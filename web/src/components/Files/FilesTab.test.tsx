@@ -44,6 +44,13 @@ vi.mock("../../lib/wsStore", () => ({
 	isRPCTimeout: () => false,
 }));
 
+const saveRawFolder = vi.fn();
+
+vi.mock("../../hooks/useRawMediaSource", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../../hooks/useRawMediaSource")>()),
+	saveRawFolder: (...args: unknown[]) => saveRawFolder(...args),
+}));
+
 vi.mock("../../lib/fileUpload", async (importOriginal) => ({
 	...(await importOriginal<typeof import("../../lib/fileUpload")>()),
 	uploadFile: vi.fn(),
@@ -1559,6 +1566,136 @@ describe("FilesTab entry menu", () => {
 		await user.click(screen.getByRole("button", { name: "Delete" }));
 
 		expect(await screen.findByText("permission denied")).toBeInTheDocument();
+	});
+});
+
+describe("FilesTab folder download", () => {
+	beforeEach(() => {
+		treeEntries = [...DEFAULT_TREE_ENTRIES];
+		searchFiles.mockResolvedValue(result([]));
+		saveRawFolder.mockReset();
+	});
+
+	/** A save that settles when the case says, and records its signal. */
+	function pendingSave() {
+		const save: {
+			signal?: AbortSignal;
+			resolve: () => void;
+			reject: (error: Error) => void;
+		} = { resolve: () => {}, reject: () => {} };
+		saveRawFolder.mockImplementationOnce(
+			(_path: string, signal: AbortSignal) =>
+				new Promise<void>((resolve, reject) => {
+					save.signal = signal;
+					save.resolve = resolve;
+					save.reject = reject;
+				}),
+		);
+		return save;
+	}
+
+	it("keeps the sheet up while the zip is prepared, and closes it on hand-over", async () => {
+		const user = userEvent.setup();
+		const save = pendingSave();
+		renderFilesTab();
+
+		await user.click(screen.getByRole("button", { name: "menu for src" }));
+		await user.click(screen.getByRole("button", { name: "Download as zip" }));
+
+		expect(saveRawFolder).toHaveBeenCalledWith("src", expect.any(AbortSignal));
+		expect(
+			screen.getByRole("button", { name: /Cancel download.*Preparing zip/ }),
+		).toBeInTheDocument();
+
+		await act(async () => save.resolve());
+
+		// The browser has it now; the app shows nothing more about it.
+		expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+	});
+
+	it("downloads the project root from the root's menu", async () => {
+		const user = userEvent.setup();
+		saveRawFolder.mockResolvedValue(undefined);
+		renderFilesTab({ "": [] });
+
+		await user.click(
+			screen.getByRole("button", { name: "Project root actions" }),
+		);
+		await user.click(screen.getByRole("button", { name: "Download as zip" }));
+
+		expect(saveRawFolder).toHaveBeenCalledWith("", expect.any(AbortSignal));
+	});
+
+	it("is not offered for a file", async () => {
+		const user = userEvent.setup();
+		renderFilesTab();
+
+		await user.click(
+			screen.getByRole("button", { name: "menu for src/main.tsx" }),
+		);
+
+		expect(
+			screen.queryByRole("button", { name: "Download as zip" }),
+		).not.toBeInTheDocument();
+	});
+
+	it("closes the sheet and reports a refusal in the tab's banner", async () => {
+		const user = userEvent.setup();
+		saveRawFolder.mockRejectedValue(
+			new Error("Folder not found — it may have been moved or deleted"),
+		);
+		renderFilesTab();
+
+		await user.click(screen.getByRole("button", { name: "menu for src" }));
+		await user.click(screen.getByRole("button", { name: "Download as zip" }));
+
+		expect(
+			await screen.findByText(
+				"Download failed: Folder not found — it may have been moved or deleted",
+			),
+		).toBeInTheDocument();
+		expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+	});
+
+	it.each([
+		["pressing it again", "Cancel download"],
+		["closing the sheet", "Close"],
+	])("cancels on %s and says nothing", async (_, button) => {
+		const user = userEvent.setup();
+		const save = pendingSave();
+		renderFilesTab();
+
+		await user.click(screen.getByRole("button", { name: "menu for src" }));
+		await user.click(screen.getByRole("button", { name: "Download as zip" }));
+		await user.click(
+			screen.getByRole("button", { name: new RegExp(`^${button}`) }),
+		);
+
+		expect(save.signal?.aborted).toBe(true);
+		const abort = new Error("aborted");
+		abort.name = "AbortError";
+		await act(async () => save.reject(abort));
+		expect(screen.queryByText(/Download failed/)).not.toBeInTheDocument();
+	});
+
+	// The capability's request is not cancellable: it can still fail on its own
+	// — a timeout, a dropped connection — after the user has moved on.
+	it("says nothing, and leaves the next menu open, when a cancelled download fails late", async () => {
+		const user = userEvent.setup();
+		const save = pendingSave();
+		renderFilesTab();
+
+		await user.click(screen.getByRole("button", { name: "menu for src" }));
+		await user.click(screen.getByRole("button", { name: "Download as zip" }));
+		await user.click(screen.getByRole("button", { name: "Close" }));
+		await user.click(
+			screen.getByRole("button", { name: "menu for src/main.tsx" }),
+		);
+
+		await act(async () => save.reject(new Error("RPC timed out")));
+
+		expect(screen.queryByText(/Download failed/)).not.toBeInTheDocument();
+		expect(screen.getByRole("dialog")).toBeInTheDocument();
 	});
 });
 

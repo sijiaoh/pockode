@@ -1,5 +1,5 @@
 import { asError } from "../utils/errorMessage";
-import { readError, saveUrl } from "./fileDownload";
+import { type ErrorMessages, readError, saveUrl } from "./fileDownload";
 
 /**
  * What one byte of a raw capability URL says about it: served, or refused with
@@ -19,6 +19,7 @@ export type RawProbe =
 export async function probeRaw(
 	src: string,
 	signal: AbortSignal,
+	messages?: ErrorMessages,
 ): Promise<RawProbe> {
 	try {
 		const response = await fetch(src, {
@@ -30,7 +31,7 @@ export async function probeRaw(
 			response.body?.cancel().catch(() => {});
 			return { ok: true };
 		}
-		const error = await readError(response.clone());
+		const error = await readError(response.clone(), messages);
 		const code = await response
 			.json()
 			.then((body: unknown) =>
@@ -49,6 +50,26 @@ export async function probeRaw(
 			error: asError(error),
 		};
 	}
+}
+
+/**
+ * `probeRaw` for an archive the server builds as it streams, which has no
+ * first byte to ask for alone: a GET would start the whole of it. A HEAD runs
+ * the same checks and sends nothing — but nothing is also all a refusal says,
+ * so only a refusal is asked again with a GET, whose body names the reason.
+ */
+export async function probeArchive(
+	src: string,
+	signal: AbortSignal,
+	messages?: ErrorMessages,
+): Promise<RawProbe> {
+	try {
+		const response = await fetch(src, { method: "HEAD", signal });
+		if (response.ok) return { ok: true };
+	} catch (error) {
+		return { ok: false, error: asError(error) };
+	}
+	return probeRaw(src, signal, messages);
 }
 
 /** The answer of a capability that has expired or died with its session. */

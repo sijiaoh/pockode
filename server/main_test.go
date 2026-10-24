@@ -66,9 +66,9 @@ func newTestServer(t *testing.T, serverPassword, mcpToken string) (http.Handler,
 	scheduleStore, _ := schedule.NewFileStore(dataDir, agentRoleStore)
 	scheduler := schedule.NewScheduler(scheduleStore, workOps)
 	workOps.SetRunRecorder(scheduler)
-	transferHandler := filetransfer.NewHandler(registry, slog.Default())
+	transferHandler := filetransfer.NewHandler(registry, dataDir, slog.Default())
 	attachmentHandler := filetransfer.NewAttachmentHandler(scopeManager, worktree.ErrWorktreeNotFound, worktree.ErrSessionNotFound, slog.Default())
-	rawHandler := filetransfer.NewRawHandler(sessions, transferHandler, attachmentHandler, dataDir)
+	rawHandler := filetransfer.NewRawHandler(sessions, transferHandler, attachmentHandler)
 	wsHandler := ws.NewRPCHandler(serverPassword, authguard.New(), sessions, "test", func() string { return "" }, authsession.NewTickets(), rawHandler, true, cmdStore, scopeManager, settingsStore, workStore, workOps, work.NewEngine(workStore, work.DefaultMaxNudges), agentRoleStore, scheduleStore, scheduler, cliauth.NewService(slog.Default()), cliupdate.NewService(slog.Default(), nil, nil))
 	mcpHandler := mcp.NewAPIHandler(mcp.NewExecutor(workStore, agentRoleStore, workOps, settingsStore, registry, scopeManager), mcpToken)
 	return newHandler(serverPassword, authguard.New(), sessions, true, wsHandler, mcpHandler, transferHandler, attachmentHandler, rawHandler), workDir, sessions, rawHandler
@@ -210,9 +210,25 @@ func TestFileTransferEndpoints(t *testing.T) {
 		}
 	})
 
+	t.Run("downloads a folder with a valid credential", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/api/files/download-folder", nil)
+		req.Header.Set("Authorization", "Bearer "+serverPassword)
+		rec := httptest.NewRecorder()
+
+		handler.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("got status %d, want %d (body %q)", rec.Code, http.StatusOK, rec.Body.String())
+		}
+		if got := rec.Header().Get("Content-Disposition"); !strings.Contains(got, ".zip") {
+			t.Errorf("got Content-Disposition %q, want a zip archive", got)
+		}
+	})
+
 	t.Run("rejects transfers without a credential", func(t *testing.T) {
 		reqs := []*http.Request{
 			httptest.NewRequest(http.MethodGet, "/api/files/download?path=a.txt", nil),
+			httptest.NewRequest(http.MethodGet, "/api/files/download-folder", nil),
 			httptest.NewRequest(http.MethodPost, "/api/files/upload", strings.NewReader("")),
 			httptest.NewRequest(http.MethodPost, "/api/chat/attachments", strings.NewReader("")),
 		}

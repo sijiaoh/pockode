@@ -75,9 +75,11 @@ without the session token, when it stops working, and the worktree it reads
 from (`""` = main). Why it exists and what bounds it are in
 [Raw capabilities](authentication.md#raw-capabilities-urls-a-browser-element-loads-by-itself).
 The params name the content the way the client already reads it, by `origin`
-(the frontend's `ContentOrigin`), plus a `scope` of `file` or `root`. A
-`root` scope is the whole work directory or commit, for a page, and takes no
-`path` — the page's own path goes on the URL instead:
+(the frontend's `ContentOrigin`), plus a `scope` of `file`, `root` or
+`folder`. A `root` scope is the whole work directory or commit, for a page, and
+takes no `path` — the page's own path goes on the URL instead. A `folder` scope
+is a `file` origin's folder (`path`, none for the work directory) served as one
+zip archive:
 
 | `origin` | Params | Read from |
 |---|---|---|
@@ -89,7 +91,8 @@ A param that belongs to another origin is refused with `CodeInvalidParams`, not
 ignored: a `worktree` sent with a `file` origin would otherwise read the
 connection's worktree while the client believed it had chosen another. So are an
 unknown origin or scope, a missing `session_id`, a file scope whose path is not
-local or is the root itself, a root scope with any `path`
+local or is the root itself, a root scope with any `path`, a folder scope
+whose path is not local or whose origin is not `file`
 ([why](authentication.md#raw-capabilities-urls-a-browser-element-loads-by-itself)), a malformed, unknown, ambiguous or non-commit
 `hash`, and an attachment `worktree` that cannot be a worktree's name; the
 message says which. A `commit` origin outside a git repository gets
@@ -115,7 +118,10 @@ client's cache keys on it too.
 `path` is where to open the content, already percent-encoded: the file for a
 file scope, and for a root scope the root with a trailing `/`, a base for
 relative URLs rather than something to load — there is no index file, and the
-root itself answers `400`
+root itself answers `400`. For a folder scope it is the capability with a
+trailing `/`, which answers the archive itself, named by its
+`Content-Disposition` (only the server knows a work directory's name); `HEAD`
+on it runs every check the archive would without sending it
 ([what a path under it may be](../file.md#transfer)). A page at project path
 `docs/site/index.html` is opened at `path` + `docs/site/index.html`, each
 segment percent-encoded the same way. A client must pass it

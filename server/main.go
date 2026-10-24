@@ -74,6 +74,7 @@ func newHandler(serverPassword string, passwordGuard *authguard.Guard, sessions 
 	mux.HandleFunc("GET /api/files/download", transferHandler.Download)
 	mux.HandleFunc("POST /api/files/upload", transferHandler.Upload)
 	mux.HandleFunc("POST /api/files/upload-folder", transferHandler.UploadFolder)
+	mux.HandleFunc("GET /api/files/download-folder", transferHandler.DownloadFolder)
 	mux.HandleFunc("GET /api/git/show/file", transferHandler.GitFile)
 	mux.HandleFunc("POST /api/chat/attachments", attachmentHandler.Upload)
 	mux.HandleFunc("GET /api/chat/attachments", attachmentHandler.Download)
@@ -467,10 +468,10 @@ Flags:
 	portStr := strconv.Itoa(port)
 	localURL := "http://localhost:" + portStr
 
-	transferHandler := filetransfer.NewHandler(registry, slog.Default())
+	transferHandler := filetransfer.NewHandler(registry, dataDir, slog.Default())
 	attachmentHandler := filetransfer.NewAttachmentHandler(worktreeManager, worktree.ErrWorktreeNotFound, worktree.ErrSessionNotFound, slog.Default())
 	// Issued over the WebSocket and resolved over HTTP: one instance for both.
-	rawHandler := filetransfer.NewRawHandler(sessions, transferHandler, attachmentHandler, dataDir)
+	rawHandler := filetransfer.NewRawHandler(sessions, transferHandler, attachmentHandler)
 
 	// The remote URL is read live wherever it is exposed: renewing the relay
 	// credentials mid-run can move the server to a new subdomain.

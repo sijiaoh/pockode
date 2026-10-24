@@ -1698,7 +1698,9 @@ type PortPreviewTicketResult struct {
 // Scope is "file" for Path alone, or "root" for the whole work directory or
 // commit, Path empty, except anything with a dot-prefixed component: a page is
 // opened at its own path beneath the root, so that its relative URLs load. An
-// attachment is always a file.
+// attachment is always a file. "folder" is a file origin's folder at Path (the
+// work directory for none), served as one zip archive with what a root scope
+// withholds left out.
 //
 // For a page, Hosts are the hosts beyond this server it may reach, as the
 // reader allowed them, and BaseURL is what the app puts the capability's path
@@ -1720,7 +1722,8 @@ type RawCapabilityParams struct {
 //
 // Path is a URL path on this server: for a file scope the file itself, for a
 // root scope the root with a trailing slash, against which a path beneath it
-// resolves as a relative URL — each segment percent-encoded. A
+// resolves as a relative URL — each segment percent-encoded; for a folder
+// scope, the capability with a trailing slash, which answers the archive. A
 // request after ExpiresAt, or after the session that asked has ended, answers
 // 404 capability_not_found; the remedy is to ask again.
 //

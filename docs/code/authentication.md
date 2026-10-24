@@ -342,7 +342,7 @@ page, open a tab anywhere with it
 also fetch every file the capability reaches and send the bytes out the same
 way, which matters even where the URL alone would not: a server kept to its
 LAN is out of reach of whoever receives the URL, but not of the page running
-inside it. So a capability reaches one of two things:
+inside it. So a capability a player or a page holds reaches one of two things:
 
 - **One file** for a video, a sound, or a page the root scope withholds
   (below). A request for any other name is refused with `403 outside_scope`.
@@ -358,6 +358,16 @@ inside it. So a capability reaches one of two things:
   ([tool-call-ui.md](../tool-call-ui.md#project-files)).
 - An attachment is always one file. An attachment store is flat, not a tree of
   files that refer to each other.
+
+A third scope, `folder` (`filetransfer.RawScopeFolder`, work-directory origin
+only), is no page at all: it serves one folder — `path`, or the work directory
+for none — as a zip archive at the capability's own path, for the Files tab's
+"Download as zip", which needs a link for the same reason a file's Download
+does. Beneath the folder it reaches nothing a root scope does not: the archive
+leaves out every dot-prefixed name, the data directory and other worktrees,
+and never follows a symlink ([file.md](../file.md#folder-archive)). The folder
+named is archived whatever it is — a dot directory, the data directory, another
+worktree — as a file there named by itself gets a file scope of its own.
 
 **The root, not the page's folder, because the page is the agent's.** A page
 previewed here was written by the agent working in this project, and that agent

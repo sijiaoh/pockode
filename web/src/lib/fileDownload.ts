@@ -19,7 +19,10 @@ const RAW_DOWNLOAD_PARAM = "download";
  * response says, and an object would answer for `toString` as readily as for a
  * code that exists.
  */
-const ERROR_MESSAGES = new Map([
+export type ErrorMessages = ReadonlyMap<string, string>;
+
+/** The wording for a file. */
+const ERROR_MESSAGES: ErrorMessages = new Map([
 	["invalid_path", "Invalid file path"],
 	["not_a_file", "This path is not a regular file"],
 	["not_found", "File not found — it may have been moved or deleted"],
@@ -30,6 +33,18 @@ const ERROR_MESSAGES = new Map([
 		"outside_scope",
 		"This file can't be read from here — it may link to outside the project, or not be readable",
 	],
+]);
+
+/**
+ * `ERROR_MESSAGES` for a folder saved as a zip archive. `invalid_path` keeps
+ * the server's message, which says what is wrong — a name inside that would
+ * unpack outside the folder on Windows, a folder linking out of the project —
+ * where a file's is only ever a bad path. Too large, too many entries and a
+ * file changed mid-read are worded by the server with the limit it applied.
+ */
+export const FOLDER_ERROR_MESSAGES: ErrorMessages = new Map([
+	["not_found", "Folder not found — it may have been moved or deleted"],
+	["worktree_not_found", "Worktree not found"],
 ]);
 
 export function downloadUrl(path: string, worktree: string): string {
@@ -57,7 +72,10 @@ export function commitFileUrl(
  * text — so a body that is not that JSON is expected rather than exceptional,
  * and the status stands in for it.
  */
-export async function readError(response: Response): Promise<Error> {
+export async function readError(
+	response: Response,
+	messages: ErrorMessages = ERROR_MESSAGES,
+): Promise<Error> {
 	// A rejected credential is the end of the session rather than of this download;
 	// saying so and returning to login beats a banner naming a status code.
 	if (logoutIfUnauthorized(response.status)) {
@@ -79,7 +97,7 @@ export async function readError(response: Response): Promise<Error> {
 		// Not JSON; fall through to the status below.
 	}
 
-	const known = ERROR_MESSAGES.get(code);
+	const known = messages.get(code);
 	if (known) return new Error(known);
 	if (message) {
 		// `internal` is a server fault the user cannot act on, so it keeps the
@@ -125,7 +143,8 @@ export function saveBlob(blob: Blob, fileName: string): void {
  * must carry its own credential (a raw capability). It is asked for as an
  * attachment, so a browser that ignores `download` — a cross-origin URL, a
  * type it would rather preview — still saves it rather than opening it; only
- * a same-origin one takes `fileName` from the link, the rest the URL's own.
+ * a same-origin one takes `fileName` from the link, the rest the URL's own. An
+ * empty `fileName` leaves the name to the response's `Content-Disposition`.
  *
  * The browser owns the transfer from here: nothing is reported back, so a
  * caller that has to report failures checks the URL first (`saveCheckedUrl`).

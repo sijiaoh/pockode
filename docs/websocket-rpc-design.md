@@ -3,7 +3,7 @@
 All communication uses WebSocket JSON-RPC 2.0. REST APIs are not used.
 
 The one exception is bytes rather than calls — whole-file transfer and the
-bytes of media: `GET /api/files/download`, `POST /api/files/upload`, `POST /api/files/upload-folder`,
+bytes of media: `GET /api/files/download`, `GET /api/files/download-folder`, `POST /api/files/upload`, `POST /api/files/upload-folder`,
 `POST` / `GET /api/chat/attachments` and `GET /api/git/show/file` are plain
 HTTP so a large body neither waits behind nor holds up the one connection
 ([file.md](file.md#transfer)). An image, an audio or a video file is still

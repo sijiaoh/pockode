@@ -7,8 +7,9 @@ import (
 	"syscall"
 )
 
-// openNonBlock makes an open of a fifo with no reader fail at once instead of
-// waiting for one; on a regular file it changes nothing.
+// openNonBlock makes an open of a fifo return at once instead of waiting for
+// the other end — failing for a writer, succeeding for a reader, who then sees
+// it is no regular file; on a regular file it changes nothing.
 const openNonBlock = syscall.O_NONBLOCK
 
 // isInvalidName reports whether the file system refused a name itself: one too

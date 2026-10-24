@@ -1,6 +1,7 @@
 package filetransfer
 
 import (
+	"archive/zip"
 	"bytes"
 	"encoding/json"
 	"errors"
@@ -12,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -41,8 +43,9 @@ func newRawFixture(t *testing.T) rawFixture {
 	if err != nil {
 		t.Fatalf("Issue session: %v", err)
 	}
+	files.dataDir = dataDir
 	return rawFixture{
-		h:       NewRawHandler(sessions, files, attachmentHandler, dataDir),
+		h:       NewRawHandler(sessions, files, attachmentHandler),
 		workDir: workDir,
 		dataDir: dataDir,
 		session: session,
@@ -119,6 +122,9 @@ func TestRawIssue(t *testing.T) {
 		// one the scope is held to.
 		"root scope with a path": {Origin: RawOriginFile, Scope: RawScopeRoot, Path: "site"},
 		"root scope as .":        {Origin: RawOriginFile, Scope: RawScopeRoot, Path: "."},
+		"folder path escaping":   {Origin: RawOriginFile, Scope: RawScopeFolder, Path: "../site"},
+		"folder of a commit":     {Origin: RawOriginCommit, Scope: RawScopeFolder, Hash: "abc", Path: "site"},
+		"folder of attachments":  {Origin: RawOriginAttachment, Scope: RawScopeFolder, SessionID: "sess"},
 		// A host goes into a header as written, so nothing in it may end a
 		// source or a directive.
 		"a host ending the directive":   {Origin: RawOriginFile, Scope: RawScopeFile, Path: "a.html", Hosts: []string{"cdn.example; script-src *"}},
@@ -585,7 +591,7 @@ func TestRawRootScopeWithholdsDataAndNestedWorktrees(t *testing.T) {
 	// nothing and refuses nothing.
 	gone := filepath.Join(mainDir, "worktrees", "gone")
 	f.h.files.resolver = resolver{dirs: map[string]string{"": mainDir, "other": nested, "gone": gone}}
-	f.h.dataDir = filepath.Join(mainDir, "pockode-data")
+	f.h.files.dataDir = filepath.Join(mainDir, "pockode-data")
 	writeFile(t, mainDir, "index.html", []byte("main"))
 	writeFile(t, mainDir, "worktrees/notes.txt", []byte("beside"))
 	writeFile(t, mainDir, "pockode-data/sessions.json", []byte("{}"))
@@ -835,4 +841,98 @@ func TestRawPageContract(t *testing.T) {
 	if string(got) != string(want) {
 		t.Errorf("%s is out of step with this server; rewrite it with UPDATE_RAW_PAGE_CONTRACT=1 and run the web's browser tests:\n%s", rawPageContract, want)
 	}
+}
+
+// A folder scope serves the archive DownloadFolder does, at the capability's
+// own path and nowhere beneath it, with the raw endpoint's headers on it.
+func TestRawFolderScope(t *testing.T) {
+	f := newRawFixture(t)
+	writeFile(t, f.workDir, "site/index.html", []byte("<p>"))
+	writeFile(t, f.workDir, "site/.env", []byte("SECRET=1"))
+
+	for _, path := range []string{"site", "site/", "./site"} {
+		capability := f.issue(t, RawGrant{Origin: RawOriginFile, Scope: RawScopeFolder, Path: path})
+		entry := RawEntryPath(capability, RawGrant{Scope: RawScopeFolder})
+		if want := RawPathPrefix + capability + "/"; entry != want {
+			t.Fatalf("entry path = %q, want %q", entry, want)
+		}
+
+		rec := f.get(t, entry, http.Header{"Range": {"bytes=0-0"}})
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%q: status %d, want 200: %s", path, rec.Code, rec.Body.String())
+		}
+		if got := rec.Header().Get("Content-Disposition"); got != "attachment; filename=site.zip" {
+			t.Errorf("%q: Content-Disposition = %q", path, got)
+		}
+		body := rec.Body.Bytes()
+		zr, err := zip.NewReader(bytes.NewReader(body), int64(len(body)))
+		if err != nil {
+			t.Fatalf("%q: not a zip archive: %v", path, err)
+		}
+		var got []string
+		for _, file := range zr.File {
+			got = append(got, file.Name)
+		}
+		if want := []string{"site/", "site/index.html"}; !slices.Equal(got, want) {
+			t.Errorf("%q: archive holds %q, want %q", path, got, want)
+		}
+
+		rec = f.get(t, RawPath(capability, "index.html"), nil)
+		if rec.Code != http.StatusForbidden {
+			t.Errorf("%q: a path beneath the capability answered %d, want 403", path, rec.Code)
+		}
+	}
+
+	t.Run("the work directory, named after it", func(t *testing.T) {
+		capability := f.issue(t, RawGrant{Origin: RawOriginFile, Scope: RawScopeFolder})
+		rec := f.get(t, RawPath(capability, ""), nil)
+		want := "attachment; filename=" + filepath.Base(f.workDir) + ".zip"
+		if got := rec.Header().Get("Content-Disposition"); rec.Code != http.StatusOK || got != want {
+			t.Errorf("status %d, Content-Disposition %q, want 200 and %q", rec.Code, got, want)
+		}
+	})
+
+	// Over a real connection, where headers flushed before the archive are
+	// on the wire and cannot be added to afterwards. HEAD too: it writes
+	// nothing, and the client checks the archive with it, cross-origin in a
+	// dev build.
+	for _, method := range []string{http.MethodGet, http.MethodHead} {
+		t.Run("the archive's headers carry the sandbox on "+method, func(t *testing.T) {
+			capability := f.issue(t, RawGrant{Origin: RawOriginFile, Scope: RawScopeFolder, Path: "site"})
+			srv := httptest.NewServer(f.h)
+			defer srv.Close()
+			req, err := http.NewRequest(method, srv.URL+RawPath(capability, ""), nil)
+			if err != nil {
+				t.Fatalf("new request: %v", err)
+			}
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatalf("%s: %v", method, err)
+			}
+			defer resp.Body.Close()
+			if resp.StatusCode != http.StatusOK {
+				t.Fatalf("status %d, want 200", resp.StatusCode)
+			}
+			if got := resp.Header.Get("Content-Security-Policy"); !strings.HasPrefix(got, rawSandbox) {
+				t.Errorf("Content-Security-Policy = %q, want the sandbox", got)
+			}
+			if got := resp.Header.Get("Access-Control-Allow-Origin"); got != "*" {
+				t.Errorf("Access-Control-Allow-Origin = %q", got)
+			}
+			if got := resp.Header.Get("Cache-Control"); got != "private, no-cache" {
+				t.Errorf("Cache-Control = %q", got)
+			}
+		})
+	}
+
+	t.Run("a missing folder is a JSON error", func(t *testing.T) {
+		capability := f.issue(t, RawGrant{Origin: RawOriginFile, Scope: RawScopeFolder, Path: "gone"})
+		rec := f.get(t, RawPath(capability, ""), nil)
+		if rec.Code != http.StatusNotFound {
+			t.Fatalf("status %d, want 404: %s", rec.Code, rec.Body.String())
+		}
+		if got := decodeError(t, rec).Code; got != CodeNotFound {
+			t.Errorf("code %q, want %q", got, CodeNotFound)
+		}
+	})
 }

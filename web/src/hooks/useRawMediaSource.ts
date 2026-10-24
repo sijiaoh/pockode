@@ -7,7 +7,13 @@ import {
 } from "@tanstack/react-query";
 import { useCallback } from "react";
 import { apiUrl } from "../lib/api";
-import { isDeadCapability, probeRaw, saveProbedUrl } from "../lib/rawProbe";
+import { FOLDER_ERROR_MESSAGES } from "../lib/fileDownload";
+import {
+	isDeadCapability,
+	probeArchive,
+	probeRaw,
+	saveProbedUrl,
+} from "../lib/rawProbe";
 import type { RawCapability, RawTarget } from "../lib/rpc/raw";
 import { useWorktreeStore } from "../lib/worktreeStore";
 import { useWSStore, wsActions } from "../lib/wsStore";
@@ -181,6 +187,10 @@ function serves(
 	return origin.kind === "attachment" || capability.worktree === worktree;
 }
 
+const WORKTREE_CHANGED = "The worktree changed before the download started.";
+const WORKTREE_SWITCHING =
+	"The worktree is still switching. Try again in a moment.";
+
 /**
  * Saves `origin` to disk under `fileName`, streamed by the browser from a raw
  * capability rather than read into memory here — a recording can be hundreds
@@ -216,18 +226,45 @@ export async function saveRawFile(
 			origin.kind !== "attachment" &&
 			useWorktreeStore.getState().current !== worktree
 		) {
-			throw new Error("The worktree changed before the download started.");
+			throw new Error(WORKTREE_CHANGED);
 		}
 		const current = serves(origin, capability, worktree);
 		if (!renew && (!current || isDeadCapability(probe))) continue;
 		if (!current) {
-			throw new Error(
-				"The worktree is still switching. Try again in a moment.",
-			);
+			throw new Error(WORKTREE_SWITCHING);
 		}
 		saveProbedUrl(url, fileName, probe);
 		return;
 	}
+}
+
+/**
+ * Saves the folder at `path` — the work directory for "" — as a zip archive
+ * the server builds while the browser streams it to disk, under the name the
+ * server gives it: only the server knows the work directory's own name.
+ *
+ * Checked before the hand-over as `saveRawFile` checks a file, since past it
+ * a refusal — too large, a file that cannot be read — would fail out of sight.
+ * The capability is a fresh one each time, so there is none to renew; one
+ * bound to the worktree a switch is leaving fails rather than saving the other
+ * worktree's folder. Rejects with `signal`'s reason once it is aborted, and
+ * then saves nothing.
+ */
+export async function saveRawFolder(
+	path: string,
+	signal: AbortSignal,
+): Promise<void> {
+	const worktree = useWorktreeStore.getState().current;
+	const capability = await wsActions.rawFolderCapability(path);
+	signal.throwIfAborted();
+	if (capability.worktree !== worktree) throw new Error(WORKTREE_SWITCHING);
+	const url = apiUrl(capability.path);
+	const probe = await probeArchive(url, signal, FOLDER_ERROR_MESSAGES);
+	signal.throwIfAborted();
+	if (useWorktreeStore.getState().current !== worktree) {
+		throw new Error(WORKTREE_CHANGED);
+	}
+	saveProbedUrl(url, "", probe);
 }
 
 /**
