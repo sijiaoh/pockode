@@ -2,6 +2,7 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { act } from "react";
 import { createPortal } from "react-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { ENTRY_DRAG_TYPE } from "../lib/entryDrag";
 import {
 	type DroppedFiles,
 	readPasted,
@@ -94,6 +95,22 @@ describe("useFileDragZone", () => {
 			folders: [src.webkitGetAsEntry()],
 		});
 		expect(screen.queryByText("dragging")).not.toBeInTheDocument();
+	});
+
+	// The chat's drop zone is one of these: a tree row let go over it is not an
+	// upload, whatever a browser lists beside it for saving it outside.
+	it("takes no tree row's drag", () => {
+		const onDrop = vi.fn();
+		render(<Zone onDrop={onDrop} />);
+		const target = screen.getByText("inside");
+		const types = [ENTRY_DRAG_TYPE, "Files"];
+
+		fireDrag(target, "dragenter", { types });
+		fireDrag(target, "dragover", { types });
+		fireDrag(target, "drop", { types });
+
+		expect(screen.queryByText("dragging")).not.toBeInTheDocument();
+		expect(onDrop).not.toHaveBeenCalled();
 	});
 
 	it("tracks a refused drag but hands nothing over", () => {

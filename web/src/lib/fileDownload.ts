@@ -8,7 +8,7 @@ import { apiUrl, logoutIfUnauthorized } from "./api";
  * A Blob under its real type is worse: its object URL is same-origin with the
  * app, so an SVG or HTML file shown inline would run its scripts as the app.
  */
-const DOWNLOAD_MIME = "application/octet-stream";
+export const DOWNLOAD_MIME = "application/octet-stream";
 
 /** Asks the raw endpoint for an attachment (`filetransfer.RawDownloadParam`). */
 const RAW_DOWNLOAD_PARAM = "download";
@@ -138,6 +138,17 @@ export function saveBlob(blob: Blob, fileName: string): void {
 }
 
 /**
+ * `url`, absolute, asking the raw endpoint to answer as an attachment
+ * (`Content-Disposition: attachment`): what the browser saves from rather than
+ * opens.
+ */
+export function attachmentUrl(url: string): string {
+	const target = new URL(url, window.location.href);
+	target.searchParams.set(RAW_DOWNLOAD_PARAM, "1");
+	return target.href;
+}
+
+/**
  * Has the browser download `url` to disk as it arrives, never holding it in
  * memory — for files that may be far larger than a Blob should be. The URL
  * must carry its own credential (a raw capability). It is asked for as an
@@ -150,10 +161,8 @@ export function saveBlob(blob: Blob, fileName: string): void {
  * caller that has to report failures checks the URL first (`saveCheckedUrl`).
  */
 export function saveUrl(url: string, fileName: string): void {
-	const target = new URL(url, window.location.href);
-	target.searchParams.set(RAW_DOWNLOAD_PARAM, "1");
 	const link = document.createElement("a");
-	link.href = target.href;
+	link.href = attachmentUrl(url);
 	link.download = fileName;
 	document.body.appendChild(link);
 	link.click();

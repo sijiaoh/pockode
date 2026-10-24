@@ -7,6 +7,7 @@ import {
 } from "@tanstack/react-query";
 import { useCallback } from "react";
 import { apiUrl } from "../lib/api";
+import { canDragOutDownload } from "../lib/entryDrag";
 import { FOLDER_ERROR_MESSAGES } from "../lib/fileDownload";
 import {
 	isDeadCapability,
@@ -17,7 +18,7 @@ import {
 import type { RawCapability, RawTarget } from "../lib/rpc/raw";
 import { useWorktreeStore } from "../lib/worktreeStore";
 import { useWSStore, wsActions } from "../lib/wsStore";
-import type { ContentOrigin } from "../types/contents";
+import type { ContentOrigin, Entry } from "../types/contents";
 
 /**
  * How long before its expiry a capability stops being handed to a new player.
@@ -150,6 +151,10 @@ function rawCapabilityQuery(target: RawTarget, worktree: string) {
  */
 const ONE_OFF_MARGIN_MS = 30 * 1000;
 
+function livesForOneOff(capability: RawCapability): boolean {
+	return capability.expiresAt - ONE_OFF_MARGIN_MS > Date.now();
+}
+
 /**
  * A capability for a one-off use of `origin`, such as a download: the one the
  * players hold for as long as it still works, not only while it is fresh for
@@ -167,7 +172,7 @@ async function oneOffCapability(
 	return !renew &&
 		held &&
 		serves(origin, held, worktree) &&
-		held.expiresAt - ONE_OFF_MARGIN_MS > Date.now()
+		livesForOneOff(held)
 		? held
 		: await queryClient.fetchQuery({ ...options, staleTime: 0 });
 }
@@ -265,6 +270,99 @@ export async function saveRawFolder(
 		throw new Error(WORKTREE_CHANGED);
 	}
 	saveProbedUrl(url, "", probe);
+}
+
+/**
+ * How long a capability asked for on a press is trusted for a drag. A drag
+ * hands it to the browser unchecked — nothing can be asked between `dragstart`
+ * and a drop outside the page — and the server forgets capabilities long
+ * before they expire: on a restart, when its cap evicts the oldest, when the
+ * session ends. A press after this asks for a new one.
+ */
+const DRAG_TRUST_MS = 5 * 60 * 1000;
+
+type DragCapability = RawCapability & { issuedAt: number };
+
+/**
+ * The capability a tree row's drag saves the entry from when it is let go
+ * outside the browser: the file, or the archive Download as zip saves. Its
+ * own rather than the players' for a file, which is renewed on its own
+ * schedule (`DRAG_TRUST_MS`), and renewing theirs would swap a playing
+ * video's `src`. Under the workspace key, so a worktree switch drops it.
+ */
+function dragDownloadQuery(
+	entry: Pick<Entry, "path" | "type">,
+	worktree: string,
+) {
+	const queryKey: readonly unknown[] = [
+		...WORKSPACE_RAW_CAPABILITY_KEY,
+		worktree,
+		"drag",
+		entry.type,
+		entry.path,
+	];
+	return queryOptions({
+		queryKey,
+		queryFn: async (): Promise<DragCapability> => {
+			const issuedAt = Date.now();
+			const capability =
+				entry.type === "dir"
+					? await wsActions.rawFolderCapability(entry.path)
+					: await wsActions.rawCapability({
+							origin: { kind: "file", path: entry.path },
+							scope: "file",
+						});
+			return { ...capability, issuedAt };
+		},
+		staleTime: 0,
+		// Nothing observes it between the press and the drag.
+		gcTime: DRAG_TRUST_MS,
+	});
+}
+
+/**
+ * Asks ahead for what a row's drag needs to save the entry outside the
+ * browser (`heldDragDownloadUrl`) — on the press that may start the drag,
+ * since `dragstart` cannot wait for one. Per press, not per row shown, so
+ * merely seeing the tree asks for none; nothing is asked for where the drag
+ * could not use it (`canDragOutDownload`).
+ *
+ * A failure is deliberately not reported: nothing has been asked of the user
+ * yet, the press may be only a click, and a drag started without a capability
+ * still moves — it only saves nothing when let go outside.
+ */
+export function prepareDragDownload(
+	queryClient: QueryClient,
+	entry: Pick<Entry, "path" | "type">,
+): void {
+	if (!canDragOutDownload()) return;
+	if (useWSStore.getState().status !== "connected") return;
+	if (heldDragDownloadUrl(queryClient, entry) !== null) return;
+	const worktree = useWorktreeStore.getState().current;
+	void queryClient.prefetchQuery(dragDownloadQuery(entry, worktree));
+}
+
+/**
+ * The URL a row's drag saves the entry from, if a capability for it is on
+ * hand, recent enough to trust (`DRAG_TRUST_MS`), reading from the worktree
+ * the tree shows, and living long enough for the drop; null otherwise, and the
+ * drag only moves. Synchronous for `dragstart`, which has to fill the drag in
+ * before it returns.
+ */
+export function heldDragDownloadUrl(
+	queryClient: QueryClient,
+	entry: Pick<Entry, "path" | "type">,
+): string | null {
+	if (!canDragOutDownload()) return null;
+	const worktree = useWorktreeStore.getState().current;
+	const held = queryClient.getQueryData(
+		dragDownloadQuery(entry, worktree).queryKey,
+	);
+	if (!held || held.worktree !== worktree || !livesForOneOff(held)) {
+		return null;
+	}
+	if (Date.now() - held.issuedAt >= DRAG_TRUST_MS) return null;
+	return apiUrl(held.path);
 }
 
 /**

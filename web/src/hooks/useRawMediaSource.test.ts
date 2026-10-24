@@ -2,7 +2,12 @@ import { QueryClient } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { saveUrl } from "../lib/fileDownload";
 import { useWorktreeStore } from "../lib/worktreeStore";
-import { saveRawFile, saveRawFolder } from "./useRawMediaSource";
+import {
+	heldDragDownloadUrl,
+	prepareDragDownload,
+	saveRawFile,
+	saveRawFolder,
+} from "./useRawMediaSource";
 
 const rawCapability = vi.fn();
 const rawFolderCapability = vi.fn();
@@ -17,6 +22,12 @@ vi.mock("../lib/wsStore", () => ({
 		rawFolderCapability: (...args: unknown[]) => rawFolderCapability(...args),
 	},
 	useWSStore: { getState: () => ({ status: "connected" }) },
+}));
+
+const dragOut = vi.hoisted(() => ({ supported: true }));
+vi.mock("../lib/entryDrag", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../lib/entryDrag")>()),
+	canDragOutDownload: () => dragOut.supported,
 }));
 
 vi.mock("../lib/fileDownload", async (importOriginal) => ({
@@ -301,5 +312,133 @@ describe("saveRawFolder", () => {
 
 		await expect(saveRawFolder("assets", controller.signal)).rejects.toThrow();
 		expect(saveUrl).not.toHaveBeenCalled();
+	});
+});
+
+describe("a row's drag out of the browser", () => {
+	const file = { path: "rec/clip.mov", type: "file" } as const;
+	const folder = { path: "assets", type: "dir" } as const;
+	let queryClient: QueryClient;
+
+	beforeEach(() => {
+		queryClient = new QueryClient();
+		rawCapability.mockReset();
+		rawFolderCapability.mockReset();
+		dragOut.supported = true;
+	});
+
+	afterEach(() => {
+		vi.restoreAllMocks();
+		useWorktreeStore.setState({ current: "" });
+	});
+
+	function pressAndWait(entry: { path: string; type: "file" | "dir" }) {
+		prepareDragDownload(queryClient, entry);
+		return vi.waitFor(() => expect(queryClient.isFetching()).toBe(0));
+	}
+
+	// `dragstart` cannot wait for a capability, so one never asked for means
+	// the drag only moves.
+	it("has nothing to save from until the press has asked ahead", async () => {
+		rawCapability.mockResolvedValue(capability("cap1"));
+		expect(heldDragDownloadUrl(queryClient, file)).toBeNull();
+
+		await pressAndWait(file);
+
+		expect(heldDragDownloadUrl(queryClient, file)).toBe(
+			"http://localhost:8080/api/raw/cap1/clip.mov",
+		);
+		expect(rawCapability).toHaveBeenCalledWith({
+			origin: { kind: "file", path: "rec/clip.mov" },
+			scope: "file",
+		});
+	});
+
+	it("saves a folder from the archive Download as zip saves", async () => {
+		rawFolderCapability.mockResolvedValue(capability("zip1"));
+
+		await pressAndWait(folder);
+
+		expect(heldDragDownloadUrl(queryClient, folder)).toContain("/zip1/");
+		expect(rawFolderCapability).toHaveBeenCalledWith("assets");
+		// A file of the same path is a different capability.
+		expect(
+			heldDragDownloadUrl(queryClient, { path: "assets", type: "file" }),
+		).toBeNull();
+	});
+
+	// A drag's capability is its own: renewing it never swaps a player's `src`.
+	it("leaves the players' capability for the file alone", async () => {
+		rawCapability.mockResolvedValue(capability("drag"));
+		const playerKey = ["raw-capability", "workspace", "", "file", "file"];
+		queryClient.setQueryData([...playerKey, file.path], capability("player"));
+
+		await pressAndWait(file);
+
+		expect(heldDragDownloadUrl(queryClient, file)).toContain("/drag/");
+		expect(queryClient.getQueryData([...playerKey, file.path])).toMatchObject({
+			path: "/api/raw/player/clip.mov",
+		});
+	});
+
+	it("asks once per entry, however often it is pressed", async () => {
+		rawCapability.mockResolvedValue(capability("cap1"));
+
+		await pressAndWait(file);
+		prepareDragDownload(queryClient, file);
+
+		expect(rawCapability).toHaveBeenCalledTimes(1);
+	});
+
+	// The server forgets capabilities before they expire — a restart, its cap
+	// evicting the oldest — and a drag hands one over unchecked.
+	it("asks again on a press long after the last", async () => {
+		rawCapability.mockResolvedValueOnce(capability("old"));
+		rawCapability.mockResolvedValueOnce(capability("new"));
+		await pressAndWait(file);
+
+		vi.spyOn(Date, "now").mockReturnValue(Date.now() + 5 * 60e3);
+		expect(heldDragDownloadUrl(queryClient, file)).toBeNull();
+		prepareDragDownload(queryClient, file);
+
+		await vi.waitFor(() =>
+			expect(heldDragDownloadUrl(queryClient, file)).toContain("/new/"),
+		);
+	});
+
+	it("asks again for one about to expire", async () => {
+		rawCapability.mockResolvedValueOnce({
+			...capability("old"),
+			expiresAt: Date.now() + 1000,
+		});
+		rawCapability.mockResolvedValueOnce(capability("new"));
+		await pressAndWait(file);
+		expect(heldDragDownloadUrl(queryClient, file)).toBeNull();
+
+		prepareDragDownload(queryClient, file);
+
+		await vi.waitFor(() =>
+			expect(heldDragDownloadUrl(queryClient, file)).toContain("/new/"),
+		);
+	});
+
+	// Asked for during a switch, answered by the connection still on the main
+	// worktree.
+	it("saves nothing from a capability bound to the worktree being left", async () => {
+		rawCapability.mockResolvedValue(capability("old", ""));
+		useWorktreeStore.setState({ current: "feature" });
+
+		await pressAndWait(file);
+
+		expect(heldDragDownloadUrl(queryClient, file)).toBeNull();
+	});
+
+	it("asks for nothing where the browser cannot save a drag", () => {
+		dragOut.supported = false;
+
+		prepareDragDownload(queryClient, file);
+
+		expect(rawCapability).not.toHaveBeenCalled();
+		expect(heldDragDownloadUrl(queryClient, file)).toBeNull();
 	});
 });

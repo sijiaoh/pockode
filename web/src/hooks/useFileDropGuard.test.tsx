@@ -1,5 +1,6 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
+import { ENTRY_DRAG_TYPE } from "../lib/entryDrag";
 import { useFileDropGuard } from "./useFileDropGuard";
 
 function Guarded() {
@@ -55,6 +56,15 @@ describe("useFileDropGuard", () => {
 		// The guard runs in the capture phase, so the zone's own handler — which
 		// runs later, on the way back up — still has the last word on the cursor.
 		expect(dataTransfer.dropEffect).toBe("copy");
+	});
+
+	// A browser may list the file a row's drag saves outside the window.
+	it("stops a tree row's drag from being opened where it is let go", () => {
+		render(<Guarded />);
+
+		const drop = dispatch(document.body, "drop", [ENTRY_DRAG_TYPE, "Files"]);
+
+		expect(drop.event.defaultPrevented).toBe(true);
 	});
 
 	it("leaves drags that carry no files alone", () => {

@@ -10,6 +10,10 @@ import {
 import { memo, useCallback, useEffect, useState } from "react";
 import { contentsQueryKey, useContents } from "../../hooks/useContents";
 import { useFSWatch } from "../../hooks/useFSWatch";
+import {
+	heldDragDownloadUrl,
+	prepareDragDownload,
+} from "../../hooks/useRawMediaSource";
 import { writeEntryDrag } from "../../lib/entryDrag";
 import type { Entry } from "../../types/contents";
 import { isAtOrUnder } from "../../utils/path";
@@ -151,14 +155,33 @@ const FileTreeNode = memo(function FileTreeNode({
 			    button, which no longer spans the row: on the button they would stop
 			    short of the menu, leaving a notch out of the drop target. The drag
 			    starts here for the same reason: anywhere on the row picks it up.
-			    A drag never sends `click`, so pressing still opens or toggles. */}
+			    A drag never sends `click`, so pressing still opens or toggles.
+			    The press asks ahead for what saves the entry if the drag is let go
+			    outside the browser, which `dragstart` cannot wait for. */}
 			{/* biome-ignore lint/a11y/noStaticElementInteractions: a mouse-only drag source; the buttons inside are the row's controls */}
 			<div
 				draggable={canDrag || undefined}
+				onPointerDown={
+					canDrag
+						? (event) => {
+								// The `…` opens a menu; a drag rarely starts on it.
+								const onMenu =
+									event.target instanceof Element &&
+									event.target.closest("[data-row-menu]") !== null;
+								if (event.button === 0 && !onMenu) {
+									prepareDragDownload(queryClient, entry);
+								}
+							}
+						: undefined
+				}
 				onDragStart={
 					canDrag
 						? (event) => {
-								writeEntryDrag(event.dataTransfer, entry);
+								writeEntryDrag(
+									event.dataTransfer,
+									entry,
+									heldDragDownloadUrl(queryClient, entry),
+								);
 								onEntryDragStart(entry, {
 									wasExpanded: isDirectory && isExpanded,
 									element: event.currentTarget,
@@ -225,6 +248,7 @@ const FileTreeNode = memo(function FileTreeNode({
 							? ""
 							: "pointer-fine:opacity-0 pointer-fine:group-hover:opacity-100 pointer-fine:group-focus-within:opacity-100"
 					}`}
+					data-row-menu
 					aria-label={`More actions for ${entry.path}`}
 					aria-haspopup="dialog"
 					aria-expanded={isMenuOpen}

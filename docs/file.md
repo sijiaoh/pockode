@@ -36,10 +36,10 @@ served through it; it is addressed by id in the session's own attachment store
 | RPC actions | `web/src/lib/rpc/file.ts` | `getFile`, `writeFile`, `createFile`, `deleteFile`, `renameFile`, `moveFile`, `searchFiles`, `isAlreadyExistsError`, `fileMoveRefusedReason` |
 | HTTP transfer client | `web/src/lib/fileDownload.ts`, `web/src/lib/rawProbe.ts`, `web/src/lib/fileUpload.ts` | Handing a download to the browser and wording its failures, upload (see [Downloading](#downloading), [Uploading](#uploading)) |
 | Media playback | `web/src/components/Files/MediaPreview.tsx`, `web/src/components/Media/useMediaPlayback.ts`, `web/src/hooks/useRawMediaSource.ts`, `web/src/components/Media/exclusivePlayback.ts` | Inline audio and video streamed from a raw capability, its recovery, and one sound at a time (see [Playing audio and video](#playing-audio-and-video)) |
-| Download action | `web/src/hooks/useFileDownload.ts`, `web/src/components/Files/FileDownloadControls.tsx`, `saveRawFile` / `saveRawFolder` in `web/src/hooks/useRawMediaSource.ts` | The viewer's Download — check, hand-over, cancel, error — shared by `FileView` and `CommitFileView`, and the menu's Download as zip (`useFolderDownload`, the same core); `saveRawFile` is every streamed Save that gets its own capability, `saveRawFolder` a folder's |
+| Download action | `web/src/hooks/useFileDownload.ts`, `web/src/components/Files/FileDownloadControls.tsx`, `saveRawFile` / `saveRawFolder` in `web/src/hooks/useRawMediaSource.ts` | The viewer's Download — check, hand-over, cancel, error — shared by `FileView` and `CommitFileView`, and the menu's Download as zip (`useFolderDownload`, the same core); `saveRawFile` is every streamed Save that gets its own capability, `saveRawFolder` a folder's; `prepareDragDownload` / `heldDragDownloadUrl` the capability a row's drag saves from outside the browser (see [Dragging out to download](#dragging-out-to-download)) |
 | Upload queue state | `web/src/lib/uploadStore.ts` | Queue, concurrency, retry, worktree scope |
 | Reading a folder | `web/src/lib/folderRead.ts` | Walking a dropped folder, a picked folder's paths, the client's file cap (see [Uploading a folder](#dropping-a-folder)) |
-| Drag and drop | `web/src/hooks/useFileDragZone.ts`, `web/src/components/Files/useFileDrop.ts`, `web/src/hooks/useFileDropGuard.ts`, `web/src/lib/entryDrag.ts` | What every drop zone shares (`useDragZone`: the depth count, the resets, claiming the drag; file detection and folder splitting on top for files); the tree's drop target resolution, for uploads and moves alike; the window-level drop backstop; what a tree row's drag carries (see [Moving](#moving)) |
+| Drag and drop | `web/src/hooks/useFileDragZone.ts`, `web/src/components/Files/useFileDrop.ts`, `web/src/hooks/useFileDropGuard.ts`, `web/src/lib/entryDrag.ts` | What every drop zone shares (`useDragZone`: the depth count, the resets, claiming the drag; file detection and folder splitting on top for files); the tree's drop target resolution, for uploads and moves alike; the window-level drop backstop; what a tree row's drag carries, and whether it can save the row outside the browser (see [Moving](#moving), [Dragging out to download](#dragging-out-to-download)) |
 
 ## Operations
 
@@ -1541,7 +1541,10 @@ collapses, a file opens — and everything else hangs off a `…` button at the 
 of the row. The project root has no row, so its `…` sits in the search bar; it
 stays usable under search, where the tree is hidden but the target is not in
 doubt. The one action that is not in the menu is [moving](#moving), which is
-the row itself dragged onto a folder, on a desktop only.
+the row itself dragged onto a folder, on a desktop only. The same drag let go
+outside the browser saves the entry there
+([Dragging out to download](#dragging-out-to-download)), in Chromium only — an
+addition to the menu's and the viewer's downloads, never the only way to one.
 
 The `…` is a **sibling** of the row button, never nested in it: nested, every
 tap on it would also open the file or toggle the folder. That split is why the
@@ -1759,20 +1762,24 @@ answered; the dimming is applied a task after `dragstart`, because a commit
 landing before the browser's snapshot would fade the drag image too. Search
 results are not draggable: they have no tree to be dropped into.
 
-`lib/entryDrag.ts` is **the one place what a row's drag carries is written**:
-`effectAllowed = "move"` and the entry's path and type under
-`application/x-pockode-entry`, nothing else. No `text/plain` and no
-`text/uri-list`, because with either a row let go over the chat composer or the
-search field would type itself in. Dragging a row out of the window as a
-download is an addition there (`DownloadURL`, a widened `effectAllowed`), and
-the tree's own `dropEffect = "move"` stays right after it.
+`lib/entryDrag.ts` (`writeEntryDrag`) is **the one place what a row's drag
+carries is written**: the entry's path and type under
+`application/x-pockode-entry`, with `effectAllowed = "move"` — and, in Chromium
+with a capability on hand, a `DownloadURL` and `effectAllowed = "copyMove"`
+([Dragging out to download](#dragging-out-to-download)). Nothing else: no
+`text/plain` and no `text/uri-list`, because with either a row let go over the
+chat composer or the search field would type itself in. The tree's own
+`dropEffect = "move"` holds whichever `effectAllowed` it is.
 
-**Telling a move from an upload** is by type and by origin. A row's drag never
-carries `Files`, so the upload path, the chat's drop zone and
-`useFileDropGuard` all let it pass; an outside drag never carries the row type.
-The tree takes a row drag only while `FilesTab` holds a **drag source** —
-recorded at `dragstart`, because during `dragover` a page can read a drag's
-`types` and nothing else — so a row dragged from another Pockode window or tab
+**Telling a move from an upload** is by type and by origin. A drag carrying the
+row type is never an upload, whatever else is listed beside it: a browser may
+list `Files` for the file a `DownloadURL` would save, so `carriesFiles()`
+(`hooks/useFileDragZone.ts`) answers no for it, and the tree's upload path and
+the chat's drop zone let it pass. `useFileDropGuard` refuses it, as it refuses
+files, anywhere no zone claims it, so nothing it lists can be opened over the
+app. An outside drag never carries the row type. The tree takes a row drag only
+while `FilesTab` holds a **drag source** — recorded at `dragstart`, because
+during `dragover` a page can read a drag's `types` and nothing else — so a row dragged from another Pockode window or tab
 is nobody's here: nothing claims it, the cursor says not allowed, and letting
 go does nothing. The source is kept in a ref beside the state, since the zone
 asks about it from drag events that can arrive before the render `dragstart`
@@ -1875,8 +1882,10 @@ link carries no header. What differs:
 - **A `folder` scope**, asked for afresh each time (`wsActions.rawFolderCapability`,
   `lib/rpc/raw.ts`): `raw.capability` with `{ origin: "file", scope: "folder", path }`,
   `""` for the root. It is an action of its own rather than another
-  `RawTarget`, because nothing plays it and nothing caches it; with no cached
-  one there is nothing to renew either.
+  `RawTarget`, because nothing plays it and Download as zip caches none; with
+  no cached one there is nothing to renew either. (A row's drag holds one of
+  its own, apart from this —
+  [Dragging out to download](#dragging-out-to-download).)
 - **Checked with `HEAD`** (`probeArchive`, `lib/rawProbe.ts`), not the one-byte
   probe: the archive ignores `Range`, so that `GET` would make the server build
   the whole of it. A refusal to a `HEAD` has no body, though, so only a refused
@@ -1923,6 +1932,106 @@ There is no confirmation, for a file's reason: nothing is held in memory, the
 browser lets the user watch and cancel, and a folder that is too large gets a
 refusal naming the limit. Downloading the root will often meet that limit —
 `node_modules` and build output are included — and that message is the answer.
+
+### Dragging out to download
+
+On a desktop, in a Chromium browser, a tree row dragged **out of the browser**
+— onto the desktop, a file manager, another app — is saved there. It is the
+[move](#moving) drag, not a second one: the same row, the same `dragstart`, the
+same gate (a fine primary pointer), so a touch screen has none of it. It adds
+nothing a user needs: a file still has the viewer's [Download](#downloading)
+and a folder [Download as zip](#downloading-a-folder), which work in every
+browser, so this is a P2 shortcut beside controls that stay
+([responsive-ui.md](responsive-ui.md#what-may-be-hidden-three-levels)).
+
+**What is saved** is what the menu's and the viewer's downloads save:
+
+- **A file** — its bytes, under its own name.
+- **A folder** — the zip [Download as zip](#downloading-a-folder) builds, named
+  `<folder>.zip`, the name the server's `Content-Disposition` gives it.
+
+**How.** Chromium reads a non-standard drag type, `DownloadURL`, as
+`<mime>:<file name>:<absolute URL>`, and when the drag is let go outside the
+browser it fetches the URL itself and saves the response there.
+`writeEntryDrag` adds it beside the row type, with
+`application/octet-stream` for a file and `application/zip` for a folder, and
+the same [raw capability](code/authentication.md#raw-capabilities-urls-a-browser-element-loads-by-itself)
+URL with `?download=1` (`attachmentUrl`, `lib/fileDownload.ts`) that the
+download links click. It widens `effectAllowed` to `copyMove`, since a drop
+outside the browser is a copy; inside the tree `dropEffect` still says move. A
+row whose name contains `:` gets no `DownloadURL` — Chromium would end the name
+at it and take the rest as the URL — so it only moves.
+
+**No new credential.** The URL is a raw capability of the same scope a
+download link uses: `{ origin: "file", scope: "file", path }` for a file,
+`{ origin: "file", scope: "folder", path }` for a folder. It carries no bearer
+or session token, lives 4 hours, and ends with the session that asked for it
+([authentication](code/authentication.md#raw-capabilities-urls-a-browser-element-loads-by-itself)).
+
+**Asked for on the press, because `dragstart` cannot wait.** A drag's data has
+to be written before `dragstart` returns, and a capability is an RPC away. So
+the row's `pointerdown` — primary button, draggable rows only, not on the
+`…` — asks for one (`prepareDragDownload`, `hooks/useRawMediaSource.ts`), and
+`dragstart` takes whatever is already on hand (`heldDragDownloadUrl`). Nothing is on hand when
+the drag began before the answer came (a quick drag over a slow relay), the
+WebSocket was down, or the call failed; that drag only moves, and the next
+press on the row has one. The failure is deliberately not reported: the press
+may be only a click, and the move works either way. Asking per press, not per
+row shown, keeps merely seeing the tree from asking for anything.
+
+**Its own cache entry, trusted for 5 minutes.** A capability for a drag is held
+under `["raw-capability", "workspace", <worktree>, "drag", <type>, <path>]` —
+beneath the workspace key, so a worktree switch drops it with the rest. It is
+apart from the players' entry for a file, so renewing one never swaps a playing
+video's `src`. Unlike Download, which probes first, a drag hands its URL over
+unchecked — nothing can be asked between `dragstart` and a drop outside the
+page — and the server forgets capabilities long before they expire: on a
+restart, when its cap evicts the oldest, when the session ends. So a drag
+uses one only within 5 minutes of asking for it (`DRAG_TRUST_MS`), bound to the
+worktree shown and with more than 30 seconds left to live; a press after that
+asks again. That costs at most one capability per pressed row per 5 minutes; a
+pressed video can hold two, the player's and the drag's.
+
+**Never an upload when it comes back.** Let go over the tree, the drag is a
+move; over the chat, or anywhere else in the app, `useFileDropGuard` refuses it
+and nothing opens — whatever the browser lists beside the row type, `Files`
+included ([Moving](#moving)).
+
+**Where it works.** In Chromium browsers (Chrome, Edge, Brave, Opera, …) on a
+desktop, and nowhere else:
+
+| Browser and platform | Dropping outside the browser |
+|---|---|
+| Chromium on Windows, macOS | Saves the file there |
+| Chromium on Linux, X11 | Saves the file only where the target speaks XdndDirectSave (XDS), which some file managers do |
+| Chromium on Linux, Wayland | Unverified |
+| Firefox, Safari | Nothing happens; the drag only moves, as before |
+| Touch screens | No drag at all |
+
+There is no feature to detect, so the browser is named (`canDragOutDownload`,
+`lib/entryDrag.ts`): a `Chromium` brand in `navigator.userAgentData`, or
+`Chrome/` in the user agent string where `userAgentData` is missing — outside
+a secure context, such as a server reached over plain HTTP by its address.
+Elsewhere no capability is asked for on a press and none is put on a drag,
+where it would travel along and save nothing.
+
+**Everything after the drop is the browser's.** No spinner, no cancel, no
+banner of the app's own: the drop happens outside the page, which hears nothing
+about it, and there is no probe first as Download has. Progress shows in the
+browser's download list, and so does every failure — a folder that is
+`too_large` or has `too_many_entries`, a capability the server forgot, an entry
+since moved or deleted — as the browser's generic failed download, with none of
+the app's wording. Download and Download as zip are where to go for the reason.
+
+**What it exposes**, accepted as the cost of `DownloadURL`: while the drag is
+in progress the capability URL is in its data. A row deliberately dropped onto
+another web page can be read there (`getData("DownloadURL")`), as a link
+dragged there could; on macOS the system's drag pasteboard may keep it after
+the drag ends; and a folder's URL is the whole folder's zip, for as long as the
+capability lives. A drop onto the desktop or another app hands over the file
+Chromium downloaded, not the URL. Not checked in a real browser yet: an actual
+drop onto a desktop or file manager, and whether Chromium lists `Files` on a
+drag that carries a `DownloadURL` — the code holds either way.
 
 ## Uploading
 

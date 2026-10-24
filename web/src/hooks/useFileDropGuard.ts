@@ -1,4 +1,5 @@
 import { useEffect } from "react";
+import { carriesEntry } from "../lib/entryDrag";
 import { carriesFiles } from "./useFileDragZone";
 
 /**
@@ -17,7 +18,14 @@ import { carriesFiles } from "./useFileDragZone";
 export function useFileDropGuard(): void {
 	useEffect(() => {
 		const refuse = (event: DragEvent) => {
-			if (!carriesFiles(event.dataTransfer)) return;
+			// A row's drag too: a browser may list the file it saves when let go
+			// outside the window, and dropping that here must not open it.
+			if (
+				!carriesFiles(event.dataTransfer) &&
+				!carriesEntry(event.dataTransfer)
+			) {
+				return;
+			}
 			event.preventDefault();
 			if (event.type === "dragover" && event.dataTransfer) {
 				event.dataTransfer.dropEffect = "none";
