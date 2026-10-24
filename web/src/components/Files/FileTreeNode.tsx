@@ -10,8 +10,22 @@ import {
 import { memo, useCallback, useEffect, useState } from "react";
 import { contentsQueryKey, useContents } from "../../hooks/useContents";
 import { useFSWatch } from "../../hooks/useFSWatch";
+import { writeEntryDrag } from "../../lib/entryDrag";
 import type { Entry } from "../../types/contents";
+import { isAtOrUnder } from "../../utils/path";
 import { iconButtonClass, Spinner } from "../ui";
+
+/** What the tree knows about a row's drag at the moment it starts. */
+export interface EntryDragStart {
+	/** Whether the folder was open, so it can be opened again where it lands. */
+	wasExpanded: boolean;
+	/**
+	 * The row the drag started from, where its `dragend` is sent — still sent
+	 * there once the row has left the page under the drag, though it no longer
+	 * bubbles anywhere — so the end of the drag is listened for on it.
+	 */
+	element: HTMLElement;
+}
 
 interface Props {
 	entry: Entry;
@@ -27,8 +41,21 @@ interface Props {
 	dropTargetPath: string | null;
 	/** Folder a drag has hovered long enough to open. */
 	springOpenPath: string | null;
-	/** Folder something outside the tree — a new entry — needs open. */
-	forceOpenPath: string | null;
+	/**
+	 * Folders something outside the tree — a new or moved entry — needs open.
+	 * A new array is a new request, even for paths asked for before.
+	 */
+	forceOpenPaths: readonly string[];
+	/**
+	 * Starts a row's drag, and with it the move of that entry. Left out where
+	 * rows must not be dragged: on a touch screen, where a long press is not a
+	 * drag but the start of a scroll or a menu.
+	 */
+	onEntryDragStart?: (entry: Entry, drag: EntryDragStart) => void;
+	/** Entry being dragged right now. */
+	dragSourcePath: string | null;
+	/** Entries whose move has been sent and not yet answered. */
+	movingPaths: ReadonlySet<string>;
 }
 
 const FileTreeNode = memo(function FileTreeNode({
@@ -42,7 +69,10 @@ const FileTreeNode = memo(function FileTreeNode({
 	menuPath,
 	dropTargetPath,
 	springOpenPath,
-	forceOpenPath,
+	forceOpenPaths,
+	onEntryDragStart,
+	dragSourcePath,
+	movingPaths,
 }: Props) {
 	const queryClient = useQueryClient();
 	const isDirectory = entry.type === "dir";
@@ -64,11 +94,12 @@ const FileTreeNode = memo(function FileTreeNode({
 		if (isDirectory && springOpenPath === entry.path) setIsExpanded(true);
 	}, [isDirectory, springOpenPath, entry.path]);
 
-	// Something was just created in this folder, and a folder that stays closed
-	// over it is the same as the creation having done nothing.
+	// Something was just created or moved into this folder, or this is a folder
+	// just moved, and a folder that stays closed over it is the same as the
+	// action having done nothing.
 	useEffect(() => {
-		if (isDirectory && forceOpenPath === entry.path) setIsExpanded(true);
-	}, [isDirectory, forceOpenPath, entry.path]);
+		if (isDirectory && forceOpenPaths.includes(entry.path)) setIsExpanded(true);
+	}, [isDirectory, forceOpenPaths, entry.path]);
 
 	const { data, isLoading, error } = useContents(
 		entry.path,
@@ -93,6 +124,14 @@ const FileTreeNode = memo(function FileTreeNode({
 
 	const isDropTarget = isDirectory && entry.path === dropTargetPath;
 	const isMenuOpen = entry.path === menuPath;
+	const isMoving = movingPaths.has(entry.path);
+	// A row whose move is still in flight is not dragged again, nor is anything
+	// inside it: the second move would be sent for a path the first is about to
+	// vacate. Only the moving row itself is dimmed; its wrapper takes the
+	// subtree with it.
+	const canDrag =
+		!!onEntryDragStart &&
+		![...movingPaths].some((moving) => isAtOrUnder(entry.path, moving));
 
 	const paddingLeft = 12 + depth * 16;
 
@@ -100,11 +139,33 @@ const FileTreeNode = memo(function FileTreeNode({
 		// On the wrapper rather than the row: the subtree of an expanded folder
 		// then answers for that folder, so the gaps around its children — the
 		// loading spinner, the failure line — are aimed somewhere too.
-		<div data-entry-path={entry.path} data-entry-type={entry.type}>
+		<div
+			data-entry-path={entry.path}
+			data-entry-type={entry.type}
+			// The subtree goes with the folder, so it fades with it.
+			className={
+				isMoving || entry.path === dragSourcePath ? "opacity-50" : undefined
+			}
+		>
 			{/* Highlight, hover and indentation sit here rather than on the row
 			    button, which no longer spans the row: on the button they would stop
-			    short of the menu, leaving a notch out of the drop target. */}
+			    short of the menu, leaving a notch out of the drop target. The drag
+			    starts here for the same reason: anywhere on the row picks it up.
+			    A drag never sends `click`, so pressing still opens or toggles. */}
+			{/* biome-ignore lint/a11y/noStaticElementInteractions: a mouse-only drag source; the buttons inside are the row's controls */}
 			<div
+				draggable={canDrag || undefined}
+				onDragStart={
+					canDrag
+						? (event) => {
+								writeEntryDrag(event.dataTransfer, entry);
+								onEntryDragStart(entry, {
+									wasExpanded: isDirectory && isExpanded,
+									element: event.currentTarget,
+								});
+							}
+						: undefined
+				}
 				style={{ paddingLeft }}
 				className={`group flex min-h-[44px] items-center gap-2 pr-1 text-sm transition-colors ${
 					isDropTarget
@@ -202,7 +263,10 @@ const FileTreeNode = memo(function FileTreeNode({
 								menuPath={menuPath}
 								dropTargetPath={dropTargetPath}
 								springOpenPath={springOpenPath}
-								forceOpenPath={forceOpenPath}
+								forceOpenPaths={forceOpenPaths}
+								onEntryDragStart={onEntryDragStart}
+								dragSourcePath={dragSourcePath}
+								movingPaths={movingPaths}
 							/>
 						))
 					) : null}

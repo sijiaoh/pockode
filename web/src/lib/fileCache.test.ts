@@ -2,7 +2,7 @@ import { QueryClient } from "@tanstack/react-query";
 import { describe, expect, it } from "vitest";
 import { contentsQueryKey } from "../hooks/useContents";
 import { FILE_SEARCH_QUERY_KEY } from "../hooks/useFileSearch";
-import { applyEntryGone } from "./fileCache";
+import { applyEntryGone, applyEntryMoved } from "./fileCache";
 
 /**
  * Tested here rather than through the components because all three callers —
@@ -82,5 +82,22 @@ describe("applyEntryGone", () => {
 		// that opens nothing. True of a delete exactly as it is of a rename,
 		// which is why both come through here.
 		expect(isStale(queryClient, [FILE_SEARCH_QUERY_KEY, "old"])).toBe(true);
+	});
+
+	describe("applyEntryMoved", () => {
+		it("leaves the old place as a rename does and refreshes where it landed", () => {
+			const queryClient = seed();
+			queryClient.setQueryData(contentsQueryKey("archive"), []);
+
+			applyEntryMoved(queryClient, "src/old", "archive");
+
+			expect(
+				queryClient.getQueryData(contentsQueryKey("src/old")),
+			).toBeUndefined();
+			expect(isStale(queryClient, contentsQueryKey("src"))).toBe(true);
+			// Unlike a rename, the entry turns up in another folder's listing.
+			expect(isStale(queryClient, contentsQueryKey("archive"))).toBe(true);
+			expect(isStale(queryClient, [FILE_SEARCH_QUERY_KEY, "old"])).toBe(true);
+		});
 	});
 });

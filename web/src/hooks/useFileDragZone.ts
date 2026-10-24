@@ -135,14 +135,24 @@ export function readPasted(clipboardData: DataTransfer): DroppedFiles | null {
 	return pasted;
 }
 
-interface Options {
+export type ZoneDropEffect = "copy" | "move" | "none";
+
+interface DragZoneOptions<T> {
+	/** Which drags the zone tracks at all; every other drag passes through it. */
+	accepts: (dataTransfer: DataTransfer) => boolean;
 	/**
-	 * Whether a drop is taken. When false the drag is still tracked, so the
-	 * caller can say why it is being turned away, but nothing is handed over.
+	 * What letting go here would do, asked on every `dragover` and again at the
+	 * drop: "none" turns the drag away at that spot. Asked per event rather than
+	 * once per drag, since some drags are taken over one row and not the next.
 	 */
-	enabled: boolean;
-	onDrop: (dropped: DroppedFiles, target: EventTarget) => void;
-	/** Every `dragenter`/`dragover` of a drag that would be taken. */
+	dropEffect: (event: ReactDragEvent<HTMLElement>) => ZoneDropEffect;
+	/** What a taken drop hands over, read while its event is still alive. */
+	read: (dataTransfer: DataTransfer) => T;
+	onDrop: (dropped: T, target: EventTarget) => void;
+	/**
+	 * Every `dragenter`/`dragover` of a tracked drag, turned away or not; on a
+	 * `dragover`, before `dropEffect` is asked about it.
+	 */
 	onDragMove?: (event: ReactDragEvent<HTMLElement>) => void;
 	/** The drag is over: left, dropped, or ended somewhere else. */
 	onReset?: () => void;
@@ -154,8 +164,8 @@ interface Options {
 	ownDomOnly?: boolean;
 }
 
-export interface FileDragZone {
-	/** Whether a file drag is over the zone, refused drags included. */
+export interface DragZone {
+	/** Whether a tracked drag is over the zone, turned-away drags included. */
 	isDragging: boolean;
 	dropProps: {
 		onDragEnter: (event: ReactDragEvent<HTMLElement>) => void;
@@ -166,20 +176,24 @@ export interface FileDragZone {
 }
 
 /**
- * An element that takes files dragged onto it, or says it will not.
+ * An element that takes drags of some kind, or says it will not — what every
+ * drop zone needs whatever it is that is dragged: the depth count, the resets
+ * for a drag that ends elsewhere, and claiming the drag.
  *
  * Claims the drag in the bubbling phase, after `useFileDropGuard` has refused
  * it in the capture phase, so the zone's `dropEffect` is the one the cursor
  * shows. The drag state stays here rather than in any store — it is over in a
  * second and nothing outside the zone has a use for it.
  */
-export function useFileDragZone({
-	enabled,
+export function useDragZone<T>({
+	accepts,
+	dropEffect,
+	read,
 	onDrop,
 	onDragMove,
 	onReset,
 	ownDomOnly = false,
-}: Options): FileDragZone {
+}: DragZoneOptions<T>): DragZone {
 	const [isDragging, setIsDragging] = useState(false);
 
 	// Every child bubbles a `dragenter`/`dragleave` pair of its own as the cursor
@@ -191,9 +205,23 @@ export function useFileDragZone({
 	// Held in refs so the handlers below never have to be rebuilt, which keeps the
 	// window listeners subscribed once for the life of the zone. Only ever read
 	// from an event, which is long after the effect that refreshed them.
-	const optionsRef = useRef({ enabled, onDrop, onDragMove, onReset });
+	const optionsRef = useRef({
+		accepts,
+		dropEffect,
+		read,
+		onDrop,
+		onDragMove,
+		onReset,
+	});
 	useEffect(() => {
-		optionsRef.current = { enabled, onDrop, onDragMove, onReset };
+		optionsRef.current = {
+			accepts,
+			dropEffect,
+			read,
+			onDrop,
+			onDragMove,
+			onReset,
+		};
 	});
 
 	const clearLostTimer = useCallback(() => {
@@ -227,7 +255,8 @@ export function useFileDragZone({
 	// its `dragenter` there, which must not hold the zone open behind it.
 	const isOurs = useCallback(
 		(event: ReactDragEvent<HTMLElement>) =>
-			carriesFiles(event.dataTransfer) &&
+			!!event.dataTransfer &&
+			optionsRef.current.accepts(event.dataTransfer) &&
 			(!ownDomOnly || event.currentTarget.contains(event.target as Node)),
 		[ownDomOnly],
 	);
@@ -239,7 +268,7 @@ export function useFileDragZone({
 			clearLostTimer();
 			depthRef.current += 1;
 			setIsDragging(true);
-			if (optionsRef.current.enabled) optionsRef.current.onDragMove?.(event);
+			optionsRef.current.onDragMove?.(event);
 		},
 		[isOurs, clearLostTimer],
 	);
@@ -248,15 +277,16 @@ export function useFileDragZone({
 		(event: ReactDragEvent<HTMLElement>) => {
 			if (!isOurs(event)) return;
 			// Required for the drop to happen at all: left alone, the browser's
-			// default action for a file drag is to open the file.
+			// default action for a file drag is to open the file, and for any other
+			// drag is to refuse it.
 			event.preventDefault();
 			clearLostTimer();
-			const { enabled, onDragMove } = optionsRef.current;
-			event.dataTransfer.dropEffect = enabled ? "copy" : "none";
+			const { dropEffect, onDragMove } = optionsRef.current;
 			// Also here and not only on enter, so that a drag whose `dragenter` went
 			// missing still gets told why it is being refused.
 			setIsDragging(true);
-			if (enabled) onDragMove?.(event);
+			onDragMove?.(event);
+			event.dataTransfer.dropEffect = dropEffect(event);
 		},
 		[isOurs, clearLostTimer],
 	);
@@ -298,12 +328,14 @@ export function useFileDragZone({
 		(event: ReactDragEvent<HTMLElement>) => {
 			if (!isOurs(event)) return;
 			event.preventDefault();
+			// Asked again rather than trusted from the last `dragover`: the drop is
+			// where something is actually done, and the answer may have changed.
 			// Read before resetting: the event's data is only alive during dispatch.
-			const dropped = optionsRef.current.enabled
-				? readDropped(event.dataTransfer)
-				: null;
+			const { dropEffect, read } = optionsRef.current;
+			const taken = dropEffect(event) !== "none";
+			const dropped = taken ? read(event.dataTransfer) : null;
 			reset();
-			if (dropped) optionsRef.current.onDrop(dropped, event.target);
+			if (taken) optionsRef.current.onDrop(dropped as T, event.target);
 		},
 		[isOurs, reset],
 	);
@@ -317,4 +349,42 @@ export function useFileDragZone({
 			onDrop: handleDrop,
 		},
 	};
+}
+
+interface Options {
+	/**
+	 * Whether a drop is taken. When false the drag is still tracked, so the
+	 * caller can say why it is being turned away, but nothing is handed over.
+	 */
+	enabled: boolean;
+	onDrop: (dropped: DroppedFiles, target: EventTarget) => void;
+	/** Every `dragenter`/`dragover` of a drag that would be taken. */
+	onDragMove?: (event: ReactDragEvent<HTMLElement>) => void;
+	/** The drag is over: left, dropped, or ended somewhere else. */
+	onReset?: () => void;
+	/** See `useDragZone`. */
+	ownDomOnly?: boolean;
+}
+
+export type FileDragZone = DragZone;
+
+/** An element that takes files dragged onto it, or says it will not. */
+export function useFileDragZone({
+	enabled,
+	onDrop,
+	onDragMove,
+	onReset,
+	ownDomOnly,
+}: Options): FileDragZone {
+	return useDragZone({
+		accepts: carriesFiles,
+		dropEffect: () => (enabled ? "copy" : "none"),
+		read: readDropped,
+		onDrop,
+		onDragMove: (event) => {
+			if (enabled) onDragMove?.(event);
+		},
+		onReset,
+		ownDomOnly,
+	});
 }
