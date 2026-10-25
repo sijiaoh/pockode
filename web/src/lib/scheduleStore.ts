@@ -1,21 +1,16 @@
 import { create } from "zustand";
-import type { Schedule, ScheduleListItem, ServerZone } from "../types/schedule";
+import type { Schedule, ScheduleListItem } from "../types/schedule";
 import { needsAttention } from "./activity";
 import { normalizeWorkRow, useWorkNeedsAttention } from "./workStore";
 
 interface ScheduleState {
 	schedules: ScheduleListItem[];
-	/**
-	 * The zone every cron is evaluated in, as the subscription last reported it.
-	 * Null until the first snapshot.
-	 */
-	serverZone: ServerZone | null;
 	isLoading: boolean;
 	error: string | null;
 }
 
 interface ScheduleActions {
-	setSchedules: (schedules: ScheduleListItem[], serverZone: ServerZone) => void;
+	setSchedules: (schedules: ScheduleListItem[]) => void;
 	updateSchedules: (
 		updater: (old: ScheduleListItem[]) => ScheduleListItem[],
 	) => void;
@@ -35,13 +30,11 @@ type ScheduleStore = ScheduleState & ScheduleActions;
 
 export const useScheduleStore = create<ScheduleStore>((set) => ({
 	schedules: [],
-	serverZone: null,
 	isLoading: true,
 	error: null,
-	setSchedules: (schedules, serverZone) =>
+	setSchedules: (schedules) =>
 		set({
 			schedules: schedules.map(normalizeScheduleRow),
-			serverZone,
 			isLoading: false,
 			error: null,
 		}),
@@ -56,8 +49,7 @@ export const useScheduleStore = create<ScheduleStore>((set) => ({
 				: { schedules: [...state.schedules, schedule] },
 		),
 	setError: (error) => set({ isLoading: false, error }),
-	reset: () =>
-		set({ schedules: [], serverZone: null, isLoading: true, error: null }),
+	reset: () => set({ schedules: [], isLoading: true, error: null }),
 }));
 
 /**

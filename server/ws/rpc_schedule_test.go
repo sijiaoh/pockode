@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/pockode/server/agentrole"
 	"github.com/pockode/server/rpc"
@@ -23,10 +22,9 @@ type scheduleListChanged struct {
 }
 
 type scheduleDetailChanged struct {
-	ID         string              `json:"id"`
-	Schedule   schedule.Schedule   `json:"schedule"`
-	Runs       rpc.ScheduleRunPage `json:"runs"`
-	ServerZone schedule.Zone       `json:"server_zone"`
+	ID       string              `json:"id"`
+	Schedule schedule.Schedule   `json:"schedule"`
+	Runs     rpc.ScheduleRunPage `json:"runs"`
 }
 
 func createSchedule(t *testing.T, env *testEnv, params rpc.ScheduleCreateParams) schedule.Schedule {
@@ -42,6 +40,9 @@ func createSchedule(t *testing.T, env *testEnv, params rpc.ScheduleCreateParams)
 	}
 	if params.Cron == "" {
 		params.Cron = "0 3 * * *"
+	}
+	if params.TimeZone == "" {
+		params.TimeZone = "Asia/Tokyo"
 	}
 	resp := env.call("schedule.create", params)
 	if resp.Error != nil {
@@ -155,6 +156,39 @@ func TestHandler_ScheduleCreate_EnabledByDefault(t *testing.T) {
 	}
 }
 
+// A schedule keeps the zone it was made in through an edit of its period, and
+// moves to another only when one is sent: the client's "switch to this
+// device's zone".
+func TestHandler_ScheduleUpdate_TimeZone(t *testing.T) {
+	env := newTestEnv(t, &mockAgent{})
+	sched := createSchedule(t, env, rpc.ScheduleCreateParams{TimeZone: "Asia/Tokyo"})
+	if sched.TimeZone != "Asia/Tokyo" {
+		t.Fatalf("time_zone = %q, want Asia/Tokyo", sched.TimeZone)
+	}
+
+	update := func(params rpc.ScheduleUpdateParams) schedule.Schedule {
+		t.Helper()
+		params.ID = sched.ID
+		if resp := env.call("schedule.update", params); resp.Error != nil {
+			t.Fatalf("schedule.update: %s", resp.Error.Message)
+		}
+		got, _, err := env.scheduleStore.Get(sched.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+
+	cron := "30 7 * * *"
+	if got := update(rpc.ScheduleUpdateParams{Cron: &cron}); got.TimeZone != "Asia/Tokyo" {
+		t.Errorf("time_zone after a new cron = %q, want it kept", got.TimeZone)
+	}
+	zone := "America/New_York"
+	if got := update(rpc.ScheduleUpdateParams{TimeZone: &zone}); got.TimeZone != zone || got.Cron != cron {
+		t.Errorf("after switching zone: time_zone %q, cron %q; want %s, %s", got.TimeZone, got.Cron, zone, cron)
+	}
+}
+
 // TestHandler_Schedule_UserErrors pins which refusals are the user's: each is
 // InvalidParams with a message that says what to fix.
 func TestHandler_Schedule_UserErrors(t *testing.T) {
@@ -169,6 +203,7 @@ func TestHandler_Schedule_UserErrors(t *testing.T) {
 	sched := createSchedule(t, env, rpc.ScheduleCreateParams{})
 	badCron := "61 * * * *"
 	missingWorktree := "nope"
+	unknownZone := "Mars/Olympus_Mons"
 
 	for _, tc := range []struct {
 		name   string
@@ -176,16 +211,19 @@ func TestHandler_Schedule_UserErrors(t *testing.T) {
 		params any
 		want   string
 	}{
-		{"unparsable cron", "schedule.create", rpc.ScheduleCreateParams{Title: "x", Prompt: "y", AgentRoleID: env.testRoleID, Cron: badCron}, "61 is out of range"},
-		{"missing prompt", "schedule.create", rpc.ScheduleCreateParams{Title: "x", AgentRoleID: env.testRoleID, Cron: "* * * * *"}, "prompt"},
-		{"role that takes no jobs", "schedule.create", rpc.ScheduleCreateParams{Title: "x", Prompt: "y", AgentRoleID: storyRole.ID, Cron: "* * * * *"}, "job"},
+		{"unparsable cron", "schedule.create", rpc.ScheduleCreateParams{Title: "x", Prompt: "y", AgentRoleID: env.testRoleID, Cron: badCron, TimeZone: "UTC"}, "61 is out of range"},
+		{"missing prompt", "schedule.create", rpc.ScheduleCreateParams{Title: "x", AgentRoleID: env.testRoleID, Cron: "* * * * *", TimeZone: "UTC"}, "prompt"},
+		{"role that takes no jobs", "schedule.create", rpc.ScheduleCreateParams{Title: "x", Prompt: "y", AgentRoleID: storyRole.ID, Cron: "* * * * *", TimeZone: "UTC"}, "job"},
+		{"missing time zone", "schedule.create", rpc.ScheduleCreateParams{Title: "x", Prompt: "y", AgentRoleID: env.testRoleID, Cron: "* * * * *"}, "time_zone is required"},
+		{"unknown time zone", "schedule.create", rpc.ScheduleCreateParams{Title: "x", Prompt: "y", AgentRoleID: env.testRoleID, Cron: "* * * * *", TimeZone: unknownZone}, "unknown time zone"},
+		{"update to an unknown time zone", "schedule.update", rpc.ScheduleUpdateParams{ID: sched.ID, TimeZone: &unknownZone}, "unknown time zone"},
 		{"update to an unparsable cron", "schedule.update", rpc.ScheduleUpdateParams{ID: sched.ID, Cron: &badCron}, "61 is out of range"},
 		{"update of an unknown schedule", "schedule.update", rpc.ScheduleUpdateParams{ID: "nope"}, "schedule not found"},
 		{"delete of an unknown schedule", "schedule.delete", rpc.ScheduleDeleteParams{ID: "nope"}, "schedule not found"},
 		{"run of an unknown schedule", "schedule.run", rpc.ScheduleRunParams{ID: "nope"}, "schedule not found"},
 		{"detail of an unknown schedule", "schedule.detail.subscribe", rpc.ScheduleDetailSubscribeParams{ID: env.nextSubID(), ScheduleID: "nope"}, "schedule not found"},
 		{"detail without a schedule", "schedule.detail.subscribe", rpc.ScheduleDetailSubscribeParams{ID: env.nextSubID()}, "schedule_id is required"},
-		{"worktree that does not exist", "schedule.create", rpc.ScheduleCreateParams{Title: "x", Prompt: "y", AgentRoleID: env.testRoleID, Cron: "* * * * *", Worktree: "nope"}, "worktree \"nope\""},
+		{"worktree that does not exist", "schedule.create", rpc.ScheduleCreateParams{Title: "x", Prompt: "y", AgentRoleID: env.testRoleID, Cron: "* * * * *", TimeZone: "UTC", Worktree: "nope"}, "worktree \"nope\""},
 		{"update to a worktree that does not exist", "schedule.update", rpc.ScheduleUpdateParams{ID: sched.ID, Worktree: &missingWorktree}, "worktree \"nope\""},
 		{"runs of no subscription", "schedule.detail.runs", rpc.ScheduleDetailRunsParams{ID: "nope"}, "no such subscription"},
 	} {
@@ -348,31 +386,6 @@ func TestHandler_ScheduleDetail_PagesRunsNewestFirst(t *testing.T) {
 		if want := made[total-1-i]; id != want {
 			t.Fatalf("run %d = %s, want %s (newest made first)", i, id, want)
 		}
-	}
-}
-
-// The server's zone rides on both subscriptions, because a period is the
-// server's wall-clock time and the detail page is reachable without the list.
-func TestHandler_ScheduleSubscriptions_CarryTheServerZone(t *testing.T) {
-	env := newTestEnv(t, &mockAgent{})
-	sched := createSchedule(t, env, rpc.ScheduleCreateParams{})
-	name, offset := time.Now().Zone()
-	want := schedule.Zone{Name: name, OffsetSeconds: offset}
-
-	if got := subscribeScheduleList(t, env).ServerZone; got != want {
-		t.Errorf("list server_zone = %+v, want %+v", got, want)
-	}
-	if _, detail := subscribeScheduleDetail(t, env, sched.ID); detail.ServerZone != want {
-		t.Errorf("detail server_zone = %+v, want %+v", detail.ServerZone, want)
-	}
-
-	// A detail notification is the whole detail, so it carries the zone too.
-	if _, err := env.scheduleStore.RecordSkip(context.Background(), sched.ID); err != nil {
-		t.Fatalf("RecordSkip: %v", err)
-	}
-	changed := awaitScheduleDetail(t, env, func(d scheduleDetailChanged) bool { return d.Schedule.LastSkippedAt != nil })
-	if changed.ServerZone != want {
-		t.Errorf("schedule.detail.changed server_zone = %+v, want %+v", changed.ServerZone, want)
 	}
 }
 

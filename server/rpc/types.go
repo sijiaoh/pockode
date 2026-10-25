@@ -1485,6 +1485,9 @@ type ScheduleCreateParams struct {
 	Prompt      string `json:"prompt"`
 	AgentRoleID string `json:"agent_role_id"`
 	Cron        string `json:"cron"`
+	// TimeZone is the IANA zone the cron is read in, required: the client
+	// sends the zone of the device the schedule is made on.
+	TimeZone string `json:"time_zone"`
 	// Enabled defaults to true: a schedule is made to run, and one that has to
 	// be switched on after it is created is a second step nobody asked for.
 	Enabled  *bool  `json:"enabled,omitempty"`
@@ -1492,13 +1495,15 @@ type ScheduleCreateParams struct {
 }
 
 // ScheduleUpdateParams follows "absent = unchanged" for every field. An empty
-// worktree moves the runs back to the main one.
+// worktree moves the runs back to the main one. A new cron keeps the
+// schedule's time zone; the zone moves only when TimeZone is sent.
 type ScheduleUpdateParams struct {
 	ID          string  `json:"id"`
 	Title       *string `json:"title,omitempty"`
 	Prompt      *string `json:"prompt,omitempty"`
 	AgentRoleID *string `json:"agent_role_id,omitempty"`
 	Cron        *string `json:"cron,omitempty"`
+	TimeZone    *string `json:"time_zone,omitempty"`
 	Enabled     *bool   `json:"enabled,omitempty"`
 	Worktree    *string `json:"worktree,omitempty"`
 }
@@ -1524,10 +1529,6 @@ type ScheduleListItem struct {
 
 type ScheduleListSubscribeResult struct {
 	Items []ScheduleListItem `json:"items"`
-	// ServerZone is the zone every schedule's cron is evaluated in, read at
-	// subscribe time: a period is the server's wall-clock time, and the client
-	// may be in another zone.
-	ServerZone schedule.Zone `json:"server_zone"`
 }
 
 type ScheduleDetailSubscribeParams struct {
@@ -1566,9 +1567,6 @@ type ScheduleDetailSubscribeResult struct {
 	// Runs is the newest page of the schedule's runs. Every schedule.detail.changed
 	// replaces it whole; older pages are read with schedule.detail.runs.
 	Runs ScheduleRunPage `json:"runs"`
-	// ServerZone is ScheduleListSubscribeResult.ServerZone, here too because a
-	// detail page is reachable by URL without the list.
-	ServerZone schedule.Zone `json:"server_zone"`
 }
 
 // ScheduleDetailRunsParams asks for a page of runs older than Cursor, against

@@ -189,7 +189,8 @@ Each firing makes a [job](#jobs); the schedule itself never runs anything.
 | title            | string      | Required; becomes each run's title |
 | prompt           | string      | Required; becomes each run's body |
 | agent_role_id    | string      | Required; the role must take `job` works, judged on create and whenever it changes ([Work Type Field](#work-type-field)) |
-| cron             | string      | Standard 5 fields, stored trimmed, evaluated in the **server's local time zone** |
+| cron             | string      | Standard 5 fields, stored trimmed, read on the wall clock of `time_zone` |
+| time_zone        | string      | Required IANA name (`Asia/Tokyo`), set by the client ([api](api.md#schedule-time-zones)) |
 | enabled          | bool        | A disabled schedule never fires, and can still be run by hand |
 | worktree         | string?     | Worktree each run is made in (empty = main); must exist when set — a worktree removed later fails the next firing, recorded as `last_failure` |
 | next_run_at      | time?       | The next firing; absent exactly when the schedule is disabled |

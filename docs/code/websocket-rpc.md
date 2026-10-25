@@ -452,8 +452,8 @@ This pattern ensures:
 | `settings.subscribe` | ✅ Full settings | `onSubscribed` replaces state |
 | `remote_url.subscribe` | ✅ Current remote URL | `onSubscribed` replaces state; a reset keeps it ([why](#following-the-remote-url)) |
 | `agent_role.list.subscribe` | ✅ Full list | `onSubscribed` replaces state |
-| `schedule.list.subscribe` | ✅ Full list, each with its latest run, and the server's zone | `onSubscribed` replaces state |
-| `schedule.detail.subscribe` | ✅ The schedule, its newest run page, and the server's zone | `onSubscribed` replaces state ([run paging](../projects/api.md#schedule-runs)) |
+| `schedule.list.subscribe` | ✅ Full list, each with its latest run | `onSubscribed` replaces state |
+| `schedule.detail.subscribe` | ✅ The schedule and its newest run page | `onSubscribed` replaces state ([run paging](../projects/api.md#schedule-runs)) |
 | `chat.messages.subscribe` | ✅ Newest history page | `onSubscribed` replaces state ([paging](../agent-chat.md#history-paging)) |
 | `git.diff.subscribe` | ✅ Diff data | `onSubscribed` updates state |
 | `fs.subscribe` | ❌ Empty reply | `onSubscribed` triggers refresh |

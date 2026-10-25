@@ -10,8 +10,6 @@ import ProjectTab from "./ProjectTab";
 
 vi.mock("../Layout", () => ({ useSidebarRefresh: () => ({ isActive: true }) }));
 
-const ZONE = { name: "UTC", offset_seconds: 0 };
-
 const row = (activity: Activity, overrides: Partial<WorkListItem> = {}) =>
 	({
 		id: "w1",
@@ -67,10 +65,9 @@ describe("ProjectTab", () => {
 	it("dots Schedules, and only Schedules, while a schedule's latest run is waiting on the user", () => {
 		useScheduleStore
 			.getState()
-			.setSchedules(
-				[makeSchedule({ last_run: row("needs_permission", { type: "job" }) })],
-				ZONE,
-			);
+			.setSchedules([
+				makeSchedule({ last_run: row("needs_permission", { type: "job" }) }),
+			]);
 
 		renderTab();
 
@@ -92,15 +89,12 @@ describe("ProjectTab", () => {
 	// A failure needs a person whenever they get to it, not now — the row's edge
 	// says it, and a dot would say "someone is waiting" (docs/schedule-ui.md §1).
 	it("leaves Schedules undotted for a failed firing alone", () => {
-		useScheduleStore.getState().setSchedules(
-			[
-				makeSchedule({
-					last_failure: { at: "2026-10-23T03:00:00Z", error: "boom" },
-					last_run: row("stopped", { type: "job", status: "stopped" }),
-				}),
-			],
-			ZONE,
-		);
+		useScheduleStore.getState().setSchedules([
+			makeSchedule({
+				last_failure: { at: "2026-10-23T03:00:00Z", error: "boom" },
+				last_run: row("stopped", { type: "job", status: "stopped" }),
+			}),
+		]);
 
 		renderTab();
 

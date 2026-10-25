@@ -15,6 +15,10 @@ vi.mock("../../lib/wsStore", () => ({
 		selector({ actions: { createSchedule } }),
 }));
 
+vi.mock("../../hooks/useDeviceTimeZone", () => ({
+	useDeviceTimeZone: () => "Asia/Tokyo",
+}));
+
 vi.mock("../../hooks/useRouteState", () => ({
 	useCurrentWorktree: () => worktree,
 }));
@@ -60,10 +64,7 @@ describe("CreateScheduleSheet", () => {
 	beforeEach(() => {
 		createSchedule.mockReset();
 		worktree = "";
-		useScheduleStore.getState().setSchedules([], {
-			name: "UTC",
-			offset_seconds: 0,
-		});
+		useScheduleStore.getState().setSchedules([]);
 		setRoles([role("any", "Engineer"), role("job", "Auditor", "job")]);
 	});
 
@@ -76,16 +77,19 @@ describe("CreateScheduleSheet", () => {
 		const { onCreated } = renderSheet();
 
 		expect(screen.getByText("Runs in feature-x")).toBeInTheDocument();
+		expect(screen.queryByText(/Tokyo/)).not.toBeInTheDocument();
 		await fill(user);
 		await user.click(createButton());
 
 		// The field reports nothing until touched, so the cron it opened on is
-		// the one sent; the jobs-only role is preselected; enabled is left out.
+		// the one sent; the jobs-only role is preselected; enabled is left out;
+		// the zone is the device's, never asked.
 		expect(createSchedule).toHaveBeenCalledWith({
 			title: "Nightly audit",
 			prompt: "Audit the dependencies.",
 			agent_role_id: "job",
 			cron: "0 9 * * *",
+			time_zone: "Asia/Tokyo",
 			worktree: "feature-x",
 		});
 		expect(onCreated).toHaveBeenCalledWith("sched-9");

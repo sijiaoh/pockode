@@ -1,16 +1,5 @@
 import type { WorkListItem } from "./work";
 
-/**
- * The zone the server evaluates every schedule's cron in: its own local zone
- * (docs/projects/data-model.md#schedule). `name` is the zone's abbreviation as
- * the server's clock reports it (`JST`, or a bare `+03` where the zone has
- * none); `offset_seconds` is east of UTC, at subscribe time.
- */
-export interface ServerZone {
-	name: string;
-	offset_seconds: number;
-}
-
 /** A run the scheduler could not make or start, as the schedule records it. */
 export interface ScheduleRunFailure {
 	at: string;
@@ -29,8 +18,10 @@ export interface Schedule {
 	title: string;
 	prompt: string;
 	agent_role_id: string;
-	/** Standard 5-field cron, evaluated in the server's zone (`ServerZone`). */
+	/** Standard 5-field cron, evaluated in `time_zone`. */
 	cron: string;
+	/** IANA name, e.g. `Asia/Tokyo` (docs/schedule-ui.md §6.5). */
+	time_zone: string;
 	enabled: boolean;
 	/** Worktree each run is made in (empty/undefined = main). */
 	worktree?: string;
@@ -60,6 +51,8 @@ export interface ScheduleCreateParams {
 	prompt: string;
 	agent_role_id: string;
 	cron: string;
+	/** The device's zone: a schedule is made where its user is. */
+	time_zone: string;
 	/** Omitted makes an enabled schedule. */
 	enabled?: boolean;
 	/** Omitted or empty is main. */
@@ -73,6 +66,7 @@ export interface ScheduleUpdateParams {
 	prompt?: string;
 	agent_role_id?: string;
 	cron?: string;
+	time_zone?: string;
 	enabled?: boolean;
 	/** Empty string is main. */
 	worktree?: string;
@@ -93,18 +87,12 @@ export interface ScheduleRunPage {
 
 export interface ScheduleListSubscribeResult {
 	items: ScheduleListItem[];
-	server_zone: ServerZone;
 }
 
 export type ScheduleListChangedNotification =
 	| { id: string; operation: "create" | "update"; schedule: ScheduleListItem }
 	| { id: string; operation: "delete"; scheduleId: string }
-	| {
-			id: string;
-			operation: "sync";
-			schedules: ScheduleListItem[];
-			server_zone: ServerZone;
-	  };
+	| { id: string; operation: "sync"; schedules: ScheduleListItem[] };
 
 /**
  * One schedule and the newest page of its runs. Every notification is the whole
@@ -113,7 +101,6 @@ export type ScheduleListChangedNotification =
 export interface ScheduleDetailSubscribeResult {
 	schedule: Schedule;
 	runs: ScheduleRunPage;
-	server_zone: ServerZone;
 }
 
 export interface ScheduleDetailChangedNotification

@@ -1,7 +1,6 @@
 import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { deviceOffsetSeconds } from "../../lib/schedulePeriod";
 import { useScheduleStore } from "../../lib/scheduleStore";
 import { makeSchedule } from "../../test/scheduleFixtures";
 import type { ScheduleListItem } from "../../types/schedule";
@@ -12,6 +11,11 @@ const updateSchedule = vi.fn();
 vi.mock("../../lib/wsStore", () => ({
 	useWSStore: (selector: (s: unknown) => unknown) =>
 		selector({ actions: { updateSchedule } }),
+}));
+
+let deviceZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+vi.mock("../../hooks/useDeviceTimeZone", () => ({
+	useDeviceTimeZone: () => deviceZone,
 }));
 
 vi.mock("../../hooks/useRouteState", () => ({
@@ -29,13 +33,9 @@ vi.mock("./CreateScheduleSheet", () => ({
 }));
 
 const NOW = new Date("2026-10-23T12:00:00Z");
-const sameZone = () => ({
-	name: "JST",
-	offset_seconds: deviceOffsetSeconds(NOW),
-});
 
-function setSchedules(schedules: ScheduleListItem[], zone = sameZone()) {
-	useScheduleStore.getState().setSchedules(schedules, zone);
+function setSchedules(schedules: ScheduleListItem[]) {
+	useScheduleStore.getState().setSchedules(schedules);
 }
 
 const onOpenScheduleDetail = vi.fn();
@@ -126,22 +126,31 @@ describe("ScheduleListOverlay", () => {
 		expect(within(card("Paused")).getByText("Off")).toBeInTheDocument();
 	});
 
-	it("adds the server's offset to the period only when the device is on another", () => {
-		setSchedules([makeSchedule({ title: "Audit" })], {
-			name: "JST",
-			offset_seconds: deviceOffsetSeconds(NOW) + 3600,
-		});
-		const { unmount } = renderOverlay();
-		expect(
-			within(card("Audit")).getByText(/^Daily at 03:00 \(UTC/),
-		).toBeInTheDocument();
-		unmount();
-
-		setSchedules([makeSchedule({ title: "Audit" })]);
-		renderOverlay();
-		expect(
-			within(card("Audit")).getByText("Daily at 03:00"),
-		).toBeInTheDocument();
+	it("names the schedule's zone beside the period only when the device is in another", () => {
+		const real = deviceZone;
+		deviceZone = "Europe/London";
+		try {
+			setSchedules([
+				makeSchedule({ id: "a", title: "Audit", time_zone: "Asia/Tokyo" }),
+				makeSchedule({
+					id: "b",
+					title: "Custom",
+					cron: "0 9 1 * *",
+					time_zone: "Asia/Tokyo",
+				}),
+				makeSchedule({ id: "c", title: "Home", time_zone: "Europe/London" }),
+			]);
+			renderOverlay();
+			expect(card("Audit")).toHaveTextContent("Daily at 03:00 (Tokyo)");
+			// The label in the line's own font, not the expression's mono.
+			expect(within(card("Custom")).getByText("(Tokyo)")).not.toHaveClass(
+				"font-mono",
+			);
+			expect(card("Home")).toHaveTextContent("Daily at 03:00");
+			expect(card("Home")).not.toHaveTextContent("(");
+		} finally {
+			deviceZone = real;
+		}
 	});
 
 	it.each<[string, Partial<ScheduleListItem>, RegExp]>([

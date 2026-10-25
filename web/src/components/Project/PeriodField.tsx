@@ -1,20 +1,19 @@
 import { useId, useState } from "react";
+import { useDeviceTimeZone } from "../../hooks/useDeviceTimeZone";
 import {
 	cronFields,
 	DEFAULT_CRON,
 	dayShortName,
 	describePreset,
-	deviceOffsetSeconds,
 	formatClock,
 	HOURLY_EVERY,
 	type HourlyEvery,
 	type Period,
 	parsePeriod,
-	periodZoneLine,
 	toCron,
 	WEEK_DAYS,
 } from "../../lib/schedulePeriod";
-import type { ServerZone } from "../../types/schedule";
+import { sameZone, zoneLine } from "../../lib/scheduleZone";
 import { inputClass } from "../ui/inputClass";
 import ToggleGroup from "../ui/ToggleGroup";
 
@@ -167,8 +166,12 @@ interface Props {
 	 * is the caller's comparison with the stored string.
 	 */
 	onChange: (cron: string | null) => void;
-	/** Absent until the server's zone has arrived; the zone line waits for it. */
-	serverZone?: ServerZone;
+	/**
+	 * The stored schedule's zone, which every input is typed in. Absent for a
+	 * new schedule, which is made in the device's zone and so needs no line.
+	 * The field never writes a zone: editing keeps the schedule's.
+	 */
+	timeZone?: string;
 }
 
 /**
@@ -178,8 +181,9 @@ interface Props {
  * being written, so ticking the seventh day — which writes a daily cron —
  * does not swap the day toggles out from under the user.
  */
-export default function PeriodField({ initial, onChange, serverZone }: Props) {
+export default function PeriodField({ initial, onChange, timeZone }: Props) {
 	const id = useId();
+	const deviceZone = useDeviceTimeZone();
 	const [inputs, setInputs] = useState(() => initialInputs(initial));
 
 	const update = (next: Inputs) => {
@@ -211,7 +215,7 @@ export default function PeriodField({ initial, onChange, serverZone }: Props) {
 		</div>
 	);
 
-	let description: string | null;
+	let description: string;
 	if (inputs.mode === "custom") {
 		const parsed = parsePeriod(inputs.custom);
 		description = parsed
@@ -228,13 +232,6 @@ export default function PeriodField({ initial, onChange, serverZone }: Props) {
 				? "Enter a minute from 0 to 59."
 				: "Pick a time.";
 	}
-
-	const summary = [
-		description,
-		serverZone && periodZoneLine(serverZone, deviceOffsetSeconds()),
-	]
-		.filter(Boolean)
-		.join(" · ");
 
 	return (
 		<div className="space-y-3">
@@ -336,7 +333,14 @@ export default function PeriodField({ initial, onChange, serverZone }: Props) {
 				</div>
 			)}
 
-			{summary && <p className="text-xs text-th-text-muted">{summary}</p>}
+			<div className="text-xs text-th-text-muted">
+				<p>{description}</p>
+				{/* Its own line, not joined with ` · `: a phone would wrap the
+				    joined form mid-sentence. */}
+				{timeZone !== undefined && !sameZone(timeZone, deviceZone) && (
+					<p>{zoneLine(timeZone, deviceZone)}</p>
+				)}
+			</div>
 		</div>
 	);
 }

@@ -28,7 +28,6 @@ vi.mock("../lib/wsStore", async (importOriginal) => ({
 	),
 }));
 
-const ZONE = { name: "UTC", offset_seconds: 0 };
 const schedule = makeSchedule({ id: "s1" });
 const runOn = (day: number) =>
 	makeRun({ id: `run-${day}`, created_at: `2026-10-0${day}T03:00:00Z` });
@@ -55,7 +54,7 @@ beforeEach(() => {
 	scheduleDetailUnsubscribe.mockResolvedValue(undefined);
 	scheduleDetailSubscribe.mockResolvedValue({
 		id: "sub-1",
-		initial: { schedule, runs: firstPage, server_zone: ZONE },
+		initial: { schedule, runs: firstPage },
 	});
 });
 
@@ -72,7 +71,6 @@ describe("useScheduleDetailSubscription", () => {
 		notify({
 			schedule,
 			runs: { items: [runOn(5), runOn(4)], next_cursor: "c4", has_more: true },
-			server_zone: ZONE,
 		});
 
 		expect(result.current.runs.map((r) => r.id)).toEqual([

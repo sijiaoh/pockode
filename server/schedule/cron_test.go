@@ -4,7 +4,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-	_ "time/tzdata" // DST cases need America/New_York on every CI runner.
 )
 
 func TestParseCron_Rejects(t *testing.T) {

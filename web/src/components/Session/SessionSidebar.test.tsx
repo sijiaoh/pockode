@@ -293,18 +293,15 @@ describe("the Project tab's attention badge", () => {
 	// Jobs are kept out of the work list, so a run asking a question reaches the
 	// badge through its schedule or not at all (docs/schedule-ui.md §1).
 	it("lights while a schedule's latest run is waiting on the user", () => {
-		useScheduleStore.getState().setSchedules(
-			[
-				makeSchedule({
-					last_run: {
-						...work("running"),
-						type: "job",
-						unanswered_questions: 1,
-					},
-				}),
-			],
-			{ name: "UTC", offset_seconds: 0 },
-		);
+		useScheduleStore.getState().setSchedules([
+			makeSchedule({
+				last_run: {
+					...work("running"),
+					type: "job",
+					unanswered_questions: 1,
+				},
+			}),
+		]);
 
 		renderSidebar(vi.fn());
 

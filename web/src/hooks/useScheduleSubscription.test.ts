@@ -26,7 +26,6 @@ vi.mock("../lib/worktreeStore", () => ({
 	},
 }));
 
-const TOKYO = { name: "JST", offset_seconds: 9 * 3600 };
 const schedule = makeSchedule({ id: "s1" });
 
 const run = (activity: Activity): WorkListItem => ({
@@ -56,16 +55,15 @@ beforeEach(() => {
 	useScheduleStore.getState().reset();
 	scheduleListSubscribe.mockResolvedValue({
 		id: "sub-1",
-		initial: { items: [schedule], server_zone: TOKYO },
+		initial: { items: [schedule] },
 	});
 });
 
 describe("useScheduleSubscription", () => {
-	it("takes the schedules and the server's zone from the snapshot", async () => {
+	it("takes the schedules from the snapshot", async () => {
 		await subscribed();
 
 		expect(useScheduleStore.getState().schedules).toEqual([schedule]);
-		expect(useScheduleStore.getState().serverZone).toEqual(TOKYO);
 	});
 
 	// The create reply lands first when the sheet adds it, and the list's own
@@ -97,20 +95,13 @@ describe("useScheduleSubscription", () => {
 		expect(useScheduleStore.getState().schedules).toEqual([]);
 	});
 
-	it("replaces everything, zone included, on a sync", async () => {
+	it("replaces everything on a sync", async () => {
 		await subscribed();
 		const other = makeSchedule({ id: "s9" });
-		const utc = { name: "UTC", offset_seconds: 0 };
 
-		notify({
-			id: "sub-1",
-			operation: "sync",
-			schedules: [other],
-			server_zone: utc,
-		});
+		notify({ id: "sub-1", operation: "sync", schedules: [other] });
 
 		expect(useScheduleStore.getState().schedules).toEqual([other]);
-		expect(useScheduleStore.getState().serverZone).toEqual(utc);
 	});
 
 	// The run is drawn by the work components, which index their tables by

@@ -27,7 +27,7 @@ export function useScheduleSubscription(enabled: boolean) {
 	const handleNotification = useCallback(
 		(params: ScheduleListChangedNotification) => {
 			if (params.operation === "sync") {
-				setSchedules(params.schedules, params.server_zone);
+				setSchedules(params.schedules);
 				return;
 			}
 			updateSchedules((old) => {
@@ -59,7 +59,7 @@ export function useScheduleSubscription(enabled: boolean) {
 
 	const applyInitial = useCallback(
 		(initial: ScheduleListSubscribeResult) => {
-			setSchedules(initial.items, initial.server_zone);
+			setSchedules(initial.items);
 		},
 		[setSchedules],
 	);

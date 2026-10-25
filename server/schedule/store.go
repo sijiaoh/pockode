@@ -25,7 +25,8 @@ type Store interface {
 	// if it is enabled. Only the settings fields of s are read.
 	Create(ctx context.Context, s Schedule) (Schedule, error)
 	// Update changes the given settings. NextRunAt is recomputed when the cron
-	// expression or the enabled flag changes, and left alone otherwise.
+	// expression, the time zone or the enabled flag changes, and left alone
+	// otherwise.
 	Update(ctx context.Context, id string, fields UpdateFields) (Schedule, error)
 	// Delete removes the schedule and nothing else: its runs are job works of
 	// their own, and they and their sessions stay.
@@ -47,9 +48,6 @@ type Store interface {
 	// before anything fires.
 	SkipMissedRuns(ctx context.Context) error
 
-	// Zone is the zone the store evaluates cron expressions in, at this moment.
-	Zone() Zone
-
 	AddOnChangeListener(listener OnChangeListener)
 }
 
@@ -59,6 +57,7 @@ type UpdateFields struct {
 	Prompt      *string `json:"prompt,omitempty"`
 	AgentRoleID *string `json:"agent_role_id,omitempty"`
 	Cron        *string `json:"cron,omitempty"`
+	TimeZone    *string `json:"time_zone,omitempty"`
 	Enabled     *bool   `json:"enabled,omitempty"`
 	Worktree    *string `json:"worktree,omitempty"`
 }
@@ -76,8 +75,8 @@ type FileStore struct {
 	schedules   []Schedule
 	listeners   []OnChangeListener
 
-	// now is the clock every NextRunAt is computed from. Its location is the
-	// zone cron expressions are evaluated in: the server's local one.
+	// now is the clock every NextRunAt is computed from; the zone each cron
+	// expression is read in is the schedule's own, not this clock's.
 	now func() time.Time
 }
 
@@ -132,6 +131,7 @@ func (s *FileStore) Create(_ context.Context, in Schedule) (Schedule, error) {
 		Prompt:      in.Prompt,
 		AgentRoleID: in.AgentRoleID,
 		Cron:        strings.TrimSpace(in.Cron),
+		TimeZone:    in.TimeZone,
 		Enabled:     in.Enabled,
 		Worktree:    in.Worktree,
 		CreatedAt:   now,
@@ -176,6 +176,10 @@ func (s *FileStore) Update(_ context.Context, id string, fields UpdateFields) (S
 			cron := strings.TrimSpace(*fields.Cron)
 			timingChanged = timingChanged || cron != sched.Cron
 			sched.Cron = cron
+		}
+		if fields.TimeZone != nil {
+			timingChanged = timingChanged || *fields.TimeZone != sched.TimeZone
+			sched.TimeZone = *fields.TimeZone
 		}
 		if fields.Enabled != nil {
 			timingChanged = timingChanged || *fields.Enabled != sched.Enabled
@@ -344,12 +348,16 @@ func validateSettings(sched Schedule) error {
 	if _, err := ParseCron(sched.Cron); err != nil {
 		return fmt.Errorf("%w: %v", ErrInvalidSchedule, err)
 	}
+	if _, err := loadZone(sched.TimeZone); err != nil {
+		return fmt.Errorf("%w: %v", ErrInvalidSchedule, err)
+	}
 	return nil
 }
 
-// reschedule sets NextRunAt to the schedule's first firing after now, or
-// clears it when the schedule is disabled. The cron expression has already
-// been validated by the time any schedule reaches the store.
+// reschedule sets NextRunAt to the schedule's first firing after now, read on
+// the wall clock of the schedule's own zone, or clears it when the schedule is
+// disabled. The cron expression and the zone have already been validated by
+// the time any schedule reaches the store.
 func reschedule(sched *Schedule, now time.Time) {
 	if !sched.Enabled {
 		sched.NextRunAt = nil
@@ -362,17 +370,18 @@ func reschedule(sched *Schedule, now time.Time) {
 		sched.NextRunAt = nil
 		return
 	}
-	next := cron.Next(now)
+	loc, err := loadZone(sched.TimeZone)
+	if err != nil {
+		// As above: a zone is not guessed either.
+		sched.NextRunAt = nil
+		return
+	}
+	next := cron.Next(now.In(loc))
 	if next.IsZero() {
 		sched.NextRunAt = nil
 		return
 	}
 	sched.NextRunAt = &next
-}
-
-func (s *FileStore) Zone() Zone {
-	name, offset := s.now().Zone()
-	return Zone{Name: name, OffsetSeconds: offset}
 }
 
 // --- Listener management ---
