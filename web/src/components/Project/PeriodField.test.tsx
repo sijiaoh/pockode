@@ -1,50 +1,80 @@
-import { fireEvent, render, screen } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { act, fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { Period } from "../../types/schedule";
 import PeriodField from "./PeriodField";
 
 vi.mock("../../hooks/useDeviceTimeZone", () => ({
 	useDeviceTimeZone: () => "Europe/London",
 }));
 
+// 08:00 in London (GMT by then), 17:00 in Tokyo.
+const NOW = new Date("2026-10-25T08:00:00Z");
+
+// `fireEvent` throughout: the clock is frozen, and `userEvent` deadlocks on a
+// frozen fake clock (docs/testing.md).
+beforeEach(() => {
+	vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+	vi.setSystemTime(NOW);
+});
+
+afterEach(() => {
+	vi.useRealTimers();
+});
+
 const button = (name: string) => screen.getByRole("button", { name });
+const mode = () => screen.getByLabelText("Period");
+const pickMode = (value: string) =>
+	fireEvent.change(mode(), { target: { value } });
 const lastCall = (fn: ReturnType<typeof vi.fn>) => fn.mock.calls.at(-1)?.[0];
 
-function renderField(initial: string) {
+function renderField(initial: Period | null, timeZone?: string) {
 	const onChange = vi.fn();
-	render(<PeriodField initial={initial} onChange={onChange} />);
+	render(
+		<PeriodField initial={initial} onChange={onChange} timeZone={timeZone} />,
+	);
 	return onChange;
 }
 
 describe("PeriodField", () => {
 	it("starts a new schedule on Daily at 09:00 and calls nothing on mount", () => {
-		const onChange = renderField("");
-		expect(button("Daily")).toHaveAttribute("aria-pressed", "true");
+		const onChange = renderField(null);
+		expect(mode()).toHaveValue("daily");
 		expect(screen.getByLabelText("At")).toHaveValue("09:00");
 		expect(screen.getByText("Daily at 09:00")).toBeInTheDocument();
 		expect(onChange).not.toHaveBeenCalled();
 	});
 
-	it.each([
-		["15 */6 * * *", "Hourly"],
-		["0 9 * * *", "Daily"],
-		["0 9 * * MON-FRI", "Weekly"],
-		["0 9 1 * *", "Custom"],
-	])("opens %s in %s and calls nothing on mount", (cron, mode) => {
-		const onChange = renderField(cron);
-		expect(button(mode)).toHaveAttribute("aria-pressed", "true");
+	it("offers the five kinds, Once first, and nothing to type an expression in", () => {
+		renderField(null);
+		expect(
+			screen
+				.getAllByRole("option")
+				.slice(0, 5)
+				.map((o) => o.textContent),
+		).toEqual(["Once", "Hourly", "Daily", "Weekly", "Monthly"]);
+		expect(screen.queryByText(/cron/i)).not.toBeInTheDocument();
+	});
+
+	it.each<[Period, string]>([
+		[{ kind: "once", at: "2026-11-03T09:00" }, "once"],
+		[{ kind: "hourly", every: 6, minute: 15 }, "hourly"],
+		[{ kind: "daily", time: "09:00" }, "daily"],
+		[{ kind: "weekly", weekdays: [1, 2, 3, 4, 5], time: "09:00" }, "weekly"],
+		[{ kind: "monthly", day: 1, time: "09:00" }, "monthly"],
+	])("opens %j in its mode and calls nothing on mount", (period, kind) => {
+		const onChange = renderField(period);
+		expect(mode()).toHaveValue(kind);
 		expect(onChange).not.toHaveBeenCalled();
 	});
 
-	it("does not count re-tapping the lit mode as an edit", async () => {
-		const user = userEvent.setup();
-		const onChange = renderField("0 9 * * MON-FRI");
-		await user.click(button("Weekly"));
+	it("does not count picking the mode already shown as an edit", () => {
+		const onChange = renderField({ kind: "daily", time: "09:00" });
+		pickMode("daily");
 		expect(onChange).not.toHaveBeenCalled();
 	});
 
-	it("fills the preset's inputs from the stored cron", () => {
-		renderField("0 9 * * MON-FRI");
+	it("fills the inputs from the stored period", () => {
+		renderField({ kind: "weekly", weekdays: [1, 2, 3, 4, 5], time: "09:00" });
 		for (const day of ["Mon", "Tue", "Wed", "Thu", "Fri"]) {
 			expect(button(day)).toHaveAttribute("aria-pressed", "true");
 		}
@@ -53,196 +83,329 @@ describe("PeriodField", () => {
 		expect(screen.getByText("Weekdays at 09:00")).toBeInTheDocument();
 	});
 
-	it("keeps an unrecognised cron as stored in Custom", () => {
-		renderField("*/15 9-17 * * 1-5");
-		expect(
-			screen.getByRole("textbox", { name: "Cron expression" }),
-		).toHaveValue("*/15 9-17 * * 1-5");
-		expect(
-			screen.getByText("Checked by the server when you save."),
-		).toBeInTheDocument();
-	});
-
-	it("writes the hourly cron", async () => {
-		const user = userEvent.setup();
-		const onChange = renderField("0 * * * *");
-		await user.selectOptions(screen.getByLabelText("Every"), "6");
-		expect(lastCall(onChange)).toBe("0 */6 * * *");
-		const minute = screen.getByLabelText("hours at minute");
-		await user.clear(minute);
+	it("writes an hourly period", () => {
+		const onChange = renderField({ kind: "hourly", every: 1 });
+		expect(screen.getByLabelText("at minute")).toHaveValue("00");
+		fireEvent.change(screen.getByLabelText("Every"), {
+			target: { value: "6" },
+		});
+		expect(lastCall(onChange)).toEqual({ kind: "hourly", every: 6, minute: 0 });
+		const minute = screen.getByLabelText("at minute");
+		fireEvent.change(minute, { target: { value: "" } });
 		expect(lastCall(onChange)).toBeNull();
-		await user.type(minute, "15");
-		expect(lastCall(onChange)).toBe("15 */6 * * *");
+		fireEvent.change(minute, { target: { value: "15" } });
+		expect(lastCall(onChange)).toEqual({
+			kind: "hourly",
+			every: 6,
+			minute: 15,
+		});
 		expect(
 			screen.getByText("Every 6 hours, at 00:15, 06:15, 12:15 and 18:15"),
 		).toBeInTheDocument();
-		await user.clear(minute);
-		await user.type(minute, "60");
+		fireEvent.change(minute, { target: { value: "60" } });
 		expect(lastCall(onChange)).toBeNull();
 		expect(
 			screen.getByText("Enter a minute from 0 to 59."),
 		).toBeInTheDocument();
 	});
 
-	it("writes the daily cron and reports null for an empty time", () => {
-		const onChange = renderField("0 9 * * *");
+	it("names the unit in every interval", () => {
+		renderField({ kind: "hourly" });
+		expect(screen.getByRole("option", { name: "1 hour" })).toBeInTheDocument();
+		expect(screen.getByRole("option", { name: "6 hours" })).toBeInTheDocument();
+		expect(
+			screen.queryByRole("option", { name: "5 hours" }),
+		).not.toBeInTheDocument();
+	});
+
+	it("writes a daily period and reports null for an empty time", () => {
+		const onChange = renderField({ kind: "daily", time: "09:00" });
 		const time = screen.getByLabelText("At");
 		fireEvent.change(time, { target: { value: "21:05" } });
-		expect(lastCall(onChange)).toBe("5 21 * * *");
+		expect(lastCall(onChange)).toEqual({ kind: "daily", time: "21:05" });
 		fireEvent.change(time, { target: { value: "" } });
 		expect(lastCall(onChange)).toBeNull();
 		expect(screen.getByText("Pick a time.")).toBeInTheDocument();
 	});
 
-	it("rewrites a weekly cron in the canonical spelling once a day is toggled", async () => {
-		const user = userEvent.setup();
-		const onChange = renderField("0 9 * * MON-FRI");
-		await user.click(button("Wed"));
-		expect(lastCall(onChange)).toBe("0 9 * * 1,2,4,5");
-		await user.click(button("Sun"));
-		expect(lastCall(onChange)).toBe("0 9 * * 0,1,2,4,5");
+	it("writes the weekdays ascending, Sunday as 0", () => {
+		const onChange = renderField({
+			kind: "weekly",
+			weekdays: [1, 2, 3, 4, 5],
+			time: "09:00",
+		});
+		fireEvent.click(button("Wed"));
+		fireEvent.click(button("Sun"));
+		expect(lastCall(onChange)).toEqual({
+			kind: "weekly",
+			weekdays: [0, 1, 2, 4, 5],
+			time: "09:00",
+		});
 	});
 
-	it("reports null with no day ticked", async () => {
-		const user = userEvent.setup();
-		const onChange = renderField("0 9 * * 1");
-		await user.click(button("Mon"));
+	it("reports null with no day ticked", () => {
+		const onChange = renderField({
+			kind: "weekly",
+			weekdays: [1],
+			time: "09:00",
+		});
+		fireEvent.click(button("Mon"));
 		expect(lastCall(onChange)).toBeNull();
 		expect(screen.getByText("Pick at least one day.")).toBeInTheDocument();
 	});
 
-	it("stays on Weekly when the seventh day writes a daily cron", async () => {
-		const user = userEvent.setup();
-		const onChange = renderField("0 9 * * 1-6");
-		await user.click(button("Sun"));
-		expect(lastCall(onChange)).toBe("0 9 * * *");
-		expect(button("Weekly")).toHaveAttribute("aria-pressed", "true");
+	it("stays on Weekly when the seventh day writes a daily period", () => {
+		const onChange = renderField({
+			kind: "weekly",
+			weekdays: [1, 2, 3, 4, 5, 6],
+			time: "09:00",
+		});
+		fireEvent.click(button("Sun"));
+		expect(lastCall(onChange)).toEqual({ kind: "daily", time: "09:00" });
+		expect(mode()).toHaveValue("weekly");
 		expect(button("Sun")).toHaveAttribute("aria-pressed", "true");
 		expect(screen.getByText("Daily at 09:00")).toBeInTheDocument();
 	});
 
-	it("stays on Custom when the text reads as a preset", async () => {
-		const user = userEvent.setup();
-		const onChange = renderField("0 9 1 * *");
-		const text = screen.getByRole("textbox", { name: "Cron expression" });
-		await user.clear(text);
-		await user.type(text, "  0 9 * * 1 ");
-		expect(lastCall(onChange)).toBe("0 9 * * 1");
-		expect(button("Custom")).toHaveAttribute("aria-pressed", "true");
-		expect(screen.getByText("Mondays at 09:00")).toBeInTheDocument();
-	});
-
-	it("reports null for a custom text without five fields", async () => {
-		const user = userEvent.setup();
-		const onChange = renderField("0 9 1 * *");
-		const text = screen.getByRole("textbox", { name: "Cron expression" });
-		await user.clear(text);
-		await user.type(text, "0 9 1 *");
-		expect(lastCall(onChange)).toBeNull();
-	});
-
-	describe("switching mode", () => {
-		it("keeps the time between Daily and Weekly", async () => {
-			const user = userEvent.setup();
-			const onChange = renderField("30 7 * * *");
-			await user.click(button("Weekly"));
-			expect(screen.getByLabelText("At")).toHaveValue("07:30");
-			expect(lastCall(onChange)).toBe("30 7 * * 1");
-			await user.click(button("Daily"));
-			expect(lastCall(onChange)).toBe("30 7 * * *");
-		});
-
-		it("takes the minute into Hourly and back with hour 09", async () => {
-			const user = userEvent.setup();
-			const onChange = renderField("30 7 * * *");
-			await user.click(button("Hourly"));
-			expect(lastCall(onChange)).toBe("30 * * * *");
-			await user.click(button("Daily"));
-			expect(lastCall(onChange)).toBe("30 9 * * *");
-		});
-
-		it("fills Custom with the cron the preset writes", async () => {
-			const user = userEvent.setup();
-			const onChange = renderField("0 9 * * MON-FRI");
-			await user.click(button("Custom"));
+	describe("monthly", () => {
+		it("offers 1st to 30th and then Last day, which is day 31", () => {
+			const onChange = renderField({ kind: "monthly", day: 1, time: "09:00" });
+			const day = screen.getByLabelText("On the");
+			expect(screen.getByRole("option", { name: "30th" })).toBeInTheDocument();
 			expect(
-				screen.getByRole("textbox", { name: "Cron expression" }),
-			).toHaveValue("0 9 * * 1,2,3,4,5");
-			expect(lastCall(onChange)).toBe("0 9 * * 1,2,3,4,5");
+				screen.queryByRole("option", { name: "31st" }),
+			).not.toBeInTheDocument();
+			fireEvent.change(day, { target: { value: "31" } });
+			expect(lastCall(onChange)).toEqual({
+				kind: "monthly",
+				day: 31,
+				time: "09:00",
+			});
+			expect(
+				screen.getByText("Monthly on the last day at 09:00"),
+			).toBeInTheDocument();
 		});
 
-		it("keeps the ticked days through a look at Custom", async () => {
-			const user = userEvent.setup();
-			const onChange = renderField("0 9 * * 1-6");
-			await user.click(button("Sun"));
-			await user.click(button("Custom"));
-			await user.click(button("Weekly"));
-			expect(button("Mon")).toHaveAttribute("aria-pressed", "true");
-			expect(button("Sun")).toHaveAttribute("aria-pressed", "true");
-			expect(lastCall(onChange)).toBe("0 9 * * *");
-		});
-
-		it("ticks every day from Custom text that means every day", async () => {
-			const user = userEvent.setup();
-			const onChange = renderField("0 9 * * 2");
-			await user.click(button("Custom"));
-			const text = screen.getByRole("textbox", { name: "Cron expression" });
-			await user.clear(text);
-			await user.type(text, "30 7 * * *");
-			await user.click(button("Weekly"));
-			expect(button("Mon")).toHaveAttribute("aria-pressed", "true");
-			expect(lastCall(onChange)).toBe("30 7 * * *");
-		});
-
-		it("fills a preset from Custom text that fits it", async () => {
-			const user = userEvent.setup();
-			const onChange = renderField("0 9 1 * *");
-			const text = screen.getByRole("textbox", { name: "Cron expression" });
-			await user.clear(text);
-			await user.type(text, "45 18 * * sat,sun");
-			await user.click(button("Weekly"));
-			expect(button("Sat")).toHaveAttribute("aria-pressed", "true");
-			expect(button("Sun")).toHaveAttribute("aria-pressed", "true");
-			expect(button("Mon")).toHaveAttribute("aria-pressed", "false");
-			expect(lastCall(onChange)).toBe("45 18 * * 0,6");
-		});
-
-		it("starts a preset at its defaults from Custom text that fits none", async () => {
-			const user = userEvent.setup();
-			const onChange = renderField("0 9 1 * *");
-			await user.click(button("Weekly"));
-			expect(lastCall(onChange)).toBe("0 9 * * 1");
-			await user.click(button("Custom"));
-			await user.click(button("Hourly"));
-			expect(lastCall(onChange)).toBe("0 * * * *");
+		it("says what the 29th and the 30th do in a shorter month, and only then", () => {
+			renderField({ kind: "monthly", day: 28, time: "09:00" });
+			const line = "In shorter months, runs on the last day.";
+			expect(screen.queryByText(line)).not.toBeInTheDocument();
+			fireEvent.change(screen.getByLabelText("On the"), {
+				target: { value: "30" },
+			});
+			expect(screen.getByText(line)).toBeInTheDocument();
+			fireEvent.change(screen.getByLabelText("On the"), {
+				target: { value: "31" },
+			});
+			expect(screen.queryByText(line)).not.toBeInTheDocument();
 		});
 	});
 
-	describe("zone line", () => {
-		it("is not drawn without a zone, as on the create sheet", () => {
-			renderField("0 9 * * *");
-			expect(screen.queryByText(/ time/)).not.toBeInTheDocument();
+	describe("once", () => {
+		it("writes the date and time as one wall-clock reading", () => {
+			const onChange = renderField({ kind: "once", at: "2026-11-03T09:00" });
+			fireEvent.change(screen.getByLabelText("On"), {
+				target: { value: "2026-11-04" },
+			});
+			expect(lastCall(onChange)).toEqual({
+				kind: "once",
+				at: "2026-11-04T09:00",
+			});
+			expect(
+				screen.getByText("Once on Wed 4 Nov at 09:00"),
+			).toBeInTheDocument();
+			fireEvent.change(screen.getByLabelText("On"), { target: { value: "" } });
+			expect(lastCall(onChange)).toBeNull();
+			expect(screen.getByText("Pick a date.")).toBeInTheDocument();
 		});
 
-		it("is not drawn while the schedule's zone is the device's", () => {
-			render(
-				<PeriodField
-					initial="0 9 * * *"
-					onChange={vi.fn()}
-					timeZone="Europe/London"
-				/>,
+		it("starts on today when the carried time is still ahead", () => {
+			const onChange = renderField({ kind: "daily", time: "09:00" });
+			pickMode("once");
+			expect(screen.getByLabelText("On")).toHaveValue("2026-10-25");
+			expect(lastCall(onChange)).toEqual({
+				kind: "once",
+				at: "2026-10-25T09:00",
+			});
+		});
+
+		it("starts on tomorrow when the carried time has gone by today", () => {
+			const onChange = renderField({ kind: "daily", time: "07:30" });
+			pickMode("once");
+			expect(lastCall(onChange)).toEqual({
+				kind: "once",
+				at: "2026-10-26T07:30",
+			});
+		});
+
+		it("counts today in the schedule's zone, not the device's", () => {
+			// 09:00 is still ahead in London, but Tokyo is at 17:00.
+			const onChange = renderField(
+				{ kind: "daily", time: "09:00" },
+				"Asia/Tokyo",
 			);
-			expect(screen.queryByText(/ time/)).not.toBeInTheDocument();
+			pickMode("once");
+			expect(lastCall(onChange)).toEqual({
+				kind: "once",
+				at: "2026-10-26T09:00",
+			});
 		});
 
-		it("names the zone the inputs are typed in, on a line of its own", () => {
-			render(
+		it("judges a passed time in the schedule's zone, not the device's", () => {
+			const period: Period = { kind: "once", at: "2026-10-25T12:00" };
+			const { unmount } = render(
 				<PeriodField
-					initial="0 9 * * *"
+					initial={period}
 					onChange={vi.fn()}
 					timeZone="Asia/Tokyo"
 				/>,
 			);
+			expect(
+				screen.getByText("That time has passed. Pick a later one."),
+			).toBeInTheDocument();
+			unmount();
+			render(
+				<PeriodField
+					initial={period}
+					onChange={vi.fn()}
+					timeZone="Europe/London"
+				/>,
+			);
+			expect(
+				screen.getByText("Once on Sun 25 Oct at 12:00"),
+			).toBeInTheDocument();
+		});
+
+		it("reports null when an edited time passes while the field is open", () => {
+			const onChange = renderField({ kind: "once", at: "2026-11-03T09:00" });
+			fireEvent.change(screen.getByLabelText("On"), {
+				target: { value: "2026-10-25" },
+			});
+			fireEvent.change(screen.getByLabelText("at"), {
+				target: { value: "08:01" },
+			});
+			expect(lastCall(onChange)).toEqual({
+				kind: "once",
+				at: "2026-10-25T08:01",
+			});
+			act(() => {
+				vi.advanceTimersByTime(60_000);
+			});
+			expect(lastCall(onChange)).toBeNull();
+			expect(
+				screen.getByText("That time has passed. Pick a later one."),
+			).toBeInTheDocument();
+		});
+
+		it("does not report a stored time that has passed until it is edited", () => {
+			const onChange = renderField({ kind: "once", at: "2026-10-01T09:00" });
+			act(() => {
+				vi.advanceTimersByTime(60_000);
+			});
+			expect(onChange).not.toHaveBeenCalled();
+		});
+	});
+
+	describe("switching mode", () => {
+		it("carries the time between Daily, Weekly, Monthly and Once", () => {
+			const onChange = renderField({ kind: "daily", time: "21:30" });
+			pickMode("weekly");
+			expect(lastCall(onChange)).toEqual({
+				kind: "weekly",
+				weekdays: [1],
+				time: "21:30",
+			});
+			pickMode("monthly");
+			expect(lastCall(onChange)).toEqual({
+				kind: "monthly",
+				day: 1,
+				time: "21:30",
+			});
+			pickMode("once");
+			expect(lastCall(onChange)).toEqual({
+				kind: "once",
+				at: "2026-10-25T21:30",
+			});
+		});
+
+		it("takes the minute into Hourly and gives back hour 09", () => {
+			const onChange = renderField({ kind: "daily", time: "07:30" });
+			pickMode("hourly");
+			expect(lastCall(onChange)).toEqual({
+				kind: "hourly",
+				every: 1,
+				minute: 30,
+			});
+			pickMode("daily");
+			expect(lastCall(onChange)).toEqual({ kind: "daily", time: "09:30" });
+		});
+
+		it("keeps the days, the day of month and the date through a look elsewhere", () => {
+			const onChange = renderField({
+				kind: "weekly",
+				weekdays: [0, 6],
+				time: "09:00",
+			});
+			pickMode("monthly");
+			fireEvent.change(screen.getByLabelText("On the"), {
+				target: { value: "15" },
+			});
+			pickMode("once");
+			fireEvent.change(screen.getByLabelText("On"), {
+				target: { value: "2026-12-24" },
+			});
+			pickMode("weekly");
+			expect(lastCall(onChange)).toEqual({
+				kind: "weekly",
+				weekdays: [0, 6],
+				time: "09:00",
+			});
+			pickMode("monthly");
+			expect(lastCall(onChange)).toEqual({
+				kind: "monthly",
+				day: 15,
+				time: "09:00",
+			});
+			pickMode("once");
+			expect(lastCall(onChange)).toEqual({
+				kind: "once",
+				at: "2026-12-24T09:00",
+			});
+		});
+	});
+
+	it("opens a kind this build does not know on Daily 09:00, and says saving replaces it", () => {
+		const onChange = renderField({ kind: "yearly" } as unknown as Period);
+		expect(mode()).toHaveValue("daily");
+		expect(
+			screen.getByText(
+				"This period was set by a newer version of Pockode. Saving replaces it.",
+			),
+		).toBeInTheDocument();
+		expect(onChange).not.toHaveBeenCalled();
+	});
+
+	it("says a period with no kind could not be read, rather than blaming a newer version", () => {
+		renderField({ kind: "" } as unknown as Period);
+		expect(mode()).toHaveValue("daily");
+		expect(
+			screen.getByText("This period could not be read. Saving replaces it."),
+		).toBeInTheDocument();
+	});
+
+	describe("zone line", () => {
+		it("is not drawn without a zone, as on the create sheet", () => {
+			renderField({ kind: "daily", time: "09:00" });
+			expect(screen.queryByText(/ time/)).not.toBeInTheDocument();
+		});
+
+		it("is not drawn while the schedule's zone is the device's", () => {
+			renderField({ kind: "daily", time: "09:00" }, "Europe/London");
+			expect(screen.queryByText(/ time/)).not.toBeInTheDocument();
+		});
+
+		it("names the zone the inputs are typed in, on a line of its own", () => {
+			renderField({ kind: "daily", time: "09:00" }, "Asia/Tokyo");
 			expect(screen.getByText("Daily at 09:00")).toBeInTheDocument();
 			expect(
 				screen.getByText(

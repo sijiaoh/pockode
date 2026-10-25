@@ -1,4 +1,5 @@
-import { dayShortName, formatClock } from "../lib/schedulePeriod";
+import { formatClock, formatDayDate } from "../lib/schedulePeriod";
+import { wallClock } from "../lib/scheduleZone";
 
 /**
  * Renders a past timestamp as an age ("4m ago"), the form the narrow git panel
@@ -48,64 +49,6 @@ export function formatRelativeFuture(isoDate: string): string {
 	return `in ${Math.round(diffHours / 24)}d`;
 }
 
-const MONTH_SHORT = [
-	"Jan",
-	"Feb",
-	"Mar",
-	"Apr",
-	"May",
-	"Jun",
-	"Jul",
-	"Aug",
-	"Sep",
-	"Oct",
-	"Nov",
-	"Dec",
-];
-
-interface WallClock {
-	year: number;
-	/** 0-based, as `Date`'s. */
-	month: number;
-	day: number;
-	hour: number;
-	minute: number;
-}
-
-const WALL_CLOCK: Intl.DateTimeFormatOptions = {
-	year: "numeric",
-	month: "numeric",
-	day: "numeric",
-	hour: "numeric",
-	minute: "numeric",
-	hourCycle: "h23",
-};
-
-/**
- * `date` on the wall clock of `timeZone` — the device's when absent, or when
- * the browser does not know the zone (docs/schedule-ui.md §11).
- */
-function wallClock(date: Date, timeZone: string | undefined): WallClock {
-	// Built per call, never cached: a format made without a zone keeps the
-	// device's zone of that moment, and a traveller's device moves.
-	let format: Intl.DateTimeFormat;
-	try {
-		format = new Intl.DateTimeFormat("en-US", { ...WALL_CLOCK, timeZone });
-	} catch {
-		format = new Intl.DateTimeFormat("en-US", WALL_CLOCK);
-	}
-	const parts = Object.fromEntries(
-		format.formatToParts(date).map((part) => [part.type, part.value]),
-	);
-	return {
-		year: Number(parts.year),
-		month: Number(parts.month) - 1,
-		day: Number(parts.day),
-		hour: Number(parts.hour),
-		minute: Number(parts.minute),
-	};
-}
-
 /**
  * An instant as a day and a 24-hour time — `today 03:00`, `tomorrow 03:00`,
  * `yesterday 03:00`, `Mon 27 Oct 03:00` further out — on the clock of
@@ -135,8 +78,5 @@ export function formatNextRun(
 	if (days === 0) return `today ${time}`;
 	if (days === 1) return `tomorrow ${time}`;
 	if (days === -1) return `yesterday ${time}`;
-	// Written out rather than localised, as the period beside it is: the
-	// same 24-hour wording in every locale.
-	const weekday = dayShortName(new Date(calendarDay).getUTCDay());
-	return `${weekday} ${at.day} ${MONTH_SHORT[at.month]} ${time}`;
+	return `${formatDayDate(at)} ${time}`;
 }

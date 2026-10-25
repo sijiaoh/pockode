@@ -12,7 +12,7 @@ export function makeSchedule(
 		title: "Nightly audit",
 		prompt: "Audit the dependencies.",
 		agent_role_id: "role-job",
-		cron: "0 3 * * *",
+		period: { kind: "daily", time: "03:00" },
 		// The device's own, so a test sees no zone unless it is about one.
 		time_zone: Intl.DateTimeFormat().resolvedOptions().timeZone,
 		enabled: true,

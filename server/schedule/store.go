@@ -24,9 +24,11 @@ type Store interface {
 	// Create validates s and adds it under a fresh id, computing its NextRunAt
 	// if it is enabled. Only the settings fields of s are read.
 	Create(ctx context.Context, s Schedule) (Schedule, error)
-	// Update changes the given settings. NextRunAt is recomputed when the cron
-	// expression, the time zone or the enabled flag changes, and left alone
-	// otherwise.
+	// Update changes the given settings. NextRunAt is recomputed when the
+	// period, the time zone or the enabled flag changes, and left alone
+	// otherwise. A once period has to be in the future whenever it is given a
+	// new time or zone, or switched back on: that is how a done schedule is
+	// run again.
 	Update(ctx context.Context, id string, fields UpdateFields) (Schedule, error)
 	// Delete removes the schedule and nothing else: its runs are job works of
 	// their own, and they and their sessions stay.
@@ -45,7 +47,8 @@ type Store interface {
 	// SkipMissedRuns moves every enabled schedule whose NextRunAt is not in the
 	// future to its next firing after now. Firings missed while the server was
 	// down are skipped rather than caught up, so this is called on startup
-	// before anything fires.
+	// before anything fires. A once period is the exception and stays due: its
+	// firing is its only one, and skipping it would quietly mean it never runs.
 	SkipMissedRuns(ctx context.Context) error
 
 	AddOnChangeListener(listener OnChangeListener)
@@ -56,7 +59,7 @@ type UpdateFields struct {
 	Title       *string `json:"title,omitempty"`
 	Prompt      *string `json:"prompt,omitempty"`
 	AgentRoleID *string `json:"agent_role_id,omitempty"`
-	Cron        *string `json:"cron,omitempty"`
+	Period      *Period `json:"period,omitempty"`
 	TimeZone    *string `json:"time_zone,omitempty"`
 	Enabled     *bool   `json:"enabled,omitempty"`
 	Worktree    *string `json:"worktree,omitempty"`
@@ -75,8 +78,8 @@ type FileStore struct {
 	schedules   []Schedule
 	listeners   []OnChangeListener
 
-	// now is the clock every NextRunAt is computed from; the zone each cron
-	// expression is read in is the schedule's own, not this clock's.
+	// now is the clock every NextRunAt is computed from; the zone each period
+	// is read in is the schedule's own, not this clock's.
 	now func() time.Time
 }
 
@@ -130,14 +133,17 @@ func (s *FileStore) Create(_ context.Context, in Schedule) (Schedule, error) {
 		Title:       in.Title,
 		Prompt:      in.Prompt,
 		AgentRoleID: in.AgentRoleID,
-		Cron:        strings.TrimSpace(in.Cron),
+		Period:      in.Period,
 		TimeZone:    in.TimeZone,
 		Enabled:     in.Enabled,
 		Worktree:    in.Worktree,
 		CreatedAt:   now,
 		UpdatedAt:   now,
 	}
-	if err := validateSettings(sched); err != nil {
+	if err := validateSettings(&sched); err != nil {
+		return Schedule{}, err
+	}
+	if err := checkStillToCome(sched, now); err != nil {
 		return Schedule{}, err
 	}
 	if err := s.checkRole(sched.AgentRoleID); err != nil {
@@ -161,7 +167,7 @@ func (s *FileStore) Create(_ context.Context, in Schedule) (Schedule, error) {
 
 func (s *FileStore) Update(_ context.Context, id string, fields UpdateFields) (Schedule, error) {
 	return s.modify(id, func(sched *Schedule, now time.Time) error {
-		timingChanged := false
+		prev := *sched
 		if fields.Title != nil {
 			sched.Title = *fields.Title
 		}
@@ -172,24 +178,29 @@ func (s *FileStore) Update(_ context.Context, id string, fields UpdateFields) (S
 		if fields.AgentRoleID != nil {
 			sched.AgentRoleID = *fields.AgentRoleID
 		}
-		if fields.Cron != nil {
-			cron := strings.TrimSpace(*fields.Cron)
-			timingChanged = timingChanged || cron != sched.Cron
-			sched.Cron = cron
+		if fields.Period != nil {
+			sched.Period = *fields.Period
 		}
 		if fields.TimeZone != nil {
-			timingChanged = timingChanged || *fields.TimeZone != sched.TimeZone
 			sched.TimeZone = *fields.TimeZone
 		}
 		if fields.Enabled != nil {
-			timingChanged = timingChanged || *fields.Enabled != sched.Enabled
 			sched.Enabled = *fields.Enabled
 		}
 		if fields.Worktree != nil {
 			sched.Worktree = *fields.Worktree
 		}
-		if err := validateSettings(*sched); err != nil {
+		if err := validateSettings(sched); err != nil {
 			return err
+		}
+		// Compared once normalized, so a period resent in another spelling is
+		// not a change.
+		retimed := !sched.Period.equal(prev.Period) || sched.TimeZone != prev.TimeZone
+		enabling := sched.Enabled && !prev.Enabled
+		if retimed || enabling {
+			if err := checkStillToCome(*sched, now); err != nil {
+				return err
+			}
 		}
 		// The role is judged only when it changes, as a work's is
 		// (agentrole.CheckReassignment): a role restricted away from jobs after
@@ -199,7 +210,7 @@ func (s *FileStore) Update(_ context.Context, id string, fields UpdateFields) (S
 				return err
 			}
 		}
-		if timingChanged {
+		if retimed || sched.Enabled != prev.Enabled {
 			reschedule(sched, now)
 		}
 		sched.UpdatedAt = now
@@ -274,7 +285,7 @@ func (s *FileStore) SkipMissedRuns(_ context.Context) error {
 	var changed []Schedule
 	for i := range s.schedules {
 		sched := &s.schedules[i]
-		if !sched.Enabled || (sched.NextRunAt != nil && sched.NextRunAt.After(now)) {
+		if !sched.Enabled || (sched.NextRunAt != nil && sched.NextRunAt.After(now)) || sched.Period.Kind == PeriodOnce {
 			continue
 		}
 		reschedule(sched, now)
@@ -335,7 +346,8 @@ func (s *FileStore) checkRole(roleID string) error {
 	return agentrole.CheckAssignmentWith(s.roles, roleID, work.WorkTypeJob, ErrInvalidSchedule)
 }
 
-func validateSettings(sched Schedule) error {
+// validateSettings checks sched's settings and normalizes its period.
+func validateSettings(sched *Schedule) error {
 	if strings.TrimSpace(sched.Title) == "" {
 		return fmt.Errorf("%w: title is required", ErrInvalidSchedule)
 	}
@@ -345,38 +357,52 @@ func validateSettings(sched Schedule) error {
 	if sched.AgentRoleID == "" {
 		return fmt.Errorf("%w: agent_role_id is required", ErrInvalidSchedule)
 	}
-	if _, err := ParseCron(sched.Cron); err != nil {
+	period, err := sched.Period.normalize()
+	if err != nil {
 		return fmt.Errorf("%w: %v", ErrInvalidSchedule, err)
 	}
+	sched.Period = period
 	if _, err := loadZone(sched.TimeZone); err != nil {
 		return fmt.Errorf("%w: %v", ErrInvalidSchedule, err)
 	}
 	return nil
 }
 
+// checkStillToCome refuses a once period whose time has already passed in the
+// schedule's zone: saved, it would be done before it ever ran. Every recurring
+// period always has a firing to come. sched has been validated.
+func checkStillToCome(sched Schedule, now time.Time) error {
+	if sched.Period.Kind != PeriodOnce {
+		return nil
+	}
+	loc, err := loadZone(sched.TimeZone)
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrInvalidSchedule, err)
+	}
+	if sched.Period.Next(now.In(loc)).IsZero() {
+		return fmt.Errorf("%w: the one-time run at %s (%s) has already passed; pick a later time", ErrInvalidSchedule, sched.Period.At, sched.TimeZone)
+	}
+	return nil
+}
+
 // reschedule sets NextRunAt to the schedule's first firing after now, read on
 // the wall clock of the schedule's own zone, or clears it when the schedule is
-// disabled. The cron expression and the zone have already been validated by
-// the time any schedule reaches the store.
+// disabled or has no firing left. The period and the zone have already been
+// validated by the time any schedule reaches the store.
 func reschedule(sched *Schedule, now time.Time) {
 	if !sched.Enabled {
 		sched.NextRunAt = nil
 		return
 	}
-	cron, err := ParseCron(sched.Cron)
-	if err != nil {
-		// Only a hand-edited index can get here; such a schedule is left
-		// without a next run rather than firing on a guess.
-		sched.NextRunAt = nil
-		return
-	}
 	loc, err := loadZone(sched.TimeZone)
 	if err != nil {
-		// As above: a zone is not guessed either.
+		// Only a hand-edited index can get here; such a schedule is left
+		// without a next run rather than firing on a guess. An invalid period
+		// is the same: Next has no firing for it.
 		sched.NextRunAt = nil
 		return
 	}
-	next := cron.Next(now.In(loc))
+	next := sched.Period.Next(now.In(loc))
 	if next.IsZero() {
 		sched.NextRunAt = nil
 		return

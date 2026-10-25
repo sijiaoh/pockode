@@ -1,4 +1,4 @@
-import { act, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useAgentRoleStore } from "../../lib/agentRoleStore";
@@ -81,14 +81,14 @@ describe("CreateScheduleSheet", () => {
 		await fill(user);
 		await user.click(createButton());
 
-		// The field reports nothing until touched, so the cron it opened on is
+		// The field reports nothing until touched, so the period it opened on is
 		// the one sent; the jobs-only role is preselected; enabled is left out;
 		// the zone is the device's, never asked.
 		expect(createSchedule).toHaveBeenCalledWith({
 			title: "Nightly audit",
 			prompt: "Audit the dependencies.",
 			agent_role_id: "job",
-			cron: "0 9 * * *",
+			period: { kind: "daily", time: "09:00" },
 			time_zone: "Asia/Tokyo",
 			worktree: "feature-x",
 		});
@@ -124,7 +124,7 @@ describe("CreateScheduleSheet", () => {
 		expect(createButton()).toBeEnabled();
 
 		// A weekly period with no day spells nothing yet.
-		await user.click(screen.getByRole("button", { name: "Weekly" }));
+		await user.selectOptions(screen.getByLabelText("Period"), "weekly");
 		await user.click(screen.getByRole("button", { name: "Mon" }));
 		expect(createButton()).toBeDisabled();
 		await user.click(screen.getByRole("button", { name: "Fri" }));
@@ -134,7 +134,9 @@ describe("CreateScheduleSheet", () => {
 	it("keeps the sheet and everything typed when the server refuses", async () => {
 		const user = userEvent.setup();
 		createSchedule.mockRejectedValue(
-			new Error('invalid cron: minute field "61": 61 is out of range 0-59'),
+			new Error(
+				"invalid schedule: the one-time run at 2026-01-01T09:00 (Asia/Tokyo) has already passed; pick a later time",
+			),
 		);
 		const { onCreated } = renderSheet();
 
@@ -142,7 +144,7 @@ describe("CreateScheduleSheet", () => {
 		await user.click(createButton());
 
 		expect(await screen.findByRole("alert")).toHaveTextContent(
-			'minute field "61"',
+			"has already passed",
 		);
 		expect(onCreated).not.toHaveBeenCalled();
 		expect(screen.getByLabelText("Title")).toHaveValue("Nightly audit");
@@ -158,7 +160,7 @@ describe("CreateScheduleSheet", () => {
 		renderSheet();
 
 		await fill(user);
-		await user.click(screen.getByRole("button", { name: "Weekly" }));
+		await user.selectOptions(screen.getByLabelText("Period"), "weekly");
 		await user.click(createButton());
 		expect(screen.getByRole("button", { name: "Mon" })).toBeDisabled();
 	});
@@ -180,18 +182,23 @@ describe("CreateScheduleSheet", () => {
 		expect(screen.getByLabelText("Role")).toHaveValue("a");
 	});
 
-	it("offers Create for a custom cron only once it has five fields", async () => {
+	it("offers Create for a one-time only while its time is still ahead", async () => {
 		const user = userEvent.setup();
+		createSchedule.mockResolvedValue(makeSchedule());
 		renderSheet();
 		await fill(user);
 
-		await user.click(screen.getByRole("button", { name: "Custom" }));
-		const cron = screen.getByLabelText("Cron expression");
-		await user.clear(cron);
-		await user.type(cron, "0 9 1 *");
+		await user.selectOptions(screen.getByLabelText("Period"), "once");
+		const date = screen.getByLabelText("On");
+		fireEvent.change(date, { target: { value: "2000-01-01" } });
 		expect(createButton()).toBeDisabled();
-		await user.type(cron, " *");
+		fireEvent.change(date, { target: { value: "2099-01-01" } });
 		expect(createButton()).toBeEnabled();
+		await user.click(createButton());
+		expect(createSchedule.mock.calls[0][0].period).toEqual({
+			kind: "once",
+			at: "2099-01-01T09:00",
+		});
 	});
 
 	it("keeps the form and the period being written through a role reload", async () => {
@@ -199,7 +206,7 @@ describe("CreateScheduleSheet", () => {
 		createSchedule.mockResolvedValue(makeSchedule());
 		renderSheet();
 		await fill(user);
-		await user.click(screen.getByRole("button", { name: "Weekly" }));
+		await user.selectOptions(screen.getByLabelText("Period"), "weekly");
 		await user.click(screen.getByRole("button", { name: "Fri" }));
 
 		// What a reconnect does to the app-wide role store.
@@ -214,7 +221,11 @@ describe("CreateScheduleSheet", () => {
 			setRoles([role("any", "Engineer"), role("job", "Auditor", "job")]),
 		);
 		await user.click(createButton());
-		expect(createSchedule.mock.calls[0][0].cron).toBe("0 9 * * 1,5");
+		expect(createSchedule.mock.calls[0][0].period).toEqual({
+			kind: "weekly",
+			weekdays: [1, 5],
+			time: "09:00",
+		});
 	});
 
 	it("sends the period it shows after a failed role reload brings the form back", async () => {
@@ -222,7 +233,7 @@ describe("CreateScheduleSheet", () => {
 		createSchedule.mockResolvedValue(makeSchedule());
 		renderSheet();
 		await fill(user);
-		await user.click(screen.getByRole("button", { name: "Weekly" }));
+		await user.selectOptions(screen.getByLabelText("Period"), "weekly");
 		await user.click(screen.getByRole("button", { name: "Fri" }));
 
 		act(() =>
@@ -232,12 +243,12 @@ describe("CreateScheduleSheet", () => {
 			setRoles([role("any", "Engineer"), role("job", "Auditor", "job")]),
 		);
 		// The field opened again on its default, and that is what is sent.
-		expect(screen.getByRole("button", { name: "Daily" })).toHaveAttribute(
-			"aria-pressed",
-			"true",
-		);
+		expect(screen.getByLabelText("Period")).toHaveValue("daily");
 		await user.click(createButton());
-		expect(createSchedule.mock.calls[0][0].cron).toBe("0 9 * * *");
+		expect(createSchedule.mock.calls[0][0].period).toEqual({
+			kind: "daily",
+			time: "09:00",
+		});
 	});
 
 	describe("without a role that takes jobs", () => {

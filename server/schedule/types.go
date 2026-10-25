@@ -1,5 +1,5 @@
 // Package schedule stores the schedules that start job works: a fixed prompt,
-// the agent role that runs it and the cron expression that says when.
+// the agent role that runs it and the period that says when.
 package schedule
 
 import (
@@ -9,8 +9,9 @@ import (
 
 var (
 	ErrNotFound = errors.New("schedule not found")
-	// ErrInvalidSchedule marks the caller's mistake: a missing field, an
-	// unparsable cron expression, a role that does not take jobs.
+	// ErrInvalidSchedule marks the caller's mistake: a missing field, a
+	// malformed period, a one-time run in the past, a role that does not take
+	// jobs.
 	ErrInvalidSchedule = errors.New("invalid schedule")
 )
 
@@ -20,10 +21,9 @@ type Schedule struct {
 	// Prompt is what every run is asked to do; it becomes the job's body.
 	Prompt      string `json:"prompt"`
 	AgentRoleID string `json:"agent_role_id"`
-	// Cron is a standard 5-field expression (see Cron), evaluated in TimeZone.
-	Cron string `json:"cron"`
+	Period      Period `json:"period"`
 	// TimeZone is the IANA name (such as "Asia/Tokyo") of the zone whose wall
-	// clock Cron is read on. It belongs to the schedule rather than to the
+	// clock Period is read on. It belongs to the schedule rather than to the
 	// server, which may be a machine in another zone than the person who wrote
 	// "09:00"; it changes only when it is set explicitly.
 	TimeZone string `json:"time_zone"`
@@ -31,10 +31,15 @@ type Schedule struct {
 	// Worktree the runs are made in (empty = main).
 	Worktree string `json:"worktree,omitempty"`
 
-	// NextRunAt is when the schedule fires next; nil exactly when it is
-	// disabled. The store keeps it in the future of every change it makes:
-	// creating, enabling or re-timing a schedule, recording a firing, and
-	// SkipMissedRuns.
+	// NextRunAt is when the schedule fires next; nil when it is disabled, and
+	// when it is done: a once period whose firing has been made (run, failed
+	// or skipped). A recurring period always has a next run, so an enabled
+	// once schedule without one is done; anything else enabled without one is
+	// a hand-edited index whose period or zone cannot be read (reschedule).
+	// The store keeps it in the future of every change it makes — creating,
+	// enabling or re-timing a schedule, recording a firing, SkipMissedRuns —
+	// with one exception: SkipMissedRuns leaves a once period's missed firing
+	// due, so that it is made late rather than never.
 	NextRunAt *time.Time `json:"next_run_at,omitempty"`
 	// LastRunAt and LastRunWorkID describe the latest run started, whether by
 	// the schedule firing or by hand.

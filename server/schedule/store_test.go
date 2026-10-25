@@ -59,7 +59,7 @@ func (env *testEnv) valid() Schedule {
 		Title:       "Nightly triage",
 		Prompt:      "Triage new issues",
 		AgentRoleID: env.jobRole.ID,
-		Cron:        "0 9 * * *",
+		Period:      Period{Kind: PeriodDaily, Time: "09:00"},
 		TimeZone:    "UTC",
 		Enabled:     true,
 	}
@@ -107,7 +107,7 @@ func (r *recorder) ops() []Operation {
 func TestCreate_ComputesNextRunAndPersists(t *testing.T) {
 	env := newTestEnv(t)
 	in := env.valid()
-	in.Cron = "  0 9 * * *  "
+	in.Period = Period{Kind: PeriodDaily, Time: "9:00"}
 	in.Worktree = "feature"
 
 	s := env.create(t, in)
@@ -115,8 +115,8 @@ func TestCreate_ComputesNextRunAndPersists(t *testing.T) {
 	if s.ID == "" || s.CreatedAt.IsZero() {
 		t.Errorf("created = %+v, want an id and a creation time", s)
 	}
-	if s.Cron != "0 9 * * *" {
-		t.Errorf("cron = %q, want it trimmed", s.Cron)
+	if s.Period.Time != "09:00" {
+		t.Errorf("period = %+v, want it normalized", s.Period)
 	}
 	if want := at(time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC)); !sameTime(s.NextRunAt, want) {
 		t.Errorf("next run = %v, want %v", s.NextRunAt, want)
@@ -158,8 +158,13 @@ func TestCreate_Rejects(t *testing.T) {
 		{"no role", func(s *Schedule) { s.AgentRoleID = "" }, "agent_role_id is required"},
 		{"unknown role", func(s *Schedule) { s.AgentRoleID = "missing" }, "agent role not found"},
 		{"role that does not take jobs", func(s *Schedule) { s.AgentRoleID = taskRole.ID }, "only takes task work, not job"},
-		{"bad cron", func(s *Schedule) { s.Cron = "every day" }, "must have 5 fields"},
-		{"cron that never runs", func(s *Schedule) { s.Cron = "0 0 31 4 *" }, "never runs"},
+		{"no period", func(s *Schedule) { s.Period = Period{} }, "period: kind is required"},
+		{"bad period", func(s *Schedule) { s.Period.Time = "9am" }, "not a time of day"},
+		{"one-time run in the past", func(s *Schedule) { s.Period = Period{Kind: PeriodOnce, At: "2026-01-01T07:59"} }, "the one-time run at 2026-01-01T07:59 (UTC) has already passed"},
+		{"one-time run at this minute", func(s *Schedule) { s.Period = Period{Kind: PeriodOnce, At: "2026-01-01T08:00"} }, "has already passed"},
+		{"one-time run already past in its zone", func(s *Schedule) {
+			s.Period, s.TimeZone = Period{Kind: PeriodOnce, At: "2026-01-01T12:00"}, "Asia/Tokyo"
+		}, "(Asia/Tokyo) has already passed"},
 		{"no time zone", func(s *Schedule) { s.TimeZone = "" }, "time_zone is required"},
 		{"the server's zone in disguise", func(s *Schedule) { s.TimeZone = "Local" }, "not an IANA name"},
 		{"unknown time zone", func(s *Schedule) { s.TimeZone = "Mars/Olympus_Mons" }, "unknown time zone \"Mars/Olympus_Mons\""},
@@ -197,7 +202,7 @@ func TestUpdate(t *testing.T) {
 		wantNext *time.Time
 	}{
 		{"settings other than timing keep the next run", UpdateFields{Title: str("Renamed"), Prompt: str("New"), Worktree: str("wt")}, nineAM},
-		{"a new cron moves it", UpdateFields{Cron: str("30 8 * * *")}, at(time.Date(2026, 1, 1, 8, 30, 0, 0, time.UTC))},
+		{"a new period moves it", UpdateFields{Period: &Period{Kind: PeriodDaily, Time: "08:30"}}, at(time.Date(2026, 1, 1, 8, 30, 0, 0, time.UTC))},
 		{"disabling clears it", UpdateFields{Enabled: &off}, nil},
 		{"enabling computes it from now", UpdateFields{Enabled: &on}, at(time.Date(2026, 1, 1, 8, 30, 0, 0, time.UTC))},
 	}
@@ -218,14 +223,14 @@ func TestUpdate(t *testing.T) {
 	}
 
 	got, _, _ := env.store.Get(s.ID)
-	if got.Title != "Renamed" || got.Prompt != "New" || got.Worktree != "wt" || got.Cron != "30 8 * * *" {
+	if got.Title != "Renamed" || got.Prompt != "New" || got.Worktree != "wt" || got.Period.Time != "08:30" {
 		t.Errorf("schedule = %+v, want every update applied", got)
 	}
 }
 
 // The period is read on the schedule's own wall clock, daylight saving time
 // included, whatever zone the server is in. How a skipped or repeated wall time
-// fires is Cron.Next's (TestCron_Next_DST).
+// fires is Period.Next's (TestPeriod_Next_DST).
 func TestCreate_ReadsThePeriodInTheSchedulesZone(t *testing.T) {
 	env := newTestEnv(t)
 	tests := []struct {
@@ -264,13 +269,12 @@ func TestUpdate_ZoneMovesOnlyWhenSent(t *testing.T) {
 	in.TimeZone = "Asia/Tokyo"
 	s := env.create(t, in)
 
-	cron := "0 18 * * *"
-	got, err := env.store.Update(bgCtx, s.ID, UpdateFields{Cron: &cron})
+	got, err := env.store.Update(bgCtx, s.ID, UpdateFields{Period: &Period{Kind: PeriodDaily, Time: "18:00"}})
 	if err != nil {
 		t.Fatalf("Update: %v", err)
 	}
 	if want := at(time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC)); got.TimeZone != "Asia/Tokyo" || !sameTime(got.NextRunAt, want) {
-		t.Errorf("after a new cron: zone %q, next run %v; want Asia/Tokyo, %v", got.TimeZone, got.NextRunAt, want)
+		t.Errorf("after a new period: zone %q, next run %v; want Asia/Tokyo, %v", got.TimeZone, got.NextRunAt, want)
 	}
 
 	zone := "Europe/London"
@@ -294,13 +298,13 @@ func TestUpdate_ZoneMovesOnlyWhenSent(t *testing.T) {
 func TestUpdate_InvalidLeavesScheduleUntouched(t *testing.T) {
 	env := newTestEnv(t)
 	s := env.create(t, env.valid())
-	title, bad := "Renamed", "61 * * * *"
+	title := "Renamed"
 
-	_, err := env.store.Update(bgCtx, s.ID, UpdateFields{Title: &title, Cron: &bad})
+	_, err := env.store.Update(bgCtx, s.ID, UpdateFields{Title: &title, Period: &Period{Kind: PeriodHourly, Minute: 61}})
 	if !errors.Is(err, ErrInvalidSchedule) {
 		t.Fatalf("err = %v, want ErrInvalidSchedule", err)
 	}
-	if got, _, _ := env.store.Get(s.ID); got.Title != s.Title || got.Cron != s.Cron {
+	if got, _, _ := env.store.Get(s.ID); got.Title != s.Title || !got.Period.equal(s.Period) {
 		t.Errorf("schedule = %+v, want it unchanged", got)
 	}
 }
@@ -444,7 +448,7 @@ func TestSkipMissedRuns(t *testing.T) {
 	env := newTestEnv(t)
 	missed := env.create(t, env.valid())
 	laterIn := env.valid()
-	laterIn.Cron = "0 9 1 6 *"
+	laterIn.Period = Period{Kind: PeriodOnce, At: "2026-06-01T09:00"}
 	later := env.create(t, laterIn)
 	disabledIn := env.valid()
 	disabledIn.Enabled = false
@@ -498,8 +502,8 @@ func TestChangeNotifications(t *testing.T) {
 	if _, err := env.store.RecordSkip(bgCtx, s.ID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := env.store.Update(bgCtx, s.ID, UpdateFields{Cron: new(string)}); err == nil {
-		t.Fatal("empty cron accepted")
+	if _, err := env.store.Update(bgCtx, s.ID, UpdateFields{Period: &Period{}}); err == nil {
+		t.Fatal("empty period accepted")
 	}
 	if err := env.store.Delete(bgCtx, s.ID); err != nil {
 		t.Fatal(err)
@@ -520,5 +524,97 @@ func TestChangeNotifications(t *testing.T) {
 	defer rec.eventsMu.Unlock()
 	if last := rec.events[len(rec.events)-1]; last.Schedule.ID != s.ID {
 		t.Errorf("delete event names %q, want %q", last.Schedule.ID, s.ID)
+	}
+}
+
+// A one-time schedule is done once its firing has been made: still enabled,
+// with no next run. It runs again only when given a new time.
+func TestOnce_Lifecycle(t *testing.T) {
+	env := newTestEnv(t) // 2026-01-01 08:00 UTC
+	in := env.valid()
+	in.Period = Period{Kind: PeriodOnce, At: "2026-01-01T09:00"}
+	s := env.create(t, in)
+	nineAM := at(time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC))
+	if !sameTime(s.NextRunAt, nineAM) {
+		t.Fatalf("next run = %v, want %v", s.NextRunAt, nineAM)
+	}
+
+	// A run by hand before the time does not use the firing up.
+	env.clock = time.Date(2026, 1, 1, 8, 30, 0, 0, time.UTC)
+	got, err := env.store.RecordRun(bgCtx, s.ID, "by-hand")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !sameTime(got.NextRunAt, nineAM) {
+		t.Errorf("after a run by hand: next run = %v, want still %v", got.NextRunAt, nineAM)
+	}
+
+	// The firing, whatever came of it, leaves the schedule done.
+	env.clock = time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC)
+	if got, err = env.store.RecordFailure(bgCtx, s.ID, "", "worktree not found"); err != nil {
+		t.Fatal(err)
+	}
+	if !got.Enabled || got.NextRunAt != nil {
+		t.Errorf("after the firing: enabled %v, next run %v; want enabled with none (done)", got.Enabled, got.NextRunAt)
+	}
+
+	// Editing anything but the timing keeps it done.
+	env.clock = time.Date(2026, 1, 2, 8, 0, 0, 0, time.UTC)
+	title := "Renamed"
+	if got, err = env.store.Update(bgCtx, s.ID, UpdateFields{Title: &title}); err != nil || got.NextRunAt != nil {
+		t.Errorf("rename of a done schedule: next run %v, err %v; want it still done", got.NextRunAt, err)
+	}
+
+	// Switched off, it cannot be switched back on at a time that has passed.
+	off, on := false, true
+	if _, err := env.store.Update(bgCtx, s.ID, UpdateFields{Enabled: &off}); err != nil {
+		t.Fatalf("disable a done schedule: %v", err)
+	}
+	if _, err := env.store.Update(bgCtx, s.ID, UpdateFields{Enabled: &on}); !errors.Is(err, ErrInvalidSchedule) || !strings.Contains(err.Error(), "has already passed") {
+		t.Errorf("enable at a past time: err = %v, want the time refused", err)
+	}
+
+	// A new time that has passed too is refused.
+	earlier := Period{Kind: PeriodOnce, At: "2026-01-02T07:00"}
+	if _, err := env.store.Update(bgCtx, s.ID, UpdateFields{Period: &earlier, Enabled: &on}); !errors.Is(err, ErrInvalidSchedule) || !strings.Contains(err.Error(), "has already passed") {
+		t.Errorf("re-time to a past time: err = %v, want the time refused", err)
+	}
+
+	// A new time brings it back.
+	later := Period{Kind: PeriodOnce, At: "2026-01-03T09:00"}
+	if got, err = env.store.Update(bgCtx, s.ID, UpdateFields{Period: &later, Enabled: &on}); err != nil {
+		t.Fatalf("re-time: %v", err)
+	}
+	if want := at(time.Date(2026, 1, 3, 9, 0, 0, 0, time.UTC)); !got.Enabled || !sameTime(got.NextRunAt, want) {
+		t.Errorf("after re-timing: enabled %v, next run %v; want enabled at %v", got.Enabled, got.NextRunAt, want)
+	}
+
+	// Moving the wall clock to a zone where that time has already gone is
+	// refused like any other time in the past, and changes nothing.
+	env.clock = time.Date(2026, 1, 3, 2, 0, 0, 0, time.UTC) // 11:00 in Tokyo
+	tokyo := "Asia/Tokyo"
+	if _, err := env.store.Update(bgCtx, s.ID, UpdateFields{TimeZone: &tokyo}); !errors.Is(err, ErrInvalidSchedule) || !strings.Contains(err.Error(), "(Asia/Tokyo) has already passed") {
+		t.Errorf("zone where the time has passed: err = %v, want the time refused", err)
+	}
+	if got, _, _ := env.store.Get(s.ID); got.TimeZone != "UTC" || got.NextRunAt == nil {
+		t.Errorf("after a refused zone change: %+v, want it unchanged", got)
+	}
+}
+
+// A one-time firing missed while the server was down is made late rather than
+// never: it is the schedule's only one.
+func TestSkipMissedRuns_LeavesAMissedOnceDue(t *testing.T) {
+	env := newTestEnv(t)
+	in := env.valid()
+	in.Period = Period{Kind: PeriodOnce, At: "2026-01-01T09:00"}
+	s := env.create(t, in)
+
+	env.clock = time.Date(2026, 1, 4, 12, 0, 0, 0, time.UTC)
+	store := env.open(t)
+	if err := store.SkipMissedRuns(bgCtx); err != nil {
+		t.Fatalf("SkipMissedRuns: %v", err)
+	}
+	if got, _, _ := store.Get(s.ID); !sameTime(got.NextRunAt, s.NextRunAt) {
+		t.Errorf("next run = %v, want it left due at %v", got.NextRunAt, s.NextRunAt)
 	}
 }

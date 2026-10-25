@@ -180,7 +180,7 @@ the create refused by the server, visibly, rather than accepted.
 
 ### Schedule
 
-A fixed prompt, the agent role that runs it, and a cron expression saying when.
+A fixed prompt, the agent role that runs it, and a period saying when.
 Each firing makes a [job](#jobs); the schedule itself never runs anything.
 
 | Field            | Type        | Description |
@@ -189,11 +189,11 @@ Each firing makes a [job](#jobs); the schedule itself never runs anything.
 | title            | string      | Required; becomes each run's title |
 | prompt           | string      | Required; becomes each run's body |
 | agent_role_id    | string      | Required; the role must take `job` works, judged on create and whenever it changes ([Work Type Field](#work-type-field)) |
-| cron             | string      | Standard 5 fields, stored trimmed, read on the wall clock of `time_zone` |
+| period           | Period      | When it fires, read on the wall clock of `time_zone`; stored in its canonical spelling ([Schedule Periods](api.md#schedule-periods)) |
 | time_zone        | string      | Required IANA name (`Asia/Tokyo`), set by the client ([api](api.md#schedule-time-zones)) |
 | enabled          | bool        | A disabled schedule never fires, and can still be run by hand |
 | worktree         | string?     | Worktree each run is made in (empty = main); must exist when set — a worktree removed later fails the next firing, recorded as `last_failure` |
-| next_run_at      | time?       | The next firing; absent exactly when the schedule is disabled |
+| next_run_at      | time?       | The next firing; absent when the schedule is disabled, and when it is *done*: a `once` period whose firing has been made |
 | last_run_at      | time?       | The latest run *started*: by a firing, by Run now, or by `work.start` on one of its runs |
 | last_run_work_id | string?     | That run's work id |
 | last_skipped_at  | time?       | The latest firing skipped because another run was still active; older than `last_run_at` once a later run has been made |

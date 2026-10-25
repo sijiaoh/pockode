@@ -139,6 +139,11 @@ its schedule as well — which is the way to the schedule §8 is about.
 │ ▌ Fridays at 17:00 · Off                 │   │
 │ ▌ ⚠ Last run failed · 3d ago             │   │  error edge
 │ └──────────────────────────────────────────┘   │
+│ ┌──────────────────────────────────────────┐   │
+│ ▌ Release notes for v2            ✓ Done  │   │  one-time, done (§6.6)
+│ ▌ Once on Mon 3 Nov at 09:00             │   │
+│ ▌ ◦ Closed · 2d ago                      │   │
+│ └──────────────────────────────────────────┘   │
 ├ bottom action bar ─────────────────────────────┤
 │ [ +  New Schedule ]                            │
 └────────────────────────────────────────────────┘
@@ -169,20 +174,22 @@ restated: `WorkRow`'s inline `edgeClass` was extracted as
 `workEdgeClass(work)`, exported from `WorkRow.tsx`, and `scheduleEdgeClass`
 calls it — one predicate for both surfaces.
 
-**The card opens the detail, and holds one control: the switch.** The title is
+**The card opens the detail, and holds one control: the switch** — none at
+all once a one-time schedule is done (§6.6). The title is
 a `<button>` covering the card with the `after:inset-0` overlay `WorkRow` uses;
 the switch lifts itself above it with `relative z-10`. The title states
 `min-h-[44px]`. The card is `h2`-headed (the page's `h1` is the header, and
 there are no groups between).
 
-**Line 1** — the title, truncated; the switch at the end (§3.2).
+**Line 1** — the title, truncated; the switch at the end (§3.2), or `Done`
+in its place for a one-time schedule that is done (§6.6).
 
 **Line 2** — one line, never wrapped, clipped from the right, two slots:
 
 | Slot | Tier | Content |
 |---|---|---|
-| Period | `text-th-text-secondary` | `PeriodWords` (§6.4), followed by the schedule's zone label (`(Tokyo)`) only when it is not the device's zone (§6.5). A cron that matches no preset reads `Custom ·` and the expression in `font-mono` |
-| Next | `text-th-text-muted` | Enabled: `Next in 5h` (`formatRelativeFuture(next_run_at)`, beside `formatRelativeDate` in `utils/relativeTime.ts`, with its steps: `in 1m`, `in 5h`, `in 3d` — never "now", and hours and days rounded rather than floored, so 47h is `in 2d`); nothing while no next firing is known. Disabled: `Off` |
+| Period | `text-th-text-secondary` | `PeriodWords` (§6.4), followed by the schedule's zone label (`(Tokyo)`) only when it is not the device's zone (§6.5) |
+| Next | `text-th-text-muted` | Done (§6.6): nothing — the slot and its ` · ` are left out. Enabled: `Next in 5h` (`formatRelativeFuture(next_run_at)`, beside `formatRelativeDate` in `utils/relativeTime.ts`, with its steps: `in 1m`, `in 5h`, `in 3d` — never "now", and hours and days rounded rather than floored, so 47h is `in 2d`); nothing while no next firing is known. Disabled: `Off` |
 
 The period is first because it is the one fact that says what this schedule
 *is*; "next" is derived from it.
@@ -193,6 +200,7 @@ The period is first because it is the one fact that says what this schedule
 |---|---|
 | `last_failure` set | `AlertCircle` (error tone) + `Last run failed` + `· {age of last_failure.at}` |
 | `last_run` present | `ActivityIcon` of the run + its activity label + `· {age of last_run_at}`. `1 to answer` follows the label when the run owes answers, as slot 2b does on a work row |
+| done because it passed while off (§6.6), no `last_run_at` | `Did not run: it was off`, muted — the user turned it off, so it is a fact, not a warning |
 | neither, `last_run_at` set | `Latest run deleted · {age}`, muted |
 | neither, no `last_run_at` | `No runs yet`, muted |
 
@@ -231,6 +239,10 @@ component is the detail page's (§4), and so is the request behind it:
   refusal and the notification arrives first.
 - Its accessible name is `Run "<title>" on schedule`; `aria-checked` says
   whether it does.
+- **A done one-time schedule has no switch** (§6.6): there is nothing left to
+  turn on. Before its time it has the switch like any schedule, and off means
+  it will not run at that time. A refusal printed under a switch that then
+  gives way to `Done` goes with it, since no retry could clear it.
 - **Turning a schedule off does not stop a run in progress.** Off means "do not
   fire again", and a running agent is stopped where runs are stopped — the
   run's own row. The switch is not the place to guess which the user meant.
@@ -262,6 +274,7 @@ the nanosecond as the server does, since a `Date` keeps only milliseconds.
 ├ scroll region (max-w-2xl) ─────────────────────────────┤
 │ Nightly dependency audit                          ✎   │  title, inline edit
 │ [◯━] On · Next run today 03:00 (in 5h)                │  switch + next
+│                                                        │  (done one-time: ✓ Done · Was due Mon 3 Nov 09:00)
 │ ┌ ⚠ The run at today 03:00 could not be started.   ┐  │  notice (only when set)
 │ │ start run …: …                    Open the run  › │  │
 │ └───────────────────────────────────────────────────┘  │
@@ -303,7 +316,10 @@ state and the runs come first, the settings after, and deleting at the end.
   the title of future runs; past runs keep the title they were made with.
 - **Switch line** — the `Switch` from §3.2, then `On · Next run today 03:00
   (in 5h)` (plain `On` while no next firing is known), or `Off · Runs only
-  when you press Run now`. The absolute time is
+  when you press Run now`. A one-time schedule before its time says `Runs` for
+  `Next run` (`On · Runs Mon 3 Nov 09:00 (in 2d)`) — there is no run after it
+  to make this one the "next" — and is otherwise the same. A done one-time
+  schedule has a `Done · Was due …` line instead of the switch line (§6.6). The absolute time is
   `formatNextRun(next_run_at, now, schedule.time_zone)` (`utils/relativeTime.ts`)
   in the **schedule's** zone (§6.5): `today 03:00`, `tomorrow 03:00`,
   `Mon 27 Oct 03:00` beyond that (24-hour, the period's own format). When that
@@ -315,7 +331,8 @@ state and the runs come first, the settings after, and deleting at the end.
 |---|---|
 | `last_failure` set | An error-toned block (`border-th-error`, `role="alert"`): `The run at {at} could not be made.` (no `work_id`) or `The run at {at} could not be started.` (with one), the server's `error` verbatim under it, and — when `work_id` is set — `Open the run`, which opens that job (left `open`, so the user can start it there) |
 | the latest run is `active` — the row with id `last_run_work_id` on the loaded run page, the newest-first page it is on | Muted: `A run is going now. Run now is refused until it ends.` Said ahead and not enforced, the agent-role delete rule ([agent-roles-ui.md §5](agent-roles-ui.md#5-deleting-lives-on-the-detail-page)): the server decides, and the button stays enabled |
-| `last_skipped_at` is later than `last_run_at`, or there is no `last_run_at` | Muted: `Skipped the run at {at}: the previous one was still going.` |
+| `last_skipped_at` is later than `last_run_at`, or there is no `last_run_at` | Muted: `Skipped the run at {at}: the previous one was still going.` — on a done one-time, `Did not run at {at}: a run started earlier was still going.` |
+| done because it passed while off (§6.6) | Muted: `It was off at {at}, so it did not run.` |
 
 `{at}` is `formatNextRun`'s format applied to a past instant (`today 03:00`,
 `yesterday 03:00`, `Mon 27 Oct 03:00`), in the schedule's zone and with its
@@ -368,8 +385,9 @@ gone, or the cursor is not one the server issued), on which the hook
 subscribes afresh instead: a retry of the same request would be refused again.
 
 Empty: `No runs yet. The first is due {formatNextRun}.` (in the schedule's
-zone, with its label when it differs, §6.5), or, when off or no
-next firing is known, `No runs yet. Press Run now to make one.` A schedule whose runs were all
+zone, with its label when it differs, §6.5) — `It is due {…}.` for a one-time —
+or, when off, done, or no next firing is known, `No runs yet. Press Run now
+to make one.` A schedule whose runs were all
 deleted is not one with none yet: with `last_run_at` set the line is
 `Its runs have been deleted.`, as the row says `Latest run deleted` (§11).
 
@@ -381,7 +399,7 @@ work and role pages.
 | Section | Control |
 |---|---|
 | **Prompt** | The work detail's Description interaction: `MarkdownContent` in an `overflow-x-auto` box, a pencil opening a textarea with Save / Cancel. Never empty (the server requires it), so it has no empty state. Muted line under the heading: `Every run starts with this prompt.` |
-| **Period** | Read-only, `PeriodWords`; when the schedule's zone is not the device's, the zone line and the `Use {city} time` switch under it (§6.5). A pencil opens the `PeriodField` (§6) with Save / Cancel; Save sends `cron` only if it differs from the stored string, and otherwise just closes; it never sends `time_zone`, so editing keeps the schedule's zone. While the save is in flight the field sits in a `<fieldset disabled>`, so an edit made during the request cannot be dropped silently when the editor closes on success |
+| **Period** | Read-only, `PeriodWords`; when the schedule's zone is not the device's, the zone line and the `Use {city} time` switch under it (§6.5). A pencil opens the `PeriodField` (§6) with Save / Cancel; Save sends `period` only if it differs from the stored one (`samePeriod`), and otherwise just closes; it never sends `time_zone`, so editing keeps the schedule's zone. On a done one-time schedule Save also sends `enabled: true` and reads `Save and turn on` (§6.6). While the save is in flight the field sits in a `<fieldset disabled>`, so an edit made during the request cannot be dropped silently when the editor closes on success |
 | **Role** | `RoleSelect workType="job"`, applied on change like the work detail's Role. A kept role that no longer takes jobs is shown with its suffix and the work detail's kind of muted line, `{name} only takes {kind}. Runs keep using it until you change it.` — that is what the server does: the kind is judged when the role is assigned, and nothing on the run path judges it again. A role that has been **deleted** shows as `Unknown role` (`RoleSelect`'s rule) with a muted line `This role has been deleted. Runs will fail until you pick another.` — muted like the page's other lines, since `text-th-error` does not clear AA in the light themes and the failure, when it comes, is the notice's to state in error — those runs are refused at start (`agent role not found`) and become the notice |
 | **Worktree** | Drawn only when `isGitRepo === true`: outside a git repository the server takes no worktree but main, so there is nothing to choose. A `<select>` of the worktrees that exist (`useWorktreeList`, the read-only hook for naming one), `main` first, applied on change. A stored worktree that no longer exists stays selected as `{name} (deleted)` with the muted line `Runs will fail until you pick a worktree that exists.` |
 
@@ -435,7 +453,7 @@ New Schedule
 Title    [ Nightly dependency audit  ]
 Prompt   [ textarea, 4 rows, grows    ]
 Role     [ Auditor                  ▾ ]
-Period   [ Hourly | Daily | Weekly | Custom ]
+Period   [ Daily                     ▾ ]
          At [ 03:00 ]
          Daily at 03:00
 Runs in  main
@@ -449,8 +467,10 @@ Runs in  main
   to jobs (the seeded job role), it; else `Select role...`. There is no default
   job role setting, and none is added (§12).
 - **Period** — the `PeriodField` (§6), starting on `Daily` at `09:00`. The
-  sheet holds `DEFAULT_CRON` (`lib/schedulePeriod.ts`, `0 9 * * *`) as its cron
-  until the field is touched, because the field reports nothing on mount.
+  sheet holds `DEFAULT_PERIOD` (`lib/schedulePeriod.ts`) as its period until
+  the field is touched, because the field reports nothing on mount. Daily stays
+  the start, not Once: most schedules are made to repeat, and a one-time is one
+  tap away with the next 09:00 already filled in (§6.1).
 - **Worktree** — not asked: the schedule is made in the worktree the user is in
   (`useCurrentWorktree()`, `""` for main), stated as the muted line `Runs in {name}` so it
   is not a surprise. It is changed on the detail page.
@@ -462,14 +482,12 @@ Runs in  main
 - **Enabled** — not asked, sent absent (the server's `true`). A schedule made is
   a schedule meant to run; the switch is one tap on the page the user lands on.
 - `Create` is disabled until title and prompt have non-blank text, a role is
-  picked, and the period is complete (a weekly period with at least one day;
-  a custom cron with five fields — the count only, everything else is the
-  server's to judge, §6.3).
+  picked, and the period is complete (§6.2 — for a one-time, a date and time
+  still ahead).
 
 The rest is `CreateStorySheet`'s behaviour, unchanged: focus lands on the
 sheet; a refusal keeps the sheet open with everything typed and the server's
-error under the fields (an invalid cron's message names the field, which is
-why it is printed as it is); `dismissible={false}` while in flight, with every
+error under the fields; `dismissible={false}` while in flight, with every
 field held still — the period too, in a `<fieldset disabled>` as on the detail
 page (§4.3) — so what was sent is what is shown; on success
 the sheet adds the schedule from the reply to the schedule store and hands
@@ -485,56 +503,83 @@ with the job wording for the fourth:
 One thing differs from the story sheet. A reconnect empties the role store, and
 swapping the form for `NoEligibleRoleSheet` while the roles reload would
 remount `PeriodField` on its default period while the sheet still held the
-user's cron — Create would send a period other than the one shown. So once the
-form has been shown it stays up through a role reload; if the swap happens
-anyway (the reload failed), the cron goes back to `DEFAULT_CRON` with the
+user's period — Create would send a period other than the one shown. So once
+the form has been shown it stays up through a role reload; if the swap happens
+anyway (the reload failed), the period goes back to `DEFAULT_PERIOD` with the
 field.
 
 ## 6. The period
 
-**Always stored as cron.** The presets are a way of writing a cron expression,
-not a second kind of period: the server knows only `cron`, and the client turns
-an expression into a preset when it can and shows it raw when it cannot.
+**A period is one of five kinds, and nothing else.** `Once`, `Hourly`, `Daily`,
+`Weekly`, `Monthly` — each a handful of plain inputs, each read back in plain
+words. There is no rule language, no expression to type and no `Custom` mode:
+a period the five cannot say is deliberately unsupported (§12). Nothing on any
+screen shows, asks for or mentions cron. Whatever the server stores a recurring
+period as is the server's business; the client holds, sends and receives the
+period as the kind and its values (§9 E), so the words on a screen are read off
+the values and never off a stored string.
+
+**A one-time run is not a recurring period that happens to fire once.** It is a
+date and a time, it fires once, and then the schedule is *done* (§6.6) — a state
+the recurring kinds never reach.
 
 ### 6.1 The field
 
 `PeriodField` (`components/Project/PeriodField.tsx`) is the one editor, in the
 sheet and on the detail page. Its contract:
 
-- **`initial: string`** (a cron, or `""` for a new schedule) is read **once, on
-  mount**, to pick the mode and fill the inputs (§6.2). After that the mode and
-  every input are the field's own state. The mode is never re-derived from the
-  cron being written: ticking the seventh day writes a daily cron, and typing a
-  preset-shaped expression in Custom writes one the presets would recognise,
-  and neither may swap the inputs out from under the user.
-- **`onChange(cron: string | null)`**, called on every edit with the cron the
-  inputs now spell, or `null` when they spell nothing yet (no weekday ticked, an
-  empty or out-of-range minute or time, a custom text without five fields).
+- **`initial: Period | null`** (the stored period, or `null` for a new
+  schedule) is read **once, on mount**, to pick the mode and fill the inputs.
+  After that the mode and every input are the field's own state. The mode is
+  never re-derived from what the inputs write: ticking the seventh day writes a
+  daily period, and must not swap the day toggles out from under the user.
+- **`onChange(period: Period | null)`**, called on every edit with the period
+  the inputs now spell, or `null` when they spell nothing yet (§6.2's hints).
   The caller disables Save / Create on `null`.
-- **"Changed" is the caller's comparison with the stored string**, and only
-  after the user has touched an input — the field calls nothing on mount. So a
-  `0 9 * * MON-FRI` opened as Weekly and saved untouched sends nothing; once a
-  day is toggled it is rewritten in the canonical spelling, which is the
-  user's edit.
+- **"Changed" is the caller's comparison with the stored period** (`samePeriod`,
+  `lib/schedulePeriod.ts`, by value), and only after the user has touched an
+  input — the field calls nothing on mount. So a weekday schedule opened and
+  saved untouched sends nothing.
 
-A `ToggleGroup` picks the mode — used for a draft value here, as
-`CreateAgentRoleSheet`'s Runs choice already uses it, though its own comment
-describes a stored one — and the inputs under it follow:
+A native `<select>` picks the mode — `Once`, `Hourly`, `Daily`, `Weekly`,
+`Monthly`, in that order: from the smallest commitment to the longest rhythm,
+with the one that is not a rhythm at the start rather than wedged between two
+that are. It is the field's first row, full width, `min-h-[44px]`, styled as the
+detail page's Worktree select. **Not a `ToggleGroup`, as the field had with
+four modes:** a segment there is `px-3`, so five equal segments in a 320px
+sheet leave about 29px for a label and `Monthly` needs about 52px — it does not
+fit even at 390px. A select holds any number of kinds at any width, opens the
+platform's own picker on a phone, and is what a calendar's "repeat" choice
+already is everywhere a user has set one. The inputs under it follow:
 
-| Mode | Inputs | Writes |
+```
+Once      On [ 2026-11-03 ] at [ 09:00 ]
+Hourly    Every [ 1 hour ▾ ] at minute [ 00 ]
+Daily     At [ 09:00 ]
+Weekly    [Mon][Tue][Wed][Thu][Fri][Sat][Sun]
+          At [ 09:00 ]
+Monthly   On the [ 1st ▾ ] at [ 09:00 ]
+```
+
+| Mode | Inputs | Period |
 |---|---|---|
-| **Hourly** | `Every [1 ▾] hour(s) at minute [00]` — a `<select>` of 1, 2, 3, 4, 6, 8, 12 and a two-digit text input (`inputMode="numeric"`) taking 0–59; `hour` agrees with N | `M * * * *` for 1, `M */N * * *` otherwise |
-| **Daily** | `At [09:00]` — `<input type="time">` | `M H * * *` |
-| **Weekly** | Seven day toggles, Mon to Sun, and `At [09:00]` | `M H * * d,d,…` — days ascending, Sunday as `0`, so Mon/Wed/Fri at 09:00 is `0 9 * * 1,3,5` |
-| **Custom** | One `font-mono` text input, placeholder `minute hour day month weekday`, with the muted hint `Standard 5-field cron, e.g. 0 9 1 * * for 09:00 on the 1st.` | the text, trimmed |
+| **Once** | `On [date] at [time]` — `<input type="date">` and `<input type="time">`, side by side in a wrapping row, so on the narrowest phones the time drops under the date rather than either shrinking | `{kind: "once", at: "2026-11-03T09:00"}` — a wall-clock date and time in the schedule's zone, no seconds, no offset |
+| **Hourly** | `Every [1 hour ▾] at minute [00]` — a `<select>` of `1 hour`, `2 hours`, `3 hours`, `4 hours`, `6 hours`, `8 hours`, `12 hours`, and a two-digit text input (`inputMode="numeric"`) taking 0–59 | `{kind: "hourly", every, minute}`, both always sent though the server defaults them |
+| **Daily** | `At [09:00]` | `{kind: "daily", time: "09:00"}` |
+| **Weekly** | Seven day toggles, Mon to Sun, and `At [09:00]` | `{kind: "weekly", weekdays, time}` — `0` Sunday … `6` Saturday, ascending; all seven days is `daily` |
+| **Monthly** | `On the [1st ▾] at [09:00]` — a `<select>` of `1st` … `30th` and then `Last day` | `{kind: "monthly", day, time}`, `day` 1–30, and `Last day` is `31` |
 
-- **Hourly offers only divisors of 24.** `*/5` fires at 00, 05, 10, 15, 20 and
-  then 00 again: a gap of four hours once a day that "every 5 hours" does not
-  describe. A user who wants that writes it in Custom.
-- **Weekly with all seven days is written as daily** (`M H * * *`), so one
-  period has one spelling. **Weekly with none** keeps Save/Create disabled with
-  the muted line `Pick at least one day.`; a minute outside 0–59 says
-  `Enter a minute from 0 to 59.` and a cleared time `Pick a time.`
+Every time input is the native `<input type="time">`, 24-hour in its value;
+the platform draws it as it likes, which on phones is its own wheel or clock.
+
+- **Hourly offers only divisors of 24.** Every 5 hours from midnight fires at
+  00, 05, 10, 15, 20 and then 00 again: a gap of four hours once a day that
+  "every 5 hours" does not describe. The select's options name the unit
+  (`1 hour`, `6 hours`) rather than a bare number beside a fixed `hour(s)`, so
+  the line reads as a sentence in every option.
+- **Weekly with all seven days is written as daily**, so one period has one
+  spelling (the server stores it so too), and reads as daily. **Weekly with
+  none** is `null` (§6.2).
 - **The day toggles** are `aria-pressed` buttons labelled `Mon` … `Sun` — filled
   with the accent when on, only bordered when off, since a fill would vanish on
   the sheet's own ground — 44 × 44,
@@ -543,75 +588,97 @@ describes a stored one — and the inputs under it follow:
   wrapping is what keeps every one of them at the floor. The week starts on
   Monday everywhere; a locale-dependent first day would move the buttons
   under a user who changes language.
-- **Switching mode keeps what carries.** Daily ↔ Weekly keep the time; Hourly
-  takes the minute from it and Daily takes it back with hour `09`. Any preset →
-  Custom fills the text with the cron the preset would write, so Custom is also
-  how a user learns the syntax (inputs that spell nothing yet leave the Custom
-  text as it was). Custom → a preset parses the text (§6.2): if it is some
-  preset, its values fill the inputs and then carry by the rules above (a
-  daily text ticks all seven days in Weekly), and inputs the text does not
-  name keep what they held, so days survive a look at Custom; if it is no
-  preset, the preset starts at its defaults (`Daily 09:00`, `Every 1 hour at
-  :00`, `Mon at 09:00`).
-- **Re-tapping the lit mode is not an edit**: nothing is reported, so an
-  untouched `MON-FRI` schedule cannot be made to look changed.
+- **Monthly's day list stops at 30 and then says `Last day`.** That is where a
+  user looking for the 31st looks, and it is what the 31st means to anyone who
+  picks it: the end of the month. So `31st` is not offered under that name — it
+  is `Last day`, which is what the server's `day: 31` does — and the two days
+  that some months lack — the 29th and the 30th — are the only ones that need a
+  rule (§6.3). The select's options are ordinals (`1st`, `2nd`, `3rd`, `4th` …
+  `21st`, `22nd`, `23rd` … `30th`), English, as every other word here is.
+- **Switching mode keeps what carries.** The time of day carries between Once,
+  Daily, Weekly and Monthly; Hourly takes its minute from it and gives back
+  hour `09` with that minute. The days a Weekly held, the day of month a Monthly
+  held and the date a Once held each survive a look at another mode, so a user
+  comparing two modes loses nothing. A mode never opened before fills the rest
+  with its defaults — every `1 hour`, `Mon`, the `1st` — and for Once the date
+  of the **next occurrence of the carried time** — today in
+  the schedule's zone if that time is still ahead, else tomorrow — so switching
+  a `Daily at 09:00` to Once offers the next 09:00, and Save is ready at once.
+- **Picking the mode already shown is not an edit**: nothing is reported, so
+  an untouched schedule cannot be made to look changed.
 - Under the inputs, always: the description (§6.4) of what would be saved, one
-  muted line. In Custom mode the description is shown only when the
-  text happens to match a preset; otherwise the line says
-  `Checked by the server when you save.` rather than nothing.
+  muted line, or the hint (§6.2) while the inputs spell nothing; on Monthly with
+  the 29th or the 30th, the short-month line (§6.3) under it.
 - **`timeZone?: string`** — the schedule's zone, passed by the detail page and
   not by the create sheet. When it is given and is not the device's zone
   (`sameZone`, §6.5), the zone line follows the description on a line of its
   own: `Tokyo time (UTC+9). This device is on London time (UTC+1).` — the
-  zone every input is typed in. The field never sends a zone: it only writes
-  `cron`.
+  zone every input, the date included, is typed in. The field never sends a
+  zone: it only writes the period. Without `timeZone` (the create sheet, whose
+  schedule will be in the device's zone, §5) the field takes
+  `useDeviceTimeZone()` for Once's default date and its "passed" check.
 
-### 6.2 Reading a cron back
+### 6.2 What the client checks
 
-`parsePeriod(cron): Period | null` in `lib/schedulePeriod.ts`, with
-`toCron(period)` and the describers (§6.4) beside it — one module, so the
-expression a preset writes and the one it recognises cannot drift. It returns a
-preset only for these shapes, after splitting on whitespace:
+Every input is a plain value now, so **the client checks all of it** and the
+caller disables Save / Create while the period is `null`. One muted hint names
+the first thing missing, in place of the description:
 
-| Shape | Preset |
+| Inputs | Hint |
 |---|---|
-| `M * * * *` | Hourly, every 1 |
-| `M */N * * *`, N ∈ {2,3,4,6,8,12} | Hourly, every N |
-| `M H * * *` | Daily |
-| `M H * * D`, D a list of day values, ranges and names (`1-5`, `MON-FRI`, `sun`, `7`) that expands to 1–6 distinct days | Weekly |
-| `M H * * D` where D expands to all 7 | Daily |
+| Weekly, no day ticked | `Pick at least one day.` |
+| A minute outside 0–59, or empty | `Enter a minute from 0 to 59.` |
+| A time cleared | `Pick a time.` |
+| Once, the date cleared | `Pick a date.` |
+| Once, the date and time are not ahead of now in the schedule's zone | `That time has passed. Pick a later one.` |
 
-`M` and `H` must be plain integers in range (`0`–`59`, `0`–`23`; leading zeros
-allowed). Day names are read case-insensitively and `7` is Sunday, as the
-server's parser reads them. Anything else — a step on the minute, `*/1` on the
-hour, a day-of-month, a month, a list of hours, a backwards day range
-(`FRI-MON`, which the server refuses too) — is `null`, and the field opens in **Custom** with the expression
-as stored.
+**"Passed" is judged on the client** by turning the wall-clock date and time in
+the schedule's zone into an instant (`zonedInstant(at, zone)` — `at` in the
+period's own `YYYY-MM-DDTHH:MM` form — in `lib/scheduleZone.ts`, read through `Intl` as the offsets already are) and
+comparing it with now. It is judged on each edit and again when that minute
+arrives, so a field left open across its own time goes to the hint rather than
+offering a Save that would be refused. The server judges it once more on
+receipt — a time a few seconds ahead can pass in flight — and its refusal is
+printed under the field as any refusal is. A zone the browser does not know
+(§11) cannot be converted, so the client skips this one check there and the
+server's refusal is what the user sees.
 
-Recognising an expression never rewrites it: recognition picks the inputs,
-and only an edit to them writes (§6.1).
+**A time that a DST change skips or repeats is not checked.** 02:30 on the
+night the clocks go forward does not exist and 01:30 on the night they go back
+happens twice; the server runs the first at the moment the clock jumps to and
+the second at its first occurrence, one-time runs included
+([api.md](projects/api.md#schedule-periods)),
+and the next-run line (§4.1) shows the instant it chose. A warning in the
+editor for two nights a year, in the zones that have them, would be louder than
+the problem.
 
-### 6.3 What the client does not check
+### 6.3 Short months
 
-The client checks the field count of a custom cron (so Create is not offered
-for half an expression) and nothing more. Ranges, names, steps and the dates
-that never occur are the server's parser's
-(`server/schedule/cron.go`), whose refusal already names the field and the
-range (`minute field "61": 61 is out of range 0-59`). A second validator here
-would be a second definition of cron that disagrees with the one that runs —
-and the server's message is printed under the field either way.
+**The 29th and the 30th run on the last day of a month that lacks them.**
+`Monthly on the 30th` runs on 28 February (29 in a leap year), and on the 30th
+everywhere else. The alternative, skipping the month, is what a calendar does
+for a meeting and is wrong for work: a monthly report that quietly does not
+happen in February is the failure a schedule exists to prevent. With the 31st
+replaced by `Last day` (§6.1), this rule touches only two choices, so it is said
+right where they are made — one muted line under the description, shown only
+for them:
+
+> `In shorter months, runs on the last day.`
+
+The words (§6.4) do not repeat it: `Monthly on the 30th at 09:00` is read on a
+row many times and chosen once, and the next-run line shows the date it
+actually picks.
 
 ### 6.4 Periods in words
 
-`describePreset(period)` writes the words for a preset, 24-hour times, the
-minute always two digits; a weekly period with all seven days reads as daily.
-Every screen draws a cron through `components/Project/PeriodWords.tsx`, which
-parses it and prints the preset's words, or `Custom ·` (`CUSTOM_PERIOD_LABEL`)
-and the expression in mono. `describePeriod(cron)` is the same as one plain
-string:
+`describePeriod(period)` (`lib/schedulePeriod.ts`) writes the words, 24-hour
+times, the minute always two digits. Every screen draws a period through
+`components/Project/PeriodWords.tsx`, which is that string and the zone
+label (§6.5) and nothing else:
 
 | Period | Words |
 |---|---|
+| Once | `Once on Mon 3 Nov at 09:00` — weekday, day, month; the year is added when it is not the current year in the schedule's zone (`Once on Fri 1 Jan 2027 at 09:00`) |
 | Hourly, 1 | `Every hour at :15` |
 | Hourly, N ≤ 4 | `Every 2 hours at :15` |
 | Hourly, N ≥ 6 | `Every 6 hours, at 00:15, 06:15, 12:15 and 18:15` — four firings or fewer a day are named, because "every 6 hours" does not say which six |
@@ -620,18 +687,21 @@ string:
 | Weekly, Sat and Sun | `Weekends at 09:00` |
 | Weekly, one day | `Mondays at 09:00` |
 | Weekly, other sets | `Mon, Wed, Fri at 09:00` — Monday-first, as the toggles |
-| no preset | `Custom` and the expression, mono: `Custom · 0 9 1 * *` |
+| Monthly, a day | `Monthly on the 1st at 09:00` |
+| Monthly, 31 | `Monthly on the last day at 09:00` |
+| A kind this build does not know | `Unsupported period` — a newer server's kind on an older page (§11) |
 
-**No general cron-to-English.** Describing every cron (`at 09:00 on day 1 of
-the month`, the Vixie OR between day-of-month and day-of-week) is a library's
-worth of rules and a second interpreter of cron; the expression itself is
-exact, and a user who wrote it reads it.
+**Once is written as an absolute date, never `tomorrow`.** The words are the
+period, and a period's words do not count down; "when, for me" is the next-run
+slot's (`Next in 5h`, §3.1), as it is for every kind. The
+date format is `formatNextRun`'s beyond-tomorrow form (§4.1), so the period and
+the next run read alike.
 
 ### 6.5 Time zones
 
 **Every schedule carries its own IANA zone** (`time_zone`, e.g. `Asia/Tokyo`;
 [data-model](projects/data-model.md#schedule)), and the server evaluates its
-cron in that zone, DST included, against the tz database built into the
+period in that zone, DST included, against the tz database built into the
 server binary, so a host without one (Windows, a minimal container) resolves
 every zone too ([api.md](projects/api.md#schedule-time-zones)). The client sets
 it without asking: the create sheet sends the device's zone (§5), and the only
@@ -697,7 +767,8 @@ every wall-clock time the schedule shows, with one way to make it the device's.
 #### A schedule's times are in the schedule's zone
 
 - **A period is wall-clock time in the schedule's zone.** `Daily at 09:00`
-  means 09:00 in Tokyo. The period's words, the editor's inputs and its
+  means 09:00 in Tokyo, and `Once on Mon 3 Nov at 09:00` means 09:00 on 3
+  November in Tokyo — the date is Tokyo's date too. The period's words, the editor's inputs and its
   description are all in that zone.
 - **A schedule's instants are shown in the schedule's zone too**: the next run,
   the instant in a failure or skip notice, and the empty Runs list's `The first
@@ -725,7 +796,7 @@ label is conditional.
 | Surface | Same zone | Zone differs |
 |---|---|---|
 | List row, line 2 (§3.1) | `Daily at 09:00 · Next in 5h` | `Daily at 09:00 (Tokyo) · Next in 5h` |
-| List row, custom cron | `Custom · 0 9 1 * *` | `Custom · 0 9 1 * * (Tokyo)` — the label in the line's own font, not mono |
+| List row, one-time | `Once on Mon 3 Nov at 09:00 · Next in 2d` | `Once on Mon 3 Nov at 09:00 (Tokyo) · Next in 2d` |
 | Detail head, switch line (§4.1) | `On · Next run tomorrow 09:00 (in 5h)` | `On · Next run tomorrow 09:00 (Tokyo) · in 5h` — the relative half moves out of brackets so the line has one pair |
 | Detail head, notice `{at}` (§4.1) | `The run at today 09:00 could not be started.` | `The run at today 09:00 (Tokyo) could not be started.` — the skip notice the same |
 | Runs, empty line (§4.2) | `No runs yet. The first is due tomorrow 09:00.` | `No runs yet. The first is due tomorrow 09:00 (Tokyo).` |
@@ -762,7 +833,7 @@ difference costs them nothing today.
 
 #### Editing keeps the zone
 
-Saving the period sends `cron` and nothing else (§4.3), whatever zone the
+Saving the period sends `period` and never `time_zone` (§4.3), whatever zone the
 device is in. A user editing while travelling writes 09:00 in the zone the line
 names, and the schedule stays there: following the device on edit would move a
 home schedule to every hotel. The zone line is how the editor makes that
@@ -786,11 +857,15 @@ not know (§11: there is no zone to switch to).
   the settings' job, and Period is the setting it changes.
 
 **What it does:** `schedule.update { id, time_zone: <device zone> }` — the zone
-only, the cron as stored. The wall-clock period is kept and re-read in the new
-zone: `Daily at 09:00` in Tokyo becomes `Daily at 09:00` in London. That is what
+only, the period as stored. The wall-clock period is kept and re-read in the new
+zone: `Daily at 09:00` in Tokyo becomes `Daily at 09:00` in London, and `Once on
+Mon 3 Nov at 09:00` stays 09:00 on 3 November, now London's. A one-time whose
+wall-clock time has already passed in the device's zone is refused by the
+server, and the dialog prints that refusal as it prints any (below); the user
+then sets a new time first. That is what
 "run it on my time" means, and the instants follow from the server's next
 notification (`next_run_at` is the server's to compute — the client evaluates
-no cron, §6.3).
+no recurring period).
 
 **It confirms**, with a non-`danger` `ConfirmDialog`, because from here it
 cannot be undone: there is no zone picker, so only a device in Tokyo can put
@@ -802,9 +877,10 @@ the schedule back in Tokyo.
 >
 > [ Cancel ] [ Use London time ]
 
-The quoted period is `describePeriod(cron)`, so the sentence holds for every
-period, an hourly or a custom one (`"Custom · 0 9 1 * *" will run on …`)
-included — it never claims a clock time the period does not have. The names and
+The quoted period is `describePeriod(period)`, so the sentence holds for every
+period, an hourly or a one-time one (`"Once on Mon 3 Nov at 09:00" will run on
+…`) included — it never claims a clock time the period does not have. It is not
+offered on a done schedule (§6.6). The names and
 offsets are the zone line's, and a zone whose offset cannot be read drops its
 bracket, as there.
 
@@ -826,6 +902,90 @@ year, since two zones that agree in winter part in summer. With the zone on the
 schedule, nothing on these screens depends on where the server is, so none of
 them mentions the server's clock. The offsets on the zone line are computed
 when it is drawn, so they cannot go stale across a DST change.
+
+### 6.6 Done
+
+A one-time schedule is **done** once its time has gone by. `isDone(schedule,
+now)` (`lib/schedulePeriod.ts`) is the one predicate, and it has two halves:
+
+- **Fired** — `kind` is `once`, `enabled`, and no `next_run_at`. That is the
+  server's fact ([api.md](projects/api.md#schedule-periods)): it clears
+  `next_run_at` when it handles the time, whether the run started, failed to
+  start or was skipped, and a recurring schedule that is on always has a
+  `next_run_at`. The client never declares a schedule that is *on* done from
+  its own clock, so a page left open across the time keeps saying `Runs today
+  09:00` until the server has fired it.
+- **Passed while off** — `kind` is `once`, not `enabled`, and its `at` is
+  behind now in the schedule's zone (`zonedInstant`, §6.2). The server does
+  nothing at an off schedule's time and refuses to turn one on once its time has
+  passed, so a switch here would be a control that only ever fails. This half
+  reads the clock because nothing is waiting on the server: an off schedule
+  fires nothing, so the client cannot run ahead of an event. An open page
+  re-judges it when that instant arrives (`useHasPassed`, one wake-up at the
+  instant rather than `useSecondsUntil`'s one a second), so the switch gives
+  way to `Done` on the minute rather than at the next notification, which an
+  off schedule's time never sends. In a zone the browser does not know (§11)
+  it cannot be judged, and the schedule is drawn as off, with the switch;
+  turning it on is then refused with the server's words.
+
+**A one-time missed while Pockode was not running is run when it starts again.**
+Recurring firings missed while the server was down are skipped
+([work-system.md](code/work-system.md#schedules)), because the next one is
+coming; a one-time has no next one, and skipping it would be the silent failure
+a schedule exists to prevent. So the run is late rather than lost, and the
+Runs list says how late: it is dated by when it was made (§4.2), beside a head
+that says when it was due. Nothing else on the screens marks it — a run made
+late is an ordinary run.
+
+**What a done schedule looks like**, surface by surface:
+
+| Surface | Before its time | Done |
+|---|---|---|
+| Row, line 1 (§3.1) | title, switch | title, and `Done` with a `CircleCheck` glyph (`text-th-text-muted`, `text-xs`) where the switch was — text, not a control |
+| Row, line 2 | `Once on Mon 3 Nov at 09:00 · Next in 5h`, or `· Off` | `Once on Mon 3 Nov at 09:00` alone — `Done` is on line 1, and there is no next run to state |
+| Row, line 3 | the latest run, or `No runs yet` | the latest run as always; passed while off with no run, `Did not run: it was off` (§3.1) |
+| Detail head (§4.1) | the switch line | `CircleCheck` + `Done · Was due Mon 3 Nov 09:00`, and under it the muted `To run it again, set a new time under Period.` |
+| Detail notice | as for any schedule | as for any schedule — a failed start or a skip at its time shows as it would on any firing; passed while off, its own muted notice |
+| Period section (§4.3) | the words, the pencil | the same: the pencil is the way back |
+| `Use {city} time` (§6.5) | offered when the zones differ | not offered: nothing more will run in either zone |
+| Run now (§4.4) | works; the one time still fires | works, and leaves the schedule done — a run by hand is not its one time |
+| Order (§3.3) | — | stays where it was: newest created first, never re-sorted by state |
+
+- **`Was due`, not `Ran`.** A done schedule's latest run may be one made by Run
+  now after its time, or there may be none (it failed to start, it was skipped,
+  it was off); the head says the one thing that is true of all of them, and the
+  notice and the Runs list say the rest. Its `{at}` is the period's own `at` —
+  a done schedule has no `next_run_at` to draw — turned into an instant with
+  `zonedInstant` and drawn as the notices' `{at}` is (§4.1): `today 09:00`,
+  `yesterday 09:00`, `Mon 3 Nov 09:00`, with the zone label when the zones
+  differ. In a zone the browser does not know, the wall clock is printed as
+  stored, `Mon 3 Nov 09:00 (America/Ciudad_Juarez)` — it is the schedule's time
+  as written, so unlike §11's instants it keeps the raw label. The off notice's
+  `{at}` (§4.1) is the same.
+- **No switch on a done schedule, not a disabled one.** A switch is a promise
+  that flipping it does something; a done one-time has nothing to turn on. A
+  disabled switch would also be a control drawn under 3:1 on every done row.
+  `Done` in its place is text: the card's overlay button (§3.1) still covers it
+  and opens the detail, and the switch's accessible name is not left behind for
+  a screen reader to find. The server would still take `enabled: false` on a
+  fired one-time; the screens just do not offer it, since it would only move the
+  schedule from one kind of done to the other.
+- **Doing it again is setting a new time.** Saving a new period on a done
+  schedule — a later date and time, or any recurring kind — re-arms it, and the
+  save **turns it on**: it sends `enabled: true` beside the period (§4.3), so a
+  schedule that passed while off comes back on in the same write, and Save reads
+  `Save and turn on` so the user sees that before pressing it. A user who picks
+  a new time for a finished one-time means it to run then. On a schedule that is
+  not done, saving the period never touches `enabled` — an off schedule given a
+  new time stays off.
+- **The editor opens on the stored date and time**, which has passed, so Save
+  waits behind `That time has passed. Pick a later one.` until the user picks
+  another — rather than quietly proposing one. What a done schedule is waiting
+  for is the user's choice of when, and an editor that pre-filled tomorrow
+  would turn a glance at the pencil into a scheduled run.
+- **Nothing deletes a done schedule by itself.** It is the record of a one-time
+  run and the way to its run, its chat and its prompt; deleting is the user's,
+  on the detail page, as for any schedule.
 
 ## 7. A run's own page
 
@@ -883,7 +1043,8 @@ The job's page is where a job's context lives.
 ## 9. What the server and the wire added
 
 Three facts these screens draw were not on the wire when the backend landed
-(A–C), and one piece of bookkeeping was missing (D). Each went where the data
+(A–C), one piece of bookkeeping was missing (D), and periods without cron
+needed the period itself and a one-time's end (E). Each went where the data
 already was, and none is a new RPC method. The wire shapes and the full rule
 are [api.md](projects/api.md#schedule); here is why each exists.
 
@@ -950,6 +1111,32 @@ Restarting an older, `stopped` run had the same hole. So, on the server:
 A refused Restart or Reopen prints on the run's row as line 3, as any refused
 lifecycle command does.
 
+**E. The period as values.** The server keeps no cron: the stored format is
+the period itself ([api.md](projects/api.md#schedule-periods) is the authority
+on the shapes). What the screens rely on:
+
+- **`period` replaces `cron`** on `Schedule`, `schedule.create` and
+  `schedule.update` (given whole, or left out to keep it): the shapes of §6.1's
+  table. Values, so no screen ever parses or prints a stored expression, and a
+  one-time is a date and time rather than an expression that happens to match
+  once. Fields that do not belong to the kind are refused, so one period has one
+  spelling and `samePeriod` can compare values — reading an hourly `every` or
+  `minute` left out as the server's defaults (`1`, `0`), so a stored period the
+  server echoes without them is still the one the field writes.
+- **A one-time's time must be ahead** when it is set, and an off one-time whose
+  time has passed cannot be turned on without a new one; both refusals name the
+  time. The client checks the same thing first (§6.2), so the server's words
+  are the race's, not the normal path's.
+- **Done is read off fields that were already there** — `enabled` and
+  `next_run_at`, and for an off one-time the period's own `at` (§6.6) — so
+  nothing was added for it. The outcome of the one
+  time is said by what every firing already records: the run, `last_failure`,
+  `last_skipped_at`.
+- **A one-time missed while the server was down is run on startup**; recurring
+  firings are still skipped.
+- **Saving a period with `enabled: true` beside it** re-arms a done schedule in
+  one write; it is `schedule.update` with two fields.
+
 ## 10. Mobile and desktop
 
 One layout at every width, as the role and story screens have
@@ -958,8 +1145,8 @@ split): one column, `max-w-2xl`, bottom bar under the thumb.
 
 - **Coarse pointer.** Every control meets 44 × 44 with 8px between neighbours:
   the switch's hit area, the run rows' icons (unchanged `WorkRow`), the day
-  toggles (wrapping, §6.1), `Show more runs`. The time input is the native
-  picker, which on phones is the platform's own wheel or clock; nothing is
+  toggles (wrapping, §6.1), `Show more runs`. The date and time inputs are the
+  native pickers, which on phones is the platform's own wheel or clock; nothing is
   drawn over it.
 - **Keyboard on the sheet.** The prompt textarea sits in a `Sheet`, which the
   viewport meta's `interactive-widget=resizes-content` already keeps above the
@@ -980,7 +1167,16 @@ split): one column, `max-w-2xl`, bottom bar under the thumb.
 | An older run left `stopped` with a question unanswered, after a newer run was made | Not on the row and not in the dot, which read `last_run` only. It is on the detail's Runs list with its warning edge. Accepted: reading every run for the dot means pushing every schedule's history, and a stopped run has been handed back already |
 | The latest run is deleted | `last_run` absent while `last_run_at` is set: line 3 reads `Latest run deleted · {age of last_run_at}`, muted. `No runs yet` is only for a schedule with no `last_run_at` at all. The Runs list shows the rest |
 | A schedule is deleted while its detail is open | The detail subscription goes quiet; the list notification removes it from the store and the page shows `Schedule not found` |
-| A cron that is legal but never matches a preset (`*/15 9-17 * * 1-5`) | Custom everywhere: row `Custom · */15 9-17 * * 1-5`, editor opens in Custom |
+| A period kind this build does not know (a newer server) | `Unsupported period` wherever words go; the pencil opens the editor on `Daily 09:00` with the muted line `This period was set by a newer version of Pockode. Saving replaces it.` Nothing is sent until the user saves |
+| A period with no kind (a schedule stored as cron before periods, which the server does not migrate) | `Unsupported period`, as above, but the editor's line is `This period could not be read. Saving replaces it.` — it did not come from a newer version |
+| A one-time's time passes while its detail is open, the schedule on | The head keeps `Runs today 09:00` until the server's notification drops `next_run_at`; the client never declares an on schedule done from its own clock (§6.6). An open editor goes to `That time has passed.` on the minute (§6.2) |
+| An off one-time's time passes while its detail is open | It becomes done on the minute: the switch gives way to `Done` (§6.6) |
+| A one-time saved for a time seconds away, which passes in flight | Refused by the server; the refusal prints under the field and the inputs stay (§6.2) |
+| Run now on a one-time before its time | A run like any; the one time still fires. If that run is still going then, the one time is skipped — the skip notice — and the schedule is done (§6.6) |
+| Pockode is not running at a one-time's time | Run when it starts again (§6.6, §9 E): an ordinary run, dated later than the head's `Was due` |
+| A one-time turned off and left off past its time | Done; no switch; `Did not run: it was off`; a new time turns it on (§6.6) |
+| Monthly on the 29th or 30th in a shorter month | Runs on that month's last day (§6.3) |
+| A wall-clock time a DST change skips or repeats | The server's rule (§6.2); the next-run line shows the instant it chose |
 | A role that stops taking jobs | §4.3's line; runs carry on with it |
 | The role is deleted (or replaced by Reset to defaults) | §4.3's line; the next firing fails to start and becomes the notice and the error edge. Deleting a role does not count schedules today (§12) |
 | The schedule's worktree is deleted | §4.3's line; same |
@@ -994,7 +1190,26 @@ split): one column, `max-w-2xl`, bottom bar under the thumb.
 
 ## 12. Deliberately not done
 
-- **A general cron describer and a client-side cron validator.** §6.3, §6.4.
+- **A rule language, or any way to type a period.** The five kinds (§6) cover
+  what schedules are made for; a period they cannot say is unsupported until
+  someone needs it, and then it is a sixth kind with its own inputs, not an
+  expression field.
+- **Every N minutes.** An agent run usually takes longer than a quarter of an
+  hour, so every 15 minutes would mostly be skips beside a run still going
+  (§9 D); hourly is the fastest rhythm that means what it says.
+- **The nth weekday of a month** (`first Monday`), **every other week**, and
+  **every N days.** Each is a calendar idiom more than a work one; the last two
+  also need an anchor date the other kinds do not, which is a second input with
+  its own rules. Add one as a kind when someone asks.
+- **Hours windows** (`every hour from 9 to 17 on weekdays`) and **several
+  times a day** (`09:00 and 17:00`). Two kinds combined, or one kind with a list
+  where it has one value; the same answer — and two schedules on one prompt do
+  it today.
+- **Yearly.** A once-a-year job is rare enough that a one-time, set again after
+  it runs, covers it.
+- **Marking a one-time run as late.** It is run on startup when it was missed
+  (§6.6); the Runs list's date beside the head's `Was due` already says so.
+- **Deleting a done one-time by itself.** §6.6.
 - **Choosing a zone.** This used to say a schedule had no zone of its own:
   every schedule ran on the server machine's clock. That decision is reversed
   ([why](#why-not-the-servers-clock)), but there is still no picker, field or
@@ -1026,9 +1241,12 @@ split): one column, `max-w-2xl`, bottom bar under the thumb.
 |---|---|---|
 | 1 | The Project tab reads `Stories`, `Schedules`, `Agent Roles` in that order, and the stories list is headed `Stories` | `ProjectTab.test.tsx`, `WorkListOverlay.test.tsx` |
 | 2 | The Schedules dot lights exactly when some `last_run` satisfies `needsAttention` — a failure alone lights nothing; the tab badge is the OR of the two entries' dots | `ProjectTab.test.tsx`, `SessionSidebar.test.tsx` |
-| 3 | `parsePeriod` / `toCron` round-trip every preset; the shapes in §6.2 map as listed; anything else is `null`; all seven days are Daily | `schedulePeriod.test.ts` |
-| 4 | `describePeriod` writes §6.4's table, including the named firings for N ≥ 6 and `Custom ·` | `schedulePeriod.test.ts` |
-| 5 | An unchanged period sends no `cron`, including one stored in a spelling the preset would not write (`MON-FRI`) | `ScheduleDetailOverlay.test.tsx` |
+| 3 | All seven days is Daily; `samePeriod` compares by value, the weekly days in any order | `schedulePeriod.test.ts` |
+| 4 | `describePeriod` writes §6.4's table, including the named firings for N ≥ 6, Once's year only outside the current year in the schedule's zone, the ordinals, and `Unsupported period` | `schedulePeriod.test.ts` |
+| 5 | An unchanged period sends nothing; a done one-time's Save sends `enabled: true` and reads `Save and turn on`, any other Save never sends `enabled` | `ScheduleDetailOverlay.test.tsx` |
+| 5a | `zonedInstant` turns a wall-clock date and time into the right instant in a zone with DST on both sides of a change; the field shows `That time has passed.` for a past one-time, in the schedule's zone and not the device's | `lib/scheduleZone.test.ts`, `PeriodField.test.tsx` |
+| 5b | `isDone`: on, once, no `next_run_at` → done; off, once, `at` past in the schedule's zone → done; on with `next_run_at` in the past → not done. A done schedule: `Done` and no switch on its row and head, `Was due`, no `Use {city} time`, Run now still offered; before its time, the switch and `Runs …` | `schedulePeriod.test.ts`, `ScheduleListOverlay.test.tsx`, `ScheduleDetailOverlay.test.tsx` |
+| 5c | Nothing a user sees says cron: `PeriodWords`, `PeriodField` and `describePeriod` take a `Period`, never a string, so no expression can reach a screen — held by the type check, with no string-period prop or export left in `lib/schedulePeriod.ts` | `tsc -b` (`web`'s `build`) |
 | 6 | `sameZone` treats aliases as one zone and `Europe/London` / `Africa/Abidjan` as two; `zoneLabel` writes §6.5's forms (`Buenos Aires`, `UTC`, `UTC+9` for `Etc/GMT-9`); the zone line drops a repeated offset | `lib/scheduleZone.test.ts` |
 | 6a | With the device's zone the schedule's, no surface shows a label, a zone line or the switch; with another, the row, the head's next run, the notices and the empty Runs line carry `(City)`, and instants and day words are in the schedule's zone | the row's and the detail's tests, with a fixed device zone (`TZ` / a mocked `resolvedOptions`) |
 | 6b | Saving a period sends no `time_zone`; the switch confirms, sends `time_zone` alone, and the label stays until the notification carries the new zone; Create sends the device's zone | `ScheduleDetailOverlay.test.tsx`, `CreateScheduleSheet.test.tsx` |
@@ -1040,7 +1258,8 @@ split): one column, `max-w-2xl`, bottom bar under the thumb.
 | 12 | Both new routes resolve with and without `/w/<worktree>` | `navigation.test.ts`, `AppShell.test.tsx` |
 | 13 | Every new icon-only or small control meets the floor | `web/tests/touchTarget.test.ts` (the register regenerated, not silenced) |
 | 14 | `last_run`, `time_zone` and `schedule` arrive as §9 says, and `last_run` is re-sent when the run's row moves | `server/watch/schedule_list_test.go`, `server/watch/work_detail_test.go`, `server/ws/rpc_schedule_test.go`, `server/ws/rpc_work_test.go` |
+| 14a | A period is refused outside its kind's fields and stored in one spelling; `Next` keeps month ends, hourly spacing and §6.2's DST rule; a one-time is refused once passed (on create, on a new period or zone, on turning back on), fires once and is then done, survives a Run now before its time, and is run on startup when missed while recurring firings are skipped (§9 E) | `server/schedule/period_test.go`, `server/schedule/store_test.go`, `server/schedule/scheduler_test.go` |
 | 15 | Starting a failed-to-start job by hand clears `last_failure` and makes it `last_run_work_id`, so the next firing is skipped while it runs; restarting or reopening a run while another is active is refused; a fired run is recorded once; a firing overtaken by a hand start records no skip; a hand start racing Run now leaves exactly one active run (§9 D) | `server/schedule/scheduler_test.go`, `server/ws/rpc_work_test.go` |
 | 16 | A run deleted from the newest page's span disappears from the loaded list; an older loaded run does not | `lib/scheduleRuns.test.ts` |
-| 17 | `PeriodField` keeps its mode when the cron it writes would read back as another (seven days ticked; a preset-shaped custom text), reports `null` while incomplete, and calls nothing on mount | `PeriodField.test.tsx` |
+| 17 | `PeriodField` keeps Weekly when all seven days are ticked, carries the time, days, day of month and date across modes as §6.1 says, starts Once on the next occurrence of the carried time, reports `null` with §6.2's hints, and calls nothing on mount | `PeriodField.test.tsx` |
 | 18 | Deleting a job from its page lands on its schedule, and deleting a task on its story — wherever the header's Back goes | `WorkDetailOverlay.test.tsx` |

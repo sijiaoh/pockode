@@ -103,13 +103,12 @@ describe("ScheduleListOverlay", () => {
 			makeSchedule({
 				id: "a",
 				title: "On",
-				cron: "0 3 * * *",
 				next_run_at: "2026-10-23T17:00:00Z",
 			}),
 			makeSchedule({
 				id: "b",
 				title: "Paused",
-				cron: "*/15 9-17 * * 1-5",
+				period: { kind: "weekly", weekdays: [1, 2, 3, 4, 5], time: "09:00" },
 				enabled: false,
 				next_run_at: undefined,
 				created_at: "2026-09-01T00:00:00Z",
@@ -119,10 +118,9 @@ describe("ScheduleListOverlay", () => {
 
 		expect(within(card("On")).getByText("Daily at 03:00")).toBeInTheDocument();
 		expect(within(card("On")).getByText("Next in 5h")).toBeInTheDocument();
-		// A cron no preset matches is shown as written, the expression in mono.
-		expect(within(card("Paused")).getByText("*/15 9-17 * * 1-5")).toHaveClass(
-			"font-mono",
-		);
+		expect(
+			within(card("Paused")).getByText("Weekdays at 09:00"),
+		).toBeInTheDocument();
 		expect(within(card("Paused")).getByText("Off")).toBeInTheDocument();
 	});
 
@@ -132,25 +130,92 @@ describe("ScheduleListOverlay", () => {
 		try {
 			setSchedules([
 				makeSchedule({ id: "a", title: "Audit", time_zone: "Asia/Tokyo" }),
-				makeSchedule({
-					id: "b",
-					title: "Custom",
-					cron: "0 9 1 * *",
-					time_zone: "Asia/Tokyo",
-				}),
 				makeSchedule({ id: "c", title: "Home", time_zone: "Europe/London" }),
 			]);
 			renderOverlay();
 			expect(card("Audit")).toHaveTextContent("Daily at 03:00 (Tokyo)");
-			// The label in the line's own font, not the expression's mono.
-			expect(within(card("Custom")).getByText("(Tokyo)")).not.toHaveClass(
-				"font-mono",
-			);
 			expect(card("Home")).toHaveTextContent("Daily at 03:00");
 			expect(card("Home")).not.toHaveTextContent("(");
 		} finally {
 			deviceZone = real;
 		}
+	});
+
+	describe("a one-time schedule", () => {
+		const once = (at: string) => ({ kind: "once" as const, at });
+		const switchOf = (title: string) =>
+			within(card(title)).queryByRole("switch");
+
+		it("has the switch and its next run before its time", () => {
+			setSchedules([
+				makeSchedule({
+					title: "Release",
+					period: once("2026-11-03T09:00"),
+					next_run_at: "2026-11-03T09:00:00Z",
+				}),
+			]);
+			renderOverlay();
+			expect(switchOf("Release")).toBeInTheDocument();
+			expect(card("Release")).toHaveTextContent(/Next in 11d/);
+			expect(card("Release")).not.toHaveTextContent("Done");
+		});
+
+		it("is done, with no switch and no next run, once the server has handled its time", () => {
+			setSchedules([
+				makeSchedule({
+					title: "Release",
+					period: once("2026-10-20T09:00"),
+					next_run_at: undefined,
+					time_zone: "UTC",
+				}),
+			]);
+			renderOverlay();
+			expect(switchOf("Release")).not.toBeInTheDocument();
+			expect(within(card("Release")).getByText("Done")).toBeInTheDocument();
+			expect(card("Release")).not.toHaveTextContent("Next");
+			expect(card("Release")).toHaveTextContent(/No runs yet/);
+		});
+
+		it("waits for the server while on, even past its time", () => {
+			setSchedules([
+				makeSchedule({
+					title: "Release",
+					period: once("2026-10-23T11:00"),
+					next_run_at: "2026-10-23T11:00:00Z",
+					time_zone: "UTC",
+				}),
+			]);
+			renderOverlay();
+			expect(switchOf("Release")).toBeInTheDocument();
+		});
+
+		it("is done when its time passes while off, on the minute", () => {
+			setSchedules([
+				makeSchedule({
+					title: "Release",
+					period: once("2026-10-23T12:01"),
+					enabled: false,
+					next_run_at: undefined,
+					time_zone: "UTC",
+				}),
+			]);
+			// The timers too, so the one wake-up at its time can be run out.
+			vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+			vi.setSystemTime(NOW);
+			renderOverlay();
+			expect(switchOf("Release")).toBeInTheDocument();
+
+			act(() => {
+				vi.advanceTimersByTime(59_999);
+			});
+			expect(switchOf("Release")).toBeInTheDocument();
+			act(() => {
+				vi.advanceTimersByTime(1);
+			});
+			expect(within(card("Release")).getByText("Done")).toBeInTheDocument();
+			expect(switchOf("Release")).not.toBeInTheDocument();
+			expect(card("Release")).toHaveTextContent(/Did not run: it was off/);
+		});
 	});
 
 	it.each<[string, Partial<ScheduleListItem>, RegExp]>([

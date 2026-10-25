@@ -6,9 +6,10 @@ import { useCurrentWorktree } from "../../hooks/useRouteState";
 import { useAgentRoleStore } from "../../lib/agentRoleStore";
 import { resolveInitialJobRole } from "../../lib/initialRole";
 import { roleAcceptsWorkType } from "../../lib/roleWorkType";
-import { DEFAULT_CRON } from "../../lib/schedulePeriod";
+import { DEFAULT_PERIOD } from "../../lib/schedulePeriod";
 import { useScheduleStore } from "../../lib/scheduleStore";
 import { useWSStore } from "../../lib/wsStore";
+import type { Period } from "../../types/schedule";
 import { Sheet } from "../ui";
 import { inputClass } from "../ui/inputClass";
 import NoEligibleRoleSheet from "./NoEligibleRoleSheet";
@@ -42,9 +43,9 @@ export default function CreateScheduleSheet({ onClose, onCreated }: Props) {
 	const [title, setTitle] = useState("");
 	const [prompt, setPrompt] = useState("");
 	const [agentRoleId, setAgentRoleId] = useState("");
-	// The field reports nothing until it is touched, so the cron it opens on is
-	// written down here rather than read from it.
-	const [cron, setCron] = useState<string | null>(DEFAULT_CRON);
+	// The field reports nothing until it is touched, so the period it opens on
+	// is written down here rather than read from it.
+	const [period, setPeriod] = useState<Period | null>(DEFAULT_PERIOD);
 	const [error, setError] = useState<string | null>(null);
 	const [isSubmitting, setIsSubmitting] = useState(false);
 	const createSchedule = useWSStore((s) => s.actions.createSchedule);
@@ -61,7 +62,7 @@ export default function CreateScheduleSheet({ onClose, onCreated }: Props) {
 	// A reconnect empties the role store while it reloads. Once the form has
 	// been shown it stays through that: swapping to the no-role sheet would
 	// remount `PeriodField`, which reads only its `initial`, so it would show
-	// the default period while the cron held here is still the user's — and a
+	// the default period while the one held here is still the user's — and a
 	// create in flight would lose its undismissable sheet.
 	const rolesLoading = useAgentRoleStore((s) => s.isLoading);
 	const [formShown, setFormShown] = useState(hasEligibleRole);
@@ -84,13 +85,13 @@ export default function CreateScheduleSheet({ onClose, onCreated }: Props) {
 		title.trim() !== "" &&
 		prompt.trim() !== "" &&
 		selectedRoleFits &&
-		cron !== null &&
+		period !== null &&
 		!isSubmitting;
 
 	const handleSubmit = useCallback(
 		async (e: React.FormEvent) => {
 			e.preventDefault();
-			if (!canSubmit || cron === null) return;
+			if (!canSubmit || period === null) return;
 
 			setError(null);
 			setIsSubmitting(true);
@@ -99,7 +100,7 @@ export default function CreateScheduleSheet({ onClose, onCreated }: Props) {
 					title: title.trim(),
 					prompt: prompt.trim(),
 					agent_role_id: agentRoleId,
-					cron,
+					period,
 					time_zone: deviceZone,
 					...(worktree ? { worktree } : {}),
 				});
@@ -110,7 +111,7 @@ export default function CreateScheduleSheet({ onClose, onCreated }: Props) {
 				// it does a second submit would make a second schedule.
 				onCreated(created.id);
 			} catch (err) {
-				// Everything typed stays: the server's message (an invalid cron's
+				// Everything typed stays: the server's message (an invalid period's
 				// names the field) is printed as it came.
 				setError(
 					err instanceof Error ? err.message : "Failed to create schedule",
@@ -120,7 +121,7 @@ export default function CreateScheduleSheet({ onClose, onCreated }: Props) {
 		},
 		[
 			canSubmit,
-			cron,
+			period,
 			createSchedule,
 			title,
 			prompt,
@@ -134,8 +135,8 @@ export default function CreateScheduleSheet({ onClose, onCreated }: Props) {
 
 	if (!hasEligibleRole && !(formShown && rolesLoading)) {
 		// `PeriodField` unmounts with the form and opens on the default when it
-		// comes back, so the cron it reports from goes back there with it.
-		if (cron !== DEFAULT_CRON) setCron(DEFAULT_CRON);
+		// comes back, so the period it reports from goes back there with it.
+		if (period !== DEFAULT_PERIOD) setPeriod(DEFAULT_PERIOD);
 		return (
 			<NoEligibleRoleSheet title={TITLE} workType="job" onClose={onClose} />
 		);
@@ -226,7 +227,7 @@ export default function CreateScheduleSheet({ onClose, onCreated }: Props) {
 				{/* Held still like the other fields: an edit made mid-request would
 				    otherwise not be what was sent. */}
 				<fieldset disabled={isSubmitting} className="min-w-0">
-					<PeriodField initial="" onChange={setCron} />
+					<PeriodField initial={null} onChange={setPeriod} />
 				</fieldset>
 
 				<p className="text-xs text-th-text-muted">

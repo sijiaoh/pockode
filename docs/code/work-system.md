@@ -79,8 +79,8 @@ templates ([Prompt Format](#prompt-format)).
 
 ### Schedules
 
-A schedule (`server/schedule/`) is what makes jobs: a prompt, a role and a cron
-expression, with a `Scheduler` that fires it. Its fields are
+A schedule (`server/schedule/`) is what makes jobs: a prompt, a role and a
+period, with a `Scheduler` that fires it. Its fields are
 [data-model](../projects/data-model.md#schedule)'s; what follows is why the
 scheduler behaves the way it does.
 
@@ -103,7 +103,9 @@ scheduler behaves the way it does.
 - **Missed firings are not caught up.** `Start` calls `SkipMissedRuns` before
   anything fires, moving every past-due firing to the next one after now. A
   server that was off overnight starting eight hourly runs at once is never what
-  anyone wanted; the next firing is.
+  anyone wanted; the next firing is. A one-time period is the exception and
+  is made late: it has no next firing, so skipping it would mean it silently
+  never runs.
 - **A run is a fresh job, started through `work.Operations`.** Each firing and
   each run-now calls `Operations.StartRun` with the schedule's title, its prompt
   as the body, its role and its worktree; it makes the job (`CreateJob`) and
@@ -134,13 +136,15 @@ scheduler behaves the way it does.
   state and are written by its store; the runs are works that know nothing of
   why they were made. "Is a run going now" is not stored at all — it is the
   status of the schedule's runs, read where it is needed.
-- **Times are the schedule's own zone's.** A cron expression means what a
-  clock in `Schedule.TimeZone` means, which is what the person who wrote
-  `0 9 * * *` on their device expects; the server may be a machine somewhere
-  else. `reschedule` passes `Cron.Next` the current time in that zone, so
+- **Times are the schedule's own zone's.** A period means what a clock in
+  `Schedule.TimeZone` means, which is what the person who picked "daily at
+  09:00" on their device expects; the server may be a machine somewhere
+  else. `reschedule` passes `Period.Next` the current time in that zone, so
   across a DST change a skipped wall time fires at the jump and a repeated one
-  fires once. The store's clock (`now`) only says *when*; its location plays no
-  part. Zones are checked and loaded in one place, `loadZone`, against the tz
+  fires at its first occurrence — once, unless the next firing is recomputed
+  from inside the repeated hour, where the second occurrence is still ahead.
+  The store's clock (`now`) only says *when*; its location plays no part.
+  Zones are checked and loaded in one place, `loadZone`, against the tz
   database embedded with `time/tzdata` ([api.md](../projects/api.md#schedule-time-zones)).
 - **The wait is re-read, not trusted.** Every schedule change wakes the loop,
   and the wait is capped at a minute, because a timer counts elapsed time and a

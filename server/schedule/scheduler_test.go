@@ -327,8 +327,7 @@ func TestLoop_FiresOnTimeAndFollowsEdits(t *testing.T) {
 	}
 
 	// An edit moves the wait without the old timer going off.
-	cron := "30 8 * * *"
-	if _, err := env.store.Update(bgCtx, s.ID, UpdateFields{Cron: &cron}); err != nil {
+	if _, err := env.store.Update(bgCtx, s.ID, UpdateFields{Period: &Period{Kind: PeriodDaily, Time: "08:30"}}); err != nil {
 		t.Fatalf("Update: %v", err)
 	}
 	timer := env.nextTimer(t)
@@ -598,5 +597,53 @@ func TestRecordRun_ARunOfADeletedScheduleIsNotAFailure(t *testing.T) {
 	}
 	if _, err := env.ops.StartWork(bgCtx, run.ID, nil); err != nil {
 		t.Errorf("restarting a run of a deleted schedule: %v", err)
+	}
+}
+
+func TestLoop_OnceFiresOnceAndIsDone(t *testing.T) {
+	env := newSchedulerEnv(t) // 2026-01-01 08:00 UTC
+	in := env.valid()
+	in.Period = Period{Kind: PeriodOnce, At: "2026-01-01T09:00"}
+	s := env.create(t, in)
+	if err := env.scheduler.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer env.scheduler.Stop()
+
+	timer := env.nextTimer(t)
+	if !timer.at.Equal(day(1, 9, 0)) {
+		t.Fatalf("timer at %v, want 09:00", timer.at)
+	}
+	env.clock.set(timer.at)
+	timer.c <- timer.at
+	if next := env.nextTimer(t); !next.at.Equal(env.clock.Now().Add(env.scheduler.recheck)) {
+		t.Errorf("timer after the firing at %v, want only the recheck", next.at)
+	}
+	if runs := env.runs(t, s.ID); len(runs) != 1 {
+		t.Errorf("runs = %d, want one", len(runs))
+	}
+	if got := env.get(t, s.ID); !got.Enabled || got.NextRunAt != nil {
+		t.Errorf("schedule = %+v, want it done: enabled with no next run", got)
+	}
+}
+
+func TestStart_CatchesUpAMissedOnce(t *testing.T) {
+	env := newSchedulerEnv(t)
+	in := env.valid()
+	in.Period = Period{Kind: PeriodOnce, At: "2026-01-01T09:00"}
+	s := env.create(t, in)
+
+	env.clock.set(day(4, 12, 0))
+	if err := env.scheduler.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer env.scheduler.Stop()
+
+	env.nextTimer(t)
+	if runs := env.runs(t, s.ID); len(runs) != 1 {
+		t.Errorf("runs = %d, want the missed one-time run made on start", len(runs))
+	}
+	if got := env.get(t, s.ID); got.NextRunAt != nil {
+		t.Errorf("next run = %v, want none: done", got.NextRunAt)
 	}
 }
