@@ -20,6 +20,7 @@ import type {
 	TurnBlocker,
 	WatchedStory,
 } from "../../types/message";
+import { formatTime, isInstant } from "../../utils/dateTime";
 import { ActivityIcon } from "../ui";
 import type { PromptError } from "./MessageItem";
 import { Armed } from "./SendStopSlot";
@@ -131,17 +132,6 @@ function permissionRowEntry(
 		(e) => e.status === "allowed" || e.status === "denied",
 	);
 	return answered && { entry: answered, more: 0 };
-}
-
-/** "14:02" in the reader's own locale. */
-function formatSince(since: string): string | undefined {
-	if (!since) return undefined;
-	const at = new Date(since);
-	if (Number.isNaN(at.getTime())) return undefined;
-	return at.toLocaleTimeString(undefined, {
-		hour: "2-digit",
-		minute: "2-digit",
-	});
 }
 
 // Bounded like the transcript column above it; the frame's border stays full width.
@@ -620,7 +610,7 @@ function AttentionStrip({
 		);
 	}
 
-	const since = formatSince(turn.since);
+	const since = isInstant(turn.since) && formatTime(turn.since);
 	return (
 		<div className={STRIP_FRAME}>
 			<div className={STRIP_LINE}>

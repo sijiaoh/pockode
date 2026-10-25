@@ -1,5 +1,11 @@
 import type { HourlyEvery, Period, Schedule } from "../types/schedule";
-import { parseWallClock, wallClock, zonedInstant } from "./scheduleZone";
+import {
+	dayShortName,
+	formatClock,
+	formatWallDate,
+	pad2,
+} from "../utils/dateTime";
+import { parseWallClock, zonedInstant } from "./scheduleZone";
 
 /**
  * A schedule's period as the screens read, compare and describe it
@@ -20,7 +26,6 @@ export const WEEK_DAYS = [1, 2, 3, 4, 5, 6, 0] as const;
 /** The monthly `day` that means the last day of every month. */
 export const LAST_DAY = 31;
 
-const DAY_SHORT = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const DAY_PLURAL = [
 	"Sundays",
 	"Mondays",
@@ -30,41 +35,6 @@ const DAY_PLURAL = [
 	"Fridays",
 	"Saturdays",
 ];
-const MONTH_SHORT = [
-	"Jan",
-	"Feb",
-	"Mar",
-	"Apr",
-	"May",
-	"Jun",
-	"Jul",
-	"Aug",
-	"Sep",
-	"Oct",
-	"Nov",
-	"Dec",
-];
-
-export const dayShortName = (day: number) => DAY_SHORT[day];
-
-const pad2 = (n: number) => String(n).padStart(2, "0");
-export const formatClock = (hour: number, minute: number) =>
-	`${pad2(hour)}:${pad2(minute)}`;
-
-/**
- * `Mon 3 Nov`: a calendar date, written out rather than localised so it reads
- * the same in every locale, as the 24-hour times beside it do.
- */
-export function formatDayDate(date: {
-	year: number;
-	month: number;
-	day: number;
-}): string {
-	const weekday = new Date(
-		Date.UTC(date.year, date.month, date.day),
-	).getUTCDay();
-	return `${DAY_SHORT[weekday]} ${date.day} ${MONTH_SHORT[date.month]}`;
-}
 
 /** `1st`, `2nd`, `3rd`, `4th` … `11th`, `12th`, `13th` … `21st`. */
 export function ordinal(n: number): string {
@@ -150,7 +120,7 @@ function describeDays(days: number[]): string {
 	if (key === "0,6") return "Weekends";
 	if (days.length === 1) return DAY_PLURAL[days[0]];
 	return WEEK_DAYS.filter((d) => days.includes(d))
-		.map((d) => DAY_SHORT[d])
+		.map(dayShortName)
 		.join(", ");
 }
 
@@ -173,9 +143,7 @@ export function describePeriod(
 		case "once": {
 			const wall = parseWallClock(p.at);
 			if (!wall) return `Once at ${p.at}`;
-			const year =
-				wall.year === wallClock(now, timeZone).year ? "" : ` ${wall.year}`;
-			return `Once on ${formatDayDate(wall)}${year} at ${formatClock(wall.hour, wall.minute)}`;
+			return `Once on ${formatWallDate(wall, now, timeZone)} at ${formatClock(wall.hour, wall.minute)}`;
 		}
 		case "hourly": {
 			const every = p.every ?? 1;

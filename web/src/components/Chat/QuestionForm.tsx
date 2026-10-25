@@ -2,6 +2,7 @@ import { Check, Plus } from "lucide-react";
 import { useEffect, useId, useRef, useState } from "react";
 import TextareaAutosize from "react-textarea-autosize";
 import type { AskUserQuestion } from "../../types/message";
+import { formatTime, isInstant } from "../../utils/dateTime";
 import {
 	noteApplies,
 	type QuestionSelection,
@@ -176,12 +177,12 @@ function QuestionForm({
 							{selectedCount} selected
 						</span>
 					)}
-					{/* Opposite the chip, in the reader's own locale. It is what tells two
+					{/* Opposite the chip, on the reader's own clock. It is what tells two
 					    questions with the same header apart, and what says how long one
 					    has been waiting. */}
-					{formatAskedAt(askedAt) && (
+					{isInstant(askedAt) && (
 						<span className="ml-auto shrink-0 text-xs text-th-text-muted">
-							{formatAskedAt(askedAt)}
+							{formatTime(askedAt)}
 						</span>
 					)}
 				</div>
@@ -450,17 +451,6 @@ function NoteField({
 
 function NoteLabel() {
 	return <div className="text-xs text-th-text-muted">Note</div>;
-}
-
-/** "14:02" in the reader's own locale, or nothing for a time that is not one. */
-function formatAskedAt(askedAt: string | undefined): string | undefined {
-	if (!askedAt) return undefined;
-	const at = new Date(askedAt);
-	if (Number.isNaN(at.getTime())) return undefined;
-	return at.toLocaleTimeString(undefined, {
-		hour: "2-digit",
-		minute: "2-digit",
-	});
 }
 
 export default QuestionForm;

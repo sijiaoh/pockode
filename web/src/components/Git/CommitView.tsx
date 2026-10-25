@@ -7,17 +7,10 @@ import {
 	GIT_STATUS_INFO,
 	type GitFileStatus,
 } from "../../types/git";
+import { formatDateTime } from "../../utils/dateTime";
 import PageHeader from "../Layout/PageHeader";
 import { BottomActionBar, ContentView } from "../ui";
 import { HeaderSubtitle, headerTitleTextClass } from "../ui/HeaderTitle";
-
-function formatDate(isoDate: string): string {
-	const date = new Date(isoDate);
-	if (Number.isNaN(date.getTime())) {
-		return isoDate;
-	}
-	return date.toLocaleString();
-}
 
 interface Props {
 	hash: string;
@@ -102,7 +95,7 @@ function CommitView({ hash, onBack }: Props) {
 							)}
 							<div className="mt-3 text-xs text-th-text-muted">
 								<div>{commit.author}</div>
-								<div>{formatDate(commit.date)}</div>
+								<div>{formatDateTime(commit.date)}</div>
 								<div className="mt-1 font-mono">{commit.hash}</div>
 							</div>
 						</div>

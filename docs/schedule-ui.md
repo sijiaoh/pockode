@@ -320,10 +320,10 @@ state and the runs come first, the settings after, and deleting at the end.
   `Next run` (`On · Runs Mon 3 Nov 09:00 (in 2d)`) — there is no run after it
   to make this one the "next" — and is otherwise the same. A done one-time
   schedule has a `Done · Was due …` line instead of the switch line (§6.6). The absolute time is
-  `formatNextRun(next_run_at, now, schedule.time_zone)` (`utils/relativeTime.ts`)
+  `formatRelativeDay(next_run_at, now, schedule.time_zone)` (`utils/dateTime.ts`)
   in the **schedule's** zone (§6.5): `today 03:00`, `tomorrow 03:00`,
-  `Mon 27 Oct 03:00` beyond that (24-hour, the period's own format). When that
-  zone is not the device's, the zone label follows the time and the relative
+  `Mon 27 Oct 03:00` beyond that, `Tue 5 Jan 2027 03:00` in another year
+  (24-hour, the period's own format). When that zone is not the device's, the zone label follows the time and the relative
   half leaves its brackets: `On · Next run tomorrow 09:00 (Tokyo) · in 5h`.
 - **Notice** — at most one, in this order of precedence:
 
@@ -334,7 +334,7 @@ state and the runs come first, the settings after, and deleting at the end.
 | `last_skipped_at` is later than `last_run_at`, or there is no `last_run_at` | Muted: `Skipped the run at {at}: the previous one was still going.` — on a done one-time, `Did not run at {at}: a run started earlier was still going.` |
 | done because it passed while off (§6.6) | Muted: `It was off at {at}, so it did not run.` |
 
-`{at}` is `formatNextRun`'s format applied to a past instant (`today 03:00`,
+`{at}` is `formatRelativeDay`'s format applied to a past instant (`today 03:00`,
 `yesterday 03:00`, `Mon 27 Oct 03:00`), in the schedule's zone and with its
 label when that is not the device's (`today 09:00 (Tokyo)`), as the switch
 line's time is.
@@ -384,7 +384,7 @@ place — except a refusal of the page as `InvalidParams` (the subscription is
 gone, or the cursor is not one the server issued), on which the hook
 subscribes afresh instead: a retry of the same request would be refused again.
 
-Empty: `No runs yet. The first is due {formatNextRun}.` (in the schedule's
+Empty: `No runs yet. The first is due {formatRelativeDay}.` (in the schedule's
 zone, with its label when it differs, §6.5) — `It is due {…}.` for a one-time —
 or, when off, done, or no next firing is known, `No runs yet. Press Run now
 to make one.` A schedule whose runs were all
@@ -694,7 +694,7 @@ label (§6.5) and nothing else:
 **Once is written as an absolute date, never `tomorrow`.** The words are the
 period, and a period's words do not count down; "when, for me" is the next-run
 slot's (`Next in 5h`, §3.1), as it is for every kind. The
-date format is `formatNextRun`'s beyond-tomorrow form (§4.1), so the period and
+date format is `formatRelativeDay`'s beyond-tomorrow form (§4.1), so the period and
 the next run read alike.
 
 ### 6.5 Time zones
@@ -776,7 +776,7 @@ every wall-clock time the schedule shows, with one way to make it the device's.
   clock — `Daily at 09:00 (Tokyo)` and `Next run tomorrow 09:00 (Tokyo)` agree on
   sight, where a device-zone `tomorrow 01:00` beside it would read as a bug the
   user has to work out. The *day* words (`today`, `tomorrow`, `Mon 27 Oct`) are
-  that zone's days too. `formatNextRun(iso, now, timeZone)` takes the zone.
+  that zone's days too. `formatRelativeDay(iso, now, timeZone)` takes the zone.
 - **"When, for me" is said relatively, where it matters**: the next run is
   `in 5h` on the row and in the head, and the latest run is `· 2h ago` on the
   row. Those need no zone, so a traveller never has to convert the one time

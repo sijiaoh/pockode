@@ -18,12 +18,7 @@ import { useScheduleEnabledToggle } from "../../hooks/useScheduleEnabledToggle";
 import { useWorktreeList } from "../../hooks/useWorktreeList";
 import { useAgentRoleStore } from "../../lib/agentRoleStore";
 import { roleAcceptsWorkType, WORK_TYPE_PLURAL } from "../../lib/roleWorkType";
-import {
-	describePeriod,
-	formatClock,
-	formatDayDate,
-	samePeriod,
-} from "../../lib/schedulePeriod";
+import { describePeriod, samePeriod } from "../../lib/schedulePeriod";
 import { useScheduleStore } from "../../lib/scheduleStore";
 import {
 	instantZoneLabel,
@@ -38,7 +33,8 @@ import {
 import { useIsGitRepo } from "../../lib/worktreeStore";
 import { useWSStore } from "../../lib/wsStore";
 import type { Period, Schedule, ScheduleRunItem } from "../../types/schedule";
-import { formatNextRun, formatRelativeFuture } from "../../utils/relativeTime";
+import { formatRelativeDay, formatWallDateTime } from "../../utils/dateTime";
+import { formatRelativeFuture } from "../../utils/relativeTime";
 import PageHeader from "../Layout/PageHeader";
 import { MarkdownContent } from "../ui";
 import BottomActionBar from "../ui/BottomActionBar";
@@ -197,7 +193,7 @@ function ScheduleInstant({
 	const deviceZone = useDeviceTimeZone();
 	return (
 		<>
-			{formatNextRun(iso, undefined, schedule.time_zone)}
+			{formatRelativeDay(iso, undefined, schedule.time_zone)}
 			<ZoneLabel label={instantZoneLabel(schedule.time_zone, deviceZone)} />
 		</>
 	);
@@ -222,9 +218,7 @@ function OnceAt({ at, schedule }: { at: string; schedule: Schedule }) {
 	const wall = parseWallClock(at);
 	return (
 		<>
-			{wall
-				? `${formatDayDate(wall)} ${formatClock(wall.hour, wall.minute)}`
-				: at}
+			{wall ? formatWallDateTime(wall, undefined, schedule.time_zone) : at}
 			<ZoneLabel label={schedule.time_zone} />
 		</>
 	);
@@ -268,7 +262,7 @@ function EnabledLine({ schedule }: { schedule: Schedule }) {
 	} else if (!next) {
 		state = "On";
 	} else if (instantZoneLabel(schedule.time_zone, deviceZone) === null) {
-		state = `On · ${nextLabel} ${formatNextRun(next, undefined, schedule.time_zone)} (${formatRelativeFuture(next)})`;
+		state = `On · ${nextLabel} ${formatRelativeDay(next, undefined, schedule.time_zone)} (${formatRelativeFuture(next)})`;
 	} else {
 		// The zone label takes the brackets, so the relative half leaves them:
 		// one pair on the line (docs/schedule-ui.md §6.5).

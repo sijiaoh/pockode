@@ -3,9 +3,7 @@ import { useDeviceTimeZone } from "../../hooks/useDeviceTimeZone";
 import { useHasPassed } from "../../hooks/useHasPassed";
 import {
 	DEFAULT_PERIOD,
-	dayShortName,
 	describePeriod,
-	formatClock,
 	HOURLY_EVERY,
 	isKnownPeriod,
 	LAST_DAY,
@@ -20,6 +18,7 @@ import {
 	zoneLine,
 } from "../../lib/scheduleZone";
 import type { HourlyEvery, Period } from "../../types/schedule";
+import { dayShortName, formatClock, pad2 } from "../../utils/dateTime";
 import { inputClass } from "../ui/inputClass";
 
 const MODES = ["once", "hourly", "daily", "weekly", "monthly"] as const;
@@ -72,7 +71,7 @@ function initialInputs(period: Period): Inputs {
 				...DEFAULTS,
 				mode: "hourly",
 				every: period.every ?? 1,
-				minute: String(period.minute ?? 0).padStart(2, "0"),
+				minute: pad2(period.minute ?? 0),
 			};
 		case "daily":
 			return { ...DEFAULTS, mode: "daily", time: period.time };
