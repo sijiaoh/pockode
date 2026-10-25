@@ -10,7 +10,6 @@ import type {
 	Schedule,
 	ScheduleDetailChangedNotification,
 	ScheduleDetailSubscribeResult,
-	ServerZone,
 } from "../types/schedule";
 import { useSubscription } from "./useSubscription";
 
@@ -29,7 +28,6 @@ export function useScheduleDetailSubscription(scheduleId: string) {
 	const scheduleDetailRuns = useWSStore((s) => s.actions.scheduleDetailRuns);
 
 	const [schedule, setSchedule] = useState<Schedule | null>(null);
-	const [serverZone, setServerZone] = useState<ServerZone | null>(null);
 	const [runs, setRuns] = useState<LoadedRuns>(NO_RUNS);
 	const [loading, setLoading] = useState(true);
 	const [error, setError] = useState<string | null>(null);
@@ -51,7 +49,6 @@ export function useScheduleDetailSubscription(scheduleId: string) {
 		generationRef.current++;
 		isLoadingMoreRef.current = false;
 		setSchedule(null);
-		setServerZone(null);
 		setRuns(NO_RUNS);
 		setLoading(true);
 		setError(null);
@@ -82,7 +79,6 @@ export function useScheduleDetailSubscription(scheduleId: string) {
 
 	const apply = useCallback((detail: ScheduleDetailSubscribeResult) => {
 		setSchedule(detail.schedule);
-		setServerZone(detail.server_zone);
 		setRuns((loaded) => mergeNewestPage(loaded, detail.runs));
 	}, []);
 
@@ -97,7 +93,6 @@ export function useScheduleDetailSubscription(scheduleId: string) {
 			setLoadMoreError(null);
 			setRuns(mergeNewestPage(NO_RUNS, initial.runs));
 			setSchedule(initial.schedule);
-			setServerZone(initial.server_zone);
 			setLoading(false);
 			setError(null);
 		},
@@ -162,7 +157,6 @@ export function useScheduleDetailSubscription(scheduleId: string) {
 	return useMemo(
 		() => ({
 			schedule,
-			serverZone,
 			runs: runs.items,
 			hasMoreRuns: runs.nextCursor !== null,
 			loadMore,
@@ -171,15 +165,6 @@ export function useScheduleDetailSubscription(scheduleId: string) {
 			loading,
 			error,
 		}),
-		[
-			schedule,
-			serverZone,
-			runs,
-			loadMore,
-			isLoadingMore,
-			loadMoreError,
-			loading,
-			error,
-		],
+		[schedule, runs, loadMore, isLoadingMore, loadMoreError, loading, error],
 	);
 }

@@ -12,7 +12,7 @@ Three Zustand stores hold entity state:
 |---|---|---|
 | `useWorkStore` | `works: WorkListItem[]`, `isLoading`, `error` | `web/src/lib/workStore.ts` |
 | `useAgentRoleStore` | `roles: AgentRole[]`, `workRefCounts: Record<string, number>`, `isLoading`, `error` | `web/src/lib/agentRoleStore.ts` |
-| `useScheduleStore` | `schedules: ScheduleListItem[]` (each with its latest run's row), `serverZone`, `isLoading`, `error` | `web/src/lib/scheduleStore.ts` |
+| `useScheduleStore` | `schedules: ScheduleListItem[]` (each with its latest run's row), `isLoading`, `error` | `web/src/lib/scheduleStore.ts` |
 
 All three expose the same action pattern:
 
@@ -133,7 +133,7 @@ this app ([project-ui.md §4](../project-ui.md#4-creating-work-lands-you-on-its-
 
 `ProjectTab` is the sidebar entry point. It renders three buttons that open their respective overlay screens via callbacks (`onOpenWorkList`, `onOpenScheduleList`, `onOpenAgentRoleList`). The tab keeps the name Project — it is the place — while its first entry is `Stories`, the list it opens ([schedule-ui.md §1](../schedule-ui.md#1-the-project-tab)).
 
-The schedule data is app-wide, like the agent roles: `AppShell` mounts `useScheduleSubscription`, which fills `scheduleStore` (every schedule, each with its latest run's row, and the server's zone), because the Project tab's dot reads it whichever screen is open. A schedule's detail and its pages of runs are `useScheduleDetailSubscription`, held by the page; the merge of the newest page into what is loaded is `lib/scheduleRuns.ts`.
+The schedule data is app-wide, like the agent roles: `AppShell` mounts `useScheduleSubscription`, which fills `scheduleStore` (every schedule, each with its latest run's row), because the Project tab's dot reads it whichever screen is open. A schedule's detail and its pages of runs are `useScheduleDetailSubscription`, held by the page; the merge of the newest page into what is loaded is `lib/scheduleRuns.ts`.
 
 Opening a work's chat (the `Chat` / `Open Chat` shortcuts) navigates to the session URL of **the work's own worktree** (`/w/<worktree>/s/<sessionId>`), not the currently active one — the list is global across worktrees, so a shortcut may switch worktrees. See [work-system.md](../code/work-system.md#cross-worktree-chat-navigation) for the rationale.
 
@@ -311,8 +311,8 @@ and never re-sorted by state
 ([schedule-ui.md §3](../schedule-ui.md#3-the-schedules-list)). Each card is
 `WorkRow`'s card: the title button covers it and opens the detail, and the one
 control lifted above it is the enable switch. Line 2 is the period in words
-(`lib/schedulePeriod.ts`, with the server's offset when the device is on
-another) and `Next in …` (`formatRelativeFuture`) or `Off`; line 3 is the
+(`lib/schedulePeriod.ts`, with the schedule's `ZoneLabel` when the device is in
+another zone) and `Next in …` (`formatRelativeFuture`) or `Off`; line 3 is the
 latest run — a failure, the run's activity, a deleted run, or none. The edge is
 error while `last_failure` is set, otherwise `workEdgeClass` of `last_run`.
 
@@ -334,9 +334,17 @@ the title (inline edit), the `Switch` with the next firing (`formatNextRun` and
 `formatRelativeFuture`), at most one notice (a failed firing, a run going now,
 a skipped firing), **Runs**, then the settings — Prompt, Period
 (`PeriodField` behind a pencil; Save sends `cron` only when it differs from the
-stored string), Role (`RoleSelect workType="job"`, applied on change), Worktree
-(git repositories only) — and `Delete schedule` at the end. `Run now` is the
-bottom bar and stays on the page.
+stored string, and never `time_zone`), Role (`RoleSelect workType="job"`,
+applied on change), Worktree (git repositories only) — and `Delete schedule`
+at the end. `Run now` is the bottom bar and stays on the page.
+
+A schedule's own instants — the next firing, a notice's, the empty Runs line's —
+are drawn in the schedule's `time_zone` (`formatNextRun`'s third argument). When
+that is not the device's (`useDeviceTimeZone`, compared with `sameZone` from
+`lib/scheduleZone.ts`), they and the list row's period carry `ZoneLabel`, and
+the Period section adds the zone line and `Use {city} time`, a confirmed
+`schedule.update {id, time_zone}`
+([schedule-ui.md §6.5](../schedule-ui.md#65-time-zones)).
 
 The runs are `WorkRow`s unchanged, at `headingLevel={4}` and dated by
 `created_at`, so a run is stopped, restarted, reopened and opened exactly as a
@@ -357,9 +365,10 @@ title, prompt, role and period
 `RoleSelect workType="job"`, preselected by `resolveInitialJobRole`; the period
 is `PeriodField`, and the sheet starts its cron at `DEFAULT_CRON` because the
 field reports nothing until it is touched. The worktree is the current URL's,
-stated as `Runs in …` rather than asked. Once the form has been shown it stays
-through a role reload (a reconnect empties the role store): swapping to
-`NoEligibleRoleSheet` would remount `PeriodField` on its default period, so
+stated as `Runs in …` rather than asked; the zone is the device's
+(`useDeviceTimeZone`), sent as `time_zone` and not shown. Once the form has
+been shown it stays through a role reload (a reconnect empties the role
+store): swapping to `NoEligibleRoleSheet` would remount `PeriodField` on its default period, so
 when the swap does happen — the reload failed — the cron goes back to the
 default with it. On success the reply is added to `scheduleStore` before
 `onCreated`, so the detail page it lands on does not read

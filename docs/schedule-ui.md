@@ -181,7 +181,7 @@ there are no groups between).
 
 | Slot | Tier | Content |
 |---|---|---|
-| Period | `text-th-text-secondary` | `PeriodWords` (§6.4), with the zone suffix when it applies (§6.5). A cron that matches no preset reads `Custom ·` and the expression in `font-mono` |
+| Period | `text-th-text-secondary` | `PeriodWords` (§6.4), followed by the schedule's zone label (`(Tokyo)`) only when it is not the device's zone (§6.5). A cron that matches no preset reads `Custom ·` and the expression in `font-mono` |
 | Next | `text-th-text-muted` | Enabled: `Next in 5h` (`formatRelativeFuture(next_run_at)`, beside `formatRelativeDate` in `utils/relativeTime.ts`, with its steps: `in 1m`, `in 5h`, `in 3d` — never "now", and hours and days rounded rather than floored, so 47h is `in 2d`); nothing while no next firing is known. Disabled: `Off` |
 
 The period is first because it is the one fact that says what this schedule
@@ -303,10 +303,12 @@ state and the runs come first, the settings after, and deleting at the end.
   the title of future runs; past runs keep the title they were made with.
 - **Switch line** — the `Switch` from §3.2, then `On · Next run today 03:00
   (in 5h)` (plain `On` while no next firing is known), or `Off · Runs only
-  when you press Run now`. The absolute time is `formatNextRun(next_run_at)`
-  (`utils/relativeTime.ts`) in the device's zone: `today 03:00`,
-  `tomorrow 03:00`, `Mon 27 Oct 03:00` beyond that (24-hour, the period's own
-  format).
+  when you press Run now`. The absolute time is
+  `formatNextRun(next_run_at, now, schedule.time_zone)` (`utils/relativeTime.ts`)
+  in the **schedule's** zone (§6.5): `today 03:00`, `tomorrow 03:00`,
+  `Mon 27 Oct 03:00` beyond that (24-hour, the period's own format). When that
+  zone is not the device's, the zone label follows the time and the relative
+  half leaves its brackets: `On · Next run tomorrow 09:00 (Tokyo) · in 5h`.
 - **Notice** — at most one, in this order of precedence:
 
 | Case | Notice |
@@ -316,7 +318,9 @@ state and the runs come first, the settings after, and deleting at the end.
 | `last_skipped_at` is later than `last_run_at`, or there is no `last_run_at` | Muted: `Skipped the run at {at}: the previous one was still going.` |
 
 `{at}` is `formatNextRun`'s format applied to a past instant (`today 03:00`,
-`yesterday 03:00`, `Mon 27 Oct 03:00`).
+`yesterday 03:00`, `Mon 27 Oct 03:00`), in the schedule's zone and with its
+label when that is not the device's (`today 09:00 (Tokyo)`), as the switch
+line's time is.
 
 ### 4.2 Runs
 
@@ -363,7 +367,8 @@ place — except a refusal of the page as `InvalidParams` (the subscription is
 gone, or the cursor is not one the server issued), on which the hook
 subscribes afresh instead: a retry of the same request would be refused again.
 
-Empty: `No runs yet. The first is due {formatNextRun}.`, or, when off or no
+Empty: `No runs yet. The first is due {formatNextRun}.` (in the schedule's
+zone, with its label when it differs, §6.5), or, when off or no
 next firing is known, `No runs yet. Press Run now to make one.` A schedule whose runs were all
 deleted is not one with none yet: with `last_run_at` set the line is
 `Its runs have been deleted.`, as the row says `Latest run deleted` (§11).
@@ -376,7 +381,7 @@ work and role pages.
 | Section | Control |
 |---|---|
 | **Prompt** | The work detail's Description interaction: `MarkdownContent` in an `overflow-x-auto` box, a pencil opening a textarea with Save / Cancel. Never empty (the server requires it), so it has no empty state. Muted line under the heading: `Every run starts with this prompt.` |
-| **Period** | Read-only, `PeriodWords` with the zone line of §6.5. A pencil opens the `PeriodField` (§6) with Save / Cancel; Save sends `cron` only if it differs from the stored string, and otherwise just closes. While the save is in flight the field sits in a `<fieldset disabled>`, so an edit made during the request cannot be dropped silently when the editor closes on success |
+| **Period** | Read-only, `PeriodWords`; when the schedule's zone is not the device's, the zone line and the `Use {city} time` switch under it (§6.5). A pencil opens the `PeriodField` (§6) with Save / Cancel; Save sends `cron` only if it differs from the stored string, and otherwise just closes; it never sends `time_zone`, so editing keeps the schedule's zone. While the save is in flight the field sits in a `<fieldset disabled>`, so an edit made during the request cannot be dropped silently when the editor closes on success |
 | **Role** | `RoleSelect workType="job"`, applied on change like the work detail's Role. A kept role that no longer takes jobs is shown with its suffix and the work detail's kind of muted line, `{name} only takes {kind}. Runs keep using it until you change it.` — that is what the server does: the kind is judged when the role is assigned, and nothing on the run path judges it again. A role that has been **deleted** shows as `Unknown role` (`RoleSelect`'s rule) with a muted line `This role has been deleted. Runs will fail until you pick another.` — muted like the page's other lines, since `text-th-error` does not clear AA in the light themes and the failure, when it comes, is the notice's to state in error — those runs are refused at start (`agent role not found`) and become the notice |
 | **Worktree** | Drawn only when `isGitRepo === true`: outside a git repository the server takes no worktree but main, so there is nothing to choose. A `<select>` of the worktrees that exist (`useWorktreeList`, the read-only hook for naming one), `main` first, applied on change. A stored worktree that no longer exists stays selected as `{name} (deleted)` with the muted line `Runs will fail until you pick a worktree that exists.` |
 
@@ -432,7 +437,7 @@ Prompt   [ textarea, 4 rows, grows    ]
 Role     [ Auditor                  ▾ ]
 Period   [ Hourly | Daily | Weekly | Custom ]
          At [ 03:00 ]
-         Daily at 03:00 · Server time, UTC+9
+         Daily at 03:00
 Runs in  main
 ──────────────────────────────────────
 [ Cancel ]                  [ Create ]
@@ -449,6 +454,11 @@ Runs in  main
 - **Worktree** — not asked: the schedule is made in the worktree the user is in
   (`useCurrentWorktree()`, `""` for main), stated as the muted line `Runs in {name}` so it
   is not a surprise. It is changed on the detail page.
+- **Time zone** — not asked and not shown: the sheet sends the device's zone
+  (`useDeviceTimeZone()`, §6.5) as `time_zone`, as it is when Create is pressed. A
+  schedule made on this device is in this device's zone, so the period the user
+  just typed means what it says on their clock, and nothing on the sheet needs
+  to say so. `PeriodField` is given no zone here, and so draws no zone line.
 - **Enabled** — not asked, sent absent (the server's `true`). A schedule made is
   a schedule meant to run; the switch is one tap on the page the user lands on.
 - `Create` is disabled until title and prompt have non-blank text, a role is
@@ -545,11 +555,16 @@ describes a stored one — and the inputs under it follow:
   :00`, `Mon at 09:00`).
 - **Re-tapping the lit mode is not an edit**: nothing is reported, so an
   untouched `MON-FRI` schedule cannot be made to look changed.
-- Under the inputs, always: the description (§6.4) of what would be saved, and
-  the zone line (§6.5), on one muted line joined by ` · `; the zone half is
-  left out until the server's zone has arrived. In Custom mode the description is shown only when the
+- Under the inputs, always: the description (§6.4) of what would be saved, one
+  muted line. In Custom mode the description is shown only when the
   text happens to match a preset; otherwise the line says
   `Checked by the server when you save.` rather than nothing.
+- **`timeZone?: string`** — the schedule's zone, passed by the detail page and
+  not by the create sheet. When it is given and is not the device's zone
+  (`sameZone`, §6.5), the zone line follows the description on a line of its
+  own: `Tokyo time (UTC+9). This device is on London time (UTC+1).` — the
+  zone every input is typed in. The field never sends a zone: it only writes
+  `cron`.
 
 ### 6.2 Reading a cron back
 
@@ -614,38 +629,203 @@ exact, and a user who wrote it reads it.
 
 ### 6.5 Time zones
 
-The server evaluates cron in **its own** local time
-([data-model](projects/data-model.md#schedule)), and a phone reaching it through
-the relay may be in another zone. So there are two kinds of time on these
-screens and each is shown in its own zone:
+**Every schedule carries its own IANA zone** (`time_zone`, e.g. `Asia/Tokyo`;
+[data-model](projects/data-model.md#schedule)), and the server evaluates its
+cron in that zone, DST included, against the tz database built into the
+server binary, so a host without one (Windows, a minimal container) resolves
+every zone too ([api.md](projects/api.md#schedule-time-zones)). The client sets
+it without asking: the create sheet sends the device's zone (§5), and the only
+other way it changes is the switch below. There is no zone setting, picker or field anywhere.
 
-- **A period is server wall-clock time.** `Daily at 09:00` means 09:00 on the
-  server's clock, so the period, the time inputs and every description are in
-  the server's zone.
-- **A firing is an instant.** `next_run_at`, `last_run_at`, a skip, a failure,
-  a run's age — all shown in the device's zone, like every other time in the
-  app.
+**The zone is invisible while it is the device's**, which is the normal case:
+the schedule was made on this phone, in this place. It appears only when the
+device viewing the schedule is in another zone — the user is travelling, or
+opened the server's Pockode from a second device elsewhere — and then it is on
+every wall-clock time the schedule shows, with one way to make it the device's.
 
-The server's zone arrives with the schedule subscriptions (§9 B). The client
-compares its offset with the device's current one:
+#### Which zone is "the device's", and when two are the same
 
-| | Row (line 2) | Editor and detail Period |
+- **The device's zone** is `Intl.DateTimeFormat().resolvedOptions().timeZone`,
+  read by one hook, `useDeviceTimeZone()` (`hooks/useDeviceTimeZone.ts`), which
+  reads it again on `visibilitychange` and `focus`: a phone that landed in
+  another zone while the app was in the background shows the change the moment
+  it is brought back, not at the next reconnect. Every surface below takes the
+  device's zone from this hook and never calls `Intl` for it itself, so they
+  all change together.
+- **Two zones are the same when their names are**, after both are canonicalised
+  by the device — `Temporal.ZonedDateTime#equals` where the browser has
+  Temporal, whose `resolvedOptions()` then returns a name as given; otherwise
+  `new Intl.DateTimeFormat("en-US", { timeZone }).resolvedOptions().timeZone` —
+  so an alias (`Asia/Calcutta`, `Asia/Kolkata`) is not a difference. It is
+  **not** a comparison of current offsets: `Europe/London` and `Africa/Abidjan`
+  agree in January and disagree in July, and a schedule that silently moves an
+  hour twice a year is the bug this design removes. Two zones that happen to
+  follow the same rules (`Asia/Seoul` beside `Asia/Tokyo`) count as different
+  — the label is then true and harmless, and one tap on the switch clears it.
+- A zone the device's `Intl` does not know (it throws a `RangeError`) is never
+  the same as the device's; §11 says how it is drawn.
+- `sameZone(a, b)` is the one predicate; every surface below asks it, none
+  compares strings itself.
+
+#### How a zone is named
+
+| Where | Form | Example |
 |---|---|---|
-| Same offset | `Daily at 09:00` | `Server time, UTC+9` |
-| Different | `Daily at 09:00 (UTC+9)` | `Server time, UTC+9 (JST). This device is on UTC+1.` |
+| The **short label**, beside a period or an instant | the city: the IANA name's last segment, `_` read as a space | `(Tokyo)`, `(Buenos Aires)`, `(Indianapolis)` |
+| The **zone line** (below) | the city and its offset now | `Tokyo time (UTC+9)` |
 
-The offset is written `UTC+9`, `UTC−3:30`, `UTC` — always unambiguous — with
-the server's abbreviation in brackets only on the long line, since an
-abbreviation (`IST`) can name three zones — and left out when it is numeric
-(`+03`) or repeats the offset. When the zones differ, `Next run
-today 17:00` beside `Daily at 09:00 (UTC+9)` is correct and the suffix is what
-explains it.
+- **A city, not an offset or an abbreviation.** A city is the zone's identity
+  and is what the user picked by being there; an offset changes with DST and
+  names many zones; an abbreviation (`IST`) names three. The offset is added
+  where there is room, because it is what lets a user compare two zones at a
+  glance.
+- **Names that are not places** are written as what they mean: `UTC`,
+  `Etc/UTC`, `Etc/GMT`, `GMT` → `UTC`; `Etc/GMT-9` → `UTC+9` (`Etc` signs are
+  inverted, so the offset is read with `Intl`, never from the name); a legacy
+  name without a `/` (`Japan`, `EST5EDT`) is printed as it is. Where the city
+  form *is* an offset, the zone line does not repeat it: `UTC+9 time`.
+- **The offset** is `formatUtcOffset` (`UTC+9`, `UTC−3:30`, `UTC`) of the zone's
+  offset at the moment of drawing, read through `Intl` (`timeZoneName:
+  "longOffset"`). It is never stored or sent.
+- These rules live in `lib/scheduleZone.ts`, pure functions with no React:
+  `sameZone`, `isKnownZone`, `zoneLabel`, `zoneOffsetSeconds`, `zoneName` (the
+  city with its offset), `zoneLine` (below), `formatUtcOffset`, and
+  `periodZoneLabel` / `instantZoneLabel`, which hold §11's rule for a zone the
+  browser does not know. `lib/schedulePeriod.ts` keeps only the period's own
+  rules.
 
-The list's offset is the one at subscribe time (and at a sync). The list
-subscription is app-wide, so a DST change leaves the row's label an hour off
-until the next reconnect; an open detail page takes the new offset with its
-next notification, which always carries the zone. The instants, which come
-from the server, are never wrong.
+#### A schedule's times are in the schedule's zone
+
+- **A period is wall-clock time in the schedule's zone.** `Daily at 09:00`
+  means 09:00 in Tokyo. The period's words, the editor's inputs and its
+  description are all in that zone.
+- **A schedule's instants are shown in the schedule's zone too**: the next run,
+  the instant in a failure or skip notice, and the empty Runs list's `The first
+  is due …`. They are the period's firings, so they are drawn in the period's
+  clock — `Daily at 09:00 (Tokyo)` and `Next run tomorrow 09:00 (Tokyo)` agree on
+  sight, where a device-zone `tomorrow 01:00` beside it would read as a bug the
+  user has to work out. The *day* words (`today`, `tomorrow`, `Mon 27 Oct`) are
+  that zone's days too. `formatNextRun(iso, now, timeZone)` takes the zone.
+- **"When, for me" is said relatively, where it matters**: the next run is
+  `in 5h` on the row and in the head, and the latest run is `· 2h ago` on the
+  row. Those need no zone, so a traveller never has to convert the one time
+  they act on. The notices name a past firing by its clock time on purpose
+  (§4.1: the age alone would not say which firing it was), and the clock that
+  names it is the period's.
+- **Everything that is a work's is the work's**: a run's `WorkRow`, its age on
+  line 3, its detail page — drawn as every work is, in the device's zone. A run
+  is a work (the rule at the top of this document).
+
+Because instants are always formatted in the schedule's zone, the rule needs no
+branch when the zones are the same — then it *is* the device's — and only the
+label is conditional.
+
+#### Where it shows when the zones differ
+
+| Surface | Same zone | Zone differs |
+|---|---|---|
+| List row, line 2 (§3.1) | `Daily at 09:00 · Next in 5h` | `Daily at 09:00 (Tokyo) · Next in 5h` |
+| List row, custom cron | `Custom · 0 9 1 * *` | `Custom · 0 9 1 * * (Tokyo)` — the label in the line's own font, not mono |
+| Detail head, switch line (§4.1) | `On · Next run tomorrow 09:00 (in 5h)` | `On · Next run tomorrow 09:00 (Tokyo) · in 5h` — the relative half moves out of brackets so the line has one pair |
+| Detail head, notice `{at}` (§4.1) | `The run at today 09:00 could not be started.` | `The run at today 09:00 (Tokyo) could not be started.` — the skip notice the same |
+| Runs, empty line (§4.2) | `No runs yet. The first is due tomorrow 09:00.` | `No runs yet. The first is due tomorrow 09:00 (Tokyo).` |
+| Detail **Period**, read (§4.3) | `Daily at 09:00` and nothing under it | `Daily at 09:00`, the zone line, the switch |
+| Detail **Period**, editing (§6.1) | the description line only | the description line, then the zone line |
+| Create sheet (§5) | `Daily at 09:00` | never differs: a new schedule is made in the device's zone |
+| A run's page, its row, its chat | — | unchanged: work, in the device's zone |
+
+The short label is the period's and the instant's own suffix, `(Tokyo)` with a
+leading space, `text-th-text-muted` inside the slot's tier. It is part of the
+text, so a screen reader reads `Daily at 09:00 Tokyo`, which is what it says.
+
+On the Period section the label is **not** appended to the words: the zone line
+directly under them says it at length, and saying it twice in two lines is
+noise.
+
+#### The zone line
+
+One muted `text-xs` line, `zoneLine(scheduleZone, deviceZone)`, drawn only when
+the zones differ:
+
+> `Tokyo time (UTC+9). This device is on London time (UTC+1).`
+
+The same line in the read state and in the editor, so a user who opens the
+editor sees the zone they were already told about, in the same words. In the
+editor it is the answer to "what zone am I typing in": it sits directly under
+the description (§6.1), on its own line rather than joined with ` · `, because
+a phone wraps the joined form mid-sentence.
+
+When the two offsets happen to agree (`Asia/Seoul` on the device, `Asia/Tokyo`
+on the schedule) the line still prints both, `Tokyo time (UTC+9). This device
+is on Seoul time (UTC+9).` — which tells the user, truthfully, that the
+difference costs them nothing today.
+
+#### Editing keeps the zone
+
+Saving the period sends `cron` and nothing else (§4.3), whatever zone the
+device is in. A user editing while travelling writes 09:00 in the zone the line
+names, and the schedule stays there: following the device on edit would move a
+home schedule to every hotel. The zone line is how the editor makes that
+visible, and it is why the line is in the editor at all.
+
+#### The switch
+
+**One action, on the detail page's Period section, in the read state, under the
+zone line:** a text button `Use London time` (the device's city; `Use UTC+9
+time` for a non-place name), `text-th-accent`, `min-h-[44px]`, left-aligned
+with the words. It is not drawn while the zones are the same, nor while the
+editor is open (the editor is for the period; the switch is not part of a
+period edit, and a Save that also moved the zone would be the silent follow
+this design forbids), nor while the device's own zone is one its browser does
+not know (§11: there is no zone to switch to).
+
+- **Not on the row.** The row holds one control, the switch to turn it off
+  (§3.1); the `(Tokyo)` label tells the user there is something to look at, and
+  the detail is one tap.
+- **Not in the head.** The head says what will happen; changing a setting is
+  the settings' job, and Period is the setting it changes.
+
+**What it does:** `schedule.update { id, time_zone: <device zone> }` — the zone
+only, the cron as stored. The wall-clock period is kept and re-read in the new
+zone: `Daily at 09:00` in Tokyo becomes `Daily at 09:00` in London. That is what
+"run it on my time" means, and the instants follow from the server's next
+notification (`next_run_at` is the server's to compute — the client evaluates
+no cron, §6.3).
+
+**It confirms**, with a non-`danger` `ConfirmDialog`, because from here it
+cannot be undone: there is no zone picker, so only a device in Tokyo can put
+the schedule back in Tokyo.
+
+> **Run on London time?**
+> "Daily at 09:00" will run on London time (UTC+1) instead of Tokyo time
+> (UTC+9). Only a device on Tokyo time can switch it back.
+>
+> [ Cancel ] [ Use London time ]
+
+The quoted period is `describePeriod(cron)`, so the sentence holds for every
+period, an hourly or a custom one (`"Custom · 0 9 1 * *" will run on …`)
+included — it never claims a clock time the period does not have. The names and
+offsets are the zone line's, and a zone whose offset cannot be read drops its
+bracket, as there.
+
+`onConfirm` returns the request's promise, so the dialog does what it already
+does for an async confirm: busy and not cancellable while the request is in
+flight, and a refusal printed inside the dialog, which can be confirmed again or
+cancelled. On success it closes. The label, the zone line and the button vanish
+together when the notification brings the new `time_zone` — not on the reply,
+so the page never shows a zone the store does not hold (for that moment the
+button is still there, and a second press only opens the dialog again).
+
+#### Why not the server's clock
+
+Schedules used to be read on the server's clock, which the client annotated
+with the server's offset (`Server time, UTC+9`). That clock belongs to a
+machine, not to the person who wrote `09:00`, and a client reaching it through
+the relay is often somewhere else. Comparing offsets also went wrong twice a
+year, since two zones that agree in winter part in summer. With the zone on the
+schedule, nothing on these screens depends on where the server is, so none of
+them mentions the server's clock. The offsets on the zone line are computed
+when it is drawn, so they cannot go stale across a DST change.
 
 ## 7. A run's own page
 
@@ -719,12 +899,12 @@ moving), de-duplicated against the last row it sent. `Schedule` itself stays
 the stored record; `last_run` is beside it, derived, the way `Activity` rides
 beside a work detail.
 
-**B. The server's zone.** `server_zone: { name, offset_seconds }` on the
-`schedule.list.subscribe` and `schedule.detail.subscribe` results, the list's
-sync and every detail notification, read off the schedule store's own clock —
-the one cron is evaluated on ([api.md](projects/api.md#server-zone)). Both
-subscriptions carry it, because the detail page is reachable by URL without
-the list.
+**B. Each schedule's zone.** `time_zone` (an IANA name) on `Schedule`,
+required by `schedule.create` and accepted by `schedule.update` alone or with
+other fields; the server refuses a missing or unknown zone at the boundary
+([api.md](projects/api.md#schedule-time-zones)). With the zone on the
+schedule, the schedule itself is all a screen needs, and the subscriptions
+carry nothing beside it.
 
 **C. `schedule` on `work.detail`.** For a job, `schedule?: { id, title }` on
 `WorkDetailSubscribeResult`, beside `parent` and for the same reason: the page
@@ -805,13 +985,27 @@ split): one column, `max-w-2xl`, bottom bar under the thumb.
 | The role is deleted (or replaced by Reset to defaults) | §4.3's line; the next firing fails to start and becomes the notice and the error edge. Deleting a role does not count schedules today (§12) |
 | The schedule's worktree is deleted | §4.3's line; same |
 | Disabled schedule | `Off` on the row, no next run, Run now still works |
-| Server and device zones differ | §6.5 |
+| The device is in another zone than the schedule | The label on its times, the zone line and `Use {city} time` (§6.5). Editing the period keeps the schedule's zone |
+| The device moves to another zone while the app is open or backgrounded | `useDeviceTimeZone()` re-reads on `visibilitychange` and `focus`; the labels and the switch appear or vanish then |
+| The schedule's zone is an alias of the device's (`Asia/Calcutta`, `Asia/Kolkata`) | The same zone: both are canonicalised before comparing (§6.5) |
+| The device's browser does not know the schedule's zone (its tz data is older than the server's) | `Intl` throws for it, so nothing can be drawn in it. The zones count as different (§6.5). The period's label is the raw IANA name, `Daily at 09:00 (America/Ciudad_Juarez)`; the instants fall back to the device's zone and so carry **no** label, since they are the device's times; the zone line reads `America/Ciudad_Juarez time, which this device cannot show times in. This device is on London time (UTC+1).`; the switch is offered as usual |
+| The device reports no real zone (`Etc/Unknown`, as some locked-down browsers do) | Sent as it is on Create; the server refuses an unknown zone and the sheet prints that refusal under the fields (§5). Not papered over with `UTC`, which would make the user's 09:00 silently mean someone else's. An existing schedule shows its zone as for any other device, but no `Use … time`: there is no zone to switch to |
+| Two devices in different zones view one schedule | Each sees it from its own zone: the one in the schedule's zone sees nothing, the other sees the label. Either may switch it; the switch is a write like any setting, and the last write wins |
 
 ## 12. Deliberately not done
 
 - **A general cron describer and a client-side cron validator.** §6.3, §6.4.
-- **Choosing the zone.** The server's zone is the zone; a per-schedule zone is a
-  data-model change, not a UI one.
+- **Choosing a zone.** This used to say a schedule had no zone of its own:
+  every schedule ran on the server machine's clock. That decision is reversed
+  ([why](#why-not-the-servers-clock)), but there is still no picker, field or
+  setting for it: the device's zone at creation, and the switch to the viewing
+  device's zone, are the only two ways it is set. A zone is where the user is,
+  and the device knows that better than a 400-entry list. A user who wants a
+  schedule in a zone they are not in has no way to do it — accepted until
+  someone asks.
+- **Showing a schedule's instants in the device's zone.** §6.5: they are the
+  period's firings and read in its clock; the relative half already says when,
+  for the user.
 - **Counting schedules in a role's references.** `agent_role.delete` refuses a
   role that work items name and ignores schedules, so a role can be deleted
   from under a schedule (§4.3 says so where it shows). Whether a schedule should
@@ -835,7 +1029,9 @@ split): one column, `max-w-2xl`, bottom bar under the thumb.
 | 3 | `parsePeriod` / `toCron` round-trip every preset; the shapes in §6.2 map as listed; anything else is `null`; all seven days are Daily | `schedulePeriod.test.ts` |
 | 4 | `describePeriod` writes §6.4's table, including the named firings for N ≥ 6 and `Custom ·` | `schedulePeriod.test.ts` |
 | 5 | An unchanged period sends no `cron`, including one stored in a spelling the preset would not write (`MON-FRI`) | `ScheduleDetailOverlay.test.tsx` |
-| 6 | The zone suffix appears only when the offsets differ; instants are in the device zone | `schedulePeriod.test.ts` / the row's test, with a fixed device offset |
+| 6 | `sameZone` treats aliases as one zone and `Europe/London` / `Africa/Abidjan` as two; `zoneLabel` writes §6.5's forms (`Buenos Aires`, `UTC`, `UTC+9` for `Etc/GMT-9`); the zone line drops a repeated offset | `lib/scheduleZone.test.ts` |
+| 6a | With the device's zone the schedule's, no surface shows a label, a zone line or the switch; with another, the row, the head's next run, the notices and the empty Runs line carry `(City)`, and instants and day words are in the schedule's zone | the row's and the detail's tests, with a fixed device zone (`TZ` / a mocked `resolvedOptions`) |
+| 6b | Saving a period sends no `time_zone`; the switch confirms, sends `time_zone` alone, and the label stays until the notification carries the new zone; Create sends the device's zone | `ScheduleDetailOverlay.test.tsx`, `CreateScheduleSheet.test.tsx` |
 | 7 | The switch shows the server's value, not the tap, and a refusal leaves it with the message as its description | `ScheduleListOverlay.test.tsx` |
 | 8 | Runs are `WorkRow`s dated by `created_at` at heading level 4, the stories list still by `updated_at`, Tasks not at all | `WorkRow.test.tsx` (the `dateAt` prop), `ScheduleDetailOverlay.test.tsx` |
 | 9 | A notification replacing the newest page keeps older loaded runs (merge by id) | `lib/scheduleRuns.test.ts`; paging against the subscription in `useScheduleDetailSubscription.test.ts` |
@@ -843,7 +1039,7 @@ split): one column, `max-w-2xl`, bottom bar under the thumb.
 | 11 | A job's detail links to its schedule and Backs to it; with the schedule gone, the muted line and Back to `/schedules` | `WorkDetailOverlay.test.tsx` |
 | 12 | Both new routes resolve with and without `/w/<worktree>` | `navigation.test.ts`, `AppShell.test.tsx` |
 | 13 | Every new icon-only or small control meets the floor | `web/tests/touchTarget.test.ts` (the register regenerated, not silenced) |
-| 14 | `last_run`, `server_zone` and `schedule` arrive as §9 says, and `last_run` is re-sent when the run's row moves | `server/watch/schedule_list_test.go`, `server/watch/work_detail_test.go`, `server/ws/rpc_schedule_test.go`, `server/ws/rpc_work_test.go` |
+| 14 | `last_run`, `time_zone` and `schedule` arrive as §9 says, and `last_run` is re-sent when the run's row moves | `server/watch/schedule_list_test.go`, `server/watch/work_detail_test.go`, `server/ws/rpc_schedule_test.go`, `server/ws/rpc_work_test.go` |
 | 15 | Starting a failed-to-start job by hand clears `last_failure` and makes it `last_run_work_id`, so the next firing is skipped while it runs; restarting or reopening a run while another is active is refused; a fired run is recorded once; a firing overtaken by a hand start records no skip; a hand start racing Run now leaves exactly one active run (§9 D) | `server/schedule/scheduler_test.go`, `server/ws/rpc_work_test.go` |
 | 16 | A run deleted from the newest page's span disappears from the loaded list; an older loaded run does not | `lib/scheduleRuns.test.ts` |
 | 17 | `PeriodField` keeps its mode when the cron it writes would read back as another (seven days ticked; a preset-shaped custom text), reports `null` while incomplete, and calls nothing on mount | `PeriodField.test.tsx` |

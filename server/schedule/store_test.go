@@ -60,6 +60,7 @@ func (env *testEnv) valid() Schedule {
 		Prompt:      "Triage new issues",
 		AgentRoleID: env.jobRole.ID,
 		Cron:        "0 9 * * *",
+		TimeZone:    "UTC",
 		Enabled:     true,
 	}
 }
@@ -159,6 +160,9 @@ func TestCreate_Rejects(t *testing.T) {
 		{"role that does not take jobs", func(s *Schedule) { s.AgentRoleID = taskRole.ID }, "only takes task work, not job"},
 		{"bad cron", func(s *Schedule) { s.Cron = "every day" }, "must have 5 fields"},
 		{"cron that never runs", func(s *Schedule) { s.Cron = "0 0 31 4 *" }, "never runs"},
+		{"no time zone", func(s *Schedule) { s.TimeZone = "" }, "time_zone is required"},
+		{"the server's zone in disguise", func(s *Schedule) { s.TimeZone = "Local" }, "not an IANA name"},
+		{"unknown time zone", func(s *Schedule) { s.TimeZone = "Mars/Olympus_Mons" }, "unknown time zone \"Mars/Olympus_Mons\""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -216,6 +220,74 @@ func TestUpdate(t *testing.T) {
 	got, _, _ := env.store.Get(s.ID)
 	if got.Title != "Renamed" || got.Prompt != "New" || got.Worktree != "wt" || got.Cron != "30 8 * * *" {
 		t.Errorf("schedule = %+v, want every update applied", got)
+	}
+}
+
+// The period is read on the schedule's own wall clock, daylight saving time
+// included, whatever zone the server is in. How a skipped or repeated wall time
+// fires is Cron.Next's (TestCron_Next_DST).
+func TestCreate_ReadsThePeriodInTheSchedulesZone(t *testing.T) {
+	env := newTestEnv(t)
+	tests := []struct {
+		zone  string
+		clock time.Time
+		want  time.Time
+	}{
+		// 17:00 in Tokyo: today's 09:00 has passed.
+		{"Asia/Tokyo", time.Date(2026, 1, 1, 8, 0, 0, 0, time.UTC), time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC)},
+		// 09:00 on the morning New York springs forward is EDT, not EST.
+		{"America/New_York", time.Date(2026, 3, 7, 15, 0, 0, 0, time.UTC), time.Date(2026, 3, 8, 13, 0, 0, 0, time.UTC)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.zone, func(t *testing.T) {
+			env.clock = tt.clock
+			in := env.valid()
+			in.TimeZone = tt.zone
+
+			s := env.create(t, in)
+
+			if s.TimeZone != tt.zone {
+				t.Errorf("time zone = %q, want %q", s.TimeZone, tt.zone)
+			}
+			if !sameTime(s.NextRunAt, &tt.want) {
+				t.Errorf("next run = %v, want %v", s.NextRunAt, tt.want)
+			}
+		})
+	}
+}
+
+// Editing the period keeps the schedule's zone; it moves only when a new one
+// is sent, and the next run moves with it.
+func TestUpdate_ZoneMovesOnlyWhenSent(t *testing.T) {
+	env := newTestEnv(t) // 2026-01-01 08:00 UTC
+	in := env.valid()
+	in.TimeZone = "Asia/Tokyo"
+	s := env.create(t, in)
+
+	cron := "0 18 * * *"
+	got, err := env.store.Update(bgCtx, s.ID, UpdateFields{Cron: &cron})
+	if err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if want := at(time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC)); got.TimeZone != "Asia/Tokyo" || !sameTime(got.NextRunAt, want) {
+		t.Errorf("after a new cron: zone %q, next run %v; want Asia/Tokyo, %v", got.TimeZone, got.NextRunAt, want)
+	}
+
+	zone := "Europe/London"
+	got, err = env.store.Update(bgCtx, s.ID, UpdateFields{TimeZone: &zone})
+	if err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if want := at(time.Date(2026, 1, 1, 18, 0, 0, 0, time.UTC)); got.TimeZone != zone || !sameTime(got.NextRunAt, want) {
+		t.Errorf("after a new zone: zone %q, next run %v; want %s, %v", got.TimeZone, got.NextRunAt, zone, want)
+	}
+
+	bad := "Europe/Atlantis"
+	if _, err := env.store.Update(bgCtx, s.ID, UpdateFields{TimeZone: &bad}); !errors.Is(err, ErrInvalidSchedule) {
+		t.Errorf("update to an unknown zone: err = %v, want ErrInvalidSchedule", err)
+	}
+	if got, _, _ := env.store.Get(s.ID); got.TimeZone != zone {
+		t.Errorf("zone after a refused update = %q, want %q", got.TimeZone, zone)
 	}
 }
 

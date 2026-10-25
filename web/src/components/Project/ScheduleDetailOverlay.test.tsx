@@ -27,6 +27,11 @@ vi.mock("../../hooks/useScheduleDetailSubscription", () => ({
 	useScheduleDetailSubscription: (id: string) => mockDetail(id),
 }));
 
+let deviceZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+vi.mock("../../hooks/useDeviceTimeZone", () => ({
+	useDeviceTimeZone: () => deviceZone,
+}));
+
 const mockWorktrees = vi.fn();
 vi.mock("../../hooks/useWorktreeList", () => ({
 	useWorktreeList: () => mockWorktrees(),
@@ -73,7 +78,6 @@ function setDetail({
 }: Detail = {}) {
 	mockDetail.mockReturnValue({
 		schedule,
-		serverZone: { name: "UTC", offset_seconds: 0 },
 		runs,
 		hasMoreRuns,
 		loadMore,
@@ -85,9 +89,7 @@ function setDetail({
 	// The page is the store's too: a schedule the loaded list does not hold
 	// has been deleted.
 	if (schedule) {
-		useScheduleStore
-			.getState()
-			.setSchedules([schedule], { name: "UTC", offset_seconds: 0 });
+		useScheduleStore.getState().setSchedules([schedule]);
 	}
 }
 
@@ -134,9 +136,7 @@ describe("ScheduleDetailOverlay", () => {
 		// The detail subscription sends nothing on delete; the list does.
 		it("says so once the loaded list no longer holds it", () => {
 			setDetail();
-			useScheduleStore
-				.getState()
-				.setSchedules([], { name: "UTC", offset_seconds: 0 });
+			useScheduleStore.getState().setSchedules([]);
 			renderPage();
 			expect(screen.getByText("Schedule not found")).toBeInTheDocument();
 		});
@@ -352,6 +352,179 @@ describe("ScheduleDetailOverlay", () => {
 				"61 is out of range",
 			);
 			expect(text).toBeVisible();
+		});
+	});
+
+	// Checks 6a and 6b (docs/schedule-ui.md §6.5). NOW is 21:00 in Tokyo and
+	// 13:00 in London (still on summer time).
+	describe("the zone", () => {
+		const realZone = deviceZone;
+		const tokyo = (overrides: Partial<Schedule> = {}) =>
+			makeSchedule({
+				cron: "0 9 * * *",
+				time_zone: "Asia/Tokyo",
+				next_run_at: "2026-10-24T00:00:00Z",
+				...overrides,
+			});
+		const zoneLineText =
+			"Tokyo time (UTC+9). This device is on London time (UTC+1).";
+
+		beforeEach(() => {
+			deviceZone = "Europe/London";
+		});
+		afterEach(() => {
+			deviceZone = realZone;
+		});
+
+		it("shows nothing about it while the device is in the schedule's zone", () => {
+			deviceZone = "Asia/Tokyo";
+			setDetail({ schedule: tokyo() });
+			renderPage();
+
+			// The schedule's day words: tomorrow in Tokyo.
+			expect(
+				screen.getByText("On · Next run tomorrow 09:00 (in 12h)"),
+			).toBeVisible();
+			expect(screen.queryByText(/Tokyo/)).toBeNull();
+			expect(screen.queryByRole("button", { name: /^Use / })).toBeNull();
+		});
+
+		it("draws the schedule's instants on its clock, labelled", () => {
+			setDetail({ schedule: tokyo() });
+			renderPage();
+
+			expect(screen.getByText(/^On · Next run/)).toHaveTextContent(
+				"On · Next run tomorrow 09:00 (Tokyo) · in 12h",
+			);
+			expect(screen.getByText(/^No runs yet/)).toHaveTextContent(
+				"No runs yet. The first is due tomorrow 09:00 (Tokyo).",
+			);
+			expect(screen.getByText(zoneLineText)).toBeVisible();
+			// The zone line says it; the words under the heading do not repeat it.
+			expect(screen.getByText("Daily at 09:00")).not.toHaveTextContent("Tokyo");
+		});
+
+		it("labels the notices' instants", () => {
+			setDetail({
+				schedule: tokyo({
+					last_failure: { at: "2026-10-23T00:00:00Z", error: "boom" },
+				}),
+			});
+			const { unmount } = renderPage();
+			expect(screen.getByText(/could not be made/)).toHaveTextContent(
+				"The run at today 09:00 (Tokyo) could not be made.",
+			);
+			unmount();
+
+			setDetail({
+				schedule: tokyo({ last_skipped_at: "2026-10-23T00:00:00Z" }),
+			});
+			renderPage();
+			expect(screen.getByText(/^Skipped the run at/)).toHaveTextContent(
+				"Skipped the run at today 09:00 (Tokyo): the previous one was still going.",
+			);
+		});
+
+		it("keeps the zone when the period is edited, and says which it is", async () => {
+			const user = userEvent.setup();
+			setDetail({ schedule: tokyo() });
+			renderPage();
+
+			await user.click(screen.getByRole("button", { name: "Edit period" }));
+			expect(screen.getByText(zoneLineText)).toBeVisible();
+			// The switch is not part of a period edit.
+			expect(screen.queryByRole("button", { name: "Use London time" })).toBe(
+				null,
+			);
+			await user.click(screen.getByRole("button", { name: "Custom" }));
+			const text = screen.getByRole("textbox", { name: "Cron expression" });
+			await user.clear(text);
+			await user.type(text, "30 9 * * *");
+			await user.click(screen.getByRole("button", { name: "Save" }));
+
+			expect(actions.updateSchedule).toHaveBeenCalledWith({
+				id: "sched-1",
+				cron: "30 9 * * *",
+			});
+		});
+
+		it("switches to the device's zone after confirming, and only the zone", async () => {
+			const user = userEvent.setup();
+			const schedule = tokyo();
+			setDetail({ schedule });
+			const { rerender } = renderPage();
+
+			await user.click(screen.getByRole("button", { name: "Use London time" }));
+			const dialog = screen.getByRole("dialog", {
+				name: "Run on London time?",
+			});
+			expect(dialog).toHaveTextContent(
+				'"Daily at 09:00" will run on London time (UTC+1) instead of Tokyo time (UTC+9). Only a device on Tokyo time can switch it back.',
+			);
+			await user.click(
+				within(dialog).getByRole("button", { name: "Use London time" }),
+			);
+
+			expect(actions.updateSchedule).toHaveBeenCalledWith({
+				id: "sched-1",
+				time_zone: "Europe/London",
+			});
+			expect(screen.queryByRole("dialog")).toBeNull();
+			// Gone with the notification that carries the new zone, not the reply.
+			expect(screen.getByText(zoneLineText)).toBeVisible();
+
+			setDetail({ schedule: { ...schedule, time_zone: "Europe/London" } });
+			rerender(<ScheduleDetailOverlay scheduleId="sched-1" {...nav} />);
+			expect(screen.queryByText(zoneLineText)).toBeNull();
+			expect(screen.queryByRole("button", { name: "Use London time" })).toBe(
+				null,
+			);
+		});
+
+		it("shows a refused switch inside the dialog", async () => {
+			const user = userEvent.setup();
+			actions.updateSchedule.mockRejectedValue(new Error("no such zone"));
+			setDetail({ schedule: tokyo() });
+			renderPage();
+
+			await user.click(screen.getByRole("button", { name: "Use London time" }));
+			const dialog = screen.getByRole("dialog");
+			await user.click(
+				within(dialog).getByRole("button", { name: "Use London time" }),
+			);
+
+			expect(await within(dialog).findByRole("alert")).toHaveTextContent(
+				"no such zone",
+			);
+		});
+
+		it("offers no switch to a device that reports no real zone", () => {
+			deviceZone = "Etc/Unknown";
+			setDetail({ schedule: tokyo() });
+			renderPage();
+
+			expect(screen.getByText(/^Tokyo time \(UTC\+9\)\./)).toBeVisible();
+			expect(screen.queryByRole("button", { name: /^Use / })).toBeNull();
+		});
+
+		it("falls back to the device's clock for a zone the browser does not know", () => {
+			setDetail({
+				schedule: tokyo({ time_zone: "Mars/Olympus_Mons" }),
+			});
+			renderPage();
+
+			// The instants are the device's then, so they carry no label.
+			expect(screen.getByText(/^On · Next run/)).not.toHaveTextContent(
+				"Olympus",
+			);
+			expect(
+				screen.getByText(
+					/^Mars\/Olympus_Mons time, which this device cannot show times in\./,
+				),
+			).toBeVisible();
+			expect(
+				screen.getByRole("button", { name: "Use London time" }),
+			).toBeVisible();
 		});
 	});
 

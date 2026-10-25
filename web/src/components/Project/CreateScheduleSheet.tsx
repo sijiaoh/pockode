@@ -1,6 +1,7 @@
 import { Loader2 } from "lucide-react";
 import { useCallback, useEffect, useId, useState } from "react";
 import TextareaAutosize from "react-textarea-autosize";
+import { useDeviceTimeZone } from "../../hooks/useDeviceTimeZone";
 import { useCurrentWorktree } from "../../hooks/useRouteState";
 import { useAgentRoleStore } from "../../lib/agentRoleStore";
 import { resolveInitialJobRole } from "../../lib/initialRole";
@@ -48,7 +49,9 @@ export default function CreateScheduleSheet({ onClose, onCreated }: Props) {
 	const [isSubmitting, setIsSubmitting] = useState(false);
 	const createSchedule = useWSStore((s) => s.actions.createSchedule);
 	const addCreatedSchedule = useScheduleStore((s) => s.addCreatedSchedule);
-	const serverZone = useScheduleStore((s) => s.serverZone);
+	// Not shown: a schedule made here is in this device's zone, so the period
+	// typed means what it says on the user's clock (docs/schedule-ui.md §5).
+	const deviceZone = useDeviceTimeZone();
 	const roles = useAgentRoleStore((s) => s.roles);
 
 	const selectedRole = roles.find((r) => r.id === agentRoleId);
@@ -97,6 +100,7 @@ export default function CreateScheduleSheet({ onClose, onCreated }: Props) {
 					prompt: prompt.trim(),
 					agent_role_id: agentRoleId,
 					cron,
+					time_zone: deviceZone,
 					...(worktree ? { worktree } : {}),
 				});
 				// The detail page this lands on reads a loaded store without the id
@@ -121,6 +125,7 @@ export default function CreateScheduleSheet({ onClose, onCreated }: Props) {
 			title,
 			prompt,
 			agentRoleId,
+			deviceZone,
 			worktree,
 			addCreatedSchedule,
 			onCreated,
@@ -221,11 +226,7 @@ export default function CreateScheduleSheet({ onClose, onCreated }: Props) {
 				{/* Held still like the other fields: an edit made mid-request would
 				    otherwise not be what was sent. */}
 				<fieldset disabled={isSubmitting} className="min-w-0">
-					<PeriodField
-						initial=""
-						onChange={setCron}
-						serverZone={serverZone ?? undefined}
-					/>
+					<PeriodField initial="" onChange={setCron} />
 				</fieldset>
 
 				<p className="text-xs text-th-text-muted">

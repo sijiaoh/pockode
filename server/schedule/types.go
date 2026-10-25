@@ -20,10 +20,14 @@ type Schedule struct {
 	// Prompt is what every run is asked to do; it becomes the job's body.
 	Prompt      string `json:"prompt"`
 	AgentRoleID string `json:"agent_role_id"`
-	// Cron is a standard 5-field expression (see Cron), evaluated in the
-	// server's local time zone.
-	Cron    string `json:"cron"`
-	Enabled bool   `json:"enabled"`
+	// Cron is a standard 5-field expression (see Cron), evaluated in TimeZone.
+	Cron string `json:"cron"`
+	// TimeZone is the IANA name (such as "Asia/Tokyo") of the zone whose wall
+	// clock Cron is read on. It belongs to the schedule rather than to the
+	// server, which may be a machine in another zone than the person who wrote
+	// "09:00"; it changes only when it is set explicitly.
+	TimeZone string `json:"time_zone"`
+	Enabled  bool   `json:"enabled"`
 	// Worktree the runs are made in (empty = main).
 	Worktree string `json:"worktree,omitempty"`
 
@@ -60,18 +64,6 @@ type RunFailure struct {
 	// person can start it by hand.
 	WorkID string `json:"work_id,omitempty"`
 	Error  string `json:"error"`
-}
-
-// Zone is the time zone cron expressions are evaluated in — the server's
-// local one — as it stands now. A client in another zone needs it to say when
-// a period's wall-clock time falls for it; it is sent beside the schedules
-// rather than on each, since every schedule shares it.
-type Zone struct {
-	// Name is the zone's abbreviation (time.Time.Zone), such as "JST"; it can
-	// be ambiguous ("IST"), which OffsetSeconds never is.
-	Name string `json:"name"`
-	// OffsetSeconds is east of UTC, and moves with daylight saving time.
-	OffsetSeconds int `json:"offset_seconds"`
 }
 
 type Operation string

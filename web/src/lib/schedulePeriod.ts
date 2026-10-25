@@ -1,5 +1,3 @@
-import type { ServerZone } from "../types/schedule";
-
 /**
  * A schedule's period as the presets write it. The server knows only cron, so
  * this is a way of writing a cron expression, never a second kind of period
@@ -206,49 +204,4 @@ export function describePeriod(cron: string): string {
 	return period
 		? describePreset(period)
 		: `${CUSTOM_PERIOD_LABEL} · ${cron.trim()}`;
-}
-
-/** `UTC+9`, `UTC−3:30`, `UTC` — an offset east of UTC, never ambiguous. */
-export function formatUtcOffset(offsetSeconds: number): string {
-	const totalMinutes = Math.round(offsetSeconds / 60);
-	if (totalMinutes === 0) return "UTC";
-	const sign = totalMinutes > 0 ? "+" : "−";
-	const abs = Math.abs(totalMinutes);
-	const hours = Math.floor(abs / 60);
-	const minutes = abs % 60;
-	return `UTC${sign}${hours}${minutes ? `:${pad2(minutes)}` : ""}`;
-}
-
-/** The device's current offset east of UTC, in the server's units. */
-export const deviceOffsetSeconds = (now: Date = new Date()) =>
-	-now.getTimezoneOffset() * 60;
-
-/**
- * What a list row appends to a period: the server's offset, only when the
- * device is on another one — otherwise the period already reads in the
- * user's own time.
- */
-export function periodZoneSuffix(
-	zone: ServerZone,
-	deviceOffset: number,
-): string {
-	return zone.offset_seconds === deviceOffset
-		? ""
-		: ` (${formatUtcOffset(zone.offset_seconds)})`;
-}
-
-/**
- * The line under the period in the editor and on the detail page. The zone's
- * abbreviation appears only here and only beside the offset, since one
- * abbreviation (`IST`) can name three zones; a numeric one (`+03`) or a
- * repeat of the offset adds nothing and is left out.
- */
-export function periodZoneLine(zone: ServerZone, deviceOffset: number): string {
-	const offset = formatUtcOffset(zone.offset_seconds);
-	if (zone.offset_seconds === deviceOffset) return `Server time, ${offset}`;
-	const name =
-		zone.name && !/^[+-]/.test(zone.name) && zone.name !== offset
-			? ` (${zone.name})`
-			: "";
-	return `Server time, ${offset}${name}. This device is on ${formatUtcOffset(deviceOffset)}.`;
 }

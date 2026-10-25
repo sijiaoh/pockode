@@ -43,3 +43,34 @@ describe("formatNextRun", () => {
 		expect(formatNextRun(iso, now)).toBe(expected);
 	});
 });
+
+describe("formatNextRun in a schedule's zone", () => {
+	// 2026-10-23 20:00 UTC is already the 24th in Tokyo (UTC+9).
+	const now = new Date("2026-10-23T20:00:00Z");
+
+	it.each([
+		["2026-10-24T00:00:00Z", "Asia/Tokyo", "today 09:00"],
+		["2026-10-25T15:00:00Z", "Asia/Tokyo", "Mon 26 Oct 00:00"],
+		["2026-10-24T00:00:00Z", "UTC", "tomorrow 00:00"],
+		["2026-10-23T14:00:00Z", "Asia/Tokyo", "yesterday 23:00"],
+	])("%s in %s reads %s", (iso, zone, expected) => {
+		expect(formatNextRun(iso, now, zone)).toBe(expected);
+	});
+
+	it("counts days across a DST change as calendar days", () => {
+		// London leaves summer time on 25 Oct 2026, so 23:30 on the 24th to
+		// 00:10 on the 26th is 25h40m: one day by elapsed time, two by the
+		// calendar.
+		const before = new Date("2026-10-24T22:30:00Z");
+		expect(formatNextRun("2026-10-26T00:10:00Z", before, "Europe/London")).toBe(
+			"Mon 26 Oct 00:10",
+		);
+	});
+
+	it("falls back to the device's zone for a zone the browser does not know", () => {
+		const iso = "2026-10-24T00:00:00Z";
+		expect(formatNextRun(iso, now, "Mars/Olympus_Mons")).toBe(
+			formatNextRun(iso, now),
+		);
+	});
+});

@@ -3,6 +3,10 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import PeriodField from "./PeriodField";
 
+vi.mock("../../hooks/useDeviceTimeZone", () => ({
+	useDeviceTimeZone: () => "Europe/London",
+}));
+
 const button = (name: string) => screen.getByRole("button", { name });
 const lastCall = (fn: ReturnType<typeof vi.fn>) => fn.mock.calls.at(-1)?.[0];
 
@@ -215,22 +219,35 @@ describe("PeriodField", () => {
 	});
 
 	describe("zone line", () => {
-		it("waits for the server's zone", () => {
+		it("is not drawn without a zone, as on the create sheet", () => {
 			renderField("0 9 * * *");
-			expect(screen.queryByText(/Server time/)).not.toBeInTheDocument();
+			expect(screen.queryByText(/ time/)).not.toBeInTheDocument();
 		});
 
-		it("shows the server's zone once it has arrived", () => {
-			const offset = -new Date().getTimezoneOffset() * 60;
+		it("is not drawn while the schedule's zone is the device's", () => {
 			render(
 				<PeriodField
 					initial="0 9 * * *"
 					onChange={vi.fn()}
-					serverZone={{ name: "XST", offset_seconds: offset }}
+					timeZone="Europe/London"
 				/>,
 			);
+			expect(screen.queryByText(/ time/)).not.toBeInTheDocument();
+		});
+
+		it("names the zone the inputs are typed in, on a line of its own", () => {
+			render(
+				<PeriodField
+					initial="0 9 * * *"
+					onChange={vi.fn()}
+					timeZone="Asia/Tokyo"
+				/>,
+			);
+			expect(screen.getByText("Daily at 09:00")).toBeInTheDocument();
 			expect(
-				screen.getByText(/^Daily at 09:00 · Server time, UTC/),
+				screen.getByText(
+					/^Tokyo time \(UTC\+9\)\. This device is on London time/,
+				),
 			).toBeInTheDocument();
 		});
 	});

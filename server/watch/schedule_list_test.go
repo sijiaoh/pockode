@@ -26,15 +26,12 @@ func TestScheduleListWatcher_ResendsOnlyWhenTheLatestRunMoved(t *testing.T) {
 	defer w.Stop()
 
 	notifier := &captureNotifier{}
-	list, err := w.Subscribe("client-1", notifier)
+	items, err := w.Subscribe("client-1", notifier)
 	if err != nil {
 		t.Fatalf("subscribe: %v", err)
 	}
-	if len(list.Items) != 1 || list.Items[0].LastRun == nil || list.Items[0].LastRun.ID != "latest" {
-		t.Fatalf("items on subscribe = %+v, want the schedule with its latest run", list.Items)
-	}
-	if list.ServerZone.OffsetSeconds != 9*60*60 {
-		t.Errorf("server_zone = %+v, want the store's", list.ServerZone)
+	if len(items) != 1 || items[0].LastRun == nil || items[0].LastRun.ID != "latest" {
+		t.Fatalf("items on subscribe = %+v, want the schedule with its latest run", items)
 	}
 
 	// The first change of the latest run's session after a subscribe goes out:
@@ -65,8 +62,8 @@ func TestScheduleListWatcher_ResendsOnlyWhenTheLatestRunMoved(t *testing.T) {
 }
 
 // A sync replaces the client's list whole, so it carries what the subscribe
-// result does: each schedule with its latest run, and the zone.
-func TestScheduleListWatcher_SyncCarriesLatestRunsAndZone(t *testing.T) {
+// result does: each schedule with its latest run.
+func TestScheduleListWatcher_SyncCarriesLatestRuns(t *testing.T) {
 	schedules := &mockScheduleStore{schedules: []schedule.Schedule{{ID: "sched", LastRunWorkID: "latest"}}}
 	runs := &mockRunStore{mockDetailStore{works: []work.Work{
 		{ID: "latest", ScheduleID: "sched", Status: work.StatusActive, SessionID: "s1"},
@@ -85,8 +82,5 @@ func TestScheduleListWatcher_SyncCarriesLatestRunsAndZone(t *testing.T) {
 	}
 	if params.Operation != "sync" || len(params.Schedules) != 1 || params.Schedules[0].LastRun == nil || params.Schedules[0].LastRun.ID != "latest" {
 		t.Errorf("sync = %+v, want the schedule with its latest run", params)
-	}
-	if params.ServerZone.OffsetSeconds != 9*60*60 {
-		t.Errorf("server_zone = %+v, want the store's", params.ServerZone)
 	}
 }

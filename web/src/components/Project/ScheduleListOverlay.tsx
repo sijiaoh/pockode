@@ -1,14 +1,12 @@
 import { AlertCircle, Loader2, Plus } from "lucide-react";
 import { type ReactNode, useCallback, useId, useMemo, useState } from "react";
+import { useDeviceTimeZone } from "../../hooks/useDeviceTimeZone";
 import { useScheduleEnabledToggle } from "../../hooks/useScheduleEnabledToggle";
 import { ACTIVITY_VIEW } from "../../lib/activity";
-import {
-	deviceOffsetSeconds,
-	periodZoneSuffix,
-} from "../../lib/schedulePeriod";
 import { compareNewestFirst } from "../../lib/scheduleRuns";
 import { useScheduleStore } from "../../lib/scheduleStore";
-import type { ScheduleListItem, ServerZone } from "../../types/schedule";
+import { periodZoneLabel } from "../../lib/scheduleZone";
+import type { ScheduleListItem } from "../../types/schedule";
 import {
 	formatRelativeDate,
 	formatRelativeFuture,
@@ -20,6 +18,7 @@ import Switch from "../ui/Switch";
 import CreateScheduleSheet from "./CreateScheduleSheet";
 import PeriodWords from "./PeriodWords";
 import { workEdgeClass } from "./WorkRow";
+import ZoneLabel from "./ZoneLabel";
 
 interface Props {
 	onBack: () => void;
@@ -36,7 +35,7 @@ export default function ScheduleListOverlay({
 	onOpenScheduleDetail,
 }: Props) {
 	const schedules = useScheduleStore((s) => s.schedules);
-	const serverZone = useScheduleStore((s) => s.serverZone);
+	const deviceZone = useDeviceTimeZone();
 	const isLoading = useScheduleStore((s) => s.isLoading);
 	const error = useScheduleStore((s) => s.error);
 
@@ -84,7 +83,7 @@ export default function ScheduleListOverlay({
 								<li key={schedule.id}>
 									<ScheduleRow
 										schedule={schedule}
-										serverZone={serverZone}
+										deviceZone={deviceZone}
 										onOpen={onOpenScheduleDetail}
 									/>
 								</li>
@@ -129,19 +128,15 @@ function scheduleEdgeClass(schedule: ScheduleListItem): string {
 
 function ScheduleRow({
 	schedule,
-	serverZone,
+	deviceZone,
 	onOpen,
 }: {
 	schedule: ScheduleListItem;
-	serverZone: ServerZone | null;
+	deviceZone: string;
 	onOpen: (scheduleId: string) => void;
 }) {
 	const { busy, error, toggle } = useScheduleEnabledToggle(schedule);
 	const errorId = useId();
-
-	const zoneSuffix = serverZone
-		? periodZoneSuffix(serverZone, deviceOffsetSeconds())
-		: "";
 
 	return (
 		// The work row's card idiom, edge and all: a schedule has a state — its latest
@@ -177,7 +172,7 @@ function ScheduleRow({
 			<div className="flex items-center gap-1.5 overflow-hidden whitespace-nowrap text-xs">
 				<span className="shrink-0 text-th-text-secondary">
 					<PeriodWords cron={schedule.cron} />
-					{zoneSuffix}
+					<ZoneLabel label={periodZoneLabel(schedule.time_zone, deviceZone)} />
 				</span>
 				<NextRun schedule={schedule} />
 			</div>

@@ -134,12 +134,14 @@ scheduler behaves the way it does.
   state and are written by its store; the runs are works that know nothing of
   why they were made. "Is a run going now" is not stored at all — it is the
   status of the schedule's runs, read where it is needed.
-- **Times are the server's local time.** A cron expression means what the
-  machine's clock means, which is what a person writing `0 9 * * *` expects.
-  Across a DST change a skipped wall time fires at the jump and a repeated one
-  fires once (`Cron.Next`). The zone is sent to clients with both schedule
-  subscriptions (`Store.Zone`, read off the store's own clock), since a client
-  may be in another one ([api.md](../projects/api.md#server-zone)).
+- **Times are the schedule's own zone's.** A cron expression means what a
+  clock in `Schedule.TimeZone` means, which is what the person who wrote
+  `0 9 * * *` on their device expects; the server may be a machine somewhere
+  else. `reschedule` passes `Cron.Next` the current time in that zone, so
+  across a DST change a skipped wall time fires at the jump and a repeated one
+  fires once. The store's clock (`now`) only says *when*; its location plays no
+  part. Zones are checked and loaded in one place, `loadZone`, against the tz
+  database embedded with `time/tzdata` ([api.md](../projects/api.md#schedule-time-zones)).
 - **The wait is re-read, not trusted.** Every schedule change wakes the loop,
   and the wait is capped at a minute, because a timer counts elapsed time and a
   machine that sleeps or has its clock set forward would otherwise fire late. A

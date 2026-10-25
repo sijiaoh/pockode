@@ -196,7 +196,7 @@ func (c Cron) dayMatches(t time.Time) bool {
 
 // Next returns the first instant strictly after `after` at which the schedule
 // fires, in after's location; callers pass a time in the zone the schedule is
-// meant to keep (the server's local zone).
+// meant to keep (Schedule.TimeZone).
 //
 // The fields are matched against the wall clock, and a daylight-saving jump is
 // resolved like this:

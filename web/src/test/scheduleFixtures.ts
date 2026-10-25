@@ -13,6 +13,8 @@ export function makeSchedule(
 		prompt: "Audit the dependencies.",
 		agent_role_id: "role-job",
 		cron: "0 3 * * *",
+		// The device's own, so a test sees no zone unless it is about one.
+		time_zone: Intl.DateTimeFormat().resolvedOptions().timeZone,
 		enabled: true,
 		next_run_at: "2026-10-24T03:00:00Z",
 		created_at: "2026-10-01T00:00:00Z",

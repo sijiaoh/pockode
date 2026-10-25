@@ -108,20 +108,21 @@ nothing left to tell the two apart ([frontend.md](frontend.md#workdetailoverlay)
 
 | Method | Params | Result | Description |
 |--------|--------|--------|-------------|
-| `schedule.create` | `ScheduleCreateParams` | `Schedule` | Create a schedule; `enabled` absent = `true` |
-| `schedule.update` | `ScheduleUpdateParams` | `{}` | Update settings (pointer semantics); `next_run_at` is recomputed when `cron` or `enabled` changes |
+| `schedule.create` | `ScheduleCreateParams` | `Schedule` | Create a schedule; `enabled` absent = `true`; `time_zone` required ([Schedule Time Zones](#schedule-time-zones)) |
+| `schedule.update` | `ScheduleUpdateParams` | `{}` | Update settings (pointer semantics); `next_run_at` is recomputed when `cron`, `time_zone` or `enabled` changes |
 | `schedule.delete` | `{id}` | `{}` | Delete the schedule alone; its runs stay |
 | `schedule.run` | `{id}` | `WorkDetailItem` | Make and start a run now, enabled or not; the started job, as `work.start` replies |
-| `schedule.list.subscribe` | `SubscribeParams` | `{items: ScheduleListItem[], server_zone: Zone}` | Subscribe + every schedule, run bookkeeping included, each with the row of its latest run; and the zone cron is evaluated in ([Server Zone](#server-zone)) |
+| `schedule.list.subscribe` | `SubscribeParams` | `{items: ScheduleListItem[]}` | Subscribe + every schedule, run bookkeeping included, each with the row of its latest run |
 | `schedule.list.unsubscribe` | `{id}` | `{}` | Unsubscribe |
-| `schedule.detail.subscribe` | `ScheduleDetailSubscribeParams` | `{schedule, runs: ScheduleRunPage, server_zone: Zone}` | Subscribe to one schedule and the newest page of its runs ([Schedule Runs](#schedule-runs)), with the zone the list carries too — a detail page is reachable by URL without the list |
+| `schedule.detail.subscribe` | `ScheduleDetailSubscribeParams` | `{schedule, runs: ScheduleRunPage}` | Subscribe to one schedule and the newest page of its runs ([Schedule Runs](#schedule-runs)) |
 | `schedule.detail.runs` | `ScheduleDetailRunsParams` | `ScheduleRunPage` | A page of older runs, served against an open detail subscription |
 | `schedule.detail.unsubscribe` | `{id}` | `{}` | Unsubscribe |
 
 Every refusal the user can act on is `InvalidParams` with a message that says
 what to fix: `schedule not found`; `invalid schedule: …` for a missing field, an
 unparsable cron (`invalid schedule: cron expression "61 * * * *": minute field
-"61": 61 is out of range 0-59`) or a role that does not take jobs;
+"61": 61 is out of range 0-59`), a zone that is not an IANA name
+([Schedule Time Zones](#schedule-time-zones)) or a role that does not take jobs;
 `schedule.run` — and `work.start` or `work.reopen` on one of its runs — while
 another run is still active (`previous run is still active: run <work-id> of
 schedule <id>`). A run the work store refuses to make or start — a field it
@@ -157,15 +158,14 @@ AgentRoleCreateParams   { name, role_prompt, steps?, work_type? }
 AgentRoleUpdateParams   { id, name?, role_prompt?, steps?, agent_type?, model?, effort?, work_type? }   // work_type "" clears the restriction
 AgentRoleDeleteParams   { id }
 
-Schedule                      { id, title, prompt, agent_role_id, cron, enabled, worktree?, next_run_at?, last_run_at?, last_run_work_id?, last_skipped_at?, last_failure?: {at, work_id?, error}, created_at, updated_at }
-ScheduleCreateParams          { title, prompt, agent_role_id, cron, enabled?, worktree? }
-ScheduleUpdateParams          { id, title?, prompt?, agent_role_id?, cron?, enabled?, worktree? }   // worktree "" = main
+Schedule                      { id, title, prompt, agent_role_id, cron, time_zone, enabled, worktree?, next_run_at?, last_run_at?, last_run_work_id?, last_skipped_at?, last_failure?: {at, work_id?, error}, created_at, updated_at }
+ScheduleCreateParams          { title, prompt, agent_role_id, cron, time_zone, enabled?, worktree? }
+ScheduleUpdateParams          { id, title?, prompt?, agent_role_id?, cron?, time_zone?, enabled?, worktree? }   // worktree "" = main
 ScheduleDetailSubscribeParams { id, schedule_id }
 ScheduleDetailRunsParams      { id, cursor?, limit? }   // id names the detail subscription
 ScheduleRunPage               { items: ScheduleRunItem[], next_cursor?, has_more? }
 ScheduleRunItem               WorkListItem & { created_at }
 ScheduleListItem              Schedule & { last_run?: WorkListItem }   // the row of last_run_work_id; absent when none or deleted
-Zone                          { name, offset_seconds }   // time.Time.Zone(): abbreviation, seconds east of UTC
 ```
 
 `Schedule` is the stored record as it stands — it derives nothing, so there is
@@ -177,18 +177,36 @@ schedule's row draws the run's activity, status and questions, and no other
 subscription a client holds carries a job's row — the work list leaves jobs
 out.
 
-### Server Zone
+### Schedule Time Zones
 
-Cron is evaluated in the server's local time zone
-([data-model](data-model.md#schedule)), and a client reaching it through the
-relay may be in another. Both schedule subscriptions therefore carry
-`server_zone` — the zone's abbreviation and its offset now — so a client can
-show a period in the server's wall-clock time and say so when its own offset
-differs. The offset is read when the subscription answers (and on a list's sync
-and every detail notification); it moves with daylight saving time, so a
-client that has held a list across a DST change has an offset an hour out until
-it subscribes again. The instants — `next_run_at` and the rest — are absolute
-and never wrong.
+Each schedule's cron is read on the wall clock of its own zone, `time_zone`
+([data-model](data-model.md#schedule)) — never the server's, since a client
+reaching the server through the relay may be anywhere. The client sends the
+device's zone on `schedule.create`, where it is required. On `schedule.update`
+it follows "absent = unchanged" like every other field: a new `cron` keeps the
+schedule's zone, and sending `time_zone` alone moves the schedule to that zone
+with its cron as written, so `0 9 * * *` is then 09:00 there. Either change
+recomputes `next_run_at`.
+
+`time_zone` must be an IANA name. A missing one, an unknown one and `"Local"`
+(Go's name for whatever zone the server is in) are refused, and a refused
+update leaves the schedule as it was:
+
+```
+invalid schedule: time_zone is required (an IANA name such as "Asia/Tokyo")
+invalid schedule: time zone "Local" is not an IANA name such as "Asia/Tokyo"
+invalid schedule: unknown time zone "Mars/Olympus_Mons": expected an IANA name such as "Asia/Tokyo"
+```
+
+Zones are resolved against the tz database built into the server binary
+(Go's `time/tzdata`), so they resolve on a host that has none, such as
+Windows or a minimal container image. A system database, where there is one,
+is tried first. A stored schedule whose zone cannot be resolved gets no
+`next_run_at` instead of a guessed one, as one with an unparsable cron does.
+
+The instants (`next_run_at` and the rest) are absolute RFC 3339 times;
+`next_run_at` is written with the schedule zone's offset, but a client reads
+it as an instant like any other.
 
 ### A Schedule Has One Run Going
 
@@ -429,7 +447,7 @@ triggers the detail follows for its run page. A change to any other run sends
 nothing here.
 
 **Detail** (`schedule.detail.changed`) is always whole, like
-`work.detail.changed`: `{ "id": "<sub-id>", "schedule": {...}, "runs": {...}, "server_zone": {...} }`.
+`work.detail.changed`: `{ "id": "<sub-id>", "schedule": {...}, "runs": {...} }`.
 It is sent when the schedule changes (settings or bookkeeping), when one of its
 runs is made, changes or is deleted, and when a run's session changes in a way
 that moves the run page — a turn starting, say; a session touched without
@@ -451,9 +469,8 @@ the role store — the watcher listens to both
 ```json
 { "id": "<sub-id>", "operation": "sync", "works": [...] }
 ```
-`roles` for `agent_role.list`, `schedules` for `schedule.list` (with
-`server_zone` beside it). A detail subscription's sync is simply its whole
-detail again.
+`roles` for `agent_role.list`, `schedules` for `schedule.list`. A detail
+subscription's sync is simply its whole detail again.
 
 ### Backpressure Handling
 

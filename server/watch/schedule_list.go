@@ -184,14 +184,12 @@ func (w *ScheduleListWatcher) notifySync() {
 	for _, item := range items {
 		w.rememberRun(item.ID, item.LastRun)
 	}
-	zone := w.store.Zone()
 
 	w.NotifyAll("schedule.list.changed", func(sub *Subscription) any {
 		return scheduleListSyncParams{
-			ID:         sub.ID,
-			Operation:  "sync",
-			Schedules:  items,
-			ServerZone: zone,
+			ID:        sub.ID,
+			Operation: "sync",
+			Schedules: items,
 		}
 	})
 
@@ -256,30 +254,24 @@ func (w *ScheduleListWatcher) forgetRun(scheduleID string) {
 	delete(w.sentRuns, scheduleID)
 }
 
-// ScheduleList is everything a schedule.list subscriber is sent on subscribe.
-type ScheduleList struct {
-	Items      []rpc.ScheduleListItem
-	ServerZone schedule.Zone
-}
-
 // Subscribe registers a subscriber under the client-chosen id and returns the
-// current schedule list.
+// current schedule list, each schedule as its row draws it.
 //
 // Registered before the list is read, so a change landing between the two is
 // notified rather than lost; see BaseWatcher.AddSubscription.
-func (w *ScheduleListWatcher) Subscribe(id string, notifier Notifier) (ScheduleList, error) {
+func (w *ScheduleListWatcher) Subscribe(id string, notifier Notifier) ([]rpc.ScheduleListItem, error) {
 	sub := &Subscription{
 		ID:       id,
 		Notifier: notifier,
 	}
 	if err := w.AddSubscription(sub); err != nil {
-		return ScheduleList{}, err
+		return nil, err
 	}
 
 	items, err := w.items()
 	if err != nil {
 		w.RemoveSubscription(id)
-		return ScheduleList{}, err
+		return nil, err
 	}
 	// The loop may have sent the others a row this reply is newer or older
 	// than; forgetting what was sent makes the next session change go out
@@ -288,7 +280,7 @@ func (w *ScheduleListWatcher) Subscribe(id string, notifier Notifier) (ScheduleL
 	w.sentRunsMu.Lock()
 	clear(w.sentRuns)
 	w.sentRunsMu.Unlock()
-	return ScheduleList{Items: items, ServerZone: w.store.Zone()}, nil
+	return items, nil
 }
 
 type scheduleListChangedParams struct {
@@ -299,10 +291,9 @@ type scheduleListChangedParams struct {
 }
 
 type scheduleListSyncParams struct {
-	ID         string                 `json:"id"`
-	Operation  string                 `json:"operation"`
-	Schedules  []rpc.ScheduleListItem `json:"schedules"`
-	ServerZone schedule.Zone          `json:"server_zone"`
+	ID        string                 `json:"id"`
+	Operation string                 `json:"operation"`
+	Schedules []rpc.ScheduleListItem `json:"schedules"`
 }
 
 // OnScheduleChange implements schedule.OnChangeListener.

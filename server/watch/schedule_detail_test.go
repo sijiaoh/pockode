@@ -27,10 +27,6 @@ func (m *mockScheduleStore) List() ([]schedule.Schedule, error) {
 	return m.schedules, nil
 }
 
-func (m *mockScheduleStore) Zone() schedule.Zone {
-	return schedule.Zone{Name: "JST", OffsetSeconds: 9 * 60 * 60}
-}
-
 func (m *mockScheduleStore) AddOnChangeListener(schedule.OnChangeListener) {}
 
 type mockRunStore struct {

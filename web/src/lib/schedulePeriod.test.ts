@@ -2,12 +2,9 @@ import { describe, expect, it } from "vitest";
 import {
 	describePeriod,
 	describePreset,
-	formatUtcOffset,
 	HOURLY_EVERY,
 	type Period,
 	parsePeriod,
-	periodZoneLine,
-	periodZoneSuffix,
 	toCron,
 } from "./schedulePeriod";
 
@@ -158,39 +155,4 @@ it("describes a weekly period with every day as what is saved: daily", () => {
 			minute: 0,
 		}),
 	).toBe("Daily at 09:00");
-});
-
-describe("zones", () => {
-	it.each([
-		[0, "UTC"],
-		[9 * 3600, "UTC+9"],
-		[-5 * 3600, "UTC−5"],
-		[-(3 * 3600 + 30 * 60), "UTC−3:30"],
-		[5 * 3600 + 45 * 60, "UTC+5:45"],
-	])("writes offset %i as %s", (seconds, text) => {
-		expect(formatUtcOffset(seconds)).toBe(text);
-	});
-
-	const jst = { name: "JST", offset_seconds: 9 * 3600 };
-
-	it("suffixes a row's period only when the device is on another offset", () => {
-		expect(periodZoneSuffix(jst, 9 * 3600)).toBe("");
-		expect(periodZoneSuffix(jst, 3600)).toBe(" (UTC+9)");
-	});
-
-	it("names the server zone, and the device's when it differs", () => {
-		expect(periodZoneLine(jst, 9 * 3600)).toBe("Server time, UTC+9");
-		expect(periodZoneLine(jst, 3600)).toBe(
-			"Server time, UTC+9 (JST). This device is on UTC+1.",
-		);
-	});
-
-	it("leaves out an abbreviation that only repeats the offset", () => {
-		expect(periodZoneLine({ name: "+03", offset_seconds: 3 * 3600 }, 0)).toBe(
-			"Server time, UTC+3. This device is on UTC.",
-		);
-		expect(periodZoneLine({ name: "UTC", offset_seconds: 0 }, 3600)).toBe(
-			"Server time, UTC. This device is on UTC+1.",
-		);
-	});
 });
