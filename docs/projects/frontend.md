@@ -311,10 +311,14 @@ and never re-sorted by state
 ([schedule-ui.md §3](../schedule-ui.md#3-the-schedules-list)). Each card is
 `WorkRow`'s card: the title button covers it and opens the detail, and the one
 control lifted above it is the enable switch. Line 2 is the period in words
-(`lib/schedulePeriod.ts`, with the schedule's `ZoneLabel` when the device is in
+(`PeriodWords`, which adds the schedule's zone label when the device is in
 another zone) and `Next in …` (`formatRelativeFuture`) or `Off`; line 3 is the
 latest run — a failure, the run's activity, a deleted run, or none. The edge is
 error while `last_failure` is set, otherwise `workEdgeClass` of `last_run`.
+A one-time schedule that is done (`useIsScheduleDone`, which wraps `isDone`
+and re-judges an off one-time the moment its time arrives) shows `Done` where
+the switch was and no next run
+([schedule-ui.md §6.6](../schedule-ui.md#66-done)).
 
 The switch is `ui/Switch`, a `role="switch"` button sized by `touch-target`. It
 sends `schedule.update {enabled}` and moves only when the store does, so it
@@ -331,10 +335,12 @@ One schedule, from `useScheduleDetailSubscription`, keyed by id inside the
 component (`ScheduleDetailPage key={scheduleId}`) for the work detail's reason
 ([schedule-ui.md §4](../schedule-ui.md#4-the-schedule-detail)). Top to bottom:
 the title (inline edit), the `Switch` with the next firing (`formatNextRun` and
-`formatRelativeFuture`), at most one notice (a failed firing, a run going now,
-a skipped firing), **Runs**, then the settings — Prompt, Period
-(`PeriodField` behind a pencil; Save sends `cron` only when it differs from the
-stored string, and never `time_zone`), Role (`RoleSelect workType="job"`,
+`formatRelativeFuture`) — or, on a done one-time, `Done · Was due …` — at most
+one notice (a failed firing, a run going now, a skipped firing, a one-time
+that passed while off), **Runs**, then the settings — Prompt, Period
+(`PeriodField` behind a pencil; Save sends `period` only when it differs from
+the stored one by `samePeriod`, never `time_zone`, and on a done one-time
+`enabled: true` beside it as `Save and turn on`), Role (`RoleSelect workType="job"`,
 applied on change), Worktree (git repositories only) — and `Delete schedule`
 at the end. `Run now` is the bottom bar and stays on the page.
 
@@ -363,13 +369,13 @@ triggers are [schedule-ui.md §4.4](../schedule-ui.md#44-run-now-and-delete). Th
 title, prompt, role and period
 ([schedule-ui.md §5](../schedule-ui.md#5-creating-a-schedule)). The role is
 `RoleSelect workType="job"`, preselected by `resolveInitialJobRole`; the period
-is `PeriodField`, and the sheet starts its cron at `DEFAULT_CRON` because the
+is `PeriodField`, and the sheet starts its period at `DEFAULT_PERIOD` because the
 field reports nothing until it is touched. The worktree is the current URL's,
 stated as `Runs in …` rather than asked; the zone is the device's
 (`useDeviceTimeZone`), sent as `time_zone` and not shown. Once the form has
 been shown it stays through a role reload (a reconnect empties the role
 store): swapping to `NoEligibleRoleSheet` would remount `PeriodField` on its default period, so
-when the swap does happen — the reload failed — the cron goes back to the
+when the swap does happen — the reload failed — the period goes back to the
 default with it. On success the reply is added to `scheduleStore` before
 `onCreated`, so the detail page it lands on does not read
 the new id as deleted while the list notification is still on its way.

@@ -1,11 +1,10 @@
-import { AlertCircle, Loader2, Plus } from "lucide-react";
+import { AlertCircle, CircleCheck, Loader2, Plus } from "lucide-react";
 import { type ReactNode, useCallback, useId, useMemo, useState } from "react";
-import { useDeviceTimeZone } from "../../hooks/useDeviceTimeZone";
+import { useIsScheduleDone } from "../../hooks/useIsScheduleDone";
 import { useScheduleEnabledToggle } from "../../hooks/useScheduleEnabledToggle";
 import { ACTIVITY_VIEW } from "../../lib/activity";
 import { compareNewestFirst } from "../../lib/scheduleRuns";
 import { useScheduleStore } from "../../lib/scheduleStore";
-import { periodZoneLabel } from "../../lib/scheduleZone";
 import type { ScheduleListItem } from "../../types/schedule";
 import {
 	formatRelativeDate,
@@ -18,7 +17,6 @@ import Switch from "../ui/Switch";
 import CreateScheduleSheet from "./CreateScheduleSheet";
 import PeriodWords from "./PeriodWords";
 import { workEdgeClass } from "./WorkRow";
-import ZoneLabel from "./ZoneLabel";
 
 interface Props {
 	onBack: () => void;
@@ -35,7 +33,6 @@ export default function ScheduleListOverlay({
 	onOpenScheduleDetail,
 }: Props) {
 	const schedules = useScheduleStore((s) => s.schedules);
-	const deviceZone = useDeviceTimeZone();
 	const isLoading = useScheduleStore((s) => s.isLoading);
 	const error = useScheduleStore((s) => s.error);
 
@@ -83,7 +80,6 @@ export default function ScheduleListOverlay({
 								<li key={schedule.id}>
 									<ScheduleRow
 										schedule={schedule}
-										deviceZone={deviceZone}
 										onOpen={onOpenScheduleDetail}
 									/>
 								</li>
@@ -128,14 +124,13 @@ function scheduleEdgeClass(schedule: ScheduleListItem): string {
 
 function ScheduleRow({
 	schedule,
-	deviceZone,
 	onOpen,
 }: {
 	schedule: ScheduleListItem;
-	deviceZone: string;
 	onOpen: (scheduleId: string) => void;
 }) {
 	const { busy, error, toggle } = useScheduleEnabledToggle(schedule);
+	const done = useIsScheduleDone(schedule);
 	const errorId = useId();
 
 	return (
@@ -156,32 +151,43 @@ function ScheduleRow({
 						<span className="truncate">{schedule.title}</span>
 					</button>
 				</h2>
-				<span className="relative z-10 flex">
-					<Switch
-						checked={schedule.enabled}
-						onToggle={toggle}
-						busy={busy}
-						label={`Run "${schedule.title}" on schedule`}
-						describedBy={error ? errorId : undefined}
-					/>
-				</span>
+				{done ? (
+					// Text, not a control: a done one-time has nothing left to turn
+					// on, and the card's overlay still opens it (docs/schedule-ui.md §6.6).
+					<span className="flex shrink-0 items-center gap-1 text-xs text-th-text-muted">
+						<CircleCheck className="size-3.5" aria-hidden="true" />
+						Done
+					</span>
+				) : (
+					<span className="relative z-10 flex">
+						<Switch
+							checked={schedule.enabled}
+							onToggle={toggle}
+							busy={busy}
+							label={`Run "${schedule.title}" on schedule`}
+							describedBy={error ? errorId : undefined}
+						/>
+					</span>
+				)}
 			</div>
 
 			{/* The period first: it is what this schedule is, and "next" is
 			    derived from it. Clipped from the right, never wrapped. */}
 			<div className="flex items-center gap-1.5 overflow-hidden whitespace-nowrap text-xs">
 				<span className="shrink-0 text-th-text-secondary">
-					<PeriodWords cron={schedule.cron} />
-					<ZoneLabel label={periodZoneLabel(schedule.time_zone, deviceZone)} />
+					<PeriodWords schedule={schedule} />
 				</span>
-				<NextRun schedule={schedule} />
+				{/* Done is on line 1, and there is no next run to state. */}
+				{!done && <NextRun schedule={schedule} />}
 			</div>
 
 			<div className="flex items-center gap-1.5 overflow-hidden whitespace-nowrap pb-1.5 text-xs">
-				<LatestRun schedule={schedule} />
+				<LatestRun schedule={schedule} done={done} />
 			</div>
 
-			{error && (
+			{/* A refusal on a switch that is gone describes nothing, and could
+			    never clear: the value it was refused against stays put. */}
+			{error && !done && (
 				<p
 					id={errorId}
 					className="pb-1.5 text-xs break-words text-th-error"
@@ -217,7 +223,13 @@ function NextRun({ schedule }: { schedule: ScheduleListItem }) {
  * would arrive as its first two words. The label is untinted and the glyph
  * carries the tone (docs/project-ui.md §3).
  */
-function LatestRun({ schedule }: { schedule: ScheduleListItem }) {
+function LatestRun({
+	schedule,
+	done,
+}: {
+	schedule: ScheduleListItem;
+	done: boolean;
+}) {
 	const age = (iso: string): ReactNode => (
 		<>
 			<span aria-hidden="true">&middot;</span>
@@ -264,7 +276,10 @@ function LatestRun({ schedule }: { schedule: ScheduleListItem }) {
 
 	return (
 		<span className="flex items-center gap-1.5 text-th-text-muted">
-			{schedule.last_run_at ? (
+			{done && !schedule.enabled && !schedule.last_run_at ? (
+				// The user turned it off, so it is a fact, not a warning.
+				<span>Did not run: it was off</span>
+			) : schedule.last_run_at ? (
 				<>
 					<span>Latest run deleted</span>
 					{age(schedule.last_run_at)}

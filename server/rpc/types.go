@@ -1481,11 +1481,11 @@ type AgentRoleListSubscribeResult struct {
 // Schedule namespace
 
 type ScheduleCreateParams struct {
-	Title       string `json:"title"`
-	Prompt      string `json:"prompt"`
-	AgentRoleID string `json:"agent_role_id"`
-	Cron        string `json:"cron"`
-	// TimeZone is the IANA zone the cron is read in, required: the client
+	Title       string          `json:"title"`
+	Prompt      string          `json:"prompt"`
+	AgentRoleID string          `json:"agent_role_id"`
+	Period      schedule.Period `json:"period"`
+	// TimeZone is the IANA zone the period is read in, required: the client
 	// sends the zone of the device the schedule is made on.
 	TimeZone string `json:"time_zone"`
 	// Enabled defaults to true: a schedule is made to run, and one that has to
@@ -1495,17 +1495,18 @@ type ScheduleCreateParams struct {
 }
 
 // ScheduleUpdateParams follows "absent = unchanged" for every field. An empty
-// worktree moves the runs back to the main one. A new cron keeps the
-// schedule's time zone; the zone moves only when TimeZone is sent.
+// worktree moves the runs back to the main one. A period is replaced whole,
+// never merged; a new one keeps the schedule's time zone, which moves only
+// when TimeZone is sent.
 type ScheduleUpdateParams struct {
-	ID          string  `json:"id"`
-	Title       *string `json:"title,omitempty"`
-	Prompt      *string `json:"prompt,omitempty"`
-	AgentRoleID *string `json:"agent_role_id,omitempty"`
-	Cron        *string `json:"cron,omitempty"`
-	TimeZone    *string `json:"time_zone,omitempty"`
-	Enabled     *bool   `json:"enabled,omitempty"`
-	Worktree    *string `json:"worktree,omitempty"`
+	ID          string           `json:"id"`
+	Title       *string          `json:"title,omitempty"`
+	Prompt      *string          `json:"prompt,omitempty"`
+	AgentRoleID *string          `json:"agent_role_id,omitempty"`
+	Period      *schedule.Period `json:"period,omitempty"`
+	TimeZone    *string          `json:"time_zone,omitempty"`
+	Enabled     *bool            `json:"enabled,omitempty"`
+	Worktree    *string          `json:"worktree,omitempty"`
 }
 
 type ScheduleDeleteParams struct {

@@ -4,6 +4,7 @@ import {
 	instantZoneLabel,
 	periodZoneLabel,
 	sameZone,
+	zonedInstant,
 	zoneLabel,
 	zoneLine,
 	zoneName,
@@ -144,5 +145,45 @@ describe("labels", () => {
 			"Mars/Olympus_Mons",
 		);
 		expect(instantZoneLabel("Mars/Olympus_Mons", "Europe/London")).toBeNull();
+	});
+});
+
+describe("zonedInstant", () => {
+	const iso = (at: string, zone: string) => {
+		const t = zonedInstant(at, zone);
+		return t === null ? null : new Date(t).toISOString();
+	};
+
+	it("reads the wall clock in the zone, on either side of DST", () => {
+		expect(iso("2026-01-15T09:00", "Europe/London")).toBe(
+			"2026-01-15T09:00:00.000Z",
+		);
+		expect(iso("2026-07-15T09:00", "Europe/London")).toBe(
+			"2026-07-15T08:00:00.000Z",
+		);
+		expect(iso("2026-11-03T09:00", "Asia/Tokyo")).toBe(
+			"2026-11-03T00:00:00.000Z",
+		);
+	});
+
+	// The server's rule (docs/projects/api.md#schedule-periods).
+	it("runs a skipped time at the jump", () => {
+		// New York springs from 02:00 EST to 03:00 EDT on 8 March 2026.
+		expect(iso("2026-03-08T02:30", "America/New_York")).toBe(
+			"2026-03-08T07:00:00.000Z",
+		);
+	});
+
+	it("runs a repeated time at its first occurrence", () => {
+		// New York falls back from 02:00 EDT to 01:00 EST on 1 November 2026.
+		expect(iso("2026-11-01T01:30", "America/New_York")).toBe(
+			"2026-11-01T05:30:00.000Z",
+		);
+	});
+
+	it("gives nothing for a malformed time or a zone the browser does not know", () => {
+		expect(zonedInstant("2026-02-30T09:00", "UTC")).toBeNull();
+		expect(zonedInstant("2026-11-03 09:00", "UTC")).toBeNull();
+		expect(zonedInstant("2026-11-03T09:00", "Mars/Olympus_Mons")).toBeNull();
 	});
 });

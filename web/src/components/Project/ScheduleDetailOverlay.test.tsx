@@ -1,4 +1,4 @@
-import { render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAgentRoleStore } from "../../lib/agentRoleStore";
@@ -304,10 +304,14 @@ describe("ScheduleDetailOverlay", () => {
 	});
 
 	describe("the period", () => {
-		// Check 5: a spelling the presets would not write is still the stored one.
+		const weekdays = makeSchedule({
+			period: { kind: "weekly", weekdays: [1, 2, 3, 4, 5], time: "09:00" },
+		});
+
+		// Check 5.
 		it("sends nothing for a period saved untouched", async () => {
 			const user = userEvent.setup();
-			setDetail({ schedule: makeSchedule({ cron: "0 9 * * MON-FRI" }) });
+			setDetail({ schedule: weekdays });
 			renderPage();
 
 			expect(screen.getByText("Weekdays at 09:00")).toBeVisible();
@@ -318,9 +322,22 @@ describe("ScheduleDetailOverlay", () => {
 			expect(screen.getByRole("button", { name: "Edit period" })).toBeVisible();
 		});
 
-		it("sends the canonical cron once the period is edited", async () => {
+		it("sends nothing for an edit that comes back to the stored period", async () => {
 			const user = userEvent.setup();
-			setDetail({ schedule: makeSchedule({ cron: "0 9 * * MON-FRI" }) });
+			setDetail({ schedule: weekdays });
+			renderPage();
+
+			await user.click(screen.getByRole("button", { name: "Edit period" }));
+			await user.click(screen.getByRole("button", { name: "Sat" }));
+			await user.click(screen.getByRole("button", { name: "Sat" }));
+			await user.click(screen.getByRole("button", { name: "Save" }));
+
+			expect(actions.updateSchedule).not.toHaveBeenCalled();
+		});
+
+		it("sends the period, and only the period, once it is edited", async () => {
+			const user = userEvent.setup();
+			setDetail({ schedule: weekdays });
 			renderPage();
 
 			await user.click(screen.getByRole("button", { name: "Edit period" }));
@@ -329,29 +346,163 @@ describe("ScheduleDetailOverlay", () => {
 
 			expect(actions.updateSchedule).toHaveBeenCalledWith({
 				id: "sched-1",
-				cron: "0 9 * * 1,2,3,4,5,6",
+				period: {
+					kind: "weekly",
+					weekdays: [1, 2, 3, 4, 5, 6],
+					time: "09:00",
+				},
 			});
 		});
 
 		it("keeps the editor open with the server's refusal", async () => {
 			const user = userEvent.setup();
 			actions.updateSchedule.mockRejectedValue(
-				new Error('minute field "61": 61 is out of range 0-59'),
+				new Error(
+					"invalid schedule: the one-time run at 2026-10-24T09:00 (UTC) has already passed; pick a later time",
+				),
 			);
-			setDetail({ schedule: makeSchedule({ cron: "0 9 * * *" }) });
+			setDetail({ schedule: makeSchedule() });
 			renderPage();
 
 			await user.click(screen.getByRole("button", { name: "Edit period" }));
-			await user.click(screen.getByRole("button", { name: "Custom" }));
-			const text = screen.getByRole("textbox", { name: "Cron expression" });
-			await user.clear(text);
-			await user.type(text, "61 9 * * *");
+			await user.selectOptions(screen.getByLabelText("Period"), "once");
 			await user.click(screen.getByRole("button", { name: "Save" }));
 
 			expect(await screen.findByRole("alert")).toHaveTextContent(
-				"61 is out of range",
+				"has already passed",
 			);
-			expect(text).toBeVisible();
+			expect(screen.getByLabelText("On")).toBeVisible();
+		});
+
+		it("opens a kind this build does not know on Daily, and sends nothing untouched", async () => {
+			const user = userEvent.setup();
+			setDetail({
+				schedule: makeSchedule({
+					period: { kind: "yearly" } as unknown as Schedule["period"],
+				}),
+			});
+			renderPage();
+
+			expect(screen.getByText("Unsupported period")).toBeVisible();
+			await user.click(screen.getByRole("button", { name: "Edit period" }));
+			expect(screen.getByLabelText("Period")).toHaveValue("daily");
+			await user.click(screen.getByRole("button", { name: "Save" }));
+			expect(actions.updateSchedule).not.toHaveBeenCalled();
+		});
+	});
+
+	// Check 5b (docs/schedule-ui.md §6.6). NOW is Fri 23 Oct, 12:00 UTC.
+	describe("a one-time schedule", () => {
+		const realZone = deviceZone;
+		const once = (at: string, overrides: Partial<Schedule> = {}) =>
+			makeSchedule({
+				period: { kind: "once", at },
+				time_zone: "UTC",
+				next_run_at: undefined,
+				...overrides,
+			});
+
+		beforeEach(() => {
+			deviceZone = "UTC";
+		});
+		afterEach(() => {
+			deviceZone = realZone;
+		});
+
+		it("has the switch and says when it runs before its time", () => {
+			setDetail({
+				schedule: once("2026-10-24T09:00", {
+					next_run_at: "2026-10-24T09:00:00Z",
+				}),
+			});
+			renderPage();
+
+			expect(screen.getByRole("switch")).toBeChecked();
+			expect(
+				screen.getByText("On · Runs tomorrow 09:00 (in 21h)"),
+			).toBeVisible();
+			expect(screen.getByText(/^No runs yet/)).toHaveTextContent(
+				"No runs yet. It is due tomorrow 09:00.",
+			);
+			expect(screen.queryByText(/^Done/)).toBeNull();
+		});
+
+		it("is done once the server has handled its time, and can still be run", () => {
+			setDetail({ schedule: once("2026-10-23T09:00") });
+			renderPage();
+
+			expect(screen.queryByRole("switch")).toBeNull();
+			expect(screen.getByText(/^Done · Was due/)).toHaveTextContent(
+				"Done · Was due today 09:00",
+			);
+			expect(
+				screen.getByText("To run it again, set a new time under Period."),
+			).toBeVisible();
+			expect(
+				screen.getByText("No runs yet. Press Run now to make one."),
+			).toBeVisible();
+			expect(screen.getByRole("button", { name: "Run now" })).toBeEnabled();
+		});
+
+		it("turns itself on with the new time it is saved with", async () => {
+			const user = userEvent.setup();
+			setDetail({ schedule: once("2026-10-23T09:00") });
+			renderPage();
+
+			await user.click(screen.getByRole("button", { name: "Edit period" }));
+			// It opens on the time that passed rather than proposing one.
+			expect(
+				screen.getByText("That time has passed. Pick a later one."),
+			).toBeVisible();
+			const save = screen.getByRole("button", { name: "Save and turn on" });
+			expect(save).toBeDisabled();
+			fireEvent.change(screen.getByLabelText("On"), {
+				target: { value: "2026-10-24" },
+			});
+			await user.click(save);
+
+			expect(actions.updateSchedule).toHaveBeenCalledWith({
+				id: "sched-1",
+				period: { kind: "once", at: "2026-10-24T09:00" },
+				enabled: true,
+			});
+		});
+
+		it("is done when its time passed while off, and says it did not run", () => {
+			setDetail({ schedule: once("2026-10-23T09:00", { enabled: false }) });
+			renderPage();
+
+			expect(screen.queryByRole("switch")).toBeNull();
+			expect(screen.getByText(/^It was off at/)).toHaveTextContent(
+				"It was off at today 09:00, so it did not run.",
+			);
+		});
+
+		it("words a skip at its time as the run that did not happen", () => {
+			setDetail({
+				schedule: once("2026-10-23T09:00", {
+					last_run_at: "2026-10-23T08:00:00Z",
+					last_skipped_at: "2026-10-23T09:00:00Z",
+				}),
+			});
+			renderPage();
+
+			expect(screen.getByText(/^Did not run at/)).toHaveTextContent(
+				"Did not run at today 09:00: a run started earlier was still going.",
+			);
+		});
+
+		it("offers no zone switch once done, and labels when it was due", () => {
+			deviceZone = "Europe/London";
+			setDetail({
+				schedule: once("2026-10-23T09:00", { time_zone: "Asia/Tokyo" }),
+			});
+			renderPage();
+
+			expect(screen.getByText(/^Done · Was due/)).toHaveTextContent(
+				"Done · Was due today 09:00 (Tokyo)",
+			);
+			expect(screen.queryByRole("button", { name: /^Use / })).toBeNull();
 		});
 	});
 
@@ -361,7 +512,7 @@ describe("ScheduleDetailOverlay", () => {
 		const realZone = deviceZone;
 		const tokyo = (overrides: Partial<Schedule> = {}) =>
 			makeSchedule({
-				cron: "0 9 * * *",
+				period: { kind: "daily", time: "09:00" },
 				time_zone: "Asia/Tokyo",
 				next_run_at: "2026-10-24T00:00:00Z",
 				...overrides,
@@ -436,15 +587,14 @@ describe("ScheduleDetailOverlay", () => {
 			expect(screen.queryByRole("button", { name: "Use London time" })).toBe(
 				null,
 			);
-			await user.click(screen.getByRole("button", { name: "Custom" }));
-			const text = screen.getByRole("textbox", { name: "Cron expression" });
-			await user.clear(text);
-			await user.type(text, "30 9 * * *");
+			fireEvent.change(screen.getByLabelText("At"), {
+				target: { value: "09:30" },
+			});
 			await user.click(screen.getByRole("button", { name: "Save" }));
 
 			expect(actions.updateSchedule).toHaveBeenCalledWith({
 				id: "sched-1",
-				cron: "30 9 * * *",
+				period: { kind: "daily", time: "09:30" },
 			});
 		});
 
@@ -749,10 +899,10 @@ describe("ScheduleDetailOverlay, more of the page", () => {
 	it("holds the period still while it saves", async () => {
 		const user = userEvent.setup();
 		actions.updateSchedule.mockReturnValue(new Promise(() => {}));
-		setDetail({ schedule: makeSchedule({ cron: "0 9 * * *" }) });
+		setDetail({ schedule: makeSchedule() });
 		renderPage();
 		await user.click(screen.getByRole("button", { name: "Edit period" }));
-		await user.click(screen.getByRole("button", { name: "Weekly" }));
+		await user.selectOptions(screen.getByLabelText("Period"), "weekly");
 		await user.click(screen.getByRole("button", { name: "Save" }));
 		expect(screen.getByRole("button", { name: "Mon" })).toBeDisabled();
 	});

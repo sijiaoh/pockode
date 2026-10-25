@@ -147,3 +147,109 @@ export function periodZoneLabel(
 ): string | null {
 	return sameZone(scheduleZone, deviceZone) ? null : zoneLabel(scheduleZone);
 }
+
+export interface WallClock {
+	year: number;
+	/** 0-based, as `Date`'s. */
+	month: number;
+	day: number;
+	hour: number;
+	minute: number;
+}
+
+const WALL_CLOCK: Intl.DateTimeFormatOptions = {
+	year: "numeric",
+	month: "numeric",
+	day: "numeric",
+	hour: "numeric",
+	minute: "numeric",
+	hourCycle: "h23",
+};
+
+/**
+ * `date` on the wall clock of `timeZone` — the device's when absent, or when
+ * the browser does not know the zone (docs/schedule-ui.md §11).
+ */
+export function wallClock(date: Date, timeZone: string | undefined): WallClock {
+	// Built per call, never cached: a format made without a zone keeps the
+	// device's zone of that moment, and a traveller's device moves.
+	let format: Intl.DateTimeFormat;
+	try {
+		format = new Intl.DateTimeFormat("en-US", { ...WALL_CLOCK, timeZone });
+	} catch {
+		format = new Intl.DateTimeFormat("en-US", WALL_CLOCK);
+	}
+	const parts = Object.fromEntries(
+		format.formatToParts(date).map((part) => [part.type, part.value]),
+	);
+	return {
+		year: Number(parts.year),
+		month: Number(parts.month) - 1,
+		day: Number(parts.day),
+		hour: Number(parts.hour),
+		minute: Number(parts.minute),
+	};
+}
+
+/** A one-time period's `YYYY-MM-DDTHH:MM`, or `null` when it is not one. */
+export function parseWallClock(at: string): WallClock | null {
+	const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/.exec(at);
+	if (!match) return null;
+	const [year, month, day, hour, minute] = match.slice(1).map(Number);
+	const wall = { year, month: month - 1, day, hour, minute };
+	// `Date.UTC` rolls 31 February over into March; a real date survives it.
+	const back = new Date(Date.UTC(year, month - 1, day, hour, minute));
+	return back.getUTCFullYear() === year &&
+		back.getUTCMonth() === month - 1 &&
+		back.getUTCDate() === day &&
+		hour <= 23 &&
+		minute <= 59
+		? wall
+		: null;
+}
+
+const HOUR_MS = 60 * 60 * 1000;
+
+/**
+ * The instant (epoch milliseconds) a wall-clock `YYYY-MM-DDTHH:MM` names in
+ * `timeZone`, by the server's rule for a DST change: a time the clocks skip is
+ * the moment they jump, a time they repeat is its first occurrence
+ * (docs/projects/api.md#schedule-periods). `null` for a malformed `at` or a
+ * zone the browser does not know.
+ */
+export function zonedInstant(at: string, timeZone: string): number | null {
+	const wall = parseWallClock(at);
+	if (!wall || !isKnownZone(timeZone)) return null;
+	const asUtc = Date.UTC(
+		wall.year,
+		wall.month,
+		wall.day,
+		wall.hour,
+		wall.minute,
+	);
+	const offsetAt = (t: number) =>
+		(zoneOffsetSeconds(timeZone, new Date(t)) ?? 0) * 1000;
+
+	// No zone moves its clocks by a day, so the offsets a day either side are
+	// every offset that can be in effect at this wall clock.
+	const offsets = new Set([
+		offsetAt(asUtc - 24 * HOUR_MS),
+		offsetAt(asUtc),
+		offsetAt(asUtc + 24 * HOUR_MS),
+	]);
+	const instants = [...offsets]
+		.map((offset) => asUtc - offset)
+		.filter((t) => asUtc - t === offsetAt(t));
+	if (instants.length > 0) return Math.min(...instants);
+
+	// Skipped: the jump lies between the instants the two offsets give.
+	let lo = asUtc - Math.max(...offsets);
+	let hi = asUtc - Math.min(...offsets);
+	const before = offsetAt(lo);
+	while (hi - lo > 1000) {
+		const mid = lo + Math.floor((hi - lo) / 2000) * 1000;
+		if (offsetAt(mid) === before) lo = mid;
+		else hi = mid;
+	}
+	return hi;
+}

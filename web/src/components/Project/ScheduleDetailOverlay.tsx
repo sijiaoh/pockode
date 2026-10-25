@@ -1,28 +1,43 @@
 import { ConfirmDialog } from "@pockode/shared";
-import { AlertCircle, Loader2, Pencil, Play, Trash2 } from "lucide-react";
+import {
+	AlertCircle,
+	CircleCheck,
+	Loader2,
+	Pencil,
+	Play,
+	Trash2,
+} from "lucide-react";
 import { type ReactNode, useCallback, useId, useMemo, useState } from "react";
 import TextareaAutosize from "react-textarea-autosize";
 import { useDeviceTimeZone } from "../../hooks/useDeviceTimeZone";
 import { useInlineEdit } from "../../hooks/useInlineEdit";
+import { useIsScheduleDone } from "../../hooks/useIsScheduleDone";
 import { useRoleNameMap } from "../../hooks/useRoleNameMap";
 import { useScheduleDetailSubscription } from "../../hooks/useScheduleDetailSubscription";
 import { useScheduleEnabledToggle } from "../../hooks/useScheduleEnabledToggle";
 import { useWorktreeList } from "../../hooks/useWorktreeList";
 import { useAgentRoleStore } from "../../lib/agentRoleStore";
 import { roleAcceptsWorkType, WORK_TYPE_PLURAL } from "../../lib/roleWorkType";
-import { describePeriod } from "../../lib/schedulePeriod";
+import {
+	describePeriod,
+	formatClock,
+	formatDayDate,
+	samePeriod,
+} from "../../lib/schedulePeriod";
 import { useScheduleStore } from "../../lib/scheduleStore";
 import {
 	instantZoneLabel,
 	isKnownZone,
+	parseWallClock,
 	sameZone,
+	zonedInstant,
 	zoneLabel,
 	zoneLine,
 	zoneName,
 } from "../../lib/scheduleZone";
 import { useIsGitRepo } from "../../lib/worktreeStore";
 import { useWSStore } from "../../lib/wsStore";
-import type { Schedule, ScheduleRunItem } from "../../types/schedule";
+import type { Period, Schedule, ScheduleRunItem } from "../../types/schedule";
 import { formatNextRun, formatRelativeFuture } from "../../utils/relativeTime";
 import PageHeader from "../Layout/PageHeader";
 import { MarkdownContent } from "../ui";
@@ -77,6 +92,7 @@ function ScheduleDetailPage({
 }: Props) {
 	const detail = useScheduleDetailSubscription(scheduleId);
 	const { schedule, loading, error } = detail;
+	const done = useIsScheduleDone(schedule);
 
 	// The detail subscription sends nothing on delete, so a deletion reaches an
 	// open page through the list (docs/schedule-ui.md §4.4). Only a loaded list
@@ -111,15 +127,21 @@ function ScheduleDetailPage({
 				<div className="mx-auto max-w-2xl space-y-5 px-4 py-4">
 					<div>
 						<ScheduleTitle schedule={schedule} />
-						<EnabledLine schedule={schedule} />
+						{done ? (
+							<DoneLine schedule={schedule} />
+						) : (
+							<EnabledLine schedule={schedule} />
+						)}
 						<Notice
 							schedule={schedule}
+							done={done}
 							runs={detail.runs}
 							onOpenWorkDetail={onOpenWorkDetail}
 						/>
 					</div>
 					<RunsSection
 						schedule={schedule}
+						done={done}
 						runs={detail.runs}
 						hasMoreRuns={detail.hasMoreRuns}
 						loadMore={detail.loadMore}
@@ -129,7 +151,7 @@ function ScheduleDetailPage({
 						onNavigateToSession={onNavigateToSession}
 					/>
 					<PromptSection schedule={schedule} />
-					<PeriodSection schedule={schedule} />
+					<PeriodSection schedule={schedule} done={done} />
 					<RoleSection schedule={schedule} />
 					<WorktreeSection schedule={schedule} />
 					<DeleteSection schedule={schedule} onDeleted={onBack} />
@@ -181,6 +203,37 @@ function ScheduleInstant({
 	);
 }
 
+/**
+ * A one-time's own time, drawn as its instants are. A done schedule has no
+ * `next_run_at` to draw, so this is the period's `at`; in a zone the browser
+ * cannot convert, the wall clock as stored with the raw zone, since it is the
+ * schedule's time as written (docs/schedule-ui.md §6.6).
+ */
+function OnceAt({ at, schedule }: { at: string; schedule: Schedule }) {
+	const instant = zonedInstant(at, schedule.time_zone);
+	if (instant !== null) {
+		return (
+			<ScheduleInstant
+				iso={new Date(instant).toISOString()}
+				schedule={schedule}
+			/>
+		);
+	}
+	const wall = parseWallClock(at);
+	return (
+		<>
+			{wall
+				? `${formatDayDate(wall)} ${formatClock(wall.hour, wall.minute)}`
+				: at}
+			<ZoneLabel label={schedule.time_zone} />
+		</>
+	);
+}
+
+/** The one-time `at`, for a schedule the caller knows is a one-time. */
+const onceAt = (schedule: Schedule) =>
+	schedule.period.kind === "once" ? schedule.period.at : "";
+
 function useUpdateSchedule() {
 	return useWSStore((s) => s.actions.updateSchedule);
 }
@@ -207,19 +260,21 @@ function EnabledLine({ schedule }: { schedule: Schedule }) {
 	const deviceZone = useDeviceTimeZone();
 
 	const next = schedule.next_run_at;
+	// A one-time has no run after this one to make it the "next".
+	const nextLabel = schedule.period.kind === "once" ? "Runs" : "Next run";
 	let state: ReactNode;
 	if (!schedule.enabled) {
 		state = "Off · Runs only when you press Run now";
 	} else if (!next) {
 		state = "On";
 	} else if (instantZoneLabel(schedule.time_zone, deviceZone) === null) {
-		state = `On · Next run ${formatNextRun(next, undefined, schedule.time_zone)} (${formatRelativeFuture(next)})`;
+		state = `On · ${nextLabel} ${formatNextRun(next, undefined, schedule.time_zone)} (${formatRelativeFuture(next)})`;
 	} else {
 		// The zone label takes the brackets, so the relative half leaves them:
 		// one pair on the line (docs/schedule-ui.md §6.5).
 		state = (
 			<>
-				On · Next run <ScheduleInstant iso={next} schedule={schedule} /> ·{" "}
+				On · {nextLabel} <ScheduleInstant iso={next} schedule={schedule} /> ·{" "}
 				{formatRelativeFuture(next)}
 			</>
 		);
@@ -247,16 +302,42 @@ function EnabledLine({ schedule }: { schedule: Schedule }) {
 }
 
 /**
+ * What a done one-time says in place of the switch line: when it was due —
+ * true whether it ran, failed, was skipped or was off — and how to run it
+ * again (docs/schedule-ui.md §6.6).
+ */
+function DoneLine({ schedule }: { schedule: Schedule }) {
+	return (
+		<div className="mt-1">
+			<p className="flex min-h-[44px] items-center gap-1.5 text-sm text-th-text-secondary">
+				<CircleCheck
+					className="size-4 shrink-0 text-th-text-muted"
+					aria-hidden="true"
+				/>
+				<span className="min-w-0">
+					Done · Was due <OnceAt at={onceAt(schedule)} schedule={schedule} />
+				</span>
+			</p>
+			<p className="text-xs text-th-text-muted">
+				To run it again, set a new time under Period.
+			</p>
+		</div>
+	);
+}
+
+/**
  * At most one line about the schedule's state, in order of precedence: a run
  * that could not be made or started, a run going now, a firing skipped
  * (docs/schedule-ui.md §4.1).
  */
 function Notice({
 	schedule,
+	done,
 	runs,
 	onOpenWorkDetail,
 }: {
 	schedule: Schedule;
+	done: boolean;
 	runs: ScheduleRunItem[];
 	onOpenWorkDetail: (workId: string) => void;
 }) {
@@ -313,10 +394,24 @@ function Notice({
 		(!schedule.last_run_at ||
 			Date.parse(skipped) > Date.parse(schedule.last_run_at))
 	) {
-		return (
+		return done ? (
+			<p className="mt-2 text-xs text-th-text-muted">
+				Did not run at <ScheduleInstant iso={skipped} schedule={schedule} />: a
+				run started earlier was still going.
+			</p>
+		) : (
 			<p className="mt-2 text-xs text-th-text-muted">
 				Skipped the run at <ScheduleInstant iso={skipped} schedule={schedule} />
 				: the previous one was still going.
+			</p>
+		);
+	}
+
+	if (done && !schedule.enabled) {
+		return (
+			<p className="mt-2 text-xs text-th-text-muted">
+				It was off at <OnceAt at={onceAt(schedule)} schedule={schedule} />, so
+				it did not run.
 			</p>
 		);
 	}
@@ -328,12 +423,12 @@ function Notice({
  * Runs once made and since deleted are not "no runs yet": `last_run_at` says
  * one was made (the list row's `Latest run deleted`, docs/schedule-ui.md §11).
  */
-function emptyRunsText(schedule: Schedule): ReactNode {
+function emptyRunsText(schedule: Schedule, done: boolean): ReactNode {
 	if (schedule.last_run_at) return "Its runs have been deleted.";
-	return schedule.enabled && schedule.next_run_at ? (
+	return !done && schedule.enabled && schedule.next_run_at ? (
 		<>
-			No runs yet. The first is due{" "}
-			<ScheduleInstant iso={schedule.next_run_at} schedule={schedule} />.
+			No runs yet. {schedule.period.kind === "once" ? "It is" : "The first is"}{" "}
+			due <ScheduleInstant iso={schedule.next_run_at} schedule={schedule} />.
 		</>
 	) : (
 		"No runs yet. Press Run now to make one."
@@ -347,6 +442,7 @@ function emptyRunsText(schedule: Schedule): ReactNode {
  */
 function RunsSection({
 	schedule,
+	done,
 	runs,
 	hasMoreRuns,
 	loadMore,
@@ -356,6 +452,7 @@ function RunsSection({
 	onNavigateToSession,
 }: {
 	schedule: Schedule;
+	done: boolean;
 	runs: ScheduleRunItem[];
 	hasMoreRuns: boolean;
 	loadMore: () => Promise<void>;
@@ -384,7 +481,7 @@ function RunsSection({
 			</div>
 			{runs.length === 0 ? (
 				<p className="py-2 text-sm text-th-text-muted">
-					{emptyRunsText(schedule)}
+					{emptyRunsText(schedule, done)}
 				</p>
 			) : (
 				<div className="space-y-2">
@@ -521,11 +618,13 @@ function SaveCancel({
 	onCancel,
 	saving,
 	canSave,
+	saveLabel = "Save",
 }: {
 	onSave: () => void;
 	onCancel: () => void;
 	saving: boolean;
 	canSave: boolean;
+	saveLabel?: string;
 }) {
 	return (
 		<div className="mt-2 flex items-center gap-2">
@@ -535,7 +634,7 @@ function SaveCancel({
 				disabled={saving || !canSave}
 				className="min-h-[44px] rounded-lg bg-th-accent px-4 text-sm font-medium text-th-accent-text disabled:opacity-50"
 			>
-				{saving ? "Saving..." : "Save"}
+				{saving ? "Saving..." : saveLabel}
 			</button>
 			<button
 				type="button"
@@ -551,18 +650,26 @@ function SaveCancel({
 
 /**
  * The period in words, in the schedule's zone, and the one editor for it. Save
- * sends `cron` only when the field wrote something other than what is stored:
- * a period opened and saved untouched sends nothing, whatever spelling it is
- * stored in (docs/schedule-ui.md §6.1). It never sends `time_zone`, so an edit
- * made while travelling keeps the schedule where it was.
+ * sends `period` only when the field wrote something other than what is
+ * stored: a period opened and saved untouched sends nothing
+ * (docs/schedule-ui.md §6.1). It never sends `time_zone`, so an edit made
+ * while travelling keeps the schedule where it was. On a done one-time it also
+ * turns the schedule on: a new time for a finished one-time is meant to run
+ * (§6.6); on any other schedule `enabled` is left alone.
  */
-function PeriodSection({ schedule }: { schedule: Schedule }) {
+function PeriodSection({
+	schedule,
+	done,
+}: {
+	schedule: Schedule;
+	done: boolean;
+}) {
 	const deviceZone = useDeviceTimeZone();
 	const zonesDiffer = !sameZone(schedule.time_zone, deviceZone);
 	const updateSchedule = useUpdateSchedule();
 	const [editing, setEditing] = useState(false);
 	// `undefined` until the field reports an edit; `null` while it spells nothing.
-	const [draft, setDraft] = useState<string | null | undefined>(undefined);
+	const [draft, setDraft] = useState<Period | null | undefined>(undefined);
 	const [saving, setSaving] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 
@@ -574,21 +681,25 @@ function PeriodSection({ schedule }: { schedule: Schedule }) {
 
 	const save = useCallback(async () => {
 		if (draft === null) return;
-		if (draft === undefined || draft === schedule.cron) {
+		if (draft === undefined || samePeriod(draft, schedule.period)) {
 			close();
 			return;
 		}
 		setError(null);
 		setSaving(true);
 		try {
-			await updateSchedule({ id: schedule.id, cron: draft });
+			await updateSchedule({
+				id: schedule.id,
+				period: draft,
+				...(done ? { enabled: true } : {}),
+			});
 			close();
 		} catch (err) {
 			setError(err instanceof Error ? err.message : "Failed to save");
 		} finally {
 			setSaving(false);
 		}
-	}, [draft, schedule.cron, schedule.id, updateSchedule, close]);
+	}, [draft, schedule.period, schedule.id, done, updateSchedule, close]);
 
 	return (
 		<div>
@@ -616,7 +727,7 @@ function PeriodSection({ schedule }: { schedule: Schedule }) {
 					    an edit made during the request without a word. */}
 					<fieldset disabled={saving} className="min-w-0">
 						<PeriodField
-							initial={schedule.cron}
+							initial={schedule.period}
 							onChange={setDraft}
 							timeZone={schedule.time_zone}
 						/>
@@ -625,7 +736,10 @@ function PeriodSection({ schedule }: { schedule: Schedule }) {
 						onSave={save}
 						onCancel={close}
 						saving={saving}
-						canSave={draft !== null}
+						// A done one-time opens on the time that passed: there is
+						// nothing to save until the user picks another (§6.6).
+						canSave={draft !== null && !(done && draft === undefined)}
+						saveLabel={done ? "Save and turn on" : "Save"}
 					/>
 					{error && (
 						<p className="mt-1 break-words text-xs text-th-error" role="alert">
@@ -636,7 +750,7 @@ function PeriodSection({ schedule }: { schedule: Schedule }) {
 			) : (
 				<>
 					<p className="text-sm text-th-text-primary">
-						<PeriodWords cron={schedule.cron} />
+						<PeriodWords schedule={schedule} withZone={false} />
 					</p>
 					{/* The label is not appended to the words here: the zone line
 					    under them says it at length. */}
@@ -647,7 +761,8 @@ function PeriodSection({ schedule }: { schedule: Schedule }) {
 							</p>
 							{/* A device that reports no real zone (`Etc/Unknown`) has
 							    none to offer: the server would only refuse it. */}
-							{isKnownZone(deviceZone) && (
+							{/* Nothing more will run in either zone once it is done. */}
+							{isKnownZone(deviceZone) && !done && (
 								<UseDeviceZoneButton
 									schedule={schedule}
 									deviceZone={deviceZone}
@@ -662,7 +777,7 @@ function PeriodSection({ schedule }: { schedule: Schedule }) {
 }
 
 /**
- * Moves the schedule to the device's zone, the cron as stored: `09:00` is then
+ * Moves the schedule to the device's zone, the period as stored: `09:00` is then
  * read on this device's clock. It confirms because nothing here can undo it —
  * there is no zone picker, so only a device in the old zone can switch back.
  * The button goes when the notification brings the new zone, not on the
@@ -699,7 +814,7 @@ function UseDeviceZoneButton({
 			{confirming && (
 				<ConfirmDialog
 					title={`Run on ${deviceCity} time?`}
-					message={`"${describePeriod(schedule.cron)}" will run on ${zoneName(deviceZone)} instead of ${zoneName(schedule.time_zone)}. Only a device on ${scheduleCity} time can switch it back.`}
+					message={`"${describePeriod(schedule.period, schedule.time_zone)}" will run on ${zoneName(deviceZone)} instead of ${zoneName(schedule.time_zone)}. Only a device on ${scheduleCity} time can switch it back.`}
 					confirmLabel={action}
 					onConfirm={handleConfirm}
 					onCancel={() => setConfirming(false)}

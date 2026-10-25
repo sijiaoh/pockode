@@ -3,6 +3,7 @@ package ws
 import (
 	"context"
 	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -38,8 +39,8 @@ func createSchedule(t *testing.T, env *testEnv, params rpc.ScheduleCreateParams)
 	if params.AgentRoleID == "" {
 		params.AgentRoleID = env.testRoleID
 	}
-	if params.Cron == "" {
-		params.Cron = "0 3 * * *"
+	if params.Period.Kind == "" {
+		params.Period = schedule.Period{Kind: schedule.PeriodDaily, Time: "03:00"}
 	}
 	if params.TimeZone == "" {
 		params.TimeZone = "Asia/Tokyo"
@@ -129,12 +130,9 @@ func runSchedule(t *testing.T, env *testEnv, scheduleID string) rpc.WorkDetailIt
 func TestHandler_ScheduleCreate_EnabledByDefault(t *testing.T) {
 	env := newTestEnv(t, &mockAgent{})
 
-	sched := createSchedule(t, env, rpc.ScheduleCreateParams{Cron: " 0 3 * * * "})
+	sched := createSchedule(t, env, rpc.ScheduleCreateParams{})
 	if !sched.Enabled || sched.NextRunAt == nil {
 		t.Errorf("enabled = %v, next_run_at = %v; want an enabled schedule with its next firing", sched.Enabled, sched.NextRunAt)
-	}
-	if sched.Cron != "0 3 * * *" {
-		t.Errorf("cron = %q, want it trimmed", sched.Cron)
 	}
 
 	disabled := false
@@ -153,6 +151,29 @@ func TestHandler_ScheduleCreate_EnabledByDefault(t *testing.T) {
 	}
 	if len(list.Items) != 2 || list.Items[0].ID != sched.ID || list.Items[1].ID != off.ID {
 		t.Errorf("list = %+v, want both schedules", list.Items)
+	}
+}
+
+// The period travels as an object in its canonical spelling: a period sent in
+// another is stored and answered the one way the client reads back.
+func TestHandler_ScheduleCreate_PeriodOnTheWire(t *testing.T) {
+	env := newTestEnv(t, &mockAgent{})
+
+	resp := env.call("schedule.create", map[string]any{
+		"title": "Standup notes", "prompt": "Collect notes.", "agent_role_id": env.testRoleID, "time_zone": "UTC",
+		"period": map[string]any{"kind": "weekly", "weekdays": []int{5, 1, 3, 1}, "time": "9:00"},
+	})
+	if resp.Error != nil {
+		t.Fatalf("schedule.create: %s", resp.Error.Message)
+	}
+	var got struct {
+		Period json.RawMessage `json:"period"`
+	}
+	if err := json.Unmarshal(resp.Result, &got); err != nil {
+		t.Fatal(err)
+	}
+	if want := `{"kind":"weekly","time":"09:00","weekdays":[1,3,5]}`; string(got.Period) != want {
+		t.Errorf("period = %s, want %s", got.Period, want)
 	}
 }
 
@@ -179,13 +200,13 @@ func TestHandler_ScheduleUpdate_TimeZone(t *testing.T) {
 		return got
 	}
 
-	cron := "30 7 * * *"
-	if got := update(rpc.ScheduleUpdateParams{Cron: &cron}); got.TimeZone != "Asia/Tokyo" {
-		t.Errorf("time_zone after a new cron = %q, want it kept", got.TimeZone)
+	period := schedule.Period{Kind: schedule.PeriodDaily, Time: "07:30"}
+	if got := update(rpc.ScheduleUpdateParams{Period: &period}); got.TimeZone != "Asia/Tokyo" {
+		t.Errorf("time_zone after a new period = %q, want it kept", got.TimeZone)
 	}
 	zone := "America/New_York"
-	if got := update(rpc.ScheduleUpdateParams{TimeZone: &zone}); got.TimeZone != zone || got.Cron != cron {
-		t.Errorf("after switching zone: time_zone %q, cron %q; want %s, %s", got.TimeZone, got.Cron, zone, cron)
+	if got := update(rpc.ScheduleUpdateParams{TimeZone: &zone}); got.TimeZone != zone || got.Period.Time != "07:30" {
+		t.Errorf("after switching zone: time_zone %q, period %+v; want %s, %+v", got.TimeZone, got.Period, zone, period)
 	}
 }
 
@@ -201,7 +222,9 @@ func TestHandler_Schedule_UserErrors(t *testing.T) {
 		t.Fatalf("create story role: %v", err)
 	}
 	sched := createSchedule(t, env, rpc.ScheduleCreateParams{})
-	badCron := "61 * * * *"
+	badPeriod := schedule.Period{Kind: schedule.PeriodHourly, Minute: 61}
+	daily := schedule.Period{Kind: schedule.PeriodDaily, Time: "09:00"}
+	past := schedule.Period{Kind: schedule.PeriodOnce, At: "2020-01-01T09:00"}
 	missingWorktree := "nope"
 	unknownZone := "Mars/Olympus_Mons"
 
@@ -211,19 +234,20 @@ func TestHandler_Schedule_UserErrors(t *testing.T) {
 		params any
 		want   string
 	}{
-		{"unparsable cron", "schedule.create", rpc.ScheduleCreateParams{Title: "x", Prompt: "y", AgentRoleID: env.testRoleID, Cron: badCron, TimeZone: "UTC"}, "61 is out of range"},
-		{"missing prompt", "schedule.create", rpc.ScheduleCreateParams{Title: "x", AgentRoleID: env.testRoleID, Cron: "* * * * *", TimeZone: "UTC"}, "prompt"},
-		{"role that takes no jobs", "schedule.create", rpc.ScheduleCreateParams{Title: "x", Prompt: "y", AgentRoleID: storyRole.ID, Cron: "* * * * *", TimeZone: "UTC"}, "job"},
-		{"missing time zone", "schedule.create", rpc.ScheduleCreateParams{Title: "x", Prompt: "y", AgentRoleID: env.testRoleID, Cron: "* * * * *"}, "time_zone is required"},
-		{"unknown time zone", "schedule.create", rpc.ScheduleCreateParams{Title: "x", Prompt: "y", AgentRoleID: env.testRoleID, Cron: "* * * * *", TimeZone: unknownZone}, "unknown time zone"},
+		{"malformed period", "schedule.create", rpc.ScheduleCreateParams{Title: "x", Prompt: "y", AgentRoleID: env.testRoleID, Period: badPeriod, TimeZone: "UTC"}, "minute 61 is out of range 0-59"},
+		{"missing prompt", "schedule.create", rpc.ScheduleCreateParams{Title: "x", AgentRoleID: env.testRoleID, Period: daily, TimeZone: "UTC"}, "prompt"},
+		{"role that takes no jobs", "schedule.create", rpc.ScheduleCreateParams{Title: "x", Prompt: "y", AgentRoleID: storyRole.ID, Period: daily, TimeZone: "UTC"}, "job"},
+		{"missing time zone", "schedule.create", rpc.ScheduleCreateParams{Title: "x", Prompt: "y", AgentRoleID: env.testRoleID, Period: daily}, "time_zone is required"},
+		{"unknown time zone", "schedule.create", rpc.ScheduleCreateParams{Title: "x", Prompt: "y", AgentRoleID: env.testRoleID, Period: daily, TimeZone: unknownZone}, "unknown time zone"},
 		{"update to an unknown time zone", "schedule.update", rpc.ScheduleUpdateParams{ID: sched.ID, TimeZone: &unknownZone}, "unknown time zone"},
-		{"update to an unparsable cron", "schedule.update", rpc.ScheduleUpdateParams{ID: sched.ID, Cron: &badCron}, "61 is out of range"},
+		{"update to a malformed period", "schedule.update", rpc.ScheduleUpdateParams{ID: sched.ID, Period: &badPeriod}, "minute 61 is out of range 0-59"},
+		{"one-time run in the past", "schedule.create", rpc.ScheduleCreateParams{Title: "x", Prompt: "y", AgentRoleID: env.testRoleID, Period: past, TimeZone: "UTC"}, "has already passed"},
 		{"update of an unknown schedule", "schedule.update", rpc.ScheduleUpdateParams{ID: "nope"}, "schedule not found"},
 		{"delete of an unknown schedule", "schedule.delete", rpc.ScheduleDeleteParams{ID: "nope"}, "schedule not found"},
 		{"run of an unknown schedule", "schedule.run", rpc.ScheduleRunParams{ID: "nope"}, "schedule not found"},
 		{"detail of an unknown schedule", "schedule.detail.subscribe", rpc.ScheduleDetailSubscribeParams{ID: env.nextSubID(), ScheduleID: "nope"}, "schedule not found"},
 		{"detail without a schedule", "schedule.detail.subscribe", rpc.ScheduleDetailSubscribeParams{ID: env.nextSubID()}, "schedule_id is required"},
-		{"worktree that does not exist", "schedule.create", rpc.ScheduleCreateParams{Title: "x", Prompt: "y", AgentRoleID: env.testRoleID, Cron: "* * * * *", TimeZone: "UTC", Worktree: "nope"}, "worktree \"nope\""},
+		{"worktree that does not exist", "schedule.create", rpc.ScheduleCreateParams{Title: "x", Prompt: "y", AgentRoleID: env.testRoleID, Period: daily, TimeZone: "UTC", Worktree: "nope"}, "worktree \"nope\""},
 		{"update to a worktree that does not exist", "schedule.update", rpc.ScheduleUpdateParams{ID: sched.ID, Worktree: &missingWorktree}, "worktree \"nope\""},
 		{"runs of no subscription", "schedule.detail.runs", rpc.ScheduleDetailRunsParams{ID: "nope"}, "no such subscription"},
 	} {
@@ -243,8 +267,8 @@ func TestHandler_Schedule_UserErrors(t *testing.T) {
 
 	// A refused update changes nothing.
 	got, _, _ := env.scheduleStore.Get(sched.ID)
-	if got.Cron != sched.Cron {
-		t.Errorf("cron = %q after a refused update, want %q", got.Cron, sched.Cron)
+	if !reflect.DeepEqual(got.Period, sched.Period) {
+		t.Errorf("period = %+v after a refused update, want %+v", got.Period, sched.Period)
 	}
 }
 

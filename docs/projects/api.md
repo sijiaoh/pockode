@@ -109,7 +109,7 @@ nothing left to tell the two apart ([frontend.md](frontend.md#workdetailoverlay)
 | Method | Params | Result | Description |
 |--------|--------|--------|-------------|
 | `schedule.create` | `ScheduleCreateParams` | `Schedule` | Create a schedule; `enabled` absent = `true`; `time_zone` required ([Schedule Time Zones](#schedule-time-zones)) |
-| `schedule.update` | `ScheduleUpdateParams` | `{}` | Update settings (pointer semantics); `next_run_at` is recomputed when `cron`, `time_zone` or `enabled` changes |
+| `schedule.update` | `ScheduleUpdateParams` | `{}` | Update settings (pointer semantics; a `period` is replaced whole); `next_run_at` is recomputed when `period`, `time_zone` or `enabled` changes |
 | `schedule.delete` | `{id}` | `{}` | Delete the schedule alone; its runs stay |
 | `schedule.run` | `{id}` | `WorkDetailItem` | Make and start a run now, enabled or not; the started job, as `work.start` replies |
 | `schedule.list.subscribe` | `SubscribeParams` | `{items: ScheduleListItem[]}` | Subscribe + every schedule, run bookkeeping included, each with the row of its latest run |
@@ -119,9 +119,10 @@ nothing left to tell the two apart ([frontend.md](frontend.md#workdetailoverlay)
 | `schedule.detail.unsubscribe` | `{id}` | `{}` | Unsubscribe |
 
 Every refusal the user can act on is `InvalidParams` with a message that says
-what to fix: `schedule not found`; `invalid schedule: …` for a missing field, an
-unparsable cron (`invalid schedule: cron expression "61 * * * *": minute field
-"61": 61 is out of range 0-59`), a zone that is not an IANA name
+what to fix: `schedule not found`; `invalid schedule: …` for a missing field, a
+malformed period (`invalid schedule: period: minute 61 is out of range 0-59`),
+a one-time run whose time has passed ([Schedule Periods](#schedule-periods)),
+a zone that is not an IANA name
 ([Schedule Time Zones](#schedule-time-zones)) or a role that does not take jobs;
 `schedule.run` — and `work.start` or `work.reopen` on one of its runs — while
 another run is still active (`previous run is still active: run <work-id> of
@@ -158,9 +159,14 @@ AgentRoleCreateParams   { name, role_prompt, steps?, work_type? }
 AgentRoleUpdateParams   { id, name?, role_prompt?, steps?, agent_type?, model?, effort?, work_type? }   // work_type "" clears the restriction
 AgentRoleDeleteParams   { id }
 
-Schedule                      { id, title, prompt, agent_role_id, cron, time_zone, enabled, worktree?, next_run_at?, last_run_at?, last_run_work_id?, last_skipped_at?, last_failure?: {at, work_id?, error}, created_at, updated_at }
-ScheduleCreateParams          { title, prompt, agent_role_id, cron, time_zone, enabled?, worktree? }
-ScheduleUpdateParams          { id, title?, prompt?, agent_role_id?, cron?, time_zone?, enabled?, worktree? }   // worktree "" = main
+Schedule                      { id, title, prompt, agent_role_id, period: Period, time_zone, enabled, worktree?, next_run_at?, last_run_at?, last_run_work_id?, last_skipped_at?, last_failure?: {at, work_id?, error}, created_at, updated_at }
+ScheduleCreateParams          { title, prompt, agent_role_id, period: Period, time_zone, enabled?, worktree? }
+ScheduleUpdateParams          { id, title?, prompt?, agent_role_id?, period?: Period, time_zone?, enabled?, worktree? }   // worktree "" = main
+Period                        { kind: "once", at: "YYYY-MM-DDTHH:MM" }
+                            | { kind: "hourly", every?: 1|2|3|4|6|8|12, minute?: 0-59 }   // absent = 1, 0
+                            | { kind: "daily", time: "HH:MM" }
+                            | { kind: "weekly", weekdays: (0-6)[], time: "HH:MM" }      // 0 = Sunday
+                            | { kind: "monthly", day: 1-31, time: "HH:MM" }
 ScheduleDetailSubscribeParams { id, schedule_id }
 ScheduleDetailRunsParams      { id, cursor?, limit? }   // id names the detail subscription
 ScheduleRunPage               { items: ScheduleRunItem[], next_cursor?, has_more? }
@@ -177,15 +183,45 @@ schedule's row draws the run's activity, status and questions, and no other
 subscription a client holds carries a job's row — the work list leaves jobs
 out.
 
+### Schedule Periods
+
+A period is one of a closed set of shapes (`Period` above); there is no rule
+language, and a rule outside the set is unsupported until someone needs it.
+Every time in it is a wall-clock reading in the schedule's `time_zone`.
+
+- **One spelling per period.** A field that does not belong to the kind is
+  refused (`period: weekdays does not apply to daily periods`). What is
+  accepted is stored canonically and answered that way: times get two digits,
+  `weekdays` ascend without repeats, a weekly period with all seven days is
+  `daily`, an hourly one carries its `every`.
+- **`hourly`** fires at `minute` past every `every`-th hour counted from
+  midnight — only divisors of 24 are offered, so the spacing holds across
+  midnight. **`monthly`** fires on `day`, or on the last day of a month that
+  has fewer days, so `day: 31` is "the last day of every month".
+- **`once`** fires once, at `at`, which must be in the future whenever it is
+  saved: on create, on any change of `period` or `time_zone`, and when the
+  schedule is switched back on
+  (`invalid schedule: the one-time run at 2026-01-01T09:00 (Asia/Tokyo) has
+  already passed; pick a later time`). Once its firing has been made — a run
+  started, a failure or a skip, all alike — `next_run_at` goes and `enabled`
+  stays: **a `once` that is `enabled` and has no `next_run_at` has fired**,
+  and is *done*. (The client also draws an off `once` past its `at` as done,
+  since it cannot be switched back on —
+  [schedule-ui.md §6.6](../schedule-ui.md#66-done).) A done schedule can still
+  be run by hand, and edited; a new future time arms it again. A run by hand
+  before `at` does not use the firing up. A one-time firing missed while the
+  server was down is made when it starts again, unlike a recurring one
+  ([work-system.md](../code/work-system.md#schedules)).
+
 ### Schedule Time Zones
 
-Each schedule's cron is read on the wall clock of its own zone, `time_zone`
+Each schedule's period is read on the wall clock of its own zone, `time_zone`
 ([data-model](data-model.md#schedule)) — never the server's, since a client
 reaching the server through the relay may be anywhere. The client sends the
 device's zone on `schedule.create`, where it is required. On `schedule.update`
-it follows "absent = unchanged" like every other field: a new `cron` keeps the
+it follows "absent = unchanged" like every other field: a new `period` keeps the
 schedule's zone, and sending `time_zone` alone moves the schedule to that zone
-with its cron as written, so `0 9 * * *` is then 09:00 there. Either change
+with its period as written, so daily at `09:00` is then 09:00 there. Either change
 recomputes `next_run_at`.
 
 `time_zone` must be an IANA name. A missing one, an unknown one and `"Local"`
@@ -202,7 +238,7 @@ Zones are resolved against the tz database built into the server binary
 (Go's `time/tzdata`), so they resolve on a host that has none, such as
 Windows or a minimal container image. A system database, where there is one,
 is tried first. A stored schedule whose zone cannot be resolved gets no
-`next_run_at` instead of a guessed one, as one with an unparsable cron does.
+`next_run_at` instead of a guessed one, as one with a malformed period does.
 
 The instants (`next_run_at` and the rest) are absolute RFC 3339 times;
 `next_run_at` is written with the schedule zone's offset, but a client reads
