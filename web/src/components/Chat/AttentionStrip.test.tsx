@@ -112,7 +112,22 @@ describe("AttentionStrip", () => {
 			"Stopping ends the turn and loses the tasks.",
 		);
 		// Stated as a time, never as a countdown to a lease the user cannot change.
-		expect(detail.textContent).toMatch(/since \d{1,2}:\d{2}/);
+		expect(detail.textContent).toMatch(/since \d{2}:\d{2}\./);
+	});
+
+	it("drops the clock rather than showing an unreadable one", async () => {
+		const user = userEvent.setup();
+		render(
+			<AttentionStrip
+				turn={{ ...turn("blocked", [background]), since: "not a time" }}
+				onJumpToRequest={vi.fn()}
+			/>,
+		);
+
+		await user.click(screen.getByRole("button", { name: "Details" }));
+
+		const detail = screen.getByText(/resumes on its own/, { exact: false });
+		expect(detail.textContent).toMatch(/^Waiting on background tasks\. /);
 	});
 
 	describe("the unanswered questions row", () => {

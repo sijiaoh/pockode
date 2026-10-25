@@ -334,7 +334,7 @@ overlay passes it to `onOpenScheduleDetail` and `AppShell` lands on the detail.
 One schedule, from `useScheduleDetailSubscription`, keyed by id inside the
 component (`ScheduleDetailPage key={scheduleId}`) for the work detail's reason
 ([schedule-ui.md §4](../schedule-ui.md#4-the-schedule-detail)). Top to bottom:
-the title (inline edit), the `Switch` with the next firing (`formatNextRun` and
+the title (inline edit), the `Switch` with the next firing (`formatRelativeDay` and
 `formatRelativeFuture`) — or, on a done one-time, `Done · Was due …` — at most
 one notice (a failed firing, a run going now, a skipped firing, a one-time
 that passed while off), **Runs**, then the settings — Prompt, Period
@@ -345,7 +345,7 @@ applied on change), Worktree (git repositories only) — and `Delete schedule`
 at the end. `Run now` is the bottom bar and stays on the page.
 
 A schedule's own instants — the next firing, a notice's, the empty Runs line's —
-are drawn in the schedule's `time_zone` (`formatNextRun`'s third argument). When
+are drawn in the schedule's `time_zone` (`formatRelativeDay`'s third argument). When
 that is not the device's (`useDeviceTimeZone`, compared with `sameZone` from
 `lib/scheduleZone.ts`), they and the list row's period carry `ZoneLabel`, and
 the Period section adds the zone line and `Use {city} time`, a confirmed

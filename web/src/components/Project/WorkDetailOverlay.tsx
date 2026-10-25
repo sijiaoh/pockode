@@ -35,6 +35,7 @@ import type {
 	WorkSchedule,
 	WorkType,
 } from "../../types/work";
+import { formatCompactDateTime } from "../../utils/dateTime";
 import { formatStepCount, getStepProgress } from "../../utils/workSteps";
 import PageHeader from "../Layout/PageHeader";
 import { ActivityBadge, MarkdownContent, RecommendedTag } from "../ui";
@@ -949,27 +950,10 @@ function CommentItem({ comment }: { comment: Comment }) {
 		<div className="rounded-lg bg-th-bg-secondary px-3 py-2">
 			<MarkdownContent content={comment.body} />
 			<p className="mt-1.5 text-xs text-th-text-muted">
-				{formatCommentDate(comment.created_at)}
+				{formatCompactDateTime(comment.created_at)}
 			</p>
 		</div>
 	);
-}
-
-function formatCommentDate(dateString: string): string {
-	const date = new Date(dateString);
-	const now = new Date();
-	if (date.toDateString() === now.toDateString()) {
-		return date.toLocaleTimeString(undefined, {
-			hour: "2-digit",
-			minute: "2-digit",
-		});
-	}
-	return date.toLocaleDateString(undefined, {
-		month: "short",
-		day: "numeric",
-		hour: "2-digit",
-		minute: "2-digit",
-	});
 }
 
 function StepProgressSection({

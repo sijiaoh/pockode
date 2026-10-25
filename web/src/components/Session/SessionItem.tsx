@@ -9,27 +9,9 @@ import {
 } from "../../lib/sessionStore";
 import { useWorkStore } from "../../lib/workStore";
 import type { SessionListItem } from "../../types/message";
+import { formatCompactDateTime } from "../../utils/dateTime";
 import DeleteButton from "../common/DeleteButton";
 import SidebarListItem from "../common/SidebarListItem";
-
-function formatDate(dateString: string): string {
-	const date = new Date(dateString);
-	const now = new Date();
-	const isToday = date.toDateString() === now.toDateString();
-
-	if (isToday) {
-		return date.toLocaleTimeString(undefined, {
-			hour: "2-digit",
-			minute: "2-digit",
-		});
-	}
-	return date.toLocaleDateString(undefined, {
-		month: "short",
-		day: "numeric",
-		hour: "2-digit",
-		minute: "2-digit",
-	});
-}
 
 interface Props {
 	session: SessionListItem;
@@ -127,10 +109,12 @@ const SessionItem = memo(function SessionItem({
 						{!origin.exists && (
 							<span className="sr-only">, deleted worktree</span>
 						)}
-						<span className="shrink-0">· {formatDate(session.updated_at)}</span>
+						<span className="shrink-0">
+							· {formatCompactDateTime(session.updated_at)}
+						</span>
 					</span>
 				) : (
-					formatDate(session.updated_at)
+					formatCompactDateTime(session.updated_at)
 				)
 			}
 			isActive={isActive}
