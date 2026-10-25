@@ -43,6 +43,17 @@
         "golang"
       ],
       "groupName": "Go"
+    },
+    {
+      "description": "One PR moves .node-version (which every CI job reads) and the Dockerfile frontend builder image together, so a released image is never built by a Node CI did not test",
+      "matchDatasources": [
+        "docker",
+        "node-version"
+      ],
+      "matchPackageNames": [
+        "node"
+      ],
+      "groupName": "Node"
     }
   ]
 }

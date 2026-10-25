@@ -12,10 +12,10 @@ import { availableParallelism } from "node:os";
  * Plain JavaScript, unlike everything else here, because a `vitest.config.ts`
  * is not part of the bundle it configures: vite bundles the config file but
  * leaves bare imports external, so node itself loads this one. Node only strips
- * types from 22.18 on, and `.node-version` pins 22.13, so a `.ts` here fails
- * the whole suite at startup on CI while passing on a newer local node. There
- * is no type syntax to lose — `erasableSyntaxOnly` already rules it out for the
- * configs that import this.
+ * types from 22.18 on, while the frontends' `engines` admit any 22, so a `.ts`
+ * here fails the whole suite at startup on an older 22 even though it passes
+ * on the node `.node-version` pins. There is no type syntax to lose —
+ * `erasableSyntaxOnly` already rules it out for the configs that import this.
  */
 export const vitestRuntimeOptions = {
 	/**
