@@ -12,11 +12,12 @@ its Go doc (`server/fuzzy/doc.go`, `Pattern`, `Scheme`, `Slab`, `Algo`). This
 document explains why the package has that shape and what a caller has to get
 right when wiring it in.
 
-Its caller is `file.search`'s name mode ([docs/file.md](../file.md#search-behavior)).
-Content mode still matches a literal substring through `server/search`'s own
-matcher, which stays the right tool there: a line of a file does not want
-fuzzy subsequence matching, and its ASCII fast path is what makes scanning a
-whole repository affordable.
+Its caller is `file.search`, in both modes
+([docs/file.md](../file.md#search-behavior)): name mode matches each path with
+`PathScheme`, content mode each line of each file with `DefaultScheme`. One
+query language for both means a term like `'exact` or `!test` reads the same
+whichever mode is on. Matching every line of a repository fuzzily is affordable
+only with the layering in [Scanning Many Texts](#scanning-many-texts).
 
 ## Why a Port and Not a Dependency
 
@@ -106,6 +107,44 @@ length. If a caller might score long texts, give it a slab.
 `ToChars` keeps an ASCII text's bytes without copying them, so do not reuse
 that byte buffer for the next text while the `Chars` is still being matched.
 
+### Scanning Many Texts
+
+`Match` is built for a list where scoring every text is fine. Content search is
+the opposite case: millions of lines, of which almost none match. fzf puts a
+byte prefilter in front of scoring for the same reason; `file.search` takes the
+layering further so that the expensive step runs only where it must, and any
+caller in that position should do the same:
+
+1. **`Pattern.MayMatchWithin(file)`** rules out a whole text of many lines at
+   once. Every term set needs one of its terms somewhere in the file — a fuzzy
+   term's characters in order, any other term as a literal — and both are byte
+   searches, so this costs about one pass, the same one a plain substring grep
+   makes. It is a necessary condition only: true means "scan the lines", not
+   "a line matches".
+2. **`Pattern.Matches(line)`** gives `Match`'s verdict without scoring. A fuzzy
+   term occurs in a text exactly when its best occurrence does, so the linear
+   FuzzyMatchV1 decides what FuzzyMatchV2 would, without filling a matrix. This
+   matters most for a query of several terms, where `Match` would score the
+   first term in full only for a later one to fail.
+3. **`Pattern.Match(line, withPos=false)`** scores only the lines that matched.
+4. **`Pattern.Match(line, withPos=true)`** finds positions only for the lines
+   that are kept, after the caller's own cap.
+
+The prefilter decides only for ASCII text, as fzf's own byte prefilter does:
+normalization lets `e` match `é`, and lowercasing lets `k` match the Kelvin
+sign, which no byte search sees. A file with any non-ASCII byte always passes
+and is decided line by line. Two property tests hold the layers to `Match`:
+`Matches` always agrees with `Match`'s `ok`, and `MayMatchWithin` never rejects
+a text that has a matching line. Both layers are Pockode's own code
+(`prefilter.go`, and `Matches` as a listed change in `pattern.go`), so a
+newer fzf will not carry them over by itself; rerun those tests after an
+upgrade.
+
+**`ToCharsBuffer`** prepares each line without allocating: a non-ASCII line is
+decoded into a rune buffer the caller passes back on the next call. Like
+`ToChars` on ASCII, the `Chars` it returns aliases storage the next call
+overwrites, so finish with one line before preparing the next.
+
 ### Picking a Scheme
 
 `PathScheme` is for slash-separated paths. A match right after `/`, or at the
@@ -134,6 +173,11 @@ descending, then:
 These come from fzf's `parseScheme` (`src/options.go`) and
 `buildResultFromBounds` (`src/result.go`), in the version named in the headers
 of the ported files.
+
+`file.search`'s content mode ranks files rather than texts: a file scores as its
+best line, and ties fall straight to the listing's order. The pathname and
+length tiebreaks are fzf's for a list of texts and do not carry over to a list
+of files ranked by their lines.
 
 An empty query (`IsEmpty`) matches every text with score 0. Decide what the
 list shows then, such as its natural order or nothing at all, and skip the

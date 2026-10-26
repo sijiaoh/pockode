@@ -29,7 +29,7 @@ served through it; it is addressed by id in the session's own attachment store
 | RPC handlers | `server/ws/rpc_file.go` | `file.get`, `file.write`, `file.create`, `file.delete`, `file.rename`, `file.move`, `file.search` |
 | File operations | `server/contents/contents.go`, `server/contents/move.go`, `server/contents/within.go` | Path validation, read, write (upsert), create, delete, rename, move; opening a directory only where its links lead inside the work directory (`OpenDirWithin`, shared with the folder upload and download) |
 | HTTP transfer | `server/filetransfer/filetransfer.go`, `server/filetransfer/folder.go`, `server/filetransfer/folderdownload.go` | Upload / download of whole files, upload of a folder, download of a folder as a zip archive (see [Transfer](#transfer)) |
-| Search | `server/search/` | Candidate listing (`list.go`), fuzzy name matching and ranking (`name.go`, on `server/fuzzy`), content grep (`scan.go`), ranges to UTF-16 (`utf16.go`) |
+| Search | `server/search/` | Candidate listing (`list.go`), fuzzy matching and ranking on `server/fuzzy`, of names (`name.go`) and of lines (`scan.go`), ranges to UTF-16 (`utf16.go`) |
 | Frontend components | `web/src/components/Files/` | FileTree, FileEditor, FileView, FileTreeNode, FileSearchBar, FileSearchResults, FileEntryMenu, EntryNameDialog, UploadQueue, UploadConflictDialog |
 | Entry-action helpers | `web/src/hooks/useTakenNames.ts`, `web/src/lib/fileCache.ts` | Which names a directory has spoken for; the cache work a rename, a move or a delete implies |
 | Search UI state | `web/src/hooks/useFileSearch.ts`, `web/src/lib/filesSearchStore.ts` | Debounce + query cache, persisted options |
@@ -300,27 +300,47 @@ Params:
 
 | Field | Type | Default | Meaning |
 |-------|------|---------|---------|
-| `query` | string | — | Name mode: the same as fzf's extended search (fuzzy terms, `'exact`, `^prefix`, `suffix$`, `!exclude`, `a \| b`; see [fuzzy-matching.md](code/fuzzy-matching.md)). Content mode: literal substring (not a regex). Required, max 1024 bytes |
-| `mode` | `"name"` \| `"content"` | `"name"` | Match relative path, or file content |
+| `query` | string | — | fzf's extended search in both modes: space-separated fuzzy terms, `'exact`, `^prefix`, `suffix$`, `!exclude`, `a \| b`, and `\ ` for a literal space (see [fuzzy-matching.md](code/fuzzy-matching.md)). Not a regex. Required, max 1024 bytes |
+| `mode` | `"name"` \| `"content"` | `"name"` | Match against each relative path, or against each line of each file |
 | `path` | string | `""` | Limit to a subdirectory of the work directory |
 | `respect_gitignore` | bool | `true` | Omit ignored files (no effect outside a git repo) |
 | `max_results` | int | `100` | Max files returned, hard-capped at 500 |
 
-Both modes are smart-case: a query (in name mode, each space-separated term) is
-case-sensitive exactly when it contains an uppercase letter. There is no
-`case_sensitive` parameter; one sent by an older client is ignored. It was
-dropped rather than kept for content mode alone: no client sent it, `'term`
-already asks name mode for an exact match, and one rule for the whole RPC is
-simpler than a flag that means something in only one mode.
+Both modes parse the query the same way, so a query means the same thing
+whichever chip is on. In content mode every term has to match within **one
+line**: `search timeout` finds a line holding both, not a file holding them on
+different lines, and a phrase with a space in it is written `'search\ timeout`.
+`^` skips a line's leading whitespace, as fzf's prefix match does, so `^func`
+finds indented code too.
+
+Both modes are smart-case per term: a term is case-sensitive exactly when it
+contains an uppercase letter. There is no `case_sensitive` parameter; one sent
+by an older client is ignored. It was dropped rather than kept for content mode
+alone: no client sent it, and one rule for the whole RPC is simpler than a flag
+that means something in only one mode.
 
 Result: `{ matches: FileMatch[], truncated: boolean }`, where `FileMatch` is
-`{ path, name, path_ranges?, lines? }` and each line is `{ number, text, ranges }`.
-`number` is 1-based; `ranges` are `{ start, end }` offsets into `text`, and
-`path_ranges` the same into `path`, in **UTF-16 code units** (end-exclusive), so
-a JS client can slice with them directly. `path_ranges` (name mode only) are the
-matched characters, ascending with neighbours merged, and absent when the query
-matched none (a query of only `!exclusions`). `lines` is present in content
-mode only.
+`{ path, name, path_ranges?, lines? }` and each line is
+`{ number, text, ranges, rank }`. `matches` is ranked, best first, in both modes
+(see [Search behavior](#search-behavior)); the client shows it in that order and
+never re-ranks.
+
+`ranges` are `{ start, end }` offsets into `text`, and `path_ranges` the same
+into `path`, in **UTF-16 code units** (end-exclusive), so a JS client can slice
+with them directly. Both are the characters the fuzzy match picked, ascending
+with neighbours merged — so usually several short ranges, `stmo` on
+`searchTimeout` giving four of one character each. Only the best alignment is
+highlighted, as in fzf: `needle` on `needle needle` marks one occurrence, not
+both. A query that matched no characters (only `!exclusions`) leaves
+`path_ranges` absent and a line's `ranges` empty (`[]`, never `null`).
+
+`lines` is present in content mode only: the file's matching lines, in
+line-number order. `number` is 1-based. `rank` orders the same lines by score —
+0 for the best, then 1, 2, … each exactly once per file, ties going to the
+earlier line — so a client showing only a few can show the ones that earned the
+file its place without re-sorting the list it reads. A rank rather than the
+score itself, so that, as with the order of `matches`, the scoring scale stays
+the server's own.
 
 Text that is not valid UTF-8 still gets offsets that index what arrives. A
 file can be scanned with invalid bytes in it — the binary check only inspects
@@ -971,6 +991,21 @@ file and keeps the listing's order. Listed entries that are not readable regular
 files (submodule gitlinks, tracked-but-deleted files) are dropped, so every
 result can actually be opened.
 
+Content-mode lines are matched with `server/fuzzy`'s default scheme — a line is
+free text, not a path. A file ranks by its **best line's score**, best first;
+ties keep the listing's order, and the best `max_results` files are kept. Of a
+file's matching lines the best-scoring are kept, up to the per-file limit below
+(ties to the earlier line), then sent in line-number order with their `rank`. A
+query with no terms at all matches every line with no ranges, so files come in
+the listing's order and the scan stops at the first `max_results`. How the scan stays affordable while
+fuzzy-matching every line — a byte prefilter per file, a linear match per line,
+scoring only the lines that match — is in
+[fuzzy-matching.md](code/fuzzy-matching.md#scanning-many-texts).
+
+Case folding and normalization are fzf's in both modes, ASCII or not:
+`école` finds `ÉCOLE`, and a term without diacritics matches Latin text with
+them (`e` finds `é`).
+
 There is no persistent file index: every search lists the candidates afresh
 through `git ls-files` or the walk, then scores all of them. That is a
 **known trade-off**. An index would have to follow every edit, checkout and
@@ -979,28 +1014,29 @@ repository (about 1,600 files) takes 8–12ms end to end. Revisit it when listin
 plus scoring on a large repository exceeds about 100ms — the point where a
 search stops keeping up with typing.
 
-In content mode, case-insensitive matching folds **ASCII only** when the query
-is ASCII, so `"s"` does not match `"ſ"`. This is deliberate: Go's regexp loses
-its literal fast path under `(?i)` and runs ~150x slower, and an all-lowercase
-query — the common one — is case-insensitive. A query containing non-ASCII
-characters uses the regexp instead, keeping its case folding correct (`"école"`
-finds `"ÉCOLE"`).
+Content mode pays the same trade-off over every line, and ranking makes it pay
+in full: the best file may be the last one listed, so the scan reads every file
+rather than stopping at the first `max_results` matches, as a plain grep could.
+Measured on a 4-core machine with a warm cache, a ranked scan of about 4,300
+source files takes 60–290ms, and of a 42,000-file `node_modules` full of
+minified bundles 0.5–2s — well inside the timeout, which is the budget a scan
+that outgrows this falls back on.
 
 Limits keep large repositories responsive, but they are not all reported the same way:
 
 | Limit | Value | On hit |
 |-------|-------|--------|
-| Timeout | 10s | Partial results, `truncated` |
+| Timeout | 10s | The files scanned so far, ranked; `truncated` |
 | Files listed | 50,000 | `truncated` |
-| Files returned | `max_results` | `truncated` |
-| Matching lines per file | 20 | `truncated` |
+| Files returned | `max_results` | The best ones; `truncated` |
+| Matching lines per file | 20 | The best-scoring ones; `truncated` |
 | File size scanned | 1 MiB | File skipped, unreported |
-| Match ranges per line | 20 | Further matches on that line unreported |
-| Returned line length | 500 bytes | Clipped around the first match |
+| Returned line length | 500 bytes | Clipped to a window starting 64 bytes before the first matched character; matched characters outside it lose their highlight |
 
 `truncated` therefore means "results were cut off", not "everything you can see
-is complete": a file too large to scan, a clipped line, or matches past the
-per-line cap leave no trace in the response.
+is complete": a file too large to scan or a clipped line leaves no trace in the
+response. A result cut by the timeout is ranked only among the files it reached,
+so a better file may lie past where it stopped.
 
 Binary files are skipped in content mode, likewise without setting `truncated`.
 The test is the same one `file.get` applies — sniffing rejects the formats it
@@ -1063,8 +1099,14 @@ suppress `mousedown` so toggling one keeps focus and the keyboard up, and
 picking a result blurs the input first so the keyboard isn't left hanging over
 the sidebar's closing animation.
 
-Queries are debounced 300ms and need at least 1 character in name mode, 2 in
-content mode. Previous results stay on screen while a new query loads — the
+Queries are debounced 300ms and need at least 1 character in name mode, 3 in
+content mode. A fuzzy content query matches any line holding its characters in
+order, and at two characters that is nearly every line of code: the server
+scores them all and returns a ranked list that is mostly ties, so in effect an
+arbitrary set of files. Three is where a fuzzy query starts to pick lines out.
+The cost falls on a two-character CJK word such as `超时`, a specific query that
+now counts as too short; `'超时` reaches the minimum and asks for the exact word
+anyway. Previous results stay on screen while a new query loads — the
 icon in the search box turns into a spinner rather than the list going blank
 between keystrokes — but only while the options are unchanged, since name-mode
 results have no place in the content-mode layout. The cache holds each result
@@ -1076,9 +1118,11 @@ seeing the error and a `Retry` button. Nothing is searched while the tab is
 hidden, so an invalidation can't quietly re-run a content scan nobody is
 looking at.
 
-Name mode renders a flat list of files. Content mode groups by file and shows at
-most 3 matching lines each, plus a `+N more` hint counting the lines the server
-returned but the list withholds — not every remaining match in the file.
+Both modes keep the server's order of files. Name mode renders a flat list of
+files. Content mode groups by file and previews its 3 best lines — those with
+`rank` below 3 — still in line-number order, so the line that earned the file
+its place is never hidden under the hint. A `+N more` hint counts the lines the
+server returned but the list withholds — not every remaining match in the file.
 Snippets drop leading indentation and re-anchor on the first match so it stays
 visible in a ~250px sidebar row. An empty result offers the two escape hatches
 that usually explain it — stop respecting `.gitignore`, or search contents
