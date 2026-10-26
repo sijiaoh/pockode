@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import type { SessionListItem } from "../types/message";
 import { CURRENT_WORKTREE_FILTER, type SessionFilter } from "./sessionFilter";
+import { compareSessions } from "./sessionMerge";
 
 const SHOW_TASK_SESSIONS_KEY = "show-task-sessions";
 
@@ -279,4 +280,28 @@ export function prependSession(
 	session: SessionListItem,
 ): SessionListItem[] {
 	return [session, ...sessions.filter((s) => s.id !== session.id)];
+}
+
+/**
+ * Puts an updated session where the server's order says it now belongs,
+ * whether or not the list held it.
+ *
+ * The list only goes as far as its last row, so a session lands in it only if
+ * it sorts above that row — or anywhere once the list has been read to its end.
+ * Below the line it is among rows nobody has fetched yet, and the page that
+ * reaches it brings it in at the right place (docs/list-paging-ui.md §3.3).
+ * That holds for a row the list was already holding, too: kept at the bottom,
+ * the next page would be appended under a row that sorts after it.
+ */
+export function placeSession(
+	sessions: SessionListItem[],
+	session: SessionListItem,
+	readToEnd: boolean,
+): SessionListItem[] {
+	const rest = sessions.filter((s) => s.id !== session.id);
+	const index = rest.findIndex((s) => compareSessions(session, s) < 0);
+	if (index !== -1) {
+		return [...rest.slice(0, index), session, ...rest.slice(index)];
+	}
+	return readToEnd ? [...rest, session] : rest;
 }

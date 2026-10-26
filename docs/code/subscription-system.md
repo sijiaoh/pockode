@@ -823,7 +823,7 @@ Two properties the order has to have for a cursor to mean anything:
 that build one, so a row and the record it came from cannot disagree about where
 a row sits.
 
-#### The two lists update live in opposite ways
+#### The two lists update live in different ways
 
 They are not two instances of one rule, and treating them as one would break
 whichever of them was second.
@@ -831,17 +831,32 @@ whichever of them was second.
 | | Session sidebar | Closed archive |
 |---|---|---|
 | Shape | One list that grows downwards | Discrete pages the user walks |
-| A row on screen changes | Updated in place, **never moved** | Updated in place |
+| A row on screen changes | **Moved to where the order now puts it** — the top when its `updated_at` moved, where it already was when it did not | Updated in place |
 | Something new appears | Prepended — it genuinely is the newest | **Never inserted.** It belongs at the top of page 1; the page the user asked for is the page they keep |
-| A row not held changes | Ignored; it lands in its right place the next time the order is computed | Ignored, with one exception: a **closed story**, which is the one thing the page would have held had it been cut now. That is recorded as the page being stale |
+| A row not held changes | Inserted if it now sorts above the last held row, or anywhere once the list is read to its end; otherwise left to the page that reaches it | Ignored, with one exception: a **closed story**, which is the one thing the page would have held had it been cut now. That is recorded as the page being stale |
 | A row is deleted | Removed at once — it is the answer to an action | Removed; the page stays one row short until the user moves |
 | Refreshed on its own | Never | Never on an event. A stale page is re-fetched when the segment is looked at — see below |
 
-Recency reordering therefore happens **on a load, never on an event**, which is
-the rule `FileStore.AddUsage` already keeps on the server for its own reason:
-moving a session to the top every time a turn is metered would reorder the list
-behind the user's back. Paging turns that from good manners into a requirement,
-because the reader may be two hundred rows down.
+The session list re-sorts on every update because what it holds must stay a
+prefix of the server's order: every row above the last one, nothing missing
+between them. `placeSession` (`web/src/lib/sessionStore.ts`) applies that one
+rule to held and unheld rows alike, with the same `compareSessions` the
+cross-worktree merge uses (`web/src/lib/sessionMerge.ts`). It can take a held row
+out — one that now sorts below the last row — because the page that reaches it
+brings it back and the dedupe on append keeps it single. The cursor is the
+server's last row and a sync replaces the list, so neither notices the
+insertions. Why moving is the right trade for the user, and why
+`FileStore.AddUsage` leaving `UpdatedAt` alone matters more now than before, is
+[list-paging-ui.md §3.2](../list-paging-ui.md#32-live-updates-once-the-list-is-longer-than-a-page).
+
+A list that filters work sessions out never inserts one. `SessionListWatcher.pushSession`
+already sends such a subscriber one removal and then nothing, but the client's
+update handler checks `work_id` too, since it is the line that would put the row
+on screen.
+
+The other-worktree view (`useSessionViewList`, `session_view.*`) has no
+subscription and is in neither column: nothing is pushed to it, so nothing in it
+moves until the user re-reads it.
 
 The archive's whole column follows from one fact the session list cannot claim:
 **nobody is waiting on the archive.** So it earns none of the machinery for

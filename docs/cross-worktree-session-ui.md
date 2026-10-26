@@ -202,8 +202,9 @@ them across sources:
   not handed over yet sorts below the last row it has. A merged row is only shown
   once it sits at or above the last row of *every* source that still has more —
   below that line another source's next page could still land in between, and
-  inserting a row above what the reader has already scrolled past is the one thing
-  paging may not do ([list-paging-ui.md §2.4](list-paging-ui.md#24-the-list-holds-still-while-it-is-being-read)).
+  a row put among what the reader has already scrolled past by a page, rather than
+  by its own recency changing, is the one thing paging may not do
+  ([list-paging-ui.md §2.4](list-paging-ui.md#24-the-list-is-a-prefix-of-the-order)).
   The line only moves down, so the visible list only grows downwards.
 - **Dedupe by id**, newest copy winning, exactly as
   [§3.3](list-paging-ui.md#33-the-constraint-paging-puts-on-the-server) requires
