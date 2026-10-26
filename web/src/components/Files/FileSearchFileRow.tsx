@@ -1,16 +1,21 @@
 import { File } from "lucide-react";
 import { memo, type ReactNode } from "react";
+import type { SearchRange } from "../../types/search";
 import { splitPath } from "../../utils/path";
+import { sliceRanges } from "../../utils/searchRange";
 import Highlight from "../common/Highlight";
 import SidebarListItem from "../common/SidebarListItem";
 
 interface Props {
 	path: string;
-	query: string;
+	/** Matched characters of `path`; omitted where the row has nothing to mark. */
+	pathRanges?: readonly SearchRange[];
 	isActive: boolean;
 	onSelect: (path: string) => void;
 	actions?: ReactNode;
 }
+
+const NO_RANGES: readonly SearchRange[] = [];
 
 /**
  * One matched file, shared by both search modes.
@@ -20,7 +25,7 @@ interface Props {
  */
 const FileSearchFileRow = memo(function FileSearchFileRow({
 	path,
-	query,
+	pathRanges = NO_RANGES,
 	isActive,
 	onSelect,
 	actions,
@@ -29,10 +34,20 @@ const FileSearchFileRow = memo(function FileSearchFileRow({
 
 	return (
 		<SidebarListItem
-			title={<Highlight text={fileName} query={query} />}
-			// A query containing "/" can match the directory instead of the name.
+			title={
+				<Highlight
+					text={fileName}
+					ranges={sliceRanges(pathRanges, directory.length, path.length)}
+				/>
+			}
+			// A fuzzy match can pick characters from the directory as well as the name.
 			subtitle={
-				directory ? <Highlight text={directory} query={query} /> : undefined
+				directory ? (
+					<Highlight
+						text={directory}
+						ranges={sliceRanges(pathRanges, 0, directory.length)}
+					/>
+				) : undefined
 			}
 			isActive={isActive}
 			onSelect={() => onSelect(path)}

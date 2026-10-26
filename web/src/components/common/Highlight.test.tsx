@@ -1,46 +1,41 @@
-import { render, screen } from "@testing-library/react";
+import { render } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import Highlight from "./Highlight";
 
-describe("Highlight", () => {
-	it("marks every case-insensitive occurrence", () => {
-		render(<Highlight text="Foo foo FOO" query="foo" />);
+function marked(container: HTMLElement): string[] {
+	return Array.from(container.querySelectorAll("mark"), (m) => m.textContent);
+}
 
-		const marks = screen.getAllByText(/foo/i, { selector: "mark" });
-		expect(marks.map((mark) => mark.textContent)).toEqual([
-			"Foo",
-			"foo",
-			"FOO",
-		]);
+describe("Highlight", () => {
+	it("marks exactly the given ranges and keeps the rest as text", () => {
+		const { container } = render(
+			<Highlight
+				text="useFileSearch.ts"
+				ranges={[
+					{ start: 0, end: 1 },
+					{ start: 3, end: 7 },
+					{ start: 15, end: 16 },
+				]}
+			/>,
+		);
+
+		expect(marked(container)).toEqual(["u", "File", "s"]);
+		expect(container).toHaveTextContent("useFileSearch.ts");
 	});
 
-	it("renders plain text when nothing matches", () => {
-		const { container } = render(<Highlight text="bar" query="foo" />);
+	it("renders plain text without ranges", () => {
+		const { container } = render(<Highlight text="bar" ranges={[]} />);
 
 		expect(container.querySelector("mark")).toBeNull();
 		expect(container).toHaveTextContent("bar");
 	});
 
-	it("renders plain text for an empty query", () => {
-		const { container } = render(<Highlight text="bar" query="" />);
+	it("slices by UTF-16 code units, so astral characters stay whole", () => {
+		// "😀" is two code units; the server counts it the same way.
+		const { container } = render(
+			<Highlight text="a😀b" ranges={[{ start: 1, end: 3 }]} />,
+		);
 
-		expect(container.querySelector("mark")).toBeNull();
-	});
-
-	it("treats regex metacharacters literally", () => {
-		const { container } = render(<Highlight text="a.c abc" query="a.c" />);
-
-		const marks = container.querySelectorAll("mark");
-		expect(marks).toHaveLength(1);
-		expect(marks[0]).toHaveTextContent("a.c");
-	});
-
-	it("skips highlighting when lowercasing would shift indexes", () => {
-		// "İ".toLowerCase() is two code units, so indexes from the lowercased copy
-		// would cut the original mid-character.
-		const { container } = render(<Highlight text="İstanbul" query="stan" />);
-
-		expect(container.querySelector("mark")).toBeNull();
-		expect(container).toHaveTextContent("İstanbul");
+		expect(marked(container)).toEqual(["😀"]);
 	});
 });
