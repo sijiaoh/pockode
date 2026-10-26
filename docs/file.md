@@ -29,7 +29,7 @@ served through it; it is addressed by id in the session's own attachment store
 | RPC handlers | `server/ws/rpc_file.go` | `file.get`, `file.write`, `file.create`, `file.delete`, `file.rename`, `file.move`, `file.search` |
 | File operations | `server/contents/contents.go`, `server/contents/move.go`, `server/contents/within.go` | Path validation, read, write (upsert), create, delete, rename, move; opening a directory only where its links lead inside the work directory (`OpenDirWithin`, shared with the folder upload and download) |
 | HTTP transfer | `server/filetransfer/filetransfer.go`, `server/filetransfer/folder.go`, `server/filetransfer/folderdownload.go` | Upload / download of whole files, upload of a folder, download of a folder as a zip archive (see [Transfer](#transfer)) |
-| Search | `server/search/` | Candidate listing (`list.go`), content grep (`scan.go`) |
+| Search | `server/search/` | Candidate listing (`list.go`), fuzzy name matching and ranking (`name.go`, on `server/fuzzy`), content grep (`scan.go`), ranges to UTF-16 (`utf16.go`) |
 | Frontend components | `web/src/components/Files/` | FileTree, FileEditor, FileView, FileTreeNode, FileSearchBar, FileSearchResults, FileEntryMenu, EntryNameDialog, UploadQueue, UploadConflictDialog |
 | Entry-action helpers | `web/src/hooks/useTakenNames.ts`, `web/src/lib/fileCache.ts` | Which names a directory has spoken for; the cache work a rename, a move or a delete implies |
 | Search UI state | `web/src/hooks/useFileSearch.ts`, `web/src/lib/filesSearchStore.ts` | Debounce + query cache, persisted options |
@@ -299,24 +299,35 @@ Params:
 
 | Field | Type | Default | Meaning |
 |-------|------|---------|---------|
-| `query` | string | — | Literal substring (not a regex); required, max 1024 bytes |
+| `query` | string | — | Name mode: the same as fzf's extended search (fuzzy terms, `'exact`, `^prefix`, `suffix$`, `!exclude`, `a \| b`; see [fuzzy-matching.md](code/fuzzy-matching.md)). Content mode: literal substring (not a regex). Required, max 1024 bytes |
 | `mode` | `"name"` \| `"content"` | `"name"` | Match relative path, or file content |
 | `path` | string | `""` | Limit to a subdirectory of the work directory |
 | `respect_gitignore` | bool | `true` | Omit ignored files (no effect outside a git repo) |
-| `case_sensitive` | bool | `false` | — |
 | `max_results` | int | `100` | Max files returned, hard-capped at 500 |
 
-Result: `{ matches: FileMatch[], truncated: boolean }`, where `FileMatch` is
-`{ path, name, lines? }` and each line is `{ number, text, ranges }`.
-`number` is 1-based; `ranges` are `{ start, end }` **byte** offsets into the
-UTF-8 encoding of `text` (end-exclusive). `lines` is present in content mode only.
+Both modes are smart-case: a query (in name mode, each space-separated term) is
+case-sensitive exactly when it contains an uppercase letter. There is no
+`case_sensitive` parameter; one sent by an older client is ignored. It was
+dropped rather than kept for content mode alone: no client sent it, `'term`
+already asks name mode for an exact match, and one rule for the whole RPC is
+simpler than a flag that means something in only one mode.
 
-`ranges` is offered as an optimization, not a guarantee. A file that is not
-valid UTF-8 can still be scanned — the binary check only inspects the first 512
-bytes, so invalid bytes further in go unnoticed — and JSON encoding substitutes
-U+FFFD for each of them, so on such a line the offsets no longer index the
-`text` that arrives. Recomputing the match positions client-side, as the web UI
-does, sidesteps this entirely.
+Result: `{ matches: FileMatch[], truncated: boolean }`, where `FileMatch` is
+`{ path, name, path_ranges?, lines? }` and each line is `{ number, text, ranges }`.
+`number` is 1-based; `ranges` are `{ start, end }` offsets into `text`, and
+`path_ranges` the same into `path`, in **UTF-16 code units** (end-exclusive), so
+a JS client can slice with them directly. `path_ranges` (name mode only) are the
+matched characters, ascending with neighbours merged, and absent when the query
+matched none (a query of only `!exclusions`). `lines` is present in content
+mode only.
+
+Text that is not valid UTF-8 still gets offsets that index what arrives. A
+file can be scanned with invalid bytes in it — the binary check only inspects
+the first 512 bytes, so invalid bytes further in go unnoticed — and a path can
+hold them on Linux. JSON encoding writes one U+FFFD per invalid byte, so the
+server makes the same substitution before it counts (`toClientText` in
+`server/search/utf16.go`), and the offsets are taken against the `text` or
+`path` the client receives rather than the raw bytes.
 
 `truncated` reports that limits or the timeout cut the search short, so more
 matches may exist.
@@ -950,15 +961,29 @@ which is the shape Pockode itself runs in. The `-z` is not optional: without
 it git escapes non-ASCII and whitespace paths, which then no longer name the
 file they came from — see [git.md](git.md#path-encoding).
 
-Name-mode results rank base-name hits above path-only hits, then shorter paths
-first. Listed entries that are not readable regular files (submodule gitlinks,
-tracked-but-deleted files) are dropped, so every result can actually be opened.
+Name-mode results are matched with `server/fuzzy`'s path scheme and ordered by
+score, best first, with fzf's path tiebreaks (a match starting in the base name,
+then the shorter path) — see
+[fuzzy-matching.md](code/fuzzy-matching.md#ranking-is-the-callers); the best
+`max_results` are kept. A query with no terms at all (`'` alone) matches every
+file and keeps the listing's order. Listed entries that are not readable regular
+files (submodule gitlinks, tracked-but-deleted files) are dropped, so every
+result can actually be opened.
 
-Case-insensitive matching folds **ASCII only** when the query is ASCII, so `"s"`
-does not match `"ſ"`. This is deliberate: Go's regexp loses its literal fast path
-under `(?i)` and runs ~150x slower, and case-insensitive is the default mode. A
-query containing non-ASCII characters uses the regexp instead, keeping its case
-folding correct (`"ÉCOLE"` finds `"école"`).
+There is no persistent file index: every search lists the candidates afresh
+through `git ls-files` or the walk, then scores all of them. That is a
+**known trade-off**. An index would have to follow every edit, checkout and
+`.gitignore` change to stay correct, while listing and scoring the pockode
+repository (about 1,600 files) takes 8–12ms end to end. Revisit it when listing
+plus scoring on a large repository exceeds about 100ms — the point where a
+search stops keeping up with typing.
+
+In content mode, case-insensitive matching folds **ASCII only** when the query
+is ASCII, so `"s"` does not match `"ſ"`. This is deliberate: Go's regexp loses
+its literal fast path under `(?i)` and runs ~150x slower, and an all-lowercase
+query — the common one — is case-insensitive. A query containing non-ASCII
+characters uses the regexp instead, keeping its case folding correct (`"école"`
+finds `"ÉCOLE"`).
 
 Limits keep large repositories responsive, but they are not all reported the same way:
 
@@ -1024,9 +1049,9 @@ floor is their own text — at the long label they needed ~245px and overflowed 
 inside a panel that narrow.
 
 Since respecting `.gitignore` defaults to **on**, an absent entry has to read as
-true and only an explicit `"false"` turns it off. `path` and `case_sensitive`
-are never sent; `max_results` is pinned to 100 by the client rather than left to
-the server default, so how long the rendered list can grow stays a decision of
+true and only an explicit `"false"` turns it off. `path` is never sent;
+`max_results` is pinned to 100 by the client rather than left to the server
+default, so how long the rendered list can grow stays a decision of
 the code that renders it.
 
 Keyboard and focus are tuned for a phone. Enter only blurs the input, since
@@ -1042,8 +1067,8 @@ content mode. Previous results stay on screen while a new query loads — the
 icon in the search box turns into a spinner rather than the list going blank
 between keystrokes — but only while the options are unchanged, since name-mode
 results have no place in the content-mode layout. The cache holds each result
-next to the query that produced it, so highlighting and snippet anchoring keep
-describing the rows actually on screen instead of drifting to the query still in
+next to the query that produced it, so a message naming the query ("No matches
+for …") describes the rows actually on screen instead of the query still in
 flight — a content search can take seconds. Requests are not retried:
 sitting through three attempts before learning a search failed is worse than
 seeing the error and a `Retry` button. Nothing is searched while the tab is
@@ -1059,12 +1084,11 @@ that usually explain it — stop respecting `.gitignore`, or search contents
 instead of names — so a dead end is one tap from a wider search rather than a
 retyped query.
 
-Matches are highlighted client-side as literal case-insensitive substrings
-rather than from the server's `ranges`, which are UTF-8 byte offsets and an easy
-way to cut a character in half on the way to JS string indexes. Where
-lowercasing changes a string's length (`"İ".toLowerCase()` is two code units)
-the text is rendered unhighlighted, because indexes taken from the lowercased
-copy no longer line up with the original.
+Matches are highlighted from the server's ranges — `path_ranges` in name mode,
+split between the file name and the directory line, and each line's `ranges` in
+content mode, carried through the snippet's trimming. Only the matcher knows
+which characters a fuzzy match picked, and since the ranges travel inside the
+result they always describe the rows on screen.
 
 Truncation appends `· more results exist` to the usual counts rather than naming
 a fixed limit or replacing them: the server also sets `truncated` on timeout,
