@@ -17,6 +17,11 @@
 //	chars := fuzzy.ToChars([]byte(path))
 //	score, positions, ok := pattern.Match(fuzzy.PathScheme, &chars, true, slab)
 //
+// For many texts of which few match, such as every line of a repository,
+// Pattern.MayMatchWithin rules out a whole file at once, Pattern.Matches
+// rejects a line without scoring it, and ToCharsBuffer prepares each line
+// without allocating.
+//
 // The match functions on Scheme are the single-term building blocks under
 // Pattern. Called directly, the pattern must already be lowercased when the
 // match is case-insensitive and normalized (NormalizeRunes) when normalize is

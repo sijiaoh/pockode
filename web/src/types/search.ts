@@ -17,7 +17,14 @@ export interface SearchLine {
 	number: number;
 	/** Line content, clipped by the server to a window around the first match. */
 	text: string;
+	/** Matched characters of `text`, ascending and merged; a fuzzy match may leave gaps. */
 	ranges: SearchRange[];
+	/**
+	 * This line's place among the file's lines by score, 0 for the best. Lines
+	 * arrive in line-number order; a view showing only some of them shows the
+	 * lowest ranks, which earned the file its place in `matches`.
+	 */
+	rank: number;
 }
 
 export interface FileMatch {
@@ -29,11 +36,12 @@ export interface FileMatch {
 	 * and absent when the query matched no characters (only `!exclusions`).
 	 */
 	path_ranges?: SearchRange[];
-	/** Only present in content mode. */
+	/** Only present in content mode, in line-number order; `rank` orders them by score. */
 	lines?: SearchLine[];
 }
 
 export interface FileSearchResult {
+	/** Ranked by the server, best first; shown in this order. */
 	matches: FileMatch[];
 	/** Limits or the server timeout cut the search short; more matches may exist. */
 	truncated: boolean;

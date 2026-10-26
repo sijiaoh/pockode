@@ -57,8 +57,9 @@ interface FileMoveResult {
 
 export interface FileSearchParams {
 	/**
-	 * Name mode: fzf extended search syntax. Content mode: literal substring.
-	 * Both are smart-case: case-sensitive only where an uppercase letter is typed.
+	 * fzf extended search syntax in both modes, matched against each path or
+	 * each line. Smart-case per term: a term is case-sensitive only when it
+	 * contains an uppercase letter.
 	 */
 	query: string;
 	/** Defaults to "name" on the server. */

@@ -94,11 +94,14 @@ func pathnameTiebreak(p string, positions []int) int {
 // positionsToByteRanges turns fuzzy.Pattern.Match positions — ascending rune
 // indices, where an invalid UTF-8 byte counts as one rune just as it does for
 // toClientText — into byte ranges of text, merging consecutive positions.
-func positionsToByteRanges(text string, positions []int) []Range {
-	var ranges []Range
+//
+// The result is never nil, so that a Line matched without positions encodes
+// its ranges as [] rather than null.
+func positionsToByteRanges[T ~string | ~[]byte](text T, positions []int) []Range {
+	ranges := make([]Range, 0, len(positions))
 	next := 0
 	for i, runeIdx := 0, 0; i < len(text) && next < len(positions); runeIdx++ {
-		_, size := utf8.DecodeRuneInString(text[i:])
+		size := runeSize(text[i:])
 		if runeIdx == positions[next] {
 			if n := len(ranges); n > 0 && ranges[n-1].End == i {
 				ranges[n-1].End = i + size
@@ -110,4 +113,15 @@ func positionsToByteRanges(text string, positions []int) []Range {
 		i += size
 	}
 	return ranges
+}
+
+// runeSize is the byte length of the rune text starts with, as ranging over
+// it as a string decodes it.
+func runeSize[T ~string | ~[]byte](text T) int {
+	if text[0] < utf8.RuneSelf {
+		return 1
+	}
+	// A rune is at most UTFMax bytes, so only that much is converted.
+	_, size := utf8.DecodeRuneInString(string(text[:min(len(text), utf8.UTFMax)]))
+	return size
 }

@@ -10,6 +10,8 @@
 //   - Match scores a single text and returns the positions of all positive
 //     terms merged, sorted and deduplicated, instead of an fzf Result and the
 //     raw per-term position lists.
+//   - Matches gives Match's verdict alone, finding fuzzy terms with
+//     FuzzyMatchV1 instead of FuzzyMatchV2.
 //
 // The MIT License (MIT)
 //
@@ -202,10 +204,30 @@ func (p *Pattern) IsEmpty() bool {
 //
 // slab is the calling goroutine's own (NewSlab) and may be nil.
 func (p *Pattern) Match(scheme *Scheme, text *Chars, withPos bool, slab *Slab) (score int, positions []int, ok bool) {
+	return p.match(scheme, text, withPos, slab, (*Scheme).FuzzyMatchV2)
+}
+
+// Matches reports whether text matches, exactly as Match's ok does, at a
+// fraction of the cost: a fuzzy term occurs in a text exactly when its best
+// occurrence does, so the greedy FuzzyMatchV1 decides it in linear time where
+// FuzzyMatchV2 fills a score matrix. Use it to reject texts before scoring
+// them when most of what is matched does not match, such as the lines of a
+// file, and in particular for a query of several terms, where Match would
+// score the first term in full only for a later one to fail.
+func (p *Pattern) Matches(scheme *Scheme, text *Chars, slab *Slab) bool {
+	_, _, ok := p.match(scheme, text, false, slab, (*Scheme).FuzzyMatchV1)
+	return ok
+}
+
+func (p *Pattern) match(scheme *Scheme, text *Chars, withPos bool, slab *Slab, fuzzyAlgo Algo) (score int, positions []int, ok bool) {
 	for _, termSet := range p.termSets {
 		matched := false
 		for _, term := range termSet {
-			res, pos := termAlgos[term.typ](scheme, term.caseSensitive, term.normalize, true, text, term.text, withPos && !term.inv, slab)
+			algo := termAlgos[term.typ]
+			if term.typ == termFuzzy {
+				algo = fuzzyAlgo
+			}
+			res, pos := algo(scheme, term.caseSensitive, term.normalize, true, text, term.text, withPos && !term.inv, slab)
 			if res.Start >= 0 {
 				if term.inv {
 					continue

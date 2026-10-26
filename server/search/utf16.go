@@ -55,3 +55,12 @@ func toClientText(text string, ranges []Range) (string, []Range) {
 	}
 	return b.String(), out
 }
+
+func isASCII(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] >= utf8.RuneSelf {
+			return false
+		}
+	}
+	return true
+}

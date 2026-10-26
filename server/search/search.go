@@ -33,9 +33,9 @@ const (
 	defaultMaxResults = 100
 	maxMaxResults     = 500
 
-	// A non-ASCII query is compiled into a regexp, which has its own size
-	// ceiling; rejecting oversized input at the boundary gives a clear error
-	// instead of a confusing "expression too large".
+	// A query is matched against every line of a repository, at a cost that
+	// grows with its length; no one types one this long, so a longer one is
+	// rejected at the boundary rather than left to run into the timeout.
 	maxQueryBytes = 1024
 
 	// Searches run against a live repository from an interactive UI, so an
@@ -62,11 +62,18 @@ type Line struct {
 	// when the line is very long.
 	Text   string  `json:"text"`
 	Ranges []Range `json:"ranges"`
+	// Rank orders the file's lines by score, 0 for its best: Lines stay in
+	// line order for reading, and Rank says which of them earned the file its
+	// place, so a client showing only a few can show those. Ties go to the
+	// earlier line. A rank rather than the score itself, so that, as with the
+	// order of Matches, the scoring scale stays the server's own.
+	Rank int `json:"rank"`
 }
 
-// FileMatch is one matching file. Lines is set in ModeContent only; PathRanges
-// in ModeName only, and only when the query matched characters of Path (a
-// query of nothing but exclusions, such as "!test", matches without any).
+// FileMatch is one matching file. Lines is set in ModeContent only, in line
+// order; PathRanges in ModeName only. Either set of ranges is empty when the
+// query matched no characters (a query of nothing but exclusions, such as
+// "!test", matches without any).
 type FileMatch struct {
 	Path       string  `json:"path"`
 	Name       string  `json:"name"`
@@ -84,9 +91,11 @@ type Result struct {
 // Options configures a search. The zero value searches file names in the whole
 // work directory without respecting gitignore.
 //
-// Case is smart-case in both modes, as in fzf: a query (in ModeName, each
-// space-separated term) is case-sensitive exactly when it contains an
-// uppercase letter.
+// Both modes take the same query, fzf's extended search syntax
+// (fuzzy.ParsePattern): ModeName matches it against each relative path,
+// ModeContent against each line of each file, where every term has to match
+// within one line. Results are ranked by score; in ModeContent a file ranks by
+// its best line.
 type Options struct {
 	Query string
 	Mode  Mode
@@ -126,20 +135,7 @@ func Search(ctx context.Context, workDir string, opts Options) (Result, error) {
 	}
 	opts.MaxResults = min(opts.MaxResults, maxMaxResults)
 
-	// The query is prepared before listing so that a bad one fails without
-	// paying for enumeration.
-	var pattern *fuzzy.Pattern
-	var m *matcher
-	if opts.Mode == ModeName {
-		pattern = fuzzy.ParsePattern(opts.Query)
-	} else {
-		// One literal is one term, so smart-case reads the whole query: the
-		// same test fuzzy.ParsePattern applies per term in ModeName.
-		m, err = newMatcher(opts.Query, opts.Query != strings.ToLower(opts.Query))
-		if err != nil {
-			return Result{}, err
-		}
-	}
+	pattern := fuzzy.ParsePattern(opts.Query)
 
 	ctx, cancel := context.WithTimeout(ctx, searchTimeout)
 	defer cancel()
@@ -154,7 +150,7 @@ func Search(ctx context.Context, workDir string, opts Options) (Result, error) {
 	if opts.Mode == ModeName {
 		matches, truncated = searchNames(workDir, files, pattern, opts.MaxResults)
 	} else {
-		matches, truncated = searchContents(ctx, workDir, files, m, opts.MaxResults)
+		matches, truncated = searchContents(ctx, workDir, files, pattern, opts.MaxResults)
 	}
 
 	return Result{Matches: matches, Truncated: truncated || listTruncated}, nil

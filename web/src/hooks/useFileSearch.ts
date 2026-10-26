@@ -21,11 +21,14 @@ const FILE_SEARCH_MAX_RESULTS = 100;
  */
 export const FILE_SEARCH_DEBOUNCE_MS = 300;
 
-// Scanning file contents is far more expensive than matching names, so it waits
-// for a longer query before firing.
+// A fuzzy content query matches any line holding its characters in order, so at
+// two characters nearly every line of code matches: the server scores all of
+// them, and the ranked list it returns is mostly ties. Three is where a fuzzy
+// query starts to pick lines out. Matching names is cheap by comparison, so name
+// mode starts at one.
 const MIN_QUERY_LENGTH: Record<FileSearchMode, number> = {
 	name: 1,
-	content: 2,
+	content: 3,
 };
 
 type FileSearchQueryKey = readonly [string, string, FileSearchMode, boolean];
