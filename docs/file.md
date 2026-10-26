@@ -35,6 +35,7 @@ served through it; it is addressed by id in the session's own attachment store
 | Search UI state | `web/src/hooks/useFileSearch.ts`, `web/src/lib/filesSearchStore.ts` | Debounce + query cache, persisted options |
 | RPC actions | `web/src/lib/rpc/file.ts` | `getFile`, `writeFile`, `createFile`, `deleteFile`, `renameFile`, `moveFile`, `searchFiles`, `isAlreadyExistsError`, `fileMoveRefusedReason` |
 | HTTP transfer client | `web/src/lib/fileDownload.ts`, `web/src/lib/rawProbe.ts`, `web/src/lib/fileUpload.ts` | Handing a download to the browser and wording its failures, upload (see [Downloading](#downloading), [Uploading](#uploading)) |
+| Markdown frontmatter | `web/src/lib/frontmatter.ts`, `web/src/components/ui/FrontmatterBlock.tsx` | Splitting a `.md` file's YAML frontmatter from its body, and drawing it as properties (see [Frontmatter](#frontmatter)) |
 | Media playback | `web/src/components/Files/MediaPreview.tsx`, `web/src/components/Media/useMediaPlayback.ts`, `web/src/hooks/useRawMediaSource.ts`, `web/src/components/Media/exclusivePlayback.ts` | Inline audio and video streamed from a raw capability, its recovery, and one sound at a time (see [Playing audio and video](#playing-audio-and-video)) |
 | Download action | `web/src/hooks/useFileDownload.ts`, `web/src/components/Files/FileDownloadControls.tsx`, `saveRawFile` / `saveRawFolder` in `web/src/hooks/useRawMediaSource.ts` | The viewer's Download — check, hand-over, cancel, error — shared by `FileView` and `CommitFileView`, and the menu's Download as zip (`useFolderDownload`, the same core); `saveRawFile` is every streamed Save that gets its own capability, `saveRawFolder` a folder's; `prepareDragDownload` / `heldDragDownloadUrl` the capability a row's drag saves from outside the browser (see [Dragging out to download](#dragging-out-to-download)) |
 | Upload queue state | `web/src/lib/uploadStore.ts` | Queue, concurrency, retry, worktree scope |
@@ -1129,6 +1130,8 @@ plays in place only.
 A `.md` file's text is rendered as Markdown, and an image it names by a
 relative path is read from the file's own directory, as on GitHub — see
 [markdown-images-ui.md](markdown-images-ui.md#where-the-bytes-come-from).
+A YAML frontmatter at its top is shown as properties above the body rather
+than as Markdown — [below](#frontmatter).
 
 Edit is disabled rather than hidden, with the reason in its accessible name, and
 `binary`/`too-large` repeat it visibly on the card. **Delete stays available in
@@ -1181,6 +1184,53 @@ plain, which is how a reader gets at a rendered Markdown file's source and the
 copy button that comes with it, there being no Edit to open it in. For a page
 it is the page/source toggle the viewer above has.
 See [git-ui.md](git-ui.md#viewing-a-file-from-a-commit).
+
+### Frontmatter
+
+A `.md` file that opens with a `---` fenced YAML block — Hugo pages, skill
+files, agent definitions — has that block drawn as a properties list above the
+body. Read as Markdown it is wrong twice over: the closing `---` turns the
+lines above it into a setext heading, and the metadata reads as prose.
+Detection is micromark's own frontmatter extension, not a pattern: the block
+counts only at the very first line (a byte order mark before it is fine), and
+only when it is closed. A later `---` stays a thematic break. The source is
+still a step away, as for any rendered `.md`: Edit here, the plain toggle on a
+file at a commit — so the block offers no copy button of its own.
+
+It is recognised only where `FileContentDisplay` renders a file — the surfaces
+[markdown-images-ui.md](markdown-images-ui.md#where-the-bytes-come-from) lists —
+and never in `MarkdownContent` itself. Frontmatter belongs to a file, not to
+Markdown: an agent's reply, a work item or a comment that opens with `---` means
+a rule, and treating it as metadata there would swallow the text below it.
+
+Values are file content, so they are shown exactly as the file writes them:
+
+- Every value is a text node — never Markdown, never HTML. `**x**` and `<b>`
+  show as typed.
+- YAML is read with the 1.2 core schema, so `2024-05-01` is a string and is
+  never reformatted as a local time; the
+  [time-display rules](time-display-ui.md) are for event times, not file
+  content. Numbers and booleans are sliced from the source (`1.50` stays
+  `1.50`, `0x1F` stays `0x1F`) and set in monospace.
+- A list of scalars is a row of chips; a mapping, or a list holding one, nests
+  under its key with an indent rather than a second key column, so it stays
+  readable on a phone. Three nested levels are drawn as blocks; a structure
+  deeper than that is shown as its YAML source.
+- `null`, `~`, `""`, `[]` and `{}` show a dash (announced as "empty"). An empty
+  frontmatter, or one that is only comments, draws nothing at all.
+
+When the block does not parse — a syntax error, a duplicate key, or more
+aliases than `yaml`'s guard allows — or parses to something other than a
+mapping, the same frame says so instead: a warning note with the first line of
+the parser's message, and the raw text between the fences under it. The line
+and column in that message are the file's own. The body still renders below;
+only the icon carries the warning colour, since the file itself is fine and
+only its metadata is unreadable. A file that is only frontmatter shows only the
+block.
+
+Finding the block costs one Markdown parse more, and only for a file that
+starts with `---`: the same text `MarkdownContent` parses anyway, so it at most
+doubles a cost the view already pays.
 
 ### Loading image bytes
 

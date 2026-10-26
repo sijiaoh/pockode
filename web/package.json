@@ -27,7 +27,10 @@
 		"diff": "^8.0.2",
 		"json-rpc-2.0": "^1.7.1",
 		"lucide-react": "^0.562.0",
+		"mdast-util-from-markdown": "^2.1.0",
+		"mdast-util-frontmatter": "^2.0.1",
 		"mermaid": "^11.12.2",
+		"micromark-extension-frontmatter": "^2.0.0",
 		"react": "^19.2.0",
 		"react-dom": "^19.2.0",
 		"react-markdown": "^10.1.0",
@@ -40,6 +43,7 @@
 		"shiki": "^3.22.0",
 		"tailwindcss": "^4.1.18",
 		"textarea-caret": "^3.1.0",
+		"yaml": "^2.9.1",
 		"zod": "^4.2.1",
 		"zustand": "^5.0.9"
 	},

@@ -1,3 +1,5 @@
+import { useMemo } from "react";
+import { readMarkdownFile } from "../../lib/frontmatter";
 import {
 	CodeHighlighter,
 	getLanguageFromPath,
@@ -5,6 +7,7 @@ import {
 } from "../../lib/shikiUtils";
 import { useWSStore } from "../../lib/wsStore";
 import { markdownFileBaseDir } from "../../utils/markdownImage";
+import { FrontmatterBlock } from "./FrontmatterBlock";
 import { MarkdownContent } from "./MarkdownContent";
 
 interface Props {
@@ -58,11 +61,22 @@ function MarkdownFileContent({
 	onOpenFile?: (path: string) => void;
 }) {
 	const workDir = useWSStore((state) => state.workDir);
-	return (
+	const { frontmatter, body } = useMemo(
+		() => readMarkdownFile(content),
+		[content],
+	);
+	const markdown = (
 		<MarkdownContent
-			content={content}
+			content={body}
 			baseDir={markdownFileBaseDir(filePath, workDir)}
 			onOpenFile={onOpenFile}
 		/>
+	);
+	if (!frontmatter) return markdown;
+	return (
+		<div className="space-y-4">
+			<FrontmatterBlock frontmatter={frontmatter} />
+			{body.trim() && markdown}
+		</div>
 	);
 }
