@@ -33,7 +33,7 @@ func TestMatcherFind(t *testing.T) {
 			text: "needle NEEDLE", want: []Range{{7, 13}},
 		},
 		{
-			// Offsets must stay byte-based so the client can slice Text with them.
+			// find works in bytes; toClientText converts to the client's unit later.
 			name: "offsets are bytes past multibyte runes", query: "needle", text: "日本語 needle",
 			want: []Range{{10, 16}},
 		},

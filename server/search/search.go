@@ -7,13 +7,12 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path"
 	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 
 	"github.com/pockode/server/contents"
+	"github.com/pockode/server/fuzzy"
 )
 
 var (
@@ -45,8 +44,11 @@ const (
 	searchTimeout = 10 * time.Second
 )
 
-// Range is a match position as byte offsets into Line.Text (end-exclusive).
-// Offsets are byte-based, matching the UTF-8 encoding of Text.
+// Range is a match position in the string it accompanies (Line.Text, or
+// FileMatch.Path for PathRanges), end-exclusive, in UTF-16 code units: the unit
+// JS string indexes count, so the client can slice that string with it
+// directly. Inside this package ranges are byte offsets, and toClientText
+// converts on the way out.
 type Range struct {
 	Start int `json:"start"`
 	End   int `json:"end"`
@@ -62,11 +64,14 @@ type Line struct {
 	Ranges []Range `json:"ranges"`
 }
 
-// FileMatch is one matching file. Lines is empty in ModeName.
+// FileMatch is one matching file. Lines is set in ModeContent only; PathRanges
+// in ModeName only, and only when the query matched characters of Path (a
+// query of nothing but exclusions, such as "!test", matches without any).
 type FileMatch struct {
-	Path  string `json:"path"`
-	Name  string `json:"name"`
-	Lines []Line `json:"lines,omitempty"`
+	Path       string  `json:"path"`
+	Name       string  `json:"name"`
+	PathRanges []Range `json:"path_ranges,omitempty"`
+	Lines      []Line  `json:"lines,omitempty"`
 }
 
 // Result holds search matches. Truncated reports that limits or the timeout
@@ -77,14 +82,17 @@ type Result struct {
 }
 
 // Options configures a search. The zero value searches file names in the whole
-// work directory, case-insensitively, without respecting gitignore.
+// work directory without respecting gitignore.
+//
+// Case is smart-case in both modes, as in fzf: a query (in ModeName, each
+// space-separated term) is case-sensitive exactly when it contains an
+// uppercase letter.
 type Options struct {
 	Query string
 	Mode  Mode
 	// Path limits the search to a subdirectory, relative to the work directory.
 	Path             string
 	RespectGitignore bool
-	CaseSensitive    bool
 	// MaxResults caps the number of returned files. Non-positive means the
 	// default; values above the hard cap are clamped.
 	MaxResults int
@@ -118,9 +126,19 @@ func Search(ctx context.Context, workDir string, opts Options) (Result, error) {
 	}
 	opts.MaxResults = min(opts.MaxResults, maxMaxResults)
 
-	m, err := newMatcher(opts.Query, opts.CaseSensitive)
-	if err != nil {
-		return Result{}, err
+	// The query is prepared before listing so that a bad one fails without
+	// paying for enumeration.
+	var pattern *fuzzy.Pattern
+	var m *matcher
+	if opts.Mode == ModeName {
+		pattern = fuzzy.ParsePattern(opts.Query)
+	} else {
+		// One literal is one term, so smart-case reads the whole query: the
+		// same test fuzzy.ParsePattern applies per term in ModeName.
+		m, err = newMatcher(opts.Query, opts.Query != strings.ToLower(opts.Query))
+		if err != nil {
+			return Result{}, err
+		}
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, searchTimeout)
@@ -134,7 +152,7 @@ func Search(ctx context.Context, workDir string, opts Options) (Result, error) {
 	var matches []FileMatch
 	var truncated bool
 	if opts.Mode == ModeName {
-		matches, truncated = searchNames(workDir, files, m, opts.MaxResults)
+		matches, truncated = searchNames(workDir, files, pattern, opts.MaxResults)
 	} else {
 		matches, truncated = searchContents(ctx, workDir, files, m, opts.MaxResults)
 	}
@@ -162,45 +180,4 @@ func resolveScope(workDir, path string) (string, error) {
 		return "", fmt.Errorf("failed to stat search path: %w", err)
 	}
 	return scope, nil
-}
-
-// searchNames matches the query against relative paths, ranking base-name hits
-// above path-only hits and shorter paths above longer ones.
-func searchNames(workDir string, files []string, m *matcher, maxResults int) ([]FileMatch, bool) {
-	type candidate struct {
-		path      string
-		name      string
-		nameMatch bool
-	}
-
-	candidates := make([]candidate, 0, maxResults)
-	for _, p := range files {
-		if !m.matchString(p) {
-			continue
-		}
-		name := path.Base(p)
-		candidates = append(candidates, candidate{path: p, name: name, nameMatch: m.matchString(name)})
-	}
-
-	sort.SliceStable(candidates, func(i, j int) bool {
-		if candidates[i].nameMatch != candidates[j].nameMatch {
-			return candidates[i].nameMatch
-		}
-		return len(candidates[i].path) < len(candidates[j].path)
-	})
-
-	matches := make([]FileMatch, 0, min(len(candidates), maxResults))
-	for _, c := range candidates {
-		// The file list can name entries that are not readable regular files
-		// (submodule gitlinks, tracked-but-deleted files); drop them here so
-		// only results the client can actually open are returned.
-		if !isRegularFile(filepath.Join(workDir, filepath.FromSlash(c.path))) {
-			continue
-		}
-		if len(matches) >= maxResults {
-			return matches, true
-		}
-		matches = append(matches, FileMatch{Path: c.path, Name: c.name})
-	}
-	return matches, false
 }
