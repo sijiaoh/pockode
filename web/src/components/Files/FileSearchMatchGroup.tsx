@@ -20,7 +20,9 @@ const FileSearchMatchGroup = memo(function FileSearchMatchGroup({
 	onSelect,
 }: Props) {
 	const lines = match.lines ?? [];
-	const preview = lines.slice(0, MAX_PREVIEW_LINES);
+	// The server ranks the lines, so the preview shows the ones that earned the
+	// file its place rather than the first ones in the file.
+	const preview = lines.filter((line) => line.rank < MAX_PREVIEW_LINES);
 	// The server caps lines per file, so this is "more than shown", not
 	// necessarily every remaining match in the file.
 	const hidden = lines.length - preview.length;

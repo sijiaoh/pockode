@@ -423,18 +423,23 @@ describe("FilesTab search", () => {
 		).toBeInTheDocument();
 	});
 
-	it("waits for two characters before searching file contents", async () => {
+	it("waits for three characters before searching file contents", async () => {
 		searchFiles.mockResolvedValue(result([]));
 		useFilesSearchStore.setState({ searchContent: true });
 		renderFilesTab();
 
-		typeSearch("a");
+		typeSearch("ab");
 		await settleSearch();
 
 		expect(
-			screen.getByText("Type at least 2 characters to search file contents"),
+			screen.getByText("Type at least 3 characters to search file contents"),
 		).toBeInTheDocument();
 		expect(searchFiles).not.toHaveBeenCalled();
+
+		typeSearch("abc");
+		await settleSearch();
+
+		expect(lastSearchParams()).toMatchObject({ query: "abc", mode: "content" });
 	});
 });
 

@@ -12,8 +12,9 @@ function line(
 	number: number,
 	text: string,
 	ranges: SearchRange[] = [],
+	rank = 0,
 ): SearchLine {
-	return { number, text, ranges };
+	return { number, text, ranges, rank };
 }
 
 function marked(container: HTMLElement): string[] {
@@ -30,7 +31,7 @@ function renderResults(
 		error: null,
 		isFetching: false,
 		mode: "content",
-		minQueryLength: 2,
+		minQueryLength: 3,
 		matchedQuery: "needle",
 		retry: vi.fn(),
 		...overrides,
@@ -46,18 +47,20 @@ function renderResults(
 }
 
 describe("FileSearchResults in content mode", () => {
-	it("previews the first matches and summarises the rest", () => {
+	it("previews the best-ranked matches in line order and summarises the rest", () => {
 		renderResults({
 			matches: [
 				{
 					path: "src/app.ts",
 					name: "app.ts",
+					// The file's best line is its last one, the case where showing the
+					// first lines would hide what ranked the file.
 					lines: [
-						line(3, "const needle = 1;"),
-						line(9, "use(needle);"),
-						line(12, "// needle"),
-						line(20, "needle again"),
-						line(31, "still needle"),
+						line(3, "const needle = 1;", [], 3),
+						line(9, "use(needle);", [], 1),
+						line(12, "// needle", [], 2),
+						line(20, "needle again", [], 4),
+						line(31, "still needle", [], 0),
 					],
 				},
 			],
@@ -65,15 +68,36 @@ describe("FileSearchResults in content mode", () => {
 		});
 
 		expect(
-			screen.getByRole("button", { name: "Open src/app.ts, match on line 3" }),
-		).toBeInTheDocument();
-		expect(
-			screen.queryByRole("button", {
-				name: "Open src/app.ts, match on line 20",
-			}),
-		).not.toBeInTheDocument();
+			screen
+				.getAllByRole("button", { name: /match on line/ })
+				.map((button) => button.getAttribute("aria-label")),
+		).toEqual([
+			"Open src/app.ts, match on line 9",
+			"Open src/app.ts, match on line 12",
+			"Open src/app.ts, match on line 31",
+		]);
 		expect(screen.getByText("+2 more matches")).toBeInTheDocument();
 		expect(screen.getByText("1 file · 5 matches")).toBeInTheDocument();
+	});
+
+	it("lists files in the order the server ranked them", () => {
+		renderResults({
+			matches: [
+				{ path: "src/z.ts", name: "z.ts", lines: [line(40, "needle")] },
+				{ path: "src/a.ts", name: "a.ts", lines: [line(2, "nee dle")] },
+			],
+			truncated: false,
+		});
+
+		// Neither alphabetical nor by line number: the best-scoring file first.
+		expect(
+			screen
+				.getAllByRole("button", { name: /match on line/ })
+				.map((button) => button.getAttribute("aria-label")),
+		).toEqual([
+			"Open src/z.ts, match on line 40",
+			"Open src/a.ts, match on line 2",
+		]);
 	});
 
 	it("says the search was cut off rather than claiming nothing matches", () => {
@@ -120,6 +144,34 @@ describe("FileSearchResults highlighting", () => {
 		});
 
 		expect(marked(container)).toEqual(["Needle"]);
+	});
+
+	it("marks each part of a fuzzy content match separately", () => {
+		const { container } = renderResults(
+			{
+				matches: [
+					{
+						path: "src/search.go",
+						name: "search.go",
+						// "srch tmout": the characters picked are scattered, and the
+						// two terms meet at "hT" so the server merged across them.
+						lines: [
+							line(7, "\tsearchTimeout = 10 * time.Second", [
+								{ start: 1, end: 2 },
+								{ start: 4, end: 8 },
+								{ start: 9, end: 10 },
+								{ start: 11, end: 14 },
+							]),
+						],
+					},
+				],
+				truncated: false,
+			},
+			{ matchedQuery: "srch tmout" },
+		);
+
+		expect(marked(container)).toEqual(["s", "rchT", "m", "out"]);
+		expect(container).toHaveTextContent("searchTimeout = 10 * time.Second");
 	});
 
 	it("marks a fuzzy name match in both the file name and its directory", () => {
