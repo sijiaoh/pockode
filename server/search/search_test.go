@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -197,6 +198,7 @@ func TestSearchContent(t *testing.T) {
 		"c.txt":       "nothing to see\n",
 		"sub/d.txt":   "a NEEDLE in sub\n",
 		"binary.dat":  "before\x00needle after\n",
+		"long.bin":    "\x00" + strings.Repeat("needle\n", binaryProbeBytes),
 		"unicode.txt": "日本語 needle テスト\n",
 	})
 
@@ -213,8 +215,10 @@ func TestSearchContent(t *testing.T) {
 	if _, ok := byPath["c.txt"]; ok {
 		t.Error("c.txt has no match but was returned")
 	}
-	if _, ok := byPath["binary.dat"]; ok {
-		t.Error("binary file was searched, want it skipped")
+	for _, binary := range []string{"binary.dat", "long.bin"} {
+		if _, ok := byPath[binary]; ok {
+			t.Errorf("binary file %s was searched, want it skipped", binary)
+		}
 	}
 
 	a, ok := byPath["a.txt"]
@@ -228,9 +232,10 @@ func TestSearchContent(t *testing.T) {
 		t.Errorf("got a.txt ranges %+v, want %+v", a.Lines[0].Ranges, want)
 	}
 
+	// Like fzf, a line highlights the one occurrence it was scored by.
 	b := byPath["b.txt"]
-	if len(b.Lines) != 1 || len(b.Lines[0].Ranges) != 2 {
-		t.Errorf("got b.txt lines %+v, want one line with two ranges", b.Lines)
+	if want := []Range{{Start: 0, End: 6}}; len(b.Lines) != 1 || !slices.Equal(b.Lines[0].Ranges, want) {
+		t.Errorf("got b.txt lines %+v, want one line with ranges %+v", b.Lines, want)
 	}
 
 	if _, ok := byPath["sub/d.txt"]; !ok {
@@ -259,7 +264,6 @@ func TestSearchContentSmartCase(t *testing.T) {
 	}{
 		{query: "needle", want: []string{"lower.txt", "upper.txt"}},
 		{query: "NEEDLE", want: []string{"upper.txt"}},
-		// Non-ASCII queries take the regexp path, which follows the same rule.
 		{query: "école", want: []string{"lower.txt", "upper.txt"}},
 		{query: "ÉCOLE", want: []string{"upper.txt"}},
 	}
@@ -285,7 +289,8 @@ func TestSearchContentRangesIndexDecodedText(t *testing.T) {
 		"a.txt": strings.Repeat("ok\n", binaryProbeBytes) + "\xff\xfe 😀 needle \xe6\x97 NEEDLE\n",
 	})
 
-	result, err := Search(context.Background(), workDir, Options{Query: "needle", Mode: ModeContent})
+	// Two exact terms, so that two ranges land past the invalid bytes.
+	result, err := Search(context.Background(), workDir, Options{Query: "'needle 'NEEDLE", Mode: ModeContent})
 	if err != nil {
 		t.Fatalf("Search failed: %v", err)
 	}
@@ -302,9 +307,9 @@ func TestSearchContentRangesIndexDecodedText(t *testing.T) {
 	if len(line.Ranges) != 2 {
 		t.Fatalf("got ranges %+v, want two", line.Ranges)
 	}
-	for _, r := range line.Ranges {
-		if got := sliceUTF16(line.Text, r); !strings.EqualFold(got, "needle") {
-			t.Errorf("got %q at range %+v in %q, want needle", got, r, line.Text)
+	for i, want := range []string{"needle", "NEEDLE"} {
+		if got := sliceUTF16(line.Text, line.Ranges[i]); got != want {
+			t.Errorf("got %q at range %+v in %q, want %q", got, line.Ranges[i], line.Text, want)
 		}
 	}
 }
@@ -394,6 +399,209 @@ func TestSearchContentCapsLinesPerFile(t *testing.T) {
 	}
 	if !result.Truncated {
 		t.Error("got Truncated = false, want true")
+	}
+}
+
+func searchContent(t *testing.T, workDir string, opts Options) Result {
+	t.Helper()
+	opts.Mode = ModeContent
+	result, err := Search(context.Background(), workDir, opts)
+	if err != nil {
+		t.Fatalf("Search failed: %v", err)
+	}
+	return result
+}
+
+// Content mode takes name mode's query language, with a line as the text every
+// term has to match within.
+func TestSearchContentQuerySyntax(t *testing.T) {
+	workDir := t.TempDir()
+	writeTree(t, workDir, map[string]string{
+		"const.go": "\tsearchTimeout = 10 * time.Second\n",
+		"split.go": "search\ntimeout\n",
+		"test.go":  "// searchTimeout under test\n",
+	})
+
+	tests := []struct {
+		query string
+		want  []string
+	}{
+		{query: "search timeout", want: []string{"const.go", "test.go"}},
+		{query: "stmo", want: []string{"const.go", "test.go"}},
+		{query: "'searchtimeout", want: []string{"const.go", "test.go"}},
+		{query: "'stmo"},
+		{query: "searchTimeout !test", want: []string{"const.go"}},
+		// As in fzf, ^ skips the line's leading whitespace: indentation.
+		{query: "^search", want: []string{"const.go", "split.go"}},
+		{query: "Second$", want: []string{"const.go"}},
+		{query: "'SEARCH"},
+		{query: "zzz | ^timeout", want: []string{"split.go"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.query, func(t *testing.T) {
+			got := matchedPaths(searchContent(t, workDir, Options{Query: tt.query}).Matches)
+			slices.Sort(got)
+			if !slices.Equal(got, tt.want) {
+				t.Errorf("got %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestSearchContentRanksFilesByBestLine(t *testing.T) {
+	workDir := t.TempDir()
+	writeTree(t, workDir, map[string]string{
+		// Listed first, so only ranking can put the others ahead of it.
+		"a.txt": "sxexaxrxcxh\n",
+		"b.txt": "researching\n",
+		// One scattered line and one whole word: the word ranks the file.
+		"c.txt": "s.e.a.r.c.h\nfind search here\n",
+		// The same best line as c.txt ties, and ties keep the listing's order.
+		"d.txt": "search here find\n",
+	})
+
+	result := searchContent(t, workDir, Options{Query: "search"})
+	want := []string{"c.txt", "d.txt", "b.txt", "a.txt"}
+	if got := matchedPaths(result.Matches); !slices.Equal(got, want) {
+		t.Errorf("got %v, want %v", got, want)
+	}
+	if lines := result.Matches[0].Lines; len(lines) != 2 || lines[0].Number != 1 || lines[1].Number != 2 {
+		t.Errorf("got c.txt lines %+v, want lines 1 and 2 in order", lines)
+	}
+}
+
+func TestSearchContentTruncatesKeepingBest(t *testing.T) {
+	workDir := t.TempDir()
+	writeTree(t, workDir, map[string]string{
+		"a.txt": "sxexaxrxcxh\n",
+		"b.txt": "researching\n",
+		"c.txt": "search\n",
+	})
+
+	result := searchContent(t, workDir, Options{Query: "search", MaxResults: 2})
+	want := []string{"c.txt", "b.txt"}
+	if got := matchedPaths(result.Matches); !slices.Equal(got, want) {
+		t.Errorf("got %v, want %v", got, want)
+	}
+	if !result.Truncated {
+		t.Error("got Truncated = false, want true")
+	}
+}
+
+// Ranking holds across chunks and the trims made while scanning: a better file
+// in a later chunk still wins, and among ties the earliest listed survives.
+func TestSearchContentRanksAcrossChunks(t *testing.T) {
+	workDir := t.TempDir()
+	files := make(map[string]string)
+	for i := range chunkSize + 1 {
+		files[fmt.Sprintf("f%03d.txt", i)] = "sxexaxrxcxh\n"
+	}
+	files[fmt.Sprintf("f%03d.txt", chunkSize+1)] = "search\n"
+	writeTree(t, workDir, files)
+
+	result := searchContent(t, workDir, Options{Query: "search", MaxResults: 2})
+	want := []string{fmt.Sprintf("f%03d.txt", chunkSize+1), "f000.txt"}
+	if got := matchedPaths(result.Matches); !slices.Equal(got, want) {
+		t.Errorf("got %v, want %v", got, want)
+	}
+	if !result.Truncated {
+		t.Error("got Truncated = false, want true")
+	}
+}
+
+// A query that parses to no terms matches every line without marking any
+// characters, and the files come in the listing's order.
+func TestSearchContentNoTerms(t *testing.T) {
+	workDir := t.TempDir()
+	writeTree(t, workDir, map[string]string{
+		"a.txt": "one\n",
+		"b.txt": "two\n",
+		"c.txt": "three\n",
+	})
+
+	result := searchContent(t, workDir, Options{Query: "'", MaxResults: 2})
+	if got, want := matchedPaths(result.Matches), []string{"a.txt", "b.txt"}; !slices.Equal(got, want) {
+		t.Errorf("got %v, want %v", got, want)
+	}
+	if !result.Truncated {
+		t.Error("got Truncated = false, want true")
+	}
+	if line := result.Matches[0].Lines[0]; line.Ranges == nil || len(line.Ranges) != 0 {
+		t.Errorf("got ranges %+v, want empty (not null)", line.Ranges)
+	}
+}
+
+// A file with more matching lines than are kept shows its best ones, still in
+// line order, so the lines that ranked it are among those shown, and
+// ranks them so a client showing fewer can pick the best. Equal scores rank
+// the earlier line first, and also decide which of them is dropped.
+func TestSearchContentKeepsBestLines(t *testing.T) {
+	workDir := t.TempDir()
+	writeTree(t, workDir, map[string]string{
+		"many.txt": strings.Repeat("sxexaxrxcxh\n", maxLinesPerFile) + "search\n" + "sxexaxrxcxh\n",
+	})
+
+	result := searchContent(t, workDir, Options{Query: "search"})
+	lines := result.Matches[0].Lines
+	if len(lines) != maxLinesPerFile {
+		t.Fatalf("got %d lines, want %d", len(lines), maxLinesPerFile)
+	}
+	if got := lines[len(lines)-1]; got.Number != maxLinesPerFile+1 || got.Text != "search" {
+		t.Errorf("got last line %+v, want line %d %q", got, maxLinesPerFile+1, "search")
+	}
+	if !slices.IsSortedFunc(lines, func(a, b Line) int { return a.Number - b.Number }) {
+		t.Errorf("got lines out of order: %+v", lines)
+	}
+	// Lines 1..19 survive with equal scores, the 20th is the one dropped.
+	for i, l := range lines[:len(lines)-1] {
+		if l.Number != i+1 || l.Rank != i+1 {
+			t.Errorf("got line %d with rank %d, want line %d with rank %d", l.Number, l.Rank, i+1, i+1)
+		}
+	}
+	if got := lines[len(lines)-1].Rank; got != 0 {
+		t.Errorf("got best line rank %d, want 0", got)
+	}
+	if !result.Truncated {
+		t.Error("got Truncated = false, want true")
+	}
+}
+
+// Fuzzy ranges mark each matched character, in UTF-16 units past characters
+// that take two of them.
+func TestSearchContentFuzzyRanges(t *testing.T) {
+	workDir := t.TempDir()
+	writeTree(t, workDir, map[string]string{
+		"a.txt": "😀 é searchTimeout\r\n",
+	})
+
+	line := searchContent(t, workDir, Options{Query: "stmo"}).Matches[0].Lines[0]
+	if line.Text != "😀 é searchTimeout" {
+		t.Errorf("got text %q, want the line without its line break", line.Text)
+	}
+	var got strings.Builder
+	for _, r := range line.Ranges {
+		got.WriteString(sliceUTF16(line.Text, r))
+	}
+	if got.String() != "sTmo" {
+		t.Errorf("got %q marked by ranges %+v, want %q", got.String(), line.Ranges, "sTmo")
+	}
+}
+
+// A query of only exclusions matches lines without marking any characters,
+// long ones included.
+func TestSearchContentExclusionOnly(t *testing.T) {
+	workDir := t.TempDir()
+	writeTree(t, workDir, map[string]string{
+		"a.txt": "needle\n" + strings.Repeat("x", 2*maxLineBytes) + "\n",
+	})
+
+	result := searchContent(t, workDir, Options{Query: "!needle"})
+	lines := result.Matches[0].Lines
+	if len(lines) != 1 || lines[0].Number != 2 || lines[0].Ranges == nil || len(lines[0].Ranges) != 0 {
+		t.Fatalf("got lines %+v, want line 2 with empty (not null) ranges", lines)
+	}
+	if len(lines[0].Text) != maxLineBytes {
+		t.Errorf("got text of %d bytes, want it clipped to %d", len(lines[0].Text), maxLineBytes)
 	}
 }
 
