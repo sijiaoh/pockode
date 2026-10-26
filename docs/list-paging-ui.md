@@ -18,8 +18,8 @@ that already pages and is the pattern the session list follows.
 | | Session sidebar | Project list |
 |---|---|---|
 | What it is for | Getting back into a conversation | Seeing what needs a person |
-| Order today | `updated_at`, newest first (`server/session/store.go` — `FileStore.List`) | The order the store holds, which is creation order; the archive alone is sorted, by `updated_at` |
-| Sort key | **Moves constantly.** Every turn touches it | Stable. A row's position never changes while it is on screen (project-ui.md §2.3) |
+| Order | `updated_at`, newest first (`server/session/store.go` — `FileStore.List`) | Grouped by state, each group `updated_at` newest first (project-ui.md §2.3); the archive is `updated_at` too |
+| Sort key | Moves when a session needs the user — a turn ending, a permission request — and on title or settings changes; not while a turn streams or is metered | Moves on lifecycle events, not on comments (project-ui.md §2.3) |
 | What the user does with it | Scans the top, occasionally digs | Reads the groups, acts on a row |
 | What grows without limit | Sessions, forever | Closed work, forever |
 | Chosen interaction | **Infinite scroll** | **Paging, in the archive only** |
@@ -115,15 +115,24 @@ left for a row that is not there, whatever the filter is doing — which leaves 
 state for it to decide on, so it is a constant (`UNLISTED_SESSION_NAME`) rather
 than a selector.
 
-### 2.4 The list holds still while it is being read
+### 2.4 The list is a prefix of the order
 
-project-ui.md §2.3 already promises this for work rows: "rows keep the order the
-list arrives in, so a work that starts or blocks while the list is being read
-stays where the user's eye left it". The session list has never made that promise
-and has never needed to, because the user reads its first screen and the rows
-that jump to the top are jumping into view, not out of it.
+Whatever a list that grows downwards shows — the session sidebar, subscribed or
+merged across worktrees — is the top of the server's order, cut at its last row,
+with nothing missing above the cut. (The archive is a window, not a prefix, and
+has rules of its own in §4.3.) A page only extends it downwards, and a
+row only moves when its own place in the order has changed — never because of a
+page landing. So **nothing is ever inserted among rows the reader has already
+scrolled past except a row whose recency genuinely changed**, and that row goes
+where the order puts it.
 
-With infinite scroll it needs the promise, and §3.2 gives it the same one.
+That is the promise paging has to keep, and it is narrower than "the list holds
+still". The session list once made the wider one — rows updated in place and
+moved only on a load — and gave it up (§3.2): a sidebar left open for hours
+showed a "most recent" order that was hours stale. What paging must not do is
+put a row in the middle of the list for a reason of its own, such as a page that
+arrived out of order or a source that had not been read far enough yet (§3.6);
+that is a row in the wrong place, not a row that moved.
 
 ## 3. The session sidebar — infinite scroll
 
@@ -140,8 +149,9 @@ part. Chat pages *upward*, so every landing page pushes the reader's content dow
 and has to be measured and re-pinned around. The session list pages *downward*:
 rows are appended below the fold, nothing on screen moves, and there is no anchor
 to restore. **No page that lands here needs a scroll measurement.** The one thing
-that can still move the reader is a row arriving at the *top* while they are far
-down it, and §3.2 says who absorbs that.
+that can still move the reader is a row arriving above them — created, or moving
+up because it was touched — while they are far down the list, and §3.2 says who
+absorbs that.
 
 | State | What is on screen |
 |---|---|
@@ -170,38 +180,68 @@ The subscription keeps pushing. The rules:
 
 | Event | Behaviour |
 |---|---|
-| A session **changes** — new turn, unread, title | The row updates in place. **It does not move.** |
+| A session **changes** — a turn, unread, title, settings | It **goes where the order now puts it**: the top if the change moved its `updated_at`, where it already was if not (unread and usage do not) |
 | A session is **created** | Prepended, at the top of the list, where it genuinely belongs. The user is not scrolled to it |
 | A session is **deleted** | The row goes immediately. It is the answer to an action, and an action's answer is never deferred |
-| A session changes but is **not loaded** | Nothing. It will be in its right place the next time the order is computed |
+| A session changes but is **not loaded** | Inserted where it belongs if that is above the last loaded row, or anywhere once the list has been read to its end. Otherwise nothing: the page that reaches it brings it in |
 
-A prepend is the one event that moves everything below it, and a reader 200 rows
-down would see the list slide by one row. **The browser's own scroll anchoring
-absorbs that, and the session list must therefore leave it on** — which means not
-doing what the transcript does, where it is switched off (`overflow-anchor: none`)
-precisely because chat pins its own anchor by hand. A list that does no measuring
-of its own must not disable the thing that measures for it. This is the one place
-in §3 where that matters, and it is worth a test of its own (§8).
+**Where a changed session goes is one rule, whether or not the list held it.**
+The list is a prefix of the order (§2.4), so a session belongs in it only if it
+sorts above the last row, or once nothing is left to fetch. Below that line it is
+among rows nobody has fetched, and the page that reaches it puts it in the right
+place, deduped against any copy the list held (§3.3). A held row that now sorts
+below the line is therefore taken out rather than kept at the bottom, where the
+next page would be appended under a row that sorts after it. In practice that
+never happens — the server only ever moves `updated_at` to now, so a changed row
+goes to the top — but the rule is what keeps the list a prefix if it ever did.
 
-**Recency reordering happens on a load, not on an event.** That is the whole
-rule, and it is the same one project-ui.md §2.3 already states for work. Today
-the list re-sorts on the server for every fetch and never re-sorts on the client
-at all, so this is not a new behaviour — it is the existing behaviour, named, so
-that paging cannot be built on the assumption that a row may be moved to the top
-of a list somebody is 200 rows into.
+A session the task-session filter hides is never inserted. The server does not
+push it in the first place — a filtered subscriber is sent one removal when a
+session becomes a work session, and nothing about it after that — and the client
+checks again, because the update handler is the line that would otherwise put a
+row the user asked not to see on screen.
 
-The server already keeps a rule of this shape on the other side, and for the
-same reason: `FileStore.AddUsage` deliberately leaves `UpdatedAt` alone, because
-"moving the session to the top of the list every time a turn is metered would
-reorder the list behind the user's back". §3.2 is that sentence applied to every
-other kind of touch.
+A prepend, or a row moving up from below the reader, shifts everything under it,
+and a reader 200 rows down would see the list slide by one row. **The browser's
+own scroll anchoring absorbs that, and the session list must therefore leave it
+on** — which means not doing what the transcript does, where it is switched off
+(`overflow-anchor: none`) precisely because chat pins its own anchor by hand. A
+list that does no measuring of its own must not disable the thing that measures
+for it. This is the one place in §3 where that matters, and it is worth a test
+of its own (§8).
 
-A frozen order is legible rather than arbitrary because every row already prints
-its own `updated_at` (`SessionItem`'s subtitle). A row sitting above one that was
-touched more recently is not a list in no order — it is two visible dates, and
-the user can see which of them the list was sorted on.
+**Recency is re-sorted on an event, not frozen until a load.** The list used to
+hold every row where it was and re-sort only when it was loaded again, so that a
+row would never jump out from under the user's finger. The cost ran the other
+way: on a wide screen the sidebar stays open for hours, and its "most recent"
+order went stale until the user happened to toggle it. A session moves rarely —
+`updated_at` is touched when a turn ends or is interrupted, when the agent asks
+for permission, on a title or settings change and on first activation, and
+never while a turn streams or is metered — and it moves exactly when it needs
+the user. A mis-tap has to land in the few hundred milliseconds around that, and
+all it does is open the wrong conversation, which is one tap to undo. The work
+list's `Current` segment already re-sorts live for the same reason
+(project-ui.md §2.3), and the same refusal applies here: nothing pauses the
+re-sort while the list is scrolled or hovered, because an order that depends on
+when the user last scrolled is harder to explain than one that re-sorts.
 
-The order is recomputed, and the list collapses back to one page, on exactly
+The server keeps the rarity on its side: `FileStore.AddUsage` deliberately
+leaves `UpdatedAt` alone, because "moving the session to the top of the list
+every time a turn is metered would reorder the list behind the user's back".
+Live re-sorting makes that rule matter more, not less — it is what keeps a
+running turn from dragging its row to the top on every metered step.
+
+Every row prints its own `updated_at` (`SessionItem`'s subtitle), so the order on
+screen can always be checked against the dates beside it.
+
+**One known gap.** The line a not-loaded session is held to is the client's
+last row; the next page starts at the server's cursor, which is the last row it
+*sent*. If that row has since moved up, the two differ, and a session landing
+between them would be left out by the event and skipped by the page until the
+next load or resync. It takes an `updated_at` that moves somewhere other than
+now, which the server never does, so nothing guards against it.
+
+The list collapses back to one page, recomputed from the top, on exactly
 these: opening the sidebar, clicking the Sessions tab, switching worktree,
 flipping the task-session filter, and reconnecting. All five are things the user
 did, and all five already reset this list today.
@@ -277,7 +317,9 @@ because no single request can make them across sources: the list may only show
 rows it can prove nothing will be inserted above (§2.4), and it dedupes by id
 (§3.3). Nothing is pushed to it, so it is re-read only when the user asks and
 never in the background — installing a round replaces the list and would cost a
-reader their depth. That list, and the filter that selects it, are
+reader their depth. For the same reason §3.2's live re-sort does not reach it:
+with no subscription there is no event to move a row on, and its order is the
+one its last read put it in. That list, and the filter that selects it, are
 [cross-worktree-session-ui.md](cross-worktree-session-ui.md#all-worktrees-is-merged-on-the-client).
 
 Changing that filter is unlike the five things §3.2 lists as recomputing the
@@ -550,14 +592,14 @@ The checks, in the order they would fail:
 | 1 | The Project tab's attention dot and the *Needs you* count are the same before and after paging exists, on a project whose archive is longer than one page (§2.1) |
 | 2 | A story row's `{closed}/{total} tasks` is right when some of those tasks are closed and the archive has not been opened (§2.2) |
 | 3 | Scrolling the session list to the end, while sessions are being touched by a running agent, loses no session and shows none twice (§3.3) |
-| 4 | A session that updates while the user is scrolled past it does not move (§3.2) |
+| 4 | A session that updates moves to its place in the order; one not loaded is inserted only above the last loaded row or once the list is read to its end, and never when the task-session filter hides it (§3.2) |
 | 5 | A failed page shows Retry and does not retry by itself; Retry recovers and re-arms (§3.1) |
 | 6 | The sentinel is reachable and operable by keyboard alone (§3.1) |
 | 7 | A resync while scrolled deep does not strand the user past the end of the list (§3.4) |
 | 8 | The archive pager does not render when there is one page, and each button is disabled rather than removed at its end (§4.2) |
 | 9 | Changing archive page returns the scroll to the top (§4.2) |
 | 9a | A work that closes while the app is open is in the archive the next time the Closed segment is looked at, with no reload (§4.3) |
-| 10 | A session created while the reader is far down the list does not slide the rows under them — the scroll anchoring §3.2 relies on is on, and no `overflow-anchor: none` has been copied over from the transcript |
+| 10 | A session created, or one updated and moving up, while the reader is far down the list does not slide the rows under them — the scroll anchoring §3.2 relies on is on, and no `overflow-anchor: none` has been copied over from the transcript |
 | 11 | Each capped group's count is that whole group's, not the number of rows fetched, and "Show earlier work" sits above the rows rather than below them (§4.1) |
 | 11a | The rows a cap holds back are the least recently updated of that group — the bottom of what the reader sees — and the two capped groups cannot spend each other's budget (§4.1) |
 | 11b | Two groups offering "Show earlier work" at once produce one error message and one Retry between them when the fetch fails (§4.1) |
