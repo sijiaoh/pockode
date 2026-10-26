@@ -124,3 +124,68 @@ describe("a rendered Markdown file's images", () => {
 		});
 	});
 });
+
+describe("a rendered Markdown file's frontmatter", () => {
+	it("is shown as properties above the body", () => {
+		const { container } = renderFile(
+			"SKILL.md",
+			"---\nname: commit\ntags: [review, git]\n---\n# Commit\n\nBody.\n\n---\n\nAfter.\n",
+		);
+
+		const terms = within(container).getAllByRole("term");
+		expect(terms.map((term) => term.textContent)).toEqual(["name", "tags"]);
+		expect(screen.getByText("commit").tagName).toBe("DD");
+		expect(screen.getByText("review")).toBeInTheDocument();
+		expect(
+			screen.getByRole("heading", { level: 1, name: "Commit" }),
+		).toBeInTheDocument();
+		expect(screen.queryByRole("heading", { level: 2 })).toBeNull();
+		// A `---` past the frontmatter is still a rule.
+		expect(container.querySelectorAll("hr")).toHaveLength(1);
+	});
+
+	it("shows its values as text, never as Markdown or HTML", () => {
+		const { container } = renderFile(
+			"a.md",
+			'---\ndescription: "**bold** <b>tag</b>"\n---\n',
+		);
+
+		expect(screen.getByText("**bold** <b>tag</b>")).toBeInTheDocument();
+		expect(container.querySelector("strong, b")).toBeNull();
+	});
+
+	it("shows the raw text with a note when it is not valid YAML", () => {
+		renderFile("a.md", "---\nname: [unclosed\n---\n# Body\n");
+
+		expect(
+			screen.getByText("Frontmatter could not be parsed as YAML"),
+		).toBeInTheDocument();
+		expect(screen.getByText("name: [unclosed")).toBeInTheDocument();
+		expect(
+			screen.getByRole("heading", { level: 1, name: "Body" }),
+		).toBeInTheDocument();
+	});
+
+	it("shows nothing when it is empty", () => {
+		const { container } = renderFile("a.md", "---\n---\n# Body\n");
+
+		expect(container.querySelector("dl, hr")).toBeNull();
+		expect(
+			screen.getByRole("heading", { level: 1, name: "Body" }),
+		).toBeInTheDocument();
+	});
+
+	it("keeps relative images working on the body", () => {
+		renderFile("docs/guide.md", "---\ntitle: Guide\n---\n![logo](logo.png)");
+
+		expect(getFile).toHaveBeenCalledWith("docs/logo.png");
+	});
+
+	it("is left in the source when the file is shown plain", () => {
+		const content = "---\nname: commit\n---\n";
+		render(<FileContentDisplay content={content} filePath="a.md" plain />);
+
+		expect(screen.queryByRole("term")).toBeNull();
+		expect(screen.getByText(/name: commit/)).toBeInTheDocument();
+	});
+});
