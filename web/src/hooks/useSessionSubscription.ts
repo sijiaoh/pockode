@@ -1,5 +1,9 @@
 import { useCallback, useRef } from "react";
-import { prependSession, useSessionStore } from "../lib/sessionStore";
+import {
+	placeSession,
+	prependSession,
+	useSessionStore,
+} from "../lib/sessionStore";
 import { isInvalidParamsRejection, useWSStore } from "../lib/wsStore";
 import type {
 	SessionListChangedNotification,
@@ -106,17 +110,29 @@ export function useSessionSubscription(
 						// (docs/list-paging-ui.md §3.2).
 						return prependSession(old, params.session);
 					case "update":
-						// In place, and only if it is loaded. A row never moves on an
-						// event; recency is recomputed on a load.
-						return old.map((s) =>
-							s.id === params.session.id ? params.session : s,
+						// Moved to where recency now puts it, which is usually the top.
+						// Scroll anchoring absorbs it the same way as a create's prepend
+						// (docs/list-paging-ui.md §3.2).
+						//
+						// A work session never belongs in a list that filters them out.
+						// The server already keeps it out — a filtered subscriber is sent
+						// a removal or nothing (`SessionListWatcher.pushSession`) — but
+						// this is the line that would otherwise insert a row the user
+						// asked not to see, so it does not rest on that.
+						if (excludeWorkSessions && params.session.work_id) {
+							return old.filter((s) => s.id !== params.session.id);
+						}
+						return placeSession(
+							old,
+							params.session,
+							useSessionStore.getState().nextCursor === null,
 						);
 					case "delete":
 						return old.filter((s) => s.id !== params.sessionId);
 				}
 			});
 		},
-		[setSessions, setHasUnread, updateSessions],
+		[setSessions, setHasUnread, updateSessions, excludeWorkSessions],
 	);
 
 	const handleReset = useCallback(() => {

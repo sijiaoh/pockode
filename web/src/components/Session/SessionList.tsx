@@ -39,9 +39,10 @@ function SessionList({
 	}
 
 	return (
-		// No `overflow-anchor: none` here, deliberately: a session created while
-		// the reader is far down the list is the one event that moves everything
-		// below it, and the browser's own scroll anchoring is what absorbs that.
+		// No `overflow-anchor: none` here, deliberately: a session created, or one
+		// updated and moving up, while the reader is far down the list shifts
+		// everything below it, and the browser's own scroll anchoring is what
+		// absorbs that.
 		// The transcript switches anchoring off because it pins its own anchor by
 		// hand; a list that does no measuring of its own must not disable the
 		// thing that measures for it (docs/list-paging-ui.md §3.2).

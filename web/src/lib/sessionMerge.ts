@@ -27,11 +27,15 @@ export interface MergedSessionRow {
  * The order the server lists sessions in: most recently updated first, ties
  * broken by id descending (`session.ListCursor.before`).
  *
- * Merging across worktrees only works because that order is total and the same
- * on every source — the client is re-deriving the comparison the pages were
+ * Merging across worktrees, and moving an updated row into place
+ * (`placeSession`), only work because that order is total and the same on
+ * every source — the client is re-deriving the comparison the pages were
  * already cut along, not inventing one.
  */
-function compareSessions(a: SessionListItem, b: SessionListItem): number {
+export function compareSessions(
+	a: SessionListItem,
+	b: SessionListItem,
+): number {
 	// A timestamp that will not parse sorts as the epoch rather than as NaN: a
 	// comparator that answers NaN makes the whole sort undefined, which would
 	// scramble every other row over one unreadable one.

@@ -167,64 +167,124 @@ describe("useSessionSubscription", () => {
 			expect(useSessionStore.getState().sessions[0].title).toBe("New");
 		});
 
-		// The promise the whole design rests on: recency is recomputed when a page
-		// is *loaded*, never when an event arrives (docs/list-paging-ui.md §3.2,
-		// check 4). Every other update case here holds one row, where updating in
-		// place and moving to the top are indistinguishable — so this is the one
-		// that would notice `update` being handed the `create` branch's prepend.
-		it("leaves an updated row where it is instead of moving it", async () => {
-			mockSessions = [
-				mockSessionItem("1"),
-				mockSessionItem("2", "Old"),
-				mockSessionItem("3"),
-			];
-
-			renderHook(() => useSessionSubscription(true, false));
-
-			await waitFor(() => {
-				expect(useSessionStore.getState().sessions).toHaveLength(3);
-			});
-
-			act(() => {
-				notificationCallback?.({
-					id: "watch-1",
-					operation: "update",
-					session: mockSessionItem("2", "New"),
+		// Recency is live: an update puts the row where the server's order now
+		// puts it (docs/list-paging-ui.md §3.2). Every other update case here
+		// holds one row, where updating in place and moving are indistinguishable.
+		describe("update reordering", () => {
+			const at = (id: string, minute: number, title = "Test") =>
+				makeSessionListItem({
+					id,
+					title,
+					updated_at: `2024-01-01T00:${String(minute).padStart(2, "0")}:00Z`,
 				});
-			});
 
-			const sessions = useSessionStore.getState().sessions;
-			expect(sessions.map((s) => s.id)).toEqual(["1", "2", "3"]);
-			expect(sessions[1].title).toBe("New");
-		});
-
-		// The deliberate opposite of the work list, which upserts a row it was
-		// never sent. There the absence is a held-back row and dropping it would
-		// darken the attention dot; here it is a row further down a list nobody
-		// has scrolled to, and inserting it would put it at a position the sort
-		// order does not agree with. The badge that *does* have to survive the
-		// absence rides on the notification instead (`has_unread`).
-		it("ignores an update for a session below the loaded range", async () => {
-			mockSessions = [mockSessionItem("1")];
-
-			renderHook(() => useSessionSubscription(true, false));
-
-			await waitFor(() => {
-				expect(useSessionStore.getState().sessions).toHaveLength(1);
-			});
-
-			act(() => {
-				notificationCallback?.({
-					id: "watch-1",
-					operation: "update",
-					session: mockSessionItem("unloaded"),
-					has_unread: true,
+			async function subscribeWith(
+				sessions: SessionListItem[],
+				nextCursor: string | null,
+				excludeWorkSessions = false,
+			) {
+				mockSessions = sessions;
+				mockNextCursor = nextCursor;
+				renderHook(() => useSessionSubscription(true, excludeWorkSessions));
+				await waitFor(() => {
+					expect(useSessionStore.getState().sessions).toHaveLength(
+						sessions.length,
+					);
 				});
+			}
+
+			function update(session: SessionListItem) {
+				act(() => {
+					notificationCallback?.({
+						id: "watch-1",
+						operation: "update",
+						session,
+					});
+				});
+			}
+
+			const ids = () => useSessionStore.getState().sessions.map((s) => s.id);
+
+			it("moves an updated row to where recency puts it", async () => {
+				await subscribeWith([at("a", 30), at("b", 20), at("c", 10)], "next");
+
+				update(at("c", 40, "New"));
+
+				expect(ids()).toEqual(["c", "a", "b"]);
+				expect(useSessionStore.getState().sessions[0].title).toBe("New");
 			});
 
-			const state = useSessionStore.getState();
-			expect(state.sessions.map((s) => s.id)).toEqual(["1"]);
-			expect(state.hasUnread).toBe(true);
+			it("moves a row between neighbours, ties broken by id descending", async () => {
+				await subscribeWith([at("a", 30), at("c", 20), at("d", 10)], "next");
+
+				// Same timestamp as "c": the higher id sorts first.
+				update(at("d", 20));
+
+				expect(ids()).toEqual(["a", "d", "c"]);
+			});
+
+			// Kept at the bottom, the next page would land under a row that sorts
+			// after it; left out, that page brings it back in its place.
+			it("takes a held row out when it now sorts below the loaded range", async () => {
+				await subscribeWith([at("a", 30), at("b", 20)], "next");
+
+				update(at("a", 10));
+
+				expect(ids()).toEqual(["b"]);
+			});
+
+			it("keeps a held row at the bottom once the list is read to its end", async () => {
+				await subscribeWith([at("a", 30), at("b", 20)], null);
+
+				update(at("a", 10));
+
+				expect(ids()).toEqual(["b", "a"]);
+			});
+
+			it("inserts an unloaded session that sorts within the loaded range", async () => {
+				await subscribeWith([at("a", 30), at("b", 20)], "next");
+
+				update(at("unloaded", 25));
+
+				expect(ids()).toEqual(["a", "unloaded", "b"]);
+			});
+
+			// The deliberate opposite of the work list, which upserts a row it was
+			// never sent. Below the last loaded row it sits among rows nobody has
+			// fetched, and the page that reaches it brings it in. The badge that
+			// *does* have to survive the absence rides on the notification instead
+			// (`has_unread`).
+			it("leaves out an unloaded session that sorts below the loaded range", async () => {
+				await subscribeWith([at("a", 30), at("b", 20)], "next");
+
+				act(() => {
+					notificationCallback?.({
+						id: "watch-1",
+						operation: "update",
+						session: at("unloaded", 10),
+						has_unread: true,
+					});
+				});
+
+				expect(ids()).toEqual(["a", "b"]);
+				expect(useSessionStore.getState().hasUnread).toBe(true);
+			});
+
+			it("appends an unloaded session anywhere once the list is read to its end", async () => {
+				await subscribeWith([at("a", 30), at("b", 20)], null);
+
+				update(at("unloaded", 10));
+
+				expect(ids()).toEqual(["a", "b", "unloaded"]);
+			});
+
+			it("never inserts a work session the filter hides", async () => {
+				await subscribeWith([at("a", 30), at("b", 20)], null, true);
+
+				update({ ...at("hidden", 40), work_id: "w1" });
+
+				expect(ids()).toEqual(["a", "b"]);
+			});
 		});
 
 		it("reflects server-side unread flag from update notification", async () => {
