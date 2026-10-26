@@ -57,6 +57,15 @@ if ! [ -s "$tmp/expected.txt" ]; then
     exit 1
 fi
 
+# Asked for by name because the diff below only compares the release with
+# dist/: a build that stopped writing the notices would leave both sides
+# agreeing on binaries published without them.
+if ! [ -s "$dist_dir/THIRD_PARTY_NOTICES.txt" ]; then
+    echo "$dist_dir has no THIRD_PARTY_NOTICES.txt: the binaries would be" \
+        "published without their third-party notices" >&2
+    exit 1
+fi
+
 # A failing gh is a round that got no answer, not a verdict: this loop sends
 # several calls inside the window, so one 502 or one rate-limit reply would
 # otherwise be enough to throw away a whole draft release. The deadline stays
