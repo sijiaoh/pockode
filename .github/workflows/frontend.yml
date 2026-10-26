@@ -16,6 +16,7 @@ on:
       - "pnpm-workspace.yaml"
       - "pnpm-lock.yaml"
       - ".node-version"
+      - "scripts/notices/**"
       - ".github/workflows/frontend.yml"
   pull_request:
     branches: [main]
@@ -28,6 +29,7 @@ on:
       - "pnpm-workspace.yaml"
       - "pnpm-lock.yaml"
       - ".node-version"
+      - "scripts/notices/**"
       - ".github/workflows/frontend.yml"
   workflow_dispatch:
 
@@ -93,6 +95,35 @@ jobs:
       - name: Build
         run: pnpm run build
         working-directory: ${{ matrix.project }}
+
+  # The release build stops when a shipped package's license cannot be
+  # determined. Running the generator here as well puts that failure on the
+  # pull request that adds or bumps the package, not on the tag push.
+  notices:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Test the generator
+        run: pnpm run test:notices
+
+      - name: Generate the frontend notices
+        run: node scripts/notices/frontend.mjs --out "$RUNNER_TEMP/notices.txt"
 
   # web's real-browser entry (`test:browser`), apart from `check` so the jsdom
   # suites never wait on a browser download. Browsers are not cached: on Linux

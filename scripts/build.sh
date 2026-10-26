@@ -43,6 +43,8 @@ touch server/cluster/static/.keep
 if [ "$LOCAL_ONLY" = true ]; then
     platforms=("$(go env GOOS)/$(go env GOARCH)")
 else
+    # Kept one quoted platform per line: the server's notices test reads this
+    # array to check every released platform's licenses.
     platforms=(
         "darwin/amd64"
         "darwin/arm64"
@@ -53,6 +55,25 @@ else
 fi
 
 mkdir -p "$OUTPUT_DIR"
+
+# Written into both static directories after the frontend builds, which empty
+# them, so that every binary embeds the notices and serves them at
+# /THIRD_PARTY_NOTICES.txt in normal and cluster mode alike: install.sh and
+# install.ps1 fetch only the binary, never a release's other assets. The Go
+# side is asked for exactly the platforms built below, since the dependencies
+# linked can differ by platform. Either generator exits non-zero without output
+# when a license cannot be determined, so each writes a file of its own instead
+# of sharing one pipeline, whose status set -e takes from the last command
+# alone.
+notices=THIRD_PARTY_NOTICES.txt
+echo "Writing third-party notices..."
+notices_tmp=$(mktemp -d "${TMPDIR:-/tmp}/pockode-notices.XXXXXX")
+trap 'rm -rf "$notices_tmp"' EXIT
+go run -C server ./internal/cmd/thirdpartynotices "${platforms[@]}" > "$notices_tmp/server.txt"
+node scripts/notices/frontend.mjs --out "$notices_tmp/web.txt"
+{ cat "$notices_tmp/server.txt"; echo; cat "$notices_tmp/web.txt"; } > "$OUTPUT_DIR/$notices"
+cp "$OUTPUT_DIR/$notices" "server/static/$notices"
+cp "$OUTPUT_DIR/$notices" "server/cluster/static/$notices"
 
 # go build runs with -C server, so it resolves -o from inside server/. Normalising
 # to an absolute path here is what keeps that detail from leaking: prefixing "../"
@@ -94,5 +115,5 @@ echo "Writing $OUTPUT_DIR/checksums.txt..."
 (cd "$OUTPUT_DIR" && "${sha256[@]}" "${binaries[@]}" > checksums.txt)
 
 echo ""
-echo "Build complete! Binaries in $OUTPUT_DIR/"
+echo "Build complete! Binaries and $notices in $OUTPUT_DIR/"
 ls -lh "$OUTPUT_DIR"

@@ -27,6 +27,7 @@ The project layout and conventions are in [AGENTS.md](AGENTS.md). Commands live 
 | README, website and marketing copy | [site/README.md](site/README.md#where-the-words-come-from) |
 | Lint and format (all frontends) | `pnpm run lint` / `pnpm run format` from the repository root |
 | Why a test is red | [docs/testing.md](docs/testing.md) |
+| Third-party notices (a dependency's license failing CI) | [scripts/README.md](scripts/README.md#notices--third-party-notices) |
 
 Run `pnpm install` once, then `POCKODE_PASSWORD=<any-password> pnpm run dev` starts the server and the web frontend together (the server refuses to start without a password). On Windows, develop under WSL — see [docs/platforms.md](docs/platforms.md#developing-pockode-on-windows).
 

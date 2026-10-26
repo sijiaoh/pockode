@@ -178,8 +178,9 @@ assets() {
     echo "$out]}"
 }
 
-DONE=$(assets checksums.txt:uploaded pockode-linux-amd64:uploaded)
-PARTIAL=$(assets checksums.txt:uploaded pockode-linux-amd64:starting)
+DIST="THIRD_PARTY_NOTICES.txt checksums.txt pockode-linux-amd64"
+DONE=$(assets THIRD_PARTY_NOTICES.txt:uploaded checksums.txt:uploaded pockode-linux-amd64:uploaded)
+PARTIAL=$(assets THIRD_PARTY_NOTICES.txt:uploaded checksums.txt:uploaded pockode-linux-amd64:starting)
 
 # TIMEOUT=5 below means "more than this case needs": at the poll rate above that
 # is upwards of twenty rounds, and no case here wants more than three. It is not
@@ -191,23 +192,23 @@ suite() {
 
     # Nothing to wait for: the first answer is already complete, and a second
     # poll would be a wasted round trip.
-    TIMEOUT=5 run_case "already uploaded" 0 "checksums.txt pockode-linux-amd64" "$DONE"
+    TIMEOUT=5 run_case "already uploaded" 0 "$DIST" "$DONE"
     expect_calls 1
 
     # The case a strict equality check would have turned into a false red.
-    TIMEOUT=5 run_case "uploaded on the third poll" 0 "checksums.txt pockode-linux-amd64" \
+    TIMEOUT=5 run_case "uploaded on the third poll" 0 "$DIST" \
         "$PARTIAL" "$PARTIAL" "$DONE"
     expect_calls 3
 
     # Waits, then gives up - and says which asset is stuck in what state,
     # rather than only that a timeout elapsed.
-    TIMEOUT=1 run_case "never finishes uploading" 1 "checksums.txt pockode-linux-amd64" "$PARTIAL"
+    TIMEOUT=1 run_case "never finishes uploading" 1 "$DIST" "$PARTIAL"
     expect_output "pockode-linux-amd64: state=starting"
     expect_no_output "could not read the assets"
 
     # The point of retrying at all: the window is several calls wide, so one
     # unreachable call must not be the end of the release.
-    TIMEOUT=5 run_case "gh fails twice, then answers" 0 "checksums.txt pockode-linux-amd64" \
+    TIMEOUT=5 run_case "gh fails twice, then answers" 0 "$DIST" \
         "!" "!" "$DONE"
     expect_calls 3
     # Passing silently would hide that the release nearly did not happen, and
@@ -219,7 +220,7 @@ suite() {
     # gh has to say about the endpoint this gate depends on has to be handed
     # on here or it is lost. Exiting 0 is half the assertion: what a
     # successful call said is a note, not a reason to keep waiting.
-    TIMEOUT=5 run_case "gh warns on a call that answers" 0 "checksums.txt pockode-linux-amd64" \
+    TIMEOUT=5 run_case "gh warns on a call that answers" 0 "$DIST" \
         "!warn$DONE"
     expect_calls 1
     expect_output "this endpoint is deprecated"
@@ -229,7 +230,7 @@ suite() {
     # in flight, and the report has to name that cause: "short a binary" sends
     # whoever reads it to the build. Nor may it read as a slow upload - which
     # is why the last call's own words have to come back out.
-    TIMEOUT=1 run_case "gh fails until the deadline" 1 "checksums.txt pockode-linux-amd64" "!"
+    TIMEOUT=1 run_case "gh fails until the deadline" 1 "$DIST" "!"
     expect_output "could not read the assets"
     expect_output "HTTP 502 reading release (stub)"
     expect_no_output "still has assets"
@@ -239,7 +240,7 @@ suite() {
     # the loop reads as "this round answered". Without a stand-in for it the
     # wait would end on the first such call, and a release nobody managed to
     # ask about would come out as one short a binary.
-    TIMEOUT=1 run_case "gh fails without saying why" 1 "checksums.txt pockode-linux-amd64" "!!"
+    TIMEOUT=1 run_case "gh fails without saying why" 1 "$DIST" "!!"
     expect_output "could not read the assets"
     expect_no_output "does not carry exactly"
 
@@ -247,9 +248,14 @@ suite() {
     TIMEOUT=5 run_case "empty dist" 1 "" "$(assets)"
     expect_output "is empty"
 
-    TIMEOUT=5 run_case "release is short an asset" 1 "checksums.txt pockode-linux-amd64" \
+    TIMEOUT=5 run_case "release is short an asset" 1 "$DIST" \
         "$(assets checksums.txt:uploaded)"
     expect_output "does not carry exactly"
+
+    # A release and a dist/ that agree with each other, both short the notices.
+    TIMEOUT=5 run_case "no notices in dist" 1 "checksums.txt pockode-linux-amd64" \
+        "$(assets checksums.txt:uploaded pockode-linux-amd64:uploaded)"
+    expect_output "no THIRD_PARTY_NOTICES.txt"
 }
 
 echo "== the script as written =="
@@ -277,6 +283,7 @@ mutations=(
     'drops what a gh call that answered still said|s/elif \[ -s "\$tmp\/gh-error.txt" \]/elif false/'
     'drops the reason the last gh call gave|/printf .%s.n. "\$gh_error"/ s/^\( *\).*/\1:/'
     'drops the empty-dist assertion|/is empty: the build produced/,/exit 1/ s/.*/:/'
+    'drops the notices assertion|/has no THIRD_PARTY_NOTICES.txt/,/exit 1/ s/.*/:/'
     'drops the name diff|/does not carry exactly/,/exit 1/ s/.*/:/'
     'asks about the wrong release|s/releases\/\$RELEASE_ID/releases\/999/'
 )

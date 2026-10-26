@@ -17,6 +17,12 @@ importers:
       concurrently:
         specifier: ^9.2.1
         version: 9.2.1
+      tm-grammars:
+        specifier: ^1.32.22
+        version: 1.32.22
+      tm-themes:
+        specifier: ^1.12.12
+        version: 1.12.12
       yaml:
         specifier: ^2.9.1
         version: 2.9.1
@@ -3282,6 +3288,12 @@ packages:
   tldts@7.0.22:
     resolution: {integrity: sha512-nqpKFC53CgopKPjT6Wfb6tpIcZXHcI6G37hesvikhx0EmUGPkZrujRyAjgnmp1SHNgpQfKVanZ+KfpANFt2Hxw==}
     hasBin: true
+
+  tm-grammars@1.32.22:
+    resolution: {integrity: sha512-VKWL+UiqlGqbGHonRbrBc0kkqDIHUUiVO/A2rBTBz5LBXKA8Fe2f34O1YiBI7ED37tTUlT3MGmLf9+0F/H4/Ww==}
+
+  tm-themes@1.12.12:
+    resolution: {integrity: sha512-okyxQlASpDOtUA40+ZT0IGQyfObGOknntHY3kujfUlD8lj3ERMObDJNRgvlc/baVMsnJVQmtAB2nE7LFGTo0qQ==}
 
   tmp@0.0.33:
     resolution: {integrity: sha512-jRCJlojKnZ3addtTOjdIqoRuPEKBvNXcGYqzO6zWZX8KfKEpnGY5jfggJQ3EjKuu8D4bJRr0y+cYJFmYbImXGw==}
@@ -7171,6 +7183,10 @@ snapshots:
   tldts@7.0.22:
     dependencies:
       tldts-core: 7.0.22
+
+  tm-grammars@1.32.22: {}
+
+  tm-themes@1.12.12: {}
 
   tmp@0.0.33:
     dependencies:

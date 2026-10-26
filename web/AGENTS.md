@@ -126,7 +126,7 @@ describe("MyComponent", () => {
 
 ✅ **Always**: `pnpm -w run lint` + `pnpm run build` + `pnpm run test` · 函数组件 · Props 定义类型 · 直接调 HTTP API 时用 `lib/api.ts` 的 `apiUrl()` / `authHeaders()` / `fetchWithAuth()`，401 走 `logoutIfUnauthorized()`（凭证拼装与登出规则全站只有这一处） · 显示日期/时间一律用 `utils/dateTime.ts`（时长与「几分钟前」用 `utils/relativeTime.ts`），按设备时区显示（schedule 自己的时间除外）、没有时区设置；别处自己格式化日期会被 `tests/dateFormatting.test.ts` 拦下（形状与理由见 [docs/time-display-ui.md](../docs/time-display-ui.md)）
 
-⚠️ **Ask First**: 添加 pnpm 依赖 · 修改 Vite/TS 配置 · 新建全局 store
+⚠️ **Ask First**: 添加 pnpm 依赖（打进 bundle 的包会进入发布的第三方声明；许可证无法确定时 Frontend 的 `notices` job 会失败，见 [scripts/README.md](../scripts/README.md#notices--third-party-notices)） · 修改 Vite/TS 配置 · 新建全局 store
 
 🚫 **Never**: `any`（用 `unknown`） · `!` 非空断言 · 硬编码颜色/API 地址 · 提交 `console.log` · 编辑 `pnpm-lock.yaml`
 
