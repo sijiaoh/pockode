@@ -14,12 +14,16 @@
     "format": "biome check --write --linter-enabled=false web web-cluster packages",
     "readme": "node scripts/messaging/readme.mjs",
     "check:messaging": "node scripts/messaging/readme.mjs --check && node scripts/messaging/flags.mjs",
+    "notices:frontend": "node scripts/notices/frontend.mjs",
+    "test:notices": "node --test \"scripts/notices/*.test.mjs\"",
     "test:messaging": "node --test \"scripts/messaging/*.test.mjs\" \"scripts/ui-walkthrough/marketing/*.test.mjs\""
   },
   "devDependencies": {
     "@biomejs/biome": "^2.3.10",
     "@lhci/cli": "^0.15.1",
     "concurrently": "^9.2.1",
+    "tm-grammars": "^1.32.22",
+    "tm-themes": "^1.12.12",
     "yaml": "^2.9.1"
   }
 }
