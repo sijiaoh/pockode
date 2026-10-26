@@ -54,6 +54,7 @@ contents/               # 文件内容获取
 datadir/                # 默认数据目录（<work>/.pockode）自带的 .gitignore（首行标记在时归 Pockode 管理、每次启动覆盖为当前版本的内容，用户删掉标记即接管，见 docs/projects/data-model.md）
 filestore/              # 文件存储基础设施（原子写 / 文件锁 / JSONL / 变更监听）
 filetransfer/           # 文件上传 / 下载 HTTP 端点；以 capability 为凭据的 /api/raw（含 HTML 页面的外部主机策略与上报脚本注入）
+fuzzy/                  # fzf 的模糊匹配、评分与扩展搜索语法（移植自 fzf，MIT；评分方案由调用方传入，纯算法无 IO，见 docs/code/fuzzy-matching.md）
 git/                    # Git 操作
 internal/cmd/marketingbanner/  # 打印启动横幅供营销视频截取（不是服务器的一部分；放在本模块里是为了让 CI 的 vet/build 覆盖它，见 docs/marketing-assets.md §3.3）
 logger/                 # 结构化日志 (slog)
