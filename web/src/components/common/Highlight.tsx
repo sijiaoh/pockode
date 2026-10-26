@@ -1,40 +1,39 @@
 import type { ReactNode } from "react";
-import { findMatchIndexes } from "../../utils/textMatch";
+import type { SearchRange } from "../../types/search";
 
 interface Props {
 	text: string;
-	query: string;
+	/** Ascending, non-overlapping spans of `text` to mark, in UTF-16 code units. */
+	ranges: readonly SearchRange[];
 }
 
 /**
- * Renders `text` with every case-insensitive occurrence of `query` marked.
+ * Renders `text` with the given spans marked.
  *
- * Matching is done here rather than from server-provided offsets: those are
- * UTF-8 byte offsets, and converting them to JS string indexes is an easy place
- * to cut a character in half. The server may also fold case slightly
- * differently for exotic characters — a missing highlight is the worst outcome.
+ * The spans come from whoever did the matching rather than being recomputed
+ * here: a fuzzy match is not a substring of the query, so only the matcher
+ * knows which characters it picked.
  */
-function Highlight({ text, query }: Props) {
-	const indexes = findMatchIndexes(text, query);
-	if (indexes.length === 0) {
+function Highlight({ text, ranges }: Props) {
+	if (ranges.length === 0) {
 		return <>{text}</>;
 	}
 
 	const parts: ReactNode[] = [];
 	let cursor = 0;
-	for (const index of indexes) {
-		if (index > cursor) {
-			parts.push(text.slice(cursor, index));
+	for (const { start, end } of ranges) {
+		if (start > cursor) {
+			parts.push(text.slice(cursor, start));
 		}
-		cursor = index + query.length;
 		parts.push(
 			<mark
-				key={index}
+				key={start}
 				className="rounded-sm bg-th-accent/20 px-0.5 text-th-text-primary"
 			>
-				{text.slice(index, cursor)}
+				{text.slice(start, end)}
 			</mark>,
 		);
+		cursor = end;
 	}
 	if (cursor < text.length) {
 		parts.push(text.slice(cursor));

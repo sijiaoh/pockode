@@ -424,7 +424,6 @@ type FileSearchParams struct {
 	// RespectGitignore defaults to true when omitted, so clients opt in to
 	// searching ignored files rather than accidentally scanning build output.
 	RespectGitignore *bool `json:"respect_gitignore"`
-	CaseSensitive    bool  `json:"case_sensitive"`
 	MaxResults       int   `json:"max_results"`
 }
 

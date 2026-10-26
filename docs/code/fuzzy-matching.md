@@ -12,9 +12,9 @@ its Go doc (`server/fuzzy/doc.go`, `Pattern`, `Scheme`, `Slab`, `Algo`). This
 document explains why the package has that shape and what a caller has to get
 right when wiring it in.
 
-It has no caller yet. `file.search` still matches a literal substring through
-`server/search`'s own matcher ([docs/file.md](../file.md#search-behavior)). That
-matcher stays the right tool for content search: a line of a file does not want
+Its caller is `file.search`'s name mode ([docs/file.md](../file.md#search-behavior)).
+Content mode still matches a literal substring through `server/search`'s own
+matcher, which stays the right tool there: a line of a file does not want
 fuzzy subsequence matching, and its ASCII fast path is what makes scanning a
 whole repository affordable.
 
@@ -152,13 +152,15 @@ A rune here is what `for range` over the Go string yields, so an invalid UTF-8
 byte counts as one rune. That is also how Go's `encoding/json` treats such a
 byte: it writes one U+FFFD in its place. So the text a client receives has
 exactly one character per rune index, and the indices stay valid even on
-malformed text. `file.search`'s byte offsets do not
+malformed text. `file.search` relies on the same substitution for its ranges
 ([docs/file.md](../file.md#operations), `file.search`).
 
 A JavaScript client indexes strings in UTF-16 code units, so convert before
 sending. Walk the text's runes, keep a running UTF-16 offset that grows by 2
 for a rune above U+FFFF and by 1 otherwise, and map each position as it passes.
 That takes one pass, because the positions are sorted. Do the conversion in
-the RPC layer, not in this package: the unit belongs to the wire, and a Go
-caller wants runes. Positions are single characters, not ranges, so a
-highlighter that wants ranges merges consecutive ones.
+the layer that hands results to the wire, not in this package: the unit belongs
+to the wire, and a Go caller wants runes. Positions are single characters, not
+ranges, so a highlighter that wants ranges merges consecutive ones.
+`file.search` does both in `server/search` (`positionsToByteRanges`,
+`toClientText`) as its results leave the package.

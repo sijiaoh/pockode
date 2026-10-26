@@ -45,17 +45,17 @@ export interface FileSearchState {
 	isFetching: boolean;
 	mode: FileSearchMode;
 	minQueryLength: number;
-	/** The query `result` was produced from — use this for highlighting. */
+	/** The query `result` was produced from — use this to describe `result`. */
 	matchedQuery: string;
 	retry: () => void;
 }
 
 /**
- * The query is cached alongside its result so highlighting always describes the
- * results actually on screen. While a new query loads the previous ones stay
- * visible, and a content search can take seconds — long enough for highlights
- * and snippet anchoring computed from the newer query to visibly drift off the
- * older text.
+ * The query is cached alongside its result so whatever names the query describes
+ * the results actually on screen. While a new query loads the previous ones stay
+ * visible, and a content search can take seconds — long enough for "No matches
+ * for …" to name a query that never produced the list below it. Highlights need
+ * no such care: their ranges arrive inside the result.
  */
 interface FileSearchData {
 	query: string;

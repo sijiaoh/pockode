@@ -158,7 +158,7 @@ function Matches({
 						<FileSearchFileRow
 							key={match.path}
 							path={match.path}
-							query={query}
+							pathRanges={match.path_ranges}
 							isActive={match.path === activeFilePath}
 							onSelect={onSelectFile}
 						/>
@@ -166,7 +166,6 @@ function Matches({
 						<FileSearchMatchGroup
 							key={match.path}
 							match={match}
-							query={query}
 							isActive={match.path === activeFilePath}
 							onSelect={onSelectFile}
 						/>

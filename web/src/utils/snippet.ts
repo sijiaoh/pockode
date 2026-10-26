@@ -1,4 +1,5 @@
-import { findMatchIndexes } from "./textMatch";
+import type { SearchRange } from "../types/search";
+import { sliceRanges } from "./searchRange";
 
 const TAB_REPLACEMENT = "  ";
 
@@ -12,6 +13,12 @@ const MAX_SNIPPET_CHARS = 200;
 
 const ELLIPSIS = "…";
 
+export interface Snippet {
+	text: string;
+	/** The match ranges moved along with the text they mark. */
+	ranges: SearchRange[];
+}
+
 function isHighSurrogate(code: number): boolean {
 	return code >= 0xd800 && code <= 0xdbff;
 }
@@ -24,29 +31,68 @@ function isLowSurrogate(code: number): boolean {
  * Prepare a matching line for display in the narrow result list.
  *
  * The server already clips very long lines to a window around the first match;
- * this trims what is left to fit a sidebar row, always keeping the match
- * itself visible.
+ * this trims what is left to fit a sidebar row, always keeping the first of
+ * `ranges` visible.
  */
-export function buildSnippet(text: string, query: string): string {
-	// Leading indentation is pure noise here and would push the match off screen.
-	const normalized = text.split("\t").join(TAB_REPLACEMENT).replace(/^\s+/, "");
+export function buildSnippet(
+	text: string,
+	ranges: readonly SearchRange[],
+): Snippet {
+	const normalized = normalize(text, ranges);
 
-	const matchIndex = findMatchIndexes(normalized, query)[0] ?? -1;
+	const matchIndex = normalized.ranges[0]?.start ?? -1;
 	if (matchIndex <= MAX_LEADING_CHARS) {
-		return clamp(normalized, MAX_SNIPPET_CHARS);
+		return clamp(normalized, 0, "");
 	}
 
 	let start = matchIndex - LEADING_CONTEXT_CHARS;
-	if (isLowSurrogate(normalized.charCodeAt(start))) {
+	if (isLowSurrogate(normalized.text.charCodeAt(start))) {
 		start -= 1;
 	}
-	return ELLIPSIS + clamp(normalized.slice(start), MAX_SNIPPET_CHARS);
+	return clamp(normalized, start, ELLIPSIS);
 }
 
-function clamp(text: string, max: number): string {
-	if (text.length <= max) {
-		return text;
+/**
+ * Drops leading indentation — pure noise here, and it would push the match off
+ * screen — and expands tabs, carrying each range to where its characters end up.
+ */
+function normalize(text: string, ranges: readonly SearchRange[]): Snippet {
+	const indent = text.length - text.trimStart().length;
+	// position[i] is where original offset i lands; one past the end too, so
+	// end-exclusive offsets map like any other.
+	const position: number[] = new Array(text.length + 1).fill(0);
+	let out = "";
+	for (let i = indent; i < text.length; i++) {
+		position[i] = out.length;
+		out += text[i] === "\t" ? TAB_REPLACEMENT : text[i];
 	}
-	const end = isHighSurrogate(text.charCodeAt(max - 1)) ? max - 1 : max;
-	return text.slice(0, end);
+	position[text.length] = out.length;
+
+	const moved: SearchRange[] = [];
+	for (const range of ranges) {
+		const start = position[range.start];
+		const end = position[range.end];
+		if (start < end) {
+			moved.push({ start, end });
+		}
+	}
+	return { text: out, ranges: moved };
+}
+
+/** Takes up to `MAX_SNIPPET_CHARS` from `from`, never splitting a surrogate pair. */
+function clamp(snippet: Snippet, from: number, prefix: string): Snippet {
+	let end = Math.min(snippet.text.length, from + MAX_SNIPPET_CHARS);
+	if (
+		end < snippet.text.length &&
+		isHighSurrogate(snippet.text.charCodeAt(end - 1))
+	) {
+		end -= 1;
+	}
+	return {
+		text: prefix + snippet.text.slice(from, end),
+		ranges: sliceRanges(snippet.ranges, from, end).map((range) => ({
+			start: range.start + prefix.length,
+			end: range.end + prefix.length,
+		})),
+	};
 }

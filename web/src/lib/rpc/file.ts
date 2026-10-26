@@ -56,7 +56,10 @@ interface FileMoveResult {
 }
 
 export interface FileSearchParams {
-	/** Literal substring, not a pattern. */
+	/**
+	 * Name mode: fzf extended search syntax. Content mode: literal substring.
+	 * Both are smart-case: case-sensitive only where an uppercase letter is typed.
+	 */
 	query: string;
 	/** Defaults to "name" on the server. */
 	mode?: FileSearchMode;
@@ -64,7 +67,6 @@ export interface FileSearchParams {
 	path?: string;
 	/** Defaults to true on the server when omitted. */
 	respect_gitignore?: boolean;
-	case_sensitive?: boolean;
 	/** Caps the number of returned files; server default 100, hard cap 500. */
 	max_results?: number;
 }

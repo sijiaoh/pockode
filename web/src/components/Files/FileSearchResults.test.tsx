@@ -1,11 +1,23 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type { FileSearchState } from "../../hooks/useFileSearch";
-import type { FileSearchResult } from "../../types/search";
+import type {
+	FileSearchResult,
+	SearchLine,
+	SearchRange,
+} from "../../types/search";
 import FileSearchResults from "./FileSearchResults";
 
-function line(number: number, text: string) {
-	return { number, text, ranges: [] };
+function line(
+	number: number,
+	text: string,
+	ranges: SearchRange[] = [],
+): SearchLine {
+	return { number, text, ranges };
+}
+
+function marked(container: HTMLElement): string[] {
+	return Array.from(container.querySelectorAll("mark"), (m) => m.textContent);
 }
 
 function renderResults(
@@ -90,5 +102,62 @@ describe("FileSearchResults in content mode", () => {
 			screen.getByText("1 file · 1 match · more results exist"),
 		).toBeInTheDocument();
 		expect(screen.getByText(/refine your search/)).toBeInTheDocument();
+	});
+});
+
+describe("FileSearchResults highlighting", () => {
+	it("marks the characters the server matched in content mode", () => {
+		const { container } = renderResults({
+			matches: [
+				{
+					path: "src/app.ts",
+					name: "app.ts",
+					// The query is not what decides the marks: these ranges do.
+					lines: [line(3, "\tconst Needle = needle;", [{ start: 7, end: 13 }])],
+				},
+			],
+			truncated: false,
+		});
+
+		expect(marked(container)).toEqual(["Needle"]);
+	});
+
+	it("marks a fuzzy name match in both the file name and its directory", () => {
+		const { container } = renderResults(
+			{
+				matches: [
+					{
+						path: "src/hooks/useFileSearch.ts",
+						name: "useFileSearch.ts",
+						// "h/us": a range that runs across the "/" is split between the
+						// directory and the file name.
+						path_ranges: [
+							{ start: 4, end: 5 },
+							{ start: 9, end: 12 },
+						],
+					},
+				],
+				truncated: false,
+			},
+			{ mode: "name", minQueryLength: 1, matchedQuery: "h/us" },
+		);
+
+		// The file name is the row's title, drawn above its directory.
+		expect(marked(container)).toEqual(["us", "h", "/"]);
+		expect(container).toHaveTextContent("useFileSearch.ts");
+		expect(container).toHaveTextContent("src/hooks/");
+	});
+
+	it("marks nothing when the server sent no ranges", () => {
+		const { container } = renderResults(
+			{
+				matches: [{ path: "src/test.ts", name: "test.ts" }],
+				truncated: false,
+			},
+			{ mode: "name", minQueryLength: 1, matchedQuery: "!spec" },
+		);
+
+		expect(container.querySelector("mark")).toBeNull();
+		expect(container).toHaveTextContent("test.ts");
 	});
 });

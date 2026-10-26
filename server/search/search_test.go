@@ -2,6 +2,7 @@ package search
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"os/exec"
@@ -9,6 +10,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/pockode/server/contents"
 	"github.com/pockode/server/internal/symlinktest"
@@ -39,11 +41,10 @@ func matchedPaths(matches []FileMatch) []string {
 func TestSearchName(t *testing.T) {
 	workDir := t.TempDir()
 	writeTree(t, workDir, map[string]string{
-		"main.go":              "package main",
-		"pkg/handler.go":       "package pkg",
-		"pkg/handler_test.go":  "package pkg",
-		"handler/README.md":    "docs",
-		"vendor/lib/Handler.h": "header",
+		"web/src/hooks/useFileSearch.ts": "x",
+		"web/src/hooks/useTheme.ts":      "x",
+		"pkg/handler.go":                 "x",
+		"vendor/lib/Handler.h":           "x",
 	})
 
 	tests := []struct {
@@ -52,14 +53,24 @@ func TestSearchName(t *testing.T) {
 		want []string
 	}{
 		{
-			name: "matches base name and path, base name first",
-			opts: Options{Query: "handler"},
-			want: []string{"pkg/handler.go", "pkg/handler_test.go", "vendor/lib/Handler.h", "handler/README.md"},
+			name: "fuzzy subsequence",
+			opts: Options{Query: "usefs"},
+			want: []string{"web/src/hooks/useFileSearch.ts"},
 		},
 		{
-			name: "case sensitive excludes different casing",
-			opts: Options{Query: "Handler", CaseSensitive: true},
+			name: "lowercase query ignores case",
+			opts: Options{Query: "handler"},
+			want: []string{"pkg/handler.go", "vendor/lib/Handler.h"},
+		},
+		{
+			name: "uppercase letter makes the term case-sensitive",
+			opts: Options{Query: "Handler"},
 			want: []string{"vendor/lib/Handler.h"},
+		},
+		{
+			name: "extended syntax",
+			opts: Options{Query: "hooks !search"},
+			want: []string{"web/src/hooks/useTheme.ts"},
 		},
 		{
 			name: "no match",
@@ -85,23 +96,96 @@ func TestSearchName(t *testing.T) {
 	}
 }
 
-func TestSearchNameTruncates(t *testing.T) {
-	workDir := t.TempDir()
-	files := make(map[string]string)
-	for _, name := range []string{"a_hit.go", "b_hit.go", "c_hit.go"} {
-		files[name] = "x"
-	}
-	writeTree(t, workDir, files)
+// rankingTree is listed in alphabetical order (the order files are scored in)
+// with the best match for "main" last, so a result that keeps list order or
+// cuts before sorting fails.
+var rankingTree = map[string]string{
+	"a/xmxaxixn.txt":   "x",
+	"b/domain/x.go":    "x",
+	"c/main/README.md": "x",
+	"d/main.go":        "x",
+}
 
-	result, err := Search(context.Background(), workDir, Options{Query: "hit", MaxResults: 2})
+func TestSearchNameOrdersByScore(t *testing.T) {
+	workDir := t.TempDir()
+	writeTree(t, workDir, rankingTree)
+
+	result, err := Search(context.Background(), workDir, Options{Query: "main"})
 	if err != nil {
 		t.Fatalf("Search failed: %v", err)
 	}
-	if len(result.Matches) != 2 {
-		t.Errorf("got %d matches, want 2", len(result.Matches))
+	// A whole word after "/" beats one inside a word, which beats letters
+	// scattered over the path; between the two word matches the base name wins.
+	want := []string{"d/main.go", "c/main/README.md", "b/domain/x.go", "a/xmxaxixn.txt"}
+	if got := matchedPaths(result.Matches); !slices.Equal(got, want) {
+		t.Errorf("got %v, want %v", got, want)
+	}
+}
+
+func TestSearchNameTruncatesKeepingBest(t *testing.T) {
+	workDir := t.TempDir()
+	writeTree(t, workDir, rankingTree)
+
+	result, err := Search(context.Background(), workDir, Options{Query: "main", MaxResults: 2})
+	if err != nil {
+		t.Fatalf("Search failed: %v", err)
+	}
+	want := []string{"d/main.go", "c/main/README.md"}
+	if got := matchedPaths(result.Matches); !slices.Equal(got, want) {
+		t.Errorf("got %v, want %v", got, want)
 	}
 	if !result.Truncated {
 		t.Error("got Truncated = false, want true")
+	}
+}
+
+func TestSearchNamePathRanges(t *testing.T) {
+	workDir := t.TempDir()
+	writeTree(t, workDir, map[string]string{
+		"web/src/hooks/useFileSearch.ts": "x",
+		"docs/😀日本/notes.md":              "x",
+	})
+
+	tests := []struct {
+		query string
+		// want is each range's slice of the decoded path, the way a JS client
+		// would cut it.
+		want []string
+	}{
+		{query: "usefs", want: []string{"useF", "S"}},
+		// The emoji is a surrogate pair, so UTF-16 offsets after it differ
+		// from both rune and byte offsets.
+		{query: "日本/n", want: []string{"日本/n"}},
+		{query: "😀 notes", want: []string{"😀", "notes"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.query, func(t *testing.T) {
+			result, err := Search(context.Background(), workDir, Options{Query: tt.query})
+			if err != nil {
+				t.Fatalf("Search failed: %v", err)
+			}
+			if len(result.Matches) != 1 {
+				t.Fatalf("got %v, want one match", matchedPaths(result.Matches))
+			}
+
+			encoded, err := json.Marshal(result.Matches[0])
+			if err != nil {
+				t.Fatalf("Marshal failed: %v", err)
+			}
+			var decoded FileMatch
+			if err := json.Unmarshal(encoded, &decoded); err != nil {
+				t.Fatalf("Unmarshal failed: %v", err)
+			}
+
+			got := make([]string, 0, len(decoded.PathRanges))
+			for _, r := range decoded.PathRanges {
+				got = append(got, sliceUTF16(decoded.Path, r))
+			}
+			if !slices.Equal(got, tt.want) {
+				t.Errorf("got %q (ranges %+v), want %q", got, decoded.PathRanges, tt.want)
+			}
+		})
 	}
 }
 
@@ -153,15 +237,75 @@ func TestSearchContent(t *testing.T) {
 		t.Error("sub/d.txt missing: case-insensitive match failed")
 	}
 
-	// Ranges are byte offsets into Text, so multi-byte prefixes must be counted
-	// in bytes rather than runes.
 	u := byPath["unicode.txt"]
 	if len(u.Lines) != 1 {
 		t.Fatalf("got unicode.txt lines %+v, want one", u.Lines)
 	}
-	r := u.Lines[0].Ranges[0]
-	if got := u.Lines[0].Text[r.Start:r.End]; got != "needle" {
-		t.Errorf("got %q at range %+v, want %q", got, r, "needle")
+	if want := []Range{{Start: 4, End: 10}}; !slices.Equal(u.Lines[0].Ranges, want) {
+		t.Errorf("got unicode.txt ranges %+v, want %+v", u.Lines[0].Ranges, want)
+	}
+}
+
+func TestSearchContentSmartCase(t *testing.T) {
+	workDir := t.TempDir()
+	writeTree(t, workDir, map[string]string{
+		"lower.txt": "needle école\n",
+		"upper.txt": "NEEDLE ÉCOLE\n",
+	})
+
+	tests := []struct {
+		query string
+		want  []string
+	}{
+		{query: "needle", want: []string{"lower.txt", "upper.txt"}},
+		{query: "NEEDLE", want: []string{"upper.txt"}},
+		// Non-ASCII queries take the regexp path, which follows the same rule.
+		{query: "école", want: []string{"lower.txt", "upper.txt"}},
+		{query: "ÉCOLE", want: []string{"upper.txt"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.query, func(t *testing.T) {
+			result, err := Search(context.Background(), workDir, Options{Query: tt.query, Mode: ModeContent})
+			if err != nil {
+				t.Fatalf("Search failed: %v", err)
+			}
+			if got := matchedPaths(result.Matches); !slices.Equal(got, tt.want) {
+				t.Errorf("got %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// Ranges must index the text the client decodes from JSON, including on lines
+// whose invalid UTF-8 bytes json turns into U+FFFD.
+func TestSearchContentRangesIndexDecodedText(t *testing.T) {
+	workDir := t.TempDir()
+	writeTree(t, workDir, map[string]string{
+		// Past the binary probe, which would reject the file outright.
+		"a.txt": strings.Repeat("ok\n", binaryProbeBytes) + "\xff\xfe 😀 needle \xe6\x97 NEEDLE\n",
+	})
+
+	result, err := Search(context.Background(), workDir, Options{Query: "needle", Mode: ModeContent})
+	if err != nil {
+		t.Fatalf("Search failed: %v", err)
+	}
+	encoded, err := json.Marshal(result)
+	if err != nil {
+		t.Fatalf("Marshal failed: %v", err)
+	}
+	var decoded Result
+	if err := json.Unmarshal(encoded, &decoded); err != nil {
+		t.Fatalf("Unmarshal failed: %v", err)
+	}
+
+	line := decoded.Matches[0].Lines[0]
+	if len(line.Ranges) != 2 {
+		t.Fatalf("got ranges %+v, want two", line.Ranges)
+	}
+	for _, r := range line.Ranges {
+		if got := sliceUTF16(line.Text, r); !strings.EqualFold(got, "needle") {
+			t.Errorf("got %q at range %+v in %q, want needle", got, r, line.Text)
+		}
 	}
 }
 
@@ -205,7 +349,32 @@ func TestSearchContentClipsLongLines(t *testing.T) {
 	if len(line.Ranges) != 1 {
 		t.Fatalf("got ranges %+v, want one", line.Ranges)
 	}
-	if got := line.Text[line.Ranges[0].Start:line.Ranges[0].End]; got != "needle" {
+	if got := sliceUTF16(line.Text, line.Ranges[0]); got != "needle" {
+		t.Errorf("got %q at clipped range, want %q", got, "needle")
+	}
+}
+
+// Clipping counts bytes and the ranges count UTF-16 units, so a window cut
+// from multi-byte text must still yield ranges that land on the match.
+func TestSearchContentClipsMultibyteLines(t *testing.T) {
+	workDir := t.TempDir()
+	pad := strings.Repeat("日😀", maxLineBytes)
+	writeTree(t, workDir, map[string]string{
+		"long.txt": pad + "needle" + pad + "\n",
+	})
+
+	result, err := Search(context.Background(), workDir, Options{Query: "needle", Mode: ModeContent})
+	if err != nil {
+		t.Fatalf("Search failed: %v", err)
+	}
+	line := result.Matches[0].Lines[0]
+	if !utf8.ValidString(line.Text) {
+		t.Errorf("clipped text %q is not valid UTF-8", line.Text)
+	}
+	if len(line.Ranges) != 1 {
+		t.Fatalf("got ranges %+v, want one", line.Ranges)
+	}
+	if got := sliceUTF16(line.Text, line.Ranges[0]); got != "needle" {
 		t.Errorf("got %q at clipped range, want %q", got, "needle")
 	}
 }

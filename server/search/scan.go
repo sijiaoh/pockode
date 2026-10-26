@@ -186,8 +186,8 @@ func (fs *fileScanner) scanFile(fullPath, relPath string, m *matcher) (*FileMatc
 			break
 		}
 
-		clippedText, clippedRanges := clipLine(line, ranges)
-		lines = append(lines, Line{Number: number, Text: clippedText, Ranges: clippedRanges})
+		text, textRanges := toClientText(clipLine(line, ranges))
+		lines = append(lines, Line{Number: number, Text: text, Ranges: textRanges})
 	}
 
 	if len(lines) == 0 {
@@ -198,7 +198,9 @@ func (fs *fileScanner) scanFile(fullPath, relPath string, m *matcher) (*FileMatc
 
 // clipLine extracts a window around the first match when the line is too long,
 // dropping ranges outside the window and rebasing the rest onto the window.
-// Window edges are snapped to UTF-8 rune boundaries so the text stays valid.
+// Window edges are snapped to UTF-8 rune boundaries so no valid character is
+// cut, and the window is taken from the raw bytes before toClientText
+// substitutes invalid ones: both the limits and the ranges here are bytes.
 //
 // The returned string is a copy, so it stays valid after the caller's scanner
 // buffer is overwritten by the next line.

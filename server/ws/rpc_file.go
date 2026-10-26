@@ -211,7 +211,6 @@ func (h *rpcMethodHandler) handleFileSearch(ctx context.Context, conn *jsonrpc2.
 		Mode:             search.Mode(params.Mode),
 		Path:             params.Path,
 		RespectGitignore: respectGitignore,
-		CaseSensitive:    params.CaseSensitive,
 		MaxResults:       params.MaxResults,
 	})
 	if err != nil {
