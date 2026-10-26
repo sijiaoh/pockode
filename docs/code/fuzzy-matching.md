@@ -62,7 +62,8 @@ algorithms and 300,000 for the query syntax, across both schemes and every
 option. Score, span and positions agreed in every case. That harness is not
 kept, because it would need fzf as a dependency. When moving to a newer fzf,
 diff the upstream files listed in each header between the two versions, carry
-the change over, update the version in the headers, and repeat the comparison
+the change over, update the version in the headers and in the notices entry
+(see [Third-Party Code](#third-party-code)), and repeat the comparison
 the same way.
 
 ## Third-Party Code
@@ -78,6 +79,14 @@ the ported files, unless it is a change to ported code, which then goes into
 the header's list. Then "which code is fzf's" never needs more than a look at
 the file headers, and the MIT notice travels with every copy of the code it
 covers.
+
+The binary's third-party notices list fzf too, but `go list` cannot see a
+port, so that entry is kept by hand: `fzfEntry` in
+`server/internal/cmd/thirdpartynotices/manual.go`. Its test reads the headers
+here and fails when one names another fzf version or carries a different
+license text, so a re-port that updates the headers also has to update that
+entry. How the notices are built is in
+[scripts/README.md](../../scripts/README.md#notices--third-party-notices).
 
 ## Wiring It In
 

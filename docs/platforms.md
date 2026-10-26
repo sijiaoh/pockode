@@ -7,9 +7,11 @@ around them. Build details for the release artifacts are in
 ## Release Binaries
 
 Every [release](https://github.com/sijiaoh/pockode/releases/latest) attaches one
-binary per platform, plus a `checksums.txt` covering all of them. Each binary
-embeds the frontend, so it is the only thing you need to download; the checksums
-file is what the install scripts check it against.
+binary per platform, plus a `checksums.txt` covering all of them and a
+`THIRD_PARTY_NOTICES.txt`. Each binary embeds the frontend, so it is the only
+thing you need to download; the checksums file is what the install scripts check
+it against. The binary embeds the third-party notices too, and serves them at
+`/THIRD_PARTY_NOTICES.txt` ([where they come from](../scripts/README.md#notices--third-party-notices)).
 
 | Platform | Architecture | Artifact | Install |
 |----------|--------------|----------|---------|
