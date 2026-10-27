@@ -4,7 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { gitSyncActions } from "../../lib/gitSyncStore";
 import { makeHead, makeSync } from "../../test/gitFixtures";
-import type { GitBranches } from "../../types/git";
+import type { GitBranches, LineStat } from "../../types/git";
 import type { GitSegment } from "../../types/overlay";
 import GitTab from "./GitTab";
 
@@ -15,9 +15,11 @@ vi.mock("../../hooks/useGitBranches", () => ({
 	useGitBranches: () => ({ data: branches, isLoading: false, error: null }),
 }));
 let changeCount: number | undefined;
+let changeLines: LineStat | null;
 vi.mock("../../hooks/useGitChangeCount", async (importOriginal) => ({
 	...(await importOriginal<typeof import("../../hooks/useGitChangeCount")>()),
 	useGitChangeCount: () => changeCount,
+	useGitChangeLines: () => changeLines,
 }));
 
 function renderTab(activeSegment: GitSegment | null = null) {
@@ -38,6 +40,7 @@ beforeEach(() => {
 		sync: makeSync({ behind: 2 }),
 	};
 	changeCount = 5;
+	changeLines = null;
 	gitSyncActions.reset();
 });
 
@@ -84,6 +87,26 @@ describe("GitTab", () => {
 			expect(
 				screen.getByRole("button", { name: /^Changes/ }),
 			).toHaveTextContent("No changes");
+		});
+
+		it("carries the lines added and removed beside the count", () => {
+			changeLines = { additions: 142, deletions: 37 };
+			renderTab();
+
+			const entry = screen.getByRole("button", {
+				name: "Changes, 5 changed files, 142 lines added, 37 removed",
+			});
+			expect(entry).toHaveTextContent("5+142 −37");
+		});
+
+		// Every file binary or too large: nothing to sum, which is not `+0 −0`.
+		it("leaves the lines out when nothing could be counted", () => {
+			changeLines = { additions: 0, deletions: 0 };
+			renderTab();
+
+			expect(
+				screen.getByRole("button", { name: "Changes, 5 changed files" }),
+			).toHaveTextContent(/^Changes5$/);
 		});
 
 		// Like the tab's badge, this is not where a failed read is reported.

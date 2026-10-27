@@ -197,7 +197,7 @@ Follows standard JSON-RPC 2.0; Pockode has no custom extensions.
 {
   "jsonrpc": "2.0",
   "id": 1,
-  "result": { "files": [...] }
+  "result": { "staged": [...], "unstaged": [...], "submodules": {} }
 }
 ```
 

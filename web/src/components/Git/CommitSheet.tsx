@@ -49,7 +49,7 @@ interface Props {
 	submodules: StagedSubmodule[];
 	/** null before the first commit, where there is nothing to amend. */
 	lastCommit: LastCommit | null;
-	/** Opened from the HEAD row's amend action rather than from `Commit (n)`. */
+	/** Opened from the HEAD row's amend action rather than from `Commit n files`. */
 	amendInitially: boolean;
 	/** null where the sync chip is absent: no remote, or a detached HEAD. */
 	push: CommitPush | null;

@@ -2,7 +2,7 @@
 package git
 
 import (
-	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/pockode/server/contents"
 	"github.com/pockode/server/internal/fsperm"
@@ -236,9 +237,29 @@ func configUser(dir, name, email string) error {
 }
 
 // FileStatus represents a file's git status.
+//
+// An entry describes one side of the file — the staged list compares HEAD with
+// the index, the unstaged list the index with the working tree — and so do its
+// line counts. A file changed on both sides appears in both lists, each with
+// the counts of its own diff, so the file's whole change is their sum: exactly
+// the two diffs a reviewer reads for it.
+//
+// Lines is nil when the side has no lines to count. Binary then says whether
+// that is because git treats the file as binary; with Binary false the count is
+// simply unknown — a conflicted file, an untracked one too large, unreadable or
+// past the read budget to count, or a rename the status and the numstat paired
+// differently (only a `status.renameLimit` set apart from `diff.renameLimit`
+// can still do that).
 type FileStatus struct {
-	Path   string `json:"path"`
-	Status string `json:"status"` // M=modified, A=added, D=deleted, R=renamed, ?=untracked
+	Path   string    `json:"path"`
+	Status string    `json:"status"` // M=modified, A=added, D=deleted, R=renamed, ?=untracked
+	Lines  *LineStat `json:"lines,omitempty"`
+	Binary bool      `json:"binary,omitempty"`
+	// OrigPath is the path a renamed file had in HEAD, set on the staged
+	// entry of a rename only. An unstaged move is a deletion plus an untracked
+	// file — except after `git add -N`, whose unstaged rename is left without a
+	// source and is counted and diffed as its new path alone.
+	OrigPath string `json:"orig_path,omitempty"`
 }
 
 // GitStatus represents the overall git status.
@@ -251,12 +272,18 @@ type GitStatus struct {
 // HasFile returns true if the file exists in staged or unstaged list.
 // Supports submodule paths (e.g., "submodule/path/to/file").
 func (s *GitStatus) HasFile(path string, staged bool) bool {
+	return s.file(path, staged) != nil
+}
+
+// file is path's entry on one side, nil when that side has none. Supports
+// submodule paths; the entry's own paths are relative to the submodule.
+func (s *GitStatus) file(path string, staged bool) *FileStatus {
 	// Check submodules first
 	for subPath, subStatus := range s.Submodules {
 		prefix := subPath + "/"
 		if strings.HasPrefix(path, prefix) {
 			relativePath := strings.TrimPrefix(path, prefix)
-			return subStatus.HasFile(relativePath, staged)
+			return subStatus.file(relativePath, staged)
 		}
 	}
 
@@ -265,12 +292,12 @@ func (s *GitStatus) HasFile(path string, staged bool) bool {
 	if staged {
 		files = s.Staged
 	}
-	for _, f := range files {
-		if f.Path == path {
-			return true
+	for i := range files {
+		if files[i].Path == path {
+			return &files[i]
 		}
 	}
-	return false
+	return nil
 }
 
 // IsUntracked returns true if the file is untracked (status "?").
@@ -294,7 +321,8 @@ func (s *GitStatus) IsUntracked(path string) bool {
 	return false
 }
 
-// Status returns the current git status (staged and unstaged files).
+// Status returns the current git status (staged and unstaged files), with
+// each file's line counts (see FileStatus).
 // Submodules are returned as nested GitStatus with their relative paths as keys.
 // Note: Pockode does not support nested submodules.
 //
@@ -302,25 +330,48 @@ func (s *GitStatus) IsUntracked(path string) bool {
 // Combined with ignoring CHMOD events in watcher.go, this prevents an infinite loop
 // when watching .git/index. If issues persist, consider switching to periodic polling.
 func Status(dir string) (*GitStatus, error) {
-	return statusWithSubmodules(dir, getSubmodulePaths(dir))
+	return StatusContext(context.Background(), dir)
 }
 
-// statusWithSubmodules is Status with the directory's submodule paths already
-// computed, letting callers that also need the paths (Diff) avoid re-forking
+// StatusContext is Status bounded by ctx, for a caller that has to be able to
+// give up on it.
+func StatusContext(ctx context.Context, dir string) (*GitStatus, error) {
+	return readStatus(ctx, dir, getSubmodulePaths(dir), true)
+}
+
+// statusWithSubmodules is Status without the line counts, which only the
+// client displays, and with the directory's submodule paths already computed,
+// letting callers that also need the paths (Diff) avoid re-forking
 // `git config --file .gitmodules` for the same directory.
 func statusWithSubmodules(dir string, submodules []string) (*GitStatus, error) {
-	// Not execGit: it trims the output, and a leading space is significant here
-	// (" M file" is an unstaged modification). stderr is captured by hand for the
-	// same reason — without it a refusal like "detected dubious ownership in
-	// repository at ..." reaches the panel as "exit status 128".
-	args := []string{"--no-optional-locks", "status", "--porcelain=v1", "-z", "-uall", "--ignore-submodules=none"}
-	cmd := gitCommand(dir, args...)
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
+	return readStatus(context.Background(), dir, submodules, false)
+}
 
-	output, err := cmd.Output()
-	if err != nil {
-		return nil, newCommandError(args, stderr.String(), err)
+func readStatus(ctx context.Context, dir string, submodules []string, countLines bool) (*GitStatus, error) {
+	// The status and both numstats are independent reads of the repository, so
+	// they run together: each may take a while in a large one.
+	var output string
+	var staged, unstaged numstat
+	var statusErr, stagedErr, unstagedErr error
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		// Renames are always detected, whatever status.renames says: the
+		// staged numstat and the review's diff pair them the same way
+		// (readNumstat, DiffWithContent), and all three have to agree.
+		output, statusErr = execGitRaw(ctx, dir, "--no-optional-locks", "status", "--porcelain=v1", "-z", "-uall", "--ignore-submodules=none", "--find-renames")
+	}()
+	if countLines {
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			staged, stagedErr = readNumstat(ctx, dir, true)
+		}()
+		go func() {
+			defer wg.Done()
+			unstaged, unstagedErr = readNumstat(ctx, dir, false)
+		}()
 	}
 
 	result := &GitStatus{
@@ -337,7 +388,7 @@ func statusWithSubmodules(dir string, submodules []string) (*GitStatus, error) {
 				result.Submodules[sub] = &GitStatus{Staged: []FileStatus{}, Unstaged: []FileStatus{}}
 				continue
 			}
-			subStatus, err := Status(subDir)
+			subStatus, err := readStatus(ctx, subDir, getSubmodulePaths(subDir), countLines)
 			if err != nil {
 				slog.Warn("failed to get submodule status", "submodule", sub, "error", err)
 				result.Submodules[sub] = &GitStatus{Staged: []FileStatus{}, Unstaged: []FileStatus{}}
@@ -347,17 +398,42 @@ func statusWithSubmodules(dir string, submodules []string) (*GitStatus, error) {
 		}
 	}
 
-	for _, entry := range parseStatusZ(string(output)) {
+	wg.Wait()
+	// A repository git cannot read fails all three the same way; status's own
+	// account is the one to show, once.
+	if statusErr != nil {
+		return nil, statusErr
+	}
+	if err := errors.Join(stagedErr, unstagedErr); err != nil {
+		return nil, err
+	}
+
+	budget := int64(untrackedBudget)
+	for _, entry := range parseStatusZ(output) {
 		// Skip submodule entries (already handled recursively)
 		if contains(submodules, entry.path) {
 			continue
 		}
 
+		// A conflicted file's numstat describes no diff anyone reads: the index
+		// holds its stages rather than a version, so it is left uncounted.
+		count := countLines && !entry.unmerged()
+
 		if entry.staged != ' ' && entry.staged != '?' {
-			result.Staged = append(result.Staged, FileStatus{Path: entry.path, Status: string(entry.staged)})
+			file := FileStatus{Path: entry.path, Status: string(entry.staged), OrigPath: entry.origPath}
+			if count {
+				staged.fill(&file)
+			}
+			result.Staged = append(result.Staged, file)
 		}
 		if entry.unstaged != ' ' {
-			result.Unstaged = append(result.Unstaged, FileStatus{Path: entry.path, Status: string(entry.unstaged)})
+			file := FileStatus{Path: entry.path, Status: string(entry.unstaged)}
+			if count && entry.unstaged == '?' {
+				countUntracked(dir, &file, &budget)
+			} else if count {
+				unstaged.fill(&file)
+			}
+			result.Unstaged = append(result.Unstaged, file)
 		}
 	}
 
@@ -369,6 +445,16 @@ type statusEntry struct {
 	staged   byte
 	unstaged byte
 	path     string
+	// origPath is the rename or copy source, empty for any other entry.
+	origPath string
+}
+
+// unmerged reports a conflicted path: either side "U", or both sides added or
+// both deleted ("AA", "DD"), as `git status --porcelain` documents them.
+func (e statusEntry) unmerged() bool {
+	return e.staged == 'U' || e.unstaged == 'U' ||
+		(e.staged == 'A' && e.unstaged == 'A') ||
+		(e.staged == 'D' && e.unstaged == 'D')
 }
 
 // parseStatusZ parses `git status --porcelain=v1 -z` output.
@@ -391,7 +477,10 @@ func parseStatusZ(output string) []statusEntry {
 
 		entry := statusEntry{staged: field[0], unstaged: field[1], path: field[3:]}
 		if isRenameOrCopy(entry.staged) || isRenameOrCopy(entry.unstaged) {
-			i++ // consume the source path field
+			i++
+			if i < len(fields) {
+				entry.origPath = fields[i]
+			}
 		}
 
 		entries = append(entries, entry)
@@ -450,21 +539,33 @@ type DiffOptions struct {
 
 // diffFile runs git diff for a tracked path git status reports as changed,
 // with dir and path already resolved into the submodule that holds it.
-func diffFile(dir, path string, opts DiffOptions) (string, error) {
+//
+// origPath is a staged rename's source, or empty. With it the diff names both
+// paths, so git pairs them as the status did; limited to the new path alone,
+// it would show the whole file as added.
+func diffFile(dir, path, origPath string, opts DiffOptions) (string, error) {
 	var args []string
 	if opts.Staged {
-		args = []string{"diff", "--cached"}
+		args = []string{"diff", "--cached", "--find-renames"}
 	} else {
-		args = []string{"diff"}
+		// As the working tree's numstat counts it (readNumstat).
+		args = []string{"diff", "--no-renames"}
 	}
 	if opts.HideWhitespace {
 		args = append(args, "-w")
 	}
-	pathspec, err := literalPathspec(path)
-	if err != nil {
-		return "", fmt.Errorf("%w: %s", err, path)
+	paths := []string{path}
+	if origPath != "" {
+		paths = append(paths, origPath)
 	}
-	args = append(args, "--", pathspec)
+	args = append(args, "--")
+	for _, p := range paths {
+		pathspec, err := literalPathspec(p)
+		if err != nil {
+			return "", fmt.Errorf("%w: %s", err, p)
+		}
+		args = append(args, pathspec)
+	}
 
 	cmd := gitCommand(dir, args...)
 	output, err := cmd.CombinedOutput()
@@ -659,7 +760,8 @@ func DiffWithContent(dir, path string, opts DiffOptions) (*DiffResult, error) {
 	if err != nil {
 		return nil, err
 	}
-	if !status.HasFile(path, opts.Staged) {
+	file := status.file(path, opts.Staged)
+	if file == nil {
 		return &DiffResult{}, nil
 	}
 
@@ -667,7 +769,11 @@ func DiffWithContent(dir, path string, opts DiffOptions) (*DiffResult, error) {
 
 	var oldSide, newSide diffSide
 	if opts.Staged {
-		oldSide = objectSide(actualDir, "HEAD", relativePath)
+		oldPath := relativePath
+		if file.OrigPath != "" {
+			oldPath = file.OrigPath
+		}
+		oldSide = objectSide(actualDir, "HEAD", oldPath)
 		newSide = indexSide(actualDir, relativePath)
 	} else {
 		oldSide = indexSide(actualDir, relativePath)
@@ -688,7 +794,7 @@ func DiffWithContent(dir, path string, opts DiffOptions) (*DiffResult, error) {
 		// have grown past the limit in between.
 		diff = untrackedDiff(relativePath, newContent)
 	} else {
-		diff, err = diffFile(actualDir, relativePath, opts)
+		diff, err = diffFile(actualDir, relativePath, file.OrigPath, opts)
 		if err != nil {
 			return nil, err
 		}

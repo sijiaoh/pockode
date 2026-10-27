@@ -121,7 +121,7 @@ describe("describeCommitAction", () => {
 
 	it("offers the staged count", () => {
 		expect(describeCommitAction(status(["a.ts", "b.ts"], []))).toEqual({
-			label: "Commit (2)",
+			label: "Commit 2 files",
 			enabled: true,
 			hint: null,
 		});
@@ -135,7 +135,7 @@ describe("describeCommitAction", () => {
 			enabled: false,
 			// The stage buttons it names are on screen right above the bar, so it
 			// is worth saying to a screen reader and not worth a line of text.
-			hint: { text: "Stage a file to commit", alreadyOnScreen: true },
+			hint: { text: "Check a file to commit", alreadyOnScreen: true },
 		});
 	});
 
@@ -168,7 +168,7 @@ describe("describeCommitAction", () => {
 			}),
 		).toMatchObject({
 			enabled: false,
-			hint: { text: "Stage a file to commit" },
+			hint: { text: "Check a file to commit" },
 		});
 	});
 

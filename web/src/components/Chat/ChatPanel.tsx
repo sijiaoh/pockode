@@ -221,7 +221,11 @@ interface Props {
 	onSelectGitSegment?: (segment: GitSegment) => void;
 	onSelectDiffFile?: (path: string, staged: boolean) => void;
 	onSelectCommit?: (hash: string) => void;
-	onCloseGitFile?: (path: string, worktree: string) => void;
+	onCloseGitFile?: (
+		path: string,
+		worktree: string,
+		next: { path: string; staged: boolean } | null,
+	) => void;
 	/**
 	 * Set when the session's data is being read out of another worktree, which
 	 * is the whole of what makes this screen read-only: the data comes from

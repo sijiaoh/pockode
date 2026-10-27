@@ -1,65 +1,142 @@
-import { useNavigate } from "@tanstack/react-router";
+import { ConfirmDialog } from "@pockode/shared";
+import { useNavigate, useRouter } from "@tanstack/react-router";
 import {
 	ALargeSmall,
 	ChevronLeft,
 	ChevronRight,
+	Columns2,
 	Loader2,
-	Minus,
-	Plus,
+	WrapText,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import {
+	useCallback,
+	useEffect,
+	useId,
+	useLayoutEffect,
+	useMemo,
+	useRef,
+	useState,
+} from "react";
 import { useGitDiffWatch } from "../../hooks/useGitDiffWatch";
 import { useGitStatus } from "../../hooks/useGitStatus";
 import { useGitWriteRunner } from "../../hooks/useGitWrites";
+import { useLeaveReview } from "../../hooks/useLeaveReview";
 import { useRouteState } from "../../hooks/useRouteState";
-import { useDiffSettings } from "../../lib/diffSettingsStore";
+import {
+	useDiffSettings,
+	useGitDiffSplit,
+	useGitDiffWrap,
+} from "../../lib/diffSettingsStore";
+import {
+	adjacentChange,
+	type ChangedFile,
+	changeKindOf,
+	collectChanges,
+	orderChanges,
+	reviewSideOf,
+	unstagePaths,
+} from "../../lib/gitChanges";
+import { useGitChangesViewStore } from "../../lib/gitChangesViewStore";
 import { gitWriteActions, WorktreeChangedError } from "../../lib/gitWriteStore";
 import { overlayToNavigation } from "../../lib/navigation";
 import { useWorktreeStore } from "../../lib/worktreeStore";
-import { flattenGitStatus, stageFailureSummary } from "../../types/git";
+import {
+	describeCommitAction,
+	describeDiscard,
+	type FileStatus,
+	type GitCommitHint,
+	stageFailureSummary,
+} from "../../types/git";
 import { describeGitFailure, type GitFailure } from "../../utils/gitErrors";
-import { FilePageHeader, type PageBack } from "../Layout/PageHeader";
+import { splitPath } from "../../utils/path";
+import PageHeader, { type PageBack } from "../Layout/PageHeader";
 import {
 	BottomActionBar,
 	ContentView,
 	getActionIconButtonClass,
 	ToggleIconButton,
 } from "../ui";
+import { FileNameTitle } from "../ui/HeaderTitle";
 import DiffContent from "./DiffContent";
 import ErrorBanner from "./ErrorBanner";
+import GitCommitSheet from "./GitCommitSheet";
 
 interface Props {
 	path: string;
+	/** The side the route asks for; the file's other side stands in if it has only that. */
 	staged: boolean;
 	/**
-	 * Back to the list this was opened from. Absent where that list is on
-	 * screen beside it.
+	 * Whether the header offers the way back to the list. Not where that list
+	 * is on screen beside it.
 	 */
-	onBack?: () => void;
+	showBack?: boolean;
 }
 
-function DiffView({ path, staged, onBack }: Props) {
+interface Primary {
+	label: string;
+	onClick: () => void;
+	enabled: boolean;
+	hint?: GitCommitHint | null;
+}
+
+const bottomButtonBase =
+	"flex min-h-[44px] items-center justify-center gap-1.5 rounded-lg px-4 text-sm transition-opacity hover:opacity-90 focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent disabled:cursor-not-allowed disabled:opacity-50";
+
+/**
+ * The review layer: one changed file at a time, in the order the Changes list
+ * draws them, with "stage and go on to the next" as its primary action
+ * (docs/git-changes-ui.md#the-review-layer).
+ *
+ * A review is one history entry: every move inside it — to another file, to
+ * the file's other side — replaces the route, carrying its history state, and
+ * leaving it is `useLeaveReview`, so the list is one step behind it.
+ */
+function DiffView({ path, staged, showBack }: Props) {
 	const navigate = useNavigate();
-	const back: PageBack | undefined = onBack && {
-		to: "parent",
-		label: "Back to changes",
-		onClick: onBack,
-	};
+	const router = useRouter();
 	const { worktree, sessionId } = useRouteState();
 	const { hideWhitespace, toggleHideWhitespace } = useDiffSettings();
-	const { data: diff, isLoading } = useGitDiffWatch({
-		path,
-		staged,
-		hideWhitespace,
-	});
-	const { data: gitStatus } = useGitStatus();
-	const { toggle, writes } = useGitWriteRunner();
+	const { wrap, toggleWrap } = useGitDiffWrap();
+	const { available: splitAvailable, split, toggleSplit } = useGitDiffSplit();
+	const { data: status } = useGitStatus();
+	const view = useGitChangesViewStore((s) => s.view);
+	const { toggle, discard, writes } = useGitWriteRunner();
 	// The worktree the runner sends to, read in the same render, as the Changes
 	// list does: a failure is filed under the worktree whose path it names.
 	const writeWorktree = useWorktreeStore((s) => s.current);
 	const [error, setError] = useState<GitFailure | null>(null);
-	// A stage answers after the press, and by then the reader may have left
-	// this diff — Back to the list, or another file beside it.
+	const [staging, setStaging] = useState(false);
+	const [confirmingDiscard, setConfirmingDiscard] = useState(false);
+	const [committing, setCommitting] = useState(false);
+	const hintId = useId();
+
+	const files = useMemo(
+		() => (status ? orderChanges(collectChanges(status), view) : []),
+		[status, view],
+	);
+	const file = files.find((f) => f.path === path);
+	// Stopped being changed while on screen — committed or reverted by the
+	// agent, say. The page stays and says so rather than being taken away.
+	const gone = status !== undefined && !file;
+	const side = file ? reviewSideOf(file, staged) : staged;
+	const position = file ? files.indexOf(file) + 1 : null;
+	const prev = adjacentChange(files, view, path, -1);
+	const next = adjacentChange(files, view, path, 1);
+
+	// A write answers after the press; by then the list may have changed, and
+	// "next" is whatever sorts after this file *then*.
+	const latest = useRef({ files, view });
+	const wasDeleted = useRef(false);
+	useLayoutEffect(() => {
+		latest.current = { files, view };
+		if (file) wasDeleted.current = changeKindOf(file) === "deleted";
+	});
+	// Set once this page has sent the reader to another file or to the list.
+	// The route props still name this file until the router renders the move,
+	// and the side-following below must not send them back meanwhile.
+	const leaving = useRef(false);
+	// GitWorkspace mounts one instance per path, so this is "the reader is still
+	// on this file": a write answered after they moved on must not move them.
 	const mounted = useRef(true);
 	useEffect(() => {
 		mounted.current = true;
@@ -68,87 +145,268 @@ function DiffView({ path, staged, onBack }: Props) {
 		};
 	}, []);
 
-	const allFiles = useMemo(() => {
-		if (!gitStatus) return [];
-		const flat = flattenGitStatus(gitStatus);
-		return [
-			...flat.staged.map((f) => ({ ...f, staged: true })),
-			...flat.unstaged.map((f) => ({ ...f, staged: false })),
-		];
-	}, [gitStatus]);
+	const { data: diff, isLoading } = useGitDiffWatch({
+		path,
+		staged: side,
+		hideWhitespace,
+		enabled: !gone,
+	});
 
-	const currentIndex = allFiles.findIndex(
-		(f) => f.path === path && f.staged === staged,
-	);
-	const prev = currentIndex > 0 ? allFiles[currentIndex - 1] : null;
-	const next =
-		currentIndex >= 0 && currentIndex < allFiles.length - 1
-			? allFiles[currentIndex + 1]
-			: null;
-
-	const navigateTo = (file: { path: string; staged: boolean }) => {
-		navigate(
-			overlayToNavigation(
-				{ type: "diff", path: file.path, staged: file.staged },
-				worktree,
-				sessionId,
-			),
-		);
-	};
-
-	// Any pending write on this file, not just a stage: a discard started from
-	// the file list would otherwise leave this button live, and the write store
-	// drops a path it is already writing — the tap would navigate to the other
-	// side of a stage that never happened.
-	const isBusy = writes.toggling.has(path) || writes.discarding.has(path);
-
-	const handleToggleStage = async () => {
-		setError(null);
-		try {
-			await toggle([path], staged);
-			gitWriteActions.succeed(writeWorktree, [path]);
-			// Following the file to its other side is for a reader still on it;
-			// one who has moved on keeps the page they moved to.
-			if (!mounted.current) return;
-			navigate(
-				overlayToNavigation(
-					{ type: "diff", path, staged: !staged },
+	const moveTo = useCallback(
+		(target: { path: string; staged: boolean }) => {
+			navigate({
+				...overlayToNavigation(
+					{ type: "diff", ...target },
 					worktree,
 					sessionId,
+					{ replace: true },
 				),
-			);
+				state: true,
+			});
+		},
+		[navigate, worktree, sessionId],
+	);
+	const goToFile = (target: ChangedFile) => {
+		leaving.current = true;
+		moveTo({ path: target.path, staged: reviewSideOf(target, false) });
+	};
+	const goToNextOrLeave = () => {
+		const { files, view } = latest.current;
+		const after = adjacentChange(files, view, path, 1);
+		if (after) goToFile(after);
+		else leave();
+	};
+	const leaveReview = useLeaveReview();
+	const leave = () => {
+		leaving.current = true;
+		leaveReview(worktree, sessionId);
+	};
+	const back: PageBack | undefined = showBack
+		? { to: "parent", label: "Back to changes", onClick: leave }
+		: undefined;
+
+	// The route follows to the side that still exists — after Stage, Unstage or
+	// a change from elsewhere — so that it keeps naming what is on screen.
+	useEffect(() => {
+		if (!file || side === staged || leaving.current) return;
+		// Sent elsewhere by someone else — the shell, moving the review on from
+		// a file discarded in the list — and not rendered yet: the URL already
+		// says so while these props do not.
+		const here = router.buildLocation(
+			overlayToNavigation({ type: "diff", path, staged }, worktree, sessionId),
+		);
+		if (router.latestLocation.pathname !== here.pathname) return;
+		moveTo({ path, staged: side });
+	}, [file, side, staged, path, moveTo, router, worktree, sessionId]);
+
+	// Forgotten with the side it was for, so it cannot come back by itself if
+	// the file changes again later.
+	useEffect(() => {
+		if (confirmingDiscard && !file?.unstaged) setConfirmingDiscard(false);
+	}, [confirmingDiscard, file]);
+
+	// Any pending write on this file, not just one started here: the write
+	// store drops a path it is already writing, so a second press would report
+	// a write that never happened.
+	const isBusy = writes.toggling.has(path) || writes.discarding.has(path);
+
+	const report = (e: unknown, summary: () => string, paths: string[]) => {
+		// A write dropped by a worktree switch says nothing about this file.
+		if (e instanceof WorktreeChangedError) return;
+		const failure = describeGitFailure(e, summary);
+		// Shown here while the file is on screen; once it is not, on the Changes
+		// list's banner, which outlives the page — a failure that settled after
+		// the reader left would otherwise be told to nobody.
+		if (mounted.current) setError(failure);
+		else gitWriteActions.fail(writeWorktree, { ...failure, paths });
+	};
+
+	const handleStage = async () => {
+		setError(null);
+		setStaging(true);
+		try {
+			await toggle([path], false);
+			gitWriteActions.succeed(writeWorktree, [path]);
+			if (!mounted.current) return;
+			// The last file stays: the reader sees it go staged and the commit
+			// button appear, and a failure is never hidden behind a sheet.
+			const { files, view } = latest.current;
+			const after = adjacentChange(files, view, path, 1);
+			if (after) goToFile(after);
 		} catch (e) {
-			// The view stays where it is: the file did not move, so neither does
-			// the diff the user is reading. A write dropped by a worktree switch
-			// says nothing about this file at all, so it says nothing here.
-			if (e instanceof WorktreeChangedError) return;
-			const failure = describeGitFailure(e, () => stageFailureSummary(staged));
-			// Shown here while this diff is on screen; once it is not, on the
-			// Changes list's banner, which outlives the page — a failure that
-			// settled after the reader left would otherwise be told to nobody.
-			if (mounted.current) setError(failure);
-			else gitWriteActions.fail(writeWorktree, { ...failure, paths: [path] });
+			report(e, () => stageFailureSummary(false), [path]);
+		} finally {
+			if (mounted.current) setStaging(false);
 		}
 	};
 
-	const stageButtonLabel = staged ? "Unstage" : "Stage";
-	const StageIcon = staged ? Minus : Plus;
-	const stageButtonColor = staged ? "text-th-warning" : "text-th-success";
-
-	const handlePathClick = () => {
-		navigate(overlayToNavigation({ type: "file", path }, worktree, sessionId));
+	const handleUnstage = async (target: ChangedFile) => {
+		setError(null);
+		const paths = unstagePaths(target);
+		try {
+			await toggle(paths, true);
+			gitWriteActions.succeed(writeWorktree, paths);
+		} catch (e) {
+			report(e, () => stageFailureSummary(true), paths);
+		}
 	};
+
+	const handleDiscard = async (target: FileStatus) => {
+		setConfirmingDiscard(false);
+		setError(null);
+		try {
+			await discard([path]);
+			gitWriteActions.succeed(writeWorktree, [path]);
+			// The discarded side has nothing left to review.
+			if (mounted.current) goToNextOrLeave();
+		} catch (e) {
+			report(e, () => describeDiscard([target]).failureSummary, [path]);
+		}
+	};
+
+	const commitAction = describeCommitAction(status);
+	const primary: Primary | null = file?.unstaged
+		? {
+				label: next ? "Stage & next" : "Stage",
+				onClick: handleStage,
+				enabled: !isBusy,
+			}
+		: next
+			? { label: "Next", onClick: () => goToFile(next), enabled: true }
+			: commitAction
+				? {
+						label: commitAction.label,
+						onClick: () => setCommitting(true),
+						enabled: commitAction.enabled,
+						hint: commitAction.hint,
+					}
+				: gone
+					? { label: "Back to changes", onClick: leave, enabled: true }
+					: null;
+
+	const untracked = file?.unstaged?.status === "?";
+	// Still deleted once the deletion is committed and the file has left the
+	// list: there is nothing to open either way.
+	const deleted = file ? changeKindOf(file) === "deleted" : wasDeleted.current;
+	const { fileName, directory } = splitPath(path);
+	const dir = directory.replace(/\/$/, "");
+	const total = files.length;
 
 	return (
 		<div className="flex flex-1 flex-col overflow-hidden">
-			{/* The side is spelled out rather than coloured: colour on this page
-			    belongs to the Stage / Unstage action, which is the opposite one. */}
-			<FilePageHeader
-				path={path}
-				status={staged ? "Staged" : "Unstaged"}
+			<PageHeader
 				back={back}
-				onTitleClick={handlePathClick}
+				title={<FileNameTitle name={fileName} />}
+				fullText={path}
+				onTitleClick={
+					deleted
+						? undefined
+						: () =>
+								navigate(
+									overlayToNavigation(
+										{ type: "file", path },
+										worktree,
+										sessionId,
+									),
+								)
+				}
+				titleActionLabel={deleted ? undefined : `Open ${fileName}`}
 			/>
+
+			<div className="flex min-h-[44px] shrink-0 items-center gap-1 border-b border-th-border px-2 pointer-coarse:gap-2">
+				<button
+					type="button"
+					disabled={!prev}
+					onClick={() => prev && goToFile(prev)}
+					className={getActionIconButtonClass(!!prev)}
+					aria-label="Previous file"
+				>
+					<ChevronLeft className="h-4 w-4" aria-hidden="true" />
+				</button>
+				{status && (
+					<span className="shrink-0 px-1 text-xs tabular-nums text-th-text-muted">
+						<span aria-hidden="true">
+							{position ?? "–"} / {total}
+						</span>
+						<span className="sr-only">
+							{position
+								? `File ${position} of ${total}`
+								: `No longer changed, ${total} changed files`}
+						</span>
+					</span>
+				)}
+				<button
+					type="button"
+					disabled={!next}
+					onClick={() => next && goToFile(next)}
+					className={getActionIconButtonClass(!!next)}
+					aria-label="Next file"
+				>
+					<ChevronRight className="h-4 w-4" aria-hidden="true" />
+				</button>
+				{/* The one part that gives way: from the head, since the deepest
+				    folder is what tells files apart. `bdi` keeps rtl from
+				    reordering the path. */}
+				<span className="min-w-0 flex-1 truncate px-1 text-xs text-th-text-muted [direction:rtl]">
+					<bdi>{dir}</bdi>
+				</span>
+				<ToggleIconButton
+					icon={WrapText}
+					pressed={wrap}
+					onClick={toggleWrap}
+					label={wrap ? "Don't wrap lines" : "Wrap lines"}
+				/>
+				<ToggleIconButton
+					icon={ALargeSmall}
+					pressed={hideWhitespace}
+					onClick={toggleHideWhitespace}
+					label={
+						hideWhitespace
+							? "Show whitespace changes"
+							: "Hide whitespace changes"
+					}
+				/>
+				{splitAvailable && (
+					<ToggleIconButton
+						icon={Columns2}
+						pressed={split}
+						onClick={toggleSplit}
+						label={split ? "Inline" : "Side by side"}
+					/>
+				)}
+			</div>
+
+			{file?.staged && file.unstaged && (
+				<div className="flex min-h-[44px] shrink-0 items-center gap-2 border-b border-th-border px-3">
+					<span className="min-w-0 flex-1 truncate text-xs text-th-text-muted">
+						Partly staged
+					</span>
+					<fieldset
+						aria-label="Which part of the file to show"
+						className="flex min-w-0 shrink-0 gap-0.5 rounded-md bg-th-bg-tertiary p-0.5 pointer-coarse:gap-2"
+					>
+						{[
+							{ label: "Unstaged", staged: false },
+							{ label: "Staged", staged: true },
+						].map((option) => (
+							<button
+								key={option.label}
+								type="button"
+								aria-pressed={side === option.staged}
+								onClick={() => moveTo({ path, staged: option.staged })}
+								className={`min-h-9 rounded px-3 text-xs transition-colors pointer-coarse:min-h-11 focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent ${
+									side === option.staged
+										? "bg-th-bg-primary font-medium text-th-text-primary"
+										: "text-th-text-muted hover:text-th-text-primary"
+								}`}
+							>
+								{option.label}
+							</button>
+						))}
+					</fieldset>
+				</div>
+			)}
+
 			{error && (
 				<ErrorBanner
 					summary={error.summary}
@@ -156,64 +414,126 @@ function DiffView({ path, staged, onBack }: Props) {
 					onDismiss={() => setError(null)}
 				/>
 			)}
-			<ContentView isLoading={isLoading}>
-				{diff !== undefined && <DiffContent data={diff} fileName={path} />}
-			</ContentView>
-			<BottomActionBar>
-				<div className="flex items-center justify-between">
-					<div className="flex items-center gap-1 pointer-coarse:gap-2">
-						<button
-							type="button"
-							disabled={!prev}
-							onClick={() => prev && navigateTo(prev)}
-							className={getActionIconButtonClass(!!prev)}
-							aria-label="Previous file"
-						>
-							<ChevronLeft className="h-4 w-4" aria-hidden="true" />
-						</button>
-						<button
-							type="button"
-							disabled={!next}
-							onClick={() => next && navigateTo(next)}
-							className={getActionIconButtonClass(!!next)}
-							aria-label="Next file"
-						>
-							<ChevronRight className="h-4 w-4" aria-hidden="true" />
-						</button>
-					</div>
-					<div className="flex items-center gap-2">
-						<ToggleIconButton
-							icon={ALargeSmall}
-							pressed={hideWhitespace}
-							onClick={toggleHideWhitespace}
-							label={
-								hideWhitespace
-									? "Show whitespace changes"
-									: "Hide whitespace changes"
-							}
-						/>
-						<button
-							type="button"
-							onClick={handleToggleStage}
-							disabled={isBusy}
-							className={`flex items-center gap-1.5 rounded border border-th-border bg-th-bg-tertiary h-9 px-3 text-xs transition-all pointer-coarse:h-11 focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent active:scale-95 ${
-								isBusy
-									? "opacity-50 cursor-not-allowed text-th-text-muted"
-									: `${stageButtonColor} hover:border-th-border-focus`
-							}`}
-							aria-label={stageButtonLabel}
-						>
-							{isBusy ? (
-								<Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
-							) : (
-								<StageIcon className="h-4 w-4" aria-hidden="true" />
-							)}
-							{stageButtonLabel}
-						</button>
-					</div>
+			{gone ? (
+				<div className="flex flex-1 items-center justify-center p-4 text-center text-sm text-th-text-muted">
+					This file no longer has changes
 				</div>
-			</BottomActionBar>
+			) : (
+				<ContentView isLoading={isLoading}>
+					{diff !== undefined && (
+						<DiffContent data={diff} fileName={path} split={split} />
+					)}
+				</ContentView>
+			)}
+
+			{(file || primary) && (
+				<BottomActionBar>
+					{/* Above the buttons, as on the list's bar: a line under them is
+					    the first thing an on-screen keyboard covers. */}
+					{primary?.hint && (
+						<span
+							id={hintId}
+							className={
+								primary.hint.alreadyOnScreen
+									? "sr-only"
+									: "mb-1.5 block text-xs text-th-text-muted"
+							}
+						>
+							{primary.hint.text}
+						</span>
+					)}
+					{/* A gap between the two, so the one that takes something away is
+					    not flush against the one pressed all day. */}
+					<div className="flex gap-3">
+						{file &&
+							(side ? (
+								<button
+									type="button"
+									onClick={() => handleUnstage(file)}
+									disabled={isBusy}
+									className={`${bottomButtonBase} max-w-[40%] shrink-0 bg-th-bg-tertiary text-th-text-primary`}
+								>
+									Unstage
+								</button>
+							) : (
+								<button
+									type="button"
+									onClick={() => setConfirmingDiscard(true)}
+									disabled={isBusy}
+									className={`${bottomButtonBase} max-w-[40%] shrink-0 bg-th-bg-tertiary text-th-error`}
+								>
+									{untracked ? "Delete file" : "Discard file"}
+								</button>
+							))}
+						{primary && (
+							<button
+								type="button"
+								onClick={primary.onClick}
+								disabled={!primary.enabled}
+								aria-describedby={primary.hint ? hintId : undefined}
+								className={`${bottomButtonBase} min-w-0 flex-1 bg-th-accent font-medium text-th-accent-text`}
+							>
+								{staging ? (
+									<>
+										<Loader2
+											className="h-4 w-4 shrink-0 animate-spin"
+											aria-hidden="true"
+										/>
+										Staging…
+									</>
+								) : (
+									primary.label
+								)}
+							</button>
+						)}
+					</div>
+				</BottomActionBar>
+			)}
+
+			{/* Read from the live file: a confirmation for a side that has gone
+			    meanwhile would discard nothing and report a failure. */}
+			{confirmingDiscard && file?.unstaged && (
+				<DiscardConfirm
+					file={file.unstaged}
+					onConfirm={() => file.unstaged && handleDiscard(file.unstaged)}
+					onCancel={() => setConfirmingDiscard(false)}
+				/>
+			)}
+
+			{/* A sibling of the bar, not inside it: a refresh that changes the
+			    buttons must not unmount a half-written message. */}
+			{committing && (
+				<GitCommitSheet
+					amendInitially={false}
+					onClose={() => setCommitting(false)}
+					// What the reader came to do is done; files left unstaged are
+					// waiting in the list.
+					onCommitted={leave}
+				/>
+			)}
 		</div>
+	);
+}
+
+function DiscardConfirm({
+	file,
+	onConfirm,
+	onCancel,
+}: {
+	file: FileStatus;
+	onConfirm: () => void;
+	onCancel: () => void;
+}) {
+	const { title, message, confirmLabel } = describeDiscard([file]);
+	return (
+		<ConfirmDialog
+			title={title}
+			message={message}
+			confirmLabel={confirmLabel}
+			variant="danger"
+			onConfirm={onConfirm}
+			onCancel={onCancel}
+		/>
 	);
 }
 

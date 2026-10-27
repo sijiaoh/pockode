@@ -2,14 +2,16 @@
 
 How the Git workspace (`web/src/components/Git/`, entry `GitWorkspace`) presents the four everyday operations — commit, discard, branch, remote sync — and how the sidebar's Git tab (`GitTab`) leads into it. Backend architecture is in [git.md](git.md); this document covers entry points, navigation, layout, interaction flow, feedback and confirmation policy. The layouts and copy below are what the workspace does — where the implementation departed from the original design, this file records the implementation.
 
+The Changes segment — one list of files with a checkbox each — and the `diff` layer, a file-by-file review, are [git-changes-ui.md](git-changes-ui.md)'s; this file points to it rather than restating either.
+
 The rules the workspace's rows share with the sidebar's Files panel — the visual weight ladder its `L1`–`L5` references point at, what `th-accent` is allowed to mean, and the narrow-width rule every fixed row below obeys — are in [sidebar-ui.md](sidebar-ui.md), which also owns the Git tab's shape.
 
 ## Goals and constraints
 
 - **The workspace is a place; the sidebar is its doorplate.** Git used to be a panel inside the tabbed sidebar — a 288px drawer on a phone, a 240–500px column on desktop — and every layout was drawn at 288px. It is now a page of the main content area, `/git`, with the sidebar's Git tab reduced to a read-only overview and three entries into it ([The sidebar's Git tab](#the-sidebars-git-tab)). Everything that writes appears once, in the workspace; nothing in the sidebar writes.
 - **Still narrow where it matters.** Below `expanded` (1024) the workspace has a phone's width to itself; at and above it, its list column is `clamp(280px, 35%, 400px)` ([Layout](#layout)). Every fixed row still obeys the narrow-width rule, which is about containers, not about the sidebar ([sidebar-ui.md](sidebar-ui.md#the-narrow-width-rule)).
-- **One-handed and touch-first.** Full-width rows are `min-h-[44px]`; icon-only buttons inside a row are `min-h-[36px] min-w-[36px]` (L5), defined once in `ui/iconButtonClass.ts` so stage, unstage, discard, amend and dismiss cannot drift apart in weight. 36 is the visual rung; a coarse pointer grows the box to 44 ([responsive-ui.md](responsive-ui.md#hit-areas-and-spacing)).
-- **One level of grouping.** `Staged` / `Changes` are the Changes segment's only hierarchy; nothing wraps them in a second section that also has a header. The segments themselves are a filter over the page, not a level of it.
+- **One-handed and touch-first.** Full-width rows are `min-h-[44px]`; icon-only buttons inside a row are `min-h-[36px] min-w-[36px]` (L5), defined once in `ui/iconButtonClass.ts` so a row's checkbox and `⋯`, amend and dismiss cannot drift apart in weight. 36 is the visual rung; a coarse pointer grows the box to 44 ([responsive-ui.md](responsive-ui.md#hit-areas-and-spacing)).
+- **One list.** The Changes segment is one list, a row per path, with staging a checkbox on the row rather than a group it sits in ([git-changes-ui.md](git-changes-ui.md#the-changes-segment)). The segments themselves are a filter over the page, not a level of it.
 - **Reuse the existing vocabulary.** `th-*` tokens, `ConfirmDialog` and `Sheet` from `@pockode/shared`, `BottomActionBar`, `SidebarListItem`, `PageHeader`, the segmented control the Stories screen already had (`ui/SegmentedControl.tsx`, extracted so both pages draw one), and lucide icons.
 - **Nothing stashes implicitly.** Pockode runs in worktrees that share one stash stack with the main checkout and every other worktree, so a stash the user did not ask for can be popped by a different session. No operation here creates one — a switch that git refuses is reported, not worked around.
 
@@ -22,7 +24,7 @@ The workspace is three segments, each a list, and the existing diff and commit p
 | Changes list | `/git` | `changes` — the absence of the parameter: never written as `segment=changes`, though accepted if typed |
 | History list | `/git?segment=history` | `history` |
 | Branches list | `/git?segment=branches` | `branches` |
-| A file's diff | the `diff` route (staged or unstaged) | `changes` |
+| A file's review | the `diff` route (staged or unstaged — the side on screen) | `changes` |
 | A commit | the `commit` route | `history` |
 | A file as a commit changed it | the `commit-diff` route | `history` |
 | A file as of a commit | the `commit-file` route | `history` |
@@ -39,14 +41,14 @@ Navigation is `AppShell`'s, on the Stories screen's model:
 | A press that names the layer already on screen — the bare list of the segment it is on | nothing | no entry |
 | The lit segment while a detail is open beside it | The bare list, detail dropped | push |
 | The app header's `←` on a list, or at `expanded` on anything | Back to the chat the workspace was opened over (`session`), or the worktree's home | as every page over the chat |
-| The app header's `←` on a narrow layer | The **parent**: diff → Changes (`Back to changes`), commit → History (`Back to history`), commit-diff → commit, commit-file → commit-diff | navigates *to* the parent URL rather than `history.back()`, so a deep-linked diff still has a list to go back to |
+| The app header's `←` on a narrow layer | The **parent**: diff → Changes (`Back to changes`), commit → History (`Back to history`), commit-diff → commit, commit-file → commit-diff | navigates *to* the parent URL rather than `history.back()`, so a deep-linked diff still has a list to go back to. Pushed, except from the review: there it is `history.back()` when the review was pushed from the list — the one case where the list is known to be behind — and otherwise a replace ([git-changes-ui.md](git-changes-ui.md#what-the-two-bottom-buttons-say)) |
 | A sidebar entry | That segment's list — never a detail it remembers | push |
 
-`handleSelectGitSegment` serves the segment control, the branch name, the back of the narrow diff and commit layers, and the sidebar's entries, so all of them land on a list the same way.
+`handleSelectGitSegment` serves the segment control, the branch name, the clean list's `View history`, the back of the narrow commit layer, and the sidebar's entries, so all of them land on a list the same way.
 
 **Switching worktree inside the workspace stays inside it**, at the same segment's list: every worktree has one, where the path or hash of the detail on screen may not exist over there (`useWorktree.select` reads the current route). Each worktree's own failures stay with it ([Results that outlive the page](#results-that-outlive-the-page)), and the automatic fetch decides again for the new worktree ([Automatic fetch](#automatic-fetch)).
 
-**There is no composer anywhere in the workspace.** The chat input is hidden on every layer — `git`, `diff`, `commit`, `commit-diff`, `commit-file` are in `ChatPanel`'s `inputBarHiddenOverlays`, beside the Stories pages. The workspace's bottom edge belongs to Git's own primary actions — the commit bar, the diff's previous/next and stage bar, `New branch…` — and a composer under them would be a third stacked bar on a phone, all of them competing for the thumb. Viewing a diff or a commit — and a commit's file layers — used to keep the composer under it; those are the places this is a change. To talk to the agent the user goes back, which the app header's `←` always offers; and the way Git hands work to the agent is planned to bring the user back to the session's input with a prefilled message, rather than to grow a second input here.
+**There is no composer anywhere in the workspace.** The chat input is hidden on every layer — `git`, `diff`, `commit`, `commit-diff`, `commit-file` are in `ChatPanel`'s `inputBarHiddenOverlays`, beside the Stories pages. The workspace's bottom edge belongs to Git's own primary actions — the commit bar, the review's `Discard file` / `Stage & next` bar, `New branch…` — and a composer under them would be a third stacked bar on a phone, all of them competing for the thumb. Viewing a diff or a commit — and a commit's file layers — used to keep the composer under it; those are the places this is a change. To talk to the agent the user goes back, which the app header's `←` always offers; and the way Git hands work to the agent is planned to bring the user back to the session's input with a prefilled message, rather than to grow a second input here.
 
 ## The top bar
 
@@ -126,31 +128,30 @@ The sidebar header shows a `GitBranch` icon with the worktree name, and the top 
 │ [ Changes ]  History   Branches  │  segmented control — fixed
 ├──────────────────────────────────┤
 │ ⚠ Discard failed · Details     ✕ │  inline-action banner — Changes only
-│ STAGED 2                     ⊖   │  L3, sticky   ┐
-│  M  GitTab.tsx               ⊖   │               │
-│  A  BranchBar.tsx            ⊖   │               │
-│                                  │               ├ scroll area
-│ CHANGES 3                 ↶  ⊕   │  L3, sticky   │
-│  M  git.md                ↶  ⊕   │               │
-│  ?  notes.txt             ↶  ⊕   │               ┘
+│ ▣ 3 files  +142 −37   [≣|⌸]  ⋯  │  list header, sticky  ┐
+│ ☑  GitTab.tsx          +12 −3  ⋯ │                       │
+│    web/src/components/Git        │                       ├ scroll area
+│ ▣  git.md              +88 −20 ⋯ │                       │
+│    docs                          │                       ┘
 ├──────────────────────────────────┤
-│ [          Commit (2)          ] │  commit bar — Changes only, when committable
+│ [ Review ]  [ Commit 2 files   ] │  commit bar — Changes only, when committable
 └──────────────────────────────────┘
 ```
 
 Each segment's root is a flex column whose scroll area is a plain `min-h-0 flex-1 overflow-y-auto` box, with the fixed rows as its siblings rather than content inside it. The top bar, the banners above the list, the segmented control and the commit bar therefore stay reachable however far the list has scrolled, and they render outside the list's `isLoading` / `error` branch: a failing `git.status` must not take the branch name, or the other segments, down with it. The segmented control is the Stories screen's — full width, outside the scroll area, no counts ([project-ui.md §2.1](project-ui.md#21-the-segmented-control)); each segment opens at the top.
 
-**A detail layer** (here a diff):
+**A detail layer** (here the review):
 
 ```
 ┌──────────────────────────────────┐
-│ ←  git.md · Unstaged             │  app header — the layer's own title; ← to its list
+│ ←  git.md                        │  app header — the layer's own title; ← to its list
 ├──────────────────────────────────┤
 │ ⑂ feature/git-ui      ↓ Pull 2   │  top bar, as on every layer
 ├──────────────────────────────────┤
+│ ‹ 2 / 3 ›  docs          ↵ ␣     │  the review's toolbar
 │ (DiffView, with its own banner)  │
 ├──────────────────────────────────┤
-│ ⟨ prev  next ⟩        [ Stage ]  │  DiffView's own bottom bar
+│ [Discard file]  [Stage & next ]  │  DiffView's own bottom bar
 └──────────────────────────────────┘
 ```
 
@@ -166,13 +167,13 @@ A layer has **no segmented control** — the segments filter the lists, and a la
 ├──────────────────────────────────────────────────────────────────┤
 │ ⚠ Push failed · Details                                       ✕  │  top-bar banners, across both
 ├────────────────────────┬─────────────────────────────────────────┤
-│ [Changes] History Bra… │ git.md · Unstaged                       │  column heading (L2)
+│ [Changes] History Bra… │ git.md                                  │  column heading (L2)
 ├────────────────────────┼─────────────────────────────────────────┤
-│ STAGED 2           ⊖   │                                         │
-│▌M  git.md          ⊖   │   (the diff)                            │
-│ CHANGES 3       ↶  ⊕   │                                         │
+│ ▣ 3 files +142 −37 ≣ ⋯ │ ‹ 2 / 3 › docs                    ↵ ␣   │  the review's toolbar
+│▌▣ git.md      +88 −20⋯ │   (the diff)                            │
+│ ☐ notes.txt   +9     ⋯ │                                         │
 ├────────────────────────┼─────────────────────────────────────────┤
-│ [   Commit (2)       ] │ ⟨ prev  next ⟩              [ Unstage ] │  each column's own bottom bar
+│ [Review] [Commit 2 fi…]│ [ Discard file ]        [ Stage & next ]│  each column's own bottom bar
 └────────────────────────┴─────────────────────────────────────────┘
 ```
 
@@ -195,26 +196,18 @@ A layer has **no segmented control** — the segments filter the lists, and a la
 
 **Why Git splits into two columns when the Stories screen does not.** [project-ui.md §7](project-ui.md#7-deliberately-not-done) rejects a master-detail split there: a story's detail is read one at a time, and a list, a detail and a sidebar would share the space of one chat. A diff is read in a run — file after file, then a commit — and walking back and forth between a list and a full-screen diff is exactly the cost this layout removes. The same reasoning, with the opposite answer, because the reading is different.
 
-### Group headers
+### The Changes list
 
-`Staged` / `Changes` are L3 (`GroupHeader.tsx`): `text-xs uppercase tracking-wide text-th-text-muted`, no hover fill, count appended to the label rather than parenthesised. The top bar stays L2 and, with a layer's column heading at `expanded`, is the only header-weight row below the app header — the earlier `▾ Changes` section header, which wrapped two groups that already carried headers and counts, is gone along with its collapse state and its count.
-
-**The headers are 36px, not the 32px the ladder names.** The container is `min-h-[32px]`, but a group with actions contains 36px L5 buttons and flex grows the row to fit them. Shrinking the row would mean shrinking the touch targets, and the touch target is the one of the two that a thumb can miss. On a coarse pointer the container is `min-h-11` and the whole header goes to 44 — grown behind the pointer gate, so the rung is untouched for a mouse ([responsive-ui.md](responsive-ui.md#hit-areas-and-spacing)).
-
-Each group header is `sticky top-0` inside its own `flex flex-col` box, so it pins only over the list it labels and gives way as the next group arrives. That is the need the deleted collapse toggle was actually serving — collapsing `Changes` was how you scrolled past a long list to reach what was under it.
-
-`Unstaged` is renamed **`Changes`**, matching VS Code's source-control naming — with the parent header gone there is nothing left for it to be confused with. The group actions are icon-only (`Plus` / `Minus`, the same icons the per-row stage buttons use) rather than the previous `Stage All` / `Unstage All` text, so their labels moved into `aria-label`: `Stage all files` / `Unstage all files`, derived from `staged`, and a constant `Discard all changes`. The discard label used to be built from the group title, which the rename would have turned into `Discard all changes changes`.
-
-**A clean tree shows one muted `No changes` row** in place of both groups. It is a line of explanation instead of a blank band, so "clean" and "not loaded yet" cannot be confused.
+The list — its rows, checkboxes, header, flat and tree views, the file's action sheet and the clean, loading and failed states — is [git-changes-ui.md](git-changes-ui.md#the-changes-segment)'s. It replaced two groups, `Staged` and `Changes`, under L3 group headers: a partially staged file was two rows, and staging a file moved it across the screen out from under the thumb.
 
 ## Commit
 
-The bottom bar holds at most one primary button (L1), and renders only while committing is on the table. `describeCommitAction` returns `null` for the two states that have no button:
+The bottom bar holds at most one primary button (L1), beside a secondary `Review` that opens the first file in list order ([git-changes-ui.md](git-changes-ui.md#the-bottom-bar)), and renders only while committing is on the table. `describeCommitAction` returns `null` for the two states that have no button:
 
 | Working tree | Bar |
 |--------------|-----|
-| n files staged in the root | `Commit (n)` — enabled |
-| changes, nothing staged anywhere | `Commit` — disabled, `Stage a file to commit` as an `sr-only` hint |
+| n files staged in the root | `Commit n files` (`Commit 1 file`) — enabled |
+| changes, nothing staged anywhere | `Commit` — disabled, `Check a file to commit` as an `sr-only` hint |
 | staged only inside a submodule | `Commit` — disabled, with a **visible** line saying why |
 | clean | **no bar** |
 | `git.status` unreadable | **no bar** — the Changes segment is already showing why |
@@ -223,9 +216,9 @@ Keeping the disabled button in the second case is deliberate: the user is on the
 
 Keeping it in the clean case is not: there is nothing to commit and nothing on its way to being committed, and 56px of permanently dead accent-coloured button is the loudest thing on a screen that has nothing to say. The bar no longer falls back to `Amend last commit` either — see [Amend](#amend).
 
-**Whether a hint is `sr-only` follows one test: does the screen already show the reason?** `Stage a file to commit` names the stage buttons sitting right above the bar, so a line of text would repeat on screen what the screen already says — worth saying to a screen reader, not worth 20px. The submodule case fails that test, and gets a visible line.
+**Whether a hint is `sr-only` follows one test: does the screen already show the reason?** `Check a file to commit` names the checkboxes sitting right above the bar, so a line of text would repeat on screen what the screen already says — worth saying to a screen reader, not worth 20px. The submodule case fails that test, and gets a visible line.
 
-That case exists because the two counts behind the bar are deliberately different. The **enabled count is the root repository's** staged files, since that is what `git.commit` records ([Submodules](#submodules)). Whether the bar renders at all follows the **flattened** counts, since those are what the file groups above it show — one function, `flattenGitStatus`, shared with `ChangesSection`, so the bar and the groups cannot disagree about whether there is anything on screen. They diverge in exactly one state: files staged inside a submodule. There the rows read as staged like any other and nothing else on screen accounts for a dead button, so the bar spends a line on `Only submodule files are staged; ask the agent in chat to commit them.` — the same referral the sync sheet makes for a diverged branch. The alternative, letting the bar vanish out from under a list of staged rows, is a silent failure.
+That case exists because the two counts behind the bar are deliberately different. The **enabled count is the root repository's** staged files, since that is what `git.commit` records ([Submodules](#submodules)). Whether the bar renders at all follows the **flattened** counts, since those are what the list above it shows — so the bar and the list cannot disagree about whether there is anything on screen. They diverge in exactly one state: files staged inside a submodule. There the rows read as staged like any other and nothing else on screen accounts for a dead button, so the bar spends a line on `Only submodule files are staged; ask the agent in chat to commit them.` — the same referral the sync sheet makes for a diverged branch. The alternative, letting the bar vanish out from under a list of staged rows, is a silent failure.
 
 The hint renders **above** the button, on the same rule the sheets follow: the bar already sits at the bottom edge, so a line under the button is the first thing an on-screen keyboard covers.
 
@@ -384,7 +377,7 @@ Only the first row carries it. `git.Log` runs `git log -nN` from HEAD in reverse
 
 This costs zero permanent pixels, it is where a desktop client such as GitHub Desktop puts it, and it puts the message about to be replaced directly under the control that replaces it. The previous arrangement did the opposite: the old panel's loudest control wore its sharpest and rarest action, and it stood in exactly the state — a clean tree — where the user had come to read history.
 
-Both entry points go through `GitCommitSheet.tsx`, which is where `stagedCount`, `submodules`, `lastCommit` and the commit mutation are assembled; `CommitSheet` itself takes them as props and already understood `amendInitially`.
+Every entry point — the commit bar, the review's `Commit n files` and amend — goes through `GitCommitSheet.tsx`, which is where `stagedCount`, `submodules`, `lastCommit` and the commit mutation are assembled; `CommitSheet` itself takes them as props and already understood `amendInitially`.
 
 ### History
 
@@ -417,16 +410,16 @@ The toggle appears only where pressing it could change something — a highlight
 
 ### Submodules
 
-`flattenGitStatus` merges submodule files into the same Staged / Unstaged lists with their path prefixed, and `git.add` stages them in the *submodule's* index. A root-repo `git commit` would silently leave those files staged and uncommitted, which is exactly the silent failure the project forbids.
+Submodule files are listed with the rest, their path prefixed and `· Submodule` on their second line, and `git.add` stages them in the *submodule's* index. A root-repo `git commit` would silently leave those files staged and uncommitted, which is exactly the silent failure the project forbids.
 
-So: **commit operates on the root repository only.** `Commit (n)` counts root-repo staged files, and when submodule entries are staged the sheet says so plainly — `2 staged files in vendor/sdk are not included`. The rejected alternative is committing in each submodule and then the root: that is several commits from one tap, sharing one message, with no rollback if the third fails. Discard, by contrast, does apply to submodule paths, and must resolve into the submodule directory the way `Add` and `Reset` already do.
+So: **commit operates on the root repository only.** `Commit n files` counts root-repo staged files, and when submodule entries are staged the sheet says so plainly — `2 staged files in vendor/sdk are not included`. The rejected alternative is committing in each submodule and then the root: that is several commits from one tap, sharing one message, with no rollback if the third fails. Discard, by contrast, does apply to submodule paths, and must resolve into the submodule directory the way `Add` and `Reset` already do.
 
 ## Discard
 
-Two entry points, both hanging off things that already exist:
+Two entry points, both behind a `⋯` rather than a one-tap icon ([git-changes-ui.md](git-changes-ui.md#the-files-action-sheet-)):
 
-- **Per file** — unstaged rows gain a second action button, `Undo2`, placed *left* of the existing stage button. The frequent, benign action keeps the rightmost (most thumb-reachable) slot; the destructive one sits inboard. Staged-only rows get no discard button: unstage first, which is what the `⊖` beside it already does.
-- **All unstaged** — an `Undo2` icon button in the `CHANGES n` group header, separated by a gap from the stage-all button so the two are not flush neighbours. The `STAGED n` header has no discard-all: its rows have no per-file discard either, for the same reason — unstage first.
+- **Per file** — `Discard changes` (`Delete file` for an untracked one), last in the row's action sheet behind a divider, and only while the file has unstaged changes: a staged-only file is unstaged first, which its checkbox does.
+- **All unstaged** — `Discard all changes…`, the one item of the list header's `⋯`, over every file with unstaged changes; the `⋯` is not there when nothing is unstaged.
 
 Both always go through `ConfirmDialog` with `variant="danger"`, and the wording differs by what is actually lost, because these are two operations with two different blast radii. `ConfirmDialog`'s `message` is a plain string, so the copy stays prose — no code formatting, no markup:
 
@@ -440,11 +433,11 @@ Both always go through `ConfirmDialog` with `variant="danger"`, and the wording 
 
 The confirm button is labelled with the verb of the outcome rather than the default `Confirm`: it is the last thing read before something irreversible happens, and "Delete" against a title asking about deletion is the one word that has to be unambiguous.
 
-A batch of one — which the group header produces whenever a single file is unstaged — takes the single-file wording, because naming the file beats counting it. The classification behind all of this belongs to the server: the list on screen is as old as its last refresh, and the request carries paths only (see [git.md](git.md#discard)).
+A batch of one — which discard-all produces whenever a single file is unstaged — takes the single-file wording, because naming the file beats counting it. The classification behind all of this belongs to the server: the list on screen is as old as its last refresh, and the request carries paths only (see [git.md](git.md#discard)).
 
 "This cannot be undone" is literal here: discarded worktree changes are not in the reflog, unlike nearly every other git mistake. That is why discard is the one file-level action in the workspace behind a modal.
 
-If the unstaged diff of a discarded file is open, the workspace leaves it on success — otherwise the diff view sits on a file that no longer has a diff. It goes to the Changes list, **replacing** the diff in history rather than pushing, because Back must not lead to a diff that no longer exists: below `expanded` that is the list layer, at `expanded` the right column's empty state. Only while that diff is still the page: the discard answers after the press, and a reader who has moved to another page meanwhile — including the same path in another worktree — must not have it replaced under them. So `ChangesSection` reports every discarded path with the worktree it ran in, and `AppShell`'s `handleCloseGitFile(path, worktree)` checks the route at the moment the answer lands, not the one the discard was confirmed on (the reader may have opened one of the discarded files since). The staged view of that same file is left open: throwing away unstaged edits does not empty it.
+If a discarded file's review is open, the workspace moves it on to the next file on success, or to the Changes list when nothing follows ([git-changes-ui.md](git-changes-ui.md#when-the-list-changes-under-the-review)) — **replacing** the review in history rather than pushing, as every move in the review does, and leaving for the list the way the review itself does. Only while that review is still the page: the discard answers after the press, and a reader who has moved to another page meanwhile — including the same path in another worktree — must not have it replaced under them. So `ChangesSection` reports every discarded path with the worktree it ran in and the file that follows it, and `AppShell`'s `handleCloseGitFile(path, worktree, next)` checks the route at the moment the answer lands, not the one the discard was confirmed on (the reader may have opened one of the discarded files since).
 
 ## Branch
 
@@ -545,8 +538,8 @@ The project has no toast system — `WorktreeSwitcher` still carries a `TODO` ab
 
 | Action | Started from | Its failure is shown |
 |---|---|---|
-| Stage, unstage, discard (list rows and group headers) | Changes segment | The Changes segment's banner — including a failure that settled while the user was elsewhere |
-| Stage from a diff | The diff layer | `DiffView`'s own banner; one that answers after the reader left the diff, the Changes list's banner |
+| Stage, unstage, discard (checkboxes, the list header, the action sheets) | Changes segment | The Changes segment's banner — including a failure that settled while the user was elsewhere |
+| Stage, unstage, discard from the review | The review (`diff`) layer | `DiffView`'s own banner; one that answers after the reader left the file, the Changes list's banner |
 | Commit, amend | Commit sheet | In the sheet |
 | Draft with AI | Commit sheet | In the sheet, under the staged line, apart from a commit failure; nowhere once the sheet is closed, since closing cancels it ([Drafting](#drafting-the-message-with-ai)) |
 | Commit & push | Commit sheet | The commit: in the sheet. The push: as a push from the Sync sheet that was then closed ([Commit & push](#commit--push)) |
@@ -558,9 +551,9 @@ The project has no toast system — `WorktreeSwitcher` still carries a `TODO` ab
 - **Actions started in a sheet the user cannot leave** (commit, create) render their error inside that sheet, in the `text-th-error` + `role="alert"` form `WorktreeCreateSheet` already uses. The sheet stays open and the user's typed input survives.
 - **Fetch, pull and push** are started in a sheet that *can* be closed while they run ([Remote sync](#remote-sync)), so one outcome is rendered in whichever place is on screen. Sheet open: the same in-sheet `role="alert"` block as above, unchanged. Sheet closed: an **error banner** under the top bar, below. There is one outcome either way, not two copies of it — opening the sheet moves the message into it and takes the banner away, closing it brings the banner back, and there is no "already seen" state in between. A success is not banner material at all: its signal is the chip's spinner stopping and the counts refreshing, and it waits in the sheet as `Already up to date.` or `Pushed 2 commits.` for whoever reopens it.
 - **Actions started inline from a row** — stage, unstage, discard, discard all — have no sheet to hold the result, so they use that same dismissible **error banner**: one line of plain-language summary, git's stderr behind a `Details` disclosure in a mono block, and a `✕`. It covers stage and unstage rather than discard alone, and not for symmetry: a failed stage used to reach nothing on screen at all — no surface rendered the mutation's error and the panel's own handler let the rejection escape — which is precisely the silent failure the project forbids. The banner clears on dismissal, or when a later attempt succeeds on one of the paths that failed. An unrelated file succeeding is not a retry: dropping the message then would leave the file that failed sitting in the list with nothing on screen explaining why.
-- **A banner holds at most one failure *per source***, each with its own `✕`: under the top bar, from `BranchBar`, the sync banner and then the branch-switch banner — at most two, never merged — and in the Changes segment, between the segmented control and the list, the inline row actions' banner from `ChangesSection`. Several sources can be unacknowledged at once and all are real; collapsing them to "the most recent failure" would silently drop one. Within a source there is only ever one: a new run replaces the outcome of the last. `DiffView` carries a banner of its own for its stage button, which is on a layer where the list may not be on screen. A stage that answers after the reader left the diff — Back to the list, or another file opened beside it (each file is its own `DiffView`, so nothing about one is shown on the next) — does not navigate, and a failure then goes to the Changes list's banner through the store rather than to nobody; a success clears that banner for its path, as a retry from the list would.
+- **A banner holds at most one failure *per source***, each with its own `✕`: under the top bar, from `BranchBar`, the sync banner and then the branch-switch banner — at most two, never merged — and in the Changes segment, between the segmented control and the list, the inline row actions' banner from `ChangesSection`. Several sources can be unacknowledged at once and all are real; collapsing them to "the most recent failure" would silently drop one. Within a source there is only ever one: a new run replaces the outcome of the last. `DiffView` carries a banner of its own for its bottom bar's writes, which are on a layer where the list may not be on screen. A write that answers after the reader left the file — Back to the list, or another file of the review (each path is its own `DiffView`, so nothing about one is shown on the next) — does not navigate, and a failure then goes to the Changes list's banner through the store rather than to nobody; a success clears that banner for its path, as a retry from the list would.
 - **A refused request has no `Details`, because git never ran.** The server refuses a write while another one it would collide with holds the worktree — which pairs those are is the server's to decide and is decided narrowly, a fetch never standing in the way of staging a file ([git.md](git.md#serialising-writes)). That refusal is a fact about the workspace's own traffic rather than anything git said — quoting the server's English sentence back under a summary of itself would be the workspace talking to itself. The same holds for `-32002`, a request that reached a project which has just stopped being a repository. So `utils/gitErrors.ts` is the one place the two kinds of failure are told apart, by error code and never by matching the sentence, and every surface renders the outcome: a summary always, git's words only when there are any. The sentence names the operation to wait for in the workspace's own vocabulary (`switching branches`, not `checkout`), and falls back to "another git operation" for an operation name it does not know, so a write added on the server is still explained rather than mis-explained. A branch switch is the one failure that embeds the sentence in its own — `Could not switch to <branch>. This worktree is busy pushing.` — because the branch list is taller than the screen and the row that was tapped is usually scrolled away, or the user has left the segment altogether, while the refusal by itself cannot say which branch it was.
-- **The workspace queues its own fast writes rather than leaning on that refusal.** Stage, unstage and discard run one at a time per worktree through `lib/gitWriteStore.ts`: tapping two files' stage buttons in a row is two `git.add` requests, each row disables only *itself* while its own request is in flight, and react-query does not serialise mutations — so without the queue the commonest interaction in the workspace would be answered with *This worktree is busy staging files*, an error the user did nothing to earn. They **queue** rather than being dropped, unlike the sync store's guard: the second tap names a different file, so it is a second thing the user asked for and not a duplicate of the first. Requests are not merged into one batch either, though the server would take it: merging means either a debounce, which makes a single tap slower for nothing, or bookkeeping that re-derives which row's spinner and which banner a combined failure belongs to. Only the fast writes are queued — commit runs hooks and the three sync operations wait on another machine, so queueing behind one of those is the hang the server's bounded wait exists to prevent, and each of them is behind a single control that cannot be double-tapped into a collision.
+- **The workspace queues its own fast writes rather than leaning on that refusal.** Stage, unstage and discard run one at a time per worktree through `lib/gitWriteStore.ts`: tapping two files' checkboxes in a row is two `git.add` requests, each checkbox goes busy only *itself* while its own request is in flight, and react-query does not serialise mutations — so without the queue the commonest interaction in the workspace would be answered with *This worktree is busy staging files*, an error the user did nothing to earn. They **queue** rather than being dropped, unlike the sync store's guard: the second tap names a different file, so it is a second thing the user asked for and not a duplicate of the first. Requests are not merged into one batch either, though the server would take it: merging means either a debounce, which makes a single tap slower for nothing, or bookkeeping that re-derives which row's spinner and which banner a combined failure belongs to. Only the fast writes are queued — commit runs hooks and the three sync operations wait on another machine, so queueing behind one of those is the hang the server's bounded wait exists to prevent, and each of them is behind a single control that cannot be double-tapped into a collision.
 
   **A queued write is dropped if the user leaves the worktree before its turn.** A `git.*` request names no worktree: the server answers it against whichever one the connection is bound to, and `worktree.switch` rebinds it. Sending each write immediately used to make that safe by itself, since one connection is answered in order — a queue is what gives a switch room to land in between, so the queue is what has to check, at the moment the request would go out. Nothing is shown when one is dropped: nothing was written, so there is nothing to report. The uploads queue cancels for the same reason, and does say so, because its queue stays on screen per worktree.
 - **The sync banner yields to the sheet only when the sheet is really on screen**, not when it is merely the selected one: without branch data there is no sheet to render, and a banner suppressed by a sheet that is not there is a silent failure. For the same reason it is not gated on the chip either — a run that ends after HEAD went detached, or after `git.branches` started failing, has lost the chip that was carrying its progress, and losing progress is acceptable where losing a failure is not. Nor does leaving the workspace lose it: the outcome is stored state rather than a notification, so it is still under the top bar when the user comes back, which is exactly what a toast would not have managed.
@@ -591,10 +584,9 @@ The Git tab (`Git/GitTab.tsx`) is the workspace's doorplate, the same shape as t
 
 The Git tab's icon carries a badge with the number of files holding uncommitted
 changes, so the workspace does not have to be on screen for the user to know
-there is something here to look at. It counts the file lists above, but **deduplicated by
-path** across `Staged` and `Changes`, submodules included: a partially staged
-file is two rows in the list and one changed file to someone reading a digit
-off an icon.
+there is something here to look at. It counts the list's rows — one per path, submodules
+included, so a partially staged file, which is both a staged and an unstaged
+entry of `git.status`, is one changed file.
 
 | State | Badge |
 |-------|-------|
@@ -678,10 +670,11 @@ Beyond the components named above, the workspace's own supporting modules are:
 
 | Module | Role |
 |--------|------|
-| `Git/GroupHeader.tsx` | The L3 group header — label and optional L5 actions. One definition, so the sticky background and the rung's typography cannot drift between the two file groups |
-| `ui/iconButtonClass.ts` | The L5 icon button's classes, used by `DiffFileItem`, `DiffFileList`, `LogList`, `BranchList` and `ErrorBanner` here, by the file tree row's `…` in the Files panel, and by chat's message actions — the `…` beside every user bubble, which is the one caller that asks for the overlay instead of a grown box, and the icon row under every agent message ([session-fork-ui.md](session-fork-ui.md)). It used to live under `Git/` while the tree wrote its own copy, because the two rungs disagreed on height — 36 against 44 — and parameterising that would have meant sharing everything about the rung except the part that made it a rung. The disagreement turned out to be one rung measured two ways: 36 of visual weight, 44 of hit area on a coarse pointer ([responsive-ui.md](responsive-ui.md#hit-areas-and-spacing)). With both stated here, there is one definition and it belongs to no single surface |
+| `lib/gitChanges.ts` | The one record per changed path (`collectChanges`), the checkbox rules, the line sums, and the **one ordering** the list and the review share — `orderChanges`, `compareChangePaths` and `adjacentChange`, which finds the next file by position rather than index ([git-changes-ui.md](git-changes-ui.md#review-order)) |
+| `lib/gitChangesViewStore.ts` | Flat or tree (remembered per browser) and which tree folders are collapsed (per worktree, in memory) — a store rather than the list's state because the review reads the view for its order, and collapse state outlives the list unmounting on a segment switch |
+| `ui/iconButtonClass.ts` | The L5 icon button's classes, used by the Changes list's checkboxes and `⋯`, `LogList`, `BranchList` and `ErrorBanner` here, by the file tree row's `…` in the Files panel, and by chat's message actions — the `…` beside every user bubble, which is the one caller that asks for the overlay instead of a grown box, and the icon row under every agent message ([session-fork-ui.md](session-fork-ui.md)). It used to live under `Git/` while the tree wrote its own copy, because the two rungs disagreed on height — 36 against 44 — and parameterising that would have meant sharing everything about the rung except the part that made it a rung. The disagreement turned out to be one rung measured two ways: 36 of visual weight, 44 of hit area on a coarse pointer ([responsive-ui.md](responsive-ui.md#hit-areas-and-spacing)). With both stated here, there is one definition and it belongs to no single surface |
 | `Git/GitOutput.tsx` | The capped, scrollable block holding git's own words, shared by the error banner, the branch list's pinned failure, and the commit and sync sheets. Every one of them renders it conditionally: a refused write has no git output to hold ([above](#feedback-and-errors)) |
-| `Git/GitCommitSheet.tsx` | The connecting layer between the commit sheet and the workspace's queries, shared by the commit bar and the HEAD row's amend |
+| `Git/GitCommitSheet.tsx` | The connecting layer between the commit sheet and the workspace's queries, shared by the commit bar, the review's bottom bar and the HEAD row's amend |
 | `Git/BranchList.tsx` | The branch rows, their filter and the pinned failure, and `useBranchCheckout`, the Branches segment's handle on `gitCheckoutStore` |
 | `ui/SegmentedControl.tsx` | The segmented control, shared with the Stories screen; it holds no state, since the segment is in the URL |
 | `lib/gitSyncStore.ts` | Which fetch/pull/push is in flight in each worktree, whether it is the automatic fetch (`auto`), and how the last one ended, so a run outlives the sheet that started it. Keyed by worktree because switching worktrees mid-run is reachable, and one record would show A's outcome under B or let A's run disable B's buttons |
@@ -729,9 +722,9 @@ The session filter's worktree dimension is not in the table: it reads which work
 
 ## Out of scope
 
-Deliberately excluded, to keep the workspace at "the everyday operations, done well": conflict resolution, interactive rebase, cherry-pick, revert, tags, stash, branch deletion, remote management, per-hunk staging, submodule commit/branch/sync, and a global toast system.
+Deliberately excluded, to keep the workspace at "the everyday operations, done well": conflict resolution, interactive rebase, cherry-pick, revert, tags, stash, branch deletion, remote management, submodule commit/branch/sync, and a global toast system.
 
-Left for later rather than excluded — the workspace was built as a frame for them, with its current contents moved in unchanged: a redesigned changes list (grouping, a directory tree, batch actions) and a diffstat beside the sidebar's `Changes` count, which `git.status` does not carry yet; a review flow through the diffs; a commit graph; branch details — per-branch ahead/behind, deletion, and the right column Branches does not have yet; AI help such as a generated commit message, which would bring the user back to the session's input with it prefilled ([no composer](#routes-segments-and-back)); a conflict-resolution mode; and resizable columns and keyboard navigation.
+Left for later rather than excluded — the workspace was built as a frame for them, with its current contents moved in unchanged: in the review ([git-changes-ui.md](git-changes-ui.md#the-review-layer)), per-hunk staging, sending a selection of changes to the agent, and an entry into it from chat; a commit graph; branch details — per-branch ahead/behind, deletion, and the right column Branches does not have yet; AI help such as a generated commit message, which would bring the user back to the session's input with it prefilled ([no composer](#routes-segments-and-back)); a conflict-resolution mode; and resizable columns and keyboard navigation.
 
 ---
 

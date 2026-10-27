@@ -1,8 +1,9 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { JSONRPCErrorException } from "json-rpc-2.0";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { gitChangesViewActions } from "../../lib/gitChangesViewStore";
 import { gitWriteActions } from "../../lib/gitWriteStore";
 import { useWorktreeStore, worktreeActions } from "../../lib/worktreeStore";
 import type { GitStatus } from "../../types/git";
@@ -11,8 +12,15 @@ import ChangesSection from "./ChangesSection";
 const discard = vi.fn();
 const stage = vi.fn();
 const unstage = vi.fn();
+const navigate = vi.fn();
 let status: GitStatus | undefined;
 
+vi.mock("@tanstack/react-router", () => ({
+	useNavigate: () => navigate,
+}));
+vi.mock("../../hooks/useRouteState", () => ({
+	useRouteState: () => ({ worktree: "", sessionId: null }),
+}));
 vi.mock("../../hooks/useGitStatus", () => ({
 	useGitStatus: () => ({ data: status, isLoading: false, error: null }),
 }));
@@ -25,8 +33,14 @@ vi.mock("../../hooks/useGitStage", () => ({
 vi.mock("../../hooks/useGitDiscard", () => ({
 	useGitDiscard: () => ({ mutateAsync: discard }),
 }));
-// Reads queries this test does not stand up, and takes no part in discard.
-vi.mock("./CommitBar", () => ({ default: () => null }));
+// Reads queries this test does not stand up; its own test covers it.
+vi.mock("./CommitBar", () => ({
+	default: ({ onReview }: { onReview: () => void }) => (
+		<button type="button" onClick={onReview}>
+			Review
+		</button>
+	),
+}));
 
 const STATUS: GitStatus = {
 	staged: [{ path: "staged.ts", status: "M" }],
@@ -39,28 +53,61 @@ const STATUS: GitStatus = {
 function renderSection(
 	props: {
 		activeFile?: { path: string; staged: boolean } | null;
-		onCloseFile?: (path: string, worktree: string) => void;
+		onCloseFile?: (
+			path: string,
+			worktree: string,
+			next: { path: string; staged: boolean } | null,
+		) => void;
 	} = {},
 ) {
 	const onCloseFile = props.onCloseFile ?? vi.fn();
-	const { unmount } = render(
-		<QueryClientProvider client={new QueryClient()}>
+	const onSelectFile = vi.fn();
+	const onViewHistory = vi.fn();
+	const client = new QueryClient();
+	const ui = () => (
+		<QueryClientProvider client={client}>
 			<ChangesSection
-				onSelectFile={vi.fn()}
+				onSelectFile={onSelectFile}
 				onCloseFile={onCloseFile}
+				onViewHistory={onViewHistory}
 				activeFile={props.activeFile ?? null}
 			/>
-		</QueryClientProvider>,
+		</QueryClientProvider>
 	);
-	return { onCloseFile, unmount };
+	const { unmount, rerender } = render(ui());
+	// Stands for a status refresh: the mocked query is read on every render.
+	const refresh = () => rerender(ui());
+	return { onCloseFile, onSelectFile, onViewHistory, unmount, refresh };
 }
 
 const confirmButton = (name: string) =>
 	screen.getByRole("button", { name, hidden: false });
 
+const checkbox = (name: string) => screen.getByRole("checkbox", { name });
+
+async function openMenu(
+	user: ReturnType<typeof userEvent.setup>,
+	path: string,
+) {
+	await user.click(
+		screen.getByRole("button", { name: `More actions for ${path}` }),
+	);
+	return screen.getByRole("dialog");
+}
+
+async function discardFromMenu(
+	user: ReturnType<typeof userEvent.setup>,
+	path: string,
+	item = "Discard changes",
+) {
+	const sheet = await openMenu(user, path);
+	await user.click(within(sheet).getByRole("button", { name: item }));
+}
+
 function resetWrites() {
 	gitWriteActions.reset();
 	worktreeActions.reset();
+	gitChangesViewActions.setView("flat");
 	for (const rpc of [discard, stage, unstage]) {
 		rpc.mockReset();
 		rpc.mockResolvedValue(undefined);
@@ -73,34 +120,56 @@ describe("ChangesSection discard", () => {
 		resetWrites();
 	});
 
-	// Staged rows have no discard button: unstaging first is what the button
-	// beside them already does.
-	it("offers discard on unstaged rows only", () => {
+	// A staged-only file has nothing to discard; it is unstaged first.
+	it("offers discard only for files with unstaged changes", async () => {
+		const user = userEvent.setup();
 		renderSection();
 
+		const staged = await openMenu(user, "staged.ts");
 		expect(
-			screen.getByRole("button", { name: "Discard changes" }),
+			within(staged).getByRole("button", { name: "Open file" }),
 		).toBeInTheDocument();
 		expect(
-			screen.getByRole("button", { name: "Delete file" }),
-		).toBeInTheDocument();
+			within(staged).queryByRole("button", { name: /Discard|Delete/ }),
+		).not.toBeInTheDocument();
+		await user.keyboard("{Escape}");
+
+		const untracked = await openMenu(user, "notes.txt");
 		expect(
-			screen.getByRole("button", { name: "Discard all changes" }),
+			within(untracked).getByRole("button", { name: "Delete file" }),
 		).toBeInTheDocument();
-		// One per group, and only the Changes group has a discard-all beside it.
+	});
+
+	// The write queue drops a path it already holds: a discard let through now
+	// would report success for a write that never ran.
+	it("holds discard back while the file has a write in flight", async () => {
+		const user = userEvent.setup();
+		let finish!: () => void;
+		stage.mockReturnValueOnce(
+			new Promise<void>((resolve) => {
+				finish = resolve;
+			}),
+		);
+		renderSection();
+		await user.click(checkbox("Stage src/foo.ts"));
+
+		const sheet = await openMenu(user, "src/foo.ts");
+		const item = within(sheet).getByRole("button", { name: /Discard changes/ });
+		expect(item).toHaveAttribute("aria-disabled", "true");
+		await user.click(item);
 		expect(
-			screen.getByRole("button", { name: "Unstage all files" }),
-		).toBeInTheDocument();
-		expect(
-			screen.getByRole("button", { name: "Stage all files" }),
-		).toBeInTheDocument();
+			screen.queryByRole("heading", { name: "Discard changes?" }),
+		).toBeNull();
+
+		await act(async () => finish());
+		await waitFor(() => expect(item).not.toHaveAttribute("aria-disabled"));
 	});
 
 	it("discards a tracked file only after the warning is confirmed", async () => {
 		const user = userEvent.setup();
 		renderSection();
 
-		await user.click(screen.getByRole("button", { name: "Discard changes" }));
+		await discardFromMenu(user, "src/foo.ts");
 
 		expect(
 			screen.getByRole("heading", { name: "Discard changes?" }),
@@ -123,7 +192,7 @@ describe("ChangesSection discard", () => {
 		const user = userEvent.setup();
 		renderSection();
 
-		await user.click(screen.getByRole("button", { name: "Delete file" }));
+		await discardFromMenu(user, "notes.txt", "Delete file");
 
 		expect(
 			screen.getByRole("heading", { name: "Delete file?" }),
@@ -137,19 +206,22 @@ describe("ChangesSection discard", () => {
 		const user = userEvent.setup();
 		renderSection();
 
-		await user.click(screen.getByRole("button", { name: "Discard changes" }));
+		await discardFromMenu(user, "src/foo.ts");
 		await user.click(confirmButton("Cancel"));
 
 		expect(discard).not.toHaveBeenCalled();
 		expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
 	});
 
-	it("sends every unstaged path from the group header", async () => {
+	it("sends every unstaged path from the header's menu", async () => {
 		const user = userEvent.setup();
 		renderSection();
 
 		await user.click(
-			screen.getByRole("button", { name: "Discard all changes" }),
+			screen.getByRole("button", { name: "More actions for all changes" }),
+		);
+		await user.click(
+			screen.getByRole("button", { name: "Discard all changes…" }),
 		);
 
 		expect(
@@ -159,7 +231,7 @@ describe("ChangesSection discard", () => {
 		).toBeInTheDocument();
 		await user.click(confirmButton("Discard"));
 
-		expect(discard).toHaveBeenCalledWith(["src/foo.ts", "notes.txt"]);
+		expect(discard).toHaveBeenCalledWith(["notes.txt", "src/foo.ts"]);
 	});
 
 	const GIT_ERROR =
@@ -169,7 +241,7 @@ describe("ChangesSection discard", () => {
 		discard.mockRejectedValue(new Error(GIT_ERROR));
 		renderSection();
 
-		await user.click(screen.getByRole("button", { name: "Discard changes" }));
+		await discardFromMenu(user, "src/foo.ts");
 		await user.click(confirmButton("Discard"));
 
 		return screen.findByRole("alert");
@@ -206,26 +278,83 @@ describe("ChangesSection discard", () => {
 		await failADiscard(user);
 
 		discard.mockResolvedValue(undefined);
-		await user.click(screen.getByRole("button", { name: "Delete file" }));
+		await discardFromMenu(user, "notes.txt", "Delete file");
 		await user.click(confirmButton("Delete"));
 
 		await waitFor(() => expect(discard).toHaveBeenCalledWith(["notes.txt"]));
 		expect(screen.getByRole("alert")).toHaveTextContent("Discard failed.");
 	});
 
-	// The workspace would otherwise sit on a diff that no longer exists.
-	it("closes the open file when its own changes are discarded", async () => {
+	// A review of the file goes on to whatever follows it in the list, on the
+	// side the review would open it on.
+	it("names the file after the discarded one", async () => {
 		const user = userEvent.setup();
 		const { onCloseFile } = renderSection({
 			activeFile: { path: "src/foo.ts", staged: false },
 		});
 
-		await user.click(screen.getByRole("button", { name: "Discard changes" }));
+		await discardFromMenu(user, "src/foo.ts");
 		await user.click(confirmButton("Discard"));
 
 		await waitFor(() =>
-			expect(onCloseFile).toHaveBeenCalledWith("src/foo.ts", ""),
+			expect(onCloseFile).toHaveBeenCalledWith("src/foo.ts", "", {
+				path: "staged.ts",
+				staged: true,
+			}),
 		);
+	});
+
+	// The list has not heard of the discard when it answers: a file it left
+	// with no changes at all must not be what the review moves on to.
+	it("passes over the other files a discard all leaves unchanged", async () => {
+		const user = userEvent.setup();
+		const { onCloseFile } = renderSection({
+			activeFile: { path: "notes.txt", staged: false },
+		});
+
+		await user.click(
+			screen.getByRole("button", { name: "More actions for all changes" }),
+		);
+		await user.click(
+			screen.getByRole("button", { name: "Discard all changes…" }),
+		);
+		await user.click(confirmButton("Discard"));
+
+		await waitFor(() =>
+			expect(onCloseFile).toHaveBeenCalledWith("notes.txt", "", {
+				path: "staged.ts",
+				staged: true,
+			}),
+		);
+	});
+
+	// A partly staged file keeps its row: it is still a file to walk past.
+	it("keeps a discarded file that is still staged in the order", async () => {
+		const user = userEvent.setup();
+		status = {
+			staged: [{ path: "src/foo.ts", status: "M" }],
+			unstaged: [
+				{ path: "notes.txt", status: "?" },
+				{ path: "src/foo.ts", status: "M" },
+			],
+		};
+		const { onCloseFile } = renderSection();
+
+		await user.click(
+			screen.getByRole("button", { name: "More actions for all changes" }),
+		);
+		await user.click(
+			screen.getByRole("button", { name: "Discard all changes…" }),
+		);
+		await user.click(confirmButton("Discard"));
+
+		await waitFor(() =>
+			expect(onCloseFile).toHaveBeenCalledWith("notes.txt", "", {
+				path: "src/foo.ts",
+				staged: true,
+			}),
+		);
+		expect(onCloseFile).toHaveBeenCalledWith("src/foo.ts", "", null);
 	});
 
 	// What was open when the discard was confirmed is not what is open when it
@@ -236,17 +365,23 @@ describe("ChangesSection discard", () => {
 			activeFile: { path: "src/other.ts", staged: false },
 		});
 
-		await user.click(screen.getByRole("button", { name: "Discard changes" }));
+		await discardFromMenu(user, "src/foo.ts");
 		await user.click(confirmButton("Discard"));
 
 		await waitFor(() =>
-			expect(onCloseFile).toHaveBeenCalledWith("src/foo.ts", ""),
+			expect(onCloseFile).toHaveBeenCalledWith(
+				"src/foo.ts",
+				"",
+				expect.anything(),
+			),
 		);
 	});
 });
 
-const stageButtons = () =>
-	screen.getAllByRole("button", { name: "Stage file" });
+const stageButtons = () => [
+	checkbox("Stage src/foo.ts"),
+	checkbox("Stage notes.txt"),
+];
 
 describe("ChangesSection staging", () => {
 	beforeEach(() => {
@@ -271,6 +406,9 @@ describe("ChangesSection staging", () => {
 		await user.click(second);
 
 		expect(stage).toHaveBeenCalledTimes(1);
+		// Busy, but still focusable: `disabled` would drop the focus.
+		expect(first).toHaveAttribute("aria-busy", "true");
+		expect(first).not.toBeDisabled();
 
 		finishFirst();
 
@@ -316,6 +454,237 @@ describe("ChangesSection staging", () => {
 		await user.click(screen.getByRole("button", { name: "Details" }));
 		expect(
 			screen.getByText("fatal: pathspec did not match"),
+		).toBeInTheDocument();
+	});
+});
+
+describe("ChangesSection checkboxes", () => {
+	beforeEach(() => {
+		status = {
+			staged: [
+				{ path: "a/full.ts", status: "M" },
+				{ path: "a/part.ts", status: "M" },
+			],
+			unstaged: [
+				{ path: "a/part.ts", status: "M" },
+				{ path: "b/none.ts", status: "M" },
+			],
+		};
+		resetWrites();
+	});
+
+	it("shows a file's staging as its checkbox, partial staging as mixed", () => {
+		renderSection();
+
+		expect(checkbox("Stage a/full.ts")).toHaveAttribute("aria-checked", "true");
+		expect(checkbox("Stage a/part.ts")).toHaveAttribute(
+			"aria-checked",
+			"mixed",
+		);
+		expect(checkbox("Stage b/none.ts")).toHaveAttribute(
+			"aria-checked",
+			"false",
+		);
+	});
+
+	// Mixed goes to checked: a partial staging made on purpose is not thrown
+	// away by a press that means "include this file".
+	it("stages the rest of a mixed file and unstages a checked one", async () => {
+		const user = userEvent.setup();
+		renderSection();
+
+		await user.click(checkbox("Stage a/part.ts"));
+		await waitFor(() => expect(stage).toHaveBeenCalledWith(["a/part.ts"]));
+
+		await user.click(checkbox("Stage a/full.ts"));
+		await waitFor(() => expect(unstage).toHaveBeenCalledWith(["a/full.ts"]));
+	});
+
+	it("stages everything unstaged from select all, in one request", async () => {
+		const user = userEvent.setup();
+		renderSection();
+
+		const all = checkbox("Stage all 3 files");
+		expect(all).toHaveAttribute("aria-checked", "mixed");
+		await user.click(all);
+
+		await waitFor(() =>
+			expect(stage).toHaveBeenCalledWith(["a/part.ts", "b/none.ts"]),
+		);
+		expect(stage).toHaveBeenCalledTimes(1);
+	});
+
+	it("unstages everything once every file is fully staged", async () => {
+		const user = userEvent.setup();
+		status = {
+			staged: [
+				{ path: "a.ts", status: "M" },
+				{ path: "b.ts", status: "A" },
+			],
+			unstaged: [],
+		};
+		renderSection();
+
+		await user.click(checkbox("Stage all 2 files"));
+
+		await waitFor(() => expect(unstage).toHaveBeenCalledWith(["a.ts", "b.ts"]));
+	});
+
+	// A folder writes the files the list shows under it, never `git add <dir>`.
+	it("stages a folder's files by path, and still does so collapsed", async () => {
+		const user = userEvent.setup();
+		gitChangesViewActions.setView("tree");
+		renderSection();
+
+		const folder = screen.getByRole("button", { name: "a" });
+		expect(folder).toHaveAttribute("aria-expanded", "true");
+		await user.click(folder);
+		expect(folder).toHaveAttribute("aria-expanded", "false");
+		expect(
+			screen.queryByRole("checkbox", { name: "Stage a/part.ts" }),
+		).toBeNull();
+
+		const box = checkbox("Stage folder a, 2 files");
+		expect(box).toHaveAttribute("aria-checked", "mixed");
+		await user.click(box);
+
+		await waitFor(() => expect(stage).toHaveBeenCalledWith(["a/part.ts"]));
+	});
+});
+
+describe("ChangesSection rows", () => {
+	beforeEach(() => {
+		resetWrites();
+	});
+
+	it("names each file's change in words and sums both sides' lines", () => {
+		status = {
+			staged: [
+				{
+					path: "docs/new.md",
+					status: "R",
+					orig_path: "docs/old.md",
+					lines: { additions: 2, deletions: 1 },
+				},
+				{
+					path: "lib/x.ts",
+					status: "M",
+					lines: { additions: 3, deletions: 0 },
+				},
+			],
+			unstaged: [
+				{
+					path: "lib/x.ts",
+					status: "M",
+					lines: { additions: 4, deletions: 2 },
+				},
+				{
+					path: "gone.ts",
+					status: "D",
+					lines: { additions: 0, deletions: 14 },
+				},
+				{ path: "logo.png", status: "?", binary: true },
+			],
+		};
+		renderSection();
+
+		const row = (path: string) =>
+			screen.getByRole("button", { name: `Review ${path}` });
+		expect(row("docs/new.md")).toHaveTextContent("Renamed from old.md");
+		expect(row("docs/new.md")).toHaveTextContent("+2 −1");
+		expect(row("lib/x.ts")).toHaveTextContent("+7 −2");
+		expect(row("gone.ts")).toHaveTextContent("Deleted");
+		expect(row("gone.ts")).toHaveTextContent("−14");
+		expect(row("gone.ts")).not.toHaveTextContent("+0");
+		expect(row("logo.png")).toHaveTextContent("UntrackedBinary");
+		// The row's name stands in for its text, so a screen reader hears the
+		// rest as the description.
+		expect(row("gone.ts")).toHaveAccessibleDescription("Deleted −14");
+		expect(row("logo.png")).toHaveAccessibleDescription("Untracked Binary");
+	});
+
+	it("marks a submodule's files", () => {
+		status = {
+			staged: [],
+			unstaged: [],
+			submodules: {
+				"vendor/sdk": { staged: [], unstaged: [{ path: "a.ts", status: "?" }] },
+			},
+		};
+		renderSection();
+
+		expect(
+			screen.getByRole("button", { name: "Review vendor/sdk/a.ts" }),
+		).toHaveTextContent("Untracked · Submodule");
+	});
+
+	// The unstaged side is what staging would add; a fully staged file has
+	// only the other.
+	it("opens a file on the side that still has something to stage", async () => {
+		const user = userEvent.setup();
+		status = STATUS;
+		const { onSelectFile } = renderSection();
+
+		await user.click(screen.getByRole("button", { name: "Review src/foo.ts" }));
+		expect(onSelectFile).toHaveBeenLastCalledWith("src/foo.ts", false);
+
+		await user.click(screen.getByRole("button", { name: "Review staged.ts" }));
+		expect(onSelectFile).toHaveBeenLastCalledWith("staged.ts", true);
+	});
+
+	it("reviews from the first file in list order", async () => {
+		const user = userEvent.setup();
+		status = STATUS;
+		const { onSelectFile } = renderSection();
+
+		await user.click(screen.getByRole("button", { name: "Review" }));
+
+		expect(onSelectFile).toHaveBeenCalledWith("notes.txt", false);
+	});
+
+	it("points a clean tree at history", async () => {
+		const user = userEvent.setup();
+		status = { staged: [], unstaged: [] };
+		const { onViewHistory } = renderSection();
+
+		expect(screen.getByText("No changes")).toBeInTheDocument();
+		expect(screen.queryByRole("checkbox")).toBeNull();
+		await user.click(screen.getByRole("button", { name: "View history" }));
+		expect(onViewHistory).toHaveBeenCalled();
+	});
+
+	// The sheet is about a file; once the file has no changes it has nothing
+	// to offer, and must not spring back if the path changes again later.
+	it("closes a file's menu for good when the file stops having changes", async () => {
+		const user = userEvent.setup();
+		status = STATUS;
+		const { refresh } = renderSection();
+		await openMenu(user, "notes.txt");
+
+		status = { ...STATUS, unstaged: [STATUS.unstaged[0]] };
+		refresh();
+		expect(screen.queryByRole("dialog")).toBeNull();
+
+		status = STATUS;
+		refresh();
+		expect(screen.queryByRole("dialog")).toBeNull();
+	});
+
+	it("copies a file's path from its menu", async () => {
+		const user = userEvent.setup();
+		status = STATUS;
+		renderSection();
+
+		const writeText = vi
+			.spyOn(navigator.clipboard, "writeText")
+			.mockResolvedValue(undefined);
+
+		const sheet = await openMenu(user, "src/foo.ts");
+		await user.click(within(sheet).getByRole("button", { name: "Copy path" }));
+
+		expect(writeText).toHaveBeenCalledWith("src/foo.ts");
+		expect(
+			await within(sheet).findByRole("button", { name: "Copied" }),
 		).toBeInTheDocument();
 	});
 });

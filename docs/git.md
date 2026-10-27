@@ -26,7 +26,7 @@ React SPA ──WebSocket──▶ Go Server ──exec──▶ git CLI
 | Discard operations | `server/git/discard.go` | Discard |
 | Write serialisation | `server/git/lock.go` | A worktree's two locks — index and refs — with what each write takes, `BusyError`, and the operation names that lock and wire share ([Serialising Writes](#serialising-writes)) |
 | Command execution | `server/git/command.go` | `gitCommand` / `execGit` / `execGitLines` / `execGitVerbose` / `execGitNetwork`, `CommandError`, and `literalPathspec` |
-| Frontend components | `web/src/components/Git/` | `GitWorkspace` is the `/git` page: `BranchBar` (the top bar, with `SyncChip` and `SyncSheet`) over three segments — `ChangesSection` (`DiffFileList`, `CommitBar` → `CommitSheet`), `HistorySection` (`LogList`, amend → `CommitSheet`) and `BranchesSection` (`BranchList`, `NewBranchSheet`) — with `DiffView` and the chain from `CommitView` to `CommitDiffView` to `CommitFileView` as layers under the first two. `ErrorBanner` catches the failures with no sheet to land in. `GitTab` is the sidebar's read-only overview and its entries into the workspace |
+| Frontend components | `web/src/components/Git/` | `GitWorkspace` is the `/git` page: `BranchBar` (the top bar, with `SyncChip` and `SyncSheet`) over three segments — `ChangesSection` (`ChangesHeader`, `ChangedFileRow` and its `ChangedFileMenu`, `CommitBar` → `CommitSheet`), `HistorySection` (`LogList`, amend → `CommitSheet`) and `BranchesSection` (`BranchList`, `NewBranchSheet`) — with `DiffView` and the chain from `CommitView` to `CommitDiffView` to `CommitFileView` as layers under the first two. `ErrorBanner` catches the failures with no sheet to land in. `GitTab` is the sidebar's read-only overview and its entries into the workspace |
 | Frontend types | `web/src/types/git.ts` | Wire types, plus the pure `describeGitSync` / `describeCommitAction` / `describeDiscard` the workspace's labels and confirmation copy come from |
 | Frontend hooks | `web/src/hooks/useGit*.ts` | The workspace's queries, mutations and watch subscriptions, and `useAutoFetch`, the fetch it runs on the way in. Note `useGitCommit` *reads* a commit (`git.show`) — `useGitCreateCommit` is the one that writes. `useCommitFile` (`git.show.file`) is outside the glob because it reads a file rather than the repository's state: it backs the commit-file layer ([git-ui.md](git-ui.md#viewing-a-file-from-a-commit)) |
 | RPC actions | `web/src/lib/rpc/git.ts` | RPC action creators for all git methods |
@@ -94,6 +94,34 @@ It is also why `Add` and `Reset` take a whole request's paths in one call rather
 **Some git this server runs takes no lock, on purpose.** `git.Init` runs before any client can connect and returns immediately once `.git` exists. The `git worktree add` / `remove` / `list` in `worktree/registry.go` run in the *main* checkout, which is a key of its own and not among the locks any worktree's writes take; removing a worktree while git runs in it is a lifecycle question rather than one about a lock file. The `watch/` pollers and `search`'s `git ls-files` only read.
 
 **And these locks only serialise the git *this server* runs.** An AI CLI session in the same worktree runs `git commit` in its own shell, which never passes through this package; the server cannot stop it and does not pretend to. What the locks are for is the workspace's own concurrency — one user, several taps, and a UI that offers no way to see that two of them collided.
+
+## Status
+
+`git.status` answers `git.GitStatus`: the `staged` and `unstaged` file lists, plus `submodules`, one nested `GitStatus` per submodule keyed by its path. A file changed on both sides is in both lists.
+
+**Each entry carries its own side's line counts.** `lines` is `{additions, deletions}` from `git diff --cached --numstat` for a staged entry and `git diff --numstat` for an unstaged one, so a file's whole change is the sum of its two entries — exactly the two diffs a reviewer opens for it. That sum is not `git diff HEAD`: a line staged and then removed again counts on both sides — on purpose, since the review reads those two diffs and not that third one ([git-changes-ui.md](git-changes-ui.md#what-the-list-reads-from-the-server)).
+
+| Entry | `lines` | `binary` |
+|-------|---------|----------|
+| Text change, staged or unstaged | git's numstat | — |
+| Binary file (git reports `-`) | absent | `true` |
+| Staged rename | git's numstat for the pair, under the new path the status entry carries | — |
+| Untracked text file | every line an addition, counted by the server as `untrackedDiff` renders it; a symlink is its target, one line | — |
+| Untracked file with a NUL in its first 8000 bytes (git's own binary test) | absent | `true` |
+| Untracked file over `contents.MaxFileSize`, unreadable, or a nested repository | absent (unknown) | — |
+| Untracked file past the status's read budget (`untrackedBudget`, 8 × `contents.MaxFileSize` per repository) | absent (unknown) | — |
+| Conflicted file (`U` on either side, `AA`, `DD`) — the index holds its stages, not a version | absent (unknown) | — |
+| A rename the status and the numstat pair differently (`status.renameLimit` set apart from `diff.renameLimit`) | absent (unknown) | — |
+
+**Renames are paired the same way by every read of them, whatever the user's git config says.** The status and the staged numstat pass `--find-renames`, and so does the review's staged diff, which names both paths (`git diff --cached --find-renames -- <new> <old>`) and reads the old side from `HEAD:<old>`; limited to the new path alone, git would show a renamed file as wholly added, and the row's count would not be the diff it opens. The working tree's numstat and diff pass `--no-renames`: its one rename — a move after `git add -N` — is counted and diffed as its new path alone.
+
+**A staged rename carries its source.** `orig_path` is the path the file had in HEAD, read from the field `git status -z` emits after a rename's entry, for the Changes list's `Renamed from …`. Only staged entries have one: an unstaged move is a deletion plus an untracked file, or, after `git add -N`, an unstaged rename that is shown as its new path alone.
+
+A submodule's own entry in the parent is left out of the lists, as it always was; its files are counted inside its nested `GitStatus`.
+
+**Three processes per repository, not one per file.** The status and the two numstats run in parallel; untracked files are read in-process, since git has no way to count them in one invocation. That read is what can grow with the tree — GitWatcher repeats it every poll — so it stops at a budget, and only regular files and symlinks are opened (a fifo would block the status). Internal status reads (`DiffWithContent`, `Discard`) skip the counts — only the client displays them.
+
+**GitWatcher fingerprints the whole `git.status` answer.** A file edited again stays ` M` in the porcelain while its counts move, so comparing porcelain alone would leave the client showing stale numbers until something else changed.
 
 ## Diffs
 
@@ -235,7 +263,7 @@ git.commit.draft.cancel  { draft_id }                                      ->  n
 
 `git.discard` takes paths and throws away their unstaged state. A tracked path is restored, an untracked one is deleted — and **which of the two a path gets is decided on the server from a fresh `git status`, never taken from the request**. The workspace's file list is only as new as its last refresh, and the branches are not interchangeable: deleting a path that has since been added to the index would destroy work nobody asked to lose, and discarded worktree changes are not in the reflog.
 
-**Restore comes from the index, not from HEAD.** `git restore --worktree` leaves the index alone, so a file that was staged and then edited again keeps what was staged. That matches where the button lives — discard appears on unstaged rows only.
+**Restore comes from the index, not from HEAD.** `git restore --worktree` leaves the index alone, so a file that was staged and then edited again keeps what was staged. That matches where the button lives — discard is offered only for a file's unstaged side.
 
 **Untracked files go through `git clean -f`** rather than being removed directly, because clean refuses to touch anything git tracks: a path classified wrongly is a no-op instead of a deletion.
 
@@ -251,7 +279,7 @@ Paths are validated up front, before anything runs, so a rejected path stops the
 
 Two watchers deliver live updates via the subscription system. Both poll every 3 seconds and only while they have subscribers — see [watcher.md](watcher.md) for the watcher inventory and [code/subscription-system.md](code/subscription-system.md) for why git polls instead of using fsnotify.
 
-- **GitWatcher** — Polls `git rev-parse HEAD` + `git status` and compares the result against the previous one. Subscribers receive `git.changed` notifications when it differs (e.g., after `git add`).
+- **GitWatcher** — Polls `git rev-parse HEAD` + the `git.status` answer (counts included, see [Status](#status)) and compares the result against the previous one. Subscribers receive `git.changed` notifications when it differs (e.g., after `git add`).
 - **GitDiffWatcher** — Recomputes the diff behind each `git.diff.subscribe` subscription and sends `git.diff.changed` to that subscriber when the result changes. Each notification carries the full result described in [Diffs](#diffs), not a delta.
 
 ## Projects Without a Repository

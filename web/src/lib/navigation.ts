@@ -1,3 +1,4 @@
+import type { HistoryState } from "@tanstack/react-router";
 import type { GitSegment, OverlayState, WorkSegment } from "../types/overlay";
 import { ROUTES, WT_ROUTES } from "./routes";
 import { SESSION_VIEW_PARAM } from "./sessionView";
@@ -138,6 +139,31 @@ interface NavigationResult {
 	params?: Record<string, string>;
 	search?: Record<string, string>;
 	replace?: boolean;
+}
+
+const REVIEW_FROM_LIST_KEY = "reviewFromList";
+
+/**
+ * The history state of a review pushed from the Changes list, which is what
+ * says the entry behind it is that list. Every move inside the review replaces
+ * with `state: true` to carry it, and leaving the review goes back to that
+ * entry instead of replacing the review with a second copy of the list
+ * (docs/git-changes-ui.md#the-review-layer). A review reached any other way —
+ * a link, a URL typed in — has nothing behind it to go back to.
+ *
+ * Cast because the router's HistoryState is declared in @tanstack/history,
+ * which this package does not depend on directly and so cannot augment.
+ */
+export const REVIEW_FROM_LIST_STATE = {
+	[REVIEW_FROM_LIST_KEY]: true,
+} as HistoryState;
+
+export function isReviewFromList(state: unknown): boolean {
+	return (
+		typeof state === "object" &&
+		state !== null &&
+		(state as Record<string, unknown>)[REVIEW_FROM_LIST_KEY] === true
+	);
 }
 
 /**

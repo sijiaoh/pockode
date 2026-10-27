@@ -8,6 +8,7 @@ import { useAgentOptions } from "../hooks/useAgentOptions";
 import { useAgentRoleSubscription } from "../hooks/useAgentRoleSubscription";
 import { useDocumentTitle } from "../hooks/useDocumentTitle";
 import { useFileDropGuard } from "../hooks/useFileDropGuard";
+import { useLeaveReview } from "../hooks/useLeaveReview";
 import { useRemoteUrlSubscription } from "../hooks/useRemoteUrlSubscription";
 import { useRouteState } from "../hooks/useRouteState";
 import { useScheduleSubscription } from "../hooks/useScheduleSubscription";
@@ -17,7 +18,11 @@ import { useSettingsSubscription } from "../hooks/useSettingsSubscription";
 import { useWorkSubscription } from "../hooks/useWorkSubscription";
 import { useWorktree } from "../hooks/useWorktree";
 import { authActions, selectCredential, useAuthStore } from "../lib/authStore";
-import { buildNavigation, overlayToNavigation } from "../lib/navigation";
+import {
+	buildNavigation,
+	overlayToNavigation,
+	REVIEW_FROM_LIST_STATE,
+} from "../lib/navigation";
 import { filterShowing, isVisibleUnder } from "../lib/sessionFilter";
 import { useSessionStore } from "../lib/sessionStore";
 import { resolveSessionView } from "../lib/sessionView";
@@ -579,17 +584,27 @@ function AppShell() {
 		[deleteSession, navigate, urlWorktree, queryClient],
 	);
 
+	/**
+	 * Opens the review at a file of the Changes list. Pushed from the list, and
+	 * marked as pushed from it so that leaving goes back to it; replaced when a
+	 * review is already open beside it (at `expanded`), keeping whatever mark it
+	 * has: a review is one history entry however many rows are tapped in it
+	 * (docs/git-changes-ui.md).
+	 */
+	const reviewOpen = overlay?.type === "diff";
 	const handleSelectDiffFile = useCallback(
 		(path: string, staged: boolean) => {
-			navigate(
-				overlayToNavigation(
+			navigate({
+				...overlayToNavigation(
 					{ type: "diff", path, staged },
 					urlWorktree,
 					currentSessionId,
+					{ replace: reviewOpen },
 				),
-			);
+				state: reviewOpen ? true : REVIEW_FROM_LIST_STATE,
+			});
 		},
-		[navigate, urlWorktree, currentSessionId],
+		[navigate, urlWorktree, currentSessionId, reviewOpen],
 	);
 
 	const handleSelectFile = useCallback(
@@ -659,11 +674,12 @@ function AppShell() {
 	 * A segment of the Git workspace, at its list: a press on the segment
 	 * control, on the branch name or on one of the sidebar's Git entries — an
 	 * entrance that always lands on the list, never on a detail it remembers —
-	 * and the way back from a diff or a commit to
-	 * the list it was opened from. Pushed, so Back walks the segments the way it
-	 * walks the project list's (docs/project-ui.md §5). A press that names the
-	 * layer already on screen — the list itself, with nothing open under it —
-	 * is not a step, and adds none. With a diff or a commit open beside the
+	 * and the way back from a commit to the list it was opened from (the
+	 * review's way back is `useLeaveReview`, docs/git-changes-ui.md). Pushed,
+	 * so Back walks the segments the way it walks the project list's
+	 * (docs/project-ui.md §5). A press that names the layer already on screen —
+	 * the list itself, with nothing open under it — is not a step, and adds
+	 * none. With a diff or a commit open beside the
 	 * list, pressing its lit segment does go back to the bare list.
 	 */
 	const handleSelectGitSegment = useCallback(
@@ -681,33 +697,46 @@ function AppShell() {
 	);
 
 	/**
-	 * Takes the workspace off the unstaged diff of `path` in `worktree`, which
-	 * has stopped existing — the file was discarded — and onto the Changes
-	 * list. Replaced, because Back must not lead to the diff that is gone.
+	 * Moves the review of `path` in `worktree`, just discarded from the list,
+	 * on to `next`, or to the Changes list when nothing follows. Either side:
+	 * a file discarded is done with, as the review's own Discard treats it,
+	 * even one whose staged side is still there (docs/git-changes-ui.md).
+	 * Replaced, as every move in the review is; leaving it for the list is
+	 * `useLeaveReview`'s.
 	 *
-	 * Only while that diff is still the page: the discard answers after the
+	 * Only while that review is still the page: the discard answers after the
 	 * press, and a reader who has moved on meanwhile — to another file, or to
 	 * the same path in another worktree — must not have the page they moved to
 	 * replaced under them. Read from a ref for the same reason: the route the
 	 * caller saw is the one it pressed in, not the one now.
 	 */
+	const leaveReview = useLeaveReview();
 	const routeRef = useRef({ overlay, urlWorktree, currentSessionId });
 	routeRef.current = { overlay, urlWorktree, currentSessionId };
 	const handleCloseGitFile = useCallback(
-		(path: string, worktree: string) => {
+		(
+			path: string,
+			worktree: string,
+			next: { path: string; staged: boolean } | null,
+		) => {
 			const { overlay: open, urlWorktree, currentSessionId } = routeRef.current;
 			if (urlWorktree !== worktree) return;
-			if (open?.type !== "diff" || open.staged || open.path !== path) return;
-			navigate(
-				overlayToNavigation(
-					{ type: "git", segment: "changes" },
+			if (open?.type !== "diff" || open.path !== path) return;
+			if (!next) {
+				leaveReview(urlWorktree, currentSessionId);
+				return;
+			}
+			navigate({
+				...overlayToNavigation(
+					{ type: "diff", ...next },
 					urlWorktree,
 					currentSessionId,
 					{ replace: true },
 				),
-			);
+				state: true,
+			});
 		},
-		[navigate],
+		[navigate, leaveReview],
 	);
 
 	const handleOpenSettings = useCallback(() => {
