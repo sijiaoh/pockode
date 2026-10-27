@@ -1,6 +1,7 @@
 import type { JSONRPCRequester } from "json-rpc-2.0";
 import type { FileContent } from "../../types/contents";
 import type {
+	CommitDraftRequest,
 	GitBranches,
 	GitDiffData,
 	GitLogResult,
@@ -25,6 +26,14 @@ export interface GitActions {
 	/** Reverts unstaged edits; the server decides per path whether that means deleting it. */
 	discard: (paths: string[]) => Promise<void>;
 	commit: (message: string, amend: boolean) => Promise<void>;
+	/**
+	 * Asks an AI CLI for a message describing what committing now would record.
+	 * A paid call that can take the server's full 90s: never retry it, and stop
+	 * one no longer waited for with `cancelCommitDraft`.
+	 */
+	draftCommitMessage: (request: CommitDraftRequest) => Promise<string>;
+	/** Idempotent: an id that already ended, or never ran, is not an error. */
+	cancelCommitDraft: (draftId: string) => Promise<void>;
 	getBranches: () => Promise<GitBranches>;
 	checkout: (branch: string) => Promise<void>;
 	createBranch: (name: string) => Promise<void>;
@@ -35,11 +44,18 @@ export interface GitActions {
 	push: (force: boolean) => Promise<void>;
 }
 
+/**
+ * @param getDraftClient Requester for `git.commit.draft`, whose answer comes
+ * only once the CLI does — see COMMIT_DRAFT_RPC_TIMEOUT_MS.
+ */
 export function createGitActions(
 	getClient: () => JSONRPCRequester<void> | null,
+	getDraftClient: () => JSONRPCRequester<void> | null,
 ): GitActions {
-	const requireClient = (): JSONRPCRequester<void> => {
-		const client = getClient();
+	const requireClient = (
+		get: () => JSONRPCRequester<void> | null = getClient,
+	): JSONRPCRequester<void> => {
+		const client = get();
 		if (!client) {
 			throw new Error("Not connected");
 		}
@@ -81,6 +97,29 @@ export function createGitActions(
 		},
 		commit: async (message: string, amend: boolean): Promise<void> => {
 			await requireClient().request("git.commit", { message, amend });
+		},
+		draftCommitMessage: async ({
+			draftId,
+			agentType,
+			model,
+			effort,
+			amend,
+		}: CommitDraftRequest): Promise<string> => {
+			const result: { message: string } = await requireClient(
+				getDraftClient,
+			).request("git.commit.draft", {
+				draft_id: draftId,
+				agent_type: agentType,
+				model,
+				effort,
+				amend,
+			});
+			return result.message;
+		},
+		cancelCommitDraft: async (draftId: string): Promise<void> => {
+			await requireClient().request("git.commit.draft.cancel", {
+				draft_id: draftId,
+			});
 		},
 		getBranches: async (): Promise<GitBranches> => {
 			return requireClient().request("git.branches", {});

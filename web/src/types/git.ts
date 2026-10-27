@@ -1,4 +1,5 @@
 import type { OmitReason } from "./contents";
+import type { AgentType } from "./settings";
 
 export interface FileStatus {
 	path: string;
@@ -124,6 +125,19 @@ export interface GitBranches {
 	local: GitBranch[];
 	remote_only: GitRemoteBranch[];
 	sync: GitSync;
+}
+
+/** A `git.commit.draft` request: who writes the draft, and about what. */
+export interface CommitDraftRequest {
+	/** The client's name for the draft, which a cancel names it by. Never reused. */
+	draftId: string;
+	agentType: AgentType;
+	/** Empty lets the CLI pick. */
+	model: string;
+	/** Empty lets the CLI keep its default. */
+	effort: string;
+	/** Drafts the message of the commit that would replace HEAD. */
+	amend: boolean;
 }
 
 /** What a pull actually brought in, counted by the server. */
