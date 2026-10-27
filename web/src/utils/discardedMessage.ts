@@ -1,5 +1,6 @@
 import type { FileBlock } from "../types/content";
 import type { Message, UserMessage } from "../types/message";
+import { appendToDraft } from "./draftText";
 import { formatPockodeCommand } from "./pockodeCommand";
 
 /**
@@ -96,8 +97,8 @@ export function commandRestoreBlocked(
  * What restoring `messages` into `draft` changes: the text to set, absent when
  * it stays as it is, and the files to add. Only what is missing is added, so
  * pressing again — or after a reload, which keeps the text and loses the files —
- * repeats nothing. Existing words are never replaced: what is restored goes
- * after them, a blank line apart.
+ * repeats nothing. The text goes in by `appendToDraft`, the rule the prefill
+ * handoff shares.
  */
 export function restoreIntoDraft(
 	draft: Draft,
@@ -108,11 +109,7 @@ export function restoreIntoDraft(
 	const ids = new Set(draft.attachmentIds);
 	const attachments: FileBlock[] = [];
 	for (const message of messages) {
-		const restored = restoreText(message).trim();
-		if (restored && !text.includes(restored)) {
-			const kept = text.trimEnd();
-			text = kept ? `${kept}\n\n${restored}` : restored;
-		}
+		text = appendToDraft(text, restoreText(message));
 		for (const file of message.attachments ?? []) {
 			if (!file.attachment_id || ids.has(file.attachment_id)) continue;
 			ids.add(file.attachment_id);
