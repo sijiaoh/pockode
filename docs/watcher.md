@@ -69,11 +69,11 @@ type Notification struct {
 
 | Watcher | File | What it polls | Notification |
 |---------|------|---------------|--------------|
-| GitWatcher | `watch/git.go` | `git rev-parse HEAD` + `git status --porcelain=v1` | `git.changed` |
+| GitWatcher | `watch/git.go` | `git rev-parse HEAD` + the `git.status` answer (`git.StatusContext`) | `git.changed` |
 | GitDiffWatcher | `watch/git_diff.go` | `git diff` for specific file (staged or unstaged) | `git.diff.changed` (includes diff content; see [git.md](git.md#diffs)) |
 | WorktreeWatcher | `watch/worktree.go` | `git worktree list --porcelain`, through the worktree registry | `worktree.changed` (includes `is_git_repo`; see [git.md](git.md#projects-without-a-repository)) |
 
-All skip polling when there are no subscribers.
+All skip polling when there are no subscribers. A GitWatcher poll that runs out of its 10 s is dropped rather than compared: its git commands were killed mid-read, and an empty answer would announce a change nobody made — and another when the next poll answers. A large tree can take that long: every poll is a whole `git.status`, line counts included ([git.md](git.md#status)).
 
 ### Event-Driven
 

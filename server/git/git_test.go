@@ -1089,10 +1089,10 @@ func TestParseStatusZ(t *testing.T) {
 			},
 		},
 		{
-			name:  "rename reports new path and skips source field",
+			name:  "rename reports new path and keeps source field",
 			input: "RM new.go\x00old.go\x00 M other.go\x00",
 			expected: []statusEntry{
-				{staged: 'R', unstaged: 'M', path: "new.go"},
+				{staged: 'R', unstaged: 'M', path: "new.go", origPath: "old.go"},
 				{staged: ' ', unstaged: 'M', path: "other.go"},
 			},
 		},
@@ -1495,8 +1495,8 @@ func TestStatus_NonASCIIRename(t *testing.T) {
 	if len(status.Staged) != 1 {
 		t.Fatalf("expected 1 staged entry, got %+v", status.Staged)
 	}
-	if status.Staged[0].Path != "新名.txt" || status.Staged[0].Status != "R" {
-		t.Errorf("staged entry = %+v, want {Path: 新名.txt, Status: R}", status.Staged[0])
+	if got := status.Staged[0]; got.Path != "新名.txt" || got.Status != "R" || got.OrigPath != "旧名.txt" {
+		t.Errorf("staged entry = %+v, want {Path: 新名.txt, Status: R, OrigPath: 旧名.txt}", got)
 	}
 }
 

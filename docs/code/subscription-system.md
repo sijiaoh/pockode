@@ -289,7 +289,7 @@ const gitPollInterval = 3 * time.Second
 
 2. **Cross-platform consistency**: Git behavior varies across platforms; polling `git status` works everywhere.
 
-3. **Simplicity**: Two commands (`rev-parse HEAD` + `status --porcelain`) capture all relevant state.
+3. **Simplicity**: `rev-parse HEAD` plus the `git.status` answer itself capture all relevant state — the answer rather than `status --porcelain`, because a file edited again keeps its porcelain line while its line counts move ([git.md](../git.md#status)).
 
 4. **Skip when idle**: Polling only runs when there are subscribers, so no overhead when unused.
 
@@ -308,7 +308,8 @@ go func() {
 
 go func() {
     defer wg.Done()
-    status = w.runGitCmd(ctx, "status", "--porcelain=v1", ...)
+    result, err := git.StatusContext(ctx, w.workDir)
+    ... // status = the JSON encoding of result
 }()
 
 wg.Wait()

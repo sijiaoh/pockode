@@ -1,8 +1,29 @@
 import type { OmitReason } from "./contents";
 
+export interface LineStat {
+	additions: number;
+	deletions: number;
+}
+
+/**
+ * One side of a file's change: a staged entry compares HEAD with the index, an
+ * unstaged one the index with the working tree. A file changed on both sides is
+ * in both lists, so its whole change is the sum of the two `lines`.
+ *
+ * `lines` is absent when the side has nothing to count: `binary` says git
+ * treats the file as binary; without it the count is unknown (a conflicted
+ * file, or an untracked one too large or unreadable to count — see docs/git.md).
+ */
 export interface FileStatus {
 	path: string;
 	status: "M" | "A" | "D" | "R" | "?";
+	lines?: LineStat;
+	binary?: true;
+	/**
+	 * The path a renamed file had in HEAD. Staged renames only: git reports an
+	 * unstaged move as a deletion plus an untracked file.
+	 */
+	orig_path?: string;
 }
 
 export interface GitStatus {
@@ -172,7 +193,7 @@ export interface GitCommitAction {
 export interface GitCommitHint {
 	text: string;
 	/**
-	 * Whether the workspace already shows the reason — the stage buttons the usual
+	 * Whether the workspace already shows the reason — the checkboxes the usual
 	 * hint points at sit right above the bar. The bar keeps such a hint for a
 	 * screen reader and spends no pixels repeating on screen what the screen
 	 * already says; a reason nothing else accounts for has to be visible.
@@ -202,11 +223,16 @@ export function describeCommitAction(
 	// submodule's index, which a root commit does not touch.
 	const staged = status.staged.length;
 	if (staged > 0) {
-		return { label: `Commit (${staged})`, enabled: true, hint: null };
+		// The count is in the label: no `STAGED n` header above says it any more.
+		return {
+			label: `Commit ${plural(staged, "file")}`,
+			enabled: true,
+			hint: null,
+		};
 	}
 
 	// Whether the bar exists at all follows the flattened counts, which is what
-	// the file groups above it show: with a submodule's files listed as staged
+	// the list above it shows: with a submodule's files listed as staged
 	// and no bar under them, the workspace would offer no account of where the
 	// commit button went.
 	const flat = flattenGitStatus(status);
@@ -229,7 +255,7 @@ export function describeCommitAction(
 	return {
 		label: "Commit",
 		enabled: false,
-		hint: { text: "Stage a file to commit", alreadyOnScreen: true },
+		hint: { text: "Check a file to commit", alreadyOnScreen: true },
 	};
 }
 

@@ -92,6 +92,20 @@ func execGit(dir string, args ...string) (string, error) {
 	return strings.TrimSpace(string(output)), nil
 }
 
+// execGitRaw is execGit without the trimming, for output whose leading
+// whitespace is significant (" M file" is an unstaged modification).
+func execGitRaw(ctx context.Context, dir string, args ...string) (string, error) {
+	cmd := gitCommandContext(ctx, dir, args...)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+
+	output, err := cmd.Output()
+	if err != nil {
+		return "", newCommandError(args, stderr.String(), err)
+	}
+	return string(output), nil
+}
+
 // execGitLines is execGit split into lines.
 //
 // Safe for the ref listings it is used with: git rejects control characters in

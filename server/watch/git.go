@@ -2,12 +2,14 @@ package watch
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
 	"os/exec"
-	"sort"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/pockode/server/git"
 )
 
 const gitPollInterval = 3 * time.Second
@@ -21,7 +23,7 @@ type GitWatcher struct {
 	workDir string
 
 	stateMu   sync.Mutex
-	lastState string // HEAD hash + git status output
+	lastState string // HEAD hash + git.status result
 }
 
 func NewGitWatcher(workDir string) *GitWatcher {
@@ -32,7 +34,9 @@ func NewGitWatcher(workDir string) *GitWatcher {
 }
 
 func (w *GitWatcher) Start() error {
-	state := w.pollGitState()
+	// Without an answer the baseline is empty, and the first poll that has one
+	// announces it once.
+	state, _ := w.pollGitState()
 	w.stateMu.Lock()
 	w.lastState = state
 	w.stateMu.Unlock()
@@ -74,11 +78,11 @@ func (w *GitWatcher) pollLoop() {
 }
 
 func (w *GitWatcher) checkAndNotify() {
-	newState := w.pollGitState()
-	// A cancelled context aborts the git commands, so the poll reports an empty
-	// tree rather than the truth: comparing it would announce a change nobody
-	// made, on a watcher that is being torn down anyway.
-	if w.Context().Err() != nil {
+	newState, ok := w.pollGitState()
+	// A cancelled or timed-out context aborts the git commands, so the poll
+	// reports an empty tree rather than the truth: comparing it would announce
+	// a change nobody made — twice, once more when the next poll answers.
+	if !ok || w.Context().Err() != nil {
 		return
 	}
 
@@ -96,7 +100,9 @@ func (w *GitWatcher) checkAndNotify() {
 
 // pollGitState returns git status + HEAD hash for detecting changes.
 // This detects both working tree changes and HEAD changes (commit, checkout, etc).
-func (w *GitWatcher) pollGitState() string {
+// ok is false when the poll ran out of time and so has no answer: a status now
+// counts lines too (git.StatusContext), and in a large tree that can.
+func (w *GitWatcher) pollGitState() (state string, ok bool) {
 	// Bound by the watcher's context, not just the timeout: Stop waits for this
 	// loop, and a git command left running against a work tree that is being
 	// removed has nothing left to report anyway.
@@ -113,14 +119,28 @@ func (w *GitWatcher) pollGitState() string {
 		head = w.runGitCmd(ctx, "rev-parse", "HEAD")
 	}()
 
+	// The whole of what git.status answers, not just `git status --porcelain`:
+	// a file edited again stays " M" while its line counts move, and the
+	// client would keep showing the old ones until something else changed.
 	go func() {
 		defer wg.Done()
-		status = w.runGitCmd(ctx, "status", "--porcelain=v1", "-uall", "--ignore-submodules=none")
+		result, err := git.StatusContext(ctx, w.workDir)
+		if err != nil {
+			return
+		}
+		encoded, err := json.Marshal(result)
+		if err != nil {
+			return
+		}
+		status = string(encoded)
 	}()
 
 	wg.Wait()
 
-	return head + "\n" + sortLines(status)
+	if ctx.Err() != nil {
+		return "", false
+	}
+	return head + "\n" + status, true
 }
 
 func (w *GitWatcher) runGitCmd(ctx context.Context, args ...string) string {
@@ -133,15 +153,6 @@ func (w *GitWatcher) runGitCmd(ctx context.Context, args ...string) string {
 		return ""
 	}
 	return strings.TrimSpace(string(output))
-}
-
-func sortLines(text string) string {
-	if text == "" {
-		return ""
-	}
-	lines := strings.Split(text, "\n")
-	sort.Strings(lines)
-	return strings.Join(lines, "\n")
 }
 
 func (w *GitWatcher) notifySubscribers() {
