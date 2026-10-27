@@ -5,11 +5,11 @@ import { BottomActionBar } from "../ui";
 import GitCommitSheet from "./GitCommitSheet";
 
 /**
- * The panel's fixed bottom row: one button, for as long as there is something to
- * commit or something on its way to being committed.
+ * The Changes list's fixed bottom row: one button, for as long as there is
+ * something to commit or something on its way to being committed.
  *
- * It renders outside DiffTab's loading/error branch, so the action stays
- * reachable however far the user has scrolled into History.
+ * It renders outside ChangesSection's loading/error branch, so the action stays
+ * reachable however far the user has scrolled down the list.
  */
 function CommitBar() {
 	const { data: status } = useGitStatus();

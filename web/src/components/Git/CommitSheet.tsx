@@ -37,9 +37,10 @@ const NO_IDENTITY =
 /**
  * Writes the commit message and records the commit.
  *
- * A sheet rather than a permanently mounted message box: the panel is 288px
- * wide and committing happens a few times an hour, so the textarea is worth one
- * extra tap and the room the sheet gives it.
+ * A sheet rather than a permanently mounted message box: the changes list is
+ * what the segment is for, and on a phone it has no room to spare; committing
+ * happens a few times an hour, so the textarea is worth one extra tap and the
+ * room the sheet gives it.
  */
 function CommitSheet({
 	stagedCount,

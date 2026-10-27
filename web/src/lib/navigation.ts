@@ -1,4 +1,4 @@
-import type { OverlayState, WorkSegment } from "../types/overlay";
+import type { GitSegment, OverlayState, WorkSegment } from "../types/overlay";
 import { ROUTES, WT_ROUTES } from "./routes";
 import { SESSION_VIEW_PARAM } from "./sessionView";
 
@@ -60,6 +60,14 @@ interface NavToSettingsOverlay {
 	sessionId: string | null;
 }
 
+interface NavToGitOverlay {
+	type: "overlay";
+	worktree: string;
+	overlayType: "git";
+	segment: GitSegment;
+	sessionId: string | null;
+}
+
 interface NavToWorkListOverlay {
 	type: "overlay";
 	worktree: string;
@@ -110,6 +118,7 @@ interface NavToScheduleDetailOverlay {
 type NavToOverlay =
 	| NavToFileOverlay
 	| NavToSettingsOverlay
+	| NavToGitOverlay
 	| NavToWorkListOverlay
 	| NavToWorkDetailOverlay
 	| NavToAgentRoleListOverlay
@@ -133,23 +142,25 @@ interface NavigationResult {
 
 /**
  * The query most overlay routes carry: the chat underneath it, and — on the two
- * work routes — which segment of the list the reader is in. The file routes
- * build their own, because they also carry `mode`.
+ * work routes and the Git workspace — which segment of the list the reader is
+ * in. The file routes build their own, because they also carry `mode`.
  *
- * `Current` is the *absence* of `segment` rather than `segment=current`, so that
- * the default landing place has exactly one URL; it is what lets the Project
- * entry button's plain `/works` mean `Current` on its own
- * (docs/project-ui.md §5). A query with nothing in it is left off the result
- * entirely rather than handed over empty.
+ * A default segment (`current`, `changes`) is the *absence* of `segment`
+ * rather than spelled out, so that the default landing place has exactly one
+ * URL; it is what lets the Project entry button's plain `/works` mean
+ * `Current` on its own (docs/project-ui.md §5). A query with nothing in it is
+ * left off the result entirely rather than handed over empty.
  */
 function assignSearch(
 	result: NavigationResult,
 	sessionId: string | null,
-	segment?: WorkSegment,
+	segment?: WorkSegment | GitSegment,
 ) {
 	const search: Record<string, string> = {};
 	if (sessionId) search.session = sessionId;
-	if (segment === "closed") search.segment = segment;
+	if (segment && segment !== "current" && segment !== "changes") {
+		search.segment = segment;
+	}
 	if (Object.keys(search).length > 0) result.search = search;
 }
 
@@ -168,6 +179,14 @@ export function overlayToNavigation(
 ): NavigationResult {
 	const target: NavToOverlay = (() => {
 		switch (overlay.type) {
+			case "git":
+				return {
+					type: "overlay" as const,
+					worktree,
+					overlayType: "git" as const,
+					segment: overlay.segment,
+					sessionId,
+				};
 			case "diff":
 				return {
 					type: "overlay" as const,
@@ -328,12 +347,14 @@ export function buildNavigation(
 				assignSearch(result, target.sessionId, target.segment);
 			} else if (
 				target.overlayType === "settings" ||
+				target.overlayType === "git" ||
 				target.overlayType === "work-list" ||
 				target.overlayType === "agent-role-list" ||
 				target.overlayType === "schedule-list"
 			) {
 				const routeKeyMap = {
 					settings: "settings",
+					git: "git",
 					"work-list": "works",
 					"agent-role-list": "agentRoles",
 					"schedule-list": "schedules",
@@ -346,7 +367,9 @@ export function buildNavigation(
 				assignSearch(
 					result,
 					target.sessionId,
-					target.overlayType === "work-list" ? target.segment : undefined,
+					target.overlayType === "work-list" || target.overlayType === "git"
+						? target.segment
+						: undefined,
 				);
 			} else if (target.overlayType === "commit") {
 				result.to = isMain ? ROUTES.commit : WT_ROUTES.commit;

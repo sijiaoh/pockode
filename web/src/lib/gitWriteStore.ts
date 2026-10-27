@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import type { GitFailure } from "../utils/gitErrors";
 import { worktreeActions } from "./worktreeStore";
 
 /**
@@ -15,9 +16,24 @@ export interface GitWrites {
 	discarding: Set<string>;
 }
 
+/** A stage, unstage or discard from the Changes list that the user has not put away. */
+export interface GitWriteFailure extends GitFailure {
+	/** What failed, so only a retry of it can clear the failure. */
+	paths: string[];
+}
+
 interface GitWriteState {
-	/** Keyed by worktree name, the same key the rest of the panel switches on. */
+	/** Keyed by worktree name, the same key the rest of the workspace switches on. */
 	writes: Record<string, GitWrites>;
+	/**
+	 * The Changes list's banner, per worktree. Here rather than in the list for
+	 * the reason the pending sets are: the write outlives the list. Leaving the
+	 * segment or the workspace unmounts the list, and a failure that settles
+	 * meanwhile — or that the user had not dismissed yet — would be gone when
+	 * they come back, which is a failure nobody was told about. Per worktree
+	 * because the paths it names are that worktree's.
+	 */
+	failures: Record<string, GitWriteFailure>;
 }
 
 /**
@@ -47,15 +63,18 @@ interface GitWriteState {
  * is what keeps a row's spinner up until it is in the group it belongs to,
  * instead of clearing in the old one and jumping a moment later.
  *
- * It lives outside the panel's components because a write has to outlive the
- * one that started it: staging from an open diff and navigating away unmounts
- * that view mid-request, and the sidebar remounts across the desktop
- * breakpoint (Layout/Sidebar.tsx) — which is where the old per-component sets
- * lost track of what was still running. Keyed by worktree for the reason
+ * It lives outside the workspace's components because a write has to outlive
+ * the one that started it: staging from an open diff and navigating away
+ * unmounts that view mid-request, and leaving the Git workspace unmounts the
+ * lists — which is where the old per-component sets lost track of what was
+ * still running. Keyed by worktree for the reason
  * gitSyncStore is: switching mid-write is reachable, and one record would let
  * A's pending paths grey out B's rows.
  */
-export const useGitWriteStore = create<GitWriteState>(() => ({ writes: {} }));
+export const useGitWriteStore = create<GitWriteState>(() => ({
+	writes: {},
+	failures: {},
+}));
 
 /**
  * A queued write that was dropped because the user left the worktree it was
@@ -116,8 +135,8 @@ export const gitWriteActions = {
 	 * failure; a failure never stops what is queued behind it, which belongs to
 	 * a tap the user made separately. A write whose turn comes after the user
 	 * has left the worktree is not sent at all and rejects with
-	 * WorktreeChangedError, which the panel drops rather than reports — its
-	 * banners deliberately do not cross a switch.
+	 * WorktreeChangedError, which the workspace drops rather than reports:
+	 * nothing was written, so there is nothing to tell.
 	 *
 	 * Paths that already have a write pending are left out: that request is
 	 * doing this one's job, and the pending sets count a path once. A call left
@@ -173,12 +192,48 @@ export const gitWriteActions = {
 		return settled;
 	},
 
+	/** Replaces whatever failure the worktree was showing: the newest is the one to read. */
+	fail: (worktree: string, failure: GitWriteFailure) =>
+		useGitWriteStore.setState((s) => ({
+			failures: { ...s.failures, [worktree]: failure },
+		})),
+
+	/**
+	 * Only a retry of what failed clears the failure. Another file succeeding
+	 * says nothing about the one that did not, and dropping its message would
+	 * leave that failure with no explanation on screen.
+	 */
+	succeed: (worktree: string, paths: string[]) => {
+		const failure = useGitWriteStore.getState().failures[worktree];
+		if (failure?.paths.some((p) => paths.includes(p))) {
+			gitWriteActions.dismissFailure(worktree);
+		}
+	},
+
+	dismissFailure: (worktree: string) =>
+		useGitWriteStore.setState((s) => {
+			const { [worktree]: _, ...rest } = s.failures;
+			return { failures: rest };
+		}),
+
 	reset: () => {
 		queues.clear();
-		useGitWriteStore.setState({ writes: {} });
+		useGitWriteStore.setState({ writes: {}, failures: {} });
 	},
 };
 
+// A failure names paths in the repository it ran against; after the answer
+// flips, that repository is gone, and a later `git init` must not bring back
+// its banner. The pending sets are left alone: their requests' settling clears
+// them. The same rule as gitSyncStore's.
+worktreeActions.onGitRepoChange(() => {
+	useGitWriteStore.setState({ failures: {} });
+});
+
 export function useWorktreeWrites(worktree: string): GitWrites {
 	return useGitWriteStore((s) => s.writes[worktree] ?? IDLE);
+}
+
+export function useWriteFailure(worktree: string): GitWriteFailure | null {
+	return useGitWriteStore((s) => s.failures[worktree] ?? null);
 }

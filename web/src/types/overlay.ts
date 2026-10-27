@@ -4,7 +4,14 @@
  */
 export type WorkSegment = "current" | "closed";
 
+/**
+ * Which list of the Git workspace is on screen. `changes` is the default, and
+ * like `current` above it is the absence of the URL parameter.
+ */
+export type GitSegment = "changes" | "history" | "branches";
+
 export type OverlayState =
+	| { type: "git"; segment: GitSegment }
 	| { type: "diff"; path: string; staged: boolean }
 	| { type: "file"; path: string; edit?: boolean }
 	| { type: "commit"; hash: string }
@@ -23,15 +30,33 @@ export type OverlayState =
 	| { type: "schedule-detail"; scheduleId: string }
 	| null;
 
-/** The overlays that read the repository, and so have nothing to show without one. */
+/**
+ * The overlays that read the repository, and so have nothing to show without
+ * one. Every one of them is a layer of the Git workspace.
+ */
 export function isGitOverlay(overlay: OverlayState | undefined): boolean {
+	return gitSegmentOf(overlay) !== null;
+}
+
+/**
+ * The workspace segment a Git layer belongs to, and null for anything that is
+ * not one. A detail does not carry its segment the way a work detail does: a
+ * diff can only have been opened from Changes and a commit only from History,
+ * so the layer itself already says which list is its parent.
+ */
+export function gitSegmentOf(
+	overlay: OverlayState | undefined,
+): GitSegment | null {
 	switch (overlay?.type) {
+		case "git":
+			return overlay.segment;
 		case "diff":
+			return "changes";
 		case "commit":
 		case "commit-diff":
 		case "commit-file":
-			return true;
+			return "history";
 		default:
-			return false;
+			return null;
 	}
 }

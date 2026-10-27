@@ -21,6 +21,18 @@ const overlaySearchSchema = z.object({
 export type OverlaySearchParams = z.infer<typeof overlaySearchSchema>;
 
 /**
+ * The Git workspace's own query: the same `session`, and a `segment` with its
+ * own words. As with the project list, only the non-default segments are ever
+ * written, and the default is accepted spelled out.
+ */
+const gitSearchSchema = z.object({
+	session: z.string().optional(),
+	segment: z.enum(["changes", "history", "branches"]).optional(),
+});
+
+export type GitSearchParams = z.infer<typeof gitSearchSchema>;
+
+/**
  * The session routes carry one parameter, and only they do: which worktree the
  * session's data is read out of. `""` is the main worktree, so the value is
  * accepted empty and an absent parameter is the ordinary case — see
@@ -64,6 +76,12 @@ const fileViewRoute = createRoute({
 	getParentRoute: () => rootRoute,
 	path: ROUTES.files,
 	validateSearch: (search) => overlaySearchSchema.parse(search),
+});
+
+const gitRoute = createRoute({
+	getParentRoute: () => rootRoute,
+	path: ROUTES.git,
+	validateSearch: (search) => gitSearchSchema.parse(search),
 });
 
 const commitRoute = createRoute({
@@ -161,6 +179,12 @@ const wtFileViewRoute = createRoute({
 	validateSearch: (search) => overlaySearchSchema.parse(search),
 });
 
+const wtGitRoute = createRoute({
+	getParentRoute: () => worktreeLayoutRoute,
+	path: WT_CHILD_ROUTES.git,
+	validateSearch: (search) => gitSearchSchema.parse(search),
+});
+
 const wtCommitRoute = createRoute({
 	getParentRoute: () => worktreeLayoutRoute,
 	path: WT_CHILD_ROUTES.commit,
@@ -227,6 +251,7 @@ export const routeTree = rootRoute.addChildren([
 	stagedDiffRoute,
 	unstagedDiffRoute,
 	fileViewRoute,
+	gitRoute,
 	commitDiffRoute, // Must be before commitRoute (more specific path)
 	commitFileRoute, // Must be before commitRoute (more specific path)
 	commitRoute,
@@ -243,6 +268,7 @@ export const routeTree = rootRoute.addChildren([
 		wtStagedDiffRoute,
 		wtUnstagedDiffRoute,
 		wtFileViewRoute,
+		wtGitRoute,
 		wtCommitDiffRoute, // Must be before wtCommitRoute (more specific path)
 		wtCommitFileRoute, // Must be before wtCommitRoute (more specific path)
 		wtCommitRoute,

@@ -1,24 +1,20 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { JSONRPCErrorException } from "json-rpc-2.0";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { gitPanelActions } from "../../lib/gitPanelStore";
 import { gitWriteActions } from "../../lib/gitWriteStore";
-import type { GitCommit, GitStatus } from "../../types/git";
-import DiffTab from "./DiffTab";
+import { useWorktreeStore, worktreeActions } from "../../lib/worktreeStore";
+import type { GitStatus } from "../../types/git";
+import ChangesSection from "./ChangesSection";
 
 const discard = vi.fn();
 const stage = vi.fn();
 const unstage = vi.fn();
 let status: GitStatus | undefined;
-let commits: GitCommit[] = [];
 
 vi.mock("../../hooks/useGitStatus", () => ({
 	useGitStatus: () => ({ data: status, isLoading: false, error: null }),
-}));
-vi.mock("../../hooks/useGitLog", () => ({
-	useGitLog: () => ({ data: { commits } }),
 }));
 vi.mock("../../hooks/useGitStage", () => ({
 	useGitStage: () => ({
@@ -29,15 +25,8 @@ vi.mock("../../hooks/useGitStage", () => ({
 vi.mock("../../hooks/useGitDiscard", () => ({
 	useGitDiscard: () => ({ mutateAsync: discard }),
 }));
-vi.mock("../Layout", () => ({ useSidebarRefresh: () => ({ isActive: true }) }));
-// Both read queries this test does not stand up; neither takes part in discard.
-vi.mock("./BranchBar", () => ({ default: () => null }));
+// Reads queries this test does not stand up, and takes no part in discard.
 vi.mock("./CommitBar", () => ({ default: () => null }));
-vi.mock("./GitCommitSheet", () => ({
-	default: ({ amendInitially }: { amendInitially: boolean }) => (
-		<div role="dialog">{amendInitially ? "amending" : "committing"}</div>
-	),
-}));
 
 const STATUS: GitStatus = {
 	staged: [{ path: "staged.ts", status: "M" }],
@@ -47,21 +36,19 @@ const STATUS: GitStatus = {
 	],
 };
 
-function renderTab(
+function renderSection(
 	props: {
 		activeFile?: { path: string; staged: boolean } | null;
-		onCloseFile?: () => void;
+		onCloseFile?: (path: string, worktree: string) => void;
 	} = {},
 ) {
 	const onCloseFile = props.onCloseFile ?? vi.fn();
 	const { unmount } = render(
 		<QueryClientProvider client={new QueryClient()}>
-			<DiffTab
+			<ChangesSection
 				onSelectFile={vi.fn()}
-				onSelectCommit={vi.fn()}
 				onCloseFile={onCloseFile}
 				activeFile={props.activeFile ?? null}
-				activeCommitHash={null}
 			/>
 		</QueryClientProvider>,
 	);
@@ -72,25 +59,24 @@ const confirmButton = (name: string) =>
 	screen.getByRole("button", { name, hidden: false });
 
 function resetWrites() {
-	gitPanelActions.reset();
 	gitWriteActions.reset();
+	worktreeActions.reset();
 	for (const rpc of [discard, stage, unstage]) {
 		rpc.mockReset();
 		rpc.mockResolvedValue(undefined);
 	}
 }
 
-describe("DiffTab discard", () => {
+describe("ChangesSection discard", () => {
 	beforeEach(() => {
 		status = STATUS;
-		commits = [];
 		resetWrites();
 	});
 
 	// Staged rows have no discard button: unstaging first is what the button
 	// beside them already does.
 	it("offers discard on unstaged rows only", () => {
-		renderTab();
+		renderSection();
 
 		expect(
 			screen.getByRole("button", { name: "Discard changes" }),
@@ -112,7 +98,7 @@ describe("DiffTab discard", () => {
 
 	it("discards a tracked file only after the warning is confirmed", async () => {
 		const user = userEvent.setup();
-		renderTab();
+		renderSection();
 
 		await user.click(screen.getByRole("button", { name: "Discard changes" }));
 
@@ -135,7 +121,7 @@ describe("DiffTab discard", () => {
 	// from throwing away edits, so it gets its own words.
 	it("warns that an untracked file is deleted rather than restored", async () => {
 		const user = userEvent.setup();
-		renderTab();
+		renderSection();
 
 		await user.click(screen.getByRole("button", { name: "Delete file" }));
 
@@ -149,7 +135,7 @@ describe("DiffTab discard", () => {
 
 	it("cancelling discards nothing", async () => {
 		const user = userEvent.setup();
-		renderTab();
+		renderSection();
 
 		await user.click(screen.getByRole("button", { name: "Discard changes" }));
 		await user.click(confirmButton("Cancel"));
@@ -160,7 +146,7 @@ describe("DiffTab discard", () => {
 
 	it("sends every unstaged path from the group header", async () => {
 		const user = userEvent.setup();
-		renderTab();
+		renderSection();
 
 		await user.click(
 			screen.getByRole("button", { name: "Discard all changes" }),
@@ -181,7 +167,7 @@ describe("DiffTab discard", () => {
 
 	async function failADiscard(user: ReturnType<typeof userEvent.setup>) {
 		discard.mockRejectedValue(new Error(GIT_ERROR));
-		renderTab();
+		renderSection();
 
 		await user.click(screen.getByRole("button", { name: "Discard changes" }));
 		await user.click(confirmButton("Discard"));
@@ -190,7 +176,7 @@ describe("DiffTab discard", () => {
 	}
 
 	// Discard starts inline, with no sheet to hold the outcome, so the failure
-	// lands in the panel's own banner — and git's text is kept, not paraphrased.
+	// lands in the segment's own banner — and git's text is kept, not paraphrased.
 	it("keeps git's own message behind the banner's summary", async () => {
 		const user = userEvent.setup();
 		const banner = await failADiscard(user);
@@ -227,42 +213,44 @@ describe("DiffTab discard", () => {
 		expect(screen.getByRole("alert")).toHaveTextContent("Discard failed.");
 	});
 
-	// The content area would otherwise sit on a diff that no longer exists.
+	// The workspace would otherwise sit on a diff that no longer exists.
 	it("closes the open file when its own changes are discarded", async () => {
 		const user = userEvent.setup();
-		const { onCloseFile } = renderTab({
+		const { onCloseFile } = renderSection({
 			activeFile: { path: "src/foo.ts", staged: false },
 		});
 
 		await user.click(screen.getByRole("button", { name: "Discard changes" }));
 		await user.click(confirmButton("Discard"));
 
-		await waitFor(() => expect(onCloseFile).toHaveBeenCalled());
+		await waitFor(() =>
+			expect(onCloseFile).toHaveBeenCalledWith("src/foo.ts", ""),
+		);
 	});
 
-	// Discarding the unstaged edits leaves the staged diff intact, so the file
-	// the content area shows still has something to show.
-	it("leaves an open staged diff alone", async () => {
+	// What was open when the discard was confirmed is not what is open when it
+	// answers; whether the diff is still the page is the shell's to decide.
+	it("reports a discarded file even when another one was open", async () => {
 		const user = userEvent.setup();
-		const { onCloseFile } = renderTab({
-			activeFile: { path: "src/foo.ts", staged: true },
+		const { onCloseFile } = renderSection({
+			activeFile: { path: "src/other.ts", staged: false },
 		});
 
 		await user.click(screen.getByRole("button", { name: "Discard changes" }));
 		await user.click(confirmButton("Discard"));
 
-		await waitFor(() => expect(discard).toHaveBeenCalled());
-		expect(onCloseFile).not.toHaveBeenCalled();
+		await waitFor(() =>
+			expect(onCloseFile).toHaveBeenCalledWith("src/foo.ts", ""),
+		);
 	});
 });
 
 const stageButtons = () =>
 	screen.getAllByRole("button", { name: "Stage file" });
 
-describe("DiffTab staging", () => {
+describe("ChangesSection staging", () => {
 	beforeEach(() => {
 		status = STATUS;
-		commits = [];
 		resetWrites();
 	});
 
@@ -276,7 +264,7 @@ describe("DiffTab staging", () => {
 				finishFirst = resolve;
 			}),
 		);
-		renderTab();
+		renderSection();
 
 		const [first, second] = stageButtons();
 		await user.click(first);
@@ -303,7 +291,7 @@ describe("DiffTab staging", () => {
 				{ operation: "push" },
 			),
 		);
-		renderTab();
+		renderSection();
 
 		await user.click(stageButtons()[0]);
 
@@ -320,7 +308,7 @@ describe("DiffTab staging", () => {
 	it("keeps git's message when the stage itself failed", async () => {
 		const user = userEvent.setup();
 		stage.mockRejectedValue(new Error("fatal: pathspec did not match"));
-		renderTab();
+		renderSection();
 
 		await user.click(stageButtons()[0]);
 
@@ -332,91 +320,71 @@ describe("DiffTab staging", () => {
 	});
 });
 
-const COMMITS: GitCommit[] = [
-	{
-		hash: "9692fc9aaaaaaaa",
-		subject: "Add branch bar to git panel",
-		author: "sijiaoh",
-		date: new Date().toISOString(),
-	},
-	{
-		hash: "1c4b8e0bbbbbbbb",
-		subject: "Render every codex_changes event",
-		author: "sijiaoh",
-		date: new Date().toISOString(),
-	},
-];
-
-const historyToggle = () => screen.getByRole("button", { name: /History/i });
-
-describe("DiffTab history", () => {
+describe("ChangesSection banner outliving the list", () => {
 	beforeEach(() => {
-		commits = COMMITS;
+		status = STATUS;
 		resetWrites();
 	});
 
-	// The diff is the subject whenever there is one; history is what is left to
-	// look at when there is not.
-	it("collapses while there are changes and expands on a clean tree", () => {
-		status = STATUS;
-		const { unmount } = renderTab();
-		expect(historyToggle()).toHaveAttribute("aria-expanded", "false");
-		unmount();
-
-		status = { staged: [], unstaged: [] };
-		renderTab();
-		expect(historyToggle()).toHaveAttribute("aria-expanded", "true");
-	});
-
-	// A section that keeps re-deciding for the user is worse than one that is
-	// occasionally in the wrong state.
-	it("keeps the user's choice once they have made one", async () => {
+	// Switching segment or leaving the workspace unmounts the list; a failure
+	// the user had not put away has to be there when they come back.
+	it("is still there after the list is left and come back to", async () => {
 		const user = userEvent.setup();
-		status = STATUS;
-		const { unmount } = renderTab();
+		stage.mockRejectedValue(new Error("fatal: pathspec did not match"));
+		const { unmount } = renderSection();
+		await user.click(stageButtons()[0]);
+		await screen.findByRole("alert");
 
-		await user.click(historyToggle());
-		expect(historyToggle()).toHaveAttribute("aria-expanded", "true");
 		unmount();
+		renderSection();
 
-		status = { staged: [], unstaged: [] };
-		renderTab();
-		expect(historyToggle()).toHaveAttribute("aria-expanded", "true");
-	});
-});
-
-describe("DiffTab amend", () => {
-	beforeEach(() => {
-		status = { staged: [], unstaged: [] };
-		commits = COMMITS;
-		resetWrites();
+		expect(screen.getByRole("alert")).toHaveTextContent("Stage failed.");
 	});
 
-	// Amend belongs to the commit it replaces, and that commit is HEAD — the
-	// first row of the log, and only that row.
-	it("offers amend on the HEAD row only", () => {
-		renderTab();
-
-		expect(
-			screen.getAllByRole("button", { name: "Amend this commit" }),
-		).toHaveLength(1);
-	});
-
-	it("opens the commit sheet with amend pre-toggled", async () => {
+	// "Stage, then switch straight away": the failure settles with nobody
+	// looking, and is the one the user most needs to hear about.
+	it("shows a failure that settled while the list was not on screen", async () => {
 		const user = userEvent.setup();
-		renderTab();
+		let fail!: (error: Error) => void;
+		stage.mockReturnValueOnce(
+			new Promise<void>((_, reject) => {
+				fail = reject;
+			}),
+		);
+		const { unmount } = renderSection();
+		await user.click(stageButtons()[0]);
 
-		await user.click(screen.getByRole("button", { name: "Amend this commit" }));
+		unmount();
+		await act(async () => fail(new Error("fatal: index.lock exists")));
+		renderSection();
 
-		expect(screen.getByRole("dialog")).toHaveTextContent("amending");
+		expect(screen.getByRole("alert")).toHaveTextContent("Stage failed.");
 	});
 
-	it("has nothing to amend in a repository without commits", () => {
-		commits = [];
-		renderTab();
+	// Its paths are that worktree's: another worktree has nothing to retry.
+	it("belongs to the worktree it happened in", async () => {
+		const user = userEvent.setup();
+		stage.mockRejectedValue(new Error("fatal: pathspec did not match"));
+		renderSection();
+		await user.click(stageButtons()[0]);
+		await screen.findByRole("alert");
 
-		expect(
-			screen.queryByRole("button", { name: "Amend this commit" }),
-		).not.toBeInTheDocument();
+		act(() => useWorktreeStore.setState({ current: "feature" }));
+		expect(screen.queryByRole("alert")).toBeNull();
+
+		act(() => useWorktreeStore.setState({ current: "" }));
+		expect(screen.getByRole("alert")).toHaveTextContent("Stage failed.");
+	});
+
+	it("is cleared by a retry of the same path that succeeds", async () => {
+		const user = userEvent.setup();
+		stage.mockRejectedValueOnce(new Error("fatal: pathspec did not match"));
+		renderSection();
+		await user.click(stageButtons()[0]);
+		await screen.findByRole("alert");
+
+		await user.click(stageButtons()[0]);
+
+		await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
 	});
 });

@@ -569,7 +569,7 @@ src/lib/sort.test.ts
 - Story: **Add due dates to todos**, role: the default story role. Its name
   is on every row and the defaults are not in English, so the suite renames
   it `PM` (two steps, none of them a commit: committing is the user's, in the
-  Git panel) and the first task role `Engineer`.
+  Git workspace) and the first task role `Engineer`.
 - Tasks, created and started by the story agent through MCP:
   1. **Store a due date on each todo** — `src/types.ts`, `src/api/todos.ts`
   2. **Date picker in the todo form** — `src/components/TodoForm.tsx`

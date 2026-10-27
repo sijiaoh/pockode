@@ -23,7 +23,12 @@ import { useSessionStore } from "../lib/sessionStore";
 import { resolveSessionView } from "../lib/sessionView";
 import { useWorktreeStore, worktreeActions } from "../lib/worktreeStore";
 import { useWSStore, wsActions } from "../lib/wsStore";
-import { isGitOverlay, type WorkSegment } from "../types/overlay";
+import {
+	type GitSegment,
+	gitSegmentOf,
+	isGitOverlay,
+	type WorkSegment,
+} from "../types/overlay";
 import PasswordInput from "./Auth/PasswordInput";
 import { ChatPanel } from "./Chat";
 import { SessionSidebar } from "./Session";
@@ -196,17 +201,11 @@ function AppShell() {
 		navigate,
 	]);
 
-	const activeDiffFile =
-		overlay?.type === "diff"
-			? { path: overlay.path, staged: overlay.staged }
-			: null;
-
 	const activeFilePath = overlay?.type === "file" ? overlay.path : null;
 	// Coarse on purpose: whether the editor is on screen, not whether it has
 	// unsaved text. The dirty flag belongs to the editor, and lifting it here to
 	// gate one menu row would run a state line across the whole shell.
 	const activeFileEdit = overlay?.type === "file" && overlay.edit === true;
-	const activeCommitHash = overlay?.type === "commit" ? overlay.hash : null;
 
 	const {
 		sessions,
@@ -656,6 +655,61 @@ function AppShell() {
 		}
 	}, [navigate, urlWorktree, currentSessionId]);
 
+	/**
+	 * A segment of the Git workspace, at its list: a press on the segment
+	 * control, on the branch name or on one of the sidebar's Git entries — an
+	 * entrance that always lands on the list, never on a detail it remembers —
+	 * and the way back from a diff or a commit to
+	 * the list it was opened from. Pushed, so Back walks the segments the way it
+	 * walks the project list's (docs/project-ui.md §5). A press that names the
+	 * layer already on screen — the list itself, with nothing open under it —
+	 * is not a step, and adds none. With a diff or a commit open beside the
+	 * list, pressing its lit segment does go back to the bare list.
+	 */
+	const handleSelectGitSegment = useCallback(
+		(segment: GitSegment) => {
+			if (overlay?.type === "git" && overlay.segment === segment) return;
+			navigate(
+				overlayToNavigation(
+					{ type: "git", segment },
+					urlWorktree,
+					currentSessionId,
+				),
+			);
+		},
+		[navigate, overlay, urlWorktree, currentSessionId],
+	);
+
+	/**
+	 * Takes the workspace off the unstaged diff of `path` in `worktree`, which
+	 * has stopped existing — the file was discarded — and onto the Changes
+	 * list. Replaced, because Back must not lead to the diff that is gone.
+	 *
+	 * Only while that diff is still the page: the discard answers after the
+	 * press, and a reader who has moved on meanwhile — to another file, or to
+	 * the same path in another worktree — must not have the page they moved to
+	 * replaced under them. Read from a ref for the same reason: the route the
+	 * caller saw is the one it pressed in, not the one now.
+	 */
+	const routeRef = useRef({ overlay, urlWorktree, currentSessionId });
+	routeRef.current = { overlay, urlWorktree, currentSessionId };
+	const handleCloseGitFile = useCallback(
+		(path: string, worktree: string) => {
+			const { overlay: open, urlWorktree, currentSessionId } = routeRef.current;
+			if (urlWorktree !== worktree) return;
+			if (open?.type !== "diff" || open.staged || open.path !== path) return;
+			navigate(
+				overlayToNavigation(
+					{ type: "git", segment: "changes" },
+					urlWorktree,
+					currentSessionId,
+					{ replace: true },
+				),
+			);
+		},
+		[navigate],
+	);
+
 	const handleOpenSettings = useCallback(() => {
 		navigate(
 			overlayToNavigation({ type: "settings" }, urlWorktree, currentSessionId),
@@ -951,11 +1005,8 @@ function AppShell() {
 					onSelectSession={handleSelectSession}
 					onCreateSession={handleCreateSession}
 					onDeleteSession={handleDeleteSession}
-					onSelectDiffFile={handleSelectDiffFile}
-					onCloseDiffFile={handleCloseOverlay}
-					activeDiffFile={activeDiffFile}
-					onSelectCommit={handleSelectCommit}
-					activeCommitHash={activeCommitHash}
+					onOpenGitSegment={handleSelectGitSegment}
+					activeGitSegment={gitSegmentOf(overlay)}
 					onSelectFile={handleSelectFile}
 					activeFilePath={activeFilePath}
 					activeFileEdit={activeFileEdit}
@@ -1001,6 +1052,10 @@ function AppShell() {
 						onOpenAgentRoleDetail={handleOpenAgentRoleDetail}
 						onOpenScheduleList={handleOpenScheduleList}
 						onOpenScheduleDetail={handleOpenScheduleDetail}
+						onSelectGitSegment={handleSelectGitSegment}
+						onSelectDiffFile={handleSelectDiffFile}
+						onSelectCommit={handleSelectCommit}
+						onCloseGitFile={handleCloseGitFile}
 					/>
 				</div>
 			</div>

@@ -142,4 +142,42 @@ describe("gitWriteStore", () => {
 		// And it leaves no row spinning in the worktree it was queued for.
 		expect(writes("").toggling.size).toBe(0);
 	});
+
+	describe("failures", () => {
+		const failure = (worktree: string) =>
+			useGitWriteStore.getState().failures[worktree];
+		const FAILURE = { summary: "Stage failed.", detail: null, paths: ["a.ts"] };
+
+		// Only a retry of what failed clears it: another file succeeding says
+		// nothing about the one that did not.
+		it("is cleared only by a success on one of its paths", () => {
+			gitWriteActions.fail("", FAILURE);
+
+			gitWriteActions.succeed("", ["b.ts"]);
+			expect(failure("")).toEqual(FAILURE);
+
+			gitWriteActions.succeed("", ["a.ts", "b.ts"]);
+			expect(failure("")).toBeUndefined();
+		});
+
+		it("is kept per worktree", () => {
+			gitWriteActions.fail("feature", FAILURE);
+
+			gitWriteActions.succeed("", ["a.ts"]);
+
+			expect(failure("feature")).toEqual(FAILURE);
+			expect(failure("")).toBeUndefined();
+		});
+
+		// Its paths belong to a repository that has gone; a later `git init`
+		// must not bring the banner back.
+		it("is cleared when the repository changes", () => {
+			gitWriteActions.fail("", FAILURE);
+			gitWriteActions.fail("feature", FAILURE);
+
+			worktreeActions.setIsGitRepo(false);
+
+			expect(useGitWriteStore.getState().failures).toEqual({});
+		});
+	});
 });

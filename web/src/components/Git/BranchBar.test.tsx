@@ -2,6 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { gitCheckoutActions } from "../../lib/gitCheckoutStore";
 import { gitSyncActions } from "../../lib/gitSyncStore";
 import { makeHead, makeSync } from "../../test/gitFixtures";
 import type { GitBranches } from "../../types/git";
@@ -21,18 +22,18 @@ vi.mock("../../lib/wsStore", () => ({
 let branches: GitBranches | undefined;
 vi.mock("../../hooks/useGitBranches", () => ({
 	useGitBranches: () => ({ data: branches, isLoading: false, error: null }),
-	useGitBranchActions: () => ({
-		checkoutMutation: { mutateAsync: vi.fn() },
-		createMutation: { mutateAsync: vi.fn() },
-	}),
 }));
 
-function renderBar() {
-	return render(
+function bar(branchesOnScreen = false) {
+	return (
 		<QueryClientProvider client={new QueryClient()}>
-			<BranchBar />
-		</QueryClientProvider>,
+			<BranchBar onOpenBranches={vi.fn()} branchesOnScreen={branchesOnScreen} />
+		</QueryClientProvider>
 	);
+}
+
+function renderBar(branchesOnScreen = false) {
+	return render(bar(branchesOnScreen));
 }
 
 /** A pull that has already failed, as the store holds it afterwards. */
@@ -45,9 +46,13 @@ async function failedPull() {
 	);
 }
 
+beforeEach(() => {
+	gitSyncActions.reset();
+	gitCheckoutActions.reset();
+});
+
 describe("BranchBar sync feedback", () => {
 	beforeEach(() => {
-		gitSyncActions.reset();
 		branches = {
 			head: makeHead(),
 			local: [],
@@ -102,11 +107,7 @@ describe("BranchBar sync feedback", () => {
 		expect(screen.queryByRole("button", { name: "Dismiss error" })).toBeNull();
 
 		branches = undefined;
-		rerender(
-			<QueryClientProvider client={new QueryClient()}>
-				<BranchBar />
-			</QueryClientProvider>,
-		);
+		rerender(bar());
 
 		expect(screen.getByText("Branch unavailable")).toBeInTheDocument();
 		expect(screen.getByRole("alert")).toHaveTextContent("Pull failed.");
@@ -127,5 +128,118 @@ describe("BranchBar sync feedback", () => {
 		expect(
 			screen.getByRole("button", { name: "Sync with remote, pulling…" }),
 		).toBeInTheDocument();
+	});
+
+	// Nobody asked for the automatic fetch, so its failure interrupts nobody:
+	// it waits on the chip until the user opens the sheet to see why.
+	it("marks a failed automatic fetch on the chip and explains it in the sheet", async () => {
+		const user = userEvent.setup();
+		await gitSyncActions.startAutoFetch("", () =>
+			Promise.reject(new Error("fatal: unable to access 'origin'")),
+		);
+		renderBar();
+
+		expect(screen.queryByRole("alert")).toBeNull();
+		await user.click(
+			screen.getByRole("button", {
+				name: "Sync with remote, 2 to pull, automatic fetch failed",
+			}),
+		);
+
+		const reason = screen.getByRole("alert");
+		expect(reason).toHaveTextContent("Automatic fetch failed.");
+		expect(reason).toHaveTextContent("fatal: unable to access 'origin'");
+
+		// Seeing it does not make the counts fresh.
+		await user.click(screen.getByRole("button", { name: "Close" }));
+		expect(screen.queryByRole("alert")).toBeNull();
+		expect(
+			screen.getByRole("button", { name: /automatic fetch failed/ }),
+		).toBeInTheDocument();
+	});
+});
+
+/** A switch that has already failed, as the store holds it afterwards. */
+async function failedSwitch() {
+	await gitCheckoutActions.start("", "topic", () =>
+		Promise.reject(new Error("error: would be overwritten by checkout")),
+	);
+}
+
+describe("BranchBar switch feedback", () => {
+	beforeEach(() => {
+		branches = {
+			head: makeHead(),
+			local: [],
+			remote_only: [],
+			sync: makeSync(),
+		};
+	});
+
+	// The switch was walked away from mid-run; the user is somewhere else in the
+	// workspace, believing it happened unless something says otherwise.
+	it("reports a switch that failed off the Branches segment under the bar", async () => {
+		const user = userEvent.setup();
+		await failedSwitch();
+		renderBar();
+
+		expect(screen.getByRole("alert")).toHaveTextContent(
+			"Could not switch to topic. Commit or discard these changes first.",
+		);
+
+		await user.click(screen.getByRole("button", { name: "Dismiss error" }));
+		expect(screen.queryByRole("alert")).toBeNull();
+	});
+
+	// One failure in one place: on the segment, its pinned area holds it.
+	it("leaves the failure to the Branches segment while it is on screen", async () => {
+		await failedSwitch();
+		const { rerender } = renderBar(true);
+
+		expect(screen.queryByRole("alert")).toBeNull();
+
+		rerender(bar(false));
+		expect(screen.getByRole("alert")).toHaveTextContent(
+			"Could not switch to topic.",
+		);
+	});
+
+	// The pinned area is part of the list; with no list to draw, the segment
+	// cannot hold the failure, so the bar keeps it.
+	it("keeps the failure under the bar when the Branches segment has no list", async () => {
+		await failedSwitch();
+		branches = undefined;
+		renderBar(true);
+
+		expect(screen.getByRole("alert")).toHaveTextContent(
+			"Could not switch to topic.",
+		);
+	});
+
+	// Two sources, two banners: neither may hide the other's failure.
+	it("shows a sync failure and a switch failure side by side", async () => {
+		await failedSwitch();
+		await gitSyncActions.start(
+			"",
+			"pull",
+			() => Promise.reject(new Error("fatal: could not read from remote")),
+			() => "Pull failed.",
+		);
+		renderBar();
+
+		const banners = screen.getAllByRole("alert");
+		expect(banners).toHaveLength(2);
+		expect(banners[0]).toHaveTextContent("Pull failed.");
+		expect(banners[1]).toHaveTextContent("Could not switch to topic.");
+	});
+
+	// A switch is about the worktree it was started in.
+	it("keeps another worktree's failed switch out of this one", async () => {
+		await gitCheckoutActions.start("feature", "topic", () =>
+			Promise.reject(new Error("boom")),
+		);
+		renderBar();
+
+		expect(screen.queryByRole("alert")).toBeNull();
 	});
 });

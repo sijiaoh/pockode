@@ -119,7 +119,10 @@ is headed there the same way, as `Story`, `Task` or `Job`.
 ### 2.1 The segmented control
 
 Two segments, `Current` and `Closed`, full width, directly under the header and
-outside the scroll area so it never scrolls away.
+outside the scroll area so it never scrolls away. The control is
+`ui/SegmentedControl.tsx`, shared with the Git workspace's three segments
+([git-ui.md](git-ui.md#routes-segments-and-back)): it holds no state, and its
+`onSelect` is a navigation (§5).
 
 `Current` is everything not `closed`. `Closed` is the archive: closed stories,
 newest first, flat. **Closed work is not a group in the main list and not a
@@ -802,6 +805,9 @@ second place worktree-aware URLs get built (§4).
 - **A master-detail split on the expanded tier.** The list renders in the main
   panel beside the sidebar, and two columns inside that panel would put a list,
   a detail and a sidebar in the space of one chat. One column at every width.
+  The Git workspace reaches the opposite answer on purpose — its diffs are read
+  in a run, one file after another, where a story is read one at a time — and
+  says why in [git-ui.md](git-ui.md#at-expanded-two-columns).
 - **Reordering, priorities, due dates.** Nothing in the data model carries them
   and nothing in the page's job needs them.
 - **Grouping by worktree or role.** Both are slots on the row and neither is a

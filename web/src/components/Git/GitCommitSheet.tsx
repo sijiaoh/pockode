@@ -11,10 +11,10 @@ interface Props {
 }
 
 /**
- * CommitSheet wired to the panel's queries, so both of its entry points — the
+ * CommitSheet wired to the workspace's queries, so both of its entry points — the
  * commit bar and the amend action on the HEAD row — assemble it the same way.
  *
- * It reads the same two queries the rest of the panel does; react-query serves
+ * It reads the same two queries the rest of the workspace does; react-query serves
  * both from cache.
  */
 function GitCommitSheet({ amendInitially, onClose }: Props) {

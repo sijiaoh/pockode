@@ -23,7 +23,7 @@ const NOT_GIT_REPO_CODE = -32002;
 /**
  * The operations the server names in a refusal, each as the gerund that goes
  * after "busy". The keys are the contract (server/git/lock.go); the values are
- * the only part a user reads, so they say what the panel calls the action
+ * the only part a user reads, so they say what the workspace calls the action
  * rather than what the RPC is called.
  */
 const BUSY_OPERATIONS: Record<string, string> = {
@@ -53,9 +53,10 @@ export interface GitFailure {
  * The plain-language sentence for a request the server refused before git ran,
  * or null if the failure is anything else.
  *
- * Exported for the two sheets that put the sentence inside one of their own,
- * naming the branch the refusal cannot name; anything that renders a failure
- * as it comes wants describeGitFailure.
+ * Exported for the messages that put the sentence inside one of their own,
+ * naming the branch the refusal cannot name — the two create sheets and a
+ * branch switch's failure; anything that renders a failure as it comes wants
+ * describeGitFailure.
  */
 export function gitRefusalSummary(error: unknown): string | null {
 	if (!(error instanceof JSONRPCErrorException)) return null;
@@ -79,7 +80,7 @@ function busyOperation(data: unknown): string | null {
 }
 
 /**
- * A failed git request as the panel shows it, keeping the two kinds of failure
+ * A failed git request as the workspace shows it, keeping the two kinds of failure
  * apart: a refusal is the server's own sentence about a request that never ran,
  * while everything else is git failing and gets its output quoted verbatim —
  * the reader is a developer who needs git's words, not a paraphrase of them.

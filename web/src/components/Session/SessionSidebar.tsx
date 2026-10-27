@@ -7,18 +7,21 @@ import {
 } from "lucide-react";
 import { useCallback, useMemo } from "react";
 import { invalidateGitQueries } from "../../hooks/gitQueries";
-import { useGitChangeCount } from "../../hooks/useGitChangeCount";
+import {
+	describeChangeCount,
+	useGitChangeCount,
+} from "../../hooks/useGitChangeCount";
 import { useGitWatch } from "../../hooks/useGitWatch";
 import { useSidebarAttention } from "../../hooks/useSidebarAttention";
 import { useSidebarUIConfig } from "../../lib/registries/sidebarUIRegistry";
 import { SidebarContainerContext } from "../../lib/sidebarContainerContext";
 import { useHasUnfinishedUploads } from "../../lib/uploadStore";
 import { useIsGitRepo } from "../../lib/worktreeStore";
+import type { GitSegment } from "../../types/overlay";
 import { FilesTab } from "../Files";
-import { DiffTab } from "../Git";
+import { GitTab } from "../Git";
 import { Sidebar, TabbedSidebar, type TabConfig } from "../Layout";
 import { ProjectTab } from "../Project";
-import { formatBadgeCount } from "../ui";
 import { WorktreeSwitcher } from "../Worktree";
 import SessionsTab from "./SessionsTab";
 
@@ -34,12 +37,13 @@ interface Props {
 	onSelectSession: (id: string, worktree: string | null) => void;
 	onCreateSession: () => void;
 	onDeleteSession: (id: string, worktree: string | null) => void;
-	onSelectDiffFile: (path: string, staged: boolean) => void;
-	/** Closes the content area when the diff it shows is discarded away. */
-	onCloseDiffFile: () => void;
-	activeDiffFile: { path: string; staged: boolean } | null;
-	onSelectCommit: (hash: string) => void;
-	activeCommitHash: string | null;
+	/** Opens the Git workspace at a segment's list. */
+	onOpenGitSegment: (segment: GitSegment) => void;
+	/**
+	 * The segment the Git workspace is standing in, at any of its layers, and
+	 * null while it is not on screen.
+	 */
+	activeGitSegment: GitSegment | null;
 	onSelectFile: (path: string) => void;
 	activeFilePath: string | null;
 	/** Whether that file is open in the editor rather than the viewer. */
@@ -70,11 +74,8 @@ function SessionSidebar({
 	onSelectSession,
 	onCreateSession,
 	onDeleteSession,
-	onSelectDiffFile,
-	onCloseDiffFile,
-	activeDiffFile,
-	onSelectCommit,
-	activeCommitHash,
+	onOpenGitSegment,
+	activeGitSegment,
 	onSelectFile,
 	activeFilePath,
 	activeFileEdit,
@@ -102,10 +103,12 @@ function SessionSidebar({
 
 	// The watcher belongs to the sidebar, not to the Git tab: it feeds the tab's
 	// count badge, which has to keep up while another tab is on top. Each term
-	// below closes a case where nobody is left to read the number — including the
-	// one easily dropped, a diff still open behind a drawer the tap closed.
-	// `isOpen` is whether the sidebar is on screen in either tier, so a collapsed
-	// column stops watching exactly as a closed drawer does.
+	// below closes a case where nobody is left to read the number. `isOpen` is
+	// whether the sidebar is on screen in either tier, so a collapsed column
+	// stops watching exactly as a closed drawer does — and an extension's
+	// sidebar has no badge to feed. The Git workspace is read whatever sidebar
+	// is beside it, open or not, so it is watched on its own term: without it
+	// its lists would freeze under the reader.
 	// See docs/git-ui.md, *Who subscribes to `git.changed`*.
 	const queryClient = useQueryClient();
 	const refreshGit = useCallback(
@@ -114,7 +117,8 @@ function SessionSidebar({
 	);
 	useGitWatch({
 		onChanged: refreshGit,
-		enabled: isGitRepo && !SidebarContent && (isOpen || !!activeDiffFile),
+		enabled:
+			isGitRepo && ((!SidebarContent && isOpen) || activeGitSegment !== null),
 	});
 
 	const gitChangeCount = useGitChangeCount();
@@ -125,9 +129,7 @@ function SessionSidebar({
 			gitChangeCount
 				? {
 						value: gitChangeCount,
-						label: `${formatBadgeCount(gitChangeCount)} changed ${
-							gitChangeCount === 1 ? "file" : "files"
-						}`,
+						label: describeChangeCount(gitChangeCount),
 					}
 				: undefined,
 		[gitChangeCount],
@@ -185,20 +187,12 @@ function SessionSidebar({
 		[onSelectSession, isExpanded, onClose],
 	);
 
-	const handleSelectDiffFile = useCallback(
-		(path: string, staged: boolean) => {
-			onSelectDiffFile(path, staged);
+	const handleOpenGitSegment = useCallback(
+		(segment: GitSegment) => {
+			onOpenGitSegment(segment);
 			if (!isExpanded) onClose();
 		},
-		[onSelectDiffFile, isExpanded, onClose],
-	);
-
-	const handleSelectCommit = useCallback(
-		(hash: string) => {
-			onSelectCommit(hash);
-			if (!isExpanded) onClose();
-		},
-		[onSelectCommit, isExpanded, onClose],
+		[onOpenGitSegment, isExpanded, onClose],
 	);
 
 	const handleSelectFile = useCallback(
@@ -259,12 +253,9 @@ function SessionSidebar({
 				onCloseFile={onCloseFile}
 			/>
 			{isGitRepo && (
-				<DiffTab
-					onSelectFile={handleSelectDiffFile}
-					onSelectCommit={handleSelectCommit}
-					onCloseFile={onCloseDiffFile}
-					activeFile={activeDiffFile}
-					activeCommitHash={activeCommitHash}
+				<GitTab
+					onOpenSegment={handleOpenGitSegment}
+					activeSegment={activeGitSegment}
 				/>
 			)}
 			<ProjectTab

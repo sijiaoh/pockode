@@ -98,10 +98,7 @@ vi.mock("../Files", async () => {
 });
 
 vi.mock("../Git", () => ({
-	DiffView: () => <div data-testid="diff-view" />,
-	CommitView: () => null,
-	CommitDiffView: () => null,
-	CommitFileView: () => null,
+	GitWorkspace: () => <div data-testid="git-workspace" />,
 }));
 
 vi.mock("../Settings", () => ({
@@ -4228,10 +4225,26 @@ describe("ChatPanel", () => {
 			const diff = { type: "diff", path: "a.ts", staged: false } as const;
 			render(<ChatPanel {...defaultProps} overlay={diff} />);
 			await waitForHistoryLoad();
-			expect(screen.queryByTestId("diff-view")).toBeNull();
+			expect(screen.queryByTestId("git-workspace")).toBeNull();
 
 			act(() => worktreeActions.setIsGitRepo(true));
-			expect(screen.getByTestId("diff-view")).toBeInTheDocument();
+			expect(screen.getByTestId("git-workspace")).toBeInTheDocument();
+		});
+
+		// The workspace has bottom bars of its own — the commit bar, a diff's
+		// previous/next — and the composer under them would be a third.
+		it("draws no composer under the Git workspace", async () => {
+			worktreeActions.setIsGitRepo(true);
+			render(
+				<ChatPanel
+					{...defaultProps}
+					overlay={{ type: "git", segment: "changes" }}
+				/>,
+			);
+			await waitForHistoryLoad();
+
+			expect(screen.getByTestId("git-workspace")).toBeInTheDocument();
+			expect(screen.queryByRole("textbox")).toBeNull();
 		});
 
 		// An overlay is a page of its own: the header names it, and the session

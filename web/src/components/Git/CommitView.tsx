@@ -8,13 +8,17 @@ import {
 	type GitFileStatus,
 } from "../../types/git";
 import { formatDateTime } from "../../utils/dateTime";
-import PageHeader from "../Layout/PageHeader";
+import PageHeader, { type PageBack } from "../Layout/PageHeader";
 import { BottomActionBar, ContentView } from "../ui";
 import { HeaderSubtitle, headerTitleTextClass } from "../ui/HeaderTitle";
 
 interface Props {
 	hash: string;
-	onBack: () => void;
+	/**
+	 * Back to the list this was opened from. Absent where that list is on
+	 * screen beside it.
+	 */
+	onBack?: () => void;
 }
 
 function FileChangeItem({
@@ -41,6 +45,11 @@ function FileChangeItem({
 
 function CommitView({ hash, onBack }: Props) {
 	const navigate = useNavigate();
+	const back: PageBack | undefined = onBack && {
+		to: "parent",
+		label: "Back to history",
+		onClick: onBack,
+	};
 	const { worktree, sessionId } = useRouteState();
 	const { data: commit, isLoading, error } = useGitCommit(hash);
 
@@ -62,7 +71,7 @@ function CommitView({ hash, onBack }: Props) {
 				// The hash is in the route, so it shows at once; the subject waits
 				// for the commit as a skeleton rather than borrowing the hash.
 				<PageHeader
-					back={{ to: "chat", onClick: onBack }}
+					back={back}
 					title={commit?.subject ?? null}
 					subtitle={<HeaderSubtitle status={shortHash} mono />}
 					fullText={commit && `${commit.subject} — ${commit.hash}`}
@@ -71,7 +80,7 @@ function CommitView({ hash, onBack }: Props) {
 				// No subject is coming. The hash is still true, so it is the title;
 				// why the rest is missing is the body's to say.
 				<PageHeader
-					back={{ to: "chat", onClick: onBack }}
+					back={back}
 					title={
 						<span className={`${headerTitleTextClass} font-mono`}>
 							{shortHash}

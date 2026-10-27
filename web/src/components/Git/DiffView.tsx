@@ -7,17 +7,18 @@ import {
 	Minus,
 	Plus,
 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useGitDiffWatch } from "../../hooks/useGitDiffWatch";
 import { useGitStatus } from "../../hooks/useGitStatus";
 import { useGitWriteRunner } from "../../hooks/useGitWrites";
 import { useRouteState } from "../../hooks/useRouteState";
 import { useDiffSettings } from "../../lib/diffSettingsStore";
-import { WorktreeChangedError } from "../../lib/gitWriteStore";
+import { gitWriteActions, WorktreeChangedError } from "../../lib/gitWriteStore";
 import { overlayToNavigation } from "../../lib/navigation";
+import { useWorktreeStore } from "../../lib/worktreeStore";
 import { flattenGitStatus, stageFailureSummary } from "../../types/git";
 import { describeGitFailure, type GitFailure } from "../../utils/gitErrors";
-import { FilePageHeader } from "../Layout/PageHeader";
+import { FilePageHeader, type PageBack } from "../Layout/PageHeader";
 import {
 	BottomActionBar,
 	ContentView,
@@ -30,11 +31,20 @@ import ErrorBanner from "./ErrorBanner";
 interface Props {
 	path: string;
 	staged: boolean;
-	onBack: () => void;
+	/**
+	 * Back to the list this was opened from. Absent where that list is on
+	 * screen beside it.
+	 */
+	onBack?: () => void;
 }
 
 function DiffView({ path, staged, onBack }: Props) {
 	const navigate = useNavigate();
+	const back: PageBack | undefined = onBack && {
+		to: "parent",
+		label: "Back to changes",
+		onClick: onBack,
+	};
 	const { worktree, sessionId } = useRouteState();
 	const { hideWhitespace, toggleHideWhitespace } = useDiffSettings();
 	const { data: diff, isLoading } = useGitDiffWatch({
@@ -44,7 +54,19 @@ function DiffView({ path, staged, onBack }: Props) {
 	});
 	const { data: gitStatus } = useGitStatus();
 	const { toggle, writes } = useGitWriteRunner();
+	// The worktree the runner sends to, read in the same render, as the Changes
+	// list does: a failure is filed under the worktree whose path it names.
+	const writeWorktree = useWorktreeStore((s) => s.current);
 	const [error, setError] = useState<GitFailure | null>(null);
+	// A stage answers after the press, and by then the reader may have left
+	// this diff — Back to the list, or another file beside it.
+	const mounted = useRef(true);
+	useEffect(() => {
+		mounted.current = true;
+		return () => {
+			mounted.current = false;
+		};
+	}, []);
 
 	const allFiles = useMemo(() => {
 		if (!gitStatus) return [];
@@ -84,6 +106,10 @@ function DiffView({ path, staged, onBack }: Props) {
 		setError(null);
 		try {
 			await toggle([path], staged);
+			gitWriteActions.succeed(writeWorktree, [path]);
+			// Following the file to its other side is for a reader still on it;
+			// one who has moved on keeps the page they moved to.
+			if (!mounted.current) return;
 			navigate(
 				overlayToNavigation(
 					{ type: "diff", path, staged: !staged },
@@ -96,7 +122,12 @@ function DiffView({ path, staged, onBack }: Props) {
 			// the diff the user is reading. A write dropped by a worktree switch
 			// says nothing about this file at all, so it says nothing here.
 			if (e instanceof WorktreeChangedError) return;
-			setError(describeGitFailure(e, () => stageFailureSummary(staged)));
+			const failure = describeGitFailure(e, () => stageFailureSummary(staged));
+			// Shown here while this diff is on screen; once it is not, on the
+			// Changes list's banner, which outlives the page — a failure that
+			// settled after the reader left would otherwise be told to nobody.
+			if (mounted.current) setError(failure);
+			else gitWriteActions.fail(writeWorktree, { ...failure, paths: [path] });
 		}
 	};
 
@@ -115,7 +146,7 @@ function DiffView({ path, staged, onBack }: Props) {
 			<FilePageHeader
 				path={path}
 				status={staged ? "Staged" : "Unstaged"}
-				back={{ to: "chat", onClick: onBack }}
+				back={back}
 				onTitleClick={handlePathClick}
 			/>
 			{error && (

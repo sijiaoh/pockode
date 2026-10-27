@@ -131,7 +131,7 @@ export interface GitPullResult {
 	commits: number;
 }
 
-/** What the panel can actually do with the current sync state. */
+/** What the workspace can actually do with the current sync state. */
 export interface GitSyncState {
 	/**
 	 * Nothing known to track: no upstream, or one whose ref we do not have. Push
@@ -161,7 +161,7 @@ export function describeGitSync(sync: GitSync): GitSyncState {
 	};
 }
 
-/** What the panel's commit bar offers. */
+/** What the workspace's commit bar offers. */
 export interface GitCommitAction {
 	label: string;
 	enabled: boolean;
@@ -172,7 +172,7 @@ export interface GitCommitAction {
 export interface GitCommitHint {
 	text: string;
 	/**
-	 * Whether the panel already shows the reason — the stage buttons the usual
+	 * Whether the workspace already shows the reason — the stage buttons the usual
 	 * hint points at sit right above the bar. The bar keeps such a hint for a
 	 * screen reader and spends no pixels repeating on screen what the screen
 	 * already says; a reason nothing else accounts for has to be visible.
@@ -186,7 +186,7 @@ export interface GitCommitHint {
  * A clean tree has nothing to commit and nothing on its way to being committed,
  * so a permanently dead primary button would be the loudest thing on a panel
  * that has nothing to say. An unreadable status is not an empty one either —
- * undefined covers both, and the panel is already showing why.
+ * undefined covers both, and the workspace is already showing why.
  *
  * The disabled button, where there are changes but nothing this commit can
  * record, is deliberate: the user is on their way to committing, and a target
@@ -207,12 +207,12 @@ export function describeCommitAction(
 
 	// Whether the bar exists at all follows the flattened counts, which is what
 	// the file groups above it show: with a submodule's files listed as staged
-	// and no bar under them, the panel would offer no account of where the
+	// and no bar under them, the workspace would offer no account of where the
 	// commit button went.
 	const flat = flattenGitStatus(status);
 	if (flat.staged.length + flat.unstaged.length === 0) return null;
 
-	// Staged, but somewhere this commit cannot reach. Nothing else on the panel
+	// Staged, but somewhere this commit cannot reach. Nothing else in the workspace
 	// says so — the rows read as staged like any other — so this is the one hint
 	// the bar has to spend a line on.
 	if (flat.staged.length > 0) {
@@ -295,7 +295,7 @@ export function flattenGitStatus(
 /**
  * What a discard confirmation says, and what a failed one reports.
  *
- * Discard is the panel's one modal-confirmed file action because discarded
+ * Discard is the workspace's one modal-confirmed file action because discarded
  * worktree changes are not in the reflog — "cannot be undone" is literal. The
  * two blast radii get their own wording: a tracked file loses edits, an
  * untracked file stops existing.

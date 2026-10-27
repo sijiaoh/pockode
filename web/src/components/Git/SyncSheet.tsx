@@ -16,7 +16,7 @@ interface Props {
 }
 
 /**
- * Fetch, pull and push — the only operations in the panel that wait on a machine
+ * Fetch, pull and push — the only operations in the workspace that wait on a machine
  * other than this one, and so the only ones with no bound on how long they take.
  *
  * The sheet stays open after one succeeds: over a slow relay link, a sheet that
@@ -185,7 +185,7 @@ function operationOrder(
 }
 
 /**
- * The chip's arrows in words: "↓2 ↑1" is an abbreviation for a 288px-wide row,
+ * The chip's arrows in words: "↓2 ↑1" is an abbreviation that fits a chip,
  * not an explanation.
  */
 function describeCounts(sync: GitSync, needsPublish: boolean): string {
