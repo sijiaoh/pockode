@@ -238,16 +238,18 @@ Tapping opens the **Commit sheet** rather than editing inline. A permanently mou
 │ ═══                              │
 │ Commit                        ✕  │
 ├──────────────────────────────────┤
-│ 2 files staged                   │
+│ 2 files staged        [✨ Draft] │
 │ ┌──────────────────────────────┐ │
 │ │ Add branch bar to git panel  │ │
 │ │                              │ │
 │ └──────────────────────────────┘ │
 │ ☐ Amend last commit              │
 ├──────────────────────────────────┤
-│ [ Cancel ]       [    Commit   ] │
+│ [ Commit & push ] [   Commit   ] │
 └──────────────────────────────────┘
 ```
+
+**The footer has no `Cancel`.** It used to read `[ Cancel ] [ Commit ]`; a third button does not fit at 320px — `Commit & push` alone is ~130px at `text-sm px-4` — and `Cancel` was the one that said nothing new: the header's `✕`, the backdrop and Escape all close the sheet, and all three are disabled in exactly the states `Cancel` was. The footer is now the two ways to finish, `Commit` keeping the primary (L1, `th-accent`) weight and `Commit & push` beside it as the secondary (`bg-th-bg-tertiary`, the weight `Cancel` had). Commit stays primary because it is the one that is always available; a remote, an attached HEAD and a pushable branch are conditions, and a primary button that comes and goes would move the thumb's target.
 
 - The message textarea autofocuses and starts at ~3 rows, growing to a cap. An empty message keeps Commit disabled — no `-m ""`, no auto-generated placeholder.
 - With nothing staged the first line says what is left to do: `Nothing staged — only the message changes` while Amend is on, `Nothing staged — stage a file, or amend the last commit` when it is off and there is a commit to amend, plain `Nothing staged` when there is not. Commit is disabled in the second and third cases — git would refuse them, and a button that says so beats a round trip that always ends in `nothing to commit`.
@@ -257,11 +259,115 @@ Tapping opens the **Commit sheet** rather than editing inline. A permanently mou
   ☑ Amend last commit
   ⚠ Replaces "Show what the permission mode does…"
     This commit is already on origin/main —
-    pushing afterwards needs a force push.
+    pushing afterwards needs a force push
+    from Sync.
   ```
 
   Turning it on prefills the message from HEAD, but only when the user has not typed anything, so toggling never eats input. The second warning line appears only when HEAD is contained in the upstream, and names that upstream rather than assuming it is `origin`. No `ConfirmDialog` here: the toggle is already a deliberate act with its consequence spelled out on screen, and a modal stacked on a sheet reads worse on a phone than the warning it would deliver.
-- While committing, the Commit button becomes a spinner plus `Committing…`, Cancel and backdrop dismissal are disabled, and on success the sheet closes. On failure it stays open with the error inline (see [Feedback and errors](#feedback-and-errors)) — hooks, `commit-msg` rules and a missing `user.email` all fail here, and the user needs the raw message to act on any of them. The missing identity is the one failure with a summary of its own above git's text: git's advice is to run `git config`, which is exactly what this user cannot do, so the summary points at the agent in chat instead.
+- While committing, the button that was pressed becomes a spinner plus `Committing…`; the other commit button, `Draft`, the amend toggle and the textarea are disabled; the `✕`, backdrop and Escape do nothing, and on success the sheet closes. On failure it stays open with the error inline (see [Feedback and errors](#feedback-and-errors)) — hooks, `commit-msg` rules and a missing `user.email` all fail here, and the user needs the raw message to act on any of them. The missing identity is the one failure with a summary of its own above git's text: git's advice is to run `git config`, which is exactly what this user cannot do, so the summary points at the agent in chat instead.
+
+### Drafting the message with AI
+
+Typing a commit message on a phone keyboard is the slowest part of committing, and the product's premise is that the AI writes. `✨ Draft` asks the AI CLI once — a one-off call the user's press starts, outside any session — for a message describing what is staged, in the style of this repository's recent commits. The result goes into the textarea and nowhere else: nothing is committed until the user presses a commit button, so the draft is always read before it is recorded.
+
+**Where.** Right-aligned on the staged-count line, directly above the textarea it fills: an L4 text button (`Sparkles` icon + `Draft`, `text-th-accent`, no fill), `min-h-[36px]` and 44 on a coarse pointer. Not in the footer — the footer is the two ways to *finish*, and a third button there would sit between the thumb and `Commit` — and not inside the textarea, where it would overlap the text it is about to replace and move with the on-screen keyboard. The staged line is the natural shelf: it already says what the draft will describe.
+
+**Which AI CLI.** The workspace belongs to a worktree, not to a session, but it is never opened from nowhere: its URL carries `session`, the chat it was opened over, which is what the app header's `←` returns to ([Routes](#routes-segments-and-back)). The draft uses **that session's engine** — its agent type, model and effort, exactly as its session panel shows them. Without a `session` in the URL, or with one this worktree's session list does not have (a deep link, a deleted session), it uses the **global default engine** (`useGlobalEngine`), the one a new session would start on. There is no picker: the user already chose an engine for the chat they came from, and asking again on every draft would be a question with an obvious answer. The frontend resolves the engine — one hook, so the label and the request cannot name different engines — and sends it with the request; the server validates the combination the way it validates one for a new session.
+
+What the sheet relies on from the call itself — the backend's contract is in [git.md](git.md#drafting-a-commit-message), with the input, the size cap, the timeout and the error kinds:
+
+- **No tools, no session.** Nothing appears in the session list and nothing the CLI does can change the worktree; the only output is text. A diff cut to size is said so in the prompt; the UI says nothing about it.
+- **Slow, paid, and cancellable.** The server gives up after 90 seconds and answers `timeout`; the client's own RPC timeout for this request outlasts that — the default 30 s would answer `Request timed out` long before, and leave the CLI running — and the request is never retried, since each try is a paid model call ([code/websocket-rpc.md](code/websocket-rpc.md#request-timeout)). Each draft carries a fresh client-chosen id, and `Stop`, closing the sheet, leaving the workspace, switching worktree and the client's own timeout running out (the server's 90 seconds start only once git has read the change) all send a cancel naming it; a dropped connection cancels on the server's side. An answer for a draft the sheet no longer waits for — stopped, or from the worktree it was switched away from — is dropped, never filled.
+
+**States of the row:**
+
+| State | Staged line, right side | Textarea | Commit buttons, amend toggle |
+|---|---|---|---|
+| Ready | `✨ Draft` | editable | as usual |
+| Nothing for the draft to describe — nothing staged in the root with Amend off, including *only submodule files staged* | `✨ Draft`, disabled, accessible name `Draft a message (nothing staged)` | editable | as usual |
+| Asking whether to replace | the replace strip below | editable | as usual |
+| Drafting | spinner + `Drafting with Claude…` + `Stop` | read-only, dimmed | disabled |
+| Failed | `✨ Draft` again; the failure under the row | editable, untouched | as usual |
+
+- **Disabled exactly where Commit is disabled for having nothing to record.** Nothing staged with Amend on is *not* that state: amend is then a message-only change, and redrafting the message of the commit being replaced is a real use. The submodule-only case keeps its existing `… in vendor/sdk are not included` line, which already explains the dead button; the sentence the disabled `Draft` adds is for a screen reader only, by the same test as the commit bar's hints.
+- **While drafting, `Draft` becomes `Stop`.** The spinner and the engine's name (`Drafting with Codex…`) take the staged count's place for the duration — the count is not what the user is reading then, and naming the engine says whose time and quota is being spent. `Stop` is the only cancel; it ends the request and puts the row back to Ready with nothing reported, since the user knows why it stopped.
+- **The textarea is read-only while drafting**, not merely discouraged: the draft is about to land there, and text typed in the meantime would need a second "replace?" question at the moment the answer arrives. The commit buttons and the amend toggle are disabled for the same reason — the message is about to change, and amend changes what the draft describes.
+- **The sheet can be closed while drafting, and closing cancels.** Unlike committing, drafting holds nothing irreversible and nothing the user cannot get back by pressing `Draft` again, so there is no reason to hold the sheet shut; and unlike sync, nothing outlives the sheet, because the draft's only destination is a textarea that is gone. It is still the sheet's existing close: a message written by hand is not kept across closing today, and a draft is not either.
+- **The result** replaces the textarea's contents and focus stays where it was — focusing the textarea would raise the on-screen keyboard over the draft the user now wants to read. A polite live region says `Draft inserted`. The textarea grows to fit, as for typed text.
+
+**Replacing what is there.** Pressing `Draft` with text in the box asks first — but only if that text is the user's. Two kinds of text are not: the message Amend prefilled from HEAD, still untouched, and a previous draft, still untouched. Replacing either is what the user is asking for (redrafting is "try again"), and asking would only add a tap. This is the same "untouched" test Amend's toggle already uses to take its prefill back. Turning Amend off takes an untouched draft written with Amend on back the same way: it described HEAD's own changes too, which a plain commit would not record.
+
+The question is an inline strip, not a `ConfirmDialog`: sheets do not stack, and the reason is the one Amend's warning gives — a modal over a sheet reads worse on a phone than a line of text in it. It appears between the staged line and the textarea — right under the button that raised it, with the text it would replace still in view below — in the amend warning's form (`bg-th-bg-tertiary`, `text-xs`):
+
+```
+│ 2 files staged                   │
+│ ┌──────────────────────────────┐ │
+│ │ Replace your message with an │ │
+│ │ AI draft?                    │ │
+│ │       [ Keep mine ][Replace] │ │
+│ └──────────────────────────────┘ │
+│ ┌──────────────────────────────┐ │
+│ │ fix: the thing I was typing  │ │
+```
+
+`Replace` starts the draft; `Keep mine` takes the strip away. Focus moves to `Replace` when it appears and back to `Draft` when it goes. Escape inside the strip is `Keep mine`, and the strip claims it ([answering-ui.md](answering-ui.md#who-owns-escape)) so the sheet does not close with it. Typing in the textarea while the strip is up leaves it up — what the user is about to lose has only grown.
+
+**Failure** is said under the staged row in `text-th-error` with `role="alert"`, the sheet's existing form, with the CLI's own output in `GitOutput` when there is any. It is a separate block from the commit failure above the message: one per source, each replaced by the next run of its own kind — a commit failure stays on screen while a draft is attempted, and vice versa. The draft's block goes when the next draft starts.
+
+| Kind (from the server) | Shown |
+|---|---|
+| `timeout` | `Drafting took too long and was stopped.` |
+| `auth_failed` / `cli_not_found` — the CLI is not signed in, or not installed | `Could not draft: Claude is not signed in. Sign in under Settings → AI CLIs.` / `… is not installed.` — the CLI named by `getAgentLabel`; no link: following it would close the sheet and take the message with it |
+| `nothing_staged` — the index emptied between the press and the run (an agent committed) | `Nothing is staged any more.` — the staged line above updates on its own |
+| `empty` — the CLI answered with no message | `The AI returned an empty message. Try again.` |
+| `tool_use` — the model called a tool and the server stopped it | `The AI tried to use a tool, so the draft was stopped. Try again.` |
+| `failed` — the CLI exited non-zero, a usage limit, anything else — and a request that failed on the way (the connection dropped, a refused parameter) | `Could not draft a message.` + the CLI's output, or what went wrong with the request |
+| cancelled | nothing |
+
+### Commit & push
+
+Committing is almost always followed by pushing, and between the two the user has to close one sheet and open another. `Commit & push` does both: it commits, and **only after the commit has succeeded** starts a push.
+
+**Shown** whenever the sync chip is — a remote, and HEAD on a branch (`hasSyncStatus`). With no remote or on a detached HEAD there is nowhere to push to, so the button is absent rather than disabled, and `Commit` alone takes the footer. Its label follows the push it will run:
+
+| Branch | Label |
+|---|---|
+| Has an upstream | `Commit & push` |
+| No upstream, or `upstream_gone` (`needsPublish`) | `Commit & publish` — the push publishes the branch and sets its upstream, as `Publish branch` does |
+
+**Disabled, with the reason on screen**, when the push it promises would not be a plain push:
+
+| State | Why a plain push cannot follow | Where the reason is |
+|---|---|---|
+| Amend on, and HEAD is already on the upstream (`lastCommit.pushedTo`) | The rewritten commit needs a force push | The amend warning, which gains a clause: `… pushing afterwards needs a force push from Sync.` |
+| `behind > 0`, on a branch with an upstream (not `needsPublish`, where the counts mean nothing) | The new commit would diverge from the upstream, and pushing a diverged branch is a force push | A line inside the footer, above the buttons (`text-xs text-th-text-muted`) — not in the body, which scrolls and would carry it off-screen under a long message: `origin/main has 2 commits this branch does not — pull before pushing.` |
+| A sync is running in this worktree | The sync store refuses a second run, so the push would never start | The same line: `Waiting for the fetch to finish.` (naming the running operation) |
+
+Force push stays where it is today — the Sync sheet's `Push (force)` behind its `ConfirmDialog`. Offering it here would mean that confirmation stacked on this sheet, for an action this button exists to make *quick*. `behind` is only as fresh as the last fetch; a stale zero lets the press through and the push is then rejected as non-fast-forward, which is reported like any other failed push, below.
+
+**Running.** The press starts the commit exactly as `Commit` does: the pressed button reads `Committing…`, and the sheet cannot be closed — the commit is the part that holds the user's message. When the commit succeeds **the sheet closes and the push is handed to the sync store** (`gitSyncActions.start(worktree, "push", …)` with the Sync sheet's own push action and failure summary — shared, not copied — filed under the worktree the commit was made in), and from there it is an ordinary push started from the Sync sheet and then left: the chip spins, a success waits in the Sync sheet as `Pushed 1 commit.`, and a failure comes back in the top bar's banner — or in the Sync sheet, if the user opens it ([Feedback and errors](#feedback-and-errors)). The commit sheet does not stay open to show `Pushing…`: its job — the message — is done, and the push already has a place that reports it and can be left, so a second, smaller copy of that place here would hold the user for nothing.
+
+- **A failed push keeps the commit.** Nothing is rolled back; the commit is on the branch, the chip now says `↑ Push 1`, and the banner's failure is the same one a push from the Sync sheet would have produced, with the same `Details`.
+- **A failed commit pushes nothing.** The sheet stays open with the commit failure, exactly as for `Commit`.
+- **The push is plain or publish, never force**, which the disabled states above guarantee before it starts.
+
+### The title length hint
+
+A commit's first line is its title: `git log --oneline`, GitHub and most tools cut it at 72 characters. The sheet counts it — never enforces it.
+
+```
+│ ┌──────────────────────────────┐ │
+│ │ Move Git into a full-screen /│ │
+│ │ git workspace with a sidebar │ │
+│ │ overview and three entries   │ │
+│ └──────────────────────────────┘ │
+│                   Title 81 / 72  │
+```
+
+- **Counts the first line only**, in code points (`[...title].length`), so a Chinese or emoji title is not counted double.
+- **Absent below 50**, so a short title shows nothing. **Muted (`text-th-text-muted`) from 50 to 72**: the user is close and might want to stop. **Past 72 the count goes up to `text-th-text-secondary` behind a `TriangleAlert` in `text-th-warning`**, still just the count. The hue is on the glyph rather than the text: `text-th-warning` at `text-xs` is far under AA 4.5 in the light themes, while a glyph owes only the 3:1 non-text floor — the same split the sidebar's question count makes.
+- Right-aligned under the textarea, `text-xs`, `tabular-nums` so it does not jitter. It is tied to the textarea by `aria-describedby` only past 72, so a screen reader hears it once it matters rather than on every keystroke.
+- **Never disables a commit button.** A long title is a convention broken, not a commit git refuses, and the user may have reasons.
 
 ### Amend
 
@@ -442,6 +548,8 @@ The project has no toast system — `WorktreeSwitcher` still carries a `TODO` ab
 | Stage, unstage, discard (list rows and group headers) | Changes segment | The Changes segment's banner — including a failure that settled while the user was elsewhere |
 | Stage from a diff | The diff layer | `DiffView`'s own banner; one that answers after the reader left the diff, the Changes list's banner |
 | Commit, amend | Commit sheet | In the sheet |
+| Draft with AI | Commit sheet | In the sheet, under the staged line, apart from a commit failure; nowhere once the sheet is closed, since closing cancels it ([Drafting](#drafting-the-message-with-ai)) |
+| Commit & push | Commit sheet | The commit: in the sheet. The push: as a push from the Sync sheet that was then closed ([Commit & push](#commit--push)) |
 | Switch branch | A Branches row | Branches on screen: its pinned area. Anywhere else in the workspace: a top-bar banner |
 | Create branch | New-branch sheet | In the sheet |
 | Fetch, pull, push | Sync sheet | Sheet open: in the sheet. Sheet closed: a top-bar banner |
@@ -471,7 +579,7 @@ Both surfaces show git's own output *under* the summary rather than in place of 
 
 In-flight rules, uniform across the workspace: the triggering control shows a spinner and a gerund label, controls whose outcome the running operation would change are disabled, and nothing is fired optimistically. A mutation then refreshes immediately rather than waiting out `GitWatcher`'s 3-second poll, invalidating what it can actually have changed: staging and unstaging touch only the status query, while commit, discard, checkout, create and the three sync operations move HEAD or the counts and so invalidate status, log and branches together.
 
-**Refusing to close the surface is not one of those uniform rules.** It applies only to bounded operations, which is why the sync sheet no longer does it ([Remote sync](#remote-sync)). The commit and new-branch sheets still do — and for commit that is not because committing is always quick, since a `pre-commit` hook can take as long as it likes. It is because those two hold typed input: closing them would have to answer "is what I wrote still there", and a commit message is the one thing in the workspace the user cannot get back. The sync sheet holds no input and only has to answer "where did the result go" — which the chip and the banner answer. A branch switch used to be held shut by the sheet it ran in, though it holds no input either; as a page it cannot hold anyone, so it answers that same question the way sync does ([above](#results-that-outlive-the-page)).
+**Refusing to close the surface is not one of those uniform rules.** It applies only to bounded operations, which is why the sync sheet no longer does it ([Remote sync](#remote-sync)). The commit and new-branch sheets still do — and for commit that is not because committing is always quick, since a `pre-commit` hook can take as long as it likes. It is because those two hold typed input: closing them would have to answer "is what I wrote still there", and a commit message is the one thing in the workspace the user cannot get back. The sync sheet holds no input and only has to answer "where did the result go" — which the chip and the banner answer. A branch switch used to be held shut by the sheet it ran in, though it holds no input either; as a page it cannot hold anyone, so it answers that same question the way sync does ([above](#results-that-outlive-the-page)). Inside the commit sheet the same test splits two runs: a commit holds the sheet shut, an AI draft does not — the draft has no result anyone else waits for, closing simply cancels it, and pressing `Draft` again gets it back ([Drafting](#drafting-the-message-with-ai)).
 
 Discard is the one that refreshes whether it succeeded or not. It is several git invocations behind a single tap, and a batch that failed part-way has still deleted files; refreshing only on success would leave those rows on screen until the next poll.
 

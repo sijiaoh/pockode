@@ -500,6 +500,39 @@ needs no validation pass, either — the source's values were already checked
 against the source's agent ([Session Models](#session-models)), and the fork runs
 the same agent.
 
+## One-Shot Requests
+
+Some features want one piece of text from the model and nothing else — drafting a commit message is the first ([git.md](../git.md#drafting-a-commit-message)). An agent offers that by implementing the optional `agent.OneShotRunner`: `RunOneShot(ctx, OneShotRequest{WorkDir, Prompt, Model, Effort})` returns the model's answer. `Registry.OneShot` (reached through `worktree.Manager.AgentOneShot`) hands it out by agent type; an agent that does not implement it is refused there, before anything starts.
+
+### How It Differs From a Session
+
+Everything else in this document is about sessions. A one-shot request shares only the binary, the launch path and the model/effort ids with them:
+
+| | Session | One-shot request |
+|---|---|---|
+| Process | Long-lived, leased, resumed after an idle exit ([Process Management](#process-management)) | Started per request, gone when it answers |
+| Channel | claude stream-json in both directions; codex `app-server` | claude `--print` with stream-json output; codex `exec --json` — there is no thread to keep |
+| History | Recorded, listed, forkable | None: claude `--no-session-persistence`, codex `--ephemeral`; nothing reaches the session list or `ProcessManager` |
+| Tools | The user's, behind the permission mode | None (below) |
+| Input | Messages over stdin, one per turn | One prompt on stdin, closed after it — never on the command line: it can run to tens of kilobytes, past what Windows allows a command line (32 KiB) and far past the npm `.cmd` wrapper (8 KiB, and no newlines; see `agent/cmdline.go`) |
+| Model, effort | Validated per session ([Session Models](#session-models)) | The same ids, validated by the caller with `session.ValidateEngine`, passed with the same flags a session uses; empty lets the CLI decide |
+| Lifetime | Stop, idle timeout, lease expiry | The caller's ctx: when it ends the whole process tree is killed. The caller sets the deadline and owns cancellation — commit drafts take 90 seconds and a cancel RPC ([git.md](../git.md#drafting-a-commit-message)) |
+
+It runs in `WorkDir`, so each CLI still reads the project's own instructions (`CLAUDE.md`, `AGENTS.md`) — a question about the project should be answered with them.
+
+### No Tools
+
+A one-shot prompt is built from project data — a diff, earlier commit messages — and a line in it that reads like an instruction must not get to act on anything. So the contract an implementation owes is: it switches off every tool its CLI lets it switch off, makes whatever is left unable to act, and if the CLI reports a tool call anyway, kills the run there and returns `ErrOneShotToolUse` instead of an answer. Reading the output as it streams is what makes the kill immediate rather than after the run; `agent.RunStream` does that (it is `StartProcess` plus a prompt written to stdin and a callback per stdout line, and kills the tree when the callback errors).
+
+- **claude** — `--tools ""` removes every built-in tool; `--strict-mcp-config` with no `--mcp-config` drops the MCP servers of the user's and the project's settings, which `--tools` does not cover; `--disable-slash-commands` keeps skills out. Asked to name its tools, the model answers that it has none. `--bare` would go further, but it reads credentials from `ANTHROPIC_API_KEY` alone and so breaks an OAuth sign-in. That leaves the hooks of the user's and the project's settings running (only `--bare` skips them): they are commands the user configured, not something the model can call, but a hook that fires on every session start or stop fires on a one-shot request too. Any `tool_use` or `server_tool_use` block (a tool the API runs itself, such as web search) stops the run.
+- **codex** — has no switch that removes all tools. The flags remove what can be removed — the shell (`features.shell_tool=false`), web search, the features that bring tools of their own, and the user's MCP servers via `--ignore-user-config` (MCP servers run outside the sandbox; `-c mcp_servers={}` merges rather than replaces, so it removes nothing) — and make the rest unable to change anything: `--sandbox read-only` with `approval_policy=never` refuses a write without asking anyone. apply_patch, view_image, code-mode exec and the MCP resource readers remain. Any item that is not an answer, reasoning, a CLI warning or the model's own plan (`todo_list`, which writes only into its context and cannot be switched off) counts as a tool call and stops the run. Two gaps are left, and callers have to account for them: calls made inside code mode are not reported as items, so the sandbox — not the check — is what the guarantee rests on; and the sandbox stops writes, not **reads**, so the model can still read any file the user can and quote it into its answer. `--ignore-user-config` costs the user's provider settings and default model (a model the request names is still passed); sign-in lives beside the config, not in it, and is kept. Feature switches go through `-c` rather than `--disable`, which fails the whole run on a feature name the installed version does not know.
+
+The reader fails closed: the fields the check needs (a frame's type, its content blocks' or item's type) are decoded on their own, and a line that is JSON but does not decode into them stops the run as failed rather than being skipped — skipping would let exactly the frame that matters through unread. The exact flag lists, with the CLI versions they were measured on, are in `agent/claude/oneshot.go` and `agent/codex/oneshot.go`.
+
+### Errors
+
+An implementation returns `*BinaryNotFoundError` (not installed), `*OneShotAuthError` (not signed in — claude's `authentication_failed` frame, codex's `401 Unauthorized` in its turn failure, since `exec` carries none of the structured auth info `app-server` does), `*OneShotFailedError` (the CLI ended without an answer, carrying its own words — or the tail of its stderr, kept to 16 KiB), `ErrOneShotToolUse`, or `ctx.Err()`. What an empty answer means is the caller's to decide.
+
 ## EventRecord: Unified Event Format
 
 `EventRecord` is the standard serialization format for events, used for both:
@@ -4512,6 +4545,7 @@ The following conditions send an `ErrorEvent` and end the session:
 | Codex implementation | `server/agent/codex/codex.go` (process, JSON-RPC, thread lifecycle), `events.go` (notification mapping), `approval.go` (server requests), `resume.go` (`codex_resume.json`), `view_image.go` (the image an `imageView` item names) |
 | Thinking | `server/agent/claude/thinking.go` (the `--thinking-display` gate, `thinkingClock`), `server/agent/codex/reasoning.go` |
 | Content blocks and attachments | `server/agent/content.go` (block shapes), `server/agent/claude/tool_result.go` (Claude's blocks), `server/attachments/attachments.go` (per-session store), `server/ws/rpc_attachment.go` (`attachment.get`), `server/filetransfer/attachment.go` (an image's bytes), `web/src/lib/contentBlocks.ts`, `web/src/components/Chat/AttachmentStrip.tsx` |
+| One-shot requests | `server/agent/oneshot.go` (`OneShotRunner`, `RunStream`), `claude/oneshot.go`, `codex/oneshot.go`, `server/agent/registry.go` (`OneShot`) |
 | Session forking | `server/agent/fork.go`, `claude/fork.go`, `codex/fork.go` |
 | Codex protocol drift check | `server/agent/codex/schema_integration_test.go` |
 | Fork capability over the wire | `server/ws/rpc_agent.go`, `web/src/lib/rpc/agent.ts`, `web/src/hooks/useForkSupport.ts` |
