@@ -303,6 +303,8 @@ type rpcConnState struct {
 	worktree      *worktree.Worktree           // set after auth
 	subscriptions map[subscriptionKey]struct{} // what this connection must give back
 	closed        bool                         // set by cleanup; guards against binds/subscribes racing disconnect
+	// drafts are the commit message drafts this connection is waiting on.
+	drafts commitDrafts
 	// ready is closed by setConn. Handlers must wait on it before touching the
 	// state: a handler that runs first would subscribe the still-nil notifier
 	// to the worktree — an entry cleanup can never find (it unsubscribes the
@@ -665,6 +667,11 @@ func (h *rpcMethodHandler) Handle(ctx context.Context, conn *jsonrpc2.Conn, req 
 	case "session_view.delete":
 		h.handleSessionViewDelete(ctx, conn, req)
 		return
+	// A connection's drafts are its own, not its worktree's: a cancel has to
+	// reach one whose worktree was deleted or switched away from mid-draft.
+	case "git.commit.draft.cancel":
+		h.handleGitCommitDraftCancel(ctx, conn, req)
+		return
 	}
 
 	// All other methods require a valid worktree
@@ -763,6 +770,8 @@ func (h *rpcMethodHandler) Handle(ctx context.Context, conn *jsonrpc2.Conn, req 
 		h.handleGitDiscard(ctx, conn, req, wt)
 	case "git.commit":
 		h.handleGitCommit(ctx, conn, req, wt)
+	case "git.commit.draft":
+		h.handleGitCommitDraft(ctx, conn, req, wt)
 	case "git.log":
 		h.handleGitLog(ctx, conn, req, wt)
 	case "git.show":

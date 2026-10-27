@@ -39,3 +39,17 @@ func (r *Registry) Get(agentType session.AgentType) (Agent, error) {
 	}
 	return a, nil
 }
+
+// OneShot returns the agent of agentType as a OneShotRunner, for an agent that
+// is registered and can answer one.
+func (r *Registry) OneShot(agentType session.AgentType) (OneShotRunner, error) {
+	a, err := r.Get(agentType)
+	if err != nil {
+		return nil, err
+	}
+	runner, ok := a.(OneShotRunner)
+	if !ok {
+		return nil, fmt.Errorf("agent %q cannot answer one-shot requests", agentType)
+	}
+	return runner, nil
+}

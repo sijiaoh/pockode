@@ -71,6 +71,11 @@ func (m *Manager) AgentForkSupports() map[session.AgentType]agent.ForkSupport {
 	return m.agents.ForkSupports()
 }
 
+// AgentOneShot returns the registered agent of agentType as a one-shot runner.
+func (m *Manager) AgentOneShot(agentType session.AgentType) (agent.OneShotRunner, error) {
+	return m.agents.OneShot(agentType)
+}
+
 func (m *Manager) Registry() *Registry {
 	return m.registry
 }

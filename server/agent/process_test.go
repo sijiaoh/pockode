@@ -37,6 +37,9 @@ const (
 	// roleFail stands in for a CLI command that fails: a line on each stream,
 	// then a non-zero exit, which is how the auth commands say no.
 	roleFail = "fail"
+	// roleEcho stands in for a one-shot CLI: it prints back what it read on
+	// stdin, then stays up as a CLI still working would, until it is killed.
+	roleEcho = "echo"
 
 	// leafLifetime only has to outlast the assertions; every test kills the leaf
 	// long before it elapses.
@@ -55,6 +58,8 @@ func TestMain(m *testing.M) {
 		runTerminalRole()
 	case roleFail:
 		runFailRole()
+	case roleEcho:
+		runEchoRole()
 	default:
 		os.Exit(m.Run())
 	}
@@ -93,6 +98,14 @@ func runArgvRole() {
 	for _, arg := range os.Args[1:] {
 		fmt.Println(arg)
 	}
+	os.Exit(0)
+}
+
+func runEchoRole() {
+	if _, err := io.Copy(os.Stdout, os.Stdin); err != nil {
+		os.Exit(1)
+	}
+	time.Sleep(leafLifetime)
 	os.Exit(0)
 }
 
