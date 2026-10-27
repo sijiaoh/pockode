@@ -92,7 +92,7 @@ tests. That has held for every red run looked at here but one, where a test
 asked jsdom for an accessible name once per row. `getByRole(..., { name })`
 computes one for **every** element carrying that role, and each computation
 goes through `getComputedStyle`, which jsdom re-cascades from scratch. Two
-`BranchSheet` tests did that over a sheet's worth of branch rows — and a dozen
+branch-list tests did that over a screen's worth of branch rows — and a dozen
 buttons is already enough for one such query to cost seconds.
 
 A slow test and a busy box compound, and it is the product that reaches
@@ -146,7 +146,7 @@ Querying by text stops checking the accessible name; it does not stop the name
 from mattering. So one test still asks by name and the rest go by text, which
 pays the cost once — and a name that drifts from the visible text, which no
 text query can see, still turns one test red.
-`web/src/components/Git/BranchSheet.test.tsx` does this with "names each row by
+`web/src/components/Git/BranchesSection.test.tsx` does this with "names each row by
 its branch", and `web/src/components/ui/Sheet.test.tsx` with "names the box by
 its title and the close button by its job".
 

@@ -140,7 +140,7 @@ it *off* screen (closes the drawer, or collapses the column). Anything that once
 read `isExpanded` as "the sidebar is visible" reads `isOpen` now — the
 [`git.changed` watch](git-ui.md#who-subscribes-to-gitchanged) is the case that
 had to change. The `if (!isExpanded) onClose()` after picking a session, a file
-or a diff is the opposite case and stays: it means "close the drawer behind the
+or one of the Git tab's entries is the opposite case and stays: it means "close the drawer behind the
 pick", and without the guard every pick on a wide screen would collapse the
 column.
 
@@ -617,7 +617,7 @@ The shared definitions, so the common cases cannot drift apart:
 
 - `web/src/components/ui/iconButtonClass.ts` — the inline icon action inside a
   list row, a group header or the slot beside a chat bubble (36 / coarse 44).
-  Shared by both sidebar panels and chat; it moved out of `Git/` once the file
+  Shared by the Files panel, the Git workspace and chat; it moved out of `Git/` once the file
   tree stopped writing its own copy. It takes `grow`, which picks **which of the
   two techniques above** pays for the coarse floor: growing the box by default,
   or `size-9 touch-target` when the box may not change size. Chat's `…` is the

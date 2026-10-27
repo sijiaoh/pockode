@@ -18,8 +18,8 @@ Pockode uses Zustand for state management, pure reducers for event processing, a
 │  ├─ inputStore (localStorage)                               │   │
 │  ├─ questionDraftStore (localStorage)                       │   │
 │  ├─ filesSearchStore (localStorage)                         │   │
-│  ├─ gitPanelStore                                           │   │
 │  ├─ gitSyncStore                                            │   │
+│  ├─ gitCheckoutStore                                        │   │
 │  ├─ gitWriteStore                                           │   │
 │  ├─ portPreviewStore (localStorage)                         │   │
 │  └─ worktreeStore + listeners                               │   │
@@ -61,9 +61,9 @@ Pockode uses Zustand for state management, pure reducers for event processing, a
 | inputStore | The draft, per session: its text, and the files picked for it with their uploads | persist middleware for the text only — neither a `File` nor its `blob:` preview survives a reload. The files are here, not in the bar, because the bar is unmounted mid-draft and an upload outlives it |
 | questionDraftStore | What has been typed into each unanswered question, per session | persist middleware, plus a second map: what came out of storage waits there until the session's unanswered list vouches for it, so an answer to a withdrawn question can never reach the screen ([answering-ui.md §5](../answering-ui.md#5-drafts)) |
 | filesSearchStore | File search options | localStorage init |
-| gitPanelStore | Git panel UI state (History expanded) | Session-scoped override |
-| gitSyncStore | The fetch/pull/push in flight in each worktree, and how the last one ended | Keyed by worktree; outlives the sheet that started the run |
-| gitWriteStore | Each worktree's serial queue of stage/unstage/discard writes, and the paths they have pending | Keyed by worktree; one write at a time, so two taps cannot race |
+| gitSyncStore | The fetch/pull/push in flight in each worktree, whether the user or the Git workspace started it, and how the last one ended | Keyed by worktree; outlives the sheet that started the run |
+| gitCheckoutStore | The branch switch in flight in each worktree, and how the last one failed | Keyed by worktree; outlives the Branches segment that started it |
+| gitWriteStore | Each worktree's serial queue of stage/unstage/discard writes, the paths they have pending, and the Changes list's unacknowledged failure | Keyed by worktree; one write at a time, so two taps cannot race |
 | portPreviewStore | The ports a preview was recently opened for ([port-preview.md](../port-preview.md#opening-a-preview-from-the-app)) | localStorage init; one key for every worktree, since ports belong to the machine |
 | worktreeStore | Current worktree, whether the project is a git repository, and whether the server can run the setup hook | External listener pattern; `isGitRepo` is `null` until the server has answered |
 | themeStore | Theme mode/name | Registry subscription |
@@ -120,7 +120,7 @@ export const worktreeActions = {
 
 wsStore subscribes to these listeners to clean up worktree-scoped subscriptions before worktree switch completes — React's async rendering would be too late. App-level subscriptions (work list/detail, agent role list, settings, worktree list) are preserved across switches because the server keeps pushing to them.
 
-`isGitRepo` has listeners of its own, for the moment the project becomes or stops being a git repository. It is live state the server owns, three-valued — `null` (not answered yet), `true`, `false` — and written only from the server's answers: the `worktree.list` result (`fetchWorktrees`), the `worktree.subscribe` reply, and each `worktree.changed` ([git.md](../git.md#projects-without-a-repository)). A failed `git.*` request never writes it: one failure proves nothing, and the server has already read the answer. `null` is not a stand-in for either answer; git-only UI treats it as "not yet" and stays hidden ([git-ui.md](../git-ui.md#projects-without-a-repository)). Those replies can arrive out of order, so a newer answer cancels the list request in flight before refetching, and `fetchWorktrees` does not write from a request that was cancelled — otherwise the older reply would put the older answer back. `onGitRepoChange` fires only when the value actually changes; its three listeners are the caches that depend on it — `queryClient.ts` invalidates the git queries when a repository appears and removes them when it goes (an invalidation then would refetch through readers that have not yet re-rendered as disabled, straight into `-32002`), wsStore drops the cached `command.list`, which leaves out commands that need git, and `gitSyncStore` drops the last fetch/pull/push outcomes, which belong to the repository before the change.
+`isGitRepo` has listeners of its own, for the moment the project becomes or stops being a git repository. It is live state the server owns, three-valued — `null` (not answered yet), `true`, `false` — and written only from the server's answers: the `worktree.list` result (`fetchWorktrees`), the `worktree.subscribe` reply, and each `worktree.changed` ([git.md](../git.md#projects-without-a-repository)). A failed `git.*` request never writes it: one failure proves nothing, and the server has already read the answer. `null` is not a stand-in for either answer; git-only UI treats it as "not yet" and stays hidden ([git-ui.md](../git-ui.md#projects-without-a-repository)). Those replies can arrive out of order, so a newer answer cancels the list request in flight before refetching, and `fetchWorktrees` does not write from a request that was cancelled — otherwise the older reply would put the older answer back. `onGitRepoChange` fires only when the value actually changes; its five listeners are the caches that depend on it — `queryClient.ts` invalidates the git queries when a repository appears and removes them when it goes (an invalidation then would refetch through readers that have not yet re-rendered as disabled, straight into `-32002`), wsStore drops the cached `command.list`, which leaves out commands that need git, `gitSyncStore` drops the last fetch/pull/push outcomes, and `gitCheckoutStore` and `gitWriteStore` drop their failures — all of which belong to the repository before the change.
 
 **Pattern C: Registry Subscription** — themeStore subscribes to themeRegistry changes:
 
@@ -190,36 +190,7 @@ The reasoning behind all of it — cursors, the two update strategies, what the
 server only approximates — is
 [subscription-system.md](subscription-system.md#paging-and-pushing-on-one-list).
 
-### Why a Store for Panel UI State
-
-`gitPanelStore` holds one field — whether the Git panel's `History` group is
-expanded — which looks like a case for `useState` in `DiffTab`. It is in the
-store instead, because **the decision has to outlive the component, and how long
-the component lives is not this panel's to decide.**
-
-Today it usually survives: `TabbedSidebar` renders all four tabs at once and
-each hides itself with a class, and the drawer form does the same (`Sidebar`
-says why — CSS hiding preserves scroll position). But that is a layout
-implementation detail, not a contract, and it does not hold everywhere:
-crossing the `expanded` breakpoint (1024) swaps `Sidebar` between two structurally
-different trees and remounts everything inside, and an extension that registers
-`SidebarContent` replaces the tabbed sidebar outright. Component state would
-quietly revert the user's explicit choice in exactly those cases, and would
-break the moment someone changes a tab from `hidden` to conditional
-rendering.
-
-The field is `boolean | null`, not `boolean`. `null` means "still following the
-change count" and a boolean means "the user has decided"; `useHistoryExpanded`
-resolves it as `override ?? changeCount === 0`. Storing the resolved boolean
-instead would erase the difference between a default that happens to be
-collapsed and a user who chose collapsed — and a section that keeps re-deciding
-for someone who has already decided is worse than one occasionally in the wrong
-state.
-
-It is deliberately **not** persisted. The default is derived from the working
-tree, which is where the answer usually comes from; a stale choice restored
-across restarts would outlive the situation that produced it. See
-[git-ui.md](../git-ui.md#history).
+### Why a Segment Is Not State
 
 Which segment of the project list is on screen — `Current` or `Closed` — used
 to be a store here (`projectPanelStore`) and is **not state at all any more**:
@@ -233,22 +204,65 @@ The round trip into a work is paid for in the URL instead: the detail carries
 the segment it was opened from, which a store never had to and a component never
 could. See [project-ui.md](../project-ui.md#5-where-the-segment-lives).
 
+The Git workspace's three segments are in the URL for the same reasons
+([git-ui.md](../git-ui.md#routes-segments-and-back)). A store for the Git
+panel's UI, `gitPanelStore`, held whether its `History` group was expanded, and
+went when History stopped being a collapsible group and became a segment.
+
 ### Why a Run in Flight Is a Store
 
-`gitSyncStore` and `gitWriteStore` hold neither server data nor a user
-preference: they hold **a request that is already on its way**, and they are
-stores for a reason the section above does not cover. A run outlives the
-component that started it, and not as an accident of layout — it outlives it *by
-definition*. Staging from an open diff and navigating away unmounts that view
-while the request is in flight; closing the sync sheet mid-push is a documented
-interaction rather than an edge case ([git-ui.md](../git-ui.md#remote-sync)).
+`gitSyncStore`, `gitCheckoutStore` and `gitWriteStore` hold neither server
+data nor a user preference: they hold **a request that is already on its way**,
+and what it left behind. A run outlives the component that started it, and not
+as an accident of layout — it outlives it *by definition*. Staging from an open
+diff and navigating away unmounts that view while the request is in flight;
+closing the sync sheet mid-push is a documented interaction rather than an edge
+case ([git-ui.md](../git-ui.md#remote-sync)); and the Git workspace is a page,
+so its segment control, its top bar and Back all leave a list while something
+started from it is still running
+([git-ui.md](../git-ui.md#results-that-outlive-the-page)).
 Component state would lose the outcome of something that is still happening —
 a silent failure — and there is nothing to ask again, because the request has
 already been made.
 
-Both are keyed by worktree for the same reason: switching worktrees mid-run is
-reachable, and a single record would show A's outcome under B, or let A's run
-disable B's controls.
+All three are keyed by worktree for the same reason: switching worktrees mid-run
+is reachable, and a single record would show A's outcome under B, or let A's run
+disable B's controls. And all three drop their failures — never what is still
+running, whose settling is what lifts the guard — whenever the project starts or
+stops being a repository (`worktreeActions.onGitRepoChange`): a failure is about
+the repository it ran against, and one refused after `.git` went would otherwise
+come back as a banner after a later `git init`.
+
+What each holds:
+
+- **`gitSyncStore`** — per worktree, the running operation, the outcome of the
+  last one, and `auto`: whether that run was the fetch the Git workspace starts
+  by itself on the way in rather than one the user asked for.
+  `startAutoFetch` shares `start`'s guard, so an automatic fetch and a manual
+  one can never run on top of each other, but leaves nothing on success and a
+  failure marked `auto` — which the sync chip carries as a mark rather than
+  the banner a manual failure gets, since nobody asked for that run
+  ([git-ui.md](../git-ui.md#automatic-fetch)). The next run of either kind
+  replaces it.
+- **`gitCheckoutStore`** — per worktree, the branch a switch is running to and
+  how the last switch failed. It has `gitSyncStore`'s shape and semantics —
+  one switch per worktree, a new one clears the last failure, success leaves
+  nothing — and it is a store of its own rather than a field of
+  `gitWriteStore` on purpose. `gitWriteStore` queues the fast local writes —
+  stage, unstage, discard — one after another; a branch switch moves HEAD and
+  the working tree, is guarded rather than queued (a second switch while one
+  runs is refused, not lined up), and is behind a control that cannot be
+  double-tapped into a collision. Put in that queue it would make a tap on a
+  file wait behind a checkout, and put beside it as one more field it would
+  blur what the store is: a queue of quick writes.
+- **`gitWriteStore`** — per worktree, the queue, the paths with a write pending,
+  and `failures`: the Changes list's banner. `fail` replaces whatever failure
+  the worktree was showing, `succeed(paths)` clears it only when the success
+  covers one of the paths that failed — another file succeeding says nothing
+  about the one that did not — and `dismissFailure` is the banner's `✕`. It is
+  here rather than in the list for the reason the pending sets are: the write
+  outlives the list, and a failure that settles while the user is on another
+  segment has to be on screen when they come back.
 
 Keying is not the whole answer for `gitWriteStore`, though, because a queued
 write is not yet a request: the server applies a `git.*` write to whatever
@@ -283,9 +297,8 @@ They are not in a store because **they must not outlive the component**. The
 list is keyed by the session id and remounts on every switch, and every one of
 these values describes a view that no longer exists once it does; a store would
 carry "the user had scrolled up" into a session they have not looked at yet.
-Where `gitPanelStore` holds a decision the user made and the two stores above
-hold a run that is still going, these hold facts about a layout that no longer
-exists.
+Where the stores above hold a run that is still going, these hold facts about
+a layout that no longer exists.
 
 They are refs rather than `useState` because **nothing should re-render when
 they change**, and more than that: they are read at moments a render cannot
@@ -1130,8 +1143,8 @@ Key features:
 | `web/src/lib/extensions.ts` | Extension loading and context creation |
 | `web/src/lib/registries/*.ts` | Runtime registries for themes, UI, settings |
 | `web/src/lib/*Store.ts` | Domain data stores |
-| `web/src/lib/gitPanelStore.ts` | Git panel UI state that must outlive remounts |
-| `web/src/lib/gitWriteStore.ts` | The Git panel's serial queue per worktree, for writes that outlive the view that started them |
+| `web/src/lib/gitSyncStore.ts` / `gitCheckoutStore.ts` | The Git workspace's fetch/pull/push and branch switch per worktree, for runs that outlive the view that started them |
+| `web/src/lib/gitWriteStore.ts` | The Git workspace's serial queue per worktree, for writes — and their failures — that outlive the view that started them |
 | `web/src/lib/worktreeQuery.ts` | Worktree list query key + fetcher, kept together |
 | `web/src/hooks/useSubscription.ts` | Subscription lifecycle hook |
 | `web/src/lib/valueState.ts` | Stored / still coming / not coming, named once for every control that waits on a snapshot ([why three states](subscription-system.md#why-the-controls-wait-for-the-session-to-describe-itself)) |

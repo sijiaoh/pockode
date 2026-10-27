@@ -932,7 +932,7 @@ value to branch on — it embeds an arbitrary error string, and its fixed half i
 free to be reworded. Nothing on the client matches text against a server reply:
 `isAuthRejection` ([above](#auto-reconnect)) reads the code alone, and
 `isRPCTimeout` ([above](#request-timeout)) compares text only after code 0 has
-established that the error never came from the server at all. The git panel's
+established that the error never came from the server at all. The Git workspace's
 `web/src/utils/gitErrors.ts` is where that rule pays off: a refusal is
 recognised by `-32001` and never by its wording, so a git command that really
 ran and failed with prose that happens to read the same is still shown as what
