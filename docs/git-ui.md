@@ -48,7 +48,7 @@ Navigation is `AppShell`'s, on the Stories screen's model:
 
 **Switching worktree inside the workspace stays inside it**, at the same segment's list: every worktree has one, where the path or hash of the detail on screen may not exist over there (`useWorktree.select` reads the current route). Each worktree's own failures stay with it ([Results that outlive the page](#results-that-outlive-the-page)), and the automatic fetch decides again for the new worktree ([Automatic fetch](#automatic-fetch)).
 
-**There is no composer anywhere in the workspace.** The chat input is hidden on every layer — `git`, `diff`, `commit`, `commit-diff`, `commit-file` are in `ChatPanel`'s `inputBarHiddenOverlays`, beside the Stories pages. The workspace's bottom edge belongs to Git's own primary actions — the commit bar, the review's `Discard file` / `Stage & next` bar, `New branch…` — and a composer under them would be a third stacked bar on a phone, all of them competing for the thumb. Viewing a diff or a commit — and a commit's file layers — used to keep the composer under it; those are the places this is a change. To talk to the agent the user goes back, which the app header's `←` always offers; and the way Git hands work to the agent is planned to bring the user back to the session's input with a prefilled message, rather than to grow a second input here.
+**There is no composer anywhere in the workspace.** The chat input is hidden on every layer — `git`, `diff`, `commit`, `commit-diff`, `commit-file` are in `ChatPanel`'s `inputBarHiddenOverlays`, beside the Stories pages. The workspace's bottom edge belongs to Git's own primary actions — the commit bar, the review's `Discard file` / `Stage & next` bar, `New branch…` — and a composer under them would be a third stacked bar on a phone, all of them competing for the thumb. Viewing a diff or a commit — and a commit's file layers — used to keep the composer under it; those are the places this is a change. To talk to the agent the user goes back, which the app header's `←` always offers; and the way Git hands work to the agent is the [prefill handoff](agent-handoff-ui.md#1-prefill-handoff), which brings the user back to the session's input with a prefilled message, rather than a second input here. The mechanism is in place; the entries that will call it are still to come.
 
 ## The top bar
 
@@ -635,7 +635,11 @@ session in which the sidebar was never on screen.
 So it runs while somebody can read the answer, and stops otherwise:
 
 ```typescript
-enabled: isGitRepo && ((!SidebarContent && isOpen) || activeGitSegment !== null)
+enabled: isGitRepo && (
+  (!SidebarContent && isOpen) ||
+  activeGitSegment !== null ||
+  reviewRowCanShow
+)
 ```
 
 - `isGitRepo` — **there is a repository to watch**, confirmed by the server;
@@ -657,6 +661,13 @@ enabled: isGitRepo && ((!SidebarContent && isOpen) || activeGitSegment !== null)
   would freeze exactly while they were being used. It stands outside the
   `!SidebarContent` term on purpose: a custom sidebar takes away the badge, not
   the workspace.
+- `reviewRowCanShow` — **the chat's review row may show**: the strip's
+  `N changed files · Review` reads the same count, on a phone with the drawer
+  closed. `ChatPanel` owns the gate and reports it up through `AppShell`; it is
+  only true while no turn is open, so a turn ending resubscribes and refetches
+  at the moment the row may appear. Outside `!SidebarContent` like the
+  workspace's term
+  ([agent-handoff-ui.md §2.4](agent-handoff-ui.md#24-keeping-the-count-live)).
 
 Re-enabling resubscribes, and `useGitWatch` refreshes on `onSubscribed`, so
 opening the drawer, expanding the column or entering the workspace shows a
@@ -724,7 +735,7 @@ The session filter's worktree dimension is not in the table: it reads which work
 
 Deliberately excluded, to keep the workspace at "the everyday operations, done well": conflict resolution, interactive rebase, cherry-pick, revert, tags, stash, branch deletion, remote management, submodule commit/branch/sync, and a global toast system.
 
-Left for later rather than excluded — the workspace was built as a frame for them, with its current contents moved in unchanged: in the review ([git-changes-ui.md](git-changes-ui.md#the-review-layer)), per-hunk staging, sending a selection of changes to the agent, and an entry into it from chat; a commit graph; branch details — per-branch ahead/behind, deletion, and the right column Branches does not have yet; AI help such as a generated commit message, which would bring the user back to the session's input with it prefilled ([no composer](#routes-segments-and-back)); a conflict-resolution mode; and resizable columns and keyboard navigation.
+Left for later rather than excluded — the workspace was built as a frame for them, with its current contents moved in unchanged: in the review ([git-changes-ui.md](git-changes-ui.md#the-review-layer), which the chat already enters through the strip's [review row](agent-handoff-ui.md#2-the-review-row)), per-hunk staging and sending a selection of changes to the agent; a commit graph; branch details — per-branch ahead/behind, deletion, and the right column Branches does not have yet; AI help that hands work to the agent — the entries the [prefill handoff](agent-handoff-ui.md#1-prefill-handoff) was built for, which bring the user back to the session's input with a message prefilled; a conflict-resolution mode; and resizable columns and keyboard navigation.
 
 ---
 
