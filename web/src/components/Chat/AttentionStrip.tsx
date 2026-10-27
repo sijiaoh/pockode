@@ -4,11 +4,13 @@ import {
 	CircleHelp,
 	CornerDownRight,
 	Eye,
+	FileDiff,
 	Hourglass,
 	Lock,
 	X,
 } from "lucide-react";
-import { type MouseEvent, useRef, useState } from "react";
+import { type MouseEvent, useId, useRef, useState } from "react";
+import { describeChangeCount } from "../../hooks/useGitChangeCount";
 import { ACTIVITY_VIEW, watchingLabel } from "../../lib/activity";
 import { toolSummary } from "../../lib/toolSummary";
 import { useWorkStore } from "../../lib/workStore";
@@ -47,7 +49,7 @@ interface Props {
 	/**
 	 * Opens the answer panel. The strip is the one way back into it once it has
 	 * been closed, which is why this row's action is a button rather than the
-	 * underlined text the other three wear.
+	 * underlined text the others wear.
 	 */
 	onAnswer?: () => void;
 	/**
@@ -93,6 +95,14 @@ interface Props {
 	watchedStories?: WatchedStory[];
 	/** Opens a watched story's detail, from the row's Details list. */
 	onOpenWorkDetail?: (workId: string) => void;
+	/**
+	 * The worktree's changed files, passed only while the review row may show —
+	 * a gate the caller holds, because the same flag keeps the count live
+	 * (docs/agent-handoff-ui.md §2.3). Absent or 0, the row does not exist.
+	 */
+	changeCount?: number;
+	/** Opens the review at the first changed file. */
+	onReview?: () => void;
 }
 
 /**
@@ -138,7 +148,7 @@ function permissionRowEntry(
 const STRIP_LINE =
 	"mx-auto flex max-w-3xl flex-wrap items-center justify-center gap-1.5 px-3 py-2 text-th-text-muted text-xs";
 
-// One bordered row above the composer, whichever of the four things it says.
+// One bordered row above the composer, whichever of its rows it is.
 const STRIP_FRAME = "shrink-0 border-th-border border-t";
 
 // `touch-target` over a text line rather than a taller box: the strip's height
@@ -426,6 +436,49 @@ function WatchingRow({
 	);
 }
 
+// The review row's line: one line that truncates its statement, where the
+// other rows wrap — the action has to stay beside the count it acts on.
+const REVIEW_LINE =
+	"mx-auto flex max-w-3xl items-center justify-center gap-1.5 px-3 py-2 text-th-text-muted text-xs";
+
+/**
+ * The lowest row of all: the agent is idle and left files changed. It says the
+ * worktree's live state, never the turn's — the transcript's change cards are
+ * that history — so it goes the moment the tree is clean or a turn opens
+ * (docs/agent-handoff-ui.md §2). No `aria-live`, like the tab's badge: the
+ * count reaches a screen reader when the reader reaches the row.
+ */
+function ReviewRow({
+	count,
+	onReview,
+}: {
+	count: number;
+	onReview: () => void;
+}) {
+	// The count is what the button acts on, and a reader tabbing to it skips
+	// the statement beside it.
+	const countId = useId();
+	return (
+		<div className={STRIP_FRAME}>
+			<div className={REVIEW_LINE}>
+				<FileDiff className="size-3 shrink-0" aria-hidden="true" />
+				<span id={countId} className="min-w-0 truncate">
+					{describeChangeCount(count)}
+				</span>
+				<span aria-hidden="true">·</span>
+				<button
+					type="button"
+					aria-describedby={countId}
+					onClick={onReview}
+					className={`${STRIP_ACTION} shrink-0`}
+				>
+					Review
+				</button>
+			</div>
+		</div>
+	);
+}
+
 /**
  * One line between the transcript and the composer, saying what needs the user
  * (docs/lifecycle-ui.md §2.2).
@@ -459,6 +512,8 @@ function AttentionStrip({
 	promptError,
 	watchedStories,
 	onOpenWorkDetail,
+	changeCount,
+	onReview,
 }: Props) {
 	const [expanded, setExpanded] = useState(false);
 
@@ -466,9 +521,10 @@ function AttentionStrip({
 		turn.phase === "blocked" ? leadingBlocker(turn.blockers ?? []) : undefined;
 	const unanswered = turn.unanswered?.length ?? 0;
 
-	// The line is one of five things, and the branches below are in that order:
+	// The line is one of six things, and the branches below are in that order:
 	// permission, unanswered questions, the send receipt, then a background wait
-	// or the stories being watched — two activity leaves, so never both.
+	// or the stories being watched — two activity leaves, so never both — and
+	// last the files the idle agent left changed.
 	//
 	// A permission request comes first, and now for a sharper reason than
 	// precedence: it is the only row the composer is disabled under, and the only
@@ -549,7 +605,7 @@ function AttentionStrip({
 		return (
 			<div className={STRIP_FRAME}>
 				<div className={STRIP_LINE}>
-					{/* Muted like the other three glyphs: `text-th-warning` on a glyph
+					{/* Muted like the other glyphs: `text-th-warning` on a glyph
 					    is under the 3:1 non-text floor in every light variant
 					    (docs/project-ui.md §3 holds the numbers), so a hue here would
 					    say nothing in half the themes while costing the strip its one
@@ -565,7 +621,7 @@ function AttentionStrip({
 					    this one is the action itself, and it is the entry point a user
 					    is meant to find without hunting. Breaking the grammar once,
 					    for the one row that is a call to action rather than a
-					    statement, is what keeps the other three readable as
+					    statement, is what keeps the others readable as
 					    statements. */}
 					<button
 						type="button"
@@ -601,13 +657,20 @@ function AttentionStrip({
 	}
 
 	if (!blocker) {
-		if (!watchedStories?.length) return null;
-		return (
-			<WatchingRow
-				stories={watchedStories}
-				onOpenWorkDetail={onOpenWorkDetail}
-			/>
-		);
+		if (watchedStories?.length) {
+			return (
+				<WatchingRow
+					stories={watchedStories}
+					onOpenWorkDetail={onOpenWorkDetail}
+				/>
+			);
+		}
+		// Last, and in practice alone: the caller only passes a count while no
+		// turn is open, nothing is watched and no question waits.
+		if (changeCount && onReview) {
+			return <ReviewRow count={changeCount} onReview={onReview} />;
+		}
+		return null;
 	}
 
 	const since = isInstant(turn.since) && formatTime(turn.since);

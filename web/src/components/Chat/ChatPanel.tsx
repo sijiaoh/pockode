@@ -22,6 +22,7 @@ import {
 } from "../../hooks/useFileDragZone";
 import { useForkSession } from "../../hooks/useForkSession";
 import { useForkSupport } from "../../hooks/useForkSupport";
+import { useGitChangeCount } from "../../hooks/useGitChangeCount";
 import { useShortViewport } from "../../hooks/useShortViewport";
 import { useViewedSession } from "../../hooks/useViewedSession";
 import { sessionActivity } from "../../lib/activity";
@@ -235,6 +236,13 @@ interface Props {
 	view?: SessionView | null;
 	/** Opens the viewed session in its own worktree; see `ReadOnlyBar`. */
 	onOpenSessionThere?: () => void;
+	/** Opens the review from the strip's review row; see `AttentionStrip`. */
+	onOpenReview?: () => void;
+	/**
+	 * Told whether the review row may show, so the sidebar's Git watch keeps its
+	 * count live meanwhile. Must be stable.
+	 */
+	onReviewRowCanShowChange?: (canShow: boolean) => void;
 }
 
 function ChatPanel({
@@ -265,6 +273,8 @@ function ChatPanel({
 	onCloseGitFile,
 	view = null,
 	onOpenSessionThere,
+	onOpenReview,
+	onReviewRowCanShowChange,
 }: Props) {
 	const isReadOnly = view !== null;
 	const projectTitle = useWSStore((state) => state.projectTitle);
@@ -372,10 +382,9 @@ function ChatPanel({
 	const sessionWork = useWorkStore((s) =>
 		sessionWorkId ? s.works.find((w) => w.id === sessionWorkId) : undefined,
 	);
+	const activity = sessionActivity(turn, sessionWork, sessionDetail?.watching);
 	const watchedStories =
-		sessionActivity(turn, sessionWork, sessionDetail?.watching) === "watching"
-			? sessionDetail?.watched_stories
-			: undefined;
+		activity === "watching" ? sessionDetail?.watched_stories : undefined;
 
 	// The cards behind those blockers, for the strip to answer from. Looked up
 	// at every depth: a subagent's request is filed under its Task call.
@@ -805,6 +814,37 @@ function ChatPanel({
 	}, [sessionId, isChatPending, isReadOnly, overlayOpen, openAnswerPanel]);
 
 	const unanswered = turn.unanswered ?? [];
+
+	// Whether the strip may say "N changed files · Review": the strip is up
+	// (no overlay, a writable session that has loaded), the agent is idle by the
+	// composer's own test — `turnOpen` takes the optimistic half too, so the row
+	// goes in the frame Send is pressed — and by the session's activity, which
+	// is not `watching` or `waiting_children` (other agents may still be editing
+	// this tree), and no question waits, panel up or not
+	// (docs/agent-handoff-ui.md §2.3). The detail has to have landed: until then
+	// the turn is a placeholder that says idle whatever the session is doing.
+	// So does a work's session whose work the store has not paged in, which
+	// costs the activity its wait: not knowing whether it waits on its tasks,
+	// the row stays away.
+	// Everything but the count, which is reported up so the sidebar keeps the
+	// count live while this holds: the gate must not depend on the answer it
+	// enables.
+	const reviewRowCanShow =
+		!overlay &&
+		!isChatPending &&
+		!isReadOnly &&
+		isSessionDetailLoaded &&
+		isGitRepo === true &&
+		!turnOpen &&
+		activity === "idle" &&
+		(!sessionWorkId || sessionWork !== undefined) &&
+		unanswered.length === 0;
+	useEffect(() => {
+		if (!reviewRowCanShow) return;
+		onReviewRowCanShowChange?.(true);
+		return () => onReviewRowCanShowChange?.(false);
+	}, [reviewRowCanShow, onReviewRowCanShowChange]);
+	const changeCount = useGitChangeCount();
 
 	// The seen set below holds only what is still waiting. A question that
 	// leaves the list leaves the set too, so one coming back — its answer
@@ -1504,6 +1544,8 @@ function ChatPanel({
 							promptError={promptError ?? undefined}
 							watchedStories={watchedStories}
 							onOpenWorkDetail={onOpenWorkDetail}
+							changeCount={reviewRowCanShow ? changeCount : undefined}
+							onReview={onOpenReview}
 						/>
 					)}
 					{/* Held back by an overlay like the composer's errors: the session

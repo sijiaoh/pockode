@@ -1,13 +1,13 @@
 import { useMutation } from "@tanstack/react-query";
-import { useCallback, useRef } from "react";
+import { useCallback } from "react";
 import { attachmentActions } from "../lib/inputStore";
+import { createSession } from "../lib/sessionCreate";
 import {
 	selectSessionDetailStatus,
 	useSessionDetailStore,
 } from "../lib/sessionDetailStore";
-import { prependSession, useSessionStore } from "../lib/sessionStore";
+import { useSessionStore } from "../lib/sessionStore";
 import { wsActions } from "../lib/wsStore";
-import type { SessionListItem } from "../types/message";
 import { useSessionSubscription } from "./useSessionSubscription";
 
 interface UseSessionOptions {
@@ -31,7 +31,6 @@ export function useSession({
 	const hasPaged = useSessionStore((s) => s.hasPaged);
 	const retryLoadMore = useSessionStore((s) => s.retryLoadMore);
 	const showTaskSessions = useSessionStore((s) => s.showTaskSessions);
-	const updateSessions = useSessionStore((s) => s.updateSessions);
 	// The filter is the server's, so the toggle is a subscription parameter
 	// rather than a predicate applied to what came back. Deciding it here would
 	// mean holding the whole work list to invert it, which makes this list wrong
@@ -48,29 +47,12 @@ export function useSession({
 	// (docs/list-paging-ui.md §2.1).
 	const hasAnyUnread = useSessionStore((s) => s.hasUnread);
 
-	const createMutation = useMutation({
-		mutationFn: wsActions.createSession,
-		onSuccess: (newSession) => {
-			// Optimistically add session to avoid redirect race condition.
-			// The subscription notification will deduplicate.
-			updateSessions((old) => prependSession(old, newSession));
-		},
-	});
-
-	// Every entry point to session creation goes through here, so a second caller
-	// arriving while a create is in flight joins that one instead of starting
-	// another: a double tap on "+" would otherwise leave a stray session behind,
-	// and an effect that re-runs mid-request would do the same.
-	const createInFlight = useRef<Promise<SessionListItem> | null>(null);
+	// The create itself, and the joining of concurrent callers, is shared with
+	// the entries that create without this hook (`createSession`); the mutation
+	// only holds the failure for the shell's error screen.
+	const createMutation = useMutation({ mutationFn: createSession });
 	const { mutateAsync: runCreate } = createMutation;
-	const createSession = useCallback(() => {
-		if (!createInFlight.current) {
-			createInFlight.current = runCreate().finally(() => {
-				createInFlight.current = null;
-			});
-		}
-		return createInFlight.current;
-	}, [runCreate]);
+	const create = useCallback(() => runCreate(), [runCreate]);
 
 	const deleteMutation = useMutation({
 		mutationFn: wsActions.deleteSession,
@@ -144,7 +126,7 @@ export function useSession({
 		redirectSessionId,
 		needsNewSession,
 		refresh,
-		createSession,
+		createSession: create,
 		createError: createMutation.error,
 		clearCreateError: createMutation.reset,
 		deleteSession: (id: string) => deleteMutation.mutateAsync(id),

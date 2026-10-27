@@ -23,6 +23,7 @@ import { useInputHistory } from "../../hooks/useInputHistory";
 import type { ChatAttachment } from "../../lib/chatAttachments";
 import {
 	attachmentActions,
+	type ComposerReveal,
 	type DraftAttachment,
 	inputActions,
 	useInputStore,
@@ -155,6 +156,36 @@ function InputBar({
 		if (disabled) return;
 		if (!isPrimaryPointerCoarse) textareaRef.current?.focus();
 	}, [sessionId, disabled, focusRequest]);
+
+	// A prefill handed in from outside the chat, made noticeable once
+	// (docs/agent-handoff-ui.md §1.3). Taken only once the bar is enabled: a
+	// session just created is still resolving when the bar first renders it.
+	const reveal = useInputStore((state) => state.reveals[sessionId]);
+	const [arrival, setArrival] = useState<ComposerReveal | null>(null);
+	// Ahead of the effect below, so a reveal waiting for the session being
+	// opened is set after the previous session's is cleared.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: an arrival belongs to the session it was made for
+	useEffect(() => {
+		setArrival(null);
+	}, [sessionId]);
+
+	useEffect(() => {
+		if (!reveal || disabled) return;
+		inputActions.takeReveal(sessionId);
+		const textarea = textareaRef.current;
+		if (textarea) {
+			// Explicitly at the end: after an append, a caret anywhere else would be
+			// in the middle of the user's own words. The pointer gate is the
+			// autofocus rule's.
+			if (!isPrimaryPointerCoarse) {
+				textarea.focus();
+				const end = textarea.value.length;
+				textarea.setSelectionRange(end, end);
+			}
+			textarea.scrollTop = textarea.scrollHeight;
+		}
+		setArrival(reveal);
+	}, [reveal, disabled, sessionId, isPrimaryPointerCoarse]);
 
 	useEffect(() => {
 		if (!isPaletteOpen) return;
@@ -534,8 +565,20 @@ function InputBar({
 			    do the palette and the menu, which hang from this box. */}
 			<div
 				ref={containerRef}
-				className="relative mx-auto w-full max-w-3xl px-3 py-2 sm:px-4 sm:py-3"
+				className={`relative mx-auto w-full max-w-3xl px-3 py-2 sm:px-4 sm:py-3 ${
+					arrival ? "composer-arrival" : ""
+				}`}
+				onAnimationEnd={(e) => {
+					if (e.target === e.currentTarget) setArrival(null);
+				}}
 			>
+				<span className="sr-only" aria-live="polite">
+					{arrival === "ready"
+						? "Message ready to send."
+						: arrival === "added"
+							? "Added to your message."
+							: ""}
+				</span>
 				{hasFiles && (
 					<ComposerAttachments
 						items={files}

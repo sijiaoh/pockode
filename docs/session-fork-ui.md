@@ -502,8 +502,8 @@ Three things to be exact about:
   and the server does not know it exists. It is written to `lib/inputStore`, the
   per-session store that already holds "what this session has typed but not
   sent" — no new state was introduced for this, and no history record was
-  touched (AGENTS.md, *Events are events, state is state*). The store now has a
-  second writer; it still has exactly one reader, `InputBar`.
+  touched (AGENTS.md, *Events are events, state is state*). The store has
+  several writers; `InputBar` is still the only thing that shows it.
 - **It does not happen on an assistant anchor.** That message is kept by the
   fork, so there is nothing to hand back.
 - **A command comes back as typed.** A message that invoked a

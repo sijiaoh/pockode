@@ -21,6 +21,7 @@ import {
 	checkboxWrite,
 	collectChanges,
 	filesUnder,
+	firstReviewTarget,
 	orderChanges,
 	reviewSideOf,
 	sumLines,
@@ -307,7 +308,8 @@ function ChangesSection({
 
 			<CommitBar
 				onReview={() => {
-					if (files[0]) selectFile(files[0]);
+					const first = firstReviewTarget(files, view);
+					if (first) onSelectFile(first.path, first.staged);
 				}}
 			/>
 

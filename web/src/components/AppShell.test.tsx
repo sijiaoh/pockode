@@ -8,6 +8,7 @@ import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { JSONRPCErrorCode, JSONRPCErrorException } from "json-rpc-2.0";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { gitStatusQueryKey } from "../hooks/gitQueries";
 import { useAuthStore } from "../lib/authStore";
 import { useSessionDetailStore } from "../lib/sessionDetailStore";
 import { useSessionStore } from "../lib/sessionStore";
@@ -23,6 +24,7 @@ import {
 	makeSessionDetail,
 	makeSessionListItem,
 } from "../test/sessionFixtures";
+import type { GitStatus } from "../types/git";
 import type { SessionListChangedNotification } from "../types/message";
 
 // ChatPanel is the attach point; render the session it was handed and whether
@@ -53,6 +55,8 @@ vi.mock("./Chat", () => ({
 		onSelectDiffFile,
 		onCloseGitFile,
 		onCloseOverlay,
+		onOpenReview,
+		onReviewRowCanShowChange,
 		overlay,
 		view,
 	}: {
@@ -76,6 +80,8 @@ vi.mock("./Chat", () => ({
 			next: { path: string; staged: boolean } | null,
 		) => void;
 		onCloseOverlay?: () => void;
+		onOpenReview?: () => void;
+		onReviewRowCanShowChange?: (canShow: boolean) => void;
 		overlay?: { type: string; scheduleId?: string; segment?: string } | null;
 		view?: { worktree: string; exists: boolean } | null;
 	}) => (
@@ -155,6 +161,15 @@ vi.mock("./Chat", () => ({
 			</button>
 			<button type="button" onClick={() => onCloseOverlay?.()}>
 				Leave the page
+			</button>
+			<button type="button" onClick={() => onOpenReview?.()}>
+				Review from the chat
+			</button>
+			<button type="button" onClick={() => onReviewRowCanShowChange?.(true)}>
+				Agent goes idle
+			</button>
+			<button type="button" onClick={() => onReviewRowCanShowChange?.(false)}>
+				Agent starts a turn
 			</button>
 		</div>
 	),
@@ -303,6 +318,9 @@ const mockDetailSubscribe = vi.fn(async (sessionId: string, _cb: unknown) => {
 const mockDetailUnsubscribe = vi.fn(async () => {});
 const mockListModels = vi.fn(async () => ({ claude: [], codex: [] }));
 const mockListEfforts = vi.fn(async () => ({ claude: [], codex: [] }));
+const mockGetStatus = vi.fn(
+	async (): Promise<GitStatus> => ({ staged: [], unstaged: [] }),
+);
 
 const ws = vi.hoisted(() => ({ status: "connected" }));
 
@@ -318,6 +336,7 @@ vi.mock("../lib/wsStore", async (importOriginal) => ({
 				sessionDetailUnsubscribe: mockDetailUnsubscribe,
 				listModels: mockListModels,
 				listEfforts: mockListEfforts,
+				getStatus: mockGetStatus,
 			},
 		}),
 	wsActions: {
@@ -327,13 +346,17 @@ vi.mock("../lib/wsStore", async (importOriginal) => ({
 	},
 }));
 
-function renderAppShell(initialPath: string) {
+const shell = { queryClient: undefined as QueryClient | undefined };
+
+function renderAppShell(initialPath: string, gitStatus?: GitStatus) {
 	const queryClient = new QueryClient({
 		defaultOptions: {
 			queries: { retry: false },
 			mutations: { retry: false },
 		},
 	});
+	if (gitStatus) queryClient.setQueryData(gitStatusQueryKey, gitStatus);
+	shell.queryClient = queryClient;
 	const router = createRouter({
 		routeTree,
 		history: createMemoryHistory({ initialEntries: [initialPath] }),
@@ -982,6 +1005,108 @@ describe("AppShell Git workspace", () => {
 		);
 
 		router.history.back();
+		await waitFor(() =>
+			expect(router.state.location.pathname).toBe("/w/A/git"),
+		);
+	});
+
+	// The chat's review row starts where the list's Review does, and with no
+	// list behind it: leaving it goes to the list, and from there to the chat.
+	it("opens the review from the chat at the list's first file", async () => {
+		const user = userEvent.setup();
+		const router = renderAppShell("/w/A/s/a1", {
+			staged: [{ path: "src/b.ts", status: "M" }],
+			unstaged: [{ path: "src/a.ts", status: "M" }],
+		});
+		await waitFor(() => expect(panel()).toHaveTextContent("a1"));
+
+		await user.click(screen.getByRole("button", { name: "Agent goes idle" }));
+		await user.click(
+			screen.getByRole("button", { name: "Review from the chat" }),
+		);
+		await waitFor(() =>
+			expect(router.state.location.pathname).toBe("/w/A/unstaged/src/a.ts"),
+		);
+		expect(search(router)).toEqual({ session: "a1" });
+
+		await user.click(
+			screen.getByRole("button", { name: "Discarded src/a.ts" }),
+		);
+		await waitFor(() =>
+			expect(router.state.location.pathname).toBe("/w/A/git"),
+		);
+		router.history.back();
+		await waitFor(() =>
+			expect(router.state.location.pathname).toBe("/w/A/s/a1"),
+		);
+	});
+
+	// The row drew from the cache as it was; a refresh that has been asked for
+	// since is what the press goes by — here, the file the row counted is
+	// committed and another one changed.
+	it("opens the file the status says at the press, not the one cached", async () => {
+		const user = userEvent.setup();
+		mockGetStatus.mockResolvedValueOnce({
+			staged: [],
+			unstaged: [{ path: "src/c.ts", status: "M" }],
+		});
+		const router = renderAppShell("/w/A/s/a1", {
+			staged: [],
+			unstaged: [{ path: "src/a.ts", status: "M" }],
+		});
+		await waitFor(() => expect(panel()).toHaveTextContent("a1"));
+		await act(() =>
+			shell.queryClient?.invalidateQueries({
+				queryKey: gitStatusQueryKey,
+				refetchType: "none",
+			}),
+		);
+
+		await user.click(screen.getByRole("button", { name: "Agent goes idle" }));
+		await user.click(
+			screen.getByRole("button", { name: "Review from the chat" }),
+		);
+		await waitFor(() =>
+			expect(router.state.location.pathname).toBe("/w/A/unstaged/src/c.ts"),
+		);
+	});
+
+	// A press whose read outlives the row — the user sent meanwhile — must not
+	// push the review over the turn they just started.
+	it("drops a press the chat has moved past while the status was read", async () => {
+		const user = userEvent.setup();
+		let answer: (status: GitStatus) => void = () => {};
+		mockGetStatus.mockImplementationOnce(
+			() =>
+				new Promise<GitStatus>((resolve) => {
+					answer = resolve;
+				}),
+		);
+		const router = renderAppShell("/w/A/s/a1");
+		await waitFor(() => expect(panel()).toHaveTextContent("a1"));
+		await user.click(screen.getByRole("button", { name: "Agent goes idle" }));
+		await user.click(
+			screen.getByRole("button", { name: "Review from the chat" }),
+		);
+		await user.click(
+			screen.getByRole("button", { name: "Agent starts a turn" }),
+		);
+
+		await act(async () =>
+			answer({ staged: [], unstaged: [{ path: "src/a.ts", status: "M" }] }),
+		);
+		expect(router.state.location.pathname).toBe("/w/A/s/a1");
+	});
+
+	it("opens the Changes list from the chat once the tree is clean", async () => {
+		const user = userEvent.setup();
+		const router = renderAppShell("/w/A/s/a1", { staged: [], unstaged: [] });
+		await waitFor(() => expect(panel()).toHaveTextContent("a1"));
+
+		await user.click(screen.getByRole("button", { name: "Agent goes idle" }));
+		await user.click(
+			screen.getByRole("button", { name: "Review from the chat" }),
+		);
 		await waitFor(() =>
 			expect(router.state.location.pathname).toBe("/w/A/git"),
 		);

@@ -92,7 +92,9 @@ return as chips without uploading.
 
 - **Never over the user's words.** An empty input takes the message as is; one
   with text in it keeps that text first, and the message follows a blank line
-  later. Files go after the ones already there.
+  later. Files go after the ones already there. The text half is
+  `appendToDraft` (`utils/draftText.ts`), the one rule the
+  [prefill handoff](agent-handoff-ui.md#12-what-is-written) uses too.
 - **Only what is missing.** Text already in the draft is not added again, and a
   file already there by id is not either. Pressing twice repeats nothing, and
   after a reload — the draft keeps its text and loses its files — a press brings

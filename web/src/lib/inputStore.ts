@@ -41,13 +41,28 @@ interface InputState {
 	 * Not persisted: neither the `File` nor its `blob:` URL survives a reload.
 	 */
 	attachments: Record<string, DraftAttachment[]>;
+	/**
+	 * A prefill waiting for the composer to show it arrived, keyed by session:
+	 * written by the handoff before it navigates, taken by `InputBar` when it
+	 * next renders that session. Passing device state, so not persisted, and not
+	 * the draft's: the draft is what was written, this is that it was just
+	 * written (docs/agent-handoff-ui.md §1.3).
+	 */
+	reveals: Record<string, ComposerReveal>;
 }
+
+/**
+ * How the prefill landed: `ready` when the draft is the prefill and nothing
+ * else, `added` when it went in beside the user's own words.
+ */
+export type ComposerReveal = "ready" | "added";
 
 export const useInputStore = create<InputState>()(
 	persist(
 		() => ({
 			inputs: {},
 			attachments: {},
+			reveals: {},
 		}),
 		{
 			name: "input_drafts",
@@ -66,6 +81,19 @@ export const inputActions = {
 			const { [sessionId]: _, ...rest } = state.inputs;
 			return { inputs: rest };
 		}),
+	requestReveal: (sessionId: string, reveal: ComposerReveal) =>
+		useInputStore.setState((state) => ({
+			reveals: { ...state.reveals, [sessionId]: reveal },
+		})),
+	takeReveal: (sessionId: string): ComposerReveal | undefined => {
+		const reveal = useInputStore.getState().reveals[sessionId];
+		if (reveal === undefined) return undefined;
+		useInputStore.setState((state) => {
+			const { [sessionId]: _, ...rest } = state.reveals;
+			return { reveals: rest };
+		});
+		return reveal;
+	},
 };
 
 const controllers = new Map<string, AbortController>();

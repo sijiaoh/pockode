@@ -8,6 +8,7 @@ import {
 	checkboxWrite,
 	collectChanges,
 	filesUnder,
+	firstReviewTarget,
 	lineStatOf,
 	orderChanges,
 	sumLines,
@@ -111,6 +112,35 @@ describe("line counts", () => {
 		expect(lineStatOf(binary)).toEqual({ lines: null, binary: true });
 		expect(sumLines([both, binary])).toEqual({ additions: 4, deletions: 2 });
 		expect(sumLines([binary])).toBeNull();
+	});
+});
+
+describe("firstReviewTarget", () => {
+	const files = [
+		file("web/z.ts", "staged"),
+		file("b.ts", "both"),
+		file("a/c.ts"),
+	];
+
+	it("starts at the first file the list draws, in the view the list is in", () => {
+		expect(firstReviewTarget(files, "flat")?.path).toBe("a/c.ts");
+		expect(firstReviewTarget(files.slice(0, 2), "flat")?.path).toBe("b.ts");
+		expect(firstReviewTarget(files.slice(0, 2), "tree")?.path).toBe("web/z.ts");
+	});
+
+	it("opens the side the review would open from the list", () => {
+		expect(firstReviewTarget([file("b.ts", "both")], "flat")).toEqual({
+			path: "b.ts",
+			staged: false,
+		});
+		expect(firstReviewTarget([file("b.ts", "staged")], "flat")).toEqual({
+			path: "b.ts",
+			staged: true,
+		});
+	});
+
+	it("has nowhere to start on a clean tree", () => {
+		expect(firstReviewTarget([], "tree")).toBeNull();
 	});
 });
 

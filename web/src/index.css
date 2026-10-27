@@ -1479,6 +1479,38 @@ samp {
 }
 
 /* =============================================================================
+ * COMPOSER ARRIVAL
+ *
+ * The ring a prefill handed in from outside the chat puts on the composer, once
+ * (docs/agent-handoff-ui.md §1.3). The jump's grammar in `th-accent`: an
+ * arrival, not a warning. An animation rather than a class swap with a
+ * transition, so the ring is there at once and only its going fades; its end is
+ * what `InputBar` takes the class off on.
+ * ============================================================================= */
+
+.composer-arrival {
+	animation: composer-arrival 1500ms ease-out;
+}
+
+@keyframes composer-arrival {
+	0%,
+	30% {
+		box-shadow: inset 0 0 0 2px var(--th-accent);
+	}
+	100% {
+		box-shadow: inset 0 0 0 2px transparent;
+	}
+}
+
+/* Shows and goes with no fade, like the jump's; still an animation, so its end
+ * still arrives. */
+@media (prefers-reduced-motion: reduce) {
+	.composer-arrival {
+		animation-timing-function: step-end;
+	}
+}
+
+/* =============================================================================
  * MESSAGE MENU TRIGGER
  *
  * The `…` beside a chat bubble is mounted, not revealed: the slot is always

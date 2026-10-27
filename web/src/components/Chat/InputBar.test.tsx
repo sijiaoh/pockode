@@ -99,7 +99,7 @@ describe("InputBar", () => {
 	});
 
 	afterEach(() => {
-		useInputStore.setState({ inputs: {}, attachments: {} });
+		useInputStore.setState({ inputs: {}, attachments: {}, reveals: {} });
 		localStorage.clear();
 		vi.clearAllMocks();
 	});
@@ -852,6 +852,86 @@ describe("InputBar", () => {
 
 			if (focused) expect(screen.getByRole("textbox")).toHaveFocus();
 			else expect(screen.getByRole("textbox")).not.toHaveFocus();
+		});
+	});
+
+	// A prefill handed in from outside the chat (docs/agent-handoff-ui.md §1.3).
+	describe("prefill arrival", () => {
+		function prefilled(text: string, reveal: "ready" | "added") {
+			useInputStore.setState({
+				inputs: { [TEST_SESSION_ID]: text },
+				reveals: { [TEST_SESSION_ID]: reveal },
+			});
+		}
+
+		it("puts the caret at the end, rings the composer and says so once", () => {
+			prefilled("Mine\n\nExplain this", "added");
+			render(<InputBar sessionId={TEST_SESSION_ID} onSend={sendAccepted} />);
+
+			const textbox = screen.getByRole<HTMLTextAreaElement>("textbox");
+			expect(textbox).toHaveFocus();
+			expect(textbox.selectionStart).toBe(textbox.value.length);
+			expect(screen.getByText("Added to your message.")).toBeInTheDocument();
+			expect(textbox.closest(".composer-arrival")).not.toBeNull();
+			expect(useInputStore.getState().reveals).toEqual({});
+		});
+
+		it("raises no keyboard on a coarse pointer, and still rings", () => {
+			vi.mocked(useHasCoarsePointer).mockReturnValue(true);
+			prefilled("Explain this", "ready");
+			render(<InputBar sessionId={TEST_SESSION_ID} onSend={sendAccepted} />);
+
+			const textbox = screen.getByRole("textbox");
+			expect(textbox).not.toHaveFocus();
+			expect(screen.getByText("Message ready to send.")).toBeInTheDocument();
+			expect(textbox.closest(".composer-arrival")).not.toBeNull();
+		});
+
+		// A session just created is still resolving when the bar first draws it.
+		it("waits for the bar to be enabled", () => {
+			prefilled("Explain this", "ready");
+			const { rerender } = render(
+				<InputBar sessionId={TEST_SESSION_ID} onSend={sendAccepted} disabled />,
+			);
+			expect(screen.queryByText("Message ready to send.")).toBeNull();
+			expect(useInputStore.getState().reveals[TEST_SESSION_ID]).toBe("ready");
+
+			rerender(<InputBar sessionId={TEST_SESSION_ID} onSend={sendAccepted} />);
+			expect(screen.getByText("Message ready to send.")).toBeInTheDocument();
+		});
+
+		it("puts the ring and the announcement away once the ring has faded", () => {
+			prefilled("Explain this", "ready");
+			render(<InputBar sessionId={TEST_SESSION_ID} onSend={sendAccepted} />);
+			const ring = screen.getByRole("textbox").closest(".composer-arrival");
+			if (!ring) throw new Error("no ring");
+
+			fireEvent.animationEnd(ring);
+
+			expect(ring).not.toHaveClass("composer-arrival");
+			expect(screen.queryByText("Message ready to send.")).toBeNull();
+		});
+
+		it("does not carry an arrival over to the next session", () => {
+			prefilled("Explain this", "ready");
+			const { rerender } = render(
+				<InputBar sessionId={TEST_SESSION_ID} onSend={sendAccepted} />,
+			);
+
+			rerender(<InputBar sessionId="next" onSend={sendAccepted} />);
+
+			expect(screen.queryByText("Message ready to send.")).toBeNull();
+			expect(
+				screen.getByRole("textbox").closest(".composer-arrival"),
+			).toBeNull();
+		});
+
+		it("leaves another session's arrival alone", () => {
+			useInputStore.setState({ reveals: { other: "ready" } });
+			render(<InputBar sessionId={TEST_SESSION_ID} onSend={sendAccepted} />);
+
+			expect(screen.queryByText("Message ready to send.")).toBeNull();
+			expect(useInputStore.getState().reveals).toEqual({ other: "ready" });
 		});
 	});
 

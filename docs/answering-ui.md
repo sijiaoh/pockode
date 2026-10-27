@@ -200,7 +200,7 @@ to find without hunting, so it is drawn as a small filled control:
 `rounded bg-th-accent px-2 py-0.5 text-th-accent-text`, `touch-target` for its
 hit area the way the text actions get theirs. Breaking the grammar once, for the
 one row that is a call to action rather than a statement, is what keeps the
-other three readable as statements.
+others readable as statements.
 
 `text-th-accent-text` and **not** `text-th-bg`: no stylesheet declares a
 `--color-th-bg`, so a utility naming it is dropped and the button inherits the
@@ -209,7 +209,7 @@ strip's muted text on an accent fill — a contrast failure nothing goes red ove
 guards, and `colorTokens.test.ts` now guards against naming a colour that does
 not exist at all.
 
-**The glyph stays muted like the other three.** `text-th-warning` on a glyph is
+**The glyph stays muted like the others.** `text-th-warning` on a glyph is
 under the 3:1 non-text floor in every light variant
 ([project-ui.md §3](project-ui.md#3-the-row) holds the numbers), so a hue here
 would be saying nothing in half the themes while costing the strip its one

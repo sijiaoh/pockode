@@ -37,6 +37,7 @@ import {
 	makeSessionDetail,
 	makeSessionListItem,
 } from "../../test/sessionFixtures";
+import type { GitStatus } from "../../types/git";
 import type {
 	ServerNotification,
 	SessionDetail,
@@ -140,6 +141,10 @@ const mockState = vi.hoisted(() => ({
 		(_sessionId: string, _effort: string): Promise<void> => Promise.resolve(),
 	),
 	startWork: vi.fn(() => Promise.resolve()),
+	// Read only once the project is a repository; the review row's count.
+	getStatus: vi.fn(
+		(): Promise<GitStatus> => Promise.resolve({ staged: [], unstaged: [] }),
+	),
 	forkSession: vi.fn(),
 	// The read-only pair: one session's metadata and one page of its transcript,
 	// out of a worktree the connection is not bound to.
@@ -183,6 +188,7 @@ vi.mock("../../lib/wsStore", () => {
 		setSessionModel: mockState.setSessionModel,
 		setSessionEffort: mockState.setSessionEffort,
 		startWork: mockState.startWork,
+		getStatus: mockState.getStatus,
 		forkSession: mockState.forkSession,
 		listAgents: mockState.listAgents,
 		sessionViewGet: mockState.sessionViewGet,
@@ -478,6 +484,161 @@ describe("ChatPanel", () => {
 			await waitForHistoryLoad();
 
 			expect(screen.queryByText(/^Watching/)).toBeNull();
+		});
+	});
+
+	describe("the files the idle agent left changed", () => {
+		const changed: GitStatus = {
+			staged: [{ path: "b.ts", status: "M" }],
+			unstaged: [
+				{ path: "b.ts", status: "M" },
+				{ path: "a.ts", status: "?" },
+			],
+		};
+
+		beforeEach(() => {
+			mockState.getStatus.mockResolvedValue(changed);
+			worktreeActions.setIsGitRepo(true);
+		});
+		afterEach(() =>
+			mockState.getStatus.mockResolvedValue({ staged: [], unstaged: [] }),
+		);
+
+		it("says how many once the agent is idle, and opens the review", async () => {
+			const user = userEvent.setup();
+			const onOpenReview = vi.fn();
+			const onCanShow = vi.fn();
+			render(
+				<ChatPanel
+					{...defaultProps}
+					onOpenReview={onOpenReview}
+					onReviewRowCanShowChange={onCanShow}
+				/>,
+			);
+
+			expect(await screen.findByText("2 changed files")).toBeInTheDocument();
+			expect(onCanShow).toHaveBeenLastCalledWith(true);
+			await user.click(screen.getByRole("button", { name: "Review" }));
+			expect(onOpenReview).toHaveBeenCalledOnce();
+		});
+
+		// The optimistic half of `turnOpen`: gone in the frame Send is pressed,
+		// and the sidebar's watch told to stop with it.
+		it("goes the moment the user sends", async () => {
+			const user = userEvent.setup();
+			const onCanShow = vi.fn();
+			render(
+				<ChatPanel
+					{...defaultProps}
+					onOpenReview={vi.fn()}
+					onReviewRowCanShowChange={onCanShow}
+				/>,
+			);
+			await screen.findByText("2 changed files");
+
+			await user.type(screen.getByRole("textbox"), "commit it");
+			await user.click(screen.getByRole("button", { name: /Send/ }));
+
+			expect(screen.queryByText("2 changed files")).toBeNull();
+			expect(onCanShow).toHaveBeenLastCalledWith(false);
+		});
+
+		// With the answer panel up the questions row is hidden, and this row
+		// must not rise into its place under the card.
+		it("stands down while a question waits", async () => {
+			const onCanShow = vi.fn();
+			seedSessionDetail({
+				turn: {
+					phase: "idle",
+					open: false,
+					since: "",
+					unanswered: [
+						{
+							request_id: "q1",
+							header: "Database",
+							question: "Which database should I use?",
+							options: [],
+							multi_select: false,
+							asked_at: "2024-01-01T00:00:00Z",
+						},
+					],
+				},
+			});
+			render(
+				<ChatPanel
+					{...defaultProps}
+					onOpenReview={vi.fn()}
+					onReviewRowCanShowChange={onCanShow}
+				/>,
+			);
+			await waitForHistoryLoad();
+
+			expect(onCanShow).not.toHaveBeenCalledWith(true);
+		});
+
+		// The gate is what the sidebar's watch follows, so it is asserted
+		// directly: the row would also stay away for want of a count.
+		it("is not offered in a project without a repository", async () => {
+			const onCanShow = vi.fn();
+			act(() => worktreeActions.setIsGitRepo(false));
+			render(
+				<ChatPanel
+					{...defaultProps}
+					onOpenReview={vi.fn()}
+					onReviewRowCanShowChange={onCanShow}
+				/>,
+			);
+			await waitForHistoryLoad();
+
+			expect(screen.queryByText(/changed files/)).toBeNull();
+			expect(onCanShow).not.toHaveBeenCalledWith(true);
+		});
+
+		// Until the detail lands the turn is a placeholder that says idle, and a
+		// running session would flash the row for a round trip.
+		it("waits for the session's detail to say it is idle", async () => {
+			const onCanShow = vi.fn();
+			useSessionDetailStore.getState().clear();
+			render(
+				<ChatPanel
+					{...defaultProps}
+					onOpenReview={vi.fn()}
+					onReviewRowCanShowChange={onCanShow}
+				/>,
+			);
+			await waitForHistoryLoad();
+			expect(onCanShow).not.toHaveBeenCalledWith(true);
+
+			act(() => seedSessionDetail());
+			expect(await screen.findByText("2 changed files")).toBeInTheDocument();
+		});
+
+		// A story waiting on its tasks is not done with the tree: they may be
+		// editing it.
+		it("stands down while the chat's work waits on its subtasks", async () => {
+			const onCanShow = vi.fn();
+			useWorkStore.getState().setWorks([
+				{
+					id: "w1",
+					type: "story",
+					title: "Ship the importer",
+					status: "active",
+					wait: "child",
+					activity: "waiting_children",
+					updated_at: "2024-01-01T00:00:00Z",
+				},
+			]);
+			seedSessionDetail({ work_id: "w1" });
+			render(
+				<ChatPanel
+					{...defaultProps}
+					onOpenReview={vi.fn()}
+					onReviewRowCanShowChange={onCanShow}
+				/>,
+			);
+			await waitForHistoryLoad();
+
+			expect(onCanShow).not.toHaveBeenCalledWith(true);
 		});
 	});
 

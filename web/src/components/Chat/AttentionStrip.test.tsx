@@ -818,4 +818,52 @@ describe("AttentionStrip", () => {
 			expect(screen.queryByText(/Watching/)).toBeNull();
 		});
 	});
+
+	describe("the files the idle agent left changed", () => {
+		it("says how many, in the badge's words, and opens the review", async () => {
+			const user = userEvent.setup();
+			const onReview = vi.fn();
+			render(
+				<AttentionStrip
+					turn={turn("idle")}
+					onJumpToRequest={vi.fn()}
+					changeCount={120}
+					onReview={onReview}
+				/>,
+			);
+
+			expect(screen.getByText("99+ changed files")).toBeInTheDocument();
+			expect(
+				screen.getByRole("button", { name: "Review" }),
+			).toHaveAccessibleDescription("99+ changed files");
+			await user.click(screen.getByRole("button", { name: "Review" }));
+			expect(onReview).toHaveBeenCalledOnce();
+		});
+
+		it("does not exist at zero", () => {
+			const { container } = render(
+				<AttentionStrip
+					turn={turn("idle")}
+					onJumpToRequest={vi.fn()}
+					changeCount={0}
+					onReview={vi.fn()}
+				/>,
+			);
+			expect(container).toBeEmptyDOMElement();
+		});
+
+		it("gives way to the watching row", () => {
+			render(
+				<AttentionStrip
+					turn={turn("idle")}
+					onJumpToRequest={vi.fn()}
+					watchedStories={[{ id: "st1", title: "Ship the importer" }]}
+					changeCount={3}
+					onReview={vi.fn()}
+				/>,
+			);
+			expect(screen.getByText("Watching 1 story.")).toBeInTheDocument();
+			expect(screen.queryByText(/changed files/)).toBeNull();
+		});
+	});
 });

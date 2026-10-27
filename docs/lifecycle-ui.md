@@ -436,7 +436,7 @@ because both are one-line statements about the transcript rather than controls,
 and the pane should have one vocabulary for them. It sits below the list (not at
 the top like the fork banner) because it describes the transcript's *end*.
 
-Five things it can say, in the order it prefers them:
+Six things it can say, in the order it prefers them:
 
 | State | Copy | Trailing action |
 |---|---|---|
@@ -445,9 +445,13 @@ Five things it can say, in the order it prefers them:
 | a message went into a turn already open, unread so far | "Sent — the agent has not read it yet." | — |
 | `background` | "Waiting on a background task — nothing to answer." | "Details" (expands) |
 | `watching` | "Watching 1 story." / "Watching {n} stories." | "Details" (expands) |
+| idle, files changed in the worktree | `FileDiff` `describeChangeCount(n)`: "1 changed file" / "{n} changed files" / "99+ changed files" | "Review" |
 
 The layout, copy and controls of the question row are
 [answering-ui.md §2](answering-ui.md#2-the-strip); only its rank is decided here.
+So are the review row's, in
+[agent-handoff-ui.md §2](agent-handoff-ui.md#2-the-review-row): it shows only
+while the session is idle and no question waits, so in practice it is alone.
 
 Permission is first, and now for a sharper reason than the precedence §1.2 uses:
 it is the only row left that Send is refused under (§2.3), and it is also the

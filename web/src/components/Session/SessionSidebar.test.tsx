@@ -94,6 +94,7 @@ interface RenderOptions {
 	isOpen?: boolean;
 	isExpanded?: boolean;
 	activeGitSegment?: GitSegment | null;
+	reviewRowCanShow?: boolean;
 }
 
 function renderSidebar(
@@ -102,6 +103,7 @@ function renderSidebar(
 		isOpen = true,
 		isExpanded = false,
 		activeGitSegment = null,
+		reviewRowCanShow = false,
 	}: RenderOptions = {},
 ) {
 	return render(
@@ -115,6 +117,7 @@ function renderSidebar(
 				onDeleteSession={vi.fn()}
 				onOpenGitSegment={vi.fn()}
 				activeGitSegment={activeGitSegment}
+				reviewRowCanShow={reviewRowCanShow}
 				onSelectFile={vi.fn()}
 				activeFilePath={null}
 				activeFileEdit={false}
@@ -383,6 +386,18 @@ describe("the git watcher", () => {
 			unmount();
 
 			renderSidebar(vi.fn(), { activeGitSegment: "history" });
+			expect(gitWatchEnabled).toBe(true);
+		} finally {
+			resetSidebarUIConfig();
+		}
+	});
+
+	// The chat's review row reads the count on a phone with the drawer
+	// closed, and under an extension's sidebar, which takes the badge only.
+	it("keeps watching while the chat's review row may show", () => {
+		setSidebarUIConfig({ SidebarContent: () => null });
+		try {
+			renderSidebar(vi.fn(), { isOpen: false, reviewRowCanShow: true });
 			expect(gitWatchEnabled).toBe(true);
 		} finally {
 			resetSidebarUIConfig();
