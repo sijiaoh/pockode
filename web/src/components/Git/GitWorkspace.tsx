@@ -40,8 +40,12 @@ interface Props {
 	onSelectSegment: (segment: GitSegment) => void;
 	onSelectFile: (path: string, staged: boolean) => void;
 	onSelectCommit: (hash: string) => void;
-	/** Takes the workspace off a diff whose file has stopped having one. */
-	onCloseFile: (path: string, worktree: string) => void;
+	/** Moves the review off a file just discarded from the list. */
+	onCloseFile: (
+		path: string,
+		worktree: string,
+		next: { path: string; staged: boolean } | null,
+	) => void;
 }
 
 /**
@@ -87,12 +91,15 @@ function GitWorkspace({
 				return (
 					// One instance per file: a stage answered for one file must not
 					// report on, or navigate away from, the next one opened beside
-					// the list.
+					// the list. Per file and not per side: switching sides is a move
+					// within the file's review, and staging the file flips it.
 					<DiffView
-						key={`${detail.staged ? "staged" : "unstaged"}:${detail.path}`}
+						key={detail.path}
 						path={detail.path}
 						staged={detail.staged}
-						onBack={backToList}
+						// Not `backToList`: the review replaces its way out, since it
+						// is one history entry (docs/git-changes-ui.md).
+						showBack={!isExpanded}
 					/>
 				);
 			case "commit":
@@ -165,6 +172,7 @@ function GitWorkspace({
 								<ChangesSection
 									onSelectFile={onSelectFile}
 									onCloseFile={onCloseFile}
+									onViewHistory={() => onSelectSegment("history")}
 									activeFile={activeFile}
 								/>
 							) : segment === "history" ? (

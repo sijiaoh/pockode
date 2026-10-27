@@ -11,7 +11,9 @@ import { invalidateGitQueries } from "../../hooks/gitQueries";
 import { useGitBranches } from "../../hooks/useGitBranches";
 import {
 	describeChangeCount,
+	describeChangeLines,
 	useGitChangeCount,
+	useGitChangeLines,
 } from "../../hooks/useGitChangeCount";
 import { useSyncRun } from "../../lib/gitSyncStore";
 import { useWorktreeStore } from "../../lib/worktreeStore";
@@ -27,6 +29,7 @@ import { formatBadgeCount, Spinner } from "../ui";
 import { headLabel } from "./BranchBar";
 import BranchName from "./BranchName";
 import HeadPlaceholder from "./HeadPlaceholder";
+import LineCounts, { formatLineCounts } from "./LineCounts";
 
 interface Props {
 	onOpenSegment: (segment: GitSegment) => void;
@@ -47,6 +50,8 @@ function GitTab({ onOpenSegment, activeSegment }: Props) {
 	);
 	const { isActive } = useSidebarRefresh("git", refreshAll);
 	const changeCount = useGitChangeCount();
+	const changeLines = useGitChangeLines();
+	const hasLines = changeLines !== null && formatLineCounts(changeLines) !== "";
 
 	return (
 		<div className={isActive ? "flex flex-col" : "hidden"}>
@@ -59,7 +64,13 @@ function GitTab({ onOpenSegment, activeSegment }: Props) {
 					onClick={() => onOpenSegment("changes")}
 					ariaLabel={
 						changeCount
-							? `Changes, ${describeChangeCount(changeCount)}`
+							? [
+									"Changes",
+									describeChangeCount(changeCount),
+									hasLines && describeChangeLines(changeLines),
+								]
+									.filter(Boolean)
+									.join(", ")
 							: undefined
 					}
 				>
@@ -71,8 +82,11 @@ function GitTab({ onOpenSegment, activeSegment }: Props) {
 							No changes
 						</span>
 					) : changeCount !== undefined ? (
-						<span className="ml-auto text-xs tabular-nums text-th-text-secondary">
-							{formatBadgeCount(changeCount)}
+						<span className="ml-auto flex min-w-0 items-baseline gap-2">
+							<span className="text-xs tabular-nums text-th-text-secondary">
+								{formatBadgeCount(changeCount)}
+							</span>
+							{hasLines && <LineCounts lines={changeLines} />}
 						</span>
 					) : null}
 				</Entry>

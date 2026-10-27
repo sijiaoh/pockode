@@ -24,7 +24,7 @@ interface Props {
 	submodules: StagedSubmodule[];
 	/** null before the first commit, where there is nothing to amend. */
 	lastCommit: LastCommit | null;
-	/** Opened from the HEAD row's amend action rather than from `Commit (n)`. */
+	/** Opened from the HEAD row's amend action rather than from `Commit n files`. */
 	amendInitially: boolean;
 	onClose: () => void;
 	onCommit: (message: string, amend: boolean) => Promise<void>;

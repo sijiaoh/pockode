@@ -4,14 +4,20 @@ import { describeCommitAction } from "../../types/git";
 import { BottomActionBar } from "../ui";
 import GitCommitSheet from "./GitCommitSheet";
 
+interface Props {
+	/** Opens the review at the first file in list order. */
+	onReview: () => void;
+}
+
 /**
- * The Changes list's fixed bottom row: one button, for as long as there is
- * something to commit or something on its way to being committed.
+ * The Changes list's fixed bottom row — `Review` and the commit button — for
+ * as long as there is something to commit or something on its way to being
+ * committed.
  *
  * It renders outside ChangesSection's loading/error branch, so the action stays
  * reachable however far the user has scrolled down the list.
  */
-function CommitBar() {
+function CommitBar({ onReview }: Props) {
 	const { data: status } = useGitStatus();
 	const [isOpen, setIsOpen] = useState(false);
 	const hintId = useId();
@@ -40,15 +46,24 @@ function CommitBar() {
 							{action.hint.text}
 						</span>
 					)}
-					<button
-						type="button"
-						onClick={() => setIsOpen(true)}
-						disabled={!action.enabled}
-						aria-describedby={action.hint ? hintId : undefined}
-						className="flex min-h-[44px] w-full items-center justify-center rounded-lg bg-th-accent text-sm font-medium text-th-accent-text transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
-					>
-						{action.label}
-					</button>
+					<div className="flex gap-2">
+						<button
+							type="button"
+							onClick={onReview}
+							className="flex min-h-[44px] max-w-[33%] shrink-0 items-center justify-center rounded-lg bg-th-bg-tertiary px-4 text-sm text-th-text-primary transition-opacity hover:opacity-90 focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent"
+						>
+							Review
+						</button>
+						<button
+							type="button"
+							onClick={() => setIsOpen(true)}
+							disabled={!action.enabled}
+							aria-describedby={action.hint ? hintId : undefined}
+							className="flex min-h-[44px] min-w-0 flex-1 items-center justify-center rounded-lg bg-th-accent text-sm font-medium text-th-accent-text transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+						>
+							{action.label}
+						</button>
+					</div>
 				</BottomActionBar>
 			)}
 

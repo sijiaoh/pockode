@@ -79,11 +79,13 @@ vi.mock("./DiffView", async () => {
 	const { useEffect } = await import("react");
 	const Page = page("diff");
 	return {
-		default: (props: { onBack?: () => void }) => {
+		// The review leaves by itself, replacing; all it is told is whether to
+		// offer the way back.
+		default: ({ showBack }: { showBack?: boolean }) => {
 			useEffect(() => {
 				diffMounts.count++;
 			}, []);
-			return <Page {...props} />;
+			return <Page onBack={showBack ? () => {} : undefined} />;
 		},
 	};
 });
@@ -165,9 +167,8 @@ describe("GitWorkspace below expanded", () => {
 
 	// A layer is the page: no segment control, no list, and its way back is the
 	// list it was opened from rather than the chat.
-	it("shows a diff on its own, going back to Changes", async () => {
-		const user = userEvent.setup();
-		const { onSelectSegment } = renderWorkspace(DIFF);
+	it("shows a diff on its own, with a way back", () => {
+		renderWorkspace(DIFF);
 
 		expect(screen.getByText("diff page")).toBeVisible();
 		// Still mounted under the layer, for its scroll position, but covered:
@@ -184,8 +185,9 @@ describe("GitWorkspace below expanded", () => {
 			screen.getByRole("button", { name: "Branches, currently on main" }),
 		).toBeInTheDocument();
 
-		await user.click(screen.getByRole("button", { name: "diff back" }));
-		expect(onSelectSegment).toHaveBeenCalledWith("changes");
+		expect(
+			screen.getByRole("button", { name: "diff back" }),
+		).toBeInTheDocument();
 	});
 
 	it("goes back from a commit to History", async () => {

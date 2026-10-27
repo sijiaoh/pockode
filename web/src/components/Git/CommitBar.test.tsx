@@ -26,9 +26,9 @@ describe("CommitBar", () => {
 	it("commits what is staged", async () => {
 		const user = userEvent.setup();
 		status = { staged: [file("a.ts"), file("b.ts")], unstaged: [] };
-		render(<CommitBar />);
+		render(<CommitBar onReview={() => {}} />);
 
-		const button = screen.getByRole("button", { name: "Commit (2)" });
+		const button = screen.getByRole("button", { name: "Commit 2 files" });
 		expect(button).toBeEnabled();
 
 		await user.click(button);
@@ -39,14 +39,14 @@ describe("CommitBar", () => {
 	// what it is waiting for rather than appearing under their thumb mid-stage.
 	it("waits, visibly, while nothing is staged yet", () => {
 		status = { staged: [], unstaged: [file("a.ts")] };
-		render(<CommitBar />);
+		render(<CommitBar onReview={() => {}} />);
 
 		const button = screen.getByRole("button", { name: "Commit" });
 		expect(button).toBeDisabled();
-		expect(button).toHaveAccessibleDescription("Stage a file to commit");
-		// The stage buttons it names are on screen right above the bar; the line
+		expect(button).toHaveAccessibleDescription("Check a file to commit");
+		// The checkboxes it names are on screen right above the bar; the line
 		// would only repeat them, so it is not worth 20px of a 288px panel.
-		expect(screen.getByText("Stage a file to commit")).toHaveClass("sr-only");
+		expect(screen.getByText("Check a file to commit")).toHaveClass("sr-only");
 	});
 
 	// Staged rows on screen with no working commit button, and nothing else on
@@ -57,7 +57,7 @@ describe("CommitBar", () => {
 			unstaged: [],
 			submodules: { "vendor/sdk": { staged: [file("sub.ts")], unstaged: [] } },
 		};
-		render(<CommitBar />);
+		render(<CommitBar onReview={() => {}} />);
 
 		expect(screen.getByRole("button", { name: "Commit" })).toBeDisabled();
 		const hint = screen.getByText(/Only submodule files are staged/);
@@ -68,7 +68,7 @@ describe("CommitBar", () => {
 	// lives on the commit it amends.
 	it("renders nothing on a clean tree", () => {
 		status = { staged: [], unstaged: [] };
-		render(<CommitBar />);
+		render(<CommitBar onReview={() => {}} />);
 
 		expect(commitButton()).not.toBeInTheDocument();
 	});
@@ -78,18 +78,29 @@ describe("CommitBar", () => {
 	it("keeps an open sheet when the tree goes clean underneath it", async () => {
 		const user = userEvent.setup();
 		status = { staged: [file("a.ts")], unstaged: [] };
-		const { rerender } = render(<CommitBar />);
-		await user.click(screen.getByRole("button", { name: "Commit (1)" }));
+		const { rerender } = render(<CommitBar onReview={() => {}} />);
+		await user.click(screen.getByRole("button", { name: "Commit 1 file" }));
 
 		status = { staged: [], unstaged: [] };
-		rerender(<CommitBar />);
+		rerender(<CommitBar onReview={() => {}} />);
 
 		expect(commitButton()).not.toBeInTheDocument();
 		expect(screen.getByRole("dialog")).toBeInTheDocument();
 	});
 
+	it("reviews beside the commit button", async () => {
+		const user = userEvent.setup();
+		const onReview = vi.fn();
+		status = { staged: [], unstaged: [file("a.ts")] };
+		render(<CommitBar onReview={onReview} />);
+
+		await user.click(screen.getByRole("button", { name: "Review" }));
+
+		expect(onReview).toHaveBeenCalled();
+	});
+
 	it("renders nothing while the status cannot be read", () => {
-		render(<CommitBar />);
+		render(<CommitBar onReview={() => {}} />);
 
 		expect(commitButton()).not.toBeInTheDocument();
 	});

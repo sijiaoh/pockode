@@ -4,12 +4,13 @@ import {
 	ChevronLeft,
 	ChevronRight,
 	FileClock,
+	WrapText,
 } from "lucide-react";
 import { useMemo } from "react";
 import { useCommitDiff } from "../../hooks/useCommitDiff";
 import { useGitCommit } from "../../hooks/useGitCommit";
 import { useRouteState } from "../../hooks/useRouteState";
-import { useDiffSettings } from "../../lib/diffSettingsStore";
+import { useDiffSettings, useGitDiffWrap } from "../../lib/diffSettingsStore";
 import { overlayToNavigation } from "../../lib/navigation";
 import { splitPath } from "../../utils/path";
 import { FilePageHeader } from "../Layout/PageHeader";
@@ -30,6 +31,7 @@ function CommitDiffView({ hash, path }: Props) {
 	const navigate = useNavigate();
 	const { worktree, sessionId } = useRouteState();
 	const { hideWhitespace, toggleHideWhitespace } = useDiffSettings();
+	const { wrap, toggleWrap } = useGitDiffWrap();
 	const { data: commit } = useGitCommit(hash);
 	const {
 		data: diff,
@@ -135,6 +137,12 @@ function CommitDiffView({ hash, path }: Props) {
 						>
 							<FileClock className="h-4 w-4" aria-hidden="true" />
 						</button>
+						<ToggleIconButton
+							icon={WrapText}
+							pressed={wrap}
+							onClick={toggleWrap}
+							label={wrap ? "Don't wrap lines" : "Wrap lines"}
+						/>
 						<ToggleIconButton
 							icon={ALargeSmall}
 							pressed={hideWhitespace}

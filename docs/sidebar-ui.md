@@ -17,7 +17,8 @@ Git tab's shape. It does **not** describe the Files panel's or the Git
 workspace's own shape — [file.md](file.md) owns the Files panel (backend,
 search behaviour, the entry `…` menu and everything that hangs off it, the
 upload queue) and [git-ui.md](git-ui.md) owns the Git workspace (routes and
-segments, the top bar, layout, group headers, commit bar, amend, the sheets).
+segments, the top bar, layout, commit bar, amend, the sheets), with its
+Changes list in [git-changes-ui.md](git-changes-ui.md).
 A rule stated here is referenced from there, not copied. Nor does it describe how either panel answers the *viewport*:
 the width ladder, the pointer gates and the hit-area floors are
 [responsive-ui.md](responsive-ui.md)'s. The 240px below is a **container** width,
@@ -130,9 +131,9 @@ Five rungs. Existing Tailwind and `th-*` tokens only; nothing here is a new toke
 |------|----------|---------|
 | **L1** Primary action | At most one per panel, and only while it applies | `min-h-[44px] w-full rounded-lg bg-th-accent text-sm font-medium text-th-accent-text` |
 | **L2** Panel header row | The Git workspace's top bar, search row, the worktree switcher | `min-h-[44px]`, label `text-sm text-th-text-primary`, icons `text-th-text-muted`, bottom border `border-th-border` where the row is the whole header — the Files search row omits it, since the option chips render directly beneath it and a border would cut the header block in half. The worktree switcher is the header *control* GitHub Desktop puts above its list: a transparent button, `th-bg-tertiary` only on hover or while open, name `text-sm font-medium`, and 36px rather than 44 under a fine pointer, since it is a control and not a row — see [The top of the sidebar](#the-top-of-the-sidebar) |
-| **L3** Group header | `Staged`, `Changes` | `min-h-[32px] px-3 text-xs uppercase tracking-wide text-th-text-muted`, no hover fill. A header carrying L5 actions grows to their 36px — the touch target wins over the nominal height — and grows again where a finger may land ([responsive-ui.md](responsive-ui.md#hit-areas-and-spacing)) |
-| **L4** List row | Tree node, changed file, commit | `min-h-[44px]`, `text-sm text-th-text-secondary`; active `bg-th-bg-tertiary text-th-text-primary` |
-| **L5** Inline icon action | Entry menu, stage, unstage, discard, collapse, dismiss | 36×36, no border and no fill at rest (a hover fill is allowed). Two shapes, by where the control sits: square where it sits inside a **list** row or a group header, over the list itself (`rounded-md text-th-text-secondary`, defined once in `ui/iconButtonClass.ts`), round where it does not — the project root's `…` in the L2 search row, the session filter beside New Chat, the search field's clear button inside the input (`rounded-full text-th-text-muted hover:bg-th-bg-tertiary`). The filter is the `…`'s classes with `hover:` and `active:` behind `enabled:` and a `disabled:` dimming added, since it alone is disabled while its list is stale. 36 is the visual size only; the hit area a coarse pointer gets on top of it is [responsive-ui.md](responsive-ui.md#hit-areas-and-spacing)'s |
+| **L3** Group header | The session filter's `Worktrees` / `Deleted` (the Git workspace's `Staged` / `Changes` were these until its list became one, under an L4-height header of its own — [git-changes-ui.md](git-changes-ui.md#the-list-header)) | `min-h-[32px] px-3 text-xs uppercase tracking-wide text-th-text-muted`, no hover fill. A header carrying L5 actions grows to their 36px — the touch target wins over the nominal height — and grows again where a finger may land ([responsive-ui.md](responsive-ui.md#hit-areas-and-spacing)) |
+| **L4** List row | Tree node, changed file (two lines tall, with its checkbox and `⋯` beside the row's button), commit | `min-h-[44px]`, `text-sm text-th-text-secondary`; active `bg-th-bg-tertiary text-th-text-primary` |
+| **L5** Inline icon action | Entry menu, a Git file row's checkbox and `⋯`, collapse, dismiss | 36×36, no border and no fill at rest (a hover fill is allowed). Two shapes, by where the control sits: square where it sits inside a **list** row or a group header, over the list itself (`rounded-md text-th-text-secondary`, defined once in `ui/iconButtonClass.ts`), round where it does not — the project root's `…` in the L2 search row, the session filter beside New Chat, the search field's clear button inside the input (`rounded-full text-th-text-muted hover:bg-th-bg-tertiary`). The filter is the `…`'s classes with `hover:` and `active:` behind `enabled:` and a `disabled:` dimming added, since it alone is disabled while its list is stale. 36 is the visual size only; the hit area a coarse pointer gets on top of it is [responsive-ui.md](responsive-ui.md#hit-areas-and-spacing)'s |
 
 The two rungs that matter most are L3 and L5, because that is where the panels
 had it wrong: the old `▾ Changes` header was L2-weight text on an L2-height row,
@@ -456,8 +457,11 @@ the same shape as the Project tab: something to read, and doors.
   `describeChangeCount`. A clean tree reads a muted `No changes`, never `0`; a
   status with no answer yet, or a failed one, shows nothing — like the badge,
   this is not where a failed read is reported, and the workspace says it
-  ([git-ui.md](git-ui.md#the-change-count-on-the-tab)). There is no diffstat
-  yet: `git.status` does not carry one.
+  ([git-ui.md](git-ui.md#the-change-count-on-the-tab)). Beside the number, the
+  lines added and removed across every file (`useGitChangeLines`), in the
+  Changes list header's muted figures — `5  +142 −37`, named `Changes, 5 changed
+  files, 142 lines added, 37 removed` — and left out, never `+0 −0`, when
+  nothing could be counted ([git-changes-ui.md](git-changes-ui.md#the-sidebars-overview)).
 - **The segment the workspace is on is lit** — `bg-th-bg-tertiary` and
   `aria-current="page"` — and still pressable: it is the way back to that
   segment's list.
@@ -509,7 +513,7 @@ The rules above are general; each surface's shape is documented with it.
 | Panel | Document | What it now covers that this file does not |
 |-------|----------|--------------------------------------------|
 | Files | [file.md](file.md) | The row's [`…` menu](file.md#entry-actions) and the create / delete flows it opens, the [two upload paths](file.md#uploading) and why neither leaves a destination behind. The search row's narrow-width fix and the wrapping option chips |
-| Git | [git-ui.md](git-ui.md) | The workspace's routes, segments and Back, the top bar and its sync chip, the automatic fetch, the one-layer and two-column layouts, the L3 group headers (sticky, `Staged` / `Changes`), the commit bar's render conditions, amend on HEAD's row, `canPull`, the sync sheet's state-dependent button list, the `Sheet` overflow root cause, and which results outlive the page. Also the [change count on the tab](git-ui.md#the-change-count-on-the-tab) — what it counts, and why the `git.changed` subscription that feeds it sits in the sidebar rather than in the workspace |
+| Git | [git-ui.md](git-ui.md) | The workspace's routes, segments and Back, the top bar and its sync chip, the automatic fetch, the one-layer and two-column layouts, the commit bar's render conditions, amend on HEAD's row, `canPull`, the sync sheet's state-dependent button list, the `Sheet` overflow root cause, and which results outlive the page. Also the [change count on the tab](git-ui.md#the-change-count-on-the-tab) — what it counts, and why the `git.changed` subscription that feeds it sits in the sidebar rather than in the workspace |
 
 Two of the redesign's outcomes reach past the panel they were found in, so they
 are flagged here rather than left where they were diagnosed:
@@ -523,9 +527,9 @@ are flagged here rather than left where they were diagnosed:
   Files or Git rule, and it applies to the project screen too, so the session
   sidebar's infinite scroll — and what it does to the live updates the list is
   pushed — lives in [list-paging-ui.md](list-paging-ui.md).
-- **Sticky group headers are still owed a check on a real device.** The
-  reasoning behind them ([git-ui.md](git-ui.md#group-headers)) is from source
-  and spec, not from a rendered page.
+- **The Changes list's sticky header is still owed a check on a real device.**
+  The reasoning behind it ([git-changes-ui.md](git-changes-ui.md#the-list-header))
+  is from source and spec, not from a rendered page.
 
 ---
 

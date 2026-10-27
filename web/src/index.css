@@ -876,6 +876,50 @@ samp {
 	);
 }
 
+/*
+ * Collapsed context (components/ui/collapsedContext.ts): a gap's row says how
+ * many unchanged lines it hides in place of git's `@@` header, and the whole
+ * row expands it.
+ */
+.diff-tailwindcss-wrapper .diff-style-root
+	.diff-line-hunk:has(.diff-line-hunk-action button),
+.diff-tailwindcss-wrapper
+	.diff-style-root
+	.diff-line-hunk:has(.diff-line-hunk-placeholder[data-unchanged]) {
+	cursor: pointer;
+}
+
+.diff-tailwindcss-wrapper
+	.diff-style-root
+	.diff-line-hunk-content[data-unchanged]
+	> div {
+	display: none;
+}
+
+.diff-tailwindcss-wrapper
+	.diff-style-root
+	.diff-line-hunk-content[data-unchanged]::before {
+	content: attr(data-unchanged);
+	padding-left: 1.5em;
+	color: var(--diff-hunk-content-color--);
+}
+
+/* The library gives its expand buttons no focus style of its own. */
+.diff-tailwindcss-wrapper .diff-style-root
+	.diff-line-hunk-action
+	button:focus-visible {
+	outline: 2px solid var(--th-accent);
+	outline-offset: -2px;
+}
+
+/* The library's expand buttons are a few pixels tall: a thumb gets the floor.
+   Between hunks there are two of them, stacked, so that row is twice it. */
+@media (any-pointer: coarse) {
+	.diff-tailwindcss-wrapper .diff-style-root .diff-line-hunk-action button {
+		min-height: 44px;
+	}
+}
+
 /* Mobile: Let line numbers scroll with content instead of staying fixed */
 /* biome-ignore lint/correctness/noUnknownFunction: Tailwind CSS v4 theme() function */
 @media (width < theme(--breakpoint-sm)) {
@@ -923,8 +967,10 @@ samp {
 	}
 }
 
-/* Let parent container handle scrolling instead of child components' internal scroll */
-.diff-table-scroll-container {
+/* Let parent container handle scrolling instead of child components' internal
+   scroll. Not split view's: without wrap each side is a half-width scroll box
+   of its own, kept in step by the library, and let out they overlap. */
+.diff-table-scroll-container:not(.split-diff-view *) {
 	/* biome-ignore lint/complexity/noImportantStyles: Override library's scroll container */
 	overflow-x: visible !important;
 	/* biome-ignore lint/complexity/noImportantStyles: Override library's scroll container */

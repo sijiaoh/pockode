@@ -8,6 +8,8 @@ interface Props {
 	/** Pre-toggled when the sheet is opened from the HEAD row's `⋯`. */
 	amendInitially: boolean;
 	onClose: () => void;
+	/** After a commit succeeded, in place of `onClose`. */
+	onCommitted?: () => void;
 }
 
 /**
@@ -17,7 +19,7 @@ interface Props {
  * It reads the same two queries the rest of the workspace does; react-query serves
  * both from cache.
  */
-function GitCommitSheet({ amendInitially, onClose }: Props) {
+function GitCommitSheet({ amendInitially, onClose, onCommitted }: Props) {
 	const { data: status } = useGitStatus();
 	const { data: branches } = useGitBranches();
 	const commitMutation = useGitCreateCommit();
@@ -43,7 +45,7 @@ function GitCommitSheet({ amendInitially, onClose }: Props) {
 			// the error stops there rather than becoming an unhandled rejection.
 			onCommit={async (message, amend) => {
 				await commitMutation.mutateAsync({ message, amend });
-				onClose();
+				(onCommitted ?? onClose)();
 			}}
 		/>
 	);

@@ -499,8 +499,8 @@ measurement.
 
 Growing the box is safe precisely because it is gated: the fine-pointer weight
 ladder does not move at all, so the old worry about "a bigger box pushing its
-container out of its rung" only applies to *unconditional* growth. `GroupHeader`
-is `min-h-[32px] pointer-coarse:min-h-11` — 32 under a mouse, 44 under a thumb.
+container out of its rung" only applies to *unconditional* growth. `ToggleChip`
+is `min-h-[36px] pointer-coarse:min-h-11` — 36 under a mouse, 44 under a thumb.
 
 The overlay (`touch-target`, defined in `web/src/index.css`) lays a centred
 `::after` over a control without resizing it: **both** floors, 36 always and 44
@@ -1134,9 +1134,9 @@ Known blind spots, recorded as they are rather than as they should be:
    belongs to the layout", so the check credits the control with the full 44 and
    stops — but a container is not an interactive element, so no assertion ever
    reads its height. A `self-stretch` button in a 32px row is 32px with the suite
-   green. Both of today's uses do hold, read one by one: `GroupHeader`'s row is
-   `min-h-[32px] pointer-coarse:min-h-11` and `FileTreeNode`'s is
-   `min-h-[44px]`. **No violation today, listed anyway** — the guard is green for
+   green. Today's uses do hold, read one by one: `FileTreeNode`'s row and the
+   Changes list's file and folder rows (`ChangedFileRow`, `ChangesSection`) are
+   all `min-h-[44px]`. **No violation today, listed anyway** — the guard is green for
    a reason it cannot verify, and that is worth knowing before the third one is
    written. (`w-full` / `flex-1` are credited the same way on the width axis,
    where a control that fills its row is rarely the one a thumb misses.)

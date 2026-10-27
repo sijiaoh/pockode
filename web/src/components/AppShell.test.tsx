@@ -50,6 +50,7 @@ vi.mock("./Chat", () => ({
 		onOpenScheduleList,
 		onOpenScheduleDetail,
 		onSelectGitSegment,
+		onSelectDiffFile,
 		onCloseGitFile,
 		onCloseOverlay,
 		overlay,
@@ -68,7 +69,12 @@ vi.mock("./Chat", () => ({
 		onOpenScheduleList?: () => void;
 		onOpenScheduleDetail?: (scheduleId: string) => void;
 		onSelectGitSegment?: (segment: "changes" | "history" | "branches") => void;
-		onCloseGitFile?: (path: string, worktree: string) => void;
+		onSelectDiffFile?: (path: string, staged: boolean) => void;
+		onCloseGitFile?: (
+			path: string,
+			worktree: string,
+			next: { path: string; staged: boolean } | null,
+		) => void;
 		onCloseOverlay?: () => void;
 		overlay?: { type: string; scheduleId?: string; segment?: string } | null;
 		view?: { worktree: string; exists: boolean } | null;
@@ -121,10 +127,30 @@ vi.mock("./Chat", () => ({
 			<button type="button" onClick={() => onSelectGitSegment?.("history")}>
 				Git History
 			</button>
-			<button type="button" onClick={() => onCloseGitFile?.("src/a.ts", "A")}>
+			<button
+				type="button"
+				onClick={() => onSelectDiffFile?.("src/b.ts", false)}
+			>
+				Review src/b.ts
+			</button>
+			<button
+				type="button"
+				onClick={() => onCloseGitFile?.("src/a.ts", "A", null)}
+			>
 				Discarded src/a.ts
 			</button>
-			<button type="button" onClick={() => onCloseGitFile?.("src/a.ts", "B")}>
+			<button
+				type="button"
+				onClick={() =>
+					onCloseGitFile?.("src/a.ts", "A", { path: "src/b.ts", staged: true })
+				}
+			>
+				Discarded src/a.ts before src/b.ts
+			</button>
+			<button
+				type="button"
+				onClick={() => onCloseGitFile?.("src/a.ts", "B", null)}
+			>
 				Discarded src/a.ts in B
 			</button>
 			<button type="button" onClick={() => onCloseOverlay?.()}>
@@ -888,6 +914,107 @@ describe("AppShell Git workspace", () => {
 			}),
 		);
 
+		await user.click(
+			screen.getByRole("button", { name: "Discarded src/a.ts" }),
+		);
+		await waitFor(() =>
+			expect(router.state.location.pathname).toBe("/w/A/git"),
+		);
+
+		router.history.back();
+		await waitFor(() =>
+			expect(router.state.location.pathname).toBe("/w/A/s/a1"),
+		);
+	});
+
+	// A file discarded from the list beside its review is done with: the review
+	// goes on to the next file, on either side, in the same history entry.
+	it.each([
+		["unstaged", "/w/A/unstaged/src/a.ts"],
+		["staged", "/w/A/staged/src/a.ts"],
+	])("moves a discarded file's review on to the next file, from the %s side", async (_, from) => {
+		const user = userEvent.setup();
+		const router = renderAppShell("/w/A/s/a1");
+		await waitFor(() => expect(panel()).toHaveTextContent("a1"));
+		await act(() => router.navigate({ to: from, search: { session: "a1" } }));
+
+		await user.click(
+			screen.getByRole("button", {
+				name: "Discarded src/a.ts before src/b.ts",
+			}),
+		);
+		await waitFor(() =>
+			expect(router.state.location.pathname).toBe("/w/A/staged/src/b.ts"),
+		);
+		expect(search(router)).toEqual({ session: "a1" });
+
+		router.history.back();
+		await waitFor(() =>
+			expect(router.state.location.pathname).toBe("/w/A/s/a1"),
+		);
+	});
+
+	// A row opens the review with a step of its own, but a row tapped beside a
+	// review already open moves it: Back still leaves the review in one step.
+	it("pushes the review from the list, and replaces it from another row", async () => {
+		const user = userEvent.setup();
+		const router = renderAppShell("/w/A/git?session=a1");
+		await waitFor(() => expect(panel()).toHaveAttribute("data-overlay", "git"));
+
+		await user.click(screen.getByRole("button", { name: "Review src/b.ts" }));
+		await waitFor(() =>
+			expect(router.state.location.pathname).toBe("/w/A/unstaged/src/b.ts"),
+		);
+		await act(() =>
+			router.navigate({
+				to: "/w/$worktree/unstaged/$",
+				params: { worktree: "A", _splat: "src/a.ts" },
+				search: { session: "a1" },
+				replace: true,
+			}),
+		);
+		await waitFor(() =>
+			expect(router.state.location.pathname).toBe("/w/A/unstaged/src/a.ts"),
+		);
+		await user.click(screen.getByRole("button", { name: "Review src/b.ts" }));
+		await waitFor(() =>
+			expect(router.state.location.pathname).toBe("/w/A/unstaged/src/b.ts"),
+		);
+
+		router.history.back();
+		await waitFor(() =>
+			expect(router.state.location.pathname).toBe("/w/A/git"),
+		);
+	});
+
+	// Leaving a review pushed from the list goes back to that list, moves
+	// inside it and all: the history is as if the review had never been
+	// opened, rather than holding the list twice.
+	it("goes back to the list a review was pushed from when it ends", async () => {
+		const user = userEvent.setup();
+		const router = renderAppShell("/w/A/s/a1");
+		await waitFor(() => expect(panel()).toHaveTextContent("a1"));
+		await user.click(screen.getByRole("button", { name: "Git Changes" }));
+		await waitFor(() =>
+			expect(router.state.location.pathname).toBe("/w/A/git"),
+		);
+
+		await user.click(screen.getByRole("button", { name: "Review src/b.ts" }));
+		await waitFor(() =>
+			expect(router.state.location.pathname).toBe("/w/A/unstaged/src/b.ts"),
+		);
+		// A row tapped beside the open review, then a move inside the review as
+		// the review itself makes it.
+		await user.click(screen.getByRole("button", { name: "Review src/b.ts" }));
+		await act(() =>
+			router.navigate({
+				to: "/w/$worktree/unstaged/$",
+				params: { worktree: "A", _splat: "src/a.ts" },
+				search: { session: "a1" },
+				replace: true,
+				state: true,
+			}),
+		);
 		await user.click(
 			screen.getByRole("button", { name: "Discarded src/a.ts" }),
 		);
