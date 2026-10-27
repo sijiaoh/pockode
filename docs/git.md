@@ -16,12 +16,13 @@ React SPA ──WebSocket──▶ Go Server ──exec──▶ git CLI
 
 | Layer | Path | Role |
 |-------|------|------|
-| RPC handlers | `server/ws/rpc_git.go` | `git.status`, `git.add`, `git.reset`, `git.discard`, `git.commit`, `git.log`, `git.show`, `git.show.diff`, `git.show.file`, `git.branches`, `git.checkout`, `git.branch.create`, `git.fetch`, `git.pull`, `git.push`, and the `git.subscribe` / `git.diff.subscribe` pairs with their unsubscribes |
+| RPC handlers | `server/ws/rpc_git.go` | `git.status`, `git.add`, `git.reset`, `git.discard`, `git.commit`, `git.log`, `git.show`, `git.show.diff`, `git.show.file`, `git.branches`, `git.checkout`, `git.branch.create`, `git.fetch`, `git.pull`, `git.push`, and the `git.subscribe` / `git.diff.subscribe` pairs with their unsubscribes; `server/ws/rpc_git_draft.go` has `git.commit.draft` and `git.commit.draft.cancel` |
 | Git operations | `server/git/git.go` | Init, Status, Add, Reset, Diff, DiffWithContent, Log, Show, ShowFileDiff |
 | Historical file contents | `server/git/showfile.go` | ShowFile |
 | Branch operations | `server/git/branch.go` | Head, Branches, Checkout, CreateBranch |
 | Remote operations | `server/git/remote.go` | sync state (upstream, ahead/behind, last fetch), Fetch, Pull, Push |
 | Commit operations | `server/git/commit.go` | CreateCommit |
+| Commit message drafts | `server/git/draft.go`, `server/commitdraft/` | StagedChange (what a commit would record, cut to size), and Draft (the prompt, the one-shot AI call, the answer) — [Drafting a Commit Message](#drafting-a-commit-message) |
 | Discard operations | `server/git/discard.go` | Discard |
 | Write serialisation | `server/git/lock.go` | A worktree's two locks — index and refs — with what each write takes, `BusyError`, and the operation names that lock and wire share ([Serialising Writes](#serialising-writes)) |
 | Command execution | `server/git/command.go` | `gitCommand` / `execGit` / `execGitLines` / `execGitVerbose` / `execGitNetwork`, `CommandError`, and `literalPathspec` |
@@ -187,6 +188,48 @@ Linked worktrees are named by their directory, which is the name the worktree sw
 **HEAD's message rides along with `git.branches`** as `head.message` (`git log -1 --no-show-signature --format=%B`), which is what amend prefills the sheet with. It is read from git rather than rebuilt out of the parsed commits `git.log` already returns: rebuilding guesses at the blank line between subject and body, and an amend would then silently rewrite the message it was asked to preserve.
 
 `--no-show-signature` is load-bearing. With `log.showSignature=true` git prints its verification of a signed commit (`gpg: Good signature…`, or an error when the allowed-signers file is missing) *ahead of* the format output, and that text would become part of the prefilled message and get committed. `Log` and `Show` do not need the flag — their format is delimited, and `parseLogOutput` drops anything before the first `---COMMIT_START---` — but a bare `%B` has no delimiter to hide behind.
+
+## Drafting a Commit Message
+
+`git.commit.draft` asks an AI CLI once for a message describing what committing now would record. It is the first AI call Pockode makes outside a session — a one-shot request: no conversation, no history, nothing kept afterwards ([how that differs from a session](code/agent-integration.md#how-it-differs-from-a-session)). The answer only goes into the commit sheet's text box; nothing is committed until the user commits it.
+
+```
+git.commit.draft         { draft_id, agent_type, model?, effort?, amend }  ->  { message }
+git.commit.draft.cancel  { draft_id }                                      ->  null
+```
+
+**The client names the engine.** `agent_type` is required, `model` and `effort` optional (empty lets the CLI decide); the server does not guess, because which engine the user is working with is something the client knows — how it resolves one is in [git-ui.md](git-ui.md). The trio is checked with `session.ValidateEngine`, the same lists a session is held to, and reaches the CLI the way a session's does (claude `--model` / `--effort`; codex `--model` / `-c model_reasoning_effort=`). A combination that fails the check, or an agent type that is not registered or cannot answer one-shot requests, is `InvalidParams`, and no CLI starts.
+
+**What the CLI is shown.** `git.StagedChange` reads it, and `commitdraft.buildPrompt` lays it out:
+
+- The diff is the root repository's index against HEAD (`git diff --cached --no-ext-diff -M`) — the same thing `git.commit` records, so a submodule's own staged files are not in it ([Commit](#commit)). Nothing staged and no amend is the `nothing_staged` failure, and the CLI is not started.
+- With `amend` the diff is against HEAD's first parent (the empty tree for a root commit), so it is the whole commit that would replace HEAD: HEAD's own changes plus whatever is staged. That makes an amend with nothing staged — a reword — draftable. HEAD's current message is shown as the one being replaced.
+- The full messages of the 10 latest non-merge commits before it (before HEAD's parent when amending), each cut at 2 KiB, for the repository's style. Read with `--no-show-signature` for the reason given under [Commit](#commit).
+- `--stat` of every file in the change, so a file whose diff was cut or left out is still named. It is asked for at a width of 1000 columns: without a terminal git fits it to 80 and shortens long paths to `.../name`.
+- The instructions: match the recent messages' style — language, prefixes, length, body or none — and only with no history to follow fall back to an imperative title of at most 72 characters; reply with the message alone. The repository's text sits inside tags, and the model is told that everything inside them is data, not instructions.
+
+**Diff size.** A diff over 48 KiB (on the order of 12k tokens) is cut to that, fairly, so a regenerated lockfile staged beside a two-line fix does not push the fix out. Every file shown is first guaranteed its header (up to its first hunk), a few hundred bytes of its changes and room for its note; when the budget cannot give every file that much — thousands of files — those with the smallest such minimum are shown and the rest left out under one closing note. What is left over is split by water-filling: files needing less than an even share are shown whole, the larger ones get the same share each. A file that is cut keeps as many whole lines as fit, then a line saying how many were left out, and the prompt says the diff is incomplete. The notes are counted in the budget, so the diff never exceeds it. The `--stat` list is cut only past 16 KiB. Before any of that, at most 4 MiB of the diff is read at all — the fair split needs every file's size, but a staged database dump should not be held in memory whole — and past it git is stopped: the file it stopped in is marked as incomplete and the files after it are left out under the closing note.
+
+**No tools.** The diff and the earlier messages are repository data, written by whoever wrote the branch; a line in a diff that reads like an instruction must not get to act on anything. The draft runs as a one-shot request, which has no tools — fully for claude, and for codex as far as its switches go ([agent-integration.md](code/agent-integration.md#no-tools) has how each CLI is run and what is left). A tool call either CLI reports kills the run and fails the draft with `tool_use`, discarding the answer. Codex's remaining gap is that its sandbox stops writes but not reads: a prompt injected through the diff could have the model quote a file the user can read into its answer. That answer reaches only the text box, where the user reads it before committing, and the model provider, which a codex session in the same project already sends as much to — but it is the gap between codex's guarantee and claude's.
+
+**Where it runs.** In the worktree, so each CLI reads the project's own instructions (`CLAUDE.md`, `AGENTS.md`) — which is where a repository writes down its commit conventions.
+
+**Ending it.** `draft_id` is the client's name for the draft, and is never reused on a connection (a second draft under a running id is `InvalidParams`; one under an id cancelled earlier is cancelled at once, for the reason below). `git.commit.draft.cancel` names it and is idempotent: an id that already ended, or never ran, succeeds and does nothing. Requests are handled concurrently, so a cancel sent right behind its draft may be handled first; the id is remembered and the draft, when it arrives, ends as `cancelled` before reading anything or starting a CLI; one that lands while git is reading the change still starts none. Cancel needs neither git nor a worktree — the drafts are the connection's — so it is answered in a project that is not a repository, and for a draft whose worktree was deleted or switched away from. The CLI's whole process tree is killed when the draft is cancelled, when the connection closes, or after 90 seconds (`commitdraft.Timeout`: a small change is answered in 3–4 seconds; codex signed out retries for 15–40 seconds before saying so). The draft request's own reply comes only then, so a client's request timeout for it has to be longer than that — and it must not retry: each draft is a paid call.
+
+**Failures** are `CodeCommitDraftFailed` (-32004) with `data.reason` for the client to pick its copy by; the message is English and, for the CLI's failures, the CLI's own words:
+
+| `reason` | Meaning |
+|---|---|
+| `nothing_staged` | The index matches HEAD and this is no amend |
+| `cli_not_found` | The CLI is not installed where the server can see it |
+| `auth_failed` | The CLI is not signed in, or its sign-in expired (claude's `authentication_failed` frame; codex's `401 Unauthorized`) |
+| `timeout` | No answer within `commitdraft.Timeout` |
+| `cancelled` | `git.commit.draft.cancel`, or the connection closed |
+| `tool_use` | The model called a tool; the run was stopped and its answer discarded |
+| `empty` | The CLI finished with an empty message |
+| `failed` | The CLI ended without a message — an error result, a failed turn, an exit before answering, or output the tool check could not read |
+
+`cli_not_found` and `auth_failed` are kept apart, though a sheet may show both as "unavailable": only the second is fixed by signing in. An amend on a branch with no commit yet is `InvalidParams` (the sheet does not offer one there). A git command that fails while reading the change is an internal error, as elsewhere. A model that wraps its answer in a code fence or in quotes despite being told not to has them removed — a quote counts as wrapping only if it occurs nowhere else in the message, so `Revert "Add div"` keeps its own.
 
 ## Discard
 

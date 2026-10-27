@@ -458,6 +458,70 @@ type GitCommitParams struct {
 	Amend bool `json:"amend"`
 }
 
+// GitCommitDraftParams is the params for git.commit.draft.
+type GitCommitDraftParams struct {
+	// DraftID is the client's name for this draft, which
+	// git.commit.draft.cancel names it by. Never reused on a connection: a
+	// cancel that arrives after its draft ended is kept (see commitDrafts), and
+	// would stop a later draft under the same id.
+	DraftID string `json:"draft_id"`
+	// AgentType, Model and Effort are the engine that writes the draft. The
+	// server does not pick one: the client knows which CLI the user is working
+	// with. They are validated as a session's are (session.ValidateEngine);
+	// empty Model and Effort let the CLI decide.
+	AgentType session.AgentType `json:"agent_type"`
+	Model     string            `json:"model,omitempty"`
+	Effort    string            `json:"effort,omitempty"`
+	// Amend drafts the message of the commit that would replace HEAD, so the
+	// change described is HEAD's own plus whatever is staged.
+	Amend bool `json:"amend"`
+}
+
+// GitCommitDraftResult is the result of git.commit.draft.
+type GitCommitDraftResult struct {
+	Message string `json:"message"`
+}
+
+// GitCommitDraftCancelParams is the params for git.commit.draft.cancel.
+type GitCommitDraftCancelParams struct {
+	DraftID string `json:"draft_id"`
+}
+
+// CodeCommitDraftFailed answers a git.commit.draft that produced no message;
+// CommitDraftFailedData says why. The message says it in English, with the
+// CLI's own words where there are any; the reason is what a client picks its
+// own copy by.
+const CodeCommitDraftFailed = -32004
+
+// Reasons of a CodeCommitDraftFailed error.
+const (
+	// CommitDraftNothingStaged: the index matches HEAD and this is no amend.
+	CommitDraftNothingStaged = "nothing_staged"
+	// CommitDraftCLINotFound: the CLI is not installed where the server can
+	// see it.
+	CommitDraftCLINotFound = "cli_not_found"
+	// CommitDraftAuthFailed: the CLI is not signed in, or its sign-in expired.
+	CommitDraftAuthFailed = "auth_failed"
+	// CommitDraftTimeout: no answer within commitdraft.Timeout.
+	CommitDraftTimeout = "timeout"
+	// CommitDraftCancelled: git.commit.draft.cancel stopped it, or the
+	// connection closed.
+	CommitDraftCancelled = "cancelled"
+	// CommitDraftToolUse: the model called a tool, so the run was stopped and
+	// its answer discarded.
+	CommitDraftToolUse = "tool_use"
+	// CommitDraftEmpty: the CLI finished with an empty message.
+	CommitDraftEmpty = "empty"
+	// CommitDraftFailed: the CLI ran and ended without a message; the error
+	// message carries what it said.
+	CommitDraftFailed = "failed"
+)
+
+// CommitDraftFailedData is the data member of a CodeCommitDraftFailed error.
+type CommitDraftFailedData struct {
+	Reason string `json:"reason"`
+}
+
 // GitLogParams is the params for git.log request.
 type GitLogParams struct {
 	Limit int `json:"limit,omitempty"` // default 50

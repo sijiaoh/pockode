@@ -532,6 +532,10 @@ function getAgentStartClient(): JSONRPCRequester<void> | null {
 	return rpcClients?.withAgentStartTimeout ?? null;
 }
 
+function getCommitDraftClient(): JSONRPCRequester<void> | null {
+	return rpcClients?.withCommitDraftTimeout ?? null;
+}
+
 /**
  * This and AGENT_START_RPC_TIMEOUT_MS are exported because the tests advance a
  * fake clock across them: a second copy of either number goes stale the moment
@@ -594,11 +598,26 @@ const CODEX_START_BUDGET_MS = 10000 + 45000;
  */
 export const AGENT_START_RPC_TIMEOUT_MS = CODEX_START_BUDGET_MS + 20000;
 
+// Where: server/commitdraft's Timeout, after which the server kills the CLI and
+// answers `timeout` itself (docs/git.md#drafting-a-commit-message).
+const COMMIT_DRAFT_SERVER_TIMEOUT_MS = 90000;
+
+/**
+ * Timeout for `git.commit.draft`, which runs an AI CLI for as long as the
+ * server's own 90s allow and only answers then. Shorter, and a slow draft would
+ * be reported as "Request timed out" while the CLI went on running and its
+ * answer was thrown away. The margin covers reading the diff and the round trip.
+ */
+export const COMMIT_DRAFT_RPC_TIMEOUT_MS =
+	COMMIT_DRAFT_SERVER_TIMEOUT_MS + 20000;
+
 interface RPCClients {
 	base: JSONRPCClient;
 	withTimeout: JSONRPCRequester<void>;
 	/** For agent-starting requests only; see AGENT_START_RPC_TIMEOUT_MS. */
 	withAgentStartTimeout: JSONRPCRequester<void>;
+	/** For `git.commit.draft` only; see COMMIT_DRAFT_RPC_TIMEOUT_MS. */
+	withCommitDraftTimeout: JSONRPCRequester<void>;
 }
 
 function createRPCClient(socket: WebSocket): RPCClients {
@@ -617,6 +636,7 @@ function createRPCClient(socket: WebSocket): RPCClients {
 		base,
 		withTimeout: base.timeout(RPC_TIMEOUT_MS, timedOut),
 		withAgentStartTimeout: base.timeout(AGENT_START_RPC_TIMEOUT_MS, timedOut),
+		withCommitDraftTimeout: base.timeout(COMMIT_DRAFT_RPC_TIMEOUT_MS, timedOut),
 	};
 }
 
@@ -832,7 +852,7 @@ const sessionActions = createSessionActions(getClient);
 const sessionViewActions = createSessionViewActions(getClient);
 const settingsActions = createSettingsActions(getClient);
 const fileActions = createFileActions(getClient);
-const gitActions = createGitActions(getClient);
+const gitActions = createGitActions(getClient, getCommitDraftClient);
 const workActions = createWorkActions(getClient, getAgentStartClient);
 const worktreeRpcActions = createWorktreeActions(getClient);
 

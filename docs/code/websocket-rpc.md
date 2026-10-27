@@ -34,7 +34,7 @@ Method names are organized using the `namespace.method` format, solving two prob
 | `session_view.*` | app | `ws/rpc_session_view.go` |
 | `file.*` | worktree | `ws/rpc_file.go` |
 | `attachment.*` | worktree | `ws/rpc_attachment.go` |
-| `git.*` | worktree | `ws/rpc_git.go` |
+| `git.*` | worktree | `ws/rpc_git.go`; `git.commit.draft*` in `ws/rpc_git_draft.go` — its `.cancel` is connection-level, so it reaches a draft whose worktree was deleted or switched away from |
 | `fs.*` | worktree | `ws/rpc_fs.go` |
 | `worktree.*` | app | `ws/rpc_worktree.go` |
 | `command.*` | app | `ws/rpc_command.go` |
@@ -858,7 +858,7 @@ the status is still `connected`, and refetches once reconnected. A user action
 that fails this way still reports it, because whether it took effect is
 unknown.
 
-The exception is `AGENT_START_RPC_TIMEOUT_MS`, a longer clock for the requests
+One exception is `AGENT_START_RPC_TIMEOUT_MS`, a longer clock for the requests
 that start an agent CLI on their own path.
 [Lock Strategy](agent-integration.md#lock-strategy) names those requests and the
 deadlines the server bounds a start with before it answers. Give up first and
@@ -869,6 +869,13 @@ client timeout must outlast the deadlines the server spends answering it. A test
 pins those requests to a longer clock than the default, but nothing ties that
 clock to the Go deadlines it is derived from — the two sides only name each other
 in comments.
+
+The other exception is `COMMIT_DRAFT_RPC_TIMEOUT_MS`, for `git.commit.draft`
+alone, on the same rule: the server answers it only once the AI CLI has, after up
+to 90 seconds of its own, and a client that gave up first would throw away the
+`timeout` it says then while the paid run went on
+([Drafting a Commit Message](../git.md#drafting-a-commit-message)). It is never
+retried.
 
 **A timeout is not a failure the caller may retry blindly.** The server is likely
 still working on the request, so a retry stacks a second copy of that work on top
@@ -926,6 +933,11 @@ request work — the repository appearing — arrives as `worktree.changed`
 anything ran, with `data.reason` — `already_installed`, `npm_not_found` or
 `busy` — because each asks the user for something different: nothing, Node.js,
 or waiting ([cli-update.md](cli-update.md#refused-before-it-starts)).
+`-32004` (`rpc.CodeCommitDraftFailed`) is not a refusal but a failure with
+several causes the user acts on differently: a `git.commit.draft` that produced
+no message, with `data.reason` (`timeout`, `auth_failed`, `cli_not_found`,
+`tool_use`, `cancelled`, …) for the commit sheet to pick its sentence by
+([git.md](../git.md#drafting-a-commit-message)).
 
 A server's error message is therefore text to put in front of a user, never a
 value to branch on — it embeds an arbitrary error string, and its fixed half is

@@ -4,6 +4,7 @@ import { authActions, useAuthStore } from "./authStore";
 import { worktreeActions } from "./worktreeStore";
 import {
 	AGENT_START_RPC_TIMEOUT_MS,
+	COMMIT_DRAFT_RPC_TIMEOUT_MS,
 	isRPCTimeout,
 	RPC_TIMEOUT_MS,
 	reconnectWebSocket,
@@ -692,6 +693,34 @@ describe("wsStore", () => {
 			for (const { caught } of agentStarters) {
 				expect(isRPCTimeout(await caught)).toBe(true);
 			}
+		});
+
+		// The server answers a draft only once the CLI has, for up to 90s, and
+		// gives up with a `timeout` of its own. Stop waiting first and that
+		// answer is thrown away while the paid run goes on.
+		it("waits out the server's own draft deadline on a commit draft", async () => {
+			await connectAndAuth();
+			getMockWs()?.mockNoResponse();
+
+			const settled = { done: false };
+			const caught = wsActions
+				.draftCommitMessage({
+					draftId: "d1",
+					agentType: "claude",
+					model: "",
+					effort: "",
+					amend: false,
+				})
+				.catch((error) => error)
+				.finally(() => {
+					settled.done = true;
+				});
+
+			await vi.advanceTimersByTimeAsync(90000);
+			expect(settled.done).toBe(false);
+
+			await vi.advanceTimersByTimeAsync(COMMIT_DRAFT_RPC_TIMEOUT_MS - 90000);
+			expect(isRPCTimeout(await caught)).toBe(true);
 		});
 	});
 
