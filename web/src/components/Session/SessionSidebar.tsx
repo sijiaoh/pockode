@@ -44,6 +44,11 @@ interface Props {
 	 * null while it is not on screen.
 	 */
 	activeGitSegment: GitSegment | null;
+	/**
+	 * Whether the chat's strip may show its review row, which reads the same
+	 * count as the tab's badge. Reported by the chat, which owns the gate.
+	 */
+	reviewRowCanShow?: boolean;
 	onSelectFile: (path: string) => void;
 	activeFilePath: string | null;
 	/** Whether that file is open in the editor rather than the viewer. */
@@ -76,6 +81,7 @@ function SessionSidebar({
 	onDeleteSession,
 	onOpenGitSegment,
 	activeGitSegment,
+	reviewRowCanShow = false,
 	onSelectFile,
 	activeFilePath,
 	activeFileEdit,
@@ -108,7 +114,10 @@ function SessionSidebar({
 	// stops watching exactly as a closed drawer does — and an extension's
 	// sidebar has no badge to feed. The Git workspace is read whatever sidebar
 	// is beside it, open or not, so it is watched on its own term: without it
-	// its lists would freeze under the reader.
+	// its lists would freeze under the reader. The chat's review row reads the
+	// count too, on a phone with the drawer closed, and is on its own term for
+	// the same reason; it is only true while no turn is open, so a turn ending
+	// resubscribes and refetches at the moment the row may appear.
 	// See docs/git-ui.md, *Who subscribes to `git.changed`*.
 	const queryClient = useQueryClient();
 	const refreshGit = useCallback(
@@ -118,7 +127,10 @@ function SessionSidebar({
 	useGitWatch({
 		onChanged: refreshGit,
 		enabled:
-			isGitRepo && ((!SidebarContent && isOpen) || activeGitSegment !== null),
+			isGitRepo &&
+			((!SidebarContent && isOpen) ||
+				activeGitSegment !== null ||
+				reviewRowCanShow),
 	});
 
 	const gitChangeCount = useGitChangeCount();

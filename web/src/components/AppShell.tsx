@@ -3,6 +3,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
+import { gitStatusQueryKey } from "../hooks/gitQueries";
 import { invalidateSessionViewQueries } from "../hooks/sessionViewQueries";
 import { useAgentOptions } from "../hooks/useAgentOptions";
 import { useAgentRoleSubscription } from "../hooks/useAgentRoleSubscription";
@@ -18,6 +19,8 @@ import { useSettingsSubscription } from "../hooks/useSettingsSubscription";
 import { useWorkSubscription } from "../hooks/useWorkSubscription";
 import { useWorktree } from "../hooks/useWorktree";
 import { authActions, selectCredential, useAuthStore } from "../lib/authStore";
+import { collectChanges, firstReviewTarget } from "../lib/gitChanges";
+import { useGitChangesViewStore } from "../lib/gitChangesViewStore";
 import {
 	buildNavigation,
 	overlayToNavigation,
@@ -607,6 +610,12 @@ function AppShell() {
 		[navigate, urlWorktree, currentSessionId, reviewOpen],
 	);
 
+	// Reported by the chat, which owns the gate, for the sidebar's Git watch and
+	// for a press on the row whose read outlived the row (`handleOpenReview`).
+	const [reviewRowCanShow, setReviewRowCanShow] = useState(false);
+	const reviewRowCanShowRef = useRef(reviewRowCanShow);
+	reviewRowCanShowRef.current = reviewRowCanShow;
+
 	const handleSelectFile = useCallback(
 		(path: string) => {
 			navigate(
@@ -713,6 +722,7 @@ function AppShell() {
 	const leaveReview = useLeaveReview();
 	const routeRef = useRef({ overlay, urlWorktree, currentSessionId });
 	routeRef.current = { overlay, urlWorktree, currentSessionId };
+
 	const handleCloseGitFile = useCallback(
 		(
 			path: string,
@@ -738,6 +748,68 @@ function AppShell() {
 		},
 		[navigate, leaveReview],
 	);
+
+	/**
+	 * Opens the review from the chat's review row, at the file the Changes
+	 * list's `Review` would open (docs/agent-handoff-ui.md §2.5).
+	 *
+	 * The status is the one as it is at the press, not the one the row drew
+	 * from: a cached answer that has not been invalidated is used as it is,
+	 * and one that has — a `git.changed`, the refresh as a turn ends, a worktree
+	 * switch landing — is waited for, so a file committed meanwhile, or another
+	 * worktree's, is never opened. A tree clean by then, a read that fails, or a
+	 * switch still in flight open the list instead, which is true in every case.
+	 * A reader who has moved on while the read was out keeps the page they moved
+	 * to, and one who has sent meanwhile keeps the chat: the row's gate closing
+	 * is the press expiring.
+	 *
+	 * Pushed without the list's mark: there is no list behind it, so leaving
+	 * goes to the list and from there back to the chat.
+	 */
+	const getGitStatus = useWSStore((s) => s.actions.getStatus);
+	const handleOpenReview = useCallback(async () => {
+		const pressed = routeRef.current;
+		let first: { path: string; staged: boolean } | null = null;
+		if (!worktreeSwitchInFlight) {
+			try {
+				// A refresh already under way carries the readers' retries, and
+				// fetchQuery would join it rather than start its own.
+				await queryClient.cancelQueries({ queryKey: gitStatusQueryKey });
+				const status = await queryClient.fetchQuery({
+					queryKey: gitStatusQueryKey,
+					queryFn: getGitStatus,
+					staleTime: Number.POSITIVE_INFINITY,
+					// A press waits on this read; a retry's backoff would leave it
+					// doing nothing for seconds, where the list can say what failed.
+					retry: false,
+				});
+				first = firstReviewTarget(
+					collectChanges(status),
+					useGitChangesViewStore.getState().view,
+				);
+			} catch {
+				// The list says what the status read could not, in its own banner.
+			}
+		}
+		const now = routeRef.current;
+		if (
+			!reviewRowCanShowRef.current ||
+			now.overlay ||
+			now.urlWorktree !== pressed.urlWorktree ||
+			now.currentSessionId !== pressed.currentSessionId
+		) {
+			return;
+		}
+		navigate(
+			overlayToNavigation(
+				first
+					? { type: "diff", path: first.path, staged: first.staged }
+					: { type: "git", segment: "changes" },
+				pressed.urlWorktree,
+				pressed.currentSessionId,
+			),
+		);
+	}, [navigate, queryClient, getGitStatus, worktreeSwitchInFlight]);
 
 	const handleOpenSettings = useCallback(() => {
 		navigate(
@@ -1036,6 +1108,7 @@ function AppShell() {
 					onDeleteSession={handleDeleteSession}
 					onOpenGitSegment={handleSelectGitSegment}
 					activeGitSegment={gitSegmentOf(overlay)}
+					reviewRowCanShow={reviewRowCanShow}
 					onSelectFile={handleSelectFile}
 					activeFilePath={activeFilePath}
 					activeFileEdit={activeFileEdit}
@@ -1085,6 +1158,8 @@ function AppShell() {
 						onSelectDiffFile={handleSelectDiffFile}
 						onSelectCommit={handleSelectCommit}
 						onCloseGitFile={handleCloseGitFile}
+						onOpenReview={handleOpenReview}
+						onReviewRowCanShowChange={setReviewRowCanShow}
 					/>
 				</div>
 			</div>

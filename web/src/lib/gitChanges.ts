@@ -220,6 +220,22 @@ export function orderChanges(
 }
 
 /**
+ * Where a review entered from outside a file starts: the first file in the
+ * list's order, on the side `reviewSideOf` opens. The Changes list's `Review`
+ * and the chat's review row both start here, so they never start at different
+ * files (docs/agent-handoff-ui.md §2.5). Null for a clean tree.
+ */
+export function firstReviewTarget(
+	files: ChangedFile[],
+	view: ChangesView,
+): { path: string; staged: boolean } | null {
+	const [first] = orderChanges(files, view);
+	return first
+		? { path: first.path, staged: reviewSideOf(first, false) }
+		: null;
+}
+
+/**
  * The file after (`1`) or before (`-1`) `path` in the current list, found by
  * position in the order rather than by index: `path` need not be in `files`
  * any more, and a file added or dropped elsewhere meanwhile never makes the
