@@ -72,7 +72,7 @@ function NewBranchSheet({ base, onClose, onCreate }: Props) {
 			}
 		>
 			<div className="space-y-4 p-4">
-				{/* Above the field, like the panel's other sheets: pushed below it the
+				{/* Above the field, like the workspace's other sheets: pushed below it the
 				    refusal would sit under the on-screen keyboard on a phone. */}
 				{error && (
 					<p className="whitespace-pre-wrap text-sm text-th-error" role="alert">

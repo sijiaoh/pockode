@@ -1,12 +1,12 @@
 import { ConfirmDialog } from "@pockode/shared";
-import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useMemo, useState } from "react";
-import { invalidateGitQueries } from "../../hooks/gitQueries";
-import { useGitLog } from "../../hooks/useGitLog";
 import { useGitStatus } from "../../hooks/useGitStatus";
 import { useGitWriteRunner } from "../../hooks/useGitWrites";
-import { gitPanelActions, useHistoryExpanded } from "../../lib/gitPanelStore";
-import { WorktreeChangedError } from "../../lib/gitWriteStore";
+import {
+	gitWriteActions,
+	useWriteFailure,
+	WorktreeChangedError,
+} from "../../lib/gitWriteStore";
 import { useWorktreeStore } from "../../lib/worktreeStore";
 import {
 	describeDiscard,
@@ -14,64 +14,39 @@ import {
 	flattenGitStatus,
 	stageFailureSummary,
 } from "../../types/git";
-import { describeGitFailure, type GitFailure } from "../../utils/gitErrors";
-import { useSidebarRefresh } from "../Layout";
+import { describeGitFailure } from "../../utils/gitErrors";
 import { Spinner } from "../ui";
-import BranchBar from "./BranchBar";
 import CommitBar from "./CommitBar";
 import DiffFileList from "./DiffFileList";
 import ErrorBanner from "./ErrorBanner";
-import GitCommitSheet from "./GitCommitSheet";
-import GroupHeader from "./GroupHeader";
-import LogList from "./LogList";
 
 interface Props {
 	onSelectFile: (path: string, staged: boolean) => void;
-	onSelectCommit: (hash: string) => void;
-	/** Closes the content area when the file it shows stops having a diff. */
-	onCloseFile: () => void;
+	/**
+	 * Closes the diff of `path` in `worktree`, which has just stopped having
+	 * one — if that diff is still the page. Both are named because the discard
+	 * is answered later than it was asked: by then the screen may be somewhere
+	 * else, even in another worktree.
+	 */
+	onCloseFile: (path: string, worktree: string) => void;
 	activeFile: { path: string; staged: boolean } | null;
-	activeCommitHash: string | null;
 }
 
-function DiffTab({
-	onSelectFile,
-	onSelectCommit,
-	onCloseFile,
-	activeFile,
-	activeCommitHash,
-}: Props) {
-	const queryClient = useQueryClient();
+/**
+ * The working tree's changes: the inline-action banner, the Staged and Changes
+ * groups, and the commit bar under them — the Git workspace's Changes segment.
+ */
+function ChangesSection({ onSelectFile, onCloseFile, activeFile }: Props) {
 	const { data: status, isLoading, error } = useGitStatus();
-	const { data: logData } = useGitLog();
-
-	const refreshAll = useCallback(
-		() => invalidateGitQueries(queryClient),
-		[queryClient],
-	);
-
-	const { isActive } = useSidebarRefresh("git", refreshAll);
 	const { toggle, discard, writes } = useGitWriteRunner();
 	// The files a confirmation is currently open for; null when none is.
 	const [pendingDiscard, setPendingDiscard] = useState<FileStatus[] | null>(
 		null,
 	);
-	const [actionError, setActionError] = useState<ActionError | null>(null);
-
-	// A failure names a path in the workspace it happened in, so carrying the
-	// banner across a switch would point at a file that is not in this one.
-	// Adjusted during render rather than in an effect: an effect would let the
-	// previous workspace's error paint once before clearing it.
-	const currentWorktree = useWorktreeStore((s) => s.current);
-	const [bannerWorktree, setBannerWorktree] = useState(currentWorktree);
-	if (bannerWorktree !== currentWorktree) {
-		setBannerWorktree(currentWorktree);
-		setActionError(null);
-	}
-
-	// Opened from the HEAD row's amend action; the commit bar owns its own.
-	const [isAmending, setIsAmending] = useState(false);
-	const handleAmend = useCallback(() => setIsAmending(true), []);
+	// The worktree the runner sends to, read in the same render, so a failure
+	// is filed under the worktree whose paths it names.
+	const worktree = useWorktreeStore((s) => s.current);
+	const actionError = useWriteFailure(worktree);
 
 	const flatStatus = useMemo(
 		() => (status ? flattenGitStatus(status) : null),
@@ -81,22 +56,21 @@ function DiffTab({
 	const changeCount = flatStatus
 		? flatStatus.staged.length + flatStatus.unstaged.length
 		: 0;
-	const historyExpanded = useHistoryExpanded(changeCount);
 
 	const togglePaths = useCallback(
 		async (paths: string[], staged: boolean) => {
 			try {
 				await toggle(paths, staged);
-				setActionError((prev) => clearedBy(prev, paths));
+				gitWriteActions.succeed(worktree, paths);
 			} catch (e) {
 				if (e instanceof WorktreeChangedError) return;
-				setActionError({
+				gitWriteActions.fail(worktree, {
 					...describeGitFailure(e, () => stageFailureSummary(staged)),
 					paths,
 				});
 			}
 		},
-		[toggle],
+		[toggle, worktree],
 	);
 
 	const handleToggleStage = useCallback(
@@ -118,27 +92,23 @@ function DiffTab({
 			setPendingDiscard(null);
 			try {
 				await discard(paths);
-				setActionError((prev) => clearedBy(prev, paths));
-				// The open diff no longer exists — the file is either back to its
-				// staged content or gone altogether.
-				if (
-					activeFile &&
-					!activeFile.staged &&
-					paths.includes(activeFile.path)
-				) {
-					onCloseFile();
-				}
+				gitWriteActions.succeed(worktree, paths);
+				// Each discarded file's unstaged diff no longer exists — the file is
+				// either back to its staged content or gone altogether. Every path,
+				// not the one open when the discard was confirmed: the reader may
+				// have opened another of them since, and only the shell knows what
+				// the page is now.
+				for (const path of paths) onCloseFile(path, worktree);
 			} catch (e) {
-				// Nothing was written and the banner belongs to a worktree that is
-				// no longer on screen — the same reason a switch clears it above.
+				// Nothing was written, so there is nothing to report.
 				if (e instanceof WorktreeChangedError) return;
-				setActionError({
+				gitWriteActions.fail(worktree, {
 					...describeGitFailure(e, () => describeDiscard(files).failureSummary),
 					paths,
 				});
 			}
 		},
-		[discard, activeFile, onCloseFile],
+		[discard, worktree, onCloseFile],
 	);
 
 	const handleDiscard = useCallback(
@@ -160,16 +130,12 @@ function DiffTab({
 	}, [flatStatus, togglePaths]);
 
 	return (
-		<div
-			className={isActive ? "flex flex-1 flex-col overflow-hidden" : "hidden"}
-		>
-			<BranchBar />
-
+		<>
 			{actionError && (
 				<ErrorBanner
 					summary={actionError.summary}
 					details={actionError.detail}
-					onDismiss={() => setActionError(null)}
+					onDismiss={() => gitWriteActions.dismissFailure(worktree)}
 				/>
 			)}
 
@@ -218,39 +184,11 @@ function DiffTab({
 								/>
 							</>
 						)}
-
-						{/* Its own box, so its header stops being sticky once the
-						    section it labels has scrolled past — the same way each
-						    file group's header behaves. */}
-						<div className="mt-2 flex flex-col">
-							<GroupHeader
-								label="History"
-								isExpanded={historyExpanded}
-								onToggle={() =>
-									gitPanelActions.setHistoryExpanded(!historyExpanded)
-								}
-							/>
-							{historyExpanded && (
-								<LogList
-									commits={logData?.commits ?? []}
-									activeHash={activeCommitHash}
-									onSelectCommit={onSelectCommit}
-									onAmend={handleAmend}
-								/>
-							)}
-						</div>
 					</div>
 				)}
 			</div>
 
 			<CommitBar />
-
-			{isAmending && (
-				<GitCommitSheet
-					amendInitially={true}
-					onClose={() => setIsAmending(false)}
-				/>
-			)}
 
 			{pendingDiscard && (
 				<DiscardConfirm
@@ -261,25 +199,8 @@ function DiffTab({
 					onCancel={() => setPendingDiscard(null)}
 				/>
 			)}
-		</div>
+		</>
 	);
-}
-
-interface ActionError extends GitFailure {
-	/** What failed, so only a retry of it can clear the banner. */
-	paths: string[];
-}
-
-/**
- * Only a retry of what failed clears the banner. Another file succeeding says
- * nothing about the one that did not, and dropping its message would leave that
- * failure with no explanation on screen.
- */
-function clearedBy(
-	prev: ActionError | null,
-	paths: string[],
-): ActionError | null {
-	return prev?.paths.some((p) => paths.includes(p)) ? null : prev;
 }
 
 /**
@@ -309,4 +230,4 @@ function DiscardConfirm({
 	);
 }
 
-export default DiffTab;
+export default ChangesSection;

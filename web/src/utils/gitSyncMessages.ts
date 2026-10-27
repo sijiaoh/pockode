@@ -17,7 +17,7 @@ export const FETCH_FAILURE = "Fetch failed.";
 
 /**
  * The count comes back from the pull itself: it fetches first, so it can bring
- * in more than the panel's numbers promised.
+ * in more than the workspace's numbers promised.
  */
 export function pullSuccess(pulled: number): string {
 	return pulled > 0 ? `Pulled ${commits(pulled)}.` : "Already up to date.";
@@ -41,7 +41,7 @@ export function pushSuccess(sync: GitSync): string {
 
 /**
  * Both rejections mean the same thing to the user — the remote moved — but only
- * after a fetch can the panel tell them whether pulling is enough. Anything else
+ * after a fetch can the workspace tell them whether pulling is enough. Anything else
  * gets no guessed summary; git's own message is below it either way.
  */
 export function pushFailureSummary(detail: string): string {

@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { useCallback, useEffect, useRef } from "react";
-import { buildNavigation } from "../lib/navigation";
+import { buildNavigation, overlayToNavigation } from "../lib/navigation";
 import { fetchWorktrees, WORKTREES_QUERY_KEY } from "../lib/worktreeQuery";
 import {
 	getDisplayName,
@@ -20,6 +20,8 @@ import type {
 	WorktreeInfo,
 	WorktreeSubscribeResult,
 } from "../types/message";
+import { gitSegmentOf } from "../types/overlay";
+import { useRouteState } from "./useRouteState";
 import { useSubscription } from "./useSubscription";
 
 /** Resolves to the skipped setup script, or null when it ran. */
@@ -181,13 +183,25 @@ export function useWorktree({
 		},
 	});
 
+	// A switch made from the Git workspace stays in it, at the same segment's
+	// list: every worktree has one, where the diff or commit open here may not
+	// exist over there.
+	const gitSegment = gitSegmentOf(useRouteState().overlay);
 	const selectWorktree = useCallback(
 		(name: string) => {
 			if (name === current) return;
 			// URL is source of truth; store sync and WebSocket reconnect happen via listeners
-			navigate(buildNavigation({ type: "home", worktree: name }));
+			navigate(
+				gitSegment
+					? overlayToNavigation(
+							{ type: "git", segment: gitSegment },
+							name,
+							null,
+						)
+					: buildNavigation({ type: "home", worktree: name }),
+			);
 		},
-		[current, navigate],
+		[current, navigate, gitSegment],
 	);
 
 	const currentWorktree =

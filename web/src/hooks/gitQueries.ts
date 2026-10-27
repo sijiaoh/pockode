@@ -5,7 +5,7 @@ export const gitLogQueryKey = ["git-log"] as const;
 export const gitBranchesQueryKey = ["git-branches"] as const;
 
 /**
- * Refetch everything the git panel reads.
+ * Refetch everything the Git workspace reads.
  *
  * Mutations call this on success instead of waiting out GitWatcher's 3-second
  * poll, and moving HEAD invalidates all three at once — a checkout changes the
@@ -22,14 +22,14 @@ export function invalidateGitQueries(queryClient: QueryClient): void {
 }
 
 /**
- * Drop everything the git panel read, for a project that has just stopped
+ * Drop everything the Git workspace read, for a project that has just stopped
  * being a repository.
  *
  * Not invalidateGitQueries: the listener that learns the news runs before React
  * re-renders, while the readers still hold `enabled: true`, so an invalidation
  * would send every one of them off to be refused with -32002 — and retried.
  * Removing also cancels whatever is in flight, and leaves no error behind to
- * flash up if a later `git init` brings the panel back.
+ * flash up if a later `git init` brings the workspace back.
  */
 export function removeGitQueries(queryClient: QueryClient): void {
 	for (const queryKey of [

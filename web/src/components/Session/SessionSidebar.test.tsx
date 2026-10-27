@@ -4,11 +4,16 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Activity } from "../../lib/activity";
 import { uploadFile } from "../../lib/fileUpload";
+import {
+	resetSidebarUIConfig,
+	setSidebarUIConfig,
+} from "../../lib/registries/sidebarUIRegistry";
 import { useScheduleStore } from "../../lib/scheduleStore";
 import { uploadActions } from "../../lib/uploadStore";
 import { useWorkStore } from "../../lib/workStore";
 import { worktreeActions } from "../../lib/worktreeStore";
 import { makeSchedule } from "../../test/scheduleFixtures";
+import type { GitSegment } from "../../types/overlay";
 import type { WorkListItem } from "../../types/work";
 import SessionSidebar from "./SessionSidebar";
 
@@ -35,7 +40,8 @@ vi.mock("../../hooks/useGitWatch", () => ({
 	},
 }));
 let gitChangeCount: number | undefined;
-vi.mock("../../hooks/useGitChangeCount", () => ({
+vi.mock("../../hooks/useGitChangeCount", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../../hooks/useGitChangeCount")>()),
 	useGitChangeCount: () => gitChangeCount,
 }));
 
@@ -60,21 +66,14 @@ vi.mock("../Files", () => ({
 	),
 }));
 vi.mock("../Git", () => ({
-	DiffTab: ({
-		onSelectFile,
-		onSelectCommit,
+	GitTab: ({
+		onOpenSegment,
 	}: {
-		onSelectFile: (path: string, staged: boolean) => void;
-		onSelectCommit: (hash: string) => void;
+		onOpenSegment: (segment: GitSegment) => void;
 	}) => (
-		<>
-			<button type="button" onClick={() => onSelectFile("src/main.tsx", false)}>
-				open diff
-			</button>
-			<button type="button" onClick={() => onSelectCommit("abc123")}>
-				open commit
-			</button>
-		</>
+		<button type="button" onClick={() => onOpenSegment("history")}>
+			open history
+		</button>
 	),
 }));
 vi.mock("./SessionsTab", () => ({
@@ -94,7 +93,7 @@ vi.mock("../Worktree", () => ({ WorktreeSwitcher: () => null }));
 interface RenderOptions {
 	isOpen?: boolean;
 	isExpanded?: boolean;
-	activeDiffFile?: { path: string; staged: boolean } | null;
+	activeGitSegment?: GitSegment | null;
 }
 
 function renderSidebar(
@@ -102,7 +101,7 @@ function renderSidebar(
 	{
 		isOpen = true,
 		isExpanded = false,
-		activeDiffFile = null,
+		activeGitSegment = null,
 	}: RenderOptions = {},
 ) {
 	return render(
@@ -114,11 +113,8 @@ function renderSidebar(
 				onSelectSession={vi.fn()}
 				onCreateSession={vi.fn()}
 				onDeleteSession={vi.fn()}
-				onSelectDiffFile={vi.fn()}
-				onCloseDiffFile={vi.fn()}
-				activeDiffFile={activeDiffFile}
-				onSelectCommit={vi.fn()}
-				activeCommitHash={null}
+				onOpenGitSegment={vi.fn()}
+				activeGitSegment={activeGitSegment}
 				onSelectFile={vi.fn()}
 				activeFilePath={null}
 				activeFileEdit={false}
@@ -323,12 +319,7 @@ describe("picking a row", () => {
 		return () => worktreeActions.reset();
 	});
 
-	const picks = [
-		"open session",
-		"open src/main.tsx",
-		"open diff",
-		"open commit",
-	];
+	const picks = ["open session", "open src/main.tsx", "open history"];
 
 	// The column's `onClose` collapses it, so a pick that dismissed the drawer
 	// on a phone would take the column away with it.
@@ -371,13 +362,31 @@ describe("the git watcher", () => {
 		expect(gitWatchEnabled).toBe(false);
 	});
 
-	it("keeps watching a collapsed column while a diff is still on screen", () => {
+	// Any layer of it, not only a diff: a list frozen under the reader is the
+	// same failure as a diff's previous/next frozen under them.
+	it("keeps watching a collapsed column while the Git workspace is on screen", () => {
 		renderSidebar(vi.fn(), {
 			isExpanded: true,
 			isOpen: false,
-			activeDiffFile: { path: "src/main.tsx", staged: false },
+			activeGitSegment: "changes",
 		});
 		expect(gitWatchEnabled).toBe(true);
+	});
+
+	// An extension's sidebar has no badge to feed, but the workspace beside it
+	// is still read.
+	it("watches the Git workspace under an extension's sidebar too", () => {
+		setSidebarUIConfig({ SidebarContent: () => null });
+		try {
+			const { unmount } = renderSidebar(vi.fn());
+			expect(gitWatchEnabled).toBe(false);
+			unmount();
+
+			renderSidebar(vi.fn(), { activeGitSegment: "history" });
+			expect(gitWatchEnabled).toBe(true);
+		} finally {
+			resetSidebarUIConfig();
+		}
 	});
 
 	it("stops with a closed drawer, as before", () => {

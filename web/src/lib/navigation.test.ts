@@ -359,6 +359,28 @@ describe("the work list segment in the URL", () => {
 	});
 });
 
+// The Git workspace follows the same rule: `changes` is the absence of the
+// parameter, never `segment=changes`.
+describe("the Git workspace segment in the URL", () => {
+	it("writes nothing for Changes and the word for the others", () => {
+		expect(
+			overlayToNavigation({ type: "git", segment: "changes" }, "", null),
+		).toEqual({ to: "/git" });
+
+		expect(
+			overlayToNavigation(
+				{ type: "git", segment: "branches" },
+				"feature-x",
+				"sess123",
+			),
+		).toEqual({
+			to: "/w/$worktree/git",
+			params: { worktree: "feature-x" },
+			search: { session: "sess123", segment: "branches" },
+		});
+	});
+});
+
 describe("the schedule routes", () => {
 	it("builds the list in main and in a worktree", () => {
 		expect(overlayToNavigation({ type: "schedule-list" }, "", null)).toEqual({

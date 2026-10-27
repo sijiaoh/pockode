@@ -4,7 +4,7 @@ interface Props {
 }
 
 /**
- * git's own words, wherever the panel reports a failure.
+ * git's own words, wherever the workspace reports a failure.
  *
  * Always capped and scrollable: a rejected push runs to a dozen lines of
  * `hint:`, a checkout refusal names every file in the way, and a pre-commit hook

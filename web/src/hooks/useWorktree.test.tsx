@@ -2,6 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { ROUTES, WT_ROUTES } from "../lib/routes";
 import { useWorktreeStore, worktreeActions } from "../lib/worktreeStore";
 import type { WorktreeChangedNotification } from "../types/message";
 import { useWorktree } from "./useWorktree";
@@ -9,7 +10,20 @@ import { useWorktree } from "./useWorktree";
 let notify: ((params: WorktreeChangedNotification) => void) | null = null;
 const listWorktrees = vi.fn();
 
-vi.mock("@tanstack/react-router", () => ({ useNavigate: () => vi.fn() }));
+// The route the switch is made from: a match for one path, nothing else.
+const route = vi.hoisted(() => ({
+	from: null as string | null,
+	search: {} as Record<string, string>,
+	navigate: vi.fn(),
+}));
+vi.mock("@tanstack/react-router", () => ({
+	useNavigate: () => route.navigate,
+	useMatch: ({ from }: { from: string }) =>
+		from === route.from
+			? { params: { _splat: "abc1234" }, search: route.search }
+			: undefined,
+	useParams: () => ({}),
+}));
 
 vi.mock("../lib/wsStore", () => {
 	const state = {
@@ -43,6 +57,9 @@ function renderWorktree() {
 }
 
 afterEach(() => {
+	route.from = null;
+	route.search = {};
+	route.navigate.mockReset();
 	worktreeActions.reset();
 	notify = null;
 	listWorktrees.mockReset();
@@ -103,5 +120,48 @@ describe("useWorktree", () => {
 			expect(result.current.currentWorktree?.branch).toBe("main"),
 		);
 		expect(useWorktreeStore.getState().isGitRepo).toBe(true);
+	});
+
+	it("goes to the new worktree's home from an ordinary page", () => {
+		listWorktrees.mockReturnValue(new Promise(() => {}));
+		const { result } = renderWorktree();
+
+		act(() => result.current.select("B"));
+
+		expect(route.navigate).toHaveBeenCalledWith({
+			to: WT_ROUTES.index,
+			params: { worktree: "B" },
+		});
+	});
+
+	// The segment's list, not the layer: the diff or commit open here need not
+	// exist in the other worktree.
+	it("stays in the Git workspace, at the same segment's list", () => {
+		listWorktrees.mockReturnValue(new Promise(() => {}));
+		route.from = ROUTES.commit;
+		const { result } = renderWorktree();
+
+		act(() => result.current.select("B"));
+
+		expect(route.navigate).toHaveBeenCalledWith({
+			to: WT_ROUTES.git,
+			params: { worktree: "B" },
+			search: { segment: "history" },
+		});
+	});
+
+	it("keeps the segment of a list it is switched from", () => {
+		listWorktrees.mockReturnValue(new Promise(() => {}));
+		route.from = WT_ROUTES.git;
+		route.search = { segment: "branches" };
+		const { result } = renderWorktree();
+
+		act(() => result.current.select("B"));
+
+		expect(route.navigate).toHaveBeenCalledWith({
+			to: WT_ROUTES.git,
+			params: { worktree: "B" },
+			search: { segment: "branches" },
+		});
 	});
 });

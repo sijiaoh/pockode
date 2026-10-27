@@ -17,7 +17,7 @@ interface GitWriteRunner {
 }
 
 /**
- * Stage, unstage and discard as the panel starts them: through the write store,
+ * Stage, unstage and discard as the workspace starts them: through the write store,
  * so that two taps in a row queue instead of racing each other for this
  * worktree's `index.lock`.
  *

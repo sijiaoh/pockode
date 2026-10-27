@@ -1,7 +1,11 @@
 import { useMatch, useParams } from "@tanstack/react-router";
 import { ROUTES, WT_ROUTES } from "../lib/routes";
-import type { OverlaySearchParams, SessionSearchParams } from "../router";
-import type { OverlayState, WorkSegment } from "../types/overlay";
+import type {
+	GitSearchParams,
+	OverlaySearchParams,
+	SessionSearchParams,
+} from "../router";
+import type { GitSegment, OverlayState, WorkSegment } from "../types/overlay";
 
 export interface RouteInfo {
 	overlay: OverlayState;
@@ -35,6 +39,11 @@ function readSegment(search: OverlaySearchParams): WorkSegment {
 	return search.segment === "closed" ? "closed" : "current";
 }
 
+/** As `readSegment`: `changes` is whatever does not name another segment. */
+function readGitSegment(search: GitSearchParams): GitSegment {
+	return search.segment ?? "changes";
+}
+
 export function useRouteState(): RouteInfo {
 	const worktree = useCurrentWorktree();
 
@@ -61,6 +70,8 @@ export function useRouteState(): RouteInfo {
 		from: WT_ROUTES.files,
 		shouldThrow: false,
 	});
+	const gitMatch = useMatch({ from: ROUTES.git, shouldThrow: false });
+	const wtGitMatch = useMatch({ from: WT_ROUTES.git, shouldThrow: false });
 	const commitMatch = useMatch({
 		from: ROUTES.commit,
 		shouldThrow: false,
@@ -186,6 +197,16 @@ export function useRouteState(): RouteInfo {
 			wtFileMatch?.search) as OverlaySearchParams;
 		return {
 			overlay: { type: "file", path: filePath, edit: search.mode === "edit" },
+			sessionId: search.session ?? null,
+			worktree,
+			viewWorktree: null,
+		};
+	}
+
+	if (gitMatch || wtGitMatch) {
+		const search = (gitMatch?.search ?? wtGitMatch?.search) as GitSearchParams;
+		return {
+			overlay: { type: "git", segment: readGitSegment(search) },
 			sessionId: search.session ?? null,
 			worktree,
 			viewWorktree: null,

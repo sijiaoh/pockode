@@ -1585,6 +1585,14 @@ worktreeActions.onWorktreeChange(() => {
 	void runWorktreeSwitchLoop();
 });
 
+/**
+ * Whether the connection may still be bound to a worktree the app has left,
+ * for a reader that mounts mid-switch and so never heard the switch start.
+ */
+export function isWorktreeSwitchInFlight(): boolean {
+	return switchInFlight;
+}
+
 // command.list leaves out the commands that need a repository, so the palette's
 // copy is stale the moment the answer changes.
 worktreeActions.onGitRepoChange(() => {

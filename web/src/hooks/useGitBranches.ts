@@ -26,7 +26,7 @@ export function useGitBranchActions() {
 	const createBranch = useWSStore((s) => s.actions.createBranch);
 
 	// Deliberately not returned: react-query would fold the refetch into the
-	// mutation's outcome, and the branch sheet would report a switch that did
+	// mutation's outcome, and the Branches list would report a switch that did
 	// happen as a failure because the refresh behind it failed.
 	const onSuccess = () => {
 		invalidateGitQueries(queryClient);

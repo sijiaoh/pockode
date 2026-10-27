@@ -56,6 +56,7 @@ import type {
 	UserMessage,
 } from "../../types/message";
 import {
+	type GitSegment,
 	isGitOverlay,
 	type OverlayState,
 	type WorkSegment,
@@ -73,7 +74,7 @@ import {
 } from "../../utils/sendAgain";
 import CliLoginSheet from "../CliLogin/CliLoginSheet";
 import { FileEditor, FileView } from "../Files";
-import { CommitDiffView, CommitFileView, CommitView, DiffView } from "../Git";
+import { GitWorkspace } from "../Git";
 import MainContainer from "../Layout/MainContainer";
 import PageHeader, {
 	PageHeaderTarget,
@@ -110,7 +111,14 @@ const noop = () => {};
 const FOLDER_ATTACH_REFUSED =
 	"Folders can't be attached. Upload them in the Files tab.";
 
+// The Git workspace is among them: it is a page of its own with its own
+// bottom bars, and the composer under them would be a third.
 const inputBarHiddenOverlays: NonNullable<OverlayState>["type"][] = [
+	"git",
+	"diff",
+	"commit",
+	"commit-diff",
+	"commit-file",
 	"work-list",
 	"work-detail",
 	"agent-role-list",
@@ -209,6 +217,11 @@ interface Props {
 	onOpenAgentRoleDetail?: (roleId: string) => void;
 	onOpenScheduleList?: () => void;
 	onOpenScheduleDetail?: (scheduleId: string) => void;
+	/** The Git workspace's navigations; see `GitWorkspace`. */
+	onSelectGitSegment?: (segment: GitSegment) => void;
+	onSelectDiffFile?: (path: string, staged: boolean) => void;
+	onSelectCommit?: (hash: string) => void;
+	onCloseGitFile?: (path: string, worktree: string) => void;
 	/**
 	 * Set when the session's data is being read out of another worktree, which
 	 * is the whole of what makes this screen read-only: the data comes from
@@ -242,6 +255,10 @@ function ChatPanel({
 	onOpenAgentRoleDetail,
 	onOpenScheduleList,
 	onOpenScheduleDetail,
+	onSelectGitSegment,
+	onSelectDiffFile,
+	onSelectCommit,
+	onCloseGitFile,
 	view = null,
 	onOpenSessionThere,
 }: Props) {
@@ -1264,12 +1281,21 @@ function ChatPanel({
 
 	const renderOverlay = (overlay: NonNullable<OverlayState>) => {
 		switch (overlay.type) {
+			// One element for every layer, so that moving between a list and its
+			// layers keeps the workspace — and the list's place — mounted.
+			case "git":
 			case "diff":
+			case "commit":
+			case "commit-diff":
+			case "commit-file":
 				return (
-					<DiffView
-						path={overlay.path}
-						staged={overlay.staged}
+					<GitWorkspace
+						layer={overlay}
 						onBack={onCloseOverlay ?? noop}
+						onSelectSegment={onSelectGitSegment ?? noop}
+						onSelectFile={onSelectDiffFile ?? noop}
+						onSelectCommit={onSelectCommit ?? noop}
+						onCloseFile={onCloseGitFile ?? noop}
 					/>
 				);
 			case "file":
@@ -1279,14 +1305,6 @@ function ChatPanel({
 					);
 				}
 				return <FileView path={overlay.path} onBack={onCloseOverlay ?? noop} />;
-			case "commit":
-				return (
-					<CommitView hash={overlay.hash} onBack={onCloseOverlay ?? noop} />
-				);
-			case "commit-diff":
-				return <CommitDiffView hash={overlay.hash} path={overlay.path} />;
-			case "commit-file":
-				return <CommitFileView hash={overlay.hash} path={overlay.path} />;
 			case "settings":
 				return <SettingsPage onBack={onCloseOverlay ?? noop} />;
 			case "work-list":
