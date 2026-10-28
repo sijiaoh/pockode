@@ -13,6 +13,7 @@ import DiffView from "./DiffView";
 
 const navigate = vi.fn();
 const stage = vi.fn();
+const resolve = vi.fn();
 const unstage = vi.fn();
 const discard = vi.fn();
 const diffWatch = vi.fn();
@@ -20,6 +21,22 @@ const statusRef = vi.hoisted(() => ({
 	current: undefined as GitStatus | undefined,
 }));
 const expandedRef = vi.hoisted(() => ({ current: false }));
+// The working-tree file a conflicted path is read from.
+const contentsRef = vi.hoisted(() => ({
+	current: {
+		data: undefined as unknown,
+		isLoading: false,
+		isFetching: false,
+		error: null,
+		// What a re-read finds on disk; the cached `data` unless a test says.
+		onDisk: undefined as unknown,
+		refetch: async () => ({
+			data: contentsRef.current.onDisk ?? contentsRef.current.data,
+			isError: false,
+		}),
+	},
+}));
+const prefill = vi.hoisted(() => vi.fn());
 
 vi.mock("@pockode/shared", async (importOriginal) => ({
 	...(await importOriginal<typeof import("@pockode/shared")>()),
@@ -68,11 +85,38 @@ vi.mock("../../hooks/useGitDiffWatch", () => ({
 	},
 }));
 vi.mock("../../hooks/useGitStatus", () => ({
-	useGitStatus: () => ({ data: statusRef.current }),
+	useGitStatus: () => ({
+		data: statusRef.current,
+		isPending: statusRef.current === undefined,
+	}),
+}));
+vi.mock("../../hooks/useContents", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../../hooks/useContents")>()),
+	useContents: () => contentsRef.current,
+}));
+vi.mock("../../hooks/useFSWatch", () => ({ useFSWatch: () => {} }));
+vi.mock("@tanstack/react-query", async (importOriginal) => ({
+	...(await importOriginal<typeof import("@tanstack/react-query")>()),
+	useQueryClient: () => ({
+		invalidateQueries: () => {},
+		getQueryData: (key: readonly string[]) =>
+			key[0] === "git-status"
+				? statusRef.current
+				: { head: { branch: "feature", detached: false } },
+	}),
+}));
+vi.mock("../../hooks/usePrefillComposer", () => ({
+	usePrefillComposer: () => ({
+		prefill,
+		isPending: false,
+		error: null,
+		dismissError: () => {},
+	}),
 }));
 vi.mock("../../hooks/useGitStage", () => ({
 	useGitStage: () => ({
 		stageMutation: { mutateAsync: stage },
+		resolveMutation: { mutateAsync: resolve },
 		unstageMutation: { mutateAsync: unstage },
 	}),
 }));
@@ -121,9 +165,18 @@ beforeEach(() => {
 	back.mockReset();
 	historyStateRef.current = {};
 	stage.mockReset().mockResolvedValue(undefined);
+	resolve.mockReset().mockResolvedValue(undefined);
 	unstage.mockReset().mockResolvedValue(undefined);
 	discard.mockReset().mockResolvedValue(undefined);
 	diffWatch.mockReset();
+	prefill.mockReset().mockResolvedValue(undefined);
+	Object.assign(contentsRef.current, {
+		data: undefined,
+		isLoading: false,
+		isFetching: false,
+		error: null,
+		onDisk: undefined,
+	});
 	gitWriteActions.reset();
 	expandedRef.current = false;
 	urlRef.current = null;
@@ -346,6 +399,25 @@ describe("DiffView bottom buttons", () => {
 			await waitFor(() => expect(back).toHaveBeenCalledTimes(1));
 			expect(navigate).not.toHaveBeenCalled();
 		});
+	});
+
+	// Staging would record the markers as the resolution, unstaging would
+	// throw the conflict away, and git refuses to discard it.
+	it("offers no stage, unstage or discard on a conflicted file", () => {
+		statusRef.current = {
+			staged: [
+				{ path: "a.ts", status: "U" },
+				{ path: "b.ts", status: "M" },
+			],
+			unstaged: [{ path: "a.ts", status: "U" }],
+			conflicted: ["a.ts"],
+		};
+		render(<DiffView path="a.ts" staged={false} />);
+
+		for (const name of [/Stage/, "Unstage", "Discard file"]) {
+			expect(screen.queryByRole("button", { name })).toBeNull();
+		}
+		expect(screen.getByRole("button", { name: "Next" })).toBeEnabled();
 	});
 
 	it("offers Next and Unstage on a fully staged file", async () => {
@@ -578,5 +650,215 @@ describe("DiffView stage answered after the reader left", () => {
 		expect(await screen.findByRole("alert")).toBeInTheDocument();
 		expect(failures()).toEqual({});
 		expect(navigate).not.toHaveBeenCalled();
+	});
+});
+
+describe("DiffView conflict view", () => {
+	const textFile = (content: string) => ({
+		name: "a.ts",
+		type: "file",
+		path: "a.ts",
+		size: content.length,
+		mime: "text/plain",
+		content,
+		encoding: "text",
+	});
+	const MARKED = [
+		"const a = 1;",
+		"<<<<<<< HEAD",
+		"const b = old;",
+		"=======",
+		"const b = new;",
+		">>>>>>> 9692fc9 (Add branch bar)",
+		"",
+	].join("\n");
+
+	beforeEach(() => {
+		statusRef.current = {
+			staged: [
+				{ path: "a.ts", status: "U" },
+				{ path: "b.ts", status: "M" },
+			],
+			unstaged: [{ path: "a.ts", status: "U" }],
+			conflicted: ["a.ts"],
+			operation: {
+				kind: "merge",
+				commit: { hash: "4be1f20aaaa", subject: "Bump", ref: "main" },
+			},
+		};
+	});
+
+	it("shows the working-tree file with its markers, not a diff", () => {
+		contentsRef.current.data = textFile(MARKED);
+		render(<DiffView path="a.ts" staged={false} />);
+
+		expect(screen.getByText("<<<<<<< HEAD")).toBeInTheDocument();
+		expect(screen.getByText("1 conflict")).toBeInTheDocument();
+		expect(diffWatch).toHaveBeenLastCalledWith(
+			expect.objectContaining({ enabled: false }),
+		);
+		expect(
+			screen.queryByRole("button", { name: "Hide whitespace changes" }),
+		).toBeNull();
+		expect(screen.queryByRole("button", { name: "Mark resolved" })).toBeNull();
+		expect(
+			screen.getByRole("button", {
+				name: "Ask agent to resolve the conflicts",
+			}),
+		).toBeEnabled();
+		expect(screen.getByRole("button", { name: "Next" })).toBeEnabled();
+	});
+
+	it("goes back to the list from the last file", async () => {
+		const user = userEvent.setup();
+		contentsRef.current.data = textFile(MARKED);
+		statusRef.current = {
+			staged: [{ path: "a.ts", status: "U" }],
+			unstaged: [{ path: "a.ts", status: "U" }],
+			conflicted: ["a.ts"],
+		};
+		render(<DiffView path="a.ts" staged={false} showBack />);
+
+		const leave = within(
+			screen.getByRole("button", { name: "Ask agent to resolve the conflicts" })
+				.parentElement as HTMLElement,
+		).getByRole("button", { name: "Back to changes" });
+		await user.click(leave);
+		expect(navigate).toHaveBeenCalledWith(toList());
+	});
+
+	it("hands the conflicts to the agent with the state at the press", async () => {
+		const user = userEvent.setup();
+		contentsRef.current.data = textFile(MARKED);
+		render(<DiffView path="a.ts" staged={false} />);
+
+		await user.click(
+			screen.getByRole("button", {
+				name: "Ask agent to resolve the conflicts",
+			}),
+		);
+		expect(prefill).toHaveBeenCalledWith(
+			expect.stringMatching(
+				/^The repository is in the middle of a merge of main into feature, stopped on conflicts in:\n- a\.ts\n/,
+			),
+		);
+	});
+
+	// Resolved by hand: nothing left that staging would record as a resolution.
+	it("marks a file with no paired marker left resolved, and stays on it", async () => {
+		const user = userEvent.setup();
+		contentsRef.current.data = textFile("const b = new;\n=======\n");
+		render(<DiffView path="a.ts" staged={false} />);
+
+		expect(
+			screen.getByText(
+				"No conflict markers left. The file stays conflicted until it is marked resolved.",
+			),
+		).toBeInTheDocument();
+		await user.click(screen.getByRole("button", { name: "Mark resolved" }));
+		expect(resolve).toHaveBeenCalledWith(["a.ts"]);
+		expect(stage).not.toHaveBeenCalled();
+		await writesSettled();
+		expect(navigate).not.toHaveBeenCalled();
+	});
+
+	it("does not offer Mark resolved while the file is being re-read", () => {
+		contentsRef.current.data = textFile("resolved\n");
+		contentsRef.current.isFetching = true;
+		render(<DiffView path="a.ts" staged={false} />);
+
+		expect(screen.queryByRole("button", { name: "Mark resolved" })).toBeNull();
+	});
+
+	// The cache can be a moment behind the disk: the agent wrote markers back.
+	it("stages nothing when the re-read at the press finds markers", async () => {
+		const user = userEvent.setup();
+		contentsRef.current.data = textFile("resolved\n");
+		contentsRef.current.onDisk = textFile(MARKED);
+		render(<DiffView path="a.ts" staged={false} />);
+
+		await user.click(screen.getByRole("button", { name: "Mark resolved" }));
+		expect(resolve).not.toHaveBeenCalled();
+	});
+
+	// Shown plain, since they do not pair up — and still not a resolution.
+	it("does not offer Mark resolved while an unpaired marker is left", () => {
+		contentsRef.current.data = textFile("<<<<<<< HEAD\nx\n>>>>>>> t\n");
+		render(<DiffView path="a.ts" staged={false} />);
+
+		expect(screen.queryByRole("button", { name: "Mark resolved" })).toBeNull();
+		expect(
+			screen.getByText(
+				"Conflict markers are left that do not pair up. Fix them in the file, or ask the agent.",
+			),
+		).toBeInTheDocument();
+	});
+
+	it("shows an SVG's markers as text, not a picture", () => {
+		contentsRef.current.data = { ...textFile(MARKED), mime: "image/svg+xml" };
+		render(<DiffView path="a.ts" staged={false} />);
+
+		expect(screen.getByText("<<<<<<< HEAD")).toBeInTheDocument();
+	});
+
+	it("reports a failed Mark resolved on the layer", async () => {
+		const user = userEvent.setup();
+		resolve.mockRejectedValue(new Error("index.lock exists"));
+		contentsRef.current.data = textFile("resolved\n");
+		render(<DiffView path="a.ts" staged={false} />);
+
+		await user.click(screen.getByRole("button", { name: "Mark resolved" }));
+		expect(await screen.findByRole("alert")).toBeInTheDocument();
+		expect(failures()).toEqual({});
+	});
+
+	it("shows a card, and no Mark resolved, for a file deleted on one side", async () => {
+		const user = userEvent.setup();
+		statusRef.current = {
+			staged: [{ path: "a.ts", status: "D" }],
+			unstaged: [{ path: "a.ts", status: "U" }],
+			conflicted: ["a.ts"],
+		};
+		contentsRef.current.data = textFile("still here\n");
+		render(<DiffView path="a.ts" staged={false} />);
+
+		expect(
+			screen.getByText("One side deleted this file and the other changed it."),
+		).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Mark resolved" })).toBeNull();
+		await user.click(screen.getByRole("button", { name: "Open file" }));
+		expect(navigate).toHaveBeenCalledWith(
+			overlayToNavigation({ type: "file", path: "a.ts" }, "", null),
+		);
+	});
+
+	it("offers no Open file once both sides deleted it", () => {
+		statusRef.current = {
+			staged: [{ path: "a.ts", status: "D" }],
+			unstaged: [{ path: "a.ts", status: "D" }],
+			conflicted: ["a.ts"],
+		};
+		render(<DiffView path="a.ts" staged={false} />);
+
+		expect(
+			screen.getByText("Both sides deleted this file."),
+		).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: /Open/ })).toBeNull();
+	});
+
+	it("shows a card for a binary file", () => {
+		contentsRef.current.data = {
+			...textFile(""),
+			size: 10,
+			content: "",
+			encoding: "none",
+			omitted: "binary",
+		};
+		render(<DiffView path="a.ts" staged={false} />);
+
+		expect(
+			screen.getByText("Binary file — the conflict cannot be shown."),
+		).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Mark resolved" })).toBeNull();
 	});
 });

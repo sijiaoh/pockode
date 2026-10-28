@@ -89,6 +89,19 @@ vi.mock("./DiffView", async () => {
 		},
 	};
 });
+vi.mock("./OperationBanner", () => ({
+	default: ({
+		compact,
+		onSelectFile,
+	}: {
+		compact: boolean;
+		onSelectFile: (path: string) => void;
+	}) => (
+		<button type="button" onClick={() => onSelectFile("src/c.ts")}>
+			{compact ? "one-line banner" : "full banner"}
+		</button>
+	),
+}));
 vi.mock("./CommitView", () => ({ default: page("commit") }));
 vi.mock("./CommitDiffView", () => ({ default: page("commit diff") }));
 vi.mock("./CommitFileView", () => ({ default: page("commit file") }));
@@ -190,6 +203,26 @@ describe("GitWorkspace below expanded", () => {
 		).toBeInTheDocument();
 	});
 
+	// A layer has no room for the whole banner over its content; the list does.
+	it("draws the operation banner whole on a list and in one line on a layer", async () => {
+		const user = userEvent.setup();
+		const { rerender, onSelectFile, ...props } = renderWorkspace({
+			type: "git",
+			segment: "history",
+		});
+
+		await user.click(screen.getByRole("button", { name: "full banner" }));
+		// The conflicted file's working-tree side: what its review shows.
+		expect(onSelectFile).toHaveBeenCalledWith("src/c.ts", false);
+
+		rerender(
+			<GitWorkspace layer={DIFF} onSelectFile={onSelectFile} {...props} />,
+		);
+		expect(
+			screen.getByRole("button", { name: "one-line banner" }),
+		).toBeInTheDocument();
+	});
+
 	it("goes back from a commit to History", async () => {
 		const user = userEvent.setup();
 		const { onSelectSegment } = renderWorkspace({
@@ -216,6 +249,10 @@ describe("GitWorkspace at expanded", () => {
 		// The app header names the workspace; it cannot name both columns.
 		expect(screen.getByRole("heading", { name: "Git" })).toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: "diff back" })).toBeNull();
+		// Above both columns, so the layer needs no one-line form of its own.
+		expect(
+			screen.getByRole("button", { name: "full banner" }),
+		).toBeInTheDocument();
 	});
 
 	// The list beside it is the commit's; its row stays lit through the

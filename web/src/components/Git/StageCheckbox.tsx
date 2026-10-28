@@ -1,4 +1,4 @@
-import { Check, Minus } from "lucide-react";
+import { Check, Minus, TriangleAlert } from "lucide-react";
 import type { CheckState } from "../../lib/gitChanges";
 import { Spinner } from "../ui";
 import { iconButtonClass } from "../ui/iconButtonClass";
@@ -59,3 +59,18 @@ function StageCheckbox({ state, label, busy, onToggle }: Props) {
 }
 
 export default StageCheckbox;
+
+/**
+ * The checkbox column without a checkbox: a conflicted file's glyph, or
+ * nothing for a folder or select-all with only conflicts under it. As wide as
+ * a box, so the column of boxes stays aligned.
+ */
+export function StageGutter({ conflict = false }: { conflict?: boolean }) {
+	return (
+		<span className="flex min-w-[36px] shrink-0 items-center justify-center self-stretch pointer-coarse:min-w-11">
+			{conflict && (
+				<TriangleAlert className="size-4 text-th-warning" aria-hidden="true" />
+			)}
+		</span>
+	);
+}

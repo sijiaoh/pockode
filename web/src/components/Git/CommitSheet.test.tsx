@@ -22,6 +22,7 @@ function renderSheet(
 		amendInitially?: boolean;
 		push?: CommitPush | null;
 		draft?: CommitDraft["run"];
+		paused?: string | null;
 		onCommit?: (
 			message: string,
 			amend: boolean,
@@ -41,6 +42,7 @@ function renderSheet(
 			amendInitially={props.amendInitially ?? false}
 			push={props.push === undefined ? null : props.push}
 			draft={{ agentLabel: "Claude", run: runDraft }}
+			paused={props.paused ?? null}
 			onClose={onClose}
 			onCommit={onCommit}
 		/>,
@@ -58,6 +60,22 @@ const amendToggle = () =>
 	screen.getByRole("checkbox", { name: "Amend last commit" });
 
 describe("CommitSheet", () => {
+	// An operation that began with the sheet open: the message stays, both
+	// commits stop, and the footer says why.
+	it("disables committing with the reason while paused", async () => {
+		const user = userEvent.setup();
+		renderSheet({ push: PUSH, paused: "Can't commit during a rebase." });
+
+		await user.type(message(), "Fix it");
+
+		expect(commitButton()).toBeDisabled();
+		expect(pushButton()).toBeDisabled();
+		expect(commitButton()).toHaveAccessibleDescription(
+			"Can't commit during a rebase.",
+		);
+		expect(message()).toHaveValue("Fix it");
+	});
+
 	it("commits the typed message", async () => {
 		const user = userEvent.setup();
 		const { onCommit } = renderSheet({ stagedCount: 2 });
@@ -611,6 +629,7 @@ describe("CommitSheet", () => {
 					amendInitially={false}
 					push={null}
 					draft={{ agentLabel, run }}
+					paused={null}
 					onClose={vi.fn()}
 					onCommit={vi.fn()}
 				/>

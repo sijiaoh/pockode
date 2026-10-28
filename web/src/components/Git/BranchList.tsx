@@ -51,13 +51,20 @@ export function useBranchCheckout(
 interface Props {
 	branches: GitBranches;
 	state: BranchCheckout;
+	/**
+	 * Why no branch can be switched to right now — an operation in progress —
+	 * null when one can. `pausedId` names the line for the page's own
+	 * `New branch…`, which stops for the same reason.
+	 */
+	paused: string | null;
+	pausedId?: string;
 }
 
 /**
  * The branches to switch to: local ones first, then the remote-only ones, with
  * a filter once the list is long.
  */
-function BranchList({ branches, state }: Props) {
+function BranchList({ branches, state, paused, pausedId }: Props) {
 	const [filter, setFilter] = useState("");
 	const filterId = useId();
 	const { switchingTo, error, checkout, dismissError } = state;
@@ -76,6 +83,7 @@ function BranchList({ branches, state }: Props) {
 	const showFilter =
 		branches.local.length + branches.remote_only.length > FILTER_THRESHOLD;
 	const isSwitching = switchingTo !== null;
+	const blocked = isSwitching || paused !== null;
 
 	return (
 		<>
@@ -106,6 +114,12 @@ function BranchList({ branches, state }: Props) {
 					</div>
 				)}
 
+				{paused && (
+					<p id={pausedId} className="px-4 py-3 text-sm text-th-text-muted">
+						{paused}
+					</p>
+				)}
+
 				{error && (
 					<div className="flex items-start gap-2 px-4 py-3">
 						<div className="min-w-0 flex-1 space-y-1" role="alert">
@@ -129,7 +143,7 @@ function BranchList({ branches, state }: Props) {
 
 			{local.map((branch) => {
 				const occupied = Boolean(branch.worktree);
-				const disabled = branch.current || occupied || isSwitching;
+				const disabled = branch.current || occupied || blocked;
 
 				return (
 					<button
@@ -175,8 +189,8 @@ function BranchList({ branches, state }: Props) {
 					key={`remote:${branch.ref}`}
 					type="button"
 					onClick={() => checkout(branch.name)}
-					disabled={isSwitching}
-					className={rowClass(isSwitching)}
+					disabled={blocked}
+					className={rowClass(blocked)}
 				>
 					<span className="h-4 w-4 shrink-0" />
 					<BranchName name={branch.ref} />

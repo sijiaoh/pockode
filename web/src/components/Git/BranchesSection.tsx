@@ -1,9 +1,11 @@
 import { Plus } from "lucide-react";
-import { useState } from "react";
+import { useId, useState } from "react";
 import {
 	useGitBranchActions,
 	useGitBranches,
 } from "../../hooks/useGitBranches";
+import { useGitStatus } from "../../hooks/useGitStatus";
+import { branchSwitchPausedReason } from "../../lib/gitOperation";
 import { BottomActionBar, Spinner } from "../ui";
 import { headLabel } from "./BranchBar";
 import BranchList, { useBranchCheckout } from "./BranchList";
@@ -23,9 +25,12 @@ function BranchesSection() {
 		await checkoutMutation.mutateAsync(branch);
 	});
 	const [creating, setCreating] = useState(false);
+	const pausedId = useId();
 
 	const head = branches?.head;
 	const isSwitching = checkout.switchingTo !== null;
+	const operation = useGitStatus().data?.operation;
+	const paused = operation ? branchSwitchPausedReason(operation.kind) : null;
 
 	return (
 		<>
@@ -35,7 +40,12 @@ function BranchesSection() {
 				{/* Data first, as in the top bar: a refetch that fails leaves the
 				    branches already known. */}
 				{branches ? (
-					<BranchList branches={branches} state={checkout} />
+					<BranchList
+						branches={branches}
+						state={checkout}
+						paused={paused}
+						pausedId={pausedId}
+					/>
 				) : isLoading ? (
 					<div className="flex items-center justify-center p-8">
 						<Spinner variant="current" className="text-th-text-muted" />
@@ -57,7 +67,8 @@ function BranchesSection() {
 					<button
 						type="button"
 						onClick={() => setCreating(true)}
-						disabled={isSwitching}
+						disabled={isSwitching || paused !== null}
+						aria-describedby={paused ? pausedId : undefined}
 						className="flex min-h-[44px] w-full items-center justify-center gap-2 rounded-lg bg-th-bg-tertiary px-4 py-2.5 text-sm text-th-text-primary transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
 					>
 						<Plus className="h-4 w-4" aria-hidden="true" />
@@ -69,6 +80,7 @@ function BranchesSection() {
 			{creating && head && (
 				<NewBranchSheet
 					base={headLabel(head)}
+					paused={paused}
 					onClose={() => setCreating(false)}
 					onCreate={async (name) => {
 						await createMutation.mutateAsync(name);

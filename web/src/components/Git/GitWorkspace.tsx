@@ -16,6 +16,7 @@ import CommitFileView from "./CommitFileView";
 import CommitView from "./CommitView";
 import DiffView from "./DiffView";
 import HistorySection from "./HistorySection";
+import OperationBanner from "./OperationBanner";
 
 /** A layer of the workspace: the overlays `gitSegmentOf` gives a segment. */
 export type GitLayer = Extract<
@@ -127,6 +128,14 @@ function GitWorkspace({
 			<BranchBar
 				onOpenBranches={() => onSelectSegment("branches")}
 				branchesOnScreen={segment === "branches"}
+			/>
+
+			{/* Narrow, a layer has no room for the whole banner over its content;
+			    the actions are one Back away. Wide, the banner spans both
+			    columns, so it is never a second form. */}
+			<OperationBanner
+				compact={!listOnScreen}
+				onSelectFile={(path) => onSelectFile(path, false)}
 			/>
 
 			<div className="relative flex min-h-0 flex-1">

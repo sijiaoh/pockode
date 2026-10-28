@@ -8,7 +8,12 @@ import { getAgentLabel } from "../../lib/agentType";
 import { useSyncRun } from "../../lib/gitSyncStore";
 import { useWorktreeStore } from "../../lib/worktreeStore";
 import { isRPCTimeout, useWSStore } from "../../lib/wsStore";
-import { describeGitSync, stagedSubmodules } from "../../types/git";
+import {
+	commitPausedReason,
+	describeGitSync,
+	stagedCount,
+	stagedSubmodules,
+} from "../../types/git";
 import { commitPushBlocker } from "../../utils/gitSyncMessages";
 import { hasSyncStatus } from "../../utils/gitSyncStatus";
 import { generateUUID } from "../../utils/uuid";
@@ -121,14 +126,13 @@ function GitCommitSheet({ amendInitially, onClose, onCommitted }: Props) {
 
 	return (
 		<CommitSheet
-			// Root repository only: git.add stages a submodule's file in that
-			// submodule's index, which a root commit does not touch.
-			stagedCount={status?.staged.length ?? 0}
+			stagedCount={status ? stagedCount(status) : 0}
 			submodules={status ? stagedSubmodules(status) : []}
 			lastCommit={lastCommit}
 			amendInitially={amendInitially}
 			push={push}
 			draft={draft}
+			paused={status ? commitPausedReason(status) : null}
 			onClose={onClose}
 			// The sheet reports the outcome itself and stays open on failure, so
 			// the error stops there rather than becoming an unhandled rejection.

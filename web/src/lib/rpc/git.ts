@@ -2,9 +2,11 @@ import type { JSONRPCRequester } from "json-rpc-2.0";
 import type { FileContent } from "../../types/contents";
 import type {
 	CommitDraftRequest,
+	GitAbortResult,
 	GitBranches,
 	GitDiffData,
 	GitLogResult,
+	GitOperationKind,
 	GitPullResult,
 	GitShowResult,
 	GitStatus,
@@ -21,7 +23,12 @@ export interface GitActions {
 	) => Promise<GitDiffData>;
 	/** The file as it stood in that commit, shaped like a `file.get` file. */
 	getCommitFile: (hash: string, path: string) => Promise<FileContent>;
-	stage: (paths: string[]) => Promise<void>;
+	/**
+	 * `resolve` marks conflicted paths resolved by staging them; without it the
+	 * server refuses a conflicted path (-32007), as a stage chosen from an older
+	 * status would record its markers.
+	 */
+	stage: (paths: string[], resolve?: boolean) => Promise<void>;
 	unstage: (paths: string[]) => Promise<void>;
 	/** Reverts unstaged edits; the server decides per path whether that means deleting it. */
 	discard: (paths: string[]) => Promise<void>;
@@ -42,6 +49,11 @@ export interface GitActions {
 	/** Resolves to the number of commits the fast-forward brought in. */
 	pull: () => Promise<number>;
 	push: (force: boolean) => Promise<void>;
+	/**
+	 * Abandons the operation of `kind` in progress. Refused with -32005 when
+	 * that is no longer the one in progress; nothing runs then.
+	 */
+	abort: (kind: GitOperationKind) => Promise<GitAbortResult>;
 }
 
 /**
@@ -86,8 +98,8 @@ export function createGitActions(
 		getCommitFile: async (hash: string, path: string): Promise<FileContent> => {
 			return requireClient().request("git.show.file", { hash, path });
 		},
-		stage: async (paths: string[]): Promise<void> => {
-			await requireClient().request("git.add", { paths });
+		stage: async (paths: string[], resolve = false): Promise<void> => {
+			await requireClient().request("git.add", { paths, resolve });
 		},
 		unstage: async (paths: string[]): Promise<void> => {
 			await requireClient().request("git.reset", { paths });
@@ -142,6 +154,9 @@ export function createGitActions(
 		},
 		push: async (force: boolean): Promise<void> => {
 			await requireClient().request("git.push", { force });
+		},
+		abort: async (kind: GitOperationKind): Promise<GitAbortResult> => {
+			return requireClient().request("git.abort", { kind });
 		},
 	};
 }

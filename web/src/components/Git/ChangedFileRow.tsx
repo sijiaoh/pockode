@@ -7,10 +7,10 @@ import {
 	checkStateOf,
 	lineStatOf,
 } from "../../lib/gitChanges";
-import { splitPath } from "../../utils/path";
+import { splitExtension, splitPath } from "../../utils/path";
 import { iconButtonClass } from "../ui/iconButtonClass";
 import LineCounts from "./LineCounts";
-import StageCheckbox from "./StageCheckbox";
+import StageCheckbox, { StageGutter } from "./StageCheckbox";
 
 /** Px per tree level, for the row's content; the checkbox column stays put. */
 export const TREE_INDENT = 16;
@@ -35,7 +35,9 @@ const KIND_WORD: Partial<Record<ChangeKind, string>> = {
 /** Line 2's status words, after the directory; none for a plain modification. */
 function statusWords(file: ChangedFile, kind: ChangeKind): string[] {
 	const words: string[] = [];
-	if (kind === "renamed") {
+	if (file.conflict) {
+		words.push("Conflict");
+	} else if (kind === "renamed") {
 		const from = file.staged?.orig_path;
 		if (from) {
 			const old = splitPath(from);
@@ -55,16 +57,6 @@ function statusWords(file: ChangedFile, kind: ChangeKind): string[] {
 }
 
 /**
- * Stem and extension apart, so that a long name is cut at the tail and still
- * keeps its extension (`very-long-na….tsx`): CSS cannot cut in the middle.
- */
-function splitExtension(name: string): { stem: string; ext: string } {
-	const dot = name.lastIndexOf(".");
-	if (dot <= 0) return { stem: name, ext: "" };
-	return { stem: name.slice(0, dot), ext: name.slice(dot) };
-}
-
-/**
  * One changed file: its checkbox, the row that opens it, and `⋯` for the
  * rest. The three are siblings, never nested.
  */
@@ -79,7 +71,7 @@ const ChangedFileRow = memo(function ChangedFileRow({
 }: Props) {
 	const kind = changeKindOf(file);
 	const { fileName, directory } = splitPath(file.path);
-	const { stem, ext } = splitExtension(fileName);
+	const { stem, extension: ext } = splitExtension(fileName);
 	const { lines, binary } = lineStatOf(file);
 	const dir = directory.replace(/\/$/, "");
 	const words = statusWords(file, kind);
@@ -94,16 +86,27 @@ const ChangedFileRow = memo(function ChangedFileRow({
 					: "hover:bg-th-bg-tertiary"
 			}`}
 		>
-			<StageCheckbox
-				state={checkStateOf(file)}
-				label={`Stage ${file.path}`}
-				busy={busy}
-				onToggle={() => onToggle(file)}
-			/>
+			{/* Staging a conflict is how git is told it is resolved, so no single
+			    press may do it: the conflict view's `Mark resolved` or the agent
+			    does (docs/git-conflict-ui.md). */}
+			{file.conflict ? (
+				<StageGutter conflict />
+			) : (
+				<StageCheckbox
+					state={checkStateOf(file)}
+					label={`Stage ${file.path}`}
+					busy={busy}
+					onToggle={() => onToggle(file)}
+				/>
+			)}
 			<button
 				type="button"
 				onClick={() => onSelect(file)}
-				aria-label={`Review ${file.path}`}
+				aria-label={
+					file.conflict
+						? `Review ${file.path}, conflicted`
+						: `Review ${file.path}`
+				}
 				// The name replaces the button's text, so what line 2 and the
 				// counts say — Deleted or Untracked before a discard — is
 				// handed back as its description. An id with no element is

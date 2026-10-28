@@ -12,7 +12,11 @@ interface Props {
 	file: ChangedFile;
 	onClose: () => void;
 	onOpenFile: (path: string) => void;
-	/** Only offered while the file has unstaged changes: a staged side has nothing to discard. */
+	/**
+	 * Only offered while the file has unstaged changes: a staged side has
+	 * nothing to discard, and a conflict has no side at all — git refuses to
+	 * restore an unmerged path, and picking a side is not offered here.
+	 */
 	onDiscard: (file: ChangedFile) => void;
 	/**
 	 * A write for this file is queued or running. Discard waits it out: the

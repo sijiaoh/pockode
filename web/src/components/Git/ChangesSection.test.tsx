@@ -27,6 +27,7 @@ vi.mock("../../hooks/useGitStatus", () => ({
 vi.mock("../../hooks/useGitStage", () => ({
 	useGitStage: () => ({
 		stageMutation: { mutateAsync: stage },
+		resolveMutation: { mutateAsync: vi.fn() },
 		unstageMutation: { mutateAsync: unstage },
 	}),
 }));
@@ -549,6 +550,100 @@ describe("ChangesSection checkboxes", () => {
 		await user.click(box);
 
 		await waitFor(() => expect(stage).toHaveBeenCalledWith(["a/part.ts"]));
+	});
+});
+
+describe("ChangesSection conflicts", () => {
+	beforeEach(() => {
+		status = {
+			staged: [
+				{ path: "src/clash.ts", status: "U" },
+				{ path: "done.ts", status: "M" },
+			],
+			unstaged: [
+				{ path: "src/clash.ts", status: "U" },
+				{ path: "notes.txt", status: "M" },
+			],
+			conflicted: ["src/clash.ts"],
+			operation: { kind: "merge" },
+		};
+		resetWrites();
+	});
+
+	// One tap must not record the markers as the resolution.
+	it("draws a conflicted file without a checkbox, named and marked as one", () => {
+		renderSection();
+
+		expect(
+			screen.queryByRole("checkbox", { name: "Stage src/clash.ts" }),
+		).toBeNull();
+		const row = screen.getByRole("button", {
+			name: "Review src/clash.ts, conflicted",
+		});
+		expect(row).toHaveAccessibleDescription(/Conflict/);
+	});
+
+	it("offers no discard for a conflicted file", async () => {
+		const user = userEvent.setup();
+		renderSection();
+
+		const sheet = await openMenu(user, "src/clash.ts");
+
+		expect(
+			within(sheet).getByRole("button", { name: "Open file" }),
+		).toBeEnabled();
+		expect(
+			within(sheet).queryByRole("button", { name: /Discard|Delete/ }),
+		).toBeNull();
+	});
+
+	it("passes conflicts over in select all, and says so in its name", async () => {
+		const user = userEvent.setup();
+		renderSection();
+
+		await user.click(checkbox("Stage 2 of 3 files, 1 conflicted"));
+
+		await waitFor(() => expect(stage).toHaveBeenCalledWith(["notes.txt"]));
+	});
+
+	it("passes conflicts over in discard all", async () => {
+		const user = userEvent.setup();
+		renderSection();
+
+		await user.click(
+			screen.getByRole("button", { name: "More actions for all changes" }),
+		);
+		await user.click(
+			screen.getByRole("button", { name: "Discard all changes…" }),
+		);
+		await user.click(confirmButton("Discard"));
+
+		expect(discard).toHaveBeenCalledWith(["notes.txt"]);
+	});
+
+	// The gutter stays, empty, so the column of boxes stays aligned.
+	it("gives a folder of only conflicts no checkbox", () => {
+		gitChangesViewActions.setView("tree");
+		renderSection();
+
+		expect(screen.getByRole("button", { name: "src" })).toBeInTheDocument();
+		expect(
+			screen.queryByRole("checkbox", { name: /Stage folder src/ }),
+		).toBeNull();
+	});
+
+	it("has no select all when every file is conflicted", () => {
+		status = {
+			staged: [{ path: "a.ts", status: "U" }],
+			unstaged: [{ path: "a.ts", status: "U" }],
+			conflicted: ["a.ts"],
+		};
+		renderSection();
+
+		expect(screen.queryByRole("checkbox")).toBeNull();
+		expect(
+			screen.queryByRole("button", { name: "More actions for all changes" }),
+		).toBeNull();
 	});
 });
 

@@ -20,11 +20,13 @@ import {
 	type ChangeFolder,
 	checkboxWrite,
 	collectChanges,
+	describeStageable,
 	filesUnder,
 	firstReviewTarget,
 	orderChanges,
 	reviewSideOf,
 	sumLines,
+	withoutConflicts,
 } from "../../lib/gitChanges";
 import {
 	gitChangesViewActions,
@@ -52,7 +54,7 @@ import ChangesHeader from "./ChangesHeader";
 import CommitBar from "./CommitBar";
 import ErrorBanner from "./ErrorBanner";
 import LineCounts from "./LineCounts";
-import StageCheckbox from "./StageCheckbox";
+import StageCheckbox, { StageGutter } from "./StageCheckbox";
 
 interface Props {
 	onSelectFile: (path: string, staged: boolean) => void;
@@ -409,18 +411,21 @@ function FolderRow({
 }: RowProps & { folder: ChangeFolder; depth: number; worktree: string }) {
 	const collapsed = useCollapsedFolders(worktree).includes(folder.path);
 	const files = filesUnder(folder);
-	const count = `${files.length} ${files.length === 1 ? "file" : "files"}`;
 	const Chevron = collapsed ? ChevronRight : ChevronDown;
 
 	return (
 		<>
 			<div className="flex min-h-[44px] items-center rounded-lg transition-colors hover:bg-th-bg-tertiary">
-				<StageCheckbox
-					state={aggregateCheckState(files)}
-					label={`Stage folder ${folder.path}, ${count}`}
-					busy={files.some((f) => isWriting(rowProps.writes, f.path))}
-					onToggle={() => rowProps.onToggleFolder(files)}
-				/>
+				{withoutConflicts(files).length > 0 ? (
+					<StageCheckbox
+						state={aggregateCheckState(files)}
+						label={`Stage folder ${folder.path}, ${describeStageable(files)}`}
+						busy={files.some((f) => isWriting(rowProps.writes, f.path))}
+						onToggle={() => rowProps.onToggleFolder(files)}
+					/>
+				) : (
+					<StageGutter />
+				)}
 				<button
 					type="button"
 					aria-expanded={!collapsed}

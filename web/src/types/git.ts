@@ -17,7 +17,8 @@ export interface LineStat {
  */
 export interface FileStatus {
 	path: string;
-	status: "M" | "A" | "D" | "R" | "?";
+	/** `U` (or `A`/`D` on both sides) for a path in `GitStatus.conflicted`. */
+	status: "M" | "A" | "D" | "R" | "?" | "U";
 	lines?: LineStat;
 	binary?: true;
 	/**
@@ -31,6 +32,44 @@ export interface GitStatus {
 	staged: FileStatus[];
 	unstaged: FileStatus[];
 	submodules?: Record<string, GitStatus>;
+	/**
+	 * Paths with unresolved conflicts, in status order. Each is also in
+	 * `staged` and `unstaged`, under the letters git gave it.
+	 */
+	conflicted?: string[];
+	/** Root repository only; absent when nothing is in progress. */
+	operation?: GitOperation;
+}
+
+export type GitOperationKind = "merge" | "rebase" | "cherry-pick" | "revert";
+
+/** A commit an in-progress operation involves. `hash` is the full hash. */
+export interface GitOperationCommit {
+	hash: string;
+	subject: string;
+	/** A local or remote-tracking branch pointing exactly at it, if any. */
+	ref?: string;
+}
+
+/**
+ * A merge, rebase, cherry-pick or revert the repository was left in the middle
+ * of. Every field but `kind` is absent when git could not say it
+ * (docs/git.md, Operations in Progress).
+ */
+export interface GitOperation {
+	kind: GitOperationKind;
+	/**
+	 * Merge: what is merged in. Rebase: the commit being replayed. Cherry-pick,
+	 * revert: the commit picked or reverted — absent between two commits of a
+	 * sequence.
+	 */
+	commit?: GitOperationCommit;
+	/** Rebase only: the branch being rewritten; absent for a detached HEAD. */
+	branch?: string;
+	/** Rebase only. */
+	onto?: GitOperationCommit;
+	/** Rebase only: the todo list's step, counted from 1. */
+	step?: { current: number; total: number };
 }
 
 /**
@@ -166,6 +205,14 @@ export interface GitPullResult {
 	commits: number;
 }
 
+export interface GitAbortResult {
+	/**
+	 * git ended the operation but left the branch where it was: commits were
+	 * made on it during a sequence of picks or reverts.
+	 */
+	head_kept: boolean;
+}
+
 /** What the workspace can actually do with the current sync state. */
 export interface GitSyncState {
 	/**
@@ -233,10 +280,9 @@ export function describeCommitAction(
 ): GitCommitAction | null {
 	if (!status) return null;
 
-	// Root repository only: git.add stages a submodule's file in that
-	// submodule's index, which a root commit does not touch.
-	const staged = status.staged.length;
-	if (staged > 0) {
+	const staged = stagedCount(status);
+	const paused = commitPausedReason(status);
+	if (staged > 0 && !paused) {
 		// The count is in the label: no `STAGED n` header above says it any more.
 		return {
 			label: `Commit ${plural(staged, "file")}`,
@@ -251,6 +297,16 @@ export function describeCommitAction(
 	// commit button went.
 	const flat = flattenGitStatus(status);
 	if (flat.staged.length + flat.unstaged.length === 0) return null;
+
+	// Visible: during an operation the banner that says so may be collapsed or
+	// scrolled away, and a conflict left by a stash has no banner at all.
+	if (paused) {
+		return {
+			label: "Commit",
+			enabled: false,
+			hint: { text: paused, alreadyOnScreen: false },
+		};
+	}
 
 	// Staged, but somewhere this commit cannot reach. Nothing else in the workspace
 	// says so — the rows read as staged like any other — so this is the one hint
@@ -271,6 +327,30 @@ export function describeCommitAction(
 		enabled: false,
 		hint: { text: "Check a file to commit", alreadyOnScreen: true },
 	};
+}
+
+/**
+ * The files a root-repository commit records. Root repository only: git.add
+ * stages a submodule's file in that submodule's index, which a root commit
+ * does not touch. A conflicted path is listed as staged too, under its
+ * conflict letters, and is not something a commit records.
+ */
+export function stagedCount(status: GitStatus): number {
+	return status.staged.length - (status.conflicted?.length ?? 0);
+}
+
+/**
+ * Why nothing can be committed right now, null when something can. During an
+ * operation committing would finish a merge, pick or revert — the continue
+ * left to the agent — or insert a stray commit into a rebase
+ * (docs/git-conflict-ui.md). Without one, git refuses to commit over
+ * unresolved conflicts, such as a `git stash pop` leaves.
+ */
+export function commitPausedReason(status: GitStatus): string | null {
+	if (status.operation)
+		return `Can't commit during a ${status.operation.kind}.`;
+	if (status.conflicted?.length) return "Resolve the conflicts to commit.";
+	return null;
 }
 
 /** One submodule's staged files, which a root-repository commit leaves behind. */
@@ -295,10 +375,25 @@ export function stagedSubmodules(
 
 	for (const [subPath, subStatus] of Object.entries(status.submodules)) {
 		const path = prefix ? `${prefix}/${subPath}` : subPath;
-		if (subStatus.staged.length > 0) {
-			result.push({ path, count: subStatus.staged.length });
-		}
+		// A conflict is listed as staged too, and is not what a commit there
+		// would record.
+		const count = stagedCount(subStatus);
+		if (count > 0) result.push({ path, count });
 		result.push(...stagedSubmodules(subStatus, path));
+	}
+	return result;
+}
+
+/**
+ * Every conflicted path, submodules' included and prefixed as the Changes list
+ * shows them — what a handoff of the conflicts has to name. Only the root's
+ * stop a root commit, which `commitPausedReason` reads on its own.
+ */
+export function allConflicted(status: GitStatus, prefix = ""): string[] {
+	const prefixed = (p: string) => (prefix ? `${prefix}/${p}` : p);
+	const result = (status.conflicted ?? []).map(prefixed);
+	for (const [subPath, subStatus] of Object.entries(status.submodules ?? {})) {
+		result.push(...allConflicted(subStatus, prefixed(subPath)));
 	}
 	return result;
 }

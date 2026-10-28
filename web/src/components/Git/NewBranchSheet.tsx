@@ -6,16 +6,22 @@ import { inputClass } from "../ui/inputClass";
 interface Props {
 	/** What the new branch forks from, already rendered for display. */
 	base: string;
+	/**
+	 * Why no branch can be created right now — an operation that began with the
+	 * sheet open — null when one can. The sheet stays, since it holds the name.
+	 */
+	paused: string | null;
 	onClose: () => void;
 	onCreate: (name: string) => Promise<void>;
 }
 
-function NewBranchSheet({ base, onClose, onCreate }: Props) {
+function NewBranchSheet({ base, paused, onClose, onCreate }: Props) {
 	const [name, setName] = useState("");
 	const [error, setError] = useState<string | null>(null);
 	const [isCreating, setIsCreating] = useState(false);
 	const inputRef = useRef<HTMLInputElement>(null);
 	const inputId = useId();
+	const pausedId = useId();
 
 	useEffect(() => {
 		inputRef.current?.focus();
@@ -24,7 +30,7 @@ function NewBranchSheet({ base, onClose, onCreate }: Props) {
 	const handleSubmit = async (e: React.FormEvent) => {
 		e.preventDefault();
 		const trimmed = name.trim();
-		if (!trimmed || isCreating) return;
+		if (!trimmed || isCreating || paused) return;
 
 		setError(null);
 		setIsCreating(true);
@@ -60,7 +66,8 @@ function NewBranchSheet({ base, onClose, onCreate }: Props) {
 					</button>
 					<button
 						type="submit"
-						disabled={!name.trim() || isCreating}
+						disabled={!name.trim() || isCreating || paused !== null}
+						aria-describedby={paused ? pausedId : undefined}
 						className="flex flex-1 items-center justify-center gap-2 rounded-lg bg-th-accent px-4 py-2.5 text-sm text-th-accent-text transition-colors hover:bg-th-accent-hover disabled:cursor-not-allowed disabled:opacity-50"
 					>
 						{/* The gerund label already announces the state; the spinner's
@@ -77,6 +84,12 @@ function NewBranchSheet({ base, onClose, onCreate }: Props) {
 				{error && (
 					<p className="whitespace-pre-wrap text-sm text-th-error" role="alert">
 						{error}
+					</p>
+				)}
+
+				{paused && (
+					<p id={pausedId} className="text-sm text-th-text-muted">
+						{paused}
 					</p>
 				)}
 

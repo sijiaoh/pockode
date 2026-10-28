@@ -15,6 +15,12 @@ import {
 	useGitChangeCount,
 	useGitChangeLines,
 } from "../../hooks/useGitChangeCount";
+import { useGitStatus } from "../../hooks/useGitStatus";
+import {
+	describeOperation,
+	headBranchOf,
+	rebasingBranch,
+} from "../../lib/gitOperation";
 import { useSyncRun } from "../../lib/gitSyncStore";
 import { useWorktreeStore } from "../../lib/worktreeStore";
 import type { GitSegment } from "../../types/overlay";
@@ -26,8 +32,7 @@ import {
 } from "../../utils/gitSyncStatus";
 import { useSidebarRefresh } from "../Layout";
 import { formatBadgeCount, Spinner } from "../ui";
-import { headLabel } from "./BranchBar";
-import BranchName from "./BranchName";
+import { HeadName } from "./BranchBar";
 import HeadPlaceholder from "./HeadPlaceholder";
 import LineCounts, { formatLineCounts } from "./LineCounts";
 
@@ -116,6 +121,8 @@ function Overview() {
 	const { data: branches, isLoading, error } = useGitBranches();
 	const worktree = useWorktreeStore((s) => s.current);
 	const run = useSyncRun(worktree);
+	const { data: gitStatus } = useGitStatus();
+	const operation = gitStatus?.operation;
 
 	const head = branches?.head;
 	const sync = branches?.sync;
@@ -135,6 +142,15 @@ function Overview() {
 	const status = hasSyncStatus(head, sync)
 		? describeSyncStatus(sync, run)
 		: null;
+	// A repository stuck mid-operation is what the doorplate has to say, in
+	// place of the sync line (docs/git-conflict-ui.md).
+	const operationTitle = operation
+		? describeOperation(
+				operation,
+				gitStatus?.conflicted?.length ?? 0,
+				headBranchOf(head),
+			).title
+		: null;
 
 	return (
 		<div className="space-y-1 border-b border-th-border px-4 py-2.5">
@@ -143,26 +159,36 @@ function Overview() {
 					className="h-4 w-4 shrink-0 text-th-text-muted"
 					aria-hidden="true"
 				/>
-				<BranchName name={headLabel(head)} />
+				<HeadName head={head} rebasing={rebasingBranch(operation)} />
 			</div>
-			{status && (
-				<div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 pl-6 text-xs text-th-text-secondary">
-					<span>{sentence(describeSyncStep(status.step))}</span>
-					{status.running && (
-						<span className="flex items-center gap-1">
-							<span aria-hidden="true">·</span>
-							<Spinner variant="current" size="h-3 w-3" srText={null} />
-							{sentence(RUNNING_DESCRIPTION[status.running])}
-						</span>
-					)}
-					{status.autoFetchFailed && (
-						<span className="flex items-center gap-1 text-th-warning">
-							<span aria-hidden="true">·</span>
-							<TriangleAlert className="h-3 w-3" aria-hidden="true" />
-							Automatic fetch failed
-						</span>
-					)}
+			{operationTitle ? (
+				<div className="flex items-center gap-1.5 pl-6 text-xs text-th-text-secondary">
+					<TriangleAlert
+						className="h-3 w-3 shrink-0 text-th-warning"
+						aria-hidden="true"
+					/>
+					<span className="min-w-0 truncate">{operationTitle}</span>
 				</div>
+			) : (
+				status && (
+					<div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 pl-6 text-xs text-th-text-secondary">
+						<span>{sentence(describeSyncStep(status.step))}</span>
+						{status.running && (
+							<span className="flex items-center gap-1">
+								<span aria-hidden="true">·</span>
+								<Spinner variant="current" size="h-3 w-3" srText={null} />
+								{sentence(RUNNING_DESCRIPTION[status.running])}
+							</span>
+						)}
+						{status.autoFetchFailed && (
+							<span className="flex items-center gap-1 text-th-warning">
+								<span aria-hidden="true">·</span>
+								<TriangleAlert className="h-3 w-3" aria-hidden="true" />
+								Automatic fetch failed
+							</span>
+						)}
+					</div>
+				)
 			)}
 		</div>
 	);

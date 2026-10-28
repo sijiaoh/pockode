@@ -1,4 +1,6 @@
 import type { QueryClient } from "@tanstack/react-query";
+import { describeOperationPrompt, headBranchOf } from "../lib/gitOperation";
+import { allConflicted, type GitBranches, type GitStatus } from "../types/git";
 
 export const gitStatusQueryKey = ["git-status"] as const;
 export const gitLogQueryKey = ["git-log"] as const;
@@ -19,6 +21,26 @@ export function invalidateGitQueries(queryClient: QueryClient): void {
 	]) {
 		queryClient.invalidateQueries({ queryKey });
 	}
+}
+
+/**
+ * What a handoff of the repository's unfinished state gives the agent — the
+ * banner's `Resolve with agent`, the conflict view's `Ask agent` — built from
+ * the cache at the press, never from what the pressed surface last rendered.
+ * Null when there is nothing left to hand over.
+ */
+export function operationPromptAtPress(
+	queryClient: QueryClient,
+): string | null {
+	const status = queryClient.getQueryData<GitStatus>(gitStatusQueryKey);
+	const conflicted = status ? allConflicted(status) : [];
+	if (!status || (!status.operation && conflicted.length === 0)) return null;
+	const head = queryClient.getQueryData<GitBranches>(gitBranchesQueryKey)?.head;
+	return describeOperationPrompt(
+		status.operation,
+		conflicted,
+		headBranchOf(head),
+	);
 }
 
 /**

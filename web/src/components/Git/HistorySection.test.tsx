@@ -1,13 +1,17 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { GitCommit } from "../../types/git";
+import type { GitCommit, GitStatus } from "../../types/git";
 import HistorySection from "./HistorySection";
 
 let commits: GitCommit[] = [];
+let status: GitStatus | undefined;
 
 vi.mock("../../hooks/useGitLog", () => ({
 	useGitLog: () => ({ data: { commits }, isLoading: false, error: null }),
+}));
+vi.mock("../../hooks/useGitStatus", () => ({
+	useGitStatus: () => ({ data: status }),
 }));
 vi.mock("./GitCommitSheet", () => ({
 	default: ({ amendInitially }: { amendInitially: boolean }) => (
@@ -37,6 +41,7 @@ const COMMITS: GitCommit[] = [
 describe("HistorySection amend", () => {
 	beforeEach(() => {
 		commits = COMMITS;
+		status = undefined;
 	});
 
 	// Amend belongs to the commit it replaces, and that commit is HEAD — the
@@ -60,6 +65,17 @@ describe("HistorySection amend", () => {
 
 	it("has nothing to amend in a repository without commits", () => {
 		commits = [];
+		renderSection();
+
+		expect(
+			screen.queryByRole("button", { name: "Amend this commit" }),
+		).not.toBeInTheDocument();
+	});
+
+	// git refuses amend mid-merge, and mid-rebase HEAD is not the branch's
+	// commit; a menu entry that does not apply goes rather than greying out.
+	it("leaves amend out while an operation is in progress", () => {
+		status = { staged: [], unstaged: [], operation: { kind: "rebase" } };
 		renderSection();
 
 		expect(

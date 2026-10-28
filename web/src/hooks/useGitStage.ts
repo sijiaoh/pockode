@@ -8,7 +8,14 @@ export function useGitStage() {
 	const unstage = useWSStore((s) => s.actions.unstage);
 
 	const stageMutation = useMutation({
-		mutationFn: stage,
+		mutationFn: (paths: string[]) => stage(paths),
+		onSuccess: () =>
+			queryClient.invalidateQueries({ queryKey: gitStatusQueryKey }),
+	});
+
+	// The one stage of a conflicted path: the user marking it resolved.
+	const resolveMutation = useMutation({
+		mutationFn: (paths: string[]) => stage(paths, true),
 		onSuccess: () =>
 			queryClient.invalidateQueries({ queryKey: gitStatusQueryKey }),
 	});
@@ -19,5 +26,5 @@ export function useGitStage() {
 			queryClient.invalidateQueries({ queryKey: gitStatusQueryKey }),
 	});
 
-	return { stageMutation, unstageMutation };
+	return { stageMutation, resolveMutation, unstageMutation };
 }

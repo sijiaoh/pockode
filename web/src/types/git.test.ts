@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { makeSync } from "../test/gitFixtures";
 import type { FileStatus, GitStatus, GitSync, GitSyncState } from "./git";
 import {
+	allConflicted,
 	describeCommitAction,
 	describeDiscard,
 	describeGitSync,
@@ -172,6 +173,43 @@ describe("describeCommitAction", () => {
 		});
 	});
 
+	// Committing would continue the operation, or insert a commit into a
+	// rebase; the reason is visible, since nothing beside the button says it.
+	it("disables commit with a visible reason during an operation", () => {
+		expect(
+			describeCommitAction({
+				...status(["a.ts"], []),
+				operation: { kind: "rebase" },
+			}),
+		).toEqual({
+			label: "Commit",
+			enabled: false,
+			hint: { text: "Can't commit during a rebase.", alreadyOnScreen: false },
+		});
+	});
+
+	// A stash that did not apply cleanly leaves conflicts with no operation;
+	// git refuses to commit over them, and they are not files to count.
+	it("disables commit over conflicts left without an operation", () => {
+		expect(
+			describeCommitAction({
+				staged: [
+					{ path: "a.ts", status: "M" },
+					{ path: "c.ts", status: "U" },
+				],
+				unstaged: [{ path: "c.ts", status: "U" }],
+				conflicted: ["c.ts"],
+			}),
+		).toEqual({
+			label: "Commit",
+			enabled: false,
+			hint: {
+				text: "Resolve the conflicts to commit.",
+				alreadyOnScreen: false,
+			},
+		});
+	});
+
 	// Nothing to commit and nothing on its way to being committed: the bar itself
 	// is what goes away, not just its button.
 	it("renders no bar on a clean tree", () => {
@@ -205,6 +243,22 @@ describe("stagedSubmodules", () => {
 		).toEqual([{ path: "vendor/sdk", count: 2 }]);
 	});
 
+	it("leaves a submodule's conflicts out of its count", () => {
+		expect(
+			stagedSubmodules({
+				staged: [],
+				unstaged: [],
+				submodules: {
+					sdk: {
+						staged: [{ path: "a.ts", status: "U" }],
+						unstaged: [{ path: "a.ts", status: "U" }],
+						conflicted: ["a.ts"],
+					},
+				},
+			}),
+		).toEqual([]);
+	});
+
 	it("is empty when nothing is staged in a submodule", () => {
 		expect(
 			stagedSubmodules({
@@ -212,6 +266,28 @@ describe("stagedSubmodules", () => {
 				unstaged: [],
 			}),
 		).toEqual([]);
+	});
+});
+
+describe("allConflicted", () => {
+	it("names nested submodules' conflicts by their full path", () => {
+		expect(
+			allConflicted({
+				staged: [],
+				unstaged: [],
+				conflicted: ["root.ts"],
+				submodules: {
+					sdk: {
+						staged: [],
+						unstaged: [],
+						conflicted: ["a.ts"],
+						submodules: {
+							inner: { staged: [], unstaged: [], conflicted: ["b.ts"] },
+						},
+					},
+				},
+			}),
+		).toEqual(["root.ts", "sdk/a.ts", "sdk/inner/b.ts"]);
 	});
 });
 

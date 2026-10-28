@@ -1,7 +1,9 @@
 import { ConfirmDialog } from "@pockode/shared";
 import { ArrowDown, ArrowUp, RefreshCw } from "lucide-react";
-import { type ReactNode, useState } from "react";
+import { type ReactNode, useId, useState } from "react";
+import { useGitStatus } from "../../hooks/useGitStatus";
 import { useGitSyncRunner } from "../../hooks/useGitSync";
+import { pullPausedReason } from "../../lib/gitOperation";
 import { type SyncOperation, useSyncRun } from "../../lib/gitSyncStore";
 import { useWorktreeStore } from "../../lib/worktreeStore";
 import { describeGitSync, type GitSync } from "../../types/git";
@@ -32,6 +34,11 @@ function SyncSheet({ sync, onClose }: Props) {
 
 	const state = describeGitSync(sync);
 	const busy = running !== null;
+	// git refuses a pull mid-operation; the sheet says so rather than relaying
+	// the refusal. During a rebase HEAD is detached and the chip is gone.
+	const operation = useGitStatus().data?.operation;
+	const pullPaused = operation ? pullPausedReason(operation.kind) : null;
+	const pullPausedId = useId();
 
 	const order = operationOrder(state.needsPublish, sync.upstream_gone);
 	const buttons: Record<SyncOperation, ReactNode> = {
@@ -55,7 +62,8 @@ function SyncSheet({ sync, onClose }: Props) {
 				label={sync.behind > 0 ? `Pull (${sync.behind})` : "Pull"}
 				runningLabel="Pulling…"
 				isRunning={running === "pull"}
-				disabled={busy || !state.canPull}
+				disabled={busy || !state.canPull || pullPaused !== null}
+				describedBy={pullPaused ? pullPausedId : undefined}
 				onClick={startPull}
 			/>
 		),
@@ -113,6 +121,12 @@ function SyncSheet({ sync, onClose }: Props) {
 				)}
 
 				<div className="space-y-2">{order.map((op) => buttons[op])}</div>
+
+				{pullPaused && order.includes("pull") && (
+					<p id={pullPausedId} className="text-xs text-th-text-muted">
+						{pullPaused}
+					</p>
+				)}
 			</div>
 
 			{confirmingForce && (
@@ -139,6 +153,7 @@ function SyncButton({
 	isRunning,
 	disabled,
 	danger,
+	describedBy,
 	onClick,
 }: {
 	icon: ReactNode;
@@ -147,6 +162,7 @@ function SyncButton({
 	isRunning: boolean;
 	disabled: boolean;
 	danger?: boolean;
+	describedBy?: string;
 	onClick: () => void;
 }) {
 	return (
@@ -154,6 +170,7 @@ function SyncButton({
 			type="button"
 			onClick={onClick}
 			disabled={disabled}
+			aria-describedby={describedBy}
 			className={`flex min-h-[44px] w-full items-center gap-3 rounded-lg bg-th-bg-tertiary px-4 py-2.5 text-sm transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50 ${
 				danger ? "text-th-error" : "text-th-text-primary"
 			}`}
