@@ -577,6 +577,47 @@ type GitBranchCreateParams struct {
 	Name string `json:"name"`
 }
 
+// GitBranchInspectParams is the params for git.branch.inspect; the result is
+// a git.BranchInspection.
+type GitBranchInspectParams struct {
+	Name string `json:"name"`
+}
+
+// GitBranchDeleteParams is the params for git.branch.delete.
+type GitBranchDeleteParams struct {
+	Name string `json:"name"`
+	// Tip is git.branch.inspect's full hash: the delete is refused with
+	// CodeGitBranchChanged if the branch points anywhere else.
+	Tip string `json:"tip"`
+}
+
+// CodeGitBranchChanged answers a git.branch.delete whose branch no longer
+// points at the tip the user confirmed (git.ErrBranchChanged) — something
+// committed to it or reset it since the inspect — and a git.branch.inspect or
+// git.branch.delete whose branch no longer exists (git.ErrBranchNotFound).
+// Nothing was deleted. A moved branch is inspected again rather than retried;
+// a gone one leaves nothing to inspect.
+const CodeGitBranchChanged = -32009
+
+// GitBranchChangedData is the data member of a CodeGitBranchChanged error.
+type GitBranchChangedData struct {
+	// Gone is true when the branch no longer exists, rather than having moved.
+	Gone bool `json:"gone"`
+}
+
+// CodeGitBranchCheckedOut answers a git.branch.delete of the current branch
+// or of a branch another worktree has checked out (git.BranchCheckedOutError).
+// Nothing was deleted.
+const CodeGitBranchCheckedOut = -32010
+
+// GitBranchCheckedOutData is the data member of a CodeGitBranchCheckedOut
+// error.
+type GitBranchCheckedOutData struct {
+	// Worktree labels the worktree holding the branch, as git.branches does;
+	// empty when it is this worktree's current branch.
+	Worktree string `json:"worktree"`
+}
+
 // GitPullResult is the result of git.pull request.
 type GitPullResult struct {
 	// Commits is how many the fast-forward brought in, measured by the server:
@@ -619,7 +660,7 @@ const CodeGitHunkStale = -32005
 type GitBusyData struct {
 	// Operation is what holds the worktree, in git.BusyError's vocabulary:
 	// "stage", "unstage", "discard", "commit", "checkout", "branch-create",
-	// "fetch", "pull", "push", "abort".
+	// "branch-delete", "fetch", "pull", "push", "abort".
 	Operation string `json:"operation"`
 }
 
@@ -655,8 +696,8 @@ type GitOperationChangedData struct {
 // CodeGitOperationInProgress answers a write refused because the repository is
 // in the middle of a merge, rebase, cherry-pick or revert that the write would
 // finish or derail (git.OperationInProgressError): commit, checkout, branch
-// create, pull. Nothing ran; it works again once the operation is finished or
-// aborted.
+// create, branch delete, pull. Nothing ran; it works again once the operation
+// is finished or aborted.
 const CodeGitOperationInProgress = -32006
 
 // GitOperationInProgressData is the data member of a

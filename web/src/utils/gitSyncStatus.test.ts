@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { SyncRun } from "../lib/gitSyncStore";
-import { makeHead, makeSync } from "../test/gitFixtures";
+import { makeBranches, makeHead, makeSync } from "../test/gitFixtures";
 import type { GitBranches, GitSync } from "../types/git";
 import {
 	AUTO_FETCH_AFTER_MS,
@@ -59,12 +59,7 @@ describe("shouldAutoFetch", () => {
 	const fetchedAgo = (ms: number) => new Date(NOW - ms).toISOString();
 
 	function branches(sync: Partial<GitSync>, detached = false): GitBranches {
-		return {
-			head: makeHead({ detached }),
-			local: [],
-			remote_only: [],
-			sync: makeSync(sync),
-		};
+		return makeBranches({ head: makeHead({ detached }), sync: makeSync(sync) });
 	}
 
 	it("fetches when the last fetch is more than ten minutes old", () => {

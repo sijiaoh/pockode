@@ -3,7 +3,7 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { gitSyncActions } from "../../lib/gitSyncStore";
-import { makeHead, makeSync } from "../../test/gitFixtures";
+import { makeBranches, makeHead, makeSync } from "../../test/gitFixtures";
 import type { GitBranches, GitStatus, LineStat } from "../../types/git";
 import type { GitSegment } from "../../types/overlay";
 import GitTab from "./GitTab";
@@ -37,12 +37,10 @@ function renderTab(activeSegment: GitSegment | null = null) {
 }
 
 beforeEach(() => {
-	branches = {
+	branches = makeBranches({
 		head: makeHead({ branch: "feature/git-workspace" }),
-		local: [],
-		remote_only: [],
 		sync: makeSync({ behind: 2 }),
-	};
+	});
 	changeCount = 5;
 	changeLines = null;
 	status = undefined;
@@ -183,12 +181,10 @@ describe("GitTab", () => {
 describe("GitTab overview during an operation", () => {
 	// A repository stuck mid-rebase is what the doorplate has to say.
 	it("says the operation in place of the sync line, and names the rebased branch", () => {
-		branches = {
+		branches = makeBranches({
 			head: makeHead({ branch: "", detached: true, hash: "4be1f20" }),
-			local: [],
-			remote_only: [],
 			sync: makeSync({ behind: 2 }),
-		};
+		});
 		status = {
 			staged: [],
 			unstaged: [],

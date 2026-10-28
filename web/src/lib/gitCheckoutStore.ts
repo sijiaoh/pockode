@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import {
+	branchRefusalSummary,
 	describeGitFailure,
 	type GitFailure,
 	gitRefusalSummary,
@@ -11,6 +12,10 @@ export interface CheckoutRun {
 	switchingTo: string | null;
 	/** How the last switch failed, until it is dismissed or the next one starts. */
 	error: GitFailure | null;
+	/** The local branch a delete is running for, and null while none is. */
+	deleting: string | null;
+	/** How the last delete failed, until it is dismissed or the next one starts. */
+	deleteError: GitFailure | null;
 }
 
 interface GitCheckoutState {
@@ -20,7 +25,8 @@ interface GitCheckoutState {
 
 /**
  * Which branch switch is in flight in each worktree, and how the last one
- * failed.
+ * failed — and the same for deleting a branch, whose confirm closes when the
+ * user navigates away while the request keeps running.
  *
  * It lives outside the Branches segment because a switch can be walked away
  * from: the segment control, the top bar and Back all leave the segment while
@@ -45,7 +51,12 @@ export const useGitCheckoutStore = create<GitCheckoutState>(() => ({
 }));
 
 /** A worktree nothing has been switched in, as a stable identity for selectors. */
-const IDLE: CheckoutRun = { switchingTo: null, error: null };
+const IDLE: CheckoutRun = {
+	switchingTo: null,
+	error: null,
+	deleting: null,
+	deleteError: null,
+};
 
 function setRun(worktree: string, patch: Partial<CheckoutRun>) {
 	useGitCheckoutStore.setState((s) => ({
@@ -82,6 +93,17 @@ function describeCheckoutFailure(err: unknown, branch: string): GitFailure {
 	);
 }
 
+function describeDeleteFailure(err: unknown, branch: string): GitFailure {
+	// Recognised by code, never by the server's sentence.
+	const branchRefusal = branchRefusalSummary(err, branch);
+	if (branchRefusal) return { summary: branchRefusal, detail: null };
+	const refusal = gitRefusalSummary(err);
+	if (refusal) {
+		return { summary: `Could not delete ${branch}. ${refusal}`, detail: null };
+	}
+	return describeGitFailure(err, () => `Could not delete ${branch}.`);
+}
+
 export const gitCheckoutActions = {
 	/**
 	 * Starting a switch puts away the last one's failure, and success leaves
@@ -109,6 +131,44 @@ export const gitCheckoutActions = {
 
 	dismissError: (worktree: string) => setRun(worktree, { error: null }),
 
+	/**
+	 * Never rejects: the confirm awaiting it closes either way, and a failure
+	 * is kept here to be shown in the list's pinned area or the top bar. Success
+	 * leaves nothing behind — the row going is the report of it.
+	 */
+	startDelete: async (
+		worktree: string,
+		branch: string,
+		action: () => Promise<unknown>,
+	) => {
+		// Refused, not queued — but said: the confirm awaiting this closes, and
+		// a delete that silently never ran would read as one that did.
+		const running = useGitCheckoutStore.getState().runs[worktree]?.deleting;
+		if (running) {
+			setRun(worktree, {
+				deleteError: {
+					summary: `Could not delete ${branch}. Deleting ${running} is still in progress.`,
+					detail: null,
+				},
+			});
+			return;
+		}
+
+		setRun(worktree, { deleting: branch, deleteError: null });
+		try {
+			await action();
+			setRun(worktree, { deleting: null });
+		} catch (err) {
+			setRun(worktree, {
+				deleting: null,
+				deleteError: describeDeleteFailure(err, branch),
+			});
+		}
+	},
+
+	dismissDeleteError: (worktree: string) =>
+		setRun(worktree, { deleteError: null }),
+
 	reset: () => useGitCheckoutStore.setState({ runs: {} }),
 };
 
@@ -120,7 +180,7 @@ worktreeActions.onGitRepoChange(() => {
 		runs: Object.fromEntries(
 			Object.entries(s.runs).map(([worktree, run]) => [
 				worktree,
-				{ ...run, error: null },
+				{ ...run, error: null, deleteError: null },
 			]),
 		),
 	}));

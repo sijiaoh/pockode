@@ -790,6 +790,10 @@ func (h *rpcMethodHandler) Handle(ctx context.Context, conn *jsonrpc2.Conn, req 
 		h.handleGitCheckout(ctx, conn, req, wt)
 	case "git.branch.create":
 		h.handleGitBranchCreate(ctx, conn, req, wt)
+	case "git.branch.inspect":
+		h.handleGitBranchInspect(ctx, conn, req, wt)
+	case "git.branch.delete":
+		h.handleGitBranchDelete(ctx, conn, req, wt)
 	case "git.fetch":
 		h.handleGitFetch(ctx, conn, req, wt)
 	case "git.pull":

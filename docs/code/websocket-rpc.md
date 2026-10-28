@@ -942,7 +942,7 @@ no message, with `data.reason` (`timeout`, `auth_failed`, `cli_not_found`,
 whose hunk the file's current diff no longer has: nothing was written, and the
 client rereads the diff rather than retrying ([git.md](../git.md#staging-hunks)).
 `-32006` (`rpc.CodeGitOperationInProgress`) refuses a commit, checkout, new
-branch or pull while the repository is in the middle of a merge, rebase,
+branch, branch delete or pull while the repository is in the middle of a merge, rebase,
 cherry-pick or revert, with `data.kind` naming it
 ([git.md](../git.md#writes-refused-during-an-operation)); `-32007`
 (`rpc.CodeGitConflicted`) refuses a `git.add` (unless it says `resolve`),
@@ -954,6 +954,13 @@ is no longer the one in progress, with `data.current` naming the one that is
 (empty when none): the user confirmed losing one particular merge or rebase, and
 the client has to be able to say it already ended rather than show a git failure
 ([git.md](../git.md#aborting)).
+`-32009` (`rpc.CodeGitBranchChanged`) refuses a `git.branch.delete` whose
+branch no longer points at the tip the user confirmed, or — `data.gone` — no
+longer exists (an inspect of a missing branch too): nothing was deleted, and a
+moved branch is inspected again rather than retried; `-32010`
+(`rpc.CodeGitBranchCheckedOut`) refuses deleting the current branch or one
+another worktree has checked out, with `data.worktree`
+([git.md](../git.md#deleting-a-branch)).
 
 A server's error message is therefore text to put in front of a user, never a
 value to branch on — it embeds an arbitrary error string, and its fixed half is

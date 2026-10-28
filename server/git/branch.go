@@ -6,7 +6,9 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
+	"time"
 )
 
 // HeadInfo describes what HEAD points at.
@@ -29,13 +31,19 @@ type BranchInfo struct {
 	// Worktree names the other worktree holding this branch, if any. git refuses
 	// to check the same branch out twice, so the UI disables such a row instead
 	// of letting the user discover the rule through an error.
-	Worktree string `json:"worktree,omitempty"`
+	Worktree    string    `json:"worktree,omitempty"`
+	CommittedAt time.Time `json:"committed_at"`
+	// VsDefault is absent on the default branch itself, in a repository with no
+	// default branch, and where the count was not taken (see divergences).
+	VsDefault *Divergence `json:"vs_default,omitempty"`
 }
 
 // RemoteBranch is a branch that exists on a remote but not locally.
 type RemoteBranch struct {
-	Ref  string `json:"ref"`  // "origin/topic", what the UI displays
-	Name string `json:"name"` // "topic", what Checkout takes
+	Ref         string      `json:"ref"`  // "origin/topic", what the UI displays
+	Name        string      `json:"name"` // "topic", what Checkout takes
+	CommittedAt time.Time   `json:"committed_at"`
+	VsDefault   *Divergence `json:"vs_default,omitempty"` // as on BranchInfo
 }
 
 // BranchList is the branch state behind the panel's branch bar and branch sheet.
@@ -48,13 +56,21 @@ type BranchList struct {
 	Local      []BranchInfo   `json:"local"`
 	RemoteOnly []RemoteBranch `json:"remote_only"`
 	Sync       SyncInfo       `json:"sync"`
+	// DefaultBranch is what the vs_default counts are taken against, as
+	// displayed ("main", or "origin/main" when there is no local one); empty when
+	// the repository has none.
+	DefaultBranch string `json:"default_branch"`
+	// Recent names the local branches most recently checked out in this
+	// worktree, latest first; the current branch, when HEAD is on one with a
+	// commit, is always the first.
+	Recent []string `json:"recent"`
 }
 
 // Head reports the branch HEAD is on, or the commit it is detached at.
 func Head(dir string) (*HeadInfo, error) {
 	// --quiet turns "HEAD is not symbolic" into a plain non-zero exit, which is
 	// how a detached HEAD is detected here rather than by matching a message.
-	branch, branchErr := execGit(dir, "symbolic-ref", "--quiet", "--short", "HEAD")
+	branch, branchErr := headBranch(dir)
 	// Fails in a repository without commits, where the branch is named but unborn.
 	hash, hashErr := execGit(dir, "rev-parse", "--short", "HEAD")
 	if branchErr != nil && hashErr != nil {
@@ -78,6 +94,18 @@ func Head(dir string) (*HeadInfo, error) {
 	return head, nil
 }
 
+// headBranch is the branch HEAD points at, failing as `git symbolic-ref
+// --quiet` does when HEAD is detached. The ref is stripped by hand because
+// --short renders "heads/main" whenever a tag shares the branch's name, and the
+// name is compared against the branch list's.
+func headBranch(dir string) (string, error) {
+	ref, err := execGit(dir, "symbolic-ref", "--quiet", "HEAD")
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimPrefix(ref, "refs/heads/"), nil
+}
+
 // ErrDetachedHead is CurrentBranch in a worktree whose HEAD is on no branch.
 var ErrDetachedHead = errors.New("HEAD is detached")
 
@@ -85,7 +113,7 @@ var ErrDetachedHead = errors.New("HEAD is detached")
 // commit. Unlike Head it reads nothing else, so a caller that needs only the
 // name is not failed by a log it never asked for.
 func CurrentBranch(dir string) (string, error) {
-	branch, err := execGit(dir, "symbolic-ref", "--quiet", "--short", "HEAD")
+	branch, err := headBranch(dir)
 	// --quiet makes "HEAD is not symbolic" exit 1 and silent; everything else
 	// that can go wrong (no repository, no git) is fatal and exits otherwise.
 	var exitErr *exec.ExitError
@@ -96,17 +124,17 @@ func CurrentBranch(dir string) (string, error) {
 }
 
 // Branches returns HEAD plus the local and remote-only branches of dir.
+//
+// The number of git processes does not grow with the number of branches (on a
+// git with %(ahead-behind), see divergences): a large repository has hundreds
+// of remote branches, and this runs on every refresh of the panel.
 func Branches(dir string) (*BranchList, error) {
 	head, err := Head(dir)
 	if err != nil {
 		return nil, err
 	}
 
-	// Most recently committed first: in a panel this narrow, the branches worth
-	// putting within reach are the ones the user touched last. lstrip=2 drops
-	// exactly "refs/heads/", where %(refname:short) would render "heads/main"
-	// whenever a tag happens to share the branch's name.
-	names, err := execGitLines(dir, "for-each-ref", "--sort=-committerdate", "--format=%(refname:lstrip=2)", "refs/heads")
+	refs, err := branchRefs(dir)
 	if err != nil {
 		return nil, err
 	}
@@ -121,9 +149,41 @@ func Branches(dir string) (*BranchList, error) {
 		return nil, err
 	}
 
-	local := make([]BranchInfo, 0, len(names))
-	for _, name := range names {
-		info := BranchInfo{Name: name, Current: name == head.Branch}
+	base := defaultBranchRef(refs, remotes)
+	var counts map[string]Divergence
+	if base != nil {
+		names := make([]string, len(refs))
+		for i, r := range refs {
+			names[i] = r.ref
+		}
+		// By object id, not by name: a ref name may contain ")", which would end
+		// the %(ahead-behind:) atom early. The id also pins the counts to the
+		// commit the listing saw.
+		if counts, err = divergences(dir, base.hash, names); err != nil {
+			return nil, err
+		}
+	}
+	var baseRef string
+	if base != nil {
+		baseRef = base.ref
+	}
+	vsDefault := func(ref string) *Divergence {
+		d, ok := counts[ref]
+		if !ok || ref == baseRef {
+			return nil
+		}
+		return &d
+	}
+
+	var names []string
+	local := []BranchInfo{}
+	for _, r := range refs {
+		name, ok := strings.CutPrefix(r.ref, "refs/heads/")
+		if !ok {
+			continue
+		}
+		names = append(names, name)
+		info := BranchInfo{Name: name, Current: name == head.Branch, CommittedAt: r.committedAt, VsDefault: vsDefault(r.ref)}
 		// A branch lives in at most one worktree, so every entry other than the
 		// current branch necessarily belongs to a different one.
 		if !info.Current {
@@ -133,9 +193,18 @@ func Branches(dir string) (*BranchList, error) {
 	}
 	sort.SliceStable(local, func(i, j int) bool { return local[i].Current && !local[j].Current })
 
-	remoteOnly, err := remoteOnlyBranches(dir, names, remotes)
-	if err != nil {
-		return nil, err
+	remoteOnly := remoteOnlyBranches(refs, names, remotes)
+	for i := range remoteOnly {
+		remoteOnly[i].VsDefault = vsDefault("refs/remotes/" + remoteOnly[i].Ref)
+	}
+
+	recent := []string{}
+	// An unborn HEAD cannot be resolved, and `log -g HEAD` fails rather than
+	// print nothing.
+	if head.Hash != "" {
+		if recent, err = recentBranches(dir, head.Branch, names); err != nil {
+			return nil, err
+		}
 	}
 
 	sync, err := syncInfo(dir, head, remotes)
@@ -143,7 +212,159 @@ func Branches(dir string) (*BranchList, error) {
 		return nil, err
 	}
 
-	return &BranchList{Head: *head, Local: local, RemoteOnly: remoteOnly, Sync: sync}, nil
+	return &BranchList{
+		Head:          *head,
+		Local:         local,
+		RemoteOnly:    remoteOnly,
+		Sync:          sync,
+		DefaultBranch: shortBranchRef(baseRef),
+		Recent:        recent,
+	}, nil
+}
+
+// branchRef is one ref under refs/heads or refs/remotes.
+type branchRef struct {
+	ref         string // full name, "refs/heads/topic"
+	hash        string
+	committedAt time.Time
+	symref      string // the target of a symbolic ref such as origin/HEAD
+}
+
+// branchRefs lists local and remote-tracking branches, most recently committed
+// first: in a panel this narrow, the branches worth putting within reach are the
+// ones the user touched last.
+func branchRefs(dir string) ([]branchRef, error) {
+	lines, err := execGitLines(dir, "for-each-ref", "--sort=-committerdate",
+		"--format=%(refname)%09%(objectname)%09%(committerdate:unix)%09%(symref)", "refs/heads", "refs/remotes")
+	if err != nil {
+		return nil, err
+	}
+
+	refs := make([]branchRef, 0, len(lines))
+	for _, line := range lines {
+		// Trailing empty fields may be missing rather than empty: the output is
+		// trimmed as a whole, which takes the last line's trailing tabs with it.
+		fields := strings.SplitN(line, "\t", 4)
+		if len(fields) < 2 {
+			return nil, fmt.Errorf("unexpected for-each-ref output: %q", line)
+		}
+		fields = append(fields, "", "")[:4]
+		// No committer date means the ref points at something other than a
+		// commit — a tag object, which a refspec mapping tags under refs/remotes
+		// puts there. It is not a branch, and has nothing to switch to.
+		if fields[2] == "" {
+			continue
+		}
+		unix, err := strconv.ParseInt(fields[2], 10, 64)
+		if err != nil {
+			return nil, fmt.Errorf("unexpected for-each-ref output: %q", line)
+		}
+		refs = append(refs, branchRef{ref: fields[0], hash: fields[1], committedAt: time.Unix(unix, 0), symref: fields[3]})
+	}
+	return refs, nil
+}
+
+// defaultBranchRef picks the ref branches are counted against, nil when there
+// is none.
+//
+// The name is the remote's default (origin/HEAD) when one has been recorded,
+// else main or master. The local branch of that name wins over the
+// remote-tracking one: it is the branch work is merged into here, and the one a
+// count against would stay meaningful between fetches.
+func defaultBranchRef(refs []branchRef, remotes []string) *branchRef {
+	// The same remote push publishes to: origin by git's convention, or the only
+	// one there is.
+	var remote string
+	switch {
+	case contains(remotes, "origin"):
+		remote = "origin"
+	case len(remotes) == 1:
+		remote = remotes[0]
+	}
+	remotePrefix := "refs/remotes/" + remote + "/"
+
+	byName := make(map[string]*branchRef, len(refs))
+	candidates := []string{"main", "master"}
+	for i, r := range refs {
+		byName[r.ref] = &refs[i]
+		if remote != "" && r.ref == remotePrefix+"HEAD" {
+			if name, ok := strings.CutPrefix(r.symref, remotePrefix); ok {
+				// Still falling back: origin/HEAD can outlive the branch it names.
+				candidates = []string{name, "main", "master"}
+			}
+		}
+	}
+
+	for _, name := range candidates {
+		if r, ok := byName["refs/heads/"+name]; ok {
+			return r
+		}
+		if r, ok := byName[remotePrefix+name]; ok && remote != "" {
+			return r
+		}
+	}
+	return nil
+}
+
+// shortBranchRef is the displayed form of a full branch ref: "main" or
+// "origin/main".
+func shortBranchRef(ref string) string {
+	if name, ok := strings.CutPrefix(ref, "refs/heads/"); ok {
+		return name
+	}
+	return strings.TrimPrefix(ref, "refs/remotes/")
+}
+
+// recentReflogDepth bounds how far back the HEAD reflog is read for recent
+// branches. Entries are a line each, so this is cheap, and a branch not checked
+// out within this many HEAD moves is not recent.
+const recentReflogDepth = "1000"
+
+// recentBranches lists the current branch, then the existing local branches
+// HEAD has moved to or from with a checkout or switch, latest first.
+//
+// The reflog of HEAD is per worktree, so this is what was worked on here — which
+// is what "recent" in this workspace's branch list should mean. The current
+// branch is put first rather than found there: a clone or a `git worktree add`,
+// which is how Pockode makes worktrees, starts the reflog with no checkout entry.
+func recentBranches(dir, current string, localNames []string) ([]string, error) {
+	// --no-show-signature for the reason Head gives: log.showSignature would mix
+	// verification output into the lines parsed here.
+	lines, err := execGitLines(dir, "log", "-g", "--no-show-signature", "--format=%gs", "-n", recentReflogDepth, "HEAD")
+	if err != nil {
+		return nil, err
+	}
+
+	exists := make(map[string]bool, len(localNames))
+	for _, name := range localNames {
+		exists[name] = true
+	}
+
+	result := []string{}
+	seen := make(map[string]bool)
+	add := func(name string) {
+		// Also rules out the commit hash a detached checkout moved to or from.
+		if exists[name] && !seen[name] {
+			seen[name] = true
+			result = append(result, name)
+		}
+	}
+	add(current)
+	for _, line := range lines {
+		// git switch writes the same message. Branch names cannot contain a
+		// space, so " to " splits it unambiguously.
+		moved, ok := strings.CutPrefix(line, "checkout: moving from ")
+		if !ok {
+			continue
+		}
+		from, to, ok := strings.Cut(moved, " to ")
+		if !ok {
+			continue
+		}
+		add(to)
+		add(from)
+	}
+	return result, nil
 }
 
 // mainWorktreeLabel names the main checkout in the branch sheet's "in <worktree>"
@@ -184,20 +405,15 @@ func worktreeBranches(dir string) (map[string]string, error) {
 }
 
 // remoteOnlyBranches lists remote branches that have no local counterpart,
-// given the local branch names and the configured remotes.
-func remoteOnlyBranches(dir string, localNames []string, remotes []string) ([]RemoteBranch, error) {
+// given the listed refs, the local branch names and the configured remotes.
+func remoteOnlyBranches(refs []branchRef, localNames []string, remotes []string) []RemoteBranch {
 	// The result is an empty slice, never nil: it is marshalled straight to the
 	// frontend, which filters it, and a JSON null would arrive there as a crash
 	// rather than as "no remote branches".
 	result := []RemoteBranch{}
 
 	if len(remotes) == 0 {
-		return result, nil
-	}
-
-	refs, err := execGitLines(dir, "for-each-ref", "--sort=-committerdate", "--format=%(refname)", "refs/remotes")
-	if err != nil {
-		return nil, err
+		return result
 	}
 
 	byLength := append([]string(nil), remotes...)
@@ -209,17 +425,17 @@ func remoteOnlyBranches(dir string, localNames []string, remotes []string) ([]Re
 	}
 
 	seen := make(map[string]bool)
-	for _, ref := range refs {
-		short, name, ok := splitRemoteRef(ref, byLength)
+	for _, r := range refs {
+		short, name, ok := splitRemoteRef(r.ref, byLength)
 		// "origin/HEAD" is a symbolic ref aliasing the remote's default branch,
 		// not a branch of its own.
 		if !ok || name == "HEAD" || locals[name] || seen[name] {
 			continue
 		}
 		seen[name] = true
-		result = append(result, RemoteBranch{Ref: short, Name: name})
+		result = append(result, RemoteBranch{Ref: short, Name: name, CommittedAt: r.committedAt})
 	}
-	return result, nil
+	return result
 }
 
 // splitRemoteRef splits "refs/remotes/origin/topic" into "origin/topic" and
@@ -282,13 +498,14 @@ func CreateBranch(dir, name string) error {
 
 // validateBranchName rejects names git would read as an option before reading
 // them as a ref. Every other rule is left to git, whose own message names the
-// offending character more precisely than a reimplementation could.
+// offending character more precisely than a reimplementation could. Its
+// refusals are ErrInvalidArgument: git never ran.
 func validateBranchName(name string) error {
 	if name == "" {
-		return fmt.Errorf("branch name is empty")
+		return fmt.Errorf("%w: branch name is empty", ErrInvalidArgument)
 	}
 	if strings.HasPrefix(name, "-") {
-		return fmt.Errorf("branch name cannot start with '-'")
+		return fmt.Errorf("%w: branch name cannot start with '-'", ErrInvalidArgument)
 	}
 	return nil
 }

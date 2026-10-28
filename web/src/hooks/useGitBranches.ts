@@ -18,12 +18,14 @@ export function useGitBranches() {
 
 /**
  * Switching to a branch and creating one both move HEAD, so they invalidate the
- * whole panel rather than only the branch list.
+ * whole panel rather than only the branch list. Deleting a branch never touches
+ * HEAD, so it refreshes the list alone.
  */
 export function useGitBranchActions() {
 	const queryClient = useQueryClient();
 	const checkout = useWSStore((s) => s.actions.checkout);
 	const createBranch = useWSStore((s) => s.actions.createBranch);
+	const deleteBranch = useWSStore((s) => s.actions.deleteBranch);
 
 	// Deliberately not returned: react-query would fold the refetch into the
 	// mutation's outcome, and the Branches list would report a switch that did
@@ -34,6 +36,13 @@ export function useGitBranchActions() {
 
 	const checkoutMutation = useMutation({ mutationFn: checkout, onSuccess });
 	const createMutation = useMutation({ mutationFn: createBranch, onSuccess });
+	const deleteMutation = useMutation({
+		mutationFn: ({ name, tip }: { name: string; tip: string }) =>
+			deleteBranch(name, tip),
+		onSuccess: () => {
+			queryClient.invalidateQueries({ queryKey: gitBranchesQueryKey });
+		},
+	});
 
-	return { checkoutMutation, createMutation };
+	return { checkoutMutation, createMutation, deleteMutation };
 }

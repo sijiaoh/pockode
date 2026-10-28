@@ -5,7 +5,7 @@ import { JSONRPCErrorException } from "json-rpc-2.0";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { gitBranchesQueryKey, gitStatusQueryKey } from "../../hooks/gitQueries";
 import { gitOperationActions } from "../../lib/gitOperationStore";
-import { makeHead, makeSync } from "../../test/gitFixtures";
+import { makeBranches, makeHead } from "../../test/gitFixtures";
 import type { GitAbortResult, GitStatus } from "../../types/git";
 import OperationBanner from "./OperationBanner";
 
@@ -64,12 +64,10 @@ function renderBanner(
 	{ compact = false, onSelectFile = vi.fn() } = {},
 ) {
 	queryClient.setQueryData(gitStatusQueryKey, status);
-	queryClient.setQueryData(gitBranchesQueryKey, {
-		head: makeHead({ branch: "", detached: true }),
-		local: [],
-		remote_only: [],
-		sync: makeSync(),
-	});
+	queryClient.setQueryData(
+		gitBranchesQueryKey,
+		makeBranches({ head: makeHead({ branch: "", detached: true }) }),
+	);
 	const view = render(
 		<QueryClientProvider client={queryClient}>
 			<OperationBanner compact={compact} onSelectFile={onSelectFile} />

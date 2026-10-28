@@ -4,6 +4,7 @@ import type {
 	CommitDraftRequest,
 	GitAbortResult,
 	GitBranches,
+	GitBranchInspection,
 	GitDiffData,
 	GitLogResult,
 	GitOperationKind,
@@ -53,6 +54,13 @@ export interface GitActions {
 	getBranches: () => Promise<GitBranches>;
 	checkout: (branch: string) => Promise<void>;
 	createBranch: (name: string) => Promise<void>;
+	inspectBranch: (name: string) => Promise<GitBranchInspection>;
+	/**
+	 * Deletes local branch `name` only while it still points at `tip`, the hash
+	 * `inspectBranch` returned; otherwise refused with -32009
+	 * (server/rpc/types.go's CodeGitBranchChanged).
+	 */
+	deleteBranch: (name: string, tip: string) => Promise<void>;
 	/** Named for the git command rather than "fetch", which the global already is. */
 	fetchRemote: () => Promise<void>;
 	/** Resolves to the number of commits the fast-forward brought in. */
@@ -162,6 +170,12 @@ export function createGitActions(
 		},
 		createBranch: async (name: string): Promise<void> => {
 			await requireClient().request("git.branch.create", { name });
+		},
+		inspectBranch: async (name: string): Promise<GitBranchInspection> => {
+			return requireClient().request("git.branch.inspect", { name });
+		},
+		deleteBranch: async (name: string, tip: string): Promise<void> => {
+			await requireClient().request("git.branch.delete", { name, tip });
 		},
 		fetchRemote: async (): Promise<void> => {
 			await requireClient().request("git.fetch", {});

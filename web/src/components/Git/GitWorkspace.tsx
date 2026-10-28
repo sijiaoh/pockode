@@ -1,5 +1,6 @@
 import { CoveredSurface, useIsExpanded } from "@pockode/shared";
 import { useMemo } from "react";
+import { useBranchMergeHandoff } from "../../hooks/useBranchMergeHandoff";
 import { useGitLog } from "../../hooks/useGitLog";
 import { useGitStatus } from "../../hooks/useGitStatus";
 import { useAutoFetch } from "../../hooks/useGitSync";
@@ -71,6 +72,8 @@ function GitWorkspace({
 	// which this component lives exactly as long as; the bar is only where its
 	// failure is shown.
 	useAutoFetch();
+	// Here rather than in BranchesSection, which unmounts with its segment.
+	const mergeHandoff = useBranchMergeHandoff();
 	// Always a segment: every layer has one.
 	const segment = gitSegmentOf(layer) ?? "changes";
 	const detail = layer.type === "git" ? null : layer;
@@ -128,6 +131,7 @@ function GitWorkspace({
 			<BranchBar
 				onOpenBranches={() => onSelectSegment("branches")}
 				branchesOnScreen={segment === "branches"}
+				mergeHandoff={mergeHandoff}
 			/>
 
 			{/* Narrow, a layer has no room for the whole banner over its content;
@@ -190,7 +194,7 @@ function GitWorkspace({
 									onSelectCommit={onSelectCommit}
 								/>
 							) : (
-								<BranchesSection />
+								<BranchesSection mergeHandoff={mergeHandoff} />
 							)}
 						</div>
 					</CoveredSurface>
