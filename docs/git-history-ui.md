@@ -277,7 +277,7 @@ With either on, **no graph**: rows keep their height and text, the graph column 
 
 ```
 ┌────────────────────────────────┐
-│ ← Add lane layout              │  app header
+│ ← Commit a1b2c3d             ⋯ │  app header — short hash in mono
 ├────────────────────────────────┤
 │ Add lane layout                │  subject
 │ Lines carry across pages …     │  body
@@ -291,16 +291,15 @@ With either on, **no graph**: rows keep their height and text, the graph column 
 ├────────────────────────────────┤
 │ CHANGED FILES (3) vs parent 1  │
 │ M  web/src/…/HistorySection.tsx│
-├────────────────────────────────┤
-│ a1b2c3d                      ⋯ │  bottom bar
 └────────────────────────────────┘
 ```
 
+- **Title**: `Commit a1b2c3d`, the same while the commit loads and if it cannot be read — the hash comes from the route — and no subtitle. The subject is the page's content, not its name: it is said once, in full and wrapping, under the header. The hash is said twice, short in the title to name the page and full in the body to copy.
 - **Refs**: all of them, chips wrapping onto further lines; no `+N` here, there is room to say everything.
 - **Hash**: the full hash in mono with a copy button.
 - **Parents**: one `min-h-[44px]` row each — short hash, subject (the subject is a skeleton until known, then `git.show`'s answer for that parent) — opening that commit (push; Back returns here). A merge numbers them, `1` and `2` (and on for an octopus), with the accessible names `First parent` / `Merged-in parent 2`. A root commit says `No parents — this is the first commit.`
 - **Files**: the commit's changed files. For a merge the heading says `vs parent 1` — the files are its diff against its first parent, which is what the merge brought into the line.
-- **`⋯` in the bottom bar**, at its right end, beside the short hash already there: the same commit menu as the list row's, at the bottom where a thumb reaches it.
+- **`⋯` in the header**, at the right of the title (`PageHeader`'s `actions`), named `Actions for commit a1b2c3d`: the same commit menu as the list row's, shown once the commit is read. There is no bottom bar: with the short hash in the title, it would be a whole strip for one button. The cost is a menu out of reach of the thumb holding the phone.
 - **The refs are live.** The commit never changes but the refs on it do — a branch created here, a push, a fetch — so the page's answer is re-read with the rest of the workspace on `git.changed` and after every write.
 
 At `expanded` all of this is in the right column; the commit's row stays lit in the left one, and the history query (`scope`, `q`, `file`) rides on the commit route so the list beside it is the list it was opened from ([URL](#url)).

@@ -79,6 +79,7 @@ export default Dialog;
 - **放 `sticky` 子元素的滚动容器自己不带竖向 padding**：`sticky` 的 `top-0` 贴的是滚动容器的 padding 边而不是边框边，容器上的 `p-*` / `pt-*` / `py-*` 会在吸顶的 header 上方留出一条缝，滚过去的行从缝里露出来。内边距交给里面再包一层的内容 div（范例见 `Project/WorkListOverlay.tsx`；它的测试只守这一处，别处靠自觉）
 - **表单控件焦点**：有边框的文本框 / textarea / select 一律用 `ui/inputClass.ts` 的 `inputClass`（边框 + 焦点边框 + 光晕，用 `focus:`），padding、字号、背景、圆角留在调用处；按钮类控件仍用 `focus-visible:`。不要手写 `focus:border-*` —— 浅色主题下只变 1px 边框几乎看不出来。**无边框的行内控件**（如步骤编辑器里与序号、把手并排的 textarea）不走 `inputClass`，由包住它的带边框容器挂同文件的 `inputFocusWithinClass`（同一套 token，用 `focus-within:`）显示焦点 —— 光晕加在控件本身会压到旁边的序号和把手
 - **主题**：必须用 `th-` 前缀颜色，禁止硬编码（详见 `index.css` 中的主题定义）
+- **第三方库的样式表放进 `components` layer**：在 `index.css` 里 `@import "…" layer(components);`，不要从 JS `import "…css"`。未分层的样式压过所有 layer 里的规则，于是库的样式同时盖掉我们的 utilities 和主题覆盖，且不报任何错（`@git-diff-view` 曾因此把 hunk 栏画成黑字、让 `index.css` 里的 diff 主题从未生效）。`components` 在 preflight 之上（库的规则本来就是写来压它的）、utilities 之下；理由写在 `index.css` 那行 import 上，`ui/DiffViewer.browser.test.tsx` 守着它
 
 ### Zustand
 
