@@ -20,6 +20,7 @@ Pockode uses Zustand for state management, pure reducers for event processing, a
 │  ├─ filesSearchStore (localStorage)                         │   │
 │  ├─ gitSyncStore                                            │   │
 │  ├─ gitCheckoutStore                                        │   │
+│  ├─ gitOperationStore                                       │   │
 │  ├─ gitWriteStore                                           │   │
 │  ├─ gitChangesViewStore (localStorage)                      │   │
 │  ├─ portPreviewStore (localStorage)                         │   │
@@ -64,6 +65,7 @@ Pockode uses Zustand for state management, pure reducers for event processing, a
 | filesSearchStore | File search options | localStorage init |
 | gitSyncStore | The fetch/pull/push in flight in each worktree, whether the user or the Git workspace started it, and how the last one ended | Keyed by worktree; outlives the sheet that started the run |
 | gitCheckoutStore | The branch switch in flight in each worktree, and how the last one failed | Keyed by worktree; outlives the Branches segment that started it |
+| gitOperationStore | The abort of an in-progress merge/rebase/cherry-pick/revert in each worktree, how it ended, and which operation's banner is collapsed ([git-conflict-ui.md](../git-conflict-ui.md#abort)) | Keyed by worktree; outlives the workspace the abort was pressed in |
 | gitWriteStore | Each worktree's serial queue of stage/unstage/discard writes, the paths they have pending, and the Changes list's unacknowledged failure | Keyed by worktree; one write at a time, so two taps cannot race |
 | gitChangesViewStore | The Changes list's flat/tree choice, and which tree folders are collapsed in each worktree ([git-changes-ui.md](../git-changes-ui.md#flat-and-tree)) | localStorage init for the view, which the review also reads for its order; collapse state in memory, keyed by worktree |
 | portPreviewStore | The ports a preview was recently opened for ([port-preview.md](../port-preview.md#opening-a-preview-from-the-app)) | localStorage init; one key for every worktree, since ports belong to the machine |
@@ -1146,6 +1148,7 @@ Key features:
 | `web/src/lib/registries/*.ts` | Runtime registries for themes, UI, settings |
 | `web/src/lib/*Store.ts` | Domain data stores |
 | `web/src/lib/gitSyncStore.ts` / `gitCheckoutStore.ts` | The Git workspace's fetch/pull/push and branch switch per worktree, for runs that outlive the view that started them |
+| `web/src/lib/gitOperationStore.ts` | The abort of an in-progress git operation per worktree, its failure kept while that operation lasts |
 | `web/src/lib/gitWriteStore.ts` | The Git workspace's serial queue per worktree, for writes — and their failures — that outlive the view that started them |
 | `web/src/lib/worktreeQuery.ts` | Worktree list query key + fetcher, kept together |
 | `web/src/hooks/useSubscription.ts` | Subscription lifecycle hook |

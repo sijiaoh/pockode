@@ -18,6 +18,8 @@ Copy below is the UI's English. What is left for later is in [git-ui.md](git-ui.
 
 Each `git.status` entry carries its own side's line counts — or `binary`, or nothing when the count is unknown — and a staged rename carries its source; what each case yields is [git.md](git.md#status)'s. The row shows the **sum of the file's two sides**: that is exactly the two diffs the review shows for the file, so the number on the row is the amount there is to read. A line edited on both sides counts twice, which is accepted for that reason. A path without counts is not an error of the status read; the row simply shows none.
 
+A path listed in `conflicted` — a merge, rebase, cherry-pick, revert or stash pop that stopped on it — is one record carrying `conflict` rather than two sides, and its row, its `⋯` sheet, how select all and folders treat it, and what its review draws are [git-conflict-ui.md](git-conflict-ui.md#the-changes-list)'s; everything below is about the files without one.
+
 ## The Changes segment
 
 ### Below `expanded`
@@ -161,7 +163,7 @@ The commit bar becomes a two-button bar. It renders on the same condition the co
 
 ## The review layer
 
-The review layer is the `diff` layer redesigned: one file at a time, in list order, with "stage and go to the next file" as its primary action.
+The review layer is the `diff` layer redesigned: one file at a time, in list order, with "stage and go to the next file" as its primary action. A conflicted file is reviewed in the same layer and order but draws the conflict view instead, with its own bottom bar ([git-conflict-ui.md](git-conflict-ui.md#viewing-a-conflicted-file)).
 
 ### Below `expanded`
 

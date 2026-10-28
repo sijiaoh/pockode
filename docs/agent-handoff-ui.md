@@ -10,10 +10,13 @@ Two halves of one loop between the chat and the Git workspace:
   has uncommitted changes, the chat's attention strip says so and offers the
   Git workspace's review.
 
-The handoff is a mechanism, not an entry point. The entries that will use it —
-asking the agent about selected lines, revert, merge, conflict resolution — each
-belong to their own design. This file says only what every one of them gets by
-calling it. The review row is the one entry this file does define.
+The handoff is a mechanism, not an entry point. The entries that use it each
+belong to their own design — today the in-progress operation's `Resolve with
+agent` and the conflict view's `Ask agent`
+([git-conflict-ui.md](git-conflict-ui.md#resolve-with-agent)); asking about
+selected lines, revert and merge are still to come. This file says only what
+every one of them gets by calling it. The review row is the one entry this file
+does define.
 
 Copy below is the UI's English.
 

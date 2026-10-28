@@ -446,7 +446,9 @@ the same shape as the Project tab: something to read, and doors.
   HEAD there is no line, by the chip's own `hasSyncStatus`. None of it is a
   button and none of it is drawn like the chip: something that looks pressable
   and does nothing is worse than nothing, and the entries below already go
-  everywhere it could.
+  everywhere it could. While a merge, rebase, cherry-pick or revert is in
+  progress the sync line gives way to what the workspace's banner says
+  ([git-conflict-ui.md](git-conflict-ui.md#the-sidebars-git-tab)).
 - **Three entries**, `min-h-[44px]`, in the Project tab's row style:
   `Changes`, `History`, `Branches`. Each lands on its segment's **list**, never
   on a detail it remembers — the Stories entry's rule — through the same
