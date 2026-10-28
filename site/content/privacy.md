@@ -13,7 +13,7 @@ By using the Service, you agree to the collection and use of information in acco
 
 ### 1.1 Information Collected Automatically
 
-When you use our relay service, we automatically collect certain technical information necessary to provide and maintain the Service:
+When you use our relay service or the cloud account pages, we automatically collect certain technical information necessary to provide and maintain the Service:
 
 - **Network Information:** IP addresses of connecting clients and servers
 - **Connection Data:** Timestamps, session identifiers, and connection duration
@@ -23,16 +23,16 @@ The Pockode server also fetches a short announcement from us each time it starts
 
 ### 1.2 Cloud Account Information
 
-A cloud account is optional. If you sign in to the cloud and link a machine with `pockode login`, we receive the following so that we can show you your instances:
+A cloud account is optional. If you sign in to the cloud, we receive your email address; if you also link a machine with `pockode login`, we receive information about that machine and the Pockode instances on it, so that we can show you your instances:
 
-- **Account:** Your email address, which is your account; there is no password. We send a one-time sign-in code to it each time you sign in.
+- **Account:** Your email address, which identifies your account (there is no password). We send a one-time sign-in code to it each time you sign in.
 - **Linked Machine:** The machine's hostname, your operating system user name on it, and its operating system, sent when you link it. The machine is named `user@hostname` in your account.
-- **Linked Instances:** For each Pockode instance that runs on a linked machine, its kind (server, cluster, or node), its name, and the path it runs in — the project directory for a server or node, the data directory for a cluster. These are sent when the instance starts and each time it renews its relay registration.
+- **Linked Instances:** For each Pockode instance your operating system user runs on a linked machine, its kind (server, cluster, or node) and the name and full path of its directory — the project directory for a server or node, the data directory for a cluster. These are sent each time the instance registers or renews its relay connection.
 - **Last Seen:** When each linked instance last connected to or disconnected from the relay.
 
 A machine that has not been linked sends none of this: its requests to the relay are the same as if accounts did not exist.
 
-To stop sending it, run `pockode logout` on the machine, or unlink the machine from your account on the web. Either one deletes the machine from your account, and its instances are no longer associated with it or shown in your list. An instance that is offline can also be removed from the list on its own; it reappears the next time it renews its registration from a linked machine.
+To stop this, run `pockode logout` on the machine or unlink the machine from your account on the web. Either one deletes the machine from your account, and its instances are no longer associated with your account or shown in your list. `pockode logout` also removes the link from the machine itself, so it stops sending this information; if the cloud cannot be reached at that moment, unlink the machine on the web to remove it from your account. An instance that is offline can also be removed from the list on its own; it reappears the next time it renews its registration from a linked machine.
 
 ### 1.3 Information We Do Not Collect
 
@@ -46,7 +46,7 @@ Pockode provides relay infrastructure that enables you to use AI-powered coding 
 
 ### 1.5 Website
 
-Our website does not use cookies, tracking pixels, or third-party analytics services. The cloud account pages set a single cookie, the session cookie that keeps you signed in: it is set only when you sign in, lasts up to 30 days and is renewed while you keep using the pages, and is removed when you sign out. They do not use tracking pixels or third-party analytics services either.
+Our website does not use cookies, tracking pixels, or third-party analytics services. Neither do the cloud account pages, except for a single session cookie that keeps you signed in: it is set only when you sign in, lasts up to 30 days and is renewed while you keep using the pages, and is removed when you sign out.
 
 ## 2. How We Use Information
 
