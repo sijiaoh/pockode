@@ -63,8 +63,12 @@ Overlay routes deliberately do not carry it (see [Known gaps](#known-gaps)).
 
 ### The filter panel
 
-`Filter sessions` holds one flat level of grouping — the panel's own title is its
-heading, so the existing checkbox has no group header of its own:
+At `expanded` the panel drops down across the whole New Chat row, the same
+width as the worktree switcher's
+([sidebar-ui.md](sidebar-ui.md#the-top-of-the-sidebar)); below it the panel is
+a bottom sheet. `Filter sessions` holds one flat level of grouping — the
+panel's own title is its heading, so the existing checkbox has no group header
+of its own:
 
 ```
 Show task sessions
@@ -112,7 +116,7 @@ other way to find out.
 
 Two glyphs carry "still there" against "deleted", in the filter rows, on the list
 rows, on the context line, on both strips of the read-only screen, and on a
-work's `WorktreeBadge`. A 240px row has no space for the word `(deleted)`, and
+work's `WorktreeBadge`. A 280px row has no space for the word `(deleted)`, and
 `Archive` says exactly the right thing — *kept, but no longer running*. Screen
 readers get the word: `, deleted worktree`.
 
@@ -133,7 +137,7 @@ and the list:
 | `All worktrees` | `Sessions from every worktree. Opening one may switch worktree.` |
 
 The difference belongs to the list, not to any session in it: on a row it would
-repeat dozens of times and compete with the title for a 240px line. Under
+repeat dozens of times and compete with the title for a 280px line. Under
 `All worktrees` the per-row glyph carries the distinction instead.
 
 **It must not look like a group header.** Sentence case, no uppercase, no letter
@@ -148,7 +152,7 @@ third group header.
 - Otherwise the marker goes in the row's **subtitle**, not its left slot: the
   left slot is fork's, and a forked session from another worktree would otherwise
   need two. The subtitle reads `<glyph> feature-x · 14:22`, the name truncating
-  and the time holding its width — the name is what gives way in a 240px column.
+  and the time holding its width — the name is what gives way in a 280px column.
 - A row of the worktree the user is standing in is unmarked even under
   `All worktrees`, and opens and deletes exactly as it always has.
 - **The open session's row is highlighted whichever list it came from.** A viewed

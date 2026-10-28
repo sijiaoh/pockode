@@ -180,17 +180,21 @@ function SessionsTab({
 		<div
 			className={isActive ? "flex flex-1 flex-col overflow-hidden" : "hidden"}
 		>
-			<div className="flex items-center gap-2 p-2">
-				<button
-					type="button"
-					onClick={onCreateSession}
-					disabled={isStale}
-					className="flex min-h-[44px] flex-1 items-center justify-center gap-2 rounded-lg bg-th-accent px-3 text-sm font-medium text-th-accent-text hover:bg-th-accent-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent focus-visible:ring-offset-2 focus-visible:ring-offset-th-bg-secondary disabled:cursor-not-allowed disabled:opacity-50"
-				>
-					<Plus className="h-4 w-4" aria-hidden="true" />
-					New Chat
-				</button>
-				<SessionFilterButton disabled={isStale} />
+			{/* `relative` inside the inset, so the filter's dropdown spans exactly
+			    this row. */}
+			<div className="p-2">
+				<div className="relative flex items-center gap-2">
+					<button
+						type="button"
+						onClick={onCreateSession}
+						disabled={isStale}
+						className="flex min-h-[44px] flex-1 items-center justify-center gap-2 rounded-lg bg-th-accent px-3 text-sm font-medium text-th-accent-text hover:bg-th-accent-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent focus-visible:ring-offset-2 focus-visible:ring-offset-th-bg-secondary disabled:cursor-not-allowed disabled:opacity-50"
+					>
+						<Plus className="h-4 w-4" aria-hidden="true" />
+						New Chat
+					</button>
+					<SessionFilterButton disabled={isStale} />
+				</div>
 			</div>
 			{isViewing && <FilterContextLine filter={filter} worktrees={worktrees} />}
 			<div className="min-h-0 flex-1 overflow-y-auto">

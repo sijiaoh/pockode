@@ -234,7 +234,7 @@ messages' left edge and Send with their right. Borders and backgrounds stay full
 width, and so does the transcript's scroll box, so its scrollbar sits at the
 window's edge and the wheel works over the margins. The header is not
 constrained: it is the window's chrome. With the sidebar open at its default
-288px, the column only starts to bind at a window of roughly 1060px, so phones
+320px, the column only starts to bind at a window of roughly 1090px, so phones
 and tablets are untouched. The scroll-to-bottom button belongs to the column too
 ([Where the View Sits](#where-the-view-sits)).
 

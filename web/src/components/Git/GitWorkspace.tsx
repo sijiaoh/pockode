@@ -48,7 +48,7 @@ const SEGMENTS = [
 ] as const satisfies readonly { value: GitSegment; label: string }[];
 
 // The list column at `expanded`. The minimum is the narrowest its rows have
-// been checked at, above the narrow-width rule's 240px (docs/sidebar-ui.md);
+// been checked at, the narrow-width rule's 280px (docs/sidebar-ui.md);
 // the detail column is left at least DETAIL_MIN_WIDTH, the width a diff stays
 // readable at, unless the minimum itself does not fit.
 const LIST_MIN_WIDTH = 280;

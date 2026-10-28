@@ -412,7 +412,7 @@ with nothing added for it.
 **The question count is a second indicator beside that one, never instead of
 it** — rung 2 of §1.5. When `unanswered_questions > 0` the row draws `CircleHelp`
 in `text-th-warning`, followed by the number when it is above 1, after the
-activity indicator. Both are `shrink-0`, so the 240px sidebar pays about 30px and
+activity indicator. Both are `shrink-0`, so the 280px sidebar pays about 30px and
 the title keeps being the one `flex-1 min-w-0` element
 ([sidebar-ui.md](sidebar-ui.md#the-narrow-width-rule)).
 
@@ -1333,7 +1333,7 @@ a user who stopped one subtask restart two things.
 | Work closed while its turn is still finishing (grace: 2 minutes) | the work row reads `Closed` immediately while its session row may still read `Running` for the length of the grace period. That is two layers telling the truth about themselves, not a contradiction: the engine has let go, the process has not finished speaking. Nothing waits for the other before it updates |
 | Work reopened during the close grace | the reopen's restart message cancels the retirement outright — the premise of it was that nobody was coming back. The session keeps its process and its transcript, and the work is `active` again with no trace of the two minutes it spent closed |
 | Blocker raised *during* the close grace period | it never appears as `Closed` work needing input: it is cancelled with reason `work_closed` (§5), and the session's phase returns to idle. A question posted then is cancelled by the same rule — a closed work must not leave a card waiting on an answer nobody will act on |
-| 240px sidebar | every indicator is `shrink-0` and icon-only; the title is the one `flex-1 min-w-0` element ([sidebar-ui.md](sidebar-ui.md#the-narrow-width-rule)) |
+| 280px sidebar | every indicator is `shrink-0` and icon-only; the title is the one `flex-1 min-w-0` element ([sidebar-ui.md](sidebar-ui.md#the-narrow-width-rule)) |
 | Reduced motion | the session row's spinner degrades the way it always has; the tail line ([turn-progress-ui.md §2.3](turn-progress-ui.md#23-what-it-says)), a running tool row and a running group summary ([tool-call-ui.md § Status](tool-call-ui.md#status)) swap their `Spinner` for a still accent `CircleDot`, since the shared `Spinner` does not stop itself |
 
 ## 9. Deliberately not done

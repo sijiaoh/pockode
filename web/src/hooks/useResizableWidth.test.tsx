@@ -137,15 +137,18 @@ describe("useResizableWidth", () => {
 		expect(localStorage.getItem(KEY)).toBeNull();
 	});
 
-	it("ignores a stored width it cannot use", () => {
+	it("ignores a stored width it cannot read", () => {
 		localStorage.setItem(KEY, "abc");
-		const { unmount } = render(<Harness />);
-		expect(width()).toBe("300");
-		unmount();
-
-		localStorage.setItem(KEY, "100");
 		render(<Harness />);
 		expect(width()).toBe("300");
+	});
+
+	// A minimum raised since the width was chosen: the nearest to it is the
+	// narrowest the column now goes, not the default the user had left.
+	it("draws a stored width under the minimum at the minimum", () => {
+		localStorage.setItem(KEY, "100");
+		render(<Harness />);
+		expect(width()).toBe("200");
 	});
 
 	// After a reset the default is relative again, not frozen at the value it
