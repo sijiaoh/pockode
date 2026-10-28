@@ -283,6 +283,8 @@ Every write the workspace offers, reviewed. "Disabled" keeps the control in plac
 | `✨ Draft` | — | unreachable (the sheet cannot be opened) | — |
 | Switch branch (Branches rows) | stopped | **disabled**, as rows are during a switch | Pinned at the top of the list where a checkout failure goes: `Branch switching is paused during the rebase. Abort it, or let the agent finish it.` |
 | `New branch…` | stopped | **disabled** | The same pinned line |
+| `Delete branch` (a branch's `⋯`) | stopped | **disabled** | `Finish or abort the rebase first.` as the menu row's description ([git-branches-ui.md](git-branches-ui.md#the-branchs-menu-)) |
+| `Ask AI to merge into current branch` (a branch's `⋯`) | stopped | **disabled** | The same description: a merge cannot start inside another operation |
 | The new-branch sheet, if open when an operation begins | stays open (it holds the name) | `Create` disabled | The same sentence, in the sheet |
 | Fetch | allowed | — | Touches no working tree |
 | Pull | stopped (merge, cherry-pick, revert; during a rebase the chip is hidden) | **disabled** in the Sync sheet | A line under the button rows: `Can't pull during a merge.` git refuses it; the sheet should say so rather than relay the refusal |
@@ -292,7 +294,7 @@ Every write the workspace offers, reviewed. "Disabled" keeps the control in plac
 
 **Conflicts with no operation** — a `git stash pop` that did not apply cleanly — have no banner and pause nothing but commit: git refuses to commit over them, so the bar and the sheet disable it the same way with `Resolve the conflicts to commit.`, and the conflicted rows are drawn as above.
 
-The server refuses the stopped writes on its own as well — commit, amend, checkout, new branch and pull while an operation is in progress, and stage, unstage (whole or by hunk) or discard of a conflicted path ([git.md](git.md#writes-refused-during-an-operation)) — so a client that has not yet seen the operation begin meets a sentence naming it, not git's refusal or, worse, its consent. Both are refusals, read by code in `utils/gitErrors.ts` and shown without `Details`: `This worktree is in the middle of a rebase. Abort it, or let the agent finish it.` (`-32006`) and `Nothing was discarded: a.ts has unresolved conflicts.` (`-32007`; `staged` / `unstaged` for the other two writes). A write refused as busy behind an abort reads `This worktree is busy aborting an operation. Try again once it finishes.`
+The server refuses the stopped writes on its own as well — commit, amend, checkout, new branch, branch delete and pull while an operation is in progress, and stage, unstage (whole or by hunk) or discard of a conflicted path ([git.md](git.md#writes-refused-during-an-operation)) — so a client that has not yet seen the operation begin meets a sentence naming it, not git's refusal or, worse, its consent. Both are refusals, read by code in `utils/gitErrors.ts` and shown without `Details`: `This worktree is in the middle of a rebase. Abort it, or let the agent finish it.` (`-32006`) and `Nothing was discarded: a.ts has unresolved conflicts.` (`-32007`; `staged` / `unstaged` for the other two writes). A write refused as busy behind an abort reads `This worktree is busy aborting an operation. Try again once it finishes.`
 
 The chat's review row is unchanged; a conflict-aware version of it is left for later.
 

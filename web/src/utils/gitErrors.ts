@@ -22,8 +22,9 @@ const NOT_GIT_REPO_CODE = -32002;
 
 /**
  * Where: server/rpc/types.go's CodeGitOperationInProgress. A commit, branch
- * switch, new branch or pull the repository's merge, rebase, cherry-pick or
- * revert would have been finished or derailed by; `data.kind` names it.
+ * switch, new branch, branch delete or pull the repository's merge, rebase,
+ * cherry-pick or revert would have been finished or derailed by; `data.kind`
+ * names it.
  */
 const OPERATION_IN_PROGRESS_CODE = -32006;
 
@@ -40,6 +41,44 @@ const CONFLICTED_CODE = -32007;
  * and nothing was written.
  */
 const GIT_HUNK_STALE_CODE = -32005;
+
+/**
+ * Where: server/rpc/types.go's CodeGitBranchChanged. The branch no longer
+ * points at the tip the user confirmed deleting, or — `data.gone` — no longer
+ * exists at all. Nothing was deleted.
+ */
+const GIT_BRANCH_CHANGED_CODE = -32009;
+
+/**
+ * Where: server/rpc/types.go's CodeGitBranchCheckedOut. A delete of the
+ * current branch, or of one `data.worktree` has checked out. Nothing was
+ * deleted.
+ */
+const GIT_BRANCH_CHECKED_OUT_CODE = -32010;
+
+/**
+ * The sentence for a branch inspect or delete the server refused because of
+ * where the branch is now, or null for any other failure. It names the branch,
+ * which the refusal itself cannot be relied on to do in the user's words.
+ */
+export function branchRefusalSummary(
+	error: unknown,
+	branch: string,
+): string | null {
+	if (!(error instanceof JSONRPCErrorException)) return null;
+	if (error.code === GIT_BRANCH_CHANGED_CODE) {
+		return dataField(error.data, "gone") === true
+			? `${branch} no longer exists.`
+			: `${branch} has changed since. Open its menu again to see what deleting it would lose.`;
+	}
+	if (error.code === GIT_BRANCH_CHECKED_OUT_CODE) {
+		const worktree = dataField(error.data, "worktree");
+		return typeof worktree === "string" && worktree !== ""
+			? `Could not delete ${branch}: it is checked out in ${worktree}.`
+			: `Could not delete ${branch}: it is the current branch.`;
+	}
+	return null;
+}
 
 /** Whether a hunk write was refused because the diff it was read from is out of date. */
 export function isHunkStale(error: unknown): boolean {
@@ -61,6 +100,7 @@ const BUSY_OPERATIONS: Record<string, string> = {
 	commit: "committing",
 	checkout: "switching branches",
 	"branch-create": "creating a branch",
+	"branch-delete": "deleting a branch",
 	fetch: "fetching",
 	pull: "pulling",
 	push: "pushing",

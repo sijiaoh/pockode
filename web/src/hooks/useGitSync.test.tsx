@@ -4,7 +4,7 @@ import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { gitSyncActions, useGitSyncStore } from "../lib/gitSyncStore";
 import { resetWorktreeStore, worktreeActions } from "../lib/worktreeStore";
-import { makeHead, makeSync } from "../test/gitFixtures";
+import { makeBranches, makeSync } from "../test/gitFixtures";
 import type { GitBranches, GitSync } from "../types/git";
 import { AUTO_FETCH_AFTER_MS } from "../utils/gitSyncStatus";
 import { useAutoFetch } from "./useGitSync";
@@ -28,7 +28,7 @@ let query: {
 vi.mock("./useGitBranches", () => ({ useGitBranches: () => query }));
 
 function branches(sync: Partial<GitSync>): GitBranches {
-	return { head: makeHead(), local: [], remote_only: [], sync: makeSync(sync) };
+	return makeBranches({ sync: makeSync(sync) });
 }
 
 const stale = () =>

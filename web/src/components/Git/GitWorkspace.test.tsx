@@ -57,6 +57,15 @@ vi.mock("./HistorySection", () => ({
 		<div>history list, active {activeHash ?? "none"}</div>
 	),
 }));
+// Has the prefill handoff's own tests behind it; it needs a router here.
+vi.mock("../../hooks/useBranchMergeHandoff", () => ({
+	useBranchMergeHandoff: () => ({
+		handingOff: null,
+		error: null,
+		dismissError: () => {},
+		start: () => {},
+	}),
+}));
 vi.mock("./BranchesSection", () => ({
 	default: () => <div>branches list</div>,
 }));

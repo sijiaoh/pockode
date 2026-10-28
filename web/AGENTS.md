@@ -85,7 +85,7 @@ export default Dialog;
 **领域数据**用 Zustand，**UI 状态**用 React —— 除非该状态的寿命必须长于组件。三类：
 需要持久化；代表「用户已经做过的选择」而组件何时卸载不由它自己决定；以及**已经发出去
 的请求**——它的寿命由请求本身决定，组件卸载了请求还在跑。如 `filesSearchStore`（持久化）、
-`gitSyncStore` / `gitCheckoutStore` / `gitWriteStore`（正在跑的同步、切换分支和排队中的暂存类写操作，理由见
+`gitSyncStore` / `gitCheckoutStore` / `gitWriteStore`（正在跑的同步、切换和删除分支、排队中的暂存类写操作，理由见
 [docs/code/frontend-state.md](../docs/code/frontend-state.md#why-a-run-in-flight-is-a-store)）。
 
 - 按领域划分 store，组件只调用 action 不处理业务逻辑

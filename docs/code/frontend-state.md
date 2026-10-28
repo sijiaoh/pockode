@@ -64,7 +64,7 @@ Pockode uses Zustand for state management, pure reducers for event processing, a
 | questionDraftStore | What has been typed into each unanswered question, per session | persist middleware, plus a second map: what came out of storage waits there until the session's unanswered list vouches for it, so an answer to a withdrawn question can never reach the screen ([answering-ui.md §5](../answering-ui.md#5-drafts)) |
 | filesSearchStore | File search options | localStorage init |
 | gitSyncStore | The fetch/pull/push in flight in each worktree, whether the user or the Git workspace started it, and how the last one ended | Keyed by worktree; outlives the sheet that started the run |
-| gitCheckoutStore | The branch switch in flight in each worktree, and how the last one failed | Keyed by worktree; outlives the Branches segment that started it |
+| gitCheckoutStore | The branch switch and the branch delete in flight in each worktree, and how the last of each failed | Keyed by worktree; outlives the Branches segment that started it |
 | gitOperationStore | The abort of an in-progress merge/rebase/cherry-pick/revert in each worktree, how it ended, and which operation's banner is collapsed ([git-conflict-ui.md](../git-conflict-ui.md#abort)) | Keyed by worktree; outlives the workspace the abort was pressed in |
 | gitWriteStore | Each worktree's serial queue of stage/unstage/discard writes, the paths they have pending, and the Changes list's unacknowledged failure | Keyed by worktree; one write at a time, so two taps cannot race |
 | gitChangesViewStore | The Changes list's flat/tree choice, and which tree folders are collapsed in each worktree ([git-changes-ui.md](../git-changes-ui.md#flat-and-tree)) | localStorage init for the view, which the review also reads for its order; collapse state in memory, keyed by worktree |
@@ -258,7 +258,10 @@ What each holds:
   runs is refused, not lined up), and is behind a control that cannot be
   double-tapped into a collision. Put in that queue it would make a tap on a
   file wait behind a checkout, and put beside it as one more field it would
-  blur what the store is: a queue of quick writes.
+  blur what the store is: a queue of quick writes. A branch delete keeps its
+  own run and failure here, beside the switch's (`deleting`, `deleteError`),
+  for the same reason: its confirm closes when the user leaves while the
+  request runs, and one delete per worktree is guarded, not queued.
 - **`gitWriteStore`** — per worktree, the queue, the paths with a write pending
   (whole-file writes by path, hunk writes by path and hunk ID — a path holds
   many hunks, and `isPathWriting` counts both as the file being busy:
@@ -1150,7 +1153,7 @@ Key features:
 | `web/src/lib/extensions.ts` | Extension loading and context creation |
 | `web/src/lib/registries/*.ts` | Runtime registries for themes, UI, settings |
 | `web/src/lib/*Store.ts` | Domain data stores |
-| `web/src/lib/gitSyncStore.ts` / `gitCheckoutStore.ts` | The Git workspace's fetch/pull/push and branch switch per worktree, for runs that outlive the view that started them |
+| `web/src/lib/gitSyncStore.ts` / `gitCheckoutStore.ts` | The Git workspace's fetch/pull/push and branch switch and delete per worktree, for runs that outlive the view that started them |
 | `web/src/lib/gitOperationStore.ts` | The abort of an in-progress git operation per worktree, its failure kept while that operation lasts |
 | `web/src/lib/gitWriteStore.ts` | The Git workspace's serial queue per worktree, for writes — and their failures — that outlive the view that started them |
 | `web/src/lib/worktreeQuery.ts` | Worktree list query key + fetcher, kept together |

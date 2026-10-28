@@ -14,8 +14,10 @@ The handoff is a mechanism, not an entry point. The entries that use it each
 belong to their own design — today asking the agent about selected lines
 ([git-changes-ui.md](git-changes-ui.md#handing-lines-to-the-agent)), the
 in-progress operation's `Resolve with agent` and the conflict view's `Ask agent`
-([git-conflict-ui.md](git-conflict-ui.md#resolve-with-agent)); revert and merge
-are still to come. This file says only what every one of them gets by calling
+([git-conflict-ui.md](git-conflict-ui.md#resolve-with-agent)), and a branch's
+`Ask AI to merge into current branch`
+([git-branches-ui.md](git-branches-ui.md#asking-the-agent-to-merge)); revert is
+still to come. This file says only what every one of them gets by calling
 it. The review row is the one entry this file does define.
 
 Copy below is the UI's English.
@@ -169,11 +171,12 @@ be one with an obvious answer.
   opening. Try again in a moment.` as the failure below.
 - **If the create fails**, the user stays where they were, and the failure is
   reported on the entry's surface as `Couldn't start a new chat` with the
-  reason under `Details`. Nothing is lost: the text exists only in the entry
+  reason as its detail. Nothing is lost: the text exists only in the entry
   until the session does. The hook does not write a banner itself: it hands the
   failure back as a `GitFailure` (`summary`, and the server's message as
-  `detail`) with `dismissError`, and the entry renders it as an `ErrorBanner`
-  of its own, beside the banners its surface already has: the Git workspace's
+  `detail`) with `dismissError`, and the entry renders it as a failure of its
+  own (an `ErrorBanner`, or the branch list's pinned failure), beside the ones
+  its surface already has: the Git workspace's
   rule is that feedback appears where the action started
   ([git-ui.md](git-ui.md#feedback-and-errors)).
 - **On success**, the draft is set on the new id and the route is pushed, in

@@ -279,6 +279,10 @@ func TestLock_OperationsExcludeOnlyWhatTheyShare(t *testing.T) {
 		{opPush, opStage, false},
 		{opStage, opFetch, false},
 		{opCommit, opPush, false},
+		// A delete moves no ref a commit moves, and a commit's hooks can take
+		// as long as they like.
+		{opCommit, opBranchDelete, false},
+		{opBranchDelete, opStage, false},
 
 		// Two writers of the same refs still collide — FETCH_HEAD.lock is real,
 		// and a guard in one client cannot see the other one.
@@ -287,6 +291,8 @@ func TestLock_OperationsExcludeOnlyWhatTheyShare(t *testing.T) {
 		{opFetch, opPull, true},
 		{opFetch, opCheckout, true},
 		{opPush, opBranchCreate, true},
+		{opFetch, opBranchDelete, true},
+		{opCheckout, opBranchDelete, true},
 
 		// And the index is still one at a time.
 		{opCommit, opStage, true},

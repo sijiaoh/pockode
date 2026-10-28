@@ -1,5 +1,6 @@
 import { GitBranch } from "lucide-react";
 import { useState } from "react";
+import type { BranchMergeHandoff } from "../../hooks/useBranchMergeHandoff";
 import { useGitBranches } from "../../hooks/useGitBranches";
 import { useGitStatus } from "../../hooks/useGitStatus";
 import { gitCheckoutActions, useCheckoutRun } from "../../lib/gitCheckoutStore";
@@ -18,10 +19,12 @@ interface Props {
 	/** Where the branch name leads: the workspace's Branches segment. */
 	onOpenBranches: () => void;
 	/**
-	 * Whether the Branches segment is on screen, holding a switch's failure in
-	 * its own pinned area; when it is not, the failure is shown here.
+	 * Whether the Branches segment is on screen, holding a switch's or a
+	 * delete's failure in its own pinned area; when it is not, it is shown here.
 	 */
 	branchesOnScreen: boolean;
+	/** Its failure follows the same rule as a switch's. */
+	mergeHandoff: Pick<BranchMergeHandoff, "error" | "dismissError">;
 }
 
 /**
@@ -31,7 +34,7 @@ interface Props {
  * It renders outside the lists' loading/error branches on purpose — a failing
  * git.status must not take branch identity down with it.
  */
-function BranchBar({ onOpenBranches, branchesOnScreen }: Props) {
+function BranchBar({ onOpenBranches, branchesOnScreen, mergeHandoff }: Props) {
 	const { data: branches, isLoading, error } = useGitBranches();
 	const [syncSheetOpen, setSyncSheetOpen] = useState(false);
 	const worktree = useWorktreeStore((s) => s.current);
@@ -67,7 +70,14 @@ function BranchBar({ onOpenBranches, branchesOnScreen }: Props) {
 	// branch the user is actually on. One failure, in one place. The segment's
 	// pinned area lives inside the list, so a segment with no branches to list
 	// (the read failed with nothing cached) cannot hold it either.
-	const checkoutError = branchesOnScreen && branches ? null : checkoutRun.error;
+	const listHoldsFailures = branchesOnScreen && Boolean(branches);
+	const checkoutError = listHoldsFailures ? null : checkoutRun.error;
+	// A delete's failure follows the same rule: its confirm closes when the
+	// user navigates away, and the request keeps running.
+	const deleteError = listHoldsFailures ? null : checkoutRun.deleteError;
+	// And a merge handoff's: the user can move to another segment while its
+	// new session is being created.
+	const handoffError = listHoldsFailures ? null : mergeHandoff.error;
 
 	return (
 		<>
@@ -114,9 +124,10 @@ function BranchBar({ onOpenBranches, branchesOnScreen }: Props) {
 			</div>
 
 			{/* A banner each rather than a shared slot: a sync's failure, a
-			    switch's, and the one ChangesSection renders further down for its
-			    inline actions are different unacknowledged failures, and hiding
-			    any of them would be hiding a failure. */}
+			    switch's, a branch delete's, a merge handoff's, and the one
+			    ChangesSection renders further down for its inline actions are
+			    different unacknowledged failures, and hiding any of them would be
+			    hiding a failure. */}
 			{syncError && (
 				<ErrorBanner
 					summary={syncError.summary}
@@ -129,6 +140,20 @@ function BranchBar({ onOpenBranches, branchesOnScreen }: Props) {
 					summary={checkoutError.summary}
 					details={checkoutError.detail}
 					onDismiss={() => gitCheckoutActions.dismissError(worktree)}
+				/>
+			)}
+			{deleteError && (
+				<ErrorBanner
+					summary={deleteError.summary}
+					details={deleteError.detail}
+					onDismiss={() => gitCheckoutActions.dismissDeleteError(worktree)}
+				/>
+			)}
+			{handoffError && (
+				<ErrorBanner
+					summary={handoffError.summary}
+					details={handoffError.detail}
+					onDismiss={mergeHandoff.dismissError}
 				/>
 			)}
 		</>

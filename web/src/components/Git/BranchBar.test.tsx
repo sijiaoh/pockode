@@ -2,9 +2,10 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { BranchMergeHandoff } from "../../hooks/useBranchMergeHandoff";
 import { gitCheckoutActions } from "../../lib/gitCheckoutStore";
 import { gitSyncActions } from "../../lib/gitSyncStore";
-import { makeHead, makeSync } from "../../test/gitFixtures";
+import { makeBranches, makeHead, makeSync } from "../../test/gitFixtures";
 import type { GitBranches, GitStatus } from "../../types/git";
 import BranchBar from "./BranchBar";
 
@@ -29,10 +30,17 @@ vi.mock("../../hooks/useGitBranches", () => ({
 	useGitBranches: () => ({ data: branches, isLoading: false, error: null }),
 }));
 
+const dismissHandoffError = vi.fn();
+let mergeHandoff: Pick<BranchMergeHandoff, "error" | "dismissError">;
+
 function bar(branchesOnScreen = false) {
 	return (
 		<QueryClientProvider client={new QueryClient()}>
-			<BranchBar onOpenBranches={vi.fn()} branchesOnScreen={branchesOnScreen} />
+			<BranchBar
+				onOpenBranches={vi.fn()}
+				branchesOnScreen={branchesOnScreen}
+				mergeHandoff={mergeHandoff}
+			/>
 		</QueryClientProvider>
 	);
 }
@@ -53,18 +61,15 @@ async function failedPull() {
 
 beforeEach(() => {
 	status = undefined;
+	dismissHandoffError.mockReset();
+	mergeHandoff = { error: null, dismissError: dismissHandoffError };
 	gitSyncActions.reset();
 	gitCheckoutActions.reset();
 });
 
 describe("BranchBar sync feedback", () => {
 	beforeEach(() => {
-		branches = {
-			head: makeHead(),
-			local: [],
-			remote_only: [],
-			sync: makeSync({ behind: 2 }),
-		};
+		branches = makeBranches({ sync: makeSync({ behind: 2 }) });
 		pull.mockReset();
 	});
 
@@ -174,12 +179,7 @@ async function failedSwitch() {
 
 describe("BranchBar switch feedback", () => {
 	beforeEach(() => {
-		branches = {
-			head: makeHead(),
-			local: [],
-			remote_only: [],
-			sync: makeSync(),
-		};
+		branches = makeBranches();
 	});
 
 	// The switch was walked away from mid-run; the user is somewhere else in the
@@ -239,6 +239,41 @@ describe("BranchBar switch feedback", () => {
 		expect(banners[1]).toHaveTextContent("Could not switch to topic.");
 	});
 
+	// A delete's confirm closes when the user leaves; a failure that settles
+	// after that follows the switch's rule, beside it rather than in its place.
+	it("reports a delete that failed off the Branches segment, beside a switch's", async () => {
+		await failedSwitch();
+		await gitCheckoutActions.startDelete("", "spike", () =>
+			Promise.reject(new Error("error: cannot lock ref")),
+		);
+		const { rerender } = renderBar(true);
+		expect(screen.queryByRole("alert")).toBeNull();
+
+		rerender(bar(false));
+		const banners = screen.getAllByRole("alert");
+		expect(banners).toHaveLength(2);
+		expect(banners[1]).toHaveTextContent("Could not delete spike.");
+	});
+
+	// The user can move to another segment while the merge's new chat is
+	// being created; its failure then has nowhere else to go.
+	it("reports a merge handoff that failed off the Branches segment", async () => {
+		const user = userEvent.setup();
+		mergeHandoff = {
+			error: { summary: "Couldn't start a new chat", detail: null },
+			dismissError: dismissHandoffError,
+		};
+		const { rerender } = renderBar(true);
+		expect(screen.queryByRole("alert")).toBeNull();
+
+		rerender(bar(false));
+		expect(screen.getByRole("alert")).toHaveTextContent(
+			"Couldn't start a new chat",
+		);
+		await user.click(screen.getByRole("button", { name: "Dismiss error" }));
+		expect(dismissHandoffError).toHaveBeenCalled();
+	});
+
 	// A switch is about the worktree it was started in.
 	it("keeps another worktree's failed switch out of this one", async () => {
 		await gitCheckoutActions.start("feature", "topic", () =>
@@ -253,12 +288,9 @@ describe("BranchBar switch feedback", () => {
 describe("BranchBar during a rebase", () => {
 	// A rebase detaches HEAD: `detached @ hash` is true, and useless.
 	it("names the branch being rebased instead of the detached HEAD", () => {
-		branches = {
+		branches = makeBranches({
 			head: makeHead({ branch: "", detached: true, hash: "4be1f20" }),
-			local: [],
-			remote_only: [],
-			sync: makeSync(),
-		};
+		});
 		status = {
 			staged: [],
 			unstaged: [],

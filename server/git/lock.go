@@ -42,13 +42,13 @@ const (
 // without saying what it locks — the mistake would not fail, it would either
 // let a real conflict through or block something that never conflicted.
 type operation struct {
-	// name is a contract: a client renders BusyError from it, so these ten
+	// name is a contract: a client renders BusyError from it, so these eleven
 	// strings are not log text and do not change.
 	name  string
 	locks need
 }
 
-// The ten writing operations, and why each one locks what it does.
+// The eleven writing operations, and why each one locks what it does.
 //
 // Reads take no lock at all; see the note at the bottom of this file.
 var (
@@ -69,6 +69,12 @@ var (
 	// checkout and a fetch, which write the same refs.
 	opCheckout     = operation{"checkout", needIndex | needRefs}
 	opBranchCreate = operation{"branch-create", needIndex | needRefs}
+
+	// Deleting a branch removes a ref and its config section and touches
+	// neither the index nor the working tree, so it does not wait behind a
+	// commit's hooks — and a commit only moves the current branch, which is
+	// never the one deleted.
+	opBranchDelete = operation{"branch-delete", needRefs}
 
 	// Fetch writes remote-tracking refs and FETCH_HEAD; push reads refs and may
 	// write the branch's upstream into config. Neither goes near the index, so

@@ -6,7 +6,7 @@ import { gitSyncActions, useGitSyncStore } from "../../lib/gitSyncStore";
 import { useSessionDetailStore } from "../../lib/sessionDetailStore";
 import { useSettingsStore } from "../../lib/settingsStore";
 import { useWorktreeStore } from "../../lib/worktreeStore";
-import { makeHead, makeSync } from "../../test/gitFixtures";
+import { makeBranches, makeSync } from "../../test/gitFixtures";
 import { makeSessionDetail } from "../../test/sessionFixtures";
 import type { GitBranches, GitStatus } from "../../types/git";
 import GitCommitSheet from "./GitCommitSheet";
@@ -69,12 +69,7 @@ describe("GitCommitSheet", () => {
 		useSessionDetailStore.getState().clear();
 		useSettingsStore.getState().reset();
 		useWorktreeStore.setState({ current: "" });
-		branches = {
-			head: makeHead(),
-			local: [],
-			remote_only: [],
-			sync: makeSync({ ahead: 1 }),
-		};
+		branches = makeBranches({ sync: makeSync({ ahead: 1 }) });
 	});
 
 	// The push belongs to the sync store from here on, so the sheet can close

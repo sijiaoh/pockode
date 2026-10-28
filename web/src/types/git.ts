@@ -154,6 +154,14 @@ export interface GitHead {
 	message: string;
 }
 
+/** How far a branch has moved apart from the default branch. */
+export interface GitDivergence {
+	/** Commits on the branch the default branch lacks. */
+	ahead: number;
+	/** Commits on the default branch the branch lacks. */
+	behind: number;
+}
+
 export interface GitBranch {
 	name: string;
 	current: boolean;
@@ -162,6 +170,14 @@ export interface GitBranch {
 	 * branch out twice, so such a branch cannot be switched to from here.
 	 */
 	worktree?: string;
+	/** ISO timestamp of the branch's last commit. */
+	committed_at: string;
+	/**
+	 * Standing against `default_branch`. Absent on the default branch itself,
+	 * when there is no default branch, and where git was too old to count it
+	 * cheaply (remote branches on git before 2.41).
+	 */
+	vs_default?: GitDivergence;
 }
 
 export interface GitRemoteBranch {
@@ -169,6 +185,10 @@ export interface GitRemoteBranch {
 	ref: string;
 	/** "topic", what checkout takes. */
 	name: string;
+	/** ISO timestamp of the branch's last commit. */
+	committed_at: string;
+	/** As on `GitBranch`. */
+	vs_default?: GitDivergence;
 }
 
 /** The current branch's standing against its upstream. */
@@ -196,6 +216,16 @@ export interface GitBranches {
 	local: GitBranch[];
 	remote_only: GitRemoteBranch[];
 	sync: GitSync;
+	/**
+	 * What `vs_default` counts against, as displayed: "main", or "origin/main"
+	 * when there is no local copy. Empty when the repository has none.
+	 */
+	default_branch: string;
+	/**
+	 * Local branches most recently checked out in this worktree, latest first;
+	 * the current branch, when there is one, is always the first.
+	 */
+	recent: string[];
 }
 
 /** A `git.commit.draft` request: who writes the draft, and about what. */
@@ -214,6 +244,20 @@ export interface CommitDraftRequest {
 /** What a pull actually brought in, counted by the server. */
 export interface GitPullResult {
 	commits: number;
+}
+
+/** What deleting a local branch would cost: `git.branch.inspect`'s answer. */
+export interface GitBranchInspection {
+	/** Full hash; the delete sends it back so only this tip is deleted. */
+	tip: string;
+	subject: string;
+	/**
+	 * Commits on the branch no other local branch or remote-tracking ref
+	 * reaches — what deleting it loses. Zero is "merged".
+	 */
+	unique: number;
+	/** The remote-tracking upstream ("origin/x") when it exists. */
+	upstream?: string;
 }
 
 export interface GitAbortResult {
