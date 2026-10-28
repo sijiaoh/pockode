@@ -210,6 +210,35 @@ A layer has **no segmented control** — the segments filter the lists, and a la
 
 **Why Git splits into two columns when the Stories screen does not.** [project-ui.md §7](project-ui.md#7-deliberately-not-done) rejects a master-detail split there: a story's detail is read one at a time, and a list, a detail and a sidebar would share the space of one chat. A diff is read in a run — file after file, then a commit — and walking back and forth between a list and a full-screen diff is exactly the cost this layout removes. The same reasoning, with the opposite answer, because the reading is different.
 
+### Rows follow their column's width
+
+The file, commit and branch rows are built for the narrow column: the primary text — file name, subject, branch name — has a line to itself, and what describes it sits on a second line. A wider column makes that a waste, so each list's rows switch to **one line** once *the list* is wide enough, with the secondary text beside the primary rather than under it. What each row puts where is its own document's: [the file row](git-changes-ui.md#the-file-row), [the commit row](git-history-ui.md#one-line-in-a-wide-list), [the branch row](git-branches-ui.md#the-row). What they share is here.
+
+**A row goes wide only where its primary text keeps the room it has in the 320px default column.** One line costs the primary text whatever the secondary takes beside it, so "as soon as it fits" would trade a readable name for a tidy row. The thresholds follow from that rule:
+
+| Lists | Threshold | Token (`web/src/index.css`) | Variant | Why that number |
+|---|---|---|---|---|
+| Changes, Branches | 600px | `--container-git-row` | `@git-row:` | A branch name keeps ≈228px beside its 17rem of state, counts and age (≈236 today); a file name gets up to 60% of its text cell |
+| History, and a branch's commits in its detail | 768px | `--container-git-commit-row` | `@git-commit-row:` | 8 + 74 (a four-lane graph) + 8 + 298 (author, date, hash and their gaps) + 36 (`⋯`) leaves the subject ≈344px, about 50 characters — a whole conventional summary line. At 640 it would get ≈250, less than its own line gives it in the narrow layout |
+
+- **The width measured is the list's, not the viewport's.** Each list's scroll box carries Tailwind's `@container` — the `min-h-0 flex-1 overflow-y-auto` box of Changes and of Branches, and `HistoryList`'s root, which is History's scroll box and, in a branch's detail, the commit list inside the detail's own scroll box — so there it follows the detail column. Nothing between that box and the rows declares another container.
+- **One container per list, not per row**, so every row of a list switches together: in tree mode a file row's text cell narrows with its depth, and per-row containers would leave shallow rows on one line and deep ones on two in the same list.
+- **History does not switch on its JS `textWidth`** (what the graph leaves): the graph column grows as pages arrive, and a threshold on what it leaves could fold rows back into two lines under the reader as a page lands. The list's width does not move.
+- **These are container widths, not rungs of [the width ladder](responsive-ui.md#the-width-ladder)**, so they are not in `BREAKPOINTS` and `responsiveTokens.test.ts` does not compare them. They are named `@theme` tokens in px, like the ladder, so they do not move with the root font size and no `@min-[600px]:` repeats the number in three files. They live in `web` only; `web-cluster` draws no Git lists.
+- **Tailwind's own container sizes are refused.** `@sm:` is 384px and `@lg:` 512px, which read like the ladder's `sm:` (640) and `lg:` (1024) and are not; they cannot be retired, since `max-w-sm` reads the same tokens, so `web/tests/widthLadder.test.ts` rejects `@3xs:`…`@7xl:` in source instead.
+
+**Who sees the wide rows.** At `expanded` the list column's default, `clamp(320px, 40%, 560px)`, never reaches 600: on a PC rows go wide once the user widens the column, which is the user asking for that room, and History's one line needs a Git row of at least 1248px. Below `expanded` the list is the window's full width, so a landscape phone or a tablet gets them by default.
+
+**What every row holds to, in both layouts:**
+
+- **The narrow layout, pixel for pixel.** Every wide-only class sits behind the variant. What is not — `@container` on the box, the `title`s below, and an empty secondary text left out (below) — draws the narrow row as it was.
+- **Row heights** (files `min-h-[44px]`, branches `min-h-[52px]`, commits 52px fixed): a row that changed height on a resize would move the scroll position under the reader, and History's virtual list needs its fixed height.
+- **Targets, selection and names.** Nothing new is pressable — the columns are inside the row's existing button — so a landscape phone gets the wide rows with the same targets: the width picks the layout, the pointer the target size ([responsive-ui.md](responsive-ui.md#the-two-axes)). The active treatment, `aria-current`, accessible names and `aria-describedby` ids are those of the narrow rows.
+- **Which end truncates.** Branch and ref names and directories from the head; subjects, file stems, file status words, branch details and authors at the tail.
+- **What lines up is the right side.** The commit and branch rows' secondary columns are fixed widths anchored at the right, so they line up down the list and every pixel past the threshold goes to the primary text; a file row's path follows its name instead, and only its counts line up ([why](git-changes-ui.md#the-file-row)). A secondary text that can be empty is left out rather than drawn as an empty box: in a baseline-aligned row an empty box becomes the line's baseline and sets its neighbours off the primary's.
+
+**Every element that can truncate carries a `title`** with its whole value, in both layouts — what each one is, is in the row's document. A `title` is hover only, added and never needed ([responsive-ui.md](responsive-ui.md#progressive-disclosure-hover-reveal)): each value is also in the row's accessible name, its `⋯` sheet or its detail page. Ref chips carry theirs only under a fine pointer, as their `+N` already did; every other `title` is ungated, like `BranchName`'s.
+
 ### The Changes list
 
 The list — its rows, checkboxes, header, flat and tree views, the file's action sheet and the clean, loading and failed states — is [git-changes-ui.md](git-changes-ui.md#the-changes-segment)'s. It replaced two groups, `Staged` and `Changes`, under L3 group headers: a partially staged file was two rows, and staging a file moved it across the screen out from under the thumb.
