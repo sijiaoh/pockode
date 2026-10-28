@@ -1,4 +1,3 @@
-import { ConfirmDialog } from "@pockode/shared";
 import { Plus } from "lucide-react";
 import { useId, useMemo, useState } from "react";
 import type { BranchMergeHandoff } from "../../hooks/useBranchMergeHandoff";
@@ -6,17 +5,12 @@ import {
 	useGitBranchActions,
 	useGitBranches,
 } from "../../hooks/useGitBranches";
-import { useGitStatus } from "../../hooks/useGitStatus";
-import {
-	describeBranchDelete,
-	describeMergePrompt,
-	findBranchRow,
-} from "../../lib/gitBranches";
+import { type BranchRow, findBranchRow } from "../../lib/gitBranches";
 import { branchSwitchPausedReason } from "../../lib/gitOperation";
-import type { GitBranchInspection } from "../../types/git";
 import { BottomActionBar, Spinner } from "../ui";
+import { PinnedBranchFailures, useBranchActions } from "./BranchActions";
 import { headLabel } from "./BranchBar";
-import BranchList, { hasMenu, useBranchCheckout } from "./BranchList";
+import BranchList, { hasMenu } from "./BranchList";
 import BranchMenu from "./BranchMenu";
 import NewBranchSheet from "./NewBranchSheet";
 
@@ -24,37 +18,34 @@ import NewBranchSheet from "./NewBranchSheet";
  * The Git workspace's Branches segment: the branch list as a page, with the
  * way to a new branch fixed under it.
  *
- * A switch that succeeds stays here — the check moves to the new branch and
- * the name in the top bar changes, which is the whole report of it. A delete
- * that succeeds is reported by its row going. A merge is never run here: it
- * is handed to the agent, which can get through the conflicts it stops on.
+ * A row opens its branch's detail; the `⋯` beside it is the quick path to the
+ * detail's actions. A switch that succeeds stays here — the check moves to the
+ * new branch and the name in the top bar changes, which is the whole report of
+ * it. A delete that succeeds is reported by its row going. A merge is never
+ * run here: it is handed to the agent, which can get through the conflicts it
+ * stops on.
  */
 function BranchesSection({
 	mergeHandoff,
+	activeKey,
+	onSelectBranch,
+	onBranchDeleted,
 }: {
 	/** The workspace's, so that it outlives this segment. */
 	mergeHandoff: BranchMergeHandoff;
+	/** The key of the branch whose detail is open beside the list. */
+	activeKey: string | null;
+	onSelectBranch: (row: BranchRow) => void;
+	onBranchDeleted: (row: BranchRow) => void;
 }) {
 	const { data: branches, isLoading, error } = useGitBranches();
-	const { checkoutMutation, createMutation, deleteMutation } =
-		useGitBranchActions();
-	const checkout = useBranchCheckout(
-		async (branch) => {
-			await checkoutMutation.mutateAsync(branch);
-		},
-		async (name, tip) => {
-			await deleteMutation.mutateAsync({ name, tip });
-		},
-	);
+	const { createMutation } = useGitBranchActions();
+	const actions = useBranchActions(mergeHandoff, onBranchDeleted);
+	const { checkout, operation, handingOff } = actions;
 	const [creating, setCreating] = useState(false);
 	// The key, not the row: the list refreshes under an open menu, and a row
 	// that became occupied, current or gone must not keep offering Delete.
 	const [menuKey, setMenuKey] = useState<string | null>(null);
-	const [pendingDelete, setPendingDelete] = useState<{
-		name: string;
-		inspection: GitBranchInspection;
-	} | null>(null);
-	const { handingOff } = mergeHandoff;
 	const pausedId = useId();
 
 	const menuRow = useMemo(() => {
@@ -68,8 +59,7 @@ function BranchesSection({
 
 	const head = branches?.head;
 	const isSwitching = checkout.switchingTo !== null;
-	const operation = useGitStatus().data?.operation;
-	const paused = operation ? branchSwitchPausedReason(operation.kind) : null;
+	const paused = operation ? branchSwitchPausedReason(operation) : null;
 
 	return (
 		<>
@@ -81,12 +71,18 @@ function BranchesSection({
 				{branches ? (
 					<BranchList
 						branches={branches}
-						state={checkout}
+						switchingTo={checkout.switchingTo}
 						paused={paused}
 						pausedId={pausedId}
 						handingOff={handingOff}
-						handoffError={mergeHandoff.error}
-						onDismissHandoffError={mergeHandoff.dismissError}
+						failures={
+							<PinnedBranchFailures
+								checkout={checkout}
+								handoff={mergeHandoff}
+							/>
+						}
+						activeKey={activeKey}
+						onSelect={onSelectBranch}
 						onOpenMenu={(row) => setMenuKey(row.key)}
 					/>
 				) : isLoading ? (
@@ -136,71 +132,13 @@ function BranchesSection({
 				<BranchMenu
 					row={menuRow}
 					head={head}
-					operation={operation?.kind ?? null}
-					switching={isSwitching}
-					deleting={checkout.deleting}
-					handingOff={handingOff !== null}
+					actions={actions}
 					onClose={() => setMenuKey(null)}
-					onMerge={() => {
-						// From the branches this render holds, not from the row the
-						// sheet was opened on. Never null here: a detached HEAD has
-						// disabled the item already.
-						const text = branches && describeMergePrompt(menuRow, branches);
-						if (!text) return;
-						setMenuKey(null);
-						mergeHandoff.start(menuRow.key, text);
-					}}
-					onDelete={(inspection) => {
-						setMenuKey(null);
-						setPendingDelete({ name: menuRow.name, inspection });
-					}}
 				/>
 			)}
 
-			{pendingDelete && (
-				<BranchDeleteConfirm
-					name={pendingDelete.name}
-					inspection={pendingDelete.inspection}
-					onConfirm={async () => {
-						// Settles either way; a failure is pinned above the list.
-						await checkout.deleteBranch(
-							pendingDelete.name,
-							pendingDelete.inspection.tip,
-						);
-						setPendingDelete(null);
-					}}
-					onCancel={() => setPendingDelete(null)}
-				/>
-			)}
+			{actions.dialog}
 		</>
-	);
-}
-
-function BranchDeleteConfirm({
-	name,
-	inspection,
-	onConfirm,
-	onCancel,
-}: {
-	name: string;
-	inspection: GitBranchInspection;
-	onConfirm: () => Promise<void>;
-	onCancel: () => void;
-}) {
-	const { title, message, confirmLabel, variant } = describeBranchDelete(
-		name,
-		inspection,
-	);
-
-	return (
-		<ConfirmDialog
-			title={title}
-			message={message}
-			confirmLabel={confirmLabel}
-			variant={variant}
-			onConfirm={onConfirm}
-			onCancel={onCancel}
-		/>
 	);
 }
 

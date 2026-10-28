@@ -47,9 +47,30 @@ const gitSearchSchema = historySearchSchema.extend({
 
 export type GitSearchParams = z.infer<typeof gitSearchSchema>;
 
-const commitSearchSchema = overlaySearchSchema.extend(
-	historySearchSchema.shape,
-);
+/**
+ * A branch detail's: `remote=1` names a remote-only branch, whose `ref` a
+ * local branch may share (docs/git-branches-ui.md#the-branch). A number, not
+ * a string: the router writes the validated value back, and quotes a string
+ * that would parse as JSON (`remote=%221%22`).
+ */
+const branchSearchSchema = overlaySearchSchema.extend({
+	remote: z.coerce.number().optional(),
+});
+
+export type BranchSearchParams = z.infer<typeof branchSearchSchema>;
+
+/**
+ * The commit layers': the History query of the list a commit was opened from,
+ * or `branch` (and `remote=1`) for one opened from a branch's detail
+ * (docs/git-branches-ui.md#opening-a-commit). `branch` is coerced as `q` is:
+ * a branch may be named `2024`.
+ */
+const commitSearchSchema = overlaySearchSchema
+	.extend(historySearchSchema.shape)
+	.extend({
+		branch: z.coerce.string().optional(),
+		remote: z.coerce.number().optional(),
+	});
 
 export type CommitSearchParams = z.infer<typeof commitSearchSchema>;
 
@@ -103,6 +124,12 @@ const gitRoute = createRoute({
 	getParentRoute: () => rootRoute,
 	path: ROUTES.git,
 	validateSearch: (search) => gitSearchSchema.parse(search),
+});
+
+const branchRoute = createRoute({
+	getParentRoute: () => rootRoute,
+	path: ROUTES.branch,
+	validateSearch: (search) => branchSearchSchema.parse(search),
 });
 
 const commitRoute = createRoute({
@@ -206,6 +233,12 @@ const wtGitRoute = createRoute({
 	validateSearch: (search) => gitSearchSchema.parse(search),
 });
 
+const wtBranchRoute = createRoute({
+	getParentRoute: () => worktreeLayoutRoute,
+	path: WT_CHILD_ROUTES.branch,
+	validateSearch: (search) => branchSearchSchema.parse(search),
+});
+
 const wtCommitRoute = createRoute({
 	getParentRoute: () => worktreeLayoutRoute,
 	path: WT_CHILD_ROUTES.commit,
@@ -273,6 +306,7 @@ export const routeTree = rootRoute.addChildren([
 	unstagedDiffRoute,
 	fileViewRoute,
 	gitRoute,
+	branchRoute,
 	commitDiffRoute, // Must be before commitRoute (more specific path)
 	commitFileRoute, // Must be before commitRoute (more specific path)
 	commitRoute,
@@ -290,6 +324,7 @@ export const routeTree = rootRoute.addChildren([
 		wtUnstagedDiffRoute,
 		wtFileViewRoute,
 		wtGitRoute,
+		wtBranchRoute,
 		wtCommitDiffRoute, // Must be before wtCommitRoute (more specific path)
 		wtCommitFileRoute, // Must be before wtCommitRoute (more specific path)
 		wtCommitRoute,

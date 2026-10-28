@@ -1,5 +1,5 @@
-import { Check, Ellipsis, X } from "lucide-react";
-import { useId, useMemo, useState } from "react";
+import { Check, Ellipsis } from "lucide-react";
+import { type ReactNode, useId, useMemo, useState } from "react";
 import {
 	type BranchRow,
 	branchDetails,
@@ -7,58 +7,16 @@ import {
 	FILTER_THRESHOLD,
 	groupBranches,
 } from "../../lib/gitBranches";
-import {
-	type CheckoutRun,
-	gitCheckoutActions,
-	useCheckoutRun,
-} from "../../lib/gitCheckoutStore";
-import { useWorktreeStore } from "../../lib/worktreeStore";
 import type { GitBranches } from "../../types/git";
-import type { GitFailure } from "../../utils/gitErrors";
 import { formatRelativeDate } from "../../utils/relativeTime";
 import { Spinner } from "../ui";
 import { iconButtonClass } from "../ui/iconButtonClass";
 import { inputClass } from "../ui/inputClass";
 import BranchName from "./BranchName";
-import GitOutput from "./GitOutput";
-
-export interface BranchCheckout extends CheckoutRun {
-	checkout: (branch: string) => void;
-	dismissError: () => void;
-	/** Resolves once the delete settles, failed or not; see startDelete. */
-	deleteBranch: (branch: string, tip: string) => Promise<void>;
-	dismissDeleteError: () => void;
-}
-
-/**
- * This worktree's switch and delete and how they ended, for the page that
- * hosts the list: it holds the way to a new branch while `switchingTo` is set,
- * which is why this lives above the list. The runs themselves are
- * gitCheckoutStore's, so they outlive the page.
- */
-export function useBranchCheckout(
-	onCheckout: (branch: string) => Promise<unknown>,
-	onDelete: (branch: string, tip: string) => Promise<unknown>,
-): BranchCheckout {
-	const worktree = useWorktreeStore((s) => s.current);
-	const run = useCheckoutRun(worktree);
-
-	return {
-		...run,
-		checkout: (branch) =>
-			void gitCheckoutActions.start(worktree, branch, () => onCheckout(branch)),
-		dismissError: () => gitCheckoutActions.dismissError(worktree),
-		deleteBranch: (branch, tip) =>
-			gitCheckoutActions.startDelete(worktree, branch, () =>
-				onDelete(branch, tip),
-			),
-		dismissDeleteError: () => gitCheckoutActions.dismissDeleteError(worktree),
-	};
-}
 
 /**
  * Whether a row has a `⋯`. Never the current branch's, whose every action —
- * merging it into itself, deleting it — would be unavailable.
+ * switching to it, merging it into itself, deleting it — would be unavailable.
  */
 export function hasMenu(row: BranchRow): boolean {
 	return !row.current;
@@ -66,7 +24,8 @@ export function hasMenu(row: BranchRow): boolean {
 
 interface Props {
 	branches: GitBranches;
-	state: BranchCheckout;
+	/** The branch a switch is running to, wherever it was pressed. */
+	switchingTo: string | null;
 	/**
 	 * Why no branch can be switched to right now — an operation in progress —
 	 * null when one can. `pausedId` names the line for the page's own
@@ -74,43 +33,35 @@ interface Props {
 	 */
 	paused: string | null;
 	pausedId?: string;
-	/**
-	 * The key of the row whose merge handoff is waiting for a new session:
-	 * the list holds still as during a switch, since a switch now would make
-	 * the prompt name the wrong branch.
-	 */
+	/** The key of the row whose merge handoff is waiting for a new session. */
 	handingOff: string | null;
-	/** The handoff's failure, pinned beside the list's own. */
-	handoffError: GitFailure | null;
-	onDismissHandoffError: () => void;
+	/** The branch failures, pinned under the filter. */
+	failures: ReactNode;
+	/** The key of the row whose detail is open beside the list, lit. */
+	activeKey: string | null;
+	onSelect: (row: BranchRow) => void;
 	onOpenMenu: (row: BranchRow) => void;
 }
 
 /**
- * The branches to switch to, grouped Recent / Local / Remote once the list is
- * long (docs/git-branches-ui.md#the-list), with the filter and failures pinned
- * above them.
+ * The branches, grouped Recent / Local / Remote once the list is long
+ * (docs/git-branches-ui.md#the-list), with the filter and failures pinned
+ * above them. A row opens its branch; acting on it is the detail's, or the
+ * `⋯`'s.
  */
 function BranchList({
 	branches,
-	state,
+	switchingTo,
 	paused,
 	pausedId,
 	handingOff,
-	handoffError,
-	onDismissHandoffError,
+	failures,
+	activeKey,
+	onSelect,
 	onOpenMenu,
 }: Props) {
 	const [filter, setFilter] = useState("");
 	const filterId = useId();
-	const {
-		switchingTo,
-		error,
-		checkout,
-		dismissError,
-		deleteError,
-		dismissDeleteError,
-	} = state;
 
 	const groups = useMemo(
 		() => groupBranches(branches, filter),
@@ -119,8 +70,6 @@ function BranchList({
 
 	const showFilter =
 		branches.local.length + branches.remote_only.length > FILTER_THRESHOLD;
-	const isSwitching = switchingTo !== null;
-	const blocked = isSwitching || handingOff !== null || paused !== null;
 
 	return (
 		<>
@@ -128,8 +77,8 @@ function BranchList({
 			 * Pinned above the rows: the list is taller than the screen whenever
 			 * either of these matters. A filter that scrolls away is the way out of
 			 * a long list that the user cannot reach, and a refusal that scrolls
-			 * away turns a failed switch into a row that simply did nothing — the
-			 * user taps a branch from halfway down, and the message lands off the
+			 * away turns a failed switch into one that simply did nothing — the
+			 * user switches from a `⋯` halfway down, and the message lands off the
 			 * top.
 			 */}
 			{/* Opaque over the rows scrolling under it. */}
@@ -157,30 +106,7 @@ function BranchList({
 					</p>
 				)}
 
-				{/* Failures share one capped box that scrolls on its own: several,
-				    each with git's output, would otherwise push the list off a
-				    short phone — and none is dropped to make room. */}
-				{(error || deleteError || handoffError) && (
-					<div className="max-h-[40dvh] overflow-y-auto">
-						{/* Each its own, never merged: two failures are two things
-						    the user has not acknowledged yet. */}
-						{error && (
-							<PinnedFailure failure={error} onDismiss={dismissError} />
-						)}
-						{deleteError && (
-							<PinnedFailure
-								failure={deleteError}
-								onDismiss={dismissDeleteError}
-							/>
-						)}
-						{handoffError && (
-							<PinnedFailure
-								failure={handoffError}
-								onDismiss={onDismissHandoffError}
-							/>
-						)}
-					</div>
-				)}
+				{failures}
 			</div>
 
 			{groups.length > 0 && branches.default_branch && (
@@ -205,7 +131,7 @@ function BranchList({
 							key={row.key}
 							row={row}
 							defaultBranch={branches.default_branch}
-							disabled={row.current || Boolean(row.worktree) || blocked}
+							active={row.key === activeKey}
 							busy={
 								switchingTo === row.name
 									? `Switching to ${row.label}`
@@ -213,7 +139,7 @@ function BranchList({
 										? "Opening a new chat"
 										: null
 							}
-							onCheckout={() => checkout(row.name)}
+							onSelect={() => onSelect(row)}
 							onOpenMenu={hasMenu(row) ? () => onOpenMenu(row) : null}
 						/>
 					))}
@@ -229,74 +155,53 @@ function BranchList({
 	);
 }
 
-function PinnedFailure({
-	failure,
-	onDismiss,
-}: {
-	failure: GitFailure;
-	onDismiss: () => void;
-}) {
-	return (
-		<div className="flex items-start gap-2 px-4 py-3">
-			<div className="min-w-0 flex-1 space-y-1" role="alert">
-				<p className="text-sm text-th-error">{failure.summary}</p>
-				{/* Absent when the server refused before running git: there is
-				    no output to quote, only the sentence above. */}
-				{failure.detail && <GitOutput>{failure.detail}</GitOutput>}
-			</div>
-			{/* A page has no sheet whose closing puts the refusal away. */}
-			<button
-				type="button"
-				onClick={onDismiss}
-				aria-label="Dismiss error"
-				className={iconButtonClass()}
-			>
-				<X className="h-4 w-4" aria-hidden="true" />
-			</button>
-		</div>
-	);
-}
-
 interface RowProps {
 	row: BranchRow;
 	defaultBranch: string;
-	disabled: boolean;
+	active: boolean;
 	/** What this row's running switch or merge handoff is doing, for the spinner. */
 	busy: string | null;
-	onCheckout: () => void;
+	onSelect: () => void;
 	/** Null where the row has no `⋯`; the slot then stays empty. */
 	onOpenMenu: (() => void) | null;
 }
 
 /**
- * One branch: the row that switches to it, and the slot beside it, siblings
- * as in the Changes list. The slot holds the spinner while this row's switch
- * or merge handoff runs and the row's `⋯` otherwise — enabled even on a greyed
- * row, whose menu says why it cannot be deleted — and is left empty on a row
+ * One branch: the row that opens it, and the slot beside it, siblings as in
+ * the Changes list. The slot holds the spinner while this row's switch or
+ * merge handoff runs and the row's `⋯` otherwise, and is left empty on a row
  * with no menu, so names line up.
+ *
+ * Never disabled, whatever runs: opening a branch writes nothing, so there is
+ * nothing for a switch or a handoff to collide with. What a held branch cannot
+ * do is said by its state word, and by its actions.
  */
 function BranchRowItem({
 	row,
 	defaultBranch,
-	disabled,
+	active,
 	busy,
-	onCheckout,
+	onSelect,
 	onOpenMenu,
 }: RowProps) {
 	const age = formatRelativeDate(row.committed_at);
 
 	return (
-		<div className="flex min-h-[52px] items-center">
+		// History's active treatment (CommitRow): the fill across the row and
+		// the accent bar at its left edge, beside the gutter's check.
+		<div
+			className={`relative flex min-h-[52px] items-center ${
+				active
+					? "bg-th-bg-tertiary before:pointer-events-none before:absolute before:inset-y-2 before:left-0 before:w-0.5 before:rounded-full before:bg-th-accent"
+					: ""
+			}`}
+		>
 			<button
 				type="button"
-				onClick={onCheckout}
-				disabled={disabled}
+				onClick={onSelect}
 				aria-label={branchRowLabel(row, defaultBranch, age)}
-				className={`flex min-w-0 flex-1 items-center gap-2 self-stretch py-1.5 pl-4 text-left transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent focus-visible:ring-inset ${
-					disabled
-						? "cursor-not-allowed text-th-text-muted"
-						: "text-th-text-primary hover:bg-th-bg-tertiary"
-				}`}
+				aria-current={active ? "true" : undefined}
+				className="flex min-w-0 flex-1 items-center gap-2 self-stretch py-1.5 pl-4 text-left text-th-text-primary transition-colors hover:bg-th-bg-tertiary focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent focus-visible:ring-inset"
 			>
 				{row.current ? (
 					<Check
@@ -311,8 +216,8 @@ function BranchRowItem({
 						<BranchName name={row.label} />
 					</span>
 					<span className="flex min-w-0 gap-2 text-xs text-th-text-muted">
-						{/* Cut at the tail: the state word leads, and it is the reason
-						    a greyed row is greyed. */}
+						{/* Cut at the tail: the state word leads, and `in <worktree>`
+						    is why the branch cannot be switched to here. */}
 						<span className="min-w-0 flex-1 truncate">
 							{branchDetails(row).join(" · ")}
 						</span>

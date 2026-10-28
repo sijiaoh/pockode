@@ -1,23 +1,26 @@
 import { describe, expect, it } from "vitest";
-import { makeBranch, makeBranches, makeHead } from "../test/gitFixtures";
-import type { GitBranches, GitRemoteBranch } from "../types/git";
+import {
+	makeBranch,
+	makeBranches,
+	makeHead,
+	makeRemoteBranch as remote,
+} from "../test/gitFixtures";
+import type { GitBranches } from "../types/git";
 import {
 	type BranchRow,
 	branchDeleteUnavailableReason,
 	branchDetails,
 	branchMergeUnavailableReason,
 	branchRowLabel,
+	branchStateWords,
+	branchSwitchUnavailableReason,
+	branchUpstreamLine,
+	branchVsDefaultLine,
 	describeBranchDelete,
 	describeMergePrompt,
 	FILTER_THRESHOLD,
 	groupBranches,
 } from "./gitBranches";
-
-const remote = (name: string): GitRemoteBranch => ({
-	ref: `origin/${name}`,
-	name,
-	committed_at: new Date().toISOString(),
-});
 
 const titles = (b: GitBranches, filter = "") =>
 	groupBranches(b, filter).map((g) => [g.title, g.rows.map((r) => r.label)]);
@@ -87,6 +90,7 @@ const row = (overrides: Partial<BranchRow> = {}): BranchRow => ({
 	remote: false,
 	isDefault: false,
 	committed_at: new Date().toISOString(),
+	committer: "Test",
 	...overrides,
 });
 
@@ -119,6 +123,65 @@ describe("branchDetails", () => {
 	});
 });
 
+// The detail has room for every word the row has to choose between.
+describe("branchStateWords", () => {
+	it("says every word that holds", () => {
+		expect(
+			branchStateWords(row({ worktree: "main worktree", isDefault: true })),
+		).toEqual(["in main worktree", "default"]);
+		expect(branchStateWords(row())).toEqual([]);
+	});
+});
+
+describe("branchUpstreamLine", () => {
+	it("says where a local branch is published, if anywhere", () => {
+		expect(branchUpstreamLine(row({ upstream: "origin/old-spike" }))).toBe(
+			"Tracks origin/old-spike",
+		);
+		expect(
+			branchUpstreamLine(
+				row({ upstream: "origin/old-spike", upstream_gone: true }),
+			),
+		).toBe(
+			"Tracks origin/old-spike, which is missing here — not fetched yet, or deleted on the remote",
+		);
+		expect(branchUpstreamLine(row())).toBe("Local only — not published");
+	});
+
+	// A remote's name may itself have a slash; the branch's name is known.
+	it("says what switching to a remote-only branch creates", () => {
+		const b = makeBranches({
+			remote_only: [
+				remote("topic", { ref: "upstream/fork/topic", name: "topic" }),
+			],
+		});
+		const [remoteRow] = groupBranches(b, "")[0].rows;
+
+		expect(branchUpstreamLine(remoteRow)).toBe(
+			"Only on upstream/fork. Switching to it creates a local topic that tracks it.",
+		);
+	});
+});
+
+describe("branchVsDefaultLine", () => {
+	it("names the default once and leaves out a count that is 0", () => {
+		const line = (ahead: number, behind: number) =>
+			branchVsDefaultLine(row({ vs_default: { ahead, behind } }), "main");
+
+		expect(line(3, 12)).toBe("3 ahead of main · 12 behind");
+		expect(line(3, 0)).toBe("3 ahead of main");
+		expect(line(0, 12)).toBe("12 behind main");
+		expect(line(0, 0)).toBe("Up to date with main");
+	});
+
+	it("says what the default branch is, and nothing without counts", () => {
+		expect(branchVsDefaultLine(row({ isDefault: true }), "main")).toBe(
+			"The default branch — other branches are compared with it",
+		);
+		expect(branchVsDefaultLine(row(), "")).toBeNull();
+	});
+});
+
 describe("branchRowLabel", () => {
 	it("names the default branch once, on the first count", () => {
 		expect(
@@ -135,6 +198,48 @@ describe("branchRowLabel", () => {
 				"2d ago",
 			),
 		).toBe("old-spike, in review, 4 behind main, last commit 2d ago");
+	});
+});
+
+describe("branchSwitchUnavailableReason", () => {
+	const idle = {
+		operation: null,
+		switching: false,
+		deleting: false,
+		handingOff: false,
+	};
+
+	it("is available on a branch no worktree holds", () => {
+		expect(branchSwitchUnavailableReason(row(), idle)).toBeNull();
+	});
+
+	it("gives the first reason that holds", () => {
+		const held = row({ worktree: "review-wt" });
+		const all = {
+			operation: "rebase" as const,
+			switching: true,
+			deleting: true,
+			handingOff: true,
+		};
+		expect(branchSwitchUnavailableReason(held, all)).toBe(
+			"Branch switching is paused during the rebase.",
+		);
+		expect(
+			branchSwitchUnavailableReason(held, { ...all, operation: null }),
+		).toBe("Checked out in review-wt.");
+		expect(
+			branchSwitchUnavailableReason(row(), { ...all, operation: null }),
+		).toBe("Wait for the branch switch to finish.");
+		expect(
+			branchSwitchUnavailableReason(row(), {
+				...idle,
+				deleting: true,
+				handingOff: true,
+			}),
+		).toBe("Wait for the branch delete to finish.");
+		expect(
+			branchSwitchUnavailableReason(row(), { ...idle, handingOff: true }),
+		).toBe("Wait for the new chat to open.");
 	});
 });
 

@@ -1,4 +1,10 @@
-import type { GitBranch, GitBranches, GitHead, GitSync } from "../types/git";
+import type {
+	GitBranch,
+	GitBranches,
+	GitHead,
+	GitRemoteBranch,
+	GitSync,
+} from "../types/git";
 
 /**
  * A branch in sync with its upstream, the state every other one is a deviation
@@ -37,6 +43,21 @@ export function makeBranch(
 		name,
 		current: false,
 		committed_at: new Date().toISOString(),
+		committer: "Test",
+		...overrides,
+	};
+}
+
+/** `origin/<name>`, with no local branch of that name. */
+export function makeRemoteBranch(
+	name: string,
+	overrides: Partial<GitRemoteBranch> = {},
+): GitRemoteBranch {
+	return {
+		ref: `origin/${name}`,
+		name,
+		committed_at: new Date().toISOString(),
+		committer: "Test",
 		...overrides,
 	};
 }

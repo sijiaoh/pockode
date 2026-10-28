@@ -19,10 +19,11 @@ interface Props {
 	/** Where the branch name leads: the workspace's Branches segment. */
 	onOpenBranches: () => void;
 	/**
-	 * Whether the Branches segment is on screen, holding a switch's or a
-	 * delete's failure in its own pinned area; when it is not, it is shown here.
+	 * Whether a surface that pins the branch failures — the Branches list, or
+	 * a branch's detail below `expanded` — is on screen; when none is, they
+	 * are shown here.
 	 */
-	branchesOnScreen: boolean;
+	branchFailureSurface: boolean;
 	/** Its failure follows the same rule as a switch's. */
 	mergeHandoff: Pick<BranchMergeHandoff, "error" | "dismissError">;
 }
@@ -34,7 +35,11 @@ interface Props {
  * It renders outside the lists' loading/error branches on purpose — a failing
  * git.status must not take branch identity down with it.
  */
-function BranchBar({ onOpenBranches, branchesOnScreen, mergeHandoff }: Props) {
+function BranchBar({
+	onOpenBranches,
+	branchFailureSurface,
+	mergeHandoff,
+}: Props) {
 	const { data: branches, isLoading, error } = useGitBranches();
 	const [syncSheetOpen, setSyncSheetOpen] = useState(false);
 	const worktree = useWorktreeStore((s) => s.current);
@@ -65,12 +70,13 @@ function BranchBar({ onOpenBranches, branchesOnScreen, mergeHandoff }: Props) {
 	const syncError =
 		!syncSheetShown && outcome?.kind === "error" && !run.auto ? outcome : null;
 	// The same rule for a branch switch, which can be walked away from while it
-	// runs: on the Branches segment it is shown where the switch was asked for,
-	// anywhere else in the workspace it is shown under the bar that names the
-	// branch the user is actually on. One failure, in one place. The segment's
-	// pinned area lives inside the list, so a segment with no branches to list
-	// (the read failed with nothing cached) cannot hold it either.
-	const listHoldsFailures = branchesOnScreen && Boolean(branches);
+	// runs: on a branch-failure surface — the list, or a narrow branch detail —
+	// it is pinned there, anywhere else in the workspace it is shown under the
+	// bar that names the branch the user is actually on. One failure, in one
+	// place. Those surfaces draw it only once there are branches to draw (the
+	// read failed with nothing cached leaves them only that failure), so then
+	// it is shown here.
+	const listHoldsFailures = branchFailureSurface && Boolean(branches);
 	const checkoutError = listHoldsFailures ? null : checkoutRun.error;
 	// A delete's failure follows the same rule: its confirm closes when the
 	// user navigates away, and the request keeps running.

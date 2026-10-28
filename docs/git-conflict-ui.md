@@ -281,10 +281,10 @@ Every write the workspace offers, reviewed. "Disabled" keeps the control in plac
 | The commit sheet, if open when an operation begins | stays open (it holds the message) | `Commit` / `Commit & push` disabled | The same line, in the footer where the push reasons go |
 | Amend (a commit's `⋯` menu, on HEAD) | stopped | absent | Not on the user's way: an entry in a menu, not a target to keep. git refuses amend mid-merge, and mid-rebase HEAD is not the branch's commit. The banner's pause sentence says why commits stopped |
 | `✨ Draft` | — | unreachable (the sheet cannot be opened) | — |
-| Switch branch (Branches rows) | stopped | **disabled**, as rows are during a switch | Pinned at the top of the list where a checkout failure goes: `Branch switching is paused during the rebase. Abort it, or let the agent finish it.` |
+| `Switch to this branch` (a branch's `⋯` and its detail) | stopped | **disabled**, with `Branch switching is paused during the rebase.` as its description; rows stay openable, since reading a branch writes nothing | The full sentence is pinned at the top of the list where a checkout failure goes: `Branch switching is paused during the rebase. Abort it, or let the agent finish it.` |
 | `New branch…` | stopped | **disabled** | The same pinned line |
-| `Delete branch` (a branch's `⋯`) | stopped | **disabled** | `Finish or abort the rebase first.` as the menu row's description ([git-branches-ui.md](git-branches-ui.md#the-branchs-menu-)) |
-| `Ask AI to merge into current branch` (a branch's `⋯`) | stopped | **disabled** | The same description: a merge cannot start inside another operation |
+| `Delete branch` (a branch's `⋯` and its detail) | stopped | **disabled** | `Finish or abort the rebase first.` as the menu row's description ([git-branches-ui.md](git-branches-ui.md#the-branchs-menu-)) |
+| `Ask AI to merge into current branch` (a branch's `⋯` and its detail) | stopped | **disabled** | The same description: a merge cannot start inside another operation |
 | The new-branch sheet, if open when an operation begins | stays open (it holds the name) | `Create` disabled | The same sentence, in the sheet |
 | `Create branch here…` (a commit's `⋯` menu) | stopped | the menu row stays; the sheet opens with `Create` **disabled** | The same sentence, in the sheet: the menu has no line of its own to say it in ([git-history-ui.md](git-history-ui.md#create-branch-here)) |
 | `Ask AI to revert` (a commit's `⋯` menu) | allowed | — | It writes nothing itself; the prefilled message goes into the composer, and the agent meets the operation there ([agent-handoff-ui.md §1.5](agent-handoff-ui.md#15-the-targets-state-does-not-gate-the-handoff)) |

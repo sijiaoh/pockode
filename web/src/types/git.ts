@@ -255,6 +255,15 @@ export interface GitBranch {
 	worktree?: string;
 	/** ISO timestamp of the branch's last commit. */
 	committed_at: string;
+	/** Who committed that commit: the name `committed_at` is the date of. */
+	committer: string;
+	/** The configured upstream as displayed ("origin/topic"); absent when none is. */
+	upstream?: string;
+	/**
+	 * `upstream` is configured but its remote-tracking ref is missing here — the
+	 * per-branch form of `GitSync.upstream_gone`.
+	 */
+	upstream_gone?: boolean;
 	/**
 	 * Standing against `default_branch`. Absent on the default branch itself,
 	 * when there is no default branch, and where git was too old to count it
@@ -270,6 +279,8 @@ export interface GitRemoteBranch {
 	name: string;
 	/** ISO timestamp of the branch's last commit. */
 	committed_at: string;
+	/** As on `GitBranch`. */
+	committer: string;
 	/** As on `GitBranch`. */
 	vs_default?: GitDivergence;
 }

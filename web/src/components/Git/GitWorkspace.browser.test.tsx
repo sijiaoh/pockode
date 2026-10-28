@@ -25,6 +25,10 @@ vi.mock("../../hooks/useGitSync", async (importOriginal) => ({
 vi.mock("../../hooks/useGitLog", () => ({
 	useGitLog: () => ({ data: undefined }),
 }));
+vi.mock("../../hooks/useGitBranches", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../../hooks/useGitBranches")>()),
+	useGitBranches: () => ({ data: undefined }),
+}));
 vi.mock("../../hooks/useBranchMergeHandoff", () => ({
 	useBranchMergeHandoff: () => ({
 		handingOff: null,
@@ -59,6 +63,8 @@ function Workspace({ segment, width }: { segment: GitSegment; width: number }) {
 				onSelectSegment={() => {}}
 				onSelectFile={() => {}}
 				onSelectCommit={() => {}}
+				onSelectBranch={() => {}}
+				onRepointBranch={() => {}}
 				onCloseFile={() => {}}
 			/>
 		</div>
@@ -84,12 +90,13 @@ const segmentControl = () =>
 const widthOf = (element: Element) =>
 	Math.round(element.getBoundingClientRect().width);
 /** The column the handle is the right edge of. */
-const listWidth = () => {
+const listColumn = () => {
 	const id = handle().getAttribute("aria-controls");
 	const column = id && document.getElementById(id);
 	if (!column) throw new Error("the handle names no column");
-	return widthOf(column);
+	return column;
 };
+const listWidth = () => widthOf(listColumn());
 
 /**
  * A mouse drag of the handle by `dx`, dispatched by hand: the hook reads
@@ -206,21 +213,24 @@ describe("GitWorkspace list column", () => {
 		expect(listWidth()).toBe(720);
 	});
 
-	it("keeps one width, and the control one place, across the segments", () => {
+	// A control that moves once pressed sends the next press somewhere else.
+	it("keeps the list column and the control in place across the segments", () => {
 		const view = renderAt(1200);
 		drag(-80);
-		const chosen = listWidth();
-		const control = segmentControl().getBoundingClientRect();
+		const box = (element: Element) => {
+			const rect = element.getBoundingClientRect();
+			return [rect.left, rect.width].map(Math.round);
+		};
+		const place = () => ({
+			column: box(listColumn()),
+			control: box(segmentControl()),
+		});
+		const before = place();
 
-		view.rerender({ segment: "history" });
-		expect(listWidth()).toBe(chosen);
-
-		view.rerender({ segment: "branches" });
-		// No second column, so no edge to drag — but the control stays put.
-		expect(screen.queryByRole("separator", { name: "Resize list" })).toBeNull();
-		const after = segmentControl().getBoundingClientRect();
-		expect(Math.round(after.left)).toBe(Math.round(control.left));
-		expect(Math.round(after.width)).toBe(Math.round(control.width));
+		for (const segment of ["history", "branches", "changes"] as const) {
+			view.rerender({ segment });
+			expect(place(), segment).toEqual(before);
+		}
 	});
 
 	it("goes back to the default on a double-click", () => {

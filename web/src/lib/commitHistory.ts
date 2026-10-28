@@ -5,7 +5,12 @@
  * docs/git-history-ui.md's; the lane layout itself is `commitGraph.ts`'s.
  */
 
-import type { GitCommit, GitHistoryScope, GitRef } from "../types/git";
+import type {
+	GitBranchRange,
+	GitCommit,
+	GitHistoryScope,
+	GitRef,
+} from "../types/git";
 import {
 	createGraphState,
 	type GraphCommit,
@@ -75,7 +80,7 @@ export function graphWidth(lanes: number, cap: number): number {
 
 /** The query a history list is read with, as far as the graph cares. */
 export interface GraphOptions {
-	scope: GitHistoryScope;
+	scope: GitHistoryScope | GitBranchRange["scope"];
 	/** The first page's `default_line`: the refs lane 1 is kept for. */
 	defaultLine: readonly string[] | undefined;
 }
