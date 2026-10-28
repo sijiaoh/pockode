@@ -19,9 +19,8 @@ interface Props {
 	/** Where the branch name leads: the workspace's Branches segment. */
 	onOpenBranches: () => void;
 	/**
-	 * Whether a surface that pins the branch failures — the Branches list, or
-	 * a branch's detail below `expanded` — is on screen; when none is, they
-	 * are shown here.
+	 * Whether the list under the bar is the Branches list, which pins the
+	 * branch failures itself; under any other list they are shown here.
 	 */
 	branchFailureSurface: boolean;
 	/** Its failure follows the same rule as a switch's. */
@@ -29,8 +28,9 @@ interface Props {
 }
 
 /**
- * The fixed top row of the Git workspace: which branch this worktree is on,
- * the way to the branch list, and the sync chip.
+ * The top row of the Git workspace's lists: which branch this worktree is on,
+ * the way to the branch list, and the sync chip. A narrow detail layer goes
+ * without it; what it reports is kept until the user is back on a list.
  *
  * It renders outside the lists' loading/error branches on purpose — a failing
  * git.status must not take branch identity down with it.
@@ -70,12 +70,11 @@ function BranchBar({
 	const syncError =
 		!syncSheetShown && outcome?.kind === "error" && !run.auto ? outcome : null;
 	// The same rule for a branch switch, which can be walked away from while it
-	// runs: on a branch-failure surface — the list, or a narrow branch detail —
-	// it is pinned there, anywhere else in the workspace it is shown under the
-	// bar that names the branch the user is actually on. One failure, in one
-	// place. Those surfaces draw it only once there are branches to draw (the
-	// read failed with nothing cached leaves them only that failure), so then
-	// it is shown here.
+	// runs: over the Branches list it is pinned there, over any other list it
+	// is shown under the bar that names the branch the user is actually on.
+	// One failure, in one place. The list draws it only once there are
+	// branches to draw (the read failed with nothing cached leaves it only that
+	// failure), so then it is shown here.
 	const listHoldsFailures = branchFailureSurface && Boolean(branches);
 	const checkoutError = listHoldsFailures ? null : checkoutRun.error;
 	// A delete's failure follows the same rule: its confirm closes when the

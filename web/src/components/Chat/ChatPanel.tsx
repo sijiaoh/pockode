@@ -61,6 +61,7 @@ import {
 	type GitSegment,
 	isGitOverlay,
 	type OverlayState,
+	overlayKeepsComposer,
 	type WorkSegment,
 } from "../../types/overlay";
 import type { AgentType } from "../../types/settings";
@@ -112,27 +113,6 @@ const noop = () => {};
  */
 const FOLDER_ATTACH_REFUSED =
 	"Folders can't be attached. Upload them in the Files tab.";
-
-// The Git workspace is among them: it is a page of its own with its own
-// bottom bars, and the composer under them would be a third.
-const inputBarHiddenOverlays: NonNullable<OverlayState>["type"][] = [
-	"git",
-	"diff",
-	"branch",
-	"commit",
-	"commit-diff",
-	"commit-file",
-	"work-list",
-	"work-detail",
-	"agent-role-list",
-	"agent-role-detail",
-	"schedule-list",
-	"schedule-detail",
-];
-
-function isInputBarHidden(overlay: OverlayState | undefined): boolean {
-	return !!overlay && inputBarHiddenOverlays.includes(overlay.type);
-}
 
 /**
  * A refusal of something the user just did from the composer, in the server's
@@ -449,6 +429,16 @@ function ChatPanel({
 	useEffect(() => {
 		setAttachError(null);
 	}, [sessionId]);
+	// A send that failed is reported under the message in the transcript, which
+	// a page keeping the composer — a Git detail — covers: there the user would
+	// see the draft go and nothing come of it. So the composer says it, keyed
+	// like `commandError`, until the transcript is back on the screen to say why.
+	const [undeliveredTo, setUndeliveredTo] = useState<string | null>(null);
+	const overlayRef = useRef(overlay);
+	overlayRef.current = overlay;
+	useEffect(() => {
+		if (!overlay) setUndeliveredTo(null);
+	}, [overlay]);
 
 	const handleSend = useCallback(
 		(content: string, attachments?: ChatAttachment[]): Promise<SendOutcome> => {
@@ -474,6 +464,7 @@ function ChatPanel({
 
 			setCommandError(null);
 			setAttachError(null);
+			setUndeliveredTo(null);
 			const sentTo = sessionId;
 			// Only a refused command or message with files rejects here (see
 			// `sendUserMessage`): its echo is gone, so what was typed goes back into
@@ -481,6 +472,7 @@ function ChatPanel({
 			return sendUserMessage(content, undefined, attachments).then(
 				(sent): SendOutcome => {
 					if (sent && mayBeRefused) rename?.();
+					if (!sent && overlayRef.current) setUndeliveredTo(sentTo);
 					return "sent";
 				},
 				(error: unknown): SendOutcome => {
@@ -741,6 +733,10 @@ function ChatPanel({
 	// Whether the caret is in the composer, which on a short touch screen is
 	// what makes the panel step aside (see `answerPanelYielded` below).
 	const [composerFocused, setComposerFocused] = useState(false);
+	// Narrower: whether the caret is in one of the composer's text fields, which
+	// is what holds a soft keyboard up. A tap on Send leaves focus on the button
+	// under a finger, with the keyboard gone.
+	const [composerTyping, setComposerTyping] = useState(false);
 
 	// Clearing `composerFocused` is what ends a yield, and it is done here rather
 	// than left to the composer's blur: the card is `inert` while it has yielded,
@@ -1023,23 +1019,27 @@ function ChatPanel({
 	// folded into the footer — exists only while the chrome is folded, and one
 	// flag is what keeps the two from ever disagreeing.
 	const [answerPanelFocused, setAnswerPanelFocused] = useState(false);
-	// A closed panel has no focus to report, and its last word on the way out is
-	// not always delivered — a card unmounted under the caret fires no blur. So
-	// the flag is cleared from the fact that owns it, and a panel that opens
-	// again starts from "not in it yet".
+	// A panel that is not drawn has no focus to report, and its last word on
+	// the way out is not always delivered — a card unmounted under the caret
+	// fires no blur. So the flag is cleared from the fact that owns it, and a
+	// panel drawn again starts from "not in it yet". Drawn, not open: an overlay
+	// unmounts an open card too, and a page that keeps the composer must not
+	// have it folded away by a card that is not there.
 	useEffect(() => {
-		if (!answerPanelShown) setAnswerPanelFocused(false);
-	}, [answerPanelShown]);
+		if (!answerPanelDrawn) setAnswerPanelFocused(false);
+	}, [answerPanelDrawn]);
 	const chromeCollapsed =
-		answerPanelShown && answerPanelFocused && isShortViewport;
+		answerPanelDrawn && answerPanelFocused && isShortViewport;
 	// The same reasoning as the card's flag above, for the composer: it is
 	// unmounted by the fold and by an overlay, and a bar removed under the caret
 	// fires no blur — left standing, the flag would make the card yield to a
 	// composer that is not there.
 	const composerMounted =
-		!view && !isInputBarHidden(overlay) && !chromeCollapsed;
+		!view && overlayKeepsComposer(overlay) && !chromeCollapsed;
 	useEffect(() => {
-		if (!composerMounted) setComposerFocused(false);
+		if (composerMounted) return;
+		setComposerFocused(false);
+		setComposerTyping(false);
 	}, [composerMounted]);
 
 	// Dropping is a shortcut for the composer's `+`, so it is taken exactly where
@@ -1051,7 +1051,7 @@ function ChatPanel({
 		? "Read-only — files can't be attached here"
 		: sessionId === ""
 			? "Open a session to attach files"
-			: isInputBarHidden(overlay)
+			: !overlayKeepsComposer(overlay)
 				? "Go back to the chat to attach files"
 				: CustomInputBar
 					? "This message box doesn't take files"
@@ -1208,7 +1208,11 @@ function ChatPanel({
 		const handleKeyDown = (e: KeyboardEvent) => {
 			// Skip if already handled (e.g., by CommandPalette)
 			if (e.defaultPrevented) return;
-			if (isInputBarHidden(overlay)) return;
+			// Not on a Git page even where it keeps the composer: Escape there
+			// clears the review's line selection, whose listener is added after
+			// this one and so runs after it — too late to claim the key. Stop is
+			// in the composer.
+			if (!overlayKeepsComposer(overlay) || isGitOverlay(overlay)) return;
 			// A sheet takes Escape for dismissing itself; interrupting the agent as
 			// well would make one key do two unrelated things.
 			if (isSheetOpen) return;
@@ -1353,6 +1357,9 @@ function ChatPanel({
 						onSelectBranch={onSelectBranch ?? noop}
 						onRepointBranch={onRepointBranch ?? noop}
 						onCloseFile={onCloseGitFile ?? noop}
+						// The pointer gate is the answer panel's yield's: a fine
+						// pointer has no soft keyboard to make room for.
+						keyboardUp={composerTyping && isPrimaryPointerCoarse}
 					/>
 				);
 			case "file":
@@ -1506,6 +1513,8 @@ function ChatPanel({
 		turnOpen,
 		onStop: handleInterrupt,
 		focusRequest: inputFocusRequest,
+		// A Git page is there to be read: the user writes once they have read it.
+		focusOnOpen: !isGitOverlay(overlay),
 	};
 
 	return (
@@ -1561,18 +1570,28 @@ function ChatPanel({
 							onReview={onOpenReview}
 						/>
 					)}
-					{/* Held back by an overlay like the composer's errors: the session
-					    panel that raised it is not reachable from a page either. */}
+					{/* Held back by an overlay: the session panel that raised it is
+					    not reachable from a page. */}
 					{!overlay && settingError && (
 						<ComposerErrorBar
 							message={settingError}
 							onDismiss={clearSettingError}
 						/>
 					)}
-					{!overlay && commandError?.sessionId === sessionId && (
+					{/* With the composer it was typed into, wherever that is: the
+					    refused text is back in the draft, and this is the only place
+					    that says why. */}
+					{overlayKeepsComposer(overlay) &&
+						commandError?.sessionId === sessionId && (
+							<ComposerErrorBar
+								message={commandError.message}
+								onDismiss={() => setCommandError(null)}
+							/>
+						)}
+					{composerMounted && overlay && undeliveredTo === sessionId && (
 						<ComposerErrorBar
-							message={commandError.message}
-							onDismiss={() => setCommandError(null)}
+							message="Your message couldn't be sent. The chat says why."
+							onDismiss={() => setUndeliveredTo(null)}
 						/>
 					)}
 					{/* Not held back by an overlay: a drop is taken over the pages that
@@ -1632,7 +1651,7 @@ function ChatPanel({
 					    lives in the bar and folds with it, though it is one of the
 					    user's two exits from a blocked turn: one press outside the card
 					    brings it back. */}
-					{!isInputBarHidden(overlay) &&
+					{overlayKeepsComposer(overlay) &&
 						!chromeCollapsed &&
 						(view ? (
 							<ReadOnlyBar view={view} onOpenThere={onOpenSessionThere} />
@@ -1644,10 +1663,14 @@ function ChatPanel({
 							// biome-ignore lint/a11y/noStaticElementInteractions: listens to focus moving through the bar; nothing here is a control
 							<div
 								className="contents"
-								onFocus={() => setComposerFocused(true)}
+								onFocus={(e) => {
+									setComposerFocused(true);
+									setComposerTyping(e.target.matches("textarea, input"));
+								}}
 								onBlur={(e) => {
 									if (e.currentTarget.contains(e.relatedTarget)) return;
 									setComposerFocused(false);
+									setComposerTyping(false);
 								}}
 							>
 								{CustomInputBar ? (

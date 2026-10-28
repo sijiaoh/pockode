@@ -30,6 +30,7 @@ import CommitDiffView from "./CommitDiffView";
 import CommitFileView from "./CommitFileView";
 import CommitView from "./CommitView";
 import DiffView from "./DiffView";
+import { detailActionsPlacement } from "./detailActions";
 import HistorySection from "./HistorySection";
 import OperationBanner from "./OperationBanner";
 
@@ -93,12 +94,17 @@ interface Props {
 		worktree: string,
 		next: { path: string; staged: boolean } | null,
 	) => void;
+	/**
+	 * Whether the chat's composer under a detail holds a soft keyboard, which
+	 * takes a detail's action bar off the screen (`DetailActionsPlacement`).
+	 */
+	keyboardUp?: boolean;
 }
 
 /**
- * The Git workspace (`/git`): a top bar naming the branch, three segments —
- * Changes, History, Branches — and the diff, commit and branch pages as layers
- * under them.
+ * The Git workspace (`/git`): three segments — Changes, History, Branches —
+ * under a top bar naming the branch, and the diff, commit and branch pages as
+ * layers under them.
  *
  * Below `expanded` a layer fills the screen on its own; at `expanded` the list
  * and the layer under it stand side by side. The same URL is either: what
@@ -113,8 +119,10 @@ function GitWorkspace({
 	onSelectBranch,
 	onRepointBranch,
 	onCloseFile,
+	keyboardUp = false,
 }: Props) {
 	const isExpanded = useIsExpanded();
+	const actionsAt = detailActionsPlacement(isExpanded, keyboardUp);
 	const worktree = useWorktreeStore((s) => s.current);
 	// Here rather than in BranchBar: it belongs to arriving in the workspace,
 	// which this component lives exactly as long as; the bar is only where its
@@ -161,6 +169,7 @@ function GitWorkspace({
 						// Not `backToList`: the review replaces its way out, since it
 						// is one history entry (docs/git-changes-ui.md).
 						showBack={!isExpanded}
+						actionsAt={actionsAt}
 					/>
 				);
 			case "branch":
@@ -195,9 +204,21 @@ function GitWorkspace({
 				);
 			}
 			case "commit-diff":
-				return <CommitDiffView hash={detail.hash} path={detail.path} />;
+				return (
+					<CommitDiffView
+						hash={detail.hash}
+						path={detail.path}
+						actionsAt={actionsAt}
+					/>
+				);
 			case "commit-file":
-				return <CommitFileView hash={detail.hash} path={detail.path} />;
+				return (
+					<CommitFileView
+						hash={detail.hash}
+						path={detail.path}
+						actionsAt={actionsAt}
+					/>
+				);
 		}
 	};
 
@@ -212,13 +233,17 @@ function GitWorkspace({
 				<PageHeader back={{ to: "chat", onClick: onBack }} title="Git" />
 			)}
 
-			{/* On every layer, not only the lists: a sync left running when its
-			    sheet was closed reports through the chip and nowhere else. */}
-			<BranchBar
-				onOpenBranches={() => onSelectSegment("branches")}
-				branchFailureSurface={branchFailureSurface(layer, isExpanded)}
-				mergeHandoff={mergeHandoff}
-			/>
+			{/* Only over a list: a narrow layer is for reading, and a sync's
+			    progress and failure wait for the list, which is one Back away —
+			    the store keeps the outcome until it is shown. The Branches list
+			    pins the branch failures itself; any other list leaves them here. */}
+			{listOnScreen && (
+				<BranchBar
+					onOpenBranches={() => onSelectSegment("branches")}
+					branchFailureSurface={segment === "branches"}
+					mergeHandoff={mergeHandoff}
+				/>
+			)}
 
 			{/* Narrow, a layer has no room for the whole banner over its content;
 			    the actions are one Back away. Wide, the banner spans both
@@ -355,21 +380,6 @@ function WorkspaceColumns({
 
 function commitHashOf(layer: Exclude<GitLayer, { type: "git" }>) {
 	return layer.type === "diff" || layer.type === "branch" ? null : layer.hash;
-}
-
-/**
- * Whether a surface that pins the branch failures — a switch's, a delete's,
- * a merge handoff's — is on screen; where none is, the top bar shows them
- * (docs/git-branches-ui.md#the-pinned-area). Beside the list, the list's
- * pinned area holds them, whatever is open next to it. Below `expanded`, the
- * bare list does, and so does a branch's detail, which covers the list.
- */
-function branchFailureSurface(layer: GitLayer, isExpanded: boolean): boolean {
-	if (isExpanded) return gitSegmentOf(layer) === "branches";
-	return (
-		(layer.type === "git" && layer.segment === "branches") ||
-		layer.type === "branch"
-	);
 }
 
 /**

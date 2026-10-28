@@ -2,6 +2,7 @@ import {
 	hasCoarsePointer,
 	useCoverPage,
 	useHasCoarsePointer,
+	useIsPageCovered,
 	useOutsideClick,
 } from "@pockode/shared";
 import { ArrowUp, Image, Paperclip, Plus, Slash, Square } from "lucide-react";
@@ -67,6 +68,8 @@ interface Props {
 	onStop?: () => void;
 	/** See `InputBarProps.focusRequest`. */
 	focusRequest?: number;
+	/** See `InputBarProps.focusOnOpen`. */
+	focusOnOpen?: boolean;
 	/**
 	 * Takes files pasted into the textarea; absent where the host would refuse
 	 * them, which leaves the paste to the browser. The host's rather than the
@@ -90,6 +93,7 @@ function InputBar({
 	turnOpen = false,
 	onStop,
 	focusRequest = 0,
+	focusOnOpen = true,
 	onPasteFiles,
 }: Props) {
 	const input = useInputStore((state) => state.inputs[sessionId] ?? "");
@@ -150,17 +154,31 @@ function InputBar({
 	// focus), so this is `hasCoarsePointer`, not the any-pointer gate hit areas
 	// use.
 	//
-	// A focus request is answered the same way, for the same reason.
-	// biome-ignore lint/correctness/useExhaustiveDependencies: intentionally re-run when sessionId changes or focus is requested
+	// A focus request is answered the same way, for the same reason — and even
+	// where opening takes no focus, since it is the host asking. Counted as
+	// answered only once the bar is enabled, so one made while it is disabled
+	// is still answered when it comes back. Leaving a page that took no focus
+	// for one that does — a Git detail for the chat — counts as opening: the
+	// bar stays mounted across it, so no remount opens it.
+	const answeredFocusRequest = useRef(focusRequest);
+	// biome-ignore lint/correctness/useExhaustiveDependencies: intentionally re-run when sessionId changes, focus is requested or opening starts taking focus
 	useEffect(() => {
 		if (disabled) return;
+		const requested = focusRequest !== answeredFocusRequest.current;
+		answeredFocusRequest.current = focusRequest;
+		if (!focusOnOpen && !requested) return;
 		if (!isPrimaryPointerCoarse) textareaRef.current?.focus();
-	}, [sessionId, disabled, focusRequest]);
+	}, [sessionId, disabled, focusRequest, focusOnOpen]);
 
 	// A prefill handed in from outside the chat, made noticeable once
 	// (docs/agent-handoff-ui.md §1.3). Taken only once the bar is enabled: a
 	// session just created is still resolving when the bar first renders it.
+	// And only once nothing covers the page: a handoff made from a page that
+	// keeps this bar — a menu row in a sheet over a Git detail — lands while
+	// the sheet is still up, and the sheet hands focus back to its opener as it
+	// closes, taking the caret from the draft and the ring from view.
 	const reveal = useInputStore((state) => state.reveals[sessionId]);
+	const isPageCovered = useIsPageCovered();
 	const [arrival, setArrival] = useState<ComposerReveal | null>(null);
 	// Ahead of the effect below, so a reveal waiting for the session being
 	// opened is set after the previous session's is cleared.
@@ -170,7 +188,7 @@ function InputBar({
 	}, [sessionId]);
 
 	useEffect(() => {
-		if (!reveal || disabled) return;
+		if (!reveal || disabled || isPageCovered) return;
 		inputActions.takeReveal(sessionId);
 		const textarea = textareaRef.current;
 		if (textarea) {
@@ -185,7 +203,7 @@ function InputBar({
 			textarea.scrollTop = textarea.scrollHeight;
 		}
 		setArrival(reveal);
-	}, [reveal, disabled, sessionId, isPrimaryPointerCoarse]);
+	}, [reveal, disabled, isPageCovered, sessionId, isPrimaryPointerCoarse]);
 
 	useEffect(() => {
 		if (!isPaletteOpen) return;

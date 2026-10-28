@@ -94,18 +94,19 @@ Copy below is the UI's English.
 
 Its rules — what is pinned, why, and the one capped box the failures share — are [git-ui.md](git-ui.md#branch)'s. This design adds two failure sources beside a switch's: a delete, and the merge handoff's session create ([below](#asking-the-agent-to-merge)) — each its own pinned failure (the summary, git's words in a `GitOutput` when there are any, its own `✕`), never merged, per [git-ui.md](git-ui.md#feedback-and-errors).
 
-**Where the three failures are drawn** — still exactly one place, read from the same records (`gitCheckoutStore`, the workspace's handoff), whichever surface started the action. The detail is a second surface that can start them, so where they are drawn depends on the layer and the width, not on the segment:
+**Where the three failures are drawn** — still exactly one place, read from the same records (`gitCheckoutStore`, the workspace's handoff), whichever surface started the action. The detail is a second surface that can start them, and the top bar is only over a list ([git-ui.md](git-ui.md#the-top-bar)), so:
 
 | Width | What is on screen | The failures are |
 |---|---|---|
 | At `expanded` | The Branches segment — the list alone, or beside a branch or a commit opened from one | Pinned above the list |
 | Below `expanded` | The Branches list, no layer over it | Pinned above the list |
 | Below `expanded` | A branch detail layer | Pinned at the top of the detail's scroll area — the same `PinnedFailure`s in the same capped box ([The branch](#the-branch)) |
-| Below `expanded` | A commit (or its file layers) opened from a branch | The top-bar banners |
-| Either | Any other segment or layer | The top-bar banners |
+| Below `expanded` | A commit (or its file layers) opened from a branch | Not drawn: kept in their records for the branch's detail, which Back lands on |
+| Either | Any other segment's list, or a layer over it at `expanded` | The top-bar banners |
 
-- **The surface must be able to draw them.** A Branches list with nothing to draw — `git.branches` failed with nothing cached — leaves the failures to the top bar, and so does a narrow detail in that state, which shows only the read's failure ([When the branch goes away](#when-the-branch-goes-away)).
-- **So the rule is not the segment.** `BranchBar` is told whether *a branch-failure surface* is drawn (`branchFailureSurface`, computed in `GitWorkspace` from the layer and the width by the table above); read off the segment, it would hide the top-bar banners under a narrow commit opened from a branch, where the list's pinned area is covered — a failure drawn nowhere.
+- **So the rule is the segment.** `BranchBar` is drawn only where a list is, and is told whether that list is the Branches list (`branchFailureSurface`, `segment === "branches"` in `GitWorkspace`); a narrow branch detail has no top bar over it and pins them itself.
+- **The surface must be able to draw them.** A Branches list with nothing to draw — `git.branches` failed with nothing cached — leaves the failures to the top bar over it. A narrow detail in that state pins them over the read's failure ([When the branch goes away](#when-the-branch-goes-away)), since there is no top bar to leave them to.
+- **A narrow commit opened from a branch draws none of them.** It has no top bar, and the branch's detail that pins them is covered. Nothing is lost: the records outlive the page, and the way out of the commit is `Back to branch`, onto the surface that draws them. It is the same terms the sync outcome is on over any narrow layer ([git-ui.md](git-ui.md#the-top-bar)).
 - **At `expanded` they stay with the list, even for an action pressed in the detail.** The list's pinned area is on screen and pinned, so the failure is seen; giving the detail column a copy too would break "one place", and giving it the failure *instead* would move a failure from a `⋯` pressed in the list to the other column.
 - **A narrow detail is where the press was**, and with the list covered under it, a pinned area there is the only place the failure is seen. It is `sticky` at the top of the detail's scroll area — over the gone notice too, since a delete that failed because the branch went is still a failure to show. The capped box and each `PinnedFailure` are one component, `PinnedBranchFailures` (`Git/BranchActions.tsx`), which the list and the detail both render.
 
@@ -172,9 +173,7 @@ A full-screen layer, as a review or a commit is ([git-ui.md](git-ui.md#below-exp
 ```
 ┌──────────────────────────────────┐
 │ ←  …/branch-detail               │  app header — BranchName; ← Back to branches
-├──────────────────────────────────┤
-│ ⑂ feature/git-ui         ⟳ Synced│  top bar, as on every layer
-├──────────────────────────────────┤
+├──────────────────────────────────┤  no top bar over a layer
 │ ⚠ Could not switch to …        ✕ │  pinned failures (narrow only)   ┐
 │ feature/git-branch-detail-with-a │  full name, wraps                │
 │ -very-long-suffix                │                                  │
@@ -195,10 +194,12 @@ A full-screen layer, as a review or a commit is ([git-ui.md](git-ui.md#below-exp
 │     a1b2c3d sijiaoh, 2h          │                                  │
 │ ●   Add the branch route        ⋯│                                  │
 │     Older commits are on main too│  end row                         ┘
+├──────────────────────────────────┤
+│ [+] Message…                 [↑] │  the chat's composer
 └──────────────────────────────────┘
 ```
 
-No bottom bar: the actions say why they are unavailable, which a bar of buttons has no room for, and the segment's own bar (`New branch…`) belongs to the list.
+No action bar: the actions say why they are unavailable, which a bar of buttons has no room for, and the segment's own bar (`New branch…`) belongs to the list. The bottom is the chat's composer, as under every detail ([git-ui.md](git-ui.md#the-composer)).
 
 **App header.** The branch as the list's line 1 shows it, through `BranchName` (head-truncated — the header has one line; the body has the whole name). `←` is `Back to branches`, to the parent list, on the commit's rule rather than the review's: it navigates *to* the list, pushed, so a deep-linked detail still has a list to go back to ([git-ui.md](git-ui.md#routes-segments-and-back)). The review can go *back* instead because it is one history entry; a branch is not — each row tapped pushes, as each commit in History does.
 
@@ -266,7 +267,7 @@ Both `←`s are `GitWorkspace` handing `CommitView` an `onBack` that opens the b
 
 ### When the branch goes away
 
-- **After Switch.** The detail stays: the switch's report is the facts turning to `current` and the actions going, and the top bar's name changing — the same "success shows where the user is looking" a switch from the list has.
+- **After Switch.** The detail stays: the switch's report is the facts turning to `current` and the actions going — and, at `expanded`, the top bar's name changing; a narrow detail has no top bar, and the list's is already right when the user is back on it — the same "success shows where the user is looking" a switch from the list has.
 - **A remote-only branch that became local.** Once a local `topic` exists, `origin/topic` is no longer remote-only and has no row (the list hides a remote branch that has a local one). Whoever made it — a switch from this detail, from the list's `⋯` beside it, an agent — the detail of `remote:origin/topic` then **replaces** its route with the detail of `local:topic`: the same work, now under the name the list shows it by, not a page for a ref that left the list. The local name is the remote row's `name` (what checkout takes) — not something to cut out of `ref`, since a remote's name may have slashes — so the detail keeps the last row it found, as it does while a delete runs. A detail that never saw the remote row — opened after the change, by a commit's `Back to branch` or a link — finds the local branch by its `upstream` instead. The replace goes through the same `handleRepointBranch`, once per page; until it lands the page shows neither the row nor the gone notice.
 - **Deleted from this workspace.** A delete of the branch whose detail is on screen — pressed in the detail, or in the `⋯` of its lit row at `expanded` — leaves the detail for the list when it **succeeds**, replacing the route, so Back does not reopen a branch that is gone; at `expanded` that is the list with the empty-detail line. The row is gone from it, which is the whole report, as from the menu. If the branch had an upstream, it now appears under Remote, and is not selected: the user deleted a branch, not asked to read another. What tells success apart is the delete's own outcome, not the row going: `gitCheckoutActions.startDelete` never rejects — a failure is kept in `gitCheckoutStore` — but resolves to whether the branch was deleted, and only then does `useBranchActions` report it (`onBranchDeleted`, whichever surface pressed it). The workspace hands that to `AppShell`'s `handleRepointBranch(from, null, worktree)`, which replaces the route only if that branch's detail is still the page, in the worktree the delete ran in — `handleCloseGitFile`'s guard, for its reason: the answer can land after the reader moved on. A failed delete leaves the detail where it was, the failure where [The pinned area](#the-pinned-area) puts it. The delete invalidates the list before it answers, so the row can be gone a moment before the outcome arrives: from the moment that branch's delete is running (`deleting`) until the branch is listed again, the detail keeps showing what it last had instead of the notice below — past the delete's end too, since `deleting` clears a render before the route is replaced, and the notice would flash in between.
 - **Gone some other way** — deleted by an agent or in another worktree, pruned by a fetch — and a deep link or a typed URL naming no branch: the detail says so in its place, `No branch named <ref>.`, muted and centred, with a `Back to branches` text button (L4), until the user leaves. It does not leave on its own: a page that vanishes under a reader looks like a bug. At `expanded` no row is lit. A commit opened from that branch stays open — commits do not go with a branch name — and its `Back to branch` leads to the same notice (unless the branch became local, above).
@@ -320,7 +321,7 @@ Server-side, the delete takes the refs lock only, is refused during an operation
 
 ## Asking the agent to merge
 
-`Ask AI to merge into current branch` is the [prefill handoff](agent-handoff-ui.md#1-prefill-handoff), as it is: the current session or a new one, appended to the draft, never sent.
+`Ask AI to merge into current branch` is the [prefill handoff](agent-handoff-ui.md#1-prefill-handoff), as it is: the current session or a new one, appended to the draft, never sent. From a branch's detail, which has the composer under it, the text lands in that composer and the user stays on the branch; from the list's `⋯`, which has none, the user is taken to the chat.
 
 - **The hook belongs to the workspace** (`useBranchMergeHandoff`, called by `GitWorkspace`, which renders `OperationBanner` with its own handoff at the same level), not to the sheet nor to `BranchesSection` — the sheet closes on select and the segment unmounts when the user moves to another, and a pending state or an error handed to a component that has unmounted is one nobody sees ([agent-handoff-ui.md §1.4](agent-handoff-ui.md#14-no-current-session)). `isPending` is the whole hook's, so it also remembers which branch was pressed: that row's `⋯` slot shows the spinner (`Opening a new chat` to a screen reader), and so does the detail's `Ask AI…` row when that branch's detail is open (`MenuRow`'s `busy`). While it is pending (a new session being created; with a current session there is no pending state) every `Switch to this branch` and `New branch…` are unavailable — the prompt already names the current branch, and a switch now would make it wrong; and since the hold is the workspace's, leaving the segment and coming back finds it still in place. Rows stay openable: reading a branch changes nothing the prompt names. A switch and a pending handoff therefore never overlap, so one row never has two spinners. A failed create (`Couldn't start a new chat`) is a failure where [The pinned area](#the-pinned-area) puts the others. Leaving the workspace altogether is the prefill handoff's own case: the text waits in the new session's draft.
 - **The text is built at the press** from the branches as they are then (`describeMergePrompt` in `lib/gitBranches.ts`, beside the rest of the list's copy), never from what the menu rendered. Prose only:
@@ -372,7 +373,7 @@ The workspace's one skeleton ([git-ui.md](git-ui.md#at-expanded-two-columns)): l
 - **Ahead/behind is against the default branch**, local when there is one, in words, not arrows — arrows are the chip's, and mean the upstream.
 - **"Merged" is "deleting loses no commit"**, counted against every other branch and remote-tracking ref, not `git branch -d`'s HEAD-or-upstream test.
 - **The lost-commit count is asked when Delete is pressed**, not carried in the list, and the delete is bound to the tip that was counted.
-- **Delete failures go to the pinned area (or the top bar, off the segment), not the dialog**, held in a per-worktree store so they outlive the page, with git's words capped and no retry offered that cannot work.
+- **Delete failures go to the pinned area (or the top bar, over another segment's list), not the dialog**, held in a per-worktree store so they outlive the page, with git's words capped and no retry offered that cannot work.
 - **A row selects, it does not act** — at every width. Switching is `Switch to this branch`, first in the `⋯` and in the detail; no row is greyed, since opening a detail has nothing to refuse.
 - **The detail is a layer of Branches, `{ type: "branch", ref, remote }`** — the row's key, since a local and a remote row can read the same — reading the list's own query; a commit opened from it carries that same identity as `branch` and stacks under it, with a way back to the branch.
 - **The detail's commits are `<default>..<branch>`**, the very commits the row counts as `ahead`, as History's filtered list — dots, no lines, since the range is cut wherever it meets the default branch.

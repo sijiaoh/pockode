@@ -240,7 +240,7 @@ A `git.changed` while the list is on screen re-reads it from the top, as many ro
   | From | Where | Entry |
   |---|---|---|
   | `FileView` (the Files tab's file page) | Bottom bar, after Download; absent where the project has no repository ([git-ui.md](git-ui.md#projects-without-a-repository)) | `History` icon, `History of this file` |
-  | `CommitDiffView` | Bottom bar, beside `View this file at <hash>` | the same |
+  | `CommitDiffView` | Its action bar — under the header at `expanded`, at the bottom below it ([git-ui.md](git-ui.md#where-a-details-actions-go)) — beside `View this file at <hash>` | the same |
   | The Changes segment's file menu (`ChangedFileMenu`) | After `Open file`; absent for an untracked file, which has none | `History of this file` row |
 
   Each navigates (push) to `/git?segment=history&file=<path>` in the same worktree. Typing a path by hand is not offered: the Files tree and its search are how a file is found. The server filters a directory as readily as a file; a folder's `History of this folder` in the Files tree's menu is left for later.
@@ -328,13 +328,13 @@ A `Sheet` titled with the short hash and subject, opened by a row's `⋯` or the
 - The base line reads `Branches from a1b2c3d · Add lane layout`.
 - **It creates the branch and switches to it**, as `New branch…` does — one meaning for "new branch" anywhere in the workspace. The helper box says what that costs here: `Switches to the new branch at this commit. Uncommitted changes come with you unless they clash with it — then git refuses and nothing changes.`
 
-On success the sheet closes onto where it was opened — the list, or the commit's page. The top bar's branch name changes, the list re-reads, and the commit becomes the HEAD row with the new branch's current-branch chip — the whole report, by the workspace's rule that success shows where the user is looking. A refusal stays in the sheet above the field, as today: a name git rejects, one that exists, or uncommitted changes in the way, with git's output listing the files.
+On success the sheet closes onto where it was opened — the list, or the commit's page. The top bar's branch name changes, the list re-reads, and the commit becomes the HEAD row with the new branch's current-branch chip; on a narrow commit page, which has no top bar, the page's ref chips gain the new branch, and the top bar already names it when the user is back on the list — the whole report, by the workspace's rule that success shows where the user is looking. A refusal stays in the sheet above the field, as today: a name git rejects, one that exists, or uncommitted changes in the way, with git's output listing the files.
 
 During an operation it is paused like `New branch…`: the sheet's `paused` sentence, `Create` disabled ([git-conflict-ui.md](git-conflict-ui.md#what-stops-while-an-operation-is-in-progress)). The menu row stays — the sheet is where the reason is said.
 
 ### Ask AI to revert
 
-`usePrefillComposer().prefill(text)`, called from `CommitActions`, which `HistorySection` and a branch's `BranchCommits` keep mounted through `useCommitMenu`, and `CommitView` itself — so the call outlives the menu row's press, as the hook's contract asks — into the current session or a new one, appended, never sent. The user lands in the chat with:
+`usePrefillComposer().prefill(text)`, called from `CommitActions`, which `HistorySection` and a branch's `BranchCommits` keep mounted through `useCommitMenu`, and `CommitView` itself — so the call outlives the menu row's press, as the hook's contract asks — into the current session or a new one, appended, never sent. From the commit's page the text lands in the composer under it and the user stays on the commit; from a list row's `⋯`, which has no composer under it, or into a new session, the user lands in the chat ([agent-handoff-ui.md §1.3](agent-handoff-ui.md#13-landing-in-the-composer)). The text:
 
 ```
 Revert commit a1b2c3d "Add lane layout" on feature/graph with git revert. If that commit is not part of feature/graph's history, say so and stop.

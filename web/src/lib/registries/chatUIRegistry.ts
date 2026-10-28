@@ -82,6 +82,14 @@ export interface InputBarProps {
 	 * where focusing would raise an on-screen keyboard over the conversation.
 	 */
 	focusRequest?: number;
+	/**
+	 * Whether opening the bar — on a session, or once re-enabled — takes focus
+	 * where a physical keyboard is likely. False under a page the user came to
+	 * read rather than to write in (a diff, a commit), where the caret in the
+	 * draft would take the page's keys — Space no longer scrolls it. Defaults
+	 * to true; `focusRequest` is answered either way.
+	 */
+	focusOnOpen?: boolean;
 }
 
 export interface ModeSelectorProps {

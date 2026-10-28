@@ -99,7 +99,12 @@ vi.mock("../Files", async () => {
 });
 
 vi.mock("../Git", () => ({
-	GitWorkspace: () => <div data-testid="git-workspace" />,
+	GitWorkspace: ({ keyboardUp }: { keyboardUp?: boolean }) => (
+		<div
+			data-testid="git-workspace"
+			data-keyboard-up={keyboardUp ? "" : undefined}
+		/>
+	),
 }));
 
 vi.mock("../Settings", () => ({
@@ -1568,6 +1573,29 @@ describe("ChatPanel", () => {
 
 				expect(composer()).not.toBeInTheDocument();
 				expect(cardTakesTheRoom()).toBe(true);
+			});
+
+			// Folded only by a card on the screen: one focused when a Git detail
+			// opened is unmounted without a blur, and must not take the composer
+			// away from the page with it.
+			it("leaves the composer to a Git detail opened from the card", async () => {
+				const user = userEvent.setup();
+				viewport.set(true);
+				worktreeActions.setIsGitRepo(true);
+				seedUnansweredQuestion();
+				const { rerender } = render(<ChatPanel {...defaultProps} />);
+				await waitForHistoryLoad();
+				await answerInThePanel(user);
+				expect(composer()).not.toBeInTheDocument();
+
+				rerender(
+					<ChatPanel
+						{...defaultProps}
+						overlay={{ type: "diff", path: "a.ts", staged: false }}
+					/>,
+				);
+
+				expect(composer()).toBeInTheDocument();
 			});
 
 			// Files dropped there would go into a draft nobody can see.
@@ -3556,6 +3584,30 @@ describe("ChatPanel", () => {
 			expect(mockState.interrupt).not.toHaveBeenCalled();
 		});
 
+		// Escape on a Git page belongs to the page — the review's line selection
+		// clears on it — even where the composer, and its Stop, are there.
+		it("does not interrupt on Escape over a Git detail", async () => {
+			const user = userEvent.setup();
+			worktreeActions.setIsGitRepo(true);
+			render(
+				<ChatPanel
+					{...defaultProps}
+					overlay={{ type: "diff", path: "a.ts", staged: false }}
+				/>,
+			);
+			await waitForHistoryLoad();
+			act(() => {
+				acceptSetting({
+					turn: { phase: "running", open: true, since: "2024-01-01T00:00:00Z" },
+				});
+			});
+
+			await user.keyboard("{Escape}");
+
+			expect(mockState.interrupt).not.toHaveBeenCalled();
+			expect(screen.getByRole("button", { name: /Stop/ })).toBeInTheDocument();
+		});
+
 		// A panel raised from outside the chat — a Git sheet, a header dropdown,
 		// the session drawer — listens on `document` beside the interrupt, where
 		// stopping the press does not silence a sibling and marking it comes too
@@ -4392,9 +4444,9 @@ describe("ChatPanel", () => {
 			expect(screen.getByTestId("git-workspace")).toBeInTheDocument();
 		});
 
-		// The workspace has bottom bars of its own — the commit bar, a diff's
-		// previous/next — and the composer under them would be a third.
-		it("draws no composer under the Git workspace", async () => {
+		// A list's bottom is its commit bar, and a list holds no code to talk
+		// about.
+		it("draws no composer under a Git list", async () => {
 			worktreeActions.setIsGitRepo(true);
 			render(
 				<ChatPanel
@@ -4406,6 +4458,184 @@ describe("ChatPanel", () => {
 
 			expect(screen.getByTestId("git-workspace")).toBeInTheDocument();
 			expect(screen.queryByRole("textbox")).toBeNull();
+		});
+
+		// A detail is where the user reads what the agent changed and tells it
+		// what to change next, so the chat's own composer is there — and a send
+		// leaves them on the page, which `git.changed` keeps up to date.
+		it.each([
+			{ type: "diff", path: "a.ts", staged: false },
+			{ type: "commit", hash: "abc123" },
+			{ type: "commit-diff", hash: "abc123", path: "a.ts" },
+			{ type: "commit-file", hash: "abc123", path: "a.ts" },
+			{ type: "branch", ref: "topic", remote: false },
+		] as const)("keeps the composer under a Git $type layer", async (layer) => {
+			const user = userEvent.setup();
+			const onCloseOverlay = vi.fn();
+			worktreeActions.setIsGitRepo(true);
+			render(
+				<ChatPanel
+					{...defaultProps}
+					overlay={layer}
+					onCloseOverlay={onCloseOverlay}
+				/>,
+			);
+			await waitForHistoryLoad();
+
+			const textarea = screen.getByRole("textbox");
+			// The page is there to be read: the caret is not taken from it.
+			expect(textarea).not.toHaveFocus();
+			await user.type(textarea, "rename it");
+			await user.click(screen.getByRole("button", { name: /Send/ }));
+
+			expect(mockState.sendMessage).toHaveBeenCalledWith(
+				"test-session",
+				"rename it",
+				undefined,
+			);
+			expect(screen.getByTestId("git-workspace")).toBeInTheDocument();
+			expect(onCloseOverlay).not.toHaveBeenCalled();
+		});
+
+		// The transcript that reports a failed send is covered by the page, so
+		// the composer says it — until the chat is back to say why.
+		it("says a send failed over a Git detail", async () => {
+			mockState.sendMessage.mockRejectedValueOnce(new Error("socket closed"));
+			const user = userEvent.setup();
+			worktreeActions.setIsGitRepo(true);
+			const diff = { type: "diff", path: "a.ts", staged: false } as const;
+			const { rerender } = render(
+				<ChatPanel {...defaultProps} overlay={diff} />,
+			);
+			await waitForHistoryLoad();
+
+			await user.type(screen.getByRole("textbox"), "rename it");
+			await user.click(screen.getByRole("button", { name: /Send/ }));
+
+			expect(
+				await screen.findByText(
+					"Your message couldn't be sent. The chat says why.",
+				),
+			).toBeInTheDocument();
+
+			rerender(<ChatPanel {...defaultProps} />);
+			expect(
+				screen.queryByText("Your message couldn't be sent. The chat says why."),
+			).toBeNull();
+			expect(screen.getByText(/socket closed/)).toBeInTheDocument();
+		});
+
+		// The refused text is back in the draft under the page, so its reason
+		// is said there too.
+		it("says why a command was refused over a Git detail", async () => {
+			mockState.isInvalidParamsRejection.mockReturnValue(true);
+			mockState.sendMessage.mockRejectedValueOnce(
+				new Error('Unknown Pockode command "/pockode-foo"'),
+			);
+			const user = userEvent.setup();
+			worktreeActions.setIsGitRepo(true);
+			render(
+				<ChatPanel
+					{...defaultProps}
+					overlay={{ type: "diff", path: "a.ts", staged: false }}
+				/>,
+			);
+			await waitForHistoryLoad();
+
+			await user.type(screen.getByRole("textbox"), "/pockode-foo");
+			await user.keyboard("{Escape}");
+			await user.click(screen.getByRole("button", { name: /Send/ }));
+
+			expect(
+				await screen.findByText(/Unknown Pockode command/),
+			).toBeInTheDocument();
+			expect(screen.getByRole("textbox")).toHaveValue("/pockode-foo");
+		});
+
+		// The draft is the session's, not the page's: what was typed in the chat
+		// is what the composer under a diff holds, and the other way round.
+		it("shares the draft between the chat and a Git detail", async () => {
+			const user = userEvent.setup();
+			worktreeActions.setIsGitRepo(true);
+			const { rerender } = render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+			await user.type(screen.getByRole("textbox"), "look at");
+
+			rerender(
+				<ChatPanel
+					{...defaultProps}
+					overlay={{ type: "diff", path: "a.ts", staged: false }}
+				/>,
+			);
+			expect(screen.getByRole("textbox")).toHaveValue("look at");
+			await user.type(screen.getByRole("textbox"), " this");
+
+			rerender(<ChatPanel {...defaultProps} />);
+			expect(screen.getByRole("textbox")).toHaveValue("look at this");
+		});
+
+		// What takes the review's bar off a phone's screen: the composer holding
+		// the caret where that raises a soft keyboard.
+		describe("the keyboard a Git detail makes room for", () => {
+			const withPointer = (coarse: boolean) => {
+				const original = window.matchMedia;
+				window.matchMedia = (query: string) =>
+					({
+						...original(query),
+						matches:
+							query === MEDIA_QUERIES.primaryCoarsePointer ? coarse : false,
+					}) as MediaQueryList;
+				return () => {
+					window.matchMedia = original;
+				};
+			};
+			const renderOverDiff = async () => {
+				worktreeActions.setIsGitRepo(true);
+				render(
+					<ChatPanel
+						{...defaultProps}
+						overlay={{ type: "diff", path: "a.ts", staged: false }}
+					/>,
+				);
+				await waitForHistoryLoad();
+				return screen.getByTestId("git-workspace");
+			};
+
+			it("is up while the composer has the caret under a thumb", async () => {
+				const restore = withPointer(true);
+				try {
+					const user = userEvent.setup();
+					const workspace = await renderOverDiff();
+					expect(workspace).not.toHaveAttribute("data-keyboard-up");
+
+					await user.type(screen.getByRole("textbox"), "fix");
+					expect(workspace).toHaveAttribute("data-keyboard-up");
+
+					// Where a tap on Send leaves focus under a finger: still in the
+					// composer, with the keyboard gone.
+					act(() => screen.getByRole("button", { name: "Send" }).focus());
+					expect(workspace).not.toHaveAttribute("data-keyboard-up");
+
+					await user.click(screen.getByRole("textbox"));
+					expect(workspace).toHaveAttribute("data-keyboard-up");
+					act(() => screen.getByRole("textbox").blur());
+					expect(workspace).not.toHaveAttribute("data-keyboard-up");
+				} finally {
+					restore();
+				}
+			});
+
+			it("is never up under a fine pointer", async () => {
+				const restore = withPointer(false);
+				try {
+					const user = userEvent.setup();
+					const workspace = await renderOverDiff();
+					await user.click(screen.getByRole("textbox"));
+					expect(workspace).not.toHaveAttribute("data-keyboard-up");
+				} finally {
+					restore();
+				}
+			});
 		});
 
 		// An overlay is a page of its own: the header names it, and the session

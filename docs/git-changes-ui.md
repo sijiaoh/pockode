@@ -194,9 +194,7 @@ The review layer is the `diff` layer redesigned: one file at a time, in list ord
 ┌──────────────────────────────────┐
 │ ←  GitTab.tsx                    │  app header — file name; tap opens the file
 ├──────────────────────────────────┤
-│ ⑂ feature/git-ui      ↓ Pull 2   │  top bar, as on every layer
-├──────────────────────────────────┤
-│ ‹  2 / 5  ›  web/src/compo…  ↵ ␣ │  review toolbar
+│ ‹  2 / 5  ›  web/src/compo…  ↵ ␣ │  review toolbar — no top bar over a layer
 ├──────────────────────────────────┤
 │ ⚠ Stage failed · Details       ✕ │  the layer's banner
 │  40   import { Foo }             │
@@ -206,13 +204,15 @@ The review layer is the `diff` layer redesigned: one file at a time, in list ord
 │ ┄┄┄ ⌄ 24 unchanged lines ⌃ ┄┄┄  │  collapsed context, tap to expand
 │  66   …                          │
 ├──────────────────────────────────┤
-│ [ Discard file ]  [Stage & next] │  bottom bar
+│ [ Discard file ]  [Stage & next] │  bottom bar — gone while the keyboard is up
+├──────────────────────────────────┤
+│ [+] Message…                 [↑] │  the chat's composer
 └──────────────────────────────────┘
 ```
 
 **App header.** The file name as the title, tappable to open the working-tree file (`Open <path>`) as the diff's title is today — except for a deleted file, where it is plain text. `←` goes to the parent, the Changes list (`Back to changes`), the way every way out of the review does ([below](#what-the-two-bottom-buttons-say)).
 
-**Review toolbar**, one row, `min-h-[44px]`, under the top bar:
+**Review toolbar**, one row, `min-h-[44px]`, under the app header:
 
 | Part | Content |
 |---|---|
@@ -222,12 +222,13 @@ The review layer is the `diff` layer redesigned: one file at a time, in list ord
 | `↵` wrap | `ToggleIconButton` (`WrapText`), `Wrap lines` / `Don't wrap lines` |
 | `␣` whitespace | The existing `ALargeSmall` toggle and store, moved here from the bottom bar |
 | Split | `Columns2`, at `expanded` only ([below](#at-expanded)) |
+| The file's actions | At `expanded` only: the bottom bar's two buttons, at the row's end ([below](#at-expanded)) |
 
 The toggles go in the toolbar rather than the bottom bar because the bottom bar now carries two text buttons and is for deciding about the file; the toolbar is for how to read it. When the row is too narrow, the path is what gives way — it is the row's one `flex-1 min-w-0` element and truncates to nothing before any control moves. At 360px on a coarse pointer the fixed parts are four 44px buttons, `2 / 5` and the 8px gaps between them, about 260px, so they always fit.
 
 **Side row**, only for a partially staged file: a second row under the toolbar, `Partly staged` in muted text and a segmented control `Unstaged | Staged` ([Partially and fully staged files](#partially-and-fully-staged-files)). It is a row of its own rather than a toolbar part because a 140px control beside four buttons and the position would overflow a phone's toolbar, and because it only exists for the one case in which it says something.
 
-**Bottom bar** (`BottomActionBar`): a secondary button on the left, the L1 primary on the right taking the remaining width, with a gap between them so the destructive one is not flush against the one used all day.
+**Bottom bar** (`BottomActionBar`): a secondary button on the left, the L1 primary on the right taking the remaining width, with a gap between them so the destructive one is not flush against the one used all day. It stands above the chat's composer, which is under every Git detail, and goes while the composer holds a soft keyboard; at `expanded` its buttons are in the toolbar instead. Which of the three is [git-ui.md](git-ui.md#where-a-details-actions-go)'s rule, shared with a commit's file layers.
 
 ### What the two bottom buttons say
 
@@ -249,7 +250,7 @@ The left button acts on **the side on screen**, the primary on **the file**:
 
 - **`Stage & next`** queues `git.add` for this file; the button shows the spinner and `Staging…`; on success the layer moves to the next file. On failure it stays, with the failure in the layer's banner, as the diff's stage failure does today — and one that answers after the reader left goes to the Changes banner, as today.
 - **The last file stages and stays** rather than jumping straight into the commit sheet: the reader sees the file go checked and the count become right before being asked to commit, and a stage failure is never hidden behind a sheet.
-- **`Commit n files`** opens the existing commit sheet, over the review layer. It follows `describeCommitAction` exactly as the list's bar does: disabled with the visible submodule line when only submodule files are staged; disabled with `Check a file to commit` (sr-only) when nothing is staged — possible when every earlier file was skipped with `›`. The sheet is a sibling of the bottom bar, not inside it, so a refresh that changes the buttons under it does not unmount a half-written message. **A successful commit started here ends the review**: the reader is taken to the Changes list (at `expanded`, the right column's empty state), since what the reader came to do is done; files left unstaged are waiting in the list. This is the one move that leaves the review by itself, and it does so only because the reader asked for it — a change made by somebody else never does ([below](#when-the-list-changes-under-the-review)).
+- **`Commit n files`** opens the existing commit sheet, over the review layer. It follows `describeCommitAction` exactly as the list's bar does: disabled with the visible submodule line when only submodule files are staged; disabled with `Check a file to commit` (sr-only) when nothing is staged — possible when every earlier file was skipped with `›`. The sheet is a sibling of the bottom bar, not inside it, so a refresh that changes the buttons under it — or the bar going while the keyboard is up — does not unmount a half-written message. **A successful commit started here ends the review**: the reader is taken to the Changes list (at `expanded`, the right column's empty state), since what the reader came to do is done; files left unstaged are waiting in the list. This is the one move that leaves the review by itself, and it does so only because the reader asked for it — a change made by somebody else never does ([below](#when-the-list-changes-under-the-review)).
 - **`Discard file`** opens the existing `ConfirmDialog` with the single-file copy. It discards the unstaged side only, as discard always has, so on a partly staged file the dialog reads `Discard unstaged changes?` and says the staged changes are kept ([git-ui.md](git-ui.md#discard)). On success the layer moves to the next file — replacing, since the discarded file has no review left to come back to — or to the list when it was the last.
 - **`Unstage`** queues `git.reset` and stays on the file, on its unstaged side; the buttons then follow the tables again. A staged side has nothing to discard, so the left slot offers the undo of staging instead — the same rule as the action sheet.
 - Moving between files — `‹ ›`, `Stage & next`, `Next`, discard — **replaces** the history entry rather than pushing. A review is one place: Back leaves it for the list in one step, instead of walking back through every file read. At `expanded`, a row tapped in the list beside an open review moves the review too, replacing as `‹ ›` would; only the tap that opens a review from the list pushes. **Leaving** the review — `←`, a commit made from it, discarding its last file, `Back to changes` — goes *back* to the list when the review was pushed from it, so the history is what it was before the review opened: neither the list twice (a Back that does nothing on screen) nor a list pushed over the review (a Back that reopens it). The push marks its history entry and every move inside carries the mark (`REVIEW_FROM_LIST_STATE` in `lib/navigation.ts`); a review reached any other way — a link, a URL typed in, the chat's review row — has no list behind it, and is replaced by the list instead (`hooks/useLeaveReview.ts`).
@@ -409,7 +410,8 @@ Touch has no Shift, and a drag in the gutter on a touch screen is the page's scr
 - A different file (`‹ ›`, `Stage & next`, a list row at `expanded`), the side switch, or the whitespace or split toggle clears it.
 - A refreshed diff for the file keeps it when every selected row is still there, with the same text and the same number on the side the range is named by. The other side's numbers do not count: on the unstaged side the old numbers are the index's, and staging a hunk above the selection moves them while the lines picked are unchanged. A connection being re-established, with no diff for a moment, keeps it too. Otherwise it is cleared, with the polite announcement `Selection cleared — the file changed`. An agent editing elsewhere in the file pushes a new diff every few seconds, and a selection that vanished on each of them could never be used. A hunk staged or unstaged from this page leaves the view, so a selection inside it clears.
 - Wrap keeps it, since the same rows are only drawn differently.
-- Leaving the page drops it. When the user comes Back from the chat it is not restored: what it named is in the composer by then. This is the one thing the handoff's Back does not bring back ([agent-handoff-ui.md §1.3](agent-handoff-ui.md#13-landing-in-the-chat)).
+- `Ask AI to edit…` keeps it: the handoff writes into the composer under the review and the user stays on the page, so the same range can still be copied or narrowed.
+- Leaving the page drops it.
 
 #### The selection bar
 
@@ -419,16 +421,18 @@ Touch has no Shift, and a drag in the gutter on a touch screen is the page's scr
 ├──────────────────────────────────┤
 │ Lines 41–42   [Copy] [✦ Ask AI…] ✕│  selection bar, under the diff's scroll area
 ├──────────────────────────────────┤
-│ [ Discard file ]  [Stage & next] │  bottom bar (unchanged)
+│ [ Discard file ]  [Stage & next] │  bottom bar — gone while the keyboard is up
+├──────────────────────────────────┤
+│ [+] Message…                 [↑] │  the chat's composer
 └──────────────────────────────────┘
 ```
 
-- **Where.** Docked at the bottom of the diff area, directly above the review's bottom bar. It is full width below `expanded`. At `expanded` it spans the review column only, above that column's bottom bar, and the list column is untouched. It is a raised strip (`th-bg-secondary`, top border, the sheets' shadow), not a bubble beside the selection: a bubble would have to follow the range as the page scrolls, would cover the code it points at, and on a phone would sit where the thumb is not. It is laid out in the page's column, between the diff's scroll area and the bottom bar, rather than over the diff: while it is up the scroll area simply ends at its top edge, so the last selected line can always be scrolled clear of it. It is not portalled, so it mounts and unmounts with the review page and never floats over a page the user moved to.
+- **Where.** Docked at the bottom of the diff area, directly above the review's bottom bar, and so above the composer under it. It is full width below `expanded`. At `expanded` it spans the review column only, over the composer — the bottom bar's buttons are in the toolbar there — and the list column is untouched. **It stays with the keyboard up**, when the bottom bar goes: typing an instruction is exactly when the user wants a piece of the code in it. A press on it then does not take focus from the text field the caret is in — it would drop the keyboard, the bottom bar would come back under this one before the press's click arrived, and the button would move out from under the finger; and the user goes on typing after the insert. With no caret in a field, a press takes focus as usual ([git-ui.md](git-ui.md#where-a-details-actions-go)). It is a raised strip (`th-bg-secondary`, top border, the sheets' shadow), not a bubble beside the selection: a bubble would have to follow the range as the page scrolls, would cover the code it points at, and on a phone would sit where the thumb is not. It is laid out in the page's column, between the diff's scroll area and the bottom bar (or the composer), rather than over the diff: while it is up the scroll area simply ends at its top edge, so the last selected line can always be scrolled clear of it. It is not portalled, so it mounts and unmounts with the review page and never floats over a page the user moved to.
 - **What it holds.** First the range label, the row's one `flex-1 min-w-0` part: `Lines 41–42`, `Line 41`, `Removed lines 41–43` when every selected row is a removed one, or `Old lines 41–48` for a range made on the old side in split view. Then `Copy`, then `Ask AI to edit…` with the `Sparkles` icon the commit sheet's `Draft` uses. Both are secondary buttons (`th-bg-tertiary`), each with a minimum width that holds its busy and done labels (`Copied`, `Opening chat…`), so a pressed button never moves the one beside it. Last is ✕, an L5 button named `Clear selection`. Every control reaches 44px on a coarse pointer by growing the box, as in the bottom bar. Neither action is L1: the bottom bar's primary is still the page's one primary, and both are on screen at once.
 - **For assistive technology** the bar is a `role="group"` named `Selected lines`, with its buttons in tab order. It is not a `toolbar`, which would promise arrow-key focus. A selection made by pointer announces `Lines 41–42 selected` politely, since tapping the gutter moves no focus. One made with the hunk bar's Select button moves focus to `Copy`. When the bar goes while it holds focus (✕, Escape, a refresh), focus returns to the Select button of the hunk the selection was in, or the nearest one left.
 - **At 360px on a coarse pointer** the label truncates first. The fixed parts (the two text buttons, ✕, gaps and padding) take roughly 320–330px, so the label keeps only a few dozen pixels and shows the start of its range.
 - **`Copy`** copies the code as it stands on the side the range is numbered on. That is the new side's lines from the first to the last selected, verbatim, hidden gap lines included, read from the full content the diff already carries. For a removed-only range, or one made on the old side in split view, it is the old side's lines. No `+` / `-` markers: someone who copies code wants code. A diff for the agent is what the other button is for. Feedback is `useCopyToClipboard`'s: `Copied` with a check for about a second, or `Copy failed`, which stays until the next press so that it cannot flash past a reader who looked away. Both are also said politely. The selection stays, so `Ask AI to edit…` can follow.
-- **`Ask AI to edit…`** prefills the text below through `usePrefillComposer`, which resolves the session, writes the draft and pushes the chat ([agent-handoff-ui.md §1](agent-handoff-ui.md#1-prefill-handoff)). The ellipsis is the usual promise that something follows before anything is done: the user writes the instruction there, and nothing is sent. The hook is called by the review page (`DiffView`), not by the bar. The bar unmounts whenever the selection clears, which a diff refresh can do while a new session is still being created, and an unmounted caller loses the hook's error. While a session is being created (`isPending`) the button shows the spinner and `Opening chat…`, and the rest of the bar stays usable. A failure goes to the layer's banner with the hook's own summary and details, and is dismissed with it.
+- **`Ask AI to edit…`** prefills the text below through `usePrefillComposer`, which resolves the session and writes the draft ([agent-handoff-ui.md §1](agent-handoff-ui.md#1-prefill-handoff)). With the route's session, that is the composer under the review: the text lands there, revealed, and the user stays on the diff. Only a session that has to be created first takes the user to its chat. The ellipsis is the usual promise that something follows before anything is done: the user writes the instruction there, and nothing is sent. The hook is called by the review page (`DiffView`), not by the bar. The bar unmounts whenever the selection clears, which a diff refresh can do while a new session is still being created, and an unmounted caller loses the hook's error. While a session is being created (`isPending`) the button shows the spinner and `Opening chat…`, and the rest of the bar stays usable. A failure goes to the layer's banner with the hook's own summary and details, and is dismissed with it.
 
 #### How it goes away
 
@@ -436,7 +440,7 @@ The bar has no backdrop, so it follows the shared conventions for overlays witho
 
 - **✕** and **pressing the only selected line again** clear it.
 - **Escape** clears it. The bar listens on `document` and claims the key with `preventDefault`. It stands down in two cases, which between them cover everything that can be over the review ([answering-ui.md](answering-ui.md#who-owns-escape)). First, while `useIsPageCovered()` is true. `Sheet` and `ConfirmDialog` count as covering through their scroll lock, and they claim Escape with `stopPropagation`, which does not stop another listener on `document`, so the count is what keeps the bar from clearing under a sheet that is closing. Second, when the press is already `defaultPrevented`, which is how `Sidebar` and `ResponsivePanel` mark theirs. The bar does not call `useCoverPage` itself: it is part of the surface, not a layer over it.
-- **A click outside** (`useOutsideClick`, so a scroll on a phone never dismisses) clears it, and is claimed with `stopPropagation`, but only when the click lands on non-interactive content: the code, the empty part of the diff area, the headers. A click on the bar, on a gutter number, or on any control (a hunk's Stage or Select button, a gap row, the toolbar, the bottom bar, a list row at `expanded`) is not a dismissal and passes untouched. Whatever that control does then decides: staging a hunk or moving file changes the rows and clears the selection by the rules above, and opening the commit sheet leaves the selection waiting under it. One press never does two things.
+- **A click outside** (`useOutsideClick`, so a scroll on a phone never dismisses) clears it, and is claimed with `stopPropagation`, but only when the click lands on non-interactive content: the code, the empty part of the diff area, the headers. A click on the bar, on a gutter number, or on any control (a hunk's Stage or Select button, a gap row, the toolbar, the bottom bar, the composer, a list row at `expanded`) is not a dismissal and passes untouched. Whatever that control does then decides: staging a hunk or moving file changes the rows and clears the selection by the rules above, and opening the commit sheet leaves the selection waiting under it. One press never does two things.
 
 #### What `Ask AI to edit…` writes
 
@@ -471,21 +475,24 @@ The text is prose plus a fence, never a Pockode command, as the handoff requires
 ```
 ┌────────────────────────┬─────────────────────────────────────────┐
 │ [Changes] History Bra… │ GitTab.tsx                              │  column heading (L2)
-│ ▣ 5 files +142 −37   ≣ │ ‹ 2 / 5 › web/src/components/Git  ↵ ␣ ⫴ │  review toolbar
+│ ▣ 5 files +142 −37   ≣ │ ‹2/5› …Git ↵ ␣ ⫴ [Discard file] [Stage…]│  review toolbar, with the file's actions
 ├────────────────────────┼─────────────────────────────────────────┤
 │ ☑ GitTab.tsx  +12 −3 ⋯ │                                         │
 │▌▣ git.md      +88 −20⋯ │   (the diff, unified or split)          │
 │ ☐ notes.txt   +9     ⋯ │                                         │
-├────────────────────────┼─────────────────────────────────────────┤
-│ [Discard…] [Commit 1…] │ [ Discard file ]        [ Stage & next ]│
-└────────────────────────┴─────────────────────────────────────────┘
+├────────────────────────┤                                         │
+│ [Discard…] [Commit 1…] │                                         │
+├────────────────────────┴─────────────────────────────────────────┤
+│ [+] Message…                                                 [↑] │  the chat's composer, under both
+└──────────────────────────────────────────────────────────────────┘
 ```
 
 - The review layer is the right column, exactly as the diff is today: the same URL, a column heading instead of the app header's title, no `←` in it, the row on screen lit in the list.
 - **Split view**: a `Columns2` toggle in the toolbar, `Side by side` / `Inline`, `aria-pressed`, remembered (`pockode:gitReviewSplit`). Default inline. It is offered only at `expanded` — below it there is no width for two columns — and follows the tier, not the measured width, as the layout does ([git-ui.md](git-ui.md#at-expanded-two-columns)); at 1024 with an open sidebar the column is narrow enough that inline is the better choice, which is why it is the default. Split keeps wrap, word highlight and collapsed context: the separator row carries its label on the old side, and a press on either half expands it — unwrapped, each side is a table of its own and the new side's half of the row is an empty placeholder whose buttons are in the other table (`components/ui/collapsedContext.ts`). Unwrapped, each half also scrolls sideways on its own, in step with the other, rather than handing that to the page as inline view does. A commit's file diff stays inline: the toggle is the review's.
 - Checking a box in the list while its file is in the review column changes the review's buttons with it, since both read the same status.
 - With nothing chosen, the right column's empty state is unchanged: `Select a file to see its diff`, or `No changes to review` on a clean tree.
-- Two primary buttons are on screen at once, one per column. Each column is its own panel with its own bottom bar, as today; on the last file both read `Commit n files` and open the same sheet.
+- **The file's actions are in the review's toolbar**, at its end: the bottom of the screen is the composer's alone ([git-ui.md](git-ui.md#where-a-details-actions-go)). The buttons keep their full labels — the folder path beside them is what gives way — and fit at the detail column's 480px minimum (`DiffView.browser.test.tsx`). The commit hint, which on a phone is a line above the bottom bar's buttons, is a line under the toolbar.
+- Two primary buttons are on screen at once, one per column: the list's in its bottom bar, the review's in its toolbar. On the last file both read `Commit n files` and open the same sheet.
 
 ## The sidebar's overview
 
@@ -506,6 +513,6 @@ The Git tab's `Changes` entry carries the totals beside the count: `Changes   5 
 11. **A hunk stays busy after a successful write until a diff read after the write arrives**, and the page asks for that diff softly, keeping the old one on screen, as soon as the write succeeds. A failed write ends the busy state. Hunk writes are deduplicated by path and ID but mark the path busy, and file-level writes make every hunk button busy.
 12. **A stale hunk (`-32005`) is said as such, the diff is read again, and nothing retries.**
 13. **Lines are selected by their numbers, never by a long press**, and how a press reads follows `pointerType`: click, Shift-click and drag for a mouse; tap, then tap the far end, for touch. The hunk bar's Select button is the keyboard's way in. The gutter's sub-44px rows are a recorded exemption.
-14. **The selection bar is docked above the bottom bar, not floating at the selection.** It is cleared by ✕, by Escape (on `document`, claimed, standing down while the page is covered or the key is already claimed), and by a click outside on non-interactive content (claimed), never by a press on a control. A diff refresh keeps it while its rows are unchanged.
+14. **The selection bar is docked above the bottom bar, not floating at the selection**, and stays there with the keyboard up, when the bottom bar goes. It is cleared by ✕, by Escape (on `document`, claimed, standing down while the page is covered or the key is already claimed), and by a click outside on non-interactive content (claimed), never by a press on a control. A diff refresh keeps it while its rows are unchanged.
 15. **`Ask AI to edit…` writes path, range, version and a `diff` fence through the prefill handoff, and never sends.** `Copy` copies the side the range is numbered on, without markers.
 16. **Every control answers one question.** One that answers none is removed, two that answer the same one are merged: hence no `Review` button in the list's bottom bar, no `⋯` in its header and no `View history` on a clean tree.

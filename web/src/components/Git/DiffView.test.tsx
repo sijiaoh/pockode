@@ -363,6 +363,51 @@ describe("DiffView bottom buttons", () => {
 		expect(screen.getByText(/Only submodule files are staged/)).toBeVisible();
 	});
 
+	// Wide, the bottom is the composer's: the buttons join the toolbar, and
+	// a hint goes with them.
+	it("moves into the toolbar when placed at the top", () => {
+		statusRef.current = {
+			staged: [],
+			unstaged: [],
+			submodules: {
+				lib: { staged: [{ path: "x.ts", status: "M" }], unstaged: [] },
+			},
+		};
+		const { rerender } = render(
+			<DiffView path="lib/x.ts" staged={true} actionsAt="top" />,
+		);
+		const toolbar = screen.getByRole("button", {
+			name: "Next file",
+		}).parentElement;
+		const commit = screen.getByRole("button", { name: "Commit" });
+		expect(toolbar).toContainElement(commit);
+		expect(commit).toHaveAccessibleDescription(
+			/Only submodule files are staged/,
+		);
+		expect(screen.getByText(/Only submodule files are staged/)).toBeVisible();
+
+		statusRef.current = {
+			staged: [],
+			unstaged: [
+				{ path: "a.ts", status: "M" },
+				{ path: "b.ts", status: "M" },
+			],
+		};
+		rerender(<DiffView path="a.ts" staged={false} actionsAt="top" />);
+		expect(toolbar).toContainElement(
+			screen.getByRole("button", { name: "Stage & next" }),
+		);
+		expect(toolbar).toContainElement(
+			screen.getByRole("button", { name: "Discard file" }),
+		);
+	});
+
+	it("draws no buttons while hidden", () => {
+		render(<DiffView path="a.ts" staged={false} actionsAt="hidden" />);
+		expect(screen.queryByRole("button", { name: "Stage & next" })).toBeNull();
+		expect(screen.queryByRole("button", { name: "Discard file" })).toBeNull();
+	});
+
 	it("leaves for the list by replacing, from the header's back", async () => {
 		const user = userEvent.setup();
 		render(<DiffView path="a.ts" staged={false} showBack />);
@@ -1290,6 +1335,28 @@ describe("DiffView line selection", () => {
 				"```",
 			].join("\n"),
 		);
+	});
+
+	// The bar stays up while the composer holds the keyboard, so that code can
+	// be put into the message being typed; a press that took the caret would
+	// drop the keyboard instead.
+	it("leaves the caret in the field being typed in, even with the review's buttons hidden", async () => {
+		const user = userEvent.setup();
+		diffRef.current = { data: diffOf([10], ["h1"]), snapshot: 1 };
+		render(
+			<>
+				<DiffView path="a.ts" staged={false} actionsAt="hidden" />
+				<textarea aria-label="Message" />
+			</>,
+		);
+		await user.click(await gutter(10));
+		const field = screen.getByRole("textbox", { name: "Message" });
+		field.focus();
+
+		await user.click(screen.getByRole("button", { name: "Copy" }));
+		await user.click(screen.getByRole("button", { name: "Ask AI to edit…" }));
+		expect(prefill).toHaveBeenCalled();
+		expect(field).toHaveFocus();
 	});
 
 	// Touch has no Shift: each tap moves the far end.

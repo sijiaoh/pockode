@@ -8,11 +8,13 @@ import {
 	makeSessionDetail,
 	makeSessionListItem,
 } from "../test/sessionFixtures";
+import type { OverlayState } from "../types/overlay";
 import { usePrefillComposer } from "./usePrefillComposer";
 
 const route = vi.hoisted(() => ({
 	sessionId: null as string | null,
 	worktree: "wt",
+	overlay: null as OverlayState,
 	navigate: vi.fn(),
 	router: { state: { location: { href: "/wt/git?session=s1" } } },
 }));
@@ -24,6 +26,7 @@ vi.mock("./useRouteState", () => ({
 	useRouteState: () => ({
 		sessionId: route.sessionId,
 		worktree: route.worktree,
+		overlay: route.overlay,
 	}),
 }));
 
@@ -48,6 +51,7 @@ function pushedSession(): string | undefined {
 describe("usePrefillComposer", () => {
 	beforeEach(() => {
 		route.sessionId = "s1";
+		route.overlay = { type: "git", segment: "changes" };
 		route.router.state.location.href = "/wt/git?session=s1";
 		switchInFlight.value = false;
 		useWorktreeStore.setState({ current: "wt" });
@@ -77,6 +81,31 @@ describe("usePrefillComposer", () => {
 		expect(route.navigate).toHaveBeenCalledTimes(1);
 		expect(draftWhenPushed).toEqual({ text: "Explain this", reveal: "ready" });
 		expect(createSession).not.toHaveBeenCalled();
+	});
+
+	// A Git detail keeps the composer under it, so the draft is already on
+	// the page the message is about.
+	it("stays on a page that keeps the composer, and reveals the draft there", async () => {
+		route.overlay = { type: "diff", path: "a.ts", staged: false };
+		const { result } = renderHook(() => usePrefillComposer());
+
+		await act(() => result.current.prefill("Explain this"));
+
+		expect(route.navigate).not.toHaveBeenCalled();
+		expect(useInputStore.getState().inputs.s1).toBe("Explain this");
+		expect(useInputStore.getState().reveals.s1).toBe("ready");
+	});
+
+	// The composer on the page is the route session's, not the new one's.
+	it("still takes the user to a session it had to create", async () => {
+		route.sessionId = null;
+		route.overlay = { type: "diff", path: "a.ts", staged: false };
+		createSession.mockResolvedValue(makeSessionListItem({ id: "new" }));
+		const { result } = renderHook(() => usePrefillComposer());
+
+		await act(() => result.current.prefill("Explain this"));
+
+		expect(pushedSession()).toBe("new");
 	});
 
 	it("pushes once for a double press before the route moves", async () => {
