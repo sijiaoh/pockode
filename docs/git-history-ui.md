@@ -179,7 +179,7 @@ The range picker is a `Sheet` titled `Show`, three `MenuRow`s with a check on th
 | `All branches` | Every local branch and its upstream | `scope=all` |
 | `Mainline only` | This branch's own line — a merge shows as one commit | `scope=mainline` |
 
-`git.log`'s fourth scope, `branch` — one branch's own commits — is not a range here: it needs a branch beside it, and `scope=branch` in the URL would name none. The client asks for it with `useGitLog({ scope: "branch", branch })`, cached per branch, and `GitHistoryScope`, the picker's and the URL's type, leaves it out.
+`git.log`'s fourth scope, `branch` — one branch's own commits — is not a range here: it needs a branch beside it, and `scope=branch` in the URL would name none. The branch's detail asks for it with `useGitLog({ scope: "branch", branch })`, cached per branch, and draws it with this list's rows, dots without lines ([git-branches-ui.md](git-branches-ui.md#commits-not-on-the-default-branch)); `GitHistoryScope`, the picker's and the URL's type, leaves it out.
 
 `main` in the label and description is the repository's actual default branch name (`Current + master`). Where HEAD *is* the default branch, the label still says so — `Current + main` on `main` — since that is still what is listed. Where the server names none ([git.md](git.md#history) says when), the range is HEAD and its upstream alone and says so: `Current branch`, `This branch and its upstream`.
 
@@ -201,6 +201,8 @@ Pages of 100 commits (the server allows up to 200), in a virtualised list — on
 | End of history | A last row, muted and centred: `Beginning of history` — the root commits' lines stop at their dots above it |
 | End of a shallow clone | `Older history isn't in this clone` instead — the oldest commits' parents are missing, so their lines stop at their dots as well, rather than run into a row that is not there |
 | Unborn HEAD | `No commits yet`, as today |
+
+The paging — when the next page is asked for, what `Retry` does, which last row is shown — is `Git/useHistoryPaging.ts`, shared with a branch's commits; each caller says its own end text, since only History knows whether a shallow clone is why its walk ended. `HistoryList` scrolls on its own here; given a `scroller` (`{ element, margin }`), it lays its rows out in a page's scroll area instead, below whatever the page puts above it — which is how a branch's commits share one scroll area with its facts ([git-branches-ui.md](git-branches-ui.md#commits-not-on-the-default-branch)).
 
 A `git.changed` while the list is on screen re-reads it from the top, as many rows as were loaded, and keeps the reader on the commit that was at the top of the screen when it is still listed. Rewritten history (an amend, a pull) moves rows; a list that kept its old pages would draw lines to commits that no longer exist.
 
@@ -294,7 +296,7 @@ A `Sheet` titled with the short hash and subject, opened by a row's `⋯` or the
 
 **HEAD is a ref, not row 0.** In `All branches` the first row may be another branch's newer commit; the HEAD row is the one carrying the `HEAD` ref, which `git.show` sends as well, so the commit's own page knows it too.
 
-**"In HEAD's history" is known where the graph is drawn.** In date order every commit on a path from HEAD down to a commit comes before it, so the loaded rows hold the whole path and the client computes it over the loaded rows, read again as the list is. The row's menu is read from the list as it is when used, not as it was when opened: a commit made meanwhile moves HEAD. A filtered list has no such path, and the commit's own page does not ask the list — one reached by a link has none, and at `expanded` the page keeps to what it can know by itself, so its `⋯` may offer a revert the row's beside it does not; there the row is offered, and the prompt itself asks the agent to stop if the commit is not on the branch ([below](#ask-ai-to-revert)) — offering an entry that might be refused beats hiding one that might be right.
+**"In HEAD's history" is known where the graph is drawn.** In date order every commit on a path from HEAD down to a commit comes before it, so the loaded rows hold the whole path and the client computes it over the loaded rows, read again as the list is. The row's menu is read from the list as it is when used, not as it was when opened: a commit made meanwhile moves HEAD. A filtered list has no such path, nor does a branch's list of its own commits unless that branch is HEAD's ([git-branches-ui.md](git-branches-ui.md#commits-not-on-the-default-branch)), and the commit's own page does not ask the list — one reached by a link has none, and at `expanded` the page keeps to what it can know by itself, so its `⋯` may offer a revert the row's beside it does not; there the row is offered, and the prompt itself asks the agent to stop if the commit is not on the branch ([below](#ask-ai-to-revert)) — offering an entry that might be refused beats hiding one that might be right.
 
 ### Create branch here
 
@@ -309,7 +311,7 @@ During an operation it is paused like `New branch…`: the sheet's `paused` sent
 
 ### Ask AI to revert
 
-`usePrefillComposer().prefill(text)`, called from `CommitActions`, which `HistorySection` and `CommitView` keep mounted — so the call outlives the menu row's press, as the hook's contract asks — into the current session or a new one, appended, never sent. The user lands in the chat with:
+`usePrefillComposer().prefill(text)`, called from `CommitActions`, which `HistorySection` and a branch's `BranchCommits` keep mounted through `useCommitMenu`, and `CommitView` itself — so the call outlives the menu row's press, as the hook's contract asks — into the current session or a new one, appended, never sent. The user lands in the chat with:
 
 ```
 Revert commit a1b2c3d "Add lane layout" on feature/graph with git revert. If that commit is not part of feature/graph's history, say so and stop.
@@ -332,7 +334,7 @@ The History segment's query, beside `segment=history` and `session`:
 | `q` | the message search text | none |
 | `file` | a path relative to the repository root | none |
 
-They are carried by the history layers — `commit`, `commit-diff`, `commit-file` — as well, unlike the segment, which a layer implies ([git-ui.md](git-ui.md#routes-segments-and-back)): the list beside a commit at `expanded`, and the list `Back to history` returns to, must be the one the commit was picked from. Switching segment drops them; coming back to History is the default range, unfiltered. Switching worktree keeps `scope` and drops `q` and `file` — a path may not exist over there.
+They are carried by the history layers — `commit`, `commit-diff`, `commit-file` — as well (a commit opened from a branch carries `branch` instead, never both: [git-branches-ui.md](git-branches-ui.md#opening-a-commit)), unlike the segment, which a layer implies ([git-ui.md](git-ui.md#routes-segments-and-back)): the list beside a commit at `expanded`, and the list `Back to history` returns to, must be the one the commit was picked from. Switching segment drops them; coming back to History is the default range, unfiltered. Switching worktree keeps `scope` and drops `q` and `file` — a path may not exist over there.
 
 ## What the server answers
 
