@@ -205,7 +205,10 @@ function GitWorkspace({
 			}
 			case "commit-diff":
 				return (
+					// Per file, like the review: a line selection, and a failed
+					// handoff of it, are not the next file's.
 					<CommitDiffView
+						key={`${detail.hash}\0${detail.path}`}
 						hash={detail.hash}
 						path={detail.path}
 						actionsAt={actionsAt}

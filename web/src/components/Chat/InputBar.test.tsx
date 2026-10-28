@@ -17,7 +17,7 @@ import {
 	type ChatAttachment,
 	uploadChatAttachment,
 } from "../../lib/chatAttachments";
-import { useInputStore } from "../../lib/inputStore";
+import { inputActions, useInputStore } from "../../lib/inputStore";
 import {
 	resetChatUIConfig,
 	type SendOutcome,
@@ -911,10 +911,14 @@ describe("InputBar", () => {
 
 	// A prefill handed in from outside the chat (docs/agent-handoff-ui.md §1.3).
 	describe("prefill arrival", () => {
-		function prefilled(text: string, reveal: "ready" | "added") {
+		function prefilled(
+			text: string,
+			landed: "ready" | "added",
+			caret?: number,
+		) {
 			useInputStore.setState({
 				inputs: { [TEST_SESSION_ID]: text },
-				reveals: { [TEST_SESSION_ID]: reveal },
+				reveals: { [TEST_SESSION_ID]: { landed, caret } },
 			});
 		}
 
@@ -928,6 +932,32 @@ describe("InputBar", () => {
 			expect(screen.getByText("Added to your message.")).toBeInTheDocument();
 			expect(textbox.closest(".composer-arrival")).not.toBeNull();
 			expect(useInputStore.getState().reveals).toEqual({});
+		});
+
+		it("puts the caret under what went in at it", () => {
+			const draft = "Fix this\n\nCODE\n\nand that";
+			prefilled(draft, "added", "Fix this\n\nCODE\n".length);
+			render(<InputBar sessionId={TEST_SESSION_ID} onSend={sendAccepted} />);
+
+			const textbox = screen.getByRole<HTMLTextAreaElement>("textbox");
+			expect(textbox).toHaveFocus();
+			expect(draft.slice(textbox.selectionStart)).toBe("\nand that");
+		});
+
+		// The keyboard is already up, so moving the caret raises nothing.
+		it("moves the caret on a coarse pointer when the field has the keyboard", () => {
+			vi.mocked(useHasCoarsePointer).mockReturnValue(true);
+			useInputStore.setState({ inputs: { [TEST_SESSION_ID]: "Mine more" } });
+			render(<InputBar sessionId={TEST_SESSION_ID} onSend={sendAccepted} />);
+			const textbox = screen.getByRole<HTMLTextAreaElement>("textbox");
+			textbox.focus();
+			textbox.setSelectionRange(0, 0);
+
+			// Mid-draft: the end is where a new value leaves the caret anyway.
+			act(() => prefilled("Mine\n\nCODE\n\nmore", "added", 11));
+
+			expect(textbox).toHaveFocus();
+			expect(textbox.selectionStart).toBe(11);
 		});
 
 		it("raises no keyboard on a coarse pointer, and still rings", () => {
@@ -948,7 +978,9 @@ describe("InputBar", () => {
 				<InputBar sessionId={TEST_SESSION_ID} onSend={sendAccepted} disabled />,
 			);
 			expect(screen.queryByText("Message ready to send.")).toBeNull();
-			expect(useInputStore.getState().reveals[TEST_SESSION_ID]).toBe("ready");
+			expect(useInputStore.getState().reveals[TEST_SESSION_ID]).toEqual({
+				landed: "ready",
+			});
 
 			rerender(<InputBar sessionId={TEST_SESSION_ID} onSend={sendAccepted} />);
 			expect(screen.getByText("Message ready to send.")).toBeInTheDocument();
@@ -1016,11 +1048,97 @@ describe("InputBar", () => {
 		});
 
 		it("leaves another session's arrival alone", () => {
-			useInputStore.setState({ reveals: { other: "ready" } });
+			useInputStore.setState({ reveals: { other: { landed: "ready" } } });
 			render(<InputBar sessionId={TEST_SESSION_ID} onSend={sendAccepted} />);
 
 			expect(screen.queryByText("Message ready to send.")).toBeNull();
-			expect(useInputStore.getState().reveals).toEqual({ other: "ready" });
+			expect(useInputStore.getState().reveals).toEqual({
+				other: { landed: "ready" },
+			});
+		});
+	});
+
+	// Where a prefill put in at the caret goes (inputActions.registerCaret).
+	describe("caret for a prefill", () => {
+		it("offers none until the user has been in the field, then the caret's end", async () => {
+			const user = userEvent.setup();
+			useInputStore.setState({ inputs: { [TEST_SESSION_ID]: "Fix this" } });
+			const { unmount } = render(
+				<InputBar
+					sessionId={TEST_SESSION_ID}
+					onSend={sendAccepted}
+					focusOnOpen={false}
+				/>,
+			);
+			expect(inputActions.readCaret(TEST_SESSION_ID)).toBeNull();
+
+			const textbox = screen.getByRole<HTMLTextAreaElement>("textbox");
+			await user.click(textbox);
+			textbox.setSelectionRange(0, 3);
+			expect(inputActions.readCaret(TEST_SESSION_ID)).toBe(3);
+
+			unmount();
+			expect(inputActions.readCaret(TEST_SESSION_ID)).toBeNull();
+		});
+
+		// No focus event comes for a field that kept focus through the switch.
+		it("offers the caret of a field that kept focus into the next session", () => {
+			useInputStore.setState({ inputs: { next: "Hello" } });
+			const { rerender } = render(
+				<InputBar sessionId={TEST_SESSION_ID} onSend={sendAccepted} />,
+			);
+			expect(screen.getByRole("textbox")).toHaveFocus();
+
+			rerender(<InputBar sessionId="next" onSend={sendAccepted} />);
+
+			expect(inputActions.readCaret("next")).toBe(5);
+			expect(inputActions.readCaret(TEST_SESSION_ID)).toBeNull();
+		});
+
+		// Not wherever the browser left it on a first draw.
+		it("offers the end of a saved draft once it has focused the field itself", () => {
+			useInputStore.setState({ inputs: { [TEST_SESSION_ID]: "Fix this" } });
+			render(<InputBar sessionId={TEST_SESSION_ID} onSend={sendAccepted} />);
+
+			expect(screen.getByRole("textbox")).toHaveFocus();
+			expect(inputActions.readCaret(TEST_SESSION_ID)).toBe(8);
+		});
+
+		// Placing it would raise the keyboard; without it, a second insert
+		// would go under the user's last words rather than under the first.
+		it("holds an insert's caret on a touch screen until the user taps the field", async () => {
+			vi.mocked(useHasCoarsePointer).mockReturnValue(true);
+			const user = userEvent.setup();
+			render(<InputBar sessionId={TEST_SESSION_ID} onSend={sendAccepted} />);
+			act(() =>
+				useInputStore.setState({
+					inputs: { [TEST_SESSION_ID]: "Fix A\n\nCODE\n\nand B" },
+					reveals: { [TEST_SESSION_ID]: { landed: "added", caret: 12 } },
+				}),
+			);
+			const textbox = screen.getByRole<HTMLTextAreaElement>("textbox");
+			expect(textbox).not.toHaveFocus();
+			expect(inputActions.readCaret(TEST_SESSION_ID)).toBe(12);
+
+			await user.click(textbox);
+			textbox.setSelectionRange(2, 2);
+			expect(inputActions.readCaret(TEST_SESSION_ID)).toBe(2);
+		});
+
+		// Send again, say, rewrites the draft without the field being tapped.
+		it("drops a held caret once the draft is rewritten under it", () => {
+			vi.mocked(useHasCoarsePointer).mockReturnValue(true);
+			render(<InputBar sessionId={TEST_SESSION_ID} onSend={sendAccepted} />);
+			act(() =>
+				useInputStore.setState({
+					inputs: { [TEST_SESSION_ID]: "Fix A\n\nCODE\n\nand B" },
+					reveals: { [TEST_SESSION_ID]: { landed: "added", caret: 12 } },
+				}),
+			);
+
+			act(() => inputActions.set(TEST_SESSION_ID, "Another message entirely"));
+
+			expect(inputActions.readCaret(TEST_SESSION_ID)).toBeNull();
 		});
 	});
 

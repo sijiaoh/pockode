@@ -7,10 +7,12 @@ import {
 	History,
 	WrapText,
 } from "lucide-react";
-import { useMemo } from "react";
+import { useCallback, useMemo, useRef } from "react";
 import { useCommitDiff } from "../../hooks/useCommitDiff";
 import { useGitCommit } from "../../hooks/useGitCommit";
+import { usePrefillComposer } from "../../hooks/usePrefillComposer";
 import { useRouteState } from "../../hooks/useRouteState";
+import { type DiffHunk, parseHunks } from "../../lib/diffHunks";
 import { useDiffSettings, useGitDiffWrap } from "../../lib/diffSettingsStore";
 import { overlayToNavigation } from "../../lib/navigation";
 import { commitOriginOf, fileHistoryOverlay } from "../../types/overlay";
@@ -19,6 +21,9 @@ import { FilePageHeader } from "../Layout/PageHeader";
 import { ContentView, getActionIconButtonClass, ToggleIconButton } from "../ui";
 import DiffContent from "./DiffContent";
 import { DetailActionBar, type DetailActionsPlacement } from "./detailActions";
+import ErrorBanner from "./ErrorBanner";
+import HunkBar from "./HunkBar";
+import { useLineSelection } from "./useLineSelection";
 
 interface Props {
 	hash: string;
@@ -97,6 +102,33 @@ function CommitDiffView({ hash, path, actionsAt = "bottom" }: Props) {
 	};
 
 	const shortHash = hash.substring(0, 7);
+
+	// Lines selected for Copy and Ask AI, as in the review; the draft names
+	// the commit, since these lines are history and not what is on disk.
+	const prefill = usePrefillComposer();
+	const hunks = useMemo(
+		() => (diff && !diff.omitted ? parseHunks(diff.diff) : []),
+		[diff],
+	);
+	const bodyRef = useRef<HTMLDivElement>(null);
+	const { selectHunk, onLinePress, selectedLines, announcement, bar } =
+		useLineSelection({
+			path,
+			diff,
+			hunks,
+			source: { kind: "commit", hash },
+			scope: String(hideWhitespace),
+			bodyRef,
+			prefill,
+		});
+	// The review's bars without the stage button: a hunk's Select is the way
+	// to a selection without a pointer, and where focus goes back to.
+	const renderHunkBar = useCallback(
+		(hunk: DiffHunk, index: number) => (
+			<HunkBar hunk={hunk} index={index} onSelect={() => selectHunk(index)} />
+		),
+		[selectHunk],
+	);
 	// A commit that deletes a file holds no blob for it, so there is no version
 	// here to show. The reason travels with the control rather than leaving it
 	// silently greyed out, as with `getEditLabel`.
@@ -181,9 +213,30 @@ function CommitDiffView({ hash, path, actionsAt = "bottom" }: Props) {
 			<DetailActionBar end="top" placement={actionsAt}>
 				{actions}
 			</DetailActionBar>
+			{prefill.error && (
+				<ErrorBanner
+					summary={prefill.error.summary}
+					details={prefill.error.detail}
+					onDismiss={prefill.dismissError}
+				/>
+			)}
+			<p className="sr-only" aria-live="polite">
+				{announcement}
+			</p>
 			<ContentView isLoading={isLoading} error={error ?? undefined}>
-				{diff && <DiffContent data={diff} fileName={path} />}
+				{diff && (
+					<div ref={bodyRef}>
+						<DiffContent
+							data={diff}
+							fileName={path}
+							renderHunkBar={renderHunkBar}
+							onLinePress={onLinePress}
+							selectedLines={selectedLines}
+						/>
+					</div>
+				)}
 			</ContentView>
+			{bar}
 			<DetailActionBar end="bottom" placement={actionsAt}>
 				{actions}
 			</DetailActionBar>

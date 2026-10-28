@@ -682,10 +682,11 @@ it a step at a time, and Home and End jump to its limits. Its focus
 indicator is the same accent line that hover shows. A focus ring around an 8px
 strip would be drawn over the column's own border.
 
-#### The review's line numbers
+#### A diff's line numbers
 
-In the Git review a line's number cell selects the line, for handing it to the
-agent or copying it ([git-changes-ui.md](git-changes-ui.md#selecting)). A cell
+In the Git review and a commit's file diff a line's number cell selects the
+line, for handing it to the agent or copying it
+([git-changes-ui.md](git-changes-ui.md#selecting)). A cell
 is one line of code tall, about 20px on a phone. Growing every line to 44px
 would double the height of the code the review exists to read, and what a miss
 costs is small: it selects the neighbouring line, which shows at once in the

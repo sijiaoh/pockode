@@ -142,6 +142,34 @@ function InputBar({
 		setSelectedIndex(0);
 	}, [filter]);
 
+	// Where a prefill put in at the caret goes (`inputActions.registerCaret`).
+	// Placed means the field has been focused since it was drawn for this
+	// session, or is focused now: one that kept focus through a session switch
+	// is typed in without another focus event. Ahead of the autofocus below,
+	// so the reset never undoes the focus that gives.
+	//
+	// `heldCaret` is where an insert left it on a touch screen with the field
+	// unfocused: placing it there would raise the keyboard, and the DOM caret
+	// went to the end when the draft was written — so a second insert would
+	// land under the user's last words instead of under the first block. A tap
+	// in the field places the caret itself, and drops it; so does any other
+	// rewrite of the draft (Send again), which the offset no longer points into.
+	const caretPlaced = useRef(false);
+	const heldCaret = useRef<{ at: number; draft: string } | null>(null);
+	useEffect(() => {
+		caretPlaced.current = false;
+		heldCaret.current = null;
+		return inputActions.registerCaret(sessionId, () => {
+			const textarea = textareaRef.current;
+			if (!textarea) return null;
+			if (heldCaret.current?.draft === textarea.value) {
+				return heldCaret.current.at;
+			}
+			const placed = caretPlaced.current || document.activeElement === textarea;
+			return placed ? textarea.selectionEnd : null;
+		});
+	}, [sessionId]);
+
 	// Focus input on session change. Also re-runs when the bar is re-enabled: a
 	// switch disables it before this effect can focus, and without the second
 	// pass the input would stay unfocused on the session just opened.
@@ -167,7 +195,14 @@ function InputBar({
 		const requested = focusRequest !== answeredFocusRequest.current;
 		answeredFocusRequest.current = focusRequest;
 		if (!focusOnOpen && !requested) return;
-		if (!isPrimaryPointerCoarse) textareaRef.current?.focus();
+		const textarea = textareaRef.current;
+		if (isPrimaryPointerCoarse || !textarea) return;
+		if (document.activeElement === textarea) return;
+		textarea.focus();
+		// At the end: a field drawn with a saved draft can have its caret ahead
+		// of it, where typing — and a prefill at the caret — would go first.
+		const end = textarea.value.length;
+		textarea.setSelectionRange(end, end);
 	}, [sessionId, disabled, focusRequest, focusOnOpen]);
 
 	// A prefill handed in from outside the chat, made noticeable once
@@ -192,17 +227,26 @@ function InputBar({
 		inputActions.takeReveal(sessionId);
 		const textarea = textareaRef.current;
 		if (textarea) {
-			// Explicitly at the end: after an append, a caret anywhere else would be
-			// in the middle of the user's own words. The pointer gate is the
-			// autofocus rule's.
-			if (!isPrimaryPointerCoarse) {
+			// Explicitly at the end after an append: a caret anywhere else would be
+			// in the middle of the user's own words. After an insert, just under
+			// what went in. The pointer gate is the autofocus rule's — except that
+			// a field already holding the keyboard raises nothing, and its caret
+			// is where the next key goes.
+			const end = textarea.value.length;
+			const caret = Math.min(reveal.caret ?? end, end);
+			if (!isPrimaryPointerCoarse || document.activeElement === textarea) {
 				textarea.focus();
-				const end = textarea.value.length;
-				textarea.setSelectionRange(end, end);
+				textarea.setSelectionRange(caret, caret);
+				heldCaret.current = null;
+			} else {
+				heldCaret.current =
+					reveal.caret === undefined
+						? null
+						: { at: caret, draft: textarea.value };
 			}
-			textarea.scrollTop = textarea.scrollHeight;
+			scrollToCaret(textarea, caret);
 		}
-		setArrival(reveal);
+		setArrival(reveal.landed);
 	}, [reveal, disabled, isPageCovered, sessionId, isPrimaryPointerCoarse]);
 
 	useEffect(() => {
@@ -685,6 +729,10 @@ function InputBar({
 						onKeyDown={handleKeyDown}
 						onKeyUp={handleKeyUp}
 						onPaste={handlePaste}
+						onFocus={() => {
+							caretPlaced.current = true;
+							heldCaret.current = null;
+						}}
 						// The autosizer measures the placeholder when the draft is
 						// empty, so a reason that wraps on a narrow phone would grow
 						// the bar by a line exactly as a permission request arrives.
@@ -750,6 +798,20 @@ function InputBar({
 			</div>
 		</div>
 	);
+}
+
+/**
+ * Scrolls a field that has grown past its height to `caret`: to the bottom for
+ * one at the end, and with the caret's line mid-field otherwise, so the text
+ * just put in above it is in view.
+ */
+function scrollToCaret(textarea: HTMLTextAreaElement, caret: number) {
+	if (caret >= textarea.value.length) {
+		textarea.scrollTop = textarea.scrollHeight;
+		return;
+	}
+	const { top } = getCaretCoordinates(textarea, caret);
+	textarea.scrollTop = Math.max(0, top - textarea.clientHeight / 2);
 }
 
 export default InputBar;
