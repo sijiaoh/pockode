@@ -46,7 +46,7 @@ vi.mock("./CommitBar", () => ({
 		discardUnchecked && (
 			<button
 				type="button"
-				disabled={discardUnchecked.busy}
+				aria-disabled={discardUnchecked.busy || undefined}
 				onClick={discardUnchecked.onDiscard}
 			>
 				Discard unchecked…
@@ -263,7 +263,7 @@ describe("ChangesSection discard", () => {
 
 		expect(
 			screen.getByText(
-				"1 file will lose its edits and 1 untracked file will be deleted. This cannot be undone.",
+				"The unchecked edits in 1 file will be lost and 1 untracked file will be deleted. Checked changes are kept. This cannot be undone.",
 			),
 		).toBeInTheDocument();
 		await user.click(confirmButton("Discard"));
@@ -284,12 +284,27 @@ describe("ChangesSection discard", () => {
 		await user.click(discardUncheckedButton());
 		expect(
 			screen.getByText(
-				"Your edits to src/foo.ts will be lost. This cannot be undone.",
+				"Your unstaged edits to src/foo.ts will be lost. Its staged changes are kept. This cannot be undone.",
 			),
 		).toBeInTheDocument();
 		await user.click(confirmButton("Discard"));
 
 		expect(discard).toHaveBeenCalledWith(["src/foo.ts"]);
+	});
+
+	it("tells the row menu's discard of a partly staged file what it keeps", async () => {
+		const user = userEvent.setup();
+		status = {
+			staged: [{ path: "src/foo.ts", status: "M" }],
+			unstaged: [{ path: "src/foo.ts", status: "M" }],
+		};
+		renderSection();
+
+		await discardFromMenu(user, "src/foo.ts");
+
+		expect(
+			screen.getByRole("heading", { name: "Discard unstaged changes?" }),
+		).toBeInTheDocument();
 	});
 
 	it("offers no discard when every file is checked", () => {
@@ -314,10 +329,12 @@ describe("ChangesSection discard", () => {
 		renderSection();
 
 		await user.click(checkbox("Stage src/foo.ts"));
-		expect(discardUncheckedButton()).toBeDisabled();
+		expect(discardUncheckedButton()).toHaveAttribute("aria-disabled", "true");
 
 		await act(async () => finish());
-		await waitFor(() => expect(discardUncheckedButton()).toBeEnabled());
+		await waitFor(() =>
+			expect(discardUncheckedButton()).not.toHaveAttribute("aria-disabled"),
+		);
 	});
 
 	const GIT_ERROR =

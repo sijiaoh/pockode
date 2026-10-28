@@ -483,6 +483,23 @@ describe("DiffView bottom buttons", () => {
 		expect(navigate).toHaveBeenCalledWith(toList());
 	});
 
+	it("says a partly staged file keeps its staged side", async () => {
+		const user = userEvent.setup();
+		statusRef.current = {
+			staged: [{ path: "a.ts", status: "M" }],
+			unstaged: [{ path: "a.ts", status: "M" }],
+		};
+		render(<DiffView path="a.ts" staged={false} />);
+
+		await user.click(screen.getByRole("button", { name: "Discard file" }));
+		const dialog = await screen.findByRole("dialog");
+		expect(
+			within(dialog).getByText(
+				"Your unstaged edits to a.ts will be lost. Its staged changes are kept. This cannot be undone.",
+			),
+		).toBeInTheDocument();
+	});
+
 	it("discards the side on screen after confirming, then moves on", async () => {
 		const user = userEvent.setup();
 		render(<DiffView path="a.ts" staged={false} />);

@@ -25,6 +25,13 @@ function CommitBar({ discardUnchecked }: Props) {
 	const { data: status } = useGitStatus();
 	const [isOpen, setIsOpen] = useState(false);
 	const hintId = useId();
+	const heldId = useId();
+	// A press refused while busy: the reason stays up until the writes finish,
+	// and does not come back by itself on the next write — busy flips on every
+	// checkbox press, and a line that came and went with it would jolt the bar.
+	const [refused, setRefused] = useState(false);
+	const busy = discardUnchecked?.busy ?? false;
+	if (refused && !busy) setRefused(false);
 
 	const action = describeCommitAction(status);
 
@@ -50,17 +57,32 @@ function CommitBar({ discardUnchecked }: Props) {
 							{action.hint.text}
 						</span>
 					)}
+					{refused && (
+						<span
+							id={heldId}
+							className="mb-1.5 block text-xs text-th-text-muted"
+						>
+							Wait for the changes in progress to finish.
+						</span>
+					)}
 					{/* The review bar's gap, for the same reason: the button that takes
 					    something away is not flush against the one pressed all day. */}
 					<div className="flex gap-3">
 						{discardUnchecked && (
 							<button
 								type="button"
-								onClick={discardUnchecked.onDiscard}
 								// The write queue drops a path it already holds, so a
 								// discard now would skip those files and say nothing.
-								disabled={discardUnchecked.busy}
-								className="flex min-h-[44px] max-w-[50%] shrink-0 items-center justify-center rounded-lg bg-th-bg-tertiary px-4 text-center text-sm leading-tight text-th-error transition-opacity hover:opacity-90 focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent disabled:cursor-not-allowed disabled:opacity-50"
+								// `aria-disabled` rather than `disabled`, as `MenuRow` does:
+								// a press has to get through to be told why.
+								onClick={
+									busy ? () => setRefused(true) : discardUnchecked.onDiscard
+								}
+								aria-disabled={busy || undefined}
+								aria-describedby={refused ? heldId : undefined}
+								className={`flex min-h-[44px] max-w-[50%] shrink-0 items-center justify-center rounded-lg bg-th-bg-tertiary px-4 text-center text-sm leading-tight text-th-error transition-opacity focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent ${
+									busy ? "cursor-not-allowed opacity-50" : "hover:opacity-90"
+								}`}
 							>
 								{/* Wraps rather than truncates: at the sidebar's default width
 								    the label is wider than its half of the bar, and two lines

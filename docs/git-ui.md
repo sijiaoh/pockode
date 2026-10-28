@@ -470,14 +470,17 @@ Both always go through `ConfirmDialog` with `variant="danger"`, and the wording 
 | Target | Title | Message | Confirm |
 |--------|-------|---------|---------|
 | Tracked file (`M` / `D` / `R`) | Discard changes? | Your edits to src/foo.ts will be lost. This cannot be undone. | Discard |
+| Tracked file with a staged side too (partly staged) | Discard unstaged changes? | Your unstaged edits to src/foo.ts will be lost. Its staged changes are kept. This cannot be undone. | Discard |
 | Untracked file (`?`) | Delete file? | notes.txt is not tracked by git and will be permanently deleted. This cannot be undone. | Delete |
-| Mixed selection (all) | Discard all changes? | 3 files will lose their edits and 1 untracked file will be deleted. This cannot be undone. | Discard |
-| Tracked only (all) | Discard all changes? | 2 files will lose their edits. This cannot be undone. | Discard |
-| Untracked only (all) | Delete all files? | 2 untracked files will be permanently deleted. This cannot be undone. | Delete |
+| Several files, mixed (unchecked) | Discard unchecked changes? | The unchecked edits in 3 files will be lost and 1 untracked file will be deleted. Checked changes are kept. This cannot be undone. | Discard |
+| Several files, tracked only (unchecked) | Discard unchecked changes? | The unchecked edits in 2 files will be lost. Checked changes are kept. This cannot be undone. | Discard |
+| Several files, untracked only (unchecked) | Delete unchecked files? | 2 untracked files will be permanently deleted. Checked changes are kept. This cannot be undone. | Delete |
 
 The confirm button is labelled with the verb of the outcome rather than the default `Confirm`: it is the last thing read before something irreversible happens, and "Delete" against a title asking about deletion is the one word that has to be unambiguous.
 
-A batch of one — which `Discard unchecked…` produces whenever a single file is unstaged — takes the single-file wording, because naming the file beats counting it. The classification behind all of this belongs to the server: the list on screen is as old as its last refresh, and the request carries paths only (see [git.md](git.md#discard)).
+Every entry point discards a file's unstaged side only — restore comes from the index ([git.md](git.md#discard)) — so a partly staged file keeps its staged side, and its copy says so rather than "your edits", which would claim more than is lost. The action sheet, the review's `Discard file` and a batch of one all pick that variant the same way: the file has a staged side in the current status. Several files only ever come from `Discard unchecked…`, so their copy says "unchecked", never "all", and "Checked changes are kept" covers a partly checked file among them without singling it out.
+
+A batch of one — which `Discard unchecked…` produces whenever a single file is unstaged — takes the single-file wording, partly staged variant included, because naming the file beats counting it. The classification behind all of this belongs to the server: the list on screen is as old as its last refresh, and the request carries paths only (see [git.md](git.md#discard)).
 
 "This cannot be undone" is literal here: discarded worktree changes are not in the reflog, unlike nearly every other git mistake. That is why discard is the one file-level action in the workspace behind a modal.
 
