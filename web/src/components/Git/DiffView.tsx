@@ -95,7 +95,7 @@ import ConflictView, { useConflictFile } from "./ConflictView";
 import DiffContent from "./DiffContent";
 import ErrorBanner from "./ErrorBanner";
 import GitCommitSheet from "./GitCommitSheet";
-import HunkBar, { HUNK_BAR_ATTRIBUTE } from "./HunkBar";
+import HunkBar, { HUNK_BAR_ATTRIBUTE, HUNK_STAGE_ATTRIBUTE } from "./HunkBar";
 import LineSelectionBar from "./LineSelectionBar";
 
 interface Props {
@@ -341,9 +341,9 @@ function DiffView({ path, staged, showBack }: Props) {
 		() => (diff && !diff.omitted ? parseHunks(diff.diff) : []),
 		[diff],
 	);
-	// A box stages the ID at its hunk's index, which the server accepts as long
+	// A bar stages the ID at its hunk's index, which the server accepts as long
 	// as the ID is current: were its count and this parse ever to disagree, a
-	// box would stage a hunk other than the one it is drawn under.
+	// bar would stage a hunk other than the one it is drawn under.
 	const listedIds = diff && !diff.omitted ? diff.hunk_ids : undefined;
 	const hunkIds = listedIds?.length === hunks.length ? listedIds : undefined;
 	// Read when a write answers, which is later than the press's render.
@@ -426,10 +426,13 @@ function DiffView({ path, staged, showBack }: Props) {
 			if (scroller) {
 				scroller.scrollTop += bar.getBoundingClientRect().top - held.top;
 			}
+			// The last hunk left has no stage button of its own — the bottom
+			// bar's stages it — so focus goes on to its Select instead.
 			if (held.focused) {
-				bar
-					.querySelector<HTMLElement>('[role="checkbox"]')
-					?.focus({ preventScroll: true });
+				(
+					bar.querySelector<HTMLElement>(`[${HUNK_STAGE_ATTRIBUTE}]`) ??
+					bar.querySelector<HTMLElement>("button")
+				)?.focus({ preventScroll: true });
 			}
 		});
 		return () => cancelAnimationFrame(request);
@@ -490,7 +493,10 @@ function DiffView({ path, staged, showBack }: Props) {
 					staged={side}
 					onSelect={() => pressSelect.current(index)}
 					stage={
-						hunkId
+						// One hunk is the whole side: staging it is the bottom bar's
+						// button, which also covers what a hunk cannot carry (a mode
+						// change, a staged rename).
+						hunkId && (hunkIds?.length ?? 0) > 1
 							? { busy, onToggle: () => pressHunk.current(hunkId) }
 							: undefined
 					}
