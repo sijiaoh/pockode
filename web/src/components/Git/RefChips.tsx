@@ -25,12 +25,24 @@ const MAX_WIDTH: Record<ChipWidth, string> = {
 };
 
 /**
- * A row's ref markers, at the start of its second line. What a chip names is
- * told by its icon, never by its colour (docs/git-history-ui.md#ref-markers).
+ * A commit row's one-line layout gives way in the chips before the subject;
+ * a commit's page, in no such container, never matches it.
+ */
+const SHRINK: Record<ChipWidth, string> = {
+	narrow: "@git-commit-row:shrink @git-commit-row:min-w-10",
+	wide: "@git-commit-row:shrink @git-commit-row:min-w-10",
+	full: "",
+};
+
+/**
+ * A row's ref markers, at the start of its second line, or before the subject
+ * where the row is one line. What a chip names is told by its icon, never by
+ * its colour (docs/git-history-ui.md#ref-markers).
  *
  * `+N` is not a control: the whole row is the button that opens the commit,
  * where every ref is listed. Under a fine pointer it carries a `title` with
- * the names it hides, which hover may add and nothing needs.
+ * the names it hides, and each chip one with its whole name, which hover may
+ * add and nothing needs.
  */
 function RefChips({ chips, limit, color, width }: Props) {
 	const finePointer = useHasFinePointer();
@@ -46,6 +58,7 @@ function RefChips({ chips, limit, color, width }: Props) {
 					chip={chip}
 					color={color}
 					width={width}
+					title={finePointer ? chip.name : undefined}
 				/>
 			))}
 			{hidden.length > 0 && (
@@ -76,17 +89,20 @@ function Chip({
 	chip,
 	color,
 	width,
+	title,
 }: {
 	chip: RefChip;
 	color: string;
 	width: ChipWidth;
+	title: string | undefined;
 }) {
 	const here = chip.kind === "current" || chip.kind === "head";
 	const Icon =
 		chip.kind === "remote" ? Cloud : chip.kind === "tag" ? Tag : GitBranch;
 	return (
 		<span
-			className={`flex min-w-0 shrink-0 items-center gap-1 overflow-hidden rounded bg-th-bg-tertiary pr-1 leading-4 ${MAX_WIDTH[width]} ${
+			title={title}
+			className={`flex min-w-0 shrink-0 items-center gap-1 overflow-hidden rounded bg-th-bg-tertiary pr-1 leading-4 ${MAX_WIDTH[width]} ${SHRINK[width]} ${
 				here
 					? "font-medium text-th-text-primary ring-1 ring-th-accent ring-inset"
 					: "text-th-text-secondary"

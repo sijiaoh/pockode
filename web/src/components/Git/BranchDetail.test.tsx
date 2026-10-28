@@ -453,7 +453,9 @@ describe("BranchDetail", () => {
 				within(section).getByText("Older commits are on main too"),
 			).toBeInTheDocument();
 
-			await user.click(within(section).getByText("Draw the detail layer"));
+			await user.click(
+				within(section).getByRole("button", { name: /Draw the detail layer/ }),
+			);
 			expect(onSelectCommit).toHaveBeenCalledWith("a1".padEnd(40, "0"));
 		});
 

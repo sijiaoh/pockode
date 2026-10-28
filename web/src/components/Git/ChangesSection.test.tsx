@@ -752,6 +752,32 @@ describe("ChangesSection rows", () => {
 		expect(row("logo.png")).toHaveAccessibleDescription("Untracked Binary");
 	});
 
+	// Hover only: every one of these is also in the row's name or description.
+	it("gives each text that can be cut its full value as a title", () => {
+		status = {
+			staged: [
+				{
+					path: "src/components/Git/next.tsx",
+					status: "R",
+					orig_path: "lib/prev.tsx",
+				},
+			],
+			unstaged: [],
+		};
+		renderSection();
+
+		const row = screen.getByRole("button", {
+			name: "Review src/components/Git/next.tsx",
+		});
+		expect(within(row).getByTitle("next.tsx")).toHaveTextContent("next.tsx");
+		expect(within(row).getByTitle("src/components/Git")).toHaveTextContent(
+			"src/components/Git",
+		);
+		expect(
+			within(row).getByTitle("Renamed from lib/prev.tsx"),
+		).toBeInTheDocument();
+	});
+
 	it("marks a submodule's files", () => {
 		status = {
 			staged: [],

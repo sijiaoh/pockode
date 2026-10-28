@@ -264,7 +264,7 @@ function ChangesSection({
 			{/* No vertical padding here: the sticky header pins to this box's
 			    padding edge, and would leave a gap above it for rows to show
 			    through. */}
-			<div className="min-h-0 flex-1 overflow-y-auto">
+			<div className="@container min-h-0 flex-1 overflow-y-auto">
 				{isLoading ? (
 					<div className="flex items-center justify-center p-8">
 						<Spinner variant="current" className="text-th-text-muted" />

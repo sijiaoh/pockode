@@ -32,7 +32,7 @@ const KIND_WORD: Partial<Record<ChangeKind, string>> = {
 	deleted: "Deleted",
 };
 
-/** Line 2's status words, after the directory; none for a plain modification. */
+/** The details' status words, after the directory; none for a plain modification. */
 function statusWords(file: ChangedFile, kind: ChangeKind): string[] {
 	const words: string[] = [];
 	if (file.conflict) {
@@ -74,7 +74,7 @@ const ChangedFileRow = memo(function ChangedFileRow({
 	const { stem, extension: ext } = splitExtension(fileName);
 	const { lines, binary } = lineStatOf(file);
 	const dir = directory.replace(/\/$/, "");
-	const words = statusWords(file, kind);
+	const status = statusWords(file, kind).join(" · ");
 	const detailsId = useId();
 	const countsId = useId();
 
@@ -107,7 +107,7 @@ const ChangedFileRow = memo(function ChangedFileRow({
 						? `Review ${file.path}, conflicted`
 						: `Review ${file.path}`
 				}
-				// The name replaces the button's text, so what line 2 and the
+				// The name replaces the button's text, so what the details and the
 				// counts say — Deleted or Untracked before a discard — is
 				// handed back as its description. An id with no element is
 				// skipped.
@@ -116,32 +116,36 @@ const ChangedFileRow = memo(function ChangedFileRow({
 				style={{ paddingLeft: depth * TREE_INDENT }}
 				className="flex min-w-0 flex-1 items-center gap-2 self-stretch py-1.5 pr-1 text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent focus-visible:ring-inset"
 			>
-				<span className="min-w-0 flex-1">
+				<span className="min-w-0 flex-1 @git-row:flex @git-row:items-baseline @git-row:gap-3">
 					<span
-						className={`flex min-w-0 text-sm text-th-text-primary ${
+						title={fileName}
+						className={`flex min-w-0 text-sm text-th-text-primary @git-row:max-w-[60%] @git-row:shrink-0 ${
 							kind === "deleted" ? "*:line-through" : ""
 						}`}
 					>
 						<span className="truncate">{stem}</span>
 						<span className="shrink-0">{ext}</span>
 					</span>
-					{(dir || words.length > 0) && (
+					{(dir || status) && (
 						<span
 							id={detailsId}
-							className="flex min-w-0 text-xs text-th-text-muted"
+							className="flex min-w-0 text-xs text-th-text-muted @git-row:flex-1"
 						>
 							{/* From the head: the deepest folder is what tells files
 							    apart. `bdi` keeps rtl from reordering the path. */}
 							{dir && (
 								// Gives way before the status words, which say more.
-								<span className="min-w-0 shrink-[100] truncate [direction:rtl]">
+								<span
+									title={dir}
+									className="min-w-0 shrink-[100] truncate [direction:rtl]"
+								>
 									<bdi>{dir}</bdi>
 								</span>
 							)}
-							{words.length > 0 && (
-								<span className="min-w-0 shrink truncate">
+							{status && (
+								<span title={status} className="min-w-0 shrink truncate">
 									{dir && " · "}
-									{words.join(" · ")}
+									{status}
 								</span>
 							)}
 						</span>
