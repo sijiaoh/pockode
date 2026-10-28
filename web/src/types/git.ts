@@ -140,21 +140,41 @@ export interface GitCommit {
 /** Which commits the history lists (docs/git-history-ui.md#range). */
 export type GitHistoryScope = "current" | "all" | "mainline";
 
+/**
+ * The commits one branch has that the default branch lacks
+ * (`<default>..<branch>`): the ones behind the branch list's "ahead N".
+ * `branch` is the name the branch list shows — `GitBranch.name` for a
+ * local branch, `GitRemoteBranch.ref` for a remote-only one.
+ */
+export interface GitBranchRange {
+	scope: "branch";
+	branch: string;
+}
+
+/** What `git.log` walks: `branch` comes with the branch scope and only with it. */
+export type GitLogRange =
+	| { scope?: GitHistoryScope; branch?: never }
+	| GitBranchRange;
+
 /** Where a page of history ends, sent back as received for the next one. */
 export interface GitHistoryCursor {
 	tips: string[];
 	skip: number;
+	/**
+	 * Branch scope: the default branch, pinned so that merging the branch
+	 * between pages does not empty the pages still to come.
+	 */
+	exclude?: string[];
 }
 
-export interface GitLogParams {
-	scope?: GitHistoryScope;
+export type GitLogParams = GitLogRange & {
 	/** Case-insensitive plain text in the commit message. */
 	query?: string;
 	/** A path relative to the repository root. */
 	path?: string;
 	limit?: number;
 	cursor?: GitHistoryCursor;
-}
+};
 
 export interface GitLogResult {
 	commits: GitCommit[];
@@ -164,11 +184,15 @@ export interface GitLogResult {
 	unpushed_count?: number;
 	/** First page only: the oldest commits' parents are not in this clone. */
 	shallow?: boolean;
-	/** First page only, absent when the repository has none git can name. */
+	/**
+	 * First page only, absent when the repository has none git can name. In
+	 * the branch scope, the branch the range is taken against.
+	 */
 	default_branch?: string;
 	/**
 	 * First page only: the default branch's refs drawn as a line of their own
-	 * (walked from, not in HEAD's history), which lane 1 is kept for.
+	 * (walked from, not in HEAD's history), which lane 1 is kept for. Always
+	 * empty in the branch scope, which does not walk the default branch.
 	 */
 	default_line?: string[];
 }

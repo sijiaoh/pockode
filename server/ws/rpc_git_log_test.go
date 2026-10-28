@@ -43,6 +43,8 @@ func TestHandler_GitLog(t *testing.T) {
 		"unknown scope":  {Scope: "everything"},
 		"escaping path":  {Path: "../outside"},
 		"malformed tips": {Cursor: &git.HistoryCursor{Tips: []string{"HEAD"}}},
+		"unknown branch": {Scope: "branch", Branch: "nope"},
+		"stray branch":   {Branch: "main"},
 	} {
 		if resp := env.call("git.log", params); resp.Error == nil || resp.Error.Code != -32602 {
 			t.Errorf("git.log with %s = %+v, want invalid params", name, resp.Error)

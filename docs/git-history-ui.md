@@ -179,6 +179,8 @@ The range picker is a `Sheet` titled `Show`, three `MenuRow`s with a check on th
 | `All branches` | Every local branch and its upstream | `scope=all` |
 | `Mainline only` | This branch's own line — a merge shows as one commit | `scope=mainline` |
 
+`git.log`'s fourth scope, `branch` — one branch's own commits — is not a range here: it needs a branch beside it, and `scope=branch` in the URL would name none. The client asks for it with `useGitLog({ scope: "branch", branch })`, cached per branch, and `GitHistoryScope`, the picker's and the URL's type, leaves it out.
+
 `main` in the label and description is the repository's actual default branch name (`Current + master`). Where HEAD *is* the default branch, the label still says so — `Current + main` on `main` — since that is still what is listed. Where the server names none ([git.md](git.md#history) says when), the range is HEAD and its upstream alone and says so: `Current branch`, `This branch and its upstream`.
 
 Not a segmented control: three labels of this length do not fit beside the count and the search at 300px, and a second segmented control under the workspace's own would read as a second level of segments. Ordering is date order (children before parents, otherwise by date) in every range.

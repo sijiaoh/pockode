@@ -366,6 +366,126 @@ func TestHistory_SearchAndPath(t *testing.T) {
 	}
 }
 
+func TestHistory_BranchScope(t *testing.T) {
+	r := newHistoryRepo(t)
+	remote, cleanupRemote := setupBareRemote(t)
+	defer cleanupRemote()
+	r.commit("base", "file.txt")
+	r.git("remote", "add", "origin", remote)
+	r.git("push", "-q", "-u", "origin", "main")
+	r.git("checkout", "-q", "-b", "feature")
+	r.commit("f1", "feature.txt")
+	r.git("checkout", "-q", "main")
+	r.git("merge", "--no-ff", "--no-gpg-sign", "-m", "merge f1", "feature")
+	r.git("checkout", "-q", "feature")
+	r.commit("f2", "feature.txt")
+	r.commit("f3", "feature.txt")
+	r.git("checkout", "-q", "-b", "topic", "main")
+	r.commit("t1", "topic.txt")
+	r.git("push", "-q", "origin", "topic")
+	r.git("checkout", "-q", "main")
+	r.git("branch", "-q", "-D", "topic")
+
+	page := r.history(HistoryQuery{Scope: ScopeBranch, Branch: "feature"})
+	// f1 came into main with the merge, so only what the merge did not bring.
+	if got, want := subjects(page.Commits), []string{"f3", "f2"}; !slices.Equal(got, want) {
+		t.Errorf("feature = %v, want %v", got, want)
+	}
+	if page.UnpushedCount == nil || *page.UnpushedCount != 2 {
+		t.Errorf("feature unpushed_count = %v, want 2: main's unpushed merge is not the branch's", page.UnpushedCount)
+	}
+	if page.DefaultBranch != "main" || len(page.DefaultLine) != 0 {
+		t.Errorf("default_branch = %q, default_line = %v, want main and none", page.DefaultBranch, page.DefaultLine)
+	}
+
+	if got, want := subjects(r.history(HistoryQuery{Scope: ScopeBranch, Branch: "origin/topic"}).Commits), []string{"t1"}; !slices.Equal(got, want) {
+		t.Errorf("remote-only origin/topic = %v, want %v", got, want)
+	}
+	if got := r.history(HistoryQuery{Scope: ScopeBranch, Branch: "main"}).Commits; len(got) != 0 {
+		t.Errorf("default branch against itself = %v, want nothing", subjects(got))
+	}
+
+	// The cursor pins the default branch too: merging the branch between pages
+	// would otherwise empty the rest of a listing the client already has half of.
+	first := r.history(HistoryQuery{Scope: ScopeBranch, Branch: "feature", Limit: 1})
+	r.git("merge", "--no-ff", "--no-gpg-sign", "-m", "merge feature", "feature")
+	second := r.history(HistoryQuery{Scope: ScopeBranch, Branch: "feature", Limit: 1, Cursor: first.Next})
+	if got, want := subjects(second.Commits), []string{"f2"}; !slices.Equal(got, want) || second.Next != nil {
+		t.Errorf("second page = %v (next %v), want %v and no next", got, second.Next, want)
+	}
+}
+
+// A tag object a refspec maps under refs/remotes is no branch: the branch list
+// leaves it out, so it can neither be listed nor be the default compared with.
+func TestHistory_BranchScopeSkipsTagObjects(t *testing.T) {
+	r := newHistoryRepo(t)
+	remote, cleanupRemote := setupBareRemote(t)
+	defer cleanupRemote()
+	r.commit("base", "file.txt")
+	r.git("remote", "add", "origin", remote)
+	r.git("push", "-q", "origin", "main:master")
+	r.git("tag", "-a", "-m", "v1", "v1")
+	r.git("update-ref", "refs/remotes/origin/v1", "v1")
+	r.git("update-ref", "refs/remotes/origin/main", "v1")
+	r.git("checkout", "-q", "-b", "feature")
+	r.commit("f1", "feature.txt")
+	r.git("branch", "-q", "-D", "main")
+
+	if _, err := History(r.dir, HistoryQuery{Scope: ScopeBranch, Branch: "origin/v1"}); !errors.Is(err, ErrInvalidArgument) {
+		t.Errorf("tag object as branch: error = %v, want ErrInvalidArgument", err)
+	}
+	page := r.history(HistoryQuery{Scope: ScopeBranch, Branch: "feature"})
+	if got, want := subjects(page.Commits), []string{"f1"}; !slices.Equal(got, want) || page.DefaultBranch != "master" {
+		t.Errorf("feature = %v against %q, want %v against master", got, page.DefaultBranch, want)
+	}
+}
+
+// History's own default branch follows the remote the current branch tracks,
+// the branch list's follows origin; the range and the name it reports go by
+// the branch list's, which is the count the user saw.
+func TestHistory_BranchScopeNamesItsOwnDefaultBranch(t *testing.T) {
+	r := newHistoryRepo(t)
+	origin, cleanupOrigin := setupBareRemote(t)
+	defer cleanupOrigin()
+	fork, cleanupFork := setupBareRemote(t)
+	defer cleanupFork()
+	r.commit("base", "file.txt")
+	r.git("remote", "add", "origin", origin)
+	r.git("remote", "add", "fork", fork)
+	r.git("push", "-q", "origin", "main")
+	r.git("checkout", "-q", "-b", "trunk")
+	r.commit("trunk work", "trunk.txt")
+	r.git("push", "-q", "-u", "fork", "trunk")
+	r.git("remote", "set-head", "fork", "trunk")
+	r.git("branch", "-q", "-D", "main")
+	r.git("checkout", "-q", "-b", "feature")
+	r.commit("feature work", "feature.txt")
+	r.git("branch", "-q", "--set-upstream-to", "fork/trunk")
+
+	if got := r.history(HistoryQuery{}).DefaultBranch; got != "trunk" {
+		t.Fatalf("current scope default_branch = %q, want trunk: the setup no longer tells the two apart", got)
+	}
+	page := r.history(HistoryQuery{Scope: ScopeBranch, Branch: "feature"})
+	if page.DefaultBranch != "main" {
+		t.Errorf("branch scope default_branch = %q, want main", page.DefaultBranch)
+	}
+	if got, want := subjects(page.Commits), []string{"feature work", "trunk work"}; !slices.Equal(got, want) {
+		t.Errorf("feature = %v, want %v", got, want)
+	}
+}
+
+// With no default branch there is nothing to take the branch's commits from,
+// and listing all of them would pass for an answer.
+func TestHistory_BranchScopeWithoutDefaultBranch(t *testing.T) {
+	r := newHistoryRepo(t)
+	r.git("symbolic-ref", "HEAD", "refs/heads/trunk")
+	r.commit("only", "file.txt")
+
+	if _, err := History(r.dir, HistoryQuery{Scope: ScopeBranch, Branch: "trunk"}); !errors.Is(err, ErrInvalidArgument) {
+		t.Errorf("History() error = %v, want ErrInvalidArgument", err)
+	}
+}
+
 func TestHistory_InvalidArguments(t *testing.T) {
 	r := newHistoryRepo(t)
 	r.commit("only", "file.txt")
@@ -379,6 +499,13 @@ func TestHistory_InvalidArguments(t *testing.T) {
 		{"negative skip", HistoryQuery{Cursor: &HistoryCursor{Tips: []string{strings.Repeat("a", 40)}, Skip: -1}}},
 		{"option as tip", HistoryQuery{Cursor: &HistoryCursor{Tips: []string{"--all"}}}},
 		{"short hash as tip", HistoryQuery{Cursor: &HistoryCursor{Tips: []string{"abcdef1"}}}},
+		{"option as exclusion", HistoryQuery{Cursor: &HistoryCursor{Tips: []string{strings.Repeat("a", 40)}, Exclude: []string{"--all"}}}},
+		{"branch scope without a branch", HistoryQuery{Scope: ScopeBranch}},
+		{"branch without the branch scope", HistoryQuery{Branch: "main"}},
+		{"unknown branch", HistoryQuery{Scope: ScopeBranch, Branch: "nope"}},
+		{"option as branch", HistoryQuery{Scope: ScopeBranch, Branch: "--all"}},
+		{"revision as branch", HistoryQuery{Scope: ScopeBranch, Branch: "main~1"}},
+		{"range as branch", HistoryQuery{Scope: ScopeBranch, Branch: "main..main"}},
 		// git would take each line as a pattern of its own and match any.
 		{"multi-line search", HistoryQuery{Grep: "zzz\nonly"}},
 	}

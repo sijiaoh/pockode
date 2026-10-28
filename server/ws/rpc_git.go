@@ -340,6 +340,7 @@ func (h *rpcMethodHandler) handleGitLog(ctx context.Context, conn *jsonrpc2.Conn
 
 	page, err := git.History(wt.WorkDir, git.HistoryQuery{
 		Scope:  git.HistoryScope(params.Scope),
+		Branch: params.Branch,
 		Grep:   params.Query,
 		Path:   params.Path,
 		Limit:  params.Limit,

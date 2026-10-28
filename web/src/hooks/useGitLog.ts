@@ -1,7 +1,7 @@
 import { useInfiniteQuery } from "@tanstack/react-query";
 import { useIsGitRepo } from "../lib/worktreeStore";
 import { useWSStore } from "../lib/wsStore";
-import type { GitHistoryCursor } from "../types/git";
+import type { GitBranchRange, GitHistoryCursor } from "../types/git";
 import type { HistoryQuery } from "../types/overlay";
 import { gitLogQueryKey } from "./gitQueries";
 
@@ -9,7 +9,15 @@ import { gitLogQueryKey } from "./gitQueries";
 export const HISTORY_PAGE_SIZE = 100;
 
 /**
- * The History segment's commits, a page at a time.
+ * What `useGitLog` lists: one of the History segment's ranges, or the commits
+ * one branch has that the default branch lacks, each optionally filtered.
+ */
+export type GitLogQuery =
+	| HistoryQuery
+	| (GitBranchRange & Pick<HistoryQuery, "q" | "file">);
+
+/**
+ * A history listing's commits, a page at a time.
  *
  * Under `gitLogQueryKey`, so a `git.changed` re-reads the list on screen and
  * leaves every other range and filter stale for when it is next shown. An
@@ -17,16 +25,21 @@ export const HISTORY_PAGE_SIZE = 100;
  * taken from the page re-read before it, so rewritten history (an amend, a
  * pull) never leaves a page continuing from commits that no longer exist.
  */
-export function useGitLog(query: HistoryQuery) {
+export function useGitLog(query: GitLogQuery) {
 	const getLog = useWSStore((state) => state.actions.getLog);
 	const isGitRepo = useIsGitRepo();
-	const { scope, q = "", file = "" } = query;
+	const { q = "", file = "" } = query;
+	const range =
+		query.scope === "branch"
+			? { scope: query.scope, branch: query.branch }
+			: { scope: query.scope };
 
 	return useInfiniteQuery({
-		queryKey: [...gitLogQueryKey, scope, q, file],
+		// A branch name is never empty, so "" cannot collide with one.
+		queryKey: [...gitLogQueryKey, range.scope, range.branch ?? "", q, file],
 		queryFn: ({ pageParam }) =>
 			getLog({
-				scope,
+				...range,
 				...(q ? { query: q } : {}),
 				...(file ? { path: file } : {}),
 				limit: HISTORY_PAGE_SIZE,
