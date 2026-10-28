@@ -35,10 +35,11 @@ Copy below is the UI's English.
   ([git-ui.md](git-ui.md#the-composer)), and the way it hands work to the agent
   is to put the message in that one.
 - **Never over the user's words.** A half-written draft is the user's. A prefill
-  goes after it and never replaces it. This is the rule
+  goes after it — or, for a quotation, in at the user's caret
+  ([§1.2](#12-what-is-written)) — and never replaces any of it. This is the rule
   [discarded-messages-ui.md §5](discarded-messages-ui.md#5-what-restoring-does)
-  already set for *Restore to input*. Both are the same operation, so they share
-  one function.
+  already set for *Restore to input*. Appending is the same operation there and
+  here, so they share one function.
 - **The review row is live state, not an event.** It is drawn from the
   worktree's `git.status` as it is now. It is never written into history, never
   attached to a turn, and never left behind in the transcript. A card saying
@@ -103,6 +104,39 @@ The draft (`inputStore`) of the target session, on this device:
   (`ChatPanel`'s `handleFork`). That way the composer is never on screen empty
   for a frame and then filled.
 
+#### In at the caret
+
+The hook has two calls. `prefill(text)` is the table above: a whole message,
+appended. `insert(text)` is for a quotation — lines of code, a diff — that goes
+with words the user is writing (today only `Ask AI to edit…`,
+[git-changes-ui.md](git-changes-ui.md#the-selection-bar)): someone who has typed
+"rename this, and also" and then picks the lines wants them there, not under
+everything else. Everything else — the target, a new session, pending, the
+error, the push — is one implementation, and the two differ only here:
+
+| | Draft after `insert` |
+|---|---|
+| The composer is on the page ([§1.3](#13-landing-in-the-composer)) and the user has placed its caret | The text in at the caret as a **block of its own**: a blank line apart from the user's words on either side, so a fence never starts mid-line. With a selection in the field, in after it. Only the blank space at the cut gives way; the next line keeps its indent. A caret inside a fenced block (one inserted earlier, clicked into to reread it) puts the text after that block's closing fence instead: a block in there would split the fence |
+| Already contains the text verbatim | Unchanged, the caret where it was — the rule above. A caret moved onto the fence's line would break the block with the next key |
+| The composer is not on the page, is a registry bar, or its caret was never placed | `prefill`'s append, from the table above |
+
+- **A placed caret is one the user put there**: the field has been focused
+  since it was drawn for this session, or is focused now. A caret nobody placed
+  is wherever the browser left it — often the start of a saved draft — and no
+  place to put anything. (A fine pointer's autofocus puts it at the end of the
+  draft for the same reason.)
+- **The caret is read at the press, live, not recorded.** It moves with every
+  key, and a press that keeps the keyboard up (the selection bar's) leaves
+  focus in the field, so no blur would have recorded the last move. The
+  default `InputBar` registers a reader per session (`inputActions.registerCaret`)
+  and the hook asks it (`readCaret`); a bar that is not mounted has no reader,
+  which is the append.
+- **Where typing goes on** is a fresh line under the block, for the instruction
+  it was put there to go with: at the end of the draft when the block is last
+  (it is followed by a blank line), or the blank line between the block and the
+  user's words after it. The reveal carries that offset
+  ([§1.3](#13-landing-in-the-composer)).
+
 ### 1.3 Landing in the composer
 
 Where the text is shown depends on whether the target's composer is already on
@@ -115,7 +149,7 @@ the page:
 | A new session ([§1.4](#14-no-current-session)) | Pushed, from any page: whatever composer is on the page is not the target's |
 
 The push keeps Back meaningful: Back returns to the Git screen the user came
-from, with its selection and scroll (a review's selected lines excepted,
+from, with its selection and scroll (a diff's selected lines excepted,
 [git-changes-ui.md](git-changes-ui.md#selecting)), if the user decides not to send
 after all.
 
@@ -124,8 +158,8 @@ and each one has a reason:
 
 | | Fine pointer | Coarse pointer |
 |---|---|---|
-| Caret | In the textarea, **at the end of the text**. Set explicitly, not left to where a browser puts the caret when a value changes under a textarea that is not mounted yet. After an append, a caret anywhere else would be in the middle of the user's own words | Not focused. The soft keyboard is not raised. This is the composer's existing rule ([InputBar](agent-chat.md#the-session-screen), *Restore to input*): the keyboard would cover half the transcript the user came back to read, and Send can be pressed without it |
-| Textarea scroll | Scrolled to its end, so the prefill is what shows when the draft is taller than the box's maximum height | same |
+| Caret | In the textarea, **at the end of the text** — or, after an insert, on the line under the block ([§1.2](#in-at-the-caret)). Set explicitly, not left to where a browser puts the caret when a value changes under a textarea that is not mounted yet. After an append, a caret anywhere else would be in the middle of the user's own words | Not focused. The soft keyboard is not raised. This is the composer's existing rule ([InputBar](agent-chat.md#the-session-screen), *Restore to input*): the keyboard would cover half the transcript the user came back to read, and Send can be pressed without it. **Unless the field already has focus** — the keyboard is up, the user was typing when they pressed — when the caret is set as on a fine pointer: that raises nothing, and it is where the next key goes. An insert into an unfocused field remembers its offset instead, so a second insert lands under the first block rather than at the end; a tap in the field places the caret itself and drops it, and so does any other rewrite of the draft (*Send again*), which the offset no longer points into |
+| Textarea scroll | Scrolled to its end, so the prefill is what shows when the draft is taller than the box's maximum height. After an insert with words below it, scrolled to put the caret's line mid-field, so the block just put in above it is in view | same |
 | Ring | The composer's box (the reading column it is held to) wears a 2px inset `th-accent` ring for about half a second, which then fades out over about a second, once | same. The ring is the only visible sign on a touch screen, because nothing takes focus there |
 
 - **The ring borrows the jump's grammar.** `MessageList`'s jump rings the card
@@ -228,10 +262,11 @@ send mid-turn is the user's call, in the composer.
 
 | Piece | Place | Note |
 |---|---|---|
-| Merging text into a draft | `utils/discardedMessage.ts`'s text half of `restoreIntoDraft`, moved to a neutral `utils/draftText.ts` (`appendToDraft(draft, text)`) | *Restore to input* and the handoff call the one function, so "never over the user's words" has one definition |
-| The handoff | `hooks/usePrefillComposer.ts`, returning `prefill(text)`, `isPending`, `error` and `dismissError` | Resolves the target ([§1.1](#11-which-session)), creates if needed, writes, files the reveal request, pushes the route unless the composer is already on the page ([§1.3](#13-landing-in-the-composer)). Every later entry calls this; none writes `inputStore` itself |
+| Merging text into a draft | `utils/discardedMessage.ts`'s text half of `restoreIntoDraft`, moved to a neutral `utils/draftText.ts` (`appendToDraft(draft, text)`), beside `insertIntoDraft(draft, text, at)`, which returns the draft and where the caret goes | *Restore to input* and the handoff call the one append, so "never over the user's words" has one definition; the insert keeps the same two rules |
+| The handoff | `hooks/usePrefillComposer.ts`, returning `prefill(text)`, `insert(text)`, `isPending`, `error` and `dismissError` | Resolves the target ([§1.1](#11-which-session)), creates if needed, writes, files the reveal request, pushes the route unless the composer is already on the page ([§1.3](#13-landing-in-the-composer)). Every later entry calls this; none writes `inputStore` itself |
+| The composer's caret | `inputActions.registerCaret` / `readCaret` in `inputStore`: a module-level map of readers by session, not store state — nothing renders from it | Registered by `InputBar` while it draws the session, unregistered on unmount |
 | Whether the composer is on the page | `overlayKeepsComposer` in `types/overlay.ts` | The one rule, read by `ChatPanel`, which draws the composer, and by the handoff |
-| The reveal request | `inputStore`, a non-persisted one-shot keyed by session (`reveals`, `requestReveal`, `takeReveal`) | Consumed by `InputBar` |
+| The reveal request | `inputStore`, a non-persisted one-shot keyed by session (`reveals`, `requestReveal`, `takeReveal`): `PrefillReveal`, how the text landed (`ready` / `added`) and, after an insert, the caret offset | Consumed by `InputBar` |
 | Creating the session | `lib/sessionCreate.ts` (`createSession`) | The one create `useSession` and the handoff share, so concurrent callers join one request |
 | The ring | `.composer-arrival` in `index.css` | A keyframe animation, so the ring is there at once and only its going fades |
 
@@ -405,14 +440,16 @@ must: the action is never cut.
    chat goes through `usePrefillComposer`. None writes `inputStore` itself, and
    none sends.
 2. **Append, never replace, never ask.** One function, shared with *Restore to
-   input*. The same text twice is added once.
+   input*. The same text twice is added once. A quotation goes in at a caret
+   the user placed instead, as a block of its own, by the same two rules.
 3. **The current session is the workspace URL's `session` if this worktree
    holds its detail.** Otherwise a new session is created in the workspace's worktree
    on the default engine. This is the same rule that picks the AI draft's
    engine.
 4. **Land where the composer is, and land visibly.** In place under a Git
-   detail, pushed into the chat otherwise. Caret at the end on a fine pointer,
-   no keyboard on a coarse one, the textarea scrolled to the end, an accent
+   detail, pushed into the chat otherwise. Caret at the end (under an insert)
+   on a fine pointer, no keyboard raised on a coarse one, the textarea scrolled
+   to the caret, an accent
    ring once, one polite announcement — once nothing covers the page.
 5. **The review row is live state.** It is drawn from `git.status`, never
    recorded, and gone the moment the condition is.

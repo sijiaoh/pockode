@@ -275,7 +275,22 @@ export const PREFILL_MAX_ROWS = 200;
 
 const MARKER = { context: " ", added: "+", removed: "-" } as const;
 
-function versionLabel(side: "old" | "new", staged: boolean): string {
+/**
+ * What a diff compares: a side of the working tree's changes in the review,
+ * or a commit against its parent in the history.
+ */
+export type DiffSource =
+	| { kind: "review"; staged: boolean }
+	| { kind: "commit"; hash: string };
+
+function versionLabel(side: "old" | "new", source: DiffSource): string {
+	// A commit's lines are history: said so, or the agent edits the file as
+	// though they were what is on disk now.
+	if (source.kind === "commit") {
+		const at = side === "new" ? "as of" : "before";
+		return `${at} commit ${source.hash}, not the working tree`;
+	}
+	const { staged } = source;
 	if (side === "new") return staged ? "staged" : "working tree";
 	// The unstaged side's old version is the index, which is HEAD's content
 	// when nothing is staged.
@@ -307,17 +322,17 @@ export function selectionPrefillText({
 	selected,
 	view,
 	description,
-	staged,
+	source,
 	isShown,
 }: {
 	path: string;
 	selected: DiffRow[];
 	view: LineView;
 	description: RangeDescription;
-	staged: boolean;
+	source: DiffSource;
 	isShown: (row: DiffRow) => boolean;
 }): string {
-	const head = `\`${path}\`, ${description.label} (${versionLabel(description.side, staged)})`;
+	const head = `\`${path}\`, ${description.label} (${versionLabel(description.side, source)})`;
 	const body: string[] = [];
 	let hidden = 0;
 	let shown = 0;

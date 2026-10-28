@@ -51,6 +51,7 @@ const contentsRef = vi.hoisted(() => ({
 	},
 }));
 const prefill = vi.hoisted(() => vi.fn());
+const insert = vi.hoisted(() => vi.fn());
 
 vi.mock("@pockode/shared", async (importOriginal) => ({
 	...(await importOriginal<typeof import("@pockode/shared")>()),
@@ -106,6 +107,7 @@ vi.mock("../../hooks/useGitDiffWatch", () => ({
 vi.mock("../../hooks/usePrefillComposer", () => ({
 	usePrefillComposer: () => ({
 		prefill,
+		insert,
 		isPending: false,
 		error: null,
 		dismissError: () => {},
@@ -191,6 +193,7 @@ beforeEach(() => {
 	discard.mockReset().mockResolvedValue(undefined);
 	diffWatch.mockReset();
 	prefill.mockReset().mockResolvedValue(undefined);
+	insert.mockReset().mockResolvedValue(undefined);
 	Object.assign(contentsRef.current, {
 		data: undefined,
 		isLoading: false,
@@ -1324,7 +1327,7 @@ describe("DiffView line selection", () => {
 		expect(bar()).toHaveTextContent("Lines 10–12");
 
 		await user.click(screen.getByRole("button", { name: "Ask AI to edit…" }));
-		expect(prefill).toHaveBeenCalledWith(
+		expect(insert).toHaveBeenCalledWith(
 			[
 				"`a.ts`, lines 10–12 (working tree):",
 				"",
@@ -1355,7 +1358,7 @@ describe("DiffView line selection", () => {
 
 		await user.click(screen.getByRole("button", { name: "Copy" }));
 		await user.click(screen.getByRole("button", { name: "Ask AI to edit…" }));
-		expect(prefill).toHaveBeenCalled();
+		expect(insert).toHaveBeenCalled();
 		expect(field).toHaveFocus();
 	});
 
@@ -1528,7 +1531,7 @@ describe("DiffView line selection", () => {
 		).toHaveLength(1);
 
 		await user.click(screen.getByRole("button", { name: "Ask AI to edit…" }));
-		expect(prefill.mock.calls[0][0]).toContain(
+		expect(insert.mock.calls[0][0]).toContain(
 			"\n line 13\n… 13 unchanged lines …\n line 27\n",
 		);
 	});

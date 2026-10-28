@@ -3,6 +3,7 @@ import { parseHunks } from "./diffHunks";
 import {
 	applyPress,
 	buildDiffRows,
+	type DiffSource,
 	describeRange,
 	type GutterLine,
 	hunkLineRange,
@@ -131,9 +132,9 @@ describe("selectionPrefillText", () => {
 	const prefill = (
 		r: LineRange,
 		{
-			staged = false,
+			source = { kind: "review", staged: false },
 			shown = (_: string): boolean => true,
-		}: { staged?: boolean; shown?: (key: string) => boolean } = {},
+		}: { source?: DiffSource; shown?: (key: string) => boolean } = {},
 	) => {
 		const s = selected(r);
 		return selectionPrefillText({
@@ -141,7 +142,7 @@ describe("selectionPrefillText", () => {
 			selected: s,
 			view: r.view,
 			description: describeRange(s, r.view),
-			staged,
+			source,
 			isShown: (row) => shown(rowKey(row, r.view) ?? ""),
 		});
 	};
@@ -171,7 +172,19 @@ describe("selectionPrefillText", () => {
 		{ r: range("old", "o2"), staged: false, version: "index" },
 		{ r: range("old", "o2"), staged: true, version: "HEAD" },
 	])("names the $version version", ({ r, staged, version }) => {
-		expect(prefill(r, { staged }).split("\n")[0]).toMatch(`(${version}):`);
+		const source: DiffSource = { kind: "review", staged };
+		expect(prefill(r, { source }).split("\n")[0]).toMatch(`(${version}):`);
+	});
+
+	// A commit's lines are not what is on disk, and the draft has to say so.
+	it.each([
+		{ r: range("unified", "n2"), version: "as of commit abc1234" },
+		{ r: range("old", "o2"), version: "before commit abc1234" },
+	])("names a commit's lines $version as history", ({ r, version }) => {
+		const source: DiffSource = { kind: "commit", hash: "abc1234" };
+		expect(prefill(r, { source }).split("\n")[0]).toMatch(
+			`(${version}, not the working tree):`,
+		);
 	});
 
 	it("makes the fence longer than any run of backticks in the code", () => {
@@ -186,7 +199,7 @@ describe("selectionPrefillText", () => {
 			selected: s,
 			view: "unified",
 			description: describeRange(s, "unified"),
-			staged: false,
+			source: { kind: "review", staged: false },
 			isShown: () => true,
 		});
 		expect(text).toContain("\n`````diff\n");
@@ -210,7 +223,7 @@ describe("selectionPrefillText", () => {
 				selected: s,
 				view: "unified",
 				description: describeRange(s, "unified"),
-				staged: false,
+				source: { kind: "review", staged: false },
 				isShown: () => true,
 			}),
 		).toBe(`\`a.ts\`, lines 1–${length} (working tree).`);
@@ -313,7 +326,7 @@ describe("buildDiffRows at the ends of a file's life", () => {
 				selected: s,
 				view: "old",
 				description: describeRange(s, "old"),
-				staged: false,
+				source: { kind: "review", staged: false },
 				isShown: () => true,
 			}),
 		).toContain("\n line\t5\n");

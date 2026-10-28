@@ -1,8 +1,8 @@
 import { useNavigate, useRouter } from "@tanstack/react-router";
 import { useCallback, useRef, useState } from "react";
 import {
-	type ComposerReveal,
 	inputActions,
+	type PrefillReveal,
 	useInputStore,
 } from "../lib/inputStore";
 import { buildNavigation } from "../lib/navigation";
@@ -14,7 +14,7 @@ import {
 import { useWorktreeStore } from "../lib/worktreeStore";
 import { isWorktreeSwitchInFlight } from "../lib/wsStore";
 import { overlayKeepsComposer } from "../types/overlay";
-import { appendToDraft } from "../utils/draftText";
+import { appendToDraft, insertIntoDraft } from "../utils/draftText";
 import type { GitFailure } from "../utils/gitErrors";
 import { useRouteState } from "./useRouteState";
 
@@ -26,6 +26,14 @@ export interface PrefillComposer {
 	 * appended to a draft would go out as plain text.
 	 */
 	prefill: (text: string) => Promise<void>;
+	/**
+	 * `prefill` for a quotation — lines of code, a diff — that goes with words
+	 * the user is writing: where the composer is on the page, it goes in at
+	 * the composer's caret instead of after the draft, and the caret ends up
+	 * under it. Everything else is `prefill`'s, including a new session and
+	 * the push to it.
+	 */
+	insert: (text: string) => Promise<void>;
 	/** A session is being created for the text; the pressed entry shows it. */
 	isPending: boolean;
 	/** The create failed, in the shape the Git workspace's banner takes. */
@@ -65,8 +73,8 @@ export function usePrefillComposer(): PrefillComposer {
 	routeRef.current = { sessionId, worktree, overlay };
 	const pendingRef = useRef(false);
 
-	const prefill = useCallback(
-		async (text: string) => {
+	const handOff = useCallback(
+		async (text: string, atCaret: boolean) => {
 			if (pendingRef.current) return;
 			const { sessionId, worktree, overlay } = routeRef.current;
 			const pressedAt = router.state.location.href;
@@ -110,16 +118,21 @@ export function usePrefillComposer(): PrefillComposer {
 					}
 				}
 
+				const stays = target === sessionId && overlayKeepsComposer(overlay);
 				// Before navigating, so the composer is never on screen empty for a
 				// frame.
-				const reveal = writeDraft(target, text);
+				const reveal = writeDraft(
+					target,
+					text,
+					atCaret && stays ? inputActions.readCaret(target) : null,
+				);
 				// A user who moved on while the session was being created has gone
 				// somewhere of their own, and is not pulled away from it; the text
 				// waits in the new session's draft, with nothing to announce on a
 				// later visit.
 				if (router.state.location.href !== pressedAt) return;
 				inputActions.requestReveal(target, reveal);
-				if (target === sessionId && overlayKeepsComposer(overlay)) return;
+				if (stays) return;
 				await navigate(
 					buildNavigation({ type: "session", worktree, sessionId: target }),
 				);
@@ -130,14 +143,36 @@ export function usePrefillComposer(): PrefillComposer {
 		[navigate, router],
 	);
 
+	const prefill = useCallback(
+		(text: string) => handOff(text, false),
+		[handOff],
+	);
+	const insert = useCallback((text: string) => handOff(text, true), [handOff]);
 	const dismissError = useCallback(() => setError(null), []);
 
-	return { prefill, isPending, error, dismissError };
+	return { prefill, insert, isPending, error, dismissError };
 }
 
-function writeDraft(sessionId: string, text: string): ComposerReveal {
+/** `caret` is the composer's, or null to append. */
+function writeDraft(
+	sessionId: string,
+	text: string,
+	caret: number | null,
+): PrefillReveal {
 	const before = useInputStore.getState().inputs[sessionId] ?? "";
-	const after = appendToDraft(before, text);
-	if (after !== before) inputActions.set(sessionId, after);
-	return after === text.trim() ? "ready" : "added";
+	if (caret === null) {
+		const after = appendToDraft(before, text);
+		if (after !== before) inputActions.set(sessionId, after);
+		return { landed: after === text.trim() ? "ready" : "added" };
+	}
+	const inserted = insertIntoDraft(
+		before,
+		text,
+		Math.min(caret, before.length),
+	);
+	if (inserted.draft !== before) inputActions.set(sessionId, inserted.draft);
+	return {
+		landed: inserted.draft.trim() === text.trim() ? "ready" : "added",
+		caret: inserted.caret,
+	};
 }

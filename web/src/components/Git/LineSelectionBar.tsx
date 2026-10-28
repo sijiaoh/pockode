@@ -28,10 +28,11 @@ const buttonClass =
 	"flex min-h-9 shrink-0 items-center justify-center gap-1.5 rounded-lg bg-th-bg-tertiary px-3 text-sm text-th-text-primary transition-opacity hover:opacity-90 pointer-coarse:min-h-11 focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent";
 
 /**
- * What can be done with the lines selected in the review: copy them, or hand
- * them to the agent (docs/git-changes-ui.md#the-selection-bar). Docked above
- * the review's bottom bar rather than beside the selection, and not portalled,
- * so it goes with the page.
+ * What can be done with the lines selected in a diff — the review's or a
+ * commit's: copy them, or hand them to the agent
+ * (docs/git-changes-ui.md#the-selection-bar). Docked above the page's bottom
+ * bar rather than beside the selection, and not portalled, so it goes with
+ * the page.
  */
 function LineSelectionBar({
 	label,
@@ -67,7 +68,7 @@ function LineSelectionBar({
 			// A press leaves the caret in a field being typed in. The bar stays
 			// up while the composer holds the keyboard, since that is when code
 			// is inserted; a press that took focus would drop the keyboard, and
-			// bring the review's bar back under this one before its own click
+			// bring the page's bar back under this one before its own click
 			// arrived (`DetailActionsPlacement`). Anywhere else the press takes
 			// focus as usual, for the page to put back when the bar goes.
 			onMouseDown={(event) => {

@@ -1,6 +1,6 @@
 import { act, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { useInputStore } from "../lib/inputStore";
+import { inputActions, useInputStore } from "../lib/inputStore";
 import { WT_ROUTES } from "../lib/routes";
 import { useSessionDetailStore } from "../lib/sessionDetailStore";
 import { useWorktreeStore } from "../lib/worktreeStore";
@@ -39,7 +39,7 @@ vi.mock("../lib/wsStore", () => ({
 
 // The composer must never be on screen empty for a frame, so the draft is
 // read at the moment of the push.
-let draftWhenPushed: { text?: string; reveal?: string } | null = null;
+let draftWhenPushed: { text?: string; reveal?: unknown } | null = null;
 
 function pushedSession(): string | undefined {
 	const [target] = route.navigate.mock.calls.at(-1) ?? [];
@@ -79,7 +79,10 @@ describe("usePrefillComposer", () => {
 
 		expect(pushedSession()).toBe("s1");
 		expect(route.navigate).toHaveBeenCalledTimes(1);
-		expect(draftWhenPushed).toEqual({ text: "Explain this", reveal: "ready" });
+		expect(draftWhenPushed).toEqual({
+			text: "Explain this",
+			reveal: { landed: "ready" },
+		});
 		expect(createSession).not.toHaveBeenCalled();
 	});
 
@@ -93,7 +96,7 @@ describe("usePrefillComposer", () => {
 
 		expect(route.navigate).not.toHaveBeenCalled();
 		expect(useInputStore.getState().inputs.s1).toBe("Explain this");
-		expect(useInputStore.getState().reveals.s1).toBe("ready");
+		expect(useInputStore.getState().reveals.s1).toEqual({ landed: "ready" });
 	});
 
 	// The composer on the page is the route session's, not the new one's.
@@ -137,7 +140,63 @@ describe("usePrefillComposer", () => {
 		await act(() => result.current.prefill("Explain this"));
 
 		expect(useInputStore.getState().inputs.s1).toBe("Mine\n\nExplain this");
-		expect(useInputStore.getState().reveals.s1).toBe("added");
+		expect(useInputStore.getState().reveals.s1).toEqual({ landed: "added" });
+	});
+
+	describe("insert", () => {
+		const diffOverlay: OverlayState = {
+			type: "diff",
+			path: "a.ts",
+			staged: false,
+		};
+		let unregister = () => {};
+		const caretAt = (caret: number | null) => {
+			unregister = inputActions.registerCaret("s1", () => caret);
+		};
+		afterEach(() => unregister());
+
+		it("goes in at the composer's caret on the page, and leaves the caret under it", async () => {
+			route.overlay = diffOverlay;
+			useInputStore.setState({ inputs: { s1: "Fix this and that" } });
+			caretAt(9);
+			const { result } = renderHook(() => usePrefillComposer());
+
+			await act(() => result.current.insert("CODE"));
+
+			expect(route.navigate).not.toHaveBeenCalled();
+			expect(useInputStore.getState().inputs.s1).toBe(
+				"Fix this\n\nCODE\n\nand that",
+			);
+			expect(useInputStore.getState().reveals.s1).toEqual({
+				landed: "added",
+				caret: "Fix this\n\nCODE\n".length,
+			});
+		});
+
+		// A caret the user never placed is no place to put anything.
+		it("goes after the draft when the composer has no caret to offer", async () => {
+			route.overlay = diffOverlay;
+			useInputStore.setState({ inputs: { s1: "Mine" } });
+			caretAt(null);
+			const { result } = renderHook(() => usePrefillComposer());
+
+			await act(() => result.current.insert("CODE"));
+
+			expect(useInputStore.getState().inputs.s1).toBe("Mine\n\nCODE");
+			expect(useInputStore.getState().reveals.s1).toEqual({ landed: "added" });
+		});
+
+		// The caret is the page's composer's; the chat it pushes is another.
+		it("appends and pushes the chat when the composer is not on the page", async () => {
+			useInputStore.setState({ inputs: { s1: "Mine" } });
+			caretAt(0);
+			const { result } = renderHook(() => usePrefillComposer());
+
+			await act(() => result.current.insert("CODE"));
+
+			expect(pushedSession()).toBe("s1");
+			expect(useInputStore.getState().inputs.s1).toBe("Mine\n\nCODE");
+		});
 	});
 
 	// Absent, deleted, or another worktree's: the detail held is what decides.

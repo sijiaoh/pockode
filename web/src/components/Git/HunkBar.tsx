@@ -7,14 +7,15 @@ import { iconButtonClass } from "../ui/iconButtonClass";
 interface Props {
 	hunk: DiffHunk;
 	index: number;
-	/** Whether the side on screen is the staged one: the button unstages there. */
-	staged: boolean;
 	/**
-	 * Absent when the server sent no ID for the hunk, which cannot be staged as
-	 * shown, and when it is the side's only hunk, which the bottom bar's button
+	 * Absent where nothing can be staged — a commit's diff — and in the review
+	 * when the server sent no ID for the hunk, which cannot be staged as shown,
+	 * and when it is the side's only hunk, which the bottom bar's button
 	 * already stages.
 	 */
 	stage?: {
+		/** Whether the side on screen is the staged one: the button unstages there. */
+		staged: boolean;
 		busy: boolean;
 		onToggle: () => void;
 	};
@@ -22,15 +23,23 @@ interface Props {
 	onSelect?: () => void;
 }
 
-/** Where the review finds a bar again after the diff under it changed. */
+/** Where a page finds a bar again after the diff under it changed. */
 export const HUNK_BAR_ATTRIBUTE = "data-hunk-bar";
 /** The bar's stage button, for the review to hand focus on to. */
 export const HUNK_STAGE_ATTRIBUTE = "data-hunk-stage";
 
 /**
- * `lines 40–48`, numbered on the side's new version — the working tree's on
- * the unstaged side, the index's on the staged one. A hunk that only removes
- * lines has none there, so it is `removed lines 41–43` in the old numbering.
+ * Frames to wait for the library to draw a diff's bars, about a second: it
+ * rebuilds the lines of a changed diff in an effect, and draws an unwrapped
+ * extend row only once it has measured the table.
+ */
+export const HUNK_BAR_FRAMES = 60;
+
+/**
+ * `lines 40–48`, numbered on the diff's new version — the working tree's on
+ * the review's unstaged side, the index's on its staged one, the commit's in a
+ * commit. A hunk that only removes lines has none there, so it is
+ * `removed lines 41–43` in the old numbering.
  */
 export function hunkRange(hunk: DiffHunk): string {
 	return hunk.newCount === 0
@@ -39,8 +48,8 @@ export function hunkRange(hunk: DiffHunk): string {
 }
 
 /**
- * A hunk's title row in the review: its range and git's function context, the
- * button that selects its lines, and the one that stages or unstages it
+ * A hunk's title row: its range and git's function context, the button that
+ * selects its lines, and in the review the one that stages or unstages it
  * (docs/git-changes-ui.md#staging-a-hunk).
  *
  * An action named like the bottom bar's, not a checkbox: a box over each hunk
@@ -52,9 +61,9 @@ export function hunkRange(hunk: DiffHunk): string {
  * the lines' gutter below: 60px around a 44px area under a thumb, 44px around
  * 36px for a mouse.
  */
-function HunkBar({ hunk, index, staged, stage, onSelect }: Props) {
+function HunkBar({ hunk, index, stage, onSelect }: Props) {
 	const range = hunkRange(hunk);
-	const verb = staged ? "Unstage" : "Stage";
+	const verb = stage?.staged ? "Unstage" : "Stage";
 	return (
 		<div
 			{...{ [HUNK_BAR_ATTRIBUTE]: index }}

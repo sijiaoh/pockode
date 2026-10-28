@@ -43,6 +43,7 @@ vi.mock("../../hooks/useGitDiffWatch", () => ({
 vi.mock("../../hooks/usePrefillComposer", () => ({
 	usePrefillComposer: () => ({
 		prefill: () => {},
+		insert: () => {},
 		isPending: false,
 		error: null,
 		dismissError: () => {},
