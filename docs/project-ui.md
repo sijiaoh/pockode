@@ -807,7 +807,9 @@ second place worktree-aware URLs get built (§4).
   a detail and a sidebar in the space of one chat. One column at every width.
   The Git workspace reaches the opposite answer on purpose — its diffs are read
   in a run, one file after another, where a story is read one at a time — and
-  says why in [git-ui.md](git-ui.md#at-expanded-two-columns).
+  keeps its list beside the detail by putting it in the sidebar's Git tab
+  rather than in a column of the main panel; it says why in
+  [git-ui.md](git-ui.md#at-expanded-the-sidebars-list-and-the-detail).
 - **Reordering, priorities, due dates.** Nothing in the data model carries them
   and nothing in the page's job needs them.
 - **Grouping by worktree or role.** Both are slots on the row and neither is a

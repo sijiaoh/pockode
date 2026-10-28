@@ -5,7 +5,7 @@ import {
 	ListChecks,
 	MessageSquare,
 } from "lucide-react";
-import { useCallback, useMemo } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { invalidateGitQueries } from "../../hooks/gitQueries";
 import {
 	describeChangeCount,
@@ -17,9 +17,10 @@ import { useSidebarUIConfig } from "../../lib/registries/sidebarUIRegistry";
 import { SidebarContainerContext } from "../../lib/sidebarContainerContext";
 import { useHasUnfinishedUploads } from "../../lib/uploadStore";
 import { useIsGitRepo } from "../../lib/worktreeStore";
-import type { GitSegment } from "../../types/overlay";
+import type { GitLayer, GitSegment } from "../../types/overlay";
 import { FilesTab } from "../Files";
 import { GitTab } from "../Git";
+import type { GitNavigation } from "../Git/GitTab";
 import { Sidebar, TabbedSidebar, type TabConfig } from "../Layout";
 import { ProjectTab } from "../Project";
 import { WorktreeSwitcher } from "../Worktree";
@@ -37,13 +38,11 @@ interface Props {
 	onSelectSession: (id: string, worktree: string | null) => void;
 	onCreateSession: () => void;
 	onDeleteSession: (id: string, worktree: string | null) => void;
-	/** Opens the Git workspace at a segment's list. */
-	onOpenGitSegment: (segment: GitSegment) => void;
-	/**
-	 * The segment the Git workspace is standing in, at any of its layers, and
-	 * null while it is not on screen.
-	 */
-	activeGitSegment: GitSegment | null;
+	/** The Git layer the route names, and null when it names none. */
+	gitLayer: GitLayer | null;
+	gitNavigation: GitNavigation;
+	/** See `GitTab`'s `onListShownChange`. Must be stable. */
+	onGitListShownChange?: (shown: boolean) => void;
 	/**
 	 * Whether the chat's strip may show its review row, which reads the same
 	 * count as the tab's badge. Reported by the chat, which owns the gate.
@@ -79,8 +78,9 @@ function SessionSidebar({
 	onSelectSession,
 	onCreateSession,
 	onDeleteSession,
-	onOpenGitSegment,
-	activeGitSegment,
+	gitLayer,
+	gitNavigation,
+	onGitListShownChange,
 	reviewRowCanShow = false,
 	onSelectFile,
 	activeFilePath,
@@ -128,9 +128,7 @@ function SessionSidebar({
 		onChanged: refreshGit,
 		enabled:
 			isGitRepo &&
-			((!SidebarContent && isOpen) ||
-				activeGitSegment !== null ||
-				reviewRowCanShow),
+			((!SidebarContent && isOpen) || gitLayer !== null || reviewRowCanShow),
 	});
 
 	const gitChangeCount = useGitChangeCount();
@@ -191,6 +189,36 @@ function SessionSidebar({
 		],
 	);
 
+	// At `expanded` a Git route is this tab beside the main area — the chat
+	// for a list URL, a detail for a layer — so arriving at one turns to the
+	// tab, whatever made the arrival (the chat's review row, a link, Back):
+	// without it a list URL shows nothing of Git, and a detail's lit row is off
+	// screen. Arriving is coming to Git at all, or opening a detail from a list
+	// URL, which is the chat. Moving between details, or leaving one for the
+	// chat, is not: the user may have turned elsewhere since, and is not pulled
+	// back. Waits for the repository to be confirmed, since a link opened on
+	// load arrives before the tab does.
+	const gitPlace =
+		isGitRepo && isExpanded && gitLayer
+			? gitLayer.type === "git"
+				? "list"
+				: "detail"
+			: null;
+	const [gitArrival, setGitArrival] = useState({
+		place: gitPlace,
+		count: gitPlace ? 1 : 0,
+	});
+	if (gitPlace !== gitArrival.place) {
+		const arrives =
+			gitPlace !== null && (gitArrival.place === null || gitPlace === "detail");
+		setGitArrival({
+			place: gitPlace,
+			count: gitArrival.count + (arrives ? 1 : 0),
+		});
+	}
+	const gitReveal =
+		gitArrival.count > 0 ? { tab: "git", request: gitArrival.count } : null;
+
 	const handleSelectSession = useCallback(
 		(id: string, worktree: string | null) => {
 			onSelectSession(id, worktree);
@@ -199,12 +227,21 @@ function SessionSidebar({
 		[onSelectSession, isExpanded, onClose],
 	);
 
-	const handleOpenGitSegment = useCallback(
-		(segment: GitSegment) => {
-			onOpenGitSegment(segment);
-			if (!isExpanded) onClose();
-		},
-		[onOpenGitSegment, isExpanded, onClose],
+	// Below `expanded` the tab's doors lead to a page under the drawer, which
+	// closes for it; at `expanded` the list stays where it is beside what a
+	// row opens.
+	const tabGitNavigation = useMemo(
+		() =>
+			isExpanded
+				? gitNavigation
+				: {
+						...gitNavigation,
+						onSelectSegment: (segment: GitSegment) => {
+							gitNavigation.onSelectSegment(segment);
+							onClose();
+						},
+					},
+		[gitNavigation, isExpanded, onClose],
 	);
 
 	const handleSelectFile = useCallback(
@@ -245,6 +282,7 @@ function SessionSidebar({
 			onClose={onClose}
 			tabs={tabs}
 			defaultTab="sessions"
+			reveal={gitReveal}
 			isExpanded={isExpanded}
 			renderHeader={({ onClose, isExpanded }) => (
 				<WorktreeSwitcher onClose={onClose} isExpanded={isExpanded} />
@@ -266,8 +304,11 @@ function SessionSidebar({
 			/>
 			{isGitRepo && (
 				<GitTab
-					onOpenSegment={handleOpenGitSegment}
-					activeSegment={activeGitSegment}
+					isExpanded={isExpanded}
+					isOpen={isOpen}
+					layer={gitLayer}
+					navigation={tabGitNavigation}
+					onListShownChange={onGitListShownChange}
 				/>
 			)}
 			<ProjectTab

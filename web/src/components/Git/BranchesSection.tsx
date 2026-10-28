@@ -1,5 +1,5 @@
 import { Plus } from "lucide-react";
-import { useId, useMemo, useState } from "react";
+import { useId, useMemo, useRef, useState } from "react";
 import type { BranchMergeHandoff } from "../../hooks/useBranchMergeHandoff";
 import {
 	useGitBranchActions,
@@ -13,6 +13,7 @@ import { headLabel } from "./BranchBar";
 import BranchList, { hasMenu } from "./BranchList";
 import BranchMenu from "./BranchMenu";
 import NewBranchSheet from "./NewBranchSheet";
+import { useRevealLitRow } from "./revealRow";
 
 /**
  * The Git workspace's Branches segment: the branch list as a page, with the
@@ -28,13 +29,16 @@ import NewBranchSheet from "./NewBranchSheet";
 function BranchesSection({
 	mergeHandoff,
 	activeKey,
+	reveal,
 	onSelectBranch,
 	onBranchDeleted,
 }: {
-	/** The workspace's, so that it outlives this segment. */
+	/** The app's, so that it outlives this segment. */
 	mergeHandoff: BranchMergeHandoff;
 	/** The key of the branch whose detail is open beside the list. */
 	activeKey: string | null;
+	/** Set while the lit row is wanted on screen; called once it is. */
+	reveal?: () => void;
 	onSelectBranch: (row: BranchRow) => void;
 	onBranchDeleted: (row: BranchRow) => void;
 }) {
@@ -47,6 +51,8 @@ function BranchesSection({
 	// that became occupied, current or gone must not keep offering Delete.
 	const [menuKey, setMenuKey] = useState<string | null>(null);
 	const pausedId = useId();
+	const scrollerRef = useRef<HTMLDivElement>(null);
+	useRevealLitRow(scrollerRef, reveal);
 
 	const menuRow = useMemo(() => {
 		if (!menuKey || !branches) return null;
@@ -65,8 +71,11 @@ function BranchesSection({
 		<>
 			{/* No vertical padding of its own: the list pins its filter and its
 			    refusals to the top of this scroller. The container its rows lay
-			    out by, so they follow the list column's width, not the window's. */}
-			<div className="@container min-h-0 flex-1 overflow-y-auto">
+			    out by, so they follow the list's width, not the window's. */}
+			<div
+				ref={scrollerRef}
+				className="@container min-h-0 flex-1 overflow-y-auto"
+			>
 				{/* Data first, as in the top bar: a refetch that fails leaves the
 				    branches already known. */}
 				{branches ? (

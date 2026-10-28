@@ -22,11 +22,13 @@ import RefChips from "./RefChips";
 
 interface Props {
 	hash: string;
+	/** Back to the list this was opened from, or the branch's detail. */
+	onBack: () => void;
 	/**
-	 * Back to the list this was opened from, or the branch's detail. Absent
-	 * where that is on screen beside it.
+	 * See `DiffView`'s. Never for a commit opened from a branch: that branch's
+	 * detail is what it goes back to, at every width.
 	 */
-	onBack?: () => void;
+	backToChat?: boolean;
 }
 
 function FileChangeItem({
@@ -106,18 +108,21 @@ function ParentRow({
 	);
 }
 
-function CommitView({ hash, onBack }: Props) {
+function CommitView({ hash, onBack, backToChat = false }: Props) {
 	const navigate = useNavigate();
 	const { worktree, sessionId, overlay } = useRouteState();
 	// Carried from layer to layer, so Back lands on the list the commit was
 	// picked from (docs/git-history-ui.md#url), or the branch
 	// (docs/git-branches-ui.md#opening-a-commit).
 	const origin = commitOriginOf(overlay);
-	const back: PageBack | undefined = onBack && {
-		to: "parent",
-		label: origin.branch ? "Back to branch" : "Back to history",
-		onClick: onBack,
-	};
+	const back: PageBack =
+		backToChat && !origin.branch
+			? { to: "chat", onClick: onBack }
+			: {
+					to: "parent",
+					label: origin.branch ? "Back to branch" : "Back to history",
+					onClick: onBack,
+				};
 	const { data: commit, isLoading, error } = useGitCommit(hash);
 	const [menuOpen, setMenuOpen] = useState(false);
 

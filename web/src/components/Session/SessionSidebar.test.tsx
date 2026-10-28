@@ -13,8 +13,9 @@ import { uploadActions } from "../../lib/uploadStore";
 import { useWorkStore } from "../../lib/workStore";
 import { worktreeActions } from "../../lib/worktreeStore";
 import { makeSchedule } from "../../test/scheduleFixtures";
-import type { GitSegment } from "../../types/overlay";
+import type { GitLayer } from "../../types/overlay";
 import type { WorkListItem } from "../../types/work";
+import type { GitNavigation } from "../Git/GitTab";
 import SessionSidebar from "./SessionSidebar";
 
 const wsState = {
@@ -66,12 +67,8 @@ vi.mock("../Files", () => ({
 	),
 }));
 vi.mock("../Git", () => ({
-	GitTab: ({
-		onOpenSegment,
-	}: {
-		onOpenSegment: (segment: GitSegment) => void;
-	}) => (
-		<button type="button" onClick={() => onOpenSegment("history")}>
+	GitTab: ({ navigation }: { navigation: GitNavigation }) => (
+		<button type="button" onClick={() => navigation.onSelectSegment("history")}>
 			open history
 		</button>
 	),
@@ -93,21 +90,22 @@ vi.mock("../Worktree", () => ({ WorktreeSwitcher: () => null }));
 interface RenderOptions {
 	isOpen?: boolean;
 	isExpanded?: boolean;
-	activeGitSegment?: GitSegment | null;
+	gitLayer?: GitLayer | null;
 	reviewRowCanShow?: boolean;
 }
 
-function renderSidebar(
+function sidebar(
+	queryClient: QueryClient,
 	onClose: () => void,
 	{
 		isOpen = true,
 		isExpanded = false,
-		activeGitSegment = null,
+		gitLayer = null,
 		reviewRowCanShow = false,
 	}: RenderOptions = {},
 ) {
-	return render(
-		<QueryClientProvider client={new QueryClient()}>
+	return (
+		<QueryClientProvider client={queryClient}>
 			<SessionSidebar
 				isOpen={isOpen}
 				onClose={onClose}
@@ -115,8 +113,15 @@ function renderSidebar(
 				onSelectSession={vi.fn()}
 				onCreateSession={vi.fn()}
 				onDeleteSession={vi.fn()}
-				onOpenGitSegment={vi.fn()}
-				activeGitSegment={activeGitSegment}
+				gitLayer={gitLayer}
+				gitNavigation={{
+					onSelectSegment: vi.fn(),
+					onSelectFile: vi.fn(),
+					onCloseFile: vi.fn(),
+					onSelectCommit: vi.fn(),
+					onSelectBranch: vi.fn(),
+					onRepointBranch: vi.fn(),
+				}}
 				reviewRowCanShow={reviewRowCanShow}
 				onSelectFile={vi.fn()}
 				activeFilePath={null}
@@ -129,8 +134,18 @@ function renderSidebar(
 				isSwitchingWorktree={false}
 				isExpanded={isExpanded}
 			/>
-		</QueryClientProvider>,
+		</QueryClientProvider>
 	);
+}
+
+function renderSidebar(onClose: () => void, options?: RenderOptions) {
+	const queryClient = new QueryClient();
+	const result = render(sidebar(queryClient, onClose, options));
+	return {
+		...result,
+		rerender: (next?: RenderOptions) =>
+			result.rerender(sidebar(queryClient, onClose, next)),
+	};
 }
 
 /**
@@ -264,6 +279,100 @@ describe("the Git tab", () => {
 	});
 });
 
+// At `expanded` a detail's row is in the Git tab, so opening one from outside
+// the sidebar brings the tab forward to show it (docs/git-ui.md).
+describe("arriving at a Git route", () => {
+	beforeEach(() => {
+		worktreeActions.setIsGitRepo(true);
+		return () => worktreeActions.reset();
+	});
+
+	const diff: GitLayer = { type: "diff", path: "src/a.ts", staged: false };
+	const selected = (name: string) =>
+		screen.getByRole("tab", { name }).getAttribute("aria-selected");
+
+	it("turns the column to the Git tab", () => {
+		const { rerender } = renderSidebar(vi.fn(), { isExpanded: true });
+		expect(selected("Sessions")).toBe("true");
+
+		rerender({ isExpanded: true, gitLayer: diff });
+		expect(selected("Git")).toBe("true");
+	});
+
+	// A list URL at `expanded` is the chat beside this tab's list: arriving at
+	// one without turning would show nothing of Git at all.
+	it("turns to it for a list arrived at from outside the tab", () => {
+		const { rerender } = renderSidebar(vi.fn(), { isExpanded: true });
+
+		rerender({
+			isExpanded: true,
+			gitLayer: { type: "git", segment: "history" },
+		});
+		expect(selected("Git")).toBe("true");
+	});
+
+	// A link opened on load arrives before the server has said the project is a
+	// repository, which is what the tab waits for.
+	it("turns to it when the detail was there before the tab was", () => {
+		worktreeActions.reset();
+		const { rerender } = renderSidebar(vi.fn(), {
+			isExpanded: true,
+			gitLayer: diff,
+		});
+		expect(screen.queryByRole("tab", { name: "Git" })).toBeNull();
+
+		worktreeActions.setIsGitRepo(true);
+		rerender({ isExpanded: true, gitLayer: diff });
+		expect(selected("Git")).toBe("true");
+	});
+
+	it("leaves a tab the user picks afterwards alone", async () => {
+		const user = userEvent.setup();
+		const { rerender } = renderSidebar(vi.fn(), { isExpanded: true });
+		rerender({ isExpanded: true, gitLayer: diff });
+
+		await user.click(screen.getByRole("tab", { name: "Files" }));
+		rerender({
+			isExpanded: true,
+			gitLayer: { type: "diff", path: "src/b.ts", staged: false },
+		});
+		expect(selected("Files")).toBe("true");
+
+		// Back to the chat leaves the tab picked; into another detail from there
+		// is an opening again.
+		rerender({
+			isExpanded: true,
+			gitLayer: { type: "git", segment: "changes" },
+		});
+		expect(selected("Files")).toBe("true");
+		rerender({ isExpanded: true, gitLayer: diff });
+		expect(selected("Git")).toBe("true");
+	});
+
+	it("does not bring a collapsed column back", () => {
+		const onClose = vi.fn();
+		const { rerender } = renderSidebar(onClose, {
+			isExpanded: true,
+			isOpen: false,
+		});
+
+		rerender({ isExpanded: true, isOpen: false, gitLayer: diff });
+
+		expect(
+			screen.getByRole("tab", { name: "Git", hidden: true }),
+		).toHaveAttribute("aria-selected", "true");
+		// The column is the parent's to open; all the sidebar did was turn.
+		expect(onClose).not.toHaveBeenCalled();
+	});
+
+	// Below `expanded` the detail covers the page and the drawer is shut.
+	it("leaves a phone's drawer on the tab it was on", () => {
+		const { rerender } = renderSidebar(vi.fn());
+		rerender({ gitLayer: diff });
+		expect(selected("Sessions")).toBe("true");
+	});
+});
+
 describe("the Project tab's attention badge", () => {
 	// Its activity is the whole of what the badge reads; the rest is scaffolding.
 	const work = (activity: Activity): WorkListItem => ({
@@ -371,7 +480,7 @@ describe("the git watcher", () => {
 		renderSidebar(vi.fn(), {
 			isExpanded: true,
 			isOpen: false,
-			activeGitSegment: "changes",
+			gitLayer: { type: "diff", path: "src/a.ts", staged: false },
 		});
 		expect(gitWatchEnabled).toBe(true);
 	});
@@ -385,7 +494,9 @@ describe("the git watcher", () => {
 			expect(gitWatchEnabled).toBe(false);
 			unmount();
 
-			renderSidebar(vi.fn(), { activeGitSegment: "history" });
+			renderSidebar(vi.fn(), {
+				gitLayer: { type: "git", segment: "history" },
+			});
 			expect(gitWatchEnabled).toBe(true);
 		} finally {
 			resetSidebarUIConfig();

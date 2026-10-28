@@ -144,7 +144,7 @@ the page:
 
 | The press | Where it lands |
 |---|---|
-| The target is the route's session, on a page that keeps the composer under it — a Git detail (`overlayKeepsComposer`, [git-ui.md](git-ui.md#the-composer)) | **In place.** Nothing navigates: the draft and the reveal land in the composer under the page, and the user stays on the diff, commit or branch the message is about — the next thing they want to see is what the agent does to it |
+| The target is the route's session, on a page that keeps the composer under it — a Git detail, or at `expanded` a Git list URL, whose list is the sidebar's beside the chat (`overlayKeepsComposer` of `mainAreaOverlay`, [git-ui.md](git-ui.md#the-composer)) | **In place.** Nothing navigates: the draft and the reveal land in the composer under the page, and the user stays on the diff, commit or branch the message is about — the next thing they want to see is what the agent does to it |
 | The target is the route's session, on a page without the composer — a Git list | The target session's chat route is **pushed**, in the workspace's worktree |
 | A new session ([§1.4](#14-no-current-session)) | Pushed, from any page: whatever composer is on the page is not the target's |
 
@@ -265,7 +265,7 @@ send mid-turn is the user's call, in the composer.
 | Merging text into a draft | `utils/discardedMessage.ts`'s text half of `restoreIntoDraft`, moved to a neutral `utils/draftText.ts` (`appendToDraft(draft, text)`), beside `insertIntoDraft(draft, text, at)`, which returns the draft and where the caret goes | *Restore to input* and the handoff call the one append, so "never over the user's words" has one definition; the insert keeps the same two rules |
 | The handoff | `hooks/usePrefillComposer.ts`, returning `prefill(text)`, `insert(text)`, `isPending`, `error` and `dismissError` | Resolves the target ([§1.1](#11-which-session)), creates if needed, writes, files the reveal request, pushes the route unless the composer is already on the page ([§1.3](#13-landing-in-the-composer)). Every later entry calls this; none writes `inputStore` itself |
 | The composer's caret | `inputActions.registerCaret` / `readCaret` in `inputStore`: a module-level map of readers by session, not store state — nothing renders from it | Registered by `InputBar` while it draws the session, unregistered on unmount |
-| Whether the composer is on the page | `overlayKeepsComposer` in `types/overlay.ts` | The one rule, read by `ChatPanel`, which draws the composer, and by the handoff |
+| Whether the composer is on the page | `overlayKeepsComposer` in `types/overlay.ts`, of `mainAreaOverlay` — what the main area draws at this width | The one rule, read by `ChatPanel`, which draws the composer, and by the handoff |
 | The reveal request | `inputStore`, a non-persisted one-shot keyed by session (`reveals`, `requestReveal`, `takeReveal`): `PrefillReveal`, how the text landed (`ready` / `added`) and, after an insert, the caret offset | Consumed by `InputBar` |
 | Creating the session | `lib/sessionCreate.ts` (`createSession`) | The one create `useSession` and the handoff share, so concurrent callers join one request |
 | The ring | `.composer-arrival` in `index.css` | A keyframe animation, so the ring is there at once and only its going fades |
@@ -359,7 +359,7 @@ drawer was last open. So the review row adds a term to that condition:
 ```typescript
 enabled: isGitRepo && (
   (!SidebarContent && isOpen) ||
-  activeGitSegment !== null ||
+  gitLayer !== null ||
   reviewRowCanShow   // the chat's composer is up and turnOpen is false
 )
 ```
@@ -376,10 +376,10 @@ enabled: isGitRepo && (
 - `turnOpen` is derived inside `ChatPanel`, and the watch is in
   `SessionSidebar`, its sibling under `AppShell`. The flag has to cross from one
   to the other: `ChatPanel` reports it up, and `AppShell` passes it down beside
-  `activeGitSegment`. It must not be re-derived in the sidebar, where a second
+  `gitLayer`. It must not be re-derived in the sidebar, where a second
   copy of the gate could disagree with the one that draws the row.
 - The watch also needs `!SidebarContent` to stay out of this term, as
-  `activeGitSegment` does: a custom sidebar takes away the badge, not the chat's
+  `gitLayer` does: a custom sidebar takes away the badge, not the chat's
   row.
 - `ChatPanel` reports it through `onReviewRowCanShowChange` from an effect that
   says `true` while the gate holds and `false` in its cleanup, so a panel that
@@ -408,8 +408,12 @@ carries the current `session`, so the header's way back names this chat.
   commit made in the review ends on the list too, where any unstaged files are
   waiting. Taking the user straight back to the chat would skip the list at the
   moment it is most useful.
-- At `expanded` the same route is two columns, the list beside the first file,
-  with nothing special for this entry.
+- At `expanded` the same route is the first file across the main area, with
+  the sidebar turned to its Git tab and the file's row lit and brought into
+  view ([git-ui.md](git-ui.md#at-expanded-the-sidebars-list-and-the-detail)) —
+  the turn is for any detail opened from outside the tab, nothing special for
+  this entry. Leaving the review lands on the Changes list's URL, which there
+  is the chat with the list beside it.
 - **The file is not known at render.** It is computed at the press from the
   status as it is then, so a file committed between render and press is never
   opened. A cached status nothing has invalidated is used as it is; one that

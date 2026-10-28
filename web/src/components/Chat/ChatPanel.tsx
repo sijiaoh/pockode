@@ -215,6 +215,8 @@ interface Props {
 		worktree: string,
 		next: { path: string; staged: boolean } | null,
 	) => void;
+	/** Whether the sidebar's Git list is on screen; see `GitWorkspace`. */
+	gitListBeside?: boolean;
 	/**
 	 * Set when the session's data is being read out of another worktree, which
 	 * is the whole of what makes this screen read-only: the data comes from
@@ -261,6 +263,7 @@ function ChatPanel({
 	onSelectBranch,
 	onRepointBranch,
 	onCloseGitFile,
+	gitListBeside = false,
 	view = null,
 	onOpenSessionThere,
 	onOpenReview,
@@ -1357,6 +1360,7 @@ function ChatPanel({
 						onSelectBranch={onSelectBranch ?? noop}
 						onRepointBranch={onRepointBranch ?? noop}
 						onCloseFile={onCloseGitFile ?? noop}
+						listBeside={gitListBeside}
 						// The pointer gate is the answer panel's yield's: a fine
 						// pointer has no soft keyboard to make room for.
 						keyboardUp={composerTyping && isPrimaryPointerCoarse}

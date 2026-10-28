@@ -7,6 +7,10 @@ import { gitStatusQueryKey } from "../hooks/gitQueries";
 import { invalidateSessionViewQueries } from "../hooks/sessionViewQueries";
 import { useAgentOptions } from "../hooks/useAgentOptions";
 import { useAgentRoleSubscription } from "../hooks/useAgentRoleSubscription";
+import {
+	BranchMergeHandoffContext,
+	useBranchMergeHandoff,
+} from "../hooks/useBranchMergeHandoff";
 import { useDocumentTitle } from "../hooks/useDocumentTitle";
 import { useFileDropGuard } from "../hooks/useFileDropGuard";
 import { useLeaveReview } from "../hooks/useLeaveReview";
@@ -33,15 +37,19 @@ import { useWorktreeStore, worktreeActions } from "../lib/worktreeStore";
 import { useWSStore, wsActions } from "../lib/wsStore";
 import {
 	type BranchRef,
+	type CommitOrigin,
 	commitOriginOf,
 	type GitSegment,
+	gitLayerOf,
 	gitSegmentOf,
 	historyQueryOf,
 	isGitOverlay,
+	mainAreaOverlay,
 	type WorkSegment,
 } from "../types/overlay";
 import PasswordInput from "./Auth/PasswordInput";
 import { ChatPanel } from "./Chat";
+import type { GitNavigation } from "./Git/GitTab";
 import { SessionSidebar } from "./Session";
 import { ReconnectBanner } from "./ui";
 
@@ -664,14 +672,16 @@ function AppShell() {
 		[navigate, urlWorktree, currentSessionId],
 	);
 
-	// A commit is opened from the History list, or beside it from another
-	// commit, and carries the list's query along; or from a branch's detail,
-	// and stacks on that branch (docs/git-branches-ui.md#opening-a-commit).
+	// A commit is opened from the History list, or in place of another commit,
+	// and carries the list's query along; or from a branch's detail, and stacks
+	// on that branch (docs/git-branches-ui.md#opening-a-commit). The sidebar's
+	// list at `expanded` names its own origin: it can stand at a list the route
+	// no longer names.
 	const handleSelectCommit = useCallback(
-		(hash: string) => {
+		(hash: string, origin: CommitOrigin = commitOriginOf(overlay)) => {
 			navigate(
 				overlayToNavigation(
-					{ type: "commit", hash, ...commitOriginOf(overlay) },
+					{ type: "commit", hash, ...origin },
 					urlWorktree,
 					currentSessionId,
 				),
@@ -817,6 +827,31 @@ function AppShell() {
 		},
 		[navigate],
 	);
+
+	const gitNavigation: GitNavigation = useMemo(
+		() => ({
+			onSelectSegment: handleSelectGitSegment,
+			onSelectFile: handleSelectDiffFile,
+			onCloseFile: handleCloseGitFile,
+			onSelectCommit: handleSelectCommit,
+			onSelectBranch: handleSelectBranch,
+			onRepointBranch: handleRepointBranch,
+		}),
+		[
+			handleSelectGitSegment,
+			handleSelectDiffFile,
+			handleCloseGitFile,
+			handleSelectCommit,
+			handleSelectBranch,
+			handleRepointBranch,
+		],
+	);
+	// One for the app rather than one per Git surface: at `expanded` the
+	// Branches list is in the sidebar and a branch's detail in the main area,
+	// and a merge handed off from either is the same one.
+	const mergeHandoff = useBranchMergeHandoff();
+	// Reported by the sidebar's Git tab, for the detail beside it.
+	const [gitListShown, setGitListShown] = useState(false);
 
 	/**
 	 * Opens the review from the chat's review row, at the file the Changes
@@ -1163,77 +1198,81 @@ function AppShell() {
 				)}
 				<ReconnectBanner />
 			</div>
-			<div className="flex min-h-0 flex-1">
-				<SessionSidebar
-					isOpen={sidebarVisible}
-					onClose={handleCloseSidebar}
-					// The session on screen, whichever list it came from. A viewed
-					// one has no row in this worktree's list and so is not
-					// `currentSessionId` — but the filter has moved to the list it
-					// does have a row in, and that row is the one to highlight.
-					currentSessionId={sessionView ? routeSessionId : currentSessionId}
-					onSelectSession={handleSelectSession}
-					onCreateSession={handleCreateSession}
-					onDeleteSession={handleDeleteSession}
-					onOpenGitSegment={handleSelectGitSegment}
-					activeGitSegment={gitSegmentOf(overlay)}
-					reviewRowCanShow={reviewRowCanShow}
-					onSelectFile={handleSelectFile}
-					activeFilePath={activeFilePath}
-					activeFileEdit={activeFileEdit}
-					onRepointFile={handleRepointFile}
-					onCloseFile={handleCloseOverlay}
-					onOpenWorkList={handleOpenWorkList}
-					onOpenScheduleList={handleOpenScheduleList}
-					onOpenAgentRoleList={handleOpenAgentRoleList}
-					isExpanded={isExpanded}
-					isSwitchingWorktree={worktreeSwitchInFlight}
-				/>
-				<div className="contents" inert={isDrawerUp}>
-					<ChatPanel
-						view={sessionView}
-						onOpenSessionThere={handleOpenSessionThere}
-						sessionId={
-							sessionView ? (routeSessionId ?? "") : (currentSessionId ?? "")
-						}
-						sessionTitle={currentSession?.title ?? ""}
-						isSessionResolved={isSessionResolved}
-						onUpdateTitle={(title) => {
-							if (currentSessionId) updateTitle(currentSessionId, title);
-						}}
-						// Only while the sidebar is off the screen, with one exception:
-						// the drawer's opener has to stay mounted under it, since that is
-						// where focus goes back when it closes.
-						onOpenSidebar={
-							isExpanded && !columnCollapsed ? undefined : handleOpenSidebar
-						}
-						sidebarKind={isExpanded ? "column" : "drawer"}
-						sidebarToggleRef={sidebarToggleRef}
-						onOpenSettings={handleOpenSettings}
-						overlay={overlay}
-						onCloseOverlay={handleCloseOverlay}
-						onNavigateToSession={handleNavigateToSession}
-						onSelectSession={handleSelectChatSession}
-						onOpenWorkDetail={handleOpenWorkDetail}
-						onOpenFile={handleSelectFile}
-						onOpenWorkList={handleBackToWorkList}
-						workSegment={workSegment}
-						onSelectWorkSegment={handleSelectWorkSegment}
-						onOpenAgentRoleList={handleOpenAgentRoleList}
-						onOpenAgentRoleDetail={handleOpenAgentRoleDetail}
+			<BranchMergeHandoffContext value={mergeHandoff}>
+				<div className="flex min-h-0 flex-1">
+					<SessionSidebar
+						isOpen={sidebarVisible}
+						onClose={handleCloseSidebar}
+						// The session on screen, whichever list it came from. A viewed
+						// one has no row in this worktree's list and so is not
+						// `currentSessionId` — but the filter has moved to the list it
+						// does have a row in, and that row is the one to highlight.
+						currentSessionId={sessionView ? routeSessionId : currentSessionId}
+						onSelectSession={handleSelectSession}
+						onCreateSession={handleCreateSession}
+						onDeleteSession={handleDeleteSession}
+						gitLayer={gitLayerOf(overlay)}
+						gitNavigation={gitNavigation}
+						onGitListShownChange={setGitListShown}
+						reviewRowCanShow={reviewRowCanShow}
+						onSelectFile={handleSelectFile}
+						activeFilePath={activeFilePath}
+						activeFileEdit={activeFileEdit}
+						onRepointFile={handleRepointFile}
+						onCloseFile={handleCloseOverlay}
+						onOpenWorkList={handleOpenWorkList}
 						onOpenScheduleList={handleOpenScheduleList}
-						onOpenScheduleDetail={handleOpenScheduleDetail}
-						onSelectGitSegment={handleSelectGitSegment}
-						onSelectDiffFile={handleSelectDiffFile}
-						onSelectCommit={handleSelectCommit}
-						onSelectBranch={handleSelectBranch}
-						onRepointBranch={handleRepointBranch}
-						onCloseGitFile={handleCloseGitFile}
-						onOpenReview={handleOpenReview}
-						onReviewRowCanShowChange={setReviewRowCanShow}
+						onOpenAgentRoleList={handleOpenAgentRoleList}
+						isExpanded={isExpanded}
+						isSwitchingWorktree={worktreeSwitchInFlight}
 					/>
+					<div className="contents" inert={isDrawerUp}>
+						<ChatPanel
+							view={sessionView}
+							onOpenSessionThere={handleOpenSessionThere}
+							sessionId={
+								sessionView ? (routeSessionId ?? "") : (currentSessionId ?? "")
+							}
+							sessionTitle={currentSession?.title ?? ""}
+							isSessionResolved={isSessionResolved}
+							onUpdateTitle={(title) => {
+								if (currentSessionId) updateTitle(currentSessionId, title);
+							}}
+							// Only while the sidebar is off the screen, with one exception:
+							// the drawer's opener has to stay mounted under it, since that is
+							// where focus goes back when it closes.
+							onOpenSidebar={
+								isExpanded && !columnCollapsed ? undefined : handleOpenSidebar
+							}
+							sidebarKind={isExpanded ? "column" : "drawer"}
+							sidebarToggleRef={sidebarToggleRef}
+							onOpenSettings={handleOpenSettings}
+							overlay={mainAreaOverlay(overlay, isExpanded)}
+							onCloseOverlay={handleCloseOverlay}
+							onNavigateToSession={handleNavigateToSession}
+							onSelectSession={handleSelectChatSession}
+							onOpenWorkDetail={handleOpenWorkDetail}
+							onOpenFile={handleSelectFile}
+							onOpenWorkList={handleBackToWorkList}
+							workSegment={workSegment}
+							onSelectWorkSegment={handleSelectWorkSegment}
+							onOpenAgentRoleList={handleOpenAgentRoleList}
+							onOpenAgentRoleDetail={handleOpenAgentRoleDetail}
+							onOpenScheduleList={handleOpenScheduleList}
+							onOpenScheduleDetail={handleOpenScheduleDetail}
+							onSelectGitSegment={handleSelectGitSegment}
+							onSelectDiffFile={handleSelectDiffFile}
+							onSelectCommit={handleSelectCommit}
+							onSelectBranch={handleSelectBranch}
+							onRepointBranch={handleRepointBranch}
+							onCloseGitFile={handleCloseGitFile}
+							gitListBeside={isExpanded && gitListShown}
+							onOpenReview={handleOpenReview}
+							onReviewRowCanShowChange={setReviewRowCanShow}
+						/>
+					</div>
 				</div>
-			</div>
+			</BranchMergeHandoffContext>
 		</div>
 	);
 }

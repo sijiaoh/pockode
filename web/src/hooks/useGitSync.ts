@@ -105,7 +105,9 @@ export function useGitSyncRunner() {
  * switched to while inside it, if the counts on screen are older than
  * AUTO_FETCH_AFTER_MS (see shouldAutoFetch). Moving between the workspace's
  * segments and layers does not count as arriving: the caller stays mounted
- * across them.
+ * across them. Called by the workspace and, at `expanded`, by the sidebar's
+ * Git list while it is on screen; a fetch already running is never started
+ * again, so the two never fetch twice.
  *
  * The decision waits for branch data that belongs to the worktree it is made
  * for. During a switch the cache still holds the previous worktree's answer,

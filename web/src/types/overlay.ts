@@ -76,10 +76,11 @@ export type OverlayState =
 	| { type: "schedule-detail"; scheduleId: string }
 	| null;
 
-// The Git workspace's lists are here and its details are not: a list's bottom
-// belongs to its commit bar and holds no code to talk about, while a detail is
-// where the user reads what the agent changed and tells it what to change next
-// (docs/git-ui.md).
+// The Git workspace's list page is here and its details are not: a list's
+// bottom belongs to its commit bar and holds no code to talk about, while a
+// detail is where the user reads what the agent changed and tells it what to
+// change next (docs/git-ui.md). At `expanded` a list URL is the chat, so read
+// this of `mainAreaOverlay`.
 const composerHiddenOverlays: NonNullable<OverlayState>["type"][] = [
 	"git",
 	"work-list",
@@ -103,11 +104,45 @@ export function overlayKeepsComposer(
 }
 
 /**
+ * What of `overlay` the main area draws. At `expanded` a Git list is the
+ * sidebar's Git tab, so the main area beside it is the chat; only a detail
+ * takes the main area over (docs/git-ui.md). The same URL at either width.
+ */
+export function mainAreaOverlay(
+	overlay: OverlayState | undefined,
+	isExpanded: boolean,
+): OverlayState | undefined {
+	return isExpanded && overlay?.type === "git" ? undefined : overlay;
+}
+
+/**
  * The overlays that read the repository, and so have nothing to show without
  * one. Every one of them is a layer of the Git workspace.
  */
 export function isGitOverlay(overlay: OverlayState | undefined): boolean {
 	return gitSegmentOf(overlay) !== null;
+}
+
+/** A layer of the Git workspace: the overlays `gitSegmentOf` gives a segment. */
+export type GitLayer = Extract<
+	NonNullable<OverlayState>,
+	{
+		type: "git" | "diff" | "branch" | "commit" | "commit-diff" | "commit-file";
+	}
+>;
+
+export function gitLayerOf(overlay: OverlayState | undefined): GitLayer | null {
+	switch (overlay?.type) {
+		case "git":
+		case "diff":
+		case "branch":
+		case "commit":
+		case "commit-diff":
+		case "commit-file":
+			return overlay;
+		default:
+			return null;
+	}
 }
 
 /**

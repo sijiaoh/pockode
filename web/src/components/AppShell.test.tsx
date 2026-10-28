@@ -845,6 +845,26 @@ describe("AppShell sidebar form and its switch", () => {
 		expect(sidebarOpen()).toBe("false");
 		expect(document.querySelector("[inert]")).toBeNull();
 	});
+
+	// docs/git-ui.md: at `expanded` a Git list is the sidebar's Git tab, so
+	// its URL leaves the main area to the chat. The same URL is the list page
+	// once the window is narrow.
+	it("leaves the main area to the chat beside a Git list at expanded", async () => {
+		setExpanded(true);
+		renderAppShell("/w/A/git?session=a1");
+		await waitFor(() => {
+			expect(screen.getByTestId("chat-panel")).toHaveTextContent("a1");
+		});
+		expect(screen.getByTestId("chat-panel")).not.toHaveAttribute(
+			"data-overlay",
+		);
+
+		resize(false);
+		expect(screen.getByTestId("chat-panel")).toHaveAttribute(
+			"data-overlay",
+			"git",
+		);
+	});
 });
 
 // A git view has nothing to show outside a repository — reached by a saved URL,
