@@ -90,7 +90,7 @@ A rejected token does not fail the request: the status, subdomain and URL are wh
 - **A cluster reports its data directory** because it has no working directory of its own: the directory it was started from is arbitrary, while the data directory is what tells one cluster from another on the same machine.
 - **A node knows it is one** from `POCKODE_CLUSTER_NODE`, which the cluster sets in `nodeEnv` (dropping any inherited value). The node reads and **unsets** it at startup, before spawning anything, so the AI CLIs, terminals or nested `pockode` it starts do not inherit the claim. `cluster/node.MarkerEnvVar` and `TakeMarker` hold both halves.
 - `path` is shown to the account owner only; it exists to tell apart projects of the same name.
-- The [Privacy Policy](../../site/content/privacy.md) tells users what a linked machine sends; a change to what `pockode login` or an instance reports changes it too.
+- The [privacy policy](../../site/content/privacy.md) tells users what `pockode login` and a linked instance send; a change to either must update it in the same change.
 
 ### A Refused Attachment Falls Back to Guest
 
