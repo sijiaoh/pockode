@@ -1113,6 +1113,7 @@ function DiffView({ path, staged, showBack }: Props) {
 			{confirmingDiscard && file?.unstaged && (
 				<DiscardConfirm
 					file={file.unstaged}
+					keepsStaged={!!file.staged}
 					onConfirm={() => file.unstaged && handleDiscard(file.unstaged)}
 					onCancel={() => setConfirmingDiscard(false)}
 				/>
@@ -1135,14 +1136,16 @@ function DiffView({ path, staged, showBack }: Props) {
 
 function DiscardConfirm({
 	file,
+	keepsStaged,
 	onConfirm,
 	onCancel,
 }: {
 	file: FileStatus;
+	keepsStaged: boolean;
 	onConfirm: () => void;
 	onCancel: () => void;
 }) {
-	const { title, message, confirmLabel } = describeDiscard([file]);
+	const { title, message, confirmLabel } = describeDiscard([file], keepsStaged);
 	return (
 		<ConfirmDialog
 			title={title}

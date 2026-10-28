@@ -330,6 +330,12 @@ function ChangesSection({ onSelectFile, onCloseFile, activeFile }: Props) {
 			{pendingDiscard && (
 				<DiscardConfirm
 					files={pendingDiscard}
+					// The pending batch holds unstaged sides only, which cannot say
+					// whether the file has a staged one; the live list can.
+					keepsStaged={
+						pendingDiscard.length === 1 &&
+						files.some((f) => f.path === pendingDiscard[0].path && f.staged)
+					}
 					onConfirm={() => {
 						runDiscard(pendingDiscard);
 					}}
@@ -460,14 +466,16 @@ function FolderRow({
  */
 function DiscardConfirm({
 	files,
+	keepsStaged,
 	onConfirm,
 	onCancel,
 }: {
 	files: FileStatus[];
+	keepsStaged: boolean;
 	onConfirm: () => void;
 	onCancel: () => void;
 }) {
-	const { title, message, confirmLabel } = describeDiscard(files);
+	const { title, message, confirmLabel } = describeDiscard(files, keepsStaged);
 
 	return (
 		<ConfirmDialog

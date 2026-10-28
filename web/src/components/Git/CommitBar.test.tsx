@@ -105,6 +105,32 @@ describe("CommitBar", () => {
 		expect(onDiscard).toHaveBeenCalled();
 	});
 
+	// A dimmed button says nothing, and a title never reaches a finger: the
+	// press itself is what asks why.
+	it("says why the discard is held when it is pressed mid-write", async () => {
+		const user = userEvent.setup();
+		const onDiscard = vi.fn();
+		const reason = "Wait for the changes in progress to finish.";
+		status = { staged: [file("a.ts")], unstaged: [file("b.ts")] };
+		const { rerender } = render(
+			<CommitBar discardUnchecked={{ onDiscard, busy: true }} />,
+		);
+
+		const discard = screen.getByRole("button", { name: "Discard unchecked…" });
+		expect(discard).toHaveAttribute("aria-disabled", "true");
+		expect(screen.queryByText(reason)).toBeNull();
+
+		await user.click(discard);
+		expect(onDiscard).not.toHaveBeenCalled();
+		expect(discard).toHaveAccessibleDescription(reason);
+
+		// Gone once the writes finish, and not back by itself on the next one.
+		rerender(<CommitBar discardUnchecked={{ onDiscard, busy: false }} />);
+		expect(screen.queryByText(reason)).toBeNull();
+		rerender(<CommitBar discardUnchecked={{ onDiscard, busy: true }} />);
+		expect(screen.queryByText(reason)).toBeNull();
+	});
+
 	it("renders nothing while the status cannot be read", () => {
 		render(<CommitBar discardUnchecked={null} />);
 

@@ -298,6 +298,7 @@ describe("describeDiscard", () => {
 	const cases: {
 		name: string;
 		files: FileStatus[];
+		keepsStaged?: boolean;
 		title: string;
 		message: string;
 		confirmLabel: string;
@@ -308,6 +309,18 @@ describe("describeDiscard", () => {
 			files: [modified("src/foo.ts")],
 			title: "Discard changes?",
 			message: "Your edits to src/foo.ts will be lost. This cannot be undone.",
+			confirmLabel: "Discard",
+			failureSummary: "Discard failed.",
+		},
+		{
+			// Discard takes the unstaged side only, so "your edits" would claim the
+			// staged ones too.
+			name: "a single partly staged file loses only its unstaged edits",
+			files: [modified("src/foo.ts")],
+			keepsStaged: true,
+			title: "Discard unstaged changes?",
+			message:
+				"Your unstaged edits to src/foo.ts will be lost. Its staged changes are kept. This cannot be undone.",
 			confirmLabel: "Discard",
 			failureSummary: "Discard failed.",
 		},
@@ -330,17 +343,18 @@ describe("describeDiscard", () => {
 				modified("c.ts"),
 				untracked("notes.txt"),
 			],
-			title: "Discard all changes?",
+			title: "Discard unchecked changes?",
 			message:
-				"3 files will lose their edits and 1 untracked file will be deleted. This cannot be undone.",
+				"The unchecked edits in 3 files will be lost and 1 untracked file will be deleted. Checked changes are kept. This cannot be undone.",
 			confirmLabel: "Discard",
 			failureSummary: "Discard failed.",
 		},
 		{
 			name: "several tracked files",
 			files: [modified("a.ts"), modified("b.ts")],
-			title: "Discard all changes?",
-			message: "2 files will lose their edits. This cannot be undone.",
+			title: "Discard unchecked changes?",
+			message:
+				"The unchecked edits in 2 files will be lost. Checked changes are kept. This cannot be undone.",
 			confirmLabel: "Discard",
 			failureSummary: "Discard failed.",
 		},
@@ -348,9 +362,9 @@ describe("describeDiscard", () => {
 			// Nothing is discarded here, so the wording says what it does.
 			name: "several untracked files",
 			files: [untracked("a.txt"), untracked("b.txt")],
-			title: "Delete all files?",
+			title: "Delete unchecked files?",
 			message:
-				"2 untracked files will be permanently deleted. This cannot be undone.",
+				"2 untracked files will be permanently deleted. Checked changes are kept. This cannot be undone.",
 			confirmLabel: "Delete",
 			failureSummary: "Delete failed.",
 		},
@@ -367,9 +381,9 @@ describe("describeDiscard", () => {
 		{
 			name: "one tracked and one untracked agree in number",
 			files: [modified("a.ts"), untracked("b.txt")],
-			title: "Discard all changes?",
+			title: "Discard unchecked changes?",
 			message:
-				"1 file will lose its edits and 1 untracked file will be deleted. This cannot be undone.",
+				"The unchecked edits in 1 file will be lost and 1 untracked file will be deleted. Checked changes are kept. This cannot be undone.",
 			confirmLabel: "Discard",
 			failureSummary: "Discard failed.",
 		},
@@ -387,7 +401,7 @@ describe("describeDiscard", () => {
 
 	for (const c of cases) {
 		it(c.name, () => {
-			expect(describeDiscard(c.files)).toEqual({
+			expect(describeDiscard(c.files, c.keepsStaged)).toEqual({
 				title: c.title,
 				message: c.message,
 				confirmLabel: c.confirmLabel,

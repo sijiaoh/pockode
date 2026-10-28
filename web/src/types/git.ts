@@ -593,6 +593,7 @@ export interface DiscardPrompt {
 }
 
 const CANNOT_BE_UNDONE = "This cannot be undone.";
+const CHECKED_ARE_KEPT = "Checked changes are kept.";
 
 /**
  * Summary line when a stage or unstage fails, worded like DiscardPrompt's: the
@@ -608,7 +609,16 @@ function plural(count: number, noun: string): string {
 	return `${count} ${noun}${count === 1 ? "" : "s"}`;
 }
 
-export function describeDiscard(files: FileStatus[]): DiscardPrompt {
+/**
+ * `keepsStaged`: the one file in `files` also has a staged side. A discard
+ * takes only the unstaged side, so the staged one survives, and "your edits"
+ * would claim more than is lost. A batch of several ignores it: its wording
+ * already says checked changes are kept.
+ */
+export function describeDiscard(
+	files: FileStatus[],
+	keepsStaged = false,
+): DiscardPrompt {
 	const untracked = files.filter((f) => f.status === "?");
 	const tracked = files.filter((f) => f.status !== "?");
 
@@ -624,6 +634,14 @@ export function describeDiscard(files: FileStatus[]): DiscardPrompt {
 				failureSummary: "Delete failed.",
 			};
 		}
+		if (keepsStaged) {
+			return {
+				title: "Discard unstaged changes?",
+				message: `Your unstaged edits to ${path} will be lost. Its staged changes are kept. ${CANNOT_BE_UNDONE}`,
+				confirmLabel: "Discard",
+				failureSummary: "Discard failed.",
+			};
+		}
 		return {
 			title: "Discard changes?",
 			message: `Your edits to ${path} will be lost. ${CANNOT_BE_UNDONE}`,
@@ -632,17 +650,20 @@ export function describeDiscard(files: FileStatus[]): DiscardPrompt {
 		};
 	}
 
+	// Several files only ever come from the bottom bar's Discard unchecked, which
+	// takes each file's unstaged side: a file checked in part keeps what is
+	// staged, so the words say "unchecked", never "all".
 	if (tracked.length === 0) {
 		return {
-			title: "Delete all files?",
-			message: `${plural(untracked.length, "untracked file")} will be permanently deleted. ${CANNOT_BE_UNDONE}`,
+			title: "Delete unchecked files?",
+			message: `${plural(untracked.length, "untracked file")} will be permanently deleted. ${CHECKED_ARE_KEPT} ${CANNOT_BE_UNDONE}`,
 			confirmLabel: "Delete",
 			failureSummary: "Delete failed.",
 		};
 	}
 
 	const clauses = [
-		`${plural(tracked.length, "file")} will lose ${tracked.length === 1 ? "its" : "their"} edits`,
+		`The unchecked edits in ${plural(tracked.length, "file")} will be lost`,
 	];
 	if (untracked.length > 0) {
 		clauses.push(
@@ -651,8 +672,8 @@ export function describeDiscard(files: FileStatus[]): DiscardPrompt {
 	}
 
 	return {
-		title: "Discard all changes?",
-		message: `${clauses.join(" and ")}. ${CANNOT_BE_UNDONE}`,
+		title: "Discard unchecked changes?",
+		message: `${clauses.join(" and ")}. ${CHECKED_ARE_KEPT} ${CANNOT_BE_UNDONE}`,
 		confirmLabel: "Discard",
 		failureSummary: "Discard failed.",
 	};
