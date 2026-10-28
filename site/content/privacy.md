@@ -53,7 +53,7 @@ Our website does not use cookies, tracking pixels, or third-party analytics serv
 We use the information we collect for the following purposes:
 
 - **Service Provision:** To operate, maintain, and provide the relay service
-- **Your Instance List:** To show you, and only you, the machines and instances linked to your account, and to send you sign-in codes by email. Cloud account information is not shown to anyone other than the account owner
+- **Cloud Accounts:** To send you sign-in codes by email, and to show you, and only you, the machines and instances linked to your account. Cloud account information is not shown to anyone other than the account owner
 - **Security:** To detect, prevent, and respond to security incidents, fraud, or abuse
 - **Troubleshooting:** To diagnose technical problems and improve service reliability
 - **Legal Compliance:** To comply with applicable laws and legal obligations
