@@ -27,12 +27,16 @@ const (
 
 // BannerOptions configures the startup banner display.
 type BannerOptions struct {
-	Version      string
-	LocalURL     string
-	RemoteURL    string               // Empty if relay is disabled
-	Announcement string               // Message from cloud
-	Agents       []agent.BinaryStatus // AI CLI availability; omitted when empty
-	NoColor      bool                 // Disable ANSI color output
+	Version    string
+	LocalURL   string
+	RemoteURL  string // Empty if relay is disabled
+	CloudEmail string // Cloud account the relay is attached to; empty for a guest
+	// CloudLinkInvalid is set when the cloud did not accept this machine's
+	// link to an account; the relay works regardless.
+	CloudLinkInvalid bool
+	Announcement     string               // Message from cloud
+	Agents           []agent.BinaryStatus // AI CLI availability; omitted when empty
+	NoColor          bool                 // Disable ANSI color output
 }
 
 // noColorSet is set by PrintBanner and used by subsequent Print* calls.
@@ -76,9 +80,18 @@ func PrintBanner(opts BannerOptions) {
 	if opts.RemoteURL != "" {
 		printRemoteURL(opts.RemoteURL)
 	}
+	if opts.CloudEmail != "" {
+		fmt.Printf("%s%s  %s\n", indent, color(dim, "▸ Cloud"), color(green, opts.CloudEmail))
+	}
 
 	for _, line := range agentLines(opts.Agents) {
 		fmt.Println(line)
+	}
+
+	if opts.CloudLinkInvalid {
+		fmt.Println()
+		fmt.Printf("%s%s\n", indent, color(bold+yellow, "⚠ This machine is no longer linked to your cloud account"))
+		fmt.Printf("%s%s\n", indent, color(dim, "  Run pockode login to link it again"))
 	}
 
 	fmt.Println()

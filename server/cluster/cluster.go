@@ -93,12 +93,16 @@ func Run(cfg Config) error {
 	var relayManager *relay.Manager
 	if cfg.RelayEnabled {
 		relayCfg := relay.Config{
-			CloudURL:      cfg.CloudURL,
-			DataDir:       cfg.DataDir,
-			ClientVersion: cfg.Version,
-			Password:      cfg.Password,
-			PasswordGuard: passwordGuard,
-			Sessions:      sessions,
+			CloudURL:         cfg.CloudURL,
+			DataDir:          cfg.DataDir,
+			ClientVersion:    cfg.Version,
+			Password:         cfg.Password,
+			PasswordGuard:    passwordGuard,
+			Sessions:         sessions,
+			CloudCredentials: relay.DefaultCloudCredentials(log),
+			// A cluster has no working directory of its own; its data
+			// directory is what tells one apart from another.
+			Instance: relay.NewInstance(relay.InstanceCluster, cfg.DataDir),
 			// The banner is the only place the cluster shows its remote URL.
 			OnRemoteURLChange: startup.PrintRemoteURLChanged,
 		}
@@ -122,18 +126,22 @@ func Run(cfg Config) error {
 	// Read at print time rather than kept from Start: the announcement fetch
 	// above gives the relay time to move, and announce it, first.
 	var remoteURL string
+	var account relay.Account
 	if relayManager != nil {
 		remoteURL = relayManager.RemoteURL()
+		account = relayManager.Account()
 	}
 
 	// Display startup banner
 	localURL := fmt.Sprintf("http://localhost:%d", port)
 	startup.PrintBanner(startup.BannerOptions{
-		Version:      cfg.Version,
-		LocalURL:     localURL,
-		RemoteURL:    remoteURL,
-		Announcement: announcement,
-		Agents:       agentStatuses,
+		Version:          cfg.Version,
+		LocalURL:         localURL,
+		RemoteURL:        remoteURL,
+		CloudEmail:       account.Email,
+		CloudLinkInvalid: account.Error != "",
+		Announcement:     announcement,
+		Agents:           agentStatuses,
 	})
 
 	// Print QR code if relay is enabled

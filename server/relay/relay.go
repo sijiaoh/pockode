@@ -12,6 +12,7 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/pockode/server/authguard"
+	"github.com/pockode/server/cloudcred"
 	"github.com/pockode/server/logger"
 )
 
@@ -32,6 +33,10 @@ const tunnelCompression = websocket.CompressionContextTakeover
 // looks like from here.
 const connectTimeout = 15 * time.Second
 
+// credentialPollInterval is how soon a running process notices `pockode login`
+// or `pockode logout`: the cloud's account design promises 5 s.
+const credentialPollInterval = 5 * time.Second
+
 type Config struct {
 	CloudURL      string
 	DataDir       string
@@ -46,6 +51,12 @@ type Config struct {
 	// Tickets are the one-time logins the app hands a preview tab, so it
 	// gets a session without the password being typed again.
 	Tickets TicketRedeemer
+	// CloudCredentials is where the machine's link to a cloud account is read
+	// from; nil leaves the relay a guest. Only a token issued by CloudURL is
+	// used.
+	CloudCredentials *cloudcred.Store
+	// Instance is how this process is listed in the account it is attached to.
+	Instance Instance
 	// OnRemoteURLChange, if set, is called whenever renewing the credentials
 	// moves the server to a different remote URL; RemoteURL already reports
 	// the new one by then. An empty URL means remote access has ended for
@@ -68,16 +79,36 @@ type TicketRedeemer interface {
 }
 
 type Manager struct {
-	config         Config
-	backendPort    int
-	frontendPort   int
-	store          *Store
-	client         *Client
-	log            *slog.Logger
-	cancel         context.CancelFunc
-	remoteURLMu    sync.Mutex // renewing the credentials can replace remoteURL
-	remoteURL      string
-	wg             sync.WaitGroup
+	config       Config
+	backendPort  int
+	frontendPort int
+	store        *Store
+	client       *Client
+	log          *slog.Logger
+	cancel       context.CancelFunc
+	remoteURLMu  sync.Mutex // renewing the credentials can replace remoteURL
+	remoteURL    string
+	wg           sync.WaitGroup
+
+	// cloudCallsMu serializes the calls that rewrite relay.json, since both
+	// the reconnect loop and the credential watcher make them.
+	cloudCallsMu sync.Mutex
+	// presentedToken is the machine token ("" for none) the account state was
+	// last settled for — whether the cloud attached it, rejected it, or the
+	// request fell back to a guest's. The watcher refreshes when cloud.json no
+	// longer agrees with it.
+	presentedToken string
+	// machineTokenErr is the last failure to read cloud.json, so the watcher
+	// reports a persisting one once rather than every poll.
+	machineTokenErr string
+	// syncFailing is set while the watcher's refreshes keep failing, until the
+	// account state is next settled, so an outage is reported once rather
+	// than every poll.
+	syncFailing bool
+
+	accountMu sync.Mutex
+	account   Account
+
 	connectTimeout time.Duration
 }
 
@@ -117,6 +148,19 @@ func (m *Manager) Start(ctx context.Context) (string, error) {
 		r.run(relayCtx, storedCfg)
 	}()
 
+	if m.config.CloudCredentials != nil {
+		m.wg.Add(1)
+		go func() {
+			defer m.wg.Done()
+			defer func() {
+				if r := recover(); r != nil {
+					logger.LogPanic(r, "cloud credential watcher crashed")
+				}
+			}()
+			m.watchCloudCredentials(relayCtx)
+		}()
+	}
+
 	return remoteURL, nil
 }
 
@@ -124,22 +168,29 @@ func (m *Manager) Start(ctx context.Context) (string, error) {
 // once the cloud has confirmed them, or fresh ones from a new registration when
 // there are none or the cloud no longer recognizes them.
 func (m *Manager) credentials(ctx context.Context) (*StoredConfig, error) {
+	m.cloudCallsMu.Lock()
+	defer m.cloudCallsMu.Unlock()
+
 	storedCfg, err := m.store.Load()
 	if err != nil {
 		return nil, fmt.Errorf("load config: %w", err)
 	}
 
+	machineToken := m.machineToken()
+
 	if storedCfg != nil {
 		m.log.Info("refreshing config from cloud", "subdomain", storedCfg.Subdomain)
 
-		refreshedCfg, err := m.client.Refresh(ctx, storedCfg.RelayToken)
+		refreshed, err := m.call(machineToken, func(attach *Attachment) (*Registration, error) {
+			return m.client.Refresh(ctx, storedCfg.RelayToken, attach)
+		})
 		switch {
 		case err == nil:
-			if err := m.store.Save(refreshedCfg); err != nil {
+			if err := m.store.Save(&refreshed.StoredConfig); err != nil {
 				return nil, fmt.Errorf("save config: %w", err)
 			}
-			m.log.Info("config refreshed", "subdomain", refreshedCfg.Subdomain)
-			return refreshedCfg, nil
+			m.log.Info("config refreshed", "subdomain", refreshed.Subdomain)
+			return &refreshed.StoredConfig, nil
 		case errors.Is(err, ErrUpgradeRequired):
 			return nil, ErrUpgradeRequired
 		case errors.Is(err, ErrInvalidToken):
@@ -154,7 +205,9 @@ func (m *Manager) credentials(ctx context.Context) (*StoredConfig, error) {
 
 	m.log.Info("registering with cloud", "url", m.config.CloudURL)
 
-	registeredCfg, err := m.client.Register(ctx)
+	registered, err := m.call(machineToken, func(attach *Attachment) (*Registration, error) {
+		return m.client.Register(ctx, attach)
+	})
 	if errors.Is(err, ErrUpgradeRequired) {
 		return nil, ErrUpgradeRequired
 	}
@@ -162,12 +215,142 @@ func (m *Manager) credentials(ctx context.Context) (*StoredConfig, error) {
 		return nil, fmt.Errorf("register: %w", err)
 	}
 
-	if err := m.store.Save(registeredCfg); err != nil {
+	if err := m.store.Save(&registered.StoredConfig); err != nil {
 		return nil, fmt.Errorf("save config: %w", err)
 	}
 
-	m.log.Info("registered with cloud", "subdomain", registeredCfg.Subdomain)
-	return registeredCfg, nil
+	m.log.Info("registered with cloud", "subdomain", registered.Subdomain)
+	return &registered.StoredConfig, nil
+}
+
+// call makes a register or refresh, attaching the relay to the machine's
+// account when machineToken is set, and records what became of that.
+//
+// A refused attachment is retried as a guest, because the link to an account
+// must never be what keeps the relay from working. The cloud does refuse some:
+// it bounds the instance fields (a path with a control character is refused),
+// and a cloud that predates accounts caps the whole body at 4 KiB, which a long
+// path can exceed.
+//
+// The caller holds cloudCallsMu.
+func (m *Manager) call(machineToken string, do func(*Attachment) (*Registration, error)) (*Registration, error) {
+	var attach *Attachment
+	if machineToken != "" {
+		attach = &Attachment{MachineToken: machineToken, Instance: m.config.Instance}
+	}
+
+	reg, err := do(attach)
+	if attach != nil && errors.Is(err, errRequestRefused) {
+		m.log.Warn("cloud refused to attach this instance to the account, continuing as a guest", "instance", m.config.Instance, "error", err)
+		reg, err = do(nil)
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	m.presentedToken = machineToken
+	m.syncFailing = false
+	m.setAccount(reg.Account)
+	switch {
+	case reg.Email != "":
+		m.log.Info("attached to cloud account")
+	case reg.Error != "":
+		m.log.Warn("cloud did not accept the machine token, run `pockode login` to link this machine again", "account_error", reg.Error)
+	}
+	return reg, nil
+}
+
+// machineToken reads cloud.json afresh. A file it cannot read leaves the relay
+// a guest rather than stopping it.
+func (m *Manager) machineToken() string {
+	if m.config.CloudCredentials == nil {
+		return ""
+	}
+	token, err := m.config.CloudCredentials.MachineToken(m.config.CloudURL)
+	if err != nil {
+		if err.Error() != m.machineTokenErr {
+			m.log.Warn("cannot read the cloud credential, continuing as a guest", "error", err)
+		}
+		m.machineTokenErr = err.Error()
+		return ""
+	}
+	m.machineTokenErr = ""
+	return token
+}
+
+// watchCloudCredentials refreshes whenever cloud.json changes, so a running
+// process attaches on `pockode login` and detaches on `pockode logout` without
+// a restart. A refresh keeps the subdomain, so the remote URL stays put.
+func (m *Manager) watchCloudCredentials(ctx context.Context) {
+	ticker := time.NewTicker(credentialPollInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if errors.Is(m.syncCloudCredentials(ctx), ErrUpgradeRequired) {
+				return
+			}
+		}
+	}
+}
+
+// syncCloudCredentials leaves a failed refresh to the next poll, which still
+// sees cloud.json disagree with what was presented — except one whose relay
+// token was rejected. Asking again cannot help that; the reconnect loop
+// registers anew once its uplink is rejected too, and takes cloud.json along.
+func (m *Manager) syncCloudCredentials(ctx context.Context) error {
+	m.cloudCallsMu.Lock()
+	defer m.cloudCallsMu.Unlock()
+
+	machineToken := m.machineToken()
+	if machineToken == m.presentedToken {
+		return nil
+	}
+
+	// No stored credentials means the reconnect loop is registering, and it
+	// reads cloud.json for itself.
+	storedCfg, err := m.store.Load()
+	if err != nil || storedCfg == nil {
+		return err
+	}
+
+	if !m.syncFailing {
+		m.log.Info("cloud credential changed, refreshing", "subdomain", storedCfg.Subdomain)
+	}
+	refreshed, err := m.call(machineToken, func(attach *Attachment) (*Registration, error) {
+		return m.client.Refresh(ctx, storedCfg.RelayToken, attach)
+	})
+	if errors.Is(err, ErrInvalidToken) {
+		m.log.Warn("cloud no longer recognizes the relay token, leaving the account change to the next registration")
+		m.presentedToken = machineToken
+		m.syncFailing = false
+		return nil
+	}
+	if err != nil {
+		if ctx.Err() == nil && !m.syncFailing {
+			m.log.Warn("failed to refresh after the cloud credential changed, retrying every poll", "error", err)
+		}
+		m.syncFailing = true
+		return err
+	}
+	return m.store.Save(&refreshed.StoredConfig)
+}
+
+// Account reports the relay's cloud account as of the last register or
+// refresh; the zero value for a guest.
+func (m *Manager) Account() Account {
+	m.accountMu.Lock()
+	defer m.accountMu.Unlock()
+	return m.account
+}
+
+func (m *Manager) setAccount(account Account) {
+	m.accountMu.Lock()
+	defer m.accountMu.Unlock()
+	m.account = account
 }
 
 // renewCredentials is how the reconnect loop recovers from an uplink rejected

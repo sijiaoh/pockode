@@ -25,6 +25,7 @@ import (
 	"github.com/pockode/server/cliauth"
 	"github.com/pockode/server/cliupdate"
 	"github.com/pockode/server/cluster"
+	"github.com/pockode/server/cluster/node"
 	"github.com/pockode/server/command"
 	"github.com/pockode/server/datadir"
 	"github.com/pockode/server/filetransfer"
@@ -217,6 +218,12 @@ Flags:
 	if cred.Password == "" {
 		slog.Error("a password is required: pass -password <password>, or set the " + password.EnvVar + " environment variable (which keeps it out of the process argv)")
 		os.Exit(1)
+	}
+
+	// Taken before anything is spawned, for the same reason the password is.
+	instanceKind := relay.InstanceServer
+	if node.TakeMarker() {
+		instanceKind = relay.InstanceNode
 	}
 
 	// Path flags are expanded here because no shell does it for us on Windows:
@@ -482,13 +489,15 @@ Flags:
 	relayEnabled := *relayFlag
 	if relayEnabled {
 		relayCfg := relay.Config{
-			CloudURL:      cloudURL,
-			DataDir:       dataDir,
-			ClientVersion: version,
-			Password:      cred.Password,
-			PasswordGuard: passwordGuard,
-			Sessions:      sessions,
-			Tickets:       previewTickets,
+			CloudURL:         cloudURL,
+			DataDir:          dataDir,
+			ClientVersion:    version,
+			Password:         cred.Password,
+			PasswordGuard:    passwordGuard,
+			Sessions:         sessions,
+			Tickets:          previewTickets,
+			CloudCredentials: relay.DefaultCloudCredentials(slog.Default()),
+			Instance:         relay.NewInstance(instanceKind, workDir),
 			OnRemoteURLChange: func(url string) {
 				startup.PrintRemoteURLChanged(url)
 				if err := serverInfo.Refresh(); err != nil {
@@ -590,12 +599,18 @@ Flags:
 	// Display startup banner. The remote URL is read now, not kept from Start:
 	// the announcement fetch above gives the relay time to move first.
 	remote := remoteURL()
+	var account relay.Account
+	if relayManager != nil {
+		account = relayManager.Account()
+	}
 	startup.PrintBanner(startup.BannerOptions{
-		Version:      version,
-		LocalURL:     localURL,
-		RemoteURL:    remote,
-		Announcement: announcement,
-		Agents:       agentStatuses,
+		Version:          version,
+		LocalURL:         localURL,
+		RemoteURL:        remote,
+		CloudEmail:       account.Email,
+		CloudLinkInvalid: account.Error != "",
+		Announcement:     announcement,
+		Agents:           agentStatuses,
 	})
 
 	// Print QR code if relay is enabled
@@ -673,6 +688,12 @@ func runCluster() {
 			os.Exit(1)
 		}
 		dataDir = filepath.Join(homeDir, ".pockode-cluster")
+	}
+	// Absolute because the relay reports it to the cloud as the cluster's path.
+	dataDir, err = filepath.Abs(dataDir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: failed to resolve data directory: %v\n", err)
+		os.Exit(1)
 	}
 	if err := fsperm.RestrictDir(dataDir); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: failed to create data directory: %v\n", err)

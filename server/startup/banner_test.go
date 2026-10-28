@@ -117,6 +117,54 @@ func TestPrintBannerShowsAgents(t *testing.T) {
 	}
 }
 
+// A guest's banner is the one it always was; a linked machine adds its account,
+// and a link the cloud no longer accepts says how to restore it.
+func TestPrintBannerShowsCloudAccount(t *testing.T) {
+	tests := []struct {
+		name    string
+		opts    BannerOptions
+		want    []string
+		notWant []string
+	}{
+		{
+			name:    "guest",
+			notWant: []string{"Cloud", "pockode login"},
+		},
+		{
+			name: "attached",
+			opts: BannerOptions{CloudEmail: "alice@example.com"},
+			want: []string{"▸ Cloud  alice@example.com"},
+		},
+		{
+			name:    "invalid link",
+			opts:    BannerOptions{CloudLinkInvalid: true},
+			want:    []string{"⚠ This machine is no longer linked to your cloud account", "Run pockode login"},
+			notWant: []string{"▸ Cloud"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			noColor(t)
+			opts := tt.opts
+			opts.LocalURL = "http://localhost:9870"
+			opts.RemoteURL = "https://abc123.cloud.pockode.com"
+			opts.NoColor = true
+			out := captureStdout(t, func() { PrintBanner(opts) })
+			for _, want := range tt.want {
+				if !strings.Contains(out, want) {
+					t.Errorf("missing %q in:\n%s", want, out)
+				}
+			}
+			for _, notWant := range tt.notWant {
+				if strings.Contains(out, notWant) {
+					t.Errorf("unexpected %q in:\n%s", notWant, out)
+				}
+			}
+		})
+	}
+}
+
 func captureStdout(t *testing.T, fn func()) string {
 	t.Helper()
 	r, w, err := os.Pipe()

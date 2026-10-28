@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -67,7 +68,7 @@ func TestClient_Register(t *testing.T) {
 			defer server.Close()
 
 			client := NewClient(server.URL)
-			cfg, err := client.Register(context.Background())
+			cfg, err := client.Register(context.Background(), nil)
 
 			if tt.wantErr == nil {
 				if err != nil {
@@ -168,7 +169,7 @@ func TestClient_RegisterContextCancelled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // Cancel immediately
 
-	_, err := client.Register(ctx)
+	_, err := client.Register(ctx, nil)
 	if err == nil {
 		t.Error("Register() with cancelled context should return error")
 	}
@@ -229,7 +230,7 @@ func TestClient_Refresh(t *testing.T) {
 			defer server.Close()
 
 			client := NewClient(server.URL)
-			cfg, err := client.Refresh(context.Background(), "test_token")
+			cfg, err := client.Refresh(context.Background(), "test_token", nil)
 
 			if tt.wantErr == nil {
 				if err != nil {
@@ -254,6 +255,65 @@ func TestClient_Refresh(t *testing.T) {
 
 			if cfg.Subdomain != tt.response.Subdomain {
 				t.Errorf("Subdomain = %v, want %v", cfg.Subdomain, tt.response.Subdomain)
+			}
+		})
+	}
+}
+
+// A guest's request bodies are exactly what they were before accounts existed,
+// so the cloud cannot tell a guest from a Pockode that predates them; an
+// attached relay adds the machine token and the instance, nothing else.
+func TestClientRequestBodies(t *testing.T) {
+	attach := &Attachment{
+		MachineToken: "machine-token",
+		Instance:     Instance{Kind: InstanceNode, Name: "app", Path: "/home/alice/app"},
+	}
+	attachFields := `"machine_token":"machine-token","instance":{"kind":"node","name":"app","path":"/home/alice/app"}`
+
+	tests := []struct {
+		name string
+		call func(*Client) error
+		want string
+	}{
+		{
+			name: "guest register",
+			call: func(c *Client) error { _, err := c.Register(context.Background(), nil); return err },
+			want: `{"client_version":"v1.2.3"}`,
+		},
+		{
+			name: "guest refresh",
+			call: func(c *Client) error { _, err := c.Refresh(context.Background(), "relay-token", nil); return err },
+			want: `{"relay_token":"relay-token","client_version":"v1.2.3"}`,
+		},
+		{
+			name: "attached register",
+			call: func(c *Client) error { _, err := c.Register(context.Background(), attach); return err },
+			want: `{"client_version":"v1.2.3",` + attachFields + `}`,
+		},
+		{
+			name: "attached refresh",
+			call: func(c *Client) error { _, err := c.Refresh(context.Background(), "relay-token", attach); return err },
+			want: `{"relay_token":"relay-token","client_version":"v1.2.3",` + attachFields + `}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var got []byte
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				got, _ = io.ReadAll(r.Body)
+				if r.URL.Path == "/api/relay/register" {
+					w.WriteHeader(http.StatusCreated)
+				}
+				w.Write([]byte(`{}`))
+			}))
+			defer server.Close()
+
+			if err := tt.call(NewClientWithVersion(server.URL, "v1.2.3")); err != nil {
+				t.Fatalf("request failed: %v", err)
+			}
+			if string(got) != tt.want {
+				t.Errorf("body = %s\nwant   %s", got, tt.want)
 			}
 		})
 	}

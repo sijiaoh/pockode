@@ -244,21 +244,37 @@ func (pm *ProcessManager) GetNodeStatus(n Node) NodeStatus {
 	}
 }
 
-// nodeEnv returns base with the password env var set to nodePassword, dropping
-// any inherited value under either spelling so the child sees exactly one,
-// unambiguous credential — the deprecated name is stripped too, because leaving
-// it there would hand the child a second answer to the same question.
+// MarkerEnvVar marks a process the cluster started as one of its nodes, which
+// is how the node knows to list itself as one in its cloud account.
+const MarkerEnvVar = "POCKODE_CLUSTER_NODE"
+
+// TakeMarker reports whether this process was started by a cluster, and unsets
+// MarkerEnvVar so that nothing this node spawns in turn — AI CLIs, terminals, a
+// nested pockode — inherits the claim. Call it at startup, before spawning
+// anything.
+func TakeMarker() bool {
+	_, ok := os.LookupEnv(MarkerEnvVar)
+	os.Unsetenv(MarkerEnvVar)
+	return ok
+}
+
+// nodeEnv returns base with the password env var set to nodePassword and the
+// node marker set, dropping any inherited value under either password spelling
+// so the child sees exactly one, unambiguous credential — the deprecated name
+// is stripped too, because leaving it there would hand the child a second
+// answer to the same question.
 func nodeEnv(base []string, nodePassword string) []string {
 	prefix := password.EnvVar + "="
 	legacyPrefix := password.LegacyEnvVar + "="
-	env := make([]string, 0, len(base)+1)
+	markerPrefix := MarkerEnvVar + "="
+	env := make([]string, 0, len(base)+2)
 	for _, kv := range base {
-		if strings.HasPrefix(kv, prefix) || strings.HasPrefix(kv, legacyPrefix) {
+		if strings.HasPrefix(kv, prefix) || strings.HasPrefix(kv, legacyPrefix) || strings.HasPrefix(kv, markerPrefix) {
 			continue
 		}
 		env = append(env, kv)
 	}
-	return append(env, prefix+nodePassword)
+	return append(env, prefix+nodePassword, markerPrefix+"1")
 }
 
 // getExecutablePath returns the path to the pockode executable.

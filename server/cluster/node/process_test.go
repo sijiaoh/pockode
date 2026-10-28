@@ -282,6 +282,24 @@ func TestNodeEnv_SetsPasswordAndPreservesBase(t *testing.T) {
 	if !containsEnv(env, "POCKODE_PASSWORD=secret-password") {
 		t.Errorf("nodeEnv did not set the password env var, got %v", env)
 	}
+	if !containsEnv(env, MarkerEnvVar+"=1") {
+		t.Errorf("nodeEnv did not mark the child as a node, got %v", env)
+	}
+}
+
+// The marker is a claim about the process it was set for, never about whatever
+// that process goes on to spawn.
+func TestTakeMarker(t *testing.T) {
+	t.Setenv(MarkerEnvVar, "1")
+	if !TakeMarker() {
+		t.Error("TakeMarker() = false with the marker set")
+	}
+	if _, ok := os.LookupEnv(MarkerEnvVar); ok {
+		t.Error("TakeMarker left the marker for children to inherit")
+	}
+	if TakeMarker() {
+		t.Error("TakeMarker() = true once the marker was taken")
+	}
 }
 
 // A child that inherited either spelling would be given two answers to the same
