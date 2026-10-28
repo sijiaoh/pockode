@@ -80,37 +80,42 @@ function heading() {
 }
 
 describe("CommitView", () => {
-	// The hash comes with the route; the subject has to be fetched, and the
-	// hash does not stand in for it meanwhile.
-	it("shows the hash at once and the subject as loading", () => {
-		render(<CommitView hash="abc1234def" onBack={vi.fn()} />);
-
-		expect(heading()).toHaveAttribute("aria-busy", "true");
-		expect(heading()).toHaveTextContent(/^Loading, abc1234$/);
-	});
-
-	it("names the commit by its subject, with the short hash under it", () => {
-		commitQuery = loaded();
-		render(<CommitView hash="abc1234def" onBack={vi.fn()} />);
-
-		expect(heading()).toHaveTextContent(/^Fix the header, abc1234$/);
-		expect(heading().querySelector("[title]")).toHaveAttribute(
-			"title",
-			"Fix the header — abc1234def",
-		);
-	});
-
-	// No subject is coming, but the hash is still true.
-	it("falls back to the hash when the commit cannot be read", () => {
-		commitQuery = {
-			data: undefined,
-			isLoading: false,
-			error: new Error("bad object"),
-		};
+	// The hash comes with the route and is what identifies a commit, so the
+	// heading needs nothing fetched — nor anything that can fail to arrive.
+	it.each([
+		["loading", loading()],
+		["loaded", loaded()],
+		[
+			"unreadable",
+			{ data: undefined, isLoading: false, error: new Error("bad object") },
+		],
+	])("names the commit by its short hash while %s", (_, query) => {
+		commitQuery = query;
 		render(<CommitView hash="abc1234def" onBack={vi.fn()} />);
 
 		expect(heading()).not.toHaveAttribute("aria-busy");
-		expect(heading()).toHaveTextContent(/^abc1234$/);
+		expect(heading()).toHaveTextContent(/^Commit abc1234$/);
+	});
+
+	// The subject starts the message, and the message is the body's: the
+	// heading does not say it again a line above.
+	it("shows the subject once, in the body with the rest of the message", () => {
+		commitQuery = loaded({ body: "Lines carry across pages." });
+		render(<CommitView hash="abc1234def" />);
+
+		expect(screen.getAllByText("Fix the header")).toHaveLength(1);
+		expect(heading()).not.toHaveTextContent("Fix the header");
+		expect(screen.getByText("Lines carry across pages.")).toBeInTheDocument();
+	});
+
+	// The heading's short hash and the body's full one, which is the one to
+	// copy; nothing else repeats it.
+	it("shows the hash only in the heading and in full in the body", () => {
+		commitQuery = loaded();
+		render(<CommitView hash="abc1234def" />);
+
+		expect(screen.getAllByText(/abc1234/)).toHaveLength(2);
+		expect(screen.getByText("abc1234def")).toBeInTheDocument();
 	});
 
 	it("lists every ref and the full hash, which it copies", () => {
@@ -244,17 +249,29 @@ describe("CommitView", () => {
 
 	// From a link nothing tells whether HEAD reaches it, so the menu is not
 	// told it does not.
-	it("opens the commit's menu from the bottom bar", async () => {
+	it("opens the commit's menu from the heading", async () => {
 		const user = userEvent.setup();
 		commitQuery = loaded();
 		render(<CommitView hash="abc1234def" />);
 
-		await user.click(
-			screen.getByRole("button", { name: "Actions for commit abc1234" }),
-		);
+		const menu = screen.getByRole("button", {
+			name: "Actions for commit abc1234",
+		});
+		// Beside the heading, not in it: the heading names the page.
+		expect(heading()).not.toContainElement(menu);
+		await user.click(menu);
 
 		expect(
 			within(screen.getByRole("dialog")).getByText(/Fix the header/),
 		).toHaveTextContent("in HEAD's history: undefined");
+	});
+
+	// There is nothing to act on until the commit has been read.
+	it("offers no menu before the commit is read", () => {
+		render(<CommitView hash="abc1234def" />);
+
+		expect(
+			screen.queryByRole("button", { name: /^Actions for commit/ }),
+		).not.toBeInTheDocument();
 	});
 });

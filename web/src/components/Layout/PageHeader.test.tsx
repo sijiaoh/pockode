@@ -40,12 +40,16 @@ describe("PageHeader", () => {
 						back={{ to: "chat", onClick: vi.fn() }}
 						title={<FileNameTitle name="App.tsx" />}
 						subtitle={<HeaderSubtitle detail="src/" status="Unstaged" />}
+						actions={<button type="button">Page menu</button>}
 					/>
 				}
 			/>,
 		);
 
 		const header = within(screen.getByRole("banner"));
+		expect(
+			header.getByRole("button", { name: "Page menu" }),
+		).toBeInTheDocument();
 		expect(header.getByRole("heading", { level: 1 })).toHaveTextContent(
 			"App.tsx, src/·Unstaged",
 		);
