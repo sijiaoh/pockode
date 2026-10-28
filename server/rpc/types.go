@@ -446,9 +446,18 @@ type GitDiffChangedParams struct {
 	*git.DiffResult
 }
 
-// GitPathsParams is used for git.add, git.reset and git.discard operations.
+// GitPathsParams is used for git.reset and git.discard operations.
 type GitPathsParams struct {
 	Paths []string `json:"paths"`
+}
+
+// GitAddParams is the params for git.add.
+type GitAddParams struct {
+	Paths []string `json:"paths"`
+	// Resolve marks conflicted paths resolved by staging them (git.Resolve).
+	// Without it a conflicted path is refused with CodeGitConflicted: a stage
+	// chosen from a status older than the conflict would record its markers.
+	Resolve bool `json:"resolve,omitempty"`
 }
 
 // GitCommitParams is the params for git.commit request.
@@ -596,8 +605,65 @@ const CodeNotGitRepo = -32002
 type GitBusyData struct {
 	// Operation is what holds the worktree, in git.BusyError's vocabulary:
 	// "stage", "unstage", "discard", "commit", "checkout", "branch-create",
-	// "fetch", "pull", "push".
+	// "fetch", "pull", "push", "abort".
 	Operation string `json:"operation"`
+}
+
+// GitAbortParams is the params for git.abort.
+type GitAbortParams struct {
+	// Kind is the operation the user confirmed abandoning, as git.status
+	// reported it: "merge", "rebase", "cherry-pick" or "revert".
+	Kind string `json:"kind"`
+}
+
+// GitAbortResult is the result of git.abort.
+type GitAbortResult struct {
+	// HeadKept is true when git ended the operation but left the branch where
+	// it was rather than moving it back: commits were made on it during a
+	// sequence of picks or reverts (git.Abort). The client has to say so — the
+	// user confirmed losing that work, and it is still there.
+	HeadKept bool `json:"head_kept"`
+}
+
+// CodeGitOperationChanged answers a git.abort whose operation is no longer the
+// one in progress (git.OperationChangedError): it was finished or aborted
+// elsewhere, or another one started, since the user confirmed. Nothing ran —
+// whatever is in progress now is not what the user agreed to lose.
+const CodeGitOperationChanged = -32005
+
+// GitOperationChangedData is the data member of a CodeGitOperationChanged
+// error.
+type GitOperationChangedData struct {
+	// Current is the operation in progress now, empty when there is none.
+	Current string `json:"current"`
+}
+
+// CodeGitOperationInProgress answers a write refused because the repository is
+// in the middle of a merge, rebase, cherry-pick or revert that the write would
+// finish or derail (git.OperationInProgressError): commit, checkout, branch
+// create, pull. Nothing ran; it works again once the operation is finished or
+// aborted.
+const CodeGitOperationInProgress = -32006
+
+// GitOperationInProgressData is the data member of a
+// CodeGitOperationInProgress error.
+type GitOperationInProgressData struct {
+	// Kind is the operation in the way: "merge", "rebase", "cherry-pick" or
+	// "revert".
+	Kind string `json:"kind"`
+}
+
+// CodeGitConflicted answers a git.add (without resolve), git.reset or
+// git.discard naming paths with unresolved conflicts
+// (git.ConflictedPathsError). Nothing ran, the other paths included.
+const CodeGitConflicted = -32007
+
+// GitConflictedData is the data member of a CodeGitConflicted error.
+type GitConflictedData struct {
+	// Action is the refused write: "stage", "unstage" or "discard".
+	Action string `json:"action"`
+	// Paths are the refused paths, as the request named them.
+	Paths []string `json:"paths"`
 }
 
 // Command namespace

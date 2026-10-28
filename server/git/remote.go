@@ -180,6 +180,9 @@ func Fetch(dir string) error {
 func Pull(dir string) (int, error) {
 	var commits int
 	err := withLock(dir, opPull, func() error {
+		if err := refuseDuringOperation(dir, "pull"); err != nil {
+			return err
+		}
 		// Empty for an unborn HEAD, which has nothing to fast-forward — the pull
 		// below is what says so, in git's own words.
 		before, _ := execGit(dir, "rev-parse", "HEAD")

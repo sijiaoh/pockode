@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 
@@ -267,6 +268,14 @@ type GitStatus struct {
 	Staged     []FileStatus          `json:"staged"`
 	Unstaged   []FileStatus          `json:"unstaged"`
 	Submodules map[string]*GitStatus `json:"submodules,omitempty"`
+	// Conflicted lists the paths the index holds unresolved conflicts for, in
+	// status order. Each is also in Staged and Unstaged, under whatever
+	// letters git gave it ("U", or "A"/"D" on both sides).
+	Conflicted []string `json:"conflicted,omitempty"`
+	// Operation is the merge, rebase, cherry-pick or revert the repository is
+	// in the middle of, nil when there is none. Only the root repository's is
+	// read: an abort is offered for that one alone.
+	Operation *Operation `json:"operation,omitempty"`
 }
 
 // HasFile returns true if the file exists in staged or unstaged list.
@@ -336,7 +345,14 @@ func Status(dir string) (*GitStatus, error) {
 // StatusContext is Status bounded by ctx, for a caller that has to be able to
 // give up on it.
 func StatusContext(ctx context.Context, dir string) (*GitStatus, error) {
-	return readStatus(ctx, dir, getSubmodulePaths(dir), true)
+	status, err := readStatus(ctx, dir, getSubmodulePaths(dir), true)
+	if err != nil {
+		return nil, err
+	}
+	if status.Operation, err = readOperation(ctx, dir); err != nil {
+		return nil, err
+	}
+	return status, nil
 }
 
 // statusWithSubmodules is Status without the line counts, which only the
@@ -417,7 +433,11 @@ func readStatus(ctx context.Context, dir string, submodules []string, countLines
 
 		// A conflicted file's numstat describes no diff anyone reads: the index
 		// holds its stages rather than a version, so it is left uncounted.
-		count := countLines && !entry.unmerged()
+		unmerged := entry.unmerged()
+		if unmerged {
+			result.Conflicted = append(result.Conflicted, entry.path)
+		}
+		count := countLines && !unmerged
 
 		if entry.staged != ' ' && entry.staged != '?' {
 			file := FileStatus{Path: entry.path, Status: string(entry.staged), OrigPath: entry.origPath}
@@ -838,11 +858,22 @@ func extractHost(repoURL string) (string, error) {
 //
 // The whole request is one locked operation rather than one per path: a commit
 // slipping between two of them would record half of what the user staged.
+//
+// A conflicted path is refused (ConflictedPathsError): staging one records it
+// as resolved, markers and all, which is Resolve's to do, on purpose.
 func Add(dir string, paths ...string) error {
-	return stagingOp(dir, opStage, paths, func(actualDir, pathspec string) error {
-		_, err := execGit(actualDir, "add", "--", pathspec)
-		return err
-	})
+	return stagingOp(dir, opStage, paths, false, addPath)
+}
+
+// Resolve is Add for paths whose conflicts the user has declared resolved:
+// the one write that stages a conflicted path, which is what marks it so.
+func Resolve(dir string, paths ...string) error {
+	return stagingOp(dir, opStage, paths, true, addPath)
+}
+
+func addPath(actualDir, pathspec string) error {
+	_, err := execGit(actualDir, "add", "--", pathspec)
+	return err
 }
 
 // Reset unstages files from the git index.
@@ -850,8 +881,12 @@ func Add(dir string, paths ...string) error {
 // Uses "git restore --staged" which handles both existing and newly added files
 // correctly, and "git rm --cached" before the first commit, where there is no
 // HEAD to restore from.
+//
+// A conflicted path is refused (ConflictedPathsError): restoring it from HEAD
+// drops its conflict stages without a word — git exits 0 — and leaves the
+// markers in the file as an ordinary change.
 func Reset(dir string, paths ...string) error {
-	return stagingOp(dir, opUnstage, paths, func(actualDir, pathspec string) error {
+	return stagingOp(dir, opUnstage, paths, false, func(actualDir, pathspec string) error {
 		_, err := execGit(actualDir, "restore", "--staged", "--", pathspec)
 		if err != nil && isUnborn(actualDir) {
 			// Before the first commit unstaging is dropping the entry from the
@@ -873,11 +908,12 @@ func isUnborn(dir string) bool {
 	return errors.As(err, &exitErr) && exitErr.ExitCode() == 1
 }
 
-// stagingOp is Add and Reset, which differ only in the command they run per
-// path. Each path is resolved against the submodule it may live in and run
-// there; every one is validated before any of them runs, so a rejected path
-// stops the request rather than leaving half of it applied.
-func stagingOp(dir string, op operation, paths []string, run func(actualDir, pathspec string) error) error {
+// stagingOp is Add, Resolve and Reset, which differ only in the command they
+// run per path and in whether a conflicted path may be among them. Each path
+// is resolved against the submodule it may live in and run there; every one is
+// validated before any of them runs, so a rejected path stops the request
+// rather than leaving half of it applied.
+func stagingOp(dir string, op operation, paths []string, allowConflicted bool, run func(actualDir, pathspec string) error) error {
 	if len(paths) == 0 {
 		return fmt.Errorf("no paths to %s", op.name)
 	}
@@ -888,8 +924,20 @@ func stagingOp(dir string, op operation, paths []string, run func(actualDir, pat
 	}
 
 	return withLock(dir, op, func() error {
+		// Inside the lock, as Discard's is: the client chose these paths from a
+		// status that may be older than the merge that conflicted them.
+		submodules := getSubmodulePaths(dir)
+		if !allowConflicted {
+			conflicted, err := unmergedPaths(dir, submodules, paths)
+			if err != nil {
+				return err
+			}
+			if len(conflicted) > 0 {
+				return &ConflictedPathsError{Action: op.name, Paths: conflicted}
+			}
+		}
 		for _, path := range paths {
-			actualDir, relativePath := resolveSubmodulePath(dir, path)
+			actualDir, relativePath := resolveSubmodulePathWith(submodules, dir, path)
 			pathspec, err := literalPathspec(relativePath)
 			if err != nil {
 				return fmt.Errorf("%w: %s", err, path)
@@ -900,6 +948,55 @@ func stagingOp(dir string, op operation, paths []string, run func(actualDir, pat
 		}
 		return nil
 	})
+}
+
+// unmergedPaths are the requested paths the index holds unresolved conflicts
+// for, as the request named them — or, for a directory, the conflicted files
+// in it — with one `git ls-files --unmerged` per repository the paths are in.
+// submodules is getSubmodulePaths(dir), which the caller has read already.
+func unmergedPaths(dir string, submodules, paths []string) ([]string, error) {
+	type repo struct {
+		prefix    string
+		pathspecs []string
+	}
+	repos := map[string]*repo{}
+	var order []string
+	for _, path := range paths {
+		actualDir, relativePath := resolveSubmodulePathWith(submodules, dir, path)
+		pathspec, err := literalPathspec(relativePath)
+		if err != nil {
+			return nil, fmt.Errorf("%w: %s", err, path)
+		}
+		r, ok := repos[actualDir]
+		if !ok {
+			r = &repo{prefix: strings.TrimSuffix(path, relativePath)}
+			repos[actualDir] = r
+			order = append(order, actualDir)
+		}
+		r.pathspecs = append(r.pathspecs, pathspec)
+	}
+
+	var unmerged []string
+	for _, actualDir := range order {
+		r := repos[actualDir]
+		args := append([]string{"ls-files", "--unmerged", "-z", "--"}, r.pathspecs...)
+		output, err := execGitRaw(context.Background(), actualDir, args...)
+		if err != nil {
+			return nil, err
+		}
+		// "<mode> <hash> <stage>\t<path>", one entry per stage the path has.
+		for _, entry := range strings.Split(output, "\x00") {
+			_, path, ok := strings.Cut(entry, "\t")
+			if !ok {
+				continue
+			}
+			path = r.prefix + path
+			if !slices.Contains(unmerged, path) {
+				unmerged = append(unmerged, path)
+			}
+		}
+	}
+	return unmerged, nil
 }
 
 // validatePath checks that a repository-relative path stays inside the
