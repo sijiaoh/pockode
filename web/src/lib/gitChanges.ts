@@ -120,6 +120,25 @@ export function reviewSideOf(file: ChangedFile, staged: boolean): boolean {
 	return !file.unstaged;
 }
 
+/**
+ * Whether the server sends no hunk IDs for the side whatever the whitespace
+ * setting, so it can only be staged whole: binary, conflicted, or turned into
+ * a symlink or back (docs/git.md#staging-hunks). A conflict is `U` on either
+ * side, or both sides added or both deleted, as git's porcelain has it.
+ */
+export function stagesOnlyWhole(file: ChangedFile, staged: boolean): boolean {
+	const side = staged ? file.staged : file.unstaged;
+	const both = `${file.staged?.status}${file.unstaged?.status}`;
+	return (
+		!!side?.binary ||
+		side?.status === "T" ||
+		file.staged?.status === "U" ||
+		file.unstaged?.status === "U" ||
+		both === "AA" ||
+		both === "DD"
+	);
+}
+
 export function changeKindOf(file: ChangedFile): ChangeKind {
 	if (file.unstaged?.status === "?") return "untracked";
 	if (file.unstaged?.status === "D" || file.staged?.status === "D") {

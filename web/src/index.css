@@ -920,6 +920,80 @@ samp {
 	}
 }
 
+/*
+ * Line selection (components/ui/lineGutter.ts). The numbers are the control;
+ * a selected line is tinted over its add or remove colour rather than in
+ * place of it, so the change still reads as the diff. The tint is a
+ * background image because the library writes each cell's colour inline.
+ */
+.diff-tailwindcss-wrapper .diff-style-root td[data-line-selected],
+.diff-tailwindcss-wrapper .diff-style-root tr[data-line-selected] > td {
+	background-image: linear-gradient(
+		color-mix(in srgb, var(--th-accent) 18%, transparent),
+		color-mix(in srgb, var(--th-accent) 18%, transparent)
+	);
+}
+
+.diff-tailwindcss-wrapper
+	.diff-style-root
+	:is(
+		.diff-line-num,
+		.diff-line-old-num,
+		.diff-line-new-num
+	)[data-line-selected] {
+	box-shadow: inset 2px 0 0 var(--th-accent);
+	/* biome-ignore lint/complexity/noImportantStyles: Override library's inline colour */
+	color: var(--th-accent) !important;
+}
+
+/* The library dims an unchanged line's numbers, inline in split view. */
+.diff-tailwindcss-wrapper .diff-style-root
+	:is(
+		.diff-line-num,
+		.diff-line-old-num,
+		.diff-line-new-num
+	)[data-line-selected]
+	:is(div, span) {
+	/* biome-ignore lint/complexity/noImportantStyles: Override library's inline opacity */
+	opacity: 1 !important;
+}
+
+/* Tapping the only selected line again clears it: two quick taps on one
+   cell, which must not read as a double-tap zoom. */
+[data-line-select]
+	.diff-style-root
+	:is(.diff-line-num, .diff-line-old-num, .diff-line-new-num) {
+	touch-action: manipulation;
+}
+
+/* Split view sizes each side's number cell to its numbers, from 40px. */
+[data-line-select]
+	.diff-style-root
+	:is(.diff-line-old-num, .diff-line-new-num) {
+	/* biome-ignore lint/complexity/noImportantStyles: Override library's inline width */
+	min-width: 44px !important;
+}
+
+/* What the gutter does is shown only to a mouse; a tap shows it at once. */
+@media (hover: hover) and (pointer: fine) {
+	[data-line-select]
+		.diff-style-root
+		:is(.diff-line-num, .diff-line-old-num, .diff-line-new-num) {
+		cursor: pointer;
+	}
+
+	[data-line-select]
+		.diff-style-root
+		:is(.diff-line-num, .diff-line-old-num, .diff-line-new-num):not(
+			[data-line-selected]
+		):hover {
+		background-image: linear-gradient(
+			color-mix(in srgb, var(--th-accent) 10%, transparent),
+			color-mix(in srgb, var(--th-accent) 10%, transparent)
+		);
+	}
+}
+
 /* Mobile: Let line numbers scroll with content instead of staying fixed */
 /* biome-ignore lint/correctness/noUnknownFunction: Tailwind CSS v4 theme() function */
 @media (width < theme(--breakpoint-sm)) {
@@ -964,6 +1038,17 @@ samp {
 
 	.diff-tailwindcss-wrapper .diff-style-root .diff-line-num span {
 		width: 100%;
+	}
+
+	/* Where the numbers select lines, the narrowed column is still 44px. */
+	[data-line-select] .diff-style-root .diff-line-num,
+	[data-line-select] .diff-style-root .diff-line-hunk-action {
+		/* biome-ignore lint/complexity/noImportantStyles: Override library's inline width */
+		width: max(44px, var(--diff-aside-width--)) !important;
+		/* biome-ignore lint/complexity/noImportantStyles: Override library's inline width */
+		min-width: max(44px, var(--diff-aside-width--)) !important;
+		/* biome-ignore lint/complexity/noImportantStyles: Override library's inline width */
+		max-width: max(44px, var(--diff-aside-width--)) !important;
 	}
 }
 

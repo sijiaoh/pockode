@@ -28,6 +28,8 @@ vi.mock("../../hooks/useGitStage", () => ({
 	useGitStage: () => ({
 		stageMutation: { mutateAsync: stage },
 		unstageMutation: { mutateAsync: unstage },
+		stageHunkMutation: { mutateAsync: vi.fn() },
+		unstageHunkMutation: { mutateAsync: vi.fn() },
 	}),
 }));
 vi.mock("../../hooks/useGitDiscard", () => ({
@@ -485,6 +487,29 @@ describe("ChangesSection checkboxes", () => {
 			"aria-checked",
 			"false",
 		);
+	});
+
+	// A hunk staged in the review moves the file: its row waits for that as it
+	// waits for a write of the whole file.
+	it("shows a file busy while one of its hunks is being staged", async () => {
+		renderSection();
+		let finish!: () => void;
+		const write = new Promise<void>((resolve) => {
+			finish = resolve;
+		});
+		let running!: Promise<void>;
+		act(() => {
+			running = gitWriteActions.runHunk("", "a/part.ts", "h1", () => write);
+		});
+
+		expect(checkbox("Stage a/part.ts")).toHaveAttribute("aria-busy", "true");
+		expect(checkbox("Stage b/none.ts")).not.toHaveAttribute("aria-busy");
+
+		await act(async () => {
+			finish();
+			await running;
+		});
+		expect(checkbox("Stage a/part.ts")).not.toHaveAttribute("aria-busy");
 	});
 
 	// Mixed goes to checked: a partial staging made on purpose is not thrown

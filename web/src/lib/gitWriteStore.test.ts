@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	gitWriteActions,
+	isPathWriting,
 	useGitWriteStore,
 	WorktreeChangedError,
 } from "./gitWriteStore";
@@ -178,6 +179,60 @@ describe("gitWriteStore", () => {
 			worktreeActions.setIsGitRepo(false);
 
 			expect(useGitWriteStore.getState().failures).toEqual({});
+		});
+	});
+
+	describe("hunks", () => {
+		// Keyed by path alone, the second hunk's press would be dropped as a
+		// duplicate of the first and still report success.
+		it("queues two hunks of one file, and drops only a repeat of the same one", async () => {
+			const first = deferred();
+			const firstAction = vi.fn(() => first.promise);
+			const second = vi.fn(async () => {});
+			const repeat = vi.fn(async () => {});
+
+			const running = gitWriteActions.runHunk("", "a.ts", "h1", firstAction);
+			const queued = gitWriteActions.runHunk("", "a.ts", "h2", second);
+			await gitWriteActions.runHunk("", "a.ts", "h1", repeat);
+
+			await vi.waitFor(() => expect(firstAction).toHaveBeenCalled());
+			expect(second).not.toHaveBeenCalled();
+			first.settle();
+			await running;
+			await queued;
+			expect(second).toHaveBeenCalledOnce();
+			expect(repeat).not.toHaveBeenCalled();
+		});
+
+		// While a hunk is in flight the file's own controls wait for it, and the
+		// file's write would move the hunk before the hunk's turn came.
+		it("makes the path busy, and is dropped behind a write of the whole file", async () => {
+			const hunk = deferred();
+			const running = gitWriteActions.runHunk(
+				"",
+				"a.ts",
+				"h1",
+				() => hunk.promise,
+			);
+			expect(isPathWriting(writes(""), "a.ts")).toBe(true);
+			expect(isPathWriting(writes(""), "b.ts")).toBe(false);
+
+			hunk.settle();
+			await running;
+			expect(isPathWriting(writes(""), "a.ts")).toBe(false);
+
+			const file = deferred();
+			const staging = gitWriteActions.run(
+				"",
+				"toggle",
+				["a.ts"],
+				() => file.promise,
+			);
+			const behind = vi.fn(async () => {});
+			await gitWriteActions.runHunk("", "a.ts", "h1", behind);
+			expect(behind).not.toHaveBeenCalled();
+			file.settle();
+			await staging;
 		});
 	});
 });

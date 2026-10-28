@@ -938,6 +938,9 @@ several causes the user acts on differently: a `git.commit.draft` that produced
 no message, with `data.reason` (`timeout`, `auth_failed`, `cli_not_found`,
 `tool_use`, `cancelled`, …) for the commit sheet to pick its sentence by
 ([git.md](../git.md#drafting-a-commit-message)).
+`-32005` (`rpc.CodeGitHunkStale`) refuses a `git.hunk.stage` / `git.hunk.unstage`
+whose hunk the file's current diff no longer has: nothing was written, and the
+client rereads the diff rather than retrying ([git.md](../git.md#staging-hunks)).
 
 A server's error message is therefore text to put in front of a user, never a
 value to branch on — it embeds an arbitrary error string, and its fixed half is

@@ -272,3 +272,101 @@ describe("DiffViewer", () => {
 		expect(await screen.findAllByText("line 1")).toHaveLength(2);
 	});
 });
+
+describe("DiffViewer hunk bars", () => {
+	// Wrapped: unwrapped, the library draws a row of the caller's only once it
+	// has measured the table, which jsdom never lays out.
+	const bars = (container: HTMLElement) =>
+		Array.from(container.querySelectorAll("[data-bar]"), (bar) => {
+			const row = bar.closest("tr");
+			return {
+				bar: bar.getAttribute("data-bar"),
+				// The line drawn just above the bar's row.
+				after: row?.previousElementSibling?.textContent?.trim(),
+			};
+		});
+
+	it.each([
+		["inline", false],
+		["side by side", true],
+	])("draws one under each hunk's last line, %s", async (_, split) => {
+		const { container } = render(
+			<DiffViewer
+				fileName="a.txt"
+				hunks={[
+					patch(hunk(10, "line 10", "ten"), hunk(30, "line 30", "thirty")),
+				]}
+				oldContent={file(40)}
+				newContent={file(40, { 10: "ten", 30: "thirty" })}
+				wrap
+				split={split}
+				renderHunkBar={(h, index) => (
+					<div data-bar={`${index}:${h.newStart}`} />
+				)}
+			/>,
+		);
+
+		await waitFor(() => expect(bars(container)).toHaveLength(2));
+		expect(bars(container)).toEqual([
+			{ bar: "0:7", after: expect.stringContaining("line 13") },
+			{ bar: "1:27", after: expect.stringContaining("line 33") },
+		]);
+	});
+
+	it("keeps them once the gap between two hunks is expanded", async () => {
+		const user = userEvent.setup();
+		const { container } = render(
+			<DiffViewer
+				fileName="a.txt"
+				hunks={[
+					patch(hunk(10, "line 10", "ten"), hunk(20, "line 20", "twenty")),
+				]}
+				oldContent={file(30)}
+				newContent={file(30, { 10: "ten", 20: "twenty" })}
+				wrap
+				renderHunkBar={(_, index) => <div data-bar={index} />}
+			/>,
+		);
+
+		await user.click(
+			await waitFor(() => gapCell(container, "3 unchanged lines")),
+		);
+		await screen.findByText("line 15");
+
+		expect(bars(container).map((b) => b.bar)).toEqual(["0", "1"]);
+	});
+
+	// At the end of a file the hunk can end on a change rather than on context,
+	// and then the layouts disagree on which row is last: unified draws the
+	// addition after the removals, split pairs it with the first removal.
+	it.each([
+		["inline", false, "thirty-nine"],
+		["side by side", true, "line 40"],
+	])("hangs it under the last row of a hunk ending in a change, %s", async (_, split, last) => {
+		const { container } = render(
+			<DiffViewer
+				fileName="a.txt"
+				hunks={[
+					patch(
+						[
+							"@@ -37,4 +37,3 @@",
+							" line 37",
+							" line 38",
+							"-line 39",
+							"-line 40",
+							"+thirty-nine",
+						].join("\n"),
+					),
+				]}
+				oldContent={file(40)}
+				newContent={`${file(38)}thirty-nine\n`}
+				wrap
+				split={split}
+				renderHunkBar={(_, index) => <div data-bar={index} />}
+			/>,
+		);
+
+		await waitFor(() => expect(bars(container)).toHaveLength(1));
+		expect(bars(container)[0].after).toContain(last);
+	});
+});
