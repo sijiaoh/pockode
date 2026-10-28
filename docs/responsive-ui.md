@@ -691,7 +691,7 @@ would double the height of the code the review exists to read, and what a miss
 costs is small: it selects the neighbouring line, which shows at once in the
 highlight and in the selection bar's range, executes nothing, and is undone by
 the next tap. The one neighbour that does execute something, the hunk bar's
-stage box, keeps the floor's spacing from the gutter. The cells are not
+Stage button, keeps the floor's spacing from the gutter. The cells are not
 narrow: the unified column is at least 90px (the library sizes it to twice its
 widest number), held at 44px where a phone narrows it to one number, and split
 view's per-side cells, which the library sizes from 40px, get a 44px minimum width. These are

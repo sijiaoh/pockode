@@ -338,15 +338,14 @@ enabled: isGitRepo && (
 
 ### 2.5 Pressing Review
 
-It opens the review layer at the **first file in list order**, exactly as the
-Changes list's `Review` button does
-([git-changes-ui.md](git-changes-ui.md#the-bottom-bar)). That includes the
-flat/tree order the user last chose. One function serves both buttons, so the
-two can never start at different files: `firstReviewTarget` in
-`lib/gitChanges.ts`, the first file of `orderChanges` under the given view plus
-its side by `reviewSideOf`. The list calls it with its own files and view; the
-row's press is `AppShell`'s `handleOpenReview`, which calls it on the status
-and the view in `gitChangesViewStore` as they are at the press. The route
+It opens the review layer at the **first file in list order** — the file the
+Changes list's first row opens — including the flat/tree order the user last
+chose: `firstReviewTarget` in `lib/gitChanges.ts`, the first file of
+`orderChanges` under the given view plus its side by `reviewSideOf`. The row's
+press is `AppShell`'s `handleOpenReview`, which calls it on the status and the
+view in `gitChangesViewStore` as they are at the press. (The list once had a
+`Review` button of its own doing the same; it went, being the first row's press
+— [git-changes-ui.md](git-changes-ui.md#the-bottom-bar).) The route
 carries the current `session`, so the header's way back names this chat.
 
 - **Push**, like every entry into the workspace, and without the list's

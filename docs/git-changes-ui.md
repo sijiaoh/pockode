@@ -33,7 +33,7 @@ A path listed in `conflicted` — a merge, rebase, cherry-pick, revert or stash 
 │ [ Changes ]  History   Branches  │  segmented control (unchanged)
 ├──────────────────────────────────┤
 │ ⚠ Discard failed · Details     ✕ │  inline-action banner (unchanged)
-│ ▣ 5 files  +142 −37   [≣|⌸]  ⋯  │  list header — sticky
+│ ▣ 5 files  +142 −37      [≣|⌸]   │  list header — sticky
 ├──────────────────────────────────┤
 │ ☑  GitTab.tsx          +12 −3  ⋯ │
 │    web/src/components/Git        │
@@ -46,9 +46,11 @@ A path listed in `conflicted` — a merge, rebase, cherry-pick, revert or stash 
 │ ☐  old.ts               −14    ⋯ │  name struck through
 │    server · Deleted              │
 ├──────────────────────────────────┤
-│ [ Review ]  [ Commit 1 file    ] │  bottom bar
+│ [Discard unchecked…] [Commit 1…] │  bottom bar
 └──────────────────────────────────┘
 ```
+
+**Every control answers one question.** A control that answers none is not there, and two that answer the same one are one. That is why the list has no `Review` button (tapping the first row is the same press), no `⋯` in its header (its one item is the bottom bar's `Discard unchecked…` now) and no `View history` on a clean tree (the segmented control's `History` is right above it).
 
 ### The file row
 
@@ -114,7 +116,7 @@ The project's menu shape: a `Sheet` of `MenuRow`s on both layouts, titled with t
 |---|---|---|
 | `Open file` | Always; **disabled** for a deleted file, with `(deleted)` in its name | The `file` layer, as the diff's title did |
 | `Copy path` | Always | Copies the path as the list knows it — relative to the root repository, a submodule file with its submodule prefix. The row reads `Copied` with a check for about a second, then the sheet closes; on failure it reads `Copy failed` and the sheet stays open, the path being in its title (`useCopyToClipboard`'s states) |
-| `Discard changes` / `Delete file` (untracked) | Only when the file has unstaged changes — the existing rule that staged-only rows have nothing to discard and are unstaged first | Closes the sheet and opens the existing `ConfirmDialog` with the existing copy. Disabled, with `Wait for the change in progress to finish.`, while the file has a write queued — the queue drops a path it already holds, so a discard let through would report success without running; discard-all in the header's `⋯` waits the same way while any file has one. Destructive styling as `FileEntryMenu`'s delete, and last in the sheet, after a divider |
+| `Discard changes` / `Delete file` (untracked) | Only when the file has unstaged changes — the existing rule that staged-only rows have nothing to discard and are unstaged first | Closes the sheet and opens the existing `ConfirmDialog` with the existing copy. Disabled, with `Wait for the change in progress to finish.`, while the file has a write queued — the queue drops a path it already holds, so a discard let through would report success without running; the bottom bar's `Discard unchecked…` waits the same way while any file has one. Destructive styling as `FileEntryMenu`'s delete, and last in the sheet, after a divider |
 
 Order is frequency, and the destructive item comes last behind a divider in `danger` style — the arrangement `FileEntryMenu` already uses for Delete, so the two menus read alike.
 
@@ -123,13 +125,13 @@ Order is frequency, and the destructive item comes last behind a divider in `dan
 One row, sticky at the top of the scroll area, `min-h-[44px]`:
 
 ```
-▣ 5 files  +142 −37            [≣|⌸]  ⋯
+▣ 5 files  +142 −37            [≣|⌸]
 ```
 
 - **Select all** — the same checkbox as the rows, over every file: checked when every file is fully staged, unchecked when nothing is staged anywhere, mixed otherwise. Tap: not checked → stage everything that has unstaged changes; checked → unstage everything. Its visible label is the count, `5 files`, and its accessible name contains it, `Stage all 5 files` — a voice-control user says what they see. The totals beside it are the sum of the rows' counts (binary files and files without counts add nothing).
 - **Flat / Tree** — a two-icon segmented toggle (`List` / `FolderTree`), `aria-label="Flat list"` / `"Folder tree"`, `aria-pressed`. The choice is remembered in `localStorage` (`pockode:gitChangesView`), per browser rather than per worktree: it is a reading preference. Default flat.
-- **At narrow widths** the row obeys [the narrow-width rule](sidebar-ui.md#the-narrow-width-rule): the label-and-totals group is the one `flex-1 min-w-0` element, and the totals are what truncate away first (they are also on every row and in the sidebar); the checkbox, the toggle and `⋯` are `shrink-0`. At the left column's 280px minimum this is what keeps the row on one line.
-- **`⋯`** (`More actions for all changes`, a sheet titled `All changes`) — one item, `Discard all changes…`, which opens the existing "all" confirmation over every file with unstaged changes, with the existing copy. It used to be an icon in the `CHANGES` header; it moves into a menu because the header is now the most-tapped row on the screen (select all) and a one-tap destructive icon beside it is the arrangement this redesign removes. Hidden when nothing is unstaged; with it the `⋯` itself, rather than a menu with nothing in it.
+- **At narrow widths** the row obeys [the narrow-width rule](sidebar-ui.md#the-narrow-width-rule): the label-and-totals group is the one `flex-1 min-w-0` element, and the totals are what truncate away first (they are also on every row and in the sidebar); the checkbox and the toggle are `shrink-0`. At the left column's 280px minimum this is what keeps the row on one line.
+- **Nothing destructive.** Discarding every file used to be the one item of a `⋯` here; it is the bottom bar's `Discard unchecked…` now ([below](#the-bottom-bar)). The header is the most-tapped row on the screen (select all), and a destructive control beside it is the arrangement this layout removes.
 
 ### Flat and tree
 
@@ -155,22 +157,30 @@ One row, sticky at the top of the scroll area, `min-h-[44px]`:
 
 ### The bottom bar
 
-The commit bar becomes a two-button bar. It renders on the same condition the commit bar does today — `describeCommitAction` returns non-null — so a clean tree and an unreadable status have no bar.
+`[ Discard unchecked… ]  [ Commit n files ]`. It renders on the same condition the commit bar always has — `describeCommitAction` returns non-null — so a clean tree and an unreadable status have no bar.
 
 | Working tree | Left | Right (L1) |
 |---|---|---|
-| n files staged in the root | `Review` | `Commit n files` (`Commit 1 file`) |
-| changes, nothing staged anywhere | `Review` | `Commit` disabled, `sr-only` hint `Check a file to commit` |
-| staged only inside a submodule | `Review` | `Commit` disabled, the existing **visible** submodule line above the bar |
+| n files staged in the root, some changes unstaged | `Discard unchecked…` | `Commit n files` (`Commit 1 file`) |
+| every change staged | none | `Commit n files` |
+| changes, nothing staged anywhere | `Discard unchecked…` | `Commit` disabled, `sr-only` hint `Check a file to commit` |
+| staged only inside a submodule | `Discard unchecked…` when something is unstaged | `Commit` disabled, the existing **visible** submodule line above the bar |
 
-- `Review` is a secondary button (`th-bg-tertiary` fill, the sheets' secondary style), at most a third of the width; Commit takes the rest. It opens the review layer at the **first file in list order** (push), by `firstReviewTarget` in `lib/gitChanges.ts` — the one function the chat's [review row](agent-handoff-ui.md#25-pressing-review) presses too, so the two never start at different files.
+**The checkboxes are the ballot.** A checked box says "commit this file", so an unchecked one says "not this". The bar reads the review's bar at the scale of the list: there the left button takes away and the right one keeps, for one file; here the same, for every file at once. It is the AI workflow in two presses — go through what the agent changed, check what is good, discard what is not, commit.
+
+- **`Discard unchecked…`** is a secondary button in the review's `Discard file` style (`th-bg-tertiary` fill, `th-error` text), at most half the width, 12px from Commit as in the review's bar. At the sidebar's default width its label is wider than its half, so it wraps to two lines inside the 44px button rather than truncating (`CommitBar.browser.test.tsx`); only at the sidebar's narrowest does it take three and the bar grows a few pixels. Half rather than the review's 40%, which would cost the third line at the default width too. It opens the existing `ConfirmDialog` with the existing "all" copy ([git-ui.md](git-ui.md#discard)), which counts the files: `Discard all changes?`, `n files will lose their edits and m untracked files will be deleted`, or the single-file wording when the batch is one file.
+- **Unchecked means unstaged**, file by file — the set discard-all always took. An unchecked (☐) file loses its unstaged changes, an untracked one is deleted. A partly checked (▣) file loses its unstaged side only: it goes back to what is staged and stays in the list, ☑. A checked (☑) file is untouched. A conflicted file has no unstaged side and is passed over, as its own sheet offers no discard ([git-conflict-ui.md](git-conflict-ui.md#the-changes-list)). Renames and submodule files go through the same `git.discard` as a single file's discard, so what each loses is unchanged.
+- **Hidden when nothing is unstaged** — every file checked, or every file conflicted. **Disabled while any file in the list has a write queued**: the write queue drops a path it already holds, so a discard let through then would skip that file and report success.
+- A file under review that it discards is done with — a partly checked one included, whose staged part waits in its row — and the review moves on, as for any discard from the list ([When the list changes under the review](#when-the-list-changes-under-the-review)).
+- **No separate multi-select mode.** A row already has one kind of "selected", its checkbox. A second kind would give one list two meanings of selected — the confusion merging `Staged` and `Changes` into one list removed.
 - The sr-only hint was `Stage a file to commit`, naming the stage buttons; with those gone it names the checkboxes. It stays sr-only by git-ui.md's test — the boxes are right above the bar.
 - `Commit n files` opens the existing commit sheet. n is the root repository's staged count, as before; the count is in the label because the button no longer sits under a `STAGED n` header that said it.
 - The bar and the sheet stay siblings, so a refresh that empties the tree does not unmount a half-written message ([git-ui.md](git-ui.md#commit)).
+- The chat's [review row](agent-handoff-ui.md#25-pressing-review) starts at the first file in list order, through `firstReviewTarget` in `lib/gitChanges.ts` — the file the list's first row opens.
 
 ### Clean, loading, failed
 
-- **Clean**: in place of the header and the list, centred and muted, `No changes`, and under it a text button `View history` that selects the History segment (push, as the segment control does). No bottom bar.
+- **Clean**: in place of the header and the list, centred and muted, `No changes`, and nothing else: History is one tap away in the segmented control above. No bottom bar.
 - **Loading**: the spinner, as today. No header, no bar.
 - **Status unreadable**: `Failed to load git status` and the reason, as today. No header, no bar.
 
@@ -192,7 +202,7 @@ The review layer is the `diff` layer redesigned: one file at a time, in list ord
 │  40   import { Foo }             │
 │  41 − const a = «old»;           │  «» = word-level highlight
 │  41 + const a = «new»;           │
-│ ☐  Lines 40–48 · function lo… ⋮≡ │  hunk bar (Staging a hunk)
+│ Lines 40–48 · functi… ⋮≡ [Stage] │  hunk bar (Staging a hunk)
 │ ┄┄┄ ⌄ 24 unchanged lines ⌃ ┄┄┄  │  collapsed context, tap to expand
 │  66   …                          │
 ├──────────────────────────────────┤
@@ -297,13 +307,13 @@ A file discarded from the list while it is under review is done with, as the rev
 
 ### Staging a hunk
 
-Each hunk of the diff gets a row of its own, the **hunk bar**, carrying a checkbox. It is the file's checkbox scaled down to one hunk. The meaning is the same, "will this be committed", and so are the component (`StageCheckbox`) and the rules for in flight and failure. Per-line staging is not offered. Lines can be selected only to hand them to the agent ([below](#handing-lines-to-the-agent)).
+Each hunk of the diff gets a row of its own, the **hunk bar**, carrying a `Stage` button — `Unstage` on the staged side. It is the bottom bar's `Stage` / `Unstage` scaled down to one hunk: the same words, the bottom bar's for the whole file and the bar's for this part of it, the pattern of VS Code's Stage Block and GitHub Desktop. The rules for in flight and failure are the file's. Per-line staging is not offered. Lines can be selected only to hand them to the agent ([below](#handing-lines-to-the-agent)).
 
 ```
 │  40   import { Foo }             │
 │  41 − const a = «old»;           │
 │  41 + const a = «new»;           │
-│ ☐  Lines 40–48 · function lo… ⋮≡ │  hunk bar, under the hunk's last row
+│ Lines 40–48 · functi… ⋮≡ [Stage] │  hunk bar, under the hunk's last row
 │ ┄┄┄ ⌄ 24 unchanged lines ⌃ ┄┄┄  │  gap row (unchanged)
 ```
 
@@ -311,55 +321,57 @@ Each hunk of the diff gets a row of its own, the **hunk bar**, carrying a checkb
 
 | Part | Content |
 |---|---|
-| Checkbox | `StageCheckbox`, the 20px box with its hit area in the gutter column, so the boxes of successive hunks line up under each other and under the gap rows' expand buttons. Absent when the hunk has no ID ([below](#which-hunks-have-boxes)) |
 | Range | `Lines 40–48`, from the side's new numbering (`+40,9` in git's header): the working tree's lines on the unstaged side, the index's on the staged side. A hunk of one line reads `Line 40`. A hunk that only removes lines (`-41,3 +40,0`, or a deleted file's `+0,0`) reads `Removed lines 41–43` in the old numbering, the label the selection bar uses for the same case. `text-xs`, tabular figures |
 | Context | git's function context, the text after the second `@@`, muted, and the row's one `flex-1 min-w-0` part, truncating at the tail. Absent when git gives none |
 | Select | An L5 icon button (`TextSelect`), `Select lines 40–48`: selects the hunk's rows for [handing to the agent](#handing-lines-to-the-agent) and moves focus to the selection bar. It is the keyboard's way to a selection, and a one-tap way for a thumb to take a whole hunk |
+| Stage | At the right end, after Select: a small text button (`th-bg-tertiary`, `text-xs`, 36px tall, 44px on a coarse pointer), `Stage` on the unstaged side and `Unstage` on the staged side. Absent when the hunk has no ID or is the side's only hunk ([below](#which-hunks-have-a-stage-button)) |
 
-- **Height.** The box sits between two other targets. Above it is the gutter cell of the hunk's last line, which selects. Below it is the next gap row, whose whole width expands. A tap that lands a little off either one must not stage the hunk, so the box keeps the floor's spacing from both ([responsive-ui.md](responsive-ui.md#hit-areas-and-spacing)). On a coarse pointer the bar is 60px, with the 44px hit area centred and 8px of no target above and below it. On a fine pointer it is 44px, with the 36px area centred and 4px either side. The fill is `th-bg-secondary`, the tint the library's `@@` row had, so the bar reads as the seam between one hunk and what follows.
+- **Height.** The bar's buttons sit between two other targets. Above it is the gutter cell of the hunk's last line, which selects. Below it is the next gap row, whose whole width expands. A tap that lands a little off either one must not stage the hunk, so the buttons keep the floor's spacing from both ([responsive-ui.md](responsive-ui.md#hit-areas-and-spacing)). On a coarse pointer the bar is 60px, with the 44px hit area centred and 8px of no target above and below it. On a fine pointer it is 44px, with the 36px area centred and 4px either side. The fill is `th-bg-secondary`, the tint the library's `@@` row had, so the bar reads as the seam between one hunk and what follows.
 - **Not sticky.** A hunk is its change plus three lines of context, so its bar is rarely out of sight. A sticky row inside the library's tables, which are two side-by-side tables when split view is unwrapped, is fragile out of proportion to what it would add.
 - **It is not the gap row.** The gap row is the library's, and its whole width is the expand target. The bar is the hunk's own row, under the hunk's last line. When a gap is fully expanded and two hunks join on screen, both bars stay: the hunks are git's, taken from the diff text, and expanding context does not merge them. In split view the bar is in the half its anchoring line is on (see below).
-- **Accessible name** `Stage lines 40–48` (or `Stage removed lines 41–43`). The state is spoken on its own: "Stage lines 40–48, checkbox, not checked". This is the `Stage <path>` pattern.
+- **Accessible name** `Stage lines 40–48` (or `Unstage removed lines 41–43`): the visible verb first, so a voice-control user says what they see, then the range.
 
 **Why under the hunk, not above it.** A title row above the hunk was the first intent, and the library does not allow it. `@git-diff-view/react` 0.0.35 renders, per line, the gap row, the line, its widget row and its extend row, in that order. The gap row renders nothing once its gap is fully expanded, and a hidden line renders no extend row. So the library has no slot directly *above* a hunk that exists in every state, and a `<tr>` written into its React-managed `<tbody>` from outside does not survive its next render. `DiffViewer` therefore hands the bar to `renderExtendLine` on the hunk's last line, which is always visible because it belongs to the hunk. Which line that is depends on the layout — unified draws a change block's additions after its removals, split pairs them up — and `lib/diffHunks.ts` works it out per layout from the hunk's text. In split view the library gives each half's extend row a cell of its own, wrapped or not, so the bar is in the half the last line is on rather than across both. A cost that follows from the library rather than from the position: a staged or unstaged hunk changes the diff, a changed diff is a new model in the library, and a new model starts with every gap collapsed again, so context the reader expanded is folded back after each press. The page still keeps the next bar where the pressed one was.
 
-#### Which hunks have boxes
+#### Which hunks have a Stage button
 
-Exactly those the server gives an ID. Every `git.diff.subscribe` reply and `git.diff.changed` notification carries `hunk_ids`, one per `@@` hunk, in order, and the i-th hunk takes the i-th ID. Where the hunks cannot be applied as shown, the IDs are absent. The cases are [git.md](git.md#staging-hunks)'s table. The client does not decide this a second time. Without IDs the bars still draw, for their range, context and Select button, but carry no box. A submodule's file has boxes, and they apply to the submodule's index, as staging the file does.
+Those the server gives an ID, on a side with more than one hunk. Every `git.diff.subscribe` reply and `git.diff.changed` notification carries `hunk_ids`, one per `@@` hunk, in order, and the i-th hunk takes the i-th ID. Where the hunks cannot be applied as shown, the IDs are absent. The cases are [git.md](git.md#staging-hunks)'s table. The client does not decide this a second time. Without IDs the bars still draw, for their range, context and Select button, but carry no Stage button. A submodule's file has them, and they apply to the submodule's index, as staging the file does.
 
-**A conflicted file has no hunks to stage.** Its review is the conflict view, which draws the working-tree file with its markers rather than a diff, so there are no hunk bars and no line selection: the handoff there is `Ask agent`, and the one stage it offers is `Mark resolved` ([git-conflict-ui.md](git-conflict-ui.md#viewing-a-conflicted-file)). A hunk write that names a conflicted path anyway, from a diff older than the conflict, is refused as a whole-file one is (`-32007`, [git.md](git.md#writes-refused-during-an-operation)), with the same refusal sentence. The other files keep their boxes while a merge or rebase is in progress: staging part of a file is an index edit like staging all of it ([git-conflict-ui.md](git-conflict-ui.md#what-stops-while-an-operation-is-in-progress)).
+**A conflicted file has no hunks to stage.** Its review is the conflict view, which draws the working-tree file with its markers rather than a diff, so there are no hunk bars and no line selection: the handoff there is `Ask agent`, and the one stage it offers is `Mark resolved` ([git-conflict-ui.md](git-conflict-ui.md#viewing-a-conflicted-file)). A hunk write that names a conflicted path anyway, from a diff older than the conflict, is refused as a whole-file one is (`-32007`, [git.md](git.md#writes-refused-during-an-operation)), with the same refusal sentence. The other files keep their Stage buttons while a merge or rebase is in progress: staging part of a file is an index edit like staging all of it ([git-conflict-ui.md](git-conflict-ui.md#what-stops-while-an-operation-is-in-progress)).
 
-An untracked, added or deleted file is one hunk, and its box stages or unstages the whole file. That duplicates the bottom bar's `Stage` / `Unstage`. It stays anyway, so that every hunk looks the same. It is not always equivalent: a mode change is part of no hunk, and a staged rename stays staged when its hunks are unstaged ([git.md](git.md#staging-hunks)). After the last hunk goes, such a side can stay, reading `No content changes` with no box. The bottom bar's whole-file button is still there to finish it, and the layer follows to the other side only when the side is really gone.
+**A side with one hunk has no Stage button.** That hunk is the whole side, so staging it is the bottom bar's `Stage` / `Unstage` — the same operation under two buttons. The bottom bar's is also the one that finishes what a hunk cannot carry: a mode change is part of no hunk, and a staged rename stays staged when its hunks are unstaged ([git.md](git.md#staging-hunks)). An untracked, added or deleted file is always one hunk. Since a file's hunks have IDs all together or not at all, either every bar of a side has the button or none has, and the Select buttons line up down the side either way. The bar still draws, for its range, context and Select.
 
 #### The two sides read the same way
 
-The box says whether the hunk is in the index, so its state is fixed by the side it is drawn on:
+The button names what pressing it does, so it is fixed by the side it is drawn on:
 
-| Side on screen | Box | Press | Afterwards |
+| Side on screen | Button | Press | Afterwards |
 |---|---|---|---|
-| Unstaged (index → working tree) | ☐ on every hunk | `git.hunk.stage` | The hunk leaves this side and appears on the staged one |
-| Staged (HEAD → index) | ☑ on every hunk | `git.hunk.unstage` | The hunk leaves this side and appears on the unstaged one |
+| Unstaged (index → working tree) | `Stage` on every hunk | `git.hunk.stage` | The hunk leaves this side and appears on the staged one |
+| Staged (HEAD → index) | `Unstage` on every hunk | `git.hunk.unstage` | The hunk leaves this side and appears on the unstaged one |
 
-A box that never shows two states on one screen looks odd at first. It is still the right box. It is the same question the file's checkbox answers in the list, and after one press the user sees it work: the hunk goes, and the file's row in the list turns ▣. The alternative, a `Stage hunk` / `Unstage hunk` text button, would be a second vocabulary for the same operation, in a row where text costs the width the context line needs.
+**Why a button and not a checkbox.** The bar used to carry the file's checkbox scaled down to a hunk. Two things were wrong with it. A column of boxes over a bottom bar with a `Stage` button is the commonest "tick, then act" pattern there is, so it read as "check the hunks, then press Stage below" — which is not what it did. And a box drawn on one side could only ever show one state, ☐ on every unstaged hunk and ☑ on every staged one, so the one thing a checkbox is for, seeing the state change, never happened on screen. An action button says what it does, in the bottom bar's words.
 
 #### In flight, and after
 
-**A hunk is busy until a diff read after its write arrives.** The press queues the write, and the box shows the spinner and is `aria-busy` / `aria-disabled`, exactly as the file's box is while its write runs. After the write **succeeds** it stays that way, until a diff read after the write was answered arrives, or until the side is gone. That diff no longer has the hunk, so in practice the box leaves with it. The write's slot in `gitWriteStore` ends when the write answers. The diff comes back separately, and the server's diff watcher polls every 3 s, so for up to that long the box would sit idle in front of a hunk that is already staged. A second press there would be refused, and the stale message below would be a lie. So that the wait is short, the page asks for the diff again as soon as the write succeeds, rather than waiting for the poll. That refresh is **soft**: the diff on screen stays until the new one replaces it, with no loading state in between, since a spinner in its place would empty the scroll box and throw away the position the next paragraph keeps. `useGitDiffWatch`'s `refresh` resubscribes without the loading flag, which is kept for a new path, side or whitespace setting. A refresh that fails replaces the diff with `Failed to load` and the reason, as a first read that fails does; nothing reads it again on its own, so a spinner left in its place would never end. Only a subscribe reply counts as that diff: a notification already on its way when the write answered may predate it. The hunk leaves the view only with that diff, never before (no optimism). A write that fails ends the busy state with its answer, since nothing was written and the hunk is still there.
+**A hunk is busy until a diff read after its write arrives.** The press queues the write, and the button shows the spinner over its label, which keeps its width so nothing beside it moves, and is `aria-busy` / `aria-disabled` — focusable, ignoring presses — exactly as the file's box is while its write runs. After the write **succeeds** it stays that way, until a diff read after the write was answered arrives, or until the side is gone. That diff no longer has the hunk, so in practice the button leaves with it. The write's slot in `gitWriteStore` ends when the write answers. The diff comes back separately, and the server's diff watcher polls every 3 s, so for up to that long the button would sit idle in front of a hunk that is already staged. A second press there would be refused, and the stale message below would be a lie. So that the wait is short, the page asks for the diff again as soon as the write succeeds, rather than waiting for the poll. That refresh is **soft**: the diff on screen stays until the new one replaces it, with no loading state in between, since a spinner in its place would empty the scroll box and throw away the position the next paragraph keeps. `useGitDiffWatch`'s `refresh` resubscribes without the loading flag, which is kept for a new path, side or whitespace setting. A refresh that fails replaces the diff with `Failed to load` and the reason, as a first read that fails does; nothing reads it again on its own, so a spinner left in its place would never end. Only a subscribe reply counts as that diff: a notification already on its way when the write answered may predate it. The hunk leaves the view only with that diff, never before (no optimism). A write that fails ends the busy state with its answer, since nothing was written and the hunk is still there.
 
 **The other hunks stay pressable**, and their writes queue behind it. IDs are content, not positions ([git.md](git.md#staging-hunks)), so a press queued behind an earlier hunk of the same file still names its hunk after the earlier one has moved the numbers. Two hunks with identical lines are told apart by order. Pressing the second while the first is in flight can therefore be refused as stale. That is safe, and rare.
 
-**The busy sets.** `gitWriteStore` drops a path it already holds, so hunk writes are deduplicated on their own set, keyed by path and ID. Keyed by path alone, the second hunk's press would be dropped and still report success. They also mark their path busy, the way a file's write does. So while any hunk of the file is in flight, the file's box in the list shows the spinner, and the review's `Discard file`, `Stage & next` and `Unstage` are disabled, as the file's action sheet already is ("Wait for the change in progress to finish."). The reverse holds too: while a file-level `git.add`, `git.reset` or discard is pending on the path, every hunk box of the file is busy. A hunk pressed behind a whole-file write would only be refused as stale once the write had moved it.
+**The busy sets.** `gitWriteStore` drops a path it already holds, so hunk writes are deduplicated on their own set, keyed by path and ID. Keyed by path alone, the second hunk's press would be dropped and still report success. They also mark their path busy, the way a file's write does. So while any hunk of the file is in flight, the file's box in the list shows the spinner, and the review's `Discard file`, `Stage & next` and `Unstage` are disabled, as the file's action sheet already is ("Wait for the change in progress to finish."). The reverse holds too: while a file-level `git.add`, `git.reset` or discard is pending on the path, every hunk button of the file is busy. A hunk pressed behind a whole-file write would only be refused as stale once the write had moved it.
 
 **Where the page goes.** When the hunk leaves, the page keeps the next hunk's bar where the pressed bar was, so a run of presses walks down the file under a still thumb, the way `Stage & next` walks the list. With the bar under its hunk, that leaves the next hunk to decide about directly above the thumb. With no hunk below, the page keeps the previous hunk where it was. The successor is the pressed hunk's neighbour by ID, not by index, so two hunks pressed in a row that leave in one diff still hand the place to the hunk after the second. The side follows the existing rules ([Partially and fully staged files](#partially-and-fully-staged-files)). After staging the first hunk of an unstaged-only file, the file is partly staged and the side row appears, with `Unstaged` still selected. After staging the last unstaged hunk, the layer follows to the staged side, replacing the route. Hunk staging never moves to the next file: `Stage & next` is the one control that advances.
 
-**Failure** goes to the layer's banner, `Stage failed` / `Unstage failed` with the details, and the box returns to its mark. The rule is the one `Stage & next` follows, including the fallback to the Changes banner when the answer comes after the reader left.
+**Focus goes with the place.** A keyboard user who pressed a hunk's button finds focus on the Stage button of the hunk that took its place. When that hunk is the last one left, it has no Stage button ([above](#which-hunks-have-a-stage-button)), and focus lands on its Select button instead.
+
+**Failure** goes to the layer's banner, `Stage failed` / `Unstage failed` with the details, and the button returns to its label. The rule is the one `Stage & next` follows, including the fallback to the Changes banner when the answer comes after the reader left.
 
 **When the file changed under the hunk.** The diff on screen can be older than the file: the agent edits it, or the user saves elsewhere, and the watcher has not polled yet. The server then refuses with `-32005` (`CodeGitHunkStale`), having written nothing. The user sees:
 
 - The banner: `This part of the file changed before it could be staged.` (`unstaged` for the staged side), with no details link, because nothing failed that the user could act on. There is no automatic retry: the hunk the user decided about is gone, and staging whatever now sits in its place is the user's decision to make again.
 - The diff asked for again at once, softly, as after a success. The page keeps the bar nearest the refused one where the refused one was.
 
-**Hidden whitespace.** With `Ignore whitespace` on, the hunks on screen come from `-w`, so the server sends no IDs and the bars have no box. One muted line above the diff says `Show whitespace to stage parts of this file`, with the existing `Show whitespace` text button. It is left out when the status already says the file would have no IDs anyway: binary, conflicted, or turned into a symlink or back (`gitChanges.ts`'s `stagesOnlyWhole`). The bottom bar's whole-file actions are unaffected.
+**Hidden whitespace.** With `Ignore whitespace` on, the hunks on screen come from `-w`, so the server sends no IDs and the bars have no Stage button. One muted line above the diff says `Show whitespace to stage parts of this file`, with the existing `Show whitespace` text button. It is left out when the status already says the file would have no IDs anyway: binary, conflicted, or turned into a symlink or back (`gitChanges.ts`'s `stagesOnlyWhole`). The bottom bar's whole-file actions are unaffected.
 
 **The Changes list needs nothing new.** A file with some hunks staged is in both of `git.status`'s lists, which the list already draws as ▣ ([The checkbox](#the-checkbox)). Pressing it stages the rest, by Decision 3: mixed goes to checked, never to unchecked, because a hunk the user staged on purpose is not thrown away by a press that means "include this file".
 
@@ -389,7 +401,7 @@ Touch has no Shift, and a drag in the gutter on a touch screen is the page's scr
 - **The unit is a diff row**: context, added and removed lines alike. In unified view the library draws the old and new numbers in one cell per row, and pressing it selects the row. The range runs in row order. In split view a range stays on the side it started on. Pressing the other side's numbers starts a new selection there.
 - **A range may cross a collapsed gap.** The gap row is highlighted with the rest, and the hidden lines are part of the range ([below](#what-ask-ai-to-edit-writes)). Expanding a gap inside the range keeps the selection and shows what it already held.
 - **Drawn as** a `th-accent` tint across the selected rows, laid over the add and remove tints rather than replacing them, plus a 2px `th-accent` bar on the gutter's left edge and the selected numbers in `th-accent`. The selection reads as "the user's" and the change colours still read as the diff.
-- **Hit area.** A gutter cell is one line of code tall, under the 44px coarse floor. That is a deliberate exemption, recorded with its reasons and the cells' widths in [responsive-ui.md](responsive-ui.md#the-reviews-line-numbers). The one neighbour that executes something, the hunk bar's box, keeps the floor's spacing (above).
+- **Hit area.** A gutter cell is one line of code tall, under the 44px coarse floor. That is a deliberate exemption, recorded with its reasons and the cells' widths in [responsive-ui.md](responsive-ui.md#the-reviews-line-numbers). The one neighbour that executes something, the hunk bar's Stage button, keeps the floor's spacing (above).
 - **Keyboard and screen readers** reach a selection through the hunk bar's Select button, a hunk at a time. One focusable stop per line would put a thousand stops in a long file. Selecting any range by keyboard waits for keyboard navigation of the review as a whole ([git-ui.md](git-ui.md#out-of-scope)).
 
 **The selection is a reading state**, like the expanded gaps, and is cleared when the rows it names may be gone:
@@ -424,7 +436,7 @@ The bar has no backdrop, so it follows the shared conventions for overlays witho
 
 - **✕** and **pressing the only selected line again** clear it.
 - **Escape** clears it. The bar listens on `document` and claims the key with `preventDefault`. It stands down in two cases, which between them cover everything that can be over the review ([answering-ui.md](answering-ui.md#who-owns-escape)). First, while `useIsPageCovered()` is true. `Sheet` and `ConfirmDialog` count as covering through their scroll lock, and they claim Escape with `stopPropagation`, which does not stop another listener on `document`, so the count is what keeps the bar from clearing under a sheet that is closing. Second, when the press is already `defaultPrevented`, which is how `Sidebar` and `ResponsivePanel` mark theirs. The bar does not call `useCoverPage` itself: it is part of the surface, not a layer over it.
-- **A click outside** (`useOutsideClick`, so a scroll on a phone never dismisses) clears it, and is claimed with `stopPropagation`, but only when the click lands on non-interactive content: the code, the empty part of the diff area, the headers. A click on the bar, on a gutter number, or on any control (a hunk box or Select button, a gap row, the toolbar, the bottom bar, a list row at `expanded`) is not a dismissal and passes untouched. Whatever that control does then decides: staging a hunk or moving file changes the rows and clears the selection by the rules above, and opening the commit sheet leaves the selection waiting under it. One press never does two things.
+- **A click outside** (`useOutsideClick`, so a scroll on a phone never dismisses) clears it, and is claimed with `stopPropagation`, but only when the click lands on non-interactive content: the code, the empty part of the diff area, the headers. A click on the bar, on a gutter number, or on any control (a hunk's Stage or Select button, a gap row, the toolbar, the bottom bar, a list row at `expanded`) is not a dismissal and passes untouched. Whatever that control does then decides: staging a hunk or moving file changes the rows and clears the selection by the rules above, and opening the commit sheet leaves the selection waiting under it. One press never does two things.
 
 #### What `Ask AI to edit…` writes
 
@@ -458,14 +470,14 @@ The text is prose plus a fence, never a Pockode command, as the handoff requires
 
 ```
 ┌────────────────────────┬─────────────────────────────────────────┐
-│ [Changes] History Bra… │ GitTab.tsx                               │  column heading (L2)
-│ ▣ 5 files +142 −37 ≣ ⋯ │ ‹ 2 / 5 › web/src/components/Git  ↵ ␣ ⫴ │  review toolbar
+│ [Changes] History Bra… │ GitTab.tsx                              │  column heading (L2)
+│ ▣ 5 files +142 −37   ≣ │ ‹ 2 / 5 › web/src/components/Git  ↵ ␣ ⫴ │  review toolbar
 ├────────────────────────┼─────────────────────────────────────────┤
 │ ☑ GitTab.tsx  +12 −3 ⋯ │                                         │
 │▌▣ git.md      +88 −20⋯ │   (the diff, unified or split)          │
 │ ☐ notes.txt   +9     ⋯ │                                         │
 ├────────────────────────┼─────────────────────────────────────────┤
-│ [Review] [Commit 1 file]│ [ Discard file ]        [ Stage & next ]│
+│ [Discard…] [Commit 1…] │ [ Discard file ]        [ Stage & next ]│
 └────────────────────────┴─────────────────────────────────────────┘
 ```
 
@@ -485,14 +497,15 @@ The Git tab's `Changes` entry carries the totals beside the count: `Changes   5 
 2. **`git.status` carries per-side line counts (with binary marked) and the rename source; the row sums the sides.** Without them neither the row nor the sidebar's totals can be drawn.
 3. **Mixed → checked.** The checkbox and select all only ever stage the rest or unstage everything; mixed comes from hunk staging or from elsewhere.
 4. **Checkbox semantics are `role="checkbox"` with `aria-checked="mixed"`**, named `Stage <path>`, `aria-disabled` and `aria-busy` (not `disabled`) while its write is queued, and never flipped before the status says so.
-5. **Discard leaves the row** for the action sheet and the review's bottom bar, where the left button acts on the side on screen; discard-all leaves the header for its `⋯`. Copy and dialog unchanged.
+5. **Discard leaves the row** for the action sheet and the review's bottom bar, where the left button acts on the side on screen. Discarding many files is the list's bottom bar: the checkboxes are the ballot, and `Discard unchecked…` throws away every unstaged side — left takes away, right keeps, as in the review's bar. No separate multi-select mode: one list, one meaning of selected. Copy and dialog unchanged.
 6. **The review is one history entry.** Moves inside it replace; Back and `←` leave it, and so does a commit made from it — back to the list it was pushed from, so the history is as if it had never opened.
 7. **The last file stages and stays**; only then does the primary become `Commit n files`, following `describeCommitAction` — root-only count, submodule line, disabled when nothing is staged.
 8. **The page is not taken away from a reader** whose file stopped changing; it says so and offers `Next`.
 9. **Wrap defaults by tier and is its own remembered setting; split exists only at `expanded`.**
-10. **A hunk's box is the file's box for one hunk.** It means "in the index", so it is ☐ on every hunk of the unstaged side and ☑ on every hunk of the staged side. Boxes appear exactly where the server sent `hunk_ids`. It is drawn under the hunk's last row, the one slot the diff library keeps in every state, and its target keeps the floor's spacing from the gutter above and the gap row below.
-11. **A hunk stays busy after a successful write until a diff read after the write arrives**, and the page asks for that diff softly, keeping the old one on screen, as soon as the write succeeds. A failed write ends the busy state. Hunk writes are deduplicated by path and ID but mark the path busy, and file-level writes make every hunk box busy.
+10. **A hunk is staged with a `Stage` / `Unstage` button, not a checkbox.** A box over each hunk read as "tick, then press Stage below", and on either side it could only show one state. The button uses the bottom bar's words, appears where the server sent `hunk_ids` and the side has more than one hunk — one hunk is the bottom bar's button already — and is drawn under the hunk's last row, the one slot the diff library keeps in every state, keeping the floor's spacing from the gutter above and the gap row below.
+11. **A hunk stays busy after a successful write until a diff read after the write arrives**, and the page asks for that diff softly, keeping the old one on screen, as soon as the write succeeds. A failed write ends the busy state. Hunk writes are deduplicated by path and ID but mark the path busy, and file-level writes make every hunk button busy.
 12. **A stale hunk (`-32005`) is said as such, the diff is read again, and nothing retries.**
 13. **Lines are selected by their numbers, never by a long press**, and how a press reads follows `pointerType`: click, Shift-click and drag for a mouse; tap, then tap the far end, for touch. The hunk bar's Select button is the keyboard's way in. The gutter's sub-44px rows are a recorded exemption.
 14. **The selection bar is docked above the bottom bar, not floating at the selection.** It is cleared by ✕, by Escape (on `document`, claimed, standing down while the page is covered or the key is already claimed), and by a click outside on non-interactive content (claimed), never by a press on a control. A diff refresh keeps it while its rows are unchanged.
 15. **`Ask AI to edit…` writes path, range, version and a `diff` fence through the prefill handoff, and never sends.** `Copy` copies the side the range is numbered on, without markers.
+16. **Every control answers one question.** One that answers none is removed, two that answer the same one are merged: hence no `Review` button in the list's bottom bar, no `⋯` in its header and no `View history` on a clean tree.
