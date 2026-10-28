@@ -1,13 +1,7 @@
 import { useHasCoarsePointer, useIsExpanded } from "@pockode/shared";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import {
-	useEffect,
-	useId,
-	useLayoutEffect,
-	useMemo,
-	useRef,
-	useState,
-} from "react";
+import { useEffect, useId, useLayoutEffect, useMemo, useRef } from "react";
+import { useElementWidth } from "../../hooks/useElementWidth";
 import type { HistoryRow } from "../../hooks/useHistoryGraph";
 import { foldRow, type GraphRow } from "../../lib/commitGraph";
 import {
@@ -59,7 +53,7 @@ function HistoryList({
 	const scrollerRef = useRef<HTMLDivElement>(null);
 	const isExpanded = useIsExpanded();
 	const menuWidth = useHasCoarsePointer() ? MENU_WIDTH.coarse : MENU_WIDTH.fine;
-	const listWidth = useWidth(scrollerRef);
+	const listWidth = useElementWidth(scrollerRef);
 	const cap = laneCap(listWidth, menuWidth, isExpanded);
 
 	// Only grows: a page arriving may move the text column right once, but a
@@ -253,20 +247,6 @@ function FooterRow({
 			Loading older commits…
 		</div>
 	);
-}
-
-/** The scroller's width, followed as it changes. */
-function useWidth(ref: React.RefObject<HTMLElement | null>): number {
-	const [width, setWidth] = useState(0);
-	useLayoutEffect(() => {
-		const el = ref.current;
-		if (!el) return;
-		setWidth(el.clientWidth);
-		const observer = new ResizeObserver(() => setWidth(el.clientWidth));
-		observer.observe(el);
-		return () => observer.disconnect();
-	}, [ref]);
-	return width;
 }
 
 /**
