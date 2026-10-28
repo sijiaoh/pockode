@@ -19,6 +19,7 @@ vi.mock("../../hooks/useGitCommit", () => ({
 	useGitCommit: () => ({
 		data: {
 			hash: "abc1234def",
+			parents: [],
 			subject: "Do a thing",
 			author: "a",
 			date: "d",
@@ -90,6 +91,27 @@ describe("CommitDiffView", () => {
 				to: "/commit/$hash/file/$",
 				params: { hash: "abc1234def", _splat: "src/app.ts" },
 			}),
+		);
+	});
+
+	it("opens the file's history from the bottom bar", async () => {
+		const user = userEvent.setup();
+		renderView();
+
+		await user.click(
+			screen.getByRole("button", { name: "History of this file" }),
+		);
+
+		// The default range, not the one the commit was picked from: this is
+		// the file's history now.
+		expect(navigate).toHaveBeenCalledWith(
+			expect.objectContaining({
+				to: "/git",
+				search: { segment: "history", file: "src/app.ts" },
+			}),
+		);
+		expect(navigate).toHaveBeenCalledWith(
+			expect.not.objectContaining({ replace: true }),
 		);
 	});
 

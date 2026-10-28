@@ -11,11 +11,19 @@ interface Props {
 	 * sheet open — null when one can. The sheet stays, since it holds the name.
 	 */
 	paused: string | null;
+	/** What switching to the new branch costs, where HEAD's default does not say it. */
+	note?: string;
 	onClose: () => void;
 	onCreate: (name: string) => Promise<void>;
 }
 
-function NewBranchSheet({ base, paused, onClose, onCreate }: Props) {
+function NewBranchSheet({
+	base,
+	paused,
+	note = "Uncommitted changes come with you to the new branch.",
+	onClose,
+	onCreate,
+}: Props) {
 	const [name, setName] = useState("");
 	const [error, setError] = useState<string | null>(null);
 	const [isCreating, setIsCreating] = useState(false);
@@ -113,7 +121,7 @@ function NewBranchSheet({ base, paused, onClose, onCreate }: Props) {
 				</div>
 
 				<p className="rounded-lg bg-th-bg-tertiary px-3 py-2 text-sm text-th-text-secondary">
-					Uncommitted changes come with you to the new branch.
+					{note}
 				</p>
 			</div>
 		</Sheet>

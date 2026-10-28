@@ -783,6 +783,39 @@ samp {
 }
 
 /* =============================================================================
+ * COMMIT GRAPH LINES
+ *
+ * One palette per mode, the same in every theme: lines are told apart by
+ * colour, never told what they mean by it, so a theme has nothing to say here.
+ * Not the accent, which reads as "selected". Each clears 4:1 against every
+ * theme's primary, secondary and tertiary background — the test
+ * (tests/graphColors.test.ts) holds the 3:1 floor — but not 4.5:1, so these are never text colours
+ * (docs/git-history-ui.md#line-colours).
+ * ============================================================================= */
+
+:root {
+	--th-graph-1: #1d4ed8;
+	--th-graph-2: #c2410c;
+	--th-graph-3: #047857;
+	--th-graph-4: #a21caf;
+	--th-graph-5: #0369a1;
+	--th-graph-6: #b45309;
+	--th-graph-7: #be123c;
+	--th-graph-8: #6d28d9;
+}
+
+.dark {
+	--th-graph-1: #60a5fa;
+	--th-graph-2: #fb923c;
+	--th-graph-3: #34d399;
+	--th-graph-4: #e879f9;
+	--th-graph-5: #38bdf8;
+	--th-graph-6: #fbbf24;
+	--th-graph-7: #fb7185;
+	--th-graph-8: #a78bfa;
+}
+
+/* =============================================================================
  * DIFF VIEW STYLES (@git-diff-view/react)
  *
  * Font size is controlled via diffViewFontSize prop (12px mobile, 13px desktop)

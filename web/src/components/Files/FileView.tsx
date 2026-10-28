@@ -1,7 +1,14 @@
 import { ConfirmDialog } from "@pockode/shared";
 import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
-import { Code, Loader2, Pencil, PencilLine, Trash2 } from "lucide-react";
+import {
+	Code,
+	History,
+	Loader2,
+	Pencil,
+	PencilLine,
+	Trash2,
+} from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { contentsQueryKey, useContents } from "../../hooks/useContents";
 import { useFileDownload } from "../../hooks/useFileDownload";
@@ -11,8 +18,10 @@ import { useTakenNames } from "../../hooks/useTakenNames";
 import { applyEntryGone } from "../../lib/fileCache";
 import { overlayToNavigation } from "../../lib/navigation";
 import { isAlreadyExistsError } from "../../lib/rpc/file";
+import { useIsGitRepo } from "../../lib/worktreeStore";
 import { useWSStore } from "../../lib/wsStore";
 import { isFileContent } from "../../types/contents";
+import { fileHistoryOverlay } from "../../types/overlay";
 import {
 	canEditFileView,
 	getEditLabel,
@@ -96,6 +105,15 @@ function FileView({ path, onBack }: Props) {
 		},
 		[navigate, worktree, sessionId],
 	);
+
+	// A project without a repository has no history to show
+	// (docs/git-ui.md#projects-without-a-repository).
+	const isGitRepo = useIsGitRepo() === true;
+	const openHistory = useCallback(() => {
+		navigate(
+			overlayToNavigation(fileHistoryOverlay(path), worktree, sessionId),
+		);
+	}, [navigate, path, worktree, sessionId]);
 
 	const handleRename = useCallback(
 		async (name: string) => {
@@ -252,6 +270,17 @@ function FileView({ path, onBack }: Props) {
 							<PencilLine className="h-4 w-4" aria-hidden="true" />
 						</button>
 						<DownloadButton download={download} disabled={isDeleting} />
+						{isGitRepo && (
+							<button
+								type="button"
+								onClick={openHistory}
+								className={getActionIconButtonClass(true)}
+								aria-label="History of this file"
+								title="History of this file"
+							>
+								<History className="h-4 w-4" aria-hidden="true" />
+							</button>
+						)}
 						{isPage && (
 							<ToggleIconButton
 								icon={Code}

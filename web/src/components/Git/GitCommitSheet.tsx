@@ -24,7 +24,7 @@ import CommitSheet, {
 } from "./CommitSheet";
 
 interface Props {
-	/** Pre-toggled when the sheet is opened from the HEAD row's `⋯`. */
+	/** Pre-toggled when the sheet is opened from `Amend this commit` in a commit menu. */
 	amendInitially: boolean;
 	onClose: () => void;
 	/** After a commit succeeded, in place of `onClose`. */
@@ -33,7 +33,7 @@ interface Props {
 
 /**
  * CommitSheet wired to the workspace's queries, so both of its entry points — the
- * commit bar and the amend action on the HEAD row — assemble it the same way.
+ * commit bar and `Amend this commit` in a commit menu — assemble it the same way.
  *
  * It reads the same two queries the rest of the workspace does; react-query serves
  * both from cache.

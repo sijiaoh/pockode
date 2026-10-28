@@ -21,16 +21,37 @@ const overlaySearchSchema = z.object({
 export type OverlaySearchParams = z.infer<typeof overlaySearchSchema>;
 
 /**
+ * The History segment's query (docs/git-history-ui.md#url), on the list and on
+ * the commit layers alike. `scope=current` is the default, accepted spelled
+ * out and never written.
+ */
+const historySearchSchema = z.object({
+	scope: z.enum(["current", "all", "mainline"]).optional(),
+	// Coerced: the router reads `q=2024` from a typed or shared URL as a
+	// number, and a search for a year or an issue number is a string.
+	q: z.coerce.string().optional(),
+	file: z.coerce.string().optional(),
+});
+
+export type HistorySearchParams = z.infer<typeof historySearchSchema>;
+
+/**
  * The Git workspace's own query: the same `session`, and a `segment` with its
  * own words. As with the project list, only the non-default segments are ever
  * written, and the default is accepted spelled out.
  */
-const gitSearchSchema = z.object({
+const gitSearchSchema = historySearchSchema.extend({
 	session: z.string().optional(),
 	segment: z.enum(["changes", "history", "branches"]).optional(),
 });
 
 export type GitSearchParams = z.infer<typeof gitSearchSchema>;
+
+const commitSearchSchema = overlaySearchSchema.extend(
+	historySearchSchema.shape,
+);
+
+export type CommitSearchParams = z.infer<typeof commitSearchSchema>;
 
 /**
  * The session routes carry one parameter, and only they do: which worktree the
@@ -87,19 +108,19 @@ const gitRoute = createRoute({
 const commitRoute = createRoute({
 	getParentRoute: () => rootRoute,
 	path: ROUTES.commit,
-	validateSearch: (search) => overlaySearchSchema.parse(search),
+	validateSearch: (search) => commitSearchSchema.parse(search),
 });
 
 const commitDiffRoute = createRoute({
 	getParentRoute: () => rootRoute,
 	path: ROUTES.commitDiff,
-	validateSearch: (search) => overlaySearchSchema.parse(search),
+	validateSearch: (search) => commitSearchSchema.parse(search),
 });
 
 const commitFileRoute = createRoute({
 	getParentRoute: () => rootRoute,
 	path: ROUTES.commitFile,
-	validateSearch: (search) => overlaySearchSchema.parse(search),
+	validateSearch: (search) => commitSearchSchema.parse(search),
 });
 
 const settingsRoute = createRoute({
@@ -188,19 +209,19 @@ const wtGitRoute = createRoute({
 const wtCommitRoute = createRoute({
 	getParentRoute: () => worktreeLayoutRoute,
 	path: WT_CHILD_ROUTES.commit,
-	validateSearch: (search) => overlaySearchSchema.parse(search),
+	validateSearch: (search) => commitSearchSchema.parse(search),
 });
 
 const wtCommitDiffRoute = createRoute({
 	getParentRoute: () => worktreeLayoutRoute,
 	path: WT_CHILD_ROUTES.commitDiff,
-	validateSearch: (search) => overlaySearchSchema.parse(search),
+	validateSearch: (search) => commitSearchSchema.parse(search),
 });
 
 const wtCommitFileRoute = createRoute({
 	getParentRoute: () => worktreeLayoutRoute,
 	path: WT_CHILD_ROUTES.commitFile,
-	validateSearch: (search) => overlaySearchSchema.parse(search),
+	validateSearch: (search) => commitSearchSchema.parse(search),
 });
 
 const wtSettingsRoute = createRoute({

@@ -20,7 +20,7 @@ import type {
 	WorktreeInfo,
 	WorktreeSubscribeResult,
 } from "../types/message";
-import { gitSegmentOf } from "../types/overlay";
+import { gitSegmentOf, historyQueryOf } from "../types/overlay";
 import { useRouteState } from "./useRouteState";
 import { useSubscription } from "./useSubscription";
 
@@ -185,8 +185,11 @@ export function useWorktree({
 
 	// A switch made from the Git workspace stays in it, at the same segment's
 	// list: every worktree has one, where the diff or commit open here may not
-	// exist over there.
-	const gitSegment = gitSegmentOf(useRouteState().overlay);
+	// exist over there. History keeps its range and drops its search and file
+	// filter — a path may not exist over there either.
+	const { overlay } = useRouteState();
+	const gitSegment = gitSegmentOf(overlay);
+	const historyScope = historyQueryOf(overlay).scope;
 	const selectWorktree = useCallback(
 		(name: string) => {
 			if (name === current) return;
@@ -194,14 +197,18 @@ export function useWorktree({
 			navigate(
 				gitSegment
 					? overlayToNavigation(
-							{ type: "git", segment: gitSegment },
+							{
+								type: "git",
+								segment: gitSegment,
+								history: { scope: historyScope },
+							},
 							name,
 							null,
 						)
 					: buildNavigation({ type: "home", worktree: name }),
 			);
 		},
-		[current, navigate, gitSegment],
+		[current, navigate, gitSegment, historyScope],
 	);
 
 	const currentWorktree =

@@ -1,61 +1,269 @@
-import { useState } from "react";
+import { useNavigate } from "@tanstack/react-router";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { useDebouncedValue } from "../../hooks/useDebouncedValue";
 import { useGitLog } from "../../hooks/useGitLog";
-import { useGitStatus } from "../../hooks/useGitStatus";
+import { type HistoryRow, useHistoryGraph } from "../../hooks/useHistoryGraph";
+import { useRouteState } from "../../hooks/useRouteState";
+import { HISTORY_SEARCH_DEBOUNCE_MS } from "../../lib/commitHistory";
+import { overlayToNavigation } from "../../lib/navigation";
+import type { GitHistoryScope } from "../../types/git";
+import type { HistoryQuery } from "../../types/overlay";
+import { splitPath } from "../../utils/path";
 import { Spinner } from "../ui";
-import GitCommitSheet from "./GitCommitSheet";
-import LogList from "./LogList";
+import CommitActions, { type CommitMenuTarget } from "./CommitActions";
+import HistoryFilters from "./HistoryFilters";
+import HistoryHeader from "./HistoryHeader";
+import HistoryList, { type HistoryFooter } from "./HistoryList";
 
 interface Props {
+	/** The range and filters the URL names. */
+	history: HistoryQuery;
 	activeHash: string | null;
 	onSelectCommit: (hash: string) => void;
 }
 
-/** The Git workspace's History segment: the commit log, HEAD first. */
-function HistorySection({ activeHash, onSelectCommit }: Props) {
-	const { data, isLoading, error } = useGitLog();
-	// Absent rather than disabled while an operation is in progress: git
-	// refuses amend mid-merge, and mid-rebase HEAD is not the branch's commit.
-	// A menu entry is not a target the user is on the way to, and the banner's
-	// pause sentence says why commits stopped (docs/git-conflict-ui.md).
-	const operation = useGitStatus().data?.operation;
-	// Opened from the HEAD row's amend action.
-	const [isAmending, setIsAmending] = useState(false);
+function errorText(error: unknown): string {
+	return error instanceof Error ? error.message : String(error);
+}
+
+/** An empty field is no search, and neither is one of only spaces. */
+function searchOf(text: string): string {
+	return text.trim() ? text : "";
+}
+
+function noMatchText({ q, file }: HistoryQuery): string {
+	const name = file ? splitPath(file).fileName : "";
+	if (q && file) return `No commits changed ${name} matching "${q}"`;
+	if (q) return `No commits match "${q}"`;
+	return `No commits changed ${name}`;
+}
+
+/**
+ * The Git workspace's History segment: the commit graph over the chosen
+ * range, a page at a time (docs/git-history-ui.md).
+ */
+function HistorySection({ history, activeHash, onSelectCommit }: Props) {
+	const navigate = useNavigate();
+	const { worktree, sessionId, overlay } = useRouteState();
+	const {
+		data,
+		isLoading,
+		error,
+		hasNextPage,
+		isFetching,
+		isFetchNextPageError,
+		isRefetchError,
+		fetchNextPage,
+		refetch,
+	} = useGitLog(history);
+	// A search or a file filter lists commits that are not each other's
+	// parents; lines drawn between them would be lies.
+	const filtered = Boolean(history.q || history.file);
+	const listKey = `${history.scope}\0${history.q ?? ""}\0${history.file ?? ""}`;
+	const rows = useHistoryGraph(data?.pages, history.scope, !filtered);
+	const first = data?.pages[0];
+
+	// The label keeps the name it last had while another range loads, rather
+	// than flicker to the one that does not name it.
+	const knownDefault = useRef<string | undefined>(undefined);
+	if (first) knownDefault.current = first.default_branch;
+
+	const [menuFor, setMenuFor] = useState<CommitMenuTarget | null>(null);
+	// Stable, so a menu opened does not re-render every memoized row.
+	const openMenu = useCallback(
+		({ commit, inHeadHistory }: HistoryRow) =>
+			setMenuFor({ commit, inHeadHistory }),
+		[],
+	);
+	const closeMenu = useCallback(() => setMenuFor(null), []);
+	// From the list as it is now rather than as it was at the press: a commit
+	// made meanwhile moves HEAD, and amend is HEAD's. A commit no longer listed
+	// has been rewritten or left the range; its refs are no longer known, and
+	// HEAD — which an amend would rewrite — is not among them.
+	const menuRow =
+		menuFor && rows.find((r) => r.commit.hash === menuFor.commit.hash);
+	const menuTarget: CommitMenuTarget | null = menuRow
+		? { commit: menuRow.commit, inHeadHistory: menuRow.inHeadHistory }
+		: menuFor && { commit: { ...menuFor.commit, refs: [] } };
+
+	// Onto whichever history layer is up: a commit beside the list at
+	// `expanded` stays open, and a search settling after a row was pressed
+	// lands on that commit's page rather than replacing it with the list.
+	const showHistory = (next: HistoryQuery, replace = false) => {
+		const layer =
+			overlay?.type === "commit" ||
+			overlay?.type === "commit-diff" ||
+			overlay?.type === "commit-file"
+				? { ...overlay, history: next }
+				: { type: "git" as const, segment: "history" as const, history: next };
+		navigate(overlayToNavigation(layer, worktree, sessionId, { replace }));
+	};
+	const changeScope = (scope: GitHistoryScope) =>
+		showHistory({ ...history, scope });
+
+	// The field runs ahead of the URL by the debounce; the URL is what is
+	// listed. A URL that arrives with `q` opens the row with the text in it.
+	const urlQ = history.q ?? "";
+	const [searchOpen, setSearchOpen] = useState(urlQ !== "");
+	const [text, setText] = useState(urlQ);
+	const inputRef = useRef<HTMLInputElement>(null);
+	const searchButtonRef = useRef<HTMLButtonElement>(null);
+	// Compared with what the field last wrote rather than with the field: a
+	// character typed while that write lands must not be taken back.
+	const writtenQ = useRef(urlQ);
+	// A `q` the field did not write — Back, a link, a worktree switch dropping
+	// it — replaces what is in the field.
+	useEffect(() => {
+		if (urlQ === writtenQ.current) return;
+		writtenQ.current = urlQ;
+		setText(urlQ);
+		// As a fresh mount would have it: a URL without `q` has no search row.
+		setSearchOpen(urlQ !== "");
+	}, [urlQ]);
+	const debouncedText = useDebouncedValue(text, HISTORY_SEARCH_DEBOUNCE_MS);
+	// Settling, not the debounced value changing, is what writes: text typed
+	// back to what it was before a Cancel settles without the value moving.
+	const settled = text === debouncedText;
+	// biome-ignore lint/correctness/useExhaustiveDependencies: only the settled text writes the URL; a URL change on its own must not write it back
+	useEffect(() => {
+		if (!settled) return;
+		const q = searchOf(debouncedText);
+		if (q === urlQ) return;
+		writtenQ.current = q;
+		// Replaced, so Back does not walk back through what was typed.
+		showHistory({ ...history, q: q || undefined }, true);
+	}, [debouncedText, settled]);
+	const [focusRequest, setFocusRequest] = useState(0);
+	useEffect(() => {
+		if (focusRequest > 0) inputRef.current?.focus();
+	}, [focusRequest]);
+	const openSearch = () => {
+		setSearchOpen(true);
+		setFocusRequest((n) => n + 1);
+	};
+	const cancelSearch = () => {
+		setSearchOpen(false);
+		setText("");
+		// The row goes with the focus in it.
+		searchButtonRef.current?.focus();
+		// Also when the last write has not landed yet, or it would bring the
+		// search back once it does.
+		const pending = urlQ !== "" || writtenQ.current !== "";
+		writtenQ.current = "";
+		if (pending) showHistory({ ...history, q: undefined }, true);
+	};
+	// Pushed: dropping the file is a step the user took, as adding it was.
+	const clearFile = () => showHistory({ ...history, file: undefined });
+
+	// Not while anything is fetching: `fetchNextPage` cancels a fetch in flight,
+	// and a re-read after `git.changed` would be dropped for a page appended
+	// to the old ones. A new identity once it settles asks again.
+	const loadMore = useCallback(() => {
+		if (hasNextPage && !isFetching) void fetchNextPage();
+	}, [hasNextPage, isFetching, fetchNextPage]);
+	// From the top rather than the failed page again: a cursor whose commits
+	// were garbage-collected fails the same way every time, and the re-read
+	// takes fresh cursors (docs/git.md, History). The next page follows on its
+	// own once the reader is still near the end.
+	const retry = useCallback(() => void refetch(), [refetch]);
+
+	// A re-read from the top (`git.changed`, Retry) that failed keeps the old
+	// rows on screen, which are then not current: said where Retry is. The
+	// failed footer also asks for no next page, which would hang off the stale
+	// pages and hide the failure once it arrived.
+	const footer: HistoryFooter = isFetchNextPageError
+		? {
+				kind: "failed",
+				text: "Couldn't load older commits.",
+				reason: errorText(error),
+			}
+		: isRefetchError && !isFetching
+			? {
+					kind: "failed",
+					text: "Couldn't refresh history.",
+					reason: errorText(error),
+				}
+			: hasNextPage
+				? { kind: "loading" }
+				: {
+						kind: "end",
+						text: first?.shallow
+							? "Older history isn't in this clone"
+							: filtered
+								? "No more matches"
+								: "Beginning of history",
+					};
 
 	return (
 		<>
-			<div className="min-h-0 flex-1 overflow-y-auto">
-				{isLoading ? (
-					<div className="flex items-center justify-center p-8">
-						<Spinner variant="current" className="text-th-text-muted" />
-					</div>
-				) : data ? (
-					// A refetch that fails keeps the log already on screen: it is
-					// still what HEAD was a moment ago.
-					<div className="pt-2">
-						<LogList
-							commits={data.commits}
-							activeHash={activeHash}
-							onSelectCommit={onSelectCommit}
-							onAmend={operation ? undefined : () => setIsAmending(true)}
-						/>
-					</div>
-				) : (
-					error && (
-						<div className="p-4 text-center text-th-error">
-							<div>Failed to load history</div>
-							<div className="mt-1 text-sm text-th-text-muted">
-								{error instanceof Error ? error.message : String(error)}
-							</div>
+			<HistoryHeader
+				scope={history.scope}
+				defaultBranch={knownDefault.current}
+				unpushedCount={filtered ? 0 : (first?.unpushed_count ?? 0)}
+				onChangeScope={changeScope}
+				onSearch={openSearch}
+				searchButtonRef={searchButtonRef}
+			/>
+			<HistoryFilters
+				searchOpen={searchOpen}
+				text={text}
+				onTextChange={setText}
+				onCancel={cancelSearch}
+				inputRef={inputRef}
+				q={history.q}
+				file={history.file}
+				onClearFile={clearFile}
+			/>
+			<CommitActions target={menuTarget} onClose={closeMenu} />
+			{isLoading ? (
+				<div className="flex items-center justify-center p-8">
+					<Spinner variant="current" className="text-th-text-muted" />
+				</div>
+			) : data ? (
+				// A refetch that fails keeps the log already on screen: it is
+				// still what HEAD was a moment ago.
+				rows.length === 0 ? (
+					filtered ? (
+						<div className="px-3 py-2 text-sm text-th-text-muted">
+							<p className="break-words">{noMatchText(history)}</p>
+							{history.scope !== "all" && (
+								<button
+									type="button"
+									onClick={() => changeScope("all")}
+									className="-ml-3 mt-1 min-h-[36px] rounded-md px-3 text-sm text-th-accent hover:bg-th-bg-tertiary focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent pointer-coarse:min-h-11"
+								>
+									Look in all branches
+								</button>
+							)}
+						</div>
+					) : (
+						<div className="px-3 py-2 text-sm text-th-text-muted">
+							No commits yet
 						</div>
 					)
-				)}
-			</div>
-
-			{isAmending && (
-				<GitCommitSheet
-					amendInitially={true}
-					onClose={() => setIsAmending(false)}
-				/>
+				) : (
+					// Keyed by the query: another range or filter is another list,
+					// read from the top, with a graph column that starts narrow.
+					<HistoryList
+						key={listKey}
+						rows={rows}
+						footer={footer}
+						onLoadMore={loadMore}
+						onRetry={retry}
+						activeHash={activeHash}
+						onSelectCommit={onSelectCommit}
+						onOpenMenu={openMenu}
+					/>
+				)
+			) : (
+				error && (
+					<div className="p-4 text-center text-th-error">
+						<div>Failed to load history</div>
+						<div className="mt-1 text-sm text-th-text-muted">
+							{errorText(error)}
+						</div>
+					</div>
+				)
 			)}
 		</>
 	);

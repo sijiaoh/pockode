@@ -24,7 +24,7 @@ vi.mock("../../hooks/useGitSync", async (importOriginal) => ({
 	useAutoFetch: () => {},
 }));
 vi.mock("../../hooks/useGitLog", () => ({
-	useGitLog: () => ({ data: commits && { commits } }),
+	useGitLog: () => ({ data: commits && { pages: [{ commits, next: null }] } }),
 }));
 
 // What is under test is which layers are on screen and where their ways back
@@ -269,7 +269,13 @@ describe("GitWorkspace at expanded", () => {
 		["history", "Select a commit to see what it changed"],
 	] as const)("says what to do in an empty %s column", (segment, text) => {
 		commits = [
-			{ hash: "abc1234", subject: "s", author: "a", date: "2026-01-01" },
+			{
+				hash: "abc1234",
+				parents: [],
+				subject: "s",
+				author: "a",
+				date: "2026-01-01",
+			},
 		];
 		renderWorkspace({ type: "git", segment });
 

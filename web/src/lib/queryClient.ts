@@ -17,6 +17,8 @@ const WORKTREE_DEPENDENT_QUERY_KEYS = [
 	"git-status",
 	"git-branches",
 	"git-log",
+	// Its refs: HEAD and the current branch are the worktree's.
+	"git-commit",
 	"git-diff",
 	"sessions",
 	"contents",

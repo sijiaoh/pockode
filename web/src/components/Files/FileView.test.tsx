@@ -5,6 +5,7 @@ import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { contentsQueryKey } from "../../hooks/useContents";
 import { overlayToNavigation } from "../../lib/navigation";
+import { useWorktreeStore } from "../../lib/worktreeStore";
 import {
 	reportEverythingInView,
 	stubImageFetch,
@@ -561,6 +562,42 @@ describe("FileView", () => {
 		expect(navigate).toHaveBeenCalledWith(
 			overlayToNavigation({ type: "file", path: "docs/a.png" }, "", null),
 		);
+	});
+
+	describe("history of this file", () => {
+		afterEach(() => {
+			useWorktreeStore.setState({ isGitRepo: null });
+		});
+
+		it("opens the file's history in the Git workspace", async () => {
+			const user = userEvent.setup();
+			useWorktreeStore.setState({ isGitRepo: true });
+			await renderFileView(fileContent({ path: "src/app.ts" }));
+
+			await user.click(
+				screen.getByRole("button", { name: "History of this file" }),
+			);
+
+			// Pushed: Back returns to the file.
+			expect(navigate).toHaveBeenCalledWith(
+				expect.objectContaining({
+					to: "/git",
+					search: { segment: "history", file: "src/app.ts" },
+				}),
+			);
+			expect(navigate).toHaveBeenCalledWith(
+				expect.not.objectContaining({ replace: true }),
+			);
+		});
+
+		it("is not offered where the project has no repository", async () => {
+			useWorktreeStore.setState({ isGitRepo: false });
+			await renderFileView(fileContent({ content: "const a = 1;" }));
+
+			expect(
+				screen.queryByRole("button", { name: "History of this file" }),
+			).not.toBeInTheDocument();
+		});
 	});
 
 	describe("renaming", () => {

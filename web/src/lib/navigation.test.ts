@@ -409,3 +409,49 @@ describe("the schedule routes", () => {
 		});
 	});
 });
+
+describe("the History query in the URL", () => {
+	it("writes the default range as absence", () => {
+		expect(
+			overlayToNavigation(
+				{ type: "git", segment: "history", history: { scope: "current" } },
+				"",
+				null,
+			).search,
+		).toEqual({ segment: "history" });
+	});
+
+	it("carries the range and filters on the commit layers", () => {
+		const history = { scope: "all" as const, q: "lane", file: "a/b.ts" };
+		const expected = { scope: "all", q: "lane", file: "a/b.ts" };
+
+		expect(
+			overlayToNavigation({ type: "commit", hash: "abc", history }, "", null)
+				.search,
+		).toEqual(expected);
+		expect(
+			overlayToNavigation(
+				{ type: "commit-diff", hash: "abc", path: "x", history },
+				"",
+				null,
+			).search,
+		).toEqual(expected);
+		expect(
+			overlayToNavigation(
+				{ type: "commit-file", hash: "abc", path: "x", history },
+				"",
+				null,
+			).search,
+		).toEqual(expected);
+	});
+
+	it("is History's alone: another segment drops it", () => {
+		expect(
+			overlayToNavigation(
+				{ type: "git", segment: "branches", history: { scope: "all" } },
+				"",
+				null,
+			).search,
+		).toEqual({ segment: "branches" });
+	});
+});

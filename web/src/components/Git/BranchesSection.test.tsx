@@ -137,7 +137,7 @@ describe("BranchesSection", () => {
 		await user.click(screen.getByText(/New branch/));
 		await user.type(screen.getByRole("textbox"), "feature/x{Enter}");
 
-		expect(createBranch).toHaveBeenCalledWith("feature/x");
+		expect(createBranch).toHaveBeenCalledWith({ name: "feature/x" });
 		expect(screen.queryByRole("dialog")).toBeNull();
 		expect(rowFor("topic")).toBeInTheDocument();
 	});

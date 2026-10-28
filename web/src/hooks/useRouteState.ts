@@ -1,11 +1,18 @@
 import { useMatch, useParams } from "@tanstack/react-router";
 import { ROUTES, WT_ROUTES } from "../lib/routes";
 import type {
+	CommitSearchParams,
 	GitSearchParams,
+	HistorySearchParams,
 	OverlaySearchParams,
 	SessionSearchParams,
 } from "../router";
-import type { GitSegment, OverlayState, WorkSegment } from "../types/overlay";
+import type {
+	GitSegment,
+	HistoryQuery,
+	OverlayState,
+	WorkSegment,
+} from "../types/overlay";
 
 export interface RouteInfo {
 	overlay: OverlayState;
@@ -42,6 +49,22 @@ function readSegment(search: OverlaySearchParams): WorkSegment {
 /** As `readSegment`: `changes` is whatever does not name another segment. */
 function readGitSegment(search: GitSearchParams): GitSegment {
 	return search.segment ?? "changes";
+}
+
+/**
+ * Left off the overlay when the URL says nothing, so the default has one
+ * shape. An empty `q` or `file` is no filter.
+ */
+function readHistoryQuery(
+	search: HistorySearchParams,
+): HistoryQuery | undefined {
+	const { scope, q, file } = search;
+	if (!scope && !q && !file) return undefined;
+	return {
+		scope: scope ?? "current",
+		...(q ? { q } : {}),
+		...(file ? { file } : {}),
+	};
 }
 
 export function useRouteState(): RouteInfo {
@@ -205,8 +228,13 @@ export function useRouteState(): RouteInfo {
 
 	if (gitMatch || wtGitMatch) {
 		const search = (gitMatch?.search ?? wtGitMatch?.search) as GitSearchParams;
+		const segment = readGitSegment(search);
+		// Only History reads it: a stray query on another segment is not
+		// carried back into History when the reader switches to it.
+		const history =
+			segment === "history" ? readHistoryQuery(search) : undefined;
 		return {
-			overlay: { type: "git", segment: readGitSegment(search) },
+			overlay: { type: "git", segment, ...(history ? { history } : {}) },
 			sessionId: search.session ?? null,
 			worktree,
 			viewWorktree: null,
@@ -216,9 +244,14 @@ export function useRouteState(): RouteInfo {
 	const commitHash = commitMatch?.params._splat ?? wtCommitMatch?.params._splat;
 	if (commitHash !== undefined) {
 		const search = (commitMatch?.search ??
-			wtCommitMatch?.search) as OverlaySearchParams;
+			wtCommitMatch?.search) as CommitSearchParams;
+		const history = readHistoryQuery(search);
 		return {
-			overlay: { type: "commit", hash: commitHash },
+			overlay: {
+				type: "commit",
+				hash: commitHash,
+				...(history ? { history } : {}),
+			},
 			sessionId: search.session ?? null,
 			worktree,
 			viewWorktree: null,
@@ -230,9 +263,15 @@ export function useRouteState(): RouteInfo {
 		const hash = (commitDiffParams as { hash: string }).hash;
 		const path = (commitDiffParams as { _splat: string })._splat;
 		const search = (commitDiffMatch?.search ??
-			wtCommitDiffMatch?.search) as OverlaySearchParams;
+			wtCommitDiffMatch?.search) as CommitSearchParams;
+		const history = readHistoryQuery(search);
 		return {
-			overlay: { type: "commit-diff", hash, path },
+			overlay: {
+				type: "commit-diff",
+				hash,
+				path,
+				...(history ? { history } : {}),
+			},
 			sessionId: search.session ?? null,
 			worktree,
 			viewWorktree: null,
@@ -244,9 +283,15 @@ export function useRouteState(): RouteInfo {
 		const hash = (commitFileParams as { hash: string }).hash;
 		const path = (commitFileParams as { _splat: string })._splat;
 		const search = (commitFileMatch?.search ??
-			wtCommitFileMatch?.search) as OverlaySearchParams;
+			wtCommitFileMatch?.search) as CommitSearchParams;
+		const history = readHistoryQuery(search);
 		return {
-			overlay: { type: "commit-file", hash, path },
+			overlay: {
+				type: "commit-file",
+				hash,
+				path,
+				...(history ? { history } : {}),
+			},
 			sessionId: search.session ?? null,
 			worktree,
 			viewWorktree: null,

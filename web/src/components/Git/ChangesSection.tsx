@@ -47,6 +47,7 @@ import {
 	type FileStatus,
 	stageFailureSummary,
 } from "../../types/git";
+import { fileHistoryOverlay } from "../../types/overlay";
 import { describeGitFailure } from "../../utils/gitErrors";
 import { Spinner } from "../ui";
 import ChangedFileMenu from "./ChangedFileMenu";
@@ -221,6 +222,16 @@ function ChangesSection({
 		[navigate, routeWorktree, sessionId],
 	);
 
+	const openHistory = useCallback(
+		(path: string) => {
+			setMenuPath(null);
+			navigate(
+				overlayToNavigation(fileHistoryOverlay(path), routeWorktree, sessionId),
+			);
+		},
+		[navigate, routeWorktree, sessionId],
+	);
+
 	const discardFile = useCallback((file: ChangedFile) => {
 		setMenuPath(null);
 		if (file.unstaged) setPendingDiscard([file.unstaged]);
@@ -321,6 +332,7 @@ function ChangesSection({
 					file={menuFile}
 					onClose={closeMenu}
 					onOpenFile={openFile}
+					onOpenHistory={openHistory}
 					onDiscard={discardFile}
 					busy={isPathWriting(writes, menuFile.path)}
 				/>
