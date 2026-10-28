@@ -1,4 +1,4 @@
-import { GitBranch, Plus } from "lucide-react";
+import { FolderGit2, Plus } from "lucide-react";
 import { useMemo } from "react";
 import type { WorktreeInfo } from "../../types/message";
 import ResponsivePanel from "../ui/ResponsivePanel";
@@ -53,7 +53,7 @@ function WorktreeDropdown({
 			{hasOnlyMain ? (
 				<div className="flex flex-col items-center px-4 py-6 text-center">
 					<div className="mb-3 flex h-10 w-10 items-center justify-center rounded-full bg-th-bg-tertiary">
-						<GitBranch className="h-5 w-5 text-th-text-muted" />
+						<FolderGit2 className="h-5 w-5 text-th-text-muted" />
 					</div>
 					<p className="text-sm text-th-text-muted">No other worktrees yet</p>
 					<p className="mt-1 text-xs text-th-text-muted">

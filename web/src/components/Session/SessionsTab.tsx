@@ -1,5 +1,5 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { Archive, GitBranch, Plus } from "lucide-react";
+import { Archive, FolderGit2, Plus } from "lucide-react";
 import { useCallback, useEffect, useMemo } from "react";
 import {
 	invalidateSessionViewQueries,
@@ -293,7 +293,7 @@ function FilterContextLine({
 		filter.kind === "worktree"
 			? describeWorktree(filter.worktree, worktrees)
 			: null;
-	const Icon = origin && !origin.exists ? Archive : GitBranch;
+	const Icon = origin && !origin.exists ? Archive : FolderGit2;
 	return (
 		<div className="flex min-h-[32px] items-center gap-1.5 border-b border-th-border px-3 py-1.5 text-xs text-th-text-muted">
 			<Icon className="size-3 shrink-0" aria-hidden="true" />

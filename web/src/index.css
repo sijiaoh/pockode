@@ -1,4 +1,12 @@
 @import "tailwindcss";
+/* The diff library's stylesheet, in the layer between Tailwind's base and its
+ * utilities: above preflight, which its rules were written to beat, and below
+ * the utilities and the unlayered theme rules further down. Imported from JS,
+ * unlayered, it beat both: its
+ * `.diff-line-extend-wrapper * { color: initial }` painted our hunk bar in
+ * CanvasText, and its `[data-theme] .diff-style-root` colours outranked ours
+ * in DIFF VIEW STYLES. components/ui/DiffViewer.browser.test.tsx holds it. */
+@import "@git-diff-view/react/styles/diff-view-pure.css" layer(components);
 @plugin "@tailwindcss/typography";
 
 /* Tailwind's automatic source detection stops at the project directory and
@@ -852,6 +860,20 @@ samp {
 	--diff-hunk-content--: var(--th-bg-tertiary);
 	--diff-hunk-lineNumber--: var(--th-bg-tertiary);
 	--diff-hunk-content-color--: var(--th-text-muted);
+	color: var(--th-text-primary);
+}
+
+/* A row of ours drawn inside the diff (the Git review's hunk bar) inherits
+ * colour like anywhere else. The library resets every element in it to
+ * `color: initial` — CanvasText, black or white whatever the theme — which the
+ * layer alone only lifts from elements naming a colour of their own: an icon
+ * taking its button's would still get CanvasText. In the library's layer, so
+ * a `text-th-*` utility on the row still wins over this. */
+@layer components {
+	.diff-tailwindcss-wrapper .diff-line-extend-wrapper *,
+	.diff-tailwindcss-wrapper .diff-line-widget-wrapper * {
+		color: inherit;
+	}
 }
 
 /* Light mode - subtle colors for light backgrounds */
@@ -1057,9 +1079,6 @@ samp {
 	 * The library writes the column's width inline as twice
 	 * --diff-aside-width-- (its measure of the widest number, at least 40px),
 	 * so one of them is the narrow column, and only !important reaches it.
-	 * Every selector goes through .diff-style-root because the library's own
-	 * utilities are `.diff-tailwindcss-wrapper .pl-[10px]` and the like: a tie
-	 * would leave the result to whichever stylesheet happened to load last.
 	 */
 	.diff-tailwindcss-wrapper .diff-style-root .diff-line-num,
 	.diff-tailwindcss-wrapper .diff-style-root .diff-line-hunk-action {

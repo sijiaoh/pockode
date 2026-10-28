@@ -76,9 +76,9 @@ Show task sessions
 WORKTREES
   ○ This worktree
   ○ All worktrees
-  ○ <GitBranch> feature-x     12
+  ○ <FolderGit2> feature-x     12
 DELETED
-  ○ <Archive>   old-fix        3
+  ○ <Archive>    old-fix        3
 ```
 
 - **A single choice, not a set.** The intent is "go and look at another
@@ -112,7 +112,7 @@ While the filter is anything but `This worktree`, the trigger button carries a
 else's once the panel is closed, and the filter is not persisted, so there is no
 other way to find out.
 
-### `GitBranch` and `Archive`
+### `FolderGit2` and `Archive`
 
 Two glyphs carry "still there" against "deleted", in the filter rows, on the list
 rows, on the context line, on both strips of the read-only screen, and on a
@@ -253,7 +253,7 @@ there for. The deleted wording is the one the app reaches on its own.
 
 ### Top: whose conversation this is
 
-`SessionOriginBar` — `<GitBranch> Session from "feature-x"`, or
+`SessionOriginBar` — `<FolderGit2> Session from "feature-x"`, or
 `<Archive> Session from "feature-x" (deleted)`.
 
 It does not scroll with the transcript: *this is not the worktree you are in* has

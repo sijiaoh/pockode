@@ -1,4 +1,4 @@
-import { Archive, GitBranch } from "lucide-react";
+import { Archive, FolderGit2, GitBranch } from "lucide-react";
 import { memo } from "react";
 import { isWorkActive, sessionActivity } from "../../lib/activity";
 import type { SessionOrigin } from "../../lib/sessionFilter";
@@ -95,7 +95,7 @@ const SessionItem = memo(function SessionItem({
 				origin ? (
 					<span className="flex min-w-0 items-center gap-1">
 						{origin.exists ? (
-							<GitBranch
+							<FolderGit2
 								className="size-3 shrink-0 text-th-text-muted"
 								aria-hidden="true"
 							/>

@@ -13,9 +13,9 @@ import {
 import { commitOriginOf } from "../../types/overlay";
 import { formatDateTime } from "../../utils/dateTime";
 import PageHeader, { type PageBack } from "../Layout/PageHeader";
-import { BottomActionBar, ContentView, CopyButton } from "../ui";
-import { HeaderSubtitle, headerTitleTextClass } from "../ui/HeaderTitle";
-import { iconButtonClass } from "../ui/iconButtonClass";
+import { ContentView, CopyButton } from "../ui";
+import { headerTitleTextClass } from "../ui/HeaderTitle";
+import { headerIconButtonClass } from "../ui/headerIconButtonClass";
 import Skeleton from "../ui/Skeleton";
 import CommitActions from "./CommitActions";
 import RefChips from "./RefChips";
@@ -146,28 +146,28 @@ function CommitView({ hash, onBack }: Props) {
 
 	return (
 		<div className="flex flex-1 flex-col overflow-hidden">
-			{commit || !error ? (
-				// The hash is in the route, so it shows at once; the subject waits
-				// for the commit as a skeleton rather than borrowing the hash.
-				<PageHeader
-					back={back}
-					title={commit?.subject ?? null}
-					subtitle={<HeaderSubtitle status={shortHash} mono />}
-					fullText={commit && `${commit.subject} — ${commit.hash}`}
-				/>
-			) : (
-				// No subject is coming. The hash is still true, so it is the title;
-				// why the rest is missing is the body's to say.
-				<PageHeader
-					back={back}
-					title={
-						<span className={`${headerTitleTextClass} font-mono`}>
-							{shortHash}
-						</span>
-					}
-					fullText={hash}
-				/>
-			)}
+			{/* Named by its hash, which is what identifies a commit and comes with
+			    the route; the subject is the body's, as the start of its message. */}
+			<PageHeader
+				back={back}
+				title={
+					<span className={headerTitleTextClass}>
+						Commit <span className="font-mono">{shortHash}</span>
+					</span>
+				}
+				actions={
+					commit && (
+						<button
+							type="button"
+							onClick={() => setMenuOpen(true)}
+							aria-label={`Actions for commit ${shortHash}`}
+							className={headerIconButtonClass}
+						>
+							<MoreHorizontal className="size-5" aria-hidden="true" />
+						</button>
+					)
+				}
+			/>
 			<CommitActions
 				target={menuOpen && commit ? { commit } : null}
 				onClose={() => setMenuOpen(false)}
@@ -257,22 +257,6 @@ function CommitView({ hash, onBack }: Props) {
 					</div>
 				)}
 			</ContentView>
-			<BottomActionBar>
-				{/* The menu at the bottom, where a thumb reaches it. */}
-				<div className="flex items-center justify-between gap-2">
-					<div className="text-xs text-th-text-muted">{shortHash}</div>
-					{commit && (
-						<button
-							type="button"
-							onClick={() => setMenuOpen(true)}
-							aria-label={`Actions for commit ${shortHash}`}
-							className={iconButtonClass()}
-						>
-							<MoreHorizontal className="h-4 w-4" aria-hidden="true" />
-						</button>
-					)}
-				</div>
-			</BottomActionBar>
 		</div>
 	);
 }

@@ -110,7 +110,7 @@ Counts are only as fresh as the last fetch, and nothing else fetches on its own.
 
 ### On the relationship with `WorktreeSwitcher`
 
-The sidebar header shows a `GitBranch` icon with the worktree name, and the top bar and the sidebar's overview show a branch name. They are kept apart by what they name: the header switches *workspace* and is labelled by worktree name (`review`), the top bar names *the branch within this workspace* and always renders the real ref name. A branch already checked out in another worktree cannot be checked out here — git refuses — so its row says `in <worktree>` and its `Switch to this branch` is unavailable with `Checked out in <worktree>.` instead of letting the user find out through an error ([git-branches-ui.md](git-branches-ui.md#the-row)). Linked worktrees are named as the switcher names them; the main checkout reads `in main worktree`, because the switcher labels *it* by branch and "branch X is held by branch X" says nothing (see [git.md](git.md#branches)).
+The sidebar header shows a `FolderGit2` icon with the worktree name — every worktree marker does, so it is never the top bar's `GitBranch` — and the top bar and the sidebar's overview show a branch name. They are kept apart by what they name: the header switches *workspace* and is labelled by worktree name (`review`), the top bar names *the branch within this workspace* and always renders the real ref name. A branch already checked out in another worktree cannot be checked out here — git refuses — so its row says `in <worktree>` and its `Switch to this branch` is unavailable with `Checked out in <worktree>.` instead of letting the user find out through an error ([git-branches-ui.md](git-branches-ui.md#the-row)). Linked worktrees are named as the switcher names them; the main checkout reads `in main worktree`, because the switcher labels *it* by branch and "branch X is held by branch X" says nothing (see [git.md](git.md#branches)).
 
 ## Layout
 
@@ -156,7 +156,7 @@ Each segment's root is a flex column whose scroll area is a plain `min-h-0 flex-
 └──────────────────────────────────┘
 ```
 
-A layer has **no segmented control** — the segments filter the lists, and a layer belongs to exactly one — and **no commit bar**: a layer's bottom edge is its own — the review's and the commit's bars; a branch has none — and two stacked bottom bars are not acceptable. The list stays mounted under the layer rather than unmounted, so Back returns the reader to where they were in it. It is covered the way the transcript is under an overlay — `invisible absolute inset-0`, `inert`, inside a `CoveredSurface` so a sheet it raised closes — and not with the `hidden` attribute: `display: none` destroys the very scroll box it is kept for ([answering-ui.md](answering-ui.md)).
+A layer has **no segmented control** — the segments filter the lists, and a layer belongs to exactly one — and **no commit bar**: a layer's bottom edge is its own — the review's bar and a commit file's two (its diff, its version); a commit and a branch have none — and two stacked bottom bars are not acceptable. The list stays mounted under the layer rather than unmounted, so Back returns the reader to where they were in it. It is covered the way the transcript is under an overlay — `invisible absolute inset-0`, `inert`, inside a `CoveredSurface` so a sheet it raised closes — and not with the `hidden` attribute: `display: none` destroys the very scroll box it is kept for ([answering-ui.md](answering-ui.md)).
 
 ### At `expanded`: two columns
 
