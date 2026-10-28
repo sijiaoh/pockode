@@ -455,3 +455,61 @@ describe("the History query in the URL", () => {
 		).toEqual({ segment: "branches" });
 	});
 });
+
+describe("the branch detail route", () => {
+	it("names the branch in the path, and a remote-only one in the search", () => {
+		expect(
+			overlayToNavigation(
+				{ type: "branch", ref: "feature/x", remote: false },
+				"",
+				null,
+			),
+		).toEqual({ to: "/branch/$", params: { _splat: "feature/x" } });
+		expect(
+			overlayToNavigation(
+				{ type: "branch", ref: "origin/x", remote: true },
+				"feature-x",
+				"sess123",
+			),
+		).toEqual({
+			to: "/w/$worktree/branch/$",
+			params: { worktree: "feature-x", _splat: "origin/x" },
+			search: { session: "sess123", remote: 1 },
+		});
+	});
+});
+
+describe("a commit opened from a branch", () => {
+	// docs/git-branches-ui.md#opening-a-commit: the branch's whole identity,
+	// carried on by every layer stacked under the commit.
+	it("carries the branch, and says when it is a remote one", () => {
+		expect(
+			overlayToNavigation(
+				{
+					type: "commit-diff",
+					hash: "abc",
+					path: "src/a.ts",
+					branch: { ref: "feature/x", remote: false },
+				},
+				"",
+				"sess123",
+			),
+		).toEqual({
+			to: "/commit/$hash/diff/$",
+			params: { hash: "abc", _splat: "src/a.ts" },
+			search: { session: "sess123", branch: "feature/x" },
+		});
+		expect(
+			overlayToNavigation(
+				{
+					type: "commit-file",
+					hash: "abc",
+					path: "src/a.ts",
+					branch: { ref: "origin/x", remote: true },
+				},
+				"",
+				null,
+			).search,
+		).toEqual({ branch: "origin/x", remote: 1 });
+	});
+});

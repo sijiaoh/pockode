@@ -6,7 +6,7 @@ import { useFileDownload } from "../../hooks/useFileDownload";
 import { useGitCommit } from "../../hooks/useGitCommit";
 import { useRouteState } from "../../hooks/useRouteState";
 import { overlayToNavigation } from "../../lib/navigation";
-import { historyQueryOf } from "../../types/overlay";
+import { commitOriginOf } from "../../types/overlay";
 import { getFileViewState } from "../../utils/fileView";
 import FileBody from "../Files/FileBody";
 import { DownloadButton } from "../Files/FileDownloadControls";
@@ -29,8 +29,9 @@ function CommitFileView({ hash, path }: Props) {
 	const navigate = useNavigate();
 	const { worktree, sessionId, overlay } = useRouteState();
 	// Carried from layer to layer, so Back lands on the list the commit was
-	// picked from (docs/git-history-ui.md#url).
-	const history = historyQueryOf(overlay);
+	// picked from (docs/git-history-ui.md#url), or the branch
+	// (docs/git-branches-ui.md#opening-a-commit).
+	const origin = commitOriginOf(overlay);
 	// Kept across files: someone reading several historical files in a row
 	// should not have to press it again for each.
 	const [plain, setPlain] = useState(false);
@@ -60,7 +61,7 @@ function CommitFileView({ hash, path }: Props) {
 	const handleBack = () => {
 		navigate(
 			overlayToNavigation(
-				{ type: "commit-diff", hash, path, history },
+				{ type: "commit-diff", hash, path, ...origin },
 				worktree,
 				sessionId,
 			),

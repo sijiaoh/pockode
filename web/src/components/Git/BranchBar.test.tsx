@@ -33,20 +33,20 @@ vi.mock("../../hooks/useGitBranches", () => ({
 const dismissHandoffError = vi.fn();
 let mergeHandoff: Pick<BranchMergeHandoff, "error" | "dismissError">;
 
-function bar(branchesOnScreen = false) {
+function bar(branchFailureSurface = false) {
 	return (
 		<QueryClientProvider client={new QueryClient()}>
 			<BranchBar
 				onOpenBranches={vi.fn()}
-				branchesOnScreen={branchesOnScreen}
+				branchFailureSurface={branchFailureSurface}
 				mergeHandoff={mergeHandoff}
 			/>
 		</QueryClientProvider>
 	);
 }
 
-function renderBar(branchesOnScreen = false) {
-	return render(bar(branchesOnScreen));
+function renderBar(branchFailureSurface = false) {
+	return render(bar(branchFailureSurface));
 }
 
 /** A pull that has already failed, as the store holds it afterwards. */

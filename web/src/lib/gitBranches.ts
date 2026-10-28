@@ -27,6 +27,10 @@ export interface BranchRow {
 	worktree?: string;
 	isDefault: boolean;
 	committed_at: string;
+	committer: string;
+	/** Local rows only, as on `GitBranch`. */
+	upstream?: string;
+	upstream_gone?: boolean;
 	vs_default?: GitDivergence;
 }
 
@@ -55,6 +59,9 @@ export function groupBranches(
 		worktree: b.worktree,
 		isDefault: b.name === branches.default_branch,
 		committed_at: b.committed_at,
+		committer: b.committer,
+		upstream: b.upstream,
+		upstream_gone: b.upstream_gone,
 		vs_default: b.vs_default,
 	}));
 	const remote: BranchRow[] = branches.remote_only.map((b) => ({
@@ -65,6 +72,7 @@ export function groupBranches(
 		remote: true,
 		isDefault: b.ref === branches.default_branch,
 		committed_at: b.committed_at,
+		committer: b.committer,
 		vs_default: b.vs_default,
 	}));
 
@@ -111,14 +119,61 @@ export function findBranchRow(
 }
 
 /**
- * The one state word a row carries, the first that holds: the reason a row is
- * greyed comes before the fact that it is the default.
+ * Every state word that holds, most telling first: being where HEAD is, or
+ * where another worktree's HEAD is, says more than being the default.
+ */
+export function branchStateWords(row: BranchRow): string[] {
+	const words: string[] = [];
+	if (row.current) words.push("current");
+	if (row.worktree) words.push(`in ${row.worktree}`);
+	if (row.isDefault) words.push("default");
+	return words;
+}
+
+/**
+ * The one state word a row has room for, the first that holds: `in <worktree>`
+ * comes before `default` because it is why the branch cannot be switched to.
  */
 export function branchStateWord(row: BranchRow): string | null {
-	if (row.current) return "current";
-	if (row.worktree) return `in ${row.worktree}`;
-	if (row.isDefault) return "default";
-	return null;
+	return branchStateWords(row)[0] ?? null;
+}
+
+/**
+ * Where the branch lives, as the detail says it
+ * (docs/git-branches-ui.md#the-branch). A remote-only branch is switched to
+ * by creating a local one that tracks it, which is said here because the
+ * label `Switch to this branch` does not.
+ */
+export function branchUpstreamLine(row: BranchRow): string {
+	if (row.remote) {
+		// The ref is `<remote>/<name>`; the remote's own name may have slashes.
+		const remote = row.label.slice(0, -(row.name.length + 1));
+		return `Only on ${remote}. Switching to it creates a local ${row.name} that tracks it.`;
+	}
+	if (!row.upstream) return "Local only — not published";
+	if (row.upstream_gone) {
+		return `Tracks ${row.upstream}, which is missing here — not fetched yet, or deleted on the remote`;
+	}
+	return `Tracks ${row.upstream}`;
+}
+
+/**
+ * The row's counts in a sentence, the default named once since the detail
+ * has no `Compared with` line; null where there is nothing to compare.
+ */
+export function branchVsDefaultLine(
+	row: BranchRow,
+	defaultBranch: string,
+): string | null {
+	if (row.isDefault) {
+		return "The default branch — other branches are compared with it";
+	}
+	if (!row.vs_default) return null;
+	const { ahead, behind } = row.vs_default;
+	if (!ahead && !behind) return `Up to date with ${defaultBranch}`;
+	if (!behind) return `${ahead} ahead of ${defaultBranch}`;
+	if (!ahead) return `${behind} behind ${defaultBranch}`;
+	return `${ahead} ahead of ${defaultBranch} · ${behind} behind`;
 }
 
 /** Line 2's words before the age: state word, then counts, none that are 0. */
@@ -154,6 +209,31 @@ export function branchRowLabel(
 	}
 	parts.push(`last commit ${age}`);
 	return parts.join(", ");
+}
+
+/**
+ * Why `Switch to this branch` cannot run now, the first reason that holds, or
+ * null when it can (docs/git-branches-ui.md#the-branchs-menu-). The operation's
+ * reason is the pinned line's first sentence: the way out is on the banner.
+ */
+export function branchSwitchUnavailableReason(
+	row: BranchRow,
+	state: {
+		operation: GitOperationKind | null;
+		switching: boolean;
+		/** This row's branch is the one being deleted. */
+		deleting: boolean;
+		handingOff: boolean;
+	},
+): string | null {
+	if (state.operation) {
+		return `Branch switching is paused during the ${state.operation}.`;
+	}
+	if (row.worktree) return `Checked out in ${row.worktree}.`;
+	if (state.switching) return "Wait for the branch switch to finish.";
+	if (state.deleting) return "Wait for the branch delete to finish.";
+	if (state.handingOff) return "Wait for the new chat to open.";
+	return null;
 }
 
 /**

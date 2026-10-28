@@ -32,6 +32,8 @@ import { resolveSessionView } from "../lib/sessionView";
 import { useWorktreeStore, worktreeActions } from "../lib/worktreeStore";
 import { useWSStore, wsActions } from "../lib/wsStore";
 import {
+	type BranchRef,
+	commitOriginOf,
 	type GitSegment,
 	gitSegmentOf,
 	historyQueryOf,
@@ -663,12 +665,13 @@ function AppShell() {
 	);
 
 	// A commit is opened from the History list, or beside it from another
-	// commit; either way it carries the list's query along.
+	// commit, and carries the list's query along; or from a branch's detail,
+	// and stacks on that branch (docs/git-branches-ui.md#opening-a-commit).
 	const handleSelectCommit = useCallback(
 		(hash: string) => {
 			navigate(
 				overlayToNavigation(
-					{ type: "commit", hash, history: historyQueryOf(overlay) },
+					{ type: "commit", hash, ...commitOriginOf(overlay) },
 					urlWorktree,
 					currentSessionId,
 				),
@@ -724,6 +727,21 @@ function AppShell() {
 		[navigate, overlay, urlWorktree, currentSessionId],
 	);
 
+	// Pushed from a row, as a commit is from History: each branch read is a
+	// step Back retraces.
+	const handleSelectBranch = useCallback(
+		(branch: BranchRef) => {
+			navigate(
+				overlayToNavigation(
+					{ type: "branch", ...branch },
+					urlWorktree,
+					currentSessionId,
+				),
+			);
+		},
+		[navigate, urlWorktree, currentSessionId],
+	);
+
 	/**
 	 * Moves the review of `path` in `worktree`, just discarded from the list,
 	 * on to `next`, or to the Changes list when nothing follows. Either side:
@@ -766,6 +784,38 @@ function AppShell() {
 			});
 		},
 		[navigate, leaveReview],
+	);
+
+	/**
+	 * Replaces the detail of `from` in `worktree` with `to`'s, or with the
+	 * Branches list when `to` is null: the branch is now listed under another
+	 * name, or this workspace deleted it (docs/git-branches-ui.md#when-the-branch-goes-away).
+	 * Replaced so that Back does not reopen a page for a row that left the list.
+	 *
+	 * Only while that detail is still the page, for `handleCloseGitFile`'s
+	 * reason: the answer behind it can arrive after the reader moved on.
+	 */
+	const handleRepointBranch = useCallback(
+		(from: BranchRef, to: BranchRef | null, worktree: string) => {
+			const { overlay: open, urlWorktree, currentSessionId } = routeRef.current;
+			if (urlWorktree !== worktree) return;
+			if (
+				open?.type !== "branch" ||
+				open.ref !== from.ref ||
+				open.remote !== from.remote
+			) {
+				return;
+			}
+			navigate(
+				overlayToNavigation(
+					to ? { type: "branch", ...to } : { type: "git", segment: "branches" },
+					urlWorktree,
+					currentSessionId,
+					{ replace: true },
+				),
+			);
+		},
+		[navigate],
 	);
 
 	/**
@@ -1176,6 +1226,8 @@ function AppShell() {
 						onSelectGitSegment={handleSelectGitSegment}
 						onSelectDiffFile={handleSelectDiffFile}
 						onSelectCommit={handleSelectCommit}
+						onSelectBranch={handleSelectBranch}
+						onRepointBranch={handleRepointBranch}
 						onCloseGitFile={handleCloseGitFile}
 						onOpenReview={handleOpenReview}
 						onReviewRowCanShowChange={setReviewRowCanShow}

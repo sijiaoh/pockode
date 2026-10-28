@@ -1,9 +1,12 @@
 import type { HistoryState } from "@tanstack/react-router";
-import type {
-	GitSegment,
-	HistoryQuery,
-	OverlayState,
-	WorkSegment,
+import {
+	type BranchRef,
+	type CommitOrigin,
+	commitOriginOf,
+	type GitSegment,
+	type HistoryQuery,
+	type OverlayState,
+	type WorkSegment,
 } from "../types/overlay";
 import { ROUTES, WT_ROUTES } from "./routes";
 import { SESSION_VIEW_PARAM } from "./sessionView";
@@ -36,28 +39,35 @@ interface NavToPathOverlay extends NavToOverlayBase {
 	edit?: boolean;
 }
 
-interface NavToCommitOverlay extends NavToOverlayBase {
-	overlayType: "commit";
-	hash: string;
-	history?: HistoryQuery;
+interface NavToBranchOverlay extends NavToOverlayBase {
+	overlayType: "branch";
+	ref: string;
+	remote: boolean;
 }
 
-interface NavToCommitDiffOverlay extends NavToOverlayBase {
-	overlayType: "commit-diff";
-	hash: string;
-	path: string;
-	history?: HistoryQuery;
-}
+type NavToCommitOverlay = NavToOverlayBase &
+	CommitOrigin & {
+		overlayType: "commit";
+		hash: string;
+	};
 
-interface NavToCommitFileOverlay extends NavToOverlayBase {
-	overlayType: "commit-file";
-	hash: string;
-	path: string;
-	history?: HistoryQuery;
-}
+type NavToCommitDiffOverlay = NavToOverlayBase &
+	CommitOrigin & {
+		overlayType: "commit-diff";
+		hash: string;
+		path: string;
+	};
+
+type NavToCommitFileOverlay = NavToOverlayBase &
+	CommitOrigin & {
+		overlayType: "commit-file";
+		hash: string;
+		path: string;
+	};
 
 type NavToFileOverlay =
 	| NavToPathOverlay
+	| NavToBranchOverlay
 	| NavToCommitOverlay
 	| NavToCommitDiffOverlay
 	| NavToCommitFileOverlay;
@@ -147,7 +157,11 @@ export type NavTarget = NavToSession | NavToOverlay | NavToHome;
 interface NavigationResult {
 	to: string;
 	params?: Record<string, string>;
-	search?: Record<string, string>;
+	/**
+	 * A number only where the route's schema takes one (`remote=1`): the
+	 * router quotes a string that would parse as JSON.
+	 */
+	search?: Record<string, string | number>;
 	replace?: boolean;
 }
 
@@ -208,6 +222,21 @@ function assignSearch(
 }
 
 /**
+ * A branch as its detail's URL names it, and a commit opened from it: `remote=1`
+ * for a remote-only branch (docs/git-branches-ui.md#the-branch).
+ */
+function assignBranchSearch(
+	result: NavigationResult,
+	branch: BranchRef,
+	withRef: boolean,
+) {
+	const search: Record<string, string | number> = { ...result.search };
+	if (withRef) search.branch = branch.ref;
+	if (branch.remote) search.remote = 1;
+	if (Object.keys(search).length > 0) result.search = search;
+}
+
+/**
  * Convert OverlayState to navigation result.
  *
  * `options.replace` is for the cases where the overlay is being *corrected*
@@ -250,13 +279,22 @@ export function overlayToNavigation(
 					sessionId,
 					edit: overlay.edit,
 				};
+			case "branch":
+				return {
+					type: "overlay" as const,
+					worktree,
+					overlayType: "branch" as const,
+					ref: overlay.ref,
+					remote: overlay.remote,
+					sessionId,
+				};
 			case "commit":
 				return {
 					type: "overlay" as const,
 					worktree,
 					overlayType: "commit" as const,
 					hash: overlay.hash,
-					history: overlay.history,
+					...commitOriginOf(overlay),
 					sessionId,
 				};
 			case "commit-diff":
@@ -266,7 +304,7 @@ export function overlayToNavigation(
 					overlayType: "commit-diff" as const,
 					path: overlay.path,
 					hash: overlay.hash,
-					history: overlay.history,
+					...commitOriginOf(overlay),
 					sessionId,
 				};
 			case "commit-file":
@@ -276,7 +314,7 @@ export function overlayToNavigation(
 					overlayType: "commit-file" as const,
 					path: overlay.path,
 					hash: overlay.hash,
-					history: overlay.history,
+					...commitOriginOf(overlay),
 					sessionId,
 				};
 			case "settings":
@@ -421,6 +459,14 @@ export function buildNavigation(
 						? target.history
 						: undefined,
 				);
+			} else if (target.overlayType === "branch") {
+				result.to = isMain ? ROUTES.branch : WT_ROUTES.branch;
+				result.params = { _splat: target.ref };
+				if (!isMain) {
+					result.params.worktree = target.worktree;
+				}
+				assignSearch(result, target.sessionId);
+				assignBranchSearch(result, target, false);
 			} else if (target.overlayType === "commit") {
 				result.to = isMain ? ROUTES.commit : WT_ROUTES.commit;
 				result.params = { _splat: target.hash };
@@ -428,6 +474,7 @@ export function buildNavigation(
 					result.params.worktree = target.worktree;
 				}
 				assignSearch(result, target.sessionId, undefined, target.history);
+				if (target.branch) assignBranchSearch(result, target.branch, true);
 			} else if (
 				target.overlayType === "commit-diff" ||
 				target.overlayType === "commit-file"
@@ -440,6 +487,7 @@ export function buildNavigation(
 					result.params.worktree = target.worktree;
 				}
 				assignSearch(result, target.sessionId, undefined, target.history);
+				if (target.branch) assignBranchSearch(result, target.branch, true);
 			} else {
 				const routeMap = {
 					staged: isMain ? ROUTES.staged : WT_ROUTES.staged,

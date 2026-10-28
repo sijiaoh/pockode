@@ -24,8 +24,11 @@ export type GitLogQuery =
  * infinite query re-reads its pages from the first, each cursor
  * taken from the page re-read before it, so rewritten history (an amend, a
  * pull) never leaves a page continuing from commits that no longer exist.
+ *
+ * `enabled: false` asks nothing and keeps what was read: a branch's commits
+ * while that branch is not listed, which `git.log` would refuse.
  */
-export function useGitLog(query: GitLogQuery) {
+export function useGitLog(query: GitLogQuery, { enabled = true } = {}) {
 	const getLog = useWSStore((state) => state.actions.getLog);
 	const isGitRepo = useIsGitRepo();
 	const { q = "", file = "" } = query;
@@ -47,7 +50,7 @@ export function useGitLog(query: GitLogQuery) {
 			}),
 		initialPageParam: null as GitHistoryCursor | null,
 		getNextPageParam: (page) => page.next ?? undefined,
-		enabled: isGitRepo === true,
+		enabled: enabled && isGitRepo === true,
 		staleTime: 30_000, // 30 seconds - commits change less frequently
 	});
 }

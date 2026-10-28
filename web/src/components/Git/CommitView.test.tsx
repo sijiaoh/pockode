@@ -163,6 +163,43 @@ describe("CommitView", () => {
 		});
 	});
 
+	// docs/git-branches-ui.md#opening-a-commit: stacked on a branch, the
+	// page leads back to it and carries it to everything opened from here.
+	it("leads back to the branch it was opened from, and carries it on", async () => {
+		const user = userEvent.setup();
+		const onBack = vi.fn();
+		routeOverlay = {
+			type: "commit",
+			hash: "abc1234def",
+			branch: { ref: "origin/topic", remote: true },
+		};
+		commitQuery = loaded({
+			files: [{ path: "src/a.ts", status: "M" }],
+		});
+		parentQueries["1111111aaa"] = loaded({
+			hash: "1111111aaa",
+			subject: "The parent",
+		});
+		render(<CommitView hash="abc1234def" onBack={onBack} />);
+
+		await user.click(screen.getByRole("button", { name: "Back to branch" }));
+		expect(onBack).toHaveBeenCalled();
+
+		await user.click(screen.getByRole("button", { name: /The parent/ }));
+		expect(navigate).toHaveBeenLastCalledWith({
+			to: "/commit/$",
+			params: { _splat: "1111111aaa" },
+			search: { branch: "origin/topic", remote: 1 },
+		});
+
+		await user.click(screen.getByRole("button", { name: /src\/a\.ts/ }));
+		expect(navigate).toHaveBeenLastCalledWith({
+			to: "/commit/$hash/diff/$",
+			params: { hash: "abc1234def", _splat: "src/a.ts" },
+			search: { branch: "origin/topic", remote: 1 },
+		});
+	});
+
 	it("numbers a merge's parents, and says its files are against the first", () => {
 		commitQuery = loaded({
 			parents: ["1111111aaa", "2222222bbb"],

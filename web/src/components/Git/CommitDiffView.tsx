@@ -13,7 +13,7 @@ import { useGitCommit } from "../../hooks/useGitCommit";
 import { useRouteState } from "../../hooks/useRouteState";
 import { useDiffSettings, useGitDiffWrap } from "../../lib/diffSettingsStore";
 import { overlayToNavigation } from "../../lib/navigation";
-import { fileHistoryOverlay, historyQueryOf } from "../../types/overlay";
+import { commitOriginOf, fileHistoryOverlay } from "../../types/overlay";
 import { splitPath } from "../../utils/path";
 import { FilePageHeader } from "../Layout/PageHeader";
 import {
@@ -33,8 +33,9 @@ function CommitDiffView({ hash, path }: Props) {
 	const navigate = useNavigate();
 	const { worktree, sessionId, overlay } = useRouteState();
 	// Carried from layer to layer, so Back lands on the list the commit was
-	// picked from (docs/git-history-ui.md#url).
-	const history = historyQueryOf(overlay);
+	// picked from (docs/git-history-ui.md#url), or the branch
+	// (docs/git-branches-ui.md#opening-a-commit).
+	const origin = commitOriginOf(overlay);
 	const { hideWhitespace, toggleHideWhitespace } = useDiffSettings();
 	const { wrap, toggleWrap } = useGitDiffWrap();
 	const { data: commit } = useGitCommit(hash);
@@ -60,7 +61,7 @@ function CommitDiffView({ hash, path }: Props) {
 	const navigateToFile = (filePath: string) => {
 		navigate(
 			overlayToNavigation(
-				{ type: "commit-diff", hash, path: filePath, history },
+				{ type: "commit-diff", hash, path: filePath, ...origin },
 				worktree,
 				sessionId,
 			),
@@ -74,7 +75,7 @@ function CommitDiffView({ hash, path }: Props) {
 	const viewCommitVersion = () => {
 		navigate(
 			overlayToNavigation(
-				{ type: "commit-file", hash, path, history },
+				{ type: "commit-file", hash, path, ...origin },
 				worktree,
 				sessionId,
 			),
@@ -90,7 +91,7 @@ function CommitDiffView({ hash, path }: Props) {
 	const handleBack = () => {
 		navigate(
 			overlayToNavigation(
-				{ type: "commit", hash, history },
+				{ type: "commit", hash, ...origin },
 				worktree,
 				sessionId,
 			),

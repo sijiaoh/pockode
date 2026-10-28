@@ -53,6 +53,9 @@ vi.mock("./Chat", () => ({
 		onOpenScheduleDetail,
 		onSelectGitSegment,
 		onSelectDiffFile,
+		onSelectBranch,
+		onSelectCommit,
+		onRepointBranch,
 		onCloseGitFile,
 		onCloseOverlay,
 		onOpenReview,
@@ -74,6 +77,13 @@ vi.mock("./Chat", () => ({
 		onOpenScheduleDetail?: (scheduleId: string) => void;
 		onSelectGitSegment?: (segment: "changes" | "history" | "branches") => void;
 		onSelectDiffFile?: (path: string, staged: boolean) => void;
+		onSelectBranch?: (branch: { ref: string; remote: boolean }) => void;
+		onSelectCommit?: (hash: string) => void;
+		onRepointBranch?: (
+			from: { ref: string; remote: boolean },
+			to: { ref: string; remote: boolean } | null,
+			worktree: string,
+		) => void;
 		onCloseGitFile?: (
 			path: string,
 			worktree: string,
@@ -82,7 +92,14 @@ vi.mock("./Chat", () => ({
 		onCloseOverlay?: () => void;
 		onOpenReview?: () => void;
 		onReviewRowCanShowChange?: (canShow: boolean) => void;
-		overlay?: { type: string; scheduleId?: string; segment?: string } | null;
+		overlay?: {
+			type: string;
+			scheduleId?: string;
+			segment?: string;
+			ref?: string;
+			remote?: boolean;
+			branch?: { ref: string; remote: boolean };
+		} | null;
 		view?: { worktree: string; exists: boolean } | null;
 	}) => (
 		<div
@@ -93,6 +110,15 @@ vi.mock("./Chat", () => ({
 			data-overlay={overlay?.type}
 			data-schedule-id={overlay?.scheduleId}
 			data-git-segment={overlay?.type === "git" ? overlay.segment : undefined}
+			data-branch={
+				overlay?.type === "branch"
+					? `${overlay.remote ? "remote" : "local"}:${overlay.ref}`
+					: undefined
+			}
+			data-commit-branch={
+				overlay?.branch &&
+				`${overlay.branch.remote ? "remote" : "local"}:${overlay.branch.ref}`
+			}
 			// Absent rather than empty when there is no view: "" is a worktree here.
 			data-view-worktree={view?.worktree}
 			data-view-exists={view ? String(view.exists) : undefined}
@@ -158,6 +184,40 @@ vi.mock("./Chat", () => ({
 				onClick={() => onCloseGitFile?.("src/a.ts", "B", null)}
 			>
 				Discarded src/a.ts in B
+			</button>
+			<button
+				type="button"
+				onClick={() =>
+					onSelectBranch?.({ ref: "origin/colleague", remote: true })
+				}
+			>
+				Open origin/colleague
+			</button>
+			<button type="button" onClick={() => onSelectCommit?.("a".repeat(40))}>
+				Open commit aaaaaaa
+			</button>
+			<button type="button" onClick={() => onSelectCommit?.("b".repeat(40))}>
+				Open commit bbbbbbb
+			</button>
+			<button
+				type="button"
+				onClick={() =>
+					onRepointBranch?.(
+						{ ref: "origin/colleague", remote: true },
+						{ ref: "colleague", remote: false },
+						"A",
+					)
+				}
+			>
+				origin/colleague became local
+			</button>
+			<button
+				type="button"
+				onClick={() =>
+					onRepointBranch?.({ ref: "topic", remote: false }, null, "A")
+				}
+			>
+				Deleted topic
 			</button>
 			<button type="button" onClick={() => onCloseOverlay?.()}>
 				Leave the page
@@ -1244,6 +1304,145 @@ describe("AppShell Git workspace", () => {
 
 		await waitFor(() =>
 			expect(router.state.location.pathname).toBe("/w/A/s/a1"),
+		);
+	});
+
+	// docs/git-branches-ui.md#the-branch: a remote-only branch's ref can be a
+	// local branch's name too, so the URL says which.
+	it("pushes a branch's detail, saying when it is a remote one", async () => {
+		const user = userEvent.setup();
+		const router = renderAppShell("/w/A/git?segment=branches&session=a1");
+		await waitFor(() =>
+			expect(panel()).toHaveAttribute("data-git-segment", "branches"),
+		);
+
+		await user.click(
+			screen.getByRole("button", { name: "Open origin/colleague" }),
+		);
+
+		await waitFor(() =>
+			expect(router.state.location.pathname).toBe(
+				"/w/A/branch/origin/colleague",
+			),
+		);
+		expect(router.state.location.searchStr).toBe("?session=a1&remote=1");
+		expect(panel()).toHaveAttribute("data-branch", "remote:origin/colleague");
+
+		router.history.back();
+		await waitFor(() =>
+			expect(router.state.location.pathname).toBe("/w/A/git"),
+		);
+	});
+
+	// docs/git-branches-ui.md#opening-a-commit: the commit stacks on the
+	// branch, carrying its whole identity.
+	it("opens a commit from a branch's detail stacked on that branch", async () => {
+		const user = userEvent.setup();
+		const router = renderAppShell(
+			"/w/A/branch/origin/colleague?session=a1&remote=1",
+		);
+		await waitFor(() =>
+			expect(panel()).toHaveAttribute("data-branch", "remote:origin/colleague"),
+		);
+
+		await user.click(
+			screen.getByRole("button", { name: "Open commit aaaaaaa" }),
+		);
+
+		await waitFor(() =>
+			expect(router.state.location.pathname).toBe(
+				`/w/A/commit/${"a".repeat(40)}`,
+			),
+		);
+		expect(router.state.location.searchStr).toBe(
+			"?session=a1&branch=origin%2Fcolleague&remote=1",
+		);
+		expect(panel()).toHaveAttribute(
+			"data-commit-branch",
+			"remote:origin/colleague",
+		);
+
+		// Another commit opened from it carries the branch on.
+		await user.click(
+			screen.getByRole("button", { name: "Open commit bbbbbbb" }),
+		);
+		await waitFor(() =>
+			expect(router.state.location.pathname).toBe(
+				`/w/A/commit/${"b".repeat(40)}`,
+			),
+		);
+		expect(router.state.location.searchStr).toBe(
+			"?session=a1&branch=origin%2Fcolleague&remote=1",
+		);
+
+		router.history.back();
+		router.history.back();
+		await waitFor(() =>
+			expect(panel()).toHaveAttribute("data-branch", "remote:origin/colleague"),
+		);
+	});
+
+	it("opens a local branch's detail from a link", async () => {
+		renderAppShell("/w/A/branch/feature/x?session=a1");
+
+		await waitFor(() =>
+			expect(panel()).toHaveAttribute("data-branch", "local:feature/x"),
+		);
+	});
+
+	// Back must not reopen a page for a row that left the list.
+	it("replaces a branch's detail once its branch is listed by another name", async () => {
+		const user = userEvent.setup();
+		const router = renderAppShell("/w/A/git?segment=branches&session=a1");
+		await waitFor(() =>
+			expect(panel()).toHaveAttribute("data-git-segment", "branches"),
+		);
+		await user.click(
+			screen.getByRole("button", { name: "Open origin/colleague" }),
+		);
+		await waitFor(() =>
+			expect(panel()).toHaveAttribute("data-branch", "remote:origin/colleague"),
+		);
+
+		await user.click(
+			screen.getByRole("button", { name: "origin/colleague became local" }),
+		);
+		await waitFor(() =>
+			expect(panel()).toHaveAttribute("data-branch", "local:colleague"),
+		);
+
+		router.history.back();
+		await waitFor(() =>
+			expect(panel()).toHaveAttribute("data-git-segment", "branches"),
+		);
+	});
+
+	it("replaces a deleted branch's detail with the list, and only that one's", async () => {
+		const user = userEvent.setup();
+		const router = renderAppShell("/w/A/branch/main?session=a1");
+		await waitFor(() =>
+			expect(panel()).toHaveAttribute("data-branch", "local:main"),
+		);
+
+		// Another branch's delete answering leaves this page alone.
+		await user.click(screen.getByRole("button", { name: "Deleted topic" }));
+		expect(panel()).toHaveAttribute("data-branch", "local:main");
+
+		await act(() =>
+			router.navigate({
+				to: "/w/$worktree/branch/$",
+				params: { worktree: "A", _splat: "topic" },
+				search: { session: "a1" },
+			}),
+		);
+		await user.click(screen.getByRole("button", { name: "Deleted topic" }));
+		await waitFor(() =>
+			expect(panel()).toHaveAttribute("data-git-segment", "branches"),
+		);
+
+		router.history.back();
+		await waitFor(() =>
+			expect(panel()).toHaveAttribute("data-branch", "local:main"),
 		);
 	});
 

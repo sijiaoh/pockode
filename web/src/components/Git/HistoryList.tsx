@@ -32,14 +32,24 @@ interface Props {
 	activeHash: string | null;
 	onSelectCommit: (hash: string) => void;
 	onOpenMenu: (row: HistoryRow) => void;
+	/**
+	 * A scroll area of the page's own that the list sits in, below other
+	 * content, rather than one of the list's: `margin` is how far down that
+	 * area the list starts, kept current by the caller as what is above it
+	 * changes height. Mounted with the list and kept for its life.
+	 */
+	scroller?: { element: HTMLElement; margin: number };
 }
 
 const OVERSCAN = 10;
 
 /**
- * The History segment's rows in a virtual list: only the rows near the screen
- * are mounted, every row 52px. The next page is asked for when the reader is
+ * A list of commits in a virtual list: only the rows near the screen are
+ * mounted, every row 52px. The next page is asked for when the reader is
  * within a screen of the end.
+ *
+ * It scrolls on its own, as History's list does, or inside a `scroller` with
+ * whatever is above it, as a branch's commits do under its facts.
  */
 function HistoryList({
 	rows,
@@ -49,11 +59,17 @@ function HistoryList({
 	activeHash,
 	onSelectCommit,
 	onOpenMenu,
+	scroller,
 }: Props) {
-	const scrollerRef = useRef<HTMLDivElement>(null);
+	const rootRef = useRef<HTMLDivElement>(null);
+	// The outer element never changes for the list's life, so a ref to it
+	// serves both cases.
+	const outerRef = useRef<HTMLElement | null>(scroller?.element ?? null);
+	const scrollerRef = scroller ? outerRef : rootRef;
+	const margin = scroller?.margin ?? 0;
 	const isExpanded = useIsExpanded();
 	const menuWidth = useHasCoarsePointer() ? MENU_WIDTH.coarse : MENU_WIDTH.fine;
-	const listWidth = useElementWidth(scrollerRef);
+	const listWidth = useElementWidth(rootRef);
 	const cap = laneCap(listWidth, menuWidth, isExpanded);
 
 	// Only grows: a page arriving may move the text column right once, but a
@@ -79,6 +95,7 @@ function HistoryList({
 	const virtualizer = useVirtualizer({
 		count,
 		getScrollElement: () => scrollerRef.current,
+		scrollMargin: margin,
 		estimateSize: () => ROW_HEIGHT,
 		overscan: OVERSCAN,
 		getItemKey: (index) => rows[index]?.commit.hash ?? "footer",
@@ -97,11 +114,14 @@ function HistoryList({
 		if (loadMoreAt !== -1 && footer.kind === "loading") onLoadMore();
 	}, [loadMoreAt, footer.kind, onLoadMore]);
 
-	useKeepTopRow(scrollerRef, rows);
+	useKeepTopRow(scrollerRef, rows, margin);
 
 	const lastGraph = rows.at(-1)?.graph;
 	return (
-		<div ref={scrollerRef} className="min-h-0 flex-1 overflow-y-auto">
+		<div
+			ref={rootRef}
+			className={scroller ? undefined : "min-h-0 flex-1 overflow-y-auto"}
+		>
 			<ul
 				className="relative w-full"
 				style={{ height: virtualizer.getTotalSize() }}
@@ -114,7 +134,7 @@ function HistoryList({
 							className="absolute inset-x-0 top-0"
 							style={{
 								height: ROW_HEIGHT,
-								transform: `translateY(${item.start}px)`,
+								transform: `translateY(${item.start - margin}px)`,
 							}}
 						>
 							{row ? (
@@ -258,20 +278,28 @@ function FooterRow({
 function useKeepTopRow(
 	scrollerRef: React.RefObject<HTMLElement | null>,
 	rows: HistoryRow[],
+	/** Where in the scroll area the first row starts. */
+	margin: number,
 ) {
 	const top = useRef<{ index: number; hash: string } | null>(null);
 	const rowsRef = useRef(rows);
+	const marginRef = useRef(margin);
+	useLayoutEffect(() => {
+		marginRef.current = margin;
+	}, [margin]);
 	useEffect(() => {
 		const el = scrollerRef.current;
 		if (!el) return;
 		const onScroll = () => {
+			const scrolled = el.scrollTop - marginRef.current;
 			// At the very top the reader is reading what is newest, and a commit
-			// arriving above belongs on screen rather than pushed out of it.
-			if (el.scrollTop === 0) {
+			// arriving above belongs on screen rather than pushed out of it —
+			// as is a reader still above the list, reading what heads it.
+			if (scrolled <= 0) {
 				top.current = null;
 				return;
 			}
-			const index = Math.floor(el.scrollTop / ROW_HEIGHT);
+			const index = Math.floor(scrolled / ROW_HEIGHT);
 			const hash = rowsRef.current[index]?.commit.hash;
 			top.current = hash ? { index, hash } : null;
 		};

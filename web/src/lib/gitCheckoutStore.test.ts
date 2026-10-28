@@ -113,7 +113,7 @@ describe("gitCheckoutStore", () => {
 				gitCheckoutActions.startDelete("", "spike", () =>
 					Promise.reject(new Error("error: cannot lock ref")),
 				),
-			).resolves.toBeUndefined();
+			).resolves.toBe(false);
 
 			expect(run("")).toMatchObject({
 				deleting: null,
@@ -122,6 +122,19 @@ describe("gitCheckoutStore", () => {
 					detail: "error: cannot lock ref",
 				},
 			});
+		});
+
+		// The branch's detail leaves for the list on this, and only on this.
+		it("resolves to whether the branch was deleted", async () => {
+			await expect(
+				gitCheckoutActions.startDelete("", "spike", () => Promise.resolve()),
+			).resolves.toBe(true);
+
+			const rpc = vi.fn(pending);
+			gitCheckoutActions.startDelete("", "spike", rpc);
+			await expect(
+				gitCheckoutActions.startDelete("", "old", rpc),
+			).resolves.toBe(false);
 		});
 
 		it("tells the user to look again when the branch moved", async () => {

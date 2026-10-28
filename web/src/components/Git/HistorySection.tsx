@@ -1,29 +1,27 @@
 import { useNavigate } from "@tanstack/react-router";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useDebouncedValue } from "../../hooks/useDebouncedValue";
 import { useGitLog } from "../../hooks/useGitLog";
-import { type HistoryRow, useHistoryGraph } from "../../hooks/useHistoryGraph";
+import { useHistoryGraph } from "../../hooks/useHistoryGraph";
 import { useRouteState } from "../../hooks/useRouteState";
 import { HISTORY_SEARCH_DEBOUNCE_MS } from "../../lib/commitHistory";
 import { overlayToNavigation } from "../../lib/navigation";
 import type { GitHistoryScope } from "../../types/git";
 import type { HistoryQuery } from "../../types/overlay";
+import { errorMessage } from "../../utils/errorMessage";
 import { splitPath } from "../../utils/path";
 import { Spinner } from "../ui";
-import CommitActions, { type CommitMenuTarget } from "./CommitActions";
 import HistoryFilters from "./HistoryFilters";
 import HistoryHeader from "./HistoryHeader";
-import HistoryList, { type HistoryFooter } from "./HistoryList";
+import HistoryList from "./HistoryList";
+import { useCommitMenu } from "./useCommitMenu";
+import { useHistoryPaging } from "./useHistoryPaging";
 
 interface Props {
 	/** The range and filters the URL names. */
 	history: HistoryQuery;
 	activeHash: string | null;
 	onSelectCommit: (hash: string) => void;
-}
-
-function errorText(error: unknown): string {
-	return error instanceof Error ? error.message : String(error);
 }
 
 /** An empty field is no search, and neither is one of only spaces. */
@@ -45,17 +43,8 @@ function noMatchText({ q, file }: HistoryQuery): string {
 function HistorySection({ history, activeHash, onSelectCommit }: Props) {
 	const navigate = useNavigate();
 	const { worktree, sessionId, overlay } = useRouteState();
-	const {
-		data,
-		isLoading,
-		error,
-		hasNextPage,
-		isFetching,
-		isFetchNextPageError,
-		isRefetchError,
-		fetchNextPage,
-		refetch,
-	} = useGitLog(history);
+	const log = useGitLog(history);
+	const { data, isLoading, error } = log;
 	// A search or a file filter lists commits that are not each other's
 	// parents; lines drawn between them would be lies.
 	const filtered = Boolean(history.q || history.file);
@@ -68,23 +57,7 @@ function HistorySection({ history, activeHash, onSelectCommit }: Props) {
 	const knownDefault = useRef<string | undefined>(undefined);
 	if (first) knownDefault.current = first.default_branch;
 
-	const [menuFor, setMenuFor] = useState<CommitMenuTarget | null>(null);
-	// Stable, so a menu opened does not re-render every memoized row.
-	const openMenu = useCallback(
-		({ commit, inHeadHistory }: HistoryRow) =>
-			setMenuFor({ commit, inHeadHistory }),
-		[],
-	);
-	const closeMenu = useCallback(() => setMenuFor(null), []);
-	// From the list as it is now rather than as it was at the press: a commit
-	// made meanwhile moves HEAD, and amend is HEAD's. A commit no longer listed
-	// has been rewritten or left the range; its refs are no longer known, and
-	// HEAD — which an amend would rewrite — is not among them.
-	const menuRow =
-		menuFor && rows.find((r) => r.commit.hash === menuFor.commit.hash);
-	const menuTarget: CommitMenuTarget | null = menuRow
-		? { commit: menuRow.commit, inHeadHistory: menuRow.inHeadHistory }
-		: menuFor && { commit: { ...menuFor.commit, refs: [] } };
+	const { openMenu, menu } = useCommitMenu(rows);
 
 	// Onto whichever history layer is up: a commit beside the list at
 	// `expanded` stays open, and a search settling after a row was pressed
@@ -94,7 +67,8 @@ function HistorySection({ history, activeHash, onSelectCommit }: Props) {
 			overlay?.type === "commit" ||
 			overlay?.type === "commit-diff" ||
 			overlay?.type === "commit-file"
-				? { ...overlay, history: next }
+				? // A commit under History carries no branch; said for the type.
+					{ ...overlay, branch: undefined, history: next }
 				: { type: "git" as const, segment: "history" as const, history: next };
 		navigate(overlayToNavigation(layer, worktree, sessionId, { replace }));
 	};
@@ -155,44 +129,14 @@ function HistorySection({ history, activeHash, onSelectCommit }: Props) {
 	// Pushed: dropping the file is a step the user took, as adding it was.
 	const clearFile = () => showHistory({ ...history, file: undefined });
 
-	// Not while anything is fetching: `fetchNextPage` cancels a fetch in flight,
-	// and a re-read after `git.changed` would be dropped for a page appended
-	// to the old ones. A new identity once it settles asks again.
-	const loadMore = useCallback(() => {
-		if (hasNextPage && !isFetching) void fetchNextPage();
-	}, [hasNextPage, isFetching, fetchNextPage]);
-	// From the top rather than the failed page again: a cursor whose commits
-	// were garbage-collected fails the same way every time, and the re-read
-	// takes fresh cursors (docs/git.md, History). The next page follows on its
-	// own once the reader is still near the end.
-	const retry = useCallback(() => void refetch(), [refetch]);
-
-	// A re-read from the top (`git.changed`, Retry) that failed keeps the old
-	// rows on screen, which are then not current: said where Retry is. The
-	// failed footer also asks for no next page, which would hang off the stale
-	// pages and hide the failure once it arrived.
-	const footer: HistoryFooter = isFetchNextPageError
-		? {
-				kind: "failed",
-				text: "Couldn't load older commits.",
-				reason: errorText(error),
-			}
-		: isRefetchError && !isFetching
-			? {
-					kind: "failed",
-					text: "Couldn't refresh history.",
-					reason: errorText(error),
-				}
-			: hasNextPage
-				? { kind: "loading" }
-				: {
-						kind: "end",
-						text: first?.shallow
-							? "Older history isn't in this clone"
-							: filtered
-								? "No more matches"
-								: "Beginning of history",
-					};
+	const { footer, loadMore, retry } = useHistoryPaging(
+		log,
+		first?.shallow
+			? "Older history isn't in this clone"
+			: filtered
+				? "No more matches"
+				: "Beginning of history",
+	);
 
 	return (
 		<>
@@ -214,7 +158,7 @@ function HistorySection({ history, activeHash, onSelectCommit }: Props) {
 				file={history.file}
 				onClearFile={clearFile}
 			/>
-			<CommitActions target={menuTarget} onClose={closeMenu} />
+			{menu}
 			{isLoading ? (
 				<div className="flex items-center justify-center p-8">
 					<Spinner variant="current" className="text-th-text-muted" />
@@ -260,7 +204,7 @@ function HistorySection({ history, activeHash, onSelectCommit }: Props) {
 					<div className="p-4 text-center text-th-error">
 						<div>Failed to load history</div>
 						<div className="mt-1 text-sm text-th-text-muted">
-							{errorText(error)}
+							{errorMessage(error)}
 						</div>
 					</div>
 				)

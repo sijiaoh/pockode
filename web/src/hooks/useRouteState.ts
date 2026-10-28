@@ -1,6 +1,7 @@
 import { useMatch, useParams } from "@tanstack/react-router";
 import { ROUTES, WT_ROUTES } from "../lib/routes";
 import type {
+	BranchSearchParams,
 	CommitSearchParams,
 	GitSearchParams,
 	HistorySearchParams,
@@ -8,6 +9,7 @@ import type {
 	SessionSearchParams,
 } from "../router";
 import type {
+	CommitOrigin,
 	GitSegment,
 	HistoryQuery,
 	OverlayState,
@@ -67,6 +69,18 @@ function readHistoryQuery(
 	};
 }
 
+/**
+ * A commit layer's origin. A URL naming both a branch and a History query —
+ * typed, never written — is taken as the branch's: the narrower of the two.
+ */
+function readCommitOrigin(search: CommitSearchParams): CommitOrigin {
+	if (search.branch) {
+		return { branch: { ref: search.branch, remote: search.remote === 1 } };
+	}
+	const history = readHistoryQuery(search);
+	return history ? { history } : {};
+}
+
 export function useRouteState(): RouteInfo {
 	const worktree = useCurrentWorktree();
 
@@ -95,6 +109,11 @@ export function useRouteState(): RouteInfo {
 	});
 	const gitMatch = useMatch({ from: ROUTES.git, shouldThrow: false });
 	const wtGitMatch = useMatch({ from: WT_ROUTES.git, shouldThrow: false });
+	const branchMatch = useMatch({ from: ROUTES.branch, shouldThrow: false });
+	const wtBranchMatch = useMatch({
+		from: WT_ROUTES.branch,
+		shouldThrow: false,
+	});
 	const commitMatch = useMatch({
 		from: ROUTES.commit,
 		shouldThrow: false,
@@ -241,16 +260,31 @@ export function useRouteState(): RouteInfo {
 		};
 	}
 
+	const branchRef = branchMatch?.params._splat ?? wtBranchMatch?.params._splat;
+	if (branchRef !== undefined) {
+		const search = (branchMatch?.search ??
+			wtBranchMatch?.search) as BranchSearchParams;
+		return {
+			overlay: {
+				type: "branch",
+				ref: branchRef,
+				remote: search.remote === 1,
+			},
+			sessionId: search.session ?? null,
+			worktree,
+			viewWorktree: null,
+		};
+	}
+
 	const commitHash = commitMatch?.params._splat ?? wtCommitMatch?.params._splat;
 	if (commitHash !== undefined) {
 		const search = (commitMatch?.search ??
 			wtCommitMatch?.search) as CommitSearchParams;
-		const history = readHistoryQuery(search);
 		return {
 			overlay: {
 				type: "commit",
 				hash: commitHash,
-				...(history ? { history } : {}),
+				...readCommitOrigin(search),
 			},
 			sessionId: search.session ?? null,
 			worktree,
@@ -264,13 +298,12 @@ export function useRouteState(): RouteInfo {
 		const path = (commitDiffParams as { _splat: string })._splat;
 		const search = (commitDiffMatch?.search ??
 			wtCommitDiffMatch?.search) as CommitSearchParams;
-		const history = readHistoryQuery(search);
 		return {
 			overlay: {
 				type: "commit-diff",
 				hash,
 				path,
-				...(history ? { history } : {}),
+				...readCommitOrigin(search),
 			},
 			sessionId: search.session ?? null,
 			worktree,
@@ -284,13 +317,12 @@ export function useRouteState(): RouteInfo {
 		const path = (commitFileParams as { _splat: string })._splat;
 		const search = (commitFileMatch?.search ??
 			wtCommitFileMatch?.search) as CommitSearchParams;
-		const history = readHistoryQuery(search);
 		return {
 			overlay: {
 				type: "commit-file",
 				hash,
 				path,
-				...(history ? { history } : {}),
+				...readCommitOrigin(search),
 			},
 			sessionId: search.session ?? null,
 			worktree,

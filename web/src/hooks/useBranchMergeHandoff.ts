@@ -17,7 +17,7 @@ export interface BranchMergeHandoff {
  * A branch's `Ask AI to merge into current branch`
  * (docs/git-branches-ui.md#asking-the-agent-to-merge). Called by the Git
  * workspace, not the Branches segment: the segment unmounts when the user
- * moves to another one, and a create still running then must keep the list
+ * moves to another one, and a create still running then must keep switching
  * held when they come back, and its failure must still be shown.
  *
  * The prefill hook's `isPending` is its own, so the pressed row is

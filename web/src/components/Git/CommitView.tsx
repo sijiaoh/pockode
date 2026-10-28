@@ -10,7 +10,7 @@ import {
 	GIT_STATUS_INFO,
 	type GitFileStatus,
 } from "../../types/git";
-import { historyQueryOf } from "../../types/overlay";
+import { commitOriginOf } from "../../types/overlay";
 import { formatDateTime } from "../../utils/dateTime";
 import PageHeader, { type PageBack } from "../Layout/PageHeader";
 import { BottomActionBar, ContentView, CopyButton } from "../ui";
@@ -23,8 +23,8 @@ import RefChips from "./RefChips";
 interface Props {
 	hash: string;
 	/**
-	 * Back to the list this was opened from. Absent where that list is on
-	 * screen beside it.
+	 * Back to the list this was opened from, or the branch's detail. Absent
+	 * where that is on screen beside it.
 	 */
 	onBack?: () => void;
 }
@@ -108,15 +108,16 @@ function ParentRow({
 
 function CommitView({ hash, onBack }: Props) {
 	const navigate = useNavigate();
-	const back: PageBack | undefined = onBack && {
-		to: "parent",
-		label: "Back to history",
-		onClick: onBack,
-	};
 	const { worktree, sessionId, overlay } = useRouteState();
 	// Carried from layer to layer, so Back lands on the list the commit was
-	// picked from (docs/git-history-ui.md#url).
-	const history = historyQueryOf(overlay);
+	// picked from (docs/git-history-ui.md#url), or the branch
+	// (docs/git-branches-ui.md#opening-a-commit).
+	const origin = commitOriginOf(overlay);
+	const back: PageBack | undefined = onBack && {
+		to: "parent",
+		label: origin.branch ? "Back to branch" : "Back to history",
+		onClick: onBack,
+	};
 	const { data: commit, isLoading, error } = useGitCommit(hash);
 	const [menuOpen, setMenuOpen] = useState(false);
 
@@ -126,7 +127,7 @@ function CommitView({ hash, onBack }: Props) {
 	const openCommit = (parent: string) => {
 		navigate(
 			overlayToNavigation(
-				{ type: "commit", hash: parent, history },
+				{ type: "commit", hash: parent, ...origin },
 				worktree,
 				sessionId,
 			),
@@ -136,7 +137,7 @@ function CommitView({ hash, onBack }: Props) {
 	const handleFileClick = (path: string) => {
 		navigate(
 			overlayToNavigation(
-				{ type: "commit-diff", hash, path, history },
+				{ type: "commit-diff", hash, path, ...origin },
 				worktree,
 				sessionId,
 			),

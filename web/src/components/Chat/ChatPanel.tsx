@@ -57,6 +57,7 @@ import type {
 	UserMessage,
 } from "../../types/message";
 import {
+	type BranchRef,
 	type GitSegment,
 	isGitOverlay,
 	type OverlayState,
@@ -117,6 +118,7 @@ const FOLDER_ATTACH_REFUSED =
 const inputBarHiddenOverlays: NonNullable<OverlayState>["type"][] = [
 	"git",
 	"diff",
+	"branch",
 	"commit",
 	"commit-diff",
 	"commit-file",
@@ -222,6 +224,12 @@ interface Props {
 	onSelectGitSegment?: (segment: GitSegment) => void;
 	onSelectDiffFile?: (path: string, staged: boolean) => void;
 	onSelectCommit?: (hash: string) => void;
+	onSelectBranch?: (branch: BranchRef) => void;
+	onRepointBranch?: (
+		from: BranchRef,
+		to: BranchRef | null,
+		worktree: string,
+	) => void;
 	onCloseGitFile?: (
 		path: string,
 		worktree: string,
@@ -270,6 +278,8 @@ function ChatPanel({
 	onSelectGitSegment,
 	onSelectDiffFile,
 	onSelectCommit,
+	onSelectBranch,
+	onRepointBranch,
 	onCloseGitFile,
 	view = null,
 	onOpenSessionThere,
@@ -1329,6 +1339,7 @@ function ChatPanel({
 			// layers keeps the workspace — and the list's place — mounted.
 			case "git":
 			case "diff":
+			case "branch":
 			case "commit":
 			case "commit-diff":
 			case "commit-file":
@@ -1339,6 +1350,8 @@ function ChatPanel({
 						onSelectSegment={onSelectGitSegment ?? noop}
 						onSelectFile={onSelectDiffFile ?? noop}
 						onSelectCommit={onSelectCommit ?? noop}
+						onSelectBranch={onSelectBranch ?? noop}
+						onRepointBranch={onRepointBranch ?? noop}
 						onCloseFile={onCloseGitFile ?? noop}
 					/>
 				);

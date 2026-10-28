@@ -1,12 +1,14 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { GitCommit, GitStatus } from "../../types/git";
+import { makeBranch } from "../../test/gitFixtures";
+import type { GitBranches, GitCommit, GitStatus } from "../../types/git";
 import GitWorkspace, { type GitLayer } from "./GitWorkspace";
 
 const layout = vi.hoisted(() => ({ expanded: false }));
 let status: GitStatus | undefined;
 let commits: GitCommit[] | undefined;
+let branches: Pick<GitBranches, "local" | "remote_only"> | undefined;
 
 vi.mock("@pockode/shared", async (importOriginal) => ({
 	...(await importOriginal<typeof import("@pockode/shared")>()),
@@ -26,22 +28,25 @@ vi.mock("../../hooks/useGitSync", async (importOriginal) => ({
 vi.mock("../../hooks/useGitLog", () => ({
 	useGitLog: () => ({ data: commits && { pages: [{ commits, next: null }] } }),
 }));
+vi.mock("../../hooks/useGitBranches", () => ({
+	useGitBranches: () => ({ data: branches }),
+}));
 
 // What is under test is which layers are on screen and where their ways back
 // lead; the sections and pages themselves have tests of their own.
 vi.mock("./BranchBar", () => ({
 	default: ({
 		onOpenBranches,
-		branchesOnScreen,
+		branchFailureSurface,
 	}: {
 		onOpenBranches: () => void;
-		branchesOnScreen: boolean;
+		branchFailureSurface: boolean;
 	}) => (
 		<>
 			<button type="button" onClick={onOpenBranches}>
 				Branches, currently on main
 			</button>
-			{!branchesOnScreen && <div>top bar holds switch failures</div>}
+			{!branchFailureSurface && <div>top bar holds switch failures</div>}
 		</>
 	),
 }));
@@ -66,9 +71,45 @@ vi.mock("../../hooks/useBranchMergeHandoff", () => ({
 		start: () => {},
 	}),
 }));
+const TOPIC_ROW = { key: "local:topic", label: "topic", remote: false };
 vi.mock("./BranchesSection", () => ({
-	default: () => <div>branches list</div>,
+	default: ({
+		activeKey,
+		onSelectBranch,
+		onBranchDeleted,
+	}: {
+		activeKey: string | null;
+		onSelectBranch: (row: typeof TOPIC_ROW) => void;
+		onBranchDeleted: (row: typeof TOPIC_ROW) => void;
+	}) => (
+		<div>
+			branches list, active {activeKey ?? "none"}
+			<button type="button" onClick={() => onSelectBranch(TOPIC_ROW)}>
+				open topic
+			</button>
+			<button type="button" onClick={() => onBranchDeleted(TOPIC_ROW)}>
+				topic deleted
+			</button>
+		</div>
+	),
 }));
+vi.mock("./BranchDetail", async () => {
+	const Page = page("branch");
+	return {
+		default: ({
+			onBack,
+			holdsFailures,
+		}: {
+			onBack?: () => void;
+			holdsFailures: boolean;
+		}) => (
+			<>
+				<Page onBack={onBack} />
+				{holdsFailures && <div>branch page holds failures</div>}
+			</>
+		),
+	};
+});
 const page = vi.hoisted(
 	() =>
 		(name: string) =>
@@ -121,6 +162,8 @@ function renderWorkspace(layer: GitLayer) {
 		onSelectSegment: vi.fn(),
 		onSelectFile: vi.fn(),
 		onSelectCommit: vi.fn(),
+		onSelectBranch: vi.fn(),
+		onRepointBranch: vi.fn(),
 		onCloseFile: vi.fn(),
 	};
 	const view = render(<GitWorkspace layer={layer} {...props} />);
@@ -134,11 +177,16 @@ const resizeHandle = () =>
 	screen.queryByRole("separator", { name: "Resize list" });
 
 const DIFF: GitLayer = { type: "diff", path: "src/a.ts", staged: false };
+const TOPIC: GitLayer = { type: "branch", ref: "topic", remote: false };
 
 beforeEach(() => {
 	layout.expanded = false;
 	status = { staged: [], unstaged: [{ path: "src/a.ts", status: "M" }] };
 	commits = [];
+	branches = {
+		local: [makeBranch("main", { current: true })],
+		remote_only: [],
+	};
 });
 
 describe("GitWorkspace below expanded", () => {
@@ -175,19 +223,62 @@ describe("GitWorkspace below expanded", () => {
 		expect(onSelectSegment).toHaveBeenCalledWith("branches");
 	});
 
-	// A switch's failure is shown by the Branches segment while it is on
-	// screen, and by the top bar on every other layer.
-	it("tells the top bar whether Branches is holding a switch's failure", () => {
+	// A switch's failure is shown by the Branches list while it is on screen,
+	// by a branch's detail covering it, and by the top bar on every other
+	// layer.
+	it("tells the top bar whether a branch surface is holding a switch's failure", () => {
 		const { rerender, ...props } = renderWorkspace({
 			type: "git",
 			segment: "branches",
 		});
 		expect(screen.queryByText("top bar holds switch failures")).toBeNull();
 
+		rerender(<GitWorkspace layer={TOPIC} {...props} />);
+		expect(screen.queryByText("top bar holds switch failures")).toBeNull();
+		expect(screen.getByText("branch page holds failures")).toBeInTheDocument();
+
 		rerender(<GitWorkspace layer={DIFF} {...props} />);
 		expect(
 			screen.getByText("top bar holds switch failures"),
 		).toBeInTheDocument();
+	});
+
+	// A row selects; switching is an action of the branch's.
+	it("opens a branch from its row, and goes back from it to the list", async () => {
+		const user = userEvent.setup();
+		const { onSelectBranch, rerender, ...props } = renderWorkspace({
+			type: "git",
+			segment: "branches",
+		});
+
+		await user.click(screen.getByRole("button", { name: "open topic" }));
+		expect(onSelectBranch).toHaveBeenCalledWith({
+			ref: "topic",
+			remote: false,
+		});
+
+		rerender(
+			<GitWorkspace layer={TOPIC} onSelectBranch={onSelectBranch} {...props} />,
+		);
+		expect(screen.getByText("branch page")).toBeVisible();
+		// Covered: nothing is lit under a page.
+		expect(screen.getByText(/branches list/)).toHaveTextContent("active none");
+		await user.click(screen.getByRole("button", { name: "branch back" }));
+		expect(props.onSelectSegment).toHaveBeenCalledWith("branches");
+	});
+
+	// Whichever surface it was pressed in: the route is the workspace's to
+	// correct, and only if that branch's detail is still the one open.
+	it("asks to leave a deleted branch's detail", async () => {
+		const user = userEvent.setup();
+		const { onRepointBranch } = renderWorkspace(TOPIC);
+
+		await user.click(screen.getByRole("button", { name: "topic deleted" }));
+		expect(onRepointBranch).toHaveBeenCalledWith(
+			{ ref: "topic", remote: false },
+			null,
+			"",
+		);
 	});
 
 	it("has no list edge to drag", () => {
@@ -251,6 +342,28 @@ describe("GitWorkspace below expanded", () => {
 		await user.click(screen.getByRole("button", { name: "commit back" }));
 		expect(onSelectSegment).toHaveBeenCalledWith("history");
 	});
+
+	// docs/git-branches-ui.md#opening-a-commit: stacked on the branch, its
+	// way back is the branch, not the list.
+	it("goes back from a commit opened from a branch to that branch", async () => {
+		const user = userEvent.setup();
+		const { onSelectBranch, onSelectSegment } = renderWorkspace({
+			type: "commit",
+			hash: "abc1234",
+			branch: { ref: "origin/topic", remote: true },
+		});
+
+		await user.click(screen.getByRole("button", { name: "commit back" }));
+		expect(onSelectBranch).toHaveBeenCalledWith({
+			ref: "origin/topic",
+			remote: true,
+		});
+		expect(onSelectSegment).not.toHaveBeenCalled();
+		// Not a surface of branch failures: the top bar holds them.
+		expect(
+			screen.getByText("top bar holds switch failures"),
+		).toBeInTheDocument();
+	});
 });
 
 describe("GitWorkspace at expanded", () => {
@@ -282,9 +395,56 @@ describe("GitWorkspace at expanded", () => {
 		expect(screen.getByText("commit diff page")).toBeVisible();
 	});
 
+	// The list's pinned area is on screen: the failures stay with it.
+	it("lights the open branch's row beside its detail", () => {
+		renderWorkspace(TOPIC);
+
+		expect(screen.getByText(/branches list/)).toHaveTextContent(
+			"active local:topic",
+		);
+		expect(screen.getByText("branch page")).toBeVisible();
+		expect(screen.queryByRole("button", { name: "branch back" })).toBeNull();
+		expect(screen.queryByText("branch page holds failures")).toBeNull();
+		expect(screen.queryByText("top bar holds switch failures")).toBeNull();
+	});
+
+	// The branch is not on screen beside it, so unlike a commit beside
+	// History it keeps a way back; the list beside it is the Branches list.
+	it("puts a commit opened from a branch beside the Branches list", async () => {
+		const user = userEvent.setup();
+		const branch = { ref: "topic", remote: false };
+		const { onSelectBranch } = renderWorkspace({
+			type: "commit",
+			hash: "abc1234",
+			branch,
+		});
+
+		expect(screen.getByText(/branches list/)).toHaveTextContent(
+			"active local:topic",
+		);
+		expect(screen.queryByText("top bar holds switch failures")).toBeNull();
+		await user.click(screen.getByRole("button", { name: "commit back" }));
+		expect(onSelectBranch).toHaveBeenCalledWith(branch);
+	});
+
+	it("keeps the branch lit under a file of a commit opened from it", () => {
+		renderWorkspace({
+			type: "commit-file",
+			hash: "abc1234",
+			path: "a.ts",
+			branch: { ref: "topic", remote: false },
+		});
+
+		expect(screen.getByText(/branches list/)).toHaveTextContent(
+			"active local:topic",
+		);
+		expect(screen.getByText("commit file page")).toBeVisible();
+	});
+
 	it.each([
 		["changes", "Select a file to see its diff"],
 		["history", "Select a commit to see what it changed"],
+		["branches", "Select a branch to see its commits"],
 	] as const)("says what to do in an empty %s column", (segment, text) => {
 		commits = [
 			{
@@ -307,17 +467,27 @@ describe("GitWorkspace at expanded", () => {
 		unmount();
 
 		commits = [];
-		renderWorkspace({ type: "git", segment: "history" });
+		const history = renderWorkspace({ type: "git", segment: "history" });
 		expect(screen.getByText("No commits yet")).toBeInTheDocument();
+		history.unmount();
+
+		branches = { local: [], remote_only: [] };
+		renderWorkspace({ type: "git", segment: "branches" });
+		expect(screen.getByText("No branches yet")).toBeInTheDocument();
 	});
 
 	// Blank, not a prompt to choose: the list is still saying why it is empty.
 	it("leaves the column blank while the list has no answer", () => {
 		status = undefined;
-		renderWorkspace({ type: "git", segment: "changes" });
+		const { unmount } = renderWorkspace({ type: "git", segment: "changes" });
 
 		expect(screen.queryByText(/Select a file/)).toBeNull();
 		expect(screen.queryByText(/No changes/)).toBeNull();
+		unmount();
+
+		branches = undefined;
+		renderWorkspace({ type: "git", segment: "branches" });
+		expect(screen.queryByText(/Select a branch/)).toBeNull();
 	});
 
 	// Rotating a tablet moves the diff's heading between the app header and its
@@ -331,6 +501,8 @@ describe("GitWorkspace at expanded", () => {
 			onSelectSegment,
 			onSelectFile,
 			onSelectCommit,
+			onSelectBranch,
+			onRepointBranch,
 			onCloseFile,
 		} = renderWorkspace(DIFF);
 
@@ -342,20 +514,14 @@ describe("GitWorkspace at expanded", () => {
 				onSelectSegment={onSelectSegment}
 				onSelectFile={onSelectFile}
 				onSelectCommit={onSelectCommit}
+				onSelectBranch={onSelectBranch}
+				onRepointBranch={onRepointBranch}
 				onCloseFile={onCloseFile}
 			/>,
 		);
 
 		expect(screen.getByText("diff page")).toBeVisible();
 		expect(diffMounts.count).toBe(1);
-	});
-
-	it("gives Branches no second column", () => {
-		renderWorkspace({ type: "git", segment: "branches" });
-
-		expect(screen.getByText("branches list")).toBeVisible();
-		expect(screen.queryByText(/Select a/)).toBeNull();
-		expect(resizeHandle()).toBeNull();
 	});
 
 	// How wide it is drawn and how a drag moves it need layout:

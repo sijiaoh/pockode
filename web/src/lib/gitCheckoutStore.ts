@@ -135,12 +135,17 @@ export const gitCheckoutActions = {
 	 * Never rejects: the confirm awaiting it closes either way, and a failure
 	 * is kept here to be shown in the list's pinned area or the top bar. Success
 	 * leaves nothing behind — the row going is the report of it.
+	 *
+	 * Resolves to whether the branch was deleted, for the branch's detail,
+	 * which leaves for the list only then: the row going is no evidence, since
+	 * the delete refreshes the list before it answers and a branch can go for
+	 * other reasons (docs/git-branches-ui.md#when-the-branch-goes-away).
 	 */
 	startDelete: async (
 		worktree: string,
 		branch: string,
 		action: () => Promise<unknown>,
-	) => {
+	): Promise<boolean> => {
 		// Refused, not queued — but said: the confirm awaiting this closes, and
 		// a delete that silently never ran would read as one that did.
 		const running = useGitCheckoutStore.getState().runs[worktree]?.deleting;
@@ -151,18 +156,20 @@ export const gitCheckoutActions = {
 					detail: null,
 				},
 			});
-			return;
+			return false;
 		}
 
 		setRun(worktree, { deleting: branch, deleteError: null });
 		try {
 			await action();
 			setRun(worktree, { deleting: null });
+			return true;
 		} catch (err) {
 			setRun(worktree, {
 				deleting: null,
 				deleteError: describeDeleteFailure(err, branch),
 			});
+			return false;
 		}
 	},
 

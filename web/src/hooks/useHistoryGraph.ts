@@ -2,10 +2,11 @@ import { useMemo, useRef } from "react";
 import type { GraphRow, GraphState } from "../lib/commitGraph";
 import {
 	createHistoryGraphState,
+	type GraphOptions,
 	headHistoryFlags,
 	layoutHistoryPage,
 } from "../lib/commitHistory";
-import type { GitCommit, GitHistoryScope, GitLogResult } from "../types/git";
+import type { GitCommit, GitLogResult } from "../types/git";
 
 export interface HistoryRow {
 	commit: GitCommit;
@@ -35,7 +36,7 @@ interface PageLayout {
  */
 export function useHistoryGraph(
 	pages: readonly GitLogResult[] | undefined,
-	scope: GitHistoryScope,
+	scope: GraphOptions["scope"],
 	drawGraph: boolean,
 ): HistoryRow[] {
 	// By value: a re-read hands back a new array of the same names.

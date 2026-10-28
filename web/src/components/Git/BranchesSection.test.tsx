@@ -4,7 +4,12 @@ import { JSONRPCErrorException } from "json-rpc-2.0";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { BranchMergeHandoff } from "../../hooks/useBranchMergeHandoff";
 import { gitCheckoutActions } from "../../lib/gitCheckoutStore";
-import { makeBranch, makeBranches, makeHead } from "../../test/gitFixtures";
+import {
+	makeBranch,
+	makeBranches,
+	makeHead,
+	makeRemoteBranch,
+} from "../../test/gitFixtures";
 import type { GitBranches, GitStatus } from "../../types/git";
 import BranchesSection from "./BranchesSection";
 
@@ -42,7 +47,18 @@ const startMerge = vi.fn<(rowKey: string, text: string) => void>();
 const dismissHandoffError = vi.fn();
 let mergeHandoff: BranchMergeHandoff;
 
-const Section = () => <BranchesSection mergeHandoff={mergeHandoff} />;
+const selectBranch = vi.fn();
+const branchDeleted = vi.fn();
+let activeKey: string | null;
+
+const Section = () => (
+	<BranchesSection
+		mergeHandoff={mergeHandoff}
+		activeKey={activeKey}
+		onSelectBranch={selectBranch}
+		onBranchDeleted={branchDeleted}
+	/>
+);
 
 const BRANCHES: GitBranches = makeBranches({
 	local: [makeBranch("main", { current: true }), makeBranch("topic")],
@@ -59,6 +75,27 @@ const BRANCHES: GitBranches = makeBranches({
 const rowFor = (name: string) =>
 	screen.getByText(name).closest("button") as HTMLElement;
 
+/** The row's `⋯`, opened. */
+async function openMenu(
+	user: ReturnType<typeof userEvent.setup>,
+	name: string,
+) {
+	await user.click(
+		screen.getByRole("button", { name: `More actions for ${name}` }),
+	);
+}
+
+/** A switch is an action of the branch's: the row only opens it. */
+async function switchVia(
+	user: ReturnType<typeof userEvent.setup>,
+	name: string,
+) {
+	await openMenu(user, name);
+	await user.click(
+		screen.getByRole("button", { name: /^Switch to this branch/ }),
+	);
+}
+
 beforeEach(() => {
 	gitCheckoutActions.reset();
 	branches = BRANCHES;
@@ -70,6 +107,9 @@ beforeEach(() => {
 	inspectBranch.mockReset();
 	startMerge.mockReset();
 	dismissHandoffError.mockReset();
+	selectBranch.mockReset();
+	branchDeleted.mockReset();
+	activeKey = null;
 	mergeHandoff = {
 		handingOff: null,
 		error: null,
@@ -81,17 +121,48 @@ beforeEach(() => {
 describe("BranchesSection", () => {
 	// A switch would carry the operation's state onto another branch; the
 	// reason is pinned where a refused switch's would go.
-	it("pauses switching and New branch during an operation, and says why", () => {
+	it("pauses switching and New branch during an operation, and says why", async () => {
+		const user = userEvent.setup();
 		status = { staged: [], unstaged: [], operation: { kind: "rebase" } };
 		render(<Section />);
 
 		const reason =
 			"Branch switching is paused during the rebase. Abort it, or let the agent finish it.";
 		expect(screen.getByText(reason)).toBeInTheDocument();
-		expect(rowFor("topic")).toBeDisabled();
 		const create = screen.getByText(/New branch/).closest("button");
 		expect(create).toBeDisabled();
 		expect(create).toHaveAccessibleDescription(reason);
+		// Reading a branch writes nothing, so its row stays open to press.
+		expect(rowFor("topic")).toBeEnabled();
+
+		await openMenu(user, "topic");
+		const item = screen.getByRole("button", { name: /^Switch to this branch/ });
+		expect(item).toHaveTextContent(
+			"Branch switching is paused during the rebase.",
+		);
+		await user.click(item);
+		expect(checkout).not.toHaveBeenCalled();
+	});
+
+	// On a phone a stray tap while scrolling used to move HEAD.
+	it("opens a branch from its row, never switching to it", async () => {
+		const user = userEvent.setup();
+		render(<Section />);
+
+		await user.click(rowFor("topic"));
+
+		expect(selectBranch).toHaveBeenCalledWith(
+			expect.objectContaining({ key: "local:topic" }),
+		);
+		expect(checkout).not.toHaveBeenCalled();
+	});
+
+	it("lights the row whose branch is open beside it", () => {
+		activeKey = "local:topic";
+		render(<Section />);
+
+		expect(rowFor("topic")).toHaveAttribute("aria-current", "true");
+		expect(rowFor("main")).not.toHaveAttribute("aria-current");
 	});
 
 	// A page has no sheet to close on success; the switch shows itself in the
@@ -101,9 +172,10 @@ describe("BranchesSection", () => {
 		checkout.mockResolvedValue(undefined);
 		render(<Section />);
 
-		await user.click(rowFor("topic"));
+		await switchVia(user, "topic");
 
 		expect(checkout).toHaveBeenCalledWith("topic");
+		expect(screen.queryByRole("dialog")).toBeNull();
 		expect(rowFor("topic")).toBeInTheDocument();
 	});
 
@@ -114,7 +186,7 @@ describe("BranchesSection", () => {
 		checkout.mockRejectedValue(new Error("error: would be overwritten"));
 		render(<Section />);
 
-		await user.click(rowFor("topic"));
+		await switchVia(user, "topic");
 		expect(await screen.findByRole("alert")).toHaveTextContent(
 			"Could not switch to topic.",
 		);
@@ -147,9 +219,12 @@ describe("BranchesSection", () => {
 		checkout.mockReturnValue(new Promise(() => {}));
 		render(<Section />);
 
-		await user.click(rowFor("topic"));
+		await switchVia(user, "topic");
 
 		expect(screen.getByText(/New branch/).closest("button")).toBeDisabled();
+		expect(
+			screen.getByRole("status", { name: "Switching to topic" }),
+		).toBeInTheDocument();
 	});
 
 	it("creates a branch from the sheet and comes back to the list", async () => {
@@ -185,13 +260,7 @@ const LIST: GitBranches = makeBranches({
 		makeBranch("topic"),
 		makeBranch("review", { worktree: "review-wt" }),
 	],
-	remote_only: [
-		{
-			ref: "origin/colleague",
-			name: "colleague",
-			committed_at: new Date().toISOString(),
-		},
-	],
+	remote_only: [makeRemoteBranch("colleague")],
 });
 
 // A page can be walked away from mid-switch, where a sheet that would not
@@ -211,17 +280,19 @@ describe("BranchesSection after leaving mid-switch", () => {
 		const user = userEvent.setup();
 		const { settle } = startSwitch();
 		const { unmount } = render(<Section />);
-		await user.click(rowFor("topic"));
+		await switchVia(user, "topic");
 
 		unmount();
 		render(<Section />);
 
-		expect(rowFor("topic")).toBeDisabled();
-		expect(rowFor("main")).toBeDisabled();
-		expect(screen.getByText(/New branch/).closest("button")).toBeDisabled();
+		const create = () => screen.getByText(/New branch/).closest("button");
+		expect(create()).toBeDisabled();
+		expect(
+			screen.getByRole("status", { name: "Switching to topic" }),
+		).toBeInTheDocument();
 
 		await settle();
-		expect(rowFor("topic")).toBeEnabled();
+		expect(create()).toBeEnabled();
 	});
 
 	// The failure settled with the segment off screen (the top bar reported
@@ -230,7 +301,7 @@ describe("BranchesSection after leaving mid-switch", () => {
 		const user = userEvent.setup();
 		const { settle } = startSwitch();
 		const { unmount } = render(<Section />);
-		await user.click(rowFor("topic"));
+		await switchVia(user, "topic");
 
 		unmount();
 		await settle(new Error("fatal: boom"));
@@ -245,11 +316,11 @@ describe("BranchesSection after leaving mid-switch", () => {
 		const user = userEvent.setup();
 		checkout.mockRejectedValueOnce(new Error("fatal: boom"));
 		render(<Section />);
-		await user.click(rowFor("topic"));
+		await switchVia(user, "topic");
 		await screen.findByRole("alert");
 
 		startSwitch();
-		await user.click(rowFor("topic"));
+		await switchVia(user, "topic");
 
 		expect(screen.queryByRole("alert")).toBeNull();
 	});
@@ -272,16 +343,19 @@ describe("BranchList", () => {
 		).toBeInTheDocument();
 	});
 
-	it("blocks a branch held by another worktree and names that worktree", async () => {
+	// The state word says it on the row; the switch says why it cannot run.
+	it("names the worktree holding a branch, and switches to it from nowhere", async () => {
 		const user = userEvent.setup();
-		checkout.mockResolvedValue(undefined);
 		render(<Section />);
 
 		const row = rowFor("review");
-		expect(row).toBeDisabled();
+		expect(row).toBeEnabled();
 		expect(row).toHaveTextContent("in review-wt");
 
-		await user.click(row);
+		await openMenu(user, "review");
+		const item = screen.getByRole("button", { name: /^Switch to this branch/ });
+		expect(item).toHaveTextContent("Checked out in review-wt.");
+		await user.click(item);
 		expect(checkout).not.toHaveBeenCalled();
 	});
 
@@ -313,7 +387,7 @@ describe("BranchList", () => {
 		checkout.mockResolvedValue(undefined);
 		render(<Section />);
 
-		await user.click(rowFor("origin/colleague"));
+		await switchVia(user, "origin/colleague");
 
 		expect(checkout).toHaveBeenCalledWith("colleague");
 	});
@@ -378,7 +452,7 @@ describe("BranchList", () => {
 			checkout.mockRejectedValue(new Error("boom"));
 			render(<Section />);
 
-			await user.click(rowFor("topic/7"));
+			await switchVia(user, "topic/7");
 
 			const alert = await screen.findByRole("alert");
 			expect(alert.closest(".sticky")).not.toBeNull();
@@ -394,7 +468,7 @@ describe("BranchList", () => {
 		checkout.mockRejectedValue(new Error(stderr));
 		render(<Section />);
 
-		await user.click(rowFor("topic"));
+		await switchVia(user, "topic");
 
 		const alert = await screen.findByRole("alert");
 		expect(alert).toHaveTextContent("Could not switch to topic.");
@@ -416,7 +490,7 @@ describe("BranchList", () => {
 		);
 		render(<Section />);
 
-		await user.click(rowFor("topic"));
+		await switchVia(user, "topic");
 
 		const alert = await screen.findByRole("alert");
 		expect(alert).toHaveTextContent(
@@ -436,13 +510,7 @@ describe("deleting a branch", () => {
 				makeBranch("old-spike"),
 				makeBranch("review", { worktree: "review-wt" }),
 			],
-			remote_only: [
-				{
-					ref: "origin/colleague",
-					name: "colleague",
-					committed_at: new Date().toISOString(),
-				},
-			],
+			remote_only: [makeRemoteBranch("colleague")],
 		});
 	});
 
@@ -502,6 +570,10 @@ describe("deleting a branch", () => {
 		expect(inspectBranch).toHaveBeenCalledWith("old-spike");
 		expect(deleteBranch).toHaveBeenCalledWith({ name: "old-spike", tip: TIP });
 		await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+		// So that a detail of it, open beside the list, leaves for the list.
+		expect(branchDeleted).toHaveBeenCalledWith(
+			expect.objectContaining({ key: "local:old-spike" }),
+		);
 	});
 
 	it("names the commits an unmerged branch takes with it", async () => {
@@ -523,7 +595,7 @@ describe("deleting a branch", () => {
 		).toBeInTheDocument();
 	});
 
-	// The occupied row is greyed, but its menu says why it cannot go.
+	// The menu says why it cannot go.
 	it("says why a branch checked out elsewhere cannot be deleted", async () => {
 		const user = userEvent.setup();
 		render(<Section />);
@@ -628,6 +700,7 @@ describe("deleting a branch", () => {
 		);
 		expect(alert.closest(".sticky")).not.toBeNull();
 		expect(screen.queryByRole("dialog")).toBeNull();
+		expect(branchDeleted).not.toHaveBeenCalled();
 	});
 });
 
@@ -698,11 +771,12 @@ describe("asking the agent to merge", () => {
 	});
 
 	// The prompt names the current branch; a switch now would make it wrong.
-	it("holds the list while a new chat is being created for the merge", async () => {
+	it("holds switching while a new chat is being created for the merge", async () => {
 		mergeHandoff = { ...mergeHandoff, handingOff: "local:old-spike" };
 		render(<Section />);
 
-		expect(rowFor("topic")).toBeDisabled();
+		// Reading a branch changes nothing the prompt names.
+		expect(rowFor("topic")).toBeEnabled();
 		expect(screen.getByText(/New branch/).closest("button")).toBeDisabled();
 		expect(
 			screen.getByRole("status", { name: "Opening a new chat" }),
@@ -710,6 +784,9 @@ describe("asking the agent to merge", () => {
 
 		const { item } = await openMerge("topic");
 		expect(item).toHaveTextContent("Wait for the new chat to open.");
+		expect(
+			screen.getByRole("button", { name: /^Switch to this branch/ }),
+		).toHaveTextContent("Wait for the new chat to open.");
 	});
 
 	it("waits for a delete of the same branch to finish", async () => {

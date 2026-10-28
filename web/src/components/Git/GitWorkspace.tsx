@@ -2,13 +2,19 @@ import { CoveredSurface, useIsExpanded } from "@pockode/shared";
 import { useId, useMemo, useRef } from "react";
 import { useBranchMergeHandoff } from "../../hooks/useBranchMergeHandoff";
 import { useElementWidth } from "../../hooks/useElementWidth";
+import { useGitBranches } from "../../hooks/useGitBranches";
 import { useGitLog } from "../../hooks/useGitLog";
 import { useGitStatus } from "../../hooks/useGitStatus";
 import { useAutoFetch } from "../../hooks/useGitSync";
 import { useResizableWidth } from "../../hooks/useResizableWidth";
+import type { BranchRow } from "../../lib/gitBranches";
+import { useWorktreeStore } from "../../lib/worktreeStore";
 import { flattenGitStatus } from "../../types/git";
 import type { GitSegment, OverlayState } from "../../types/overlay";
 import {
+	type BranchRef,
+	branchRowKey,
+	commitOriginOf,
 	gitSegmentOf,
 	type HistoryQuery,
 	historyQueryOf,
@@ -17,6 +23,7 @@ import PageHeader, { InlinePageHeaders } from "../Layout/PageHeader";
 import ResizeHandle from "../ui/ResizeHandle";
 import SegmentedControl from "../ui/SegmentedControl";
 import BranchBar from "./BranchBar";
+import BranchDetail from "./BranchDetail";
 import BranchesSection from "./BranchesSection";
 import ChangesSection from "./ChangesSection";
 import CommitDiffView from "./CommitDiffView";
@@ -29,7 +36,9 @@ import OperationBanner from "./OperationBanner";
 /** A layer of the workspace: the overlays `gitSegmentOf` gives a segment. */
 export type GitLayer = Extract<
 	NonNullable<OverlayState>,
-	{ type: "git" | "diff" | "commit" | "commit-diff" | "commit-file" }
+	{
+		type: "git" | "diff" | "branch" | "commit" | "commit-diff" | "commit-file";
+	}
 >;
 
 const SEGMENTS = [
@@ -68,6 +77,16 @@ interface Props {
 	onSelectSegment: (segment: GitSegment) => void;
 	onSelectFile: (path: string, staged: boolean) => void;
 	onSelectCommit: (hash: string) => void;
+	onSelectBranch: (branch: BranchRef) => void;
+	/**
+	 * Replaces the detail of `from` with `to`'s, or with the Branches list —
+	 * only while that detail is still the one open in `worktree`.
+	 */
+	onRepointBranch: (
+		from: BranchRef,
+		to: BranchRef | null,
+		worktree: string,
+	) => void;
 	/** Moves the review off a file just discarded from the list. */
 	onCloseFile: (
 		path: string,
@@ -78,8 +97,8 @@ interface Props {
 
 /**
  * The Git workspace (`/git`): a top bar naming the branch, three segments —
- * Changes, History, Branches — and the diff and commit pages as layers under
- * the first two.
+ * Changes, History, Branches — and the diff, commit and branch pages as layers
+ * under them.
  *
  * Below `expanded` a layer fills the screen on its own; at `expanded` the list
  * and the layer under it stand side by side. The same URL is either: what
@@ -91,9 +110,12 @@ function GitWorkspace({
 	onSelectSegment,
 	onSelectFile,
 	onSelectCommit,
+	onSelectBranch,
+	onRepointBranch,
 	onCloseFile,
 }: Props) {
 	const isExpanded = useIsExpanded();
+	const worktree = useWorktreeStore((s) => s.current);
 	// Here rather than in BranchBar: it belongs to arriving in the workspace,
 	// which this component lives exactly as long as; the bar is only where its
 	// failure is shown.
@@ -103,13 +125,22 @@ function GitWorkspace({
 	// Always a segment: every layer has one.
 	const segment = gitSegmentOf(layer) ?? "changes";
 	const detail = layer.type === "git" ? null : layer;
-	// Branches have no layer, and a column that could only ever stay empty
-	// would promise one.
-	const twoColumns = isExpanded && segment !== "branches";
 
 	const activeFile =
 		layer.type === "diff" ? { path: layer.path, staged: layer.staged } : null;
 	const activeCommitHash = layer.type === "git" ? null : commitHashOf(layer);
+	// Lit only beside the list: below `expanded` a detail covers it. A commit
+	// opened from a branch keeps that branch lit, as a commit keeps its row lit
+	// in History.
+	// `commitOriginOf` gives the branch of a branch's detail too.
+	const openBranch = commitOriginOf(layer).branch;
+	const activeBranchKey =
+		isExpanded && openBranch ? branchRowKey(openBranch) : null;
+
+	// Whichever surface the delete was pressed in, a detail of the deleted
+	// branch leaves for the list (docs/git-branches-ui.md#when-the-branch-goes-away).
+	const onBranchDeleted = (row: BranchRow) =>
+		onRepointBranch({ ref: row.label, remote: row.remote }, null, worktree);
 
 	// Narrow, the back of a detail is the list it came from: the list is not on
 	// screen to go back to by any other way. Wide, it is.
@@ -132,16 +163,37 @@ function GitWorkspace({
 						showBack={!isExpanded}
 					/>
 				);
-			case "commit":
-				// Keyed like the review: a sheet raised over one commit, and a
-				// failed handoff from it, are not the next commit's.
+			case "branch":
+				// Keyed like the review: an inspect or a confirm raised over one
+				// branch is not the next one's.
 				return (
+					<BranchDetail
+						key={branchRowKey(detail)}
+						branch={detail}
+						onBack={backToList}
+						onLeave={() => onSelectSegment("branches")}
+						holdsFailures={!isExpanded}
+						mergeHandoff={mergeHandoff}
+						onRepoint={(to) => onRepointBranch(detail, to, worktree)}
+						onBranchDeleted={onBranchDeleted}
+						onSelectCommit={onSelectCommit}
+					/>
+				);
+			case "commit": {
+				// A commit opened from a branch goes back to that branch at every
+				// width: beside the list it is the branch's page that is not on
+				// screen, not the list (docs/git-branches-ui.md#opening-a-commit).
+				const { branch } = detail;
+				return (
+					// Keyed like the review: a sheet raised over one commit, and a
+					// failed handoff from it, are not the next commit's.
 					<CommitView
 						key={detail.hash}
 						hash={detail.hash}
-						onBack={backToList}
+						onBack={branch ? () => onSelectBranch(branch) : backToList}
 					/>
 				);
+			}
 			case "commit-diff":
 				return <CommitDiffView hash={detail.hash} path={detail.path} />;
 			case "commit-file":
@@ -164,7 +216,7 @@ function GitWorkspace({
 			    sheet was closed reports through the chip and nowhere else. */}
 			<BranchBar
 				onOpenBranches={() => onSelectSegment("branches")}
-				branchesOnScreen={segment === "branches"}
+				branchFailureSurface={branchFailureSurface(layer, isExpanded)}
 				mergeHandoff={mergeHandoff}
 			/>
 
@@ -179,7 +231,6 @@ function GitWorkspace({
 			<WorkspaceColumns
 				isExpanded={isExpanded}
 				listOnScreen={listOnScreen}
-				twoColumns={twoColumns}
 				control={
 					<SegmentedControl
 						label="Which part of the repository to show"
@@ -203,7 +254,14 @@ function GitWorkspace({
 							onSelectCommit={onSelectCommit}
 						/>
 					) : (
-						<BranchesSection mergeHandoff={mergeHandoff} />
+						<BranchesSection
+							mergeHandoff={mergeHandoff}
+							activeKey={activeBranchKey}
+							onSelectBranch={(row) =>
+								onSelectBranch({ ref: row.label, remote: row.remote })
+							}
+							onBranchDeleted={onBranchDeleted}
+						/>
 					)
 				}
 				detail={
@@ -214,8 +272,7 @@ function GitWorkspace({
 							</InlinePageHeaders>
 						</div>
 					) : (
-						isExpanded &&
-						segment !== "branches" && (
+						isExpanded && (
 							<EmptyDetail segment={segment} history={historyQueryOf(layer)} />
 						)
 					)
@@ -236,21 +293,19 @@ function GitWorkspace({
 function WorkspaceColumns({
 	isExpanded,
 	listOnScreen,
-	twoColumns,
 	control,
 	list,
 	detail,
 }: {
 	isExpanded: boolean;
 	listOnScreen: boolean;
-	twoColumns: boolean;
 	control: React.ReactNode;
 	list: React.ReactNode;
 	detail: React.ReactNode;
 }) {
 	// One width for every segment, so the segmented control above the list
-	// stays where it was when the segment changes — Branches' included, which
-	// has no column to resize but keeps the control at the same width.
+	// stays where it was when the segment changes: a control that moves once
+	// pressed sends the next press somewhere else.
 	const rowRef = useRef<HTMLDivElement>(null);
 	const rowWidth = useElementWidth(rowRef);
 	const listWidth = useResizableWidth({
@@ -258,10 +313,9 @@ function WorkspaceColumns({
 		min: LIST_MIN_WIDTH,
 		max: rowWidth - DETAIL_MIN_WIDTH,
 		defaultWidth: listDefaultWidth(rowWidth),
-		active: twoColumns,
+		active: isExpanded,
 	});
 	const listId = useId();
-	const singleWide = isExpanded && !twoColumns;
 
 	return (
 		<div ref={rowRef} className="relative flex min-h-0 flex-1">
@@ -276,32 +330,17 @@ function WorkspaceColumns({
 				className={
 					!listOnScreen
 						? "invisible absolute inset-0 flex flex-col"
-						: twoColumns
+						: isExpanded
 							? "relative flex shrink-0 flex-col border-r border-th-border"
 							: "flex min-w-0 flex-1 flex-col"
 				}
-				style={twoColumns ? { width: listWidth.width } : undefined}
+				style={isExpanded ? { width: listWidth.width } : undefined}
 			>
 				<CoveredSurface covered={!listOnScreen}>
-					{/* The control keeps its place and its width when Branches
-					    drops the second column: a control that moves once pressed
-					    sends the next press somewhere else. The transparent border
-					    stands for the list column's own, which its width includes. */}
-					<div
-						className={singleWide ? "border-r border-transparent" : undefined}
-						style={singleWide ? { width: listWidth.width } : undefined}
-					>
-						{control}
-					</div>
-					<div
-						className={`flex min-h-0 flex-1 flex-col ${
-							singleWide ? "w-full max-w-xl" : ""
-						}`}
-					>
-						{list}
-					</div>
+					{control}
+					<div className="flex min-h-0 flex-1 flex-col">{list}</div>
 				</CoveredSurface>
-				{twoColumns && (
+				{isExpanded && (
 					<ResizeHandle
 						resize={listWidth}
 						label="Resize list"
@@ -316,7 +355,22 @@ function WorkspaceColumns({
 }
 
 function commitHashOf(layer: Exclude<GitLayer, { type: "git" }>) {
-	return layer.type === "diff" ? null : layer.hash;
+	return layer.type === "diff" || layer.type === "branch" ? null : layer.hash;
+}
+
+/**
+ * Whether a surface that pins the branch failures — a switch's, a delete's,
+ * a merge handoff's — is on screen; where none is, the top bar shows them
+ * (docs/git-branches-ui.md#the-pinned-area). Beside the list, the list's
+ * pinned area holds them, whatever is open next to it. Below `expanded`, the
+ * bare list does, and so does a branch's detail, which covers the list.
+ */
+function branchFailureSurface(layer: GitLayer, isExpanded: boolean): boolean {
+	if (isExpanded) return gitSegmentOf(layer) === "branches";
+	return (
+		(layer.type === "git" && layer.segment === "branches") ||
+		layer.type === "branch"
+	);
 }
 
 /**
@@ -332,14 +386,17 @@ function EmptyDetail({
 	segment,
 	history,
 }: {
-	segment: "changes" | "history";
+	segment: GitSegment;
 	history: HistoryQuery;
 }) {
-	return segment === "changes" ? (
-		<EmptyChangesDetail />
-	) : (
-		<EmptyHistoryDetail history={history} />
-	);
+	switch (segment) {
+		case "changes":
+			return <EmptyChangesDetail />;
+		case "history":
+			return <EmptyHistoryDetail history={history} />;
+		case "branches":
+			return <EmptyBranchesDetail />;
+	}
 }
 
 function EmptyChangesDetail() {
@@ -364,6 +421,16 @@ function EmptyHistoryDetail({ history }: { history: HistoryQuery }) {
 			: history.q || history.file
 				? "No matching commits"
 				: "No commits yet";
+	return <EmptyDetailMessage message={message} />;
+}
+
+function EmptyBranchesDetail() {
+	const { data: branches } = useGitBranches();
+	const message = !branches
+		? null
+		: branches.local.length + branches.remote_only.length > 0
+			? "Select a branch to see its commits"
+			: "No branches yet";
 	return <EmptyDetailMessage message={message} />;
 }
 
