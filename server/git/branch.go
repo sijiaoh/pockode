@@ -54,7 +54,7 @@ type BranchList struct {
 func Head(dir string) (*HeadInfo, error) {
 	// --quiet turns "HEAD is not symbolic" into a plain non-zero exit, which is
 	// how a detached HEAD is detected here rather than by matching a message.
-	branch, branchErr := execGit(dir, "symbolic-ref", "--quiet", "--short", "HEAD")
+	branch, branchErr := headBranch(dir)
 	// Fails in a repository without commits, where the branch is named but unborn.
 	hash, hashErr := execGit(dir, "rev-parse", "--short", "HEAD")
 	if branchErr != nil && hashErr != nil {
@@ -85,7 +85,7 @@ var ErrDetachedHead = errors.New("HEAD is detached")
 // commit. Unlike Head it reads nothing else, so a caller that needs only the
 // name is not failed by a log it never asked for.
 func CurrentBranch(dir string) (string, error) {
-	branch, err := execGit(dir, "symbolic-ref", "--quiet", "--short", "HEAD")
+	branch, err := headBranch(dir)
 	// --quiet makes "HEAD is not symbolic" exit 1 and silent; everything else
 	// that can go wrong (no repository, no git) is fatal and exits otherwise.
 	var exitErr *exec.ExitError
@@ -93,6 +93,14 @@ func CurrentBranch(dir string) (string, error) {
 		return "", ErrDetachedHead
 	}
 	return branch, err
+}
+
+// headBranch names the branch HEAD points at. The full ref is cut down here
+// rather than asked for with --short, which disambiguates against every other
+// ref: with a tag of the same name, branch main comes out as "heads/main".
+func headBranch(dir string) (string, error) {
+	ref, err := execGit(dir, "symbolic-ref", "--quiet", "HEAD")
+	return strings.TrimPrefix(ref, "refs/heads/"), err
 }
 
 // Branches returns HEAD plus the local and remote-only branches of dir.
@@ -265,17 +273,25 @@ func Checkout(dir, branch string) error {
 	})
 }
 
-// CreateBranch creates a branch at the current HEAD and switches to it.
-func CreateBranch(dir, name string) error {
+// CreateBranch creates a branch at start, or at the current HEAD when start is
+// empty, and switches to it.
+func CreateBranch(dir, name, start string) error {
 	if err := validateBranchName(name); err != nil {
 		return err
+	}
+	args := []string{"checkout", "-b", name}
+	if start != "" {
+		if err := validateFullHash(start); err != nil {
+			return fmt.Errorf("%w: %w", ErrInvalidArgument, err)
+		}
+		args = append(args, start)
 	}
 
 	return withLock(dir, opBranchCreate, func() error {
 		if err := refuseDuringOperation(dir, "create a branch"); err != nil {
 			return err
 		}
-		_, err := execGit(dir, "checkout", "-b", name, "--")
+		_, err := execGit(dir, append(args, "--")...)
 		return err
 	})
 }

@@ -1042,11 +1042,21 @@ func validatePath(path string) error {
 
 // Commit represents a single git commit.
 type Commit struct {
-	Hash    string `json:"hash"`
-	Subject string `json:"subject"`
-	Body    string `json:"body,omitempty"`
-	Author  string `json:"author"`
-	Date    string `json:"date"`
+	Hash string `json:"hash"`
+	// Parents are full hashes, first parent first; empty for a root commit and
+	// for a shallow clone's boundary, whose parents git does not have. Never
+	// nil, so the client can walk them without a null check.
+	Parents []string `json:"parents"`
+	Subject string   `json:"subject"`
+	Body    string   `json:"body,omitempty"`
+	Author  string   `json:"author"`
+	Date    string   `json:"date"`
+	// Refs are the refs pointing at the commit (see Ref), set by History and
+	// Show.
+	Refs []Ref `json:"refs,omitempty"`
+	// Unpushed marks a commit no remote-tracking ref contains, set by History
+	// only.
+	Unpushed bool `json:"unpushed,omitempty"`
 }
 
 // Delimiters for parsing git log/show output.
@@ -1059,8 +1069,8 @@ const (
 )
 
 // commitFormat is the git log/show format string.
-// Format: COMMIT_START, hash, subject, BODY_START, body, BODY_END, author, date, COMMIT_END
-var commitFormat = fmt.Sprintf("%s%%n%%H%%n%%s%%n%s%%n%%b%s%%n%%an%%n%%aI%%n%s",
+// Format: COMMIT_START, hash, parents, subject, BODY_START, body, BODY_END, author, date, COMMIT_END
+var commitFormat = fmt.Sprintf("%s%%n%%H%%n%%P%%n%%s%%n%s%%n%%b%s%%n%%an%%n%%aI%%n%s",
 	commitStartDelim, bodyStartDelim, bodyEndDelim, commitEndDelim)
 
 // FileChange represents a file changed in a commit.
@@ -1073,32 +1083,6 @@ type FileChange struct {
 type ShowResult struct {
 	Commit
 	Files []FileChange `json:"files"`
-}
-
-// Log returns the commit history for the repository.
-func Log(dir string, limit int) ([]Commit, error) {
-	if limit <= 0 {
-		limit = 50
-	}
-
-	args := []string{
-		"log",
-		fmt.Sprintf("-n%d", limit),
-		fmt.Sprintf("--format=%s", commitFormat),
-	}
-
-	cmd := exec.Command("git", args...)
-	cmd.Dir = dir
-	output, err := cmd.Output()
-	if err != nil {
-		// Asked only once log has failed, so the ordinary case pays for nothing.
-		if isUnborn(dir) {
-			return []Commit{}, nil
-		}
-		return nil, fmt.Errorf("git log failed: %w", err)
-	}
-
-	return parseLogOutput(string(output)), nil
 }
 
 // parseLogOutput parses the output of git log with our custom format.
@@ -1130,14 +1114,20 @@ func parseLogOutput(output string) []Commit {
 			continue
 		}
 
-		// Header: hash and subject
-		header := strings.TrimSpace(block[:bodyStartIdx])
-		headerLines := strings.SplitN(header, "\n", 2)
-		if len(headerLines) < 2 {
+		// Header: hash, parents and subject. Only the newline ending the subject
+		// is trimmed: a root commit's parents line and an empty subject are both
+		// blank lines that must keep their place.
+		header := strings.TrimSuffix(block[:bodyStartIdx], "\n")
+		headerLines := strings.SplitN(header, "\n", 3)
+		if len(headerLines) < 3 {
 			continue
 		}
 		hash := headerLines[0]
-		subject := headerLines[1]
+		parents := strings.Fields(headerLines[1])
+		if parents == nil {
+			parents = []string{}
+		}
+		subject := headerLines[2]
 
 		// Body (may be empty or multi-line)
 		body := strings.TrimSpace(block[bodyStartIdx+len(bodyStartDelim) : bodyEndIdx])
@@ -1153,6 +1143,7 @@ func parseLogOutput(output string) []Commit {
 
 		commits = append(commits, Commit{
 			Hash:    hash,
+			Parents: parents,
 			Subject: subject,
 			Body:    body,
 			Author:  author,
@@ -1184,6 +1175,7 @@ func Show(dir, hash string) (*ShowResult, error) {
 	args := []string{
 		"show",
 		"--no-patch",
+		"--no-show-signature",
 		fmt.Sprintf("--format=%s", commitFormat),
 		hash,
 	}
@@ -1200,6 +1192,11 @@ func Show(dir, hash string) (*ShowResult, error) {
 		return nil, fmt.Errorf("commit not found: %s", hash)
 	}
 
+	refs, err := readRefs(dir)
+	if err != nil {
+		return nil, err
+	}
+	refs.decorate(commits)
 	commit := commits[0]
 
 	// Get changed files with status
@@ -1296,6 +1293,18 @@ func ShowFileDiff(dir, hash, path string, hideWhitespace bool) (*DiffResult, err
 		OldContent: oldContent,
 		NewContent: newContent,
 	}, nil
+}
+
+// validateFullHash is validateCommitHash for a value git must not resolve as
+// a ref first: a short hex string loses to a branch or tag of the same name.
+func validateFullHash(hash string) error {
+	if err := validateCommitHash(hash); err != nil {
+		return err
+	}
+	if len(hash) != 40 && len(hash) != 64 {
+		return fmt.Errorf("not a full commit hash: %q", hash)
+	}
+	return nil
 }
 
 // validateCommitHash validates a git commit hash to prevent injection.

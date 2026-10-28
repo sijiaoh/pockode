@@ -65,6 +65,21 @@ func TestCurrentBranch(t *testing.T) {
 	}
 }
 
+// --short would disambiguate against the tag and answer "heads/main".
+func TestCurrentBranch_TagOfTheSameName(t *testing.T) {
+	dir, cleanup := setupTestRepoWithCommit(t)
+	defer cleanup()
+	runGit(t, dir, "branch", "-M", "main")
+	runGit(t, dir, "update-ref", "refs/tags/main", "HEAD")
+
+	if branch, err := CurrentBranch(dir); err != nil || branch != "main" {
+		t.Errorf("CurrentBranch() = %q, %v; want main", branch, err)
+	}
+	if head, err := Head(dir); err != nil || head.Branch != "main" {
+		t.Errorf("Head().Branch = %q, %v; want main", head.Branch, err)
+	}
+}
+
 func TestCurrentBranch_UnbornBranch(t *testing.T) {
 	dir, cleanup := setupTestRepo(t)
 	defer cleanup()
@@ -290,7 +305,7 @@ func TestCreateBranch(t *testing.T) {
 	base := gitHead(t, dir)
 	writeTestFile(t, dir, "file.txt", "uncommitted\n")
 
-	if err := CreateBranch(dir, "feature/new"); err != nil {
+	if err := CreateBranch(dir, "feature/new", ""); err != nil {
 		t.Fatalf("CreateBranch() error: %v", err)
 	}
 	if got := gitOutput(t, dir, "rev-parse", "--abbrev-ref", "HEAD"); got != "feature/new" {
