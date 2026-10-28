@@ -542,13 +542,19 @@ type GitHunkParams struct {
 // GitLogParams is the params for git.log request; the result is a
 // git.HistoryPage.
 type GitLogParams struct {
-	// Scope is "current" (the default), "all" or "mainline" (git.HistoryScope).
-	// A later page is asked with the same Scope, Query and Path as the first:
-	// the cursor holds where the scope started, not how it walks.
+	// Scope is "current" (the default), "all", "mainline" or "branch"
+	// (git.HistoryScope). A later page is asked with the same Scope, Branch,
+	// Query and Path as the first: the cursor holds where the scope started,
+	// not how it walks.
 	Scope string `json:"scope,omitempty"`
-	Query string `json:"query,omitempty"` // in the commit message
-	Path  string `json:"path,omitempty"`  // touched by the commit
-	Limit int    `json:"limit,omitempty"` // default 50, at most 200
+	// Branch is what scope "branch" lists against the default branch, as the
+	// branch list names it: BranchInfo.Name or RemoteBranch.Ref
+	// (git.HistoryQuery.Branch). Required with that scope, refused with any
+	// other.
+	Branch string `json:"branch,omitempty"`
+	Query  string `json:"query,omitempty"` // in the commit message
+	Path   string `json:"path,omitempty"`  // touched by the commit
+	Limit  int    `json:"limit,omitempty"` // default 50, at most 200
 	// Cursor is the previous page's next, sent back as received.
 	Cursor *git.HistoryCursor `json:"cursor,omitempty"`
 }
