@@ -1,9 +1,11 @@
 import { CoveredSurface, useIsExpanded } from "@pockode/shared";
-import { useMemo } from "react";
+import { useId, useMemo, useRef } from "react";
 import { useBranchMergeHandoff } from "../../hooks/useBranchMergeHandoff";
+import { useElementWidth } from "../../hooks/useElementWidth";
 import { useGitLog } from "../../hooks/useGitLog";
 import { useGitStatus } from "../../hooks/useGitStatus";
 import { useAutoFetch } from "../../hooks/useGitSync";
+import { useResizableWidth } from "../../hooks/useResizableWidth";
 import { flattenGitStatus } from "../../types/git";
 import type { GitSegment, OverlayState } from "../../types/overlay";
 import {
@@ -12,6 +14,7 @@ import {
 	historyQueryOf,
 } from "../../types/overlay";
 import PageHeader, { InlinePageHeaders } from "../Layout/PageHeader";
+import ResizeHandle from "../ui/ResizeHandle";
 import SegmentedControl from "../ui/SegmentedControl";
 import BranchBar from "./BranchBar";
 import BranchesSection from "./BranchesSection";
@@ -34,6 +37,25 @@ const SEGMENTS = [
 	{ value: "history", label: "History" },
 	{ value: "branches", label: "Branches" },
 ] as const satisfies readonly { value: GitSegment; label: string }[];
+
+// The list column at `expanded`. The minimum is the narrowest its rows have
+// been checked at, above the narrow-width rule's 240px (docs/sidebar-ui.md);
+// the detail column is left at least DETAIL_MIN_WIDTH, the width a diff stays
+// readable at, unless the minimum itself does not fit.
+const LIST_MIN_WIDTH = 280;
+const DETAIL_MIN_WIDTH = 480;
+const LIST_DEFAULT_MIN = 320;
+const LIST_DEFAULT_SHARE = 0.4;
+const LIST_DEFAULT_MAX = 560;
+
+function listDefaultWidth(rowWidth: number): number {
+	return Math.round(
+		Math.min(
+			LIST_DEFAULT_MAX,
+			Math.max(LIST_DEFAULT_MIN, rowWidth * LIST_DEFAULT_SHARE),
+		),
+	);
+}
 
 interface Props {
 	layer: GitLayer;
@@ -154,78 +176,141 @@ function GitWorkspace({
 				onSelectFile={(path) => onSelectFile(path, false)}
 			/>
 
-			<div className="relative flex min-h-0 flex-1">
-				{/* Covered rather than unmounted under a narrow layer: the list's
-				    scroll position is what Back returns the reader to. And covered
-				    with `invisible`, not `hidden`: `display: none` destroys the
-				    scroll box it is kept for (docs/answering-ui.md, the transcript
-				    under an overlay). */}
-				<div
-					inert={!listOnScreen}
-					className={
-						!listOnScreen
-							? "invisible absolute inset-0 flex flex-col"
-							: twoColumns
-								? "flex w-[clamp(280px,35%,400px)] shrink-0 flex-col border-r border-th-border"
-								: "flex min-w-0 flex-1 flex-col"
-					}
-				>
-					<CoveredSurface covered={!listOnScreen}>
-						{/* The control keeps its place and its width when Branches
-					    drops the second column: a control that moves once pressed
-					    sends the next press somewhere else. */}
-						<div
-							className={
-								isExpanded && !twoColumns
-									? "w-[clamp(280px,35%,400px)]"
-									: undefined
-							}
-						>
-							<SegmentedControl
-								label="Which part of the repository to show"
-								items={SEGMENTS}
-								selected={segment}
-								onSelect={onSelectSegment}
-							/>
-						</div>
-						<div
-							className={`flex min-h-0 flex-1 flex-col ${
-								isExpanded && !twoColumns ? "w-full max-w-xl" : ""
-							}`}
-						>
-							{segment === "changes" ? (
-								<ChangesSection
-									onSelectFile={onSelectFile}
-									onCloseFile={onCloseFile}
-									onViewHistory={() => onSelectSegment("history")}
-									activeFile={activeFile}
-								/>
-							) : segment === "history" ? (
-								<HistorySection
-									history={historyQueryOf(layer)}
-									activeHash={activeCommitHash}
-									onSelectCommit={onSelectCommit}
-								/>
-							) : (
-								<BranchesSection mergeHandoff={mergeHandoff} />
-							)}
-						</div>
-					</CoveredSurface>
-				</div>
-
-				{detail ? (
-					<div className="flex min-w-0 flex-1 flex-col">
-						<InlinePageHeaders inline={isExpanded}>
-							{renderDetail(detail)}
-						</InlinePageHeaders>
-					</div>
-				) : (
-					isExpanded &&
-					segment !== "branches" && (
-						<EmptyDetail segment={segment} history={historyQueryOf(layer)} />
+			<WorkspaceColumns
+				isExpanded={isExpanded}
+				listOnScreen={listOnScreen}
+				twoColumns={twoColumns}
+				control={
+					<SegmentedControl
+						label="Which part of the repository to show"
+						items={SEGMENTS}
+						selected={segment}
+						onSelect={onSelectSegment}
+					/>
+				}
+				list={
+					segment === "changes" ? (
+						<ChangesSection
+							onSelectFile={onSelectFile}
+							onCloseFile={onCloseFile}
+							onViewHistory={() => onSelectSegment("history")}
+							activeFile={activeFile}
+						/>
+					) : segment === "history" ? (
+						<HistorySection
+							history={historyQueryOf(layer)}
+							activeHash={activeCommitHash}
+							onSelectCommit={onSelectCommit}
+						/>
+					) : (
+						<BranchesSection mergeHandoff={mergeHandoff} />
 					)
+				}
+				detail={
+					detail ? (
+						<div className="flex min-w-0 flex-1 flex-col">
+							<InlinePageHeaders inline={isExpanded}>
+								{renderDetail(detail)}
+							</InlinePageHeaders>
+						</div>
+					) : (
+						isExpanded &&
+						segment !== "branches" && (
+							<EmptyDetail segment={segment} history={historyQueryOf(layer)} />
+						)
+					)
+				}
+			/>
+		</div>
+	);
+}
+
+/**
+ * The row under the bars: the list column and, beside it, the detail.
+ *
+ * The list's width lives here rather than in GitWorkspace so that a drag,
+ * which sets it on every pointer move, re-renders only this frame: the
+ * columns' contents arrive as elements already made and are not rendered
+ * again for it.
+ */
+function WorkspaceColumns({
+	isExpanded,
+	listOnScreen,
+	twoColumns,
+	control,
+	list,
+	detail,
+}: {
+	isExpanded: boolean;
+	listOnScreen: boolean;
+	twoColumns: boolean;
+	control: React.ReactNode;
+	list: React.ReactNode;
+	detail: React.ReactNode;
+}) {
+	// One width for every segment, so the segmented control above the list
+	// stays where it was when the segment changes — Branches' included, which
+	// has no column to resize but keeps the control at the same width.
+	const rowRef = useRef<HTMLDivElement>(null);
+	const rowWidth = useElementWidth(rowRef);
+	const listWidth = useResizableWidth({
+		storageKey: "pockode:gitListWidth",
+		min: LIST_MIN_WIDTH,
+		max: rowWidth - DETAIL_MIN_WIDTH,
+		defaultWidth: listDefaultWidth(rowWidth),
+		active: twoColumns,
+	});
+	const listId = useId();
+	const singleWide = isExpanded && !twoColumns;
+
+	return (
+		<div ref={rowRef} className="relative flex min-h-0 flex-1">
+			{/* Covered rather than unmounted under a narrow layer: the list's
+			    scroll position is what Back returns the reader to. And covered
+			    with `invisible`, not `hidden`: `display: none` destroys the
+			    scroll box it is kept for (docs/answering-ui.md, the transcript
+			    under an overlay). */}
+			<div
+				id={listId}
+				inert={!listOnScreen}
+				className={
+					!listOnScreen
+						? "invisible absolute inset-0 flex flex-col"
+						: twoColumns
+							? "relative flex shrink-0 flex-col border-r border-th-border"
+							: "flex min-w-0 flex-1 flex-col"
+				}
+				style={twoColumns ? { width: listWidth.width } : undefined}
+			>
+				<CoveredSurface covered={!listOnScreen}>
+					{/* The control keeps its place and its width when Branches
+					    drops the second column: a control that moves once pressed
+					    sends the next press somewhere else. The transparent border
+					    stands for the list column's own, which its width includes. */}
+					<div
+						className={singleWide ? "border-r border-transparent" : undefined}
+						style={singleWide ? { width: listWidth.width } : undefined}
+					>
+						{control}
+					</div>
+					<div
+						className={`flex min-h-0 flex-1 flex-col ${
+							singleWide ? "w-full max-w-xl" : ""
+						}`}
+					>
+						{list}
+					</div>
+				</CoveredSurface>
+				{twoColumns && (
+					<ResizeHandle
+						resize={listWidth}
+						label="Resize list"
+						controls={listId}
+						onDoubleClick={listWidth.reset}
+					/>
 				)}
 			</div>
+			{detail}
 		</div>
 	);
 }

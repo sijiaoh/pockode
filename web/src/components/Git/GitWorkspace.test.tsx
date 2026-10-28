@@ -130,6 +130,9 @@ function renderWorkspace(layer: GitLayer) {
 const segmentControl = () =>
 	screen.queryByRole("group", { name: "Which part of the repository to show" });
 
+const resizeHandle = () =>
+	screen.queryByRole("separator", { name: "Resize list" });
+
 const DIFF: GitLayer = { type: "diff", path: "src/a.ts", staged: false };
 
 beforeEach(() => {
@@ -185,6 +188,12 @@ describe("GitWorkspace below expanded", () => {
 		expect(
 			screen.getByText("top bar holds switch failures"),
 		).toBeInTheDocument();
+	});
+
+	it("has no list edge to drag", () => {
+		renderWorkspace({ type: "git", segment: "changes" });
+
+		expect(resizeHandle()).toBeNull();
 	});
 
 	// A layer is the page: no segment control, no list, and its way back is the
@@ -346,5 +355,21 @@ describe("GitWorkspace at expanded", () => {
 
 		expect(screen.getByText("branches list")).toBeVisible();
 		expect(screen.queryByText(/Select a/)).toBeNull();
+		expect(resizeHandle()).toBeNull();
+	});
+
+	// How wide it is drawn and how a drag moves it need layout:
+	// GitWorkspace.browser.test.tsx.
+	it("puts a resize handle on the list column's edge", () => {
+		renderWorkspace(DIFF);
+
+		const handle = resizeHandle();
+		expect(handle).toHaveAttribute("aria-orientation", "vertical");
+		const column = document.getElementById(
+			handle?.getAttribute("aria-controls") ?? "",
+		);
+		expect(column).toContainElement(
+			screen.getByText("changes list, active src/a.ts"),
+		);
 	});
 });

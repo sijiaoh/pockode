@@ -59,7 +59,7 @@ The whole row (but the `⋯`) is one button opening the commit, named for a scre
 
 ### At `expanded`
 
-The same list in the left column (`clamp(280px, 35%, 400px)`), the commit in the right ([git-ui.md](git-ui.md#at-expanded-two-columns)). The column is not widened for History: the segmented control above it would move when the segment changes. The lane cap rises to 8 where the column has room for it ([Lane cap](#lane-cap)) — at 400px, 8 lanes still leave the text its 160px.
+The same list in the left column, the commit in the right ([git-ui.md](git-ui.md#at-expanded-two-columns)). The column has the width every segment shares, not one of History's own: the segmented control above it would move when the segment changes. The lane cap rises to 8 where the column has room for it ([Lane cap](#lane-cap)) — 8 lanes need a list about 340px wide (350 with a coarse pointer's `⋯`), so a column near the 320px smallest default draws fewer.
 
 ### The history header
 

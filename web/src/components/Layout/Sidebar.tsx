@@ -1,24 +1,11 @@
 import { useCoverPage } from "@pockode/shared";
-import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { useEffect, useId, useRef } from "react";
+import { useResizableWidth } from "../../hooks/useResizableWidth";
+import ResizeHandle from "../ui/ResizeHandle";
 
-const SIDEBAR_WIDTH_KEY = "pockode:sidebar-width";
 const MIN_WIDTH = 240;
 const MAX_WIDTH = 500;
 const DEFAULT_WIDTH = 288; // w-72
-// One arrow press moves the edge by a step a sighted user can see land, and
-// MIN_WIDTH..MAX_WIDTH is then about sixteen presses across.
-const KEYBOARD_STEP = 16;
-
-function getInitialWidth(): number {
-	const saved = localStorage.getItem(SIDEBAR_WIDTH_KEY);
-	if (saved) {
-		const parsed = Number.parseInt(saved, 10);
-		if (!Number.isNaN(parsed) && parsed >= MIN_WIDTH && parsed <= MAX_WIDTH) {
-			return parsed;
-		}
-	}
-	return DEFAULT_WIDTH;
-}
 
 interface Props {
 	/** On screen: the drawer open, or the column not collapsed. */
@@ -29,8 +16,16 @@ interface Props {
 }
 
 function Sidebar({ isOpen, onClose, children, isExpanded }: Props) {
-	const [width, setWidth] = useState(getInitialWidth);
-	const [isDragging, setIsDragging] = useState(false);
+	// The handle is only on screen in the expanded tier and while the column is
+	// not collapsed, so a viewport shrinking out of the tier or a collapse ends
+	// the drag.
+	const resize = useResizableWidth({
+		storageKey: "pockode:sidebar-width",
+		min: MIN_WIDTH,
+		max: MAX_WIDTH,
+		defaultWidth: DEFAULT_WIDTH,
+		active: isExpanded && isOpen,
+	});
 
 	// Escape closes the drawer; the column is not an overlay and ignores it —
 	// only its own button collapses it.
@@ -84,89 +79,6 @@ function Sidebar({ isOpen, onClose, children, isExpanded }: Props) {
 		}
 	}, [isOpen, isExpanded]);
 
-	// The handle is only on screen in the expanded tier and while the column is
-	// not collapsed, so a viewport shrinking out of the tier or a collapse takes
-	// the drag with it: the handle is gone before any pointerup or
-	// pointercancel can reach it, and without this the drag stays live forever.
-	useEffect(() => {
-		if (!isExpanded || !isOpen) setIsDragging(false);
-	}, [isExpanded, isOpen]);
-
-	// The page-wide cursor and selection lock belong to an effect so React
-	// guarantees the undo. Applied imperatively on pointerdown they outlive a
-	// drag that ends without a release — leaving the whole app wearing a
-	// col-resize cursor with no text selectable, permanently.
-	useEffect(() => {
-		if (!isDragging) return;
-
-		document.body.style.cursor = "col-resize";
-		document.body.style.userSelect = "none";
-		return () => {
-			document.body.style.cursor = "";
-			document.body.style.userSelect = "";
-		};
-	}, [isDragging]);
-
-	// Pointer events rather than mouse events, and pointer capture rather than
-	// document-level listeners: the drag then follows a finger or a stylus as
-	// well as a mouse, and the browser routes every move and the release back to
-	// the handle even when the pointer outruns it.
-	const handlePointerDown = useCallback((e: React.PointerEvent) => {
-		e.preventDefault();
-		e.currentTarget.setPointerCapture(e.pointerId);
-		setIsDragging(true);
-	}, []);
-
-	const handlePointerMove = useCallback(
-		(e: React.PointerEvent) => {
-			if (!isDragging) return;
-			setWidth(Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, e.clientX)));
-		},
-		[isDragging],
-	);
-
-	// Also the pointercancel handler: the gesture can be taken away mid-drag (the
-	// browser claiming it for a scroll), and the width reached by then is the one
-	// the user last saw.
-	const handlePointerEnd = useCallback(() => {
-		if (!isDragging) return;
-		setIsDragging(false);
-		localStorage.setItem(SIDEBAR_WIDTH_KEY, width.toString());
-	}, [isDragging, width]);
-
-	// The keyboard path to the same preference, after the WAI-ARIA window
-	// splitter: arrows step, Home and End go to the limits. Every press is
-	// final, so it is stored at once — there is no release to wait for.
-	// A chord is left alone: Alt+← is the browser's Back, and taking it here
-	// would strand a user whose focus happens to rest on the handle.
-	const handleKeyDown = useCallback(
-		(e: React.KeyboardEvent) => {
-			if (e.altKey || e.ctrlKey || e.metaKey) return;
-			let next: number;
-			switch (e.key) {
-				case "ArrowLeft":
-					next = width - KEYBOARD_STEP;
-					break;
-				case "ArrowRight":
-					next = width + KEYBOARD_STEP;
-					break;
-				case "Home":
-					next = MIN_WIDTH;
-					break;
-				case "End":
-					next = MAX_WIDTH;
-					break;
-				default:
-					return;
-			}
-			e.preventDefault();
-			next = Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, next));
-			setWidth(next);
-			localStorage.setItem(SIDEBAR_WIDTH_KEY, next.toString());
-		},
-		[width],
-	);
-
 	const columnId = useId();
 
 	// Expanded: a column in the flex layout. Collapsed, it is hidden rather
@@ -188,48 +100,14 @@ function Sidebar({ isOpen, onClose, children, isExpanded }: Props) {
 				aria-label="Sidebar"
 				tabIndex={-1}
 				className={`relative shrink-0 flex-col border-r border-th-border bg-th-bg-secondary outline-none ${isOpen ? "flex" : "hidden"}`}
-				style={{ width }}
+				style={{ width: resize.width }}
 			>
 				<div className="flex flex-1 flex-col overflow-hidden">{children}</div>
-				{/*
-				 * touch-pan-y, not touch-none: the handle claims horizontal drags
-				 * only, so it does not become an 8px strip that swallows scrolling.
-				 *
-				 * Deliberately left at 8px rather than widened to the 44px coarse
-				 * floor. Sidebar width is a preference, not an operation (P2 in
-				 * docs/responsive-ui.md), and a 44px drag strip would lie over the
-				 * right edge of every row in the list — where Delete sits — turning
-				 * taps that work today into drags. The floor is there to make
-				 * operations reachable, not to make a preference easier at the cost
-				 * of one.
-				 *
-				 * A focusable separator so a screen reader announces it as the
-				 * column's adjustable edge and a keyboard can move it. The focus
-				 * ring is the accent line hover already uses: an outline around an
-				 * 8px strip would sit over the column's own border.
-				 */}
-				{/* biome-ignore lint/a11y/useSemanticElements: an <hr> is a static rule; a focusable, valued separator is a widget and has no element */}
-				<div
-					role="separator"
-					aria-label="Resize sidebar"
-					aria-orientation="vertical"
-					aria-controls={columnId}
-					aria-valuenow={width}
-					aria-valuemin={MIN_WIDTH}
-					aria-valuemax={MAX_WIDTH}
-					aria-valuetext={`${width} pixels`}
-					tabIndex={0}
-					onKeyDown={handleKeyDown}
-					onPointerDown={handlePointerDown}
-					onPointerMove={handlePointerMove}
-					onPointerUp={handlePointerEnd}
-					onPointerCancel={handlePointerEnd}
-					className="group absolute top-0 right-0 z-10 h-full w-2 translate-x-1/2 cursor-col-resize touch-pan-y outline-none"
-				>
-					<div
-						className={`absolute left-1/2 h-full w-0.5 -translate-x-1/2 transition-colors group-hover:bg-th-accent group-focus-visible:bg-th-accent ${isDragging ? "bg-th-accent" : "bg-transparent"}`}
-					/>
-				</div>
+				<ResizeHandle
+					resize={resize}
+					label="Resize sidebar"
+					controls={columnId}
+				/>
 			</aside>
 		);
 	}

@@ -9,7 +9,7 @@ The rules the workspace's rows share with the sidebar's Files panel — the visu
 ## Goals and constraints
 
 - **The workspace is a place; the sidebar is its doorplate.** Git used to be a panel inside the tabbed sidebar — a 288px drawer on a phone, a 240–500px column on desktop — and every layout was drawn at 288px. It is now a page of the main content area, `/git`, with the sidebar's Git tab reduced to a read-only overview and three entries into it ([The sidebar's Git tab](#the-sidebars-git-tab)). Everything that writes appears once, in the workspace; nothing in the sidebar writes.
-- **Still narrow where it matters.** Below `expanded` (1024) the workspace has a phone's width to itself; at and above it, its list column is `clamp(280px, 35%, 400px)` ([Layout](#layout)). Every fixed row still obeys the narrow-width rule, which is about containers, not about the sidebar ([sidebar-ui.md](sidebar-ui.md#the-narrow-width-rule)).
+- **Still narrow where it matters.** Below `expanded` (1024) the workspace has a phone's width to itself; at and above it, its list column is user-resizable and never narrower than 280px ([Layout](#layout)). Every fixed row still obeys the narrow-width rule, which is about containers, not about the sidebar ([sidebar-ui.md](sidebar-ui.md#the-narrow-width-rule)).
 - **One-handed and touch-first.** Full-width rows are `min-h-[44px]`; icon-only buttons inside a row are `min-h-[36px] min-w-[36px]` (L5), defined once in `ui/iconButtonClass.ts` so a row's checkbox and `⋯`, amend and dismiss cannot drift apart in weight. 36 is the visual rung; a coarse pointer grows the box to 44 ([responsive-ui.md](responsive-ui.md#hit-areas-and-spacing)).
 - **One list.** The Changes segment is one list, a row per path, with staging a checkbox on the row rather than a group it sits in ([git-changes-ui.md](git-changes-ui.md#the-changes-segment)). The segments themselves are a filter over the page, not a level of it.
 - **Reuse the existing vocabulary.** `th-*` tokens, `ConfirmDialog` and `Sheet` from `@pockode/shared`, `BottomActionBar`, `SidebarListItem`, `PageHeader`, the segmented control the Stories screen already had (`ui/SegmentedControl.tsx`, extracted so both pages draw one), and lucide icons.
@@ -178,7 +178,17 @@ A layer has **no segmented control** — the segments filter the lists, and a la
 ```
 
 - **Two columns follow the tier** (`useIsExpanded`), not the main area's measured width, as everywhere else in the app. At 1024 with a 288px sidebar the main area is about 736px; a user who drags the sidebar to 500 has made that trade themselves ([responsive-ui.md](responsive-ui.md#the-width-ladder)).
-- The left column is `clamp(280px, 35%, 400px)` and holds everything the narrow list layer holds — segmented control, banner, list, commit bar. It is not resizable.
+- The left column holds everything the narrow list layer holds — segmented control, banner, list, commit bar — and **the user can resize it** by its right edge, with the sidebar's handle and drag logic (`ResizeHandle`, `useResizableWidth`; why it stays 8px is [responsive-ui.md](responsive-ui.md#the-column-resize-handle)). Its numbers are against the measured row holding both columns:
+
+  | | Width | Why |
+  |---|---|---|
+  | Default | `clamp(320px, 40%, 560px)` | Followed as the row changes until the user picks a width |
+  | Minimum | 280 | The narrowest the column has been built and checked at; its fixed rows obey the narrow-width rule ([sidebar-ui.md](sidebar-ui.md#the-narrow-width-rule)), whose 240px design width leaves them slack here |
+  | Maximum | row − 480 | 480 is where a diff stays readable; the list cannot take it from the detail column. Below a 760px row the minimum wins and the detail gets what is left — the case at 1024 beside a 288px sidebar, where the column stays at 280 |
+
+  - **One width for every segment**, stored as `localStorage["pockode:gitListWidth"]`, per browser rather than per worktree. Branches has no handle (it has no right column), but its segmented control sits at the same width, so the control does not move when the segment changes.
+  - A drag moves the edge by the pointer's travel; a press that does not move stores nothing. The keyboard moves it as the sidebar's does — arrows 16px, Home and End to the limits — and **double-click resets** it to the default, which then follows the row again.
+  - **A narrower window clamps what is drawn, not what is stored**: the chosen width comes back once there is room for it again.
 - **The app header names the workspace**, `Git`, and its `←` leaves the workspace: one header cannot name two layers. Each layer names itself in a **column heading** at the top of the right column — the layer's `PageHeader`, drawn inline as a bar of its own by `InlinePageHeaders` rather than portalled into the app header. It is a switch rather than a wrapper that comes and goes, so a resize across 1024 moves the heading without remounting the page under it.
 - **Diff and commit have no `←` in their heading**: their parent is the left column, already on screen (`PageHeader`'s `back` is optional for exactly this). Commit-diff and commit-file keep theirs, back to the layer above (commit-file → commit-diff → commit), and the History list keeps the commit lit throughout.
 - The selected row in the left column wears the usual active treatment.
@@ -728,7 +738,7 @@ The session filter's worktree dimension is not in the table: it reads which work
 
 Deliberately excluded, to keep the workspace at "the everyday operations, done well": conflict resolution (what the workspace shows while the repository is stopped mid-merge, -rebase, -cherry-pick or -revert, and its two ways out, is [git-conflict-ui.md](git-conflict-ui.md)), interactive rebase, cherry-pick, running a revert or a merge itself (a commit's `Ask AI to revert` and a branch's `Ask AI to merge into current branch` hand them to the agent — [git-history-ui.md](git-history-ui.md#ask-ai-to-revert), [git-branches-ui.md](git-branches-ui.md#asking-the-agent-to-merge)), tags, stash, remote branch deletion, remote management, submodule commit/branch/sync, and a global toast system.
 
-Left for later rather than excluded: the right column Branches does not have yet, and resizable columns and keyboard navigation. Per-hunk staging and handing selected lines to the agent are built, in the review ([staging a hunk](git-changes-ui.md#staging-a-hunk), [handing lines to the agent](git-changes-ui.md#handing-lines-to-the-agent)).
+Left for later rather than excluded: the right column Branches does not have yet, and keyboard navigation. The list column is resizable ([Layout](#layout)). Per-hunk staging and handing selected lines to the agent are built, in the review ([staging a hunk](git-changes-ui.md#staging-a-hunk), [handing lines to the agent](git-changes-ui.md#handing-lines-to-the-agent)).
 
 ---
 
