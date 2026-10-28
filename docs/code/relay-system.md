@@ -74,6 +74,8 @@ Manager.Start()
 
 On first run the PC registers with the cloud to obtain a unique subdomain and token. Later startups refresh the token to verify it is still valid. Configuration is persisted so a restart does not consume a new subdomain.
 
+Both calls also attach the relay to the machine's cloud account when the machine is linked, and a watcher refreshes whenever that link changes; a guest's requests are unchanged. See [Cloud Account Linking](cloud-account.md#attaching-the-relay).
+
 `credentials` is not only a startup step: the reconnect loop runs the same check when the relay rejects the token mid-run — see [Recovering From a Rejected Token](#recovering-from-a-rejected-token).
 
 A config file damaged by an interrupted write takes the same recovery path as an invalid token: it is set aside and the server registers again. That costs the user their subdomain, which is not free — but the file is unreadable either way, and a relay that comes back at a new address beats one that refuses to start at all. The damaged copy is kept at `relay.json.corrupt` in case the old subdomain is worth recovering by hand.
@@ -313,7 +315,7 @@ Requests for the app arriving through the tunnel go through the same `middleware
 
 | Component | Path | Responsibility |
 |-----------|------|----------------|
-| Manager | `server/relay/relay.go` | Lifecycle, dial + authentication |
+| Manager | `server/relay/relay.go` | Lifecycle, dial + authentication, attaching to the cloud account ([Cloud Account Linking](cloud-account.md)) |
 | Reconnector | `server/relay/reconnect.go` | Backoff loop keeping the uplink up, renewing a rejected token |
 | Client | `server/relay/client.go` | Communication with the cloud HTTP API |
 | Tunnel | `server/relay/tunnel.go` | yamux session, serving HTTP over its streams |

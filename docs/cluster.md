@@ -121,6 +121,8 @@ environment (`/proc/<pid>/environ`) is readable only by the owner and root. See
 [Authentication](code/authentication.md) for the full model. Implemented in
 `server/cluster/node/process.go` (`nodeEnv`) and `server/password/`.
 
+`nodeEnv` also sets `POCKODE_CLUSTER_NODE`, which is how a node knows to list itself as a `node` in a linked cloud account; the cluster itself is listed under its data directory. See [Cloud Account Linking](code/cloud-account.md#what-an-instance-reports).
+
 If `node.stop` cannot find the saved process, the backend removes any stale
 `server.json` state it can clean up and returns `"node not running"` — stopping
 what is already gone is a failed stop, not a success. Removing stale state on

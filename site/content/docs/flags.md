@@ -1,6 +1,6 @@
 ---
 title: Command-line flags
-description: Every flag the pockode server and pockode cluster accept, with their defaults.
+description: Every flag the pockode server and pockode cluster accept, with their defaults, and the login and logout commands.
 weight: 60
 ---
 
@@ -55,3 +55,12 @@ For running on a server or in a container:
 | `-dev` | `false` | Development mode, for working on Pockode itself |
 
 See [Cluster mode](/docs/cluster/).
+
+## Linking a machine to your cloud account
+
+| Command | What it does |
+|---|---|
+| `pockode login` | Shows a link and a QR code; open it where you are signed in to the cloud and approve the code it shows. The machine is then listed in your account, and every Pockode on it — already running ones included, within a few seconds — appears there. `-cloud-url` picks the cloud, as for the server |
+| `pockode logout` | Unlinks the machine. If the cloud cannot be reached, the machine is still unlinked here; remove it from your account on the web |
+
+The link is kept per OS user, in `pockode/cloud.json` under the user's configuration directory. Without it Pockode works exactly as before.

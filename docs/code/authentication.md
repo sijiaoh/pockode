@@ -636,9 +636,12 @@ in. Nodes keep receiving their password through `POCKODE_PASSWORD` in `cmd.Env`.
 
 ## Credentials on Disk
 
-Four files hold secrets: `server.json` (the MCP local token), `relay.json` (the
-relay token), `sessions.json` (the session hashes and the password fingerprint)
-and, in `--git` mode, `.git/.git-credentials` (a GitHub PAT in cleartext). They
+Five files hold secrets: `server.json` (the MCP local token), `relay.json` (the
+relay token), `sessions.json` (the session hashes and the password fingerprint),
+`cloud.json` (the machine token linking this machine to a cloud account, kept in
+the OS user's configuration directory rather than a data directory — see
+[Cloud Account Linking](cloud-account.md)) and, in `--git` mode,
+`.git/.git-credentials` (a GitHub PAT in cleartext). They
 are still written `0600`, but that mode is not what protects them. It is the
 right permission attached to the wrong *unit*, and on Windows it is not a
 permission at all.

@@ -49,6 +49,8 @@ authsession/            # 登录会话：密码换取的 session token + 密码�
 chat/                   # Chat 客户端
 cliauth/                # AI CLI 登录状态查询、远程登录流程与登出（各 CLI 的实现在 agent/*/auth.go、login.go，见 docs/code/cli-auth.md）
 cliupdate/              # AI CLI 新版本检查与更新（跑 CLI 自己的 update，再核对版本；各 CLI 的定义在 agent/*/update.go，见 docs/code/cli-update.md）
+cloudcred/              # 机器凭据 cloud.json（OS 用户配置目录下、本 OS 用户的所有进程共享；只对签发它的 cloud 使用，见 docs/code/cloud-account.md）
+cloudlogin/             # `pockode login` / `pockode logout`：RFC 8628 device flow 关联机器、吊销并删除 cloud.json
 command/                # 命令存储 + Pockode 命令（`/pockode-*` 的解析与展开，见 docs/pockode-commands.md）
 contents/               # 文件内容获取
 datadir/                # 默认数据目录（<work>/.pockode）自带的 .gitignore（首行标记在时归 Pockode 管理、每次启动覆盖为当前版本的内容，用户删掉标记即接管，见 docs/projects/data-model.md）
@@ -69,7 +71,7 @@ rpc/                    # RPC 消息类型定义
 session/                # Session 存储 + 清理
 settings/               # 设置存储
 spa/                    # SPA 静态文件服务：路径解析（缺失的 assets 返回 404，其余回落 index.html）与缓存策略（assets immutable，入口文档 no-cache），main 与 cluster 共用
-startup/                # 启动横幅
+startup/                # 启动横幅（含 cloud 账户行）与 QR 码
 static/                 # 静态文件（构建后的前端资源）
 watch/                  # 实时订阅（WebSocket 通知的分发引擎）
 work/                   # Work 存储, 状态机, 驱动引擎 (engine.go), 命令 (operations.go), activity 派生, 提示词构建器
@@ -214,9 +216,10 @@ if err := json.Unmarshal(data, &parsed); err != nil {
 
 四个 `*-timeout` 是同一张租约表的四行，不是四个独立开关：进程活多久完全由它所属 session 的 turn 状态决定，所以 `--idle-timeout=0` 只是关掉 idle 那一行，另外三行照常回收（要什么都不收得四个都设 0）。每个默认值为什么是这个数，见 [docs/lifecycle.md](../docs/lifecycle.md#process-a-lease-table)。
 
-上表为默认（server）模式。此外还有两个子命令（`flag.Parse()` 前分发，见 `main.go`）：
+上表为默认（server）模式。此外还有四个子命令（`flag.Parse()` 前分发，见 `main.go`）：
 
 - `pockode cluster` — 多项目节点编排模式，注册并按需启停多个项目，参数与实现见 [docs/cluster.md](../docs/cluster.md)
+- `pockode login [-cloud-url <url>]` — 把本机关联到 cloud 账户（写入 cloud.json）；`pockode logout` — 吊销并删除 cloud.json。见 [docs/code/cloud-account.md](../docs/code/cloud-account.md)
 - `pockode mcp` — MCP stdio 代理，由 AI CLI 内部启动，见下方「MCP 本地 API」
 
 ## 运行时文件

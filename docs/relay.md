@@ -32,10 +32,11 @@ Relay Server (cloud)    ◀── outbound WSS (yamux) ──  User PC
 | `server/relay/preview.go` | Port preview: host recognition, same-origin gate, forwarding to `localhost:<port>` |
 | `server/relay/preview_auth.go` | Port preview login page, login endpoint and session cookie |
 | `server/relay/store.go` | Persist relay config (subdomain, token) to `relay.json` |
+| `server/relay/account.go` | What register/refresh add to attach the relay to a cloud account ([Cloud Account Linking](code/cloud-account.md)) |
 
 ## How It Works
 
-1. PC starts → `relay.Start()` registers with the cloud relay (or refreshes its stored registration), receives subdomain + relay_token
+1. PC starts → `relay.Start()` registers with the cloud relay (or refreshes its stored registration), receives subdomain + relay_token. A machine linked with `pockode login` is attached to its cloud account by the same call ([Cloud Account Linking](code/cloud-account.md))
 2. PC opens an outbound WebSocket to `wss://<subdomain>.<relay_server>/relay` (NAT-friendly), carrying `Authorization: Bearer <relay_token>`. The cloud verifies the token before accepting the upgrade
 3. Past the 101 the connection is nothing but a yamux session. The PC runs `http.Server.Serve(session)` — `*yamux.Session` is a `net.Listener`
 4. Mobile sends an HTTPS request to `<subdomain>.relay.example.com`

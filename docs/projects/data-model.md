@@ -350,9 +350,10 @@ The same primitive (`filestore.WriteFileAtomic`) backs every file the server
 rewrites whole: the stores built on `filestore.File` (work, agent-role,
 settings, the cluster node registry), the session and command indexes, plus
 `server.json`, `relay.json`, `sessions.json`, `mcp-config.json`, the data
-directory's `.gitignore` and the per-session Claude resume file. Files whose
-mode matters pass it explicitly — `server.json`, `relay.json` and
-`sessions.json` stay `0600` because they hold credentials.
+directory's `.gitignore` and the per-session Claude resume file — and, outside
+the data directory, the machine credential `cloud.json`. Files whose mode
+matters pass it explicitly — `server.json`, `relay.json`, `sessions.json` and
+`cloud.json` stay `0600` because they hold credentials.
 
 Attachments (`server/attachments`) keep the same guarantee without the
 primitive, because a user's upload is too large to hold in memory:
