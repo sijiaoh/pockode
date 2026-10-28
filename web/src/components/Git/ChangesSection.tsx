@@ -55,6 +55,7 @@ import ChangesHeader from "./ChangesHeader";
 import CommitBar from "./CommitBar";
 import ErrorBanner from "./ErrorBanner";
 import LineCounts from "./LineCounts";
+import { useRevealLitRow } from "./revealRow";
 import StageCheckbox, { StageGutter } from "./StageCheckbox";
 
 interface Props {
@@ -72,6 +73,8 @@ interface Props {
 		next: { path: string; staged: boolean } | null,
 	) => void;
 	activeFile: { path: string; staged: boolean } | null;
+	/** Set while the lit row is wanted on screen; called once it is. */
+	reveal?: () => void;
 }
 
 /**
@@ -80,7 +83,12 @@ interface Props {
  * discards what is left unchecked — the Git workspace's Changes segment
  * (docs/git-changes-ui.md).
  */
-function ChangesSection({ onSelectFile, onCloseFile, activeFile }: Props) {
+function ChangesSection({
+	onSelectFile,
+	onCloseFile,
+	activeFile,
+	reveal,
+}: Props) {
 	const navigate = useNavigate();
 	const { worktree: routeWorktree, sessionId } = useRouteState();
 	const { data: status, isLoading, error } = useGitStatus();
@@ -97,6 +105,8 @@ function ChangesSection({ onSelectFile, onCloseFile, activeFile }: Props) {
 	const worktree = useWorktreeStore((s) => s.current);
 	const actionError = useWriteFailure(worktree);
 	const view = useGitChangesViewStore((s) => s.view);
+	const scrollerRef = useRef<HTMLDivElement>(null);
+	useRevealLitRow(scrollerRef, reveal);
 
 	const files = useMemo(
 		() => (status ? orderChanges(collectChanges(status), view) : []),
@@ -260,7 +270,10 @@ function ChangesSection({ onSelectFile, onCloseFile, activeFile }: Props) {
 			{/* No vertical padding here: the sticky header pins to this box's
 			    padding edge, and would leave a gap above it for rows to show
 			    through. */}
-			<div className="@container min-h-0 flex-1 overflow-y-auto">
+			<div
+				ref={scrollerRef}
+				className="@container min-h-0 flex-1 overflow-y-auto"
+			>
 				{isLoading ? (
 					<div className="flex items-center justify-center p-8">
 						<Spinner variant="current" className="text-th-text-muted" />

@@ -413,9 +413,22 @@ describe("DiffView bottom buttons", () => {
 
 	it("leaves for the list by replacing, from the header's back", async () => {
 		const user = userEvent.setup();
-		render(<DiffView path="a.ts" staged={false} showBack />);
+		render(<DiffView path="a.ts" staged={false} />);
 
 		await user.click(screen.getByRole("button", { name: "Back to changes" }));
+		expect(navigate).toHaveBeenCalledWith(toList());
+	});
+
+	// At `expanded` the list is the sidebar's and its URL shows the chat, so
+	// the same way out is the way back to the chat.
+	it("draws the way out as the way to the chat beside the sidebar's list", async () => {
+		const user = userEvent.setup();
+		render(<DiffView path="a.ts" staged={false} backToChat />);
+
+		expect(
+			screen.queryByRole("button", { name: "Back to changes" }),
+		).toBeNull();
+		await user.click(screen.getByRole("button", { name: "Back to chat" }));
 		expect(navigate).toHaveBeenCalledWith(toList());
 	});
 
@@ -436,7 +449,7 @@ describe("DiffView bottom buttons", () => {
 
 		it("goes back to the list from the header's back, once", async () => {
 			const user = userEvent.setup();
-			render(<DiffView path="a.ts" staged={false} showBack />);
+			render(<DiffView path="a.ts" staged={false} />);
 
 			const button = screen.getByRole("button", { name: "Back to changes" });
 			await user.click(button);
@@ -690,7 +703,11 @@ describe("DiffView when the file stops changing", () => {
 		statusRef.current = { staged: [], unstaged: [] };
 		render(<DiffView path="a.ts" staged={false} />);
 
-		await user.click(screen.getByRole("button", { name: "Back to changes" }));
+		// The bar's, after the header's.
+		const [, inBar] = screen.getAllByRole("button", {
+			name: "Back to changes",
+		});
+		await user.click(inBar);
 		expect(navigate).toHaveBeenCalledWith(toList());
 	});
 });
@@ -807,7 +824,7 @@ describe("DiffView conflict view", () => {
 			unstaged: [{ path: "a.ts", status: "U" }],
 			conflicted: ["a.ts"],
 		};
-		render(<DiffView path="a.ts" staged={false} showBack />);
+		render(<DiffView path="a.ts" staged={false} />);
 
 		const leave = within(
 			screen.getByRole("button", { name: "Ask agent to resolve the conflicts" })

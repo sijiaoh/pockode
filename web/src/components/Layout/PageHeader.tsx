@@ -112,27 +112,6 @@ export function PageHeaderTarget({
 	return <TargetContext value={value}>{children}</TargetContext>;
 }
 
-/**
- * While `inline`, draws the heading of a page inside as a bar of its own, even
- * within a host. For a page laid out beside another: the app header can name
- * one page, and it names the one that holds them both.
- *
- * A switch rather than a wrapper that comes and goes, so that the page inside
- * keeps its state when a resize moves its heading.
- */
-export function InlinePageHeaders({
-	inline,
-	children,
-}: {
-	inline: boolean;
-	children: ReactNode;
-}) {
-	const host = useContext(TargetContext);
-	return (
-		<TargetContext value={inline ? undefined : host}>{children}</TargetContext>
-	);
-}
-
 function PageHeaderOutlet({ ref }: { ref: Ref<HTMLDivElement> }) {
 	return <div ref={ref} className={outletClass} />;
 }

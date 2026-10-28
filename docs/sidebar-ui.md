@@ -4,10 +4,11 @@ The two work panels in the tabbed sidebar — **Files** (`web/src/components/Fil
 entry `FilesTab`) and **Git** (`web/src/components/Git/`) — grew
 one feature at a time: search, then upload, then branch/commit/sync. Each landed
 as an addition to whatever row had space, and the result was a panel whose chrome
-competed with its content. Git has since moved out of the sidebar altogether:
-its operations live in the Git workspace, a page of the main area, and the
-sidebar's Git tab (`GitTab`) is only an overview and the way in
-([The Git tab](#the-git-tab)).
+competed with its content. Git then moved out of the sidebar into the Git
+workspace, a page of the main area, and below `expanded` it is still there,
+with the sidebar's Git tab (`GitTab`) an overview and the way in. At
+`expanded` the workspace's list came back into the tab, and the main area shows
+what a row opens ([The Git tab](#the-git-tab)).
 
 This document holds what the Files panel and the Git surfaces have to agree on:
 the principles behind the redesign that fixed that, the visual weight ladder,
@@ -100,22 +101,21 @@ not on the commit button**.
 
 The sidebar is a drawer below `expanded` and a resizable, collapsible column
 at and above it (`web/src/components/Layout/Sidebar.tsx`; the column's edge is
-the [column resize handle](responsive-ui.md#the-column-resize-handle) the Git
-list column shares). Its widths are one rule for every tab — no tab gets a
-width of its own:
+the [column resize handle](responsive-ui.md#the-column-resize-handle)). Its
+widths are one rule for every tab — no tab gets a width of its own, the Git
+tab's list at `expanded` included:
 
 | | Width | Why |
 |---|---|---|
 | Drawer | viewport − 56px, at most 400px | The 56px strip of chat left showing says the panel is a drawer over the chat rather than a page, is where a tap closes it, and shows where that tap goes back to. The 56 is Material Design's mobile navigation drawer, which is the screen width less 56dp, the mobile app bar's height. 400px caps it on a tablet, where the screen less 56 would be far wider than the panel's rows need |
-| Column minimum | 280px | The narrowest a column in this app has been built and checked at — the Git workspace's list column ([git-ui.md](git-ui.md#at-expanded-two-columns)) |
-| Column default | 320px | The Git list column's default, the floor of its `clamp(320px, 40%, 560px)` ([git-ui.md](git-ui.md#at-expanded-two-columns)) |
+| Column minimum | 280px | The narrowest a column in this app has been built and checked at — the Git tab's list, whose fixed rows are built to this width ([git-ui.md](git-ui.md#at-expanded-the-sidebars-list-and-the-detail)) |
+| Column default | 320px | The width the Git list had by default when it was a column of the main area, before it moved into the Git tab ([git-ui.md](git-ui.md#at-expanded-the-sidebars-list-and-the-detail)) |
 | Column maximum | 500px | A user who drags it out that far has made their own trade with the chat beside it ([responsive-ui.md](responsive-ui.md#why-the-two-column-threshold-is-1024-and-not-768)) |
 
 A width the user stored is kept as it was and only drawn within the limits, so
 a stored width below a raised minimum shows at the minimum — the nearest to the
 narrow column they chose — rather than falling back to the default they had
-moved away from. `useResizableWidth` holds this for every column it drives, the
-Git list column included.
+moved away from. `useResizableWidth` holds this.
 
 **280px is the design width**; anything wider is slack. The drawer meets it on a
 336px screen and only a narrower phone takes it below — 264px on a 320px
@@ -139,7 +139,7 @@ field was left ~106px, which is the "the search box disappeared" report. With th
 root's `…`, which replaced that button — the floor is ~144px and the field takes
 every pixel above it.
 
-The branch bar — now the Git workspace's top bar — by contrast, already obeyed
+The branch bar — now the Git workspace's top bar, in the Git tab at `expanded` — by contrast, already obeyed
 the rule — one truncating branch name, one chip of fixed copy — and does not
 break at any width. The rule is not new
 guidance; it is what the rows that work already did.
@@ -446,8 +446,66 @@ taller.
 
 ## The Git tab
 
-The Git tab (`Git/GitTab.tsx`) is the [Git workspace](git-ui.md)'s doorplate,
-the same shape as the Project tab: something to read, and doors.
+The Git tab (`Git/GitTab.tsx`) takes one of two shapes, by the tier: at
+`expanded` it is the [Git workspace](git-ui.md)'s list, and below it the
+workspace's doorplate. Either way **every write appears in one place** — the
+sidebar's at `expanded`, the Git page's below it.
+
+### At `expanded`: the list
+
+```
+┌──────────────────────────────┐
+│ ⑂ feature/git-ui    ↓ Pull 2 │  top bar — branch name and sync chip
+│ ⚠ Push failed · Details    ✕ │  top-bar banners
+│ ⚠ Rebase stopped on conf…  ⌃ │  operation banner, whole, with its actions
+│ [Changes] History  Branches  │  segmented control
+│ ▣ 3 files  +142 −37    [≣|⌸] │  the segment's list
+│▌▣ git.md          +88 −20  ⋯ │  the open detail's row, lit
+├──────────────────────────────┤
+│ [Discard unchecked…][Commit…]│  commit bar
+└──────────────────────────────┘
+```
+
+- **The whole list, nothing else.** What the Git page holds over its list —
+  top bar and sync chip, their banners, the operation banner, segments, list,
+  commit bar — drawn by the same components (`GitSegmentList` for the segments
+  and lists), so the two shapes cannot drift apart. The read-only overview of
+  the narrow shape is not drawn: it says what the top bar says, and the top bar
+  is pressable. Laid out and navigated as [git-ui.md](git-ui.md#at-expanded-the-sidebars-list-and-the-detail)
+  says; the rules the sidebar itself owns are below.
+- **Its width is the sidebar's.** No width of its own and no handle of its own:
+  280–500px by the column's handle, 320 by default
+  ([The narrow-width rule](#the-narrow-width-rule)). A user who wants a wider
+  list drags the column.
+- **A row opens its detail in the main area**, and the column stays: a press
+  here never collapses it.
+- **Arriving decides the automatic fetch.** The list coming on screen — the tab
+  selected and the column not collapsed — is arriving in the workspace, as
+  opening the Git page is ([git-ui.md](git-ui.md#automatic-fetch)).
+- **The tab turns to Git when the route arrives at Git** — a list URL, or a
+  detail opened from outside a detail — whatever made it arrive, so the list
+  and the row it lights are on screen; once, not as a lock, never expanding a
+  collapsed column — and the lit row is scrolled into view ([git-ui.md](git-ui.md#at-expanded-the-sidebars-list-and-the-detail)).
+  It is `TabbedSidebar`'s `reveal`: a tab selected each time a new request is
+  made, and left alone between requests, so a tab the user picks afterwards
+  stays picked.
+- **Where the route names no Git layer** — a session, a file — the tab stays at
+  the segment and History query it was left at
+  ([git-ui.md](git-ui.md#routes-segments-and-back)).
+
+**Why the sidebar may write at `expanded`.** The rule used to be that nothing in
+the sidebar writes. Its reasons were the drawer's: a phone's drawer is too
+short to hold a list under the tab bar and the worktree switcher, and the rows
+had not been built for its width. Neither holds for the column at `expanded`,
+which is the window's height and whose width is the 280px the rows are now
+built for. What the rule was protecting is kept as its own statement: a write
+is on screen in one place. On a desktop that place is the sidebar, and the main
+area beside it shows only details; on a phone it is the Git page, and the
+drawer holds no write.
+
+### Below `expanded`: the doorplate
+
+The same shape as the Project tab: something to read, and doors.
 
 ```
 ┌──────────────────────────────┐
@@ -492,10 +550,9 @@ the same shape as the Project tab: something to read, and doors.
 - **The segment the workspace is on is lit** — `bg-th-bg-tertiary` and
   `aria-current="page"` — and still pressable: it is the way back to that
   segment's list.
-- **On a phone an entry closes the drawer behind it**, as every pick in the
-  sidebar does; at `expanded` the column stays.
+- **An entry closes the drawer behind it**, as every pick in the sidebar does.
 - The tab badge keeps its rule ([git-ui.md](git-ui.md#the-change-count-on-the-tab)),
-  and **nothing in the tab writes**: every write appears once, in the workspace.
+  and **nothing in the tab writes**: every write appears once, on the Git page.
 
 ## No manual refresh
 
@@ -540,7 +597,7 @@ The rules above are general; each surface's shape is documented with it.
 | Panel | Document | What it now covers that this file does not |
 |-------|----------|--------------------------------------------|
 | Files | [file.md](file.md) | The row's [`…` menu](file.md#entry-actions) and the create / delete flows it opens, the [two upload paths](file.md#uploading) and why neither leaves a destination behind. The search row's narrow-width fix and the wrapping option chips |
-| Git | [git-ui.md](git-ui.md) | The workspace's routes, segments and Back, the top bar and its sync chip, the automatic fetch, the one-layer and two-column layouts, the commit bar's render conditions, amend on HEAD's row, `canPull`, the sync sheet's state-dependent button list, the `Sheet` overflow root cause, and which results outlive the page. Also the [change count on the tab](git-ui.md#the-change-count-on-the-tab) — what it counts, and why the `git.changed` subscription that feeds it sits in the sidebar rather than in the workspace |
+| Git | [git-ui.md](git-ui.md) | The workspace's routes, segments and Back, the top bar and its sync chip, the automatic fetch, the one-layer layout and the sidebar's list beside the detail at `expanded`, the commit bar's render conditions, amend on HEAD's row, `canPull`, the sync sheet's state-dependent button list, the `Sheet` overflow root cause, and which results outlive the page. Also the [change count on the tab](git-ui.md#the-change-count-on-the-tab) — what it counts, and why the `git.changed` subscription that feeds it sits in the sidebar rather than in the workspace |
 
 Two of the redesign's outcomes reach past the panel they were found in, so they
 are flagged here rather than left where they were diagnosed:

@@ -4,9 +4,9 @@ import { describe, expect, it, vi } from "vitest";
 import type { GitStatus } from "../../types/git";
 import DiffView from "./DiffView";
 
-// What jsdom cannot say: that the review's actions fit its toolbar at the
-// narrowest width a detail is given beside the list (`DETAIL_MIN_WIDTH`), the
-// folder giving way rather than a button.
+// What jsdom cannot say: that the review's actions fit its toolbar at a width
+// under the narrowest main area `expanded` gives a detail (`DETAIL_MIN_WIDTH`),
+// the folder giving way rather than a button.
 
 const statusRef = vi.hoisted(() => ({
 	current: undefined as GitStatus | undefined,
@@ -54,7 +54,8 @@ vi.mock("../../hooks/useGitStatus", () => ({
 }));
 vi.mock("../../hooks/useFSWatch", () => ({ useFSWatch: () => {} }));
 
-// The value in GitWorkspace.tsx.
+// Under the narrowest main area at `expanded`: about 524px, at 1024 beside the
+// sidebar at its 500px maximum (docs/git-ui.md#where-a-details-actions-go).
 const DETAIL_MIN_WIDTH = 480;
 const PATH = "packages/some/deeply/nested/folder/structure/a-long-file-name.ts";
 

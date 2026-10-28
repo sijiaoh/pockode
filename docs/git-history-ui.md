@@ -1,6 +1,6 @@
 # Git History UI
 
-How the Git workspace's History segment draws the commit graph, how its range, search and file filter work, and what a commit's detail and `⋯` menu offer. The workspace around it — routes, the top bar, the two-column layout at `expanded`, the commit sheet that amend reuses — is [git-ui.md](git-ui.md)'s; what pauses while the repository is mid-merge or mid-rebase is [git-conflict-ui.md](git-conflict-ui.md)'s. This file points to both rather than restating them.
+How the Git workspace's History segment draws the commit graph, how its range, search and file filter work, and what a commit's detail and `⋯` menu offer. The workspace around it — routes, the top bar, the list in the sidebar beside the detail at `expanded`, the commit sheet that amend reuses — is [git-ui.md](git-ui.md)'s; what pauses while the repository is mid-merge or mid-rebase is [git-conflict-ui.md](git-conflict-ui.md)'s. This file points to both rather than restating them.
 
 Copy below is the UI's English.
 
@@ -59,7 +59,7 @@ The whole row (but the `⋯`) is one button opening the commit, named for a scre
 
 ### At `expanded`
 
-The same list in the left column, the commit in the right ([git-ui.md](git-ui.md#at-expanded-two-columns)). The column has the width every segment shares, not one of History's own: the segmented control above it would move when the segment changes. The lane cap rises to 8 where the column has room for it ([Lane cap](#lane-cap)) — 8 lanes need a list about 340px wide (350 with a coarse pointer's `⋯`), so a column near the 320px smallest default draws fewer.
+The same list in the sidebar's Git tab, the commit across the main area ([git-ui.md](git-ui.md#at-expanded-the-sidebars-list-and-the-detail)). The list has the sidebar's width, not one of History's own: the segmented control above it would move when the segment changed. The lane cap rises to 8 where the list has room for it ([Lane cap](#lane-cap)) — 8 lanes need a list about 340px wide (350 with a coarse pointer's `⋯`), so the sidebar at its 320px default draws fewer. A commit opened from the chat or a link, below the rows on screen, is scrolled into view, the row's offset computed from its index since a virtual list may not have mounted it; a commit in a page not loaded yet is not paged to ([git-ui.md](git-ui.md#at-expanded-the-sidebars-list-and-the-detail)).
 
 ### One line in a wide list
 
@@ -81,7 +81,7 @@ From a list 768px wide or more (`@git-commit-row:`, measured on `HistoryList`'s 
 - Author, date and hash are 16px apart and anchored at the right, so they line up down the whole list; every pixel past 768 goes to the subject.
 - **Chips give way before the subject.** In this layout only, a chip may shrink to 2.5rem (`min-w-10`), cutting more of its name from the head. Two chips, `+N` and their gaps are then at most ≈112px, which beside the 160px floor fits the narrowest subject cell 768 can leave (≈280px, eight lanes and a coarse `⋯`). On a crowded tip row that means a short tag can be little more than its icon; the commit's page names it in full.
 - **Two layouts, two pieces of markup.** The narrow markup is untouched and hidden at the threshold (`@git-commit-row:hidden`); the wide pieces are separate elements shown only there. That keeps the narrow row identical by construction, without `order` or `display: contents`. The hidden copy is `display: none`, so the row's accessible name — `describeCommitRow`, on the button — is unchanged. It does put the subject in the DOM twice: a test finds a commit row by its button's name, not with `getByText(subject)`.
-- The same layout serves a search or file filter (`LoneDotCell` in place of the graph); the footer rows are unchanged. A branch's commits in its detail follow the **detail** column's width. A commit's page draws its chips in no container, so they never change.
+- The same layout serves a search or file filter (`LoneDotCell` in place of the graph); the footer rows are unchanged. A branch's commits in its detail follow the **detail**'s width, the main area's at `expanded`. A commit's page draws its chips in no container, so they never change.
 
 **`title`s**, on what may be cut: the subject (both layouts); the narrow second line's `author, date` with the full date (`formatDateTime`); the wide author, the full date, and the full hash. Ref chips carry their name only under a fine pointer, as `+N` carries its hidden names.
 
@@ -133,7 +133,7 @@ The number of lanes drawn is the smaller of two numbers:
 | Tier | 4 below `expanded`, 8 at it (`useIsExpanded`) |
 | Width | `floor((listWidth − 8 − 8 − menu − 18 − 160) / 14)`, from the list's measured width, `menu` the `⋯`'s 36 or 44px — what fits beside a 160px text column and the `+N` slot |
 
-…and at least 1. The width limit is what keeps the text from being squeezed: at 280px (the narrowest left column) it gives 3, on a 300px phone 4, at 400px 8.
+…and at least 1. The width limit is what keeps the text from being squeezed: at 280px (the narrowest sidebar) it gives 3, on a 300px phone 4, at 400px 8.
 
 The graph column is as wide as the **most lanes any loaded row uses**, capped — a straight history has a 14px graph, not 56px of empty gutter. It only grows, when a new page needs more lanes, and never narrows while the list is on screen: a page arriving at the bottom may move the text column right once; a column that also shrank would move under the reader's finger.
 
@@ -302,7 +302,7 @@ With either on, **no graph**: rows keep their height and text, the graph column 
 - **`⋯` in the header**, at the right of the title (`PageHeader`'s `actions`), named `Actions for commit a1b2c3d`: the same commit menu as the list row's, shown once the commit is read. There is no bottom bar: with the short hash in the title, it would be a whole strip for one button. The cost is a menu out of reach of the thumb holding the phone.
 - **The refs are live.** The commit never changes but the refs on it do — a branch created here, a push, a fetch — so the page's answer is re-read with the rest of the workspace on `git.changed` and after every write.
 
-At `expanded` all of this is in the right column; the commit's row stays lit in the left one, and the history query (`scope`, `q`, `file`) rides on the commit route so the list beside it is the list it was opened from ([URL](#url)).
+At `expanded` all of this is in the main area; the commit's row stays lit in the sidebar's list, and the history query (`scope`, `q`, `file`) rides on the commit route so the list beside it is the list it was opened from ([URL](#url)). The header's `←` goes to that list's URL, which at `expanded` is the chat beside the list, and is drawn so; a commit opened from a branch keeps `Back to branch`.
 
 ## The commit menu
 
@@ -376,4 +376,4 @@ They are carried by the history layers — `commit`, `commit-diff`, `commit-file
 - **Create branch here creates and switches**, like `New branch…`, and is paused mid-operation like it.
 - **Revert is the agent's**, through the prefill handoff, hidden only where the commit is known to be off HEAD's history.
 - **Refs sit on the second line**; the subject keeps the first to itself. In a list 768px wide or more the row is one line, and the chips shrink before the subject drops under 160px. `+N` is read by opening the commit, not pressed on its own.
-- **The history query rides on the history layers**, so the two columns agree and Back restores the list.
+- **The history query rides on the history layers**, so the sidebar's list and the detail agree and Back restores the list.

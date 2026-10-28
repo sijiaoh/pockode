@@ -1,12 +1,12 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen } from "@testing-library/react";
+import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { gitSyncActions } from "../../lib/gitSyncStore";
 import { makeBranches, makeHead, makeSync } from "../../test/gitFixtures";
 import type { GitBranches, GitStatus, LineStat } from "../../types/git";
-import type { GitSegment } from "../../types/overlay";
-import GitTab from "./GitTab";
+import type { GitLayer, GitSegment } from "../../types/overlay";
+import GitTab, { type GitNavigation } from "./GitTab";
 
 vi.mock("../Layout", () => ({ useSidebarRefresh: () => ({ isActive: true }) }));
 
@@ -26,14 +26,118 @@ vi.mock("../../hooks/useGitChangeCount", async (importOriginal) => ({
 	useGitChangeLines: () => changeLines,
 }));
 
+vi.mock("../../hooks/useBranchMergeHandoff", () => ({
+	useSharedMergeHandoff: () => ({
+		handingOff: null,
+		error: null,
+		dismissError: () => {},
+		start: () => {},
+	}),
+}));
+// Has tests of its own (hooks/useGitSync.test.tsx).
+vi.mock("../../hooks/useGitSync", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../../hooks/useGitSync")>()),
+	useAutoFetch: () => {},
+}));
+// At `expanded` what is under test is which list the tab stands at and what
+// it lights; the bar, the banner and the lists have tests of their own.
+vi.mock("./BranchBar", async (importOriginal) => ({
+	...(await importOriginal<typeof import("./BranchBar")>()),
+	default: () => <div>branch bar</div>,
+}));
+vi.mock("./OperationBanner", () => ({
+	default: ({ compact }: { compact: boolean }) => (
+		<div>{compact ? "compact banner" : "whole banner"}</div>
+	),
+}));
+vi.mock("./GitSegmentList", async (importOriginal) => ({
+	...(await importOriginal<typeof import("./GitSegmentList")>()),
+	default: ({
+		segment,
+		history,
+		activeFile,
+		activeHash,
+		activeBranchKey,
+		reveal,
+		onSelectCommit,
+	}: {
+		segment: GitSegment;
+		history: { q?: string };
+		activeFile: { path: string } | null;
+		activeHash: string | null;
+		activeBranchKey: string | null;
+		reveal?: () => void;
+		onSelectCommit: (hash: string) => void;
+	}) => (
+		<div>
+			<div>
+				{segment} list{history.q ? ` matching ${history.q}` : ""}, lit{" "}
+				{[activeFile?.path, activeHash, activeBranchKey]
+					.filter(Boolean)
+					.join(" ") || "none"}
+			</div>
+			<button type="button" onClick={() => onSelectCommit("abc1234")}>
+				open commit
+			</button>
+			{reveal && (
+				<button type="button" onClick={reveal}>
+					reveal lit row
+				</button>
+			)}
+		</div>
+	),
+}));
+
+function makeNavigation(): GitNavigation {
+	return {
+		onSelectSegment: vi.fn(),
+		onSelectFile: vi.fn(),
+		onCloseFile: vi.fn(),
+		onSelectCommit: vi.fn(),
+		onSelectBranch: vi.fn(),
+		onRepointBranch: vi.fn(),
+	};
+}
+
 function renderTab(activeSegment: GitSegment | null = null) {
-	const onOpenSegment = vi.fn();
+	const navigation = makeNavigation();
 	render(
 		<QueryClientProvider client={new QueryClient()}>
-			<GitTab onOpenSegment={onOpenSegment} activeSegment={activeSegment} />
+			<GitTab
+				isExpanded={false}
+				isOpen
+				layer={activeSegment && { type: "git", segment: activeSegment }}
+				navigation={navigation}
+			/>
 		</QueryClientProvider>,
 	);
-	return { onOpenSegment };
+	return { onOpenSegment: navigation.onSelectSegment };
+}
+
+function renderExpanded(layer: GitLayer | null, { isOpen = true } = {}) {
+	const navigation = makeNavigation();
+	const onListShownChange = vi.fn();
+	const client = new QueryClient();
+	const tab = (layer: GitLayer | null, isOpen: boolean) => (
+		<QueryClientProvider client={client}>
+			<GitTab
+				isExpanded
+				isOpen={isOpen}
+				layer={layer}
+				navigation={navigation}
+				onListShownChange={onListShownChange}
+			/>
+		</QueryClientProvider>
+	);
+	const { rerender } = render(tab(layer, isOpen));
+	return {
+		navigation,
+		onListShownChange,
+		route: (next: GitLayer | null) => act(() => rerender(tab(next, isOpen))),
+		collapse: () => act(() => rerender(tab(layer, false))),
+		setOpen: (next: GitLayer | null, open: boolean) =>
+			act(() => rerender(tab(next, open))),
+	};
 }
 
 beforeEach(() => {
@@ -197,5 +301,148 @@ describe("GitTab overview during an operation", () => {
 		expect(screen.getByText("feature/git-ui")).toBeInTheDocument();
 		expect(screen.getByText("· rebasing")).toBeInTheDocument();
 		expect(screen.queryByText(/behind/i)).toBeNull();
+	});
+});
+
+describe("GitTab at expanded", () => {
+	// The tab is the workspace's list, its writes included; the doors and the
+	// read-only overview would only repeat the bar over it.
+	it("is the workspace's list, with the bar and the whole banner over it", () => {
+		renderExpanded(null);
+		expect(screen.getByText("branch bar")).toBeInTheDocument();
+		expect(screen.getByText("whole banner")).toBeInTheDocument();
+		expect(screen.getByText("changes list, lit none")).toBeInTheDocument();
+		expect(
+			screen.queryByRole("button", { name: "Changes, 5 changed files" }),
+		).toBeNull();
+	});
+
+	it("stands at the route's list and lights what the main area has open", () => {
+		const { route } = renderExpanded({
+			type: "diff",
+			path: "src/a.ts",
+			staged: false,
+		});
+		expect(screen.getByText("changes list, lit src/a.ts")).toBeInTheDocument();
+
+		route({ type: "commit-file", hash: "abc1234", path: "src/a.ts" });
+		expect(screen.getByText("history list, lit abc1234")).toBeInTheDocument();
+
+		route({
+			type: "commit",
+			hash: "abc1234",
+			branch: { ref: "topic", remote: false },
+		});
+		expect(
+			screen.getByText("branches list, lit abc1234 local:topic"),
+		).toBeInTheDocument();
+	});
+
+	// A session or a file opened from elsewhere is not a reason to lose the
+	// reader's place in the list beside it.
+	it("stays at the list it was left at once the route names no Git layer", () => {
+		const { route } = renderExpanded({
+			type: "git",
+			segment: "history",
+			history: { scope: "current", q: "fix" },
+		});
+		route(null);
+		expect(
+			screen.getByText("history list matching fix, lit none"),
+		).toBeInTheDocument();
+	});
+
+	// The detail beside it pins its own failures whenever the list cannot.
+	it("says whether the list is on screen", () => {
+		const { onListShownChange, collapse } = renderExpanded(null);
+		expect(onListShownChange).toHaveBeenLastCalledWith(true);
+
+		collapse();
+		expect(onListShownChange).toHaveBeenLastCalledWith(false);
+	});
+
+	it("opens a commit carrying the list it was picked from", async () => {
+		const user = userEvent.setup();
+		const { navigation, route } = renderExpanded({
+			type: "git",
+			segment: "history",
+			history: { scope: "current", q: "fix" },
+		});
+		route(null);
+
+		await user.click(screen.getByRole("button", { name: "open commit" }));
+		expect(navigation.onSelectCommit).toHaveBeenCalledWith("abc1234", {
+			history: { scope: "current", q: "fix" },
+		});
+	});
+
+	describe("bringing the lit row into view", () => {
+		const commit: GitLayer = { type: "commit", hash: "abc1234" };
+		const revealButton = () =>
+			screen.queryByRole("button", { name: "reveal lit row" });
+		/** What the list does once it has scrolled to the row. */
+		const revealed = () => act(() => revealButton()?.click());
+
+		it("asks for it when a link opens with a detail", () => {
+			renderExpanded(commit);
+			expect(revealButton()).toBeInTheDocument();
+
+			revealed();
+			expect(revealButton()).toBeNull();
+		});
+
+		it("asks for it when a detail is opened from outside the list", () => {
+			const { route } = renderExpanded(null);
+			expect(revealButton()).toBeNull();
+
+			route({ type: "diff", path: "src/a.ts", staged: false });
+			expect(revealButton()).toBeInTheDocument();
+			revealed();
+
+			// The detail stepping on to the next file moves the lit row.
+			route({ type: "diff", path: "src/b.ts", staged: false });
+			expect(revealButton()).toBeInTheDocument();
+		});
+
+		it("does not ask for a row the user just pressed in the list", async () => {
+			const user = userEvent.setup();
+			const { route } = renderExpanded({ type: "git", segment: "history" });
+
+			await user.click(screen.getByRole("button", { name: "open commit" }));
+			route(commit);
+			expect(revealButton()).toBeNull();
+		});
+
+		it("drops a request still waiting once the user reaches for the list", () => {
+			renderExpanded(commit);
+			act(() => {
+				screen
+					.getByText(/history list/)
+					.dispatchEvent(new WheelEvent("wheel", { bubbles: true }));
+			});
+			expect(revealButton()).toBeNull();
+		});
+
+		// Hidden, the list loses its scroll position; it asks once it can act.
+		it("holds the request while the list is off screen, and asks again when it comes back", () => {
+			const { setOpen } = renderExpanded(null, { isOpen: false });
+			setOpen(commit, false);
+			expect(revealButton()).toBeNull();
+
+			setOpen(commit, true);
+			expect(revealButton()).toBeInTheDocument();
+			revealed();
+
+			setOpen(commit, false);
+			setOpen(commit, true);
+			expect(revealButton()).toBeInTheDocument();
+		});
+
+		it("asks for nothing while no row is lit", () => {
+			const { setOpen } = renderExpanded(null);
+			setOpen(null, false);
+			setOpen(null, true);
+			expect(revealButton()).toBeNull();
+		});
 	});
 });

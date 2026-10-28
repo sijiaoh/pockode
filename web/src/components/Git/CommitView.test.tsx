@@ -101,7 +101,7 @@ describe("CommitView", () => {
 	// heading does not say it again a line above.
 	it("shows the subject once, in the body with the rest of the message", () => {
 		commitQuery = loaded({ body: "Lines carry across pages." });
-		render(<CommitView hash="abc1234def" />);
+		render(<CommitView hash="abc1234def" onBack={vi.fn()} />);
 
 		expect(screen.getAllByText("Fix the header")).toHaveLength(1);
 		expect(heading()).not.toHaveTextContent("Fix the header");
@@ -112,7 +112,7 @@ describe("CommitView", () => {
 	// copy; nothing else repeats it.
 	it("shows the hash only in the heading and in full in the body", () => {
 		commitQuery = loaded();
-		render(<CommitView hash="abc1234def" />);
+		render(<CommitView hash="abc1234def" onBack={vi.fn()} />);
 
 		expect(screen.getAllByText(/abc1234/)).toHaveLength(2);
 		expect(screen.getByText("abc1234def")).toBeInTheDocument();
@@ -128,7 +128,7 @@ describe("CommitView", () => {
 				{ name: "v1.2", type: "tag" },
 			],
 		});
-		render(<CommitView hash="abc1234def" />);
+		render(<CommitView hash="abc1234def" onBack={vi.fn()} />);
 
 		// No `+N` here: the page has room to say them all.
 		for (const name of ["main", "topic-a", "topic-b", "v1.2"]) {
@@ -156,7 +156,7 @@ describe("CommitView", () => {
 			hash: "1111111aaa",
 			subject: "The parent",
 		});
-		render(<CommitView hash="abc1234def" />);
+		render(<CommitView hash="abc1234def" onBack={vi.fn()} />);
 
 		await user.click(screen.getByRole("button", { name: /The parent/ }));
 
@@ -214,7 +214,7 @@ describe("CommitView", () => {
 			hash: "1111111aaa",
 			subject: "Main's line",
 		});
-		render(<CommitView hash="abc1234def" />);
+		render(<CommitView hash="abc1234def" onBack={vi.fn()} />);
 
 		expect(
 			screen.getByRole("button", { name: "First parent: 1111111 Main's line" }),
@@ -230,7 +230,7 @@ describe("CommitView", () => {
 
 	it("does not number a single parent, nor compare its files", () => {
 		commitQuery = loaded({ files: [{ path: "a.ts", status: "M" }] });
-		render(<CommitView hash="abc1234def" />);
+		render(<CommitView hash="abc1234def" onBack={vi.fn()} />);
 
 		expect(screen.queryByText(/vs parent/)).not.toBeInTheDocument();
 		expect(
@@ -240,7 +240,7 @@ describe("CommitView", () => {
 
 	it("says a root commit has no parents", () => {
 		commitQuery = loaded({ parents: [] });
-		render(<CommitView hash="abc1234def" />);
+		render(<CommitView hash="abc1234def" onBack={vi.fn()} />);
 
 		expect(
 			screen.getByText("No parents — this is the first commit."),
@@ -252,7 +252,7 @@ describe("CommitView", () => {
 	it("opens the commit's menu from the heading", async () => {
 		const user = userEvent.setup();
 		commitQuery = loaded();
-		render(<CommitView hash="abc1234def" />);
+		render(<CommitView hash="abc1234def" onBack={vi.fn()} />);
 
 		const menu = screen.getByRole("button", {
 			name: "Actions for commit abc1234",
@@ -268,7 +268,7 @@ describe("CommitView", () => {
 
 	// There is nothing to act on until the commit has been read.
 	it("offers no menu before the commit is read", () => {
-		render(<CommitView hash="abc1234def" />);
+		render(<CommitView hash="abc1234def" onBack={vi.fn()} />);
 
 		expect(
 			screen.queryByRole("button", { name: /^Actions for commit/ }),

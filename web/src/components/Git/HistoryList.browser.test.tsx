@@ -1,5 +1,5 @@
 import { render, screen } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { page } from "vitest/browser";
 import type { HistoryRow } from "../../hooks/useHistoryGraph";
 import {
@@ -233,5 +233,59 @@ describe("HistoryList row width", () => {
 			rect(tip.author as Element).left,
 		);
 		expect(rect(tip.hash as Element).right).toBeLessThanOrEqual(tip.menu.left);
+	});
+});
+
+/** `count` commits, each the parent of the one above it. */
+function linearHistory(count: number): HistoryRow[] {
+	const hash = (i: number) => i.toString(16).padStart(40, "0");
+	const commits: GitCommit[] = Array.from({ length: count }, (_, i) => ({
+		hash: hash(i),
+		parents: i === count - 1 ? [] : [hash(i + 1)],
+		subject: `Commit ${i}`,
+		author: "sijiaoh",
+		date: DATE,
+	}));
+	const { rows } = layoutHistoryPage(
+		commits,
+		createHistoryGraphState({ scope: "current", defaultLine: undefined }),
+		undefined,
+	);
+	return commits.map((commit, i) => ({ commit, graph: rows[i] }));
+}
+
+describe("HistoryList bringing the lit row into view", () => {
+	// Far enough down that the virtual list has not mounted the row: it is
+	// found by its offset, not its element.
+	it("scrolls to a lit commit it had not mounted, and reports it", async () => {
+		const rows = linearHistory(200);
+		const target = rows[150].commit;
+		const reveal = vi.fn();
+		render(
+			<div className="flex flex-col" style={{ width: 600, height: 520 }}>
+				<HistoryList
+					rows={rows}
+					footer={{ kind: "end", text: "Beginning of history" }}
+					onLoadMore={() => {}}
+					onRetry={() => {}}
+					activeHash={target.hash}
+					reveal={reveal}
+					onSelectCommit={() => {}}
+					onOpenMenu={() => {}}
+				/>
+			</div>,
+		);
+
+		expect(reveal).toHaveBeenCalledTimes(1);
+		const row = await vi.waitFor(() => {
+			const lit = document.querySelector<HTMLElement>('[aria-current="true"]');
+			if (!lit) throw new Error("lit row not mounted");
+			return lit;
+		});
+		const scroller = row.closest(".overflow-y-auto") as HTMLElement;
+		const view = scroller.getBoundingClientRect();
+		const box = row.getBoundingClientRect();
+		expect(box.top).toBeGreaterThanOrEqual(view.top);
+		expect(box.bottom).toBeLessThanOrEqual(view.bottom);
 	});
 });

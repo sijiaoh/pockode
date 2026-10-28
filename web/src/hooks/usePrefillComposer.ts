@@ -1,3 +1,4 @@
+import { useIsExpanded } from "@pockode/shared";
 import { useNavigate, useRouter } from "@tanstack/react-router";
 import { useCallback, useRef, useState } from "react";
 import {
@@ -13,7 +14,7 @@ import {
 } from "../lib/sessionDetailStore";
 import { useWorktreeStore } from "../lib/worktreeStore";
 import { isWorktreeSwitchInFlight } from "../lib/wsStore";
-import { overlayKeepsComposer } from "../types/overlay";
+import { mainAreaOverlay, overlayKeepsComposer } from "../types/overlay";
 import { appendToDraft, insertIntoDraft } from "../utils/draftText";
 import type { GitFailure } from "../utils/gitErrors";
 import { useRouteState } from "./useRouteState";
@@ -63,7 +64,9 @@ export interface PrefillComposer {
 export function usePrefillComposer(): PrefillComposer {
 	const navigate = useNavigate();
 	const router = useRouter();
-	const { sessionId, worktree, overlay } = useRouteState();
+	const { sessionId, worktree, overlay: routeOverlay } = useRouteState();
+	// A Git list at `expanded` is in the sidebar, beside the chat's composer.
+	const overlay = mainAreaOverlay(routeOverlay, useIsExpanded());
 	const [isPending, setIsPending] = useState(false);
 	const [error, setError] = useState<GitFailure | null>(null);
 

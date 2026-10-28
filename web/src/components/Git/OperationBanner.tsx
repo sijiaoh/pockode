@@ -1,4 +1,4 @@
-import { ConfirmDialog, useIsExpanded } from "@pockode/shared";
+import { ConfirmDialog } from "@pockode/shared";
 import { useQueryClient } from "@tanstack/react-query";
 import {
 	ChevronDown,
@@ -48,8 +48,10 @@ const COLLAPSED_FILE_ROWS = 3;
 
 interface Props {
 	/**
-	 * A detail layer below `expanded`: one line, no actions — they are one Back
-	 * away, and the diff needs the room.
+	 * Over a detail: one line, no actions — they are over the list, one Back
+	 * away or in the sidebar beside it, and the diff needs the room. The whole
+	 * banner is only ever over a list, and is laid out for the narrowest one:
+	 * the page below `expanded`, the sidebar at it.
 	 */
 	compact: boolean;
 	/** Opens a conflicted file's review layer. */
@@ -162,7 +164,6 @@ function FullBanner({
 	switching,
 	onSelectFile,
 }: FullBannerProps) {
-	const isExpanded = useIsExpanded();
 	const queryClient = useQueryClient();
 	const abortRequest = useWSStore((s) => s.actions.abort);
 	const run = useAbortRun(worktree);
@@ -203,9 +204,7 @@ function FullBanner({
 				type="button"
 				onClick={resolve}
 				disabled={handoff.isPending || isAborting || switching}
-				className={`flex min-h-[44px] items-center justify-center gap-2 rounded-lg bg-th-accent px-4 py-2 text-sm font-medium text-th-accent-text transition-colors hover:bg-th-accent-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 ${
-					isExpanded ? "" : "flex-1"
-				}`}
+				className="flex min-h-[44px] flex-1 items-center justify-center gap-2 rounded-lg bg-th-accent px-4 py-2 text-sm font-medium text-th-accent-text transition-colors hover:bg-th-accent-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
 			>
 				{handoff.isPending ? (
 					<Spinner variant="current" size="h-4 w-4" srText={null} />
@@ -289,20 +288,17 @@ function FullBanner({
 						/>
 					)}
 				</button>
-				{isExpanded && actions}
 			</div>
 
 			{!collapsed && (
 				<div className="space-y-2 px-3 pb-2 pl-9">
-					<ContextLines description={description} joined={isExpanded} />
+					<ContextLines description={description} />
 					{files.length > 0 ? (
 						<div>
 							<ul
-								className={`${
-									isExpanded
-										? "grid grid-cols-[repeat(auto-fill,minmax(260px,1fr))] gap-x-2"
-										: "rounded-lg border border-th-border"
-								} ${showAllFiles ? "max-h-[242px] overflow-y-auto" : ""}`}
+								className={`rounded-lg border border-th-border ${
+									showAllFiles ? "max-h-[242px] overflow-y-auto" : ""
+								}`}
 							>
 								{visibleFiles.map((path) => (
 									<li key={path}>
@@ -333,7 +329,7 @@ function FullBanner({
 
 			{failures}
 
-			{!isExpanded && <div className="px-3 pt-1 pb-2">{actions}</div>}
+			<div className="px-3 pt-1 pb-2">{actions}</div>
 
 			{confirming && !switching && (
 				<ConfirmDialog
@@ -347,13 +343,7 @@ function FullBanner({
 	);
 }
 
-function ContextLines({
-	description,
-	joined,
-}: {
-	description: OperationDescription;
-	joined: boolean;
-}) {
+function ContextLines({ description }: { description: OperationDescription }) {
 	const { context, progress, commitLine } = description;
 	if (!context && !progress && !commitLine) return null;
 
@@ -385,13 +375,7 @@ function ContextLines({
 		</span>
 	);
 
-	return joined ? (
-		<div className="flex min-w-0 gap-2 text-xs text-th-text-muted">
-			{contextLine}
-			{contextLine && commit && <span aria-hidden="true">·</span>}
-			{commit}
-		</div>
-	) : (
+	return (
 		<div className="space-y-0.5 text-xs text-th-text-muted">
 			{contextLine && <div className="flex min-w-0">{contextLine}</div>}
 			{commit && <div className="flex min-w-0">{commit}</div>}

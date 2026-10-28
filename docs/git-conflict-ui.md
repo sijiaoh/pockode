@@ -36,9 +36,11 @@ Below, *incoming* is `commit.ref` or else `commit`'s short hash, and *onto* like
 
 ## The banner
 
-Fixed, across the full width of the workspace, directly under the top bar's own error banners and above the segmented control — on every list layer, at every segment. It is not an error banner: no `✕`, no `role="alert"`; it is a `role="region"` labelled by its title, and it is there for as long as the state is. Its appearance is not announced (as with the change count, an agent working the repository would make a screen reader narrate it).
+Fixed, across the full width of the list — the page below `expanded`, the sidebar's Git tab at it — directly under the top bar's own error banners and above the segmented control, at every segment. It is not an error banner: no `✕`, no `role="alert"`; it is a `role="region"` labelled by its title, and it is there for as long as the state is. Its appearance is not announced (as with the change count, an agent working the repository would make a screen reader narrate it).
 
 ### Below `expanded`
+
+The page's layout; at `expanded` the same banner is the sidebar's ([below](#at-expanded)).
 
 ```
 ┌──────────────────────────────────┐
@@ -66,7 +68,7 @@ Fixed, across the full width of the workspace, directly under the top bar's own 
 ```
 
 - **Surface.** `bg-th-bg-secondary` with a 3px `th-warning` left rule; the `TriangleAlert` glyph in `text-th-warning`, the text in the ordinary tokens (warning hue on text fails AA at `text-xs` in the light themes — the split [git-ui.md](git-ui.md#the-title-length-hint) already makes).
-- **Header row.** Glyph, title (`text-sm font-medium`, the row's one `flex-1 min-w-0`, truncating), and a `ChevronUp`/`ChevronDown` L5 toggle, `aria-expanded`, `Hide details` / `Show details`. The glyph, title and chevron are one button, the toggle; at `expanded`, where the actions join this row, they are siblings of that button, never inside it.
+- **Header row.** Glyph, title (`text-sm font-medium`, the row's one `flex-1 min-w-0`, truncating), and a `ChevronUp`/`ChevronDown` L5 toggle, `aria-expanded`, `Hide details` / `Show details`. The glyph, title and chevron are one button, the toggle.
 - **Expanded by default.** While an operation is in progress the workspace's ordinary work is paused, so this is the most important thing on the screen and earns the space. Collapsing keeps the header row and the actions; the choice is remembered in memory per worktree **and per operation** (its kind and `commit` hash — for a rebase, its `branch` and `onto`, since its `commit` changes at every step), so a new operation opens expanded again. Not persisted: it is a reading state of this visit.
 - **Conflicted files.** Each row: the `TriangleAlert` glyph, the file name (tail-truncated, extension kept, as the Changes row does), the directory muted and head-truncated, a `ChevronRight`. Up to **three** rows; past that a text button `Show all n files` expands the list in place — one way, for as long as the operation lasts — into a box capped at five and a half rows that scrolls on its own (the half row says there is more). Order is the Changes list's flat order (`compareChangePaths`), whatever view the list is in — the banner is not a tree. Tapping a row opens that file's review layer, which draws the conflict ([Viewing a conflicted file](#viewing-a-conflicted-file)); its name is `Review <path>, conflicted`, as the Changes row's. On the Changes segment the press is a list row's press — pushed with the list's `REVIEW_FROM_LIST_STATE` mark, since the list is behind it. From History or Branches it is the chat review row's press (`handleOpenReview`'s shape): pushed without the mark, so leaving the review replaces it with the Changes list rather than going back to a segment the review did not come from.
 - **The pause sentence** — `Commits and branch switches are paused until the <kind> is finished or aborted.` — says once, where the state is described, why several controls further down have stopped. It is part of the details: collapsing hides it, and the controls that stop each still carry a reason of their own.
@@ -105,30 +107,15 @@ The pause sentence and `Abort` are unchanged: the repository is still mid-operat
 
 ### At `expanded`
 
-```
-┌───────────────────────────────────────────────────────────────────────────────┐
-│ ⑂ feature/git-ui · rebasing                                                   │
-├───────────────────────────────────────────────────────────────────────────────┤
-│ ⚠ Rebase stopped on conflicts       [ ✨ Resolve with agent ] [ Abort ]    ⌃  │
-│   Rebasing feature/git-ui onto main · 3 of 7  ·  At 9692fc9 Add branch bar to …│
-│   ⚠ GitTab.tsx  web/src/components/Git  ›   ⚠ git.md  docs  ›                 │
-│   ⚠ old.ts  server                      ›   Show all 5 files                  │
-│   Commits and branch switches are paused until the rebase is finished…        │
-├────────────────────────┬──────────────────────────────────────────────────────┤
-│ [Changes] History Bra… │ (detail column)                                      │
-```
-
-The same component and content; only the arrangement follows the tier (`useIsExpanded`), as the rest of the workspace does. The actions move up into the header row, `Resolve with agent` at its natural width; the context and commit lines join into one; the file rows sit in an auto-fill grid (`minmax(260px, 1fr)`), and `Show all` expands the grid in place under the same cap. Banner spans both columns, like the top bar's banners.
+The same banner, laid out the same way, at the top of the sidebar's Git tab: the list is the sidebar's there ([git-ui.md](git-ui.md#at-expanded-the-sidebars-list-and-the-detail)), and the banner goes with it, at the sidebar's width. It used to have a wide arrangement of its own — the actions in the header row, the context and commit lines joined, the file rows in an auto-fill grid — for when it spanned a list column and a detail column in the main area; with the list in a 280–500px column there is nothing left for it to use.
 
 ### On detail layers
 
-A layer below `expanded` has no room for the whole banner over a diff, and the actions are not lost by leaving them off: they are one `←` away on the list, and the conflict view carries the handoff in its own action bar (`Ask agent`). So at the top of a layer, under the app header — a layer has no top bar ([git-ui.md](git-ui.md#the-top-bar)) — it draws one non-interactive line, `min-h-[36px]`, on the banner's surface — the title, which truncates, and the progress, which does not:
+A detail has no room for the whole banner over a diff, and the actions are not lost by leaving them off: they are on the list — one `←` away below `expanded`, in the sidebar beside it at `expanded` — and the conflict view carries the handoff in its own action bar (`Ask agent`). So at the top of a layer, under the app header — a layer has no top bar ([git-ui.md](git-ui.md#the-top-bar)) — it draws, at every width, one non-interactive line, `min-h-[36px]`, on the banner's surface — the title, which truncates, and the progress, which does not:
 
 ```
 │ ⚠ Rebase stopped on conflicts · 3 of 7 │
 ```
-
-At `expanded` the full banner is above both columns already, so there is no second form.
 
 ### The top bar during a rebase
 
@@ -136,7 +123,7 @@ A rebase detaches HEAD, so today's top bar would read `detached @ 4be1f20` — t
 
 ## Resolve with agent
 
-The [prefill handoff](agent-handoff-ui.md#1-prefill-handoff), as it is: `usePrefillComposer().prefill(text)` from the banner (which outlives the press), the current session or a new one, appended to the draft, never sent. Pending: the button's spinner, disabled. A failed session create: an `ErrorBanner` inside the operation banner, under its details (above the actions below `expanded`; at `expanded` the actions are in the header row) — the handoff's rule of reporting where the action started.
+The [prefill handoff](agent-handoff-ui.md#1-prefill-handoff), as it is: `usePrefillComposer().prefill(text)` from the banner (which outlives the press), the current session or a new one, appended to the draft, never sent. Pending: the button's spinner, disabled. A failed session create: an `ErrorBanner` inside the operation banner, under its details and above the actions — the handoff's rule of reporting where the action started.
 
 **The text is built at the press**, from the state as it is then (`describeOperationPrompt` in `lib/gitOperation.ts`, pure and tested), never from what the banner rendered a moment earlier. Prose only, paths as they are relative to the repository root:
 
@@ -191,7 +178,7 @@ The repository is in the middle of a merge of main into feature/git-ui. There ar
 
 ## Viewing a conflicted file
 
-A conflicted file's diff route opens the **conflict view** in the review layer — the same layer, the same toolbar, the same `‹ ›` and review order, at both widths (the right column at `expanded`). Opened from a banner row, from the file's row in the Changes list, by `‹ ›`, or by a deep link: one place, so there is no second rule to learn. The diff route has nothing useful to draw for it — the index holds stages rather than a version and `git diff` answers in a combined form the diff component cannot read — so the conflict view replaces it rather than sitting beside it; no diff is requested or watched for a conflicted file.
+A conflicted file's diff route opens the **conflict view** in the review layer — the same layer, the same toolbar, the same `‹ ›` and review order, at both widths (the main area at `expanded`). Opened from a banner row, from the file's row in the Changes list, by `‹ ›`, or by a deep link: one place, so there is no second rule to learn. The diff route has nothing useful to draw for it — the index holds stages rather than a version and `git diff` answers in a combined form the diff component cannot read — so the conflict view replaces it rather than sitting beside it; no diff is requested or watched for a conflicted file.
 
 ```
 ┌──────────────────────────────────┐
@@ -302,13 +289,13 @@ The chat's review row is unchanged; a conflict-aware version of it is left for l
 
 ## The sidebar's Git tab
 
-The overview is the workspace's doorplate ([sidebar-ui.md](sidebar-ui.md#the-git-tab)); a repository stuck mid-rebase is exactly what it should say. While an operation is in progress, the overview's second line becomes the banner's title — `⚠ Rebase stopped on conflicts`, glyph in `th-warning`, text in the line's usual token — in place of the sync line, and its branch name follows the top bar's (`feature/git-ui · rebasing`). Still read-only; the `Changes` entry is where to go. The tab badge is unchanged: conflicted files are already in its count.
+At `expanded` the tab holds the list, and with it the banner itself ([above](#at-expanded)). Below it the tab is the workspace's doorplate ([sidebar-ui.md](sidebar-ui.md#the-git-tab)), and a repository stuck mid-rebase is exactly what its overview should say. While an operation is in progress, the overview's second line becomes the banner's title — `⚠ Rebase stopped on conflicts`, glyph in `th-warning`, text in the line's usual token — in place of the sync line, and its branch name follows the top bar's (`feature/git-ui · rebasing`). Still read-only; the `Changes` entry is where to go. The tab badge is unchanged: conflicted files are already in its count.
 
 ## Where it lives
 
 | Piece | Place | Note |
 |---|---|---|
-| The banner | `Git/OperationBanner.tsx`, rendered by `GitWorkspace` above the segments and as its one-line form on layers | Always mounted, and owns the handoff hook and the abort request, so their pending state and errors outlive the press and a rebase's next step |
+| The banner | `Git/OperationBanner.tsx`, rendered above the segments by `GitWorkspace` below `expanded` and by the sidebar's Git tab at it, and as its one-line form on layers at every width | Always mounted, and owns the handoff hook and the abort request, so their pending state and errors outlive the press and a rebase's next step |
 | Title, context, prompt text, abort copy, conflict regions, paused reasons | `lib/gitOperation.ts` — `describeOperation`, `describeOperationPrompt`, `describeAbort`, `describeAbortFailure`, `describeHeadKept`, `findConflictRegions`, `hasConflictMarkers`, `branchSwitchPausedReason`, `pullPausedReason`; the commit's reason is `commitPausedReason` in `types/git.ts`, beside `describeCommitAction` | Pure, so every sentence is testable without a screen |
 | The prompt at the press | `operationPromptAtPress` in `hooks/gitQueries.ts` | Reads the status cache at the press; the banner and the conflict view share it |
 | The conflict view | `Git/ConflictView.tsx` (`useConflictFile` reads the working tree), a branch of `DiffView` for a file whose record carries `conflict` | Same page per path, so a file the agent stages turns into its ordinary review in place |

@@ -26,20 +26,20 @@ import BranchName from "./BranchName";
 
 interface Props {
 	branch: BranchRef;
-	/**
-	 * Back to the Branches list. Absent where that list is on screen beside
-	 * it.
-	 */
-	onBack?: () => void;
+	/** Back to the Branches list. */
+	onBack: () => void;
+	/** See `DiffView`'s. */
+	backToChat?: boolean;
 	/** To the Branches list, from the notice of a branch that is gone. */
 	onLeave: () => void;
 	/**
-	 * Whether the branch failures are pinned here: below `expanded`, where
-	 * the list's pinned area is covered by this page
+	 * Whether the branch failures are pinned here: wherever the list, and the
+	 * bar over it, are not on screen — below `expanded`, where this page
+	 * covers them, and beside a sidebar collapsed or on another tab
 	 * (docs/git-branches-ui.md#the-pinned-area).
 	 */
 	holdsFailures: boolean;
-	/** The workspace's, so that it outlives this page. */
+	/** The app's, so that it outlives this page. */
 	mergeHandoff: BranchMergeHandoff;
 	/** This branch is now listed under another identity; open that one. */
 	onRepoint: (to: BranchRef) => void;
@@ -60,6 +60,7 @@ interface Props {
 function BranchDetail({
 	branch,
 	onBack,
+	backToChat = false,
 	onLeave,
 	holdsFailures,
 	mergeHandoff,
@@ -109,11 +110,9 @@ function BranchDetail({
 		onRepoint({ ref: localName, remote: false });
 	}, [localName, onRepoint]);
 
-	const back: PageBack | undefined = onBack && {
-		to: "parent",
-		label: "Back to branches",
-		onClick: onBack,
-	};
+	const back: PageBack = backToChat
+		? { to: "chat", onClick: onBack }
+		: { to: "parent", label: "Back to branches", onClick: onBack };
 	const pinned = holdsFailures && (
 		<div className="sticky top-0 z-10 bg-th-bg-primary">
 			<PinnedBranchFailures checkout={checkout} handoff={mergeHandoff} />

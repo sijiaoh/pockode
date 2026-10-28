@@ -1,14 +1,10 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { makeBranch } from "../../test/gitFixtures";
-import type { GitBranches, GitCommit, GitStatus } from "../../types/git";
-import GitWorkspace, { type GitLayer } from "./GitWorkspace";
+import type { GitLayer } from "../../types/overlay";
+import GitWorkspace from "./GitWorkspace";
 
 const layout = vi.hoisted(() => ({ expanded: false }));
-let status: GitStatus | undefined;
-let commits: GitCommit[] | undefined;
-let branches: Pick<GitBranches, "local" | "remote_only"> | undefined;
 
 vi.mock("@pockode/shared", async (importOriginal) => ({
 	...(await importOriginal<typeof import("@pockode/shared")>()),
@@ -17,19 +13,10 @@ vi.mock("@pockode/shared", async (importOriginal) => ({
 vi.mock("../../hooks/useOpenSessionUnread", () => ({
 	useOpenSessionUnread: () => false,
 }));
-vi.mock("../../hooks/useGitStatus", () => ({
-	useGitStatus: () => ({ data: status }),
-}));
 // Has tests of its own (hooks/useGitSync.test.tsx).
 vi.mock("../../hooks/useGitSync", async (importOriginal) => ({
 	...(await importOriginal<typeof import("../../hooks/useGitSync")>()),
 	useAutoFetch: () => {},
-}));
-vi.mock("../../hooks/useGitLog", () => ({
-	useGitLog: () => ({ data: commits && { pages: [{ commits, next: null }] } }),
-}));
-vi.mock("../../hooks/useGitBranches", () => ({
-	useGitBranches: () => ({ data: branches }),
 }));
 
 // What is under test is which layers are on screen and where their ways back
@@ -62,9 +49,9 @@ vi.mock("./HistorySection", () => ({
 		<div>history list, active {activeHash ?? "none"}</div>
 	),
 }));
-// Has the prefill handoff's own tests behind it; it needs a router here.
+// The app shell's; it has the prefill handoff's own tests behind it.
 vi.mock("../../hooks/useBranchMergeHandoff", () => ({
-	useBranchMergeHandoff: () => ({
+	useSharedMergeHandoff: () => ({
 		handingOff: null,
 		error: null,
 		dismissError: () => {},
@@ -98,13 +85,15 @@ vi.mock("./BranchDetail", async () => {
 	return {
 		default: ({
 			onBack,
+			backToChat,
 			holdsFailures,
 		}: {
-			onBack?: () => void;
+			onBack: () => void;
+			backToChat?: boolean;
 			holdsFailures: boolean;
 		}) => (
 			<>
-				<Page onBack={onBack} />
+				<Page onBack={onBack} backToChat={backToChat} />
 				{holdsFailures && <div>branch page holds failures</div>}
 			</>
 		),
@@ -113,7 +102,15 @@ vi.mock("./BranchDetail", async () => {
 const page = vi.hoisted(
 	() =>
 		(name: string) =>
-		({ onBack, actionsAt }: { onBack?: () => void; actionsAt?: string }) => (
+		({
+			onBack,
+			backToChat,
+			actionsAt,
+		}: {
+			onBack?: () => void;
+			backToChat?: boolean;
+			actionsAt?: string;
+		}) => (
 			<div>
 				{name} page
 				{actionsAt && (
@@ -123,7 +120,7 @@ const page = vi.hoisted(
 				)}
 				{onBack && (
 					<button type="button" onClick={onBack}>
-						{name} back
+						{name} back{backToChat && " to chat"}
 					</button>
 				)}
 			</div>
@@ -134,20 +131,20 @@ vi.mock("./DiffView", async () => {
 	const { useEffect } = await import("react");
 	const Page = page("diff");
 	return {
-		// The review leaves by itself, replacing; all it is told is whether to
-		// offer the way back.
+		// The review leaves by itself, replacing; all it is told is how to draw
+		// its way back.
 		default: ({
-			showBack,
+			backToChat,
 			actionsAt,
 		}: {
-			showBack?: boolean;
+			backToChat?: boolean;
 			actionsAt?: string;
 		}) => {
 			useEffect(() => {
 				diffMounts.count++;
 			}, []);
 			return (
-				<Page onBack={showBack ? () => {} : undefined} actionsAt={actionsAt} />
+				<Page onBack={() => {}} backToChat={backToChat} actionsAt={actionsAt} />
 			);
 		},
 	};
@@ -169,7 +166,10 @@ vi.mock("./CommitView", () => ({ default: page("commit") }));
 vi.mock("./CommitDiffView", () => ({ default: page("commit diff") }));
 vi.mock("./CommitFileView", () => ({ default: page("commit file") }));
 
-function renderWorkspace(layer: GitLayer, { keyboardUp = false } = {}) {
+function renderWorkspace(
+	layer: GitLayer,
+	{ keyboardUp = false, listBeside = false } = {},
+) {
 	const props = {
 		onBack: vi.fn(),
 		onSelectSegment: vi.fn(),
@@ -180,7 +180,12 @@ function renderWorkspace(layer: GitLayer, { keyboardUp = false } = {}) {
 		onCloseFile: vi.fn(),
 	};
 	const view = render(
-		<GitWorkspace layer={layer} keyboardUp={keyboardUp} {...props} />,
+		<GitWorkspace
+			layer={layer}
+			keyboardUp={keyboardUp}
+			listBeside={listBeside}
+			{...props}
+		/>,
 	);
 	return { ...props, ...view };
 }
@@ -191,20 +196,11 @@ const segmentControl = () =>
 const topBar = () =>
 	screen.queryByRole("button", { name: "Branches, currently on main" });
 
-const resizeHandle = () =>
-	screen.queryByRole("separator", { name: "Resize list" });
-
 const DIFF: GitLayer = { type: "diff", path: "src/a.ts", staged: false };
 const TOPIC: GitLayer = { type: "branch", ref: "topic", remote: false };
 
 beforeEach(() => {
 	layout.expanded = false;
-	status = { staged: [], unstaged: [{ path: "src/a.ts", status: "M" }] };
-	commits = [];
-	branches = {
-		local: [makeBranch("main", { current: true })],
-		remote_only: [],
-	};
 });
 
 describe("GitWorkspace below expanded", () => {
@@ -334,12 +330,6 @@ describe("GitWorkspace below expanded", () => {
 		);
 	});
 
-	it("has no list edge to drag", () => {
-		renderWorkspace({ type: "git", segment: "changes" });
-
-		expect(resizeHandle()).toBeNull();
-	});
-
 	// A layer is the page: no segment control, no list, and its way back is the
 	// list it was opened from rather than the chat.
 	it("shows a diff on its own, with a way back", () => {
@@ -422,46 +412,61 @@ describe("GitWorkspace at expanded", () => {
 		expect(screen.getByText("diff actions top")).toBeInTheDocument();
 	});
 
-	it("puts the list and the diff side by side, the diff needing no way back", () => {
+	// The list is the sidebar's Git tab: the main area is the detail alone,
+	// naming itself in the app header, and its way back lands on the list's
+	// URL, which is the chat here.
+	it("draws a detail alone, its way back leading to the chat", () => {
 		renderWorkspace(DIFF);
 
-		expect(screen.getByText("changes list, active src/a.ts")).toBeVisible();
 		expect(screen.getByText("diff page")).toBeVisible();
-		expect(segmentControl()).toBeInTheDocument();
-		// The app header names the workspace; it cannot name both columns.
-		expect(screen.getByRole("heading", { name: "Git" })).toBeInTheDocument();
-		expect(screen.queryByRole("button", { name: "diff back" })).toBeNull();
-		// Above both columns, so the layer needs no one-line form of its own.
+		expect(screen.queryByText(/changes list/)).toBeNull();
+		expect(segmentControl()).toBeNull();
+		expect(topBar()).toBeNull();
+		expect(screen.queryByRole("heading", { name: "Git" })).toBeNull();
 		expect(
-			screen.getByRole("button", { name: "full banner" }),
+			screen.getByRole("button", { name: "diff back to chat" }),
+		).toBeInTheDocument();
+		// The whole banner, and its actions, are the sidebar's.
+		expect(
+			screen.getByRole("button", { name: "one-line banner" }),
 		).toBeInTheDocument();
 	});
 
-	// The list beside it is the commit's; its row stays lit through the
-	// commit's own layers.
-	it("keeps the commit selected in History under a file of it", () => {
-		renderWorkspace({ type: "commit-diff", hash: "abc1234", path: "a.ts" });
+	it("goes back from a commit to the History list's URL", async () => {
+		const user = userEvent.setup();
+		const { onSelectSegment } = renderWorkspace({
+			type: "commit",
+			hash: "abc1234",
+		});
 
-		expect(screen.getByText("history list, active abc1234")).toBeVisible();
-		expect(screen.getByText("commit diff page")).toBeVisible();
-	});
-
-	// The list's pinned area is on screen: the failures stay with it.
-	it("lights the open branch's row beside its detail", () => {
-		renderWorkspace(TOPIC);
-
-		expect(screen.getByText(/branches list/)).toHaveTextContent(
-			"active local:topic",
+		await user.click(
+			screen.getByRole("button", { name: "commit back to chat" }),
 		);
-		expect(screen.getByText("branch page")).toBeVisible();
-		expect(screen.queryByRole("button", { name: "branch back" })).toBeNull();
-		expect(screen.queryByText("branch page holds failures")).toBeNull();
-		expect(screen.queryByText("top bar holds switch failures")).toBeNull();
+		expect(onSelectSegment).toHaveBeenCalledWith("history");
 	});
 
-	// The branch is not on screen beside it, so unlike a commit beside
-	// History it keeps a way back; the list beside it is the Branches list.
-	it("puts a commit opened from a branch beside the Branches list", async () => {
+	// The sidebar's list, and its pinned area, are on screen: the failures stay
+	// with them.
+	it("leaves a branch's failures to the sidebar's list beside it", async () => {
+		const user = userEvent.setup();
+		const { onSelectSegment } = renderWorkspace(TOPIC, { listBeside: true });
+
+		expect(screen.getByText("branch page")).toBeVisible();
+		expect(screen.queryByText("branch page holds failures")).toBeNull();
+		await user.click(
+			screen.getByRole("button", { name: "branch back to chat" }),
+		);
+		expect(onSelectSegment).toHaveBeenCalledWith("branches");
+	});
+
+	// A sidebar collapsed, or on another tab, shows nothing: a press in the
+	// detail would fail in silence.
+	it("holds a branch's failures while the sidebar's list is off the screen", () => {
+		renderWorkspace(TOPIC);
+		expect(screen.getByText("branch page holds failures")).toBeInTheDocument();
+	});
+
+	it("goes back from a commit opened from a branch to that branch", async () => {
 		const user = userEvent.setup();
 		const branch = { ref: "topic", remote: false };
 		const { onSelectBranch } = renderWorkspace({
@@ -470,123 +475,21 @@ describe("GitWorkspace at expanded", () => {
 			branch,
 		});
 
-		expect(screen.getByText(/branches list/)).toHaveTextContent(
-			"active local:topic",
-		);
-		expect(screen.queryByText("top bar holds switch failures")).toBeNull();
-		await user.click(screen.getByRole("button", { name: "commit back" }));
+		await user.click(screen.getByRole("button", { name: /commit back/ }));
 		expect(onSelectBranch).toHaveBeenCalledWith(branch);
 	});
 
-	it("keeps the branch lit under a file of a commit opened from it", () => {
-		renderWorkspace({
-			type: "commit-file",
-			hash: "abc1234",
-			path: "a.ts",
-			branch: { ref: "topic", remote: false },
-		});
-
-		expect(screen.getByText(/branches list/)).toHaveTextContent(
-			"active local:topic",
-		);
-		expect(screen.getByText("commit file page")).toBeVisible();
-	});
-
-	it.each([
-		["changes", "Select a file to see its diff"],
-		["history", "Select a commit to see what it changed"],
-		["branches", "Select a branch to see its commits"],
-	] as const)("says what to do in an empty %s column", (segment, text) => {
-		commits = [
-			{
-				hash: "abc1234",
-				parents: [],
-				subject: "s",
-				author: "a",
-				date: "2026-01-01",
-			},
-		];
-		renderWorkspace({ type: "git", segment });
-
-		expect(screen.getByText(text)).toBeInTheDocument();
-	});
-
-	it("says there is nothing to choose from when there is nothing", () => {
-		status = { staged: [], unstaged: [] };
-		const { unmount } = renderWorkspace({ type: "git", segment: "changes" });
-		expect(screen.getByText("No changes to review")).toBeInTheDocument();
-		unmount();
-
-		commits = [];
-		const history = renderWorkspace({ type: "git", segment: "history" });
-		expect(screen.getByText("No commits yet")).toBeInTheDocument();
-		history.unmount();
-
-		branches = { local: [], remote_only: [] };
-		renderWorkspace({ type: "git", segment: "branches" });
-		expect(screen.getByText("No branches yet")).toBeInTheDocument();
-	});
-
-	// Blank, not a prompt to choose: the list is still saying why it is empty.
-	it("leaves the column blank while the list has no answer", () => {
-		status = undefined;
-		const { unmount } = renderWorkspace({ type: "git", segment: "changes" });
-
-		expect(screen.queryByText(/Select a file/)).toBeNull();
-		expect(screen.queryByText(/No changes/)).toBeNull();
-		unmount();
-
-		branches = undefined;
-		renderWorkspace({ type: "git", segment: "branches" });
-		expect(screen.queryByText(/Select a branch/)).toBeNull();
-	});
-
-	// Rotating a tablet moves the diff's heading between the app header and its
-	// column; the diff itself — its scroll, its state — must not start over.
+	// Rotating a tablet takes the list away from under the diff; the diff
+	// itself — its scroll, its state — must not start over.
 	it("keeps the open diff mounted across a resize", () => {
 		layout.expanded = false;
 		diffMounts.count = 0;
-		const {
-			rerender,
-			onBack,
-			onSelectSegment,
-			onSelectFile,
-			onSelectCommit,
-			onSelectBranch,
-			onRepointBranch,
-			onCloseFile,
-		} = renderWorkspace(DIFF);
+		const { rerender, ...props } = renderWorkspace(DIFF);
 
 		layout.expanded = true;
-		rerender(
-			<GitWorkspace
-				layer={DIFF}
-				onBack={onBack}
-				onSelectSegment={onSelectSegment}
-				onSelectFile={onSelectFile}
-				onSelectCommit={onSelectCommit}
-				onSelectBranch={onSelectBranch}
-				onRepointBranch={onRepointBranch}
-				onCloseFile={onCloseFile}
-			/>,
-		);
+		rerender(<GitWorkspace layer={DIFF} {...props} />);
 
 		expect(screen.getByText("diff page")).toBeVisible();
 		expect(diffMounts.count).toBe(1);
-	});
-
-	// How wide it is drawn and how a drag moves it need layout:
-	// GitWorkspace.browser.test.tsx.
-	it("puts a resize handle on the list column's edge", () => {
-		renderWorkspace(DIFF);
-
-		const handle = resizeHandle();
-		expect(handle).toHaveAttribute("aria-orientation", "vertical");
-		const column = document.getElementById(
-			handle?.getAttribute("aria-controls") ?? "",
-		);
-		expect(column).toContainElement(
-			screen.getByText("changes list, active src/a.ts"),
-		);
 	});
 });

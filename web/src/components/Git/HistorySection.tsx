@@ -21,6 +21,8 @@ interface Props {
 	/** The range and filters the URL names. */
 	history: HistoryQuery;
 	activeHash: string | null;
+	/** Set while the lit row is wanted on screen; called once it is. */
+	reveal?: () => void;
 	onSelectCommit: (hash: string) => void;
 }
 
@@ -40,7 +42,12 @@ function noMatchText({ q, file }: HistoryQuery): string {
  * The Git workspace's History segment: the commit graph over the chosen
  * range, a page at a time (docs/git-history-ui.md).
  */
-function HistorySection({ history, activeHash, onSelectCommit }: Props) {
+function HistorySection({
+	history,
+	activeHash,
+	reveal,
+	onSelectCommit,
+}: Props) {
 	const navigate = useNavigate();
 	const { worktree, sessionId, overlay } = useRouteState();
 	const log = useGitLog(history);
@@ -195,6 +202,7 @@ function HistorySection({ history, activeHash, onSelectCommit }: Props) {
 						onLoadMore={loadMore}
 						onRetry={retry}
 						activeHash={activeHash}
+						reveal={reveal}
 						onSelectCommit={onSelectCommit}
 						onOpenMenu={openMenu}
 					/>

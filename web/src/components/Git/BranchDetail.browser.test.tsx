@@ -84,6 +84,7 @@ function Detail({ width = 360 }: { width?: number }) {
 		<div className="flex flex-col" style={{ width, height: 640 }}>
 			<BranchDetail
 				branch={{ ref: "topic", remote: false }}
+				onBack={() => {}}
 				onLeave={() => {}}
 				holdsFailures={true}
 				mergeHandoff={mergeHandoff}

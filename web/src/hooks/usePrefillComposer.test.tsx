@@ -22,6 +22,11 @@ vi.mock("@tanstack/react-router", () => ({
 	useNavigate: () => route.navigate,
 	useRouter: () => route.router,
 }));
+const layout = vi.hoisted(() => ({ expanded: false }));
+vi.mock("@pockode/shared", async (importOriginal) => ({
+	...(await importOriginal<typeof import("@pockode/shared")>()),
+	useIsExpanded: () => layout.expanded,
+}));
 vi.mock("./useRouteState", () => ({
 	useRouteState: () => ({
 		sessionId: route.sessionId,
@@ -52,6 +57,7 @@ describe("usePrefillComposer", () => {
 	beforeEach(() => {
 		route.sessionId = "s1";
 		route.overlay = { type: "git", segment: "changes" };
+		layout.expanded = false;
 		route.router.state.location.href = "/wt/git?session=s1";
 		switchInFlight.value = false;
 		useWorktreeStore.setState({ current: "wt" });
@@ -97,6 +103,18 @@ describe("usePrefillComposer", () => {
 		expect(route.navigate).not.toHaveBeenCalled();
 		expect(useInputStore.getState().inputs.s1).toBe("Explain this");
 		expect(useInputStore.getState().reveals.s1).toEqual({ landed: "ready" });
+	});
+
+	// At `expanded` a Git list is the sidebar's, and the main area beside it
+	// is the chat: its composer is on the page.
+	it("stays beside a Git list at expanded", async () => {
+		layout.expanded = true;
+		const { result } = renderHook(() => usePrefillComposer());
+
+		await act(() => result.current.prefill("Explain this"));
+
+		expect(route.navigate).not.toHaveBeenCalled();
+		expect(useInputStore.getState().inputs.s1).toBe("Explain this");
 	});
 
 	// The composer on the page is the route session's, not the new one's.

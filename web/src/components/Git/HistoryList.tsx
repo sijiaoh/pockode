@@ -16,6 +16,7 @@ import {
 } from "../../lib/commitHistory";
 import { Spinner } from "../ui";
 import CommitRow from "./CommitRow";
+import { scrollSpanIntoView } from "./revealRow";
 
 /** What the last row of the list says (docs/git-history-ui.md#paging-and-states). */
 export type HistoryFooter =
@@ -30,6 +31,11 @@ interface Props {
 	onLoadMore: () => void;
 	onRetry: () => void;
 	activeHash: string | null;
+	/**
+	 * Set while the lit row is wanted on screen; called once it is — which
+	 * waits for the page that lists it.
+	 */
+	reveal?: () => void;
 	onSelectCommit: (hash: string) => void;
 	onOpenMenu: (row: HistoryRow) => void;
 	/**
@@ -57,6 +63,7 @@ function HistoryList({
 	onLoadMore,
 	onRetry,
 	activeHash,
+	reveal,
 	onSelectCommit,
 	onOpenMenu,
 	scroller,
@@ -115,6 +122,18 @@ function HistoryList({
 	}, [loadMoreAt, footer.kind, onLoadMore]);
 
 	useKeepTopRow(scrollerRef, rows, margin);
+
+	// From the row's offset rather than its element: it may be one the virtual
+	// list has not mounted.
+	useLayoutEffect(() => {
+		const el = scrollerRef.current;
+		if (!reveal || !el) return;
+		const index = rows.findIndex((r) => r.commit.hash === activeHash);
+		if (index === -1) return;
+		const top = margin + index * ROW_HEIGHT;
+		scrollSpanIntoView(el, top, top + ROW_HEIGHT);
+		reveal();
+	});
 
 	const lastGraph = rows.at(-1)?.graph;
 	return (

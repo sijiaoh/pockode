@@ -88,10 +88,10 @@ interface Props {
 	/** The side the route asks for; the file's other side stands in if it has only that. */
 	staged: boolean;
 	/**
-	 * Whether the header offers the way back to the list. Not where that list
-	 * is on screen beside it.
+	 * Whether the way back is drawn as the way to the chat: at `expanded`,
+	 * where the list is in the sidebar and its URL shows the chat.
 	 */
-	showBack?: boolean;
+	backToChat?: boolean;
 	/** Where the file's actions are drawn; see `DetailActionsPlacement`. */
 	actionsAt?: DetailActionsPlacement;
 }
@@ -148,7 +148,12 @@ const toolbarButtonBase =
  * the file's other side — replaces the route, carrying its history state, and
  * leaving it is `useLeaveReview`, so the list is one step behind it.
  */
-function DiffView({ path, staged, showBack, actionsAt = "bottom" }: Props) {
+function DiffView({
+	path,
+	staged,
+	backToChat = false,
+	actionsAt = "bottom",
+}: Props) {
 	const navigate = useNavigate();
 	const router = useRouter();
 	const { worktree, sessionId } = useRouteState();
@@ -254,9 +259,9 @@ function DiffView({ path, staged, showBack, actionsAt = "bottom" }: Props) {
 		leaving.current = true;
 		leaveReview(worktree, sessionId);
 	};
-	const back: PageBack | undefined = showBack
-		? { to: "parent", label: "Back to changes", onClick: leave }
-		: undefined;
+	const back: PageBack = backToChat
+		? { to: "chat", onClick: leave }
+		: { to: "parent", label: "Back to changes", onClick: leave };
 
 	// The route follows to the side that still exists — after Stage, Unstage or
 	// a change from elsewhere — so that it keeps naming what is on screen.
