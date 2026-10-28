@@ -495,29 +495,48 @@ sidebar's at `expanded`, the Git page's below it.
 
 **Why the sidebar may write at `expanded`.** The rule used to be that nothing in
 the sidebar writes. Its reasons were the drawer's: a phone's drawer is too
-short to hold a list under the tab bar and the worktree switcher, and the rows
-had not been built for its width. Neither holds for the column at `expanded`,
-which is the window's height and whose width is the 280px the rows are now
-built for. What the rule was protecting is kept as its own statement: a write
-is on screen in one place. On a desktop that place is the sidebar, and the main
-area beside it shows only details; on a phone it is the Git page, and the
-drawer holds no write.
+short to hold a list that writes — its header, its checkboxes and a pinned
+commit bar — under the tab bar and the worktree switcher, and the rows had not
+been built for its width. Neither holds for the column at `expanded`, which is
+the window's height and whose width is the 280px the rows are now built for.
+What the rule was protecting is kept as its own statement: a write is on screen
+in one place. On a desktop that place is the sidebar, and the main area beside
+it shows only details; on a phone it is the Git page, and the drawer holds no
+write. A list that only reads fits the drawer, and it has one
+([below](#below-expanded-the-doorplate)).
 
 ### Below `expanded`: the doorplate
 
-The same shape as the Project tab: something to read, and doors.
+The same shape as the Project tab: something to read, and doors. The changed
+files under `Changes` are part of the reading.
 
 ```
 ┌──────────────────────────────┐
 │ ⑂ feature/git-workspace      │  overview — read-only
 │   2 to pull · ⟳ Pulling…     │
 ├──────────────────────────────┤
-│ ▤  Changes                5  │  entries — L4 rows, ProjectTab's style
-│ ⏱  History                   │
-│ ⑂  Branches                  │
+│ ▤  Changes     5 +142 −37  › │  door — L4 row, ProjectTab's style
+│    GitTab.tsx        +12 −3  │  ┐ changed files, read-only, the name
+│    web/src/components/Git    │  │ in line with "Changes"
+│▌   git.md            +88 −20 │  │ the file under review, lit
+│    docs                      │  │
+│ ⚠  merge.go            +4 −1 │  │ a conflict: ⚠ in the icon column
+│    server · Conflict         │  │
+│    notes.txt              +9 │  │
+│    Untracked                 │  │
+│    old.ts                −14 │  ┘ at most five rows
+│    server · Deleted          │
+│    Show all 14 files         │  expands in place
+│ ⏱  History                 › │  door
+│ ⑂  Branches                › │  door
 └──────────────────────────────┘
 ```
 
+- **The tab scrolls as one; nothing in it is pinned.** Overview, doors and
+  files are one scroller (`Doorplate` in `Git/GitTab.tsx`). Pinning the
+  overview and the doors around a scrolling list would spend about 245px of a
+  phone's drawer before the first file — the old panel's ~265px
+  ([What went wrong](#what-went-wrong-and-what-it-teaches)) again.
 - **The overview is read-only.** The branch name — `detached @ <hash>` when
   detached, the shared skeleton while loading and `Branch unavailable` with
   nothing cached (`Git/HeadPlaceholder.tsx`, as in the workspace's top bar) —
@@ -528,31 +547,76 @@ The same shape as the Project tab: something to read, and doors.
   `· ⚠ Automatic fetch failed` in `th-warning`. With no remote or a detached
   HEAD there is no line, by the chip's own `hasSyncStatus`. None of it is a
   button and none of it is drawn like the chip: something that looks pressable
-  and does nothing is worse than nothing, and the entries below already go
+  and does nothing is worse than nothing, and the doors below already go
   everywhere it could. While a merge, rebase, cherry-pick or revert is in
   progress the sync line gives way to what the workspace's banner says
   ([git-conflict-ui.md](git-conflict-ui.md#the-sidebars-git-tab)).
-- **Three entries**, `min-h-[44px]`, in the Project tab's row style:
+- **Three doors**, `min-h-[44px]`, in the Project tab's row style:
   `Changes`, `History`, `Branches`. Each lands on its segment's **list**, never
   on a detail it remembers — the Stories entry's rule — through the same
   `handleSelectGitSegment` the workspace's own segment control uses, so it is
-  pushed and a press on the list already on screen adds nothing.
+  pushed and a press on the list already on screen adds nothing. Each ends in a
+  muted `ChevronRight`: beside rows that open a file, `›` is what says a row
+  opens a page. The Project tab has only doors and does without it.
 - **`Changes` carries the tab badge's number** (`useGitChangeCount`, capped by
   `formatBadgeCount`), named `Changes, 5 changed files` through the badge's own
-  `describeChangeCount`. A clean tree reads a muted `No changes`, never `0`; a
-  status with no answer yet, or a failed one, shows nothing — like the badge,
-  this is not where a failed read is reported, and the workspace says it
-  ([git-ui.md](git-ui.md#the-change-count-on-the-tab)). Beside the number, the
-  lines added and removed across every file (`useGitChangeLines`), in the
-  Changes list header's muted figures — `5  +142 −37`, named `Changes, 5 changed
-  files, 142 lines added, 37 removed` — and left out, never `+0 −0`, when
-  nothing could be counted ([git-changes-ui.md](git-changes-ui.md#the-sidebars-overview)).
-- **The segment the workspace is on is lit** — `bg-th-bg-tertiary` and
-  `aria-current="page"` — and still pressable: it is the way back to that
-  segment's list.
-- **An entry closes the drawer behind it**, as every pick in the sidebar does.
+  `describeChangeCount`. A clean tree reads a muted `No changes`, never `0`,
+  and no file rows follow — it is not said twice. A status with no answer yet
+  shows nothing, like the badge. Beside the number, the lines added and
+  removed across every file (`useGitChangeLines`), in the Changes list
+  header's muted figures — `5  +142 −37`, named `Changes, 5 changed files, 142
+  lines added, 37 removed` — and left out, never `+0 −0`, when nothing could be
+  counted ([git-changes-ui.md](git-changes-ui.md#the-sidebars-overview)).
+- **Under it, the changed files, read-only.** The Changes list's own row
+  (`ChangedFileRow` with `readOnly`): name, directory and status words, line
+  counts, its accessible name `Review <path>` (`, conflicted`). No checkbox,
+  no `⋯`, and the staging state is not drawn — a box that looks pressable and
+  does nothing is the overview's sync-chip case again; staging is the Git
+  page's. One row per path, as in the list. The row's name is in line with the
+  doors' text, so it reads as under `Changes`, and a conflicted file puts
+  `TriangleAlert` in `th-warning` in that icon column, where the list's
+  `StageGutter` would put it. They are a `<ul>` named `Changed files`.
+- **In the review's order, always flat.** `useOrderedChanges` — the order the
+  Changes list and the review share, in whichever view the list is set to — so
+  row k is the review's `k / n`; files in a collapsed folder are listed too,
+  since the review walks them. No folder rows, no Flat / Tree toggle, no
+  header: a folder row would be a second thing to press that opens nothing.
+- **At most five rows**, then `Show all n files`, a muted text button indented
+  as the rows, `min-h-[44px]`, that expands the list in place and moves focus
+  to the first row it brought. Six files are drawn as six rows rather than a
+  button standing in for one. The cap keeps History and Branches near the
+  first screen of a phone; the operation banner's conflicted files use the same
+  pattern ([git-conflict-ui.md](git-conflict-ui.md#the-banner)). `Show all` reads
+  the list here and `Changes ›` goes to where it can be written; it does not
+  close the drawer. **Each opening of the drawer starts collapsed**, and so
+  does a worktree switch: the tab stays mounted, and an expansion kept would
+  push History and Branches away for good. Turning to another tab and back
+  keeps it.
+- **One thing lit.** With a review open its file's row is lit — the list's
+  `isActive`, a 2px accent bar and `aria-current="true"` — and the `Changes`
+  door is not; a door is lit, `bg-th-bg-tertiary` and `aria-current="page"`,
+  only while the route is that segment's list, and stays pressable as the way
+  back to it. A file under review past the cap opens the list expanded, and
+  each time the tab comes on screen — the drawer opened on it, or the tab
+  turned to — that row is scrolled into view (`useRevealLitRow` over
+  `Git/revealRow.ts`), waiting for the status if it has not arrived: the drawer
+  is opened from where the reader is. A file under review that has stopped
+  changing has no row, and nothing in the tab is lit.
+- **A file row opens its review**, by `handleSelectDiffFile`'s history rules
+  ([git-changes-ui.md](git-changes-ui.md#what-the-two-bottom-buttons-say)):
+  it replaces an open review, and otherwise is pushed as the chat's review row
+  is, or as the list's row when the Changes list is under the drawer. It opens
+  on the side the list would; the row of the file already under review keeps
+  the side being read, so pressing it only closes the drawer.
+- **A failed status with nothing cached** reads a muted `Changes unavailable`
+  under the door, not pressable — left blank, a list's place would read as a
+  clean tree that forgot to say so; the reason and Retry are on the Git page.
+  With a status cached, the cached files stay.
+- **A door or a file row closes the drawer behind it**, as every pick in the
+  sidebar does.
 - The tab badge keeps its rule ([git-ui.md](git-ui.md#the-change-count-on-the-tab)),
   and **nothing in the tab writes**: every write appears once, on the Git page.
+  No operation banner, no queued-write state on a row.
 
 ## No manual refresh
 
@@ -614,6 +678,9 @@ are flagged here rather than left where they were diagnosed:
 - **The Changes list's sticky header is still owed a check on a real device.**
   The reasoning behind it ([git-changes-ui.md](git-changes-ui.md#the-list-header))
   is from source and spec, not from a rendered page.
+- **So is the drawer's five-row cap.** That History and Branches stay roughly
+  on the first screen of a 667px-class phone is an estimate — two-line rows of
+  about 48px, the rest of the chrome about 330px — not a measurement.
 
 ---
 

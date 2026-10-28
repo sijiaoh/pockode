@@ -227,9 +227,9 @@ function SessionSidebar({
 		[onSelectSession, isExpanded, onClose],
 	);
 
-	// Below `expanded` the tab's doors lead to a page under the drawer, which
-	// closes for it; at `expanded` the list stays where it is beside what a
-	// row opens.
+	// Below `expanded` the tab's doors and file rows lead to a page under the
+	// drawer, which closes for it; at `expanded` the list stays where it is
+	// beside what a row opens.
 	const tabGitNavigation = useMemo(
 		() =>
 			isExpanded
@@ -238,6 +238,10 @@ function SessionSidebar({
 						...gitNavigation,
 						onSelectSegment: (segment: GitSegment) => {
 							gitNavigation.onSelectSegment(segment);
+							onClose();
+						},
+						onSelectFile: (path: string, staged: boolean) => {
+							gitNavigation.onSelectFile(path, staged);
 							onClose();
 						},
 					},

@@ -289,7 +289,7 @@ The chat's review row is unchanged; a conflict-aware version of it is left for l
 
 ## The sidebar's Git tab
 
-At `expanded` the tab holds the list, and with it the banner itself ([above](#at-expanded)). Below it the tab is the workspace's doorplate ([sidebar-ui.md](sidebar-ui.md#the-git-tab)), and a repository stuck mid-rebase is exactly what its overview should say. While an operation is in progress, the overview's second line becomes the banner's title — `⚠ Rebase stopped on conflicts`, glyph in `th-warning`, text in the line's usual token — in place of the sync line, and its branch name follows the top bar's (`feature/git-ui · rebasing`). Still read-only; the `Changes` entry is where to go. The tab badge is unchanged: conflicted files are already in its count.
+At `expanded` the tab holds the list, and with it the banner itself ([above](#at-expanded)). Below it the tab is the workspace's doorplate ([sidebar-ui.md](sidebar-ui.md#the-git-tab)), and a repository stuck mid-rebase is exactly what its overview should say. While an operation is in progress, the overview's second line becomes the banner's title — `⚠ Rebase stopped on conflicts`, glyph in `th-warning`, text in the line's usual token — in place of the sync line, and its branch name follows the top bar's (`feature/git-ui · rebasing`). Still read-only; the `Changes` door is where to go. A conflicted file is one of the read-only rows under that door, with `TriangleAlert` in `th-warning` where the list's row has its gutter and `Conflict` among its status words, and a press opens its review, which draws the conflict. The banner and its actions are not drawn there: they write. The tab badge is unchanged: conflicted files are already in its count.
 
 ## Where it lives
 

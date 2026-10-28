@@ -503,7 +503,9 @@ The commit's diff takes everything above from the same code (`useLineSelection`,
 
 ## The sidebar's overview
 
-Below `expanded`, where the Git tab is doors rather than the list, its `Changes` entry carries the totals beside the count: `Changes   5  +142 −37`, the same muted figures as the list header, from the same sums. Its accessible name becomes `Changes, 5 changed files, 142 lines added, 37 removed`. With no counts at all (every file binary or too large) the figures are left out, never `+0 −0`. At `expanded` the tab is the list, and its header carries them. The tab badge is unchanged — a digit on an icon has no room for a diffstat.
+Below `expanded`, where the Git tab is doors rather than the workspace's list, its `Changes` door carries the totals beside the count: `Changes   5  +142 −37`, the same muted figures as the list header, from the same sums. Its accessible name becomes `Changes, 5 changed files, 142 lines added, 37 removed`. With no counts at all (every file binary or too large) the figures are left out, never `+0 −0`. At `expanded` the tab is the list, and its header carries them. The tab badge is unchanged — a digit on an icon has no room for a diffstat.
+
+Under the door the changed files are listed read-only, drawn by this list's own `ChangedFileRow` (its `readOnly` form: no checkbox, no `⋯`) in [review order](#review-order) through the same `useOrderedChanges` the list and the review read, always flat — so a row's place is its `k / n` in the review. The cap, the lit row and what a press opens are [sidebar-ui.md](sidebar-ui.md#below-expanded-the-doorplate)'s.
 
 ## Decisions not to lose
 
