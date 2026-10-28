@@ -10,9 +10,9 @@ Two halves of one loop between the chat and the Git workspace:
   has uncommitted changes, the chat's attention strip says so and offers the
   Git workspace's review.
 
-The handoff is a mechanism, not an entry point. The entries that will use it —
-asking the agent about selected lines, revert, merge, conflict resolution — each
-belong to their own design. This file says only what every one of them gets by
+The handoff is a mechanism, not an entry point. The entries that use it —
+asking the agent about selected lines ([git-changes-ui.md](git-changes-ui.md#handing-lines-to-the-agent)),
+and later revert, merge, conflict resolution — each belong to their own design. This file says only what every one of them gets by
 calling it. The review row is the one entry this file does define.
 
 Copy below is the UI's English.
@@ -98,7 +98,8 @@ The draft (`inputStore`) of the target session, on this device:
 
 The handoff **pushes** the target session's chat route, in the workspace's
 worktree. The push keeps Back meaningful: Back returns to the Git screen the
-user came from, with its selection and scroll, if the user decides not to send
+user came from, with its selection and scroll (a review's selected lines
+excepted, [git-changes-ui.md](git-changes-ui.md#selecting)), if the user decides not to send
 after all.
 
 The composer then shows the text. Three things make the handoff noticeable,

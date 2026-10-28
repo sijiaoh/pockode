@@ -23,6 +23,14 @@ export interface GitActions {
 	getCommitFile: (hash: string, path: string) => Promise<FileContent>;
 	stage: (paths: string[]) => Promise<void>;
 	unstage: (paths: string[]) => Promise<void>;
+	/**
+	 * Stage one hunk of the path's unstaged diff, or unstage one of its staged
+	 * diff, by an ID from that diff's `hunk_ids`. A hunk the file no longer
+	 * has is refused with -32005 (server/rpc/types.go's CodeGitHunkStale) and
+	 * nothing is written: reread the diff rather than retry.
+	 */
+	stageHunk: (path: string, hunkId: string) => Promise<void>;
+	unstageHunk: (path: string, hunkId: string) => Promise<void>;
 	/** Reverts unstaged edits; the server decides per path whether that means deleting it. */
 	discard: (paths: string[]) => Promise<void>;
 	commit: (message: string, amend: boolean) => Promise<void>;
@@ -91,6 +99,18 @@ export function createGitActions(
 		},
 		unstage: async (paths: string[]): Promise<void> => {
 			await requireClient().request("git.reset", { paths });
+		},
+		stageHunk: async (path: string, hunkId: string): Promise<void> => {
+			await requireClient().request("git.hunk.stage", {
+				path,
+				hunk_id: hunkId,
+			});
+		},
+		unstageHunk: async (path: string, hunkId: string): Promise<void> => {
+			await requireClient().request("git.hunk.unstage", {
+				path,
+				hunk_id: hunkId,
+			});
 		},
 		discard: async (paths: string[]): Promise<void> => {
 			await requireClient().request("git.discard", { paths });

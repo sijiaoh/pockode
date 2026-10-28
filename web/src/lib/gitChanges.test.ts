@@ -11,6 +11,7 @@ import {
 	firstReviewTarget,
 	lineStatOf,
 	orderChanges,
+	stagesOnlyWhole,
 	sumLines,
 } from "./gitChanges";
 
@@ -237,5 +238,29 @@ describe("buildChangeTree", () => {
 			path: "web/src/components",
 		});
 		expect(paths(web.files)).toEqual(["web/index.html"]);
+	});
+});
+
+describe("stagesOnlyWhole", () => {
+	const sides = (staged?: string, unstaged?: string, binary = false) =>
+		({
+			path: "a",
+			submodule: false,
+			...(staged && { staged: { path: "a", status: staged } }),
+			...(unstaged && {
+				unstaged: { path: "a", status: unstaged, ...(binary && { binary }) },
+			}),
+		}) as ChangedFile;
+
+	it.each([
+		["binary", sides(undefined, "M", true), true],
+		["conflicted", sides("U", "U"), true],
+		["added by both", sides("A", "A"), true],
+		["deleted by both", sides("D", "D"), true],
+		["turned into a symlink", sides(undefined, "T"), true],
+		["modified", sides(undefined, "M"), false],
+		["added, then edited", sides("A", "M"), false],
+	])("%s", (_, file, expected) => {
+		expect(stagesOnlyWhole(file, false)).toBe(expected);
 	});
 });

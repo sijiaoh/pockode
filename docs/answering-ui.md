@@ -1199,7 +1199,8 @@ because it has scrolled once already.
 ### Who owns Escape
 
 The panel claims Escape for as long as it is up (§3), and several surfaces in
-this one chat want that key. The order between them is a cross-component convention,
+this one chat want that key — as do surfaces elsewhere in the app that follow the
+same convention, listed here so that there is one table to check. The order between them is a cross-component convention,
 and it lives in **this document** because every part of it is a single line in a
 different file — the next person to add an Escape listener will read none of
 them:
@@ -1214,6 +1215,7 @@ them:
 | `Sidebar` — the session drawer, below the expanded tier | `document`, and it calls `preventDefault` | closes itself and **marks the press handled**; while open as a drawer, it counts itself as covering the page |
 | `InputBar`'s command palette | the textarea, and it calls `preventDefault` | closes the palette; the press never gets past it unmarked |
 | `InputBar`'s `+` menu | `document`, and it calls `preventDefault` | closes itself and **marks the press handled**; while open, it counts itself as covering the page |
+| the Git review's selection bar | `document`, and it calls `preventDefault` | clears the line selection — standing down while anything counts itself as covering the page, or the press is already `defaultPrevented` ([git-changes-ui.md](git-changes-ui.md#how-it-goes-away)) |
 | the answer panel | **`window`** | closes, unless the press is already `defaultPrevented` |
 | `ChatPanel`'s interrupt | `document` | ends the agent's turn — the fallback, and the only one that cannot be undone. It stands down (`isSheetOpen`) while anything counts itself as covering the page (`useIsPageCovered`) or the answer panel is up |
 

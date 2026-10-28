@@ -85,7 +85,7 @@ A file at the root shows its status word alone, or nothing for a modified file. 
 
 Unchecking a staged rename unstages its source path with it: in the index a rename is the old path deleted and the new one added, and restoring the new path alone would split the row into `Deleted` and `Untracked`.
 
-Mixed goes to checked, not to unchecked: the press is "include this file", and throwing away a partial staging the user (or the agent) made on purpose is the more surprising of the two. Mixed is never produced by tapping — it comes from staging done elsewhere.
+Mixed goes to checked, not to unchecked: the press is "include this file", and throwing away a partial staging the user (or the agent) made on purpose is the more surprising of the two. The file's own box never produces mixed: it comes from staging a hunk in the review, or from staging done elsewhere.
 
 **While the write is in flight** the box shows the existing small spinner in place of its mark, the checkbox is `aria-busy="true"` and inert to presses (see Accessibility), and its state does not flip until the refreshed status says so — the workspace's no-optimism rule. A failure goes to the Changes banner as stage/unstage failures do today.
 
@@ -174,10 +174,10 @@ The review layer is the `diff` layer redesigned: one file at a time, in list ord
 │ ‹  2 / 5  ›  web/src/compo…  ↵ ␣ │  review toolbar
 ├──────────────────────────────────┤
 │ ⚠ Stage failed · Details       ✕ │  the layer's banner
-│ @@ −40,7 +40,9 @@                 │
 │  40   import { Foo }             │
 │  41 − const a = «old»;           │  «» = word-level highlight
 │  41 + const a = «new»;           │
+│ ☐  Lines 40–48 · function lo… ⋮≡ │  hunk bar (Staging a hunk)
 │ ┄┄┄ ⌄ 24 unchanged lines ⌃ ┄┄┄  │  collapsed context, tap to expand
 │  66   …                          │
 ├──────────────────────────────────┤
@@ -280,6 +280,163 @@ A file discarded from the list while it is under review is done with, as the rev
 | Mode change only, or empty | no counts | `No content changes` |
 | Inside a submodule | `· Submodule` | Like any file. Staging goes to the submodule's index; the commit button's existing submodule rules explain what is not committed |
 
+### Staging a hunk
+
+Each hunk of the diff gets a row of its own, the **hunk bar**, carrying a checkbox. It is the file's checkbox scaled down to one hunk. The meaning is the same, "will this be committed", and so are the component (`StageCheckbox`) and the rules for in flight and failure. Per-line staging is not offered. Lines can be selected only to hand them to the agent ([below](#handing-lines-to-the-agent)).
+
+```
+│  40   import { Foo }             │
+│  41 − const a = «old»;           │
+│  41 + const a = «new»;           │
+│ ☐  Lines 40–48 · function lo… ⋮≡ │  hunk bar, under the hunk's last row
+│ ┄┄┄ ⌄ 24 unchanged lines ⌃ ┄┄┄  │  gap row (unchanged)
+```
+
+**What the bar holds**, left to right:
+
+| Part | Content |
+|---|---|
+| Checkbox | `StageCheckbox`, the 20px box with its hit area in the gutter column, so the boxes of successive hunks line up under each other and under the gap rows' expand buttons. Absent when the hunk has no ID ([below](#which-hunks-have-boxes)) |
+| Range | `Lines 40–48`, from the side's new numbering (`+40,9` in git's header): the working tree's lines on the unstaged side, the index's on the staged side. A hunk of one line reads `Line 40`. A hunk that only removes lines (`-41,3 +40,0`, or a deleted file's `+0,0`) reads `Removed lines 41–43` in the old numbering, the label the selection bar uses for the same case. `text-xs`, tabular figures |
+| Context | git's function context, the text after the second `@@`, muted, and the row's one `flex-1 min-w-0` part, truncating at the tail. Absent when git gives none |
+| Select | An L5 icon button (`TextSelect`), `Select lines 40–48`: selects the hunk's rows for [handing to the agent](#handing-lines-to-the-agent) and moves focus to the selection bar. It is the keyboard's way to a selection, and a one-tap way for a thumb to take a whole hunk |
+
+- **Height.** The box sits between two other targets. Above it is the gutter cell of the hunk's last line, which selects. Below it is the next gap row, whose whole width expands. A tap that lands a little off either one must not stage the hunk, so the box keeps the floor's spacing from both ([responsive-ui.md](responsive-ui.md#hit-areas-and-spacing)). On a coarse pointer the bar is 60px, with the 44px hit area centred and 8px of no target above and below it. On a fine pointer it is 44px, with the 36px area centred and 4px either side. The fill is `th-bg-secondary`, the tint the library's `@@` row had, so the bar reads as the seam between one hunk and what follows.
+- **Not sticky.** A hunk is its change plus three lines of context, so its bar is rarely out of sight. A sticky row inside the library's tables, which are two side-by-side tables when split view is unwrapped, is fragile out of proportion to what it would add.
+- **It is not the gap row.** The gap row is the library's, and its whole width is the expand target. The bar is the hunk's own row, under the hunk's last line. When a gap is fully expanded and two hunks join on screen, both bars stay: the hunks are git's, taken from the diff text, and expanding context does not merge them. In split view the bar is in the half its anchoring line is on (see below).
+- **Accessible name** `Stage lines 40–48` (or `Stage removed lines 41–43`). The state is spoken on its own: "Stage lines 40–48, checkbox, not checked". This is the `Stage <path>` pattern.
+
+**Why under the hunk, not above it.** A title row above the hunk was the first intent, and the library does not allow it. `@git-diff-view/react` 0.0.35 renders, per line, the gap row, the line, its widget row and its extend row, in that order. The gap row renders nothing once its gap is fully expanded, and a hidden line renders no extend row. So the library has no slot directly *above* a hunk that exists in every state, and a `<tr>` written into its React-managed `<tbody>` from outside does not survive its next render. `DiffViewer` therefore hands the bar to `renderExtendLine` on the hunk's last line, which is always visible because it belongs to the hunk. Which line that is depends on the layout — unified draws a change block's additions after its removals, split pairs them up — and `lib/diffHunks.ts` works it out per layout from the hunk's text. In split view the library gives each half's extend row a cell of its own, wrapped or not, so the bar is in the half the last line is on rather than across both. A cost that follows from the library rather than from the position: a staged or unstaged hunk changes the diff, a changed diff is a new model in the library, and a new model starts with every gap collapsed again, so context the reader expanded is folded back after each press. The page still keeps the next bar where the pressed one was.
+
+#### Which hunks have boxes
+
+Exactly those the server gives an ID. Every `git.diff.subscribe` reply and `git.diff.changed` notification carries `hunk_ids`, one per `@@` hunk, in order, and the i-th hunk takes the i-th ID. Where the hunks cannot be applied as shown, the IDs are absent. The cases are [git.md](git.md#staging-hunks)'s table. The client does not decide this a second time. Without IDs the bars still draw, for their range, context and Select button, but carry no box. A submodule's file has boxes, and they apply to the submodule's index, as staging the file does.
+
+An untracked, added or deleted file is one hunk, and its box stages or unstages the whole file. That duplicates the bottom bar's `Stage` / `Unstage`. It stays anyway, so that every hunk looks the same. It is not always equivalent: a mode change is part of no hunk, and a staged rename stays staged when its hunks are unstaged ([git.md](git.md#staging-hunks)). After the last hunk goes, such a side can stay, reading `No content changes` with no box. The bottom bar's whole-file button is still there to finish it, and the layer follows to the other side only when the side is really gone.
+
+#### The two sides read the same way
+
+The box says whether the hunk is in the index, so its state is fixed by the side it is drawn on:
+
+| Side on screen | Box | Press | Afterwards |
+|---|---|---|---|
+| Unstaged (index → working tree) | ☐ on every hunk | `git.hunk.stage` | The hunk leaves this side and appears on the staged one |
+| Staged (HEAD → index) | ☑ on every hunk | `git.hunk.unstage` | The hunk leaves this side and appears on the unstaged one |
+
+A box that never shows two states on one screen looks odd at first. It is still the right box. It is the same question the file's checkbox answers in the list, and after one press the user sees it work: the hunk goes, and the file's row in the list turns ▣. The alternative, a `Stage hunk` / `Unstage hunk` text button, would be a second vocabulary for the same operation, in a row where text costs the width the context line needs.
+
+#### In flight, and after
+
+**A hunk is busy until a diff read after its write arrives.** The press queues the write, and the box shows the spinner and is `aria-busy` / `aria-disabled`, exactly as the file's box is while its write runs. After the write **succeeds** it stays that way, until a diff read after the write was answered arrives, or until the side is gone. That diff no longer has the hunk, so in practice the box leaves with it. The write's slot in `gitWriteStore` ends when the write answers. The diff comes back separately, and the server's diff watcher polls every 3 s, so for up to that long the box would sit idle in front of a hunk that is already staged. A second press there would be refused, and the stale message below would be a lie. So that the wait is short, the page asks for the diff again as soon as the write succeeds, rather than waiting for the poll. That refresh is **soft**: the diff on screen stays until the new one replaces it, with no loading state in between, since a spinner in its place would empty the scroll box and throw away the position the next paragraph keeps. `useGitDiffWatch`'s `refresh` resubscribes without the loading flag, which is kept for a new path, side or whitespace setting. A refresh that fails replaces the diff with `Failed to load` and the reason, as a first read that fails does; nothing reads it again on its own, so a spinner left in its place would never end. Only a subscribe reply counts as that diff: a notification already on its way when the write answered may predate it. The hunk leaves the view only with that diff, never before (no optimism). A write that fails ends the busy state with its answer, since nothing was written and the hunk is still there.
+
+**The other hunks stay pressable**, and their writes queue behind it. IDs are content, not positions ([git.md](git.md#staging-hunks)), so a press queued behind an earlier hunk of the same file still names its hunk after the earlier one has moved the numbers. Two hunks with identical lines are told apart by order. Pressing the second while the first is in flight can therefore be refused as stale. That is safe, and rare.
+
+**The busy sets.** `gitWriteStore` drops a path it already holds, so hunk writes are deduplicated on their own set, keyed by path and ID. Keyed by path alone, the second hunk's press would be dropped and still report success. They also mark their path busy, the way a file's write does. So while any hunk of the file is in flight, the file's box in the list shows the spinner, and the review's `Discard file`, `Stage & next` and `Unstage` are disabled, as the file's action sheet already is ("Wait for the change in progress to finish."). The reverse holds too: while a file-level `git.add`, `git.reset` or discard is pending on the path, every hunk box of the file is busy. A hunk pressed behind a whole-file write would only be refused as stale once the write had moved it.
+
+**Where the page goes.** When the hunk leaves, the page keeps the next hunk's bar where the pressed bar was, so a run of presses walks down the file under a still thumb, the way `Stage & next` walks the list. With the bar under its hunk, that leaves the next hunk to decide about directly above the thumb. With no hunk below, the page keeps the previous hunk where it was. The successor is the pressed hunk's neighbour by ID, not by index, so two hunks pressed in a row that leave in one diff still hand the place to the hunk after the second. The side follows the existing rules ([Partially and fully staged files](#partially-and-fully-staged-files)). After staging the first hunk of an unstaged-only file, the file is partly staged and the side row appears, with `Unstaged` still selected. After staging the last unstaged hunk, the layer follows to the staged side, replacing the route. Hunk staging never moves to the next file: `Stage & next` is the one control that advances.
+
+**Failure** goes to the layer's banner, `Stage failed` / `Unstage failed` with the details, and the box returns to its mark. The rule is the one `Stage & next` follows, including the fallback to the Changes banner when the answer comes after the reader left.
+
+**When the file changed under the hunk.** The diff on screen can be older than the file: the agent edits it, or the user saves elsewhere, and the watcher has not polled yet. The server then refuses with `-32005` (`CodeGitHunkStale`), having written nothing. The user sees:
+
+- The banner: `This part of the file changed before it could be staged.` (`unstaged` for the staged side), with no details link, because nothing failed that the user could act on. There is no automatic retry: the hunk the user decided about is gone, and staging whatever now sits in its place is the user's decision to make again.
+- The diff asked for again at once, softly, as after a success. The page keeps the bar nearest the refused one where the refused one was.
+
+**Hidden whitespace.** With `Ignore whitespace` on, the hunks on screen come from `-w`, so the server sends no IDs and the bars have no box. One muted line above the diff says `Show whitespace to stage parts of this file`, with the existing `Show whitespace` text button. It is left out when the status already says the file would have no IDs anyway: binary, conflicted, or turned into a symlink or back (`gitChanges.ts`'s `stagesOnlyWhole`). The bottom bar's whole-file actions are unaffected.
+
+**The Changes list needs nothing new.** A file with some hunks staged is in both of `git.status`'s lists, which the list already draws as ▣ ([The checkbox](#the-checkbox)). Pressing it stages the rest, by Decision 3: mixed goes to checked, never to unchecked, because a hunk the user staged on purpose is not thrown away by a press that means "include this file".
+
+**No per-hunk discard.** `Discard file` keeps discarding the side on screen. A one-tap destructive control on every hunk is the kind of control this redesign moved behind a menu.
+
+### Handing lines to the agent
+
+The user selects a range of the diff by its line numbers and gets two actions: `Ask AI to edit…`, which goes through the [prefill handoff](agent-handoff-ui.md#1-prefill-handoff), and `Copy`. Selection exists only for these two. It stages nothing.
+
+#### Selecting
+
+The **line-number gutter** is the control. Its cells are `user-select: none`, so a press there never starts the system's text selection, and the code beside it stays selectable the usual way. There is no long press: on a phone it is the system's own text selection ([Goals](#goals-and-constraints)).
+
+How a press reads depends on **what pressed**, decided per event from `PointerEvent.pointerType`. It is not decided by the `pointer-fine` / `pointer-coarse` gates. Those are deliberately not complements ([responsive-ui.md](responsive-ui.md#they-are-deliberately-not-complements)): a touchscreen laptop matches both, and one plain press must not mean "start again" under the mouse and "extend" under the finger on the same screen.
+
+| | Mouse (`pointerType` `mouse`) | Touch or pen |
+|---|---|---|
+| Start | Click a line number: that line alone, the anchor | Tap a line number: that line alone, the anchor |
+| Extend | Shift-click a number: anchor to it. Or drag down or up the gutter | Tap another number: anchor to it. Each tap moves the range's far end, so a tap that lands one line off is corrected by the next one |
+| Start again elsewhere | Click a number without Shift | ✕, or a tap outside ([below](#how-it-goes-away)), then a new tap |
+| Clear | ✕, Escape, a click outside, or clicking the only selected line again | ✕, a tap outside, or tapping the only selected line again |
+| Whole hunk | The hunk bar's Select button | The same |
+| Hint | `cursor: pointer` and the hover tint on the number cell | None. The first tap shows what the gutter does |
+
+Touch has no Shift, and a drag in the gutter on a touch screen is the page's scroll. A mouse drag is tracked with pointer events, gutter only, as gesture tracking is everywhere ([responsive-ui.md](responsive-ui.md#which-event-primitive)). The `click` that ends a drag is the drag's own: it lands on whatever contains both ends, and it must not count as the click outside that clears the selection the drag just made.
+
+- **The unit is a diff row**: context, added and removed lines alike. In unified view the library draws the old and new numbers in one cell per row, and pressing it selects the row. The range runs in row order. In split view a range stays on the side it started on. Pressing the other side's numbers starts a new selection there.
+- **A range may cross a collapsed gap.** The gap row is highlighted with the rest, and the hidden lines are part of the range ([below](#what-ask-ai-to-edit-writes)). Expanding a gap inside the range keeps the selection and shows what it already held.
+- **Drawn as** a `th-accent` tint across the selected rows, laid over the add and remove tints rather than replacing them, plus a 2px `th-accent` bar on the gutter's left edge and the selected numbers in `th-accent`. The selection reads as "the user's" and the change colours still read as the diff.
+- **Hit area.** A gutter cell is one line of code tall, under the 44px coarse floor. That is a deliberate exemption, recorded with its reasons and the cells' widths in [responsive-ui.md](responsive-ui.md#the-reviews-line-numbers). The one neighbour that executes something, the hunk bar's box, keeps the floor's spacing (above).
+- **Keyboard and screen readers** reach a selection through the hunk bar's Select button, a hunk at a time. One focusable stop per line would put a thousand stops in a long file. Selecting any range by keyboard waits for keyboard navigation of the review as a whole ([git-ui.md](git-ui.md#out-of-scope)).
+
+**The selection is a reading state**, like the expanded gaps, and is cleared when the rows it names may be gone:
+
+- A different file (`‹ ›`, `Stage & next`, a list row at `expanded`), the side switch, or the whitespace or split toggle clears it.
+- A refreshed diff for the file keeps it when every selected row is still there, with the same text and the same number on the side the range is named by. The other side's numbers do not count: on the unstaged side the old numbers are the index's, and staging a hunk above the selection moves them while the lines picked are unchanged. A connection being re-established, with no diff for a moment, keeps it too. Otherwise it is cleared, with the polite announcement `Selection cleared — the file changed`. An agent editing elsewhere in the file pushes a new diff every few seconds, and a selection that vanished on each of them could never be used. A hunk staged or unstaged from this page leaves the view, so a selection inside it clears.
+- Wrap keeps it, since the same rows are only drawn differently.
+- Leaving the page drops it. When the user comes Back from the chat it is not restored: what it named is in the composer by then. This is the one thing the handoff's Back does not bring back ([agent-handoff-ui.md §1.3](agent-handoff-ui.md#13-landing-in-the-chat)).
+
+#### The selection bar
+
+```
+│  41 + const a = «new»;           │  selected rows
+│  42 + const b = 2;               │
+├──────────────────────────────────┤
+│ Lines 41–42   [Copy] [✦ Ask AI…] ✕│  selection bar, under the diff's scroll area
+├──────────────────────────────────┤
+│ [ Discard file ]  [Stage & next] │  bottom bar (unchanged)
+└──────────────────────────────────┘
+```
+
+- **Where.** Docked at the bottom of the diff area, directly above the review's bottom bar. It is full width below `expanded`. At `expanded` it spans the review column only, above that column's bottom bar, and the list column is untouched. It is a raised strip (`th-bg-secondary`, top border, the sheets' shadow), not a bubble beside the selection: a bubble would have to follow the range as the page scrolls, would cover the code it points at, and on a phone would sit where the thumb is not. It is laid out in the page's column, between the diff's scroll area and the bottom bar, rather than over the diff: while it is up the scroll area simply ends at its top edge, so the last selected line can always be scrolled clear of it. It is not portalled, so it mounts and unmounts with the review page and never floats over a page the user moved to.
+- **What it holds.** First the range label, the row's one `flex-1 min-w-0` part: `Lines 41–42`, `Line 41`, `Removed lines 41–43` when every selected row is a removed one, or `Old lines 41–48` for a range made on the old side in split view. Then `Copy`, then `Ask AI to edit…` with the `Sparkles` icon the commit sheet's `Draft` uses. Both are secondary buttons (`th-bg-tertiary`), each with a minimum width that holds its busy and done labels (`Copied`, `Opening chat…`), so a pressed button never moves the one beside it. Last is ✕, an L5 button named `Clear selection`. Every control reaches 44px on a coarse pointer by growing the box, as in the bottom bar. Neither action is L1: the bottom bar's primary is still the page's one primary, and both are on screen at once.
+- **For assistive technology** the bar is a `role="group"` named `Selected lines`, with its buttons in tab order. It is not a `toolbar`, which would promise arrow-key focus. A selection made by pointer announces `Lines 41–42 selected` politely, since tapping the gutter moves no focus. One made with the hunk bar's Select button moves focus to `Copy`. When the bar goes while it holds focus (✕, Escape, a refresh), focus returns to the Select button of the hunk the selection was in, or the nearest one left.
+- **At 360px on a coarse pointer** the label truncates first. The fixed parts (the two text buttons, ✕, gaps and padding) take roughly 320–330px, so the label keeps only a few dozen pixels and shows the start of its range.
+- **`Copy`** copies the code as it stands on the side the range is numbered on. That is the new side's lines from the first to the last selected, verbatim, hidden gap lines included, read from the full content the diff already carries. For a removed-only range, or one made on the old side in split view, it is the old side's lines. No `+` / `-` markers: someone who copies code wants code. A diff for the agent is what the other button is for. Feedback is `useCopyToClipboard`'s: `Copied` with a check for about a second, or `Copy failed`, which stays until the next press so that it cannot flash past a reader who looked away. Both are also said politely. The selection stays, so `Ask AI to edit…` can follow.
+- **`Ask AI to edit…`** prefills the text below through `usePrefillComposer`, which resolves the session, writes the draft and pushes the chat ([agent-handoff-ui.md §1](agent-handoff-ui.md#1-prefill-handoff)). The ellipsis is the usual promise that something follows before anything is done: the user writes the instruction there, and nothing is sent. The hook is called by the review page (`DiffView`), not by the bar. The bar unmounts whenever the selection clears, which a diff refresh can do while a new session is still being created, and an unmounted caller loses the hook's error. While a session is being created (`isPending`) the button shows the spinner and `Opening chat…`, and the rest of the bar stays usable. A failure goes to the layer's banner with the hook's own summary and details, and is dismissed with it.
+
+#### How it goes away
+
+The bar has no backdrop, so it follows the shared conventions for overlays without one ([AGENTS.md](../AGENTS.md), `useOutsideClick` and Escape):
+
+- **✕** and **pressing the only selected line again** clear it.
+- **Escape** clears it. The bar listens on `document` and claims the key with `preventDefault`. It stands down in two cases, which between them cover everything that can be over the review ([answering-ui.md](answering-ui.md#who-owns-escape)). First, while `useIsPageCovered()` is true. `Sheet` and `ConfirmDialog` count as covering through their scroll lock, and they claim Escape with `stopPropagation`, which does not stop another listener on `document`, so the count is what keeps the bar from clearing under a sheet that is closing. Second, when the press is already `defaultPrevented`, which is how `Sidebar` and `ResponsivePanel` mark theirs. The bar does not call `useCoverPage` itself: it is part of the surface, not a layer over it.
+- **A click outside** (`useOutsideClick`, so a scroll on a phone never dismisses) clears it, and is claimed with `stopPropagation`, but only when the click lands on non-interactive content: the code, the empty part of the diff area, the headers. A click on the bar, on a gutter number, or on any control (a hunk box or Select button, a gap row, the toolbar, the bottom bar, a list row at `expanded`) is not a dismissal and passes untouched. Whatever that control does then decides: staging a hunk or moving file changes the rows and clears the selection by the rules above, and opening the commit sheet leaves the selection waiting under it. One press never does two things.
+
+#### What `Ask AI to edit…` writes
+
+````
+`web/src/components/Git/DiffView.tsx`, lines 40–48 (working tree):
+
+```diff
+ import { Foo } from "./foo";
+-const a = old;
++const a = new;
+… 24 unchanged lines …
+ return a;
+```
+````
+
+| Part | Rule |
+|---|---|
+| Path | In backticks, as the list knows it: relative to the root repository, a submodule file with its prefix. The agent works in that root, and the handoff carries text only ([agent-handoff-ui.md §1.2](agent-handoff-ui.md#12-what-is-written)) |
+| Range | As the bar's label, lower-cased: `lines 40–48`, `line 41`, `removed lines 41–43`, `old lines 41–48`. New-side ranges run from the first to the last selected row that has a new-side number |
+| Version | Names the file version the numbers belong to. New-side numbers are `(working tree)` on the unstaged side, the file the agent will open, and `(staged)` on the staged side, where they are the index's. Old-side numbers are `(index)` on the unstaged side, whose old side is the index (which is HEAD's content when nothing is staged), and `(HEAD)` on the staged side. The code is quoted either way, so the agent does not have to reconcile numbers from a version it is not looking at |
+| Code | A `diff` fence holding the selected rows with their markers (space, `-`, `+`). Each collapsed gap inside the range is one line, `… 24 unchanged lines …`, in place of lines the user did not read. The fence is one backtick longer than the longest run of backticks in the code, and at least three |
+| Too long | Over 200 selected rows (gap lines not counted), the fence is left out and the text is just the path, the range and the version, ending in a period. The agent reads the file itself, and a draft that fills the composer several times over is not something the user can review before sending |
+
+The text is prose plus a fence, never a Pockode command, as the handoff requires. Its last line is the closing fence. The handoff trims what it writes, so the caret lands right after the fence, and the user starts the instruction with one line break. That costs one keystroke. Changing the shared trimming for this one entry would change it for every entry.
+
+**Same press, same text.** Pressing `Ask AI to edit…` twice for one selection adds nothing the second time. That is the handoff's verbatim check, and it holds because the text depends only on the selection and the diff.
+
+**Where it is offered.** In the review layer, on both sides, for every file whose diff has rows, including files whose hunks have no IDs. A commit's file diff shares `DiffContent` but not this. There the agent would be asked to edit lines that are history, and what such a request means is a separate design.
+
 ### At `expanded`
 
 ```
@@ -309,10 +466,16 @@ The Git tab's `Changes` entry carries the totals beside the count: `Changes   5 
 
 1. **One row per path; staging is the checkbox.** Rows never move when staged. The list and the review share one ordering function, and "next" is computed by that order from the current path, not by index.
 2. **`git.status` carries per-side line counts (with binary marked) and the rename source; the row sums the sides.** Without them neither the row nor the sidebar's totals can be drawn.
-3. **Mixed → checked.** The checkbox and select all only ever stage the rest or unstage everything; mixed comes from elsewhere.
+3. **Mixed → checked.** The checkbox and select all only ever stage the rest or unstage everything; mixed comes from hunk staging or from elsewhere.
 4. **Checkbox semantics are `role="checkbox"` with `aria-checked="mixed"`**, named `Stage <path>`, `aria-disabled` and `aria-busy` (not `disabled`) while its write is queued, and never flipped before the status says so.
 5. **Discard leaves the row** for the action sheet and the review's bottom bar, where the left button acts on the side on screen; discard-all leaves the header for its `⋯`. Copy and dialog unchanged.
 6. **The review is one history entry.** Moves inside it replace; Back and `←` leave it, and so does a commit made from it — back to the list it was pushed from, so the history is as if it had never opened.
 7. **The last file stages and stays**; only then does the primary become `Commit n files`, following `describeCommitAction` — root-only count, submodule line, disabled when nothing is staged.
 8. **The page is not taken away from a reader** whose file stopped changing; it says so and offers `Next`.
 9. **Wrap defaults by tier and is its own remembered setting; split exists only at `expanded`.**
+10. **A hunk's box is the file's box for one hunk.** It means "in the index", so it is ☐ on every hunk of the unstaged side and ☑ on every hunk of the staged side. Boxes appear exactly where the server sent `hunk_ids`. It is drawn under the hunk's last row, the one slot the diff library keeps in every state, and its target keeps the floor's spacing from the gutter above and the gap row below.
+11. **A hunk stays busy after a successful write until a diff read after the write arrives**, and the page asks for that diff softly, keeping the old one on screen, as soon as the write succeeds. A failed write ends the busy state. Hunk writes are deduplicated by path and ID but mark the path busy, and file-level writes make every hunk box busy.
+12. **A stale hunk (`-32005`) is said as such, the diff is read again, and nothing retries.**
+13. **Lines are selected by their numbers, never by a long press**, and how a press reads follows `pointerType`: click, Shift-click and drag for a mouse; tap, then tap the far end, for touch. The hunk bar's Select button is the keyboard's way in. The gutter's sub-44px rows are a recorded exemption.
+14. **The selection bar is docked above the bottom bar, not floating at the selection.** It is cleared by ✕, by Escape (on `document`, claimed, standing down while the page is covered or the key is already claimed), and by a click outside on non-interactive content (claimed), never by a press on a control. A diff refresh keeps it while its rows are unchanged.
+15. **`Ask AI to edit…` writes path, range, version and a `diff` fence through the prefill handoff, and never sends.** `Copy` copies the side the range is numbered on, without markers.
