@@ -16,16 +16,17 @@ React SPA ──WebSocket──▶ Go Server ──exec──▶ git CLI
 
 | Layer | Path | Role |
 |-------|------|------|
-| RPC handlers | `server/ws/rpc_git.go` | `git.status`, `git.add`, `git.reset`, `git.discard`, `git.commit`, `git.log`, `git.show`, `git.show.diff`, `git.show.file`, `git.branches`, `git.checkout`, `git.branch.create`, `git.fetch`, `git.pull`, `git.push`, and the `git.subscribe` / `git.diff.subscribe` pairs with their unsubscribes; `server/ws/rpc_git_draft.go` has `git.commit.draft` and `git.commit.draft.cancel` |
+| RPC handlers | `server/ws/rpc_git.go` | `git.status`, `git.add`, `git.reset`, `git.hunk.stage`, `git.hunk.unstage`, `git.discard`, `git.commit`, `git.log`, `git.show`, `git.show.diff`, `git.show.file`, `git.branches`, `git.checkout`, `git.branch.create`, `git.fetch`, `git.pull`, `git.push`, and the `git.subscribe` / `git.diff.subscribe` pairs with their unsubscribes; `server/ws/rpc_git_draft.go` has `git.commit.draft` and `git.commit.draft.cancel` |
 | Git operations | `server/git/git.go` | Init, Status, Add, Reset, Diff, DiffWithContent, Log, Show, ShowFileDiff |
 | Historical file contents | `server/git/showfile.go` | ShowFile |
 | Branch operations | `server/git/branch.go` | Head, Branches, Checkout, CreateBranch |
 | Remote operations | `server/git/remote.go` | sync state (upstream, ahead/behind, last fetch), Fetch, Pull, Push |
 | Commit operations | `server/git/commit.go` | CreateCommit |
 | Commit message drafts | `server/git/draft.go`, `server/commitdraft/` | StagedChange (what a commit would record, cut to size), and Draft (the prompt, the one-shot AI call, the answer) — [Drafting a Commit Message](#drafting-a-commit-message) |
+| Hunk staging | `server/git/hunk.go` | StageHunk, UnstageHunk, and the hunk IDs a diff carries ([Staging Hunks](#staging-hunks)) |
 | Discard operations | `server/git/discard.go` | Discard |
 | Write serialisation | `server/git/lock.go` | A worktree's two locks — index and refs — with what each write takes, `BusyError`, and the operation names that lock and wire share ([Serialising Writes](#serialising-writes)) |
-| Command execution | `server/git/command.go` | `gitCommand` / `execGit` / `execGitLines` / `execGitVerbose` / `execGitNetwork`, `CommandError`, and `literalPathspec` |
+| Command execution | `server/git/command.go` | `gitCommand` / `execGit` / `execGitLines` / `execGitVerbose` / `execGitNetwork` / `execGitInput` (stdin, for `git apply -` and `hash-object --stdin`), `CommandError`, and `literalPathspec` |
 | Frontend components | `web/src/components/Git/` | `GitWorkspace` is the `/git` page: `BranchBar` (the top bar, with `SyncChip` and `SyncSheet`) over three segments — `ChangesSection` (`ChangesHeader`, `ChangedFileRow` and its `ChangedFileMenu`, `CommitBar` → `CommitSheet`), `HistorySection` (`LogList`, amend → `CommitSheet`) and `BranchesSection` (`BranchList`, `NewBranchSheet`) — with `DiffView` and the chain from `CommitView` to `CommitDiffView` to `CommitFileView` as layers under the first two. `ErrorBanner` catches the failures with no sheet to land in. `GitTab` is the sidebar's read-only overview and its entries into the workspace |
 | Frontend types | `web/src/types/git.ts` | Wire types, plus the pure `describeGitSync` / `describeCommitAction` / `describeDiscard` the workspace's labels and confirmation copy come from |
 | Frontend hooks | `web/src/hooks/useGit*.ts` | The workspace's queries, mutations and watch subscriptions, and `useAutoFetch`, the fetch it runs on the way in. Note `useGitCommit` *reads* a commit (`git.show`) — `useGitCreateCommit` is the one that writes. `useCommitFile` (`git.show.file`) is outside the glob because it reads a file rather than the repository's state: it backs the commit-file layer ([git-ui.md](git-ui.md#viewing-a-file-from-a-commit)) |
@@ -129,8 +130,11 @@ One file's diff reaches the client three ways — the `git.diff.subscribe` reply
 
 ```
 { "diff": string, "old_content": string, "new_content": string,
-  "omitted"?: "too_large", "size"?: int, "mime"?: string, "limit"?: int }
+  "omitted"?: "too_large", "size"?: int, "mime"?: string, "limit"?: int,
+  "hunk_ids"?: string[] }
 ```
+
+`hunk_ids` names the hunks for [Staging Hunks](#staging-hunks); a commit's diff never has it.
 
 `old_content` and `new_content` are the two whole versions, sent beside the hunks so the client can highlight them.
 
@@ -258,6 +262,45 @@ git.commit.draft.cancel  { draft_id }                                      ->  n
 | `failed` | The CLI ended without a message — an error result, a failed turn, an exit before answering, or output the tool check could not read |
 
 `cli_not_found` and `auth_failed` are kept apart, though a sheet may show both as "unavailable": only the second is fixed by signing in. An amend on a branch with no commit yet is `InvalidParams` (the sheet does not offer one there). A git command that fails while reading the change is an internal error, as elsewhere. A model that wraps its answer in a code fence or in quotes despite being told not to has them removed — a quote counts as wrapping only if it occurs nowhere else in the message, so `Revert "Add div"` keeps its own.
+
+## Staging Hunks
+
+`git.hunk.stage` and `git.hunk.unstage` move one hunk of a file between the working tree and the index; the file's other hunks stay where they are.
+
+```
+git.hunk.stage    { path, hunk_id }  ->  null   // a hunk of the unstaged diff into the index
+git.hunk.unstage  { path, hunk_id }  ->  null   // a hunk of the staged diff back out of it
+```
+
+**The client names a hunk by an ID that came with the diff.** Every `git.diff.subscribe` reply and `git.diff.changed` notification carries `hunk_ids`, one per `@@` hunk of `diff`, in order. An ID is a hash of the side, the path and the hunk's own lines — context included — and not of its position: staging one hunk moves the line numbers of every hunk below it, and a client that has not yet seen the refreshed diff must still be able to stage the next one. The context lines are what pin a hunk to its place. Identical hunks in one file are told apart by how many came before them and how many there are, so one more identical hunk appearing makes all of them stale rather than shifting which place an ID names. The price is that staging one of several identical hunks makes the others stale too, so the client rereads the diff before the next.
+
+**What the server applies is the hunk it finds, never one the client sent.** Under the index lock it reads the file's diff again, looks for a hunk with that ID, and applies that hunk to the index with `git apply --cached` (`--reverse` to unstage). The working tree is never written. When no hunk matches — the file was edited since, by the user or an agent; the change was staged or reverted another way; the ID belongs to the other side — nothing is written and the answer is `-32005` (`rpc.CodeGitHunkStale`): the client rereads the diff and lets the user pick again. It does not retry, since what it would retry is no longer on screen. Applying the hunk the user looked at to a file that has moved on would stage something nobody reviewed.
+
+**The diff has to be one `git apply` can take.** So the review's diff is read with its format pinned against the user's config: the file's own content rather than an external driver's or a `textconv`'s rendering of it (applied, a rendered hunk would write the rendering into the index), no colour, `a/` `b/` prefixes, three lines of context, and stdout alone, so a warning git prints cannot land in a hunk. Hunk staging needs it, and the review shows the hunks that are applied. A file with a `textconv` driver is therefore reviewed as its own text, or as binary.
+
+Where a file's diff is not a list of hunks that can be applied as shown, `hunk_ids` is absent, and the file is staged whole with `git.add` as before:
+
+| Case | Why |
+|---|---|
+| Whitespace hidden (`hide_whitespace`) | `-w` leaves changes out of the hunks it shows, so applying one would stage what is not on screen |
+| Binary file, tracked or untracked | git has no hunks for it; an untracked one is drawn as text but staged as the file it is |
+| Conflicted file | its diff is git's combined one; a hunk request is `-32602` (`git.ErrHunkUnsupported`), since rereading would not help |
+| A file that became a symlink, or the reverse (status `T`) | git diffs it as a deletion and a creation of one path, neither of which applies without the other; `-32602` as above |
+| A staged rename the diff does not pair as the status did | the diff is the new path added and the old one deleted, and a hunk of the second would write a path the request did not name; `-32602` as above |
+| Too large to send, or a mode change alone | no hunks reach the client |
+| A commit's diff (`git.show.diff`) | history, not something to stage |
+
+The other edges each keep their meaning:
+
+- **An untracked file** is one hunk, the whole file. It goes in through `git add` so that its mode, a symlink and the repository's clean filters come out as for any staged file, and the blob the add stored is then compared with the content the ID was checked against; a file rewritten in between is taken back out of the index and refused as stale.
+- **A new or deleted file** is also one hunk, and its patch keeps the creation or deletion: staging it adds or removes the index entry, unstaging it does the reverse. An intent-to-add entry (`git add -N`) stages like a modification.
+- **A mode change is not part of any hunk.** `old mode` / `new mode` describe the file, so they are dropped from the patch: staging a hunk does not stage the mode, unstaging one does not unstage it.
+- **A staged rename keeps its rename.** Its hunks are applied to the new path alone, so unstaging part of a renamed file's edits leaves the move staged.
+- **No newline at end of file**, and `diff.suppressBlankEmpty`'s empty context lines, are carried through as git wrote them; hunk bodies are read by their header's counts, never up to the next line that looks like a header.
+
+**Partly staged needs no new field.** A file with some hunks staged and some not is in both of `git.status`'s lists, which is what the Changes list already reads as mixed ([git-changes-ui.md](git-changes-ui.md#the-changes-segment)).
+
+Both methods take the index lock as `stage` and `unstage` — the names a `-32001` refusal carries — and announce nothing themselves: the watchers pick the change up like any other ([Real-Time Updates](#real-time-updates)).
 
 ## Discard
 

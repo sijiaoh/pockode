@@ -23,6 +23,14 @@ func (h *rpcMethodHandler) replyGitError(ctx context.Context, conn *jsonrpc2.Con
 		h.replyErrorData(ctx, conn, id, rpc.CodeGitBusy, err.Error(), rpc.GitBusyData{Operation: busy.Running})
 		return
 	}
+	if errors.Is(err, git.ErrHunkStale) {
+		h.replyError(ctx, conn, id, rpc.CodeGitHunkStale, err.Error())
+		return
+	}
+	if errors.Is(err, git.ErrHunkUnsupported) {
+		h.replyError(ctx, conn, id, jsonrpc2.CodeInvalidParams, err.Error())
+		return
+	}
 	h.replyError(ctx, conn, id, jsonrpc2.CodeInternalError, err.Error())
 }
 
@@ -190,6 +198,36 @@ func (h *rpcMethodHandler) handleGitReset(ctx context.Context, conn *jsonrpc2.Co
 
 	if err := conn.Reply(ctx, req.ID, nil); err != nil {
 		h.log.Error("failed to send git reset response", "error", err)
+	}
+}
+
+// handleGitHunk is git.hunk.stage (staged false) and git.hunk.unstage (staged
+// true).
+func (h *rpcMethodHandler) handleGitHunk(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request, wt *worktree.Worktree, staged bool) {
+	var params rpc.GitHunkParams
+	if err := unmarshalParams(req, &params); err != nil {
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "invalid params")
+		return
+	}
+	if params.Path == "" || params.HunkID == "" {
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "path and hunk_id required")
+		return
+	}
+	if !h.validateGitPaths(ctx, conn, req, wt.WorkDir, []string{params.Path}) {
+		return
+	}
+
+	apply := git.StageHunk
+	if staged {
+		apply = git.UnstageHunk
+	}
+	if err := apply(wt.WorkDir, params.Path, params.HunkID); err != nil {
+		h.replyGitError(ctx, conn, req.ID, err)
+		return
+	}
+
+	if err := conn.Reply(ctx, req.ID, nil); err != nil {
+		h.log.Error("failed to send git hunk response", "error", err, "staged", staged)
 	}
 }
 
