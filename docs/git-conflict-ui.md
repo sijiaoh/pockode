@@ -279,11 +279,13 @@ Every write the workspace offers, reviewed. "Disabled" keeps the control in plac
 | Discard other files, discard all | allowed, conflicted files excluded | — | — |
 | Commit (list's bar, the review's commit button) | stopped | **disabled**, labelled `Commit` with no count, visible line above the button | `Can't commit during a rebase.` (the kind named). Committing would finish a merge, pick or revert — the `Continue` left to the agent — and would insert a stray commit into a rebase. Visible rather than `sr-only`: the banner may be collapsed or scrolled out of mind, and nothing next to the button says why |
 | The commit sheet, if open when an operation begins | stays open (it holds the message) | `Commit` / `Commit & push` disabled | The same line, in the footer where the push reasons go |
-| Amend (HEAD row's `⋯` in History) | stopped | absent | Not on the user's way: an entry in a menu, not a target to keep. git refuses amend mid-merge, and mid-rebase HEAD is not the branch's commit. The banner's pause sentence says why commits stopped |
+| Amend (a commit's `⋯` menu, on HEAD) | stopped | absent | Not on the user's way: an entry in a menu, not a target to keep. git refuses amend mid-merge, and mid-rebase HEAD is not the branch's commit. The banner's pause sentence says why commits stopped |
 | `✨ Draft` | — | unreachable (the sheet cannot be opened) | — |
 | Switch branch (Branches rows) | stopped | **disabled**, as rows are during a switch | Pinned at the top of the list where a checkout failure goes: `Branch switching is paused during the rebase. Abort it, or let the agent finish it.` |
 | `New branch…` | stopped | **disabled** | The same pinned line |
 | The new-branch sheet, if open when an operation begins | stays open (it holds the name) | `Create` disabled | The same sentence, in the sheet |
+| `Create branch here…` (a commit's `⋯` menu) | stopped | the menu row stays; the sheet opens with `Create` **disabled** | The same sentence, in the sheet: the menu has no line of its own to say it in ([git-history-ui.md](git-history-ui.md#create-branch-here)) |
+| `Ask AI to revert` (a commit's `⋯` menu) | allowed | — | It writes nothing itself; the prefilled message goes into the composer, and the agent meets the operation there ([agent-handoff-ui.md §1.5](agent-handoff-ui.md#15-the-targets-state-does-not-gate-the-handoff)) |
 | Fetch | allowed | — | Touches no working tree |
 | Pull | stopped (merge, cherry-pick, revert; during a rebase the chip is hidden) | **disabled** in the Sync sheet | A line under the button rows: `Can't pull during a merge.` git refuses it; the sheet should say so rather than relay the refusal |
 | Push | allowed when on a branch | — | Pushes the branch as of its last commit; nothing in progress is sent |

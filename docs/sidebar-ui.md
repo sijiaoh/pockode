@@ -161,6 +161,7 @@ Colour, restated as rules rather than as a list of places:
 | `th-bg-tertiary` | The row you are looking at (selected file, selected commit), and the fill of secondary buttons inside sheets |
 | `th-text-muted` | Group headers, metadata, and the icon of an action rare enough to sit below the row it lives on (a tree row's `…`). Quieter than the body colour, never quiet enough to stop being read — it owes AA 4.5 over the worst surface it lands on |
 | `th-error` / `th-success` | A failure / a completed outcome. Never a state that is merely unusual |
+| `th-graph-1` … `th-graph-8` | One line of the History commit graph, told from its neighbours — never text, never a state; what a commit is, its shape says ([git-history-ui.md](git-history-ui.md#line-colours)) |
 
 **`th-accent-text` on `th-accent` clears WCAG AA's 4.5:1 in every variant, and
 `web/tests/contrast.test.ts` holds the line.** The test finds the variants by
