@@ -1,4 +1,4 @@
-import { ChevronDown, GitBranch, PanelLeftClose, X } from "lucide-react";
+import { ChevronDown, FolderGit2, PanelLeftClose, X } from "lucide-react";
 import { type ReactNode, useCallback, useRef, useState } from "react";
 import { useWorktree } from "../../hooks/useWorktree";
 import { useWSStore } from "../../lib/wsStore";
@@ -194,7 +194,7 @@ function WorktreeSwitcher({ onClose, isExpanded = true }: Props) {
 				aria-haspopup="listbox"
 				aria-label="Select worktree"
 			>
-				<GitBranch
+				<FolderGit2
 					className="size-4 shrink-0 text-th-text-muted"
 					aria-hidden="true"
 				/>

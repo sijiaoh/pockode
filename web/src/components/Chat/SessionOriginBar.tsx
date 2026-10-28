@@ -1,4 +1,4 @@
-import { Archive, GitBranch } from "lucide-react";
+import { Archive, FolderGit2 } from "lucide-react";
 import type { SessionView } from "../../lib/sessionView";
 
 interface Props {
@@ -22,7 +22,7 @@ function SessionOriginBar({ view }: Props) {
 	// beside a worktree name, and the two states have to be distinguishable at a
 	// glance. `Archive` means "kept, but no longer running", which is exactly
 	// what a deleted worktree's sessions are.
-	const Icon = view.exists ? GitBranch : Archive;
+	const Icon = view.exists ? FolderGit2 : Archive;
 
 	return (
 		<div className="flex min-h-[32px] shrink-0 items-center gap-1.5 border-b border-th-border bg-th-bg-secondary px-3 text-xs text-th-text-muted">

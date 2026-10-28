@@ -1,4 +1,4 @@
-import { Archive, GitBranch } from "lucide-react";
+import { Archive, FolderGit2 } from "lucide-react";
 import type { SessionView } from "../../lib/sessionView";
 
 interface Props {
@@ -23,7 +23,7 @@ interface Props {
  * the same row.
  */
 function ReadOnlyBar({ view, onOpenThere }: Props) {
-	const Icon = view.exists ? GitBranch : Archive;
+	const Icon = view.exists ? FolderGit2 : Archive;
 
 	return (
 		<div className="flex min-h-[52px] shrink-0 items-center gap-2 border-t border-th-border bg-th-bg-secondary px-3 py-2">

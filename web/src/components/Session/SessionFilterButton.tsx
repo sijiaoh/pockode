@@ -1,5 +1,5 @@
 import { useIsExpanded } from "@pockode/shared";
-import { Archive, GitBranch, ListFilter } from "lucide-react";
+import { Archive, FolderGit2, ListFilter } from "lucide-react";
 import { useCallback, useMemo, useRef, useState } from "react";
 import { useSessionViewSources } from "../../hooks/sessionViewQueries";
 import { useWorktreeList } from "../../hooks/useWorktreeList";
@@ -198,7 +198,7 @@ function WorktreeChoiceRow({
 	// Two glyphs rather than the word "(deleted)": a 240px row has no space for
 	// it, and `Archive` says the thing that has to be said — kept, but no longer
 	// running. The word is there for a screen reader, which has the room.
-	const Icon = choice.exists ? GitBranch : Archive;
+	const Icon = choice.exists ? FolderGit2 : Archive;
 	return (
 		<FilterOption
 			type="radio"
