@@ -244,7 +244,6 @@ function GitWorkspace({
 						<ChangesSection
 							onSelectFile={onSelectFile}
 							onCloseFile={onCloseFile}
-							onViewHistory={() => onSelectSegment("history")}
 							activeFile={activeFile}
 						/>
 					) : segment === "history" ? (

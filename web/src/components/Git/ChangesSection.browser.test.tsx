@@ -69,7 +69,6 @@ function renderAt(width: number) {
 				<ChangesSection
 					onSelectFile={() => {}}
 					onCloseFile={() => {}}
-					onViewHistory={() => {}}
 					activeFile={null}
 				/>
 			</div>
