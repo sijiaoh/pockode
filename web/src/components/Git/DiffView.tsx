@@ -24,6 +24,7 @@ import { useGitDiffWatch } from "../../hooks/useGitDiffWatch";
 import { useGitStatus } from "../../hooks/useGitStatus";
 import { useGitWriteRunner } from "../../hooks/useGitWrites";
 import { useLeaveReview } from "../../hooks/useLeaveReview";
+import { useOrderedChanges } from "../../hooks/useOrderedChanges";
 import { usePrefillComposer } from "../../hooks/usePrefillComposer";
 import { useRouteState } from "../../hooks/useRouteState";
 import { type DiffHunk, parseHunks } from "../../lib/diffHunks";
@@ -36,13 +37,10 @@ import {
 	adjacentChange,
 	type ChangedFile,
 	changeKindOf,
-	collectChanges,
-	orderChanges,
 	reviewSideOf,
 	stagesOnlyWhole,
 	unstagePaths,
 } from "../../lib/gitChanges";
-import { useGitChangesViewStore } from "../../lib/gitChangesViewStore";
 import {
 	gitWriteActions,
 	isPathWriting,
@@ -162,7 +160,7 @@ function DiffView({
 	const { available: splitAvailable, split, toggleSplit } = useGitDiffSplit();
 	const { data: status, isPending: statusPending } = useGitStatus();
 	const queryClient = useQueryClient();
-	const view = useGitChangesViewStore((s) => s.view);
+	const { files, view } = useOrderedChanges(status);
 	const { toggle, resolve, toggleHunk, discard, writes } = useGitWriteRunner();
 	// The worktree the runner sends to, read in the same render, as the Changes
 	// list does: a failure is filed under the worktree whose path it names.
@@ -175,10 +173,6 @@ function DiffView({
 	const [committing, setCommitting] = useState(false);
 	const hintId = useId();
 
-	const files = useMemo(
-		() => (status ? orderChanges(collectChanges(status), view) : []),
-		[status, view],
-	);
 	const file = files.find((f) => f.path === path);
 	// Stopped being changed while on screen — committed or reverted by the
 	// agent, say. The page stays and says so rather than being taken away.

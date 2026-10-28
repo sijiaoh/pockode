@@ -1,4 +1,4 @@
-import { Ellipsis } from "lucide-react";
+import { Ellipsis, TriangleAlert } from "lucide-react";
 import { memo, useId } from "react";
 import {
 	type ChangedFile,
@@ -15,16 +15,31 @@ import StageCheckbox, { StageGutter } from "./StageCheckbox";
 /** Px per tree level, for the row's content; the checkbox column stays put. */
 export const TREE_INDENT = 16;
 
-interface Props {
+interface BaseProps {
 	file: ChangedFile;
+	isActive: boolean;
+	onSelect: (file: ChangedFile) => void;
+}
+
+interface WritableProps extends BaseProps {
+	readOnly?: false;
 	/** Tree depth below the root; 0 in the flat list. */
 	depth: number;
-	isActive: boolean;
 	busy: boolean;
 	onToggle: (file: ChangedFile) => void;
-	onSelect: (file: ChangedFile) => void;
 	onMore: (file: ChangedFile) => void;
 }
+
+/**
+ * The drawer's list below `expanded`, where nothing writes: no checkbox, no
+ * `⋯`, and the staging state left unsaid rather than drawn as a box that does
+ * nothing (docs/sidebar-ui.md).
+ */
+interface ReadOnlyProps extends BaseProps {
+	readOnly: true;
+}
+
+type Props = WritableProps | ReadOnlyProps;
 
 const KIND_WORD: Partial<Record<ChangeKind, string>> = {
 	added: "Added",
@@ -58,17 +73,11 @@ function statusWords(file: ChangedFile, kind: ChangeKind): string[] {
 
 /**
  * One changed file: its checkbox, the row that opens it, and `⋯` for the
- * rest. The three are siblings, never nested.
+ * rest. The three are siblings, never nested. Read-only, the row is the
+ * button alone.
  */
-const ChangedFileRow = memo(function ChangedFileRow({
-	file,
-	depth,
-	isActive,
-	busy,
-	onToggle,
-	onSelect,
-	onMore,
-}: Props) {
+const ChangedFileRow = memo(function ChangedFileRow(props: Props) {
+	const { file, isActive, onSelect } = props;
 	const kind = changeKindOf(file);
 	const { fileName, directory } = splitPath(file.path);
 	const { stem, extension: ext } = splitExtension(fileName);
@@ -89,14 +98,14 @@ const ChangedFileRow = memo(function ChangedFileRow({
 			{/* Staging a conflict is how git is told it is resolved, so no single
 			    press may do it: the conflict view's `Mark resolved` or the agent
 			    does (docs/git-conflict-ui.md). */}
-			{file.conflict ? (
+			{props.readOnly ? null : file.conflict ? (
 				<StageGutter conflict />
 			) : (
 				<StageCheckbox
 					state={checkStateOf(file)}
 					label={`Stage ${file.path}`}
-					busy={busy}
-					onToggle={() => onToggle(file)}
+					busy={props.busy}
+					onToggle={() => props.onToggle(file)}
 				/>
 			)}
 			<button
@@ -113,9 +122,28 @@ const ChangedFileRow = memo(function ChangedFileRow({
 				// skipped.
 				aria-describedby={`${detailsId} ${countsId}`}
 				aria-current={isActive ? "true" : undefined}
-				style={{ paddingLeft: depth * TREE_INDENT }}
-				className="flex min-w-0 flex-1 items-center gap-2 self-stretch py-1.5 pr-1 text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent focus-visible:ring-inset"
+				style={
+					props.readOnly
+						? undefined
+						: { paddingLeft: props.depth * TREE_INDENT }
+				}
+				className={`flex min-w-0 flex-1 items-center gap-2 self-stretch py-1.5 text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent focus-visible:ring-inset ${
+					props.readOnly ? "rounded-lg px-3" : "pr-1"
+				}`}
 			>
+				{/* The drawer's entries' icon column (GitTab's `Entry`: `px-3`, a
+				    `size-4` icon, `gap-2.5`), so the name lines up with
+				    "Changes" and reads as under it. */}
+				{props.readOnly && (
+					<span className="mr-0.5 flex w-4 shrink-0 justify-center">
+						{file.conflict && (
+							<TriangleAlert
+								className="size-4 text-th-warning"
+								aria-hidden="true"
+							/>
+						)}
+					</span>
+				)}
 				<span className="min-w-0 flex-1 @git-row:flex @git-row:items-baseline @git-row:gap-3">
 					<span
 						title={fileName}
@@ -158,14 +186,16 @@ const ChangedFileRow = memo(function ChangedFileRow({
 					className="shrink-0"
 				/>
 			</button>
-			<button
-				type="button"
-				onClick={() => onMore(file)}
-				aria-label={`More actions for ${file.path}`}
-				className={`${iconButtonClass()} mr-1`}
-			>
-				<Ellipsis className="h-4 w-4" aria-hidden="true" />
-			</button>
+			{!props.readOnly && (
+				<button
+					type="button"
+					onClick={() => props.onMore(file)}
+					aria-label={`More actions for ${file.path}`}
+					className={`${iconButtonClass()} mr-1`}
+				>
+					<Ellipsis className="h-4 w-4" aria-hidden="true" />
+				</button>
+			)}
 		</div>
 	);
 });

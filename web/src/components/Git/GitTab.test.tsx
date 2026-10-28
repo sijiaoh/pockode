@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, render, screen } from "@testing-library/react";
+import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { gitSyncActions } from "../../lib/gitSyncStore";
@@ -8,7 +8,29 @@ import type { GitBranches, GitStatus, LineStat } from "../../types/git";
 import type { GitLayer, GitSegment } from "../../types/overlay";
 import GitTab, { type GitNavigation } from "./GitTab";
 
-vi.mock("../Layout", () => ({ useSidebarRefresh: () => ({ isActive: true }) }));
+let tabActive: boolean;
+vi.mock("../Layout", () => ({
+	useSidebarRefresh: () => ({ isActive: tabActive }),
+}));
+// jsdom lays nothing out, and the scrolling is revealRow.test.tsx's: what is
+// recorded here is which row the drawer asked to bring into view.
+let revealed: string[];
+vi.mock("./revealRow", async () => {
+	const { useLayoutEffect } = await import("react");
+	return {
+		useRevealLitRow: (
+			scrollerRef: { current: HTMLElement | null },
+			reveal: (() => void) | undefined,
+		) => {
+			useLayoutEffect(() => {
+				const row = scrollerRef.current?.querySelector('[aria-current="true"]');
+				if (!reveal || !row) return;
+				revealed.push(row.getAttribute("aria-label") ?? "");
+				reveal();
+			});
+		},
+	};
+});
 
 let branches: GitBranches | undefined;
 vi.mock("../../hooks/useGitBranches", () => ({
@@ -17,8 +39,9 @@ vi.mock("../../hooks/useGitBranches", () => ({
 let changeCount: number | undefined;
 let changeLines: LineStat | null;
 let status: GitStatus | undefined;
+let statusError: Error | null;
 vi.mock("../../hooks/useGitStatus", () => ({
-	useGitStatus: () => ({ data: status }),
+	useGitStatus: () => ({ data: status, error: statusError }),
 }));
 vi.mock("../../hooks/useGitChangeCount", async (importOriginal) => ({
 	...(await importOriginal<typeof import("../../hooks/useGitChangeCount")>()),
@@ -114,6 +137,53 @@ function renderTab(activeSegment: GitSegment | null = null) {
 	return { onOpenSegment: navigation.onSelectSegment };
 }
 
+function renderDrawer(layer: GitLayer | null, { isOpen = true } = {}) {
+	const navigation = makeNavigation();
+	const client = new QueryClient();
+	const tab = (layer: GitLayer | null, isOpen: boolean) => (
+		<QueryClientProvider client={client}>
+			<GitTab
+				isExpanded={false}
+				isOpen={isOpen}
+				layer={layer}
+				navigation={navigation}
+			/>
+		</QueryClientProvider>
+	);
+	let open = isOpen;
+	const { rerender } = render(tab(layer, isOpen));
+	return {
+		navigation,
+		setOpen: (next: boolean) => {
+			open = next;
+			act(() => rerender(tab(layer, next)));
+		},
+		/** Renders again, as a new status or a tab switch would. */
+		refresh: () => act(() => rerender(tab(layer, open))),
+	};
+}
+
+/** A status of plain unstaged modifications, one per path. */
+function modified(...paths: string[]): GitStatus {
+	return {
+		staged: [],
+		unstaged: paths.map((path) => ({ path, status: "M" as const })),
+	};
+}
+
+/** Seven files, one more than the drawer shows before `Show all`. */
+function paths7(): string[] {
+	return ["a", "b", "c", "d", "e", "f", "g"].map((p) => `${p}.ts`);
+}
+
+/** The paths the drawer lists, top to bottom. */
+function listedPaths(): string[] {
+	const list = screen.getByRole("list", { name: "Changed files" });
+	return within(list)
+		.getAllByRole("button")
+		.map((b) => (b.getAttribute("aria-label") ?? "").replace(/^Review /, ""));
+}
+
 function renderExpanded(layer: GitLayer | null, { isOpen = true } = {}) {
 	const navigation = makeNavigation();
 	const onListShownChange = vi.fn();
@@ -148,6 +218,9 @@ beforeEach(() => {
 	changeCount = 5;
 	changeLines = null;
 	status = undefined;
+	statusError = null;
+	tabActive = true;
+	revealed = [];
 	gitSyncActions.reset();
 });
 
@@ -165,8 +238,9 @@ describe("GitTab", () => {
 		expect(onOpenSegment).toHaveBeenCalledWith(segment);
 	});
 
-	// Every write lives once, in the workspace: the tab is the three doors and
-	// nothing else — the branch and its sync state are read, not pressed.
+	// Every write lives once, in the workspace: past the changed files the
+	// tab is the three doors — the branch and its sync state are read, not
+	// pressed.
 	it("offers nothing but the three entries", () => {
 		renderTab();
 
@@ -278,6 +352,225 @@ describe("GitTab", () => {
 
 			expect(screen.getByText("feature/git-workspace")).toBeInTheDocument();
 			expect(screen.queryByText(/to pull/)).toBeNull();
+		});
+	});
+});
+
+describe("GitTab's changed files below expanded", () => {
+	it("lists them in the review's order, and opens one where the list would", async () => {
+		const user = userEvent.setup();
+		status = {
+			staged: [{ path: "src/b.ts", status: "M" }],
+			unstaged: [
+				{ path: "src/b.ts", status: "M" },
+				{ path: "a.ts", status: "M" },
+				{ path: "new.ts", status: "?" },
+			],
+		};
+		const { navigation } = renderDrawer(null);
+
+		expect(listedPaths()).toEqual(["a.ts", "new.ts", "src/b.ts"]);
+		// A partly staged file opens unstaged, as from the Changes list.
+		await user.click(screen.getByRole("button", { name: "Review src/b.ts" }));
+		expect(navigation.onSelectFile).toHaveBeenCalledWith("src/b.ts", false);
+	});
+
+	// Every write lives once, in the workspace.
+	it("offers nothing that writes", () => {
+		status = modified("a.ts", "b.ts");
+		renderDrawer(null);
+
+		expect(screen.queryByRole("checkbox")).toBeNull();
+		expect(screen.queryByRole("button", { name: /^More actions/ })).toBeNull();
+	});
+
+	it("marks a conflicted file, which opens like any other", async () => {
+		const user = userEvent.setup();
+		status = {
+			staged: [{ path: "merge.go", status: "U" }],
+			unstaged: [{ path: "merge.go", status: "U" }],
+			conflicted: ["merge.go"],
+			operation: { kind: "merge" },
+		};
+		const { navigation } = renderDrawer(null);
+
+		await user.click(
+			screen.getByRole("button", { name: "Review merge.go, conflicted" }),
+		);
+		expect(navigation.onSelectFile).toHaveBeenCalledWith("merge.go", false);
+	});
+
+	it("lists nothing for a clean tree, which the door already says", () => {
+		changeCount = 0;
+		status = modified();
+		renderDrawer(null);
+
+		expect(screen.queryByRole("list", { name: "Changed files" })).toBeNull();
+		expect(screen.queryByText("Changes unavailable")).toBeNull();
+	});
+
+	// Left blank, a failed read would look like a clean tree that forgot to
+	// say so.
+	it("says a failed read while nothing is known", () => {
+		changeCount = undefined;
+		statusError = new Error("git status failed");
+		renderDrawer(null);
+
+		expect(screen.getByText("Changes unavailable")).toBeInTheDocument();
+		expect(screen.queryByRole("list", { name: "Changed files" })).toBeNull();
+	});
+
+	it("keeps the files known through a failed refresh", () => {
+		statusError = new Error("git status failed");
+		status = modified("a.ts");
+		renderDrawer(null);
+
+		expect(listedPaths()).toEqual(["a.ts"]);
+		expect(screen.queryByText("Changes unavailable")).toBeNull();
+	});
+
+	describe("the cap", () => {
+		const paths = paths7();
+
+		it("shows five and offers the rest, which take the focus once shown", async () => {
+			const user = userEvent.setup();
+			status = modified(...paths);
+			renderDrawer(null);
+
+			expect(listedPaths()).toEqual(paths.slice(0, 5));
+			await user.click(
+				screen.getByRole("button", { name: "Show all 7 files" }),
+			);
+
+			expect(listedPaths()).toEqual(paths);
+			expect(screen.getByRole("button", { name: "Review f.ts" })).toHaveFocus();
+			expect(screen.queryByRole("button", { name: /^Show all/ })).toBeNull();
+		});
+
+		// A button standing in for a single row would save nothing.
+		it("draws a sixth file rather than a button in its place", () => {
+			status = modified(...paths.slice(0, 6));
+			renderDrawer(null);
+
+			expect(listedPaths()).toEqual(paths.slice(0, 6));
+			expect(screen.queryByRole("button", { name: /^Show all/ })).toBeNull();
+		});
+
+		it("starts over each time the drawer opens", async () => {
+			const user = userEvent.setup();
+			status = modified(...paths);
+			const { setOpen } = renderDrawer(null);
+			await user.click(
+				screen.getByRole("button", { name: "Show all 7 files" }),
+			);
+
+			setOpen(false);
+			setOpen(true);
+
+			expect(listedPaths()).toEqual(paths.slice(0, 5));
+		});
+
+		it("shows them all when the file under review is past it", () => {
+			status = modified(...paths);
+			renderDrawer({ type: "diff", path: "g.ts", staged: false });
+
+			expect(listedPaths()).toEqual(paths);
+			expect(screen.queryByRole("button", { name: /^Show all/ })).toBeNull();
+		});
+
+		// Only the drawer closing starts it over: a look at another tab is
+		// still the same visit.
+		it("stays shown across a switch to another tab and back", async () => {
+			const user = userEvent.setup();
+			status = modified(...paths);
+			const { refresh } = renderDrawer(null);
+			await user.click(
+				screen.getByRole("button", { name: "Show all 7 files" }),
+			);
+
+			tabActive = false;
+			refresh();
+			tabActive = true;
+			refresh();
+
+			expect(listedPaths()).toEqual(paths);
+		});
+	});
+
+	describe("the file under review", () => {
+		// One thing lit in the tab: the review is the file, not the list.
+		it("is lit in place of the Changes door", () => {
+			status = modified("a.ts", "b.ts");
+			renderDrawer({ type: "diff", path: "b.ts", staged: false });
+
+			expect(
+				screen.getByRole("button", { name: "Review b.ts" }),
+			).toHaveAttribute("aria-current", "true");
+			expect(
+				screen.getByRole("button", { name: /^Changes/ }),
+			).not.toHaveAttribute("aria-current");
+		});
+
+		it("is brought into view each time the drawer opens on the tab", () => {
+			status = modified(...paths7());
+			const { setOpen } = renderDrawer(
+				{ type: "diff", path: "g.ts", staged: false },
+				{ isOpen: false },
+			);
+			expect(revealed).toEqual([]);
+
+			setOpen(true);
+			expect(revealed).toEqual(["Review g.ts"]);
+
+			setOpen(false);
+			setOpen(true);
+			expect(revealed).toEqual(["Review g.ts", "Review g.ts"]);
+		});
+
+		it("is brought into view when the tab is switched to", () => {
+			status = modified(...paths7());
+			tabActive = false;
+			const { refresh } = renderDrawer({
+				type: "diff",
+				path: "g.ts",
+				staged: false,
+			});
+			expect(revealed).toEqual([]);
+
+			tabActive = true;
+			refresh();
+			expect(revealed).toEqual(["Review g.ts"]);
+		});
+
+		it("waits for a status still on its way", () => {
+			const { refresh } = renderDrawer({
+				type: "diff",
+				path: "g.ts",
+				staged: false,
+			});
+			expect(revealed).toEqual([]);
+
+			status = modified(...paths7());
+			refresh();
+			expect(revealed).toEqual(["Review g.ts"]);
+		});
+
+		// Pressing it only closes the drawer; it must not flip the review back
+		// to the unstaged side.
+		it("is opened again on the side being read", async () => {
+			const user = userEvent.setup();
+			status = {
+				staged: [{ path: "a.ts", status: "M" }],
+				unstaged: [{ path: "a.ts", status: "M" }],
+			};
+			const { navigation } = renderDrawer({
+				type: "diff",
+				path: "a.ts",
+				staged: true,
+			});
+
+			await user.click(screen.getByRole("button", { name: "Review a.ts" }));
+			expect(navigation.onSelectFile).toHaveBeenCalledWith("a.ts", true);
 		});
 	});
 });

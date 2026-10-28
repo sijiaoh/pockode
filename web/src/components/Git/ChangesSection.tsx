@@ -11,6 +11,7 @@ import {
 } from "react";
 import { useGitStatus } from "../../hooks/useGitStatus";
 import { useGitWriteRunner } from "../../hooks/useGitWrites";
+import { useOrderedChanges } from "../../hooks/useOrderedChanges";
 import { useRouteState } from "../../hooks/useRouteState";
 import {
 	adjacentChange,
@@ -19,10 +20,8 @@ import {
 	type ChangedFile,
 	type ChangeFolder,
 	checkboxWrite,
-	collectChanges,
 	describeStageable,
 	filesUnder,
-	orderChanges,
 	reviewSideOf,
 	sumLines,
 	withoutConflicts,
@@ -30,7 +29,6 @@ import {
 import {
 	gitChangesViewActions,
 	useCollapsedFolders,
-	useGitChangesViewStore,
 } from "../../lib/gitChangesViewStore";
 import {
 	type GitWrites,
@@ -104,14 +102,10 @@ function ChangesSection({
 	// is filed under the worktree whose paths it names.
 	const worktree = useWorktreeStore((s) => s.current);
 	const actionError = useWriteFailure(worktree);
-	const view = useGitChangesViewStore((s) => s.view);
+	const { files, view } = useOrderedChanges(status);
 	const scrollerRef = useRef<HTMLDivElement>(null);
 	useRevealLitRow(scrollerRef, reveal);
 
-	const files = useMemo(
-		() => (status ? orderChanges(collectChanges(status), view) : []),
-		[status, view],
-	);
 	// A discard answers after the press; what follows a file then is read from
 	// the list as it is then.
 	const latest = useRef({ files, view });

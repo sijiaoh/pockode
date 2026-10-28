@@ -1,5 +1,6 @@
 import { useQueryClient } from "@tanstack/react-query";
 import {
+	ChevronRight,
 	FileDiff,
 	GitBranch,
 	History,
@@ -8,8 +9,10 @@ import {
 } from "lucide-react";
 import {
 	type ReactNode,
+	type RefObject,
 	useCallback,
 	useEffect,
+	useLayoutEffect,
 	useRef,
 	useState,
 } from "react";
@@ -24,7 +27,9 @@ import {
 } from "../../hooks/useGitChangeCount";
 import { useGitStatus } from "../../hooks/useGitStatus";
 import { useAutoFetch } from "../../hooks/useGitSync";
+import { useOrderedChanges } from "../../hooks/useOrderedChanges";
 import type { BranchRow } from "../../lib/gitBranches";
+import { type ChangedFile, reviewSideOf } from "../../lib/gitChanges";
 import {
 	describeOperation,
 	headBranchOf,
@@ -53,10 +58,12 @@ import {
 import { useSidebarRefresh } from "../Layout";
 import { formatBadgeCount, Spinner } from "../ui";
 import BranchBar, { HeadName } from "./BranchBar";
+import ChangedFileRow from "./ChangedFileRow";
 import GitSegmentList, { activeRowsOf } from "./GitSegmentList";
 import HeadPlaceholder from "./HeadPlaceholder";
 import LineCounts, { formatLineCounts } from "./LineCounts";
 import OperationBanner from "./OperationBanner";
+import { useRevealLitRow } from "./revealRow";
 
 /** The Git routes' navigations, as the app shell makes them. */
 export interface GitNavigation {
@@ -106,11 +113,12 @@ interface Props {
  *
  * At `expanded` it is the Git workspace's list — the branch bar, the segments
  * and the list under them — and the main area beside it shows what a row
- * opens, or the chat. Below `expanded` the drawer is too short for a list and
- * the workspace is a page of its own, so the tab is where the worktree stands
- * and the doors into that page — the same shape as the Project tab. Either
- * way each write is in one place: the sidebar's at `expanded`, the page's
- * below it.
+ * opens, or the chat. Below `expanded` the drawer is too short for a list
+ * that writes — its header, checkboxes and pinned commit bar — and the
+ * workspace is a page of its own, so the tab is where the worktree stands,
+ * the changed files to read, and the doors into that page — the shape of the
+ * Project tab. Either way each write is in one place: the sidebar's at
+ * `expanded`, the page's below it.
  */
 function GitTab({
 	isExpanded,
@@ -144,13 +152,12 @@ function GitTab({
 		);
 	}
 	return (
-		<div className={isActive ? "flex flex-col" : "hidden"}>
-			<Overview />
-			<Doors
-				activeSegment={layer && gitSegmentOf(layer)}
-				onOpenSegment={navigation.onSelectSegment}
-			/>
-		</div>
+		<Doorplate
+			isActive={isActive}
+			isOpen={isOpen}
+			layer={layer}
+			navigation={navigation}
+		/>
 	);
 }
 
@@ -339,67 +346,234 @@ function samePlace(a: ListPlace, b: ListPlace): boolean {
 }
 
 /**
- * The doors into the workspace's segments. Nothing here writes: below
- * `expanded` every write lives once, in the workspace.
+ * The tab below `expanded`: where the worktree stands, the changed files, and
+ * the doors into the workspace's segments. Nothing here writes: below
+ * `expanded` every write lives once, in the workspace. Nothing is pinned
+ * either — the tab scrolls as one, since pinned rows around a list are what
+ * left the drawer no room for it (docs/sidebar-ui.md).
  */
-function Doors({
-	activeSegment,
-	onOpenSegment,
+function Doorplate({
+	isActive,
+	isOpen,
+	layer,
+	navigation,
 }: {
-	/** The segment the workspace is standing in, and null when it is not on screen. */
-	activeSegment: GitSegment | null;
-	onOpenSegment: (segment: GitSegment) => void;
+	isActive: boolean;
+	isOpen: boolean;
+	layer: GitLayer | null;
+	navigation: GitNavigation;
+}) {
+	const worktree = useWorktreeStore((s) => s.current);
+	const scrollerRef = useRef<HTMLDivElement>(null);
+	// One thing lit in the tab: with a review open it is the file's row, and
+	// the Changes door only while the route is the list itself.
+	const activeSegment =
+		layer && layer.type !== "diff" ? gitSegmentOf(layer) : null;
+	const { activeFile } = activeRowsOf(layer);
+
+	return (
+		<div
+			ref={scrollerRef}
+			className={isActive ? "min-h-0 flex-1 overflow-y-auto" : "hidden"}
+		>
+			<Overview />
+			<div className="space-y-1 p-2">
+				<ChangesDoor
+					isActive={activeSegment === "changes"}
+					onOpen={() => navigation.onSelectSegment("changes")}
+				/>
+				<DrawerChanges
+					key={worktree}
+					activeFile={activeFile}
+					isOpen={isOpen}
+					shown={isOpen && isActive}
+					scrollerRef={scrollerRef}
+					onSelectFile={navigation.onSelectFile}
+				/>
+				<Entry
+					icon={History}
+					label="History"
+					isActive={activeSegment === "history"}
+					onClick={() => navigation.onSelectSegment("history")}
+				/>
+				<Entry
+					icon={GitBranch}
+					label="Branches"
+					isActive={activeSegment === "branches"}
+					onClick={() => navigation.onSelectSegment("branches")}
+				/>
+			</div>
+		</div>
+	);
+}
+
+function ChangesDoor({
+	isActive,
+	onOpen,
+}: {
+	isActive: boolean;
+	onOpen: () => void;
 }) {
 	const changeCount = useGitChangeCount();
 	const changeLines = useGitChangeLines();
 	const hasLines = changeLines !== null && formatLineCounts(changeLines) !== "";
 
 	return (
-		<div className="space-y-1 p-2">
-			<Entry
-				icon={FileDiff}
-				label="Changes"
-				isActive={activeSegment === "changes"}
-				onClick={() => onOpenSegment("changes")}
-				ariaLabel={
-					changeCount
-						? [
-								"Changes",
-								describeChangeCount(changeCount),
-								hasLines && describeChangeLines(changeLines),
-							]
-								.filter(Boolean)
-								.join(", ")
-						: undefined
-				}
-			>
-				{/* Nothing while the status has no answer: like the tab's badge,
-				    this is not where a failed read is reported — the workspace
-				    says it. */}
-				{changeCount === 0 ? (
-					<span className="ml-auto text-xs text-th-text-muted">No changes</span>
-				) : changeCount !== undefined ? (
-					<span className="ml-auto flex min-w-0 items-baseline gap-2">
-						<span className="text-xs tabular-nums text-th-text-secondary">
-							{formatBadgeCount(changeCount)}
-						</span>
-						{hasLines && <LineCounts lines={changeLines} />}
+		<Entry
+			icon={FileDiff}
+			label="Changes"
+			isActive={isActive}
+			onClick={onOpen}
+			ariaLabel={
+				changeCount
+					? [
+							"Changes",
+							describeChangeCount(changeCount),
+							hasLines && describeChangeLines(changeLines),
+						]
+							.filter(Boolean)
+							.join(", ")
+					: undefined
+			}
+		>
+			{/* Nothing while the status has no answer: like the tab's badge,
+			    this is not where a failed read is reported — the workspace
+			    says it. */}
+			{changeCount === 0 ? (
+				<span className="ml-auto text-xs text-th-text-muted">No changes</span>
+			) : changeCount !== undefined ? (
+				<span className="ml-auto flex min-w-0 items-baseline gap-2">
+					<span className="text-xs tabular-nums text-th-text-secondary">
+						{formatBadgeCount(changeCount)}
 					</span>
-				) : null}
-			</Entry>
-			<Entry
-				icon={History}
-				label="History"
-				isActive={activeSegment === "history"}
-				onClick={() => onOpenSegment("history")}
-			/>
-			<Entry
-				icon={GitBranch}
-				label="Branches"
-				isActive={activeSegment === "branches"}
-				onClick={() => onOpenSegment("branches")}
-			/>
-		</div>
+					{hasLines && <LineCounts lines={changeLines} />}
+				</span>
+			) : null}
+		</Entry>
+	);
+}
+
+/**
+ * Rows shown before `Show all`, so History and Branches stay near the first
+ * screen on a phone. One more file than this is drawn rather than a button
+ * standing in for a single row.
+ */
+const DRAWER_FILE_ROWS = 5;
+
+/**
+ * The changed files under the Changes door, read-only, in the review's order:
+ * row k is the review's `k / n`. Always flat — a folder row would be a second
+ * thing to press that opens nothing.
+ */
+function DrawerChanges({
+	activeFile,
+	isOpen,
+	shown,
+	scrollerRef,
+	onSelectFile,
+}: {
+	activeFile: { path: string; staged: boolean } | null;
+	isOpen: boolean;
+	/** The drawer open with this tab selected. */
+	shown: boolean;
+	scrollerRef: RefObject<HTMLDivElement | null>;
+	onSelectFile: (path: string, staged: boolean) => void;
+}) {
+	const { data: status, error } = useGitStatus();
+	const { files } = useOrderedChanges(status);
+	// By value: `activeFile` is a new object each render, and the rows are
+	// memoized on the press handler built from it.
+	const activePath = activeFile?.path;
+	const activeStaged = activeFile?.staged ?? false;
+
+	// Each opening starts collapsed: the tab stays mounted, and once opened
+	// for good the list would push History and Branches away for the rest of
+	// the visit.
+	const [expanded, setExpanded] = useState(false);
+	if (!isOpen && expanded) setExpanded(false);
+
+	// The drawer is opened from where the reader is, so it shows the file
+	// under review — past the cap too.
+	const litIndex = activePath
+		? files.findIndex((f) => f.path === activePath)
+		: -1;
+	const capped =
+		!expanded &&
+		files.length > DRAWER_FILE_ROWS + 1 &&
+		litIndex < DRAWER_FILE_ROWS;
+	const visible = capped ? files.slice(0, DRAWER_FILE_ROWS) : files;
+
+	const [revealPending, setRevealPending] = useState(false);
+	const [wasShown, setWasShown] = useState(false);
+	// Waits for the row while the status is still on its way.
+	if (shown !== wasShown) {
+		setWasShown(shown);
+		setRevealPending(shown && activePath !== undefined);
+	}
+	const revealed = useCallback(() => setRevealPending(false), []);
+	useRevealLitRow(scrollerRef, revealPending && shown ? revealed : undefined);
+
+	// `Show all` goes once pressed; the focus moves to the first row it
+	// brought rather than falling back to the body.
+	const listRef = useRef<HTMLUListElement>(null);
+	const focusFirstShown = useRef(false);
+	useLayoutEffect(() => {
+		if (!focusFirstShown.current || !expanded) return;
+		focusFirstShown.current = false;
+		listRef.current?.children[DRAWER_FILE_ROWS]
+			?.querySelector("button")
+			?.focus();
+	});
+
+	const selectFile = useCallback(
+		(file: ChangedFile) =>
+			onSelectFile(
+				file.path,
+				// The row of the file under review only closes the drawer: it
+				// stays on the side being read.
+				reviewSideOf(file, file.path === activePath && activeStaged),
+			),
+		[onSelectFile, activePath, activeStaged],
+	);
+
+	if (!status) {
+		// The reason and the retry are on the workspace's page; left blank,
+		// this would read as a clean tree that forgot to say so.
+		return error ? (
+			<p className="py-1 pr-3 pl-[38px] text-xs text-th-text-muted">
+				Changes unavailable
+			</p>
+		) : null;
+	}
+	if (files.length === 0) return null;
+
+	return (
+		<>
+			<ul ref={listRef} aria-label="Changed files" className="space-y-1">
+				{visible.map((file) => (
+					<li key={file.path}>
+						<ChangedFileRow
+							readOnly
+							file={file}
+							isActive={activePath === file.path}
+							onSelect={selectFile}
+						/>
+					</li>
+				))}
+			</ul>
+			{capped && (
+				<button
+					type="button"
+					onClick={() => {
+						focusFirstShown.current = true;
+						setExpanded(true);
+					}}
+					className="flex min-h-[44px] w-full items-center rounded-lg pr-3 pl-[38px] text-left text-sm text-th-text-muted transition-colors hover:bg-th-bg-tertiary focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent"
+				>
+					Show all {files.length} files
+				</button>
+			)}
+		</>
 	);
 }
 
@@ -517,9 +691,15 @@ function Entry({
 				isActive ? "bg-th-bg-tertiary" : ""
 			}`}
 		>
-			<Icon className="size-4 text-th-text-muted" aria-hidden="true" />
+			<Icon className="size-4 shrink-0 text-th-text-muted" aria-hidden="true" />
 			{label}
 			{children}
+			{/* A door goes to a page, where the file rows under Changes go to a
+			    file. */}
+			<ChevronRight
+				className={`size-4 shrink-0 text-th-text-muted ${children ? "" : "ml-auto"}`}
+				aria-hidden="true"
+			/>
 		</button>
 	);
 }

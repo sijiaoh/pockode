@@ -68,9 +68,20 @@ vi.mock("../Files", () => ({
 }));
 vi.mock("../Git", () => ({
 	GitTab: ({ navigation }: { navigation: GitNavigation }) => (
-		<button type="button" onClick={() => navigation.onSelectSegment("history")}>
-			open history
-		</button>
+		<>
+			<button
+				type="button"
+				onClick={() => navigation.onSelectSegment("history")}
+			>
+				open history
+			</button>
+			<button
+				type="button"
+				onClick={() => navigation.onSelectFile("src/a.ts", false)}
+			>
+				review src/a.ts
+			</button>
+		</>
 	),
 }));
 vi.mock("./SessionsTab", () => ({
@@ -431,7 +442,12 @@ describe("picking a row", () => {
 		return () => worktreeActions.reset();
 	});
 
-	const picks = ["open session", "open src/main.tsx", "open history"];
+	const picks = [
+		"open session",
+		"open src/main.tsx",
+		"open history",
+		"review src/a.ts",
+	];
 
 	// The column's `onClose` collapses it, so a pick that dismissed the drawer
 	// on a phone would take the column away with it.
