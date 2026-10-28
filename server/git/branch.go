@@ -29,10 +29,19 @@ type BranchInfo struct {
 	Name    string `json:"name"`
 	Current bool   `json:"current"`
 	// Worktree names the other worktree holding this branch, if any. git refuses
-	// to check the same branch out twice, so the UI disables such a row instead
-	// of letting the user discover the rule through an error.
+	// to check the same branch out twice, so the UI offers no switch to such a
+	// branch instead of letting the user discover the rule through an error.
 	Worktree    string    `json:"worktree,omitempty"`
 	CommittedAt time.Time `json:"committed_at"`
+	// Committer is the committer of the last commit, not its author: it pairs
+	// with CommittedAt, which is the committer date.
+	Committer string `json:"committer"`
+	// Upstream is the configured upstream as displayed ("origin/topic"); empty
+	// when none is configured.
+	Upstream string `json:"upstream,omitempty"`
+	// UpstreamGone marks an Upstream whose ref is not among the listed refs:
+	// SyncInfo.UpstreamGone, for every branch.
+	UpstreamGone bool `json:"upstream_gone,omitempty"`
 	// VsDefault is absent on the default branch itself, in a repository with no
 	// default branch, and where the count was not taken (see divergences).
 	VsDefault *Divergence `json:"vs_default,omitempty"`
@@ -43,6 +52,7 @@ type RemoteBranch struct {
 	Ref         string      `json:"ref"`  // "origin/topic", what the UI displays
 	Name        string      `json:"name"` // "topic", what Checkout takes
 	CommittedAt time.Time   `json:"committed_at"`
+	Committer   string      `json:"committer"`            // as on BranchInfo
 	VsDefault   *Divergence `json:"vs_default,omitempty"` // as on BranchInfo
 }
 
@@ -175,6 +185,14 @@ func Branches(dir string) (*BranchList, error) {
 		return &d
 	}
 
+	// Read off the listed refs rather than with a `rev-parse --verify` per
+	// branch, as syncInfo does for the current one; the two agree, since
+	// branchRefs already leaves out a ref that is not a commit.
+	listed := make(map[string]bool, len(refs))
+	for _, r := range refs {
+		listed[r.ref] = true
+	}
+
 	var names []string
 	local := []BranchInfo{}
 	for _, r := range refs {
@@ -183,7 +201,17 @@ func Branches(dir string) (*BranchList, error) {
 			continue
 		}
 		names = append(names, name)
-		info := BranchInfo{Name: name, Current: name == head.Branch, CommittedAt: r.committedAt, VsDefault: vsDefault(r.ref)}
+		info := BranchInfo{
+			Name:        name,
+			Current:     name == head.Branch,
+			CommittedAt: r.committedAt,
+			Committer:   r.committer,
+			VsDefault:   vsDefault(r.ref),
+		}
+		if r.upstream != "" {
+			info.Upstream = shortBranchRef(r.upstream)
+			info.UpstreamGone = !listed[r.upstream]
+		}
 		// A branch lives in at most one worktree, so every entry other than the
 		// current branch necessarily belongs to a different one.
 		if !info.Current {
@@ -227,15 +255,21 @@ type branchRef struct {
 	ref         string // full name, "refs/heads/topic"
 	hash        string
 	committedAt time.Time
+	committer   string
+	upstream    string // full name, empty when none is configured
 	symref      string // the target of a symbolic ref such as origin/HEAD
 }
 
 // branchRefs lists local and remote-tracking branches, most recently committed
 // first: in a panel this narrow, the branches worth putting within reach are the
 // ones the user touched last.
+//
+// Not %(upstream:track): it would say "[gone]", but by counting ahead/behind
+// against every branch's upstream, a history walk per branch.
 func branchRefs(dir string) ([]branchRef, error) {
 	lines, err := execGitLines(dir, "for-each-ref", "--sort=-committerdate",
-		"--format=%(refname)%09%(objectname)%09%(committerdate:unix)%09%(symref)", "refs/heads", "refs/remotes")
+		"--format=%(refname)%09%(objectname)%09%(committerdate:unix)%09%(committername)%09%(upstream)%09%(symref)",
+		"refs/heads", "refs/remotes")
 	if err != nil {
 		return nil, err
 	}
@@ -244,11 +278,11 @@ func branchRefs(dir string) ([]branchRef, error) {
 	for _, line := range lines {
 		// Trailing empty fields may be missing rather than empty: the output is
 		// trimmed as a whole, which takes the last line's trailing tabs with it.
-		fields := strings.SplitN(line, "\t", 4)
+		fields := strings.SplitN(line, "\t", 6)
 		if len(fields) < 2 {
 			return nil, fmt.Errorf("unexpected for-each-ref output: %q", line)
 		}
-		fields = append(fields, "", "")[:4]
+		fields = append(fields, "", "", "", "")[:6]
 		// No committer date means the ref points at something other than a
 		// commit — a tag object, which a refspec mapping tags under refs/remotes
 		// puts there. It is not a branch, and has nothing to switch to.
@@ -259,7 +293,14 @@ func branchRefs(dir string) ([]branchRef, error) {
 		if err != nil {
 			return nil, fmt.Errorf("unexpected for-each-ref output: %q", line)
 		}
-		refs = append(refs, branchRef{ref: fields[0], hash: fields[1], committedAt: time.Unix(unix, 0), symref: fields[3]})
+		refs = append(refs, branchRef{
+			ref:         fields[0],
+			hash:        fields[1],
+			committedAt: time.Unix(unix, 0),
+			committer:   fields[3],
+			upstream:    fields[4],
+			symref:      fields[5],
+		})
 	}
 	return refs, nil
 }
@@ -433,7 +474,7 @@ func remoteOnlyBranches(refs []branchRef, localNames []string, remotes []string)
 			continue
 		}
 		seen[name] = true
-		result = append(result, RemoteBranch{Ref: short, Name: name, CommittedAt: r.committedAt})
+		result = append(result, RemoteBranch{Ref: short, Name: name, CommittedAt: r.committedAt, Committer: r.committer})
 	}
 	return result
 }

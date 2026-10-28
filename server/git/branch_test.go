@@ -753,3 +753,55 @@ func TestBranches_Unborn(t *testing.T) {
 		t.Errorf("Branches() = %+v, want no branches and an empty recent list", list)
 	}
 }
+
+func TestBranches_CommitterAndUpstream(t *testing.T) {
+	dir, cleanup := setupTestRepoWithCommit(t)
+	defer cleanup()
+	runGit(t, dir, "branch", "-M", "main")
+
+	remote, remoteCleanup := setupBareRemote(t)
+	defer remoteCleanup()
+	runGit(t, dir, "remote", "add", "origin", remote)
+	runGit(t, dir, "branch", "gone")
+	runGit(t, dir, "branch", "unpublished")
+	runGit(t, dir, "branch", "remote-only")
+	runGit(t, dir, "push", "-u", "origin", "main", "gone", "remote-only")
+	// The remote deleted it and the fetch pruned it; the configuration stays.
+	runGit(t, dir, "update-ref", "-d", "refs/remotes/origin/gone")
+	runGit(t, dir, "branch", "-D", "remote-only")
+
+	// A committer other than the author: the field pairs with committed_at.
+	cmd := exec.Command("git", "commit", "--no-gpg-sign", "--allow-empty", "-m", "rebased")
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), "GIT_COMMITTER_NAME=Rebaser")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git commit failed: %v\n%s", err, out)
+	}
+
+	list, err := Branches(dir)
+	if err != nil {
+		t.Fatalf("Branches() error: %v", err)
+	}
+
+	tests := []struct {
+		name         string
+		committer    string
+		upstream     string
+		upstreamGone bool
+	}{
+		{"main", "Rebaser", "origin/main", false},
+		{"gone", "Test", "origin/gone", true},
+		{"unpublished", "Test", "", false},
+	}
+	for _, tt := range tests {
+		b := findBranch(t, list.Local, tt.name)
+		if b.Committer != tt.committer || b.Upstream != tt.upstream || b.UpstreamGone != tt.upstreamGone {
+			t.Errorf("%s = {committer %q, upstream %q, gone %v}, want {%q, %q, %v}",
+				tt.name, b.Committer, b.Upstream, b.UpstreamGone, tt.committer, tt.upstream, tt.upstreamGone)
+		}
+	}
+
+	if len(list.RemoteOnly) != 1 || list.RemoteOnly[0].Committer != "Test" {
+		t.Errorf("RemoteOnly = %+v, want origin/remote-only committed by Test", list.RemoteOnly)
+	}
+}
