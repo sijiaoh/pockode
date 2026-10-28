@@ -99,8 +99,9 @@ not on the commit button**.
 ## The narrow-width rule
 
 The sidebar is `w-72` (288px) as a mobile drawer and 240–500px as a resizable,
-collapsible desktop column (`web/src/components/Layout/Sidebar.tsx`). 240px is
-the design width; anything wider is slack.
+collapsible desktop column (`web/src/components/Layout/Sidebar.tsx`; its edge is
+the [column resize handle](responsive-ui.md#the-column-resize-handle) the Git
+list column shares). 240px is the design width; anything wider is slack.
 
 > In a fixed row, **exactly one** element is `flex-1 min-w-0` and truncates.
 > Every other element is `shrink-0` and is either icon-only or at most two short

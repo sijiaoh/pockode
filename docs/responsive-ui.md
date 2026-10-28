@@ -663,12 +663,15 @@ for a helper still has to state a number.
 Two controls are kept under the floor on purpose, each for a reason of its own.
 They are written down so the next reader does not "fix" them in passing.
 
-#### The sidebar's resize handle
+#### The column resize handle
 
-The sidebar's resize handle stays **8px** and is not grown to 44. Widening it
-would lay a 44px drag strip down the right edge of every row in the list —
-exactly where Delete sits — and taps that work today would become drags. Sidebar
-width is a preference (P2); Delete is an operation.
+A column's resize handle stays **8px** and is not grown to 44. There is one
+handle, `ui/ResizeHandle` driven by `hooks/useResizableWidth`, on two columns:
+the sidebar and the Git workspace's list column at `expanded`
+([git-ui.md](git-ui.md#at-expanded-two-columns)). Widening it would lay a 44px
+drag strip down the right edge of every row in the column — exactly where the
+sidebar's Delete and a Git row's `⋯` sit — and taps that work today would
+become drags. A column's width is a preference (P2); Delete is an operation.
 
 > **The floor exists to make operations reachable, not to make a preference
 > easier at the cost of an operation.**
