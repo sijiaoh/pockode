@@ -16,10 +16,10 @@ import (
 // that ran and failed: a worktree already running an operation this one would
 // collide with, an abort of an operation that is no longer in progress, a
 // write paused by an operation in progress, a stage, unstage or discard of
-// conflicted paths, a hunk no longer in the file's diff, or a branch delete
-// whose branch moved, went or is checked out. Nothing was attempted, so none is
-// an internal error, and the client is told what is going on rather than being
-// left to read it out of a sentence.
+// conflicted paths, a hunk no longer in the file's diff, a branch delete whose
+// branch moved, went or is checked out, or an argument refused before git was
+// run. Nothing was attempted, so none is an internal error, and the client is
+// told what is going on rather than being left to read it out of a sentence.
 func (h *rpcMethodHandler) replyGitError(ctx context.Context, conn *jsonrpc2.Conn, id jsonrpc2.ID, err error) {
 	var busy *git.BusyError
 	if errors.As(err, &busy) {
@@ -330,15 +330,27 @@ func (h *rpcMethodHandler) handleGitLog(ctx context.Context, conn *jsonrpc2.Conn
 		return
 	}
 
-	commits, err := git.Log(wt.WorkDir, params.Limit)
-	if err != nil {
-		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInternalError, err.Error())
+	if !git.IsHistoryScope(params.Scope) {
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "unknown scope: "+params.Scope)
+		return
+	}
+	if params.Path != "" && !h.validateGitPaths(ctx, conn, req, wt.WorkDir, []string{params.Path}) {
 		return
 	}
 
-	result := rpc.GitLogResult{Commits: commits}
+	page, err := git.History(wt.WorkDir, git.HistoryQuery{
+		Scope:  git.HistoryScope(params.Scope),
+		Grep:   params.Query,
+		Path:   params.Path,
+		Limit:  params.Limit,
+		Cursor: params.Cursor,
+	})
+	if err != nil {
+		h.replyGitError(ctx, conn, req.ID, err)
+		return
+	}
 
-	if err := conn.Reply(ctx, req.ID, result); err != nil {
+	if err := conn.Reply(ctx, req.ID, page); err != nil {
 		h.log.Error("failed to send git log response", "error", err)
 	}
 }
@@ -466,7 +478,7 @@ func (h *rpcMethodHandler) handleGitBranchCreate(ctx context.Context, conn *json
 		return
 	}
 
-	if err := git.CreateBranch(wt.WorkDir, params.Name); err != nil {
+	if err := git.CreateBranch(wt.WorkDir, params.Name, params.Start); err != nil {
 		h.replyGitError(ctx, conn, req.ID, err)
 		return
 	}

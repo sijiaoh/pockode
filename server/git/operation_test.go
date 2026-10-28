@@ -457,7 +457,7 @@ func TestWritesRefusedDuringOperation(t *testing.T) {
 		{"commit", "commit", func(dir string) error { return CreateCommit(dir, "stray", false) }},
 		{"amend", "commit", func(dir string) error { return CreateCommit(dir, "stray", true) }},
 		{"checkout", "switch branches", func(dir string) error { return Checkout(dir, "feature") }},
-		{"branch create", "create a branch", func(dir string) error { return CreateBranch(dir, "side") }},
+		{"branch create", "create a branch", func(dir string) error { return CreateBranch(dir, "side", "") }},
 		{"branch delete", "delete a branch", func(dir string) error {
 			return DeleteBranch(dir, "feature", gitOutput(t, dir, "rev-parse", "feature"))
 		}},

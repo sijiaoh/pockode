@@ -154,8 +154,8 @@ func TestBusy_ReadsAreNotBlocked(t *testing.T) {
 	if _, err := Status(dir); err != nil {
 		t.Errorf("Status() during a commit: %v", err)
 	}
-	if _, err := Log(dir, 10); err != nil {
-		t.Errorf("Log() during a commit: %v", err)
+	if _, err := History(dir, HistoryQuery{}); err != nil {
+		t.Errorf("History() during a commit: %v", err)
 	}
 	if _, err := Branches(dir); err != nil {
 		t.Errorf("Branches() during a commit: %v", err)

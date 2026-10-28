@@ -1,17 +1,14 @@
-import { Check, Copy, FileText, Trash2, Undo2 } from "lucide-react";
-import { useEffect } from "react";
-import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
+import { FileText, History, Trash2, Undo2 } from "lucide-react";
 import { type ChangedFile, changeKindOf } from "../../lib/gitChanges";
+import CopyMenuRow from "../common/CopyMenuRow";
 import MenuRow from "../common/MenuRow";
 import { Sheet } from "../ui";
-
-/** Long enough to read `Copied`, short enough not to feel like a wait. */
-const COPIED_CLOSE_MS = 1000;
 
 interface Props {
 	file: ChangedFile;
 	onClose: () => void;
 	onOpenFile: (path: string) => void;
+	onOpenHistory: (path: string) => void;
 	/**
 	 * Only offered while the file has unstaged changes: a staged side has
 	 * nothing to discard, and a conflict has no side at all — git refuses to
@@ -35,20 +32,12 @@ function ChangedFileMenu({
 	file,
 	onClose,
 	onOpenFile,
+	onOpenHistory,
 	onDiscard,
 	busy,
 }: Props) {
 	const deleted = changeKindOf(file) === "deleted";
 	const untracked = file.unstaged?.status === "?";
-	const { state: copyState, copy } = useCopyToClipboard();
-
-	// The row says `Copied` before the sheet goes, so the press is seen to work.
-	// A failure keeps the sheet: its title holds the path to copy by hand.
-	useEffect(() => {
-		if (copyState !== "copied") return;
-		const timer = window.setTimeout(onClose, COPIED_CLOSE_MS);
-		return () => clearTimeout(timer);
-	}, [copyState, onClose]);
 
 	return (
 		<Sheet title={file.path} onClose={onClose}>
@@ -60,19 +49,15 @@ function ChangedFileMenu({
 					description={deleted ? "(deleted)" : undefined}
 					onClick={() => onOpenFile(file.path)}
 				/>
-				<MenuRow
-					icon={copyState === "copied" ? Check : Copy}
-					label={
-						copyState === "copied"
-							? "Copied"
-							: copyState === "failed"
-								? "Copy failed"
-								: "Copy path"
-					}
-					onClick={() => {
-						copy(file.path);
-					}}
-				/>
+				{/* An untracked file has never been committed, so has no history. */}
+				{!untracked && (
+					<MenuRow
+						icon={History}
+						label="History of this file"
+						onClick={() => onOpenHistory(file.path)}
+					/>
+				)}
+				<CopyMenuRow text={file.path} label="Copy path" onCopied={onClose} />
 				{file.unstaged && (
 					<>
 						<div className="my-1 border-t border-th-border" />

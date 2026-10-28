@@ -3,9 +3,11 @@ import type { FileContent } from "../../types/contents";
 import type {
 	CommitDraftRequest,
 	GitAbortResult,
+	GitBranchCreateParams,
 	GitBranches,
 	GitBranchInspection,
 	GitDiffData,
+	GitLogParams,
 	GitLogResult,
 	GitOperationKind,
 	GitPullResult,
@@ -15,7 +17,11 @@ import type {
 
 export interface GitActions {
 	getStatus: () => Promise<GitStatus>;
-	getLog: (limit?: number) => Promise<GitLogResult>;
+	/**
+	 * A page of history. A later page passes the previous page's `next` as
+	 * `cursor` with the same scope, query and path as the first.
+	 */
+	getLog: (params: GitLogParams) => Promise<GitLogResult>;
 	getCommit: (hash: string) => Promise<GitShowResult>;
 	getCommitDiff: (
 		hash: string,
@@ -53,7 +59,8 @@ export interface GitActions {
 	cancelCommitDraft: (draftId: string) => Promise<void>;
 	getBranches: () => Promise<GitBranches>;
 	checkout: (branch: string) => Promise<void>;
-	createBranch: (name: string) => Promise<void>;
+	/** Creates the branch and switches to it, at `start` or else at HEAD. */
+	createBranch: (params: GitBranchCreateParams) => Promise<void>;
 	inspectBranch: (name: string) => Promise<GitBranchInspection>;
 	/**
 	 * Deletes local branch `name` only while it still points at `tip`, the hash
@@ -95,8 +102,8 @@ export function createGitActions(
 		getStatus: async (): Promise<GitStatus> => {
 			return requireClient().request("git.status", {});
 		},
-		getLog: async (limit?: number): Promise<GitLogResult> => {
-			return requireClient().request("git.log", { limit: limit ?? 50 });
+		getLog: async (params: GitLogParams): Promise<GitLogResult> => {
+			return requireClient().request("git.log", params);
 		},
 		getCommit: async (hash: string): Promise<GitShowResult> => {
 			return requireClient().request("git.show", { hash });
@@ -168,8 +175,8 @@ export function createGitActions(
 		checkout: async (branch: string): Promise<void> => {
 			await requireClient().request("git.checkout", { branch });
 		},
-		createBranch: async (name: string): Promise<void> => {
-			await requireClient().request("git.branch.create", { name });
+		createBranch: async (params: GitBranchCreateParams): Promise<void> => {
+			await requireClient().request("git.branch.create", params);
 		},
 		inspectBranch: async (name: string): Promise<GitBranchInspection> => {
 			return requireClient().request("git.branch.inspect", { name });

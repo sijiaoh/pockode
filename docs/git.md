@@ -17,7 +17,8 @@ React SPA ──WebSocket──▶ Go Server ──exec──▶ git CLI
 | Layer | Path | Role |
 |-------|------|------|
 | RPC handlers | `server/ws/rpc_git.go` | `git.status`, `git.add`, `git.reset`, `git.hunk.stage`, `git.hunk.unstage`, `git.discard`, `git.commit`, `git.log`, `git.show`, `git.show.diff`, `git.show.file`, `git.branches`, `git.checkout`, `git.branch.create`, `git.branch.inspect`, `git.branch.delete`, `git.fetch`, `git.pull`, `git.push`, `git.abort`, and the `git.subscribe` / `git.diff.subscribe` pairs with their unsubscribes; `server/ws/rpc_git_draft.go` has `git.commit.draft` and `git.commit.draft.cancel` |
-| Git operations | `server/git/git.go` | Init, Status, Add, Reset, Diff, DiffWithContent, Log, Show, ShowFileDiff |
+| Git operations | `server/git/git.go` | Init, Status, Add, Reset, Diff, DiffWithContent, Show, ShowFileDiff |
+| History | `server/git/history.go` | History (the `git.log` listing: scopes, paging, search, refs, unpushed) |
 | Historical file contents | `server/git/showfile.go` | ShowFile |
 | Branch operations | `server/git/branch.go`, `server/git/divergence.go`, `server/git/branchdelete.go` | Head, Branches (with each branch's standing against the default branch, counted in `divergence.go`), Checkout, CreateBranch; InspectBranch and DeleteBranch ([Deleting a branch](#deleting-a-branch)) |
 | Remote operations | `server/git/remote.go` | sync state (upstream, ahead/behind, last fetch), Fetch, Pull, Push |
@@ -28,11 +29,12 @@ React SPA ──WebSocket──▶ Go Server ──exec──▶ git CLI
 | Operations in progress | `server/git/operation.go` | The merge / rebase / cherry-pick / revert a repository is left in the middle of, and Abort ([Operations in Progress](#operations-in-progress)) |
 | Write serialisation | `server/git/lock.go` | A worktree's two locks — index and refs — with what each write takes, `BusyError`, and the operation names that lock and wire share ([Serialising Writes](#serialising-writes)) |
 | Command execution | `server/git/command.go` | `gitCommand` / `execGit` / `execGitLines` / `execGitVerbose` / `execGitNetwork` / `execGitInput` (stdin, for `git apply -` and `hash-object --stdin`), `CommandError`, and `literalPathspec` |
-| Frontend components | `web/src/components/Git/` | `GitWorkspace` is the `/git` page: `BranchBar` (the top bar, with `SyncChip` and `SyncSheet`) over three segments — `ChangesSection` (`ChangesHeader`, `ChangedFileRow` and its `ChangedFileMenu`, `CommitBar` → `CommitSheet`), `HistorySection` (`LogList`, amend → `CommitSheet`) and `BranchesSection` (`BranchList`, `BranchMenu`, `NewBranchSheet`) — with `DiffView` and the chain from `CommitView` to `CommitDiffView` to `CommitFileView` as layers under the first two. `ErrorBanner` catches the failures with no sheet to land in. `OperationBanner` (under the top bar) and `ConflictView` (inside `DiffView`) are the in-progress operation's ([git-conflict-ui.md](git-conflict-ui.md#where-it-lives)). `GitTab` is the sidebar's read-only overview and its entries into the workspace |
+| Frontend components | `web/src/components/Git/` | `GitWorkspace` is the `/git` page: `BranchBar` (the top bar, with `SyncChip` and `SyncSheet`) over three segments — `ChangesSection` (`ChangesHeader`, `ChangedFileRow` and its `ChangedFileMenu`, `CommitBar` → `CommitSheet`), `HistorySection` (`HistoryHeader` with its range sheet, `HistoryFilters`, `HistoryList` of `CommitRow`s — `CommitGraphCell`, `RefChips` — and `CommitActions`, the commit menu: amend → `CommitSheet`, `NewBranchSheet`, the revert handoff) and `BranchesSection` (`BranchList`, `BranchMenu`, `NewBranchSheet`) — with `DiffView` and the chain from `CommitView` (which mounts `CommitActions` too) to `CommitDiffView` to `CommitFileView` as layers under the first two. `ErrorBanner` catches the failures with no sheet to land in. `OperationBanner` (under the top bar) and `ConflictView` (inside `DiffView`) are the in-progress operation's ([git-conflict-ui.md](git-conflict-ui.md#where-it-lives)). `GitTab` is the sidebar's read-only overview and its entries into the workspace |
 | Frontend types | `web/src/types/git.ts` | Wire types, plus the pure `describeGitSync` / `describeCommitAction` / `describeDiscard` the workspace's labels and confirmation copy come from |
 | Frontend hooks | `web/src/hooks/useGit*.ts` | The workspace's queries, mutations and watch subscriptions, and `useAutoFetch`, the fetch it runs on the way in. Note `useGitCommit` *reads* a commit (`git.show`) — `useGitCreateCommit` is the one that writes. `useCommitFile` (`git.show.file`) is outside the glob because it reads a file rather than the repository's state: it backs the commit-file layer ([git-ui.md](git-ui.md#viewing-a-file-from-a-commit)) |
+| History graph | `web/src/lib/commitGraph.ts`, `web/src/lib/commitHistory.ts`, `web/src/hooks/useHistoryGraph.ts` | The lane layout, a pure function carried page to page; what the History list draws on top of it — lane cap, reserved lanes, ref chips, row names, the revert prompt; and the hook laying out each page as it arrives ([git-history-ui.md](git-history-ui.md#the-graph)) |
 | RPC actions | `web/src/lib/rpc/git.ts` | RPC action creators for all git methods |
-| Query keys | `web/src/hooks/gitQueries.ts` | The workspace's three query keys plus `invalidateGitQueries` |
+| Query keys | `web/src/hooks/gitQueries.ts` | The workspace's query keys — status, log, branches and an open commit, whose refs move — plus `invalidateGitQueries` |
 
 ## Path Encoding
 
@@ -152,13 +154,44 @@ One file's diff reaches the client three ways — the `git.diff.subscribe` reply
 
 A version that does not exist — the old side of an added file, the new side of a deleted one — reads as empty. A working-tree file that exists but cannot be read is returned as an error; a git object that cannot be read reads as empty too, since git's exit status does not tell a missing path from any other failure; a repository that is really broken fails the diff itself.
 
+## History
+
+`git.log` lists one page of the history graph. The server answers commits; the lanes are laid out by the client, since how many fit is a question of the screen's width ([git-history-ui.md](git-history-ui.md)).
+
+```
+git.log  { scope?, query?, path?, limit?, cursor? }
+      -> { commits, next, unpushed_count?, shallow?, default_branch?, default_line? }
+```
+
+| Param | Meaning |
+|---|---|
+| `scope` | `current` (default): HEAD, its upstream and the default branch. `all`: every local branch and its upstream, plus HEAD. `mainline`: HEAD with `--first-parent`. Anything else is invalid params |
+| `query` | Commits whose message contains it — `--regexp-ignore-case --fixed-strings`, since a search box is not a regex. One line only: git splits a `--grep` on newlines into patterns any one of which matches, so a multi-line query is invalid params |
+| `path` | Commits that touched it (file or directory, repository-relative, `:(literal)`). No `--follow`: it cannot be combined with several starting points or a date-ordered graph, so history stops at a rename |
+| `limit` | Default 50, at most 200 |
+| `cursor` | The previous page's `next`, sent back as received, with the same `scope`, `query` and `path` as the first page — the cursor holds where the walk starts, not how it walks |
+
+Each commit is `{hash, parents, subject, body, author, date, refs, unpushed}`. `parents` are full hashes, first parent first, never null. `refs` lists every ref pointing at the commit whatever the scope — `{name, type: "head"|"branch"|"remote"|"tag", current}` — `HEAD` first, then the branch it is on (`current: true`), the other local branches, remote branches, tags; an annotated tag is peeled to its commit, and `origin/HEAD` is left out since it only repeats the branch it points at. `git.show` carries the same `parents` and `refs`, so a commit's own page knows whether it is HEAD.
+
+**Order is `--date-order`**: every commit before its parents, otherwise newest first. Ordering needs the reachable graph before the first commit comes out, and each page walks again from the tips, so on a long history without a commit-graph file every page costs a full walk (a fraction of a second at 100k commits); `git commit-graph write` (or `gc`) removes it. A search or path filter makes the listed commits non-adjacent, so a parent need not be on any page.
+
+**The cursor holds the commits the scope resolved to, not the scope.** `next` is `{tips, skip}`: the first page resolves the scope's refs to commit hashes and every later page walks from those same hashes, skipping what was already sent. git orders the same starting set the same way every time, so a ref that moves between two pages — a commit, a fetch — does not shift the listing under a client that is laying lanes out across pages and cannot redo the ones it has. The new commit appears when the client re-reads from the top, which `git.changed` tells it to do. The tips are read from stdin, because `all` has one per branch and Windows' command line is 32K. They must be full hashes — hex, so none can smuggle in an option, and full length, so none can be taken for a ref of the same name. `next` is null on the last page, found by asking git for one more commit than the page holds.
+
+**Unpushed is "no remote-tracking ref reaches it"** (`--not --remotes`), not "ahead of the current branch's upstream": a feature branch pushed to its own remote branch is pushed even though `origin/main` lacks it. Each page marks its commits with one `rev-list` over the page's commits `--not --remotes` rather than a question per commit: git walks until the page and the remote-tracking refs meet, which is quick while the unpushed part is small. A remote with no remote-tracking refs yet (added, never fetched or pushed) would make that walk the whole history on every page, so there every commit is marked unpushed without asking. `unpushed_count` is the same test over the whole scope (first-parent in `mainline`), unfiltered by `query` and `path` — it describes the branches, not the listing — and so differs from the sync chip's `ahead`, which compares one branch with its own upstream. In a repository with no remote both are off: nothing is unpushed where there is nowhere to push.
+
+**The default branch** is what the remote's `HEAD` points at (recorded by clone and `git remote set-head`), the remote being the current branch's upstream's, else `origin`, else the only one; failing that, a local or remote `main`, then `master`. Its local branch and remote branch both count as tips. Where none of these exists — whatever the number of remotes — there is no default branch, and `current` is HEAD and its upstream alone. Its name is `default_branch`, for the range label. `default_line` names those of its refs (`main`, `origin/main`) that the listing draws as a line of their own — walked from, and not in HEAD's history (`merge-base --is-ancestor`) — for the client to keep the graph's lane 1 for; it is absent in `mainline` and wherever HEAD already contains the default branch.
+
+**Only the first page carries `unpushed_count`, `shallow`, `default_branch` and `default_line`** — facts about the scope, not the page. `shallow` is a shallow clone, whose oldest listed commit has no `parents` because git does not have them; without it the client would draw that commit as the repository's root.
+
+**Edge cases.** A detached HEAD is a tip in every scope and carries the `HEAD` ref with no `current` branch; it has no upstream. A branch with no upstream, or an upstream whose ref is gone, contributes HEAD alone. Before the first commit there is nothing to walk from and the page is empty ([Before the first commit](#before-the-first-commit)) — unless the unborn branch is an orphan in a repository with other branches, where `current` still lists the default branch and `all` the others. A cursor whose commits have since been garbage-collected (a deleted branch, pruned) fails with git's `bad object`; the client re-reads from the first page. `log.follow` is overridden with `--no-follow`, for the reason under `path` above.
+
 ## Merge Commits
 
 `git.show` and `git.show.diff` present a merge as an ordinary diff against its **first parent** (`-m --first-parent`, a no-op on ordinary commits). The `old_content` returned with a diff comes from `hash^`, which is that same parent.
 
 Both must agree on this. Plain `git show` on a merge produces a *combined* diff, which by definition only keeps hunks differing from **every** parent — so a file identical to one side of the merge, the common case, yields nothing. Using it for the file contents while listing files against the first parent is what makes the list offer files that open blank.
 
-`git.log` is not first-parent filtered; history lists merge commits alongside the rest.
+`git.log` is first-parent filtered only in the `mainline` scope ([History](#history)); otherwise it lists merge commits alongside the rest.
 
 ## Historical File Contents
 
@@ -174,9 +207,9 @@ The not-found case is ordinary rather than exceptional: a deleted file is listed
 
 ## Branches
 
-`git.branches` returns HEAD (branch name, or the short hash it is detached at) together with the local branches and the branches that exist only on a remote. `git.checkout` switches; `git.branch.create` branches from the current HEAD and switches to it.
+`git.branches` returns HEAD (branch name, or the short hash it is detached at) together with the local branches and the branches that exist only on a remote. `git.checkout` switches; `git.branch.create` branches from `start` — a commit hash, the current HEAD when absent — and switches to it. `start` must be a full hash — hex, so it cannot be read as an option, and full length, so it cannot be taken for a branch or tag of the same name; a malformed one is invalid params.
 
-**Its own method, not a field of `git.status`.** The workspace's top bar has to survive a failing `git.status` — a repository whose status cannot be read still has a branch worth showing — and `Status` recurses into submodules, which have their own HEAD the workspace deliberately does not expose. The two are still refreshed together: `invalidateGitQueries` refetches status, log and branches on the same `git.changed` notification, so this is not a second poll.
+**Its own method, not a field of `git.status`.** The workspace's top bar has to survive a failing `git.status` — a repository whose status cannot be read still has a branch worth showing — and `Status` recurses into submodules, which have their own HEAD the workspace deliberately does not expose. The two are still refreshed together: `invalidateGitQueries` refetches status, log, branches and an open commit on the same `git.changed` notification, so this is not a second poll.
 
 **Local branches carry the worktree that occupies them.** Pockode runs in git worktrees and git refuses to check the same branch out twice, so `Branches` joins `git worktree list --porcelain` onto the branch list and the UI disables those rows. The mapping needs no path comparison to exclude the current worktree: a branch lives in at most one worktree, so any entry other than the current branch belongs to a different one.
 
@@ -248,7 +281,7 @@ Then it runs `git branch -D`, so the config section and reflog go as they would 
 
 **HEAD's message rides along with `git.branches`** as `head.message` (`git log -1 --no-show-signature --format=%B`), which is what amend prefills the sheet with. It is read from git rather than rebuilt out of the parsed commits `git.log` already returns: rebuilding guesses at the blank line between subject and body, and an amend would then silently rewrite the message it was asked to preserve.
 
-`--no-show-signature` is load-bearing. With `log.showSignature=true` git prints its verification of a signed commit (`gpg: Good signature…`, or an error when the allowed-signers file is missing) *ahead of* the format output, and that text would become part of the prefilled message and get committed. `Log` and `Show` do not need the flag — their format is delimited, and `parseLogOutput` drops anything before the first `---COMMIT_START---` — but a bare `%B` has no delimiter to hide behind.
+`--no-show-signature` is load-bearing. With `log.showSignature=true` git prints its verification of a signed commit (`gpg: Good signature…`, or an error when the allowed-signers file is missing) *ahead of* the format output, and that text would become part of the prefilled message and get committed. `History` and `Show` pass it too: git prints each commit's verification ahead of that commit's format output, which in a listing is *after* the previous commit's `---COMMIT_END---`, where `parseLogOutput` would read it as part of that commit's date.
 
 ## Drafting a Commit Message
 
@@ -422,10 +455,10 @@ What the client does with the answer — which git surfaces disappear, and what 
 
 ### Before the first commit
 
-`git init` leaves a repository whose branch has no commit yet, and the workspace has to work there, since that is exactly where a user who just asked for a repository lands. Two operations assume a HEAD and are given a fallback, each taken only after the ordinary command has failed and `rev-parse --verify --quiet HEAD` has exited 1 (resolves to nothing, as opposed to a broken repository, which is fatal):
+`git init` leaves a repository whose branch has no commit yet, and the workspace has to work there, since that is exactly where a user who just asked for a repository lands. Two operations assume a HEAD and are given a way round it, each decided by `rev-parse --verify --quiet HEAD` exiting 1 (resolves to nothing, as opposed to a broken repository, which is fatal):
 
-- **`git.log` answers an empty list** rather than git's `does not have any commits yet`, so History reads as empty instead of failed.
-- **`git.reset` falls back to `git rm --cached -f -r`.** `restore --staged` restores from HEAD, and there is none; before the first commit, unstaging *is* dropping the entry from the index. `-f` only lifts rm's refusal of an entry that differs from the file on disk (staged, then edited again) — with `--cached` the file itself is never touched — and an unmatched path still fails, as it does once there are commits.
+- **`git.log` answers an empty list** rather than git's `does not have any commits yet`, so History reads as empty instead of failed. HEAD is checked before anything runs: with nothing to walk from, `git log` is never run ([History](#history)).
+- **`git.reset` falls back to `git rm --cached -f -r`**, after the ordinary command has failed. `restore --staged` restores from HEAD, and there is none; before the first commit, unstaging *is* dropping the entry from the index. `-f` only lifts rm's refusal of an entry that differs from the file on disk (staged, then edited again) — with `--cached` the file itself is never touched — and an unmatched path still fails, as it does once there are commits.
 
 The rest needs no special case: `worktree list --porcelain` still names the branch, so the switcher shows it, and the first commit goes through `git.commit` like any other. Amend is simply not offered, because there is no HEAD commit for it to sit on ([git-ui.md](git-ui.md#amend)).
 

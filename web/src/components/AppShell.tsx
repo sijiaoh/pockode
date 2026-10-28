@@ -34,6 +34,7 @@ import { useWSStore, wsActions } from "../lib/wsStore";
 import {
 	type GitSegment,
 	gitSegmentOf,
+	historyQueryOf,
 	isGitOverlay,
 	type WorkSegment,
 } from "../types/overlay";
@@ -661,17 +662,19 @@ function AppShell() {
 		[navigate, urlWorktree, currentSessionId],
 	);
 
+	// A commit is opened from the History list, or beside it from another
+	// commit; either way it carries the list's query along.
 	const handleSelectCommit = useCallback(
 		(hash: string) => {
 			navigate(
 				overlayToNavigation(
-					{ type: "commit", hash },
+					{ type: "commit", hash, history: historyQueryOf(overlay) },
 					urlWorktree,
 					currentSessionId,
 				),
 			);
 		},
-		[navigate, urlWorktree, currentSessionId],
+		[navigate, overlay, urlWorktree, currentSessionId],
 	);
 
 	const handleCloseOverlay = useCallback(() => {
@@ -703,9 +706,16 @@ function AppShell() {
 	const handleSelectGitSegment = useCallback(
 		(segment: GitSegment) => {
 			if (overlay?.type === "git" && overlay.segment === segment) return;
+			// Back from a commit to History is the list it was picked from;
+			// arriving from another segment is History's default
+			// (docs/git-history-ui.md#url).
+			const history =
+				segment === "history" && gitSegmentOf(overlay) === "history"
+					? historyQueryOf(overlay)
+					: undefined;
 			navigate(
 				overlayToNavigation(
-					{ type: "git", segment },
+					{ type: "git", segment, history },
 					urlWorktree,
 					currentSessionId,
 				),

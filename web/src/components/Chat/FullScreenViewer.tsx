@@ -19,6 +19,7 @@ import { outputLines } from "../../lib/textLines";
 import { pathParts } from "../../lib/toolSummary";
 import { useWSStore } from "../../lib/wsStore";
 import { HIGHLIGHT_LIMIT } from "../../utils/fileView";
+import { composing } from "../../utils/keyboard";
 import { formatFilePath } from "../../utils/path";
 import {
 	FileContentDisplay,
@@ -29,7 +30,6 @@ import {
 	WrapLinesToggle,
 } from "../ui";
 import {
-	composing,
 	diffSegments,
 	FindBar,
 	type FindModel,

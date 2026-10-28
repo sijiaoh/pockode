@@ -908,6 +908,37 @@ describe("AppShell Git workspace", () => {
 		);
 	});
 
+	// docs/git-history-ui.md#url: back from a commit is the list it was picked
+	// from; History entered from another segment is History's default.
+	it("returns from a commit to History with the list's range and search", async () => {
+		const user = userEvent.setup();
+		const router = renderAppShell(
+			`/w/A/commit/${"a".repeat(40)}?session=a1&scope=all&q=lane`,
+		);
+		await waitFor(() =>
+			expect(panel()).toHaveAttribute("data-overlay", "commit"),
+		);
+
+		await user.click(screen.getByRole("button", { name: "Git History" }));
+
+		await waitFor(() =>
+			expect(router.state.location.pathname).toBe("/w/A/git"),
+		);
+		expect(search(router)).toEqual({
+			session: "a1",
+			segment: "history",
+			scope: "all",
+			q: "lane",
+		});
+
+		await user.click(screen.getByRole("button", { name: "Git Changes" }));
+		await waitFor(() => expect(search(router)).toEqual({ session: "a1" }));
+		await user.click(screen.getByRole("button", { name: "Git History" }));
+		await waitFor(() =>
+			expect(search(router)).toEqual({ session: "a1", segment: "history" }),
+		);
+	});
+
 	// A diff's way back is a step to its list, not `history.back()`: a diff
 	// reached from a link has no list behind it in the history.
 	it("goes back from a diff opened by link to the list it belongs to", async () => {

@@ -126,7 +126,7 @@ function BranchesSection({
 					paused={paused}
 					onClose={() => setCreating(false)}
 					onCreate={async (name) => {
-						await createMutation.mutateAsync(name);
+						await createMutation.mutateAsync({ name });
 						setCreating(false);
 					}}
 				/>

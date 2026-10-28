@@ -4,6 +4,7 @@ import {
 	ChevronLeft,
 	ChevronRight,
 	FileClock,
+	History,
 	WrapText,
 } from "lucide-react";
 import { useMemo } from "react";
@@ -12,6 +13,7 @@ import { useGitCommit } from "../../hooks/useGitCommit";
 import { useRouteState } from "../../hooks/useRouteState";
 import { useDiffSettings, useGitDiffWrap } from "../../lib/diffSettingsStore";
 import { overlayToNavigation } from "../../lib/navigation";
+import { fileHistoryOverlay, historyQueryOf } from "../../types/overlay";
 import { splitPath } from "../../utils/path";
 import { FilePageHeader } from "../Layout/PageHeader";
 import {
@@ -29,7 +31,10 @@ interface Props {
 
 function CommitDiffView({ hash, path }: Props) {
 	const navigate = useNavigate();
-	const { worktree, sessionId } = useRouteState();
+	const { worktree, sessionId, overlay } = useRouteState();
+	// Carried from layer to layer, so Back lands on the list the commit was
+	// picked from (docs/git-history-ui.md#url).
+	const history = historyQueryOf(overlay);
 	const { hideWhitespace, toggleHideWhitespace } = useDiffSettings();
 	const { wrap, toggleWrap } = useGitDiffWrap();
 	const { data: commit } = useGitCommit(hash);
@@ -55,7 +60,7 @@ function CommitDiffView({ hash, path }: Props) {
 	const navigateToFile = (filePath: string) => {
 		navigate(
 			overlayToNavigation(
-				{ type: "commit-diff", hash, path: filePath },
+				{ type: "commit-diff", hash, path: filePath, history },
 				worktree,
 				sessionId,
 			),
@@ -69,16 +74,26 @@ function CommitDiffView({ hash, path }: Props) {
 	const viewCommitVersion = () => {
 		navigate(
 			overlayToNavigation(
-				{ type: "commit-file", hash, path },
+				{ type: "commit-file", hash, path, history },
 				worktree,
 				sessionId,
 			),
 		);
 	};
 
+	const openHistory = () => {
+		navigate(
+			overlayToNavigation(fileHistoryOverlay(path), worktree, sessionId),
+		);
+	};
+
 	const handleBack = () => {
 		navigate(
-			overlayToNavigation({ type: "commit", hash }, worktree, sessionId),
+			overlayToNavigation(
+				{ type: "commit", hash, history },
+				worktree,
+				sessionId,
+			),
 		);
 	};
 
@@ -136,6 +151,15 @@ function CommitDiffView({ hash, path }: Props) {
 							title={versionLabel}
 						>
 							<FileClock className="h-4 w-4" aria-hidden="true" />
+						</button>
+						<button
+							type="button"
+							onClick={openHistory}
+							className={getActionIconButtonClass(true)}
+							aria-label="History of this file"
+							title="History of this file"
+						>
+							<History className="h-4 w-4" aria-hidden="true" />
 						</button>
 						<ToggleIconButton
 							icon={WrapText}

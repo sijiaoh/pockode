@@ -5,4 +5,3 @@ export { default as DiffContent } from "./DiffContent";
 export { default as DiffView } from "./DiffView";
 export { default as GitTab } from "./GitTab";
 export { default as GitWorkspace } from "./GitWorkspace";
-export { default as LogList } from "./LogList";

@@ -481,17 +481,25 @@ func Checkout(dir, branch string) error {
 	})
 }
 
-// CreateBranch creates a branch at the current HEAD and switches to it.
-func CreateBranch(dir, name string) error {
+// CreateBranch creates a branch at start, or at the current HEAD when start is
+// empty, and switches to it.
+func CreateBranch(dir, name, start string) error {
 	if err := validateBranchName(name); err != nil {
 		return err
+	}
+	args := []string{"checkout", "-b", name}
+	if start != "" {
+		if err := validateFullHash(start); err != nil {
+			return fmt.Errorf("%w: %w", ErrInvalidArgument, err)
+		}
+		args = append(args, start)
 	}
 
 	return withLock(dir, opBranchCreate, func() error {
 		if err := refuseDuringOperation(dir, "create a branch"); err != nil {
 			return err
 		}
-		_, err := execGit(dir, "checkout", "-b", name, "--")
+		_, err := execGit(dir, append(args, "--")...)
 		return err
 	})
 }

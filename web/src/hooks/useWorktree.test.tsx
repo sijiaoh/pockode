@@ -164,4 +164,25 @@ describe("useWorktree", () => {
 			search: { segment: "branches" },
 		});
 	});
+
+	// docs/git-history-ui.md#url: a path may not exist in the other worktree.
+	it("keeps History's range and drops its search and file filter", () => {
+		listWorktrees.mockReturnValue(new Promise(() => {}));
+		route.from = WT_ROUTES.git;
+		route.search = {
+			segment: "history",
+			scope: "all",
+			q: "lane",
+			file: "a.ts",
+		};
+		const { result } = renderWorktree();
+
+		act(() => result.current.select("B"));
+
+		expect(route.navigate).toHaveBeenCalledWith({
+			to: WT_ROUTES.git,
+			params: { worktree: "B" },
+			search: { segment: "history", scope: "all" },
+		});
+	});
 });

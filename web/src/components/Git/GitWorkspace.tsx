@@ -6,7 +6,11 @@ import { useGitStatus } from "../../hooks/useGitStatus";
 import { useAutoFetch } from "../../hooks/useGitSync";
 import { flattenGitStatus } from "../../types/git";
 import type { GitSegment, OverlayState } from "../../types/overlay";
-import { gitSegmentOf } from "../../types/overlay";
+import {
+	gitSegmentOf,
+	type HistoryQuery,
+	historyQueryOf,
+} from "../../types/overlay";
 import PageHeader, { InlinePageHeaders } from "../Layout/PageHeader";
 import SegmentedControl from "../ui/SegmentedControl";
 import BranchBar from "./BranchBar";
@@ -107,7 +111,15 @@ function GitWorkspace({
 					/>
 				);
 			case "commit":
-				return <CommitView hash={detail.hash} onBack={backToList} />;
+				// Keyed like the review: a sheet raised over one commit, and a
+				// failed handoff from it, are not the next commit's.
+				return (
+					<CommitView
+						key={detail.hash}
+						hash={detail.hash}
+						onBack={backToList}
+					/>
+				);
 			case "commit-diff":
 				return <CommitDiffView hash={detail.hash} path={detail.path} />;
 			case "commit-file":
@@ -190,6 +202,7 @@ function GitWorkspace({
 								/>
 							) : segment === "history" ? (
 								<HistorySection
+									history={historyQueryOf(layer)}
 									activeHash={activeCommitHash}
 									onSelectCommit={onSelectCommit}
 								/>
@@ -208,7 +221,9 @@ function GitWorkspace({
 					</div>
 				) : (
 					isExpanded &&
-					segment !== "branches" && <EmptyDetail segment={segment} />
+					segment !== "branches" && (
+						<EmptyDetail segment={segment} history={historyQueryOf(layer)} />
+					)
 				)}
 			</div>
 		</div>
@@ -228,11 +243,17 @@ function commitHashOf(layer: Exclude<GitLayer, { type: "git" }>) {
  * an observed log would be refetched on every git.changed while the reader
  * is in Changes.
  */
-function EmptyDetail({ segment }: { segment: "changes" | "history" }) {
+function EmptyDetail({
+	segment,
+	history,
+}: {
+	segment: "changes" | "history";
+	history: HistoryQuery;
+}) {
 	return segment === "changes" ? (
 		<EmptyChangesDetail />
 	) : (
-		<EmptyHistoryDetail />
+		<EmptyHistoryDetail history={history} />
 	);
 }
 
@@ -248,13 +269,16 @@ function EmptyChangesDetail() {
 	return <EmptyDetailMessage message={message} />;
 }
 
-function EmptyHistoryDetail() {
-	const { data: log } = useGitLog();
+/** Reads the list's own query, so it shares the list's cache entry. */
+function EmptyHistoryDetail({ history }: { history: HistoryQuery }) {
+	const { data: log } = useGitLog(history);
 	const message = !log
 		? null
-		: log.commits.length > 0
+		: (log.pages[0]?.commits.length ?? 0) > 0
 			? "Select a commit to see what it changed"
-			: "No commits yet";
+			: history.q || history.file
+				? "No matching commits"
+				: "No commits yet";
 	return <EmptyDetailMessage message={message} />;
 }
 

@@ -29,7 +29,7 @@ The workspace is three segments, each a list, and the existing diff and commit p
 | A file as a commit changed it | the `commit-diff` route | `history` |
 | A file as of a commit | the `commit-file` route | `history` |
 
-**A layer does not carry its segment.** A diff can only have come from Changes and a commit only from History, so the layer's type decides its parent — `gitSegmentOf(overlay)` in `types/overlay.ts`, which is also what `isGitOverlay` is built on. This is unlike the Stories detail, which carries the segment it was opened from because either segment can open it ([project-ui.md §5](project-ui.md#5-where-the-segment-lives)). There is no second set of URLs for the wide layout either: the same URL is one layer on a phone and two columns on a desktop, so resizing never invalidates where the user is.
+**A layer does not carry its segment.** A diff can only have come from Changes and a commit only from History, so the layer's type decides its parent — `gitSegmentOf(overlay)` in `types/overlay.ts`, which is also what `isGitOverlay` is built on. What a history layer does carry is the list it was picked from — range, search and file filter ([git-history-ui.md](git-history-ui.md#url)). This is unlike the Stories detail, which carries the segment it was opened from because either segment can open it ([project-ui.md §5](project-ui.md#5-where-the-segment-lives)). There is no second set of URLs for the wide layout either: the same URL is one layer on a phone and two columns on a desktop, so resizing never invalidates where the user is.
 
 Navigation is `AppShell`'s, on the Stories screen's model:
 
@@ -48,7 +48,7 @@ Navigation is `AppShell`'s, on the Stories screen's model:
 
 **Switching worktree inside the workspace stays inside it**, at the same segment's list: every worktree has one, where the path or hash of the detail on screen may not exist over there (`useWorktree.select` reads the current route). Each worktree's own failures stay with it ([Results that outlive the page](#results-that-outlive-the-page)), and the automatic fetch decides again for the new worktree ([Automatic fetch](#automatic-fetch)).
 
-**There is no composer anywhere in the workspace.** The chat input is hidden on every layer — `git`, `diff`, `commit`, `commit-diff`, `commit-file` are in `ChatPanel`'s `inputBarHiddenOverlays`, beside the Stories pages. The workspace's bottom edge belongs to Git's own primary actions — the commit bar, the review's `Discard file` / `Stage & next` bar, `New branch…` — and a composer under them would be a third stacked bar on a phone, all of them competing for the thumb. Viewing a diff or a commit — and a commit's file layers — used to keep the composer under it; those are the places this is a change. To talk to the agent the user goes back, which the app header's `←` always offers; and the way Git hands work to the agent is the [prefill handoff](agent-handoff-ui.md#1-prefill-handoff), which brings the user back to the session's input with a prefilled message, rather than a second input here. Its entries are each their own design's: handing selected lines over in the review, `Resolve with agent` for an operation left in progress, and a branch's `Ask AI to merge into current branch` ([agent-handoff-ui.md](agent-handoff-ui.md#1-prefill-handoff) lists them).
+**There is no composer anywhere in the workspace.** The chat input is hidden on every layer — `git`, `diff`, `commit`, `commit-diff`, `commit-file` are in `ChatPanel`'s `inputBarHiddenOverlays`, beside the Stories pages. The workspace's bottom edge belongs to Git's own primary actions — the commit bar, the review's `Discard file` / `Stage & next` bar, `New branch…` — and a composer under them would be a third stacked bar on a phone, all of them competing for the thumb. Viewing a diff or a commit — and a commit's file layers — used to keep the composer under it; those are the places this is a change. To talk to the agent the user goes back, which the app header's `←` always offers; and the way Git hands work to the agent is the [prefill handoff](agent-handoff-ui.md#1-prefill-handoff), which brings the user back to the session's input with a prefilled message, rather than a second input here; which entries call it is [agent-handoff-ui.md](agent-handoff-ui.md)'s list.
 
 ## The top bar
 
@@ -365,16 +365,16 @@ A commit's first line is its title: `git log --oneline`, GitHub and most tools c
 
 ### Amend
 
-Amend is not a commit-bar label. It belongs to the last commit, and the last commit is already on screen: the first row of the History segment is HEAD. That row carries a trailing L5 `⋯` (`Amend this commit`) which opens the same commit sheet with **Amend** pre-toggled — the same warning copy, the same force-push consequence line described above.
+Amend is not a commit-bar label. It belongs to the last commit, and the last commit is already on screen: HEAD's row in the History segment. Every row there carries a trailing L5 `⋯` that opens the commit's menu, and on HEAD that menu has `Amend this commit` ([git-history-ui.md](git-history-ui.md#the-commit-menu)), which opens the same commit sheet with **Amend** pre-toggled — the same warning copy, the same force-push consequence line described above.
 
 ```
-   Add branch bar to git panel          ⋯   ← HEAD only
+   Add branch bar to git panel          ⋯   ← HEAD: the menu has Amend
    9692fc9 sijiaoh, 2h ago
-   Render every codex_changes event
+   Render every codex_changes event     ⋯
    1c4b8e0 sijiaoh, 5h ago
 ```
 
-Only the first row carries it. `git.Log` runs `git log -nN` from HEAD in reverse-chronological order (`server/git/git.go`), so `commits[0]` *is* HEAD whenever the list is non-empty — including on a detached HEAD, where amending is still legal. An unborn HEAD has no rows, which is the correct answer for "there is nothing to amend".
+HEAD is the commit carrying the `HEAD` ref, not the first row: in `All branches` another branch's newer commits come above it ([git-history-ui.md](git-history-ui.md#the-commit-menu)). That includes a detached HEAD, where amending is still legal. An unborn HEAD has no rows, which is the correct answer for "there is nothing to amend".
 
 This costs zero permanent pixels, it is where a desktop client such as GitHub Desktop puts it, and it puts the message about to be replaced directly under the control that replaces it. The previous arrangement did the opposite: the old panel's loudest control wore its sharpest and rarest action, and it stood in exactly the state — a clean tree — where the user had come to read history.
 
@@ -382,7 +382,7 @@ Every entry point — the commit bar, the review's `Commit n files` and amend �
 
 ### History
 
-History is a segment of its own, the commit log from HEAD down (`HistorySection` around `LogList`), with no collapse and no default to decide. It used to be a collapsible `HISTORY` group under the file lists, collapsed while there were changes and expanded on a clean tree, with the user's toggle remembered in `lib/gitPanelStore.ts` — all of that was a way of sharing one narrow column between two lists. With a segment each, there is nothing to share, and the store went with it.
+History is a segment of its own, the commit graph over the chosen range (`HistorySection` around `HistoryList`), with no collapse and no default to decide. Its commit graph, range, search and file filter, and a commit's detail and `⋯` menu are [git-history-ui.md](git-history-ui.md)'s. It used to be a collapsible `HISTORY` group under the file lists, collapsed while there were changes and expanded on a clean tree, with the user's toggle remembered in `lib/gitPanelStore.ts` — all of that was a way of sharing one narrow column between two lists. With a segment each, there is nothing to share, and the store went with it.
 
 A failing `git.log` is said in the list's place (`Failed to load history` and the reason); the collapsed group used to swallow that error. A refetch that fails keeps the log already on screen. An unborn HEAD reads `No commits yet`.
 
@@ -661,7 +661,7 @@ current answer rather than a stale one for a frame.
 
 ## Data behind the workspace
 
-None of these queries runs on a refetch interval; `git.changed` is what drives all three together, and the subscription it arrives on belongs to the sidebar rather than to the workspace ([above](#who-subscribes-to-gitchanged)). `git.status` backs the file lists, `git.log` the history, and `git.branches` answers with HEAD (branch or detached hash, plus the message amend prefills), the local branches annotated with the worktree occupying each, the remote-only branches — each with its last commit time and its standing against the default branch — the branches recently checked out here, and the sync state — one answer, so the branch name and the chip beside it — and the sidebar's overview — can never disagree about which branch they describe.
+None of these queries runs on a refetch interval; `git.changed` is what drives them all together, and the subscription it arrives on belongs to the sidebar rather than to the workspace ([above](#who-subscribes-to-gitchanged)). `git.status` backs the file lists, `git.log` the history (paged; [git-history-ui.md](git-history-ui.md#paging-and-states)), `git.show` an open commit — re-read too, since the refs on it move — and `git.branches` answers with HEAD (branch or detached hash, plus the message amend prefills), the local branches annotated with the worktree occupying each, the remote-only branches — each with its last commit time and its standing against the default branch — the branches recently checked out here, and the sync state — one answer, so the branch name and the chip beside it — and the sidebar's overview — can never disagree about which branch they describe.
 
 Beyond the components named above, the workspace's own supporting modules are:
 
@@ -669,10 +669,11 @@ Beyond the components named above, the workspace's own supporting modules are:
 |--------|------|
 | `lib/gitChanges.ts` | The one record per changed path (`collectChanges`), the checkbox rules, the line sums, and the **one ordering** the list and the review share — `orderChanges`, `compareChangePaths` and `adjacentChange`, which finds the next file by position rather than index ([git-changes-ui.md](git-changes-ui.md#review-order)) |
 | `lib/gitChangesViewStore.ts` | Flat or tree (remembered per browser) and which tree folders are collapsed (per worktree, in memory) — a store rather than the list's state because the review reads the view for its order, and collapse state outlives the list unmounting on a segment switch |
-| `ui/iconButtonClass.ts` | The L5 icon button's classes, used by the Changes list's checkboxes and `⋯`, `LogList`, `BranchList` and `ErrorBanner` here, by the file tree row's `…` in the Files panel, and by chat's message actions — the `…` beside every user bubble, which is the one caller that asks for the overlay instead of a grown box, and the icon row under every agent message ([session-fork-ui.md](session-fork-ui.md)). It used to live under `Git/` while the tree wrote its own copy, because the two rungs disagreed on height — 36 against 44 — and parameterising that would have meant sharing everything about the rung except the part that made it a rung. The disagreement turned out to be one rung measured two ways: 36 of visual weight, 44 of hit area on a coarse pointer ([responsive-ui.md](responsive-ui.md#hit-areas-and-spacing)). With both stated here, there is one definition and it belongs to no single surface |
+| `ui/iconButtonClass.ts` | The L5 icon button's classes, used by the Changes list's checkboxes and `⋯`, the History rows' `⋯`, `BranchList` and `ErrorBanner` here, by the file tree row's `…` in the Files panel, and by chat's message actions — the `…` beside every user bubble, which is the one caller that asks for the overlay instead of a grown box, and the icon row under every agent message ([session-fork-ui.md](session-fork-ui.md)). It used to live under `Git/` while the tree wrote its own copy, because the two rungs disagreed on height — 36 against 44 — and parameterising that would have meant sharing everything about the rung except the part that made it a rung. The disagreement turned out to be one rung measured two ways: 36 of visual weight, 44 of hit area on a coarse pointer ([responsive-ui.md](responsive-ui.md#hit-areas-and-spacing)). With both stated here, there is one definition and it belongs to no single surface |
 | `Git/GitOutput.tsx` | The capped, scrollable block holding git's own words, shared by the error banner, the branch list's pinned failure, and the commit and sync sheets. Every one of them renders it conditionally: a refused write has no git output to hold ([above](#feedback-and-errors)) |
-| `Git/GitCommitSheet.tsx` | The connecting layer between the commit sheet and the workspace's queries, shared by the commit bar, the review's bottom bar and the HEAD row's amend |
-| `Git/BranchList.tsx` | The branch rows, their filter and the pinned failures, and `useBranchCheckout`, the Branches segment's handle on `gitCheckoutStore` |
+| `Git/GitCommitSheet.tsx` | The connecting layer between the commit sheet and the workspace's queries, shared by the commit bar, the review's bottom bar and the commit menu's amend |
+| `Git/CommitActions.tsx` | A commit's `⋯` menu and the sheets it leads to — amend, `Create branch here…`, the revert handoff — mounted by the History segment and by the commit's page for as long as each is on screen, so the handoff's failure outlives the menu that started it ([git-history-ui.md](git-history-ui.md#the-commit-menu)) |
+| `Git/BranchList.tsx` | The branch rows, their filter and the pinned failure, and `useBranchCheckout`, the Branches segment's handle on `gitCheckoutStore` |
 | `lib/gitBranches.ts`, `Git/BranchMenu.tsx`, `hooks/useBranchMergeHandoff.ts` | The branch list's groups, row text and menu copy (pure functions), the row's `⋯` sheet, and the merge handoff the workspace holds so it outlives the segment — [git-branches-ui.md](git-branches-ui.md) |
 | `ui/SegmentedControl.tsx` | The segmented control, shared with the Stories screen; it holds no state, since the segment is in the URL |
 | `lib/gitSyncStore.ts` | Which fetch/pull/push is in flight in each worktree, whether it is the automatic fetch (`auto`), and how the last one ended, so a run outlives the sheet that started it. Keyed by worktree because switching worktrees mid-run is reachable, and one record would show A's outcome under B or let A's run disable B's buttons |
@@ -704,6 +705,7 @@ The answer comes from one place, `worktreeStore.isGitRepo`, which only the serve
 | Worktree badge on work rows | Main's badge hidden, and a leftover feature name drawn as gone ([work-system.md](code/work-system.md#displaying-a-works-worktree)) |
 | Settings → Worktree | Hidden with its heading and its nav entry, through the section's `visibility`; the saved values are left alone |
 | Files search `.gitignore` chip | Hidden ([file.md](file.md#search-ui)) |
+| File page `History of this file` | Hidden; it leads into the workspace ([git-history-ui.md](git-history-ui.md#entering-them)) |
 | `/pockode-lead` | Left out of the palette, refused if typed ([pockode-commands.md](pockode-commands.md#when-the-server-refuses)) |
 
 The session filter's worktree dimension is not in the table: it reads which worktrees hold sessions on disk, not git, so a project that stopped being a repository still lists its old worktrees there — as deleted, which is what they now are.
@@ -724,9 +726,9 @@ The session filter's worktree dimension is not in the table: it reads which work
 
 ## Out of scope
 
-Deliberately excluded, to keep the workspace at "the everyday operations, done well": conflict resolution (what the workspace shows while the repository is stopped mid-merge, -rebase, -cherry-pick or -revert, and its two ways out, is [git-conflict-ui.md](git-conflict-ui.md)), interactive rebase, cherry-pick, revert, tags, stash, remote branch deletion, remote management, submodule commit/branch/sync, and a global toast system.
+Deliberately excluded, to keep the workspace at "the everyday operations, done well": conflict resolution (what the workspace shows while the repository is stopped mid-merge, -rebase, -cherry-pick or -revert, and its two ways out, is [git-conflict-ui.md](git-conflict-ui.md)), interactive rebase, cherry-pick, running a revert or a merge itself (a commit's `Ask AI to revert` and a branch's `Ask AI to merge into current branch` hand them to the agent — [git-history-ui.md](git-history-ui.md#ask-ai-to-revert), [git-branches-ui.md](git-branches-ui.md#asking-the-agent-to-merge)), tags, stash, remote branch deletion, remote management, submodule commit/branch/sync, and a global toast system.
 
-Left for later rather than excluded — the workspace was built as a frame for them, with its current contents moved in unchanged: a commit graph; branch details — the right column Branches does not have yet; more AI help that hands work to the agent — a revert, say — through the [prefill handoff](agent-handoff-ui.md#1-prefill-handoff), which brings the user back to the session's input with a message prefilled; and resizable columns and keyboard navigation. Per-hunk staging and handing selected lines to the agent are built, in the review ([staging a hunk](git-changes-ui.md#staging-a-hunk), [handing lines to the agent](git-changes-ui.md#handing-lines-to-the-agent)).
+Left for later rather than excluded: the right column Branches does not have yet, and resizable columns and keyboard navigation. Per-hunk staging and handing selected lines to the agent are built, in the review ([staging a hunk](git-changes-ui.md#staging-a-hunk), [handing lines to the agent](git-changes-ui.md#handing-lines-to-the-agent)).
 
 ---
 

@@ -310,7 +310,7 @@ func TestCreateBranch(t *testing.T) {
 	base := gitHead(t, dir)
 	writeTestFile(t, dir, "file.txt", "uncommitted\n")
 
-	if err := CreateBranch(dir, "feature/new"); err != nil {
+	if err := CreateBranch(dir, "feature/new", ""); err != nil {
 		t.Fatalf("CreateBranch() error: %v", err)
 	}
 	if got := gitOutput(t, dir, "rev-parse", "--abbrev-ref", "HEAD"); got != "feature/new" {

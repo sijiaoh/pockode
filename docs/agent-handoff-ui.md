@@ -14,10 +14,12 @@ The handoff is a mechanism, not an entry point. The entries that use it each
 belong to their own design — today asking the agent about selected lines
 ([git-changes-ui.md](git-changes-ui.md#handing-lines-to-the-agent)), the
 in-progress operation's `Resolve with agent` and the conflict view's `Ask agent`
-([git-conflict-ui.md](git-conflict-ui.md#resolve-with-agent)), and a branch's
+([git-conflict-ui.md](git-conflict-ui.md#resolve-with-agent)), a branch's
 `Ask AI to merge into current branch`
-([git-branches-ui.md](git-branches-ui.md#asking-the-agent-to-merge)); revert is
-still to come. This file says only what every one of them gets by calling
+([git-branches-ui.md](git-branches-ui.md#asking-the-agent-to-merge)), and a
+commit menu's `Ask AI to revert`
+([git-history-ui.md](git-history-ui.md#ask-ai-to-revert)). This file says only
+what every one of them gets by calling
 it. The review row is the one entry this file does define.
 
 Copy below is the UI's English.

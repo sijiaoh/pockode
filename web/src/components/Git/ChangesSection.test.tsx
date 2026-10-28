@@ -143,6 +143,35 @@ describe("ChangesSection discard", () => {
 		).toBeInTheDocument();
 	});
 
+	// An untracked file has never been committed, so has no history to list.
+	it("opens a file's history from its menu, except an untracked file's", async () => {
+		const user = userEvent.setup();
+		renderSection();
+
+		const untracked = await openMenu(user, "notes.txt");
+		expect(
+			within(untracked).queryByRole("button", {
+				name: "History of this file",
+			}),
+		).not.toBeInTheDocument();
+		await user.keyboard("{Escape}");
+
+		const staged = await openMenu(user, "staged.ts");
+		await user.click(
+			within(staged).getByRole("button", { name: "History of this file" }),
+		);
+		expect(navigate).toHaveBeenCalledWith(
+			expect.objectContaining({
+				to: "/git",
+				search: { segment: "history", file: "staged.ts" },
+			}),
+		);
+		expect(navigate).toHaveBeenCalledWith(
+			expect.not.objectContaining({ replace: true }),
+		);
+		expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+	});
+
 	// The write queue drops a path it already holds: a discard let through now
 	// would report success for a write that never ran.
 	it("holds discard back while the file has a write in flight", async () => {

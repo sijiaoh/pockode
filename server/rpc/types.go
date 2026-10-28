@@ -539,14 +539,18 @@ type GitHunkParams struct {
 	HunkID string `json:"hunk_id"`
 }
 
-// GitLogParams is the params for git.log request.
+// GitLogParams is the params for git.log request; the result is a
+// git.HistoryPage.
 type GitLogParams struct {
-	Limit int `json:"limit,omitempty"` // default 50
-}
-
-// GitLogResult is the result of git.log request.
-type GitLogResult struct {
-	Commits []git.Commit `json:"commits"`
+	// Scope is "current" (the default), "all" or "mainline" (git.HistoryScope).
+	// A later page is asked with the same Scope, Query and Path as the first:
+	// the cursor holds where the scope started, not how it walks.
+	Scope string `json:"scope,omitempty"`
+	Query string `json:"query,omitempty"` // in the commit message
+	Path  string `json:"path,omitempty"`  // touched by the commit
+	Limit int    `json:"limit,omitempty"` // default 50, at most 200
+	// Cursor is the previous page's next, sent back as received.
+	Cursor *git.HistoryCursor `json:"cursor,omitempty"`
 }
 
 // GitShowParams is the params for git.show request.
@@ -575,6 +579,8 @@ type GitCheckoutParams struct {
 // GitBranchCreateParams is the params for git.branch.create request.
 type GitBranchCreateParams struct {
 	Name string `json:"name"`
+	// Start is the commit to branch from, the current HEAD when empty.
+	Start string `json:"start,omitempty"`
 }
 
 // GitBranchInspectParams is the params for git.branch.inspect; the result is

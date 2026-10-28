@@ -1,5 +1,10 @@
 import type { HistoryState } from "@tanstack/react-router";
-import type { GitSegment, OverlayState, WorkSegment } from "../types/overlay";
+import type {
+	GitSegment,
+	HistoryQuery,
+	OverlayState,
+	WorkSegment,
+} from "../types/overlay";
 import { ROUTES, WT_ROUTES } from "./routes";
 import { SESSION_VIEW_PARAM } from "./sessionView";
 
@@ -34,18 +39,21 @@ interface NavToPathOverlay extends NavToOverlayBase {
 interface NavToCommitOverlay extends NavToOverlayBase {
 	overlayType: "commit";
 	hash: string;
+	history?: HistoryQuery;
 }
 
 interface NavToCommitDiffOverlay extends NavToOverlayBase {
 	overlayType: "commit-diff";
 	hash: string;
 	path: string;
+	history?: HistoryQuery;
 }
 
 interface NavToCommitFileOverlay extends NavToOverlayBase {
 	overlayType: "commit-file";
 	hash: string;
 	path: string;
+	history?: HistoryQuery;
 }
 
 type NavToFileOverlay =
@@ -66,6 +74,8 @@ interface NavToGitOverlay {
 	worktree: string;
 	overlayType: "git";
 	segment: GitSegment;
+	/** Read on the History segment only. */
+	history?: HistoryQuery;
 	sessionId: string | null;
 }
 
@@ -175,17 +185,24 @@ export function isReviewFromList(state: unknown): boolean {
  * rather than spelled out, so that the default landing place has exactly one
  * URL; it is what lets the Project entry button's plain `/works` mean
  * `Current` on its own (docs/project-ui.md §5). A query with nothing in it is
- * left off the result entirely rather than handed over empty.
+ * left off the result entirely rather than handed over empty. The History
+ * segment's query follows the same rule: `scope=current` is never written.
  */
 function assignSearch(
 	result: NavigationResult,
 	sessionId: string | null,
 	segment?: WorkSegment | GitSegment,
+	history?: HistoryQuery,
 ) {
 	const search: Record<string, string> = {};
 	if (sessionId) search.session = sessionId;
 	if (segment && segment !== "current" && segment !== "changes") {
 		search.segment = segment;
+	}
+	if (history) {
+		if (history.scope !== "current") search.scope = history.scope;
+		if (history.q) search.q = history.q;
+		if (history.file) search.file = history.file;
 	}
 	if (Object.keys(search).length > 0) result.search = search;
 }
@@ -211,6 +228,7 @@ export function overlayToNavigation(
 					worktree,
 					overlayType: "git" as const,
 					segment: overlay.segment,
+					history: overlay.history,
 					sessionId,
 				};
 			case "diff":
@@ -238,6 +256,7 @@ export function overlayToNavigation(
 					worktree,
 					overlayType: "commit" as const,
 					hash: overlay.hash,
+					history: overlay.history,
 					sessionId,
 				};
 			case "commit-diff":
@@ -247,6 +266,7 @@ export function overlayToNavigation(
 					overlayType: "commit-diff" as const,
 					path: overlay.path,
 					hash: overlay.hash,
+					history: overlay.history,
 					sessionId,
 				};
 			case "commit-file":
@@ -256,6 +276,7 @@ export function overlayToNavigation(
 					overlayType: "commit-file" as const,
 					path: overlay.path,
 					hash: overlay.hash,
+					history: overlay.history,
 					sessionId,
 				};
 			case "settings":
@@ -396,6 +417,9 @@ export function buildNavigation(
 					target.overlayType === "work-list" || target.overlayType === "git"
 						? target.segment
 						: undefined,
+					target.overlayType === "git" && target.segment === "history"
+						? target.history
+						: undefined,
 				);
 			} else if (target.overlayType === "commit") {
 				result.to = isMain ? ROUTES.commit : WT_ROUTES.commit;
@@ -403,7 +427,7 @@ export function buildNavigation(
 				if (!isMain) {
 					result.params.worktree = target.worktree;
 				}
-				assignSearch(result, target.sessionId);
+				assignSearch(result, target.sessionId, undefined, target.history);
 			} else if (
 				target.overlayType === "commit-diff" ||
 				target.overlayType === "commit-file"
@@ -415,7 +439,7 @@ export function buildNavigation(
 				if (!isMain) {
 					result.params.worktree = target.worktree;
 				}
-				assignSearch(result, target.sessionId);
+				assignSearch(result, target.sessionId, undefined, target.history);
 			} else {
 				const routeMap = {
 					staged: isMain ? ROUTES.staged : WT_ROUTES.staged,

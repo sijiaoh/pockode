@@ -5,19 +5,23 @@ import { allConflicted, type GitBranches, type GitStatus } from "../types/git";
 export const gitStatusQueryKey = ["git-status"] as const;
 export const gitLogQueryKey = ["git-log"] as const;
 export const gitBranchesQueryKey = ["git-branches"] as const;
+/** Prefix of `useGitCommit`'s keys: a commit never changes, its refs do. */
+export const gitCommitQueryKey = ["git-commit"] as const;
 
 /**
  * Refetch everything the Git workspace reads.
  *
  * Mutations call this on success instead of waiting out GitWatcher's 3-second
- * poll, and moving HEAD invalidates all three at once — a checkout changes the
- * status, the history and the branch list together.
+ * poll, and moving HEAD invalidates them all at once — a checkout changes the
+ * status, the history, the branch list and the refs on an open commit
+ * together.
  */
 export function invalidateGitQueries(queryClient: QueryClient): void {
 	for (const queryKey of [
 		gitStatusQueryKey,
 		gitLogQueryKey,
 		gitBranchesQueryKey,
+		gitCommitQueryKey,
 	]) {
 		queryClient.invalidateQueries({ queryKey });
 	}
@@ -58,6 +62,7 @@ export function removeGitQueries(queryClient: QueryClient): void {
 		gitStatusQueryKey,
 		gitLogQueryKey,
 		gitBranchesQueryKey,
+		gitCommitQueryKey,
 	]) {
 		queryClient.removeQueries({ queryKey });
 	}

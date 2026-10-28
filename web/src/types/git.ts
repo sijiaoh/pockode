@@ -108,16 +108,69 @@ export type GitDiffData =
 
 export type GitDiffChangedNotification = GitDiffData & { id: string };
 
+/** A ref pointing at a commit, whatever range the commit was listed in. */
+export interface GitRef {
+	/** `HEAD`, `main`, `origin/main`, `v1.2`. */
+	name: string;
+	type: "head" | "branch" | "remote" | "tag";
+	/** The branch HEAD is on; absent while detached. */
+	current?: boolean;
+}
+
 export interface GitCommit {
 	hash: string;
+	/** Full hashes, the first parent first; empty for a root, or a shallow clone's edge. */
+	parents: string[];
 	subject: string;
 	body?: string;
 	author: string;
 	date: string;
+	/**
+	 * In server order: `HEAD`, the current branch, other local branches, remote
+	 * branches, tags.
+	 */
+	refs?: GitRef[];
+	/**
+	 * No remote-tracking ref reaches it; always false without a remote.
+	 * `git.log` only.
+	 */
+	unpushed?: boolean;
+}
+
+/** Which commits the history lists (docs/git-history-ui.md#range). */
+export type GitHistoryScope = "current" | "all" | "mainline";
+
+/** Where a page of history ends, sent back as received for the next one. */
+export interface GitHistoryCursor {
+	tips: string[];
+	skip: number;
+}
+
+export interface GitLogParams {
+	scope?: GitHistoryScope;
+	/** Case-insensitive plain text in the commit message. */
+	query?: string;
+	/** A path relative to the repository root. */
+	path?: string;
+	limit?: number;
+	cursor?: GitHistoryCursor;
 }
 
 export interface GitLogResult {
 	commits: GitCommit[];
+	/** Null on the last page. */
+	next: GitHistoryCursor | null;
+	/** First page only: the range's commits no remote-tracking ref reaches. */
+	unpushed_count?: number;
+	/** First page only: the oldest commits' parents are not in this clone. */
+	shallow?: boolean;
+	/** First page only, absent when the repository has none git can name. */
+	default_branch?: string;
+	/**
+	 * First page only: the default branch's refs drawn as a line of their own
+	 * (walked from, not in HEAD's history), which lane 1 is kept for.
+	 */
+	default_line?: string[];
 }
 
 export interface FileChange {
@@ -140,6 +193,12 @@ export const GIT_STATUS_INFO: Record<
 
 export interface GitShowResult extends GitCommit {
 	files: FileChange[];
+}
+
+export interface GitBranchCreateParams {
+	name: string;
+	/** The full hash to branch from; HEAD when absent. */
+	start?: string;
 }
 
 /** What HEAD points at. `branch` is empty while detached. */
