@@ -22,7 +22,6 @@ import {
 	collectChanges,
 	describeStageable,
 	filesUnder,
-	firstReviewTarget,
 	orderChanges,
 	reviewSideOf,
 	sumLines,
@@ -72,22 +71,16 @@ interface Props {
 		worktree: string,
 		next: { path: string; staged: boolean } | null,
 	) => void;
-	/** The clean tree's way onward: what was changed is in History now. */
-	onViewHistory: () => void;
 	activeFile: { path: string; staged: boolean } | null;
 }
 
 /**
  * The working tree's changes as one list, a row per path with its checkbox,
- * under a header that stages, totals and discards them all, and over the
- * commit bar — the Git workspace's Changes segment (docs/git-changes-ui.md).
+ * under a header that stages and totals them all, and over the commit bar that
+ * discards what is left unchecked — the Git workspace's Changes segment
+ * (docs/git-changes-ui.md).
  */
-function ChangesSection({
-	onSelectFile,
-	onCloseFile,
-	onViewHistory,
-	activeFile,
-}: Props) {
+function ChangesSection({ onSelectFile, onCloseFile, activeFile }: Props) {
 	const navigate = useNavigate();
 	const { worktree: routeWorktree, sessionId } = useRouteState();
 	const { data: status, isLoading, error } = useGitStatus();
@@ -237,10 +230,13 @@ function ChangesSection({
 		if (file.unstaged) setPendingDiscard([file.unstaged]);
 	}, []);
 
-	const discardAll = useCallback(() => {
-		const unstaged = files.flatMap((f) => (f.unstaged ? [f.unstaged] : []));
-		if (unstaged.length > 0) setPendingDiscard(unstaged);
-	}, [files]);
+	// Unchecked is unstaged: a file checked in part keeps what is staged, and a
+	// conflict, which has no unstaged side, is passed over.
+	const unchecked = useMemo(
+		() => files.flatMap((f) => (f.unstaged ? [f.unstaged] : [])),
+		[files],
+	);
+	const busy = files.some((f) => isPathWriting(writes, f.path));
 
 	const rowProps = {
 		activePath: activeFile?.path ?? null,
@@ -277,25 +273,17 @@ function ChangesSection({
 						</div>
 					</div>
 				) : files.length === 0 ? (
-					<div className="flex flex-col items-center gap-1 p-8 text-center text-sm text-th-text-muted">
-						<div>No changes</div>
-						<button
-							type="button"
-							onClick={onViewHistory}
-							className="inline-flex min-h-[36px] items-center px-2 text-th-accent hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent pointer-coarse:min-h-11"
-						>
-							View history
-						</button>
+					<div className="p-8 text-center text-sm text-th-text-muted">
+						No changes
 					</div>
 				) : (
 					<>
 						<ChangesHeader
 							files={files}
-							busy={files.some((f) => isPathWriting(writes, f.path))}
+							busy={busy}
 							view={view}
 							onToggleAll={() => toggleFiles(files)}
 							onChangeView={gitChangesViewActions.setView}
-							onDiscardAll={discardAll}
 						/>
 						<div className="flex flex-col gap-1 px-2 py-2">
 							{view === "flat" ? (
@@ -321,10 +309,11 @@ function ChangesSection({
 			</div>
 
 			<CommitBar
-				onReview={() => {
-					const first = firstReviewTarget(files, view);
-					if (first) onSelectFile(first.path, first.staged);
-				}}
+				discardUnchecked={
+					unchecked.length > 0
+						? { onDiscard: () => setPendingDiscard(unchecked), busy }
+						: null
+				}
 			/>
 
 			{menuFile && (

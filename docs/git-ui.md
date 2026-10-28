@@ -45,7 +45,7 @@ Navigation is `AppShell`'s, on the Stories screen's model:
 | The app header's `←` on a narrow layer | The **parent**: diff → Changes (`Back to changes`), branch → Branches (`Back to branches`), commit → History (`Back to history`) or, opened from a branch, → that branch (`Back to branch`), commit-diff → commit, commit-file → commit-diff | navigates *to* the parent URL rather than `history.back()`, so a deep-linked diff still has a list to go back to. Pushed, except from the review: there it is `history.back()` when the review was pushed from the list — the one case where the list is known to be behind — and otherwise a replace ([git-changes-ui.md](git-changes-ui.md#what-the-two-bottom-buttons-say)) |
 | A sidebar entry | That segment's list — never a detail it remembers | push |
 
-`handleSelectGitSegment` serves the segment control, the branch name, the clean list's `View history`, the back of a narrow commit opened from History and of a narrow branch, a gone branch's `Back to branches`, and the sidebar's entries, so all of them land on a list the same way.
+`handleSelectGitSegment` serves the segment control, the branch name, the back of a narrow commit opened from History and of a narrow branch, a gone branch's `Back to branches`, and the sidebar's entries, so all of them land on a list the same way.
 
 **Switching worktree inside the workspace stays inside it**, at the same segment's list: every worktree has one, where the path or hash of the detail on screen may not exist over there (`useWorktree.select` reads the current route). Each worktree's own failures stay with it ([Results that outlive the page](#results-that-outlive-the-page)), and the automatic fetch decides again for the new worktree ([Automatic fetch](#automatic-fetch)).
 
@@ -129,13 +129,13 @@ The sidebar header shows a `GitBranch` icon with the worktree name, and the top 
 │ [ Changes ]  History   Branches  │  segmented control — fixed
 ├──────────────────────────────────┤
 │ ⚠ Discard failed · Details     ✕ │  inline-action banner — Changes only
-│ ▣ 3 files  +142 −37   [≣|⌸]  ⋯  │  list header, sticky  ┐
+│ ▣ 3 files  +142 −37      [≣|⌸]   │  list header, sticky  ┐
 │ ☑  GitTab.tsx          +12 −3  ⋯ │                       │
 │    web/src/components/Git        │                       ├ scroll area
 │ ▣  git.md              +88 −20 ⋯ │                       │
 │    docs                          │                       ┘
 ├──────────────────────────────────┤
-│ [ Review ]  [ Commit 2 files   ] │  commit bar — Changes only, when committable
+│ [Discard unchecked…] [Commit 2…] │  commit bar — Changes only, when committable
 └──────────────────────────────────┘
 ```
 
@@ -170,11 +170,11 @@ A layer has **no segmented control** — the segments filter the lists, and a la
 ├────────────────────────┬─────────────────────────────────────────┤
 │ [Changes] History Bra… │ git.md                                  │  column heading (L2)
 ├────────────────────────┼─────────────────────────────────────────┤
-│ ▣ 3 files +142 −37 ≣ ⋯ │ ‹ 2 / 3 › docs                    ↵ ␣   │  the review's toolbar
+│ ▣ 3 files +142 −37   ≣ │ ‹ 2 / 3 › docs                    ↵ ␣   │  the review's toolbar
 │▌▣ git.md      +88 −20⋯ │   (the diff)                            │
 │ ☐ notes.txt   +9     ⋯ │                                         │
 ├────────────────────────┼─────────────────────────────────────────┤
-│ [Review] [Commit 2 fi…]│ [ Discard file ]        [ Stage & next ]│  each column's own bottom bar
+│ [Discard…] [Commit 2…] │ [ Discard file ]        [ Stage & next ]│  each column's own bottom bar
 └────────────────────────┴─────────────────────────────────────────┘
 ```
 
@@ -245,7 +245,7 @@ The list — its rows, checkboxes, header, flat and tree views, the file's actio
 
 ## Commit
 
-The bottom bar holds at most one primary button (L1), beside a secondary `Review` that opens the first file in list order ([git-changes-ui.md](git-changes-ui.md#the-bottom-bar)), and renders only while committing is on the table. `describeCommitAction` returns `null` for the two states that have no button:
+The bottom bar holds at most one primary button (L1), beside a secondary `Discard unchecked…` that discards every unstaged change while there is one ([git-changes-ui.md](git-changes-ui.md#the-bottom-bar)), and renders only while committing is on the table. `describeCommitAction` decides the commit button — the discard button beside it has rules of its own — and returns `null` for the two states that have no button:
 
 | Working tree | Bar |
 |--------------|-----|
@@ -460,10 +460,10 @@ So: **commit operates on the root repository only.** `Commit n files` counts roo
 
 ## Discard
 
-Two entry points, both behind a `⋯` rather than a one-tap icon ([git-changes-ui.md](git-changes-ui.md#the-files-action-sheet-)):
+Two entry points, neither a one-tap icon on a row:
 
-- **Per file** — `Discard changes` (`Delete file` for an untracked one), last in the row's action sheet behind a divider, and only while the file has unstaged changes: a staged-only file is unstaged first, which its checkbox does.
-- **All unstaged** — `Discard all changes…`, the one item of the list header's `⋯`, over every file with unstaged changes; the `⋯` is not there when nothing is unstaged.
+- **Per file** — `Discard changes` (`Delete file` for an untracked one), last in the row's `⋯` action sheet behind a divider ([git-changes-ui.md](git-changes-ui.md#the-files-action-sheet-)), and only while the file has unstaged changes: a staged-only file is unstaged first, which its checkbox does.
+- **All unstaged** — `Discard unchecked…`, the left button of the list's bottom bar, over every file with unstaged changes: what is not checked is not wanted. It is not there when nothing is unstaged ([git-changes-ui.md](git-changes-ui.md#the-bottom-bar)).
 
 Both always go through `ConfirmDialog` with `variant="danger"`, and the wording differs by what is actually lost, because these are two operations with two different blast radii. `ConfirmDialog`'s `message` is a plain string, so the copy stays prose — no code formatting, no markup:
 
@@ -477,7 +477,7 @@ Both always go through `ConfirmDialog` with `variant="danger"`, and the wording 
 
 The confirm button is labelled with the verb of the outcome rather than the default `Confirm`: it is the last thing read before something irreversible happens, and "Delete" against a title asking about deletion is the one word that has to be unambiguous.
 
-A batch of one — which discard-all produces whenever a single file is unstaged — takes the single-file wording, because naming the file beats counting it. The classification behind all of this belongs to the server: the list on screen is as old as its last refresh, and the request carries paths only (see [git.md](git.md#discard)).
+A batch of one — which `Discard unchecked…` produces whenever a single file is unstaged — takes the single-file wording, because naming the file beats counting it. The classification behind all of this belongs to the server: the list on screen is as old as its last refresh, and the request carries paths only (see [git.md](git.md#discard)).
 
 "This cannot be undone" is literal here: discarded worktree changes are not in the reflog, unlike nearly every other git mistake. That is why discard is the one file-level action in the workspace behind a modal.
 
@@ -562,7 +562,7 @@ The project has no toast system — `WorktreeSwitcher` still carries a `TODO` ab
 
 | Action | Started from | Its failure is shown |
 |---|---|---|
-| Stage, unstage, discard (checkboxes, the list header, the action sheets) | Changes segment | The Changes segment's banner — including a failure that settled while the user was elsewhere |
+| Stage, unstage, discard (checkboxes, the list header, the action sheets, the bottom bar's `Discard unchecked…`) | Changes segment | The Changes segment's banner — including a failure that settled while the user was elsewhere |
 | Stage, unstage, discard from the review | The review (`diff`) layer | `DiffView`'s own banner; one that answers after the reader left the file, the Changes list's banner |
 | Commit, amend | Commit sheet | In the sheet |
 | Draft with AI | Commit sheet | In the sheet, under the staged line, apart from a commit failure; nowhere once the sheet is closed, since closing cancels it ([Drafting](#drafting-the-message-with-ai)) |

@@ -38,11 +38,20 @@ vi.mock("../../hooks/useGitDiscard", () => ({
 }));
 // Reads queries this test does not stand up; its own test covers it.
 vi.mock("./CommitBar", () => ({
-	default: ({ onReview }: { onReview: () => void }) => (
-		<button type="button" onClick={onReview}>
-			Review
-		</button>
-	),
+	default: ({
+		discardUnchecked,
+	}: {
+		discardUnchecked: { onDiscard: () => void; busy: boolean } | null;
+	}) =>
+		discardUnchecked && (
+			<button
+				type="button"
+				disabled={discardUnchecked.busy}
+				onClick={discardUnchecked.onDiscard}
+			>
+				Discard unchecked…
+			</button>
+		),
 }));
 
 const STATUS: GitStatus = {
@@ -65,14 +74,12 @@ function renderSection(
 ) {
 	const onCloseFile = props.onCloseFile ?? vi.fn();
 	const onSelectFile = vi.fn();
-	const onViewHistory = vi.fn();
 	const client = new QueryClient();
 	const ui = () => (
 		<QueryClientProvider client={client}>
 			<ChangesSection
 				onSelectFile={onSelectFile}
 				onCloseFile={onCloseFile}
-				onViewHistory={onViewHistory}
 				activeFile={props.activeFile ?? null}
 			/>
 		</QueryClientProvider>
@@ -80,13 +87,16 @@ function renderSection(
 	const { unmount, rerender } = render(ui());
 	// Stands for a status refresh: the mocked query is read on every render.
 	const refresh = () => rerender(ui());
-	return { onCloseFile, onSelectFile, onViewHistory, unmount, refresh };
+	return { onCloseFile, onSelectFile, unmount, refresh };
 }
 
 const confirmButton = (name: string) =>
 	screen.getByRole("button", { name, hidden: false });
 
 const checkbox = (name: string) => screen.getByRole("checkbox", { name });
+
+const discardUncheckedButton = () =>
+	screen.getByRole("button", { name: "Discard unchecked…" });
 
 async function openMenu(
 	user: ReturnType<typeof userEvent.setup>,
@@ -245,16 +255,11 @@ describe("ChangesSection discard", () => {
 		expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
 	});
 
-	it("sends every unstaged path from the header's menu", async () => {
+	it("sends every unchecked path from the bottom bar", async () => {
 		const user = userEvent.setup();
 		renderSection();
 
-		await user.click(
-			screen.getByRole("button", { name: "More actions for all changes" }),
-		);
-		await user.click(
-			screen.getByRole("button", { name: "Discard all changes…" }),
-		);
+		await user.click(discardUncheckedButton());
 
 		expect(
 			screen.getByText(
@@ -264,6 +269,55 @@ describe("ChangesSection discard", () => {
 		await user.click(confirmButton("Discard"));
 
 		expect(discard).toHaveBeenCalledWith(["notes.txt", "src/foo.ts"]);
+	});
+
+	// Checked in part is checked for what is staged: only the rest is a vote
+	// against, and git's discard restores the file to its index.
+	it("discards only the unchecked side of a partly checked file", async () => {
+		const user = userEvent.setup();
+		status = {
+			staged: [{ path: "src/foo.ts", status: "M" }],
+			unstaged: [{ path: "src/foo.ts", status: "M" }],
+		};
+		renderSection();
+
+		await user.click(discardUncheckedButton());
+		expect(
+			screen.getByText(
+				"Your edits to src/foo.ts will be lost. This cannot be undone.",
+			),
+		).toBeInTheDocument();
+		await user.click(confirmButton("Discard"));
+
+		expect(discard).toHaveBeenCalledWith(["src/foo.ts"]);
+	});
+
+	it("offers no discard when every file is checked", () => {
+		status = { staged: STATUS.staged, unstaged: [] };
+		renderSection();
+
+		expect(
+			screen.queryByRole("button", { name: "Discard unchecked…" }),
+		).toBeNull();
+	});
+
+	// The write queue drops a path it already holds: a discard now would skip
+	// the file being written and say nothing.
+	it("holds the discard while a file is being written", async () => {
+		const user = userEvent.setup();
+		let finish!: () => void;
+		stage.mockReturnValue(
+			new Promise<void>((resolve) => {
+				finish = resolve;
+			}),
+		);
+		renderSection();
+
+		await user.click(checkbox("Stage src/foo.ts"));
+		expect(discardUncheckedButton()).toBeDisabled();
+
+		await act(async () => finish());
+		await waitFor(() => expect(discardUncheckedButton()).toBeEnabled());
 	});
 
 	const GIT_ERROR =
@@ -338,18 +392,13 @@ describe("ChangesSection discard", () => {
 
 	// The list has not heard of the discard when it answers: a file it left
 	// with no changes at all must not be what the review moves on to.
-	it("passes over the other files a discard all leaves unchanged", async () => {
+	it("passes over the other files a discard of the unchecked leaves unchanged", async () => {
 		const user = userEvent.setup();
 		const { onCloseFile } = renderSection({
 			activeFile: { path: "notes.txt", staged: false },
 		});
 
-		await user.click(
-			screen.getByRole("button", { name: "More actions for all changes" }),
-		);
-		await user.click(
-			screen.getByRole("button", { name: "Discard all changes…" }),
-		);
+		await user.click(discardUncheckedButton());
 		await user.click(confirmButton("Discard"));
 
 		await waitFor(() =>
@@ -372,12 +421,7 @@ describe("ChangesSection discard", () => {
 		};
 		const { onCloseFile } = renderSection();
 
-		await user.click(
-			screen.getByRole("button", { name: "More actions for all changes" }),
-		);
-		await user.click(
-			screen.getByRole("button", { name: "Discard all changes…" }),
-		);
+		await user.click(discardUncheckedButton());
 		await user.click(confirmButton("Discard"));
 
 		await waitFor(() =>
@@ -660,16 +704,11 @@ describe("ChangesSection conflicts", () => {
 		await waitFor(() => expect(stage).toHaveBeenCalledWith(["notes.txt"]));
 	});
 
-	it("passes conflicts over in discard all", async () => {
+	it("passes conflicts over in discarding the unchecked", async () => {
 		const user = userEvent.setup();
 		renderSection();
 
-		await user.click(
-			screen.getByRole("button", { name: "More actions for all changes" }),
-		);
-		await user.click(
-			screen.getByRole("button", { name: "Discard all changes…" }),
-		);
+		await user.click(discardUncheckedButton());
 		await user.click(confirmButton("Discard"));
 
 		expect(discard).toHaveBeenCalledWith(["notes.txt"]);
@@ -696,7 +735,7 @@ describe("ChangesSection conflicts", () => {
 
 		expect(screen.queryByRole("checkbox")).toBeNull();
 		expect(
-			screen.queryByRole("button", { name: "More actions for all changes" }),
+			screen.queryByRole("button", { name: "Discard unchecked…" }),
 		).toBeNull();
 	});
 });
@@ -807,25 +846,14 @@ describe("ChangesSection rows", () => {
 		expect(onSelectFile).toHaveBeenLastCalledWith("staged.ts", true);
 	});
 
-	it("reviews from the first file in list order", async () => {
-		const user = userEvent.setup();
-		status = STATUS;
-		const { onSelectFile } = renderSection();
-
-		await user.click(screen.getByRole("button", { name: "Review" }));
-
-		expect(onSelectFile).toHaveBeenCalledWith("notes.txt", false);
-	});
-
-	it("points a clean tree at history", async () => {
-		const user = userEvent.setup();
+	// History is one segment away; the empty list does not point there again.
+	it("says only that a clean tree has no changes", () => {
 		status = { staged: [], unstaged: [] };
-		const { onViewHistory } = renderSection();
+		renderSection();
 
 		expect(screen.getByText("No changes")).toBeInTheDocument();
 		expect(screen.queryByRole("checkbox")).toBeNull();
-		await user.click(screen.getByRole("button", { name: "View history" }));
-		expect(onViewHistory).toHaveBeenCalled();
+		expect(screen.queryByRole("button")).toBeNull();
 	});
 
 	// The sheet is about a file; once the file has no changes it has nothing

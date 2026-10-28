@@ -5,19 +5,23 @@ import { BottomActionBar } from "../ui";
 import GitCommitSheet from "./GitCommitSheet";
 
 interface Props {
-	/** Opens the review at the first file in list order. */
-	onReview: () => void;
+	/**
+	 * Throws away every unstaged change, after a confirmation the caller owns;
+	 * null when nothing is unstaged — every file already checked.
+	 */
+	discardUnchecked: { onDiscard: () => void; busy: boolean } | null;
 }
 
 /**
- * The Changes list's fixed bottom row — `Review` and the commit button — for
- * as long as there is something to commit or something on its way to being
- * committed.
+ * The Changes list's fixed bottom row for as long as there is something to
+ * commit or something on its way to being committed. Like the review's bar it
+ * takes away on the left and keeps on the right, but for every file at once:
+ * the checkboxes are the ballot, and what is left unchecked is discarded.
  *
  * It renders outside ChangesSection's loading/error branch, so the action stays
  * reachable however far the user has scrolled down the list.
  */
-function CommitBar({ onReview }: Props) {
+function CommitBar({ discardUnchecked }: Props) {
 	const { data: status } = useGitStatus();
 	const [isOpen, setIsOpen] = useState(false);
 	const hintId = useId();
@@ -46,14 +50,25 @@ function CommitBar({ onReview }: Props) {
 							{action.hint.text}
 						</span>
 					)}
-					<div className="flex gap-2">
-						<button
-							type="button"
-							onClick={onReview}
-							className="flex min-h-[44px] max-w-[33%] shrink-0 items-center justify-center rounded-lg bg-th-bg-tertiary px-4 text-sm text-th-text-primary transition-opacity hover:opacity-90 focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent"
-						>
-							Review
-						</button>
+					{/* The review bar's gap, for the same reason: the button that takes
+					    something away is not flush against the one pressed all day. */}
+					<div className="flex gap-3">
+						{discardUnchecked && (
+							<button
+								type="button"
+								onClick={discardUnchecked.onDiscard}
+								// The write queue drops a path it already holds, so a
+								// discard now would skip those files and say nothing.
+								disabled={discardUnchecked.busy}
+								className="flex min-h-[44px] max-w-[50%] shrink-0 items-center justify-center rounded-lg bg-th-bg-tertiary px-4 text-center text-sm leading-tight text-th-error transition-opacity hover:opacity-90 focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent disabled:cursor-not-allowed disabled:opacity-50"
+							>
+								{/* Wraps rather than truncates: at the sidebar's default width
+								    the label is wider than its half of the bar, and two lines
+								    still fit the button's height. Half, not the review's 40%,
+								    which would make that three lines and a taller bar. */}
+								Discard unchecked…
+							</button>
+						)}
 						<button
 							type="button"
 							onClick={() => setIsOpen(true)}

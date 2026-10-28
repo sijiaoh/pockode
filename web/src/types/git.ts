@@ -613,7 +613,7 @@ export function describeDiscard(files: FileStatus[]): DiscardPrompt {
 	const tracked = files.filter((f) => f.status !== "?");
 
 	// A batch of one is still one file, and naming it beats counting it — the
-	// group header hits this whenever a single file is unstaged.
+	// bottom bar hits this whenever a single file is left unchecked.
 	if (files.length === 1) {
 		const { path } = files[0];
 		if (untracked.length === 1) {

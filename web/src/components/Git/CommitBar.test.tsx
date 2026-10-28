@@ -26,7 +26,7 @@ describe("CommitBar", () => {
 	it("commits what is staged", async () => {
 		const user = userEvent.setup();
 		status = { staged: [file("a.ts"), file("b.ts")], unstaged: [] };
-		render(<CommitBar onReview={() => {}} />);
+		render(<CommitBar discardUnchecked={null} />);
 
 		const button = screen.getByRole("button", { name: "Commit 2 files" });
 		expect(button).toBeEnabled();
@@ -39,7 +39,7 @@ describe("CommitBar", () => {
 	// what it is waiting for rather than appearing under their thumb mid-stage.
 	it("waits, visibly, while nothing is staged yet", () => {
 		status = { staged: [], unstaged: [file("a.ts")] };
-		render(<CommitBar onReview={() => {}} />);
+		render(<CommitBar discardUnchecked={null} />);
 
 		const button = screen.getByRole("button", { name: "Commit" });
 		expect(button).toBeDisabled();
@@ -57,7 +57,7 @@ describe("CommitBar", () => {
 			unstaged: [],
 			submodules: { "vendor/sdk": { staged: [file("sub.ts")], unstaged: [] } },
 		};
-		render(<CommitBar onReview={() => {}} />);
+		render(<CommitBar discardUnchecked={null} />);
 
 		expect(screen.getByRole("button", { name: "Commit" })).toBeDisabled();
 		const hint = screen.getByText(/Only submodule files are staged/);
@@ -68,7 +68,7 @@ describe("CommitBar", () => {
 	// lives on the commit it amends.
 	it("renders nothing on a clean tree", () => {
 		status = { staged: [], unstaged: [] };
-		render(<CommitBar onReview={() => {}} />);
+		render(<CommitBar discardUnchecked={null} />);
 
 		expect(commitButton()).not.toBeInTheDocument();
 	});
@@ -78,29 +78,35 @@ describe("CommitBar", () => {
 	it("keeps an open sheet when the tree goes clean underneath it", async () => {
 		const user = userEvent.setup();
 		status = { staged: [file("a.ts")], unstaged: [] };
-		const { rerender } = render(<CommitBar onReview={() => {}} />);
+		const { rerender } = render(<CommitBar discardUnchecked={null} />);
 		await user.click(screen.getByRole("button", { name: "Commit 1 file" }));
 
 		status = { staged: [], unstaged: [] };
-		rerender(<CommitBar onReview={() => {}} />);
+		rerender(<CommitBar discardUnchecked={null} />);
 
 		expect(commitButton()).not.toBeInTheDocument();
 		expect(screen.getByRole("dialog")).toBeInTheDocument();
 	});
 
-	it("reviews beside the commit button", async () => {
+	// Left takes away and right keeps, as on the review's bar.
+	it("puts the discard of what is unchecked before the commit button", async () => {
 		const user = userEvent.setup();
-		const onReview = vi.fn();
-		status = { staged: [], unstaged: [file("a.ts")] };
-		render(<CommitBar onReview={onReview} />);
+		const onDiscard = vi.fn();
+		status = { staged: [file("a.ts")], unstaged: [file("b.ts")] };
+		render(<CommitBar discardUnchecked={{ onDiscard, busy: false }} />);
 
-		await user.click(screen.getByRole("button", { name: "Review" }));
+		const buttons = screen.getAllByRole("button");
+		expect(buttons.map((b) => b.textContent)).toEqual([
+			"Discard unchecked…",
+			"Commit 1 file",
+		]);
 
-		expect(onReview).toHaveBeenCalled();
+		await user.click(buttons[0]);
+		expect(onDiscard).toHaveBeenCalled();
 	});
 
 	it("renders nothing while the status cannot be read", () => {
-		render(<CommitBar onReview={() => {}} />);
+		render(<CommitBar discardUnchecked={null} />);
 
 		expect(commitButton()).not.toBeInTheDocument();
 	});

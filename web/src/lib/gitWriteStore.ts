@@ -256,7 +256,7 @@ export const gitWriteActions = {
 	 * Dropped, resolving, on the same terms as `run`: when the same hunk is
 	 * already pending, or a whole-file write is pending on its path — that
 	 * write will have moved the hunk by the time this one's turn comes, and
-	 * the hunk's box is busy meanwhile, so nothing should be asking.
+	 * the hunk's button is busy meanwhile, so nothing should be asking.
 	 */
 	runHunk: (
 		worktree: string,

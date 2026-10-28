@@ -247,14 +247,14 @@ Who deleted it is deliberately not named: in a rebase "ours" is the branch being
 - **`Next` stays on the right**, where `Stage & next` is on every other file, so the thumb's "go on" never moves. The handoff is the secondary here because the banner's primary is one Back away; it is the same press with the same text ([above](#resolve-with-agent)). Conflicts with no operation in progress (a `git stash pop`) have no banner but still open here, so the text then opens `The repository has unresolved conflicts in:` and asks only to resolve and stage — there is nothing to continue. Its label is shortened to `Ask agent` (accessible name `Ask agent to resolve the conflicts`, which keeps the visible words) so that at 320px it sits beside the primary: `Resolve with agent` would take more than half the bar.
 - **`Mark resolved`** is `git.add` with `resolve` through the write queue — the review's `Stage` by another name, and the one stage the server lets through for a conflicted path, offered only when the text no longer contains an opening, closing or diff3 base (`|||||||`) marker of any length, paired or not (a bare `=======` is a setext heading, and allowed), so it cannot record markers as a resolution. It is not offered while the file is being re-read — the primary is `Next` until the read settles, except after its own press, where it stays in place, disabled — and the text is read once more at the press — the cached text may be a moment behind the disk — staging nothing if markers are back. Spinner and `Marking…` while queued; a failure goes to the layer's banner as a stage failure does. It **stays on the file**, as the last file's `Stage` does: the file is no longer conflicted, so the page becomes its ordinary review, on the staged side — the resolution as it will be committed — with the ordinary review's primary on the right: `Next`, or on the last file the commit button, disabled while the operation lasts. It is the one way to finish a file resolved by hand; it stages and does not continue anything. A marker that is really part of the file (a test fixture) is the agent's case.
 - **No discard.** git refuses to check out an unmerged path, and picking a side is out of scope.
-- The whitespace toggle, the split toggle and the side row are absent: there is no diff to filter or split and no second side. So are the review's hunk bars and line selection, which need a diff ([git-changes-ui.md](git-changes-ui.md#which-hunks-have-boxes)).
+- The whitespace toggle, the split toggle and the side row are absent: there is no diff to filter or split and no second side. So are the review's hunk bars and line selection, which need a diff ([git-changes-ui.md](git-changes-ui.md#which-hunks-have-a-stage-button)).
 
 ## The Changes list
 
 A conflicted file is a row like any other, in its place in the order — rows never move ([git-changes-ui.md](git-changes-ui.md#goals-and-constraints)).
 
 ```
-│ ▣ 5 files  +142 −37   [≣|⌸]  ⋯  │
+│ ▣ 5 files  +142 −37      [≣|⌸]   │
 │ ⚠  GitTab.tsx                  ⋯ │  checkbox replaced by the glyph
 │    web/src/components/Git · Conflict
 │ ☑  notes.txt           +9      ⋯ │
@@ -264,7 +264,7 @@ A conflicted file is a row like any other, in its place in the order — rows ne
 - **Line 2** reads `<dir> · Conflict`, muted like every status word. No counts (the server has none).
 - **The `⋯` sheet** keeps `Open file` (disabled when both sides deleted it) and `Copy path`, and has no `Discard`.
 - **Select all and folder checkboxes** aggregate and act over the files without conflicts only. With conflicts present, select all's name becomes `Stage 3 of 5 files, 2 conflicted` (it still contains the visible count, for voice control). A folder holding only conflicted files has no checkbox — its gutter stays empty so the column of boxes stays aligned — and if every file is conflicted, select all goes the same way.
-- **Discard all** covers the files with unstaged changes that are not conflicted, and its copy counts those; with none, the header's `⋯` is absent as today. The server refuses unmerged paths in `git.discard` on its own as well, naming them ([git.md](git.md#discard)): the boundary is where the rule is enforced, the list only keeps the user from meeting it.
+- **`Discard unchecked…`** in the bottom bar covers the files with unstaged changes that are not conflicted, and its copy counts those; with none, the button is absent. The server refuses unmerged paths in `git.discard` on its own as well, naming them ([git.md](git.md#discard)): the boundary is where the rule is enforced, the list only keeps the user from meeting it.
 
 ## What stops while an operation is in progress
 
@@ -276,7 +276,7 @@ Every write the workspace offers, reviewed. "Disabled" keeps the control in plac
 | Stage / unstage other files, whole or by hunk | allowed | — | Ordinary index edits; the operation's result is built from the index |
 | Selecting lines of another file's diff, `Copy`, `Ask AI to edit…` | allowed | — | They write nothing; the prefilled message goes into the composer like any other handoff |
 | Discard a conflicted file | stopped | absent from `⋯` | git refuses it; picking a side is out of scope |
-| Discard other files, discard all | allowed, conflicted files excluded | — | — |
+| Discard other files, `Discard unchecked…` | allowed, conflicted files excluded | — | — |
 | Commit (list's bar, the review's commit button) | stopped | **disabled**, labelled `Commit` with no count, visible line above the button | `Can't commit during a rebase.` (the kind named). Committing would finish a merge, pick or revert — the `Continue` left to the agent — and would insert a stray commit into a rebase. Visible rather than `sr-only`: the banner may be collapsed or scrolled out of mind, and nothing next to the button says why |
 | The commit sheet, if open when an operation begins | stays open (it holds the message) | `Commit` / `Commit & push` disabled | The same line, in the footer where the push reasons go |
 | Amend (a commit's `⋯` menu, on HEAD) | stopped | absent | Not on the user's way: an entry in a menu, not a target to keep. git refuses amend mid-merge, and mid-rebase HEAD is not the branch's commit. The banner's pause sentence says why commits stopped |

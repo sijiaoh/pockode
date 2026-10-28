@@ -92,7 +92,7 @@ export function collectChanges(status: GitStatus): ChangedFile[] {
 	return [...byPath.values()];
 }
 
-/** The files a checkbox or a discard-all may act on: every one but a conflict. */
+/** The files a checkbox or a discard of many may act on: every one but a conflict. */
 export function withoutConflicts(files: ChangedFile[]): ChangedFile[] {
 	return files.filter((f) => !f.conflict);
 }
@@ -291,9 +291,9 @@ export function orderChanges(
 
 /**
  * Where a review entered from outside a file starts: the first file in the
- * list's order, on the side `reviewSideOf` opens. The Changes list's `Review`
- * and the chat's review row both start here, so they never start at different
- * files (docs/agent-handoff-ui.md §2.5). Null for a clean tree.
+ * list's order, on the side `reviewSideOf` opens — the chat's review row starts
+ * here, at the file the list's first row opens (docs/agent-handoff-ui.md §2.5).
+ * Null for a clean tree.
  */
 export function firstReviewTarget(
 	files: ChangedFile[],

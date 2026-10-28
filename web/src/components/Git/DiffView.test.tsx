@@ -927,15 +927,20 @@ function withDiffLibrary() {
 describe("DiffView hunk staging", () => {
 	withDiffLibrary();
 
-	const box = (name: string) => screen.findByRole("checkbox", { name });
+	const stageButton = (name: string) => screen.findByRole("button", { name });
+	const anyStageButton = () =>
+		screen.queryByRole("button", { name: /^(Stage|Unstage) (removed )?lines/ });
 
 	it("stages a hunk, and keeps it busy until a diff read after the write", async () => {
 		const user = userEvent.setup();
-		diffRef.current = { data: diffOf([10, 30], ["h1", "h2"]), snapshot: 1 };
+		diffRef.current = {
+			data: diffOf([10, 20, 30], ["h1", "h2", "h3"]),
+			snapshot: 1,
+		};
 		const { rerender } = render(<DiffView path="a.ts" staged={false} />);
 
-		const first = await box("Stage lines 7–13");
-		expect(first).toHaveAttribute("aria-checked", "false");
+		const first = await stageButton("Stage lines 7–13");
+		expect(first).toHaveTextContent("Stage");
 		await user.click(first);
 
 		expect(stageHunk).toHaveBeenCalledWith({ path: "a.ts", hunkId: "h1" });
@@ -944,17 +949,19 @@ describe("DiffView hunk staging", () => {
 		await writesSettled();
 		expect(first).toHaveAttribute("aria-busy", "true");
 		expect(
-			screen.getByRole("checkbox", { name: "Stage lines 27–33" }),
+			screen.getByRole("button", { name: "Stage lines 17–23" }),
 		).not.toHaveAttribute("aria-busy");
 		// And the file's own actions wait for nothing more than the write.
 		expect(screen.getByRole("button", { name: "Stage & next" })).toBeEnabled();
 
-		diffRef.current = { data: diffOf([30], ["h2"]), snapshot: 2 };
+		diffRef.current = { data: diffOf([20, 30], ["h2", "h3"]), snapshot: 2 };
 		rerender(<DiffView path="a.ts" staged={false} />);
 
-		expect(await box("Stage lines 27–33")).not.toHaveAttribute("aria-busy");
+		expect(await stageButton("Stage lines 17–23")).not.toHaveAttribute(
+			"aria-busy",
+		);
 		expect(
-			screen.queryByRole("checkbox", { name: "Stage lines 7–13" }),
+			screen.queryByRole("button", { name: "Stage lines 7–13" }),
 		).toBeNull();
 	});
 
@@ -962,19 +969,24 @@ describe("DiffView hunk staging", () => {
 	// asked for after it says what the write did.
 	it("stays busy through a notification that still has the hunk", async () => {
 		const user = userEvent.setup();
-		diffRef.current = { data: diffOf([10], ["h1"]), snapshot: 1 };
+		diffRef.current = { data: diffOf([10, 30], ["h1", "h2"]), snapshot: 1 };
 		const { rerender } = render(<DiffView path="a.ts" staged={false} />);
-		await user.click(await box("Stage lines 7–13"));
+		await user.click(await stageButton("Stage lines 7–13"));
 		await writesSettled();
 
-		diffRef.current = { data: diffOf([10], ["h1"]), snapshot: 1 };
+		diffRef.current = { data: diffOf([10, 30], ["h1", "h2"]), snapshot: 1 };
 		rerender(<DiffView path="a.ts" staged={false} />);
-		expect(await box("Stage lines 7–13")).toHaveAttribute("aria-busy", "true");
+		expect(await stageButton("Stage lines 7–13")).toHaveAttribute(
+			"aria-busy",
+			"true",
+		);
 
-		diffRef.current = { data: diffOf([10], ["h1"]), snapshot: 2 };
+		diffRef.current = { data: diffOf([10, 30], ["h1", "h2"]), snapshot: 2 };
 		rerender(<DiffView path="a.ts" staged={false} />);
 		await waitFor(async () =>
-			expect(await box("Stage lines 7–13")).not.toHaveAttribute("aria-busy"),
+			expect(await stageButton("Stage lines 7–13")).not.toHaveAttribute(
+				"aria-busy",
+			),
 		);
 	});
 
@@ -998,8 +1010,8 @@ describe("DiffView hunk staging", () => {
 			const { container, rerender } = render(
 				<DiffView path="a.ts" staged={false} />,
 			);
-			await user.click(await box("Stage lines 1–7"));
-			await user.click(await box("Stage lines 17–23"));
+			await user.click(await stageButton("Stage lines 1–7"));
+			await user.click(await stageButton("Stage lines 17–23"));
 			await writesSettled();
 			const scroller = container.querySelector<HTMLElement>(".overflow-auto");
 			if (!scroller) throw new Error("no scroll box");
@@ -1025,31 +1037,66 @@ describe("DiffView hunk staging", () => {
 		}
 	});
 
-	// The pressed box leaves with its hunk; a keyboard user goes on from the
-	// box that took its place rather than from the top of the page.
-	it("hands focus to the next hunk's box once the staged one leaves", async () => {
+	// The pressed button leaves with its hunk; a keyboard user goes on from
+	// the button that took its place rather than from the top of the page.
+	it("hands focus to the next hunk's button once the staged one leaves", async () => {
+		const user = userEvent.setup();
+		diffRef.current = {
+			data: diffOf([10, 20, 30], ["h1", "h2", "h3"]),
+			snapshot: 1,
+		};
+		const { rerender } = render(<DiffView path="a.ts" staged={false} />);
+
+		(await stageButton("Stage lines 7–13")).focus();
+		await user.keyboard(" ");
+		await waitFor(() => expect(refreshDiff).toHaveBeenCalledOnce());
+
+		diffRef.current = { data: diffOf([20, 30], ["h2", "h3"]), snapshot: 2 };
+		rerender(<DiffView path="a.ts" staged={false} />);
+
+		const next = await stageButton("Stage lines 17–23");
+		await waitFor(() => expect(next).toHaveFocus());
+	});
+
+	// The hunk left behind is the whole side, staged by the bottom bar, so its
+	// bar has no button of its own to take the focus.
+	it("hands focus to the last hunk's Select once it is the only one", async () => {
 		const user = userEvent.setup();
 		diffRef.current = { data: diffOf([10, 30], ["h1", "h2"]), snapshot: 1 };
 		const { rerender } = render(<DiffView path="a.ts" staged={false} />);
 
-		(await box("Stage lines 7–13")).focus();
+		(await stageButton("Stage lines 7–13")).focus();
 		await user.keyboard(" ");
 		await waitFor(() => expect(refreshDiff).toHaveBeenCalledOnce());
 
 		diffRef.current = { data: diffOf([30], ["h2"]), snapshot: 2 };
 		rerender(<DiffView path="a.ts" staged={false} />);
 
-		const next = await box("Stage lines 27–33");
-		await waitFor(() => expect(next).toHaveFocus());
+		const select = await screen.findByRole("button", {
+			name: "Select lines 27–33",
+		});
+		await waitFor(() => expect(select).toHaveFocus());
+		expect(anyStageButton()).toBeNull();
 	});
 
-	it("unstages from the staged side, where every box is checked", async () => {
+	// Staging a side's only hunk is the bottom bar's Stage under another name.
+	it("offers no hunk button when the side has a single hunk", async () => {
+		diffRef.current = { data: diffOf([10], ["h1"]), snapshot: 1 };
+		render(<DiffView path="a.ts" staged={false} />);
+
+		expect(
+			await screen.findByRole("button", { name: "Select lines 7–13" }),
+		).toBeInTheDocument();
+		expect(anyStageButton()).toBeNull();
+	});
+
+	it("unstages from the staged side", async () => {
 		const user = userEvent.setup();
-		diffRef.current = { data: diffOf([10], ["s1"]), snapshot: 1 };
+		diffRef.current = { data: diffOf([10, 30], ["s1", "s2"]), snapshot: 1 };
 		render(<DiffView path="b.ts" staged />);
 
-		const staged = await box("Stage lines 7–13");
-		expect(staged).toHaveAttribute("aria-checked", "true");
+		const staged = await stageButton("Unstage lines 7–13");
+		expect(staged).toHaveTextContent("Unstage");
 		await user.click(staged);
 
 		expect(unstageHunk).toHaveBeenCalledWith({ path: "b.ts", hunkId: "s1" });
@@ -1060,10 +1107,10 @@ describe("DiffView hunk staging", () => {
 		const user = userEvent.setup();
 		const pending = deferred();
 		stageHunk.mockReturnValue(pending.promise);
-		diffRef.current = { data: diffOf([10], ["h1"]), snapshot: 1 };
+		diffRef.current = { data: diffOf([10, 30], ["h1", "h2"]), snapshot: 1 };
 		render(<DiffView path="a.ts" staged={false} />);
 
-		await user.click(await box("Stage lines 7–13"));
+		await user.click(await stageButton("Stage lines 7–13"));
 
 		expect(screen.getByRole("button", { name: "Stage & next" })).toBeDisabled();
 		expect(screen.getByRole("button", { name: "Discard file" })).toBeDisabled();
@@ -1080,10 +1127,10 @@ describe("DiffView hunk staging", () => {
 		stageHunk.mockRejectedValue(
 			new JSONRPCErrorException("hunk is no longer in the diff", -32005),
 		);
-		diffRef.current = { data: diffOf([10], ["h1"]), snapshot: 1 };
+		diffRef.current = { data: diffOf([10, 30], ["h1", "h2"]), snapshot: 1 };
 		render(<DiffView path="a.ts" staged={false} />);
 
-		await user.click(await box("Stage lines 7–13"));
+		await user.click(await stageButton("Stage lines 7–13"));
 
 		const banner = await screen.findByRole("alert");
 		expect(banner).toHaveTextContent(
@@ -1094,19 +1141,19 @@ describe("DiffView hunk staging", () => {
 		).toBeNull();
 		expect(refreshDiff).toHaveBeenCalledOnce();
 		expect(stageHunk).toHaveBeenCalledOnce();
-		// Nothing was written, so the box is pressable again at once.
+		// Nothing was written, so the button is pressable again at once.
 		expect(
-			screen.getByRole("checkbox", { name: "Stage lines 7–13" }),
+			screen.getByRole("button", { name: "Stage lines 7–13" }),
 		).not.toHaveAttribute("aria-busy");
 	});
 
 	it("reports any other failure with git's words", async () => {
 		const user = userEvent.setup();
 		stageHunk.mockRejectedValue(new Error("error: patch failed"));
-		diffRef.current = { data: diffOf([10], ["h1"]), snapshot: 1 };
+		diffRef.current = { data: diffOf([10, 30], ["h1", "h2"]), snapshot: 1 };
 		render(<DiffView path="a.ts" staged={false} />);
 
-		await user.click(await box("Stage lines 7–13"));
+		await user.click(await stageButton("Stage lines 7–13"));
 
 		const banner = await screen.findByRole("alert");
 		expect(banner).toHaveTextContent("Stage failed.");
@@ -1116,7 +1163,7 @@ describe("DiffView hunk staging", () => {
 
 	// Staging part of a conflicted file would end its conflict unresolved, so
 	// the page offers no hunk to stage, even with a diff carrying IDs at hand.
-	it("draws no hunk boxes for a conflicted file", async () => {
+	it("draws no hunk buttons for a conflicted file", async () => {
 		statusRef.current = {
 			staged: [{ path: "a.ts", status: "U" }],
 			unstaged: [{ path: "a.ts", status: "U" }],
@@ -1131,11 +1178,11 @@ describe("DiffView hunk staging", () => {
 			content: "<<<<<<< HEAD\n",
 			encoding: "text",
 		};
-		diffRef.current = { data: diffOf([10], ["h1"]), snapshot: 1 };
+		diffRef.current = { data: diffOf([10, 30], ["h1", "h2"]), snapshot: 1 };
 		render(<DiffView path="a.ts" staged={false} />);
 
 		expect(await screen.findByText("<<<<<<< HEAD")).toBeInTheDocument();
-		expect(screen.queryByRole("checkbox", { name: /^Stage lines/ })).toBeNull();
+		expect(anyStageButton()).toBeNull();
 		expect(screen.queryByText("Lines 7–13")).toBeNull();
 	});
 
@@ -1153,10 +1200,10 @@ describe("DiffView hunk staging", () => {
 				},
 			),
 		);
-		diffRef.current = { data: diffOf([10], ["h1"]), snapshot: 1 };
+		diffRef.current = { data: diffOf([10, 30], ["h1", "h2"]), snapshot: 1 };
 		render(<DiffView path="a.ts" staged={false} />);
 
-		await user.click(await box("Stage lines 7–13"));
+		await user.click(await stageButton("Stage lines 7–13"));
 
 		const banner = await screen.findByRole("alert");
 		expect(banner).toHaveTextContent(
@@ -1168,14 +1215,14 @@ describe("DiffView hunk staging", () => {
 	});
 
 	// The server decides which hunks can be applied as shown; without IDs the
-	// bars stay, for their range, but carry no box.
-	it("draws no box where the server sent no IDs, and says why when whitespace is hidden", async () => {
+	// bars stay, for their range, but carry no button.
+	it("draws no button where the server sent no IDs, and says why when whitespace is hidden", async () => {
 		useDiffSettingsStore.setState({ hideWhitespace: true });
-		diffRef.current = { data: diffOf([10], undefined), snapshot: 1 };
+		diffRef.current = { data: diffOf([10, 30], undefined), snapshot: 1 };
 		render(<DiffView path="a.ts" staged={false} />);
 
 		expect(await screen.findByText("Lines 7–13")).toBeInTheDocument();
-		expect(screen.queryByRole("checkbox", { name: /^Stage lines/ })).toBeNull();
+		expect(anyStageButton()).toBeNull();
 		expect(
 			screen.getByText("Show whitespace to stage parts of this file"),
 		).toBeInTheDocument();
