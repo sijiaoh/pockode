@@ -64,8 +64,9 @@ function BranchesSection({
 	return (
 		<>
 			{/* No vertical padding of its own: the list pins its filter and its
-			    refusals to the top of this scroller. */}
-			<div className="min-h-0 flex-1 overflow-y-auto">
+			    refusals to the top of this scroller. The container its rows lay
+			    out by, so they follow the list column's width, not the window's. */}
+			<div className="@container min-h-0 flex-1 overflow-y-auto">
 				{/* Data first, as in the top bar: a refetch that fails leaves the
 				    branches already known. */}
 				{branches ? (

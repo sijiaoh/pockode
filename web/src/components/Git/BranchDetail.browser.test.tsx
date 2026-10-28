@@ -1,5 +1,6 @@
 import { act, render, screen } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { page } from "vitest/browser";
 import type { BranchMergeHandoff } from "../../hooks/useBranchMergeHandoff";
 import { ROW_HEIGHT } from "../../lib/commitHistory";
 import { gitCheckoutActions } from "../../lib/gitCheckoutStore";
@@ -78,9 +79,9 @@ function listing(topic: Parameters<typeof makeBranch>[1] = {}): GitBranches {
 	});
 }
 
-function Detail() {
+function Detail({ width = 360 }: { width?: number }) {
 	return (
-		<div className="flex flex-col" style={{ width: 360, height: 640 }}>
+		<div className="flex flex-col" style={{ width, height: 640 }}>
 			<BranchDetail
 				branch={{ ref: "topic", remote: false }}
 				onLeave={() => {}}
@@ -145,8 +146,9 @@ describe("BranchDetail's commits", () => {
 	it("start right under their heading, in the page's one scroll area", () => {
 		render(<Detail />);
 
+		// Each row has a subject per layout; the first is the narrow one's.
 		const firstRow = screen
-			.getByText("Commit #0 done")
+			.getAllByText("Commit #0 done")[0]
 			.closest("li") as HTMLElement;
 		expect(firstRow.getBoundingClientRect().top).toBeCloseTo(
 			heading().getBoundingClientRect().bottom,
@@ -193,5 +195,32 @@ describe("BranchDetail's commits", () => {
 		expect(after - before).toBeGreaterThan(ROW_HEIGHT);
 		await scrollTo(scroller().scrollTop + 1);
 		expectScreenMounted();
+	});
+
+	describe("in a wide window", () => {
+		beforeEach(async () => {
+			await page.viewport(1280, 800);
+		});
+		afterEach(async () => {
+			await page.viewport(414, 896);
+		});
+
+		// The full hash is the wide layout's column; the narrow one shows only
+		// the short one, on the second line.
+		const wideHash = () =>
+			screen
+				.getAllByTitle(commits[0].hash)
+				.filter((el) => el.getClientRects().length > 0);
+
+		// Well either side of the threshold: the page's scroll bar, where it
+		// takes room, comes out of the list's width.
+		it("lays the commits out by the detail's width, not the window's", () => {
+			const { unmount } = render(<Detail width={700} />);
+			expect(wideHash()).toHaveLength(0);
+			unmount();
+
+			render(<Detail width={900} />);
+			expect(wideHash()).toHaveLength(1);
+		});
 	});
 });

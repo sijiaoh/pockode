@@ -8,6 +8,7 @@ import {
 	groupBranches,
 } from "../../lib/gitBranches";
 import type { GitBranches } from "../../types/git";
+import { formatDateTime } from "../../utils/dateTime";
 import { formatRelativeDate } from "../../utils/relativeTime";
 import { Spinner } from "../ui";
 import { iconButtonClass } from "../ui/iconButtonClass";
@@ -185,6 +186,7 @@ function BranchRowItem({
 	onOpenMenu,
 }: RowProps) {
 	const age = formatRelativeDate(row.committed_at);
+	const details = branchDetails(row).join(" · ");
 
 	return (
 		// History's active treatment (CommitRow): the fill across the row and
@@ -211,17 +213,29 @@ function BranchRowItem({
 				) : (
 					<span className="h-4 w-4 shrink-0" />
 				)}
-				<span className="flex min-w-0 flex-1 flex-col">
-					<span className="flex min-w-0">
+				{/* Two lines in a narrow list, one in a wide one: the details and
+				    the age become fixed columns at the right, so they line up down
+				    the list and every pixel past the threshold goes to the name. */}
+				<span className="flex min-w-0 flex-1 flex-col @git-row:flex-row @git-row:items-baseline @git-row:gap-4">
+					<span className="flex min-w-0 @git-row:flex-1">
 						<BranchName name={row.label} />
 					</span>
-					<span className="flex min-w-0 gap-2 text-xs text-th-text-muted">
+					<span className="flex min-w-0 gap-2 text-xs text-th-text-muted @git-row:w-[17rem] @git-row:shrink-0 @git-row:gap-4">
 						{/* Cut at the tail: the state word leads, and `in <worktree>`
-						    is why the branch cannot be switched to here. */}
-						<span className="min-w-0 flex-1 truncate">
-							{branchDetails(row).join(" · ")}
+						    is why the branch cannot be switched to here. Left out
+						    rather than drawn empty: an empty box would be the line's
+						    baseline in the wide layout, setting the age off the name's. */}
+						{details && (
+							<span className="min-w-0 flex-1 truncate" title={details}>
+								{details}
+							</span>
+						)}
+						<span
+							className="ml-auto shrink-0 @git-row:w-16 @git-row:text-right"
+							title={formatDateTime(row.committed_at)}
+						>
+							{age}
 						</span>
-						<span className="shrink-0">{age}</span>
 					</span>
 				</span>
 			</button>

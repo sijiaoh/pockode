@@ -120,7 +120,12 @@ function HistoryList({
 	return (
 		<div
 			ref={rootRef}
-			className={scroller ? undefined : "min-h-0 flex-1 overflow-y-auto"}
+			// The width every row's layout follows (`@git-commit-row`): the list's
+			// own, which does not move as pages arrive the way its text column
+			// does.
+			className={
+				scroller ? "@container" : "@container min-h-0 flex-1 overflow-y-auto"
+			}
 		>
 			<ul
 				className="relative w-full"

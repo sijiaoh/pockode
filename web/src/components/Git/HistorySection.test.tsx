@@ -7,6 +7,7 @@ import {
 } from "../../lib/commitHistory";
 import type { GitCommit, GitLogResult } from "../../types/git";
 import type { HistoryQuery, OverlayState } from "../../types/overlay";
+import { formatDateTime } from "../../utils/dateTime";
 import type { CommitMenuTarget } from "./CommitActions";
 import HistorySection from "./HistorySection";
 
@@ -326,7 +327,9 @@ describe("HistorySection", () => {
 		expect(screen.getByText(/Couldn't load older commits/)).toHaveTextContent(
 			"bad object",
 		);
-		expect(screen.getByText("Subject aaa")).toBeInTheDocument();
+		expect(
+			screen.getByRole("button", { name: /^Commit aaa0000/ }),
+		).toBeInTheDocument();
 		await user.click(screen.getByRole("button", { name: "Retry" }));
 		expect(refetch).toHaveBeenCalledTimes(1);
 	});
@@ -353,6 +356,25 @@ describe("HistorySection", () => {
 		expect(
 			screen.getByRole("button", { name: /^Commit bbb0000/ }),
 		).not.toHaveAttribute("aria-current");
+	});
+
+	it("carries every text a row may cut as its full value, in both layouts", () => {
+		const date = "2026-03-04T05:06:07Z";
+		log.pages = [page([commit("bbb", [], { author: "Ada Lovelace", date })])];
+		renderSection();
+		const row = screen.getByRole("button", { name: /^Commit bbb0000/ });
+		const when = formatDateTime(date);
+
+		// Narrow and wide subjects, both mounted; CSS shows one.
+		expect(within(row).getAllByTitle("Subject bbb")).toHaveLength(2);
+		expect(within(row).getByTitle(`Ada Lovelace, ${when}`)).toHaveTextContent(
+			/^Ada Lovelace, /,
+		);
+		expect(within(row).getByTitle("Ada Lovelace")).toBeInTheDocument();
+		expect(within(row).getByTitle(when)).toBeInTheDocument();
+		expect(within(row).getByTitle("bbb".padEnd(40, "0"))).toHaveTextContent(
+			"bbb0000",
+		);
 	});
 
 	describe("search and file filter", () => {

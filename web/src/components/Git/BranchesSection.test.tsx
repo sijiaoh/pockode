@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { JSONRPCErrorException } from "json-rpc-2.0";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -11,6 +11,7 @@ import {
 	makeRemoteBranch,
 } from "../../test/gitFixtures";
 import type { GitBranches, GitStatus } from "../../types/git";
+import { formatDateTime } from "../../utils/dateTime";
 import BranchesSection from "./BranchesSection";
 
 const checkout = vi.fn();
@@ -380,6 +381,39 @@ describe("BranchList", () => {
 		// One state word per row: being current says more than being the default.
 		expect(rowFor("main")).toHaveTextContent("current");
 		expect(rowFor("main")).not.toHaveTextContent("default");
+	});
+
+	// Whichever layout the list's width picks, these are the texts it may cut.
+	it("puts the whole of every text a row can cut in its title", () => {
+		const twoDaysAgo = new Date(Date.now() - 2 * 86_400_000).toISOString();
+		branches = {
+			...LIST,
+			local: [
+				makeBranch("main", { current: true }),
+				makeBranch("topic", {
+					committed_at: twoDaysAgo,
+					vs_default: { ahead: 3, behind: 2 },
+				}),
+				makeBranch("plain"),
+			],
+		};
+		render(<Section />);
+
+		const topic = rowFor("topic");
+		expect(within(topic).getByText("topic").closest("[title]")).toHaveAttribute(
+			"title",
+			"topic",
+		);
+		expect(within(topic).getByText("3 ahead · 2 behind")).toHaveAttribute(
+			"title",
+			"3 ahead · 2 behind",
+		);
+		expect(within(topic).getByText("2d ago")).toHaveAttribute(
+			"title",
+			formatDateTime(twoDaysAgo),
+		);
+		// Nothing to cut, nothing to hover: only the name and the age.
+		expect(rowFor("plain").querySelectorAll("[title]")).toHaveLength(2);
 	});
 
 	it("checks out a remote-only branch by its local name", async () => {

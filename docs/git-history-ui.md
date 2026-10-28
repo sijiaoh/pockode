@@ -61,6 +61,30 @@ The whole row (but the `⋯`) is one button opening the commit, named for a scre
 
 The same list in the left column, the commit in the right ([git-ui.md](git-ui.md#at-expanded-two-columns)). The column has the width every segment shares, not one of History's own: the segmented control above it would move when the segment changes. The lane cap rises to 8 where the column has room for it ([Lane cap](#lane-cap)) — 8 lanes need a list about 340px wide (350 with a coarse pointer's `⋯`), so a column near the 320px smallest default draws fewer.
 
+### One line in a wide list
+
+From a list 768px wide or more (`@git-commit-row:`, measured on `HistoryList`'s root; the threshold, its arithmetic and who reaches it are [git-ui.md](git-ui.md#rows-follow-their-columns-width)'s), a row is one line, vertically centred in the same 52px:
+
+```
+○ │   [⑂ …/graph] Add lane layout ………………   colleague   2h ago   a1b2c3d  ⋯
+```
+
+| Part | Width | Content |
+|---|---|---|
+| Graph | as above | unchanged — the lane cap, `+N` slot and `textWidth` are computed as they always are; here `textWidth` is never under 240, so two chips |
+| Subject cell | the rest | ref chips, then the subject, `text-sm`, truncated at the tail, **never under 160px** (`min-w-40`, the floor the graph already keeps) |
+| Author | 8rem | `text-xs` muted, truncated at the tail |
+| Date | 4rem, right-aligned | `formatRelativeDate`; its longest output, `yesterday`, fits |
+| Hash | 7 characters, mono | never truncated |
+| `⋯` | as above | the button gains 8px of right padding so the hash does not touch it |
+
+- Author, date and hash are 16px apart and anchored at the right, so they line up down the whole list; every pixel past 768 goes to the subject.
+- **Chips give way before the subject.** In this layout only, a chip may shrink to 2.5rem (`min-w-10`), cutting more of its name from the head. Two chips, `+N` and their gaps are then at most ≈112px, which beside the 160px floor fits the narrowest subject cell 768 can leave (≈280px, eight lanes and a coarse `⋯`). On a crowded tip row that means a short tag can be little more than its icon; the commit's page names it in full.
+- **Two layouts, two pieces of markup.** The narrow markup is untouched and hidden at the threshold (`@git-commit-row:hidden`); the wide pieces are separate elements shown only there. That keeps the narrow row identical by construction, without `order` or `display: contents`. The hidden copy is `display: none`, so the row's accessible name — `describeCommitRow`, on the button — is unchanged. It does put the subject in the DOM twice: a test finds a commit row by its button's name, not with `getByText(subject)`.
+- The same layout serves a search or file filter (`LoneDotCell` in place of the graph); the footer rows are unchanged. A branch's commits in its detail follow the **detail** column's width. A commit's page draws its chips in no container, so they never change.
+
+**`title`s**, on what may be cut: the subject (both layouts); the narrow second line's `author, date` with the full date (`formatDateTime`); the wide author, the full date, and the full hash. Ref chips carry their name only under a fine pointer, as `+N` carries its hidden names.
+
 ### The history header
 
 One row, `min-h-[44px]`, above the list's scroll box rather than sticky inside it — it looks the same and stays put, and the virtual list's offsets start at its own top instead of under a header it would have to subtract:
@@ -150,7 +174,7 @@ The palette is not a theme's accent on purpose: a lane in `th-accent` would read
 
 ## Ref markers
 
-A chip at the start of the row's second line: `text-xs` with `leading-4` and no vertical padding (the line's 16px), `rounded`, `bg-th-bg-tertiary`, `text-th-text-secondary`, truncated at the **head** like branch names everywhere in the workspace — max-width 6rem where the text column is under 240px, 7.5rem otherwise. A 2px bar on its left in the colour of the commit's line ties it to that line. What it names is told by its icon, not its colour:
+A chip at the start of the row's second line — before the subject where the row is [one line](#one-line-in-a-wide-list): `text-xs` with `leading-4` and no vertical padding (the line's 16px), `rounded`, `bg-th-bg-tertiary`, `text-th-text-secondary`, truncated at the **head** like branch names everywhere in the workspace — max-width 6rem where the text column is under 240px, 7.5rem otherwise. A 2px bar on its left in the colour of the commit's line ties it to that line. What it names is told by its icon, not its colour:
 
 | Ref | Chip |
 |---|---|
@@ -352,5 +376,5 @@ They are carried by the history layers — `commit`, `commit-diff`, `commit-file
 - **Amend is HEAD-only and absent mid-operation**; HEAD is identified by ref, not by row position.
 - **Create branch here creates and switches**, like `New branch…`, and is paused mid-operation like it.
 - **Revert is the agent's**, through the prefill handoff, hidden only where the commit is known to be off HEAD's history.
-- **Refs sit on the second line**; the subject keeps the first to itself. `+N` is read by opening the commit, not pressed on its own.
+- **Refs sit on the second line**; the subject keeps the first to itself. In a list 768px wide or more the row is one line, and the chips shrink before the subject drops under 160px. `+N` is read by opening the commit, not pressed on its own.
 - **The history query rides on the history layers**, so the two columns agree and Back restores the list.

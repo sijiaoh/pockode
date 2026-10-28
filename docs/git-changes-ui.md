@@ -62,6 +62,19 @@ A path listed in `conflicted` — a merge, rebase, cherry-pick, revert or stash 
 
 The row is the L4 row (`SidebarListItem` with `min-h-[44px]`, here two lines tall), with the usual active treatment while its file is open in the review column at `expanded`. The checkbox and `⋯` are siblings of the row's button, never nested inside it.
 
+**In a list 600px wide or more** (`@git-row:`, measured on the list's scroll box — the threshold and why are [git-ui.md](git-ui.md#rows-follow-their-columns-width)'s) the row is one line, its details on the name's baseline:
+
+```
+☐  name.tsx   …/components/Git · Renamed from x  ……………  +12 −3  ⋯
+```
+
+- The name keeps its natural width up to **60% of the text cell**, then its stem truncates as before.
+- The details — the same element, so `aria-describedby` still points at it — take the rest, 12px after the name. Inside them nothing changes: the directory still gives way first, from the head, and the status words last. Past their natural width the room is left blank before the counts.
+- **The path is not a column.** File names vary too much: a fixed name column would cut long names and leave holes after short ones, and in tree mode the indent already staggers where rows start. What lines up is the right side: the counts stay against the `⋯`, as in the narrow row.
+- Unchanged: the 44px checkbox gutter, the tree indent, `min-h-[44px]`, folder rows (already one line) and the `line-through` on a deleted file's name alone.
+
+**`title`s**, in both layouts: the name span carries the file name, the directory span the directory, the status words span the whole words (`Renamed from <old path>`) — each is what that span may cut.
+
 **Status words on line 2** (the status letter column goes; a word says it once, in full):
 
 | File | Line 2 |

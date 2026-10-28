@@ -39,6 +39,19 @@
 	--breakpoint-2xl: initial;
 }
 
+/* The Git lists' row widths: container widths, not rungs of the ladder, so not
+ * in BREAKPOINTS. Each list's scroll box is the `@container` its rows query,
+ * one per list, so every row of a list switches together whatever its indent.
+ * A row goes wide only where its primary text keeps the room the 320px default
+ * column gives it today — files and branches at 600, History's meta columns
+ * and graph at 768. Tailwind's default container sizes (`@sm:` = 384, …) are
+ * not for these rows; tests/widthLadder.test.ts rejects them. See
+ * docs/git-ui.md#layout. */
+@theme {
+	--container-git-row: 600px;
+	--container-git-commit-row: 768px;
+}
+
 /* The two pointer gates. Deliberately NOT complements: a touchscreen laptop
  * matches both, and wants hover reveal (it has a trackpad) as well as
  * thumb-sized hit areas (it has a touchscreen). Never write one as the negation
