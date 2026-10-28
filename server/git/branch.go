@@ -257,6 +257,9 @@ func Checkout(dir, branch string) error {
 	// The trailing "--" marks branch as a ref, so a file of the same name cannot
 	// turn the switch into a file restore.
 	return withLock(dir, opCheckout, func() error {
+		if err := refuseDuringOperation(dir, "switch branches"); err != nil {
+			return err
+		}
 		_, err := execGit(dir, "checkout", branch, "--")
 		return err
 	})
@@ -269,6 +272,9 @@ func CreateBranch(dir, name string) error {
 	}
 
 	return withLock(dir, opBranchCreate, func() error {
+		if err := refuseDuringOperation(dir, "create a branch"); err != nil {
+			return err
+		}
 		_, err := execGit(dir, "checkout", "-b", name, "--")
 		return err
 	})

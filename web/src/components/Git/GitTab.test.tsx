@@ -4,7 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { gitSyncActions } from "../../lib/gitSyncStore";
 import { makeHead, makeSync } from "../../test/gitFixtures";
-import type { GitBranches, LineStat } from "../../types/git";
+import type { GitBranches, GitStatus, LineStat } from "../../types/git";
 import type { GitSegment } from "../../types/overlay";
 import GitTab from "./GitTab";
 
@@ -16,6 +16,10 @@ vi.mock("../../hooks/useGitBranches", () => ({
 }));
 let changeCount: number | undefined;
 let changeLines: LineStat | null;
+let status: GitStatus | undefined;
+vi.mock("../../hooks/useGitStatus", () => ({
+	useGitStatus: () => ({ data: status }),
+}));
 vi.mock("../../hooks/useGitChangeCount", async (importOriginal) => ({
 	...(await importOriginal<typeof import("../../hooks/useGitChangeCount")>()),
 	useGitChangeCount: () => changeCount,
@@ -41,6 +45,7 @@ beforeEach(() => {
 	};
 	changeCount = 5;
 	changeLines = null;
+	status = undefined;
 	gitSyncActions.reset();
 });
 
@@ -172,5 +177,29 @@ describe("GitTab", () => {
 			expect(screen.getByText("feature/git-workspace")).toBeInTheDocument();
 			expect(screen.queryByText(/to pull/)).toBeNull();
 		});
+	});
+});
+
+describe("GitTab overview during an operation", () => {
+	// A repository stuck mid-rebase is what the doorplate has to say.
+	it("says the operation in place of the sync line, and names the rebased branch", () => {
+		branches = {
+			head: makeHead({ branch: "", detached: true, hash: "4be1f20" }),
+			local: [],
+			remote_only: [],
+			sync: makeSync({ behind: 2 }),
+		};
+		status = {
+			staged: [],
+			unstaged: [],
+			conflicted: ["a.ts"],
+			operation: { kind: "rebase", branch: "feature/git-ui" },
+		};
+		renderTab();
+
+		expect(screen.getByText("Rebase stopped on conflicts")).toBeInTheDocument();
+		expect(screen.getByText("feature/git-ui")).toBeInTheDocument();
+		expect(screen.getByText("· rebasing")).toBeInTheDocument();
+		expect(screen.queryByText(/behind/i)).toBeNull();
 	});
 });

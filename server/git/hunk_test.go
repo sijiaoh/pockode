@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -422,7 +423,7 @@ func TestDiffWithContent_NoHunkIDs(t *testing.T) {
 	}
 }
 
-func TestStageHunk_ConflictedFileIsUnsupported(t *testing.T) {
+func TestStageHunk_RefusesConflictedFile(t *testing.T) {
 	dir := setupHunkRepo(t)
 	runGit(t, dir, "commit", "--no-gpg-sign", "-q", "-am", "ours")
 	runGit(t, dir, "checkout", "-q", "-b", "theirs", "HEAD~1")
@@ -438,9 +439,17 @@ func TestStageHunk_ConflictedFileIsUnsupported(t *testing.T) {
 		if staged {
 			apply = UnstageHunk
 		}
-		if err := apply(dir, "file.txt", "anything"); !errors.Is(err, ErrHunkUnsupported) {
-			t.Errorf("staged=%v: error = %v, want ErrHunkUnsupported", staged, err)
+		err := apply(dir, "file.txt", "anything")
+		var conflicted *ConflictedPathsError
+		if !errors.As(err, &conflicted) {
+			t.Fatalf("staged=%v: error = %v, want ConflictedPathsError", staged, err)
 		}
+		if !reflect.DeepEqual(conflicted.Paths, []string{"file.txt"}) {
+			t.Errorf("staged=%v: Paths = %v, want [file.txt]", staged, conflicted.Paths)
+		}
+	}
+	if got := mustStatus(t, dir).Conflicted; !reflect.DeepEqual(got, []string{"file.txt"}) {
+		t.Errorf("Conflicted = %v, want [file.txt] left unresolved", got)
 	}
 }
 

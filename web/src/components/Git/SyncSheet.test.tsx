@@ -4,13 +4,20 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { gitSyncActions } from "../../lib/gitSyncStore";
 import { makeSync } from "../../test/gitFixtures";
-import type { GitSync } from "../../types/git";
+import type { GitStatus, GitSync } from "../../types/git";
 import SyncSheet from "./SyncSheet";
 
 const fetchRemote = vi.fn();
 const pull = vi.fn();
 const push = vi.fn();
 const wsState = { actions: { fetchRemote, pull, push } };
+
+// Mocked rather than seeded into the query cache: a finished run invalidates
+// the git queries, and an observed query with no queryFn warns on refetch.
+let gitStatus: GitStatus | undefined;
+vi.mock("../../hooks/useGitStatus", () => ({
+	useGitStatus: () => ({ data: gitStatus }),
+}));
 
 vi.mock("../../lib/wsStore", () => ({
 	useWSStore: Object.assign(
@@ -19,10 +26,12 @@ vi.mock("../../lib/wsStore", () => ({
 	),
 }));
 
-function renderSheet(sync: Partial<GitSync> = {}) {
+function renderSheet(sync: Partial<GitSync> = {}, status?: GitStatus) {
 	const onClose = vi.fn();
+	const client = new QueryClient();
+	gitStatus = status;
 	const { unmount } = render(
-		<QueryClientProvider client={new QueryClient()}>
+		<QueryClientProvider client={client}>
 			<SyncSheet sync={makeSync(sync)} onClose={onClose} />
 		</QueryClientProvider>,
 	);
@@ -47,6 +56,21 @@ describe("SyncSheet", () => {
 		fetchRemote.mockResolvedValue(undefined);
 		pull.mockResolvedValue(0);
 		push.mockResolvedValue(undefined);
+	});
+
+	// git refuses it; the sheet says so instead of relaying the refusal.
+	it("disables pull during an operation and says why", () => {
+		renderSheet(
+			{ behind: 2 },
+			{ staged: [], unstaged: [], operation: { kind: "merge" } },
+		);
+
+		const pullButton = screen.getByRole("button", { name: "Pull (2)" });
+		expect(pullButton).toBeDisabled();
+		expect(pullButton).toHaveAccessibleDescription(
+			"Can't pull during a merge.",
+		);
+		expect(screen.getByRole("button", { name: "Fetch" })).toBeEnabled();
 	});
 
 	it("states the counts in words and when they were last refreshed", () => {

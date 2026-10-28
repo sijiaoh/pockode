@@ -1,8 +1,8 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef } from "react";
 import { gitSyncActions, useGitSyncStore } from "../lib/gitSyncStore";
-import { useWorktreeStore, worktreeActions } from "../lib/worktreeStore";
-import { isWorktreeSwitchInFlight, useWSStore } from "../lib/wsStore";
+import { useWorktreeStore } from "../lib/worktreeStore";
+import { useWSStore } from "../lib/wsStore";
 import type { GitSync } from "../types/git";
 import {
 	FETCH_FAILURE,
@@ -15,6 +15,7 @@ import {
 import { shouldAutoFetch } from "../utils/gitSyncStatus";
 import { invalidateGitQueries } from "./gitQueries";
 import { useGitBranches } from "./useGitBranches";
+import { useIsWorktreeSwitching } from "./useIsWorktreeSwitching";
 
 /**
  * Fetch, pull and push.
@@ -124,27 +125,10 @@ export function useAutoFetch() {
 	const worktree = useWorktreeStore((s) => s.current);
 	const { data: branches, isFetching, isError } = useGitBranches();
 	const { startAutoFetch } = useGitSyncRunner();
-	// Seeded for a workspace opened while a switch is already under way.
-	const [switching, setSwitching] = useState(isWorktreeSwitchInFlight);
+	const switching = useIsWorktreeSwitching();
 	// The worktree this visit has already decided for, so a refetch landing
 	// later — git.changed, or the fetch's own invalidation — decides nothing.
 	const decidedFor = useRef<string | null>(null);
-
-	useEffect(() => {
-		const offStart = worktreeActions.onWorktreeSwitchStart(() =>
-			setSwitching(true),
-		);
-		const offEnd = worktreeActions.onWorktreeSwitchEnd(() =>
-			setSwitching(false),
-		);
-		// Read again now the listeners are on: a switch that started or settled
-		// between the render that seeded the state and this effect told nobody.
-		setSwitching(isWorktreeSwitchInFlight());
-		return () => {
-			offStart();
-			offEnd();
-		};
-	}, []);
 
 	useEffect(() => {
 		if (switching || isFetching || isError || !branches) return;

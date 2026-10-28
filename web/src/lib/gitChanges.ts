@@ -14,7 +14,21 @@ export interface ChangedFile {
 	unstaged?: FileStatus;
 	/** Inside a submodule: staged in its own index, out of a root commit's reach. */
 	submodule: boolean;
+	/**
+	 * The index holds unresolved conflicts for the path. Such a record has
+	 * neither side: what git lists on its two sides are conflict codes, not
+	 * changes, and drawn as sides they would read as a partly staged file whose
+	 * checkbox stages it — recording the markers as the resolution
+	 * (docs/git-conflict-ui.md, The Changes list).
+	 */
+	conflict?: ConflictKind;
 }
+
+/**
+ * Read from the two letters git gives a conflicted path: `D` on both sides,
+ * `D` on one, or anything else (`UU`, `AA`, `AU`, `UA`).
+ */
+export type ConflictKind = "content" | "deleted-one-side" | "deleted-both";
 
 /** `mixed` only ever comes from staging done elsewhere, never from a tap. */
 export type CheckState = "checked" | "unchecked" | "mixed";
@@ -31,8 +45,10 @@ export type ChangeKind =
 /** Every changed path in `status`, one record per path, in no particular order. */
 export function collectChanges(status: GitStatus): ChangedFile[] {
 	const byPath = new Map<string, ChangedFile>();
+	const conflicted: string[] = [];
 	const visit = (s: GitStatus, prefix: string) => {
 		const prefixed = (p: string) => (prefix ? `${prefix}/${p}` : p);
+		for (const p of s.conflicted ?? []) conflicted.push(prefixed(p));
 		const entry = (f: FileStatus) => {
 			const path = prefixed(f.path);
 			let file = byPath.get(path);
@@ -57,7 +73,42 @@ export function collectChanges(status: GitStatus): ChangedFile[] {
 		}
 	};
 	visit(status, "");
+	for (const path of conflicted) {
+		const file = byPath.get(path);
+		// Always found: a conflicted path is on both sides too.
+		if (!file) continue;
+		const deletions = [file.staged, file.unstaged].filter(
+			(side) => side?.status === "D",
+		).length;
+		file.conflict =
+			deletions === 2
+				? "deleted-both"
+				: deletions === 1
+					? "deleted-one-side"
+					: "content";
+		delete file.staged;
+		delete file.unstaged;
+	}
 	return [...byPath.values()];
+}
+
+/** The files a checkbox or a discard-all may act on: every one but a conflict. */
+export function withoutConflicts(files: ChangedFile[]): ChangedFile[] {
+	return files.filter((f) => !f.conflict);
+}
+
+/**
+ * What a checkbox over `files` stands for, as its name says it: `5 files`, or
+ * `3 of 5 files, 2 conflicted` when it passes conflicts over — still holding
+ * the visible count, for voice control.
+ */
+export function describeStageable(files: ChangedFile[]): string {
+	const total = `${files.length} ${files.length === 1 ? "file" : "files"}`;
+	const stageable = withoutConflicts(files).length;
+	const conflicts = files.length - stageable;
+	return conflicts === 0
+		? total
+		: `${stageable} of ${total}, ${conflicts} conflicted`;
 }
 
 export function checkStateOf(file: ChangedFile): CheckState {
@@ -68,10 +119,11 @@ export function checkStateOf(file: ChangedFile): CheckState {
 /**
  * The state of a checkbox standing for several files — a folder, or select
  * all: checked when every file is fully staged, unchecked when none has
- * anything staged.
+ * anything staged. Conflicts are left out, here and in `checkboxWrite`: no
+ * press of a box stages one.
  */
 export function aggregateCheckState(files: ChangedFile[]): CheckState {
-	const states = new Set(files.map(checkStateOf));
+	const states = new Set(withoutConflicts(files).map(checkStateOf));
 	if (states.size === 1 && !states.has("mixed")) {
 		return states.has("checked") ? "checked" : "unchecked";
 	}
@@ -89,11 +141,12 @@ export function checkboxWrite(files: ChangedFile[]): {
 	paths: string[];
 	staged: boolean;
 } {
-	if (aggregateCheckState(files) === "checked") {
-		return { paths: files.flatMap(unstagePaths), staged: true };
+	const stageable = withoutConflicts(files);
+	if (aggregateCheckState(stageable) === "checked") {
+		return { paths: stageable.flatMap(unstagePaths), staged: true };
 	}
 	return {
-		paths: files.filter((f) => f.unstaged).map((f) => f.path),
+		paths: stageable.filter((f) => f.unstaged).map((f) => f.path),
 		staged: false,
 	};
 }
@@ -116,6 +169,8 @@ export function unstagePaths(file: ChangedFile): string[] {
  * staging would add — and a side that stops existing gives way to the other.
  */
 export function reviewSideOf(file: ChangedFile, staged: boolean): boolean {
+	// The conflict is in the working tree, and there is no staged version yet.
+	if (file.conflict) return false;
 	if (staged ? file.staged : file.unstaged) return staged;
 	return !file.unstaged;
 }
@@ -123,23 +178,19 @@ export function reviewSideOf(file: ChangedFile, staged: boolean): boolean {
 /**
  * Whether the server sends no hunk IDs for the side whatever the whitespace
  * setting, so it can only be staged whole: binary, conflicted, or turned into
- * a symlink or back (docs/git.md#staging-hunks). A conflict is `U` on either
- * side, or both sides added or both deleted, as git's porcelain has it.
+ * a symlink or back (docs/git.md#staging-hunks). A conflict is read from
+ * `conflict`, since collectChanges leaves such a record without sides.
  */
 export function stagesOnlyWhole(file: ChangedFile, staged: boolean): boolean {
 	const side = staged ? file.staged : file.unstaged;
-	const both = `${file.staged?.status}${file.unstaged?.status}`;
-	return (
-		!!side?.binary ||
-		side?.status === "T" ||
-		file.staged?.status === "U" ||
-		file.unstaged?.status === "U" ||
-		both === "AA" ||
-		both === "DD"
-	);
+	return !!file.conflict || !!side?.binary || side?.status === "T";
 }
 
 export function changeKindOf(file: ChangedFile): ChangeKind {
+	// A conflict deleted on one side still has the other side's file on disk.
+	if (file.conflict) {
+		return file.conflict === "deleted-both" ? "deleted" : "modified";
+	}
 	if (file.unstaged?.status === "?") return "untracked";
 	if (file.unstaged?.status === "D" || file.staged?.status === "D") {
 		return "deleted";

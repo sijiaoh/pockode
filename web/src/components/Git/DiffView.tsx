@@ -3,6 +3,7 @@ import {
 	useIsPageCovered,
 	useOutsideClick,
 } from "@pockode/shared";
+import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useRouter } from "@tanstack/react-router";
 import {
 	ALargeSmall,
@@ -10,6 +11,7 @@ import {
 	ChevronRight,
 	Columns2,
 	Loader2,
+	Sparkles,
 	WrapText,
 } from "lucide-react";
 import {
@@ -21,6 +23,7 @@ import {
 	useRef,
 	useState,
 } from "react";
+import { operationPromptAtPress } from "../../hooks/gitQueries";
 import { useGitDiffWatch } from "../../hooks/useGitDiffWatch";
 import { useGitStatus } from "../../hooks/useGitStatus";
 import { useGitWriteRunner } from "../../hooks/useGitWrites";
@@ -88,6 +91,7 @@ import {
 } from "../ui";
 import { FileNameTitle } from "../ui/HeaderTitle";
 import { isGutter, shownLineKeys } from "../ui/lineGutter";
+import ConflictView, { useConflictFile } from "./ConflictView";
 import DiffContent from "./DiffContent";
 import ErrorBanner from "./ErrorBanner";
 import GitCommitSheet from "./GitCommitSheet";
@@ -187,14 +191,17 @@ function DiffView({ path, staged, showBack }: Props) {
 	const { hideWhitespace, toggleHideWhitespace } = useDiffSettings();
 	const { wrap, toggleWrap } = useGitDiffWrap();
 	const { available: splitAvailable, split, toggleSplit } = useGitDiffSplit();
-	const { data: status } = useGitStatus();
+	const { data: status, isPending: statusPending } = useGitStatus();
+	const queryClient = useQueryClient();
 	const view = useGitChangesViewStore((s) => s.view);
-	const { toggle, toggleHunk, discard, writes } = useGitWriteRunner();
+	const { toggle, resolve, toggleHunk, discard, writes } = useGitWriteRunner();
 	// The worktree the runner sends to, read in the same render, as the Changes
 	// list does: a failure is filed under the worktree whose path it names.
 	const writeWorktree = useWorktreeStore((s) => s.current);
 	const [error, setError] = useState<GitFailure | null>(null);
-	const [staging, setStaging] = useState(false);
+	// What the pressed write says while it is queued — kept from the press, as
+	// a status landing first may already have changed the button under it.
+	const [pendingLabel, setPendingLabel] = useState<string | null>(null);
 	const [confirmingDiscard, setConfirmingDiscard] = useState(false);
 	const [committing, setCommitting] = useState(false);
 	const hintId = useId();
@@ -234,6 +241,11 @@ function DiffView({ path, staged, showBack }: Props) {
 		};
 	}, []);
 
+	const conflict = file?.conflict;
+	// A conflicted path has no diff to read: the index holds stages, not a
+	// version (docs/git-conflict-ui.md#viewing-a-conflicted-file). Not asked
+	// while the status that says whether it is one is still on its way — a
+	// status that failed says nothing, and the diff is read as it always was.
 	const {
 		data: diff,
 		isLoading,
@@ -245,8 +257,9 @@ function DiffView({ path, staged, showBack }: Props) {
 		path,
 		staged: side,
 		hideWhitespace,
-		enabled: !gone,
+		enabled: !statusPending && !gone && !conflict,
 	});
+	const conflictFile = useConflictFile(path, conflict);
 
 	const moveTo = useCallback(
 		(target: { path: string; staged: boolean }) => {
@@ -708,7 +721,7 @@ function DiffView({ path, staged, showBack }: Props) {
 
 	const handleStage = async () => {
 		setError(null);
-		setStaging(true);
+		setPendingLabel("Staging…");
 		try {
 			await toggle([path], false);
 			gitWriteActions.succeed(writeWorktree, [path]);
@@ -721,8 +734,30 @@ function DiffView({ path, staged, showBack }: Props) {
 		} catch (e) {
 			report(e, () => stageFailureSummary(false), [path]);
 		} finally {
-			if (mounted.current) setStaging(false);
+			if (mounted.current) setPendingLabel(null);
 		}
+	};
+
+	// The review's Stage by another name, and it stays: the file stops being
+	// conflicted, and this page becomes the resolution's ordinary review.
+	const handleMarkResolved = async () => {
+		setError(null);
+		setPendingLabel("Marking…");
+		try {
+			// The re-read shows the markers it found; there is nothing to stage.
+			if (!(await conflictFile.confirmResolvable())) return;
+			await resolve([path]);
+			gitWriteActions.succeed(writeWorktree, [path]);
+		} catch (e) {
+			report(e, () => stageFailureSummary(false), [path]);
+		} finally {
+			if (mounted.current) setPendingLabel(null);
+		}
+	};
+
+	const handleAskAgent = () => {
+		const text = operationPromptAtPress(queryClient);
+		if (text) void prefill.prefill(text);
 	};
 
 	const handleUnstage = async (target: ChangedFile) => {
@@ -750,29 +785,48 @@ function DiffView({ path, staged, showBack }: Props) {
 	};
 
 	const commitAction = describeCommitAction(status);
-	const primary: Primary | null = file?.unstaged
+	// Offered only once the text has no marker left, so it cannot record
+	// markers as a resolution. Kept through its own press, whose re-read would
+	// otherwise put another button under the spinner — a conflict has no other
+	// write to be pending.
+	const offerResolve =
+		conflictFile.resolvable ||
+		(conflict === "content" && pendingLabel !== null);
+	const primary: Primary | null = offerResolve
 		? {
-				label: next ? "Stage & next" : "Stage",
-				onClick: handleStage,
-				enabled: !isBusy,
+				label: "Mark resolved",
+				onClick: handleMarkResolved,
+				enabled: !isBusy && pendingLabel === null,
 			}
-		: next
-			? { label: "Next", onClick: () => goToFile(next), enabled: true }
-			: commitAction
+		: conflict
+			? next
+				? { label: "Next", onClick: () => goToFile(next), enabled: true }
+				: { label: "Back to changes", onClick: leave, enabled: true }
+			: file?.unstaged
 				? {
-						label: commitAction.label,
-						onClick: () => setCommitting(true),
-						enabled: commitAction.enabled,
-						hint: commitAction.hint,
+						label: next ? "Stage & next" : "Stage",
+						onClick: handleStage,
+						enabled: !isBusy,
 					}
-				: gone
-					? { label: "Back to changes", onClick: leave, enabled: true }
-					: null;
+				: next
+					? { label: "Next", onClick: () => goToFile(next), enabled: true }
+					: commitAction
+						? {
+								label: commitAction.label,
+								onClick: () => setCommitting(true),
+								enabled: commitAction.enabled,
+								hint: commitAction.hint,
+							}
+						: gone
+							? { label: "Back to changes", onClick: leave, enabled: true }
+							: null;
 
 	const untracked = file?.unstaged?.status === "?";
 	// Still deleted once the deletion is committed and the file has left the
 	// list: there is nothing to open either way.
 	const deleted = file ? changeKindOf(file) === "deleted" : wasDeleted.current;
+	const openFile = () =>
+		navigate(overlayToNavigation({ type: "file", path }, worktree, sessionId));
 	const { fileName, directory } = splitPath(path);
 	const dir = directory.replace(/\/$/, "");
 	const total = files.length;
@@ -783,18 +837,7 @@ function DiffView({ path, staged, showBack }: Props) {
 				back={back}
 				title={<FileNameTitle name={fileName} />}
 				fullText={path}
-				onTitleClick={
-					deleted
-						? undefined
-						: () =>
-								navigate(
-									overlayToNavigation(
-										{ type: "file", path },
-										worktree,
-										sessionId,
-									),
-								)
-				}
+				onTitleClick={deleted ? undefined : openFile}
 				titleActionLabel={deleted ? undefined : `Open ${fileName}`}
 			/>
 
@@ -841,17 +884,20 @@ function DiffView({ path, staged, showBack }: Props) {
 					onClick={toggleWrap}
 					label={wrap ? "Don't wrap lines" : "Wrap lines"}
 				/>
-				<ToggleIconButton
-					icon={ALargeSmall}
-					pressed={hideWhitespace}
-					onClick={toggleHideWhitespace}
-					label={
-						hideWhitespace
-							? "Show whitespace changes"
-							: "Hide whitespace changes"
-					}
-				/>
-				{splitAvailable && (
+				{/* A conflict is the file, not a diff: nothing to filter or split. */}
+				{!conflict && (
+					<ToggleIconButton
+						icon={ALargeSmall}
+						pressed={hideWhitespace}
+						onClick={toggleHideWhitespace}
+						label={
+							hideWhitespace
+								? "Show whitespace changes"
+								: "Hide whitespace changes"
+						}
+					/>
+				)}
+				{splitAvailable && !conflict && (
 					<ToggleIconButton
 						icon={Columns2}
 						pressed={split}
@@ -909,7 +955,15 @@ function DiffView({ path, staged, showBack }: Props) {
 			<p className="sr-only" aria-live="polite">
 				{announcement}
 			</p>
-			{gone ? (
+			{conflict ? (
+				<ConflictView
+					path={path}
+					conflict={conflict}
+					file={conflictFile}
+					wrap={wrap}
+					onOpenFile={openFile}
+				/>
+			) : gone ? (
 				<div className="flex flex-1 items-center justify-center p-4 text-center text-sm text-th-text-muted">
 					This file no longer has changes
 				</div>
@@ -979,7 +1033,30 @@ function DiffView({ path, staged, showBack }: Props) {
 					{/* A gap between the two, so the one that takes something away is
 					    not flush against the one pressed all day. */}
 					<div className="flex gap-3">
-						{file &&
+						{/* A conflict has neither side to unstage or discard: git
+						    refuses to restore an unmerged path, and resetting one
+						    would throw its conflict away. The handoff takes the
+						    secondary's place; the banner's primary is one Back away. */}
+						{conflict ? (
+							<button
+								type="button"
+								onClick={handleAskAgent}
+								disabled={prefill.isPending}
+								aria-label="Ask agent to resolve the conflicts"
+								className={`${bottomButtonBase} max-w-[50%] shrink-0 bg-th-bg-tertiary text-th-text-primary`}
+							>
+								{prefill.isPending ? (
+									<Loader2
+										className="h-4 w-4 shrink-0 animate-spin"
+										aria-hidden="true"
+									/>
+								) : (
+									<Sparkles className="h-4 w-4 shrink-0" aria-hidden="true" />
+								)}
+								Ask agent
+							</button>
+						) : (
+							file &&
 							(side ? (
 								<button
 									type="button"
@@ -998,7 +1075,8 @@ function DiffView({ path, staged, showBack }: Props) {
 								>
 									{untracked ? "Delete file" : "Discard file"}
 								</button>
-							))}
+							))
+						)}
 						{primary && (
 							<button
 								type="button"
@@ -1007,13 +1085,13 @@ function DiffView({ path, staged, showBack }: Props) {
 								aria-describedby={primary.hint ? hintId : undefined}
 								className={`${bottomButtonBase} min-w-0 flex-1 bg-th-accent font-medium text-th-accent-text`}
 							>
-								{staging ? (
+								{pendingLabel ? (
 									<>
 										<Loader2
 											className="h-4 w-4 shrink-0 animate-spin"
 											aria-hidden="true"
 										/>
-										Staging…
+										{pendingLabel}
 									</>
 								) : (
 									primary.label

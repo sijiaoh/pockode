@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { gitCheckoutActions } from "../../lib/gitCheckoutStore";
 import { gitSyncActions } from "../../lib/gitSyncStore";
 import { makeHead, makeSync } from "../../test/gitFixtures";
-import type { GitBranches } from "../../types/git";
+import type { GitBranches, GitStatus } from "../../types/git";
 import BranchBar from "./BranchBar";
 
 const pull = vi.fn();
@@ -17,6 +17,11 @@ vi.mock("../../lib/wsStore", () => ({
 		(selector: (state: unknown) => unknown) => selector(wsState),
 		{ getState: () => wsState },
 	),
+}));
+
+let status: GitStatus | undefined;
+vi.mock("../../hooks/useGitStatus", () => ({
+	useGitStatus: () => ({ data: status }),
 }));
 
 let branches: GitBranches | undefined;
@@ -47,6 +52,7 @@ async function failedPull() {
 }
 
 beforeEach(() => {
+	status = undefined;
 	gitSyncActions.reset();
 	gitCheckoutActions.reset();
 });
@@ -241,5 +247,27 @@ describe("BranchBar switch feedback", () => {
 		renderBar();
 
 		expect(screen.queryByRole("alert")).toBeNull();
+	});
+});
+
+describe("BranchBar during a rebase", () => {
+	// A rebase detaches HEAD: `detached @ hash` is true, and useless.
+	it("names the branch being rebased instead of the detached HEAD", () => {
+		branches = {
+			head: makeHead({ branch: "", detached: true, hash: "4be1f20" }),
+			local: [],
+			remote_only: [],
+			sync: makeSync(),
+		};
+		status = {
+			staged: [],
+			unstaged: [],
+			operation: { kind: "rebase", branch: "feature/git-ui" },
+		};
+		renderBar();
+
+		expect(
+			screen.getByRole("button", { name: "Branches, rebasing feature/git-ui" }),
+		).toHaveTextContent("feature/git-ui· rebasing");
 	});
 });

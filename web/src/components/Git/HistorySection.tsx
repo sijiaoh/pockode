@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useGitLog } from "../../hooks/useGitLog";
+import { useGitStatus } from "../../hooks/useGitStatus";
 import { Spinner } from "../ui";
 import GitCommitSheet from "./GitCommitSheet";
 import LogList from "./LogList";
@@ -12,6 +13,11 @@ interface Props {
 /** The Git workspace's History segment: the commit log, HEAD first. */
 function HistorySection({ activeHash, onSelectCommit }: Props) {
 	const { data, isLoading, error } = useGitLog();
+	// Absent rather than disabled while an operation is in progress: git
+	// refuses amend mid-merge, and mid-rebase HEAD is not the branch's commit.
+	// A menu entry is not a target the user is on the way to, and the banner's
+	// pause sentence says why commits stopped (docs/git-conflict-ui.md).
+	const operation = useGitStatus().data?.operation;
 	// Opened from the HEAD row's amend action.
 	const [isAmending, setIsAmending] = useState(false);
 
@@ -30,7 +36,7 @@ function HistorySection({ activeHash, onSelectCommit }: Props) {
 							commits={data.commits}
 							activeHash={activeHash}
 							onSelectCommit={onSelectCommit}
-							onAmend={() => setIsAmending(true)}
+							onAmend={operation ? undefined : () => setIsAmending(true)}
 						/>
 					</div>
 				) : (

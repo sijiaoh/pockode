@@ -941,6 +941,19 @@ no message, with `data.reason` (`timeout`, `auth_failed`, `cli_not_found`,
 `-32005` (`rpc.CodeGitHunkStale`) refuses a `git.hunk.stage` / `git.hunk.unstage`
 whose hunk the file's current diff no longer has: nothing was written, and the
 client rereads the diff rather than retrying ([git.md](../git.md#staging-hunks)).
+`-32006` (`rpc.CodeGitOperationInProgress`) refuses a commit, checkout, new
+branch or pull while the repository is in the middle of a merge, rebase,
+cherry-pick or revert, with `data.kind` naming it
+([git.md](../git.md#writes-refused-during-an-operation)); `-32007`
+(`rpc.CodeGitConflicted`) refuses a `git.add` (unless it says `resolve`),
+`git.reset`, `git.hunk.stage`, `git.hunk.unstage` or `git.discard` naming
+conflicted paths, with `data.action` and `data.paths`
+([git.md](../git.md#writes-refused-during-an-operation)). Both mean nothing ran.
+`-32008` (`rpc.CodeGitOperationChanged`) refuses a `git.abort` whose operation
+is no longer the one in progress, with `data.current` naming the one that is
+(empty when none): the user confirmed losing one particular merge or rebase, and
+the client has to be able to say it already ended rather than show a git failure
+([git.md](../git.md#aborting)).
 
 A server's error message is therefore text to put in front of a user, never a
 value to branch on — it embeds an arbitrary error string, and its fixed half is

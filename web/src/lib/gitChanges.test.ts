@@ -5,12 +5,15 @@ import {
 	aggregateCheckState,
 	buildChangeTree,
 	type ChangedFile,
+	changeKindOf,
 	checkboxWrite,
 	collectChanges,
+	describeStageable,
 	filesUnder,
 	firstReviewTarget,
 	lineStatOf,
 	orderChanges,
+	reviewSideOf,
 	stagesOnlyWhole,
 	sumLines,
 } from "./gitChanges";
@@ -48,6 +51,88 @@ describe("collectChanges", () => {
 		expect(root.submodule).toBe(false);
 		expect(sub).toMatchObject({ path: "sdk/b.ts", submodule: true });
 		expect(sub.staged?.orig_path).toBe("sdk/a.ts");
+	});
+});
+
+describe("conflicts", () => {
+	const conflicted: GitStatus = {
+		staged: [
+			{ path: "both.ts", status: "U" },
+			{ path: "gone.ts", status: "D" },
+			{ path: "theirs.ts", status: "U" },
+		],
+		unstaged: [
+			{ path: "both.ts", status: "U" },
+			{ path: "gone.ts", status: "D" },
+			{ path: "theirs.ts", status: "D" },
+			{ path: "plain.ts", status: "M" },
+		],
+		conflicted: ["both.ts", "gone.ts", "theirs.ts"],
+		submodules: {
+			sdk: {
+				staged: [{ path: "x.ts", status: "A" }],
+				unstaged: [{ path: "x.ts", status: "A" }],
+				conflicted: ["x.ts"],
+			},
+		},
+	};
+	const byPath = () =>
+		new Map(collectChanges(conflicted).map((f) => [f.path, f]));
+
+	// Drawn as two sides a conflict would read as partly staged, and its
+	// checkbox would stage the markers as the resolution.
+	it("makes one record per conflicted path, with no sides", () => {
+		const files = byPath();
+
+		expect(files.get("both.ts")).toEqual({
+			path: "both.ts",
+			submodule: false,
+			conflict: "content",
+		});
+		expect(files.get("gone.ts")?.conflict).toBe("deleted-both");
+		expect(files.get("theirs.ts")?.conflict).toBe("deleted-one-side");
+		expect(files.get("sdk/x.ts")).toMatchObject({
+			submodule: true,
+			conflict: "content",
+		});
+		expect(files.get("plain.ts")?.conflict).toBeUndefined();
+	});
+
+	it("opens a conflict on the working tree, deleted only when both deleted it", () => {
+		const files = byPath();
+		const both = files.get("both.ts") as ChangedFile;
+
+		expect(reviewSideOf(both, true)).toBe(false);
+		expect(changeKindOf(both)).toBe("modified");
+		expect(changeKindOf(files.get("theirs.ts") as ChangedFile)).toBe(
+			"modified",
+		);
+		expect(changeKindOf(files.get("gone.ts") as ChangedFile)).toBe("deleted");
+	});
+
+	it("leaves conflicts out of every checkbox over several files", () => {
+		const conflict: ChangedFile = {
+			path: "c",
+			submodule: false,
+			conflict: "content",
+		};
+
+		expect(aggregateCheckState([file("a", "staged"), conflict])).toBe(
+			"checked",
+		);
+		expect(checkboxWrite([file("a"), conflict])).toEqual({
+			paths: ["a"],
+			staged: false,
+		});
+		expect(checkboxWrite([file("a", "staged"), conflict])).toEqual({
+			paths: ["a"],
+			staged: true,
+		});
+		expect(checkboxWrite([conflict]).paths).toEqual([]);
+		expect(describeStageable([file("a"), file("b"), conflict])).toBe(
+			"2 of 3 files, 1 conflicted",
+		);
+		expect(describeStageable([file("a")])).toBe("1 file");
 	});
 });
 
@@ -254,13 +339,26 @@ describe("stagesOnlyWhole", () => {
 
 	it.each([
 		["binary", sides(undefined, "M", true), true],
-		["conflicted", sides("U", "U"), true],
-		["added by both", sides("A", "A"), true],
-		["deleted by both", sides("D", "D"), true],
 		["turned into a symlink", sides(undefined, "T"), true],
 		["modified", sides(undefined, "M"), false],
 		["added, then edited", sides("A", "M"), false],
 	])("%s", (_, file, expected) => {
 		expect(stagesOnlyWhole(file, false)).toBe(expected);
+	});
+
+	// Read through collectChanges, which is what turns git's letters into a
+	// conflict record: the letters themselves never reach a caller.
+	it.each([
+		["conflicted", "U", "U"],
+		["added by both", "A", "A"],
+		["deleted by both", "D", "D"],
+	] as const)("%s", (_, staged, unstaged) => {
+		const [conflicted] = collectChanges({
+			staged: [{ path: "a", status: staged }],
+			unstaged: [{ path: "a", status: unstaged }],
+			conflicted: ["a"],
+		} as GitStatus);
+		expect(stagesOnlyWhole(conflicted, false)).toBe(true);
+		expect(stagesOnlyWhole(conflicted, true)).toBe(true);
 	});
 });

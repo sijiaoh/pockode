@@ -33,6 +33,9 @@ func CreateCommit(dir, message string, amend bool) error {
 	// route around with --no-verify. The lock is held for as long as they take,
 	// which is as long as they like.
 	return withLock(dir, opCommit, func() error {
+		if err := refuseDuringOperation(dir, "commit"); err != nil {
+			return err
+		}
 		return execGitVerbose(dir, args...)
 	})
 }

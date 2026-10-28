@@ -4,13 +4,14 @@ import { JSONRPCErrorException } from "json-rpc-2.0";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { gitCheckoutActions } from "../../lib/gitCheckoutStore";
 import { makeHead, makeSync } from "../../test/gitFixtures";
-import type { GitBranches } from "../../types/git";
+import type { GitBranches, GitStatus } from "../../types/git";
 import BranchesSection from "./BranchesSection";
 
 const checkout = vi.fn();
 const createBranch = vi.fn();
 let branches: GitBranches | undefined;
 let error: Error | null;
+let status: GitStatus | undefined;
 
 vi.mock("../../hooks/useGitBranches", () => ({
 	useGitBranches: () => ({ data: branches, isLoading: false, error }),
@@ -18,6 +19,10 @@ vi.mock("../../hooks/useGitBranches", () => ({
 		checkoutMutation: { mutateAsync: checkout },
 		createMutation: { mutateAsync: createBranch },
 	}),
+}));
+
+vi.mock("../../hooks/useGitStatus", () => ({
+	useGitStatus: () => ({ data: status }),
 }));
 
 const BRANCHES: GitBranches = {
@@ -45,11 +50,27 @@ beforeEach(() => {
 	gitCheckoutActions.reset();
 	branches = BRANCHES;
 	error = null;
+	status = undefined;
 	checkout.mockReset();
 	createBranch.mockReset();
 });
 
 describe("BranchesSection", () => {
+	// A switch would carry the operation's state onto another branch; the
+	// reason is pinned where a refused switch's would go.
+	it("pauses switching and New branch during an operation, and says why", () => {
+		status = { staged: [], unstaged: [], operation: { kind: "rebase" } };
+		render(<BranchesSection />);
+
+		const reason =
+			"Branch switching is paused during the rebase. Abort it, or let the agent finish it.";
+		expect(screen.getByText(reason)).toBeInTheDocument();
+		expect(rowFor("topic")).toBeDisabled();
+		const create = screen.getByText(/New branch/).closest("button");
+		expect(create).toBeDisabled();
+		expect(create).toHaveAccessibleDescription(reason);
+	});
+
 	// A page has no sheet to close on success; the switch shows itself in the
 	// list and the top bar instead.
 	it("stays on the list after a switch", async () => {
@@ -77,6 +98,25 @@ describe("BranchesSection", () => {
 
 		await user.click(screen.getByRole("button", { name: "Dismiss error" }));
 		expect(screen.queryByRole("alert")).toBeNull();
+	});
+
+	// The sheet holds a typed name: it stays, and only Create stops.
+	it("keeps an open New branch sheet when an operation begins", async () => {
+		const user = userEvent.setup();
+		const { rerender } = render(<BranchesSection />);
+		await user.click(screen.getByText(/New branch/));
+		await user.type(screen.getByRole("textbox", { name: "Name" }), "side");
+
+		status = { staged: [], unstaged: [], operation: { kind: "merge" } };
+		rerender(<BranchesSection />);
+
+		expect(screen.getByRole("textbox", { name: "Name" })).toHaveValue("side");
+		expect(screen.getByRole("button", { name: "Create" })).toBeDisabled();
+		expect(
+			screen.getByRole("button", { name: "Create" }),
+		).toHaveAccessibleDescription(
+			"Branch switching is paused during the merge. Abort it, or let the agent finish it.",
+		);
 	});
 
 	it("holds New branch while a switch is running", async () => {

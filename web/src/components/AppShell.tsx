@@ -588,13 +588,18 @@ function AppShell() {
 	);
 
 	/**
-	 * Opens the review at a file of the Changes list. Pushed from the list, and
-	 * marked as pushed from it so that leaving goes back to it; replaced when a
-	 * review is already open beside it (at `expanded`), keeping whatever mark it
-	 * has: a review is one history entry however many rows are tapped in it
-	 * (docs/git-changes-ui.md).
+	 * Opens the review at a file of the Changes list, or at a conflicted file
+	 * of the operation banner. Pushed from the list, and marked as pushed from
+	 * it so that leaving goes back to it; replaced when a review is already
+	 * open beside it (at `expanded`), keeping whatever mark it has: a review is
+	 * one history entry however many rows are tapped in it
+	 * (docs/git-changes-ui.md). From any other segment the banner's press is
+	 * pushed unmarked, as the chat's review row is: the list it would go back
+	 * to is not behind it (docs/git-conflict-ui.md).
 	 */
 	const reviewOpen = overlay?.type === "diff";
+	const fromChangesList =
+		overlay?.type === "git" && overlay.segment === "changes";
 	const handleSelectDiffFile = useCallback(
 		(path: string, staged: boolean) => {
 			navigate({
@@ -604,10 +609,14 @@ function AppShell() {
 					currentSessionId,
 					{ replace: reviewOpen },
 				),
-				state: reviewOpen ? true : REVIEW_FROM_LIST_STATE,
+				state: reviewOpen
+					? true
+					: fromChangesList
+						? REVIEW_FROM_LIST_STATE
+						: undefined,
 			});
 		},
-		[navigate, urlWorktree, currentSessionId, reviewOpen],
+		[navigate, urlWorktree, currentSessionId, reviewOpen, fromChangesList],
 	);
 
 	// Reported by the chat, which owns the gate, for the sidebar's Git watch and

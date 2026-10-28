@@ -1,7 +1,9 @@
 import { GitBranch } from "lucide-react";
 import { useState } from "react";
 import { useGitBranches } from "../../hooks/useGitBranches";
+import { useGitStatus } from "../../hooks/useGitStatus";
 import { gitCheckoutActions, useCheckoutRun } from "../../lib/gitCheckoutStore";
+import { rebasingBranch } from "../../lib/gitOperation";
 import { gitSyncActions, useSyncRun } from "../../lib/gitSyncStore";
 import { useWorktreeStore } from "../../lib/worktreeStore";
 import type { GitHead } from "../../types/git";
@@ -36,6 +38,8 @@ function BranchBar({ onOpenBranches, branchesOnScreen }: Props) {
 	const run = useSyncRun(worktree);
 	const { outcome } = run;
 	const checkoutRun = useCheckoutRun(worktree);
+	// A rebase detaches HEAD: `detached @ hash` would be true and useless.
+	const rebasing = rebasingBranch(useGitStatus().data?.operation);
 
 	const head = branches?.head;
 	const sync = branches?.sync;
@@ -83,13 +87,17 @@ function BranchBar({ onOpenBranches, branchesOnScreen }: Props) {
 						className="flex min-h-[36px] min-w-0 flex-1 items-center gap-2 rounded px-2 text-th-text-primary pointer-coarse:min-h-11 transition-colors hover:bg-th-bg-tertiary focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent"
 						// It opens a page of branches rather than a sheet to switch in,
 						// and says so.
-						aria-label={`Branches, currently on ${headLabel(head)}`}
+						aria-label={
+							rebasing
+								? `Branches, rebasing ${rebasing}`
+								: `Branches, currently on ${headLabel(head)}`
+						}
 					>
 						<GitBranch
 							className="h-4 w-4 shrink-0 text-th-text-muted"
 							aria-hidden="true"
 						/>
-						<BranchName name={headLabel(head)} />
+						<HeadName head={head} rebasing={rebasing} />
 					</button>
 				)}
 
@@ -124,6 +132,21 @@ function BranchBar({ onOpenBranches, branchesOnScreen }: Props) {
 				/>
 			)}
 		</>
+	);
+}
+
+/** HEAD's name, or the branch a rebase is rewriting while it runs. */
+export function HeadName({
+	head,
+	rebasing,
+}: {
+	head: GitHead;
+	rebasing: string | null;
+}) {
+	return rebasing ? (
+		<BranchName name={rebasing} suffix="· rebasing" />
+	) : (
+		<BranchName name={headLabel(head)} />
 	);
 }
 

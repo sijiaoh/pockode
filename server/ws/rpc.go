@@ -796,6 +796,8 @@ func (h *rpcMethodHandler) Handle(ctx context.Context, conn *jsonrpc2.Conn, req 
 		h.handleGitPull(ctx, conn, req, wt)
 	case "git.push":
 		h.handleGitPush(ctx, conn, req, wt)
+	case "git.abort":
+		h.handleGitAbort(ctx, conn, req, wt)
 	// fs namespace
 	case "fs.subscribe":
 		h.handleFSSubscribe(ctx, conn, req, wt)

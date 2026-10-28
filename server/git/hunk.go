@@ -20,8 +20,9 @@ import (
 var ErrHunkStale = errors.New("hunk no longer matches the current diff; reload it and try again")
 
 // ErrHunkUnsupported refuses a hunk operation on a file whose diff is not a
-// list of hunks that can be applied one at a time: a conflicted path, whose diff
-// is git's combined one, a typechange, and a diff spanning two paths.
+// list of hunks that can be applied one at a time: a typechange, and a diff
+// spanning two paths. A conflicted path, whose diff is git's combined one, is
+// refused before its diff is read, as ConflictedPathsError.
 var ErrHunkUnsupported = errors.New("hunks cannot be staged or unstaged for this file")
 
 // statusTypeChange is a path that changed kind — a file became a symlink, or
@@ -208,6 +209,9 @@ func (d parsedDiff) find(path string, staged bool, id string) (diffSection, diff
 // is returned. The client's copy of the diff can be seconds old, and an agent
 // may have rewritten the file in between — applying the hunk the user looked at
 // to a file that has moved on would stage something nobody reviewed.
+//
+// A conflicted path is refused (ConflictedPathsError), as Add and Reset refuse
+// it: marking it resolved is Resolve's, for the whole file.
 func StageHunk(dir, path, id string) error {
 	return applyHunk(dir, path, id, false)
 }
@@ -228,6 +232,16 @@ func applyHunk(dir, path, id string, staged bool) error {
 	}
 	return withLock(dir, op, func() error {
 		submodules := getSubmodulePaths(dir)
+		// Refused as Add and Reset refuse it, and before the status is read: a
+		// conflicted path has no side to take a hunk from, and the client's diff
+		// may be older than the merge that conflicted it.
+		conflicted, err := unmergedPaths(dir, submodules, []string{path})
+		if err != nil {
+			return err
+		}
+		if len(conflicted) > 0 {
+			return &ConflictedPathsError{Action: op.name, Paths: conflicted}
+		}
 		status, err := statusWithSubmodules(dir, submodules)
 		if err != nil {
 			return err

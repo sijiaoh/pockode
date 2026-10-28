@@ -46,6 +46,15 @@ interface Props {
 	onOpenFile?: (path: string) => void;
 }
 
+/** Said where a file's size, not the reader, turned its colours off. */
+export function PlainTextNotice() {
+	return (
+		<div className="shrink-0 border-b border-th-border bg-th-bg-secondary px-4 py-2 text-xs text-th-text-muted">
+			Large file — showing plain text only.
+		</div>
+	);
+}
+
 function fileDetails(mime: string, size: number) {
 	return [
 		{ label: "Type", value: getMimeType(mime) },
@@ -79,11 +88,7 @@ function FileBody({
 				<>
 					{/* Only the forced case is worth a banner: when the reader asked
 					    for plain text themselves, saying so back is noise. */}
-					{!state.highlight && (
-						<div className="border-b border-th-border bg-th-bg-secondary px-4 py-2 text-xs text-th-text-muted">
-							Large file — showing plain text only.
-						</div>
-					)}
+					{!state.highlight && <PlainTextNotice />}
 					<div className="p-2">
 						<FileContentDisplay
 							content={state.content}

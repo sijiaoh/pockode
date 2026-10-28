@@ -18,6 +18,8 @@ Copy below is the UI's English. What is left for later is in [git-ui.md](git-ui.
 
 Each `git.status` entry carries its own side's line counts — or `binary`, or nothing when the count is unknown — and a staged rename carries its source; what each case yields is [git.md](git.md#status)'s. The row shows the **sum of the file's two sides**: that is exactly the two diffs the review shows for the file, so the number on the row is the amount there is to read. A line edited on both sides counts twice, which is accepted for that reason. A path without counts is not an error of the status read; the row simply shows none.
 
+A path listed in `conflicted` — a merge, rebase, cherry-pick, revert or stash pop that stopped on it — is one record carrying `conflict` rather than two sides, and its row, its `⋯` sheet, how select all and folders treat it, and what its review draws are [git-conflict-ui.md](git-conflict-ui.md#the-changes-list)'s; everything below is about the files without one.
+
 ## The Changes segment
 
 ### Below `expanded`
@@ -161,7 +163,7 @@ The commit bar becomes a two-button bar. It renders on the same condition the co
 
 ## The review layer
 
-The review layer is the `diff` layer redesigned: one file at a time, in list order, with "stage and go to the next file" as its primary action.
+The review layer is the `diff` layer redesigned: one file at a time, in list order, with "stage and go to the next file" as its primary action. A conflicted file is reviewed in the same layer and order but draws the conflict view instead, with its own bottom bar ([git-conflict-ui.md](git-conflict-ui.md#viewing-a-conflicted-file)).
 
 ### Below `expanded`
 
@@ -311,6 +313,8 @@ Each hunk of the diff gets a row of its own, the **hunk bar**, carrying a checkb
 #### Which hunks have boxes
 
 Exactly those the server gives an ID. Every `git.diff.subscribe` reply and `git.diff.changed` notification carries `hunk_ids`, one per `@@` hunk, in order, and the i-th hunk takes the i-th ID. Where the hunks cannot be applied as shown, the IDs are absent. The cases are [git.md](git.md#staging-hunks)'s table. The client does not decide this a second time. Without IDs the bars still draw, for their range, context and Select button, but carry no box. A submodule's file has boxes, and they apply to the submodule's index, as staging the file does.
+
+**A conflicted file has no hunks to stage.** Its review is the conflict view, which draws the working-tree file with its markers rather than a diff, so there are no hunk bars and no line selection: the handoff there is `Ask agent`, and the one stage it offers is `Mark resolved` ([git-conflict-ui.md](git-conflict-ui.md#viewing-a-conflicted-file)). A hunk write that names a conflicted path anyway, from a diff older than the conflict, is refused as a whole-file one is (`-32007`, [git.md](git.md#writes-refused-during-an-operation)), with the same refusal sentence. The other files keep their boxes while a merge or rebase is in progress: staging part of a file is an index edit like staging all of it ([git-conflict-ui.md](git-conflict-ui.md#what-stops-while-an-operation-is-in-progress)).
 
 An untracked, added or deleted file is one hunk, and its box stages or unstages the whole file. That duplicates the bottom bar's `Stage` / `Unstage`. It stays anyway, so that every hunk looks the same. It is not always equivalent: a mode change is part of no hunk, and a staged rename stays staged when its hunks are unstaged ([git.md](git.md#staging-hunks)). After the last hunk goes, such a side can stay, reading `No content changes` with no box. The bottom bar's whole-file button is still there to finish it, and the layer follows to the other side only when the side is really gone.
 

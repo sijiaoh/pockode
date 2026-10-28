@@ -42,13 +42,13 @@ const (
 // without saying what it locks — the mistake would not fail, it would either
 // let a real conflict through or block something that never conflicted.
 type operation struct {
-	// name is a contract: a client renders BusyError from it, so these nine
+	// name is a contract: a client renders BusyError from it, so these ten
 	// strings are not log text and do not change.
 	name  string
 	locks need
 }
 
-// The nine writing operations, and why each one locks what it does.
+// The ten writing operations, and why each one locks what it does.
 //
 // Reads take no lock at all; see the note at the bottom of this file.
 var (
@@ -82,6 +82,10 @@ var (
 	// Pull is the only network operation that fast-forwards the working tree
 	// and the index, so it is the only one that takes both.
 	opPull = operation{"pull", needIndex | needRefs}
+
+	// Aborting a merge, rebase, cherry-pick or revert resets the index and
+	// working tree and moves HEAD back — a rebase's to another branch entirely.
+	opAbort = operation{"abort", needIndex | needRefs}
 )
 
 // lockWait is how long an operation waits for a busy worktree before refusing:

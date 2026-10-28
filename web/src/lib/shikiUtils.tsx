@@ -341,6 +341,21 @@ async function ensureLanguage(language: string): Promise<void> {
 	}
 }
 
+/** shiki's `FontStyle` flags. */
+const ITALIC = 1;
+const BOLD = 2;
+const UNDERLINE = 4;
+
+export function tokenStyle(token: ThemedToken): React.CSSProperties {
+	const flags = token.fontStyle ?? 0;
+	return {
+		color: token.color,
+		fontStyle: flags & ITALIC ? "italic" : undefined,
+		fontWeight: flags & BOLD ? "bold" : undefined,
+		textDecoration: flags & UNDERLINE ? "underline" : undefined,
+	};
+}
+
 /**
  * Code's colours as tokens per line, for a view that draws its lines itself —
  * the full screen viewer's, which draws only the lines in view. Over the whole

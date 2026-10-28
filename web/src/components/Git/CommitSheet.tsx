@@ -54,6 +54,12 @@ interface Props {
 	/** null where the sync chip is absent: no remote, or a detached HEAD. */
 	push: CommitPush | null;
 	draft: CommitDraft;
+	/**
+	 * Why nothing can be committed right now — an operation in progress, which
+	 * may have begun with the sheet already open — null when something can.
+	 * The sheet stays, since it holds the message.
+	 */
+	paused: string | null;
 	onClose: () => void;
 	onCommit: (message: string, amend: boolean, push: boolean) => Promise<void>;
 }
@@ -82,6 +88,7 @@ function CommitSheet({
 	amendInitially,
 	push,
 	draft,
+	paused,
 	onClose,
 	onCommit,
 }: Props) {
@@ -124,6 +131,7 @@ function CommitSheet({
 	const messageId = useId();
 	const titleHintId = useId();
 	const pushBlockedId = useId();
+	const pausedId = useId();
 	const forcePushId = useId();
 
 	useEffect(() => {
@@ -174,7 +182,11 @@ function CommitSheet({
 	const nothingToCommit = stagedCount === 0 && !amend;
 	// Disabled while drafting too: the message is about to be replaced.
 	const canSubmit =
-		message.trim() !== "" && !nothingToCommit && !isCommitting && !isDrafting;
+		message.trim() !== "" &&
+		!nothingToCommit &&
+		!paused &&
+		!isCommitting &&
+		!isDrafting;
 	// With amend on and nothing staged there is still a message to redraft.
 	const canDraft = !nothingToCommit && !isCommitting;
 	// Rewriting a commit the upstream has makes the push a force push, which
@@ -290,6 +302,11 @@ function CommitSheet({
 				<div className="flex w-full flex-col gap-2">
 					{/* In the footer rather than the body, which scrolls and would
 					    carry the reason off-screen under a long message. */}
+					{paused && (
+						<p id={pausedId} className="text-xs text-th-text-muted">
+							{paused}
+						</p>
+					)}
 					{push?.blocked && (
 						<p id={pushBlockedId} className="text-xs text-th-text-muted">
 							{push.blocked}
@@ -301,7 +318,11 @@ function CommitSheet({
 								type="button"
 								onClick={() => commit(true)}
 								disabled={!canPush}
-								aria-describedby={pushReasonId}
+								aria-describedby={
+									[paused && pausedId, pushReasonId]
+										.filter(Boolean)
+										.join(" ") || undefined
+								}
 								className="flex flex-1 items-center justify-center gap-2 rounded-lg bg-th-bg-tertiary px-4 py-2.5 text-sm text-th-text-primary transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
 							>
 								{committing === "push" && (
@@ -317,6 +338,7 @@ function CommitSheet({
 						<button
 							type="submit"
 							disabled={!canSubmit}
+							aria-describedby={paused ? pausedId : undefined}
 							className="flex flex-1 items-center justify-center gap-2 rounded-lg bg-th-accent px-4 py-2.5 text-sm text-th-accent-text transition-colors hover:bg-th-accent-hover disabled:cursor-not-allowed disabled:opacity-50"
 						>
 							{/* The gerund label already announces the state; the spinner's

@@ -4,13 +4,15 @@ import {
 	aggregateCheckState,
 	type ChangedFile,
 	type ChangesView,
+	describeStageable,
 	sumLines,
+	withoutConflicts,
 } from "../../lib/gitChanges";
 import MenuRow from "../common/MenuRow";
 import { Sheet } from "../ui";
 import { iconButtonClass } from "../ui/iconButtonClass";
 import LineCounts from "./LineCounts";
-import StageCheckbox from "./StageCheckbox";
+import StageCheckbox, { StageGutter } from "./StageCheckbox";
 
 interface Props {
 	files: ChangedFile[];
@@ -44,6 +46,9 @@ function ChangesHeader({
 }: Props) {
 	const [menuOpen, setMenuOpen] = useState(false);
 	const count = `${files.length} ${files.length === 1 ? "file" : "files"}`;
+	const stageable = withoutConflicts(files);
+	const anyConflict = stageable.length < files.length;
+	// A conflict has no unstaged side, so discard-all already passes it over.
 	const anyUnstaged = files.some((f) => f.unstaged);
 
 	// Gone with its one item, rather than left offering a discard that has
@@ -54,12 +59,20 @@ function ChangesHeader({
 
 	return (
 		<div className="sticky top-0 z-10 flex min-h-[44px] items-center gap-1 border-b border-th-border bg-th-bg-secondary px-2 pointer-coarse:gap-2">
-			<StageCheckbox
-				state={aggregateCheckState(files)}
-				label={`Stage all ${count}`}
-				busy={busy}
-				onToggle={onToggleAll}
-			/>
+			{stageable.length > 0 ? (
+				<StageCheckbox
+					state={aggregateCheckState(files)}
+					label={
+						anyConflict
+							? `Stage ${describeStageable(files)}`
+							: `Stage all ${count}`
+					}
+					busy={busy}
+					onToggle={onToggleAll}
+				/>
+			) : (
+				<StageGutter />
+			)}
 			<span className="flex min-w-0 flex-1 items-baseline gap-2 overflow-hidden whitespace-nowrap">
 				<span className="shrink-0 text-sm text-th-text-primary">{count}</span>
 				<LineCounts lines={sumLines(files)} className="min-w-0 truncate" />

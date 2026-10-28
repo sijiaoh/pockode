@@ -11,6 +11,8 @@ import { useGitStage } from "./useGitStage";
 interface GitWriteRunner {
 	/** Stages the paths, or unstages them when they are staged already. */
 	toggle: (paths: string[], staged: boolean) => Promise<void>;
+	/** Stages conflicted paths as resolved — the one write that may. */
+	resolve: (paths: string[]) => Promise<void>;
 	/** Stages one hunk of the path, or unstages it when it is on the staged side. */
 	toggleHunk: (path: string, hunkId: string, staged: boolean) => Promise<void>;
 	discard: (paths: string[]) => Promise<void>;
@@ -30,6 +32,7 @@ export function useGitWriteRunner(): GitWriteRunner {
 	const worktree = useWorktreeStore((s) => s.current);
 	const {
 		stageMutation,
+		resolveMutation,
 		unstageMutation,
 		stageHunkMutation,
 		unstageHunkMutation,
@@ -38,6 +41,7 @@ export function useGitWriteRunner(): GitWriteRunner {
 	const writes = useWorktreeWrites(worktree);
 
 	const stage = stageMutation.mutateAsync;
+	const resolveConflicts = resolveMutation.mutateAsync;
 	const unstage = unstageMutation.mutateAsync;
 	const discardPaths = discardMutation.mutateAsync;
 	const stageHunk = stageHunkMutation.mutateAsync;
@@ -49,6 +53,13 @@ export function useGitWriteRunner(): GitWriteRunner {
 				staged ? unstage(accepted) : stage(accepted),
 			),
 		[worktree, stage, unstage],
+	);
+
+	// Queued as a toggle: it is a stage, and shows on the row as one.
+	const resolve = useCallback(
+		(paths: string[]) =>
+			gitWriteActions.run(worktree, "toggle", paths, resolveConflicts),
+		[worktree, resolveConflicts],
 	);
 
 	const toggleHunk = useCallback(
@@ -66,7 +77,7 @@ export function useGitWriteRunner(): GitWriteRunner {
 	);
 
 	return useMemo(
-		() => ({ toggle, toggleHunk, discard, writes }),
-		[toggle, toggleHunk, discard, writes],
+		() => ({ toggle, resolve, toggleHunk, discard, writes }),
+		[toggle, resolve, toggleHunk, discard, writes],
 	);
 }

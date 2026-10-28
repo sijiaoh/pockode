@@ -21,6 +21,20 @@ const GIT_BUSY_CODE = -32001;
 const NOT_GIT_REPO_CODE = -32002;
 
 /**
+ * Where: server/rpc/types.go's CodeGitOperationInProgress. A commit, branch
+ * switch, new branch or pull the repository's merge, rebase, cherry-pick or
+ * revert would have been finished or derailed by; `data.kind` names it.
+ */
+const OPERATION_IN_PROGRESS_CODE = -32006;
+
+/**
+ * Where: server/rpc/types.go's CodeGitConflicted. A stage, unstage or discard
+ * naming paths with unresolved conflicts, refused before any path in it was
+ * touched; `data.action` names the write and `data.paths` the paths.
+ */
+const CONFLICTED_CODE = -32007;
+
+/**
  * Where: server/rpc/types.go's CodeGitHunkStale. The hunk named is no longer
  * in the file's diff — the file changed after the diff on screen was read —
  * and nothing was written.
@@ -50,6 +64,17 @@ const BUSY_OPERATIONS: Record<string, string> = {
 	fetch: "fetching",
 	pull: "pulling",
 	push: "pushing",
+	abort: "aborting an operation",
+};
+
+/**
+ * The writes the server refuses over a conflicted path, each as the participle
+ * after "Nothing was". The keys are the contract (server/git/lock.go's names).
+ */
+const CONFLICTED_ACTIONS: Record<string, string> = {
+	stage: "staged",
+	unstage: "unstaged",
+	discard: "discarded",
 };
 
 /** How a failed git request is shown: a sentence, and git's own words if any. */
@@ -77,6 +102,21 @@ export function gitRefusalSummary(error: unknown): string | null {
 	if (error.code === NOT_GIT_REPO_CODE) {
 		return "This project is no longer a git repository.";
 	}
+	if (error.code === OPERATION_IN_PROGRESS_CODE) {
+		const kind = dataField(error.data, "kind");
+		return typeof kind === "string"
+			? `This worktree is in the middle of a ${kind}. Abort it, or let the agent finish it.`
+			: "This worktree is in the middle of an operation. Abort it, or let the agent finish it.";
+	}
+	if (error.code === CONFLICTED_CODE) {
+		const data = dataField(error.data, "paths");
+		const paths = Array.isArray(data) ? data : [];
+		const done =
+			CONFLICTED_ACTIONS[String(dataField(error.data, "action"))] ?? "changed";
+		return paths.length > 0
+			? `Nothing was ${done}: ${paths.join(", ")} ${paths.length === 1 ? "has" : "have"} unresolved conflicts.`
+			: `Nothing was ${done}: some of the files have unresolved conflicts.`;
+	}
 	if (error.code !== GIT_BUSY_CODE) return null;
 
 	// An operation the server has since added is still a refusal worth
@@ -88,9 +128,13 @@ export function gitRefusalSummary(error: unknown): string | null {
 }
 
 function busyOperation(data: unknown): string | null {
-	if (typeof data !== "object" || data === null) return null;
-	const operation = (data as { operation?: unknown }).operation;
+	const operation = dataField(data, "operation");
 	return typeof operation === "string" ? operation : null;
+}
+
+function dataField(data: unknown, key: string): unknown {
+	if (typeof data !== "object" || data === null) return undefined;
+	return (data as Record<string, unknown>)[key];
 }
 
 /**

@@ -16,7 +16,7 @@ React SPA ──WebSocket──▶ Go Server ──exec──▶ git CLI
 
 | Layer | Path | Role |
 |-------|------|------|
-| RPC handlers | `server/ws/rpc_git.go` | `git.status`, `git.add`, `git.reset`, `git.hunk.stage`, `git.hunk.unstage`, `git.discard`, `git.commit`, `git.log`, `git.show`, `git.show.diff`, `git.show.file`, `git.branches`, `git.checkout`, `git.branch.create`, `git.fetch`, `git.pull`, `git.push`, and the `git.subscribe` / `git.diff.subscribe` pairs with their unsubscribes; `server/ws/rpc_git_draft.go` has `git.commit.draft` and `git.commit.draft.cancel` |
+| RPC handlers | `server/ws/rpc_git.go` | `git.status`, `git.add`, `git.reset`, `git.hunk.stage`, `git.hunk.unstage`, `git.discard`, `git.commit`, `git.log`, `git.show`, `git.show.diff`, `git.show.file`, `git.branches`, `git.checkout`, `git.branch.create`, `git.fetch`, `git.pull`, `git.push`, `git.abort`, and the `git.subscribe` / `git.diff.subscribe` pairs with their unsubscribes; `server/ws/rpc_git_draft.go` has `git.commit.draft` and `git.commit.draft.cancel` |
 | Git operations | `server/git/git.go` | Init, Status, Add, Reset, Diff, DiffWithContent, Log, Show, ShowFileDiff |
 | Historical file contents | `server/git/showfile.go` | ShowFile |
 | Branch operations | `server/git/branch.go` | Head, Branches, Checkout, CreateBranch |
@@ -25,9 +25,10 @@ React SPA ──WebSocket──▶ Go Server ──exec──▶ git CLI
 | Commit message drafts | `server/git/draft.go`, `server/commitdraft/` | StagedChange (what a commit would record, cut to size), and Draft (the prompt, the one-shot AI call, the answer) — [Drafting a Commit Message](#drafting-a-commit-message) |
 | Hunk staging | `server/git/hunk.go` | StageHunk, UnstageHunk, and the hunk IDs a diff carries ([Staging Hunks](#staging-hunks)) |
 | Discard operations | `server/git/discard.go` | Discard |
+| Operations in progress | `server/git/operation.go` | The merge / rebase / cherry-pick / revert a repository is left in the middle of, and Abort ([Operations in Progress](#operations-in-progress)) |
 | Write serialisation | `server/git/lock.go` | A worktree's two locks — index and refs — with what each write takes, `BusyError`, and the operation names that lock and wire share ([Serialising Writes](#serialising-writes)) |
 | Command execution | `server/git/command.go` | `gitCommand` / `execGit` / `execGitLines` / `execGitVerbose` / `execGitNetwork` / `execGitInput` (stdin, for `git apply -` and `hash-object --stdin`), `CommandError`, and `literalPathspec` |
-| Frontend components | `web/src/components/Git/` | `GitWorkspace` is the `/git` page: `BranchBar` (the top bar, with `SyncChip` and `SyncSheet`) over three segments — `ChangesSection` (`ChangesHeader`, `ChangedFileRow` and its `ChangedFileMenu`, `CommitBar` → `CommitSheet`), `HistorySection` (`LogList`, amend → `CommitSheet`) and `BranchesSection` (`BranchList`, `NewBranchSheet`) — with `DiffView` and the chain from `CommitView` to `CommitDiffView` to `CommitFileView` as layers under the first two. `ErrorBanner` catches the failures with no sheet to land in. `GitTab` is the sidebar's read-only overview and its entries into the workspace |
+| Frontend components | `web/src/components/Git/` | `GitWorkspace` is the `/git` page: `BranchBar` (the top bar, with `SyncChip` and `SyncSheet`) over three segments — `ChangesSection` (`ChangesHeader`, `ChangedFileRow` and its `ChangedFileMenu`, `CommitBar` → `CommitSheet`), `HistorySection` (`LogList`, amend → `CommitSheet`) and `BranchesSection` (`BranchList`, `NewBranchSheet`) — with `DiffView` and the chain from `CommitView` to `CommitDiffView` to `CommitFileView` as layers under the first two. `ErrorBanner` catches the failures with no sheet to land in. `OperationBanner` (under the top bar) and `ConflictView` (inside `DiffView`) are the in-progress operation's ([git-conflict-ui.md](git-conflict-ui.md#where-it-lives)). `GitTab` is the sidebar's read-only overview and its entries into the workspace |
 | Frontend types | `web/src/types/git.ts` | Wire types, plus the pure `describeGitSync` / `describeCommitAction` / `describeDiscard` the workspace's labels and confirmation copy come from |
 | Frontend hooks | `web/src/hooks/useGit*.ts` | The workspace's queries, mutations and watch subscriptions, and `useAutoFetch`, the fetch it runs on the way in. Note `useGitCommit` *reads* a commit (`git.show`) — `useGitCreateCommit` is the one that writes. `useCommitFile` (`git.show.file`) is outside the glob because it reads a file rather than the repository's state: it backs the commit-file layer ([git-ui.md](git-ui.md#viewing-a-file-from-a-commit)) |
 | RPC actions | `web/src/lib/rpc/git.ts` | RPC action creators for all git methods |
@@ -49,7 +50,7 @@ None of this helps when a filename is not valid UTF-8 (e.g. latin-1 byte sequenc
 
 ## Serialising Writes
 
-A worktree never runs two git writes that touch the same thing. The nine writes take one or both of that worktree's **two** locks (`server/git/lock.go`) — one for the index and working tree, one for refs — and every read (`Status`, `Log`, `Diff`, `DiffWithContent`, `Show`, `ShowFileDiff`, `ShowFile`, `Branches`, `Head`) takes neither.
+A worktree never runs two git writes that touch the same thing. The ten writes take one or both of that worktree's **two** locks (`server/git/lock.go`) — one for the index and working tree, one for refs — and every read (`Status`, `Log`, `Diff`, `DiffWithContent`, `Show`, `ShowFileDiff`, `ShowFile`, `Branches`, `Head`) takes neither.
 
 | Write | index | refs | What it touches |
 |-------|:-----:|:----:|-----------------|
@@ -58,6 +59,7 @@ A worktree never runs two git writes that touch the same thing. The nine writes 
 | checkout, branch-create | ● | ● | rewrite the working tree *and* move HEAD |
 | fetch, push | | ● | remote-tracking refs and `FETCH_HEAD`; a push may write an upstream into config |
 | pull | ● | ● | the only network operation that fast-forwards the working tree |
+| abort | ● | ● | resets the index and working tree and moves HEAD back — a rebase's onto another branch |
 
 Without any of this, two writes that overlap race for the lock file they have in common and whichever loses fails. Nothing about that is silent, so the project's rule on errors was already satisfied — but the failure is arbitrary in a way a user cannot reason about: which of two taps survives depends on timing, and what comes back names a lock file rather than the operation that was holding it.
 
@@ -71,7 +73,7 @@ Fetch and push do still exclude each other, and the operations that move the sam
 
 One deadline covers both acquisitions, so needing two locks cannot cost twice the wait: a refused caller waited at most the two seconds below, whatever it asked for. An operation that needs both does hold the index while it waits for the refs — the price of a fixed order — but it cannot push anyone past their own deadline, because a caller arriving during that wait started its own wait later. And a caller refused half-way gives back what it already took: a pull that never ran must not go on refusing every stage for as long as it sat waiting.
 
-**The locks live in this package, not in the RPC handlers.** A handler does not see every caller: two connections reach the same worktree, and worktree setup and the watchers run git without passing through the handlers at all. Every git command the server runs is built here, so this is the narrowest place the rule can sit — and sitting there makes bypassing it impossible by construction rather than by review. It is also what keeps the lock order a property of one file: the nine operations carry what they lock as part of what they are, so adding a write cannot mean adding a name and forgetting to say what it conflicts with.
+**The locks live in this package, not in the RPC handlers.** A handler does not see every caller: two connections reach the same worktree, and worktree setup and the watchers run git without passing through the handlers at all. Every git command the server runs is built here, so this is the narrowest place the rule can sit — and sitting there makes bypassing it impossible by construction rather than by review. It is also what keeps the lock order a property of one file: the ten operations carry what they lock as part of what they are, so adding a write cannot mean adding a name and forgetting to say what it conflicts with.
 
 **A worktree is identified by where it is, not by how the path was spelled.** The locks are keyed by the directory every git command here is already given, but that directory arrives by two routes: from the worktree registry, which resolves symlinks, and from callers that never went near it. Keying on the raw string would give one worktree two locks, which is not weaker exclusion but none — and it would only ever show up where two spellings of a path differ: `/var` against `/private/var` on macOS, a short `8.3` path or a differently-cased drive letter on Windows, a symlinked checkout anywhere. So the key is the path resolved the same way the registry resolves it, and a path that cannot be resolved at all (the worktree is gone) falls back to the cleaned string rather than failing the command.
 
@@ -80,11 +82,11 @@ One deadline covers both acquisitions, so needing two locks cannot cost twice th
 **A conflicting write waits two seconds, then is refused.** Both halves of that are load-bearing:
 
 - *Not zero.* The server cannot assume its callers queue — staging two files is two independent requests, and a second tab or a second device has nothing in common with the first except these locks — so two fast local writes overlapping is ordinary use, not a conflict anybody needs to hear about. A local git command is tens of milliseconds; the slowest write here — a discard that reads submodule status, a checkout of a large tree — is on the order of a second. Refusing immediately would answer a double tap with an error the user did nothing to earn, trading git's `index.lock` message for one that is no more use to them.
-- *Not unbounded.* Three of the nine wait on another machine and commit runs arbitrary hooks. A queue with no ceiling makes "my tap did nothing for five minutes" the normal case, with nothing on screen to explain it and no way to take it back. Anything still holding a lock after two seconds is waiting on a network or on a hook, which is precisely the case a refusal exists for — and the wait a user can be made to sit through is capped at two seconds whatever the operation ahead of them is doing.
+- *Not unbounded.* Three of the ten wait on another machine and commit runs arbitrary hooks. A queue with no ceiling makes "my tap did nothing for five minutes" the normal case, with nothing on screen to explain it and no way to take it back. Anything still holding a lock after two seconds is waiting on a network or on a hook, which is precisely the case a refusal exists for — and the wait a user can be made to sit through is capped at two seconds whatever the operation ahead of them is doing.
 
 The refusal names what is running at the moment it gives up rather than what was running when the wait began: the worktree may have changed hands during those two seconds, and what the user can act on is what to wait for *now*.
 
-**A refusal is its own wire error, because nothing failed.** `rpc.CodeGitBusy` (`-32001`) carries `data.operation`, naming the holder by the same nine names. The request was never started, and repeating it once that operation ends will work — so it is not the `-32603` a git command that ran and failed comes back as, and the client can tell the two apart without matching English prose. Why that is a code rather than a recognisable sentence, and where the number comes from, is in [code/websocket-rpc.md](code/websocket-rpc.md#error-replies); what the user ends up reading is in [git-ui.md](git-ui.md#feedback-and-errors).
+**A refusal is its own wire error, because nothing failed.** `rpc.CodeGitBusy` (`-32001`) carries `data.operation`, naming the holder by the same ten names. The request was never started, and repeating it once that operation ends will work — so it is not the `-32603` a git command that ran and failed comes back as, and the client can tell the two apart without matching English prose. Why that is a code rather than a recognisable sentence, and where the number comes from, is in [code/websocket-rpc.md](code/websocket-rpc.md#error-replies); what the user ends up reading is in [git-ui.md](git-ui.md#feedback-and-errors).
 
 **A lock spans a whole operation, not a single command.** `Pull` (rev-parse, pull, rev-list), `Push` (read HEAD and upstream, then push) and `Discard` (read status, then delete or restore per path) are each several commands whose middle must not be interleaved — `Discard` most of all, since a path staged between its status read and its `clean` would send it down the deletion branch. This is also why `execGitNetworkTimeout` rooting its own context is not a problem: the lock is released by the closure around it, which cannot return before the command has.
 
@@ -98,7 +100,7 @@ It is also why `Add` and `Reset` take a whole request's paths in one call rather
 
 ## Status
 
-`git.status` answers `git.GitStatus`: the `staged` and `unstaged` file lists, plus `submodules`, one nested `GitStatus` per submodule keyed by its path. A file changed on both sides is in both lists.
+`git.status` answers `git.GitStatus`: the `staged` and `unstaged` file lists, plus `submodules`, one nested `GitStatus` per submodule keyed by its path. A file changed on both sides is in both lists. While a repository is in the middle of a merge, rebase, cherry-pick or revert, or holds unresolved conflicts, the answer also carries `operation` and `conflicted` ([Operations in Progress](#operations-in-progress)).
 
 **Each entry carries its own side's line counts.** `lines` is `{additions, deletions}` from `git diff --cached --numstat` for a staged entry and `git diff --numstat` for an unstaged one, so a file's whole change is the sum of its two entries — exactly the two diffs a reviewer opens for it. That sum is not `git diff HEAD`: a line staged and then removed again counts on both sides — on purpose, since the review reads those two diffs and not that third one ([git-changes-ui.md](git-changes-ui.md#what-the-list-reads-from-the-server)).
 
@@ -205,11 +207,11 @@ Linked worktrees are named by their directory, which is the name the worktree sw
 
 **Pull reports how many commits it brought in, counted by the server.** `git pull` fetches before it fast-forwards, so it can bring in more than the workspace's behind count promised — a number taken from the chip would be a figure the workspace never measured. Counting fails softly: a pull that succeeded must not be reported as a failure because the count afterwards could not be read.
 
-**Pull is `--ff-only` and push is at most `--force-with-lease`.** The reasoning is in [git-ui.md](git-ui.md#remote-sync): a merge conflict is unescapable from a phone, and a bare `--force` has no safe single-tap form. `Push` reads the upstream itself rather than trusting the client, and adds `--set-upstream` when there is none — the client's copy can be seconds old, and pushing to the wrong place is not a mistake to make on stale data.
+**Pull is `--ff-only` and push is at most `--force-with-lease`.** The reasoning is in [git-ui.md](git-ui.md#remote-sync): a merge conflict cannot be resolved from a phone, only aborted or handed to the agent, and a bare `--force` has no safe single-tap form. `Push` reads the upstream itself rather than trusting the client, and adds `--set-upstream` when there is none — the client's copy can be seconds old, and pushing to the wrong place is not a mistake to make on stale data.
 
 ## Commit
 
-`git.commit` takes a message and an `amend` flag; what goes into the commit is already settled by the index.
+`git.commit` takes a message and an `amend` flag; what goes into the commit is already settled by the index. It is refused while an operation is in progress ([Writes refused during an operation](#writes-refused-during-an-operation)), as are checkout, branch creation and pull.
 
 **The root repository only.** `git.add` stages a submodule's file in that submodule's index, which a root `git commit` never reaches, so those entries are still staged when the commit returns. The workspace names them rather than letting them sit there unexplained; why committing each submodule as well was rejected is in [git-ui.md](git-ui.md#submodules).
 
@@ -284,8 +286,8 @@ Where a file's diff is not a list of hunks that can be applied as shown, `hunk_i
 |---|---|
 | Whitespace hidden (`hide_whitespace`) | `-w` leaves changes out of the hunks it shows, so applying one would stage what is not on screen |
 | Binary file, tracked or untracked | git has no hunks for it; an untracked one is drawn as text but staged as the file it is |
-| Conflicted file | its diff is git's combined one; a hunk request is `-32602` (`git.ErrHunkUnsupported`), since rereading would not help |
-| A file that became a symlink, or the reverse (status `T`) | git diffs it as a deletion and a creation of one path, neither of which applies without the other; `-32602` as above |
+| Conflicted file | its diff is git's combined one; a hunk request is refused as staging the whole file is, `-32007` (`rpc.CodeGitConflicted`, [below](#writes-refused-during-an-operation)) |
+| A file that became a symlink, or the reverse (status `T`) | git diffs it as a deletion and a creation of one path, neither of which applies without the other; a hunk request is `-32602` (`git.ErrHunkUnsupported`), since rereading would not help |
 | A staged rename the diff does not pair as the status did | the diff is the new path added and the old one deleted, and a hunk of the second would write a path the request did not name; `-32602` as above |
 | Too large to send, or a mode change alone | no hunks reach the client |
 | A commit's diff (`git.show.diff`) | history, not something to stage |
@@ -316,7 +318,59 @@ Both methods take the index lock as `stage` and `unstage` — the names a `-3200
 
 **A directory holding its own git repository survives `git clean`** — exit 0, no output — and `git status -uall` lists such a directory as a single untracked entry, so a deletion the user confirmed would appear to do nothing. `Discard` therefore checks that the paths it cleaned are gone and reports the ones that are not. Forcing them through would take `-ff`, which overrides that protection for a repository whose commits may exist nowhere else.
 
-Paths are validated up front, before anything runs, so a rejected path stops the operation instead of being reached halfway through it. Submodule paths resolve into the submodule the way `Add` and `Reset` do, and paths are grouped into one git invocation per (repository, kind) — discarding every unstaged change is a single tap.
+Paths are validated up front, before anything runs, so a rejected path stops the operation instead of being reached halfway through it. **A conflicted path is refused by name** the same way, under the same lock — a directory by the conflicted files in it: it has no version in the index to restore — git says `path is unmerged`, but only for the group it is running, after earlier groups have already been restored or deleted — and picking a side is not something discard offers. The answer is `-32007` (`rpc.CodeGitConflicted`) with `data.action` (`"discard"`) and `data.paths` naming them, and nothing in the batch has been touched — the same refusal staging and unstaging give ([below](#writes-refused-during-an-operation)). Submodule paths resolve into the submodule the way `Add` and `Reset` do, and paths are grouped into one git invocation per (repository, kind) — discarding every unstaged change is a single tap.
+
+## Operations in Progress
+
+The workspace starts no merge, rebase, cherry-pick or revert — those are the AI's to run — but a repository can be left in the middle of one, conflicts and all, by an AI session or by the user elsewhere. `git.status` says so, and `git.abort` is the way back out.
+
+**`conflicted`** lists the paths the index holds unresolved conflicts for, in status order: `UU`, `AA`, `DD`, and a `U` on either side. Each is also in `staged` and `unstaged` under the letters git gave it; the list is there so a client does not have to know which pairs of letters mean a conflict. It is per repository, so a submodule's nested status carries its own. A conflict can exist without an operation — a `git stash pop` that did not apply cleanly leaves one — and is still listed.
+
+**`operation`** is present while the root repository is in the middle of one, and absent otherwise:
+
+```json
+{
+  "kind": "rebase",
+  "commit": { "hash": "1a2b…", "subject": "Add login" },
+  "branch": "feature",
+  "onto": { "hash": "9f8e…", "subject": "Bump deps", "ref": "main" },
+  "step": { "current": 3, "total": 7 }
+}
+```
+
+| Field | Present for | Meaning |
+|-------|-------------|---------|
+| `kind` | all | `merge`, `rebase`, `cherry-pick` or `revert` |
+| `commit` | all, when there is one | the commit being brought in: merged (`MERGE_HEAD`), replayed (`REBASE_HEAD`), picked or reverted. A sequence of picks or reverts that is between two of its commits has none |
+| `branch` | rebase | the branch being rewritten; absent for a detached HEAD |
+| `onto` | rebase | the commit being replayed onto |
+| `step` | rebase | step `current` of `total` of the rebase's todo list, from 1 — one per commit replayed, unless the list runs commands too (`exec`, or `--rebase-merges`' label/reset/merge lines). A sequence of picks or reverts records what is left rather than what is done, so it has no step |
+
+Each commit carries `ref`, a local or remote-tracking branch pointing exactly at it — local first, symbolic refs such as `origin/HEAD` skipped — absent when none does. git records the commit, not the name that was typed, so this is how "merging `feature`" is told from "merging `1a2b3c4`", and it names the branch that is there *now*.
+
+**How the kind is decided follows `git status`** (`wt-status.c`), with one order: rebase, then merge, cherry-pick, revert. A rebase stopped on a merge it is recreating has `MERGE_HEAD` too, and aborting the merge alone would leave the rebase behind. Both rebase backends are recognised — `rebase-merge/` (the default, and every interactive rebase) counts in `msgnum`/`end`, `rebase-apply/` in `next`/`last` — and so is a sequence of picks or reverts with no `CHERRY_PICK_HEAD` left, from `sequencer/todo`. `git am`, which shares `rebase-apply/` with the apply backend, is not reported: nothing in the workspace leads to it.
+
+**Where the state lives is asked of git, never assumed.** The state directories are located with `git rev-parse --git-path`, because in a linked worktree `.git` is a file and a rebase's state lives in that worktree's own git directory. The `*_HEAD` refs are resolved by name through one `git cat-file --batch-check` rather than read as files, because under the reftable backend only `MERGE_HEAD` still is one. A bare name is not exact, though: when no such ref exists git goes on to try `refs/tags/<name>`, `refs/heads/<name>` and the rest, so a branch called `MERGE_HEAD` would read as a merge in progress and lock commits out. The same batch therefore asks for those shadows too, and a head some shadow exists for is believed only if its file is there. Paths come back with forward slashes and are converted before use.
+
+Only the root repository's operation is read: the abort below is offered for that one alone. The cost is two git processes per status while nothing is in progress, and two more while something is.
+
+**Live updates come for free.** GitWatcher fingerprints the whole `git.status` answer ([Real-Time Updates](#real-time-updates)), so an operation starting, advancing a step or ending elsewhere is a `git.changed` within one poll.
+
+### Writes refused during an operation
+
+`git.commit` (amend included), `git.checkout`, `git.branch.create` and `git.pull` refuse to run while the root repository is in the middle of an operation, before git is started, with a message naming both — `can't commit during a rebase: finish or abort the rebase first`. Each would finish or derail the operation rather than do what it says: a commit concludes a merge, pick or revert (the `--continue` left to whoever started it) and inserts a stray commit into a rebase; a checkout or a new branch carries the operation's state onto another branch; a pull moves HEAD under it. git refuses some of these itself, in some states, in words that do not say what to do instead; others — a commit mid-rebase, a checkout during a rebase with no conflicts left — it lets through. The check runs inside the write's lock, which `Abort` shares, so the answer holds until the write has run. The workspace disables these controls too ([git-conflict-ui.md](git-conflict-ui.md#what-stops-while-an-operation-is-in-progress)); the server is the boundary for a client that has not yet seen the operation begin. Nothing ran, so the answer is a refusal of its own, not the `-32603` of a git command that failed: `-32006` (`rpc.CodeGitOperationInProgress`) with `data.kind` naming the operation in the way.
+
+Staging and unstaging (whole files or hunks), discarding the files that are not conflicted, fetch and push stay available: none of them moves HEAD, and the operation's result is built from the index they edit.
+
+**A conflicted path is refused by every one of those three**, hunk by hunk too (`git.hunk.stage` / `git.hunk.unstage`), in or out of an operation (a `git stash pop` leaves conflicts with none), because each would end the conflict without resolving it: `git add` records the markers as the resolution, `git restore --staged` drops the conflict stages and exits 0, and discard has nothing in the index to restore ([Discard](#discard)). The client offers none of them on a conflicted row, but it chose the paths from a status that may be older than the merge that conflicted them; the check runs under the write's index lock, one `git ls-files --unmerged` per repository the paths are in (a directory is refused by the conflicted files in it), and the whole batch is refused — `-32007` (`rpc.CodeGitConflicted`) with `data.action` (`"stage"`, `"unstage"`, `"discard"`) and `data.paths`. The one stage of a conflicted path that is meant is the user marking it resolved, so `git.add` takes `"resolve": true` for it (`git.Resolve`), and only then lets a conflicted path through.
+
+### Aborting
+
+`git.abort` takes `{"kind": "<kind>"}` and runs `git <kind> --abort`, which puts the branch, index and working tree back where they were before the operation started — whatever had been resolved is lost, so the client confirms first. It answers `{"head_kept": false}`. It is a write like any other: it takes both locks ([Serialising Writes](#serialising-writes)) and fails with git's own words when git does.
+
+**`head_kept` is the one abort that does not put the branch back.** A sequence of picks or reverts rolls back only while HEAD is still the commit git recorded after its last pick (`sequencer/abort-safety`, checked by `rollback_is_safe` in git's `sequencer.c`). Once something else committed during the sequence — a conflict resolved with a plain `git commit` rather than `--continue`, the usual way to reach the between-commits state above — git ends the sequence, leaves the branch where it is, warns and exits 0. The server makes the same check before running the abort and answers `true`, because the user confirmed losing that work and it is still on the branch; the client has to say so rather than report a rollback that did not happen. A single pick or revert keeps no sequencer state, commits nothing, and is always rolled back.
+
+**The kind is the one the user confirmed, and the server checks it under the lock.** If the operation in progress is no longer of that kind — it was finished or aborted elsewhere, or one of another kind started — nothing runs, and the answer is `-32008` (`rpc.CodeGitOperationChanged`) with `data.current` naming what is in progress now, empty when nothing is. Aborting whatever happens to be there would throw away work the user never agreed to lose. Only the kind is compared: a new operation of the same kind started in the moment between the press and the request is aborted in its place. The client narrows that moment to the request itself — its confirmation closes the instant the status shows a different operation ([git-conflict-ui.md](git-conflict-ui.md#abort)). A kind that is not one of the four is `-32602`.
 
 ## Real-Time Updates
 
