@@ -238,12 +238,7 @@ A previewed server knows nothing of Pockode's credentials, so the preview is gua
 - The page posts the password (form-encoded `password`) to `/__pockode/preview/login` on the same host: 204 with the cookie, 401 on a wrong password, 429 with `Retry-After` while password attempts are locked out (see [Authentication](authentication.md#failed-password-attempts-are-rate-limited)) — the ticket login below is never locked out. On success the page reloads; the address bar never left the page asked for, so there is no redirect parameter.
 - A request that already carries a live session is answered 204 without issuing another, so a second tab does not spend a session slot.
 
-| Cookie | https | http (local development relay) |
-|---|---|---|
-| Name | `__Host-pockode_preview` | `pockode_preview` |
-| Attributes | `Secure; HttpOnly; SameSite=Lax; Path=/` | `HttpOnly; SameSite=Lax; Path=/` |
-
-`Max-Age` is the 400 days browsers cap it at: expiry is the session store's decision, as it is for the app's token. The `__Host-` prefix makes the cookie host-only and stops any other subdomain of the relay domain from planting one of that name; plain http cannot carry it.
+The cookie is `__Host-pockode_preview` with `Secure; HttpOnly; SameSite=Lax; Path=/`. `Max-Age` is the 400 days browsers cap it at: expiry is the session store's decision, as it is for the app's token. The `__Host-` prefix makes the cookie host-only and stops any other subdomain of the relay domain from planting one of that name.
 
 ##### Ticket Login
 

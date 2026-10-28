@@ -22,8 +22,6 @@ const previewReservedPrefix = "/__pockode/"
 // "<subdomain>.<relay server>". The cloud passes the public Host through
 // unchanged, so the port is read from it here.
 type previewSite struct {
-	// scheme is the public scheme of the preview URL, the same as the app's.
-	scheme string
 	// labelPrefix is "<subdomain>-".
 	labelPrefix string
 	domain      string
@@ -31,7 +29,6 @@ type previewSite struct {
 
 func newPreviewSite(cfg *StoredConfig) previewSite {
 	return previewSite{
-		scheme:      publicScheme(cfg),
 		labelPrefix: cfg.Subdomain + "-",
 		domain:      cfg.RelayServer,
 	}
@@ -107,7 +104,7 @@ func (p *previewProxy) serve(w http.ResponseWriter, r *http.Request, port int) {
 			if origin := pr.In.Header.Get("Origin"); origin != "" && originHostIs(origin, pr.In.Host) {
 				pr.Out.Header.Set("Origin", "http://"+local)
 			}
-			stripCookie(pr.Out.Header, p.site.cookieName())
+			stripCookie(pr.Out.Header, previewCookieName)
 			// Only the client address: a public X-Forwarded-Host or -Proto
 			// would contradict the localhost Host and Origin, and frameworks
 			// that trust them (Next's Server Actions, Rails' host check)
@@ -121,7 +118,7 @@ func (p *previewProxy) serve(w http.ResponseWriter, r *http.Request, port int) {
 			// Host alone, so a scheme-relative "//localhost:<port>/..." is
 			// caught as well.
 			if loc, err := url.Parse(resp.Header.Get("Location")); err == nil && strings.EqualFold(loc.Host, local) {
-				loc.Scheme = p.site.scheme
+				loc.Scheme = "https"
 				loc.Host = publicHost
 				resp.Header.Set("Location", loc.String())
 			}

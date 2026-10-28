@@ -43,18 +43,13 @@ type previewAuth struct {
 	tickets  TicketRedeemer
 }
 
-// cookieName carries the "__Host-" prefix under https, which keeps another
+// previewCookieName carries the "__Host-" prefix, which keeps another
 // subdomain of the relay domain from planting a cookie of the same name for
-// this host. Plain http cannot carry the prefix.
-func (s previewSite) cookieName() string {
-	if s.scheme == "https" {
-		return "__Host-pockode_preview"
-	}
-	return "pockode_preview"
-}
+// this host.
+const previewCookieName = "__Host-pockode_preview"
 
 func (p *previewProxy) authenticated(r *http.Request) bool {
-	c, err := r.Cookie(p.site.cookieName())
+	c, err := r.Cookie(previewCookieName)
 	return err == nil && p.auth.sessions.Validate(c.Value)
 }
 
@@ -132,11 +127,11 @@ func (p *previewProxy) serveTicketLogin(w http.ResponseWriter, r *http.Request) 
 
 func (p *previewProxy) setSessionCookie(w http.ResponseWriter, token string) {
 	http.SetCookie(w, &http.Cookie{
-		Name:     p.site.cookieName(),
+		Name:     previewCookieName,
 		Value:    token,
 		Path:     "/",
 		MaxAge:   previewCookieMaxAge,
-		Secure:   p.site.scheme == "https",
+		Secure:   true,
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
 	})

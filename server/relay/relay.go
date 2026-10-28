@@ -287,22 +287,9 @@ func (m *Manager) setRemoteURL(url string) {
 }
 
 func buildRemoteURL(cfg *StoredConfig) string {
-	return fmt.Sprintf("%s://%s.%s", publicScheme(cfg), cfg.Subdomain, cfg.RelayServer)
-}
-
-// publicScheme is the scheme browsers reach this server through the relay
-// with; the local development relay serves plain HTTP.
-func publicScheme(cfg *StoredConfig) string {
-	if cfg.RelayServer == "local.pockode.com" {
-		return "http"
-	}
-	return "https"
+	return fmt.Sprintf("https://%s.%s", cfg.Subdomain, cfg.RelayServer)
 }
 
 func buildRelayWSURL(cfg *StoredConfig) string {
-	scheme := "wss"
-	if publicScheme(cfg) == "http" {
-		scheme = "ws"
-	}
-	return fmt.Sprintf("%s://%s.%s/relay", scheme, cfg.Subdomain, cfg.RelayServer)
+	return fmt.Sprintf("wss://%s.%s/relay", cfg.Subdomain, cfg.RelayServer)
 }

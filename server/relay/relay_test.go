@@ -14,71 +14,15 @@ import (
 	"github.com/coder/websocket"
 )
 
-func TestBuildRemoteURL(t *testing.T) {
-	tests := []struct {
-		name string
-		cfg  *StoredConfig
-		want string
-	}{
-		{
-			name: "production",
-			cfg: &StoredConfig{
-				Subdomain:   "abc123def456ghi789jkl0123",
-				RelayServer: "cloud.pockode.com",
-			},
-			want: "https://abc123def456ghi789jkl0123.cloud.pockode.com",
-		},
-		{
-			name: "local development",
-			cfg: &StoredConfig{
-				Subdomain:   "dev123",
-				RelayServer: "local.pockode.com",
-			},
-			want: "http://dev123.local.pockode.com",
-		},
+// No relay server gets a scheme of its own: the local development relay is
+// TLS like production.
+func TestBuildRelayURLs(t *testing.T) {
+	cfg := &StoredConfig{Subdomain: "abc123", RelayServer: "local.pockode.com"}
+	if got, want := buildRemoteURL(cfg), "https://abc123.local.pockode.com"; got != want {
+		t.Errorf("buildRemoteURL() = %v, want %v", got, want)
 	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := buildRemoteURL(tt.cfg)
-			if got != tt.want {
-				t.Errorf("buildRemoteURL() = %v, want %v", got, tt.want)
-			}
-		})
-	}
-}
-
-func TestBuildRelayWSURL(t *testing.T) {
-	tests := []struct {
-		name string
-		cfg  *StoredConfig
-		want string
-	}{
-		{
-			name: "production",
-			cfg: &StoredConfig{
-				Subdomain:   "abc123def456ghi789jkl0123",
-				RelayServer: "cloud.pockode.com",
-			},
-			want: "wss://abc123def456ghi789jkl0123.cloud.pockode.com/relay",
-		},
-		{
-			name: "local development",
-			cfg: &StoredConfig{
-				Subdomain:   "dev123",
-				RelayServer: "local.pockode.com",
-			},
-			want: "ws://dev123.local.pockode.com/relay",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := buildRelayWSURL(tt.cfg)
-			if got != tt.want {
-				t.Errorf("buildRelayWSURL() = %v, want %v", got, tt.want)
-			}
-		})
+	if got, want := buildRelayWSURL(cfg), "wss://abc123.local.pockode.com/relay"; got != want {
+		t.Errorf("buildRelayWSURL() = %v, want %v", got, want)
 	}
 }
 

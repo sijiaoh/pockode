@@ -71,8 +71,8 @@ func TestPreviewRefusesWithoutLiveSession(t *testing.T) {
 		{name: "no cookie"},
 		{name: "unknown session", cookie: "__Host-pockode_preview=forged"},
 		// Any other subdomain of the relay domain can set this one, which is
-		// why https reads only the __Host- name.
-		{name: "the http cookie name under https", cookie: "pockode_preview=" + testToken},
+		// why only the __Host- name is read.
+		{name: "the name without the __Host- prefix", cookie: "pockode_preview=" + testToken},
 	}
 
 	for _, tt := range tests {
@@ -154,51 +154,33 @@ func login(t *testing.T, proxy string, host, password string, cookie *http.Cooki
 }
 
 func TestPreviewLoginIssuesSessionCookie(t *testing.T) {
-	tests := []struct {
-		name        string
-		relayServer string
-		wantName    string
-		wantSecure  bool
-	}{
-		{name: "https", relayServer: "cloud.pockode.com", wantName: "__Host-pockode_preview", wantSecure: true},
-		// The local development relay is plain http, where a Secure or
-		// __Host- cookie would never be sent back.
-		{name: "http", relayServer: "local.pockode.com", wantName: "pockode_preview"},
+	port, reached := reachablePort(t)
+	sessions := newTestSessions()
+	unused := closedPort(t)
+	proxy := serveProxyFor(t, unused, unused, testSite, sessions)
+	host := previewHost(port)
+
+	resp := login(t, proxy.URL, host, testPassword, nil)
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusNoContent)
+	}
+	cookies := resp.Cookies()
+	if len(cookies) != 1 {
+		t.Fatalf("cookies = %v, want exactly one", cookies)
+	}
+	c := cookies[0]
+	if c.Name != "__Host-pockode_preview" || !c.Secure || !c.HttpOnly ||
+		c.SameSite != http.SameSiteLaxMode || c.Path != "/" || c.Domain != "" ||
+		c.MaxAge != 400*24*60*60 {
+		t.Errorf("cookie = %+v, want __Host-pockode_preview; Secure; HttpOnly; SameSite=Lax; Path=/; no Domain; Max-Age 400 days", c)
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			port, reached := reachablePort(t)
-			sessions := newTestSessions()
-			unused := closedPort(t)
-			site := newPreviewSite(&StoredConfig{Subdomain: "abc123", RelayServer: tt.relayServer})
-			proxy := serveProxyFor(t, unused, unused, site, sessions)
-			host := "abc123-" + strconv.Itoa(port) + "." + tt.relayServer
-
-			resp := login(t, proxy.URL, host, testPassword, nil)
-			if resp.StatusCode != http.StatusNoContent {
-				t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusNoContent)
-			}
-			cookies := resp.Cookies()
-			if len(cookies) != 1 {
-				t.Fatalf("cookies = %v, want exactly one", cookies)
-			}
-			c := cookies[0]
-			if c.Name != tt.wantName || c.Secure != tt.wantSecure || !c.HttpOnly ||
-				c.SameSite != http.SameSiteLaxMode || c.Path != "/" || c.Domain != "" ||
-				c.MaxAge != 400*24*60*60 {
-				t.Errorf("cookie = %+v, want %s; Secure=%v; HttpOnly; SameSite=Lax; Path=/; no Domain; Max-Age 400 days",
-					c, tt.wantName, tt.wantSecure)
-			}
-
-			// The cookie is what the next request is let through on.
-			req, _ := http.NewRequest(http.MethodGet, proxy.URL+"/", nil)
-			req.Host = host
-			req.AddCookie(&http.Cookie{Name: c.Name, Value: c.Value})
-			if resp, _ := doRequest(t, req); resp.StatusCode != http.StatusOK || !reached.Load() {
-				t.Errorf("request with the issued cookie: status %d, forwarded %v", resp.StatusCode, reached.Load())
-			}
-		})
+	// The cookie is what the next request is let through on.
+	req, _ := http.NewRequest(http.MethodGet, proxy.URL+"/", nil)
+	req.Host = host
+	req.AddCookie(&http.Cookie{Name: c.Name, Value: c.Value})
+	if resp, _ := doRequest(t, req); resp.StatusCode != http.StatusOK || !reached.Load() {
+		t.Errorf("request with the issued cookie: status %d, forwarded %v", resp.StatusCode, reached.Load())
 	}
 }
 
@@ -223,7 +205,7 @@ func TestPreviewLoginKeepsLiveSession(t *testing.T) {
 	unused := closedPort(t)
 	proxy := serveProxyFor(t, unused, unused, testSite, sessions)
 
-	live := &http.Cookie{Name: testSite.cookieName(), Value: testToken}
+	live := &http.Cookie{Name: previewCookieName, Value: testToken}
 	resp := login(t, proxy.URL, previewHost(5173), testPassword, live)
 	if resp.StatusCode != http.StatusNoContent {
 		t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusNoContent)
@@ -247,12 +229,12 @@ func TestPreviewLoginLockedOutKeepsSessionsAndTickets(t *testing.T) {
 		}
 	}
 
-	live := &http.Cookie{Name: testSite.cookieName(), Value: testToken}
+	live := &http.Cookie{Name: previewCookieName, Value: testToken}
 	if resp := login(t, p.url, host, "wrong", live); resp.StatusCode != http.StatusNoContent {
 		t.Errorf("live session while locked out: status %d, want %d", resp.StatusCode, http.StatusNoContent)
 	}
 	resp := ticketLogin(t, p.url, host, url.Values{"ticket": {testTicket}}.Encode(), nil)
-	if cookies := resp.Cookies(); len(cookies) != 1 || cookies[0].Name != testSite.cookieName() {
+	if cookies := resp.Cookies(); len(cookies) != 1 || cookies[0].Name != previewCookieName {
 		t.Errorf("ticket while locked out: cookies %v, want a session cookie", cookies)
 	}
 
@@ -369,7 +351,7 @@ func TestPreviewTicketLoginIssuesSessionCookie(t *testing.T) {
 	resp := ticketLogin(t, p.url, host, url.Values{"ticket": {testTicket}, "next": {"https://evil.example/"}}.Encode(), nil)
 	wantRedirectToRoot(t, resp)
 	cookies := resp.Cookies()
-	if len(cookies) != 1 || cookies[0].Name != testSite.cookieName() || !cookies[0].HttpOnly || !cookies[0].Secure ||
+	if len(cookies) != 1 || cookies[0].Name != previewCookieName || !cookies[0].HttpOnly || !cookies[0].Secure ||
 		cookies[0].SameSite != http.SameSiteLaxMode || cookies[0].MaxAge != previewCookieMaxAge {
 		t.Fatalf("cookies = %v, want the password login's session cookie", cookies)
 	}
@@ -431,7 +413,7 @@ func TestPreviewTicketLoginFallsBackToPasswordPage(t *testing.T) {
 func TestPreviewTicketLoginKeepsLiveSession(t *testing.T) {
 	p := serveTicketProxy(t)
 
-	live := &http.Cookie{Name: testSite.cookieName(), Value: testToken}
+	live := &http.Cookie{Name: previewCookieName, Value: testToken}
 	resp := ticketLogin(t, p.url, previewHost(5173), url.Values{"ticket": {testTicket}}.Encode(), live)
 	wantRedirectToRoot(t, resp)
 	if len(resp.Cookies()) != 0 || p.sessions.issuedCount() != 0 {
@@ -466,7 +448,7 @@ func TestPreviewTicketLoginRefusesFrames(t *testing.T) {
 }
 
 func TestPreviewDoesNotForwardSessionCookie(t *testing.T) {
-	name := testSite.cookieName()
+	name := previewCookieName
 	tests := []struct {
 		name    string
 		cookies []string
@@ -540,7 +522,7 @@ func TestPreviewRefusesRequestsFromOtherOrigins(t *testing.T) {
 			}
 			req.Host = previewHost(port)
 			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-			req.AddCookie(&http.Cookie{Name: testSite.cookieName(), Value: testToken})
+			req.AddCookie(&http.Cookie{Name: previewCookieName, Value: testToken})
 			for k, v := range tt.headers {
 				req.Header.Set(k, strings.ReplaceAll(v, self, "https://"+previewHost(port)))
 			}

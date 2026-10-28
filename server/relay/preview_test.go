@@ -76,7 +76,7 @@ func previewRequest(t *testing.T, proxy *httptest.Server, port int, method, path
 		t.Fatalf("build request: %v", err)
 	}
 	req.Host = previewHost(port)
-	req.AddCookie(&http.Cookie{Name: testSite.cookieName(), Value: testToken})
+	req.AddCookie(&http.Cookie{Name: previewCookieName, Value: testToken})
 	return req
 }
 
@@ -217,7 +217,7 @@ func dialPreview(ctx context.Context, proxy *httptest.Server, port int, origin s
 		HTTPClient: client,
 		HTTPHeader: http.Header{
 			"Origin": {origin},
-			"Cookie": {testSite.cookieName() + "=" + testToken},
+			"Cookie": {previewCookieName + "=" + testToken},
 		},
 	})
 }

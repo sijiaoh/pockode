@@ -18,7 +18,7 @@ PASSWORD="${POCKODE_PASSWORD:-dev-password}"
 # Resolve to absolute path (relative paths break when subprocesses cd)
 WORK_DIR="$(cd "${WORK_DIR:-$PROJECT_DIR}" && pwd)"
 LOG_LEVEL="${LOG_LEVEL:-debug}"
-CLOUD_URL="${CLOUD_URL:-http://local.pockode.com}"
+CLOUD_URL="${CLOUD_URL:-https://local.pockode.com}"
 
 if [ "$CLUSTER_MODE" = true ]; then
     # Cluster mode configuration
