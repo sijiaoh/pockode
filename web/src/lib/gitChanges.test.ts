@@ -14,6 +14,7 @@ import {
 	lineStatOf,
 	orderChanges,
 	reviewSideOf,
+	stagesOnlyWhole,
 	sumLines,
 } from "./gitChanges";
 
@@ -322,5 +323,42 @@ describe("buildChangeTree", () => {
 			path: "web/src/components",
 		});
 		expect(paths(web.files)).toEqual(["web/index.html"]);
+	});
+});
+
+describe("stagesOnlyWhole", () => {
+	const sides = (staged?: string, unstaged?: string, binary = false) =>
+		({
+			path: "a",
+			submodule: false,
+			...(staged && { staged: { path: "a", status: staged } }),
+			...(unstaged && {
+				unstaged: { path: "a", status: unstaged, ...(binary && { binary }) },
+			}),
+		}) as ChangedFile;
+
+	it.each([
+		["binary", sides(undefined, "M", true), true],
+		["turned into a symlink", sides(undefined, "T"), true],
+		["modified", sides(undefined, "M"), false],
+		["added, then edited", sides("A", "M"), false],
+	])("%s", (_, file, expected) => {
+		expect(stagesOnlyWhole(file, false)).toBe(expected);
+	});
+
+	// Read through collectChanges, which is what turns git's letters into a
+	// conflict record: the letters themselves never reach a caller.
+	it.each([
+		["conflicted", "U", "U"],
+		["added by both", "A", "A"],
+		["deleted by both", "D", "D"],
+	] as const)("%s", (_, staged, unstaged) => {
+		const [conflicted] = collectChanges({
+			staged: [{ path: "a", status: staged }],
+			unstaged: [{ path: "a", status: unstaged }],
+			conflicted: ["a"],
+		} as GitStatus);
+		expect(stagesOnlyWhole(conflicted, false)).toBe(true);
+		expect(stagesOnlyWhole(conflicted, true)).toBe(true);
 	});
 });

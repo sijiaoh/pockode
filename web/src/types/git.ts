@@ -17,8 +17,13 @@ export interface LineStat {
  */
 export interface FileStatus {
 	path: string;
-	/** `U` (or `A`/`D` on both sides) for a path in `GitStatus.conflicted`. */
-	status: "M" | "A" | "D" | "R" | "?" | "U";
+	/**
+	 * git's porcelain letter for the side, as the server passes it on. A path in
+	 * `GitStatus.conflicted` carries `U` (or `A`/`D` on both sides). `T` (a file
+	 * that turned into a symlink or back) is rarer and reads as a modification
+	 * wherever the workspace names the change.
+	 */
+	status: "M" | "A" | "D" | "R" | "?" | "U" | "T";
 	lines?: LineStat;
 	binary?: true;
 	/**
@@ -84,6 +89,12 @@ export type GitDiffData =
 			old_content: string;
 			new_content: string;
 			omitted?: undefined;
+			/**
+			 * One ID per `@@` hunk of `diff`, in order, for `stageHunk` /
+			 * `unstageHunk`. Absent where a hunk cannot be applied as shown:
+			 * whitespace hidden, a binary or conflicted file, a commit's diff.
+			 */
+			hunk_ids?: string[];
 	  }
 	| {
 			diff: "";

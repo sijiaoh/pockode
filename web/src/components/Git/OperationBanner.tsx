@@ -191,7 +191,7 @@ function FullBanner({
 			try {
 				return await abortRequest(kind);
 			} finally {
-				// A refusal too: -32005 says the status on screen is out of date.
+				// A refusal too: -32008 says the status on screen is out of date.
 				invalidateGitQueries(queryClient);
 			}
 		});

@@ -36,6 +36,7 @@ import {
 import {
 	type GitWrites,
 	gitWriteActions,
+	isPathWriting,
 	useWriteFailure,
 	WorktreeChangedError,
 } from "../../lib/gitWriteStore";
@@ -279,7 +280,7 @@ function ChangesSection({
 					<>
 						<ChangesHeader
 							files={files}
-							busy={files.some((f) => isWriting(writes, f.path))}
+							busy={files.some((f) => isPathWriting(writes, f.path))}
 							view={view}
 							onToggleAll={() => toggleFiles(files)}
 							onChangeView={gitChangesViewActions.setView}
@@ -321,7 +322,7 @@ function ChangesSection({
 					onClose={closeMenu}
 					onOpenFile={openFile}
 					onDiscard={discardFile}
-					busy={isWriting(writes, menuFile.path)}
+					busy={isPathWriting(writes, menuFile.path)}
 				/>
 			)}
 
@@ -336,11 +337,6 @@ function ChangesSection({
 			)}
 		</>
 	);
-}
-
-/** Either write leaves the other with a stale idea of the file. */
-function isWriting(writes: GitWrites, path: string): boolean {
-	return writes.toggling.has(path) || writes.discarding.has(path);
 }
 
 interface RowProps {
@@ -366,7 +362,7 @@ function FileRow({
 			file={file}
 			depth={depth}
 			isActive={activePath === file.path}
-			busy={isWriting(writes, file.path)}
+			busy={isPathWriting(writes, file.path)}
 			onToggle={onToggle}
 			onSelect={onSelect}
 			onMore={onMore}
@@ -420,7 +416,7 @@ function FolderRow({
 					<StageCheckbox
 						state={aggregateCheckState(files)}
 						label={`Stage folder ${folder.path}, ${describeStageable(files)}`}
-						busy={files.some((f) => isWriting(rowProps.writes, f.path))}
+						busy={files.some((f) => isPathWriting(rowProps.writes, f.path))}
 						onToggle={() => rowProps.onToggleFolder(files)}
 					/>
 				) : (

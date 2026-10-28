@@ -531,6 +531,14 @@ type CommitDraftFailedData struct {
 	Reason string `json:"reason"`
 }
 
+// GitHunkParams is the params for git.hunk.stage and git.hunk.unstage. The
+// hunk is one of the hunk_ids of the path's diff on the side the method takes
+// it from: the unstaged diff for stage, the staged one for unstage.
+type GitHunkParams struct {
+	Path   string `json:"path"`
+	HunkID string `json:"hunk_id"`
+}
+
 // GitLogParams is the params for git.log request.
 type GitLogParams struct {
 	Limit int `json:"limit,omitempty"` // default 50
@@ -601,6 +609,12 @@ const CodeGitBusy = -32001
 // from worktree.changed.
 const CodeNotGitRepo = -32002
 
+// CodeGitHunkStale answers git.hunk.stage or git.hunk.unstage when the hunk it
+// names is no longer in the file's current diff (git.ErrHunkStale): the file
+// changed after the client read the diff. Nothing was written; the client
+// rereads the diff and lets the user pick again, rather than retrying.
+const CodeGitHunkStale = -32005
+
 // GitBusyData is the data member of a CodeGitBusy error.
 type GitBusyData struct {
 	// Operation is what holds the worktree, in git.BusyError's vocabulary:
@@ -629,7 +643,7 @@ type GitAbortResult struct {
 // one in progress (git.OperationChangedError): it was finished or aborted
 // elsewhere, or another one started, since the user confirmed. Nothing ran —
 // whatever is in progress now is not what the user agreed to lose.
-const CodeGitOperationChanged = -32005
+const CodeGitOperationChanged = -32008
 
 // GitOperationChangedData is the data member of a CodeGitOperationChanged
 // error.
@@ -653,9 +667,9 @@ type GitOperationInProgressData struct {
 	Kind string `json:"kind"`
 }
 
-// CodeGitConflicted answers a git.add (without resolve), git.reset or
-// git.discard naming paths with unresolved conflicts
-// (git.ConflictedPathsError). Nothing ran, the other paths included.
+// CodeGitConflicted answers a git.add (without resolve), git.reset,
+// git.hunk.stage, git.hunk.unstage or git.discard naming paths with unresolved
+// conflicts (git.ConflictedPathsError). Nothing ran, the other paths included.
 const CodeGitConflicted = -32007
 
 // GitConflictedData is the data member of a CodeGitConflicted error.

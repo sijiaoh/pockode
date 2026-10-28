@@ -658,7 +658,12 @@ that cannot. That is what `web/tests/touchTarget.test.ts`
 enforces: the rule is the floor, not the helper, so a button that never reaches
 for a helper still has to state a number.
 
-### The one deliberate exemption
+### Deliberate exemptions
+
+Two controls are kept under the floor on purpose, each for a reason of its own.
+They are written down so the next reader does not "fix" them in passing.
+
+#### The sidebar's resize handle
 
 The sidebar's resize handle stays **8px** and is not grown to 44. Widening it
 would lay a 44px drag strip down the right edge of every row in the list —
@@ -668,13 +673,27 @@ width is a preference (P2); Delete is an operation.
 > **The floor exists to make operations reachable, not to make a preference
 > easier at the cost of an operation.**
 
-This is written down so the next reader does not "fix" it in passing.
-
 A keyboard does not need the strip to be wider either. The handle is a focusable
 WAI-ARIA window splitter (`role="separator"` with its value): the arrow keys move
 it a step at a time, and Home and End jump to its limits. Its focus
 indicator is the same accent line that hover shows. A focus ring around an 8px
 strip would be drawn over the column's own border.
+
+#### The review's line numbers
+
+In the Git review a line's number cell selects the line, for handing it to the
+agent or copying it ([git-changes-ui.md](git-changes-ui.md#selecting)). A cell
+is one line of code tall, about 20px on a phone. Growing every line to 44px
+would double the height of the code the review exists to read, and what a miss
+costs is small: it selects the neighbouring line, which shows at once in the
+highlight and in the selection bar's range, executes nothing, and is undone by
+the next tap. The one neighbour that does execute something, the hunk bar's
+stage box, keeps the floor's spacing from the gutter. The cells are not
+narrow: the unified column is at least 90px (the library sizes it to twice its
+widest number), held at 44px where a phone narrows it to one number, and split
+view's per-side cells, which the library sizes from 40px, get a 44px minimum width. These are
+table cells rather than buttons, so the scan below does not see them; the
+widths are in `index.css`, under the line selection rules.
 
 ### Outside the floor today
 

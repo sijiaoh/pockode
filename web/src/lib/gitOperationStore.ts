@@ -14,7 +14,7 @@ import { worktreeActions } from "./worktreeStore";
 
 /**
  * Which operation something is about: one by its `operationKey`, or — when
- * only the kind is known, as a -32005 names the new one — any of that kind.
+ * only the kind is known, as a -32008 names the new one — any of that kind.
  */
 export interface OperationRef {
 	kind: GitOperationKind;
@@ -51,7 +51,7 @@ export interface AbortRun {
 	/**
 	 * When the last abort was answered (`Date.now()`), 0 before any. A status
 	 * read before then cannot clear what the answer left: it predates it — a
-	 * -32005 names an operation that status has not shown yet.
+	 * -32008 names an operation that status has not shown yet.
 	 */
 	answeredAt: number;
 }

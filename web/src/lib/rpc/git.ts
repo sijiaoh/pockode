@@ -30,6 +30,15 @@ export interface GitActions {
 	 */
 	stage: (paths: string[], resolve?: boolean) => Promise<void>;
 	unstage: (paths: string[]) => Promise<void>;
+	/**
+	 * Stage one hunk of the path's unstaged diff, or unstage one of its staged
+	 * diff, by an ID from that diff's `hunk_ids`. A hunk the file no longer
+	 * has is refused with -32005 (server/rpc/types.go's CodeGitHunkStale) and
+	 * nothing is written: reread the diff rather than retry. A conflicted path
+	 * is refused with -32007, as a whole-file stage is.
+	 */
+	stageHunk: (path: string, hunkId: string) => Promise<void>;
+	unstageHunk: (path: string, hunkId: string) => Promise<void>;
 	/** Reverts unstaged edits; the server decides per path whether that means deleting it. */
 	discard: (paths: string[]) => Promise<void>;
 	commit: (message: string, amend: boolean) => Promise<void>;
@@ -50,7 +59,7 @@ export interface GitActions {
 	pull: () => Promise<number>;
 	push: (force: boolean) => Promise<void>;
 	/**
-	 * Abandons the operation of `kind` in progress. Refused with -32005 when
+	 * Abandons the operation of `kind` in progress. Refused with -32008 when
 	 * that is no longer the one in progress; nothing runs then.
 	 */
 	abort: (kind: GitOperationKind) => Promise<GitAbortResult>;
@@ -103,6 +112,18 @@ export function createGitActions(
 		},
 		unstage: async (paths: string[]): Promise<void> => {
 			await requireClient().request("git.reset", { paths });
+		},
+		stageHunk: async (path: string, hunkId: string): Promise<void> => {
+			await requireClient().request("git.hunk.stage", {
+				path,
+				hunk_id: hunkId,
+			});
+		},
+		unstageHunk: async (path: string, hunkId: string): Promise<void> => {
+			await requireClient().request("git.hunk.unstage", {
+				path,
+				hunk_id: hunkId,
+			});
 		},
 		discard: async (paths: string[]): Promise<void> => {
 			await requireClient().request("git.discard", { paths });

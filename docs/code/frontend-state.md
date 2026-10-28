@@ -259,7 +259,10 @@ What each holds:
   double-tapped into a collision. Put in that queue it would make a tap on a
   file wait behind a checkout, and put beside it as one more field it would
   blur what the store is: a queue of quick writes.
-- **`gitWriteStore`** — per worktree, the queue, the paths with a write pending,
+- **`gitWriteStore`** — per worktree, the queue, the paths with a write pending
+  (whole-file writes by path, hunk writes by path and hunk ID — a path holds
+  many hunks, and `isPathWriting` counts both as the file being busy:
+  [git-changes-ui.md](../git-changes-ui.md#in-flight-and-after)),
   and `failures`: the Changes list's banner. `fail` replaces whatever failure
   the worktree was showing, `succeed(paths)` clears it only when the success
   covers one of the paths that failed — another file succeeding says nothing

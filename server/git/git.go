@@ -564,12 +564,18 @@ type DiffOptions struct {
 // paths, so git pairs them as the status did; limited to the new path alone,
 // it would show the whole file as added.
 func diffFile(dir, path, origPath string, opts DiffOptions) (string, error) {
-	var args []string
+	// The format is pinned against the user's diff config, because a hunk of
+	// this output is what StageHunk hands to `git apply`: the file's own
+	// content, not an external driver's or a textconv's rendering of it —
+	// applied, a textconv'd hunk would write the rendering into the index — no
+	// colour, the a/ b/ prefixes apply expects, and three lines of context,
+	// which apply needs at least one of to place a hunk.
+	args := []string{"diff", "--no-ext-diff", "--no-textconv", "--no-color", "--src-prefix=a/", "--dst-prefix=b/", "--unified=3"}
 	if opts.Staged {
-		args = []string{"diff", "--cached", "--find-renames"}
+		args = append(args, "--cached", "--find-renames")
 	} else {
 		// As the working tree's numstat counts it (readNumstat).
-		args = []string{"diff", "--no-renames"}
+		args = append(args, "--no-renames")
 	}
 	if opts.HideWhitespace {
 		args = append(args, "-w")
@@ -587,13 +593,13 @@ func diffFile(dir, path, origPath string, opts DiffOptions) (string, error) {
 		args = append(args, pathspec)
 	}
 
-	cmd := gitCommand(dir, args...)
-	output, err := cmd.CombinedOutput()
+	// stdout alone: git warns on stderr (autocrlf's "LF will be replaced"),
+	// and a warning inside the diff would end up in a hunk.
+	output, err := execGitRaw(context.Background(), dir, args...)
 	if err != nil {
-		return "", fmt.Errorf("git diff failed: %w (output: %s)", err, string(output))
+		return "", fmt.Errorf("git diff failed: %w", err)
 	}
-
-	return string(output), nil
+	return output, nil
 }
 
 // resolveSubmodulePath resolves "submodule/path/to/file" to (dir/submodule, "path/to/file").
@@ -670,6 +676,11 @@ type DiffResult struct {
 	Size       int64               `json:"size,omitempty"`
 	MIME       string              `json:"mime,omitempty"`
 	Limit      int64               `json:"limit,omitempty"`
+	// HunkIDs names the hunks of Diff in the order their `@@` lines appear,
+	// for StageHunk and UnstageHunk. Absent when the hunks cannot be applied
+	// as shown: with whitespace hidden, for a binary or conflicted file, and
+	// for a commit's diff, which is history rather than something to stage.
+	HunkIDs []string `json:"hunk_ids,omitempty"`
 }
 
 // diffSide is one of the two versions of a file a diff compares.
@@ -809,15 +820,21 @@ func DiffWithContent(dir, path string, opts DiffOptions) (*DiffResult, error) {
 	}
 
 	var diff string
+	var hunkIDs []string
 	if !opts.Staged && status.IsUntracked(path) {
 		// From the content already read rather than the file again, which may
 		// have grown past the limit in between.
 		diff = untrackedDiff(relativePath, newContent)
+		// A binary file is drawn as text here, but staged as the file it is.
+		if !strings.Contains(newContent[:min(len(newContent), binarySniffLen)], "\x00") {
+			hunkIDs = hunkIDsFor(path, file, opts, diff)
+		}
 	} else {
 		diff, err = diffFile(actualDir, relativePath, file.OrigPath, opts)
 		if err != nil {
 			return nil, err
 		}
+		hunkIDs = hunkIDsFor(path, file, opts, diff)
 	}
 	if diff == "" {
 		return &DiffResult{}, nil
@@ -827,6 +844,7 @@ func DiffWithContent(dir, path string, opts DiffOptions) (*DiffResult, error) {
 		Diff:       diff,
 		OldContent: oldContent,
 		NewContent: newContent,
+		HunkIDs:    hunkIDs,
 	}, nil
 }
 

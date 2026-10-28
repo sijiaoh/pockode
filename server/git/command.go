@@ -106,6 +106,21 @@ func execGitRaw(ctx context.Context, dir string, args ...string) (string, error)
 	return string(output), nil
 }
 
+// execGitInput is execGit with input on stdin, for commands that read a patch
+// or content from it (`apply -`, `hash-object --stdin`).
+func execGitInput(dir string, input []byte, args ...string) (string, error) {
+	cmd := gitCommand(dir, args...)
+	cmd.Stdin = bytes.NewReader(input)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+
+	output, err := cmd.Output()
+	if err != nil {
+		return "", newCommandError(args, stderr.String(), err)
+	}
+	return strings.TrimSpace(string(output)), nil
+}
+
 // execGitLines is execGit split into lines.
 //
 // Safe for the ref listings it is used with: git rejects control characters in

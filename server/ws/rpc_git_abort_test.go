@@ -122,7 +122,7 @@ func TestHandler_GitWriteDuringOperation(t *testing.T) {
 	}
 }
 
-// A stage, unstage or discard of a conflicted path is a refusal naming the
+// A stage, unstage or discard of a conflicted path, whole or by hunk, is a refusal naming the
 // write and the paths; only a stage that says it resolves goes through.
 func TestHandler_GitWriteConflicted(t *testing.T) {
 	tests := []struct {
@@ -133,6 +133,8 @@ func TestHandler_GitWriteConflicted(t *testing.T) {
 		{"git.add", rpc.GitAddParams{Paths: []string{"test.txt"}}, "stage"},
 		{"git.reset", rpc.GitPathsParams{Paths: []string{"test.txt"}}, "unstage"},
 		{"git.discard", rpc.GitPathsParams{Paths: []string{"test.txt"}}, "discard"},
+		{"git.hunk.stage", rpc.GitHunkParams{Path: "test.txt", HunkID: "any"}, "stage"},
+		{"git.hunk.unstage", rpc.GitHunkParams{Path: "test.txt", HunkID: "any"}, "unstage"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.method, func(t *testing.T) {

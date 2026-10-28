@@ -231,7 +231,7 @@ describe("describeAbort", () => {
 
 describe("describeAbortFailure", () => {
 	const changed = (current: string) =>
-		new JSONRPCErrorException("operation changed", -32005, { current });
+		new JSONRPCErrorException("operation changed", -32008, { current });
 
 	it("says which operation is in progress instead, and that nothing ran", () => {
 		expect(describeAbortFailure(changed("merge"), "rebase")).toEqual({

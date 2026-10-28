@@ -14,6 +14,12 @@ export interface GitWrites {
 	toggling: Set<string>;
 	/** Paths with a discard queued or running. */
 	discarding: Set<string>;
+	/**
+	 * Hunk IDs with a stage or unstage queued or running, by path. A set of
+	 * their own because a path holds many hunks: keyed by path alone, a second
+	 * hunk's press would be dropped as a duplicate of the first.
+	 */
+	hunks: Map<string, Set<string>>;
 }
 
 /** A stage, unstage or discard from the Changes list that the user has not put away. */
@@ -97,7 +103,24 @@ export class WorktreeChangedError extends Error {
 }
 
 /** A worktree nothing has been written in, as a stable identity for selectors. */
-const IDLE: GitWrites = { toggling: new Set(), discarding: new Set() };
+const IDLE: GitWrites = {
+	toggling: new Set(),
+	discarding: new Set(),
+	hunks: new Map(),
+};
+
+/**
+ * Whether any write — of the whole file or of one of its hunks — is pending
+ * on the path. Each of them leaves the others with a stale idea of the file,
+ * so every control writing it waits for all of them.
+ */
+export function isPathWriting(writes: GitWrites, path: string): boolean {
+	return (
+		writes.toggling.has(path) ||
+		writes.discarding.has(path) ||
+		writes.hunks.has(path)
+	);
+}
 
 /**
  * The tail of each worktree's queue. Outside the store because nothing renders
@@ -127,6 +150,64 @@ function setPending(
 	});
 }
 
+function setHunkPending(
+	worktree: string,
+	path: string,
+	hunkId: string,
+	pending: boolean,
+) {
+	useGitWriteStore.setState((s) => {
+		const current = s.writes[worktree] ?? IDLE;
+		const hunks = new Map(current.hunks);
+		const ids = new Set(hunks.get(path));
+		if (pending) ids.add(hunkId);
+		else ids.delete(hunkId);
+		if (ids.size > 0) hunks.set(path, ids);
+		else hunks.delete(path);
+		return { writes: { ...s.writes, [worktree]: { ...current, hunks } } };
+	});
+}
+
+/**
+ * Runs `action` once everything already queued for the worktree has settled,
+ * and `release` after it either way.
+ */
+function enqueue(
+	worktree: string,
+	action: () => Promise<unknown>,
+	release: () => void,
+): Promise<void> {
+	const previous = queues.get(worktree) ?? Promise.resolve();
+	// Released inside the chain rather than after it, so that a caller which
+	// has seen this settle is looking at rows that are no longer pending.
+	const settled = previous.then(async () => {
+		try {
+			// Checked here rather than when the write was queued: this is the
+			// moment the request is actually sent, and the only one at which
+			// the worktree it will reach is known.
+			if (worktreeActions.getCurrent() !== worktree) {
+				throw new WorktreeChangedError();
+			}
+			await action();
+		} finally {
+			release();
+		}
+	});
+	// What the next caller waits on, with the outcome swallowed: the queue
+	// only tracks "is anything still running here".
+	const tail = settled.then(
+		() => {},
+		() => {},
+	);
+	queues.set(worktree, tail);
+	void tail.then(() => {
+		// Only if nothing has queued behind it, or this would drop a live queue.
+		if (queues.get(worktree) === tail) queues.delete(worktree);
+	});
+
+	return settled;
+}
+
 export const gitWriteActions = {
 	/**
 	 * Queues one write behind whatever this worktree is already writing.
@@ -138,8 +219,10 @@ export const gitWriteActions = {
 	 * WorktreeChangedError, which the workspace drops rather than reports:
 	 * nothing was written, so there is nothing to tell.
 	 *
-	 * Paths that already have a write pending are left out: that request is
-	 * doing this one's job, and the pending sets count a path once. A call left
+	 * Paths that already have a write of the whole file pending are left out:
+	 * that request is doing this one's job, and the pending sets count a path
+	 * once. A pending hunk write does not drop the path — this one simply
+	 * queues behind it — though every control that starts one waits for it. A call left
 	 * with nothing at all to do resolves as if it had succeeded, which it can
 	 * afford to because every control that could raise one is disabled while the
 	 * write it would duplicate is pending — and because the request that *is*
@@ -160,36 +243,39 @@ export const gitWriteActions = {
 		if (paths.length === 0) return Promise.resolve();
 
 		setPending(worktree, kind, paths, true);
-
-		const previous = queues.get(worktree) ?? Promise.resolve();
-		// Cleared inside the chain rather than after it, so that a caller which
-		// has seen this settle is looking at rows that are no longer pending.
-		const settled = previous.then(async () => {
-			try {
-				// Checked here rather than when the write was queued: this is the
-				// moment the request is actually sent, and the only one at which
-				// the worktree it will reach is known.
-				if (worktreeActions.getCurrent() !== worktree) {
-					throw new WorktreeChangedError();
-				}
-				await action(paths);
-			} finally {
-				setPending(worktree, kind, paths, false);
-			}
-		});
-		// What the next caller waits on, with the outcome swallowed: the queue
-		// only tracks "is anything still running here".
-		const tail = settled.then(
-			() => {},
-			() => {},
+		return enqueue(
+			worktree,
+			() => action(paths),
+			() => setPending(worktree, kind, paths, false),
 		);
-		queues.set(worktree, tail);
-		void tail.then(() => {
-			// Only if nothing has queued behind it, or this would drop a live queue.
-			if (queues.get(worktree) === tail) queues.delete(worktree);
-		});
+	},
 
-		return settled;
+	/**
+	 * Queues the stage or unstage of one hunk, as `run` queues a file's.
+	 *
+	 * Dropped, resolving, on the same terms as `run`: when the same hunk is
+	 * already pending, or a whole-file write is pending on its path — that
+	 * write will have moved the hunk by the time this one's turn comes, and
+	 * the hunk's box is busy meanwhile, so nothing should be asking.
+	 */
+	runHunk: (
+		worktree: string,
+		path: string,
+		hunkId: string,
+		action: () => Promise<unknown>,
+	): Promise<void> => {
+		const { toggling, discarding, hunks } = writesOf(worktree);
+		if (
+			toggling.has(path) ||
+			discarding.has(path) ||
+			hunks.get(path)?.has(hunkId)
+		) {
+			return Promise.resolve();
+		}
+		setHunkPending(worktree, path, hunkId, true);
+		return enqueue(worktree, action, () =>
+			setHunkPending(worktree, path, hunkId, false),
+		);
 	},
 
 	/** Replaces whatever failure the worktree was showing: the newest is the one to read. */

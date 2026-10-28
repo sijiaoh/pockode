@@ -35,6 +35,20 @@ const OPERATION_IN_PROGRESS_CODE = -32006;
 const CONFLICTED_CODE = -32007;
 
 /**
+ * Where: server/rpc/types.go's CodeGitHunkStale. The hunk named is no longer
+ * in the file's diff — the file changed after the diff on screen was read —
+ * and nothing was written.
+ */
+const GIT_HUNK_STALE_CODE = -32005;
+
+/** Whether a hunk write was refused because the diff it was read from is out of date. */
+export function isHunkStale(error: unknown): boolean {
+	return (
+		error instanceof JSONRPCErrorException && error.code === GIT_HUNK_STALE_CODE
+	);
+}
+
+/**
  * The operations the server names in a refusal, each as the gerund that goes
  * after "busy". The keys are the contract (server/git/lock.go); the values are
  * the only part a user reads, so they say what the workspace calls the action

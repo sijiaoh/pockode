@@ -766,6 +766,10 @@ func (h *rpcMethodHandler) Handle(ctx context.Context, conn *jsonrpc2.Conn, req 
 		h.handleGitAdd(ctx, conn, req, wt)
 	case "git.reset":
 		h.handleGitReset(ctx, conn, req, wt)
+	case "git.hunk.stage":
+		h.handleGitHunk(ctx, conn, req, wt, false)
+	case "git.hunk.unstage":
+		h.handleGitHunk(ctx, conn, req, wt, true)
 	case "git.discard":
 		h.handleGitDiscard(ctx, conn, req, wt)
 	case "git.commit":

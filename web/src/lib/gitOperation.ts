@@ -349,7 +349,7 @@ export function describeAbort(
  * Where: server/rpc/types.go's CodeGitOperationChanged. The operation the
  * user confirmed is no longer the one in progress, and nothing ran.
  */
-const OPERATION_CHANGED_CODE = -32005;
+const OPERATION_CHANGED_CODE = -32008;
 
 /** The kind in progress now when the server refused for that reason. */
 export function changedOperation(

@@ -175,6 +175,17 @@ export function reviewSideOf(file: ChangedFile, staged: boolean): boolean {
 	return !file.unstaged;
 }
 
+/**
+ * Whether the server sends no hunk IDs for the side whatever the whitespace
+ * setting, so it can only be staged whole: binary, conflicted, or turned into
+ * a symlink or back (docs/git.md#staging-hunks). A conflict is read from
+ * `conflict`, since collectChanges leaves such a record without sides.
+ */
+export function stagesOnlyWhole(file: ChangedFile, staged: boolean): boolean {
+	const side = staged ? file.staged : file.unstaged;
+	return !!file.conflict || !!side?.binary || side?.status === "T";
+}
+
 export function changeKindOf(file: ChangedFile): ChangeKind {
 	// A conflict deleted on one side still has the other side's file on disk.
 	if (file.conflict) {

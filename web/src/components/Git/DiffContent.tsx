@@ -1,4 +1,6 @@
-import { memo } from "react";
+import { memo, type ReactNode } from "react";
+import type { DiffHunk } from "../../lib/diffHunks";
+import type { LinePress, LineView } from "../../lib/diffRows";
 import { useDiffSettings, useGitDiffWrap } from "../../lib/diffSettingsStore";
 import type { GitDiffData } from "../../types/git";
 import FileBody from "../Files/FileBody";
@@ -12,12 +14,20 @@ interface Props {
 	 * file diff does not.
 	 */
 	split?: boolean;
+	/** A title row for each hunk; see DiffViewer. */
+	renderHunkBar?: (hunk: DiffHunk, index: number) => ReactNode;
+	/** Line selection by the gutter; see DiffViewer. */
+	onLinePress?: (press: LinePress) => void;
+	selectedLines?: { view: LineView; keys: ReadonlySet<string> } | null;
 }
 
 const DiffContent = memo(function DiffContent({
 	data,
 	fileName,
 	split,
+	renderHunkBar,
+	onLinePress,
+	selectedLines,
 }: Props) {
 	const { wrap } = useGitDiffWrap();
 	const { hideWhitespace, setHideWhitespace } = useDiffSettings();
@@ -82,6 +92,9 @@ const DiffContent = memo(function DiffContent({
 			newContent={newContent}
 			wrap={wrap}
 			split={split}
+			renderHunkBar={renderHunkBar}
+			onLinePress={onLinePress}
+			selectedLines={selectedLines}
 		/>
 	);
 });

@@ -280,7 +280,7 @@ describe("OperationBanner abort", () => {
 	it("says so when another operation took its place, and nothing ran", async () => {
 		const user = userEvent.setup();
 		abort.mockRejectedValue(
-			new JSONRPCErrorException("changed", -32005, { current: "merge" }),
+			new JSONRPCErrorException("changed", -32008, { current: "merge" }),
 		);
 		renderBanner(rebaseStatus(["b.ts"]));
 
