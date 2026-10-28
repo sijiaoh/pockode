@@ -1081,9 +1081,9 @@ kept for when one appears ([git-ui.md](git-ui.md#projects-without-a-repository))
 
 The chip reads `Contents` rather than `File contents`; the long form stays in
 its `title`. Side by side the two chips carry no `overflow-hidden`, so their
-floor is their own text — at the long label they needed ~245px and overflowed a
-240px panel — and the row wraps (`flex-wrap`) rather than scrolling sideways
-inside a panel that narrow.
+floor is their own text — at the long label they needed ~245px and overflowed
+the 240px panel that was then the sidebar's minimum — and the row wraps
+(`flex-wrap`) rather than scrolling sideways inside a panel that narrow.
 
 Since respecting `.gitignore` defaults to **on**, an absent entry has to read as
 true and only an explicit `"false"` turns it off. `path` is never sent;
@@ -1124,8 +1124,8 @@ files. Content mode groups by file and previews its 3 best lines — those with
 its place is never hidden under the hint. A `+N more` hint counts the lines the
 server returned but the list withholds — not every remaining match in the file.
 Snippets drop leading indentation and re-anchor on the first match so it stays
-visible in a ~250px sidebar row. An empty result offers the two escape hatches
-that usually explain it — stop respecting `.gitignore`, or search contents
+visible in a sidebar row under 300px wide. An empty result offers the two escape
+hatches that usually explain it — stop respecting `.gitignore`, or search contents
 instead of names — so a dead end is one tap from a wider search rather than a
 retyped query.
 

@@ -21,7 +21,7 @@ segments, the top bar, layout, commit bar, amend, the sheets), with its
 Changes list in [git-changes-ui.md](git-changes-ui.md).
 A rule stated here is referenced from there, not copied. Nor does it describe how either panel answers the *viewport*:
 the width ladder, the pointer gates and the hit-area floors are
-[responsive-ui.md](responsive-ui.md)'s. The 240px below is a **container** width,
+[responsive-ui.md](responsive-ui.md)'s. The 280px below is a **container** width,
 which is why it lives here.
 
 ## What went wrong, and what it teaches
@@ -42,9 +42,9 @@ and fill, and the standing upload destination on a folder row. Six meanings for
 one colour, three of them on screen at once, and the loudest of them (the filled
 upload button) belonged to the rarest action in the panel.
 
-**Fixed rows were not built to be narrow.** The sidebar is 288px on a phone and
-resizes down to 240px on desktop, but rows were composed at whatever width the
-author had. Two of them broke; the search row broke visibly.
+**Fixed rows were not built to be narrow.** The sidebar was then 288px on a
+phone and resized down to 240px on desktop, but rows were composed at whatever
+width the author had. Two of them broke; the search row broke visibly.
 
 ## Principles
 
@@ -62,7 +62,7 @@ author had. Two of them broke; the search row broke visibly.
    never wears accent merely to announce that it exists.
 4. **One hierarchy level per panel.** Groups have headers; groups do not live
    inside a section that also has a header.
-5. **Every fixed row survives 240px.** Stated as a rule in
+5. **Every fixed row survives 280px.** Stated as a rule in
    [The narrow-width rule](#the-narrow-width-rule), because both width bugs were
    the same bug.
 6. **Nothing new is introduced to fix layout.** No new dependency, no new token,
@@ -98,10 +98,29 @@ not on the commit button**.
 
 ## The narrow-width rule
 
-The sidebar is `w-72` (288px) as a mobile drawer and 240–500px as a resizable,
-collapsible desktop column (`web/src/components/Layout/Sidebar.tsx`; its edge is
+The sidebar is a drawer below `expanded` and a resizable, collapsible column
+at and above it (`web/src/components/Layout/Sidebar.tsx`; the column's edge is
 the [column resize handle](responsive-ui.md#the-column-resize-handle) the Git
-list column shares). 240px is the design width; anything wider is slack.
+list column shares). Its widths are one rule for every tab — no tab gets a
+width of its own:
+
+| | Width | Why |
+|---|---|---|
+| Drawer | viewport − 56px, at most 400px | The 56px strip of chat left showing says the panel is a drawer over the chat rather than a page, is where a tap closes it, and shows where that tap goes back to. The 56 is Material Design's mobile navigation drawer, which is the screen width less 56dp, the mobile app bar's height. 400px caps it on a tablet, where the screen less 56 would be far wider than the panel's rows need |
+| Column minimum | 280px | The narrowest a column in this app has been built and checked at — the Git workspace's list column ([git-ui.md](git-ui.md#at-expanded-two-columns)) |
+| Column default | 320px | The Git list column's default, the floor of its `clamp(320px, 40%, 560px)` ([git-ui.md](git-ui.md#at-expanded-two-columns)) |
+| Column maximum | 500px | A user who drags it out that far has made their own trade with the chat beside it ([responsive-ui.md](responsive-ui.md#why-the-two-column-threshold-is-1024-and-not-768)) |
+
+A width the user stored is kept as it was and only drawn within the limits, so
+a stored width below a raised minimum shows at the minimum — the nearest to the
+narrow column they chose — rather than falling back to the default they had
+moved away from. `useResizableWidth` holds this for every column it drives, the
+Git list column included.
+
+**280px is the design width**; anything wider is slack. The drawer meets it on a
+336px screen and only a narrower phone takes it below — 264px on a 320px
+screen. The rule below is what keeps that case honest: a row built to it only
+truncates further, it does not break.
 
 > In a fixed row, **exactly one** element is `flex-1 min-w-0` and truncates.
 > Every other element is `shrink-0` and is either icon-only or at most two short
@@ -111,9 +130,10 @@ list column shares). 240px is the design width; anything wider is slack.
 The Files search row broke all three clauses at once, which is why it was the row
 that visibly failed. Its field wrapper was `flex-1` without `min-w-0`, so its
 floor was the sum of its own icons (~84px); beside it sat an upload button that
-was `shrink-0` and carried a folder name up to `max-w-[7rem]` (112px). At 240px
-the row's minimum was ~266px: the field was crushed to 84px first, then the row
-overflowed the panel and the button left the screen. On the 288px drawer the
+was `shrink-0` and carried a folder name up to `max-w-[7rem]` (112px). At the
+240px minimum the column had then, the row's minimum was ~266px: the field was
+crushed to 84px first, then the row overflowed the panel and the button left the
+screen. On the 288px drawer of the time the
 field was left ~106px, which is the "the search box disappeared" report. With the
 `min-w-0` added and the row's one other element icon-only — today the project
 root's `…`, which replaced that button — the floor is ~144px and the field takes
@@ -419,7 +439,10 @@ taller.
   in both the drawer and the desktop column, since an accent ring drawn
   straight onto an accent fill cannot be seen. The row keeps the search row's
   `p-2`, and `gap-2` keeps 8px between the two 44px hit areas on a coarse
-  pointer.
+  pointer. The filter's dropdown is positioned inside that inset the way the
+  worktree switcher's is, so on desktop it too spans exactly the New Chat row.
+  A panel of its own width hung off the filter button would outgrow a column at
+  its minimum, and the column clips it.
 
 ## The Git tab
 

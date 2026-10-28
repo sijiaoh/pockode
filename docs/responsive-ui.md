@@ -14,7 +14,7 @@ ladder, the two pointer gates, hover reveal, hit areas, which event primitive to
 use for which job, and which box owns the scroll boundary. It does **not** cover
 any single panel's shape: [sidebar-ui.md](sidebar-ui.md) owns what the two
 sidebar panels share, including the visual weight rungs this file sizes hit
-areas against and the narrow-width rule for what fits **inside** a 240px
+areas against and the narrow-width rule for what fits **inside** a 280px
 container.
 
 > **The dividing line with sidebar-ui.md:** if a number is a **viewport** width,
@@ -96,8 +96,8 @@ available. The shell and its contents reached opposite conclusions about the
 same screen. That is not "a bit cramped", it is self-contradiction.
 
 1024 is the smallest number that makes the contradiction go away: with the
-sidebar at its [240px minimum](sidebar-ui.md#the-narrow-width-rule), the content
-area gets 784px, comfortably above
+sidebar at its [280px minimum](sidebar-ui.md#the-narrow-width-rule), the content
+area gets 744px, and 704px beside its 320px default — both comfortably above
 `sm`. (A user who then drags the sidebar out to 500px has made their own
 trade-off; that is not the rule failing.)
 
@@ -435,7 +435,7 @@ reason.
 2. **Folded into a `…` menu opening a sheet.** For rows with ≥2 secondary
    actions, where always-visible icons would eat the title's room to truncate.
    [sidebar-ui.md's narrow-width rule](sidebar-ui.md#the-narrow-width-rule)
-   decides when: two standing icons are enough to break a 240px row.
+   decides when: two standing icons are enough to break a 280px row.
 3. **A separate entry point** (long-press menu, swipe). **Only ever in addition
    to 1 or 2, never as the only path** — it is invisible, therefore
    undiscoverable.
@@ -1275,5 +1275,5 @@ overlays (hence `click`), and the drawer's open state survived a rotation into
 project-management system. A rule set that cuts across every panel in both
 front ends is none of those, so it sits beside [sidebar-ui.md](sidebar-ui.md),
 which is here for the same reason. It holds only what no other document owns:
-the 240px container floor stays in `sidebar-ui.md`, the 36px visual rung stays
+the 280px container floor stays in `sidebar-ui.md`, the 36px visual rung stays
 in `sidebar-ui.md`, and only the 44px coarse hit-area floor is defined here.
