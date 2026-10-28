@@ -3,9 +3,9 @@ import { useEffect, useId, useRef } from "react";
 import { useResizableWidth } from "../../hooks/useResizableWidth";
 import ResizeHandle from "../ui/ResizeHandle";
 
-const MIN_WIDTH = 240;
+const MIN_WIDTH = 280;
 const MAX_WIDTH = 500;
-const DEFAULT_WIDTH = 288; // w-72
+const DEFAULT_WIDTH = 320;
 
 interface Props {
 	/** On screen: the drawer open, or the column not collapsed. */
@@ -133,12 +133,15 @@ function Sidebar({ isOpen, onClose, children, isExpanded }: Props) {
 				aria-label="Close sidebar"
 			/>
 
-			{/* outline-none: focused on open only to announce the dialog, and a
+			{/* The viewport less 56px, up to 400px: the strip of chat left showing
+			    says this is a drawer over it, is where a tap closes it, and shows
+			    where that tap goes back to.
+			    outline-none: focused on open only to announce the dialog, and a
 			    ring around the whole panel would read as a control. */}
 			<div
 				ref={drawerRef}
 				tabIndex={-1}
-				className="fixed inset-y-0 left-0 z-50 flex w-72 flex-col bg-th-bg-secondary outline-none"
+				className="fixed inset-y-0 left-0 z-50 flex w-[calc(100%-56px)] max-w-100 flex-col bg-th-bg-secondary outline-none"
 			>
 				<div className="flex flex-1 flex-col overflow-hidden">{children}</div>
 			</div>

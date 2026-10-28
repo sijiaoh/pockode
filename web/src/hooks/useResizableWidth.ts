@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 // One arrow press moves the edge by a step a sighted user can see land: the
-// sidebar's 240..500 is then about sixteen presses across.
+// sidebar's 280..500 is then about fourteen presses across.
 const KEYBOARD_STEP = 16;
 
 interface Options {
@@ -43,11 +43,15 @@ function clamp(value: number, min: number, max: number): number {
 	return Math.min(max, Math.max(min, value));
 }
 
-function readStored(key: string, min: number): number | null {
+// A stored width outside the limits is kept and drawn clamped, like one above
+// a shrunken max: under a raised minimum the user still gets the nearest to
+// the narrow column they chose, rather than the default they had moved away
+// from.
+function readStored(key: string): number | null {
 	const saved = localStorage.getItem(key);
 	if (!saved) return null;
 	const parsed = Number.parseInt(saved, 10);
-	return Number.isNaN(parsed) || parsed < min ? null : parsed;
+	return Number.isNaN(parsed) ? null : parsed;
 }
 
 /**
@@ -67,7 +71,7 @@ export function useResizableWidth({
 
 	// null while the user has not chosen, so a default relative to the
 	// container keeps following it.
-	const [preferred, setPreferred] = useState(() => readStored(storageKey, min));
+	const [preferred, setPreferred] = useState(() => readStored(storageKey));
 	const width = clamp(preferred ?? defaultWidth, min, max);
 
 	const [isDragging, setIsDragging] = useState(false);

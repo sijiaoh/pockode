@@ -17,7 +17,7 @@ interface Props {
 	/** Panel content */
 	children: ReactNode;
 	/** Desktop panel position relative to trigger */
-	desktopPosition?: "left" | "right" | "stretch";
+	desktopPosition?: "left" | "stretch";
 	/**
 	 * Which side of the trigger the dropdown grows towards. "above" is for
 	 * triggers that sit at the bottom of the viewport, where a panel hanging below
@@ -137,11 +137,7 @@ function ResponsivePanel({
 	if (!isOpen) return null;
 
 	const desktopPositionClass =
-		desktopPosition === "left"
-			? "left-0"
-			: desktopPosition === "right"
-				? "right-0"
-				: "left-0 right-0";
+		desktopPosition === "left" ? "left-0" : "left-0 right-0";
 
 	const desktopPlacementClass =
 		desktopPlacement === "above" ? "bottom-full mb-1" : "top-full mt-1";

@@ -73,8 +73,12 @@ export default function SessionFilterButton({ disabled }: Props) {
 		(c) => filter.kind === "worktree" && c.worktree === filter.worktree,
 	);
 
+	// No positioned box of its own: the dropdown stretches to the New Chat row
+	// it sits in, as the worktree switcher's does to the same row. A panel of
+	// its own width hung off this button outgrew the sidebar at its narrowest,
+	// and the column clips it.
 	return (
-		<div className="relative">
+		<>
 			<button
 				ref={triggerRef}
 				type="button"
@@ -103,7 +107,6 @@ export default function SessionFilterButton({ disabled }: Props) {
 				title="Filter sessions"
 				triggerRef={triggerRef}
 				isExpanded={isExpanded}
-				desktopPosition="right"
 				mobileMaxHeight="50dvh"
 			>
 				{/* The panel caps its own height and clips, so the one thing in it
@@ -174,7 +177,7 @@ export default function SessionFilterButton({ disabled }: Props) {
 					)}
 				</div>
 			</ResponsivePanel>
-		</div>
+		</>
 	);
 }
 

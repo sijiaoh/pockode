@@ -139,14 +139,14 @@ describe("Sidebar resize handle", () => {
 
 		const handle = screen.getByRole("separator", { name: "Resize sidebar" });
 		expect(handle).toHaveAttribute("aria-orientation", "vertical");
-		expect(handle).toHaveAttribute("aria-valuenow", "288");
-		expect(handle).toHaveAttribute("aria-valuemin", "240");
+		expect(handle).toHaveAttribute("aria-valuenow", "320");
+		expect(handle).toHaveAttribute("aria-valuemin", "280");
 		expect(handle).toHaveAttribute("aria-valuemax", "500");
 		const column = document.getElementById(
 			handle.getAttribute("aria-controls") ?? "",
 		);
 		expect(column).toContainElement(screen.getByText("sessions"));
-		expect(column).toHaveStyle({ width: "288px" });
+		expect(column).toHaveStyle({ width: "320px" });
 	});
 
 	// Each press is final, so it is kept the way a released drag is.
@@ -159,19 +159,19 @@ describe("Sidebar resize handle", () => {
 		expect(handle).toHaveFocus();
 
 		await user.keyboard("{ArrowRight}");
-		expect(handle).toHaveAttribute("aria-valuenow", "304");
-		expect(localStorage.getItem("pockode:sidebar-width")).toBe("304");
+		expect(handle).toHaveAttribute("aria-valuenow", "336");
+		expect(localStorage.getItem("pockode:sidebar-width")).toBe("336");
 
 		await user.keyboard("{ArrowLeft}{ArrowLeft}");
-		expect(handle).toHaveAttribute("aria-valuenow", "272");
+		expect(handle).toHaveAttribute("aria-valuenow", "304");
 
 		await user.keyboard("{End}{ArrowRight}");
 		expect(handle).toHaveAttribute("aria-valuenow", "500");
 		expect(localStorage.getItem("pockode:sidebar-width")).toBe("500");
 
 		await user.keyboard("{Home}{ArrowLeft}");
-		expect(handle).toHaveAttribute("aria-valuenow", "240");
-		expect(localStorage.getItem("pockode:sidebar-width")).toBe("240");
+		expect(handle).toHaveAttribute("aria-valuenow", "280");
+		expect(localStorage.getItem("pockode:sidebar-width")).toBe("280");
 	});
 
 	it("leaves modified arrows to the browser", async () => {
@@ -184,7 +184,7 @@ describe("Sidebar resize handle", () => {
 			"{Alt>}{ArrowLeft}{/Alt}{Control>}{ArrowRight}{/Control}",
 		);
 
-		expect(handle).toHaveAttribute("aria-valuenow", "288");
+		expect(handle).toHaveAttribute("aria-valuenow", "320");
 		expect(localStorage.getItem("pockode:sidebar-width")).toBeNull();
 	});
 
