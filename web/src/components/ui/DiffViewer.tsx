@@ -1,5 +1,4 @@
 import { type DiffFile, DiffModeEnum, DiffView } from "@git-diff-view/react";
-import "@git-diff-view/react/styles/diff-view-pure.css";
 import type { getDiffViewHighlighter } from "@git-diff-view/shiki";
 import { useIsExpanded } from "@pockode/shared";
 import {

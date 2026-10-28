@@ -63,3 +63,59 @@ describe("hunk bars in a real browser", () => {
 		);
 	});
 });
+
+// Where index.css puts the library's stylesheet in the cascade. Each side of
+// it was lost once: the hunk bar's text and icons came out in CanvasText.
+describe("the diff library's styles in the cascade", () => {
+	it.each(["light", "dark"])("hold their place in %s", async (mode) => {
+		const root = document.documentElement;
+		root.classList.add("theme-abyss");
+		root.classList.toggle("dark", mode === "dark");
+		try {
+			const { container } = render(
+				<div style={{ width: 900 }}>
+					<span data-reference className="text-th-text-primary" />
+					<span data-reference-bg className="bg-th-bg-tertiary" />
+					<DiffViewer
+						fileName="a.txt"
+						hunks={[`--- a/a.txt\n+++ b/a.txt\n${hunk(10, "ten")}\n`]}
+						oldContent={file(20)}
+						newContent={file(20, { 10: "ten" })}
+						renderHunkBar={() => (
+							<span data-bar className="text-th-text-primary">
+								bar <svg data-icon aria-hidden="true" />
+							</span>
+						)}
+					/>
+				</div>,
+			);
+			const bar = await waitFor(
+				() => {
+					const found = container.querySelector("[data-bar]");
+					expect(found).not.toBeNull();
+					return found as Element;
+				},
+				{ timeout: 20_000 },
+			);
+			const style = (selector: string) => {
+				const el = container.querySelector(selector);
+				expect(el, selector).not.toBeNull();
+				return getComputedStyle(el as Element);
+			};
+
+			// A utility on a row of ours beats the library's reset, and what
+			// names no colour of its own — an icon — inherits it.
+			const themed = style("[data-reference]").color;
+			expect(getComputedStyle(bar).color).toBe(themed);
+			expect(style("[data-bar] [data-icon]").color).toBe(themed);
+			// Our theme's `--diff-*` values beat the library's own.
+			expect(style(".diff-line-hunk-content").backgroundColor).toBe(
+				style("[data-reference-bg]").backgroundColor,
+			);
+			// And the library still beats preflight's `padding: 0`.
+			expect(style(".diff-widget-tooltip").paddingTop).toBe("6px");
+		} finally {
+			root.classList.remove("theme-abyss", "dark");
+		}
+	});
+});
