@@ -24,6 +24,8 @@ import (
 	"github.com/pockode/server/authsession"
 	"github.com/pockode/server/cliauth"
 	"github.com/pockode/server/cliupdate"
+	"github.com/pockode/server/cloudcred"
+	"github.com/pockode/server/cloudlogin"
 	"github.com/pockode/server/cluster"
 	"github.com/pockode/server/cluster/node"
 	"github.com/pockode/server/command"
@@ -134,6 +136,8 @@ func newSPAHandler(apiHandler http.Handler) http.Handler {
 
 const defaultPort = 9870
 
+const defaultCloudURL = "https://cloud.pockode.com"
+
 // generateToken returns a random 256-bit token as a hex string.
 func generateToken() (string, error) {
 	b := make([]byte, 32)
@@ -152,6 +156,12 @@ func main() {
 			return
 		case "cluster":
 			runCluster()
+			return
+		case "login":
+			runLogin()
+			return
+		case "logout":
+			runLogout()
 			return
 		}
 	}
@@ -176,7 +186,7 @@ func main() {
 		"how long a turn parked on background work waits for the CLI to resume before it is ended (0 for no limit)")
 	relayFlag := flag.Bool("relay", true, "relay for remote access (use -relay=false to disable)")
 	relayFrontendPortFlag := flag.Int("relay-frontend-port", 0, "relay frontend port (default: same as server port)")
-	cloudURLFlag := flag.String("cloud-url", "https://cloud.pockode.com", "cloud server URL")
+	cloudURLFlag := flag.String("cloud-url", defaultCloudURL, "cloud server URL")
 	gitEnabledFlag := flag.Bool("git", false, "enable git integration")
 	gitRepoURLFlag := flag.String("git-repo-url", "", "git repository URL")
 	gitRepoTokenFlag := flag.String("git-repo-token", "", "git repository token")
@@ -193,6 +203,8 @@ func main() {
 Usage:
   pockode [flags]           Start the server (default)
   pockode cluster [flags]   Orchestrator for multiple project nodes (see docs/cluster.md)
+  pockode login [flags]     Link this machine to your cloud account
+  pockode logout            Unlink this machine from its cloud account
   pockode mcp [flags]       MCP stdio proxy (spawned internally by AI CLIs)
 
 Run "pockode cluster -help" for cluster-mode flags.
@@ -658,6 +670,44 @@ func runMCP() {
 	}
 }
 
+func runLogin() {
+	loginFlags := flag.NewFlagSet("login", flag.ExitOnError)
+	cloudURLFlag := loginFlags.String("cloud-url", defaultCloudURL, "cloud server URL")
+	loginFlags.Parse(os.Args[2:])
+
+	linker, err := newCloudLinker()
+	if err == nil {
+		err = linker.Login(context.Background(), *cloudURLFlag)
+	}
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+func runLogout() {
+	// No -cloud-url: the token is revoked at the cloud that issued it, which
+	// cloud.json records.
+	flag.NewFlagSet("logout", flag.ExitOnError).Parse(os.Args[2:])
+
+	linker, err := newCloudLinker()
+	if err == nil {
+		err = linker.Logout(context.Background())
+	}
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+func newCloudLinker() (*cloudlogin.Linker, error) {
+	store, err := cloudcred.DefaultStore()
+	if err != nil {
+		return nil, fmt.Errorf("locate the cloud credential: %w", err)
+	}
+	return cloudlogin.NewLinker(store, os.Stdout), nil
+}
+
 func runCluster() {
 	clusterFlags := flag.NewFlagSet("cluster", flag.ExitOnError)
 	portFlag := clusterFlags.Int("port", cluster.DefaultPort, "server port")
@@ -666,7 +716,7 @@ func runCluster() {
 	dataDirFlag := clusterFlags.String("data", "", "data directory (default: ~/.pockode-cluster)")
 	relayFlag := clusterFlags.Bool("relay", true, "relay for remote access (use -relay=false to disable)")
 	relayFrontendPortFlag := clusterFlags.Int("relay-frontend-port", 0, "relay frontend port (default: same as server port)")
-	cloudURLFlag := clusterFlags.String("cloud-url", "https://cloud.pockode.com", "cloud server URL")
+	cloudURLFlag := clusterFlags.String("cloud-url", defaultCloudURL, "cloud server URL")
 	devModeFlag := clusterFlags.Bool("dev", false, "enable development mode")
 	clusterFlags.Parse(os.Args[2:])
 

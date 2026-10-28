@@ -3,6 +3,7 @@ package startup
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 
@@ -155,8 +156,13 @@ func agentLines(agents []agent.BinaryStatus) []string {
 	)
 }
 
-// PrintQRCode prints an indented QR code with a label on the side.
+// PrintQRCode prints an indented QR code for connecting to the server.
 func PrintQRCode(url string) {
+	WriteQRCode(os.Stdout, url, "Scan to connect")
+}
+
+// WriteQRCode writes an indented QR code with label on its side.
+func WriteQRCode(w io.Writer, url, label string) {
 	var buf bytes.Buffer
 	qrterminal.GenerateWithConfig(url, qrterminal.Config{
 		Level:          qrterminal.L,
@@ -180,9 +186,9 @@ func PrintQRCode(url string) {
 	midLine := len(lines) / 2
 	for i, line := range lines {
 		if i == midLine {
-			fmt.Printf("%s%s  %s\n", indent, line, color(dim, "Scan to connect"))
+			fmt.Fprintf(w, "%s%s  %s\n", indent, line, color(dim, label))
 		} else {
-			fmt.Printf("%s%s\n", indent, line)
+			fmt.Fprintf(w, "%s%s\n", indent, line)
 		}
 	}
 }
