@@ -13,6 +13,7 @@ import {
 } from "../lib/sessionDetailStore";
 import { useWorktreeStore } from "../lib/worktreeStore";
 import { isWorktreeSwitchInFlight } from "../lib/wsStore";
+import { overlayKeepsComposer } from "../types/overlay";
 import { appendToDraft } from "../utils/draftText";
 import type { GitFailure } from "../utils/gitErrors";
 import { useRouteState } from "./useRouteState";
@@ -20,8 +21,9 @@ import { useRouteState } from "./useRouteState";
 export interface PrefillComposer {
 	/**
 	 * Puts `text` into the current session's composer — or a new session's, when
-	 * there is no current one — and takes the user there. Never sends. Prose
-	 * only: a Pockode command appended to a draft would go out as plain text.
+	 * there is no current one — and takes the user there, unless that composer
+	 * is already on the page. Never sends. Prose only: a Pockode command
+	 * appended to a draft would go out as plain text.
 	 */
 	prefill: (text: string) => Promise<void>;
 	/** A session is being created for the text; the pressed entry shows it. */
@@ -34,9 +36,12 @@ export interface PrefillComposer {
 /**
  * How a surface outside the chat hands the agent a piece of work: it writes a
  * prepared message into a session's draft and pushes that session's chat
- * (docs/agent-handoff-ui.md §1). Every such entry goes through here and none
- * writes `inputStore` itself, so "never sends, never over the user's words"
- * has one implementation.
+ * (docs/agent-handoff-ui.md §1). A page that keeps the composer under it — a
+ * Git detail — is left where it is: the draft is right there, and the page is
+ * what the message is about.
+ *
+ * Every such entry goes through here and none writes `inputStore` itself, so
+ * "never sends, never over the user's words" has one implementation.
  *
  * The target is the route's `session` when this worktree holds its detail —
  * `useWorkspaceEngine`'s test, so an AI call and a handoff from one screen
@@ -50,20 +55,20 @@ export interface PrefillComposer {
 export function usePrefillComposer(): PrefillComposer {
 	const navigate = useNavigate();
 	const router = useRouter();
-	const { sessionId, worktree } = useRouteState();
+	const { sessionId, worktree, overlay } = useRouteState();
 	const [isPending, setIsPending] = useState(false);
 	const [error, setError] = useState<GitFailure | null>(null);
 
 	// Read at the press, not captured at render: the target is whatever is held
 	// when the user acts.
-	const routeRef = useRef({ sessionId, worktree });
-	routeRef.current = { sessionId, worktree };
+	const routeRef = useRef({ sessionId, worktree, overlay });
+	routeRef.current = { sessionId, worktree, overlay };
 	const pendingRef = useRef(false);
 
 	const prefill = useCallback(
 		async (text: string) => {
 			if (pendingRef.current) return;
-			const { sessionId, worktree } = routeRef.current;
+			const { sessionId, worktree, overlay } = routeRef.current;
 			const pressedAt = router.state.location.href;
 			setError(null);
 			let target = selectSessionDetail(sessionId)(
@@ -114,6 +119,7 @@ export function usePrefillComposer(): PrefillComposer {
 				// later visit.
 				if (router.state.location.href !== pressedAt) return;
 				inputActions.requestReveal(target, reveal);
+				if (target === sessionId && overlayKeepsComposer(overlay)) return;
 				await navigate(
 					buildNavigation({ type: "session", worktree, sessionId: target }),
 				);

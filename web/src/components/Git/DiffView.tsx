@@ -93,6 +93,7 @@ import { FileNameTitle } from "../ui/HeaderTitle";
 import { isGutter, shownLineKeys } from "../ui/lineGutter";
 import ConflictView, { useConflictFile } from "./ConflictView";
 import DiffContent from "./DiffContent";
+import type { DetailActionsPlacement } from "./detailActions";
 import ErrorBanner from "./ErrorBanner";
 import GitCommitSheet from "./GitCommitSheet";
 import HunkBar, { HUNK_BAR_ATTRIBUTE, HUNK_STAGE_ATTRIBUTE } from "./HunkBar";
@@ -107,6 +108,8 @@ interface Props {
 	 * is on screen beside it.
 	 */
 	showBack?: boolean;
+	/** Where the file's actions are drawn; see `DetailActionsPlacement`. */
+	actionsAt?: DetailActionsPlacement;
 }
 
 interface Primary {
@@ -174,6 +177,10 @@ const INTERACTIVE =
 
 const bottomButtonBase =
 	"flex min-h-[44px] items-center justify-center gap-1.5 rounded-lg px-4 text-sm transition-opacity hover:opacity-90 focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent disabled:cursor-not-allowed disabled:opacity-50";
+// The same buttons in the toolbar, sized to its row; whole, since the folder
+// beside them is what gives way.
+const toolbarButtonBase =
+	"flex min-h-9 shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-lg px-3 text-sm transition-opacity hover:opacity-90 pointer-coarse:min-h-11 focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent disabled:cursor-not-allowed disabled:opacity-50";
 
 /**
  * The review layer: one changed file at a time, in the order the Changes list
@@ -184,7 +191,7 @@ const bottomButtonBase =
  * the file's other side — replaces the route, carrying its history state, and
  * leaving it is `useLeaveReview`, so the list is one step behind it.
  */
-function DiffView({ path, staged, showBack }: Props) {
+function DiffView({ path, staged, showBack, actionsAt = "bottom" }: Props) {
 	const navigate = useNavigate();
 	const router = useRouter();
 	const { worktree, sessionId } = useRouteState();
@@ -837,6 +844,84 @@ function DiffView({ path, staged, showBack }: Props) {
 	const dir = directory.replace(/\/$/, "");
 	const total = files.length;
 
+	const inToolbar = actionsAt === "top";
+	const hint = primary?.hint && (
+		<span
+			id={hintId}
+			className={
+				primary.hint.alreadyOnScreen
+					? "sr-only"
+					: inToolbar
+						? "shrink-0 border-b border-th-border px-3 py-1 text-xs text-th-text-muted"
+						: "mb-1.5 block text-xs text-th-text-muted"
+			}
+		>
+			{primary.hint.text}
+		</span>
+	);
+	// A conflict has neither side to unstage or discard: git refuses to restore
+	// an unmerged path, and resetting one would throw its conflict away. The
+	// handoff takes the secondary's place; the banner's primary is one Back
+	// away.
+	const secondaryAction = conflict ? (
+		<button
+			type="button"
+			onClick={handleAskAgent}
+			disabled={prefill.isPending}
+			aria-label="Ask agent to resolve the conflicts"
+			className={`${inToolbar ? toolbarButtonBase : `${bottomButtonBase} max-w-[50%] shrink-0`} bg-th-bg-tertiary text-th-text-primary`}
+		>
+			{prefill.isPending ? (
+				<Loader2 className="h-4 w-4 shrink-0 animate-spin" aria-hidden="true" />
+			) : (
+				<Sparkles className="h-4 w-4 shrink-0" aria-hidden="true" />
+			)}
+			Ask agent
+		</button>
+	) : (
+		file &&
+		(side ? (
+			<button
+				type="button"
+				onClick={() => handleUnstage(file)}
+				disabled={isBusy}
+				className={`${inToolbar ? toolbarButtonBase : `${bottomButtonBase} max-w-[40%] shrink-0`} bg-th-bg-tertiary text-th-text-primary`}
+			>
+				Unstage
+			</button>
+		) : (
+			<button
+				type="button"
+				onClick={() => setConfirmingDiscard(true)}
+				disabled={isBusy}
+				className={`${inToolbar ? toolbarButtonBase : `${bottomButtonBase} max-w-[40%] shrink-0`} bg-th-bg-tertiary text-th-error`}
+			>
+				{untracked ? "Delete file" : "Discard file"}
+			</button>
+		))
+	);
+	const primaryAction = primary && (
+		<button
+			type="button"
+			onClick={primary.onClick}
+			disabled={!primary.enabled}
+			aria-describedby={primary.hint ? hintId : undefined}
+			className={`${inToolbar ? toolbarButtonBase : `${bottomButtonBase} min-w-0 flex-1`} bg-th-accent font-medium text-th-accent-text`}
+		>
+			{pendingLabel ? (
+				<>
+					<Loader2
+						className="h-4 w-4 shrink-0 animate-spin"
+						aria-hidden="true"
+					/>
+					{pendingLabel}
+				</>
+			) : (
+				primary.label
+			)}
+		</button>
+	);
+
 	return (
 		<div className="flex flex-1 flex-col overflow-hidden">
 			<PageHeader
@@ -911,7 +996,14 @@ function DiffView({ path, staged, showBack }: Props) {
 						label={split ? "Inline" : "Side by side"}
 					/>
 				)}
+				{inToolbar && (secondaryAction || primaryAction) && (
+					<div className="ml-1 flex shrink-0 gap-2 pointer-coarse:ml-2">
+						{secondaryAction}
+						{primaryAction}
+					</div>
+				)}
 			</div>
+			{inToolbar && hint}
 
 			{file?.staged && file.unstaged && (
 				<div className="flex min-h-[44px] shrink-0 items-center gap-2 border-b border-th-border px-3">
@@ -1020,90 +1112,16 @@ function DiffView({ path, staged, showBack }: Props) {
 				/>
 			)}
 
-			{(file || primary) && (
+			{actionsAt === "bottom" && (file || primary) && (
 				<BottomActionBar>
 					{/* Above the buttons, as on the list's bar: a line under them is
 					    the first thing an on-screen keyboard covers. */}
-					{primary?.hint && (
-						<span
-							id={hintId}
-							className={
-								primary.hint.alreadyOnScreen
-									? "sr-only"
-									: "mb-1.5 block text-xs text-th-text-muted"
-							}
-						>
-							{primary.hint.text}
-						</span>
-					)}
+					{hint}
 					{/* A gap between the two, so the one that takes something away is
 					    not flush against the one pressed all day. */}
 					<div className="flex gap-3">
-						{/* A conflict has neither side to unstage or discard: git
-						    refuses to restore an unmerged path, and resetting one
-						    would throw its conflict away. The handoff takes the
-						    secondary's place; the banner's primary is one Back away. */}
-						{conflict ? (
-							<button
-								type="button"
-								onClick={handleAskAgent}
-								disabled={prefill.isPending}
-								aria-label="Ask agent to resolve the conflicts"
-								className={`${bottomButtonBase} max-w-[50%] shrink-0 bg-th-bg-tertiary text-th-text-primary`}
-							>
-								{prefill.isPending ? (
-									<Loader2
-										className="h-4 w-4 shrink-0 animate-spin"
-										aria-hidden="true"
-									/>
-								) : (
-									<Sparkles className="h-4 w-4 shrink-0" aria-hidden="true" />
-								)}
-								Ask agent
-							</button>
-						) : (
-							file &&
-							(side ? (
-								<button
-									type="button"
-									onClick={() => handleUnstage(file)}
-									disabled={isBusy}
-									className={`${bottomButtonBase} max-w-[40%] shrink-0 bg-th-bg-tertiary text-th-text-primary`}
-								>
-									Unstage
-								</button>
-							) : (
-								<button
-									type="button"
-									onClick={() => setConfirmingDiscard(true)}
-									disabled={isBusy}
-									className={`${bottomButtonBase} max-w-[40%] shrink-0 bg-th-bg-tertiary text-th-error`}
-								>
-									{untracked ? "Delete file" : "Discard file"}
-								</button>
-							))
-						)}
-						{primary && (
-							<button
-								type="button"
-								onClick={primary.onClick}
-								disabled={!primary.enabled}
-								aria-describedby={primary.hint ? hintId : undefined}
-								className={`${bottomButtonBase} min-w-0 flex-1 bg-th-accent font-medium text-th-accent-text`}
-							>
-								{pendingLabel ? (
-									<>
-										<Loader2
-											className="h-4 w-4 shrink-0 animate-spin"
-											aria-hidden="true"
-										/>
-										{pendingLabel}
-									</>
-								) : (
-									primary.label
-								)}
-							</button>
-						)}
+						{secondaryAction}
+						{primaryAction}
 					</div>
 				</BottomActionBar>
 			)}

@@ -1,4 +1,8 @@
-import { useHasCoarsePointer, useIsPageCovered } from "@pockode/shared";
+import {
+	useCoverPage,
+	useHasCoarsePointer,
+	useIsPageCovered,
+} from "@pockode/shared";
 import {
 	act,
 	fireEvent,
@@ -853,6 +857,56 @@ describe("InputBar", () => {
 			if (focused) expect(screen.getByRole("textbox")).toHaveFocus();
 			else expect(screen.getByRole("textbox")).not.toHaveFocus();
 		});
+
+		// Under a page the user came to read: opening takes nothing, but the
+		// host asking still does.
+		it("takes no focus on opening when told not to, but answers a request", () => {
+			vi.mocked(useHasCoarsePointer).mockReturnValue(false);
+			const { rerender } = render(
+				<InputBar
+					sessionId={TEST_SESSION_ID}
+					onSend={sendAccepted}
+					focusOnOpen={false}
+				/>,
+			);
+			expect(screen.getByRole("textbox")).not.toHaveFocus();
+
+			rerender(
+				<InputBar
+					sessionId="another-session"
+					onSend={sendAccepted}
+					focusOnOpen={false}
+				/>,
+			);
+			expect(screen.getByRole("textbox")).not.toHaveFocus();
+
+			rerender(
+				<InputBar
+					sessionId="another-session"
+					onSend={sendAccepted}
+					focusOnOpen={false}
+					focusRequest={1}
+				/>,
+			);
+			expect(screen.getByRole("textbox")).toHaveFocus();
+		});
+
+		// Back from a Git detail to the chat: the bar stays mounted, and the
+		// chat is opened as if drawn afresh.
+		it("takes focus when opening starts to take it", () => {
+			vi.mocked(useHasCoarsePointer).mockReturnValue(false);
+			const { rerender } = render(
+				<InputBar
+					sessionId={TEST_SESSION_ID}
+					onSend={sendAccepted}
+					focusOnOpen={false}
+				/>,
+			);
+			expect(screen.getByRole("textbox")).not.toHaveFocus();
+
+			rerender(<InputBar sessionId={TEST_SESSION_ID} onSend={sendAccepted} />);
+			expect(screen.getByRole("textbox")).toHaveFocus();
+		});
 	});
 
 	// A prefill handed in from outside the chat (docs/agent-handoff-ui.md §1.3).
@@ -897,6 +951,41 @@ describe("InputBar", () => {
 			expect(useInputStore.getState().reveals[TEST_SESSION_ID]).toBe("ready");
 
 			rerender(<InputBar sessionId={TEST_SESSION_ID} onSend={sendAccepted} />);
+			expect(screen.getByText("Message ready to send.")).toBeInTheDocument();
+		});
+
+		// Made from a sheet over a page that keeps this bar: the sheet hands
+		// focus back to its opener as it goes, so the caret is taken after.
+		it("waits for whatever covers the page to go", () => {
+			function Cover({ up }: { up: boolean }) {
+				useCoverPage(up);
+				return null;
+			}
+			const { rerender } = render(
+				<>
+					<Cover up />
+					<InputBar
+						sessionId={TEST_SESSION_ID}
+						onSend={sendAccepted}
+						focusOnOpen={false}
+					/>
+				</>,
+			);
+			act(() => prefilled("Explain this", "ready"));
+			expect(screen.getByRole("textbox")).not.toHaveFocus();
+			expect(screen.queryByText("Message ready to send.")).toBeNull();
+
+			rerender(
+				<>
+					<Cover up={false} />
+					<InputBar
+						sessionId={TEST_SESSION_ID}
+						onSend={sendAccepted}
+						focusOnOpen={false}
+					/>
+				</>,
+			);
+			expect(screen.getByRole("textbox")).toHaveFocus();
 			expect(screen.getByText("Message ready to send.")).toBeInTheDocument();
 		});
 

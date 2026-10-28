@@ -271,7 +271,7 @@ the first of these that holds is the reason given:
 |---|-----------|--------------|
 | 1 | Read-only session | `Read-only — files can't be attached here` |
 | 2 | The route names no session | `Open a session to attach files` |
-| 3 | A page that hides the composer (the Work pages, agent roles) | `Go back to the chat to attach files` |
+| 3 | A page that hides the composer (the Work pages, agent roles, the Git workspace's lists — `overlayKeepsComposer`) | `Go back to the chat to attach files` |
 | 4 | A registry `InputBar` replaces the default one | `This message box doesn't take files` |
 | 5 | The session has not resolved yet | `Wait for the session to load` |
 | 6 | The composer is folded: a short screen with the answer card focused | `Close the question card to attach files` |

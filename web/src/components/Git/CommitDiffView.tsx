@@ -16,20 +16,18 @@ import { overlayToNavigation } from "../../lib/navigation";
 import { commitOriginOf, fileHistoryOverlay } from "../../types/overlay";
 import { splitPath } from "../../utils/path";
 import { FilePageHeader } from "../Layout/PageHeader";
-import {
-	BottomActionBar,
-	ContentView,
-	getActionIconButtonClass,
-	ToggleIconButton,
-} from "../ui";
+import { ContentView, getActionIconButtonClass, ToggleIconButton } from "../ui";
 import DiffContent from "./DiffContent";
+import { DetailActionBar, type DetailActionsPlacement } from "./detailActions";
 
 interface Props {
 	hash: string;
 	path: string;
+	/** Where the bar is drawn; see `DetailActionsPlacement`. */
+	actionsAt?: DetailActionsPlacement;
 }
 
-function CommitDiffView({ hash, path }: Props) {
+function CommitDiffView({ hash, path, actionsAt = "bottom" }: Props) {
 	const navigate = useNavigate();
 	const { worktree, sessionId, overlay } = useRouteState();
 	// Carried from layer to layer, so Back lands on the list the commit was
@@ -107,6 +105,69 @@ function CommitDiffView({ hash, path }: Props) {
 		? `View this file at ${shortHash} (deleted in this commit)`
 		: `View this file at ${shortHash}`;
 
+	const actions = (
+		<div className="flex items-center justify-between">
+			<div className="flex items-center gap-1 pointer-coarse:gap-2">
+				<button
+					type="button"
+					disabled={!prev}
+					onClick={() => prev && navigateToFile(prev.path)}
+					className={getActionIconButtonClass(!!prev)}
+					aria-label="Previous file"
+				>
+					<ChevronLeft className="h-4 w-4" aria-hidden="true" />
+				</button>
+				<button
+					type="button"
+					disabled={!next}
+					onClick={() => next && navigateToFile(next.path)}
+					className={getActionIconButtonClass(!!next)}
+					aria-label="Next file"
+				>
+					<ChevronRight className="h-4 w-4" aria-hidden="true" />
+				</button>
+			</div>
+			<div className="flex items-center gap-2">
+				<button
+					type="button"
+					disabled={deletedHere}
+					onClick={viewCommitVersion}
+					className={getActionIconButtonClass(!deletedHere)}
+					aria-label={versionLabel}
+					title={versionLabel}
+				>
+					<FileClock className="h-4 w-4" aria-hidden="true" />
+				</button>
+				<button
+					type="button"
+					onClick={openHistory}
+					className={getActionIconButtonClass(true)}
+					aria-label="History of this file"
+					title="History of this file"
+				>
+					<History className="h-4 w-4" aria-hidden="true" />
+				</button>
+				<ToggleIconButton
+					icon={WrapText}
+					pressed={wrap}
+					onClick={toggleWrap}
+					label={wrap ? "Don't wrap lines" : "Wrap lines"}
+				/>
+				<ToggleIconButton
+					icon={ALargeSmall}
+					pressed={hideWhitespace}
+					onClick={toggleHideWhitespace}
+					label={
+						hideWhitespace
+							? "Show whitespace changes"
+							: "Hide whitespace changes"
+					}
+				/>
+				<div className="text-xs text-th-text-muted">{shortHash}</div>
+			</div>
+		</div>
+	);
+
 	return (
 		<div className="flex flex-1 flex-col overflow-hidden">
 			<FilePageHeader
@@ -117,71 +178,15 @@ function CommitDiffView({ hash, path }: Props) {
 				onTitleClick={handlePathClick}
 				titleActionLabel={`Open current ${splitPath(path).fileName}`}
 			/>
+			<DetailActionBar end="top" placement={actionsAt}>
+				{actions}
+			</DetailActionBar>
 			<ContentView isLoading={isLoading} error={error ?? undefined}>
 				{diff && <DiffContent data={diff} fileName={path} />}
 			</ContentView>
-			<BottomActionBar>
-				<div className="flex items-center justify-between">
-					<div className="flex items-center gap-1 pointer-coarse:gap-2">
-						<button
-							type="button"
-							disabled={!prev}
-							onClick={() => prev && navigateToFile(prev.path)}
-							className={getActionIconButtonClass(!!prev)}
-							aria-label="Previous file"
-						>
-							<ChevronLeft className="h-4 w-4" aria-hidden="true" />
-						</button>
-						<button
-							type="button"
-							disabled={!next}
-							onClick={() => next && navigateToFile(next.path)}
-							className={getActionIconButtonClass(!!next)}
-							aria-label="Next file"
-						>
-							<ChevronRight className="h-4 w-4" aria-hidden="true" />
-						</button>
-					</div>
-					<div className="flex items-center gap-2">
-						<button
-							type="button"
-							disabled={deletedHere}
-							onClick={viewCommitVersion}
-							className={getActionIconButtonClass(!deletedHere)}
-							aria-label={versionLabel}
-							title={versionLabel}
-						>
-							<FileClock className="h-4 w-4" aria-hidden="true" />
-						</button>
-						<button
-							type="button"
-							onClick={openHistory}
-							className={getActionIconButtonClass(true)}
-							aria-label="History of this file"
-							title="History of this file"
-						>
-							<History className="h-4 w-4" aria-hidden="true" />
-						</button>
-						<ToggleIconButton
-							icon={WrapText}
-							pressed={wrap}
-							onClick={toggleWrap}
-							label={wrap ? "Don't wrap lines" : "Wrap lines"}
-						/>
-						<ToggleIconButton
-							icon={ALargeSmall}
-							pressed={hideWhitespace}
-							onClick={toggleHideWhitespace}
-							label={
-								hideWhitespace
-									? "Show whitespace changes"
-									: "Hide whitespace changes"
-							}
-						/>
-						<div className="text-xs text-th-text-muted">{shortHash}</div>
-					</div>
-				</div>
-			</BottomActionBar>
+			<DetailActionBar end="bottom" placement={actionsAt}>
+				{actions}
+			</DetailActionBar>
 		</div>
 	);
 }

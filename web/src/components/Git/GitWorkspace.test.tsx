@@ -113,9 +113,14 @@ vi.mock("./BranchDetail", async () => {
 const page = vi.hoisted(
 	() =>
 		(name: string) =>
-		({ onBack }: { onBack?: () => void }) => (
+		({ onBack, actionsAt }: { onBack?: () => void; actionsAt?: string }) => (
 			<div>
 				{name} page
+				{actionsAt && (
+					<span>
+						{name} actions {actionsAt}
+					</span>
+				)}
 				{onBack && (
 					<button type="button" onClick={onBack}>
 						{name} back
@@ -131,11 +136,19 @@ vi.mock("./DiffView", async () => {
 	return {
 		// The review leaves by itself, replacing; all it is told is whether to
 		// offer the way back.
-		default: ({ showBack }: { showBack?: boolean }) => {
+		default: ({
+			showBack,
+			actionsAt,
+		}: {
+			showBack?: boolean;
+			actionsAt?: string;
+		}) => {
 			useEffect(() => {
 				diffMounts.count++;
 			}, []);
-			return <Page onBack={showBack ? () => {} : undefined} />;
+			return (
+				<Page onBack={showBack ? () => {} : undefined} actionsAt={actionsAt} />
+			);
 		},
 	};
 });
@@ -156,7 +169,7 @@ vi.mock("./CommitView", () => ({ default: page("commit") }));
 vi.mock("./CommitDiffView", () => ({ default: page("commit diff") }));
 vi.mock("./CommitFileView", () => ({ default: page("commit file") }));
 
-function renderWorkspace(layer: GitLayer) {
+function renderWorkspace(layer: GitLayer, { keyboardUp = false } = {}) {
 	const props = {
 		onBack: vi.fn(),
 		onSelectSegment: vi.fn(),
@@ -166,12 +179,17 @@ function renderWorkspace(layer: GitLayer) {
 		onRepointBranch: vi.fn(),
 		onCloseFile: vi.fn(),
 	};
-	const view = render(<GitWorkspace layer={layer} {...props} />);
+	const view = render(
+		<GitWorkspace layer={layer} keyboardUp={keyboardUp} {...props} />,
+	);
 	return { ...props, ...view };
 }
 
 const segmentControl = () =>
 	screen.queryByRole("group", { name: "Which part of the repository to show" });
+
+const topBar = () =>
+	screen.queryByRole("button", { name: "Branches, currently on main" });
 
 const resizeHandle = () =>
 	screen.queryByRole("separator", { name: "Resize list" });
@@ -224,8 +242,8 @@ describe("GitWorkspace below expanded", () => {
 	});
 
 	// A switch's failure is shown by the Branches list while it is on screen,
-	// by a branch's detail covering it, and by the top bar on every other
-	// layer.
+	// by a branch's detail covering it, and by the top bar over any other
+	// list.
 	it("tells the top bar whether a branch surface is holding a switch's failure", () => {
 		const { rerender, ...props } = renderWorkspace({
 			type: "git",
@@ -234,13 +252,48 @@ describe("GitWorkspace below expanded", () => {
 		expect(screen.queryByText("top bar holds switch failures")).toBeNull();
 
 		rerender(<GitWorkspace layer={TOPIC} {...props} />);
-		expect(screen.queryByText("top bar holds switch failures")).toBeNull();
 		expect(screen.getByText("branch page holds failures")).toBeInTheDocument();
 
-		rerender(<GitWorkspace layer={DIFF} {...props} />);
+		rerender(
+			<GitWorkspace layer={{ type: "git", segment: "history" }} {...props} />,
+		);
 		expect(
 			screen.getByText("top bar holds switch failures"),
 		).toBeInTheDocument();
+	});
+
+	// A layer is for reading; what the bar reports waits for the list, which
+	// the stores keep it for.
+	it("has no top bar over a layer", () => {
+		const { rerender, ...props } = renderWorkspace(DIFF);
+		expect(topBar()).toBeNull();
+
+		for (const layer of [
+			TOPIC,
+			{ type: "commit", hash: "abc1234" },
+			{ type: "commit-diff", hash: "abc1234", path: "a.ts" },
+			{ type: "commit-file", hash: "abc1234", path: "a.ts" },
+		] as const) {
+			rerender(<GitWorkspace layer={layer} {...props} />);
+			expect(topBar()).toBeNull();
+		}
+	});
+
+	// The composer is under a detail, so its bar stands above it — and gives
+	// way to the soft keyboard, which leaves no room for three bars.
+	it("puts a detail's actions above the composer, and away for the keyboard", () => {
+		const layers = [
+			[DIFF, "diff"],
+			[{ type: "commit-diff", hash: "abc1234", path: "a.ts" }, "commit diff"],
+			[{ type: "commit-file", hash: "abc1234", path: "a.ts" }, "commit file"],
+		] as const;
+		const { rerender, ...props } = renderWorkspace(DIFF);
+		for (const [layer, name] of layers) {
+			rerender(<GitWorkspace layer={layer} {...props} />);
+			expect(screen.getByText(`${name} actions bottom`)).toBeInTheDocument();
+			rerender(<GitWorkspace layer={layer} keyboardUp {...props} />);
+			expect(screen.getByText(`${name} actions hidden`)).toBeInTheDocument();
+		}
 	});
 
 	// A row selects; switching is an action of the branch's.
@@ -302,10 +355,6 @@ describe("GitWorkspace below expanded", () => {
 		expect(covered).not.toHaveAttribute("hidden");
 		expect(covered).toContainElement(segmentControl());
 		expect(screen.queryByRole("heading", { name: "Git" })).toBeNull();
-		// The top bar stays: a sync left running reports there and nowhere else.
-		expect(
-			screen.getByRole("button", { name: "Branches, currently on main" }),
-		).toBeInTheDocument();
 
 		expect(
 			screen.getByRole("button", { name: "diff back" }),
@@ -359,16 +408,18 @@ describe("GitWorkspace below expanded", () => {
 			remote: true,
 		});
 		expect(onSelectSegment).not.toHaveBeenCalled();
-		// Not a surface of branch failures: the top bar holds them.
-		expect(
-			screen.getByText("top bar holds switch failures"),
-		).toBeInTheDocument();
 	});
 });
 
 describe("GitWorkspace at expanded", () => {
 	beforeEach(() => {
 		layout.expanded = true;
+	});
+
+	// The bottom is the composer's alone, keyboard or not.
+	it("puts a detail's actions at its top", () => {
+		renderWorkspace(DIFF, { keyboardUp: true });
+		expect(screen.getByText("diff actions top")).toBeInTheDocument();
 	});
 
 	it("puts the list and the diff side by side, the diff needing no way back", () => {

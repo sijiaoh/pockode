@@ -76,6 +76,32 @@ export type OverlayState =
 	| { type: "schedule-detail"; scheduleId: string }
 	| null;
 
+// The Git workspace's lists are here and its details are not: a list's bottom
+// belongs to its commit bar and holds no code to talk about, while a detail is
+// where the user reads what the agent changed and tells it what to change next
+// (docs/git-ui.md).
+const composerHiddenOverlays: NonNullable<OverlayState>["type"][] = [
+	"git",
+	"work-list",
+	"work-detail",
+	"agent-role-list",
+	"agent-role-detail",
+	"schedule-list",
+	"schedule-detail",
+];
+
+/**
+ * Whether the chat's composer is under `overlay` — the chat itself, with no
+ * overlay, included. The one rule for the composer being on screen, read by
+ * the chat that draws it and by a handoff deciding whether it has to take the
+ * user to it.
+ */
+export function overlayKeepsComposer(
+	overlay: OverlayState | undefined,
+): boolean {
+	return !overlay || !composerHiddenOverlays.includes(overlay.type);
+}
+
 /**
  * The overlays that read the repository, and so have nothing to show without
  * one. Every one of them is a layer of the Git workspace.

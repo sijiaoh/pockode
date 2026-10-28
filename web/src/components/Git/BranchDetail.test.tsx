@@ -426,6 +426,22 @@ describe("BranchDetail", () => {
 		expect(screen.getByText("Failed to load branches")).toBeInTheDocument();
 	});
 
+	// No top bar is over a narrow detail to take them instead.
+	it("pins the branch failures even when the branches cannot be read", () => {
+		branches = undefined;
+		error = new Error("fatal: not a git repository");
+		mergeHandoff.error = {
+			summary: "Could not start a session.",
+			detail: null,
+		};
+		render(<Detail />);
+
+		expect(screen.getByRole("alert")).toHaveTextContent(
+			"Could not start a session.",
+		);
+		expect(screen.getByText("Failed to load branches")).toBeInTheDocument();
+	});
+
 	describe("commits not on the default branch", () => {
 		it("lists the branch's own range under the default branch's name", async () => {
 			const user = userEvent.setup();

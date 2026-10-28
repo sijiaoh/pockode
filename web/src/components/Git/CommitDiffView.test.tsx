@@ -36,18 +36,42 @@ vi.mock("../../hooks/useCommitDiff", () => ({
 	}),
 }));
 
-vi.mock("./DiffContent", () => ({ default: () => <div /> }));
+vi.mock("./DiffContent", () => ({
+	default: () => <div data-testid="diff" />,
+}));
 
 beforeEach(() => {
 	navigate.mockClear();
 	files = [{ path: "src/app.ts", status: "M" }];
 });
 
-function renderView(path = "src/app.ts") {
-	return render(<CommitDiffView hash="abc1234def" path={path} />);
+function renderView(
+	path = "src/app.ts",
+	actionsAt?: "top" | "bottom" | "hidden",
+) {
+	return render(
+		<CommitDiffView hash="abc1234def" path={path} actionsAt={actionsAt} />,
+	);
 }
 
 describe("CommitDiffView", () => {
+	// Where `GitWorkspace` places it: the composer is under the page.
+	it.each([
+		["top", true],
+		["bottom", false],
+	] as const)("draws its bar at the %s of the page", (at, aboveDiff) => {
+		renderView(undefined, at);
+		const order = screen
+			.getByRole("button", { name: "Next file" })
+			.compareDocumentPosition(screen.getByTestId("diff"));
+		expect(!!(order & Node.DOCUMENT_POSITION_FOLLOWING)).toBe(aboveDiff);
+	});
+
+	it("draws no bar while hidden", () => {
+		renderView(undefined, "hidden");
+		expect(screen.queryByRole("button", { name: "Next file" })).toBeNull();
+	});
+
 	it("opens the working-tree file from the path bar", async () => {
 		const user = userEvent.setup();
 		renderView();

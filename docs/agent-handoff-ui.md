@@ -4,7 +4,8 @@ Two halves of one loop between the chat and the Git workspace:
 
 - **Prefill handoff** — how a surface outside the chat (today: the Git
   workspace) hands the agent a piece of work. It writes a prepared message into
-  a session's composer and takes the user there. **It never sends.** The user
+  a session's composer — the one already under the page, or the chat's, which
+  it takes the user to. **It never sends.** The user
   reads what will go out, edits it, and presses Send.
 - **The review row** — the way back. When the agent is idle and the worktree
   has uncommitted changes, the chat's attention strip says so and offers the
@@ -30,8 +31,9 @@ Copy below is the UI's English.
   to the agent first sits in the composer, where the user can read and change
   it. A background send would bill the user and change the transcript with
   nothing on screen to say why. This is why the Git workspace has no composer
-  of its own ([git-ui.md](git-ui.md#routes-segments-and-back)): the way it
-  hands work to the agent is to take the user back to the session's input.
+  of its own: the one under its details is the chat's
+  ([git-ui.md](git-ui.md#the-composer)), and the way it hands work to the agent
+  is to put the message in that one.
 - **Never over the user's words.** A half-written draft is the user's. A prefill
   goes after it and never replaces it. This is the rule
   [discarded-messages-ui.md §5](discarded-messages-ui.md#5-what-restoring-does)
@@ -101,12 +103,20 @@ The draft (`inputStore`) of the target session, on this device:
   (`ChatPanel`'s `handleFork`). That way the composer is never on screen empty
   for a frame and then filled.
 
-### 1.3 Landing in the chat
+### 1.3 Landing in the composer
 
-The handoff **pushes** the target session's chat route, in the workspace's
-worktree. The push keeps Back meaningful: Back returns to the Git screen the
-user came from, with its selection and scroll (a review's selected lines
-excepted, [git-changes-ui.md](git-changes-ui.md#selecting)), if the user decides not to send
+Where the text is shown depends on whether the target's composer is already on
+the page:
+
+| The press | Where it lands |
+|---|---|
+| The target is the route's session, on a page that keeps the composer under it — a Git detail (`overlayKeepsComposer`, [git-ui.md](git-ui.md#the-composer)) | **In place.** Nothing navigates: the draft and the reveal land in the composer under the page, and the user stays on the diff, commit or branch the message is about — the next thing they want to see is what the agent does to it |
+| The target is the route's session, on a page without the composer — a Git list | The target session's chat route is **pushed**, in the workspace's worktree |
+| A new session ([§1.4](#14-no-current-session)) | Pushed, from any page: whatever composer is on the page is not the target's |
+
+The push keeps Back meaningful: Back returns to the Git screen the user came
+from, with its selection and scroll (a review's selected lines excepted,
+[git-changes-ui.md](git-changes-ui.md#selecting)), if the user decides not to send
 after all.
 
 The composer then shows the text. Three things make the handoff noticeable,
@@ -135,10 +145,13 @@ and each one has a reason:
 The reveal (caret, scroll, ring, announcement) is passing device state. It is a
 one-shot request per session, and `InputBar` consumes it when it next renders
 that session, and only once the bar is enabled (a session just created is
-still resolving when the bar first draws it). It is not persisted and not part
-of the draft. Every Git page hides the composer, so the bar that takes the
-request is always the one that mounts on landing, never one still behind the
-workspace. The existing
+still resolving when the bar first draws it) and nothing covers the page
+(`useIsPageCovered`). The second is for a handoff in place made from a sheet —
+a commit's `⋯` → `Ask AI to revert`: the request lands while the sheet is still
+up, and the sheet hands focus back to its opener as it closes, which would take
+the caret from the draft and the ring from view. It is not persisted and not
+part of the draft. A bar already on the page takes it there; otherwise the one
+that mounts on landing does. The existing
 `focusRequest` counter cannot carry it: that counter lives in `ChatPanel`, and
 the handoff starts from outside the chat.
 
@@ -181,7 +194,8 @@ be one with an obvious answer.
   its surface already has: the Git workspace's
   rule is that feedback appears where the action started
   ([git-ui.md](git-ui.md#feedback-and-errors)).
-- **On success**, the draft is set on the new id and the route is pushed, in
+- **On success**, the draft is set on the new id and the route is pushed — even
+  from a page that keeps a composer, which is the old session's — in
   that order, as in [§1.2](#12-what-is-written). If the user is no longer where
   they pressed by then — any navigation while the session was being created,
   leaving the workspace or moving inside it — the draft is still written, and
@@ -215,7 +229,8 @@ send mid-turn is the user's call, in the composer.
 | Piece | Place | Note |
 |---|---|---|
 | Merging text into a draft | `utils/discardedMessage.ts`'s text half of `restoreIntoDraft`, moved to a neutral `utils/draftText.ts` (`appendToDraft(draft, text)`) | *Restore to input* and the handoff call the one function, so "never over the user's words" has one definition |
-| The handoff | `hooks/usePrefillComposer.ts`, returning `prefill(text)`, `isPending`, `error` and `dismissError` | Resolves the target ([§1.1](#11-which-session)), creates if needed, writes, files the reveal request, pushes the route. Every later entry calls this; none writes `inputStore` itself |
+| The handoff | `hooks/usePrefillComposer.ts`, returning `prefill(text)`, `isPending`, `error` and `dismissError` | Resolves the target ([§1.1](#11-which-session)), creates if needed, writes, files the reveal request, pushes the route unless the composer is already on the page ([§1.3](#13-landing-in-the-composer)). Every later entry calls this; none writes `inputStore` itself |
+| Whether the composer is on the page | `overlayKeepsComposer` in `types/overlay.ts` | The one rule, read by `ChatPanel`, which draws the composer, and by the handoff |
 | The reveal request | `inputStore`, a non-persisted one-shot keyed by session (`reveals`, `requestReveal`, `takeReveal`) | Consumed by `InputBar` |
 | Creating the session | `lib/sessionCreate.ts` (`createSession`) | The one create `useSession` and the handoff share, so concurrent callers join one request |
 | The ring | `.composer-arrival` in `index.css` | A keyframe animation, so the ring is there at once and only its going fades |
@@ -395,9 +410,10 @@ must: the action is never cut.
    holds its detail.** Otherwise a new session is created in the workspace's worktree
    on the default engine. This is the same rule that picks the AI draft's
    engine.
-4. **Push in, and land visibly.** Caret at the end on a fine pointer, no
-   keyboard on a coarse one, the textarea scrolled to the end, an accent ring
-   once, one polite announcement.
+4. **Land where the composer is, and land visibly.** In place under a Git
+   detail, pushed into the chat otherwise. Caret at the end on a fine pointer,
+   no keyboard on a coarse one, the textarea scrolled to the end, an accent
+   ring once, one polite announcement — once nothing covers the page.
 5. **The review row is live state.** It is drawn from `git.status`, never
    recorded, and gone the moment the condition is.
 6. **Lowest rank, idle only, never beside questions or watching.** It never

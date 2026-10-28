@@ -11,11 +11,14 @@ import { getFileViewState } from "../../utils/fileView";
 import FileBody from "../Files/FileBody";
 import { DownloadButton } from "../Files/FileDownloadControls";
 import { FilePageHeader } from "../Layout/PageHeader";
-import { BottomActionBar, ContentView, ToggleIconButton } from "../ui";
+import { ContentView, ToggleIconButton } from "../ui";
+import { DetailActionBar, type DetailActionsPlacement } from "./detailActions";
 
 interface Props {
 	hash: string;
 	path: string;
+	/** Where the bar is drawn; see `DetailActionsPlacement`. */
+	actionsAt?: DetailActionsPlacement;
 }
 
 /**
@@ -25,7 +28,7 @@ interface Props {
  * write action at all rather than a disabled one, which would read as a bug or
  * a permission problem.
  */
-function CommitFileView({ hash, path }: Props) {
+function CommitFileView({ hash, path, actionsAt = "bottom" }: Props) {
 	const navigate = useNavigate();
 	const { worktree, sessionId, overlay } = useRouteState();
 	// Carried from layer to layer, so Back lands on the list the commit was
@@ -85,6 +88,35 @@ function CommitFileView({ hash, path }: Props) {
 	const shortHash = hash.substring(0, 7);
 	const isPage = state?.kind === "page";
 
+	const actions = (
+		<div className="flex items-center gap-2">
+			{/* Absent rather than present and inert wherever it could not
+			    change anything: an image or a binary has no rendering to drop
+			    to source, and a file past `HIGHLIGHT_LIMIT` is already plain
+			    with a banner that says so. A page, of any size, has: its
+			    source. The bar itself stays either way — the hash is
+			    identity, not an action. */}
+			{state?.kind === "text" && state.highlight && (
+				<ToggleIconButton
+					icon={Type}
+					pressed={plain}
+					onClick={() => setPlain((v) => !v)}
+					label={plain ? "Show rendered" : "Show plain text"}
+				/>
+			)}
+			{isPage && (
+				<ToggleIconButton
+					icon={Code}
+					pressed={plain}
+					onClick={() => setPlain((v) => !v)}
+					label={plain ? "Show page" : "Show source"}
+				/>
+			)}
+			{state && <DownloadButton download={download} />}
+			<div className="ml-auto text-xs text-th-text-muted">{shortHash}</div>
+		</div>
+	);
+
 	return (
 		<div className="flex flex-1 flex-col overflow-hidden">
 			<FilePageHeader
@@ -93,6 +125,9 @@ function CommitFileView({ hash, path }: Props) {
 				mono
 				back={{ to: "parent", label: "Back to diff", onClick: handleBack }}
 			/>
+			<DetailActionBar end="top" placement={actionsAt}>
+				{actions}
+			</DetailActionBar>
 			<ContentView
 				isLoading={isLoading}
 				error={error instanceof Error ? error : null}
@@ -122,34 +157,9 @@ function CommitFileView({ hash, path }: Props) {
 					/>
 				)}
 			</ContentView>
-			<BottomActionBar>
-				<div className="flex items-center gap-2">
-					{/* Absent rather than present and inert wherever it could not
-					    change anything: an image or a binary has no rendering to drop
-					    to source, and a file past `HIGHLIGHT_LIMIT` is already plain
-					    with a banner that says so. A page, of any size, has: its
-					    source. The bar itself stays either way — the hash is
-					    identity, not an action. */}
-					{state?.kind === "text" && state.highlight && (
-						<ToggleIconButton
-							icon={Type}
-							pressed={plain}
-							onClick={() => setPlain((v) => !v)}
-							label={plain ? "Show rendered" : "Show plain text"}
-						/>
-					)}
-					{isPage && (
-						<ToggleIconButton
-							icon={Code}
-							pressed={plain}
-							onClick={() => setPlain((v) => !v)}
-							label={plain ? "Show page" : "Show source"}
-						/>
-					)}
-					{state && <DownloadButton download={download} />}
-					<div className="ml-auto text-xs text-th-text-muted">{shortHash}</div>
-				</div>
-			</BottomActionBar>
+			<DetailActionBar end="bottom" placement={actionsAt}>
+				{actions}
+			</DetailActionBar>
 		</div>
 	);
 }

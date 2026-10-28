@@ -506,7 +506,7 @@ each of them the whole answer to a different way of getting this wrong:
 
 | Condition | What it stops |
 |---|---|
-| the panel is up | there is something to make room for |
+| the panel is **drawn** (`answerPanelDrawn`) | there is something to make room for. Drawn, not merely up: an overlay unmounts an open card, and a page that keeps the composer — a Git detail ([git-ui.md](git-ui.md#the-composer)) — must not have it folded away by a card that is not there. A card unmounted under the caret fires no blur, so the card's focus flag is cleared from this same fact |
 | focus is on a control **inside the card** | a question arriving while somebody is mid-sentence in the composer must not take the sentence, the composer and the keyboard away under them (§4 forbids exactly this shape of thing) |
 | the viewport is short | on a desktop nothing is crowding the composer, and folding it would be a change for its own sake |
 

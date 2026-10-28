@@ -685,7 +685,9 @@ liveness from the last message's status and a `process_ended` that a restart nev
 wrote.
 
 `turnOpen` governs Stop, the Escape shortcut and the session panel's engine
-and mode ([agent-chat.md](agent-chat.md#the-session-screen)). It is **not** the composer's gate, and the table below is where those two
+and mode — the shortcut wherever the composer is, except over a Git detail,
+where Escape clears the review's line selection and Stop is the way
+([git-ui.md](git-ui.md#the-composer)) — ([agent-chat.md](agent-chat.md#the-session-screen)). It is **not** the composer's gate, and the table below is where those two
 questions part company:
 
 | `phase` | Stop button | Escape shortcut | Send | Composer hint |

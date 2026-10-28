@@ -122,7 +122,7 @@ The same component and content; only the arrangement follows the tier (`useIsExp
 
 ### On detail layers
 
-A layer below `expanded` has no room for the whole banner over a diff, and the actions are not lost by leaving them off: they are one `←` away on the list, and the conflict view carries the handoff in its own bottom bar (`Ask agent`). So under the top bar a layer draws one non-interactive line, `min-h-[36px]`, on the banner's surface — the title, which truncates, and the progress, which does not:
+A layer below `expanded` has no room for the whole banner over a diff, and the actions are not lost by leaving them off: they are one `←` away on the list, and the conflict view carries the handoff in its own action bar (`Ask agent`). So at the top of a layer, under the app header — a layer has no top bar ([git-ui.md](git-ui.md#the-top-bar)) — it draws one non-interactive line, `min-h-[36px]`, on the banner's surface — the title, which truncates, and the progress, which does not:
 
 ```
 │ ⚠ Rebase stopped on conflicts · 3 of 7 │
@@ -237,7 +237,7 @@ These are the agent's to resolve: none has a text whose markers could be checked
 
 Who deleted it is deliberately not named: in a rebase "ours" is the branch being rebased onto and "theirs" the user's own commit, the opposite of a merge, and getting that backwards on screen is worse than not saying it. The agent reads the stages itself.
 
-**Bottom bar.**
+**Bottom bar.** The review's, so it is placed by the same rule: in the toolbar at `expanded`, above the chat's composer below it, and gone while the composer holds a soft keyboard ([git-ui.md](git-ui.md#where-a-details-actions-go)).
 
 | File | Left (secondary) | Primary |
 |---|---|---|

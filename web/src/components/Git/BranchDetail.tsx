@@ -114,6 +114,11 @@ function BranchDetail({
 		label: "Back to branches",
 		onClick: onBack,
 	};
+	const pinned = holdsFailures && (
+		<div className="sticky top-0 z-10 bg-th-bg-primary">
+			<PinnedBranchFailures checkout={checkout} handoff={mergeHandoff} />
+		</div>
+	);
 	// State rather than refs: the commits' list needs both mounted before it
 	// can lay itself out in them.
 	const [scroller, setScroller] = useState<HTMLElement | null>(null);
@@ -138,14 +143,7 @@ function BranchDetail({
 					<div ref={setContent}>
 						{/* Over the gone notice too: a delete that failed because
 						    the branch went is still a failure to show. */}
-						{holdsFailures && (
-							<div className="sticky top-0 z-10 bg-th-bg-primary">
-								<PinnedBranchFailures
-									checkout={checkout}
-									handoff={mergeHandoff}
-								/>
-							</div>
-						)}
+						{pinned}
 						{row ? (
 							<>
 								<BranchPage row={row} branches={branches} actions={actions} />
@@ -162,17 +160,24 @@ function BranchDetail({
 							!becameLocal && <BranchGone name={branch.ref} onLeave={onLeave} />
 						)}
 					</div>
-				) : isLoading ? (
-					<FactsSkeleton />
 				) : (
-					error && (
-						<div className="p-4 text-center text-th-error">
-							<div>Failed to load branches</div>
-							<div className="mt-1 text-sm text-th-text-muted">
-								{errorMessage(error)}
-							</div>
-						</div>
-					)
+					<>
+						{/* Without branches too: no top bar is over this page to
+						    take them instead. */}
+						{pinned}
+						{isLoading ? (
+							<FactsSkeleton />
+						) : (
+							error && (
+								<div className="p-4 text-center text-th-error">
+									<div>Failed to load branches</div>
+									<div className="mt-1 text-sm text-th-text-muted">
+										{errorMessage(error)}
+									</div>
+								</div>
+							)
+						)}
+					</>
 				)}
 			</div>
 			{actions.dialog}

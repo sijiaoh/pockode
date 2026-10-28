@@ -64,6 +64,17 @@ function LineSelectionBar({
 					onFocusChange?.(false);
 				}
 			}}
+			// A press leaves the caret in a field being typed in. The bar stays
+			// up while the composer holds the keyboard, since that is when code
+			// is inserted; a press that took focus would drop the keyboard, and
+			// bring the review's bar back under this one before its own click
+			// arrived (`DetailActionsPlacement`). Anywhere else the press takes
+			// focus as usual, for the page to put back when the bar goes.
+			onMouseDown={(event) => {
+				if (document.activeElement?.matches("input, textarea")) {
+					event.preventDefault();
+				}
+			}}
 			className="flex shrink-0 items-center gap-2 border-t border-th-border bg-th-bg-secondary py-1.5 pr-1 pl-3 shadow-xl"
 		>
 			<span className="min-w-0 flex-1 truncate text-xs tabular-nums text-th-text-primary">
