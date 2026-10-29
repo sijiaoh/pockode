@@ -8,7 +8,9 @@ import BranchesSection from "./BranchesSection";
 
 // What jsdom cannot say: that a branch row is laid out by the width of the
 // list it is in, not the window's — two lines below `--container-git-row`, one
-// line with the details and the age as aligned columns from it on.
+// line with the details and the age as aligned columns from it on — and that
+// a hovered row's fill is the whole row's, `⋯` included, since `:hover` is not
+// something jsdom computes.
 
 let branches: GitBranches;
 vi.mock("../../hooks/useGitBranches", () => ({
@@ -105,5 +107,34 @@ describe("branch row width", () => {
 		// The room the name has in a 320px column today, ≈236px; the threshold
 		// is where the one-line row still gives it about that.
 		expect(long.name.width).toBeGreaterThanOrEqual(228);
+	});
+});
+
+describe("branch row hover", () => {
+	/** The row around a branch's button: the element that carries its fill. */
+	function rowOf(name: string) {
+		return screen.getByTitle(name).closest("button")
+			?.parentElement as HTMLElement;
+	}
+	const fill = (el: Element) => getComputedStyle(el).backgroundColor;
+
+	// One fill across the row, `⋯` slot included, so the `⋯` reads as the
+	// row's own and the row does not go dark under the pointer on its way there.
+	it("fills the whole row, and keeps it while its ⋯ is hovered", async () => {
+		renderAt(400);
+		const idle = fill(rowOf("plain"));
+
+		await page
+			.getByRole("button", { name: `More actions for ${LONG}` })
+			.hover();
+		await expect.poll(() => fill(rowOf(LONG))).not.toBe(idle);
+
+		await page.getByTitle("fix").hover();
+		await expect.poll(() => fill(rowOf("fix"))).not.toBe(idle);
+		await expect.poll(() => fill(rowOf(LONG))).toBe(idle);
+		// The fill is the row's, not the button's, so it reaches past it.
+		expect(fill(rowOf("fix").querySelector("button") as Element)).toBe(
+			"rgba(0, 0, 0, 0)",
+		);
 	});
 });
