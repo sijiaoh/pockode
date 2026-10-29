@@ -16,10 +16,8 @@ import {
 } from "@testing-library/react";
 import { createRef } from "react";
 import { describe, expect, it } from "vitest";
-import {
-	ScrollRestorationContext,
-	useScrollRestorationScope,
-} from "../../hooks/useScrollRestoration";
+import { ScrollRestorationContext } from "../../hooks/useScrollRestoration";
+import { useScrollRestorationScope } from "../../hooks/useScrollRestorationScope";
 import { scrollMemoryFor } from "../../lib/scrollMemory";
 import { stubScrollBox } from "../../test/scrollBox";
 import PageBody from "./PageBody";

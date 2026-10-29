@@ -1,4 +1,5 @@
 import { render, screen } from "@testing-library/react";
+import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { page } from "vitest/browser";
 import type { HistoryRow } from "../../hooks/useHistoryGraph";
@@ -261,18 +262,34 @@ describe("HistoryList bringing the lit row into view", () => {
 		const rows = linearHistory(200);
 		const target = rows[150].commit;
 		const reveal = vi.fn();
-		render(
-			<div className="flex flex-col" style={{ width: 600, height: 520 }}>
+		// Withdrawn once reported, as GitTab does: while it is given, the list
+		// checks on every render, and mounting alone renders twice — once more
+		// when its width is first measured.
+		function Caller() {
+			const [pending, setPending] = useState(true);
+			return (
 				<HistoryList
 					rows={rows}
 					footer={{ kind: "end", text: "Beginning of history" }}
 					onLoadMore={() => {}}
 					onRetry={() => {}}
 					activeHash={target.hash}
-					reveal={reveal}
+					reveal={
+						pending
+							? () => {
+									reveal();
+									setPending(false);
+								}
+							: undefined
+					}
 					onSelectCommit={() => {}}
 					onOpenMenu={() => {}}
 				/>
+			);
+		}
+		render(
+			<div className="flex flex-col" style={{ width: 600, height: 520 }}>
+				<Caller />
 			</div>,
 		);
 

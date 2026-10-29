@@ -416,7 +416,10 @@ scrollers that should both be remembered.
 
 Rendered outside `AppShell` — in a test that mocks the router, say — there is
 no `ScrollRestorationContext`, and `PageBody` is a plain scroller. Nothing has
-to be arranged for it.
+to be arranged for it. That holds only while the scrollers' module leaves the
+router alone, so the shell's half, which reads it, is a module of its own
+(`hooks/useScrollRestorationScope.ts`): a browser test's router mock exports
+only what it lists, and one missing name fails every file that imports it.
 
 #### What it deliberately does not cover
 
@@ -1268,7 +1271,7 @@ Key features:
 | `web/src/lib/gitWriteStore.ts` | The Git workspace's serial queue per worktree, for writes — and their failures — that outlive the view that started them |
 | `web/src/lib/worktreeQuery.ts` | Worktree list query key + fetcher, kept together |
 | `web/src/hooks/useSubscription.ts` | Subscription lifecycle hook |
-| `web/src/lib/scrollMemory.ts` / `web/src/hooks/useScrollRestoration.ts` / `web/src/components/ui/PageBody.tsx` | A page's scroll position per history entry, put back when the reader returns ([why](#why-a-pages-scroll-position-outlives-the-page)) |
+| `web/src/lib/scrollMemory.ts` / `web/src/hooks/useScrollRestoration.ts` / `web/src/hooks/useScrollRestorationScope.ts` / `web/src/components/ui/PageBody.tsx` | A page's scroll position per history entry, put back when the reader returns ([why](#why-a-pages-scroll-position-outlives-the-page)) |
 | `web/src/lib/valueState.ts` | Stored / still coming / not coming, named once for every control that waits on a snapshot ([why three states](subscription-system.md#why-the-controls-wait-for-the-session-to-describe-itself)) |
 
 `worktreeQuery.ts` exists because two hooks (`useWorktree`, `useWorktreeDisplay`)
