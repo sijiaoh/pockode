@@ -706,9 +706,8 @@ function AppShell() {
 
 	/**
 	 * A segment of the Git workspace, at its list: a press on the segment
-	 * control, on the branch name or on one of the sidebar's Git entries — an
-	 * entrance that always lands on the list, never on a detail it remembers —
-	 * and the way back from a commit to the list it was opened from (the
+	 * control or on one of the sidebar's Git entries — an entrance that always
+	 * lands on the list, never on a detail it remembers — and the way back from a commit to the list it was opened from (the
 	 * review's way back is `useLeaveReview`, docs/git-changes-ui.md). Pushed,
 	 * so Back walks the segments the way it walks the project list's
 	 * (docs/project-ui.md §5). A press that names the layer already on screen —

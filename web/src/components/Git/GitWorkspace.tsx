@@ -200,7 +200,6 @@ function GitWorkspace({
 			    the bar is the Git tab's. */}
 			{listOnScreen && (
 				<BranchBar
-					onOpenBranches={() => onSelectSegment("branches")}
 					branchFailureSurface={segment === "branches"}
 					mergeHandoff={mergeHandoff}
 				/>

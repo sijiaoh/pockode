@@ -226,7 +226,7 @@ as an accident of layout — it outlives it *by definition*. Staging from an ope
 diff and navigating away unmounts that view while the request is in flight;
 closing the sync sheet mid-push is a documented interaction rather than an edge
 case ([git-ui.md](../git-ui.md#remote-sync)); and the Git workspace is a page,
-so its segment control, its top bar and Back all leave a list while something
+so its segment control and Back both leave a list while something
 started from it is still running
 ([git-ui.md](../git-ui.md#results-that-outlive-the-page)).
 Component state would lose the outcome of something that is still happening —

@@ -22,17 +22,9 @@ vi.mock("../../hooks/useGitSync", async (importOriginal) => ({
 // What is under test is which layers are on screen and where their ways back
 // lead; the sections and pages themselves have tests of their own.
 vi.mock("./BranchBar", () => ({
-	default: ({
-		onOpenBranches,
-		branchFailureSurface,
-	}: {
-		onOpenBranches: () => void;
-		branchFailureSurface: boolean;
-	}) => (
+	default: ({ branchFailureSurface }: { branchFailureSurface: boolean }) => (
 		<>
-			<button type="button" onClick={onOpenBranches}>
-				Branches, currently on main
-			</button>
+			<div>top bar</div>
 			{!branchFailureSurface && <div>top bar holds switch failures</div>}
 		</>
 	),
@@ -193,8 +185,7 @@ function renderWorkspace(
 const segmentControl = () =>
 	screen.queryByRole("group", { name: "Which part of the repository to show" });
 
-const topBar = () =>
-	screen.queryByRole("button", { name: "Branches, currently on main" });
+const topBar = () => screen.queryByText("top bar");
 
 const DIFF: GitLayer = { type: "diff", path: "src/a.ts", staged: false };
 const TOPIC: GitLayer = { type: "branch", ref: "topic", remote: false };
@@ -212,6 +203,7 @@ describe("GitWorkspace below expanded", () => {
 		});
 
 		expect(screen.getByRole("heading", { name: "Git" })).toBeInTheDocument();
+		expect(topBar()).toBeInTheDocument();
 		expect(screen.getByText(/history list/)).toBeVisible();
 		expect(
 			screen.getByRole("button", { name: "History", pressed: true }),
@@ -222,19 +214,6 @@ describe("GitWorkspace below expanded", () => {
 
 		await user.click(screen.getByRole("button", { name: "Back to chat" }));
 		expect(onBack).toHaveBeenCalled();
-	});
-
-	it("opens Branches from the branch name in the top bar", async () => {
-		const user = userEvent.setup();
-		const { onSelectSegment } = renderWorkspace({
-			type: "git",
-			segment: "changes",
-		});
-
-		await user.click(
-			screen.getByRole("button", { name: "Branches, currently on main" }),
-		);
-		expect(onSelectSegment).toHaveBeenCalledWith("branches");
 	});
 
 	// A switch's failure is shown by the Branches list while it is on screen,

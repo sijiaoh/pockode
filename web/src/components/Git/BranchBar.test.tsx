@@ -37,7 +37,6 @@ function bar(branchFailureSurface = false) {
 	return (
 		<QueryClientProvider client={new QueryClient()}>
 			<BranchBar
-				onOpenBranches={vi.fn()}
 				branchFailureSurface={branchFailureSurface}
 				mergeHandoff={mergeHandoff}
 			/>
@@ -298,8 +297,26 @@ describe("BranchBar during a rebase", () => {
 		};
 		renderBar();
 
-		expect(
-			screen.getByRole("button", { name: "Branches, rebasing feature/git-ui" }),
-		).toHaveTextContent("feature/git-ui· rebasing");
+		expect(screen.getByTitle("feature/git-ui")).toBeInTheDocument();
+		expect(screen.getByText("· rebasing")).toBeInTheDocument();
+		expect(screen.queryByText(/detached/)).toBeNull();
+	});
+});
+
+describe("BranchBar's branch name", () => {
+	// The segment control under the bar is the way to Branches; the name only
+	// says where the user is.
+	it("is plain text, leaving the sync chip the bar's only control", () => {
+		branches = makeBranches({
+			head: makeHead({ branch: "feature/x" }),
+			sync: makeSync({ behind: 2 }),
+		});
+		renderBar();
+
+		expect(screen.getByText("Current branch:")).toBeInTheDocument();
+		expect(screen.getByTitle("feature/x")).toBeInTheDocument();
+		expect(screen.getAllByRole("button")).toEqual([
+			screen.getByRole("button", { name: /Sync with remote/ }),
+		]);
 	});
 });

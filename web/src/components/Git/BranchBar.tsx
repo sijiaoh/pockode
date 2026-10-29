@@ -16,8 +16,6 @@ import SyncChip from "./SyncChip";
 import SyncSheet from "./SyncSheet";
 
 interface Props {
-	/** Where the branch name leads: the workspace's Branches segment. */
-	onOpenBranches: () => void;
 	/**
 	 * Whether the list under the bar is the Branches list, which pins the
 	 * branch failures itself; under any other list they are shown here.
@@ -29,17 +27,16 @@ interface Props {
 
 /**
  * The top row of the Git workspace's lists: which branch this worktree is on,
- * the way to the branch list, and the sync chip. A narrow detail layer goes
- * without it; what it reports is kept until the user is back on a list.
+ * and the sync chip. A narrow detail layer goes without it; what it reports is
+ * kept until the user is back on a list.
+ *
+ * The name is not pressable: the segment control right under the bar is the
+ * way to Branches, and the bar names and reports rather than navigates.
  *
  * It renders outside the lists' loading/error branches on purpose — a failing
  * git.status must not take branch identity down with it.
  */
-function BranchBar({
-	onOpenBranches,
-	branchFailureSurface,
-	mergeHandoff,
-}: Props) {
+function BranchBar({ branchFailureSurface, mergeHandoff }: Props) {
 	const { data: branches, isLoading, error } = useGitBranches();
 	const [syncSheetOpen, setSyncSheetOpen] = useState(false);
 	const worktree = useWorktreeStore((s) => s.current);
@@ -96,24 +93,9 @@ function BranchBar({
 				{!head ? (
 					<HeadPlaceholder isLoading={isLoading} error={error} />
 				) : (
-					<button
-						type="button"
-						onClick={onOpenBranches}
-						className="flex min-h-[36px] min-w-0 flex-1 items-center gap-2 rounded px-2 text-th-text-primary pointer-coarse:min-h-11 transition-colors hover:bg-th-bg-tertiary focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent"
-						// It opens a page of branches rather than a sheet to switch in,
-						// and says so.
-						aria-label={
-							rebasing
-								? `Branches, rebasing ${rebasing}`
-								: `Branches, currently on ${headLabel(head)}`
-						}
-					>
-						<GitBranch
-							className="h-4 w-4 shrink-0 text-th-text-muted"
-							aria-hidden="true"
-						/>
-						<HeadName head={head} rebasing={rebasing} />
-					</button>
+					<div className="flex min-w-0 flex-1 items-center gap-2 px-2 text-th-text-primary">
+						<CurrentBranch head={head} rebasing={rebasing} />
+					</div>
 				)}
 
 				{showChip && sync && (
@@ -165,8 +147,32 @@ function BranchBar({
 	);
 }
 
+/**
+ * The branch icon and HEAD's name, as plain text: the top bar and the
+ * sidebar's overview name the branch the same way. Each caller keeps its own
+ * row around it.
+ */
+export function CurrentBranch({
+	head,
+	rebasing,
+}: {
+	head: GitHead;
+	rebasing: string | null;
+}) {
+	return (
+		<>
+			<GitBranch
+				className="h-4 w-4 shrink-0 text-th-text-muted"
+				aria-hidden="true"
+			/>
+			<span className="sr-only">Current branch: </span>
+			<HeadName head={head} rebasing={rebasing} />
+		</>
+	);
+}
+
 /** HEAD's name, or the branch a rebase is rewriting while it runs. */
-export function HeadName({
+function HeadName({
 	head,
 	rebasing,
 }: {
