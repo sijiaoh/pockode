@@ -189,13 +189,14 @@ function BranchRowItem({
 	const details = branchDetails(row).join(" · ");
 
 	return (
-		// History's active treatment (CommitRow): the fill across the row and
-		// the accent bar at its left edge, beside the gutter's check.
+		// History's treatment (CommitRow): the fill across the row, `⋯` slot
+		// included, and when active the accent bar at its left edge, beside the
+		// gutter's check.
 		<div
-			className={`relative flex min-h-[52px] items-center ${
+			className={`relative flex min-h-[52px] items-center transition-colors ${
 				active
 					? "bg-th-bg-tertiary before:pointer-events-none before:absolute before:inset-y-2 before:left-0 before:w-0.5 before:rounded-full before:bg-th-accent"
-					: ""
+					: "hover:bg-th-bg-tertiary"
 			}`}
 		>
 			<button
@@ -203,7 +204,7 @@ function BranchRowItem({
 				onClick={onSelect}
 				aria-label={branchRowLabel(row, defaultBranch, age)}
 				aria-current={active ? "true" : undefined}
-				className="flex min-w-0 flex-1 items-center gap-2 self-stretch py-1.5 pl-4 text-left text-th-text-primary transition-colors hover:bg-th-bg-tertiary focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent focus-visible:ring-inset"
+				className="flex min-w-0 flex-1 items-center gap-2 self-stretch py-1.5 pl-4 text-left text-th-text-primary focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent focus-visible:ring-inset"
 			>
 				{row.current ? (
 					<Check

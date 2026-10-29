@@ -114,7 +114,7 @@ Its rules — what is pinned, why, and the one capped box the failures share —
 
 ### The row
 
-Two lines (one in a wide list, below), `min-h-[52px]`, the row's button and its `⋯` siblings as in the Changes list ([git-changes-ui.md](git-changes-ui.md#the-file-row)). **The row's button opens the branch's detail** ([The branch](#the-branch)), pushed, at every width — never a switch. Switching is `Switch to this branch`, first in the `⋯` and first in the detail.
+Two lines (one in a wide list, below), `min-h-[52px]`, the row's button and its `⋯` siblings as in the Changes list ([git-changes-ui.md](git-changes-ui.md#the-file-row)), under one hover fill ([L4 in sidebar-ui.md](sidebar-ui.md#visual-weight)). **The row's button opens the branch's detail** ([The branch](#the-branch)), pushed, at every width — never a switch. Switching is `Switch to this branch`, first in the `⋯` and first in the detail.
 
 | Part | Content |
 |---|---|
