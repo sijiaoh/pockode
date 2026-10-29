@@ -2,20 +2,19 @@ import { describe, expect, it } from "vitest";
 import type { GitStatus } from "../types/git";
 import {
 	adjacentChange,
-	aggregateCheckState,
 	buildChangeTree,
 	type ChangedFile,
 	changeKindOf,
-	checkboxWrite,
 	collectChanges,
-	describeStageable,
 	filesUnder,
 	firstReviewTarget,
+	groupChanges,
 	lineStatOf,
 	orderChanges,
 	reviewSideOf,
 	stagesOnlyWhole,
 	sumLines,
+	unstagePaths,
 } from "./gitChanges";
 
 const file = (
@@ -80,7 +79,7 @@ describe("conflicts", () => {
 		new Map(collectChanges(conflicted).map((f) => [f.path, f]));
 
 	// Drawn as two sides a conflict would read as partly staged, and its
-	// checkbox would stage the markers as the resolution.
+	// stage button would stage the markers as the resolution.
 	it("makes one record per conflicted path, with no sides", () => {
 		const files = byPath();
 
@@ -109,67 +108,71 @@ describe("conflicts", () => {
 		);
 		expect(changeKindOf(files.get("gone.ts") as ChangedFile)).toBe("deleted");
 	});
-
-	it("leaves conflicts out of every checkbox over several files", () => {
-		const conflict: ChangedFile = {
-			path: "c",
-			submodule: false,
-			conflict: "content",
-		};
-
-		expect(aggregateCheckState([file("a", "staged"), conflict])).toBe(
-			"checked",
-		);
-		expect(checkboxWrite([file("a"), conflict])).toEqual({
-			paths: ["a"],
-			staged: false,
-		});
-		expect(checkboxWrite([file("a", "staged"), conflict])).toEqual({
-			paths: ["a"],
-			staged: true,
-		});
-		expect(checkboxWrite([conflict]).paths).toEqual([]);
-		expect(describeStageable([file("a"), file("b"), conflict])).toBe(
-			"2 of 3 files, 1 conflicted",
-		);
-		expect(describeStageable([file("a")])).toBe("1 file");
-	});
 });
 
-describe("check states", () => {
-	it("aggregates to checked or unchecked only when every file agrees", () => {
-		expect(
-			aggregateCheckState([file("a", "staged"), file("b", "staged")]),
-		).toBe("checked");
-		expect(aggregateCheckState([file("a"), file("b")])).toBe("unchecked");
-		expect(aggregateCheckState([file("a", "staged"), file("b")])).toBe("mixed");
-		expect(aggregateCheckState([file("a", "both")])).toBe("mixed");
+describe("groupChanges", () => {
+	const status: GitStatus = {
+		staged: [
+			{ path: "both.ts", status: "M", lines: { additions: 1, deletions: 0 } },
+			{ path: "new.ts", status: "R", orig_path: "old.ts" },
+			{ path: "ad.ts", status: "A" },
+			{ path: "merge.go", status: "U" },
+		],
+		unstaged: [
+			{ path: "both.ts", status: "M", lines: { additions: 0, deletions: 2 } },
+			{ path: "ad.ts", status: "D" },
+			{ path: "merge.go", status: "U" },
+			{ path: "notes.txt", status: "?" },
+		],
+		conflicted: ["merge.go"],
+	};
+	const groups = () =>
+		groupChanges(orderChanges(collectChanges(status), "flat"));
+
+	it("puts a partly staged file in both groups, each row with its own side", () => {
+		const { unstaged, staged } = groups();
+		const [unstagedBoth] = unstaged.filter((f) => f.path === "both.ts");
+		const [stagedBoth] = staged.filter((f) => f.path === "both.ts");
+
+		expect(lineStatOf(unstagedBoth).lines).toEqual({
+			additions: 0,
+			deletions: 2,
+		});
+		expect(lineStatOf(stagedBoth).lines).toEqual({
+			additions: 1,
+			deletions: 0,
+		});
+		expect(unstagedBoth.staged).toBeUndefined();
+		expect(stagedBoth.unstaged).toBeUndefined();
 	});
 
-	// Mixed goes to checked, never back to unchecked.
-	it("stages what is unstaged unless everything is staged already", () => {
-		expect(
-			checkboxWrite([file("a", "staged"), file("b", "both"), file("c")]),
-		).toEqual({ paths: ["b", "c"], staged: false });
-		expect(checkboxWrite([file("a", "staged"), file("b", "staged")])).toEqual({
-			paths: ["a", "b"],
-			staged: true,
-		});
+	it("puts a conflict in conflicts alone, and keeps each group in order", () => {
+		const { conflicts, unstaged, staged } = groups();
+
+		expect(paths(conflicts)).toEqual(["merge.go"]);
+		expect(paths(unstaged)).toEqual(["ad.ts", "both.ts", "notes.txt"]);
+		expect(paths(staged)).toEqual(["ad.ts", "both.ts", "new.ts"]);
+	});
+
+	// Added in the index, deleted from the working tree: each row says its side.
+	it("describes an added-then-deleted file by the side each row shows", () => {
+		const { unstaged, staged } = groups();
+		const side = (rows: ChangedFile[]) =>
+			rows.find((f) => f.path === "ad.ts") as ChangedFile;
+
+		expect(changeKindOf(side(staged))).toBe("added");
+		expect(changeKindOf(side(unstaged))).toBe("deleted");
 	});
 
 	// Restoring the new path alone would leave `old` staged as deleted and
 	// `new` untracked: one row split in two.
-	it("unstages a rename together with its source", () => {
-		const renamed: ChangedFile = {
-			path: "sdk/new.ts",
-			submodule: true,
-			staged: { path: "sdk/new.ts", status: "R", orig_path: "sdk/old.ts" },
-		};
+	it("keeps a staged rename's source, so unstaging it takes both paths", () => {
+		const renamed = groups().staged.find(
+			(f) => f.path === "new.ts",
+		) as ChangedFile;
 
-		expect(checkboxWrite([renamed])).toEqual({
-			paths: ["sdk/new.ts", "sdk/old.ts"],
-			staged: true,
-		});
+		expect(changeKindOf(renamed)).toBe("renamed");
+		expect(unstagePaths(renamed)).toEqual(["new.ts", "old.ts"]);
 	});
 });
 

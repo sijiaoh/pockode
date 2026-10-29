@@ -388,14 +388,15 @@ enabled: isGitRepo && (
 
 ### 2.5 Pressing Review
 
-It opens the review layer at the **first file in list order** — the file the
-Changes list's first row opens — including the flat/tree order the user last
-chose: `firstReviewTarget` in `lib/gitChanges.ts`, the first file of
-`orderChanges` under the given view plus its side by `reviewSideOf`. The row's
+It opens the review layer at the **first file in review order** — by path, in
+the flat/tree order the user last chose, which need not be the Changes list's
+first row, since the list puts conflicts and unstaged changes first:
+`firstReviewTarget` in `lib/gitChanges.ts`, the first file of `orderChanges`
+under the given view plus its side by `reviewSideOf`. The row's
 press is `AppShell`'s `handleOpenReview`, which calls it on the status and the
 view in `gitChangesViewStore` as they are at the press. (The list once had a
-`Review` button of its own doing the same; it went, being the first row's press
-— [git-changes-ui.md](git-changes-ui.md#the-bottom-bar).) The route
+`Review` button of its own doing the same; it went, a row's press being the way
+into the review — [git-changes-ui.md](git-changes-ui.md#below-expanded).) The route
 carries the current `session`, so the header's way back names this chat.
 
 - **Push**, like every entry into the workspace, and without the list's
@@ -461,5 +462,5 @@ must: the action is never cut.
    rises into the questions row's place when the answer panel opens.
 7. **`git.changed` is watched while the row could show.** The turn's end is what
    refreshes the count.
-8. **Review opens the first file in list order through the list's own function.**
+8. **Review opens the first file in review order through the list's own function.**
    Leaving it follows the review's existing rule.

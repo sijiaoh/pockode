@@ -39,17 +39,23 @@ vi.mock("../../hooks/useGitDiscard", () => ({
 // Reads queries this test does not stand up; its own test covers it.
 vi.mock("./CommitBar", () => ({
 	default: ({
-		discardUnchecked,
+		discardUnstaged,
 	}: {
-		discardUnchecked: { onDiscard: () => void; busy: boolean } | null;
+		discardUnstaged: {
+			onDiscard: () => void;
+			busy: boolean;
+			nothingUnstaged: boolean;
+		} | null;
 	}) =>
-		discardUnchecked && (
+		discardUnstaged && (
 			<button
 				type="button"
-				aria-disabled={discardUnchecked.busy || undefined}
-				onClick={discardUnchecked.onDiscard}
+				aria-disabled={
+					discardUnstaged.busy || discardUnstaged.nothingUnstaged || undefined
+				}
+				onClick={discardUnstaged.onDiscard}
 			>
-				Discard unchecked…
+				Discard unstaged…
 			</button>
 		),
 }));
@@ -95,17 +101,34 @@ function renderSection(
 const confirmButton = (name: string) =>
 	screen.getByRole("button", { name, hidden: false });
 
-const checkbox = (name: string) => screen.getByRole("checkbox", { name });
+const button = (name: string) => screen.getByRole("button", { name });
 
-const discardUncheckedButton = () =>
-	screen.getByRole("button", { name: "Discard unchecked…" });
+const discardUnstagedButton = () => button("Discard unstaged…");
+
+type Group = "Conflicts" | "Unstaged" | "Staged";
+
+/** A group of the list, by its name; the count follows it in the label. */
+const group = (name: Group) =>
+	screen.getByRole("region", { name: new RegExp(`^${name} \\d+$`) });
+
+/**
+ * `name`, or `name` with the side a partly staged file's rows add to tell
+ * them apart — for queries already scoped to one group.
+ */
+const inGroup = (name: string) => (accessibleName: string) =>
+	[name, `${name}, staged`, `${name}, unstaged`].includes(accessibleName);
 
 async function openMenu(
 	user: ReturnType<typeof userEvent.setup>,
 	path: string,
+	from?: Group,
 ) {
 	await user.click(
-		screen.getByRole("button", { name: `More actions for ${path}` }),
+		within(from ? group(from) : document.body).getByRole("button", {
+			name: from
+				? inGroup(`More actions for ${path}`)
+				: `More actions for ${path}`,
+		}),
 	);
 	return screen.getByRole("dialog");
 }
@@ -115,7 +138,7 @@ async function discardFromMenu(
 	path: string,
 	item = "Discard changes",
 ) {
-	const sheet = await openMenu(user, path);
+	const sheet = await openMenu(user, path, "Unstaged");
 	await user.click(within(sheet).getByRole("button", { name: item }));
 }
 
@@ -135,8 +158,8 @@ describe("ChangesSection discard", () => {
 		resetWrites();
 	});
 
-	// A staged-only file has nothing to discard; it is unstaged first.
-	it("offers discard only for files with unstaged changes", async () => {
+	// Staged is never discarded; a staged file is unstaged first.
+	it("offers discard only from an unstaged row", async () => {
 		const user = userEvent.setup();
 		renderSection();
 
@@ -152,6 +175,27 @@ describe("ChangesSection discard", () => {
 		const untracked = await openMenu(user, "notes.txt");
 		expect(
 			within(untracked).getByRole("button", { name: "Delete file" }),
+		).toBeInTheDocument();
+	});
+
+	// The file has unstaged changes, but not on the row the sheet came from.
+	it("offers no discard from the staged row of a partly staged file", async () => {
+		const user = userEvent.setup();
+		status = {
+			staged: [{ path: "src/foo.ts", status: "M" }],
+			unstaged: [{ path: "src/foo.ts", status: "M" }],
+		};
+		renderSection();
+
+		const staged = await openMenu(user, "src/foo.ts", "Staged");
+		expect(
+			within(staged).queryByRole("button", { name: /Discard|Delete/ }),
+		).not.toBeInTheDocument();
+		await user.keyboard("{Escape}");
+
+		const unstaged = await openMenu(user, "src/foo.ts", "Unstaged");
+		expect(
+			within(unstaged).getByRole("button", { name: "Discard changes" }),
 		).toBeInTheDocument();
 	});
 
@@ -212,7 +256,7 @@ describe("ChangesSection discard", () => {
 			}),
 		);
 		renderSection();
-		await user.click(checkbox("Stage src/foo.ts"));
+		await user.click(button("Stage src/foo.ts"));
 
 		const sheet = await openMenu(user, "src/foo.ts");
 		const item = within(sheet).getByRole("button", { name: /Discard changes/ });
@@ -274,15 +318,15 @@ describe("ChangesSection discard", () => {
 		expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
 	});
 
-	it("sends every unchecked path from the bottom bar", async () => {
+	it("sends every unstaged path from the bottom bar", async () => {
 		const user = userEvent.setup();
 		renderSection();
 
-		await user.click(discardUncheckedButton());
+		await user.click(discardUnstagedButton());
 
 		expect(
 			screen.getByText(
-				"The unchecked edits in 1 file will be lost and 1 untracked file will be deleted. Checked changes are kept. This cannot be undone.",
+				"The unstaged edits in 1 file will be lost and 1 untracked file will be deleted. Staged changes are kept. This cannot be undone.",
 			),
 		).toBeInTheDocument();
 		await user.click(confirmButton("Discard"));
@@ -290,9 +334,8 @@ describe("ChangesSection discard", () => {
 		expect(discard).toHaveBeenCalledWith(["notes.txt", "src/foo.ts"]);
 	});
 
-	// Checked in part is checked for what is staged: only the rest is a vote
-	// against, and git's discard restores the file to its index.
-	it("discards only the unchecked side of a partly checked file", async () => {
+	// git's discard restores the file to its index: what is staged stays.
+	it("discards only the unstaged side of a partly staged file", async () => {
 		const user = userEvent.setup();
 		status = {
 			staged: [{ path: "src/foo.ts", status: "M" }],
@@ -300,7 +343,7 @@ describe("ChangesSection discard", () => {
 		};
 		renderSection();
 
-		await user.click(discardUncheckedButton());
+		await user.click(discardUnstagedButton());
 		expect(
 			screen.getByText(
 				"Your unstaged edits to src/foo.ts will be lost. Its staged changes are kept. This cannot be undone.",
@@ -326,13 +369,12 @@ describe("ChangesSection discard", () => {
 		).toBeInTheDocument();
 	});
 
-	it("offers no discard when every file is checked", () => {
+	// Held, not hidden: it still shows where discarding lives.
+	it("holds the discard when every file is staged", () => {
 		status = { staged: STATUS.staged, unstaged: [] };
 		renderSection();
 
-		expect(
-			screen.queryByRole("button", { name: "Discard unchecked…" }),
-		).toBeNull();
+		expect(discardUnstagedButton()).toHaveAttribute("aria-disabled", "true");
 	});
 
 	// The write queue drops a path it already holds: a discard now would skip
@@ -347,12 +389,12 @@ describe("ChangesSection discard", () => {
 		);
 		renderSection();
 
-		await user.click(checkbox("Stage src/foo.ts"));
-		expect(discardUncheckedButton()).toHaveAttribute("aria-disabled", "true");
+		await user.click(button("Stage src/foo.ts"));
+		expect(discardUnstagedButton()).toHaveAttribute("aria-disabled", "true");
 
 		await act(async () => finish());
 		await waitFor(() =>
-			expect(discardUncheckedButton()).not.toHaveAttribute("aria-disabled"),
+			expect(discardUnstagedButton()).not.toHaveAttribute("aria-disabled"),
 		);
 	});
 
@@ -428,13 +470,13 @@ describe("ChangesSection discard", () => {
 
 	// The list has not heard of the discard when it answers: a file it left
 	// with no changes at all must not be what the review moves on to.
-	it("passes over the other files a discard of the unchecked leaves unchanged", async () => {
+	it("passes over the other files a discard of the unstaged leaves unchanged", async () => {
 		const user = userEvent.setup();
 		const { onCloseFile } = renderSection({
 			activeFile: { path: "notes.txt", staged: false },
 		});
 
-		await user.click(discardUncheckedButton());
+		await user.click(discardUnstagedButton());
 		await user.click(confirmButton("Discard"));
 
 		await waitFor(() =>
@@ -457,7 +499,7 @@ describe("ChangesSection discard", () => {
 		};
 		const { onCloseFile } = renderSection();
 
-		await user.click(discardUncheckedButton());
+		await user.click(discardUnstagedButton());
 		await user.click(confirmButton("Discard"));
 
 		await waitFor(() =>
@@ -491,8 +533,8 @@ describe("ChangesSection discard", () => {
 });
 
 const stageButtons = () => [
-	checkbox("Stage src/foo.ts"),
-	checkbox("Stage notes.txt"),
+	button("Stage src/foo.ts"),
+	button("Stage notes.txt"),
 ];
 
 describe("ChangesSection staging", () => {
@@ -570,7 +612,7 @@ describe("ChangesSection staging", () => {
 	});
 });
 
-describe("ChangesSection checkboxes", () => {
+describe("ChangesSection groups", () => {
 	beforeEach(() => {
 		status = {
 			staged: [
@@ -585,22 +627,40 @@ describe("ChangesSection checkboxes", () => {
 		resetWrites();
 	});
 
-	it("shows a file's staging as its checkbox, partial staging as mixed", () => {
+	// By label: the role query would compute every button's name per call.
+	const rowsIn = (name: Group) =>
+		within(group(name))
+			.queryAllByLabelText(/^Review /)
+			.map((row) => row.getAttribute("aria-label"));
+
+	it("lists each side of a file in its own group, a partly staged file in both", () => {
 		renderSection();
 
-		expect(checkbox("Stage a/full.ts")).toHaveAttribute("aria-checked", "true");
-		expect(checkbox("Stage a/part.ts")).toHaveAttribute(
-			"aria-checked",
-			"mixed",
-		);
-		expect(checkbox("Stage b/none.ts")).toHaveAttribute(
-			"aria-checked",
-			"false",
-		);
+		expect(rowsIn("Unstaged")).toEqual([
+			"Review a/part.ts, unstaged",
+			"Review b/none.ts",
+		]);
+		expect(rowsIn("Staged")).toEqual([
+			"Review a/full.ts",
+			"Review a/part.ts, staged",
+		]);
+		// Counted by path, so the partly staged file counts once.
+		expect(screen.getByText("3 files")).toBeInTheDocument();
 	});
 
-	// A hunk staged in the review moves the file: its row waits for that as it
-	// waits for a write of the whole file.
+	it("keeps both groups up when one is empty, and says it is", () => {
+		status = { staged: [{ path: "a.ts", status: "M" }], unstaged: [] };
+		renderSection();
+
+		expect(within(group("Unstaged")).getByText("No unstaged changes."));
+		expect(
+			within(group("Unstaged")).queryByRole("button", { name: /^Stage all/ }),
+		).toBeNull();
+		expect(rowsIn("Staged")).toEqual(["Review a.ts"]);
+	});
+
+	// A hunk staged in the review moves the file: both of its rows wait for
+	// that as they wait for a write of the whole file.
 	it("shows a file busy while one of its hunks is being staged", async () => {
 		renderSection();
 		let finish!: () => void;
@@ -612,36 +672,49 @@ describe("ChangesSection checkboxes", () => {
 			running = gitWriteActions.runHunk("", "a/part.ts", "h1", () => write);
 		});
 
-		expect(checkbox("Stage a/part.ts")).toHaveAttribute("aria-busy", "true");
-		expect(checkbox("Stage b/none.ts")).not.toHaveAttribute("aria-busy");
+		expect(button("Stage a/part.ts")).toHaveAttribute("aria-busy", "true");
+		expect(button("Unstage a/part.ts")).toHaveAttribute("aria-busy", "true");
+		expect(button("Stage b/none.ts")).not.toHaveAttribute("aria-busy");
 
 		await act(async () => {
 			finish();
 			await running;
 		});
-		expect(checkbox("Stage a/part.ts")).not.toHaveAttribute("aria-busy");
+		expect(button("Stage a/part.ts")).not.toHaveAttribute("aria-busy");
 	});
 
-	// Mixed goes to checked: a partial staging made on purpose is not thrown
-	// away by a press that means "include this file".
-	it("stages the rest of a mixed file and unstages a checked one", async () => {
+	it("stages an unstaged row and unstages a staged one, each its own side", async () => {
 		const user = userEvent.setup();
 		renderSection();
 
-		await user.click(checkbox("Stage a/part.ts"));
+		await user.click(button("Stage a/part.ts"));
 		await waitFor(() => expect(stage).toHaveBeenCalledWith(["a/part.ts"]));
 
-		await user.click(checkbox("Stage a/full.ts"));
-		await waitFor(() => expect(unstage).toHaveBeenCalledWith(["a/full.ts"]));
+		await user.click(button("Unstage a/part.ts"));
+		await waitFor(() => expect(unstage).toHaveBeenCalledWith(["a/part.ts"]));
 	});
 
-	it("stages everything unstaged from select all, in one request", async () => {
+	// Restoring the new path alone would split the rename into two rows.
+	it("unstages a staged rename together with its source", async () => {
+		const user = userEvent.setup();
+		status = {
+			staged: [{ path: "new.ts", status: "R", orig_path: "old.ts" }],
+			unstaged: [],
+		};
+		renderSection();
+
+		await user.click(button("Unstage new.ts"));
+
+		await waitFor(() =>
+			expect(unstage).toHaveBeenCalledWith(["new.ts", "old.ts"]),
+		);
+	});
+
+	it("stages every unstaged row from the group's header, in one request", async () => {
 		const user = userEvent.setup();
 		renderSection();
 
-		const all = checkbox("Stage all 3 files");
-		expect(all).toHaveAttribute("aria-checked", "mixed");
-		await user.click(all);
+		await user.click(button("Stage all 2 unstaged files"));
 
 		await waitFor(() =>
 			expect(stage).toHaveBeenCalledWith(["a/part.ts", "b/none.ts"]),
@@ -649,41 +722,161 @@ describe("ChangesSection checkboxes", () => {
 		expect(stage).toHaveBeenCalledTimes(1);
 	});
 
-	it("unstages everything once every file is fully staged", async () => {
+	it("unstages every staged row from the group's header, in one request", async () => {
 		const user = userEvent.setup();
-		status = {
-			staged: [
-				{ path: "a.ts", status: "M" },
-				{ path: "b.ts", status: "A" },
-			],
-			unstaged: [],
-		};
 		renderSection();
 
-		await user.click(checkbox("Stage all 2 files"));
+		await user.click(button("Unstage all 2 staged files"));
 
-		await waitFor(() => expect(unstage).toHaveBeenCalledWith(["a.ts", "b.ts"]));
+		await waitFor(() =>
+			expect(unstage).toHaveBeenCalledWith(["a/full.ts", "a/part.ts"]),
+		);
+		expect(unstage).toHaveBeenCalledTimes(1);
 	});
 
-	// A folder writes the files the list shows under it, never `git add <dir>`.
+	// A folder writes the files the group shows under it, never `git add <dir>`.
 	it("stages a folder's files by path, and still does so collapsed", async () => {
 		const user = userEvent.setup();
 		gitChangesViewActions.setView("tree");
 		renderSection();
 
-		const folder = screen.getByRole("button", { name: "a" });
+		const folder = within(group("Unstaged")).getByRole("button", { name: "a" });
 		expect(folder).toHaveAttribute("aria-expanded", "true");
 		await user.click(folder);
 		expect(folder).toHaveAttribute("aria-expanded", "false");
 		expect(
-			screen.queryByRole("checkbox", { name: "Stage a/part.ts" }),
+			screen.queryByRole("button", { name: "Stage a/part.ts" }),
 		).toBeNull();
+		// Each group's tree folds on its own.
+		expect(
+			within(group("Staged")).getByRole("button", { name: "a" }),
+		).toHaveAttribute("aria-expanded", "true");
 
-		const box = checkbox("Stage folder a, 2 files");
-		expect(box).toHaveAttribute("aria-checked", "mixed");
-		await user.click(box);
-
+		await user.click(button("Stage folder a, 1 file"));
 		await waitFor(() => expect(stage).toHaveBeenCalledWith(["a/part.ts"]));
+
+		await user.click(button("Unstage folder a, 2 files"));
+		await waitFor(() =>
+			expect(unstage).toHaveBeenCalledWith(["a/full.ts", "a/part.ts"]),
+		);
+	});
+
+	// The row leaves from under the button; the focus must not go with it.
+	/**
+	 * The next stage answers with `next` already on screen: `useGitStage`'s
+	 * writes answer once the status they invalidated has been read again.
+	 */
+	const answerWith = (refresh: () => void, next: GitStatus) =>
+		stage.mockImplementationOnce(async () => {
+			status = next;
+			refresh();
+		});
+
+	it("hands the focus on to the row that takes the moved one's place", async () => {
+		const user = userEvent.setup();
+		const { refresh } = renderSection();
+
+		answerWith(refresh, {
+			staged: [
+				{ path: "a/full.ts", status: "M" },
+				{ path: "a/part.ts", status: "M" },
+			],
+			unstaged: [{ path: "b/none.ts", status: "M" }],
+		});
+		button("Stage a/part.ts").focus();
+		await user.keyboard("{Enter}");
+		await waitFor(() => expect(button("Stage b/none.ts")).toHaveFocus());
+
+		answerWith(refresh, {
+			staged: [
+				{ path: "a/full.ts", status: "M" },
+				{ path: "a/part.ts", status: "M" },
+				{ path: "b/none.ts", status: "M" },
+			],
+			unstaged: [],
+		});
+		await user.keyboard("{Enter}");
+		await waitFor(() =>
+			expect(screen.getByRole("heading", { name: "Unstaged 0" })).toHaveFocus(),
+		);
+	});
+
+	it("hands the focus back up the group when the last row moves", async () => {
+		const user = userEvent.setup();
+		const { refresh } = renderSection();
+
+		answerWith(refresh, {
+			staged: [
+				{ path: "a/full.ts", status: "M" },
+				{ path: "a/part.ts", status: "M" },
+				{ path: "b/none.ts", status: "M" },
+			],
+			unstaged: [{ path: "a/part.ts", status: "M" }],
+		});
+		button("Stage b/none.ts").focus();
+		await user.keyboard("{Enter}");
+		await waitFor(() => expect(button("Stage a/part.ts")).toHaveFocus());
+	});
+
+	// The hand-off is the press's: once the focus is elsewhere, or the write
+	// failed and left the row in place, a later move must not take the focus.
+	it("leaves the focus alone once it has gone elsewhere", async () => {
+		const user = userEvent.setup();
+		// Still writing, so nothing but the focus leaving drops the hand-off.
+		stage.mockReturnValueOnce(new Promise(() => {}));
+		const { refresh } = renderSection();
+
+		button("Stage a/part.ts").focus();
+		await user.keyboard("{Enter}");
+		await waitFor(() => expect(stage).toHaveBeenCalled());
+		const flat = button("Flat list");
+		flat.focus();
+		flat.blur();
+		status = {
+			...status,
+			unstaged: [{ path: "b/none.ts", status: "M" }],
+		} as GitStatus;
+		refresh();
+
+		expect(document.body).toHaveFocus();
+	});
+
+	// Edited again before the status was read: the row stayed, and its later
+	// move is not this press's.
+	it("drops the hand-off when the write leaves the row in place", async () => {
+		const user = userEvent.setup();
+		const { refresh } = renderSection();
+
+		button("Stage a/part.ts").focus();
+		await user.keyboard("{Enter}");
+		await waitFor(() => expect(stage).toHaveBeenCalled());
+		await act(() => new Promise((resolve) => setTimeout(resolve)));
+		(document.activeElement as HTMLElement).blur();
+		status = {
+			...status,
+			unstaged: [{ path: "b/none.ts", status: "M" }],
+		} as GitStatus;
+		refresh();
+
+		expect(document.body).toHaveFocus();
+	});
+
+	it("drops the hand-off when the write fails", async () => {
+		const user = userEvent.setup();
+		stage.mockRejectedValue(new Error("fatal: index.lock exists"));
+		const { refresh } = renderSection();
+
+		button("Stage a/part.ts").focus();
+		await user.keyboard("{Enter}");
+		await screen.findByRole("alert");
+		(document.activeElement as HTMLElement).blur();
+		status = {
+			...status,
+			unstaged: [{ path: "b/none.ts", status: "M" }],
+		} as GitStatus;
+		refresh();
+
+		expect(document.body).toHaveFocus();
 	});
 });
 
@@ -705,12 +898,17 @@ describe("ChangesSection conflicts", () => {
 	});
 
 	// One tap must not record the markers as the resolution.
-	it("draws a conflicted file without a checkbox, named and marked as one", () => {
+	it("draws a conflicted file in its own group without a stage button", () => {
 		renderSection();
 
 		expect(
-			screen.queryByRole("checkbox", { name: "Stage src/clash.ts" }),
+			screen.queryByRole("button", { name: /Stage src\/clash.ts/ }),
 		).toBeNull();
+		expect(
+			within(group("Conflicts")).getByLabelText(
+				"Review src/clash.ts, conflicted",
+			),
+		).toBeInTheDocument();
 		const row = screen.getByRole("button", {
 			name: "Review src/clash.ts, conflicted",
 		});
@@ -731,37 +929,37 @@ describe("ChangesSection conflicts", () => {
 		).toBeNull();
 	});
 
-	it("passes conflicts over in select all, and says so in its name", async () => {
+	it("passes conflicts over in staging all", async () => {
 		const user = userEvent.setup();
 		renderSection();
 
-		await user.click(checkbox("Stage 2 of 3 files, 1 conflicted"));
+		await user.click(button("Stage all 1 unstaged file"));
 
 		await waitFor(() => expect(stage).toHaveBeenCalledWith(["notes.txt"]));
 	});
 
-	it("passes conflicts over in discarding the unchecked", async () => {
+	it("passes conflicts over in discarding the unstaged", async () => {
 		const user = userEvent.setup();
 		renderSection();
 
-		await user.click(discardUncheckedButton());
+		await user.click(discardUnstagedButton());
 		await user.click(confirmButton("Discard"));
 
 		expect(discard).toHaveBeenCalledWith(["notes.txt"]);
 	});
 
-	// The gutter stays, empty, so the column of boxes stays aligned.
-	it("gives a folder of only conflicts no checkbox", () => {
+	// The gutter stays, empty, so the column of buttons stays aligned.
+	it("gives a folder of conflicts no stage button", () => {
 		gitChangesViewActions.setView("tree");
 		renderSection();
 
-		expect(screen.getByRole("button", { name: "src" })).toBeInTheDocument();
+		expect(button("src")).toBeInTheDocument();
 		expect(
-			screen.queryByRole("checkbox", { name: /Stage folder src/ }),
+			screen.queryByRole("button", { name: /Stage folder src/ }),
 		).toBeNull();
 	});
 
-	it("has no select all when every file is conflicted", () => {
+	it("has nothing to stage or discard when every file is conflicted", () => {
 		status = {
 			staged: [{ path: "a.ts", status: "U" }],
 			unstaged: [{ path: "a.ts", status: "U" }],
@@ -769,9 +967,9 @@ describe("ChangesSection conflicts", () => {
 		};
 		renderSection();
 
-		expect(screen.queryByRole("checkbox")).toBeNull();
+		expect(screen.queryByRole("button", { name: /^(Un)?[Ss]tage/ })).toBeNull();
 		expect(
-			screen.queryByRole("button", { name: "Discard unchecked…" }),
+			screen.queryByRole("button", { name: "Discard unstaged…" }),
 		).toBeNull();
 	});
 });
@@ -781,7 +979,7 @@ describe("ChangesSection rows", () => {
 		resetWrites();
 	});
 
-	it("names each file's change in words and sums both sides' lines", () => {
+	it("names each row's change in words, by its own side's lines", () => {
 		status = {
 			staged: [
 				{
@@ -812,11 +1010,16 @@ describe("ChangesSection rows", () => {
 		};
 		renderSection();
 
-		const row = (path: string) =>
-			screen.getByRole("button", { name: `Review ${path}` });
-		expect(row("docs/new.md")).toHaveTextContent("Renamed from old.md");
-		expect(row("docs/new.md")).toHaveTextContent("+2 −1");
-		expect(row("lib/x.ts")).toHaveTextContent("+7 −2");
+		const row = (path: string, from: Group = "Unstaged") =>
+			within(group(from)).getByRole("button", {
+				name: inGroup(`Review ${path}`),
+			});
+		expect(row("docs/new.md", "Staged")).toHaveTextContent(
+			"Renamed from old.md",
+		);
+		expect(row("docs/new.md", "Staged")).toHaveTextContent("+2 −1");
+		expect(row("lib/x.ts", "Staged")).toHaveTextContent("+3");
+		expect(row("lib/x.ts")).toHaveTextContent("+4 −2");
 		expect(row("gone.ts")).toHaveTextContent("Deleted");
 		expect(row("gone.ts")).toHaveTextContent("−14");
 		expect(row("gone.ts")).not.toHaveTextContent("+0");
@@ -868,18 +1071,27 @@ describe("ChangesSection rows", () => {
 		).toHaveTextContent("Untracked · Submodule");
 	});
 
-	// The unstaged side is what staging would add; a fully staged file has
-	// only the other.
-	it("opens a file on the side that still has something to stage", async () => {
+	it("opens a row on its own group's side, and lights only that row", async () => {
 		const user = userEvent.setup();
-		status = STATUS;
-		const { onSelectFile } = renderSection();
+		status = {
+			staged: [{ path: "src/foo.ts", status: "M" }],
+			unstaged: [{ path: "src/foo.ts", status: "M" }],
+		};
+		const { onSelectFile } = renderSection({
+			activeFile: { path: "src/foo.ts", staged: true },
+		});
+		const row = (from: Group) =>
+			within(group(from)).getByRole("button", {
+				name: `Review src/foo.ts, ${from.toLowerCase()}`,
+			});
 
-		await user.click(screen.getByRole("button", { name: "Review src/foo.ts" }));
+		await user.click(row("Unstaged"));
 		expect(onSelectFile).toHaveBeenLastCalledWith("src/foo.ts", false);
+		await user.click(row("Staged"));
+		expect(onSelectFile).toHaveBeenLastCalledWith("src/foo.ts", true);
 
-		await user.click(screen.getByRole("button", { name: "Review staged.ts" }));
-		expect(onSelectFile).toHaveBeenLastCalledWith("staged.ts", true);
+		expect(row("Staged")).toHaveAttribute("aria-current", "true");
+		expect(row("Unstaged")).not.toHaveAttribute("aria-current");
 	});
 
 	// History is one segment away; the empty list does not point there again.
@@ -888,8 +1100,8 @@ describe("ChangesSection rows", () => {
 		renderSection();
 
 		expect(screen.getByText("No changes")).toBeInTheDocument();
-		expect(screen.queryByRole("checkbox")).toBeNull();
 		expect(screen.queryByRole("button")).toBeNull();
+		expect(screen.queryByRole("region")).toBeNull();
 	});
 
 	// The sheet is about a file; once the file has no changes it has nothing

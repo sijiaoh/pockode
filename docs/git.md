@@ -365,7 +365,7 @@ The other edges each keep their meaning:
 - **A staged rename keeps its rename.** Its hunks are applied to the new path alone, so unstaging part of a renamed file's edits leaves the move staged.
 - **No newline at end of file**, and `diff.suppressBlankEmpty`'s empty context lines, are carried through as git wrote them; hunk bodies are read by their header's counts, never up to the next line that looks like a header.
 
-**Partly staged needs no new field.** A file with some hunks staged and some not is in both of `git.status`'s lists, which is what the Changes list already reads as mixed ([git-changes-ui.md](git-changes-ui.md#the-changes-segment)).
+**Partly staged needs no new field.** A file with some hunks staged and some not is in both of `git.status`'s lists, which the Changes list already draws as a row in both its Unstaged and Staged groups ([git-changes-ui.md](git-changes-ui.md#the-groups)).
 
 Both methods take the index lock as `stage` and `unstage` — the names a `-32001` refusal carries — and announce nothing themselves: the watchers pick the change up like any other ([Real-Time Updates](#real-time-updates)).
 

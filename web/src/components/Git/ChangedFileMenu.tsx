@@ -10,11 +10,12 @@ interface Props {
 	onOpenFile: (path: string) => void;
 	onOpenHistory: (path: string) => void;
 	/**
-	 * Only offered while the file has unstaged changes: a staged side has
-	 * nothing to discard, and a conflict has no side at all — git refuses to
-	 * restore an unmerged path, and picking a side is not offered here.
+	 * Only offered from an Unstaged row (undefined from a Staged one) and while
+	 * the file has unstaged changes: a staged side is never discarded, and a
+	 * conflict has no side at all — git refuses to restore an unmerged path,
+	 * and picking a side is not offered here.
 	 */
-	onDiscard: (file: ChangedFile) => void;
+	onDiscard?: (file: ChangedFile) => void;
 	/**
 	 * A write for this file is queued or running. Discard waits it out: the
 	 * write queue drops a path it already holds, so a discard pressed now would
@@ -58,7 +59,7 @@ function ChangedFileMenu({
 					/>
 				)}
 				<CopyMenuRow text={file.path} label="Copy path" onCopied={onClose} />
-				{file.unstaged && (
+				{onDiscard && file.unstaged && (
 					<>
 						<div className="my-1 border-t border-th-border" />
 						<MenuRow

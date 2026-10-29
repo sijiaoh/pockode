@@ -1,9 +1,9 @@
 import type { FileStatus, GitStatus, LineStat } from "../types/git";
 
 /**
- * One changed path as the Changes list and the review show it: both sides of
- * the file in one record, so that staging is a property of the row rather than
- * the list it sits in (docs/git-changes-ui.md).
+ * One changed path as the review walks it: both sides of the file in one
+ * record. The Changes list draws each side as a row of its own group
+ * (`groupChanges`, docs/git-changes-ui.md).
  */
 export interface ChangedFile {
 	/** Relative to the root repository; a submodule's file carries its prefix. */
@@ -18,7 +18,7 @@ export interface ChangedFile {
 	 * The index holds unresolved conflicts for the path. Such a record has
 	 * neither side: what git lists on its two sides are conflict codes, not
 	 * changes, and drawn as sides they would read as a partly staged file whose
-	 * checkbox stages it — recording the markers as the resolution
+	 * stage button stages it — recording the markers as the resolution
 	 * (docs/git-conflict-ui.md, The Changes list).
 	 */
 	conflict?: ConflictKind;
@@ -29,9 +29,6 @@ export interface ChangedFile {
  * `D` on one, or anything else (`UU`, `AA`, `AU`, `UA`).
  */
 export type ConflictKind = "content" | "deleted-one-side" | "deleted-both";
-
-/** `mixed` only ever comes from staging done elsewhere, never from a tap. */
-export type CheckState = "checked" | "unchecked" | "mixed";
 
 export type ChangesView = "flat" | "tree";
 
@@ -92,63 +89,38 @@ export function collectChanges(status: GitStatus): ChangedFile[] {
 	return [...byPath.values()];
 }
 
-/** The files a checkbox or a discard of many may act on: every one but a conflict. */
-export function withoutConflicts(files: ChangedFile[]): ChangedFile[] {
-	return files.filter((f) => !f.conflict);
-}
-
 /**
- * What a checkbox over `files` stands for, as its name says it: `5 files`, or
- * `3 of 5 files, 2 conflicted` when it passes conflicts over — still holding
- * the visible count, for voice control.
+ * The Changes list's groups, each a list of one-sided rows in `files`' order:
+ * a partly staged file has a row in both `unstaged` and `staged`, and a
+ * conflict, which has no side, is in `conflicts` alone.
  */
-export function describeStageable(files: ChangedFile[]): string {
-	const total = `${files.length} ${files.length === 1 ? "file" : "files"}`;
-	const stageable = withoutConflicts(files).length;
-	const conflicts = files.length - stageable;
-	return conflicts === 0
-		? total
-		: `${stageable} of ${total}, ${conflicts} conflicted`;
+export interface ChangeGroups {
+	conflicts: ChangedFile[];
+	unstaged: ChangedFile[];
+	staged: ChangedFile[];
 }
 
-export function checkStateOf(file: ChangedFile): CheckState {
-	if (!file.staged) return "unchecked";
-	return file.unstaged ? "mixed" : "checked";
-}
-
-/**
- * The state of a checkbox standing for several files — a folder, or select
- * all: checked when every file is fully staged, unchecked when none has
- * anything staged. Conflicts are left out, here and in `checkboxWrite`: no
- * press of a box stages one.
- */
-export function aggregateCheckState(files: ChangedFile[]): CheckState {
-	const states = new Set(withoutConflicts(files).map(checkStateOf));
-	if (states.size === 1 && !states.has("mixed")) {
-		return states.has("checked") ? "checked" : "unchecked";
+export function groupChanges(files: ChangedFile[]): ChangeGroups {
+	const groups: ChangeGroups = { conflicts: [], unstaged: [], staged: [] };
+	for (const file of files) {
+		if (file.conflict) {
+			groups.conflicts.push(file);
+			continue;
+		}
+		if (file.unstaged) groups.unstaged.push(sideOnly(file, false));
+		if (file.staged) groups.staged.push(sideOnly(file, true));
 	}
-	return states.size === 0 ? "unchecked" : "mixed";
+	return groups;
 }
 
 /**
- * What pressing a checkbox over `files` writes. Mixed goes to checked — the
- * press is "include these", and a partial staging was made on purpose — so
- * only a checked box unstages.
- *
- * `staged` is in `useGitWriteRunner().toggle`'s terms: true unstages.
+ * `file` with only one of its sides, so that what is read off a row — its
+ * kind, its counts — describes that side alone.
  */
-export function checkboxWrite(files: ChangedFile[]): {
-	paths: string[];
-	staged: boolean;
-} {
-	const stageable = withoutConflicts(files);
-	if (aggregateCheckState(stageable) === "checked") {
-		return { paths: stageable.flatMap(unstagePaths), staged: true };
-	}
-	return {
-		paths: stageable.filter((f) => f.unstaged).map((f) => f.path),
-		staged: false,
-	};
+export function sideOnly(file: ChangedFile, staged: boolean): ChangedFile {
+	return staged
+		? { ...file, unstaged: undefined }
+		: { ...file, staged: undefined };
 }
 
 /**
@@ -272,8 +244,9 @@ function compareTree(a: string, b: string): number {
 }
 
 /**
- * The one ordering of changed paths, shared by the list and the review: the
- * review walks the files in the order the list draws them.
+ * The one ordering of changed paths, shared by the list and the review: each
+ * of the list's groups draws its rows in it, and the review walks the files
+ * in it.
  */
 export function compareChangePaths(
 	view: ChangesView,
@@ -290,9 +263,10 @@ export function orderChanges(
 }
 
 /**
- * Where a review entered from outside a file starts: the first file in the
- * list's order, on the side `reviewSideOf` opens — the chat's review row starts
- * here, at the file the list's first row opens (docs/agent-handoff-ui.md §2.5).
+ * Where a review entered from outside a file starts: the first file in review
+ * order, on the side `reviewSideOf` opens — the chat's review row starts here
+ * (docs/agent-handoff-ui.md §2.5). Not necessarily the list's first row, which
+ * is the first conflict or unstaged change.
  * Null for a clean tree.
  */
 export function firstReviewTarget(
