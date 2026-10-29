@@ -29,12 +29,12 @@ interface GitCheckoutState {
  * user navigates away while the request keeps running.
  *
  * It lives outside the Branches segment because a switch can be walked away
- * from: the segment control, the top bar and Back all leave the segment while
- * the request runs, which a sheet that could not be closed mid-switch never
- * allowed. A failure that settled with nobody on the segment would otherwise
- * be lost, and a user who believes the switch happened goes on to have an
- * agent work on the wrong branch. Coming back mid-switch has to show the
- * spinner, too, and keep the second switch from being started on top of it.
+ * from: the segment control and Back both leave the segment while the request
+ * runs, which a sheet that could not be closed mid-switch never allowed. A
+ * failure that settled with nobody on the segment would otherwise be lost, and
+ * a user who believes the switch happened goes on to have an agent work on the
+ * wrong branch. Coming back mid-switch has to show the spinner, too, and keep
+ * the second switch from being started on top of it.
  *
  * Not part of gitWriteStore, although that one also holds write failures: it
  * queues the quick local writes — stage, unstage, discard — one behind another,

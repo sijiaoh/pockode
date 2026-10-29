@@ -471,8 +471,9 @@ sidebar's at `expanded`, the Git page's below it.
   top bar and sync chip, their banners, the operation banner, segments, list,
   commit bar — drawn by the same components (`GitSegmentList` for the segments
   and lists), so the two shapes cannot drift apart. The read-only overview of
-  the narrow shape is not drawn: it says what the top bar says, and the top bar
-  is pressable. Laid out and navigated as [git-ui.md](git-ui.md#at-expanded-the-sidebars-list-and-the-detail)
+  the narrow shape is not drawn: it says what the top bar says, and the top
+  bar's sync chip is the pressable way into the sync sheet. Laid out and
+  navigated as [git-ui.md](git-ui.md#at-expanded-the-sidebars-list-and-the-detail)
   says; the rules the sidebar itself owns are below.
 - **Its width is the sidebar's.** No width of its own and no handle of its own:
   280–500px by the column's handle, 320 by default
@@ -540,7 +541,8 @@ files under `Changes` are part of the reading.
   overview and the doors around a scrolling list would spend about 245px of a
   phone's drawer before the first file — the old panel's ~265px
   ([What went wrong](#what-went-wrong-and-what-it-teaches)) again.
-- **The overview is read-only.** The branch name — `detached @ <hash>` when
+- **The overview is read-only.** The branch name — drawn as the top bar
+  draws it (`CurrentBranch` in `Git/BranchBar.tsx`), `detached @ <hash>` when
   detached, the shared skeleton while loading and `Branch unavailable` with
   nothing cached (`Git/HeadPlaceholder.tsx`, as in the workspace's top bar) —
   and one line of sync state. That line is `describeSyncStep` of the very

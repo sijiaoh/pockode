@@ -119,7 +119,7 @@ A detail has no room for the whole banner over a diff, and the actions are not l
 
 ### The top bar during a rebase
 
-A rebase detaches HEAD, so today's top bar would read `detached @ 4be1f20` — true, and useless. While `kind` is `rebase` with a `branch`, the left region reads `⑂ feature/git-ui · rebasing` (the suffix muted), accessible name `Branches, rebasing feature/git-ui`. It still opens Branches. The sync chip stays hidden as it is for any detached HEAD. A rebase of a detached HEAD has no `branch`, and the bar stays `detached @ <hash>`. Merge, cherry-pick and revert leave HEAD where it was, and the bar is unchanged.
+A rebase detaches HEAD, so today's top bar would read `detached @ 4be1f20` — true, and useless. While `kind` is `rebase` with a `branch`, the left region reads `⑂ feature/git-ui · rebasing` (the suffix muted). The sync chip stays hidden as it is for any detached HEAD. A rebase of a detached HEAD has no `branch`, and the bar stays `detached @ <hash>`. Merge, cherry-pick and revert leave HEAD where it was, and the bar is unchanged.
 
 ## Resolve with agent
 

@@ -57,7 +57,7 @@ import {
 } from "../../utils/gitSyncStatus";
 import { useSidebarRefresh } from "../Layout";
 import { formatBadgeCount, Spinner } from "../ui";
-import BranchBar, { HeadName } from "./BranchBar";
+import BranchBar, { CurrentBranch } from "./BranchBar";
 import ChangedFileRow from "./ChangedFileRow";
 import GitSegmentList, { activeRowsOf } from "./GitSegmentList";
 import HeadPlaceholder from "./HeadPlaceholder";
@@ -295,7 +295,6 @@ function GitTabLists({
 	return (
 		<div ref={listRef} className="flex min-h-0 flex-1 flex-col">
 			<BranchBar
-				onOpenBranches={() => onSelectSegment("branches")}
 				branchFailureSurface={place.segment === "branches"}
 				mergeHandoff={mergeHandoff}
 			/>
@@ -667,11 +666,7 @@ function Overview() {
 	return (
 		<div className="space-y-1 border-b border-th-border px-4 py-2.5">
 			<div className="flex min-w-0 items-center gap-2 text-th-text-primary">
-				<GitBranch
-					className="h-4 w-4 shrink-0 text-th-text-muted"
-					aria-hidden="true"
-				/>
-				<HeadName head={head} rebasing={rebasingBranch(operation)} />
+				<CurrentBranch head={head} rebasing={rebasingBranch(operation)} />
 			</div>
 			{operationTitle ? (
 				<div className="flex items-center gap-1.5 pl-6 text-xs text-th-text-secondary">
