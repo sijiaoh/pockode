@@ -17,6 +17,10 @@ import { useLeaveReview } from "../hooks/useLeaveReview";
 import { useRemoteUrlSubscription } from "../hooks/useRemoteUrlSubscription";
 import { useRouteState } from "../hooks/useRouteState";
 import { useScheduleSubscription } from "../hooks/useScheduleSubscription";
+import {
+	ScrollRestorationContext,
+	useScrollRestorationScope,
+} from "../hooks/useScrollRestoration";
 import { useSession } from "../hooks/useSession";
 import { useSessionDetailSubscription } from "../hooks/useSessionDetailSubscription";
 import { useSettingsSubscription } from "../hooks/useSettingsSubscription";
@@ -850,6 +854,7 @@ function AppShell() {
 	// Branches list is in the sidebar and a branch's detail in the main area,
 	// and a merge handed off from either is the same one.
 	const mergeHandoff = useBranchMergeHandoff();
+	const scrollRestoration = useScrollRestorationScope();
 	// Reported by the sidebar's Git tab, for the detail beside it.
 	const [gitListShown, setGitListShown] = useState(false);
 
@@ -1198,81 +1203,85 @@ function AppShell() {
 				)}
 				<ReconnectBanner />
 			</div>
-			<BranchMergeHandoffContext value={mergeHandoff}>
-				<div className="flex min-h-0 flex-1">
-					<SessionSidebar
-						isOpen={sidebarVisible}
-						onClose={handleCloseSidebar}
-						// The session on screen, whichever list it came from. A viewed
-						// one has no row in this worktree's list and so is not
-						// `currentSessionId` — but the filter has moved to the list it
-						// does have a row in, and that row is the one to highlight.
-						currentSessionId={sessionView ? routeSessionId : currentSessionId}
-						onSelectSession={handleSelectSession}
-						onCreateSession={handleCreateSession}
-						onDeleteSession={handleDeleteSession}
-						gitLayer={gitLayerOf(overlay)}
-						gitNavigation={gitNavigation}
-						onGitListShownChange={setGitListShown}
-						reviewRowCanShow={reviewRowCanShow}
-						onSelectFile={handleSelectFile}
-						activeFilePath={activeFilePath}
-						activeFileEdit={activeFileEdit}
-						onRepointFile={handleRepointFile}
-						onCloseFile={handleCloseOverlay}
-						onOpenWorkList={handleOpenWorkList}
-						onOpenScheduleList={handleOpenScheduleList}
-						onOpenAgentRoleList={handleOpenAgentRoleList}
-						isExpanded={isExpanded}
-						isSwitchingWorktree={worktreeSwitchInFlight}
-					/>
-					<div className="contents" inert={isDrawerUp}>
-						<ChatPanel
-							view={sessionView}
-							onOpenSessionThere={handleOpenSessionThere}
-							sessionId={
-								sessionView ? (routeSessionId ?? "") : (currentSessionId ?? "")
-							}
-							sessionTitle={currentSession?.title ?? ""}
-							isSessionResolved={isSessionResolved}
-							onUpdateTitle={(title) => {
-								if (currentSessionId) updateTitle(currentSessionId, title);
-							}}
-							// Only while the sidebar is off the screen, with one exception:
-							// the drawer's opener has to stay mounted under it, since that is
-							// where focus goes back when it closes.
-							onOpenSidebar={
-								isExpanded && !columnCollapsed ? undefined : handleOpenSidebar
-							}
-							sidebarKind={isExpanded ? "column" : "drawer"}
-							sidebarToggleRef={sidebarToggleRef}
-							onOpenSettings={handleOpenSettings}
-							overlay={mainAreaOverlay(overlay, isExpanded)}
-							onCloseOverlay={handleCloseOverlay}
-							onNavigateToSession={handleNavigateToSession}
-							onSelectSession={handleSelectChatSession}
-							onOpenWorkDetail={handleOpenWorkDetail}
-							onOpenFile={handleSelectFile}
-							onOpenWorkList={handleBackToWorkList}
-							workSegment={workSegment}
-							onSelectWorkSegment={handleSelectWorkSegment}
-							onOpenAgentRoleList={handleOpenAgentRoleList}
-							onOpenAgentRoleDetail={handleOpenAgentRoleDetail}
+			<ScrollRestorationContext value={scrollRestoration}>
+				<BranchMergeHandoffContext value={mergeHandoff}>
+					<div className="flex min-h-0 flex-1">
+						<SessionSidebar
+							isOpen={sidebarVisible}
+							onClose={handleCloseSidebar}
+							// The session on screen, whichever list it came from. A viewed
+							// one has no row in this worktree's list and so is not
+							// `currentSessionId` — but the filter has moved to the list it
+							// does have a row in, and that row is the one to highlight.
+							currentSessionId={sessionView ? routeSessionId : currentSessionId}
+							onSelectSession={handleSelectSession}
+							onCreateSession={handleCreateSession}
+							onDeleteSession={handleDeleteSession}
+							gitLayer={gitLayerOf(overlay)}
+							gitNavigation={gitNavigation}
+							onGitListShownChange={setGitListShown}
+							reviewRowCanShow={reviewRowCanShow}
+							onSelectFile={handleSelectFile}
+							activeFilePath={activeFilePath}
+							activeFileEdit={activeFileEdit}
+							onRepointFile={handleRepointFile}
+							onCloseFile={handleCloseOverlay}
+							onOpenWorkList={handleOpenWorkList}
 							onOpenScheduleList={handleOpenScheduleList}
-							onOpenScheduleDetail={handleOpenScheduleDetail}
-							onSelectGitSegment={handleSelectGitSegment}
-							onSelectDiffFile={handleSelectDiffFile}
-							onSelectCommit={handleSelectCommit}
-							onSelectBranch={handleSelectBranch}
-							onRepointBranch={handleRepointBranch}
-							onCloseGitFile={handleCloseGitFile}
-							gitListBeside={isExpanded && gitListShown}
-							onOpenReview={handleOpenReview}
-							onReviewRowCanShowChange={setReviewRowCanShow}
+							onOpenAgentRoleList={handleOpenAgentRoleList}
+							isExpanded={isExpanded}
+							isSwitchingWorktree={worktreeSwitchInFlight}
 						/>
+						<div className="contents" inert={isDrawerUp}>
+							<ChatPanel
+								view={sessionView}
+								onOpenSessionThere={handleOpenSessionThere}
+								sessionId={
+									sessionView
+										? (routeSessionId ?? "")
+										: (currentSessionId ?? "")
+								}
+								sessionTitle={currentSession?.title ?? ""}
+								isSessionResolved={isSessionResolved}
+								onUpdateTitle={(title) => {
+									if (currentSessionId) updateTitle(currentSessionId, title);
+								}}
+								// Only while the sidebar is off the screen, with one exception:
+								// the drawer's opener has to stay mounted under it, since that is
+								// where focus goes back when it closes.
+								onOpenSidebar={
+									isExpanded && !columnCollapsed ? undefined : handleOpenSidebar
+								}
+								sidebarKind={isExpanded ? "column" : "drawer"}
+								sidebarToggleRef={sidebarToggleRef}
+								onOpenSettings={handleOpenSettings}
+								overlay={mainAreaOverlay(overlay, isExpanded)}
+								onCloseOverlay={handleCloseOverlay}
+								onNavigateToSession={handleNavigateToSession}
+								onSelectSession={handleSelectChatSession}
+								onOpenWorkDetail={handleOpenWorkDetail}
+								onOpenFile={handleSelectFile}
+								onOpenWorkList={handleBackToWorkList}
+								workSegment={workSegment}
+								onSelectWorkSegment={handleSelectWorkSegment}
+								onOpenAgentRoleList={handleOpenAgentRoleList}
+								onOpenAgentRoleDetail={handleOpenAgentRoleDetail}
+								onOpenScheduleList={handleOpenScheduleList}
+								onOpenScheduleDetail={handleOpenScheduleDetail}
+								onSelectGitSegment={handleSelectGitSegment}
+								onSelectDiffFile={handleSelectDiffFile}
+								onSelectCommit={handleSelectCommit}
+								onSelectBranch={handleSelectBranch}
+								onRepointBranch={handleRepointBranch}
+								onCloseGitFile={handleCloseGitFile}
+								gitListBeside={isExpanded && gitListShown}
+								onOpenReview={handleOpenReview}
+								onReviewRowCanShowChange={setReviewRowCanShow}
+							/>
+						</div>
 					</div>
-				</div>
-			</BranchMergeHandoffContext>
+				</BranchMergeHandoffContext>
+			</ScrollRestorationContext>
 		</div>
 	);
 }

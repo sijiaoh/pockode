@@ -23,6 +23,7 @@ import { countOf } from "../../utils/plural";
 import PageHeader from "../Layout/PageHeader";
 import BottomActionBar from "../ui/BottomActionBar";
 import ListGroupHeading from "../ui/ListGroupHeading";
+import PageBody from "../ui/PageBody";
 import SettingsLoadError from "../ui/SettingsLoadError";
 import Skeleton from "../ui/Skeleton";
 import Tag from "../ui/Tag";
@@ -113,7 +114,7 @@ export default function AgentRoleListOverlay({
 
 			{/* No padding on the scroller itself: the group headings pin to its
 			    padding edge, and rows would show through the strip above them. */}
-			<div className="min-h-0 flex-1 overflow-auto">
+			<PageBody>
 				<div className="mx-auto max-w-2xl px-4 py-4">
 					{isLoading ? (
 						<div className="flex items-center justify-center py-8">
@@ -202,7 +203,7 @@ export default function AgentRoleListOverlay({
 						</p>
 					)}
 				</div>
-			</div>
+			</PageBody>
 
 			{/* Usable while the list loads or fails, as `New Story` is: creating does
 			    not depend on the list, and a failure is reported in the sheet. */}

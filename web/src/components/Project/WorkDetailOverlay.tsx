@@ -42,6 +42,7 @@ import { ActivityBadge, MarkdownContent, RecommendedTag } from "../ui";
 import BottomActionBar from "../ui/BottomActionBar";
 import InlineEditableHeading from "../ui/InlineEditableHeading";
 import { inputClass } from "../ui/inputClass";
+import PageBody from "../ui/PageBody";
 import { WorktreeBadge } from "../Worktree";
 import RoleSelect from "./RoleSelect";
 import StepList from "./StepList";
@@ -148,7 +149,7 @@ function WorkDetailPage({
 				title={typeLabels[work.type]}
 				backLabel={back.label}
 			/>
-			<div className="min-h-0 flex-1 overflow-auto">
+			<PageBody>
 				<div className="space-y-5 p-4">
 					<div>
 						{parent && (
@@ -213,7 +214,7 @@ function WorkDetailPage({
 
 					<CommentsSection comments={comments} />
 				</div>
-			</div>
+			</PageBody>
 
 			<ActionBar
 				work={work}

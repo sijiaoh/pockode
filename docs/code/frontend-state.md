@@ -331,6 +331,112 @@ whether it is showing and whether it carries the new-content dot, because those
 are drawn. Something is state when a render has to happen because of it; the rest of this is
 bookkeeping the render must not see.
 
+### Why a Page's Scroll Position Outlives the Page
+
+**The contract: going back to a page puts the reader where they left it; any
+other way of arriving starts at the top.** A browser does this for a page that
+scrolls the window. Here the window never scrolls — the shell clips
+([responsive-ui.md](../responsive-ui.md#who-owns-the-scroll-boundary)) — and
+every page scrolls a container of its own. A page is unmounted when another
+replaces it (`ChatPanel`'s overlay switch, `GitWorkspace`'s detail), and its
+container goes with it. So unless something else remembers, nothing does.
+
+This is the opposite of the transcript above, and the difference is the
+page's lifetime. The transcript's scroll facts describe a view that stays
+mounted under every overlay, so they die with it. A page's offset is wanted
+exactly *after* the page is gone, so it has to live outside it, in
+`lib/scrollMemory.ts`. It is still not a store and not state: nothing renders
+from it, and it is read when a page mounts, or when the entry changes under
+a page that stayed mounted.
+
+**Keyed by history entry, not by URL.** A fresh push of a URL the reader has
+seen before is a new visit, just as following a link is in a browser. Opening
+the same commit again from History starts at its top. What counts as
+*back*:
+
+- **The browser's Back, or `history.back()`.** It returns to an entry that is
+  still in the history, so the entry's key finds what was saved.
+- **The page header's `←`.** It does not go back. It *pushes* the parent's URL
+  (`overlayToNavigation` in `lib/navigation.ts`), which makes a new entry. A
+  push to the href of the entry just under the current one in the trail the
+  reader came down is taken as that return, and the new entry inherits the old
+  one's offsets. The heuristic lives in `scrollMemory.ts` rather than at each
+  `←`, because every `←` and every Back-shaped push is already a navigation
+  through the router. No call site has anything to remember.
+
+**Why not TanStack Router's `scrollRestoration`.** It fails on all three
+counts:
+
+- It records every scroller in the app by CSS path, including the sidebar and
+  the transcript, which manage their own place.
+- It restores at `onRendered`, before content that is still loading has any
+  height to scroll into.
+- It knows only the browser's Back, and most returns here are the header's
+  push.
+
+**The entry is the one on screen, not the router's location.** The router's
+location moves to the next entry as soon as a navigation starts. The page
+being left is still mounted at that point, and a scroll there would be saved
+under the next page. `useScrollRestorationScope` therefore moves to a new entry
+only once the rendered matches have been committed. `PageBody.test.tsx` holds
+this with a loader that is kept open.
+
+**A page that stays mounted is restored too.** Some views are one instance for
+every page they show: `FileView` keeps its source toggle across files, so a
+document and the one it links to are the same mounted scroller, and coming
+back to the first is no mount. So when the entry changes under a mounted
+scroller, the scroller goes to the new entry's offset, or to the top when it
+has none — a fresh visit, even though nothing remounted. A replace is the same
+visit (a diff's side switched, a file renamed), so `scrollMemory.ts` moves the
+replaced entry's offsets to the new one, and the page stays where it is.
+
+**Restoring waits for content, and gives way to the reader.** A page usually
+remounts before its data is back, so the restore keeps writing the target every
+frame until the scroller is tall enough, for up to `RESTORE_WINDOW_MS`. It
+stops as soon as the reader reaches for the page — a wheel or touch on the
+scroller, or a pointer press or key anywhere, since a pager, a next-conflict
+button or a settings section moves the scroller from outside it. Its own
+clamped writes are never saved, or a short page would overwrite the target.
+This is the same "waits, and gives way" rule the Git list's row reveal follows
+([git-ui.md](../git-ui.md#at-expanded-the-sidebars-list-and-the-detail)).
+
+#### What a page has to do
+
+**Write the page's scrolling body as `PageBody`** (`components/ui/PageBody.tsx`)
+instead of a bare `min-h-0 flex-1 overflow-auto` div. That is the whole opt-in.
+`ContentView` renders its non-`fill` body as one, so the file, diff and
+commit pages built on it have it already. A page that needs its own handle on the scroller
+passes `ref` to `PageBody`; the ref is filled alongside the restore's.
+
+A scroller that cannot be `PageBody` — a different element, or a ref that has
+to stay a `setState` — uses `useScrollRestoration(ownRef)` directly
+(`hooks/useScrollRestoration.ts`). `BranchDetail`, `ConflictView` and
+`SettingsPage` do this. Give the second argument only when one page has two
+scrollers that should both be remembered.
+
+Rendered outside `AppShell` — in a test that mocks the router, say — there is
+no `ScrollRestorationContext`, and `PageBody` is a plain scroller. Nothing has
+to be arranged for it.
+
+#### What it deliberately does not cover
+
+| Scroller | Why not |
+|---|---|
+| The chat transcript | It is covered, never unmounted, under overlays, and its own model decides where it sits on a session switch ([agent-chat.md](../agent-chat.md#where-the-view-sits)) |
+| The Git lists below `expanded`, and every sidebar list | Kept mounted under the layer above them, so they never lose their place ([git-ui.md](../git-ui.md#routes-segments-and-back)) |
+| A sidebar tab turned away from (`GitTab`, `FilesTab`) | A tab switch is not a navigation. A tab hidden with `display: none` loses its scroll box, and covering it instead is that surface's decision to make, not this mechanism's |
+| An HTML page preview (`ContentView fill`) | The scroll is inside a sandboxed iframe this code cannot reach. A Markdown preview is a plain `ContentView` body, so it is covered |
+
+**Known edges, accepted:**
+
+- **A reload forgets everything.** The memory is in-process, and nothing goes
+  to `sessionStorage`.
+- **A child page opened directly has no parent in the trail.** Its `←` lands
+  on a fresh parent, at the top.
+- **The return check compares the whole href.** If the `session` query changes
+  while the reader is on the child page, the next `←` is not recognised as a
+  return.
+
 ## Server Cache vs Store
 
 Not every piece of server data belongs in a store. Data the client fetches
@@ -1162,6 +1268,7 @@ Key features:
 | `web/src/lib/gitWriteStore.ts` | The Git workspace's serial queue per worktree, for writes — and their failures — that outlive the view that started them |
 | `web/src/lib/worktreeQuery.ts` | Worktree list query key + fetcher, kept together |
 | `web/src/hooks/useSubscription.ts` | Subscription lifecycle hook |
+| `web/src/lib/scrollMemory.ts` / `web/src/hooks/useScrollRestoration.ts` / `web/src/components/ui/PageBody.tsx` | A page's scroll position per history entry, put back when the reader returns ([why](#why-a-pages-scroll-position-outlives-the-page)) |
 | `web/src/lib/valueState.ts` | Stored / still coming / not coming, named once for every control that waits on a snapshot ([why three states](subscription-system.md#why-the-controls-wait-for-the-session-to-describe-itself)) |
 
 `worktreeQuery.ts` exists because two hooks (`useWorktree`, `useWorktreeDisplay`)

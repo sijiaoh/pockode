@@ -6,6 +6,7 @@ import {
 import { z } from "zod";
 import AppShell from "./components/AppShell";
 import { ROUTES, WT_CHILD_ROUTES, WT_ROUTES } from "./lib/routes";
+import { scrollMemoryFor } from "./lib/scrollMemory";
 
 const overlaySearchSchema = z.object({
 	session: z.string().optional(),
@@ -342,6 +343,10 @@ export const router = createRouter({
 	routeTree,
 	defaultPreload: "intent",
 });
+
+// Before the first navigation, so that the trail Back is recognised against
+// starts at the page the app was opened on.
+scrollMemoryFor(router.history);
 
 declare module "@tanstack/react-router" {
 	interface Register {
