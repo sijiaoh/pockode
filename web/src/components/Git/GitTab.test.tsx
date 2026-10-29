@@ -82,26 +82,51 @@ vi.mock("./GitSegmentList", async (importOriginal) => ({
 		activeHash,
 		activeBranchKey,
 		reveal,
+		onSelectSegment,
 		onSelectCommit,
+		onShowHistory,
+		onShowFileHistory,
 	}: {
 		segment: GitSegment;
-		history: { q?: string };
+		history: { q?: string; file?: string };
 		activeFile: { path: string } | null;
 		activeHash: string | null;
 		activeBranchKey: string | null;
 		reveal?: () => void;
+		onSelectSegment: (segment: GitSegment) => void;
 		onSelectCommit: (hash: string) => void;
+		onShowHistory?: (next: { scope: "current"; q: string }) => void;
+		onShowFileHistory?: (path: string) => void;
 	}) => (
 		<div>
 			<div>
-				{segment} list{history.q ? ` matching ${history.q}` : ""}, lit{" "}
+				{segment} list{history.q ? ` matching ${history.q}` : ""}
+				{history.file ? ` of ${history.file}` : ""}, lit{" "}
 				{[activeFile?.path, activeHash, activeBranchKey]
 					.filter(Boolean)
 					.join(" ") || "none"}
 			</div>
+			{(["changes", "history", "branches"] as const).map((s) => (
+				<button key={s} type="button" onClick={() => onSelectSegment(s)}>
+					segment {s}
+				</button>
+			))}
 			<button type="button" onClick={() => onSelectCommit("abc1234")}>
 				open commit
 			</button>
+			{onShowHistory && (
+				<button
+					type="button"
+					onClick={() => onShowHistory({ scope: "current", q: "fix" })}
+				>
+					search fix in place
+				</button>
+			)}
+			{onShowFileHistory && (
+				<button type="button" onClick={() => onShowFileHistory("src/a.ts")}>
+					history of src/a.ts in place
+				</button>
+			)}
 			{reveal && (
 				<button type="button" onClick={reveal}>
 					reveal lit row
@@ -643,6 +668,188 @@ describe("GitTab at expanded", () => {
 		expect(
 			screen.getByText("history list matching fix, lit none"),
 		).toBeInTheDocument();
+	});
+
+	describe("turning to another segment", () => {
+		// The segment is the sidebar's: whatever the main area has open stays.
+		it.each<[string, GitLayer | null]>([
+			["a review", { type: "diff", path: "src/a.ts", staged: false }],
+			["a commit", { type: "commit", hash: "abc1234" }],
+			["no Git layer", null],
+		])("leaves %s in the main area", async (_, layer) => {
+			const user = userEvent.setup();
+			const { navigation } = renderExpanded(layer);
+
+			await user.click(
+				screen.getByRole("button", { name: "segment branches" }),
+			);
+			expect(screen.getByText(/^branches list/)).toBeInTheDocument();
+			expect(navigation.onSelectSegment).not.toHaveBeenCalled();
+		});
+
+		// With only the list on screen the URL names it, so Back walks the
+		// segments and a reload lands on the one turned to.
+		it("moves the list URL along while it is the route", async () => {
+			const user = userEvent.setup();
+			const { navigation } = renderExpanded({
+				type: "git",
+				segment: "changes",
+			});
+
+			await user.click(screen.getByRole("button", { name: "segment history" }));
+			expect(navigation.onSelectSegment).toHaveBeenCalledWith("history");
+			expect(screen.getByText("history list, lit none")).toBeInTheDocument();
+		});
+
+		it("keeps the segment while the detail beside it moves on", async () => {
+			const user = userEvent.setup();
+			const { route } = renderExpanded({
+				type: "diff",
+				path: "src/a.ts",
+				staged: false,
+			});
+			await user.click(screen.getByRole("button", { name: "segment history" }));
+
+			route({ type: "diff", path: "src/b.ts", staged: false });
+			expect(screen.getByText(/^history list/)).toBeInTheDocument();
+			// Back to the chat from the review is not a new place either.
+			route({ type: "git", segment: "changes" });
+			expect(screen.getByText(/^history list/)).toBeInTheDocument();
+		});
+
+		// A search beside a review is the sidebar's too; one on a History
+		// layer stays in the URL, which names that list.
+		it("keeps History's query in the tab beside a detail of another list", async () => {
+			const user = userEvent.setup();
+			const { route } = renderExpanded({
+				type: "diff",
+				path: "src/a.ts",
+				staged: false,
+			});
+			await user.click(screen.getByRole("button", { name: "segment history" }));
+			await user.click(
+				screen.getByRole("button", { name: "search fix in place" }),
+			);
+			expect(
+				screen.getByText(/^history list matching fix/),
+			).toBeInTheDocument();
+
+			// A commit of the default History arrives at that list, whose
+			// query the URL carries from then on.
+			route({ type: "commit", hash: "abc1234" });
+			expect(screen.getByText("history list, lit abc1234")).toBeInTheDocument();
+			expect(
+				screen.queryByRole("button", { name: "search fix in place" }),
+			).toBeNull();
+		});
+
+		it("turns to a file's history in the tab beside a review", async () => {
+			const user = userEvent.setup();
+			const { navigation } = renderExpanded({
+				type: "diff",
+				path: "src/a.ts",
+				staged: false,
+			});
+			await user.click(
+				screen.getByRole("button", { name: "history of src/a.ts in place" }),
+			);
+			expect(
+				screen.getByText(/^history list of src\/a.ts/),
+			).toBeInTheDocument();
+			expect(navigation.onSelectSegment).not.toHaveBeenCalled();
+		});
+
+		// Beside a commit of the unfiltered History, the filter is the tab's,
+		// and a commit picked from the filtered list carries the filter.
+		it("opens a commit carrying the filter held in the tab", async () => {
+			const user = userEvent.setup();
+			const { navigation } = renderExpanded({
+				type: "commit",
+				hash: "abc1234",
+			});
+			await user.click(screen.getByRole("button", { name: "segment changes" }));
+			await user.click(
+				screen.getByRole("button", { name: "history of src/a.ts in place" }),
+			);
+			// Not the route's to carry: written there it would be the commit's.
+			expect(
+				screen.getByRole("button", { name: "search fix in place" }),
+			).toBeInTheDocument();
+
+			await user.click(screen.getByRole("button", { name: "open commit" }));
+			expect(navigation.onSelectCommit).toHaveBeenCalledWith("abc1234", {
+				history: { scope: "current", file: "src/a.ts" },
+			});
+		});
+
+		// Back to the chat names the review's list, and a review opened from
+		// the chat then names it again: arriving, it turns the tab to its row.
+		it("turns back to a detail's list when one is opened from its list URL", async () => {
+			const user = userEvent.setup();
+			const { route } = renderExpanded({
+				type: "diff",
+				path: "src/a.ts",
+				staged: false,
+			});
+			await user.click(screen.getByRole("button", { name: "segment history" }));
+			route({ type: "git", segment: "changes" });
+			expect(screen.getByText(/^history list/)).toBeInTheDocument();
+
+			route({ type: "diff", path: "src/b.ts", staged: false });
+			expect(
+				screen.getByText("changes list, lit src/b.ts"),
+			).toBeInTheDocument();
+		});
+
+		// With only the list on screen there is nothing to keep, and the URL
+		// names the list: the lists write it as the page's do.
+		it("leaves the URL to the lists while the route is the bare list", () => {
+			renderExpanded({ type: "git", segment: "changes" });
+			expect(
+				screen.queryByRole("button", { name: "history of src/a.ts in place" }),
+			).toBeNull();
+			expect(
+				screen.queryByRole("button", { name: "search fix in place" }),
+			).toBeNull();
+		});
+
+		it("comes back to the route's own list at the route's query", async () => {
+			const user = userEvent.setup();
+			renderExpanded({
+				type: "commit",
+				hash: "abc1234",
+				history: { scope: "current", q: "fix" },
+			});
+			await user.click(
+				screen.getByRole("button", { name: "segment branches" }),
+			);
+			await user.click(screen.getByRole("button", { name: "segment history" }));
+			expect(
+				screen.getByText("history list matching fix, lit abc1234"),
+			).toBeInTheDocument();
+		});
+
+		it("follows the route again once it opens something in another list", async () => {
+			const user = userEvent.setup();
+			const { navigation, route } = renderExpanded({
+				type: "diff",
+				path: "src/a.ts",
+				staged: false,
+			});
+			await user.click(screen.getByRole("button", { name: "segment history" }));
+
+			route({ type: "branch", ref: "topic", remote: false });
+			expect(
+				screen.getByText("branches list, lit local:topic"),
+			).toBeInTheDocument();
+
+			// A commit picked from the list turned to carries that list.
+			await user.click(screen.getByRole("button", { name: "segment history" }));
+			await user.click(screen.getByRole("button", { name: "open commit" }));
+			expect(navigation.onSelectCommit).toHaveBeenCalledWith("abc1234", {
+				history: { scope: "current" },
+			});
+		});
 	});
 
 	// The detail beside it pins its own failures whenever the list cannot.

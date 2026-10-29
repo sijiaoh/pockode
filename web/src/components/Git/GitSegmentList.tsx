@@ -63,6 +63,12 @@ interface Props {
 		next: { path: string; staged: boolean } | null,
 	) => void;
 	onSelectCommit: (hash: string) => void;
+	/**
+	 * Changes' `onShowFileHistory` and History's `onShowHistory`: left out
+	 * where the URL holds the list.
+	 */
+	onShowFileHistory?: (path: string) => void;
+	onShowHistory?: (next: HistoryQuery) => void;
 	onSelectBranch: (branch: BranchRef) => void;
 	onBranchDeleted: (row: BranchRow) => void;
 }
@@ -84,6 +90,8 @@ function GitSegmentList({
 	onSelectFile,
 	onCloseFile,
 	onSelectCommit,
+	onShowFileHistory,
+	onShowHistory,
 	onSelectBranch,
 	onBranchDeleted,
 }: Props) {
@@ -102,6 +110,7 @@ function GitSegmentList({
 						onCloseFile={onCloseFile}
 						activeFile={activeFile}
 						reveal={reveal}
+						onShowFileHistory={onShowFileHistory}
 					/>
 				) : segment === "history" ? (
 					<HistorySection
@@ -109,6 +118,7 @@ function GitSegmentList({
 						activeHash={activeHash}
 						reveal={reveal}
 						onSelectCommit={onSelectCommit}
+						onShowHistory={onShowHistory}
 					/>
 				) : (
 					<BranchesSection

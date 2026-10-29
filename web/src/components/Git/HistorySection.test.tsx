@@ -178,6 +178,31 @@ describe("HistorySection", () => {
 		);
 	});
 
+	// The sidebar's list beside a detail of another list keeps the query
+	// itself: written into the URL, it would replace the page beside it.
+	it("hands the range to its owner instead, when it has one", async () => {
+		const user = userEvent.setup();
+		const onShowHistory = vi.fn();
+		render(
+			<HistorySection
+				history={{ scope: "current" }}
+				activeHash={null}
+				onSelectCommit={vi.fn()}
+				onShowHistory={onShowHistory}
+			/>,
+		);
+
+		await user.click(screen.getByRole("button", { name: /^Show:/ }));
+		await user.click(
+			within(screen.getByRole("dialog")).getByRole("button", {
+				name: /^All branches/,
+			}),
+		);
+
+		expect(onShowHistory).toHaveBeenCalledWith({ scope: "all" });
+		expect(navigate).not.toHaveBeenCalled();
+	});
+
 	it("counts the range's unpushed commits, and says nothing at zero", () => {
 		renderSection();
 		expect(screen.getByText("↑1 unpushed")).toBeInTheDocument();

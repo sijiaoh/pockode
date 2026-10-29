@@ -713,8 +713,9 @@ function AppShell() {
 	 * so Back walks the segments the way it walks the project list's
 	 * (docs/project-ui.md §5). A press that names the layer already on screen —
 	 * the list itself, with nothing open under it — is not a step, and adds
-	 * none. With a diff or a commit open beside the
-	 * list, pressing its lit segment does go back to the bare list.
+	 * none. At `expanded` the sidebar's segment control asks for it only while
+	 * the route is a bare list: beside anything else the segment is the
+	 * sidebar's own, and the main area keeps what it has open (`GitTab`).
 	 */
 	const handleSelectGitSegment = useCallback(
 		(segment: GitSegment) => {
