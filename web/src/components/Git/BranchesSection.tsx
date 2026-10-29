@@ -118,7 +118,7 @@ function BranchesSection({
 						onClick={() => setCreating(true)}
 						disabled={isSwitching || handingOff !== null || paused !== null}
 						aria-describedby={paused ? pausedId : undefined}
-						className="flex min-h-[44px] w-full items-center justify-center gap-2 rounded-lg bg-th-bg-tertiary px-4 py-2.5 text-sm text-th-text-primary transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+						className="flex min-h-[44px] w-full items-center justify-center gap-2 rounded-lg bg-th-accent px-4 text-sm font-medium text-th-accent-text hover:bg-th-accent-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent focus-visible:ring-offset-2 focus-visible:ring-offset-th-bg-secondary disabled:cursor-not-allowed disabled:opacity-50"
 					>
 						<Plus className="h-4 w-4" aria-hidden="true" />
 						New branch…

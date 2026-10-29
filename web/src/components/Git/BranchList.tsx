@@ -239,7 +239,7 @@ function BranchRowItem({
 					</span>
 				</span>
 			</button>
-			<span className="flex h-11 w-11 shrink-0 items-center justify-center text-th-text-muted">
+			<span className="flex w-9 shrink-0 items-center justify-center text-th-text-muted pointer-coarse:w-11">
 				{busy ? (
 					<Spinner variant="current" srText={busy} />
 				) : (

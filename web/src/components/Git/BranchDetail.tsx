@@ -243,7 +243,7 @@ function BranchGone({ name, onLeave }: { name: string; onLeave: () => void }) {
 			<button
 				type="button"
 				onClick={onLeave}
-				className="inline-flex min-h-[36px] items-center px-2 text-th-accent hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent pointer-coarse:min-h-11"
+				className="inline-flex min-h-9 items-center rounded px-2 text-th-accent hover:underline pointer-coarse:min-h-11 focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent"
 			>
 				Back to branches
 			</button>
