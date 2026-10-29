@@ -33,7 +33,8 @@ interface Props {
 	activeHash: string | null;
 	/**
 	 * Set while the lit row is wanted on screen; called once it is — which
-	 * waits for the page that lists it.
+	 * waits for the page that lists it. The caller withdraws it then: while it
+	 * is set, every render checks again and calls it again.
 	 */
 	reveal?: () => void;
 	onSelectCommit: (hash: string) => void;
