@@ -14,6 +14,7 @@ import {
 import type { ThemedToken } from "shiki";
 import { contentsQueryKey, useContents } from "../../hooks/useContents";
 import { useFSWatch } from "../../hooks/useFSWatch";
+import { useScrollRestoration } from "../../hooks/useScrollRestoration";
 import type { ConflictKind } from "../../lib/gitChanges";
 import {
 	type ConflictRegion,
@@ -259,6 +260,7 @@ function ConflictLines({
 }) {
 	const isExpanded = useIsExpanded();
 	const scrollerRef = useRef<HTMLDivElement>(null);
+	const restoringRef = useScrollRestoration(scrollerRef);
 	const { content, highlight } = text;
 	const lines = useMemo(
 		() => content.replace(/\n$/, "").split("\n"),
@@ -387,7 +389,7 @@ function ConflictLines({
 			{!highlight && <PlainTextNotice />}
 			{/* Positioned, so a row's offsetTop is its place in what scrolls. */}
 			<div
-				ref={scrollerRef}
+				ref={restoringRef}
 				onScroll={update}
 				className="relative min-h-0 flex-1 overflow-auto bg-th-code-bg"
 			>

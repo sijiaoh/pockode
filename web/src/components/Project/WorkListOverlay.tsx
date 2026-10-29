@@ -11,7 +11,7 @@ import {
 import type { WorkSegment } from "../../types/overlay";
 import type { WorkListItem } from "../../types/work";
 import PageHeader from "../Layout/PageHeader";
-import { ActivityIcon } from "../ui";
+import { ActivityIcon, PageBody } from "../ui";
 import BottomActionBar from "../ui/BottomActionBar";
 import ListGroupHeading from "../ui/ListGroupHeading";
 import SegmentedControl from "../ui/SegmentedControl";
@@ -253,11 +253,7 @@ export default function WorkListOverlay({
 			    A scroller of their own opens each at the top on its first
 			    paint, where resetting a shared one from an effect would show
 			    the old offset for a frame (docs/project-ui.md §2.1). */}
-			<div
-				key={segment}
-				ref={scrollRef}
-				className="min-h-0 flex-1 overflow-auto"
-			>
+			<PageBody key={segment} ref={scrollRef}>
 				<div className="p-2">
 					{isLoading ? (
 						<div className="flex items-center justify-center py-8">
@@ -346,7 +342,7 @@ export default function WorkListOverlay({
 						</div>
 					)}
 				</div>
-			</div>
+			</PageBody>
 
 			{/* Fixed above the bottom bar rather than at the end of the list, and
 			    absent entirely while there is only one page (docs/list-paging-ui.md

@@ -1,6 +1,7 @@
 import { Spinner } from "@pockode/shared";
 import type { ReactNode } from "react";
 import { isNotFoundError } from "../../hooks/useContents";
+import PageBody from "./PageBody";
 
 interface Props {
 	isLoading?: boolean;
@@ -46,9 +47,7 @@ export default function ContentView({
 }: Props) {
 	return (
 		<div className="flex min-h-0 flex-1 flex-col">
-			<div
-				className={`min-h-0 flex-1 ${fill ? "flex flex-col overflow-hidden" : "overflow-auto"}`}
-			>
+			<Body fill={fill}>
 				{isLoading ? (
 					<div className="flex items-center justify-center p-8">
 						<Spinner variant="current" className="text-th-text-muted" />
@@ -67,7 +66,18 @@ export default function ContentView({
 				) : (
 					children
 				)}
-			</div>
+			</Body>
 		</div>
 	);
+}
+
+function Body({ fill, children }: { fill?: boolean; children: ReactNode }) {
+	if (fill) {
+		return (
+			<div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+				{children}
+			</div>
+		);
+	}
+	return <PageBody>{children}</PageBody>;
 }

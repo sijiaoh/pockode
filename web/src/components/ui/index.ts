@@ -36,6 +36,7 @@ export { headerIconButtonClass } from "./headerIconButtonClass";
 export { iconButtonClass } from "./iconButtonClass";
 export { inputClass } from "./inputClass";
 export { MarkdownContent } from "./MarkdownContent";
+export { default as PageBody } from "./PageBody";
 export { default as PanelSection } from "./PanelSection";
 export { default as RecommendedTag } from "./RecommendedTag";
 export { default as ReconnectBanner } from "./ReconnectBanner";

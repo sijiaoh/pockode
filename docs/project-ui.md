@@ -133,9 +133,16 @@ that is always in the same place, whatever the list is doing.
 **Each segment opens at the top.** They are two lists, not two filters over one
 position: an offset into `Current` says nothing about where to be in the archive,
 and the archive changes page by returning to the top anyway
-([list-paging-ui.md](list-paging-ui.md) §4.2). Nor does a segment come back to
-where it was left: `Current` regroups and reorders while nobody is looking at it,
-so an offset kept from earlier would land on different rows.
+([list-paging-ui.md](list-paging-ui.md) §4.2). A segment never inherits the other's offset.
+
+Going *back* to a segment is different. The browser's Back from `Closed`, or a
+tap on `Current` right after coming from it, returns `Current` to where it was
+left, as going back to any page does
+([frontend-state.md](code/frontend-state.md#why-a-pages-scroll-position-outlives-the-page)).
+The tap counts because a tap on a segment is a pushed navigation (§5), and a
+push to the page just under the current one reads as a return. The cost is
+accepted: `Current` regroups and reorders while nobody is looking at it, so the
+offset it comes back to may sit over different rows than before.
 
 The segment words are chosen against the state vocabulary rather than for
 brevity. "Closed" is exactly the status word for what is in it. "Current" names

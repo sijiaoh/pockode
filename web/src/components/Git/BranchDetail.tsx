@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { BranchMergeHandoff } from "../../hooks/useBranchMergeHandoff";
 import { useGitBranches } from "../../hooks/useGitBranches";
+import { useScrollRestoration } from "../../hooks/useScrollRestoration";
 import {
 	type BranchRow,
 	branchStateWords,
@@ -122,6 +123,7 @@ function BranchDetail({
 	// can lay itself out in them.
 	const [scroller, setScroller] = useState<HTMLElement | null>(null);
 	const [content, setContent] = useState<HTMLElement | null>(null);
+	const scrollerRef = useScrollRestoration(setScroller);
 
 	return (
 		<div className="flex flex-1 flex-col overflow-hidden">
@@ -137,7 +139,7 @@ function BranchDetail({
 			{/* One scroll area: the facts, the actions and the commits
 			    scroll together, so a long name cannot push the rest off a
 			    phone. No vertical padding of its own, for the pinned box. */}
-			<div ref={setScroller} className="min-h-0 flex-1 overflow-y-auto">
+			<div ref={scrollerRef} className="min-h-0 flex-1 overflow-y-auto">
 				{branches ? (
 					<div ref={setContent}>
 						{/* Over the gone notice too: a delete that failed because
