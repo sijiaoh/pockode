@@ -30,7 +30,7 @@ The server's side is [git.md](git.md)'s to define; it rides on `git.status`, so 
 
 What kind of conflict a path is comes from the status letters it already carries on its two sides, so nothing more is sent: `D` on both sides is *both deleted*, `D` on one side *deleted on one side, changed on the other*, anything else (`UU`, `AA`, `AU`, `UA`) a content conflict.
 
-On the client a conflicted path is one `ChangedFile` with a `conflict` field and no sides (`collectChanges`): git lists it on both sides as `U` (or `A`/`D`), and drawn from those it would read as a partially staged file whose checkbox stages it — exactly the press this design removes.
+On the client a conflicted path is one `ChangedFile` with a `conflict` field and no sides (`collectChanges`): git lists it on both sides as `U` (or `A`/`D`), and drawn from those it would read as a partially staged file, a row in both groups whose stage button stages it — exactly the press this design removes.
 
 Below, *incoming* is `commit.ref` or else `commit`'s short hash, and *onto* likewise.
 
@@ -238,20 +238,24 @@ Who deleted it is deliberately not named: in a rebase "ours" is the branch being
 
 ## The Changes list
 
-A conflicted file is a row like any other, in its place in the order — rows never move ([git-changes-ui.md](git-changes-ui.md#goals-and-constraints)).
+A conflicted file is a row of its own group, **Conflicts**, first in the list and drawn only while there are any; it is in neither Unstaged nor Staged ([git-changes-ui.md](git-changes-ui.md#the-groups)). Within the group the rows are in the list's order, flat or as a tree of the group's own.
 
 ```
-│ ▣ 5 files  +142 −37      [≣|⌸]   │
-│ ⚠  GitTab.tsx                  ⋯ │  checkbox replaced by the glyph
+│   5 files  +142 −37      [≣|⌸]   │
+│ Conflicts 1                      │  no button: nothing here is staged
+│ ⚠  GitTab.tsx                  ⋯ │  stage button replaced by the glyph
 │    web/src/components/Git · Conflict
-│ ☑  notes.txt           +9      ⋯ │
+│ Unstaged 0                       │
+│ No unstaged changes.             │
+│ Staged 1           [Unstage all] │
+│ −  notes.txt           +9      ⋯ │
 ```
 
-- **No checkbox.** In the checkbox's gutter, a `TriangleAlert` in `text-th-warning`, `aria-hidden`; the row's button is named `Review <path>, conflicted`. Staging a conflicted file is git's way of saying it is resolved; one tap must not record markers as a resolution. A file is staged from the conflict view's `Mark resolved`, or by the agent.
+- **No stage button.** In its gutter, a `TriangleAlert` in `text-th-warning`, `aria-hidden`; the row's button is named `Review <path>, conflicted`. Staging a conflicted file is git's way of saying it is resolved; one tap must not record markers as a resolution. A file is staged from the conflict view's `Mark resolved`, or by the agent.
 - **Line 2** reads `<dir> · Conflict`, muted like every status word. No counts (the server has none).
 - **The `⋯` sheet** keeps `Open file` (disabled when both sides deleted it) and `Copy path`, and has no `Discard`.
-- **Select all and folder checkboxes** aggregate and act over the files without conflicts only. With conflicts present, select all's name becomes `Stage 3 of 5 files, 2 conflicted` (it still contains the visible count, for voice control). A folder holding only conflicted files has no checkbox — its gutter stays empty so the column of boxes stays aligned — and if every file is conflicted, select all goes the same way.
-- **`Discard unchecked…`** in the bottom bar covers the files with unstaged changes that are not conflicted, and its copy counts those; with none, the button is absent. The server refuses unmerged paths in `git.discard` on its own as well, naming them ([git.md](git.md#discard)): the boundary is where the rule is enforced, the list only keeps the user from meeting it.
+- **The group has no `Stage all`, and its folders no button** — a folder's gutter stays empty so the column of buttons stays aligned. `Stage all`, `Unstage all` and the folder buttons of the other two groups act on their own group's rows, which never include a conflict.
+- **`Discard unstaged…`** in the bottom bar covers the Unstaged group, which holds no conflict, and its copy counts those files; with nothing unstaged it is held, and when only conflicts are left — neither Unstaged nor Staged has a row — it is absent ([git-changes-ui.md](git-changes-ui.md#the-bottom-bar)). The server refuses unmerged paths in `git.discard` on its own as well, naming them ([git.md](git.md#discard)): the boundary is where the rule is enforced, the list only keeps the user from meeting it.
 
 ## What stops while an operation is in progress
 
@@ -263,7 +267,7 @@ Every write the workspace offers, reviewed. "Disabled" keeps the control in plac
 | Stage / unstage other files, whole or by hunk | allowed | — | Ordinary index edits; the operation's result is built from the index |
 | Selecting lines of another file's diff, `Copy`, `Ask AI to edit…` | allowed | — | They write nothing; the prefilled message goes into the composer like any other handoff |
 | Discard a conflicted file | stopped | absent from `⋯` | git refuses it; picking a side is out of scope |
-| Discard other files, `Discard unchecked…` | allowed, conflicted files excluded | — | — |
+| Discard other files, `Discard unstaged…` | allowed, conflicted files excluded | — | — |
 | Commit (list's bar, the review's commit button) | stopped | **disabled**, labelled `Commit` with no count, visible line above the button | `Can't commit during a rebase.` (the kind named). Committing would finish a merge, pick or revert — the `Continue` left to the agent — and would insert a stray commit into a rebase. Visible rather than `sr-only`: the banner may be collapsed or scrolled out of mind, and nothing next to the button says why |
 | The commit sheet, if open when an operation begins | stays open (it holds the message) | `Commit` / `Commit & push` disabled | The same line, in the footer where the push reasons go |
 | Amend (a commit's `⋯` menu, on HEAD) | stopped | absent | Not on the user's way: an entry in a menu, not a target to keep. git refuses amend mid-merge, and mid-rebase HEAD is not the branch's commit. The banner's pause sentence says why commits stopped |
@@ -299,7 +303,7 @@ At `expanded` the tab holds the list, and with it the banner itself ([above](#at
 | Title, context, prompt text, abort copy, conflict regions, paused reasons | `lib/gitOperation.ts` — `describeOperation`, `describeOperationPrompt`, `describeAbort`, `describeAbortFailure`, `describeHeadKept`, `findConflictRegions`, `hasConflictMarkers`, `branchSwitchPausedReason`, `pullPausedReason`; the commit's reason is `commitPausedReason` in `types/git.ts`, beside `describeCommitAction` | Pure, so every sentence is testable without a screen |
 | The prompt at the press | `operationPromptAtPress` in `hooks/gitQueries.ts` | Reads the status cache at the press; the banner and the conflict view share it |
 | The conflict view | `Git/ConflictView.tsx` (`useConflictFile` reads the working tree), a branch of `DiffView` for a file whose record carries `conflict` | Same page per path, so a file the agent stages turns into its ordinary review in place |
-| Conflict on the change record | `lib/gitChanges.ts` (`collectChanges`, the checkbox rules) | One record per path, as for every other state |
+| Conflict on the change record | `lib/gitChanges.ts` (`collectChanges`; `groupChanges` puts it in Conflicts) | One record per path, as for every other state |
 | Abort in flight, its failure, the `head_kept` notice, disclosure state | `lib/gitOperationStore.ts`, per worktree (disclosure also per operation, by `operationKey` from `lib/gitOperation.ts`) | In memory. An answer is only settled by a status fetched after it, so an older status cannot clear it; the failure and the notice are dropped when the project stops being a repository, as the other outcomes are |
 
 ## Decisions not to lose
@@ -308,7 +312,7 @@ At `expanded` the tab holds the list, and with it the banner itself ([above](#at
 2. **Two actions only: `Resolve with agent` and `Abort`.** No `Continue`, no per-file side picking. The agent's prompt asks it to resolve and continue; the user reads it before it goes.
 3. **The prompt is built at the press**, names the operation, the refs, the step and the commit when known, and lists up to 20 conflicted paths.
 4. **Abort always confirms**, says that resolutions made so far are lost, and names its verb on the button.
-5. **A conflicted file never has a checkbox.** It is marked resolved only from the conflict view, only when no marker is left, and the page then shows the resolution's ordinary review.
+5. **A conflicted file never has a stage button**, and sits in a Conflicts group of its own. It is marked resolved only from the conflict view, only when no marker is left, and the page then shows the resolution's ordinary review.
 6. **A conflicted file opens in the review layer**, as the working-tree text with its markers banded and a conflict-by-conflict jump — one place for every entry, at both widths.
 7. **Commit and branch switching are disabled with a visible reason; amend is absent; pull is disabled; staging, discarding non-conflicted files, fetch and push stay.**
 8. **Expanded by default** on every width; collapse is remembered only for this operation in this worktree.

@@ -114,7 +114,7 @@ interface Props {
  * At `expanded` it is the Git workspace's list — the branch bar, the segments
  * and the list under them — and the main area beside it shows what a row
  * opens, or the chat. Below `expanded` the drawer is too short for a list
- * that writes — its header, checkboxes and pinned commit bar — and the
+ * that writes — its groups, stage buttons and pinned commit bar — and the
  * workspace is a page of its own, so the tab is where the worktree stands,
  * the changed files to read, and the doors into that page — the shape of the
  * Project tab. Either way each write is in one place: the sidebar's at

@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { GitStatus } from "../../types/git";
 import CommitBar from "./CommitBar";
 
-// What jsdom cannot say: that `Discard unchecked…`, wider than its half of the
+// What jsdom cannot say: that `Discard unstaged…`, wider than its half of the
 // bar at the sidebar's default width, wraps inside the button instead of being
 // cut or pushing the bar taller.
 
@@ -22,10 +22,16 @@ describe("CommitBar width", () => {
 	it("wraps the discard's label within the bar's height at the sidebar's width", () => {
 		render(
 			<div style={{ width: SIDEBAR_WIDTH }}>
-				<CommitBar discardUnchecked={{ onDiscard: () => {}, busy: false }} />
+				<CommitBar
+					discardUnstaged={{
+						onDiscard: () => {},
+						busy: false,
+						nothingUnstaged: false,
+					}}
+				/>
 			</div>,
 		);
-		const discard = screen.getByRole("button", { name: "Discard unchecked…" });
+		const discard = screen.getByRole("button", { name: "Discard unstaged…" });
 		const commit = screen.getByRole("button", { name: "Commit 1 file" });
 
 		expect(discard.scrollWidth).toBeLessThanOrEqual(discard.clientWidth);

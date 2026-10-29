@@ -152,9 +152,9 @@ Five rungs. Existing Tailwind and `th-*` tokens only; nothing here is a new toke
 |------|----------|---------|
 | **L1** Primary action | At most one per panel, and only while it applies | `min-h-[44px] w-full rounded-lg bg-th-accent text-sm font-medium text-th-accent-text` |
 | **L2** Panel header row | The Git workspace's top bar, search row, the worktree switcher | `min-h-[44px]`, label `text-sm text-th-text-primary`, icons `text-th-text-muted`, bottom border `border-th-border` where the row is the whole header — the Files search row omits it, since the option chips render directly beneath it and a border would cut the header block in half. The worktree switcher is the header *control* GitHub Desktop puts above its list: a transparent button, `th-bg-tertiary` only on hover or while open, name `text-sm font-medium`, and 36px rather than 44 under a fine pointer, since it is a control and not a row — see [The top of the sidebar](#the-top-of-the-sidebar) |
-| **L3** Group header | The session filter's `Worktrees` / `Deleted` (the Git workspace's `Staged` / `Changes` were these until its list became one, under an L4-height header of its own — [git-changes-ui.md](git-changes-ui.md#the-list-header)) | `min-h-[32px] px-3 text-xs uppercase tracking-wide text-th-text-muted`, no hover fill. A header carrying L5 actions grows to their 36px — the touch target wins over the nominal height — and grows again where a finger may land ([responsive-ui.md](responsive-ui.md#hit-areas-and-spacing)) |
-| **L4** List row | Tree node, changed file (two lines tall, with its checkbox and `⋯` beside the row's button), commit | `min-h-[44px]`, `text-sm text-th-text-secondary`; active `bg-th-bg-tertiary text-th-text-primary` |
-| **L5** Inline icon action | Entry menu, a Git file row's checkbox and `⋯`, collapse, dismiss | 36×36, no border and no fill at rest (a hover fill is allowed). Two shapes, by where the control sits: square where it sits inside a **list** row or a group header, over the list itself (`rounded-md text-th-text-secondary`, defined once in `ui/iconButtonClass.ts`), round where it does not — the project root's `…` in the L2 search row, the session filter beside New Chat, the search field's clear button inside the input (`rounded-full text-th-text-muted hover:bg-th-bg-tertiary`). The filter is the `…`'s classes with `hover:` and `active:` behind `enabled:` and a `disabled:` dimming added, since it alone is disabled while its list is stale. 36 is the visual size only; the hit area a coarse pointer gets on top of it is [responsive-ui.md](responsive-ui.md#hit-areas-and-spacing)'s |
+| **L3** Group header | The session filter's `Worktrees` / `Deleted` (the Git workspace's `Staged` / `Changes` were these until its list became one, under an L4-height header of its own; its groups came back as `Unstaged` / `Staged`, but with `min-h-[44px]` headers that carry a `Stage all` text button and read in `text-sm` — [git-changes-ui.md](git-changes-ui.md#the-groups)) | `min-h-[32px] px-3 text-xs uppercase tracking-wide text-th-text-muted`, no hover fill. A header carrying L5 actions grows to their 36px — the touch target wins over the nominal height — and grows again where a finger may land ([responsive-ui.md](responsive-ui.md#hit-areas-and-spacing)) |
+| **L4** List row | Tree node, changed file (two lines tall, with its stage button and `⋯` beside the row's button), commit | `min-h-[44px]`, `text-sm text-th-text-secondary`; active `bg-th-bg-tertiary text-th-text-primary` |
+| **L5** Inline icon action | Entry menu, a Git file row's stage button and `⋯`, collapse, dismiss | 36×36, no border and no fill at rest (a hover fill is allowed). Two shapes, by where the control sits: square where it sits inside a **list** row or a group header, over the list itself (`rounded-md text-th-text-secondary`, defined once in `ui/iconButtonClass.ts`), round where it does not — the project root's `…` in the L2 search row, the session filter beside New Chat, the search field's clear button inside the input (`rounded-full text-th-text-muted hover:bg-th-bg-tertiary`). The filter is the `…`'s classes with `hover:` and `active:` behind `enabled:` and a `disabled:` dimming added, since it alone is disabled while its list is stale. 36 is the visual size only; the hit area a coarse pointer gets on top of it is [responsive-ui.md](responsive-ui.md#hit-areas-and-spacing)'s |
 
 The two rungs that matter most are L3 and L5, because that is where the panels
 had it wrong: the old `▾ Changes` header was L2-weight text on an L2-height row,
@@ -459,10 +459,11 @@ sidebar's at `expanded`, the Git page's below it.
 │ ⚠ Push failed · Details    ✕ │  top-bar banners
 │ ⚠ Rebase stopped on conf…  ⌃ │  operation banner, whole, with its actions
 │ [Changes] History  Branches  │  segmented control
-│ ▣ 3 files  +142 −37    [≣|⌸] │  the segment's list
-│▌▣ git.md          +88 −20  ⋯ │  the open detail's row, lit
+│   3 files  +142 −37    [≣|⌸] │  the segment's list
+│ Unstaged 2       [Stage all] │
+│▌+ git.md          +80 −12  ⋯ │  the open detail's row, lit
 ├──────────────────────────────┤
-│ [Discard unchecked…][Commit…]│  commit bar
+│ [Discard unstaged…][Commit…] │  commit bar
 └──────────────────────────────┘
 ```
 
@@ -497,7 +498,7 @@ sidebar's at `expanded`, the Git page's below it.
 
 **Why the sidebar may write at `expanded`.** The rule used to be that nothing in
 the sidebar writes. Its reasons were the drawer's: a phone's drawer is too
-short to hold a list that writes — its header, its checkboxes and a pinned
+short to hold a list that writes — its groups, its stage buttons and a pinned
 commit bar — under the tab bar and the worktree switcher, and the rows had not
 been built for its width. Neither holds for the column at `expanded`, which is
 the window's height and whose width is the 280px the rows are now built for.
@@ -571,10 +572,11 @@ files under `Changes` are part of the reading.
   counted ([git-changes-ui.md](git-changes-ui.md#the-sidebars-overview)).
 - **Under it, the changed files, read-only.** The Changes list's own row
   (`ChangedFileRow` with `readOnly`): name, directory and status words, line
-  counts, its accessible name `Review <path>` (`, conflicted`). No checkbox,
-  no `⋯`, and the staging state is not drawn — a box that looks pressable and
-  does nothing is the overview's sync-chip case again; staging is the Git
-  page's. One row per path, as in the list. The row's name is in line with the
+  counts, its accessible name `Review <path>` (`, conflicted`). No stage
+  button, no `⋯`, and the staging state is not drawn — a control that looks
+  pressable and does nothing is the overview's sync-chip case again; staging is
+  the Git page's. One row per path, not per side as in the list's groups: a
+  partly staged file is listed once, as the review walks it. The row's name is in line with the
   doors' text, so it reads as under `Changes`, and a conflicted file puts
   `TriangleAlert` in `th-warning` in that icon column, where the list's
   `StageGutter` would put it. They are a `<ul>` named `Changed files`.

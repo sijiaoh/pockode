@@ -52,9 +52,9 @@ export function hunkRange(hunk: DiffHunk): string {
  * selects its lines, and in the review the one that stages or unstages it
  * (docs/git-changes-ui.md#staging-a-hunk).
  *
- * An action named like the bottom bar's, not a checkbox: a box over each hunk
- * reads as "tick, then press Stage below", and on either side it could only
- * ever show one state.
+ * An action, like the list's stage buttons, not a checkbox: a box over each
+ * hunk reads as "tick, then press Stage below", and on either side it could
+ * only ever show one state.
  *
  * The row is taller than its buttons' hit areas by the floor's spacing on
  * either side, keeping them clear of the gap row's expand target above and

@@ -403,10 +403,11 @@ export interface GitCommitAction {
 export interface GitCommitHint {
 	text: string;
 	/**
-	 * Whether the workspace already shows the reason — the checkboxes the usual
-	 * hint points at sit right above the bar. The bar keeps such a hint for a
-	 * screen reader and spends no pixels repeating on screen what the screen
-	 * already says; a reason nothing else accounts for has to be visible.
+	 * Whether the workspace already shows the reason — with nothing staged,
+	 * every row in view carries a stage button, wherever the list is scrolled.
+	 * The bar keeps such a hint for a screen reader and spends no pixels
+	 * repeating on screen what the screen already says; a reason nothing else
+	 * accounts for has to be visible.
 	 */
 	alreadyOnScreen: boolean;
 }
@@ -474,7 +475,7 @@ export function describeCommitAction(
 	return {
 		label: "Commit",
 		enabled: false,
-		hint: { text: "Check a file to commit", alreadyOnScreen: true },
+		hint: { text: "Stage a file to commit", alreadyOnScreen: true },
 	};
 }
 
@@ -593,7 +594,7 @@ export interface DiscardPrompt {
 }
 
 const CANNOT_BE_UNDONE = "This cannot be undone.";
-const CHECKED_ARE_KEPT = "Checked changes are kept.";
+const STAGED_ARE_KEPT = "Staged changes are kept.";
 
 /**
  * Summary line when a stage or unstage fails, worded like DiscardPrompt's: the
@@ -613,7 +614,7 @@ function plural(count: number, noun: string): string {
  * `keepsStaged`: the one file in `files` also has a staged side. A discard
  * takes only the unstaged side, so the staged one survives, and "your edits"
  * would claim more than is lost. A batch of several ignores it: its wording
- * already says checked changes are kept.
+ * already says staged changes are kept.
  */
 export function describeDiscard(
 	files: FileStatus[],
@@ -623,7 +624,7 @@ export function describeDiscard(
 	const tracked = files.filter((f) => f.status !== "?");
 
 	// A batch of one is still one file, and naming it beats counting it — the
-	// bottom bar hits this whenever a single file is left unchecked.
+	// bottom bar hits this whenever a single file is left unstaged.
 	if (files.length === 1) {
 		const { path } = files[0];
 		if (untracked.length === 1) {
@@ -650,20 +651,20 @@ export function describeDiscard(
 		};
 	}
 
-	// Several files only ever come from the bottom bar's Discard unchecked, which
-	// takes each file's unstaged side: a file checked in part keeps what is
-	// staged, so the words say "unchecked", never "all".
+	// Several files only ever come from the bottom bar's Discard unstaged, which
+	// takes each file's unstaged side: a partly staged file keeps what is
+	// staged, so the words say "unstaged", never "all".
 	if (tracked.length === 0) {
 		return {
-			title: "Delete unchecked files?",
-			message: `${plural(untracked.length, "untracked file")} will be permanently deleted. ${CHECKED_ARE_KEPT} ${CANNOT_BE_UNDONE}`,
+			title: "Delete untracked files?",
+			message: `${plural(untracked.length, "untracked file")} will be permanently deleted. ${STAGED_ARE_KEPT} ${CANNOT_BE_UNDONE}`,
 			confirmLabel: "Delete",
 			failureSummary: "Delete failed.",
 		};
 	}
 
 	const clauses = [
-		`The unchecked edits in ${plural(tracked.length, "file")} will be lost`,
+		`The unstaged edits in ${plural(tracked.length, "file")} will be lost`,
 	];
 	if (untracked.length > 0) {
 		clauses.push(
@@ -672,8 +673,8 @@ export function describeDiscard(
 	}
 
 	return {
-		title: "Discard unchecked changes?",
-		message: `${clauses.join(" and ")}. ${CHECKED_ARE_KEPT} ${CANNOT_BE_UNDONE}`,
+		title: "Discard unstaged changes?",
+		message: `${clauses.join(" and ")}. ${STAGED_ARE_KEPT} ${CANNOT_BE_UNDONE}`,
 		confirmLabel: "Discard",
 		failureSummary: "Discard failed.",
 	};

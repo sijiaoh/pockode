@@ -1,21 +1,16 @@
 import { FolderTree, List } from "lucide-react";
 import {
-	aggregateCheckState,
 	type ChangedFile,
 	type ChangesView,
-	describeStageable,
 	sumLines,
-	withoutConflicts,
 } from "../../lib/gitChanges";
 import { iconButtonClass } from "../ui/iconButtonClass";
 import LineCounts from "./LineCounts";
-import StageCheckbox, { StageGutter } from "./StageCheckbox";
 
 interface Props {
+	/** One per path, both sides: a partly staged file counts once. */
 	files: ChangedFile[];
-	busy: boolean;
 	view: ChangesView;
-	onToggleAll: () => void;
 	onChangeView: (view: ChangesView) => void;
 }
 
@@ -25,41 +20,19 @@ const VIEWS = [
 ] as const;
 
 /**
- * The list's sticky header: select all, the totals and flat/tree. Nothing
- * destructive: discarding is the bottom bar's, away from the most-tapped box
- * on the screen.
+ * The list's sticky header: the file count, the totals and flat/tree. It
+ * stages nothing — each group header does that for its own rows — and
+ * discards nothing: that is the bottom bar's.
  *
  * At a narrow column the label and totals are the one element that gives
  * way, totals first; the controls keep their size.
  */
-function ChangesHeader({
-	files,
-	busy,
-	view,
-	onToggleAll,
-	onChangeView,
-}: Props) {
+function ChangesHeader({ files, view, onChangeView }: Props) {
 	const count = `${files.length} ${files.length === 1 ? "file" : "files"}`;
-	const stageable = withoutConflicts(files);
-	const anyConflict = stageable.length < files.length;
 
 	return (
 		<div className="sticky top-0 z-10 flex min-h-[44px] items-center gap-1 border-b border-th-border bg-th-bg-secondary px-2 pointer-coarse:gap-2">
-			{stageable.length > 0 ? (
-				<StageCheckbox
-					state={aggregateCheckState(files)}
-					label={
-						anyConflict
-							? `Stage ${describeStageable(files)}`
-							: `Stage all ${count}`
-					}
-					busy={busy}
-					onToggle={onToggleAll}
-				/>
-			) : (
-				<StageGutter />
-			)}
-			<span className="flex min-w-0 flex-1 items-baseline gap-2 overflow-hidden whitespace-nowrap">
+			<span className="flex min-w-0 flex-1 pl-2 items-baseline gap-2 overflow-hidden whitespace-nowrap">
 				<span className="shrink-0 text-sm text-th-text-primary">{count}</span>
 				<LineCounts lines={sumLines(files)} className="min-w-0 truncate" />
 			</span>

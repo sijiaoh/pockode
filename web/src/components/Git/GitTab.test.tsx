@@ -405,7 +405,7 @@ describe("GitTab's changed files below expanded", () => {
 		status = modified("a.ts", "b.ts");
 		renderDrawer(null);
 
-		expect(screen.queryByRole("checkbox")).toBeNull();
+		expect(screen.queryByRole("button", { name: /^(Un)?[Ss]tage/ })).toBeNull();
 		expect(screen.queryByRole("button", { name: /^More actions/ })).toBeNull();
 	});
 

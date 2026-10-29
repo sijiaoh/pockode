@@ -4,18 +4,21 @@ import {
 	type ChangedFile,
 	type ChangeKind,
 	changeKindOf,
-	checkStateOf,
 	lineStatOf,
 } from "../../lib/gitChanges";
 import { splitExtension, splitPath } from "../../utils/path";
 import { iconButtonClass } from "../ui/iconButtonClass";
 import LineCounts from "./LineCounts";
-import StageCheckbox, { StageGutter } from "./StageCheckbox";
+import StageButton, { StageGutter } from "./StageButton";
 
-/** Px per tree level, for the row's content; the checkbox column stays put. */
+/** Px per tree level, for the row's content; the stage button column stays put. */
 export const TREE_INDENT = 16;
 
 interface BaseProps {
+	/**
+	 * Writable, one side of the file only (`groupChanges`): the row describes
+	 * that side and nothing else. Read-only, the whole file.
+	 */
 	file: ChangedFile;
 	isActive: boolean;
 	onSelect: (file: ChangedFile) => void;
@@ -25,15 +28,22 @@ interface WritableProps extends BaseProps {
 	readOnly?: false;
 	/** Tree depth below the root; 0 in the flat list. */
 	depth: number;
+	/** The row is in the Staged group, so its button unstages. */
+	staged: boolean;
+	/**
+	 * The file has a row in the other group too: its names say which side
+	 * this one is, or the two would be the same name doing different things.
+	 */
+	namesSide: boolean;
 	busy: boolean;
-	onToggle: (file: ChangedFile) => void;
+	onStage: (file: ChangedFile) => void;
 	onMore: (file: ChangedFile) => void;
 }
 
 /**
- * The drawer's list below `expanded`, where nothing writes: no checkbox, no
- * `⋯`, and the staging state left unsaid rather than drawn as a box that does
- * nothing (docs/sidebar-ui.md).
+ * The drawer's list below `expanded`, where nothing writes: no stage button,
+ * no `⋯`, and the staging state left unsaid rather than drawn as a control
+ * that does nothing (docs/sidebar-ui.md).
  */
 interface ReadOnlyProps extends BaseProps {
 	readOnly: true;
@@ -72,7 +82,7 @@ function statusWords(file: ChangedFile, kind: ChangeKind): string[] {
 }
 
 /**
- * One changed file: its checkbox, the row that opens it, and `⋯` for the
+ * One changed file: its stage button, the row that opens it, and `⋯` for the
  * rest. The three are siblings, never nested. Read-only, the row is the
  * button alone.
  */
@@ -86,6 +96,12 @@ const ChangedFileRow = memo(function ChangedFileRow(props: Props) {
 	const status = statusWords(file, kind).join(" · ");
 	const detailsId = useId();
 	const countsId = useId();
+	const side =
+		!props.readOnly && props.namesSide
+			? props.staged
+				? ", staged"
+				: ", unstaged"
+			: "";
 
 	return (
 		<div
@@ -101,11 +117,11 @@ const ChangedFileRow = memo(function ChangedFileRow(props: Props) {
 			{props.readOnly ? null : file.conflict ? (
 				<StageGutter conflict />
 			) : (
-				<StageCheckbox
-					state={checkStateOf(file)}
-					label={`Stage ${file.path}`}
+				<StageButton
+					action={props.staged ? "unstage" : "stage"}
+					label={`${props.staged ? "Unstage" : "Stage"} ${file.path}`}
 					busy={props.busy}
-					onToggle={() => props.onToggle(file)}
+					onPress={() => props.onStage(file)}
 				/>
 			)}
 			<button
@@ -114,7 +130,7 @@ const ChangedFileRow = memo(function ChangedFileRow(props: Props) {
 				aria-label={
 					file.conflict
 						? `Review ${file.path}, conflicted`
-						: `Review ${file.path}`
+						: `Review ${file.path}${side}`
 				}
 				// The name replaces the button's text, so what the details and the
 				// counts say — Deleted or Untracked before a discard — is
@@ -190,7 +206,7 @@ const ChangedFileRow = memo(function ChangedFileRow(props: Props) {
 				<button
 					type="button"
 					onClick={() => props.onMore(file)}
-					aria-label={`More actions for ${file.path}`}
+					aria-label={`More actions for ${file.path}${side}`}
 					className={`${iconButtonClass()} mr-1`}
 				>
 					<Ellipsis className="h-4 w-4" aria-hidden="true" />

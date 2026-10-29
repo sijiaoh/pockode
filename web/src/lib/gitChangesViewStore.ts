@@ -14,9 +14,10 @@ interface GitChangesViewState {
 	 */
 	view: ChangesView;
 	/**
-	 * Collapsed folder rows by worktree. In memory only: it is a navigation
-	 * state of this visit, not a preference, and it outlives the list, which
-	 * unmounts whenever another segment is chosen.
+	 * Collapsed folder rows by worktree, each as `<group>:<path>` — every
+	 * group of the list draws a tree of its own. In memory only: it is a
+	 * navigation state of this visit, not a preference, and it outlives the
+	 * list, which unmounts whenever another segment is chosen.
 	 */
 	collapsed: Record<string, string[]>;
 }

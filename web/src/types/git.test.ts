@@ -136,7 +136,7 @@ describe("describeCommitAction", () => {
 			enabled: false,
 			// The stage buttons it names are on screen right above the bar, so it
 			// is worth saying to a screen reader and not worth a line of text.
-			hint: { text: "Check a file to commit", alreadyOnScreen: true },
+			hint: { text: "Stage a file to commit", alreadyOnScreen: true },
 		});
 	});
 
@@ -169,7 +169,7 @@ describe("describeCommitAction", () => {
 			}),
 		).toMatchObject({
 			enabled: false,
-			hint: { text: "Check a file to commit" },
+			hint: { text: "Stage a file to commit" },
 		});
 	});
 
@@ -343,18 +343,18 @@ describe("describeDiscard", () => {
 				modified("c.ts"),
 				untracked("notes.txt"),
 			],
-			title: "Discard unchecked changes?",
+			title: "Discard unstaged changes?",
 			message:
-				"The unchecked edits in 3 files will be lost and 1 untracked file will be deleted. Checked changes are kept. This cannot be undone.",
+				"The unstaged edits in 3 files will be lost and 1 untracked file will be deleted. Staged changes are kept. This cannot be undone.",
 			confirmLabel: "Discard",
 			failureSummary: "Discard failed.",
 		},
 		{
 			name: "several tracked files",
 			files: [modified("a.ts"), modified("b.ts")],
-			title: "Discard unchecked changes?",
+			title: "Discard unstaged changes?",
 			message:
-				"The unchecked edits in 2 files will be lost. Checked changes are kept. This cannot be undone.",
+				"The unstaged edits in 2 files will be lost. Staged changes are kept. This cannot be undone.",
 			confirmLabel: "Discard",
 			failureSummary: "Discard failed.",
 		},
@@ -362,9 +362,9 @@ describe("describeDiscard", () => {
 			// Nothing is discarded here, so the wording says what it does.
 			name: "several untracked files",
 			files: [untracked("a.txt"), untracked("b.txt")],
-			title: "Delete unchecked files?",
+			title: "Delete untracked files?",
 			message:
-				"2 untracked files will be permanently deleted. Checked changes are kept. This cannot be undone.",
+				"2 untracked files will be permanently deleted. Staged changes are kept. This cannot be undone.",
 			confirmLabel: "Delete",
 			failureSummary: "Delete failed.",
 		},
@@ -381,9 +381,9 @@ describe("describeDiscard", () => {
 		{
 			name: "one tracked and one untracked agree in number",
 			files: [modified("a.ts"), untracked("b.txt")],
-			title: "Discard unchecked changes?",
+			title: "Discard unstaged changes?",
 			message:
-				"The unchecked edits in 1 file will be lost and 1 untracked file will be deleted. Checked changes are kept. This cannot be undone.",
+				"The unstaged edits in 1 file will be lost and 1 untracked file will be deleted. Staged changes are kept. This cannot be undone.",
 			confirmLabel: "Discard",
 			failureSummary: "Discard failed.",
 		},
