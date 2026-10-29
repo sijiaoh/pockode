@@ -18,12 +18,19 @@ import { useCommitMenu } from "./useCommitMenu";
 import { useHistoryPaging } from "./useHistoryPaging";
 
 interface Props {
-	/** The range and filters the URL names. */
+	/** The range and filters listed: the URL's, or the sidebar's own. */
 	history: HistoryQuery;
 	activeHash: string | null;
 	/** Set while the lit row is wanted on screen; called once it is. */
 	reveal?: () => void;
 	onSelectCommit: (hash: string) => void;
+	/**
+	 * Takes a new range or filter in place of writing it into the URL: set
+	 * where the route names some other page, which the list must leave alone
+	 * (the sidebar's list at `expanded`, beside anything but the bare list or
+	 * the History layer whose query is on screen).
+	 */
+	onShowHistory?: (next: HistoryQuery) => void;
 }
 
 /** An empty field is no search, and neither is one of only spaces. */
@@ -47,6 +54,7 @@ function HistorySection({
 	activeHash,
 	reveal,
 	onSelectCommit,
+	onShowHistory,
 }: Props) {
 	const navigate = useNavigate();
 	const { worktree, sessionId, overlay } = useRouteState();
@@ -70,6 +78,10 @@ function HistorySection({
 	// `expanded` stays open, and a search settling after a row was pressed
 	// lands on that commit's page rather than replacing it with the list.
 	const showHistory = (next: HistoryQuery, replace = false) => {
+		if (onShowHistory) {
+			onShowHistory(next);
+			return;
+		}
 		const layer =
 			overlay?.type === "commit" ||
 			overlay?.type === "commit-diff" ||

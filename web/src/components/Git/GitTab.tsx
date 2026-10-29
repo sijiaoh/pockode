@@ -171,7 +171,7 @@ function AutoFetch() {
 	return null;
 }
 
-/** What the list stood at when the route last named a Git layer. */
+/** Which list the tab stands at, and with which History query. */
 interface ListPlace {
 	worktree: string;
 	segment: GitSegment;
@@ -190,27 +190,61 @@ function GitTabLists({
 	const worktree = useWorktreeStore((s) => s.current);
 	const mergeHandoff = useSharedMergeHandoff();
 
-	// The route says which list while it names a Git layer. Once it names
-	// something else — a session, a file — the tab stays at the list it was
-	// left at rather than jumping back to Changes; in another worktree, without
-	// the search and file filter, which may name nothing there (as a worktree
+	// The route says which list when it arrives somewhere — another list or
+	// query, or a detail opened from outside one — and the tab stands there;
+	// between arrivals the list is the sidebar's own, so turning it beside an
+	// open detail, a session or a file leaves the main area alone
+	// (docs/git-ui.md#routes-segments-and-back). A detail stepping on to the
+	// next file, or going back to its list's URL, arrives nowhere. Once the
+	// route names something else the tab stays at the list it was left at
+	// rather than jumping back to Changes; in another worktree, without the
+	// search and file filter, which may name nothing there (as a worktree
 	// switch from the workspace does, `useWorktree`).
-	const [last, setLast] = useState<ListPlace>({
-		worktree,
-		segment: "changes",
-		history: DEFAULT_HISTORY_QUERY,
-	});
 	const routed: ListPlace | null = layer && {
 		worktree,
 		segment: gitSegmentOf(layer) ?? "changes",
 		history: historyQueryOf(layer),
 	};
-	if (routed && !samePlace(routed, last)) setLast(routed);
-	const place: ListPlace = routed ?? {
-		worktree,
-		segment: last.segment,
-		history:
-			last.worktree === worktree ? last.history : { scope: last.history.scope },
+	const [shown, setShown] = useState<ListPlace>(
+		() =>
+			routed ?? {
+				worktree,
+				segment: "changes",
+				history: DEFAULT_HISTORY_QUERY,
+			},
+	);
+	// A detail opened from a list URL names the same place as the list, and
+	// still arrives: its row is lit, so its list is the one to show.
+	const routedDetail = layer !== null && layer.type !== "git";
+	const [seen, setSeen] = useState({ place: routed, detail: routedDetail });
+	if (!samePlaceOrNone(routed, seen.place) || routedDetail !== seen.detail) {
+		setSeen({ place: routed, detail: routedDetail });
+		if (routed && (routedDetail || !samePlaceOrNone(routed, seen.place))) {
+			setShown(routed);
+		}
+	}
+	const place: ListPlace =
+		shown.worktree === worktree
+			? shown
+			: {
+					worktree,
+					segment: shown.segment,
+					history: { scope: shown.history.scope },
+				};
+	// While the route is the bare list the URL follows the segment, so Back
+	// walks the segments; beside anything else the tab turns on its own.
+	const routeIsList = layer?.type === "git";
+	// The route carries exactly the list on screen, query and all.
+	const routeNamesPlace = routed !== null && samePlaceOrNone(routed, place);
+	const onSelectSegment = (segment: GitSegment) => {
+		if (segment === place.segment) return;
+		// Back at the route's own list, at the route's own query.
+		setShown(
+			routed?.segment === segment
+				? routed
+				: { worktree, segment, history: DEFAULT_HISTORY_QUERY },
+		);
+		if (routeIsList) navigation.onSelectSegment(segment);
 	};
 	const { activeFile, activeHash, activeBranchKey } = activeRowsOf(layer);
 	const litId =
@@ -223,12 +257,11 @@ function GitTabLists({
 	const { reveal, onPress, listRef } = useLitRowReveal(lit, listShown);
 
 	// A commit carries the list it was picked from, which is the one the tab
-	// shows even when the route no longer names it.
-	const listLayer: GitLayer = layer ?? {
-		type: "git",
-		segment: place.segment,
-		history: place.history,
-	};
+	// shows even when the route names another or none.
+	const listLayer: GitLayer =
+		layer && routeNamesPlace
+			? layer
+			: { type: "git", segment: place.segment, history: place.history };
 	const onSelectFile = (path: string, staged: boolean) => {
 		onPress(litRowKey("changes", path));
 		navigation.onSelectFile(path, staged);
@@ -241,6 +274,17 @@ function GitTabLists({
 		onPress(litRowKey("branches", branchRowKey(branch)));
 		navigation.onSelectBranch(branch);
 	};
+	// Where the route is the bare list, or the History layer whose query is
+	// on screen, the lists write the URL as the page's do; beside anything
+	// else a new range, search or file filter is the sidebar's, as the segment
+	// is, and must not replace the page the main area has open.
+	const showHistory = (history: HistoryQuery) =>
+		setShown({ worktree, segment: "history", history });
+	const onShowHistory =
+		routeIsList || routeNamesPlace ? undefined : showHistory;
+	const onShowFileHistory = routeIsList
+		? undefined
+		: (path: string) => showHistory({ ...DEFAULT_HISTORY_QUERY, file: path });
 	const onBranchDeleted = (row: BranchRow) =>
 		navigation.onRepointBranch(
 			{ ref: row.label, remote: row.remote },
@@ -251,7 +295,7 @@ function GitTabLists({
 	return (
 		<div ref={listRef} className="flex min-h-0 flex-1 flex-col">
 			<BranchBar
-				onOpenBranches={() => navigation.onSelectSegment("branches")}
+				onOpenBranches={() => onSelectSegment("branches")}
 				branchFailureSurface={place.segment === "branches"}
 				mergeHandoff={mergeHandoff}
 			/>
@@ -267,10 +311,12 @@ function GitTabLists({
 				activeBranchKey={activeBranchKey}
 				reveal={reveal}
 				mergeHandoff={mergeHandoff}
-				onSelectSegment={navigation.onSelectSegment}
+				onSelectSegment={onSelectSegment}
 				onSelectFile={onSelectFile}
 				onCloseFile={navigation.onCloseFile}
 				onSelectCommit={onSelectCommit}
+				onShowFileHistory={onShowFileHistory}
+				onShowHistory={onShowHistory}
 				onSelectBranch={onSelectBranch}
 				onBranchDeleted={onBranchDeleted}
 			/>
@@ -335,7 +381,8 @@ function useLitRowReveal(lit: string | null, shown: boolean) {
 	};
 }
 
-function samePlace(a: ListPlace, b: ListPlace): boolean {
+function samePlaceOrNone(a: ListPlace | null, b: ListPlace | null): boolean {
+	if (!a || !b) return a === b;
 	return (
 		a.worktree === b.worktree &&
 		a.segment === b.segment &&

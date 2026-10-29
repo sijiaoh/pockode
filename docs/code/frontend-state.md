@@ -209,7 +209,11 @@ the segment it was opened from, which a store never had to and a component never
 could. See [project-ui.md](../project-ui.md#5-where-the-segment-lives).
 
 The Git workspace's three segments are in the URL for the same reasons
-([git-ui.md](../git-ui.md#routes-segments-and-back)). A store for the Git
+([git-ui.md](../git-ui.md#routes-segments-and-back)) — all but the sidebar's at
+`expanded`, which holds its segment and History query as component state
+(`GitTabLists`), set from the URL each time the route arrives somewhere new:
+there the URL names the page the main area has open, and turning the list must
+not change it. A store for the Git
 panel's UI, `gitPanelStore`, held whether its `History` group was expanded, and
 went when History stopped being a collapsible group and became a segment.
 

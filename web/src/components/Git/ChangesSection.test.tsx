@@ -70,6 +70,7 @@ function renderSection(
 			worktree: string,
 			next: { path: string; staged: boolean } | null,
 		) => void;
+		onShowFileHistory?: (path: string) => void;
 	} = {},
 ) {
 	const onCloseFile = props.onCloseFile ?? vi.fn();
@@ -81,6 +82,7 @@ function renderSection(
 				onSelectFile={onSelectFile}
 				onCloseFile={onCloseFile}
 				activeFile={props.activeFile ?? null}
+				onShowFileHistory={props.onShowFileHistory}
 			/>
 		</QueryClientProvider>
 	);
@@ -179,6 +181,23 @@ describe("ChangesSection discard", () => {
 		expect(navigate).toHaveBeenCalledWith(
 			expect.not.objectContaining({ replace: true }),
 		);
+		expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+	});
+
+	// The sidebar's list beside a review turns to History itself: navigating
+	// to the History list would replace the review beside it.
+	it("hands a file's history to its owner instead, when it has one", async () => {
+		const user = userEvent.setup();
+		const onShowFileHistory = vi.fn();
+		navigate.mockClear();
+		renderSection({ onShowFileHistory });
+
+		const staged = await openMenu(user, "staged.ts");
+		await user.click(
+			within(staged).getByRole("button", { name: "History of this file" }),
+		);
+		expect(onShowFileHistory).toHaveBeenCalledWith("staged.ts");
+		expect(navigate).not.toHaveBeenCalled();
 		expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
 	});
 

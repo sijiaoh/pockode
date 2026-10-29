@@ -489,8 +489,10 @@ sidebar's at `expanded`, the Git page's below it.
   It is `TabbedSidebar`'s `reveal`: a tab selected each time a new request is
   made, and left alone between requests, so a tab the user picks afterwards
   stays picked.
-- **Where the route names no Git layer** — a session, a file — the tab stays at
-  the segment and History query it was left at
+- **Its segment is its own.** Turning it is navigation within the sidebar and
+  never changes what the main area shows; the tab follows the route only when
+  the route arrives somewhere new, and where the route names no Git layer — a
+  session, a file — it stays at the segment and History query it was left at
   ([git-ui.md](git-ui.md#routes-segments-and-back)).
 
 **Why the sidebar may write at `expanded`.** The rule used to be that nothing in

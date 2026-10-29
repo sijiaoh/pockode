@@ -73,6 +73,12 @@ interface Props {
 	activeFile: { path: string; staged: boolean } | null;
 	/** Set while the lit row is wanted on screen; called once it is. */
 	reveal?: () => void;
+	/**
+	 * Takes `History of this file` in place of navigating to that list: set
+	 * where the route names a page the list must leave alone (the sidebar's
+	 * list at `expanded`, beside anything but the bare list).
+	 */
+	onShowFileHistory?: (path: string) => void;
 }
 
 /**
@@ -86,6 +92,7 @@ function ChangesSection({
 	onCloseFile,
 	activeFile,
 	reveal,
+	onShowFileHistory,
 }: Props) {
 	const navigate = useNavigate();
 	const { worktree: routeWorktree, sessionId } = useRouteState();
@@ -222,11 +229,15 @@ function ChangesSection({
 	const openHistory = useCallback(
 		(path: string) => {
 			setMenuPath(null);
+			if (onShowFileHistory) {
+				onShowFileHistory(path);
+				return;
+			}
 			navigate(
 				overlayToNavigation(fileHistoryOverlay(path), routeWorktree, sessionId),
 			);
 		},
-		[navigate, routeWorktree, sessionId],
+		[navigate, routeWorktree, sessionId, onShowFileHistory],
 	);
 
 	const discardFile = useCallback((file: ChangedFile) => {
