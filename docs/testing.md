@@ -372,6 +372,18 @@ things about writing tests with it:
 - **Marker text must be unique across every page**, because `viewTopOf` finds
   its element with `getByText`.
 
+**A module mock is a real module here.** `vi.mock(path, factory)` in a
+browser file becomes an ES module that exports only what the factory returns,
+so a module anywhere under the file that imports a name the factory leaves out
+fails to link, and the whole file fails to import — in both browsers, before any
+test runs, with "does not provide an export named …". jsdom fails only when the
+missing name is read, so the same mock stays green there. When a browser file
+suddenly fails this way, look at the imports the change added to a module it
+renders, not at the test: a module that many pages import should not pull in
+what only one caller needs (worked example:
+the scroll-restoration split in
+[frontend-state.md](code/frontend-state.md#why-a-pages-scroll-position-outlives-the-page)).
+
 **A local-only red: Vite reloading mid-run.** With a warm Vite cache
 (`web/node_modules/.vite`), a dependency imported for the first time is only
 found at runtime. Vite re-optimizes and reloads the page, and the run reports

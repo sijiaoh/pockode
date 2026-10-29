@@ -1,20 +1,14 @@
-import { useRouter, useRouterState } from "@tanstack/react-router";
 import {
 	createContext,
 	type Ref,
 	useCallback,
 	useContext,
 	useLayoutEffect,
-	useMemo,
 	useRef,
 } from "react";
-import {
-	entryKeyOf,
-	type ScrollMemory,
-	scrollMemoryFor,
-} from "../lib/scrollMemory";
+import type { ScrollMemory } from "../lib/scrollMemory";
 
-interface ScrollRestorationScope {
+export interface ScrollRestorationScope {
 	memory: ScrollMemory;
 	/**
 	 * The history entry the pages under the provider are rendered for; null
@@ -27,31 +21,13 @@ interface ScrollRestorationScope {
  * Provided once, by the app shell. A context rather than the router's hooks
  * read in each scroller, so that a page rendered without the shell — in a
  * test that mocks the router, say — is an ordinary scroller and needs nothing
- * arranged for it.
+ * arranged for it. For the same reason the provider's value is computed in
+ * `useScrollRestorationScope.ts`, not here: this module must not import the
+ * router at all, since a browser test's `vi.mock` of it is a real ES module
+ * and an import of a name the mock leaves out fails the whole file at load.
  */
 export const ScrollRestorationContext =
 	createContext<ScrollRestorationScope | null>(null);
-
-/** The provider's value; called where the router is. */
-export function useScrollRestorationScope(): ScrollRestorationScope {
-	const { history } = useRouter();
-	// The entry of the pages on screen, which is not the router's location:
-	// that moves to the next entry as soon as the navigation starts, while the
-	// page being left is still mounted and can still scroll — and what it
-	// saved there would be restored into the next page. The rendered matches
-	// change together with `isLoading` going false, so until then the entry
-	// stays the one the pages were rendered for.
-	const settled = useRouterState({
-		select: (s) => (s.isLoading ? null : entryKeyOf(s.location)),
-	});
-	const lastSettled = useRef(settled);
-	if (settled !== null) lastSettled.current = settled;
-	const entry = settled ?? lastSettled.current;
-	return useMemo(
-		() => ({ memory: scrollMemoryFor(history), entry }),
-		[history, entry],
-	);
-}
 
 /**
  * How long a restore keeps trying while the page's content arrives. Long

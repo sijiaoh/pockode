@@ -17,10 +17,8 @@ import { useLeaveReview } from "../hooks/useLeaveReview";
 import { useRemoteUrlSubscription } from "../hooks/useRemoteUrlSubscription";
 import { useRouteState } from "../hooks/useRouteState";
 import { useScheduleSubscription } from "../hooks/useScheduleSubscription";
-import {
-	ScrollRestorationContext,
-	useScrollRestorationScope,
-} from "../hooks/useScrollRestoration";
+import { ScrollRestorationContext } from "../hooks/useScrollRestoration";
+import { useScrollRestorationScope } from "../hooks/useScrollRestorationScope";
 import { useSession } from "../hooks/useSession";
 import { useSessionDetailSubscription } from "../hooks/useSessionDetailSubscription";
 import { useSettingsSubscription } from "../hooks/useSettingsSubscription";
