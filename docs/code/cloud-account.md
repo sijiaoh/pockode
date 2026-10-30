@@ -2,7 +2,7 @@
 
 A user signed in to the cloud can see every Pockode instance on every machine they have linked — servers, clusters and the nodes a cluster starts — and open them from one list. Pockode's side of that is three things: a machine credential (`cloud.json`), the `pockode login` / `pockode logout` commands that create and remove it, and the relay attaching each running process to the account the credential names.
 
-Linking is purely additive. A machine that never ran `pockode login` is a **guest**, and a guest's relay requests are byte-for-byte what they were before accounts existed. Neither a link that goes bad — revoked, unlinked on the web — nor an instance the cloud will not list ever stops the relay from working; the worst it does is leave the instance off the list.
+Linking is purely additive. A machine that never ran `pockode login` is a **guest**, and a guest's relay requests are byte-for-byte what they were before accounts existed. Neither a link that goes bad — revoked, unlinked on the web, or removed along with a deleted account — nor an instance the cloud will not list ever stops the relay from working; the worst it does is leave the instance off the list.
 
 This document is the interoperability contract as Pockode implements it. The cloud's account design document is the other half.
 
@@ -83,7 +83,7 @@ Nothing about the account fields fails the request — short of making the body 
 
 | `account_error` | Cause | Banner |
 |---|---|---|
-| `invalid_machine_token` | The token is malformed or names no machine — never issued, or unlinked on the web or revoked since | `⚠ This machine is no longer linked to your cloud account` / `Run pockode login to link it again` |
+| `invalid_machine_token` | The token is malformed or names no machine — never issued, or unlinked on the web, revoked, or removed with a deleted account since | `⚠ This machine is no longer linked to your cloud account` / `Run pockode login to link it again` |
 | `invalid_instance` | The cloud will not list the instance: `kind` must be one of the three, `name` and `path` non-empty and free of control characters, `name` at most 255 bytes and `path` at most 4096. Linking again cannot fix it — it is a directory name with a control character or a path over the limit, or else a Pockode bug | `⚠ This instance could not be linked to your cloud account` |
 | `internal_error` | The cloud failed while attaching. Pockode does not retry on its own; the next refresh (a restart, a renewal, a change to `cloud.json`) attaches again | As for `invalid_instance` |
 | Any other value | Taken as `internal_error`, so the cloud can add values | As for `invalid_instance` |
@@ -121,7 +121,7 @@ An unreadable `cloud.json` likewise means guest, with the warning logged once ra
 - `cloudCallsMu` serializes the watcher with the reconnect loop, since both rewrite `relay.json`.
 - A failed refresh is retried on the next poll, which still sees the difference; a run of failures is logged once, not on every poll. The exception is a 401 for the relay token: asking again cannot fix that, and the reconnect loop registers anew once its uplink is rejected too, reading `cloud.json` as it does. The watcher logs it once and leaves it there.
 - The watcher stops for good when the cloud requires a newer client, as the reconnect loop does.
-- A machine unlinked on the web keeps working unattached until its next refresh — a restart, a renewal, or a change to `cloud.json` — which then reports `account_error`.
+- A machine unlinked on the web, or removed because its account was deleted, keeps working unattached until its next refresh — a restart, a renewal, or a change to `cloud.json` — which then reports `account_error: invalid_machine_token`. The cloud keeps its relays, so the subdomain and the remote URL stay the same.
 
 ## Code Paths
 
