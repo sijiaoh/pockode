@@ -1,4 +1,5 @@
 import { Binary, File, FileQuestion, FileWarning } from "lucide-react";
+import { useLineLanding } from "../../hooks/useLineLanding";
 import { formatBytes } from "../../utils/bytes";
 import {
 	type FileViewState,
@@ -30,6 +31,12 @@ interface Props {
 	 */
 	plain?: boolean;
 	/**
+	 * Show the source of a file that would otherwise render — Markdown, or a
+	 * page — highlighted, and numbered where `lineNumbers` asks. Unlike `plain`
+	 * it keeps the colours: it is a way of reading the file, not a cost cut.
+	 */
+	source?: boolean;
+	/**
 	 * Set where the surrounding screen has no editing at all. The cards below
 	 * otherwise explain why editing is disabled, which is written for the
 	 * disabled Edit button in the viewer's bottom bar; with no such button on
@@ -47,6 +54,12 @@ interface Props {
 	 * source of a page or of Markdown gets them, the rendering does not.
 	 */
 	lineNumbers?: boolean;
+	/**
+	 * The line to open at: scrolled to and flashed on a fresh visit
+	 * (`useLineLanding`). Only a numbered view has lines; elsewhere it is
+	 * ignored.
+	 */
+	line?: number;
 	/** Offered by a rendered `.md` file's images; takes a work-directory-relative path. */
 	onOpenFile?: (path: string) => void;
 }
@@ -72,9 +85,11 @@ function FileBody({
 	path,
 	downloadAction,
 	plain,
+	source,
 	readOnly,
 	imageDimensions,
 	lineNumbers,
+	line,
 	onOpenFile,
 }: Props) {
 	switch (state.kind) {
@@ -89,35 +104,29 @@ function FileBody({
 				/>
 			);
 
-		case "text": {
-			const textPlain = !state.highlight || plain;
-			const numbered = lineNumbers && !rendersMarkdown(path, textPlain);
+		case "text":
 			return (
-				<>
-					{/* Only the forced case is worth a banner: when the reader asked
-					    for plain text themselves, saying so back is noise. */}
-					{!state.highlight && <PlainTextNotice />}
-					<div className={numbered ? undefined : "p-2"}>
-						<FileContentDisplay
-							content={state.content}
-							filePath={path}
-							plain={textPlain}
-							lineNumbers={numbered}
-							onOpenFile={onOpenFile}
-						/>
-					</div>
-				</>
+				<TextBody
+					content={state.content}
+					highlight={state.highlight}
+					path={path}
+					plain={plain}
+					source={source}
+					lineNumbers={lineNumbers}
+					line={line}
+					onOpenFile={onOpenFile}
+				/>
 			);
-		}
 
 		case "page":
-			return plain ? (
+			return plain || source ? (
 				<FileBody
 					state={state.source}
 					path={path}
 					downloadAction={downloadAction}
 					readOnly={readOnly}
 					lineNumbers={lineNumbers}
+					line={line}
 				/>
 			) : (
 				<PagePreview
@@ -210,6 +219,46 @@ function FileBody({
 				/>
 			);
 	}
+}
+
+function TextBody({
+	content,
+	highlight,
+	path,
+	plain,
+	source,
+	lineNumbers,
+	line,
+	onOpenFile,
+}: Pick<
+	Props,
+	"path" | "plain" | "source" | "lineNumbers" | "line" | "onOpenFile"
+> & { content: string; highlight: boolean }) {
+	const textPlain = !highlight || plain;
+	const numbered = lineNumbers && !rendersMarkdown(path, textPlain || source);
+	const { containerRef, mark, clearMark } = useLineLanding(
+		numbered ? line : undefined,
+		content,
+	);
+	return (
+		<>
+			{/* Only the forced case is worth a banner: when the reader asked
+			    for plain text themselves, saying so back is noise. */}
+			{!highlight && <PlainTextNotice />}
+			<div ref={containerRef} className={numbered ? undefined : "p-2"}>
+				<FileContentDisplay
+					content={content}
+					filePath={path}
+					plain={textPlain}
+					source={source}
+					lineNumbers={numbered}
+					mark={mark}
+					onMarkEnd={clearMark}
+					onOpenFile={onOpenFile}
+				/>
+			</div>
+		</>
+	);
 }
 
 export default FileBody;

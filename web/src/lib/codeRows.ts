@@ -38,3 +38,15 @@ export function measureCodeRows(pre: HTMLElement, lineCount: number): CodeRows {
 export function lineTop(rows: CodeRows, line: number): number {
 	return rows.top + (line - 1) * rows.height;
 }
+
+/**
+ * The flash on the line a file was opened at (docs/file.md#where-the-viewer-opens).
+ * `rows` is the measurement the landing scrolled by, so the mark sits where the
+ * scroll put the line.
+ */
+export interface LineMark {
+	line: number;
+	rows: CodeRows;
+	/** Remounts the mark — restarting its animation — for each landing. */
+	key: string;
+}

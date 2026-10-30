@@ -22,6 +22,21 @@ const overlaySearchSchema = z.object({
 export type OverlaySearchParams = z.infer<typeof overlaySearchSchema>;
 
 /**
+ * The file routes': `mode=edit` is the editor, and in the viewer `mode=source`
+ * the source of a file that would otherwise render (Markdown, a page) and
+ * `line` the line to open at (docs/file.md#where-the-viewer-opens). `line` is
+ * a positive integer, coerced because a URL carries text; anything else fails
+ * the schema, as `mode` does. Only the file routes take them: a diff has no
+ * line of one file to stand at.
+ */
+const fileSearchSchema = overlaySearchSchema.extend({
+	mode: z.enum(["edit", "source"]).optional(),
+	line: z.coerce.number().int().positive().optional(),
+});
+
+export type FileSearchParams = z.infer<typeof fileSearchSchema>;
+
+/**
  * The History segment's query (docs/git-history-ui.md#url), on the list and on
  * the commit layers alike. `scope=current` is the default, accepted spelled
  * out and never written.
@@ -118,7 +133,7 @@ const unstagedDiffRoute = createRoute({
 const fileViewRoute = createRoute({
 	getParentRoute: () => rootRoute,
 	path: ROUTES.files,
-	validateSearch: (search) => overlaySearchSchema.parse(search),
+	validateSearch: (search) => fileSearchSchema.parse(search),
 });
 
 const gitRoute = createRoute({
@@ -225,7 +240,7 @@ const wtUnstagedDiffRoute = createRoute({
 const wtFileViewRoute = createRoute({
 	getParentRoute: () => worktreeLayoutRoute,
 	path: WT_CHILD_ROUTES.files,
-	validateSearch: (search) => overlaySearchSchema.parse(search),
+	validateSearch: (search) => fileSearchSchema.parse(search),
 });
 
 const wtGitRoute = createRoute({

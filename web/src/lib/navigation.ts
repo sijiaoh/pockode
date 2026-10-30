@@ -3,6 +3,7 @@ import {
 	type BranchRef,
 	type CommitOrigin,
 	commitOriginOf,
+	type FileOverlayMode,
 	type GitSegment,
 	type HistoryQuery,
 	type OverlayState,
@@ -33,11 +34,15 @@ interface NavToOverlayBase {
 	sessionId: string | null;
 }
 
-interface NavToPathOverlay extends NavToOverlayBase {
-	overlayType: "staged" | "unstaged" | "file";
+interface NavToDiffOverlay extends NavToOverlayBase {
+	overlayType: "staged" | "unstaged";
 	path: string;
-	edit?: boolean;
 }
+
+type NavToPathOverlay =
+	| NavToDiffOverlay
+	| (NavToOverlayBase &
+			FileOverlayMode & { overlayType: "file"; path: string });
 
 interface NavToBranchOverlay extends NavToOverlayBase {
 	overlayType: "branch";
@@ -193,7 +198,7 @@ export function isReviewFromList(state: unknown): boolean {
 /**
  * The query most overlay routes carry: the chat underneath it, and — on the two
  * work routes and the Git workspace — which segment of the list the reader is
- * in. The file routes build their own, because they also carry `mode`.
+ * in. The file routes add their own mode on top (`assignFileSearch`).
  *
  * A default segment (`current`, `changes`) is the *absence* of `segment`
  * rather than spelled out, so that the default landing place has exactly one
@@ -237,6 +242,31 @@ function assignBranchSearch(
 }
 
 /**
+ * The file overlay's mode as its URL spells it. A line implies the source, so
+ * the source is written only where no line already says it.
+ */
+function assignFileSearch(result: NavigationResult, mode: FileOverlayMode) {
+	const search: Record<string, string | number> = { ...result.search };
+	if (mode.edit) {
+		search.mode = "edit";
+	} else if (mode.line !== undefined) {
+		search.line = mode.line;
+	} else if (mode.source) {
+		search.mode = "source";
+	}
+	if (Object.keys(search).length > 0) result.search = search;
+}
+
+/** Only the fields of `FileOverlayMode`, so nothing else rides along. */
+function fileModeOf(mode: FileOverlayMode): FileOverlayMode {
+	if (mode.edit) return { edit: true };
+	return {
+		...(mode.source ? { source: true } : {}),
+		...(mode.line !== undefined ? { line: mode.line } : {}),
+	};
+}
+
+/**
  * Convert OverlayState to navigation result.
  *
  * `options.replace` is for the cases where the overlay is being *corrected*
@@ -277,7 +307,7 @@ export function overlayToNavigation(
 					overlayType: "file" as const,
 					path: overlay.path,
 					sessionId,
-					edit: overlay.edit,
+					...fileModeOf(overlay),
 				};
 			case "branch":
 				return {
@@ -500,15 +530,8 @@ export function buildNavigation(
 				if (!isMain) {
 					result.params.worktree = target.worktree;
 				}
-				if (target.sessionId || target.edit) {
-					result.search = {};
-					if (target.sessionId) {
-						result.search.session = target.sessionId;
-					}
-					if (target.edit) {
-						result.search.mode = "edit";
-					}
-				}
+				assignSearch(result, target.sessionId);
+				if (target.overlayType === "file") assignFileSearch(result, target);
 			}
 			break;
 		}

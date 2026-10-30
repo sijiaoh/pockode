@@ -8,7 +8,7 @@ import FileSearchMatchGroup from "./FileSearchMatchGroup";
 
 interface Props {
 	search: FileSearchState;
-	onSelectFile: (path: string) => void;
+	onSelectFile: (path: string, line?: number) => void;
 	activeFilePath: string | null;
 }
 
@@ -134,7 +134,7 @@ function Matches({
 	result: FileSearchResult;
 	mode: FileSearchState["mode"];
 	query: string;
-	onSelectFile: (path: string) => void;
+	onSelectFile: (path: string, line?: number) => void;
 	activeFilePath: string | null;
 }) {
 	if (result.matches.length === 0) {

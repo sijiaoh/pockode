@@ -1309,6 +1309,8 @@ samp {
  * geometry is read back by lib/codeRows.ts. Full-bleed: a file is a page, not
  * a card. */
 .code-lines {
+	/* The line-arrival band's containing block. */
+	position: relative;
 	display: flex;
 	min-width: fit-content;
 	/* Keeps the gutter's z-index among the block's own layers. */
@@ -1713,6 +1715,70 @@ samp {
  * still arrives. */
 @media (prefers-reduced-motion: reduce) {
 	.composer-arrival {
+		animation-timing-function: step-end;
+	}
+}
+
+/* =============================================================================
+ * LINE ARRIVAL
+ *
+ * The flash on the line a file was opened at (`useLineLanding`,
+ * docs/file.md#where-the-viewer-opens): a band under the row's code in
+ * `.code-lines` and the number redrawn over the gutter's, both placed from the
+ * row geometry (lib/codeRows.ts) and fading as one. The composer arrival's
+ * grammar — on at once, a hold, then only the going fades — after a delay for
+ * the eye to find the page it just landed on. Resting opacity is 0, so the
+ * delay before it and the end after it are both invisible; its end is what
+ * takes the mark off.
+ * ============================================================================= */
+
+.line-arrival {
+	position: absolute;
+	opacity: 0;
+	animation: line-arrival 1700ms ease-out 250ms;
+	pointer-events: none;
+}
+
+/* Under the code text: `.code-lines` isolates, so -1 is still above its
+ * background. Spans the full `fit-content` width, however far it is scrolled
+ * sideways; the opaque gutter covers its start. */
+.line-arrival--band {
+	left: 0;
+	right: 0;
+	z-index: -1;
+	background: color-mix(in srgb, var(--th-accent) 20%, transparent);
+}
+
+/* Opaque, so the muted number under it shows through only as it fades — a
+ * cross-fade back. Clear of the gutter's 1px inset hairline on the right. */
+.line-arrival--number {
+	left: 0;
+	right: 1px;
+	padding-right: calc(0.5rem - 1px);
+	text-align: right;
+	color: var(--th-accent);
+	font-weight: 600;
+	background: color-mix(in srgb, var(--th-accent) 20%, var(--th-code-bg));
+}
+
+.line-arrival--number::before {
+	content: attr(data-line);
+}
+
+@keyframes line-arrival {
+	0%,
+	35% {
+		opacity: 1;
+	}
+	100% {
+		opacity: 0;
+	}
+}
+
+/* Shows after the same delay, stays, and goes with no fade; still an
+ * animation, so its end still arrives. */
+@media (prefers-reduced-motion: reduce) {
+	.line-arrival {
 		animation-timing-function: step-end;
 	}
 }

@@ -1,4 +1,5 @@
 import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import type { FileSearchState } from "../../hooks/useFileSearch";
 import type {
@@ -24,6 +25,7 @@ function marked(container: HTMLElement): string[] {
 function renderResults(
 	result: FileSearchResult,
 	overrides: Partial<FileSearchState> = {},
+	onSelectFile = vi.fn(),
 ) {
 	const search: FileSearchState = {
 		status: "ready",
@@ -40,7 +42,7 @@ function renderResults(
 	return render(
 		<FileSearchResults
 			search={search}
-			onSelectFile={vi.fn()}
+			onSelectFile={onSelectFile}
 			activeFilePath={null}
 		/>,
 	);
@@ -78,6 +80,29 @@ describe("FileSearchResults in content mode", () => {
 		]);
 		expect(screen.getByText("+2 more matches")).toBeInTheDocument();
 		expect(screen.getByText("1 file · 5 matches")).toBeInTheDocument();
+	});
+
+	it("opens a matched line at that line, and the file's own row at the top", async () => {
+		const user = userEvent.setup();
+		const onSelectFile = vi.fn();
+		renderResults(
+			{
+				matches: [
+					{ path: "src/app.ts", name: "app.ts", lines: [line(9, "needle")] },
+				],
+				truncated: false,
+			},
+			{},
+			onSelectFile,
+		);
+
+		await user.click(
+			screen.getByRole("button", { name: "Open src/app.ts, match on line 9" }),
+		);
+		expect(onSelectFile).toHaveBeenLastCalledWith("src/app.ts", 9);
+
+		await user.click(screen.getByText("app.ts"));
+		expect(onSelectFile).toHaveBeenLastCalledWith("src/app.ts");
 	});
 
 	it("lists files in the order the server ranked them", () => {

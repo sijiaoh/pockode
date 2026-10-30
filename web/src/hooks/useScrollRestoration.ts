@@ -47,6 +47,43 @@ const SCROLL_GESTURES = ["wheel", "touchstart"];
 const ACTIONS = ["pointerdown", "keydown"];
 
 /**
+ * Where a fresh visit starts instead of the top, asked for by the content of a
+ * scroller rather than written by it (see `useFreshVisitLanding`).
+ */
+interface Landing {
+	/** The entry the content was rendered for. */
+	entry: string | null;
+	/** The `scrollTop` to start at, computed against the scroller. */
+	target: (scroller: HTMLElement) => number;
+	/** Called once the landing has been written; never for a return. */
+	onLanded: () => void;
+}
+
+/** Asks for a landing; returns what withdraws it, should it still be waiting. */
+export type Land = (
+	target: Landing["target"],
+	onLanded: Landing["onLanded"],
+) => () => void;
+
+/** Provided by `PageBody` around its content. */
+export const LandingContext = createContext<Land | null>(null);
+
+/**
+ * The scroller around a page's content, for content that knows where a fresh
+ * visit to it should start — a file opened at a line. Null outside a
+ * `PageBody`. Only a fresh visit lands, and once per entry; a return keeps
+ * what it saved.
+ *
+ * A request rather than a write of `scrollTop`, because the content cannot
+ * write it itself: the scroller answers an entry change in its own layout
+ * effect, which as an ancestor's runs after the content's and would put the
+ * fresh entry back at the top over the landing.
+ */
+export function useFreshVisitLanding(): Land | null {
+	return useContext(LandingContext);
+}
+
+/**
  * A ref for a page's scroll container that puts it back where the reader left
  * it when they come back to the page (see `lib/scrollMemory.ts` for what
  * counts as coming back). A fresh visit starts at the top. Pages get it from
@@ -65,6 +102,17 @@ export function useScrollRestoration<T extends HTMLElement>(
 	own?: Ref<T>,
 	id = "page",
 ) {
+	return useRestoredScroller(own, id).ref;
+}
+
+/**
+ * `useScrollRestoration`, plus the `Land` its content asks a fresh visit's
+ * start of through `LandingContext`.
+ */
+export function useRestoredScroller<T extends HTMLElement>(
+	own?: Ref<T>,
+	id = "page",
+): { ref: (scroller: T | null) => (() => void) | undefined; land: Land } {
 	const scope = useContext(ScrollRestorationContext);
 	const memory = scope?.memory;
 	const entry = scope?.entry ?? null;
@@ -74,6 +122,11 @@ export function useScrollRestoration<T extends HTMLElement>(
 	entryRef.current = entry;
 	// The mounted scroller's answer to the entry changing under it.
 	const showRef = useRef<((entry: string) => void) | null>(null);
+	// A landing not yet taken: asked for in the content's layout effect, which
+	// runs before the scroller is attached or has shown the entry asked for.
+	const landingRef = useRef<Landing | null>(null);
+	// The mounted scroller's answer to a landing asked for.
+	const takeRef = useRef<((landing: Landing) => void) | null>(null);
 
 	// A page can stay mounted from one entry to the next — a document and the
 	// one it links to are the same view — and then coming back to the first is
@@ -83,11 +136,19 @@ export function useScrollRestoration<T extends HTMLElement>(
 		if (entry !== null) showRef.current?.(entry);
 	}, [entry]);
 
-	return useCallback(
+	const land = useCallback<Land>((target, onLanded) => {
+		const landing = { entry: entryRef.current, target, onLanded };
+		landingRef.current = landing;
+		takeRef.current?.(landing);
+		return () => {
+			if (landingRef.current === landing) landingRef.current = null;
+		};
+	}, []);
+
+	const ref = useCallback(
 		(scroller: T | null) => {
 			if (!scroller) return;
 			const release = attach(own, scroller);
-			if (!memory) return release;
 			let restoring = false;
 			let frame = 0;
 
@@ -131,17 +192,67 @@ export function useScrollRestoration<T extends HTMLElement>(
 			};
 
 			let shown = entryRef.current;
-			const target = shown === null ? undefined : memory.get(shown, id);
-			if (target !== undefined && target > 0) restore(target);
+			// Judged when the entry is shown, not when the landing is asked for:
+			// by then the reset to the top has been saved as the entry's offset.
+			// With no memory nothing is ever returned to.
+			let fresh = true;
+
+			const takeLanding = (landing: Landing) => {
+				landingRef.current = null;
+				if (memory && !fresh) return;
+				fresh = false;
+				stop();
+				scroller.scrollTop = landing.target(scroller);
+				scroller.scrollLeft = 0;
+				// Saved at once rather than by the scroll event, so the entry's
+				// own show in this commit finds it there and leaves it.
+				if (memory && shown !== null) {
+					memory.set(shown, id, scroller.scrollTop);
+				}
+				landing.onLanded();
+			};
+			const landingFor = (entry: string | null) =>
+				landingRef.current?.entry === entry ? landingRef.current : null;
+
+			const take = (landing: Landing) => {
+				if (landing.entry === shown) takeLanding(landing);
+			};
+			takeRef.current = take;
+			const releaseTake = () => {
+				if (takeRef.current === take) takeRef.current = null;
+			};
+
+			if (!memory) {
+				const landing = landingFor(shown);
+				if (landing) takeLanding(landing);
+				return () => {
+					release();
+					releaseTake();
+				};
+			}
+
+			const saved = shown === null ? undefined : memory.get(shown, id);
+			fresh = saved === undefined;
+			const landing = landingFor(shown);
+			if (fresh && landing) takeLanding(landing);
+			else if (saved !== undefined && saved > 0) restore(saved);
 
 			// A replace hands its offsets on (see `lib/scrollMemory.ts`), so an
-			// entry that remembers none is a fresh visit, and starts at the top
-			// rather than at the offset of the page it replaced.
+			// entry that remembers none is a fresh visit, and starts at the top —
+			// or where its content asked to land — rather than at the offset of
+			// the page it replaced.
 			const show = (entry: string) => {
 				if (entry === shown) return;
 				shown = entry;
 				stop();
-				const target = memory.get(entry, id) ?? 0;
+				const saved = memory.get(entry, id);
+				fresh = saved === undefined;
+				const landing = landingFor(entry);
+				if (fresh && landing) {
+					takeLanding(landing);
+					return;
+				}
+				const target = saved ?? 0;
 				if (scroller.scrollTop !== target) restore(target);
 			};
 			showRef.current = show;
@@ -161,11 +272,14 @@ export function useScrollRestoration<T extends HTMLElement>(
 				release();
 				stop();
 				if (showRef.current === show) showRef.current = null;
+				releaseTake();
 				scroller.removeEventListener("scroll", save);
 			};
 		},
 		[own, memory, id],
 	);
+
+	return { ref, land };
 }
 
 /**

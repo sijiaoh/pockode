@@ -382,13 +382,28 @@ only once the rendered matches have been committed. `PageBody.test.tsx` holds
 this with a loader that is kept open.
 
 **A page that stays mounted is restored too.** Some views are one instance for
-every page they show: `FileView` keeps its source toggle across files, so a
+every page they show: `ChatPanel` renders `FileView` with no key, so a
 document and the one it links to are the same mounted scroller, and coming
 back to the first is no mount. So when the entry changes under a mounted
 scroller, the scroller goes to the new entry's offset, or to the top when it
 has none — a fresh visit, even though nothing remounted. A replace is the same
 visit (a diff's side switched, a file renamed), so `scrollMemory.ts` moves the
 replaced entry's offsets to the new one, and the page stays where it is.
+
+**A fresh visit can start somewhere other than the top.** A file opened at a
+line starts with that line in view ([file.md](../file.md#landing-on-the-line)).
+The content cannot write `scrollTop` itself: picking another line of the open
+file keeps the page mounted, and the scroller answers the entry change in its
+own layout effect — an ancestor's, so it runs after the content's and would
+put the fresh entry back at the top. So the content *asks*
+(`useFreshVisitLanding`, provided by `PageBody`) and the restoration does the
+writing: when it shows a fresh entry with a landing waiting for it, it lands
+there instead of at the top, and saves the offset at once so nothing resets
+it. Whether the entry is fresh is judged when it is shown, not when the
+landing is asked for — by then a page whose content was still loading has
+already saved its reset to the top as the entry's offset. A return is never
+landed, and an entry is landed at most once, so a refresh of the content
+cannot pull the reader back.
 
 **Restoring waits for content, and gives way to the reader.** A page usually
 remounts before its data is back, so the restore keeps writing the target every
