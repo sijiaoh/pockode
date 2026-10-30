@@ -48,6 +48,16 @@ describe("createSession", () => {
 		expect((await inB).id).toBe("in-b");
 	});
 
+	it("leaves the next worktree's list alone when answered after a switch", async () => {
+		request.mockResolvedValueOnce(makeSessionListItem({ id: "in-a" }));
+
+		const inA = createSession();
+		useWorktreeStore.setState({ current: "b" });
+
+		expect((await inA).id).toBe("in-a");
+		expect(useSessionStore.getState().sessions).toEqual([]);
+	});
+
 	it("asks again after a failure", async () => {
 		request
 			.mockRejectedValueOnce(new Error("Not connected"))

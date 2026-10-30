@@ -5,6 +5,7 @@ import { Check, Eye, Loader2 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import Editor from "react-simple-code-editor";
 import { contentsQueryKey, useContents } from "../../hooks/useContents";
+import { useGoToParent } from "../../hooks/useGoToParent";
 import { useCurrentWorktree, useRouteState } from "../../hooks/useRouteState";
 import { overlayToNavigation } from "../../lib/navigation";
 import {
@@ -54,15 +55,12 @@ function FileEditor({ path, onBack }: Props) {
 	const language = isLargeText ? undefined : getLanguageFromPath(path);
 	const highlight = useEditorHighlight(language);
 
+	// Up to the view it was entered from, not a push of it: a pushed view left
+	// the editor right behind it, for Back to reopen.
+	const goToParent = useGoToParent();
 	const navigateToView = useCallback(() => {
-		navigate(
-			overlayToNavigation(
-				{ type: "file", path, edit: false },
-				worktree,
-				sessionId,
-			),
-		);
-	}, [navigate, path, worktree, sessionId]);
+		goToParent({ worktree, overlay: { type: "file", path, edit: true } });
+	}, [goToParent, path, worktree]);
 
 	// Initialize content when data loads
 	// biome-ignore lint/correctness/useExhaustiveDependencies: path triggers re-init
@@ -74,12 +72,16 @@ function FileEditor({ path, onBack }: Props) {
 		}
 	}, [data, path]);
 
-	// Redirect to view if binary file accessed via direct URL
+	// A binary file has no editor: its URL is corrected to the view, in place.
 	useEffect(() => {
 		if (isBinary) {
-			navigateToView();
+			navigate(
+				overlayToNavigation({ type: "file", path }, worktree, sessionId, {
+					replace: true,
+				}),
+			);
 		}
-	}, [isBinary, navigateToView]);
+	}, [isBinary, navigate, path, worktree, sessionId]);
 
 	const handleSave = useCallback(async () => {
 		setIsSaving(true);

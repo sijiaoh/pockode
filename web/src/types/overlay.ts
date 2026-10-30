@@ -250,12 +250,30 @@ export interface Page {
  * detail's the list or branch it belongs to, a commit's file its commit and a
  * file's version its diff. A parent commit opened from a commit goes up as
  * any commit does — to its list, not to the child it was opened from: up is
- * not Back. Undefined for the chat, and for what has no parent known here.
+ * not Back. Undefined for the chat, which has none.
+ *
+ * Read off the URL alone. A work's own parent is in its data — a task's story,
+ * a job's schedule — so the work detail names it to `useGoToParent` itself;
+ * this is the list every work detail is at least under.
  */
 export function parentOf(overlay: OverlayState): OverlayState | undefined {
 	switch (overlay?.type) {
 		case "git":
+		case "settings":
+		case "work-list":
+		case "agent-role-list":
+		case "schedule-list":
 			return null;
+		// The editor is entered from the file's view and returns to it; the view
+		// itself is opened over the chat, from a row, a link or a search.
+		case "file":
+			return overlay.edit ? { type: "file", path: overlay.path } : null;
+		case "work-detail":
+			return { type: "work-list", segment: overlay.segment };
+		case "agent-role-detail":
+			return { type: "agent-role-list" };
+		case "schedule-detail":
+			return { type: "schedule-list" };
 		case "diff":
 			return { type: "git", segment: "changes" };
 		case "branch":
@@ -291,7 +309,8 @@ function sameBranch(a: BranchRef | undefined, b: BranchRef | undefined) {
 
 /**
  * Whether `a` and `b` are one page: the route and what identifies it, without
- * what is only a setting of it — a list's History query, a diff's side. A
+ * what is only a setting of it — a list's History query, a diff's side, how a
+ * file is drawn and the line it opened at, the segment a work detail carries. A
  * commit opened from a branch is not the same page as that commit opened from
  * History, since the two go up to different places.
  */
@@ -321,6 +340,10 @@ export function samePage(a: Page, b: Page): boolean {
 				x.path === y.path &&
 				sameBranch(x.branch, y.branch)
 			);
+		case "file":
+			return y.type === "file" && x.path === y.path && !x.edit === !y.edit;
+		case "work-detail":
+			return y.type === "work-detail" && x.workId === y.workId;
 		default:
 			return JSON.stringify(x) === JSON.stringify(y);
 	}
@@ -328,7 +351,7 @@ export function samePage(a: Page, b: Page): boolean {
 
 /**
  * Whether `page` was opened under `ancestor`: `ancestor` is on its chain of
- * parents. Every Git page of a worktree is under that worktree's chat, and
+ * parents. Every page of a worktree is under that worktree's chat, and
  * nothing of another worktree is.
  */
 export function isUnder(page: Page, ancestor: Page): boolean {

@@ -3575,7 +3575,7 @@ describe("ChatPanel", () => {
 				<ChatPanel
 					{...defaultProps}
 					overlay={{ type: "work-list", segment: "current" }}
-					onCloseOverlay={vi.fn()}
+					onGoUp={vi.fn()}
 				/>,
 			);
 
@@ -4471,15 +4471,9 @@ describe("ChatPanel", () => {
 			{ type: "branch", ref: "topic", remote: false },
 		] as const)("keeps the composer under a Git $type layer", async (layer) => {
 			const user = userEvent.setup();
-			const onCloseOverlay = vi.fn();
+			const onGoUp = vi.fn();
 			worktreeActions.setIsGitRepo(true);
-			render(
-				<ChatPanel
-					{...defaultProps}
-					overlay={layer}
-					onCloseOverlay={onCloseOverlay}
-				/>,
-			);
+			render(<ChatPanel {...defaultProps} overlay={layer} onGoUp={onGoUp} />);
 			await waitForHistoryLoad();
 
 			const textarea = screen.getByRole("textbox");
@@ -4494,7 +4488,7 @@ describe("ChatPanel", () => {
 				undefined,
 			);
 			expect(screen.getByTestId("git-workspace")).toBeInTheDocument();
-			expect(onCloseOverlay).not.toHaveBeenCalled();
+			expect(onGoUp).not.toHaveBeenCalled();
 		});
 
 		// The transcript that reports a failed send is covered by the page, so
@@ -4642,12 +4636,12 @@ describe("ChatPanel", () => {
 		// behind it is neither shown nor reconfigurable from there.
 		it("puts the page's heading in the header in place of the session's", async () => {
 			const user = userEvent.setup();
-			const onCloseOverlay = vi.fn();
+			const onGoUp = vi.fn();
 			render(
 				<ChatPanel
 					{...defaultProps}
 					overlay={{ type: "file", path: "a.ts" }}
-					onCloseOverlay={onCloseOverlay}
+					onGoUp={onGoUp}
 				/>,
 			);
 			await waitForHistoryLoad();
@@ -4659,7 +4653,8 @@ describe("ChatPanel", () => {
 			expect(screen.queryByRole("button", { name: /^Session:/ })).toBeNull();
 
 			await user.click(header.getByRole("button", { name: "Back" }));
-			expect(onCloseOverlay).toHaveBeenCalled();
+			// With nothing: the page goes up to its own parent, and the click is no `to`.
+			expect(onGoUp).toHaveBeenCalledWith();
 		});
 
 		it("offers no way to Settings over the Settings page itself", async () => {

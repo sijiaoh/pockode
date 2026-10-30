@@ -20,6 +20,9 @@ const getFile = vi.fn();
 const saveRawFile = vi.fn();
 const renameFile = vi.fn();
 const navigate = vi.fn();
+// What the router's location says; a case moves it to stand for the reader
+// having navigated away.
+const routerState = { location: { href: "/files/src/app.ts" } };
 
 // Only the hand-over to the browser is replaced; the players' capabilities
 // are the real ones.
@@ -50,6 +53,7 @@ vi.mock("../../lib/wsStore", () => {
 
 vi.mock("@tanstack/react-router", () => ({
 	useNavigate: () => navigate,
+	useRouter: () => ({ state: routerState }),
 }));
 
 vi.mock("../../hooks/useFSWatch", () => ({
@@ -151,6 +155,7 @@ describe("FileView", () => {
 		renameFile.mockReset();
 		renameFile.mockResolvedValue(undefined);
 		navigate.mockReset();
+		routerState.location.href = "/files/src/app.ts";
 	});
 
 	it("shows text content and allows editing", async () => {
@@ -754,6 +759,36 @@ describe("FileView", () => {
 					expect.objectContaining({ params: { _splat: "src/main.ts" } }),
 				),
 			);
+		});
+
+		it("leaves a reader who moved on while the rename was out", async () => {
+			const user = userEvent.setup();
+			let answer = () => {};
+			renameFile.mockImplementation(
+				() =>
+					new Promise<void>((resolve) => {
+						answer = resolve;
+					}),
+			);
+			await renderFileView(fileContent({ content: "const a = 1;" }));
+
+			await user.click(screen.getByRole("button", { name: "Rename" }));
+			const sheet = screen.getByRole("dialog", { name: "Rename file" });
+			await user.clear(screen.getByLabelText("Name"));
+			await user.type(screen.getByLabelText("Name"), "main.ts");
+			await user.click(within(sheet).getByRole("button", { name: "Rename" }));
+			await waitFor(() => expect(renameFile).toHaveBeenCalled());
+
+			routerState.location.href = "/settings";
+			navigate.mockClear();
+			answer();
+
+			await waitFor(() =>
+				expect(
+					screen.queryByRole("dialog", { name: "Rename file" }),
+				).not.toBeInTheDocument(),
+			);
+			expect(navigate).not.toHaveBeenCalled();
 		});
 
 		it("stays available for a file the viewer cannot render", async () => {

@@ -40,9 +40,13 @@ function setup(visited: string[]) {
 		</RouterContextProvider>
 	);
 	const { result } = renderHook(() => useGoToParent(), { wrapper });
-	const up = async (overlay: OverlayState, worktree = "A") => {
+	const up = async (
+		overlay: OverlayState,
+		worktree = "A",
+		to?: OverlayState,
+	) => {
 		await act(async () => {
-			result.current({ worktree, overlay });
+			result.current({ worktree, overlay }, to);
 			// The rewrite waits a microtask after the move, and the router's
 			// navigation is asynchronous.
 			await new Promise((resolve) => setTimeout(resolve, 0));
@@ -223,6 +227,64 @@ describe("useGoToParent", () => {
 		await up({ type: "git", segment: "branches" });
 		expect(here()).toBe(CHAT);
 		expect(behind()).toEqual([]);
+	});
+
+	// The pages over the chat other than Git's go up the same way
+	// (docs/project-ui.md §5.1): a file paged through, its source switched,
+	// then ←, and Back from the chat is not a file.
+	it("goes from a file to the chat past the files opened over it", async () => {
+		const { up, here, behind } = setup([
+			CHAT,
+			"/w/A/files/a.ts?session=a1",
+			"/w/A/files/b.md?session=a1&mode=source",
+		]);
+
+		await up({ type: "file", path: "b.md", source: true });
+		expect(here()).toBe(CHAT);
+		expect(behind()).toEqual([]);
+	});
+
+	// View after editing goes back to the view the editor was entered from,
+	// rather than pushing one with the editor behind it.
+	it("goes from the editor back to the file's view", async () => {
+		const { up, here, behind } = setup([
+			CHAT,
+			"/w/A/files/a.md?session=a1&mode=source",
+			"/w/A/files/a.md?session=a1&mode=edit",
+		]);
+
+		await up({ type: "file", path: "a.md", edit: true });
+		// The editor carries neither of the view's settings, and so has nothing
+		// to say against them: the view is as the reader left it.
+		expect(here()).toBe("/w/A/files/a.md?session=a1&mode=source");
+		expect(behind()).toEqual([CHAT]);
+	});
+
+	it("goes from the settings to the chat", async () => {
+		const { up, here, behind } = setup([CHAT, "/w/A/settings?session=a1"]);
+
+		await up({ type: "settings" });
+		expect(here()).toBe(CHAT);
+		expect(behind()).toEqual([]);
+	});
+
+	// A task's parent is in its data, so the page names it: past the task,
+	// back to the story's entry — whichever segment the URL carries.
+	it("goes up to a parent the page names", async () => {
+		const { up, here, behind } = setup([
+			CHAT,
+			"/w/A/works?session=a1",
+			"/w/A/works/s1?session=a1",
+			"/w/A/works/t1?session=a1",
+		]);
+
+		await up({ type: "work-detail", workId: "t1", segment: "current" }, "A", {
+			type: "work-detail",
+			workId: "s1",
+			segment: "current",
+		});
+		expect(here()).toBe("/w/A/works/s1?session=a1");
+		expect(behind()).toEqual(["/w/A/works?session=a1", CHAT]);
 	});
 
 	// Another worktree's pages are not under this one's chat.

@@ -4,7 +4,13 @@ import { entryKeyOf, historyTrailFor } from "../lib/historyTrail";
 import { buildNavigation, overlayToNavigation } from "../lib/navigation";
 import { routeKeyOf } from "../lib/routes";
 import { FRESH_VISIT_STATE } from "../lib/scrollMemory";
-import { isUnder, type Page, parentOf, samePage } from "../types/overlay";
+import {
+	isUnder,
+	type OverlayState,
+	type Page,
+	parentOf,
+	samePage,
+} from "../types/overlay";
 import { routeInfoOf } from "./useRouteState";
 
 /** The entry a `go()` has been issued from and has not left yet. */
@@ -60,6 +66,26 @@ function pageAt(router: AnyRouter, href: string): PageAt | undefined {
 }
 
 /**
+ * Whether the parent's own entry already says all the page knows of it: the
+ * same session, and every field of `parent` as the entry has it. A History
+ * query the commit carries and the list's entry lacks is newer, and is written
+ * over it; a setting the entry has and the page never carried — the source
+ * the file's view was drawn as, which its editor does not take along — is
+ * kept. The chat is always named afresh: its URL is the session alone.
+ */
+function alreadySays(
+	entry: PageAt,
+	parent: OverlayState,
+	sessionId: string | null,
+): boolean {
+	if (!parent || !entry.overlay || entry.sessionId !== sessionId) return false;
+	const has = entry.overlay as Record<string, unknown>;
+	return Object.entries(parent).every(
+		([key, value]) => JSON.stringify(has[key]) === JSON.stringify(value),
+	);
+}
+
+/**
  * The in-app ← of a page: up to its parent (`parentOf`), never back along
  * whatever the reader did (docs/project-ui.md). The browser's Back retraces;
  * this goes up — so after it, Back never lands on the page just left.
@@ -67,8 +93,9 @@ function pageAt(router: AnyRouter, href: string): PageAt | undefined {
  * Walks the trail (lib/historyTrail.ts) back from the page, past every entry
  * opened under the parent — its other children, theirs, the parent's own
  * siblings paged through. Reaching the parent's own entry, it goes back to it
- * (and writes the parent's exact URL over it if the parent has changed since,
- * a History query edited meanwhile); reaching anything else, or the start of
+ * (and writes the parent's URL over it if the page knows something of the
+ * parent the entry does not say, a History query edited meanwhile —
+ * `alreadySays`); reaching anything else, or the start of
  * what is known — a link, a reload of an unknown trail, a typed URL, or
  * further back than the browser may still keep — it goes back to the oldest
  * page it skipped and puts the parent in its place. Either way every page
@@ -78,24 +105,31 @@ function pageAt(router: AnyRouter, href: string): PageAt | undefined {
  * later — a commit made from the review, a discard, a delete — may find the
  * reader has moved on, and moves nobody then.
  *
+ * `to` is for a page whose parent the URL does not say, or a ← that goes
+ * further up than the parent: a task's story, a job's schedule, the editor's
+ * way back to the chat past the file's view. It has to be on `from`'s chain
+ * of parents as the page knows it; what is behind is still read by `parentOf`,
+ * so a page the URL cannot place under `to` stops the walk, and is replaced
+ * rather than gone back to — never a loop.
+ *
  * A second ← before the first `go()` has landed — a double tap, a commit
  * answering while a discard does — is dropped while the window is still on
  * the entry left: it would go up from where the first one is already going.
  */
-export function useGoToParent(): (from: Page) => void {
+export function useGoToParent(): (from: Page, to?: OverlayState) => void {
 	const router = useRouter();
 	const navigate = useNavigate();
 	// From the first render on: a trail first asked for at the press would
 	// know nothing behind it. The app's router has made it already.
 	historyTrailFor(router.history);
 	return useCallback(
-		(from) => {
+		(from, to) => {
 			const { history } = router;
 			const left = entryKeyOf(history.location);
 			if (left === goingFrom) return;
 			const here = pageAt(router, history.location.href);
 			if (!here || !samePage(here, from)) return;
-			const up = parentOf(here.overlay);
+			const up = to === undefined ? parentOf(here.overlay) : to;
 			if (up === undefined) return;
 			const parent: Page = { worktree: here.worktree, overlay: up };
 			const target = up
@@ -126,14 +160,14 @@ export function useGoToParent(): (from: Page) => void {
 				return;
 			}
 			let landing = index;
-			let isParent = false;
+			let parentEntry: PageAt | undefined;
 			for (let i = index - 1; i >= Math.max(0, index - MAX_STEPS_BACK); i--) {
 				const entry = trail.at(i);
 				const page = entry && pageAt(router, entry.href);
 				if (!page) break;
 				if (samePage(page, parent)) {
 					landing = i;
-					isParent = true;
+					parentEntry = page;
 					break;
 				}
 				if (!isUnder(page, parent)) break;
@@ -145,7 +179,11 @@ export function useGoToParent(): (from: Page) => void {
 			}
 			const landed = trail.at(landing);
 			if (!landed) return;
-			const rewrite = !isParent || landed.href !== targetHref;
+			const isParent = parentEntry !== undefined;
+			const rewrite =
+				!parentEntry ||
+				(landed.href !== targetHref &&
+					!alreadySays(parentEntry, up, here.sessionId));
 			// An entry from before a reload belongs to a document that is gone:
 			// going to it loads the app afresh, and only the trail, reading
 			// storage as it starts, can still put the parent there.
