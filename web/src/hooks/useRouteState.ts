@@ -3,6 +3,7 @@ import { ROUTES, WT_ROUTES } from "../lib/routes";
 import type {
 	BranchSearchParams,
 	CommitSearchParams,
+	FileSearchParams,
 	GitSearchParams,
 	HistorySearchParams,
 	OverlaySearchParams,
@@ -10,6 +11,7 @@ import type {
 } from "../router";
 import type {
 	CommitOrigin,
+	FileOverlayMode,
 	GitSegment,
 	HistoryQuery,
 	OverlayState,
@@ -46,6 +48,16 @@ export function useCurrentWorktree(): string {
  */
 function readSegment(search: OverlaySearchParams): WorkSegment {
 	return search.segment === "closed" ? "closed" : "current";
+}
+
+/**
+ * `mode=source` beside a `line` is accepted and dropped: the line already
+ * implies the source, and the overlay has one shape for one state.
+ */
+function readFileMode(search: FileSearchParams): FileOverlayMode {
+	if (search.mode === "edit") return { edit: true };
+	if (search.line !== undefined) return { line: search.line };
+	return search.mode === "source" ? { source: true } : {};
 }
 
 /** As `readSegment`: `changes` is whatever does not name another segment. */
@@ -236,9 +248,9 @@ export function useRouteState(): RouteInfo {
 	const filePath = fileMatch?.params._splat ?? wtFileMatch?.params._splat;
 	if (filePath !== undefined) {
 		const search = (fileMatch?.search ??
-			wtFileMatch?.search) as OverlaySearchParams;
+			wtFileMatch?.search) as FileSearchParams;
 		return {
-			overlay: { type: "file", path: filePath, edit: search.mode === "edit" },
+			overlay: { type: "file", path: filePath, ...readFileMode(search) },
 			sessionId: search.session ?? null,
 			worktree,
 			viewWorktree: null,

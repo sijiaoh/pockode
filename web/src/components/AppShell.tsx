@@ -638,11 +638,13 @@ function AppShell() {
 	const reviewRowCanShowRef = useRef(reviewRowCanShow);
 	reviewRowCanShowRef.current = reviewRowCanShow;
 
+	// Pushed even for another line of the file already open, so that Back
+	// returns to the line the reader was at.
 	const handleSelectFile = useCallback(
-		(path: string) => {
+		(path: string, line?: number) => {
 			navigate(
 				overlayToNavigation(
-					{ type: "file", path },
+					{ type: "file", path, line },
 					urlWorktree,
 					currentSessionId,
 				),

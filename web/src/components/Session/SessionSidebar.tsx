@@ -48,7 +48,8 @@ interface Props {
 	 * count as the tab's badge. Reported by the chat, which owns the gate.
 	 */
 	reviewRowCanShow?: boolean;
-	onSelectFile: (path: string) => void;
+	/** See `FilesTab`'s. */
+	onSelectFile: (path: string, line?: number) => void;
 	activeFilePath: string | null;
 	/** Whether that file is open in the editor rather than the viewer. */
 	activeFileEdit: boolean;
@@ -249,8 +250,8 @@ function SessionSidebar({
 	);
 
 	const handleSelectFile = useCallback(
-		(path: string) => {
-			onSelectFile(path);
+		(path: string, line?: number) => {
+			onSelectFile(path, line);
 			// Closing the drawer on a phone takes the upload queue — and the tab bar
 			// that badges it — off screen with it, leaving a running upload with
 			// nothing to report to. The file still opens behind the drawer.

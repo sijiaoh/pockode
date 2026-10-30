@@ -14,7 +14,7 @@ import {
 } from "shiki";
 import { CopyButton } from "../components/ui/CopyButton";
 import { splitNativePath } from "../utils/path";
-import { NUMBERED_CODE_CLASS } from "./codeRows";
+import { type LineMark, lineTop, NUMBERED_CODE_CLASS } from "./codeRows";
 import { fileLineCount } from "./textLines";
 
 export const CODE_FONT_SIZE_MOBILE = 12;
@@ -245,7 +245,15 @@ const GUTTER_BLOCK_ROWS = 1000;
  * so a copied selection holds the code alone. Drawn from the text, not from
  * shiki's lines, so it is there and final before the colours arrive.
  */
-function LineGutter({ text }: { text: string }) {
+function LineGutter({
+	text,
+	mark,
+	onMarkEnd,
+}: {
+	text: string;
+	mark?: LineMark | null;
+	onMarkEnd?: () => void;
+}) {
 	const count = React.useMemo(() => fileLineCount(text), [text]);
 	const blocks = React.useMemo(() => {
 		const result: { start: number; numbers: string }[] = [];
@@ -266,8 +274,24 @@ function LineGutter({ text }: { text: string }) {
 			{blocks.map(({ start, numbers }) => (
 				<span key={start} data-numbers={numbers} />
 			))}
+			{/* The number redrawn over the muted one, which no one number of the
+			    generated blocks above can be styled as; generated content too, so
+			    no find or copy picks it up. A <div>: `> span` draws numbers. */}
+			{mark && (
+				<div
+					key={mark.key}
+					className="line-arrival line-arrival--number"
+					data-line={mark.line}
+					style={lineArrivalBox(mark)}
+					onAnimationEnd={onMarkEnd}
+				/>
+			)}
 		</div>
 	);
+}
+
+function lineArrivalBox({ rows, line }: LineMark): React.CSSProperties {
+	return { top: lineTop(rows, line), height: rows.height };
 }
 
 /**
@@ -282,6 +306,8 @@ type CodeLayout =
 			 */
 			wrap?: boolean;
 			lineNumbers?: false;
+			mark?: undefined;
+			onMarkEnd?: undefined;
 	  }
 	| {
 			wrap?: false;
@@ -291,6 +317,13 @@ type CodeLayout =
 			 * worth reading. The block is drawn full-bleed, with no card corners.
 			 */
 			lineNumbers: true;
+			/**
+			 * Flash a row — band and number — as the line a file was opened at.
+			 * See `useLineLanding`, which supplies both.
+			 */
+			mark?: LineMark | null;
+			/** The flash has ended; drop `mark`. */
+			onMarkEnd?: () => void;
 	  };
 
 export function CodeHighlighter({
@@ -299,6 +332,8 @@ export function CodeHighlighter({
 	plain = false,
 	wrap = false,
 	lineNumbers = false,
+	mark,
+	onMarkEnd,
 	copyable = true,
 }: {
 	children: string;
@@ -356,7 +391,16 @@ export function CodeHighlighter({
 			)}
 			{lineNumbers ? (
 				<div className="code-lines">
-					<LineGutter text={children} />
+					<LineGutter text={children} mark={mark} onMarkEnd={onMarkEnd} />
+					{mark && (
+						<div
+							key={mark.key}
+							className="line-arrival line-arrival--band"
+							style={lineArrivalBox(mark)}
+							aria-hidden="true"
+							onAnimationEnd={onMarkEnd}
+						/>
+					)}
 					{pre}
 				</div>
 			) : (

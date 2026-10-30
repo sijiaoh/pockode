@@ -18,6 +18,7 @@ import { useTakenNames } from "../../hooks/useTakenNames";
 import { applyEntryGone } from "../../lib/fileCache";
 import { overlayToNavigation } from "../../lib/navigation";
 import { isAlreadyExistsError } from "../../lib/rpc/file";
+import { isMarkdownFile } from "../../lib/shikiUtils";
 import { useIsGitRepo } from "../../lib/worktreeStore";
 import { useWSStore } from "../../lib/wsStore";
 import { isFileContent } from "../../types/contents";
@@ -41,10 +42,17 @@ import { DownloadButton } from "./FileDownloadControls";
 
 interface Props {
 	path: string;
+	/** The source rather than the rendering, for a file that renders. */
+	source?: boolean;
+	/**
+	 * The line to open at, from the URL (docs/file.md#where-the-viewer-opens).
+	 * It implies `source`: a rendering has no lines.
+	 */
+	line?: number;
 	onBack: () => void;
 }
 
-function FileView({ path, onBack }: Props) {
+function FileView({ path, source = false, line, onBack }: Props) {
 	const queryClient = useQueryClient();
 	const navigate = useNavigate();
 	const worktree = useCurrentWorktree();
@@ -60,10 +68,6 @@ function FileView({ path, onBack }: Props) {
 	const [isRenaming, setIsRenaming] = useState(false);
 	const [renameError, setRenameError] = useState<string | null>(null);
 	const [isDeleting, setIsDeleting] = useState(false);
-	// A page's source rather than the page. Kept across files, as the commit
-	// view's toggle is: someone reading several pages' source in a row should
-	// not have to press it again for each.
-	const [showSource, setShowSource] = useState(false);
 	// One banner for every file-level action: two stacked error bars would read
 	// as two separate failures.
 	const [actionError, setActionError] = useState<string | null>(null);
@@ -71,11 +75,20 @@ function FileView({ path, onBack }: Props) {
 	// search or a chat link has never been listed here.
 	const takenNames = useTakenNames(showRename ? parentDir(path) : null);
 
+	const showSource = source || line !== undefined;
+
 	const file = data && isFileContent(data) ? data : null;
 	const state = useMemo(
 		() => (file ? getFileViewState(file, { kind: "file", path }) : null),
 		[file, path],
 	);
+	const isPage = state?.kind === "page";
+	// What has a rendering to switch away from. Markdown past the highlight
+	// limit is already drawn as its source, with a banner saying so.
+	const isMarkdown =
+		state?.kind === "text" && state.highlight && isMarkdownFile(path);
+	const hasSourceToggle = isPage || isMarkdown;
+
 	const download = useFileDownload({
 		path,
 		worktree,
@@ -91,6 +104,20 @@ function FileView({ path, onBack }: Props) {
 			),
 		);
 	}, [navigate, path, worktree, sessionId]);
+
+	// Replaced: switching how the file is drawn is not a place Back should
+	// return to. Either way the line is left behind — leaving the source leaves
+	// its lines, and a switch to it starts at the top like any other opening.
+	const toggleSource = useCallback(() => {
+		navigate(
+			overlayToNavigation(
+				{ type: "file", path, source: !showSource },
+				worktree,
+				sessionId,
+				{ replace: true },
+			),
+		);
+	}, [navigate, path, showSource, worktree, sessionId]);
 
 	// Pushed, so Back returns to the document the image was opened from.
 	const openFile = useCallback(
@@ -147,8 +174,14 @@ function FileView({ path, onBack }: Props) {
 			// nobody navigated, and the entry left behind would only send Back to
 			// a path that no longer resolves.
 			navigate(
+				// The way of reading it goes along; the line does not, as it would
+				// were the file left any other way.
 				overlayToNavigation(
-					{ type: "file", path: newPath },
+					{
+						type: "file",
+						path: newPath,
+						source: hasSourceToggle && showSource,
+					},
 					worktree,
 					sessionId,
 					{
@@ -157,7 +190,16 @@ function FileView({ path, onBack }: Props) {
 				),
 			);
 		},
-		[renameFile, path, queryClient, navigate, worktree, sessionId],
+		[
+			renameFile,
+			path,
+			queryClient,
+			navigate,
+			worktree,
+			sessionId,
+			hasSourceToggle,
+			showSource,
+		],
 	);
 
 	const handleDeleteClick = useCallback(() => {
@@ -208,7 +250,6 @@ function FileView({ path, onBack }: Props) {
 	// failed to load there is nothing to act on at all.
 	const canEdit = state !== null && canEditFileView(state);
 	const { fileName } = splitPath(path);
-	const isPage = state?.kind === "page";
 
 	return (
 		<div className="flex flex-1 flex-col overflow-hidden">
@@ -227,8 +268,9 @@ function FileView({ path, onBack }: Props) {
 					<FileBody
 						state={state}
 						path={path}
-						plain={isPage && showSource}
+						source={showSource}
 						lineNumbers
+						line={line}
 						onOpenFile={openFile}
 						downloadAction={{
 							label: download.label,
@@ -282,12 +324,18 @@ function FileView({ path, onBack }: Props) {
 								<History className="h-4 w-4" aria-hidden="true" />
 							</button>
 						)}
-						{isPage && (
+						{hasSourceToggle && (
 							<ToggleIconButton
 								icon={Code}
 								pressed={showSource}
-								onClick={() => setShowSource((v) => !v)}
-								label={showSource ? "Show page" : "Show source"}
+								onClick={toggleSource}
+								label={
+									showSource
+										? isPage
+											? "Show page"
+											: "Show rendered"
+										: "Show source"
+								}
 							/>
 						)}
 						{/* Last on purpose: the destructive action is the one a thumb

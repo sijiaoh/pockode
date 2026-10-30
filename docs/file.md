@@ -1119,6 +1119,12 @@ seeing the error and a `Retry` button. Nothing is searched while the tab is
 hidden, so an invalidation can't quietly re-run a content scan nobody is
 looking at.
 
+Picking a matched line opens the file at that line — `line=N` on the file
+route, which for Markdown or a page also means its source
+([below](#where-the-viewer-opens)). Picking the file's own row opens it at the
+top. Each pick is pushed, another line of the file already open included, so
+Back returns to the line the reader was at.
+
 Both modes keep the server's order of files. Name mode renders a flat list of
 files. Content mode groups by file and previews its 3 best lines — those with
 `rank` below 3 — still in line-number order, so the line that earned the file
@@ -1154,8 +1160,7 @@ Refreshing the files tab re-runs the current search instead of clearing it.
 
 Known limits: results do not follow FS watch notifications, because rescanning
 the repository on every file change is expensive and would reshuffle the list
-while it is being read; selecting a match opens the file at the top, as there is
-no line anchor to jump to yet; and on iOS the keyboard covers the lower part of
+while it is being read; and on iOS the keyboard covers the lower part of
 the list, which is left as is — the pinned header keeps the search usable, and
 `visualViewport` handling costs more than it returns here.
 
@@ -1200,7 +1205,10 @@ A `.md` file's text is rendered as Markdown, and an image it names by a
 relative path is read from the file's own directory, as on GitHub — see
 [markdown-images-ui.md](markdown-images-ui.md#where-the-bytes-come-from).
 A YAML frontmatter at its top is shown as properties above the body rather
-than as Markdown — [below](#frontmatter).
+than as Markdown — [below](#frontmatter). Its source, highlighted and numbered,
+is a toggle away ("Show source" / "Show rendered", `Code`), as a page's is;
+past `HIGHLIGHT_LIMIT` the file is already shown as plain source, and the
+toggle is not offered.
 
 Edit is disabled rather than hidden, with the reason in its accessible name, and
 `binary`/`too-large` repeat it visibly on the card. **Delete stays available in
@@ -1253,6 +1261,75 @@ plain, which is how a reader gets at a rendered Markdown file's source and the
 copy button that comes with it, there being no Edit to open it in. For a page
 it is the page/source toggle the viewer above has.
 See [git-ui.md](git-ui.md#viewing-a-file-from-a-commit).
+
+### Where the viewer opens
+
+How the viewer shows a file is part of the file route's URL, so a reload keeps
+it and the address can be shared or written by something else (a `path:42`
+link, say). Two parameters beside `session`, both read by `readFileMode` in
+`hooks/useRouteState.ts` and written by `overlayToNavigation`:
+
+| Parameter | Means |
+|-----------|-------|
+| `mode=source` | The source of a file that renders — Markdown, a page — instead of its rendering |
+| `line=N` | Open at line N (1-based) of the file's text |
+| `mode=edit` | The editor, as before |
+
+- **Only where they mean something.** They are the file routes' alone
+  (`fileSearchSchema` in `router.tsx`); a diff has no line of one file. `line`
+  is a positive integer, and anything else fails the schema, as an unknown
+  `mode` does. The editor takes neither: `FileOverlayMode` makes `edit`
+  exclusive with both, and `mode=edit&line=4` reads as the editor alone.
+- **One state, one URL.** Only the source has lines, so `line` implies it and
+  is written alone — `?line=42` on a `.md` file is its source at line 42. A
+  `mode=source` beside a `line` is accepted and dropped. `mode=source` on a
+  file that does not render changes nothing and is never written.
+- **The line is not carried.** Everything that moves the reader off it builds
+  the next URL without it: Edit, the source toggle (both ways — the toggle is
+  replaced rather than pushed, since how a file is drawn is no place for Back
+  to return to), a rename (which keeps the source of a file that renders,
+  but not the line), and opening another file. The source is not kept across
+  files either: it is the URL's, and a file opened fresh opens rendered.
+- **Where the viewer reads it.** `FileView` takes `source` and `line` as
+  props from the overlay (`ChatPanel`). `line` reaches it as given, before the
+  file has loaded, and may be past the end of a file that shrank since it was
+  written.
+
+#### Landing on the line
+
+`FileBody` passes `line` to the numbered text body, whose `useLineLanding`
+(`hooks/useLineLanding.ts`) puts the line a third of the way down the page body
+and flashes its row.
+
+- **Geometry, not an element.** The line's position is
+  `lineTop(measureCodeRows(…), N)` ([Line numbers](#line-numbers)), measured
+  once and used for the scroll and the mark alike. Plain text past the
+  highlight limit has no element per line to look up. Highlighting arriving
+  later moves no row, so the landing does not wait for it.
+- **A third of the body, clamped.** `scrollTop = clamp(lineY − clientHeight/3,
+  0, max)`: a line near the top stays where it is, one near the end sits
+  lower; nothing is padded. The scroll is instant (it is a navigation, and a
+  smooth scroll down thousands of lines is exactly the motion the flash must not
+  overlap) and resets `scrollLeft`. Every pick lands, even on a line already on
+  screen.
+- **Only a fresh visit lands.** The page body already owns its position per
+  history entry ([frontend-state.md](code/frontend-state.md#why-a-pages-scroll-position-outlives-the-page)),
+  so the landing is that restoration's start for a fresh entry, not a second
+  writer: a pick, a reload, a shared URL land and flash; Back or Forward to an
+  entry puts back what it saved, with no flash. A refresh of the content (the
+  file changed on disk) neither lands again nor restarts the flash.
+- **Past the end** (the file shrank since the search): the top of the file, no
+  mark, no error.
+- **The flash.** A band under the row's code and the number redrawn bold in
+  `--th-accent` over the gutter's muted one, both `aria-hidden` and placed from
+  the same geometry (`.line-arrival` in `index.css`). They appear whole 250 ms
+  after the landing, hold for about 0.6 s, and fade out over about 1.1 s — some
+  2 s from the pick; under reduced motion they appear and go without the fade.
+  The number is redrawn, not recoloured,
+  because the gutter's numbers are generated content in blocks of 1000; it is
+  generated content itself, so find and copy still see only the code. Each
+  landing remounts the mark, so a new pick mid-flash restarts it at the new
+  line; it is taken off at its `animationend`.
 
 ### Line numbers
 
@@ -1530,11 +1607,11 @@ over `Media/usePageFrame.ts`). Diffs and chat attachments still show text.
   side shows the too-large card, and Edit follows the source.
 - **Page or source.** A `ToggleIconButton` (`Code`, "Show source" / "Show
   page") in the bottom bar. In the Files tab it sits after Download and before
-  Delete, is kept across files for the screen's lifetime and never persisted,
-  and applies only to pages: text opened next is highlighted as usual. The
-  source is the ordinary text view, highlighted and editable through Edit as
-  before. In a commit the same toggle shares the state of its plain-text
-  toggle, which it replaces for a page
+  Delete, and is `mode=source` in the URL
+  ([Where the viewer opens](#where-the-viewer-opens)), so a file opened next
+  starts rendered. The source is the ordinary text view, highlighted and
+  editable through Edit as before. In a commit the same toggle shares the
+  state of its plain-text toggle, which it replaces for a page
   ([git-ui.md](git-ui.md#viewing-a-file-from-a-commit)).
 - **Layout.** A page bar (`HTML · 18.2 KB`, ↻ Reload page, ⤢ View full
   screen — the [media viewer](media-viewer.md#files-and-git-pagepreview)) over a frame that

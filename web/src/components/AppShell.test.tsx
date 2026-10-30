@@ -99,6 +99,10 @@ vi.mock("./Chat", () => ({
 			ref?: string;
 			remote?: boolean;
 			branch?: { ref: string; remote: boolean };
+			path?: string;
+			edit?: boolean;
+			source?: boolean;
+			line?: number;
 		} | null;
 		view?: { worktree: string; exists: boolean } | null;
 	}) => (
@@ -108,6 +112,16 @@ vi.mock("./Chat", () => ({
 			data-can-open-sidebar={String(Boolean(onOpenSidebar))}
 			data-work-segment={workSegment}
 			data-overlay={overlay?.type}
+			data-file={
+				overlay?.type === "file"
+					? JSON.stringify({
+							path: overlay.path,
+							edit: overlay.edit,
+							source: overlay.source,
+							line: overlay.line,
+						})
+					: undefined
+			}
 			data-schedule-id={overlay?.scheduleId}
 			data-git-segment={overlay?.type === "git" ? overlay.segment : undefined}
 			data-branch={
@@ -249,6 +263,7 @@ vi.mock("./Session", () => ({
 		onDeleteSession,
 		onOpenWorkList,
 		onOpenScheduleList,
+		onSelectFile,
 		isExpanded,
 	}: {
 		isOpen: boolean;
@@ -259,6 +274,7 @@ vi.mock("./Session", () => ({
 		onDeleteSession: (id: string, worktree: string | null) => void;
 		onOpenWorkList: () => void;
 		onOpenScheduleList: () => void;
+		onSelectFile: (path: string, line?: number) => void;
 		isExpanded: boolean;
 	}) => (
 		<div
@@ -293,6 +309,15 @@ vi.mock("./Session", () => ({
 				onClick={() => onDeleteSession("gone-session", "old-fix")}
 			>
 				Delete a deleted worktree's row
+			</button>
+			<button type="button" onClick={() => onSelectFile("docs/a.md")}>
+				Pick docs/a.md
+			</button>
+			<button type="button" onClick={() => onSelectFile("docs/a.md", 42)}>
+				Pick line 42 of docs/a.md
+			</button>
+			<button type="button" onClick={() => onSelectFile("docs/a.md", 7)}>
+				Pick line 7 of docs/a.md
 			</button>
 		</div>
 	),
@@ -1473,6 +1498,82 @@ describe("AppShell Git workspace", () => {
 		await waitFor(() =>
 			expect(router.state.location.pathname).toBe("/w/A/s/a1"),
 		);
+	});
+});
+
+// docs/file.md#where-the-viewer-opens: the line and the source are the URL's,
+// so a reload keeps them and Back walks the lines the reader picked.
+describe("AppShell file view URL", () => {
+	beforeEach(() => {
+		vi.clearAllMocks();
+		resetWorktreeStore();
+		useSessionDetailStore.getState().clear();
+		useSessionStore.setState({
+			sessions: [],
+			isLoading: true,
+			isSuccess: false,
+			showTaskSessions: false,
+		});
+		useWorkStore.setState({ works: [] });
+		useAuthStore.setState({ sessionToken: "test-session-token" });
+	});
+
+	const fileOnScreen = () => {
+		const file = screen.getByTestId("chat-panel").getAttribute("data-file");
+		return file ? JSON.parse(file) : null;
+	};
+	const searchOf = (router: ReturnType<typeof renderAppShell>) =>
+		router.state.location.search as Record<string, unknown>;
+
+	it.each([
+		["?line=42", { line: 42 }],
+		["?mode=source", { source: true }],
+		// The line implies the source; spelled out as well, it is the same state.
+		["?mode=source&line=42", { line: 42 }],
+		// The editor has no line to stand at.
+		["?mode=edit&line=42", { edit: true }],
+	])("reads %s", async (query, expected) => {
+		renderAppShell(`/w/A/files/docs/a.md${query}`);
+
+		await waitFor(() =>
+			expect(fileOnScreen()).toEqual({ path: "docs/a.md", ...expected }),
+		);
+	});
+
+	it("keeps the line through the session redirect", async () => {
+		const router = renderAppShell("/w/A/files/docs/a.md?line=42");
+
+		await waitFor(() => expect(searchOf(router).session).toBeDefined());
+		expect(searchOf(router).line).toBe(42);
+		expect(fileOnScreen()).toEqual({ path: "docs/a.md", line: 42 });
+	});
+
+	it("opens a picked line, a history entry per pick, and the file row at the top", async () => {
+		const user = userEvent.setup();
+		const router = renderAppShell("/w/A/files/docs/a.md");
+		await waitFor(() => expect(searchOf(router).session).toBeDefined());
+
+		await user.click(
+			screen.getByRole("button", { name: "Pick line 42 of docs/a.md" }),
+		);
+		await waitFor(() => expect(fileOnScreen()?.line).toBe(42));
+		// Only the line is written: it already says the source.
+		expect(searchOf(router).line).toBe(42);
+		expect(searchOf(router).mode).toBeUndefined();
+
+		await user.click(
+			screen.getByRole("button", { name: "Pick line 7 of docs/a.md" }),
+		);
+		await waitFor(() => expect(fileOnScreen()?.line).toBe(7));
+
+		await user.click(screen.getByRole("button", { name: "Pick docs/a.md" }));
+		await waitFor(() => expect(fileOnScreen()).toEqual({ path: "docs/a.md" }));
+		expect(searchOf(router).line).toBeUndefined();
+
+		router.history.back();
+		await waitFor(() => expect(fileOnScreen()?.line).toBe(7));
+		router.history.back();
+		await waitFor(() => expect(fileOnScreen()?.line).toBe(42));
 	});
 });
 

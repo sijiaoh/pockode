@@ -1372,7 +1372,14 @@ function ChatPanel({
 						<FileEditor path={overlay.path} onBack={onCloseOverlay ?? noop} />
 					);
 				}
-				return <FileView path={overlay.path} onBack={onCloseOverlay ?? noop} />;
+				return (
+					<FileView
+						path={overlay.path}
+						source={overlay.source}
+						line={overlay.line}
+						onBack={onCloseOverlay ?? noop}
+					/>
+				);
 			case "settings":
 				return <SettingsPage onBack={onCloseOverlay ?? noop} />;
 			case "work-list":

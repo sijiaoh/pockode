@@ -55,10 +55,21 @@ export type CommitOrigin =
 	| { history?: HistoryQuery; branch?: never }
 	| { branch: BranchRef; history?: never };
 
+/**
+ * How the file overlay shows its file (docs/file.md#where-the-viewer-opens).
+ * The editor takes neither of the viewer's two, so entering it cannot carry
+ * them along. `source` is the source of a file that would otherwise render —
+ * Markdown, a page — and `line` a line of the file's text to open at. Only the
+ * source has lines, so `line` implies it.
+ */
+export type FileOverlayMode =
+	| { edit: true; source?: never; line?: never }
+	| { edit?: false; source?: boolean; line?: number };
+
 export type OverlayState =
 	| { type: "git"; segment: GitSegment; history?: HistoryQuery }
 	| { type: "diff"; path: string; staged: boolean }
-	| { type: "file"; path: string; edit?: boolean }
+	| ({ type: "file"; path: string } & FileOverlayMode)
 	| ({ type: "branch" } & BranchRef)
 	| ({ type: "commit"; hash: string } & CommitOrigin)
 	| ({ type: "commit-diff"; hash: string; path: string } & CommitOrigin)

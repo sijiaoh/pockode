@@ -331,6 +331,26 @@ describe("overlayToNavigation", () => {
 	});
 });
 
+// docs/file.md#where-the-viewer-opens: a line implies the source, so one state
+// has one URL.
+describe("the file view's mode in the URL", () => {
+	const searchOf = (mode: { source?: boolean; line?: number }) =>
+		overlayToNavigation({ type: "file", path: "a.md", ...mode }, "", "s1")
+			.search;
+
+	it("writes the source, and the line without the source it implies", () => {
+		expect(searchOf({ source: true })).toEqual({
+			session: "s1",
+			mode: "source",
+		});
+		expect(searchOf({ source: true, line: 42 })).toEqual({
+			session: "s1",
+			line: 42,
+		});
+		expect(searchOf({})).toEqual({ session: "s1" });
+	});
+});
+
 // docs/project-ui.md §5. `Current` is the absence of the parameter, so that one
 // state has one URL and the Stories button's plain `/works` means `Current`.
 describe("the work list segment in the URL", () => {
