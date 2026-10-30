@@ -2,7 +2,7 @@
 
 A user signed in to the cloud can see every Pockode instance on every machine they have linked — servers, clusters and the nodes a cluster starts — and open them from one list. Pockode's side of that is three things: a machine credential (`cloud.json`), the `pockode login` / `pockode logout` commands that create and remove it, and the relay attaching each running process to the account the credential names.
 
-Linking is purely additive. A machine that never ran `pockode login` is a **guest**, and a guest's relay requests are byte-for-byte what they were before accounts existed. A link that goes bad — revoked, unlinked on the web, refused — never stops the relay from working; the worst it does is leave the instance off the list.
+Linking is purely additive. A machine that never ran `pockode login` is a **guest**, and a guest's relay requests are byte-for-byte what they were before accounts existed. Neither a link that goes bad — revoked, unlinked on the web — nor an instance the cloud will not list ever stops the relay from working; the worst it does is leave the instance off the list.
 
 This document is the interoperability contract as Pockode implements it. The cloud's account design document is the other half.
 
@@ -74,10 +74,23 @@ The answer carries at most one of two fields:
 | Response field | Meaning | Banner |
 |---|---|---|
 | `account_email` | The relay is attached to this account | `▸ Cloud  <email>` |
-| `account_error` | The token was not accepted (`"invalid_machine_token"` today; any value means the same) | `⚠ This machine is no longer linked to your cloud account` / `Run pockode login to link it again` |
+| `account_error` | The relay was not attached; the value says why ([below](#why-an-instance-is-not-attached)) | Depends on the value |
 | neither | Guest | Unchanged |
 
-A rejected token does not fail the request: the status, subdomain and URL are what they would have been for a guest. The email is shown and nothing else — it is not logged, and not written to `relay.json`.
+Nothing about the account fields fails the request — short of making the body too large ([below](#only-an-oversized-body-falls-back-to-guest)): the status, subdomain and URL are what they would have been for a guest. The email is shown and nothing else — it is not logged, and not written to `relay.json`.
+
+### Why an Instance Is Not Attached
+
+| `account_error` | Cause | Banner |
+|---|---|---|
+| `invalid_machine_token` | The token is malformed or names no machine — never issued, or unlinked on the web or revoked since | `⚠ This machine is no longer linked to your cloud account` / `Run pockode login to link it again` |
+| `invalid_instance` | The cloud will not list the instance: `kind` must be one of the three, `name` and `path` non-empty and free of control characters, `name` at most 255 bytes and `path` at most 4096. Linking again cannot fix it — it is a directory name with a control character or a path over the limit, or else a Pockode bug | `⚠ This instance could not be linked to your cloud account` |
+| `internal_error` | The cloud failed while attaching. Pockode does not retry on its own; the next refresh (a restart, a renewal, a change to `cloud.json`) attaches again | As for `invalid_instance` |
+| Any other value | Taken as `internal_error`, so the cloud can add values | As for `invalid_instance` |
+
+- **`account_error` is read through `Account.LinkInvalid` and `Account.NotAttached`**, never compared value by value, so an unknown value cannot slip past both banner lines.
+- **The cloud checks the instance before it looks the token up**, so a request wrong on both counts reports `invalid_instance`; once the instance is fixed, the next refresh can still report `invalid_machine_token`.
+- **The log carries the reason.** The banner line is all the terminal shows; the warning in the log names the `account_error` value, and the instance when linking again will not help.
 
 ### What an Instance Reports
 
@@ -92,9 +105,11 @@ A rejected token does not fail the request: the status, subdomain and URL are wh
 - `path` is shown to the account owner only; it exists to tell apart projects of the same name.
 - The [privacy policy](../../site/content/privacy.md) tells users what `pockode login` and a linked instance send; a change to either must update it in the same change.
 
-### A Refused Attachment Falls Back to Guest
+### Only an Oversized Body Falls Back to Guest
 
-The cloud may refuse a body that carries an attachment: 400 for an instance field it will not take (the cloud bounds the fields — a path containing a control character, for one), or 413 from a cloud that predates accounts and caps the whole body at 4 KiB, which a long path can exceed. Either way `Manager.call` sends the same request again as a guest, and the relay comes up unattached with a warning in the log. The link must never be what keeps the relay from working.
+Since the account fields never fail a request, Pockode never sends one again without them. The exception is the cloud's body size cap, answered with 413, which the attachment alone can push a body over: a cloud that predates accounts caps the body at 4 KiB, which a long path can exceed; one that has accounts caps it at 8 KiB, which a path full of characters JSON escapes (Go writes `&` as `\u0026`) can still exceed. `Manager.call` then sends the same request again as a guest, and the relay comes up unattached with a warning in the log. The link must never be what keeps the relay from working.
+
+Any other failure, 400 included, fails the call as it would for a guest.
 
 An unreadable `cloud.json` likewise means guest, with the warning logged once rather than on every check.
 
@@ -114,7 +129,7 @@ An unreadable `cloud.json` likewise means guest, with the warning logged once ra
 |---|---|---|
 | Credential store | `server/cloudcred/` | `cloud.json`: load, save, delete, and the `cloud_url` match |
 | Login / logout | `server/cloudlogin/` | Device flow, existing-link check, revoke |
-| Attachment | `server/relay/account.go` | `Instance`, `Attachment`, `Account` |
-| Manager | `server/relay/relay.go` | Attaching on register/refresh, guest fallback, the 5 s watcher |
+| Attachment | `server/relay/account.go` | `Instance`, `Attachment`, `Account` and the reading of `account_error` |
+| Manager | `server/relay/relay.go` | Attaching on register/refresh, the 413 guest fallback, the 5 s watcher |
 | Node marker | `server/cluster/node/process.go` | `POCKODE_CLUSTER_NODE`: `nodeEnv` sets it, `TakeMarker` reads and unsets it |
 | Banner | `server/startup/banner.go` | The account line, and the QR code login reuses |
