@@ -1,10 +1,12 @@
 import {
+	createBrowserHistory,
 	createRootRoute,
 	createRoute,
 	createRouter,
 } from "@tanstack/react-router";
 import { z } from "zod";
 import AppShell from "./components/AppShell";
+import { historyTrailFor } from "./lib/historyTrail";
 import { ROUTES, WT_CHILD_ROUTES, WT_ROUTES } from "./lib/routes";
 import { scrollMemoryFor } from "./lib/scrollMemory";
 
@@ -339,13 +341,20 @@ export const routeTree = rootRoute.addChildren([
 	]),
 ]);
 
+// The trail before the router: it starts at the page the app was opened on,
+// and may first have to rewrite that page (lib/historyTrail.ts), which the
+// router reads as it is created. Kept for the tab, so a reload still knows
+// what is behind the page.
+const history = createBrowserHistory();
+historyTrailFor(history, sessionStorage);
+
 export const router = createRouter({
 	routeTree,
+	history,
 	defaultPreload: "intent",
 });
 
-// Before the first navigation, so that the trail Back is recognised against
-// starts at the page the app was opened on.
+// Before the first navigation, so that it has seen the first page.
 scrollMemoryFor(router.history);
 
 declare module "@tanstack/react-router" {

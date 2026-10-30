@@ -119,7 +119,11 @@ function renderView() {
 	const queryClient = new QueryClient();
 	const view = render(
 		<QueryClientProvider client={queryClient}>
-			<CommitFileView hash="abc1234def" path="docs/readme.md" />
+			<CommitFileView
+				onBack={() => {}}
+				hash="abc1234def"
+				path="docs/readme.md"
+			/>
 		</QueryClientProvider>,
 	);
 	return {
@@ -137,20 +141,6 @@ describe("CommitFileView", () => {
 
 		expect(screen.getByText(/Read-only/)).toHaveTextContent("abc1234");
 		expect(screen.getByText(/Do a thing/)).toBeInTheDocument();
-	});
-
-	it("goes back to the diff it came from", async () => {
-		const user = userEvent.setup();
-		renderView();
-
-		await user.click(screen.getByRole("button", { name: "Back to diff" }));
-
-		expect(navigate).toHaveBeenCalledWith(
-			expect.objectContaining({
-				to: "/commit/$hash/diff/$",
-				params: { hash: "abc1234def", _splat: "docs/readme.md" },
-			}),
-		);
 	});
 
 	it("offers no way to change or delete the file", () => {
@@ -198,7 +188,13 @@ describe("CommitFileView", () => {
 
 		// The view is reused across commits, so a banner about one version would
 		// otherwise sit above another.
-		rerender(<CommitFileView hash="fedcba9876" path="docs/readme.md" />);
+		rerender(
+			<CommitFileView
+				onBack={() => {}}
+				hash="fedcba9876"
+				path="docs/readme.md"
+			/>,
+		);
 
 		expect(screen.queryByText(/Download failed/)).toBeNull();
 	});
@@ -281,7 +277,11 @@ describe("CommitFileView", () => {
 			});
 			return render(
 				<QueryClientProvider client={queryClient}>
-					<CommitFileView hash="abc1234def" path={version.path} />
+					<CommitFileView
+						onBack={() => {}}
+						hash="abc1234def"
+						path={version.path}
+					/>
 				</QueryClientProvider>,
 			);
 		}

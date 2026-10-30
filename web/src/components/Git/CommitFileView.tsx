@@ -6,7 +6,6 @@ import { useFileDownload } from "../../hooks/useFileDownload";
 import { useGitCommit } from "../../hooks/useGitCommit";
 import { useRouteState } from "../../hooks/useRouteState";
 import { overlayToNavigation } from "../../lib/navigation";
-import { commitOriginOf } from "../../types/overlay";
 import { getFileViewState } from "../../utils/fileView";
 import FileBody from "../Files/FileBody";
 import { DownloadButton } from "../Files/FileDownloadControls";
@@ -17,6 +16,8 @@ import { DetailActionBar, type DetailActionsPlacement } from "./detailActions";
 interface Props {
 	hash: string;
 	path: string;
+	/** Up to its diff, which may not be the entry behind. */
+	onBack: () => void;
 	/** Where the bar is drawn; see `DetailActionsPlacement`. */
 	actionsAt?: DetailActionsPlacement;
 }
@@ -28,13 +29,9 @@ interface Props {
  * write action at all rather than a disabled one, which would read as a bug or
  * a permission problem.
  */
-function CommitFileView({ hash, path, actionsAt = "bottom" }: Props) {
+function CommitFileView({ hash, path, onBack, actionsAt = "bottom" }: Props) {
 	const navigate = useNavigate();
-	const { worktree, sessionId, overlay } = useRouteState();
-	// Carried from layer to layer, so Back lands on the list the commit was
-	// picked from (docs/git-history-ui.md#url), or the branch
-	// (docs/git-branches-ui.md#opening-a-commit).
-	const origin = commitOriginOf(overlay);
+	const { worktree, sessionId } = useRouteState();
 	// Kept across files: someone reading several historical files in a row
 	// should not have to press it again for each.
 	const [plain, setPlain] = useState(false);
@@ -60,16 +57,6 @@ function CommitFileView({ hash, path, actionsAt = "bottom" }: Props) {
 			file ? getFileViewState(file, { kind: "commit", hash, path }) : null,
 		[file, hash, path],
 	);
-
-	const handleBack = () => {
-		navigate(
-			overlayToNavigation(
-				{ type: "commit-diff", hash, path, ...origin },
-				worktree,
-				sessionId,
-			),
-		);
-	};
 
 	// The working tree's file: that is what a relative image was read from.
 	const openFile = useCallback(
@@ -123,7 +110,7 @@ function CommitFileView({ hash, path, actionsAt = "bottom" }: Props) {
 				path={path}
 				status={shortHash}
 				mono
-				back={{ to: "parent", label: "Back to diff", onClick: handleBack }}
+				back={{ to: "parent", label: "Back to diff", onClick: onBack }}
 			/>
 			<DetailActionBar end="top" placement={actionsAt}>
 				{actions}

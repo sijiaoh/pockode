@@ -13,7 +13,7 @@ import {
 } from "../hooks/useBranchMergeHandoff";
 import { useDocumentTitle } from "../hooks/useDocumentTitle";
 import { useFileDropGuard } from "../hooks/useFileDropGuard";
-import { useLeaveReview } from "../hooks/useLeaveReview";
+import { useGoToParent } from "../hooks/useGoToParent";
 import { useRemoteUrlSubscription } from "../hooks/useRemoteUrlSubscription";
 import { useRouteState } from "../hooks/useRouteState";
 import { useScheduleSubscription } from "../hooks/useScheduleSubscription";
@@ -27,11 +27,8 @@ import { useWorktree } from "../hooks/useWorktree";
 import { authActions, selectCredential, useAuthStore } from "../lib/authStore";
 import { collectChanges, firstReviewTarget } from "../lib/gitChanges";
 import { useGitChangesViewStore } from "../lib/gitChangesViewStore";
-import {
-	buildNavigation,
-	overlayToNavigation,
-	REVIEW_FROM_LIST_STATE,
-} from "../lib/navigation";
+import { buildNavigation, overlayToNavigation } from "../lib/navigation";
+import { FRESH_VISIT_STATE } from "../lib/scrollMemory";
 import { filterShowing, isVisibleUnder } from "../lib/sessionFilter";
 import { useSessionStore } from "../lib/sessionStore";
 import { resolveSessionView } from "../lib/sessionView";
@@ -602,34 +599,28 @@ function AppShell() {
 
 	/**
 	 * Opens the review at a file of the Changes list, or at a conflicted file
-	 * of the operation banner. Pushed from the list, and marked as pushed from
-	 * it so that leaving goes back to it; replaced when a review is already
-	 * open beside it (at `expanded`), keeping whatever mark it has: a review is
-	 * one history entry however many rows are tapped in it
-	 * (docs/git-changes-ui.md). From any other segment the banner's press is
-	 * pushed unmarked, as the chat's review row is: the list it would go back
-	 * to is not behind it (docs/git-conflict-ui.md).
+	 * of the operation banner. Pushed, also from a row tapped beside a review
+	 * already open (at `expanded`): each file is a page Back retraces, as the
+	 * review's own ‹ › are (docs/git-conflict-ui.md).
+	 *
+	 * The file already under review is no new page: its own row adds nothing,
+	 * and a press on its other side replaces, as the review's side switch does.
 	 */
-	const reviewOpen = overlay?.type === "diff";
-	const fromChangesList =
-		overlay?.type === "git" && overlay.segment === "changes";
+	const reviewing = overlay?.type === "diff" ? overlay : null;
 	const handleSelectDiffFile = useCallback(
 		(path: string, staged: boolean) => {
-			navigate({
-				...overlayToNavigation(
+			const samePage = reviewing?.path === path;
+			if (samePage && reviewing.staged === staged) return;
+			navigate(
+				overlayToNavigation(
 					{ type: "diff", path, staged },
 					urlWorktree,
 					currentSessionId,
-					{ replace: reviewOpen },
+					{ replace: samePage },
 				),
-				state: reviewOpen
-					? true
-					: fromChangesList
-						? REVIEW_FROM_LIST_STATE
-						: undefined,
-			});
+			);
 		},
-		[navigate, urlWorktree, currentSessionId, reviewOpen, fromChangesList],
+		[navigate, urlWorktree, currentSessionId, reviewing],
 	);
 
 	// Reported by the chat, which owns the gate, for the sidebar's Git watch and
@@ -709,8 +700,8 @@ function AppShell() {
 	/**
 	 * A segment of the Git workspace, at its list: a press on the segment
 	 * control or on one of the sidebar's Git entries — an entrance that always
-	 * lands on the list, never on a detail it remembers — and the way back from a commit to the list it was opened from (the
-	 * review's way back is `useLeaveReview`, docs/git-changes-ui.md). Pushed,
+	 * lands on the list, never on a detail it remembers. A detail's way back to
+	 * its list is not this but `useGoToParent`. Pushed,
 	 * so Back walks the segments the way it walks the project list's
 	 * (docs/project-ui.md §5). A press that names the layer already on screen —
 	 * the list itself, with nothing open under it — is not a step, and adds
@@ -721,7 +712,7 @@ function AppShell() {
 	const handleSelectGitSegment = useCallback(
 		(segment: GitSegment) => {
 			if (overlay?.type === "git" && overlay.segment === segment) return;
-			// Back from a commit to History is the list it was picked from;
+			// History pressed over a commit is the list it was picked from;
 			// arriving from another segment is History's default
 			// (docs/git-history-ui.md#url).
 			const history =
@@ -759,8 +750,9 @@ function AppShell() {
 	 * on to `next`, or to the Changes list when nothing follows. Either side:
 	 * a file discarded is done with, as the review's own Discard treats it,
 	 * even one whose staged side is still there (docs/git-changes-ui.md).
-	 * Replaced, as every move in the review is; leaving it for the list is
-	 * `useLeaveReview`'s.
+	 * Replaced, as the review's own Discard moves on: the page under review is
+	 * gone, and Back to it would be a dead end. With nothing to move on to it
+	 * goes up to the list, as the review's own last Discard does.
 	 *
 	 * Only while that review is still the page: the discard answers after the
 	 * press, and a reader who has moved on meanwhile — to another file, or to
@@ -768,7 +760,7 @@ function AppShell() {
 	 * replaced under them. Read from a ref for the same reason: the route the
 	 * caller saw is the one it pressed in, not the one now.
 	 */
-	const leaveReview = useLeaveReview();
+	const goToParent = useGoToParent();
 	const routeRef = useRef({ overlay, urlWorktree, currentSessionId });
 	routeRef.current = { overlay, urlWorktree, currentSessionId };
 
@@ -782,7 +774,7 @@ function AppShell() {
 			if (urlWorktree !== worktree) return;
 			if (open?.type !== "diff" || open.path !== path) return;
 			if (!next) {
-				leaveReview(urlWorktree, currentSessionId);
+				goToParent({ worktree, overlay: open });
 				return;
 			}
 			navigate({
@@ -792,17 +784,18 @@ function AppShell() {
 					currentSessionId,
 					{ replace: true },
 				),
-				state: true,
+				state: FRESH_VISIT_STATE,
 			});
 		},
-		[navigate, leaveReview],
+		[navigate, goToParent],
 	);
 
 	/**
-	 * Replaces the detail of `from` in `worktree` with `to`'s, or with the
-	 * Branches list when `to` is null: the branch is now listed under another
-	 * name, or this workspace deleted it (docs/git-branches-ui.md#when-the-branch-goes-away).
-	 * Replaced so that Back does not reopen a page for a row that left the list.
+	 * Replaces the detail of `from` in `worktree` with `to`'s: the branch is now
+	 * listed under another name, and it is the same page under it. Or, with `to`
+	 * null, leaves it for the Branches list: this workspace deleted it
+	 * (docs/git-branches-ui.md#when-the-branch-goes-away), and going up takes
+	 * the deleted page off the way back.
 	 *
 	 * Only while that detail is still the page, for `handleCloseGitFile`'s
 	 * reason: the answer behind it can arrive after the reader moved on.
@@ -818,16 +811,20 @@ function AppShell() {
 			) {
 				return;
 			}
+			if (!to) {
+				goToParent({ worktree, overlay: open });
+				return;
+			}
 			navigate(
 				overlayToNavigation(
-					to ? { type: "branch", ...to } : { type: "git", segment: "branches" },
+					{ type: "branch", ...to },
 					urlWorktree,
 					currentSessionId,
 					{ replace: true },
 				),
 			);
 		},
-		[navigate],
+		[navigate, goToParent],
 	);
 
 	const gitNavigation: GitNavigation = useMemo(
@@ -870,8 +867,8 @@ function AppShell() {
 	 * to, and one who has sent meanwhile keeps the chat: the row's gate closing
 	 * is the press expiring.
 	 *
-	 * Pushed without the list's mark: there is no list behind it, so leaving
-	 * goes to the list and from there back to the chat.
+	 * Pushed with no list behind it: leaving goes up to the list, in the
+	 * review's place, and from there back to the chat.
 	 */
 	const getGitStatus = useWSStore((s) => s.actions.getStatus);
 	const handleOpenReview = useCallback(async () => {

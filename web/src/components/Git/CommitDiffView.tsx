@@ -28,15 +28,17 @@ import { useLineSelection } from "./useLineSelection";
 interface Props {
 	hash: string;
 	path: string;
+	/** Up to its commit, which may not be the entry behind. */
+	onBack: () => void;
 	/** Where the bar is drawn; see `DetailActionsPlacement`. */
 	actionsAt?: DetailActionsPlacement;
 }
 
-function CommitDiffView({ hash, path, actionsAt = "bottom" }: Props) {
+function CommitDiffView({ hash, path, onBack, actionsAt = "bottom" }: Props) {
 	const navigate = useNavigate();
 	const { worktree, sessionId, overlay } = useRouteState();
-	// Carried from layer to layer, so Back lands on the list the commit was
-	// picked from (docs/git-history-ui.md#url), or the branch
+	// Carried from layer to layer, so going up lands on the list the commit
+	// was picked from (docs/git-history-ui.md#url), or the branch
 	// (docs/git-branches-ui.md#opening-a-commit).
 	const origin = commitOriginOf(overlay);
 	const { hideWhitespace, toggleHideWhitespace } = useDiffSettings();
@@ -88,16 +90,6 @@ function CommitDiffView({ hash, path, actionsAt = "bottom" }: Props) {
 	const openHistory = () => {
 		navigate(
 			overlayToNavigation(fileHistoryOverlay(path), worktree, sessionId),
-		);
-	};
-
-	const handleBack = () => {
-		navigate(
-			overlayToNavigation(
-				{ type: "commit", hash, ...origin },
-				worktree,
-				sessionId,
-			),
 		);
 	};
 
@@ -206,7 +198,7 @@ function CommitDiffView({ hash, path, actionsAt = "bottom" }: Props) {
 				path={path}
 				status={shortHash}
 				mono
-				back={{ to: "parent", label: "Back to commit", onClick: handleBack }}
+				back={{ to: "parent", label: "Back to commit", onClick: onBack }}
 				onTitleClick={handlePathClick}
 				titleActionLabel={`Open current ${splitPath(path).fileName}`}
 			/>

@@ -10,6 +10,7 @@ import { JSONRPCErrorCode, JSONRPCErrorException } from "json-rpc-2.0";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { gitStatusQueryKey } from "../hooks/gitQueries";
 import { useAuthStore } from "../lib/authStore";
+import { FRESH_VISIT_STATE } from "../lib/scrollMemory";
 import { useSessionDetailStore } from "../lib/sessionDetailStore";
 import { useSessionStore } from "../lib/sessionStore";
 import { useWorkStore } from "../lib/workStore";
@@ -164,6 +165,12 @@ vi.mock("./Chat", () => ({
 				onClick={() => onSelectDiffFile?.("src/b.ts", false)}
 			>
 				Review src/b.ts
+			</button>
+			<button
+				type="button"
+				onClick={() => onSelectDiffFile?.("src/b.ts", true)}
+			>
+				Review staged src/b.ts
 			</button>
 			<button
 				type="button"
@@ -1019,8 +1026,8 @@ describe("AppShell Git workspace", () => {
 		);
 	});
 
-	// A diff's way back is a step to its list, not `history.back()`: a diff
-	// reached from a link has no list behind it in the history.
+	// A diff's way back goes up to its list: one reached from a link has no
+	// list behind it in the history, so the list takes the diff's place.
 	it("goes back from a diff opened by link to the list it belongs to", async () => {
 		const user = userEvent.setup();
 		const router = renderAppShell("/w/A/unstaged/src/a.ts?session=a1");
@@ -1062,7 +1069,8 @@ describe("AppShell Git workspace", () => {
 	});
 
 	// A file discarded from the list beside its review is done with: the review
-	// goes on to the next file, on either side, in the same history entry.
+	// goes on to the next file, on either side, in the entry of the file it
+	// replaces — Back to an emptied page would be a dead end.
 	it.each([
 		["unstaged", "/w/A/unstaged/src/a.ts"],
 		["staged", "/w/A/staged/src/a.ts"],
@@ -1081,6 +1089,8 @@ describe("AppShell Git workspace", () => {
 			expect(router.state.location.pathname).toBe("/w/A/staged/src/b.ts"),
 		);
 		expect(search(router)).toEqual({ session: "a1" });
+		// Another page, so not scrolled to where the emptied one was left.
+		expect(router.history.location.state).toMatchObject(FRESH_VISIT_STATE);
 
 		router.history.back();
 		await waitFor(() =>
@@ -1088,9 +1098,10 @@ describe("AppShell Git workspace", () => {
 		);
 	});
 
-	// A row opens the review with a step of its own, but a row tapped beside a
-	// review already open moves it: Back still leaves the review in one step.
-	it("pushes the review from the list, and replaces it from another row", async () => {
+	// Each file reviewed is a step of its own, also one opened from a row
+	// tapped beside a review already open: Back retraces the files one at a
+	// time, then returns to the list.
+	it("pushes the review from the list, and again from another row", async () => {
 		const user = userEvent.setup();
 		const router = renderAppShell("/w/A/git?session=a1");
 		await waitFor(() => expect(panel()).toHaveAttribute("data-overlay", "git"));
@@ -1099,12 +1110,12 @@ describe("AppShell Git workspace", () => {
 		await waitFor(() =>
 			expect(router.state.location.pathname).toBe("/w/A/unstaged/src/b.ts"),
 		);
+		// The review paging on, as its ‹ › do.
 		await act(() =>
 			router.navigate({
 				to: "/w/$worktree/unstaged/$",
 				params: { worktree: "A", _splat: "src/a.ts" },
 				search: { session: "a1" },
-				replace: true,
 			}),
 		);
 		await waitFor(() =>
@@ -1113,6 +1124,43 @@ describe("AppShell Git workspace", () => {
 		await user.click(screen.getByRole("button", { name: "Review src/b.ts" }));
 		await waitFor(() =>
 			expect(router.state.location.pathname).toBe("/w/A/unstaged/src/b.ts"),
+		);
+
+		router.history.back();
+		await waitFor(() =>
+			expect(router.state.location.pathname).toBe("/w/A/unstaged/src/a.ts"),
+		);
+		router.history.back();
+		await waitFor(() =>
+			expect(router.state.location.pathname).toBe("/w/A/unstaged/src/b.ts"),
+		);
+		router.history.back();
+		await waitFor(() =>
+			expect(router.state.location.pathname).toBe("/w/A/git"),
+		);
+	});
+
+	// The file under review is no new page: its own row adds no step, and its
+	// other side's takes the review's entry over.
+	it("adds no step for the row of the file under review", async () => {
+		const user = userEvent.setup();
+		const router = renderAppShell("/w/A/s/a1");
+		await waitFor(() => expect(panel()).toHaveTextContent("a1"));
+		await user.click(screen.getByRole("button", { name: "Git Changes" }));
+		await waitFor(() =>
+			expect(router.state.location.pathname).toBe("/w/A/git"),
+		);
+		await user.click(screen.getByRole("button", { name: "Review src/b.ts" }));
+		await waitFor(() =>
+			expect(router.state.location.pathname).toBe("/w/A/unstaged/src/b.ts"),
+		);
+
+		await user.click(screen.getByRole("button", { name: "Review src/b.ts" }));
+		await user.click(
+			screen.getByRole("button", { name: "Review staged src/b.ts" }),
+		);
+		await waitFor(() =>
+			expect(router.state.location.pathname).toBe("/w/A/staged/src/b.ts"),
 		);
 
 		router.history.back();
@@ -1223,8 +1271,8 @@ describe("AppShell Git workspace", () => {
 		);
 	});
 
-	// Leaving a review pushed from the list goes back to that list, moves
-	// inside it and all: the history is as if the review had never been
+	// Leaving a review pushed from the list goes up to that list's entry, past
+	// a replace made inside it: the history is as if the review had never been
 	// opened, rather than holding the list twice.
 	it("goes back to the list a review was pushed from when it ends", async () => {
 		const user = userEvent.setup();
@@ -1239,16 +1287,14 @@ describe("AppShell Git workspace", () => {
 		await waitFor(() =>
 			expect(router.state.location.pathname).toBe("/w/A/unstaged/src/b.ts"),
 		);
-		// A row tapped beside the open review, then a move inside the review as
-		// the review itself makes it.
-		await user.click(screen.getByRole("button", { name: "Review src/b.ts" }));
+		// A replace inside the review as the review itself makes it — moving on
+		// from a discard, or to the file's other side.
 		await act(() =>
 			router.navigate({
 				to: "/w/$worktree/unstaged/$",
 				params: { worktree: "A", _splat: "src/a.ts" },
 				search: { session: "a1" },
 				replace: true,
-				state: true,
 			}),
 		);
 		await user.click(
@@ -1437,9 +1483,21 @@ describe("AppShell Git workspace", () => {
 		);
 	});
 
-	it("replaces a deleted branch's detail with the list, and only that one's", async () => {
+	// Leaving goes up: the deleted page, and every branch read on the way to
+	// it, leave the way back.
+	it("leaves a deleted branch's detail for the list, and only that one's", async () => {
 		const user = userEvent.setup();
-		const router = renderAppShell("/w/A/branch/main?session=a1");
+		const router = renderAppShell("/w/A/s/a1");
+		await waitFor(() => expect(panel()).toHaveTextContent("a1"));
+		const openBranch = (ref: string) =>
+			act(() =>
+				router.navigate({
+					to: "/w/$worktree/branch/$",
+					params: { worktree: "A", _splat: ref },
+					search: { session: "a1" },
+				}),
+			);
+		await openBranch("main");
 		await waitFor(() =>
 			expect(panel()).toHaveAttribute("data-branch", "local:main"),
 		);
@@ -1448,21 +1506,19 @@ describe("AppShell Git workspace", () => {
 		await user.click(screen.getByRole("button", { name: "Deleted topic" }));
 		expect(panel()).toHaveAttribute("data-branch", "local:main");
 
-		await act(() =>
-			router.navigate({
-				to: "/w/$worktree/branch/$",
-				params: { worktree: "A", _splat: "topic" },
-				search: { session: "a1" },
-			}),
-		);
+		await openBranch("topic");
 		await user.click(screen.getByRole("button", { name: "Deleted topic" }));
 		await waitFor(() =>
 			expect(panel()).toHaveAttribute("data-git-segment", "branches"),
 		);
+		expect(router.state.location.search).toEqual({
+			session: "a1",
+			segment: "branches",
+		});
 
 		router.history.back();
 		await waitFor(() =>
-			expect(panel()).toHaveAttribute("data-branch", "local:main"),
+			expect(router.state.location.pathname).toBe("/w/A/s/a1"),
 		);
 	});
 

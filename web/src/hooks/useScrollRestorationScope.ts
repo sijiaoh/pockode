@@ -1,6 +1,7 @@
 import { useRouter, useRouterState } from "@tanstack/react-router";
 import { useMemo, useRef } from "react";
-import { entryKeyOf, scrollMemoryFor } from "../lib/scrollMemory";
+import { entryKeyOf } from "../lib/historyTrail";
+import { scrollMemoryFor } from "../lib/scrollMemory";
 import type { ScrollRestorationScope } from "./useScrollRestoration";
 
 /** The value of `ScrollRestorationContext`; called where the router is. */

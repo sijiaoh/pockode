@@ -23,7 +23,7 @@ import { operationPromptAtPress } from "../../hooks/gitQueries";
 import { useGitDiffWatch } from "../../hooks/useGitDiffWatch";
 import { useGitStatus } from "../../hooks/useGitStatus";
 import { useGitWriteRunner } from "../../hooks/useGitWrites";
-import { useLeaveReview } from "../../hooks/useLeaveReview";
+import { useGoToParent } from "../../hooks/useGoToParent";
 import { useOrderedChanges } from "../../hooks/useOrderedChanges";
 import { usePrefillComposer } from "../../hooks/usePrefillComposer";
 import { useRouteState } from "../../hooks/useRouteState";
@@ -47,6 +47,7 @@ import {
 	WorktreeChangedError,
 } from "../../lib/gitWriteStore";
 import { overlayToNavigation } from "../../lib/navigation";
+import { FRESH_VISIT_STATE } from "../../lib/scrollMemory";
 import { useWorktreeStore } from "../../lib/worktreeStore";
 import {
 	describeCommitAction,
@@ -142,9 +143,10 @@ const toolbarButtonBase =
  * draws them, with "stage and go on to the next" as its primary action
  * (docs/git-changes-ui.md#the-review-layer).
  *
- * A review is one history entry: every move inside it — to another file, to
- * the file's other side — replaces the route, carrying its history state, and
- * leaving it is `useLeaveReview`, so the list is one step behind it.
+ * Each file reviewed is one history entry: moving to another file pushes, so
+ * Back retraces the files one at a time. The file's other side is a view of
+ * the same page, and a file discarded here is gone, so those replace. Leaving
+ * goes up to the list (`useGoToParent`), past every file paged through.
  */
 function DiffView({
 	path,
@@ -225,33 +227,44 @@ function DiffView({
 	const conflictFile = useConflictFile(path, conflict);
 
 	const moveTo = useCallback(
-		(target: { path: string; staged: boolean }) => {
+		(
+			target: { path: string; staged: boolean },
+			{ replace, fresh = false }: { replace: boolean; fresh?: boolean },
+		) => {
 			navigate({
 				...overlayToNavigation(
 					{ type: "diff", ...target },
 					worktree,
 					sessionId,
-					{ replace: true },
+					{ replace },
 				),
-				state: true,
+				...(fresh ? { state: FRESH_VISIT_STATE } : {}),
 			});
 		},
 		[navigate, worktree, sessionId],
 	);
-	const goToFile = (target: ChangedFile) => {
+	const goToFile = (target: ChangedFile, { replace = false } = {}) => {
 		leaving.current = true;
-		moveTo({ path: target.path, staged: reviewSideOf(target, false) });
+		moveTo(
+			{ path: target.path, staged: reviewSideOf(target, false) },
+			// A replace here is another file in place of this one, not a view
+			// of it, and opens at its own top.
+			{ replace, fresh: replace },
+		);
 	};
+	// After a discard: the page just emptied is not one to come Back to.
 	const goToNextOrLeave = () => {
 		const { files, view } = latest.current;
 		const after = adjacentChange(files, view, path, 1);
-		if (after) goToFile(after);
+		if (after) goToFile(after, { replace: true });
 		else leave();
 	};
-	const leaveReview = useLeaveReview();
+	// Also what a commit made here does when it answers, by when the reader
+	// may be on another page: the page named here is the one leaving.
+	const goToParent = useGoToParent();
 	const leave = () => {
 		leaving.current = true;
-		leaveReview(worktree, sessionId);
+		goToParent({ worktree, overlay: { type: "diff", path, staged } });
 	};
 	const back: PageBack = backToChat
 		? { to: "chat", onClick: leave }
@@ -268,7 +281,7 @@ function DiffView({
 			overlayToNavigation({ type: "diff", path, staged }, worktree, sessionId),
 		);
 		if (router.latestLocation.pathname !== here.pathname) return;
-		moveTo({ path, staged: side });
+		moveTo({ path, staged: side }, { replace: true });
 	}, [file, side, staged, path, moveTo, router, worktree, sessionId]);
 
 	// Forgotten with the side it was for, so it cannot come back by itself if
@@ -776,7 +789,9 @@ function DiffView({
 								key={option.label}
 								type="button"
 								aria-pressed={side === option.staged}
-								onClick={() => moveTo({ path, staged: option.staged })}
+								onClick={() =>
+									moveTo({ path, staged: option.staged }, { replace: true })
+								}
 								className={`min-h-9 rounded px-3 text-xs transition-colors pointer-coarse:min-h-11 focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent ${
 									side === option.staged
 										? "bg-th-bg-primary font-medium text-th-text-primary"

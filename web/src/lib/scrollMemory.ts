@@ -1,4 +1,9 @@
-import type { HistoryLocation, RouterHistory } from "@tanstack/react-router";
+import type {
+	HistoryLocation,
+	HistoryState,
+	RouterHistory,
+} from "@tanstack/react-router";
+import { entryKeyOf } from "./historyTrail";
 
 /**
  * Where each page's scrollers were left, per history entry, so that going back
@@ -9,11 +14,16 @@ import type { HistoryLocation, RouterHistory } from "@tanstack/react-router";
  * Keyed by the history entry rather than the URL: a fresh push of the same URL
  * is a new entry and starts at the top, as a link does in a browser.
  *
- * Back here is two things. The browser's (and `history.back()`) returns to an
+ * Back here is two things. The browser's (and any `history.go()` back, which
+ * is what the Git workspace's ← is when its parent is behind) returns to an
  * entry that is still in the history, so its key finds what was saved. The
- * page header's Back *pushes* the parent's URL (`overlayToNavigation`), which
- * is a new entry; a push to the URL of the entry just under the current one is
- * taken as that return, and the new entry inherits what the old one saved.
+ * other screens' header Back *pushes* the parent's URL (`overlayToNavigation`),
+ * which is a new entry; a push to the URL of the page the reader came down
+ * from is taken as that return, and the new entry inherits what the old one
+ * saved.
+ *
+ * A replace is the same visit and keeps the offsets, unless it says it is not
+ * (`FRESH_VISIT_STATE`).
  */
 export interface ScrollMemory {
 	get(entry: string, scroller: string): number | undefined;
@@ -25,69 +35,84 @@ interface Frame {
 	href: string;
 }
 
+const FRESH_VISIT_KEY = "freshVisit";
+
+/**
+ * The history state of a replace that puts another page in place of the one
+ * on screen — a parent standing in for its child, the next file for one just
+ * discarded — rather than showing the same page otherwise. It starts at the
+ * top: the offsets left on the page it replaced are not this page's, and every
+ * page's scroller is named alike.
+ *
+ * Cast because the router's HistoryState is declared in @tanstack/history,
+ * which this package does not depend on directly and so cannot augment.
+ */
+export const FRESH_VISIT_STATE = { [FRESH_VISIT_KEY]: true } as HistoryState;
+
+function isFreshVisit(state: unknown): boolean {
+	return (
+		typeof state === "object" &&
+		state !== null &&
+		(state as Record<string, unknown>)[FRESH_VISIT_KEY] === true
+	);
+}
+
 /** Plenty for any trail a reader walks back along; older entries are dropped. */
 const MAX_ENTRIES = 100;
 
-/** Takes the router's location as well as the history's: both carry these. */
-export function entryKeyOf(location: {
-	href: string;
-	state: { __TSR_key?: string };
-}): string {
-	return location.state.__TSR_key ?? location.href;
+/** Sets `key` last, dropping the oldest once the map holds more than allowed. */
+function keep<V>(map: Map<string, V>, key: string, value: V) {
+	map.delete(key);
+	map.set(key, value);
+	if (map.size > MAX_ENTRIES) {
+		const oldest = map.keys().next().value;
+		if (oldest !== undefined) map.delete(oldest);
+	}
 }
 
 function createScrollMemory(history: RouterHistory): ScrollMemory {
 	const positions = new Map<string, Map<string, number>>();
-	// The pages the reader came down through to reach the current one, current
-	// last — what a push is compared against to recognise the header's Back.
-	const trail: Frame[] = [];
+	// For each entry, the page the reader came down from to reach it — what a
+	// push is compared against to recognise the header's Back. Not the entry
+	// behind it in the history (lib/historyTrail.ts): a push taken as that
+	// Back stands in for the page it returned to, so what is under it is what
+	// was under that page.
+	const below = new Map<string, Frame | undefined>();
 
 	const frameOf = (location: HistoryLocation): Frame => ({
 		entry: entryKeyOf(location),
 		href: location.href,
 	});
 
-	// An entry is added last, so the first in the map is the oldest.
-	const keep = (entry: string, saved: Map<string, number>) => {
-		positions.set(entry, saved);
-		if (positions.size > MAX_ENTRIES) {
-			const oldest = positions.keys().next().value;
-			if (oldest !== undefined) positions.delete(oldest);
-		}
-	};
-
-	trail.push(frameOf(history.location));
+	let current = frameOf(history.location);
 
 	history.subscribe(({ location, action }) => {
 		const frame = frameOf(location);
+		const left = current;
+		current = frame;
 		switch (action.type) {
 			case "PUSH": {
-				const below = trail.at(-2);
-				if (below?.href !== frame.href) {
-					trail.push(frame);
+				const under = below.get(left.entry);
+				if (under?.href !== frame.href) {
+					keep(below, frame.entry, left);
 					return;
 				}
-				const saved = positions.get(below.entry);
-				if (saved) keep(frame.entry, new Map(saved));
-				trail.splice(-2, 2, frame);
+				const saved = positions.get(under.entry);
+				if (saved) keep(positions, frame.entry, new Map(saved));
+				keep(below, frame.entry, below.get(under.entry));
 				return;
 			}
 			case "REPLACE": {
 				// Still the same visit — a side switched, a file renamed — so the
 				// offsets move to the new entry; the old one cannot be returned to.
-				const replaced = trail.at(-1);
-				const saved = replaced && positions.get(replaced.entry);
-				if (replaced && saved) {
-					positions.delete(replaced.entry);
-					keep(frame.entry, saved);
+				const saved = positions.get(left.entry);
+				positions.delete(left.entry);
+				if (saved && !isFreshVisit(location.state)) {
+					keep(positions, frame.entry, saved);
 				}
-				trail.splice(-1, 1, frame);
+				keep(below, frame.entry, below.get(left.entry));
+				below.delete(left.entry);
 				return;
-			}
-			default: {
-				const at = trail.findIndex((f) => f.entry === frame.entry);
-				if (at >= 0) trail.length = at + 1;
-				else trail.push(frame);
 			}
 		}
 	});
@@ -98,7 +123,7 @@ function createScrollMemory(history: RouterHistory): ScrollMemory {
 			let saved = positions.get(entry);
 			if (!saved) {
 				saved = new Map();
-				keep(entry, saved);
+				keep(positions, entry, saved);
 			}
 			saved.set(scroller, top);
 		},
@@ -109,7 +134,7 @@ const memories = new WeakMap<RouterHistory, ScrollMemory>();
 
 /**
  * One memory per history, created on first use. The app's router asks for it
- * as soon as it exists, so that the trail starts with the first page; a test's
+ * as soon as it exists, so that it has seen the first page; a test's
  * router gets one when its first scroller mounts.
  */
 export function scrollMemoryFor(history: RouterHistory): ScrollMemory {

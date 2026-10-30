@@ -1,4 +1,3 @@
-import type { HistoryState } from "@tanstack/react-router";
 import {
 	type BranchRef,
 	type CommitOrigin,
@@ -165,31 +164,6 @@ interface NavigationResult {
 	replace?: boolean;
 }
 
-const REVIEW_FROM_LIST_KEY = "reviewFromList";
-
-/**
- * The history state of a review pushed from the Changes list, which is what
- * says the entry behind it is that list. Every move inside the review replaces
- * with `state: true` to carry it, and leaving the review goes back to that
- * entry instead of replacing the review with a second copy of the list
- * (docs/git-changes-ui.md#the-review-layer). A review reached any other way —
- * a link, a URL typed in — has nothing behind it to go back to.
- *
- * Cast because the router's HistoryState is declared in @tanstack/history,
- * which this package does not depend on directly and so cannot augment.
- */
-export const REVIEW_FROM_LIST_STATE = {
-	[REVIEW_FROM_LIST_KEY]: true,
-} as HistoryState;
-
-export function isReviewFromList(state: unknown): boolean {
-	return (
-		typeof state === "object" &&
-		state !== null &&
-		(state as Record<string, unknown>)[REVIEW_FROM_LIST_KEY] === true
-	);
-}
-
 /**
  * The query most overlay routes carry: the chat underneath it, and — on the two
  * work routes and the Git workspace — which segment of the list the reader is
@@ -239,9 +213,11 @@ function assignBranchSearch(
 /**
  * Convert OverlayState to navigation result.
  *
- * `options.replace` is for the cases where the overlay is being *corrected*
- * rather than opened — a file renamed under it, say. Pushing there would leave
- * a history entry pointing at a path that no longer resolves.
+ * `options.replace` is for the cases where no page is visited
+ * (docs/project-ui.md §5.1): a setting of the page on screen, an overlay being
+ * *corrected* — a file renamed under it, say, where a push would leave a
+ * history entry pointing at a path that no longer resolves — or a page the
+ * user's own action destroyed.
  */
 export function overlayToNavigation(
 	overlay: NonNullable<OverlayState>,

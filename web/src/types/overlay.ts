@@ -222,3 +222,111 @@ export function fileHistoryOverlay(path: string): NonNullable<OverlayState> {
 		history: { ...DEFAULT_HISTORY_QUERY, file: path },
 	};
 }
+
+/**
+ * A page as the history knows it: an overlay in a worktree, where a null
+ * overlay is the worktree's chat. The session the URL carries is not part of
+ * it — every overlay carries one, and it names the chat underneath, not the
+ * page.
+ */
+export interface Page {
+	worktree: string;
+	overlay: OverlayState;
+}
+
+/**
+ * The page an in-app ← goes up to (docs/project-ui.md): a list's is the chat, a
+ * detail's the list or branch it belongs to, a commit's file its commit and a
+ * file's version its diff. A parent commit opened from a commit goes up as
+ * any commit does — to its list, not to the child it was opened from: up is
+ * not Back. Undefined for the chat, and for what has no parent known here.
+ */
+export function parentOf(overlay: OverlayState): OverlayState | undefined {
+	switch (overlay?.type) {
+		case "git":
+			return null;
+		case "diff":
+			return { type: "git", segment: "changes" };
+		case "branch":
+			return { type: "git", segment: "branches" };
+		case "commit":
+			if (overlay.branch) return { type: "branch", ...overlay.branch };
+			return {
+				type: "git",
+				segment: "history",
+				...(overlay.history ? { history: overlay.history } : {}),
+			};
+		case "commit-diff":
+			return {
+				type: "commit",
+				hash: overlay.hash,
+				...commitOriginOf(overlay),
+			};
+		case "commit-file":
+			return {
+				type: "commit-diff",
+				hash: overlay.hash,
+				path: overlay.path,
+				...commitOriginOf(overlay),
+			};
+		default:
+			return undefined;
+	}
+}
+
+function sameBranch(a: BranchRef | undefined, b: BranchRef | undefined) {
+	return a?.ref === b?.ref && a?.remote === b?.remote;
+}
+
+/**
+ * Whether `a` and `b` are one page: the route and what identifies it, without
+ * what is only a setting of it — a list's History query, a diff's side. A
+ * commit opened from a branch is not the same page as that commit opened from
+ * History, since the two go up to different places.
+ */
+export function samePage(a: Page, b: Page): boolean {
+	if (a.worktree !== b.worktree) return false;
+	const x = a.overlay;
+	const y = b.overlay;
+	if (x === null || y === null) return x === y;
+	switch (x.type) {
+		case "git":
+			return y.type === "git" && x.segment === y.segment;
+		case "diff":
+			return y.type === "diff" && x.path === y.path;
+		case "branch":
+			return y.type === "branch" && sameBranch(x, y);
+		case "commit":
+			return (
+				y.type === "commit" &&
+				x.hash === y.hash &&
+				sameBranch(x.branch, y.branch)
+			);
+		case "commit-diff":
+		case "commit-file":
+			return (
+				y.type === x.type &&
+				x.hash === y.hash &&
+				x.path === y.path &&
+				sameBranch(x.branch, y.branch)
+			);
+		default:
+			return JSON.stringify(x) === JSON.stringify(y);
+	}
+}
+
+/**
+ * Whether `page` was opened under `ancestor`: `ancestor` is on its chain of
+ * parents. Every Git page of a worktree is under that worktree's chat, and
+ * nothing of another worktree is.
+ */
+export function isUnder(page: Page, ancestor: Page): boolean {
+	let up = parentOf(page.overlay);
+	while (up !== undefined) {
+		if (samePage({ worktree: page.worktree, overlay: up }, ancestor)) {
+			return true;
+		}
+		up = parentOf(up);
+	}
+	return false;
+}
