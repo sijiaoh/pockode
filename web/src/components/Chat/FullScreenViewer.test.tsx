@@ -57,8 +57,6 @@ describe("a Markdown file read full screen", () => {
 						),
 					}}
 					onClose={() => {}}
-					closeThen={(after) => after()}
-					afterCloseRef={{ current: null }}
 				/>
 			</QueryClientProvider>,
 		);

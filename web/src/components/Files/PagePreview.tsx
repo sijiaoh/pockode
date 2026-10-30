@@ -1,5 +1,6 @@
+import { LayerHistoryContext } from "@pockode/shared";
 import { Maximize2 } from "lucide-react";
-import { useState } from "react";
+import { useContext, useEffect, useState } from "react";
 import { useInView } from "../../hooks/useInView";
 import type { TreeOrigin } from "../../types/contents";
 import { formatMediaCaption } from "../../utils/fileView";
@@ -42,6 +43,19 @@ function PagePreview({ origin, fileName, mime, size, revision }: Props) {
 	// entry after the viewer's, and closing — which goes back to the entry
 	// before it — would put this frame back on the page from before the edit.
 	const [held, setHeld] = useState<{ revision: unknown } | null>(null);
+	const layerHistory = useContext(LayerHistoryContext);
+	// After the commit that closed the viewer, whose cleanup has queued the
+	// `back()` over its entry by then; released once that has landed.
+	useEffect(() => {
+		if (viewing || !held) return;
+		let cancelled = false;
+		void (layerHistory?.settled() ?? Promise.resolve()).then(() => {
+			if (!cancelled) setHeld(null);
+		});
+		return () => {
+			cancelled = true;
+		};
+	}, [viewing, held, layerHistory]);
 	const page = usePageFrame(
 		{ origin, fileName },
 		inView,
@@ -113,7 +127,6 @@ function PagePreview({ origin, fileName, mime, size, revision }: Props) {
 						revision,
 					}}
 					onClose={() => setViewing(false)}
-					afterClose={() => setHeld(null)}
 				/>
 			)}
 		</div>

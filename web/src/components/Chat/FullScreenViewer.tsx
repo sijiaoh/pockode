@@ -8,7 +8,6 @@ import {
 	useRef,
 	useState,
 } from "react";
-import { useBackToClose } from "../../hooks/useBackToClose";
 import type {
 	FullScreenContent,
 	FullScreenSource,
@@ -161,7 +160,7 @@ function ContentView({
 	wrap,
 	scrollerRef,
 	linesRef,
-	onOpenFile,
+	onClose,
 }: {
 	/** The viewer's, which names a page's frame. */
 	title: string;
@@ -172,7 +171,8 @@ function ContentView({
 	scrollerRef: RefObject<HTMLElement | null>;
 	/** What brings a line into view, for the kinds drawn by the line. */
 	linesRef: RefObject<VirtualLinesHandle | null>;
-	onOpenFile: (open: () => void) => void;
+	/** Closes the viewer, for a row that opens what it names. */
+	onClose: () => void;
 }) {
 	switch (content.kind) {
 		// Drawn by the line, only where the reader is, so a huge log opens fast.
@@ -204,7 +204,13 @@ function ContentView({
 			return (
 				<FileLines
 					content={content}
-					onOpenFile={open && ((path) => onOpenFile(() => open(path)))}
+					onOpenFile={
+						open &&
+						((path) => {
+							onClose();
+							open(path);
+						})
+					}
 					scrollerRef={scrollerRef}
 					ref={linesRef}
 				/>
@@ -272,9 +278,6 @@ function wrapKind(content: FullScreenContent): "own" | "diff" | null {
 interface Props {
 	source: FullScreenSource;
 	onClose: () => void;
-	/** Closes, then runs `after` once the viewer's history entry is gone. */
-	closeThen: (after: () => void) => void;
-	afterCloseRef: RefObject<(() => void) | null>;
 }
 
 /**
@@ -283,12 +286,7 @@ interface Props {
  * (docs/tool-call-ui.md#full-screen): the block's own header as a toolbar, and
  * the content uncut in a scroller of its own.
  */
-export function FullScreenViewer({
-	source,
-	onClose,
-	closeThen,
-	afterCloseRef,
-}: Props) {
+export function FullScreenViewer({ source, onClose }: Props) {
 	const published = source.content;
 	// A page read as its source is code, drawn and searched as any other.
 	const [pageSource, setPageSource] = useState(
@@ -313,8 +311,6 @@ export function FullScreenViewer({
 	// log. A diff's is the transcript's own remembered choice.
 	const [ownWrap, setOwnWrap] = useState(content.kind === "output");
 	const wraps = wrapKind(content);
-
-	useBackToClose(onClose, afterCloseRef);
 
 	const counted = useMemo(() => contentCount(content), [content]);
 	const count = counted && formatCount(counted.total, counted.noun);
@@ -491,7 +487,7 @@ export function FullScreenViewer({
 							wrap={ownWrap}
 							scrollerRef={scrollerRef}
 							linesRef={linesRef}
-							onOpenFile={closeThen}
+							onClose={onClose}
 						/>
 					</div>
 				</section>

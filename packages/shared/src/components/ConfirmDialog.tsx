@@ -1,6 +1,7 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useLockBodyScroll } from "../hooks/useLockBodyScroll.ts";
+import { useCoverPage } from "../hooks/usePageCover.ts";
 import { useCloseWhenCovered } from "./CoveredSurface.tsx";
 import { Spinner } from "./Spinner.tsx";
 
@@ -69,6 +70,8 @@ export function ConfirmDialog({
 	};
 
 	useLockBodyScroll();
+	// Back on a question is "no", and is refused while Cancel is.
+	useCoverPage(true, { onBack: onCancel, refuse: running });
 	// Portalled to the body, so the surface that raised it cannot take it away
 	// by covering itself; cancelling is what a question about a surface the
 	// user has left comes to (CoveredSurface). Even while an action runs: it

@@ -1,3 +1,4 @@
+import { LayerHistoryContext } from "@pockode/shared";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
 	createBrowserHistory,
@@ -10,6 +11,7 @@ import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { page, userEvent as realUserEvent } from "vitest/browser";
+import { layerHistoryFor } from "../../lib/layerHistory";
 import { useWSStore, wsActions } from "../../lib/wsStore";
 // A 64×36 VP9 clip, served by the test server as a capability path would be.
 import clipPath from "../../test/clip-64x36.webm?url";
@@ -603,11 +605,13 @@ describe("MediaViewer html stage", () => {
 		});
 		render(
 			<QueryClientProvider client={new QueryClient()}>
-				<RouterProvider router={router} />
+				<LayerHistoryContext value={layerHistoryFor(history)}>
+					<RouterProvider router={router} />
+				</LayerHistoryContext>
 			</QueryClientProvider>,
 		);
 		const frame = await screen.findByTitle<HTMLIFrameElement>("index.htm");
-		await expect.poll(() => window.history.state?.fullScreen).toBeTruthy();
+		await expect.poll(() => window.history.state?.pockodeLayers).toBeTruthy();
 		// ↻ spins until the page's first load. A navigation before the page
 		// has finished loading is made a replace, so give it a moment more.
 		const reload = screen.getByRole("button", { name: "Reload page" });

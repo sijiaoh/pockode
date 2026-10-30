@@ -23,21 +23,13 @@ describe("scrollMemory", () => {
 		expect(saved()).toBe(500);
 	});
 
-	it("takes a push to the page just underneath as the header's Back", () => {
+	it("starts a push of the page just underneath at the top", () => {
 		const { history, leaveAt, saved } = setup();
 		leaveAt(500);
 		history.push("/detail");
+		// An entrance to the list, not a return: a return goes back to its entry.
 		history.push("/list");
-		expect(saved()).toBe(500);
-	});
-
-	it("still recognises that Back after the page on top was replaced", () => {
-		const { history, leaveAt, saved } = setup();
-		leaveAt(500);
-		history.push("/detail");
-		history.replace("/detail?side=staged");
-		history.push("/list");
-		expect(saved()).toBe(500);
+		expect(saved()).toBeUndefined();
 	});
 
 	it("keeps a replaced page's position for the entry that replaced it", () => {
@@ -52,26 +44,6 @@ describe("scrollMemory", () => {
 		leaveAt(500);
 		// A parent standing in for the child its ← was pressed on.
 		history.replace("/commit", FRESH_VISIT_STATE);
-		expect(saved()).toBeUndefined();
-	});
-
-	it("starts a fresh visit at the top, even of a page left scrolled", () => {
-		const { history, leaveAt, saved } = setup("/history");
-		history.push("/commit");
-		leaveAt(500);
-		// The header's Back from the commit, then the same commit opened again:
-		// a new visit, not a return.
-		history.push("/history");
-		history.push("/commit");
-		expect(saved()).toBeUndefined();
-	});
-
-	it("does not take a push to a page further down the trail as Back", () => {
-		const { history, leaveAt, saved } = setup();
-		leaveAt(500);
-		history.push("/detail");
-		history.push("/file");
-		history.push("/list");
 		expect(saved()).toBeUndefined();
 	});
 });

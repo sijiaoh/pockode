@@ -19,7 +19,7 @@ function probe() {
 }
 
 function Panel({ open }: { open: boolean }) {
-	useCoverPage(open);
+	useCoverPage(open, { onBack: () => {} });
 	return null;
 }
 

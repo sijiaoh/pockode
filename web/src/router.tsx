@@ -7,6 +7,7 @@ import {
 import { z } from "zod";
 import AppShell from "./components/AppShell";
 import { historyTrailFor } from "./lib/historyTrail";
+import { layerHistoryFor } from "./lib/layerHistory";
 import { ROUTES, WT_CHILD_ROUTES, WT_ROUTES } from "./lib/routes";
 import { scrollMemoryFor } from "./lib/scrollMemory";
 
@@ -356,11 +357,14 @@ export const routeTree = rootRoute.addChildren([
 	]),
 ]);
 
-// The trail before the router: it starts at the page the app was opened on,
-// and may first have to rewrite that page (lib/historyTrail.ts), which the
-// router reads as it is created. Kept for the tab, so a reload still knows
-// what is behind the page.
+// The layers first: a reload under one strips its marker from the entry the
+// app starts on, and from then on every push is held behind their entries.
+// Then the trail, before the router: it
+// starts at the page the app was opened on, and may first have to rewrite
+// that page (lib/historyTrail.ts), which the router reads as it is created.
+// Kept for the tab, so a reload still knows what is behind the page.
 const history = createBrowserHistory();
+export const layerHistory = layerHistoryFor(history);
 historyTrailFor(history, sessionStorage);
 
 export const router = createRouter({

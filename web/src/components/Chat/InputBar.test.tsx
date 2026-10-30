@@ -990,7 +990,7 @@ describe("InputBar", () => {
 		// focus back to its opener as it goes, so the caret is taken after.
 		it("waits for whatever covers the page to go", () => {
 			function Cover({ up }: { up: boolean }) {
-				useCoverPage(up);
+				useCoverPage(up, { onBack: () => {} });
 				return null;
 			}
 			const { rerender } = render(
