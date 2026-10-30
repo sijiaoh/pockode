@@ -1,6 +1,7 @@
 import { createMemoryHistory } from "@tanstack/react-router";
 import { describe, expect, it } from "vitest";
-import { entryKeyOf, scrollMemoryFor } from "./scrollMemory";
+import { entryKeyOf } from "./historyTrail";
+import { FRESH_VISIT_STATE, scrollMemoryFor } from "./scrollMemory";
 
 function setup(path = "/list") {
 	const history = createMemoryHistory({ initialEntries: [path] });
@@ -44,6 +45,14 @@ describe("scrollMemory", () => {
 		leaveAt(500);
 		history.replace("/list?side=staged");
 		expect(saved()).toBe(500);
+	});
+
+	it("starts another page put in place of the one on screen at the top", () => {
+		const { history, leaveAt, saved } = setup("/commit-diff");
+		leaveAt(500);
+		// A parent standing in for the child its ← was pressed on.
+		history.replace("/commit", FRESH_VISIT_STATE);
+		expect(saved()).toBeUndefined();
 	});
 
 	it("starts a fresh visit at the top, even of a page left scrolled", () => {

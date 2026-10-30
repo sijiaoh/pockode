@@ -77,7 +77,10 @@ function HistorySection({
 	// Onto whichever history layer is up: a commit beside the list at
 	// `expanded` stays open, and a search settling after a row was pressed
 	// lands on that commit's page rather than replacing it with the list.
-	const showHistory = (next: HistoryQuery, replace = false) => {
+	// Replaced, every one of them: a range, a search or a file filter is a
+	// setting of the page on screen, not a page, so Back leaves the page
+	// rather than unwinding its settings (docs/project-ui.md).
+	const showHistory = (next: HistoryQuery) => {
 		if (onShowHistory) {
 			onShowHistory(next);
 			return;
@@ -89,7 +92,9 @@ function HistorySection({
 				? // A commit under History carries no branch; said for the type.
 					{ ...overlay, branch: undefined, history: next }
 				: { type: "git" as const, segment: "history" as const, history: next };
-		navigate(overlayToNavigation(layer, worktree, sessionId, { replace }));
+		navigate(
+			overlayToNavigation(layer, worktree, sessionId, { replace: true }),
+		);
 	};
 	const changeScope = (scope: GitHistoryScope) =>
 		showHistory({ ...history, scope });
@@ -123,8 +128,7 @@ function HistorySection({
 		const q = searchOf(debouncedText);
 		if (q === urlQ) return;
 		writtenQ.current = q;
-		// Replaced, so Back does not walk back through what was typed.
-		showHistory({ ...history, q: q || undefined }, true);
+		showHistory({ ...history, q: q || undefined });
 	}, [debouncedText, settled]);
 	const [focusRequest, setFocusRequest] = useState(0);
 	useEffect(() => {
@@ -143,9 +147,8 @@ function HistorySection({
 		// search back once it does.
 		const pending = urlQ !== "" || writtenQ.current !== "";
 		writtenQ.current = "";
-		if (pending) showHistory({ ...history, q: undefined }, true);
+		if (pending) showHistory({ ...history, q: undefined });
 	};
-	// Pushed: dropping the file is a step the user took, as adding it was.
 	const clearFile = () => showHistory({ ...history, file: undefined });
 
 	const { footer, loadMore, retry } = useHistoryPaging(

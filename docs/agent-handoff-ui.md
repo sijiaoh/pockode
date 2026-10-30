@@ -399,13 +399,12 @@ view in `gitChangesViewStore` as they are at the press. (The list once had a
 into the review — [git-changes-ui.md](git-changes-ui.md#below-expanded).) The route
 carries the current `session`, so the header's way back names this chat.
 
-- **Push**, like every entry into the workspace, and without the list's
-  `REVIEW_FROM_LIST_STATE` mark — which is why it is a handler of its own
-  rather than `handleSelectDiffFile`, which sets that mark from outside a
-  review. The system Back returns to the chat.
-- **Leaving the review** follows the review's existing rule, unchanged: a review
-  not pushed from the list has no list behind it, so `←` replaces it with the
-  Changes list (`useLeaveReview`), and from there `←` returns to the chat. A
+- **Push**, like every entry into the workspace. The system Back returns to
+  the chat.
+- **Leaving the review** follows the review's rule: `←` goes up to the Changes
+  list ([project-ui.md §5.1](project-ui.md#51-back-up-and-replace)). Opened from
+  the chat, the review has no list behind it, so the list takes the place of
+  the files read (`useGoToParent`), and from there `←` returns to the chat. A
   commit made in the review ends on the list too, where any unstaged files are
   waiting. Taking the user straight back to the chat would skip the list at the
   moment it is most useful.

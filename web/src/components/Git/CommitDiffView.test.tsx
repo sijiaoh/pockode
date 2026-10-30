@@ -65,7 +65,12 @@ function renderView(
 	actionsAt?: "top" | "bottom" | "hidden",
 ) {
 	return render(
-		<CommitDiffView hash="abc1234def" path={path} actionsAt={actionsAt} />,
+		<CommitDiffView
+			onBack={() => {}}
+			hash="abc1234def"
+			path={path}
+			actionsAt={actionsAt}
+		/>,
 	);
 }
 
@@ -87,6 +92,34 @@ describe("CommitDiffView", () => {
 		expect(screen.queryByRole("button", { name: "Next file" })).toBeNull();
 	});
 
+	// Each file of the commit is a page Back retraces.
+	it("pushes a step per file paged to", async () => {
+		const user = userEvent.setup();
+		files = [
+			{ path: "a.ts", status: "M" },
+			{ path: "b.ts", status: "M" },
+			{ path: "c.ts", status: "M" },
+		];
+		renderView("b.ts");
+
+		await user.click(screen.getByRole("button", { name: "Next file" }));
+		await user.click(screen.getByRole("button", { name: "Previous file" }));
+
+		expect(navigate.mock.calls.map(([to]) => to)).toEqual([
+			expect.objectContaining({
+				to: "/commit/$hash/diff/$",
+				params: { hash: "abc1234def", _splat: "c.ts" },
+			}),
+			expect.objectContaining({
+				to: "/commit/$hash/diff/$",
+				params: { hash: "abc1234def", _splat: "a.ts" },
+			}),
+		]);
+		for (const [to] of navigate.mock.calls) {
+			expect(to).not.toHaveProperty("replace", true);
+		}
+	});
+
 	it("opens the working-tree file from the path bar", async () => {
 		const user = userEvent.setup();
 		renderView();
@@ -99,20 +132,6 @@ describe("CommitDiffView", () => {
 			expect.objectContaining({
 				to: "/files/$",
 				params: { _splat: "src/app.ts" },
-			}),
-		);
-	});
-
-	it("goes back to the commit it came from", async () => {
-		const user = userEvent.setup();
-		renderView();
-
-		await user.click(screen.getByRole("button", { name: "Back to commit" }));
-
-		expect(navigate).toHaveBeenCalledWith(
-			expect.objectContaining({
-				to: "/commit/$",
-				params: { _splat: "abc1234def" },
 			}),
 		);
 	});

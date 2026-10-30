@@ -11,10 +11,8 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { useDiffSettingsStore } from "../../lib/diffSettingsStore";
 import { gitChangesViewActions } from "../../lib/gitChangesViewStore";
 import { gitWriteActions, useGitWriteStore } from "../../lib/gitWriteStore";
-import {
-	overlayToNavigation,
-	REVIEW_FROM_LIST_STATE,
-} from "../../lib/navigation";
+import { overlayToNavigation } from "../../lib/navigation";
+import { FRESH_VISIT_STATE } from "../../lib/scrollMemory";
 import { getDiffHighlighter } from "../../lib/shikiUtils";
 import type { GitDiffData, GitStatus } from "../../types/git";
 import DiffView from "./DiffView";
@@ -61,21 +59,9 @@ vi.mock("@pockode/shared", async (importOriginal) => ({
 // Where the URL is, ahead of the props while the router renders a move; null
 // for "still on the page being rendered".
 const urlRef = vi.hoisted(() => ({ current: null as string | null }));
-// The state of the review's history entry: marked when pushed from the list.
-const historyStateRef = vi.hoisted(() => ({
-	current: {} as Record<string, unknown>,
-}));
-const back = vi.hoisted(() => vi.fn());
 const router = vi.hoisted(() => {
 	let built = "";
 	return {
-		history: {
-			get location() {
-				return { state: historyStateRef.current };
-			},
-			back,
-			subscribe: () => () => {},
-		},
 		buildLocation: (nav: { to: string; params?: unknown }) => {
 			built = `${nav.to} ${JSON.stringify(nav.params)}`;
 			return { pathname: built };
@@ -89,6 +75,12 @@ const router = vi.hoisted(() => {
 vi.mock("@tanstack/react-router", () => ({
 	useNavigate: () => navigate,
 	useRouter: () => router,
+}));
+// Where the way up lands is the hook's (useGoToParent.test.tsx); here, only
+// that the review asks for it, and from which page.
+const goToParent = vi.hoisted(() => vi.fn());
+vi.mock("../../hooks/useGoToParent", () => ({
+	useGoToParent: () => goToParent,
 }));
 vi.mock("../../hooks/useRouteState", () => ({
 	useRouteState: () => ({ worktree: "", sessionId: null }),
@@ -172,21 +164,22 @@ const writesSettled = () =>
 		expect(useGitWriteStore.getState().writes[""]?.toggling.size ?? 0).toBe(0),
 	);
 
-const toFile = (path: string, staged: boolean) => ({
-	...overlayToNavigation({ type: "diff", path, staged }, "", null, {
-		replace: true,
-	}),
-	state: true,
-});
-const toList = () =>
-	overlayToNavigation({ type: "git", segment: "changes" }, "", null, {
+// Another file is a page of its own, pushed; the same file's other side, or
+// the next file after a discard, replaces the entry.
+const toFile = (path: string, staged: boolean) =>
+	overlayToNavigation({ type: "diff", path, staged }, "", null);
+const replaceWithFile = (path: string, staged: boolean) =>
+	overlayToNavigation({ type: "diff", path, staged }, "", null, {
 		replace: true,
 	});
+const upFrom = (path: string, staged: boolean) => ({
+	worktree: "",
+	overlay: { type: "diff", path, staged },
+});
 
 beforeEach(() => {
 	navigate.mockReset();
-	back.mockReset();
-	historyStateRef.current = {};
+	goToParent.mockReset();
 	stage.mockReset().mockResolvedValue(undefined);
 	resolve.mockReset().mockResolvedValue(undefined);
 	unstage.mockReset().mockResolvedValue(undefined);
@@ -221,7 +214,7 @@ beforeEach(() => {
 });
 
 describe("DiffView review toolbar", () => {
-	it("places the file in the list's order and moves by replacing", async () => {
+	it("places the file in the list's order and pushes each move", async () => {
 		const user = userEvent.setup();
 		render(<DiffView path="b.ts" staged={true} />);
 
@@ -345,7 +338,7 @@ describe("DiffView bottom buttons", () => {
 		).toBeEnabled();
 		await writesSettled();
 		// Only the route following the file to the side it now has.
-		expect(navigate.mock.calls).toEqual([[toFile("c.ts", true)]]);
+		expect(navigate.mock.calls).toEqual([[replaceWithFile("c.ts", true)]]);
 	});
 
 	it("shows why Commit is disabled when only submodule files are staged", () => {
@@ -411,12 +404,12 @@ describe("DiffView bottom buttons", () => {
 		expect(screen.queryByRole("button", { name: "Discard file" })).toBeNull();
 	});
 
-	it("leaves for the list by replacing, from the header's back", async () => {
+	it("goes up to the list from the header's back", async () => {
 		const user = userEvent.setup();
 		render(<DiffView path="a.ts" staged={false} />);
 
 		await user.click(screen.getByRole("button", { name: "Back to changes" }));
-		expect(navigate).toHaveBeenCalledWith(toList());
+		expect(goToParent).toHaveBeenCalledWith(upFrom("a.ts", false));
 	});
 
 	// At `expanded` the list is the sidebar's and its URL shows the chat, so
@@ -429,62 +422,7 @@ describe("DiffView bottom buttons", () => {
 			screen.queryByRole("button", { name: "Back to changes" }),
 		).toBeNull();
 		await user.click(screen.getByRole("button", { name: "Back to chat" }));
-		expect(navigate).toHaveBeenCalledWith(toList());
-	});
-
-	// Pushed from the list, the review goes back to it rather than replacing
-	// itself with a second copy of it, which would leave a Back that does
-	// nothing on screen.
-	describe("pushed from the list", () => {
-		// A key of its own per test: a key backed from stays guarded until the
-		// window leaves it, which this fake history never does.
-		let entry = 0;
-		beforeEach(() => {
-			entry += 1;
-			historyStateRef.current = {
-				...REVIEW_FROM_LIST_STATE,
-				__TSR_key: `review-${entry}`,
-			};
-		});
-
-		it("goes back to the list from the header's back, once", async () => {
-			const user = userEvent.setup();
-			render(<DiffView path="a.ts" staged={false} />);
-
-			const button = screen.getByRole("button", { name: "Back to changes" });
-			await user.click(button);
-			await user.click(button);
-			expect(back).toHaveBeenCalledTimes(1);
-			expect(navigate).not.toHaveBeenCalled();
-		});
-
-		it("goes back to the list after committing", async () => {
-			const user = userEvent.setup();
-			statusRef.current = {
-				staged: [{ path: "b.ts", status: "M" }],
-				unstaged: [],
-			};
-			render(<DiffView path="b.ts" staged={true} />);
-
-			await user.click(screen.getByRole("button", { name: "Commit 1 file" }));
-			await user.click(screen.getByRole("button", { name: "commit now" }));
-			expect(back).toHaveBeenCalledTimes(1);
-			expect(navigate).not.toHaveBeenCalled();
-		});
-
-		it("goes back to the list after discarding the last file", async () => {
-			const user = userEvent.setup();
-			render(<DiffView path="c.ts" staged={false} />);
-
-			await user.click(screen.getByRole("button", { name: "Delete file" }));
-			await user.click(
-				within(await screen.findByRole("dialog")).getByRole("button", {
-					name: "Delete",
-				}),
-			);
-			await waitFor(() => expect(back).toHaveBeenCalledTimes(1));
-			expect(navigate).not.toHaveBeenCalled();
-		});
+		expect(goToParent).toHaveBeenCalledWith(upFrom("a.ts", false));
 	});
 
 	// Staging would record the markers as the resolution, unstaging would
@@ -541,7 +479,7 @@ describe("DiffView bottom buttons", () => {
 		await user.click(screen.getByRole("button", { name: "Commit 1 file" }));
 		await user.click(screen.getByRole("button", { name: "commit now" }));
 
-		expect(navigate).toHaveBeenCalledWith(toList());
+		expect(goToParent).toHaveBeenCalledWith(upFrom("b.ts", true));
 	});
 
 	it("says a partly staged file keeps its staged side", async () => {
@@ -571,8 +509,12 @@ describe("DiffView bottom buttons", () => {
 		await user.click(within(dialog).getByRole("button", { name: "Discard" }));
 
 		expect(discard).toHaveBeenCalledWith(["a.ts"]);
+		// Another file in the emptied one's place, opening at its own top.
 		await waitFor(() =>
-			expect(navigate).toHaveBeenCalledWith(toFile("b.ts", true)),
+			expect(navigate).toHaveBeenCalledWith({
+				...replaceWithFile("b.ts", true),
+				state: FRESH_VISIT_STATE,
+			}),
 		);
 	});
 
@@ -587,7 +529,9 @@ describe("DiffView bottom buttons", () => {
 			}),
 		);
 
-		await waitFor(() => expect(navigate).toHaveBeenCalledWith(toList()));
+		await waitFor(() =>
+			expect(goToParent).toHaveBeenCalledWith(upFrom("c.ts", false)),
+		);
 	});
 });
 
@@ -603,7 +547,7 @@ describe("DiffView sides", () => {
 		expect(screen.getByText("Partly staged")).toBeInTheDocument();
 		expect(screen.getByRole("button", { name: "Discard file" })).toBeEnabled();
 		await user.click(screen.getByRole("button", { name: "Staged" }));
-		expect(navigate).toHaveBeenCalledWith(toFile("a.ts", true));
+		expect(navigate).toHaveBeenCalledWith(replaceWithFile("a.ts", true));
 	});
 
 	it("follows a partly staged file to its unstaged side once unstaged", async () => {
@@ -624,7 +568,7 @@ describe("DiffView sides", () => {
 		await user.click(screen.getByRole("button", { name: "Unstage" }));
 
 		await waitFor(() =>
-			expect(navigate).toHaveBeenCalledWith(toFile("a.ts", false)),
+			expect(navigate).toHaveBeenCalledWith(replaceWithFile("a.ts", false)),
 		);
 		expect(screen.queryByText("Partly staged")).toBeNull();
 	});
@@ -635,7 +579,7 @@ describe("DiffView sides", () => {
 		expect(diffWatch).toHaveBeenLastCalledWith(
 			expect.objectContaining({ path: "a.ts", staged: false }),
 		);
-		expect(navigate).toHaveBeenCalledWith(toFile("a.ts", false));
+		expect(navigate).toHaveBeenCalledWith(replaceWithFile("a.ts", false));
 	});
 
 	// The shell moves a review on from a file discarded in the list; a status
@@ -708,7 +652,7 @@ describe("DiffView when the file stops changing", () => {
 			name: "Back to changes",
 		});
 		await user.click(inBar);
-		expect(navigate).toHaveBeenCalledWith(toList());
+		expect(goToParent).toHaveBeenCalledWith(upFrom("a.ts", false));
 	});
 });
 
@@ -831,7 +775,7 @@ describe("DiffView conflict view", () => {
 				.parentElement as HTMLElement,
 		).getByRole("button", { name: "Back to changes" });
 		await user.click(leave);
-		expect(navigate).toHaveBeenCalledWith(toList());
+		expect(goToParent).toHaveBeenCalledWith(upFrom("a.ts", false));
 	});
 
 	it("hands the conflicts to the agent with the state at the press", async () => {

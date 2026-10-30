@@ -158,7 +158,7 @@ describe("HistorySection", () => {
 		).toBeInTheDocument();
 	});
 
-	it("switches the range from its sheet, in the URL", async () => {
+	it("switches the range from its sheet, replacing the URL", async () => {
 		const user = userEvent.setup();
 		renderSection();
 
@@ -171,9 +171,12 @@ describe("HistorySection", () => {
 			within(sheet).getByRole("button", { name: /^All branches/ }),
 		);
 
+		// A setting of the page on screen, not a page: Back leaves History
+		// rather than walking back through its ranges.
 		expect(navigate).toHaveBeenCalledWith(
 			expect.objectContaining({
 				search: { segment: "history", scope: "all" },
+				replace: true,
 			}),
 		);
 	});
@@ -723,7 +726,7 @@ describe("HistorySection", () => {
 			expect(screen.getByText("No more matches")).toBeInTheDocument();
 		});
 
-		it("shows the file filter as a chip that clears it with a push", async () => {
+		it("shows the file filter as a chip that clears it in place", async () => {
 			const user = userEvent.setup();
 			renderSection({ scope: "current", file: "web/src/App.tsx" });
 
@@ -738,10 +741,10 @@ describe("HistorySection", () => {
 				screen.getByRole("button", { name: "Clear file filter" }),
 			);
 			expect(navigate).toHaveBeenCalledWith(
-				expect.objectContaining({ search: { segment: "history" } }),
-			);
-			expect(navigate).not.toHaveBeenCalledWith(
-				expect.objectContaining({ replace: true }),
+				expect.objectContaining({
+					search: { segment: "history" },
+					replace: true,
+				}),
 			);
 		});
 

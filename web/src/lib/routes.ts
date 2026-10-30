@@ -53,3 +53,18 @@ export const WT_ROUTES = {
 	schedules: `${WT_PREFIX}${BASE.schedules}`,
 	scheduleDetail: `${WT_PREFIX}${BASE.scheduleDetail}`,
 } as const;
+
+/** A route of the app, whichever worktree it is under. */
+export type RouteKey = keyof typeof BASE;
+
+const routeKeyById = new Map<string, RouteKey>(
+	(Object.keys(BASE) as RouteKey[]).flatMap((key) => [
+		[ROUTES[key], key],
+		[WT_ROUTES[key], key],
+	]),
+);
+
+/** The route a matched route ID is, under the main worktree or another. */
+export function routeKeyOf(routeId: string): RouteKey | undefined {
+	return routeKeyById.get(routeId);
+}

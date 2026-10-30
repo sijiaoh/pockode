@@ -1,6 +1,8 @@
 import { CoveredSurface, useIsExpanded } from "@pockode/shared";
 import { useSharedMergeHandoff } from "../../hooks/useBranchMergeHandoff";
 import { useAutoFetch } from "../../hooks/useGitSync";
+import { useGoToParent } from "../../hooks/useGoToParent";
+import { useCurrentWorktree } from "../../hooks/useRouteState";
 import type { BranchRow } from "../../lib/gitBranches";
 import { useWorktreeStore } from "../../lib/worktreeStore";
 import type { BranchRef, GitLayer, GitSegment } from "../../types/overlay";
@@ -22,12 +24,7 @@ import OperationBanner from "./OperationBanner";
 
 interface Props {
 	layer: GitLayer;
-	/** Leaves the workspace, for the chat it was opened over. */
-	onBack: () => void;
-	/**
-	 * Opens a segment's list. Also how a diff or a commit goes back to the list
-	 * it was opened from.
-	 */
+	/** Opens a segment's list. */
 	onSelectSegment: (segment: GitSegment) => void;
 	onSelectFile: (path: string, staged: boolean) => void;
 	onSelectCommit: (hash: string) => void;
@@ -75,7 +72,6 @@ interface Props {
  */
 function GitWorkspace({
 	layer,
-	onBack,
 	onSelectSegment,
 	onSelectFile,
 	onSelectCommit,
@@ -88,6 +84,8 @@ function GitWorkspace({
 	const isExpanded = useIsExpanded();
 	const actionsAt = detailActionsPlacement(isExpanded, keyboardUp);
 	const worktree = useWorktreeStore((s) => s.current);
+	// The page's own, which the store catches up with only after a switch.
+	const urlWorktree = useCurrentWorktree();
 	// Here rather than in BranchBar: it belongs to arriving in the workspace,
 	// which this component lives exactly as long as; the bar is only where its
 	// failure is shown. At `expanded` the Git tab arrives too, and the two
@@ -104,10 +102,12 @@ function GitWorkspace({
 	const onBranchDeleted = (row: BranchRow) =>
 		onRepointBranch({ ref: row.label, remote: row.remote }, null, worktree);
 
-	// The back of a detail is the list it came from. At `expanded` that list
-	// is in the sidebar and its URL shows the chat, so the same press is drawn
-	// as the way back to the chat.
-	const backToList = () => onSelectSegment(segment);
+	// Every ← here — the list's to the chat, a detail's to its list or
+	// branch, a gone branch's `Back to branches` — goes up, not back. At
+	// `expanded` a detail's list is in the sidebar and its URL shows the
+	// chat, so the same press is drawn as the way back to the chat.
+	const goToParent = useGoToParent();
+	const goUp = () => goToParent({ worktree: urlWorktree, overlay: layer });
 
 	const renderDetail = (detail: Exclude<GitLayer, { type: "git" }>) => {
 		switch (detail.type) {
@@ -117,8 +117,8 @@ function GitWorkspace({
 					// report on, or navigate away from, the next one opened from the
 					// list. Per file and not per side: switching sides is a move
 					// within the file's review, and staging the file flips it.
-					// The review leaves by itself, replacing, since it is one history
-					// entry (docs/git-changes-ui.md).
+					// The review goes up by itself: a commit made in it, or its last
+					// file discarded, leaves it as its ← does.
 					<DiffView
 						key={detail.path}
 						path={detail.path}
@@ -134,9 +134,9 @@ function GitWorkspace({
 					<BranchDetail
 						key={branchRowKey(detail)}
 						branch={detail}
-						onBack={backToList}
+						onBack={goUp}
 						backToChat={isExpanded}
-						onLeave={() => onSelectSegment("branches")}
+						onLeave={goUp}
 						holdsFailures={!(isExpanded && listBeside)}
 						mergeHandoff={mergeHandoff}
 						onRepoint={(to) => onRepointBranch(detail, to, worktree)}
@@ -144,21 +144,17 @@ function GitWorkspace({
 						onSelectCommit={onSelectCommit}
 					/>
 				);
-			case "commit": {
-				// A commit opened from a branch goes back to that branch at every
-				// width (docs/git-branches-ui.md#opening-a-commit).
-				const { branch } = detail;
+			case "commit":
 				return (
 					// Keyed like the review: a sheet raised over one commit, and a
 					// failed handoff from it, are not the next commit's.
 					<CommitView
 						key={detail.hash}
 						hash={detail.hash}
-						onBack={branch ? () => onSelectBranch(branch) : backToList}
+						onBack={goUp}
 						backToChat={isExpanded}
 					/>
 				);
-			}
 			case "commit-diff":
 				return (
 					// Per file, like the review: a line selection, and a failed
@@ -167,6 +163,7 @@ function GitWorkspace({
 						key={`${detail.hash}\0${detail.path}`}
 						hash={detail.hash}
 						path={detail.path}
+						onBack={goUp}
 						actionsAt={actionsAt}
 					/>
 				);
@@ -175,6 +172,7 @@ function GitWorkspace({
 					<CommitFileView
 						hash={detail.hash}
 						path={detail.path}
+						onBack={goUp}
 						actionsAt={actionsAt}
 					/>
 				);
@@ -190,7 +188,7 @@ function GitWorkspace({
 			{/* Over the list, the page is the workspace and names itself so; a
 			    layer is a page of its own, and names itself. */}
 			{listOnScreen && (
-				<PageHeader back={{ to: "chat", onClick: onBack }} title="Git" />
+				<PageHeader back={{ to: "chat", onClick: goUp }} title="Git" />
 			)}
 
 			{/* Only over a list: a layer is for reading, and a sync's progress

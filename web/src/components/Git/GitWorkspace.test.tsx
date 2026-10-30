@@ -19,8 +19,19 @@ vi.mock("../../hooks/useGitSync", async (importOriginal) => ({
 	useAutoFetch: () => {},
 }));
 
-// What is under test is which layers are on screen and where their ways back
-// lead; the sections and pages themselves have tests of their own.
+// Every way back goes up from the layer on screen; where that lands is the
+// hook's (hooks/useGoToParent.test.tsx).
+const goToParent = vi.hoisted(() => vi.fn());
+vi.mock("../../hooks/useGoToParent", () => ({
+	useGoToParent: () => goToParent,
+}));
+vi.mock("../../hooks/useRouteState", () => ({
+	useCurrentWorktree: () => "A",
+}));
+const upFrom = (overlay: GitLayer) => ({ worktree: "A", overlay });
+
+// What is under test is which layers are on screen and that their ways back
+// go up; the sections and pages themselves have tests of their own.
 vi.mock("./BranchBar", () => ({
 	default: ({ branchFailureSurface }: { branchFailureSurface: boolean }) => (
 		<>
@@ -123,8 +134,8 @@ vi.mock("./DiffView", async () => {
 	const { useEffect } = await import("react");
 	const Page = page("diff");
 	return {
-		// The review leaves by itself, replacing; all it is told is how to draw
-		// its way back.
+		// The review leaves by itself; all it is told is how to draw its way
+		// back.
 		default: ({
 			backToChat,
 			actionsAt,
@@ -163,7 +174,6 @@ function renderWorkspace(
 	{ keyboardUp = false, listBeside = false } = {},
 ) {
 	const props = {
-		onBack: vi.fn(),
 		onSelectSegment: vi.fn(),
 		onSelectFile: vi.fn(),
 		onSelectCommit: vi.fn(),
@@ -192,12 +202,13 @@ const TOPIC: GitLayer = { type: "branch", ref: "topic", remote: false };
 
 beforeEach(() => {
 	layout.expanded = false;
+	goToParent.mockReset();
 });
 
 describe("GitWorkspace below expanded", () => {
 	it("shows a list under the segment control, with the way back to the chat", async () => {
 		const user = userEvent.setup();
-		const { onBack, onSelectSegment } = renderWorkspace({
+		const { onSelectSegment } = renderWorkspace({
 			type: "git",
 			segment: "history",
 		});
@@ -213,7 +224,9 @@ describe("GitWorkspace below expanded", () => {
 		expect(onSelectSegment).toHaveBeenLastCalledWith("branches");
 
 		await user.click(screen.getByRole("button", { name: "Back to chat" }));
-		expect(onBack).toHaveBeenCalled();
+		expect(goToParent).toHaveBeenCalledWith(
+			upFrom({ type: "git", segment: "history" }),
+		);
 	});
 
 	// A switch's failure is shown by the Branches list while it is on screen,
@@ -292,7 +305,7 @@ describe("GitWorkspace below expanded", () => {
 		// Covered: nothing is lit under a page.
 		expect(screen.getByText(/branches list/)).toHaveTextContent("active none");
 		await user.click(screen.getByRole("button", { name: "branch back" }));
-		expect(props.onSelectSegment).toHaveBeenCalledWith("branches");
+		expect(goToParent).toHaveBeenCalledWith(upFrom(TOPIC));
 	});
 
 	// Whichever surface it was pressed in: the route is the workspace's to
@@ -350,32 +363,18 @@ describe("GitWorkspace below expanded", () => {
 		).toBeInTheDocument();
 	});
 
-	it("goes back from a commit to History", async () => {
+	it("goes up from a commit", async () => {
 		const user = userEvent.setup();
-		const { onSelectSegment } = renderWorkspace({
-			type: "commit",
-			hash: "abc1234",
-		});
-
-		await user.click(screen.getByRole("button", { name: "commit back" }));
-		expect(onSelectSegment).toHaveBeenCalledWith("history");
-	});
-
-	// docs/git-branches-ui.md#opening-a-commit: stacked on the branch, its
-	// way back is the branch, not the list.
-	it("goes back from a commit opened from a branch to that branch", async () => {
-		const user = userEvent.setup();
-		const { onSelectBranch, onSelectSegment } = renderWorkspace({
+		const commit: GitLayer = {
 			type: "commit",
 			hash: "abc1234",
 			branch: { ref: "origin/topic", remote: true },
-		});
+		};
+		const { onSelectBranch, onSelectSegment } = renderWorkspace(commit);
 
 		await user.click(screen.getByRole("button", { name: "commit back" }));
-		expect(onSelectBranch).toHaveBeenCalledWith({
-			ref: "origin/topic",
-			remote: true,
-		});
+		expect(goToParent).toHaveBeenCalledWith(upFrom(commit));
+		expect(onSelectBranch).not.toHaveBeenCalled();
 		expect(onSelectSegment).not.toHaveBeenCalled();
 	});
 });
@@ -411,31 +410,31 @@ describe("GitWorkspace at expanded", () => {
 		).toBeInTheDocument();
 	});
 
-	it("goes back from a commit to the History list's URL", async () => {
+	// Drawn as the way to the chat, and still the same way up: the target is
+	// the list's URL at every width.
+	it("goes up from a commit by the way drawn to the chat", async () => {
 		const user = userEvent.setup();
-		const { onSelectSegment } = renderWorkspace({
-			type: "commit",
-			hash: "abc1234",
-		});
+		const commit: GitLayer = { type: "commit", hash: "abc1234" };
+		renderWorkspace(commit);
 
 		await user.click(
 			screen.getByRole("button", { name: "commit back to chat" }),
 		);
-		expect(onSelectSegment).toHaveBeenCalledWith("history");
+		expect(goToParent).toHaveBeenCalledWith(upFrom(commit));
 	});
 
 	// The sidebar's list, and its pinned area, are on screen: the failures stay
 	// with them.
 	it("leaves a branch's failures to the sidebar's list beside it", async () => {
 		const user = userEvent.setup();
-		const { onSelectSegment } = renderWorkspace(TOPIC, { listBeside: true });
+		renderWorkspace(TOPIC, { listBeside: true });
 
 		expect(screen.getByText("branch page")).toBeVisible();
 		expect(screen.queryByText("branch page holds failures")).toBeNull();
 		await user.click(
 			screen.getByRole("button", { name: "branch back to chat" }),
 		);
-		expect(onSelectSegment).toHaveBeenCalledWith("branches");
+		expect(goToParent).toHaveBeenCalledWith(upFrom(TOPIC));
 	});
 
 	// A sidebar collapsed, or on another tab, shows nothing: a press in the
@@ -445,17 +444,25 @@ describe("GitWorkspace at expanded", () => {
 		expect(screen.getByText("branch page holds failures")).toBeInTheDocument();
 	});
 
-	it("goes back from a commit opened from a branch to that branch", async () => {
+	// History follows the URL alone: a resize between opening a detail and
+	// leaving it changes how the way up is drawn, never where it goes.
+	it("goes up from the same page however the width changed on the way", async () => {
 		const user = userEvent.setup();
-		const branch = { ref: "topic", remote: false };
-		const { onSelectBranch } = renderWorkspace({
-			type: "commit",
-			hash: "abc1234",
-			branch,
-		});
+		layout.expanded = false;
+		const { rerender, ...props } = renderWorkspace(TOPIC);
 
-		await user.click(screen.getByRole("button", { name: /commit back/ }));
-		expect(onSelectBranch).toHaveBeenCalledWith(branch);
+		layout.expanded = true;
+		rerender(<GitWorkspace layer={TOPIC} {...props} />);
+		await user.click(
+			screen.getByRole("button", { name: "branch back to chat" }),
+		);
+
+		layout.expanded = false;
+		rerender(<GitWorkspace layer={TOPIC} {...props} />);
+		await user.click(screen.getByRole("button", { name: "branch back" }));
+
+		expect(goToParent.mock.calls).toEqual([[upFrom(TOPIC)], [upFrom(TOPIC)]]);
+		expect(props.onSelectSegment).not.toHaveBeenCalled();
 	});
 
 	// Rotating a tablet takes the list away from under the diff; the diff

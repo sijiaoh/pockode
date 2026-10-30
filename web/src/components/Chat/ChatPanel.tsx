@@ -1353,7 +1353,6 @@ function ChatPanel({
 				return (
 					<GitWorkspace
 						layer={overlay}
-						onBack={onCloseOverlay ?? noop}
 						onSelectSegment={onSelectGitSegment ?? noop}
 						onSelectFile={onSelectDiffFile ?? noop}
 						onSelectCommit={onSelectCommit ?? noop}
