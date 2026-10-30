@@ -353,22 +353,21 @@ a page that stayed mounted.
 
 **Keyed by history entry, not by URL.** A fresh push of a URL the reader has
 seen before is a new visit, just as following a link is in a browser. Opening
-the same commit again from History starts at its top. What counts as
-*back*:
+the same commit again from History starts at its top. The one exception is a
+layer's entry — a sheet, a dialog, a drawer holds one while it is up
+([project-ui.md §5.2](../project-ui.md#52-back-closes-the-topmost-layer)) —
+which is keyed as the page's own under it (`visitKeyOf`,
+`web/src/lib/layerHistory.ts`): a sheet going up or down is no new visit, and
+the page under it keeps its scroll. What counts as *back*:
 
 - **The browser's Back, or any `history.go()` back.** It returns to an entry
   that is still in the history, so the entry's key finds what was saved. That
-  includes every `←` in the Git workspace: it goes up (`useGoToParent`,
+  includes every in-app `←`: it goes up (`useGoToParent`,
   [project-ui.md §5.1](../project-ui.md#51-back-up-and-replace)), which is a
-  `go()` back to the parent's own entry whenever that entry is behind.
-- **The page header's `←` everywhere else.** It does not go back. It *pushes*
-  the parent's URL (`overlayToNavigation` in `lib/navigation.ts`), which makes
-  a new entry. A push to the href of the page the reader came down from is
-  taken as that return, and the new entry inherits the old one's offsets. The
-  heuristic lives in `scrollMemory.ts` rather than at each `←`, because every
-  `←` and every Back-shaped push is already a navigation through the router. No
-  call site has anything to remember. It stays only until those screens go up
-  as the Git workspace does.
+  `go()` back to the parent's own entry whenever that entry is behind. Nothing
+  that pushes is a return: a push of the page the reader came down from — the
+  Stories button pressed from a work — is an entrance, and starts at the top.
+  No `←` pushes, so there is no push to take for one.
 
 **Why not TanStack Router's `scrollRestoration`.** It fails on all three
 counts:
@@ -377,8 +376,8 @@ counts:
   the transcript, which manage their own place.
 - It restores at `onRendered`, before content that is still loading has any
   height to scroll into.
-- It knows only the browser's Back, and outside the Git workspace most returns
-  here are the header's push.
+- It keys by entry alone, so every sheet's entry would be a new visit and the
+  page under it would scroll to the top as the sheet opened.
 
 **The entry is the one on screen, not the router's location.** The router's
 location moves to the next entry as soon as a navigation starts. The page
@@ -462,10 +461,6 @@ only what it lists, and one missing name fails every file that imports it.
   survive a reload and offsets do not.
 - **A child page opened directly has no parent behind it.** Its `←` lands on a
   fresh parent, at the top.
-- **The pushed return compares the whole href.** If the `session` query changes
-  while the reader is on the child page, the next pushed `←` is not recognised
-  as a return. A `←` that goes up is not affected: it finds the parent's entry
-  by page, not by href.
 
 #### The history trail is not the scroll memory
 
@@ -488,10 +483,16 @@ can never be arrived at. That is why
 `router.tsx` creates the browser history itself and starts the trail before
 `createRouter({ history })`: the router reads the location as it is created.
 
-The scroll memory keeps a pointer of its own per entry — the page the reader
-came down from — and not a copy of the trail: a push taken as a return stands
-in for the page it returned to, so what is under it is what was under that
-page, which is no record of the history.
+Before the trail, `router.tsx` wraps that history in the layers'
+(`layerHistoryFor`, `lib/layerHistory.ts`;
+[project-ui.md §5.2](../project-ui.md#52-back-closes-the-topmost-layer)): a
+push made while a sheet or a drawer holds an entry waits until the entries are
+gone back over, a replace under one keeps the entry the layer's, and a reload
+under one strips the marker from the entry the app starts on. The trail sees
+a layer's entry as any other — it has the page's href, so `←`'s walk passes it
+as a duplicate of the page — and the strip is a `replaceState` that keeps the
+entry's key, because a router replace would give it a new one and the trail
+would no longer know what is behind the page.
 
 ## Server Cache vs Store
 

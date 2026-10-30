@@ -28,6 +28,7 @@ import { useWorktreeStore } from "../../lib/worktreeStore";
 import { useWSStore } from "../../lib/wsStore";
 import type { AgentRole } from "../../types/agentRole";
 import type { PendingQuestion } from "../../types/message";
+import type { OverlayState, WorkSegment } from "../../types/overlay";
 import type {
 	Comment,
 	Work,
@@ -58,11 +59,15 @@ import WorkUsageSection from "./WorkUsageSection";
 
 interface Props {
 	workId: string;
-	onBack: () => void;
+	/** The list segment this detail was opened from, which its way up returns to. */
+	segment: WorkSegment;
+	/**
+	 * Goes up to `to`, what the work belongs to (`useGoToParent`); with nothing,
+	 * to the list, which is all the URL knows while the work has not arrived.
+	 */
+	onGoUp: (to?: OverlayState) => void;
 	onNavigateToSession: (sessionId: string, worktree: string) => void;
 	onOpenWorkDetail: (workId: string) => void;
-	onOpenScheduleDetail: (scheduleId: string) => void;
-	onOpenScheduleList: () => void;
 }
 
 /**
@@ -77,11 +82,10 @@ export default function WorkDetailOverlay(props: Props) {
 
 function WorkDetailPage({
 	workId,
-	onBack,
+	segment,
+	onGoUp,
 	onNavigateToSession,
 	onOpenWorkDetail,
-	onOpenScheduleDetail,
-	onOpenScheduleList,
 }: Props) {
 	// Children and parent come with the detail, not out of the work list: that
 	// list is the `Current` segment and holds no closed work, so a closed story
@@ -109,10 +113,12 @@ function WorkDetailPage({
 		[roles, work?.agent_role_id],
 	);
 
+	const goUpToList = () => onGoUp();
+
 	if (loading) {
 		return (
 			<div className="flex min-h-0 flex-1 flex-col">
-				<DetailHeader onBack={onBack} title={null} />
+				<DetailHeader onBack={goUpToList} title={null} />
 				<div className="flex flex-1 flex-col items-center justify-center gap-2 text-sm text-th-text-muted">
 					<Loader2 className="size-5 animate-spin" />
 					<p>Loading...</p>
@@ -126,7 +132,7 @@ function WorkDetailPage({
 			<div className="flex min-h-0 flex-1 flex-col">
 				{/* Not a skeleton: nothing is on its way that would say which kind
 				    of work this is. */}
-				<DetailHeader onBack={onBack} title="Work" />
+				<DetailHeader onBack={goUpToList} title="Work" />
 				<div className="flex flex-1 flex-col items-center justify-center gap-2 text-sm text-th-text-muted">
 					<AlertCircle className="size-5" />
 					<p>{error ?? "Item not found"}</p>
@@ -135,17 +141,13 @@ function WorkDetailPage({
 		);
 	}
 
-	const back = backTarget(work, parent, schedule, {
-		onBack,
-		onOpenWorkDetail,
-		onOpenScheduleDetail,
-		onOpenScheduleList,
-	});
+	const back = backTarget(work, parent, schedule, segment);
+	const goBack = () => onGoUp(back.to);
 
 	return (
 		<div className="flex min-h-0 flex-1 flex-col">
 			<DetailHeader
-				onBack={back.onClick}
+				onBack={goBack}
 				title={typeLabels[work.type]}
 				backLabel={back.label}
 			/>
@@ -157,7 +159,7 @@ function WorkDetailPage({
 								kind="Story"
 								icon={ListChecks}
 								label={parent.title}
-								onClick={() => onOpenWorkDetail(parent.id)}
+								onClick={goBack}
 							/>
 						)}
 						{work.type === "job" &&
@@ -166,7 +168,7 @@ function WorkDetailPage({
 									kind="Schedule"
 									icon={CalendarClock}
 									label={schedule.title}
-									onClick={() => onOpenScheduleDetail(schedule.id)}
+									onClick={goBack}
 								/>
 							) : (
 								<p className="mb-1 text-xs text-th-text-muted">
@@ -221,7 +223,7 @@ function WorkDetailPage({
 				activity={activity}
 				tasks={children}
 				onNavigateToSession={onNavigateToSession}
-				onBack={back.onClick}
+				onBack={goBack}
 			/>
 		</div>
 	);
@@ -242,29 +244,23 @@ function backTarget(
 	work: Work,
 	parent: WorkListItem | null,
 	schedule: WorkSchedule | null,
-	nav: Pick<
-		Props,
-		| "onBack"
-		| "onOpenWorkDetail"
-		| "onOpenScheduleDetail"
-		| "onOpenScheduleList"
-	>,
-): { onClick: () => void; label: string } {
+	segment: WorkSegment,
+): { to: NonNullable<OverlayState>; label: string } {
 	if (parent) {
 		return {
-			onClick: () => nav.onOpenWorkDetail(parent.id),
+			to: { type: "work-detail", workId: parent.id, segment },
 			label: "Back to parent story",
 		};
 	}
 	if (work.type === "job") {
 		return schedule
 			? {
-					onClick: () => nav.onOpenScheduleDetail(schedule.id),
+					to: { type: "schedule-detail", scheduleId: schedule.id },
 					label: "Back to schedule",
 				}
-			: { onClick: nav.onOpenScheduleList, label: "Back to schedules" };
+			: { to: { type: "schedule-list" }, label: "Back to schedules" };
 	}
-	return { onClick: nav.onBack, label: "Back to stories" };
+	return { to: { type: "work-list", segment }, label: "Back to stories" };
 }
 
 /**

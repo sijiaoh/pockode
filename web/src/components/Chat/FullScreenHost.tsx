@@ -99,15 +99,9 @@ export function FullScreenHost({ children }: { children: ReactNode }) {
 	const [registry] = useState(() => new SourceRegistry());
 	const [openKey, setOpenKey] = useState<string | null>(null);
 	const lastSourceRef = useRef<FullScreenSource | undefined>(undefined);
-	/** Run once the viewer's history entry is gone; see `useBackToClose`. */
-	const afterCloseRef = useRef<(() => void) | null>(null);
 
 	const open = useCallback((key: string) => setOpenKey(key), []);
 	const close = useCallback(() => setOpenKey(null), []);
-	const closeThen = useCallback((after: () => void) => {
-		afterCloseRef.current = after;
-		setOpenKey(null);
-	}, []);
 
 	const source = useSyncExternalStore(registry.subscribe, () =>
 		openKey === null ? undefined : registry.get(openKey),
@@ -170,13 +164,7 @@ export function FullScreenHost({ children }: { children: ReactNode }) {
 		<FullScreenHostContext value={value}>
 			{children}
 			{openKey !== null && shown && (
-				<FullScreenViewer
-					key={openKey}
-					source={shown}
-					onClose={close}
-					closeThen={closeThen}
-					afterCloseRef={afterCloseRef}
-				/>
+				<FullScreenViewer key={openKey} source={shown} onClose={close} />
 			)}
 		</FullScreenHostContext>
 	);

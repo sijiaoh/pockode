@@ -183,7 +183,11 @@ interface Props {
 	sidebarToggleRef?: Ref<HTMLButtonElement>;
 	onOpenSettings?: () => void;
 	overlay?: OverlayState;
-	onCloseOverlay?: () => void;
+	/**
+	 * The ← of the overlay on screen: up to its parent, or to `to` where the
+	 * page names a parent its URL cannot (`useGoToParent`).
+	 */
+	onGoUp?: (to?: OverlayState) => void;
 	onNavigateToSession?: (sessionId: string, worktree: string) => void;
 	/** Opens another session of this worktree, which a fork's parent and child both are. */
 	onSelectSession?: (sessionId: string) => void;
@@ -193,12 +197,9 @@ interface Props {
 	 * the memoized `MessageItem`.
 	 */
 	onOpenFile?: (path: string) => void;
-	onOpenWorkList?: () => void;
 	workSegment?: WorkSegment;
 	onSelectWorkSegment?: (segment: WorkSegment) => void;
-	onOpenAgentRoleList?: () => void;
 	onOpenAgentRoleDetail?: (roleId: string) => void;
-	onOpenScheduleList?: () => void;
 	onOpenScheduleDetail?: (scheduleId: string) => void;
 	/** The Git workspace's navigations; see `GitWorkspace`. */
 	onSelectGitSegment?: (segment: GitSegment) => void;
@@ -245,17 +246,14 @@ function ChatPanel({
 	sidebarToggleRef,
 	onOpenSettings,
 	overlay,
-	onCloseOverlay,
+	onGoUp,
 	onNavigateToSession,
 	onSelectSession,
 	onOpenWorkDetail,
 	onOpenFile,
-	onOpenWorkList,
 	workSegment = "current",
 	onSelectWorkSegment,
-	onOpenAgentRoleList,
 	onOpenAgentRoleDetail,
-	onOpenScheduleList,
 	onOpenScheduleDetail,
 	onSelectGitSegment,
 	onSelectDiffFile,
@@ -1340,6 +1338,9 @@ function ChatPanel({
 		);
 	};
 
+	// Takes no argument: an `onBack` may be handed straight to `onClick`, and
+	// the click's event is no `to`.
+	const goUp = () => onGoUp?.();
 	const renderOverlay = (overlay: NonNullable<OverlayState>) => {
 		switch (overlay.type) {
 			// One element for every layer, so that moving between a list and its
@@ -1367,8 +1368,9 @@ function ChatPanel({
 				);
 			case "file":
 				if (overlay.edit) {
+					// Past the view it was entered from: the editor's ← is the chat's.
 					return (
-						<FileEditor path={overlay.path} onBack={onCloseOverlay ?? noop} />
+						<FileEditor path={overlay.path} onBack={() => onGoUp?.(null)} />
 					);
 				}
 				return (
@@ -1376,17 +1378,17 @@ function ChatPanel({
 						path={overlay.path}
 						source={overlay.source}
 						line={overlay.line}
-						onBack={onCloseOverlay ?? noop}
+						onBack={goUp}
 					/>
 				);
 			case "settings":
-				return <SettingsPage onBack={onCloseOverlay ?? noop} />;
+				return <SettingsPage onBack={goUp} />;
 			case "work-list":
 				return (
 					<WorkListOverlay
 						segment={workSegment}
 						onSelectSegment={onSelectWorkSegment ?? noop}
-						onBack={onCloseOverlay ?? noop}
+						onBack={goUp}
 						onOpenWorkDetail={onOpenWorkDetail ?? noop}
 						onNavigateToSession={onNavigateToSession ?? noop}
 					/>
@@ -1395,31 +1397,25 @@ function ChatPanel({
 				return (
 					<WorkDetailOverlay
 						workId={overlay.workId}
-						onBack={onOpenWorkList ?? onCloseOverlay ?? noop}
+						segment={overlay.segment}
+						onGoUp={onGoUp ?? noop}
 						onNavigateToSession={onNavigateToSession ?? noop}
 						onOpenWorkDetail={onOpenWorkDetail ?? noop}
-						onOpenScheduleDetail={onOpenScheduleDetail ?? noop}
-						onOpenScheduleList={onOpenScheduleList ?? noop}
 					/>
 				);
 			case "agent-role-list":
 				return (
 					<AgentRoleListOverlay
-						onBack={onCloseOverlay ?? noop}
+						onBack={goUp}
 						onOpenAgentRoleDetail={onOpenAgentRoleDetail ?? noop}
 					/>
 				);
 			case "agent-role-detail":
-				return (
-					<AgentRoleDetailOverlay
-						roleId={overlay.roleId}
-						onBack={onOpenAgentRoleList ?? onCloseOverlay ?? noop}
-					/>
-				);
+				return <AgentRoleDetailOverlay roleId={overlay.roleId} onBack={goUp} />;
 			case "schedule-list":
 				return (
 					<ScheduleListOverlay
-						onBack={onCloseOverlay ?? noop}
+						onBack={goUp}
 						onOpenScheduleDetail={onOpenScheduleDetail ?? noop}
 					/>
 				);
@@ -1427,7 +1423,7 @@ function ChatPanel({
 				return (
 					<ScheduleDetailOverlay
 						scheduleId={overlay.scheduleId}
-						onBack={onOpenScheduleList ?? onCloseOverlay ?? noop}
+						onBack={goUp}
 						onOpenWorkDetail={onOpenWorkDetail ?? noop}
 						onNavigateToSession={onNavigateToSession ?? noop}
 					/>

@@ -130,16 +130,6 @@ describe("PageBody", () => {
 		await expect.poll(() => scroller.scrollTop).toBe(1200);
 	});
 
-	it("is back where it was left after the header's Back", async () => {
-		const router = renderPages();
-		scrollTo(await scrollerOf("commit"), 1200);
-		await go(router, "/diff");
-
-		await go(router, "/commit");
-		const scroller = await scrollerOf("commit");
-		await expect.poll(() => scroller.scrollTop).toBe(1200);
-	});
-
 	it("fills a page's own ref to its scroller and still restores it", async () => {
 		const router = renderPages("/own");
 		const own = await scrollerOf("own");
@@ -185,7 +175,7 @@ describe("PageBody", () => {
 		const router = renderPages("/history");
 		await go(router, "/commit");
 		scrollTo(await scrollerOf("commit"), 1200);
-		// The header's Back to the list, and the same commit opened again.
+		// The list opened again, and the same commit from it.
 		await go(router, "/history");
 		await go(router, "/commit");
 		const scroller = await scrollerOf("commit");

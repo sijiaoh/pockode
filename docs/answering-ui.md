@@ -1265,14 +1265,14 @@ not wait to be told — it **asks whether the page is covered** before it acts:
 
 - **Every overlay drawn over the page** is answered by `useIsPageCovered`
   from `@pockode/shared`, which reads one count of covering layers. Every shared
-  `Sheet` and `ConfirmDialog` is in it without asking — locking the body
-  registers a layer — so the fork sheet, a Git sheet, a sheet raised from
+  `Sheet` and `ConfirmDialog` is in it without asking — each registers itself
+  with `useCoverPage` — so the fork sheet, a Git sheet, a sheet raised from
   anywhere in the app is counted by having been written as one. The surfaces
   that only mark the press — `ResponsivePanel` (the header's session panel is
   one), the composer's `+` menu and the session drawer — take no shared lock (`ResponsivePanel` locks the body by hand, and
   only below the expanded tier; its migration is deferred in
   [cluster-ui.md](cluster-ui.md)), so each joins the count with a
-  `useCoverPage(isOpen)` of its own. They have to: each re-adds its listener
+  `useCoverPage(isOpen, { onBack })` of its own. They have to: each re-adds its listener
   when it opens, so it usually runs after `ChatPanel`'s, and its
   `preventDefault` arrives too late. `ResponsivePanel` counts in both tiers,
   since its dropdown sits between the user and the page as much as its drawer

@@ -44,6 +44,7 @@ import {
 	historyQueryOf,
 	isGitOverlay,
 	mainAreaOverlay,
+	type OverlayState,
 	type WorkSegment,
 } from "../types/overlay";
 import PasswordInput from "./Auth/PasswordInput";
@@ -58,6 +59,26 @@ const SIDEBAR_COLLAPSED_KEY = "pockode:sidebar-collapsed";
 
 function readColumnCollapsed(): boolean {
 	return localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === "true";
+}
+
+/**
+ * The route with its session corrected to `sessionId`: one that no longer
+ * exists, or none yet. Replaced, as no page was visited (docs/project-ui.md
+ * §5.1), and the page open over the chat stays — only the session under it
+ * changes, the way every overlay carries it.
+ */
+function replaceSession(
+	sessionId: string,
+	route: { overlay: OverlayState; urlWorktree: string },
+) {
+	return route.overlay
+		? overlayToNavigation(route.overlay, route.urlWorktree, sessionId, {
+				replace: true,
+			})
+		: buildNavigation(
+				{ type: "session", worktree: route.urlWorktree, sessionId },
+				{ replace: true },
+			);
 }
 
 function AppShell() {
@@ -292,18 +313,16 @@ function AppShell() {
 		hasRenderedShell.current = true;
 	}
 
-	// sessions/currentSessionId get a fresh identity on every session-store
-	// update (new message, state change over WebSocket). Read them from a ref inside
-	// handleDeleteSession so its identity stays stable and doesn't defeat the memo on
-	// every SessionItem row.
+	// sessions gets a fresh identity on every session-store update (new message,
+	// state change over WebSocket). Read it from a ref inside handleDeleteSession
+	// so its identity stays stable and doesn't defeat the memo on every
+	// SessionItem row.
 	const deleteSessionCtxRef = useRef({
 		sessions,
-		currentSessionId,
 		viewedSessionId: null as string | null,
 	});
 	deleteSessionCtxRef.current = {
 		sessions,
-		currentSessionId,
 		// The session the read-only screen is showing, which has no row in this
 		// worktree's list and so is not `currentSessionId`.
 		viewedSessionId: sessionView ? routeSessionId : null,
@@ -318,19 +337,23 @@ function AppShell() {
 		redirectSessionId !== null ||
 		needsNewSession;
 
+	// The route as it is now, for an answer that arrives after the press or the
+	// render that asked for it: the reader may have moved on meanwhile.
+	// `routeSessionId` beside `currentSessionId`: a viewed session is in the
+	// former only.
+	const routeRef = useRef({
+		overlay,
+		urlWorktree,
+		routeSessionId,
+		currentSessionId,
+	});
+	routeRef.current = { overlay, urlWorktree, routeSessionId, currentSessionId };
+
 	useEffect(() => {
 		if (worktreeSwitchInFlight) return;
 		if (sessionView) return;
 		if (redirectSessionId) {
-			// When overlay is active, preserve it and only update session query param
-			const navResult = overlay
-				? overlayToNavigation(overlay, urlWorktree, redirectSessionId)
-				: buildNavigation({
-						type: "session",
-						worktree: urlWorktree,
-						sessionId: redirectSessionId,
-					});
-			navigate({ ...navResult, replace: true });
+			navigate(replaceSession(redirectSessionId, { overlay, urlWorktree }));
 		}
 	}, [
 		worktreeSwitchInFlight,
@@ -384,18 +407,19 @@ function AppShell() {
 		if (sessionView) return;
 		if (createError) return;
 		if (needsNewSession) {
+			const asked = routeRef.current;
 			createSession()
 				.then((newSession) => {
-					navigate(
-						buildNavigation(
-							{
-								type: "session",
-								worktree: urlWorktree,
-								sessionId: newSession.id,
-							},
-							{ replace: true },
-						),
-					);
+					// Only onto the route that had no session: a reader who opened
+					// another session or worktree meanwhile keeps the page they chose.
+					const now = routeRef.current;
+					if (
+						now.urlWorktree !== asked.urlWorktree ||
+						now.routeSessionId !== asked.routeSessionId
+					) {
+						return;
+					}
+					navigate(replaceSession(newSession.id, now));
 				})
 				.catch((error) => {
 					// Reported through createError below; logged for the console trail.
@@ -409,7 +433,6 @@ function AppShell() {
 		createError,
 		createSession,
 		navigate,
-		urlWorktree,
 	]);
 
 	const handlePasswordSubmit = (password: string) => {
@@ -553,8 +576,7 @@ function AppShell() {
 
 	const handleDeleteSession = useCallback(
 		async (id: string, worktree: string | null) => {
-			const { sessions, currentSessionId, viewedSessionId } =
-				deleteSessionCtxRef.current;
+			const { sessions } = deleteSessionCtxRef.current;
 
 			// A row of another worktree — or of one that is gone — is deleted by
 			// name rather than through the connection's own worktree, and nothing
@@ -562,13 +584,13 @@ function AppShell() {
 			if (worktree !== null) {
 				await wsActions.sessionViewDelete(worktree, id);
 				invalidateSessionViewQueries(queryClient);
-				if (viewedSessionId === id) {
-					// The screen is reading the conversation that just went. There is
-					// no neighbour to fall back to — this worktree's list is not the
-					// list the row came from.
+				// Only while the screen is still reading the conversation that just
+				// went. There is no neighbour to fall back to — this worktree's list
+				// is not the list the row came from.
+				if (deleteSessionCtxRef.current.viewedSessionId === id) {
 					navigate(
 						buildNavigation(
-							{ type: "home", worktree: urlWorktree },
+							{ type: "home", worktree: routeRef.current.urlWorktree },
 							{ replace: true },
 						),
 					);
@@ -576,25 +598,19 @@ function AppShell() {
 				return;
 			}
 
-			const isCurrentSession = id === currentSessionId;
 			const remaining = sessions.filter((s) => s.id !== id);
 
 			await deleteSession(id);
 
-			if (isCurrentSession && remaining.length > 0) {
-				navigate(
-					buildNavigation(
-						{
-							type: "session",
-							worktree: urlWorktree,
-							sessionId: remaining[0].id,
-						},
-						{ replace: true },
-					),
-				);
+			// Replaced, not pushed: the session is gone and Back to it would be a
+			// dead end. A page open over it stays (`replaceSession`), and a reader
+			// who moved on before the delete answered is not moved.
+			const now = routeRef.current;
+			if (now.currentSessionId === id && remaining.length > 0) {
+				navigate(replaceSession(remaining[0].id, now));
 			}
 		},
-		[deleteSession, navigate, urlWorktree, queryClient],
+		[deleteSession, navigate, queryClient],
 	);
 
 	/**
@@ -685,20 +701,6 @@ function AppShell() {
 		[navigate, overlay, urlWorktree, currentSessionId],
 	);
 
-	const handleCloseOverlay = useCallback(() => {
-		if (currentSessionId) {
-			navigate(
-				buildNavigation({
-					type: "session",
-					worktree: urlWorktree,
-					sessionId: currentSessionId,
-				}),
-			);
-		} else {
-			navigate(buildNavigation({ type: "home", worktree: urlWorktree }));
-		}
-	}, [navigate, urlWorktree, currentSessionId]);
-
 	/**
 	 * A segment of the Git workspace, at its list: a press on the segment
 	 * control or on one of the sidebar's Git entries — an entrance that always
@@ -747,6 +749,25 @@ function AppShell() {
 		[navigate, urlWorktree, currentSessionId],
 	);
 
+	const goToParent = useGoToParent();
+
+	/**
+	 * The ← of the page over the chat: up to its parent, or to `to` where the
+	 * page knows better than its URL (`useGoToParent`). From the page on screen
+	 * when this was rendered, not when it is called: a delete answering after
+	 * the reader moved on moves nobody.
+	 */
+	const handleGoUp = useCallback(
+		(to?: OverlayState) => {
+			if (overlay) goToParent({ worktree: urlWorktree, overlay }, to);
+		},
+		[goToParent, overlay, urlWorktree],
+	);
+
+	// The open file deleted from the tree, or a folder holding it: its view
+	// and its editor alike are gone, and both go up to the chat.
+	const handleCloseFile = useCallback(() => handleGoUp(null), [handleGoUp]);
+
 	/**
 	 * Moves the review of `path` in `worktree`, just discarded from the list,
 	 * on to `next`, or to the Changes list when nothing follows. Either side:
@@ -762,10 +783,6 @@ function AppShell() {
 	 * replaced under them. Read from a ref for the same reason: the route the
 	 * caller saw is the one it pressed in, not the one now.
 	 */
-	const goToParent = useGoToParent();
-	const routeRef = useRef({ overlay, urlWorktree, currentSessionId });
-	routeRef.current = { overlay, urlWorktree, currentSessionId };
-
 	const handleCloseGitFile = useCallback(
 		(
 			path: string,
@@ -945,20 +962,11 @@ function AppShell() {
 		);
 	}, [navigate, urlWorktree, currentSessionId]);
 
-	// Back out of a work detail, which is a return rather than an entrance: it
-	// goes to the segment the reader opened the work from.
-	const handleBackToWorkList = useCallback(() => {
-		navigate(
-			overlayToNavigation(
-				{ type: "work-list", segment: workSegment },
-				urlWorktree,
-				currentSessionId,
-			),
-		);
-	}, [navigate, urlWorktree, currentSessionId, workSegment]);
-
+	// Pushed, so Back walks the segments (docs/project-ui.md §5); the segment
+	// already on screen is no step.
 	const handleSelectWorkSegment = useCallback(
 		(segment: WorkSegment) => {
+			if (overlay?.type === "work-list" && overlay.segment === segment) return;
 			navigate(
 				overlayToNavigation(
 					{ type: "work-list", segment },
@@ -967,7 +975,7 @@ function AppShell() {
 				),
 			);
 		},
-		[navigate, urlWorktree, currentSessionId],
+		[navigate, overlay, urlWorktree, currentSessionId],
 	);
 
 	const handleOpenWorkDetail = useCallback(
@@ -1222,7 +1230,7 @@ function AppShell() {
 							activeFilePath={activeFilePath}
 							activeFileEdit={activeFileEdit}
 							onRepointFile={handleRepointFile}
-							onCloseFile={handleCloseOverlay}
+							onCloseFile={handleCloseFile}
 							onOpenWorkList={handleOpenWorkList}
 							onOpenScheduleList={handleOpenScheduleList}
 							onOpenAgentRoleList={handleOpenAgentRoleList}
@@ -1253,17 +1261,14 @@ function AppShell() {
 								sidebarToggleRef={sidebarToggleRef}
 								onOpenSettings={handleOpenSettings}
 								overlay={mainAreaOverlay(overlay, isExpanded)}
-								onCloseOverlay={handleCloseOverlay}
+								onGoUp={handleGoUp}
 								onNavigateToSession={handleNavigateToSession}
 								onSelectSession={handleSelectChatSession}
 								onOpenWorkDetail={handleOpenWorkDetail}
 								onOpenFile={handleSelectFile}
-								onOpenWorkList={handleBackToWorkList}
 								workSegment={workSegment}
 								onSelectWorkSegment={handleSelectWorkSegment}
-								onOpenAgentRoleList={handleOpenAgentRoleList}
 								onOpenAgentRoleDetail={handleOpenAgentRoleDetail}
-								onOpenScheduleList={handleOpenScheduleList}
 								onOpenScheduleDetail={handleOpenScheduleDetail}
 								onSelectGitSegment={handleSelectGitSegment}
 								onSelectDiffFile={handleSelectDiffFile}

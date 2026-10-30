@@ -56,4 +56,45 @@ describe("page identity", () => {
 			...topic,
 		});
 	});
+
+	// How a file is drawn, and the line it opened at, are settings of its
+	// view; the editor is another page, entered from the view.
+	it("tells a file's editor from its view, and nothing else of it", () => {
+		expect(
+			samePage(
+				inA({ type: "file", path: "a.md" }),
+				inA({ type: "file", path: "a.md", source: true, line: 3 }),
+			),
+		).toBe(true);
+		expect(
+			samePage(
+				inA({ type: "file", path: "a.md" }),
+				inA({ type: "file", path: "a.md", edit: true }),
+			),
+		).toBe(false);
+		expect(parentOf({ type: "file", path: "a.md", edit: true })).toEqual({
+			type: "file",
+			path: "a.md",
+		});
+		expect(parentOf({ type: "file", path: "a.md", line: 3 })).toBeNull();
+	});
+
+	// The segment a work detail carries is where its way up returns, not
+	// which work it is.
+	it("puts a work detail under the segment it carries", () => {
+		const work = inA({ type: "work-detail", workId: "w", segment: "closed" });
+		expect(
+			samePage(
+				work,
+				inA({ type: "work-detail", workId: "w", segment: "current" }),
+			),
+		).toBe(true);
+		expect(isUnder(work, inA({ type: "work-list", segment: "closed" }))).toBe(
+			true,
+		);
+		expect(isUnder(work, inA({ type: "work-list", segment: "current" }))).toBe(
+			false,
+		);
+		expect(isUnder(work, inA(null))).toBe(true);
+	});
 });

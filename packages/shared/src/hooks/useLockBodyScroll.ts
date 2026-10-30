@@ -1,5 +1,4 @@
 import { useEffect } from "react";
-import { useCoverPage } from "./usePageCover.ts";
 
 let openOverlays = 0;
 let overflowBeforeFirstOverlay = "";
@@ -22,11 +21,11 @@ let overflowBeforeFirstOverlay = "";
  * hand is not merely inconsistent — it is the second writer that makes the
  * count wrong.
  *
- * Whatever locks the page is drawn over it, so this also counts as covering
- * it (`useCoverPage`).
+ * It does not register a layer: whatever locks the page is drawn over it, but
+ * only the overlay knows what Back should do to it, so `Sheet` and
+ * `ConfirmDialog` call `useCoverPage` themselves.
  */
 export function useLockBodyScroll(): void {
-	useCoverPage(true);
 	useEffect(() => {
 		if (openOverlays === 0) {
 			overflowBeforeFirstOverlay = document.body.style.overflow;

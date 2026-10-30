@@ -290,8 +290,6 @@ function InputBar({
 		setMenu("closed");
 	}, [sessionId, disabled]);
 
-	useCoverPage(isMenuOpen);
-
 	// For a control that is about to leave the screen with focus on it — a
 	// menu row, Send giving way to Stop. Focus goes to the draft, except where
 	// that would raise an on-screen keyboard nobody asked for: the autofocus
@@ -314,6 +312,8 @@ function InputBar({
 		setMenu("closed");
 		returnFocusToDraft(fromKeyboard);
 	}, [menu, returnFocusToDraft]);
+
+	useCoverPage(isMenuOpen, { onBack: closeMenu });
 
 	const handleMenuTabOut = useCallback((backward: boolean) => {
 		setMenu("closed");

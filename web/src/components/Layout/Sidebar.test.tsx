@@ -1,6 +1,15 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { LayerHistoryContext } from "@pockode/shared";
+import { createMemoryHistory } from "@tanstack/react-router";
+import {
+	act,
+	fireEvent,
+	render,
+	screen,
+	waitFor,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { layerHistoryFor } from "../../lib/layerHistory";
 import Sidebar from "./Sidebar";
 
 // Stands in for the answer panel, which listens on `window` precisely so that
@@ -34,6 +43,46 @@ describe("Sidebar", () => {
 
 		expect(onClose).toHaveBeenCalledTimes(1);
 		expect(unhandled).toBe(0);
+	});
+
+	// Material's navigation drawer: the back gesture puts it away before it
+	// ever leaves the page (docs/project-ui.md §5.2).
+	it("closes the drawer on Back, leaving the page", async () => {
+		const history = createMemoryHistory({ initialEntries: ["/a", "/b"] });
+		const onClose = vi.fn();
+		render(
+			<LayerHistoryContext value={layerHistoryFor(history)}>
+				<Sidebar isOpen onClose={onClose} isExpanded={false}>
+					<p>sessions</p>
+				</Sidebar>
+			</LayerHistoryContext>,
+		);
+		await waitFor(() => expect(history.location.state.__TSR_index).toBe(2));
+
+		act(() => history.back());
+
+		expect(onClose).toHaveBeenCalledOnce();
+		expect(history.location.pathname).toBe("/b");
+	});
+
+	// The drawer becomes the column, which is part of the page: its entry goes,
+	// and no resize ever raises one.
+	it("takes the drawer's entry back as it becomes the column", async () => {
+		const history = createMemoryHistory({ initialEntries: ["/a", "/b"] });
+		const sidebar = (expanded: boolean) => (
+			<LayerHistoryContext value={layerHistoryFor(history)}>
+				<Sidebar isOpen onClose={() => {}} isExpanded={expanded}>
+					<p>sessions</p>
+				</Sidebar>
+			</LayerHistoryContext>
+		);
+		const { rerender } = render(sidebar(false));
+		await waitFor(() => expect(history.location.state.__TSR_index).toBe(2));
+
+		rerender(sidebar(true));
+
+		await waitFor(() => expect(history.location.state.__TSR_index).toBe(1));
+		expect(history.location.pathname).toBe("/b");
 	});
 
 	// Closed, it is a drawer nobody can see: the key belongs to whatever is on

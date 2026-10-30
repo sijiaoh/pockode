@@ -48,9 +48,7 @@ vi.mock("./Chat", () => ({
 		workSegment,
 		onSelectWorkSegment,
 		onOpenWorkDetail,
-		onOpenWorkList,
 		onNavigateToSession,
-		onOpenScheduleList,
 		onOpenScheduleDetail,
 		onSelectGitSegment,
 		onSelectDiffFile,
@@ -58,7 +56,7 @@ vi.mock("./Chat", () => ({
 		onSelectCommit,
 		onRepointBranch,
 		onCloseGitFile,
-		onCloseOverlay,
+		onGoUp,
 		onOpenReview,
 		onReviewRowCanShowChange,
 		overlay,
@@ -72,9 +70,7 @@ vi.mock("./Chat", () => ({
 		workSegment?: string;
 		onSelectWorkSegment?: (segment: "current" | "closed") => void;
 		onOpenWorkDetail?: (workId: string) => void;
-		onOpenWorkList?: () => void;
 		onNavigateToSession?: (sessionId: string, worktree: string) => void;
-		onOpenScheduleList?: () => void;
 		onOpenScheduleDetail?: (scheduleId: string) => void;
 		onSelectGitSegment?: (segment: "changes" | "history" | "branches") => void;
 		onSelectDiffFile?: (path: string, staged: boolean) => void;
@@ -90,7 +86,7 @@ vi.mock("./Chat", () => ({
 			worktree: string,
 			next: { path: string; staged: boolean } | null,
 		) => void;
-		onCloseOverlay?: () => void;
+		onGoUp?: (to?: { type: string; workId?: string; segment?: string }) => void;
 		onOpenReview?: () => void;
 		onReviewRowCanShowChange?: (canShow: boolean) => void;
 		overlay?: {
@@ -159,13 +155,21 @@ vi.mock("./Chat", () => ({
 			<button type="button" onClick={() => onOpenWorkDetail?.("w1")}>
 				Open w1
 			</button>
-			<button type="button" onClick={() => onOpenWorkList?.()}>
+			<button type="button" onClick={() => onGoUp?.()}>
 				Back to list
+			</button>
+			<button
+				type="button"
+				onClick={() =>
+					onGoUp?.({ type: "work-detail", workId: "w0", segment: "current" })
+				}
+			>
+				Back to story w0
 			</button>
 			<button type="button" onClick={() => onOpenScheduleDetail?.("s1")}>
 				Open s1
 			</button>
-			<button type="button" onClick={() => onOpenScheduleList?.()}>
+			<button type="button" onClick={() => onGoUp?.()}>
 				Back to schedules
 			</button>
 			<button type="button" onClick={() => onSelectGitSegment?.("changes")}>
@@ -240,7 +244,7 @@ vi.mock("./Chat", () => ({
 			>
 				Deleted topic
 			</button>
-			<button type="button" onClick={() => onCloseOverlay?.()}>
+			<button type="button" onClick={() => onGoUp?.()}>
 				Leave the page
 			</button>
 			<button type="button" onClick={() => onOpenReview?.()}>
@@ -316,6 +320,12 @@ vi.mock("./Session", () => ({
 				onClick={() => onDeleteSession("gone-session", "old-fix")}
 			>
 				Delete a deleted worktree's row
+			</button>
+			<button
+				type="button"
+				onClick={() => onDeleteSession(currentSessionId ?? "", null)}
+			>
+				Delete the open session
 			</button>
 			<button type="button" onClick={() => onSelectFile("docs/a.md")}>
 				Pick docs/a.md
@@ -433,6 +443,7 @@ vi.mock("../lib/wsStore", async (importOriginal) => ({
 		}),
 	wsActions: {
 		createSession: vi.fn(),
+		deleteSession: vi.fn(async () => {}),
 		disconnect: vi.fn(),
 		sessionViewDelete: vi.fn(async () => {}),
 	},
@@ -1703,10 +1714,18 @@ describe("AppShell work list segment", () => {
 	});
 
 	// The list unmounts on the way into a work, so without carrying the segment
-	// the trip out would hand an archive reader back to `Current`.
+	// the trip out would hand an archive reader back to `Current`. And it goes
+	// up, back to the list's own entry: Back from there is the chat, not the
+	// work just left (docs/project-ui.md §5.1).
 	it("returns to the segment a work was opened from", async () => {
 		const user = userEvent.setup();
-		const router = renderAppShell("/w/A/works?segment=closed");
+		const router = renderAppShell("/w/A/s/a1");
+		await waitFor(() =>
+			expect(screen.getByTestId("chat-panel")).toHaveTextContent("a1"),
+		);
+		await user.click(screen.getByRole("button", { name: "Stories" }));
+		await waitFor(() => expect(segmentOnScreen()).toBe("current"));
+		await user.click(screen.getByRole("button", { name: "Show Closed" }));
 
 		await waitFor(() => expect(segmentOnScreen()).toBe("closed"));
 		await user.click(screen.getByRole("button", { name: "Open w1" }));
@@ -1722,6 +1741,74 @@ describe("AppShell work list segment", () => {
 			expect(router.state.location.pathname).toBe("/w/A/works"),
 		);
 		expect(segmentInUrl(router)).toBe("closed");
+
+		// Back walks the segments, then leaves for the chat.
+		router.history.back();
+		await waitFor(() => expect(segmentOnScreen()).toBe("current"));
+		router.history.back();
+		await waitFor(() =>
+			expect(router.state.location.pathname).toBe("/w/A/s/a1"),
+		);
+	});
+
+	it("adds no step for the segment already on screen", async () => {
+		const user = userEvent.setup();
+		const router = renderAppShell("/w/A/s/a1");
+		await waitFor(() =>
+			expect(screen.getByTestId("chat-panel")).toHaveTextContent("a1"),
+		);
+		await user.click(screen.getByRole("button", { name: "Stories" }));
+		await waitFor(() => expect(segmentOnScreen()).toBe("current"));
+		await user.click(screen.getByRole("button", { name: "Show Closed" }));
+		await waitFor(() => expect(segmentOnScreen()).toBe("closed"));
+		await user.click(screen.getByRole("button", { name: "Show Closed" }));
+
+		router.history.back();
+		await waitFor(() => expect(segmentOnScreen()).toBe("current"));
+	});
+
+	// A task's parent is its story, which only the work's data says: a story
+	// behind is gone back to, and one that is not takes the task's place.
+	it("goes up from a task to its story, whether or not the story is behind", async () => {
+		const user = userEvent.setup();
+		const router = renderAppShell("/w/A/works/w0");
+		await waitFor(() =>
+			expect(screen.getByTestId("chat-panel")).toHaveAttribute(
+				"data-overlay",
+				"work-detail",
+			),
+		);
+		await user.click(screen.getByRole("button", { name: "Open w1" }));
+		await waitFor(() =>
+			expect(router.state.location.pathname).toBe("/w/A/works/w1"),
+		);
+
+		await user.click(screen.getByRole("button", { name: "Back to story w0" }));
+		await waitFor(() =>
+			expect(router.state.location.pathname).toBe("/w/A/works/w0"),
+		);
+		// Gone back to, not pushed: nothing is in front of the story.
+		await act(() => router.history.forward());
+		await waitFor(() =>
+			expect(router.state.location.pathname).toBe("/w/A/works/w1"),
+		);
+
+		// With no story right behind — another page between, as a link leaves
+		// it — the story is put in the task's place.
+		await act(() =>
+			router.navigate({
+				to: "/w/$worktree/works/$workId",
+				params: { worktree: "A", workId: "w1" },
+			}),
+		);
+		await user.click(screen.getByRole("button", { name: "Back to story w0" }));
+		await waitFor(() =>
+			expect(router.state.location.pathname).toBe("/w/A/works/w0"),
+		);
+		router.history.back();
+		await waitFor(() =>
+			expect(router.state.location.pathname).toBe("/w/A/works/w1"),
+		);
 	});
 });
 
@@ -1783,6 +1870,11 @@ describe("AppShell schedule routes", () => {
 		await user.click(screen.getByRole("button", { name: "Back to schedules" }));
 		await waitFor(() =>
 			expect(router.state.location.pathname).toBe("/w/A/schedules"),
+		);
+		// Up to the list's own entry: Back from it is the chat, not the schedule.
+		router.history.back();
+		await waitFor(() =>
+			expect(router.state.location.pathname).toBe("/w/A/s/a1"),
 		);
 	});
 });
@@ -1998,5 +2090,136 @@ describe("AppShell reading a session of another worktree", () => {
 				kind: "current",
 			}),
 		);
+	});
+});
+
+// A session corrected under a page — none yet, or one just deleted — is no
+// page the user moved to: the route's session is replaced, and whatever is
+// open over the chat stays open (docs/project-ui.md §5.1).
+describe("AppShell correcting the session under a page", () => {
+	let unsubscribeSwitch: (() => void) | null = null;
+
+	beforeEach(() => {
+		vi.clearAllMocks();
+		resetWorktreeStore();
+		useSessionDetailStore.getState().clear();
+		useSessionStore.setState({
+			sessions: [],
+			isLoading: true,
+			isSuccess: false,
+			// B's list then holds both its sessions, so deleting one leaves the
+			// other to fall back to.
+			showTaskSessions: true,
+		});
+		useWorkStore.setState({ works: [] });
+		useAuthStore.setState({ sessionToken: "test-session-token" });
+		unsubscribeSwitch = worktreeActions.onWorktreeChange(() => {
+			worktreeActions.notifyWorktreeSwitchEnd();
+		});
+	});
+
+	afterEach(() => {
+		unsubscribeSwitch?.();
+		unsubscribeSwitch = null;
+		useSessionStore.setState({ showTaskSessions: false });
+	});
+
+	const panel = () => screen.getByTestId("chat-panel");
+	const search = (router: ReturnType<typeof renderAppShell>) =>
+		router.state.location.search as { segment?: string; session?: string };
+
+	// A switch made from the Git workspace stays in it — also into a worktree
+	// whose first session is still being made, as a just-created one's is.
+	it("keeps the Git workspace through the first session of a worktree switched to", async () => {
+		vi.mocked(wsActions.createSession).mockResolvedValueOnce(session("fresh"));
+		const router = renderAppShell("/w/A/git?segment=history");
+		await waitFor(() => expect(search(router).session).toBe("a1"));
+
+		await router.navigate({ to: "/git", search: { segment: "history" } });
+
+		await waitFor(() => expect(search(router).session).toBe("fresh"));
+		expect(router.state.location.pathname).toBe("/git");
+		expect(search(router).segment).toBe("history");
+
+		// The switch is the one step: the session was written into it.
+		router.history.back();
+		await waitFor(() =>
+			expect(router.state.location.pathname).toBe("/w/A/git"),
+		);
+		expect(search(router).session).toBe("a1");
+	});
+
+	// The create answers after the render that asked: a session opened
+	// meanwhile — here one read from a deleted worktree, which leaves the
+	// worktree in the path as it was — is the reader's, not the create's.
+	it("leaves alone a session opened before the first session was made", async () => {
+		let answer = (_: ReturnType<typeof session>) => {};
+		vi.mocked(wsActions.createSession).mockImplementationOnce(
+			() =>
+				new Promise((resolve) => {
+					answer = resolve;
+				}),
+		);
+		const router = renderAppShell("/");
+		await waitFor(() => expect(wsActions.createSession).toHaveBeenCalled());
+
+		await router.navigate({
+			to: "/s/$sessionId",
+			params: { sessionId: "gone-session" },
+			search: { from: "old-fix" },
+		});
+		await waitFor(() =>
+			expect(panel()).toHaveAttribute("data-view-worktree", "old-fix"),
+		);
+		await act(async () => answer(session("fresh")));
+
+		expect(router.state.location.pathname).toBe("/s/gone-session");
+		expect(panel()).toHaveAttribute("data-view-worktree", "old-fix");
+	});
+
+	it("keeps the page open over a deleted session, and adds no step", async () => {
+		const user = userEvent.setup();
+		const router = renderAppShell("/w/B/s/b1");
+		await waitFor(() => expect(panel()).toHaveTextContent("b1"));
+		await user.click(screen.getByRole("button", { name: "Git Changes" }));
+		await waitFor(() =>
+			expect(router.state.location.pathname).toBe("/w/B/git"),
+		);
+		const length = router.history.length;
+
+		await user.click(
+			screen.getByRole("button", { name: "Delete the open session" }),
+		);
+
+		await waitFor(() => expect(search(router).session).toBe("x"));
+		expect(router.state.location.pathname).toBe("/w/B/git");
+		expect(router.history.length).toBe(length);
+	});
+
+	// The delete answers after the press: a reader who has gone to another
+	// worktree meanwhile must not be pulled back into the one they left.
+	it("leaves alone a worktree the reader moved to before the delete answered", async () => {
+		let answer = () => {};
+		vi.mocked(wsActions.deleteSession).mockImplementationOnce(
+			() =>
+				new Promise<void>((resolve) => {
+					answer = resolve;
+				}),
+		);
+		const user = userEvent.setup();
+		const router = renderAppShell("/w/B/s/b1");
+		await waitFor(() => expect(panel()).toHaveTextContent("b1"));
+
+		await user.click(
+			screen.getByRole("button", { name: "Delete the open session" }),
+		);
+		await router.navigate({
+			to: "/w/$worktree/s/$sessionId",
+			params: { worktree: "A", sessionId: "a1" },
+		});
+		await waitFor(() => expect(panel()).toHaveTextContent("a1"));
+		await act(async () => answer());
+
+		expect(router.state.location.pathname).toBe("/w/A/s/a1");
 	});
 });

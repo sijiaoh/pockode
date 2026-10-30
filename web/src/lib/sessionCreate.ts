@@ -24,10 +24,14 @@ export function createSession(): Promise<SessionListItem> {
 		session: wsActions.createSession().then((session) => {
 			// Added before the subscription reports it, so a route pushed to the
 			// new id does not find it missing and redirect away. The
-			// notification deduplicates.
-			useSessionStore
-				.getState()
-				.updateSessions((old) => prependSession(old, session));
+			// notification deduplicates. Not once the connection has switched:
+			// the list is the next worktree's then, and the shell would redirect
+			// its route to its first row — this session, which it does not have.
+			if (useWorktreeStore.getState().current === worktree) {
+				useSessionStore
+					.getState()
+					.updateSessions((old) => prependSession(old, session));
+			}
 			return session;
 		}),
 	};

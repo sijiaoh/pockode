@@ -1,6 +1,6 @@
 import { ConfirmDialog } from "@pockode/shared";
 import { useQueryClient } from "@tanstack/react-query";
-import { useNavigate } from "@tanstack/react-router";
+import { useNavigate, useRouter } from "@tanstack/react-router";
 import {
 	Code,
 	History,
@@ -55,6 +55,7 @@ interface Props {
 function FileView({ path, source = false, line, onBack }: Props) {
 	const queryClient = useQueryClient();
 	const navigate = useNavigate();
+	const router = useRouter();
 	const worktree = useCurrentWorktree();
 	const { sessionId } = useRouteState();
 	const { data, isLoading, error } = useContents(path);
@@ -146,6 +147,7 @@ function FileView({ path, source = false, line, onBack }: Props) {
 		async (name: string) => {
 			const dir = parentDir(path);
 			const newPath = dir ? `${dir}/${name}` : name;
+			const pressedAt = router.state.location.href;
 
 			setIsRenaming(true);
 			setRenameError(null);
@@ -169,6 +171,9 @@ function FileView({ path, source = false, line, onBack }: Props) {
 
 			setShowRename(false);
 			applyEntryGone(queryClient, path);
+			// A reader who left meanwhile — a traversal of several steps passes a
+			// sheet that refuses Back — keeps the page they went to.
+			if (router.state.location.href !== pressedAt) return;
 			// Followed to the new path rather than closed: the file is still there,
 			// and the user is still reading it. Replaced rather than pushed —
 			// nobody navigated, and the entry left behind would only send Back to
@@ -195,6 +200,7 @@ function FileView({ path, source = false, line, onBack }: Props) {
 			path,
 			queryClient,
 			navigate,
+			router,
 			worktree,
 			sessionId,
 			hasSourceToggle,

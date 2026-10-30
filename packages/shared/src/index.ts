@@ -12,6 +12,8 @@ export {
 	useIsInSheet,
 } from "./components/index.ts";
 export {
+	type CoverPageBack,
+	LayerHistoryContext,
 	useCoverPage,
 	useHasCoarsePointer,
 	useHasFinePointer,
@@ -33,8 +35,12 @@ export {
 	authFailureReason,
 	authRetryAfterMs,
 	BREAKPOINTS,
+	createLayerHistory,
 	credentialParams,
 	getWebSocketUrl,
 	hasCoarsePointer,
+	type LayerBack,
+	type LayerEntries,
+	type LayerHistory,
 	MEDIA_QUERIES,
 } from "./utils/index.ts";

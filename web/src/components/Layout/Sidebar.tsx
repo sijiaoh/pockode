@@ -46,11 +46,12 @@ function Sidebar({ isOpen, onClose, children, isExpanded }: Props) {
 		return () => document.removeEventListener("keydown", handleKeyDown);
 	}, [isOpen, onClose, isExpanded]);
 
-	// Only the drawer covers the page; the expanded tier's column is part of it.
-	// Covering is what keeps the chat's interrupt off the press that closes the
-	// drawer: it is a sibling `document` listener, and if it was registered
-	// first it runs before the mark above is made.
-	useCoverPage(isOpen && !isExpanded);
+	// Only the drawer covers the page, and only it is closed by Back; the
+	// expanded tier's column is part of the page. Covering is what keeps the
+	// chat's interrupt off the press that closes the drawer: it is a sibling
+	// `document` listener, and if it was registered first it runs before the
+	// mark above is made.
+	useCoverPage(isOpen && !isExpanded, { onBack: onClose });
 
 	// Focus goes to the panel rather than to its first control, as a `Sheet`'s
 	// does to the sheet: landing inside the dialog reads its name, and the first
