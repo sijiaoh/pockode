@@ -6,7 +6,7 @@ import {
 	isImageMime,
 } from "../../utils/fileView";
 import { splitPath } from "../../utils/path";
-import { FileContentDisplay, FileStateCard } from "../ui";
+import { FileContentDisplay, FileStateCard, rendersMarkdown } from "../ui";
 import ImagePreview from "./ImagePreview";
 import MediaPreview from "./MediaPreview";
 import PagePreview from "./PagePreview";
@@ -42,6 +42,11 @@ interface Props {
 	 * decodes — an agent's content block reports it. See `ImagePreview`.
 	 */
 	imageDimensions?: { width: number; height: number };
+	/**
+	 * Number the lines of text, full-bleed. For a whole file being read; the
+	 * source of a page or of Markdown gets them, the rendering does not.
+	 */
+	lineNumbers?: boolean;
 	/** Offered by a rendered `.md` file's images; takes a work-directory-relative path. */
 	onOpenFile?: (path: string) => void;
 }
@@ -69,6 +74,7 @@ function FileBody({
 	plain,
 	readOnly,
 	imageDimensions,
+	lineNumbers,
 	onOpenFile,
 }: Props) {
 	switch (state.kind) {
@@ -83,22 +89,26 @@ function FileBody({
 				/>
 			);
 
-		case "text":
+		case "text": {
+			const textPlain = !state.highlight || plain;
+			const numbered = lineNumbers && !rendersMarkdown(path, textPlain);
 			return (
 				<>
 					{/* Only the forced case is worth a banner: when the reader asked
 					    for plain text themselves, saying so back is noise. */}
 					{!state.highlight && <PlainTextNotice />}
-					<div className="p-2">
+					<div className={numbered ? undefined : "p-2"}>
 						<FileContentDisplay
 							content={state.content}
 							filePath={path}
-							plain={!state.highlight || plain}
+							plain={textPlain}
+							lineNumbers={numbered}
 							onOpenFile={onOpenFile}
 						/>
 					</div>
 				</>
 			);
+		}
 
 		case "page":
 			return plain ? (
@@ -107,6 +117,7 @@ function FileBody({
 					path={path}
 					downloadAction={downloadAction}
 					readOnly={readOnly}
+					lineNumbers={lineNumbers}
 				/>
 			) : (
 				<PagePreview

@@ -1222,15 +1222,22 @@ samp {
 	scale: 0.9;
 }
 
-.code-block {
-	margin: 0;
-	padding: 0.75rem 1rem;
-	border-radius: 0.375rem;
-	background-color: var(--th-code-bg);
-	color: var(--shiki-foreground);
+/* One rule for the code and the numbers beside it: a gutter whose font or
+ * line-height differs by a hair drifts off its rows thousands of lines down. */
+.code-block,
+.code-gutter {
+	--code-padding-y: 0.75rem;
 	font-family: var(--font-mono);
 	font-size: var(--code-font-size, 12px);
 	line-height: 1.6;
+}
+
+.code-block {
+	margin: 0;
+	padding: var(--code-padding-y) 1rem;
+	border-radius: 0.375rem;
+	background-color: var(--th-code-bg);
+	color: var(--shiki-foreground);
 	min-width: fit-content;
 	overflow-x: visible;
 	overflow-y: visible;
@@ -1290,6 +1297,56 @@ samp {
 	display: inline-block;
 	max-width: 100%;
 	text-indent: 0;
+}
+
+/* A numbered file (`CodeHighlighter lineNumbers`): a gutter column beside the
+ * untouched <pre>, both scrolled by the page body. The gutter is sticky within
+ * it, so code scrolls sideways under the hairline like a frozen column, and the
+ * horizontal scrollbar stays at the viewport rather than at the end of a long
+ * file. The numbers are generated content, one block per 1000 rows
+ * (`LineGutter` in lib/shikiUtils.tsx), so no copy or find picks them up. Its
+ * vertical padding is the <pre>'s (`--code-padding-y`), so row 1 lines up; row
+ * geometry is read back by lib/codeRows.ts. Full-bleed: a file is a page, not
+ * a card. */
+.code-lines {
+	display: flex;
+	min-width: fit-content;
+	/* Keeps the gutter's z-index among the block's own layers. */
+	isolation: isolate;
+	background-color: var(--th-code-bg);
+}
+
+.code-gutter {
+	position: sticky;
+	left: 0;
+	/* Over the code scrolling under it, under .code-copy-button. */
+	z-index: 1;
+	flex: none;
+	box-sizing: content-box;
+	width: calc(var(--line-digits) * 1ch);
+	padding: var(--code-padding-y) 0.5rem;
+	white-space: pre;
+	text-align: right;
+	color: var(--th-text-muted);
+	background-color: var(--th-code-bg);
+	box-shadow: inset -1px 0 var(--th-border);
+	user-select: none;
+	-webkit-user-select: none;
+}
+
+.code-gutter > span {
+	display: block;
+}
+
+.code-gutter > span::before {
+	content: attr(data-numbers);
+}
+
+.code-block--numbered {
+	flex: 1;
+	padding-left: 0.5rem;
+	border-radius: 0;
+	background: transparent;
 }
 
 /* In a tool call's body a code block draws no box of its own: the body is

@@ -152,6 +152,7 @@ function CommitFileView({ hash, path, actionsAt = "bottom" }: Props) {
 						path={path}
 						plain={plain}
 						readOnly
+						lineNumbers
 						onOpenFile={openFile}
 						downloadAction={{ label: download.label, onClick: download.toggle }}
 					/>

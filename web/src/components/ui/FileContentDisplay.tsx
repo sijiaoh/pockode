@@ -22,6 +22,8 @@ interface Props {
 	plain?: boolean;
 	/** See `CodeHighlighter`. */
 	copyable?: boolean;
+	/** See `CodeHighlighter`; a rendered `.md` file has no lines to number. */
+	lineNumbers?: boolean;
 	/** Offered by a rendered `.md` file's images; takes a work-directory-relative path. */
 	onOpenFile?: (path: string) => void;
 }
@@ -31,9 +33,10 @@ export function FileContentDisplay({
 	filePath,
 	plain,
 	copyable,
+	lineNumbers = false,
 	onOpenFile,
 }: Props) {
-	if (!plain && filePath && isMarkdownFile(filePath)) {
+	if (filePath && rendersMarkdown(filePath, plain)) {
 		return (
 			<MarkdownFileContent
 				content={content}
@@ -45,10 +48,20 @@ export function FileContentDisplay({
 
 	const language = filePath ? getLanguageFromPath(filePath) : undefined;
 	return (
-		<CodeHighlighter language={language} plain={plain} copyable={copyable}>
+		<CodeHighlighter
+			language={language}
+			plain={plain}
+			copyable={copyable}
+			lineNumbers={lineNumbers}
+		>
 			{content}
 		</CodeHighlighter>
 	);
+}
+
+/** Whether `FileContentDisplay` draws the file as Markdown rather than as text. */
+export function rendersMarkdown(filePath: string, plain?: boolean): boolean {
+	return !plain && isMarkdownFile(filePath);
 }
 
 function MarkdownFileContent({
