@@ -14,6 +14,8 @@ import {
 } from "shiki";
 import { CopyButton } from "../components/ui/CopyButton";
 import { splitNativePath } from "../utils/path";
+import { NUMBERED_CODE_CLASS } from "./codeRows";
+import { fileLineCount } from "./textLines";
 
 export const CODE_FONT_SIZE_MOBILE = 12;
 export const CODE_FONT_SIZE_DESKTOP = 13;
@@ -231,11 +233,72 @@ export function WrappedPlain({
 	);
 }
 
+/**
+ * Rows per gutter block. One block holding every number made 52ms frames at
+ * 200k lines in Chromium; split this way they stay at a plain block's 19ms.
+ */
+const GUTTER_BLOCK_ROWS = 1000;
+
+/**
+ * The numbers beside a numbered block. They are generated content
+ * (`attr(data-numbers)`, index.css), which no engine selects, copies or finds,
+ * so a copied selection holds the code alone. Drawn from the text, not from
+ * shiki's lines, so it is there and final before the colours arrive.
+ */
+function LineGutter({ text }: { text: string }) {
+	const count = React.useMemo(() => fileLineCount(text), [text]);
+	const blocks = React.useMemo(() => {
+		const result: { start: number; numbers: string }[] = [];
+		for (let start = 1; start <= count; start += GUTTER_BLOCK_ROWS) {
+			const end = Math.min(start + GUTTER_BLOCK_ROWS - 1, count);
+			const numbers: number[] = [];
+			for (let n = start; n <= end; n++) numbers.push(n);
+			result.push({ start, numbers: numbers.join("\n") });
+		}
+		return result;
+	}, [count]);
+	return (
+		<div
+			className="code-gutter"
+			aria-hidden="true"
+			style={{ "--line-digits": String(count).length } as React.CSSProperties}
+		>
+			{blocks.map(({ start, numbers }) => (
+				<span key={start} data-numbers={numbers} />
+			))}
+		</div>
+	);
+}
+
+/**
+ * Numbers need one row per line — a wrapped line would take two rows beside
+ * one number — so a block either wraps or is numbered.
+ */
+type CodeLayout =
+	| {
+			/**
+			 * Break long lines instead of scrolling them. For text read end to end —
+			 * a command being approved — not for code whose lines have to stay aligned.
+			 */
+			wrap?: boolean;
+			lineNumbers?: false;
+	  }
+	| {
+			wrap?: false;
+			/**
+			 * Number the lines in a gutter pinned to the left. For a whole file being
+			 * read; a snippet, a diff or a conflict has numbers of its own or none
+			 * worth reading. The block is drawn full-bleed, with no card corners.
+			 */
+			lineNumbers: true;
+	  };
+
 export function CodeHighlighter({
 	children,
 	language,
 	plain = false,
 	wrap = false,
+	lineNumbers = false,
 	copyable = true,
 }: {
 	children: string;
@@ -243,16 +306,11 @@ export function CodeHighlighter({
 	/** Render the code as-is. Use for input too large to tokenize on the main thread. */
 	plain?: boolean;
 	/**
-	 * Break long lines instead of scrolling them. For text read end to end —
-	 * a command being approved — not for code whose lines have to stay aligned.
-	 */
-	wrap?: boolean;
-	/**
 	 * Lay a copy button over the corner. Off where the block sits under a
 	 * `BlockHeader` that carries one, which is the place that covers nothing.
 	 */
 	copyable?: boolean;
-}) {
+} & CodeLayout) {
 	const isExpanded = useIsExpanded();
 	const fontSize = isExpanded ? CODE_FONT_SIZE_DESKTOP : CODE_FONT_SIZE_MOBILE;
 
@@ -266,15 +324,29 @@ export function CodeHighlighter({
 		wrap ? WRAP_OPTIONS : undefined,
 	);
 
+	// On the wrapper, not the <pre>: a gutter beside it reads the same size.
 	const style = { "--code-font-size": `${fontSize}px` } as React.CSSProperties;
-	const preClass = wrap
-		? copyable
-			? "code-block code-block--wrap code-block--corner"
-			: "code-block code-block--wrap"
-		: "code-block";
+	const preClass = lineNumbers
+		? `code-block ${NUMBERED_CODE_CLASS}`
+		: wrap
+			? copyable
+				? "code-block code-block--wrap code-block--corner"
+				: "code-block code-block--wrap"
+			: "code-block";
+
+	const pre = (
+		<pre className={preClass}>
+			{(!plain && highlighted) ||
+				(wrap ? (
+					<WrappedPlain text={children} words={!plain} />
+				) : (
+					<code>{children}</code>
+				))}
+		</pre>
+	);
 
 	return (
-		<div className="code-block-wrapper">
+		<div className="code-block-wrapper" style={style}>
 			{copyable && (
 				<CopyButton
 					text={children}
@@ -282,14 +354,14 @@ export function CodeHighlighter({
 					className="code-copy-button"
 				/>
 			)}
-			<pre className={preClass} style={style}>
-				{(!plain && highlighted) ||
-					(wrap ? (
-						<WrappedPlain text={children} words={!plain} />
-					) : (
-						<code>{children}</code>
-					))}
-			</pre>
+			{lineNumbers ? (
+				<div className="code-lines">
+					<LineGutter text={children} />
+					{pre}
+				</div>
+			) : (
+				pre
+			)}
 		</div>
 	);
 }

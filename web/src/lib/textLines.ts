@@ -16,3 +16,18 @@ export function outputLineCount(text: string): number {
 	}
 	return n;
 }
+
+/**
+ * Rows a whole file draws, for a line-number gutter that has to end on the
+ * file's last row. Unlike `outputLineCount` only one trailing newline is
+ * dropped: it ends the last line, while a log's trailing newlines are noise —
+ * a file's `"a\n\n"` has a blank second line, and both shiki and a `<pre>`
+ * draw it. CRLF counts the same, since shiki splits on `\r?\n`.
+ */
+export function fileLineCount(text: string): number {
+	let n = 1;
+	for (let i = text.indexOf("\n"); i !== -1; i = text.indexOf("\n", i + 1)) {
+		n++;
+	}
+	return text.endsWith("\n") ? n - 1 : n;
+}

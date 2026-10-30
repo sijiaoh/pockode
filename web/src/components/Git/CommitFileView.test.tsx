@@ -48,9 +48,13 @@ vi.mock("../../hooks/useCommitFile", () => ({
 // Shiki tokenizes on the main thread with real grammars; what matters here is
 // which of the two renderers the toggle picks.
 vi.mock("../../lib/shikiUtils", () => ({
-	CodeHighlighter: ({ children }: { children: string }) => (
-		<pre>{children}</pre>
-	),
+	CodeHighlighter: ({
+		children,
+		lineNumbers,
+	}: {
+		children: string;
+		lineNumbers?: boolean;
+	}) => <pre data-numbered={lineNumbers || undefined}>{children}</pre>,
 	getLanguageFromPath: () => undefined,
 	isMarkdownFile: (path: string) => path.endsWith(".md"),
 }));
@@ -229,6 +233,7 @@ describe("CommitFileView", () => {
 
 		expect(screen.queryByTestId("markdown")).toBeNull();
 		expect(screen.getByText("# Title").tagName).toBe("PRE");
+		expect(screen.getByText("# Title")).toHaveAttribute("data-numbered");
 	});
 
 	it("drops the toggle on a file already forced to plain text", () => {

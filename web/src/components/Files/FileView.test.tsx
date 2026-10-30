@@ -64,9 +64,13 @@ vi.mock("../../hooks/useRouteState", () => ({
 // Shiki loads real grammars and tokenizes on the main thread; the viewer's own
 // branching is what these cases are about.
 vi.mock("../../lib/shikiUtils", () => ({
-	CodeHighlighter: ({ children }: { children: string }) => (
-		<pre>{children}</pre>
-	),
+	CodeHighlighter: ({
+		children,
+		lineNumbers,
+	}: {
+		children: string;
+		lineNumbers?: boolean;
+	}) => <pre data-numbered={lineNumbers || undefined}>{children}</pre>,
 	getLanguageFromPath: () => undefined,
 	isMarkdownFile: (path: string) => path.endsWith(".md"),
 }));
@@ -149,6 +153,11 @@ describe("FileView", () => {
 
 		expect(screen.getByText("const a = 1;")).toBeInTheDocument();
 		expect(editButton()).toBeEnabled();
+	});
+
+	it("numbers the lines of text", async () => {
+		await renderFileView(fileContent({ content: "const a = 1;" }));
+		expect(screen.getByText("const a = 1;")).toHaveAttribute("data-numbered");
 	});
 
 	it("reads a raster image over HTTP from the server's MIME type, and blocks editing", async () => {
@@ -321,7 +330,7 @@ describe("FileView", () => {
 			await userEvent.click(
 				screen.getByRole("button", { name: "Show source" }),
 			);
-			expect(screen.getByText("<h1>Hi</h1>")).toBeInTheDocument();
+			expect(screen.getByText("<h1>Hi</h1>")).toHaveAttribute("data-numbered");
 			expect(screen.queryByTitle("index.html")).not.toBeInTheDocument();
 			expect(editButton()).toBeEnabled();
 			expect(screen.getByRole("button", { name: "Show page" })).toHaveAttribute(

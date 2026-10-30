@@ -35,6 +35,7 @@ served through it; it is addressed by id in the session's own attachment store
 | Search UI state | `web/src/hooks/useFileSearch.ts`, `web/src/lib/filesSearchStore.ts` | Debounce + query cache, persisted options |
 | RPC actions | `web/src/lib/rpc/file.ts` | `getFile`, `writeFile`, `createFile`, `deleteFile`, `renameFile`, `moveFile`, `searchFiles`, `isAlreadyExistsError`, `fileMoveRefusedReason` |
 | HTTP transfer client | `web/src/lib/fileDownload.ts`, `web/src/lib/rawProbe.ts`, `web/src/lib/fileUpload.ts` | Handing a download to the browser and wording its failures, upload (see [Downloading](#downloading), [Uploading](#uploading)) |
+| Line numbers | `LineGutter` in `web/src/lib/shikiUtils.tsx`, `fileLineCount` in `web/src/lib/textLines.ts`, `web/src/lib/codeRows.ts` | The gutter beside a file read as text, the rows it counts, and where line N sits (see [Line numbers](#line-numbers)) |
 | Markdown frontmatter | `web/src/lib/frontmatter.ts`, `web/src/components/ui/FrontmatterBlock.tsx` | Splitting a `.md` file's YAML frontmatter from its body, and drawing it as properties (see [Frontmatter](#frontmatter)) |
 | Media playback | `web/src/components/Files/MediaPreview.tsx`, `web/src/components/Media/useMediaPlayback.ts`, `web/src/hooks/useRawMediaSource.ts`, `web/src/components/Media/exclusivePlayback.ts` | Inline audio and video streamed from a raw capability, its recovery, and one sound at a time (see [Playing audio and video](#playing-audio-and-video)) |
 | Download action | `web/src/hooks/useFileDownload.ts`, `web/src/components/Files/FileDownloadControls.tsx`, `saveRawFile` / `saveRawFolder` in `web/src/hooks/useRawMediaSource.ts` | The viewer's Download — check, hand-over, cancel, error — shared by `FileView` and `CommitFileView`, and the menu's Download as zip (`useFolderDownload`, the same core); `saveRawFile` is every streamed Save that gets its own capability, `saveRawFolder` a folder's; `prepareDragDownload` / `heldDragDownloadUrl` the capability a row's drag saves from outside the browser (see [Dragging out to download](#dragging-out-to-download)) |
@@ -1252,6 +1253,76 @@ plain, which is how a reader gets at a rendered Markdown file's source and the
 copy button that comes with it, there being no Edit to open it in. For a page
 it is the page/source toggle the viewer above has.
 See [git-ui.md](git-ui.md#viewing-a-file-from-a-commit).
+
+### Line numbers
+
+A file read as text has its lines numbered in a gutter on the left,
+highlighted or plain. This covers the Files tab and a file in a commit, and
+there the source of a page or of a Markdown file too. Nothing else gets this
+gutter: not rendered Markdown or pages, the editor, chat code blocks or tool
+results. Diffs and the conflict view number their lines their own way, one
+element per line ([git-changes-ui.md](git-changes-ui.md#selecting),
+[git-conflict-ui.md](git-conflict-ui.md#viewing-a-conflicted-file)). The renderer
+opts in, and the default is off: `FileView` and `CommitFileView` pass
+`lineNumbers` to `FileBody`, which forwards it to the page's source and on
+through `FileContentDisplay` to `CodeHighlighter`. A rendered `.md` ignores it.
+
+- **Generated content.** The numbers are `attr(data-numbers)` on `::before`,
+  in blocks of 1000 rows (`LineGutter` in `lib/shikiUtils.tsx`). A single block
+  holding every number made 52 ms frames at 200k lines in Chromium. Split into
+  blocks, frames take 19 ms, against 17 ms with no gutter at all. No engine
+  selects, copies or finds generated content, so a selection, select-all, the
+  copy button and the browser's find all see the code alone. The gutter is
+  `aria-hidden`.
+- **Width from the line count alone.** The gutter is `fileLineCount` digits
+  wide (`lib/textLines.ts`). Unlike `outputLineCount`, `fileLineCount` drops
+  one trailing newline, not all of them: `"a\n\n"` is two rows, because shiki
+  and a `<pre>` both draw two. It is computed from the text, not from shiki's
+  lines, so the gutter is final on the first render and nothing moves when the
+  colours arrive.
+- **One sticky column, full-bleed.** The gutter sits beside the untouched
+  `<pre>` in a flex row (`.code-lines` in `index.css`). The page body is the
+  one scroll box for both axes, and inside it the gutter is `sticky; left: 0`.
+  Code scrolls sideways under its hairline like a frozen column, and the
+  horizontal scrollbar stays at the bottom of the viewport, not at the end of a
+  long file. A numbered file is drawn as a page, as diffs are: `FileBody` drops
+  its `p-2` and the block its corners. That gives a phone back 16px. Rendered
+  Markdown keeps its padding.
+- **Never wrapped.** A wrapped line takes two rows beside one number, so the
+  props type of `CodeHighlighter` makes `wrap` and `lineNumbers` exclusive.
+- **Uniform rows, located by arithmetic.** The gutter and the code share one
+  font rule and one vertical padding, so every row is the same height in both
+  columns, highlighted or not. `lib/codeRows.ts` reads that height back:
+  `measureCodeRows` divides the `<code>`'s height by the line count, unrounded,
+  because line boxes are fractional and a rounded height drifts by pixels a few
+  thousand lines down. `lineTop` then gives line N's top. That is the one way
+  to find a line, for scrolling to it or marking it. The plain path past
+  `HIGHLIGHT_LIMIT` has no element per line, by decision: it stays one text
+  node, because a `span` per line costs 0.6–1 s of build and layout at 50k lines
+  on a desktop, and more on a phone, only for files already too big to colour.
+- **Known limitation: U+2028 / U+2029 in WebKit.** WebKit forces a line break
+  at the line and paragraph separators; Chromium does not. Shiki and
+  `fileLineCount` split on `\n` only, so on iOS a file containing one of them
+  shows its code a row below its numbers from that point on, and `lineTop` is a
+  row off there too. CSS cannot suppress a mandatory break, and replacing the
+  character would change what is copied. Such files are rare, so this is left
+  as is.
+
+Each of these was tried and measured, and none should come back:
+
+- A sticky number on each `.line`: 50k sticky boxes made scroll frames take
+  74–101 ms.
+- `.line` as `flex` or `block`: copying then breaks lines inside tokens and
+  drops blank lines.
+- Numbers as DOM text with `user-select: none`: whether a copy includes them
+  varies by engine.
+- A gutter element per row: it drifts 2px from the inline code rows by line
+  50k.
+- The `<pre>` as its own horizontal scroll box: the scrollbar lands at the end
+  of the file.
+
+`FileBody.browser.test.tsx` checks in Chromium and WebKit that the gutter
+matches the rows, stays pinned under a sideways scroll and is never copied.
 
 ### Frontmatter
 

@@ -228,6 +228,7 @@ function FileView({ path, onBack }: Props) {
 						state={state}
 						path={path}
 						plain={isPage && showSource}
+						lineNumbers
 						onOpenFile={openFile}
 						downloadAction={{
 							label: download.label,

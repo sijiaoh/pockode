@@ -30,7 +30,7 @@ export {
 } from "./ContentView";
 export { CopyButton } from "./CopyButton";
 export { DiffViewer } from "./DiffViewer";
-export { FileContentDisplay } from "./FileContentDisplay";
+export { FileContentDisplay, rendersMarkdown } from "./FileContentDisplay";
 export { FileStateCard } from "./FileStateCard";
 export { headerIconButtonClass } from "./headerIconButtonClass";
 export { iconButtonClass } from "./iconButtonClass";
