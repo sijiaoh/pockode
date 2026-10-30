@@ -2026,18 +2026,12 @@ again refocuses it and selects the query.
   noun, `tabIndex=0`, through `initialFocusRef`), so arrows, Page Up / Down and
   Home / End scroll at once.
 - **Closing**: ✕, Escape, the **back gesture** — Android's back, iOS's edge
-  swipe, the browser's Back — or the key going away. Back-to-close is
-  `useBackToClose` (`web/src/hooks/`), shared with the media viewer: the viewer pushes a
-  same-href entry through the router's own history (never a raw `pushState`,
-  which would bypass TanStack's index and state) and closes on its `BACK` / `GO`
-  notification. Every other close takes that entry back, once, but only if it is
-  still the current one, so a page opened over the chat keeps its own entry, at
-  the cost of one later Back that changes nothing on screen. It goes back with
-  the Navigation API's `back()` where the browser has it, which skips the
-  entries an `<iframe>` inside left behind
-  ([media-viewer.md](media-viewer.md#history)). A file row's *Open*
-  closes the viewer first and navigates only once that entry is gone, or the
-  Back would undo it.
+  swipe, the browser's Back — or the key going away. Back closes it as it
+  closes every layer ([project-ui.md §5.2](project-ui.md#52-back-closes-the-topmost-layer)):
+  the viewer is a `Sheet`, which holds a same-href entry while it is up, and
+  every other close takes that entry back. A file row's *Open* closes the
+  viewer and navigates; the navigation is held until the entry is gone, so
+  Back from the file lands on the chat with nothing open.
 - **The transcript is where it was.** The page is scroll-locked under the sheet
   and focus returns to the opener without scrolling. What changes behind it — a
   diff wrap toggled in the viewer, live output growing — is held by the

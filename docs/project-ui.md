@@ -135,12 +135,11 @@ position: an offset into `Current` says nothing about where to be in the archive
 and the archive changes page by returning to the top anyway
 ([list-paging-ui.md](list-paging-ui.md) §4.2). A segment never inherits the other's offset.
 
-Going *back* to a segment is different. The browser's Back from `Closed`, or a
-tap on `Current` right after coming from it, returns `Current` to where it was
-left, as going back to any page does
+Going *back* to a segment is different. The browser's Back from `Closed`
+returns `Current` to where it was left, as going back to any page does
 ([frontend-state.md](code/frontend-state.md#why-a-pages-scroll-position-outlives-the-page)).
-The tap counts because a tap on a segment is a pushed navigation (§5), and a
-push to the page just under the current one reads as a return. The cost is
+A tap on `Current` does not: a tap on a segment is a pushed navigation (§5),
+a visit of its own, and opens at the top like any other. The cost of Back is
 accepted: `Current` regroups and reorders while nobody is looking at it, so the
 offset it comes back to may sit over different rows than before.
 
@@ -782,9 +781,10 @@ Three consequences, each of which is a rule rather than an accident:
   nothing on the detail page; it is the same device as `session`, which every
   overlay route already carries to remember the chat underneath it.
 
-`AppShell` reads the segment off the route and passes it down, and owns all
-three navigations (switch, open, back) — a component that routes itself is a
-second place worktree-aware URLs get built (§4).
+`AppShell` reads the segment off the route and passes it down, and owns the
+navigations: a switch and an open push, and going back to the list is up,
+through `handleGoUp` (§5.1) — a component that routes itself is a second
+place worktree-aware URLs get built (§4).
 
 ### 5.1 Back, up and replace
 
@@ -798,8 +798,9 @@ What a navigation does to the tab's history is one rule for the whole app:
 > it skips — so after ← the browser's Back never lands on the page just left.
 > A page is replaced only when no page was visited: a setting or filter of the
 > page on screen, a redirect or normalisation, a URL corrected because its
-> page no longer exists, or a page the user's own action destroyed. History
-> follows the URLs alone, never the width.
+> page no longer exists, or a page the user's own action destroyed with a
+> next one to put in its place. A destroyed page with nowhere to go on to
+> goes up, as its ← would. History follows the URLs alone, never the width.
 
 It is the split native apps already make — Android's Up beside its Back,
 iOS's pop to a view controller further down the stack — and each half fixes a
@@ -820,6 +821,23 @@ failure this app had:
 - **Up is not Back.** A parent commit opened from a commit goes up to its
   list, not to the child it was opened from; Back is what returns to the
   child.
+- **A deletion goes up.** Deleting a work, a schedule, an agent role, a file
+  or a branch from its own page leaves it the way its ← does, so the browser's
+  Back never lands on it. When that is a `go()` back to the parent's entry,
+  the deleted page stays in Forward history, where Forward finds it gone and
+  says so — a step the user has to ask for, unlike a dead Back. Only a
+  destroyed page with a next one (the next file of a review after a discard)
+  is replaced by it ([git-ui.md](git-ui.md#routes-segments-and-back)).
+- **The session under a page is a setting of it.** The `session` every
+  overlay carries names the chat underneath, not a place. When it is
+  corrected — the route's session missing, a worktree with none yet getting
+  its first, the open session deleted — only the `session` is replaced, and
+  the page over the chat stays (`replaceSession` in `AppShell`). A correction
+  that answers after the reader moved on moves nobody. An entry left behind
+  in a deleted worktree or for a deleted session still costs one Back step:
+  Back lands there and the URL is corrected to the fallback page by replace.
+  Skipping such entries would need redirects that know which way the user is
+  travelling, and is not done.
 
 The mechanism is `useGoToParent` (`hooks/useGoToParent.ts`). Each page names
 its parent (`parentOf`), and whether a page was opened under another is read
@@ -835,13 +853,292 @@ nobody once the reader has moved on, and a second press while the first is
 under way is dropped. It never reads the width, so a resize changes the
 layout of the current entry and nothing in the stack.
 
-Where it applies today: the Git workspace, every ← and every "Back to …" in it
-([git-ui.md](git-ui.md#routes-segments-and-back)). The other screens' ← still
-push their parent's URL (for a page over the chat, `AppShell`'s
-`handleCloseOverlay`) and have not moved onto the hook yet; the scroll
-memory's "a push to the page the reader came down from is a return"
-heuristic exists for them
-([frontend-state.md](code/frontend-state.md#why-a-pages-scroll-position-outlives-the-page)).
+Where it applies: every ← and every "Back to …" on a page over the chat — the
+Git workspace ([git-ui.md](git-ui.md#routes-segments-and-back)), a file's view
+and editor, the settings, the stories and their works, the agent roles and the
+schedules — and every deletion made from one of those pages. `AppShell`'s
+`handleGoUp` is the way up for a page `ChatPanel` draws; the Git workspace,
+and the editor's View and Save, call `useGoToParent` themselves. Every page over the chat has a parent:
+the lists, the settings and a file's view go up to the chat, a detail to its
+list, the editor to its file's view. Two pages name more than their URL does:
+a work goes up to what it belongs to — a task to its story and a job to its
+schedule, read off the work's data, a story to the list in the segment its
+URL carries (§5) — and the editor's ←, drawn as the way to the chat, goes past
+the file's view it was entered from, while its View and Save go up to that
+view. `web-cluster` has no router and no pages, so only §5.2 reaches it.
+
+### 5.2 Back closes the topmost layer
+
+§5.1 is about pages. A layer drawn over a page — a sheet, a dialog, a drawer,
+a menu — is not a page, and the rule for it is one sentence:
+
+> **A layer the user opened is one step of Back.** While it is up it holds a
+> history entry of its own, so the back gesture — Android's system back,
+> iOS's edge swipe, the browser's Back, a mouse's back button — closes the
+> topmost layer and leaves the page where it was. Every other way of closing
+> it takes that entry away again. A layer has no URL, and its entry does not
+> outlive it — the two exceptions, a reload and a push made around the rule,
+> are below.
+
+**Why.** A Back that leaves the page while a sheet, a dialog or a drawer is
+up is the opposite of what a phone's user has been taught. On Android, back dismissing the
+topmost dialog, bottom sheet, menu or navigation drawer before it ever
+navigates is a platform rule (Material's bottom sheets, dialogs and
+navigation drawer, `OnBackPressedDispatcher`, predictive back), and Chrome
+on Android applies it to the web's own modal `<dialog>` and popovers
+(`CloseWatcher`). Mobile web apps used as apps follow it: X's composer and
+media viewer are entries Back closes, and YouTube's mobile site closes its
+menus and sheets on Back. A Back that throws away the page,
+the draft and the scroll position because a menu was open is the bug users
+report; a Back that closes a sheet is never a surprise. iOS has no system
+back, but Safari's edge swipe *is* Back and is answered by this same rule;
+the iOS-native way to dismiss a sheet, swiping it down, is a gesture on the
+sheet and outside this rule.
+
+#### Which layers
+
+**The layers Back closes are exactly the layers `useCoverPage` counts.**
+They are one fact: "something the user opened is between them and the page".
+Two registries for it would drift, and a layer counted by one and not the
+other is the bug in either direction — the chat's interrupt firing under a
+menu, or Back leaving the page under a sheet.
+
+| Layer | Back closes it | Why |
+|---|---|---|
+| `Sheet`, every form — drawer, centered modal, `fullScreen` (the full-screen viewer, the media viewer, file and diff readers built on it) | yes | the canonical case |
+| `ConfirmDialog` | yes, as Cancel | Back on a question is "no" — Android's dialog convention |
+| The session sidebar *drawer* (below the expanded tier) | yes | Material's navigation drawer |
+| `ResponsivePanel`, both as the drawer and as the expanded tier's dropdown | yes | one component, one rule; see *Desktop* |
+| `InputBar`'s menu | yes | an open popup menu is a layer on every platform |
+| The expanded tier's sidebar *column* | no | part of the page, not drawn over it; it counts as no layer |
+| The chat's answer panel | no | raised by the agent and part of the chat surface, not something the user opened ([answering-ui.md](answering-ui.md#3-the-answer-panel)); it counts as no layer. Closing it by Back would hide a question that is still waiting |
+| Pages over the chat — Stories, work detail, Settings, the Git workspace, every route overlay | no — they are pages | §5.1 governs them: they have URLs, Back retraces them |
+| Toasts, banners, tooltips, a block expanded in place | no | not opened as a layer and not modal; Back is not theirs |
+
+A layer added later gets Back by registering as a layer, and cannot register
+without saying what Back does to it (*Mechanism*).
+
+#### Closing it by its own UI
+
+✕, Escape, the backdrop, Cancel, an outside click, a row that does what it was
+opened for — every close that is not Back **takes the entry back**: the app
+goes back over it once the layer is gone, so the next Back does what it would
+have done before the layer opened. A layer's entry is not left behind for a
+later Back to land on: a step that changes nothing on screen is the dead
+Back the full-screen viewer was built to avoid, and users read it as Back
+being broken.
+
+It is taken back only while it is still the current entry. If something
+pushed over it — only possible by a path around the rule below — the entry is
+left, at the cost of one silent Back, rather than going back over somebody
+else's.
+
+A layer that refuses to close — a `Sheet` with `dismissible={false}`, a
+`ConfirmDialog` whose action is running — refuses Back too. The traversal has
+already happened by the time the app hears of it, so the layer stays up and
+**pushes its entry again**: the press did nothing, and the next one is caught
+the same way. This is Android's non-cancellable dialog. It holds only for a
+Back that landed on the page directly under the layer; a traversal further
+than that (the browser's long-press history list) has left the page, and the
+layer goes with it whatever it refuses, as it does when its surface is covered
+([`CoveredSurface`](../AGENTS.md#shared-code-pockodeshared)). Nor is the
+traversal the app makes for a held navigation (below) a Back anyone can
+refuse: a `ConfirmDialog` whose running action navigates would otherwise
+re-push its entry under the very navigation it asked for, and the push would
+wait on it for ever.
+
+What Back calls is the layer's plain close — the one ✕ or Cancel calls — and a
+held navigation calls the same one. So a layer's close has to be only a close:
+an `onCancel` that also *does* something (declines, discards, reports) is
+split, the doing behind the button and the closing shared with Back.
+
+#### Navigating from inside a layer, or while one is up
+
+A navigation never goes over a layer's entry. That entry stands for the page
+under the layer, and a page pushed on top of it would leave it behind as a
+silent step between the new page and the old one.
+
+- **A push** — a row in the sidebar drawer, a sheet whose action lands on a
+  page (a created story, *Open* on a file in the viewer) — is **held until every layer entry has been gone back over**, and
+  then made from the page's own entry. The layers close as their entries go,
+  on the same notification Back would have sent them. History after it is
+  `[… page, new page]`, and Back from the new page lands on the page with
+  nothing open — never on the sheet, which is not a place to come back to.
+  The hold is in the app's history, not in each caller, so no caller can
+  forget it.
+- **A replace** — a setting of the page changed from a layer (the History
+  scope sheet), a URL corrected because the work behind it went away — is
+  written to the current entry at once, the layer's marker kept, so the page
+  under the layer shows it while the layer is still up. Whenever a layer's
+  entry is gone back over, by Back or by any other close, the entry it lands
+  on is brought to the URL of the entry it left, by replace. A setting chosen
+  inside a sheet therefore survives the sheet closing whichever way it
+  closes, and Back never unwinds it — §5.1's "a setting is not a place".
+- **A held push to the page under the layer is a replace.** The router
+  pushes the URL on screen afresh when the entry it compares against carries
+  more state than the page — a layer's entry does — so a row for the session
+  already open, tapped in the drawer, would otherwise land as a second entry
+  of the same page. Once the layers are gone back over, a push whose href and
+  state are the page's own is made as a replace.
+- **`useGoToParent`** is not held: its ← is a `go()` or a replace, never a
+  push. Its walk passes over a layer's entry as it passes any duplicate of
+  the page it starts from — the entry has the page's href — and the layers
+  close on the traversal like on any other. A ← is not reachable under a
+  modal layer. Under a dropdown it is, in two untested corners: a walk that
+  lands on the page's own entry with a setting replaced under the dropdown,
+  where the carry-down and the walk's rewrite of that entry could race; and a
+  ← that replaces (nothing known behind the page), whose replace keeps the
+  layer's marker, so the parent is drawn under a dropdown still up.
+- **The scroll memory** sees nothing: a layer's entry is keyed as the page's
+  own under it, so a sheet going up or down is the same visit
+  ([frontend-state.md](code/frontend-state.md#why-a-pages-scroll-position-outlives-the-page)).
+
+#### Stacked layers
+
+Each layer holds its own entry, pushed when it opens: a `ConfirmDialog` raised
+over a `Sheet` is two entries over the page. Back closes the top one only —
+the dialog cancels and the sheet stays up — and the next Back closes the sheet.
+A traversal of several steps at once closes every layer it passes.
+
+A layer that *replaces* another in one commit (a menu sheet putting itself away
+as the confirmation it offered opens) is a close and an open: the second
+layer's entry is pushed only once the first one's is gone, so history holds one
+layer entry, not two, and one Back closes what is on screen.
+
+Sheets still do not nest (`useIsInSheet`); the stack is for a dialog over a
+sheet, or a sheet over a drawer, which do.
+
+#### Reload, deep links, Forward
+
+**Layers are not in the URL**, and a reload or a link never opens one. A
+layer here is an action, a menu or a reader over something that has a URL of
+its own; the things worth linking to — a work, a file, a diff, a commit —
+are already pages (§5.1). This is where the mobile sites that put a modal in
+the URL differ for a reason: X's `/compose` and Instagram's `/p/…` are a post,
+a place, drawn as a modal. Here a link opens the page, and a sheet is opened
+on it by a tap.
+
+- **Reload with a layer up.** The layer is gone with the document; its entry
+  is still the current one. At start the app replaces that entry without the
+  marker and leaves it: going back over it would cross into the old document,
+  which reloads the app a second time. One Back that lands on the same page is
+  the accepted cost of a reload under an open sheet, which is rare and was
+  already a lost sheet.
+- **A deep link** arrives on a page's entry with no layer anywhere; nothing
+  special happens.
+- **Forward onto a closed layer's entry** — Back closed a sheet, then Forward —
+  reopens nothing: a layer's content and state are gone with it. Arriving by
+  traversal at an entry whose marker no live layer owns, the app goes back
+  to the nearest entry beneath it that carries no such marker — over several
+  at once, after a long-press Forward past a stack — so Forward is a no-op
+  rather than a silent step left on the page.
+
+#### Desktop
+
+The same rule at every width. §5.1 already says history follows the URLs and
+never the width, and the corollary here is that a layer's entry follows the
+layer and never the width: a `ResponsivePanel` that is a drawer on a phone and a
+dropdown on a desktop holds its entry in both, so a resize while it is open
+changes nothing in history. Desktop Back — the button, the mouse's back button,
+a trackpad swipe — closing an open dialog is what X's modals do at every width,
+and the entry is invisible to anyone who closes the layer another way.
+
+A layer that *stops being a layer* is the one case width reaches it: the
+sidebar drawer becomes the column when the viewport crosses into the expanded
+tier. Crossing into the tier **closes the drawer** (`drawerOpen` goes false),
+and its entry is taken back as for any close. Crossing back out does not
+reopen it: no layer, and no history entry, is ever raised by a resize, only by
+a press.
+
+#### Mechanism
+
+- **One hook, in `@pockode/shared`.** `useCoverPage` takes what Back does as
+  a required argument — `useCoverPage(active, { onBack, refuse? })` — and both
+  counts the layer and holds its entry while `active`. `refuse` is read at
+  the time of the Back: `Sheet`'s is `!dismissible`, `ConfirmDialog`'s is its
+  action running. `Sheet` and
+  `ConfirmDialog` call it themselves with their own close and refusal;
+  `useLockBodyScroll` registers no layer on their behalf, because it
+  cannot know what Back should do. `ResponsivePanel`, `Sidebar` and
+  `InputBar` pass their close.
+- **One stack, `createLayerHistory`, over an adapter given by context.**
+  Shared has no router, so the app gives it `LayerEntries` — push an entry
+  carrying the layers, go by a delta, read the current entry's layers and
+  index, hear traversals — and puts the stack in `LayerHistoryContext`. The
+  stack decides everything else: each entry pushed a tick late for
+  StrictMode, every move of an entry queued behind the one before, layer ids
+  random per document so an entry from before a reload is never owned. A
+  layer whose entry has not been pushed yet closes on any traversal of the
+  user's: that Back has already left the page it was over. `settled()`
+  resolves once no entry is being moved, for a caller that must wait for a
+  close to have finished in history — `PagePreview` releases a revision it
+  held while the viewer was up only then. `web`'s adapter
+  (`web/src/lib/layerHistory.ts`) is over the TanStack router's history —
+  never a raw `pushState` — and goes with the Navigation API's `traverseTo`
+  where the browser has it, for the `<iframe>` entries a page in the viewer
+  leaves behind ([media-viewer.md](media-viewer.md#history)). `web-cluster`'s
+  (`web-cluster/src/lib/layerEntries.ts`), which has no router, is over
+  `window.history` and writes each entry's index into its state. Without a
+  provider — a unit test — a layer holds no entry and everything else about
+  it works.
+- **The hold on push and the carry-down of replace live in `web`'s history**,
+  wrapped once where `router.tsx` creates it, before the trail starts
+  ([frontend-state.md](code/frontend-state.md#the-history-trail-is-not-the-scroll-memory)),
+  so every `navigate` and every link go through them without knowing. The
+  reload strip is made there too, on the window by `replaceState`, so the
+  entry keeps the key the trail knows it by.
+- **The full-screen viewer and the media viewer** are `Sheet fullScreen` and
+  get Back from it; a navigation made from them just closes and navigates,
+  and the hold does the rest.
+- **A traversal of the stack's own is not the user's.** The `go()` it makes —
+  for a hold, or to take a closed layer's entry back — is one it is waiting
+  to land, and the layers it passes close without consulting `refuse`.
+- **No `CloseWatcher`.** It would answer Android back without an entry, but
+  Safari and Firefox do not have it, and iOS's swipe is a history traversal
+  that only an entry can catch. Two mechanisms for one rule would split by
+  browser; one entry-based mechanism covers all of them. Worth revisiting
+  when `CloseWatcher` is everywhere.
+- **Escape is not changed by this, and does not yet agree.** Back reaches the
+  topmost layer by history order and closes it alone. Escape is a key every
+  `document` listener hears, and `Sheet`'s claim does not silence a sibling
+  on `document` itself, so Escape on a `ConfirmDialog` raised inside a `Sheet`
+  still closes both (the note on `Sheet`'s Escape handler says so;
+  [answering-ui.md](answering-ui.md#who-owns-escape)). Back's top-only is the
+  intended behaviour; bringing Escape to it — the layer stack this hook keeps
+  can answer "am I topmost" — is its own change, not a condition of this one.
+
+#### Known gaps
+
+- **Escape over a stacked dialog**, above: Escape closes both, Back the top.
+- **`WorktreeCreateSheet`'s close is more than a close.** It also makes the
+  deferred switch into the worktree just created, and Back, calling the same
+  close, does it too — the same thing ✕ does there.
+- **A refused Back on Android Chrome.** A refusing layer's re-push is a
+  `pushState` made from `popstate`, without user activation, and Chrome may
+  mark such an entry skippable; a second Back could then go past a sheet that
+  refuses to close. Not yet checked on a device.
+- **A ← under a dropdown**, in *Navigating*, above.
+- **Entries for a deleted session or worktree** each cost a Back step — a
+  matter of pages ([§5.1](#51-back-up-and-replace)).
+
+#### What the implementation has to hold
+
+| Case | Expected |
+|---|---|
+| Phone, a sheet open, back gesture | The sheet closes; the URL, the page and its scroll are unchanged; the next Back does what it did before the sheet opened |
+| A sheet closed by ✕, Escape, the backdrop or a row | No entry left: Back afterwards does what it did before the sheet opened |
+| A `ConfirmDialog` over a `Sheet`, Back twice | First Back cancels the dialog only; the second closes the sheet; the third leaves the page |
+| A sheet whose action navigates (create a story; *Open* in the viewer) | `[… page, new page]`; Back from the new page lands on the page with nothing open |
+| A setting changed from inside a sheet, the sheet then closed by Back | The page keeps the setting; Back once more leaves the page |
+| Back on a sheet with `dismissible={false}` | The sheet stays up; the next Back is refused as well; once it is dismissible, Back closes it |
+| A `ConfirmDialog` whose running action navigates | The navigation lands; the dialog closes without re-pushing; Back from the new page lands on the page with nothing open |
+| A menu sheet replaced by its confirmation | One layer entry; one Back closes the confirmation and leaves no sheet |
+| A row in the sidebar drawer opens a session | The drawer closes; Back from the session lands on the previous page with no drawer |
+| Drawer open, viewport widened past the expanded tier, then narrowed | The drawer closed on the way in and stays closed on the way out; no entry left |
+| Reload with a sheet open | The page with no sheet; one Back lands on the same page, the next leaves it |
+| Back with a sheet open, then Forward | Nothing reopens; the URL and the page are unchanged |
+| A dropdown on a desktop width, browser Back | The dropdown closes, the page stays |
+| The answer panel up, Back | The panel stays; Back leaves the page as §5.1 says |
 
 ## 6. Edge cases
 
@@ -924,8 +1221,8 @@ The checks, in the order they would fail, and where each one is now:
 
 Check 6 was the one that reached the end of the rewrite untested. It had been
 written down as the behaviour that was already right and could be lost while the
-screen around it was rewritten, and it survived — `WorkDetailOverlay` still
-passes `onBack={parent ? () => onOpenWorkDetail(parent.id) : onBack}` — but
+screen around it was rewritten, and it survived — `WorkDetailOverlay`'s ←
+still goes to the parent story when there is one (`backTarget`) — but
 until the review nothing asserted it, which is exactly how the next rewrite
 would have dropped it. Both destinations are asserted now.
 

@@ -124,6 +124,9 @@ kind of parent: Back is decided by what the work belongs to, read off the data,
 never by where the user came from. So a job opened from its chat goes Back to
 its schedule as well — which is the way to the schedule §8 is about.
 
+"Back" in this table is the header's ←, which goes up; the browser's Back
+retraces ([project-ui.md §5.1](project-ui.md#51-back-up-and-replace)).
+
 ## 3. The schedules list
 
 ```
@@ -1021,7 +1024,7 @@ action bar's Delete called the raw `onBack` — so deleting a task landed on the
 list rather than on its story. The page now works its Back target out
 **once** (`backTarget`: parent story, schedule, or `/schedules`, by §2's
 table, else the list) and hands the same callback to both. That changed tasks
-as well, deliberately: deleting a task lands on its story, where Back would
+as well, deliberately: deleting a task goes up to its story, where Back would
 have gone — a behaviour change, covered by check 18.
 Everything else on the page — lifecycle bar, questions,
 usage, comments, Open Chat, Delete — is the work page unchanged, which is what

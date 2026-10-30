@@ -2102,7 +2102,8 @@ The cache has no notion of why a path is vacant, so it is asked one question.
 
 If the file being read was the one deleted — or sat inside the deleted folder —
 `FilesTab` calls `onCloseFile`, threaded down from `AppShell` through
-`SessionSidebar`. `FileView` reads the cache under the file's *own* path, which
+`SessionSidebar`; it goes up from the file to the chat, as the file's `←`
+does ([project-ui.md §5.1](project-ui.md#51-back-up-and-replace)). `FileView` reads the cache under the file's *own* path, which
 invalidating the folder around it does not touch, and the overlay belongs to
 `AppShell`; without that call the viewer would go on showing a file that no
 longer exists.
