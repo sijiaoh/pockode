@@ -33,8 +33,11 @@ type BannerOptions struct {
 	RemoteURL  string // Empty if relay is disabled
 	CloudEmail string // Cloud account the relay is attached to; empty for a guest
 	// CloudLinkInvalid is set when the cloud did not accept this machine's
-	// link to an account; the relay works regardless.
+	// link to an account, and CloudNotAttached when it would not attach this
+	// instance for a reason linking again cannot fix. The relay works
+	// regardless.
 	CloudLinkInvalid bool
+	CloudNotAttached bool
 	Announcement     string               // Message from cloud
 	Agents           []agent.BinaryStatus // AI CLI availability; omitted when empty
 	NoColor          bool                 // Disable ANSI color output
@@ -93,6 +96,10 @@ func PrintBanner(opts BannerOptions) {
 		fmt.Println()
 		fmt.Printf("%s%s\n", indent, color(bold+yellow, "⚠ This machine is no longer linked to your cloud account"))
 		fmt.Printf("%s%s\n", indent, color(dim, "  Run pockode login to link it again"))
+	}
+	if opts.CloudNotAttached {
+		fmt.Println()
+		fmt.Printf("%s%s\n", indent, color(bold+yellow, "⚠ This instance could not be linked to your cloud account"))
 	}
 
 	fmt.Println()

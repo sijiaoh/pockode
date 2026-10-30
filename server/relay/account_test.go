@@ -25,6 +25,8 @@ type fakeAccountCloud struct {
 	presented   []string
 	// down makes every request fail with 503, as a cloud in an outage does.
 	down atomic.Bool
+	// rejectStatus, when set, answers every recorded request with it.
+	rejectStatus atomic.Int32
 }
 
 const (
@@ -66,18 +68,20 @@ func newFakeAccountCloud(t *testing.T) *fakeAccountCloud {
 		c.presented = append(c.presented, token)
 		c.presentedMu.Unlock()
 
+		if status := c.rejectStatus.Load(); status != 0 {
+			w.WriteHeader(int(status))
+			return
+		}
 		if r.URL.Path == "/api/relay/refresh" && req.RelayToken != accountTestRelay.RelayToken {
 			w.WriteHeader(http.StatusUnauthorized)
 			return
 		}
-		if req.Instance != nil && strings.ContainsRune(req.Instance.Path, '\n') {
-			w.WriteHeader(http.StatusBadRequest)
-			return
-		}
 		resp := Registration{StoredConfig: accountTestRelay}
-		switch token {
-		case "":
-		case validMachineToken:
+		switch {
+		case token == "":
+		case strings.ContainsRune(req.Instance.Path, '\n'):
+			resp.Error = "invalid_instance"
+		case token == validMachineToken:
 			resp.Email = "alice@example.com"
 		default:
 			resp.Error = "invalid_machine_token"
@@ -156,7 +160,8 @@ func TestCredentialsAttachToAccount(t *testing.T) {
 				return &cloudcred.Credential{CloudURL: u, MachineToken: validMachineToken}
 			},
 			workDir:       "/home/alice/a\nb",
-			wantPresented: []string{validMachineToken, ""},
+			wantPresented: []string{validMachineToken},
+			wantAccount:   Account{Error: "invalid_instance"},
 		},
 		{
 			name: "instance over an old cloud's body cap",
@@ -219,6 +224,52 @@ func TestCredentialsAttachToAccount(t *testing.T) {
 				t.Errorf("watcher refreshed an unchanged cloud.json, presenting %q", got)
 			}
 		})
+	}
+}
+
+// Only a body over the cloud's size cap is retried as a guest. Any other
+// refusal is not about the account fields — the cloud reports those in
+// account_error — so dropping them would only hide the failure.
+func TestCredentialsDoNotRetryARefusedBodyAsGuest(t *testing.T) {
+	cloud := newFakeAccountCloud(t)
+	cloud.rejectStatus.Store(http.StatusBadRequest)
+	creds := cloudcred.NewStore(t.TempDir())
+	if err := creds.Save(&cloudcred.Credential{CloudURL: cloud.URL, MachineToken: validMachineToken}); err != nil {
+		t.Fatal(err)
+	}
+
+	m := newAccountTestManager(t, cloud, creds, "/home/alice/app")
+	if _, err := m.credentials(context.Background()); err == nil {
+		t.Fatal("credentials succeeded against a cloud refusing the request")
+	}
+	if got, want := cloud.takePresented(), []string{validMachineToken}; !slices.Equal(got, want) {
+		t.Errorf("presented tokens = %q, want %q", got, want)
+	}
+}
+
+// Only an invalid machine token is one `pockode login` can fix; every other
+// account_error, including one this version does not know, is the cloud not
+// attaching this instance.
+func TestAccountErrorKinds(t *testing.T) {
+	tests := []struct {
+		account         Account
+		wantLinkInvalid bool
+		wantNotAttached bool
+	}{
+		{account: Account{}},
+		{account: Account{Email: "alice@example.com"}},
+		{account: Account{Error: "invalid_machine_token"}, wantLinkInvalid: true},
+		{account: Account{Error: "invalid_instance"}, wantNotAttached: true},
+		{account: Account{Error: "internal_error"}, wantNotAttached: true},
+		{account: Account{Error: "some_future_error"}, wantNotAttached: true},
+	}
+	for _, tt := range tests {
+		if got := tt.account.LinkInvalid(); got != tt.wantLinkInvalid {
+			t.Errorf("%+v.LinkInvalid() = %v, want %v", tt.account, got, tt.wantLinkInvalid)
+		}
+		if got := tt.account.NotAttached(); got != tt.wantNotAttached {
+			t.Errorf("%+v.NotAttached() = %v, want %v", tt.account, got, tt.wantNotAttached)
+		}
 	}
 }
 

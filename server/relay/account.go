@@ -54,8 +54,23 @@ type Attachment struct {
 type Account struct {
 	// Email is the account the relay is now attached to.
 	Email string `json:"account_email,omitempty"`
-	// Error says the machine token was not accepted. The only value defined is
-	// "invalid_machine_token"; whatever it is, linking the machine again is
-	// the remedy, and the relay itself works as before.
+	// Error says why the relay was not attached. Read it through LinkInvalid
+	// and NotAttached rather than comparing values: the cloud may add values,
+	// and an unknown one is to be taken as "internal_error". The relay works
+	// regardless.
 	Error string `json:"account_error,omitempty"`
+}
+
+// LinkInvalid reports the cloud no longer accepting this machine's link to an
+// account, which `pockode login` restores.
+func (a Account) LinkInvalid() bool {
+	return a.Error == "invalid_machine_token"
+}
+
+// NotAttached reports the cloud not attaching the relay for a reason linking
+// again cannot fix: an instance it will not list (a directory name with a
+// control character, a path over its limit) or a fault of its own, which the
+// next refresh tries again.
+func (a Account) NotAttached() bool {
+	return a.Error != "" && !a.LinkInvalid()
 }

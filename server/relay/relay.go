@@ -226,11 +226,13 @@ func (m *Manager) credentials(ctx context.Context) (*StoredConfig, error) {
 // call makes a register or refresh, attaching the relay to the machine's
 // account when machineToken is set, and records what became of that.
 //
-// A refused attachment is retried as a guest, because the link to an account
-// must never be what keeps the relay from working. The cloud does refuse some:
-// it bounds the instance fields (a path with a control character is refused),
-// and a cloud that predates accounts caps the whole body at 4 KiB, which a long
-// path can exceed.
+// The cloud never fails a request over its account fields: it answers as it
+// would a guest and says in account_error why it did not attach. The one
+// exception is its body size cap — 4 KiB on a cloud that predates accounts,
+// 8 KiB on one that has them — which a long path, or one full of characters
+// JSON escapes, can push the body over. That body is retried as a guest,
+// because the link to an account must never be what keeps the relay from
+// working.
 //
 // The caller holds cloudCallsMu.
 func (m *Manager) call(machineToken string, do func(*Attachment) (*Registration, error)) (*Registration, error) {
@@ -240,8 +242,8 @@ func (m *Manager) call(machineToken string, do func(*Attachment) (*Registration,
 	}
 
 	reg, err := do(attach)
-	if attach != nil && errors.Is(err, errRequestRefused) {
-		m.log.Warn("cloud refused to attach this instance to the account, continuing as a guest", "instance", m.config.Instance, "error", err)
+	if attach != nil && errors.Is(err, errRequestTooLarge) {
+		m.log.Warn("the account attachment made the request too large for the cloud, continuing as a guest", "instance", m.config.Instance)
 		reg, err = do(nil)
 	}
 	if err != nil {
@@ -254,8 +256,10 @@ func (m *Manager) call(machineToken string, do func(*Attachment) (*Registration,
 	switch {
 	case reg.Email != "":
 		m.log.Info("attached to cloud account")
-	case reg.Error != "":
+	case reg.LinkInvalid():
 		m.log.Warn("cloud did not accept the machine token, run `pockode login` to link this machine again", "account_error", reg.Error)
+	case reg.NotAttached():
+		m.log.Warn("cloud could not attach this instance to the account, linking the machine again will not help", "account_error", reg.Error, "instance", m.config.Instance)
 	}
 	return reg, nil
 }

@@ -13,10 +13,10 @@ import (
 var ErrInvalidToken = errors.New("invalid relay token")
 var ErrUpgradeRequired = errors.New("client version too old, please upgrade Pockode")
 
-// errRequestRefused is the cloud refusing the request body: 400 for a field it
-// will not take, 413 for a body over its size cap. A guest's body is never
-// refused; one carrying an account attachment can be (see Manager.call).
-var errRequestRefused = errors.New("cloud refused the request body")
+// errRequestTooLarge is the cloud refusing a body over its size cap. A guest's
+// body is always under it; one carrying an account attachment need not be
+// (see Manager.call).
+var errRequestTooLarge = errors.New("cloud refused the request body as too large")
 
 type Client struct {
 	baseURL       string
@@ -117,8 +117,8 @@ func (c *Client) post(ctx context.Context, path string, body any, wantStatus int
 		return nil, ErrUpgradeRequired
 	case http.StatusUnauthorized:
 		return nil, ErrInvalidToken
-	case http.StatusBadRequest, http.StatusRequestEntityTooLarge:
-		return nil, fmt.Errorf("%w: status %d", errRequestRefused, resp.StatusCode)
+	case http.StatusRequestEntityTooLarge:
+		return nil, errRequestTooLarge
 	default:
 		return nil, fmt.Errorf("unexpected status: %d", resp.StatusCode)
 	}

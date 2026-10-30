@@ -118,7 +118,9 @@ func TestPrintBannerShowsAgents(t *testing.T) {
 }
 
 // A guest's banner is the one it always was; a linked machine adds its account,
-// and a link the cloud no longer accepts says how to restore it.
+// a link the cloud no longer accepts says how to restore it, and an instance
+// the cloud would not attach says so without pointing at a login that cannot
+// help.
 func TestPrintBannerShowsCloudAccount(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -140,6 +142,12 @@ func TestPrintBannerShowsCloudAccount(t *testing.T) {
 			opts:    BannerOptions{CloudLinkInvalid: true},
 			want:    []string{"⚠ This machine is no longer linked to your cloud account", "Run pockode login"},
 			notWant: []string{"▸ Cloud"},
+		},
+		{
+			name:    "not attached",
+			opts:    BannerOptions{CloudNotAttached: true},
+			want:    []string{"⚠ This instance could not be linked to your cloud account"},
+			notWant: []string{"▸ Cloud", "pockode login", "no longer linked"},
 		},
 	}
 

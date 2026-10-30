@@ -139,7 +139,8 @@ func Run(cfg Config) error {
 		LocalURL:         localURL,
 		RemoteURL:        remoteURL,
 		CloudEmail:       account.Email,
-		CloudLinkInvalid: account.Error != "",
+		CloudLinkInvalid: account.LinkInvalid(),
+		CloudNotAttached: account.NotAttached(),
 		Announcement:     announcement,
 		Agents:           agentStatuses,
 	})
