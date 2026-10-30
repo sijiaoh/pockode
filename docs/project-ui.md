@@ -786,6 +786,63 @@ Three consequences, each of which is a rule rather than an accident:
 three navigations (switch, open, back) — a component that routes itself is a
 second place worktree-aware URLs get built (§4).
 
+### 5.1 Back, up and replace
+
+What a navigation does to the tab's history is one rule for the whole app:
+
+> **Back retraces; ← goes up.** Every page the user deliberately opens — a
+> row, the next or previous item, a parent commit, a segment — is one history entry,
+> and the browser's Back retraces them one at a time. An in-app ← goes to the
+> page's parent: back to the parent's own entry when only pages opened under
+> it stand between, and otherwise by putting the parent in place of the pages
+> it skips — so after ← the browser's Back never lands on the page just left.
+> A page is replaced only when no page was visited: a setting or filter of the
+> page on screen, a redirect or normalisation, a URL corrected because its
+> page no longer exists, or a page the user's own action destroyed. History
+> follows the URLs alone, never the width.
+
+It is the split native apps already make — Android's Up beside its Back,
+iOS's pop to a view controller further down the stack — and each half fixes a
+failure this app had:
+
+- **Paging is a push.** A review that replaced its entry on every `‹ ›` was one
+  entry however many files were read, and Back left all of them at once. The
+  next file is a page the user moved to, so Back returns to the one before.
+- **← is never a push.** A ← that pushed its parent ping-ponged: the page just
+  left was right behind the parent, so the browser's Back reopened it, and
+  after paging A → B → C, ← then Back landed on C. Going up instead takes every
+  page opened under the parent off the way back.
+- **A segment is a place, a setting is not.** A segment has its own URL and
+  Back walks the segments (§5). A History search, its range or a file filter
+  is a setting of the list on screen, like wrap or flat-and-tree: written into
+  the URL so a reload keeps it, but by replace, so Back leaves the page instead
+  of unwinding what was chosen on it.
+- **Up is not Back.** A parent commit opened from a commit goes up to its
+  list, not to the child it was opened from; Back is what returns to the
+  child.
+
+The mechanism is `useGoToParent` (`hooks/useGoToParent.ts`). Each page names
+its parent (`parentOf`), and whether a page was opened under another is read
+from that chain (`isUnder`), with a page's identity ignoring what is only a
+setting of it — a list's query, a diff's side, the `session` every overlay
+carries (`samePage`, all in `types/overlay.ts`). What is behind the page, which
+the browser does not tell a page, comes from the history trail
+([frontend-state.md](code/frontend-state.md#the-history-trail-is-not-the-scroll-memory)).
+Where it knows nothing — a link, a typed URL, a fresh tab — the parent replaces
+the page, which can never loop, and opens at its top. A ← is from the page that
+asked: one that answers later (a commit made from the review, a delete) moves
+nobody once the reader has moved on, and a second press while the first is
+under way is dropped. It never reads the width, so a resize changes the
+layout of the current entry and nothing in the stack.
+
+Where it applies today: the Git workspace, every ← and every "Back to …" in it
+([git-ui.md](git-ui.md#routes-segments-and-back)). The other screens' ← still
+push their parent's URL (for a page over the chat, `AppShell`'s
+`handleCloseOverlay`) and have not moved onto the hook yet; the scroll
+memory's "a push to the page the reader came down from is a return"
+heuristic exists for them
+([frontend-state.md](code/frontend-state.md#why-a-pages-scroll-position-outlives-the-page)).
+
 ## 6. Edge cases
 
 | Case | Behaviour |

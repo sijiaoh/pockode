@@ -202,8 +202,10 @@ it is in the URL. There is no third option in between. Component state would
 hand a user browsing the archive back to `Current` every time they opened a
 work, which is why a store was reached for; but the store bought that at the
 price of a segment no link could name and a Back button that skipped the whole
-visit. Back stepping through the user's own filter changes turned out to be the
-behaviour users asked for by name, and it is the one a browser gives for free.
+visit. Back stepping through the segments the user chose turned out to be the
+behaviour users asked for by name, and it is the one a browser gives for free —
+a segment is a place, where a filter on the page is a setting and is replaced
+([project-ui.md §5.1](../project-ui.md#51-back-up-and-replace)).
 The round trip into a work is paid for in the URL instead: the detail carries
 the segment it was opened from, which a store never had to and a component never
 could. See [project-ui.md](../project-ui.md#5-where-the-segment-lives).
@@ -354,15 +356,19 @@ seen before is a new visit, just as following a link is in a browser. Opening
 the same commit again from History starts at its top. What counts as
 *back*:
 
-- **The browser's Back, or `history.back()`.** It returns to an entry that is
-  still in the history, so the entry's key finds what was saved.
-- **The page header's `←`.** It does not go back. It *pushes* the parent's URL
-  (`overlayToNavigation` in `lib/navigation.ts`), which makes a new entry. A
-  push to the href of the entry just under the current one in the trail the
-  reader came down is taken as that return, and the new entry inherits the old
-  one's offsets. The heuristic lives in `scrollMemory.ts` rather than at each
-  `←`, because every `←` and every Back-shaped push is already a navigation
-  through the router. No call site has anything to remember.
+- **The browser's Back, or any `history.go()` back.** It returns to an entry
+  that is still in the history, so the entry's key finds what was saved. That
+  includes every `←` in the Git workspace: it goes up (`useGoToParent`,
+  [project-ui.md §5.1](../project-ui.md#51-back-up-and-replace)), which is a
+  `go()` back to the parent's own entry whenever that entry is behind.
+- **The page header's `←` everywhere else.** It does not go back. It *pushes*
+  the parent's URL (`overlayToNavigation` in `lib/navigation.ts`), which makes
+  a new entry. A push to the href of the page the reader came down from is
+  taken as that return, and the new entry inherits the old one's offsets. The
+  heuristic lives in `scrollMemory.ts` rather than at each `←`, because every
+  `←` and every Back-shaped push is already a navigation through the router. No
+  call site has anything to remember. It stays only until those screens go up
+  as the Git workspace does.
 
 **Why not TanStack Router's `scrollRestoration`.** It fails on all three
 counts:
@@ -371,8 +377,8 @@ counts:
   the transcript, which manage their own place.
 - It restores at `onRendered`, before content that is still loading has any
   height to scroll into.
-- It knows only the browser's Back, and most returns here are the header's
-  push.
+- It knows only the browser's Back, and outside the Git workspace most returns
+  here are the header's push.
 
 **The entry is the one on screen, not the router's location.** The router's
 location moves to the next entry as soon as a navigation starts. The page
@@ -388,7 +394,11 @@ back to the first is no mount. So when the entry changes under a mounted
 scroller, the scroller goes to the new entry's offset, or to the top when it
 has none — a fresh visit, even though nothing remounted. A replace is the same
 visit (a diff's side switched, a file renamed), so `scrollMemory.ts` moves the
-replaced entry's offsets to the new one, and the page stays where it is.
+replaced entry's offsets to the new one, and the page stays where it is —
+unless the replace puts another page in its place: a parent standing in for
+the child its `←` was pressed on, the next file for one just discarded. That
+replace carries `FRESH_VISIT_STATE` and starts at the top, since every page's
+scroller is named alike and the offsets left are the other page's.
 
 **Restoring waits for content, and gives way to the reader.** A page usually
 remounts before its data is back, so the restore keeps writing the target every
@@ -433,12 +443,40 @@ only what it lists, and one missing name fails every file that imports it.
 **Known edges, accepted:**
 
 - **A reload forgets everything.** The memory is in-process, and nothing goes
-  to `sessionStorage`.
-- **A child page opened directly has no parent in the trail.** Its `←` lands
-  on a fresh parent, at the top.
-- **The return check compares the whole href.** If the `session` query changes
-  while the reader is on the child page, the next `←` is not recognised as a
-  return.
+  to `sessionStorage` — unlike the history trail (below), which a `←` needs to
+  survive a reload and offsets do not.
+- **A child page opened directly has no parent behind it.** Its `←` lands on a
+  fresh parent, at the top.
+- **The pushed return compares the whole href.** If the `session` query changes
+  while the reader is on the child page, the next pushed `←` is not recognised
+  as a return. A `←` that goes up is not affected: it finds the parent's entry
+  by page, not by href.
+
+#### The history trail is not the scroll memory
+
+Going up needs to know what is behind the page, which the browser never tells
+a page. `lib/historyTrail.ts` is the one record of that: `{ key, href }` at
+each `__TSR_index`, written on every push, replace and traversal. It is not a
+store either — nothing renders from it; `useGoToParent` reads it at a press —
+and it is kept in `sessionStorage`, which lives exactly as long as the tab's
+history, so a reload still knows what is behind. What it stored is believed
+only while the entry on screen is the one stored at its index; a typed URL
+starts a document the router numbers from 0 again, and the trail then knows
+that entry alone, which is always the safe answer (the parent replaces the
+page). An entry from before a reload belongs to a document that is gone, so a
+`go()` to it loads the app afresh; the rewrite owed on arrival is kept in
+storage too and made by the next document's trail as it starts. Each entry
+says which document wrote it, because such a `go()` may be slow to begin
+unloading this one: when `←`'s wait for it runs out, the parent is put in place
+here and that rewrite is still kept, since an entry the browser has dropped
+can never be arrived at. That is why
+`router.tsx` creates the browser history itself and starts the trail before
+`createRouter({ history })`: the router reads the location as it is created.
+
+The scroll memory keeps a pointer of its own per entry — the page the reader
+came down from — and not a copy of the trail: a push taken as a return stands
+in for the page it returned to, so what is under it is what was under that
+page, which is no record of the history.
 
 ## Server Cache vs Store
 
@@ -1271,6 +1309,7 @@ Key features:
 | `web/src/lib/gitWriteStore.ts` | The Git workspace's serial queue per worktree, for writes — and their failures — that outlive the view that started them |
 | `web/src/lib/worktreeQuery.ts` | Worktree list query key + fetcher, kept together |
 | `web/src/hooks/useSubscription.ts` | Subscription lifecycle hook |
+| `web/src/lib/historyTrail.ts` / `web/src/hooks/useGoToParent.ts` | What is behind the page in the tab's history, and the in-app ← that reads it to go up ([why](#the-history-trail-is-not-the-scroll-memory)) |
 | `web/src/lib/scrollMemory.ts` / `web/src/hooks/useScrollRestoration.ts` / `web/src/hooks/useScrollRestorationScope.ts` / `web/src/components/ui/PageBody.tsx` | A page's scroll position per history entry, put back when the reader returns ([why](#why-a-pages-scroll-position-outlives-the-page)) |
 | `web/src/lib/valueState.ts` | Stored / still coming / not coming, named once for every control that waits on a snapshot ([why three states](subscription-system.md#why-the-controls-wait-for-the-session-to-describe-itself)) |
 
