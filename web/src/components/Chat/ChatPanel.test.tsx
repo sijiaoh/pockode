@@ -19,6 +19,7 @@ import { clearAnswerIntent, requestAnswerPanel } from "../../lib/answerIntent";
 import { canvasActions, useCanvasStore } from "../../lib/canvasStore";
 import { uploadChatAttachment } from "../../lib/chatAttachments";
 import { useInputStore } from "../../lib/inputStore";
+import { usePermissionRequestStore } from "../../lib/permissionRequestStore";
 import { useQuestionDraftStore } from "../../lib/questionDraftStore";
 import {
 	resetChatUIConfig,
@@ -2352,6 +2353,35 @@ describe("ChatPanel", () => {
 			expect(screen.queryByRole("textbox")).toBeNull();
 		});
 
+		it("says the last reply on the activity strip, and opens it in chat", async () => {
+			const user = userEvent.setup();
+			mockState.mockHistory = [
+				{ type: "message", content: "make a checklist", seq: 1 },
+				{ type: "text", content: "Done — the checklist is up.", seq: 2 },
+				{ type: "done", seq: 3 },
+			];
+			subscribeWithCanvas({ revision: 0 });
+			render(<ChatPanel {...defaultProps} />);
+
+			const strip = await screen.findByRole("button", {
+				name: "Turn details: Done — the checklist is up.",
+			});
+			await user.click(strip);
+			const sheet = screen.getByRole("dialog", { name: "Last turn" });
+			await user.click(
+				within(sheet).getByRole("button", { name: "Open in chat" }),
+			);
+
+			expect(view("Chat")).toHaveAttribute("aria-pressed", "true");
+			expect(screen.queryByRole("dialog")).toBeNull();
+			// The reply's start is where the transcript was taken to.
+			expect(
+				screen
+					.getByText("Done — the checklist is up.")
+					.closest("[data-message-id]"),
+			).toHaveClass("jump-highlight");
+		});
+
 		it("opens the next session on its canvas", async () => {
 			const user = userEvent.setup();
 			subscribeWithCanvas({ revision: 0 });
@@ -2399,7 +2429,33 @@ describe("ChatPanel", () => {
 			expect(screen.queryByRole("button", { name: "Message…" })).toBeNull();
 		});
 
-		it("switches to the transcript to show a permission request", async () => {
+		const blockOn = (...requestIds: string[]) =>
+			acceptSetting({
+				turn: {
+					phase: "blocked",
+					open: true,
+					since: "2024-01-01T00:00:00Z",
+					blockers: requestIds.map((request_id) => ({
+						kind: "permission" as const,
+						request_id,
+						raised_at: "2024-01-01T00:00:00Z",
+					})),
+				},
+			});
+		// The panel's buttons wait `ARM_MS` after it appears.
+		const armed = async (button: HTMLElement) => {
+			await waitFor(
+				() =>
+					expect(button.closest("[data-armed]")).toHaveAttribute(
+						"data-armed",
+						"true",
+					),
+				{ timeout: 2000 },
+			);
+			return button;
+		};
+
+		it("answers a permission request in a panel over the canvas, not in the strip", async () => {
 			const user = userEvent.setup();
 			subscribeWithCanvas({ revision: 0 });
 			render(<ChatPanel {...defaultProps} />);
@@ -2413,27 +2469,143 @@ describe("ChatPanel", () => {
 					tool_use_id: "tool-c",
 				});
 			});
-			act(() =>
-				acceptSetting({
-					turn: {
-						phase: "blocked",
-						open: true,
-						since: "2024-01-01T00:00:00Z",
-						blockers: [
-							{
+			act(() => blockOn("req-c"));
+
+			const panel = screen.getByRole("dialog", { name: "Permission request" });
+			expect(view("Canvas")).toHaveAttribute("aria-pressed", "true");
+			expect(
+				screen.queryByRole("button", { name: /^Show permission request:/ }),
+			).toBeNull();
+			await user.click(
+				await armed(within(panel).getByRole("button", { name: "Allow" })),
+			);
+			expect(mockState.permissionResponse).toHaveBeenCalledWith(
+				expect.objectContaining({ request_id: "req-c", choice: "allow" }),
+			);
+		});
+
+		it("lists a request from the subscribe reply that the transcript does not have", async () => {
+			mockState.chatMessagesSubscribe.mockImplementation(() =>
+				Promise.resolve({
+					id: "sub-1",
+					initial: {
+						history: [],
+						// Read with the records: "req-lost" was pending then, and
+						// its record is not among them.
+						turn: {
+							phase: "blocked",
+							open: true,
+							since: "",
+							blockers: ["req-old", "req-lost"].map((request_id) => ({
 								kind: "permission",
-								request_id: "req-c",
-								raised_at: "2024-01-01T00:00:00Z",
+								request_id,
+								raised_at: "",
+							})),
+						},
+						canvas: { revision: 0 },
+						permission_requests: [
+							{
+								type: "permission_request",
+								seq: 3,
+								request_id: "req-old",
+								tool_name: "Bash",
+								tool_input: { command: "make deploy" },
+								tool_use_id: "tool-old",
 							},
 						],
 					},
 				}),
 			);
+			seedSessionDetail({ canvas: true });
+			render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+			act(() => blockOn("req-old", "req-lost"));
+
+			const panel = screen.getByRole("dialog", {
+				name: "2 permission requests",
+			});
+			expect(within(panel).getByText("make deploy")).toBeInTheDocument();
+			expect(
+				within(panel).getByText(/its details could not be read/),
+			).toBeInTheDocument();
+			// Not drawn into the transcript: the one copy is the panel's, kept
+			// hidden under chat view.
+			await userEvent.setup().click(view("Chat"));
+			expect(screen.getAllByText("make deploy")).toHaveLength(1);
+			expect(screen.getByText("make deploy").closest("[inert]")).not.toBeNull();
+		});
+
+		it("takes what became of the page's requests into the store", async () => {
+			mockState.chatMessagesSubscribe.mockImplementation(() =>
+				Promise.resolve({
+					id: "sub-1",
+					initial: {
+						history: [
+							{
+								type: "request_cancelled",
+								seq: 4,
+								request_id: "req-gone",
+								reason: "timeout",
+							},
+						],
+						turn: { phase: "idle", open: false, since: "" },
+						canvas: { revision: 0 },
+					},
+				}),
+			);
+			render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+			expect(usePermissionRequestStore.getState().outcomes).toEqual({
+				"req-gone": { status: "expired", reason: "timeout" },
+			});
+		});
+
+		it("hides to a banner and stays hidden as more requests join the batch", async () => {
+			const user = userEvent.setup();
+			subscribeWithCanvas({ revision: 0 });
+			render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+			act(() => blockOn("req-1"));
+
+			await user.click(screen.getByRole("button", { name: /Hide/ }));
+			expect(screen.queryByRole("dialog")).toBeNull();
+			const banner = screen.getByRole("button", {
+				name: /1 permission request waiting/,
+			});
+			expect(banner).toHaveFocus();
+
+			act(() => blockOn("req-1", "req-2"));
+			expect(screen.queryByRole("dialog")).toBeNull();
+			expect(
+				screen.getByRole("button", { name: /2 permission requests waiting/ }),
+			).toBeInTheDocument();
+
+			// Switching views keeps the choice.
+			await user.click(view("Chat"));
+			await user.click(view("Canvas"));
+			expect(screen.queryByRole("dialog")).toBeNull();
 
 			await user.click(
-				screen.getByRole("button", { name: /^Show permission request:/ }),
+				screen.getByRole("button", { name: /permission requests waiting/ }),
 			);
-			expect(view("Chat")).toHaveAttribute("aria-pressed", "true");
+			expect(
+				screen.getByRole("dialog", { name: "2 permission requests" }),
+			).toHaveFocus();
+		});
+
+		it("collapses an open composer when a request arrives, keeping its draft", async () => {
+			const user = userEvent.setup();
+			subscribeWithCanvas({ revision: 0 });
+			render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+			await user.click(screen.getByRole("button", { name: "Message…" }));
+			await user.type(screen.getByRole("textbox"), "half a thought");
+
+			act(() => blockOn("req-1"));
+			expect(screen.queryByRole("textbox")).toBeNull();
+			expect(
+				screen.getByRole("button", { name: "half a thought" }),
+			).toBeDisabled();
 		});
 	});
 

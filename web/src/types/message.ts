@@ -1193,6 +1193,13 @@ export interface ChatMessagesSubscribeResult extends ChatMessagesHistoryPage {
 	 * arrives with (docs/canvas-ui.md §13.2).
 	 */
 	canvas?: CanvasState;
+	/**
+	 * The `permission_request` records of every request pending when the
+	 * subscription opened, as stored, whatever page they are on. Never part of
+	 * the transcript: they may be far older than `history` (docs/canvas-ui.md
+	 * §10.4).
+	 */
+	permission_requests?: unknown[];
 }
 
 export interface ChatMessagesHistoryParams {

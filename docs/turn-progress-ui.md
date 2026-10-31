@@ -257,6 +257,12 @@ row says `Thought` (§1.1).
 ⟳ Thinking… 1m 4s · Checking how the sender retr… ›
 ```
 
+A canvas session's canvas view shows no transcript, and so no tail line; its
+activity strip says the same things on one line under the canvas, reusing the
+tail line's clock (`TurnClock`) and live glyph (`LIVE_GLYPH`) from `TurnTail`
+([canvas-ui.md §11](canvas-ui.md#11-the-activity-strip)). A change to either
+changes both.
+
 ### 2.1 Where it is
 
 **In the turn-end slot of the reply being written** — the place the turn-end

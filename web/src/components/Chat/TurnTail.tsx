@@ -24,14 +24,13 @@ interface Props {
 
 const ANNOUNCE_DELAY_MS = 100;
 
-// Wrapped because `Spinner` is a status of its own, and one nested beside the
-// line's would be announced too. Still under reduced motion: the words and the
-// clock already say the turn is alive, and `Spinner` does not stop itself.
-const GLYPH = (
-	<span
-		aria-hidden
-		className="mt-0.5 flex size-3 shrink-0 items-center justify-center text-th-accent"
-	>
+/**
+ * A producing turn's glyph, in the colour around it — here and on canvas
+ * view's activity strip. Still under reduced motion: the words and the clock
+ * already say the turn is alive, and `Spinner` does not stop itself.
+ */
+export const LIVE_GLYPH = (
+	<>
 		<Spinner
 			variant="current"
 			size="h-3 w-3"
@@ -39,15 +38,27 @@ const GLYPH = (
 			srText={null}
 		/>
 		<CircleDot className="hidden size-3 motion-reduce:block" />
+	</>
+);
+
+// Wrapped because `Spinner` is a status of its own, and one nested beside the
+// line's would be announced too.
+const GLYPH = (
+	<span
+		aria-hidden
+		className="mt-0.5 flex size-3 shrink-0 items-center justify-center text-th-accent"
+	>
+		{LIVE_GLYPH}
 	</span>
 );
 
 /**
- * How long the turn has been open. Its own component with its own one-second
+ * How long the turn has been open — here and on canvas view's activity strip
+ * (docs/canvas-ui.md §11.1). Its own component with its own one-second
  * interval — at every length, unlike a tool row's counter: `1m 4s` must not sit
  * for a minute — so the tick re-renders the clock and not the line.
  */
-function TurnClock({ openedAt }: { openedAt: number }) {
+export function TurnClock({ openedAt }: { openedAt: number }) {
 	const [now, setNow] = useState(() => Date.now());
 
 	useEffect(() => {

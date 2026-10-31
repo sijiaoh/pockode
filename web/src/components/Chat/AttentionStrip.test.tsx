@@ -358,6 +358,60 @@ describe("AttentionStrip", () => {
 		});
 	});
 
+	// Canvas view: the banner and the panel are the permission row there, and
+	// the activity strip the background row.
+	describe("with the turn's rows drawn elsewhere", () => {
+		it("leaves the permission row out, falling through to nothing", () => {
+			const { container } = render(
+				<AttentionStrip
+					turn={turn("blocked", [permission, background])}
+					onJumpToRequest={vi.fn()}
+					turnRowsElsewhere
+					watchedStories={[{ id: "w1", title: "A story" }]}
+				/>,
+			);
+			expect(container).toBeEmptyDOMElement();
+		});
+
+		it("leaves the background row out, falling through to nothing", () => {
+			const { container } = render(
+				<AttentionStrip
+					turn={turn("blocked", [background])}
+					onJumpToRequest={vi.fn()}
+					turnRowsElsewhere
+					watchedStories={[{ id: "w1", title: "A story" }]}
+				/>,
+			);
+			expect(container).toBeEmptyDOMElement();
+		});
+
+		it("keeps the rows an unblocked turn has", () => {
+			render(
+				<AttentionStrip
+					turn={turn("running", [])}
+					onJumpToRequest={vi.fn()}
+					turnRowsElsewhere
+					watchedStories={[{ id: "w1", title: "A story" }]}
+				/>,
+			);
+			expect(screen.getByText("Watching 1 story.")).toBeInTheDocument();
+		});
+
+		it("still acknowledges a message the agent has not read", () => {
+			render(
+				<AttentionStrip
+					turn={turn("blocked", [permission])}
+					onJumpToRequest={vi.fn()}
+					turnRowsElsewhere
+					sendPending
+				/>,
+			);
+			expect(
+				screen.getByText("Sent — the agent has not read it yet."),
+			).toBeInTheDocument();
+		});
+	});
+
 	// There is no per-task kill: the model gives the host no way to end one task
 	// without ending the turn, so the strip must not offer one.
 	it("offers nothing to press against the task itself", () => {

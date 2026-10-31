@@ -23,10 +23,8 @@ import {
 } from "./discardedMessagesContext";
 import ForkOriginBanner from "./ForkOriginBanner";
 import HistoryReserve from "./HistoryReserve";
-import MessageItem, {
-	type PermissionChoice,
-	type PromptError,
-} from "./MessageItem";
+import MessageItem, { type PromptError } from "./MessageItem";
+import type { PermissionChoice } from "./PermissionRequestItem";
 import { anchorCandidateProps } from "./scrollAnchor";
 import { TranscriptViewContext } from "./transcriptViewContext";
 import {
@@ -70,16 +68,27 @@ function findRequestCard(
 	return null;
 }
 
+function findMessageRow(
+	root: HTMLElement,
+	messageId: string,
+): HTMLElement | null {
+	for (const row of root.querySelectorAll<HTMLElement>("[data-message-id]")) {
+		if (row.dataset.messageId === messageId) return row;
+	}
+	return null;
+}
+
 /**
  * What the transcript can be asked to do from outside it.
  *
- * Jumping to a card is scroll work, and the scroll container lives here — so the
- * attention strip, which sits below the list, asks rather than reimplements. It
- * is the only caller, and a permission card is the only thing it can reach
- * (`findRequestCard`).
+ * Jumping is scroll work, and the scroll container lives here — so the callers
+ * below the list ask rather than reimplement: the attention strip jumps to a
+ * permission card (`findRequestCard`), canvas view's turn details to the start
+ * of a reply (docs/canvas-ui.md §11.3).
  */
 export interface MessageListHandle {
 	jumpToRequest: (requestId: string) => void;
+	jumpToMessage: (messageId: string) => void;
 }
 
 interface Props {
@@ -310,13 +319,8 @@ function MessageList({
 
 	useEffect(() => clearHighlight, [clearHighlight]);
 
-	const scrollToRequest = useCallback(
-		(requestId: string) => {
-			const scrollEl = scrollRef.current;
-			if (!scrollEl) return;
-			const card = findRequestCard(scrollEl, requestId);
-			if (!card) return;
-
+	const jumpToTarget = useCallback(
+		(card: HTMLElement, focusTarget: HTMLElement | null) => {
 			// The jump is where the view is meant to be now, so the card becomes the
 			// anchor: the output that goes on landing below it must not push it away
 			// again, which is the same promise reading anywhere else gets.
@@ -335,20 +339,43 @@ function MessageList({
 			// preventScroll: the browser's own focus scroll would move the view off
 			// the position the jump just took the anchor at.
 			//
-			// The card's first button is the row that opens it, which is as close as
-			// a permission card has to a header. Without moving the focus, the jump
-			// is one a keyboard user cannot perceive — and a focus into an `inert`
+			// Without moving the focus, the jump is one a keyboard user cannot
+			// perceive — and a focus into an `inert`
 			// subtree is dropped without a word, so a caller jumping out from under
 			// something that covers the transcript has to let the cover go first
 			// (`ChatPanel.handleJumpToRequest`).
-			card.querySelector<HTMLElement>("button")?.focus({ preventScroll: true });
+			focusTarget?.focus({ preventScroll: true });
 		},
 		[clearHighlight, jumpTo],
 	);
 
-	useImperativeHandle(ref, () => ({ jumpToRequest: scrollToRequest }), [
-		scrollToRequest,
-	]);
+	useImperativeHandle(
+		ref,
+		() => ({
+			jumpToRequest: (requestId) => {
+				const scrollEl = scrollRef.current;
+				const card = scrollEl && findRequestCard(scrollEl, requestId);
+				// The card's first button is the row that opens it, which is as
+				// close as a permission card has to a header.
+				if (card) jumpToTarget(card, card.querySelector("button"));
+			},
+			jumpToMessage: (messageId) => {
+				const scrollEl = scrollRef.current;
+				const row = scrollEl && findMessageRow(scrollEl, messageId);
+				if (!row) return;
+				// A row is no control, so it is made focusable for the jump alone:
+				// the keyboard reads on from where the eye was taken — unless the
+				// composer coming up with chat view takes focus after it, as it
+				// does under a fine pointer.
+				row.tabIndex = -1;
+				const unfocusable = () => row.removeAttribute("tabindex");
+				row.addEventListener("blur", unfocusable, { once: true });
+				jumpToTarget(row, row);
+				if (document.activeElement !== row) unfocusable();
+			},
+		}),
+		[jumpToTarget],
+	);
 
 	// Only once the whole transcript is loaded: pinned above a page that is still
 	// the middle of a conversation, the banner would claim a position it does not

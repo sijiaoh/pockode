@@ -78,7 +78,7 @@ Agent page (card)                          Workspace page (Files)
 | `FullScreenViewer` (agent page) | Under the viewer's header, above the frame; hidden while the source is shown |
 | `PagePreview` (Files, commit) | Under the page bar, above the frame |
 | `HtmlStage` (media viewer) | Under the toolbar, above the frame, as in `PagePreview` |
-| `CanvasFrame` (a canvas session) | Under the session header (or the permission banner), above the canvas; only in canvas view ([canvas-ui.md §4](canvas-ui.md#4-the-page-frame)) |
+| `CanvasFrame` (a canvas session) | Under the session header (or the permission banner or its expiry line), above the canvas; only in canvas view ([canvas-ui.md §4](canvas-ui.md#4-the-page-frame)) |
 
 **Look.** It is an offer, not a warning, as the Markdown placeholder is: muted,
 never the warning or error colour, so it does not read as "this page is
