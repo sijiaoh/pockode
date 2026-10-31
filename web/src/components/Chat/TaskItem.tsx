@@ -58,7 +58,7 @@ function isPendingCard(part: ContentPart): boolean {
 }
 
 /** The latest child, worded as its own row would word it — never red. */
-function LatestChildLabel({ child }: { child: LatestChild }) {
+export function LatestChildLabel({ child }: { child: LatestChild }) {
 	const workDir = useWSStore((state) => state.workDir);
 	if (child.kind === "text") {
 		return <span className="min-w-0 truncate">{child.text}</span>;

@@ -10,7 +10,8 @@ define.
 
 The surfaces are `ToolCallItem.tsx`, `TaskItem.tsx` (the subagent category),
 `ToolGroupSummary.tsx` (the row a run of calls folds into) and
-`PermissionRequestItem` in `MessageItem.tsx` — all three drawing their row
+`PermissionRequestItem.tsx` (the permission card, which the canvas's
+permission panel draws too) — all three drawing their row
 through `ToolRow.tsx`, which is where the grammar below lives — plus
 `ToolInvocation.tsx` for the invocation a row and a card both show,
 `ToolResultDisplay.tsx` for the result, `ProposedChange.tsx` for the file

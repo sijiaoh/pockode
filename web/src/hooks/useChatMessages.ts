@@ -31,6 +31,7 @@ import {
 	stampMessageAnchorSeq,
 	updatePermissionRequestStatus,
 } from "../lib/messageReducer";
+import { permissionRequestActions } from "../lib/permissionRequestStore";
 import type { CanvasActionInput } from "../lib/rpc";
 import {
 	selectSessionDetail,
@@ -53,6 +54,7 @@ import type {
 	ChatNotification,
 	HistorySeq,
 	Message,
+	PermissionRequest,
 	PermissionResponseParams,
 	QuestionAnswerRecord,
 	ServerNotification,
@@ -295,6 +297,38 @@ function newestSeq(history: unknown[]): HistorySeq | undefined {
 	return undefined;
 }
 
+function permissionRequestOf(
+	event: Extract<NormalizedEvent, { type: "permission_request" }>,
+): PermissionRequest {
+	return {
+		requestId: event.requestId,
+		toolName: event.toolName,
+		toolInput: event.toolInput,
+		toolUseId: event.toolUseId,
+		permissionSuggestions: event.permissionSuggestions,
+	};
+}
+
+/** What a live record says about a permission request, into the store. */
+function receivePermissionRecord(sessionId: string, event: NormalizedEvent) {
+	switch (event.type) {
+		case "permission_request":
+			permissionRequestActions.add(sessionId, permissionRequestOf(event));
+			return;
+		case "permission_response":
+			permissionRequestActions.settle(sessionId, event.requestId, {
+				status: event.choice === "deny" ? "denied" : "allowed",
+			});
+			return;
+		case "request_cancelled":
+			permissionRequestActions.settle(sessionId, event.requestId, {
+				status: "expired",
+				...(event.reason ? { reason: event.reason } : {}),
+			});
+			return;
+	}
+}
+
 /**
  * The thinking part a record settled into, found by the record itself: the
  * reducer keeps the thought it was handed, so neither its position nor what
@@ -526,6 +560,9 @@ export function useChatMessages({
 		(notification: ServerNotification) => {
 			const seq = readHistorySeq(notification);
 			const event = normalizeEvent(notification);
+			// Before the skip below: the page having a record says nothing of
+			// whether the store does.
+			receivePermissionRecord(sessionId, event);
 			// The thinking's own record ends it, and so does anything the main
 			// agent says after it: output proves the thinking is over even if its
 			// record never comes. Read before the skip below, because a record the
@@ -588,7 +625,7 @@ export function useChatMessages({
 			// replayed one has no honest clock to draw from.
 			setMessages((prev) => applyServerEvent(prev, event, seq, { live: true }));
 		},
-		[flushActivity, flushThinking, endThinking],
+		[sessionId, flushActivity, flushThinking, endThinking],
 	);
 
 	// Reset when the session changes. During render rather than in an effect: an
@@ -702,6 +739,27 @@ export function useChatMessages({
 			boundaryTerminalRef.current = leadingTurnTerminal(initial.history);
 			newestHistorySeqRef.current = newestSeq(initial.history);
 			subscribedTurnRef.current = initial.turn;
+			permissionRequestActions.reset(
+				sessionId,
+				(initial.permission_requests ?? []).flatMap((record) => {
+					const event = normalizeEvent(record as Record<string, unknown>);
+					return event.type === "permission_request"
+						? [permissionRequestOf(event)]
+						: [];
+				}),
+				(initial.turn.blockers ?? []).flatMap((b) =>
+					b.kind === "permission" && b.request_id ? [b.request_id] : [],
+				),
+			);
+			// What became of the requests on this page — answered or expired
+			// while this client was away — for the canvas's expiry line, which
+			// reads the store once no request blocks the turn.
+			for (const record of initial.history) {
+				const event = normalizeEvent(record as Record<string, unknown>);
+				if (event.type !== "permission_request") {
+					receivePermissionRecord(sessionId, event);
+				}
+			}
 			// Progress for the transcript being replaced. A thinking under way
 			// carries on, but every delta of it before now is gone: the next one
 			// starts it over as joined late.
@@ -724,7 +782,7 @@ export function useChatMessages({
 			);
 			setIsLoadingHistory(false);
 		},
-		[endThinking],
+		[sessionId, endThinking],
 	);
 
 	// Held only while its transcript is: a page can be 256KB, and the next
@@ -737,6 +795,7 @@ export function useChatMessages({
 		return () => {
 			if (openSessionRef.current === sessionId) openSessionRef.current = null;
 			canvasActions.forget(sessionId);
+			permissionRequestActions.forget(sessionId);
 		};
 	}, [sessionId]);
 
@@ -1124,17 +1183,28 @@ export function useChatMessages({
 	const resetPrompt = useCallback(
 		(requestId: string, status: "pending" | "expired") => {
 			setMessages((prev) => resetPromptRequest(prev, requestId, status));
+			// The optimistic answer is undone either way: an expiry does not
+			// replace an answer, and this answer never went through.
+			permissionRequestActions.unsettle(sessionId, requestId);
+			if (status === "expired") {
+				permissionRequestActions.settle(sessionId, requestId, { status });
+			}
 		},
-		[],
+		[sessionId],
 	);
 
+	// The store as well as the transcript: the card may be on a page not
+	// loaded, and a card answered in the canvas's panel must not look pending.
 	const updatePermissionStatus = useCallback(
 		(requestId: string, newStatus: "allowed" | "denied") => {
 			setMessages((prev) =>
 				updatePermissionRequestStatus(prev, requestId, newStatus),
 			);
+			permissionRequestActions.settle(sessionId, requestId, {
+				status: newStatus,
+			});
 		},
-		[],
+		[sessionId],
 	);
 
 	// Whether a turn is open, and the optimistic half is load-bearing: between the

@@ -33,7 +33,7 @@ It builds on, and does not repeat:
 
 ## Key Files
 
-Partly built. The server side is complete: the store, the session property,
+Built. The server side is complete: the store, the session property,
 the pushed state, the link from a result to its revision, the fork (by message
 or by page, with `numbered_from` and `fork_note`), the history reads with
 `fork_blocked`, lint, the send RPC, the size on messages, the pending
@@ -41,10 +41,10 @@ permission requests on subscribe, the two tools and the guidance. On the
 frontend, the client side of the contract (creating a canvas session, the
 pushed state, sending an action), both sides of the bridge, the page frame, the
 canvas screen (the view switch, the empty state, the collapsed input, the size
-measurement), chat view's canvas rows and action bubbles, and the history view
-(§15) with both its entries and forking from a page exist. Still to come: the
-permission panel (§10) and the activity strip (§11). Rows marked *planned* do
-not exist yet.
+measurement), chat view's canvas rows and action bubbles, the permission panel,
+its banner and the expiry line (§10), the activity strip with its turn details
+(§11), and the history view (§15) with both its entries and forking from a page
+exist.
 
 | Path | Role |
 |------|------|
@@ -76,12 +76,16 @@ not exist yet.
 | `web/src/lib/agentPage.ts` | What `CanvasFrame` and `HtmlFrame` share (§4): the sandbox, the page document's order (`agentPageDocument`), the wrapper (`agentWrapperDocument`), the project capability (`usePageProject`, whose freshness for a patch is `useRawMediaSource`'s `isFreshCapability`) |
 | `web/src/lib/canvasRedraw.ts` | How each new state reaches the frame (§8.3): patch or whole drawing, one patch at a time, the app's record of the revision shown (`CanvasRedraw`) |
 | `web/src/components/Canvas/CanvasFrame.tsx` | The page frame (§4): the document, the size (§5), redrawing through `CanvasRedraw`, the host allowance per session, and the app side of the bridge (§8.2, §8.4) — answering sends, the theme, `sendable`, the page's focus for the size rule, `readOnly` saying which page a history frame is (§15.4); tested in real engines by `CanvasFrame.browser.test.tsx` |
-| `web/src/components/Canvas/CanvasView.tsx` | The canvas view's canvas (§2): the session's current canvas from the store in a `CanvasFrame`, the empty state at revision 0, and the size measurement (§5); tested in real engines by `CanvasView.browser.test.tsx` |
+| `web/src/components/Canvas/CanvasView.tsx` | The canvas view's canvas (§2): the session's current canvas from the store in a `CanvasFrame`, the empty state at revision 0, and the size measurement (§5), held off while the permission banner is up; the permission banner, expiry line and panel in its column, the panel's layer and its focus (§10); tested in real engines by `CanvasView.browser.test.tsx` |
 | `web/src/lib/canvasSize.ts` | The size rule (§5): a measurement in whole pixels (`canvasSizeOf`), which measurement is kept (`keepsMeasurement`), and what counts as editable in the app (`isEditableElement`) |
 | `web/src/components/Canvas/CanvasComposer.tsx` | The collapsed input (§2), which opens into the ordinary composer (`CanvasComposer`), and the bars under the canvas floating over it while it is open (`ComposerDock`); its Stop is the composer's own (`StopButton` in `Chat/SendStopSlot.tsx`); the float tested in real engines by `CanvasComposer.browser.test.tsx` |
 | `web/src/components/Canvas/CanvasViewSwitch.tsx`, `web/src/components/Chat/SessionHeader.tsx` | The header's **Canvas \| Chat** switch, drawn after the session's title (`viewSwitch`); the session panel's **Canvas** section and its **History** row (`canvasHistory`, §15.1) |
-| `web/src/components/Chat/ChatPanel.tsx` | The canvas screen's place in the session screen: which view is up, both kept mounted, the canvas wired to `useChatMessages`' `sendCanvasAction`, the input in canvas view; which revision the history view is open on, over either view (§15.1), and the view and the fork sheet replacing one another, Cancel reopening the view (§15.6) |
-| `web/src/components/Canvas/ActivityStrip.tsx`, `web/src/components/Canvas/PermissionPanel.tsx`, and the store of the pending permission requests (§10.4) | *planned* |
+| `web/src/components/Chat/ChatPanel.tsx` | The canvas screen's place in the session screen: which view is up, both kept mounted, the canvas wired to `useChatMessages`' `sendCanvasAction`, the input in canvas view; which revision the history view is open on, over either view (§15.1), and the view and the fork sheet replacing one another, Cancel reopening the view (§15.6); what it hands the canvas for §10 and §11 (§10.1's list) |
+| `web/src/components/Canvas/PermissionPanel.tsx`, `web/src/components/Canvas/PermissionBanner.tsx`, `web/src/components/Canvas/usePermissionBatch.ts` | The panel (§10.1); the banner, the expiry line and the refused-send flash (`PermissionBanner`, `PermissionExpiryLine`, `RefusalFlash`); the batch, open-or-collapsed, waiting behind another layer and the refused-send sentence (`usePermissionBatch`, §10.2, §10.3), held by `CanvasView`, which draws them in its column and registers the panel as a layer |
+| `web/src/components/Chat/PermissionRequestItem.tsx` | The permission card (`PermissionRequestItem`, with its `armKey` and `endingTurn` for the panel), `PERMISSION_EXPIRY_COPY` and the batch's sentence (`permissionExpiryText`), and the card of a blocker with no record (`UnreadablePermissionItem`) — moved out of `MessageItem.tsx` so the chat, the panel and the expiry line use the same ones (§10.1) |
+| `web/src/lib/activityStrip.ts` | What the activity strip says (§11.1): which reply it speaks for (`stripReplyIndex`) and the message it answers (`replyPrompt`), the reply's latest item (`latestItem`), how it ended (`endingPrefix`), the phase from the turn alone (`stripPhase`), the line and its words for the accessible name (`stripLine`, `stripLineText`) |
+| `web/src/components/Canvas/ActivityStrip.tsx`, `web/src/components/Canvas/TurnDetailsSheet.tsx` | The strip, first in `ComposerDock` while canvas view is shown (§11.2), and the sheet its tap opens (§11.3); the line reuses the tool row's `Detail`, the subagent row's `LatestChildLabel` and the tail line's `TurnClock`, the sheet `MessageItem` (`withoutActions`); **Open in chat** is `MessageList`'s `jumpToMessage` |
+| `web/src/lib/permissionRequestStore.ts` | The pending requests' records and what became of them, kept apart from the transcript (§10.4): filled by `useChatMessages` from the subscribe reply's `permission_requests`, the answers and expiries on its first page, the live records, and the answers this client sent; `resolvePermission` puts it together with the transcript's card |
 | `web/src/components/Canvas/CanvasHistorySheet.tsx` | The history view (§15): a `fullScreen` `Sheet` holding one read-only `CanvasFrame` keyed by its revision, the stepper in its footer, the revision list (a layer of its own), the note line; Fork, `fork_blocked`'s reasons (`FORK_BLOCKED_REASONS`) and the page handed to the fork sheet (`CanvasForkPage`); owns the open revision |
 | `web/src/hooks/useCanvasHistory.ts` | The history view's reads (§15.3): the list, read again on every new pushed revision, after a reconnect, and on `callsSettled` while an entry is `pending` or a read is in flight — one read in flight and at most one more asked for; one snapshot at a time, kept while the view is up |
 | `web/src/components/Chat/ForkSessionSheet.tsx`, `web/src/hooks/useForkSession.ts` | The fork sheet's page anchor (`page`) beside its message anchor, and its `onCancel`; the cut as a message's seq or a page's revision (`ForkCut`) (§15.6) |
@@ -127,7 +131,7 @@ engine-specific except where guidance is delivered (§9).
 ┌──────────────────────────────────────────────┐
 │ ←  Release checklist        [Canvas│Chat]  ⋯ │  session header
 ├──────────────────────────────────────────────┤
-│ ⚠ 2 permission requests waiting      [Show] │  permission banner — only when collapsed (§10)
+│ 🔒 2 permission requests waiting     [Show] │  permission banner — only when collapsed or waiting (§10)
 ├──────────────────────────────────────────────┤
 │ ⊘ Not loaded · cdn.jsdelivr.net      [Load] │  hosts strip — only when something was refused
 ├──────────────────────────────────────────────┤
@@ -139,7 +143,7 @@ engine-specific except where guidance is delivered (§9).
 │                                              │
 │                                              │
 ├──────────────────────────────────────────────┤
-│ ⟳ Running tests · npm test           1m 4s › │  activity strip (§11)
+│ ⟳ Bash  npm test                     1m 4s › │  activity strip (§11)
 ├──────────────────────────────────────────────┤
 │ [ Message…                              ]  ■ │  collapsed input; ■ = Stop while a turn is open
 └──────────────────────────────────────────────┘
@@ -193,15 +197,25 @@ engine-specific except where guidance is delivered (§9).
     the composer can place the caret and show the arrival as it would in chat
     view; while the line is disabled it waits there.
   - While a permission request owns the agent's input, the line is disabled and
-    reads `Allow or deny to send` when it holds no draft (§10.3).
+    reads `Allow or deny to send` when it holds no draft (§10.3). A composer
+    open when the request arrives collapses into the line, its draft kept: it
+    could not send anyway, and floating it would cover the bottom of the
+    permission panel — the buttons.
   - A typed message that could not be delivered is reported under it in the
     transcript, which canvas view does not show, so canvas view says so above the
     input — `Your message couldn't be sent. The chat says why.` — as a page
     over the chat does.
-- **Until the permission panel and the activity strip exist** (§10, §11), the
-  chat's attention strip is shown between the canvas and the input in canvas
-  view too, so a waiting request is never invisible; its way to the request's
-  card switches to chat view, where the card is.
+- **The chat's attention strip** is shown in canvas view too, between the
+  activity strip and the input, *without* its two turn rows — permission and
+  background, which canvas view says in its own surfaces (§11.4).
+- **No question card is ever over the canvas.** A canvas session posts no
+  questions (§3.4), so `turn.unanswered` stays empty, and the answer panel and
+  the strip's questions row do not arise in canvas view. The permission panel
+  (§10) is the only layer designed to be drawn over the canvas itself. The
+  composer's answer-panel exception above and
+  [answering-ui.md §3](answering-ui.md#3-the-answer-panel)'s canvas sentence
+  describe what the code still handles should a question exist anyway; nothing
+  in §10 or §11 relies on them, or removes them.
 - **Chat view** is the session's ordinary transcript, untouched except for how
   the canvas tools and canvas actions are drawn there (§12). Every detail the
   canvas view leaves out — the whole reply, every tool call, every thinking — is
@@ -422,7 +436,8 @@ share.
 `form-action 'none'` stays in the policy: a form submits only through the
 bridge, which takes the `submit` before the browser would refuse it.
 
-The hosts strip sits between the header (or the permission banner) and the
+The hosts strip sits between the header (or the permission banner or its
+expiry line) and the
 canvas, as on every other page surface. The allowance is keyed by the session
 (`canvas:<session id>`), so a Load or Reload draws the current revision whole
 under it, and every later drawing of that session starts with it.
@@ -1029,73 +1044,323 @@ the page must never be able to answer one. So permissions are answered only in a
 ├──────────────────────────────────────────────┤
 │ ░░░░░░░ the canvas, dimmed and inert ░░░░░░░ │
 │ ░┌──────────────────────────────────────────┐│
-│ ░│ 2 permission requests              [ ⌄ ] ││  ⌄ collapses to the banner
+│ ░│ 🔒 2 permission requests        [Hide ⌄] ││  header; Hide collapses to the banner
 │ ░├──────────────────────────────────────────┤│
-│ ░│ Bash                               14:02 ││
-│ ░│ npm install --save-dev vitest            ││  the request in full
-│ ░│        [Deny] [Always allow] [Allow]     ││
-│ ░│ ──────────────────────────────────────── ││
-│ ░│ Write                              14:02 ││
-│ ░│ src/config.ts                            ││
-│ ░│ + export const …                         ││
-│ ░│        [Deny] [Always allow] [Allow]     ││
+│ ░│ ? Bash  npm install --save-dev vitest    ││  the chat's pending permission card,
+│ ░│   Command                                ││  opened
+│ ░│   npm install --save-dev vitest          ││
+│ ░│   [Deny] [Always Allow] [    Allow     ] ││
+│ ░│                                          ││
+│ ░│ ? Write  src/config.ts                   ││
+│ ░│   Proposed change                        ││
+│ ░│   + export const …                       ││
+│ ░│   [Deny]                [    Allow     ] ││
 │ ░└──────────────────────────────────────────┘│
 ├──────────────────────────────────────────────┤
 │ activity strip                               │
-│ [ Message… ]                              ■  │
+│ [ Allow or deny to send ]                 ■  │
 └──────────────────────────────────────────────┘
 ```
 
 - **Shape.** The answer panel's
   ([answering-ui.md §3](answering-ui.md#3-the-answer-panel)): modal over the
-  canvas rectangle and nothing else, the header, strip and input left lit; up to
+  canvas rectangle and nothing else, the header, strips and input left lit; up to
   85% of that rectangle, scrolling inside. It is the same reasoning — the user may
-  want to Stop, or read the strip, while deciding.
+  want to Stop, or read the activity strip, while deciding. One shape at every
+  width, as there: centred, `mx-4`, `max-w-2xl`, `max-h-[85%]`, `rounded-xl`,
+  `bg-th-bg-secondary`, `shadow-xl`, over a `bg-th-bg-overlay` backdrop. No
+  short-viewport fold: the panel has no field to type in, and the composer is
+  collapsed while it is up (§2), so no keyboard competes for the room. On a phone
+  on its side the rectangle leaves about one card on the screen at a time; the
+  body scrolls, and that is accepted — every card carries its own buttons, so
+  none of them is ever below a fold the card does not also cross.
+- **Where it is drawn.** Inside the canvas view's column (`CanvasView`), as an
+  `absolute inset-0 z-10` layer over the hosts strip and the frame, which go
+  `inert` under it; the panel is their sibling, not their child, so it stays
+  reachable. The layer is the canvas view's own, so the session screen's layout
+  around it does not change.
+- **What `ChatPanel` has to do for §10 and §11**, and nothing more, since the
+  history story is changing the same screen: hand `CanvasView` the turn and
+  whether it is known yet (`isSessionDetailLoaded`), the transcript's
+  permission cards by request id, the last reply's status (open, or ended
+  `interrupted`),
+  the answer path (`handlePermissionRespond`, `promptError`), `isCodex` and
+  `onOpenFile`, as one `permissions` prop; collapse the canvas composer when a permission block starts
+  (§2); pass `AttentionStrip` its new prop (§11.4); and mount the activity strip
+  as `ComposerDock`'s first child while canvas view is shown, which unmounts it
+  — and the sheet it raised — when canvas view leaves the screen (§11.3), with
+  the transcript's jump to a message for its **Open in chat**. The banner, the panel, the panel's open-or-collapsed
+  state, the expiry line and not measuring while the banner is up are all
+  `CanvasView`'s; whether another layer is up it reads itself
+  (`useIsPageCovered`, §10.2).
+- **The header** is the answer panel's (`border-b`, `px-4 py-3`): a `Lock`
+  (`size-4`, `text-th-warning` — the `needs_permission` glyph and tone,
+  [lifecycle-ui.md §1.1](lifecycle-ui.md#11-activity); the glyph's shape carries
+  it, the hue only reinforces, [project-ui.md §3](project-ui.md)) and the title,
+  `text-base font-bold`: `Permission request`, or `N permission requests` while
+  several are waiting — N counting the requests still unanswered, so it falls as
+  the user answers. At the far end **Hide** with a `ChevronDown` (`size-4`) — a text
+  button in the attention strip's Deny style (`touch-target h-7 rounded-md border
+  border-th-border px-3 text-xs text-th-text-primary`). Not the answer panel's `✕`: beside Deny, an `✕` reads as
+  *refuse*, and the button refuses nothing; it puts the panel away to a banner,
+  and the chevron says where it goes.
 - **Every pending request, in full.** Several can be pending at once (parallel
-  tool calls), and each is listed with what the permission card in the chat shows
-  for it — tool, input, diff — using the same component
-  ([tool-call-ui.md](tool-call-ui.md#the-permission-card-takes-the-rows-place)).
-  Oldest first.
-- **Each is answered on its own**, with that card's own buttons. There is no
-  "Allow all": a batch of requests is several decisions, and one button for all
-  of them is a way to grant something unread.
-- **Answered rows leave**; when none is left the panel closes by itself.
+  tool calls), and each is listed as the chat's permission card for it —
+  `PermissionRequestItem`, the same component, moved out of `MessageItem.tsx`
+  into a file of its own so both can import it
+  ([tool-call-ui.md](tool-call-ui.md#the-permission-card-takes-the-rows-place)):
+  its warning tint and outline, its title line, its body opened (a pending card
+  opens by itself, and outside a transcript list `useRowExpanded` is its own
+  state), its *Always Allow* sentence, its buttons — **Deny**, **Always Allow**
+  where offered, **Allow** at the thumb's end — and its refusal line. Oldest
+  first, in the blockers' order, `space-y-3` apart in a body of `p-4`. Its file
+  links open the file over the session as they do from the chat; coming back
+  finds the panel as it was left (§10.2).
+- **Each is answered on its own**, with that card's own buttons, through the same
+  answer path as the chat's card (`chat.permission_response`, one call per
+  request). There is no "Allow all": a batch of requests is several decisions,
+  and one button for all of them is a way to grant something unread.
+- **An answered card stays where it is, settled, until its blocker goes**, and
+  then leaves: the press's receipt for the round trip, as the attention strip's
+  row holds one — a card vanishing under the thumb the moment it is pressed would
+  look like the press did nothing, or something else. Settled is the card as chat
+  draws a settled one — its title line, the `Check` or `X` glyph — with its body
+  closed: the panel keys each card by request *and* status, so a settled card
+  mounts afresh and `useRowExpanded` starts it closed (outside a list its initial
+  value is read once). Its status is the transcript's when the request's card is
+  loaded there, and otherwise the answer the panel itself sent: the record may be
+  on a page not loaded (§10.4), and a pressed card must not look still pending.
+  The remount drops a keyboard user's focus with the pressed button, so a
+  keyboard answer (focus was on the button; a pointer press never focused it,
+  as in the attention strip) moves focus on — to the next pending card's first
+  button once it is armed, and meanwhile to the panel itself — as
+  `AttentionStrip` carries it over.
+- **A denial on Claude ends the turn**, so every other request is about to
+  expire, and an answer to one would only be refused. While any request listed
+  is denied on Claude (`!isCodex`) — denied from any surface: the panel, the
+  turn's details sheet, chat view or another device, read from the card's
+  status as above — the other cards' buttons give way to a muted `Ending the
+  turn…` until their blockers go: the reason `permissionRowEntry` holds a denial
+  in the attention strip. On Codex a denial refuses that call alone, and the
+  rest stay answerable.
+- **Every answer re-arms the cards still pending.** A card settling closes its
+  body, and the cards under it move up under the thumb that pressed. The panel
+  hands each card an `armKey` — its request and the number of cards listed as
+  settled, however they were answered (here, in chat, in the sheet, on another
+  device) — and a card given one wraps its button row in an `Armed` of that key
+  (full width, so Allow keeps its `flex-1`); without one, as in chat, it is drawn
+  as today. So the buttons are inert for `ARM_MS` after any card settles —
+  the rule the attention strip's row follows when the next request takes its
+  place, for the same reason: a second tap must not approve what nobody read.
+  The same `Armed` covers the panel's arrival: it opens by itself, possibly
+  under a finger already on its way to the page, so its buttons — and the
+  backdrop's collapse — wait `ARM_MS` after it appears.
+- **When none is left the panel closes by itself.** Focus, if it was in the
+  panel, goes back to the canvas frame.
 - **An expired request** leaves the list as well; the chat view's card states
-  what became of it ([lifecycle-ui.md § 5](lifecycle-ui.md#5-expiry)).
+  what became of it ([lifecycle-ui.md § 5](lifecycle-ui.md#5-expiry)). In canvas
+  view, once the batch is over, that card's sentence
+  (`PERMISSION_EXPIRY_COPY`, shared with the card) shows as a neutral line —
+  `text-xs text-th-text-secondary` on `bg-th-bg-secondary`, `border-b
+  border-th-border`, the banner's inner line, a `✕` (`touch-target`) to dismiss
+  it — so the banner going is never the only trace. Not while the batch goes on:
+  the panel or the banner is still up, and the line would be a second strip
+  about the same batch.
+  - **In the banner's place in the column**, above the hosts strip, so it
+    covers neither the strip's control nor the top of the page. Unlike the
+    banner it is measured through: it lasts until dismissed or until the next
+    batch starts, sending works all that time, and while it is up the canvas
+    really is that size — the size sent is the page's true room, and its
+    dismissal is an ordinary resize (§5).
+  - **Only for what the user did not cause.** A Stop, or a Deny on Claude,
+    expires the other requests too; that is the user's own act, already
+    answered on the screen, and reporting it as if the agent gave up would read
+    as a failure they did not cause. So the line is left out when the batch held
+    a denial on Claude (`!isCodex`) or its reply ended `interrupted`. A denial
+    on Codex ends nothing else, so an expiry after one is still reported.
+    The Stop is known only after the batch is over — Codex withdraws its
+    approvals while the turn still runs, and the turn's end is announced
+    before the reply's `interrupted` record — so an expiry that gives no
+    reason waits, unsaid, until the turn and its reply have both ended; one
+    with a reason (timeout, process ended, work closed) is never a Stop's.
+  - Several expiring at once say it once, with a count and the reason in the
+    plural when their reasons agree (`2 permission requests expired: they were
+    not answered in time, so they counted as denials and the tools did not
+    run.`), and the fallback sentence in the plural when they do not (`… the
+    agent stopped waiting for them, …`).
+  - It is the canvas view's UI state, not a record: gone on another visit,
+    where the chat card still says it.
+- **A blocker with no record** (§10.4) is a card of the same tint with the
+  `Lock` and its sentence, and no buttons. It counts in the title and the
+  banner; the banner's summary names the oldest request that has a record, and
+  none when no request has one.
 
 ### 10.2 Opening and collapsing
 
-- **It opens by itself once per batch.** A batch starts when the number of
-  pending requests goes from 0 to at least 1, and ends when it is back at 0. The
-  panel opens at the start of a batch, and not again within it. Arriving at the
-  canvas view with requests already pending — opening the session, switching
-  from chat view — counts as the start of a batch for that visit: the user has
-  not seen this panel yet.
-- **It collapses to a banner** at the top of the canvas: `⌄`, Back
+**The rule: the panel opens by itself once per batch, and a collapse holds for
+the rest of that batch, wherever the user goes inside the session.**
+
+- **A batch** starts when the number of pending requests goes from 0 to at least
+  1, and ends when it is back at 0 — counted from the session detail only once
+  it is loaded (`isSessionDetailLoaded`), as the answer panel's logic is. Until
+  then the count is unknown, not 0: a resubscribe or a reconnect that passes
+  through no detail must not end a batch and reopen a panel the user put away. The panel opens at the start of a batch.
+  Requests joining a batch never reopen a collapsed panel: they **only raise the
+  banner's count**. Permissions come first, so the panel puts itself in front of
+  the canvas the moment the agent needs one; and a user who put it away chose to
+  look at the canvas, so nothing the agent does within that batch takes the
+  canvas from them again.
+- **A visit is this session on this screen**, and what is remembered — open or
+  collapsed — lasts exactly one. It is UI state of the canvas view: `CanvasView`
+  is keyed by the session and stays mounted under chat view and under a page
+  drawn over the session, so the state lives there and needs no store — and
+  so does an open panel, hidden, so it comes back with its scroll and the
+  sections opened in its cards. Hence:
+
+  | Leaving and coming back | Panel |
+  |---|---|
+  | switching to chat view and back | as left |
+  | a page over the session (a file, the work list) and back | as left |
+  | another session and back, a reload, arriving from a notification or from the work list at a session not already open | opens, if anything is pending |
+
+  Arriving with requests already pending is the start of a batch for that
+  visit: the user has not seen this panel yet. A batch that started while chat
+  view was up starts open, and is open when the user switches over.
+
+  **While any other layer is up** — `useIsPageCovered()`, read before the panel
+  registers its own: the turn's details sheet (§11.3), the session's settings
+  sheet, a sign-in sheet, the sidebar drawer — the panel waits. A panel opened
+  under one would be a layer nobody sees, and Back would close it first. It comes
+  up when the last of them goes, unless the batch ended meanwhile; the banner
+  stands in until then, its condition being *collapsed or waiting*. The details sheet needs no special case beyond this: it
+  already shows the pending card, buttons and all.
+
+  This departs, on purpose, from the answer panel's rule that a question it has
+  not shown reopens it
+  ([answering-ui.md](answering-ui.md#closing-lasts-one-visit)): the banner
+  already says a request is waiting, in the warning colour at the top of the
+  screen, and reopening over a user who put the panel away would take the canvas
+  from them once per parallel tool call. It departs from that page's rule that
+  an overlay ends the visit too: the canvas, unlike the transcript's question
+  card, is kept exactly as left under an overlay (§2), and so is the user's
+  choice about it. A switch back from chat view does not reopen it either — the
+  user has just seen the cards there.
+
+  What makes the never-reopen safe is the banner, and it is prominent by
+  position and words rather than by hue — the warning hue is under the 3:1
+  floor in the light themes ([project-ui.md §3](project-ui.md)): it is the
+  first thing under the header, full width, pushing the page down; its words
+  are in the primary tier; and its **Show** is the accent pill.
+- **It collapses to the banner** by **Hide**, Back
   ([project-ui.md §5.2](project-ui.md#52-back-closes-the-topmost-layer) — it is
-  a layer, through `useCoverPage`), Escape, or a press on the backdrop.
-  Collapsing never denies anything.
-- **The banner**: `⚠ N permission request(s) waiting` and **Show**, which opens
-  the panel again. A request arriving while collapsed **only raises the count**;
-  it never reopens the panel over a user who chose to look at the canvas.
-- The banner uses the warning colour, as the attention strip's permission row
-  does: unlike a hosts strip, it is about something the agent cannot go on
-  without.
+  a layer, registered with `useCoverPage` only while it is actually on the
+  screen, whose `onLeave` keeps it as it was under a page navigated to (a file
+  link in a card, say), so coming back finds it open, holding an entry again; a
+  navigation that lands where it was — the open session's own row, tapped in the drawer over
+  it — leaves it on the screen without one until it is next put away and
+  shown, so a Back then leaves the session rather than collapsing it, which
+  is accepted: taking an entry back while the navigation is still landing
+  could push it over the page landed on), Escape, or a press on the backdrop —
+  both read on `window` and only when nothing drawn over it claimed them first,
+  as the answer panel's are
+  ([answering-ui.md](answering-ui.md#who-owns-escape)); while it holds its
+  entry it is a counted layer, which keeps `ChatPanel`'s Escape from
+  interrupting the turn. In the drawer-row corner above it holds none and is
+  not counted, so there `CanvasView` claims Escape itself, on `window` in the
+  capture phase — ahead of that interrupt on `document` — unless a layer drawn
+  over it is up: one Escape collapses it and stops nothing.
+  **Collapsing never denies anything.**
+- **Focus.** The panel is `role="dialog"`, `tabIndex={-1}`, without
+  `aria-modal`, as the answer panel. Opening by itself, it takes focus onto
+  itself — never onto a button, so no key already on its way lands on Allow —
+  only when the focus was where the block just took it away: in the canvas, now
+  `inert` under it, or in the composer, now collapsed. Focus anywhere else (the
+  header, the view switch) is the user's and stays. A field the user was typing
+  into in the page loses its keyboard: that is the price of permissions coming
+  first, paid once per batch. Opened by **Show**, it always takes focus — the
+  banner that had it is gone; on collapse, focus goes to the banner.
+
+**The banner**
+
+```
+┌──────────────────────────────────────────────────┐
+│ 🔒 2 permission requests waiting · Bash n… [Show] │
+└──────────────────────────────────────────────────┘
+```
+
+- **Where.** The first child of the canvas view's column, above the hosts strip
+  (§4), full width; the canvas gives way to it (it is in the column, not over the
+  page: covering the top of the page would hide what the agent put first). It
+  exists only while requests are pending, the panel is collapsed or waiting
+  behind another layer, and canvas view is up. **`CanvasView` does not measure the canvas while it is up**, as under
+  the answer panel: its height must not become the canvas
+  size, and its going may coincide with focus in a page field, when §5 keeps a
+  height-only change from replacing the measurement.
+- **Look.** The pending card's colours, so the banner and the cards read as one
+  thing: `bg-th-warning/10`, a `border-b border-th-warning` rule — reinforcement
+  only, as on the card. Inside, the
+  attention strip's permission line (`mx-auto max-w-3xl flex items-center gap-2
+  px-3 py-2 text-xs`), 44px tall with its `h-7` pill — a statement-strip height
+  that does not push the page further than it must. `Lock` `size-3`
+  `text-th-warning`; `N permission request(s) waiting` in `text-th-text-primary
+  font-medium` (`1 permission request waiting`) — N the unanswered requests, or,
+  while every one is answered and its blocker not yet gone, all of them, so it
+  never reads 0; then `·` and the oldest pending
+  request's title and detail as the tool row writes them (`toolSummary`),
+  `text-th-text-muted`, truncated — a tool name tells the user how urgent this
+  is. At the end a **Show** pill in the attention strip's Allow style (`h-7
+  rounded-md bg-th-accent px-3 font-medium text-th-accent-text`).
+- **One control.** The whole banner is one `<button>` that opens the panel —
+  the pill is its visible label, not a second control. No `aria-label`: its
+  accessible name is its visible text, summary included. Live announcements
+  (§10.3) are a visually hidden `role="status"` *beside* the button, never
+  inside it. No Allow or Deny on it: in canvas
+  view the request is not on the screen anywhere else, and answering from a cut
+  line is granting it unread. One tap to the panel is the way.
+- The banner wears the warning tint where a hosts strip is neutral: it is about
+  something the agent cannot go on without.
 
 ### 10.3 While blocked
 
-The canvas **stays viewable and locally interactive**: scrolling, tabs, toggles,
-anything the page does by itself. **Sending is refused, visibly:**
+The canvas **stays viewable and locally interactive** while the panel is
+collapsed: scrolling, tabs, toggles, anything the page does by itself. Under the
+open panel it is dimmed and inert, as anything under a modal is. **Sending is
+refused, visibly:**
 
 - the bridge is told `pockode:canvas-sendable { sendable: false, reason:
   "permission" }`; a `data-pk-send` press or a `pockode.send` call is answered
   with the `permission` refusal and the page does not send;
-- each refused attempt flashes the banner (or the panel's header, when open) and
-  shows under it, for a few seconds, `Answer the permission request first.`;
+- **each refused attempt flashes the banner**, or the panel's header while it is
+  open (a script's send can be refused under the open panel):
+  - the flash is a `pointer-events-none absolute inset-0 bg-th-warning/30`
+    layer over the banner, fading to nothing in 600ms, keyed by the attempt
+    count so every attempt restarts it — a layer rather than re-keying the
+    banner, which would drop focus from it. A keyframe beside `stop-arm` in
+    `index.css`; under `prefers-reduced-motion` there is no flash, only the
+    sentence below;
+  - **the sentence**: `Answer the permission request first.` takes the place of
+    the banner's text — count and summary — for 4s, restarted by each attempt,
+    `text-th-text-primary`, the `Lock` and **Show** staying where they are. In
+    place, not on a line of its own: a line appearing would push the page down
+    under the finger that just pressed in it. In the open panel it takes the
+    visible title's place in the header for the same 4s, for the same reason —
+    a line under the header would push every card's buttons down; the dialog
+    keeps its name (`aria-labelledby` on the title, kept in the DOM, visually
+    hidden meanwhile). It is announced once when it appears, through the
+    `role="status"` beside the banner or in the panel — not again while
+    attempts keep restarting it, so a page sending in a loop does not flood a
+    screen reader;
+  - the attempt does *not* reopen the panel: the banner is under the user's eye
+    already, with **Show** in it;
 - `pockode.send` rejects with `code: "permission"`;
-- the collapsed input's text field, and the composer's if expanded, is disabled
-  but keeps its text. **Stop stays usable** — stopping the turn is one of the two
-  ways forward ([lifecycle.md](lifecycle.md#session-one-reducer)).
+- the collapsed input's text field is disabled but keeps its text (§2). **Stop
+  stays usable** — stopping the turn is one of the two ways forward
+  ([lifecycle.md](lifecycle.md#session-one-reducer)) — and the panel never
+  covers it.
+- **Over an earlier revision** (the history view, §13.5) the banner and the panel
+  are the same: a permission is the session's, whichever revision is shown. A
+  send from that frame is refused as `readonly` first (§8.2) and flashes nothing:
+  it could not have been sent with the permission answered either.
 
 ### 10.4 Where the requests come from
 
@@ -1131,7 +1396,9 @@ whoever shows this session's content.
 than the loaded page, so they are never fed to the message reducer — that would
 put records out of order and break paging. They go into a store of their own,
 keyed by `request_id`, beside the live `chat.permission_request` records the
-subscription delivers, and the panel reads that store. Chat view goes on drawing
+subscription delivers and what became of each request — answered or expired,
+live or on the first page, which is how the expiry line learns of an expiry
+while the client was away — and the panel reads that store. Chat view goes on drawing
 its permission cards from the transcript, as today; the field is the one
 addition to the chat subscription outside canvas sessions, and only the panel
 reads it.
@@ -1141,7 +1408,11 @@ so it was only broadcast, and a client that subscribed afterwards never saw it �
 is still listed, as `A permission request is waiting, but its details could not
 be read. Stop the turn to go on.` with no answer buttons: an answer would have
 to quote what the client cannot show, and the user must not grant something
-unread.
+unread. Only a request the subscribe reply's `turn` lists without a record is
+that: one raised later is broadcast whatever its append did, and the server
+settles the blocker a moment before it sends the record, so until the record
+lands such a card reads `Loading the permission request…`, with no buttons
+either.
 
 Answering is the existing `chat.permission_response`, one call per request.
 
@@ -1153,37 +1424,177 @@ One line, between the canvas and the input, saying what the agent is doing — s
 a user looking at the canvas knows whether it is working and on what, without
 switching to chat.
 
-**What it shows: the latest item of the current turn.**
+```
+├──────────────────────────────────────────────┤
+│ ⟳ Bash  npm test                     1m 4s › │  running
+│ ⟳ Thinking… · Checking the retry path 12s › │  thinking
+│ 🔒 Write  src/config.ts                     › │  blocked(permission)
+│ ⧗ Waiting on a background task              › │  blocked(background)
+│   Done — the checklist is on the canvas.    › │  idle, muted
+├──────────────────────────────────────────────┤
+```
+
+### 11.1 What it says
+
+**The latest item of the reply being written** — the reply the chat's tail line
+sits in ([turn-progress-ui.md §2.1](turn-progress-ui.md#21-where-it-is)): the
+latest assistant reply, which a message read mid-turn opens afresh. Settled, the
+last reply. A turn running or blocked on a permission with no reply open yet —
+reported before its first record, as a send from another device is, the turn
+and the transcript arriving on two subscriptions — has none: `Working`, not the
+last reply, whose `Stopped` or error would be read as this turn's.
 
 | Latest item | Line |
 |---|---|
 | text | its last non-empty line, as plain text (Markdown stripped) |
-| a tool call | its title and detail, as the tool row writes them ([title and detail](tool-call-ui.md#title-and-detail)) |
-| a canvas tool | `Drew the canvas` / `Updated the canvas · <regions>` |
-| thinking | `Thinking… · <latest line>` ([turn-progress-ui.md §2.3](turn-progress-ui.md#23-what-it-says)) |
+| a tool call | its title and detail, as the tool row writes them (`toolSummary`, [title and detail](tool-call-ui.md#title-and-detail)) — a canvas tool in §12's wording and tense (`Drawing the canvas`, `Updated the canvas · <regions>`), a subagent's call with its latest child's line, as its row has it |
+| thinking, live | `Thinking…` and, when there is text, `· <latest line>` ([turn-progress-ui.md §2.3](turn-progress-ui.md#23-what-it-says)) |
+| a settled thinking | its row's `Thought for 12s` |
+| a permission card | its title and detail, as a tool call; settled, followed by `· Allowed`, `· Denied` or `· Expired` — words where the card has only its glyph, there being no glyph-only way to say it in a line of text |
 | nothing yet | `Working` |
 
-While the turn runs, the line has the spinner before it and the turn clock after
-it, in the tail line's format ([turn-progress-ui.md](turn-progress-ui.md#the-rules)).
+Notices in the reply — system, warning and work-event messages — are skipped:
+the strip says what the agent did, and chat view holds the rest. So is a
+subagent's child sitting flat in the reply because its call is not loaded: it
+is not what the main agent did. **How the reply
+ended** is said before its latest item, once it has (`MessageStatus`):
+
+| Reply ended | Line |
+|---|---|
+| `complete` | the latest item alone |
+| `interrupted` | `Stopped · <latest item>` |
+| `process_ended` | `The agent's process ended · <latest item>` |
+| `error` | the error's message, in `text-th-error` — an error is never left to chat view alone |
+
+Before the server reports the turn — a send just went out, the optimistic
+placeholder is up — the strip is `Working` with the spinner and no clock, as the
+tail line is ([turn-progress-ui.md §2.2](turn-progress-ui.md#22-when-it-shows)):
+a press in the page has to be answered on the screen at once, and the strip is
+where canvas view answers it.
 
 **Liveness comes from `TurnState` only** — `turn.phase` from the session detail
 subscription, as for the tail line. The latest record says *what*, never
 *whether*:
 
-| Turn | Strip |
+| Turn | Glyph | Line | Clock |
+|---|---|---|---|
+| `running` | `Spinner`, `text-th-accent` (`CircleDot` under reduced motion) | latest item | turn clock |
+| `blocked(permission)` | `Lock`, `text-th-text-muted` | latest item — the banner or panel says why | — |
+| `blocked(background)` | `Hourglass`, `text-th-text-secondary` | `Waiting on a background task` (the attention strip's wording) | — |
+| `idle` | none, the slot kept | the last reply's line, all `text-th-text-muted` (an error keeps `text-th-error`) | — |
+| no turn yet | none | `Not started`, muted; not a button — there is nothing to open | — |
+
+**Before the session detail and the transcript have loaded** the strip is the
+`Not started` box with no words: neither phase nor reply is known, and a
+placeholder `IDLE_TURN` must not be read as *no turn yet*. It becomes the button
+once both have arrived.
+
+**The strip is always drawn in canvas view**, from the first frame, so the
+canvas area has its final height before the first send measures it: a strip
+appearing with the first turn would make the size that send carried 36–44px
+taller than the page then gets (§5).
+
+The `Lock` is muted here, not warning: the banner is the one warning surface,
+and a second would make two things to look at for one request. The clock is the
+tail line's turn clock (`open_elapsed_ms`, not under 3s), `tabular-nums`.
+
+### 11.2 How it looks
+
+- **One full-width `<button>`**, `border-t border-th-border`, `min-h-9
+  pointer-coarse:min-h-11` — the tail line's height, written down on the button
+  itself so it meets the hit-area floors without `touch-target` (a height on a
+  child is one the floor's scan cannot see) — its content in `mx-auto flex
+  max-w-3xl items-center gap-1.5 px-3 text-xs`. `Not started` is the same box as a
+  plain `div`, so the height never changes when the first turn makes it a
+  button.
+- **The glyph** in a fixed `size-3` slot that is kept even when empty, so the
+  line never moves sideways as the turn settles or blocks.
+- **The line**, `min-w-0 flex-1 truncate`: a tool call's title in
+  `text-th-text-secondary` and its detail in `text-th-text-muted` (the tool row's
+  `Detail`, monospace where the row's is); text and the other items in
+  `text-th-text-secondary`; all of it muted when idle.
+- **The clock at the far end**, then a `ChevronRight` (`size-3`, muted). Not
+  after the label as on the tail line: here the label *is* the changing line, and
+  a clock after it would be dragged across the row several times a second; at the
+  end it moves only when it gains a digit.
+- Its accessible name is its visible line, prefixed by `Turn details:` —
+  written out as one string (`aria-label`), since the line is spans side by
+  side whose text would run together in a computed name. A visually hidden `role="status"` *beside* the button — never
+  inside it, where a button's name overrides its children — says only the
+  phase, `Agent working`, `Waiting for permission`, `Waiting on a background
+  task`, `Agent finished`, when it changes; not every line, which would be read
+  out several times a second, and not the phase the strip first finds the turn
+  in, which is no change.
+- It floats with the other bars over the canvas while the composer is open
+  (§2), as part of `ComposerDock`; it is the dock's first child.
+- Before the reply's first record — a turn reported running before anything
+  of it has arrived (§11.1) — it is the button disabled, for the moment there
+  is nothing to open. A sheet already open stays on the reply it was showing
+  through that moment — a turn started elsewhere passes through it — and moves
+  on to the new reply when it opens. A sheet whose reply goes (the session
+  detail cleared) closes for good: coming back is not the user asking again.
+
+### 11.3 The turn's details
+
+**Tap** opens the reply in a `Sheet`:
+
+- Title `Current turn` while a turn is open (or the placeholder is up),
+  `Last turn` when settled; the turn clock under it while running — the
+  sheet's subtitle, its title being a string, held at a line's height for the
+  whole open turn, so the header does not move when the clock appears at 3s.
+- The body is the reply as chat draws it — its text, tool rows, thinking, the
+  tail line — with the message it answers (a typed message or a canvas action,
+  §12) at its top. The same `MessageItem`s, read from the same transcript, so it
+  is live: rows arrive and settle in it as in chat, and the sheet follows the
+  end while the reader is at it, as chat does. Without the transcript's
+  per-message menus (fork, copy): the sheet is for reading what is happening,
+  and chat view is one tap away for the rest. A pending permission card in it is
+  the card, with its buttons, as in chat — the same component as the panel's.
+- At the bottom, **Open in chat**, full width: switches to chat view with the
+  reply's start at the top of the transcript, highlighted as a jump to a
+  permission card is, and closes the sheet. `MessageList`'s jump reaches a
+  message by its id (`jumpToMessage`, the row's `data-message-id`) beside a
+  permission card (`jumpToRequest`), the one addition to it this section
+  makes. The row takes focus for the keyboard, unless chat view's composer
+  takes it as it comes up, as it does under a fine pointer.
+- A settled strip opens the last reply. Before any turn the strip is no button
+  (`Not started`), so there is nothing to open.
+- It is a `Sheet`, so Back and Escape close it; switching to chat view or a page
+  over the session closes it with the strip, which is mounted only while
+  canvas view is shown and holds the sheet's state — no `CoveredSurface` is
+  needed for what is unmounted.
+
+### 11.4 Beside the attention strip
+
+The strip is part of the canvas view only: chat view has its own tail line. In
+canvas view the attention strip stays, minus the two rows that are about the
+turn (§2), and sits under the activity strip, by the input its rows are about:
+
+```
+│ canvas                                       │
+├──────────────────────────────────────────────┤
+│ ⟳ Bash  npm test                     1m 4s › │  activity strip
+│ ↳ Sent — the agent has not read it yet.      │  attention strip (send receipt), when it has a row
+│ [ Message…                              ]  ■ │
+```
+
+The permission row is left out because the banner and the panel are that row in
+canvas view, and its way to the card would leave the canvas for chat; the
+background row because the activity strip says the same wait — without the
+row's **Details** note that a Stop loses the tasks, which chat view keeps. `AttentionStrip`
+takes a prop saying the turn's rows are drawn elsewhere
+(`turnRowsElsewhere`), and with it the strip's one-row choice becomes, in
+canvas view:
+
+| Turn | Row |
 |---|---|
-| `running` | spinner, latest item, clock |
-| `blocked(permission)` | the latest item, no spinner, no clock — the banner or panel says why |
-| `blocked(background)` | `Waiting on a background task`, no clock (the attention strip's wording) |
-| `idle` | the last text line of the last turn, muted, no glyph; nothing at all before any turn |
+| `blocked(permission)` | the send receipt if a message is pending, else none |
+| `blocked(background)` | the send receipt if pending, else none |
+| `running`, `idle` | as in chat: the send receipt, then watched stories, then the files to review |
 
-One line, `truncate`; the full text is in the expanded view.
-
-**Tap** opens the turn's details in a `Sheet`: the turn's parts as chat draws
-them (text, tool rows, thinking), with **Open in chat** at the bottom, which
-switches to chat view at that turn. A settled strip opens the last turn.
-
-The strip is part of the canvas view only: chat view has its own tail line.
+Never falling through to a row the chat shows only without a blocker: the
+watched-stories and review rows are gated on there being no blocker today, and
+stay so. The questions row does not arise (§2).
 
 ---
 

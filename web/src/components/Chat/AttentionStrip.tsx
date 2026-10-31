@@ -62,6 +62,13 @@ interface Props {
 	 */
 	answerPanelOpen?: boolean;
 	/**
+	 * The turn's two rows are drawn elsewhere — in canvas view the banner and
+	 * the panel say the permission request, the activity strip the background
+	 * wait (docs/canvas-ui.md §11.4) — so both are left out, and nothing a
+	 * blocked turn hides falls through in their place.
+	 */
+	turnRowsElsewhere?: boolean;
+	/**
 	 * A typed message went into a turn that was already running and the agent has
 	 * not reached it yet. The only receipt it gets for that stretch: the reply
 	 * above keeps growing and nothing appears under the message, so without this
@@ -506,6 +513,7 @@ function AttentionStrip({
 	jumpDisabled,
 	onAnswer,
 	answerPanelOpen,
+	turnRowsElsewhere,
 	sendPending,
 	permissionRequests,
 	onPermissionRespond,
@@ -539,7 +547,7 @@ function AttentionStrip({
 	// the agent can raise a request after the message went in.
 	const prompt = blocker?.kind === "permission" ? blocker : undefined;
 
-	if (prompt) {
+	if (prompt && !turnRowsElsewhere) {
 		const shown =
 			onPermissionRespond && permissionRowEntry(permissionRequests ?? []);
 		if (shown) {
@@ -655,6 +663,10 @@ function AttentionStrip({
 			</div>
 		);
 	}
+
+	// A prompt outside canvas view has its row above; in it, neither of the
+	// turn's rows is this strip's.
+	if (blocker && turnRowsElsewhere) return null;
 
 	if (!blocker) {
 		if (watchedStories?.length) {

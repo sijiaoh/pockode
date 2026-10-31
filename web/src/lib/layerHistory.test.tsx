@@ -382,6 +382,30 @@ describe("Back closes the topmost layer", () => {
 		expect(screen.getByText("no dropdown")).toBeInTheDocument();
 		expect(history.location.pathname).toBe("/page");
 	});
+
+	it("leaves a layer with a leave of its own as it was for a navigation", async () => {
+		const user = userEvent.setup();
+		function Panel({ onNavigate }: { onNavigate: () => void }) {
+			const [state, setState] = useState("open");
+			useCoverPage(state === "open", {
+				onBack: () => setState("closed by Back"),
+				onLeave: () => setState("left"),
+			});
+			return (
+				<>
+					<p>{state}</p>
+					<button type="button" onClick={onNavigate}>
+						Navigate
+					</button>
+				</>
+			);
+		}
+		const history = setup((h) => <Panel onNavigate={() => h.push("/file")} />);
+		await layersUp(history);
+		await user.click(screen.getByRole("button", { name: "Navigate" }));
+		await waitFor(() => expect(history.location.pathname).toBe("/file"));
+		expect(screen.getByText("left")).toBeInTheDocument();
+	});
 });
 
 describe("a reload with a layer up", () => {

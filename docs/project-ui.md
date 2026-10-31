@@ -952,6 +952,13 @@ held navigation calls the same one. So a layer's close has to be only a close:
 an `onCancel` that also *does* something (declines, discards, reports) is
 split, the doing behind the button and the closing shared with Back.
 
+One kind of layer gives a held navigation something else to call
+(`onLeave`): a layer kept as it was under the page navigated to, which the
+user expects to find again on the way back — the canvas's permission panel,
+which stays mounted with the canvas under a file opened from one of its cards
+([canvas-ui.md §10.2](canvas-ui.md#102-opening-and-collapsing)). Back still
+closes it; leaving takes its entry and leaves it be.
+
 #### Navigating from inside a layer, or while one is up
 
 A navigation never goes over a layer's entry. That entry stands for the page

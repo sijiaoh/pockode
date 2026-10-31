@@ -1662,27 +1662,30 @@ samp {
 /* =============================================================================
  * JUMP HIGHLIGHT
  *
- * The transient ring on the card the attention strip jumped to. One card can be
- * jumped to — a permission request, the one thing left that holds a turn up
- * (docs/lifecycle-ui.md §2.2).
+ * The transient ring on what a jump into the transcript landed on: a
+ * permission request the attention strip jumped to, the one thing left that
+ * holds a turn up (docs/lifecycle-ui.md §2.2), or the reply canvas view's turn
+ * details opened in chat (docs/canvas-ui.md §11.3).
  * ============================================================================= */
 
-/* The transition belongs on the card, not on .jump-highlight: a transition
+/* The transition belongs on the target, not on .jump-highlight: a transition
  * declared by the class itself is already gone at the moment the class is
  * removed (transitions read the after-change style), so the ring would snap out
  * instead of fading. */
-[data-permission-request-id] {
+[data-permission-request-id],
+[data-message-id] {
 	transition: box-shadow 300ms ease-out;
 }
 
-/* Inset: the card is a row in a list that clips whatever is drawn outside its
+/* Inset: the target is a row in a list that clips whatever is drawn outside its
  * rows. A pending card's body has no fill of its own, so nothing covers it. */
 .jump-highlight {
 	box-shadow: inset 0 0 0 2px var(--th-warning);
 }
 
 @media (prefers-reduced-motion: reduce) {
-	[data-permission-request-id] {
+	[data-permission-request-id],
+	[data-message-id] {
 		transition: none;
 	}
 }
@@ -1837,10 +1840,24 @@ samp {
 			opacity: 0;
 		}
 	}
+
+	/* A canvas send refused while a permission is pending (docs/canvas-ui.md
+	   §10.3): the layer is transparent at rest and lit only by this. */
+	--animate-permission-flash: permission-flash 600ms ease-out;
+
+	@keyframes permission-flash {
+		from {
+			opacity: 1;
+		}
+	}
 }
 
 @media (prefers-reduced-motion: reduce) {
 	.animate-stop-arm {
+		animation: none;
+	}
+
+	.animate-permission-flash {
 		animation: none;
 	}
 }

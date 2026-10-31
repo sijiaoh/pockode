@@ -1221,6 +1221,7 @@ them:
 | `InputBar`'s `+` menu | `document`, and it calls `preventDefault` | closes itself and **marks the press handled**; while open, it counts itself as covering the page |
 | the Git review's selection bar | `document`, and it calls `preventDefault` | clears the line selection — standing down while anything counts itself as covering the page, or the press is already `defaultPrevented` ([git-changes-ui.md](git-changes-ui.md#how-it-goes-away)) |
 | the answer panel | **`window`** | closes, unless the press is already `defaultPrevented` |
+| the canvas's permission panel ([canvas-ui.md §10.2](canvas-ui.md#102-opening-and-collapsing)) | **`window`** | collapses to its banner, unless the press is already `defaultPrevented`; unlike the answer panel it joins the count below (`useCoverPage`) while it holds its history entry, being a layer Back puts away — in the one case where it holds none, `CanvasView` claims the key in the capture phase instead ([canvas-ui.md §10.2](canvas-ui.md#102-opening-and-collapsing)) |
 | `ChatPanel`'s interrupt | `document` | ends the agent's turn — the fallback, and the only one that cannot be undone. It stands down (`isSheetOpen`) while anything counts itself as covering the page (`useIsPageCovered`) or the answer panel is up |
 
 Two rules, and they are the whole of it:
@@ -1318,6 +1319,7 @@ exposed:
 | `InputBar`'s command palette | the same. It hangs over the composer at *every* width, so it is the one that overlaps here on a phone as well as on a desktop |
 | `InputBar`'s `+` menu | the same, at every width, for the same reason |
 | the answer panel | closes, on a **`window`** listener, if the press landed on the backdrop element itself |
+| the canvas's permission panel | collapses, the same way, and not for `ARM_MS` after it appears |
 
 The two rules, restated for the pointer:
 

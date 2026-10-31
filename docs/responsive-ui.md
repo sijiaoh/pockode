@@ -720,9 +720,9 @@ noticed. One representation with a test on it is the only thing that ends that.
      paste the expected side of its diff. Do not edit by hand. -->
 
 ```text
-45 controls render text, state no height of their own and carry no touch-target.
+46 controls render text, state no height of their own and carry no touch-target.
 
-29 state their own font size, so the height below is exact: 16–40px.
+30 state their own font size, so the height below is exact: 16–40px.
 16 inherit it, so the height below is an upper bound — the ancestor that
   sets it may well set a smaller one: 24–48px.
 
@@ -747,6 +747,7 @@ noticed. One representation with a test on it is the only thing that ends that.
   40px  bound  web/src/components/Chat/TaskItem.tsx ×2
   40px  bound  web/src/components/common/SidebarListItem.tsx
   40px  bound  web/src/extensions/ExampleExtension/settings/AboutSection.tsx
+  40px  exact  web/src/components/Canvas/TurnDetailsSheet.tsx
   40px  exact  web/src/components/Chat/ForkSessionSheet.tsx ×2
   40px  exact  web/src/components/Files/EntryNameDialog.tsx ×2
   40px  exact  web/src/components/Git/CommitSheet.tsx ×2
@@ -797,7 +798,8 @@ name does not say what a control is for:
 
 - **`Chat/MessageItem`** — the Details link out to a work item. (Allow, Always
   Allow and Deny on a permission request were here; they now state
-  `min-h-9 pointer-coarse:min-h-11` and left the list.)
+  `min-h-9 pointer-coarse:min-h-11` and left the list, and live in
+  `Chat/PermissionRequestItem`.)
 - **`Project/WorkDetailOverlay`** — the link up to the story or schedule the
   work belongs to, above the title of a task or a job. The app header's Back
   button on that same screen goes to the same place and is already 44
@@ -851,7 +853,7 @@ Either of:
   path.
 - **(b) A mis-tap that cannot be undone.** Missing costs more than a wasted tap
   — an authorization, a refusal, an overwrite, with nothing to undo it with.
-  `MessageItem`'s Deny / Always Allow / Allow fail (a), since they are not an
+  The permission card's Deny / Always Allow / Allow fail (a), since they are not an
   exit from an error, but they are the most expensive mis-tap in the app — they
   were 24px tall, side by side, and hitting Allow while aiming at Deny is a
   tool call that has already run. A rule that knew only about error exits would
@@ -909,7 +911,7 @@ one full-width row, `gap-2`, each box growing to the floor.
 
 Written down so the next reader does not grade it again.
 
-- **Batch 2 — R0, the chat transcript.** Done: `MessageItem`'s Deny, Always
+- **Batch 2 — R0, the chat transcript.** Done: the permission card's Deny, Always
   Allow and Allow, all R0 (b), went up with the permission card's redesign. The
   question card's Cancel and Submit were in this batch and are out of it:
   answering happens in the answer panel now, whose own controls clear the floor, and the card that replaced it holds no form at all

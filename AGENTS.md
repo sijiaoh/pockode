@@ -100,11 +100,13 @@ a third, separate counter, which is the bug itself.
 Whether something is drawn over the page is a separate registry, because not
 everything that covers the page locks it: a dropdown or a drawer can leave the
 page scrollable and still be what a key press — and the back gesture — is meant
-for. `useCoverPage(active, { onBack, refuse? })` registers a layer:
+for. `useCoverPage(active, { onBack, onLeave?, refuse? })` registers a layer:
 `useIsPageCovered` reads whether any is up, for a listener that has to stand
 down while one is, and the layer holds a history entry of its own while up, so
 Back closes the topmost layer by calling its `onBack` — its plain close, and
-nothing else, since a held navigation calls it too
+nothing else, since a held navigation calls it too — unless the layer gives
+the navigation an `onLeave` of its own, for a layer kept as it was under the
+page navigated to
 ([docs/project-ui.md §5.2](docs/project-ui.md#52-back-closes-the-topmost-layer)).
 `Sheet` and `ConfirmDialog` call it themselves (Back is ✕ and Cancel, refused
 while a sheet is not dismissible or a dialog's action runs); a panel of a project's own calls it with its close. The

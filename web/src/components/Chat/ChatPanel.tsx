@@ -35,6 +35,7 @@ import {
 	useInputStore,
 } from "../../lib/inputStore";
 import { collectPartsDeep } from "../../lib/partTree";
+import type { TranscriptPermission } from "../../lib/permissionRequestStore";
 import { questionDraftActions } from "../../lib/questionDraftStore";
 import {
 	type InputBarProps,
@@ -76,6 +77,7 @@ import {
 	sendAgainTarget,
 	sendAgainText,
 } from "../../utils/sendAgain";
+import ActivityStrip from "../Canvas/ActivityStrip";
 import { CanvasComposer, ComposerDock } from "../Canvas/CanvasComposer";
 import {
 	type CanvasForkPage,
@@ -104,7 +106,7 @@ import {
 } from "../Project";
 import { SettingsPage } from "../Settings";
 import AnswerPanel from "./AnswerPanel";
-import AttentionStrip, { type PermissionEntry } from "./AttentionStrip";
+import AttentionStrip from "./AttentionStrip";
 import ChatDropOverlay from "./ChatDropOverlay";
 import ChatSkeleton from "./ChatSkeleton";
 import { CanvasShowContext } from "./canvasShowContext";
@@ -436,14 +438,18 @@ function ChatPanel({
 	const watchedStories =
 		activity === "watching" ? sessionDetail?.watched_stories : undefined;
 
-	// The cards behind those blockers, for the strip to answer from. Looked up
-	// at every depth: a subagent's request is filed under its Task call.
-	const blockingPermissions = useMemo(() => {
-		const ids = (turn.blockers ?? []).flatMap((b) =>
-			b.kind === "permission" && b.request_id ? [b.request_id] : [],
-		);
-		if (ids.length === 0) return [];
-		const cards = new Map<string, PermissionEntry>();
+	// Every permission card the loaded transcript has, looked up at every
+	// depth: a subagent's request is filed under its Task call. Only while a
+	// permission blocks the turn — the one time anything reads them; after
+	// it, what became of them is in the permission request store too, from
+	// the live records and the page a subscription starts from — so a
+	// streaming reply is not walked on every delta.
+	const hasPermissionBlocker = (turn.blockers ?? []).some(
+		(b) => b.kind === "permission",
+	);
+	const transcriptPermissions = useMemo(() => {
+		const cards = new Map<string, TranscriptPermission>();
+		if (!hasPermissionBlocker) return cards;
 		for (const message of messages) {
 			if (message.role !== "assistant") continue;
 			for (const part of collectPartsDeep(
@@ -451,15 +457,41 @@ function ChatPanel({
 				(p) => p.type === "permission_request",
 			)) {
 				if (part.type === "permission_request") {
-					cards.set(part.request.requestId, part);
+					cards.set(part.request.requestId, {
+						request: part.request,
+						status: part.status,
+						...(part.reason ? { reason: part.reason } : {}),
+					});
 				}
 			}
 		}
-		return ids.flatMap((id) => {
-			const card = cards.get(id);
-			return card ? [{ request: card.request, status: card.status }] : [];
-		});
-	}, [turn.blockers, messages]);
+		return cards;
+	}, [hasPermissionBlocker, messages]);
+
+	// The cards behind those blockers, for the strip to answer from.
+	const blockingPermissions = useMemo(
+		() =>
+			(turn.blockers ?? []).flatMap((b) => {
+				const card =
+					b.kind === "permission" && b.request_id
+						? transcriptPermissions.get(b.request_id)
+						: undefined;
+				return card ? [{ request: card.request, status: card.status }] : [];
+			}),
+		[turn.blockers, transcriptPermissions],
+	);
+
+	// A Stop expires the requests it leaves, which canvas view does not report
+	// as an expiry: the user did it (docs/canvas-ui.md §10.1).
+	const replyStatus = messages.findLast((m) => m.role === "assistant")?.status;
+
+	// A composer open when a request arrives could not send anyway, and
+	// floating it would cover the permission panel's buttons (§2).
+	const [composerBlockedBy, setComposerBlockedBy] = useState(promptOwnsInput);
+	if (composerBlockedBy !== promptOwnsInput) {
+		setComposerBlockedBy(promptOwnsInput);
+		if (promptOwnsInput) setCanvasComposerExpanded(false);
+	}
 
 	const markSessionRead = useWSStore((s) => s.actions.markSessionRead);
 
@@ -1285,9 +1317,10 @@ function ChatPanel({
 	// permission request can come up mid-send, and closing then would take
 	// away the only place the send's outcome — a refusal included — is told.
 	const [answerPanelSending, setAnswerPanelSending] = useState(false);
-	const [pendingJumpRequestId, setPendingJumpRequestId] = useState<
-		string | null
-	>(null);
+	const [pendingJump, setPendingJump] = useState<{
+		to: "request" | "message";
+		id: string;
+	} | null>(null);
 	const handleJumpToRequest = useCallback((requestId: string) => {
 		// The card is in the transcript, so a jump from canvas view is a
 		// switch to chat view — in the same commit, so the transcript is on
@@ -1295,7 +1328,13 @@ function ChatPanel({
 		setCanvasView("chat");
 		setAnswerPanelOpen(false);
 		setAnswerAnchor(null);
-		setPendingJumpRequestId(requestId);
+		setPendingJump({ to: "request", id: requestId });
+	}, []);
+	// Canvas view's turn details, at the start of the reply: the same switch,
+	// the same wait for the transcript to be on the screen.
+	const handleOpenReplyInChat = useCallback((messageId: string) => {
+		setCanvasView("chat");
+		setPendingJump({ to: "message", id: messageId });
 	}, []);
 	// The request is read in the commit the press produced, which is the one the
 	// close is in: `transcriptInert` is the same value the DOM attribute is
@@ -1311,11 +1350,15 @@ function ChatPanel({
 	// the caret away whenever the user was finally done with it. The strip's row
 	// is still there to press again.
 	useLayoutEffect(() => {
-		if (pendingJumpRequestId === null) return;
-		setPendingJumpRequestId(null);
+		if (pendingJump === null) return;
+		setPendingJump(null);
 		if (transcriptInert) return;
-		messageListRef.current?.jumpToRequest(pendingJumpRequestId);
-	}, [pendingJumpRequestId, transcriptInert]);
+		if (pendingJump.to === "request") {
+			messageListRef.current?.jumpToRequest(pendingJump.id);
+		} else {
+			messageListRef.current?.jumpToMessage(pendingJump.id);
+		}
+	}, [pendingJump, transcriptInert]);
 
 	const forkAnchor = forkTarget
 		? resolveForkAnchor(messages, forkTarget.messageId, hasMoreHistory)
@@ -1656,6 +1699,16 @@ function ChatPanel({
 						turnRunning={turn.phase === "running"}
 						onSend={sendCanvasAction}
 						sendBlocked={promptOwnsInput ? "permission" : null}
+						permissions={{
+							turn,
+							turnKnown: isSessionDetailLoaded,
+							transcript: transcriptPermissions,
+							replyStatus,
+							isCodex: agentType === "codex",
+							onRespond: handlePermissionRespond,
+							promptError: promptError ?? undefined,
+							onOpenFile,
+						}}
 					/>
 				</div>
 			)}
@@ -1801,6 +1854,27 @@ function ChatPanel({
 						floating={canvasComposerFloats}
 						open={canvasLineUp && canvasComposerExpanded}
 					>
+						{/* Drawn from the first frame of canvas view, so the canvas
+						    has its final height before the first send measures it
+						    (docs/canvas-ui.md §11.1). Unmounted off canvas view,
+						    which takes its sheet with it. */}
+						{canvasShown && (
+							<ActivityStrip
+								// Its sheet and what it last announced are this session's.
+								key={sessionId}
+								sessionId={sessionId}
+								turn={turn}
+								loaded={isSessionDetailLoaded && !isChatPending}
+								messages={messages}
+								tail={tail}
+								openedThoughtIds={openedThoughtIds}
+								isCodex={agentType === "codex"}
+								onPermissionRespond={handlePermissionRespond}
+								promptError={promptError ?? undefined}
+								onOpenFile={onOpenFile}
+								onOpenInChat={handleOpenReplyInChat}
+							/>
+						)}
 						{/* What needs the user, stated where the transcript ends
 					    (docs/lifecycle-ui.md §2.2). */}
 						{!overlay && !isChatPending && !isReadOnly && (
@@ -1815,6 +1889,9 @@ function ChatPanel({
 								// visible jumps. A yielded card is off the screen, so the row
 								// is the way back to it, as after a close.
 								answerPanelOpen={answerPanelOnScreen}
+								// In canvas view the banner, the panel and the activity
+								// strip are the turn's rows (docs/canvas-ui.md §11.4).
+								turnRowsElsewhere={canvasShown}
 								sendPending={isSendPending}
 								jumpDisabled={answerPanelSending}
 								permissionRequests={blockingPermissions}

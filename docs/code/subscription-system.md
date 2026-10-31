@@ -451,6 +451,14 @@ and one it holds had its blocker settled first — a process settles the turn
 before it writes the record — so the turn read names it unless it has already
 been answered. Why the contents are not copied onto the blocker instead is
 [docs/canvas-ui.md §10.4](../canvas-ui.md#104-where-the-requests-come-from).
+On the client, `useChatMessages` hands the reply's `permission_requests` — and
+the requests its `turn` lists with no record among them, which will never
+arrive — to `permissionRequestStore` alone, never to the message reducer
+([why](../canvas-ui.md#104-where-the-requests-come-from)). The live
+`permission_request`, `permission_response` and `request_cancelled` records,
+and the first page's answers and expiries, go to the reducer as before *and*
+to the store, which is what canvas view's permission panel and expiry line
+read.
 
 ### Why a Watcher Sometimes Listens to a Second Store
 

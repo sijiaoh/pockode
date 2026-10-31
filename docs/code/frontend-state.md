@@ -35,6 +35,10 @@ Pockode uses Zustand for state management, pure reducers for event processing, a
 │  ├─ settingsStore    │                                      │   │
 │  ├─ cliLoginStore    │ (status read, not pushed)            │   │
 │  └─ authStore        │                                      │   │
+│                                                             │   │
+│  open session's chat subscription (useChatMessages):        │   │
+│  ├─ canvasStore                                             │   │
+│  └─ permissionRequestStore                                  │   │
 ├─────────────────────────────────────────────────────────────────┤
 │  Transport Layer                                                │
 │  └─ wsStore                                                     │
@@ -54,6 +58,7 @@ Pockode uses Zustand for state management, pure reducers for event processing, a
 | sessionStore | Chat session list — one page of it, as the server narrowed it — and the two filters over it | State/Actions interface split; an absence in it is not proof a session is gone ([why](subscription-system.md#what-the-client-gives-up-by-letting-the-server-filter)). The worktree filter is the one field here that can mean *the list on screen is not this store's* |
 | sessionDetailStore | The open session's own metadata, and whether it exists at all | One session at a time, read through a selector that checks whose it is |
 | canvasStore | The open canvas session's current canvas, the device's canvas size every message to a canvas session carries ([canvas-ui.md §13.2](../canvas-ui.md#132-the-pushed-state)), and a count of what may have settled a canvas call, on which the history view reads its list again ([§15.3](../canvas-ui.md#153-moving-between-pages)) | One session at a time, as sessionDetailStore; filled by `useChatMessages`, which holds the subscription it rides on; the highest revision wins |
+| permissionRequestStore | The open session's permission requests as their records told them — what each asks and what became of it — apart from the transcript ([canvas-ui.md §10.4](../canvas-ui.md#104-where-the-requests-come-from)) | One session at a time, as canvasStore; filled by `useChatMessages` from the subscribe reply's `permission_requests`, the answers and expiries on its first page, the live records, and this client's own answers (undone when refused). Never says which requests are pending — that is `TurnState.blockers` — and never feeds the message reducer ([why](../canvas-ui.md#104-where-the-requests-come-from)) |
 | workStore | The project list's `Current` segment, and the one archive page on screen | State/Actions interface split; the two halves are separate fields because only one of them is pushed to |
 | agentRoleStore | AI roles | State/Actions interface split |
 | scheduleStore | Every schedule, each with its latest run's row | State/Actions interface split; app-wide because the Project tab's dot reads it ([schedule-ui.md §1](../schedule-ui.md#1-the-project-tab)) |

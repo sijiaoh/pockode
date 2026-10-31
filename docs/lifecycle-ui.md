@@ -453,6 +453,12 @@ So are the review row's, in
 [agent-handoff-ui.md §2](agent-handoff-ui.md#2-the-review-row): it shows only
 while the session is idle and no question waits, so in practice it is alone.
 
+In a canvas session's canvas view the strip drops its two turn rows
+(`turnRowsElsewhere`): the permission row, whose job the canvas's permission
+banner and panel do there, and the background row, which the activity strip
+says. The rest keep this order; the canvas's own rule is
+[canvas-ui.md §11.4](canvas-ui.md#114-beside-the-attention-strip).
+
 Permission is first, and now for a sharper reason than the precedence §1.2 uses:
 it is the only row left that Send is refused under (§2.3), and it is also the
 state in which *answering a question is refused*, because the CLI holding the
@@ -1405,7 +1411,7 @@ controls are what they will land on:
 | `web/src/components/Chat/AttentionStrip.tsx` | renamed from `BlockerStrip.tsx` — §2.2, the watching row included |
 | `web/src/components/Chat/AnswerPanel.tsx` | new — [answering-ui.md §3](answering-ui.md#3-the-answer-panel) |
 | `web/src/components/Chat/QuestionRecordItem.tsx` | replaces `AskUserQuestionItem.tsx` — a record card: four states, no form ([answering-ui.md §6](answering-ui.md#6-the-record-card-in-the-stream)) |
-| `web/src/components/Chat/MessageItem.tsx` | permission card's expired banners |
+| `web/src/components/Chat/PermissionRequestItem.tsx` | permission card's expired banners (`PERMISSION_EXPIRY_COPY`), moved out of `MessageItem.tsx` for the canvas's permission panel |
 | `web/src/hooks/useChatMessages.ts` | `isProcessRunning` bookkeeping replaced by §2.4 |
 | `web/src/components/Project/WorkListOverlay.tsx` | the groups of §6.1, headed by a fixed `ActivityIcon` per group |
 | `web/src/components/Project/WorkRow.tsx` | the row itself — `ActivityIcon`, the activity label in its meta line, the icon-only lifecycle control ([project-ui.md §3](project-ui.md#3-the-row)) |
