@@ -31,6 +31,13 @@ export interface LayerBack {
 	/** The layer's plain close — what ✕ or Cancel calls, and nothing else. */
 	onBack: () => void;
 	/**
+	 * Called instead of `onBack` when the layer is gone back over for a held
+	 * navigation (`unwind`) rather than by the user's Back. Absent, that is
+	 * `onBack` too. For a layer that stays as it was under the page navigated
+	 * to and is shown again on the way back.
+	 */
+	onLeave?: () => void;
+	/**
 	 * True while the layer refuses to close: a Back that lands right under it
 	 * is answered by pushing its entry again. Read at the time of the Back.
 	 */
@@ -179,7 +186,8 @@ export function createLayerHistory(entries: LayerEntries): LayerHistory {
 			// Top first, as Escape would put them away.
 			for (const layer of [...gone, ...stranded].reverse()) {
 				remove(layer);
-				layer.back.onBack();
+				if (ours && layer.back.onLeave) layer.back.onLeave();
+				else layer.back.onBack();
 			}
 		}
 		landing?.();

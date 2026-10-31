@@ -30,6 +30,12 @@ export interface CoverPageBack {
 	 */
 	onBack: () => void;
 	/**
+	 * What a held navigation does instead of `onBack`, for a layer that is
+	 * kept as it was under the page navigated to — the canvas's permission
+	 * panel. Absent, the navigation closes the layer like Back.
+	 */
+	onLeave?: () => void;
+	/**
 	 * True while the layer refuses to close — a sheet mid-operation. Back then
 	 * leaves it up, and the next Back is caught the same way.
 	 */
@@ -72,6 +78,7 @@ export function useCoverPage(active: boolean, back: CoverPageBack): void {
 		setCoveringLayers(coveringLayers + 1);
 		const close = history?.open({
 			onBack: () => backRef.current.onBack(),
+			onLeave: () => (backRef.current.onLeave ?? backRef.current.onBack)(),
 			refuse: () => backRef.current.refuse ?? false,
 		});
 		return () => {
