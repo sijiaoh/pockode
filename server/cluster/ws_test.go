@@ -7,6 +7,7 @@ import (
 	"github.com/pockode/server/internal/restarttest"
 	"log/slog"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -42,7 +43,7 @@ func newTestServer(t *testing.T, sessions *authsessiontest.Sessions, restarter *
 	if err != nil {
 		t.Fatalf("failed to create node store: %v", err)
 	}
-	h := newWSHandler(testPassword, authguard.NewFrozen(), sessions, "test", true, nodeStore, node.NewProcessManager(""), restarter,
+	h := newWSHandler(testPassword, authguard.NewFrozen(), sessions, "test", true, nodeStore, node.NewProcessManager(os.Args[0]), restarter,
 		slog.New(slog.DiscardHandler))
 	server := httptest.NewServer(h)
 	t.Cleanup(server.Close)

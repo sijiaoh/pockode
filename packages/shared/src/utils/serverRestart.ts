@@ -16,11 +16,17 @@ export interface InstalledVersion {
 	path: string;
 }
 
-/** The `data.reason` of a refused `server.restart`, which changed nothing. */
+/**
+ * The `data.reason` of a refused `server.restart` or `node.restart`, which
+ * changed nothing. `older_node` and `not_running` come only from a cluster's
+ * `node.restart`; `shutting_down` only from `server.restart`.
+ */
 export type RestartRefusedReason =
 	| "not_runnable"
 	| "already_restarting"
-	| "shutting_down";
+	| "shutting_down"
+	| "older_node"
+	| "not_running";
 
 /** Where: server/rpc/types.go's CodeRestartRefused. */
 const RESTART_REFUSED_CODE = -32011;
@@ -29,6 +35,8 @@ const RESTART_REFUSED_REASONS: readonly string[] = [
 	"not_runnable",
 	"already_restarting",
 	"shutting_down",
+	"older_node",
+	"not_running",
 ] satisfies RestartRefusedReason[];
 
 /**

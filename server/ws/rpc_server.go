@@ -98,11 +98,18 @@ func (c ServerControl) refusal(err error) (reason, message string) {
 	}
 	var notRunnable *restart.NotRunnableError
 	if errors.As(err, &notRunnable) {
-		return rpc.RestartRefusedNotRunnable, "The installed pockode at " + c.Restarter.Program().Path +
-			" didn't run: " + notRunnable.Err.Error() + ". " + c.Subject + " kept running; nothing was stopped."
+		return rpc.RestartRefusedNotRunnable, NotRunnableRefusal(c.Restarter.Program().Path, notRunnable, c.Subject)
 	}
 	// Request refuses for no other reason; a new one would surface verbatim.
 	return "", err.Error()
+}
+
+// NotRunnableRefusal is the copy of a restart refused because the installed
+// executable at path did not run; subject is what kept running ("Pockode",
+// "The node"). The copy is docs/restart-ui.md's.
+func NotRunnableRefusal(path string, err *restart.NotRunnableError, subject string) string {
+	return "The installed pockode at " + path + " didn't run: " + err.Err.Error() + ". " +
+		subject + " kept running; nothing was stopped."
 }
 
 // handleServerVersion reads the installed version afresh, with what a restart

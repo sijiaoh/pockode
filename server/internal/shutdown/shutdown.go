@@ -7,6 +7,7 @@
 package shutdown
 
 import (
+	"errors"
 	"os"
 	"os/signal"
 	"sync"
@@ -53,11 +54,11 @@ func Listen() *Listener {
 	return l
 }
 
-// Restarts delivers a value for every restart request — `kill -USR1` on unix,
-// nothing on Windows — coalescing those that arrive before the previous one was
-// taken. A request that arrived before the first Listen, while
-// HoldRestartRequests was holding it, is delivered at once. It is closed by
-// Stop. Whether the process actually restarts is not decided here: see
+// Restarts delivers a value for every restart request — RequestRestart from
+// another process, or `kill -USR1` on unix — coalescing those that arrive
+// before the previous one was taken. A request that arrived before the first
+// Listen, while HoldRestartRequests was holding it, is delivered at once. It is
+// closed by Stop. Whether the process actually restarts is not decided here: see
 // internal/restart.
 func (l *Listener) Restarts() <-chan struct{} { return l.restarts }
 
@@ -115,12 +116,25 @@ func HoldInterrupts() {
 // every child, and the AI CLIs are Node programs, for which SIGUSR1 means
 // something. A caught one is reset to the default in each child.
 //
+// On Windows this is also the moment the process publishes the named event
+// RequestRestart signals, so from here on it can be asked to restart.
+//
 // Listen calls it too, so a process that never calls it is no worse off than
-// before. It does nothing on Windows, which has no restart signal.
+// before.
 func HoldRestartRequests() { restartRequests.hold() }
 
-// restartRequests routes the process's restart signals to the Listener in
-// charge, if any. It is process-wide because a signal disposition is.
+// ErrRestartUnsupported reports that the process cannot be asked to restart
+// from outside: nothing is waiting for the request — on Windows, no restart
+// event is published under its PID, which is what a pockode build that predates
+// restarts looks like. Only Windows can tell; on unix the signal is sent
+// regardless, and what an old build does with it is to terminate, so a caller
+// has to know the process is new enough before it asks (the version in its
+// server.json).
+var ErrRestartUnsupported = errors.New("process does not accept restart requests")
+
+// restartRequests routes the process's restart requests to the Listener in
+// charge, if any. It is process-wide because what it listens on is: a signal
+// disposition on unix, an event named after the PID on Windows.
 var restartRequests restartRouter
 
 type restartRouter struct {
@@ -133,18 +147,7 @@ type restartRouter struct {
 }
 
 func (r *restartRouter) hold() {
-	r.holdOnce.Do(func() {
-		if len(restartSignals) == 0 {
-			return
-		}
-		signals := make(chan os.Signal, 1)
-		signal.Notify(signals, restartSignals...)
-		go func() {
-			for range signals {
-				r.deliver()
-			}
-		}()
-	})
+	r.holdOnce.Do(func() { watchRestartRequests(r.deliver) })
 }
 
 func (r *restartRouter) deliver() {

@@ -63,6 +63,46 @@ func TestRequestExit_RejectsNonPositivePID(t *testing.T) {
 	}
 }
 
+// TestListen_RequestRestart is the round trip a cluster makes to restart a node
+// — SIGUSR1 on unix, the restart event on Windows — twice, because a restart
+// can be refused and the process carry on, and the next request must still
+// arrive. Neither is mistaken for an exit request.
+func TestListen_RequestRestart(t *testing.T) {
+	for attempt := 1; attempt <= 2; attempt++ {
+		l := Listen()
+
+		if err := RequestRestart(os.Getpid()); err != nil {
+			t.Fatalf("attempt %d: RequestRestart: %v", attempt, err)
+		}
+		select {
+		case _, ok := <-l.Restarts():
+			if !ok {
+				t.Fatalf("attempt %d: Restarts closed instead of delivering the request", attempt)
+			}
+		case <-time.After(notifyTimeout):
+			t.Fatalf("attempt %d: restart request was not delivered", attempt)
+		}
+		select {
+		case <-l.Done():
+			t.Fatalf("attempt %d: a restart request was reported as an exit request", attempt)
+		default:
+		}
+
+		l.Stop()
+		if _, ok := <-l.Restarts(); ok {
+			t.Fatalf("attempt %d: Restarts still open after Stop", attempt)
+		}
+	}
+}
+
+func TestRequestRestart_RejectsNonPositivePID(t *testing.T) {
+	for _, pid := range []int{0, -1} {
+		if err := RequestRestart(pid); err == nil {
+			t.Errorf("RequestRestart(%d) = nil, want an error", pid)
+		}
+	}
+}
+
 func TestListen_StopWithoutRequest(t *testing.T) {
 	l := Listen()
 	l.Stop()

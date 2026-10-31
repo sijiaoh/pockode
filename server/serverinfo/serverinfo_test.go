@@ -13,7 +13,7 @@ import (
 func TestWriteAndDelete(t *testing.T) {
 	dir := t.TempDir()
 
-	if err := Write(dir, 9870, "http://localhost:9870", "https://test.cloud.pockode.com", "test-token"); err != nil {
+	if err := Write(dir, "1.2.3", 9870, "http://localhost:9870", "https://test.cloud.pockode.com", "test-token"); err != nil {
 		t.Fatalf("Write failed: %v", err)
 	}
 
@@ -48,6 +48,9 @@ func TestWriteAndDelete(t *testing.T) {
 	if info.Token != "test-token" {
 		t.Errorf("Token = %q, want %q", info.Token, "test-token")
 	}
+	if info.Version != "1.2.3" {
+		t.Errorf("Version = %q, want %q", info.Version, "1.2.3")
+	}
 
 	if err := Delete(dir); err != nil {
 		t.Fatalf("Delete failed: %v", err)
@@ -69,7 +72,7 @@ func TestDeleteNonExistent(t *testing.T) {
 func TestWriteCreatesDirectory(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "nested", "dir")
 
-	if err := Write(dir, 8080, "http://localhost:8080", "", ""); err != nil {
+	if err := Write(dir, "", 8080, "http://localhost:8080", "", ""); err != nil {
 		t.Fatalf("Write failed to create directory: %v", err)
 	}
 
@@ -84,7 +87,7 @@ func TestWriteCreatesDirectory(t *testing.T) {
 func TestWriteRestrictsTokenFile(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "nested", ".pockode")
 
-	if err := Write(dir, 9870, "http://localhost:9870", "", "secret-token"); err != nil {
+	if err := Write(dir, "", 9870, "http://localhost:9870", "", "secret-token"); err != nil {
 		t.Fatalf("Write failed: %v", err)
 	}
 
@@ -104,7 +107,7 @@ func TestWriteRestrictsWhatAnEarlierRunLeftOpen(t *testing.T) {
 		t.Fatalf("seed stale file: %v", err)
 	}
 
-	if err := Write(dir, 9870, "", "", "secret-token"); err != nil {
+	if err := Write(dir, "", 9870, "", "", "secret-token"); err != nil {
 		t.Fatalf("Write failed: %v", err)
 	}
 
@@ -116,7 +119,7 @@ func TestRead(t *testing.T) {
 	dir := t.TempDir()
 
 	// Write first
-	if err := Write(dir, 9870, "http://localhost:9870", "", ""); err != nil {
+	if err := Write(dir, "", 9870, "http://localhost:9870", "", ""); err != nil {
 		t.Fatalf("Write failed: %v", err)
 	}
 
@@ -174,7 +177,7 @@ func TestReadInvalidJSON(t *testing.T) {
 func TestWriteOmitsEmptyURLs(t *testing.T) {
 	dir := t.TempDir()
 
-	if err := Write(dir, 9870, "", "", ""); err != nil {
+	if err := Write(dir, "", 9870, "", "", ""); err != nil {
 		t.Fatalf("Write failed: %v", err)
 	}
 
@@ -203,7 +206,7 @@ func TestWriteOmitsEmptyURLs(t *testing.T) {
 func TestPublisherRefreshWaitsForPublish(t *testing.T) {
 	dir := t.TempDir()
 	remoteURL := "https://old.cloud.pockode.com"
-	p := NewPublisher(dir, 9870, "http://localhost:9870", "token", func() string { return remoteURL })
+	p := NewPublisher(dir, "1.2.3", 9870, "http://localhost:9870", "token", func() string { return remoteURL })
 
 	remoteURL = "https://new.cloud.pockode.com"
 	if err := p.Refresh(); err != nil {
@@ -230,7 +233,7 @@ func TestPublisherRefreshWaitsForPublish(t *testing.T) {
 func TestPublisherRefreshRewritesTheRemoteURL(t *testing.T) {
 	dir := t.TempDir()
 	remoteURL := "https://old.cloud.pockode.com"
-	p := NewPublisher(dir, 9870, "http://localhost:9870", "token", func() string { return remoteURL })
+	p := NewPublisher(dir, "1.2.3", 9870, "http://localhost:9870", "token", func() string { return remoteURL })
 	// started_at has one-second resolution, so a write that restamped it would
 	// almost always go unnoticed against the real clock.
 	const startedAt = "2000-01-01T00:00:00Z"
