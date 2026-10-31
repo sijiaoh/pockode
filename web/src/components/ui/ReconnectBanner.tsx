@@ -11,12 +11,23 @@ import { useWSStore, wsActions } from "../../lib/wsStore";
 function ReconnectBanner() {
 	const status = useWSStore((state) => state.status);
 	const attempts = useWSStore((state) => state.reconnectAttempts);
+	const restartRequestedAt = useWSStore((state) => state.restartRequestedAt);
 
 	if (status !== "reconnecting") {
 		return null;
 	}
 
-	return <Banner attempts={attempts} onRetryNow={() => wsActions.retryNow()} />;
+	return (
+		<Banner
+			attempts={attempts}
+			onRetryNow={() => wsActions.retryNow()}
+			restarting={
+				restartRequestedAt === null
+					? null
+					: { since: restartRequestedAt, subject: "Pockode" }
+			}
+		/>
+	);
 }
 
 export default ReconnectBanner;

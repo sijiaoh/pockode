@@ -623,6 +623,79 @@ describe("wsStore", () => {
 		});
 	});
 
+	// docs/restart-ui.md, "While it restarts": the page remembers a restart it
+	// asked for until the next connection says what came back.
+	describe("restartServer", () => {
+		async function requestRestart() {
+			await connectAndAuth();
+			const ws = getMockWs();
+			ws?.deferMethod("server.restart");
+			const pending = wsActions.restartServer();
+			await vi.advanceTimersByTimeAsync(0);
+			return { ws, pending };
+		}
+
+		function refuse(ws: MockWebSocket | null, reason: string, message: string) {
+			const request = ws?.deferred[0];
+			ws?.simulateMessage({
+				jsonrpc: "2.0",
+				id: request?.id,
+				error: { code: -32011, message, data: { reason } },
+			});
+		}
+
+		it("remembers the accepted restart until the next connection", async () => {
+			const { ws, pending } = await requestRestart();
+			ws?.releaseDeferred(0, {});
+			await pending;
+			expect(useWSStore.getState().restartRequestedAt).not.toBeNull();
+
+			// The server closes with 1012 after its reply; the reconnect is ordinary.
+			ws?.simulateClose();
+			expect(useWSStore.getState().status).toBe("reconnecting");
+			expect(useWSStore.getState().restartRequestedAt).not.toBeNull();
+
+			await vi.advanceTimersByTimeAsync(RECONNECT_MAX_DELAY);
+			getMockWs()?.simulateOpen();
+			await vi.advanceTimersByTimeAsync(0);
+			expect(useWSStore.getState().status).toBe("connected");
+			expect(useWSStore.getState().restartRequestedAt).toBeNull();
+		});
+
+		it("rejects a refusal with the server's message and remembers nothing", async () => {
+			const { ws, pending } = await requestRestart();
+			const rejection = expect(pending).rejects.toThrow(
+				"The installed pockode at /x didn't run",
+			);
+			refuse(ws, "not_runnable", "The installed pockode at /x didn't run");
+			await rejection;
+			expect(useWSStore.getState().restartRequestedAt).toBeNull();
+		});
+
+		it("waits on a restart already under way as if it had asked", async () => {
+			const { ws, pending } = await requestRestart();
+			refuse(ws, "already_restarting", "Pockode is already restarting.");
+			await pending;
+			expect(useWSStore.getState().restartRequestedAt).not.toBeNull();
+		});
+
+		it("forgets a restart whose page logged out while it was out", async () => {
+			const { pending } = await requestRestart();
+			wsActions.disconnect();
+			await pending;
+			expect(useWSStore.getState().restartRequestedAt).toBeNull();
+		});
+
+		// Through the relay the reply may not arrive before the tunnel goes; the
+		// reconnect's version decides, not a failure shown for a restart that ran.
+		it("waits for the reconnect when the connection drops before the reply", async () => {
+			const { ws, pending } = await requestRestart();
+			ws?.simulateClose();
+			await pending;
+			expect(useWSStore.getState().restartRequestedAt).not.toBeNull();
+		});
+	});
+
 	describe("unanswered requests", () => {
 		it("fails them as soon as the socket closes", async () => {
 			await connectAndAuth();

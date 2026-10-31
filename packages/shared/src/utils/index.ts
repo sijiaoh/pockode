@@ -14,3 +14,9 @@ export {
 	type LayerHistory,
 } from "./layerHistory.ts";
 export { BREAKPOINTS, hasCoarsePointer, MEDIA_QUERIES } from "./responsive.ts";
+export {
+	type InstalledVersion,
+	RESTART_NOT_BACK_MS,
+	type RestartRefusedReason,
+	restartRefusedReason,
+} from "./serverRestart.ts";
