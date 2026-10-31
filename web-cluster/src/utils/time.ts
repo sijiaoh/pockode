@@ -37,3 +37,20 @@ export function formatElapsed(since: string, now: number): string | null {
 	const seconds = Math.max(0, Math.floor((now - start) / 1000));
 	return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
 }
+
+/**
+ * How long ago a past moment was, as a phrase that ends a sentence:
+ * "just now", "3 min ago", "2 h ago", "4 days ago" — for "Checked 3 min ago",
+ * where the age of a cached answer is the point.
+ */
+export function formatAgo(at: string, now: number): string | null {
+	const then = new Date(at).getTime();
+	if (Number.isNaN(then)) return null;
+	const minutes = Math.floor((now - then) / 60_000);
+	if (minutes < 1) return "just now";
+	if (minutes < 60) return `${minutes} min ago`;
+	const hours = Math.floor(minutes / 60);
+	if (hours < 24) return `${hours} h ago`;
+	const days = Math.floor(hours / 24);
+	return days === 1 ? "1 day ago" : `${days} days ago`;
+}

@@ -32,9 +32,10 @@ import (
 // working directory this process started with.
 //
 // It is captured at startup (Current) because none of it can be asked for
-// reliably later. Once an upgrade has renamed a new binary over the old one,
-// Linux reports os.Executable() as "… (deleted)"; os.Args[0] may be relative,
-// or a bare name looked up in PATH.
+// reliably later. os.Executable() resolves symlinks, so once a package manager
+// has moved its link to a new versioned directory and removed the old one, it
+// names a file that is gone; os.Args[0] may be relative, or a bare name looked
+// up in PATH.
 type Program struct {
 	// Path is the absolute path to the executable.
 	Path string

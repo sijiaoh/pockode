@@ -48,7 +48,7 @@ Method names are organized using the `namespace.method` format, solving two prob
 | `port_preview.*` | app | `ws/rpc_port_preview.go` |
 | `raw.*` | app | `ws/rpc_raw.go` |
 | `remote_url.*` | app | `ws/rpc_remote_url.go` |
-| `server.*` | app | `ws/rpc_server.go`; a cluster serves the same two methods from `cluster/ws.go` |
+| `server.*` | app | `ws/rpc_server.go` and `ws/rpc_server_update.go`; a cluster serves the same methods from `cluster/ws.go` |
 
 - **Worktree scope**: Operations that depend on the current working directory (files, Git, etc.)
 - **App scope**: Global operations across worktrees (settings, project management, etc.)
@@ -122,6 +122,93 @@ proxy that reaches `/ws`. `WebSocketStream.CloseAfterFlush` is the close that
 can be waited on. The other connections end in the shutdown that follows: the
 relayed ones when the relay stops, which comes first, and the direct ones with
 `1001` ([Closing on Shutdown](#closing-on-shutdown)).
+
+### Server: Updating to a Release
+
+`server.update_check` and `server.update` install a published release over the
+executable a restart runs; the restart into it is the client's ordinary
+`server.restart` that follows, refused or accepted exactly as above. Both modes
+serve them through the same `ws.ServerControl`, whose `Updater` is one per
+process — `server/internal/release` finds the candidates,
+`server/selfinstall` replaces the file. The screens are
+[self-update-ui.md](../self-update-ui.md); the shapes on the client are
+`@pockode/shared`'s, beside `InstalledVersion`.
+
+| Method | Params | Result |
+|---|---|---|
+| `server.update_check` | `force?` | `{ checked_at?, candidates, latest_version?, check_error?, cannot_install?, installing?, platform, asset }` |
+| `server.update` | `version` | `{}` once the file has been replaced |
+
+The check's parts are independent, so each can be drawn on its own:
+
+- **`candidates`** — `{ channel, version, notes_url, unavailable? }`, latest
+  then alpha, never `null`. Each is newer than the running version (the
+  release package's rule) **and** than the installed one, read afresh as for
+  `server.version`: a release already on disk is a restart away, not an
+  update. An installed version that is not a release (`dev`, unreadable) sets
+  no floor. `unavailable` is `{ reason: no_asset | no_checksums, message }`
+  for a release with nothing this platform can install.
+- **`latest_version`** — the newest final release whether or not it is a
+  candidate: what an alpha candidate is a prerelease beside when latest is
+  not offered (the running or installed version is past it).
+- **`checked_at`** — when the candidates were last confirmed. Absent with no
+  `check_error` means the first check has not answered yet; the request waits
+  for it (at most the check's own 20 s), so that is rare, but it is never "up
+  to date".
+- **`check_error`** — `{ reason, message }`: `dev_build` (never checked) or
+  `unavailable` (the GitHub API and `releases.atom` both failed). The
+  candidates of the last good check stay beside it.
+- **`cannot_install`** — `{ reason, message, dir?, hint? }`: `dev_build`,
+  `container` or `not_writable`, the last with the real file's directory and
+  the OS-specific advice (`hint`, commands in backticks) that ends `message`.
+  An error finding out — the executable at the saved path is gone, say — has
+  `reason` `""`. Restarting is unaffected.
+- **`installing`** — `{ version, channel, started_at }` for this process's
+  install, whichever client asked for it; `{}` for one another Pockode of the
+  same OS user runs (it holds the install lock).
+- **`platform`**, **`asset`** — `linux/amd64`, `pockode-linux-amd64`: what
+  this server downloads, for copy about a release without it.
+
+The release list is cached (an hour after a success, five minutes after a
+failure); `force` looks again past the cache unless a check started less than
+a minute ago, whose answer it returns — the GitHub API allows 60
+unauthenticated requests an hour per address, shared by every node and the
+cluster on it.
+
+`server.update` installs `version` only if it is a candidate of the cached
+check, measured against the installed version as above — the client never
+makes the server install something older, or what is already on disk. It
+answers when the install ends. The install belongs to the process, not the
+request: a dropped connection does not stop it, and the next check shows how it
+ended; only its 5-minute budget, counted from the request's arrival, does —
+up to the replacement, which is not cut short once begun (on Windows it may
+wait out antivirus). The shutdown before an exit or a restart, before it
+closes the connections, stops an install still downloading, waits for a
+replacement already begun, and keeps a later one from starting
+(`Updater.Close`), so a process never goes down between Windows' two renames.
+The stopped install answers with reason `""` if its connection still carries
+it — a restart's own client sees its connection close either way — and the
+next check, from whatever runs next, shows the file unchanged. A failure is `CodeUpdateFailed`
+(`-32012`) with `data.reason`, and the message can be shown as it is:
+
+| `reason` | When |
+|---|---|
+| `release_gone` | `version` is not a candidate (any more) — or, found under the install lock, the file on disk is already that version or newer: another install finished first |
+| `not_installable` | This server cannot install at all (`cannot_install`'s reasons) |
+| `already_installing` | An install of this process or of another Pockode of the OS user is under way |
+| `no_asset` | No build for this platform: the candidate's own `unavailable`, or found while downloading — a 404, or `checksums.txt` not listing it — which is the only way to know when the check came from `releases.atom` |
+| `no_checksums` | The release has no usable `checksums.txt`: likewise from the candidate, or from the download |
+| `download_failed` | A file of the release could not be fetched or written |
+| `checksum_mismatch` | The download is not what the release published |
+| `not_runnable` | The download does not run here with `--version`, or reports another version |
+| `replace_failed` | The new file could not be renamed into place |
+| `restore_failed` | Windows only: the old file was moved aside and could not be put back; the message says where it is |
+| `timeout` | The 5-minute budget ran out before the rename |
+| `""` | Anything else, by its message |
+
+Every reason but `restore_failed` leaves the executable as it was.
+`@pockode/shared`'s `updateFailedReason` reads them, and `UPDATE_BUDGET_MS`
+is the budget a client's request timeout has to exceed.
 
 ### Raw Capabilities
 
@@ -915,7 +1002,7 @@ message cannot expand past it.
 ### Request Timeout
 
 RPC requests in web carry a client-side timeout, 30 seconds by default; in
-web-cluster only `auth` does:
+web-cluster only `auth` and `server.update` do:
 
 ```typescript
 const RPC_TIMEOUT_MS = 30000;
@@ -958,6 +1045,16 @@ to 90 seconds of its own, and a client that gave up first would throw away the
 `timeout` it says then while the paid run went on
 ([Drafting a Commit Message](../git.md#drafting-a-commit-message)). It is never
 retried.
+
+The update RPCs follow the same rule. `server.update` answers only once the
+install has ended, within `UPDATE_BUDGET_MS` but for a replacement already
+begun ([Server: Updating to a Release](#server-updating-to-a-release)), so
+both frontends give it that budget plus minutes of margin: the shared
+`UPDATE_RPC_TIMEOUT_MS` (`@pockode/shared`).
+`server.update_check` can spend the installed-version probe and then the
+release check before it answers, which together reach 30 s, so web gives it
+`UPDATE_CHECK_RPC_TIMEOUT_MS`. Each constant's comment names the server
+deadlines it is derived from.
 
 **A timeout is not a failure the caller may retry blindly.** The server is likely
 still working on the request, so a retry stacks a second copy of that work on top

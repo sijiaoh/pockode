@@ -13,9 +13,10 @@ const wsState = {
 		connect: vi.fn(),
 		disconnect: vi.fn(),
 		listNodes: vi.fn(),
-		// The node list reads the installed version on connect; nothing here is
-		// about it.
+		// The node list reads the installed version and checks for releases on
+		// connect; nothing here is about either.
 		serverVersion: vi.fn(() => new Promise(() => {})),
+		serverUpdateCheck: vi.fn(() => new Promise(() => {})),
 	},
 };
 const authState = {

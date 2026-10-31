@@ -1,4 +1,8 @@
-import type { AuthCredential } from "@pockode/shared";
+import {
+	type AuthCredential,
+	UPDATE_BUDGET_MS,
+	UPDATE_RPC_TIMEOUT_MS,
+} from "@pockode/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { authActions, useAuthStore } from "./authStore";
 import { worktreeActions } from "./worktreeStore";
@@ -693,6 +697,176 @@ describe("wsStore", () => {
 			ws?.simulateClose();
 			await pending;
 			expect(useWSStore.getState().restartRequestedAt).not.toBeNull();
+		});
+	});
+
+	// docs/self-update-ui.md, "Installing, and after": the install is a request
+	// in flight, so the store holds it and sends the restart that follows it.
+	describe("updateServer", () => {
+		const candidate = {
+			channel: "latest" as const,
+			version: "0.25.0",
+			notes_url: "https://github.com/sijiaoh/pockode/releases/tag/v0.25.0",
+		};
+
+		async function requestUpdate() {
+			await connectAndAuth();
+			const ws = getMockWs();
+			ws?.deferMethod("server.update");
+			ws?.deferMethod("server.restart");
+			const pending = wsActions.updateServer(candidate);
+			await vi.advanceTimersByTimeAsync(0);
+			return { ws, pending };
+		}
+
+		function methods(ws: MockWebSocket | null) {
+			return ws?.deferred.map((r) => r.method);
+		}
+
+		function fail(ws: MockWebSocket | null, reason: string, message: string) {
+			ws?.simulateMessage({
+				jsonrpc: "2.0",
+				id: ws?.deferred[0].id,
+				error: { code: -32012, message, data: { reason } },
+			});
+		}
+
+		it("installs, then restarts once with no second question", async () => {
+			const { ws, pending } = await requestUpdate();
+			expect(useWSStore.getState().serverUpdate).toMatchObject({
+				phase: "installing",
+				candidate,
+			});
+			expect(ws?.deferred[0].params).toEqual({ version: "0.25.0" });
+
+			ws?.releaseDeferred(0, {});
+			await vi.advanceTimersByTimeAsync(0);
+			expect(methods(ws)).toEqual(["server.update", "server.restart"]);
+			ws?.releaseDeferred(1, {});
+			await pending;
+
+			expect(useWSStore.getState().serverUpdate).toBeNull();
+			expect(useWSStore.getState().restartRequestedAt).not.toBeNull();
+		});
+
+		it("waits out the install's budget, then gives up without restarting", async () => {
+			const { ws, pending } = await requestUpdate();
+			await vi.advanceTimersByTimeAsync(UPDATE_BUDGET_MS);
+			expect(useWSStore.getState().serverUpdate?.phase).toBe("installing");
+
+			await vi.advanceTimersByTimeAsync(
+				UPDATE_RPC_TIMEOUT_MS - UPDATE_BUDGET_MS,
+			);
+			await pending;
+			expect(useWSStore.getState().serverUpdate).toMatchObject({
+				phase: "lost",
+				cause: "timeout",
+			});
+			expect(methods(ws)).toEqual(["server.update"]);
+		});
+
+		it("gives the check longer than the ordinary timeout", async () => {
+			await connectAndAuth();
+			getMockWs()?.deferMethod("server.update_check");
+			const check = wsActions.serverUpdateCheck({});
+			let settled = false;
+			check.then(
+				() => {
+					settled = true;
+				},
+				() => {
+					settled = true;
+				},
+			);
+			await vi.advanceTimersByTimeAsync(RPC_TIMEOUT_MS + 5_000);
+			expect(settled).toBe(false);
+			getMockWs()?.releaseDeferred(0, { candidates: [] });
+			await expect(check).resolves.toEqual({ candidates: [] });
+		});
+
+		it("remembers a failure, and restarts nothing", async () => {
+			const { ws, pending } = await requestUpdate();
+			fail(ws, "checksum_mismatch", "pockode-linux-amd64 does not match");
+			await pending;
+
+			expect(useWSStore.getState().serverUpdate).toMatchObject({
+				phase: "failed",
+				reason: "checksum_mismatch",
+				message: "pockode-linux-amd64 does not match",
+			});
+			expect(methods(ws)).toEqual(["server.update"]);
+			expect(useWSStore.getState().restartRequestedAt).toBeNull();
+		});
+
+		it("keeps the message of a failure no reason describes", async () => {
+			const { ws, pending } = await requestUpdate();
+			fail(ws, "", "something new");
+			await pending;
+			expect(useWSStore.getState().serverUpdate).toMatchObject({
+				phase: "failed",
+				reason: null,
+				message: "something new",
+			});
+		});
+
+		// The install runs on; a restart nobody is watching is not sent blind.
+		it("never restarts after a connection lost during the install", async () => {
+			const { ws, pending } = await requestUpdate();
+			ws?.simulateClose();
+			await pending;
+			expect(useWSStore.getState().serverUpdate).toMatchObject({
+				phase: "lost",
+				cause: "connection",
+			});
+
+			await vi.advanceTimersByTimeAsync(RECONNECT_MAX_DELAY);
+			const next = getMockWs();
+			next?.simulateOpen();
+			await vi.advanceTimersByTimeAsync(0);
+			expect(useWSStore.getState().status).toBe("connected");
+
+			const sent = next?.send.mock.calls.map(
+				([data]) => JSON.parse(data as string).method,
+			);
+			expect(sent).not.toContain("server.restart");
+			expect(useWSStore.getState().serverUpdate?.phase).toBe("lost");
+		});
+
+		it("says the file was installed when the restart is refused", async () => {
+			const { ws, pending } = await requestUpdate();
+			ws?.releaseDeferred(0, {});
+			await vi.advanceTimersByTimeAsync(0);
+			ws?.simulateMessage({
+				jsonrpc: "2.0",
+				id: ws?.deferred[1].id,
+				error: {
+					code: -32011,
+					message: "Pockode is shutting down.",
+					data: { reason: "shutting_down" },
+				},
+			});
+			await pending;
+
+			expect(useWSStore.getState().serverUpdate).toMatchObject({
+				phase: "restart_refused",
+				message: "Pockode is shutting down.",
+			});
+			expect(useWSStore.getState().restartRequestedAt).toBeNull();
+		});
+
+		it("forgets an install whose page logged out while it was out", async () => {
+			const { ws, pending } = await requestUpdate();
+			wsActions.disconnect();
+			ws?.releaseDeferred(0, {});
+			await pending;
+			expect(useWSStore.getState().serverUpdate).toBeNull();
+		});
+
+		it("ignores a second press while one is out", async () => {
+			const { ws } = await requestUpdate();
+			void wsActions.updateServer({ ...candidate, version: "0.26.0" });
+			await vi.advanceTimersByTimeAsync(0);
+			expect(methods(ws)).toEqual(["server.update"]);
 		});
 	});
 

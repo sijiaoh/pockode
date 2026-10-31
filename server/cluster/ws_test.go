@@ -17,6 +17,7 @@ import (
 	"github.com/pockode/server/cluster/node"
 	"github.com/pockode/server/internal/authsessiontest"
 	"github.com/pockode/server/rpc"
+	"github.com/pockode/server/ws"
 	"github.com/sourcegraph/jsonrpc2"
 )
 
@@ -44,7 +45,7 @@ func newTestServer(t *testing.T, sessions *authsessiontest.Sessions, restarter *
 		t.Fatalf("failed to create node store: %v", err)
 	}
 	h := newWSHandler(testPassword, authguard.NewFrozen(), sessions, "test", true, nodeStore, node.NewProcessManager(os.Args[0]), restarter,
-		slog.New(slog.DiscardHandler))
+		ws.NewUpdater(publishedRelease{}, &acceptingInstaller{}), slog.New(slog.DiscardHandler))
 	server := httptest.NewServer(h)
 	t.Cleanup(server.Close)
 	return server

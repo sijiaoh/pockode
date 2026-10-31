@@ -21,6 +21,8 @@ const actions = {
 	stopNode: vi.fn(),
 	deleteNode: vi.fn(),
 	serverVersion: vi.fn(),
+	// The release check is ClusterVersion.update.test.tsx's; here it never answers.
+	serverUpdateCheck: vi.fn(() => new Promise(() => {})),
 	restartServer: vi.fn(),
 };
 

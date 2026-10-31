@@ -294,6 +294,7 @@ Flags:
 	if cred.DeprecationWarning != "" {
 		slog.Warn(cred.DeprecationWarning)
 	}
+	updater := ws.NewReleaseUpdater(slog.Default(), restarter.Program(), version)
 
 	// Sessions are loaded before anything can authenticate. This is also where a
 	// changed password takes effect: every session issued under the old one is
@@ -530,7 +531,7 @@ Flags:
 	// Both assigned before the relay starts, so the reconnect loop that calls
 	// OnRemoteURLChange never sees them unset.
 	serverInfo = serverinfo.NewPublisher(dataDir, version, port, localURL, mcpToken, remoteURL)
-	wsHandler = ws.NewRPCHandler(cred.Password, passwordGuard, sessions, version, remoteURL, previewTickets, rawHandler, devMode, commandStore, worktreeManager, settingsStore, workStore, workOps, workEngine, agentRoleStore, scheduleStore, scheduler, cliAuth, cliUpdate, restarter)
+	wsHandler = ws.NewRPCHandler(cred.Password, passwordGuard, sessions, version, remoteURL, previewTickets, rawHandler, devMode, commandStore, worktreeManager, settingsStore, workStore, workOps, workEngine, agentRoleStore, scheduleStore, scheduler, cliAuth, cliUpdate, restarter, updater)
 
 	if relayManager != nil {
 		url, err := relayManager.Start(context.Background())
@@ -593,6 +594,10 @@ Flags:
 		if err := srv.Shutdown(ctx); err != nil {
 			slog.Error("server shutdown error", "error", err)
 		}
+		// Before the connections: an install under way is stopped short of
+		// its replacement (or its replacement awaited), so closing them does
+		// not wait out its timeout on a handler still installing.
+		updater.Close()
 		wsHandler.Stop()
 		// Before the worktree manager: a firing in progress is still starting
 		// a session through it.

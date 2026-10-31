@@ -33,7 +33,7 @@ Install a specific version (`v0.16.0` or newer):
 curl -fsSL https://pockode.com/install.sh | sh -s -- --version 0.16.0
 ```
 
-**Upgrade** by running the install command again. **Uninstall** with `rm ~/.local/bin/pockode`. Each project's `.pockode` directory — its sessions, settings and work — is left alone either way.
+**Upgrade** from the app — **Settings → Pockode** lists newer releases with **Update**, which installs one and restarts into it — or by running the install command again. **Uninstall** with `rm ~/.local/bin/pockode`. Each project's `.pockode` directory — its sessions, settings and work — is left alone either way.
 
 An older install in `/usr/local/bin` may come first on your `PATH` and keep running; the script warns you and prints the `rm` command that removes it.
 
@@ -48,6 +48,8 @@ Anything but a default install goes through a script block:
 & ([scriptblock]::Create((irm https://pockode.com/install.ps1))) -InstallDir D:\tools\pockode
 & ([scriptblock]::Create((irm https://pockode.com/install.ps1))) -Uninstall
 ```
+
+To upgrade, use **Update** in **Settings → Pockode**, which works while Pockode runs. Running the install command again also works, but only after you stop Pockode: Windows does not let a running `pockode.exe` be overwritten.
 
 Things Windows needs alongside it:
 

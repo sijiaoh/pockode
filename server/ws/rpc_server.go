@@ -12,12 +12,13 @@ import (
 	"github.com/sourcegraph/jsonrpc2"
 )
 
-// ServerControl serves the server namespace — server.version and
-// server.restart — for whichever process owns the Restarter. A pockode server
-// and a cluster share it; Subject is how the refusal copy names the process
-// ("Pockode", "The cluster").
+// ServerControl serves the server namespace — server.version,
+// server.restart, server.update_check and server.update — for whichever
+// process owns the Restarter. A pockode server and a cluster share it; Subject
+// is how the refusal copy names the process ("Pockode", "The cluster").
 type ServerControl struct {
 	Restarter *restart.Restarter
+	Updater   *Updater
 	Subject   string
 }
 

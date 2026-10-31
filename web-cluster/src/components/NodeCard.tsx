@@ -1,5 +1,6 @@
 import { Sheet, Spinner } from "@pockode/shared";
-import { useEffect, useReducer, useState } from "react";
+import { useEffect, useState } from "react";
+import { useElapsed } from "../hooks/useElapsed";
 import {
 	type InstalledVersionState,
 	installedOf,
@@ -13,7 +14,7 @@ import {
 } from "../lib/version";
 import type { NodeStatus, NodeWithStatus } from "../types/node";
 import { displayPath, splitTail } from "../utils/path";
-import { formatElapsed, formatUptime } from "../utils/time";
+import { formatUptime } from "../utils/time";
 import {
 	DANGER_BUTTON,
 	MENU_ITEM,
@@ -113,20 +114,6 @@ function NodePath({ path }: { path: string }) {
 			{tail && <span className="max-w-[60%] shrink-0 truncate">{tail}</span>}
 		</p>
 	);
-}
-
-/**
- * Seconds since `since`, re-rendering every second while it is set: the
- * restarting card counts up, and nothing else on it would make it render.
- */
-function useElapsed(since: string | undefined) {
-	const [, tick] = useReducer((n: number) => n + 1, 0);
-	useEffect(() => {
-		if (since === undefined) return;
-		const timer = setInterval(tick, 1000);
-		return () => clearInterval(timer);
-	}, [since]);
-	return since === undefined ? null : formatElapsed(since, Date.now());
 }
 
 type MenuView = "menu" | "stop" | "delete";

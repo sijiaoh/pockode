@@ -186,10 +186,14 @@ restarted.
 
 ### Restarting and upgrading
 
-Upgrading is installing the new executable over the old one
-([platforms.md](platforms.md)) and restarting the process that runs it. The
-cluster manager and each node are restarted separately, and neither touches
-the other:
+Upgrading has two steps. First the new executable is installed over the old
+one, either with the install script ([platforms.md](platforms.md)) or from the
+panel's version button, which installs a newer release for the cluster manager
+([platforms.md](platforms.md#updating-from-the-app),
+[self-update-ui.md](self-update-ui.md#web-cluster-the-header)). Then each
+process that runs it is restarted. Nodes are started from the same file, so
+one install updates the file for all of them. But the cluster manager and each
+node are restarted separately, and neither touches the other:
 
 - **The cluster manager** restarts from the version button in the panel's
   header ([restart-ui.md](restart-ui.md#web-cluster-the-header)), or with
@@ -259,8 +263,10 @@ this concerns the cluster manager's own flags: if a release drops one it was
 started with, the restart is accepted and the new program exits on start (the
 reason on its stderr). The nodes keep running; start the cluster again without
 the flag. On Windows a running `pockode.exe` cannot be overwritten, so the
-install script asks for Pockode to be stopped first — there, a restart does not
-deliver a new version today.
+install script asks for Pockode to be stopped first. An update from the panel
+renames the running file aside instead, so the restarts that follow it deliver
+the new version
+([platforms.md](platforms.md#updating-from-the-app)).
 
 How it works is [code/self-restart.md](code/self-restart.md).
 
@@ -422,12 +428,15 @@ alternatives that were rejected on the way to it, are in
   errors (not a directory, permission denied, could not create) are shown as the
   backend worded them, with no create option — creating is not what would fix
   them.
-- **The cluster version** is a button in the header, marked when the
-  executable installed on the host is a different version; it opens the
-  **Pockode cluster** sheet, which shows both and restarts the cluster manager
-  (nodes keep running). The panel reloads itself when a reconnect finds the
-  cluster running another version than the page was built for. The screens and
-  their copy are [restart-ui.md](restart-ui.md#web-cluster-the-header).
+- **The cluster version** is a button in the header. It is marked when the
+  executable installed on the host is a different version, and gets a dot when
+  a newer latest release is out (none for an alpha). It opens the
+  **Pockode cluster** sheet, which shows both versions, offers the newer
+  releases with **Update**, and restarts the cluster manager (nodes keep
+  running). The panel reloads itself when a reconnect finds the cluster running
+  another version than the page was built for. The screens and their copy are
+  [restart-ui.md](restart-ui.md#web-cluster-the-header) and
+  [self-update-ui.md](self-update-ui.md#web-cluster-the-header).
 - **Nodes restart without their password.** A running node whose `version`
   differs from the cluster's *installed* one — the file it would be started
   from — is outdated: its card gains a version line and a **Restart** beside

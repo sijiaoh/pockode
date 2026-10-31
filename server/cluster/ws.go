@@ -49,7 +49,7 @@ type wsHandler struct {
 	server         ws.ServerControl
 }
 
-func newWSHandler(password string, passwordGuard *authguard.Guard, sessions ws.SessionStore, version string, devMode bool, nodeStore node.Store, processManager *node.ProcessManager, restarter *restart.Restarter, log *slog.Logger) *wsHandler {
+func newWSHandler(password string, passwordGuard *authguard.Guard, sessions ws.SessionStore, version string, devMode bool, nodeStore node.Store, processManager *node.ProcessManager, restarter *restart.Restarter, updater *ws.Updater, log *slog.Logger) *wsHandler {
 	return &wsHandler{
 		password:       password,
 		passwordGuard:  passwordGuard,
@@ -60,7 +60,7 @@ func newWSHandler(password string, passwordGuard *authguard.Guard, sessions ws.S
 		processManager: processManager,
 		log:            log.With("component", "ws"),
 		conns:          ws.NewConnections(),
-		server:         ws.ServerControl{Restarter: restarter, Subject: "The cluster"},
+		server:         ws.ServerControl{Restarter: restarter, Updater: updater, Subject: "The cluster"},
 	}
 }
 
@@ -164,6 +164,10 @@ func (h *clusterRPCHandler) Handle(ctx context.Context, conn *jsonrpc2.Conn, req
 		}
 	case "server.restart":
 		h.server.HandleRestart(ctx, conn, req, h.stream, h.log)
+	case "server.update_check":
+		h.server.HandleUpdateCheck(ctx, conn, req, h.log)
+	case "server.update":
+		h.server.HandleUpdate(ctx, conn, req, h.log)
 	case "node.list":
 		h.handleNodeList(ctx, conn, req)
 	case "node.get":

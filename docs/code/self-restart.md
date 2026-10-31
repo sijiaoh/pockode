@@ -10,13 +10,17 @@ step.
 The screens are [restart-ui.md](../restart-ui.md); the wire contract of
 `server.version` / `server.restart` and how their reply is delivered is
 [websocket-rpc.md](websocket-rpc.md#server-installed-version-and-restart).
+Updating from the UI ([self-update-ui.md](../self-update-ui.md)) installs a
+release over the same executable with `server.update` and then sends the
+ordinary `server.restart`; nothing here changes for it
+([self-update.md](self-update.md)).
 
 | Piece | Where |
 |---|---|
 | The program, the probe, the decision, the replacement | `server/internal/restart/` (`replace_unix.go`, `replace_windows.go`) |
 | SIGUSR1 and the Windows restart event, both ends; holding interrupts on Windows | `server/internal/shutdown/` |
 | The password across the boundary | `server/password/` — `WithEnv`, `ClearFlags` |
-| The RPCs, shared by both modes | `server/ws/rpc_server.go` — `ServerControl` |
+| The RPCs, shared by both modes | `server/ws/rpc_server.go` — `ServerControl`; the update ones in `rpc_server_update.go` — `Updater` |
 | Closing WebSockets on shutdown | `server/ws/connections.go` |
 | Wiring | `server/main.go` — `newRestarter`, the shutdown goroutine, `runCluster` |
 
@@ -49,9 +53,10 @@ both are checked the same way and refused the same way.
 the working directory, in `newRestarter`, early in `main`. None of the three can
 be asked for reliably later:
 
-- **The path.** Once an upgrade has renamed a new binary over the running one,
-  Linux reports `os.Executable()` as `… (deleted)`. So the path is resolved
-  while it is still true.
+- **The path.** What `os.Executable()` answers after an upgrade depends on
+  the OS and on how the upgrade moved files (the next point is one case where
+  it names a file that is gone), so it is resolved once, while it is still
+  true, and never asked again.
 - **Which path.** `os.Executable()` resolves symlinks, and a package manager
   that installs `bin/pockode` as a link into a versioned directory moves the
   link on an upgrade and removes the old directory — the resolved path is
@@ -76,8 +81,9 @@ being there.
 
 A cluster starts its nodes from the same saved path
 (`node.NewProcessManager(Program().Path)`), not from `os.Executable()` at the
-moment of the Start, for the same `(deleted)` reason: on Linux, a node started
-after an upgrade would otherwise fail to start at all.
+moment of the Start, for the same reason: after an upgrade that moved the
+file the process resolved to, a node started from it would fail to start at
+all.
 
 ## Checked before anything stops
 
@@ -264,9 +270,11 @@ which is decided by whether its standard input is a console:
 
 **Replacing the file is the hard part on Windows**, not restarting: Windows does
 not let a running executable be overwritten, and `install.ps1` stops with "If
-Pockode is running, stop it and run this again." So today an upgrade on Windows
-still means stopping Pockode first, and a restart there delivers no new
-version. CI's Windows leg runs the restart tests without a console on standard
+Pockode is running, stop it and run this again." So an upgrade with the
+script on Windows still means stopping Pockode first. An update from the UI
+does not: `server/selfinstall` renames the running executable aside to a
+timestamped `.old` and the new one into its place, which Windows allows, and
+the restart that follows runs the new file. CI's Windows leg runs the restart tests without a console on standard
 input, so it covers only the "anywhere else" branch; the terminal branch —
 waiting on the successor, holding Ctrl+C, passing its exit code on — has been
 neither tested nor run by hand.
