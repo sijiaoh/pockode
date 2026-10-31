@@ -399,6 +399,11 @@ predict.
 
 Footer: `Cancel` and a primary `Fork`.
 
+A canvas session's history view opens the same sheet with a page in place of
+the message — one line naming it in the preview's place, a sentence with no
+count — and an `onCancel` that reopens the view, which only the `Cancel`
+button calls ([canvas-ui.md §15.6](canvas-ui.md#156-forking-from-a-page)).
+
 In flight, `Fork` becomes `Forking…` and disables, and the sheet is passed
 `dismissible={false}` — which is exactly what that prop is for: over a slow
 relay link the user must not be able to dismiss the sheet and be left unsure
@@ -681,7 +686,7 @@ New, all in `web/src/components/Chat/` unless noted:
 | `MessageMenuTrigger.tsx` | The slot beside a user row and the `…` in it, plus whether its menu is open. Props: `{ onFork?: () => void; forkBlocked?: "nothing-before" \| "no-anchor-seq" \| "pending-request" }`. No `onFork` means this message is not a turn — the slot renders, the glyph does not. It also owns the `ForkBlocked` type, though only `nothing-before` is spelled there: the other two are `forkAnchor.ts`'s `ForkUnavailable`, declared beside the check that produces them, since a utility module does not import from the components that use it. `MessageMenu` imports `ForkBlocked`, as a type, which is erased at compile time and so is not a runtime cycle |
 | `MessageActions.tsx` | The agent's turn-end row (*The agent's turn-end row*) under a settled message: Copy and Fork, plus the copy state and whether the menu a blocked Fork opens is open. Props: `{ copyText?; onFork?; forkBlocked? }`. While the message is pending, `TurnTail.tsx` holds the slot instead ([turn-progress-ui.md §2](turn-progress-ui.md#2-the-tail-line)) |
 | `MessageMenu.tsx` | The `Sheet` behind the user's `…` and the agent's blocked Fork: everything this message can do, titled by speaker — **Your message** / **Agent message**, since a sheet here names its subject the way `Fork session` and a file's own name do. One list for both sides, with no *Copy text*: the only side with text to copy stands Copy as a button. The rules for adding a row live at its top, where the list is |
-| `ForkSessionSheet.tsx` | The confirm sheet above. Props: `{ anchor, droppedCount, agentType, defaultTitle, isForking, error, onFork, onClose }` |
+| `ForkSessionSheet.tsx` | The confirm sheet above. Props: `{ anchor, droppedCount, agentType, defaultTitle, isForking, error, onFork, onClose }`, or `page` in place of `anchor` and `droppedCount` (a canvas page), and `onCancel` where Cancel means more than closing |
 | `ForkOriginBanner.tsx` | The lineage row at the top of `MessageList` |
 
 `MessageActions.tsx`, the standing row, was once **deleted** in favour of
@@ -784,6 +789,10 @@ renders. A client *newer* than the server is the real mismatch: it promises the
 anchor is dropped and an old server keeps it, with nothing on the wire to reveal
 the disagreement. There is no graceful degradation for that one, only deployment
 order.
+
+A canvas session can also be forked from a page rather than a message:
+`canvas_revision` in place of `anchor_seq`, the cut found by the server
+([canvas-ui.md §13.6](canvas-ui.md#136-fork), *From a revision*).
 
 `SessionListItem` gains `forked_from?: { session_id: string }`.
 

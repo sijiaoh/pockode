@@ -1603,12 +1603,28 @@ For the same reason a `question_posted` record left unclosed by the cut is
 a call that never returns, while a question the fork can still answer is the
 point.
 
-A canvas session's canvas crosses the same way. `chat.Client.Fork` reads the
+A canvas session's canvas crosses the same way. The fork step that
+`chat.Client.Fork` and `ForkAtCanvasRevision` share (`fork`, through `forkCanvas`) reads the
 highest `canvas_revision` among the kept `tool_result` records and the last kept
 `canvas_size` (`canvas.ForkPoint`), and `canvas.Store.Fork` hard-links those
 snapshots into the fork — after `WriteHistory`, since that replaces the fork's
 whole history and would swallow the `fork_canvas_unavailable` warning a failed
 copy appends ([docs/canvas-ui.md §13.6](../canvas-ui.md#136-fork)).
+
+Two things a canvas fork adds are state, not records, because they are about
+what the agent will be told rather than what happened. The fork numbers its
+next page past the source's floor at the fork (`numbered_from`), not past the
+page it shows: Codex forks by turn, so it may remember pages the transcript cut
+away, and their numbers must not come back as other pages. And its first
+delivered input carries a line saying which revision is on the canvas
+(`fork_note`), cleared once a delivery carrying it has succeeded — it is added
+in `deliveredText`, never written into the message record, so the record still
+holds only what the user typed.
+
+A fork can also be cut at a page (`chat.Client.ForkAtCanvasRevision`): the
+cut is the `tool_result` record carrying that `canvas_revision`, kept. Claude
+then resumes at the uuid of the user frame that carried the result, which
+`TestIntegration_ForkAtToolResult` holds.
 
 ## Claude Implementation
 

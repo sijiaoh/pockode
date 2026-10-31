@@ -34,20 +34,22 @@ It builds on, and does not repeat:
 ## Key Files
 
 Partly built. The server side is complete: the store, the session property,
-the pushed state, the link from a result to its revision, the fork, the history
-reads, lint, the send RPC, the size on messages, the pending permission requests
-on subscribe, the two tools and the guidance. On the frontend, the client side
-of the contract (creating a canvas session, the pushed state, sending an
-action), both sides of the bridge, the page frame, the canvas screen (the view
-switch, the empty state, the collapsed input, the size measurement) and chat
-view's canvas rows and action bubbles exist. Still to come: the permission
-panel (§10), the activity strip (§11) and the history view with chat view's
-**Show** (§12, §13.5). Rows marked *planned* do not exist yet.
+the pushed state, the link from a result to its revision, the fork (by message
+or by page, with `numbered_from` and `fork_note`), the history reads with
+`fork_blocked`, lint, the send RPC, the size on messages, the pending
+permission requests on subscribe, the two tools and the guidance. On the
+frontend, the client side of the contract (creating a canvas session, the
+pushed state, sending an action), both sides of the bridge, the page frame, the
+canvas screen (the view switch, the empty state, the collapsed input, the size
+measurement), chat view's canvas rows and action bubbles, and the history view
+(§15) with both its entries and forking from a page exist. Still to come: the
+permission panel (§10) and the activity strip (§11). Rows marked *planned* do
+not exist yet.
 
 | Path | Role |
 |------|------|
-| `server/canvas/` | The canvas package: the store (`Store` — state, snapshots, `Apply`, `ReportSize`, `Fork`, the history reads), the tool result text and reading a revision back out of it (`ResultText`, `FailureText`, `RevisionFromResult`), a canvas action and its text (`Action`, `ActionText`), `ForkPoint`, both engines' names for the two tools (`IsTool`), applying an update's ops and lint (`CheckRender`, `ApplyUpdate`) |
-| `server/process/canvas_calls.go` | Stamping `canvas_revision` on a canvas call's `tool_result` before it is recorded and broadcast (§13.4) |
+| `server/canvas/` | The canvas package: the store (`Store` — state, snapshots, `Apply`, `ReportSize`, `Fork` with the numbering past the source's floor (`numbered_from`, `forked_at`) and the line a fork's first delivery carries (`ForkNote` / `ForkNoteDelivered`), the history reads), the tool result text and reading a revision back out of it (`ResultText`, `FailureText`, `RevisionFromResult`), a canvas action and its text (`Action`, `ActionText`), `ForkPoint`, `fork_blocked` (§13.5: `fork.go` — the one pass over the records, `ReadForkCuts`, that both the list and the fork read; `ListedRevision`; the reasons and their wording, `ForkBlocked`, `ForkBlockedError`; what is running, `LiveCalls`), both engines' names for the two tools (`IsTool`), applying an update's ops and lint (`CheckRender`, `ApplyUpdate`) |
+| `server/process/canvas_calls.go`, `server/process/manager.go` | Stamping `canvas_revision` on a canvas call's `tool_result` before it is recorded and broadcast (§13.4), and counting the call in flight until that result is recorded, or the turn or the process ends, so a page is never between `pending` and recorded; `Manager.CanvasLive` — those calls and when the running turn began, for a page drawn before its call was read (§13.5) |
 | `server/ws/rpc_canvas.go` | `chat.canvas_action` and the checks on it and on a `canvas_size`; `chat.canvas_history`, `chat.canvas_snapshot` |
 | `server/worktree/manager.go` | Wiring: one `canvas.Store` per worktree (`Worktree.CanvasStore`), pushing through `ChatMessagesWatcher`, forgetting deleted sessions |
 | `server/mcp/canvas.go`, `server/mcp/tools.go` | The `canvas_render` and `canvas_update` handlers, which call into `server/canvas`; the refusals in and outside a canvas session (§3.4), decided from the stored property (`Sessions.ResolveCanvas`); the canvas tool definitions and the per-session list (`listedTools`) |
@@ -56,30 +58,33 @@ panel (§10), the activity strip (§11) and the history view with chat view's
 | `server/agent/cli_question.go` | The canvas wording of the refusal of the CLIs' own question tool (`CanvasCLIQuestionRefusal`, `CLIQuestionRefusalFor`) and of the user's warning (§3.4) |
 | `server/agent/agent.go` | `StartOptions.Canvas` carries the property to both adapters (`claude.go`'s MCP config, `codex.go`'s thread parameters and `instructions.go`), set by `process.Manager` from `SessionMeta.Canvas` |
 | `server/session/types.go`, `server/session/store.go` | `SessionMeta.Canvas`, `CreateSpec.Canvas`; `CreateFork` copying the property |
-| `server/rpc/types.go` | `SessionListItem.Canvas`, the canvas params and results |
-| `server/chat/client.go` | Copying the canvas into a fork in `Fork`, once its history is written (§13.6); sending a canvas action (`SendCanvasAction`); a message's size (`Sender.CanvasSize`) — reported to the store and added to what the agent reads (`deliveredText`) |
-| `server/ws/rpc_chat.go`, `server/ws/rpc_session.go` | The canvas half of `chat.messages.subscribe`, and `chat.message`'s `canvas_size`; `session.create`'s option |
+| `server/rpc/types.go` | `SessionListItem.Canvas`, the canvas params and results; `SessionForkParams` taking exactly one of `anchor_seq` and `canvas_revision` |
+| `server/chat/client.go` | Copying the canvas into a fork in the step `Fork` and `ForkAtCanvasRevision` share (`fork`, through `forkCanvas`), once its history is written (§13.6); the fork at a page (`ForkAtCanvasRevision`, the cut at the record that drew it); the history list with `fork_blocked` (`CanvasHistory`); sending a canvas action (`SendCanvasAction`); a message's size (`Sender.CanvasSize`) — reported to the store and added to what the agent reads (`deliveredText`), with a fork's `fork_note` after it |
+| `server/ws/rpc_chat.go`, `server/ws/rpc_session.go` | The canvas half of `chat.messages.subscribe`, and `chat.message`'s `canvas_size`; `session.create`'s option; `session.fork`'s `canvas_revision` and its check against `anchor_seq` |
 | `server/watch/chat_messages.go` | Pushing `chat.canvas_state`; the pending permission requests a subscription starts from (§10.4) |
 | `web/src/lib/canvasTools.ts` | Both engines' names for the two tools (`isCanvasRenderTool`, `isCanvasUpdateTool`, `isCanvasTool`), and nothing else |
-| `web/src/types/canvas.ts` | The contract's types: `CanvasState`, `CanvasChange`, `CanvasOp`, `CanvasSize`, `CanvasAction`, `CanvasActionParams`, `CanvasStateNotification`; the record's `canvas_action` / `canvas_size`, the result's `canvas_revision` (`ToolRun.canvasRevision`), the session's `canvas`, `SessionCreateParams` and the chat subscription's `ChatNotification` are on the existing types in `types/message.ts` |
-| `web/src/lib/canvasStore.ts` | The open session's current canvas, the highest revision winning (`useCanvasStore`, `selectCanvasState`, `canvasActions`), and the device's canvas size every message to a canvas session carries (`size`, `canvasActions.setSize`) |
-| `web/src/hooks/useChatMessages.ts` | Taking `chat.canvas_state` and the subscribe reply's `canvas` into the store, never into the transcript; `sendCanvasAction`, echoed as a typed message is; the size on `chat.message` |
-| `web/src/lib/rpc/chat.ts` | `chat.canvas_action` (`sendCanvasAction`) and `chat.message`'s `canvas_size` |
-| `web/src/lib/rpc/session.ts`, `web/src/lib/sessionCreate.ts`, `web/src/hooks/useSession.ts`, `web/src/components/AppShell.tsx`, `web/src/components/Session/SessionsTab.tsx`, `web/src/components/Session/SessionItem.tsx` | Creating a canvas session (§13.1): `session.create`'s option (`SessionCreateParams`), one create in flight per kind, the retry of a failed create with its own params (`createErrorParams`, retried by `AppShell`); the **Canvas** button beside **New Chat**; a canvas row's glyph |
+| `web/src/types/canvas.ts` | The contract's types: `CanvasState`, `CanvasChange`, `CanvasOp`, `CanvasSize`, `CanvasAction`, `CanvasActionParams`, `CanvasStateNotification`, `CanvasHistoryEntry`, `CanvasForkBlocked`, `CanvasSnapshot`; the record's `canvas_action` / `canvas_size`, the result's `canvas_revision` (`ToolRun.canvasRevision`), the session's `canvas`, `SessionCreateParams`, `SessionForkParams` and the chat subscription's `ChatNotification` are on the existing types in `types/message.ts` |
+| `web/src/lib/canvasStore.ts` | The open session's current canvas, the highest revision winning (`useCanvasStore`, `selectCanvasState`, `useCanvasRevision`, `canvasActions`), the device's canvas size every message to a canvas session carries (`size`, `canvasActions.setSize`), and a count of what may have settled a canvas call (`callsSettled`, §15.3) |
+| `web/src/hooks/useChatMessages.ts` | Taking `chat.canvas_state` and the subscribe reply's `canvas` into the store, never into the transcript; `sendCanvasAction`, echoed as a typed message is; the size on `chat.message`; counting what may settle a canvas call — any tool result, or a turn ending (`settlesCanvasCalls`) |
+| `web/src/lib/rpc/chat.ts` | `chat.canvas_action` (`sendCanvasAction`) and `chat.message`'s `canvas_size`; `chat.canvas_history` / `chat.canvas_snapshot` (`canvasHistory`, `canvasSnapshot`) |
+| `web/src/lib/rpc/session.ts`, `web/src/lib/sessionCreate.ts`, `web/src/hooks/useSession.ts`, `web/src/components/AppShell.tsx`, `web/src/components/Session/SessionsTab.tsx`, `web/src/components/Session/SessionItem.tsx` | Creating a canvas session (§13.1): `session.create`'s option (`SessionCreateParams`), one create in flight per kind, the retry of a failed create with its own params (`createErrorParams`, retried by `AppShell`); the **Canvas** button beside **New Chat**; a canvas row's glyph. Also `session.fork`'s `canvas_revision` (`forkSessionAtCanvasRevision`, §13.6) |
 | `web/src/utils/forkAnchor.ts`, `web/src/utils/discardedMessage.ts`, `web/src/utils/sendAgain.ts` | A canvas action never becoming a draft (§6.2) |
-| `web/src/lib/canvasBridge.ts` | The script injected into the page (`canvasBridgeScript`), the base stylesheet (`canvasBaseStylesheet`, `canvasBaseCss`, the variables' tokens `CANVAS_THEME_TOKENS` and `canvasThemeFrom`), and the messages of the bridge (`CanvasPageMessage`, `CanvasAppMessage`, `readCanvasPageMessage`, `SEND_REFUSAL_MESSAGES`); tested in real engines by `canvasBridge.browser.test.ts` |
+| `web/src/lib/canvasBridge.ts` | The script injected into the page (`canvasBridgeScript`), the base stylesheet (`canvasBaseStylesheet`, `canvasBaseCss`, the variables' tokens `CANVAS_THEME_TOKENS` and `canvasThemeFrom`), and the messages of the bridge (`CanvasPageMessage`, `CanvasAppMessage`, `readCanvasPageMessage`, `SEND_REFUSAL_MESSAGES`, and `readonly`'s two wordings, `READONLY_REFUSAL_MESSAGES` by `CanvasReadOnly`); tested in real engines by `canvasBridge.browser.test.ts` |
 | `web/src/lib/messageReducer.ts`, `web/src/lib/toolSummary.ts`, `web/src/lib/subagentRun.ts`, `web/src/lib/toolRun.ts`, `web/src/lib/toolGroups.ts`, `web/src/components/Chat/ToolRow.tsx` | Chat view's canvas rows (§12): `canvas_revision` read off the result record onto the run (`messageReducer`), the rows' wording by outcome (`toolSummary`, and a subagent's latest-child line through `subagentRun`), a refusal's second line (`toolRun`), never folding them (`toolGroups`), and `rev N` as their meta (`ToolMeta`) |
+| `web/src/components/Chat/ToolCallItem.tsx`, `web/src/components/Chat/canvasShowContext.ts` | A canvas row's **Show** in its body (§12, §15.1), through `CanvasShowContext`, which `ChatPanel` provides only for a canvas session it can read |
 | `web/src/components/Chat/CanvasActionBubble.tsx`, `web/src/lib/messagePreview.ts` | A canvas action's bubble in chat view (§12), chosen in `MessageItem`; a canvas action quoted by its name |
 | `web/src/lib/agentPage.ts` | What `CanvasFrame` and `HtmlFrame` share (§4): the sandbox, the page document's order (`agentPageDocument`), the wrapper (`agentWrapperDocument`), the project capability (`usePageProject`, whose freshness for a patch is `useRawMediaSource`'s `isFreshCapability`) |
 | `web/src/lib/canvasRedraw.ts` | How each new state reaches the frame (§8.3): patch or whole drawing, one patch at a time, the app's record of the revision shown (`CanvasRedraw`) |
-| `web/src/components/Canvas/CanvasFrame.tsx` | The page frame (§4): the document, the size (§5), redrawing through `CanvasRedraw`, the host allowance per session, and the app side of the bridge (§8.2, §8.4) — answering sends, the theme, `sendable`, the page's focus for the size rule; tested in real engines by `CanvasFrame.browser.test.tsx` |
+| `web/src/components/Canvas/CanvasFrame.tsx` | The page frame (§4): the document, the size (§5), redrawing through `CanvasRedraw`, the host allowance per session, and the app side of the bridge (§8.2, §8.4) — answering sends, the theme, `sendable`, the page's focus for the size rule, `readOnly` saying which page a history frame is (§15.4); tested in real engines by `CanvasFrame.browser.test.tsx` |
 | `web/src/components/Canvas/CanvasView.tsx` | The canvas view's canvas (§2): the session's current canvas from the store in a `CanvasFrame`, the empty state at revision 0, and the size measurement (§5); tested in real engines by `CanvasView.browser.test.tsx` |
 | `web/src/lib/canvasSize.ts` | The size rule (§5): a measurement in whole pixels (`canvasSizeOf`), which measurement is kept (`keepsMeasurement`), and what counts as editable in the app (`isEditableElement`) |
 | `web/src/components/Canvas/CanvasComposer.tsx` | The collapsed input (§2), which opens into the ordinary composer (`CanvasComposer`), and the bars under the canvas floating over it while it is open (`ComposerDock`); its Stop is the composer's own (`StopButton` in `Chat/SendStopSlot.tsx`); the float tested in real engines by `CanvasComposer.browser.test.tsx` |
-| `web/src/components/Canvas/CanvasViewSwitch.tsx`, `web/src/components/Chat/SessionHeader.tsx` | The header's **Canvas \| Chat** switch, drawn after the session's title (`viewSwitch`) |
-| `web/src/components/Chat/ChatPanel.tsx` | The canvas screen's place in the session screen: which view is up, both kept mounted, the canvas wired to `useChatMessages`' `sendCanvasAction`, the input in canvas view |
+| `web/src/components/Canvas/CanvasViewSwitch.tsx`, `web/src/components/Chat/SessionHeader.tsx` | The header's **Canvas \| Chat** switch, drawn after the session's title (`viewSwitch`); the session panel's **Canvas** section and its **History** row (`canvasHistory`, §15.1) |
+| `web/src/components/Chat/ChatPanel.tsx` | The canvas screen's place in the session screen: which view is up, both kept mounted, the canvas wired to `useChatMessages`' `sendCanvasAction`, the input in canvas view; which revision the history view is open on, over either view (§15.1), and the view and the fork sheet replacing one another, Cancel reopening the view (§15.6) |
 | `web/src/components/Canvas/ActivityStrip.tsx`, `web/src/components/Canvas/PermissionPanel.tsx`, and the store of the pending permission requests (§10.4) | *planned* |
-| The history view, chat view's **Show**, and the client of `chat.canvas_history` / `chat.canvas_snapshot` (§12, §13.5) | *planned* |
+| `web/src/components/Canvas/CanvasHistorySheet.tsx` | The history view (§15): a `fullScreen` `Sheet` holding one read-only `CanvasFrame` keyed by its revision, the stepper in its footer, the revision list (a layer of its own), the note line; Fork, `fork_blocked`'s reasons (`FORK_BLOCKED_REASONS`) and the page handed to the fork sheet (`CanvasForkPage`); owns the open revision |
+| `web/src/hooks/useCanvasHistory.ts` | The history view's reads (§15.3): the list, read again on every new pushed revision, after a reconnect, and on `callsSettled` while an entry is `pending` or a read is in flight — one read in flight and at most one more asked for; one snapshot at a time, kept while the view is up |
+| `web/src/components/Chat/ForkSessionSheet.tsx`, `web/src/hooks/useForkSession.ts` | The fork sheet's page anchor (`page`) beside its message anchor, and its `onCancel`; the cut as a message's seq or a page's revision (`ForkCut`) (§15.6) |
 
 ---
 
@@ -758,7 +763,7 @@ teach the agent to ignore the list.
 - reflects whether sending is possible on `document.documentElement` as
   `data-pk-blocked` while it is not, so a page may style itself for it: its
   value is the `reason` (`data-pk-blocked="permission"`), and empty when there
-  is none — an old revision (§13.5).
+  is none — a frame of the history view (§15.4).
 
 It never refuses a send because of what sending is told, not even while told
 sending is impossible: every well-formed send is posted, and the app refuses it,
@@ -810,7 +815,7 @@ type SendRefusal = "permission" | "readonly" | "offline" | "invalid" | "failed";
 | `code` | When | `message` |
 |---|---|---|
 | `permission` | the session is blocked on a permission request | `Answer the permission request first.` |
-| `readonly` | the frame shows an old revision (§13.5) | `This is an earlier version of the canvas; it cannot send.` |
+| `readonly` | the frame is the history view's (§15.4): an old revision, or the current one shown there | an old revision: `This is an earlier version of the canvas; it cannot send.` The current one: `This page is shown in history; close history to use it.` |
 | `offline` | not connected | `Not connected — try again when the connection is back.` |
 | `invalid` | the bridge could not serialize `data`, or the server refused it as invalid (§6.4) | the bridge's or the server's message |
 | `failed` | anything else | the error's message |
@@ -822,7 +827,7 @@ so a send left unanswered would leave the page's promise pending for good. It
 refuses on the client first, in this order:
 
 1. `readonly` — the app's alone, and not dependent on the bridge: a frame
-   showing an old revision is never the current canvas, and a send from it —
+   in the history view is never the live canvas, and a send from it —
    on load, before `pockode:canvas-sendable` could even arrive — is refused on
    receipt.
 2. `permission` — from `TurnState`, and visibly (§10.3); the server refuses it
@@ -1190,8 +1195,10 @@ Chat view is the transcript as any session's, with three additions:
   canvas`, `canvas_update` `Updated the canvas` with the regions as detail;
   the result's revision is meta (`rev 8`). The page is not drawn into the
   transcript: it is drawn once, in the canvas. A row whose result names a
-  revision offers **Show** in its body, which switches to canvas view showing
-  that revision — *planned*: it comes with the history view of a later story.
+  revision offers **Show** in its body, which opens the history view on that
+  revision, over chat view (§15.1) — not a switch to canvas view: Back and ✕
+  put the reader back in the transcript where they were. A session read out of
+  another worktree has no canvas reads (§13.5), so its rows offer none.
   An update's regions are each named once, in the order of its ops. The title
   is past tense only once the call has drawn — succeeded, or carries a revision
   (one that returned after its turn was interrupted still drew): running it
@@ -1301,7 +1308,7 @@ type CanvasState = {
 
 ```
 sessions/<id>/canvas/
-  state.json          { revision, reported_size? } — rewritten on every new revision and every reported size
+  state.json          { revision, reported_size?, numbered_from?, forked_at?, fork_note? } — rewritten on every new revision, every reported size, at a fork and when its note is delivered; the last three are a fork's (§13.6): the next revision is max(revision, numbered_from) + 1 — the state's **next-revision floor** —, forked_at is the revision it was cut at (so the numbers above it up to numbered_from are the source's pages it never had, not pages it lost), absent when the copy failed, and fork_note is cleared once a delivery carrying it has succeeded
   <revision>.json     CanvasSnapshot — one per revision; never rewritten once state.json has named it
   revisions.jsonl     one history entry per revision (§13.5), appended after state.json
 ```
@@ -1328,13 +1335,21 @@ type CanvasSnapshot = {
   `filestore.WriteFileAtomic` (the persistence rule in
   [server/AGENTS.md](../server/AGENTS.md)). A crash between the two leaves a
   snapshot beyond the state's revision, which no state names; the next call
-  takes the state's revision + 1 and overwrites it.
+  takes the state's next revision — `revision` + 1, or in a fork
+  `max(revision, numbered_from)` + 1 — and overwrites it.
 - **A `state.json` that is unreadable** (quarantined as `state.json.corrupt`)
   does not restart the numbering: the revision is recovered from the highest
   snapshot on disk, because tool results in the transcript name those numbers.
   The recovered state is written back at once, so a restart before the next
   draw does not mistake the quarantined file for one never written. The
-  reported size is lost until the next message reports one. A `state.json`
+  reported size is lost until the next message reports one, and so are a
+  fork's `numbered_from` and `fork_note` (§13.6): a fork whose state is lost
+  before it draws numbers on from its highest snapshot, and its agent is not
+  told where the canvas is — accepted, and logged with the rest, for a file a
+  crash had to corrupt in the window before the fork's first page. Its
+  `forked_at` goes too, whenever the file is lost: the source's pages past
+  the cut are then listed as lost from disk rather than never copied — the
+  wording and the log line are wrong, the list and the numbering are not. A `state.json`
   that was never written names nothing, so a snapshot a crash left before it
   is overwritten like any other.
 - **A snapshot the state names but the disk lost** (a rename a power cut
@@ -1373,13 +1388,33 @@ has no revision and gets no field.
 
 ### 13.5 Reading history
 
-For the history view (a later story); the data above is what makes it possible,
-and the two reads are cheap to add with it:
+For the history view (§15):
 
 ```
-chat.canvas_history  { session_id }           -> { snapshots: [{ revision, change_kind, drawn_for?, drawn_at, bytes }] }   newest first
+chat.canvas_history  { session_id }           -> { snapshots: [{ revision, change_kind, drawn_for?, drawn_at, bytes, fork_blocked? }] }   newest first
 chat.canvas_snapshot { session_id, revision } -> CanvasSnapshot
+
+type ForkBlocked = "pending" | "no_record" | "superseded" | "subagent";
 ```
+
+**`fork_blocked`** says a fork from this page (§13.6) would be
+refused, and why, so the view can say so before the user asks (§15.6). Absent
+when the fork can be made. It is not stored: it is read from the session's
+history records each time the list is asked for, in one pass that notes, for
+each `tool_result` carrying a `canvas_revision`, its index and the highest
+revision named at or before it.
+
+| Value | When |
+|---|---|
+| `pending` | no `tool_result` record names this revision, and the session's live process has a canvas call in flight (`process`'s `canvasCalls`, which already tracks them to stamp their results, counts each until its result is recorded, and clears them when the turn or the process ends) — a call of the turn, or a parallel one: one of them drew it and has not returned (a page is applied, and pushed, before its result is recorded). Also for a page drawn since the open turn (running or blocked) began that is newer than every one a record names: the page is applied through the MCP server, which can draw it before the process has read the call's `tool_call` off the CLI's output. An older page with no record stays `no_record` however long a later turn runs. Decided from what is running now, not from history, where a call whose result never came stays unanswered for good. It clears, or turns into one of the others, when the result is recorded |
+| `no_record` | no `tool_result` record names this revision, and it is not `pending`: its result was never recorded (the server stopped mid-call, the append failed, the turn was interrupted and no result came, or the call was still running when its turn ended, as a backgrounded subagent's can be — `canvasCalls` stamps only the calls of a running turn), so there is no point in the conversation to cut at |
+| `superseded` | a record at or before the one naming it names a higher revision — parallel calls in one turn returned out of order — so the conversation at that point already had a later page, and a fork cut there would open on that one (§13.6's R) |
+| `subagent` | the record naming it is a subagent's (`parent_tool_use_id` set). Neither CLI can reopen its conversation inside a subagent's run (`agent.EventRecord.ProviderMessageID`), and a cut there would keep the subagent's earlier records while dropping the call that spawned it |
+
+The values are checked in the table's order. The cost is a read of the whole
+history per call, which the fork pays anyway; the view asks only while it is
+up, and coalesces its asks (§15.3). An entry whose snapshot is lost is
+not listed (below), so has no `fork_blocked` to carry.
 
 They serve only the connection's current worktree, like the rest of `chat.*`.
 A canvas session seen through the read-only `session_view.*` namespace (any
@@ -1390,13 +1425,19 @@ Both are refused with `this session is not a canvas session` for any other
 session; `chat.canvas_snapshot` for a revision the canvas does not have with
 `the canvas has no such revision: revision <n>, the canvas is at <m>` — or,
 for one the disk lost (§13.3), `the canvas has no such revision: revision <n>
-was lost from disk` — all `InvalidParams`. A snapshot that is still there but
+was lost from disk` — or, in a fork, for one of the source's pages the fork
+did not copy (numbered above its `forked_at` and at or below its `numbered_from`, §13.3), `the canvas has
+no such revision: revision <n> was not carried into this session when it was
+forked`; such a page is not listed either, and not logged as lost — all
+`InvalidParams`. Until the fork draws past its `numbered_from`, such a number
+is above its revision, and is refused with the first wording. A snapshot that
+is still there but
 cannot be parsed stays listed, and reading it is an internal error that names
 the revision.
 
-A shown old revision is read-only: its bridge is told `sendable: false`, and the
-app refuses every send from that frame with `readonly` (§8.2) whatever the
-bridge was told.
+A revision shown in the history view — an old one, or the current one shown
+there — is read-only: its bridge is told `sendable: false`, and the app refuses
+every send from that frame with `readonly` (§8.2) whatever the bridge was told.
 
 ### 13.6 Fork
 
@@ -1416,22 +1457,110 @@ records ([agent-integration.md](code/agent-integration.md#a-fork-inherits-what-w
   would.
 - The fork's `reported_size` is the `canvas_size` of the last kept message that
   carried one.
-- The fork's next revision is R + 1. The source's later revisions are not
-  copied, so the numbers cannot collide.
-- **Where**: in `chat.Client.Fork`, after the truncated history has been written
-  to the fork (`WriteHistory`) — R is read from that history, which only `Fork`
-  holds, and `WriteHistory` replaces the fork's whole history, so anything
-  appended before it would be lost. It is the place the
-  `fork_agent_context_unavailable` warning is appended for the same reason.
+- The fork's next revision is past the **source's** next-revision floor at
+  the moment of the fork (§13.3) — not R + 1. The source's later revisions are not copied,
+  and the agent may still remember them (*From a revision*, below), so their
+  numbers are not reused; the gap between R and the next revision is the truth,
+  since none of those pages is on the fork's canvas. Reading the floor rather
+  than the source's `revision` is what covers a fork of a fork that has not
+  drawn yet: its `revision` is still its R, its `numbered_from` past everything
+  its own source had drawn. The fork's `state.json` keeps `revision` at R, the page it
+  shows, and records the source's floor as `numbered_from`, and R as
+  `forked_at` (§13.3) — not a
+  `revision` naming a page it does not have, which would read as one lost from
+  disk.
+- **Where**: in `chat.Client`'s `forkCanvas`, which both `Fork` and
+  `ForkAtCanvasRevision` reach through the one fork step they share (`fork`),
+  after the truncated history has been written to the fork (`WriteHistory`) —
+  R is read from that history, which only that step holds, and `WriteHistory` replaces the fork's whole history, so anything
+  appended before it would be lost. The same step (`fork`) is where the
+  `fork_agent_context_unavailable` warning is appended, for the same reason.
 - A copy that fails — or finds none of 1…R on disk — is not fatal, as for
   attachments: the fork starts with no page (revision 0 shown), and a `warning`
   record (code `fork_canvas_unavailable`) appended to its transcript says so —
   `The canvas could not be copied into this session. Ask the agent to draw it
-  again.` Its numbering still goes on after R: the transcript it inherited
-  names revisions 1…R, and a new page under one of those numbers would be shown
-  as the page that record drew.
+  again.` Its numbering still goes on from the next revision above: the
+  transcript it inherited names revisions 1…R, and a new page under one of
+  those numbers would be shown as the page that record drew.
 
 The source is untouched.
+
+**From a revision** — the history view forks from a page (§15.6),
+not from a message, and the client cannot name the cut itself: the record that
+drew the page may be in a page of history it never loaded, and a seq is quoted
+back, never looked up or computed
+([session-fork-ui.md § Data contract](session-fork-ui.md#data-contract)). So
+`session.fork` takes the revision instead, and the server finds the cut:
+
+```
+session.fork { session_id, anchor_seq, title }       -> SessionListItem   (a message, as today)
+session.fork { session_id, canvas_revision, title }  -> SessionListItem   (a page)
+```
+
+Exactly one of `anchor_seq` and `canvas_revision`; both or neither is
+`InvalidParams`.
+
+- **The cut is the `tool_result` record carrying that `canvas_revision`**, kept
+  — the moment the page had just been drawn, as an agent message is kept. What
+  follows it is dropped: the rest of that turn (its text, its later calls, the
+  pages it drew after), and everything after. Everything else is §13.6 above
+  and the ordinary fork, unchanged — `TruncateHistory` drops a parallel call
+  the cut left without its result, R is the highest `canvas_revision` kept, which
+  is this one, and the fork opens on it.
+- It is never a user anchor, so there is no dropped prompt and no
+  `nothing-before`: a canvas call always has the message that started its turn
+  before it.
+- **Refused**, checked before anything is created, in this order: both or
+  neither of `anchor_seq` and `canvas_revision` (`InvalidParams`); the
+  session not found and an agent that cannot fork, as for any fork; then, all
+  `InvalidParams`: not a canvas session (`this session is not a canvas
+  session`); a revision the canvas does not have — §13.5's wordings, lost from
+  disk and not carried into a fork included, since a fork from a page that is
+  not there would open on another one (a snapshot that cannot be parsed is, as
+  there, an internal error); then `fork_blocked`'s four (§13.5), the same check in one place
+  (`server/canvas`) — `pending` and `no_record` as `revision <n> has no
+  recorded result in this session's history, so there is no point to fork at`,
+  `superseded` as `revision <n> was replaced by revision <m> before its call
+  returned; fork from revision <m>`, `subagent` as `revision <n> was drawn by a
+  subagent; a fork cannot be cut inside a subagent's run`.
+- **What the agent remembers** is the ordinary fork's
+  ([session-fork-ui.md § What the agent remembers](session-fork-ui.md#what-the-agent-remembers)):
+  each agent resumes at the finest point it has. Claude's tool result carries
+  the uuid of its own message, so Claude resumes there — a resume point that
+  is a tool result, which no message fork asks `--resume-session-at` for:
+  measured on claude 2.1.312 and pinned by
+  `TestIntegration_ForkAtToolResult`, the fork remembers the call and its
+  result and nothing the turn said after it. Codex names turns, so a cut inside a turn
+  carries the whole turn into its memory — the pages it drew after this one
+  included — while the transcript and the canvas stop here. Left alone that
+  would mislead it twice: the fork's next page would reuse a number it
+  remembers as another page, and an update it aims at the later page it
+  remembers lands on this one wherever the two share a region. Codex forks the
+  thread at the fork's first launch, so a turn still running at the fork may
+  even carry pages drawn after it. So, for every fork of a canvas session — by
+  message or by page, whichever agent, since the server need not know whose
+  memory runs past the cut:
+  - **numbering skips what the agent may remember** — the fork's next revision
+    is past the source's floor at the fork (above). Pages the source draws
+    after the fork, in a turn Codex then carries whole, can still share numbers
+    with the fork's own new pages; the line below is what covers them;
+  - **the first input delivered in the fork says where the canvas is** — a
+    typed message, a canvas action, or an answer to a question the fork
+    inherited, whichever reaches the agent first; added in `deliveredText`,
+    which every delivery goes through — one more line added at delivery, after the size line
+    where there is one (§6.3):
+    `[Canvas: this session was forked at revision 7, which is on the canvas
+    now; any page you remember drawing after it is not.]` — or, when the copy
+    failed (`fork_canvas_unavailable`), `[Canvas: this session was forked, but
+    its canvas could not be copied: the canvas is empty; draw it again with
+    canvas_render.]`, and with R = 0 nothing at all. It names the revision the
+    fork shows — the newest copied one, when R itself was lost (above). It is
+    canvas state (`fork_note` in `state.json`, written by the fork once the
+    copy has succeeded or failed, cleared once a delivery carrying it has
+    succeeded — a delivery that fails leaves it for the next), not
+    a record: what the agent is told, not something that happened in the
+    conversation. A fork of a fork that still holds one writes its own, about
+    its own canvas.
 
 ---
 
@@ -1450,3 +1579,324 @@ The source is untouched.
   shown; a full snapshot is what was shown.
 - **Switching an existing session to canvas.** The agent was told one thing at
   the start (§9.1); a property fixed at birth keeps that true.
+- **Showing an old revision in the canvas area itself**, with a bar saying so.
+  It would put a bar of its own into the column the banner, the strips and the
+  input share (§2), take Back from a page that is not a layer, and make the
+  page the user works in sometimes not the current one. A sheet over the screen
+  has all of Back and the cover for free (§15.2).
+- **Thumbnails of every page.** Each would be a whole page with its scripts in
+  a frame of its own, scaled down — the scaling §5 refuses, multiplied by the
+  list. The list names revisions and times; the page is one press away (§15.3).
+- **Swiping between pages.** The drag belongs to the page and its scroll
+  (§15.3).
+- **A live, sendable current page in history.** Two frames that send would be
+  two copies of the one page the user works in, patched apart; the current page
+  is shown read-only there and is one press from canvas view (§15.4).
+- **Forking at the end of the turn that drew the page** rather than at the
+  page. It would make every page but a turn's last open on a later one — the
+  opposite of what was pressed — to keep Codex's memory exactly level with the
+  transcript. What Codex remembering past the cut would cost is paid instead
+  by the numbering and the fork's first message (§13.6).
+
+---
+
+## 15. The history view
+
+Every page the agent drew, one at a time, each as it was: the stored snapshot
+(§13.3) in the same page frame as the live canvas, at the size it was drawn
+for, scrolled and never scaled (§5). From any of them the user can fork, and
+the new session opens on that page. §13.5 and §13.6 are the contract it
+reads.
+
+### 15.1 Where it opens
+
+| From | Opens on | Over |
+|---|---|---|
+| **History** in the session panel's **Canvas** section (the panel the header's title opens) | the newest earlier page — the revision before the current one in the list — or the current one when there is no earlier | the view that is up |
+| **Show** on a canvas row in chat view (§12) | that row's revision | chat view |
+
+- **The row** is the only row of a `Canvas` `PanelSection` in `SessionHeader`'s
+  panel, after Work and before Usage — with the facts about what this session
+  has done, below the settings that decide its next message. The section is
+  there for a canvas session only, and only where the canvas is pushed — not
+  for a session read out of another worktree, which has no canvas here (§2,
+  §13.5). The row is the Engine row's shape: 48px, a `History` glyph, `History`
+  and, as its second line, the current page (`At revision 12`) — not a count
+  of pages, which a lost snapshot would make wrong. At revision 0, and before the subscription has said anything about
+  the canvas, it is `aria-disabled` and dimmed, its second line `Nothing drawn
+  yet` — a row that says why, not one that vanishes. The panel closes as the
+  view opens: one layer replacing another
+  ([project-ui.md §5.2 Stacked layers](project-ui.md#stacked-layers)), whether
+  the panel is a drawer or the expanded tier's dropdown.
+  It is the panel's row rather than a button of the canvas screen on purpose:
+  the screen's bars are the banner's, the hosts strip's, the activity strip's
+  and the input's (§2, §10, §11), and a history view entered from the header
+  adds nothing to any of them.
+- **Show** opens the view rather than switching to canvas view. The user was
+  reading the transcript; a page they look at and put away should put them
+  back in it, and the live canvas is not the place to show an old revision —
+  it is the page they work in, and it stays the current one. Show is offered
+  on every row whose result names a revision, the current one included, so
+  every **Show** does the same thing — in a session whose canvas this client
+  can read (§12).
+- **Back to the current page** is closing the view — ✕, Back, Escape — which
+  lands on the live canvas, or on the transcript Show was pressed in, exactly
+  as it was. The view never changes the live canvas: the frame there keeps its
+  revision, its typed fields and its scroll under the sheet, as it does under
+  any page drawn over the session (§2). From the current page, **Go to
+  canvas** (§15.4) closes the view and switches to canvas view in one press.
+
+### 15.2 The view
+
+A `fullScreen` `Sheet` — a reader over the session, like the file and media
+viewers. It is a layer, so everything the layer rules say holds without a
+word of its own here
+([project-ui.md §5.2](project-ui.md#52-back-closes-the-topmost-layer)): Back
+closes it, a reload never reopens it, a navigation from inside it is held
+until it has gone, and the page under it is covered (`useCoverPage`, which
+`Sheet` calls). It is full screen at every width, because the page needs the
+area: in a drawer or a centered modal a page drawn for the whole canvas would
+scroll in both directions at once.
+
+```
+┌──────────────────────────────────────────────┐
+│ Canvas history                            ✕  │  Sheet header
+│ Revision 7 · updated · 14:02                 │  subtitle
+├──────────────────────────────────────────────┤
+│ ⊘ Not loaded · cdn.jsdelivr.net      [Load]  │  hosts strip — only when something was refused
+├──────────────────────────────────────────────┤
+│                                              │
+│            the snapshot, at the size         │
+│            it was drawn for (§5)             │
+│                                              │
+├──────────────────────────────────────────────┤
+│ Earlier version · read-only                  │  the note line (§15.4)
+│ [‹]       Revision 7 of 12 ▾      [›] [Fork] │  footer: the stepper, the list, Fork
+└──────────────────────────────────────────────┘
+```
+
+- **The subtitle** names the page: `Revision 7`, how it came (`drawn` for a
+  render, `updated` for an update — `change_kind`), and when (`drawn_at`, in
+  the device's time through `utils/dateTime.ts`: the time alone today, the date
+  and time before).
+- **The body** is one `CanvasFrame` with `readOnly` (§15.4), filling `Sheet`'s
+  body exactly — its height is the body's, so the body itself never scrolls and
+  the only scroller is the frame's area, as in canvas view; nested scrollers
+  would fight over every drag. The size rule is §5's, applied to this area: in
+  each dimension the larger of the area and the snapshot's `drawn_for`, the
+  area scrolling to it. This area is never measured and never reported (§5): it
+  is not the canvas area of anything, and only canvas view's area is.
+- **One frame per revision.** The frame is keyed by the revision it shows, so
+  each page is a document drawn whole from its snapshot, never a patch (§8.3)
+  applied to the page before — whose scripts may have changed its DOM — which
+  would not be the page as it was. A second `CanvasFrame` for a session whose
+  live frame is mounted is fine: what the two share is the session's host
+  allowance, which is meant to be shared.
+- **The hosts strip** is the frame's own (`PageHostsStrip`, at the top of the
+  body), keyed by the session (§4): a host allowed in the live canvas loads
+  here too, and one allowed here is allowed there.
+- **The footer** is `Sheet`'s, holding the note (§15.4) above the stepper,
+  the list and Fork.
+- **The theme** follows the app's, as the live canvas does (§3.3, §8.4) — the
+  page is drawn as it would be drawn now, in today's theme; the stored
+  document carries no colours of its own to restore.
+- **The page's scripts run.** It is the page as drawn, and many pages are
+  their scripts. What they could do that matters — send — is refused (§15.4).
+
+### 15.3 Moving between pages
+
+The list is `chat.canvas_history`, read when the view opens and again while it
+is up whenever the answer may have changed:
+
+- on every `chat.canvas_state` the session is pushed — a new page joins the
+  list, and the page that was current becomes an earlier one;
+- on anything that may settle a canvas call, while some listed entry is
+  `pending` (§13.5) or a read is in flight, since nothing pushes its clearing:
+  any `tool_result` record — a canvas call that failed names no revision and
+  settles all the same, and a result does not say whose call it answers — or
+  a turn ending (`done`, `interrupted`, `error`, `process_ended`), which ends
+  every call still in flight and turns a page whose call never returned into
+  `no_record`. The server settles a call before it broadcasts the record, so
+  the read made on it already says so; a read in flight may have been answered
+  from before, so it is followed by one more;
+- when the connection is back after a reconnect, since nothing replays what
+  it missed.
+
+One read is in flight at a time, and asks arriving meanwhile make one more
+read once it answers, so a burst of updates costs two reads, and an answer is
+never overtaken by an older one.
+
+- **‹ and ›** step to the next older and next newer listed revision. They are
+  buttons, 44px under a coarse pointer, and disabled at either end. There is
+  no swipe: a horizontal drag over the page is the page's, or the area's
+  scroll (§5).
+- **`Revision 7 of 12 ▾`** — the revision shown, of the current revision —
+  opens the list in place of the body (sheets do not nest): one row per
+  listed revision, newest first, `Revision 12 · current`, then
+  `Revision 11 · updated · 14:02`, the open one marked. A row opens that page;
+  the list's first row, `Back to revision 7`, returns to the page it was opened
+  from, and the sheet's ✕ still closes the whole view. The list is a layer of
+  its own over the page (`useCoverPage`, its `onBack` the return to the page):
+  the user opened it, so Back puts it away and leaves the view up. Escape does
+  the same: the list listens on its own container, whose open row — or its
+  Back row, when the open page is not listed — takes focus when the list
+  opens, and on the footer, where Tab can take focus
+  meanwhile, and calls `stopPropagation`, so `Sheet`'s `document` listener
+  never sees the press — the find bar's arrangement
+  ([answering-ui.md § Who owns Escape](answering-ui.md#who-owns-escape)).
+  Closing the list hands focus back to the `▾` button. The
+  numbers are revisions, not positions: a revision lost from disk is not
+  listed (§13.3), and the gap it leaves is the truth.
+- **The page stays put.** A new revision arriving does not move the view: the
+  user chose this page. If it was the current one, it becomes an earlier one,
+  and the note line says so (§15.4).
+- **Snapshots are read one at a time**, when a page is opened, and kept for as
+  long as the view is up — a snapshot never changes, so a page stepped back to
+  is not read again. Nothing is read ahead: a snapshot is up to 256KB, and most
+  views look at a handful.
+
+### 15.4 Read-only, and how it is said
+
+Every frame in the view is read-only, the current page's included: the page
+the user works in is the live canvas, and only one frame sends. The frame's
+bridge is told `sendable: false` (so `data-pk-blocked=""` is on the page's root
+for a page that styles itself for it), and the app refuses every send from it
+with `readonly` (§8.2, §13.5) — so a page that sends on load does not start a
+turn each time it is looked at. Which of `readonly`'s two wordings the page is
+answered with is told to the frame by its `readOnly` prop — `"earlier"` or
+`"current"` — which changes when a newer page arrives while it is shown.
+
+The note, in the footer above the stepper, says what this page is, in one muted line that is
+always there:
+
+| Page | Line |
+|---|---|
+| an earlier one | `Earlier version · read-only` |
+| the current one | `Current page · read-only here` and **Go to canvas**, which closes the view and switches to canvas view |
+| it was current when the user came to it, and a newer one has since been drawn | `Earlier version · a newer page was drawn` and **Newest**, which opens the current one |
+
+and, under it, at most one second line:
+
+| When | Second line |
+|---|---|
+| a fork from this page cannot be made | the reason (§15.6) |
+| a send from it was refused, until the page changes | `Sends are off in history.`, followed — where a fork can be made — by `Fork from here to go on from this page.` The press the user made is answered where they made it, not only inside the page, which may show nothing |
+| the list could not be read (§15.5) | `The list could not be read: <message>` — or, once it had been read, `The list could not be read again: <message>` — and **Retry** |
+
+The rows are in rank. The fork's reason outranks a refusal: it is the one that
+says what the footer can do. A failed list read is last: the page on screen is
+unaffected by it.
+
+### 15.5 Loading and failing
+
+Nothing fails silently.
+
+- **The list loading**: the stepper and Fork are disabled. Show's revision is
+  read and shown at once, without waiting for the list; the menu's waits for
+  it, with a `Spinner` in the body, since which page is the newest earlier one
+  is the list's to say.
+- **A snapshot loading**: the frame of the page before is taken down and the
+  body shows a `Spinner`, so an old page is never shown under a new one's
+  subtitle.
+- **A read failing**: in the body, the server's message in `text-th-error`
+  and **Retry**. Offline is the same message from the connection, retried
+  automatically once it is back. For a revision lost from disk — reachable
+  only through **Show**, since the list leaves it out — the message is §13.5's
+  `revision <n> was lost from disk`, with no Retry (nothing will bring it
+  back) and Fork disabled (`This page could not be read.`). So for every
+  `InvalidParams` refusal of a snapshot: a revision the canvas does not have
+  is not brought back by asking again either.
+- **The list failing to be read**: from the menu, before any page is up, it is
+  the body's failure above. With a page up — Show's, read without waiting for
+  the list, or any page once the list has been read and a read again fails —
+  the page stays, the view keeps the list it has, if any, and the note's second
+  line says so with **Retry** (§15.4).
+- **A snapshot that cannot be parsed** (§13.5): its internal error, with Retry.
+- **Nothing readable.** When every snapshot is lost, or a fork's canvas could
+  not be copied (§13.6's `fork_canvas_unavailable`), the store pushes revision
+  0 (§13.3), so the panel's row is the dimmed `Nothing drawn yet` and the view
+  does not open from it. A list that comes back empty all the same — the disk
+  changed between the push and the read — makes the body say `No page of this
+  canvas could be read.`, with nothing to step to or fork from.
+- **"Of N"** is always the pushed state's revision, the current one — when
+  that revision's own snapshot is lost and the canvas fell back to an older one
+  (§13.3), the pushed revision is that older one, and so is N.
+- **The session closing under it** — deleted, or the user navigated — takes
+  the view with it, as any layer on the session screen.
+
+### 15.6 Forking from a page
+
+**Fork** in the footer forks the session at the moment this page had just been
+drawn (§13.6, *From a revision*). The new session holds the conversation up to
+that call, and opens — on Canvas, as every canvas session does (§2) — on this
+page; its own history view lists revisions 1 to this one, which the fork
+copied.
+
+- **The fork sheet is the session fork's own** (`ForkSessionSheet`,
+  [session-fork-ui.md § The fork sheet](session-fork-ui.md#the-fork-sheet)),
+  with a page as its anchor beside a message:
+  - **Anchor preview**: `Canvas · revision 7 · updated · 14:02`, one line in
+    the preview's place — the page is what the user was just looking at, and a
+    second, scaled copy of it in a sheet would be neither readable nor needed.
+  - **What is cut**: *"The new session keeps the conversation up to the moment
+    this page was drawn, and opens on it. Everything after it stays in this
+    session."* No count: the record the cut falls on may be in history this
+    client has not loaded, so a count would be a guess.
+  - **Title**: the same prefill ([Naming](session-fork-ui.md#naming)).
+  - Footer, in-flight, failure and success: unchanged — `Forking…` and not
+    dismissible while it runs, the server's refusal above the footer, and on
+    success the app navigates to the new session (a held navigation, so the
+    layers go first).
+- **The sheets replace one another.** The view closes as the fork sheet
+  opens (sheets do not nest; the message menu and the fork sheet already do
+  this, [project-ui.md §5.2 Stacked layers](project-ui.md#stacked-layers)).
+  The fork sheet's **Cancel** button reopens the view on the same page: the
+  user backed out of forking, not out of history. A page that was the current
+  one still says so when a newer one was drawn meanwhile (§15.4); the
+  snapshots read are not kept across the two, which a reopened view reads again. ✕, Back and Escape do not:
+  they are the sheet's plain close, which a held navigation calls too
+  ([Closing it by its own UI](project-ui.md#closing-it-by-its-own-ui)) — a
+  reopening there would raise a layer under the very navigation a fork makes on
+  success. So the reopening is behind the button, the closing shared, as §5.2
+  asks: `ForkSessionSheet` gains `onCancel` beside `onClose`, the button
+  calling it and every other close calling `onClose`.
+- **When Fork is not there.** For an agent that cannot fork
+  (`fork_support: "none"`) Fork is not drawn, as the session fork draws no `…`
+  ([Blocked and failed](session-fork-ui.md#blocked-and-failed)): the view is
+  for looking, and fork never applied.
+- **When Fork is there but cannot run**, it is `aria-disabled` and the note's
+  second line says why (§15.4), tied to the button by `aria-describedby`, so
+  the reason is read beside the button and by a screen reader with it:
+
+  | Cause | Note line |
+  |---|---|
+  | `fork_blocked: "pending"` (§13.5) | `Can't fork from this page until its call returns.` — the list read again on the result (§15.3) clears it |
+  | `fork_blocked: "no_record"` | `Can't fork from this page: its call was never recorded in the conversation.` |
+  | `fork_blocked: "subagent"` | `Can't fork from this page: a subagent drew it, and a fork can't be cut inside a subagent's run.` |
+  | `fork_blocked: "superseded"` | `Can't fork from this page: a later page was drawn before its call returned.` |
+  | the snapshot could not be read (§15.5) | `This page could not be read.` |
+  | the list or the snapshot still loading, or the page not in the list yet (it is read again on the push that drew it) | nothing: Fork is disabled without a reason, for a moment |
+  | the revision list open (§15.3) | nothing: Fork, ‹ and › are disabled until it is put away |
+
+  The server refuses all of them again (§13.6), and a refusal that reaches the
+  fork sheet anyway — the list was read before the session changed — is shown
+  there, as any fork failure is.
+- **A running turn disables nothing.** A page whose call has returned is a
+  settled point, and what the agent is still doing falls after the cut, as for
+  a message fork
+  ([Which messages get a menu](session-fork-ui.md#which-messages-get-a-menu-and-when-fork-is-on-it)).
+  A permission request still unanswered at the cut is not carried
+  (`TruncateHistory` drops what the cut left unanswered).
+- **Nothing comes back as a draft**: the cut is never on a message the user
+  sent.
+
+### 15.7 What it leaves alone
+
+It is drawn over the canvas screen, not in it. The column of §2 — the header,
+the permission banner and panel (§10), the hosts strip, the canvas area, the
+activity strip (§11), the input — gains nothing and loses nothing, and the
+view reads nothing of theirs. The only changes outside the view are a row in
+the session panel (`SessionHeader`), **Show** in a canvas row's body,
+`readOnly`'s two wordings in `CanvasFrame`, the fork sheet's page anchor and
+`onCancel`, and canvas view's area not being measured while the view is up — a
+keyboard raised there is the history page's, not the canvas's (§5).

@@ -555,7 +555,9 @@ one of the prices — `turn cost: 0.0725 USD`, for a turn whose whole prompt is
 shared suite alone sends twenty messages per CLI (fourteen turns that run to
 completion, plus six across the four interrupt and mid-turn scenarios), before
 either package's own tests. Measured end to end, green and with nothing skipped:
-`ok … 239.822s` for `agent/claude`, `ok … 352.377s` for `agent/codex`. That is
+`ok … 239.822s` for `agent/claude`, `ok … 352.377s` for `agent/codex` — the
+former measured before `TestIntegration_ForkAtToolResult` added two turns of
+its own. That is
 also the whole reason CI does not run it — there is no CLI on the runner and no
 account to bill if there were — so a green CI says nothing whatever about this
 suite.
