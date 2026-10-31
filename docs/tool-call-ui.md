@@ -152,7 +152,7 @@ message does. Every part of a list falls into one of these kinds:
 
 | Kind | Parts | In a group |
 |---|---|---|
-| **Breaker** | a subagent call, `ExitPlanMode`, and their cards — and, since they already end the list, text, a question card and every other part | ends the group and stands as itself |
+| **Breaker** | a subagent call, `ExitPlanMode`, a canvas call ([canvas-ui.md §12](canvas-ui.md#12-in-chat-view)), and their cards — and, since they already end the list, text, a question card and every other part | ends the group and stands as itself |
 | **Pinned** | a call that is `error`; one that is `background` or `fromBackground`, running or settled, unless it was interrupted; one `lostWithProcess`, interrupted or not; a card that is not `allowed`; an `allowed` card whose row has not come back, or whose call is still running | belongs to the group, never folds |
 | **Settled** | a call that is `success` or `interrupted` (but not `lostWithProcess`), with its `allowed` card if it had one — an `interrupted` one even once a background result reaches it, since the interrupt came first | folds into the summary, and is the only kind that decides whether there is a group |
 | **Running** | a `running` call that never had a card | folds into a group its settled neighbours form — the newest is the step the summary is on; otherwise lies flat |
@@ -718,8 +718,8 @@ identifying this particular one. Only the detail truncates.
 
 Derived on the frontend from `name` + `input`, never sent on the wire
 ([tool-call-model.md](tool-call-model.md#toolrun)). It is
-`toolSummary(name, input, workDir)` in `web/src/lib/` rather than a component
-helper — derivation logic with a table in it, not a rendering concern — and every
+`toolSummary(name, input, workDir, outcome?)` in `web/src/lib/` rather than a
+component helper — derivation logic with a table in it, not a rendering concern — and every
 surface that draws a tool-shaped row calls it, so a card and the row that runs
 afterwards cannot word the same call differently.
 
@@ -735,6 +735,7 @@ afterwards cannot word the same call differently.
 | `TaskOutput` | `TaskOutput` | the `task_id`, in mono | right |
 | `server:tool` (Codex MCP) or `mcp__server__tool` (Claude MCP) | the tool half | the server half as a chip, then the first scalar argument, else compact JSON | right |
 | `html_render` (Pockode's own MCP tool), while it is a row | `html_render` | `pockode` as a chip, then the `title` — never the first argument, which is as often the whole page | right |
+| `canvas_render` / `canvas_update` (canvas sessions only), under either engine's name | worded by the run's `outcome` — `Drew the canvas`, `Drawing the canvas`, `Draw the canvas` ([canvas-ui.md §12](canvas-ui.md#12-in-chat-view)) | an update's regions, each once, in mono; no `pockode` chip, and never the page | right |
 | anything else | the name | first non-empty scalar in `input` | right |
 
 Six decisions inside that table:
@@ -1198,6 +1199,10 @@ Right-aligned, `shrink-0`, `text-th-text-muted`, after the detail.
 - Format: `1.2s`, `47s`, `4m 12s`, `1h 12m`. One unit below a minute, two above.
 - It is its own component with its own interval, so a ticking counter re-renders
   the counter and not the row. At most a handful of runs are live at once.
+
+- **A canvas call** shows `rev N`, the revision its result drew
+  (`run.canvasRevision`), in place of either
+  ([canvas-ui.md §12](canvas-ui.md#12-in-chat-view)).
 
 Codex's `exitCode` belongs in the **body**, not here: it is only interesting when
 it is non-zero, and then the glyph has already said so.
@@ -2721,7 +2726,9 @@ host the reader has not allowed for it — the rule every surface follows
 and for a page, with its strip, wrapper and security boundary, in
 [page-external-hosts-ui.md](page-external-hosts-ui.md). Both are in
 `HtmlFrame.tsx`, the one frame component the card and the viewer share, which
-takes the policy from `lib/pageHosts.ts`. The frame the app holds is a wrapper whose one child is the page:
+takes the policy from `lib/pageHosts.ts` and the sandbox, the document order and
+the project capability from `lib/agentPage.ts` — shared with the canvas
+([canvas-ui.md §4](canvas-ui.md#4-the-page-frame)). The frame the app holds is a wrapper whose one child is the page:
 
 ```
 <iframe srcdoc="<policy><wrapper's listener>
@@ -2730,7 +2737,7 @@ takes the policy from `lib/pageHosts.ts`. The frame the app holds is a wrapper w
         sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox">
 ```
 
-The floor is `HTML_FRAME_SANDBOX`, on both frames:
+The floor is `HTML_FRAME_SANDBOX` (`lib/agentPage.ts`), on both frames:
 
 - **Never `allow-same-origin`.** A `srcdoc` frame inherits its parent's origin;
   with this token it would keep it, and read Pockode's stored credentials and
@@ -2764,7 +2771,7 @@ path instead of carrying their bytes, which the transcript would keep for good
 - **Through the worktree's root.** Before drawing, the frame asks for the
   [raw capability](code/authentication.md#raw-capabilities-urls-a-browser-element-loads-by-itself)
   for the root of the worktree that `.html` file previews load through
-  (`PROJECT_TARGET` in `HtmlFrame.tsx`). It puts a `<base href>` to it right
+  (`PROJECT_TARGET` in `lib/agentPage.ts`). It puts a `<base href>` to it right
   after the policy, unless the page sets a `<base href>` of its own, which is
   the one it was written against. So a relative URL — an image, a video, a
   sound, a stylesheet, a script, a CSS `url()`, a `fetch("data.json")` —

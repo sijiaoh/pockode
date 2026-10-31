@@ -57,6 +57,127 @@ describe("MessageItem", () => {
 		expect(screen.getByText("report.pdf")).toBeInTheDocument();
 	});
 
+	describe("a canvas action", () => {
+		afterEach(() => {
+			vi.restoreAllMocks();
+		});
+
+		const actionMessage = (
+			data: unknown,
+			content = 'Canvas action "create" from revision 7:\n…',
+		): Message => ({
+			id: "a1",
+			role: "user",
+			content,
+			status: "complete",
+			createdAt: new Date(),
+			canvasAction: { action: "create", data, revision: 7 },
+		});
+
+		// `content` is for the agent (docs/canvas-ui.md §12); the sender's echo
+		// has none until the reply, and must already read right.
+		it("names the action and the revision, never the text the agent read", () => {
+			render(
+				<MessageItem
+					sessionId="session-1"
+					message={actionMessage({ title: "Fix" })}
+				/>,
+			);
+			expect(screen.getByText("create")).toBeInTheDocument();
+			expect(screen.getByText("from revision 7")).toBeInTheDocument();
+			expect(screen.getByText('{"title":"Fix"}')).toBeInTheDocument();
+			expect(screen.queryByText(/Canvas action "create"/)).toBeNull();
+		});
+
+		it("reads right in the sender's echo, before the reply brings content", () => {
+			render(
+				<MessageItem
+					sessionId="session-1"
+					message={actionMessage({ title: "Fix" }, "")}
+				/>,
+			);
+			expect(screen.getByText("create")).toBeInTheDocument();
+		});
+
+		it("shows no data when the page sent none", () => {
+			render(<MessageItem sessionId="session-1" message={actionMessage({})} />);
+			expect(screen.queryByText("{}")).toBeNull();
+		});
+
+		it("folds data longer than a line, and opens it on request", async () => {
+			const user = userEvent.setup();
+			const data = { title: "Fix login", body: "x".repeat(60) };
+			render(
+				<MessageItem sessionId="session-1" message={actionMessage(data)} />,
+			);
+
+			// Named by its words, preview and all, so what is read out is what
+			// is on screen.
+			const toggle = screen.getByRole("button", { name: /^Data ?\{"title"/ });
+			expect(toggle).toHaveAttribute("aria-expanded", "false");
+			expect(screen.queryByText(/"title": "Fix login"/)).toBeNull();
+
+			await user.click(toggle);
+			expect(toggle).toHaveAttribute("aria-expanded", "true");
+			expect(screen.getByText(/"title": "Fix login"/)).toBeInTheDocument();
+		});
+
+		it("opens long data in part, and all of it full screen", async () => {
+			const user = userEvent.setup();
+			layOutClamp(2000);
+			const data = Object.fromEntries(
+				Array.from({ length: 30 }, (_, i) => [`field${i}`, i]),
+			);
+			render(
+				<FullScreenHost>
+					<MessageItem sessionId="session-1" message={actionMessage(data)} />
+				</FullScreenHost>,
+			);
+
+			await user.click(screen.getByRole("button", { name: /^Data/ }));
+			expect(screen.getByText(/"field0": 0/)).toBeInTheDocument();
+			expect(screen.queryByText(/"field29": 29/)).toBeNull();
+
+			await user.click(screen.getByRole("button", { name: "Show all data" }));
+			// The viewer draws its lines virtually; its count is of the whole.
+			expect(screen.getByRole("dialog")).toHaveTextContent("32 lines");
+		});
+
+		// One value can be the whole 64KB: a count of lines alone would let it
+		// all into the bubble.
+		it("opens one long value in part too", async () => {
+			const user = userEvent.setup();
+			const body = `${"a".repeat(3000)}TAIL`;
+			render(
+				<FullScreenHost>
+					<MessageItem
+						sessionId="session-1"
+						message={actionMessage({ body })}
+					/>
+				</FullScreenHost>,
+			);
+
+			await user.click(screen.getByRole("button", { name: /^Data/ }));
+			expect(screen.queryByText(/TAIL/)).toBeNull();
+			expect(
+				screen.getByRole("button", { name: "Show all data" }),
+			).toBeInTheDocument();
+		});
+
+		it("says when the agent never read it, and offers nothing to restore", () => {
+			render(
+				<MessageItem
+					sessionId="session-1"
+					message={actionMessage({ title: "Fix" })}
+					isDiscarded
+				/>,
+			);
+			expect(
+				screen.getByText("Not read — won't be answered"),
+			).toBeInTheDocument();
+		});
+	});
+
 	describe("a Pockode command", () => {
 		const commandMessage: Message = {
 			id: "c1",

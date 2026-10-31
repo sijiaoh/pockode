@@ -1,4 +1,6 @@
-import { type ReactNode, useEffect, useState } from "react";
+import { Square } from "lucide-react";
+import { type ComponentType, type ReactNode, useEffect, useState } from "react";
+import type { StopButtonProps } from "../../lib/registries/chatUIRegistry";
 
 /**
  * How long a control that has just landed under the thumb refuses a press.
@@ -76,5 +78,33 @@ export function Armed({
 		>
 			{children}
 		</div>
+	);
+}
+
+/**
+ * The composer's Stop: the registry's `StopButton` where one is set, the
+ * built-in one otherwise. The caller decides whether Stop is offered at all —
+ * a registry `StopButton` of null means never — and arms it.
+ */
+export function StopButton({
+	onStop,
+	custom,
+}: StopButtonProps & {
+	/** `useChatUIConfig().StopButton`, when it is not null. */
+	custom: ComponentType<StopButtonProps> | undefined;
+}) {
+	if (custom) {
+		const Custom = custom;
+		return <Custom onStop={onStop} />;
+	}
+	return (
+		<button
+			type="button"
+			onClick={onStop}
+			aria-label="Stop"
+			className="flex size-9 items-center justify-center rounded-lg bg-th-text-primary pointer-coarse:size-11 text-th-text-inverse transition-all hover:opacity-90 active:scale-95"
+		>
+			<Square className="size-3.5 fill-current" />
+		</button>
 	);
 }

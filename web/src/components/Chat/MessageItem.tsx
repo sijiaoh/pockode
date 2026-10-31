@@ -51,6 +51,7 @@ import { workEventSubject, workEventWording } from "../../utils/systemMessage";
 import { CollapsibleBody, MarkdownContent, useEverExpanded } from "../ui";
 import AttachmentStrip from "./AttachmentStrip";
 import AuthFailureNotice from "./AuthFailureNotice";
+import { CanvasActionBubble } from "./CanvasActionBubble";
 import { DiscardedNote, DiscardedSummary } from "./DiscardedMessage";
 import { HeaderlessMainBlock } from "./HeaderlessMainBlock";
 import { HtmlRenderCard } from "./HtmlRenderCard";
@@ -1427,6 +1428,20 @@ const MessageItem = memo(function MessageItem({
 				</div>
 			) : (
 				item
+			);
+		}
+		if (message.canvasAction) {
+			return (
+				<div className="flex items-end justify-end gap-2">
+					{slot}
+					<CanvasActionBubble
+						id={message.id}
+						canvasAction={message.canvasAction}
+						discarded={isDiscarded}
+						className={userBubbleClass}
+					/>
+					{UserAvatar && <UserAvatar className="size-10 shrink-0" />}
+				</div>
 			);
 		}
 		return (

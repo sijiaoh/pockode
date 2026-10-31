@@ -1,4 +1,5 @@
 import type { ToolFetch, ToolRun } from "../types/message";
+import { isCanvasTool } from "./canvasTools";
 import { contentBlocksText } from "./contentBlocks";
 
 /**
@@ -249,10 +250,33 @@ export function toolSecondLine(run: ToolRun): ToolSecondLine | null {
 			const reason = refusal.split("\n").find((line) => line.trim());
 			return reason ? { text: reason.trim(), mono: false, live: false } : null;
 		}
+		if (isCanvasTool(run.name)) {
+			const reason = canvasRefusalLine(text);
+			if (reason) return { text: reason, mono: false, live: false };
+		}
 		const line = failureLine(text);
 		return line ? { text: line, mono: true, live: false } : null;
 	}
 	return null;
+}
+
+/**
+ * A canvas call's refusal, by its first reason: the text opens with
+ * `Canvas not changed (still revision 7):`, which says only that it failed, and
+ * lists each reason as a `- ` line under it (docs/canvas-ui.md §9.4). Null for
+ * a failure in any other shape — malformed arguments, a server fault — which
+ * is an ordinary tool error.
+ */
+function canvasRefusalLine(text: string): string | null {
+	if (!text.startsWith("Canvas not changed")) return null;
+	const reasons = text
+		.split("\n")
+		.filter((line) => line.startsWith("- "))
+		.map((line) => line.slice(2).trim());
+	if (reasons.length === 0) return null;
+	return reasons.length === 1
+		? reasons[0]
+		: `${reasons[0]} (+${reasons.length - 1} more)`;
 }
 
 /**

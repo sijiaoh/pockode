@@ -1,8 +1,10 @@
+import type { ToolRun } from "../types/message";
 import {
 	isSameNativePath,
 	relativeToWorkDir,
 	splitNativePath,
 } from "../utils/path";
+import { isCanvasTool, isCanvasUpdateTool } from "./canvasTools";
 import { codexChangePaths } from "./codexChanges";
 import { htmlRenderInput, isHtmlRenderTool } from "./htmlRender";
 import { firstLine } from "./subagentRun";
@@ -238,6 +240,37 @@ function mcpSummary(
 	};
 }
 
+/** What of a run its summary reads. */
+export type ToolOutcome = Pick<ToolRun, "status" | "canvasRevision">;
+
+/**
+ * Past tense only once it has happened: the same row is the running step, the
+ * failed call that drew nothing, and the request a permission card asks about.
+ * A stamped revision is the server saying it did, whatever the status — a
+ * call that returned after its turn was interrupted still drew.
+ */
+function canvasTitle(update: boolean, outcome?: ToolOutcome): string {
+	const status = outcome?.status;
+	if (status === "success" || outcome?.canvasRevision !== undefined) {
+		return update ? "Updated the canvas" : "Drew the canvas";
+	}
+	if (status === "running" || status === "background") {
+		return update ? "Updating the canvas" : "Drawing the canvas";
+	}
+	return update ? "Update the canvas" : "Draw the canvas";
+}
+
+/** The regions a `canvas_update` touches, each once, in the order of its ops. */
+function canvasUpdateRegions(input: unknown): string[] {
+	const { ops } = asObject(input);
+	if (!Array.isArray(ops)) return [];
+	const regions = ops.flatMap((op) => {
+		const region = str(asObject(op).region);
+		return region ? [region] : [];
+	});
+	return [...new Set(regions)];
+}
+
 function fallbackSummary(toolName: string, input: unknown): ToolSummary {
 	const obj = asObject(input);
 	const first = Object.values(obj).find(
@@ -262,8 +295,27 @@ export function toolSummary(
 	toolName: string,
 	input: unknown,
 	workDir: string,
+	/**
+	 * How the call went, for the one title that is a sentence about what the
+	 * call did — a canvas call's. Absent where there is no run yet: a
+	 * permission card.
+	 */
+	outcome?: ToolOutcome,
 ): ToolSummary {
 	const obj = asObject(input);
+
+	// A sentence rather than the tool and its first value, which would be the
+	// whole page; and no server chip, because the canvas is no external server's
+	// (docs/canvas-ui.md §12).
+	if (isCanvasTool(toolName)) {
+		const update = isCanvasUpdateTool(toolName);
+		return {
+			title: canvasTitle(update, outcome),
+			detail: update ? canvasUpdateRegions(input).join(", ") : "",
+			detailTail: "",
+			mono: update,
+		};
+	}
 
 	if (isTaskTool(toolName)) {
 		return {

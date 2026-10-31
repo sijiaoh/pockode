@@ -5,7 +5,7 @@ import {
 	useIsPageCovered,
 	useOutsideClick,
 } from "@pockode/shared";
-import { ArrowUp, Image, Paperclip, Plus, Slash, Square } from "lucide-react";
+import { ArrowUp, Image, Paperclip, Plus, Slash } from "lucide-react";
 import {
 	type ChangeEvent,
 	type ClipboardEvent,
@@ -42,7 +42,7 @@ import ComposerMenu, {
 	type ComposerMenuItem,
 	focusMenuItem,
 } from "./ComposerMenu";
-import { Armed, slotShowsStop } from "./SendStopSlot";
+import { Armed, StopButton, slotShowsStop } from "./SendStopSlot";
 
 interface Props {
 	sessionId: string;
@@ -765,18 +765,10 @@ function InputBar({
 					>
 						{onStop && showStop ? (
 							<Armed>
-								{CustomStopButton ? (
-									<CustomStopButton onStop={onStop} />
-								) : (
-									<button
-										type="button"
-										onClick={onStop}
-										aria-label="Stop"
-										className="flex size-9 items-center justify-center rounded-lg bg-th-text-primary pointer-coarse:size-11 text-th-text-inverse transition-all hover:opacity-90 active:scale-95"
-									>
-										<Square className="size-3.5 fill-current" />
-									</button>
-								)}
+								<StopButton
+									onStop={onStop}
+									custom={CustomStopButton ?? undefined}
+								/>
 							</Armed>
 						) : (
 							<button

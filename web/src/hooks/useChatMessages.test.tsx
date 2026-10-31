@@ -2,11 +2,18 @@ import { act, render, waitFor } from "@testing-library/react";
 import { JSONRPCErrorCode, JSONRPCErrorException } from "json-rpc-2.0";
 import { useLayoutEffect } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { SentMessage } from "../lib/rpc";
+import {
+	canvasActions,
+	selectCanvasState,
+	useCanvasStore,
+} from "../lib/canvasStore";
+import type { SentCanvasAction, SentMessage } from "../lib/rpc";
 import { useSessionDetailStore } from "../lib/sessionDetailStore";
 import { makeSessionDetail } from "../test/sessionFixtures";
+import type { CanvasState } from "../types/canvas";
 import type {
 	AssistantMessage,
+	ChatNotification,
 	Message,
 	QuestionAnswerRecord,
 	ServerNotification,
@@ -25,6 +32,7 @@ const mockState = vi.hoisted(() => ({
 	// Mirrors ChatActions.sendMessage: it resolves with what the server said
 	// about the message — its seq, when it has an address to give.
 	sendMessage: vi.fn((): Promise<SentMessage> => Promise.resolve({})),
+	sendCanvasAction: vi.fn((): Promise<SentCanvasAction> => Promise.resolve({})),
 	invalidateCommandCache: vi.fn(),
 }));
 
@@ -38,6 +46,7 @@ vi.mock("../lib/wsStore", () => {
 			chatMessagesHistory: mockState.chatMessagesHistory,
 			chatMessagesUnsubscribe: mockState.chatMessagesUnsubscribe,
 			sendMessage: mockState.sendMessage,
+			sendCanvasAction: mockState.sendCanvasAction,
 			invalidateCommandCache: mockState.invalidateCommandCache,
 		},
 	};
@@ -1184,6 +1193,293 @@ describe("useChatMessages", () => {
 
 			expect(state.model).toBe("");
 			expect(state.loaded).toBe(false);
+		});
+	});
+
+	describe("the canvas", () => {
+		const drawn = (revision: number): CanvasState => ({
+			revision,
+			html: `<p>revision ${revision}</p>`,
+			change: { kind: "render" },
+			drawn_at: "2026-10-31T12:00:00Z",
+		});
+		const IDLE = { phase: "idle", open: false, since: "" };
+
+		beforeEach(() => {
+			canvasActions.forget("s1");
+			useCanvasStore.setState({ size: null });
+			mockState.sendCanvasAction.mockReset();
+			mockState.sendCanvasAction.mockResolvedValue({});
+		});
+
+		function renderCanvasProbe() {
+			const state: {
+				messages: Message[];
+				sendCanvasAction: ReturnType<
+					typeof useChatMessages
+				>["sendCanvasAction"];
+				sendUserMessage: ReturnType<typeof useChatMessages>["sendUserMessage"];
+			} = {
+				messages: [],
+				sendCanvasAction: async () => {},
+				sendUserMessage: async () => false,
+			};
+			function CanvasProbe() {
+				const chat = useChatMessages({ sessionId: "s1" });
+				state.messages = chat.messages;
+				state.sendCanvasAction = chat.sendCanvasAction;
+				state.sendUserMessage = chat.sendUserMessage;
+				return null;
+			}
+			const view = render(<CanvasProbe />);
+			const reconnect = async () => {
+				for (const status of ["reconnecting", "connected"]) {
+					mockState.status = status;
+					await act(async () => {
+						view.rerender(<CanvasProbe />);
+					});
+				}
+			};
+			return { state, reconnect, unmount: view.unmount };
+		}
+
+		const heldCanvas = () => selectCanvasState("s1")(useCanvasStore.getState());
+
+		// The subscribe reply carries the state, and every notification after it
+		// is the whole state again. It is not a record, so the transcript never
+		// sees it — the reducer would draw it as a raw record.
+		it("keeps the pushed state in the store and out of the transcript", async () => {
+			let push: (n: ChatNotification) => void = () => {};
+			mockState.chatMessagesSubscribe.mockImplementation(
+				async (_id: string, onNotification: typeof push) => {
+					push = onNotification;
+					return {
+						id: "sub-1",
+						initial: { history: [], turn: IDLE, canvas: drawn(1) },
+					};
+				},
+			);
+			const { state } = renderCanvasProbe();
+			await waitFor(() => expect(heldCanvas()?.revision).toBe(1));
+
+			act(() => push({ type: "canvas_state", canvas: drawn(2) }));
+
+			expect(heldCanvas()).toEqual(drawn(2));
+			expect(state.messages).toEqual([]);
+		});
+
+		// The server registers the subscription before it reads the canvas for
+		// the reply, so a push can overtake the reply: whichever is newer wins.
+		it.each([
+			["a push newer than the reply", 3, 2, 3],
+			["a reply newer than the push", 2, 3, 3],
+		])("compares a push that arrived before the reply with it: %s", async (_name, pushed, replied, shown) => {
+			mockState.chatMessagesSubscribe.mockImplementation(
+				async (_id: string, onNotification: (n: ChatNotification) => void) => {
+					onNotification({ type: "canvas_state", canvas: drawn(pushed) });
+					return {
+						id: "sub-1",
+						initial: { history: [], turn: IDLE, canvas: drawn(replied) },
+					};
+				},
+			);
+			renderCanvasProbe();
+			await waitFor(() => expect(heldCanvas()?.revision).toBe(shown));
+		});
+
+		it("drops a push older than the state held", async () => {
+			let push: (n: ChatNotification) => void = () => {};
+			mockState.chatMessagesSubscribe.mockImplementation(
+				async (_id: string, onNotification: typeof push) => {
+					push = onNotification;
+					return {
+						id: "sub-1",
+						initial: { history: [], turn: IDLE, canvas: drawn(5) },
+					};
+				},
+			);
+			renderCanvasProbe();
+			await waitFor(() => expect(heldCanvas()?.revision).toBe(5));
+
+			act(() => push({ type: "canvas_state", canvas: drawn(4) }));
+
+			expect(heldCanvas()?.revision).toBe(5);
+		});
+
+		// A push missed while the connection was down costs nothing: the
+		// resubscribe hands back the current state.
+		it("catches up on what was drawn while disconnected", async () => {
+			let revision = 1;
+			mockState.chatMessagesSubscribe.mockImplementation(async () => ({
+				id: "sub-1",
+				initial: { history: [], turn: IDLE, canvas: drawn(revision) },
+			}));
+			const { reconnect } = renderCanvasProbe();
+			await waitFor(() => expect(heldCanvas()?.revision).toBe(1));
+
+			revision = 4;
+			await reconnect();
+
+			expect(heldCanvas()?.revision).toBe(4);
+		});
+
+		// A push of the session being left can land before its subscription is
+		// closed. It belongs to no session on screen any more: it is neither
+		// filed under the one just opened — where its revision would outrank
+		// that session's own — nor kept, a page of up to 256KB nobody shows.
+		it("drops a push of the session left behind", async () => {
+			const pushes = new Map<string, (n: ChatNotification) => void>();
+			mockState.chatMessagesSubscribe.mockImplementation(
+				async (id: string, onNotification: (n: ChatNotification) => void) => {
+					pushes.set(id, onNotification);
+					return {
+						id: `sub-${id}`,
+						initial: {
+							history: [],
+							turn: IDLE,
+							// s2 is an ordinary session: no canvas at all.
+							...(id === "s1" ? { canvas: drawn(8) } : {}),
+						},
+					};
+				},
+			);
+			function SwitchProbe({ sessionId }: { sessionId: string }) {
+				useChatMessages({ sessionId });
+				return null;
+			}
+			const { rerender } = render(<SwitchProbe sessionId="s1" />);
+			await waitFor(() => expect(heldCanvas()?.revision).toBe(8));
+
+			rerender(<SwitchProbe sessionId="s2" />);
+			await waitFor(() => expect(pushes.has("s2")).toBe(true));
+			act(() => pushes.get("s1")?.({ type: "canvas_state", canvas: drawn(9) }));
+
+			expect(useCanvasStore.getState().canvas).toBeNull();
+		});
+
+		it("does not take a canvas whose reply lands after the transcript closed", async () => {
+			let reply: (value: unknown) => void = () => {};
+			mockState.chatMessagesSubscribe.mockImplementation(
+				() =>
+					new Promise((resolve) => {
+						reply = resolve;
+					}),
+			);
+			const { unmount } = renderCanvasProbe();
+			await waitFor(() =>
+				expect(mockState.chatMessagesSubscribe).toHaveBeenCalled(),
+			);
+
+			unmount();
+			await act(async () => {
+				reply({
+					id: "sub-1",
+					initial: { history: [], turn: IDLE, canvas: drawn(3) },
+				});
+			});
+
+			expect(useCanvasStore.getState().canvas).toBeNull();
+		});
+
+		it("lets go of the canvas with its transcript", async () => {
+			mockState.chatMessagesSubscribe.mockImplementation(async () => ({
+				id: "sub-1",
+				initial: { history: [], turn: IDLE, canvas: drawn(1) },
+			}));
+			const { unmount } = renderCanvasProbe();
+			await waitFor(() => expect(heldCanvas()?.revision).toBe(1));
+
+			unmount();
+
+			expect(heldCanvas()).toBeNull();
+		});
+
+		// The sender is left out of the broadcast of its own message, so it draws
+		// the action from the start and takes the record's text from the reply.
+		it("echoes a canvas action and fills it in from the reply", async () => {
+			const recorded = {
+				action: "create",
+				data: { title: "Fix login" },
+				revision: 7,
+			};
+			mockState.sendCanvasAction.mockResolvedValue({
+				seq: 12,
+				messageId: "m-1",
+				content:
+					'Canvas action "create" from revision 7:\n{"title":"Fix login"}',
+				canvasAction: recorded,
+			});
+			const { state } = renderCanvasProbe();
+			// The default page has landed, so it cannot replace the echo.
+			await waitFor(() => expect(state.messages).toHaveLength(1));
+
+			await act(async () => {
+				await state.sendCanvasAction({
+					action: "create",
+					data: { title: "Fix login" },
+					revision: 7,
+				});
+			});
+
+			expect(mockState.sendCanvasAction).toHaveBeenCalledWith(
+				"s1",
+				{ action: "create", data: { title: "Fix login" }, revision: 7 },
+				undefined,
+			);
+			const sent = state.messages.find((m) => m.role === "user");
+			expect(sent).toMatchObject({
+				role: "user",
+				canvasAction: recorded,
+				messageId: "m-1",
+				anchorSeq: 12,
+				content: expect.stringContaining('Canvas action "create"'),
+			});
+		});
+
+		it("takes a refused canvas action back out and rethrows", async () => {
+			mockState.sendCanvasAction.mockRejectedValue(
+				new JSONRPCErrorException(
+					"revision 9 does not exist yet: the canvas is at 8",
+					JSONRPCErrorCode.InvalidParams,
+				),
+			);
+			const { state } = renderCanvasProbe();
+			// The default page has landed, so it cannot replace the echo.
+			await waitFor(() => expect(state.messages).toHaveLength(1));
+
+			await act(async () => {
+				await expect(
+					state.sendCanvasAction({ action: "go", revision: 9 }),
+				).rejects.toThrow("revision 9 does not exist yet");
+			});
+
+			expect(state.messages.some((m) => m.role === "user")).toBe(false);
+		});
+
+		// Typed messages tell the agent the size too, from either view — but only
+		// in a canvas session: anywhere else there is no canvas to measure.
+		it.each([
+			[true, { width: 390, height: 664 }],
+			[false, undefined],
+		])("sends the device's canvas size with a typed message: canvas %s", async (canvas, expected) => {
+			useSessionDetailStore
+				.getState()
+				.setDetail("s1", makeSessionDetail({ id: "s1", canvas }));
+			canvasActions.setSize({ width: 390, height: 664 });
+			const { state } = renderCanvasProbe();
+			// The default page has landed, so it cannot replace the echo.
+			await waitFor(() => expect(state.messages).toHaveLength(1));
+
+			await act(async () => {
+				await state.sendUserMessage("hello");
+			});
+
+			expect(mockState.sendMessage).toHaveBeenCalledWith(
+				"s1",
+				"hello",
+				undefined,
+				...(expected ? [undefined, expected] : []),
+			);
 		});
 	});
 });

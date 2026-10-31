@@ -186,6 +186,21 @@ describe("rowEntries", () => {
 		]);
 	});
 
+	// Each row names the revision it drew (docs/canvas-ui.md §12), which a
+	// folded "Used 2 tools" would hide.
+	it("never folds a canvas call", () => {
+		expect(
+			shape(
+				rowEntries([
+					call("r", "mcp__pockode__canvas_render"),
+					call("u", "pockode:canvas_update"),
+					bash("a"),
+					bash("b"),
+				]),
+			),
+		).toEqual(["r", "u", "[Ran 2 commands]", "a↓", "b↓"]);
+	});
+
 	it("keeps an unanswered or refused card pinned, with its row", () => {
 		expect(
 			shape(rowEntries([bash("a"), card("b", "pending"), bash("c")])),

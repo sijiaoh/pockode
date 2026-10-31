@@ -1,4 +1,5 @@
 import type { ContentPart, Thought, ToolRun } from "../types/message";
+import { isCanvasTool } from "./canvasTools";
 import { oldestPart } from "./partTree";
 import { stepId } from "./subagentRun";
 import { thoughtLabel } from "./thinking";
@@ -60,7 +61,9 @@ export type RowEntry<T> =
  * Parts that end a group and stand as rows of their own. A subagent call's row
  * is already a summary — its Process is the folded list — and its waiting
  * card sits under its row, which must stay visible. A plan is written for the
- * user to read, so it is prose in all but shape.
+ * user to read, so it is prose in all but shape. A canvas call is a change to
+ * what the user is looking at, and its row names the revision it drew
+ * (docs/canvas-ui.md §12): folded, "Used 3 tools" would say neither.
  */
 function breaksGroups(part: ContentPart): boolean {
 	const name =
@@ -69,7 +72,10 @@ function breaksGroups(part: ContentPart): boolean {
 			: part.type === "permission_request"
 				? part.request.toolName
 				: undefined;
-	return name !== undefined && (isTaskTool(name) || name === "ExitPlanMode");
+	return (
+		name !== undefined &&
+		(isTaskTool(name) || name === "ExitPlanMode" || isCanvasTool(name))
+	);
 }
 
 interface Member<T> {

@@ -1,5 +1,5 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { Archive, FolderGit2, Plus } from "lucide-react";
+import { Archive, FolderGit2, PanelsTopLeft, Plus } from "lucide-react";
 import { useCallback, useEffect, useMemo } from "react";
 import {
 	invalidateSessionViewQueries,
@@ -19,7 +19,7 @@ import {
 import { useSessionStore } from "../../lib/sessionStore";
 import { describeWorktree } from "../../lib/sessionView";
 import { useWorktreeStore } from "../../lib/worktreeStore";
-import type { WorktreeInfo } from "../../types/message";
+import type { SessionCreateParams, WorktreeInfo } from "../../types/message";
 import { useSidebarRefresh } from "../Layout";
 import SessionFilterButton from "./SessionFilterButton";
 import SessionList from "./SessionList";
@@ -29,7 +29,7 @@ interface Props {
 	currentSessionId: string | null;
 	/** Both take the row's worktree, null for this one; see `SessionItem`. */
 	onSelectSession: (id: string, worktree: string | null) => void;
-	onCreateSession: () => void;
+	onCreateSession: (params?: SessionCreateParams) => void;
 	onDeleteSession: (id: string, worktree: string | null) => void;
 	isSwitchingWorktree: boolean;
 }
@@ -186,12 +186,25 @@ function SessionsTab({
 				<div className="relative flex items-center gap-2">
 					<button
 						type="button"
-						onClick={onCreateSession}
+						onClick={() => onCreateSession()}
 						disabled={isStale}
 						className="flex min-h-[44px] flex-1 items-center justify-center gap-2 rounded-lg bg-th-accent px-3 text-sm font-medium text-th-accent-text hover:bg-th-accent-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent focus-visible:ring-offset-2 focus-visible:ring-offset-th-bg-secondary disabled:cursor-not-allowed disabled:opacity-50"
 					>
 						<Plus className="h-4 w-4" aria-hidden="true" />
 						New Chat
+					</button>
+					{/* A canvas is what the session is, fixed at birth
+					    (docs/canvas-ui.md §1), so it is chosen here, at the one
+					    place a session is born, and never offered afterwards. */}
+					<button
+						type="button"
+						onClick={() => onCreateSession({ canvas: true })}
+						aria-label="New Canvas"
+						disabled={isStale}
+						className="flex min-h-[44px] shrink-0 items-center justify-center gap-1.5 rounded-lg border border-th-border bg-th-bg-tertiary px-3 text-sm text-th-text-primary enabled:hover:border-th-border-focus focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent focus-visible:ring-offset-2 focus-visible:ring-offset-th-bg-secondary disabled:cursor-not-allowed disabled:opacity-50"
+					>
+						<PanelsTopLeft className="h-4 w-4" aria-hidden="true" />
+						Canvas
 					</button>
 					<SessionFilterButton disabled={isStale} />
 				</div>

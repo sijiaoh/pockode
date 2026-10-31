@@ -1,3 +1,4 @@
+import type { CanvasAction } from "../types/canvas";
 import type { ContentBlock, FileBlock } from "../types/content";
 import type {
 	AskUserQuestion,
@@ -102,6 +103,21 @@ export function normalizeCommand(
 		: { name: fields.name };
 }
 
+// A message record's `canvas_action`, kept only when it is one: a bubble drawn
+// for an action with no name would say nothing. Also reads the
+// `chat.canvas_action` reply. `null` is data a page may send; only a missing
+// field is the server's `{}`.
+export function normalizeCanvasAction(raw: unknown): CanvasAction | undefined {
+	const fields = raw as Record<string, unknown> | null | undefined;
+	if (typeof fields?.action !== "string" || !fields.action) return undefined;
+	if (typeof fields.revision !== "number") return undefined;
+	return {
+		action: fields.action,
+		data: fields.data === undefined ? {} : fields.data,
+		revision: fields.revision,
+	};
+}
+
 // A cancelled question is stored with a nil answers map, and `omitempty` on the
 // Go side then drops the key from the record entirely — so cancellation reaches
 // the client as an absent field, not as null. Both mean cancelled.
@@ -157,6 +173,8 @@ export type NormalizedEvent =
 			subtype?: string;
 			durationMs?: number;
 			exitCode?: number;
+			/** See `ToolRun.canvasRevision`. */
+			canvasRevision?: number;
 	  }
 	| {
 			/**
@@ -213,6 +231,7 @@ export type NormalizedEvent =
 			command?: PockodeCommandInvocation;
 			/** The files the user sent with the message. */
 			attachments?: FileBlock[];
+			canvasAction?: CanvasAction;
 	  }
 	| {
 			type: "permission_request";
@@ -335,6 +354,10 @@ export function normalizeEvent(
 						: undefined,
 				exitCode:
 					typeof record.exit_code === "number" ? record.exit_code : undefined,
+				canvasRevision:
+					typeof record.canvas_revision === "number"
+						? record.canvas_revision
+						: undefined,
 				// No `parent_tool_use_id`: a result joins its call by id at any
 				// depth, so whose call it was is already known where it lands.
 			};
@@ -401,6 +424,7 @@ export function normalizeEvent(
 				answering: normalizeAnswering(record.answering),
 				command: normalizeCommand(record.command),
 				attachments: parseFileBlocks(record.attachments),
+				canvasAction: normalizeCanvasAction(record.canvas_action),
 			};
 		case "permission_request":
 			return {
@@ -993,6 +1017,7 @@ export function applyServerEvent(
 			answering: event.answering,
 			command: event.command,
 			attachments: event.attachments,
+			canvasAction: event.canvasAction,
 		});
 	}
 
@@ -1842,6 +1867,9 @@ function settleToolRun(
 		...run,
 		...(event.durationMs !== undefined ? { durationMs: event.durationMs } : {}),
 		...(event.exitCode !== undefined ? { exitCode: event.exitCode } : {}),
+		...(event.canvasRevision !== undefined
+			? { canvasRevision: event.canvasRevision }
+			: {}),
 	};
 
 	if (event.subtype === "background_started") {
@@ -2279,6 +2307,7 @@ interface UserMessageOptions {
 	answering?: QuestionAnswerRecord[];
 	command?: PockodeCommandInvocation;
 	attachments?: FileBlock[];
+	canvasAction?: CanvasAction;
 }
 
 /**
@@ -2382,6 +2411,7 @@ export function applyUserMessage(
 		...(options?.answering ? { answering: options.answering } : {}),
 		...(options?.command ? { command: options.command } : {}),
 		...(options?.attachments ? { attachments: options.attachments } : {}),
+		...(options?.canvasAction ? { canvasAction: options.canvasAction } : {}),
 	};
 
 	return appendUserMessage(messages, userMessage, () =>

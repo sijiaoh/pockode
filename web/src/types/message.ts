@@ -1,4 +1,5 @@
 import type { AuthCredentialParams } from "@pockode/shared";
+import type { CanvasAction, CanvasSize, CanvasState } from "./canvas";
 import type { ContentBlock, FileBlock } from "./content";
 import type { AgentType } from "./settings";
 import type { WorkType } from "./work";
@@ -94,6 +95,11 @@ export interface SessionListItem {
 	unanswered_questions?: number;
 	/** Absent on a session that was created rather than forked. */
 	forked_from?: ForkOrigin;
+	/**
+	 * A canvas session (docs/canvas-ui.md §13.1). Fixed at birth, so this copy
+	 * cannot disagree with `SessionDetail.canvas`. Absent on an ordinary one.
+	 */
+	canvas?: true;
 }
 
 /** One story a session watches: enough to list it and open its detail. */
@@ -231,6 +237,12 @@ export interface ToolRun {
 	durationMs?: number;
 	/** The command's exit status, when the engine reports one separately. */
 	exitCode?: number;
+	/**
+	 * The canvas revision a successful `canvas_render` / `canvas_update` drew,
+	 * as the server stamped it on the result record (docs/canvas-ui.md §13.4).
+	 * A fact about the call, never the canvas's current revision.
+	 */
+	canvasRevision?: number;
 	/**
 	 * When this client first saw the call. Live only — a history record carries
 	 * no timestamp, so a replayed run gets none and draws no stopwatch.
@@ -508,6 +520,13 @@ export interface UserMessage {
 	 * server's description (type and dimensions read from the stored bytes).
 	 */
 	attachments?: FileBlock[];
+	/**
+	 * What the user did on a canvas page, when this message is one. The bubble
+	 * is drawn from this; `content` is the action as the agent reads it, machine
+	 * text no user wrote — which is why it never goes back into the input
+	 * (docs/canvas-ui.md §6.2).
+	 */
+	canvasAction?: CanvasAction;
 }
 
 /**
@@ -877,6 +896,11 @@ export interface MessageParams {
 	 * nothing the session has or the session's agent cannot receive files.
 	 */
 	attachments?: MessageAttachmentParams[];
+	/**
+	 * The device's canvas size, for a canvas session (docs/canvas-ui.md §5).
+	 * Ignored for any other session.
+	 */
+	canvas_size?: CanvasSize;
 }
 
 /** One uploaded file a message carries; `name` is what the user calls it. */
@@ -912,6 +936,8 @@ export interface MessageResult {
 	command?: PockodeCommandInvocation;
 	/** The files the message carried, as its record describes them. */
 	attachments?: FileBlock[];
+	/** The reply to `chat.canvas_action`: the action as its record carries it. */
+	canvas_action?: CanvasAction;
 }
 
 export interface InterruptParams {
@@ -1045,6 +1071,8 @@ export interface SessionDetail {
 	 * Absent means none.
 	 */
 	watched_stories?: WatchedStory[];
+	/** See `SessionListItem.canvas`. */
+	canvas?: boolean;
 	/**
 	 * Always present: a session that has spent nothing carries an empty usage,
 	 * not a missing one, which is what "nothing reported yet" is keyed on.
@@ -1159,6 +1187,12 @@ export interface ChatMessagesSubscribeResult extends ChatMessagesHistoryPage {
 	 * and the badge come from the derived status.
 	 */
 	tool_activity?: Record<string, string>;
+	/**
+	 * A canvas session's current canvas when the subscription opened; absent
+	 * for every other session. State, not part of the page of history it
+	 * arrives with (docs/canvas-ui.md §13.2).
+	 */
+	canvas?: CanvasState;
 }
 
 export interface ChatMessagesHistoryParams {
@@ -1169,6 +1203,12 @@ export interface ChatMessagesHistoryParams {
 }
 
 export type ChatMessagesHistoryResult = ChatMessagesHistoryPage;
+
+/** `session.create`'s params; absent fields are an ordinary session. */
+export interface SessionCreateParams {
+	/** A canvas session (docs/canvas-ui.md §13.1). Fixed at birth. */
+	canvas?: boolean;
+}
 
 export interface SessionSetModeParams {
 	session_id: string;
@@ -1266,6 +1306,9 @@ export type ServerNotification =
 			meta?: SystemMessageMeta;
 			/** The posted questions this message answers; see QuestionAnswerRecord. */
 			answering?: QuestionAnswerRecord[];
+			canvas_action?: CanvasAction;
+			/** The sender's canvas size. For the agent; nothing draws it. */
+			canvas_size?: CanvasSize;
 	  }
 	| {
 			type: "tool_call";
@@ -1306,6 +1349,11 @@ export type ServerNotification =
 			duration_ms?: number;
 			/** Absent for every tool that is not a command that ran. */
 			exit_code?: number;
+			/**
+			 * The revision a successful canvas call drew, stamped by the server
+			 * (docs/canvas-ui.md §13.4). Absent on every other result.
+			 */
+			canvas_revision?: number;
 			/** See the `text` record. */
 			parent_tool_use_id?: string;
 	  }
@@ -1441,3 +1489,12 @@ export type ServerNotification =
 			message_id: string;
 	  }
 	| { type: "command_output"; content: string };
+
+/**
+ * What a chat subscription delivers: the records above, and the canvas state,
+ * which shares their `chat.` prefix but is not a record — no seq, never in
+ * history — and must never reach the message reducer (docs/canvas-ui.md §13.2).
+ */
+export type ChatNotification =
+	| ServerNotification
+	| { type: "canvas_state"; canvas: CanvasState };

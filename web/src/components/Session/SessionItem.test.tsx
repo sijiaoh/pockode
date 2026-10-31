@@ -260,3 +260,18 @@ describe("a row read out of another worktree", () => {
 		expect(onDelete).toHaveBeenCalledWith("s1", "old-fix");
 	});
 });
+
+// A canvas session opens on a different screen, so its row says so first.
+describe("a canvas session's row", () => {
+	it("is named a canvas", () => {
+		renderRow({ canvas: true, work_id: undefined });
+		expect(
+			screen.getByRole("button", { name: /^Chat, canvas/ }),
+		).toBeInTheDocument();
+	});
+
+	it("is not named one for an ordinary session", () => {
+		renderRow({ work_id: undefined });
+		expect(screen.queryByText(", canvas")).not.toBeInTheDocument();
+	});
+});

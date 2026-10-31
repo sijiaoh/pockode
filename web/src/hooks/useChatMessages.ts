@@ -7,6 +7,7 @@ import {
 	useState,
 } from "react";
 import { IDLE_TURN } from "../lib/activity";
+import { canvasActions, useCanvasStore } from "../lib/canvasStore";
 import {
 	type ChatAttachment,
 	toAttachmentParams,
@@ -30,6 +31,7 @@ import {
 	stampMessageAnchorSeq,
 	updatePermissionRequestStatus,
 } from "../lib/messageReducer";
+import type { CanvasActionInput } from "../lib/rpc";
 import {
 	selectSessionDetail,
 	useSessionDetailStore,
@@ -44,9 +46,11 @@ import {
 	isInvalidParamsRejection,
 	useWSStore,
 } from "../lib/wsStore";
+import type { CanvasState } from "../types/canvas";
 import type {
 	AssistantMessage,
 	ChatMessagesSubscribeResult,
+	ChatNotification,
 	HistorySeq,
 	Message,
 	PermissionResponseParams,
@@ -177,6 +181,15 @@ interface UseChatMessagesReturn {
 		answering?: QuestionAnswerRecord[],
 		attachments?: ChatAttachment[],
 	) => Promise<boolean>;
+	/**
+	 * Sends what the user did on the canvas (docs/canvas-ui.md §6.4), echoed
+	 * into the transcript as a typed message is — the sender is left out of the
+	 * broadcast. Rejects on every failure, since the page that sent it is told
+	 * the outcome (§8.2): a refusal takes the echo back, as nothing was
+	 * recorded; anything else leaves it with the failure under it, as a typed
+	 * message's, because it may have been delivered.
+	 */
+	sendCanvasAction: (input: CanvasActionInput) => Promise<void>;
 	interrupt: () => Promise<void>;
 	permissionResponse: (params: PermissionResponseParams) => Promise<void>;
 	setMode: (mode: SessionMode) => Promise<void>;
@@ -199,6 +212,7 @@ interface UseChatMessagesReturn {
 // Actions are stable references - get once at module level
 const {
 	sendMessage,
+	sendCanvasAction,
 	invalidateCommandCache,
 	chatMessagesSubscribe,
 	chatMessagesHistory,
@@ -606,9 +620,43 @@ export function useChatMessages({
 	// as long as `enabled` is false, which is what makes "waiting for the session
 	// to resolve" and "waiting for its history" a single continuous wait for
 	// callers timing a loading indicator against it.
+	//
+	// The canvas is taken out here, bound to the session this subscription is
+	// for. It is state, not a record: it has no seq and no place in the
+	// transcript, and the reducer would draw it as a raw record
+	// (docs/canvas-ui.md §13.2). Every push and the reply are each the whole
+	// state, so they need no holding back — the store keeps the highest
+	// revision, which is also how a push that overtook the reply is compared
+	// with it. And none of them is read off the render's `sessionId`: a push
+	// or reply of the session being left, landing before its subscription is
+	// closed, would otherwise be filed under the session just opened, and its
+	// revision would then outrank that session's own.
+	// Set while rendering, so the session being left stops counting before its
+	// subscription's cleanup has even run; null once unmounted (below).
+	const openSessionRef = useRef<string | null>(sessionId);
+	openSessionRef.current = sessionId;
 	const subscribe = useCallback(
-		(onNotification: (notification: ServerNotification) => void) =>
-			chatMessagesSubscribe(sessionId, onNotification),
+		async (onNotification: (notification: ServerNotification) => void) => {
+			const receive = (canvas: CanvasState) => {
+				if (openSessionRef.current === sessionId) {
+					canvasActions.receive(sessionId, canvas);
+				}
+			};
+			const result = await chatMessagesSubscribe(
+				sessionId,
+				(notification: ChatNotification) => {
+					if (notification.type === "canvas_state") {
+						receive(notification.canvas);
+						return;
+					}
+					onNotification(notification);
+				},
+			);
+			// A resubscribe after a reconnect hands back the current canvas, so
+			// a push missed while away costs nothing.
+			if (result.initial?.canvas) receive(result.initial.canvas);
+			return result;
+		},
 		[sessionId],
 	);
 
@@ -659,6 +707,19 @@ export function useChatMessages({
 		},
 		[endThinking],
 	);
+
+	// Held only while its transcript is: a page can be 256KB, and the next
+	// subscribe hands the current one back. Closing the ref too keeps a reply
+	// or push still on its way after an unmount from bringing it back. Set
+	// here as well as while rendering, for an effect that is run again without
+	// a render in between (StrictMode).
+	useEffect(() => {
+		openSessionRef.current = sessionId;
+		return () => {
+			if (openSessionRef.current === sessionId) openSessionRef.current = null;
+			canvasActions.forget(sessionId);
+		};
+	}, [sessionId]);
 
 	const handleSubscribeError = useCallback((err: unknown) => {
 		console.error("Failed to subscribe to chat messages:", err);
@@ -757,36 +818,32 @@ export function useChatMessages({
 		}
 	}, [sessionId, isView, sourceWorktree]);
 
-	const sendUserMessageHandler = useCallback(
+	/**
+	 * The one path a message sent from this screen takes: echoed at once, as
+	 * `echo` with a placeholder for the reply when it opens a turn, then filled
+	 * in from the server's reply — or taken back, or left with the failure
+	 * under it. Typed messages and canvas actions differ only in what they
+	 * send and what the reply fills in.
+	 */
+	const deliverEcho = useCallback(
 		async (
-			content: string,
-			answering?: QuestionAnswerRecord[],
-			attachments?: ChatAttachment[],
+			echo: UserMessage,
+			send: () => Promise<{ seq?: HistorySeq; update: Partial<UserMessage> }>,
+			{
+				takeBack,
+				rethrow,
+				settle,
+			}: {
+				/** Whether a failure means nothing was recorded, so the echo goes. */
+				takeBack: (error: unknown) => boolean;
+				/** Rethrow a failure that was reported into the transcript too. */
+				rethrow: boolean;
+				/** What the sent message settles beyond itself. */
+				settle?: (messages: Message[], messageId?: string) => Message[];
+			},
 		): Promise<boolean> => {
-			// Normalised once, so "present" and "non-empty" cannot come apart: an
-			// empty list would otherwise echo a bubble drawn from no answers, send
-			// no `answering`, and take the wrong branch on failure.
-			const answers = answering?.length ? answering : undefined;
-			const files = attachments?.length ? attachments : undefined;
-			// Drawn as the command row from the first frame rather than as a bubble
-			// that turns into one: the prompt it stands for is the server's to
-			// expand, and arrives with the reply.
-			const command = parsePockodeCommand(content) ?? undefined;
-			const userMessageId = generateUUID();
+			const userMessageId = echo.id;
 			const assistantMessageId = generateUUID();
-
-			const userMessage: UserMessage = {
-				id: userMessageId,
-				role: "user",
-				content: command ? "" : content,
-				status: "complete",
-				createdAt: new Date(),
-				...(command ? { command } : {}),
-				// Echoed with the bubble so an answer draws as answers rather than
-				// as the flattened text the agent reads.
-				...(answers ? { answering: answers } : {}),
-				...(files ? { attachments: toEchoFileBlocks(files) } : {}),
-			};
 
 			// Empty assistant message ready to receive streaming content
 			const assistantMessage: AssistantMessage = {
@@ -803,7 +860,7 @@ export function useChatMessages({
 			// turn. The placeholder is passed as a thunk because the mid-turn shape
 			// does not want one.
 			setMessages((prev) =>
-				appendUserMessage(prev, userMessage, () => assistantMessage),
+				appendUserMessage(prev, echo, () => assistantMessage),
 			);
 
 			try {
@@ -812,38 +869,16 @@ export function useChatMessages({
 				// Without it the bubble just added could not be forked from until the
 				// session was reloaded. An older server sends none, which simply leaves
 				// the message unaddressable, as every locally sent one used to be.
-				const {
-					seq,
-					messageId,
-					expanded,
-					attachments: described,
-				} = await sendMessage(
-					sessionId,
-					content,
-					answers && toAnswerParams(answers),
-					// Only when there are any, so a message without files is sent with
-					// exactly the arguments it always was.
-					...(files ? [toAttachmentParams(files)] : []),
-				);
+				const { seq, update } = await send();
 				setMessages((prev) => {
-					// The server's text over the echo's — a command's parse and prompt,
-					// or the body written from the answers: the sender is left out of
-					// the broadcast, so this is its one copy of what the agent was
-					// actually sent.
-					//
-					// The files likewise: the echo had only the browser's guess at each
-					// type, the reply has what the stored bytes are.
-					//
-					// And the record's id, which is how a Stop throwing this message
-					// away names it: without it the one tab that pressed Stop is the
-					// one that could not show the message's ending.
-					const update = {
-						...expanded,
-						...(described ? { attachments: described } : {}),
-						...(messageId ? { messageId } : {}),
-					};
+					// The sender is left out of the broadcast, so the reply is its one
+					// copy of what the record holds — what the agent was actually
+					// sent, the files as stored, and the record's id, which is how a
+					// Stop throwing this message away names it: without it the one tab
+					// that pressed Stop is the one that could not show the message's
+					// ending.
 					const filled =
-						expanded || described || messageId
+						Object.keys(update).length > 0
 							? prev.map((m) =>
 									m.id === userMessageId && m.role === "user"
 										? { ...m, ...update }
@@ -851,40 +886,12 @@ export function useChatMessages({
 								)
 							: prev;
 					const stamped = stampMessageAnchorSeq(filled, userMessageId, seq);
-					// The cards this message settled, and this client has to settle
-					// them itself: the sender is left out of the broadcast that
-					// carries the record, so nothing else is coming to do it. Only
-					// after the send — a refused answer settles nothing.
-					return answers
-						? applyAnswering(stamped, answers, messageId)
-						: stamped;
+					return settle ? settle(stamped, update.messageId) : stamped;
 				});
-				// Not at click time: the server records a slash command's use only
-				// once the send has gone through, and a list fetched in between would
-				// be cached without it.
-				if (content.startsWith("/")) invalidateCommandCache();
 				return true;
 			} catch (error) {
 				console.error("Failed to send message:", error);
-				// An answering send is refused whole — nothing was written, nothing
-				// was delivered, and the questions are all still open — so the echo
-				// is taken back out rather than left looking sent with a failure
-				// pinned under it. The sheet is where the reason belongs: it holds
-				// the drafts, and it is what the user is looking at.
-				//
-				// A command the server refused (an unknown name, a worktree with no
-				// branch, or a send refused as any message's would be) is gone the
-				// same way, and the caller restores what was typed and says why.
-				// Only a refusal: a timeout or a dropped socket may have been
-				// delivered, and handing the draft back would invite running the
-				// command twice — that takes the ordinary path below. A message
-				// carrying files is taken back on a refusal for the same reason: the
-				// files are the composer's to keep, and an agent that cannot receive
-				// them is said so there.
-				if (
-					answers ||
-					((command || files) && isInvalidParamsRejection(error))
-				) {
+				if (takeBack(error)) {
 					setMessages((prev) =>
 						prev.filter(
 							(m) => m.id !== userMessageId && m.id !== assistantMessageId,
@@ -933,10 +940,166 @@ export function useChatMessages({
 					});
 					return reported;
 				});
+				if (rethrow) throw error;
 				return false;
 			}
 		},
-		[sessionId],
+		[],
+	);
+
+	// The size this device last measured in canvas view, sent with every
+	// message to a canvas session — from chat view too (docs/canvas-ui.md §5).
+	// Read at send time: it is a fact about the moment of sending.
+	const isCanvasSession = sessionDetail?.canvas === true;
+	const currentCanvasSize = useCallback(
+		() =>
+			isCanvasSession
+				? (useCanvasStore.getState().size ?? undefined)
+				: undefined,
+		[isCanvasSession],
+	);
+
+	const sendUserMessageHandler = useCallback(
+		async (
+			content: string,
+			answering?: QuestionAnswerRecord[],
+			attachments?: ChatAttachment[],
+		): Promise<boolean> => {
+			// Normalised once, so "present" and "non-empty" cannot come apart: an
+			// empty list would otherwise echo a bubble drawn from no answers, send
+			// no `answering`, and take the wrong branch on failure.
+			const answers = answering?.length ? answering : undefined;
+			const files = attachments?.length ? attachments : undefined;
+			// Drawn as the command row from the first frame rather than as a bubble
+			// that turns into one: the prompt it stands for is the server's to
+			// expand, and arrives with the reply.
+			const command = parsePockodeCommand(content) ?? undefined;
+			const canvasSize = currentCanvasSize();
+
+			const echo: UserMessage = {
+				id: generateUUID(),
+				role: "user",
+				content: command ? "" : content,
+				status: "complete",
+				createdAt: new Date(),
+				...(command ? { command } : {}),
+				// Echoed with the bubble so an answer draws as answers rather than
+				// as the flattened text the agent reads.
+				...(answers ? { answering: answers } : {}),
+				...(files ? { attachments: toEchoFileBlocks(files) } : {}),
+			};
+
+			const sent = await deliverEcho(
+				echo,
+				async () => {
+					const {
+						seq,
+						messageId,
+						expanded,
+						attachments: described,
+					} = await sendMessage(
+						sessionId,
+						content,
+						answers && toAnswerParams(answers),
+						// Only what there is, so a message without files or a size is
+						// sent with exactly the arguments it always was.
+						...(files || canvasSize
+							? [files && toAttachmentParams(files)]
+							: []),
+						...(canvasSize ? [canvasSize] : []),
+					);
+					// A command's parse and prompt, or the body written from the
+					// answers; the files with the type the stored bytes are, where the
+					// echo had only the browser's guess.
+					return {
+						seq,
+						update: {
+							...expanded,
+							...(described ? { attachments: described } : {}),
+							...(messageId ? { messageId } : {}),
+						},
+					};
+				},
+				{
+					// An answering send is refused whole — nothing was written, nothing
+					// was delivered, and the questions are all still open — so the echo
+					// is taken back out rather than left looking sent with a failure
+					// pinned under it. The sheet is where the reason belongs: it holds
+					// the drafts, and it is what the user is looking at.
+					//
+					// A command the server refused (an unknown name, a worktree with no
+					// branch, or a send refused as any message's would be) is gone the
+					// same way, and the caller restores what was typed and says why.
+					// Only a refusal: a timeout or a dropped socket may have been
+					// delivered, and handing the draft back would invite running the
+					// command twice — that takes the ordinary path. A message carrying
+					// files is taken back on a refusal for the same reason: the files
+					// are the composer's to keep, and an agent that cannot receive them
+					// is said so there.
+					takeBack: (error) =>
+						answers !== undefined ||
+						((command !== undefined || files !== undefined) &&
+							isInvalidParamsRejection(error)),
+					rethrow: false,
+					// The cards this message settled, and this client has to settle
+					// them itself: the sender is left out of the broadcast that
+					// carries the record, so nothing else is coming to do it. Only
+					// after the send — a refused answer settles nothing.
+					settle: answers
+						? (messages, messageId) =>
+								applyAnswering(messages, answers, messageId)
+						: undefined,
+				},
+			);
+			// Not at click time: the server records a slash command's use only
+			// once the send has gone through, and a list fetched in between would
+			// be cached without it.
+			if (sent && content.startsWith("/")) invalidateCommandCache();
+			return sent;
+		},
+		[sessionId, deliverEcho, currentCanvasSize],
+	);
+
+	const sendCanvasActionHandler = useCallback(
+		async (input: CanvasActionInput): Promise<void> => {
+			// Drawn from `canvasAction` from the first frame; `content` is the
+			// agent's text, which only the server writes.
+			const echo: UserMessage = {
+				id: generateUUID(),
+				role: "user",
+				content: "",
+				status: "complete",
+				createdAt: new Date(),
+				canvasAction: {
+					action: input.action,
+					data: input.data === undefined ? {} : input.data,
+					revision: input.revision,
+				},
+			};
+			await deliverEcho(
+				echo,
+				async () => {
+					// Only a canvas session has a page to act on, so the size goes
+					// with it even before the session's detail has said so.
+					const { seq, messageId, content, canvasAction } =
+						await sendCanvasAction(
+							sessionId,
+							input,
+							useCanvasStore.getState().size ?? undefined,
+						);
+					return {
+						seq,
+						update: {
+							...(content !== undefined ? { content } : {}),
+							...(canvasAction ? { canvasAction } : {}),
+							...(messageId ? { messageId } : {}),
+						},
+					};
+				},
+				{ takeBack: isInvalidParamsRejection, rethrow: true },
+			);
+		},
+		[sessionId, deliverEcho],
 	);
 
 	const resetPrompt = useCallback(
@@ -1063,6 +1226,7 @@ export function useChatMessages({
 		settingError,
 		clearSettingError,
 		sendUserMessage: sendUserMessageHandler,
+		sendCanvasAction: sendCanvasActionHandler,
 		interrupt: useCallback(
 			() => actions.interrupt(sessionId),
 			[actions, sessionId],

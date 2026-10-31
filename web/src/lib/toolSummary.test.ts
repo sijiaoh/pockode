@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { ToolRunStatus } from "../types/message";
 import { toolSummary } from "./toolSummary";
 
 const WORK_DIR = "/Users/test/project";
@@ -144,6 +145,71 @@ describe("toolSummary", () => {
 			title: "html_render",
 			chip: "pockode",
 			detail: "Latency report",
+		});
+	});
+
+	// Never the page as detail, which is what an MCP call's first value would be
+	// (docs/canvas-ui.md §12).
+	it("words a canvas render as a sentence, under both engines' names", () => {
+		for (const name of [
+			"mcp__pockode__canvas_render",
+			"pockode:canvas_render",
+		]) {
+			expect(
+				toolSummary(name, { html: "<h1>Board</h1>" }, WORK_DIR, {
+					status: "success",
+				}),
+			).toEqual({
+				title: "Drew the canvas",
+				detail: "",
+				detailTail: "",
+				mono: false,
+			});
+		}
+	});
+
+	// One row is the running step, the call that failed and the permission
+	// card's request; only one of them has drawn anything.
+	it("says a canvas call drew only once it has", () => {
+		const title = (name: string, status?: ToolRunStatus) =>
+			toolSummary(name, { ops: [] }, WORK_DIR, status && { status }).title;
+		expect(title("pockode:canvas_update", "running")).toBe(
+			"Updating the canvas",
+		);
+		expect(title("pockode:canvas_update", "error")).toBe("Update the canvas");
+		expect(title("pockode:canvas_render", "interrupted")).toBe(
+			"Draw the canvas",
+		);
+		expect(title("pockode:canvas_render")).toBe("Draw the canvas");
+		// Returned after the turn was cut short, and drew all the same.
+		expect(
+			toolSummary("pockode:canvas_render", {}, WORK_DIR, {
+				status: "interrupted",
+				canvasRevision: 8,
+			}).title,
+		).toBe("Drew the canvas");
+	});
+
+	it("names the regions a canvas update touched, each once", () => {
+		expect(
+			toolSummary(
+				"pockode:canvas_update",
+				{
+					ops: [
+						{ op: "replace", region: "results", html: "<li>a</li>" },
+						{ op: "append", region: "log", html: "<p>b</p>" },
+						{ op: "append", region: "results", html: "<li>c</li>" },
+						{ op: "remove", region: "spinner" },
+					],
+				},
+				WORK_DIR,
+				{ status: "success" },
+			),
+		).toEqual({
+			title: "Updated the canvas",
+			detail: "results, log, spinner",
+			detailTail: "",
+			mono: true,
 		});
 	});
 

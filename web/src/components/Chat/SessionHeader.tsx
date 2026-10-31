@@ -1,6 +1,13 @@
 import { useIsExpanded } from "@pockode/shared";
 import { ChevronDown, ChevronLeft, ChevronRight, Zap } from "lucide-react";
-import { useCallback, useEffect, useId, useRef, useState } from "react";
+import {
+	type ReactNode,
+	useCallback,
+	useEffect,
+	useId,
+	useRef,
+	useState,
+} from "react";
 import { AUTO_ID } from "../../lib/agentOptions";
 import { useChatUIConfig } from "../../lib/registries/chatUIRegistry";
 import { useHeaderUIConfig } from "../../lib/registries/headerUIRegistry";
@@ -57,6 +64,11 @@ interface Props {
 	onModelChange: (model: string) => Promise<void>;
 	onEffortChange: (effort: string) => Promise<void>;
 	onModeChange: (mode: SessionMode) => Promise<void>;
+	/**
+	 * A canvas session's **Canvas | Chat** switch, drawn after the title
+	 * (docs/canvas-ui.md §2). Absent on an ordinary session.
+	 */
+	viewSwitch?: ReactNode;
 }
 
 /**
@@ -83,6 +95,7 @@ function SessionHeader({
 	onModelChange,
 	onEffortChange,
 	onModeChange,
+	viewSwitch,
 }: Props) {
 	const [isOpen, setIsOpen] = useState(false);
 	const [view, setView] = useState<"root" | "engine">("root");
@@ -373,6 +386,7 @@ function SessionHeader({
 					/>
 				</button>
 			</h1>
+			{viewSwitch && <div className="ml-2 flex shrink-0">{viewSwitch}</div>}
 
 			<ResponsivePanel
 				isOpen={isOpen}

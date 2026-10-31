@@ -5,7 +5,9 @@ until the reader allows it, how the reader learns what was held back, and what
 allowing does. It covers both kinds of page frame:
 
 - **An agent's page** — an `html_render` card in the chat and its full-screen
-  view ([tool-call-ui.md](tool-call-ui.md#a-page-the-agent-drew-html_render)).
+  view ([tool-call-ui.md](tool-call-ui.md#a-page-the-agent-drew-html_render)),
+  and a canvas session's canvas, drawn in the same frame
+  ([canvas-ui.md §4](canvas-ui.md#4-the-page-frame)).
 - **A workspace page** — an `.html` file in the Files tab, in a commit, and in
   the media viewer, served from `/api/raw`
   ([file.md](file.md#html-pages), [media-viewer.md](media-viewer.md#the-html-stage)).
@@ -21,8 +23,9 @@ there and is not repeated; this document is what it takes for a page.
 |------|------|
 | `web/src/lib/pageHosts.ts` | The agent page's policy (`pagePolicy`), the in-page reporter and the messages it sends, which refused URL is which host (`refusedHost`, `addRefusal`), the workspace page's wrapper (`rawPageWrapper`), the app-input watch behind opening a link (`activatedIn`), and the allowance itself (`allowPageHosts`) |
 | `web/src/hooks/usePageReports.ts` | Takes a frame's reports — from the page's window and the wrapper's only — and turns them into what the strip shows |
-| `web/src/components/ui/PageHostsStrip.tsx` | The strip, on all four surfaces |
-| `web/src/components/Chat/HtmlFrame.tsx` | An agent page: its wrapper, its `srcdoc`, the capability for the project's root and the height reporter |
+| `web/src/components/ui/PageHostsStrip.tsx` | The strip, on all five surfaces |
+| `web/src/lib/agentPage.ts` | An agent page's sandbox, its `srcdoc` and wrapper, and the capability for the project's root — shared by `HtmlFrame` and `CanvasFrame` |
+| `web/src/components/Chat/HtmlFrame.tsx` | An `html_render` page: its frame, the height reporter, its strip |
 | `web/src/components/Media/usePageFrame.ts` | A workspace page: the capability for its hosts, one wrapper per capability, the strip's props |
 | `server/filetransfer/raw.go` | The workspace page's policy (`pagePolicy`), the hosts bound to a capability (`RawGrant.Hosts`), the reporter injected into a framed page (`pageReporter`, `reporterOffset`) |
 
@@ -75,6 +78,7 @@ Agent page (card)                          Workspace page (Files)
 | `FullScreenViewer` (agent page) | Under the viewer's header, above the frame; hidden while the source is shown |
 | `PagePreview` (Files, commit) | Under the page bar, above the frame |
 | `HtmlStage` (media viewer) | Under the toolbar, above the frame, as in `PagePreview` |
+| `CanvasFrame` (a canvas session) | Under the session header (or the permission banner), above the canvas; only in canvas view ([canvas-ui.md §4](canvas-ui.md#4-the-page-frame)) |
 
 **Look.** It is an offer, not a warning, as the Markdown placeholder is: muted,
 never the warning or error colour, so it does not read as "this page is
@@ -223,6 +227,9 @@ show it.
   - *An agent page* — that `html_render` call: its card and its full-screen
     view. Another call, even with the same HTML, is another page and asks
     again; this is the Markdown rule's "for this text".
+  - *A canvas* — that session: every revision it draws, since a canvas is
+    redrawn on every revision and asking again each time would be asking for
+    the same page ([canvas-ui.md §4](canvas-ui.md#4-the-page-frame)).
   - *A workspace page* — that file (its tree origin: the worktree, or the
     commit, and its path), wherever it is shown: in place, and in the media
     viewer opened from it. A page the reader follows a link to inside the
@@ -512,7 +519,8 @@ by writing a Markdown image. Suppressed reports only break the page itself.
 
 The allowance is a map from page to hosts in the app's own memory
 (`allowPageHosts` / `useAllowedPageHosts`, `web/src/lib/pageHosts.ts`), keyed
-by the `html_render` call's id for an agent page and by worktree and tree
+by the `html_render` call's id for an agent page, by the session
+(`canvas:<session id>`) for a canvas, and by worktree and tree
 origin (`file:<worktree>:<origin>`) for a workspace page. Only the strip's
 Load writes to it. From there it reaches a policy through the app alone:
 

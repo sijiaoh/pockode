@@ -2,8 +2,9 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { describe, expect, it } from "vitest";
+import { HTML_FRAME_SANDBOX } from "../../lib/agentPage";
 import { pagePolicy } from "../../lib/pageHosts";
-import { HTML_FRAME_SANDBOX, HtmlFrame } from "./HtmlFrame";
+import { HtmlFrame } from "./HtmlFrame";
 
 function sandboxTokens(frame: Element): string[] {
 	return frame.getAttribute("sandbox")?.split(/\s+/) ?? [];

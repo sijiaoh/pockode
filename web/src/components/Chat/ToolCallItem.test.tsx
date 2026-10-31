@@ -1093,4 +1093,51 @@ describe("ToolCallItem", () => {
 		).toBeInTheDocument();
 		expect(screen.queryByText(/"plan"/)).not.toBeInTheDocument();
 	});
+
+	describe("a canvas call", () => {
+		// The revision is the server's stamp on the result (docs/canvas-ui.md
+		// §12, §13.4); the page itself is drawn in the canvas, never here.
+		it("is a row naming the revision it drew", () => {
+			draw({
+				name: "mcp__pockode__canvas_update",
+				input: {
+					ops: [{ op: "replace", region: "results", html: "<li>x</li>" }],
+				},
+				status: "success",
+				result: "Canvas revision 8 · drawn for 390×664.",
+				canvasRevision: 8,
+			});
+
+			const row = screen.getByRole("button", { expanded: false });
+			expect(row).toHaveTextContent("Updated the canvas");
+			expect(row).toHaveTextContent("results");
+			expect(row).toHaveTextContent("rev 8");
+		});
+
+		it("does not say it drew while it is still drawing", () => {
+			draw({ name: "pockode:canvas_render", input: { html: "<p>x</p>" } });
+			expect(screen.getByRole("button", { expanded: false })).toHaveTextContent(
+				"Drawing the canvas",
+			);
+		});
+
+		// The refusal's first line says only that nothing changed; the reasons
+		// are the list under it (docs/canvas-ui.md §9.4).
+		it("gives a refusal's first reason, and how many more there are", () => {
+			draw({
+				name: "pockode:canvas_update",
+				input: { ops: [{ op: "remove", region: "resluts" }] },
+				status: "error",
+				result:
+					'Canvas not changed (still revision 7):\n- There is no region "resluts". Regions on the page: results, log.\n- Fixed widths wider than the canvas.',
+			});
+
+			const row = screen.getByRole("button", { expanded: false });
+			expect(row).toHaveTextContent("Update the canvas");
+			expect(row).toHaveTextContent(
+				'There is no region "resluts". Regions on the page: results, log. (+1 more)',
+			);
+			expect(row).not.toHaveTextContent(/rev \d|Canvas not changed/);
+		});
+	});
 });

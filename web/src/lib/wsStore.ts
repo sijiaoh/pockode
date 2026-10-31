@@ -29,10 +29,10 @@ import type {
 	ChatMessagesHistoryParams,
 	ChatMessagesHistoryResult,
 	ChatMessagesSubscribeResult,
+	ChatNotification,
 	HistorySeq,
 	RemoteUrlChangedNotification,
 	RemoteUrlSubscribeResult,
-	ServerNotification,
 	SessionDetailChangedNotification,
 	SessionDetailSubscribeResult,
 	SessionListChangedNotification,
@@ -183,7 +183,7 @@ export interface WatchActions {
 	sessionDetailUnsubscribe: (id: string) => Promise<void>;
 	chatMessagesSubscribe: (
 		sessionId: string,
-		callback: (notification: ServerNotification) => void,
+		callback: (notification: ChatNotification) => void,
 	) => Promise<WatchSubscribeResult<ChatMessagesSubscribeResult>>;
 	/** Fetches the page of history older than `beforeSeq` (exclusive). */
 	chatMessagesHistory: (
@@ -327,7 +327,7 @@ const sessionDetailWatchCallbacks = new Map<
 // Key: subscriptionId -> callback (unified with other watchers)
 const chatMessagesCallbacks = new Map<
 	string,
-	(notification: ServerNotification) => void
+	(notification: ChatNotification) => void
 >();
 
 // App-level (global) watch callbacks.
@@ -750,7 +750,7 @@ function handleNotification(method: string, params: unknown): void {
 		const notification = {
 			type: eventType,
 			...rest,
-		} as ServerNotification;
+		} as ChatNotification;
 
 		// Route by subscription ID (consistent with other watchers)
 		chatMessagesCallbacks.get(id)?.(notification);
@@ -1241,7 +1241,7 @@ export const useWSStore = create<WSState>((set, get) => ({
 
 		chatMessagesSubscribe: async (
 			sessionId: string,
-			callback: (notification: ServerNotification) => void,
+			callback: (notification: ChatNotification) => void,
 		) => {
 			const { id, result } = await openSubscription(
 				"chat.messages.subscribe",

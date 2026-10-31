@@ -17,6 +17,7 @@ import {
 	vi,
 } from "vitest";
 import { page, userEvent as realUserEvent } from "vitest/browser";
+import { HTML_FRAME_SANDBOX } from "../../lib/agentPage";
 import {
 	allowedPageHosts,
 	pagePolicy,
@@ -30,7 +31,7 @@ import landedPath from "../../test/page-hosts/landed.htm?url";
 import signalPath from "../../test/page-hosts/signal.js?url";
 import { otherHost } from "../../test/testServerHosts";
 import { PRESS_HOLD_MS } from "../ui/PageHostsStrip";
-import { HTML_FRAME_SANDBOX, HtmlFrame } from "./HtmlFrame";
+import { HtmlFrame } from "./HtmlFrame";
 
 // What jsdom cannot do is enforce a policy, which is the whole guarantee: these
 // run real pages against real engines. The same server under another name

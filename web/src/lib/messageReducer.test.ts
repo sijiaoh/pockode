@@ -1761,6 +1761,34 @@ describe("messageReducer", () => {
 				});
 			});
 
+			// The bubble is drawn from the action; `content` is the agent's text.
+			it("carries a canvas action through to the message", () => {
+				const event = normalizeEvent({
+					type: "message",
+					content: 'Canvas action "create" from revision 7:\n{}',
+					canvas_action: { action: "create", data: {}, revision: 7 },
+					canvas_size: { width: 390, height: 664 },
+				} as Record<string, unknown>);
+				const messages = applyServerEvent([], event);
+				expect(messages[0]).toMatchObject({
+					role: "user",
+					canvasAction: { action: "create", data: {}, revision: 7 },
+				});
+			});
+
+			// `null` is JSON a page may send; it is not "no data".
+			it("keeps a canvas action's null data", () => {
+				const event = normalizeEvent({
+					type: "message",
+					content: 'Canvas action "clear" from revision 2:\nnull',
+					canvas_action: { action: "clear", data: null, revision: 2 },
+				} as Record<string, unknown>);
+				const messages = applyServerEvent([], event);
+				expect(messages[0]).toMatchObject({
+					canvasAction: { action: "clear", data: null, revision: 2 },
+				});
+			});
+
 			// The files a user sent travel on the record by id, so a replayed or
 			// broadcast message draws them as the sender's echo did.
 			it("carries the files a message was sent with", () => {
@@ -3209,6 +3237,32 @@ describe("messageReducer", () => {
 			});
 			expect(runsOf(messages[0])).toMatchObject([
 				{ durationMs: 4200, exitCode: 1 },
+			]);
+		});
+
+		// The server's stamp on a canvas call's result (docs/canvas-ui.md §13.4):
+		// read off the record, never off the result text, and kept on the run.
+		it("carries the canvas revision a canvas call's result was stamped with", () => {
+			const event = normalizeEvent({
+				type: "tool_result",
+				tool_use_id: "t1",
+				tool_result: "Canvas revision 8 · drawn for 390×664.",
+				canvas_revision: 8,
+			});
+			expect(event).toMatchObject({ canvasRevision: 8 });
+			expect(
+				normalizeEvent({
+					type: "tool_result",
+					tool_use_id: "t1",
+					tool_result: "Canvas revision 8 · drawn for 390×664.",
+				}),
+			).toMatchObject({ canvasRevision: undefined });
+
+			let messages: Message[] = [streamingRun()];
+			messages = applyServerEvent(messages, call("t1"));
+			messages = applyServerEvent(messages, event);
+			expect(runsOf(messages[0])).toMatchObject([
+				{ status: "success", canvasRevision: 8 },
 			]);
 		});
 

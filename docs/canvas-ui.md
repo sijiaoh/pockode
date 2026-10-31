@@ -33,11 +33,16 @@ It builds on, and does not repeat:
 
 ## Key Files
 
-Partly built. The canvas store, the session property, the pushed state, the
-link from a result to its revision, the fork, the history reads, lint, the send
-RPC, the size on messages, the pending permission requests on subscribe, the
-two tools and the guidance exist; the frontend is later work that reads this
-document. Rows marked *planned* do not exist yet.
+Partly built. The server side is complete: the store, the session property,
+the pushed state, the link from a result to its revision, the fork, the history
+reads, lint, the send RPC, the size on messages, the pending permission requests
+on subscribe, the two tools and the guidance. On the frontend, the client side
+of the contract (creating a canvas session, the pushed state, sending an
+action), both sides of the bridge, the page frame, the canvas screen (the view
+switch, the empty state, the collapsed input, the size measurement) and chat
+view's canvas rows and action bubbles exist. Still to come: the permission
+panel (§10), the activity strip (§11) and the history view with chat view's
+**Show** (§12, §13.5). Rows marked *planned* do not exist yet.
 
 | Path | Role |
 |------|------|
@@ -55,9 +60,26 @@ document. Rows marked *planned* do not exist yet.
 | `server/chat/client.go` | Copying the canvas into a fork in `Fork`, once its history is written (§13.6); sending a canvas action (`SendCanvasAction`); a message's size (`Sender.CanvasSize`) — reported to the store and added to what the agent reads (`deliveredText`) |
 | `server/ws/rpc_chat.go`, `server/ws/rpc_session.go` | The canvas half of `chat.messages.subscribe`, and `chat.message`'s `canvas_size`; `session.create`'s option |
 | `server/watch/chat_messages.go` | Pushing `chat.canvas_state`; the pending permission requests a subscription starts from (§10.4) |
-| `web/src/lib/canvasTools.ts` | *planned* — Both engines' names for the two tools, and nothing else |
-| `web/src/lib/canvasBridge.ts` | *planned* — The script injected into the page, the base stylesheet, and the message types of the bridge |
-| `web/src/components/Canvas/` | *planned* — `CanvasView`, `CanvasFrame`, `ActivityStrip`, `PermissionPanel` |
+| `web/src/lib/canvasTools.ts` | Both engines' names for the two tools (`isCanvasRenderTool`, `isCanvasUpdateTool`, `isCanvasTool`), and nothing else |
+| `web/src/types/canvas.ts` | The contract's types: `CanvasState`, `CanvasChange`, `CanvasOp`, `CanvasSize`, `CanvasAction`, `CanvasActionParams`, `CanvasStateNotification`; the record's `canvas_action` / `canvas_size`, the result's `canvas_revision` (`ToolRun.canvasRevision`), the session's `canvas`, `SessionCreateParams` and the chat subscription's `ChatNotification` are on the existing types in `types/message.ts` |
+| `web/src/lib/canvasStore.ts` | The open session's current canvas, the highest revision winning (`useCanvasStore`, `selectCanvasState`, `canvasActions`), and the device's canvas size every message to a canvas session carries (`size`, `canvasActions.setSize`) |
+| `web/src/hooks/useChatMessages.ts` | Taking `chat.canvas_state` and the subscribe reply's `canvas` into the store, never into the transcript; `sendCanvasAction`, echoed as a typed message is; the size on `chat.message` |
+| `web/src/lib/rpc/chat.ts` | `chat.canvas_action` (`sendCanvasAction`) and `chat.message`'s `canvas_size` |
+| `web/src/lib/rpc/session.ts`, `web/src/lib/sessionCreate.ts`, `web/src/hooks/useSession.ts`, `web/src/components/AppShell.tsx`, `web/src/components/Session/SessionsTab.tsx`, `web/src/components/Session/SessionItem.tsx` | Creating a canvas session (§13.1): `session.create`'s option (`SessionCreateParams`), one create in flight per kind, the retry of a failed create with its own params (`createErrorParams`, retried by `AppShell`); the **Canvas** button beside **New Chat**; a canvas row's glyph |
+| `web/src/utils/forkAnchor.ts`, `web/src/utils/discardedMessage.ts`, `web/src/utils/sendAgain.ts` | A canvas action never becoming a draft (§6.2) |
+| `web/src/lib/canvasBridge.ts` | The script injected into the page (`canvasBridgeScript`), the base stylesheet (`canvasBaseStylesheet`, `canvasBaseCss`, the variables' tokens `CANVAS_THEME_TOKENS` and `canvasThemeFrom`), and the messages of the bridge (`CanvasPageMessage`, `CanvasAppMessage`, `readCanvasPageMessage`, `SEND_REFUSAL_MESSAGES`); tested in real engines by `canvasBridge.browser.test.ts` |
+| `web/src/lib/messageReducer.ts`, `web/src/lib/toolSummary.ts`, `web/src/lib/subagentRun.ts`, `web/src/lib/toolRun.ts`, `web/src/lib/toolGroups.ts`, `web/src/components/Chat/ToolRow.tsx` | Chat view's canvas rows (§12): `canvas_revision` read off the result record onto the run (`messageReducer`), the rows' wording by outcome (`toolSummary`, and a subagent's latest-child line through `subagentRun`), a refusal's second line (`toolRun`), never folding them (`toolGroups`), and `rev N` as their meta (`ToolMeta`) |
+| `web/src/components/Chat/CanvasActionBubble.tsx`, `web/src/lib/messagePreview.ts` | A canvas action's bubble in chat view (§12), chosen in `MessageItem`; a canvas action quoted by its name |
+| `web/src/lib/agentPage.ts` | What `CanvasFrame` and `HtmlFrame` share (§4): the sandbox, the page document's order (`agentPageDocument`), the wrapper (`agentWrapperDocument`), the project capability (`usePageProject`, whose freshness for a patch is `useRawMediaSource`'s `isFreshCapability`) |
+| `web/src/lib/canvasRedraw.ts` | How each new state reaches the frame (§8.3): patch or whole drawing, one patch at a time, the app's record of the revision shown (`CanvasRedraw`) |
+| `web/src/components/Canvas/CanvasFrame.tsx` | The page frame (§4): the document, the size (§5), redrawing through `CanvasRedraw`, the host allowance per session, and the app side of the bridge (§8.2, §8.4) — answering sends, the theme, `sendable`, the page's focus for the size rule; tested in real engines by `CanvasFrame.browser.test.tsx` |
+| `web/src/components/Canvas/CanvasView.tsx` | The canvas view's canvas (§2): the session's current canvas from the store in a `CanvasFrame`, the empty state at revision 0, and the size measurement (§5); tested in real engines by `CanvasView.browser.test.tsx` |
+| `web/src/lib/canvasSize.ts` | The size rule (§5): a measurement in whole pixels (`canvasSizeOf`), which measurement is kept (`keepsMeasurement`), and what counts as editable in the app (`isEditableElement`) |
+| `web/src/components/Canvas/CanvasComposer.tsx` | The collapsed input (§2), which opens into the ordinary composer (`CanvasComposer`), and the bars under the canvas floating over it while it is open (`ComposerDock`); its Stop is the composer's own (`StopButton` in `Chat/SendStopSlot.tsx`); the float tested in real engines by `CanvasComposer.browser.test.tsx` |
+| `web/src/components/Canvas/CanvasViewSwitch.tsx`, `web/src/components/Chat/SessionHeader.tsx` | The header's **Canvas \| Chat** switch, drawn after the session's title (`viewSwitch`) |
+| `web/src/components/Chat/ChatPanel.tsx` | The canvas screen's place in the session screen: which view is up, both kept mounted, the canvas wired to `useChatMessages`' `sendCanvasAction`, the input in canvas view |
+| `web/src/components/Canvas/ActivityStrip.tsx`, `web/src/components/Canvas/PermissionPanel.tsx`, and the store of the pending permission requests (§10.4) | *planned* |
+| The history view, chat view's **Show**, and the client of `chat.canvas_history` / `chat.canvas_snapshot` (§12, §13.5) | *planned* |
 
 ---
 
@@ -120,19 +142,61 @@ engine-specific except where guidance is delivered (§9).
 
 - **The header** is the session header every chat has, with a **Canvas | Chat**
   segmented control. Which view is up is the device's own UI state — not session
-  state, not in the URL's history: switching replaces the entry rather than
-  pushing one, so Back leaves the session as it does from either view. A canvas
-  session opens on Canvas. **The canvas frame stays mounted while chat view is
-  up** — hidden, not unmounted — so switching views neither loses what the user
-  did in the page nor runs its scripts again.
+  state, not in the URL's history: the session screen holds it, so switching
+  touches no history entry at all, and Back leaves the session as it does from
+  either view. A canvas session opens on Canvas, every time it is opened. **The
+  canvas frame stays mounted while chat view is up** — hidden, not unmounted —
+  so switching views neither loses what the user did in the page nor runs its
+  scripts again; so does the transcript while canvas view is up, keeping the
+  reader's place. Both stay mounted under a page drawn over the session (a file,
+  the work list) too. The session list's row says a session is a canvas one
+  before its detail arrives, so the screen does not open on chat and flip. A
+  session read out of another worktree (read-only) is shown as chat only: its
+  canvas is not pushed to this client.
 - **The canvas** takes every pixel the bars leave. It is the page frame of §4.
 - **The activity strip** is one line saying what the agent is doing or last
   said (§11).
 - **The input** is collapsed to one line: `Message…` and, while a turn is open,
   Stop. Tapping it expands it into the ordinary composer (attachments, commands,
-  the same send rules) over the bottom of the canvas. Sending or blurring an
-  empty field collapses it again. Typing is the fallback for what the page did
-  not offer; the page is the main way in.
+  the same send rules) over the bottom of the canvas, with the caret in it.
+  Sending, or focus leaving the composer with nothing in the draft, collapses it
+  again. Typing is the fallback for what the page did not offer; the page is the
+  main way in.
+  - A draft left in it shows on the collapsed line, its first line in place of
+    `Message…` (or how many files are attached).
+  - Drawn *over* the canvas rather than in the column, so opening it and the
+    draft growing move neither the page nor the canvas size (§5). The bars
+    above the input — the strips and error bars — float up with it, on top of
+    the composer, rather than being covered by it. Two exceptions put it back
+    in the column, where the canvas gives way instead: the answer panel up over
+    the canvas (floating, a growing draft would cover the card's buttons), and
+    a block taller than the whole session screen under the header (a short
+    landscape screen with the keyboard up), which floating would draw over the
+    header.
+  - A press with a mouse moves focus before the button comes up, so whether
+    leaving collapses the composer is decided once the press is over — or the
+    bars dropping back into the column would move the button from under it.
+  - Switching views also collapses it; the draft stays.
+  - Stop on the line is armed afresh each time it collapses, as the composer's
+    is when it replaces Send: a send puts it under the thumb that pressed Send.
+  - A page drawn over the session from canvas view (a file, a Git detail) gets
+    the ordinary composer, as over a chat; the line is canvas view's alone.
+  - The window losing focus — a file picker opened from the composer's own `+` —
+    is not focus leaving it, and collapses nothing.
+  - A prefill handed in from outside the chat
+    ([the prefill handoff](agent-handoff-ui.md#1-prefill-handoff)) opens it, so
+    the composer can place the caret and show the arrival as it would in chat
+    view; while the line is disabled it waits there.
+  - While a permission request owns the agent's input, the line is disabled and
+    reads `Allow or deny to send` when it holds no draft (§10.3).
+  - A typed message that could not be delivered is reported under it in the
+    transcript, which canvas view does not show, so canvas view says so above the
+    input — `Your message couldn't be sent. The chat says why.` — as a page
+    over the chat does.
+- **Until the permission panel and the activity strip exist** (§10, §11), the
+  chat's attention strip is shown between the canvas and the input in canvas
+  view too, so a waiting request is never invisible; its way to the request's
+  card switches to chat view, where the card is.
 - **Chat view** is the session's ordinary transcript, untouched except for how
   the canvas tools and canvas actions are drawn there (§12). Every detail the
   canvas view leaves out — the whole reply, every tool call, every thinking — is
@@ -140,7 +204,9 @@ engine-specific except where guidance is delivered (§9).
 
 **Before anything is drawn** (revision 0) the canvas area shows a muted line in
 its centre: `Nothing drawn yet`, or `The agent is drawing…` while the session's
-turn is running. Never a spinner of its own: liveness is the strip's.
+turn is running (`turn.phase` is `running`). Never a spinner of its own:
+liveness is the strip's. Before the subscription has said anything about the
+canvas, the area is blank.
 
 ---
 
@@ -255,9 +321,11 @@ The names are the contract with the agent; what each maps to is the app's. A
 theme token added to the app is not automatically a `--pk-*` variable — every
 one is a promise to every page ever drawn.
 
-The **base stylesheet** is placed before the agent's markup and written entirely
-inside `:where()`, so it has zero specificity and any rule of the agent's
-overrides it:
+The **base stylesheet** is placed before the agent's markup, in a cascade layer
+of its own (`@layer pockode-base`), and written entirely inside `:where()`, so
+any rule of the agent's overrides it: unlayered rules beat every layer, a layer
+named first is below every later one — so an agent's CSS framework that puts
+its rules in layers wins too — and zero specificity settles the rest:
 
 - `:root` gets the variables, `color-scheme` matching the theme, and
   `background: var(--pk-bg); color: var(--pk-text)` — the theme following
@@ -265,11 +333,14 @@ overrides it:
   black text on a dark canvas. Nothing else of the document is styled: no font,
   no margin, no layout; those are the agent's.
 - `button`, `input`, `select`, `textarea` get the theme: `--pk-bg-secondary`
-  fill, `--pk-border` border, rounded corners, `font: inherit`, a focus ring in
-  `--pk-accent`, and the coarse-pointer hit-area floor of 44px
+  fill, `--pk-border` border, rounded corners, a little padding, `font: inherit`,
+  a focus ring in `--pk-accent`, and the coarse-pointer hit-area floor of 44px
   ([responsive-ui.md](responsive-ui.md)) as a `min-height` under
-  `@media (pointer: coarse)`. A `button` inside a `form[data-pk-send]`, and any
-  `[data-pk-send]` button, takes the accent fill.
+  `@media (pointer: coarse)`. The inputs that are a native widget rather than a
+  box — checkbox, radio, range, colour, file — keep their own look and take the
+  accent through `accent-color` on `:root`. A submitting button inside a
+  `form[data-pk-send]` (not `type="button"` or `reset`, which send nothing), and
+  any `[data-pk-send]` button, takes the accent fill.
 - Disabled controls are dimmed.
 
 Unlike an `html_render` page, which is a white sheet of paper whatever the theme,
@@ -347,7 +418,15 @@ share.
 bridge, which takes the `submit` before the browser would refuse it.
 
 The hosts strip sits between the header (or the permission banner) and the
-canvas, as on every other page surface.
+canvas, as on every other page surface. The allowance is keyed by the session
+(`canvas:<session id>`), so a Load or Reload draws the current revision whole
+under it, and every later drawing of that session starts with it.
+
+The wrapper and the page's frame are transparent where an `html_render`
+wrapper is white, under the `color-scheme` of the theme it was drawn in, and
+the app's element behind them is `--th-bg-primary`: what shows is the page's
+own root, `--pk-bg`, and nothing white flashes in a dark app while a document
+loads.
 
 ---
 
@@ -369,9 +448,24 @@ while neither the composer nor an editable element in the page has focus. The
 app cannot see focus inside the frame — its own `document.activeElement` is the
 frame after any tap in the page — so the bridge reports it
 (`pockode:canvas-focus`, §8.2): editable means a text-holding `input`, a
-`textarea`, a `select` or a `contenteditable`. A measurement whose width differs
+`textarea`, a `select` or a `contenteditable`, unless it is disabled or
+read-only — neither brings up a keyboard. A measurement whose width differs
 from the kept one replaces it regardless — that is a rotation or a resized
-window, not a keyboard.
+window, not a keyboard. With no measurement kept yet, the first one is kept
+whatever has focus, until a better one replaces it: a size a little short is
+closer than none.
+
+How the app does this: it observes the canvas area's content box — the area
+less its own scrollbars, which is what a page drawn for that size gets at 100% —
+only while canvas view is on the screen with nothing over it, since under chat
+view or a page the hidden area is not the rectangle canvas view has — nor while
+the answer panel is up over it, where the composer sits in the column and the
+canvas gives way to it (§2). At each
+change it asks where focus is *now*: an editable element of the app's own (the
+composer), or the canvas frame while the bridge last said the page's focus is
+editable. Focus is not re-measured when it leaves a field: at that moment the
+keyboard is often still up, and the resize that follows its going is what
+brings the height back.
 
 **Every message the user sends carries the sending device's canvas size** —
 canvas actions and typed messages alike, from either view (chat view sends the
@@ -396,6 +490,12 @@ canvas area and `drawn_for`:
   text too small to read and buttons too small to press; scrolling keeps both
   real. The page's own scrolling stays inside the frame.
 
+The frame is the canvas area's one child, sized `max(100%, <drawn_for>px)` in
+each dimension, and the area is what scrolls; it is also what the canvas size is
+measured from. The size followed is the revision the frame shows, a patched one
+included. A touch drag over a page that does not scroll itself in that
+direction scrolls the area, as any nested scroller hands on a gesture.
+
 So after the user rotates their phone, the page they see is still the one the
 agent drew, with a scroll — and the next message they send tells the agent the
 new size.
@@ -413,8 +513,8 @@ Three attributes and one function. All of them go through the bridge (§8).
 
 | Markup | Sends | When | Data |
 |---|---|---|---|
-| `<button data-pk-send="approve">` — any element but a `form`, `input`, `select` or `textarea` | `approve` | on click on it or anything inside it (`closest("[data-pk-send]")`) | inside a form: every named field of that form; plus, when the element has a `name`, `{ [name]: value }` (`value` being its `value` attribute, `""` without one) |
-| `<form data-pk-send="create">` | `create` | on submit (a submit button in it, or Enter in a field) | every named field of the form, and the submitter's `name`/`value` |
+| `<button data-pk-send="approve">` — any element but a `form`, `input`, `select` or `textarea` | `approve` | on click on it or anything inside it (`closest("[data-pk-send]")`) but a field or `label` — a checkbox in a card that sends still toggles | inside a form: every named field of that form; plus, when the element has a `name`, `{ [name]: value }` (`value` being its `value` attribute, `""` without one) |
+| `<form data-pk-send="create">` | `create` | on submit (a submit button in it, or Enter in a text field — also where the form has no submit button, or its first one carries a `data-pk-send` of its own or sits inside one, which the browser's click on it would send instead; a disabled first button submits nothing, as in any form) | every named field of the form, and the submitter's `name`/`value` |
 | `<input data-pk-send="search" name="q">` | `search` | on Enter | `{ q: <value> }`, or `{ value: <value> }` when it has no `name` |
 | `pockode.send(action, data)` | `action` | when called | `data`, any JSON value; `{}` when omitted |
 
@@ -440,7 +540,10 @@ Precedence, so one press never sends twice:
   not something a page can send (§7.2 warns about one). Unchecked checkboxes are
   absent, as in any form.
 - **`<input data-pk-send>` is cleared** once the send is accepted, and keeps its
-  text when it is refused, so a refused message is never lost.
+  text when it is refused, so a refused message is never lost — and when the
+  user has typed on while it was being sent, so the new text is not lost either.
+- **A disabled element sends nothing** (`:disabled`, itself or by its
+  `fieldset`), and a held Enter sends once, not once per repeat.
 - **`pockode.send`** returns a `Promise` that resolves once the server accepted
   the message and rejects with an `Error` when it was not sent; the error's
   `code` is one of the reasons in §8.2, and its `message` is a sentence the page
@@ -494,14 +597,17 @@ It is an event, and it stays one: it says what the user did on which revision,
 and nothing on it changes when the canvas does. The chat view draws it as such
 (§12).
 
-**A canvas action never becomes a draft.** Two existing features put a user
+**A canvas action never becomes a draft.** Three existing features put a user
 message's `content` back into the input box: a fork anchored on it
-([the dropped prompt](session-fork-ui.md#the-dropped-prompt)) and restoring a
+([the dropped prompt](session-fork-ui.md#the-dropped-prompt)), restoring a
 message a Stop discarded
-([discarded-messages-ui.md](discarded-messages-ui.md#5-what-restoring-does)). For
-a canvas action that content is machine text no user wrote, so neither applies:
-a fork anchored on a canvas action drops it and leaves the input empty, and a
-discarded canvas action is drawn discarded with no restore. The user acts on the
+([discarded-messages-ui.md](discarded-messages-ui.md#5-what-restoring-does)), and
+*Send again* after signing in
+([cli-login-ui.md](cli-login-ui.md#after-signing-in-send-again)). For a canvas
+action that content is machine text no user wrote, so none applies: a fork
+anchored on a canvas action drops it and leaves the input empty, a discarded
+canvas action is drawn discarded with no restore, and a turn it opened that
+failed on sign-in offers no *Send again*. The user acts on the
 page again instead — which, in the fork, is the canvas as it was at the cut
 (§13.6).
 
@@ -647,10 +753,18 @@ teach the agent to ignore the list.
   document, so an element the agent added later works without wiring, and calls
   `preventDefault()` on what it sends;
 - applies patches and theme changes the app posts (§8.3, §8.4);
-- reports whether an editable element has focus, for the size rule (§5);
+- reports whether an editable element has focus, for the size rule (§5), and
+  that the page is parsed and ready (§8.2);
 - reflects whether sending is possible on `document.documentElement` as
-  `data-pk-blocked="permission"` while it is not, so a page may style itself for
-  it.
+  `data-pk-blocked` while it is not, so a page may style itself for it: its
+  value is the `reason` (`data-pk-blocked="permission"`), and empty when there
+  is none — an old revision (§13.5).
+
+It never refuses a send because of what sending is told, not even while told
+sending is impossible: every well-formed send is posted, and the app refuses it,
+because each refused attempt is something the app shows (§10.3). Only a call it
+cannot post — `pockode.send` with no action name, or `data` that is not JSON —
+is refused in the page, with `invalid` (§6.1).
 
 It is a script in the agent's document, so the page can call or overwrite
 anything it defines. That is accepted (§1): the page can only ever ask the app to
@@ -670,9 +784,15 @@ bridge takes an app message only when its `source` is the app's window
 { type: "pockode:canvas-send", id: string, action: string, data: unknown }
 { type: "pockode:canvas-patched", revision: number, ok: boolean }
 { type: "pockode:canvas-focus", editable: boolean }   // on focusin/focusout, for §5
+{ type: "pockode:canvas-ready" }                      // the page is parsed, each time it loads
 ```
 
-`id` is the bridge's own, for matching the result. The page's
+`id` is the bridge's own, for matching the result, and unique to the document:
+a page that reloads itself keeps its window, and an answer to the old
+document's send must not settle the new one's. `pockode:canvas-ready` is
+posted once the page's markup is parsed (`DOMContentLoaded`), without waiting
+for what it loads, and again whenever the page loads anew — a reload by its own
+script included. The page's
 `pockode:page-refused` and `pockode:page-link` reports are unchanged.
 
 **App → page**
@@ -696,13 +816,25 @@ type SendRefusal = "permission" | "readonly" | "offline" | "invalid" | "failed";
 | `failed` | anything else | the error's message |
 
 **On a send** the app fills in what the page must not choose: the session, the
-`revision` the frame is showing, and the device's `canvas_size`; then calls
-`chat.canvas_action` and posts the result back. The `permission` refusal is
-decided on the client first, from `TurnState`, and visibly (§10.3); the server
-refuses it again regardless. The `readonly` refusal is the app's alone and does
-not depend on the bridge: a frame showing an old revision is never the current
-canvas, and a send from it — on load, before `pockode:canvas-sendable` could
-even arrive — is refused by the app on receipt.
+`revision` the frame is showing, and the device's `canvas_size`. It answers
+every send one way or the other — the bridge refuses nothing it posted (§8.1),
+so a send left unanswered would leave the page's promise pending for good. It
+refuses on the client first, in this order:
+
+1. `readonly` — the app's alone, and not dependent on the bridge: a frame
+   showing an old revision is never the current canvas, and a send from it —
+   on load, before `pockode:canvas-sendable` could even arrive — is refused on
+   receipt.
+2. `permission` — from `TurnState`, and visibly (§10.3); the server refuses it
+   again regardless.
+3. `offline` — the WebSocket not connected.
+
+Then it calls `chat.canvas_action`: an `InvalidParams` refusal answers
+`invalid` with the server's words, any other failure `failed` with the error's
+message.
+
+The app posts the theme and `pockode:canvas-sendable` again on every
+`pockode:canvas-ready`, since what it posted before reached no bridge.
 
 ### 8.3 Redrawing
 
@@ -713,7 +845,15 @@ The frontend receives a new state (§13.2) and decides how to show it:
   ops, the same semantics as §3.2 — so a field the user is typing in outside the
   changed regions keeps its text, its focus and its scroll. Scripts inside
   inserted HTML are run (the bridge re-creates each `<script>` element, which
-  `innerHTML` alone would leave inert). It answers `pockode:canvas-patched`.
+  `innerHTML` alone would leave inert) once every op has applied, in document
+  order, and only those still in the page. A `src` script the engine fetches
+  as JavaScript, without `async`, holds back every script after it — the next
+  patch's too — until it has loaded or failed, as the parser would; one it
+  does not fetch (`nomodule`, a template `type`) holds nothing back. The ops
+  are tried first on a copy of the page in a document that loads and runs
+  nothing, and the live page is touched only once they all applied there, so a
+  patch that fails runs none of its markup — no script, no image `onerror`. It
+  answers `pockode:canvas-patched`.
   A patch whose region the bridge cannot find in the live DOM — the agent's own
   script removed it — fails whole (`ok: false`); nothing is half-applied.
 - Otherwise — a render, a frame two revisions behind, a patch that answered
@@ -728,7 +868,14 @@ answer only), and to a whole drawing's revision when that drawing is made. While
 a patch is unanswered the frame counts as showing `from_revision` — a send in
 that window carries it — and a newer state waits; when the answer comes (or the
 2 seconds pass), the newest state is compared with what the frame now shows, and
-patched or drawn whole by the rules above. A page forging an acknowledgement
+patched or drawn whole by the rules above. A document drawn whole is busy the
+same way until its bridge says it is ready — it hears nothing before, and its
+regions are not there to patch — so a newer state arriving meanwhile waits for
+that, at most the same 2 seconds, and is then drawn whole. A page that loads
+itself again after it was patched shows the revision it was drawn with, not
+the patches since, so a `pockode:canvas-ready` from it then is answered by
+drawing the current revision whole: a send from it would otherwise carry a
+revision it does not show. A page forging an acknowledgement
 gains nothing it could not have by sending, which it can do anyway (§1).
 
 **The server's document stays the truth.** A patch applies the same ops to the
@@ -1044,10 +1191,27 @@ Chat view is the transcript as any session's, with three additions:
   the result's revision is meta (`rev 8`). The page is not drawn into the
   transcript: it is drawn once, in the canvas. A row whose result names a
   revision offers **Show** in its body, which switches to canvas view showing
-  that revision — the history view of a later story.
+  that revision — *planned*: it comes with the history view of a later story.
+  An update's regions are each named once, in the order of its ops. The title
+  is past tense only once the call has drawn — succeeded, or carries a revision
+  (one that returned after its turn was interrupted still drew): running it
+  reads `Drawing the canvas` / `Updating the canvas`, and failed, cut short or
+  asked about on a permission card `Draw the canvas` / `Update the canvas`. A failed call drew
+  no revision and names none; its second line is the first reason of §9.4's
+  list, with `(+N more)` when there are several. A canvas call is never folded
+  into a group of calls ([tool-call-ui.md § Groups](tool-call-ui.md#groups)):
+  folded, its revision would not be seen.
 - **A canvas action is a user bubble of its own kind**: the action name, a
   `from revision 7` meta, and the data, folded when it is more than a line. Not
-  the raw `content` — that is for the agent.
+  the raw `content` — that is for the agent. Drawn from `canvas_action` alone,
+  so the sender's echo reads right before the reply brings `content`. The data
+  is one line of JSON; no data (`{}`) draws none. "A line" is counted, not
+  measured — 40 characters, about a phone bubble's line — so the bubble keeps
+  its shape as it is laid out; longer data shows its start cut on one line, and
+  opens into the JSON indented, its first 20 lines (at most 2,000 characters)
+  in the bubble and all of it in the full screen viewer. Where a message is
+  quoted on one line (the fork sheet) a canvas action is quoted by its name,
+  for the same reason.
 - **A typed message's `canvas_size`** is not shown. It is for the agent.
 
 ---
@@ -1076,6 +1240,12 @@ they cannot disagree
 ([why that is allowed](code/subscription-system.md#why-a-session-is-two-subscriptions)).
 There is no setter. `FileStore.CreateFork` copies it with the rest of the engine
 choice. Sessions the work system creates are never canvas sessions.
+
+The app offers it as **Canvas** beside **New Chat** in the sessions tab, and a
+canvas session's row carries a glyph of its own (and `, canvas` for a screen
+reader). Creates of the two kinds are separate requests: one never joins the
+other in flight ([agent-handoff-ui.md §1.4](agent-handoff-ui.md#14-no-current-session)),
+and Retry after a failed create asks for the same kind again.
 
 ### 13.2 The pushed state
 

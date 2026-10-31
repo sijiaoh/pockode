@@ -25,7 +25,12 @@ export function useUnfiledChildren(
 function sameLatest(a?: LatestChild, b?: LatestChild): boolean {
 	if (a?.kind === "text" && b?.kind === "text") return a.text === b.text;
 	if (a?.kind === "call" && b?.kind === "call") {
-		return a.name === b.name && a.input === b.input;
+		return (
+			a.name === b.name &&
+			a.input === b.input &&
+			a.outcome?.status === b.outcome?.status &&
+			a.outcome?.canvasRevision === b.outcome?.canvasRevision
+		);
 	}
 	return a === b;
 }

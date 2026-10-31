@@ -177,6 +177,25 @@ describe("resolveForkAnchor", () => {
 		);
 	});
 
+	// Its text is the action written out for the agent, which no user typed:
+	// in the fork the user acts on the page again (docs/canvas-ui.md §6.2).
+	it("hands nothing back for a canvas action", () => {
+		const messages: Message[] = [
+			userMessage({ id: "u1" }),
+			assistantMessage({ id: "a1" }),
+			userMessage({
+				id: "u2",
+				anchorSeq: 3,
+				content: 'Canvas action "go" from revision 2:\n{}',
+				canvasAction: { action: "go", data: {}, revision: 2 },
+			}),
+		];
+
+		const anchor = resolveForkAnchor(messages, "u2", false);
+		expect(anchor?.droppedCount).toBe(1);
+		expect(anchor?.droppedText).toBeUndefined();
+	});
+
 	// A fork returns to before the anchor was sent, so a message the user typed
 	// is one of the things left behind rather than the last thing kept.
 	it("counts a user anchor itself as staying behind", () => {

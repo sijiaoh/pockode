@@ -432,6 +432,11 @@ is state, not a record: no `seq`, not in history, sent beside the record queue
 rather than through it — each carries the whole state, so arriving out of order
 costs nothing, the highest revision wins. The canvas is read after the
 subscription is registered, for the same reason the history page is.
+On the client, `useChatMessages` takes the canvas out of the subscription
+before `useSubscription` sees it — the reply's and every push's — and hands
+it to `canvasStore`, bound to the session that subscription is for: there is
+nothing to hold back for the reply, since the store keeps the highest
+revision whichever arrives first.
 
 **The pending permission requests ride it too.** Which requests are pending is
 detail's (`TurnState.Blockers`); what each asks is its `permission_request`

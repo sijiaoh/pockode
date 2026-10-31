@@ -141,4 +141,13 @@ describe("turnRestore", () => {
 	it("offers nothing for an answer to posted questions", () => {
 		expect(turnRestore(["a"], new Map([["a", answer]])).messages).toEqual([]);
 	});
+
+	// Likewise the text of a canvas action: the user acts on the page again.
+	it("offers nothing for a canvas action", () => {
+		const action = message({
+			messageId: "x",
+			canvasAction: { action: "go", data: {}, revision: 2 },
+		});
+		expect(turnRestore(["x"], new Map([["x", action]])).messages).toEqual([]);
+	});
 });

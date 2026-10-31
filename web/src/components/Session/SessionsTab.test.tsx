@@ -63,6 +63,7 @@ function tab(
 	refreshSignal: number,
 	isSwitchingWorktree: boolean,
 	onSelectSession = vi.fn(),
+	onCreateSession = vi.fn(),
 ) {
 	return (
 		// Retries off: the app's client retries these reads, and the wait between
@@ -72,7 +73,7 @@ function tab(
 				<SessionsTab
 					currentSessionId="a1"
 					onSelectSession={onSelectSession}
-					onCreateSession={vi.fn()}
+					onCreateSession={onCreateSession}
 					onDeleteSession={vi.fn()}
 					isSwitchingWorktree={isSwitchingWorktree}
 				/>
@@ -131,6 +132,18 @@ describe("SessionsTab", () => {
 		render(tab(0, true));
 
 		expect(screen.getByRole("button", { name: /New Chat/ })).toBeDisabled();
+	});
+
+	// Canvas is fixed at birth, so creating is the one place it is chosen.
+	it("creates a canvas session or a chat session", async () => {
+		const user = userEvent.setup();
+		const onCreateSession = vi.fn();
+		render(tab(0, false, vi.fn(), onCreateSession));
+
+		await user.click(screen.getByRole("button", { name: "New Canvas" }));
+		await user.click(screen.getByRole("button", { name: "New Chat" }));
+
+		expect(onCreateSession.mock.calls).toEqual([[{ canvas: true }], []]);
 	});
 });
 

@@ -8,6 +8,7 @@ import {
 } from "../lib/sessionDetailStore";
 import { useSessionStore } from "../lib/sessionStore";
 import { wsActions } from "../lib/wsStore";
+import type { SessionCreateParams } from "../types/message";
 import { useSessionSubscription } from "./useSessionSubscription";
 
 interface UseSessionOptions {
@@ -52,7 +53,10 @@ export function useSession({
 	// only holds the failure for the shell's error screen.
 	const createMutation = useMutation({ mutationFn: createSession });
 	const { mutateAsync: runCreate } = createMutation;
-	const create = useCallback(() => runCreate(), [runCreate]);
+	const create = useCallback(
+		(params?: SessionCreateParams) => runCreate(params),
+		[runCreate],
+	);
 
 	const deleteMutation = useMutation({
 		mutationFn: wsActions.deleteSession,
@@ -128,6 +132,8 @@ export function useSession({
 		refresh,
 		createSession: create,
 		createError: createMutation.error,
+		/** What the failed create asked for, so a retry asks for the same kind. */
+		createErrorParams: createMutation.variables,
 		clearCreateError: createMutation.reset,
 		deleteSession: (id: string) => deleteMutation.mutateAsync(id),
 		updateTitle: (id: string, title: string) =>

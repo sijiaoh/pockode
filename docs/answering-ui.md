@@ -229,7 +229,9 @@ the header folds into the footer — *Room on a short viewport*), drawn on
 `bg-th-bg-secondary` with `Sheet`'s centred rounding and shadow, at most
 `max-w-2xl` wide, never taller than **85% of that rectangle** — all of it while
 the chrome below is folded (*Room on a short viewport*) — and usually shorter,
-because its height is whatever the questions need.
+because its height is whatever the questions need. In a canvas session's
+canvas view that rectangle is the canvas's, and the canvas is what goes inert
+under it ([canvas-ui.md §2](canvas-ui.md#2-the-screen)).
 
 **The backdrop stops at the transcript's edges, and that is the whole of what it
 covers.** The session header above it, and the strip, the session bar and the
@@ -1366,8 +1368,11 @@ action carries on, and its outcome is the caller's to report. And it is
 **covered**, not dimmed: the answer panel is a layer of this conversation —
 the transcript stays on screen, the user has gone nowhere, and the forty `…`
 glyphs and anything raised from one are still theirs — which is why
-`transcriptCovered` names only the overlay while `transcriptInert` names both
-(§3).
+`transcriptCovered` names only the overlay and, in a canvas session, canvas
+view, while `transcriptInert` names those and the panel too (§3). Canvas view
+takes the transcript off the screen as an overlay does, so a sheet raised from
+it — the fork confirmation, the sign-in sheet — closes when the user switches to
+the canvas ([canvas-ui.md §2](canvas-ui.md#2-the-screen)).
 
 Nothing has to be registered for this. A new sheet is covered by having been
 written as a `Sheet`, and `useCloseWhenCovered` is deliberately not exported from

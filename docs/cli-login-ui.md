@@ -482,7 +482,9 @@ notice it would re-draft a message the conversation has since moved past; on a
 turn Pockode started — a work session's kickoff or auto-continue nudge — it would
 draft words the user never wrote. In both cases the sheet offers **Done** alone.
 An answer to posted questions is left out too: its text is the answers flattened
-for the agent, not what the user entered. Latest is read against the transcript
+for the agent, not what the user entered. So is a canvas action, whose text is
+the action written out for the agent
+([canvas-ui.md §6.2](canvas-ui.md#62-the-canvas-action-record)). Latest is read against the transcript
 as it is while the sheet is up, not as it was when it opened. The turn is named
 by the place in history of the message that opened it as well as by its bubble's
 id, because a reconnect — routine while the user is off in a browser signing

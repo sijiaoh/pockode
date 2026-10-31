@@ -8,6 +8,7 @@ import {
 } from "react";
 import { usePageReports } from "../../hooks/usePageReports";
 import { useRawMediaSource } from "../../hooks/useRawMediaSource";
+import { HTML_FRAME_SANDBOX } from "../../lib/agentPage";
 import {
 	allowedPageHosts,
 	allowPageHosts,
@@ -26,7 +27,6 @@ import { pageRawTarget, pageRawUrl, type RawTarget } from "../../lib/rpc/raw";
 import { useWorktreeStore } from "../../lib/worktreeStore";
 import type { TreeOrigin } from "../../types/contents";
 import { asError } from "../../utils/errorMessage";
-import { HTML_FRAME_SANDBOX } from "../Chat/HtmlFrame";
 import type { MediaFailure } from "./useMediaPlayback";
 import { RECOVERY_WINDOW_MS } from "./useMediaPlayback";
 

@@ -3,6 +3,7 @@ import type {
 	AgentEfforts,
 	AgentModels,
 	HistorySeq,
+	SessionCreateParams,
 	SessionDeleteParams,
 	SessionEffortsResult,
 	SessionForkParams,
@@ -18,7 +19,7 @@ import type {
 import type { AgentType } from "../../types/settings";
 
 export interface SessionActions {
-	createSession: () => Promise<SessionListItem>;
+	createSession: (params?: SessionCreateParams) => Promise<SessionListItem>;
 	/**
 	 * Creates a session holding this session's conversation up to the moment
 	 * before the record named by `anchorSeq` happened — which keeps that record
@@ -59,8 +60,10 @@ export function createSessionActions(
 	};
 
 	return {
-		createSession: async (): Promise<SessionListItem> => {
-			return requireClient().request("session.create", {});
+		createSession: async (
+			params: SessionCreateParams = {},
+		): Promise<SessionListItem> => {
+			return requireClient().request("session.create", params);
 		},
 
 		forkSession: async (

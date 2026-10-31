@@ -16,6 +16,7 @@ import { SHORT_VIEWPORT_QUERY } from "../../hooks/useShortViewport";
 import { useAgentOptionsStore } from "../../lib/agentOptionsStore";
 import { useAgentRoleStore } from "../../lib/agentRoleStore";
 import { clearAnswerIntent, requestAnswerPanel } from "../../lib/answerIntent";
+import { canvasActions, useCanvasStore } from "../../lib/canvasStore";
 import { uploadChatAttachment } from "../../lib/chatAttachments";
 import { useInputStore } from "../../lib/inputStore";
 import { useQuestionDraftStore } from "../../lib/questionDraftStore";
@@ -37,6 +38,7 @@ import {
 	makeSessionDetail,
 	makeSessionListItem,
 } from "../../test/sessionFixtures";
+import type { CanvasState } from "../../types/canvas";
 import type { GitStatus } from "../../types/git";
 import type {
 	ServerNotification,
@@ -2252,6 +2254,186 @@ describe("ChatPanel", () => {
 
 				expect(answerPanel()).toBeInTheDocument();
 			});
+		});
+	});
+
+	describe("a canvas session", () => {
+		const subscribeWithCanvas = (canvas: CanvasState) =>
+			mockState.chatMessagesSubscribe.mockImplementation(() =>
+				Promise.resolve({
+					id: "sub-1",
+					initial: {
+						history: mockState.mockHistory,
+						turn: { phase: "idle", open: false, since: "" },
+						canvas,
+					},
+				}),
+			);
+		const view = (name: "Canvas" | "Chat") =>
+			within(screen.getByRole("group", { name: "View" })).getByRole("button", {
+				name,
+			});
+
+		beforeEach(() => {
+			seedSessionDetail({ canvas: true });
+			useCanvasStore.setState({ size: null });
+		});
+
+		it("opens on the canvas, and switches to the transcript and back", async () => {
+			const user = userEvent.setup();
+			subscribeWithCanvas({ revision: 0 });
+			render(<ChatPanel {...defaultProps} />);
+
+			expect(await screen.findByText("Nothing drawn yet")).toBeVisible();
+			expect(view("Canvas")).toHaveAttribute("aria-pressed", "true");
+			// The input is one line until it is asked for.
+			expect(screen.queryByRole("textbox")).toBeNull();
+			expect(screen.getByRole("button", { name: "Message…" })).toBeVisible();
+
+			await user.click(view("Chat"));
+			expect(view("Chat")).toHaveAttribute("aria-pressed", "true");
+			expect(screen.getByRole("textbox")).toBeInTheDocument();
+			expect(
+				screen.getByText("Nothing drawn yet").closest("[inert]"),
+			).not.toBeNull();
+
+			await user.click(view("Canvas"));
+			expect(
+				screen.getByText("Nothing drawn yet").closest("[inert]"),
+			).toBeNull();
+		});
+
+		it("keeps the page mounted while the transcript is up", async () => {
+			const user = userEvent.setup();
+			subscribeWithCanvas({
+				revision: 1,
+				html: "<p>drawn</p>",
+				change: { kind: "render" },
+			});
+			render(<ChatPanel {...defaultProps} />);
+			const frame = await screen.findByTitle("Canvas");
+
+			await user.click(view("Chat"));
+			await user.click(view("Canvas"));
+			expect(screen.getByTitle("Canvas")).toBe(frame);
+		});
+
+		it("says the agent is drawing while its turn runs", async () => {
+			subscribeWithCanvas({ revision: 0 });
+			render(<ChatPanel {...defaultProps} />);
+			await screen.findByText("Nothing drawn yet");
+			act(() =>
+				acceptSetting({
+					turn: { phase: "running", open: true, since: "2024-01-01T00:00:00Z" },
+				}),
+			);
+			expect(screen.getByText("The agent is drawing…")).toBeInTheDocument();
+		});
+
+		it("sends from the expanded input and folds it away again", async () => {
+			const user = userEvent.setup();
+			subscribeWithCanvas({ revision: 0 });
+			// What canvas view last measured; jsdom lays nothing out.
+			canvasActions.setSize({ width: 390, height: 600 });
+			render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+
+			await user.click(screen.getByRole("button", { name: "Message…" }));
+			await user.type(screen.getByRole("textbox"), "make it blue");
+			await user.click(screen.getByRole("button", { name: "Send" }));
+
+			expect(mockState.sendMessage).toHaveBeenCalledWith(
+				"test-session",
+				"make it blue",
+				undefined,
+				undefined,
+				{ width: 390, height: 600 },
+			);
+			expect(screen.queryByRole("textbox")).toBeNull();
+		});
+
+		it("opens the next session on its canvas", async () => {
+			const user = userEvent.setup();
+			subscribeWithCanvas({ revision: 0 });
+			const { rerender } = render(<ChatPanel {...defaultProps} />);
+			await screen.findByText("Nothing drawn yet");
+			await user.click(view("Chat"));
+
+			seedSessionDetail({ id: "other", canvas: true });
+			rerender(<ChatPanel {...defaultProps} sessionId="other" />);
+			await waitFor(() =>
+				expect(view("Canvas")).toHaveAttribute("aria-pressed", "true"),
+			);
+		});
+
+		it("says a typed message failed, since the transcript is not on screen", async () => {
+			const user = userEvent.setup();
+			mockState.sendMessage.mockRejectedValueOnce(new Error("socket closed"));
+			subscribeWithCanvas({ revision: 0 });
+			render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+
+			await user.click(screen.getByRole("button", { name: "Message…" }));
+			await user.type(screen.getByRole("textbox"), "make it blue");
+			await user.click(screen.getByRole("button", { name: "Send" }));
+			expect(
+				await screen.findByText(
+					"Your message couldn't be sent. The chat says why.",
+				),
+			).toBeInTheDocument();
+		});
+
+		it("gives a page over the canvas the ordinary composer", async () => {
+			subscribeWithCanvas({ revision: 0 });
+			const { rerender } = render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+			expect(screen.queryByRole("textbox")).toBeNull();
+
+			rerender(
+				<ChatPanel
+					{...defaultProps}
+					overlay={{ type: "file", path: "README.md" }}
+				/>,
+			);
+			expect(screen.getByRole("textbox")).toBeInTheDocument();
+			expect(screen.queryByRole("button", { name: "Message…" })).toBeNull();
+		});
+
+		it("switches to the transcript to show a permission request", async () => {
+			const user = userEvent.setup();
+			subscribeWithCanvas({ revision: 0 });
+			render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+			act(() => {
+				mockState.onNotification?.({
+					type: "permission_request",
+					request_id: "req-c",
+					tool_name: "Bash",
+					tool_input: { command: "npm test" },
+					tool_use_id: "tool-c",
+				});
+			});
+			act(() =>
+				acceptSetting({
+					turn: {
+						phase: "blocked",
+						open: true,
+						since: "2024-01-01T00:00:00Z",
+						blockers: [
+							{
+								kind: "permission",
+								request_id: "req-c",
+								raised_at: "2024-01-01T00:00:00Z",
+							},
+						],
+					},
+				}),
+			);
+
+			await user.click(
+				screen.getByRole("button", { name: /^Show permission request:/ }),
+			);
+			expect(view("Chat")).toHaveAttribute("aria-pressed", "true");
 		});
 	});
 

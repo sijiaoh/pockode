@@ -166,7 +166,8 @@ function ElapsedCounter({ seenAt }: { seenAt: Date }) {
 
 /**
  * The right-hand figure: how long a finished call took, or how long a live one
- * has been going.
+ * has been going — or, for a canvas call, the revision it drew, which is what
+ * tells two `Updated the canvas` rows apart (docs/canvas-ui.md §12).
  *
  * A finished call shows only what the engine measured — Codex reports a
  * duration, Claude reports none — because a duration made up from arrival times
@@ -174,6 +175,13 @@ function ElapsedCounter({ seenAt }: { seenAt: Date }) {
  * run this client saw start has, so a year-old transcript draws no stopwatches.
  */
 export function ToolMeta({ run }: { run: ToolRun }) {
+	if (run.canvasRevision !== undefined) {
+		return (
+			<span className="shrink-0 text-th-text-muted">
+				rev {run.canvasRevision}
+			</span>
+		);
+	}
 	const live = run.status === "running" || run.status === "background";
 	if (!live) {
 		if (run.durationMs === undefined || run.durationMs < 1000) return null;

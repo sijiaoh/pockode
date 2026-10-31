@@ -63,7 +63,7 @@ function LatestChildLabel({ child }: { child: LatestChild }) {
 	if (child.kind === "text") {
 		return <span className="min-w-0 truncate">{child.text}</span>;
 	}
-	const summary = toolSummary(child.name, child.input, workDir);
+	const summary = toolSummary(child.name, child.input, workDir, child.outcome);
 	return (
 		<>
 			{/* Secondary rather than the accent the row's own title wears: two

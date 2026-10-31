@@ -107,7 +107,8 @@ export interface ForkAnchor {
 	 * be restored into the new session's input box: the user wrote that prompt
 	 * and the fork returns to before they sent it, so it belongs where an unsent
 	 * prompt lives, not in the transcript. Absent on an assistant anchor, which
-	 * the fork keeps.
+	 * the fork keeps, and on a canvas action, whose text no user wrote: the user
+	 * acts on the page again instead (docs/canvas-ui.md §6.2).
 	 */
 	droppedText?: string;
 	/**
@@ -167,7 +168,7 @@ export function resolveForkAnchor(
 		// carry the narrowing that reaching `content` needs. A command goes back
 		// as typed, not as the prompt it expanded to.
 		droppedText:
-			message.role !== "user"
+			message.role !== "user" || message.canvasAction
 				? undefined
 				: message.command
 					? formatPockodeCommand(message.command)

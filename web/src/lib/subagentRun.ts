@@ -1,5 +1,6 @@
 import type { ContentPart, Message, ToolRun } from "../types/message";
 import { toolRunText } from "./toolRun";
+import type { ToolOutcome } from "./toolSummary";
 
 /**
  * What a subagent row derives from its children: how far it has come and what
@@ -47,7 +48,13 @@ export function countSteps(parts: ContentPart[]): number {
 /** The newest child, in the terms the second line words it. */
 export type LatestChild =
 	| { kind: "text"; text: string }
-	| { kind: "call"; name: string; input: unknown };
+	| {
+			kind: "call";
+			name: string;
+			input: unknown;
+			/** Absent for a card standing in for a call that has not run. */
+			outcome?: ToolOutcome;
+	  };
 
 const MARKDOWN_BLOCK_MARKER = /^(?:\s*(?:#{1,6}\s+|>\s?|[-*+]\s+|\d+[.)]\s+))+/;
 // Bold, strike-through and code spans, which a subagent's report opens with as
@@ -115,7 +122,15 @@ export function latestChild(parts: ContentPart[]): LatestChild | undefined {
 				break;
 			}
 			case "tool_call":
-				return { kind: "call", name: part.tool.name, input: part.tool.input };
+				return {
+					kind: "call",
+					name: part.tool.name,
+					input: part.tool.input,
+					outcome: {
+						status: part.tool.status,
+						canvasRevision: part.tool.canvasRevision,
+					},
+				};
 			case "permission_request":
 				return {
 					kind: "call",

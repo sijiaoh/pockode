@@ -38,9 +38,9 @@ function partPreview(part: ContentPart): string {
 
 /**
  * A message reduced to the words that identify it, for quoting it somewhere it
- * cannot be rendered in full — the title of its menu, the anchor echoed back in
- * the fork sheet. Whitespace is collapsed so a multi-line message stays
- * quotable on one line; the caller decides how much of it to show.
+ * cannot be rendered in full — the anchor echoed back in the fork sheet.
+ * Whitespace is collapsed so a multi-line message stays quotable on one line;
+ * the caller decides how much of it to show.
  *
  * Empty when nothing in the message reads as words — the caller decides what to
  * put there, rather than this function inventing a description of the message.
@@ -49,14 +49,19 @@ export function messagePreview(message: Message): string {
 	// A command is quoted as typed: its content is a template that opens the
 	// same way every time, and so identifies nothing.
 	//
+	// A canvas action is quoted by its name, as its bubble is: its content is
+	// written for the agent (docs/canvas-ui.md §12).
+	//
 	// A message that is only files is named by them: their names are the words
 	// the user chose, as much as anything typed would have been.
 	const raw =
 		message.role === "user"
 			? message.command
 				? formatPockodeCommand(message.command)
-				: message.content ||
-					(message.attachments ?? []).map(attachmentName).join(", ")
+				: message.canvasAction
+					? message.canvasAction.action
+					: message.content ||
+						(message.attachments ?? []).map(attachmentName).join(", ")
 			: message.parts.map(partPreview).filter(Boolean).join(" ");
 	return raw.replace(/\s+/g, " ").trim();
 }

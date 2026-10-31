@@ -17,6 +17,25 @@ describe("messagePreview", () => {
 		).toBe("/pockode-lead backend first");
 	});
 
+	// Its content is the action written out for the agent (docs/canvas-ui.md §12).
+	it("quotes a canvas action by its name, not the text the agent read", () => {
+		expect(
+			messagePreview({
+				id: "u3",
+				role: "user",
+				content:
+					'Canvas action "create" from revision 7:\n{"title":"Fix login"}',
+				status: "complete",
+				createdAt: new Date(),
+				canvasAction: {
+					action: "create",
+					data: { title: "Fix login" },
+					revision: 7,
+				},
+			}),
+		).toBe("create");
+	});
+
 	it("names a message that is only files by the files", () => {
 		expect(
 			messagePreview({

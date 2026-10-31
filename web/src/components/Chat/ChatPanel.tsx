@@ -75,6 +75,12 @@ import {
 	sendAgainTarget,
 	sendAgainText,
 } from "../../utils/sendAgain";
+import { CanvasComposer, ComposerDock } from "../Canvas/CanvasComposer";
+import { CanvasView } from "../Canvas/CanvasView";
+import {
+	type CanvasSessionView,
+	CanvasViewSwitch,
+} from "../Canvas/CanvasViewSwitch";
 import CliLoginSheet from "../CliLogin/CliLoginSheet";
 import { FileEditor, FileView } from "../Files";
 import { GitWorkspace } from "../Git";
@@ -324,6 +330,7 @@ function ChatPanel({
 		settingError,
 		clearSettingError,
 		sendUserMessage,
+		sendCanvasAction,
 		interrupt,
 		permissionResponse,
 		setMode,
@@ -352,6 +359,34 @@ function ChatPanel({
 	// fast resolve restart the delay and produce a longer blank than no delay.
 	const isChatPending = (!isReadOnly && !isSessionResolved) || isLoadingHistory;
 	const showSkeleton = useDelayedFlag(isChatPending, SKELETON_DELAY_MS);
+
+	// A canvas session shows its canvas, with the transcript one switch away
+	// (docs/canvas-ui.md §2). The row says so before the detail lands, so the
+	// screen does not open on chat and flip. Not for a viewed session: its
+	// canvas is not pushed, there being no subscription to push it.
+	const rowIsCanvas = useSessionStore((s) =>
+		s.sessions.some((row) => row.id === sessionId && row.canvas === true),
+	);
+	const isCanvasSession =
+		!isReadOnly && (sessionDetail?.canvas === true || rowIsCanvas);
+	// Which view is up is the device's UI state, not the session's, and not
+	// history's: it is held here, so a switch adds no entry and Back leaves the
+	// session from either view. Each session opens on Canvas, with its input
+	// collapsed — reset during render, for the reason the answer panel is below.
+	const [canvasView, setCanvasView] = useState<CanvasSessionView>("canvas");
+	const [canvasComposerExpanded, setCanvasComposerExpanded] = useState(false);
+	const [canvasViewSessionId, setCanvasViewSessionId] = useState(sessionId);
+	if (canvasViewSessionId !== sessionId) {
+		setCanvasViewSessionId(sessionId);
+		setCanvasView("canvas");
+		setCanvasComposerExpanded(false);
+	}
+	const selectCanvasView = (next: CanvasSessionView) => {
+		if (next === canvasView) return;
+		setCanvasView(next);
+		setCanvasComposerExpanded(false);
+	};
+	const canvasViewUp = isCanvasSession && canvasView === "canvas";
 
 	// The one thing that still refuses a send. An open turn is not it — both CLIs
 	// steer the running turn with whatever arrives — but a permission or question
@@ -434,12 +469,13 @@ function ChatPanel({
 	// a page keeping the composer — a Git detail — covers: there the user would
 	// see the draft go and nothing come of it. So the composer says it, keyed
 	// like `commandError`, until the transcript is back on the screen to say why.
+	// Canvas view leaves the transcript off the screen too.
 	const [undeliveredTo, setUndeliveredTo] = useState<string | null>(null);
-	const overlayRef = useRef(overlay);
-	overlayRef.current = overlay;
+	const transcriptAwayRef = useRef(false);
+	transcriptAwayRef.current = Boolean(overlay) || canvasViewUp;
 	useEffect(() => {
-		if (!overlay) setUndeliveredTo(null);
-	}, [overlay]);
+		if (!overlay && !canvasViewUp) setUndeliveredTo(null);
+	}, [overlay, canvasViewUp]);
 
 	const handleSend = useCallback(
 		(content: string, attachments?: ChatAttachment[]): Promise<SendOutcome> => {
@@ -473,7 +509,7 @@ function ChatPanel({
 			return sendUserMessage(content, undefined, attachments).then(
 				(sent): SendOutcome => {
 					if (sent && mayBeRefused) rename?.();
-					if (!sent && overlayRef.current) setUndeliveredTo(sentTo);
+					if (!sent && transcriptAwayRef.current) setUndeliveredTo(sentTo);
 					return "sent";
 				},
 				(error: unknown): SendOutcome => {
@@ -981,8 +1017,8 @@ function ChatPanel({
 	// transcript's `inert` has to name all of them: a conversation left reachable
 	// under an overlay would put every card and menu button in the Tab order
 	// ahead of the thing on top of it. A card that has yielded covers nothing.
-	const transcriptInert =
-		(answerPanelDrawn && answerPanelOnScreen) || overlayOpen;
+	const answerPanelCovers = answerPanelDrawn && answerPanelOnScreen;
+	const transcriptInert = answerPanelCovers || overlayOpen || canvasViewUp;
 
 	// Covered, which is a shorter list than the one above, and the difference is
 	// the whole of it: the answer panel is a layer of this conversation — it
@@ -998,7 +1034,13 @@ function ChatPanel({
 	// menu opened here would go on floating over the overlay, lit and clickable.
 	// Sheets under a *dimmed* transcript are not touched: nobody has gone
 	// anywhere, and the forty `…` glyphs stay exactly where they are.
-	const transcriptCovered = overlayOpen;
+	//
+	// Canvas view takes the transcript off the screen the same way, and the
+	// canvas is taken off it under chat view or an overlay: neither is
+	// unmounted, so the reader's place in one and what they did in the page of
+	// the other are both there to come back to.
+	const transcriptCovered = overlayOpen || canvasViewUp;
+	const canvasShown = canvasViewUp && !overlayOpen;
 
 	// Room for the card on a screen that has none (docs/answering-ui.md §3,
 	// "Room on a short viewport"). Three facts, and each one of them is what
@@ -1036,7 +1078,23 @@ function ChatPanel({
 	// fires no blur — left standing, the flag would make the card yield to a
 	// composer that is not there.
 	const composerMounted =
-		!view && overlayKeepsComposer(overlay) && !chromeCollapsed;
+		!view &&
+		overlayKeepsComposer(overlay) &&
+		!chromeCollapsed &&
+		(!canvasShown || canvasComposerExpanded);
+	// Canvas view's input, collapsed or not, is where the composer would be —
+	// only with nothing over the canvas: a page over it gets the ordinary
+	// composer, as over a chat.
+	const canvasLineUp = canvasShown && !view && !chromeCollapsed;
+	// Not over the answer panel, which would lose the bottom of its card —
+	// its buttons — under a growing draft. In the column the composer pushes
+	// the canvas up instead, with the caret in it, so the size rule keeps the
+	// measurement taken before.
+	const canvasComposerFloats =
+		canvasLineUp && canvasComposerExpanded && !answerPanelCovers;
+	useEffect(() => {
+		if (!canvasShown) setCanvasComposerExpanded(false);
+	}, [canvasShown]);
 	useEffect(() => {
 		if (composerMounted) return;
 		setComposerFocused(false);
@@ -1161,6 +1219,10 @@ function ChatPanel({
 		string | null
 	>(null);
 	const handleJumpToRequest = useCallback((requestId: string) => {
+		// The card is in the transcript, so a jump from canvas view is a
+		// switch to chat view — in the same commit, so the transcript is on
+		// the screen by the time the jump runs.
+		setCanvasView("chat");
 		setAnswerPanelOpen(false);
 		setAnswerAnchor(null);
 		setPendingJumpRequestId(requestId);
@@ -1334,6 +1396,11 @@ function ChatPanel({
 				onModelChange={setModel}
 				onEffortChange={setEffort}
 				onModeChange={setMode}
+				viewSwitch={
+					isCanvasSession ? (
+						<CanvasViewSwitch view={canvasView} onSelect={selectCanvasView} />
+					) : undefined
+				}
 			/>
 		);
 	};
@@ -1484,6 +1551,31 @@ function ChatPanel({
 					<FullScreenHost>{renderTranscript()}</FullScreenHost>
 				</CoveredSurface>
 			</div>
+			{/* Kept mounted as the list is, and for more: a page mounted again
+			    would run its scripts again and lose what the user did in it.
+			    Keyed by the session, which is what its frame records the shown
+			    revision for. */}
+			{isCanvasSession && (
+				<div
+					inert={!canvasShown || answerPanelCovers}
+					className={
+						canvasShown
+							? "flex min-h-0 flex-1 flex-col"
+							: "invisible absolute inset-0 flex flex-col"
+					}
+				>
+					<CanvasView
+						key={sessionId}
+						sessionId={sessionId}
+						shown={canvasShown}
+						// Under the panel the composer is in the column, not over it.
+						measure={canvasShown && !answerPanelCovers}
+						turnRunning={turn.phase === "running"}
+						onSend={sendCanvasAction}
+						sendBlocked={promptOwnsInput ? "permission" : null}
+					/>
+				</div>
+			)}
 			<PageHeaderTarget value={pageHeader.target}>
 				{overlay &&
 					(isOverlayHeld ? (
@@ -1523,6 +1615,39 @@ function ChatPanel({
 		focusOnOpen: !isGitOverlay(overlay),
 	};
 
+	// Focus is read from outside the bar, the way the card reports its own: the
+	// bar is a registry component, and what it renders inside is its own
+	// business. `contents` so the wrapper takes no part in the column's layout.
+	// Around the bar alone — not canvas view's collapsed line, which raises no
+	// keyboard and is no composer for the answer panel to yield to.
+	const renderTrackedBar = (props: InputBarProps) => (
+		// biome-ignore lint/a11y/noStaticElementInteractions: listens to focus moving through the bar; nothing here is a control
+		<div
+			className="contents"
+			onFocus={(e) => {
+				setComposerFocused(true);
+				setComposerTyping(e.target.matches("textarea, input"));
+			}}
+			onBlur={(e) => {
+				if (e.currentTarget.contains(e.relatedTarget)) return;
+				setComposerFocused(false);
+				setComposerTyping(false);
+			}}
+		>
+			{CustomInputBar ? (
+				<CustomInputBar {...props} />
+			) : (
+				<DefaultInputBar
+					{...props}
+					// The same rules as a drop. The refusals that leave this bar up
+					// (no session, or one still loading) also disable its textarea,
+					// so they are a backstop here.
+					onPasteFiles={dropRefusal === null ? attachFiles : undefined}
+				/>
+			)}
+		</div>
+	);
+
 	return (
 		<SessionViewProvider value={view}>
 			<MainContainer
@@ -1548,67 +1673,73 @@ function ChatPanel({
 					)}
 					{!overlay && view && <SessionOriginBar view={view} />}
 					{renderContent()}
-					{/* What needs the user, stated where the transcript ends
+					<ComposerDock
+						floating={canvasComposerFloats}
+						open={canvasLineUp && canvasComposerExpanded}
+					>
+						{/* What needs the user, stated where the transcript ends
 					    (docs/lifecycle-ui.md §2.2). */}
-					{!overlay && !isChatPending && !isReadOnly && (
-						<AttentionStrip
-							turn={turn}
-							onJumpToRequest={handleJumpToRequest}
-							onAnswer={handleOpenAnswerPanel}
-							// Driven by the same flags that draw the panel, so the row goes
-							// and the panel appears in one frame. Told rather than derived
-							// inside the strip: a frame where both are on screen moves the
-							// composer down and straight back up, and one open is then two
-							// visible jumps. A yielded card is off the screen, so the row
-							// is the way back to it, as after a close.
-							answerPanelOpen={answerPanelOnScreen}
-							sendPending={isSendPending}
-							jumpDisabled={answerPanelSending}
-							permissionRequests={blockingPermissions}
-							// Answering does not close the answer panel: unlike the jump, it
-							// needs nothing from the transcript, and it is what lets the
-							// panel's own send through afterwards.
-							onPermissionRespond={handlePermissionRespond}
-							promptError={promptError ?? undefined}
-							watchedStories={watchedStories}
-							onOpenWorkDetail={onOpenWorkDetail}
-							changeCount={reviewRowCanShow ? changeCount : undefined}
-							onReview={onOpenReview}
-						/>
-					)}
-					{/* Held back by an overlay: the session panel that raised it is
-					    not reachable from a page. */}
-					{!overlay && settingError && (
-						<ComposerErrorBar
-							message={settingError}
-							onDismiss={clearSettingError}
-						/>
-					)}
-					{/* With the composer it was typed into, wherever that is: the
-					    refused text is back in the draft, and this is the only place
-					    that says why. */}
-					{overlayKeepsComposer(overlay) &&
-						commandError?.sessionId === sessionId && (
-							<ComposerErrorBar
-								message={commandError.message}
-								onDismiss={() => setCommandError(null)}
+						{!overlay && !isChatPending && !isReadOnly && (
+							<AttentionStrip
+								turn={turn}
+								onJumpToRequest={handleJumpToRequest}
+								onAnswer={handleOpenAnswerPanel}
+								// Driven by the same flags that draw the panel, so the row goes
+								// and the panel appears in one frame. Told rather than derived
+								// inside the strip: a frame where both are on screen moves the
+								// composer down and straight back up, and one open is then two
+								// visible jumps. A yielded card is off the screen, so the row
+								// is the way back to it, as after a close.
+								answerPanelOpen={answerPanelOnScreen}
+								sendPending={isSendPending}
+								jumpDisabled={answerPanelSending}
+								permissionRequests={blockingPermissions}
+								// Answering does not close the answer panel: unlike the jump, it
+								// needs nothing from the transcript, and it is what lets the
+								// panel's own send through afterwards.
+								onPermissionRespond={handlePermissionRespond}
+								promptError={promptError ?? undefined}
+								watchedStories={watchedStories}
+								onOpenWorkDetail={onOpenWorkDetail}
+								changeCount={reviewRowCanShow ? changeCount : undefined}
+								onReview={onOpenReview}
 							/>
 						)}
-					{composerMounted && overlay && undeliveredTo === sessionId && (
-						<ComposerErrorBar
-							message="Your message couldn't be sent. The chat says why."
-							onDismiss={() => setUndeliveredTo(null)}
-						/>
-					)}
-					{/* Not held back by an overlay: a drop is taken over the pages that
+						{/* Held back by an overlay: the session panel that raised it is
+					    not reachable from a page. */}
+						{!overlay && settingError && (
+							<ComposerErrorBar
+								message={settingError}
+								onDismiss={clearSettingError}
+							/>
+						)}
+						{/* With the composer it was typed into, wherever that is: the
+					    refused text is back in the draft, and this is the only place
+					    that says why. */}
+						{overlayKeepsComposer(overlay) &&
+							commandError?.sessionId === sessionId && (
+								<ComposerErrorBar
+									message={commandError.message}
+									onDismiss={() => setCommandError(null)}
+								/>
+							)}
+						{(overlay ? composerMounted : canvasLineUp) &&
+							undeliveredTo === sessionId && (
+								<ComposerErrorBar
+									message="Your message couldn't be sent. The chat says why."
+									onDismiss={() => setUndeliveredTo(null)}
+								/>
+							)}
+						{/* Not held back by an overlay: a drop is taken over the pages that
 					    keep the composer, and a refusal there must still be heard. */}
-					{composerMounted && attachError?.sessionId === sessionId && (
-						<ComposerErrorBar
-							message={attachError.message}
-							onDismiss={() => setAttachError(null)}
-						/>
-					)}
-					{/* Gone if the anchor left the transcript — a session deleted, a
+						{(composerMounted || canvasLineUp) &&
+							attachError?.sessionId === sessionId && (
+								<ComposerErrorBar
+									message={attachError.message}
+									onDismiss={() => setAttachError(null)}
+								/>
+							)}
+						{/* Gone if the anchor left the transcript — a session deleted, a
 					    worktree switched away from. There is nothing left to confirm.
 
 					    Raised from the transcript, held here only because a fork is a
@@ -1618,38 +1749,38 @@ function ChatPanel({
 					    chat, which also clears `forkTarget`: coming back hands the
 					    reader their conversation, not a confirmation of something
 					    they navigated away from. */}
-					<CoveredSurface covered={transcriptCovered}>
-						{forkTarget && forkAnchor && (
-							<ForkSessionSheet
-								anchor={forkAnchor.message}
-								droppedCount={forkAnchor.droppedCount}
-								agentType={agentType}
-								defaultTitle={forkTarget.defaultTitle}
-								isForking={isForking}
-								error={forkError}
-								onFork={(title) =>
-									handleFork(forkAnchor.anchorSeq, title, forkAnchor)
-								}
-								onClose={handleCloseFork}
-							/>
-						)}
-						{signInTarget && (
-							<CliLoginSheet
-								agent={signInTarget.agent}
-								onClose={handleCloseSignIn}
-								sendAgain={
-									resendText === undefined
-										? undefined
-										: {
-												text: resendText,
-												draftKept: hasDraft,
-												onSendAgain: handleSendAgain,
-											}
-								}
-							/>
-						)}
-					</CoveredSurface>
-					{/* The keyboard is in one field at a time, and while this is
+						<CoveredSurface covered={transcriptCovered}>
+							{forkTarget && forkAnchor && (
+								<ForkSessionSheet
+									anchor={forkAnchor.message}
+									droppedCount={forkAnchor.droppedCount}
+									agentType={agentType}
+									defaultTitle={forkTarget.defaultTitle}
+									isForking={isForking}
+									error={forkError}
+									onFork={(title) =>
+										handleFork(forkAnchor.anchorSeq, title, forkAnchor)
+									}
+									onClose={handleCloseFork}
+								/>
+							)}
+							{signInTarget && (
+								<CliLoginSheet
+									agent={signInTarget.agent}
+									onClose={handleCloseSignIn}
+									sendAgain={
+										resendText === undefined
+											? undefined
+											: {
+													text: resendText,
+													draftKept: hasDraft,
+													onSendAgain: handleSendAgain,
+												}
+									}
+								/>
+							)}
+						</CoveredSurface>
+						{/* The keyboard is in one field at a time, and while this is
 					    collapsed it is in the card's. Unmounting is safe for the same
 					    reason the overlays above may do it: a draft has to outlive its
 					    bar, which `InputBarProps` asks of every bar and the default one
@@ -1657,43 +1788,33 @@ function ChatPanel({
 					    lives in the bar and folds with it, though it is one of the
 					    user's two exits from a blocked turn: one press outside the card
 					    brings it back. */}
-					{overlayKeepsComposer(overlay) &&
-						!chromeCollapsed &&
-						(view ? (
-							<ReadOnlyBar view={view} onOpenThere={onOpenSessionThere} />
-						) : (
-							// Read from outside the bar, the way the card reports its own
-							// focus: the bar is a registry component, and what it renders
-							// inside is its own business. `contents` so the wrapper takes no
-							// part in the column's layout.
-							// biome-ignore lint/a11y/noStaticElementInteractions: listens to focus moving through the bar; nothing here is a control
-							<div
-								className="contents"
-								onFocus={(e) => {
-									setComposerFocused(true);
-									setComposerTyping(e.target.matches("textarea, input"));
-								}}
-								onBlur={(e) => {
-									if (e.currentTarget.contains(e.relatedTarget)) return;
-									setComposerFocused(false);
-									setComposerTyping(false);
-								}}
-							>
-								{CustomInputBar ? (
-									<CustomInputBar {...inputBarProps} />
-								) : (
-									<DefaultInputBar
-										{...inputBarProps}
-										// The same rules as a drop. The refusals that leave
-										// this bar up (no session, or one still loading) also
-										// disable its textarea, so they are a backstop here.
-										onPasteFiles={
-											dropRefusal === null ? attachFiles : undefined
-										}
-									/>
-								)}
-							</div>
-						))}
+						{overlayKeepsComposer(overlay) &&
+							!chromeCollapsed &&
+							(view ? (
+								<ReadOnlyBar view={view} onOpenThere={onOpenSessionThere} />
+							) : canvasShown ? (
+								<CanvasComposer
+									sessionId={sessionId}
+									expanded={canvasComposerExpanded}
+									onExpandedChange={setCanvasComposerExpanded}
+									turnOpen={turnOpen}
+									onStop={handleInterrupt}
+									disabled={inputBarProps.disabled || promptOwnsInput}
+									blockedReason={inputBarProps.sendBlockedReason}
+								>
+									{renderTrackedBar({
+										...inputBarProps,
+										// A send is one of the two things that put it away.
+										onSend: (content, attachments) => {
+											setCanvasComposerExpanded(false);
+											return handleSend(content, attachments);
+										},
+									})}
+								</CanvasComposer>
+							) : (
+								renderTrackedBar(inputBarProps)
+							))}
+					</ComposerDock>
 					{drop.isDragging && <ChatDropOverlay refusal={dropRefusal} />}
 				</div>
 			</MainContainer>

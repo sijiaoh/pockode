@@ -79,6 +79,13 @@ describe("sendAgainText", () => {
 		expect(
 			sendAgainText([answer, failed()], { messageId: "a1" }),
 		).toBeUndefined();
+		const action = user({
+			content: 'Canvas action "go" from revision 2:\n{}',
+			canvasAction: { action: "go", data: {}, revision: 2 },
+		});
+		expect(
+			sendAgainText([action, failed()], { messageId: "a1" }),
+		).toBeUndefined();
 	});
 
 	// A reconnect replays history into bubbles with new ids, typically while the

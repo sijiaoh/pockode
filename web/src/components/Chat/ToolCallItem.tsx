@@ -88,8 +88,12 @@ const ToolCallItem = memo(function ToolCallItem({
 	const [expanded, setExpanded] = useRowExpanded();
 	const workDir = useWSStore((state) => state.workDir);
 	const summary = useMemo(
-		() => toolSummary(run.name, run.input, workDir),
-		[run.name, run.input, workDir],
+		() =>
+			toolSummary(run.name, run.input, workDir, {
+				status: run.status,
+				canvasRevision: run.canvasRevision,
+			}),
+		[run.name, run.input, workDir, run.status, run.canvasRevision],
 	);
 	// Nothing opens this body but the user. A failure used to pry it open once,
 	// back when a failed row said only *that* it failed; now it says how, on its

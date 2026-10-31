@@ -1,4 +1,4 @@
-import { Archive, FolderGit2, GitBranch } from "lucide-react";
+import { Archive, FolderGit2, GitBranch, PanelsTopLeft } from "lucide-react";
 import { memo } from "react";
 import { isWorkActive, sessionActivity } from "../../lib/activity";
 import type { SessionOrigin } from "../../lib/sessionFilter";
@@ -59,35 +59,46 @@ const SessionItem = memo(function SessionItem({
 
 	return (
 		<SidebarListItem
-			// A glyph, not a tree: the list is sorted by recency and scanned
-			// top-down, and nesting would fight that sort while having to answer for
-			// forks of forks and for parents that are gone. It answers the only
-			// question the list is asked — why two rows look alike.
 			title={
-				forkedFrom ? (
-					<>
-						{session.title}
-						{/* Said in words for a screen reader, next to the title rather
-						    than as the row's aria-label, which would replace the whole
-						    name and take the row's own state indicator down with it. */}
+				<>
+					{session.title}
+					{/* Said in words for a screen reader, next to the title rather
+					    than as the row's aria-label, which would replace the whole
+					    name and take the row's own state indicator down with it. */}
+					{session.canvas && <span className="sr-only">, canvas</span>}
+					{forkedFrom && (
 						<span className="sr-only">
 							, forked from {parentTitle ?? UNLISTED_SESSION_NAME}
 						</span>
-					</>
-				) : (
-					session.title
-				)
+					)}
+				</>
 			}
+			// A canvas session is a different screen when opened, so its row says
+			// so before it is (docs/canvas-ui.md §13.1). A fork is a glyph, not a
+			// tree: the list is sorted by recency and scanned top-down, and nesting
+			// would fight that sort while having to answer for forks of forks and
+			// for parents that are gone. It answers the only question the list is
+			// asked — why two rows look alike.
 			leftSlot={
-				forkedFrom ? (
-					<GitBranch
-						className="size-3 shrink-0 text-th-text-muted"
-						aria-hidden="true"
-					/>
+				session.canvas || forkedFrom ? (
+					<>
+						{session.canvas && (
+							<PanelsTopLeft
+								className="size-3 shrink-0 text-th-text-muted"
+								aria-hidden="true"
+							/>
+						)}
+						{forkedFrom && (
+							<GitBranch
+								className="size-3 shrink-0 text-th-text-muted"
+								aria-hidden="true"
+							/>
+						)}
+					</>
 				) : undefined
 			}
-			// The worktree goes in the subtitle rather than a second left slot: the
-			// left slot is the fork glyph's, and a fork read out of another
+			// The worktree goes in the subtitle rather than a third left glyph: the
+			// left slot is the fork's and the canvas's, and a fork read out of another
 			// worktree would need two of them. The name is the only thing here
 			// allowed to truncate — a row that ate its own timestamp to fit a
 			// worktree name would lose the one thing the list is sorted by.

@@ -344,6 +344,21 @@ needs nothing installed. That is the testing pyramid, and it means this entry
 should stay a handful of files. A test that only renders and clicks does not
 become better by moving here.
 
+A sandboxed frame is the other thing jsdom cannot answer: it runs no script in
+an `srcdoc` iframe and enforces no policy. So the canvas — the bridge in its
+page, a patch in place, the frame's size and scrolling, the measurement under a
+soft keyboard's rules — is tested here, in `web/src/lib/canvasBridge.browser.test.ts`
+and the `*.browser.test.tsx` files under `web/src/components/Canvas/`
+([canvas-ui.md § Key Files](canvas-ui.md#key-files)). One file runs on its own
+with `pnpm run test:browser <path>` from `web/`.
+
+**A test one engine cannot run** is marked
+`it.runIf(server.browser === "chromium")` (`server` from `vitest/browser`), and
+says why beside it, so WebKit reports it skipped rather than passing it
+silently. Two canvas tests are: a real touch drag, which only Chromium's
+DevTools protocol can dispatch (`cdp()`), and focus moving into a frame, which
+WebKit will not do without a press.
+
 **The transcript fixture.** `renderTranscript` in
 `web/src/test/transcriptFixture.tsx` renders the real `MessageList`, fed by the
 real `useChatMessages`, in a box of fixed height. A test gives it a session's

@@ -21,7 +21,7 @@ function CurrentStep({ summary }: { summary: GroupSummary }) {
 	const workDir = useWSStore((state) => state.workDir);
 	const run = summary.current;
 	if (!run) return null;
-	const call = toolSummary(run.name, run.input, workDir);
+	const call = toolSummary(run.name, run.input, workDir, run);
 	return (
 		// Every word of it moves, so it stays out of the button's accessible
 		// name; the spinner says what is going on.

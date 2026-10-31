@@ -3,6 +3,7 @@ import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { invalidateWorkspaceCapabilities } from "../../hooks/useRawMediaSource";
+import { HTML_FRAME_SANDBOX } from "../../lib/agentPage";
 import { apiUrl } from "../../lib/api";
 import { saveUrl } from "../../lib/fileDownload";
 import { navigateWrapper } from "../../lib/pageHosts";
@@ -10,7 +11,6 @@ import { useWSStore, wsActions } from "../../lib/wsStore";
 import { reportEverythingInView } from "../../test/imageFixtures";
 import { pageFrameOf, pageLoaded, pageUrlOf } from "../../test/pageFrame";
 import type { TreeOrigin } from "../../types/contents";
-import { HTML_FRAME_SANDBOX } from "../Chat/HtmlFrame";
 import PagePreview from "./PagePreview";
 
 vi.mock("../../lib/fileDownload", async (importOriginal) => ({

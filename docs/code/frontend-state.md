@@ -53,6 +53,7 @@ Pockode uses Zustand for state management, pure reducers for event processing, a
 | wsStore | WebSocket, RPC, subscriptions | Single hub for all communication |
 | sessionStore | Chat session list — one page of it, as the server narrowed it — and the two filters over it | State/Actions interface split; an absence in it is not proof a session is gone ([why](subscription-system.md#what-the-client-gives-up-by-letting-the-server-filter)). The worktree filter is the one field here that can mean *the list on screen is not this store's* |
 | sessionDetailStore | The open session's own metadata, and whether it exists at all | One session at a time, read through a selector that checks whose it is |
+| canvasStore | The open canvas session's current canvas, and the device's canvas size every message to a canvas session carries ([canvas-ui.md §13.2](../canvas-ui.md#132-the-pushed-state)) | One session at a time, as sessionDetailStore; filled by `useChatMessages`, which holds the subscription it rides on; the highest revision wins |
 | workStore | The project list's `Current` segment, and the one archive page on screen | State/Actions interface split; the two halves are separate fields because only one of them is pushed to |
 | agentRoleStore | AI roles | State/Actions interface split |
 | scheduleStore | Every schedule, each with its latest run's row | State/Actions interface split; app-wide because the Project tab's dot reads it ([schedule-ui.md §1](../schedule-ui.md#1-the-project-tab)) |

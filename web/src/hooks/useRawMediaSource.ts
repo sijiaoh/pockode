@@ -28,6 +28,14 @@ import type { ContentOrigin, Entry } from "../types/contents";
 const EXPIRY_MARGIN_MS = 5 * 60 * 1000;
 
 /**
+ * Whether a capability expiring at `expiresAt` is still fresh enough to be
+ * handed to a new load: what `fresh` would hand out rather than renew.
+ */
+export function isFreshCapability(expiresAt: number): boolean {
+	return expiresAt - EXPIRY_MARGIN_MS > Date.now();
+}
+
+/**
  * Capabilities for content read from the connection's worktree — a file, a
  * commit — as opposed to an attachment, which names its own. The server binds
  * them to the worktree the connection is on when they are issued, and the
@@ -394,7 +402,11 @@ export function useRawMediaSource(target: RawTarget, enabled: boolean) {
 			const capability = await queryClient.fetchQuery(
 				renew ? { ...options, staleTime: 0 } : options,
 			);
-			return { src: apiUrl(capability.path), epoch: capability.epoch };
+			return {
+				src: apiUrl(capability.path),
+				epoch: capability.epoch,
+				expiresAt: capability.expiresAt,
+			};
 		},
 		[queryClient, key],
 	);
@@ -438,6 +450,8 @@ export function useRawMediaSource(target: RawTarget, enabled: boolean) {
 export interface RawSource {
 	src: string;
 	epoch: number;
+	/** Unix milliseconds. */
+	expiresAt: number;
 }
 
 type HeldCapability = RawCapability & { epoch: number };

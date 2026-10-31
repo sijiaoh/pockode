@@ -213,7 +213,8 @@ be one with an obvious answer.
   `lib/sessionCreate.ts` is the one create every caller goes through, and
   `useSession` uses it too. It is joined only from the worktree it was asked
   in, because a create sent before a worktree switch is answered in the
-  worktree left behind.
+  worktree left behind, and only by a create of the same kind: a canvas
+  session is not a chat ([canvas-ui.md §13.1](canvas-ui.md#131-the-session-option)).
 - **While the connection is still switching to the workspace's worktree**,
   `session.create` would be answered in the old one, so the handoff does not
   send it: it reports `Couldn't start a new chat` with `This worktree is still
@@ -267,7 +268,7 @@ send mid-turn is the user's call, in the composer.
 | The composer's caret | `inputActions.registerCaret` / `readCaret` in `inputStore`: a module-level map of readers by session, not store state — nothing renders from it | Registered by `InputBar` while it draws the session, unregistered on unmount |
 | Whether the composer is on the page | `overlayKeepsComposer` in `types/overlay.ts`, of `mainAreaOverlay` — what the main area draws at this width | The one rule, read by `ChatPanel`, which draws the composer, and by the handoff |
 | The reveal request | `inputStore`, a non-persisted one-shot keyed by session (`reveals`, `requestReveal`, `takeReveal`): `PrefillReveal`, how the text landed (`ready` / `added`) and, after an insert, the caret offset | Consumed by `InputBar` |
-| Creating the session | `lib/sessionCreate.ts` (`createSession`) | The one create `useSession` and the handoff share, so concurrent callers join one request |
+| Creating the session | `lib/sessionCreate.ts` (`createSession`) | The one create `useSession` and the handoff share, so concurrent callers of the same kind (chat or canvas) join one request |
 | The ring | `.composer-arrival` in `index.css` | A keyframe animation, so the ring is there at once and only its going fades |
 
 ## 2. The review row
