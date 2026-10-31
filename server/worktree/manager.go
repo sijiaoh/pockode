@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/pockode/server/agent"
+	"github.com/pockode/server/canvas"
 	"github.com/pockode/server/chat"
 	"github.com/pockode/server/process"
 	"github.com/pockode/server/rpc"
@@ -196,6 +197,33 @@ func (m *Manager) ResolveQuestions(name string) (chat.Questions, func(), error) 
 		return nil, nil, fmt.Errorf("get worktree %q for questions: %w", name, err)
 	}
 	return wt.ChatClient, func() { m.Release(wt) }, nil
+}
+
+// ResolveCanvas returns the named worktree's canvas store, whether sessionID
+// is one of its canvas sessions, and the release func for the worktree.
+//
+// A worktree that is not there has no sessions either, so it is reported as
+// the session being missing (chat.ErrSessionNotFound): the caller is a process
+// outliving its worktree, or a proxy started by hand, not a fault here.
+func (m *Manager) ResolveCanvas(name, sessionID string) (*canvas.Store, bool, func(), error) {
+	wt, err := m.Get(name)
+	if errors.Is(err, ErrWorktreeNotFound) || errors.Is(err, ErrNotGitRepo) {
+		return nil, false, nil, fmt.Errorf("%w: %s in worktree %q: %w", chat.ErrSessionNotFound, sessionID, name, err)
+	}
+	if err != nil {
+		return nil, false, nil, fmt.Errorf("get worktree %q for the canvas: %w", name, err)
+	}
+	release := func() { m.Release(wt) }
+	meta, found, err := wt.SessionStore.Get(sessionID)
+	if err != nil {
+		release()
+		return nil, false, nil, fmt.Errorf("read session %s: %w", sessionID, err)
+	}
+	if !found {
+		release()
+		return nil, false, nil, fmt.Errorf("%w: %s", chat.ErrSessionNotFound, sessionID)
+	}
+	return wt.CanvasStore, meta.Canvas, release, nil
 }
 
 // DeleteSessions implements work.SessionDeleter: the sessions of a deleted work
@@ -841,7 +869,12 @@ func (m *Manager) create(name, workDir string) (*Worktree, error) {
 		sessionStore.AddOnChangeListener(sessionDeletions{engine: engine, worktree: name})
 	}
 
+	canvasStore := canvas.NewStore(wtDataDir)
+	canvasStore.SetOnChange(chatMessagesWatcher.NotifyCanvasState)
+	sessionStore.AddOnChangeListener(canvasStore)
+
 	chatClient := chat.NewClient(sessionStore, processManager)
+	chatClient.SetCanvasStore(canvasStore)
 	chatClient.SetBroadcaster(func(sessionID string, record agent.EventRecord, seq session.HistorySeq, exclude any) {
 		var n watch.Notifier
 		if exclude != nil {
@@ -869,6 +902,7 @@ func (m *Manager) create(name, workDir string) (*Worktree, error) {
 		ChatMessagesWatcher:  chatMessagesWatcher,
 		ProcessManager:       processManager,
 		ChatClient:           chatClient,
+		CanvasStore:          canvasStore,
 		watchers:             []watch.Watcher{fsWatcher, gitWatcher, gitDiffWatcher, sessionListWatcher, sessionDetailWatcher, chatMessagesWatcher},
 		subscribers:          make(map[watch.Notifier]struct{}),
 	}

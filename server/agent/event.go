@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"time"
 
+	"github.com/pockode/server/canvas"
 	"github.com/pockode/server/session"
 )
 
@@ -399,6 +400,14 @@ type ToolResultEvent struct {
 	// result came out of, when the agent puts ids on them. See
 	// EventRecord.ProviderMessageID.
 	ProviderMessageID string
+	// CanvasRevision is the canvas revision the call drew, set on the result
+	// of a successful canvas_render or canvas_update and zero on every other.
+	// It is the link from a canvas snapshot to the call that drew it, and a
+	// fork reads it to know what the canvas was at the cut
+	// (docs/canvas-ui.md §13.4). The CLI does not report it: an MCP call does
+	// not carry the CLI's tool call id, so the server stamps it when it
+	// records the result (process.canvasCalls).
+	CanvasRevision int
 }
 
 func (ToolResultEvent) EventType() EventType { return EventTypeToolResult }
@@ -427,6 +436,7 @@ func (e ToolResultEvent) ToRecord() EventRecord {
 		IsError:           e.IsError,
 		ParentToolUseID:   e.ParentToolUseID,
 		ProviderMessageID: e.ProviderMessageID,
+		CanvasRevision:    e.CanvasRevision,
 	}
 }
 
@@ -965,6 +975,18 @@ type MessageEvent struct {
 	// Command is the Pockode command the user typed, when Content is what it
 	// expanded to rather than what they wrote. See CommandInvocation.
 	Command *CommandInvocation
+	// CanvasAction is what the user did on a canvas page, when this message is
+	// one: Content is then canvas.ActionText of it, which is what the agent
+	// reads, and this is the structured copy the client draws from — and what
+	// tells it the content is machine text no user typed, so it never comes
+	// back as an input draft (docs/canvas-ui.md §6.2).
+	CanvasAction *canvas.Action
+	// CanvasSize is the sending device's canvas size, on a message to a canvas
+	// session whose sender reported one. It is a fact about the moment of
+	// sending; the canvas's current reported size is canvas.Store's. The agent
+	// reads it as a line added at delivery, never stored in Content
+	// (docs/canvas-ui.md §6.3).
+	CanvasSize *canvas.Size
 	// Attachments describe the files the user sent with the message, by their
 	// ids in the session's attachment store. What the agent was handed for each
 	// is not recorded: that is the agent's business, decided at delivery.
@@ -985,15 +1007,17 @@ func (MessageEvent) isAgentEvent()        {}
 
 func (e MessageEvent) ToRecord() EventRecord {
 	return EventRecord{
-		Type:        e.EventType(),
-		Content:     e.Content,
-		Origin:      e.Origin,
-		Subtype:     e.Subtype,
-		Meta:        e.Meta,
-		Answering:   e.Answering,
-		MessageID:   e.MessageID,
-		Command:     e.Command,
-		Attachments: e.Attachments,
+		Type:         e.EventType(),
+		Content:      e.Content,
+		Origin:       e.Origin,
+		Subtype:      e.Subtype,
+		Meta:         e.Meta,
+		Answering:    e.Answering,
+		MessageID:    e.MessageID,
+		Command:      e.Command,
+		CanvasAction: e.CanvasAction,
+		CanvasSize:   e.CanvasSize,
+		Attachments:  e.Attachments,
 	}
 }
 

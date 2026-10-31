@@ -700,6 +700,12 @@ func (h *rpcMethodHandler) Handle(ctx context.Context, conn *jsonrpc2.Conn, req 
 		h.handleInterrupt(ctx, conn, req, wt)
 	case "chat.permission_response":
 		h.handlePermissionResponse(ctx, conn, req, wt)
+	case "chat.canvas_action":
+		h.handleChatCanvasAction(ctx, conn, req, wt)
+	case "chat.canvas_history":
+		h.handleChatCanvasHistory(ctx, conn, req, wt)
+	case "chat.canvas_snapshot":
+		h.handleChatCanvasSnapshot(ctx, conn, req, wt)
 	// session namespace
 	case "session.create":
 		h.handleSessionCreate(ctx, conn, req, wt)

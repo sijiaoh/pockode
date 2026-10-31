@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
@@ -44,7 +45,7 @@ func callMethod(t *testing.T, s *Server, method string, params interface{}) json
 // --- Protocol tests (handled locally, no server round-trip) ---
 
 func TestInitialize(t *testing.T) {
-	resp := callMethod(t, NewServer(nil, "test"), "initialize", nil)
+	resp := callMethod(t, NewServer(nil, "test", false), "initialize", nil)
 	if resp.Error != nil {
 		t.Fatalf("unexpected error: %+v", resp.Error)
 	}
@@ -66,8 +67,39 @@ func TestInitialize(t *testing.T) {
 	}
 }
 
+// A proxy spawned with --canvas gives the canvas guidance and the canvas tool
+// set; which set that is, TestListedTools_FollowTheSession holds.
+func TestCanvasProxy(t *testing.T) {
+	s := NewServer(nil, "test", true)
+
+	b, _ := json.Marshal(callMethod(t, s, "initialize", nil).Result)
+	var init initializeResult
+	if err := json.Unmarshal(b, &init); err != nil {
+		t.Fatal(err)
+	}
+	if init.Instructions != agent.CanvasGuidance {
+		t.Errorf("instructions = %q, want agent.CanvasGuidance", init.Instructions)
+	}
+
+	b, _ = json.Marshal(callMethod(t, s, "tools/list", nil).Result)
+	var list toolsListResult
+	if err := json.Unmarshal(b, &list); err != nil {
+		t.Fatal(err)
+	}
+	var got, want []string
+	for _, td := range list.Tools {
+		got = append(got, td.Name)
+	}
+	for _, td := range listedTools(true) {
+		want = append(want, td.Name)
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("listed %v, want the canvas set %v", got, want)
+	}
+}
+
 func TestToolsList(t *testing.T) {
-	resp := callMethod(t, NewServer(nil, "test"), "tools/list", nil)
+	resp := callMethod(t, NewServer(nil, "test", false), "tools/list", nil)
 
 	b, _ := json.Marshal(resp.Result)
 	var result toolsListResult
@@ -89,7 +121,7 @@ func TestToolsList(t *testing.T) {
 }
 
 func TestUnknownMethod(t *testing.T) {
-	resp := callMethod(t, NewServer(nil, "test"), "nonexistent", nil)
+	resp := callMethod(t, NewServer(nil, "test", false), "nonexistent", nil)
 	if resp.Error == nil {
 		t.Fatal("expected error for unknown method")
 	}
@@ -109,7 +141,7 @@ func newProxyToAPI(t *testing.T, serverToken, clientToken string) (*Server, stri
 	t.Cleanup(httpSrv.Close)
 
 	client := &Client{baseURL: httpSrv.URL, token: clientToken, http: httpSrv.Client()}
-	return NewServer(client, "test"), ts.roleID
+	return NewServer(client, "test", false), ts.roleID
 }
 
 func callToolViaProxy(t *testing.T, s *Server, name string, args interface{}) jsonRPCResponse {
@@ -208,7 +240,7 @@ func newProxyToRecorder(t *testing.T, caller Caller) (*Server, *recordingExecuto
 	t.Cleanup(httpSrv.Close)
 
 	client := &Client{baseURL: httpSrv.URL, token: "secret", caller: caller, http: httpSrv.Client()}
-	return NewServer(client, "test"), rec
+	return NewServer(client, "test", false), rec
 }
 
 // The identity the CLI was spawned with has to reach the executor on every

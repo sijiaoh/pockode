@@ -415,7 +415,7 @@ func TestParseLine(t *testing.T) {
 			// not reach a Pockode user, so it is refused and the user is told.
 			name:     "control_request AskUserQuestion tool",
 			input:    `{"type":"control_request","request_id":"req-q-123","request":{"subtype":"can_use_tool","tool_name":"AskUserQuestion","tool_use_id":"toolu_q_abc","input":{"questions":[{"question":"Which library?","header":"Library","options":[{"label":"A","description":"Option A"}],"multiSelect":false}]}}}`,
-			expected: []agent.AgentEvent{agent.CLIQuestionRefusedWarning("Claude")},
+			expected: []agent.AgentEvent{agent.CLIQuestionRefusedWarning("Claude", false)},
 		},
 		{
 			name:     "system init event with session_id is filtered",
@@ -613,6 +613,26 @@ func TestParseLine_AskUserQuestionIsRefusedRatherThanAsked(t *testing.T) {
 	warning, ok := results[0].(agent.WarningEvent)
 	if !ok || warning.Code != agent.CLIQuestionRefusedCode {
 		t.Fatalf("expected the user to be warned, got %#v", results[0])
+	}
+}
+
+// A canvas session refuses question_post, so its refusal points at the canvas
+// instead — pointing at question_post would only send the agent into a second
+// refusal.
+func TestParseLine_AskUserQuestionInACanvasSessionSaysToDraw(t *testing.T) {
+	input := `{"type":"control_request","request_id":"req-q","request":{"subtype":"can_use_tool","tool_name":"AskUserQuestion","tool_use_id":"toolu_q","input":{"questions":[]}}}`
+
+	var gotMessage string
+	refusals := testRefusals(nil, func(_, _, message string) { gotMessage = message })
+	refusals.canvas = true
+
+	results := parseTestLineFull(testLogger(), []byte(input), &sync.Map{}, &backgroundTaskTracker{}, refusals)
+
+	if gotMessage != agent.CanvasCLIQuestionRefusal {
+		t.Errorf("deny message = %q, want the canvas refusal", gotMessage)
+	}
+	if len(results) != 1 || results[0] != agent.CLIQuestionRefusedWarning("Claude", true) {
+		t.Errorf("events = %#v, want the canvas wording of the warning", results)
 	}
 }
 
@@ -1419,6 +1439,21 @@ func TestWriteMCPConfig_MainWorktreeIsUnnamed(t *testing.T) {
 	for _, arg := range readMCPArgs(t, path) {
 		if arg == "--worktree" {
 			t.Errorf("main worktree session passed --worktree: %v", readMCPArgs(t, path))
+		}
+	}
+}
+
+// The flag is what makes the proxy list the canvas tools and give the canvas
+// guidance (docs/canvas-ui.md §9.1); an ordinary session must not get it.
+func TestWriteMCPConfig_CanvasFlagFollowsTheSession(t *testing.T) {
+	for _, isCanvas := range []bool{true, false} {
+		path, _, err := writeMCPConfig(agent.StartOptions{DataDir: t.TempDir(), SessionID: "s1", Canvas: isCanvas})
+		if err != nil {
+			t.Fatalf("writeMCPConfig: %v", err)
+		}
+		args := readMCPArgs(t, path)
+		if got := slices.Contains(args, "--canvas"); got != isCanvas {
+			t.Errorf("canvas session %v: --canvas passed = %v (args %v)", isCanvas, got, args)
 		}
 	}
 }

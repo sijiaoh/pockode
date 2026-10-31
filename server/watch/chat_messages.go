@@ -2,10 +2,12 @@ package watch
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
 	"sync"
 
 	"github.com/pockode/server/agent"
+	"github.com/pockode/server/canvas"
 	"github.com/pockode/server/process"
 	"github.com/pockode/server/session"
 )
@@ -101,20 +103,15 @@ func (w *ChatMessagesWatcher) notifyMessage(msg process.ChatMessage) {
 
 // notifyEvent broadcasts an event to session subscribers, optionally excluding one notifier.
 func (w *ChatMessagesWatcher) notifyEvent(sessionID string, record agent.EventRecord, seq session.HistorySeq, exclude Notifier) {
-	w.sessionMu.RLock()
-	ids := make([]string, len(w.sessionToIDs[sessionID]))
-	copy(ids, w.sessionToIDs[sessionID])
-	w.sessionMu.RUnlock()
-
-	if len(ids) == 0 {
+	subs := w.sessionSubscriptions(sessionID)
+	if len(subs) == 0 {
 		return
 	}
 
 	method := "chat." + string(record.Type)
 
-	for _, id := range ids {
-		sub := w.GetSubscription(id)
-		if sub == nil || sub.Notifier == exclude {
+	for _, sub := range subs {
+		if sub.Notifier == exclude {
 			continue
 		}
 
@@ -134,6 +131,22 @@ func (w *ChatMessagesWatcher) notifyEvent(sessionID string, record agent.EventRe
 	}
 }
 
+// sessionSubscriptions are the subscriptions currently open on a session.
+func (w *ChatMessagesWatcher) sessionSubscriptions(sessionID string) []*Subscription {
+	w.sessionMu.RLock()
+	ids := make([]string, len(w.sessionToIDs[sessionID]))
+	copy(ids, w.sessionToIDs[sessionID])
+	w.sessionMu.RUnlock()
+
+	subs := make([]*Subscription, 0, len(ids))
+	for _, id := range ids {
+		if sub := w.GetSubscription(id); sub != nil {
+			subs = append(subs, sub)
+		}
+	}
+	return subs
+}
+
 // notifyParams embeds EventRecord with subscription ID for routing.
 type notifyParams struct {
 	ID string `json:"id"`
@@ -145,6 +158,19 @@ type notifyParams struct {
 	agent.EventRecord
 }
 
+// ChatSubscribed is what a new chat subscription starts from.
+type ChatSubscribed struct {
+	// Page is the newest page of the session's history.
+	Page session.HistoryPage
+	// Turn is the session's turn at the moment of subscribing, from the same
+	// read as PermissionRequests, so that the two agree on what is pending.
+	Turn session.TurnState
+	// PermissionRequests are the stamped permission_request records of the
+	// requests Turn has pending, oldest first, whatever page they are on
+	// (docs/canvas-ui.md §10.4).
+	PermissionRequests []json.RawMessage
+}
+
 // Subscribe registers a subscriber for a specific session under the
 // client-chosen id and returns the newest page of that session's history.
 //
@@ -153,6 +179,14 @@ type notifyParams struct {
 // acceptable; message loss is not. (A record landing in the shorter window
 // between the two is not routed to this subscriber, but it is in the history
 // read right after, so it is not lost either.)
+//
+// The turn, and with it the pending requests, is read after the registration
+// too, and that is what makes the requests complete. A request's record that
+// the history read missed was written after the registration, so it reaches
+// this subscriber live. One the history holds had its blocker settled before
+// it was written — a process settles the turn first (process.Process.
+// handleEvent) — so the turn read here names it unless it has already been
+// answered.
 //
 // limit follows session.PageHistory: zero asks for the default page size. Older
 // pages are fetched out of band (chat.messages.history) rather than through the
@@ -163,13 +197,13 @@ func (w *ChatMessagesWatcher) Subscribe(
 	notifier Notifier,
 	sessionID string,
 	limit int,
-) (session.HistoryPage, error) {
+) (ChatSubscribed, error) {
 	sub := &Subscription{
 		ID:       id,
 		Notifier: notifier,
 	}
 	if err := w.AddSubscription(sub); err != nil {
-		return session.HistoryPage{}, err
+		return ChatSubscribed{}, err
 	}
 
 	w.sessionMu.Lock()
@@ -177,19 +211,37 @@ func (w *ChatMessagesWatcher) Subscribe(
 	w.idToSession[id] = sessionID
 	w.sessionMu.Unlock()
 
+	fail := func(err error) (ChatSubscribed, error) {
+		w.Unsubscribe(id)
+		return ChatSubscribed{}, err
+	}
+
 	history, err := w.store.GetHistory(context.Background(), sessionID)
 	if err != nil {
-		w.Unsubscribe(id)
-		return session.HistoryPage{}, err
+		return fail(err)
 	}
 
 	page, err := session.PageHistory(history, session.NoHistorySeq, limit)
 	if err != nil {
-		w.Unsubscribe(id)
-		return session.HistoryPage{}, err
+		return fail(err)
 	}
 
-	return page, nil
+	meta, _, err := w.store.Get(sessionID)
+	if err != nil {
+		return fail(err)
+	}
+	var pending []string
+	for _, b := range meta.Turn.Blockers {
+		if b.Kind == session.BlockerPermission {
+			pending = append(pending, b.RequestID)
+		}
+	}
+	var requests []json.RawMessage
+	for _, i := range agent.PermissionRequestIndexes(history, pending) {
+		requests = append(requests, session.RecordAt(history, i))
+	}
+
+	return ChatSubscribed{Page: page, Turn: meta.Turn, PermissionRequests: requests}, nil
 }
 
 // Unsubscribe removes a subscription.
@@ -235,4 +287,29 @@ func (w *ChatMessagesWatcher) IsViewing(sessionID string) bool {
 // clients watching the same session without waiting for a reload.
 func (w *ChatMessagesWatcher) NotifyRecord(sessionID string, record agent.EventRecord, seq session.HistorySeq, exclude Notifier) {
 	w.notifyEvent(sessionID, record, seq, exclude)
+}
+
+// NotifyCanvasState pushes a canvas session's new canvas to every chat
+// subscriber of the session, as chat.canvas_state.
+//
+// It is not a record — no seq, never in history — and goes out beside the
+// record stream rather than through it: each notification carries the whole
+// state, so one arriving before a record it came after, or after a newer one,
+// costs nothing; the client keeps the highest revision (docs/canvas-ui.md
+// §13.2).
+func (w *ChatMessagesWatcher) NotifyCanvasState(sessionID string, state canvas.State) {
+	for _, sub := range w.sessionSubscriptions(sessionID) {
+		n := Notification{Method: "chat.canvas_state", Params: canvasStateParams{ID: sub.ID, Canvas: state}}
+		if err := sub.Notifier.Notify(context.Background(), n); err != nil {
+			slog.Debug("failed to notify subscriber",
+				"id", sub.ID,
+				"sessionId", sessionID,
+				"error", err)
+		}
+	}
+}
+
+type canvasStateParams struct {
+	ID     string       `json:"id"`
+	Canvas canvas.State `json:"canvas"`
 }

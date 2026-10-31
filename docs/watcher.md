@@ -83,7 +83,7 @@ These watchers implement store listener interfaces and use async buffered channe
 |---------|------|--------------------|--------------|
 | SessionListWatcher | `watch/session_list.go` | `session.OnChangeListener`, plus work changes routed by the worktree manager | `session.list.changed` |
 | SessionDetailWatcher | `watch/session_detail.go` | `session.OnChangeListener`, plus work changes routed by the worktree manager | `session.detail.changed` |
-| ChatMessagesWatcher | `watch/chat_messages.go` | `process.ChatMessageListener` | `chat.<event-type>` |
+| ChatMessagesWatcher | `watch/chat_messages.go` | `process.ChatMessageListener`; `canvas.Store`'s on-change | `chat.<event-type>`; `chat.canvas_state`, which is state, not a record ([canvas-ui.md §13.2](canvas-ui.md#132-the-pushed-state)) |
 | WorkListWatcher | `watch/work_list.go` | `work.OnChangeListener` + every worktree's `session.OnChangeListener` | `work.list.changed` |
 | WorkDetailWatcher | `watch/work_detail.go` | `work.OnChangeListener` + `work.OnCommentChangeListener` + every worktree's `session.OnChangeListener` | `work.detail.changed` |
 | SettingsWatcher | `watch/settings.go` | `settings.OnChangeListener` | `settings.changed` |

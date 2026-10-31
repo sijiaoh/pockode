@@ -600,3 +600,43 @@ func TestForceShutdown_RemovesADataDirectoryWithNoSessionsLeft(t *testing.T) {
 		t.Errorf("the data directory of a deleted worktree with no sessions is still there: %v", err)
 	}
 }
+
+// The canvas tools decide from the stored property whether a session is a
+// canvas session, so that is what ResolveCanvas has to report — with the store
+// the session's canvas lives in, and a session it does not have refused as one.
+func TestResolveCanvas_ReportsTheStoredProperty(t *testing.T) {
+	repo := initGitRepo(t)
+	dataDir := t.TempDir()
+	m := NewManager(NewRegistry(repo, dataDir), agent.NewRegistry(), dataDir, session.LeaseBudgets{})
+	t.Cleanup(m.Shutdown)
+
+	wt, err := m.Get("")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	defer m.Release(wt)
+	for id, isCanvas := range map[string]bool{"canvas": true, "plain": false} {
+		if _, err := wt.SessionStore.Create(context.Background(), id, session.CreateSpec{Canvas: isCanvas}); err != nil {
+			t.Fatalf("create session: %v", err)
+		}
+	}
+
+	for id, want := range map[string]bool{"canvas": true, "plain": false} {
+		store, isCanvas, release, err := m.ResolveCanvas("", id)
+		if err != nil {
+			t.Fatalf("ResolveCanvas(%s): %v", id, err)
+		}
+		release()
+		if isCanvas != want || store != wt.CanvasStore {
+			t.Errorf("ResolveCanvas(%s) = %v (store %p), want %v (store %p)", id, isCanvas, store, want, wt.CanvasStore)
+		}
+	}
+
+	if _, _, _, err := m.ResolveCanvas("", "nobody"); !errors.Is(err, session.ErrSessionNotFound) {
+		t.Errorf("unknown session: err = %v, want ErrSessionNotFound", err)
+	}
+	// A worktree that is gone has none of its sessions any more.
+	if _, _, _, err := m.ResolveCanvas("removed", "canvas"); !errors.Is(err, session.ErrSessionNotFound) {
+		t.Errorf("unknown worktree: err = %v, want ErrSessionNotFound", err)
+	}
+}

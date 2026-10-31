@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/pockode/server/agent"
+	"github.com/pockode/server/canvas"
 	"github.com/pockode/server/process"
 	"github.com/pockode/server/session"
 )
@@ -99,12 +100,20 @@ type Client struct {
 	pm        *process.Manager
 	broadcast EventBroadcastFunc
 	settled   QuestionsSettledFunc
+	canvas    *canvas.Store
 	// postMu keeps each PostQuestions call's questions contiguous; see there.
 	postMu sync.Mutex
 }
 
 func NewClient(store session.Store, pm *process.Manager) *Client {
 	return &Client{store: store, pm: pm}
+}
+
+// SetCanvasStore installs the store a canvas session's fork copies its canvas
+// through, and the reported size of a message from a canvas session is
+// recorded in. Required before a canvas session is forked or sent a size.
+func (c *Client) SetCanvasStore(store *canvas.Store) {
+	c.canvas = store
 }
 
 // SetBroadcaster sets the function used to broadcast server-written records to
@@ -136,10 +145,23 @@ func (c *Client) notifySettled(sessionID string, settled []agent.SettledQuestion
 	}
 }
 
+// Sender is what a message's sender adds to the sending of it, beyond the
+// message itself.
+type Sender struct {
+	// Exclude is the notifier left out of the broadcast — the WebSocket client
+	// that sent the message and has already shown it to itself. Typed as any
+	// for the reason EventBroadcastFunc's exclude is.
+	Exclude any
+	// CanvasSize is the sending device's canvas size, for a message to a
+	// canvas session that reported one (docs/canvas-ui.md §5). The caller
+	// leaves it nil for any other session: there is no canvas to measure.
+	CanvasSize *canvas.Size
+}
+
 // SendMessageExcluding sends a user message to the agent process, persists it to
-// history, and broadcasts it to every session subscriber except the given
-// notifier — the caller that has already shown the message to itself (the
-// WebSocket client that sent it).
+// history, and broadcasts it to every session subscriber except from.Exclude —
+// the caller that has already shown the message to itself (the WebSocket
+// client that sent it).
 //
 // It returns where the message landed in the session's history, and the id
 // minted for it, so the caller can hand both back to the sender. This is the
@@ -154,16 +176,30 @@ func (c *Client) notifySettled(sessionID string, settled []agent.SettledQuestion
 // attachments are files already in the session's attachment store; the message
 // is refused whole with ErrAttachmentsUnsupported when the agent cannot take
 // them.
-func (c *Client) SendMessageExcluding(ctx context.Context, sessionID, content string, attachments []agent.Attachment, exclude any) (Sent, error) {
-	return c.sendEvent(ctx, sessionID, agent.MessageEvent{Content: content}, attachments, exclude)
+func (c *Client) SendMessageExcluding(ctx context.Context, sessionID, content string, attachments []agent.Attachment, from Sender) (Sent, error) {
+	return c.sendEvent(ctx, sessionID, agent.MessageEvent{Content: content}, attachments, from)
 }
 
 // SendCommandExcluding is SendMessageExcluding for a Pockode command: content is
 // the prompt the command expanded to, which is what the agent reads and what the
 // record holds, and cmd is what the user typed. It is still the user's message —
 // the origin is theirs, so it forks and drives a work like any other.
-func (c *Client) SendCommandExcluding(ctx context.Context, sessionID, content string, cmd agent.CommandInvocation, attachments []agent.Attachment, exclude any) (Sent, error) {
-	return c.sendEvent(ctx, sessionID, agent.MessageEvent{Content: content, Command: &cmd}, attachments, exclude)
+func (c *Client) SendCommandExcluding(ctx context.Context, sessionID, content string, cmd agent.CommandInvocation, attachments []agent.Attachment, from Sender) (Sent, error) {
+	return c.sendEvent(ctx, sessionID, agent.MessageEvent{Content: content, Command: &cmd}, attachments, from)
+}
+
+// SendCanvasAction is SendMessageExcluding for something the user did on a
+// canvas page, and returns the content the agent was sent
+// (canvas.ActionText). It is the user's message like any other — refused
+// while a permission request is open, folded into a running turn — but its
+// content is machine text, which is what the record's canvas_action says.
+//
+// The caller has checked the action against the session (docs/canvas-ui.md
+// §6.4): that it is a canvas session, and that the revision exists.
+func (c *Client) SendCanvasAction(ctx context.Context, sessionID string, action canvas.Action, from Sender) (Sent, string, error) {
+	content := canvas.ActionText(action)
+	sent, err := c.sendEvent(ctx, sessionID, agent.MessageEvent{Content: content, CanvasAction: &action}, nil, from)
+	return sent, content, err
 }
 
 // SendSystemMessage sends a system-driven automatic message (kickoff, restart,
@@ -177,7 +213,7 @@ func (c *Client) SendSystemMessage(ctx context.Context, sessionID, content, subt
 		Subtype: subtype,
 		Meta:    meta,
 	}
-	_, err := c.sendEvent(ctx, sessionID, event, nil, nil)
+	_, err := c.sendEvent(ctx, sessionID, event, nil, Sender{})
 	return err
 }
 
@@ -191,7 +227,7 @@ type Sent struct {
 
 // sendEvent delivers one message to the agent, records it, and tells subscribers.
 // It returns what names the record, or the zero Sent if there is none.
-func (c *Client) sendEvent(ctx context.Context, sessionID string, event agent.MessageEvent, attachments []agent.Attachment, exclude any) (Sent, error) {
+func (c *Client) sendEvent(ctx context.Context, sessionID string, event agent.MessageEvent, attachments []agent.Attachment, from Sender) (Sent, error) {
 	proc, err := c.getOrCreateProcess(ctx, sessionID)
 	if err != nil {
 		return Sent{}, err
@@ -216,6 +252,20 @@ func (c *Client) sendEvent(ctx context.Context, sessionID string, event agent.Me
 		event.Attachments = append(event.Attachments, a.File)
 	}
 
+	// Past every check, so a refused message reports nothing
+	// (docs/canvas-ui.md §6.4); before the record and the delivery, so the
+	// store agrees with the record that says so, and a canvas call the agent
+	// makes in answer is drawn for this size, not the one before. A size that
+	// could not be stored is not worth refusing the message over: the agent
+	// still reads it in this message, and only the next revision's drawn_for
+	// falls behind.
+	if from.CanvasSize != nil {
+		event.CanvasSize = from.CanvasSize
+		if err := c.canvas.ReportSize(sessionID, *from.CanvasSize); err != nil {
+			slog.Error("failed to record the canvas size a message reported", "sessionId", sessionID, "error", err)
+		}
+	}
+
 	// Minted here, once, for every sender: it goes into the record, to the agent
 	// that can carry it, and into the read point that names this message later.
 	event.MessageID = uuid.NewString()
@@ -235,13 +285,13 @@ func (c *Client) sendEvent(ctx context.Context, sessionID string, event agent.Me
 		event.MessageID = ""
 	}
 
-	openedTurn, err := proc.SendMessage(agent.Prompt{Text: event.Content, ID: event.MessageID, Attachments: attachments})
+	openedTurn, err := proc.SendMessage(agent.Prompt{Text: deliveredText(event), ID: event.MessageID, Attachments: attachments})
 	if err != nil {
 		return Sent{}, err
 	}
 
 	if c.broadcast != nil {
-		c.broadcast(sessionID, event.ToRecord(), seq, exclude)
+		c.broadcast(sessionID, event.ToRecord(), seq, from.Exclude)
 	}
 
 	// A message that joined a turn already under way is the one that needs a
@@ -257,6 +307,18 @@ func (c *Client) sendEvent(ctx context.Context, sessionID string, event agent.Me
 	}
 
 	return Sent{Seq: seq, MessageID: event.MessageID}, nil
+}
+
+// deliveredText is what the agent reads for a message: its content, and the
+// sender's canvas size on a line of its own when it reported one. The size is
+// added here and never stored in the content, so the content stays what the
+// user typed — a prompt a fork drops comes back as a draft without it — and
+// whoever needs the size reads it from canvas_size (docs/canvas-ui.md §6.3).
+func deliveredText(event agent.MessageEvent) string {
+	if event.CanvasSize == nil {
+		return event.Content
+	}
+	return fmt.Sprintf("%s\n[Canvas size: %d×%d]", event.Content, event.CanvasSize.Width, event.CanvasSize.Height)
 }
 
 // noteIngested writes the read point for an agent that cannot report its own:
@@ -421,6 +483,10 @@ func (c *Client) Fork(ctx context.Context, sourceID string, anchor session.Histo
 		return fail(fmt.Errorf("copy history: %w", err))
 	}
 
+	if source.Canvas {
+		c.forkCanvas(ctx, sourceID, newID, history)
+	}
+
 	// Nothing about the source's present state goes with this, not even whether a
 	// turn is in flight. The fork point lives in the copied history and nowhere
 	// else: history is append-only, so the prefix above is already final, and
@@ -456,6 +522,32 @@ func (c *Client) Fork(ctx context.Context, sourceID string, anchor session.Histo
 		"anchorSeq", int(anchor), "records", len(history),
 		"agentContextCarried", carried)
 	return meta, nil
+}
+
+// forkCanvas gives the fork the canvas as it was at the cut, read from the
+// history it was just given (docs/canvas-ui.md §13.6). After WriteHistory
+// because that replaces the fork's whole history, so the warning appended here
+// on failure would otherwise be lost.
+//
+// Not fatal, as for attachments: a fork without its canvas is still the
+// conversation the user asked for, and the warning tells them to have it drawn
+// again.
+func (c *Client) forkCanvas(ctx context.Context, sourceID, forkID string, history []json.RawMessage) {
+	revision, reported := canvas.ForkPoint(history)
+	err := c.canvas.Fork(sourceID, forkID, revision, reported)
+	if err == nil {
+		return
+	}
+	slog.Error("failed to copy the canvas into a forked session",
+		"sessionId", forkID, "sourceSessionId", sourceID, "revision", revision, "error", err)
+	warning := agent.WarningEvent{
+		Message: "The canvas could not be copied into this session. Ask the agent to draw it again.",
+		Code:    "fork_canvas_unavailable",
+	}
+	if _, err := c.store.AppendToHistory(ctx, forkID, agent.NewEventRecord(warning)); err != nil {
+		slog.Error("failed to record that the fork has no canvas",
+			"sessionId", forkID, "error", err)
+	}
 }
 
 // liveProcess returns the session's running process. Unlike getOrCreateProcess it

@@ -28,6 +28,7 @@ import (
 	"github.com/pockode/server/agent"
 	"github.com/pockode/server/agent/claude"
 	"github.com/pockode/server/agent/codex"
+	"github.com/pockode/server/canvas"
 	"github.com/pockode/server/chat"
 	"github.com/pockode/server/mcp"
 	"github.com/pockode/server/serverinfo"
@@ -427,6 +428,12 @@ func (s *recordingSessions) LocateQuestions(requestID string) []worktree.Questio
 
 func (s *recordingSessions) ResolveSessionWorktree(string) (string, error) {
 	return "", nil
+}
+
+// ResolveCanvas: the eval's session is an ordinary one, so it is never handed a
+// store.
+func (s *recordingSessions) ResolveCanvas(string, string) (*canvas.Store, bool, func(), error) {
+	return nil, false, func() {}, nil
 }
 
 func (s *recordingSessions) PostQuestions(_ context.Context, _ string, specs []chat.QuestionSpec) ([]session.PendingQuestion, error) {

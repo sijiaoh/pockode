@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/pockode/server/agent"
+	"github.com/pockode/server/canvas"
 	"github.com/pockode/server/process"
 	"github.com/pockode/server/session"
 )
@@ -15,6 +16,7 @@ import (
 // drives its turn to.
 type midTurnFixture struct {
 	store      session.Store
+	canvas     *canvas.Store
 	client     *Client
 	agent      *mockAgent
 	pm         *process.Manager
@@ -24,7 +26,8 @@ type midTurnFixture struct {
 func newMidTurnFixture(t *testing.T) *midTurnFixture {
 	t.Helper()
 
-	store, err := session.NewFileStore(t.TempDir())
+	dataDir := t.TempDir()
+	store, err := session.NewFileStore(dataDir)
 	if err != nil {
 		t.Fatalf("NewFileStore: %v", err)
 	}
@@ -36,7 +39,8 @@ func newMidTurnFixture(t *testing.T) *midTurnFixture {
 		t.Fatalf("Create session: %v", err)
 	}
 
-	f := &midTurnFixture{store: store, client: NewClient(store, pm), agent: ag, pm: pm}
+	f := &midTurnFixture{store: store, canvas: canvas.NewStore(dataDir), client: NewClient(store, pm), agent: ag, pm: pm}
+	f.client.SetCanvasStore(f.canvas)
 	f.client.SetBroadcaster(func(_ string, record agent.EventRecord, _ session.HistorySeq, _ any) {
 		f.broadcasts = append(f.broadcasts, record)
 	})
@@ -47,7 +51,7 @@ func newMidTurnFixture(t *testing.T) *midTurnFixture {
 // returns the agent session behind it.
 func (f *midTurnFixture) startTurn(t *testing.T) *mockSession {
 	t.Helper()
-	if _, err := f.client.SendMessageExcluding(context.Background(), "sess", "first", nil, nil); err != nil {
+	if _, err := f.client.SendMessageExcluding(context.Background(), "sess", "first", nil, Sender{}); err != nil {
 		t.Fatalf("SendMessageExcluding: %v", err)
 	}
 	if phase := f.phase(t); phase != session.PhaseRunning {
@@ -121,7 +125,7 @@ func TestClient_MessageDuringARunningTurnGoesThrough(t *testing.T) {
 	f := newMidTurnFixture(t)
 	sess := f.startTurn(t)
 
-	sent, err := f.client.SendMessageExcluding(context.Background(), "sess", "second", nil, nil)
+	sent, err := f.client.SendMessageExcluding(context.Background(), "sess", "second", nil, Sender{})
 	if err != nil {
 		t.Fatalf("SendMessageExcluding during a running turn = %v, want it delivered", err)
 	}
@@ -158,7 +162,7 @@ func TestClient_MessageDuringABackgroundWaitGoesThrough(t *testing.T) {
 	sess.events <- agent.BackgroundWaitEvent{}
 	f.waitForPhase(t, session.PhaseBlocked)
 
-	if _, err := f.client.SendMessageExcluding(context.Background(), "sess", "second", nil, nil); err != nil {
+	if _, err := f.client.SendMessageExcluding(context.Background(), "sess", "second", nil, Sender{}); err != nil {
 		t.Fatalf("SendMessageExcluding during a background wait = %v, want it delivered", err)
 	}
 	if got := sess.sentPrompts(); len(got) != 2 || got[1] != "second" {
@@ -194,7 +198,12 @@ func TestClient_MessageRefusedWhileARequestIsOnScreen(t *testing.T) {
 		send func(*Client) error
 	}{
 		{"user message", func(c *Client) error {
-			_, err := c.SendMessageExcluding(context.Background(), "sess", "never mind", nil, nil)
+			_, err := c.SendMessageExcluding(context.Background(), "sess", "never mind", nil, Sender{})
+			return err
+		}},
+		{"canvas action", func(c *Client) error {
+			_, _, err := c.SendCanvasAction(context.Background(), "sess",
+				canvas.Action{Action: "approve", Data: []byte("{}"), Revision: 1}, Sender{})
 			return err
 		}},
 		{"system message", func(c *Client) error {
@@ -255,7 +264,7 @@ func TestClient_MessageAfterTheAnswerGoesThrough(t *testing.T) {
 	}
 	f.waitForPhase(t, session.PhaseRunning)
 
-	if _, err := f.client.SendMessageExcluding(context.Background(), "sess", "second", nil, nil); err != nil {
+	if _, err := f.client.SendMessageExcluding(context.Background(), "sess", "second", nil, Sender{}); err != nil {
 		t.Fatalf("SendMessageExcluding after the answer = %v, want it delivered", err)
 	}
 	if got := sess.sentPrompts(); len(got) != 2 {

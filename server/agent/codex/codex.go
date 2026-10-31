@@ -520,7 +520,7 @@ func (s *appSession) openRecordedThread(ctx context.Context, state codexResumeSt
 func (s *appSession) startThread(ctx context.Context) error {
 	params := s.buildThreadParams()
 	params["threadSource"] = threadSource
-	// The guidance is about question_post, which only the MCP server offers.
+	// The guidance names Pockode's tools, which only the MCP server offers.
 	if !s.opts.DisableMCP {
 		params["developerInstructions"] = s.developerInstructions(ctx)
 	}
@@ -624,6 +624,10 @@ func (s *appSession) buildThreadParams() map[string]interface{} {
 		}
 		if s.opts.Worktree != "" {
 			args = append(args, "--worktree", s.opts.Worktree)
+		}
+		// Chooses the proxy's tool list (docs/canvas-ui.md §9.1).
+		if s.opts.Canvas {
+			args = append(args, "--canvas")
 		}
 		overrides["mcp_servers"] = map[string]interface{}{
 			"pockode": map[string]interface{}{

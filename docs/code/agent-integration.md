@@ -1017,7 +1017,11 @@ pockode mcp --data-dir <main data dir> --session-id <session> --worktree <name>
 ```
 
 `--worktree` is omitted for the main worktree, which has no name; an empty value
-would make the flags depend on where the session happens to run. The proxy holds
+would make the flags depend on where the session happens to run. A canvas session
+adds `--canvas`, which chooses the tool list and the instructions the proxy
+gives ([canvas-ui.md §9.1](../canvas-ui.md#91-which-text-reaches-which-cli));
+it is not part of the identity, and the executor decides what it accepts from
+the session's stored property, not from the flag. The proxy holds
 the pair as an `mcp.Caller` and sends it in the body of every forwarded tool
 call, so the `Executor` is handed the caller of each call rather than an
 Executor-wide identity — one Executor serves every session at once.
@@ -1226,6 +1230,14 @@ Codex 0.159.3:
 | Claude | `instructions` in the MCP server's `initialize` reply (`mcp.Server`) | Claude puts server instructions in the system prompt whether or not the server's tools are deferred. |
 | Codex | `developerInstructions` on `thread/start` | Codex shows server instructions only once a tool of the server is loaded, as the description of its namespace. The parameter *replaces* the user's own `developer_instructions`, so the user's value is read with `config/read` first and sent ahead of the guidance; a failed read warns the user and carries on. It is fixed when the thread starts: `thread/resume` and `thread/fork` ignore the parameter and keep what the thread started with, so it is sent on `thread/start` alone, and a thread started before the guidance existed, or before a change to it, goes on without it. |
 
+A canvas session gets `agent.CanvasGuidance` instead, through the same two
+channels (`agent.GuidanceFor`): its proxy is spawned with `--canvas`, which
+makes it answer `initialize` with that text, and Codex's `thread/start` carries
+it where `Guidance` would go. It is a replacement, not an addition — the asking
+section would point at `question_post` and the rendering one at `html_render`,
+neither of which a canvas session has
+([canvas-ui.md §9](../canvas-ui.md#9-what-the-agent-is-told)).
+
 Both go only where the MCP server does: a session started without it has no
 `question_post` or `html_render` to point at. Codex receives the server
 instructions as well, on loading a tool; repeating them there costs a few
@@ -1246,7 +1258,7 @@ Claude cuts a tool description and a server's instructions at 2048 characters
 it, until that rule moved into the guidance. `mcp`'s
 `TestToolDefinitions_FitClaudesLimit` holds every description and the whole of
 `agent.Guidance` — both sections together, since they travel as one
-instructions text — under it.
+instructions text — under it, and `agent.CanvasGuidance` with them.
 
 The lifecycle prompt points at the guidance rather than repeating it
 ([work-system.md](work-system.md#prompt-format)).
@@ -1301,7 +1313,11 @@ Two lines of defence, in that order:
 three things as the `question_post` tool result — posted and it returns, nothing
 waits on you, the answer comes back as a message — so an agent meeting both does
 not have to work out whether they describe one mechanism or two;
-`mcp.TestAskingTheUser_TheTwoTextsMakeTheSameClaims` holds them to it.
+`mcp.TestAskingTheUser_TheTwoTextsMakeTheSameClaims` holds them to it. A canvas
+session gets `agent.CanvasCLIQuestionRefusal` instead (`agent.CLIQuestionRefusalFor`,
+from `StartOptions.Canvas`): that session refuses `question_post`, so its refusal
+says to draw the question into the canvas, and the user's warning record says so
+too.
 
 **The refusal is not silent.** Both sides emit
 `agent.CLIQuestionRefusedWarning`, a user-visible record: something happened in
@@ -1586,6 +1602,13 @@ For the same reason a `question_posted` record left unclosed by the cut is
 *kept*, where an unanswered CLI prompt is dropped: a prompt nobody can answer is
 a call that never returns, while a question the fork can still answer is the
 point.
+
+A canvas session's canvas crosses the same way. `chat.Client.Fork` reads the
+highest `canvas_revision` among the kept `tool_result` records and the last kept
+`canvas_size` (`canvas.ForkPoint`), and `canvas.Store.Fork` hard-links those
+snapshots into the fork — after `WriteHistory`, since that replaces the fork's
+whole history and would swallow the `fork_canvas_unavailable` warning a failed
+copy appends ([docs/canvas-ui.md §13.6](../canvas-ui.md#136-fork)).
 
 ## Claude Implementation
 
@@ -4330,7 +4353,9 @@ Binary content an agent delivered inside its output is written beside it, in
 `sessions/<sessionID>/attachments/`, and named from the record by id — that is
 what keeps a line holding an image small enough to replay on every page. What
 goes there, what only gets described, and what a fork does with it are in
-[Content Blocks and Attachments](#content-blocks-and-attachments).
+[Content Blocks and Attachments](#content-blocks-and-attachments). A canvas
+session also keeps its pages in `sessions/<sessionID>/canvas/`
+([canvas-ui.md §13.3](../canvas-ui.md#133-storage)).
 
 **Crash safety** (`server/filestore/jsonl.go`):
 

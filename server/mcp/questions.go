@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/pockode/server/agent"
+	"github.com/pockode/server/canvas"
 	"github.com/pockode/server/chat"
 	"github.com/pockode/server/session"
 	"github.com/pockode/server/work"
@@ -37,6 +38,12 @@ type Sessions interface {
 	// one caller that arrives with a session id and no worktree: an agent
 	// naming the session whose question it is answering.
 	ResolveSessionWorktree(sessionID string) (string, error)
+	// ResolveCanvas hands back the worktree's canvas store, whether the
+	// session is a canvas session (session.SessionMeta.Canvas), and the release
+	// func to call when the tool call is done with the store. A session the
+	// worktree does not have, or in a worktree that is gone, is
+	// chat.ErrSessionNotFound.
+	ResolveCanvas(worktree, sessionID string) (*canvas.Store, bool, func(), error)
 }
 
 // questionPostParams is question_post's input. Its questions are not

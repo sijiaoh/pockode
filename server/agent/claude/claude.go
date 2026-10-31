@@ -76,6 +76,10 @@ func writeMCPConfig(opts agent.StartOptions) (string, func(), error) {
 	if opts.Worktree != "" {
 		args = append(args, "--worktree", opts.Worktree)
 	}
+	// Chooses the proxy's tool list and instructions (docs/canvas-ui.md §9.1).
+	if opts.Canvas {
+		args = append(args, "--canvas")
+	}
 
 	config := map[string]interface{}{
 		"mcpServers": map[string]interface{}{
@@ -252,6 +256,7 @@ func (a *Agent) Start(ctx context.Context, opts agent.StartOptions) (agent.Sessi
 		backgroundTasks: backgroundTasks,
 		lossStore:       lossStore,
 		cancel:          cancel,
+		canvas:          opts.Canvas,
 	}
 
 	// Background tasks the previous process took down with it. The agent is told
@@ -325,6 +330,8 @@ type cliSession struct {
 	cancel          func()
 	closeOnce       sync.Once
 	unread          unreadMessages
+	// canvas picks the wording of the refusal of the CLI's own question tool.
+	canvas bool
 
 	noteMu sync.Mutex
 	note   string // pending explanation for the agent; see QueueNote
@@ -507,7 +514,7 @@ func (s *cliSession) sendControlResponse(requestID string, content controlRespon
 
 // refusals hands parsing the two ways this session says no.
 func (s *cliSession) refusals() controlRefusals {
-	return controlRefusals{decline: s.declineControlRequest, denyTool: s.denyTool}
+	return controlRefusals{decline: s.declineControlRequest, denyTool: s.denyTool, canvas: s.canvas}
 }
 
 // denyTool refuses a tool the model asked to use, without interrupting.
@@ -1283,6 +1290,9 @@ type denyToolFunc func(requestID, toolUseID, message string)
 type controlRefusals struct {
 	decline  declineFunc
 	denyTool denyToolFunc
+	// canvas is a canvas session, whose refusal of the CLI's question tool says
+	// to draw the question instead (agent.CLIQuestionRefusalFor).
+	canvas bool
 }
 
 // parseLine converts one already-decoded stream-json envelope into agent events.
@@ -1456,8 +1466,8 @@ func parseControlRequest(log *slog.Logger, line []byte, refusals controlRefusals
 		// that is never coming.
 		if req.Request.ToolName == disallowedAskTool {
 			log.Warn("refusing the CLI's own ask-the-user tool", "requestId", req.RequestID)
-			refusals.denyTool(req.RequestID, req.Request.ToolUseID, agent.CLIQuestionRefusal)
-			return []agent.AgentEvent{agent.CLIQuestionRefusedWarning("Claude")}
+			refusals.denyTool(req.RequestID, req.Request.ToolUseID, agent.CLIQuestionRefusalFor(refusals.canvas))
+			return []agent.AgentEvent{agent.CLIQuestionRefusedWarning("Claude", refusals.canvas)}
 		}
 
 		log.Info("tool permission request", "tool", req.Request.ToolName, "requestId", req.RequestID)

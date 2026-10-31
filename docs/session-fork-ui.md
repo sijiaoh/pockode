@@ -496,7 +496,7 @@ the words come back as a **draft in the new session's input box**. Without it th
 user would land in a fresh session facing an empty box, having to go back to the
 parent to copy what they had just written.
 
-Three things to be exact about:
+What to be exact about:
 
 - **It is a draft, not a message.** It is unsent, it is not in the transcript,
   and the server does not know it exists. It is written to `lib/inputStore`, the
@@ -510,6 +510,11 @@ Three things to be exact about:
   [Pockode command](pockode-commands.md#how-it-is-drawn) holds the prompt the
   command expanded to, but the draft is `/name args`: sending the prompt itself
   would skip the command, and it is not what the user wrote.
+- **A canvas action does not come back at all.** Its `content` is machine text
+  the user never wrote, so the input stays empty; the user acts on the page
+  again ([canvas-ui.md §6.2](canvas-ui.md#62-the-canvas-action-record)), which
+  in the fork is the canvas as it was at the cut — it crosses by the same rule
+  as everything else ([canvas-ui.md §13.6](canvas-ui.md#136-fork)).
 - **It does not focus the input on a coarse pointer.** `InputBar` focuses on a
   session change only for a fine pointer, deliberately: a software keyboard
   springing up would cover the conversation the user just opened. Restoring a

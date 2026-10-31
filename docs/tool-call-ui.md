@@ -2626,6 +2626,9 @@ It arrives as an ordinary tool call — `mcp__pockode__html_render` from Claude,
 `pockode:html_render` from Codex — whose input already holds the whole page, so
 the frontend draws straight from the call and there is no event of its own. Both
 names, and which state is a card, are `lib/htmlRender.ts`, and nowhere else.
+A canvas session has no `html_render`: its whole screen is a page drawn with
+`canvas_render` / `canvas_update` in this same double frame
+([canvas-ui.md](canvas-ui.md#4-the-page-frame)).
 
 **It is a row until it succeeds, and then a card.** `running`, `background`,
 `error` and `interrupted` are drawn exactly as any other call's, detail = the

@@ -7,6 +7,7 @@ import (
 	"unicode"
 
 	"github.com/pockode/server/agent"
+	"github.com/pockode/server/canvas"
 	"github.com/pockode/server/chat"
 	"github.com/pockode/server/command"
 	"github.com/pockode/server/process"
@@ -25,8 +26,9 @@ func (h *rpcMethodHandler) handleChatMessagesSubscribe(ctx context.Context, conn
 
 	log := h.log.With("sessionId", params.SessionID)
 
-	// The session's turn is read here; its settings are not, because those belong
-	// to session.detail.subscribe, which the client runs alongside this one.
+	// The session's turn is read by the subscription; its settings are not read
+	// at all, because those belong to session.detail.subscribe, which the
+	// client runs alongside this one.
 	meta, found, err := wt.SessionStore.Get(params.SessionID)
 	if err != nil {
 		h.replyInternalError(ctx, conn, req.ID, "failed to get session", err, "sessionId", params.SessionID)
@@ -38,7 +40,7 @@ func (h *rpcMethodHandler) handleChatMessagesSubscribe(ctx context.Context, conn
 	}
 
 	notifier := h.state.getNotifier()
-	page, err := wt.ChatMessagesWatcher.Subscribe(params.ID, notifier, params.SessionID, params.Limit)
+	subscribed, err := wt.ChatMessagesWatcher.Subscribe(params.ID, notifier, params.SessionID, params.Limit)
 	if err != nil {
 		// An unusable subscription id or a limit the client cannot ask for are its
 		// mistakes; anything else Subscribe fails on is a history the server could
@@ -53,10 +55,24 @@ func (h *rpcMethodHandler) handleChatMessagesSubscribe(ctx context.Context, conn
 		h.replyInternalError(ctx, conn, req.ID, "failed to read session history", err, "sessionId", params.SessionID)
 		return
 	}
+	// After subscribing, so a revision drawn in between is either in this
+	// reply or pushed to the subscription — both, at worst, and the client
+	// keeps the higher.
+	var canvasState *canvas.State
+	if meta.Canvas {
+		state, err := wt.CanvasStore.Current(params.SessionID)
+		if err != nil {
+			wt.ChatMessagesWatcher.Unsubscribe(params.ID)
+			h.replyInternalError(ctx, conn, req.ID, "failed to read the session's canvas", err, "sessionId", params.SessionID)
+			return
+		}
+		canvasState = &state
+	}
 	h.state.trackSubscription(params.ID, wt.ChatMessagesWatcher)
 
 	wt.SessionListWatcher.MarkRead(params.SessionID)
 
+	page := subscribed.Page
 	result := rpc.ChatMessagesSubscribeResult{
 		History:       page.Records,
 		HasMore:       page.HasMore,
@@ -64,8 +80,11 @@ func (h *rpcMethodHandler) handleChatMessagesSubscribe(ctx context.Context, conn
 		// From the store, not from the process manager: the turn is what the
 		// session is doing, and it is recorded whether or not a process is still
 		// there to be asked.
-		Turn:         rpc.NewTurn(meta.Turn, time.Now()),
+		Turn:         rpc.NewTurn(subscribed.Turn, time.Now()),
 		ToolActivity: wt.ProcessManager.GetToolActivity(params.SessionID),
+		Canvas:       canvasState,
+
+		PermissionRequests: subscribed.PermissionRequests,
 	}
 	if err := conn.Reply(ctx, req.ID, result); err != nil {
 		log.Error("failed to send subscribe response", "error", err)
@@ -158,6 +177,27 @@ func (h *rpcMethodHandler) handleMessage(ctx context.Context, conn *jsonrpc2.Con
 		return
 	}
 
+	from := chat.Sender{Exclude: h.state.getNotifier()}
+	if params.CanvasSize != nil {
+		size, err := checkCanvasSize(params.CanvasSize)
+		if err != nil {
+			h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, err.Error())
+			return
+		}
+		// Dropped for any other session rather than refused: chat view of an
+		// ordinary session has no canvas to measure, and a client that sent a
+		// size anyway has done no harm (docs/canvas-ui.md §6.4). A session that
+		// is not there is the send's to refuse.
+		meta, found, err := wt.SessionStore.Get(params.SessionID)
+		if err != nil {
+			h.replyInternalError(ctx, conn, req.ID, "failed to get session", err, "sessionId", params.SessionID)
+			return
+		}
+		if found && meta.Canvas {
+			from.CanvasSize = &size
+		}
+	}
+
 	// Resolved before anything is sent, like a command below, so a message
 	// naming a file the session does not have leaves no trace.
 	var attached []agent.Attachment
@@ -219,12 +259,12 @@ func (h *rpcMethodHandler) handleMessage(ctx context.Context, conn *jsonrpc2.Con
 	var sent chat.Sent
 	var err error
 	if isCommand {
-		sent, err = wt.ChatClient.SendCommandExcluding(ctx, params.SessionID, content, cmd, attached, h.state.getNotifier())
+		sent, err = wt.ChatClient.SendCommandExcluding(ctx, params.SessionID, content, cmd, attached, from)
 	} else if len(params.Answering) > 0 {
 		sent, content, err = wt.ChatClient.SendAnswers(ctx, params.SessionID,
-			chatAnswers(params.Answering), h.state.getNotifier())
+			chatAnswers(params.Answering), from)
 	} else {
-		sent, err = wt.ChatClient.SendMessageExcluding(ctx, params.SessionID, content, attached, h.state.getNotifier())
+		sent, err = wt.ChatClient.SendMessageExcluding(ctx, params.SessionID, content, attached, from)
 	}
 	if err != nil {
 		h.replyErrorForChat(ctx, conn, req, params.SessionID, err)

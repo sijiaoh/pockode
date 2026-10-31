@@ -2,7 +2,10 @@ package agent
 
 import (
 	"encoding/json"
+	"slices"
 	"time"
+
+	"github.com/pockode/server/canvas"
 )
 
 // EventRecord is the serialized form of an AgentEvent.
@@ -71,6 +74,10 @@ type EventRecord struct {
 	// Command is the Pockode command a message record was expanded from; see
 	// CommandInvocation.
 	Command *CommandInvocation `json:"command,omitempty"`
+	// CanvasAction and CanvasSize belong to message records; see
+	// MessageEvent.
+	CanvasAction *canvas.Action `json:"canvas_action,omitempty"`
+	CanvasSize   *canvas.Size   `json:"canvas_size,omitempty"`
 	// Attachments are the files the user sent with a message record; see
 	// MessageEvent.Attachments.
 	Attachments []FileBlock   `json:"attachments,omitempty"`
@@ -97,6 +104,9 @@ type EventRecord struct {
 	// record carries DurationMs too, measured by the server; see ThinkingEvent.
 	DurationMs int64 `json:"duration_ms,omitempty"`
 	ExitCode   *int  `json:"exit_code,omitempty"`
+	// CanvasRevision is the canvas revision a canvas_render or canvas_update
+	// call drew, on that call's tool_result; see ToolResultEvent.CanvasRevision.
+	CanvasRevision int `json:"canvas_revision,omitempty"`
 	// Activity and OutputDelta belong to tool_activity records, which are
 	// broadcast and never stored — see EventType.Persisted. They are fields of
 	// EventRecord anyway because EventRecord is the whole of how an event is
@@ -145,4 +155,35 @@ type EventRecord struct {
 // NewEventRecord creates an EventRecord from an AgentEvent.
 func NewEventRecord(event AgentEvent) EventRecord {
 	return event.ToRecord()
+}
+
+// PermissionRequestIndexes finds the permission_request record of each of
+// requestIDs in records, returning their indexes oldest first. A request whose
+// record is not there — its append failed, so it was only ever broadcast — is
+// simply not found.
+//
+// Scanned from the end and stopped once all are found: a pending request
+// belongs to the current process, so its record is near the end of a history
+// that may be long. Each record is read for its type and request id alone.
+func PermissionRequestIndexes(records []json.RawMessage, requestIDs []string) []int {
+	wanted := make(map[string]bool, len(requestIDs))
+	for _, id := range requestIDs {
+		wanted[id] = true
+	}
+	var found []int
+	for i := len(records) - 1; i >= 0 && len(wanted) > 0; i-- {
+		var rec struct {
+			Type      EventType `json:"type"`
+			RequestID string    `json:"request_id"`
+		}
+		if err := json.Unmarshal(records[i], &rec); err != nil {
+			continue
+		}
+		if rec.Type == EventTypePermissionRequest && wanted[rec.RequestID] {
+			delete(wanted, rec.RequestID)
+			found = append(found, i)
+		}
+	}
+	slices.Reverse(found)
+	return found
 }

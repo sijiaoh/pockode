@@ -247,7 +247,7 @@ func TestClient_MessageWithNoRecordHasNoAddress(t *testing.T) {
 		broadcastSeq = seq
 	})
 
-	sent, err := client.SendMessageExcluding(context.Background(), "sess", "hello", nil, nil)
+	sent, err := client.SendMessageExcluding(context.Background(), "sess", "hello", nil, Sender{})
 	if err != nil {
 		t.Fatalf("SendMessageExcluding = %v, want the prompt to go through anyway", err)
 	}

@@ -2,6 +2,7 @@ package ws
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 
 	"github.com/google/uuid"
@@ -13,6 +14,15 @@ import (
 )
 
 func (h *rpcMethodHandler) handleSessionCreate(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request, wt *worktree.Worktree) {
+	// Params are optional: a client written before canvas sessions sends none.
+	var params rpc.SessionCreateParams
+	if req.Params != nil {
+		if err := json.Unmarshal(*req.Params, &params); err != nil {
+			h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "invalid params")
+			return
+		}
+	}
+
 	sessionID := uuid.Must(uuid.NewV7()).String()
 
 	s := h.settingsStore.Get()
@@ -22,13 +32,14 @@ func (h *rpcMethodHandler) handleSessionCreate(ctx context.Context, conn *jsonrp
 		Mode:      s.DefaultMode,
 		Model:     engine.Model,
 		Effort:    engine.Effort,
+		Canvas:    params.Canvas,
 	})
 	if err != nil {
 		h.replyInternalError(ctx, conn, req.ID, "failed to create session", err, "sessionId", sessionID)
 		return
 	}
 
-	h.log.Info("session created", "sessionId", sessionID)
+	h.log.Info("session created", "sessionId", sessionID, "canvas", params.Canvas)
 
 	// A session created here belongs to no work item — a work's session is created
 	// by the work starter, under the id the work already claimed — and has not

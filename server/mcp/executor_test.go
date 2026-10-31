@@ -12,6 +12,7 @@ import (
 
 	"github.com/pockode/server/agent"
 	"github.com/pockode/server/agentrole"
+	"github.com/pockode/server/canvas"
 	"github.com/pockode/server/chat"
 	"github.com/pockode/server/session"
 	"github.com/pockode/server/settings"
@@ -63,6 +64,23 @@ type stubSessions struct {
 	worktreeOf map[string]string
 	askedFor   []string
 	resolveErr error
+	// canvasSessions are the sessions that are canvas sessions; every other
+	// session is an ordinary one. canvas is their store, which a test drawing
+	// on one sets.
+	canvasSessions map[string]bool
+	canvas         *canvas.Store
+	// canvasErr fails every ResolveCanvas; canvasHeld counts the ones not
+	// released yet, which a tool call must leave at zero.
+	canvasErr  error
+	canvasHeld int
+}
+
+func (s *stubSessions) ResolveCanvas(_, sessionID string) (*canvas.Store, bool, func(), error) {
+	if s.canvasErr != nil {
+		return nil, false, nil, s.canvasErr
+	}
+	s.canvasHeld++
+	return s.canvas, s.canvasSessions[sessionID], func() { s.canvasHeld-- }, nil
 }
 
 func (s *stubSessions) ResolveQuestions(name string) (chat.Questions, func(), error) {
@@ -1540,7 +1558,7 @@ func extractID(t *testing.T, text string) string {
 // dead end, so assert every advertised name resolves to a handler.
 func TestEveryAdvertisedToolIsDispatchable(t *testing.T) {
 	ts := newTestExec(t)
-	for _, td := range toolDefinitions {
+	for _, td := range slices.Concat(toolDefinitions, canvasToolDefinitions) {
 		// Empty args: a handler may reject them as a user error, but it must not
 		// report the tool itself as unknown.
 		_, err := ts.exec.Execute(context.Background(), Caller{}, td.Name, json.RawMessage("{}"))

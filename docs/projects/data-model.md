@@ -350,7 +350,8 @@ The same primitive (`filestore.WriteFileAtomic`) backs every file the server
 rewrites whole: the stores built on `filestore.File` (work, agent-role,
 settings, the cluster node registry), the session and command indexes, plus
 `server.json`, `relay.json`, `sessions.json`, `mcp-config.json`, the data
-directory's `.gitignore` and the per-session Claude resume file. Files whose
+directory's `.gitignore` and the per-session Claude resume file, and a canvas session's `canvas/state.json` and
+per-revision snapshots ([canvas-ui.md §13.3](../canvas-ui.md#133-storage)). Files whose
 mode matters pass it explicitly — `server.json`, `relay.json` and
 `sessions.json` stay `0600` because they hold credentials.
 
@@ -365,7 +366,10 @@ two writers of one name write the same bytes, and a name already present is kept
 Session history is the one piece of state not rewritten whole: it is appended a
 record at a time through `filestore.AppendJSONL`, which gives up the whole-file
 guarantee for a per-record one. See
-[agent-integration.md](../code/agent-integration.md) for that trade-off.
+[agent-integration.md](../code/agent-integration.md) for that trade-off. A
+canvas's `revisions.jsonl` is appended the same way, but it is not state: it is
+an index of the snapshots, and a revision it lacks is read from its snapshot
+([canvas-ui.md §13.3](../canvas-ui.md#133-storage)).
 
 Four writes are deliberately left non-atomic. The reasons are unobvious enough
 that each is also recorded at its call site, because "fixing" one of these to

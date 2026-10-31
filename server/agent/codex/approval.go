@@ -280,10 +280,10 @@ func (s *appSession) handleRequestUserInput(msg rpcMessage) {
 
 	answers := make(map[string]interface{}, len(params.Questions))
 	for _, q := range params.Questions {
-		answers[q.ID] = map[string]interface{}{"answers": []string{agent.CLIQuestionRefusal}}
+		answers[q.ID] = map[string]interface{}{"answers": []string{agent.CLIQuestionRefusalFor(s.opts.Canvas)}}
 	}
 
 	s.log.Info("refusing codex requestUserInput", "questions", len(answers))
 	s.sendRPCResponse(*msg.ID, map[string]interface{}{"answers": answers}, nil)
-	s.emitEvent(agent.CLIQuestionRefusedWarning("Codex"))
+	s.emitEvent(agent.CLIQuestionRefusedWarning("Codex", s.opts.Canvas))
 }

@@ -4,6 +4,8 @@ package mcp
 // The actual tool logic lives in executor.go and runs inside the main server;
 // the stdio process is a thin proxy (see server.go / client.go).
 
+import "github.com/pockode/server/canvas"
+
 type toolDefinition struct {
 	Name        string      `json:"name"`
 	Description string      `json:"description"`
@@ -25,7 +27,9 @@ type propertySchema struct {
 	// and their options are lists of objects — the first tool arguments in
 	// Pockode that are not scalars, and a model given a bare "array" would have
 	// to guess the shape of.
-	Items      *propertySchema           `json:"items,omitempty"`
+	Items *propertySchema `json:"items,omitempty"`
+	// MinItems is for canvas_update's ops, which mean nothing empty.
+	MinItems   int                       `json:"minItems,omitempty"`
 	Properties map[string]propertySchema `json:"properties,omitempty"`
 	Required   []string                  `json:"required,omitempty"`
 }
@@ -346,4 +350,84 @@ var toolDefinitions = []toolDefinition{
 			Required: []string{"request_id"},
 		},
 	},
+}
+
+// canvasToolDefinitions are listed in a canvas session only, and
+// notInCanvasSession are the ordinary tools a canvas session does not list
+// (docs/canvas-ui.md §3.4). The executor refuses both the other way round,
+// from the session's stored property, so a proxy spawned with the wrong flag
+// lists a tool that is refused rather than reaching one it should not.
+var canvasToolDefinitions = []toolDefinition{
+	{
+		Name: canvas.RenderTool,
+		Description: "Draw the whole canvas: the page that fills the user's screen in this session, replacing what was there.\n" +
+			"Free HTML, a full document or a fragment, at most 256KB: scripts, SVG and <canvas> run. Project files load by path (relative to the worktree root); other hosts are blocked until the user allows them, so prefer project files or inline code.\n" +
+			"Pockode adds only theme colours that follow light/dark — --pk-bg, --pk-bg-secondary, --pk-bg-tertiary, --pk-text, --pk-text-secondary, --pk-text-muted, --pk-border, --pk-accent, --pk-accent-text, --pk-success, --pk-error, --pk-warning, --pk-code-bg, --pk-code-text — and default styling of native inputs. Use the variables instead of fixed colours.\n" +
+			"How the page sends you something:\n" +
+			"  <button data-pk-send=\"approve\">Approve</button>\n" +
+			"  <form data-pk-send=\"create\"><input name=\"title\"><button>Create</button></form>   (fields with a name are sent)\n" +
+			"  <input data-pk-send=\"search\" name=\"q\">   (sends its value on Enter)\n" +
+			"  <script>pockode.send(\"pick\", {id: 3})</script>   (returns a promise; rejects with a reason when it cannot send)\n" +
+			"Each arrives as a message naming the action, its data and the canvas revision it was sent from.\n" +
+			"Mark parts you will change later in the markup itself: <ul data-pk-region=\"results\"></ul>, then change them with canvas_update. Region names are unique.\n" +
+			"The result gives the new revision, the size it was drawn for, and warnings. An error leaves the canvas unchanged and says how to fix it.",
+		InputSchema: inputSchema{
+			Type: "object",
+			Properties: map[string]propertySchema{
+				"html": {Type: "string", Description: "The page: a full document or a fragment. At most 256KB."},
+			},
+			Required: []string{"html"},
+		},
+	},
+	{
+		Name: canvas.UpdateTool,
+		Description: "Change parts of the canvas without redrawing it: what the user typed or scrolled elsewhere on the page stays.\n" +
+			"Each op targets a region, an element marked data-pk-region=\"name\": replace swaps its contents (the element stays), append adds to the end of its contents, remove deletes the element. Ops apply in order and all or nothing; a replace may create regions a later op uses.\n" +
+			"The whole resulting page is checked as canvas_render's is. The result gives the new revision, the size it was drawn for, and new warnings; an error leaves the canvas unchanged, lists the regions that exist when one is missing, and says how to fix it.",
+		InputSchema: inputSchema{
+			Type: "object",
+			Properties: map[string]propertySchema{
+				"ops": {
+					Type:        "array",
+					Description: "The changes, applied in order. At least one.",
+					MinItems:    1,
+					Items: &propertySchema{
+						Type: "object",
+						Properties: map[string]propertySchema{
+							"op":     {Type: "string", Enum: []string{canvas.OpReplace, canvas.OpAppend, canvas.OpRemove}, Description: "replace the region's contents, append to them, or remove the region element."},
+							"region": {Type: "string", Description: "The data-pk-region name of the element to change."},
+							"html":   {Type: "string", Description: "The new contents for replace (may be empty) or what to add for append (not empty). Left out for remove."},
+						},
+						Required: []string{"op", "region"},
+					},
+				},
+			},
+			Required: []string{"ops"},
+		},
+	},
+}
+
+// notInCanvasSession maps each ordinary tool a canvas session does not list to
+// the refusal it gets there, so what is not listed and what is refused are one
+// list.
+var notInCanvasSession = map[string]string{
+	"html_render":     refuseHTMLRenderInCanvas,
+	"question_post":   refuseQuestionInCanvas,
+	"question_cancel": refuseQuestionInCanvas,
+}
+
+// listedTools is what tools/list offers: the ordinary set, or in a canvas
+// session that set less what a canvas session does not use, plus the canvas
+// tools.
+func listedTools(canvasSession bool) []toolDefinition {
+	if !canvasSession {
+		return toolDefinitions
+	}
+	var tools []toolDefinition
+	for _, def := range toolDefinitions {
+		if _, refused := notInCanvasSession[def.Name]; !refused {
+			tools = append(tools, def)
+		}
+	}
+	return append(tools, canvasToolDefinitions...)
 }

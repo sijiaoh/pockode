@@ -128,7 +128,7 @@ func TestClient_SendWithAttachments(t *testing.T) {
 
 	t.Run("delivered to the agent and described in the record", func(t *testing.T) {
 		client, store, ag := setup(t, true)
-		if _, err := client.SendMessageExcluding(context.Background(), "sess", "", attached, nil); err != nil {
+		if _, err := client.SendMessageExcluding(context.Background(), "sess", "", attached, Sender{}); err != nil {
 			t.Fatalf("send: %v", err)
 		}
 		sent := ag.session(t, 1).sent()
@@ -149,7 +149,7 @@ func TestClient_SendWithAttachments(t *testing.T) {
 
 	t.Run("refused whole when the agent cannot receive files", func(t *testing.T) {
 		client, store, ag := setup(t, false)
-		_, err := client.SendMessageExcluding(context.Background(), "sess", "look", attached, nil)
+		_, err := client.SendMessageExcluding(context.Background(), "sess", "look", attached, Sender{})
 		if !errors.Is(err, ErrAttachmentsUnsupported) {
 			t.Fatalf("send error = %v, want ErrAttachmentsUnsupported", err)
 		}

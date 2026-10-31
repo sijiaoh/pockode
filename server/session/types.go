@@ -160,6 +160,8 @@ type CreateSpec struct {
 	Mode      Mode
 	Model     string
 	Effort    string
+	// Canvas makes a canvas session; see SessionMeta.Canvas.
+	Canvas bool
 }
 
 // ForkSpec describes a session created as a copy of another one. Everything a
@@ -201,6 +203,12 @@ type SessionMeta struct {
 	// created before this field existed carries — means the CLI is passed no
 	// effort level and keeps its own default.
 	Effort string `json:"effort"`
+	// Canvas marks a canvas session: the screen is a page the agent draws, and
+	// the agent is told so from its first turn (docs/canvas-ui.md). Fixed at
+	// birth and never changed — there is no setter — because an agent told one
+	// thing at the start must not find itself in a session that became another.
+	// It is not a Mode: Mode is how permissions are handled, and can change.
+	Canvas bool `json:"canvas,omitempty"`
 	// Turn is what this session is doing, and the only place that is recorded.
 	// It is written by nothing but the reducer (see turn.go), and everything that
 	// used to be a flag of its own — the session's needs_input, the process's

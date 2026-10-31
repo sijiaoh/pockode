@@ -30,10 +30,13 @@ import (
 type Server struct {
 	client  *Client
 	version string
+	// canvas is a proxy spawned for a canvas session: it gives the canvas
+	// guidance and lists the canvas tool set (docs/canvas-ui.md §9.1).
+	canvas bool
 }
 
-func NewServer(client *Client, version string) *Server {
-	return &Server{client: client, version: version}
+func NewServer(client *Client, version string, canvas bool) *Server {
+	return &Server{client: client, version: version, canvas: canvas}
 }
 
 // Run starts the stdio JSON-RPC 2.0 loop.
@@ -85,10 +88,10 @@ func (s *Server) handleRequest(ctx context.Context, w io.Writer, req *jsonRPCReq
 				Name:    "pockode",
 				Version: s.version,
 			},
-			Instructions: agent.Guidance,
+			Instructions: agent.GuidanceFor(s.canvas),
 		})
 	case "tools/list":
-		writeJSONRPCResult(w, req.ID, toolsListResult{Tools: toolDefinitions})
+		writeJSONRPCResult(w, req.ID, toolsListResult{Tools: listedTools(s.canvas)})
 	case "tools/call":
 		s.handleToolCall(ctx, w, req)
 	default:
@@ -185,7 +188,7 @@ type initializeResult struct {
 	Capabilities    capabilities `json:"capabilities"`
 	ServerInfo      serverInfo   `json:"serverInfo"`
 	// Instructions is how Claude learns when to ask or render before it has
-	// loaded any tool; see agent.Guidance.
+	// loaded any tool; see agent.Guidance and agent.CanvasGuidance.
 	Instructions string `json:"instructions,omitempty"`
 }
 

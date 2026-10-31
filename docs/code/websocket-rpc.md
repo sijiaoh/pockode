@@ -29,7 +29,7 @@ Method names are organized using the `namespace.method` format, solving two prob
 
 | Namespace | Scope | Handler |
 |-----------|-------|---------|
-| `chat.*` | worktree | `ws/rpc_chat.go` |
+| `chat.*` | worktree | `ws/rpc_chat.go`; `chat.canvas_*` in `ws/rpc_canvas.go` |
 | `session.*` | worktree | `ws/rpc_session.go` |
 | `session_view.*` | app | `ws/rpc_session_view.go` |
 | `file.*` | worktree | `ws/rpc_file.go` |
@@ -211,6 +211,9 @@ parsed — or, for a message carrying `answering`, `content` alone: the body the
 server wrote from the answers ([agent-integration.md](agent-integration.md#answering)),
 and, for a message carrying files, `attachments` — each file as its record
 describes it ([agent-integration.md](agent-integration.md#files-the-user-sends)).
+`chat.canvas_action` answers the same `MessageResult`, with `content` — the
+action text the server wrote — and `canvas_action` echoed
+([canvas-ui.md §6.4](../canvas-ui.md#64-the-rpc)).
 It needs one because the sender is deliberately left out of the
 broadcast that carries every other record's `seq` (it has already echoed the
 message into its own transcript), so the reply is the only place that address —
@@ -454,7 +457,7 @@ This pattern ensures:
 | `agent_role.list.subscribe` | ✅ Full list | `onSubscribed` replaces state |
 | `schedule.list.subscribe` | ✅ Full list, each with its latest run | `onSubscribed` replaces state |
 | `schedule.detail.subscribe` | ✅ The schedule and its newest run page | `onSubscribed` replaces state ([run paging](../projects/api.md#schedule-runs)) |
-| `chat.messages.subscribe` | ✅ Newest history page | `onSubscribed` replaces state ([paging](../agent-chat.md#history-paging)) |
+| `chat.messages.subscribe` | ✅ Newest history page; a canvas session's current canvas; the pending permission requests | `onSubscribed` replaces state ([paging](../agent-chat.md#history-paging), [canvas](../canvas-ui.md#132-the-pushed-state)) |
 | `git.diff.subscribe` | ✅ Diff data | `onSubscribed` updates state |
 | `fs.subscribe` | ❌ Empty reply | `onSubscribed` triggers refresh |
 | `git.subscribe` | ❌ Empty reply | `onSubscribed` triggers refresh |

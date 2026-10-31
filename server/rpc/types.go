@@ -32,6 +32,7 @@ import (
 
 	"github.com/pockode/server/agent"
 	"github.com/pockode/server/agentrole"
+	"github.com/pockode/server/canvas"
 	"github.com/pockode/server/cliauth"
 	"github.com/pockode/server/cliupdate"
 	"github.com/pockode/server/command"
@@ -181,6 +182,30 @@ type MessageParams struct {
 	// any id names nothing the session has, or when the session's agent cannot
 	// receive files (chat.ErrAttachmentsUnsupported).
 	Attachments []MessageAttachmentParams `json:"attachments,omitempty"`
+	// CanvasSize is the sending device's canvas size (docs/canvas-ui.md §5).
+	// Ignored for a session that is not a canvas session; refused when out of
+	// bounds even there, as a client sending nonsense.
+	CanvasSize *CanvasSizeParams `json:"canvas_size,omitempty"`
+}
+
+// CanvasSizeParams is a canvas size as a client sends it. Numbers rather than
+// ints so that a fractional one is refused with the words the contract gives
+// (docs/canvas-ui.md §6.4) instead of a bare "invalid params".
+type CanvasSizeParams struct {
+	Width  float64 `json:"width"`
+	Height float64 `json:"height"`
+}
+
+// CanvasActionParams is chat.canvas_action: something the user did on a canvas
+// page (docs/canvas-ui.md §6.4).
+type CanvasActionParams struct {
+	SessionID string `json:"session_id"`
+	Action    string `json:"action"`
+	// Data is any JSON value; absent means {}.
+	Data json.RawMessage `json:"data,omitempty"`
+	// Revision is the revision the frame was showing when the user acted.
+	Revision   int               `json:"revision"`
+	CanvasSize *CanvasSizeParams `json:"canvas_size,omitempty"`
 }
 
 // MessageAttachmentParams names one uploaded file. Name is what the user calls
@@ -245,6 +270,9 @@ type MessageResult struct {
 	// type, size and dimensions read from the stored bytes — for the same
 	// reason as Content: the sender is left out of the broadcast.
 	Attachments []agent.FileBlock `json:"attachments,omitempty"`
+	// CanvasAction is the reply to chat.canvas_action, as the record carries
+	// it, with Content beside it.
+	CanvasAction *canvas.Action `json:"canvas_action,omitempty"`
 }
 
 type InterruptParams struct {
@@ -279,6 +307,14 @@ type SessionSetAgentTypeParams struct {
 type SessionSetModeParams struct {
 	SessionID string       `json:"session_id"`
 	Mode      session.Mode `json:"mode"`
+}
+
+// SessionCreateParams is everything session.create may be told. Absent params
+// are an ordinary session, as before the method took any.
+type SessionCreateParams struct {
+	// Canvas makes a canvas session (docs/canvas-ui.md §13.1). Fixed at birth;
+	// see session.SessionMeta.Canvas.
+	Canvas bool `json:"canvas,omitempty"`
 }
 
 // SessionForkParams asks for a new session holding this session's conversation
@@ -807,6 +843,9 @@ type SessionListItem struct {
 	UnansweredQuestions int                 `json:"unanswered_questions,omitempty"`
 	Unread              bool                `json:"unread"`
 	ForkedFrom          *session.ForkOrigin `json:"forked_from,omitempty"`
+	// Canvas marks a canvas session's row. A copy of a fact fixed at birth, so
+	// it cannot disagree with session detail's.
+	Canvas bool `json:"canvas,omitempty"`
 }
 
 // Turn is session.TurnState as a client receives it: the instant the open turn
@@ -902,6 +941,7 @@ func NewSessionListItem(meta session.SessionMeta, sw SessionWork) SessionListIte
 		UnansweredQuestions: len(meta.Turn.Unanswered),
 		Unread:              meta.Unread,
 		ForkedFrom:          meta.ForkedFrom,
+		Canvas:              meta.Canvas,
 	}
 }
 
@@ -1057,6 +1097,38 @@ type ChatMessagesSubscribeResult struct {
 	// mid-run would otherwise have missed every one of them, which on a phone is
 	// the normal case. Absent when nothing is in flight.
 	ToolActivity map[string]string `json:"tool_activity,omitempty"`
+	// Canvas is a canvas session's current canvas at the moment of subscribing,
+	// absent for every other session. Pushed here and by chat.canvas_state
+	// rather than on session detail, which goes out on every turn transition
+	// and would carry the whole page each time (docs/canvas-ui.md §13.2). It is
+	// state, not a page of history: the frontend never looks for the current
+	// canvas in the transcript.
+	Canvas *canvas.State `json:"canvas,omitempty"`
+	// PermissionRequests are the permission_request records, as stored and
+	// with their seq, of every request pending when the subscription opened,
+	// oldest first — whatever page of History they are on, which a long turn
+	// can push them off (docs/canvas-ui.md §10.4). Requests raised later arrive
+	// live, as chat.permission_request. Kept apart from History: they may be
+	// far older than its page, and a client must not feed them to its
+	// transcript. Absent when none is pending.
+	PermissionRequests []json.RawMessage `json:"permission_requests,omitempty"`
+}
+
+// ChatCanvasHistoryParams asks for the list of a canvas's revisions.
+type ChatCanvasHistoryParams struct {
+	SessionID string `json:"session_id"`
+}
+
+type ChatCanvasHistoryResult struct {
+	// Snapshots are every revision, newest first, without their pages.
+	Snapshots []canvas.HistoryEntry `json:"snapshots"`
+}
+
+// ChatCanvasSnapshotParams asks for one revision whole. The reply is the
+// canvas.Snapshot itself.
+type ChatCanvasSnapshotParams struct {
+	SessionID string `json:"session_id"`
+	Revision  int    `json:"revision"`
 }
 
 // ChatMessagesHistoryParams asks for the page of history older than one the

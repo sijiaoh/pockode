@@ -395,6 +395,7 @@ func (s *FileStore) Create(ctx context.Context, sessionID string, spec CreateSpe
 		Mode:      mode,
 		Model:     spec.Model,
 		Effort:    spec.Effort,
+		Canvas:    spec.Canvas,
 		Turn:      NewTurnState(now),
 	}
 
@@ -442,11 +443,14 @@ func (s *FileStore) CreateFork(ctx context.Context, sessionID string, fork ForkS
 		// than taken from the defaults: a conversation continued under a
 		// different agent, or answered by a different model, is not a fork of
 		// this one. No validation is needed on the way in, because the source's
-		// values were already judged against the agent the fork also runs.
+		// values were already judged against the agent the fork also runs. A
+		// canvas session's fork is a canvas session for the same reason: its
+		// agent was told it draws.
 		AgentType:  fork.Source.AgentType,
 		Mode:       fork.Source.Mode,
 		Model:      fork.Source.Model,
 		Effort:     fork.Source.Effort,
+		Canvas:     fork.Source.Canvas,
 		ForkedFrom: &ForkOrigin{SessionID: fork.Source.ID},
 		// The fork starts idle, and the source's turn is not consulted. A fork
 		// can be cut from a session that is mid-turn, and what the source is in

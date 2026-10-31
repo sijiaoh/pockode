@@ -55,6 +55,21 @@ func TestDeveloperInstructions_ANewThreadCarriesTheGuidance(t *testing.T) {
 	}
 }
 
+// A canvas session is told how to draw instead of how to ask and render; the
+// user's own instructions still go first.
+func TestDeveloperInstructions_ACanvasSessionCarriesTheCanvasGuidance(t *testing.T) {
+	opts := newThreadOpts(t)
+	opts.Canvas = true
+	s := openWithMCP(t, opts, map[string]*rpcResponse{
+		"config/read":  {Result: json.RawMessage(`{"config":{"developer_instructions":"Answer tersely."}}`)},
+		"thread/start": threadReply("thread-new"),
+	})
+
+	if got, _ := startedWith(t, s); got != "Answer tersely.\n\n"+agent.CanvasGuidance {
+		t.Errorf("developerInstructions = %q, want the user's followed by agent.CanvasGuidance", got)
+	}
+}
+
 // The parameter replaces the user's own developer_instructions, so leaving them
 // out would silently drop them from every Pockode session.
 func TestDeveloperInstructions_KeepTheUsersOwn(t *testing.T) {

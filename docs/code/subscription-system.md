@@ -424,6 +424,29 @@ about the session, and there is nothing truthful to say about it.
 are driven by the same store events, so a burst the list can absorb is a burst
 detail must absorb too, or every burst would send detail alone into a full sync.
 
+**A canvas session's page rides the chat subscription, not detail**
+([why](../canvas-ui.md#132-the-pushed-state)): `chat.messages.subscribe`
+answers a canvas session with its current `canvas.State`, and `canvas.Store` pushes each new revision as
+`chat.canvas_state` (`ChatMessagesWatcher.NotifyCanvasState`). That notification
+is state, not a record: no `seq`, not in history, sent beside the record queue
+rather than through it — each carries the whole state, so arriving out of order
+costs nothing, the highest revision wins. The canvas is read after the
+subscription is registered, for the same reason the history page is.
+
+**The pending permission requests ride it too.** Which requests are pending is
+detail's (`TurnState.Blockers`); what each asks is its `permission_request`
+record, which a long turn can push off the page the subscription answers with.
+So `ChatMessagesWatcher.Subscribe` also returns `permission_requests`: the
+stamped records of every blocker pending once the history was read, found by
+scanning that history back from its end (`agent.PermissionRequestIndexes`), and
+the reply's `turn` from the same read, so the two agree on what is pending. Both
+reads follow the registration, which is what makes the list complete: a record
+the history read missed was written after the registration and arrives live,
+and one it holds had its blocker settled first — a process settles the turn
+before it writes the record — so the turn read names it unless it has already
+been answered. Why the contents are not copied onto the blocker instead is
+[docs/canvas-ui.md §10.4](../canvas-ui.md#104-where-the-requests-come-from).
+
 ### Why a Watcher Sometimes Listens to a Second Store
 
 A watcher's usual shape is one store, one kind of event: the work store changes,

@@ -24,7 +24,7 @@ import (
 //     or before a change to it, goes on without it.
 
 // developerInstructions is the user's own developer_instructions for this
-// working directory, if any, followed by Pockode's guidance.
+// working directory, if any, followed by Pockode's guidance (CanvasGuidance in a canvas session).
 func (s *appSession) developerInstructions(ctx context.Context) string {
 	user, err := s.readUserDeveloperInstructions(ctx)
 	// Not reading them is not a reason to refuse the session: the user is told
@@ -39,10 +39,11 @@ func (s *appSession) developerInstructions(ctx context.Context) string {
 		})
 	}
 
+	guidance := agent.GuidanceFor(s.opts.Canvas)
 	if user == "" {
-		return agent.Guidance
+		return guidance
 	}
-	return user + "\n\n" + agent.Guidance
+	return user + "\n\n" + guidance
 }
 
 // readUserDeveloperInstructions asks Codex for the developer_instructions its

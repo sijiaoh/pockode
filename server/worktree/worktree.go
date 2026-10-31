@@ -6,6 +6,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/pockode/server/canvas"
 	"github.com/pockode/server/chat"
 	"github.com/pockode/server/process"
 	"github.com/pockode/server/session"
@@ -30,6 +31,10 @@ type Worktree struct {
 	ChatMessagesWatcher  *watch.ChatMessagesWatcher
 	ProcessManager       *process.Manager
 	ChatClient           *chat.Client
+	// CanvasStore owns the canvas of this worktree's canvas sessions: their
+	// current page, pushed through ChatMessagesWatcher, and every revision's
+	// snapshot.
+	CanvasStore *canvas.Store
 
 	watchers []watch.Watcher // for unified lifecycle management
 

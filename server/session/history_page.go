@@ -42,6 +42,13 @@ type HistoryPage struct {
 	NextBeforeSeq HistorySeq
 }
 
+// RecordAt is the record at index of the whole history as a client gets it:
+// stamped with its seq, as a page would carry it. For a record handed to a
+// client outside any page.
+func RecordAt(records []json.RawMessage, index int) json.RawMessage {
+	return stampHistorySeq(records[index:index+1], HistorySeq(index+1))[0]
+}
+
 // PageHistory returns the newest limit records older than beforeSeq.
 //
 // beforeSeq is exclusive: NoHistorySeq asks for the newest page, and any other

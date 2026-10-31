@@ -3,6 +3,7 @@ package mcp
 import (
 	"os"
 	"regexp"
+	"slices"
 	"testing"
 
 	"gopkg.in/yaml.v3"
@@ -12,7 +13,7 @@ import (
 
 // toolLikeName matches what the prompts name as a tool or as a tool's argument:
 // every Pockode tool is prefixed by what it acts on.
-var toolLikeName = regexp.MustCompile(`\b(?:work|story|task|step|question|agent_role|html)_[a-z_]*[a-z]\b`)
+var toolLikeName = regexp.MustCompile(`\b(?:work|story|task|step|question|agent_role|html|canvas)_[a-z_]*[a-z]\b`)
 
 // prompts.yaml is the other half of the tool contract: it is where an agent is
 // told which tool to call, and it is read from a different package than the one
@@ -39,9 +40,10 @@ func TestPrompts_NameOnlyLiveTools(t *testing.T) {
 	// Pockode's guidance is the same kind of text from a third package, and
 	// every session reads it.
 	templates["agent.Guidance"] = agent.Guidance
+	templates["agent.CanvasGuidance"] = agent.CanvasGuidance
 
 	live := map[string]bool{}
-	for _, def := range toolDefinitions {
+	for _, def := range slices.Concat(toolDefinitions, canvasToolDefinitions) {
 		live[def.Name] = true
 		for arg := range def.InputSchema.Properties {
 			live[arg] = true

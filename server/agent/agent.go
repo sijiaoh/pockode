@@ -52,7 +52,12 @@ type StartOptions struct {
 	// Effort is the agent-specific reasoning effort level
 	// (session.EffortsForAgent). Empty means pass nothing and let the CLI keep
 	// its own default.
-	Effort     string
+	Effort string
+	// Canvas is session.SessionMeta.Canvas: the session's guidance, the MCP
+	// proxy's tool list and the refusal of the CLI's own question tool all
+	// follow it (docs/canvas-ui.md §9.1). Fixed for the session's life, so it
+	// can be fixed at spawn.
+	Canvas     bool
 	DisableMCP bool // skip MCP config (for testing)
 
 	// OnUsage receives what the CLI reports about the session's consumption, as

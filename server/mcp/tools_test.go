@@ -135,13 +135,45 @@ func TestToolDefinitions_BothSubtaskRefusalsAreAnnounced(t *testing.T) {
 const claudeMCPTextLimit = 2048
 
 func TestToolDefinitions_FitClaudesLimit(t *testing.T) {
-	for _, def := range toolDefinitions {
+	for _, def := range slices.Concat(toolDefinitions, canvasToolDefinitions) {
 		if n := utf16Len(def.Description); n > claudeMCPTextLimit {
 			t.Errorf("%s's description is %d characters; Claude reads only the first %d", def.Name, n, claudeMCPTextLimit)
 		}
 	}
-	if n := utf16Len(agent.Guidance); n > claudeMCPTextLimit {
-		t.Errorf("the server instructions are %d characters; Claude reads only the first %d", n, claudeMCPTextLimit)
+	for name, text := range map[string]string{"agent.Guidance": agent.Guidance, "agent.CanvasGuidance": agent.CanvasGuidance} {
+		if n := utf16Len(text); n > claudeMCPTextLimit {
+			t.Errorf("the server instructions %s are %d characters; Claude reads only the first %d", name, n, claudeMCPTextLimit)
+		}
+	}
+}
+
+// A canvas session shows and asks through the canvas, and only a canvas
+// session has one (docs/canvas-ui.md §3.4). question_answer stays: answering
+// another agent's question is not asking the user.
+func TestListedTools_FollowTheSession(t *testing.T) {
+	names := func(defs []toolDefinition) map[string]bool {
+		m := map[string]bool{}
+		for _, d := range defs {
+			m[d.Name] = true
+		}
+		return m
+	}
+	ordinary, canvasSet := names(listedTools(false)), names(listedTools(true))
+
+	for _, tool := range []string{"canvas_render", "canvas_update"} {
+		if ordinary[tool] || !canvasSet[tool] {
+			t.Errorf("%s: listed in ordinary = %v, in canvas = %v; want only in canvas", tool, ordinary[tool], canvasSet[tool])
+		}
+	}
+	for _, tool := range []string{"html_render", "question_post", "question_cancel"} {
+		if !ordinary[tool] || canvasSet[tool] {
+			t.Errorf("%s: listed in ordinary = %v, in canvas = %v; want only in ordinary", tool, ordinary[tool], canvasSet[tool])
+		}
+	}
+	for _, tool := range []string{"question_answer", "story_list", "step_done"} {
+		if !canvasSet[tool] {
+			t.Errorf("%s is missing from a canvas session", tool)
+		}
 	}
 }
 

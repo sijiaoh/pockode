@@ -280,8 +280,8 @@ func (c *Client) withdraw(ctx context.Context, sessionID, requestID string, reas
 // answered twice, which is a thing it can make sense of; the alternative is
 // holding the session's state across a write to a subprocess's stdin, for a
 // race that needs two people answering one question in the same breath.
-func (c *Client) SendAnswers(ctx context.Context, sessionID string, answers []Answer, exclude any) (Sent, string, error) {
-	return c.deliverAnswers(ctx, sessionID, answers, agent.UserResolver(), exclude)
+func (c *Client) SendAnswers(ctx context.Context, sessionID string, answers []Answer, from Sender) (Sent, string, error) {
+	return c.deliverAnswers(ctx, sessionID, answers, agent.UserResolver(), from)
 }
 
 // AnswerQuestion delivers one answer an agent gave to a question another
@@ -304,13 +304,13 @@ func (c *Client) SendAnswers(ctx context.Context, sessionID string, answers []An
 // answer simply leaves the question where it is, for the user or for another
 // agent. So question_answer offers no decline.
 func (c *Client) AnswerQuestion(ctx context.Context, sessionID string, answer Answer, by agent.QuestionResolver) error {
-	_, _, err := c.deliverAnswers(ctx, sessionID, []Answer{answer}, by, nil)
+	_, _, err := c.deliverAnswers(ctx, sessionID, []Answer{answer}, by, Sender{})
 	return err
 }
 
 // deliverAnswers is the one path an answer takes, whoever gave it, and returns
 // the body the agent was sent.
-func (c *Client) deliverAnswers(ctx context.Context, sessionID string, answers []Answer, by agent.QuestionResolver, exclude any) (Sent, string, error) {
+func (c *Client) deliverAnswers(ctx context.Context, sessionID string, answers []Answer, by agent.QuestionResolver, from Sender) (Sent, string, error) {
 	if len(answers) == 0 {
 		// A body with no answers in it would be a bare "Answering:" that starts
 		// a turn about nothing.
@@ -333,7 +333,7 @@ func (c *Client) deliverAnswers(ctx context.Context, sessionID string, answers [
 	content := answerMessage(answering, by)
 	sent, err := c.sendEvent(ctx, sessionID, agent.MessageEvent{
 		Content: content, Answering: answering, Origin: originOf(by),
-	}, nil, exclude)
+	}, nil, from)
 	if err != nil {
 		return sent, "", err
 	}

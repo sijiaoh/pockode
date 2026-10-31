@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/pockode/server/agentrole"
+	"github.com/pockode/server/canvas"
 	"github.com/pockode/server/chat"
 	"github.com/pockode/server/session"
 	"github.com/pockode/server/settings"
@@ -34,12 +35,20 @@ func userErrorf(format string, a ...any) error {
 	return &userError{err: fmt.Errorf(format, a...)}
 }
 
+// resultError is a caller error whose message is already the whole result the
+// agent reads, written to be read as it is: the handler adds no "Error: " in
+// front. A refused canvas call is one (canvas.FailureText).
+type resultError struct{ text string }
+
+func (e *resultError) Error() string { return e.text }
+
 // isUserError reports whether err was caused by the caller's input rather than a
 // server fault. Work store sentinels (not-found / invalid transition) are
 // caller errors too, so they count even when they reach here unwrapped.
 func isUserError(err error) bool {
 	var ue *userError
-	if errors.As(err, &ue) {
+	var re *resultError
+	if errors.As(err, &ue) || errors.As(err, &re) {
 		return true
 	}
 	return errors.Is(err, work.ErrWorkNotFound) ||
@@ -133,6 +142,12 @@ func NewExecutor(workStore work.Store, agentRoleStore agentrole.Store, workOps *
 // caller is the session the call came from; it is passed per call rather than
 // held on the Executor because one Executor serves every session at once.
 func (e *Executor) Execute(ctx context.Context, caller Caller, name string, args json.RawMessage) (string, error) {
+	if refusal, ok := notInCanvasSession[name]; ok {
+		if err := e.refuseInCanvas(caller, refusal); err != nil {
+			return "", err
+		}
+	}
+
 	switch name {
 	case "story_list":
 		return e.storyList(caller)
@@ -178,6 +193,10 @@ func (e *Executor) Execute(ctx context.Context, caller Caller, name string, args
 		return e.questionPost(ctx, caller, args)
 	case "question_cancel":
 		return e.questionCancel(ctx, caller, args)
+	case canvas.RenderTool:
+		return e.canvasRender(caller, args)
+	case canvas.UpdateTool:
+		return e.canvasUpdate(caller, args)
 	case "question_answer":
 		return e.questionAnswer(ctx, caller, args)
 	default:

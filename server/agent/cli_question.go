@@ -21,6 +21,21 @@ const CLIQuestionRefusal = "This question was not delivered to the user: Pockode
 	"working or end your turn — and the answer, or the user's refusal to answer, arrives as a message in this chat, " +
 	"possibly after this turn has ended."
 
+// CanvasCLIQuestionRefusal is the refusal in a canvas session, which asks by
+// drawing and refuses question_post: pointing its agent at that tool would only
+// send it into a second refusal (docs/canvas-ui.md §3.4).
+const CanvasCLIQuestionRefusal = "This question was not delivered to the user: in a canvas session, draw it into the canvas — " +
+	"buttons for choices, a form for input."
+
+// CLIQuestionRefusalFor is the refusal a session's CLI gets, chosen by whether
+// it is a canvas session.
+func CLIQuestionRefusalFor(canvas bool) string {
+	if canvas {
+		return CanvasCLIQuestionRefusal
+	}
+	return CLIQuestionRefusal
+}
+
 // CLIQuestionRefusedCode marks the warning below in the transcript.
 const CLIQuestionRefusedCode = "cli_question_refused"
 
@@ -28,11 +43,16 @@ const CLIQuestionRefusedCode = "cli_question_refused"
 // this refusal is not silent: something visible happened in their session — the
 // agent asked them something they will never see — and without this the only
 // trace is a tool row that failed (Claude) or nothing at all (Codex). cli names
-// the CLI as the user knows it, since the tool is the CLI's and not Pockode's.
-func CLIQuestionRefusedWarning(cli string) WarningEvent {
+// the CLI as the user knows it, since the tool is the CLI's and not Pockode's;
+// canvas says which refusal it was given, so the record tells the user what to
+// expect instead.
+func CLIQuestionRefusedWarning(cli string, canvas bool) WarningEvent {
+	instead := "It was told to use Pockode's question_post instead."
+	if canvas {
+		instead = "It was told to draw the question into the canvas instead."
+	}
 	return WarningEvent{
-		Message: cli + " tried to ask you a question through its own tool, which does not reach you. " +
-			"It was told to use Pockode's question_post instead.",
-		Code: CLIQuestionRefusedCode,
+		Message: cli + " tried to ask you a question through its own tool, which does not reach you. " + instead,
+		Code:    CLIQuestionRefusedCode,
 	}
 }

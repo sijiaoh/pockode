@@ -20,6 +20,11 @@ func RunProxy(args []string, version string) error {
 	// it. Optional: a proxy started by hand has no session.
 	sessionID := flags.String("session-id", "", "session the calling CLI runs (optional)")
 	worktree := flags.String("worktree", "", "worktree that session lives in (optional; empty is the main worktree)")
+	// Set for a canvas session, a property fixed at the session's birth, so it
+	// can be fixed at spawn too. It only chooses what is listed and the
+	// instructions: whether a call is accepted is the executor's, from the
+	// stored property.
+	canvasSession := flags.Bool("canvas", false, "the session is a canvas session (optional)")
 	flags.Parse(args)
 
 	if *dataDir == "" {
@@ -32,7 +37,7 @@ func RunProxy(args []string, version string) error {
 	if err != nil {
 		return err
 	}
-	if err := NewServer(client, version).Run(context.Background()); err != nil {
+	if err := NewServer(client, version, *canvasSession).Run(context.Background()); err != nil {
 		return fmt.Errorf("MCP server failed: %w", err)
 	}
 	return nil

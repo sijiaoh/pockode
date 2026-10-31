@@ -108,6 +108,9 @@ return as chips without uploading.
   later draft has to be refused again before it is said again.
 - **Focus** follows the composer's rule: a fine pointer gets the caret, a coarse
   one does not get the keyboard thrown up.
+- **Not a canvas action.** Its `content` is text the user never wrote, so it
+  is drawn discarded with no restore; the user acts on the page again
+  ([canvas-ui.md §6.2](canvas-ui.md#62-the-canvas-action-record)).
 
 The button and the row read `In input` while the draft holds all of the
 message — its text and every file. Nothing records that a restore happened: that

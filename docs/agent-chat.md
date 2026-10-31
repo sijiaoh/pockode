@@ -20,7 +20,7 @@ React SPA ──WebSocket──▶ Go Server ──spawn──▶ AI CLI (subpro
 
 | Layer | Path | Role |
 |-------|------|------|
-| RPC handlers | `server/ws/rpc_chat.go` | `chat.message`, `chat.interrupt`, `chat.messages.subscribe` / `chat.messages.history` ([paging](#history-paging)), permission responses |
+| RPC handlers | `server/ws/rpc_chat.go`, `server/ws/rpc_canvas.go` (the `chat.canvas_*` methods) | `chat.message`, `chat.interrupt`, `chat.messages.subscribe` / `chat.messages.history` ([paging](#history-paging)), permission responses |
 | Session config | `server/ws/rpc_session.go` | `session.set_agent_type` / `set_mode` / `set_model` / `set_effort`, each closing the running process because a CLI is told these only at launch; `session.models` and `session.efforts` list the choices ([models](code/agent-integration.md#session-models), [effort](code/agent-integration.md#session-effort)). None of them answer with the new value: the settings in force reach the panel through `session.detail` ([why](code/subscription-system.md#why-a-session-is-two-subscriptions)) |
 | Another worktree's sessions | `server/ws/rpc_session_view.go` | `session_view.*` — reading (and discarding) a session stored under a worktree the connection is not in, including one that no longer exists ([how](#sessions-outlive-their-worktree)) |
 | Attachments | `server/ws/rpc_attachment.go` | `attachment.get` — the content a chat event references by id, answered in `file.get`'s own shape so one client path renders both ([why](code/agent-integration.md#content-blocks-and-attachments)) |
@@ -380,7 +380,7 @@ the rest costs transport, parsing and memory for records nobody looks at.
 
 | Method | Params | Result |
 |--------|--------|--------|
-| `chat.messages.subscribe` | `id`, `session_id`, `limit?` | `history`, `has_more`, `next_before_seq?`, `turn`, `tool_activity?` |
+| `chat.messages.subscribe` | `id`, `session_id`, `limit?` | `history`, `has_more`, `next_before_seq?`, `turn`, `tool_activity?`, `permission_requests?`, `canvas?` |
 | `chat.messages.history` | `session_id`, `before_seq?`, `limit?` | `history`, `has_more`, `next_before_seq?` |
 
 - `history` is the page, **oldest record first**, each record stamped with its
@@ -397,6 +397,13 @@ the rest costs transport, parsing and memory for records nobody looks at.
   `before_seq` naming no record are both refused with an invalid-params error —
   answering an unusable cursor with the newest page would silently restart the
   client's scrollback from the bottom.
+- `permission_requests` and `canvas` sit beside the page and are never part of
+  it: the records of the permission requests pending when the subscription
+  opened, whatever page they are on
+  ([canvas-ui.md §10.4](canvas-ui.md#104-where-the-requests-come-from)), and a
+  canvas session's current canvas
+  ([canvas-ui.md §13.2](canvas-ui.md#132-the-pushed-state)). Neither goes
+  through the message reducer.
 
 - `tool_activity` is what each tool call still in flight last reported doing,
   keyed by `tool_use_id`. It is not part of the page, because that kind of event

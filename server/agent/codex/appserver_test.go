@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -193,6 +194,21 @@ func TestBuildThreadParams_MCPArgsCarryIdentity(t *testing.T) {
 	for _, want := range [][2]string{{"--session-id", "s1"}, {"--worktree", "feature-x"}} {
 		if !hasFlagValue(args, want[0], want[1]) {
 			t.Errorf("args %v missing %s %s", args, want[0], want[1])
+		}
+	}
+}
+
+// The flag chooses the proxy's tool list (docs/canvas-ui.md §9.1), so it
+// follows the session's property and nothing else.
+func TestBuildThreadParams_CanvasFlagFollowsTheSession(t *testing.T) {
+	for _, isCanvas := range []bool{true, false} {
+		sess := &appSession{
+			opts: agent.StartOptions{WorkDir: "/tmp/work", DataDir: "/tmp/data", SessionID: "s1", Canvas: isCanvas},
+			exe:  "/usr/local/bin/pockode",
+		}
+		args := sess.buildThreadParams()["config"].(map[string]interface{})["mcp_servers"].(map[string]interface{})["pockode"].(map[string]interface{})["args"].([]string)
+		if got := slices.Contains(args, "--canvas"); got != isCanvas {
+			t.Errorf("canvas session %v: --canvas passed = %v (args %v)", isCanvas, got, args)
 		}
 	}
 }
@@ -1957,6 +1973,37 @@ func TestRequestUserInput_IsAnsweredWithTheRefusalAndWarnsTheUser(t *testing.T) 
 	}
 	if !warned {
 		t.Error("the user was not told the agent had asked them something they never saw")
+	}
+}
+
+// In a canvas session the answer points at the canvas, not at question_post,
+// which that session refuses.
+func TestRequestUserInput_InACanvasSessionSaysToDraw(t *testing.T) {
+	sess := newTestSession()
+	defer sess.cancel()
+	sess.opts.Canvas = true
+	writer := &recordingWriteCloser{}
+	sess.stdin = writer
+
+	id := int64(12)
+	sess.handleServerRequest(rpcMessage{ID: &id, Method: "item/tool/requestUserInput", Params: json.RawMessage(
+		`{"threadId":"t","turnId":"u","itemId":"i","isBlocking":true,"questions":[{"id":"q1","header":"H","question":"Q?"}]}`)})
+
+	writer.mu.Lock()
+	reply := string(writer.writes[len(writer.writes)-1])
+	writer.mu.Unlock()
+	want, _ := json.Marshal(agent.CanvasCLIQuestionRefusal)
+	if !strings.Contains(reply, string(want)) {
+		t.Errorf("reply = %s, want the canvas refusal", reply)
+	}
+	var warnings []agent.WarningEvent
+	for _, ev := range drainEvents(sess.events) {
+		if w, ok := ev.(agent.WarningEvent); ok && w.Code == agent.CLIQuestionRefusedCode {
+			warnings = append(warnings, w)
+		}
+	}
+	if len(warnings) != 1 || warnings[0] != agent.CLIQuestionRefusedWarning("Codex", true) {
+		t.Errorf("warnings = %+v, want the one in the canvas wording", warnings)
 	}
 }
 

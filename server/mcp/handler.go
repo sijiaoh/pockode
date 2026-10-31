@@ -80,7 +80,12 @@ func (h *APIHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if !isUserError(err) {
 			slog.Error("mcp tool call failed", "tool", req.Name, "error", err)
 		}
-		writeJSON(w, http.StatusOK, toolCallResponse{Text: "Error: " + err.Error(), IsError: true})
+		text := "Error: " + err.Error()
+		var re *resultError
+		if errors.As(err, &re) {
+			text = re.text
+		}
+		writeJSON(w, http.StatusOK, toolCallResponse{Text: text, IsError: true})
 		return
 	}
 

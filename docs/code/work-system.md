@@ -656,7 +656,8 @@ message, so a list would only invite an agent to poll for it inside the turn it
 was told not to wait in. The mechanism and how to word a question are in the
 `question_post` description; when to ask, and that it is the only way to, are
 in the asking section of the guidance every session gets before it has loaded a
-tool ([agent-integration.md](agent-integration.md#telling-the-agent-when-to-ask)).
+tool — a canvas session gets `agent.CanvasGuidance` instead, and has no
+`question_post` ([agent-integration.md](agent-integration.md#telling-the-agent-when-to-ask)).
 
 See [Posted Questions](agent-integration.md#posted-questions).
 
@@ -689,9 +690,26 @@ draw. The refusal points the agent at a project file for large data or
 libraries — referenced, it costs the history a path instead of its bytes. The
 reply on success tells the agent the page is shown and not to repeat its
 content, which is the one rule worth restating at the moment it applies.
-When to reach for the tool at all is in the guidance every session gets before
-it has loaded one
+When to reach for the tool at all is in the guidance every session but a canvas
+session gets before it has loaded one
 ([agent-integration.md](agent-integration.md#telling-the-agent-when-to-ask)).
+
+### Canvas Tools
+
+| Tool | Purpose | Key Parameters |
+|------|---------|----------------|
+| `canvas_render` | Draw the whole page of a canvas session | `html` |
+| `canvas_update` | Replace, append to or remove regions (`data-pk-region`) of it | `ops` |
+
+Listed and accepted in a canvas session only, where `html_render`,
+`question_post` and `question_cancel` are neither — a canvas session shows and
+asks by drawing. Unlike `html_render` the call's input is not the page: the
+server applies it to the current document, lints the result and stores a
+revision (`server/mcp/canvas.go` over `server/canvas`). The listing follows the
+proxy's `--canvas` flag; whether a call is accepted follows the session's
+stored property. A refused draw reaches the agent as the failure text itself,
+with no `Error:` in front. The contract — tool results, refusal wording, lint —
+is [canvas-ui.md](../canvas-ui.md#3-how-the-agent-draws).
 
 ### Agent Role Tools
 
@@ -1896,7 +1914,7 @@ make claims about, and no closed work at all. The archive is a separate, paged
 fetch ([websocket-rpc.md](websocket-rpc.md#paging-a-subscribed-list)), and
 `workStore` keeps it in its own field — the two halves obey opposite rules, one
 pushed to and one never
-([subscription-system.md](subscription-system.md#the-two-lists-update-live-in-opposite-ways)).
+([subscription-system.md](subscription-system.md#the-two-lists-update-live-in-different-ways)).
 
 **A job is never on this list**, in `Current` or in the archive. The Stories
 list is the tree; a run belongs under its schedule
@@ -2233,8 +2251,8 @@ to naming none of the story/task tools.
 **Asking is one sentence here, and one fact the tool cannot carry.** How to
 ask — when, and that the CLI's own ask-the-user tool does not reach the user
 ([agent-integration.md](agent-integration.md#refusing-the-clis-own-question)) —
-is the asking section of `agent.Guidance`, which every session gets, worked or
-not; the mechanism and wording are the `question_post` description, read on
+is the asking section of `agent.Guidance`, which every session but a canvas
+session gets, worked or not; the mechanism and wording are the `question_post` description, read on
 loading the tool ([agent-integration.md](agent-integration.md#telling-the-agent-when-to-ask)).
 Repeating either here would be a second copy for them to drift apart in, so the
 section says "Ask with `question_post`, as the "Asking the user something in
