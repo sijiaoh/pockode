@@ -9,7 +9,12 @@ export interface Node {
 	last_used_at: string;
 }
 
-export type NodeStatus = "running" | "stopped" | "stale";
+/**
+ * `restarting` is the cluster's own state: from an accepted `node.restart`
+ * until the node's successor publishes its `server.json`, or a minute passes
+ * (docs/restart-ui.md, "While a node restarts").
+ */
+export type NodeStatus = "running" | "stopped" | "stale" | "restarting";
 
 export interface NodeStatusInfo {
 	id: string;
@@ -18,6 +23,13 @@ export interface NodeStatusInfo {
 	started_at?: string;
 	local_url?: string;
 	remote_url?: string;
+	/** The running version, only while running. Absent: a node started by a
+	 * build older than the field — and than node restarts. */
+	version?: string;
+	/** RFC3339; while restarting, and while `restart_error` is set. */
+	restart_requested_at?: string;
+	/** Why the last restart did not come back, in English, shown as it is. */
+	restart_error?: string;
 }
 
 export interface NodeWithStatus extends Node {
@@ -47,5 +59,9 @@ export interface NodeStopParams {
 }
 
 export interface NodeCleanupParams {
+	id: string;
+}
+
+export interface NodeRestartParams {
 	id: string;
 }

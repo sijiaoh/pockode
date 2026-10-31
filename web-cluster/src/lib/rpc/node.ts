@@ -3,6 +3,7 @@ import type {
 	Node,
 	NodeCleanupParams,
 	NodeCreateParams,
+	NodeRestartParams,
 	NodeStartParams,
 	NodeStatusInfo,
 	NodeStopParams,
@@ -20,6 +21,7 @@ export interface NodeActions {
 	startNode: (params: NodeStartParams) => Promise<NodeStatusInfo>;
 	stopNode: (params: NodeStopParams) => Promise<NodeStatusInfo>;
 	cleanupNode: (params: NodeCleanupParams) => Promise<NodeStatusInfo>;
+	restartNode: (params: NodeRestartParams) => Promise<NodeStatusInfo>;
 }
 
 export function createNodeActions(
@@ -72,6 +74,13 @@ export function createNodeActions(
 		// means what the button said.
 		cleanupNode: async (params: NodeCleanupParams): Promise<NodeStatusInfo> => {
 			return requireClient().request("node.cleanup", params);
+		},
+
+		// Answers once the node has been asked, with its status `restarting` —
+		// not once it is back. A refusal rejects with the code
+		// `restartRefusedReason` reads, having sent nothing.
+		restartNode: async (params: NodeRestartParams): Promise<NodeStatusInfo> => {
+			return requireClient().request("node.restart", params);
 		},
 	};
 }

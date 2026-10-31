@@ -1,15 +1,38 @@
 import { Sheet, Spinner } from "@pockode/shared";
-import { useEffect, useId, useRef, useState } from "react";
-import { generateNodePassword } from "../lib/nodePassword";
+import { useEffect, useReducer, useState } from "react";
+import {
+	type InstalledVersionState,
+	installedOf,
+	isUnreadable,
+	useFreshRead,
+} from "../hooks/useInstalledVersion";
+import {
+	displayVersion,
+	type NodeVersionKind,
+	versionLabel,
+} from "../lib/version";
 import type { NodeStatus, NodeWithStatus } from "../types/node";
 import { displayPath, splitTail } from "../utils/path";
-import { formatUptime } from "../utils/time";
+import { formatElapsed, formatUptime } from "../utils/time";
 import {
 	DANGER_BUTTON,
 	MENU_ITEM,
 	NEUTRAL_BUTTON,
 	PRIMARY_BUTTON,
 } from "./buttons";
+import { InstalledArrow } from "./InstalledArrow";
+import { RestartNodeSheet } from "./RestartNodeSheet";
+import { StartNodeSheet } from "./StartNodeSheet";
+
+/**
+ * What the confirmation does after `node.restart` answered: close (restarting,
+ * or the error went to the card), hand over to the older node's sheet, or stay
+ * open with the refusal.
+ */
+export type RestartResult =
+	| { kind: "closed" }
+	| { kind: "older" }
+	| { kind: "refused"; message: string };
 
 interface Props {
 	node: NodeWithStatus;
@@ -20,8 +43,18 @@ interface Props {
 	onDelete: (id: string, options?: { stopFirst?: boolean }) => Promise<void>;
 	/** Resolves to whether the node actually started. */
 	onStart: (id: string, password: string) => Promise<boolean>;
-	onStop: (id: string) => Promise<void>;
+	onStop: (id: string) => Promise<unknown>;
 	onCleanup: (id: string) => Promise<void>;
+	/** The panel's one read of the cluster's installed version. */
+	installedState: InstalledVersionState;
+	/** Whether this node needs a restart into it; null when current or unknown. */
+	versionKind: NodeVersionKind;
+	/** The cluster cannot ask this node: its Restart is `onRestartOlder`. */
+	older: boolean;
+	/** Asks the cluster to restart the node; see `RestartResult`. */
+	onRestart: (node: NodeWithStatus) => Promise<RestartResult>;
+	/** Opens the older node's stop-and-start sheet, which the list holds. */
+	onRestartOlder: (node: NodeWithStatus) => void;
 }
 
 /**
@@ -40,17 +73,19 @@ function StatusMark({ status }: { status: NodeStatus }) {
 		);
 	}
 
+	const [dot, label] =
+		status === "running"
+			? ["bg-th-success", "Running"]
+			: status === "restarting"
+				? ["bg-th-warning", "Restarting"]
+				: ["bg-th-text-muted", "Stopped"];
 	return (
 		<>
 			<span
-				className={`size-2 shrink-0 rounded-full ${
-					status === "running" ? "bg-th-success" : "bg-th-text-muted"
-				}`}
+				className={`size-2 shrink-0 rounded-full ${dot}`}
 				aria-hidden="true"
 			/>
-			<span className="sr-only">
-				{status === "running" ? "Running" : "Stopped"}
-			</span>
+			<span className="sr-only">{label}</span>
 		</>
 	);
 }
@@ -80,6 +115,20 @@ function NodePath({ path }: { path: string }) {
 	);
 }
 
+/**
+ * Seconds since `since`, re-rendering every second while it is set: the
+ * restarting card counts up, and nothing else on it would make it render.
+ */
+function useElapsed(since: string | undefined) {
+	const [, tick] = useReducer((n: number) => n + 1, 0);
+	useEffect(() => {
+		if (since === undefined) return;
+		const timer = setInterval(tick, 1000);
+		return () => clearInterval(timer);
+	}, [since]);
+	return since === undefined ? null : formatElapsed(since, Date.now());
+}
+
 type MenuView = "menu" | "stop" | "delete";
 
 export function NodeCard({
@@ -91,8 +140,21 @@ export function NodeCard({
 	onStart,
 	onStop,
 	onCleanup,
+	installedState,
+	versionKind,
+	older,
+	onRestart,
+	onRestartOlder,
 }: Props) {
 	const [menuView, setMenuView] = useState<MenuView | null>(null);
+	// The restart confirmation, and where it was opened from: the menu's has
+	// Back to the menu, the card's Cancel.
+	const [restartFrom, setRestartFrom] = useState<"card" | "menu" | null>(null);
+	// The version the confirmation speaks of, as of its opening: the reply's
+	// refresh brings a restarting status, which carries none.
+	const [restartingFrom, setRestartingFrom] = useState<string | undefined>();
+	const [restartRefusal, setRestartRefusal] = useState<string | null>(null);
+	const fresh = useFreshRead(installedState);
 	const [startSheetOpen, setStartSheetOpen] = useState(false);
 	// Whether `error` is this sheet's to show. The card's error belongs to
 	// whatever acted on the node last, which is not necessarily a start: a
@@ -105,10 +167,26 @@ export function NodeCard({
 	// "Stop and delete" and a "Delete anyway", and a single flag would spin the
 	// one the user did not press.
 	const [actionLoading, setActionLoading] = useState<
-		"start" | "stop" | "cleanup" | "delete" | "stopDelete" | null
+		"start" | "stop" | "cleanup" | "delete" | "stopDelete" | "restart" | null
 	>(null);
 
 	const status = node.status.status;
+	const restarting = status === "restarting";
+	const elapsed = useElapsed(
+		restarting ? node.status.restart_requested_at : undefined,
+	);
+	const installed = installedOf(installedState);
+
+	// A restart asked from elsewhere — another device, the batch — takes the
+	// menu and the confirmation away under the user: everything in them would
+	// race the restart, or ask for one already under way.
+	useEffect(() => {
+		if (restarting && actionLoading === null) {
+			setMenuView(null);
+			setRestartFrom(null);
+		}
+	}, [restarting, actionLoading]);
+
 	const uptime = node.status.started_at
 		? formatUptime(node.status.started_at, Date.now())
 		: null;
@@ -134,6 +212,37 @@ export function NodeCard({
 
 	const closeMenu = () => setMenuView(null);
 
+	const openRestart = (from: "card" | "menu") => {
+		setMenuView(null);
+		if (older) {
+			onRestartOlder(node);
+			return;
+		}
+		setRestartRefusal(null);
+		setRestartingFrom(node.status.version);
+		fresh.begin();
+		setRestartFrom(from);
+	};
+
+	const closeRestart = () => {
+		if (actionLoading !== null) return;
+		setRestartFrom(null);
+	};
+
+	const confirmRestart = () => {
+		setRestartRefusal(null);
+		void run("restart", async () => {
+			const result = await onRestart(node);
+			if (result.kind === "refused") {
+				setRestartRefusal(result.message);
+				return;
+			}
+			// In one go, so the two sheets are never up together.
+			setRestartFrom(null);
+			if (result.kind === "older") onRestartOlder(node);
+		});
+	};
+
 	const run = async (
 		kind: NonNullable<typeof actionLoading>,
 		action: () => Promise<void>,
@@ -152,7 +261,9 @@ export function NodeCard({
 	};
 
 	const handleStop = async () => {
-		await run("stop", () => onStop(node.id));
+		await run("stop", async () => {
+			await onStop(node.id);
+		});
 		closeMenu();
 	};
 
@@ -205,7 +316,8 @@ export function NodeCard({
 					<button
 						type="button"
 						onClick={() => setMenuView("menu")}
-						className="flex size-11 shrink-0 items-center justify-center rounded-lg text-th-text-secondary hover:bg-th-overlay-hover hover:text-th-text-primary"
+						disabled={restarting}
+						className="flex size-11 shrink-0 items-center justify-center rounded-lg text-th-text-secondary hover:bg-th-overlay-hover hover:text-th-text-primary disabled:opacity-50"
 						aria-label={`More options for ${node.name}`}
 					>
 						<svg className="h-5 w-5" fill="currentColor" viewBox="0 0 24 24">
@@ -217,6 +329,23 @@ export function NodeCard({
 				</div>
 
 				{meta && <p className="mt-2 text-xs text-th-text-muted">{meta}</p>}
+
+				{restarting && (
+					<p className="mt-2 flex items-center gap-1.5 text-xs text-th-text-muted">
+						<Spinner size="h-3 w-3" srText={null} />
+						Restarting...{elapsed && ` ${elapsed}`}
+					</p>
+				)}
+
+				{versionKind !== null && installed?.version !== undefined && (
+					<p className="mt-1 flex items-center gap-1.5 text-xs text-th-text-muted">
+						<InstalledArrow />
+						{versionKind === "older" || node.status.version === undefined
+							? "Older version"
+							: versionLabel(node.status.version)}{" "}
+						· {displayVersion(installed.version)} installed
+					</p>
+				)}
 
 				{status === "stale" && (
 					<p className="mt-2 text-sm text-th-text-secondary">
@@ -273,7 +402,32 @@ export function NodeCard({
 						</>
 					)}
 
-					{status !== "running" && (
+					{status === "running" && versionKind !== null && (
+						<button
+							type="button"
+							onClick={() => openRestart("card")}
+							disabled={actionLoading !== null}
+							className={`${NEUTRAL_BUTTON} shrink-0`}
+						>
+							Restart
+						</button>
+					)}
+
+					{/* Never Start while restarting: on Windows the node has no
+					    server.json for a moment, and a Start then would put a second
+					    server on the project. */}
+					{restarting && (
+						<button
+							type="button"
+							disabled
+							className={`${PRIMARY_BUTTON} flex-1`}
+						>
+							<Spinner size="h-4 w-4" srText={null} />
+							Restarting...
+						</button>
+					)}
+
+					{(status === "stopped" || status === "stale") && (
 						// No in-flight label here, unlike Clean up beside it: a start is
 						// only ever driven from the sheet, which covers this card until
 						// the start resolves. It stays disabled all the same, because
@@ -308,6 +462,17 @@ export function NodeCard({
 			{menuView === "menu" && (
 				<Sheet title={node.name} onClose={closeMenu}>
 					<div className="flex flex-col gap-2 p-4">
+						{/* Withheld only when the installed file is known not to run:
+						    the cluster would refuse, and the header's sheet says why. */}
+						{status === "running" && !isUnreadable(installedState) && (
+							<button
+								type="button"
+								onClick={() => openRestart("menu")}
+								className={`${MENU_ITEM} text-th-text-primary`}
+							>
+								Restart
+							</button>
+						)}
 						{status === "running" && (
 							<button
 								type="button"
@@ -436,12 +601,30 @@ export function NodeCard({
 				</Sheet>
 			)}
 
+			{restartFrom !== null && (
+				<RestartNodeSheet
+					nodeName={node.name}
+					running={restartingFrom}
+					installed={installed}
+					reading={fresh.reading}
+					loading={actionLoading === "restart"}
+					refusal={restartRefusal}
+					cancelLabel={restartFrom === "menu" ? "Back" : "Cancel"}
+					onCancel={() => {
+						closeRestart();
+						if (restartFrom === "menu") setMenuView("menu");
+					}}
+					onClose={closeRestart}
+					onConfirm={confirmRestart}
+				/>
+			)}
+
 			{startSheetOpen && (
 				<StartNodeSheet
 					nodeName={node.name}
 					error={startFailed ? error : undefined}
 					password={password}
-					loading={actionLoading === "start"}
+					progress={actionLoading === "start" ? "starting" : null}
 					onPasswordChange={setPassword}
 					onConfirm={confirmStart}
 					onCancel={() => {
@@ -452,177 +635,5 @@ export function NodeCard({
 				/>
 			)}
 		</>
-	);
-}
-
-interface StartNodeSheetProps {
-	nodeName: string;
-	/**
-	 * Why the start attempted from this sheet failed — the card behind is
-	 * hiding it. Only a start's own failure: the card's error outlives whatever
-	 * raised it, and a cleanup's would read here as a start that had already
-	 * gone wrong.
-	 */
-	error?: string;
-	password: string;
-	loading: boolean;
-	onPasswordChange: (password: string) => void;
-	onConfirm: () => void;
-	onCancel: () => void;
-}
-
-function StartNodeSheet({
-	nodeName,
-	error,
-	password,
-	loading,
-	onPasswordChange,
-	onConfirm,
-	onCancel,
-}: StartNodeSheetProps) {
-	const inputId = useId();
-	const inputRef = useRef<HTMLInputElement>(null);
-	const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">(
-		"idle",
-	);
-
-	// Not `autoFocus`: the sheet takes focus itself in an effect, which runs
-	// after this subtree is mounted and would undo it.
-	useEffect(() => {
-		inputRef.current?.focus();
-	}, []);
-
-	const handleGenerate = () => {
-		onPasswordChange(generateNodePassword());
-		setCopyState("idle");
-		inputRef.current?.focus();
-	};
-
-	// A generated password exists nowhere else, so a copy that fails silently
-	// hands the user a secret they can neither read (the field is masked) nor
-	// retrieve.
-	// `navigator.clipboard` is absent outside a secure context, which is exactly
-	// where a self-hosted cluster is often reached, so this path is real.
-	const handleCopy = async () => {
-		try {
-			await navigator.clipboard.writeText(password);
-			setCopyState("copied");
-		} catch {
-			setCopyState("failed");
-		}
-	};
-
-	const handleSubmit = (e: React.FormEvent) => {
-		e.preventDefault();
-		if (!password.trim() || loading) return;
-		onConfirm();
-	};
-
-	return (
-		<Sheet
-			title={`Start ${nodeName}`}
-			onClose={onCancel}
-			dismissible={!loading}
-			onSubmit={handleSubmit}
-			footer={
-				<>
-					<button
-						type="button"
-						onClick={onCancel}
-						disabled={loading}
-						className={`${NEUTRAL_BUTTON} flex-1`}
-					>
-						Cancel
-					</button>
-					<button
-						type="submit"
-						disabled={loading || !password.trim()}
-						className={`${PRIMARY_BUTTON} flex-1`}
-					>
-						{loading && <Spinner size="h-4 w-4" />}
-						{loading ? "Starting..." : "Start"}
-					</button>
-				</>
-			}
-		>
-			<div className="flex flex-col gap-4 p-4">
-				{/* A failed start keeps this sheet open, which puts the card — and the
-				    reason — behind it. Repeated here rather than moved, because the
-				    card is where the error belongs once this sheet is gone. No
-				    `role="alert"`: the card's copy is already a live region, and the
-				    same sentence announced twice is worse than once. */}
-				{error && (
-					<p className="rounded-lg border border-th-error/30 bg-th-error/10 px-3 py-2 text-sm text-th-error">
-						{error}
-					</p>
-				)}
-				<p className="text-sm text-th-text-secondary">
-					Used by the Pockode server started in this project. It is not the
-					cluster password.
-				</p>
-				<div>
-					<label
-						htmlFor={inputId}
-						className="mb-1 block text-sm text-th-text-secondary"
-					>
-						Node password
-					</label>
-					<input
-						ref={inputRef}
-						id={inputId}
-						type="password"
-						autoComplete="new-password"
-						value={password}
-						onChange={(e) => {
-							onPasswordChange(e.target.value);
-							setCopyState("idle");
-						}}
-						disabled={loading}
-						className="min-h-[44px] w-full rounded-lg border border-th-border bg-th-bg-primary px-3 py-2 font-mono text-sm text-th-text-primary placeholder:text-th-text-muted focus:border-th-border-focus focus:outline-none disabled:opacity-50"
-					/>
-					<div className="mt-2 flex items-center gap-2">
-						<button
-							type="button"
-							onClick={handleGenerate}
-							disabled={loading}
-							className={NEUTRAL_BUTTON}
-						>
-							Generate
-						</button>
-						<button
-							type="button"
-							onClick={handleCopy}
-							disabled={loading || !password}
-							className={NEUTRAL_BUTTON}
-						>
-							Copy
-						</button>
-						{copyState !== "idle" && (
-							<output
-								className={`text-xs ${
-									copyState === "copied"
-										? "text-th-text-muted"
-										: "text-th-error"
-								}`}
-							>
-								{copyState === "copied"
-									? "Copied"
-									: "Could not copy. Take it down from here:"}
-							</output>
-						)}
-					</div>
-					{/* Revealed only when the copy failed, and only because there is no
-					    other way out: "select the field and copy it yourself" is not
-					    advice a masked input can take — browsers block copying from a
-					    password field — and this password is needed again to sign in to
-					    the server it starts. Asking for it is what unmasks it. */}
-					{copyState === "failed" && (
-						<code className="mt-2 block break-all rounded-lg border border-th-border bg-th-bg-primary p-2 font-mono text-xs text-th-text-primary">
-							{password}
-						</code>
-					)}
-				</div>
-			</div>
-		</Sheet>
 	);
 }

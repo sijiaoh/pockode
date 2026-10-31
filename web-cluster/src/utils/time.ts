@@ -26,3 +26,14 @@ export function formatUptime(startedAt: string, now: number): string | null {
 	if (hours > 0) return `${hours}h ${mins}m`;
 	return `${mins}m`;
 }
+
+/**
+ * A short wait as a clock, `0:12` / `1:05`: the seconds are the news while a
+ * node restarts, which takes a minute at most.
+ */
+export function formatElapsed(since: string, now: number): string | null {
+	const start = new Date(since).getTime();
+	if (Number.isNaN(start)) return null;
+	const seconds = Math.max(0, Math.floor((now - start) / 1000));
+	return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
+}
