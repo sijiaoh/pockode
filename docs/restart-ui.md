@@ -9,6 +9,10 @@ press, what the screen does while the process is gone, and what every failure
 says. How the process restarts itself is
 [code/self-restart.md](code/self-restart.md).
 
+Installing a newer release from the same card and the same sheet, before the
+restart, is [self-update-ui.md](self-update-ui.md), which adjusts some of the
+rules below for it.
+
 Related: [cli-update-ui.md](cli-update-ui.md) for the Settings card this one is
 built like and the conventions it set, [cluster-ui.md](cluster-ui.md) for the
 cluster panel's three rules, [platforms.md](platforms.md) for how Pockode is
@@ -25,12 +29,14 @@ read from the executable on disk each time it is asked for — by running it, no
 by trusting a file name — so it is never cached past the read that produced it.
 Neither is ever inferred from the other, nor from a restart having happened.
 
-**Different, not newer.** The two are compared for equality only. An install
-script pinned to an older release (`POCKODE_VERSION=0.15.0`) is as much a
-reason to restart as a newer one, and the UI does not try to order version
-strings it does not own. Its words are "installed", never "available" or
-"update": Pockode does not know whether a newer release exists, only what is on
-disk.
+**Different, not newer.** The running and the installed version are compared
+for equality only. An install script pinned to an older release
+(`POCKODE_VERSION=0.15.0`) is as much a reason to restart as a newer one, and
+the UI does not try to order version strings. The version row's words are
+"installed", never "available" or "update": it speaks about what is on disk.
+Whether a newer *release* exists is a second, ordered comparison the server
+makes, drawn in rows of their own under this one, and only those say "Update"
+([self-update-ui.md](self-update-ui.md#what-changes-in-the-restart-rules)).
 
 **Restart is always offered, not only on a mismatch.** A reinstall of the same
 version, a development build (whose versions are never compared), or a server
@@ -52,7 +58,8 @@ names what is lost — the AI turns that are running — and what is kept. Wheth
 the new executable can run at all is checked by the server before it lets go of
 anything; a refusal changes nothing and is shown where the press was.
 
-**No nagging outside the place it lives.** A mismatch is shown where the
+**No nagging outside the place it lives.** This holds for a newer release too
+([self-update-ui.md](self-update-ui.md#the-rules)). A mismatch is shown where the
 version is shown — the Pockode section of Settings, the cluster panel's header
 — and nowhere else: no badge on the Settings entry, no banner in the chat. A
 mismatch exists only after someone ran the installer on purpose; they know
@@ -101,8 +108,9 @@ POCKODE
 └───────────────────────────────────────────────────┘
 ```
 
-There is no card header: the section label already says "Pockode", and the
-card has one row.
+There is no card header: the section label already says "Pockode". The version
+row is the card's first; the rows offering newer releases follow it
+([self-update-ui.md](self-update-ui.md#web-settings--pockode)).
 
 **When it reads.** The installed version is read when the section mounts, when
 the page becomes visible again — the user typically comes back from a terminal
@@ -265,8 +273,10 @@ executable.
 
 ### The cluster sheet
 
-The button opens a `Sheet` titled **Pockode cluster**. The sheet is both the
-information and the confirmation (cluster rule 2: Restart costs little here,
+The button opens a `Sheet` titled **Pockode cluster**. Newer releases, and the
+update's own confirmation, are in the same sheet, between the version rows and
+the paragraph ([self-update-ui.md](self-update-ui.md#the-sheet)). The sheet is
+both the information and the confirmation (cluster rule 2: Restart costs little here,
 and the sheet already names it beside the button; cluster rule 3: no second
 overlay).
 
@@ -286,7 +296,7 @@ addresses. This panel reconnects by itself.
 
 | Case | Body | Footer |
 |------|------|--------|
-| Versions differ | Rows as above; then "Restart to use 0.17.0." before the paragraph | Cancel · **Restart** (`PRIMARY_BUTTON`) |
+| Versions differ | Rows as above; then "Restart to use 0.17.0." before the paragraph | Cancel · **Restart** (`PRIMARY_BUTTON`; `NEUTRAL_BUTTON` while a latest release carries Update, [self-update-ui.md](self-update-ui.md#the-sheet)) |
 | Same version | Rows; the paragraph | Cancel · **Restart** (`NEUTRAL_BUTTON`) |
 | Development build | "Running: development build", "Installed: …"; the paragraph | Cancel · **Restart** (`NEUTRAL_BUTTON`) |
 | Installed unreadable | "Installed: couldn't read" in `text-th-error`, then the server's reason and "The cluster can't restart until `<path>` runs. Reinstall it on the server." | Close |
@@ -707,9 +717,9 @@ Not a wire format — that is
 
 ## Considered and not done
 
-- **Showing "update available" from the release feed.** The UI would have to
-  ask the network what is newest, and the next story installs from the UI;
-  until then, what is on disk is the only thing a restart can deliver.
+- **Showing "update available" from the release feed.** Turned down while a
+  restart could only deliver what was on disk; done since, together with
+  installing it, in [self-update-ui.md](self-update-ui.md).
 - **A badge on the Settings entry, or a banner in the chat, on a mismatch.**
   *No nagging* above.
 - **Waiting for running turns to end before restarting.** It would hand the

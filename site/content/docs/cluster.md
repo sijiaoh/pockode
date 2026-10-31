@@ -26,9 +26,9 @@ A node whose process died without cleaning up shows under **Needs attention**. *
 
 ## Upgrade
 
-After [running the install command again](/docs/install/), the version in the page's header offers to restart the cluster into the new version; the nodes keep running. A node running another version than the installed one then says which, and offers **Restart**; with two or more of them, **Restart all outdated** does them at once. A restart needs no node password: the node comes back with its own. It stops the AI turns running in that project; their sessions are kept. A node started by a Pockode from before this is stopped and started instead, once, and asks for its password.
+The version in the page's header gets a dot when a newer stable release is out. Tap it and **Update**: the cluster installs the release and restarts into it, and the nodes keep running. After [running the install command again](/docs/install/) instead, the same place offers to restart the cluster into the new version. A node running another version than the installed one then says which, and offers **Restart**; with two or more of them, **Restart all outdated** does them at once. A restart needs no node password: the node comes back with its own. It stops the AI turns running in that project; their sessions are kept. A node started by a Pockode from before this is stopped and started instead, once, and asks for its password.
 
-Every running node's menu has **Restart** too. On Windows a running Pockode cannot be overwritten, so there an upgrade still means stopping the nodes and the cluster, installing, and starting them again.
+Every running node's menu has **Restart** too. On Windows the install command cannot overwrite a running Pockode, so after it you stop the nodes and the cluster and start them again; **Update** in the header has no such step.
 
 ## Things the nodes share
 

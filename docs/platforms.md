@@ -157,7 +157,9 @@ script just says `Done!`.
 **Upgrading** is re-running the same command; it replaces the file in place.
 A Pockode that is already running keeps running the old version until it is
 restarted — from the app, without a terminal; see
-[Restarting into a New Version](#restarting-into-a-new-version).
+[Restarting into a New Version](#restarting-into-a-new-version). A newer
+release can also be installed from the app itself; see
+[Updating from the App](#updating-from-the-app).
 **Uninstalling** is `rm ~/.local/bin/pockode` — the `.pockode` directory in each
 of your projects, with its sessions, settings and work items, is left alone.
 
@@ -278,8 +280,9 @@ directory on `PATH` for you rather than printing the line to add.
 
 Re-running the same command upgrades in place — once Pockode is stopped:
 Windows does not let a running `pockode.exe` be overwritten, and the script
-says so and asks you to stop it first (see
-[Restarting into a New Version](#restarting-into-a-new-version)).
+says so and asks you to stop it first. Updating from the app has no such step,
+since it renames the running file out of the way instead of overwriting it —
+see [Updating from the App](#updating-from-the-app).
 
 The download is verified here as well — see
 [Verifying the Download](#verifying-the-download). Nothing has to be installed
@@ -327,11 +330,61 @@ Downloading `pockode-windows-amd64.exe` from the
 it directly still works if you would rather not run a script. Nothing in the
 server depends on the file name or where it lives.
 
+## Updating from the App
+
+Settings → Pockode — and, for a cluster manager, the version button in the
+cluster panel's header — lists the releases newer than both the running and
+the installed version: **latest**, the newest final release, and **alpha**, the
+newest prerelease when it is newer still. **Update** does what the install
+scripts do: it downloads this platform's file from that release and checks it
+against the same release's `checksums.txt`. It also runs the file with
+`--version`, and only then renames it over the executable Pockode was started
+from. If that is a symlink, the file it points to is replaced and the link
+stays. Pockode then restarts into the new file as in
+[Restarting into a New Version](#restarting-into-a-new-version). Every failure
+before the rename leaves the installed file as it was. What each screen says,
+and each failure's wording, is in [self-update-ui.md](self-update-ui.md).
+
+- **The releases come from GitHub.** Pockode checks at most once an hour,
+  unless you press Check again. It honours `HTTPS_PROXY` like any other
+  download, and a machine that cannot reach `github.com` shows that it
+  couldn't check. It never says "up to date" in that case. How it caches, and
+  how it copes with GitHub's rate limit, is in
+  [code/self-update.md](code/self-update.md#asking-github-rarely).
+- **No downgrades, no version picker.** To go back, or to pin a version, run
+  the install script with a version
+  ([Installing a specific version](#installing-a-specific-version), `-Version`
+  on Windows), then press Restart in the app.
+- **The file is shared.** Every Pockode started from the same executable — a
+  cluster manager and its nodes, or several servers — runs the new version
+  only after its own restart. In cluster mode, **Restart all outdated** does
+  that for the nodes. Only one install runs at a time per OS user.
+- **On Windows it works while Pockode runs.** The running `pockode.exe` is
+  renamed to `pockode.exe.<timestamp>.old` beside it, and the new file is
+  renamed into its place. A later start of Pockode deletes each `.old` file
+  once nothing runs it any more; until then a node still running it keeps it.
+  Antivirus scanning the new file can hold the update up for a while; each
+  rename waits for it for up to 30 seconds.
+  If the old file cannot be moved back after a failed rename, the app says
+  where it is.
+
+Update is not offered in the cases below, and the app says why. **Restart**
+is still offered in every one of them:
+
+| Case | What to do instead |
+|---|---|
+| A development build: a version that is not a release, such as the `dev` that `scripts/build.sh` gives by default — also the repository's own Docker image, which is built from source | Rebuild from source (a newer image, for Docker), or install a release with the install script. No release check is made |
+| Pockode cannot write to the executable's directory — `/usr/local/bin` installed with `sudo`, say, or a directory under Program Files | The app shows the command for this OS. On macOS and Linux, run `install.sh --install-dir <dir>` from a terminal and then Restart from the app; or reinstall into the default `~/.local/bin` and start Pockode from there, so that later updates work from the app. On Windows, install with the default `install.ps1` and start Pockode from there; or replace the file from an administrator PowerShell after stopping Pockode |
+| A release build runs in a container (Docker, Podman, Kubernetes) | Pull or build a newer image: a file replaced inside a container is gone with it |
+| The release has no file for this platform, or no usable `checksums.txt` | Only that release loses its Update. Install another release with the script, or wait for the next one |
+
 ## Restarting into a New Version
 
 Installing a new version replaces the file on disk; the process that is running
-goes on running the version it started with. To make it use the new one without
-going back to a terminal:
+goes on running the version it started with. [Updating from the
+App](#updating-from-the-app) ends with this restart. After an install from a
+terminal, there are two ways to make Pockode use the new file without going
+back to the terminal:
 
 - **From the app**: Settings → Pockode shows the running version beside the
   installed one and offers **Restart**. In cluster mode the version button in
@@ -364,10 +417,11 @@ How the old process makes way differs:
   the old process stays until the new one ends and then hands back its exit
   code, so the prompt does not come back while Pockode is still running and
   Ctrl+C still reaches it; started any other way (a cluster node, Task
-  Scheduler, a service wrapper), the old process exits at once. Since a running
-  `pockode.exe` cannot be overwritten, an upgrade on Windows still means
-  stopping Pockode, installing, and starting it again: today a restart there
-  delivers no new version.
+  Scheduler, a service wrapper), the old process exits at once. A restart
+  there delivers a new version only after
+  [Updating from the App](#updating-from-the-app): the install script cannot
+  overwrite a running `pockode.exe`, so after it you stop Pockode and start it
+  again yourself.
 
 **One thing cannot be checked in advance:** whether the new version accepts the
 options the old one was started with. If a release removes or renames an option
