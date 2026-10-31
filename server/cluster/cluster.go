@@ -20,6 +20,7 @@ import (
 	"github.com/pockode/server/logger"
 	"github.com/pockode/server/relay"
 	"github.com/pockode/server/startup"
+	"github.com/pockode/server/ws"
 )
 
 const DefaultPort = 9871
@@ -62,6 +63,7 @@ func Run(cfg Config) error {
 		log.Warn(cfg.PasswordDeprecationWarning)
 	}
 	log.Info("starting cluster mode", "port", port, "dataDir", cfg.DataDir, "relayEnabled", cfg.RelayEnabled, "devMode", cfg.DevMode)
+	updater := ws.NewReleaseUpdater(log, cfg.Restarter.Program(), cfg.Version)
 
 	nodeStore, err := node.NewFileStore(cfg.DataDir)
 	if err != nil {
@@ -89,7 +91,7 @@ func Run(cfg Config) error {
 	// The cluster's own lockout, shared by every place it checks the password;
 	// the nodes it starts each keep theirs.
 	passwordGuard := authguard.New()
-	wsHandler := newWSHandler(cfg.Password, passwordGuard, sessions, cfg.Version, cfg.DevMode, nodeStore, processManager, cfg.Restarter, log)
+	wsHandler := newWSHandler(cfg.Password, passwordGuard, sessions, cfg.Version, cfg.DevMode, nodeStore, processManager, cfg.Restarter, updater, log)
 	handler := newHandler(cfg.Password, passwordGuard, sessions, cfg.DevMode, wsHandler)
 
 	srv := &http.Server{
@@ -184,6 +186,10 @@ func Run(cfg Config) error {
 		if err := srv.Shutdown(ctx); err != nil {
 			log.Error("server shutdown error", "error", err)
 		}
+		// Before the connections: an install under way is stopped short of
+		// its replacement (or its replacement awaited), so closing them does
+		// not wait out its timeout on a handler still installing.
+		updater.Close()
 		wsHandler.stop()
 		if err := sessions.Flush(); err != nil {
 			log.Error("failed to persist sessions", "error", err)

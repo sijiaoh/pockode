@@ -2042,3 +2042,144 @@ const (
 type RestartRefusedData struct {
 	Reason string `json:"reason"`
 }
+
+// ServerUpdateCheckParams asks server.update_check for the releases this
+// process could be updated to. Force looks again past the cache, which the
+// server honours at most once a minute (see package release).
+type ServerUpdateCheckParams struct {
+	Force bool `json:"force,omitempty"`
+}
+
+// ServerUpdateCheckResult answers server.update_check, on a pockode server and
+// on a cluster alike. Every part is independent of the others: candidates can
+// be listed beside a reason nothing can be installed, and beside the error of
+// a later check that failed.
+type ServerUpdateCheckResult struct {
+	// CheckedAt is when Candidates was last confirmed against the release
+	// feed; nil until a check has answered. Nil with no CheckError means the
+	// first check has not finished yet — not that nothing is newer.
+	CheckedAt *time.Time `json:"checked_at,omitempty"`
+	// Candidates is latest, then alpha, each only when newer than both the
+	// running and the installed version. Never null.
+	Candidates []UpdateCandidate `json:"candidates"`
+	// LatestVersion is the newest final release, a candidate or not — the
+	// release an alpha candidate is a pre-release beside, when latest is not
+	// offered because the running or installed version is past it. Omitted
+	// when there is none.
+	LatestVersion string `json:"latest_version,omitempty"`
+	// CheckError is why the most recent check did not answer.
+	CheckError *UpdateCheckError `json:"check_error,omitempty"`
+	// CannotInstall is why this process cannot install any release; Restart
+	// is unaffected.
+	CannotInstall *UpdateCannotInstall `json:"cannot_install,omitempty"`
+	// Installing is set while an install of this OS user runs.
+	Installing *UpdateInstalling `json:"installing,omitempty"`
+	// Platform ("linux/amd64") and Asset ("pockode-linux-amd64") are what
+	// this process would download, for the copy of a release without it.
+	Platform string `json:"platform"`
+	Asset    string `json:"asset"`
+}
+
+// UpdateCandidate is one release this process could be updated to.
+type UpdateCandidate struct {
+	// Channel is "latest" or "alpha".
+	Channel string `json:"channel"`
+	// Version is without the tag's "v", as the binary reports it.
+	Version string `json:"version"`
+	// NotesURL is the release's GitHub page.
+	NotesURL string `json:"notes_url"`
+	// Unavailable is why this release cannot be installed here.
+	Unavailable *UpdateUnavailable `json:"unavailable,omitempty"`
+}
+
+// Reasons of an UpdateUnavailable.
+const (
+	UpdateUnavailableNoAsset     = "no_asset"
+	UpdateUnavailableNoChecksums = "no_checksums"
+)
+
+// UpdateUnavailable is why one release has nothing this platform can install.
+type UpdateUnavailable struct {
+	Reason  string `json:"reason"`
+	Message string `json:"message"`
+}
+
+// Reasons of an UpdateCheckError.
+const (
+	// UpdateCheckDevBuild is a development build, which is never checked.
+	UpdateCheckDevBuild = "dev_build"
+	// UpdateCheckUnavailable is a check that failed: the GitHub API and the
+	// releases.atom fallback both.
+	UpdateCheckUnavailable = "unavailable"
+)
+
+// UpdateCheckError is why there is no fresh answer.
+type UpdateCheckError struct {
+	Reason  string `json:"reason"`
+	Message string `json:"message"`
+}
+
+// Reasons of an UpdateCannotInstall. A reason not listed here is an error
+// finding out, shown by its message.
+const (
+	CannotInstallDevBuild    = "dev_build"
+	CannotInstallContainer   = "container"
+	CannotInstallNotWritable = "not_writable"
+)
+
+// UpdateCannotInstall is why this process cannot replace its own executable.
+type UpdateCannotInstall struct {
+	Reason  string `json:"reason"`
+	Message string `json:"message"`
+	// Dir, for not_writable, is the directory of the real executable — the
+	// one a symlink points into — which would have to be writable.
+	Dir string `json:"dir,omitempty"`
+	// Hint, for not_writable, is what to do instead on this OS, in prose with
+	// commands in backticks.
+	Hint string `json:"hint,omitempty"`
+}
+
+// UpdateInstalling is an install under way. Version, Channel and StartedAt
+// are set for one this process runs (asked for from any client); one run by
+// another Pockode of the same OS user — a cluster node, another project —
+// holds the lock and is reported without them.
+type UpdateInstalling struct {
+	Version   string     `json:"version,omitempty"`
+	Channel   string     `json:"channel,omitempty"`
+	StartedAt *time.Time `json:"started_at,omitempty"`
+}
+
+// ServerUpdateParams asks server.update to install Version, which has to be a
+// current candidate. A success is the empty object once the executable has
+// been replaced; restarting into it is a separate server.restart.
+type ServerUpdateParams struct {
+	Version string `json:"version"`
+}
+
+// CodeUpdateFailed answers a server.update that did not replace the
+// executable; UpdateFailedData says why. The message can be shown as it is.
+const CodeUpdateFailed = -32012
+
+// Reasons of a CodeUpdateFailed error. Every one leaves the executable as it
+// was, but restore_failed.
+const (
+	// Refused before anything was downloaded.
+	UpdateFailedReleaseGone       = "release_gone"
+	UpdateFailedNotInstallable    = "not_installable"
+	UpdateFailedAlreadyInstalling = "already_installing"
+	UpdateFailedNoChecksums       = "no_checksums"
+	// Failed on the way (selfinstall.Failure).
+	UpdateFailedNoAsset          = "no_asset"
+	UpdateFailedDownload         = "download_failed"
+	UpdateFailedChecksumMismatch = "checksum_mismatch"
+	UpdateFailedNotRunnable      = "not_runnable"
+	UpdateFailedReplace          = "replace_failed"
+	UpdateFailedRestore          = "restore_failed"
+	UpdateFailedTimeout          = "timeout"
+)
+
+// UpdateFailedData is the data member of a CodeUpdateFailed error. Reason is
+// empty for a failure none of the reasons describes.
+type UpdateFailedData struct {
+	Reason string `json:"reason"`
+}

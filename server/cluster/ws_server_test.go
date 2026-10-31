@@ -5,14 +5,17 @@ import (
 	"encoding/json"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/coder/websocket"
 	"github.com/pockode/server/internal/authsessiontest"
+	"github.com/pockode/server/internal/release"
 	"github.com/pockode/server/internal/restart"
 	"github.com/pockode/server/internal/restarttest"
 	"github.com/pockode/server/rpc"
+	"github.com/pockode/server/selfinstall"
 )
 
 // authenticatedCall authenticates a fresh connection and sends method on it,
@@ -113,4 +116,59 @@ func TestClusterServerRestart(t *testing.T) {
 			t.Fatal("the shutdown was never let go")
 		}
 	})
+}
+
+// publishedRelease is a release feed with one newer release, 0.25.0.
+type publishedRelease struct{}
+
+func (publishedRelease) Status(context.Context) release.Status {
+	return release.Status{Candidates: []release.Candidate{{
+		Channel:  release.ChannelLatest,
+		Version:  "0.25.0",
+		NotesURL: "https://example.test/notes",
+		Asset:    &release.Asset{Name: "pockode-test-arch", URL: "https://example.test/asset", ChecksumsURL: "https://example.test/checksums.txt"},
+	}}, CheckedAt: time.Now()}
+}
+
+func (p publishedRelease) Recheck(ctx context.Context) release.Status { return p.Status(ctx) }
+
+// acceptingInstaller installs anything, instantly, and records what.
+type acceptingInstaller struct {
+	installedMu sync.Mutex
+	installed   []selfinstall.Release
+}
+
+func (*acceptingInstaller) Available() error { return nil }
+func (*acceptingInstaller) Busy() bool       { return false }
+func (*acceptingInstaller) Close()           {}
+func (a *acceptingInstaller) Install(_ context.Context, rel selfinstall.Release) error {
+	a.installedMu.Lock()
+	defer a.installedMu.Unlock()
+	a.installed = append(a.installed, rel)
+	return nil
+}
+
+// The cluster serves the same update methods as a server, through the same
+// ws.ServerControl; their contract is tested in ws. This holds that the
+// cluster routes them.
+func TestClusterServerUpdate(t *testing.T) {
+	server := newTestServer(t, authsessiontest.New(), restart.New(restarttest.Executable(t.TempDir())))
+	restarttest.Install(t, "0.24.0")
+
+	resp, _ := authenticatedCall(t, server.URL, "server.update_check", nil)
+	if resp.Error != nil {
+		t.Fatalf("server.update_check failed: %v", resp.Error)
+	}
+	var check rpc.ServerUpdateCheckResult
+	if err := json.Unmarshal(resp.Result, &check); err != nil {
+		t.Fatal(err)
+	}
+	if len(check.Candidates) != 1 || check.Candidates[0].Version != "0.25.0" {
+		t.Errorf("candidates = %+v, want 0.25.0", check.Candidates)
+	}
+
+	resp, _ = authenticatedCall(t, server.URL, "server.update", rpc.ServerUpdateParams{Version: "0.25.0"})
+	if resp.Error != nil {
+		t.Fatalf("server.update failed: %v", resp.Error)
+	}
 }

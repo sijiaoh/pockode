@@ -46,9 +46,9 @@ type ProcessManager struct {
 // executablePath.
 //
 // The path is the one resolved when the cluster started (restart.Program.Path),
-// not os.Executable() asked now: once an upgrade has renamed a new binary over
-// the old one, Linux reports the running file as "… (deleted)", and starting a
-// node from that fails.
+// not os.Executable() asked now: that resolves symlinks to the file this
+// process started from, which an upgrade that moved a link into a new
+// versioned directory has removed, and starting a node from that fails.
 func NewProcessManager(executablePath string) *ProcessManager {
 	return &ProcessManager{
 		executablePath: executablePath,

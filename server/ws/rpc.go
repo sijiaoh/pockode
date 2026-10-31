@@ -92,7 +92,7 @@ type RPCHandler struct {
 	server                ServerControl
 }
 
-func NewRPCHandler(password string, passwordGuard *authguard.Guard, sessions SessionStore, version string, remoteURL func() string, previewTickets PreviewTickets, rawCapabilities RawCapabilities, devMode bool, commandStore *command.Store, worktreeManager *worktree.Manager, settingsStore *settings.Store, workStore work.Store, workOps *work.Operations, workEngine *work.Engine, agentRoleStore agentrole.Store, scheduleStore schedule.Store, scheduler *schedule.Scheduler, cliAuth *cliauth.Service, cliUpdate *cliupdate.Service, restarter *restart.Restarter) *RPCHandler {
+func NewRPCHandler(password string, passwordGuard *authguard.Guard, sessions SessionStore, version string, remoteURL func() string, previewTickets PreviewTickets, rawCapabilities RawCapabilities, devMode bool, commandStore *command.Store, worktreeManager *worktree.Manager, settingsStore *settings.Store, workStore work.Store, workOps *work.Operations, workEngine *work.Engine, agentRoleStore agentrole.Store, scheduleStore schedule.Store, scheduler *schedule.Scheduler, cliAuth *cliauth.Service, cliUpdate *cliupdate.Service, restarter *restart.Restarter, updater *Updater) *RPCHandler {
 	settingsWatcher := watch.NewSettingsWatcher(settingsStore)
 	settingsWatcher.Start()
 
@@ -135,7 +135,7 @@ func NewRPCHandler(password string, passwordGuard *authguard.Guard, sessions Ses
 
 	return &RPCHandler{
 		conns:                 NewConnections(),
-		server:                ServerControl{Restarter: restarter, Subject: "Pockode"},
+		server:                ServerControl{Restarter: restarter, Updater: updater, Subject: "Pockode"},
 		password:              password,
 		passwordGuard:         passwordGuard,
 		sessions:              sessions,
@@ -561,6 +561,12 @@ func (h *rpcMethodHandler) Handle(ctx context.Context, conn *jsonrpc2.Conn, req 
 		return
 	case "server.restart":
 		h.server.HandleRestart(ctx, conn, req, h.state.stream, h.log)
+		return
+	case "server.update_check":
+		h.server.HandleUpdateCheck(ctx, conn, req, h.log)
+		return
+	case "server.update":
+		h.server.HandleUpdate(ctx, conn, req, h.log)
 		return
 	case "port_preview.ticket":
 		h.handlePortPreviewTicket(ctx, conn, req)
