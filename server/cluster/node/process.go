@@ -8,7 +8,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/pockode/server/password"
@@ -24,14 +23,18 @@ var (
 
 // ProcessManager handles starting and stopping pockode processes for nodes.
 type ProcessManager struct {
-	// executablePath is the path to the pockode executable.
-	// If empty, uses the current executable.
 	executablePath string
 }
 
-// NewProcessManager creates a new ProcessManager.
-func NewProcessManager() *ProcessManager {
-	return &ProcessManager{}
+// NewProcessManager creates a ProcessManager that starts nodes from
+// executablePath.
+//
+// The path is the one resolved when the cluster started (restart.Program.Path),
+// not os.Executable() asked now: once an upgrade has renamed a new binary over
+// the old one, Linux reports the running file as "… (deleted)", and starting a
+// node from that fails.
+func NewProcessManager(executablePath string) *ProcessManager {
+	return &ProcessManager{executablePath: executablePath}
 }
 
 // Start starts a pockode process for the given node.
@@ -63,17 +66,11 @@ func (pm *ProcessManager) Start(n Node, nodePassword string) error {
 		return fmt.Errorf("failed to remove stale server.json: %w", err)
 	}
 
-	// Get executable path
-	exePath, err := pm.getExecutablePath()
-	if err != nil {
-		return fmt.Errorf("failed to get executable path: %w", err)
-	}
-
 	// Pass the password through the environment, not argv, so it stays out of
 	// /proc/<pid>/cmdline and `ps` output.
-	cmd := exec.Command(exePath)
+	cmd := exec.Command(pm.executablePath)
 	cmd.Dir = n.Path
-	cmd.Env = nodeEnv(os.Environ(), nodePassword)
+	cmd.Env = password.WithEnv(os.Environ(), nodePassword)
 
 	// Set platform-specific process attributes
 	setProcessDetached(cmd)
@@ -242,31 +239,6 @@ func (pm *ProcessManager) GetNodeStatus(n Node) NodeStatus {
 		LocalURL:  ptrOrNil(info.LocalURL),
 		RemoteURL: ptrOrNil(info.RemoteURL),
 	}
-}
-
-// nodeEnv returns base with the password env var set to nodePassword, dropping
-// any inherited value under either spelling so the child sees exactly one,
-// unambiguous credential — the deprecated name is stripped too, because leaving
-// it there would hand the child a second answer to the same question.
-func nodeEnv(base []string, nodePassword string) []string {
-	prefix := password.EnvVar + "="
-	legacyPrefix := password.LegacyEnvVar + "="
-	env := make([]string, 0, len(base)+1)
-	for _, kv := range base {
-		if strings.HasPrefix(kv, prefix) || strings.HasPrefix(kv, legacyPrefix) {
-			continue
-		}
-		env = append(env, kv)
-	}
-	return append(env, prefix+nodePassword)
-}
-
-// getExecutablePath returns the path to the pockode executable.
-func (pm *ProcessManager) getExecutablePath() (string, error) {
-	if pm.executablePath != "" {
-		return pm.executablePath, nil
-	}
-	return os.Executable()
 }
 
 // ptrOrNil returns a pointer to s if non-empty, otherwise nil.

@@ -2,6 +2,7 @@ import {
 	AccountSection,
 	AppearanceSection,
 	CliSignInSection,
+	PockodeSection,
 	SessionSection,
 	ThemeSection,
 	WorktreeSection,
@@ -16,6 +17,7 @@ const PRIORITY = {
 	WORKTREE: 30,
 	SESSION: 40,
 	CLI_SIGN_IN: 50,
+	POCKODE: 80,
 	ACCOUNT: 90,
 } as const;
 
@@ -60,6 +62,13 @@ export const activate: Extension["activate"] = (ctx) => {
 		label: "AI CLIs",
 		priority: PRIORITY.CLI_SIGN_IN,
 		component: CliSignInSection,
+	});
+
+	ctx.settings.register({
+		id: "pockode",
+		label: "Pockode",
+		priority: PRIORITY.POCKODE,
+		component: PockodeSection,
 	});
 
 	ctx.settings.register({

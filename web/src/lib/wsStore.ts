@@ -3,6 +3,7 @@ import {
 	authFailureReason,
 	authRetryAfterMs,
 	credentialParams,
+	restartRefusedReason,
 } from "@pockode/shared";
 import {
 	createJSONRPCErrorResponse,
@@ -85,6 +86,7 @@ import {
 	createPortPreviewActions,
 	createRawActions,
 	createScheduleActions,
+	createServerActions,
 	createSessionActions,
 	createSessionViewActions,
 	createSettingsActions,
@@ -95,6 +97,7 @@ import {
 	type PortPreviewActions,
 	type RawActions,
 	type ScheduleActions,
+	type ServerActions,
 	type SessionActions,
 	type SessionViewActions,
 	type SettingsActions,
@@ -117,6 +120,14 @@ interface ConnectionActions {
 	disconnect: () => void;
 	/** Skip the remaining backoff and attempt to reconnect immediately. */
 	retryNow: () => void;
+	/**
+	 * Ask the server to restart (`server.restart`). Resolves once a restart is
+	 * under way and `restartRequestedAt` is set — accepted here, already under
+	 * way from elsewhere, or with this connection gone before its reply could
+	 * arrive (the reconnect's version says how it went). Rejects with the
+	 * server's refusal, which changed nothing.
+	 */
+	restartServer: () => Promise<void>;
 }
 
 // TODO: Implement retry logic for watcher subscriptions.
@@ -261,6 +272,7 @@ type RPCActions = ConnectionActions &
 	PortPreviewActions &
 	RawActions &
 	ScheduleActions &
+	Pick<ServerActions, "serverVersion"> &
 	SessionActions &
 	SessionViewActions &
 	SettingsActions &
@@ -299,6 +311,13 @@ interface WSState {
 	 * refuses every password until then, the right one included.
 	 */
 	authRetryAt: number | null;
+	/**
+	 * When the server accepted a restart this page asked for (epoch ms), until
+	 * the next successful `auth` — the restarted process, or the same one if it
+	 * never went down. This page's memory only: gone on a reload, which a new
+	 * version causes anyway (docs/restart-ui.md, "While it restarts").
+	 */
+	restartRequestedAt: number | null;
 	actions: RPCActions;
 }
 
@@ -429,7 +448,7 @@ function releaseSocket(reason: string): void {
 	const socket = ws;
 	ws = null;
 	socket.close(1000, reason);
-	rpcClients?.base.rejectAllPendingRequests("Connection lost");
+	rpcClients?.base.rejectAllPendingRequests(CONNECTION_LOST_MESSAGE);
 	rpcClients = null;
 	clearAllWatchSubscriptions();
 }
@@ -545,6 +564,17 @@ function getCommitDraftClient(): JSONRPCRequester<void> | null {
 export const RPC_TIMEOUT_MS = 30000;
 
 const RPC_TIMEOUT_MESSAGE = "Request timed out";
+
+const CONNECTION_LOST_MESSAGE = "Connection lost";
+
+/** Whether a request's socket went away before its answer came down it. */
+function isConnectionLost(error: unknown): boolean {
+	return (
+		error instanceof JSONRPCErrorException &&
+		error.code === 0 &&
+		error.message === CONNECTION_LOST_MESSAGE
+	);
+}
 
 /**
  * Whether a request was given up on by our own clock rather than answered.
@@ -848,6 +878,7 @@ const commandActions = createCommandActions(getClient);
 const portPreviewRpcActions = createPortPreviewActions(getClient);
 const rawActions = createRawActions(getClient);
 const scheduleActions = createScheduleActions(getClient);
+const serverActions = createServerActions(getClient);
 const sessionActions = createSessionActions(getClient);
 const sessionViewActions = createSessionViewActions(getClient);
 const settingsActions = createSettingsActions(getClient);
@@ -889,6 +920,7 @@ export const useWSStore = create<WSState>((set, get) => ({
 	maxAttachmentSize: 0,
 	maxImagePreviewSize: 0,
 	authRetryAt: null,
+	restartRequestedAt: null,
 
 	actions: {
 		connect: (credential: AuthCredential) => {
@@ -971,6 +1003,7 @@ export const useWSStore = create<WSState>((set, get) => ({
 						maxUploadSize: result.max_upload_size,
 						maxAttachmentSize: result.max_attachment_size ?? 0,
 						maxImagePreviewSize: result.max_image_preview_size ?? 0,
+						restartRequestedAt: null,
 					});
 				} catch (error) {
 					// Not a rejection: the request timed out or the socket died
@@ -1063,7 +1096,7 @@ export const useWSStore = create<WSState>((set, get) => ({
 				ws = null;
 				// Their answers can only have come down this socket, so waiting out
 				// the RPC timeout would just be a slower way of failing.
-				rpcClients?.base.rejectAllPendingRequests("Connection lost");
+				rpcClients?.base.rejectAllPendingRequests(CONNECTION_LOST_MESSAGE);
 				rpcClients = null;
 				clearAllWatchSubscriptions();
 
@@ -1106,7 +1139,11 @@ export const useWSStore = create<WSState>((set, get) => ({
 			// onclose ignores a socket releaseSocket has let go of. Reset the
 			// attempt count so a later connect() starts at the short end of the
 			// backoff.
-			set({ status: "disconnected", reconnectAttempts: 0 });
+			set({
+				status: "disconnected",
+				reconnectAttempts: 0,
+				restartRequestedAt: null,
+			});
 			releaseSocket("disconnect");
 		},
 
@@ -1118,6 +1155,35 @@ export const useWSStore = create<WSState>((set, get) => ({
 			// recovery events could retry without limit.
 			get().actions.connect(currentCredential);
 		},
+
+		restartServer: async () => {
+			try {
+				await serverActions.serverRestart();
+			} catch (error) {
+				// Either way the process is going down, and the reconnect says
+				// what came back. A reply lost with the connection — through
+				// the relay it may not have been delivered — is not a failure to
+				// show; nothing would be left to retry against anyway. A drop
+				// that took the request with it before the server saw it reads
+				// the same, and comes back to an unchanged process: accepted, as
+				// it cannot be told from a same-version restart from here.
+				if (
+					restartRefusedReason(error) !== "already_restarting" &&
+					!isConnectionLost(error)
+				) {
+					throw error;
+				}
+				// Logged out mid-request: there is no page left to wait on it.
+				if (get().status === "disconnected") return;
+			}
+			// A second press while the first is still going down is refused as
+			// already restarting; the clock runs from the first acceptance.
+			set((state) => ({
+				restartRequestedAt: state.restartRequestedAt ?? Date.now(),
+			}));
+		},
+
+		serverVersion: serverActions.serverVersion,
 
 		fsSubscribe: async (path: string, callback: () => void) => {
 			const { id } = await openSubscription(
@@ -1642,5 +1708,6 @@ export function resetWSStore() {
 		workDir: "",
 		remoteUrl: "",
 		authRetryAt: null,
+		restartRequestedAt: null,
 	});
 }

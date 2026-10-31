@@ -6,7 +6,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
@@ -54,7 +53,7 @@ func TestProcessExists_NonexistentPID(t *testing.T) {
 // --- GetNodeStatus ---
 
 func TestGetNodeStatus_Stopped(t *testing.T) {
-	pm := NewProcessManager()
+	pm := NewProcessManager(os.Args[0])
 	node := Node{
 		ID:   "test-id",
 		Path: t.TempDir(), // Empty directory, no server.json
@@ -77,7 +76,7 @@ func TestGetNodeStatus_Stopped(t *testing.T) {
 }
 
 func TestGetNodeStatus_Running(t *testing.T) {
-	pm := NewProcessManager()
+	pm := NewProcessManager(os.Args[0])
 	nodeDir := t.TempDir()
 	writeServerJSON(t, nodeDir, serverinfo.Info{
 		PID:       os.Getpid(),
@@ -115,7 +114,7 @@ func TestGetNodeStatus_Running(t *testing.T) {
 }
 
 func TestGetNodeStatus_Running_EmptyURLs(t *testing.T) {
-	pm := NewProcessManager()
+	pm := NewProcessManager(os.Args[0])
 	nodeDir := t.TempDir()
 	writeServerJSON(t, nodeDir, serverinfo.Info{
 		PID:       os.Getpid(),
@@ -142,7 +141,7 @@ func TestGetNodeStatus_Running_EmptyURLs(t *testing.T) {
 }
 
 func TestGetNodeStatus_Stale_ProcessNotRunning(t *testing.T) {
-	pm := NewProcessManager()
+	pm := NewProcessManager(os.Args[0])
 	nodeDir := t.TempDir()
 	requireDeadPID(t)
 	writeServerJSON(t, nodeDir, serverinfo.Info{
@@ -167,7 +166,7 @@ func TestGetNodeStatus_Stale_ProcessNotRunning(t *testing.T) {
 }
 
 func TestGetNodeStatus_Stale_CorruptedJSON(t *testing.T) {
-	pm := NewProcessManager()
+	pm := NewProcessManager(os.Args[0])
 	nodeDir := t.TempDir()
 	writeRawServerJSON(t, nodeDir, []byte("not valid json"))
 
@@ -186,7 +185,7 @@ func TestGetNodeStatus_Stale_CorruptedJSON(t *testing.T) {
 // --- IsRunning ---
 
 func TestIsRunning_NotRunning(t *testing.T) {
-	pm := NewProcessManager()
+	pm := NewProcessManager(os.Args[0])
 	node := Node{
 		ID:   "test-id",
 		Path: t.TempDir(),
@@ -198,7 +197,7 @@ func TestIsRunning_NotRunning(t *testing.T) {
 }
 
 func TestIsRunning_Running(t *testing.T) {
-	pm := NewProcessManager()
+	pm := NewProcessManager(os.Args[0])
 	nodeDir := t.TempDir()
 	dataDir := filepath.Join(nodeDir, ".pockode")
 	if err := os.MkdirAll(dataDir, 0755); err != nil {
@@ -233,7 +232,7 @@ func TestIsRunning_Running(t *testing.T) {
 // --- Start ---
 
 func TestStart_EmptyPassword(t *testing.T) {
-	pm := NewProcessManager()
+	pm := NewProcessManager(os.Args[0])
 	node := Node{
 		ID:   "test-id",
 		Path: t.TempDir(),
@@ -249,7 +248,7 @@ func TestStart_EmptyPassword(t *testing.T) {
 }
 
 func TestStart_AlreadyRunning(t *testing.T) {
-	pm := NewProcessManager()
+	pm := NewProcessManager(os.Args[0])
 	nodeDir := t.TempDir()
 	writeServerJSON(t, nodeDir, serverinfo.Info{
 		PID:       os.Getpid(),
@@ -268,58 +267,10 @@ func TestStart_AlreadyRunning(t *testing.T) {
 	}
 }
 
-// --- nodeEnv ---
-
-func TestNodeEnv_SetsPasswordAndPreservesBase(t *testing.T) {
-	base := []string{"PATH=/usr/bin", "HOME=/home/user"}
-	env := nodeEnv(base, "secret-password")
-
-	for _, kv := range base {
-		if !containsEnv(env, kv) {
-			t.Errorf("nodeEnv dropped base entry %q", kv)
-		}
-	}
-	if !containsEnv(env, "POCKODE_PASSWORD=secret-password") {
-		t.Errorf("nodeEnv did not set the password env var, got %v", env)
-	}
-}
-
-// A child that inherited either spelling would be given two answers to the same
-// question, and which one it obeys depends on its own build's precedence rules.
-func TestNodeEnv_OverridesInheritedCredentials(t *testing.T) {
-	base := []string{"POCKODE_PASSWORD=stale", "POCKODE_AUTH_TOKEN=stale-legacy", "PATH=/usr/bin"}
-	env := nodeEnv(base, "fresh")
-
-	count := 0
-	for _, kv := range env {
-		if strings.HasPrefix(kv, "POCKODE_AUTH_TOKEN=") {
-			t.Errorf("nodeEnv kept the deprecated env var %q", kv)
-		}
-		if strings.HasPrefix(kv, "POCKODE_PASSWORD=") {
-			count++
-			if kv != "POCKODE_PASSWORD=fresh" {
-				t.Errorf("password env = %q, want POCKODE_PASSWORD=fresh", kv)
-			}
-		}
-	}
-	if count != 1 {
-		t.Errorf("expected exactly one password env entry, got %d", count)
-	}
-}
-
-func containsEnv(env []string, kv string) bool {
-	for _, e := range env {
-		if e == kv {
-			return true
-		}
-	}
-	return false
-}
-
 // --- Stop ---
 
 func TestStop_NotRunning(t *testing.T) {
-	pm := NewProcessManager()
+	pm := NewProcessManager(os.Args[0])
 	node := Node{
 		ID:   "test-id",
 		Path: t.TempDir(),
@@ -332,7 +283,7 @@ func TestStop_NotRunning(t *testing.T) {
 }
 
 func TestStop_StaleProcess(t *testing.T) {
-	pm := NewProcessManager()
+	pm := NewProcessManager(os.Args[0])
 	nodeDir := t.TempDir()
 	requireDeadPID(t)
 	serverJSONPath := writeServerJSON(t, nodeDir, serverinfo.Info{
@@ -473,7 +424,7 @@ func TestStop_TerminatesProcessAndClearsServerInfo(t *testing.T) {
 				StartedAt: "2025-06-14T10:00:00Z",
 			})
 
-			if err := NewProcessManager().Stop(Node{ID: "test-id", Path: nodeDir}); err != nil {
+			if err := NewProcessManager(os.Args[0]).Stop(Node{ID: "test-id", Path: nodeDir}); err != nil {
 				t.Fatalf("Stop() = %v, want nil", err)
 			}
 
@@ -602,14 +553,14 @@ func TestCleanup_RemovesServerInfoThatIsAllThatIsLeftOfANode(t *testing.T) {
 			serverJSONPath := tc.write(t, nodeDir)
 			n := Node{ID: "test-id", Path: nodeDir}
 
-			if err := NewProcessManager().Cleanup(n); err != nil {
+			if err := NewProcessManager(os.Args[0]).Cleanup(n); err != nil {
 				t.Fatalf("Cleanup() = %v, want nil", err)
 			}
 
 			if _, err := os.Stat(serverJSONPath); !os.IsNotExist(err) {
 				t.Errorf("server.json still present after Cleanup: %v", err)
 			}
-			if status := NewProcessManager().GetNodeStatus(n); status.Status != StatusStopped {
+			if status := NewProcessManager(os.Args[0]).GetNodeStatus(n); status.Status != StatusStopped {
 				t.Errorf("status after Cleanup = %q, want %q", status.Status, StatusStopped)
 			}
 		})
@@ -622,7 +573,7 @@ func TestCleanup_RemovesServerInfoThatIsAllThatIsLeftOfANode(t *testing.T) {
 func TestCleanup_OnANodeWithNothingToCleanUp(t *testing.T) {
 	n := Node{ID: "test-id", Path: t.TempDir()}
 
-	if err := NewProcessManager().Cleanup(n); err != nil {
+	if err := NewProcessManager(os.Args[0]).Cleanup(n); err != nil {
 		t.Fatalf("Cleanup() on a stopped node = %v, want nil", err)
 	}
 }
@@ -634,7 +585,7 @@ func TestCleanup_RefusesARunningNode(t *testing.T) {
 	nodeDir := t.TempDir()
 	serverJSONPath := writeServerJSON(t, nodeDir, serverinfo.Info{PID: os.Getpid(), Port: 9870})
 
-	err := NewProcessManager().Cleanup(Node{ID: "test-id", Path: nodeDir})
+	err := NewProcessManager(os.Args[0]).Cleanup(Node{ID: "test-id", Path: nodeDir})
 	if !errors.Is(err, ErrNodeStillRunning) {
 		t.Errorf("Cleanup() on a running node = %v, want ErrNodeStillRunning", err)
 	}
@@ -664,7 +615,7 @@ func TestStart_WaitsForTheNodeItStartedRatherThanTheFileItFound(t *testing.T) {
 	t.Setenv(helperReadyEnv, filepath.Join(t.TempDir(), "helper-ready"))
 	t.Setenv(helperDataDirEnv, dataDir)
 
-	pm := &ProcessManager{executablePath: os.Args[0]}
+	pm := NewProcessManager(os.Args[0])
 	t.Cleanup(func() { _ = pm.Stop(n) })
 
 	if err := pm.Start(n, "test-password"); err != nil {

@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useWSStore } from "../lib/wsStore";
 import type { NodeStatus, NodeWithStatus } from "../types/node";
 import { PRIMARY_BUTTON } from "./buttons";
+import { ClusterVersion } from "./ClusterVersion";
 import { NodeCard } from "./NodeCard";
 import { NodeForm } from "./NodeForm";
 import { ReconnectBanner } from "./ReconnectBanner";
@@ -56,7 +57,7 @@ function nodeActionError(failure: string, err: unknown) {
 }
 
 export function NodeList() {
-	const { status, actions, version } = useWSStore();
+	const { status, actions, version, restartRequestedAt } = useWSStore();
 	const [nodes, setNodes] = useState<NodeWithStatus[]>([]);
 	const [loading, setLoading] = useState(true);
 	const [loadError, setLoadError] = useState<string | null>(null);
@@ -299,35 +300,47 @@ export function NodeList() {
 					    the header's own height depend on the connection, and it would
 					    move at the very moment the banner is already moving the list
 					    under it. */}
+					{/* "Restarting..." from the accepted reply on, not only once the
+					    socket drops: the cluster is going down, whatever this socket
+					    has noticed yet. */}
 					<p
 						className={`text-xs ${
-							status === "reconnecting" ? "text-th-warning" : "text-th-success"
+							restartRequestedAt !== null || status === "reconnecting"
+								? "text-th-warning"
+								: "text-th-success"
 						}`}
 					>
-						{status === "reconnecting" ? "Reconnecting..." : "Connected"}
+						{restartRequestedAt !== null
+							? "Restarting..."
+							: status === "reconnecting"
+								? "Reconnecting..."
+								: "Connected"}
 					</p>
 				</div>
-				<button
-					type="button"
-					onClick={handleAdd}
-					className={`${PRIMARY_BUTTON} min-w-[44px]`}
-					aria-label="Add node"
-				>
-					<svg
-						className="h-4 w-4"
-						fill="none"
-						stroke="currentColor"
-						viewBox="0 0 24 24"
+				<div className="flex items-center gap-2">
+					{version && <ClusterVersion running={version} />}
+					<button
+						type="button"
+						onClick={handleAdd}
+						className={`${PRIMARY_BUTTON} min-w-[44px]`}
+						aria-label="Add node"
 					>
-						<path
-							strokeLinecap="round"
-							strokeLinejoin="round"
-							strokeWidth={2}
-							d="M12 4v16m8-8H4"
-						/>
-					</svg>
-					<span className="hidden sm:inline">Add node</span>
-				</button>
+						<svg
+							className="h-4 w-4"
+							fill="none"
+							stroke="currentColor"
+							viewBox="0 0 24 24"
+						>
+							<path
+								strokeLinecap="round"
+								strokeLinejoin="round"
+								strokeWidth={2}
+								d="M12 4v16m8-8H4"
+							/>
+						</svg>
+						<span className="hidden sm:inline">Add node</span>
+					</button>
+				</div>
 			</header>
 
 			<ReconnectBanner />
@@ -437,14 +450,6 @@ export function NodeList() {
 								</section>
 							);
 						})
-					)}
-
-					{/* After the last card rather than pinned to the corner, where it
-					    floated over whatever scrolled underneath it. */}
-					{version && (
-						<p className="mt-6 text-center text-xs text-th-text-muted">
-							Pockode cluster v{version}
-						</p>
 					)}
 				</div>
 			</div>

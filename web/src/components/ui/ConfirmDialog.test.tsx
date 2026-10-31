@@ -93,4 +93,29 @@ describe("ConfirmDialog", () => {
 		expect(onConfirm).toHaveBeenCalledTimes(2);
 		expect(screen.queryByRole("alert")).toBeNull();
 	});
+
+	it("refuses a confirm while what it speaks of is still being read", async () => {
+		const user = userEvent.setup();
+		const onConfirm = vi.fn();
+		const dialog = (confirmDisabled: boolean) => (
+			<ConfirmDialog
+				title="Restart?"
+				message="Now."
+				confirmLabel="Restart"
+				confirmDisabled={confirmDisabled}
+				onConfirm={onConfirm}
+				onCancel={() => {}}
+			/>
+		);
+		const { rerender } = render(dialog(true));
+		const button = screen.getByRole("button", { name: "Restart" });
+
+		expect(button).toHaveAttribute("aria-disabled", "true");
+		await user.click(button);
+		expect(onConfirm).not.toHaveBeenCalled();
+
+		rerender(dialog(false));
+		await user.click(button);
+		expect(onConfirm).toHaveBeenCalledOnce();
+	});
 });

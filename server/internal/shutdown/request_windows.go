@@ -11,6 +11,10 @@ import (
 	"golang.org/x/sys/windows"
 )
 
+// restartSignals is empty: Windows has no signal to spare, so a restart is only
+// ever asked for from inside the process (its UI).
+var restartSignals []os.Signal
+
 // eventName is the kernel event a pockode process waits on to be asked to exit.
 //
 // The name lives in the session-local namespace, which is exactly the reach

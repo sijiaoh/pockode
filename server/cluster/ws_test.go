@@ -3,6 +3,8 @@ package cluster
 import (
 	"context"
 	"encoding/json"
+	"github.com/pockode/server/internal/restart"
+	"github.com/pockode/server/internal/restarttest"
 	"log/slog"
 	"net/http/httptest"
 	"strings"
@@ -31,11 +33,16 @@ type response struct {
 
 func newAuthTestServer(t *testing.T, sessions *authsessiontest.Sessions) *httptest.Server {
 	t.Helper()
+	return newTestServer(t, sessions, restart.New(restarttest.Executable(t.TempDir())))
+}
+
+func newTestServer(t *testing.T, sessions *authsessiontest.Sessions, restarter *restart.Restarter) *httptest.Server {
+	t.Helper()
 	nodeStore, err := node.NewFileStore(t.TempDir())
 	if err != nil {
 		t.Fatalf("failed to create node store: %v", err)
 	}
-	h := newWSHandler(testPassword, authguard.NewFrozen(), sessions, "test", true, nodeStore, node.NewProcessManager(),
+	h := newWSHandler(testPassword, authguard.NewFrozen(), sessions, "test", true, nodeStore, node.NewProcessManager(""), restarter,
 		slog.New(slog.DiscardHandler))
 	server := httptest.NewServer(h)
 	t.Cleanup(server.Close)

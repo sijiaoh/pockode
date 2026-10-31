@@ -155,6 +155,9 @@ bash on Linux and `~/.bash_profile` on macOS, `fish_add_path` for fish, and
 script just says `Done!`.
 
 **Upgrading** is re-running the same command; it replaces the file in place.
+A Pockode that is already running keeps running the old version until it is
+restarted — from the app, without a terminal; see
+[Restarting into a New Version](#restarting-into-a-new-version).
 **Uninstalling** is `rm ~/.local/bin/pockode` — the `.pockode` directory in each
 of your projects, with its sessions, settings and work items, is left alone.
 
@@ -273,7 +276,10 @@ directory on `PATH` for you rather than printing the line to add.
 **Open a new terminal afterwards**: the one you ran the command in resolved its
 `PATH` when it started.
 
-Re-running the same command upgrades in place.
+Re-running the same command upgrades in place — once Pockode is stopped:
+Windows does not let a running `pockode.exe` be overwritten, and the script
+says so and asks you to stop it first (see
+[Restarting into a New Version](#restarting-into-a-new-version)).
 
 The download is verified here as well — see
 [Verifying the Download](#verifying-the-download). Nothing has to be installed
@@ -321,6 +327,58 @@ Downloading `pockode-windows-amd64.exe` from the
 it directly still works if you would rather not run a script. Nothing in the
 server depends on the file name or where it lives.
 
+## Restarting into a New Version
+
+Installing a new version replaces the file on disk; the process that is running
+goes on running the version it started with. To make it use the new one without
+going back to a terminal:
+
+- **From the app**: Settings → Pockode shows the running version beside the
+  installed one and offers **Restart**. In cluster mode the version button in
+  the panel's header does the same for the cluster manager, and each node has
+  its own Settings → Pockode. What the screens say is
+  [restart-ui.md](restart-ui.md).
+- **On macOS and Linux**: `kill -USR1 <pid>`. A server's PID is the `pid` in
+  its project's `.pockode/server.json`; a cluster manager writes no such file,
+  so find it with `pgrep -f 'pockode cluster'` or `ps`.
+
+Either way Pockode first runs the installed file with `--version`; if that
+fails — the file is gone, truncated, or built for another architecture — the
+restart is refused and Pockode keeps running as it was. Otherwise it shuts down
+as it does on Ctrl+C — running AI turns are stopped, sessions and their history
+are kept — and starts the installed file again with the same options, in the
+same directory, with the same password and the same environment — a `PATH`
+changed since is not seen; that takes starting Pockode from a new terminal. The
+password is passed through `POCKODE_PASSWORD`, never the command line, so a
+`-password` you typed is not on the new process's command line.
+
+How the old process makes way differs:
+
+- **macOS and Linux** replace the program inside the same process: the PID,
+  the terminal and whatever started it (a shell, `systemd`) stay the same, and
+  Ctrl+C in that terminal still stops it.
+- **Windows** starts a new process, with a new PID. Started from a terminal,
+  the old process stays until the new one ends and then hands back its exit
+  code, so the prompt does not come back while Pockode is still running and
+  Ctrl+C still reaches it; started any other way (a cluster node, Task
+  Scheduler, a service wrapper), the old process exits at once. Since a running
+  `pockode.exe` cannot be overwritten, an upgrade on Windows still means
+  stopping Pockode, installing, and starting it again: today a restart there
+  delivers no new version.
+
+**One thing cannot be checked in advance:** whether the new version accepts the
+options the old one was started with. If a release removes or renames an option
+you use, the restart is accepted and the new version exits with an error about
+that option; the app says it has not come back. The reason is on the
+process's stderr — the terminal it was started in — not in `server.log`, which
+the new version had not opened yet.
+Read the [release notes](https://github.com/sijiaoh/pockode/releases) before
+upgrading, and start Pockode again with the options changed. (The deprecated
+`-auth-token` is the exception: it is carried over as `-password`, so a restart
+into a version that has dropped it still works.)
+
+How it is implemented is [code/self-restart.md](code/self-restart.md).
+
 ## Git on Windows
 
 Pockode's git and worktree features shell out to the `git` CLI. macOS and Linux
@@ -351,7 +409,9 @@ Finding them is where Windows differs, in three ways:
 - **A CLI installed inside WSL is invisible.** WSL and Windows have separate
   filesystems and separate `PATH`s, and `npm install -g` inside WSL installs into
   the Linux one. Install the CLI on the Windows side.
-- **Restart Pockode after installing a CLI.** A process keeps the environment it
+- **Restart Pockode after installing a CLI** — from a new terminal: a restart
+  from the app keeps the old environment too
+  ([Restarting into a New Version](#restarting-into-a-new-version)). A process keeps the environment it
   was started with, so the `PATH` entry an installer appends is not visible to an
   already-running `pockode.exe` — the CLI is right there, but the `PATH` Pockode
   inherited is stale. To soften that, it also looks in `%APPDATA%\npm`,

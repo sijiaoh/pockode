@@ -20,15 +20,18 @@ const actions = {
 	startNode: vi.fn(),
 	stopNode: vi.fn(),
 	deleteNode: vi.fn(),
+	serverVersion: vi.fn(),
+	restartServer: vi.fn(),
 };
 
-// Mutable so a test can speak for the store: the version is rendered by the
-// list now that it is no longer pinned to the viewport corner.
+// Mutable so a test can speak for the store: the header renders the version
+// and the restart this page asked for.
 const wsState: {
 	status: string;
 	version: string | null;
+	restartRequestedAt: number | null;
 	actions: typeof actions;
-} = { status: "connected", version: null, actions };
+} = { status: "connected", version: null, restartRequestedAt: null, actions };
 
 vi.mock("../lib/wsStore", () => ({
 	useWSStore: Object.assign(() => wsState, { getState: () => wsState }),
@@ -316,15 +319,34 @@ describe("NodeList: sections", () => {
 		expect(await screen.findAllByRole("alert")).toHaveLength(2);
 	});
 
-	it("prints the cluster version after the last card rather than over it", async () => {
+	it("shows the cluster version in the header", async () => {
 		actions.listNodes.mockResolvedValue([nodeOf("n1", "only", "stopped")]);
+		actions.serverVersion.mockResolvedValue({
+			installed: { path: "/bin/pockode", version: "1.4.0" },
+		});
 		wsState.version = "1.4.0";
 		render(<NodeList />);
 
+		const header = await screen.findByRole("banner");
 		expect(
-			await screen.findByText("Pockode cluster v1.4.0"),
-		).toBeInTheDocument();
+			await within(header).findByRole("button", {
+				name: "Pockode cluster v1.4.0",
+			}),
+		).toHaveTextContent("v1.4.0");
 		wsState.version = null;
+	});
+
+	// From the accepted reply on, before the socket has even dropped.
+	it("says Restarting in the header while a restart it asked for is out", async () => {
+		actions.listNodes.mockResolvedValue([nodeOf("n1", "only", "stopped")]);
+		wsState.restartRequestedAt = Date.now();
+		render(<NodeList />);
+
+		const header = await screen.findByRole("banner");
+		expect(within(header).getByText("Restarting...")).toHaveClass(
+			"text-th-warning",
+		);
+		wsState.restartRequestedAt = null;
 	});
 });
 

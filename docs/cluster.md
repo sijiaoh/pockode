@@ -92,7 +92,7 @@ This file is used to:
 - Detect stale state (file exists but process is dead)
 - Provide port, URL, and start time information
 
-The file is deleted when the server shuts down gracefully. `remote_url` can be rewritten while the node runs (see [server.json](../server/AGENTS.md#serverjson)); the cluster reads the file on every status check, so it always reports the current URL.
+The file is deleted when the server shuts down gracefully — except across a unix restart, which keeps the PID: the file is kept until the new program rewrites it, so the node never reads as stopped in between (see [Restarting and upgrading](#restarting-and-upgrading)). `remote_url` can be rewritten while the node runs (see [server.json](../server/AGENTS.md#serverjson)); the cluster reads the file on every status check, so it always reports the current URL.
 
 **Operations:**
 
@@ -119,7 +119,7 @@ otherwise read it — and because spawned nodes enable the relay by default, tha
 password grants full remote read/write and AI execution over the project. The
 environment (`/proc/<pid>/environ`) is readable only by the owner and root. See
 [Authentication](code/authentication.md) for the full model. Implemented in
-`server/cluster/node/process.go` (`nodeEnv`) and `server/password/`.
+`server/password/` (`WithEnv`), which a restarting server uses too.
 
 If `node.stop` cannot find the saved process, the backend removes any stale
 `server.json` state it can clean up and returns `"node not running"` — stopping
@@ -173,6 +173,38 @@ deliberately asks Windows for a console of its own. (The AI CLI was never among
 them: it has always been started on a hidden console of its own.) A node
 started by an earlier build keeps its old console arrangement until it is
 restarted.
+
+### Restarting and upgrading
+
+Upgrading is installing the new executable over the old one
+([platforms.md](platforms.md)) and restarting the process that runs it. The
+cluster manager and each node are restarted separately, and neither touches
+the other:
+
+- **The cluster manager** restarts from the version button in the panel's
+  header ([restart-ui.md](restart-ui.md#web-cluster-the-header)), or with
+  `kill -USR1 <pid>` on unix (it writes no `server.json`; `pgrep -f 'pockode cluster'`
+  finds it). Nodes keep running and stay reachable at their own
+  addresses; only the panel's connection drops, and it reconnects (and reloads,
+  if the version changed) by itself.
+- **A node** restarts from Settings → Pockode in that node's own UI, or with
+  `kill -USR1 <pid>` (the PID in its `server.json`). It comes back with its own
+  password and options. The node list shows it running throughout on unix,
+  where the PID is kept; on Windows the PID changes, the old `server.json` is
+  removed and the successor writes its own, so for a moment the node reads
+  stopped — do not press Start in that moment.
+
+A restart first runs the installed executable with `--version` and refuses,
+changing nothing, if it does not run. What it cannot check is whether the new
+version accepts the old command line. Nodes are started with no arguments, so
+this concerns the cluster manager's own flags: if a release drops one it was
+started with, the restart is accepted and the new program exits on start (the
+reason on its stderr). The nodes keep running; start the cluster again without
+the flag. On Windows a running `pockode.exe` cannot be overwritten, so the
+install script asks for Pockode to be stopped first — there, a restart does not
+deliver a new version today.
+
+How it works is [code/self-restart.md](code/self-restart.md).
 
 ## Usage
 
@@ -330,8 +362,12 @@ alternatives that were rejected on the way to it, are in
   errors (not a directory, permission denied, could not create) are shown as the
   backend worded them, with no create option — creating is not what would fix
   them.
-- **The cluster version** is printed after the last card rather than pinned to
-  the viewport corner, where it floated over whatever scrolled underneath it.
+- **The cluster version** is a button in the header, marked when the
+  executable installed on the host is a different version; it opens the
+  **Pockode cluster** sheet, which shows both and restarts the cluster manager
+  (nodes keep running). The panel reloads itself when a reconnect finds the
+  cluster running another version than the page was built for. The screens and
+  their copy are [restart-ui.md](restart-ui.md#web-cluster-the-header).
 - **Start asks for the node password every time.** It is the password the
   *spawned node server* uses for its own auth, not the cluster's own, so it is
   never defaulted from the cluster credential: one leaked node must not hand

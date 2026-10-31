@@ -2,6 +2,7 @@ package password
 
 import (
 	"os"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -129,5 +130,86 @@ func TestLoad_ReturnsEnvPassword(t *testing.T) {
 	}
 	if cred.Password != "from-env" {
 		t.Errorf("Password = %q, want from-env", cred.Password)
+	}
+}
+
+func TestWithEnv_SetsPasswordAndPreservesBase(t *testing.T) {
+	base := []string{"PATH=/usr/bin", "HOME=/home/user"}
+	env := WithEnv(base, "secret-password")
+
+	for _, kv := range base {
+		if !slices.Contains(env, kv) {
+			t.Errorf("WithEnv dropped base entry %q", kv)
+		}
+	}
+	if !slices.Contains(env, "POCKODE_PASSWORD=secret-password") {
+		t.Errorf("WithEnv did not set the password env var, got %v", env)
+	}
+}
+
+// A child that inherited either spelling would be given two answers to the same
+// question, and which one it obeys depends on its own build's precedence rules.
+func TestWithEnv_OverridesInheritedCredentials(t *testing.T) {
+	base := []string{"POCKODE_PASSWORD=stale", "POCKODE_AUTH_TOKEN=stale-legacy", "PATH=/usr/bin"}
+	env := WithEnv(base, "fresh")
+
+	count := 0
+	for _, kv := range env {
+		if strings.HasPrefix(kv, "POCKODE_AUTH_TOKEN=") {
+			t.Errorf("WithEnv kept the deprecated env var %q", kv)
+		}
+		if strings.HasPrefix(kv, "POCKODE_PASSWORD=") {
+			count++
+			if kv != "POCKODE_PASSWORD=fresh" {
+				t.Errorf("password env = %q, want POCKODE_PASSWORD=fresh", kv)
+			}
+		}
+	}
+	if count != 1 {
+		t.Errorf("expected exactly one password env entry, got %d", count)
+	}
+}
+
+func TestClearFlags(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+		want []string
+	}{
+		{"separate value", []string{"-port", "1", "-password", "secret", "-dev"}, []string{"-port", "1", "-password=", "-dev"}},
+		{"double dash", []string{"--password", "secret"}, []string{"--password="}},
+		{"inline value", []string{"-password=secret", "--work=."}, []string{"-password=", "--work=."}},
+		{"double dash inline", []string{"--password=secret"}, []string{"--password="}},
+		// Under the new name: the version restarted into may have dropped the alias.
+		{"legacy flag", []string{"-auth-token", "secret", "--auth-token=x"}, []string{"-password=", "--password="}},
+		{"a value that looks like a flag", []string{"-password", "-dev", "-relay=false"}, []string{"-password=", "-relay=false"}},
+		{"cluster subcommand", []string{"cluster", "-password", "secret", "-port", "2"}, []string{"cluster", "-password=", "-port", "2"}},
+		// A server, since its flags come first: still one, with "cluster" not first.
+		{"positional after the flag", []string{"-password", "secret", "cluster"}, []string{"-password=", "cluster"}},
+		{"after the terminator", []string{"-dev", "--", "-password", "x"}, []string{"-dev", "--", "-password", "x"}},
+		{"similar names are kept", []string{"-passwords", "x", "-password-file=y"}, []string{"-passwords", "x", "-password-file=y"}},
+		{"trailing flag without value", []string{"-dev", "-password"}, []string{"-dev", "-password="}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := ClearFlags(tc.args); !slices.Equal(got, tc.want) {
+				t.Errorf("ClearFlags(%q) = %q, want %q", tc.args, got, tc.want)
+			}
+		})
+	}
+}
+
+// An emptied flag hands the password over to the variable, and says nothing
+// about a deprecated name.
+func TestResolve_EmptiedFlagsFallThroughToEnv(t *testing.T) {
+	clearEnv(t)
+	t.Setenv(EnvVar, "from-env")
+
+	cred, err := Resolve("", "")
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if cred.Password != "from-env" || cred.DeprecationWarning != "" {
+		t.Errorf("Resolve = %+v, want the variable's password and no warning", cred)
 	}
 }
