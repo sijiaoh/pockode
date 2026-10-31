@@ -69,7 +69,9 @@ type WebSocketStream struct {
 	queue       [][]byte
 	queuedBytes int
 	closed      bool // no more messages are accepted
-	flushing    bool // closed by Close: send what is queued, then close normally
+	flushing    bool // closed by Close: send what is queued, then close with closeCode
+	closeCode   websocket.StatusCode
+	closeReason string
 }
 
 // NewWebSocketStream creates a new WebSocketStream from a websocket connection
@@ -99,9 +101,11 @@ func newWebSocketStream(conn *websocket.Conn, log *slog.Logger, maxQueued int, t
 func (s *WebSocketStream) ReadObject(v interface{}) error {
 	_, data, err := s.conn.Read(context.Background())
 	if err != nil {
-		// Treat normal close frames as EOF so jsonrpc2 shuts down gracefully
+		// Treat normal close frames as EOF so jsonrpc2 shuts down gracefully.
+		// StatusServiceRestart is the client echoing the close that follows a
+		// server.restart reply (see ServerControl.HandleRestart).
 		switch websocket.CloseStatus(err) {
-		case websocket.StatusNormalClosure, websocket.StatusGoingAway:
+		case websocket.StatusNormalClosure, websocket.StatusGoingAway, websocket.StatusServiceRestart:
 			return io.EOF
 		}
 		return err
@@ -144,17 +148,38 @@ func (s *WebSocketStream) WriteObject(v interface{}) error {
 // still reaches the client. It returns without waiting for either: jsonrpc2
 // calls it while holding the lock every send takes.
 func (s *WebSocketStream) Close() error {
+	s.closeWith(websocket.StatusNormalClosure, "")
+	return nil
+}
+
+// CloseAfterFlush is Close with a status of the caller's, and a way to wait:
+// the channel it returns is closed once the close handshake is over — the
+// client has answered the close frame, or the library gave up on it (5 s to
+// write the frame, 5 s for the answer) — or the stream ended some other way.
+// Messages queued ahead are written first, each within writeTimeout. A client that answered had received every
+// message queued before the close, however many hops lie between: a relayed
+// connection carries the frames in order and the close frame among them. That
+// is what lets a reply that ends the server's life be known to have arrived.
+//
+// A stream already closed keeps the status it was closed with.
+func (s *WebSocketStream) CloseAfterFlush(code websocket.StatusCode, reason string) <-chan struct{} {
+	s.closeWith(code, reason)
+	return s.done
+}
+
+func (s *WebSocketStream) closeWith(code websocket.StatusCode, reason string) {
 	s.queueMu.Lock()
 	if s.closed {
 		s.queueMu.Unlock()
-		return nil
+		return
 	}
 	s.closed = true
 	s.flushing = true
+	s.closeCode = code
+	s.closeReason = reason
 	s.queueMu.Unlock()
 
 	s.signal()
-	return nil
 }
 
 // discardLocked gives up on the connection without flushing: there is no point
@@ -209,10 +234,11 @@ func (s *WebSocketStream) next() ([]byte, bool) {
 			return data, true
 		}
 		closed, flushing := s.closed, s.flushing
+		code, reason := s.closeCode, s.closeReason
 		s.queueMu.Unlock()
 
 		if flushing {
-			if err := s.conn.Close(websocket.StatusNormalClosure, ""); err != nil {
+			if err := s.conn.Close(code, reason); err != nil {
 				s.log.Debug("websocket close handshake failed", "error", err)
 			}
 			return nil, false

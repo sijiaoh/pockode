@@ -62,7 +62,7 @@ internal/cmd/thirdpartynotices/  # 打印服务器二进制的第三方许可声
 logger/                 # 结构化日志 (slog)
 mcp/                    # MCP：stdio 代理客户端 + 服务端 Executor/APIHandler
 middleware/             # 密码 / session token 认证中间件
-password/               # 服务器密码的来源（--password / POCKODE_PASSWORD + 弃用别名）与比较（各认证入口共用）
+password/               # 服务器密码的来源（--password / POCKODE_PASSWORD + 弃用别名）与比较（各认证入口共用）；经环境变量把密码交给另一个 pockode 进程（WithEnv：集群启动的节点、重启后的自己；ClearFlags 清空重放命令行里的密码参数）
 process/                # 进程管理器
 relay/                  # NAT 穿透：yamux over WSS 隧道 + 本地反向代理 + 端口预览（认证与转发）
 serverinfo/             # 服务器运行时信息（server.json）
@@ -102,7 +102,8 @@ Windows 与 darwin/linux 一样是发布目标（产物见 [docs/platforms.md](.
 | `internal/pathutil/pathutil.go` | `equal_{unix,windows}.go` — Windows 路径比较大小写不敏感 |
 | `internal/fsperm/fsperm.go` | `fsperm_{unix,windows}.go` — 0700/0600 mode 位 / 显式 DACL |
 | `cluster/node/process.go` | `process_{unix,windows}.go` — 与终端脱钩（`Setsid` / `CREATE_NO_WINDOW`）、优雅关闭与强杀的等待方式 |
-| `internal/shutdown/shutdown.go` | `request_{unix,windows}.go` — SIGTERM / 命名事件 |
+| `internal/shutdown/shutdown.go` | `request_{unix,windows}.go` — SIGTERM / 命名事件；重启请求 SIGUSR1（Windows 无） |
+| `internal/restart/restart.go` | `replace_{unix,windows}.go` — 自我重启：原地 exec（PID、终端、session 不变）/ 后继进程（前台终端里等它并沿用退出码，否则直接退出）；探测版本的子进程在 Windows 上加 `CREATE_NO_WINDOW` |
 | `filetransfer/folder.go` | `folder_{unix,windows}.go` — 文件夹上传 merge 覆盖文件、文件夹下载读取文件时以非阻塞方式打开（防止换成 fifo 后卡死；Windows 工作目录里没有 fifo）、识别文件系统自己拒绝的名字（unix 的 `ENAMETOOLONG` / `EINVAL` / `EILSEQ`，Windows 的 `ERROR_INVALID_NAME` / `ERROR_FILENAME_EXCED_RANGE`）|
 | `contents/within.go`、`filetransfer/raw.go` | `contents/realname_{unix,windows}.go`（`contents.ResolvedName`）— `contents.OpenDirWithin` 要求跟随链接后的真实路径仍在工作目录内（`file.move` 的两个目录、文件夹上传的目标目录与文件夹下载的文件夹）；根 capability（`scope: "root"`）拒绝敏感名单（任意层级的 `.git`、`.env`、`.env.*`、`.envrc`、`.envrc.*`，所有平台都不区分大小写）、数据目录和其他 worktree 时也看它：unix 上 `EvalSymlinks` 跟完所有链接再核对与打开的是同一个文件；Windows 取句柄的最终长名，8.3 短名（`ENV~1`）是 `.env` 的另一种写法 |
 
@@ -127,6 +128,8 @@ Windows 与 darwin/linux 一样是发布目标（产物见 [docs/platforms.md](.
 
 **退出请求统一走 `internal/shutdown`**：`Listen()` 让本进程知道该退出了，`RequestExit(pid)` 让别的进程退出。别在别处再写一遍 `signal.Notify`。Windows 没有 SIGTERM 可发，官方的替代品 Ctrl+Break 只能送到与**调用方**共享控制台的进程，服务 / 计划任务 / detached 启动的集群一律送不到，所以那边走的是命名事件；等待方和发信方必须对上同一个名字，两半因此放在同一个包里。来龙去脉见 [docs/cluster.md](../docs/cluster.md#asking-a-node-to-exit-on-windows)。
 
+**自我重启走 `internal/restart`**（设计与取舍见 [docs/code/self-restart.md](../docs/code/self-restart.md)）：重启是结局不同的同一次优雅关闭。`main` 里 `newRestarter()` 尽早调用（在 `--version` 之后）：`shutdown.HoldRestartRequests()` 从这里起接住 SIGUSR1（否则启动期间收到会按默认动作被杀，且只捕获不忽略——忽略会被子进程继承），`restart.Current()` 记下可执行文件（绝对路径，argv[0] 指向同一个文件时保留它——符号链接是升级会挪动的那一个）、参数和工作目录。`Restarter.Request(ctx)` 先跑一次磁盘上的 `<exe> --version`，跑不起来就拒绝、进程照常运行；关闭循环取到的是退出请求就调 `Restarter.Close()`（之后的请求一律拒绝，期间刚被接受的重启也作废——先到的请求决定结局），关闭结束后 `Restarter.Pending()` 为真才 `Restarter.Restart(password)`：密码只经 `password.WithEnv` 走环境变量，命令行上的 `-password` / `-auth-token` 由 `password.ClearFlags` 清空成 `-password=`（清空而不删除，其余参数位置不变，`pockode -password x cluster` 不会被重放成 cluster）。这一步失败就记日志并以 1 退出。`Program.Version` 也是读取「已装版本」的入口。UI 的 `server.version` / `server.restart`（普通模式与 cluster 共用 `ws.ServerControl`）用 `Restarter.RequestHeld`：请求先被接受、关闭流程等成功回复的 WebSocket 关闭握手完成才开始，否则经 relay 的客户端收不到回复（见 [docs/code/websocket-rpc.md](../docs/code/websocket-rpc.md#server-installed-version-and-restart)）；测试里用 `internal/restarttest` 让测试二进制冒充磁盘上的可执行文件。集群启动节点用的也是这里记下的路径（`node.NewProcessManager`），不是当下的 `os.Executable()`：二进制被 rename 覆盖后，Linux 上它返回 `… (deleted)`；集群 exec 之后节点仍是它的子进程却没人 wait，所以 unix 的 `processExists` 会先 `wait4(WNOHANG)` 收掉僵尸。
+
 **节点与集群的终端脱钩，两个平台都是**：unix 用 `Setsid`，Windows 用 `CREATE_NO_WINDOW`——节点要活过启动集群的那个 shell，就不能待在它的终端/控制台上，否则关掉终端窗口会把节点一起带走（Windows 会给控制台上所有进程发 `CTRL_CLOSE_EVENT`）。Windows 上用的**不是** `DETACHED_PROCESS`：完全没有控制台的进程每启动一个控制台程序，Windows 都会给它新分配一个**可见**的控制台窗口，而节点不停地调 git、hook 的 shell，结果就是持续闪黑窗（AI CLI 经 `internal/proctree` 启动，本来就有自己的隐藏控制台）。`CREATE_NO_WINDOW` 给节点一个属于它自己、没有窗口的控制台，子孙进程默认继承它，所以**节点里新增的 `exec.Command` 不需要任何 flag**，孙进程（git 拉起的 ssh、credential helper）也一并覆盖——除非某个程序自己用 `DETACHED_PROCESS` / `CREATE_NEW_CONSOLE` 启动子进程、主动放弃继承，那是它自己的行为，我们管不到。别给它再加 `DETACHED_PROCESS` / `CREATE_NEW_CONSOLE`——与二者组合时 `CREATE_NO_WINDOW` 被忽略。`internal/proctree` 的 `CREATE_NO_WINDOW` 与此是一对，覆盖的是不经集群、本身就没有控制台的服务器（服务 / 计划任务），且只覆盖经它启动的进程；改其中一处务必看另一处。
 
 「这个路径必须留在某目录内」用标准库的 **`filepath.IsLocal`**，别自己拼条件：它一并挡掉 `..` 逃逸和 Windows 保留设备名（`NUL`、`COM1`——这类名字解析到设备而不是目录里的文件）。`git.validatePath` 和 `contents.ValidatePath` 都走它，因此二者的判定是结构上一致的，而不是各写一遍碰巧一致。
@@ -140,11 +143,11 @@ Windows 与 darwin/linux 一样是发布目标（产物见 [docs/platforms.md](.
   | 来源 | 调用点 | 为什么 Windows 上做不到 |
   |---|---|---|
   | `internal/fifotest` | `agent/codex`×1、`contents`×1、`filetransfer`×3 | 命名管道只存在于 `\\.\pipe`，根本进不了工作目录，被测的阻塞隐患在那里不成立 |
-  | `internal/symlinktest` | `contents`×4、`filetransfer`×13、`git`×2、`search`×1 | 未开开发者模式时建符号链接要特权；开了就一条都不 skip |
+  | `internal/symlinktest` | `contents`×4、`filetransfer`×13、`git`×2、`internal/restart`×1、`search`×1 | 未开开发者模式时建符号链接要特权；开了就一条都不 skip |
   | `internal/unwritabletest` | `filestore`×1、`ws`×1 | 目录忽略只读属性，`os.Chmod` 挡不住写入；要真挡住得给当前用户的 SID 加一条 deny ACE |
   | `filetransfer/realname_windows_test.go` 的 `shortName` | `filetransfer`×0~2 | 临时目录所在的卷关掉了 8.3 短名（`fsutil 8dot3name`）时没有别名可测；开着就一条都不 skip |
 
-  **合计 7~28 条**，两个区间端点都是对的：`filetransfer` 的「refuses to overwrite anything but a regular file」一个子测试里同时要符号链接和 fifo，谁先 skip 就记在谁名下，于是前两行的条数此消彼长——没开开发者模式是 4+20，开了是 5+0。别按单行的数去对账，按合计。
+  **合计 7~29 条**，两个区间端点都是对的：`filetransfer` 的「refuses to overwrite anything but a regular file」一个子测试里同时要符号链接和 fifo，谁先 skip 就记在谁名下，于是前两行的条数此消彼长——没开开发者模式是 4+21，开了是 5+0。别按单行的数去对账，按合计。
 
   能用平台分表（如 `settings_test.go` 的路径用例）就不要 skip；断言本身在两个平台上形状不同时，把它抽成平台分文件的测试辅助（如 `internal/fspermtest`、`internal/termtest`、`internal/fifotest`），而不是在 Windows 上 skip 掉——权限测试恰恰在权限有问题的那个平台上 skip，等于什么都没证明。
 
@@ -245,7 +248,7 @@ if err := json.Unmarshal(data, &parsed); err != nil {
 | `remote_url` | string | Relay 远程访问 URL（可选） |
 | `token` | string | 本地 API（MCP）认证 token，每次启动随机生成，区别于用户的 `--password`，不写入磁盘外的任何位置 |
 
-生命周期：启动时写入 → 运行期间保持 → 优雅关闭时删除。唯一的例外是 `remote_url`：relay 凭据更新导致远程 URL 变化时，文件会被重写，只换 `remote_url`，其余字段（包括 `started_at`）不变；relay 永久停止时该字段被移除（原因见 [relay-system.md](../docs/code/relay-system.md#when-the-remote-url-changes)）。读取方需要最新 URL 时应每次现读，不要缓存。
+生命周期：启动时写入 → 运行期间保持 → 优雅关闭时删除（unix 上的自我重启例外：PID 不变，文件保留到新程序重写，免得集群在这段时间里把节点看成已停止、再起一个）。另一个例外是 `remote_url`：relay 凭据更新导致远程 URL 变化时，文件会被重写，只换 `remote_url`，其余字段（包括 `started_at`）不变；relay 永久停止时该字段被移除（原因见 [relay-system.md](../docs/code/relay-system.md#when-the-remote-url-changes)）。读取方需要最新 URL 时应每次现读，不要缓存。
 
 ### MCP 本地 API
 

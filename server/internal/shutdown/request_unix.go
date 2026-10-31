@@ -8,6 +8,13 @@ import (
 	"syscall"
 )
 
+// restartSignals are the signals that ask the process to restart itself.
+// SIGUSR1 is free for the taking: nothing else in the process, or the Go
+// runtime, uses it, and its default action — terminate — is what a build that
+// predates the restart does with it, so sending it to an old process is no
+// worse than stopping it.
+var restartSignals = []os.Signal{syscall.SIGUSR1}
+
 // RequestExit asks the process with the given PID to shut down gracefully.
 //
 // The PID is rejected unless it is positive: it reaches us from server.json, and

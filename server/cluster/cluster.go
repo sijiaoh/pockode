@@ -15,6 +15,7 @@ import (
 	"github.com/pockode/server/authsession"
 	"github.com/pockode/server/cluster/node"
 	"github.com/pockode/server/internal/netutil"
+	"github.com/pockode/server/internal/restart"
 	"github.com/pockode/server/internal/shutdown"
 	"github.com/pockode/server/logger"
 	"github.com/pockode/server/relay"
@@ -37,6 +38,11 @@ type Config struct {
 	CloudURL                   string
 	Version                    string
 	DevMode                    bool
+	// Restarter is how the cluster restarts itself, and where it finds the
+	// executable it starts its nodes from. Run decides only whether the
+	// shutdown ends in a restart; the caller performs it once Run has returned
+	// and Restarter.Pending says so.
+	Restarter *restart.Restarter
 }
 
 func Run(cfg Config) error {
@@ -62,7 +68,7 @@ func Run(cfg Config) error {
 		return fmt.Errorf("failed to create node store: %w", err)
 	}
 
-	processManager := node.NewProcessManager()
+	processManager := node.NewProcessManager(cfg.Restarter.Program().Path)
 
 	// A cluster authenticates its own frontend exactly as a server does, out of
 	// its own data directory; the nodes it starts keep their own, separate
@@ -73,8 +79,9 @@ func Run(cfg Config) error {
 	}
 
 	// Cluster mode never runs an AI CLI itself, but the nodes it starts are this
-	// same executable and inherit this environment (nodeEnv only swaps the
-	// password), so they search the same PATH and the same install directories.
+	// same executable and inherit this environment (password.WithEnv only swaps
+	// the password), so they search the same PATH and the same install
+	// directories.
 	// Checking here is the only place the answer reaches the user: nodes are
 	// started detached, so their own banners go to a log nobody is watching.
 	agentStatuses := agent.CheckBinaries(log, claude.Binary, codex.Binary)
@@ -82,7 +89,7 @@ func Run(cfg Config) error {
 	// The cluster's own lockout, shared by every place it checks the password;
 	// the nodes it starts each keep theirs.
 	passwordGuard := authguard.New()
-	wsHandler := newWSHandler(cfg.Password, passwordGuard, sessions, cfg.Version, cfg.DevMode, nodeStore, processManager, log)
+	wsHandler := newWSHandler(cfg.Password, passwordGuard, sessions, cfg.Version, cfg.DevMode, nodeStore, processManager, cfg.Restarter, log)
 	handler := newHandler(cfg.Password, passwordGuard, sessions, cfg.DevMode, wsHandler)
 
 	srv := &http.Server{
@@ -144,15 +151,27 @@ func Run(cfg Config) error {
 
 	startup.PrintFooter()
 
+	exitRequests := shutdown.Listen()
+	go cfg.Restarter.Watch(exitRequests.Restarts())
+
 	shutdownDone := make(chan struct{})
 	go func() {
-		exitRequests := shutdown.Listen()
-		<-exitRequests.Done()
+		// Whichever request is taken here decides how the shutdown ends: an
+		// exit request drops a restart that was accepted while it was taken.
+		restarting := false
+		select {
+		case <-exitRequests.Done():
+			cfg.Restarter.Close()
+		case <-cfg.Restarter.Requested():
+			restarting = true
+		}
 		// Restore the default handling, so a second Ctrl+C aborts a shutdown
 		// that is taking too long.
 		exitRequests.Stop()
 
-		log.Info("shutting down cluster server")
+		// The nodes are separate processes and are left running either way: a
+		// restarted cluster finds them again through their server.json.
+		log.Info("shutting down cluster server", "restart", restarting)
 		// Close the relay before draining srv, not after: every relayed request
 		// is served by srv, so a tunnel still delivering traffic into a server
 		// that has stopped accepting would turn those requests into errors, and
@@ -165,6 +184,7 @@ func Run(cfg Config) error {
 		if err := srv.Shutdown(ctx); err != nil {
 			log.Error("server shutdown error", "error", err)
 		}
+		wsHandler.stop()
 		if err := sessions.Flush(); err != nil {
 			log.Error("failed to persist sessions", "error", err)
 		}

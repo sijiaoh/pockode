@@ -1974,3 +1974,60 @@ type RawCapabilityResult struct {
 type RemoteURLSubscribeResult struct {
 	RemoteURL string `json:"remote_url"`
 }
+
+// Server namespace: the pockode process itself — the version installed on disk
+// and restarting into it (see package restart). A cluster serves the same two
+// methods for itself, without the turns.
+
+// InstalledVersion is what running the executable on disk with --version
+// reported, read afresh for every request: an upgrade can replace the file at
+// any time without this process hearing of it.
+type InstalledVersion struct {
+	// Version is the installed version, as `pockode --version` prints it
+	// ("0.21.0", "dev"); empty when it could not be read.
+	Version string `json:"version,omitempty"`
+	// Error is why it could not be read, in English; empty when Version is set.
+	// A restart is refused for the same reason.
+	Error string `json:"error,omitempty"`
+	// Path is the executable a restart runs: the one this process was started
+	// from, resolved at startup.
+	Path string `json:"path"`
+}
+
+// ServerVersionResult answers server.version on a pockode server.
+type ServerVersionResult struct {
+	Installed InstalledVersion `json:"installed"`
+	// RunningTurns is how many sessions have a turn a restart would stop,
+	// across every worktree — running, or blocked on a permission request or
+	// on background work. A question an agent posted is not one: it belongs
+	// to the session and survives a restart.
+	RunningTurns int `json:"running_turns"`
+}
+
+// ClusterVersionResult answers server.version on a cluster.
+type ClusterVersionResult struct {
+	Installed InstalledVersion `json:"installed"`
+}
+
+// CodeRestartRefused answers a server.restart that changed nothing;
+// RestartRefusedData says why. The message is written to be shown as it is.
+const CodeRestartRefused = -32011
+
+// Reasons of a CodeRestartRefused error.
+const (
+	// RestartRefusedNotRunnable is an installed executable that does not run
+	// (server.version reports the same error), or a working directory the
+	// process started in that has since been removed. The process carries on.
+	RestartRefusedNotRunnable = "not_runnable"
+	// RestartRefusedAlreadyRestarting is a restart already under way, asked
+	// for elsewhere: another client, or SIGUSR1. The connection is about to
+	// drop for it.
+	RestartRefusedAlreadyRestarting = "already_restarting"
+	// RestartRefusedShuttingDown is a process already shutting down to exit.
+	RestartRefusedShuttingDown = "shutting_down"
+)
+
+// RestartRefusedData is the data member of a CodeRestartRefused error.
+type RestartRefusedData struct {
+	Reason string `json:"reason"`
+}

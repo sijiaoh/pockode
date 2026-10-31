@@ -20,6 +20,7 @@ import (
 	"github.com/pockode/server/command"
 	"github.com/pockode/server/contents"
 	"github.com/pockode/server/filetransfer"
+	"github.com/pockode/server/internal/restart"
 	"github.com/pockode/server/logger"
 	"github.com/pockode/server/password"
 	"github.com/pockode/server/rpc"
@@ -87,9 +88,11 @@ type RPCHandler struct {
 	cliLoginWatcher       *watch.CLILoginWatcher
 	cliUpdate             *cliupdate.Service
 	cliUpdateWatcher      *watch.CLIUpdateWatcher
+	conns                 *Connections
+	server                ServerControl
 }
 
-func NewRPCHandler(password string, passwordGuard *authguard.Guard, sessions SessionStore, version string, remoteURL func() string, previewTickets PreviewTickets, rawCapabilities RawCapabilities, devMode bool, commandStore *command.Store, worktreeManager *worktree.Manager, settingsStore *settings.Store, workStore work.Store, workOps *work.Operations, workEngine *work.Engine, agentRoleStore agentrole.Store, scheduleStore schedule.Store, scheduler *schedule.Scheduler, cliAuth *cliauth.Service, cliUpdate *cliupdate.Service) *RPCHandler {
+func NewRPCHandler(password string, passwordGuard *authguard.Guard, sessions SessionStore, version string, remoteURL func() string, previewTickets PreviewTickets, rawCapabilities RawCapabilities, devMode bool, commandStore *command.Store, worktreeManager *worktree.Manager, settingsStore *settings.Store, workStore work.Store, workOps *work.Operations, workEngine *work.Engine, agentRoleStore agentrole.Store, scheduleStore schedule.Store, scheduler *schedule.Scheduler, cliAuth *cliauth.Service, cliUpdate *cliupdate.Service, restarter *restart.Restarter) *RPCHandler {
 	settingsWatcher := watch.NewSettingsWatcher(settingsStore)
 	settingsWatcher.Start()
 
@@ -131,6 +134,8 @@ func NewRPCHandler(password string, passwordGuard *authguard.Guard, sessions Ses
 	remoteURLWatcher.Start()
 
 	return &RPCHandler{
+		conns:                 NewConnections(),
+		server:                ServerControl{Restarter: restarter, Subject: "Pockode"},
 		password:              password,
 		passwordGuard:         passwordGuard,
 		sessions:              sessions,
@@ -164,6 +169,10 @@ func NewRPCHandler(password string, passwordGuard *authguard.Guard, sessions Ses
 
 // Stop stops the RPC handler and releases resources.
 func (h *RPCHandler) Stop() {
+	// Connections first: their requests are what still reads the watchers, and
+	// a commit message draft among them is an AI CLI that has to be gone before
+	// the process exits or restarts.
+	h.conns.Close(connectionsCloseTimeout, slog.Default())
 	h.settingsWatcher.Stop()
 	h.workListWatcher.Stop()
 	h.workDetailWatcher.Stop()
@@ -237,8 +246,15 @@ func (h *RPCHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	conn.SetReadLimit(maxClientMessage)
 
-	h.handleConnection(r.Context(), conn)
+	h.conns.Serve(r.Context(), conn, func(ctx context.Context) {
+		h.handleConnection(ctx, conn)
+	})
 }
+
+// connectionsCloseTimeout bounds how long Stop waits for requests to notice
+// their connection is gone. A draft's CLI is killed as soon as its context
+// ends, so this is a backstop for a request that does not look.
+const connectionsCloseTimeout = 10 * time.Second
 
 func (h *RPCHandler) handleConnection(ctx context.Context, wsConn *websocket.Conn) {
 	connID := uuid.Must(uuid.NewV7()).String()
@@ -258,6 +274,7 @@ func (h *RPCHandler) handleStream(ctx context.Context, stream jsonrpc2.ObjectStr
 
 	state := &rpcConnState{
 		connID: connID,
+		stream: stream,
 		log:    log,
 		ready:  make(chan struct{}),
 		// worktree is set after auth
@@ -274,7 +291,7 @@ func (h *RPCHandler) handleStream(ctx context.Context, stream jsonrpc2.ObjectStr
 	// dispatched before setConn runs. That is not hypothetical on a relay
 	// stream: the cloud's first message is often already buffered by the time
 	// this goroutine gets here. state.ready makes handlers wait for the wiring.
-	rpcConn := jsonrpc2.NewConn(ctx, stream, jsonrpc2.AsyncHandler(handler))
+	rpcConn := jsonrpc2.NewConn(ctx, stream, h.conns.AsyncHandler(handler))
 	state.setConn(rpcConn)
 
 	<-rpcConn.DisconnectNotify()
@@ -297,6 +314,7 @@ type subscriptionKey struct {
 type rpcConnState struct {
 	mu            sync.Mutex
 	connID        string
+	stream        jsonrpc2.ObjectStream // what conn runs on; set before any handler runs
 	conn          *jsonrpc2.Conn
 	notifier      *JSONRPCNotifier
 	log           *slog.Logger
@@ -537,6 +555,12 @@ func (h *rpcMethodHandler) Handle(ctx context.Context, conn *jsonrpc2.Conn, req 
 		return
 	case "cli_update.unsubscribe":
 		h.handleWatcherUnsubscribe(ctx, conn, req, h.cliUpdateWatcher, "cli update")
+		return
+	case "server.version":
+		h.handleServerVersion(ctx, conn, req)
+		return
+	case "server.restart":
+		h.server.HandleRestart(ctx, conn, req, h.state.stream, h.log)
 		return
 	case "port_preview.ticket":
 		h.handlePortPreviewTicket(ctx, conn, req)

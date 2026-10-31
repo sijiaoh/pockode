@@ -74,3 +74,31 @@ func TestListen_StopWithoutRequest(t *testing.T) {
 	default:
 	}
 }
+
+// A restart request that arrives while the process is still starting — a
+// second one sent while a restarted process comes back up — is held for the
+// first Listener rather than lost; one arriving once the process is shutting
+// down has nothing left to act on.
+func TestRestartRouter_HoldsUntilFirstListener(t *testing.T) {
+	var r restartRouter
+
+	r.deliver()
+	first := make(chan struct{}, 1)
+	r.attach(first)
+	select {
+	case <-first:
+	default:
+		t.Fatal("a request held before the first Listener was not delivered to it")
+	}
+
+	r.detach(first)
+	r.deliver()
+	second := make(chan struct{}, 1)
+	r.attach(second)
+	select {
+	case <-second:
+		t.Fatal("a request that arrived while shutting down was delivered to the next Listener")
+	default:
+	}
+	r.detach(second)
+}

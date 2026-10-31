@@ -29,6 +29,17 @@ func processExists(pid int) bool {
 	if pid <= 0 {
 		return false
 	}
+	// A child that has exited and that nobody reaped is a zombie, which
+	// signal 0 still finds — so a node that died would be reported running, and
+	// one stopped would never be seen to go. That is every node a cluster
+	// started before it restarted itself: exec keeps the PID, and with it the
+	// children, but not the goroutines that waited on them. Reaping here is
+	// harmless otherwise: a process that is not our child fails with ECHILD, one
+	// still running returns at once, and a node this run started is reaped by
+	// whichever of this and its own Wait gets there first.
+	var status syscall.WaitStatus
+	_, _ = syscall.Wait4(pid, &status, syscall.WNOHANG, nil)
+
 	process, err := os.FindProcess(pid)
 	if err != nil {
 		return false
