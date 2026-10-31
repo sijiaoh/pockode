@@ -8,8 +8,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sync"
 	"time"
 
+	"github.com/pockode/server/internal/shutdown"
 	"github.com/pockode/server/password"
 	"github.com/pockode/server/serverinfo"
 )
@@ -19,11 +21,25 @@ var (
 	ErrNodeNotRunning     = errors.New("node not running")
 	ErrNodeStillRunning   = errors.New("node is still running")
 	ErrProcessNotFound    = errors.New("process not found")
+	// ErrRestartUnsupported is a running node that cannot be asked to restart:
+	// a build that predates restarts, which only stopping and starting it
+	// again brings up to date. The same value as shutdown's, so errors.Is
+	// matches either.
+	ErrRestartUnsupported = shutdown.ErrRestartUnsupported
 )
 
-// ProcessManager handles starting and stopping pockode processes for nodes.
+// ProcessManager handles starting, stopping and restarting pockode processes
+// for nodes.
 type ProcessManager struct {
 	executablePath string
+
+	// restartsMu guards restarts and requesting: the restarts this cluster
+	// asked for, by node ID (see restart.go).
+	restartsMu sync.Mutex
+	restarts   map[string]restartRecord
+	requesting map[string]bool
+	// now is time.Now, replaced by tests that need a restart to run out.
+	now func() time.Time
 }
 
 // NewProcessManager creates a ProcessManager that starts nodes from
@@ -34,7 +50,17 @@ type ProcessManager struct {
 // the old one, Linux reports the running file as "… (deleted)", and starting a
 // node from that fails.
 func NewProcessManager(executablePath string) *ProcessManager {
-	return &ProcessManager{executablePath: executablePath}
+	return &ProcessManager{
+		executablePath: executablePath,
+		restarts:       map[string]restartRecord{},
+		requesting:     map[string]bool{},
+		now:            time.Now,
+	}
+}
+
+// ExecutablePath is the file nodes are started from, and restart into.
+func (pm *ProcessManager) ExecutablePath() string {
+	return pm.executablePath
 }
 
 // Start starts a pockode process for the given node.
@@ -42,15 +68,20 @@ func NewProcessManager(executablePath string) *ProcessManager {
 // The password is required and passed via the POCKODE_PASSWORD environment
 // variable rather than a command-line flag, so it never appears in the child's
 // argv (which is world-readable on Linux through /proc/<pid>/cmdline and `ps`).
-// Returns an error if the password is empty or if the node is already running.
+// Returns an error if the password is empty, if the node is already running,
+// or if it is restarting (ErrNodeRestarting) — on Windows a restarting node has
+// no server.json for a moment, and starting it then would put a second server
+// on the project.
 func (pm *ProcessManager) Start(n Node, nodePassword string) error {
 	if nodePassword == "" {
 		return fmt.Errorf("%w: password is required", ErrInvalidNode)
 	}
 
-	dataDir := filepath.Join(n.Path, ".pockode")
+	dataDir := nodeDataDir(n)
 
-	// Check if already running
+	if pm.isRestarting(n) {
+		return ErrNodeRestarting
+	}
 	if pm.IsRunning(n) {
 		return ErrNodeAlreadyRunning
 	}
@@ -92,6 +123,7 @@ func (pm *ProcessManager) Start(n Node, nodePassword string) error {
 		return err
 	}
 
+	pm.forgetRestart(n)
 	return nil
 }
 
@@ -133,7 +165,7 @@ func (pm *ProcessManager) waitForServerInfo(dataDir string) error {
 // Stop stops the pockode process for the given node.
 // It first asks the node to exit, then force kills it after a timeout.
 func (pm *ProcessManager) Stop(n Node) error {
-	dataDir := filepath.Join(n.Path, ".pockode")
+	dataDir := nodeDataDir(n)
 
 	info, err := serverinfo.Read(dataDir)
 	if err != nil {
@@ -163,6 +195,7 @@ func (pm *ProcessManager) Stop(n Node) error {
 		return fmt.Errorf("failed to clean up server.json: %w", err)
 	}
 
+	pm.forgetRestart(n)
 	return nil
 }
 
@@ -183,17 +216,18 @@ func (pm *ProcessManager) Cleanup(n Node) error {
 		return ErrNodeStillRunning
 	}
 
-	dataDir := filepath.Join(n.Path, ".pockode")
+	dataDir := nodeDataDir(n)
 	if err := serverinfo.Delete(dataDir); err != nil {
 		return fmt.Errorf("failed to remove server.json: %w", err)
 	}
 
+	pm.forgetRestart(n)
 	return nil
 }
 
 // IsRunning checks if a pockode process is running for the given node.
 func (pm *ProcessManager) IsRunning(n Node) bool {
-	dataDir := filepath.Join(n.Path, ".pockode")
+	dataDir := nodeDataDir(n)
 
 	info, err := serverinfo.Read(dataDir)
 	if err != nil || info == nil {
@@ -203,14 +237,19 @@ func (pm *ProcessManager) IsRunning(n Node) bool {
 	return processExists(info.PID)
 }
 
-// GetNodeStatus returns the NodeStatus for a given node.
-// It checks if server.json exists and if the process is running.
+// GetNodeStatus returns the NodeStatus for a given node: what its server.json
+// says, unless a restart this cluster asked for is still under way or did not
+// come back (see restart.go). server.json is read afresh on every call — a
+// restart on Windows replaces the file under a new PID.
 func (pm *ProcessManager) GetNodeStatus(n Node) NodeStatus {
-	dataDir := filepath.Join(n.Path, ".pockode")
+	info, err := serverinfo.Read(nodeDataDir(n))
+	return pm.withRestart(n, info, fileStatus(n, info, err))
+}
 
-	info, err := serverinfo.Read(dataDir)
+// fileStatus is the status server.json alone gives.
+func fileStatus(n Node, info *serverinfo.Info, readErr error) NodeStatus {
 	if info == nil {
-		if err != nil {
+		if readErr != nil {
 			// File exists but couldn't be read/parsed (corrupted or permission issue)
 			return NodeStatus{
 				ID:     n.ID,
@@ -238,7 +277,12 @@ func (pm *ProcessManager) GetNodeStatus(n Node) NodeStatus {
 		StartedAt: &info.StartedAt,
 		LocalURL:  ptrOrNil(info.LocalURL),
 		RemoteURL: ptrOrNil(info.RemoteURL),
+		Version:   ptrOrNil(info.Version),
 	}
+}
+
+func nodeDataDir(n Node) string {
+	return filepath.Join(n.Path, ".pockode")
 }
 
 // ptrOrNil returns a pointer to s if non-empty, otherwise nil.

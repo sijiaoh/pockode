@@ -1,101 +1,42 @@
-import { type InstalledVersion, Sheet, Spinner } from "@pockode/shared";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Sheet, Spinner } from "@pockode/shared";
+import { useState } from "react";
+import {
+	type InstalledVersionState,
+	installedOf,
+	useFreshRead,
+} from "../hooks/useInstalledVersion";
+import { differingVersion, displayVersion, versionLabel } from "../lib/version";
 import { useWSStore } from "../lib/wsStore";
 import { NEUTRAL_BUTTON, PRIMARY_BUTTON } from "./buttons";
-
-const DEV_VERSION = "dev";
-
-/** What the last read of the installed executable came back with. */
-type InstalledRead =
-	| { kind: "read"; installed: InstalledVersion }
-	/** The request itself failed: not an answer about the install. */
-	| { kind: "failed"; message: string };
+import { InstalledArrow } from "./InstalledArrow";
 
 function errorMessage(err: unknown, fallback: string) {
 	return err instanceof Error ? err.message : fallback;
 }
 
 /**
- * The installed version when the cluster runs something other than it, else
- * null. Equality only — a downgrade is as much a reason to restart — and never
- * for a development build, which would always differ (docs/restart-ui.md).
- */
-function differingVersion(
-	running: string,
-	installed: InstalledVersion | null,
-): string | null {
-	const version = installed?.version;
-	return running !== DEV_VERSION && version !== undefined && version !== running
-		? version
-		: null;
-}
-
-function displayVersion(version: string) {
-	return version === DEV_VERSION ? "development build" : version;
-}
-
-/**
  * The header's version button and the "Pockode cluster" sheet it opens, which
  * is both the information and the restart's confirmation (docs/restart-ui.md,
- * "web-cluster: the header"; cluster-ui.md rules 2 and 3).
+ * "web-cluster: the header"; cluster-ui.md rules 2 and 3). The installed read
+ * is the list's, shared with the node cards.
  */
-export function ClusterVersion({ running }: { running: string }) {
-	const { status, actions } = useWSStore();
-	const [read, setRead] = useState<InstalledRead | null>(null);
+export function ClusterVersion({
+	running,
+	installedState,
+}: {
+	running: string;
+	installedState: InstalledVersionState;
+}) {
+	const { actions } = useWSStore();
 	const [sheetOpen, setSheetOpen] = useState(false);
-	// The sheet speaks about now, not about when the header was drawn: until a
-	// read started at or after its opening lands, the installed row is a
-	// skeleton and Restart is disabled.
-	const [readingSince, setReadingSince] = useState<number | null>(null);
+	const fresh = useFreshRead(installedState);
 	const [restarting, setRestarting] = useState(false);
 	const [refusal, setRefusal] = useState<string | null>(null);
-	const lastReadRef = useRef(0);
-
-	// Each read runs the executable on the host, so it happens only on the
-	// occasions the design names, never on the node poll; only the latest one
-	// started is allowed to land.
-	const readInstalled = useCallback(async () => {
-		const id = ++lastReadRef.current;
-		let next: InstalledRead;
-		try {
-			const result = await actions.serverVersion();
-			next = { kind: "read", installed: result.installed };
-		} catch (err) {
-			// A read the dropped socket took down with it is the reconnect's to
-			// report; the next connect reads again.
-			if (useWSStore.getState().status !== "connected") return;
-			next = {
-				kind: "failed",
-				message: errorMessage(err, "Unknown error"),
-			};
-		}
-		if (id !== lastReadRef.current) return;
-		setRead(next);
-		setReadingSince((since) => (since !== null && id >= since ? null : since));
-	}, [actions]);
-
-	useEffect(() => {
-		if (status === "connected") void readInstalled();
-	}, [status, readInstalled]);
-
-	// The user typically comes back from a terminal where they just ran the
-	// installer.
-	useEffect(() => {
-		const onVisibilityChange = () => {
-			if (!document.hidden && useWSStore.getState().status === "connected") {
-				void readInstalled();
-			}
-		};
-		document.addEventListener("visibilitychange", onVisibilityChange);
-		return () =>
-			document.removeEventListener("visibilitychange", onVisibilityChange);
-	}, [readInstalled]);
 
 	const openSheet = () => {
 		setRefusal(null);
-		setReadingSince(lastReadRef.current + 1);
+		fresh.begin();
 		setSheetOpen(true);
-		void readInstalled();
 	};
 
 	const closeSheet = () => setSheetOpen(false);
@@ -113,14 +54,15 @@ export function ClusterVersion({ running }: { running: string }) {
 		}
 	};
 
-	const installed = read?.kind === "read" ? read.installed : null;
+	const { read } = installedState;
+	const installed = installedOf(installedState);
 	const newVersion = differingVersion(running, installed);
 	const differs = newVersion !== null;
-	const reading = readingSince !== null;
+	const reading = fresh.reading;
 	const unreadable =
 		!reading && installed !== null && installed.version === undefined;
 
-	const runningLabel = running === DEV_VERSION ? "dev" : `v${running}`;
+	const runningLabel = versionLabel(running);
 	// Starts with the visible label, so a voice user can say what they see.
 	const buttonName = differs
 		? `Pockode cluster ${runningLabel}, ${displayVersion(newVersion)} installed`
@@ -134,23 +76,7 @@ export function ClusterVersion({ running }: { running: string }) {
 				aria-label={buttonName}
 				className="flex min-h-11 items-center gap-1.5 rounded-lg px-2 text-xs text-th-text-secondary hover:bg-th-overlay-hover"
 			>
-				{differs && (
-					<svg
-						className="h-4 w-4 shrink-0 text-th-accent"
-						fill="none"
-						stroke="currentColor"
-						strokeWidth={2}
-						strokeLinecap="round"
-						strokeLinejoin="round"
-						viewBox="0 0 24 24"
-						aria-hidden="true"
-						data-testid="version-differs"
-					>
-						<circle cx="12" cy="12" r="10" />
-						<path d="m16 12-4-4-4 4" />
-						<path d="M12 16V8" />
-					</svg>
-				)}
+				{differs && <InstalledArrow testId="version-differs" />}
 				<span>{runningLabel}</span>
 				{differs && (
 					<span className="hidden sm:inline">

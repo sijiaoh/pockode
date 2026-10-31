@@ -1,9 +1,10 @@
 # Restart UI
 
 How a user sees which version of Pockode is running and which is installed on
-the server, learns that the two differ, and restarts Pockode — or the cluster
-manager — from a phone, so an upgrade done with the install script takes effect
-without a terminal. What the restart costs and how that is said before the
+the server, learns that the two differ, and restarts Pockode — the cluster
+manager, or the cluster's nodes, one or all of the outdated ones at once — from
+a phone, so an upgrade done with the install script takes effect without a
+terminal. What the restart costs and how that is said before the
 press, what the screen does while the process is gone, and what every failure
 says. How the process restarts itself is
 [code/self-restart.md](code/self-restart.md).
@@ -319,6 +320,326 @@ open. When the restart came from elsewhere, the loss is accepted: the panel's
 inputs are short, and a page running the old frontend against a new server is
 the worse failure.
 
+## web-cluster: restarting nodes
+
+The cluster restarts a node **without its password**: it asks the node, and the
+node restarts itself with its own password and options
+([code/self-restart.md](code/self-restart.md)). That is the whole point of this
+part — Start asks for a password every time, so upgrading ten nodes used to mean
+ten Stops, ten Starts and ten passwords. A node started by a build from before
+node restarts existed cannot be asked; it is stopped and started instead, once
+([Older nodes](#older-nodes-stop-and-start-once)).
+
+The panel can only show this once the cluster itself runs a version that knows
+`node.restart`, so after an upgrade the order is the header first (its button
+already says the cluster is outdated), then the nodes. Nothing enforces the
+order; the old panel simply has none of the controls below.
+
+### Which node is outdated
+
+A node runs the executable the cluster starts it from, which is the one the
+header's `server.version` reads — so a node's running version is compared with
+the **cluster's installed version**, never with the cluster's running one. Same
+rules as everywhere here: equality only, `dev` never compared, a node is
+outdated only while it runs.
+
+| Kind | When | Card shows |
+|------|------|------------|
+| Current | running, `version` equals the installed version, or either is `dev` | nothing new |
+| Outdated | running, `version` differs from the installed version | the version line and **Restart** |
+| Older node | running, no `version` — its `server.json` was written by a build that predates the field, and every such build also predates the restart request (unix would kill it, Windows has no event for it). Also a node `node.restart` refused as `older_node` since it last started — on Windows, one with a version that failed to publish its restart event | the version line, "Older version", and **Restart**, which stops and starts it |
+| Not compared | the installed version could not be read, or the read failed | nothing new; no node is called outdated on a guess, and the batch strip is not drawn |
+
+An older node counts as outdated without comparing strings: what marks it is
+that its build is older than the field, which is a fact, not an ordering of
+versions this panel does not own — so it is one under an installed development
+build too, where nothing else is compared. The second way in — a refusal — is the
+panel's memory, keyed by the node and its `started_at`, so it ends with the
+process it was about; the Windows case is rare enough that the page learning
+it on the first press is fine.
+
+**One read for the whole panel.** The installed version is the same read the
+header's version button already makes (on connect, on returning to the tab, on
+opening a sheet), lifted out of `ClusterVersion` to `NodeList`, which renders
+both and passes it down. Never on the node poll: each read runs the executable.
+
+### The card
+
+```
+┌───────────────────────────────────────────┐
+│ ● my-app                               ⋮  │
+│ ~/projects/my-app                         │
+│ Port 9870 · up 3h                         │
+│ ↑ v0.16.0 · 0.17.0 installed              │
+│ [        Open        ]  Local ↗ [Restart] │
+└───────────────────────────────────────────┘
+```
+
+- **The version line** is drawn only for an outdated or older node, under the
+  meta line, `text-xs text-th-text-muted`, led by the header's up-arrow-in-circle
+  in `text-th-accent` (inline SVG, `aria-hidden`): "v0.16.0 · 0.17.0 installed",
+  or "Older version · 0.17.0 installed". A current node shows no version at
+  all — the version of a node that needs nothing is not news, and a line on
+  every card would bury the ones that do.
+- **Restart** is a `NEUTRAL_BUTTON`, `shrink-0`, after Open and Local. Not
+  primary: Open is still what the user came for (cluster rule 1), and a restart
+  costs the turns running in that node. It fits beside Open and Local on a
+  320px phone; Open is the one that gives up width.
+- **The overflow menu** of every running node gains **Restart** as its first
+  item, above Stop — also for a current node, since a restart is always offered
+  (*The rules*). It opens the same confirmation, inside the menu's sheet, with
+  **Back** to the menu, as Stop does. It is withheld only when the installed
+  version is unreadable: the cluster would refuse, and the header's sheet is
+  where that is explained.
+
+### Confirming one
+
+The confirmation is a sheet: the card's Restart opens it directly, the menu's
+Restart turns the menu into it. Opening reads the installed version again; until
+that lands the copy uses the last read and **Restart** is disabled, as in the
+header's sheet.
+
+> **Restart my-app?**
+> Pockode in this project restarts and comes back running 0.17.0 (now 0.16.0).
+> Any AI turn running in it is stopped — its session and history are kept, and
+> can be continued afterwards. Pages open on it reconnect by themselves.
+>
+> Cancel · **Restart**
+
+| Part | Copy |
+|------|------|
+| What happens, versions differ | "Pockode in this project restarts and comes back running 0.17.0 (now 0.16.0)." |
+| What happens, same version | "Pockode in this project restarts with the same version, password and options." |
+| What happens, development build | "Pockode in this project restarts with the same password and options." |
+| What happens, installed version unknown (the read failed) | "Pockode in this project restarts into the installed version, with the same password and options." — the cluster still checks the file before it asks |
+| Cost | "Any AI turn running in it is stopped — its session and history are kept, and can be continued afterwards." |
+| Ending | "Pages open on it reconnect by themselves." |
+
+- **"Any AI turn", not a count.** The cluster is not signed in to its nodes and
+  cannot ask how many turns are running
+  ([Considered and not done](#considered-and-not-done)). So there is no
+  `danger` variant to switch to: the button is `PRIMARY_BUTTON` always, as for
+  Stop, whose cost it shares.
+- **In flight**: the button reads "Restarting..." with a spinner; the sheet is
+  not dismissible and Cancel/Back is disabled, as for every action here. The
+  request answers fast — it returns once the node has been asked, not once it
+  is back — so this lasts the cluster's probe of the installed file and no more.
+- **On success** the sheet closes and the list is fetched at once, so the card
+  shows *Restarting* without waiting for the poll.
+
+| Refusal (`data.reason`) | What the page does |
+|---------|------|
+| `not_runnable` — the cluster ran the installed file and it did not run | Stays in the sheet as a `role="alert"`: "The installed pockode at <path> didn't run: <why>. The node kept running; nothing was stopped." Confirmable again |
+| `already_restarting` — another device asked first; the cluster knows only of restarts it asked for itself, not a `kill -USR1` | Treated as success: the sheet closes and the card shows *Restarting* |
+| `older_node` — the node cannot be asked: its file has no version after all, or (Windows) it has one but no restart event | The sheet turns into the older node's (below), in place, and the card is an older node's from now on |
+| `not_running` — it stopped, or went stale, since the list was drawn | The sheet closes, the list is fetched, and the card shows "Could not restart this node: <message>" |
+| Anything else (the request could not be delivered) | Stays in the sheet, the server's message verbatim |
+
+### Older nodes: stop and start, once
+
+An older node cannot be sent the restart request, so its Restart — on the card,
+in the menu, same button — opens a sheet that **stops it and starts it again**,
+asking for its password in the same sheet. A node without a `version` is one
+also when the installed version could not be compared: its card is then not
+marked, but its menu's Restart, where it is offered, still leads here rather
+than to a `node.restart` bound to be refused.
+
+> **Restart my-app**
+> This node was started by an older Pockode, which can't be restarted by the
+> cluster. It is stopped and started again instead, which needs its password —
+> this once: after that, Restart needs none.
+> Any AI turn running in it is stopped — its session and history are kept.
+>
+> Node password `[••••••••••••]`
+> [Generate] [Copy]
+> The password it runs with now. A new one works too, and signs out every
+> device signed in to it.
+>
+> Cancel · **Stop and start**
+
+- **Stop is the existing `node.stop`** — the graceful one, SIGTERM or the
+  Windows shutdown event, then the 5 s grace — and only once it has succeeded
+  does `node.start` run with the typed password. Nothing is ever signalled with
+  the restart request.
+- **The password field is the Start sheet's**, Generate, Copy and the
+  copy-failed reveal included: the sheet *is* `StartNodeSheet`, in a variant
+  with this title, paragraph and button, rather than a copy of it. It is held
+  by the list, not the card, because the stop moves the card to the Stopped
+  section and mounts it afresh, and the sheet has to outlive that. The same rules hold: never prefilled, never kept.
+- **In flight**: "Stopping..." then "Starting...", not dismissible.
+- **The stop fails** (the node is still running): the reason in the sheet, the
+  password kept, **Stop and start** again. If the node is found stopped instead
+  — it went down by itself, or from another device — the sheet becomes the
+  Start sheet below: there is nothing left to stop.
+- **The start fails** (the node is now stopped): the sheet *becomes the Start
+  sheet* — title "Start my-app", button **Start**, password and reason kept —
+  because that is now exactly the situation. Cancelled from there, the card is a
+  stopped one with its error, like any failed start.
+- **No batch here.** Every node has its own password; the batch strip names
+  older nodes and leaves them to their cards.
+
+Why one sheet rather than Stop and then a hint on the stopped card: a stopped
+node moves to the Stopped section, often below the fold on a phone, so the hint
+would be a notice the user first has to find; and a restart that takes two
+separate actions in two places is not one the user can finish without being
+told the second step. Asking for the password up front costs nothing extra —
+the second step would have asked for it anyway — and the sheet already exists.
+The appearance stays small on the card: the same Restart, an "Older version"
+line, and the difference is explained only to whoever presses it.
+
+### Restart all outdated
+
+A strip at the top of the list, above the first section, drawn when **two or
+more** running nodes are outdated or older. For one, its card is the place —
+the same threshold as the stale section's Clean up all.
+
+```
+┌───────────────────────────────────────────┐
+│ ↑ 0.17.0 installed · 3 nodes are outdated │
+│                [ Restart all outdated (2) ] │
+└───────────────────────────────────────────┘
+```
+
+- `rounded-lg border border-th-border bg-th-bg-secondary p-3`, the arrow in
+  `text-th-accent`, the text `text-sm text-th-text-secondary`. Not sticky, not a
+  warning colour: it is news the user went and caused, not a problem, and the
+  cards carry their own marker anyway.
+- **N is what the button will restart**: outdated nodes with a version. Older
+  nodes are in the strip's count and not in N, because the button cannot do
+  them. When every outdated node is older (N = 0), the button is absent and the
+  strip reads "… · 2 nodes are outdated. Restart each from its card; nodes
+  started by an older Pockode need their password."
+- `NEUTRAL_BUTTON`. The cards' Open buttons stay the loudest things on screen.
+- A node that is *Restarting* is not outdated any more for the count, so the
+  strip shrinks as a batch runs and is gone once fewer than two are left.
+
+Pressing it opens a sheet:
+
+> **Restart 2 outdated nodes?**
+> my-app — v0.16.0
+> api — v0.15.2
+> They restart and come back running 0.17.0. Any AI turn running in them is
+> stopped — sessions and history are kept, and can be continued afterwards.
+> Not included: legacy-app — started by an older Pockode, it needs its
+> password. Restart it from its card.
+>
+> Cancel · **Restart 2**
+
+- The list and N are recomputed when the installed re-read lands (opening the
+  sheet reads, as above); the button says the count it will actually send.
+- The "Not included" paragraph appears only when there are older nodes; with
+  several it names them all ("…: legacy-app, old-api — started by an older
+  Pockode, each needs its password. Restart them from their cards.").
+- **In flight**: one `node.restart` per node in parallel, settled together, one
+  list fetch at the end — the shape of Clean up all. The button reads
+  "Restarting..."; the sheet is not dismissible.
+- **When all have answered**, whatever they answered, the sheet closes. Each
+  refusal goes to *its own card*, worded as for a single restart
+  ("Could not restart this node: <message>"); `already_restarting` is success
+  here too. A batch never stops at the first failure: the nodes are
+  independent, and a half-done batch that does not say which half is worse.
+  An `older_node` refusal is not an error on the card: that node simply turns
+  into an older node's card, whose Restart is the way. If any were refused for
+  another reason, the strip adds "1 couldn't restart; its card says why." ("2 couldn't
+  restart; their cards say why.") until its next press, or until those cards'
+  errors are dismissed or cleared. It stays drawn for that note even when fewer
+  than two outdated nodes are left.
+- **The re-read on opening could not compare** (the request failed, or the
+  file did not run): the sheet says so — "The installed version couldn't be
+  read just now, so no node is called outdated. The version in the header says
+  why." — with Restart disabled, rather than closing under the user. When it
+  could compare and nothing is left to restart, the sheet closes.
+
+### While a node restarts
+
+*Restarting* is **the cluster's state**, not the page's (unlike the header's,
+which only the page can hold while the cluster is gone): the cluster marked the
+node when it asked it and watches its `server.json` for the successor, so every
+device sees it, and a reload does not lose it.
+
+```
+┌───────────────────────────────────────────┐
+│ ● my-app                               ⋮  │   ● in th-warning
+│ ~/projects/my-app                         │
+│ ◌ Restarting... 0:12                      │
+│ [ ◌ Restarting...                       ] │   disabled
+└───────────────────────────────────────────┘
+```
+
+- **It stays where it was**, in the Running section at its place: a restart
+  does not move `last_used_at` (it is upkeep, like Stop, not going to the node),
+  so a batch does not shuffle the list it is running on.
+- The status dot is `bg-th-warning`, with "Restarting" as its screen-reader
+  text; the meta line is a small spinner and "Restarting... 0:12" counted from
+  `restart_requested_at`; the version line is gone.
+- **Open is replaced by a disabled "Restarting..." button**, and Local and
+  Restart are not drawn: the server behind the link is going away, and an Open
+  now lands on a page that is still connecting.
+- **The overflow menu is disabled** for the minute at most that this lasts.
+  Stop or Restart would race the restart; Delete would read the node as not
+  running and skip its "this node is running" warning, though it is about to
+  run again; Edit could move the path the cluster is watching.
+- **Never Start.** On Windows the old `server.json` is deleted before the
+  successor writes its own, and the node used to read *stopped* in between
+  ([cluster.md](cluster.md#restarting-and-upgrading)) — with a Start button a
+  tap away from putting a second server on the project. The cluster keeps
+  reporting `restarting` through that gap, and refuses `node.start` while it
+  does.
+
+**Done** is a `server.json` written by a new start, with a live process — the
+same PID on unix, a new one on Windows. How the cluster tells a new start from
+the old one is in [cluster.md](cluster.md#restarting-from-the-cluster).
+
+The card is an ordinary running one again; the version line having gone is the
+confirmation, and nothing else is shown.
+
+**Failed** is the cluster giving up after **60 s**, the same minute as
+`RESTART_NOT_BACK_MS`. It reports what it then finds, with `restart_error`:
+
+| Found | Card | Error (shown as the cluster wrote it) |
+|-------|------|-------|
+| The old process, still running (same start) | Running, still outdated | "Didn't restart within a minute; the old server is still running. It may have refused — its project directory gone, say — or still be ending its AI sessions. Its log says which: <path>/.pockode/server.log" |
+| Nothing, or a dead process | Stopped or stale | "Stopped for the restart and didn't come back within a minute. Its log says why: <path>/.pockode/server.log" |
+
+- The error is shown in the card's usual error box. **Dismiss** hides it in this
+  page for that restart (keyed by `restart_requested_at`); the next action on
+  the node that succeeds clears it on the cluster, as for every card error.
+- **A successor that turns up late still counts**: the cluster keeps comparing
+  against the start it recorded, and the card goes back to running and drops
+  the error.
+- If the cluster itself restarts while a node is restarting, that knowledge is
+  lost and the node reads what its files say; on Windows that may be *stopped*
+  for a moment. Accepted: it takes two restarts at once, and the next poll
+  corrects it.
+
+### What the node list needs
+
+On top of [What the UI needs](#what-the-ui-needs), for the screens above:
+
+| Field / call | Meaning |
+|---|---|
+| `status.version` | The running version from `server.json`, as written; only while running. Absent means an older node |
+| `status.status = "restarting"` | From an accepted `node.restart` until the successor's `server.json` appears or 60 s pass. Grouped with Running by the panel |
+| `status.restart_requested_at` | When the restart was accepted; present while restarting, and while `restart_error` is |
+| `status.restart_error` | Why the last restart did not come back, in English, to be shown as it is; cleared by the next start, stop, clean-up or restart that succeeds, or by a late successor |
+| `node.restart {id}` | Returns the node's status, like `node.cleanup`, once the node has been asked — not once it is back. Refusals as `CodeRestartRefused` (`-32011`) with `data.reason` `not_runnable`, `already_restarting`, `older_node` or `not_running` — what the page does with each is the table above, when the cluster sends each is [cluster.md](cluster.md#restarting-from-the-cluster); anything else is an ordinary error |
+| `node.start` while restarting | Refused, "This node is restarting." |
+| `last_used_at` | Not moved by `node.restart` |
+
+**`not_runnable` has to be the cluster's own check.** A node asked by signal or
+event has no way to answer, so a node that refused to restart into an unreadable
+file would look exactly like one that is slow. The cluster therefore probes the
+installed file itself (the same `Program.Version` its `server.version` uses)
+before it asks, and refuses for it, so that the refusal arrives in the sheet
+and not as a 60 s timeout. The node still makes its own check, which also
+covers its working directory; a refusal there is what the timeout's first row
+is for.
+
+The `-32011` code and the reasons are parsed by the same helper in
+`@pockode/shared` (`serverRestart.ts`): the node reasons are added there beside
+`server.restart`'s, so one place knows the code, even though only `web-cluster`
+reads the node ones.
+
 ## Shared pieces
 
 | Piece | Where | Change |
@@ -326,6 +647,10 @@ the worse failure.
 | `ReconnectBanner` | `@pockode/shared` | An optional `restarting` prop: "Restarting..." in place of "Reconnecting...", and after the outage threshold *or* 60 s since the restart, the restart escalation. Its subject is a field of that prop (`{ since, subject }`, "Pockode" / "The cluster") — the copy is shared, the noun is the project's |
 | Each project's banner wrapper | `web`, `web-cluster` | Passes `restarting` from its store's restart request time |
 | ws stores | both | Hold `restartRequestedAt` (set on a successful restart reply — kept, not moved, by a second press — and cleared on the next successful `auth` or a logout); `web-cluster` gains the version reload |
+| `restartRefusedReason` | `@pockode/shared` | Also recognises `node.restart`'s `older_node` and `not_running` |
+| `differingVersion`, `displayVersion` | `web-cluster` | Move out of `ClusterVersion` into `src/lib/version.ts`: the header, the card, the strip and the sheets all compare and print versions the same way |
+| The installed read | `web-cluster` | Out of `ClusterVersion` into `NodeList`, one read passed to the header and the cards |
+| The node password sheet | `web-cluster` | `StartNodeSheet` out of `NodeCard` into its own file, with a `stopAndStart` variant that is the older node's sheet — the field, Generate, Copy and the reveal are the Start sheet's, and turning into the Start sheet after a failed start is a change of variant |
 
 The rest stays in each project. The Settings row and the cluster sheet look
 different because their homes do; what they share is the copy, which this
@@ -363,6 +688,22 @@ Not a wire format — that is
   and not for `dev`/`dev`.
 - The cluster version button shows the marker only on a mismatch; the sheet's
   cases render their row; the sheet cannot be dismissed while the request is out.
+- Nodes: the kinds table — outdated only when running and different, never for
+  `dev`, an older node without a version, nothing when the installed version is
+  unknown; the version line only on outdated and older cards.
+- Restart is in the menu of every running node, withheld when the installed
+  version is unreadable; the confirmation's parts per the table.
+- Each `node.restart` refusal does what its row says; `already_restarting` is
+  success.
+- The older node's sheet stops, then starts with the typed password; a failed
+  stop keeps it as it was, a failed start turns it into the Start sheet. It
+  never calls `node.restart`.
+- The strip: drawn from two outdated nodes, N excludes older ones and the
+  button is absent at N = 0; a batch with a refusal closes, puts the error on
+  that card only, and restarts the others.
+- *Restarting* cards keep their place, offer no Open or Start, and their menu
+  is disabled; an `older_node` refusal turns the card into an older node's;
+  `restart_error` shows in the card and Dismiss hides it for that restart only.
 
 ## Considered and not done
 
@@ -376,7 +717,21 @@ Not a wire format — that is
   reason about than one that happens now with its cost named. If a "restart
   when idle" turns out to be wanted, it is a second button, not a change to
   this one.
-- **Stopping and restarting the nodes from the cluster's Restart.** A later
-  story restarts nodes; this one is said not to touch them, and says so.
+- **Restarting the nodes from the cluster's Restart.** The cluster's sheet says
+  nodes are not touched, and that stays true: the nodes have their own Restart
+  and their own strip, and a cluster restart that also took down every project
+  would cost what the header's sheet promises it does not.
+- **Counting running AI turns in a node's confirmation.** The cluster is not
+  signed in to its nodes; the count would have to be published in
+  `server.json`, a file read every 5 s, turning a live number into a stale copy
+  of one. "Any AI turn" says the cost truthfully without it.
+- **One password for all the older nodes in a batch.** Each node has its own,
+  and the panel does not hold one past the sheet it was typed in
+  ([cluster-ui.md](cluster-ui.md#what-was-rejected-and-why)). Older nodes are a
+  one-time case of the upgrade into node restarts; they go one card at a time.
+- **Restarting current nodes from the strip too.** Its job is the upgrade; a
+  fresh start of a node that needs none is its card's menu, one at a time.
+- **Restarting outdated nodes by themselves after an upgrade.** It would stop
+  AI turns nobody chose to stop.
 - **Persisting "restarting" across a reload.** The reload is itself the
   success signal; a failure is what the banner already tells every page.

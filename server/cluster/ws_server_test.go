@@ -17,7 +17,7 @@ import (
 
 // authenticatedCall authenticates a fresh connection and sends method on it,
 // returning the reply and the connection, which stays the caller's to read.
-func authenticatedCall(t *testing.T, serverURL, method string) (response, *websocket.Conn) {
+func authenticatedCall(t *testing.T, serverURL, method string, params any) (response, *websocket.Conn) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), opTimeout)
 	defer cancel()
@@ -32,7 +32,7 @@ func authenticatedCall(t *testing.T, serverURL, method string) (response, *webso
 	for id, call := range []struct {
 		method string
 		params any
-	}{{"auth", AuthParams{Password: testPassword}}, {method, nil}} {
+	}{{"auth", AuthParams{Password: testPassword}}, {method, params}} {
 		data, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": id, "method": call.method, "params": call.params})
 		if err := conn.Write(ctx, websocket.MessageText, data); err != nil {
 			t.Fatalf("failed to send %s: %v", call.method, err)
@@ -56,7 +56,7 @@ func TestClusterServerVersion(t *testing.T) {
 	server := newAuthTestServer(t, authsessiontest.New())
 	restarttest.Install(t, "9.9.9")
 
-	resp, _ := authenticatedCall(t, server.URL, "server.version")
+	resp, _ := authenticatedCall(t, server.URL, "server.version", nil)
 	if resp.Error != nil {
 		t.Fatalf("server.version failed: %v", resp.Error)
 	}
@@ -75,7 +75,7 @@ func TestClusterServerRestart(t *testing.T) {
 		server := newTestServer(t, authsessiontest.New(), restarter)
 		restarttest.Break(t, "boom")
 
-		resp, _ := authenticatedCall(t, server.URL, "server.restart")
+		resp, _ := authenticatedCall(t, server.URL, "server.restart", nil)
 		if resp.Error == nil || resp.Error.Code != rpc.CodeRestartRefused {
 			t.Fatalf("server.restart = %+v, want a refusal", resp)
 		}
@@ -92,7 +92,7 @@ func TestClusterServerRestart(t *testing.T) {
 		server := newTestServer(t, authsessiontest.New(), restarter)
 		restarttest.Install(t, "9.9.9")
 
-		resp, conn := authenticatedCall(t, server.URL, "server.restart")
+		resp, conn := authenticatedCall(t, server.URL, "server.restart", nil)
 		if resp.Error != nil {
 			t.Fatalf("server.restart failed: %v", resp.Error)
 		}

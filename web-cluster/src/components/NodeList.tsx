@@ -1,12 +1,24 @@
-import { Spinner } from "@pockode/shared";
+import { restartRefusedReason, Spinner } from "@pockode/shared";
 import { useCallback, useEffect, useRef, useState } from "react";
+import {
+	installedOf,
+	useFreshRead,
+	useInstalledVersion,
+} from "../hooks/useInstalledVersion";
+import { isOlderNode, nodeVersionKind, olderNodeKey } from "../lib/version";
 import { useWSStore } from "../lib/wsStore";
 import type { NodeStatus, NodeWithStatus } from "../types/node";
 import { PRIMARY_BUTTON } from "./buttons";
 import { ClusterVersion } from "./ClusterVersion";
-import { NodeCard } from "./NodeCard";
+import { NodeCard, type RestartResult } from "./NodeCard";
 import { NodeForm } from "./NodeForm";
 import { ReconnectBanner } from "./ReconnectBanner";
+import { RestartOlderNodeSheet } from "./RestartOlderNodeSheet";
+import {
+	BATCH_THRESHOLD,
+	RestartOutdatedSheet,
+	RestartOutdatedStrip,
+} from "./RestartOutdated";
 
 /** Exported so the polling tests advance by the interval rather than by a
  * number that has to be kept in step with this one. */
@@ -21,10 +33,32 @@ export const POLL_INTERVAL_MS = 5000;
  * the headers — the summary chips they replace announced a stale node and then
  * left it to be hunted for in a flat list.
  */
-const SECTIONS: { status: NodeStatus; title: string; dot: string }[] = [
-	{ status: "stale", title: "Needs attention", dot: "bg-th-warning" },
-	{ status: "running", title: "Running", dot: "bg-th-success" },
-	{ status: "stopped", title: "Stopped", dot: "bg-th-text-muted" },
+// A restarting node stays in Running at its place: a restart is upkeep, does
+// not move `last_used_at`, and a batch must not shuffle the list it runs on.
+const SECTIONS: {
+	status: NodeStatus;
+	includes: NodeStatus[];
+	title: string;
+	dot: string;
+}[] = [
+	{
+		status: "stale",
+		includes: ["stale"],
+		title: "Needs attention",
+		dot: "bg-th-warning",
+	},
+	{
+		status: "running",
+		includes: ["running", "restarting"],
+		title: "Running",
+		dot: "bg-th-success",
+	},
+	{
+		status: "stopped",
+		includes: ["stopped"],
+		title: "Stopped",
+		dot: "bg-th-text-muted",
+	},
 ];
 
 /**
@@ -33,6 +67,32 @@ const SECTIONS: { status: NodeStatus; title: string; dot: string }[] = [
  * one failure is the kind of drift the user sees and nothing else does.
  */
 const CLEANUP_FAILED = "Could not clean up this node";
+/** Likewise a card's Restart and Restart all outdated. */
+const RESTART_FAILED = "Could not restart this node";
+
+/**
+ * Where a failed `node.restart` goes, per docs/restart-ui.md's refusal table:
+ * `done` is success (another device asked first), `older` turns the node into
+ * an older one, `card` is an error on its card (it stopped since the list was
+ * drawn), and `sheet` keeps the confirmation open with the message.
+ */
+function restartFailure(err: unknown): "done" | "older" | "card" | "sheet" {
+	switch (restartRefusedReason(err)) {
+		case "already_restarting":
+			return "done";
+		case "older_node":
+			return "older";
+		case "not_running":
+			return "card";
+		default:
+			return "sheet";
+	}
+}
+
+/** A restart's error is dismissed for that restart, not for the node. */
+function restartErrorKey(node: NodeWithStatus) {
+	return `${node.id} ${node.status.restart_requested_at ?? ""}`;
+}
 
 /**
  * Most recently used first, within a section.
@@ -70,17 +130,44 @@ export function NodeList() {
 	const [formOpen, setFormOpen] = useState(false);
 	const [editingNode, setEditingNode] = useState<NodeWithStatus | null>(null);
 	const [cleaningAll, setCleaningAll] = useState(false);
+	const installedState = useInstalledVersion();
+	// Starts whose `node.restart` was refused as `older_node`, by
+	// `olderNodeKey`: the page's memory, ending with the process it was about.
+	const [knownOlder, setKnownOlder] = useState<ReadonlySet<string>>(
+		() => new Set(),
+	);
+	const [dismissedRestartErrors, setDismissedRestartErrors] = useState<
+		ReadonlySet<string>
+	>(() => new Set());
+	const [olderSheet, setOlderSheet] = useState<{
+		id: string;
+		name: string;
+	} | null>(null);
+	const [batchOpen, setBatchOpen] = useState(false);
+	const [restartingAll, setRestartingAll] = useState(false);
+	// The nodes the last batch put an error on, for the strip's "couldn't
+	// restart" — counted while their cards still say why, not past that.
+	const [batchFailed, setBatchFailed] = useState<ReadonlySet<string>>(
+		() => new Set(),
+	);
+	const batchFresh = useFreshRead(installedState);
 	const [hidden, setHidden] = useState(() => document.hidden);
 	const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+	const lastFetchRef = useRef(0);
 
 	const fetchNodes = useCallback(async () => {
 		if (status !== "connected") return;
 
+		// Replies can arrive out of order — the cluster answers concurrently —
+		// and a poll sent before an action must not draw the node as it was.
+		const id = ++lastFetchRef.current;
 		try {
 			const result = await actions.listNodes();
+			if (id !== lastFetchRef.current) return;
 			setNodes(result);
 			setLoadError(null);
 		} catch (err) {
+			if (id !== lastFetchRef.current) return;
 			// A fetch the dropped socket took down with it is the reconnect's to
 			// report, and the banner does; the list the user was reading stays up,
 			// and the fetch reconnecting sets off replaces it.
@@ -231,14 +318,12 @@ export function NodeList() {
 			actions.startNode({ id, password }),
 		);
 
-	// The outcome is dropped rather than returned: only Start has something to
-	// do with it, and a card that cannot tell stop from cleanup success is a
-	// card that never had to.
-	const handleStop = async (id: string) => {
-		await runNodeAction(id, "Could not stop this node", () =>
+	// Resolves to whether it stopped, for the older node's stop-and-start;
+	// the card's own Stop has nothing to do with the outcome.
+	const handleStop = async (id: string) =>
+		runNodeAction(id, "Could not stop this node", () =>
 			actions.stopNode({ id }),
 		);
-	};
 
 	const handleCleanup = async (id: string) => {
 		await runNodeAction(id, CLEANUP_FAILED, () => actions.cleanupNode({ id }));
@@ -267,6 +352,126 @@ export function NodeList() {
 		} finally {
 			setCleaningAll(false);
 		}
+	};
+
+	const rememberOlder = (node: NodeWithStatus) =>
+		setKnownOlder((prev) => new Set(prev).add(olderNodeKey(node)));
+
+	const handleRestartOlder = (node: NodeWithStatus) =>
+		setOlderSheet({ id: node.id, name: node.name });
+
+	const handleRestart = async (
+		node: NodeWithStatus,
+	): Promise<RestartResult> => {
+		try {
+			await actions.restartNode({ id: node.id });
+			await fetchNodes();
+			clearNodeError(node.id);
+			return { kind: "closed" };
+		} catch (err) {
+			const failure = restartFailure(err);
+			await fetchNodes();
+			switch (failure) {
+				case "done":
+					clearNodeError(node.id);
+					return { kind: "closed" };
+				case "older":
+					rememberOlder(node);
+					return { kind: "older" };
+				case "card":
+					setNodeError(node.id, nodeActionError(RESTART_FAILED, err));
+					return { kind: "closed" };
+				case "sheet":
+					return {
+						kind: "refused",
+						message: getErrorMessage(err, "Unknown error"),
+					};
+			}
+		}
+	};
+
+	// The shape of Clean up all: in parallel, settled together, one fetch at
+	// the end, and each refusal on its own card — the nodes are independent,
+	// and a half-done batch that does not say which half is worse.
+	const handleRestartAll = async (targets: NodeWithStatus[]) => {
+		setRestartingAll(true);
+		setBatchFailed(new Set());
+		try {
+			const results = await Promise.allSettled(
+				targets.map((node) => actions.restartNode({ id: node.id })),
+			);
+			const failed = new Set<string>();
+			for (const [index, result] of results.entries()) {
+				const node = targets[index];
+				const failure =
+					result.status === "fulfilled"
+						? "done"
+						: restartFailure(result.reason);
+				if (failure === "done") {
+					clearNodeError(node.id);
+				} else if (failure === "older") {
+					rememberOlder(node);
+				} else if (result.status === "rejected") {
+					failed.add(node.id);
+					setNodeError(node.id, nodeActionError(RESTART_FAILED, result.reason));
+				}
+			}
+			setBatchFailed(failed);
+			await fetchNodes();
+		} finally {
+			setRestartingAll(false);
+			setBatchOpen(false);
+		}
+	};
+
+	const installed = installedOf(installedState);
+	const askableOutdated = nodes
+		.filter(
+			(node) => nodeVersionKind(node, installed, knownOlder) === "outdated",
+		)
+		.sort(byRecentlyUsed);
+	const olderOutdated = nodes
+		.filter((node) => nodeVersionKind(node, installed, knownOlder) === "older")
+		.sort(byRecentlyUsed);
+	// Over all nodes, not only the outdated: a `not_running` refusal is a node
+	// that has since stopped, and its card says why all the same.
+	const batchFailedCount = nodes.filter(
+		(node) => batchFailed.has(node.id) && node.id in nodeErrors,
+	).length;
+
+	// Nothing left to restart — the others restarted from another device, or
+	// the re-read found them current — leaves no question to ask. Not when the
+	// re-read could not compare at all: the sheet says so instead of vanishing.
+	const nothingToRestart =
+		installed?.version !== undefined && askableOutdated.length === 0;
+	useEffect(() => {
+		if (batchOpen && !restartingAll && nothingToRestart) setBatchOpen(false);
+	}, [batchOpen, restartingAll, nothingToRestart]);
+
+	const openBatch = () => {
+		batchFresh.begin();
+		setBatchOpen(true);
+	};
+
+	// A restart error comes from the cluster and outlives this page's errors;
+	// Dismiss hides it here for that restart, and the cluster clears it on the
+	// next action that succeeds.
+	const cardError = (node: NodeWithStatus) =>
+		nodeErrors[node.id] ??
+		(node.status.restart_error !== undefined &&
+		!dismissedRestartErrors.has(restartErrorKey(node))
+			? node.status.restart_error
+			: undefined);
+
+	const dismissCardError = (id: string) => {
+		const node = nodes.find((n) => n.id === id);
+		if (id in nodeErrors || node === undefined) {
+			clearNodeError(id);
+			return;
+		}
+		setDismissedRestartErrors((prev) =>
+			new Set(prev).add(restartErrorKey(node)),
+		);
 	};
 
 	if (loading && status === "connected") {
@@ -318,7 +523,9 @@ export function NodeList() {
 					</p>
 				</div>
 				<div className="flex items-center gap-2">
-					{version && <ClusterVersion running={version} />}
+					{version && (
+						<ClusterVersion running={version} installedState={installedState} />
+					)}
 					<button
 						type="button"
 						onClick={handleAdd}
@@ -398,61 +605,120 @@ export function NodeList() {
 							</button>
 						</div>
 					) : (
-						SECTIONS.map(({ status: sectionStatus, title, dot }) => {
-							const sectionNodes = nodes
-								.filter((node) => node.status.status === sectionStatus)
-								.sort(byRecentlyUsed);
-							// An empty section is not a fact worth a row of its own.
-							if (sectionNodes.length === 0) return null;
+						<>
+							{/* Kept while a batch's refusals are on their cards, even
+							    under the threshold: it is where the note saying so is. */}
+							{installed?.version !== undefined &&
+								(askableOutdated.length + olderOutdated.length >=
+									BATCH_THRESHOLD ||
+									batchFailedCount > 0) && (
+									<RestartOutdatedStrip
+										installed={installed.version}
+										askable={askableOutdated}
+										older={olderOutdated}
+										failedCount={batchFailedCount}
+										onOpen={openBatch}
+									/>
+								)}
+							{SECTIONS.map(
+								({ status: sectionStatus, includes, title, dot }) => {
+									const sectionNodes = nodes
+										.filter((node) => includes.includes(node.status.status))
+										.sort(byRecentlyUsed);
+									// An empty section is not a fact worth a row of its own.
+									if (sectionNodes.length === 0) return null;
 
-							return (
-								<section key={sectionStatus} className="mb-2">
-									<div className="sticky top-0 z-10 -mx-4 flex items-center gap-2 bg-th-bg-primary px-4 py-2">
-										<span
-											className={`size-2 shrink-0 rounded-full ${dot}`}
-											aria-hidden="true"
-										/>
-										<h2 className="text-sm font-medium text-th-text-primary">
-											{title}
-										</h2>
-										<span className="text-sm text-th-text-muted">
-											{sectionNodes.length}
-										</span>
-										{sectionStatus === "stale" && sectionNodes.length > 1 && (
-											<button
-												type="button"
-												onClick={() =>
-													handleCleanupAll(sectionNodes.map((node) => node.id))
-												}
-												disabled={cleaningAll}
-												className="touch-target ml-auto text-sm text-th-accent underline underline-offset-2 disabled:opacity-50 hover:opacity-80"
-											>
-												{cleaningAll ? "Cleaning up..." : "Clean up all"}
-											</button>
-										)}
-									</div>
+									return (
+										<section key={sectionStatus} className="mb-2">
+											<div className="sticky top-0 z-10 -mx-4 flex items-center gap-2 bg-th-bg-primary px-4 py-2">
+												<span
+													className={`size-2 shrink-0 rounded-full ${dot}`}
+													aria-hidden="true"
+												/>
+												<h2 className="text-sm font-medium text-th-text-primary">
+													{title}
+												</h2>
+												<span className="text-sm text-th-text-muted">
+													{sectionNodes.length}
+												</span>
+												{sectionStatus === "stale" &&
+													sectionNodes.length > 1 && (
+														<button
+															type="button"
+															onClick={() =>
+																handleCleanupAll(
+																	sectionNodes.map((node) => node.id),
+																)
+															}
+															disabled={cleaningAll}
+															className="touch-target ml-auto text-sm text-th-accent underline underline-offset-2 disabled:opacity-50 hover:opacity-80"
+														>
+															{cleaningAll ? "Cleaning up..." : "Clean up all"}
+														</button>
+													)}
+											</div>
 
-									<div className="grid gap-3 lg:grid-cols-2">
-										{sectionNodes.map((node) => (
-											<NodeCard
-												key={node.id}
-												node={node}
-												error={nodeErrors[node.id]}
-												onDismissError={clearNodeError}
-												onEdit={handleEdit}
-												onDelete={handleDelete}
-												onStart={handleStart}
-												onStop={handleStop}
-												onCleanup={handleCleanup}
-											/>
-										))}
-									</div>
-								</section>
-							);
-						})
+											<div className="grid gap-3 lg:grid-cols-2">
+												{sectionNodes.map((node) => (
+													<NodeCard
+														key={node.id}
+														node={node}
+														error={cardError(node)}
+														onDismissError={dismissCardError}
+														onEdit={handleEdit}
+														onDelete={handleDelete}
+														onStart={handleStart}
+														onStop={handleStop}
+														onCleanup={handleCleanup}
+														installedState={installedState}
+														versionKind={nodeVersionKind(
+															node,
+															installed,
+															knownOlder,
+														)}
+														older={isOlderNode(node, knownOlder)}
+														onRestart={handleRestart}
+														onRestartOlder={handleRestartOlder}
+													/>
+												))}
+											</div>
+										</section>
+									);
+								},
+							)}
+						</>
 					)}
 				</div>
 			</div>
+
+			{/* Held here rather than in a card: both outlive the cards they act
+			    on moving between sections, or dropping out of the strip's count. */}
+			{olderSheet && (
+				<RestartOlderNodeSheet
+					key={olderSheet.id}
+					nodeId={olderSheet.id}
+					nodeName={olderSheet.name}
+					status={nodes.find((n) => n.id === olderSheet.id)?.status.status}
+					error={nodeErrors[olderSheet.id]}
+					onStop={handleStop}
+					onStart={handleStart}
+					onClose={() => setOlderSheet(null)}
+				/>
+			)}
+
+			{batchOpen && (
+				<RestartOutdatedSheet
+					installed={installed?.version ?? null}
+					askable={askableOutdated}
+					older={olderOutdated}
+					reading={batchFresh.reading}
+					loading={restartingAll}
+					onConfirm={() => void handleRestartAll(askableOutdated)}
+					onClose={() => {
+						if (!restartingAll) setBatchOpen(false);
+					}}
+				/>
+			)}
 
 			<NodeForm
 				isOpen={formOpen}

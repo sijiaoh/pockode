@@ -2009,8 +2009,9 @@ type ClusterVersionResult struct {
 	Installed InstalledVersion `json:"installed"`
 }
 
-// CodeRestartRefused answers a server.restart that changed nothing;
-// RestartRefusedData says why. The message is written to be shown as it is.
+// CodeRestartRefused answers a server.restart, or a cluster's node.restart,
+// that changed nothing; RestartRefusedData says why. The message is written to
+// be shown as it is.
 const CodeRestartRefused = -32011
 
 // Reasons of a CodeRestartRefused error.
@@ -2018,6 +2019,8 @@ const (
 	// RestartRefusedNotRunnable is an installed executable that does not run
 	// (server.version reports the same error), or a working directory the
 	// process started in that has since been removed. The process carries on.
+	// For node.restart, the cluster's own check of the executable it starts
+	// nodes from.
 	RestartRefusedNotRunnable = "not_runnable"
 	// RestartRefusedAlreadyRestarting is a restart already under way, asked
 	// for elsewhere: another client, or SIGUSR1. The connection is about to
@@ -2025,6 +2028,14 @@ const (
 	RestartRefusedAlreadyRestarting = "already_restarting"
 	// RestartRefusedShuttingDown is a process already shutting down to exit.
 	RestartRefusedShuttingDown = "shutting_down"
+	// RestartRefusedOlderNode is a node.restart of a node that cannot be
+	// asked: started by a build that predates restarts (no version in its
+	// server.json), or on Windows one without a restart event. Only stopping
+	// and starting it again brings it up to date.
+	RestartRefusedOlderNode = "older_node"
+	// RestartRefusedNotRunning is a node.restart of a node that is not
+	// running: stopped, or stale.
+	RestartRefusedNotRunning = "not_running"
 )
 
 // RestartRefusedData is the data member of a CodeRestartRefused error.

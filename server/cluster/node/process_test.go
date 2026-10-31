@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pockode/server/internal/restarttest"
 	"github.com/pockode/server/internal/shutdown"
 	"github.com/pockode/server/internal/termtest"
 	"github.com/pockode/server/serverinfo"
@@ -84,6 +85,7 @@ func TestGetNodeStatus_Running(t *testing.T) {
 		StartedAt: "2025-06-14T10:00:00Z",
 		LocalURL:  "http://localhost:9870",
 		RemoteURL: "https://example.com",
+		Version:   "1.2.3",
 	})
 
 	node := Node{
@@ -111,6 +113,9 @@ func TestGetNodeStatus_Running(t *testing.T) {
 	if status.RemoteURL == nil || *status.RemoteURL != "https://example.com" {
 		t.Errorf("status.RemoteURL = %v, want https://example.com", status.RemoteURL)
 	}
+	if status.Version == nil || *status.Version != "1.2.3" {
+		t.Errorf("status.Version = %v, want 1.2.3", status.Version)
+	}
 }
 
 func TestGetNodeStatus_Running_EmptyURLs(t *testing.T) {
@@ -137,6 +142,9 @@ func TestGetNodeStatus_Running_EmptyURLs(t *testing.T) {
 	}
 	if status.RemoteURL != nil {
 		t.Errorf("status.RemoteURL = %v, want nil for empty URL", status.RemoteURL)
+	}
+	if status.Version != nil {
+		t.Errorf("status.Version = %v, want nil for a node that predates the field", status.Version)
 	}
 }
 
@@ -341,6 +349,12 @@ const (
 	// when asked, like helperListens.
 	helperWritesServerInfo = "writes-server-info"
 
+	// helperRestarts waits for a restart request and records that it arrived
+	// in the file named by helperRestartedEnv, then exits — the part of a
+	// node's restart Restart is responsible for.
+	helperRestarts     = "restarts"
+	helperRestartedEnv = "POCKODE_TEST_NODE_HELPER_RESTARTED"
+
 	// helperDataDirEnv names the data directory helperWritesServerInfo writes
 	// its server.json into.
 	helperDataDirEnv = "POCKODE_TEST_NODE_HELPER_DATA_DIR"
@@ -363,7 +377,9 @@ var platformHelperModes = map[string]func(){}
 func TestMain(m *testing.M) {
 	mode := os.Getenv(helperEnv)
 	if mode == "" {
-		os.Exit(m.Run())
+		// The test binary also stands in for the installed executable that
+		// Restart checks before it asks a node (see restarttest).
+		restarttest.Main(m)
 	}
 
 	l := shutdown.Listen()
@@ -381,12 +397,21 @@ func TestMain(m *testing.M) {
 		// The report was the whole job.
 	case helperWritesServerInfo:
 		time.Sleep(serverInfoDelay)
-		if err := serverinfo.Write(os.Getenv(helperDataDirEnv), 9871, "http://localhost:9871", "", ""); err != nil {
+		if err := serverinfo.Write(os.Getenv(helperDataDirEnv), "1.2.3", 9871, "http://localhost:9871", "", ""); err != nil {
 			panic(err)
 		}
 		// Then behave like helperListens, so the test can stop it the way the
 		// cluster stops a node instead of leaving it to the backstop.
 		select {
+		case <-l.Done():
+		case <-time.After(helperLifetime):
+		}
+	case helperRestarts:
+		select {
+		case <-l.Restarts():
+			if err := os.WriteFile(os.Getenv(helperRestartedEnv), nil, 0600); err != nil {
+				panic(err)
+			}
 		case <-l.Done():
 		case <-time.After(helperLifetime):
 		}

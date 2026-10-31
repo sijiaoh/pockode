@@ -102,7 +102,7 @@ Windows 与 darwin/linux 一样是发布目标（产物见 [docs/platforms.md](.
 | `internal/pathutil/pathutil.go` | `equal_{unix,windows}.go` — Windows 路径比较大小写不敏感 |
 | `internal/fsperm/fsperm.go` | `fsperm_{unix,windows}.go` — 0700/0600 mode 位 / 显式 DACL |
 | `cluster/node/process.go` | `process_{unix,windows}.go` — 与终端脱钩（`Setsid` / `CREATE_NO_WINDOW`）、优雅关闭与强杀的等待方式 |
-| `internal/shutdown/shutdown.go` | `request_{unix,windows}.go` — SIGTERM / 命名事件；重启请求 SIGUSR1（Windows 无） |
+| `internal/shutdown/shutdown.go` | `request_{unix,windows}.go` — 退出请求 SIGTERM / 命名事件 `pockode-shutdown-<pid>`；重启请求 SIGUSR1 / 命名事件 `pockode-restart-<pid>`（`RequestRestart`，Windows 上事件不存在即 `ErrRestartUnsupported`） |
 | `internal/restart/restart.go` | `replace_{unix,windows}.go` — 自我重启：原地 exec（PID、终端、session 不变）/ 后继进程（前台终端里等它并沿用退出码，否则直接退出）；探测版本的子进程在 Windows 上加 `CREATE_NO_WINDOW` |
 | `filetransfer/folder.go` | `folder_{unix,windows}.go` — 文件夹上传 merge 覆盖文件、文件夹下载读取文件时以非阻塞方式打开（防止换成 fifo 后卡死；Windows 工作目录里没有 fifo）、识别文件系统自己拒绝的名字（unix 的 `ENAMETOOLONG` / `EINVAL` / `EILSEQ`，Windows 的 `ERROR_INVALID_NAME` / `ERROR_FILENAME_EXCED_RANGE`）|
 | `contents/within.go`、`filetransfer/raw.go` | `contents/realname_{unix,windows}.go`（`contents.ResolvedName`）— `contents.OpenDirWithin` 要求跟随链接后的真实路径仍在工作目录内（`file.move` 的两个目录、文件夹上传的目标目录与文件夹下载的文件夹）；根 capability（`scope: "root"`）拒绝敏感名单（任意层级的 `.git`、`.env`、`.env.*`、`.envrc`、`.envrc.*`，所有平台都不区分大小写）、数据目录和其他 worktree 时也看它：unix 上 `EvalSymlinks` 跟完所有链接再核对与打开的是同一个文件；Windows 取句柄的最终长名，8.3 短名（`ENV~1`）是 `.env` 的另一种写法 |
@@ -235,7 +235,8 @@ if err := json.Unmarshal(data, &parsed); err != nil {
   "port": 9870,
   "started_at": "2025-05-31T10:00:00Z",
   "local_url": "http://localhost:9870",
-  "token": "<random hex>"
+  "token": "<random hex>",
+  "version": "0.21.0"
 }
 ```
 
@@ -247,6 +248,7 @@ if err := json.Unmarshal(data, &parsed); err != nil {
 | `local_url` | string | 本地访问 URL（可选） |
 | `remote_url` | string | Relay 远程访问 URL（可选） |
 | `token` | string | 本地 API（MCP）认证 token，每次启动随机生成，区别于用户的 `--password`，不写入磁盘外的任何位置 |
+| `version` | string | 正在运行的版本（与 `--version` 输出去掉 `pockode ` 前缀后相同，集群直接与已装版本做字符串比较）。缺失 = 早于该字段的旧版本，它也不认识重启请求（见 [docs/cluster.md](../docs/cluster.md#restarting-and-upgrading)） |
 
 生命周期：启动时写入 → 运行期间保持 → 优雅关闭时删除（unix 上的自我重启例外：PID 不变，文件保留到新程序重写，免得集群在这段时间里把节点看成已停止、再起一个）。另一个例外是 `remote_url`：relay 凭据更新导致远程 URL 变化时，文件会被重写，只换 `remote_url`，其余字段（包括 `started_at`）不变；relay 永久停止时该字段被移除（原因见 [relay-system.md](../docs/code/relay-system.md#when-the-remote-url-changes)）。读取方需要最新 URL 时应每次现读，不要缓存。
 

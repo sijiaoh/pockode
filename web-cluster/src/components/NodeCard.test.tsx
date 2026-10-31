@@ -1,6 +1,7 @@
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { InstalledVersionState } from "../hooks/useInstalledVersion";
 import type { NodeStatus, NodeWithStatus } from "../types/node";
 import { NodeCard } from "./NodeCard";
 
@@ -19,6 +20,26 @@ function makeNode(
 	};
 }
 
+/**
+ * The list's installed read, already landed: a refresh resolves at once, so
+ * nothing waits on one. A null `version` is a file that did not run.
+ */
+function installedState(
+	version: string | null = "0.17.0",
+): InstalledVersionState {
+	return {
+		read: {
+			kind: "read",
+			installed: {
+				path: "/usr/local/bin/pockode",
+				version: version ?? undefined,
+			},
+		},
+		landed: 0,
+		refresh: () => 0,
+	};
+}
+
 function renderCard(
 	node: NodeWithStatus,
 	props: Partial<Parameters<typeof NodeCard>[0]> = {},
@@ -30,8 +51,19 @@ function renderCard(
 		onStart: vi.fn().mockResolvedValue(true),
 		onStop: vi.fn().mockResolvedValue(undefined),
 		onCleanup: vi.fn().mockResolvedValue(undefined),
+		onRestart: vi.fn().mockResolvedValue({ kind: "closed" }),
+		onRestartOlder: vi.fn(),
 	};
-	render(<NodeCard node={node} {...handlers} {...props} />);
+	render(
+		<NodeCard
+			node={node}
+			installedState={installedState()}
+			versionKind={null}
+			older={false}
+			{...handlers}
+			{...props}
+		/>,
+	);
 	return handlers;
 }
 
@@ -376,5 +408,173 @@ describe("NodeCard: leaving a confirmation", () => {
 		await user.click(screen.getByRole("button", { name: "Cancel" }));
 
 		expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+	});
+});
+
+describe("NodeCard: Restart", () => {
+	const running = (version: string | undefined = "0.16.0") =>
+		makeNode("running", { local_url: "http://localhost:9870", version });
+
+	async function openFromMenu(user: ReturnType<typeof userEvent.setup>) {
+		await openMenu(user);
+		await user.click(screen.getByRole("button", { name: "Restart" }));
+		return screen.findByRole("dialog", { name: "Restart my-app?" });
+	}
+
+	it("is in the menu of a current node too, first", async () => {
+		const user = userEvent.setup();
+		renderCard(running("0.17.0"));
+
+		await openMenu(user);
+		const items = within(screen.getByRole("dialog")).getAllByRole("button");
+		expect(items.map((b) => b.textContent)).toEqual(
+			expect.arrayContaining(["Restart", "Stop"]),
+		);
+		expect(items.findIndex((b) => b.textContent === "Restart")).toBeLessThan(
+			items.findIndex((b) => b.textContent === "Stop"),
+		);
+	});
+
+	it("is withheld from the menu when the installed file does not run", async () => {
+		const user = userEvent.setup();
+		renderCard(running(), { installedState: installedState(null) });
+
+		await openMenu(user);
+		expect(
+			within(screen.getByRole("dialog")).queryByRole("button", {
+				name: "Restart",
+			}),
+		).not.toBeInTheDocument();
+	});
+
+	it.each([
+		["0.16.0", "0.17.0", "comes back running 0.17.0 (now 0.16.0)"],
+		[
+			"0.17.0",
+			"0.17.0",
+			"restarts with the same version, password and options",
+		],
+		["dev", "0.17.0", "restarts with the same password and options"],
+		["0.16.0", undefined, "restarts into the installed version"],
+	])("says what happens: running %s, installed %s", async (version, target, copy) => {
+		const user = userEvent.setup();
+		renderCard(running(version), {
+			installedState:
+				target === undefined
+					? {
+							read: { kind: "failed", message: "x" },
+							landed: 0,
+							refresh: () => 0,
+						}
+					: installedState(target),
+		});
+
+		const sheet = await openFromMenu(user);
+		expect(sheet).toHaveTextContent(copy);
+		expect(sheet).toHaveTextContent(
+			"Any AI turn running in it is stopped — its session and history are kept",
+		);
+	});
+
+	it("goes Back to the menu it came from", async () => {
+		const user = userEvent.setup();
+		renderCard(running());
+
+		const sheet = await openFromMenu(user);
+		await user.click(within(sheet).getByRole("button", { name: "Back" }));
+		expect(
+			await screen.findByRole("dialog", { name: "my-app" }),
+		).toBeInTheDocument();
+	});
+
+	it("waits for the installed read it started before it can be confirmed", async () => {
+		const user = userEvent.setup();
+		renderCard(running(), {
+			installedState: { ...installedState(), refresh: () => 1 },
+		});
+
+		const sheet = await openFromMenu(user);
+		expect(
+			within(sheet).getByRole("button", { name: "Restart" }),
+		).toBeDisabled();
+	});
+
+	it("closes when another device restarts the node first", async () => {
+		const user = userEvent.setup();
+		const props = {
+			onDismissError: vi.fn(),
+			onEdit: vi.fn(),
+			onDelete: vi.fn(),
+			onStart: vi.fn(),
+			onStop: vi.fn(),
+			onCleanup: vi.fn(),
+			onRestart: vi.fn(),
+			onRestartOlder: vi.fn(),
+			installedState: installedState(),
+			versionKind: "outdated" as const,
+			older: false,
+		};
+		const { rerender } = render(<NodeCard node={running()} {...props} />);
+		await user.click(screen.getByRole("button", { name: "Restart" }));
+		expect(await screen.findByRole("dialog")).toBeInTheDocument();
+
+		rerender(
+			<NodeCard
+				node={makeNode("restarting", {
+					restart_requested_at: new Date().toISOString(),
+				})}
+				{...props}
+				versionKind={null}
+			/>,
+		);
+		await waitFor(() =>
+			expect(screen.queryByRole("dialog")).not.toBeInTheDocument(),
+		);
+	});
+
+	it("hands an older node to its stop-and-start sheet", async () => {
+		const user = userEvent.setup();
+		const handlers = renderCard(running(undefined), {
+			versionKind: "older",
+			older: true,
+		});
+
+		await user.click(screen.getByRole("button", { name: "Restart" }));
+		expect(handlers.onRestartOlder).toHaveBeenCalled();
+		expect(handlers.onRestart).not.toHaveBeenCalled();
+		expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+	});
+});
+
+describe("NodeCard: while restarting", () => {
+	const restarting = () =>
+		makeNode("restarting", {
+			restart_requested_at: new Date(Date.now() - 12_000).toISOString(),
+		});
+
+	it("offers no Open and no Start, and counts the wait", () => {
+		renderCard(restarting());
+
+		expect(
+			screen.getByText("Restarting", { selector: ".sr-only" }),
+		).toBeInTheDocument();
+		expect(screen.getByText(/Restarting\.\.\. 0:1\d/)).toBeInTheDocument();
+		expect(
+			screen.getByRole("button", { name: "Restarting..." }),
+		).toBeDisabled();
+		expect(
+			screen.queryByRole("link", { name: "Open" }),
+		).not.toBeInTheDocument();
+		expect(
+			screen.queryByRole("button", { name: "Start" }),
+		).not.toBeInTheDocument();
+	});
+
+	it("disables the menu", () => {
+		renderCard(restarting());
+
+		expect(
+			screen.getByRole("button", { name: "More options for my-app" }),
+		).toBeDisabled();
 	});
 });

@@ -101,6 +101,12 @@ cluster" as its subject:
 | `already_restarting` | A restart was accepted already — another client, `kill -USR1` | "Pockode is already restarting." The connection drops for it shortly |
 | `shutting_down` | The process is shutting down to exit | "Pockode is shutting down." |
 
+A cluster's `node.restart` refuses with the same code, and `not_runnable` and
+`already_restarting` mean the same of the node; it adds `older_node` and
+`not_running` ([cluster.md](../cluster.md#restarting-from-the-cluster)).
+`@pockode/shared`'s `restartRefusedReason` reads all five, so the code is known
+in one place on each side.
+
 **A success reaches the client before the process starts going down.** The
 shutdown begins by stopping the relay, so a reply that has merely been written
 to the socket may still be in the tunnel when it is torn down, and a client

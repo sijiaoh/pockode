@@ -9,7 +9,14 @@ const wsState = {
 	errorMessage: null as string | null,
 	version: null as string | null,
 	authRetryAt: null as number | null,
-	actions: { connect: vi.fn(), disconnect: vi.fn(), listNodes: vi.fn() },
+	actions: {
+		connect: vi.fn(),
+		disconnect: vi.fn(),
+		listNodes: vi.fn(),
+		// The node list reads the installed version on connect; nothing here is
+		// about it.
+		serverVersion: vi.fn(() => new Promise(() => {})),
+	},
 };
 const authState = {
 	sessionToken: null as string | null,

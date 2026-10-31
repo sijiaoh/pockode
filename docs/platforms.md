@@ -335,8 +335,11 @@ going back to a terminal:
 
 - **From the app**: Settings → Pockode shows the running version beside the
   installed one and offers **Restart**. In cluster mode the version button in
-  the panel's header does the same for the cluster manager, and each node has
-  its own Settings → Pockode. What the screens say is
+  the panel's header does the same for the cluster manager, and the panel
+  restarts the nodes — each from its card, or every outdated one at once —
+  without their passwords; a node started by a build from before that is
+  stopped and started once instead, with its password. Each node still has its
+  own Settings → Pockode too. What the screens say is
   [restart-ui.md](restart-ui.md).
 - **On macOS and Linux**: `kill -USR1 <pid>`. A server's PID is the `pid` in
   its project's `.pockode/server.json`; a cluster manager writes no such file,

@@ -14,7 +14,7 @@ The screens are [restart-ui.md](../restart-ui.md); the wire contract of
 | Piece | Where |
 |---|---|
 | The program, the probe, the decision, the replacement | `server/internal/restart/` (`replace_unix.go`, `replace_windows.go`) |
-| SIGUSR1, and holding interrupts on Windows | `server/internal/shutdown/` |
+| SIGUSR1 and the Windows restart event, both ends; holding interrupts on Windows | `server/internal/shutdown/` |
 | The password across the boundary | `server/password/` — `WithEnv`, `ClearFlags` |
 | The RPCs, shared by both modes | `server/ws/rpc_server.go` — `ServerControl` |
 | Closing WebSockets on shutdown | `server/ws/connections.go` |
@@ -33,8 +33,12 @@ Two things ask for one:
 
 - **The UI** — `server.restart`, from Settings → Pockode in `web` or the
   cluster panel's header ([restart-ui.md](../restart-ui.md)).
-- **`kill -USR1 <pid>`** on unix, for a script or a person at a terminal. A
-  server's PID is in its `server.json`; a cluster manager publishes none. Windows has no such signal; there the UI is the way.
+- **Another process**, through `shutdown.RequestRestart(pid)`: SIGUSR1 on
+  unix — so `kill -USR1 <pid>` from a script or a person at a terminal — and
+  on Windows the named event `Local\pockode-restart-<pid>`, which only a
+  program can signal. A server's PID is in its `server.json`; a cluster
+  manager publishes none. A cluster asks its nodes this way, with `node.restart`
+  ([cluster.md](../cluster.md#restarting-from-the-cluster)).
 
 Both go through `Restarter.Request` (the RPC through `RequestHeld`, below), so
 both are checked the same way and refused the same way.
@@ -130,6 +134,17 @@ CLIs are Node programs, for which SIGUSR1 means something. The moment between
 `exec` and that call — runtime start-up and flag parsing — is still uncovered;
 nothing in the process runs early enough to cover it.
 
+On Windows the same call publishes the restart event, and requests that come
+through it are routed exactly as signals are: held until the first `Listen`,
+dropped once the shutdown has started. The event is auto-reset, unlike the
+shutdown event: a refused restart leaves the process running, and the next
+request has to be seen as a new one. A process that has not published it — a
+build that predates restarts, or one between start-up and
+`HoldRestartRequests` — is reported to the caller as `ErrRestartUnsupported`;
+unix cannot tell, since a signal reaches a process whether or not it is
+caught, so a caller that must not terminate an old build checks the `version`
+in its `server.json` first, which every build that catches the signal writes.
+
 A second SIGUSR1 cannot cut a shutdown short. A second Ctrl+C still can: the
 default handling is restored once the shutdown begins, for a shutdown that is
 taking too long.
@@ -204,7 +219,8 @@ Go opens every file close-on-exec, so nothing else crosses over.
 
 `server.json` is therefore **kept** across a unix restart instead of being
 deleted and rewritten: it still names the right PID, and the new program
-rewrites it on start (with a new `token` and `started_at`). Deleted, a cluster
+rewrites it on start (with a new `token`, `started_at` and `version` — the
+new program's). Deleted, a cluster
 would see the node *stopped* for the moment in between, and a Start pressed then
 would put a second server on the same project.
 
@@ -220,9 +236,12 @@ serving at their own addresses.
 ### Windows: a successor
 
 Windows has no exec, so the new program is started as a child and the PID
-changes. The successor publishes its own `server.json`; the old one is deleted
-on shutdown as for an exit, so a cluster sees the node *stopped* for the moment
-between — the gap unix avoids.
+changes. The successor publishes its own `server.json`, with its own PID and
+version; the old one is deleted on shutdown as for an exit — before the
+successor starts, so the successor's file is never the one deleted — so the
+files say the node is *stopped* for the moment between, the gap unix avoids. A
+cluster that asked for the restart reports it *restarting* through the gap and
+refuses to start it there ([cluster.md](../cluster.md#restarting-from-the-cluster)).
 
 What the old process does next depends on whether someone is waiting on it,
 which is decided by whether its standard input is a console:

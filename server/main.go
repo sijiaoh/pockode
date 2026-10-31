@@ -529,7 +529,7 @@ Flags:
 	}
 	// Both assigned before the relay starts, so the reconnect loop that calls
 	// OnRemoteURLChange never sees them unset.
-	serverInfo = serverinfo.NewPublisher(dataDir, port, localURL, mcpToken, remoteURL)
+	serverInfo = serverinfo.NewPublisher(dataDir, version, port, localURL, mcpToken, remoteURL)
 	wsHandler = ws.NewRPCHandler(cred.Password, passwordGuard, sessions, version, remoteURL, previewTickets, rawHandler, devMode, commandStore, worktreeManager, settingsStore, workStore, workOps, workEngine, agentRoleStore, scheduleStore, scheduler, cliAuth, cliUpdate, restarter)
 
 	if relayManager != nil {
