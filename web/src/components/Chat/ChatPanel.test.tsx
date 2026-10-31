@@ -153,6 +153,10 @@ const mockState = vi.hoisted(() => ({
 		(): Promise<GitStatus> => Promise.resolve({ staged: [], unstaged: [] }),
 	),
 	forkSession: vi.fn(),
+	forkSessionAtCanvasRevision: vi.fn(),
+	// The history view's reads (docs/canvas-ui.md §13.5).
+	canvasHistory: vi.fn(),
+	canvasSnapshot: vi.fn(),
 	// The read-only pair: one session's metadata and one page of its transcript,
 	// out of a worktree the connection is not bound to.
 	sessionViewGet: vi.fn(),
@@ -197,6 +201,9 @@ vi.mock("../../lib/wsStore", () => {
 		startWork: mockState.startWork,
 		getStatus: mockState.getStatus,
 		forkSession: mockState.forkSession,
+		forkSessionAtCanvasRevision: mockState.forkSessionAtCanvasRevision,
+		canvasHistory: mockState.canvasHistory,
+		canvasSnapshot: mockState.canvasSnapshot,
 		listAgents: mockState.listAgents,
 		sessionViewGet: mockState.sessionViewGet,
 		sessionViewHistory: mockState.sessionViewHistory,
@@ -372,6 +379,7 @@ describe("ChatPanel", () => {
 		);
 		mockState.chatMessagesUnsubscribe.mockResolvedValue(undefined);
 		mockState.forkSession.mockReset();
+		mockState.forkSessionAtCanvasRevision.mockReset();
 		mockState.isInvalidParamsRejection.mockReturnValue(false);
 		mockState.sessionViewGet.mockResolvedValue(
 			makeSessionDetail({ id: "test-session", title: "Old Chat" }),
@@ -2350,6 +2358,105 @@ describe("ChatPanel", () => {
 				{ width: 390, height: 600 },
 			);
 			expect(screen.queryByRole("textbox")).toBeNull();
+		});
+
+		// The view and the fork sheet replace one another (§15.6).
+		describe("forking from a page of its history", () => {
+			const openForkFromHistory = async (
+				user: ReturnType<typeof userEvent.setup>,
+				onSelectSession = vi.fn(),
+			) => {
+				subscribeWithCanvas({
+					revision: 2,
+					html: "<p>two</p>",
+					change: { kind: "render" },
+				});
+				mockState.canvasHistory.mockResolvedValue([
+					{ revision: 2, change_kind: "update", drawn_at: "", bytes: 1 },
+					{ revision: 1, change_kind: "render", drawn_at: "", bytes: 1 },
+				]);
+				mockState.canvasSnapshot.mockImplementation(
+					async (_: string, revision: number) => ({
+						revision,
+						html: `<p>${revision}</p>`,
+						change: { kind: "render" },
+					}),
+				);
+				render(
+					<ChatPanel {...defaultProps} onSelectSession={onSelectSession} />,
+				);
+				await screen.findByTitle("Canvas");
+
+				await user.click(screen.getByRole("button", { name: /^Session:/ }));
+				await user.click(screen.getByRole("button", { name: /^History/ }));
+				await screen.findByTitle("Canvas revision 1");
+				const fork = screen.getByRole("button", { name: "Fork" });
+				await waitFor(() =>
+					expect(fork).toHaveAttribute("aria-disabled", "false"),
+				);
+				await user.click(fork);
+				return within(
+					await screen.findByRole("dialog", { name: "Fork session" }),
+				);
+			};
+
+			it("goes back to the page on Cancel, and nowhere on ✕", async () => {
+				const user = userEvent.setup();
+				const sheet = await openForkFromHistory(user);
+				expect(sheet.getByText("Canvas · revision 1 · drawn")).toBeVisible();
+				expect(screen.queryByTitle("Canvas revision 1")).toBeNull();
+
+				await user.click(sheet.getByRole("button", { name: "Cancel" }));
+				expect(await screen.findByTitle("Canvas revision 1")).toBeVisible();
+
+				await user.click(screen.getByRole("button", { name: "Fork" }));
+				const again = within(
+					await screen.findByRole("dialog", { name: "Fork session" }),
+				);
+				await user.click(again.getByRole("button", { name: "Close" }));
+				await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+			});
+
+			it("forks at the page and opens the new session", async () => {
+				const user = userEvent.setup();
+				mockState.forkSessionAtCanvasRevision.mockResolvedValue(
+					makeSessionListItem({
+						id: "forked-session",
+						title: "Test Chat (fork)",
+						canvas: true,
+					}),
+				);
+				const onSelectSession = vi.fn();
+				const sheet = await openForkFromHistory(user, onSelectSession);
+				await user.click(sheet.getByRole("button", { name: "Fork" }));
+
+				await waitFor(() =>
+					expect(mockState.forkSessionAtCanvasRevision).toHaveBeenCalledWith(
+						"test-session",
+						1,
+						"Test Chat (fork)",
+					),
+				);
+				await waitFor(() =>
+					expect(onSelectSession).toHaveBeenCalledWith("forked-session"),
+				);
+				expect(screen.queryByRole("dialog")).toBeNull();
+			});
+
+			// A refusal that reaches the sheet anyway — the list was read before
+			// the session changed — is shown there (§15.6).
+			it("shows the server's refusal in the fork sheet", async () => {
+				const user = userEvent.setup();
+				const refusal =
+					"revision 1 has no recorded result in this session's history, so there is no point to fork at";
+				mockState.forkSessionAtCanvasRevision.mockRejectedValue(
+					new Error(refusal),
+				);
+				const sheet = await openForkFromHistory(user);
+				await user.click(sheet.getByRole("button", { name: "Fork" }));
+
+				expect(await sheet.findByRole("alert")).toHaveTextContent(refusal);
+			});
 		});
 
 		it("opens the next session on its canvas", async () => {

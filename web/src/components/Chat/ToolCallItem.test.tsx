@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useDiffSettingsStore } from "../../lib/diffSettingsStore";
 import type { ContentPart, ToolRun } from "../../types/message";
+import { CanvasShowContext } from "./canvasShowContext";
 import ToolCallItem from "./ToolCallItem";
 import { PartBlocks } from "./ToolList";
 import { TranscriptViewContext } from "./transcriptViewContext";
@@ -1112,6 +1113,43 @@ describe("ToolCallItem", () => {
 			expect(row).toHaveTextContent("Updated the canvas");
 			expect(row).toHaveTextContent("results");
 			expect(row).toHaveTextContent("rev 8");
+		});
+
+		describe("Show", () => {
+			const drew = run({
+				name: "mcp__pockode__canvas_render",
+				input: { html: "<p>x</p>" },
+				status: "success",
+				result: "Canvas revision 8 · drawn for 390×664.",
+				canvasRevision: 8,
+			});
+
+			it("opens the history view on the revision the call drew", async () => {
+				const user = userEvent.setup();
+				const show = vi.fn();
+				render(
+					<CanvasShowContext.Provider value={show}>
+						<ToolCallItem run={drew} sessionId="session-1" />
+					</CanvasShowContext.Provider>,
+				);
+
+				await user.click(screen.getByRole("button", { expanded: false }));
+				await user.click(
+					screen.getByRole("button", { name: "Show revision 8" }),
+				);
+				expect(show).toHaveBeenCalledWith(8);
+			});
+
+			// A session read out of another worktree has no canvas reads (§13.5).
+			it("is not offered where the canvas cannot be read", async () => {
+				const user = userEvent.setup();
+				render(<ToolCallItem run={drew} sessionId="session-1" />);
+
+				await user.click(screen.getByRole("button", { expanded: false }));
+				expect(
+					screen.queryByRole("button", { name: /^Show revision/ }),
+				).toBeNull();
+			});
 		});
 
 		it("does not say it drew while it is still drawing", () => {

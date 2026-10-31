@@ -1,3 +1,4 @@
+import { History } from "lucide-react";
 import { memo, useMemo } from "react";
 import {
 	contentBlockFiles,
@@ -19,6 +20,7 @@ import type { ToolRun } from "../../types/message";
 import { omittedLabel } from "../../utils/attachment";
 import { CollapsibleBody, useEverExpanded } from "../ui";
 import AttachmentStrip from "./AttachmentStrip";
+import { useCanvasShow } from "./canvasShowContext";
 import { proposedChangeHeader } from "./ProposedChange";
 import { useRowExpanded } from "./rowExpansionContext";
 import { PathLine, ToolInvocation } from "./ToolInvocation";
@@ -74,6 +76,26 @@ function ReferenceLine({
 	);
 }
 
+function ShowCanvasButton({
+	revision,
+	onShow,
+}: {
+	revision: number;
+	onShow: (revision: number) => void;
+}) {
+	return (
+		<button
+			type="button"
+			onClick={() => onShow(revision)}
+			aria-label={`Show revision ${revision}`}
+			className="inline-flex min-h-9 items-center gap-1.5 rounded-md border border-th-border px-3 text-th-text-primary hover:bg-th-bg-tertiary focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent pointer-coarse:min-h-11"
+		>
+			<History className="size-3.5" aria-hidden="true" />
+			Show
+		</button>
+	);
+}
+
 /**
  * One tool call, as a row that opens into everything the row could not say.
  *
@@ -86,6 +108,7 @@ const ToolCallItem = memo(function ToolCallItem({
 	onOpenFile,
 }: Props) {
 	const [expanded, setExpanded] = useRowExpanded();
+	const showCanvas = useCanvasShow();
 	const workDir = useWSStore((state) => state.workDir);
 	const summary = useMemo(
 		() =>
@@ -336,6 +359,15 @@ const ToolCallItem = memo(function ToolCallItem({
 				    opened, so the pretty-printing and the highlighting below are
 				    already paid for only once somebody asks. */}
 				<div className="space-y-3 border-t border-th-border bg-th-bg-secondary p-2">
+					{/* Opens the history view over the transcript rather than
+					    switching to canvas view, so closing it puts the reader
+					    back here (docs/canvas-ui.md §12). */}
+					{showCanvas && run.canvasRevision !== undefined && (
+						<ShowCanvasButton
+							revision={run.canvasRevision}
+							onShow={showCanvas}
+						/>
+					)}
 					{layout.resultFirst ? (
 						<>
 							{outcome}

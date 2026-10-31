@@ -1268,6 +1268,40 @@ describe("useChatMessages", () => {
 			expect(state.messages).toEqual([]);
 		});
 
+		// What may clear a history entry's `pending`, which nothing pushes
+		// (docs/canvas-ui.md §15.3): a result naming a revision, or a turn ending.
+		it("counts what may settle a canvas call, and nothing else", async () => {
+			let push: (n: ChatNotification) => void = () => {};
+			mockState.chatMessagesSubscribe.mockImplementation(
+				async (_id: string, onNotification: typeof push) => {
+					push = onNotification;
+					return {
+						id: "sub-1",
+						initial: { history: [], turn: IDLE, canvas: drawn(1) },
+					};
+				},
+			);
+			renderCanvasProbe();
+			await waitFor(() => expect(heldCanvas()?.revision).toBe(1));
+			const settled = () => useCanvasStore.getState().callsSettled;
+			const before = settled();
+
+			act(() => push({ type: "text", content: "drawing" }));
+			expect(settled()).toBe(before);
+			// A failed canvas call names no revision, and settles all the same.
+			act(() =>
+				push({
+					type: "tool_result",
+					tool_use_id: "t1",
+					tool_result: "lint failed",
+					is_error: true,
+				}),
+			);
+			expect(settled()).toBe(before + 1);
+			act(() => push({ type: "done" }));
+			expect(settled()).toBe(before + 2);
+		});
+
 		// The server registers the subscription before it reads the canvas for
 		// the reply, so a push can overtake the reply: whichever is newer wins.
 		it.each([

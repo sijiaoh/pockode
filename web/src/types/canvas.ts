@@ -59,3 +59,32 @@ export interface CanvasActionParams {
 	revision: number;
 	canvas_size?: CanvasSize;
 }
+
+/**
+ * Why a fork from a page would be refused (docs/canvas-ui.md §13.5); absent on
+ * an entry when it can be made.
+ */
+export type CanvasForkBlocked =
+	| "pending"
+	| "no_record"
+	| "superseded"
+	| "subagent";
+
+/** One revision as `chat.canvas_history` lists it, without its document. */
+export interface CanvasHistoryEntry {
+	revision: number;
+	change_kind: CanvasChange["kind"];
+	drawn_for?: CanvasSize;
+	/** RFC 3339. */
+	drawn_at: string;
+	/** The size of the revision's document. */
+	bytes: number;
+	fork_blocked?: CanvasForkBlocked;
+}
+
+/** One revision whole, as `chat.canvas_snapshot` answers: a state to draw. */
+export interface CanvasSnapshot extends CanvasState {
+	html: string;
+	change: CanvasChange;
+	drawn_at: string;
+}

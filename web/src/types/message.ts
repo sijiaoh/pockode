@@ -962,21 +962,38 @@ export interface SessionUpdateTitleParams {
 	title: string;
 }
 
-export interface SessionForkParams {
+/**
+ * A fork from a message (`anchor_seq`) or from a canvas page
+ * (`canvas_revision`): exactly one of the two, or the server refuses it.
+ */
+export type SessionForkParams = {
 	session_id: string;
-	/**
-	 * The seq of the message the user picked, quoted back unchanged.
-	 *
-	 * How much the fork keeps is the server's to decide, not this client's: an
-	 * agent message is kept, a message the user sent is not, because the fork
-	 * returns to before they sent it. Never do arithmetic on this — a seq is an
-	 * address the server handed out, not an index (see `chat.Client.Fork` and
-	 * docs/session-fork-ui.md, *The rule*).
-	 */
-	anchor_seq: HistorySeq;
 	/** Empty copies the source session's title. */
 	title?: string;
-}
+} & (
+	| {
+			/**
+			 * The seq of the message the user picked, quoted back unchanged.
+			 *
+			 * How much the fork keeps is the server's to decide, not this
+			 * client's: an agent message is kept, a message the user sent is not,
+			 * because the fork returns to before they sent it. Never do arithmetic
+			 * on this — a seq is an address the server handed out, not an index
+			 * (see `chat.Client.Fork` and docs/session-fork-ui.md, *The rule*).
+			 */
+			anchor_seq: HistorySeq;
+			canvas_revision?: never;
+	  }
+	| {
+			/**
+			 * The canvas revision the user forked from. The server finds the cut —
+			 * the record that drew the page, kept — since it may be in history this
+			 * client never loaded (docs/canvas-ui.md §13.6, *From a revision*).
+			 */
+			canvas_revision: number;
+			anchor_seq?: never;
+	  }
+);
 
 /**
  * How far a page of the session list reaches, and what the rest of the list is

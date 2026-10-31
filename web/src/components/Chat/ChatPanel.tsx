@@ -27,6 +27,7 @@ import { useShortViewport } from "../../hooks/useShortViewport";
 import { useViewedSession } from "../../hooks/useViewedSession";
 import { sessionActivity } from "../../lib/activity";
 import { takeAnswerIntent } from "../../lib/answerIntent";
+import { useCanvasRevision } from "../../lib/canvasStore";
 import type { ChatAttachment } from "../../lib/chatAttachments";
 import {
 	attachmentActions,
@@ -76,6 +77,10 @@ import {
 	sendAgainText,
 } from "../../utils/sendAgain";
 import { CanvasComposer, ComposerDock } from "../Canvas/CanvasComposer";
+import {
+	type CanvasForkPage,
+	CanvasHistorySheet,
+} from "../Canvas/CanvasHistorySheet";
 import { CanvasView } from "../Canvas/CanvasView";
 import {
 	type CanvasSessionView,
@@ -102,6 +107,7 @@ import AnswerPanel from "./AnswerPanel";
 import AttentionStrip, { type PermissionEntry } from "./AttentionStrip";
 import ChatDropOverlay from "./ChatDropOverlay";
 import ChatSkeleton from "./ChatSkeleton";
+import { CanvasShowContext } from "./canvasShowContext";
 import ForkSessionSheet from "./ForkSessionSheet";
 import { FullScreenHost } from "./FullScreenHost";
 import DefaultInputBar from "./InputBar";
@@ -375,11 +381,24 @@ function ChatPanel({
 	// collapsed — reset during render, for the reason the answer panel is below.
 	const [canvasView, setCanvasView] = useState<CanvasSessionView>("canvas");
 	const [canvasComposerExpanded, setCanvasComposerExpanded] = useState(false);
+	// The history view (docs/canvas-ui.md §15), and the revision it opens on:
+	// null for the newest earlier page, which its list decides.
+	const [canvasHistoryAt, setCanvasHistoryAt] = useState<{
+		revision: number | null;
+		wasCurrent?: boolean;
+	} | null>(null);
+	// The fork sheet raised from a page of it (§15.6), which replaces it.
+	const [canvasForkAt, setCanvasForkAt] = useState<{
+		page: CanvasForkPage;
+		defaultTitle: string;
+	} | null>(null);
 	const [canvasViewSessionId, setCanvasViewSessionId] = useState(sessionId);
 	if (canvasViewSessionId !== sessionId) {
 		setCanvasViewSessionId(sessionId);
 		setCanvasView("canvas");
 		setCanvasComposerExpanded(false);
+		setCanvasHistoryAt(null);
+		setCanvasForkAt(null);
 	}
 	const selectCanvasView = (next: CanvasSessionView) => {
 		if (next === canvasView) return;
@@ -387,6 +406,11 @@ function ChatPanel({
 		setCanvasComposerExpanded(false);
 	};
 	const canvasViewUp = isCanvasSession && canvasView === "canvas";
+	const canvasRevision = useCanvasRevision(sessionId);
+	const showCanvasRevision = useCallback(
+		(revision: number) => setCanvasHistoryAt({ revision }),
+		[],
+	);
 
 	// The one thing that still refuses a send. An open turn is not it — both CLIs
 	// steer the running turn with whatever arrives — but a permission or question
@@ -613,20 +637,23 @@ function ChatPanel({
 	// just below, for the *other* sessions' titles.
 	const forkedFromSessionId = sessionDetail?.forked_from?.session_id;
 
+	// Read rather than subscribed: the pre-filled name is a snapshot taken
+	// when the sheet opens, and the panel has no other use for the list.
+	const forkTitle = useCallback(
+		() =>
+			buildForkTitle(
+				resolvedTitle,
+				useSessionStore.getState().sessions.map((session) => session.title),
+			),
+		[resolvedTitle],
+	);
+
 	const handleStartFork = useCallback(
 		(messageId: string) => {
-			// Read rather than subscribed: the pre-filled name is a snapshot taken
-			// when the sheet opens, and the panel has no other use for the list.
-			const titles = useSessionStore
-				.getState()
-				.sessions.map((session) => session.title);
 			clearForkError();
-			setForkTarget({
-				messageId,
-				defaultTitle: buildForkTitle(resolvedTitle, titles),
-			});
+			setForkTarget({ messageId, defaultTitle: forkTitle() });
 		},
-		[resolvedTitle, clearForkError],
+		[forkTitle, clearForkError],
 	);
 
 	const handleCloseFork = useCallback(() => {
@@ -641,7 +668,7 @@ function ChatPanel({
 			dropped: Pick<ForkAnchor, "droppedText" | "droppedAttachments">,
 		) => {
 			try {
-				const forked = await forkSession(sessionId, anchorSeq, title);
+				const forked = await forkSession(sessionId, { anchorSeq }, title);
 				setForkTarget(null);
 				// A fork anchored on the user's own prompt returns to before they
 				// sent it, so the prompt comes back as a draft of the new session
@@ -660,6 +687,49 @@ function ChatPanel({
 			} catch {
 				// Reported through forkError in the sheet, which stays open: landing
 				// the user in a session that may not exist is worse than the error.
+			}
+		},
+		[forkSession, sessionId, onSelectSession],
+	);
+
+	// The sheets replace one another (docs/canvas-ui.md §15.6): sheets do not
+	// nest. The fork sheet's Cancel reopens the view on the page, and only
+	// Cancel — its other closes are the plain one, which a held navigation
+	// calls too.
+	const handleStartCanvasFork = useCallback(
+		(page: CanvasForkPage) => {
+			clearForkError();
+			setCanvasHistoryAt(null);
+			setCanvasForkAt({ page, defaultTitle: forkTitle() });
+		},
+		[forkTitle, clearForkError],
+	);
+	const handleCloseCanvasFork = useCallback(() => {
+		setCanvasForkAt(null);
+		clearForkError();
+	}, [clearForkError]);
+	const handleCancelCanvasFork = useCallback(() => {
+		if (canvasForkAt) {
+			const { revision, wasCurrent } = canvasForkAt.page;
+			setCanvasHistoryAt({ revision, wasCurrent });
+		}
+		handleCloseCanvasFork();
+	}, [canvasForkAt, handleCloseCanvasFork]);
+	const handleCanvasFork = useCallback(
+		async (revision: number, title: string) => {
+			try {
+				const forked = await forkSession(
+					sessionId,
+					{ canvasRevision: revision },
+					title,
+				);
+				setCanvasForkAt(null);
+				// It opens on Canvas, as every canvas session does, and its canvas
+				// is this page; nothing comes back as a draft, since the cut is
+				// never on a message the user sent.
+				onSelectSession?.(forked.id);
+			} catch {
+				// Reported through forkError in the sheet, which stays open.
 			}
 		},
 		[forkSession, sessionId, onSelectSession],
@@ -1401,6 +1471,14 @@ function ChatPanel({
 						<CanvasViewSwitch view={canvasView} onSelect={selectCanvasView} />
 					) : undefined
 				}
+				canvasHistory={
+					isCanvasSession
+						? {
+								revision: canvasRevision,
+								onOpen: () => setCanvasHistoryAt({ revision: null }),
+							}
+						: undefined
+				}
 			/>
 		);
 	};
@@ -1548,7 +1626,11 @@ function ChatPanel({
 				}
 			>
 				<CoveredSurface covered={transcriptCovered}>
-					<FullScreenHost>{renderTranscript()}</FullScreenHost>
+					<CanvasShowContext.Provider
+						value={isCanvasSession ? showCanvasRevision : null}
+					>
+						<FullScreenHost>{renderTranscript()}</FullScreenHost>
+					</CanvasShowContext.Provider>
 				</CoveredSurface>
 			</div>
 			{/* Kept mounted as the list is, and for more: a page mounted again
@@ -1568,14 +1650,56 @@ function ChatPanel({
 						key={sessionId}
 						sessionId={sessionId}
 						shown={canvasShown}
-						// Under the panel the composer is in the column, not over it.
-						measure={canvasShown && !answerPanelCovers}
+						// Under the panel the composer is in the column, not over it;
+						// under the history view a keyboard is the history page's.
+						measure={canvasShown && !answerPanelCovers && !canvasHistoryAt}
 						turnRunning={turn.phase === "running"}
 						onSend={sendCanvasAction}
 						sendBlocked={promptOwnsInput ? "permission" : null}
 					/>
 				</div>
 			)}
+			{/* Drawn over whichever view it was opened from, which it never
+			    changes: closing it lands the reader where they were. Covered,
+			    and so closed, only by an overlay taking the session's screen —
+			    not by canvas view, which it may be opened over. */}
+			<CoveredSurface covered={overlayOpen}>
+				{isCanvasSession && canvasHistoryAt && (
+					<CanvasHistorySheet
+						key={sessionId}
+						sessionId={sessionId}
+						initialRevision={canvasHistoryAt.revision}
+						initialWasCurrent={canvasHistoryAt.wasCurrent}
+						onClose={() => setCanvasHistoryAt(null)}
+						onGoToCanvas={() => {
+							setCanvasHistoryAt(null);
+							selectCanvasView("canvas");
+						}}
+						// The message fork's condition: a host that can open the
+						// result, and an agent that can follow it.
+						onFork={
+							onSelectSession && forkSupport !== "none"
+								? handleStartCanvasFork
+								: undefined
+						}
+					/>
+				)}
+				{isCanvasSession && canvasForkAt && (
+					<ForkSessionSheet
+						key={sessionId}
+						page={canvasForkAt.page.description}
+						agentType={agentType}
+						defaultTitle={canvasForkAt.defaultTitle}
+						isForking={isForking}
+						error={forkError}
+						onFork={(title) =>
+							handleCanvasFork(canvasForkAt.page.revision, title)
+						}
+						onClose={handleCloseCanvasFork}
+						onCancel={handleCancelCanvasFork}
+					/>
+				)}
+			</CoveredSurface>
 			<PageHeaderTarget value={pageHeader.target}>
 				{overlay &&
 					(isOverlayHeld ? (

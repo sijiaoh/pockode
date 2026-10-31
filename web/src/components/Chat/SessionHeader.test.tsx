@@ -293,6 +293,54 @@ describe("SessionHeader", () => {
 		});
 	});
 
+	// docs/canvas-ui.md §15.1.
+	describe("the canvas section", () => {
+		const historyRow = () => screen.getByRole("button", { name: /^History/ });
+
+		it("comes after the work and before the usage, naming the current page", async () => {
+			await openHeader({
+				detail: detailWith(undefined, false, "w1"),
+				canvasHistory: { revision: 12, onOpen: vi.fn() },
+			});
+
+			expect(sectionTitles()).toEqual([
+				"Engine",
+				"Permissions",
+				"Work",
+				"Canvas",
+				"Usage",
+			]);
+			expect(historyRow()).toHaveAccessibleName("History: At revision 12");
+		});
+
+		it("closes the panel as it opens the history view", async () => {
+			const onOpen = vi.fn();
+			const { user } = await openHeader({
+				canvasHistory: { revision: 12, onOpen },
+			});
+
+			await user.click(historyRow());
+			expect(onOpen).toHaveBeenCalledOnce();
+			expect(panel()).toBeNull();
+		});
+
+		it.each([
+			["nothing has been drawn", 0],
+			["the subscription has not said", null],
+		])("says why it is off while %s", async (_, revision) => {
+			const onOpen = vi.fn();
+			const { user } = await openHeader({
+				canvasHistory: { revision, onOpen },
+			});
+
+			expect(historyRow()).toHaveAttribute("aria-disabled", "true");
+			expect(historyRow()).toHaveAccessibleName("History: Nothing drawn yet");
+			await user.click(historyRow());
+			expect(onOpen).not.toHaveBeenCalled();
+			expect(panel()).toBeInTheDocument();
+		});
+	});
+
 	describe("session facts", () => {
 		it("opens before anything has been reported, and says so", async () => {
 			await open(empty);

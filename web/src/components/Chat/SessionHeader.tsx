@@ -1,5 +1,11 @@
 import { useIsExpanded } from "@pockode/shared";
-import { ChevronDown, ChevronLeft, ChevronRight, Zap } from "lucide-react";
+import {
+	ChevronDown,
+	ChevronLeft,
+	ChevronRight,
+	History,
+	Zap,
+} from "lucide-react";
 import {
 	type ReactNode,
 	useCallback,
@@ -69,6 +75,17 @@ interface Props {
 	 * (docs/canvas-ui.md §2). Absent on an ordinary session.
 	 */
 	viewSwitch?: ReactNode;
+	/**
+	 * A canvas session whose canvas is pushed here: the panel's **Canvas**
+	 * section, which opens the history view (docs/canvas-ui.md §15.1). Absent
+	 * otherwise — on an ordinary session, and on one read out of another
+	 * worktree, which has no canvas here.
+	 */
+	canvasHistory?: {
+		/** The current revision; null before the subscription has said. */
+		revision: number | null;
+		onOpen: () => void;
+	};
 }
 
 /**
@@ -96,6 +113,7 @@ function SessionHeader({
 	onEffortChange,
 	onModeChange,
 	viewSwitch,
+	canvasHistory,
 }: Props) {
 	const [isOpen, setIsOpen] = useState(false);
 	const [view, setView] = useState<"root" | "engine">("root");
@@ -449,6 +467,16 @@ function SessionHeader({
 									onOpenWorkDetail={onOpenWorkDetail}
 									onClose={handleClose}
 								/>
+								{canvasHistory && (
+									<CanvasSection
+										{...canvasHistory}
+										onOpen={() => {
+											// One layer replacing another, in one commit.
+											handleClose();
+											canvasHistory.onOpen();
+										}}
+									/>
+								)}
 								<SessionUsageSection
 									usage={detail?.usage}
 									isForked={detail?.forked_from !== undefined}
@@ -459,6 +487,46 @@ function SessionHeader({
 				</div>
 			</ResponsivePanel>
 		</div>
+	);
+}
+
+/**
+ * With the facts about what the session has done, below the settings that
+ * decide its next message. The current page, not a count of pages, which a
+ * lost snapshot would make wrong; a row that says why it is off rather than
+ * one that vanishes.
+ */
+function CanvasSection({
+	revision,
+	onOpen,
+}: {
+	revision: number | null;
+	onOpen: () => void;
+}) {
+	const drawn = revision !== null && revision > 0;
+	const hint = drawn ? `At revision ${revision}` : "Nothing drawn yet";
+	return (
+		<PanelSection title="Canvas">
+			<button
+				type="button"
+				onClick={drawn ? onOpen : undefined}
+				aria-disabled={!drawn || undefined}
+				aria-label={`History: ${hint}`}
+				className={`flex min-h-[48px] w-full items-center gap-3 px-3 text-left text-sm text-th-text-primary transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-th-accent ${
+					drawn ? "hover:bg-th-bg-tertiary" : "cursor-not-allowed opacity-50"
+				}`}
+			>
+				<History className="size-4 shrink-0" aria-hidden="true" />
+				<span className="min-w-0 flex-1">
+					<span className="block truncate">History</span>
+					<span className="block text-xs text-th-text-muted">{hint}</span>
+				</span>
+				<ChevronRight
+					className="size-4 shrink-0 text-th-text-muted"
+					aria-hidden="true"
+				/>
+			</button>
+		</PanelSection>
 	);
 }
 

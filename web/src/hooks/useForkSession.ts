@@ -3,10 +3,17 @@ import { prependSession, useSessionStore } from "../lib/sessionStore";
 import { wsActions } from "../lib/wsStore";
 import type { HistorySeq, SessionListItem } from "../types/message";
 
+/**
+ * Where the fork is cut: after a message, quoted back by its seq, or at the
+ * moment a canvas page had just been drawn, which the server finds the record
+ * of (docs/canvas-ui.md §13.6, *From a revision*).
+ */
+export type ForkCut = { anchorSeq: HistorySeq } | { canvasRevision: number };
+
 interface UseForkSessionReturn {
 	forkSession: (
 		sessionId: string,
-		anchorSeq: HistorySeq,
+		cut: ForkCut,
 		title: string,
 	) => Promise<SessionListItem>;
 	isForking: boolean;
@@ -35,15 +42,18 @@ export function useForkSession(): UseForkSessionReturn {
 	const [forkError, setForkError] = useState<string | null>(null);
 
 	const forkSession = useCallback(
-		async (sessionId: string, anchorSeq: HistorySeq, title: string) => {
+		async (sessionId: string, cut: ForkCut, title: string) => {
 			setIsForking(true);
 			setForkError(null);
 			try {
-				const session = await wsActions.forkSession(
-					sessionId,
-					anchorSeq,
-					title,
-				);
+				const session =
+					"canvasRevision" in cut
+						? await wsActions.forkSessionAtCanvasRevision(
+								sessionId,
+								cut.canvasRevision,
+								title,
+							)
+						: await wsActions.forkSession(sessionId, cut.anchorSeq, title);
 				updateSessions((old) => prependSession(old, session));
 				return session;
 			} catch (error) {

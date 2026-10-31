@@ -21,10 +21,12 @@ import {
 } from "../../lib/agentPage";
 import {
 	type CanvasAppMessage,
+	type CanvasReadOnly,
 	type CanvasTheme,
 	canvasBaseStylesheet,
 	canvasBridgeScript,
 	canvasThemeFrom,
+	READONLY_REFUSAL_MESSAGES,
 	readCanvasPageMessage,
 	SEND_REFUSAL_MESSAGES,
 	type SendRefusal,
@@ -109,8 +111,9 @@ function post(page: Window | null, message: CanvasAppMessage) {
 interface Props {
 	/**
 	 * The session the canvas is; its hosts allowance is the session's. One
-	 * frame per session: key it by the session, since the revision it records
-	 * as shown is that session's.
+	 * live frame per session: key it by the session, since the revision it
+	 * records as shown is that session's. A read-only frame is keyed by the
+	 * revision it shows instead, so each is drawn whole (§15.2).
 	 */
 	sessionId: string;
 	/** The revision to show; revision 0 draws nothing. */
@@ -122,10 +125,11 @@ interface Props {
 	 */
 	onSend: (input: CanvasActionInput) => Promise<void>;
 	/**
-	 * An earlier revision, not the current canvas (§13.5): every send from it
-	 * is refused with `readonly`.
+	 * A frame of the history view, never the live canvas (§13.5, §15.4): every
+	 * send from it is refused with `readonly`, in the wording for the page it
+	 * shows. Null for the live canvas.
 	 */
-	readOnly?: boolean;
+	readOnly?: CanvasReadOnly | null;
 	/** Sending is refused for this reason, decided from the turn (§10.3). */
 	sendBlocked?: CanvasSendBlock | null;
 	/** A send from the page was refused before it reached the server. */
@@ -153,7 +157,7 @@ export function CanvasFrame({
 	sessionId,
 	canvas,
 	onSend,
-	readOnly = false,
+	readOnly = null,
 	sendBlocked = null,
 	onSendRefused,
 	onEditableFocus,
@@ -248,16 +252,23 @@ export function CanvasFrame({
 				code,
 				message,
 			});
-		const refuseHere = (code: keyof typeof SEND_REFUSAL_MESSAGES) => {
-			refuse(code, SEND_REFUSAL_MESSAGES[code]);
+		const refuseHere = (code: SendRefusal, message: string) => {
+			refuse(code, message);
 			current.onSendRefused?.(code);
 		};
 		// Read-only first: it does not depend on anything the bridge was told,
 		// and a send on load arrives before it could be told anything.
-		if (current.readOnly) return refuseHere("readonly");
-		if (current.sendBlocked === "permission") return refuseHere("permission");
+		if (current.readOnly) {
+			return refuseHere(
+				"readonly",
+				READONLY_REFUSAL_MESSAGES[current.readOnly],
+			);
+		}
+		if (current.sendBlocked === "permission") {
+			return refuseHere("permission", SEND_REFUSAL_MESSAGES.permission);
+		}
 		if (useWSStore.getState().status !== "connected") {
-			return refuseHere("offline");
+			return refuseHere("offline", SEND_REFUSAL_MESSAGES.offline);
 		}
 		const revision = redrawRef.current?.shown ?? 0;
 		current.onSend({ action, data, revision }).then(

@@ -5,6 +5,7 @@ import { render as renderUi, screen, waitFor } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cdp, server } from "vitest/browser";
+import type { CanvasReadOnly } from "../../lib/canvasBridge";
 import { resetPageHosts } from "../../lib/pageHosts";
 import type { CanvasActionInput } from "../../lib/rpc";
 import type { RawTarget } from "../../lib/rpc/raw";
@@ -92,7 +93,7 @@ function rendered(revision: number, html: string, drawnFor?: CanvasSize) {
 interface FrameProps {
 	canvas: CanvasState;
 	onSend?: (input: CanvasActionInput) => Promise<void>;
-	readOnly?: boolean;
+	readOnly?: CanvasReadOnly;
 }
 
 function frameUi({ canvas, onSend = async () => {}, readOnly }: FrameProps) {
@@ -292,9 +293,18 @@ describe("the canvas frame in a real browser", () => {
 
 		it("refuses every send from an earlier revision", async () => {
 			const onSend = vi.fn(async () => {});
-			renderFrame({ canvas: rendered(7, SENDER), onSend, readOnly: true });
+			renderFrame({ canvas: rendered(7, SENDER), onSend, readOnly: "earlier" });
 			await signalled(
 				"readonly: This is an earlier version of the canvas; it cannot send.",
+			);
+			expect(onSend).not.toHaveBeenCalled();
+		});
+
+		it("refuses every send from the current page shown in history, saying so", async () => {
+			const onSend = vi.fn(async () => {});
+			renderFrame({ canvas: rendered(7, SENDER), onSend, readOnly: "current" });
+			await signalled(
+				"readonly: This page is shown in history; close history to use it.",
 			);
 			expect(onSend).not.toHaveBeenCalled();
 		});

@@ -21,9 +21,20 @@ export type SendRefusal =
  */
 export const SEND_REFUSAL_MESSAGES = {
 	permission: "Answer the permission request first.",
-	readonly: "This is an earlier version of the canvas; it cannot send.",
 	offline: "Not connected — try again when the connection is back.",
 } as const satisfies Partial<Record<SendRefusal, string>>;
+
+/**
+ * Which page a read-only frame — the history view's (§15.4) — shows: an
+ * earlier one, or the current one shown there rather than in canvas view.
+ */
+export type CanvasReadOnly = "earlier" | "current";
+
+/** `readonly`'s two wordings, by the page the frame shows (§8.2). */
+export const READONLY_REFUSAL_MESSAGES = {
+	earlier: "This is an earlier version of the canvas; it cannot send.",
+	current: "This page is shown in history; close history to use it.",
+} as const satisfies Record<CanvasReadOnly, string>;
 
 const SEND = "pockode:canvas-send";
 const PATCHED = "pockode:canvas-patched";

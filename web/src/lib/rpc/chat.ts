@@ -2,7 +2,9 @@ import type { JSONRPCRequester } from "json-rpc-2.0";
 import type {
 	CanvasAction,
 	CanvasActionParams,
+	CanvasHistoryEntry,
 	CanvasSize,
+	CanvasSnapshot,
 } from "../../types/canvas";
 import type { FileBlock } from "../../types/content";
 import type {
@@ -93,6 +95,20 @@ export interface ChatActions {
 		action: CanvasActionInput,
 		canvasSize?: CanvasSize,
 	) => Promise<SentCanvasAction>;
+	/**
+	 * The canvas's revisions, newest first (`chat.canvas_history`,
+	 * docs/canvas-ui.md §13.5). Refused, `InvalidParams`, for a session that is
+	 * not a canvas session.
+	 */
+	canvasHistory: (sessionId: string) => Promise<CanvasHistoryEntry[]>;
+	/**
+	 * One revision whole (`chat.canvas_snapshot`). Refused, `InvalidParams`,
+	 * for a revision the canvas does not have or lost from disk.
+	 */
+	canvasSnapshot: (
+		sessionId: string,
+		revision: number,
+	) => Promise<CanvasSnapshot>;
 	interrupt: (sessionId: string) => Promise<void>;
 	permissionResponse: (params: PermissionResponseParams) => Promise<void>;
 }
@@ -184,6 +200,19 @@ export function createChatActions(
 				...(canvasAction ? { canvasAction } : {}),
 			};
 		},
+
+		canvasHistory: async (sessionId: string) => {
+			const result = (await requireClient().request("chat.canvas_history", {
+				session_id: sessionId,
+			})) as { snapshots: CanvasHistoryEntry[] };
+			return result.snapshots;
+		},
+
+		canvasSnapshot: async (sessionId: string, revision: number) =>
+			(await requireClient().request("chat.canvas_snapshot", {
+				session_id: sessionId,
+				revision,
+			})) as CanvasSnapshot,
 
 		interrupt: async (sessionId: string): Promise<void> => {
 			await requireClient().request("chat.interrupt", {

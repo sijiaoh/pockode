@@ -135,4 +135,53 @@ describe("ForkSessionSheet", () => {
 		expect(screen.getByText("Claude")).toBeInTheDocument();
 		expect(screen.getByText("Here is the plan")).toBeInTheDocument();
 	});
+
+	describe("from a canvas page", () => {
+		const pageProps = {
+			page: "Canvas · revision 7 · updated · 14:02",
+			agentType: "claude" as const,
+			defaultTitle: "Canvas (fork)",
+			isForking: false,
+			error: null,
+			onFork: vi.fn(),
+			onClose: vi.fn(),
+		};
+
+		// No count: the record the cut falls on may not be loaded here.
+		it("names the page in one line, and what the cut keeps", () => {
+			render(<ForkSessionSheet {...pageProps} />);
+
+			expect(
+				screen.getByText("Canvas · revision 7 · updated · 14:02"),
+			).toBeInTheDocument();
+			expect(
+				screen.getByText(
+					"The new session keeps the conversation up to the moment this page was drawn, and opens on it. Everything after it stays in this session.",
+				),
+			).toBeInTheDocument();
+		});
+
+		// ✕ is the plain close, which a held navigation calls too; only the
+		// button means "back to history".
+		it("calls onCancel from Cancel and onClose from ✕", async () => {
+			const user = userEvent.setup();
+			const onCancel = vi.fn();
+			const onClose = vi.fn();
+			render(
+				<ForkSessionSheet
+					{...pageProps}
+					onClose={onClose}
+					onCancel={onCancel}
+				/>,
+			);
+
+			await user.click(screen.getByRole("button", { name: "Cancel" }));
+			expect(onCancel).toHaveBeenCalledOnce();
+			expect(onClose).not.toHaveBeenCalled();
+
+			await user.click(screen.getByRole("button", { name: "Close" }));
+			expect(onClose).toHaveBeenCalledOnce();
+			expect(onCancel).toHaveBeenCalledOnce();
+		});
+	});
 });

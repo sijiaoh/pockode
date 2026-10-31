@@ -32,6 +32,17 @@ export interface SessionActions {
 		anchorSeq: HistorySeq,
 		title: string,
 	) => Promise<SessionListItem>;
+	/**
+	 * Creates a session holding a canvas session's conversation up to the
+	 * moment the page `revision` had just been drawn, opening on that page
+	 * (docs/canvas-ui.md §13.6). Refused, `InvalidParams`, for a revision that
+	 * is not there and for one its entry's `fork_blocked` names.
+	 */
+	forkSessionAtCanvasRevision: (
+		sessionId: string,
+		revision: number,
+		title: string,
+	) => Promise<SessionListItem>;
 	deleteSession: (sessionId: string) => Promise<void>;
 	updateSessionTitle: (sessionId: string, title: string) => Promise<void>;
 	setSessionMode: (sessionId: string, mode: SessionMode) => Promise<void>;
@@ -76,6 +87,18 @@ export function createSessionActions(
 				anchor_seq: anchorSeq,
 				title,
 			} as SessionForkParams);
+		},
+
+		forkSessionAtCanvasRevision: async (
+			sessionId: string,
+			revision: number,
+			title: string,
+		): Promise<SessionListItem> => {
+			return requireClient().request("session.fork", {
+				session_id: sessionId,
+				canvas_revision: revision,
+				title,
+			} satisfies SessionForkParams);
 		},
 
 		deleteSession: async (sessionId: string): Promise<void> => {

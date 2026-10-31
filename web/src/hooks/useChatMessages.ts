@@ -270,6 +270,19 @@ function leadingTurnTerminal(history: unknown[]): unknown {
 }
 
 /**
+ * Whether a record may have settled a canvas call the server still counted in
+ * flight: any result — a failed canvas call names no revision, and it settles
+ * all the same, and a result does not say which tool it answers — or a turn
+ * ending, which clears the rest (docs/canvas-ui.md §13.5). Each is settled
+ * before it is broadcast, so a list read on it already says so. Most are no
+ * canvas call's; the history view reads on one only while an entry is
+ * `pending`.
+ */
+function settlesCanvasCalls(notification: ServerNotification): boolean {
+	return notification.type === "tool_result" || isTurnTerminal(notification);
+}
+
+/**
  * The newest record's seq in a history page, or undefined if the page addresses
  * none. Records are appended in seq order, so this is the last one that has a
  * seq at all — a page can end on records that were never persisted.
@@ -648,6 +661,12 @@ export function useChatMessages({
 					if (notification.type === "canvas_state") {
 						receive(notification.canvas);
 						return;
+					}
+					if (
+						settlesCanvasCalls(notification) &&
+						openSessionRef.current === sessionId
+					) {
+						canvasActions.callSettled();
 					}
 					onNotification(notification);
 				},

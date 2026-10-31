@@ -12,6 +12,15 @@ interface CanvasStoreState {
 	 * measured, or none if it never showed. The device's, not a session's.
 	 */
 	size: CanvasSize | null;
+	/**
+	 * Counts what may have settled the open session's canvas calls — a tool
+	 * result recorded, or a turn ending, which clears every call still in
+	 * flight. Each may clear a history entry's `fork_blocked: "pending"`, which
+	 * nothing pushes (docs/canvas-ui.md §13.5, §15.3); the history view reads
+	 * its list again on a change. A count, not a state: what it says is only
+	 * "ask again".
+	 */
+	callsSettled: number;
 }
 
 interface CanvasStoreActions {
@@ -25,6 +34,7 @@ interface CanvasStoreActions {
 	/** Lets go of the session's canvas, if it is the one held. */
 	forget: (sessionId: string) => void;
 	setSize: (size: CanvasSize) => void;
+	callSettled: () => void;
 }
 
 export type CanvasStore = CanvasStoreState & CanvasStoreActions;
@@ -41,6 +51,7 @@ export const useCanvasStore = create<CanvasStore>((set, get) => ({
 	sessionId: null,
 	canvas: null,
 	size: null,
+	callsSettled: 0,
 	receive: (sessionId, canvas) => {
 		const held = get();
 		if (
@@ -57,6 +68,7 @@ export const useCanvasStore = create<CanvasStore>((set, get) => ({
 		set({ sessionId: null, canvas: null });
 	},
 	setSize: (size) => set({ size }),
+	callSettled: () => set({ callsSettled: get().callsSettled + 1 }),
 }));
 
 /**
@@ -69,9 +81,17 @@ export const selectCanvasState =
 	(state: CanvasStore): CanvasState | null =>
 		sessionId !== null && state.sessionId === sessionId ? state.canvas : null;
 
+/** The session's current revision, or null while no canvas is known for it. */
+export function useCanvasRevision(sessionId: string | null): number | null {
+	return useCanvasStore(
+		(state) => selectCanvasState(sessionId)(state)?.revision ?? null,
+	);
+}
+
 export const canvasActions = {
 	receive: (sessionId: string, canvas: CanvasState) =>
 		useCanvasStore.getState().receive(sessionId, canvas),
 	forget: (sessionId: string) => useCanvasStore.getState().forget(sessionId),
 	setSize: (size: CanvasSize) => useCanvasStore.getState().setSize(size),
+	callSettled: () => useCanvasStore.getState().callSettled(),
 };

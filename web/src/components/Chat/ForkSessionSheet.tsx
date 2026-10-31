@@ -6,19 +6,50 @@ import type { AgentType } from "../../types/settings";
 import { Sheet, Spinner } from "../ui";
 import { inputClass } from "../ui/inputClass";
 
-interface Props {
-	/** The message the user picked the fork out of. */
-	anchor: Message;
-	/** How many messages stay behind, the anchor included when it is dropped. */
-	droppedCount: number;
+/** What the fork is cut at: a message, or a canvas page. */
+type AnchorProps =
+	| {
+			/** The message the user picked the fork out of. */
+			anchor: Message;
+			/**
+			 * How many messages stay behind, the anchor included when it is
+			 * dropped.
+			 */
+			droppedCount: number;
+			page?: never;
+	  }
+	| {
+			/**
+			 * The page the history view forks from, as one line —
+			 * `Canvas · revision 7 · updated · 14:02` (docs/canvas-ui.md §15.6).
+			 * No count of what stays behind: the record the cut falls on may be
+			 * in history this client never loaded.
+			 */
+			page: string;
+			anchor?: never;
+			droppedCount?: never;
+	  };
+
+type Props = AnchorProps & {
 	agentType: AgentType;
 	defaultTitle: string;
 	isForking: boolean;
 	/** The server's refusal, verbatim; the sheet stays open showing it. */
 	error: string | null;
 	onFork: (title: string) => void;
+	/** Every close but the Cancel button: ✕, Back, Escape, a held navigation. */
 	onClose: () => void;
-}
+	/**
+	 * The Cancel button, where it means more than closing — the history view
+	 * reopens on its page (§15.6). Kept off the plain close, which a held
+	 * navigation calls too: a layer raised there would sit under the very
+	 * navigation a fork makes on success. Defaults to `onClose`.
+	 */
+	onCancel?: () => void;
+};
+
+const PAGE_KEPT_SENTENCE =
+	"The new session keeps the conversation up to the moment this page was drawn, and opens on it. Everything after it stays in this session.";
 
 /**
  * What the fork keeps and what it leaves, in the two shapes the rule takes.
@@ -71,12 +102,14 @@ function keptSentence(
 function ForkSessionSheet({
 	anchor,
 	droppedCount,
+	page,
 	agentType,
 	defaultTitle,
 	isForking,
 	error,
 	onFork,
 	onClose,
+	onCancel = onClose,
 }: Props) {
 	const [title, setTitle] = useState(defaultTitle);
 	const inputRef = useRef<HTMLInputElement>(null);
@@ -87,7 +120,6 @@ function ForkSessionSheet({
 	}, []);
 
 	const agentLabel = AGENT_TYPE_INFO[agentType].label;
-	const preview = messagePreview(anchor);
 
 	const handleSubmit = (e: React.FormEvent) => {
 		e.preventDefault();
@@ -108,7 +140,7 @@ function ForkSessionSheet({
 				<>
 					<button
 						type="button"
-						onClick={onClose}
+						onClick={onCancel}
 						disabled={isForking}
 						className="flex-1 rounded-lg bg-th-bg-tertiary px-4 py-2.5 text-sm text-th-text-primary transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
 					>
@@ -136,17 +168,28 @@ function ForkSessionSheet({
 					</p>
 				)}
 
+				{/* A page is one line in the preview's place: it is what the user
+				    was just looking at, and a scaled copy here would be neither
+				    readable nor needed. */}
 				<div className="rounded-lg border-l-2 border-th-border bg-th-bg-tertiary px-3 py-2">
-					<div className="text-xs text-th-text-muted">
-						{anchor.role === "user" ? "You" : agentLabel}
-					</div>
-					<p className="line-clamp-3 text-sm text-th-text-secondary">
-						{preview}
-					</p>
+					{anchor ? (
+						<>
+							<div className="text-xs text-th-text-muted">
+								{anchor.role === "user" ? "You" : agentLabel}
+							</div>
+							<p className="line-clamp-3 text-sm text-th-text-secondary">
+								{messagePreview(anchor)}
+							</p>
+						</>
+					) : (
+						<p className="truncate text-sm text-th-text-secondary">{page}</p>
+					)}
 				</div>
 
 				<p className="text-sm text-th-text-secondary">
-					{keptSentence(anchor.role, droppedCount)}
+					{anchor
+						? keptSentence(anchor.role, droppedCount)
+						: PAGE_KEPT_SENTENCE}
 				</p>
 
 				<div className="space-y-1.5">
