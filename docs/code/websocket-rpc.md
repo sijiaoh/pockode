@@ -48,6 +48,7 @@ Method names are organized using the `namespace.method` format, solving two prob
 | `port_preview.*` | app | `ws/rpc_port_preview.go` |
 | `raw.*` | app | `ws/rpc_raw.go` |
 | `remote_url.*` | app | `ws/rpc_remote_url.go` |
+| `server.*` | app | `ws/rpc_server.go`; a cluster serves the same two methods from `cluster/ws.go` |
 
 - **Worktree scope**: Operations that depend on the current working directory (files, Git, etc.)
 - **App scope**: Global operations across worktrees (settings, project management, etc.)
@@ -66,6 +67,55 @@ ticket that logs a [port preview](relay-system.md#logging-in) tab in without
 the password. It is refused with `CodeInvalidRequest` when the relay is
 disabled or has stopped — the same signal as an empty `remote_url` in the
 `auth` reply — since previews do not exist then.
+
+### Server: Installed Version and Restart
+
+`server.version` and `server.restart` are the process itself: the version
+installed on disk, and restarting into it (`server/internal/restart`; the UI is
+[restart-ui.md](../restart-ui.md)). A pockode server and a cluster serve both,
+through one `ws.ServerControl`; the running version is not here, it is the
+`auth` reply's.
+
+| Method | Params | Result |
+|---|---|---|
+| `server.version` | none | `installed: { version?, error?, path }`; on a pockode server also `running_turns` |
+| `server.restart` | none | `{}`, then the connection closes with `1012 Service Restart` |
+
+`installed` is read by running `<path> --version` for every request — an
+upgrade replaces the file without the server hearing of it, so nothing is cached
+and nothing is pushed. `version` is what it printed (`0.21.0`, `dev`); `error`,
+when it could not be read, says why in English, and is also why a restart would
+be refused. `path` is the executable saved at startup, the one a restart runs.
+`running_turns` counts the sessions, across every worktree, whose turn a
+restart stops: one under way, running or blocked, or a permission request still
+waiting for its answer after its turn ended. A question an agent posted is not
+one — it belongs to the session and survives the restart.
+
+A refusal is `CodeRestartRefused` (`-32011`) with `data.reason`, and changes
+nothing. The message is written to be shown as it is, with "Pockode" or "The
+cluster" as its subject:
+
+| `reason` | When | Message |
+|---|---|---|
+| `not_runnable` | `<path> --version` fails, or the working directory the process started in is gone — a restart runs there | "The installed pockode at `<path>` didn't run: `<why>`. Pockode kept running; nothing was stopped." |
+| `already_restarting` | A restart was accepted already — another client, `kill -USR1` | "Pockode is already restarting." The connection drops for it shortly |
+| `shutting_down` | The process is shutting down to exit | "Pockode is shutting down." |
+
+**A success reaches the client before the process starts going down.** The
+shutdown begins by stopping the relay, so a reply that has merely been written
+to the socket may still be in the tunnel when it is torn down, and a client
+that sees its connection drop without a reply cannot tell a restart from a
+failure. So the request is accepted *held* (`Restarter.RequestHeld`): it is
+pending and refuses every later request, but the shutdown loop does not see it
+yet. The handler queues the reply, closes the connection with `1012` behind
+it, and releases the hold only once the close handshake is over — the client
+has answered the close frame — or after 10 s. A client that answers a close has
+read every frame before it, and that holds end to end: the relay carries the
+connection's frames in order, the close among them, through the local reverse
+proxy that reaches `/ws`. `WebSocketStream.CloseAfterFlush` is the close that
+can be waited on. The other connections end in the shutdown that follows: the
+relayed ones when the relay stops, which comes first, and the direct ones with
+`1001` ([Closing on Shutdown](#closing-on-shutdown)).
 
 ### Raw Capabilities
 
@@ -751,7 +801,13 @@ rather than showing a loading spinner indefinitely.
 Because reconnection never gives up, the banner is the only thing that tells a
 blip apart from an outage: after the fifth drop (about 15 s of accumulated
 backoff) it escalates from "Reconnecting..." to "Can't reach the server" and
-offers a manual retry. The escalation and the copy live in
+offers a manual retry. While the page waits on a restart it asked for
+(`restartRequestedAt`, set by `restartServer` and cleared by the next
+successful `auth`) the banner says "Restarting..." instead, and escalates on the
+attempts or a minute after the reply, whichever comes first
+([restart-ui.md](../restart-ui.md#while-it-restarts)). A restart whose
+connection drops before its reply arrives is waited on the same way: the
+reconnect's version says how it went. The escalation and the copy live in
 `packages/shared/src/components/ReconnectBanner.tsx`, because web-cluster's
 banner is the same one; `web/src/components/ui/ReconnectBanner.tsx` is the
 wrapper that reads this project's store.
@@ -814,6 +870,26 @@ A normal `Close` is different: it sends what is already queued, then closes
 with a normal closure, so a reply sent just before closing — an auth refusal —
 still reaches the client. It does not wait for that to finish, because jsonrpc2
 calls it while holding the lock every send takes.
+
+### Closing on Shutdown
+
+`http.Server.Shutdown` does not end a WebSocket: the connection was hijacked,
+and the server stopped tracking it at that moment. Left alone, it lives until
+the process exits, and so does every request running on it — a commit message
+draft among them, whose AI CLI is killed only when its connection's context
+ends. Where the process does not exit right away (a restart on Windows waits on
+its successor, see [self-restart.md](self-restart.md#windows-a-successor)) a client would also stay attached
+to a server that has stopped instead of reconnecting to the new one.
+
+So both `/ws` handlers serve their connections through `ws.Connections`
+(`server/ws/connections.go`). Shutdown calls its `Close` after `srv.Shutdown`:
+every connection is closed with `1001 Going Away`, every request sees its
+context end, and `Close` waits — up to 10 s, a backstop for a request that
+ignores its context — for the connections and the requests that were running
+on them. A connection that arrives after that is closed at once, and a request
+that arrives after it is dropped — possible, because a handler that closes its
+own connection (an auth refusal) lets the connection end while its read loop
+may still dispatch one more request.
 
 ### Compression
 
@@ -985,6 +1061,7 @@ means the server never started it.
 | Server RPC handler | `server/ws/rpc.go` |
 | Server method handlers | `server/ws/rpc_*.go` |
 | Server WebSocket adapter | `server/ws/stream.go` |
+| Connections closed on shutdown | `server/ws/connections.go` |
 | Server watchers | `server/watch/*.go` |
 | Client store | `web/src/lib/wsStore.ts` |
 | Client actions | `web/src/lib/rpc/*.ts` |

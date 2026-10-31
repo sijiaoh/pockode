@@ -164,12 +164,14 @@ host. The environment (`/proc/<pid>/environ`) is readable only by the process ow
 and root, so env-var delivery is the safer channel on a shared machine.
 
 This is exactly why **cluster mode passes the password to spawned node servers via
-`cmd.Env`, never argv** (`server/cluster/node/process.go` — `nodeEnv`). A cluster
+`cmd.Env`, never argv** (`server/password/` — `WithEnv`). A cluster
 host is explicitly multi-project and potentially multi-user, and each spawned node
 enables the relay by default — leaking its password to a co-tenant would hand them
-persistent remote control of that project. `nodeEnv` also strips any inherited
+persistent remote control of that project. `WithEnv` also strips any inherited
 password variable, under either spelling, so the child sees exactly one,
-unambiguous value.
+unambiguous value. A server or cluster that restarts itself hands the password
+to its new run the same way, with `-password` emptied out of the replayed
+command line ([self-restart.md](self-restart.md#handing-the-password-over)).
 
 ### The deprecated `--auth-token` / `POCKODE_AUTH_TOKEN`
 
