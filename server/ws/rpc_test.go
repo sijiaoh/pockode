@@ -1590,7 +1590,7 @@ func TestHandler_SessionFork(t *testing.T) {
 	anchor, _ := store.AppendToHistory(bgCtx, "source", map[string]string{"type": "text", "content": "keep me too"})
 	store.AppendToHistory(bgCtx, "source", map[string]string{"type": "text", "content": "drop me"})
 
-	resp := env.call("session.fork", rpc.SessionForkParams{SessionID: "source", AnchorSeq: anchor})
+	resp := env.call("session.fork", rpc.SessionForkParams{SessionID: "source", AnchorSeq: &anchor})
 	if resp.Error != nil {
 		t.Fatalf("fork failed: %s", resp.Error.Message)
 	}
@@ -1644,7 +1644,7 @@ func TestHandler_SessionFork_NoHistoryBeforeAnchor(t *testing.T) {
 	store.Create(bgCtx, "source", session.CreateSpec{AgentType: session.AgentTypeClaude, Mode: session.ModeYolo})
 	anchor, _ := store.AppendToHistory(bgCtx, "source", map[string]string{"type": "message", "content": "the first thing"})
 
-	resp := env.call("session.fork", rpc.SessionForkParams{SessionID: "source", AnchorSeq: anchor})
+	resp := env.call("session.fork", rpc.SessionForkParams{SessionID: "source", AnchorSeq: &anchor})
 	if resp.Error == nil {
 		t.Fatalf("fork succeeded with nothing to keep: %s", resp.Result)
 	}
@@ -1662,10 +1662,36 @@ func TestHandler_SessionFork_AnchorOutOfRange(t *testing.T) {
 	env := newForkableTestEnv(t)
 	env.getMainWorktree().SessionStore.Create(bgCtx, "source", session.CreateSpec{AgentType: session.AgentTypeClaude})
 
-	resp := env.call("session.fork", rpc.SessionForkParams{SessionID: "source", AnchorSeq: 7})
+	anchor := session.HistorySeq(7)
+	resp := env.call("session.fork", rpc.SessionForkParams{SessionID: "source", AnchorSeq: &anchor})
 
 	if resp.Error == nil || !strings.Contains(resp.Error.Message, "outside the session's history") {
 		t.Errorf("expected an out-of-range error, got %+v", resp)
+	}
+}
+
+// TestHandler_SessionFork_ExactlyOneCut: a fork is from a message or from a
+// canvas page, never both or neither (docs/canvas-ui.md §13.6).
+func TestHandler_SessionFork_ExactlyOneCut(t *testing.T) {
+	env := newForkableTestEnv(t)
+	env.getMainWorktree().SessionStore.Create(bgCtx, "source", session.CreateSpec{AgentType: session.AgentTypeClaude})
+
+	anchor := session.HistorySeq(1)
+	revision := 1
+	for _, params := range []rpc.SessionForkParams{
+		{SessionID: "source"},
+		{SessionID: "source", AnchorSeq: &anchor, CanvasRevision: &revision},
+	} {
+		resp := env.call("session.fork", params)
+		if resp.Error == nil || resp.Error.Code != jsonrpc2.CodeInvalidParams || !strings.Contains(resp.Error.Message, "exactly one of") {
+			t.Errorf("params %+v: got %+v, want InvalidParams naming the two", params, resp)
+		}
+	}
+
+	// From a page of a session that has none.
+	resp := env.call("session.fork", rpc.SessionForkParams{SessionID: "source", CanvasRevision: &revision})
+	if resp.Error == nil || resp.Error.Code != jsonrpc2.CodeInvalidParams || resp.Error.Message != "this session is not a canvas session" {
+		t.Errorf("fork from a page of an ordinary session: got %+v", resp)
 	}
 }
 
@@ -1679,7 +1705,7 @@ func TestHandler_SessionFork_AgentCannotFork(t *testing.T) {
 	store.Create(bgCtx, "source", session.CreateSpec{AgentType: session.AgentTypeClaude, Mode: session.ModeYolo})
 	anchor, _ := store.AppendToHistory(bgCtx, "source", map[string]string{"type": "message", "content": "keep me"})
 
-	resp := env.call("session.fork", rpc.SessionForkParams{SessionID: "source", AnchorSeq: anchor})
+	resp := env.call("session.fork", rpc.SessionForkParams{SessionID: "source", AnchorSeq: &anchor})
 
 	if resp.Error == nil || !strings.Contains(resp.Error.Message, "does not support forking") {
 		t.Fatalf("expected a refusal naming the missing capability, got %+v", resp)

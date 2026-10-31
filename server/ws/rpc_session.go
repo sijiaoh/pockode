@@ -58,7 +58,18 @@ func (h *rpcMethodHandler) handleSessionFork(ctx context.Context, conn *jsonrpc2
 		return
 	}
 
-	meta, err := wt.ChatClient.Fork(ctx, params.SessionID, params.AnchorSeq, params.Title)
+	if (params.AnchorSeq == nil) == (params.CanvasRevision == nil) {
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "exactly one of anchor_seq and canvas_revision is required")
+		return
+	}
+
+	var meta session.SessionMeta
+	var err error
+	if params.CanvasRevision != nil {
+		meta, err = wt.ChatClient.ForkAtCanvasRevision(ctx, params.SessionID, *params.CanvasRevision, params.Title)
+	} else {
+		meta, err = wt.ChatClient.Fork(ctx, params.SessionID, *params.AnchorSeq, params.Title)
+	}
 	if err != nil {
 		h.replyErrorForChat(ctx, conn, req, params.SessionID, err)
 		return

@@ -79,6 +79,9 @@ var ErrForkAnchorNoHistory = errors.New("there is no conversation before this me
 // just because the Pockode side of it would have worked.
 var ErrForkUnsupported = errors.New("this session's agent does not support forking")
 
+// ErrNotCanvasSession is returned for a canvas request about any other session.
+var ErrNotCanvasSession = errors.New("this session is not a canvas session")
+
 // EventBroadcastFunc broadcasts a record Pockode wrote itself to all session
 // subscribers, optionally excluding one notifier. seq is where the record landed
 // in the session's history, so subscribers can name it later, or
@@ -228,7 +231,7 @@ type Sent struct {
 // sendEvent delivers one message to the agent, records it, and tells subscribers.
 // It returns what names the record, or the zero Sent if there is none.
 func (c *Client) sendEvent(ctx context.Context, sessionID string, event agent.MessageEvent, attachments []agent.Attachment, from Sender) (Sent, error) {
-	proc, err := c.getOrCreateProcess(ctx, sessionID)
+	proc, meta, err := c.getOrCreateProcess(ctx, sessionID)
 	if err != nil {
 		return Sent{}, err
 	}
@@ -285,9 +288,18 @@ func (c *Client) sendEvent(ctx context.Context, sessionID string, event agent.Me
 		event.MessageID = ""
 	}
 
-	openedTurn, err := proc.SendMessage(agent.Prompt{Text: deliveredText(event), ID: event.MessageID, Attachments: attachments})
+	// Read and cleared around the delivery rather than taken before it, so a
+	// delivery that fails leaves it for the next. Two inputs delivered at once
+	// may then both carry it: the same true line twice, which misleads nobody.
+	forkNote := c.forkNote(meta)
+	openedTurn, err := proc.SendMessage(agent.Prompt{Text: deliveredText(event, forkNote), ID: event.MessageID, Attachments: attachments})
 	if err != nil {
 		return Sent{}, err
+	}
+	if forkNote != "" {
+		if err := c.canvas.ForkNoteDelivered(sessionID, forkNote); err != nil {
+			slog.Error("failed to clear a fork's canvas note; the next message carries it again", "sessionId", sessionID, "error", err)
+		}
 	}
 
 	if c.broadcast != nil {
@@ -309,16 +321,36 @@ func (c *Client) sendEvent(ctx context.Context, sessionID string, event agent.Me
 	return Sent{Seq: seq, MessageID: event.MessageID}, nil
 }
 
-// deliveredText is what the agent reads for a message: its content, and the
-// sender's canvas size on a line of its own when it reported one. The size is
+// deliveredText is what the agent reads for a message: its content, the
+// sender's canvas size on a line of its own when it reported one, and a fork's
+// note on where its canvas is when one is still to be delivered. Both are
 // added here and never stored in the content, so the content stays what the
-// user typed — a prompt a fork drops comes back as a draft without it — and
-// whoever needs the size reads it from canvas_size (docs/canvas-ui.md §6.3).
-func deliveredText(event agent.MessageEvent) string {
-	if event.CanvasSize == nil {
-		return event.Content
+// user typed — a prompt a fork drops comes back as a draft without them — and
+// whoever needs the size reads it from canvas_size (docs/canvas-ui.md §6.3,
+// §13.6).
+func deliveredText(event agent.MessageEvent, forkNote string) string {
+	text := event.Content
+	if event.CanvasSize != nil {
+		text += fmt.Sprintf("\n[Canvas size: %d×%d]", event.CanvasSize.Width, event.CanvasSize.Height)
 	}
-	return fmt.Sprintf("%s\n[Canvas size: %d×%d]", event.Content, event.CanvasSize.Width, event.CanvasSize.Height)
+	if forkNote != "" {
+		text += "\n" + forkNote
+	}
+	return text
+}
+
+// forkNote is the line a forked canvas session's next delivery carries, empty
+// for any other session. One that cannot be read is not worth refusing the
+// message over: the agent only misses where its canvas is.
+func (c *Client) forkNote(meta session.SessionMeta) string {
+	if !meta.Canvas {
+		return ""
+	}
+	note, err := c.canvas.ForkNote(meta.ID)
+	if err != nil {
+		slog.Error("failed to read a fork's canvas note", "sessionId", meta.ID, "error", err)
+	}
+	return note
 }
 
 // noteIngested writes the read point for an agent that cannot report its own:
@@ -408,24 +440,9 @@ func (c *Client) Interrupt(_ context.Context, sessionID string) error {
 // (ErrForkUnsupported); see agent.ForkSupport for why that is a refusal rather
 // than a fork with a warning on it.
 func (c *Client) Fork(ctx context.Context, sourceID string, anchor session.HistorySeq, title string) (session.SessionMeta, error) {
-	source, found, err := c.store.Get(sourceID)
+	source, err := c.forkSource(sourceID)
 	if err != nil {
-		return session.SessionMeta{}, fmt.Errorf("get session: %w", err)
-	}
-	if !found {
-		return session.SessionMeta{}, ErrSessionNotFound
-	}
-
-	// Asked before anything is created, so a refusal leaves nothing behind. The
-	// question is about the agent, not about this session or this anchor: an agent
-	// that cannot reopen a conversation cannot be forked from anywhere in one.
-	support, err := c.pm.ForkSupport(source.AgentType)
-	if err != nil {
-		return session.SessionMeta{}, fmt.Errorf("resolve agent: %w", err)
-	}
-	if !support.CanFork() {
-		return session.SessionMeta{}, fmt.Errorf("%w: %s cannot reopen a conversation at an earlier message",
-			ErrForkUnsupported, source.AgentType.DisplayName())
+		return session.SessionMeta{}, err
 	}
 
 	records, err := c.store.GetHistory(ctx, sourceID)
@@ -450,6 +467,103 @@ func (c *Client) Fork(ctx context.Context, sourceID string, anchor session.Histo
 			ErrForkAnchorNoHistory, int(anchor))
 	}
 
+	return c.fork(ctx, source, records, keepThrough, title, "anchorSeq", int(anchor))
+}
+
+// ForkAtCanvasRevision is Fork from a page rather than a message
+// (docs/canvas-ui.md §13.6, From a revision): the cut is the tool_result record
+// carrying canvas_revision, kept, which only the server can find — it may be
+// in a page of history the client never loaded.
+//
+// Refused, before anything is created, for a session that is not a canvas
+// session (ErrNotCanvasSession), a revision the canvas does not have
+// (canvas.ErrNoRevision), and one whose record cannot be cut at
+// (*canvas.ForkBlockedError, the same check chat.canvas_history lists).
+func (c *Client) ForkAtCanvasRevision(ctx context.Context, sourceID string, revision int, title string) (session.SessionMeta, error) {
+	source, err := c.forkSource(sourceID)
+	if err != nil {
+		return session.SessionMeta{}, err
+	}
+	if !source.Canvas {
+		return session.SessionMeta{}, ErrNotCanvasSession
+	}
+	// A fork from a page that is not there would open on another one.
+	snap, err := c.canvas.Snapshot(sourceID, revision)
+	if err != nil {
+		return session.SessionMeta{}, err
+	}
+
+	records, cuts, err := c.canvasForkCuts(ctx, sourceID)
+	if err != nil {
+		return session.SessionMeta{}, err
+	}
+	keepThrough, blocked := cuts.Cut(revision, snap.DrawnAt)
+	if blocked != nil {
+		return session.SessionMeta{}, blocked
+	}
+	return c.fork(ctx, source, records, keepThrough, title, "canvasRevision", revision)
+}
+
+// CanvasHistory lists a canvas session's revisions, newest first, each with
+// whether a fork from it would be refused (docs/canvas-ui.md §13.5).
+func (c *Client) CanvasHistory(ctx context.Context, sessionID string) ([]canvas.ListedRevision, error) {
+	// The list first: a revision in it was drawn before its call's result was
+	// recorded, so the cuts read after it see that result or the call in flight.
+	entries, err := c.canvas.History(sessionID)
+	if err != nil {
+		return nil, err
+	}
+	_, cuts, err := c.canvasForkCuts(ctx, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	listed := make([]canvas.ListedRevision, len(entries))
+	for i, e := range entries {
+		listed[i] = canvas.ListedRevision{HistoryEntry: e, ForkBlocked: cuts.Blocked(e.Revision, e.DrawnAt)}
+	}
+	return listed, nil
+}
+
+// canvasForkCuts reads the session's history and where a fork from each of its
+// revisions would cut. What the process is doing is asked before the records
+// are read (see canvas.LiveCalls).
+func (c *Client) canvasForkCuts(ctx context.Context, sessionID string) ([]json.RawMessage, canvas.ForkCuts, error) {
+	live := c.pm.CanvasLive(sessionID)
+	records, err := c.store.GetHistory(ctx, sessionID)
+	if err != nil {
+		return nil, canvas.ForkCuts{}, fmt.Errorf("read history: %w", err)
+	}
+	return records, canvas.ReadForkCuts(records, live), nil
+}
+
+// forkSource is the session a fork is asked of, if it can be forked at all.
+func (c *Client) forkSource(sourceID string) (session.SessionMeta, error) {
+	source, found, err := c.store.Get(sourceID)
+	if err != nil {
+		return session.SessionMeta{}, fmt.Errorf("get session: %w", err)
+	}
+	if !found {
+		return session.SessionMeta{}, ErrSessionNotFound
+	}
+
+	// Asked before anything is created, so a refusal leaves nothing behind. The
+	// question is about the agent, not about this session or this anchor: an agent
+	// that cannot reopen a conversation cannot be forked from anywhere in one.
+	support, err := c.pm.ForkSupport(source.AgentType)
+	if err != nil {
+		return session.SessionMeta{}, fmt.Errorf("resolve agent: %w", err)
+	}
+	if !support.CanFork() {
+		return session.SessionMeta{}, fmt.Errorf("%w: %s cannot reopen a conversation at an earlier message",
+			ErrForkUnsupported, source.AgentType.DisplayName())
+	}
+	return source, nil
+}
+
+// fork makes the new session from source's records 0…keepThrough. at names
+// the cut for the log.
+func (c *Client) fork(ctx context.Context, source session.SessionMeta, records []json.RawMessage, keepThrough int, title, atKey string, at int) (session.SessionMeta, error) {
+	sourceID := source.ID
 	history := agent.TruncateHistory(records, keepThrough)
 
 	newID := uuid.Must(uuid.NewV7()).String()
@@ -519,7 +633,7 @@ func (c *Client) Fork(ctx context.Context, sourceID string, anchor session.Histo
 
 	slog.Info("session forked",
 		"sourceSessionId", sourceID, "sessionId", newID,
-		"anchorSeq", int(anchor), "records", len(history),
+		atKey, at, "records", len(history),
 		"agentContextCarried", carried)
 	return meta, nil
 }
@@ -579,21 +693,21 @@ func (c *Client) liveProcess(sessionID string) (*process.Process, error) {
 // would claim a session had started whenever the CLI merely spawned, and a first
 // turn that failed outright would then be resumed — and locked to its agent
 // type — as if it had run.
-func (c *Client) getOrCreateProcess(ctx context.Context, sessionID string) (*process.Process, error) {
+func (c *Client) getOrCreateProcess(ctx context.Context, sessionID string) (*process.Process, session.SessionMeta, error) {
 	meta, found, err := c.store.Get(sessionID)
 	if err != nil {
-		return nil, fmt.Errorf("get session: %w", err)
+		return nil, session.SessionMeta{}, fmt.Errorf("get session: %w", err)
 	}
 	if !found {
-		return nil, ErrSessionNotFound
+		return nil, session.SessionMeta{}, ErrSessionNotFound
 	}
 
 	proc, _, err := c.pm.GetOrCreateProcess(ctx, meta)
 	if err != nil {
-		return nil, err
+		return nil, session.SessionMeta{}, err
 	}
 
-	return proc, nil
+	return proc, meta, nil
 }
 
 func choiceToString(choice agent.PermissionChoice) string {

@@ -46,7 +46,7 @@ func (h *rpcMethodHandler) handleChatCanvasHistory(ctx context.Context, conn *js
 		return
 	}
 
-	snapshots, err := wt.CanvasStore.History(params.SessionID)
+	snapshots, err := wt.ChatClient.CanvasHistory(ctx, params.SessionID)
 	if err != nil {
 		h.replyInternalError(ctx, conn, req.ID, "failed to read the canvas history", err, "sessionId", params.SessionID)
 		return

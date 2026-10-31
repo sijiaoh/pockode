@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/pockode/server/agent"
+	"github.com/pockode/server/canvas"
 	"github.com/pockode/server/logger"
 	"github.com/pockode/server/session"
 )
@@ -429,6 +430,20 @@ func (m *Manager) GetProcess(sessionID string) *Process {
 	m.processesMu.Lock()
 	defer m.processesMu.Unlock()
 	return m.processes[sessionID]
+}
+
+// CanvasLive is what the session's process is doing that a page with no record
+// naming it may be waiting on: a canvas call whose result is not recorded yet,
+// or an open turn, running or blocked (docs/canvas-ui.md §13.5).
+func (m *Manager) CanvasLive(sessionID string) canvas.LiveCalls {
+	p := m.GetProcess(sessionID)
+	if p == nil {
+		return canvas.LiveCalls{}
+	}
+	return canvas.LiveCalls{
+		CallsInFlight: p.canvasCalls.inFlight(),
+		TurnOpenedAt:  p.TurnState().OpenedAt,
+	}
 }
 
 // HasProcess returns whether a process exists for the given session.
@@ -1482,6 +1497,7 @@ func (p *Process) handleEvent(ctx context.Context, log *slog.Logger, event agent
 			log.Error("failed to append to history", "error", err)
 		}
 	}
+	p.canvasCalls.settle(event)
 
 	if reduce {
 		// process_ended has its own announcement, made by the goroutine that

@@ -30,6 +30,9 @@ type mockAgent struct {
 
 	mu       sync.Mutex
 	sessions []*mockSession
+	// failSends is how many of the next prompts the plain sessions it starts
+	// refuse, as a CLI whose stdin is gone does.
+	failSends int
 }
 
 func (a *mockAgent) Start(context.Context, agent.StartOptions) (agent.Session, error) {
@@ -47,7 +50,7 @@ func (a *mockAgent) Start(context.Context, agent.StartOptions) (agent.Session, e
 		a.mu.Unlock()
 		return sess, nil
 	}
-	sess := &mockSession{events: make(chan agent.AgentEvent)}
+	sess := &mockSession{events: make(chan agent.AgentEvent), owner: a}
 	a.mu.Lock()
 	a.sessions = append(a.sessions, sess)
 	a.mu.Unlock()
@@ -80,6 +83,8 @@ func (a *mockAgent) session(t *testing.T, n int) *mockSession {
 
 type mockSession struct {
 	events chan agent.AgentEvent
+	// owner, when set, is asked whether to refuse a prompt (failSends).
+	owner *mockAgent
 
 	promptsMu sync.Mutex
 	prompts   []agent.Prompt
@@ -88,6 +93,17 @@ type mockSession struct {
 func (s *mockSession) Events() <-chan agent.AgentEvent { return s.events }
 
 func (s *mockSession) SendMessage(prompt agent.Prompt) error {
+	if s.owner != nil {
+		s.owner.mu.Lock()
+		refuse := s.owner.failSends > 0
+		if refuse {
+			s.owner.failSends--
+		}
+		s.owner.mu.Unlock()
+		if refuse {
+			return errors.New("mock: the CLI refused the prompt")
+		}
+	}
 	s.promptsMu.Lock()
 	s.prompts = append(s.prompts, prompt)
 	s.promptsMu.Unlock()

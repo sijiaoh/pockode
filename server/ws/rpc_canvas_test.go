@@ -256,7 +256,11 @@ func TestChatCanvasAction_RefusedWhileAPermissionIsOpen(t *testing.T) {
 	env := newTestEnv(t, &mockAgent{})
 	row := env.createCanvasSession()
 	env.drawCanvas(row.ID, "<p>one</p>")
+	env.subscribeChatMessages(row.ID)
 	env.sendMessage(row.ID, "run ls")
+	// The mock answers every message with a done of its own; a request raised
+	// before it would be withdrawn by that ending.
+	env.awaitNotification("chat.done")
 	raisePrompt(t, env, row.ID, "req-1", agent.PermissionRequestEvent{RequestID: "req-1", ToolName: "Bash"})
 
 	resp := env.call("chat.canvas_action", rpc.CanvasActionParams{
@@ -345,6 +349,9 @@ func TestChatSubscribe_PendingPermissionRequests(t *testing.T) {
 		t.Fatalf("permission_requests before any = %s", got)
 	}
 	env.sendMessage(row.ID, "run ls")
+	// The mock answers every message with a done of its own; a request raised
+	// before it would be withdrawn by that ending.
+	env.awaitNotification("chat.done")
 	raisePrompt(t, env, row.ID, "req-1",
 		agent.PermissionRequestEvent{RequestID: "req-1", ToolName: "Bash", ToolInput: []byte(`{"command":"ls"}`), ToolUseID: "toolu_1"})
 	// The turn is blocked before the record is written; the notification is

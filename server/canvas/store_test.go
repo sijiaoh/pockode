@@ -4,6 +4,8 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"sync"
 	"testing"
 
@@ -254,9 +256,10 @@ func TestStore_Fork(t *testing.T) {
 		t.Errorf("revision 3 was copied into the fork: %v", err)
 	}
 
+	// Past the source's revision 3, which the fork's agent may remember.
 	next := mustApply(t, s, "fork", render("fork's own"))
-	if next.Revision != 3 || next.DrawnFor == nil || *next.DrawnFor != *size {
-		t.Errorf("fork's next = %+v, want revision 3 drawn for the inherited size", next)
+	if next.Revision != 4 || next.DrawnFor == nil || *next.DrawnFor != *size {
+		t.Errorf("fork's next = %+v, want revision 4 drawn for the inherited size", next)
 	}
 	if snap, err := s.Snapshot("src", 3); err != nil || snap.HTML != "three" {
 		t.Errorf("source's revision 3 = %+v, %v; the fork must not touch it", snap, err)
@@ -276,6 +279,108 @@ func TestStore_ForkFailureKeepsTheNumbering(t *testing.T) {
 	}
 	if st := mustCurrent(t, s, "fork"); st.Revision != 0 {
 		t.Errorf("fork state = %+v, want nothing drawn", st)
+	}
+	if note, _ := s.ForkNote("fork"); note != forkNoteUncopied {
+		t.Errorf("fork note = %q, want the one saying the canvas is empty", note)
+	}
+	if next := mustApply(t, s, "fork", render("fresh")); next.Revision != 3 {
+		t.Errorf("fork's next revision = %d, want 3: 1 and 2 are named by its history", next.Revision)
+	}
+}
+
+// Every fork numbers on from its source's next-revision floor, a fork of a
+// fork that has not drawn yet included, and its first delivery is told which
+// page is on the canvas (docs/canvas-ui.md §13.6).
+func TestStore_ForkNumbersPastTheSourceAndLeavesANote(t *testing.T) {
+	s := NewStore(t.TempDir())
+	for _, html := range []string{"one", "two", "three", "four", "five"} {
+		mustApply(t, s, "src", render(html))
+	}
+
+	if err := s.Fork("src", "fork", 2, nil); err != nil {
+		t.Fatalf("Fork: %v", err)
+	}
+	note, err := s.ForkNote("fork")
+	if err != nil || note != forkNoteAt(2) {
+		t.Errorf("fork note = %q, %v; want it to name revision 2", note, err)
+	}
+	if err := s.ForkNoteDelivered("fork", "an older note"); err != nil {
+		t.Fatal(err)
+	}
+	if again, _ := s.ForkNote("fork"); again != note {
+		t.Errorf("a note other than the stored one cleared it: %q", again)
+	}
+	if err := s.ForkNoteDelivered("fork", note); err != nil {
+		t.Fatal(err)
+	}
+	// Read from disk, as after a restart.
+	if again, _ := NewStore(s.dataDir).ForkNote("fork"); again != "" {
+		t.Errorf("fork note = %q after it was delivered, want none", again)
+	}
+
+	// The fork has drawn nothing yet: its revision is still 2, its floor 5.
+	if err := s.Fork("fork", "fork2", 1, nil); err != nil {
+		t.Fatalf("Fork of the fork: %v", err)
+	}
+	if next := mustApply(t, s, "fork2", render("own")); next.Revision != 6 {
+		t.Errorf("fork of a fork numbered %d, want 6: past everything its source's agent may remember", next.Revision)
+	}
+	if next := mustApply(t, s, "fork", render("own")); next.Revision != 6 {
+		t.Errorf("fork numbered %d, want 6", next.Revision)
+	}
+	// 3…5 are the source's pages past the cut: never this canvas's, not lost.
+	entries, err := s.History("fork")
+	if err != nil {
+		t.Fatalf("History: %v", err)
+	}
+	var listed []int
+	for _, e := range entries {
+		listed = append(listed, e.Revision)
+	}
+	if !slices.Equal(listed, []int{6, 2, 1}) {
+		t.Errorf("fork's history = %v, want [6 2 1]", listed)
+	}
+	if _, err := s.Snapshot("fork", 4); !errors.Is(err, ErrNoRevision) || !strings.Contains(err.Error(), "not carried into this session") {
+		t.Errorf("Snapshot(4) error = %v, want one saying it was not carried into the fork", err)
+	}
+	// A page it did copy and then lost is lost, not uncarried.
+	if err := os.Remove(snapshotPath(Dir(s.dataDir, "fork"), 1)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Snapshot("fork", 1); !errors.Is(err, ErrNoRevision) || !strings.Contains(err.Error(), "lost from disk") {
+		t.Errorf("Snapshot(1) error = %v, want one saying it was lost from disk", err)
+	}
+
+	// A cut before the first page copies nothing and says nothing, but still
+	// numbers past the source.
+	if err := s.Fork("src", "fork3", 0, nil); err != nil {
+		t.Fatalf("Fork at revision 0: %v", err)
+	}
+	if note, _ := s.ForkNote("fork3"); note != "" {
+		t.Errorf("fork with no page has a note: %q", note)
+	}
+	if st := mustCurrent(t, s, "fork3"); st.Revision != 0 {
+		t.Errorf("fork3 state = %+v, want nothing drawn", st)
+	}
+	if next := mustApply(t, s, "fork3", render("own")); next.Revision != 6 {
+		t.Errorf("fork at revision 0 numbered %d, want 6", next.Revision)
+	}
+}
+
+// A source whose canvas cannot be read — deleted while the fork was made —
+// still leaves the fork numbered past the records it inherited, and its agent
+// told the canvas is empty.
+func TestStore_ForkFromAnUnreadableSource(t *testing.T) {
+	s := NewStore(t.TempDir())
+	mustApply(t, s, "src", render("one"))
+	mustApply(t, s, "src", render("two"))
+	s.OnSessionChange(session.SessionChangeEvent{Op: session.OperationDelete, Session: session.SessionMeta{ID: "src"}})
+
+	if err := s.Fork("src", "fork", 2, nil); err == nil {
+		t.Fatal("Fork from a deleted source succeeded")
+	}
+	if note, _ := s.ForkNote("fork"); note != forkNoteUncopied {
+		t.Errorf("fork note = %q, want the one saying the canvas is empty", note)
 	}
 	if next := mustApply(t, s, "fork", render("fresh")); next.Revision != 3 {
 		t.Errorf("fork's next revision = %d, want 3: 1 and 2 are named by its history", next.Revision)

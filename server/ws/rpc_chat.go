@@ -402,6 +402,9 @@ func (h *rpcMethodHandler) replyErrorForChat(ctx context.Context, conn *jsonrpc2
 		errors.Is(err, chat.ErrForkAnchorOutOfRange) ||
 		errors.Is(err, chat.ErrForkAnchorNoHistory) ||
 		errors.Is(err, chat.ErrForkUnsupported) ||
+		errors.Is(err, chat.ErrNotCanvasSession) ||
+		errors.Is(err, canvas.ErrNoRevision) ||
+		errors.Is(err, canvas.ErrForkBlocked) ||
 		errors.Is(err, chat.ErrAttachmentsUnsupported) {
 		// The request does not fit the session's history, state or agent — a prompt
 		// whose process is gone or which is no longer being waited on, a message
@@ -410,8 +413,9 @@ func (h *rpcMethodHandler) replyErrorForChat(ctx context.Context, conn *jsonrpc2
 		// those answers out and keep the rest of the draft), a message
 		// sent into a turn that is holding a request open, a fork anchored past
 		// the end of the history or at the very first message, a fork of a
-		// session whose agent cannot be forked, files for an agent that cannot
-		// receive them.
+		// session whose agent cannot be forked, a fork from a page that is not
+		// there or has no point in the conversation to cut at, files for an
+		// agent that cannot receive them.
 		// The message names what was wrong, and none of them is a server fault.
 		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, err.Error())
 	} else {

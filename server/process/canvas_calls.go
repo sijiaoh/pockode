@@ -15,9 +15,13 @@ import (
 // says the revision in its first line (canvas.RevisionFromResult). The
 // revision is stamped on the result before it is recorded or broadcast, so the
 // record carries it from the moment it exists (docs/canvas-ui.md §13.4).
+//
+// It is also what says a canvas call is still in flight, for a fork from a
+// page whose result has not been recorded yet (canvas.ForkPending,
+// Manager.CanvasLive).
 type canvasCalls struct {
 	callsMu sync.Mutex
-	// pending are the canvas calls whose result has not arrived, by
+	// pending are the canvas calls whose result has not been recorded, by
 	// tool_use_id.
 	pending map[string]bool
 }
@@ -40,7 +44,6 @@ func (c *canvasCalls) stamp(event agent.AgentEvent) agent.AgentEvent {
 	case agent.ToolResultEvent:
 		c.callsMu.Lock()
 		pending := c.pending[e.ToolUseID]
-		delete(c.pending, e.ToolUseID)
 		c.callsMu.Unlock()
 		if !pending || e.IsError {
 			return event
@@ -49,14 +52,35 @@ func (c *canvasCalls) stamp(event agent.AgentEvent) agent.AgentEvent {
 			e.CanvasRevision = revision
 			return e
 		}
+	}
+	return event
+}
 
-	case agent.DoneEvent, agent.InterruptedEvent, agent.ErrorEvent:
+// settle forgets what an event ended, once it has been recorded. Not at
+// stamp: a call is in flight until its result is in history, or a fork asked
+// for in between would find the page neither pending nor recorded.
+func (c *canvasCalls) settle(event agent.AgentEvent) {
+	switch e := event.(type) {
+	case agent.ToolResultEvent:
+		c.callsMu.Lock()
+		delete(c.pending, e.ToolUseID)
+		c.callsMu.Unlock()
+
+	case agent.DoneEvent, agent.InterruptedEvent, agent.ErrorEvent, agent.ProcessEndedEvent:
 		// A turn that is over leaves no call running, so a canvas call cut short
-		// by a stop or a crashed CLI is never going to get its result. A canvas
+		// by a stop or a crashed CLI is never going to get its result. The
+		// process ending is cleared here too, not left to the process being
+		// dropped: a list read in between would still find the call in flight,
+		// and the client reads it on this very record (docs/canvas-ui.md §15.3). A canvas
 		// call is never background work, unlike the calls toolActivity keeps.
 		c.callsMu.Lock()
 		clear(c.pending)
 		c.callsMu.Unlock()
 	}
-	return event
+}
+
+func (c *canvasCalls) inFlight() bool {
+	c.callsMu.Lock()
+	defer c.callsMu.Unlock()
+	return len(c.pending) > 0
 }

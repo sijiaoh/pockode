@@ -318,7 +318,9 @@ type SessionCreateParams struct {
 }
 
 // SessionForkParams asks for a new session holding this session's conversation
-// up to the moment before one record of its history happened.
+// up to the moment before one record of its history happened, or up to the
+// moment a canvas page had just been drawn. Exactly one of AnchorSeq and
+// CanvasRevision is given.
 type SessionForkParams struct {
 	SessionID string `json:"session_id"` // the session to fork
 	// AnchorSeq is the seq of the message the user picked — the number the server
@@ -330,7 +332,11 @@ type SessionForkParams struct {
 	// sent it (see chat.Client.Fork). A client must not do that arithmetic
 	// itself — the seq is an address the server handed out, not an index.
 	// The cut need not be the end of a turn.
-	AnchorSeq session.HistorySeq `json:"anchor_seq"`
+	AnchorSeq *session.HistorySeq `json:"anchor_seq,omitempty"`
+	// CanvasRevision forks a canvas session from a page: the cut is the
+	// tool_result record that drew it, kept, which the server finds itself
+	// (docs/canvas-ui.md §13.6, From a revision; chat.Client.ForkAtCanvasRevision).
+	CanvasRevision *int `json:"canvas_revision,omitempty"`
 	// Title names the new session. Empty copies the source's title.
 	Title string `json:"title,omitempty"`
 }
@@ -1121,7 +1127,7 @@ type ChatCanvasHistoryParams struct {
 
 type ChatCanvasHistoryResult struct {
 	// Snapshots are every revision, newest first, without their pages.
-	Snapshots []canvas.HistoryEntry `json:"snapshots"`
+	Snapshots []canvas.ListedRevision `json:"snapshots"`
 }
 
 // ChatCanvasSnapshotParams asks for one revision whole. The reply is the

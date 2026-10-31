@@ -87,12 +87,30 @@ func TestCanvasCalls_ForgetCallsAtTurnEnd(t *testing.T) {
 	var c canvasCalls
 	drawn := canvas.ResultText(canvas.Snapshot{Revision: 4}, nil)
 
-	for _, ending := range []agent.AgentEvent{agent.DoneEvent{}, agent.InterruptedEvent{}, agent.ErrorEvent{}} {
+	for _, ending := range []agent.AgentEvent{agent.DoneEvent{}, agent.InterruptedEvent{}, agent.ErrorEvent{}, agent.ProcessEndedEvent{}} {
 		c.stamp(agent.ToolCallEvent{ToolUseID: "id", ToolName: "mcp__pockode__canvas_render"})
-		c.stamp(ending)
+		c.settle(ending)
 		got := c.stamp(agent.ToolResultEvent{ToolUseID: "id", ToolResult: drawn})
 		if r := got.(agent.ToolResultEvent); r.CanvasRevision != 0 {
 			t.Errorf("after %T: canvas_revision = %d, want none", ending, r.CanvasRevision)
 		}
+	}
+}
+
+// A canvas call is in flight from its tool_call until its result has been
+// recorded, not merely seen: a fork asked for in between must find the page
+// pending rather than without a record (docs/canvas-ui.md §13.5).
+func TestCanvasCalls_InFlightUntilTheResultIsRecorded(t *testing.T) {
+	var c canvasCalls
+	result := agent.ToolResultEvent{ToolUseID: "id", ToolResult: canvas.ResultText(canvas.Snapshot{Revision: 1}, nil)}
+
+	c.stamp(agent.ToolCallEvent{ToolUseID: "id", ToolName: "pockode:canvas_render"})
+	c.stamp(result)
+	if !c.inFlight() {
+		t.Fatal("not in flight after its result was stamped but before it was recorded")
+	}
+	c.settle(result)
+	if c.inFlight() {
+		t.Fatal("still in flight after its result was recorded")
 	}
 }

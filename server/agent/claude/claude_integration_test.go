@@ -309,6 +309,106 @@ func TestIntegration_ForkSessionCarriesContext(t *testing.T) {
 	}
 }
 
+// TestIntegration_ForkAtToolResult checks the resume point a fork from a
+// canvas page asks for (docs/canvas-ui.md §13.6, From a revision): the cut is
+// a tool_result, so --resume-session-at names the uuid of the user frame that
+// carried it — a point no message fork asks for. The fork has to remember the
+// call and its result, and nothing the turn said after it.
+//
+// Run with Bash rather than a canvas tool: the MCP server needs a running
+// Pockode, and what is under test is only where the CLI resumes.
+func TestIntegration_ForkAtToolResult(t *testing.T) {
+	// One turn with a tool call on the source, one plain turn on the fork.
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Second)
+	defer cancel()
+
+	workDir := t.TempDir()
+	dataDir := t.TempDir()
+	sourceID := uuid.Must(uuid.NewV7()).String()
+
+	source, err := New().Start(ctx, agent.StartOptions{
+		WorkDir:    workDir,
+		DataDir:    dataDir,
+		SessionID:  sourceID,
+		Mode:       session.ModeYolo,
+		DisableMCP: true,
+	})
+	if err != nil {
+		t.Fatalf("Start source failed: %v", err)
+	}
+	defer source.Close()
+
+	// The word said after the result is spelled backwards in the prompt, so
+	// that only the agent's own reply puts it in a transcript.
+	turn := agent.TurnOn(t, ctx, source, "Use the Bash tool to run exactly: echo PINEAPPLE-42\n"+
+		"After it returns, reply with only the word OGNAM spelled backwards, in capitals.")
+	if !strings.Contains(turn.Said, "MANGO") {
+		t.Fatalf("the source turn did not say the word after the result, it said: %s", turn.Said)
+	}
+	cut := -1
+	for i, raw := range turn.Records {
+		var rec agent.EventRecord
+		if err := json.Unmarshal(raw, &rec); err == nil && rec.Type == agent.EventTypeToolResult &&
+			strings.Contains(rec.ToolResult, "PINEAPPLE-42") && rec.ProviderMessageID != "" {
+			cut = i
+			break
+		}
+	}
+	if cut < 0 {
+		t.Fatal("no tool_result record carrying a CLI message id named the command's output")
+	}
+	history := agent.TruncateHistory(turn.Records, cut)
+	if got := forkAnchorMessage(history); got != recordProviderMessageID(t, turn.Records[cut]) {
+		t.Fatalf("the fork would resume at %q, not at the tool result", got)
+	}
+
+	sourceState := readIntegrationResumeState(t, dataDir, sourceID)
+	awaitProviderMessage(t, sourceState.SessionID, lastProviderMessageID(t, turn.Records))
+	source.Close()
+
+	forkID := uuid.Must(uuid.NewV7()).String()
+	carried, err := New().ForkSession(ctx, agent.ForkOptions{
+		WorkDir:         workDir,
+		DataDir:         dataDir,
+		SourceSessionID: sourceID,
+		SessionID:       forkID,
+		History:         history,
+	})
+	if err != nil {
+		t.Fatalf("ForkSession: %v", err)
+	}
+	if !carried {
+		t.Fatal("fork at a tool result reported no carried context")
+	}
+
+	said := agent.RunPrompt(t, New(), workDir, dataDir, forkID, true,
+		"What did the command you just ran print? Reply with exactly its output and nothing else.")
+	if !strings.Contains(said, "PINEAPPLE-42") {
+		t.Fatalf("the forked session did not remember the tool result, it said: %s", said)
+	}
+
+	forkState := readIntegrationResumeState(t, dataDir, forkID)
+	if forkState.Recovery != recoveryNone {
+		t.Errorf("recovery = %q after a successful turn, want empty", forkState.Recovery)
+	}
+	forkTranscript := readProviderTranscript(t, forkState.SessionID)
+	if !strings.Contains(forkTranscript, "PINEAPPLE-42") {
+		t.Error("the fork's transcript lacks the tool result it was cut at")
+	}
+	if strings.Contains(forkTranscript, "MANGO") {
+		t.Error("the fork's transcript holds what the source said after the cut")
+	}
+}
+
+func recordProviderMessageID(t *testing.T, raw json.RawMessage) string {
+	t.Helper()
+	var rec agent.EventRecord
+	if err := json.Unmarshal(raw, &rec); err != nil {
+		t.Fatalf("record does not parse: %v", err)
+	}
+	return rec.ProviderMessageID
+}
+
 // checkForkedSessions is Claude's half of the shared fork scenario: where the
 // two sessions' conversations ended up, which the suite cannot ask about because
 // only this package knows a conversation is a provider session with a transcript

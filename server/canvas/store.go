@@ -44,6 +44,27 @@ func snapshotPath(dir string, revision int) string {
 type stateFile struct {
 	Revision     int   `json:"revision"`
 	ReportedSize *Size `json:"reported_size,omitempty"`
+	// NumberedFrom is a fork's: its source's next-revision floor at the fork,
+	// past every page the fork's agent may remember (docs/canvas-ui.md §13.6).
+	NumberedFrom int `json:"numbered_from,omitempty"`
+	// ForkedAt is a fork's: the revision it was cut at, the highest it copied.
+	// Revisions above it up to NumberedFrom are the source's pages past the
+	// cut, which this canvas never had.
+	ForkedAt int `json:"forked_at,omitempty"`
+	// ForkNote is a fork's: the line its first delivered input carries, until
+	// a delivery carrying it has succeeded.
+	ForkNote string `json:"fork_note,omitempty"`
+}
+
+// floor is the next-revision floor: the next revision is floor + 1.
+func (f stateFile) floor() int {
+	return max(f.Revision, f.NumberedFrom)
+}
+
+// notCarried reports whether a revision is one a fork never had: a page the
+// source drew past the cut, numbered before the fork's own.
+func (f stateFile) notCarried(revision int) bool {
+	return revision > f.ForkedAt && revision <= f.NumberedFrom
 }
 
 // Base is what a new revision is built from: the canvas as it is now.
@@ -223,7 +244,11 @@ func (c *sessionCanvas) load(dir string) error {
 			// been quarantined. Tool results in the transcript name the
 			// revisions it counted, so the numbering goes on after the highest
 			// snapshot rather than starting again over them. The reported size
-			// is lost; the next message reports it again.
+			// is lost, and the next message reports it again; so are a fork's
+			// numbered_from and fork_note, accepted for a file a crash had to
+			// corrupt before the fork's first page, and its forked_at, after
+			// which the source's pages past the cut read as lost rather than
+			// never copied (docs/canvas-ui.md §13.3).
 			if file.Revision, err = highestSnapshot(dir); err != nil {
 				return err
 			}
@@ -328,7 +353,7 @@ func (s *Store) applyLocked(c *sessionCanvas, sessionID string, build func(Base)
 		change.FromRevision = base.Revision
 	}
 	snap := Snapshot{
-		Revision: c.file.Revision + 1,
+		Revision: c.file.floor() + 1,
 		HTML:     draft.HTML,
 		DrawnFor: base.ReportedSize,
 		Change:   change,
@@ -351,7 +376,8 @@ func (s *Store) applyLocked(c *sessionCanvas, sessionID string, build func(Base)
 	if err := filestore.WriteFileAtomic(snapshotPath(dir, snap.Revision), data, filePerm); err != nil {
 		return Snapshot{}, fmt.Errorf("write canvas snapshot: %w", err)
 	}
-	file := stateFile{Revision: snap.Revision, ReportedSize: c.file.ReportedSize}
+	file := c.file
+	file.Revision = snap.Revision
 	if err := writeState(dir, file); err != nil {
 		return Snapshot{}, err
 	}
@@ -427,8 +453,9 @@ func (s *Store) History(sessionID string) ([]HistoryEntry, error) {
 	if err != nil {
 		return nil, err
 	}
-	revision := c.file.Revision
+	file := c.file
 	c.canvasMu.Unlock()
+	revision := file.Revision
 
 	// Read outside the lock: nothing up to the revision just read is ever
 	// rewritten, so nothing can change under the reads.
@@ -448,6 +475,9 @@ func (s *Store) History(sessionID string) ([]HistoryEntry, error) {
 			}
 		}
 		snap, err := readSnapshot(dir, r)
+		if errors.Is(err, fs.ErrNotExist) && file.notCarried(r) {
+			continue
+		}
 		if err != nil {
 			slog.Error("canvas revision unreadable, left out of the history",
 				"sessionId", sessionID, "revision", r, "error", err)
@@ -480,13 +510,17 @@ func (s *Store) Snapshot(sessionID string, revision int) (Snapshot, error) {
 	if err != nil {
 		return Snapshot{}, err
 	}
-	current := c.file.Revision
+	file := c.file
 	c.canvasMu.Unlock()
+	current := file.Revision
 
 	if revision < 1 || revision > current {
 		return Snapshot{}, fmt.Errorf("%w: revision %d, the canvas is at %d", ErrNoRevision, revision, current)
 	}
 	snap, err := readSnapshot(Dir(s.dataDir, sessionID), revision)
+	if errors.Is(err, fs.ErrNotExist) && file.notCarried(revision) {
+		return Snapshot{}, fmt.Errorf("%w: revision %d was not carried into this session when it was forked", ErrNoRevision, revision)
+	}
 	if errors.Is(err, fs.ErrNotExist) {
 		return Snapshot{}, fmt.Errorf("%w: revision %d was lost from disk", ErrNoRevision, revision)
 	}
@@ -496,9 +530,13 @@ func (s *Store) Snapshot(sessionID string, revision int) (Snapshot, error) {
 // Fork gives a new session the canvas as it was at revision, with reported as
 // its reported size (both from ForkPoint). Revisions 1…revision are hard-linked
 // rather than copied, as attachments are: a snapshot is only ever replaced by a
-// rename, never written in place, so the two sessions can share the file. The
-// fork's next revision is revision + 1; the source's later ones are not taken,
-// so the numbers cannot collide.
+// rename, never written in place, so the two sessions can share the file.
+//
+// The fork's next revision is the source's next one at this moment, not
+// revision + 1: the source's later pages are not copied, but the fork's agent
+// may remember them, and their numbers must not come back as other pages
+// (docs/canvas-ui.md §13.6). Its first delivered input says where the canvas
+// is (ForkNote).
 //
 // The fork's canvas is locked throughout, and pushed once copied: a client
 // that subscribed to the fork as soon as it was listed was handed the empty
@@ -506,11 +544,25 @@ func (s *Store) Snapshot(sessionID string, revision int) (Snapshot, error) {
 //
 // A snapshot below revision the source lost is left out, as the source's own
 // history leaves it out. On error the fork is left with no page at all rather
-// than part of one — but still numbered after revision, because the history it
-// inherited names revisions 1…revision, and a new page under one of those
+// than part of one — but still numbered past the source, because the history
+// it inherited names revisions 1…revision, and a new page under one of those
 // numbers would be read back as the page that record drew.
 func (s *Store) Fork(sourceID, forkID string, revision int, reported *Size) error {
-	if revision == 0 && reported == nil {
+	// At least revision, should the source's state have been recovered from
+	// fewer snapshots than its transcript names (load), or be unreadable now:
+	// the fork's own numbering must still clear the records it inherited.
+	floor := revision
+	var source stateFile
+	if src, err := s.lockedCanvas(sourceID); err != nil {
+		slog.Error("failed to read the source's canvas for a fork; numbering the fork past its cut only",
+			"sessionId", forkID, "sourceSessionId", sourceID, "error", err)
+	} else {
+		source = src.file
+		src.canvasMu.Unlock()
+		floor = max(source.floor(), revision)
+	}
+
+	if floor == 0 && reported == nil {
 		return nil
 	}
 	c, err := s.lockedCanvas(forkID)
@@ -519,8 +571,8 @@ func (s *Store) Fork(sourceID, forkID string, revision int, reported *Size) erro
 	}
 	err = s.writable(c, forkID)
 	if err == nil {
-		if err = s.fork(sourceID, forkID, revision, reported); err != nil {
-			s.forkNumberingOnly(forkID, revision, reported)
+		if err = s.fork(sourceID, forkID, source, revision, floor, reported); err != nil {
+			s.forkNumberingOnly(forkID, revision, floor, reported)
 		}
 		if writtenErr := s.written(c, forkID); writtenErr != nil {
 			err = writtenErr
@@ -541,51 +593,103 @@ func (s *Store) Fork(sourceID, forkID string, revision int, reported *Size) erro
 	return nil
 }
 
-func (s *Store) fork(sourceID, forkID string, revision int, reported *Size) error {
+func (s *Store) fork(sourceID, forkID string, source stateFile, revision, floor int, reported *Size) error {
 	srcDir := Dir(s.dataDir, sourceID)
 	dstDir := Dir(s.dataDir, forkID)
 	if err := os.MkdirAll(dstDir, 0o755); err != nil {
 		return fmt.Errorf("create canvas dir: %w", err)
 	}
-	copied := 0
+	shown := 0
 	for r := 1; r <= revision; r++ {
 		err := linkOrCopy(snapshotPath(srcDir, r), snapshotPath(dstDir, r))
 		if errors.Is(err, fs.ErrNotExist) {
-			slog.Error("canvas revision lost from disk, left out of the fork",
-				"sessionId", forkID, "sourceSessionId", sourceID, "revision", r)
+			if !source.notCarried(r) {
+				slog.Error("canvas revision lost from disk, left out of the fork",
+					"sessionId", forkID, "sourceSessionId", sourceID, "revision", r)
+			}
 			continue
 		}
 		if err != nil {
 			return fmt.Errorf("copy canvas revision %d: %w", r, err)
 		}
-		copied++
+		shown = r
 	}
-	if revision > 0 && copied == 0 {
+	if revision > 0 && shown == 0 {
 		return fmt.Errorf("copy canvas: none of revisions 1…%d is on disk", revision)
 	}
-	if err := writeState(dstDir, stateFile{Revision: revision, ReportedSize: copySize(reported)}); err != nil {
+	file := stateFile{Revision: revision, ReportedSize: copySize(reported), NumberedFrom: floor, ForkedAt: revision}
+	if shown > 0 {
+		// The revision the fork shows, which is the newest one copied when
+		// revision itself was lost (readableSnapshot).
+		file.ForkNote = forkNoteAt(shown)
+	}
+	if err := writeState(dstDir, file); err != nil {
 		return err
 	}
 	return forkIndex(srcDir, dstDir, revision)
 }
 
-// forkNumberingOnly leaves a fork whose copy failed with no page and the
-// numbering going on after revision (see Fork).
-func (s *Store) forkNumberingOnly(forkID string, revision int, reported *Size) {
+// forkNumberingOnly leaves a fork whose copy failed with no page, the
+// numbering going on past floor, and the note saying the canvas is empty
+// (see Fork).
+func (s *Store) forkNumberingOnly(forkID string, revision, floor int, reported *Size) {
 	dir := Dir(s.dataDir, forkID)
 	if err := os.RemoveAll(dir); err != nil {
 		slog.Error("failed to remove a canvas that could not be copied into a fork",
 			"sessionId", forkID, "error", err)
 		return
 	}
+	file := stateFile{ReportedSize: copySize(reported), NumberedFrom: floor}
+	if revision > 0 {
+		file.ForkNote = forkNoteUncopied
+	}
 	err := os.MkdirAll(dir, 0o755)
 	if err == nil {
-		err = writeState(dir, stateFile{Revision: revision, ReportedSize: copySize(reported)})
+		err = writeState(dir, file)
 	}
 	if err != nil {
 		slog.Error("failed to keep a fork's canvas numbering after a failed copy; its next revision may reuse a number its history names",
-			"sessionId", forkID, "revision", revision, "error", err)
+			"sessionId", forkID, "floor", floor, "error", err)
 	}
+}
+
+// ForkNote is the line a fork's next delivered input carries, empty when
+// there is none: the session is not a fork, its fork had nothing drawn, or a
+// delivery has already carried it.
+func (s *Store) ForkNote(sessionID string) (string, error) {
+	c, err := s.lockedCanvas(sessionID)
+	if err != nil {
+		return "", err
+	}
+	defer c.canvasMu.Unlock()
+	return c.file.ForkNote, nil
+}
+
+// ForkNoteDelivered clears note once a delivery carrying it has succeeded. A
+// note that is no longer the one stored is left alone.
+func (s *Store) ForkNoteDelivered(sessionID, note string) error {
+	c, err := s.lockedCanvas(sessionID)
+	if err != nil {
+		return err
+	}
+	defer c.canvasMu.Unlock()
+
+	if note == "" || c.file.ForkNote != note {
+		return nil
+	}
+	if err := s.writable(c, sessionID); err != nil {
+		return err
+	}
+	file := c.file
+	file.ForkNote = ""
+	if err := writeState(Dir(s.dataDir, sessionID), file); err != nil {
+		return err
+	}
+	if err := s.written(c, sessionID); err != nil {
+		return err
+	}
+	c.file = file
+	return nil
 }
 
 // forkIndex gives the fork the source's index lines up to revision. Not
