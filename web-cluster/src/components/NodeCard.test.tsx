@@ -30,12 +30,14 @@ function installedState(
 	return {
 		read: {
 			kind: "read",
-			installed: {
+			value: {
 				path: "/usr/local/bin/pockode",
 				version: version ?? undefined,
 			},
 		},
+		last: null,
 		landed: 0,
+		pending: false,
 		refresh: () => 0,
 	};
 }
@@ -463,7 +465,9 @@ describe("NodeCard: Restart", () => {
 				target === undefined
 					? {
 							read: { kind: "failed", message: "x" },
+							last: null,
 							landed: 0,
+							pending: false,
 							refresh: () => 0,
 						}
 					: installedState(target),

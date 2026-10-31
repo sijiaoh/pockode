@@ -71,7 +71,12 @@ interface AuthResult {
 	session_token: string;
 }
 
-interface RPCActions extends NodeActions, Pick<ServerActions, "serverVersion"> {
+interface RPCActions
+	extends NodeActions,
+		Pick<
+			ServerActions,
+			"serverVersion" | "serverUpdateCheck" | "serverUpdate"
+		> {
 	connect: (credential: AuthCredential) => void;
 	disconnect: () => void;
 	retryNow: () => void;
@@ -361,6 +366,8 @@ export const useWSStore = create<WSState>()((set, get) => {
 		actions: {
 			...nodeActions,
 			serverVersion: serverActions.serverVersion,
+			serverUpdateCheck: serverActions.serverUpdateCheck,
+			serverUpdate: serverActions.serverUpdate,
 			connect: (credential: AuthCredential) => {
 				// A socket is already active or being established; don't open a
 				// second one. Without this guard a re-entrant connect (e.g. React

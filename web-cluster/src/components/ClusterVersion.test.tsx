@@ -7,6 +7,8 @@ import { ClusterVersion } from "./ClusterVersion";
 
 const actions = {
 	serverVersion: vi.fn(),
+	// The release check is ClusterVersion.update.test.tsx's; here it never answers.
+	serverUpdateCheck: vi.fn(() => new Promise(() => {})),
 	restartServer: vi.fn(),
 };
 
