@@ -24,6 +24,12 @@ Nodes keep running when you close the terminal the cluster was started from, or 
 
 A node whose process died without cleaning up shows under **Needs attention**. **Start** it again, or **Clean up** to clear the leftover state.
 
+## Upgrade
+
+After [running the install command again](/docs/install/), the version in the page's header offers to restart the cluster into the new version; the nodes keep running. A node running another version than the installed one then says which, and offers **Restart**; with two or more of them, **Restart all outdated** does them at once. A restart needs no node password: the node comes back with its own. It stops the AI turns running in that project; their sessions are kept. A node started by a Pockode from before this is stopped and started instead, once, and asks for its password.
+
+Every running node's menu has **Restart** too. On Windows a running Pockode cannot be overwritten, so there an upgrade still means stopping the nodes and the cluster, installing, and starting them again.
+
 ## Things the nodes share
 
 Every node runs as your user, so installing Claude Code or Codex, signing them in or out, or updating them, from any project's **Settings → AI CLIs** applies to all of them.
