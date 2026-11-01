@@ -1321,6 +1321,17 @@ exposed:
 | the answer panel | closes, on a **`window`** listener, if the press landed on the backdrop element itself |
 | the canvas's permission panel | collapses, the same way, and not for `ARM_MS` after it appears |
 
+**A press into a page frame is invisible to all of them.** It is dispatched in
+the frame's document, never the app's, so none of the listeners above hears it.
+A surface with no backdrop stays open, and the press goes on into the agent's
+page. The live canvas deals with this by laying a shield over its frame while
+any layer is up, so the press lands in the app's document instead
+([canvas-ui.md](canvas-ui.md#under-a-layer)). The command palette is not a
+layer, so it raises no shield, and a press on the canvas with it open still
+reaches the page. `HtmlFrame`, the `html_render`
+card in the transcript, has no shield yet: a press on one with any surface in the table
+open still goes to the page and leaves the surface open.
+
 The two rules, restated for the pointer:
 
 1. **A surface drawn over the answer panel claims the gesture** — here

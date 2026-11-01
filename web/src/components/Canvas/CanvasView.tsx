@@ -261,6 +261,9 @@ export function CanvasView({
 						}}
 						shown={shown}
 						covered={covered}
+						// Its own permission panel counts too, harmlessly: the
+						// frame is inert under it, shield or not.
+						shielded={pageCovered}
 						areaRef={areaRef}
 						className="flex-1"
 					/>

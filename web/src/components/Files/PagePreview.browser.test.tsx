@@ -13,6 +13,12 @@ import {
 import { resetPageHosts, watchAppInput } from "../../lib/pageHosts";
 import type { RawTarget } from "../../lib/rpc/raw";
 import { useWSStore, wsActions } from "../../lib/wsStore";
+import {
+	clearPageSignals,
+	signals,
+	startPageSignals,
+	stopPageSignals,
+} from "../../test/pageSignals";
 import { otherHost } from "../../test/testServerHosts";
 import { PRESS_HOLD_MS } from "../ui/PageHostsStrip";
 import PagePreview from "./PagePreview";
@@ -39,15 +45,6 @@ const rawCapability = vi.fn(async (target: RawTarget) => ({
 	expiresAt: Date.now() + 60 * 60 * 1000,
 	worktree: "",
 }));
-
-/** Every `signal` a page posts the test, as it arrives. */
-let signals: string[] = [];
-function onSignal(event: MessageEvent) {
-	const data: unknown = event.data;
-	if (data && typeof data === "object" && "signal" in data) {
-		signals.push(String(data.signal));
-	}
-}
 
 function renderPage() {
 	render(
@@ -112,13 +109,12 @@ describe("a workspace page in a real browser", () => {
 	beforeAll(watchAppInput);
 	beforeEach(() => {
 		issued = 0;
-		signals = [];
-		window.addEventListener("message", onSignal);
+		startPageSignals();
 		useWSStore.setState({ status: "connected" });
 		vi.spyOn(wsActions, "rawCapability").mockImplementation(rawCapability);
 	});
 	afterEach(() => {
-		window.removeEventListener("message", onSignal);
+		stopPageSignals();
 		resetPageHosts();
 		vi.restoreAllMocks();
 		rawCapability.mockClear();
@@ -276,7 +272,7 @@ describe("a workspace page in a real browser", () => {
 		])("navigating itself %s", async (_, what) => {
 			renderPage();
 			const wrapper = await started();
-			signals = [];
+			clearPageSignals();
 
 			ask(wrapper, what);
 
@@ -289,7 +285,7 @@ describe("a workspace page in a real browser", () => {
 		it("submitting a form to another host", async () => {
 			renderPage();
 			const wrapper = await started();
-			signals = [];
+			clearPageSignals();
 
 			ask(wrapper, { submit: LANDED_URL });
 
@@ -302,7 +298,7 @@ describe("a workspace page in a real browser", () => {
 		it("navigating itself to its own capability with the hosts in the URL", async () => {
 			renderPage();
 			const wrapper = await started();
-			signals = [];
+			clearPageSignals();
 
 			ask(wrapper, {
 				go: `./page.htm?hosts=${OTHER_HOST}&host=${OTHER_HOST}`,
@@ -317,7 +313,7 @@ describe("a workspace page in a real browser", () => {
 		it("posting what the app or its wrapper would say", async () => {
 			renderPage();
 			const wrapper = await started();
-			signals = [];
+			clearPageSignals();
 
 			for (const post of [
 				{ type: "pockode:page-navigate", url: `${location.origin}${granting}` },

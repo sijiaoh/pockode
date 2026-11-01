@@ -78,8 +78,8 @@ exist.
 | `web/src/components/Chat/CanvasActionBubble.tsx`, `web/src/lib/messagePreview.ts` | A canvas action's bubble in chat view (§12), chosen in `MessageItem`; a canvas action quoted by its name |
 | `web/src/lib/agentPage.ts` | What `CanvasFrame` and `HtmlFrame` share (§4): the sandbox's floor (`HTML_FRAME_SANDBOX`) and the canvas's own (`CANVAS_FRAME_SANDBOX`), the page document's order (`agentPageDocument`), the wrapper (`agentWrapperDocument`), the project capability (`usePageProject`, whose freshness for a patch is `useRawMediaSource`'s `isFreshCapability`) |
 | `web/src/lib/canvasRedraw.ts` | How each new state reaches the frame (§8.3): patch or whole drawing, one patch at a time, the app's record of the revision shown (`CanvasRedraw`) |
-| `web/src/components/Canvas/CanvasFrame.tsx` | The page frame (§4): the document, the size (§5), redrawing through `CanvasRedraw`, the host allowance per session, and the app side of the bridge (§8.2, §8.4) — answering sends, the theme, `sendable`, the page's focus for the size rule, the room the wrapper scrolls on past what the composer covers (`covered`, §5), `readOnly` saying which page a history frame is (§15.4); tested in real engines by `CanvasFrame.browser.test.tsx` |
-| `web/src/components/Canvas/CanvasView.tsx` | The canvas view's canvas (§2): the session's current canvas from the store in a `CanvasFrame`, the empty state at revision 0, and the size measurement (§5), held off while the permission banner is up; the permission banner, expiry line and panel in its column, the panel's layer and its focus (§10); tested in real engines by `CanvasView.browser.test.tsx` |
+| `web/src/components/Canvas/CanvasFrame.tsx` | The page frame (§4): the document, the size (§5), redrawing through `CanvasRedraw`, the host allowance per session, and the app side of the bridge (§8.2, §8.4) — answering sends, the theme, `sendable`, the page's focus for the size rule, the room the wrapper scrolls on past what the composer covers (`covered`, §5), `readOnly` saying which page a history frame is (§15.4), the shield while a layer is up (`shielded`, [under a layer](#under-a-layer)); tested in real engines by `CanvasFrame.browser.test.tsx` |
+| `web/src/components/Canvas/CanvasView.tsx` | The canvas view's canvas (§2): the session's current canvas from the store in a `CanvasFrame`, the empty state at revision 0, and the size measurement (§5), held off while the permission banner is up; the permission banner, expiry line and panel in its column, the panel's layer and its focus (§10); shielding the frame while any layer is up ([under a layer](#under-a-layer)); tested in real engines by `CanvasView.browser.test.tsx` |
 | `web/src/lib/canvasSize.ts` | The size rule (§5): a measurement in whole pixels (`canvasSizeOf`), which measurement is kept (`keepsMeasurement`), and what counts as editable in the app (`isEditableElement`) |
 | `web/src/components/Canvas/CanvasComposer.tsx` | The collapsed input (§2), which opens into the ordinary composer (`CanvasComposer`), with a control of the host's leading it (`leading`), and the bars under the canvas floating over it while it is open (`ComposerDock`), saying how far they cover it (`onCover`, §5); its Stop is the composer's own (`StopButton` in `Chat/SendStopSlot.tsx`); the float tested in real engines by `CanvasComposer.browser.test.tsx` |
 | `web/src/components/Canvas/CanvasHistoryButton.tsx` | The history view's entry from canvas view, leading the collapsed input (§15.1) |
@@ -496,6 +496,65 @@ wrapper is white, under the `color-scheme` of the theme it was drawn in, and
 the app's element behind them is `--th-bg-primary`: what shows is the page's
 own root, `--pk-bg`, and nothing white flashes in a dark app while a document
 loads.
+
+### Under a layer
+
+**While a layer of the app's own is up over the page, the live canvas's frame
+is shielded.** "A layer" is anything counted by `useIsPageCovered`: the
+header's session panel, the worktree and session-filter dropdowns, the
+composer's `+` menu, the sidebar drawer, and the sheets and dialogs. The
+command palette is not one (it registers no `useCoverPage`), so it does not
+shield the frame: a press on the canvas with it open still goes to the page
+and leaves the palette open. `CanvasView` passes
+`shielded={useIsPageCovered()}`, and `CanvasFrame` then lays a transparent
+`aria-hidden` element over the frame. It has no handler and no stacking of its
+own.
+
+The reason is the frame itself. A press inside an iframe is dispatched in the
+page's document and never reaches the app's, so `useOutsideClick` cannot see
+it. A panel with no backdrop of its own would stay open, and the press would
+go on into the page: it could press a button there and send an action while
+the user only meant to put the panel away. With the shield up, the press lands
+in the app's document. The panel closes on it the usual way, claiming it as
+[answering-ui.md](answering-ui.md#who-owns-the-dismissing-click) asks, and the
+page never gets it. Because the shield is in the way physically, the page
+cannot get the press whichever layer is up, even one that does not claim its
+dismissing click.
+
+**Not the window's `blur`.** A press in the frame does blur the app's window,
+and a panel could close on that. But the press would still act in the page, so
+the click would close the panel *and* press whatever is under it.
+
+What it covers, and what it leaves alone:
+
+- **The frame alone.** The hosts strip and the project notice above it are in
+  the app's document already, so outside-click handling sees presses on them,
+  and they are not shielded.
+- **The floating composer stays above it.** The shield fills only the canvas
+  area and makes no stacking context, so `ComposerDock` (`z-10`, §2) is drawn
+  over it and stays pressable. With the composer's `+` menu open, a press on
+  the canvas closes it too, rather than going into the page.
+- **The permission panel** (§10) is a layer itself, so the frame is shielded
+  while it is up. That changes nothing: the frame is `inert` under it already,
+  and the panel is the frame's sibling, not inside the shielded area, so its
+  buttons are untouched. When a navigation has taken the panel's history
+  entry it no longer counts, and the page is off the screen then anyway.
+- **The answer panel** is deliberately not a layer
+  ([answering-ui.md §3](answering-ui.md#3-the-answer-panel)), so it never
+  shields the canvas. The canvas is inert under it anyway.
+- **The history view's frame is never shielded.** `shielded` is opt-in and
+  `CanvasHistorySheet` does not pass it: the sheet is a layer itself, so a
+  shield would cover the very page it shows (§15.2). The live canvas under the
+  sheet is shielded, which is harmless.
+- **While shielded, the page cannot be scrolled** by wheel or touch: the press
+  and the drag both land on the shield. A press on it still takes focus off
+  the composer, as a press on the frame did, so an expanded empty composer
+  collapses on it (§2).
+
+The tests are in real engines: `CanvasView.browser.test.tsx` (the panel closes
+and the page's own `click` listener gets nothing; the composer and the
+permission panel stay pressable; no shield without a layer) and
+`CanvasHistorySheet.browser.test.tsx` (no shield on the history frame).
 
 ### Forms
 

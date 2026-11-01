@@ -13,6 +13,13 @@ import type { RawTarget } from "../../lib/rpc/raw";
 import { useWSStore, wsActions } from "../../lib/wsStore";
 // Says, from inside the page, that a request to another host went through.
 import landedPath from "../../test/page-hosts/landed.htm?url";
+import {
+	clearPageSignals,
+	pageSignal,
+	signals,
+	startPageSignals,
+	stopPageSignals,
+} from "../../test/pageSignals";
 import { otherHost } from "../../test/testServerHosts";
 import type { CanvasSize, CanvasState } from "../../types/canvas";
 import { CanvasFrame } from "./CanvasFrame";
@@ -26,17 +33,6 @@ const rawCapability = vi.fn(async (_target: RawTarget) => ({
 	expiresAt: Date.now() + expiresIn,
 	worktree: "",
 }));
-
-/** Every `signal` a page posts the test, as it arrives. */
-let signals: string[] = [];
-function onSignal(event: MessageEvent) {
-	const data: unknown = event.data;
-	if (data && typeof data === "object" && "signal" in data) {
-		signals.push(String(data.signal));
-	}
-}
-const signal = (expression: string) =>
-	`parent.parent.postMessage({signal:${expression}},'*')`;
 
 async function signalled(...names: string[]) {
 	await waitFor(() => expect(signals).toEqual(expect.arrayContaining(names)), {
@@ -140,15 +136,14 @@ function wrapper(): Promise<HTMLIFrameElement> {
 
 describe("the canvas frame in a real browser", () => {
 	beforeEach(() => {
-		signals = [];
+		startPageSignals();
 		expiresIn = HOUR;
 		queryClient = new QueryClient();
-		window.addEventListener("message", onSignal);
 		useWSStore.setState({ status: "connected", workDir: "/home/me/project" });
 		vi.spyOn(wsActions, "rawCapability").mockImplementation(rawCapability);
 	});
 	afterEach(() => {
-		window.removeEventListener("message", onSignal);
+		stopPageSignals();
 		useWSStore.setState({ status: "disconnected", workDir: "" });
 		resetPageHosts();
 		vi.restoreAllMocks();
@@ -157,7 +152,7 @@ describe("the canvas frame in a real browser", () => {
 
 	describe("size", () => {
 		/** A page that says its own viewport's size at load and on every resize. */
-		const SIZED = `<p>sized</p><script>function say(){${signal("'size '+innerWidth+'x'+innerHeight")}}addEventListener("load",say);addEventListener("resize",say)</script>`;
+		const SIZED = `<p>sized</p><script>function say(){${pageSignal("'size '+innerWidth+'x'+innerHeight")}}addEventListener("load",say);addEventListener("resize",say)</script>`;
 
 		// The area is the app's own document, which must never move a frame:
 		// Chromium on some tablets drops the bars around the canvas while it
@@ -223,7 +218,7 @@ describe("the canvas frame in a real browser", () => {
 			renderFrame({
 				canvas: rendered(
 					1,
-					`<div style="height:3000px"></div><script>addEventListener("load",function(){scrollTo(0,500);${signal("'scrolled '+scrollY")}})</script>`,
+					`<div style="height:3000px"></div><script>addEventListener("load",function(){scrollTo(0,500);${pageSignal("'scrolled '+scrollY")}})</script>`,
 				),
 			});
 			await signalled("scrolled 500");
@@ -240,7 +235,7 @@ describe("the canvas frame in a real browser", () => {
 					canvas: rendered(
 						1,
 						// Seen against the screen, past every frame's clip.
-						`<div id="top" style="height:40px">top</div><script>addEventListener("load",function(){new IntersectionObserver(function(es){${signal("es[0].isIntersecting?'top shown':'top hidden'")}}).observe(document.getElementById("top"))})</script>`,
+						`<div id="top" style="height:40px">top</div><script>addEventListener("load",function(){new IntersectionObserver(function(es){${pageSignal("es[0].isIntersecting?'top shown':'top hidden'")}}).observe(document.getElementById("top"))})</script>`,
 						{ width: 300, height: 1200 },
 					),
 				});
@@ -262,14 +257,14 @@ describe("the canvas frame in a real browser", () => {
 		 * viewport's size at load and on every resize, and whether its top
 		 * 50px are on the screen.
 		 */
-		const FITTED = `<div id="top" style="height:50px">top</div><script>function say(){${signal("'size '+innerWidth+'x'+innerHeight")}}addEventListener("resize",say);addEventListener("load",function(){say();new IntersectionObserver(function(es){${signal("es[0].isIntersecting?'top shown':'top hidden'")}}).observe(document.getElementById("top"))})</script>`;
+		const FITTED = `<div id="top" style="height:50px">top</div><script>function say(){${pageSignal("'size '+innerWidth+'x'+innerHeight")}}addEventListener("resize",say);addEventListener("load",function(){say();new IntersectionObserver(function(es){${pageSignal("es[0].isIntersecting?'top shown':'top hidden'")}}).observe(document.getElementById("top"))})</script>`;
 
 		it("keeps the page's viewport and the area while covered", async () => {
 			renderFrame({ canvas: rendered(1, FITTED) });
 			const frame = await wrapper();
 			await signalled(`size ${AREA.width}x${AREA.height}`, "top shown");
 
-			signals = [];
+			clearPageSignals();
 			rerender(frameUi({ canvas: rendered(1, FITTED), covered: 100 }));
 			// Past a frame for the wrapper to take it; a resize would say so.
 			for (let i = 0; i < 4; i++) {
@@ -302,7 +297,7 @@ describe("the canvas frame in a real browser", () => {
 				await signalled("top hidden");
 
 				// A page drawn while covered starts with the room.
-				signals = [];
+				clearPageSignals();
 				rerender(frameUi({ canvas: rendered(2, FITTED), covered: 100 }));
 				await signalled("top shown");
 				await touchDrag(await wrapper(), 150);
@@ -313,7 +308,7 @@ describe("the canvas frame in a real browser", () => {
 
 	describe("redrawing", () => {
 		const PAGE = `<input id="note"><ul data-pk-region="results"><li>old</li></ul>
-<script>addEventListener("load",function(){document.getElementById("note").value="half typed";${signal("'loaded'")}})</script>`;
+<script>addEventListener("load",function(){document.getElementById("note").value="half typed";${pageSignal("'loaded'")}})</script>`;
 		const UPDATE: CanvasState = {
 			revision: 2,
 			html: "<p>whole revision 2</p>",
@@ -324,7 +319,7 @@ describe("the canvas frame in a real browser", () => {
 					{
 						op: "replace",
 						region: "results",
-						html: `<li>new</li><script>${signal("'kept '+document.getElementById('note').value+' · '+document.querySelector('[data-pk-region=results] li').textContent")}</script>`,
+						html: `<li>new</li><script>${pageSignal("'kept '+document.getElementById('note').value+' · '+document.querySelector('[data-pk-region=results] li').textContent")}</script>`,
 					},
 				],
 			},
@@ -356,7 +351,7 @@ describe("the canvas frame in a real browser", () => {
 						{
 							op: "replace",
 							region: "results",
-							html: `<script>${signal("'patched'")};setTimeout(function(){location.reload()},50)</script>`,
+							html: `<script>${pageSignal("'patched'")};setTimeout(function(){location.reload()},50)</script>`,
 						},
 					],
 				},
@@ -385,7 +380,7 @@ describe("the canvas frame in a real browser", () => {
 	});
 
 	describe("sending", () => {
-		const SENDER = `<script>addEventListener("load",function(){pockode.send("pick",{id:3}).then(function(){${signal("'sent'")}},function(e){${signal("e.code+': '+e.message")}})})</script>`;
+		const SENDER = `<script>addEventListener("load",function(){pockode.send("pick",{id:3}).then(function(){${pageSignal("'sent'")}},function(e){${pageSignal("e.code+': '+e.message")}})})</script>`;
 
 		it("sends with the revision the frame shows, and answers the page", async () => {
 			const onSend = vi.fn(async (_input: CanvasActionInput) => {});
@@ -440,7 +435,7 @@ describe("the canvas frame in a real browser", () => {
 	// sandbox's `allow-forms`, and going nowhere by the policy's `form-action`.
 	describe("forms", () => {
 		const LANDED_URL = `http://${otherHost(location.port)}${landedPath}`;
-		const LOADED = `<script>addEventListener("load",function(){${signal("'loaded'")}})</script>`;
+		const LOADED = `<script>addEventListener("load",function(){${pageSignal("'loaded'")}})</script>`;
 
 		function pageFrame() {
 			return page.frameLocator(
@@ -506,7 +501,7 @@ describe("the canvas frame in a real browser", () => {
 				canvas: rendered(
 					1,
 					`<dialog open>${form}</dialog>
-<script>document.querySelector("dialog").addEventListener("close",function(){${signal("'closed'")}})</script>${LOADED}`,
+<script>document.querySelector("dialog").addEventListener("close",function(){${pageSignal("'closed'")}})</script>${LOADED}`,
 				),
 			});
 			await signalled("loaded");
@@ -546,8 +541,8 @@ describe("the canvas frame in a real browser", () => {
 				canvas: rendered(
 					1,
 					`<form${attributes}><input name="q" aria-label="Query"><button>Go</button></form>
-<script>addEventListener("submit",function(e){${signal("'submitted, cancelled: '+e.defaultPrevented")}});
-addEventListener("message",function(e){if(e.data==="query?")${signal("'query '+document.forms[0].q.value")}})</script>${LOADED}`,
+<script>addEventListener("submit",function(e){${pageSignal("'submitted, cancelled: '+e.defaultPrevented")}});
+addEventListener("message",function(e){if(e.data==="query?")${pageSignal("'query '+document.forms[0].q.value")}})</script>${LOADED}`,
 				),
 			});
 			const before = await wrapper();

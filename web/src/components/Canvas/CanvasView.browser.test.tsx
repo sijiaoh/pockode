@@ -1,9 +1,22 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, render, screen, waitFor } from "@testing-library/react";
+import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { server } from "vitest/browser";
+import { server, userEvent } from "vitest/browser";
 import { canvasActions, useCanvasStore } from "../../lib/canvasStore";
 import { resetPageHosts } from "../../lib/pageHosts";
+import {
+	permissionRequestActions,
+	usePermissionRequestStore,
+} from "../../lib/permissionRequestStore";
+import {
+	pageSignal,
+	signals,
+	startPageSignals,
+	stopPageSignals,
+} from "../../test/pageSignals";
+import ResponsivePanel from "../ui/ResponsivePanel";
+import { ComposerDock } from "./CanvasComposer";
 import { CanvasView } from "./CanvasView";
 
 /** A fractional width, as a real screen's layout often gives. */
@@ -117,5 +130,157 @@ describe("the canvas view in a real browser", () => {
 		await screen.findByTitle("Canvas");
 		await nextFrames();
 		expect(keptSize()).toBeNull();
+	});
+});
+
+/** What a press at the middle of `element` would land on. */
+function hitAt(element: Element) {
+	const box = element.getBoundingClientRect();
+	return document.elementFromPoint(
+		box.left + box.width / 2,
+		box.top + box.height / 2,
+	);
+}
+
+/** Says, from inside the page, that it has loaded, and each click it gets. */
+const PAGE_CLICKS = `<p>drawn</p><script>addEventListener("load",function(){${pageSignal("'loaded'")}});document.addEventListener("click",function(){${pageSignal("'clicked'")}})</script>`;
+
+/**
+ * The canvas under the session header's details panel — a dropdown with no
+ * backdrop, as above the expanded tier — with the composer floating over the
+ * bottom of the canvas, as `ChatPanel` lays them out.
+ */
+function Covered({ initiallyOpen }: { initiallyOpen: boolean }) {
+	const [open, setOpen] = useState(initiallyOpen);
+	return (
+		<QueryClientProvider client={new QueryClient()}>
+			<div style={{ position: "relative" }}>
+				<ResponsivePanel
+					isOpen={open}
+					onClose={() => setOpen(false)}
+					title="Session details"
+					isExpanded
+					desktopPosition="left"
+				>
+					<p>Engine</p>
+				</ResponsivePanel>
+			</div>
+			<div style={{ ...AREA, display: "flex", flexDirection: "column" }}>
+				<CanvasView
+					sessionId="s1"
+					shown
+					turnRunning={false}
+					onSend={async () => {}}
+				/>
+				<ComposerDock floating open>
+					<input aria-label="Composer" />
+				</ComposerDock>
+			</div>
+		</QueryClientProvider>
+	);
+}
+
+describe("the canvas frame while a layer covers the page", () => {
+	beforeEach(() => {
+		startPageSignals();
+		usePermissionRequestStore.setState({
+			sessionId: null,
+			records: {},
+			outcomes: {},
+			unreadable: {},
+		});
+		useCanvasStore.setState({ sessionId: null, canvas: null, size: null });
+		canvasActions.receive("s1", {
+			revision: 1,
+			html: PAGE_CLICKS,
+			change: { kind: "render" },
+		});
+	});
+	afterEach(() => {
+		stopPageSignals();
+		resetPageHosts();
+	});
+
+	it("takes a press over the canvas into the app, which closes the panel, and not into the page", async () => {
+		render(<Covered initiallyOpen />);
+		const frame = await screen.findByTitle("Canvas");
+		await screen.findByRole("dialog", { name: "Session details" });
+		// Listening already, so a press that got in would be heard.
+		await waitFor(() => expect(signals).toEqual(["loaded"]), {
+			timeout: 5000,
+		});
+
+		const hit = hitAt(frame);
+		if (hit === null) throw new Error("nothing at the frame's middle");
+		expect(hit).not.toBe(frame);
+		expect(frame.parentElement?.contains(hit)).toBe(true);
+		await userEvent.click(hit);
+
+		await waitFor(() =>
+			expect(
+				screen.queryByRole("dialog", { name: "Session details" }),
+			).toBeNull(),
+		);
+		// With nothing over it, a press reaches the page again.
+		expect(hitAt(frame)).toBe(frame);
+		await userEvent.click(frame);
+		await waitFor(() => expect(signals).toEqual(["loaded", "clicked"]), {
+			timeout: 5000,
+		});
+	});
+
+	it("leaves the composer floating over the canvas within reach", async () => {
+		render(<Covered initiallyOpen />);
+		await screen.findByTitle("Canvas");
+		const composer = screen.getByLabelText("Composer");
+		expect(hitAt(composer)).toBe(composer);
+	});
+
+	// The panel registers itself as a layer, so the frame under it is
+	// shielded too: the panel is drawn beside the frame, never under it.
+	it("leaves the permission panel drawn over the canvas within reach", async () => {
+		permissionRequestActions.reset("s1", [
+			{
+				requestId: "a",
+				toolName: "Bash",
+				toolInput: { command: "npm test" },
+				toolUseId: "tool-a",
+			},
+		]);
+		render(
+			<QueryClientProvider client={new QueryClient()}>
+				<div style={{ ...AREA, display: "flex", flexDirection: "column" }}>
+					<CanvasView
+						sessionId="s1"
+						shown
+						turnRunning={false}
+						onSend={async () => {}}
+						permissions={{
+							turn: {
+								phase: "blocked",
+								open: true,
+								since: "",
+								blockers: [
+									{ kind: "permission", request_id: "a", raised_at: "" },
+								],
+							},
+							turnKnown: true,
+							transcript: new Map(),
+							isCodex: false,
+							onRespond: () => {},
+						}}
+					/>
+				</div>
+			</QueryClientProvider>,
+		);
+		await screen.findByTitle("Canvas");
+		const hide = await screen.findByRole("button", { name: /Hide/ });
+		expect(hide.contains(hitAt(hide))).toBe(true);
+	});
+
+	it("is not shielded with nothing over the page", async () => {
+		render(<Covered initiallyOpen={false} />);
+		const frame = await screen.findByTitle("Canvas");
+		expect(hitAt(frame)).toBe(frame);
 	});
 });
