@@ -202,8 +202,7 @@ export function CanvasView({
 			return isEditableElement(active);
 		};
 		const observer = new ResizeObserver(([entry]) => {
-			// The content box, which leaves out the area's scrollbars: what a
-			// page drawn for this size gets at 100%.
+			// The content box: what a page drawn for this size gets at 100%.
 			if (!measuringRef.current) return;
 			const measured = canvasSizeOf(entry.contentRect);
 			if (measured === null) return;
