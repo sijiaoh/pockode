@@ -29,6 +29,12 @@ import { useWSStore, wsActions } from "../../lib/wsStore";
 // Says, from inside the page, that a request to another host went through.
 import landedPath from "../../test/page-hosts/landed.htm?url";
 import signalPath from "../../test/page-hosts/signal.js?url";
+import {
+	pageSignal,
+	signals,
+	startPageSignals,
+	stopPageSignals,
+} from "../../test/pageSignals";
 import { otherHost } from "../../test/testServerHosts";
 import { PRESS_HOLD_MS } from "../ui/PageHostsStrip";
 import { HtmlFrame } from "./HtmlFrame";
@@ -46,15 +52,6 @@ function render(ui: ReactElement) {
 	return renderUi(
 		<QueryClientProvider client={new QueryClient()}>{ui}</QueryClientProvider>,
 	);
-}
-
-/** Every `signal` a page posts the test, as it arrives. */
-let signals: string[] = [];
-function onSignal(event: MessageEvent) {
-	const data: unknown = event.data;
-	if (data && typeof data === "object" && "signal" in data) {
-		signals.push(String(data.signal));
-	}
 }
 
 function renderPage(html: string, title = "Page") {
@@ -100,11 +97,10 @@ describe("an agent's page in a real browser", () => {
 	// What `main.tsx` does as the app starts.
 	beforeAll(watchAppInput);
 	beforeEach(() => {
-		signals = [];
-		window.addEventListener("message", onSignal);
+		startPageSignals();
 	});
 	afterEach(() => {
-		window.removeEventListener("message", onSignal);
+		stopPageSignals();
 		resetPageHosts();
 		vi.restoreAllMocks();
 	});
@@ -480,17 +476,14 @@ describe("an agent's page reaching the project", () => {
 		expiresAt: Date.now() + 60 * 60 * 1000,
 		worktree: "",
 	}));
-	const signal = (name: string) =>
-		`parent.parent.postMessage({signal:${name}},'*')`;
 
 	beforeEach(() => {
-		signals = [];
-		window.addEventListener("message", onSignal);
+		startPageSignals();
 		useWSStore.setState({ status: "connected", workDir: WORK_DIR });
 		vi.spyOn(wsActions, "rawCapability").mockImplementation(rawCapability);
 	});
 	afterEach(() => {
-		window.removeEventListener("message", onSignal);
+		stopPageSignals();
 		useWSStore.setState({ status: "disconnected", workDir: "" });
 		resetPageHosts();
 		vi.restoreAllMocks();
@@ -507,11 +500,11 @@ describe("an agent's page reaching the project", () => {
 	}
 
 	it("loads images, video, audio, scripts and data by paths from the root", async () => {
-		renderPage(`<img src="media/shot.png" onload="${signal("'image'+this.naturalWidth")}">
-<video src="media/clip.webm" preload="auto" onloadedmetadata="${signal("'video'+this.videoWidth")}"></video>
-<audio src="media/tone.wav" preload="auto" onloadedmetadata="${signal("'audio'")}"></audio>
+		renderPage(`<img src="media/shot.png" onload="${pageSignal("'image'+this.naturalWidth")}">
+<video src="media/clip.webm" preload="auto" onloadedmetadata="${pageSignal("'video'+this.videoWidth")}"></video>
+<audio src="media/tone.wav" preload="auto" onloadedmetadata="${pageSignal("'audio'")}"></audio>
 <script src="site/own.js"></script>
-<script>fetch("site/own.js").then(function(r){if(r.ok)${signal("'data'")}})</script>`);
+<script>fetch("site/own.js").then(function(r){if(r.ok)${pageSignal("'data'")}})</script>`);
 
 		await signalled("image8", "video64", "audio", "own", "data");
 		expect(rawCapability).toHaveBeenCalledWith({
@@ -523,10 +516,10 @@ describe("an agent's page reaching the project", () => {
 	});
 
 	it("takes an absolute path under the work directory for the file it names", async () => {
-		renderPage(`<img src="${WORK_DIR}/media/shot.png" onload="${signal("'image'")}">
-<img src="file://${WORK_DIR}/media/shot.png" onload="${signal("'file'")}">
+		renderPage(`<img src="${WORK_DIR}/media/shot.png" onload="${pageSignal("'image'")}">
+<img src="file://${WORK_DIR}/media/shot.png" onload="${pageSignal("'file'")}">
 <p id="text">Saved to ${WORK_DIR}/media/shot.png</p>
-<script>${signal("document.getElementById('text').textContent")}</script>`);
+<script>${pageSignal("document.getElementById('text').textContent")}</script>`);
 
 		await signalled("image", "file");
 		// The path the page shows the reader is theirs to read as written.
@@ -538,7 +531,7 @@ describe("an agent's page reaching the project", () => {
 <div style="height: 2000px"></div>
 <p id="end">End</p>
 <script>
-addEventListener("hashchange", function () { ${signal("location.hash+(scrollY>0?' scrolled':'')")} });
+addEventListener("hashchange", function () { ${pageSignal("location.hash+(scrollY>0?' scrolled':'')")} });
 addEventListener("load", function () { document.getElementById("down").click(); });
 </script>`);
 
@@ -549,8 +542,8 @@ addEventListener("load", function () { document.getElementById("down").click(); 
 
 	it("is drawn as before when no capability can be had", async () => {
 		rawCapability.mockRejectedValueOnce(new Error("no capability"));
-		renderPage(`<img src="media/shot.png" onload="${signal("'image'")}" onerror="${signal("'refused'")}">
-<script>${signal("'ran'")}</script>`);
+		renderPage(`<img src="media/shot.png" onload="${pageSignal("'image'")}" onerror="${pageSignal("'refused'")}">
+<script>${pageSignal("'ran'")}</script>`);
 
 		await signalled("ran", "refused");
 		expect(signals).not.toContain("image");
@@ -561,7 +554,7 @@ addEventListener("load", function () { document.getElementById("down").click(); 
 
 	it("keeps a base the page sets itself", async () => {
 		renderPage(`<base href="https://cdn.example/lib/">
-<script>${signal("document.baseURI")}</script>`);
+<script>${pageSignal("document.baseURI")}</script>`);
 
 		await signalled("https://cdn.example/lib/");
 	});

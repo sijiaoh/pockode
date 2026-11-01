@@ -173,6 +173,17 @@ interface Props {
 	 * their size, and with them the canvas size (§5).
 	 */
 	covered?: number;
+	/**
+	 * A layer of the app's own is up over the page (`useIsPageCovered`): the
+	 * frame is shielded, so a press over it lands in the app's document — where
+	 * a panel with no backdrop closes on it — and never in the page, where it
+	 * could press a button and send an action. A press in the frame never
+	 * reaches the app's document at all.
+	 *
+	 * The live canvas's alone: a frame in the history view is drawn in a layer
+	 * of its own, which would shield it from itself.
+	 */
+	shielded?: boolean;
 	/** The canvas area, which the frame fills: what the size is measured from. */
 	areaRef?: Ref<HTMLDivElement>;
 	className?: string;
@@ -195,6 +206,7 @@ export function CanvasFrame({
 	onEditableFocus,
 	shown = true,
 	covered = 0,
+	shielded = false,
 	areaRef,
 	className,
 	title = "Canvas",
@@ -486,7 +498,7 @@ export function CanvasFrame({
 			)}
 			{/* Never a scroller: the frame always fills it, and what is larger
 			    than it scrolls inside the wrapper (see `wrapperStyle`). */}
-			<div ref={areaRef} className="min-h-0 flex-1">
+			<div ref={areaRef} className="relative min-h-0 flex-1">
 				{/* A new frame for a new document, as in `HtmlFrame`: a new
 				    `srcdoc` in the old one would add a history entry. */}
 				{srcDoc !== null && (
@@ -499,6 +511,12 @@ export function CanvasFrame({
 						className="block h-full w-full border-0 bg-th-bg-primary"
 						style={{ colorScheme: scheme }}
 					/>
+				)}
+				{/* Over the frame alone, not its strips, and with no stacking of
+				    its own: what the app draws over the canvas on purpose — the
+				    floating composer — stays above it. */}
+				{shielded && srcDoc !== null && (
+					<div aria-hidden="true" className="absolute inset-0" />
 				)}
 			</div>
 		</div>
