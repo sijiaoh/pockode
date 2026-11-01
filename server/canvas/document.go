@@ -54,7 +54,7 @@ func CheckRender(src string, width int) (Page, error) {
 	if err != nil {
 		return Page{}, err
 	}
-	out, warns, err := finish(doc, width, false)
+	out, warns, err := finish(doc, width)
 	if err != nil {
 		return Page{}, err
 	}
@@ -81,7 +81,7 @@ func ApplyUpdate(current string, ops []Op, width int) (Page, error) {
 		// finish read every stored document back before it was stored.
 		return Page{}, fmt.Errorf("parse stored canvas: %w", err)
 	}
-	_, before := lint(doc, len(current), width, false)
+	_, before := lint(doc, len(current), width)
 
 	var problems []string
 	for i, op := range ops {
@@ -97,7 +97,7 @@ func ApplyUpdate(current string, ops []Op, width int) (Page, error) {
 		return Page{}, reject(problems...)
 	}
 
-	out, warns, err := finish(doc, width, true)
+	out, warns, err := finish(doc, width)
 	if err != nil {
 		return Page{}, err
 	}
@@ -115,10 +115,10 @@ func ApplyUpdate(current string, ops []Op, width int) (Page, error) {
 // serializer cannot write faithfully (markup inside a raw-text element, an
 // svg <style> holding elements) comes back different, and the stored text is
 // the one that has to be right.
-func finish(doc *html.Node, width int, update bool) (string, []warning, error) {
+func finish(doc *html.Node, width int) (string, []warning, error) {
 	if tag := voidWithContents(doc); tag != "" {
 		// Nothing can be serialized; the size is the one check left out.
-		errs, _ := lint(doc, 0, width, update)
+		errs, _ := lint(doc, 0, width)
 		msg := fmt.Sprintf("<%s> cannot hold anything, but the page puts content inside one: it has no closing tag, so put that content after it, or use another element.", tag)
 		return "", nil, reject(append([]string{msg}, errs...)...)
 	}
@@ -130,7 +130,7 @@ func finish(doc *html.Node, width int, update bool) (string, []warning, error) {
 	if err != nil {
 		return "", nil, err
 	}
-	errs, warns := lint(stored, len(out), width, update)
+	errs, warns := lint(stored, len(out), width)
 	if lost := lostRegions(doc, stored); len(lost) > 0 {
 		errs = append(errs, fmt.Sprintf("The page does not read back as written: regions %s are lost, because something before them — markup inside a <script>, <style> or <svg>, or a <plaintext> — swallows the rest. Check what this call puts there.", strings.Join(lost, ", ")))
 	}
