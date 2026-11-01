@@ -113,8 +113,13 @@ var ErrRequestNotPending = errors.New("this request is no longer waiting for an 
 
 // Process holds a running agent process. Do not cache references.
 type Process struct {
-	sessionID    string
-	agentType    session.AgentType
+	sessionID string
+	agentType session.AgentType
+	// canvas is the kind this process's agent was told at spawn (the MCP
+	// tools, the guidance). A session's kind can change until it starts, so a
+	// process spawned before a switch is one that has to be replaced, never
+	// sent to — see Manager.CloseIfCanvasDiffers.
+	canvas       bool
 	agentSession agent.Session
 	sessionStore session.Store
 	manager      *Manager // back-reference for broadcasting to subscribers
@@ -288,6 +293,7 @@ func (m *Manager) GetOrCreateProcess(ctx context.Context, meta session.SessionMe
 	proc := &Process{
 		sessionID:    sessionID,
 		agentType:    meta.AgentType,
+		canvas:       meta.Canvas,
 		agentSession: sess,
 		sessionStore: m.sessionStore,
 		manager:      m,
@@ -547,8 +553,19 @@ func (m *Manager) dropProcess(p *Process) (replaced bool) {
 // remove removes whatever process a session currently has and returns it.
 // The onProcessEnd callback is invoked asynchronously after removal.
 func (m *Manager) remove(sessionID string) *Process {
+	return m.removeIf(sessionID, func(*Process) bool { return true })
+}
+
+// removeIf takes the session's process out of the map when take says so,
+// judged under processesMu, and returns it — nil when there was none or it was
+// left in place.
+func (m *Manager) removeIf(sessionID string, take func(*Process) bool) *Process {
 	m.processesMu.Lock()
-	proc := m.processes[sessionID]
+	proc, ok := m.processes[sessionID]
+	if !ok || !take(proc) {
+		m.processesMu.Unlock()
+		return nil
+	}
 	m.deleteProcess(sessionID)
 	callback := m.onProcessEnd
 	m.processesMu.Unlock()
@@ -581,11 +598,32 @@ func (m *Manager) removeWhere(predicate func(*Process) bool) []*Process {
 // race them.
 func (m *Manager) Close(sessionID string) {
 	if proc := m.remove(sessionID); proc != nil {
-		proc.closed.Store(true)
-		proc.agentSession.Close()
-		<-proc.done
+		proc.terminate()
 		slog.Info("process closed", "sessionId", sessionID)
 	}
+}
+
+// terminate stops a process already taken out of the map and waits for its
+// event stream to drain; see Close for why the wait matters.
+func (p *Process) terminate() {
+	p.closed.Store(true)
+	p.agentSession.Close()
+	<-p.done
+}
+
+// CloseIfCanvasDiffers closes the session's process if it was spawned for the
+// other kind than canvas, and leaves a process spawned for this kind — or none
+// — alone. Judged under processesMu, so it can never close a process spawned
+// from the value it is called with: both a kind switch and a send that saw one
+// call it with the stored value, and neither may kill the fresh process the
+// other just took (docs/new-session-ui.md §4).
+func (m *Manager) CloseIfCanvasDiffers(sessionID string, canvas bool) {
+	proc := m.removeIf(sessionID, func(p *Process) bool { return p.canvas != canvas })
+	if proc == nil {
+		return
+	}
+	proc.terminate()
+	slog.Info("process closed: spawned for the session's other kind", "sessionId", sessionID)
 }
 
 // workCloseGrace is how long a session gets to finish what it was saying after
@@ -1037,6 +1075,11 @@ func (p *Process) ReportsMessageIngest() bool {
 func (p *Process) ReceivesAttachments() bool {
 	_, ok := p.agentSession.(agent.AttachmentReceiver)
 	return ok
+}
+
+// Canvas is the session kind this process was spawned for.
+func (p *Process) Canvas() bool {
+	return p.canvas
 }
 
 // SendPermissionResponse answers a permission request, which clears the blocker

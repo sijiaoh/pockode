@@ -14,7 +14,7 @@ import (
 )
 
 func (h *rpcMethodHandler) handleSessionCreate(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request, wt *worktree.Worktree) {
-	// Params are optional: a client written before canvas sessions sends none.
+	// Params are optional: the app sends none and gets the project's default kind.
 	var params rpc.SessionCreateParams
 	if req.Params != nil {
 		if err := json.Unmarshal(*req.Params, &params); err != nil {
@@ -27,19 +27,23 @@ func (h *rpcMethodHandler) handleSessionCreate(ctx context.Context, conn *jsonrp
 
 	s := h.settingsStore.Get()
 	engine := s.ResolveEngine(session.Engine{})
+	canvas := s.DefaultCanvas
+	if params.Canvas != nil {
+		canvas = *params.Canvas
+	}
 	sess, err := wt.SessionStore.Create(ctx, sessionID, session.CreateSpec{
 		AgentType: engine.AgentType,
 		Mode:      s.DefaultMode,
 		Model:     engine.Model,
 		Effort:    engine.Effort,
-		Canvas:    params.Canvas,
+		Canvas:    canvas,
 	})
 	if err != nil {
 		h.replyInternalError(ctx, conn, req.ID, "failed to create session", err, "sessionId", sessionID)
 		return
 	}
 
-	h.log.Info("session created", "sessionId", sessionID, "canvas", params.Canvas)
+	h.log.Info("session created", "sessionId", sessionID, "canvas", canvas)
 
 	// A session created here belongs to no work item — a work's session is created
 	// by the work starter, under the id the work already claimed — and has not
@@ -175,6 +179,81 @@ func (h *rpcMethodHandler) handleSessionSetAgentType(ctx context.Context, conn *
 
 	if err := conn.Reply(ctx, req.ID, struct{}{}); err != nil {
 		h.log.Error("failed to send session set agent type response", "error", err)
+	}
+}
+
+// handleSessionSetCanvas changes an unstarted session's kind
+// (docs/new-session-ui.md §4.1). The ordering against a racing send is
+// chat.Client.SetCanvas's.
+func (h *rpcMethodHandler) handleSessionSetCanvas(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request, wt *worktree.Worktree) {
+	var params rpc.SessionSetCanvasParams
+	if err := unmarshalParams(req, &params); err != nil {
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "invalid params")
+		return
+	}
+
+	meta, found, err := wt.SessionStore.Get(params.SessionID)
+	if err != nil {
+		h.replyInternalError(ctx, conn, req.ID, "failed to get session", err, "sessionId", params.SessionID)
+		return
+	}
+	if !found {
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "session not found")
+		return
+	}
+	if meta.Canvas == params.Canvas {
+		if err := conn.Reply(ctx, req.ID, struct{}{}); err != nil {
+			h.log.Error("failed to send session set canvas response", "error", err)
+		}
+		return
+	}
+	// The work system's sessions are never canvas sessions (docs/canvas-ui.md
+	// §13.1). Asked of the work store, the only place the relation is kept; a
+	// work's session is started by its kickoff anyway, so this mostly speaks
+	// for the moment between the two.
+	if h.workStore != nil {
+		_, isWork, err := h.workStore.FindBySessionID(params.SessionID)
+		if err != nil {
+			h.replyInternalError(ctx, conn, req.ID, "failed to look up the session's work", err, "sessionId", params.SessionID)
+			return
+		}
+		if isWork {
+			h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "a work session's kind cannot be changed")
+			return
+		}
+	}
+
+	if err := wt.ChatClient.SetCanvas(ctx, params.SessionID, params.Canvas); err != nil {
+		switch {
+		case errors.Is(err, session.ErrSessionStarted):
+			h.replyErrorData(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, err.Error(),
+				rpc.SessionSetCanvasErrorData{Reason: rpc.SessionSetCanvasReasonStarted})
+		case errors.Is(err, session.ErrSessionNotFound):
+			h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "session not found")
+		default:
+			h.replyInternalError(ctx, conn, req.ID, "failed to set session kind", err, "sessionId", params.SessionID)
+		}
+		return
+	}
+
+	// chat.messages.subscribe answered no canvas for a session that was chat
+	// then, so a subscriber has none to read for it; without this a session
+	// switched and then started would stay blank instead of reading "The agent
+	// is drawing…". Switching to chat pushes nothing: a client stops reading
+	// the canvas of a chat session.
+	if params.Canvas {
+		state, err := wt.CanvasStore.Current(params.SessionID)
+		if err != nil {
+			h.log.Error("failed to read the canvas of a session switched to canvas", "sessionId", params.SessionID, "error", err)
+		} else {
+			wt.ChatMessagesWatcher.NotifyCanvasState(params.SessionID, state)
+		}
+	}
+
+	h.log.Info("session kind changed", "sessionId", params.SessionID, "canvas", params.Canvas)
+
+	if err := conn.Reply(ctx, req.ID, struct{}{}); err != nil {
+		h.log.Error("failed to send session set canvas response", "error", err)
 	}
 }
 

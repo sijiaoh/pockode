@@ -101,7 +101,7 @@ export function usePrefillComposer(): PrefillComposer {
 						useWorktreeStore.getState().current !== worktree
 					) {
 						setError({
-							summary: "Couldn't start a new chat",
+							summary: "Couldn't start a new session",
 							detail: "This worktree is still opening. Try again in a moment.",
 						});
 						return;
@@ -112,7 +112,7 @@ export function usePrefillComposer(): PrefillComposer {
 					} catch (e) {
 						// Nothing is lost: the text is still the entry's.
 						setError({
-							summary: "Couldn't start a new chat",
+							summary: "Couldn't start a new session",
 							detail: e instanceof Error && e.message ? e.message : null,
 						});
 						return;

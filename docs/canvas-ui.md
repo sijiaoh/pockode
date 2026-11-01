@@ -70,7 +70,7 @@ exist.
 | `web/src/lib/canvasStore.ts` | The open session's current canvas, the highest revision winning (`useCanvasStore`, `selectCanvasState`, `useCanvasRevision`, `canvasActions`), the device's canvas size every message to a canvas session carries (`size`, `canvasActions.setSize`), whether there is a page for the history view's two entries to open on (`isCanvasDrawn`, `NOTHING_DRAWN`, §15.1), and a count of what may have settled a canvas call (`callsSettled`, §15.3) |
 | `web/src/hooks/useChatMessages.ts` | Taking `chat.canvas_state` and the subscribe reply's `canvas` into the store, never into the transcript; `sendCanvasAction`, echoed as a typed message is; the size on `chat.message`; counting what may settle a canvas call — any tool result, or a turn ending (`settlesCanvasCalls`) |
 | `web/src/lib/rpc/chat.ts` | `chat.canvas_action` (`sendCanvasAction`) and `chat.message`'s `canvas_size`; `chat.canvas_history` / `chat.canvas_snapshot` (`canvasHistory`, `canvasSnapshot`) |
-| `web/src/lib/rpc/session.ts`, `web/src/lib/sessionCreate.ts`, `web/src/hooks/useSession.ts`, `web/src/components/AppShell.tsx`, `web/src/components/Session/SessionsTab.tsx`, `web/src/components/Session/SessionItem.tsx` | Creating a canvas session (§13.1): `session.create`'s option (`SessionCreateParams`), one create in flight per kind, the retry of a failed create with its own params (`createErrorParams`, retried by `AppShell`); the **Canvas** button beside **New Chat**; a canvas row's glyph. Also `session.fork`'s `canvas_revision` (`forkSessionAtCanvasRevision`, §13.6) |
+| `web/src/lib/rpc/session.ts`, `web/src/components/Session/SessionItem.tsx` | `session.create`'s option (`SessionCreateParams`, §13.1) and `session.set_canvas` (`setSessionCanvas`); a canvas row's glyph. Also `session.fork`'s `canvas_revision` (`forkSessionAtCanvasRevision`, §13.6). The New Session button and the kind chooser are [new-session-ui.md's](new-session-ui.md#key-files) |
 | `web/src/utils/forkAnchor.ts`, `web/src/utils/discardedMessage.ts`, `web/src/utils/sendAgain.ts` | A canvas action never becoming a draft (§6.2) |
 | `web/src/lib/canvasBridge.ts` | The script injected into the page (`canvasBridgeScript`), the base stylesheet (`canvasBaseStylesheet`, `canvasBaseCss`, the variables' tokens `CANVAS_THEME_TOKENS` and `canvasThemeFrom`), and the messages of the bridge (`CanvasPageMessage`, `CanvasAppMessage`, `readCanvasPageMessage`, `SEND_REFUSAL_MESSAGES`, and `readonly`'s two wordings, `READONLY_REFUSAL_MESSAGES` by `CanvasReadOnly`); tested in real engines by `canvasBridge.browser.test.ts`, and the variables against `canvas_render`'s list and the app's tokens by `web/tests/canvasThemeVars.test.ts` |
 | `web/src/lib/messageReducer.ts`, `web/src/lib/toolSummary.ts`, `web/src/lib/subagentRun.ts`, `web/src/lib/toolRun.ts`, `web/src/lib/toolGroups.ts`, `web/src/components/Chat/ToolRow.tsx` | Chat view's canvas rows (§12): `canvas_revision` read off the result record onto the run (`messageReducer`), the rows' wording by outcome (`toolSummary`, and a subagent's latest-child line through `subagentRun`), a refusal's second line (`toolRun`), never folding them (`toolGroups`), and `rev N` as their meta (`ToolMeta`) |
@@ -98,12 +98,15 @@ exist.
 
 ## 1. The rules
 
-**Canvas is a property of the session, fixed at birth.** It is chosen when the
-session is created and never changes afterwards. It is not a `Mode`: `Mode` is
-how permissions are handled (today `default` and `yolo`) and can be changed; canvas is
-what the session *is*, and changing it halfway would leave an agent that was
-told one thing living in a session that became another. A fork of a canvas
-session is a canvas session.
+**Canvas is a property of the session, fixed once its agent is first told
+anything.** A new session starts as the project's default kind, and the user
+can switch it on the empty state until the first message is delivered; from
+then on it never changes ([new-session-ui.md](new-session-ui.md#1-the-rule)).
+It is not a `Mode`: `Mode` is how permissions are handled (today `default` and
+`yolo`) and can be changed at any time; canvas is what the session *is*, and
+changing it once the agent has been told would leave an agent that was told
+one thing living in a session that became another. A fork of a canvas session
+is a canvas session.
 
 **The page is the agent's; everything that decides anything is Pockode's.** The
 agent draws freely, scripts included. What allows a host, grants a permission or
@@ -250,7 +253,9 @@ engine-specific except where guidance is delivered (§9).
 its centre: `Nothing drawn yet`, or `The agent is drawing…` while the session's
 turn is running (`turn.phase` is `running`). Never a spinner of its own:
 liveness is the strip's. Before the subscription has said anything about the
-canvas, the area is blank.
+canvas, the area is blank. A session that has not started shows the kind
+chooser there instead, whatever the canvas state
+([new-session-ui.md §3](new-session-ui.md#3-the-chooser-on-the-empty-state)).
 
 ### 2.1 The view switch
 
@@ -1276,8 +1281,10 @@ It travels through the channels `Guidance` does:
   with `--canvas` for a canvas session
   (`pockode mcp --data-dir … --session-id … [--worktree …] --canvas`), and
   answers `initialize` with `CanvasGuidance` and `tools/list` with the canvas
-  set (§3.4). The flag can be fixed at spawn because the property is fixed at
-  birth.
+  set (§3.4). The flag can be fixed at spawn because the property is fixed by
+  then: it changes only before the session starts, and a switch closes any
+  process spawned for the old kind
+  ([new-session-ui.md §4.1](new-session-ui.md#41-sessionset_canvas)).
 - **Codex** — `developerInstructions` on `thread/start`, with `CanvasGuidance`
   where `Guidance` would go, and `--canvas` in the `mcp_servers.pockode`
   arguments. That Codex fixes the instructions when the thread starts costs
@@ -2004,8 +2011,9 @@ session.create { canvas?: boolean } -> SessionListItem
 ```
 
 `canvas` is `session.create`'s only parameter; absent params, or `canvas`
-absent or false, are an ordinary session. It is `session.CreateSpec.Canvas`,
-stored as
+absent, are the project's default kind (`Settings.DefaultCanvas`,
+[new-session-ui.md §5](new-session-ui.md#5-the-default-kind-setting)); present,
+that kind. It is `session.CreateSpec.Canvas`, stored as
 
 ```go
 Canvas bool `json:"canvas,omitempty"`
@@ -2014,17 +2022,19 @@ Canvas bool `json:"canvas,omitempty"`
 `SessionDetail` embeds `SessionMeta`, so it carries `canvas` without more ado.
 `SessionListItem` lists its fields one by one, so it gains `canvas?: true`
 explicitly (`rpc.NewSessionListItem`) — a row may mark a canvas session, and the
-reply to `session.create` is such a row. Both copies are of a birth fact, so
-they cannot disagree
+reply to `session.create` is such a row. Both copies are read from the one
+stored record and pushed by the same update, as `title` and `turn` are
 ([why that is allowed](code/subscription-system.md#why-a-session-is-two-subscriptions)).
-There is no setter. `FileStore.CreateFork` copies it with the rest of the engine
-choice. Sessions the work system creates are never canvas sessions.
+The setter is `session.set_canvas`, refused once the session has started
+(`SessionMeta.Started`, [new-session-ui.md §4](new-session-ui.md#4-the-contract)).
+`FileStore.CreateFork` copies it with the rest of the engine choice, and the fork
+is started. Sessions the work system creates are never canvas sessions.
 
-The app offers it as **Canvas** beside **New Chat** in the sessions tab, and a
-canvas session's row carries a glyph of its own (and `, canvas` for a screen
-reader). Creates of the two kinds are separate requests: one never joins the
-other in flight ([agent-handoff-ui.md §1.4](agent-handoff-ui.md#14-no-current-session)),
-and Retry after a failed create asks for the same kind again.
+The app has one **New Session** button in the sessions tab, which sends no
+kind; the kind is chosen on the new session's empty state
+([new-session-ui.md §3](new-session-ui.md#3-the-chooser-on-the-empty-state)).
+A canvas session's row carries a glyph of its own (and `, canvas` for a screen
+reader), following the stored value while it can still change.
 
 ### 13.2 The pushed state
 
@@ -2355,8 +2365,10 @@ Exactly one of `anchor_seq` and `canvas_revision`; both or neither is
 - **Ops in the snapshots only, rebuilding old revisions by replay.** One parser
   change would silently rebuild every old revision differently from what was
   shown; a full snapshot is what was shown.
-- **Switching an existing session to canvas.** The agent was told one thing at
-  the start (§9.1); a property fixed at birth keeps that true.
+- **Switching a started session to or from canvas.** The agent was told one
+  thing at the start (§9.1); a property fixed once the first message is
+  delivered keeps that true. Before then the user may switch
+  ([new-session-ui.md](new-session-ui.md#1-the-rule)).
 - **Showing an old revision in the canvas area itself**, with a bar saying so.
   It would put a bar of its own into the column the banner, the strips and the
   input share (§2), take Back from a page that is not a layer, and make the

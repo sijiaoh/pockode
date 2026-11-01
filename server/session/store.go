@@ -30,6 +30,13 @@ type Store interface {
 	Delete(ctx context.Context, sessionID string) error
 	Update(ctx context.Context, sessionID string, title string) error
 	Activate(ctx context.Context, sessionID string) error
+	// MarkStarted sets Started and returns the session as it is once marked. It
+	// is the one point after which Canvas cannot change, so whatever the caller
+	// reads off the returned meta is what the agent is told.
+	MarkStarted(ctx context.Context, sessionID string) (SessionMeta, error)
+	// SetCanvas changes the session's kind, refused with ErrSessionStarted once
+	// the session has started. Writing the value it already has changes nothing.
+	SetCanvas(ctx context.Context, sessionID string, canvas bool) error
 	SetAgentType(ctx context.Context, sessionID string, agentType AgentType) error
 	SetMode(ctx context.Context, sessionID string, mode Mode) error
 	SetModel(ctx context.Context, sessionID string, model string) error
@@ -388,7 +395,7 @@ func (s *FileStore) Create(ctx context.Context, sessionID string, spec CreateSpe
 	now := time.Now()
 	session := SessionMeta{
 		ID:        sessionID,
-		Title:     "New Chat",
+		Title:     "New Session",
 		CreatedAt: now,
 		UpdatedAt: now,
 		AgentType: agentType,
@@ -452,6 +459,9 @@ func (s *FileStore) CreateFork(ctx context.Context, sessionID string, fork ForkS
 		Effort:     fork.Source.Effort,
 		Canvas:     fork.Source.Canvas,
 		ForkedFrom: &ForkOrigin{SessionID: fork.Source.ID},
+		// Started from birth: the copied history has been told to an agent, and
+		// the kind it was told is the source's.
+		Started: true,
 		// The fork starts idle, and the source's turn is not consulted. A fork
 		// can be cut from a session that is mid-turn, and what the source is in
 		// the middle of belongs to the source's process: nothing is producing
@@ -568,6 +578,38 @@ func (s *FileStore) Update(ctx context.Context, sessionID string, title string) 
 func (s *FileStore) Activate(ctx context.Context, sessionID string) error {
 	return s.updateMeta(ctx, sessionID, func(meta *SessionMeta) (bool, error) {
 		meta.Activated = true
+		meta.UpdatedAt = time.Now()
+		return true, nil
+	})
+}
+
+func (s *FileStore) MarkStarted(ctx context.Context, sessionID string) (SessionMeta, error) {
+	var marked SessionMeta
+	err := s.updateMeta(ctx, sessionID, func(meta *SessionMeta) (bool, error) {
+		changed := !meta.Started
+		meta.Started = true
+		marked = *meta
+		return changed, nil
+	})
+	if err != nil {
+		return SessionMeta{}, err
+	}
+	return marked, nil
+}
+
+// SetCanvas judges Started under the store lock, so it and MarkStarted are
+// ordered: a kind written here is the one every later MarkStarted returns, and
+// one that comes after a MarkStarted is refused. Activated counts as started
+// too — it covers sessions stored before Started existed.
+func (s *FileStore) SetCanvas(ctx context.Context, sessionID string, canvas bool) error {
+	return s.updateMeta(ctx, sessionID, func(meta *SessionMeta) (bool, error) {
+		if meta.Canvas == canvas {
+			return false, nil
+		}
+		if meta.Started || meta.Activated {
+			return false, ErrSessionStarted
+		}
+		meta.Canvas = canvas
 		meta.UpdatedAt = time.Now()
 		return true, nil
 	})

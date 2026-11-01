@@ -63,7 +63,7 @@ Overlay routes deliberately do not carry it (see [Known gaps](#known-gaps)).
 
 ### The filter panel
 
-At `expanded` the panel drops down across the whole New Chat row, the same
+At `expanded` the panel drops down across the whole New Session row, the same
 width as the worktree switcher's
 ([sidebar-ui.md](sidebar-ui.md#the-top-of-the-sidebar)); below it the panel is
 a bottom sheet. `Filter sessions` holds one flat level of grouping — the
@@ -161,7 +161,7 @@ third group header.
   for it, and that row is the one to mark. Session ids are unique across worktrees,
   so there is nothing to disambiguate. Without this the one-shot filter move above
   would buy a list with nothing selected in it.
-- **The filter never touches `New Chat`.** It always creates in the **current**
+- **The filter never touches `New Session`.** It always creates in the **current**
   worktree and is never disabled on account of the list belonging to another one
   (only a worktree switch in flight disables it). The context line is what keeps
   that from being read wrongly.
@@ -330,8 +330,8 @@ speak:
   `Answer this` would otherwise name a question in an answer panel that is not
   rendered.
 - **An empty transcript says `Nothing was said in this conversation.`** rather
-  than the live screen's `Start a conversation...` — an invitation under a bar
-  that has just explained there is no composer.
+  than the live screen's `Start a conversation...` or kind chooser — an
+  invitation under a bar that has just explained there is no composer.
 
 ### When the read fails
 

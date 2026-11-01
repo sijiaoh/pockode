@@ -2,6 +2,12 @@ import { useState } from "react";
 import { useGlobalEngine } from "../../../hooks/useGlobalEngine";
 import { useGlobalSettingsStatus } from "../../../hooks/useGlobalSettingsStatus";
 import { AUTO_ID } from "../../../lib/agentOptions";
+import {
+	getSessionKindInfo,
+	SESSION_KINDS,
+	type SessionKind,
+	sessionKindOf,
+} from "../../../lib/sessionKind";
 import { getSessionModeInfo, SESSION_MODES } from "../../../lib/sessionMode";
 import { useSettingsStore } from "../../../lib/settingsStore";
 import { useWSStore } from "../../../lib/wsStore";
@@ -17,8 +23,12 @@ export default function SessionSection() {
 	const defaultMode = useSettingsStore(
 		(s) => s.settings?.default_mode ?? "default",
 	);
+	const defaultKind = useSettingsStore((s) =>
+		sessionKindOf(s.settings?.default_canvas),
+	);
 	const updateSettings = useWSStore((s) => s.actions.updateSettings);
 	const [modeError, setModeError] = useState<string | null>(null);
+	const [kindError, setKindError] = useState<string | null>(null);
 
 	// The Engine field above reports its own failures; this toggle applies
 	// instantly and has nowhere else to say that the write was refused.
@@ -27,6 +37,15 @@ export default function SessionSection() {
 		updateSettings({ default_mode: mode }).catch((err: unknown) => {
 			setModeError(err instanceof Error ? err.message : String(err));
 		});
+	};
+
+	const selectKind = (kind: SessionKind) => {
+		setKindError(null);
+		updateSettings({ default_canvas: kind === "canvas" }).catch(
+			(err: unknown) => {
+				setKindError(err instanceof Error ? err.message : String(err));
+			},
+		);
 	};
 
 	return (
@@ -66,6 +85,16 @@ export default function SessionSection() {
 				getInfo={getSessionModeInfo}
 				hint={getSessionModeInfo(defaultMode).description}
 				error={modeError}
+				valueState={valueState}
+			/>
+			<ToggleGroup<SessionKind>
+				label="New sessions"
+				items={SESSION_KINDS}
+				selected={defaultKind}
+				onSelect={selectKind}
+				getInfo={getSessionKindInfo}
+				hint="Each new session can still be switched before its first message."
+				error={kindError}
 				valueState={valueState}
 			/>
 		</div>

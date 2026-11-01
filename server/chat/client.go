@@ -155,9 +155,9 @@ type Sender struct {
 	// that sent the message and has already shown it to itself. Typed as any
 	// for the reason EventBroadcastFunc's exclude is.
 	Exclude any
-	// CanvasSize is the sending device's canvas size, for a message to a
-	// canvas session that reported one (docs/canvas-ui.md §5). The caller
-	// leaves it nil for any other session: there is no canvas to measure.
+	// CanvasSize is the sending device's canvas size, when it reported one
+	// (docs/canvas-ui.md §5). Dropped for a session that is not a canvas
+	// session once the message starts it: there is no canvas to measure.
 	CanvasSize *canvas.Size
 }
 
@@ -220,6 +220,23 @@ func (c *Client) SendSystemMessage(ctx context.Context, sessionID, content, subt
 	return err
 }
 
+// SetCanvas changes an unstarted session's kind, refused with
+// session.ErrSessionStarted once its first message has been delivered.
+//
+// The write comes first and the process is closed after it, only if it was
+// spawned for the other kind. In that order a switch that loses to a send's
+// MarkStarted is refused and closes nothing — the process just told the old
+// kind is the session's for good — and one that wins leaves the send, which
+// sees the new kind at its mark, to replace the process itself. A process
+// already spawned from the new value is never touched by either.
+func (c *Client) SetCanvas(ctx context.Context, sessionID string, canvas bool) error {
+	if err := c.store.SetCanvas(ctx, sessionID, canvas); err != nil {
+		return err
+	}
+	c.pm.CloseIfCanvasDiffers(sessionID, canvas)
+	return nil
+}
+
 // Sent names the record a message was written to: its address in history and
 // the id minted for it. Both are zero when the record could not be written —
 // there is then nothing to name.
@@ -231,7 +248,7 @@ type Sent struct {
 // sendEvent delivers one message to the agent, records it, and tells subscribers.
 // It returns what names the record, or the zero Sent if there is none.
 func (c *Client) sendEvent(ctx context.Context, sessionID string, event agent.MessageEvent, attachments []agent.Attachment, from Sender) (Sent, error) {
-	proc, meta, err := c.getOrCreateProcess(ctx, sessionID)
+	proc, _, err := c.getOrCreateProcess(ctx, sessionID)
 	if err != nil {
 		return Sent{}, err
 	}
@@ -255,6 +272,25 @@ func (c *Client) sendEvent(ctx context.Context, sessionID string, event agent.Me
 		event.Attachments = append(event.Attachments, a.File)
 	}
 
+	// Past every check, so a refused message leaves the session unstarted and
+	// its kind still the user's to change; before the record and the delivery,
+	// so from here the kind is fixed and the meta below is what the agent is
+	// told (docs/new-session-ui.md §4.2).
+	meta, err := c.store.MarkStarted(ctx, sessionID)
+	if err != nil {
+		return Sent{}, err
+	}
+	// A kind switch that landed between taking the process and the mark leaves
+	// a process told the other kind. Replaced, never sent to; looped because a
+	// concurrent send may have spawned another from the meta it read before the
+	// switch.
+	for proc.Canvas() != meta.Canvas {
+		c.pm.CloseIfCanvasDiffers(sessionID, meta.Canvas)
+		if proc, _, err = c.pm.GetOrCreateProcess(ctx, meta); err != nil {
+			return Sent{}, err
+		}
+	}
+
 	// Past every check, so a refused message reports nothing
 	// (docs/canvas-ui.md §6.4); before the record and the delivery, so the
 	// store agrees with the record that says so, and a canvas call the agent
@@ -262,7 +298,10 @@ func (c *Client) sendEvent(ctx context.Context, sessionID string, event agent.Me
 	// could not be stored is not worth refusing the message over: the agent
 	// still reads it in this message, and only the next revision's drawn_for
 	// falls behind.
-	if from.CanvasSize != nil {
+	// Judged against the marked kind rather than by the caller: the kind is
+	// only fixed from the mark, and a message to a chat session has no canvas
+	// to report (docs/canvas-ui.md §6.4).
+	if from.CanvasSize != nil && meta.Canvas {
 		event.CanvasSize = from.CanvasSize
 		if err := c.canvas.ReportSize(sessionID, *from.CanvasSize); err != nil {
 			slog.Error("failed to record the canvas size a message reported", "sessionId", sessionID, "error", err)

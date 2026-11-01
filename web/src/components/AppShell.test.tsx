@@ -298,7 +298,7 @@ vi.mock("./Session", () => ({
 				{isExpanded ? "Collapse sidebar" : "Close sidebar"}
 			</button>
 			<button type="button" onClick={onCreateSession}>
-				New Chat
+				New Session
 			</button>
 			<button type="button" onClick={onOpenWorkList}>
 				Stories
@@ -557,7 +557,7 @@ describe("AppShell when the automatic session create fails", () => {
 			expect(screen.getByTestId("chat-panel")).toHaveTextContent("m1");
 		});
 
-		await user.click(screen.getByRole("button", { name: "New Chat" }));
+		await user.click(screen.getByRole("button", { name: "New Session" }));
 
 		expect(await screen.findByRole("alert")).toHaveTextContent(
 			"worktree is dirty",

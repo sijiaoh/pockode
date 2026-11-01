@@ -254,12 +254,12 @@ describe("BranchBar switch feedback", () => {
 		expect(banners[1]).toHaveTextContent("Could not delete spike.");
 	});
 
-	// The user can move to another segment while the merge's new chat is
+	// The user can move to another segment while the merge's new session is
 	// being created; its failure then has nowhere else to go.
 	it("reports a merge handoff that failed off the Branches segment", async () => {
 		const user = userEvent.setup();
 		mergeHandoff = {
-			error: { summary: "Couldn't start a new chat", detail: null },
+			error: { summary: "Couldn't start a new session", detail: null },
 			dismissError: dismissHandoffError,
 		};
 		const { rerender } = renderBar(true);
@@ -267,7 +267,7 @@ describe("BranchBar switch feedback", () => {
 
 		rerender(bar(false));
 		expect(screen.getByRole("alert")).toHaveTextContent(
-			"Couldn't start a new chat",
+			"Couldn't start a new session",
 		);
 		await user.click(screen.getByRole("button", { name: "Dismiss error" }));
 		expect(dismissHandoffError).toHaveBeenCalled();

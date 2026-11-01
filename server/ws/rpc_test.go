@@ -1419,8 +1419,8 @@ func TestHandler_SessionCreate(t *testing.T) {
 	if row.ID == "" {
 		t.Error("expected non-empty session ID")
 	}
-	if row.Title != "New Chat" {
-		t.Errorf("expected title 'New Chat', got %q", row.Title)
+	if row.Title != "New Session" {
+		t.Errorf("expected title 'New Session', got %q", row.Title)
 	}
 	if row.Turn.Phase != session.PhaseIdle {
 		t.Errorf("turn phase = %q, want idle for a session with no process yet", row.Turn.Phase)

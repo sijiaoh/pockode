@@ -184,18 +184,13 @@ func (h *rpcMethodHandler) handleMessage(ctx context.Context, conn *jsonrpc2.Con
 			h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, err.Error())
 			return
 		}
-		// Dropped for any other session rather than refused: chat view of an
-		// ordinary session has no canvas to measure, and a client that sent a
-		// size anyway has done no harm (docs/canvas-ui.md §6.4). A session that
-		// is not there is the send's to refuse.
-		meta, found, err := wt.SessionStore.Get(params.SessionID)
-		if err != nil {
-			h.replyInternalError(ctx, conn, req.ID, "failed to get session", err, "sessionId", params.SessionID)
-			return
-		}
-		if found && meta.Canvas {
-			from.CanvasSize = &size
-		}
+		// Passed on for every session and dropped by the send for one that is
+		// not a canvas session once it starts (chat.Sender.CanvasSize) rather
+		// than refused here: chat view of an ordinary session has no canvas to
+		// measure, and a client that sent a size anyway has done no harm
+		// (docs/canvas-ui.md §6.4). Judged there because the kind is only fixed
+		// at the send's own mark.
+		from.CanvasSize = &size
 	}
 
 	// Resolved before anything is sent, like a command below, so a message

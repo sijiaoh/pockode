@@ -476,7 +476,7 @@ the lineage legible in a sidebar sorted by recency, where the parent and child
 otherwise sit next to each other.
 
 Not derived from the anchor message's text (the way a first message titles a
-`New Chat`): a fork's subject is the parent's subject, and losing that in the
+`New Session`): a fork's subject is the parent's subject, and losing that in the
 name costs more than a sharper title gains. The field is editable anyway.
 
 ## After forking

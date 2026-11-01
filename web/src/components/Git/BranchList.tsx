@@ -137,7 +137,7 @@ function BranchList({
 								switchingTo === row.name
 									? `Switching to ${row.label}`
 									: handingOff === row.key
-										? "Opening a new chat"
+										? "Opening a new session"
 										: null
 							}
 							onSelect={() => onSelect(row)}

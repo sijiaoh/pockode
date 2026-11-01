@@ -43,7 +43,11 @@ export {
 	type ServerActions,
 	type ServerVersion,
 } from "./server";
-export { createSessionActions, type SessionActions } from "./session";
+export {
+	createSessionActions,
+	isSessionStartedRefusal,
+	type SessionActions,
+} from "./session";
 export {
 	createSessionViewActions,
 	type SessionViewActions,

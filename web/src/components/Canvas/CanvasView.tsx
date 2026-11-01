@@ -1,5 +1,11 @@
 import { useCoverPage, useIsPageCovered } from "@pockode/shared";
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import {
+	type ReactNode,
+	useEffect,
+	useLayoutEffect,
+	useRef,
+	useState,
+} from "react";
 import {
 	canvasSizeOf,
 	isEditableElement,
@@ -75,6 +81,12 @@ interface Props {
 	sendBlocked?: CanvasSendBlock | null;
 	/** Absent, no permission is ever shown (a test of the frame alone). */
 	permissions?: CanvasPermissions;
+	/**
+	 * The kind chooser, drawn in place of the empty canvas's line while the
+	 * session has not started — whether or not a canvas state has arrived
+	 * (docs/new-session-ui.md §3.5).
+	 */
+	kindChooser?: ReactNode;
 }
 
 /**
@@ -97,6 +109,7 @@ export function CanvasView({
 	onSend,
 	sendBlocked = null,
 	permissions,
+	kindChooser,
 }: Props) {
 	const canvas = useCanvasStore(selectCanvasState(sessionId));
 	const areaRef = useRef<HTMLDivElement>(null);
@@ -269,10 +282,19 @@ export function CanvasView({
 					/>
 				)}
 				{/* No spinner of its own: liveness is the activity strip's. */}
-				{canvas?.revision === 0 && (
-					<p className="pointer-events-none absolute inset-0 flex items-center justify-center px-6 text-center text-sm text-th-text-muted">
-						{turnRunning ? "The agent is drawing…" : "Nothing drawn yet"}
-					</p>
+				{kindChooser ? (
+					// Scrolls rather than squeezing the block, as in chat view.
+					<div className="absolute inset-0 flex flex-col overflow-y-auto">
+						<div className="m-auto flex w-full flex-col items-center px-4 py-6">
+							{kindChooser}
+						</div>
+					</div>
+				) : (
+					canvas?.revision === 0 && (
+						<p className="pointer-events-none absolute inset-0 flex items-center justify-center px-6 text-center text-sm text-th-text-muted">
+							{turnRunning ? "The agent is drawing…" : "Nothing drawn yet"}
+						</p>
+					)
 				)}
 			</div>
 			{batch.drawn && (

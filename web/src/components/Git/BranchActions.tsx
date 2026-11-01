@@ -75,7 +75,7 @@ function useBranchCheckout(): BranchCheckout {
 export interface BranchActions {
 	checkout: BranchCheckout;
 	operation: GitOperationKind | null;
-	/** The key of the row whose merge handoff waits for a new chat. */
+	/** The key of the row whose merge handoff waits for a new session. */
 	handingOff: string | null;
 	switchTo: (row: BranchRow) => void;
 	merge: (row: BranchRow) => void;

@@ -17,7 +17,6 @@ import { useSidebarUIConfig } from "../../lib/registries/sidebarUIRegistry";
 import { SidebarContainerContext } from "../../lib/sidebarContainerContext";
 import { useHasUnfinishedUploads } from "../../lib/uploadStore";
 import { useIsGitRepo } from "../../lib/worktreeStore";
-import type { SessionCreateParams } from "../../types/message";
 import type { GitLayer, GitSegment } from "../../types/overlay";
 import { FilesTab } from "../Files";
 import { GitTab } from "../Git";
@@ -37,7 +36,7 @@ interface Props {
 	 * worktrees (see `SessionItem`).
 	 */
 	onSelectSession: (id: string, worktree: string | null) => void;
-	onCreateSession: (params?: SessionCreateParams) => void;
+	onCreateSession: () => void;
 	onDeleteSession: (id: string, worktree: string | null) => void;
 	/** The Git layer the route names, and null when it names none. */
 	gitLayer: GitLayer | null;

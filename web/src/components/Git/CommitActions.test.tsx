@@ -265,11 +265,11 @@ describe("CommitActions", () => {
 
 	// The menu has closed by then: the failure is said where it is mounted.
 	it("says when the handoff failed, with no menu up", () => {
-		handoffError = { summary: "Couldn't start a new chat", detail: null };
+		handoffError = { summary: "Couldn't start a new session", detail: null };
 		renderMenu(null);
 
 		expect(screen.getByRole("alert")).toHaveTextContent(
-			"Couldn't start a new chat",
+			"Couldn't start a new session",
 		);
 	});
 });

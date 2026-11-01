@@ -9,6 +9,10 @@ import (
 
 var ErrSessionNotFound = errors.New("session not found")
 
+// ErrSessionStarted is returned for a change to what the agent was told at its
+// first message — the session's kind — once that message has been delivered.
+var ErrSessionStarted = errors.New("cannot change session kind after the session has started")
+
 // AgentType identifies which AI agent backend a session uses.
 type AgentType string
 
@@ -204,11 +208,19 @@ type SessionMeta struct {
 	// effort level and keeps its own default.
 	Effort string `json:"effort"`
 	// Canvas marks a canvas session: the screen is a page the agent draws, and
-	// the agent is told so from its first turn (docs/canvas-ui.md). Fixed at
-	// birth and never changed — there is no setter — because an agent told one
-	// thing at the start must not find itself in a session that became another.
-	// It is not a Mode: Mode is how permissions are handled, and can change.
+	// the agent is told so from its first turn (docs/canvas-ui.md). It can be
+	// changed (SetCanvas) only until Started, and is fixed from then on: an
+	// agent told one thing at the start must not find itself in a session that
+	// became another (docs/new-session-ui.md §1). It is not a Mode: Mode is how
+	// permissions are handled, and can change at any time.
 	Canvas bool `json:"canvas,omitempty"`
+	// Started is set immediately before the first message is delivered to the
+	// session's agent (MarkStarted), and never cleared; a fork is born with it.
+	// Canvas can change only while it is false (docs/new-session-ui.md §4.2).
+	//
+	// Not Activated: that becomes true when the agent produces output, which can
+	// be long after it was told the kind — or never.
+	Started bool `json:"started,omitempty"`
 	// Turn is what this session is doing, and the only place that is recorded.
 	// It is written by nothing but the reducer (see turn.go), and everything that
 	// used to be a flag of its own — the session's needs_input, the process's

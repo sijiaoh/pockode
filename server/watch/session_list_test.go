@@ -39,6 +39,14 @@ func (m *mockSessionStore) SetAgentType(ctx context.Context, sessionID string, a
 	return nil
 }
 
+func (m *mockSessionStore) MarkStarted(ctx context.Context, sessionID string) (session.SessionMeta, error) {
+	return session.SessionMeta{}, nil
+}
+
+func (m *mockSessionStore) SetCanvas(ctx context.Context, sessionID string, canvas bool) error {
+	return nil
+}
+
 func (m *mockSessionStore) Delete(ctx context.Context, sessionID string) error {
 	return nil
 }

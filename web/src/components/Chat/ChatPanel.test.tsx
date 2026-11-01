@@ -145,6 +145,9 @@ const mockState = vi.hoisted(() => ({
 	setSessionModel: vi.fn(
 		(_sessionId: string, _model: string): Promise<void> => Promise.resolve(),
 	),
+	setSessionCanvas: vi.fn(
+		(_sessionId: string, _canvas: boolean): Promise<void> => Promise.resolve(),
+	),
 	setSessionEffort: vi.fn(
 		(_sessionId: string, _effort: string): Promise<void> => Promise.resolve(),
 	),
@@ -199,6 +202,7 @@ vi.mock("../../lib/wsStore", () => {
 		setSessionAgentType: mockState.setSessionAgentType,
 		setSessionModel: mockState.setSessionModel,
 		setSessionEffort: mockState.setSessionEffort,
+		setSessionCanvas: mockState.setSessionCanvas,
 		startWork: mockState.startWork,
 		getStatus: mockState.getStatus,
 		forkSession: mockState.forkSession,
@@ -367,6 +371,9 @@ describe("ChatPanel", () => {
 		);
 		mockState.setSessionEffort.mockImplementation(async (_id, effort) =>
 			acceptSetting({ effort }),
+		);
+		mockState.setSessionCanvas.mockImplementation(async (_id, canvas) =>
+			acceptSetting({ canvas }),
 		);
 		// Default: subscribe returns empty history and ended state
 		mockState.chatMessagesSubscribe.mockImplementation(() =>
@@ -2300,7 +2307,7 @@ describe("ChatPanel", () => {
 		};
 
 		beforeEach(() => {
-			seedSessionDetail({ canvas: true });
+			seedSessionDetail({ canvas: true, started: true });
 			useCanvasStore.setState({ size: null });
 		});
 
@@ -2518,7 +2525,7 @@ describe("ChatPanel", () => {
 			await screen.findByText("Nothing drawn yet");
 			await user.click(chatView());
 
-			seedSessionDetail({ id: "other", canvas: true });
+			seedSessionDetail({ id: "other", canvas: true, started: true });
 			rerender(<ChatPanel {...defaultProps} sessionId="other" />);
 			await waitFor(() =>
 				expect(chatView()).toHaveAttribute("aria-pressed", "false"),
@@ -2681,7 +2688,7 @@ describe("ChatPanel", () => {
 					},
 				}),
 			);
-			seedSessionDetail({ canvas: true });
+			seedSessionDetail({ canvas: true, started: true });
 			render(<ChatPanel {...defaultProps} />);
 			await waitForHistoryLoad();
 			act(() => blockOn("req-old", "req-lost"));
@@ -2793,13 +2800,18 @@ describe("ChatPanel", () => {
 			expect(screen.getByText("Hello AI")).toBeInTheDocument();
 		});
 
-		it("updates title on first message when title is 'New Chat'", async () => {
+		// `New Chat` is what the server wrote before sessions had a kind to
+		// choose; sessions stored with it are still unnamed.
+		it.each([
+			"New Session",
+			"New Chat",
+		])("updates title on first message when title is '%s'", async (title) => {
 			const user = userEvent.setup();
 			const onUpdateTitle = vi.fn();
 			render(
 				<ChatPanel
 					{...defaultProps}
-					sessionTitle="New Chat"
+					sessionTitle={title}
 					onUpdateTitle={onUpdateTitle}
 				/>,
 			);
@@ -2874,6 +2886,24 @@ describe("ChatPanel", () => {
 			expect(screen.queryByRole("alert")).not.toBeInTheDocument();
 		});
 
+		// Nothing was delivered, so the session has not started: the choice
+		// is the user's again (docs/new-session-ui.md §3.5).
+		it("brings the kind chooser back with the draft", async () => {
+			refuse();
+			const user = userEvent.setup();
+			render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+
+			const textarea = screen.getByRole("textbox");
+			await user.type(textarea, "/pockode-foo do it");
+			await user.click(screen.getByRole("button", { name: /Send/ }));
+
+			expect(
+				await screen.findByRole("group", { name: "Session" }),
+			).toBeInTheDocument();
+			expect(textarea).toHaveValue("/pockode-foo do it");
+		});
+
 		// The input already holds something new; the refusal must not overwrite it.
 		it("keeps whatever the user typed after sending", async () => {
 			let reject: (reason: Error) => void = () => {};
@@ -2899,13 +2929,13 @@ describe("ChatPanel", () => {
 		});
 
 		// A typo must not become the new session's name.
-		it("names a new chat only once the command is accepted", async () => {
+		it("names a new session only once the command is accepted", async () => {
 			const onUpdateTitle = vi.fn();
 			const user = userEvent.setup();
 			const { rerender } = render(
 				<ChatPanel
 					{...defaultProps}
-					sessionTitle="New Chat"
+					sessionTitle="New Session"
 					onUpdateTitle={onUpdateTitle}
 				/>,
 			);
@@ -2920,7 +2950,7 @@ describe("ChatPanel", () => {
 			rerender(
 				<ChatPanel
 					{...defaultProps}
-					sessionTitle="New Chat"
+					sessionTitle="New Session"
 					onUpdateTitle={onUpdateTitle}
 				/>,
 			);
@@ -2996,7 +3026,7 @@ describe("ChatPanel", () => {
 
 		// Files the agent cannot receive are refused, and a refused message must
 		// not leave its name behind — so the rename waits, as a command's does.
-		it("names a new chat after its files once the message is accepted", async () => {
+		it("names a new session after its files once the message is accepted", async () => {
 			let accept: (value: SentMessage) => void = () => {};
 			mockState.sendMessage.mockReturnValueOnce(
 				new Promise((resolve) => {
@@ -3008,7 +3038,7 @@ describe("ChatPanel", () => {
 			render(
 				<ChatPanel
 					{...defaultProps}
-					sessionTitle="New Chat"
+					sessionTitle="New Session"
 					onUpdateTitle={onUpdateTitle}
 				/>,
 			);
@@ -3039,7 +3069,7 @@ describe("ChatPanel", () => {
 			render(
 				<ChatPanel
 					{...defaultProps}
-					sessionTitle="New Chat"
+					sessionTitle="New Session"
 					onUpdateTitle={onUpdateTitle}
 				/>,
 			);
@@ -3062,6 +3092,238 @@ describe("ChatPanel", () => {
 	// Dropping is a shortcut for the composer's `+`, taken exactly where that
 	// button can be used, and said no to — with the reason — everywhere else
 	// under the header.
+	// docs/new-session-ui.md §3.
+	describe("the kind chooser", () => {
+		const chooser = () => screen.queryByRole("group", { name: "Session" });
+		const segment = (name: "Chat" | "Canvas") =>
+			within(screen.getByRole("group", { name: "Session" })).getByRole(
+				"button",
+				{ name },
+			);
+
+		it("switches a new session between chat and canvas, keeping the draft", async () => {
+			const user = userEvent.setup();
+			render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+
+			expect(segment("Chat")).toHaveAttribute("aria-pressed", "true");
+			expect(
+				screen.getByText("You and the agent talk in a transcript."),
+			).toBeInTheDocument();
+			await user.type(screen.getByRole("textbox"), "draw a plan");
+
+			await user.click(segment("Canvas"));
+
+			expect(mockState.setSessionCanvas).toHaveBeenCalledWith(
+				"test-session",
+				true,
+			);
+			// Canvas view: the collapsed line, and the chooser drawn again there
+			// with the focus kept on the segment pressed.
+			expect(await screen.findByRole("button", { name: /draw a plan/ }));
+			expect(screen.queryByRole("textbox")).toBeNull();
+			expect(segment("Canvas")).toHaveAttribute("aria-pressed", "true");
+			expect(segment("Canvas")).toHaveFocus();
+
+			await user.click(segment("Chat"));
+
+			expect(await screen.findByRole("textbox")).toHaveValue("draw a plan");
+			expect(segment("Chat")).toHaveFocus();
+		});
+
+		// So the first message goes to the kind on screen (§3.3).
+		it("holds Send and the chooser while a switch answers", async () => {
+			const user = userEvent.setup();
+			let refuse = () => {};
+			mockState.setSessionCanvas.mockImplementation(
+				() =>
+					new Promise<void>((_, reject) => {
+						refuse = () => reject(new Error("disconnected"));
+					}),
+			);
+			render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+			await user.type(screen.getByRole("textbox"), "hello");
+
+			await user.click(segment("Canvas"));
+			expect(segment("Canvas")).toHaveAttribute("aria-disabled", "true");
+			expect(screen.getByRole("button", { name: /Send/ })).toBeDisabled();
+			await user.click(segment("Canvas"));
+			expect(mockState.setSessionCanvas).toHaveBeenCalledTimes(1);
+
+			await act(async () => refuse());
+			expect(screen.getByRole("button", { name: /Send/ })).toBeEnabled();
+			expect(segment("Canvas")).not.toHaveAttribute("aria-disabled");
+		});
+
+		// A hint sends the first message too, so it waits like Send.
+		it("holds an extension empty state's hints while a switch answers", async () => {
+			const user = userEvent.setup();
+			let answer = () => {};
+			mockState.setSessionCanvas.mockImplementation(
+				() =>
+					new Promise<void>((_, reject) => {
+						answer = () => reject(new Error("disconnected"));
+					}),
+			);
+			setChatUIConfig({
+				EmptyState: ({ onHintClick }) => (
+					<button type="button" onClick={() => onHintClick?.("say hi")}>
+						say hi
+					</button>
+				),
+			});
+			try {
+				render(<ChatPanel {...defaultProps} />);
+				await waitForHistoryLoad();
+
+				await user.click(segment("Canvas"));
+				await user.click(screen.getByRole("button", { name: "say hi" }));
+				expect(mockState.sendMessage).not.toHaveBeenCalled();
+
+				await act(async () => answer());
+				await user.click(screen.getByRole("button", { name: "say hi" }));
+				expect(mockState.sendMessage).toHaveBeenCalledTimes(1);
+			} finally {
+				resetChatUIConfig();
+			}
+		});
+
+		// The reply and the push that moves the kind travel apart.
+		it("holds Send until the switched kind has arrived", async () => {
+			const user = userEvent.setup();
+			mockState.setSessionCanvas.mockResolvedValue(undefined);
+			seedSessionDetail({ canvas: true });
+			render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+
+			await user.click(segment("Chat"));
+			await act(async () => {});
+			expect(segment("Chat")).toHaveAttribute("aria-disabled", "true");
+
+			act(() => acceptSetting({ canvas: false }));
+			await user.type(await screen.findByRole("textbox"), "hello");
+			expect(screen.getByRole("button", { name: /Send/ })).toBeEnabled();
+		});
+
+		it("says why a switch was refused under the chooser", async () => {
+			const user = userEvent.setup();
+			mockState.setSessionCanvas.mockRejectedValueOnce(
+				new JSONRPCErrorException(
+					"cannot change session kind after the session has started",
+					JSONRPCErrorCode.InvalidParams,
+					{ reason: "session_started" },
+				),
+			);
+			mockState.setSessionCanvas.mockRejectedValueOnce(new Error("timeout"));
+			render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+
+			await user.click(segment("Canvas"));
+			expect(await screen.findByRole("alert")).toHaveTextContent(
+				"This session has already started, so it stays a chat session.",
+			);
+
+			await user.click(segment("Canvas"));
+			expect(await screen.findByRole("alert")).toHaveTextContent(
+				"Couldn't switch: timeout",
+			);
+			expect(segment("Chat")).toHaveAttribute("aria-pressed", "true");
+		});
+
+		it("goes at the press of Send", async () => {
+			const user = userEvent.setup();
+			render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+
+			await user.type(screen.getByRole("textbox"), "hello");
+			await user.click(screen.getByRole("button", { name: /Send/ }));
+
+			expect(chooser()).toBeNull();
+		});
+
+		it.each([
+			["a started session", { started: true }],
+			["a session stored before `started` existed", { activated: true }],
+			["a work session", { work_id: "w1" }],
+		])("is not offered on %s", async (_, overrides) => {
+			seedSessionDetail(overrides);
+			render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+
+			expect(chooser()).toBeNull();
+		});
+
+		// A switch closes a process left by a refused send, which records its end.
+		it("still counts a history holding only a process's end as empty", async () => {
+			mockState.mockHistory = [{ type: "process_ended", seq: 1 }];
+			render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+
+			expect(chooser()).not.toBeNull();
+		});
+
+		it("keeps the Chat view toggle and History off a canvas session until it starts", async () => {
+			const user = userEvent.setup();
+			seedSessionDetail({ canvas: true });
+			render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+
+			expect(segment("Canvas")).toHaveAttribute("aria-pressed", "true");
+			expect(screen.queryByRole("button", { name: "Chat view" })).toBeNull();
+			await user.click(sessionTrigger());
+			expect(screen.queryByRole("button", { name: /^History:/ })).toBeNull();
+
+			act(() => acceptSetting({ started: true }));
+
+			expect(
+				screen.getByRole("button", { name: /^History:/ }),
+			).toBeInTheDocument();
+			expect(
+				screen.getByRole("button", { name: "Chat view" }),
+			).toBeInTheDocument();
+		});
+
+		it("is not offered on a session read out of another worktree", async () => {
+			render(
+				<ChatPanel
+					{...defaultProps}
+					isSessionResolved={false}
+					view={{ worktree: "feature-x", exists: true, label: "feature-x" }}
+				/>,
+			);
+
+			expect(
+				await screen.findByText("Nothing was said in this conversation."),
+			).toBeInTheDocument();
+			expect(chooser()).toBeNull();
+		});
+
+		// Another device switched it back before this one's reply came: the
+		// asked kind never arrives, and Send must not wait for it.
+		it("lets Send go when the kind moved away and back before the reply", async () => {
+			const user = userEvent.setup();
+			let reply = () => {};
+			mockState.setSessionCanvas.mockImplementation(
+				() =>
+					new Promise<void>((resolve) => {
+						reply = resolve;
+					}),
+			);
+			render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+
+			await user.click(segment("Canvas"));
+			act(() => acceptSetting({ canvas: true }));
+			act(() => acceptSetting({ canvas: false }));
+			await act(async () => reply());
+
+			await user.type(await screen.findByRole("textbox"), "hello");
+			expect(screen.getByRole("button", { name: /Send/ })).toBeEnabled();
+			expect(segment("Canvas")).not.toHaveAttribute("aria-disabled");
+		});
+	});
+
 	describe("dropping files", () => {
 		const shot = {
 			id: "a1.png",
@@ -3090,9 +3352,10 @@ describe("ChatPanel", () => {
 			render(<ChatPanel {...defaultProps} />);
 			await waitForHistoryLoad();
 
-			const drag = dragFiles(screen.getByText("Start a conversation..."), [
-				dropItem(file()),
-			]);
+			const drag = dragFiles(
+				screen.getByText("Can be changed until you send the first message."),
+				[dropItem(file())],
+			);
 			expect(drag.dataTransfer.dropEffect).toBe("copy");
 			expect(overlayText()).toBe("Drop files to attach");
 

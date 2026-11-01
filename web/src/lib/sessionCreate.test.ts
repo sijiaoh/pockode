@@ -6,7 +6,7 @@ import { useWorktreeStore } from "./worktreeStore";
 
 const request = vi.hoisted(() => vi.fn());
 vi.mock("./wsStore", () => ({
-	wsActions: { createSession: (params: unknown) => request(params) },
+	wsActions: { createSession: (params?: unknown) => request(params) },
 }));
 
 describe("createSession", () => {
@@ -58,47 +58,13 @@ describe("createSession", () => {
 		expect(useSessionStore.getState().sessions).toEqual([]);
 	});
 
-	// Absent rather than false, so a chat session is asked for as it always was.
-	it("asks for a canvas session only when told to", async () => {
+	// The kind is the server's default, chosen inside the session afterwards.
+	it("asks for no kind", async () => {
 		request.mockResolvedValue(makeSessionListItem({ id: "new" }));
 
 		await createSession();
-		await createSession({ canvas: true });
 
-		expect(request.mock.calls).toEqual([[{}], [{ canvas: true }]]);
-	});
-
-	// A chat session cannot become a canvas one later, so it is no answer to a
-	// caller asking for a canvas while it is in flight.
-	it("does not join a request for the other kind of session", async () => {
-		request
-			.mockResolvedValueOnce(makeSessionListItem({ id: "chat" }))
-			.mockResolvedValueOnce(
-				makeSessionListItem({ id: "canvas", canvas: true }),
-			);
-
-		const [chat, canvas] = await Promise.all([
-			createSession(),
-			createSession({ canvas: true }),
-		]);
-
-		expect(chat.id).toBe("chat");
-		expect(canvas.id).toBe("canvas");
-	});
-
-	it("still joins a create of its own kind with one of the other in flight", async () => {
-		request
-			.mockResolvedValueOnce(makeSessionListItem({ id: "chat" }))
-			.mockResolvedValueOnce(
-				makeSessionListItem({ id: "canvas", canvas: true }),
-			);
-
-		const first = createSession();
-		void createSession({ canvas: true });
-		const second = createSession();
-
-		expect(await second).toBe(await first);
-		expect(request).toHaveBeenCalledTimes(2);
+		expect(request.mock.calls).toEqual([[undefined]]);
 	});
 
 	it("asks again after a failure", async () => {

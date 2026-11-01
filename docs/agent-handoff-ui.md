@@ -199,28 +199,30 @@ as with dropped files ([agent-chat.md](agent-chat.md#attaching-by-drop-or-paste)
 
 The handoff creates a session in **the workspace's worktree**, which is the one
 in the path and the one the work is about. It uses the plain `session.create`
-that *New chat* uses. That puts the session on the global default engine and
-mode, which is also what `useWorkspaceEngine` falls back to. There is no picker,
-for the reason the AI draft has none: the user can change the engine in the
-session panel before sending, and a question asked before every handoff would
-be one with an obvious answer.
+that *New Session* uses. That puts the session on the project's default
+engine, mode and kind, the engine being also what `useWorkspaceEngine` falls
+back to. There is no picker, for the reason the AI draft has none: the user can
+change the engine in the session panel, and the kind on the empty state, before
+sending, and a question asked before every handoff would be one with an obvious
+answer.
 
 - **While the session is being created**, the entry shows its own pending state
   (the spinner of the button that was pressed, disabled). Nothing navigates yet.
   A second press on the same entry is ignored until its push has landed, so a
   double press never pushes the chat twice and leaves Back pointing at it. A
-  press on any other entry, or *New chat*, joins the create already in flight:
-  `lib/sessionCreate.ts` is the one create every caller goes through, and
-  `useSession` uses it too. It is joined only from the worktree it was asked
-  in, because a create sent before a worktree switch is answered in the
-  worktree left behind, and only by a create of the same kind: a canvas
-  session is not a chat ([canvas-ui.md §13.1](canvas-ui.md#131-the-session-option)).
+  press on any other entry, or *New Session*, joins the create already in
+  flight: `lib/sessionCreate.ts` is the one create every caller goes through,
+  and `useSession` uses it too. It is joined only from the worktree it was
+  asked in, because a create sent before a worktree switch is answered in the
+  worktree left behind. Every create asks for the project's default kind, so
+  any two join; the kind is chosen afterwards, in the session
+  ([new-session-ui.md](new-session-ui.md#2-one-new-session-button)).
 - **While the connection is still switching to the workspace's worktree**,
   `session.create` would be answered in the old one, so the handoff does not
-  send it: it reports `Couldn't start a new chat` with `This worktree is still
+  send it: it reports `Couldn't start a new session` with `This worktree is still
   opening. Try again in a moment.` as the failure below.
 - **If the create fails**, the user stays where they were, and the failure is
-  reported on the entry's surface as `Couldn't start a new chat` with the
+  reported on the entry's surface as `Couldn't start a new session` with the
   reason as its detail. Nothing is lost: the text exists only in the entry
   until the session does. The hook does not write a banner itself: it hands the
   failure back as a `GitFailure` (`summary`, and the server's message as
@@ -235,14 +237,14 @@ be one with an obvious answer.
   they pressed by then — any navigation while the session was being created,
   leaving the workspace or moving inside it — the draft is still written, and
   nothing navigates and nothing is revealed: the user has gone somewhere of
-  their own, and the text waits in the new chat.
+  their own, and the text waits in the new session.
 - **The hook belongs to a surface that outlives the press** — the page or bar
   the entry sits in, not a menu row that closes on select. Its pending state
   and its error are that call's, and an error handed to a component that has
   unmounted is one nobody sees.
 
 A new session arrives with no conversation behind it. That is visible: its
-header reads `New Chat`. Its absence is also the reason it was created. The
+header reads `New Session`. Its absence is also the reason it was created. The
 chat the user came from is gone, or never existed, so landing in an empty chat
 is the truthful result, not a fallback.
 
@@ -268,7 +270,7 @@ send mid-turn is the user's call, in the composer.
 | The composer's caret | `inputActions.registerCaret` / `readCaret` in `inputStore`: a module-level map of readers by session, not store state — nothing renders from it | Registered by `InputBar` while it draws the session, unregistered on unmount |
 | Whether the composer is on the page | `overlayKeepsComposer` in `types/overlay.ts`, of `mainAreaOverlay` — what the main area draws at this width | The one rule, read by `ChatPanel`, which draws the composer, and by the handoff |
 | The reveal request | `inputStore`, a non-persisted one-shot keyed by session (`reveals`, `requestReveal`, `takeReveal`): `PrefillReveal`, how the text landed (`ready` / `added`) and, after an insert, the caret offset | Consumed by `InputBar` |
-| Creating the session | `lib/sessionCreate.ts` (`createSession`) | The one create `useSession` and the handoff share, so concurrent callers of the same kind (chat or canvas) join one request |
+| Creating the session | `lib/sessionCreate.ts` (`createSession`) | The one create `useSession` and the handoff share, so concurrent callers join one request |
 | The ring | `.composer-arrival` in `index.css` | A keyframe animation, so the ring is there at once and only its going fades |
 
 ## 2. The review row

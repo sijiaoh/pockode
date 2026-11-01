@@ -4309,6 +4309,18 @@ reason at all is not a choice worth offering.
   [not a conversation of its own](#forking).
 - `session.set_agent_type`, which refuses to switch a started session's backend.
 
+It is not `Started`, the flag that fixes a session's kind
+([new-session-ui.md §4.2](../new-session-ui.md#42-sessionmetastarted)).
+`Started` is set when the first message is *delivered* — the moment the agent
+is told the kind's guidance and tools — and `Activated` when the agent first
+*answers*. The engine may change between the two, since the CLI that never
+answered is closed and nothing is resumed; the kind may not, since the agent
+has already been told it. `Started` is marked in `chat.Client.sendEvent`
+through `Store.MarkStarted`, ordered against `session.set_canvas`'s write by
+the store lock: the send reads the kind from the meta its own mark returned,
+and replaces a process spawned for the other kind
+(`process.Manager.CloseIfCanvasDiffers`) rather than delivering to it.
+
 Codex used to be a third reader, through the same field, to warn that a restarted
 session had lost the agent's earlier turns. It no longer reads it at all: a thread
 now survives its process, so whether the agent still remembers is answered by

@@ -28,6 +28,9 @@ export interface Settings {
 	// Empty = no flag is passed and the CLI decides.
 	default_model?: string;
 	default_effort?: string;
+	// Whether a new session starts as a canvas one; absent = chat. Applied by the
+	// server at `session.create` (docs/new-session-ui.md §5).
+	default_canvas?: boolean;
 	// Empty = default (`../<repo>-worktrees`). Non-empty may be an absolute path,
 	// a repo-relative `./`/`../` path, or a home-relative `~/` path; the backend
 	// validates and rejects invalid values.

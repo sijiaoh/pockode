@@ -19,7 +19,7 @@ import { isCanvasDrawn, NOTHING_DRAWN } from "../../lib/canvasStore";
 import { useChatUIConfig } from "../../lib/registries/chatUIRegistry";
 import { useHeaderUIConfig } from "../../lib/registries/headerUIRegistry";
 import { getSessionModeInfo, SESSION_MODES } from "../../lib/sessionMode";
-import { NEW_SESSION_TITLE } from "../../lib/sessionStore";
+import { isPlaceholderTitle as isPlaceholder } from "../../lib/sessionStore";
 import type { SessionDetail, SessionMode } from "../../types/message";
 import type { AgentType } from "../../types/settings";
 import { PanelSection } from "../ui";
@@ -177,7 +177,7 @@ function SessionHeader({
 			? `${engineText} · ${modeInfo.label}`
 			: "loading";
 
-	const isPlaceholderTitle = title === NEW_SESSION_TITLE;
+	const isPlaceholderTitle = isPlaceholder(title);
 	// The values, not the glyphs: the row truncates, but a label that reported
 	// only what fits would report the wrong thing. The agent waits like the rest
 	// — until the settings land the agent type is a placeholder, and asserting
