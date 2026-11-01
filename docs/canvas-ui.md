@@ -43,7 +43,7 @@ pushed state, sending an action), both sides of the bridge, the page frame, the
 canvas screen (the view switch, the empty state, the collapsed input, the size
 measurement), chat view's canvas rows and action bubbles, the permission panel,
 its banner and the expiry line (§10), the activity strip with its turn details
-(§11), and the history view (§15) with both its entries and forking from a page
+(§11), and the history view (§15) with its three entries and forking from a page
 exist.
 
 | Path | Role |
@@ -64,7 +64,7 @@ exist.
 | `server/watch/chat_messages.go` | Pushing `chat.canvas_state`; the pending permission requests a subscription starts from (§10.4) |
 | `web/src/lib/canvasTools.ts` | Both engines' names for the two tools (`isCanvasRenderTool`, `isCanvasUpdateTool`, `isCanvasTool`), and nothing else |
 | `web/src/types/canvas.ts` | The contract's types: `CanvasState`, `CanvasChange`, `CanvasOp`, `CanvasSize`, `CanvasAction`, `CanvasActionParams`, `CanvasStateNotification`, `CanvasHistoryEntry`, `CanvasForkBlocked`, `CanvasSnapshot`; the record's `canvas_action` / `canvas_size`, the result's `canvas_revision` (`ToolRun.canvasRevision`), the session's `canvas`, `SessionCreateParams`, `SessionForkParams` and the chat subscription's `ChatNotification` are on the existing types in `types/message.ts` |
-| `web/src/lib/canvasStore.ts` | The open session's current canvas, the highest revision winning (`useCanvasStore`, `selectCanvasState`, `useCanvasRevision`, `canvasActions`), the device's canvas size every message to a canvas session carries (`size`, `canvasActions.setSize`), and a count of what may have settled a canvas call (`callsSettled`, §15.3) |
+| `web/src/lib/canvasStore.ts` | The open session's current canvas, the highest revision winning (`useCanvasStore`, `selectCanvasState`, `useCanvasRevision`, `canvasActions`), the device's canvas size every message to a canvas session carries (`size`, `canvasActions.setSize`), whether there is a page for the history view's two entries to open on (`isCanvasDrawn`, `NOTHING_DRAWN`, §15.1), and a count of what may have settled a canvas call (`callsSettled`, §15.3) |
 | `web/src/hooks/useChatMessages.ts` | Taking `chat.canvas_state` and the subscribe reply's `canvas` into the store, never into the transcript; `sendCanvasAction`, echoed as a typed message is; the size on `chat.message`; counting what may settle a canvas call — any tool result, or a turn ending (`settlesCanvasCalls`) |
 | `web/src/lib/rpc/chat.ts` | `chat.canvas_action` (`sendCanvasAction`) and `chat.message`'s `canvas_size`; `chat.canvas_history` / `chat.canvas_snapshot` (`canvasHistory`, `canvasSnapshot`) |
 | `web/src/lib/rpc/session.ts`, `web/src/lib/sessionCreate.ts`, `web/src/hooks/useSession.ts`, `web/src/components/AppShell.tsx`, `web/src/components/Session/SessionsTab.tsx`, `web/src/components/Session/SessionItem.tsx` | Creating a canvas session (§13.1): `session.create`'s option (`SessionCreateParams`), one create in flight per kind, the retry of a failed create with its own params (`createErrorParams`, retried by `AppShell`); the **Canvas** button beside **New Chat**; a canvas row's glyph. Also `session.fork`'s `canvas_revision` (`forkSessionAtCanvasRevision`, §13.6) |
@@ -78,9 +78,10 @@ exist.
 | `web/src/components/Canvas/CanvasFrame.tsx` | The page frame (§4): the document, the size (§5), redrawing through `CanvasRedraw`, the host allowance per session, and the app side of the bridge (§8.2, §8.4) — answering sends, the theme, `sendable`, the page's focus for the size rule, `readOnly` saying which page a history frame is (§15.4); tested in real engines by `CanvasFrame.browser.test.tsx` |
 | `web/src/components/Canvas/CanvasView.tsx` | The canvas view's canvas (§2): the session's current canvas from the store in a `CanvasFrame`, the empty state at revision 0, and the size measurement (§5), held off while the permission banner is up; the permission banner, expiry line and panel in its column, the panel's layer and its focus (§10); tested in real engines by `CanvasView.browser.test.tsx` |
 | `web/src/lib/canvasSize.ts` | The size rule (§5): a measurement in whole pixels (`canvasSizeOf`), which measurement is kept (`keepsMeasurement`), and what counts as editable in the app (`isEditableElement`) |
-| `web/src/components/Canvas/CanvasComposer.tsx` | The collapsed input (§2), which opens into the ordinary composer (`CanvasComposer`), and the bars under the canvas floating over it while it is open (`ComposerDock`); its Stop is the composer's own (`StopButton` in `Chat/SendStopSlot.tsx`); the float tested in real engines by `CanvasComposer.browser.test.tsx` |
+| `web/src/components/Canvas/CanvasComposer.tsx` | The collapsed input (§2), which opens into the ordinary composer (`CanvasComposer`), with a control of the host's leading it (`leading`), and the bars under the canvas floating over it while it is open (`ComposerDock`); its Stop is the composer's own (`StopButton` in `Chat/SendStopSlot.tsx`); the float tested in real engines by `CanvasComposer.browser.test.tsx` |
+| `web/src/components/Canvas/CanvasHistoryButton.tsx` | The history view's entry from canvas view, leading the collapsed input (§15.1) |
 | `web/src/components/Canvas/CanvasViewSwitch.tsx`, `web/src/components/Chat/SessionHeader.tsx` | The header's **Canvas \| Chat** switch, drawn after the session's title (`viewSwitch`); the session panel's **Canvas** section and its **History** row (`canvasHistory`, §15.1) |
-| `web/src/components/Chat/ChatPanel.tsx` | The canvas screen's place in the session screen: which view is up, both kept mounted, the canvas wired to `useChatMessages`' `sendCanvasAction`, the input in canvas view; which revision the history view is open on, over either view (§15.1), and the view and the fork sheet replacing one another, Cancel reopening the view (§15.6); what it hands the canvas for §10 and §11 (§10.1's list) |
+| `web/src/components/Chat/ChatPanel.tsx` | The canvas screen's place in the session screen: which view is up, both kept mounted, the canvas wired to `useChatMessages`' `sendCanvasAction`, the input in canvas view and the History button leading it; which revision the history view is open on, over either view (§15.1), and the view and the fork sheet replacing one another, Cancel reopening the view (§15.6); what it hands the canvas for §10 and §11 (§10.1's list) |
 | `web/src/components/Canvas/PermissionPanel.tsx`, `web/src/components/Canvas/PermissionBanner.tsx`, `web/src/components/Canvas/usePermissionBatch.ts` | The panel (§10.1); the banner, the expiry line and the refused-send flash (`PermissionBanner`, `PermissionExpiryLine`, `RefusalFlash`); the batch, open-or-collapsed, waiting behind another layer and the refused-send sentence (`usePermissionBatch`, §10.2, §10.3), held by `CanvasView`, which draws them in its column and registers the panel as a layer |
 | `web/src/components/Chat/PermissionRequestItem.tsx` | The permission card (`PermissionRequestItem`, with its `armKey` and `endingTurn` for the panel), `PERMISSION_EXPIRY_COPY` and the batch's sentence (`permissionExpiryText`), and the card of a blocker with no record (`UnreadablePermissionItem`) — moved out of `MessageItem.tsx` so the chat, the panel and the expiry line use the same ones (§10.1) |
 | `web/src/lib/activityStrip.ts` | What the activity strip says (§11.1): which reply it speaks for (`stripReplyIndex`) and the message it answers (`replyPrompt`), the reply's latest item (`latestItem`), how it ended (`endingPrefix`), the phase from the turn alone (`stripPhase`), the line and its words for the accessible name (`stripLine`, `stripLineText`) |
@@ -145,7 +146,7 @@ engine-specific except where guidance is delivered (§9).
 ├──────────────────────────────────────────────┤
 │ ⟳ Bash  npm test                     1m 4s › │  activity strip (§11)
 ├──────────────────────────────────────────────┤
-│ [ Message…                              ]  ■ │  collapsed input; ■ = Stop while a turn is open
+│ [⟲] [ Message…                          ]  ■ │  collapsed input; ⟲ = history (§15.1), ■ = Stop while a turn is open
 └──────────────────────────────────────────────┘
 ```
 
@@ -171,6 +172,10 @@ engine-specific except where guidance is delivered (§9).
   Sending, or focus leaving the composer with nothing in the draft, collapses it
   again. Typing is the fallback for what the page did not offer; the page is the
   main way in.
+  - A **History** button leads the line — the history view's entry from canvas
+    view (§15.1). It is part of the line, not of the screen: gone while the
+    composer is expanded, in chat view and under a page drawn over the session,
+    and the line's own height, so the dock and the canvas area keep their size.
   - A draft left in it shows on the collapsed line, its first line in place of
     `Message…` (or how many files are attached).
   - Drawn *over* the canvas rather than in the column, so opening it and the
@@ -1356,7 +1361,7 @@ refused, visibly:**
 - the collapsed input's text field is disabled but keeps its text (§2). **Stop
   stays usable** — stopping the turn is one of the two ways forward
   ([lifecycle.md](lifecycle.md#session-one-reducer)) — and the panel never
-  covers it.
+  covers it. So does the History button beside the line (§15.1).
 - **Over an earlier revision** (the history view, §13.5) the banner and the panel
   are the same: a permission is the session's, whichever revision is shown. A
   send from that frame is refused as `readonly` first (§8.2) and flashes nothing:
@@ -2023,9 +2028,28 @@ reads.
 
 | From | Opens on | Over |
 |---|---|---|
+| **History** button leading canvas view's input line (§2) | the newest earlier page — the revision before the current one in the list — or the current one when there is no earlier | canvas view |
 | **History** in the session panel's **Canvas** section (the panel the header's title opens) | the newest earlier page — the revision before the current one in the list — or the current one when there is no earlier | the view that is up |
 | **Show** on a canvas row in chat view (§12) | that row's revision | chat view |
 
+- **The button** leads the collapsed `Message…` line (`CanvasHistoryButton`,
+  through `CanvasComposer`'s `leading`), where the ordinary composer has its
+  `+`: a tool the app draws, the field, then Stop. It is the `+`'s shape —
+  36px, 44px on a coarse pointer — with the row's `History` glyph, named
+  `Canvas history`, and no count: a revision is not a number of pages, and the
+  view's stepper says `Revision 7 of 12`. It is on and off by
+  the row's rule (`isCanvasDrawn` and `NOTHING_DRAWN` in `canvasStore`, shared
+  by both): before the subscription has said anything about the canvas and at
+  revision 0 it is `aria-disabled` and dimmed, named `Canvas history: Nothing
+  drawn yet` — there rather than absent, so the line does not move when the
+  state arrives. At revision 1 and up it is on, even with one page: whether an
+  earlier one exists is the list's to say (gaps, forks), and with one page the
+  view opens on the current page, which still offers Fork. What blocks sending
+  never turns it off — reading history sends nothing: while a permission
+  request owns the input it stays usable, as Stop does (§10.3), and opened over
+  the open panel the view is a layer stacked over it
+  ([project-ui.md §5.2](project-ui.md#stacked-layers)), closing back onto the
+  panel as it was. Closing the view hands focus back to the button.
 - **The row** is the only row of a `Canvas` `PanelSection` in `SessionHeader`'s
   panel, after Work and before Usage — with the facts about what this session
   has done, below the settings that decide its next message. The section is
@@ -2039,10 +2063,21 @@ reads.
   view opens: one layer replacing another
   ([project-ui.md §5.2 Stacked layers](project-ui.md#stacked-layers)), whether
   the panel is a drawer or the expanded tier's dropdown.
-  It is the panel's row rather than a button of the canvas screen on purpose:
-  the screen's bars are the banner's, the hosts strip's, the activity strip's
-  and the input's (§2, §10, §11), and a history view entered from the header
-  adds nothing to any of them.
+  The row stays the entry from chat view that needs no canvas row found
+  first, and the one a user reading through the session's facts expects.
+- **Why a button as well as the row.** The row alone was the canvas screen's
+  only way to an earlier page, and it was not found. Nothing on the screen
+  said there was a history; the title the panel opens from reads as the
+  session's name, engine and mode — settings — and the row sat below the
+  settings sections, at the foot of a phone's drawer, lower still in a work
+  session. Back, the gesture for "the page before", leaves the session (§2).
+  Users went to chat and hunted for a row's **Show**. The input line is canvas
+  view's own bar, drawn by the app outside the page and always there, so the
+  button costs the canvas area nothing. Elsewhere it would: in the header it
+  would cut a phone's title, already truncated beside the switch and the gear,
+  to a few characters; floating over the canvas it would cover what the agent
+  drew; in the activity strip it would be a second target in a line that is
+  one tap (§11.3), and the strip speaks for the agent, not the canvas.
 - **Show** opens the view rather than switching to canvas view. The user was
   reading the transcript; a page they look at and put away should put them
   back in it, and the live canvas is not the place to show an old revision —
@@ -2203,9 +2238,9 @@ unaffected by it.
 Nothing fails silently.
 
 - **The list loading**: the stepper and Fork are disabled. Show's revision is
-  read and shown at once, without waiting for the list; the menu's waits for
-  it, with a `Spinner` in the body, since which page is the newest earlier one
-  is the list's to say.
+  read and shown at once, without waiting for the list; the button's and the
+  row's wait for it, with a `Spinner` in the body, since which page is the
+  newest earlier one is the list's to say.
 - **A snapshot loading**: the frame of the page before is taken down and the
   body shows a `Spinner`, so an old page is never shown under a new one's
   subtitle.
@@ -2217,18 +2252,19 @@ Nothing fails silently.
   back) and Fork disabled (`This page could not be read.`). So for every
   `InvalidParams` refusal of a snapshot: a revision the canvas does not have
   is not brought back by asking again either.
-- **The list failing to be read**: from the menu, before any page is up, it is
-  the body's failure above. With a page up — Show's, read without waiting for
-  the list, or any page once the list has been read and a read again fails —
-  the page stays, the view keeps the list it has, if any, and the note's second
-  line says so with **Retry** (§15.4).
+- **The list failing to be read**: from the button or the row, before any page
+  is up, it is the body's failure above. With a page up — Show's, read without
+  waiting for the list, or any page once the list has been read and a read
+  again fails — the page stays, the view keeps the list it has, if any, and the
+  note's second line says so with **Retry** (§15.4).
 - **A snapshot that cannot be parsed** (§13.5): its internal error, with Retry.
 - **Nothing readable.** When every snapshot is lost, or a fork's canvas could
   not be copied (§13.6's `fork_canvas_unavailable`), the store pushes revision
-  0 (§13.3), so the panel's row is the dimmed `Nothing drawn yet` and the view
-  does not open from it. A list that comes back empty all the same — the disk
-  changed between the push and the read — makes the body say `No page of this
-  canvas could be read.`, with nothing to step to or fork from.
+  0 (§13.3), so the button and the panel's row are the dimmed `Nothing drawn
+  yet` and the view does not open from them. A list that comes back empty all
+  the same — the disk changed between the push and the read — makes the body
+  say `No page of this canvas could be read.`, with nothing to step to or fork
+  from.
 - **"Of N"** is always the pushed state's revision, the current one — when
   that revision's own snapshot is lost and the canvas fell back to an older one
   (§13.3), the pushed revision is that older one, and so is N.
@@ -2305,9 +2341,10 @@ copied.
 
 It is drawn over the canvas screen, not in it. The column of §2 — the header,
 the permission banner and panel (§10), the hosts strip, the canvas area, the
-activity strip (§11), the input — gains nothing and loses nothing, and the
-view reads nothing of theirs. The only changes outside the view are a row in
-the session panel (`SessionHeader`), **Show** in a canvas row's body,
+activity strip (§11), the input — loses nothing and gains only the History
+button leading the input line, and the view reads nothing of theirs. The only
+changes outside the view are that button, a row in the session panel
+(`SessionHeader`), **Show** in a canvas row's body,
 `readOnly`'s two wordings in `CanvasFrame`, the fork sheet's page anchor and
 `onCancel`, and canvas view's area not being measured while the view is up — a
 keyboard raised there is the history page's, not the canvas's (§5).

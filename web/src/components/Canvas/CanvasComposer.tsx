@@ -23,6 +23,11 @@ interface Props {
 	/** Why sending is refused, said where `Message…` would be. */
 	blockedReason?: string;
 	/**
+	 * Drawn before the collapsed line, and gone with it while expanded. Not
+	 * covered by `disabled`: what it offers is not a send.
+	 */
+	leading?: ReactNode;
+	/**
 	 * The ordinary composer, drawn in place of the line while expanded. Its
 	 * `onSend` has to collapse this: a send is one of the two things that put
 	 * it away.
@@ -38,9 +43,10 @@ function isDraftEmpty(sessionId: string): boolean {
 
 /**
  * The canvas view's input (docs/canvas-ui.md §2): one line — `Message…`, and
- * Stop while a turn is open — that opens into the ordinary composer over the
- * bottom of the canvas. The page is the main way in; this is the fallback for
- * what it does not offer, so it takes one line until it is asked for.
+ * Stop while a turn is open, after whatever the host leads it with — that
+ * opens into the ordinary composer over the bottom of the canvas. The page is
+ * the main way in; this is the fallback for what it does not offer, so it
+ * takes one line until it is asked for.
  *
  * Expanded, it is drawn over the canvas by the `ComposerDock` it sits in.
  */
@@ -52,6 +58,7 @@ export function CanvasComposer({
 	onStop,
 	disabled = false,
 	blockedReason,
+	leading,
 	children,
 }: Props) {
 	const { StopButton: CustomStopButton } = useChatUIConfig();
@@ -160,6 +167,7 @@ export function CanvasComposer({
 	return (
 		<div className="border-t border-th-border">
 			<div className="mx-auto flex w-full max-w-3xl items-center gap-2 px-3 py-2 sm:px-4">
+				{leading}
 				<button
 					ref={lineRef}
 					type="button"

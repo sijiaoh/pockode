@@ -88,6 +88,19 @@ export function useCanvasRevision(sessionId: string | null): number | null {
 	);
 }
 
+/**
+ * Whether the session has a page to look back from — what turns both entries
+ * to the history view on (docs/canvas-ui.md §15.1). Not "has an earlier page":
+ * gaps and forks mean only the list can say that, and with one page the view
+ * opens on the current one.
+ */
+export function isCanvasDrawn(revision: number | null): boolean {
+	return revision !== null && revision > 0;
+}
+
+/** What an entry to the history view says while `isCanvasDrawn` is false. */
+export const NOTHING_DRAWN = "Nothing drawn yet";
+
 export const canvasActions = {
 	receive: (sessionId: string, canvas: CanvasState) =>
 		useCanvasStore.getState().receive(sessionId, canvas),

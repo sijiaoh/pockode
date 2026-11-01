@@ -15,6 +15,7 @@ import {
 	useState,
 } from "react";
 import { AUTO_ID } from "../../lib/agentOptions";
+import { isCanvasDrawn, NOTHING_DRAWN } from "../../lib/canvasStore";
 import { useChatUIConfig } from "../../lib/registries/chatUIRegistry";
 import { useHeaderUIConfig } from "../../lib/registries/headerUIRegistry";
 import { getSessionModeInfo, SESSION_MODES } from "../../lib/sessionMode";
@@ -503,8 +504,8 @@ function CanvasSection({
 	revision: number | null;
 	onOpen: () => void;
 }) {
-	const drawn = revision !== null && revision > 0;
-	const hint = drawn ? `At revision ${revision}` : "Nothing drawn yet";
+	const drawn = isCanvasDrawn(revision);
+	const hint = drawn ? `At revision ${revision}` : NOTHING_DRAWN;
 	return (
 		<PanelSection title="Canvas">
 			<button
