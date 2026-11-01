@@ -299,10 +299,10 @@ is portalled to `document.body`, but its drag events still bubble up the React
 tree to the zone; taking them would put files into a composer behind the sheet
 and draw the overlay under it. Those drags are left to the window guard and
 its "not allowed" cursor. `useIsPageCovered` would have been the wrong test: it
-also counts the composer's own `+` menu and the header's dropdown, so a drag
-arriving while either was open would be turned away without a reason. A drag
-that carries no files — transcript text dragged into the textarea — is not
-touched at all.
+also counts the composer's own `+` menu and command palette and the header's
+dropdown, so a drag arriving while one was open would be turned away without a
+reason. A drag that carries no files — transcript text dragged into the
+textarea — is not touched at all.
 
 **While a file drag is over the zone, an overlay covers it** (`ChatDropOverlay`)
 with one centred pill and a paperclip: `Drop files to attach`, with an accent

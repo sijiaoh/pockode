@@ -502,10 +502,8 @@ loads.
 **While a layer of the app's own is up over the page, the live canvas's frame
 is shielded.** "A layer" is anything counted by `useIsPageCovered`: the
 header's session panel, the worktree and session-filter dropdowns, the
-composer's `+` menu, the sidebar drawer, and the sheets and dialogs. The
-command palette is not one (it registers no `useCoverPage`), so it does not
-shield the frame: a press on the canvas with it open still goes to the page
-and leaves the palette open. `CanvasView` passes
+composer's `+` menu and command palette, the sidebar drawer, and the sheets
+and dialogs. `CanvasView` passes
 `shielded={useIsPageCovered()}`, and `CanvasFrame` then lays a transparent
 `aria-hidden` element over the frame. It has no handler and no stacking of its
 own.
@@ -532,8 +530,9 @@ What it covers, and what it leaves alone:
   and they are not shielded.
 - **The floating composer stays above it.** The shield fills only the canvas
   area and makes no stacking context, so `ComposerDock` (`z-10`, §2) is drawn
-  over it and stays pressable. With the composer's `+` menu open, a press on
-  the canvas closes it too, rather than going into the page.
+  over it and stays pressable. With the composer's `+` menu or command
+  palette open, a press on the canvas closes it too, rather than going into
+  the page.
 - **The permission panel** (§10) is a layer itself, so the frame is shielded
   while it is up. That changes nothing: the frame is `inert` under it already,
   and the panel is the frame's sibling, not inside the shielded area, so its
@@ -1521,7 +1520,8 @@ the rest of that batch, wherever the user goes inside the session.**
 
   **While any other layer is up** — `useIsPageCovered()`, read before the panel
   registers its own: the turn's details sheet (§11.3), the session's settings
-  sheet, a sign-in sheet, the sidebar drawer — the panel waits. A panel opened
+  sheet, a sign-in sheet, the sidebar drawer, the composer's `+` menu or
+  command palette — the panel waits. A panel opened
   under one would be a layer nobody sees, and Back would close it first. It comes
   up when the last of them goes, unless the batch ended meanwhile; the banner
   stands in until then, its condition being *collapsed or waiting*. The details sheet needs no special case beyond this: it

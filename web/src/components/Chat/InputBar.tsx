@@ -211,7 +211,9 @@ function InputBar({
 	// And only once nothing covers the page: a handoff made from a page that
 	// keeps this bar — a menu row in a sheet over a Git detail — lands while
 	// the sheet is still up, and the sheet hands focus back to its opener as it
-	// closes, taking the caret from the draft and the ring from view.
+	// closes, taking the caret from the draft and the ring from view. The
+	// command palette is a layer too, but no hold-up: a prefill rewrites the
+	// draft out of slash mode, which puts the palette away.
 	const reveal = useInputStore((state) => state.reveals[sessionId]);
 	const isPageCovered = useIsPageCovered();
 	const [arrival, setArrival] = useState<ComposerReveal | null>(null);
@@ -269,8 +271,7 @@ function InputBar({
 	// Outside click detection. The palette hangs over the composer with no
 	// backdrop, at every width, so the click that dismisses it reaches whatever
 	// is behind — the chat's answer panel dims the transcript and treats a press
-	// there as its own dismissal. Claiming it keeps one press to one panel; the
-	// palette's Escape does the same with `preventDefault`.
+	// there as its own dismissal. Claiming it keeps one press to one panel.
 	useOutsideClick(isPaletteOpen, (target, event) => {
 		if (containerRef.current && !containerRef.current.contains(target)) {
 			event.stopPropagation();
@@ -314,6 +315,32 @@ function InputBar({
 	}, [menu, returnFocusToDraft]);
 
 	useCoverPage(isMenuOpen, { onBack: closeMenu });
+
+	// A layer like the menu, so a press over the canvas lands on its shield
+	// and closes the palette rather than acting in the page, and Back puts it
+	// away. Focus is left where it is — the draft, as it is typed in: a held
+	// navigation closes it this way too, and a Git page takes no focus on
+	// opening.
+	useCoverPage(isPaletteOpen, {
+		onBack: () => setPaletteDismissed(true),
+	});
+
+	// Escape on `document`, as the menu's, so it closes the palette wherever
+	// focus is — Tab past an empty list leaves it on Send or the `+`, and the
+	// chat's interrupt stands down while a layer is up, so a textarea-only
+	// handler would leave the key doing nothing. Claimed with `preventDefault`
+	// for the listeners on `window` (the answer panel). Not mid-composition,
+	// where Escape only cancels the composition.
+	useEffect(() => {
+		if (!isPaletteOpen) return;
+		const handleEscape = (e: globalThis.KeyboardEvent) => {
+			if (e.key !== "Escape" || e.defaultPrevented || e.isComposing) return;
+			e.preventDefault();
+			closePalette();
+		};
+		document.addEventListener("keydown", handleEscape);
+		return () => document.removeEventListener("keydown", handleEscape);
+	}, [isPaletteOpen, closePalette]);
 
 	const handleMenuTabOut = useCallback((backward: boolean) => {
 		setMenu("closed");
@@ -523,12 +550,6 @@ function InputBar({
 
 			// Palette keyboard handling
 			if (isPaletteOpen) {
-				if (e.key === "Escape") {
-					e.preventDefault();
-					closePalette();
-					return;
-				}
-
 				// Arrow keys (or Ctrl+P/N on macOS) navigate the palette
 				const ctrlNav = e.ctrlKey && isMac;
 				const isUp = e.key === "ArrowUp" || (ctrlNav && e.key === "p");
@@ -590,7 +611,6 @@ function InputBar({
 			isPaletteOpen,
 			filteredCommands,
 			selectedIndex,
-			closePalette,
 			handleCommandSelect,
 			handleSend,
 		],
