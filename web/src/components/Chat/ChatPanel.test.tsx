@@ -2278,10 +2278,7 @@ describe("ChatPanel", () => {
 					},
 				}),
 			);
-		const view = (name: "Canvas" | "Chat") =>
-			within(screen.getByRole("group", { name: "View" })).getByRole("button", {
-				name,
-			});
+		const chatView = () => screen.getByRole("button", { name: "Chat view" });
 		// Revision 2 is the current page; 1 is the newest earlier one.
 		const drawTwoPages = () => {
 			subscribeWithCanvas({
@@ -2313,19 +2310,20 @@ describe("ChatPanel", () => {
 			render(<ChatPanel {...defaultProps} />);
 
 			expect(await screen.findByText("Nothing drawn yet")).toBeVisible();
-			expect(view("Canvas")).toHaveAttribute("aria-pressed", "true");
+			expect(chatView()).toHaveAttribute("aria-pressed", "false");
 			// The input is one line until it is asked for.
 			expect(screen.queryByRole("textbox")).toBeNull();
 			expect(screen.getByRole("button", { name: "Message…" })).toBeVisible();
 
-			await user.click(view("Chat"));
-			expect(view("Chat")).toHaveAttribute("aria-pressed", "true");
+			await user.click(chatView());
+			expect(chatView()).toHaveAttribute("aria-pressed", "true");
 			expect(screen.getByRole("textbox")).toBeInTheDocument();
 			expect(
 				screen.getByText("Nothing drawn yet").closest("[inert]"),
 			).not.toBeNull();
 
-			await user.click(view("Canvas"));
+			await user.click(chatView());
+			expect(chatView()).toHaveAttribute("aria-pressed", "false");
 			expect(
 				screen.getByText("Nothing drawn yet").closest("[inert]"),
 			).toBeNull();
@@ -2341,8 +2339,8 @@ describe("ChatPanel", () => {
 			render(<ChatPanel {...defaultProps} />);
 			const frame = await screen.findByTitle("Canvas");
 
-			await user.click(view("Chat"));
-			await user.click(view("Canvas"));
+			await user.click(chatView());
+			await user.click(chatView());
 			expect(screen.getByTitle("Canvas")).toBe(frame);
 		});
 
@@ -2394,7 +2392,7 @@ describe("ChatPanel", () => {
 				expect(screen.queryByTitle("Canvas revision 1")).toBeNull(),
 			);
 			// The line's, so chat view has none.
-			await user.click(view("Chat"));
+			await user.click(chatView());
 			expect(
 				screen.queryByRole("button", { name: /^Canvas history/ }),
 			).toBeNull();
@@ -2503,7 +2501,7 @@ describe("ChatPanel", () => {
 				within(sheet).getByRole("button", { name: "Open in chat" }),
 			);
 
-			expect(view("Chat")).toHaveAttribute("aria-pressed", "true");
+			expect(chatView()).toHaveAttribute("aria-pressed", "true");
 			expect(screen.queryByRole("dialog")).toBeNull();
 			// The reply's start is where the transcript was taken to.
 			expect(
@@ -2518,12 +2516,12 @@ describe("ChatPanel", () => {
 			subscribeWithCanvas({ revision: 0 });
 			const { rerender } = render(<ChatPanel {...defaultProps} />);
 			await screen.findByText("Nothing drawn yet");
-			await user.click(view("Chat"));
+			await user.click(chatView());
 
 			seedSessionDetail({ id: "other", canvas: true });
 			rerender(<ChatPanel {...defaultProps} sessionId="other" />);
 			await waitFor(() =>
-				expect(view("Canvas")).toHaveAttribute("aria-pressed", "true"),
+				expect(chatView()).toHaveAttribute("aria-pressed", "false"),
 			);
 		});
 
@@ -2603,7 +2601,7 @@ describe("ChatPanel", () => {
 			act(() => blockOn("req-c"));
 
 			const panel = screen.getByRole("dialog", { name: "Permission request" });
-			expect(view("Canvas")).toHaveAttribute("aria-pressed", "true");
+			expect(chatView()).toHaveAttribute("aria-pressed", "false");
 			expect(
 				screen.queryByRole("button", { name: /^Show permission request:/ }),
 			).toBeNull();
@@ -2697,7 +2695,7 @@ describe("ChatPanel", () => {
 			).toBeInTheDocument();
 			// Not drawn into the transcript: the one copy is the panel's, kept
 			// hidden under chat view.
-			await userEvent.setup().click(view("Chat"));
+			await userEvent.setup().click(chatView());
 			expect(screen.getAllByText("make deploy")).toHaveLength(1);
 			expect(screen.getByText("make deploy").closest("[inert]")).not.toBeNull();
 		});
@@ -2748,8 +2746,8 @@ describe("ChatPanel", () => {
 			).toBeInTheDocument();
 
 			// Switching views keeps the choice.
-			await user.click(view("Chat"));
-			await user.click(view("Canvas"));
+			await user.click(chatView());
+			await user.click(chatView());
 			expect(screen.queryByRole("dialog")).toBeNull();
 
 			await user.click(
