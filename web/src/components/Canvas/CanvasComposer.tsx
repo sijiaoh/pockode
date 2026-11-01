@@ -213,15 +213,21 @@ export function CanvasComposer({
  * the column it is the canvas that gives way, as the transcript does in chat
  * view. Neither height it compares depends on where the block is, so this
  * cannot flip back.
+ *
+ * How far it reaches over the canvas while floating is told to `onCover` — 0
+ * in the column — so the page can be scrolled past it.
  */
 export function ComposerDock({
 	floating,
 	open,
+	onCover,
 	children,
 }: {
 	floating: boolean;
 	/** The composer is open; only ever floats while it is. */
 	open: boolean;
+	/** The height floating over what is above the dock, in whole pixels. */
+	onCover?: (height: number) => void;
 	children: ReactNode;
 }) {
 	const ref = useRef<HTMLDivElement>(null);
@@ -266,6 +272,25 @@ export function ComposerDock({
 		observer.observe(content);
 		return () => observer.disconnect();
 	}, [floating]);
+
+	const onCoverRef = useRef(onCover);
+	onCoverRef.current = onCover;
+	useLayoutEffect(() => {
+		const dock = ref.current;
+		const content = contentRef.current;
+		if (!floats || !dock || !content) {
+			onCoverRef.current?.(0);
+			return;
+		}
+		const measure = () =>
+			onCoverRef.current?.(
+				Math.max(0, content.offsetHeight - dock.offsetHeight),
+			);
+		measure();
+		const observer = new ResizeObserver(measure);
+		observer.observe(content);
+		return () => observer.disconnect();
+	}, [floats]);
 
 	return (
 		<div

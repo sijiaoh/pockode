@@ -78,13 +78,13 @@ exist.
 | `web/src/components/Chat/CanvasActionBubble.tsx`, `web/src/lib/messagePreview.ts` | A canvas action's bubble in chat view (§12), chosen in `MessageItem`; a canvas action quoted by its name |
 | `web/src/lib/agentPage.ts` | What `CanvasFrame` and `HtmlFrame` share (§4): the sandbox's floor (`HTML_FRAME_SANDBOX`) and the canvas's own (`CANVAS_FRAME_SANDBOX`), the page document's order (`agentPageDocument`), the wrapper (`agentWrapperDocument`), the project capability (`usePageProject`, whose freshness for a patch is `useRawMediaSource`'s `isFreshCapability`) |
 | `web/src/lib/canvasRedraw.ts` | How each new state reaches the frame (§8.3): patch or whole drawing, one patch at a time, the app's record of the revision shown (`CanvasRedraw`) |
-| `web/src/components/Canvas/CanvasFrame.tsx` | The page frame (§4): the document, the size (§5), redrawing through `CanvasRedraw`, the host allowance per session, and the app side of the bridge (§8.2, §8.4) — answering sends, the theme, `sendable`, the page's focus for the size rule, `readOnly` saying which page a history frame is (§15.4); tested in real engines by `CanvasFrame.browser.test.tsx` |
+| `web/src/components/Canvas/CanvasFrame.tsx` | The page frame (§4): the document, the size (§5), redrawing through `CanvasRedraw`, the host allowance per session, and the app side of the bridge (§8.2, §8.4) — answering sends, the theme, `sendable`, the page's focus for the size rule, the room the wrapper scrolls on past what the composer covers (`covered`, §5), `readOnly` saying which page a history frame is (§15.4); tested in real engines by `CanvasFrame.browser.test.tsx` |
 | `web/src/components/Canvas/CanvasView.tsx` | The canvas view's canvas (§2): the session's current canvas from the store in a `CanvasFrame`, the empty state at revision 0, and the size measurement (§5), held off while the permission banner is up; the permission banner, expiry line and panel in its column, the panel's layer and its focus (§10); tested in real engines by `CanvasView.browser.test.tsx` |
 | `web/src/lib/canvasSize.ts` | The size rule (§5): a measurement in whole pixels (`canvasSizeOf`), which measurement is kept (`keepsMeasurement`), and what counts as editable in the app (`isEditableElement`) |
-| `web/src/components/Canvas/CanvasComposer.tsx` | The collapsed input (§2), which opens into the ordinary composer (`CanvasComposer`), with a control of the host's leading it (`leading`), and the bars under the canvas floating over it while it is open (`ComposerDock`); its Stop is the composer's own (`StopButton` in `Chat/SendStopSlot.tsx`); the float tested in real engines by `CanvasComposer.browser.test.tsx` |
+| `web/src/components/Canvas/CanvasComposer.tsx` | The collapsed input (§2), which opens into the ordinary composer (`CanvasComposer`), with a control of the host's leading it (`leading`), and the bars under the canvas floating over it while it is open (`ComposerDock`), saying how far they cover it (`onCover`, §5); its Stop is the composer's own (`StopButton` in `Chat/SendStopSlot.tsx`); the float tested in real engines by `CanvasComposer.browser.test.tsx` |
 | `web/src/components/Canvas/CanvasHistoryButton.tsx` | The history view's entry from canvas view, leading the collapsed input (§15.1) |
 | `web/src/components/Canvas/CanvasViewSwitch.tsx`, `web/src/components/Chat/SessionHeader.tsx` | The header's **Canvas \| Chat** switch, drawn after the session's title (`viewSwitch`); the session panel's **Canvas** section and its **History** row (`canvasHistory`, §15.1) |
-| `web/src/components/Chat/ChatPanel.tsx` | The canvas screen's place in the session screen: which view is up, both kept mounted, the canvas wired to `useChatMessages`' `sendCanvasAction`, the input in canvas view and the History button leading it; which revision the history view is open on, over either view (§15.1), and the view and the fork sheet replacing one another, Cancel reopening the view (§15.6); what it hands the canvas for §10 and §11 (§10.1's list) |
+| `web/src/components/Chat/ChatPanel.tsx` | The canvas screen's place in the session screen: which view is up, both kept mounted, the canvas wired to `useChatMessages`' `sendCanvasAction`, the input in canvas view and the History button leading it; which revision the history view is open on, over either view (§15.1), and the view and the fork sheet replacing one another, Cancel reopening the view (§15.6); what it hands the canvas for §10 and §11 (§10.1's list), and what the floating composer covers of it (§5) |
 | `web/src/components/Canvas/PermissionPanel.tsx`, `web/src/components/Canvas/PermissionBanner.tsx`, `web/src/components/Canvas/usePermissionBatch.ts` | The panel (§10.1); the banner, the expiry line and the refused-send flash (`PermissionBanner`, `PermissionExpiryLine`, `RefusalFlash`); the batch, open-or-collapsed, waiting behind another layer and the refused-send sentence (`usePermissionBatch`, §10.2, §10.3), held by `CanvasView`, which draws them in its column and registers the panel as a layer |
 | `web/src/components/Chat/PermissionRequestItem.tsx` | The permission card (`PermissionRequestItem`, with its `armKey` and `endingTurn` for the panel), `PERMISSION_EXPIRY_COPY` and the batch's sentence (`permissionExpiryText`), and the card of a blocker with no record (`UnreadablePermissionItem`) — moved out of `MessageItem.tsx` so the chat, the panel and the expiry line use the same ones (§10.1) |
 | `web/src/lib/activityStrip.ts` | What the activity strip says (§11.1): which reply it speaks for (`stripReplyIndex`) and the message it answers (`replyPrompt`), the reply's latest item (`latestItem`), how it ended (`endingPrefix`), the phase from the turn alone (`stripPhase`), the line and its words for the accessible name (`stripLine`, `stripLineText`) |
@@ -194,14 +194,18 @@ engine-specific except where guidance is delivered (§9).
   - A draft left in it shows on the collapsed line, its first line in place of
     `Message…` (or how many files are attached).
   - Drawn *over* the canvas rather than in the column, so opening it and the
-    draft growing move neither the page nor the canvas size (§5). The bars
-    above the input — the strips and error bars — float up with it, on top of
-    the composer, rather than being covered by it. Two exceptions put it back
-    in the column, where the canvas gives way instead: the answer panel up over
-    the canvas (floating, a growing draft would cover the card's buttons), and
-    a block taller than the whole session screen under the header (a short
-    landscape screen with the keyboard up), which floating would draw over the
-    header.
+    draft growing change neither the page's viewport nor the canvas size (§5).
+    Nothing it covers is out of reach, though: the frame scrolls on past the
+    bottom of the page by as much as the floating block covers, so the user
+    can bring any part of the page — the bottom of one that fits the area
+    included — above it (§5). The page is never pushed up or scrolled for it;
+    the user scrolls. The bars above the input — the strips and error bars —
+    float up with it, on top of the composer, rather than being covered by it.
+    Two exceptions put it back in the column, where the canvas gives way
+    instead: the answer panel up over the canvas (floating, a growing draft
+    would cover the card's buttons), and a block taller than the whole session
+    screen under the header (a short landscape screen with the keyboard up),
+    which floating would draw over the header.
   - A press with a mouse moves focus before the button comes up, so whether
     leaving collapses the composer is decided once the press is over — or the
     bars dropping back into the column would move the button from under it.
@@ -458,7 +462,7 @@ What differs:
 
 | | `html_render` card | Canvas |
 |---|---|---|
-| Size | as tall as the page, capped | the canvas area; a page drawn larger keeps its size, scrolled inside the wrapper (§5) |
+| Size | as tall as the page, capped | the canvas area; a page drawn larger keeps its size, scrolled inside the wrapper, which also scrolls on past what the composer covers (§5) |
 | Height reporter | appended | not used |
 | Sandbox | the floor (`HTML_FRAME_SANDBOX`) | the floor and `allow-forms` (`CANVAS_FRAME_SANDBOX`), on both frames — [forms](#forms) |
 | Background | white, `color-scheme: light` | the theme (§3.3) |
@@ -631,6 +635,36 @@ or a page scrolling itself, does not; giving the area a compositing layer of
 its own or `contain: paint` does not help. Confirmed on the device, not
 reproducible in desktop Chromium. So no scroller in the app's document may
 ever contain the canvas frame — `CanvasFrame.browser.test.tsx` holds it.
+
+**What the composer covers** the wrapper scrolls on past. While the composer
+floats (§2), `ComposerDock` reports how far the floating block reaches over the
+canvas — its height less the collapsed line's, which the column already holds
+— on every resize, so a growing draft counts; in the column it reports 0. The
+wrapper adds that much empty room after the page's frame (`--pk-covered`, a
+`body::after` block): written into it when the page is drawn, posted to it on
+every change after (`pockode:canvas-frame-covered`), and posted again on every
+`pockode:canvas-ready`, so a change made while it loads is not lost. So the
+wrapper can scroll the page's bottom — a `position: fixed` bar of the page's
+included, which moves with its frame — above the composer, even for a page
+that fits the area and could not scroll before. When the composer collapses or
+drops back into the column, the room goes and the browser pulls the scroll
+back. The area, the frame and the page's viewport keep their size:
+the canvas size is still measured from the area, by the same rule — kept only
+while nothing editable has focus, the composer included — and the page gets
+no resize event and nothing in its document.
+
+**Why not padding in the page, or a shorter frame.** Padding the page's body by
+the cover would put the app into the agent's document, where its own styles
+and scripts can undo it, and it reaches only what is in the body's flow: a
+page that scrolls a container of its own, or pins a bar with `position:
+fixed`, keeps that under the composer. Shortening the page's frame by the
+cover instead would resize the page's viewport at every line the draft grows —
+a resize event, its `vh` and its media queries changing, the page laid out
+again for a size nobody drew it for. Room in the wrapper, after the page's
+frame, does neither. `CanvasFrame.browser.test.tsx` holds it: the page's
+viewport and the area keep their size while covered, and — in Chromium, the
+one engine whose protocol makes a real touch drag — a page that fits the area
+scrolls by one only while covered.
 
 So after the user rotates their phone, the page they see is still the one the
 agent drew, with a scroll — and the next message they send tells the agent the

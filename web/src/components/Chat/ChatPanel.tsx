@@ -1198,6 +1198,9 @@ function ChatPanel({
 	// measurement taken before.
 	const canvasComposerFloats =
 		canvasLineUp && canvasComposerExpanded && !answerPanelCovers;
+	// What the floating composer covers of the canvas, which the page scrolls
+	// past (docs/canvas-ui.md §2).
+	const [canvasCovered, setCanvasCovered] = useState(0);
 	useEffect(() => {
 		if (!canvasShown) setCanvasComposerExpanded(false);
 	}, [canvasShown]);
@@ -1700,6 +1703,7 @@ function ChatPanel({
 						// Under the panel the composer is in the column, not over it;
 						// under the history view a keyboard is the history page's.
 						measure={canvasShown && !answerPanelCovers && !canvasHistoryAt}
+						covered={canvasCovered}
 						turnRunning={turn.phase === "running"}
 						onSend={sendCanvasAction}
 						sendBlocked={promptOwnsInput ? "permission" : null}
@@ -1857,6 +1861,7 @@ function ChatPanel({
 					<ComposerDock
 						floating={canvasComposerFloats}
 						open={canvasLineUp && canvasComposerExpanded}
+						onCover={setCanvasCovered}
 					>
 						{/* Drawn from the first frame of canvas view, so the canvas
 						    has its final height before the first send measures it

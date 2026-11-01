@@ -62,6 +62,12 @@ interface Props {
 	 * that height is not taken for the canvas's.
 	 */
 	measure?: boolean;
+	/**
+	 * How much of the bottom of the canvas the composer floating over it
+	 * covers (`ComposerDock`'s `onCover`): the page scrolls past it, and the
+	 * canvas size does not change for it (§2, §5).
+	 */
+	covered?: number;
 	/** The session's turn is running, which the empty canvas says. */
 	turnRunning: boolean;
 	/** `useChatMessages(...).sendCanvasAction`. */
@@ -86,6 +92,7 @@ export function CanvasView({
 	sessionId,
 	shown,
 	measure = shown,
+	covered = 0,
 	turnRunning,
 	onSend,
 	sendBlocked = null,
@@ -253,6 +260,7 @@ export function CanvasView({
 							pageEditable.current = editable;
 						}}
 						shown={shown}
+						covered={covered}
 						areaRef={areaRef}
 						className="flex-1"
 					/>
