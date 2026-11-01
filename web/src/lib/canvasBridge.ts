@@ -275,6 +275,17 @@ export function canvasBaseStylesheet(theme: CanvasTheme): string {
  * - a submit of a `form[data-pk-send]` sends the form's action; the submit of
  *   one whose button carries its own action never happens, the click having
  *   prevented it;
+ * - any other submit nobody cancelled is cancelled, once every handler of the
+ *   page's own has run — but a dialog's (`method="dialog"`), which only
+ *   closes its dialog: Chromium's `form-action` does not cover `about:srcdoc`,
+ *   so a plain form would reload the page into itself and lose what was typed.
+ *   The policy's `form-action 'none'` still holds every other destination;
+ *   this covers only the gap, and both have to stay. Never claimed: the page
+ *   still hears the event, and a handler that cancels it first wins. Out of
+ *   its reach, so losing the page in Chromium (a plain form reloads it into
+ *   itself, one to another host leaves it): a submit whose propagation a page
+ *   handler stops before the window (React's `onSubmit` with
+ *   `stopPropagation()`), and `form.submit()`, which fires no event;
  * - Enter in an `input[data-pk-send]` sends the input's action and prevents
  *   the implicit submit, except while an input method composes (Safari ends a
  *   composition with a keydown that is no longer `isComposing` but still
@@ -391,6 +402,20 @@ document.addEventListener("submit",function(e){
   var action=form.getAttribute("data-pk-send");
   if(!action)return;
   send(action,fields(form,e.submitter?own(e.submitter):null)).catch(noop);
+},true);
+// Taken off and added again on the way down, so it is the window's last
+// bubbling listener, after any the page added itself, and never there twice.
+function cancelUnhandled(e){
+  removeEventListener("submit",cancelUnhandled);
+  if(!e.defaultPrevented)e.preventDefault();
+}
+addEventListener("submit",function(e){
+  removeEventListener("submit",cancelUnhandled);
+  // Attributes, not form.method, which a field named "method" shadows.
+  var by=e.submitter,t=e.target;
+  var method=by&&by.hasAttribute("formmethod")?by.getAttribute("formmethod"):t.getAttribute?t.getAttribute("method"):null;
+  if(String(method).toLowerCase()==="dialog")return;
+  addEventListener("submit",cancelUnhandled);
 },true);
 document.addEventListener("keydown",function(e){
   if(e.key!=="Enter"||e.isComposing||e.keyCode===229)return;

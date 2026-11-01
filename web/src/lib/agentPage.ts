@@ -13,9 +13,9 @@ import { useWSStore } from "./wsStore";
 
 /**
  * What every frame an agent's page is drawn in shares — an `html_render` card
- * (`HtmlFrame`) and the canvas (`CanvasFrame`): the sandbox, the double frame,
- * the order of the page document, and the project capability it is drawn
- * under (docs/tool-call-ui.md § A page the agent drew).
+ * (`HtmlFrame`) and the canvas (`CanvasFrame`): the sandbox's floor, the
+ * double frame, the order of the page document, and the project capability it
+ * is drawn under (docs/tool-call-ui.md § A page the agent drew).
  */
 
 /**
@@ -29,6 +29,22 @@ import { useWSStore } from "./wsStore";
  */
 export const HTML_FRAME_SANDBOX =
 	"allow-scripts allow-popups allow-popups-to-escape-sandbox";
+
+/**
+ * The canvas's sandbox: the floor and forms, since a canvas page is one the
+ * reader works in and its forms are how it sends (`data-pk-send`) — without
+ * `allow-forms` Chromium abandons a submission before its `submit` event, so
+ * neither the bridge nor the page's own handler ever hears it (WebKit fires
+ * the event regardless). Only the canvas: an `html_render` card has nothing
+ * to submit to.
+ *
+ * A form let through here reaches no host by the policy's `form-action
+ * 'none'` (`pagePolicy`), the wrapper's `frame-src` holding it too where it
+ * navigates the frame. The one URL Chromium's `form-action` lets through is
+ * the page's own `about:srcdoc`, a reload into itself, which the bridge holds
+ * by cancelling a submit nobody handled (`canvasBridgeScript`).
+ */
+export const CANVAS_FRAME_SANDBOX = `${HTML_FRAME_SANDBOX} allow-forms`;
 
 /**
  * The window the page's scripts post to: the app's, two frames up, past the
@@ -127,16 +143,21 @@ export function agentPageDocument(
  *
  * The page inherits this policy, as a `srcdoc` document does its parent's, so
  * it is the page's own: the two only ever differ by nothing. `style` is the
- * wrapper's own, a white sheet unless the frame says otherwise.
+ * wrapper's own, a white sheet unless the frame says otherwise. `sandbox` is
+ * the page frame's, and the wrapper's own frame has to carry the same: a
+ * nested frame gets no flag its parent lacks.
  */
 export function agentWrapperDocument(
 	page: string,
 	title: string,
 	hosts: readonly string[],
 	project: PageProject | null,
-	style: string = WRAPPER_STYLE,
+	{
+		style = WRAPPER_STYLE,
+		sandbox = HTML_FRAME_SANDBOX,
+	}: { style?: string; sandbox?: string } = {},
 ): string {
-	return `${pagePolicyMeta(hosts, project?.root)}<script>${LEFT_LISTENER}</script>${style}<iframe title="${escapeAttribute(title)}" sandbox="${HTML_FRAME_SANDBOX}" srcdoc="${escapeAttribute(page)}"></iframe>`;
+	return `${pagePolicyMeta(hosts, project?.root)}<script>${LEFT_LISTENER}</script>${style}<iframe title="${escapeAttribute(title)}" sandbox="${sandbox}" srcdoc="${escapeAttribute(page)}"></iframe>`;
 }
 
 /**
