@@ -78,7 +78,12 @@ export interface UpdateCandidate {
 
 /** The `params` of `server.update_check`. */
 export interface ServerUpdateCheckParams {
-	/** Look past the server's cache; it honours this at most once a minute. */
+	/**
+	 * Ask the release feed, which only this does: the server honours it at
+	 * most once a minute and answers from its cache within that minute.
+	 * Without it the answer is what the server already knows, waiting only
+	 * for a check already running.
+	 */
 	force?: boolean;
 }
 
@@ -86,7 +91,8 @@ export interface ServerUpdateCheckParams {
 export interface ServerUpdateCheck {
 	/**
 	 * When `candidates` was last confirmed, RFC 3339. Absent with no
-	 * `check_error`: the first check has not answered yet — not "up to date".
+	 * `check_error`: this process has not checked yet (no `force` since it
+	 * started, or the first is still running) — not "up to date".
 	 */
 	checked_at?: string;
 	/**

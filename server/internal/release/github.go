@@ -18,9 +18,9 @@ import (
 
 const (
 	// releasesURL lists published releases, pre-releases included, newest
-	// created first. 100 is the most one page holds; a page is fetched at most
-	// once an hour (see Checker), and asking for the most keeps the newest
-	// final release on it even after a long run of alphas.
+	// created first. 100 is the most one page holds; a page is fetched only
+	// when a user asks for a check (see Checker), and asking for the most
+	// keeps the newest final release on it even after a long run of alphas.
 	releasesURL = "https://api.github.com/repos/" + Repo + "/releases?per_page=100"
 	// atomURL is the fallback: it is served by github.com rather than the API,
 	// so it does not draw on the API's rate limit, but it names only the
@@ -52,7 +52,7 @@ func (e *RateLimitError) Error() string {
 //
 // Unauthenticated requests share a budget of 60 an hour per IP address — with
 // everything else on the machine and every other pockode behind the same NAT.
-// What keeps this from eating it is Checker asking rarely. Requests after the
+// What keeps this from eating it is Checker asking only when a user does. Requests after the
 // first are conditional, which saves the body but not the budget: GitHub only
 // exempts a 304 from the limit for authenticated requests. Once the API has
 // said it is rate-limited, it is not asked again until the limit resets.

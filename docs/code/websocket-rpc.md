@@ -152,9 +152,9 @@ The check's parts are independent, so each can be drawn on its own:
   candidate: what an alpha candidate is a prerelease beside when latest is
   not offered (the running or installed version is past it).
 - **`checked_at`** — when the candidates were last confirmed. Absent with no
-  `check_error` means the first check has not answered yet; the request waits
-  for it (at most the check's own 20 s), so that is rare, but it is never "up
-  to date".
+  `check_error` means this process has not checked yet: nobody has sent
+  `force` since it started, or the first forced check is still running past
+  the caller's own deadline. It is never "up to date".
 - **`check_error`** — `{ reason, message }`: `dev_build` (never checked) or
   `unavailable` (the GitHub API and `releases.atom` both failed). The
   candidates of the last good check stay beside it.
@@ -169,18 +169,26 @@ The check's parts are independent, so each can be drawn on its own:
 - **`platform`**, **`asset`** — `linux/amd64`, `pockode-linux-amd64`: what
   this server downloads, for copy about a release without it.
 
-The release list is cached (an hour after a success, five minutes after a
-failure); `force` looks again past the cache unless a check started less than
-a minute ago, whose answer it returns — the GitHub API allows 60
-unauthenticated requests an hour per address, shared by every node and the
-cluster on it.
+Only `force` makes the server ask GitHub. Without it the answer is what the
+process already knows — nothing at all on a fresh process — and the only wait
+is for a check already under way, which the call joins (at most the check's
+own 20 s) so that a second device asking during one gets its answer. With it
+the server starts a check, unless one started less than a minute ago, whose
+answer it returns instead (joined if still running): one real request a
+minute per process at most, a failed one included — a failure is not retried
+sooner. Nothing checks on a timer or on connect: every Pockode behind one
+address shares GitHub's 60 unauthenticated requests an hour, and a
+per-process floor cannot keep them inside it
+([self-update.md](self-update.md#asking-github-rarely)).
 
 `server.update` installs `version` only if it is a candidate of the cached
 check, measured against the installed version as above — the client never
 makes the server install something older, or what is already on disk. It
-answers when the install ends. The install belongs to the process, not the
-request: a dropped connection does not stop it, and the next check shows how it
-ended; only its 5-minute budget, counted from the request's arrival, does —
+never checks by itself: until a forced check has answered on this process
+there is nothing on offer, and every version is `release_gone`. It answers
+when the install ends. The install belongs to the process, not the request:
+a dropped connection does not stop it, and the next check shows how it ended;
+only its 5-minute budget, counted from the request's arrival, does —
 up to the replacement, which is not cut short once begun (on Windows it may
 wait out antivirus). The shutdown before an exit or a restart, before it
 closes the connections, stops an install still downloading, waits for a

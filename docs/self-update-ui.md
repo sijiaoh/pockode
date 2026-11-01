@@ -509,9 +509,16 @@ nodes their version lines — the shared-file sentence in `web`'s dialog said so
 
 The check is a separate request from `server.version`, so a slow GitHub never
 holds up the version row or the Restart button — the reason the CLI check is
-separate from sign-in status. Never on the node poll, never on a timer: the
-server's cache is what keeps the rate down, and a check nobody looks at is a
-request spent.
+separate from sign-in status. Never on the node poll, never on a timer.
+
+On the server, only a forced check (**Check again**, **Try again**) asks
+GitHub; every other row above is answered from what the process already
+knows, which on a fresh process is nothing (no `checked_at`, no error).
+Every Pockode behind one address — each node, the cluster, a second server —
+spends from one GitHub rate limit, so none of them asks unless a user does
+([code/self-update.md](code/self-update.md#asking-github-rarely)). Until
+someone has checked, the server has nothing on offer, and a `server.update`
+answers `release_gone`.
 
 ## What the UI needs
 
@@ -525,8 +532,9 @@ cluster serve the same methods. What the screens above rely on it for:
   failure to check, the per-server reason nothing can be installed and the
   install under way are independent fields. That is how *Can't update* keeps
   the candidate rows, and *Couldn't check* keeps the last good ones. A check
-  with neither `checked_at` nor an error has not answered yet, and is drawn as
-  *Checking*, never as *Up to date*.
+  with neither `checked_at` nor an error means the process has not checked
+  yet — nobody has forced a check since it started, or the first is still
+  running — and is never drawn as *Up to date*.
 - **The newest latest release comes even when it is not a candidate**, for the
   alpha dialog's "may be less stable than 0.25.0".
 - **The server holds the floor.** It installs only a candidate of its own

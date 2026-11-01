@@ -18,7 +18,8 @@ import (
 )
 
 // fakeReleaseChecker answers with whatever status it was given, and counts
-// which of the two entry points was asked.
+// which of the two entry points was asked: Recheck is the one that may reach
+// the release feed.
 type fakeReleaseChecker struct {
 	statusMu sync.Mutex
 	status   release.Status
@@ -257,14 +258,14 @@ func TestHandler_ServerUpdateCheck(t *testing.T) {
 		}
 	})
 
-	t.Run("force rechecks; otherwise the cache answers", func(t *testing.T) {
+	t.Run("only force asks the release feed", func(t *testing.T) {
 		env := newTestEnv(t, &mockAgent{})
 		restarttest.Install(t, "0.24.0")
 
 		updateCheck(t, env, nil)
 		updateCheck(t, env, rpc.ServerUpdateCheckParams{})
 		if env.releases.rechecks != 0 || env.releases.statuses != 2 {
-			t.Fatalf("recheck %d, status %d; want the cache twice", env.releases.rechecks, env.releases.statuses)
+			t.Fatalf("recheck %d, status %d; want the known answer twice", env.releases.rechecks, env.releases.statuses)
 		}
 		updateCheck(t, env, rpc.ServerUpdateCheckParams{Force: true})
 		if env.releases.rechecks != 1 {

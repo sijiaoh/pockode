@@ -55,43 +55,66 @@ func TestCheckerDevBuildNeverAsks(t *testing.T) {
 	}
 }
 
-func TestCheckerCachesAndRetries(t *testing.T) {
+func TestCheckerStatusNeverAsks(t *testing.T) {
 	src := &fakeSource{releases: []Release{rel("v0.25.0")}}
 	c, now := newTestChecker("0.24.0", src)
 	ctx := context.Background()
 
+	if st := c.Status(ctx); st.Err != nil || st.Candidates != nil || !st.CheckedAt.IsZero() {
+		t.Fatalf("Status before any check = %+v, want nothing known and no error", st)
+	}
+	*now = now.Add(24 * time.Hour)
+	c.Status(ctx)
+	if n := src.calls.Load(); n != 0 {
+		t.Fatalf("Status asked the source %d times, want never", n)
+	}
+
+	c.Recheck(ctx)
+	*now = now.Add(24 * time.Hour)
 	st := c.Status(ctx)
-	if st.Err != nil || len(st.Candidates) != 1 || st.Candidates[0].Version != "0.25.0" || !st.CheckedAt.Equal(*now) {
-		t.Fatalf("Status = %+v", st)
+	if n := src.calls.Load(); n != 1 || len(st.Candidates) != 1 {
+		t.Fatalf("Status a day after a Recheck: %d calls, %+v; want the cached answer and no new ask", n, st)
+	}
+}
+
+func TestCheckerRecheck(t *testing.T) {
+	src := &fakeSource{releases: []Release{rel("v0.25.0")}}
+	c, now := newTestChecker("0.24.0", src)
+	ctx := context.Background()
+
+	st := c.Recheck(ctx)
+	if n := src.calls.Load(); n != 1 || st.Err != nil || len(st.Candidates) != 1 || st.Candidates[0].Version != "0.25.0" || !st.CheckedAt.Equal(*now) {
+		t.Fatalf("first Recheck: %d calls, %+v", n, st)
 	}
 	checked := *now
 
-	*now = now.Add(checkInterval - time.Second)
-	c.Status(ctx)
-	if src.calls.Load() != 1 {
-		t.Fatalf("asked %d times within checkInterval, want once", src.calls.Load())
+	*now = now.Add(recheckInterval - time.Second)
+	src.set([]Release{rel("v0.25.0"), rel("v0.26.0-alpha.1")}, nil)
+	st = c.Recheck(ctx)
+	if n := src.calls.Load(); n != 1 || len(st.Candidates) != 1 || !st.CheckedAt.Equal(checked) {
+		t.Fatalf("Recheck within recheckInterval: %d calls, %+v; want the cached answer", n, st)
 	}
 
 	*now = now.Add(time.Second)
-	src.set(nil, errors.New("offline"))
-	st = c.Status(ctx)
-	if src.calls.Load() != 2 {
-		t.Fatal("a stale answer was not refreshed")
+	st = c.Recheck(ctx)
+	if n := src.calls.Load(); n != 2 || len(st.Candidates) != 2 || !st.CheckedAt.Equal(*now) {
+		t.Fatalf("Recheck past recheckInterval: %d calls, %+v; want a fresh answer", n, st)
 	}
-	if st.Err == nil || len(st.Candidates) != 1 || !st.CheckedAt.Equal(checked) {
+	checked = *now
+
+	// A failure is reported beside the last good answer, and is held to the
+	// same interval: a client retrying an offline server is not a request per
+	// retry.
+	*now = now.Add(recheckInterval)
+	src.set(nil, errors.New("offline"))
+	st = c.Recheck(ctx)
+	if st.Err == nil || len(st.Candidates) != 2 || !st.CheckedAt.Equal(checked) {
 		t.Fatalf("after a failed check: %+v, want the error beside the last good answer", st)
 	}
-
-	*now = now.Add(retryInterval - time.Second)
-	c.Status(ctx)
-	if src.calls.Load() != 2 {
-		t.Fatal("retried before retryInterval")
-	}
-	*now = now.Add(time.Second)
-	src.set([]Release{rel("v0.25.0"), rel("v0.26.0-alpha.1")}, nil)
-	st = c.Status(ctx)
-	if st.Err != nil || len(st.Candidates) != 2 {
-		t.Fatalf("after recovering: %+v", st)
+	*now = now.Add(recheckInterval - time.Second)
+	c.Recheck(ctx)
+	if n := src.calls.Load(); n != 3 {
+		t.Fatalf("asked %d times, want a failed check to hold off the next for recheckInterval", n)
 	}
 }
 
@@ -102,18 +125,30 @@ func TestCheckerJoinsRunningCheck(t *testing.T) {
 	// A caller that gives up gets the answer as it stood; the check carries on.
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if st := c.Status(ctx); st.Candidates != nil || !st.CheckedAt.IsZero() {
-		t.Fatalf("Status before any answer = %+v", st)
+	if st := c.Recheck(ctx); st.Candidates != nil || !st.CheckedAt.IsZero() {
+		t.Fatalf("Recheck before any answer = %+v", st)
 	}
 
+	// Both entry points wait for the check under way rather than answering
+	// before it or starting another.
 	var wg sync.WaitGroup
-	results := make([]Status, 5)
+	var returned atomic.Int32
+	results := make([]Status, 6)
 	for i := range results {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			results[i] = c.Status(context.Background())
+			defer returned.Add(1)
+			if i%2 == 0 {
+				results[i] = c.Status(context.Background())
+			} else {
+				results[i] = c.Recheck(context.Background())
+			}
 		}()
+	}
+	time.Sleep(20 * time.Millisecond)
+	if n := returned.Load(); n != 0 {
+		t.Errorf("%d callers returned before the running check answered", n)
 	}
 	close(src.release)
 	wg.Wait()
@@ -125,32 +160,5 @@ func TestCheckerJoinsRunningCheck(t *testing.T) {
 		if len(st.Candidates) != 1 {
 			t.Errorf("caller %d: %+v", i, st)
 		}
-	}
-}
-
-func TestCheckerRecheck(t *testing.T) {
-	src := &fakeSource{releases: []Release{rel("v0.25.0")}}
-	c, now := newTestChecker("0.24.0", src)
-	ctx := context.Background()
-
-	c.Status(ctx)
-	*now = now.Add(recheckInterval - time.Second)
-	c.Recheck(ctx)
-	if n := src.calls.Load(); n != 1 {
-		t.Fatalf("asked %d times, want Recheck within recheckInterval of the last check to reuse it", n)
-	}
-
-	*now = now.Add(time.Second)
-	src.set([]Release{rel("v0.25.0"), rel("v0.26.0-alpha.1")}, nil)
-	st := c.Recheck(ctx)
-	if n := src.calls.Load(); n != 2 || len(st.Candidates) != 2 || !st.CheckedAt.Equal(*now) {
-		t.Fatalf("Recheck past recheckInterval: %d calls, %+v; want a fresh answer", n, st)
-	}
-
-	// The fresh answer is cached as any other.
-	*now = now.Add(time.Second)
-	c.Status(ctx)
-	if n := src.calls.Load(); n != 2 {
-		t.Errorf("Status right after a Recheck asked again (%d calls)", n)
 	}
 }
