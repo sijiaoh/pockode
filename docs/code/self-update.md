@@ -90,12 +90,17 @@ disagree.
 
 Unauthenticated GitHub API requests share 60 an hour per IP address. That
 budget covers every node, the cluster, and anything else on the machine or
-behind the same NAT. So the checker is lazy: it asks only when a client asks
-and the cached answer is stale (the intervals are in
-[websocket-rpc.md](websocket-rpc.md#server-updating-to-a-release)), and
-concurrent asks join one request. A caller whose context ends gets the answer as it stood,
-and the check carries on for the next caller. Once the API says it is
-rate-limited, it is not asked again until the reset. `releases.atom` answers
+behind the same NAT, and nothing coordinates those processes. So the checker
+never asks on its own, nor because a client connected or opened a screen: it
+asks only on a forced `server.update_check` — a user pressing Check again —
+and then at most once a minute, a failed check included
+([websocket-rpc.md](websocket-rpc.md#server-updating-to-a-release)).
+That floor is per process and only stops one user's repeated presses; what
+keeps several processes inside the shared budget is that none of them checks
+unless asked. Concurrent asks, forced or not, join one request. A caller
+whose context ends gets the answer as it stood, and the check carries on for
+the next caller. Once the API says it is rate-limited, it is not asked again
+until the reset. `releases.atom` answers
 meanwhile. The feed has no asset list, so a missing asset only shows up as a
 404 when downloading. That is why `no_asset` is a possible install failure as
 well as a candidate's `unavailable`.

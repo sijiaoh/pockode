@@ -345,11 +345,11 @@ stays. Pockode then restarts into the new file as in
 before the rename leaves the installed file as it was. What each screen says,
 and each failure's wording, is in [self-update-ui.md](self-update-ui.md).
 
-- **The releases come from GitHub.** Pockode checks at most once an hour,
-  unless you press Check again. It honours `HTTPS_PROXY` like any other
-  download, and a machine that cannot reach `github.com` shows that it
-  couldn't check. It never says "up to date" in that case. How it caches, and
-  how it copes with GitHub's rate limit, is in
+- **The releases come from GitHub.** Pockode asks only when you press Check
+  again — at most once a minute — and never on its own. It honours
+  `HTTPS_PROXY` like any other download, and a machine that cannot reach
+  `github.com` shows that it couldn't check. It never says "up to date" in
+  that case. How it caches, and how it copes with GitHub's rate limit, is in
   [code/self-update.md](code/self-update.md#asking-github-rarely).
 - **No downgrades, no version picker.** To go back, or to pin a version, run
   the install script with a version

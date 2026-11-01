@@ -2044,8 +2044,10 @@ type RestartRefusedData struct {
 }
 
 // ServerUpdateCheckParams asks server.update_check for the releases this
-// process could be updated to. Force looks again past the cache, which the
-// server honours at most once a minute (see package release).
+// process could be updated to. Without Force the answer is what the process
+// already knows, and the release feed is not contacted; Force asks the feed,
+// which the server does at most once a minute, answering from its cache
+// within that minute (see package release).
 type ServerUpdateCheckParams struct {
 	Force bool `json:"force,omitempty"`
 }
@@ -2056,8 +2058,8 @@ type ServerUpdateCheckParams struct {
 // a later check that failed.
 type ServerUpdateCheckResult struct {
 	// CheckedAt is when Candidates was last confirmed against the release
-	// feed; nil until a check has answered. Nil with no CheckError means the
-	// first check has not finished yet — not that nothing is newer.
+	// feed; nil until a check has answered. Nil with no CheckError means this
+	// process has not checked yet — not that nothing is newer.
 	CheckedAt *time.Time `json:"checked_at,omitempty"`
 	// Candidates is latest, then alpha, each only when newer than both the
 	// running and the installed version. Never null.
