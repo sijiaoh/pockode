@@ -4,17 +4,31 @@ import {
 	useEffect,
 	useLayoutEffect,
 	useRef,
+	useState,
 	useSyncExternalStore,
 } from "react";
 import type { LayerHistory } from "../utils/layerHistory.ts";
 
-let coveringLayers = 0;
+/** A layer `useCoverPage` registered, known only by its identity. */
+export type CoverLayer = object;
+
+/** Every layer up, in the order they went up. */
+let coveringLayers: readonly CoverLayer[] = [];
 const listeners = new Set<() => void>();
 
-function setCoveringLayers(count: number) {
-	coveringLayers = count;
+/** The layer each layer is drawn in, if any (`CoverLayerContext`). */
+const drawnIn = new WeakMap<CoverLayer, CoverLayer>();
+
+function setCoveringLayers(layers: readonly CoverLayer[]) {
+	coveringLayers = layers;
 	for (const listener of listeners) listener();
 }
+
+/**
+ * The layer a component is drawn in, for `useIsDrawnOver`. `Sheet` gives it
+ * around its content.
+ */
+export const CoverLayerContext = createContext<CoverLayer | null>(null);
 
 /**
  * Where a layer holds its history entry, given by the app around everything
@@ -56,7 +70,7 @@ export interface CoverPageBack {
  * `ConfirmDialog` call it themselves; a panel of a project's own calls it
  * with its close.
  *
- * One count for every caller, balanced by the effect's own cleanup, so layers
+ * One registry for every caller, balanced by the effect's own cleanup, so layers
  * that overlap or replace each other in one commit cannot leave it wrong.
  * Anything that tracks "a panel is open" some other way is a second answer to
  * the same question, and the listener reading this will not hear it.
@@ -64,8 +78,13 @@ export interface CoverPageBack {
  * Not the `covered` of `CoveredSurface`: that is a surface taken off the
  * screen because the user moved over it; this is a layer on top of a page that
  * is still there.
+ *
+ * Returns the layer, for a caller that draws content in it to give in
+ * `CoverLayerContext`.
  */
-export function useCoverPage(active: boolean, back: CoverPageBack): void {
+export function useCoverPage(active: boolean, back: CoverPageBack): CoverLayer {
+	const [layer] = useState<CoverLayer>(() => ({}));
+	const parent = useContext(CoverLayerContext);
 	const history = useContext(LayerHistoryContext);
 	// Read at the Back, not at the open: callers pass an inline close.
 	const backRef = useRef(back);
@@ -75,17 +94,27 @@ export function useCoverPage(active: boolean, back: CoverPageBack): void {
 
 	useEffect(() => {
 		if (!active) return;
-		setCoveringLayers(coveringLayers + 1);
+		if (parent !== null) drawnIn.set(layer, parent);
+		// A child's effect runs before its parent's, so a layer opened inside a
+		// sheet in the sheet's own first commit is up already: the sheet goes
+		// under it, not over it.
+		const under = coveringLayers.findIndex((up) => drawnIn.get(up) === layer);
+		setCoveringLayers(
+			under === -1
+				? [...coveringLayers, layer]
+				: coveringLayers.toSpliced(under, 0, layer),
+		);
 		const close = history?.open({
 			onBack: () => backRef.current.onBack(),
 			onLeave: () => (backRef.current.onLeave ?? backRef.current.onBack)(),
 			refuse: () => backRef.current.refuse ?? false,
 		});
 		return () => {
-			setCoveringLayers(coveringLayers - 1);
+			setCoveringLayers(coveringLayers.filter((up) => up !== layer));
 			close?.();
 		};
-	}, [active, history]);
+	}, [active, history, layer, parent]);
+	return layer;
 }
 
 function subscribe(listener: () => void) {
@@ -94,7 +123,7 @@ function subscribe(listener: () => void) {
 }
 
 function isPageCovered() {
-	return coveringLayers > 0;
+	return coveringLayers.length > 0;
 }
 
 /**
@@ -107,4 +136,25 @@ function isPageCovered() {
  */
 export function useIsPageCovered(): boolean {
 	return useSyncExternalStore(subscribe, isPageCovered);
+}
+
+/**
+ * Whether a layer is drawn over this component. On the page, that is any
+ * layer. Inside a layer (`CoverLayerContext`, which a `Sheet` gives), only one
+ * that went up after it: its own layer is counted by `useIsPageCovered` too,
+ * and so is one it was opened over — the canvas's permission panel stays up
+ * under a sheet.
+ *
+ * For what has to stand down under a layer from inside a surface that may be
+ * one: a page's frame, which shielded by its own sheet could never be pressed
+ * at all.
+ */
+export function useIsDrawnOver(): boolean {
+	const own = useContext(CoverLayerContext);
+	return useSyncExternalStore(subscribe, () => {
+		if (own === null) return coveringLayers.length > 0;
+		const at = coveringLayers.indexOf(own);
+		// Not up yet, its own registration still to run: nothing is over it.
+		return at !== -1 && at < coveringLayers.length - 1;
+	});
 }

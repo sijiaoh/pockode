@@ -4,6 +4,7 @@ export {
 	type CoverPageBack,
 	LayerHistoryContext,
 	useCoverPage,
+	useIsDrawnOver,
 	useIsPageCovered,
 } from "./usePageCover.ts";
 export {

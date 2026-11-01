@@ -24,6 +24,7 @@ import {
 } from "../../lib/pageHosts";
 import { asError } from "../../utils/errorMessage";
 import PageNotice from "../Media/PageNotice";
+import { FrameShield } from "../ui/FrameShield";
 import { PageHostsStrip } from "../ui/PageHostsStrip";
 
 const HEIGHT_MESSAGE = "pockode:html-height";
@@ -246,7 +247,11 @@ export function HtmlFrame({
 					Project files won't load on this page: {doc.projectError.message}
 				</PageNotice>
 			)}
-			<div ref={boxRef} className={boxClassName} style={boxStyle}>
+			<div
+				ref={boxRef}
+				className={`relative ${boxClassName ?? ""}`}
+				style={boxStyle}
+			>
 				{/* A new frame for a new document, rather than a new `srcdoc`
 				    in the old one, which would add a history entry that Back —
 				    and the full-screen viewer's back-to-close — would step
@@ -262,6 +267,8 @@ export function HtmlFrame({
 						style={{ colorScheme: "light" }}
 					/>
 				)}
+				{/* The strip above stays within reach: it is the app's own. */}
+				{srcDoc !== null && <FrameShield />}
 			</div>
 		</div>
 	);

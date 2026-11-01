@@ -43,6 +43,7 @@ import { isInvalidParamsRejection, useWSStore } from "../../lib/wsStore";
 import type { CanvasSize, CanvasState } from "../../types/canvas";
 import { asError } from "../../utils/errorMessage";
 import PageNotice from "../Media/PageNotice";
+import { FrameShield } from "../ui/FrameShield";
 import { PageHostsStrip } from "../ui/PageHostsStrip";
 
 /** Why sending from the page is impossible right now, as the bridge is told. */
@@ -173,17 +174,6 @@ interface Props {
 	 * their size, and with them the canvas size (§5).
 	 */
 	covered?: number;
-	/**
-	 * A layer of the app's own is up over the page (`useIsPageCovered`): the
-	 * frame is shielded, so a press over it lands in the app's document — where
-	 * a panel with no backdrop closes on it — and never in the page, where it
-	 * could press a button and send an action. A press in the frame never
-	 * reaches the app's document at all.
-	 *
-	 * The live canvas's alone: a frame in the history view is drawn in a layer
-	 * of its own, which would shield it from itself.
-	 */
-	shielded?: boolean;
 	/** The canvas area, which the frame fills: what the size is measured from. */
 	areaRef?: Ref<HTMLDivElement>;
 	className?: string;
@@ -206,7 +196,6 @@ export function CanvasFrame({
 	onEditableFocus,
 	shown = true,
 	covered = 0,
-	shielded = false,
 	areaRef,
 	className,
 	title = "Canvas",
@@ -512,12 +501,10 @@ export function CanvasFrame({
 						style={{ colorScheme: scheme }}
 					/>
 				)}
-				{/* Over the frame alone, not its strips, and with no stacking of
-				    its own: what the app draws over the canvas on purpose — the
-				    floating composer — stays above it. */}
-				{shielded && srcDoc !== null && (
-					<div aria-hidden="true" className="absolute inset-0" />
-				)}
+				{/* Over the frame alone, not its strips: the floating composer
+				    stays above it. The canvas's own permission panel is a layer
+				    too, harmlessly: the frame is inert under it. */}
+				{srcDoc !== null && <FrameShield />}
 			</div>
 		</div>
 	);
