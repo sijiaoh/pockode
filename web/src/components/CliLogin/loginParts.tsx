@@ -13,9 +13,17 @@ export const secondaryButtonClass =
 export const cardTextButtonClass =
 	"inline-flex min-h-11 shrink-0 items-center gap-1.5 rounded-md px-2 text-sm hover:bg-th-bg-tertiary focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent disabled:cursor-not-allowed disabled:opacity-50";
 
+const textButtonBase =
+	"inline-flex min-h-9 shrink-0 items-center gap-1.5 rounded-md px-2 text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent pointer-coarse:min-h-11";
+
 /** Beside a value it acts on: smaller under a mouse, still a thumb's width. */
-export const textButtonClass =
-	"inline-flex min-h-9 shrink-0 items-center gap-1.5 rounded-md px-2 text-sm text-th-accent hover:bg-th-bg-tertiary focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent pointer-coarse:min-h-11";
+export const textButtonClass = `${textButtonBase} text-th-accent hover:bg-th-bg-tertiary`;
+
+/**
+ * `textButtonClass` while what it started runs: the same box, so nothing
+ * moves, and nothing that invites another press. Paired with `aria-disabled`.
+ */
+export const busyTextButtonClass = `${textButtonBase} cursor-default text-th-text-muted`;
 
 /** The current time, ticking once a second. */
 export function useNow(): number {

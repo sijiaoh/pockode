@@ -123,11 +123,11 @@ POCKODE
 └───────────────────────────────────────────────────┘
 ```
 
-Under the version row there is either **one status row** (checking, up to date,
-couldn't check, development build, installing elsewhere) or **one row per
-candidate** — one or two. So the card is two rows on almost every visit, and
-three only when both an alpha and a latest are out; that third row arriving is
-the news, as a notice's height is.
+Under the version row there is either **one status row** (checking, not
+checked, up to date, couldn't check, development build, installing
+elsewhere) or **one row per candidate** — one or two. So the card is two
+rows on almost every visit, and three only when both an alpha and a latest
+are out; that third row arriving is the news, as a notice's height is.
 
 ### A candidate row
 
@@ -170,20 +170,56 @@ per-release reasons).
 
 | State | Icon | Title / subtitle | Trailing | Notice |
 |-------|------|------------------|----------|--------|
-| Checking | skeleton | skeleton / skeleton — only before the first answer; a re-check keeps the last row | — | — |
+| Checking | skeleton | skeleton / skeleton — only before the section's first answer | — | — |
+| Not checked | `CircleDashed` `text-th-text-muted` | "Updates not checked" / "Checked only on request" — the server has nothing to say yet (no candidates, no `checked_at`, no error) | **Check**, `textButtonClass`, accessible name "Check for updates" | if the request failed, `error`: "Couldn't check: <error>"; if a forced check answered and is still not checked, "The check is still running on the server. Press Check in a moment to see its answer." |
 | Up to date | `CheckCircle2` `text-th-text-muted` | "Up to date" / "Checked 3 min ago" (from the server's `checked_at` through `utils/relativeTime.ts`, so a cached answer says how old it is) | **Check again**, `textButtonClass` | — |
 | Couldn't check | `Info` `text-th-text-muted` | "Couldn't check for updates" / "Checked 3 min ago", or nothing when no check ever answered | **Try again**, `textButtonClass` | the server's reason, then "If this server reaches the internet through a proxy, start pockode with `HTTPS_PROXY` set." |
 | Development build | `Info` `text-th-text-muted` | "No updates for a development build" / "Built from source" | — | — (the version row already says *Development build*) |
 | Installing elsewhere | Spinner | "Another update is running" / "Started 0:40 ago", or "On this machine" when it is another process's | — | "Another Pockode on this machine — a cluster node, or this server from another device — is installing a new version. This card checks again when you come back to it." |
 
+- *Not checked* is what a fresh server answers until someone presses
+  **Check**: the server asks GitHub only on request, so a visit by itself
+  never fills this row in (*When it checks*). It is never drawn as *Up to
+  date*, and never as an endless skeleton. Its visible label is the one word
+  for the same reason as **Update**'s: at 320px "Check for updates" would cut
+  the title to "Updates…". Like *Up to date*, it ignores `cannot_install` —
+  the reason waits for a release it would matter to.
 - *Couldn't check* is muted, as [cli-update-ui.md](cli-update-ui.md#the-installation-rows-states)'s
   is: Pockode works, only "is there something newer" went unanswered. It is
   never drawn as *Up to date*.
-- **Check again** asks the server to look now, past its cache; the server
-  honours that at most once a minute and otherwise returns what it has, with
-  its `checked_at` ([code/websocket-rpc.md](code/websocket-rpc.md#server-updating-to-a-release)). It is a text button
+- **Check**, **Check again** and **Try again** ask the server to look now,
+  past its cache; the server honours that at most once a minute and otherwise
+  returns what it has, with its `checked_at`, so a press soon after another
+  comes back with that check's real age ([code/websocket-rpc.md](code/websocket-rpc.md#server-updating-to-a-release)). Each is a text button
   (`textButtonClass`, "beside a value it acts on"), not a
   `secondaryButtonClass`, because it is upkeep beside a row with nothing to do.
+- **A request that fails** — the server, not GitHub — leaves the last answer
+  standing with an `error` notice: "Couldn't check again: <error>" under a row
+  that had one, "Couldn't check: <error>" under *Not checked*, where nothing
+  was checked before. With no answer at all yet, the row is *Couldn't check*
+  with "Couldn't ask the server: <error>" and no proxy hint.
+- **While a forced check is out**, the row keeps its title, its icon becomes a
+  Spinner and its subtitle "Checking...", and the previous attempt's error
+  notice is held back until the new answer. The button stays where it is, as
+  wide as it was, with `aria-disabled` and muted text (`busyTextButtonClass`):
+  a second press sends nothing, and it is not `disabled`, which would drop
+  focus to the page mid-check. The busy state lasts at least 400 ms, and the
+  card shows the check as it was at the press until then: a cached answer is
+  instant, and a press that changes nothing visible invites another. It ends
+  when the forced read lands, or a newer read does (that one joins the running
+  check); a dropped connection forgets the press, since the reconnect may
+  reach a restarted server that never ran it. Leaving Settings forgets it too
+  — the check belongs to the server, and the next visit's read joins it.
+- **Focus and announcements.** Focus stays on the button through the check,
+  unless the answer replaces the status row with candidate rows; then it moves
+  to the card. The card's status region, which otherwise speaks only of
+  installs and the restart, reads a forced check out: "Checking for
+  updates..." on the press, then "Up to date", "Update available: 0.25.0
+  (latest)" / "Updates available: 0.25.0 (latest), 0.26.0-alpha.1 (alpha)",
+  "Couldn't check for updates", "Still checking on the server" or "Another
+  update is running". A failed request adds nothing — its notice is an alert —
+  and a read the page made by itself is never announced, so an ordinary visit
+  stays silent.
 - *Installing elsewhere* is drawn from the check: the server reports an install
   of its own (started from another device) with its target and start, and an
   install by another process of the same OS user — which holds the lock — as
@@ -504,16 +540,17 @@ nodes their version lines — the shared-file sentence in `web`'s dialog said so
 | The page becomes visible again | ✓ | ✓ |
 | The confirmation opens | ✓ (cache is fine) | ✓ |
 | A failed install, a dropped install | ✓ | ✓ |
-| **Check again** / **Try again** | ✓, forced | ✓, forced |
+| **Check** (web) / **Check again** / **Try again** | ✓, forced | ✓, forced |
 | A timer | — | — |
 
 The check is a separate request from `server.version`, so a slow GitHub never
 holds up the version row or the Restart button — the reason the CLI check is
 separate from sign-in status. Never on the node poll, never on a timer.
 
-On the server, only a forced check (**Check again**, **Try again**) asks
-GitHub; every other row above is answered from what the process already
-knows, which on a fresh process is nothing (no `checked_at`, no error).
+On the server, only a forced check (**Check**, **Check again**, **Try
+again**) asks GitHub; every other row above is answered from what the
+process already knows, which on a fresh process is nothing (no `checked_at`,
+no error).
 Every Pockode behind one address — each node, the cluster, a second server —
 spends from one GitHub rate limit, so none of them asks unless a user does
 ([code/self-update.md](code/self-update.md#asking-github-rarely)). Until
@@ -534,7 +571,8 @@ cluster serve the same methods. What the screens above rely on it for:
   the candidate rows, and *Couldn't check* keeps the last good ones. A check
   with neither `checked_at` nor an error means the process has not checked
   yet — nobody has forced a check since it started, or the first is still
-  running — and is never drawn as *Up to date*.
+  running — and is never drawn as *Up to date* (`web` draws it *Not
+  checked*).
 - **The newest latest release comes even when it is not a candidate**, for the
   alpha dialog's "may be less stable than 0.25.0".
 - **The server holds the floor.** It installs only a candidate of its own
@@ -559,6 +597,16 @@ cluster serve the same methods. What the screens above rely on it for:
   accessible name is "Update to <version> (<channel>)".
 - Each status-row state renders its row; *Couldn't check* is never *Up to
   date*; **Check again** sends `force`.
+- A first answer with neither `checked_at` nor `check_error` is *Not
+  checked* with a "Check for updates" button — no skeleton, no *Up to date*,
+  nothing announced. Pressing it sends `force`; while out the subtitle is
+  "Checking...", the button is `aria-disabled` and keeps focus, and a second
+  press sends nothing. Each answer draws its row: *Up to date* (focus kept),
+  candidates (focus to the card), *Couldn't check*, still not checked (its
+  notice); a failed request reads "Couldn't check: …" and keeps *Not checked*.
+- Check again and Try again show the busy state even when the answer is
+  instant; a dropped connection forgets the press; the status region announces
+  a forced answer and stays empty for every other read.
 - *Can't update*: server reasons keep the candidate rows without Update and add
   the notice; per-release reasons drop only that row's Update; Restart is there
   in every case.

@@ -19,7 +19,11 @@ import {
 } from "../../CliLogin/loginParts";
 import { Spinner } from "../../ui";
 import CliRow, { CliRowNotice, type CliRowState } from "./CliRow";
-import { ElapsedSince, updateRows } from "./ServerUpdateRows";
+import {
+	ElapsedSince,
+	type UpdateCheckRead,
+	updateRows,
+} from "./ServerUpdateRows";
 
 /** A development build reports this, on both sides of the wire. */
 const DEV_VERSION = "dev";
@@ -41,9 +45,9 @@ interface Read<T> {
 
 /**
  * A server read made on demand and never on a timer: `server.version` runs
- * the executable on the server, and `server.update_check` may ask GitHub. Only
- * the newest read's answer is kept, so one that overtakes an older one is not
- * undone by it. `request` has to be stable.
+ * the executable on the server, and `server.update_check` runs it too — and
+ * asks GitHub when forced. Only the newest read's answer is kept, so one that
+ * overtakes an older one is not undone by it. `request` has to be stable.
  */
 function useNewestRead<T, A>(request: (arg: A) => Promise<T>) {
 	const [state, setState] = useState<Read<T>>({ landed: 0, answeredAt: 0 });
@@ -78,9 +82,28 @@ function useNewestRead<T, A>(request: (arg: A) => Promise<T>) {
 }
 
 const readVersion = (): Promise<ServerVersion> => wsActions.serverVersion();
-/** `force` looks past the server's cache: **Check again** and **Try again**. */
+/**
+ * Only `force` asks GitHub — **Check**, **Check again**, **Try again** — so
+ * every other read is free: it answers from what the server knows, waiting
+ * only for a check already running.
+ */
 const readUpdateCheck = (force: boolean): Promise<ServerUpdateCheck> =>
 	wsActions.serverUpdateCheck(force ? { force } : {});
+
+/**
+ * A forced check, from the press until it has been shown: long enough to be
+ * seen, since within the server's once-a-minute floor it answers at once.
+ */
+const MIN_CHECKING_MS = 400;
+
+interface ForcedCheck {
+	read: number;
+	/** What the card showed at the press, shown until the check is. */
+	held: UpdateCheckRead;
+	minimumPassed: boolean;
+	/** The read whose landing ended it; undefined while it is out. */
+	shownAt?: number;
+}
 
 interface UpdateDialog {
 	candidate: UpdateCandidate;
@@ -104,6 +127,11 @@ export default function PockodeSection() {
 	const { info, error, landed, read } = useNewestRead(readVersion);
 	const check = useNewestRead(readUpdateCheck);
 	const readCheck = check.read;
+	// Page state, not the store's: the server owns the check, and a read
+	// after leaving and coming back joins it.
+	const [forced, setForced] = useState<ForcedCheck | null>(null);
+	// The button pressed, to hand focus on if the answer takes its row away.
+	const pressedRef = useRef<Element | null>(null);
 	// The read the open dialog waits for; null while it is closed.
 	const [dialogRead, setDialogRead] = useState<number | null>(null);
 	const [updateDialog, setUpdateDialog] = useState<UpdateDialog | null>(null);
@@ -113,7 +141,12 @@ export default function PockodeSection() {
 	// the installer in. The check is its own request, so a slow GitHub never
 	// holds up the version row.
 	useEffect(() => {
-		if (!isConnected) return;
+		// A read after the reconnect may come from a restarted server, which
+		// has not checked: it is no answer to the press.
+		if (!isConnected) {
+			setForced(null);
+			return;
+		}
 		read(undefined);
 		readCheck(false);
 
@@ -248,12 +281,59 @@ export default function PockodeSection() {
 		cardRef.current?.focus();
 	};
 
+	// A newer read than the forced one ends it as well: it joined the
+	// running check, so it lands with the same answer.
+	if (
+		forced &&
+		forced.shownAt === undefined &&
+		forced.minimumPassed &&
+		check.landed >= forced.read
+	) {
+		setForced({ ...forced, shownAt: check.landed });
+	}
+	const checking = forced !== null && forced.shownAt === undefined;
+	const forcedRead = forced?.read;
+	useEffect(() => {
+		if (forcedRead === undefined) return;
+		const timer = setTimeout(() => {
+			setForced((f) =>
+				f?.read === forcedRead ? { ...f, minimumPassed: true } : f,
+			);
+		}, MIN_CHECKING_MS);
+		return () => clearTimeout(timer);
+	}, [forcedRead]);
+
+	// The answer may have taken the pressed button's row away — candidates
+	// in place of the status row; the card is still there.
+	const forcedShownAt = forced?.shownAt;
+	useEffect(() => {
+		const pressed = pressedRef.current;
+		if (forcedShownAt === undefined || !pressed) return;
+		pressedRef.current = null;
+		if (!pressed.isConnected && document.activeElement === document.body) {
+			cardRef.current?.focus();
+		}
+	}, [forcedShownAt]);
+
+	const forceCheck = () => {
+		if (checking) return;
+		pressedRef.current = document.activeElement;
+		setForced({
+			read: readCheck(true),
+			held: check,
+			minimumPassed: false,
+		});
+	};
+
 	const updates = updateRows({
-		check,
+		check: checking ? forced.held : check,
 		run,
 		path: info?.installed.path,
+		checking,
+		checkAnswered:
+			forced?.shownAt !== undefined && forced.shownAt === check.landed,
 		onUpdate: openUpdate,
-		onCheckAgain: () => readCheck(true),
+		onCheckAgain: forceCheck,
 		onDismiss: dismiss,
 	});
 	const installing = run?.phase === "installing";
@@ -269,10 +349,10 @@ export default function PockodeSection() {
 			className="rounded-lg border border-th-border bg-th-bg-secondary px-4 py-3 focus:outline-none"
 		>
 			{/* Always mounted, so a change to it is heard: a region born with its
-			    text is often not read at all. Only the restart and an install are
-			    announced; the rows would otherwise be read out on every visit,
-			    and a refusal is an alert of its own — the dialog's, or the
-			    version row's after an install. */}
+			    text is often not read at all. Only the restart, an install and a
+			    check the user forced are announced; the rows would otherwise be
+			    read out on every visit, and a refusal is an alert of its own —
+			    the dialog's, or the version row's after an install. */}
 			<output className="sr-only">
 				{restartRequestedAt === null
 					? updates.announcement

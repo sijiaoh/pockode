@@ -9,6 +9,7 @@ import {
 	AlertTriangle,
 	ArrowUpCircle,
 	CheckCircle2,
+	CircleDashed,
 	ExternalLink,
 	Info,
 } from "lucide-react";
@@ -16,6 +17,7 @@ import type { ReactNode } from "react";
 import type { ServerUpdateRun } from "../../../lib/wsStore";
 import { formatRelativeDate } from "../../../utils/relativeTime";
 import {
+	busyTextButtonClass,
 	formatMinutes,
 	primaryButtonClass,
 	secondaryButtonClass,
@@ -40,7 +42,18 @@ export interface UpdateRowsInput {
 	run: ServerUpdateRun | null;
 	/** The executable the install replaces, once `server.version` has said. */
 	path: string | undefined;
+	/**
+	 * A check this page forced is out: the status row shows it, and `check`
+	 * is still what the card knew when it was pressed.
+	 */
+	checking: boolean;
+	/**
+	 * `check` is the answer to a check this page forced — the one answer the
+	 * status region reads out, so an ordinary visit stays silent.
+	 */
+	checkAnswered: boolean;
 	onUpdate: (candidate: UpdateCandidate) => void;
+	/** Forces a check: **Check**, **Check again**, **Try again**. */
 	onCheckAgain: () => void;
 	onDismiss: () => void;
 }
@@ -52,7 +65,10 @@ export interface UpdateRows {
 	latestUpdateOffered: boolean;
 	/** Any row carries Update — what an unreadable file is told to use. */
 	updateOffered: boolean;
-	/** For the card's status region: an install of this page's, or its failure. */
+	/**
+	 * For the card's status region: an install of this page's, or its
+	 * failure; else a check this page forced, and its answer.
+	 */
 	announcement: string;
 }
 
@@ -72,6 +88,8 @@ export function updateRows({
 	check,
 	run,
 	path,
+	checking,
+	checkAnswered,
 	onUpdate,
 	onCheckAgain,
 	onDismiss,
@@ -87,11 +105,27 @@ export function updateRows({
 		};
 	}
 
-	const status = (state: CliRowState): UpdateRows => ({
+	// What a forced check found, said once it lands. A request that failed
+	// says nothing here: its notice is an alert of its own.
+	const answered = (words: string) =>
+		checking
+			? CHECKING_ANNOUNCEMENT
+			: checkAnswered && !check.error
+				? words
+				: "";
+	const status = (state: CliRowState, words = ""): UpdateRows => ({
 		...none,
-		rows: <StatusRow {...state} />,
-		announcement: "",
+		rows: <StatusRow {...state} checking={checking} />,
+		announcement: answered(words),
 	});
+	const checkButton = (label: string, name?: string) => (
+		<CheckButton
+			label={label}
+			name={name}
+			busy={checking}
+			onClick={onCheckAgain}
+		/>
+	);
 
 	const checkedAgo = info?.checked_at
 		? `Checked ${formatRelativeDate(info.checked_at)}`
@@ -105,7 +139,7 @@ export function updateRows({
 		if (!check.error) return status({ title: undefined });
 		// The request to this server failed, not GitHub: no proxy advice.
 		return status({
-			...couldNotCheck(onCheckAgain),
+			...couldNotCheck(checkButton("Try again")),
 			notice: { error: `Couldn't ask the server: ${check.error}` },
 		});
 	}
@@ -114,21 +148,24 @@ export function updateRows({
 		const { started_at, version } = info.installing;
 		// The install this page lost the answer to, still running.
 		const ours = run?.phase === "lost" && version === run.candidate.version;
-		return status({
-			icon: <Spinner srText={null} />,
-			title: "Another update is running",
-			subtitle: started_at ? (
-				<ElapsedSince since={Date.parse(started_at)} />
-			) : (
-				"On this machine"
-			),
-			notice: {
-				body: ours
-					? `The update to ${version} this page started is still running; the page lost its answer. This card checks again when you come back to it.`
-					: "Another Pockode on this machine — a cluster node, or this server from another device — is installing a new version. This card checks again when you come back to it.",
-				error: stale,
+		return status(
+			{
+				icon: <Spinner srText={null} />,
+				title: "Another update is running",
+				subtitle: started_at ? (
+					<ElapsedSince since={Date.parse(started_at)} />
+				) : (
+					"On this machine"
+				),
+				notice: {
+					body: ours
+						? `The update to ${version} this page started is still running; the page lost its answer. This card checks again when you come back to it.`
+						: "Another Pockode on this machine — a cluster node, or this server from another device — is installing a new version. This card checks again when you come back to it.",
+					error: stale,
+				},
 			},
-		});
+			"Another update is running",
+		);
 	}
 
 	if (info.check_error?.reason === "dev_build") {
@@ -141,32 +178,52 @@ export function updateRows({
 
 	if (info.candidates.length === 0) {
 		if (info.check_error) {
-			return status({
-				...couldNotCheck(onCheckAgain),
-				subtitle: checkedAgo,
-				notice: {
-					body: withCode(`${sentence(info.check_error.message)} ${PROXY_HINT}`),
-					error: stale,
+			return status(
+				{
+					...couldNotCheck(checkButton("Try again")),
+					subtitle: checkedAgo,
+					notice: {
+						body: withCode(
+							`${sentence(info.check_error.message)} ${PROXY_HINT}`,
+						),
+						error: stale,
+					},
 				},
-			});
+				"Couldn't check for updates",
+			);
 		}
-		// Neither an answer nor a failure: the first check is still out.
-		if (!checkedAgo) return status({ title: undefined });
-		return status({
-			icon: <CheckCircle2 className="h-4 w-4 text-th-text-muted" />,
-			title: "Up to date",
-			subtitle: checkedAgo,
-			action: (
-				<button
-					type="button"
-					onClick={onCheckAgain}
-					className={textButtonClass}
-				>
-					Check again
-				</button>
-			),
-			notice: { error: stale },
-		});
+		// Neither an answer nor a failure: this process has not checked, as it
+		// only does when asked to. Pressed, and still so: the check outlived
+		// the server's wait for it.
+		if (!checkedAgo) {
+			return status(
+				{
+					icon: <CircleDashed className="h-4 w-4 text-th-text-muted" />,
+					title: "Updates not checked",
+					subtitle: "Checked only on request",
+					// "Check" alone, so the title still fits beside it at 320px.
+					action: checkButton("Check", "Check for updates"),
+					notice: check.error
+						? { error: `Couldn't check: ${check.error}` }
+						: checkAnswered
+							? {
+									body: "The check is still running on the server. Press Check in a moment to see its answer.",
+								}
+							: undefined,
+				},
+				"Still checking on the server",
+			);
+		}
+		return status(
+			{
+				icon: <CheckCircle2 className="h-4 w-4 text-th-text-muted" />,
+				title: "Up to date",
+				subtitle: checkedAgo,
+				action: checkButton("Check again"),
+				notice: { error: stale },
+			},
+			"Up to date",
+		);
 	}
 
 	const failure = run && run.phase !== "restart_refused" ? run : null;
@@ -279,27 +336,74 @@ export function updateRows({
 		);
 	});
 
+	if (!announcement) {
+		const names = info.candidates.map(updateCandidateName).join(", ");
+		announcement = answered(
+			`${info.candidates.length === 1 ? "Update" : "Updates"} available: ${names}`,
+		);
+	}
+
 	return { rows, latestUpdateOffered, updateOffered, announcement };
 }
 
-function couldNotCheck(onTryAgain: () => void): CliRowState {
+const CHECKING_ANNOUNCEMENT = "Checking for updates...";
+
+function couldNotCheck(tryAgain: ReactNode): CliRowState {
 	return {
 		icon: <Info className="h-4 w-4 text-th-text-muted" />,
 		title: "Couldn't check for updates",
-		action: (
-			<button type="button" onClick={onTryAgain} className={textButtonClass}>
-				Try again
-			</button>
-		),
+		action: tryAgain,
 	};
 }
 
-function StatusRow({ notice, ...row }: CliRowState) {
+/**
+ * Forces a check. Busy, it stays where it is, as wide as it was, and keeps
+ * focus — `disabled` would drop focus to the page mid-check.
+ */
+function CheckButton({
+	label,
+	name,
+	busy,
+	onClick,
+}: {
+	label: string;
+	/** The accessible name, when the visible label is cut short. */
+	name?: string;
+	busy: boolean;
+	onClick: () => void;
+}) {
+	return (
+		<button
+			type="button"
+			onClick={busy ? undefined : onClick}
+			aria-label={name}
+			aria-disabled={busy || undefined}
+			className={busy ? busyTextButtonClass : textButtonClass}
+		>
+			{label}
+		</button>
+	);
+}
+
+/**
+ * While a forced check is out, the row keeps what was known, says it is
+ * checking, and holds back the last attempt's error until the new one ends.
+ */
+function StatusRow({
+	notice,
+	checking,
+	...row
+}: CliRowState & { checking: boolean }) {
+	const busy: Partial<CliRowState> = checking
+		? { icon: <Spinner srText={null} />, subtitle: "Checking..." }
+		: {};
+	const shown = checking && notice ? { ...notice, error: undefined } : notice;
 	return (
 		<CliRow
 			{...row}
+			{...busy}
 			loadingLabel="Checking for a newer Pockode"
-			notice={notice && <CliRowNotice {...notice} />}
+			notice={shown && <CliRowNotice {...shown} />}
 		/>
 	);
 }
