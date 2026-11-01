@@ -4,13 +4,31 @@ import {
 	authRetryAfterMs,
 	credentialParams,
 	getWebSocketUrl,
+	restartRefusedReason,
 } from "@pockode/shared";
 import { JSONRPCClient, JSONRPCErrorException } from "json-rpc-2.0";
 import { create } from "zustand";
 import { authActions } from "./authStore";
-import { createNodeActions, type NodeActions } from "./rpc";
+import {
+	createNodeActions,
+	createServerActions,
+	type NodeActions,
+	type ServerActions,
+} from "./rpc";
+import { APP_VERSION } from "./version";
 
 const RPC_TIMEOUT_MS = 30000;
+
+const CONNECTION_LOST_MESSAGE = "Connection lost";
+
+/** Whether a request's socket went away before its answer came down it. */
+function isConnectionLost(error: unknown): boolean {
+	return (
+		error instanceof JSONRPCErrorException &&
+		error.code === 0 &&
+		error.message === CONNECTION_LOST_MESSAGE
+	);
+}
 
 // A relay tunnel can be down for ~20s before the server even notices, and the
 // server then reconnects with its own backoff. Giving up after a fixed handful
@@ -53,10 +71,23 @@ interface AuthResult {
 	session_token: string;
 }
 
-interface RPCActions extends NodeActions {
+interface RPCActions
+	extends NodeActions,
+		Pick<
+			ServerActions,
+			"serverVersion" | "serverUpdateCheck" | "serverUpdate"
+		> {
 	connect: (credential: AuthCredential) => void;
 	disconnect: () => void;
 	retryNow: () => void;
+	/**
+	 * Ask the cluster to restart (`server.restart`). Resolves once a restart is
+	 * under way and `restartRequestedAt` is set — accepted here, already under
+	 * way from elsewhere, or with this connection gone before its reply could
+	 * arrive (the reconnect's version says how it went). Rejects with the
+	 * cluster's refusal, which changed nothing. Mirrors the web client.
+	 */
+	restartServer: () => Promise<void>;
 }
 
 interface WSState {
@@ -77,6 +108,13 @@ interface WSState {
 	 * then, the right one included.
 	 */
 	authRetryAt: number | null;
+	/**
+	 * When the cluster accepted a restart this page asked for (epoch ms), until
+	 * the next successful `auth` — the restarted process, or the same one if it
+	 * never went down. This page's memory only: gone on a reload, which a new
+	 * version causes anyway (docs/restart-ui.md, "While it restarts").
+	 */
+	restartRequestedAt: number | null;
 	actions: RPCActions;
 }
 
@@ -106,7 +144,7 @@ function releaseSocket(): void {
 	const socket = internal.socket;
 	internal.socket = null;
 	socket?.close();
-	internal.client?.rejectAllPendingRequests("Connection lost");
+	internal.client?.rejectAllPendingRequests(CONNECTION_LOST_MESSAGE);
 	internal.client = null;
 }
 
@@ -124,6 +162,7 @@ export const useWSStore = create<WSState>()((set, get) => {
 	const getClient = (): JSONRPCClient | null => internal.client;
 
 	const nodeActions = createNodeActions(getClient);
+	const serverActions = createServerActions(getClient);
 
 	const clearReconnectTimeout = () => {
 		if (internal.reconnectTimeout) {
@@ -203,11 +242,23 @@ export const useWSStore = create<WSState>()((set, get) => {
 					authActions.rememberSession(result.session_token);
 				}
 
+				// This page was built for another cluster: a restart into a newly
+				// installed version, from here or from anywhere else. A development
+				// build is "dev" on both sides, so it never reloads itself.
+				if (result.version !== APP_VERSION) {
+					console.info(
+						`Version mismatch: client=${APP_VERSION}, server=${result.version}. Reloading...`,
+					);
+					window.location.reload();
+					return;
+				}
+
 				set({
 					status: "connected",
 					reconnectAttempts: 0,
 					version: result.version,
 					errorMessage: null,
+					restartRequestedAt: null,
 				});
 			} catch (err) {
 				// Not a rejection: the request timed out or the socket died mid-auth.
@@ -283,7 +334,7 @@ export const useWSStore = create<WSState>()((set, get) => {
 			internal.socket = null;
 			// Their answers can only have come down this socket, and the node RPCs
 			// carry no timeout, so without this they would hang for good.
-			internal.client?.rejectAllPendingRequests("Connection lost");
+			internal.client?.rejectAllPendingRequests(CONNECTION_LOST_MESSAGE);
 			internal.client = null;
 
 			const currentStatus = get().status;
@@ -311,8 +362,12 @@ export const useWSStore = create<WSState>()((set, get) => {
 		errorMessage: null,
 		reconnectAttempts: 0,
 		authRetryAt: null,
+		restartRequestedAt: null,
 		actions: {
 			...nodeActions,
+			serverVersion: serverActions.serverVersion,
+			serverUpdateCheck: serverActions.serverUpdateCheck,
+			serverUpdate: serverActions.serverUpdate,
 			connect: (credential: AuthCredential) => {
 				// A socket is already active or being established; don't open a
 				// second one. Without this guard a re-entrant connect (e.g. React
@@ -351,8 +406,34 @@ export const useWSStore = create<WSState>()((set, get) => {
 					version: null,
 					errorMessage: null,
 					reconnectAttempts: 0,
+					restartRequestedAt: null,
 				});
 				releaseSocket();
+			},
+			restartServer: async () => {
+				try {
+					await serverActions.serverRestart();
+				} catch (error) {
+					// Either way the process is going down, and the reconnect says
+					// what came back. A reply lost with the connection — through the
+					// relay it may not have been delivered — is not a failure to
+					// show. A drop that took the request with it before the cluster
+					// saw it reads the same and comes back to an unchanged process:
+					// accepted, as it cannot be told from a same-version restart.
+					if (
+						restartRefusedReason(error) !== "already_restarting" &&
+						!isConnectionLost(error)
+					) {
+						throw error;
+					}
+					// Logged out mid-request: there is no page left to wait on it.
+					if (get().status === "disconnected") return;
+				}
+				// A second press while the first is still going down is refused as
+				// already restarting; the clock runs from the first acceptance.
+				set((state) => ({
+					restartRequestedAt: state.restartRequestedAt ?? Date.now(),
+				}));
 			},
 		},
 	};

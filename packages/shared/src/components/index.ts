@@ -6,6 +6,7 @@ export {
 export {
 	ReconnectBanner,
 	type ReconnectBannerProps,
+	type ReconnectBannerRestart,
 } from "./ReconnectBanner.tsx";
 export { Sheet, type SheetProps, useIsInSheet } from "./Sheet.tsx";
 export { Spinner, type SpinnerProps } from "./Spinner.tsx";

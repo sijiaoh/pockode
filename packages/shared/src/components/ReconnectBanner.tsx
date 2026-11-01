@@ -1,3 +1,6 @@
+import { useSecondsUntil } from "../hooks/useSecondsUntil.ts";
+import { RESTART_NOT_BACK_MS } from "../utils/serverRestart.ts";
+
 /**
  * Attempts after which the banner stops implying "any second now".
  *
@@ -9,10 +12,24 @@
  */
 const OUTAGE_AFTER_ATTEMPTS = 4;
 
+/** A restart this page asked for, which the drop is waiting out. */
+export interface ReconnectBannerRestart {
+	/** When the server accepted it (epoch milliseconds). */
+	since: number;
+	/** What restarts, as a sentence starts: "Pockode", "The cluster". */
+	subject: string;
+}
+
 export interface ReconnectBannerProps {
 	/** Reconnect attempts since the last connection that succeeded. */
 	attempts: number;
 	onRetryNow: () => void;
+	/**
+	 * Set while this page waits on a restart it asked for: the drop is
+	 * expected, and the escalation says what may have gone wrong
+	 * (docs/restart-ui.md, "While it restarts").
+	 */
+	restarting?: ReconnectBannerRestart | null;
 }
 
 /**
@@ -28,8 +45,24 @@ export interface ReconnectBannerProps {
 export function ReconnectBanner({
 	attempts,
 	onRetryNow,
+	restarting,
 }: ReconnectBannerProps) {
-	const outage = attempts > OUTAGE_AFTER_ATTEMPTS;
+	const notBackIn = useSecondsUntil(
+		restarting ? restarting.since + RESTART_NOT_BACK_MS : null,
+	);
+	const notBack = !!restarting && notBackIn === 0;
+	const outage = attempts > OUTAGE_AFTER_ATTEMPTS || notBack;
+
+	let text: string;
+	if (restarting) {
+		text = outage
+			? `${restarting.subject} hasn't come back from the restart. Still trying...`
+			: "Restarting...";
+	} else {
+		text = outage
+			? "Can't reach the server. Still trying..."
+			: "Reconnecting...";
+	}
 
 	return (
 		// biome-ignore lint/a11y/useSemanticElements: status banner is not a form output
@@ -37,13 +70,13 @@ export function ReconnectBanner({
 			className="flex items-center justify-center gap-2 bg-th-accent/20 px-4 py-1 text-sm text-th-text-primary"
 			role="status"
 		>
-			<span className="inline-block h-2 w-2 animate-pulse rounded-full bg-th-accent" />
-			{outage ? "Can't reach the server. Still trying..." : "Reconnecting..."}
+			<span className="inline-block h-2 w-2 shrink-0 animate-pulse rounded-full bg-th-accent" />
+			{text}
 			{outage && (
 				<button
 					type="button"
 					onClick={onRetryNow}
-					className="inline-flex min-h-9 items-center rounded px-2 underline underline-offset-2 pointer-coarse:min-h-11 pointer-coarse:min-w-11 hover:opacity-80"
+					className="inline-flex min-h-9 shrink-0 items-center rounded px-2 underline underline-offset-2 pointer-coarse:min-h-11 pointer-coarse:min-w-11 hover:opacity-80"
 				>
 					Retry now
 				</button>

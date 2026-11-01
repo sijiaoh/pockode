@@ -48,6 +48,7 @@ Method names are organized using the `namespace.method` format, solving two prob
 | `port_preview.*` | app | `ws/rpc_port_preview.go` |
 | `raw.*` | app | `ws/rpc_raw.go` |
 | `remote_url.*` | app | `ws/rpc_remote_url.go` |
+| `server.*` | app | `ws/rpc_server.go` and `ws/rpc_server_update.go`; a cluster serves the same methods from `cluster/ws.go` |
 
 - **Worktree scope**: Operations that depend on the current working directory (files, Git, etc.)
 - **App scope**: Global operations across worktrees (settings, project management, etc.)
@@ -66,6 +67,148 @@ ticket that logs a [port preview](relay-system.md#logging-in) tab in without
 the password. It is refused with `CodeInvalidRequest` when the relay is
 disabled or has stopped — the same signal as an empty `remote_url` in the
 `auth` reply — since previews do not exist then.
+
+### Server: Installed Version and Restart
+
+`server.version` and `server.restart` are the process itself: the version
+installed on disk, and restarting into it (`server/internal/restart`; the UI is
+[restart-ui.md](../restart-ui.md)). A pockode server and a cluster serve both,
+through one `ws.ServerControl`; the running version is not here, it is the
+`auth` reply's.
+
+| Method | Params | Result |
+|---|---|---|
+| `server.version` | none | `installed: { version?, error?, path }`; on a pockode server also `running_turns` |
+| `server.restart` | none | `{}`, then the connection closes with `1012 Service Restart` |
+
+`installed` is read by running `<path> --version` for every request — an
+upgrade replaces the file without the server hearing of it, so nothing is cached
+and nothing is pushed. `version` is what it printed (`0.21.0`, `dev`); `error`,
+when it could not be read, says why in English, and is also why a restart would
+be refused. `path` is the executable saved at startup, the one a restart runs.
+`running_turns` counts the sessions, across every worktree, whose turn a
+restart stops: one under way, running or blocked, or a permission request still
+waiting for its answer after its turn ended. A question an agent posted is not
+one — it belongs to the session and survives the restart.
+
+A refusal is `CodeRestartRefused` (`-32011`) with `data.reason`, and changes
+nothing. The message is written to be shown as it is, with "Pockode" or "The
+cluster" as its subject:
+
+| `reason` | When | Message |
+|---|---|---|
+| `not_runnable` | `<path> --version` fails, or the working directory the process started in is gone — a restart runs there | "The installed pockode at `<path>` didn't run: `<why>`. Pockode kept running; nothing was stopped." |
+| `already_restarting` | A restart was accepted already — another client, `kill -USR1` | "Pockode is already restarting." The connection drops for it shortly |
+| `shutting_down` | The process is shutting down to exit | "Pockode is shutting down." |
+
+A cluster's `node.restart` refuses with the same code, and `not_runnable` and
+`already_restarting` mean the same of the node; it adds `older_node` and
+`not_running` ([cluster.md](../cluster.md#restarting-from-the-cluster)).
+`@pockode/shared`'s `restartRefusedReason` reads all five, so the code is known
+in one place on each side.
+
+**A success reaches the client before the process starts going down.** The
+shutdown begins by stopping the relay, so a reply that has merely been written
+to the socket may still be in the tunnel when it is torn down, and a client
+that sees its connection drop without a reply cannot tell a restart from a
+failure. So the request is accepted *held* (`Restarter.RequestHeld`): it is
+pending and refuses every later request, but the shutdown loop does not see it
+yet. The handler queues the reply, closes the connection with `1012` behind
+it, and releases the hold only once the close handshake is over — the client
+has answered the close frame — or after 10 s. A client that answers a close has
+read every frame before it, and that holds end to end: the relay carries the
+connection's frames in order, the close among them, through the local reverse
+proxy that reaches `/ws`. `WebSocketStream.CloseAfterFlush` is the close that
+can be waited on. The other connections end in the shutdown that follows: the
+relayed ones when the relay stops, which comes first, and the direct ones with
+`1001` ([Closing on Shutdown](#closing-on-shutdown)).
+
+### Server: Updating to a Release
+
+`server.update_check` and `server.update` install a published release over the
+executable a restart runs; the restart into it is the client's ordinary
+`server.restart` that follows, refused or accepted exactly as above. Both modes
+serve them through the same `ws.ServerControl`, whose `Updater` is one per
+process — `server/internal/release` finds the candidates,
+`server/selfinstall` replaces the file. The screens are
+[self-update-ui.md](../self-update-ui.md); the shapes on the client are
+`@pockode/shared`'s, beside `InstalledVersion`.
+
+| Method | Params | Result |
+|---|---|---|
+| `server.update_check` | `force?` | `{ checked_at?, candidates, latest_version?, check_error?, cannot_install?, installing?, platform, asset }` |
+| `server.update` | `version` | `{}` once the file has been replaced |
+
+The check's parts are independent, so each can be drawn on its own:
+
+- **`candidates`** — `{ channel, version, notes_url, unavailable? }`, latest
+  then alpha, never `null`. Each is newer than the running version (the
+  release package's rule) **and** than the installed one, read afresh as for
+  `server.version`: a release already on disk is a restart away, not an
+  update. An installed version that is not a release (`dev`, unreadable) sets
+  no floor. `unavailable` is `{ reason: no_asset | no_checksums, message }`
+  for a release with nothing this platform can install.
+- **`latest_version`** — the newest final release whether or not it is a
+  candidate: what an alpha candidate is a prerelease beside when latest is
+  not offered (the running or installed version is past it).
+- **`checked_at`** — when the candidates were last confirmed. Absent with no
+  `check_error` means the first check has not answered yet; the request waits
+  for it (at most the check's own 20 s), so that is rare, but it is never "up
+  to date".
+- **`check_error`** — `{ reason, message }`: `dev_build` (never checked) or
+  `unavailable` (the GitHub API and `releases.atom` both failed). The
+  candidates of the last good check stay beside it.
+- **`cannot_install`** — `{ reason, message, dir?, hint? }`: `dev_build`,
+  `container` or `not_writable`, the last with the real file's directory and
+  the OS-specific advice (`hint`, commands in backticks) that ends `message`.
+  An error finding out — the executable at the saved path is gone, say — has
+  `reason` `""`. Restarting is unaffected.
+- **`installing`** — `{ version, channel, started_at }` for this process's
+  install, whichever client asked for it; `{}` for one another Pockode of the
+  same OS user runs (it holds the install lock).
+- **`platform`**, **`asset`** — `linux/amd64`, `pockode-linux-amd64`: what
+  this server downloads, for copy about a release without it.
+
+The release list is cached (an hour after a success, five minutes after a
+failure); `force` looks again past the cache unless a check started less than
+a minute ago, whose answer it returns — the GitHub API allows 60
+unauthenticated requests an hour per address, shared by every node and the
+cluster on it.
+
+`server.update` installs `version` only if it is a candidate of the cached
+check, measured against the installed version as above — the client never
+makes the server install something older, or what is already on disk. It
+answers when the install ends. The install belongs to the process, not the
+request: a dropped connection does not stop it, and the next check shows how it
+ended; only its 5-minute budget, counted from the request's arrival, does —
+up to the replacement, which is not cut short once begun (on Windows it may
+wait out antivirus). The shutdown before an exit or a restart, before it
+closes the connections, stops an install still downloading, waits for a
+replacement already begun, and keeps a later one from starting
+(`Updater.Close`), so a process never goes down between Windows' two renames.
+The stopped install answers with reason `""` if its connection still carries
+it — a restart's own client sees its connection close either way — and the
+next check, from whatever runs next, shows the file unchanged. A failure is `CodeUpdateFailed`
+(`-32012`) with `data.reason`, and the message can be shown as it is:
+
+| `reason` | When |
+|---|---|
+| `release_gone` | `version` is not a candidate (any more) — or, found under the install lock, the file on disk is already that version or newer: another install finished first |
+| `not_installable` | This server cannot install at all (`cannot_install`'s reasons) |
+| `already_installing` | An install of this process or of another Pockode of the OS user is under way |
+| `no_asset` | No build for this platform: the candidate's own `unavailable`, or found while downloading — a 404, or `checksums.txt` not listing it — which is the only way to know when the check came from `releases.atom` |
+| `no_checksums` | The release has no usable `checksums.txt`: likewise from the candidate, or from the download |
+| `download_failed` | A file of the release could not be fetched or written |
+| `checksum_mismatch` | The download is not what the release published |
+| `not_runnable` | The download does not run here with `--version`, or reports another version |
+| `replace_failed` | The new file could not be renamed into place |
+| `restore_failed` | Windows only: the old file was moved aside and could not be put back; the message says where it is |
+| `timeout` | The 5-minute budget ran out before the rename |
+| `""` | Anything else, by its message |
+
+Every reason but `restore_failed` leaves the executable as it was.
+`@pockode/shared`'s `updateFailedReason` reads them, and `UPDATE_BUDGET_MS`
+is the budget a client's request timeout has to exceed.
 
 ### Raw Capabilities
 
@@ -754,7 +897,13 @@ rather than showing a loading spinner indefinitely.
 Because reconnection never gives up, the banner is the only thing that tells a
 blip apart from an outage: after the fifth drop (about 15 s of accumulated
 backoff) it escalates from "Reconnecting..." to "Can't reach the server" and
-offers a manual retry. The escalation and the copy live in
+offers a manual retry. While the page waits on a restart it asked for
+(`restartRequestedAt`, set by `restartServer` and cleared by the next
+successful `auth`) the banner says "Restarting..." instead, and escalates on the
+attempts or a minute after the reply, whichever comes first
+([restart-ui.md](../restart-ui.md#while-it-restarts)). A restart whose
+connection drops before its reply arrives is waited on the same way: the
+reconnect's version says how it went. The escalation and the copy live in
 `packages/shared/src/components/ReconnectBanner.tsx`, because web-cluster's
 banner is the same one; `web/src/components/ui/ReconnectBanner.tsx` is the
 wrapper that reads this project's store.
@@ -818,6 +967,26 @@ with a normal closure, so a reply sent just before closing — an auth refusal �
 still reaches the client. It does not wait for that to finish, because jsonrpc2
 calls it while holding the lock every send takes.
 
+### Closing on Shutdown
+
+`http.Server.Shutdown` does not end a WebSocket: the connection was hijacked,
+and the server stopped tracking it at that moment. Left alone, it lives until
+the process exits, and so does every request running on it — a commit message
+draft among them, whose AI CLI is killed only when its connection's context
+ends. Where the process does not exit right away (a restart on Windows waits on
+its successor, see [self-restart.md](self-restart.md#windows-a-successor)) a client would also stay attached
+to a server that has stopped instead of reconnecting to the new one.
+
+So both `/ws` handlers serve their connections through `ws.Connections`
+(`server/ws/connections.go`). Shutdown calls its `Close` after `srv.Shutdown`:
+every connection is closed with `1001 Going Away`, every request sees its
+context end, and `Close` waits — up to 10 s, a backstop for a request that
+ignores its context — for the connections and the requests that were running
+on them. A connection that arrives after that is closed at once, and a request
+that arrives after it is dropped — possible, because a handler that closes its
+own connection (an auth refusal) lets the connection end while its read loop
+may still dispatch one more request.
+
 ### Compression
 
 `websocket.Accept` negotiates permessage-deflate with the browser
@@ -836,7 +1005,7 @@ message cannot expand past it.
 ### Request Timeout
 
 RPC requests in web carry a client-side timeout, 30 seconds by default; in
-web-cluster only `auth` does:
+web-cluster only `auth` and `server.update` do:
 
 ```typescript
 const RPC_TIMEOUT_MS = 30000;
@@ -879,6 +1048,16 @@ to 90 seconds of its own, and a client that gave up first would throw away the
 `timeout` it says then while the paid run went on
 ([Drafting a Commit Message](../git.md#drafting-a-commit-message)). It is never
 retried.
+
+The update RPCs follow the same rule. `server.update` answers only once the
+install has ended, within `UPDATE_BUDGET_MS` but for a replacement already
+begun ([Server: Updating to a Release](#server-updating-to-a-release)), so
+both frontends give it that budget plus minutes of margin: the shared
+`UPDATE_RPC_TIMEOUT_MS` (`@pockode/shared`).
+`server.update_check` can spend the installed-version probe and then the
+release check before it answers, which together reach 30 s, so web gives it
+`UPDATE_CHECK_RPC_TIMEOUT_MS`. Each constant's comment names the server
+deadlines it is derived from.
 
 **A timeout is not a failure the caller may retry blindly.** The server is likely
 still working on the request, so a retry stacks a second copy of that work on top
@@ -988,6 +1167,7 @@ means the server never started it.
 | Server RPC handler | `server/ws/rpc.go` |
 | Server method handlers | `server/ws/rpc_*.go` |
 | Server WebSocket adapter | `server/ws/stream.go` |
+| Connections closed on shutdown | `server/ws/connections.go` |
 | Server watchers | `server/watch/*.go` |
 | Client store | `web/src/lib/wsStore.ts` |
 | Client actions | `web/src/lib/rpc/*.ts` |

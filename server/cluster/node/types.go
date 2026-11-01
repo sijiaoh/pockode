@@ -38,6 +38,11 @@ const (
 	StatusStopped Status = "stopped"
 	// StatusStale indicates server.json exists but the PID process is not running.
 	StatusStale Status = "stale"
+	// StatusRestarting is a node this cluster asked to restart whose successor
+	// has not written its server.json yet, for at most restartTimeout. It is the
+	// cluster's state, not the files': they may say running (the old start),
+	// stopped (Windows, between the old file and the new) or stale.
+	StatusRestarting Status = "restarting"
 )
 
 // NodeStatus contains the status information of a node.
@@ -48,4 +53,14 @@ type NodeStatus struct {
 	StartedAt *string `json:"started_at,omitempty"` // Only set when running
 	LocalURL  *string `json:"local_url,omitempty"`  // Only set when running
 	RemoteURL *string `json:"remote_url,omitempty"` // Only set when running
+	// Version is the running version from server.json, only set when running.
+	// Absent on a running node means one started by a build that predates the
+	// field — and restarts.
+	Version *string `json:"version,omitempty"`
+	// RestartRequestedAt is when this cluster accepted a restart of the node
+	// (RFC3339), set while it is restarting and while RestartError is.
+	RestartRequestedAt *string `json:"restart_requested_at,omitempty"`
+	// RestartError is why the last restart did not come back within
+	// restartTimeout, in English, to be shown as it is.
+	RestartError *string `json:"restart_error,omitempty"`
 }

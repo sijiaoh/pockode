@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 )
 
 // fileLock is an advisory lock held on a sidecar ".lock" file.
@@ -76,4 +77,17 @@ func TryLock(path string) (unlock func(), err error) {
 	}
 	l := &fileLock{f: f}
 	return l.release, nil
+}
+
+// UserLockDir is the directory for locks every Pockode of this OS user shares —
+// other projects, other cluster nodes, a cluster manager — over something they
+// all change, such as an AI CLI's install or Pockode's own executable. It is
+// the user's cache directory: the locks are per OS user, like the installs they
+// guard, and hold nothing worth keeping. The caller creates it.
+func UserLockDir() (string, error) {
+	cacheDir, err := os.UserCacheDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(cacheDir, "pockode"), nil
 }

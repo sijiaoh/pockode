@@ -16,11 +16,11 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
-	"path/filepath"
 	"sync"
 	"time"
 
 	"github.com/pockode/server/agent"
+	"github.com/pockode/server/filestore"
 	"github.com/pockode/server/session"
 )
 
@@ -217,13 +217,7 @@ const NotAppliedFor = 6 * time.Hour
 func NewService(log *slog.Logger, sessions SessionCounter, gate Gate) *Service {
 	baseCtx, cancelBase := context.WithCancelCause(context.Background())
 	home, homeErr := os.UserHomeDir()
-	// The user's cache directory: the locks are per OS user, like the installs
-	// they guard, and hold nothing worth keeping.
-	var lockDir string
-	cacheDir, lockDirErr := os.UserCacheDir()
-	if lockDirErr == nil {
-		lockDir = filepath.Join(cacheDir, "pockode")
-	}
+	lockDir, lockDirErr := filestore.UserLockDir()
 	return &Service{
 		log:           log,
 		clis:          make(map[session.AgentType]CLI),

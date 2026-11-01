@@ -64,6 +64,14 @@ Each node has a lifecycle status indicating whether a Pockode server is running 
 | `running` | Server is active (server.json exists and process is alive) |
 | `stopped` | Server is not running (no server.json file) |
 | `stale` | Server.json exists but the process is dead (needs cleanup) |
+| `restarting` | The cluster asked the node to restart and its successor has not written `server.json` yet, for at most 60 s — the cluster's own state, whatever the files say in the meantime (see [Restarting from the cluster](#restarting-from-the-cluster)) |
+
+A node's `status` carries, beside `status`: `port`, `started_at`, `local_url`,
+`remote_url` and `version` (the running version from `server.json`; absent on
+an older node) while it is `running`; `restart_requested_at` while it is
+`restarting`; and `restart_requested_at` with `restart_error` — why the last
+restart did not come back, in English, to be shown as it is — after one that
+did not.
 
 **server.json file:**
 
@@ -75,7 +83,8 @@ When a node starts, Pockode writes runtime information to `{node.path}/.pockode/
   "port": 9870,
   "started_at": "2025-01-15T10:30:00Z",
   "local_url": "http://localhost:9870",
-  "remote_url": "https://abc123.cloud.pockode.com"
+  "remote_url": "https://abc123.cloud.pockode.com",
+  "version": "0.21.0"
 }
 ```
 
@@ -86,13 +95,14 @@ When a node starts, Pockode writes runtime information to `{node.path}/.pockode/
 | `started_at` | string | Yes | ISO 8601 timestamp of server start |
 | `local_url` | string | Yes | URL for local access |
 | `remote_url` | string | No | URL for remote access via relay (only present when relay is enabled; can change, or disappear, while the node runs) |
+| `version` | string | No | Version the node is running — what its executable's `--version` printed, minus `pockode `, so it compares as a plain string with the installed version (`restart.Program.Version`). Absent only in a file written by a build that predates it, which also cannot be asked to restart (see [Restarting and upgrading](#restarting-and-upgrading)) |
 
 This file is used to:
 - Track which process is running for a node
 - Detect stale state (file exists but process is dead)
 - Provide port, URL, and start time information
 
-The file is deleted when the server shuts down gracefully. `remote_url` can be rewritten while the node runs (see [server.json](../server/AGENTS.md#serverjson)); the cluster reads the file on every status check, so it always reports the current URL.
+The file is deleted when the server shuts down gracefully — except across a unix restart, which keeps the PID: the file is kept until the new program rewrites it, so the node never reads as stopped in between (see [Restarting and upgrading](#restarting-and-upgrading)). `remote_url` can be rewritten while the node runs (see [server.json](../server/AGENTS.md#serverjson)); the cluster reads the file on every status check, so it always reports the current URL.
 
 **Operations:**
 
@@ -119,7 +129,7 @@ otherwise read it — and because spawned nodes enable the relay by default, tha
 password grants full remote read/write and AI execution over the project. The
 environment (`/proc/<pid>/environ`) is readable only by the owner and root. See
 [Authentication](code/authentication.md) for the full model. Implemented in
-`server/cluster/node/process.go` (`nodeEnv`) and `server/password/`.
+`server/password/` (`WithEnv`), which a restarting server uses too.
 
 If `node.stop` cannot find the saved process, the backend removes any stale
 `server.json` state it can clean up and returns `"node not running"` — stopping
@@ -173,6 +183,92 @@ deliberately asks Windows for a console of its own. (The AI CLI was never among
 them: it has always been started on a hidden console of its own.) A node
 started by an earlier build keeps its old console arrangement until it is
 restarted.
+
+### Restarting and upgrading
+
+Upgrading has two steps. First the new executable is installed over the old
+one, either with the install script ([platforms.md](platforms.md)) or from the
+panel's version button, which installs a newer release for the cluster manager
+([platforms.md](platforms.md#updating-from-the-app),
+[self-update-ui.md](self-update-ui.md#web-cluster-the-header)). Then each
+process that runs it is restarted. Nodes are started from the same file, so
+one install updates the file for all of them. But the cluster manager and each
+node are restarted separately, and neither touches the other:
+
+- **The cluster manager** restarts from the version button in the panel's
+  header ([restart-ui.md](restart-ui.md#web-cluster-the-header)), or with
+  `kill -USR1 <pid>` on unix (it writes no `server.json`; `pgrep -f 'pockode cluster'`
+  finds it). Nodes keep running and stay reachable at their own
+  addresses; only the panel's connection drops, and it reconnects (and reloads,
+  if the version changed) by itself.
+- **A node** restarts from the cluster panel ([below](#restarting-from-the-cluster)),
+  from Settings → Pockode in that node's own UI, or with `kill -USR1 <pid>` (the
+  PID in its `server.json`). It comes back with its own password and options.
+  On unix the PID is kept; on Windows it changes, the old `server.json` is
+  removed and the successor writes its own. A restart the cluster asked for
+  reads `restarting` throughout; one asked for elsewhere reads running on unix,
+  and on Windows stopped for a moment — do not press Start in that moment.
+
+#### Restarting from the cluster
+
+`node.restart` restarts a node **without its password**: the cluster asks the
+node, and the node restarts itself ([code/self-restart.md](code/self-restart.md)).
+It is `ProcessManager.Restart` in `server/cluster/node`, over
+`shutdown.RequestRestart(pid)`: SIGUSR1 on unix, and on Windows the named event
+`Local\pockode-restart-<pid>`, which a node publishes beside its shutdown event
+(see [Asking a node to exit on Windows](#asking-a-node-to-exit-on-windows);
+unlike that one there is no console fallback, Ctrl+Break meaning exit).
+
+It returns once the node has been asked, not once it is back. Before asking,
+it checks, in this order, and sends nothing if any fails:
+
+| Refusal (`data.reason` of `CodeRestartRefused`, `-32011`) | When |
+|---|---|
+| `already_restarting` | A restart this cluster asked for is still under way, or another request for the node is being made. Asking twice is not merely redundant: on unix there is a moment after the node has exec'd and before the new program catches SIGUSR1, in which a second one would terminate it. The cluster knows only of restarts it asked for itself |
+| `not_running` | No `server.json`, or its process is gone. Nothing is cleaned up |
+| `older_node` | The node runs a build that predates restarts: its `server.json` has no `version`. On unix SIGUSR1 would terminate such a node and leave its `server.json` stale, so only stopping and starting it upgrades it. On Windows a node with a `version` but no restart event (it failed to publish one, and logged that) is refused the same way |
+| `not_runnable` | The installed executable — the one nodes are started from — does not run `--version`. The node would refuse the restart for it too, but a node asked by a signal or an event cannot answer, so its refusal would only ever show as the timeout below |
+
+Any other failure (reading `server.json`, sending the request) is an ordinary
+error with the reason in its message.
+
+**What the cluster tracks.** An accepted request is recorded in the cluster's
+memory with the time and the `server.json` `token` it was sent to — the token
+is per start, and never leaves the cluster. Every status read compares the
+node's `server.json`, read afresh, with that record:
+
+| Found | Status |
+|---|---|
+| A `server.json` with another `token` and a live process | The successor: the record ends and the node is `running` — also when it turns up after the timeout, which then clears the error |
+| Anything else, within 60 s of the request | `restarting`, with `restart_requested_at` — through the Windows gap with no `server.json`, and through the unix exec with the old one |
+| Anything else, later | What the files say (`running` for the old start still up, otherwise `stopped` or `stale`), with `restart_requested_at` and a `restart_error` naming the node's `server.log` |
+
+`started_at` is not what tells a new start apart: it has one-second resolution,
+and a unix restart with the relay off can finish inside the same second. 60 s
+is the frontends' `RESTART_NOT_BACK_MS`, for the same reason: a node publishes
+`server.json` only once its relay tunnel is up again.
+
+While a node is `restarting`, `node.start` is refused ("This node is
+restarting."), so the Windows gap cannot put a second server on the project. A
+successful `node.start`, `node.stop` or `node.cleanup` drops the record and its
+error. `node.restart` does not move `last_used_at`: it is upkeep, like a stop.
+A cluster that restarts itself forgets its records; the node then reads what
+its files say — on Windows, a node caught in its gap reads `stopped` until its
+successor writes `server.json`, and `node.start` is not refused meanwhile.
+
+A restart first runs the installed executable with `--version` and refuses,
+changing nothing, if it does not run. What it cannot check is whether the new
+version accepts the old command line. Nodes are started with no arguments, so
+this concerns the cluster manager's own flags: if a release drops one it was
+started with, the restart is accepted and the new program exits on start (the
+reason on its stderr). The nodes keep running; start the cluster again without
+the flag. On Windows a running `pockode.exe` cannot be overwritten, so the
+install script asks for Pockode to be stopped first. An update from the panel
+renames the running file aside instead, so the restarts that follow it deliver
+the new version
+([platforms.md](platforms.md#updating-from-the-app)).
+
+How it works is [code/self-restart.md](code/self-restart.md).
 
 ## Usage
 
@@ -285,7 +381,8 @@ alternatives that were rejected on the way to it, are in
   the backoff: the attempt count carries on where it was, so repeated taps
   cannot walk the delay back to one second.
 - **The list is grouped, not filtered**: **Needs attention** (stale) →
-  **Running** → **Stopped**, each header sticky and carrying its own count,
+  **Running** (which also holds the nodes that are *restarting*, at their
+  place) → **Stopped**, each header sticky and carrying its own count,
   empty sections not drawn, and nodes sorted by `last_used_at` inside one —
   most recently used first, name breaking ties. When more than one node is
   stale the attention header offers **Clean up all** — leftovers arrive in
@@ -300,14 +397,15 @@ alternatives that were rejected on the way to it, are in
   a stopped or stale one. Open goes to `remote_url` when the cluster has one,
   since a phone on mobile data cannot reach `localhost`; `Local` appears beside
   it only when both URLs exist. A running node that reported no address at all
-  says so rather than offering a button that leads nowhere. Stop (running only),
-  Edit and Delete live in the card's overflow menu.
+  says so rather than offering a button that leads nowhere. Restart and Stop
+  (running only), Edit and Delete live in the card's overflow menu.
 - **Stale nodes are a recoverable state**: the card says the server exited
   without cleaning up and that nothing is running, and offers **Start** (which
   clears the leftover itself) alongside **Clean up**.
-- **Only Stop and Delete ask for confirmation**; Clean Up runs on tap, since it
-  removes a file describing a process that is already gone. Stop's confirmation
-  names the actual cost (AI sessions in that project end).
+- **Only Restart, Stop and Delete ask for confirmation**; Clean Up runs on tap,
+  since it removes a file describing a process that is already gone. Restart's
+  and Stop's confirmations name the actual cost (AI turns in that project are
+  stopped; Restart keeps their sessions).
   Delete confirms, naming what it does *not* touch (the project directory), and
   for a running node offers Stop and delete / Delete anyway / Cancel, because
   `node.delete` leaves the server running and unmanageable.
@@ -330,8 +428,31 @@ alternatives that were rejected on the way to it, are in
   errors (not a directory, permission denied, could not create) are shown as the
   backend worded them, with no create option — creating is not what would fix
   them.
-- **The cluster version** is printed after the last card rather than pinned to
-  the viewport corner, where it floated over whatever scrolled underneath it.
+- **The cluster version** is a button in the header. It is marked when the
+  executable installed on the host is a different version, and gets a dot when
+  a newer latest release is out (none for an alpha). It opens the
+  **Pockode cluster** sheet, which shows both versions, offers the newer
+  releases with **Update**, and restarts the cluster manager (nodes keep
+  running). The panel reloads itself when a reconnect finds the cluster running
+  another version than the page was built for. The screens and their copy are
+  [restart-ui.md](restart-ui.md#web-cluster-the-header) and
+  [self-update-ui.md](self-update-ui.md#web-cluster-the-header).
+- **Nodes restart without their password.** A running node whose `version`
+  differs from the cluster's *installed* one — the file it would be started
+  from — is outdated: its card gains a version line and a **Restart** beside
+  Open, and from two outdated nodes up a strip above the list offers **Restart
+  all outdated (N)**, each refusal landing on its own card. Every running
+  node's menu offers Restart too, except while the installed file does not run.
+  Restart sends `node.restart`; the card then reads *Restarting...* with a
+  running clock, offers no Open, no Start and no menu, and stays where it was
+  until the cluster sees the successor or gives up and reports
+  `restart_error` on the card. A node started by a build from before restarts
+  (no `version`, or refused as `older_node`) is an *older* node: its Restart is
+  one sheet asking for its password that stops and starts it, and the strip
+  leaves it out by name. The installed version is read once for the whole
+  panel — on connect, on returning to the tab, when a sheet opens — and shared
+  by the header and the cards. The screens and their copy are
+  [restart-ui.md](restart-ui.md#web-cluster-restarting-nodes).
 - **Start asks for the node password every time.** It is the password the
   *spawned node server* uses for its own auth, not the cluster's own, so it is
   never defaulted from the cluster credential: one leaked node must not hand
@@ -374,9 +495,10 @@ After authentication:
 | `node.update` | Updates a node (params: `{id, path?, name?, create_missing_dir?}`) |
 | `node.delete` | Deletes a node (params: `{id}`) |
 | `node.status` | Returns node status (params: `{id}`) |
-| `node.start` | Starts a node's server (params: `{id, password}`; the pre-rename `token` is still accepted) |
+| `node.start` | Starts a node's server (params: `{id, password}`; the pre-rename `token` is still accepted); refused while the node is `restarting` |
 | `node.stop` | Stops a node's server (params: `{id}`) |
 | `node.cleanup` | Removes a stale node's leftover `server.json` (params: `{id}`); returns the node's status |
+| `node.restart` | Asks a running node to restart itself into the installed executable (params: `{id}`); returns the node's status — `restarting` — once it has been asked. Refusals and the status it reports meanwhile: [Restarting from the cluster](#restarting-from-the-cluster) |
 
 ## Startup Output
 

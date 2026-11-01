@@ -5,8 +5,45 @@ package shutdown
 import (
 	"fmt"
 	"os"
+	"os/signal"
 	"syscall"
 )
+
+// restartSignal asks the process to restart itself. SIGUSR1 is free for the
+// taking: nothing else in the process, or the Go runtime, uses it. Its default
+// action — terminate — is what a build that predates the restart does with it.
+const restartSignal = syscall.SIGUSR1
+
+// watchRestartRequests catches the restart signal for the rest of the process's
+// life and calls deliver for each one.
+func watchRestartRequests(deliver func()) {
+	signals := make(chan os.Signal, 1)
+	signal.Notify(signals, restartSignal)
+	go func() {
+		for range signals {
+			deliver()
+		}
+	}()
+}
+
+// RequestRestart asks the process with the given PID to restart itself. It
+// returns once the request is sent; whether the process accepts it is the
+// process's to decide (internal/restart), and it does not answer.
+//
+// It never returns ErrRestartUnsupported: a signal reaches a process whether or
+// not it catches it, and one that does not is terminated by it. The PID is
+// checked as in RequestExit.
+func RequestRestart(pid int) error {
+	if pid <= 0 {
+		return fmt.Errorf("cannot ask process %d to restart: pid must be positive", pid)
+	}
+
+	process, err := os.FindProcess(pid)
+	if err != nil {
+		return err
+	}
+	return process.Signal(restartSignal)
+}
 
 // RequestExit asks the process with the given PID to shut down gracefully.
 //

@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"github.com/pockode/server/internal/restart"
+	"github.com/pockode/server/internal/restarttest"
 	"io"
 	"log/slog"
 	"net/http"
@@ -69,7 +71,7 @@ func newTestServer(t *testing.T, serverPassword, mcpToken string) (http.Handler,
 	transferHandler := filetransfer.NewHandler(registry, dataDir, slog.Default())
 	attachmentHandler := filetransfer.NewAttachmentHandler(scopeManager, worktree.ErrWorktreeNotFound, worktree.ErrSessionNotFound, slog.Default())
 	rawHandler := filetransfer.NewRawHandler(sessions, transferHandler, attachmentHandler)
-	wsHandler := ws.NewRPCHandler(serverPassword, authguard.New(), sessions, "test", func() string { return "" }, authsession.NewTickets(), rawHandler, true, cmdStore, scopeManager, settingsStore, workStore, workOps, work.NewEngine(workStore, work.DefaultMaxNudges), agentRoleStore, scheduleStore, scheduler, cliauth.NewService(slog.Default()), cliupdate.NewService(slog.Default(), nil, nil))
+	wsHandler := ws.NewRPCHandler(serverPassword, authguard.New(), sessions, "test", func() string { return "" }, authsession.NewTickets(), rawHandler, true, cmdStore, scopeManager, settingsStore, workStore, workOps, work.NewEngine(workStore, work.DefaultMaxNudges), agentRoleStore, scheduleStore, scheduler, cliauth.NewService(slog.Default()), cliupdate.NewService(slog.Default(), nil, nil), restart.New(restarttest.Executable(workDir)), ws.NewReleaseUpdater(slog.Default(), restarttest.Executable(workDir), "test"))
 	mcpHandler := mcp.NewAPIHandler(mcp.NewExecutor(workStore, agentRoleStore, workOps, settingsStore, registry, scopeManager), mcpToken)
 	return newHandler(serverPassword, authguard.New(), sessions, true, wsHandler, mcpHandler, transferHandler, attachmentHandler, rawHandler), workDir, sessions, rawHandler
 }

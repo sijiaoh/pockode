@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/pockode/server/internal/restart"
+	"github.com/pockode/server/internal/restarttest"
 	"log/slog"
 	"net/http/httptest"
 	"os"
@@ -92,6 +94,9 @@ type testEnv struct {
 	cliAuth         *cliauthtest.Provider // the claude CLI as cli_auth.* sees it
 	handler         *RPCHandler
 	raw             *rawCapabilitiesStub
+	restarter       *restart.Restarter
+	releases        *fakeReleaseChecker // what server.update_check finds published
+	installer       *fakeInstaller      // what server.update installs with
 	server          *httptest.Server
 	conn            *websocket.Conn
 	ctx             context.Context
@@ -183,8 +188,10 @@ func newTestEnvWithAgent(t *testing.T, mock *mockAgent, ag agent.Agent, workDir 
 	cliAuthService := cliauth.NewService(slog.Default())
 	cliAuthService.Register(session.AgentTypeClaude, cliAuth)
 
+	restarter := restart.New(restarttest.Executable(workDir))
+	checker, installer := &fakeReleaseChecker{}, &fakeInstaller{}
 	raw := &rawCapabilitiesStub{}
-	h := NewRPCHandler(testPassword, authguard.New(), authsessiontest.New(), "test", func() string { return "" }, authsession.NewTickets(), raw, true, cmdStore, worktreeManager, settingsStore, workStore, workOps, workEngine, agentRoleStore, scheduleStore, scheduler, cliAuthService, cliupdate.NewService(slog.Default(), nil, nil))
+	h := NewRPCHandler(testPassword, authguard.New(), authsessiontest.New(), "test", func() string { return "" }, authsession.NewTickets(), raw, true, cmdStore, worktreeManager, settingsStore, workStore, workOps, workEngine, agentRoleStore, scheduleStore, scheduler, cliAuthService, cliupdate.NewService(slog.Default(), nil, nil), restarter, NewUpdater(checker, installer))
 	server := httptest.NewServer(h)
 
 	// No deadline of its own: every read and write is bounded individually (see
@@ -208,6 +215,9 @@ func newTestEnvWithAgent(t *testing.T, mock *mockAgent, ag agent.Agent, workDir 
 		scheduleStore:   scheduleStore,
 		testRoleID:      testRole.ID,
 		cliAuth:         cliAuth,
+		restarter:       restarter,
+		releases:        checker,
+		installer:       installer,
 		handler:         h,
 		raw:             raw,
 		server:          server,
@@ -575,7 +585,7 @@ func newMinimalTestHandler(t *testing.T, password string, remoteURL func() strin
 	scheduler := schedule.NewScheduler(scheduleStore, workOps)
 	workOps.SetRunRecorder(scheduler)
 
-	h := NewRPCHandler(password, authguard.NewFrozen(), sessions, "test", remoteURL, tickets, &rawCapabilitiesStub{}, true, cmdStore, worktreeManager, settingsStore, workStore, workOps, work.NewEngine(workStore, work.DefaultMaxNudges), agentRoleStore, scheduleStore, scheduler, cliauth.NewService(slog.Default()), cliupdate.NewService(slog.Default(), nil, nil))
+	h := NewRPCHandler(password, authguard.NewFrozen(), sessions, "test", remoteURL, tickets, &rawCapabilitiesStub{}, true, cmdStore, worktreeManager, settingsStore, workStore, workOps, work.NewEngine(workStore, work.DefaultMaxNudges), agentRoleStore, scheduleStore, scheduler, cliauth.NewService(slog.Default()), cliupdate.NewService(slog.Default(), nil, nil), restart.New(restarttest.Executable(workDir)), NewUpdater(&fakeReleaseChecker{}, &fakeInstaller{}))
 	t.Cleanup(h.Stop)
 	return h
 }

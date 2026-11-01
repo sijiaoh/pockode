@@ -515,6 +515,34 @@ func (m *Manager) AgentProcessCount(agentType session.AgentType) int {
 	return n
 }
 
+// RunningTurns is how many sessions, across every worktree, have a turn that
+// stopping their process would end: one under way, running or blocked, or a
+// permission request still waiting for an answer after its turn has ended.
+// Only loaded worktrees are looked at, which is exact for the reason
+// StopSession gives — every such session has a process.
+func (m *Manager) RunningTurns() (int, error) {
+	m.mu.Lock()
+	worktrees := make([]*Worktree, 0, len(m.worktrees))
+	for _, wt := range m.worktrees {
+		worktrees = append(worktrees, wt)
+	}
+	m.mu.Unlock()
+
+	n := 0
+	for _, wt := range worktrees {
+		metas, err := wt.SessionStore.List()
+		if err != nil {
+			return 0, fmt.Errorf("list sessions of worktree %q: %w", wt.Name, err)
+		}
+		for _, meta := range metas {
+			if meta.Turn.InProgress() || meta.Turn.AwaitingUserAnswer() {
+				n++
+			}
+		}
+	}
+	return n, nil
+}
+
 // loaded reports the worktree of that name only if it already exists, without
 // creating one or taking a reference.
 func (m *Manager) loaded(name string) (*Worktree, bool) {

@@ -9,7 +9,8 @@ import { useWSStore } from "../lib/wsStore";
  * wrapper is.
  */
 export function ReconnectBanner() {
-	const { status, reconnectAttempts, actions } = useWSStore();
+	const { status, reconnectAttempts, restartRequestedAt, actions } =
+		useWSStore();
 
 	if (status !== "reconnecting") {
 		return null;
@@ -19,6 +20,11 @@ export function ReconnectBanner() {
 		<Banner
 			attempts={reconnectAttempts}
 			onRetryNow={() => actions.retryNow()}
+			restarting={
+				restartRequestedAt === null
+					? null
+					: { since: restartRequestedAt, subject: "The cluster" }
+			}
 		/>
 	);
 }

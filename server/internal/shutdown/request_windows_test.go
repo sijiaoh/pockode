@@ -3,7 +3,9 @@
 package shutdown
 
 import (
+	"errors"
 	"os"
+	"os/exec"
 	"testing"
 	"time"
 )
@@ -31,5 +33,37 @@ func TestWatchExitRequests_ReleasesEventName(t *testing.T) {
 		}
 
 		w.stop()
+	}
+}
+
+// helperSleepEnv makes the test binary a live process that publishes no
+// restart event — what a node from a build that predates restarts looks like.
+const helperSleepEnv = "POCKODE_TEST_SHUTDOWN_HELPER_SLEEP"
+
+func TestMain(m *testing.M) {
+	if os.Getenv(helperSleepEnv) != "" {
+		time.Sleep(60 * time.Second)
+		os.Exit(0)
+	}
+	os.Exit(m.Run())
+}
+
+// TestRequestRestart_ProcessWithoutEvent is how a cluster tells an old node on
+// Windows: nothing answers, and the caller can say so rather than report a
+// request as made.
+func TestRequestRestart_ProcessWithoutEvent(t *testing.T) {
+	cmd := exec.Command(os.Args[0])
+	cmd.Env = append(os.Environ(), helperSleepEnv+"=1")
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start helper: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+	})
+
+	err := RequestRestart(cmd.Process.Pid)
+	if !errors.Is(err, ErrRestartUnsupported) {
+		t.Fatalf("RequestRestart = %v, want ErrRestartUnsupported", err)
 	}
 }
