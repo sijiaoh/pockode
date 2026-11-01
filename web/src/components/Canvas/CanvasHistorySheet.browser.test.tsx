@@ -4,6 +4,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { canvasActions } from "../../lib/canvasStore";
 import { resetPageHosts } from "../../lib/pageHosts";
 import { useWSStore } from "../../lib/wsStore";
+import { hitAt } from "../../test/hitAt";
 import { CanvasHistorySheet } from "./CanvasHistorySheet";
 
 const actions = useWSStore.getState().actions;
@@ -44,11 +45,5 @@ it("leaves the history view's page within reach", async () => {
 		</QueryClientProvider>,
 	);
 	const frame = await screen.findByTitle("Canvas revision 1");
-	const box = frame.getBoundingClientRect();
-	expect(
-		document.elementFromPoint(
-			box.left + box.width / 2,
-			box.top + box.height / 2,
-		),
-	).toBe(frame);
+	expect(hitAt(frame)).toBe(frame);
 });

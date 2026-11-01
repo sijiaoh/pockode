@@ -9,6 +9,7 @@ import {
 	permissionRequestActions,
 	usePermissionRequestStore,
 } from "../../lib/permissionRequestStore";
+import { hitAt } from "../../test/hitAt";
 import {
 	pageSignal,
 	signals,
@@ -132,15 +133,6 @@ describe("the canvas view in a real browser", () => {
 		expect(keptSize()).toBeNull();
 	});
 });
-
-/** What a press at the middle of `element` would land on. */
-function hitAt(element: Element) {
-	const box = element.getBoundingClientRect();
-	return document.elementFromPoint(
-		box.left + box.width / 2,
-		box.top + box.height / 2,
-	);
-}
 
 /** Says, from inside the page, that it has loaded, and each click it gets. */
 const PAGE_CLICKS = `<p>drawn</p><script>addEventListener("load",function(){${pageSignal("'loaded'")}});document.addEventListener("click",function(){${pageSignal("'clicked'")}})</script>`;

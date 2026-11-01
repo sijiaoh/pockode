@@ -1,3 +1,4 @@
+import { Sheet } from "@pockode/shared";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
 	render as renderUi,
@@ -6,7 +7,7 @@ import {
 	within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import type { ReactElement } from "react";
+import { type ReactElement, useState } from "react";
 import {
 	afterEach,
 	beforeAll,
@@ -26,6 +27,7 @@ import {
 } from "../../lib/pageHosts";
 import type { RawTarget } from "../../lib/rpc/raw";
 import { useWSStore, wsActions } from "../../lib/wsStore";
+import { hitAt } from "../../test/hitAt";
 // Says, from inside the page, that a request to another host went through.
 import landedPath from "../../test/page-hosts/landed.htm?url";
 import signalPath from "../../test/page-hosts/signal.js?url";
@@ -37,6 +39,7 @@ import {
 } from "../../test/pageSignals";
 import { otherHost } from "../../test/testServerHosts";
 import { PRESS_HOLD_MS } from "../ui/PageHostsStrip";
+import ResponsivePanel from "../ui/ResponsivePanel";
 import { HtmlFrame } from "./HtmlFrame";
 
 // What jsdom cannot do is enforce a policy, which is the whole guarantee: these
@@ -557,5 +560,92 @@ addEventListener("load", function () { document.getElementById("down").click(); 
 <script>${pageSignal("document.baseURI")}</script>`);
 
 		await signalled("https://cdn.example/lib/");
+	});
+});
+
+/** Says, from inside the page, that it has loaded, and each click it gets. */
+const PAGE_CLICKS = `<p>drawn</p><script>addEventListener("load",function(){${pageSignal("'loaded'")}});document.addEventListener("click",function(){${pageSignal("'clicked'")}})</script>`;
+
+/**
+ * A card under the session header's details panel — a dropdown with no
+ * backdrop, as above the expanded tier.
+ */
+function CardUnderPanel() {
+	const [open, setOpen] = useState(true);
+	return (
+		<>
+			<div style={{ position: "relative" }}>
+				<ResponsivePanel
+					isOpen={open}
+					onClose={() => setOpen(false)}
+					title="Session details"
+					isExpanded
+					desktopPosition="left"
+				>
+					<p>Engine</p>
+				</ResponsivePanel>
+			</div>
+			<div style={{ width: 480 }}>
+				<HtmlFrame
+					html={PAGE_CLICKS}
+					title="Card"
+					pageKey={KEY}
+					boxStyle={{ height: 240 }}
+				/>
+			</div>
+		</>
+	);
+}
+
+describe("an agent's page while a layer covers the page", () => {
+	beforeEach(startPageSignals);
+	afterEach(() => {
+		stopPageSignals();
+		resetPageHosts();
+	});
+
+	it("takes a press over the page into the app, which closes the panel, and not into the page", async () => {
+		render(<CardUnderPanel />);
+		const frame = await screen.findByTitle("Card");
+		await screen.findByRole("dialog", { name: "Session details" });
+		// Listening already, so a press that got in would be heard.
+		await waitFor(() => expect(signals).toEqual(["loaded"]), {
+			timeout: 5000,
+		});
+
+		const hit = hitAt(frame);
+		if (hit === null) throw new Error("nothing at the frame's middle");
+		expect(hit).not.toBe(frame);
+		await realUserEvent.click(hit);
+
+		await waitFor(() =>
+			expect(
+				screen.queryByRole("dialog", { name: "Session details" }),
+			).toBeNull(),
+		);
+		// With nothing over it, a press reaches the page again.
+		expect(hitAt(frame)).toBe(frame);
+		await realUserEvent.click(frame);
+		await waitFor(() => expect(signals).toEqual(["loaded", "clicked"]), {
+			timeout: 5000,
+		});
+	});
+
+	// The full-screen view is a sheet, which is a layer: the page it shows is
+	// never shielded by it.
+	it("leaves a page drawn in a sheet within reach", async () => {
+		render(
+			<Sheet title="Page" onClose={() => {}} fullScreen>
+				<HtmlFrame
+					html={PAGE_CLICKS}
+					title="Full screen"
+					pageKey={KEY}
+					className="flex h-full flex-col"
+					boxClassName="min-h-0 flex-1"
+				/>
+			</Sheet>,
+		);
+		const frame = await screen.findByTitle("Full screen");
+		expect(hitAt(frame)).toBe(frame);
 	});
 });

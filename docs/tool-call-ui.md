@@ -2763,6 +2763,12 @@ agent wrote, and the wrapper's `frame-src 'none'` keeps the page from leaving
 its frame for a host by navigating itself
 ([how](page-external-hosts-ui.md#the-wrapper)).
 
+While a layer of the app's is drawn over it, the frame is shielded, so a press
+that dismisses a panel with no backdrop does not go on into the page; in the
+full-screen viewer, or in a card in the canvas's turn-details sheet, the
+page's own sheet does not count
+([answering-ui.md](answering-ui.md#who-owns-the-dismissing-click)).
+
 ### Project files
 
 A page reaches the project it was drawn in, as an `.html` file opened in Files

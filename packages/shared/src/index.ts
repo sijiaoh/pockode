@@ -18,6 +18,7 @@ export {
 	useCoverPage,
 	useHasCoarsePointer,
 	useHasFinePointer,
+	useIsDrawnOver,
 	useIsExpanded,
 	useIsPageCovered,
 	useMediaQuery,

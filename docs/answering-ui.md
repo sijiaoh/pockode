@@ -1324,13 +1324,37 @@ exposed:
 **A press into a page frame is invisible to all of them.** It is dispatched in
 the frame's document, never the app's, so none of the listeners above hears it.
 A surface with no backdrop stays open, and the press goes on into the agent's
-page. The live canvas deals with this by laying a shield over its frame while
-any layer is up, so the press lands in the app's document instead
-([canvas-ui.md](canvas-ui.md#under-a-layer)). The command palette is not a
-layer, so it raises no shield, and a press on the canvas with it open still
-reaches the page. `HtmlFrame`, the `html_render`
-card in the transcript, has no shield yet: a press on one with any surface in the table
-open still goes to the page and leaves the surface open.
+page. So every page frame shields itself: `CanvasFrame` (the live canvas and
+the history view's), and `HtmlFrame` (an `html_render` card, and the page in
+its full-screen viewer) each lay a `FrameShield` — a transparent `aria-hidden`
+element over the frame alone — while a layer is drawn over it, and the press
+lands in the app's document instead, where the surface closes on it the usual
+way. Because the shield is in the way physically, the page cannot get the
+press whichever layer is up, even one that does not claim its dismissing click.
+
+"Drawn over it" is `useIsDrawnOver` from `@pockode/shared`, read over the same
+registry as `useIsPageCovered` but not the same question:
+
+- **A frame on the page** is shielded while any layer is up — any counted by
+  `useIsPageCovered`. The command palette is not a layer, so it raises no
+  shield, and a press on a page with it open still reaches the page and leaves
+  the palette open.
+- **A frame inside a `Sheet`** is shielded only by a layer that went up *after*
+  its sheet. Never by its own sheet — the sheet is a layer, and a shield would
+  cover the very page it shows, which could then never be pressed: the canvas's
+  history view, a card in the canvas's turn-details sheet (`TurnDetailsSheet`
+  renders `MessageItem`), the page in the full-screen viewer. Nor by a layer it
+  was opened over: the canvas's permission panel stays up under a sheet opened
+  over it, and the page in that sheet stays within reach. A sheet gives its
+  layer to its content for this (`CoverLayerContext`, internal to the shared
+  package), which is why the registry is ordered rather than a count.
+
+What the shield leaves alone — the frame's own strips, the canvas's floating
+composer — and what it costs is in
+[canvas-ui.md](canvas-ui.md#under-a-layer). The rule is unit-tested in
+`web/src/components/ui/pageCover.test.tsx`; the card's side in a real engine in
+`HtmlFrame.browser.test.tsx` (the session panel closes on a press over a card
+and the page gets no click; a page in a full-screen sheet stays within reach).
 
 The two rules, restated for the pointer:
 
