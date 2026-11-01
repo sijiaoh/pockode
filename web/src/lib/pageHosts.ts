@@ -36,6 +36,14 @@ function hostSources(hosts: readonly string[]): string[] {
  * `object-src 'none'` for the same document by another door: WebKit loads an
  * `<object>` or `<embed>` from a host `default-src` allows, and what it loads
  * runs under no policy of ours.
+ *
+ * `form-action 'none'` for the canvas, whose sandbox lets forms submit
+ * (`CANVAS_FRAME_SANDBOX`): the embedder's `frame-src` holds a form that
+ * navigates the frame, but not one that targets a window of its own
+ * (`target="_blank"`), which would post the page's fields to any host. Never
+ * drop it. Chromium does not apply it to `about:srcdoc`, the page itself,
+ * which the canvas bridge covers by cancelling a submit nobody handled;
+ * neither replaces the other.
  */
 export function pagePolicy(
 	allowedHosts: readonly string[],

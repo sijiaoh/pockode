@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { describe, expect, it } from "vitest";
-import { HTML_FRAME_SANDBOX } from "../../lib/agentPage";
+import { CANVAS_FRAME_SANDBOX } from "../../lib/agentPage";
 import { pageFrameOf } from "../../test/pageFrame";
 import { CanvasFrame } from "./CanvasFrame";
 
@@ -17,7 +17,7 @@ const withQueryClient = ({ children }: { children: ReactNode }) => (
 const AGENT = '<!doctype html><p id="agent">drawn</p>';
 
 describe("CanvasFrame", () => {
-	it("draws the page in the agent page's sandbox, policy first and the bridge before the agent's markup", async () => {
+	it("draws the page in the canvas's sandbox, policy first and the bridge before the agent's markup", async () => {
 		render(
 			<CanvasFrame
 				sessionId="s1"
@@ -28,8 +28,8 @@ describe("CanvasFrame", () => {
 		);
 		const wrapper = await screen.findByTitle<HTMLIFrameElement>("Canvas");
 		const page = pageFrameOf(wrapper);
-		expect(wrapper.getAttribute("sandbox")).toBe(HTML_FRAME_SANDBOX);
-		expect(page.getAttribute("sandbox")).toBe(HTML_FRAME_SANDBOX);
+		expect(wrapper.getAttribute("sandbox")).toBe(CANVAS_FRAME_SANDBOX);
+		expect(page.getAttribute("sandbox")).toBe(CANVAS_FRAME_SANDBOX);
 
 		const doc = page.getAttribute("srcdoc") ?? "";
 		expect(doc.startsWith('<meta http-equiv="Content-Security-Policy"')).toBe(

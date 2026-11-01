@@ -12,7 +12,7 @@ import {
 	APP_FROM_PAGE,
 	agentPageDocument,
 	agentWrapperDocument,
-	HTML_FRAME_SANDBOX,
+	CANVAS_FRAME_SANDBOX,
 	initialPageProject,
 	type PageProject,
 	pageHtml,
@@ -83,13 +83,10 @@ function wrapperDocument(doc: CanvasDocument, project: PageProject | null) {
 	const page = agentPageDocument(doc.state.html ?? "", doc.hosts, project, {
 		before: `${canvasBridgeScript(APP_FROM_PAGE)}${canvasBaseStylesheet(doc.theme)}`,
 	});
-	return agentWrapperDocument(
-		page,
-		doc.title,
-		doc.hosts,
-		project,
-		wrapperStyle(doc.theme.scheme),
-	);
+	return agentWrapperDocument(page, doc.title, doc.hosts, project, {
+		style: wrapperStyle(doc.theme.scheme),
+		sandbox: CANVAS_FRAME_SANDBOX,
+	});
 }
 
 /**
@@ -440,7 +437,7 @@ export function CanvasFrame({
 							ref={ref}
 							title={doc?.title}
 							srcDoc={srcDoc}
-							sandbox={HTML_FRAME_SANDBOX}
+							sandbox={CANVAS_FRAME_SANDBOX}
 							className="block h-full w-full border-0 bg-th-bg-primary"
 							style={{ colorScheme: scheme }}
 						/>

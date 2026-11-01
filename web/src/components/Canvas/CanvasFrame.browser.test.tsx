@@ -4,12 +4,16 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render as renderUi, screen, waitFor } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cdp, server } from "vitest/browser";
+import { cdp, page, server, userEvent } from "vitest/browser";
+import { pageWindowOf } from "../../lib/agentPage";
 import type { CanvasReadOnly } from "../../lib/canvasBridge";
 import { resetPageHosts } from "../../lib/pageHosts";
 import type { CanvasActionInput } from "../../lib/rpc";
 import type { RawTarget } from "../../lib/rpc/raw";
 import { useWSStore, wsActions } from "../../lib/wsStore";
+// Says, from inside the page, that a request to another host went through.
+import landedPath from "../../test/page-hosts/landed.htm?url";
+import { otherHost } from "../../test/testServerHosts";
 import type { CanvasSize, CanvasState } from "../../types/canvas";
 import { CanvasFrame } from "./CanvasFrame";
 
@@ -325,6 +329,138 @@ describe("the canvas frame in a real browser", () => {
 				},
 			});
 			await signalled("failed: the agent is gone");
+		});
+	});
+
+	// The forms the page submits, by the reader's own click and Enter in the
+	// real sandboxed frame: submitted at all in Chromium only under the canvas
+	// sandbox's `allow-forms`, and going nowhere by the policy's `form-action`.
+	describe("forms", () => {
+		const LANDED_URL = `http://${otherHost(location.port)}${landedPath}`;
+		const LOADED = `<script>addEventListener("load",function(){${signal("'loaded'")}})</script>`;
+
+		function pageFrame() {
+			return page.frameLocator(
+				page.frameLocator(page.getByTitle("Canvas")).getByTitle("Canvas"),
+			);
+		}
+
+		/** Time for a navigation or a request that should not happen. */
+		function settle(ms = 1500) {
+			return new Promise((resolve) => setTimeout(resolve, ms));
+		}
+
+		const FORM = `<form data-pk-send="create">
+<input name="title" aria-label="Title"><button name="as" value="urgent">Create</button>
+</form>${LOADED}`;
+
+		it("sends a sending form by its button", async () => {
+			const onSend = vi.fn(async (_input: CanvasActionInput) => {});
+			renderFrame({ canvas: rendered(3, FORM), onSend });
+			await signalled("loaded");
+			const frame = pageFrame();
+			await frame.getByRole("textbox", { name: "Title" }).fill("Fix login");
+			await frame.getByRole("button", { name: "Create" }).click();
+			await waitFor(() =>
+				expect(onSend).toHaveBeenCalledWith({
+					action: "create",
+					data: { title: "Fix login", as: "urgent" },
+					revision: 3,
+				}),
+			);
+		});
+
+		it("sends a sending form by Enter in a field", async () => {
+			const onSend = vi.fn(async (_input: CanvasActionInput) => {});
+			renderFrame({ canvas: rendered(3, FORM), onSend });
+			await signalled("loaded");
+			const title = pageFrame().getByRole("textbox", { name: "Title" });
+			await title.fill("Fix login");
+			await userEvent.type(title, "{Enter}");
+			await waitFor(() =>
+				expect(onSend).toHaveBeenCalledWith({
+					action: "create",
+					data: { title: "Fix login", as: "urgent" },
+					revision: 3,
+				}),
+			);
+		});
+
+		// Navigates nothing, so it is the one submission the bridge leaves to
+		// the browser.
+		it.each([
+			// A field named "method" is what `form.method` would read.
+			[
+				"its form's method",
+				'<form method="dialog"><input name="method" type="hidden" value="x"><button>Close</button></form>',
+			],
+			[
+				"its button's",
+				'<form><button formmethod="dialog">Close</button></form>',
+			],
+		])("closes a dialog by %s", async (_, form) => {
+			renderFrame({
+				canvas: rendered(
+					1,
+					`<dialog open>${form}</dialog>
+<script>document.querySelector("dialog").addEventListener("close",function(){${signal("'closed'")}})</script>${LOADED}`,
+				),
+			});
+			await signalled("loaded");
+			await pageFrame().getByRole("button", { name: "Close" }).click();
+			await signalled("closed");
+		});
+
+		// No submit event, so no bridge, and a window of its own, which the
+		// wrapper's `frame-src` never sees: `form-action` alone holds it. With
+		// an opener, so a popup that landed can tell the page, which relays it.
+		it("opens nothing when the page submits a form into a new window by script", async () => {
+			renderFrame({
+				canvas: rendered(
+					1,
+					`<form action="${LANDED_URL}" target="_blank" rel="opener"></form>
+<button onclick="document.forms[0].submit()">Open</button>
+<script>addEventListener("message",function(e){if(e.data&&e.data.signal)parent.parent.postMessage(e.data,"*")})</script>${LOADED}`,
+				),
+			});
+			await signalled("loaded");
+			await pageFrame().getByRole("button", { name: "Open" }).click();
+			await settle();
+			expect(signals).not.toContain("landed");
+		});
+
+		it.each([
+			// Chromium's `form-action` lets this one through, to `about:srcdoc`:
+			// held by the bridge, after the page's own listener has run.
+			["a plain form", ""],
+			[
+				"a form posting to another host",
+				` action="${LANDED_URL}" method="post"`,
+			],
+			["a form getting another host", ` action="${LANDED_URL}"`],
+		])("goes nowhere when %s submits", async (_, attributes) => {
+			renderFrame({
+				canvas: rendered(
+					1,
+					`<form${attributes}><input name="q" aria-label="Query"><button>Go</button></form>
+<script>addEventListener("submit",function(e){${signal("'submitted, cancelled: '+e.defaultPrevented")}});
+addEventListener("message",function(e){if(e.data==="query?")${signal("'query '+document.forms[0].q.value")}})</script>${LOADED}`,
+				),
+			});
+			const before = await wrapper();
+			await signalled("loaded");
+			const frame = pageFrame();
+			const query = frame.getByRole("textbox", { name: "Query" });
+			await query.fill("typed");
+			await frame.getByRole("button", { name: "Go" }).click();
+			await signalled("submitted, cancelled: false");
+			await settle();
+			expect(signals).not.toContain("landed");
+			// Loaded once: the frame was not navigated, not even to itself.
+			expect(signals.filter((s) => s === "loaded")).toHaveLength(1);
+			expect(screen.getByTitle("Canvas")).toBe(before);
+			pageWindowOf(before)?.postMessage("query?", "*");
+			await signalled("query typed");
 		});
 	});
 });
