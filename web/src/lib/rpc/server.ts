@@ -36,8 +36,9 @@ export interface ServerActions {
 
 // The default timeout is enough for `server.version` and `server.restart`:
 // both answer within the server's 10 s budget for running `<path> --version`.
-// `server.update_check` runs that and then may ask GitHub, so it takes the
-// client `getCheckClient` gives, and `server.update` the one `getUpdateClient`
+// `server.update_check` runs that and then waits on the release check — its
+// own when forced, else one already running — so it takes the client
+// `getCheckClient` gives, and `server.update` the one `getUpdateClient`
 // gives, whose timeout stays clear of the install's own budget
 // (UPDATE_BUDGET_MS). Both numbers are wsStore's.
 export function createServerActions(

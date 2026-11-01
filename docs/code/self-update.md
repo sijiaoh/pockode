@@ -92,8 +92,8 @@ Unauthenticated GitHub API requests share 60 an hour per IP address. That
 budget covers every node, the cluster, and anything else on the machine or
 behind the same NAT, and nothing coordinates those processes. So the checker
 never asks on its own, nor because a client connected or opened a screen: it
-asks only on a forced `server.update_check` — a user pressing Check again —
-and then at most once a minute, a failed check included
+asks only on a forced `server.update_check` — a user pressing Check, Check
+again or Try again — and then at most once a minute, a failed check included
 ([websocket-rpc.md](websocket-rpc.md#server-updating-to-a-release)).
 That floor is per process and only stops one user's repeated presses; what
 keeps several processes inside the shared budget is that none of them checks

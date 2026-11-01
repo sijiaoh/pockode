@@ -1,5 +1,5 @@
 import type { ServerUpdateCheck, UpdateCandidate } from "@pockode/shared";
-import { act, render, screen, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { JSONRPCErrorException } from "json-rpc-2.0";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -533,6 +533,170 @@ describe("PockodeSection", () => {
 				);
 				await user.click(screen.getByRole("button", { name: "Try again" }));
 				expect(checks).toHaveBeenLastCalledWith({ force: true });
+			});
+
+			describe("not checked yet", () => {
+				const NOT_CHECKED = checkOf([], { checked_at: undefined });
+				const checkButton = () =>
+					screen.getByRole("button", { name: "Check for updates" });
+
+				/** Lands the mount's read as not checked, then presses Check. */
+				async function pressCheck() {
+					const checks = deferredChecks();
+					render(<PockodeSection />);
+					await checks.release(0, NOT_CHECKED);
+					await findRow("Updates not checked", "Checked only on request");
+					await userEvent.setup().click(checkButton());
+					return checks;
+				}
+
+				it("is a row of its own, with Check, and says nothing", async () => {
+					offers([], { checked_at: undefined });
+					render(<PockodeSection />);
+
+					await findRow("Updates not checked", "Checked only on request");
+					expect(checkButton()).toHaveTextContent(/^Check$/);
+					expect(screen.queryByText("Up to date")).toBeNull();
+					expect(
+						screen.queryByLabelText("Checking for a newer Pockode"),
+					).toBeNull();
+					expect(screen.getByRole("status")).toBeEmptyDOMElement();
+				});
+
+				it("forces a check, and shows it is out without letting go of focus", async () => {
+					const calls: unknown[] = [];
+					const checks = deferredChecks();
+					const pending = fake.updateCheck;
+					fake.updateCheck = (params) => {
+						calls.push(params);
+						return pending(params);
+					};
+					render(<PockodeSection />);
+					await checks.release(0, NOT_CHECKED);
+					const user = userEvent.setup();
+
+					await user.click(
+						await screen.findByRole("button", { name: "Check for updates" }),
+					);
+					expect(calls).toEqual([{}, { force: true }]);
+					await findRow("Updates not checked", "Checking...");
+					expect(checkButton()).toHaveAttribute("aria-disabled", "true");
+					expect(checkButton()).toHaveFocus();
+					expect(screen.getByRole("status")).toHaveTextContent(
+						"Checking for updates...",
+					);
+
+					await user.click(checkButton());
+					expect(calls).toHaveLength(2);
+
+					await checks.release(1, checkOf([]));
+					await findRow("Up to date", "Checked just now");
+					const again = screen.getByRole("button", { name: "Check again" });
+					expect(again).toHaveFocus();
+					expect(again).not.toHaveAttribute("aria-disabled");
+					expect(screen.getByRole("status")).toHaveTextContent("Up to date");
+				});
+
+				it("hands focus to the card when releases replace the row", async () => {
+					const checks = await pressCheck();
+					await checks.release(1, checkOf([LATEST, ALPHA]));
+
+					await updateButton(LATEST);
+					await waitFor(() => expect(card()).toHaveFocus());
+					expect(screen.getByRole("status")).toHaveTextContent(
+						"Updates available: 0.25.0 (latest), 0.26.0-alpha.1 (alpha)",
+					);
+				});
+
+				it("stays not checked when the request fails, and says it couldn't", async () => {
+					const checks = await pressCheck();
+					await checks.fail(1, "WebSocket is not connected");
+
+					expect(await screen.findByRole("alert")).toHaveTextContent(
+						"Couldn't check: WebSocket is not connected",
+					);
+					await findRow("Updates not checked", "Checked only on request");
+					expect(checkButton()).not.toHaveAttribute("aria-disabled");
+					expect(screen.getByRole("status")).toBeEmptyDOMElement();
+				});
+
+				it("says the check still runs when it outlived the server's wait", async () => {
+					const checks = await pressCheck();
+					await checks.release(1, NOT_CHECKED);
+
+					expect(
+						await screen.findByText(/still running on the server/),
+					).toHaveTextContent(
+						"The check is still running on the server. Press Check in a moment to see its answer.",
+					);
+					expect(screen.getByRole("status")).toHaveTextContent(
+						"Still checking on the server",
+					);
+				});
+
+				// The server may have restarted in between: not checked is then no
+				// answer to the press.
+				it("forgets the press when the connection drops", async () => {
+					const checks = await pressCheck();
+					act(() => useWSStore.setState({ status: "disconnected" }));
+					act(() => useWSStore.setState({ status: "connected" }));
+					await checks.release(2, NOT_CHECKED);
+
+					await findRow("Updates not checked", "Checked only on request");
+					expect(checkButton()).not.toHaveAttribute("aria-disabled");
+					expect(screen.queryByText(/still running on the server/)).toBeNull();
+					expect(screen.getByRole("status")).toBeEmptyDOMElement();
+				});
+
+				it("says what a failed check found", async () => {
+					const checks = await pressCheck();
+					await checks.release(
+						1,
+						checkOf([], {
+							checked_at: undefined,
+							check_error: { reason: "unavailable", message: "GitHub: 503" },
+						}),
+					);
+
+					await screen.findByText(/GitHub: 503/);
+					expect(screen.getByRole("status")).toHaveTextContent(
+						"Couldn't check for updates",
+					);
+				});
+			});
+
+			// An answer from the server's cache lands at once: without a minimum
+			// the press would look like it did nothing.
+			it.each([
+				["Check again", "Up to date", {}],
+				[
+					"Try again",
+					"Couldn't check for updates",
+					{
+						checked_at: undefined,
+						check_error: {
+							reason: "unavailable" as const,
+							message: "GitHub: 503",
+						},
+					},
+				],
+			])("shows %s's check as out, even when it answers at once", async (button, row, extra) => {
+				offers([], extra);
+				render(<PockodeSection />);
+				const user = userEvent.setup();
+
+				await screen.findByText(row);
+				await user.click(screen.getByRole("button", { name: button }));
+				await findRow(row, "Checking...");
+				expect(screen.getByRole("button", { name: button })).toHaveAttribute(
+					"aria-disabled",
+					"true",
+				);
+				await waitFor(() =>
+					expect(
+						screen.getByRole("button", { name: button }),
+					).not.toHaveAttribute("aria-disabled"),
+				);
 			});
 
 			it("offers nothing to a development build", async () => {
