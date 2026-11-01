@@ -2738,7 +2738,9 @@ the project capability from `lib/agentPage.ts` — shared with the canvas
         sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox">
 ```
 
-The floor is `HTML_FRAME_SANDBOX` (`lib/agentPage.ts`), on both frames:
+The floor is `HTML_FRAME_SANDBOX` (`lib/agentPage.ts`), on both frames — the
+canvas adds `allow-forms` to it, and nothing else does
+([canvas-ui.md § Forms](canvas-ui.md#forms)):
 
 - **Never `allow-same-origin`.** A `srcdoc` frame inherits its parent's origin;
   with this token it would keep it, and read Pockode's stored credentials and

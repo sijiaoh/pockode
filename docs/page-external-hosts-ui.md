@@ -375,19 +375,23 @@ is what a link is for, as a Markdown link's URL is the agent's and a tap
 follows it; here nothing says the reader pressed anything, so an Open would
 invite a tap to finish a trip they never started.
 
-Two navigations never read as `Page left`. A `<form>` is held by the sandbox,
-which has no `allow-forms`, and behind it by `form-action`: it goes nowhere and
-nothing is listed. A frame the page makes itself, navigating to another host,
-is refused by the page's own `frame-src` — the page is that frame's embedder —
-and is listed as a document the page embeds, `(can't be allowed)`.
+Two navigations do not read as `Page left`. A `<form>` goes nowhere and nothing
+is listed: it is held by the sandbox, which has no `allow-forms`, and behind it
+by `form-action` — except in the canvas, whose forms do submit and are held by
+the wrapper, `form-action` and its bridge together, with two gaps that can still
+read `Page left` ([canvas-ui.md § Forms](canvas-ui.md#forms)). A frame the page
+makes itself, navigating to another host, is refused by the page's own
+`frame-src` — the page is that frame's embedder — and is listed as a document
+the page embeds, `(can't be allowed)`.
 
 ## How it is built
 
 Two documents per frame: a **wrapper** the app draws, which exists for its
 `frame-src`, and inside it the **page**, under a policy that refuses every host
-the reader has not allowed. Both are sandboxed with `HTML_FRAME_SANDBOX` (and
-the page from `/api/raw` with its sandbox header too): the policy is added to
-the sandbox, never traded for it.
+the reader has not allowed. Both are sandboxed with `HTML_FRAME_SANDBOX` — the
+canvas with `CANVAS_FRAME_SANDBOX`, the same and `allow-forms` — and the page
+from `/api/raw` with its sandbox header too: the policy is added to the
+sandbox, never traded for it.
 
 ### The policy
 
@@ -422,6 +426,9 @@ form-action 'none'                         (workspace: <own>)
   cannot be told apart by a nonce or hash, as Mermaid's are — one in
   `script-src` would turn `'unsafe-inline'` off. `data:` and `blob:` are no
   request.
+- `form-action` matters where forms submit, the canvas: it is what holds a
+  form posting into a window of its own, which no `frame-src` sees
+  ([canvas-ui.md § Forms](canvas-ui.md#forms)). Never drop it.
 - DNS prefetching is off: a `<meta>` in an agent page's `srcdoc`, the
   `X-DNS-Prefetch-Control: off` header on `/api/raw`.
 - A policy the page adds itself can only narrow this one.
@@ -569,6 +576,9 @@ one document the app gave it.
     reporter from `raw-contract.json`
     ([testing.md](testing.md#frontend-the-real-browser-entry)); they fail with
     the wrapper's `frame-src` loosened to `*`.
+  - `Canvas/CanvasFrame.browser.test.tsx` — the canvas's forms, which submit:
+    none reaches another host, by the frame or by a window of its own
+    ([canvas-ui.md § Forms](canvas-ui.md#forms)).
 - **The server** (`server/filetransfer/raw_test.go`): `TestRawPagePolicy` pins
   the exact policy, the `Host` fallback, bases and hosts that cannot be named,
   a URL that cannot widen it, and an unknown capability; `TestRawPageReporter`

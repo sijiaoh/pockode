@@ -73,7 +73,7 @@ exist.
 | `web/src/lib/messageReducer.ts`, `web/src/lib/toolSummary.ts`, `web/src/lib/subagentRun.ts`, `web/src/lib/toolRun.ts`, `web/src/lib/toolGroups.ts`, `web/src/components/Chat/ToolRow.tsx` | Chat view's canvas rows (§12): `canvas_revision` read off the result record onto the run (`messageReducer`), the rows' wording by outcome (`toolSummary`, and a subagent's latest-child line through `subagentRun`), a refusal's second line (`toolRun`), never folding them (`toolGroups`), and `rev N` as their meta (`ToolMeta`) |
 | `web/src/components/Chat/ToolCallItem.tsx`, `web/src/components/Chat/canvasShowContext.ts` | A canvas row's **Show** in its body (§12, §15.1), through `CanvasShowContext`, which `ChatPanel` provides only for a canvas session it can read |
 | `web/src/components/Chat/CanvasActionBubble.tsx`, `web/src/lib/messagePreview.ts` | A canvas action's bubble in chat view (§12), chosen in `MessageItem`; a canvas action quoted by its name |
-| `web/src/lib/agentPage.ts` | What `CanvasFrame` and `HtmlFrame` share (§4): the sandbox, the page document's order (`agentPageDocument`), the wrapper (`agentWrapperDocument`), the project capability (`usePageProject`, whose freshness for a patch is `useRawMediaSource`'s `isFreshCapability`) |
+| `web/src/lib/agentPage.ts` | What `CanvasFrame` and `HtmlFrame` share (§4): the sandbox's floor (`HTML_FRAME_SANDBOX`) and the canvas's own (`CANVAS_FRAME_SANDBOX`), the page document's order (`agentPageDocument`), the wrapper (`agentWrapperDocument`), the project capability (`usePageProject`, whose freshness for a patch is `useRawMediaSource`'s `isFreshCapability`) |
 | `web/src/lib/canvasRedraw.ts` | How each new state reaches the frame (§8.3): patch or whole drawing, one patch at a time, the app's record of the revision shown (`CanvasRedraw`) |
 | `web/src/components/Canvas/CanvasFrame.tsx` | The page frame (§4): the document, the size (§5), redrawing through `CanvasRedraw`, the host allowance per session, and the app side of the bridge (§8.2, §8.4) — answering sends, the theme, `sendable`, the page's focus for the size rule, `readOnly` saying which page a history frame is (§15.4); tested in real engines by `CanvasFrame.browser.test.tsx` |
 | `web/src/components/Canvas/CanvasView.tsx` | The canvas view's canvas (§2): the session's current canvas from the store in a `CanvasFrame`, the empty state at revision 0, and the size measurement (§5), held off while the permission banner is up; the permission banner, expiry line and panel in its column, the panel's layer and its focus (§10); tested in real engines by `CanvasView.browser.test.tsx` |
@@ -399,8 +399,8 @@ the refusal cannot disagree about which session is which.
 ## 4. The page frame
 
 The canvas is drawn in the same **double frame** as an `html_render` page — the
-wrapper whose one child is the page, both `srcdoc`, both sandboxed with
-`allow-scripts allow-popups allow-popups-to-escape-sandbox` and never
+wrapper whose one child is the page, both `srcdoc`, both sandboxed with the
+floor `allow-scripts allow-popups allow-popups-to-escape-sandbox` and never
 `allow-same-origin` or `allow-modals`, the policy at byte 0 of both documents,
 the project capability as the base
 ([the sandbox and the policy](tool-call-ui.md#the-sandbox-and-the-policy)).
@@ -413,6 +413,7 @@ What differs:
 |---|---|---|
 | Size | as tall as the page, capped | the canvas area, or the drawn size (§5) |
 | Height reporter | appended | not used |
+| Sandbox | the floor (`HTML_FRAME_SANDBOX`) | the floor and `allow-forms` (`CANVAS_FRAME_SANDBOX`), on both frames — [forms](#forms) |
 | Background | white, `color-scheme: light` | the theme (§3.3) |
 | Base stylesheet | none | §3.3, before the agent's markup |
 | Bridge | none | §8, after the reporter and before the agent's markup |
@@ -433,9 +434,6 @@ capability. A canvas left untouched past its capability's lifetime loses its
 project requests until it is drawn again, the known limit `html_render` pages
 share.
 
-`form-action 'none'` stays in the policy: a form submits only through the
-bridge, which takes the `submit` before the browser would refuse it.
-
 The hosts strip sits between the header (or the permission banner or its
 expiry line) and the
 canvas, as on every other page surface. The allowance is keyed by the session
@@ -447,6 +445,62 @@ wrapper is white, under the `color-scheme` of the theme it was drawn in, and
 the app's element behind them is `--th-bg-primary`: what shows is the page's
 own root, `--pk-bg`, and nothing white flashes in a dark app while a document
 loads.
+
+### Forms
+
+A canvas page is one the reader works in, and a form is how it sends
+(`data-pk-send`, §6.1), so the canvas's sandbox adds **`allow-forms`** to the
+floor. Without it Chromium abandons a submission before its `submit` event:
+neither the bridge nor the page's own handler hears it, and a form sends
+nothing — by button or by Enter. WebKit fires `submit` before it checks the
+sandbox, so iOS Safari never had the problem; Chrome on Android and desktop did.
+Both frames carry the flag, because a nested frame gets no flag its parent
+lacks. Only the canvas: an `html_render` card and a file preview have nothing to
+submit to, and keep the floor.
+
+With forms allowed, three things keep a submission from going anywhere. They
+overlap, but `form-action` and the bridge each hold something nothing else
+does, and none may be removed:
+
+- **The wrapper's `frame-src`** refuses a form that navigates the frame to
+  another host, as it does any navigation of the frame
+  ([the wrapper](page-external-hosts-ui.md#the-wrapper)).
+- **The policy's `form-action 'none'`** refuses a form submitted to another
+  host, in the frame or — what nothing else holds — into a window of its own
+  (`target="_blank"`): a popup escapes the sandbox and is no child of the
+  wrapper, so its `frame-src` never sees it, and the page's fields would go to
+  any host.
+- **The bridge cancels a submit nobody handled**: a listener on `window`, in the
+  bubble phase and the last there, calls `preventDefault()` on a submit no
+  handler cancelled. It covers what Chromium's `form-action` lets through, the
+  page's own `about:srcdoc`: a plain form would reload the page into itself and
+  lose what was typed. It never stops propagation and acts only after every
+  handler of the page's own has run, so the page hears every submit as it
+  would anywhere, uncancelled. A dialog's form (`method="dialog"` on the form,
+  or `formmethod="dialog"` on its button) navigates nothing and is left to the
+  browser, so it closes its dialog.
+
+So a submission by the reader's click or Enter is cancelled before it navigates:
+nothing is refused, and the [hosts strip](page-external-hosts-ui.md) shows
+nothing for it. Two are out of the bridge's reach — a submit whose propagation
+a page handler stops before it reaches `window` (React's `onSubmit` with
+`stopPropagation()`), and `form.submit()`, which fires no event. Nothing they
+send reaches another host, but in Chromium the page is lost: a plain form
+reloads it into itself, and one to another host is refused by the wrapper and
+reads `Page left · <host>` with Reload. In WebKit `form-action` refuses both
+and the page stays; one to another host reads `Not loaded · <host>` with a Load
+that cannot help, since Load allows the host and `form-action` stays `'none'`.
+Cancelling earlier, in the capture phase, would close the gap at the price of
+every page handler seeing `defaultPrevented === true`, a form that behaves
+unlike any other.
+
+`CanvasFrame.browser.test.tsx` holds the three in Chromium and WebKit, in the
+real double frame, by real clicks and Enter: a sending form sends by its button
+and by Enter; a plain form and forms posting and getting another host go
+nowhere — no landing, loaded once, the same frame, the text kept, the page's
+listener seeing the submit uncancelled; a dialog closes by its form's method
+and by its button's; and a form submitted by script into a new window opens
+nothing.
 
 ---
 
@@ -772,6 +826,8 @@ teach the agent to ignore the list.
 - takes `click`, `submit` and `keydown` (Enter) in the capture phase on the
   document, so an element the agent added later works without wiring, and calls
   `preventDefault()` on what it sends;
+- cancels any other submit nobody handled, last, so a plain form does not
+  reload the page into itself ([forms](#forms));
 - applies patches and theme changes the app posts (§8.3, §8.4);
 - reports whether an editable element has focus, for the size rule (§5), and
   that the page is parsed and ready (§8.2);
