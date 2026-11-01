@@ -363,11 +363,12 @@ var canvasToolDefinitions = []toolDefinition{
 		Description: "Draw the whole canvas: the page that fills the user's screen in this session, replacing what was there.\n" +
 			"Free HTML, a full document or a fragment, at most 256KB: scripts, SVG and <canvas> run. Project files load by path (relative to the worktree root); other hosts are blocked until the user allows them, so prefer project files or inline code.\n" +
 			"Pockode adds only theme colours that follow light/dark — --pk-bg, --pk-bg-secondary, --pk-bg-tertiary, --pk-text, --pk-text-secondary, --pk-text-muted, --pk-border, --pk-accent, --pk-accent-text, --pk-accent-hover, --pk-success, --pk-error, --pk-warning, --pk-code-bg, --pk-code-text — and default styling of native inputs. Use the variables instead of fixed colours.\n" +
-			"How the page sends you something:\n" +
-			"  <button data-pk-send=\"approve\">Approve</button>\n" +
-			"  <form data-pk-send=\"create\"><input name=\"title\"><button>Create</button></form>   (fields with a name are sent)\n" +
+			"Make the page work by itself: tabs, filters, sorting, expanding and editing are its own scripts and never reach you. Send only what needs you — a decision that changes what you do next, or work only you can do:\n" +
+			"  <button data-pk-send=\"open\" name=\"id\" value=\"42\">…a card…</button>   (sends {id: \"42\"}; inside a form, also the form's named fields)\n" +
+			"  <form data-pk-send=\"rename\"><input type=\"hidden\" name=\"id\" value=\"42\"><input name=\"title\"><button>Save</button></form>   (fields with a name are sent)\n" +
 			"  <input data-pk-send=\"search\" name=\"q\">   (sends its value on Enter)\n" +
-			"  <script>pockode.send(\"pick\", {id: 3})</script>   (returns a promise; rejects with a reason when it cannot send)\n" +
+			"  <script>pockode.send(\"pick\", {ids: [3, 5]})</script>   (returns a promise; rejects with a reason when it cannot send)\n" +
+			"Prefer <button> for anything pressable — a card or a row can be one, unless it holds fields; a div or li with data-pk-send is made a button too.\n" +
 			"Each arrives as a message naming the action, its data and the canvas revision it was sent from.\n" +
 			"Mark parts you will change later in the markup itself: <ul data-pk-region=\"results\"></ul>, then change them with canvas_update. Region names are unique.\n" +
 			"The result gives the new revision, the size it was drawn for, and warnings. An error leaves the canvas unchanged and says how to fix it.",
@@ -381,7 +382,7 @@ var canvasToolDefinitions = []toolDefinition{
 	},
 	{
 		Name: canvas.UpdateTool,
-		Description: "Change parts of the canvas without redrawing it: what the user typed or scrolled elsewhere on the page stays.\n" +
+		Description: "Change parts of the canvas without redrawing it: what the user typed or scrolled, and what the page's scripts changed, elsewhere on the page stays. Scripts in the new HTML run.\n" +
 			"Each op targets a region, an element marked data-pk-region=\"name\": replace swaps its contents (the element stays), append adds to the end of its contents, remove deletes the element. Ops apply in order and all or nothing; a replace may create regions a later op uses.\n" +
 			"The whole resulting page is checked as canvas_render's is. The result gives the new revision, the size it was drawn for, and new warnings; an error leaves the canvas unchanged, lists the regions that exist when one is missing, and says how to fix it.",
 		InputSchema: inputSchema{

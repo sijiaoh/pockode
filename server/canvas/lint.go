@@ -16,10 +16,7 @@ import (
 // wherever a script the server cannot read may be doing the work, it stands
 // down.
 
-const (
-	msgEmpty = "The page is empty: pass the whole page to draw, or use canvas_update to change part of it."
-	sendFix  = "add a button with data-pk-send=\"action\", a form with data-pk-send, or call pockode.send(action, data) from a script."
-)
+const msgEmpty = "The page is empty: pass the whole page to draw, or use canvas_update to change part of it."
 
 func msgTooLarge(n int) string {
 	return fmt.Sprintf("The page is %d bytes, over the 256KB limit: move large data, images or libraries into project files and reference them by path.", n)
@@ -83,7 +80,6 @@ type page struct {
 	scripts     []string // inline script text, on* handlers and javascript: URLs
 	scriptSrc   bool
 	css         []string // <style> text and style attributes, comments removed
-	sends       int
 	emptySend   bool
 	emptyRegion bool
 	regions     map[string]int
@@ -91,7 +87,7 @@ type page struct {
 	sendErrors  []string
 	unnamed     map[*html.Node][]string // per form[data-pk-send], its unnamed fields
 	formOrder   []*html.Node
-	unsent      []string // fields no send can carry, for the warning
+	unsent      []string // fields no send carries, for the warning
 	files       []string
 	hosts       []string
 	widthAttrs  []float64
@@ -103,8 +99,8 @@ type page struct {
 }
 
 // lint checks doc, whose serialization is size bytes. width is the canvas
-// width drawn for, 0 when unknown; update picks the wording of an update.
-func lint(doc *html.Node, size, width int, update bool) (errs []string, warns []warning) {
+// width drawn for, 0 when unknown.
+func lint(doc *html.Node, size, width int) (errs []string, warns []warning) {
 	p := collect(doc)
 
 	if size > MaxDocumentBytes {
@@ -114,12 +110,6 @@ func lint(doc *html.Node, size, width int, update bool) (errs []string, warns []
 	// <head>.
 	if !p.bodyContent && len(p.scripts) == 0 && !p.scriptSrc {
 		errs = append(errs, msgEmpty)
-	} else if p.sends == 0 && !p.scriptSends() {
-		if update {
-			errs = append(errs, "After this update nothing on the page could send anything back — "+sendFix)
-		} else {
-			errs = append(errs, "Nothing on this page can send anything back: "+sendFix)
-		}
 	}
 	for _, form := range p.formOrder {
 		action, _ := attr(form, attrSend)
@@ -193,29 +183,23 @@ func lint(doc *html.Node, size, width int, update bool) (errs []string, warns []
 	if colours > 0 {
 		warns = append(warns, warning{kind: "colours", count: colours, text: fmt.Sprintf("%s not follow the user's light/dark theme. Use the --pk-* variables (for example color: var(--pk-text)).", plural(colours, "hard-coded colour: it will", "hard-coded colours: they will"))})
 	}
-	var unsent []string
-	if !p.scriptSends() {
-		unsent = p.unsent
-	}
-	unsent = append(unsent, p.files...)
-	if len(unsent) > 0 {
-		// Counted too: unnamed fields without an id all read "input".
-		warns = append(warns, warning{kind: "unsent", items: unsent, count: len(unsent), text: fmt.Sprintf("%s never be sent: %s. Put %s in a form with data-pk-send, or send %[3]s from a script with pockode.send.", plural(len(unsent), "field can", "fields can"), strings.Join(unsent, ", "), pronoun(len(unsent)))})
+	// Any script may read a field — to filter, sort or edit in place — and
+	// which one it reads cannot be told, so only a page without one is sure
+	// to leave a field doing nothing.
+	if len(p.scripts) == 0 && !p.scriptSrc {
+		if inert := slices.Concat(p.unsent, p.files); len(inert) > 0 {
+			var fix []string
+			if len(p.unsent) > 0 {
+				fix = append(fix, "To send a field, give it a name inside a form with data-pk-send; otherwise remove it.")
+			}
+			if len(p.files) > 0 {
+				fix = append(fix, "A file input is never sent: read the file from a script, or ask for a project path instead.")
+			}
+			// Counted too: unnamed fields without an id all read "input".
+			warns = append(warns, warning{kind: "inert", items: inert, count: len(inert), text: fmt.Sprintf("%s nothing: no send carries %s and no script reads %[2]s: %s. %s", plural(len(inert), "field does", "fields do"), pronoun(len(inert)), strings.Join(inert, ", "), strings.Join(fix, " "))})
+		}
 	}
 	return errs, warns
-}
-
-// scriptSends is whether a script may send: one that mentions pockode, or
-// one loaded from a file the server does not read.
-//
-// Any mention of pockode counts, not only the text pockode.send: a script may
-// reach it as pockode?.send or through const { send } = pockode, and an error
-// it cannot see the reason for would only confuse the agent. An inline module
-// importing another file is as unreadable as a script from one.
-func (p *page) scriptSends() bool {
-	return p.scriptSrc || slices.ContainsFunc(p.scripts, func(s string) bool {
-		return pockodeRef.MatchString(s) || scriptImport.MatchString(s)
-	})
 }
 
 func collect(doc *html.Node) *page {
@@ -260,7 +244,6 @@ func (p *page) element(n *html.Node) {
 		key := a.Key
 		switch {
 		case a.Namespace == "" && key == attrSend:
-			p.sends++
 			if a.Val == "" {
 				p.emptySend = true
 			}
@@ -544,10 +527,6 @@ var (
 	cssURLCall     = regexp.MustCompile(`(?i)\burl\(`)
 	cssConditional = regexp.MustCompile(`(?i)@(?:media|container)\b[^{;]*\{`)
 	cssImportRule  = regexp.MustCompile(`(?i)@import\b[^;]*;?`)
-	pockodeRef     = regexp.MustCompile(`\bpockode\b`)
-	// import "x", import(…), import {…}, import * as, import name: not a word
-	// that only starts with import.
-	scriptImport = regexp.MustCompile(`\bimport(?:\s*[("'{*]|\s+[\w$])`)
 	// The global function, not a method of the same name: obj.confirm(…).
 	dialogCall = regexp.MustCompile(`(?:^|[^\w.$]|\b(?:window|self|globalThis)\.)(?:alert|confirm|prompt)\s*\(`)
 )

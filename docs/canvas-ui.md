@@ -2,9 +2,12 @@
 
 A second way to talk to an agent. In an ordinary session the screen is a
 transcript and the user types. In a **canvas session** the screen is a page the
-agent draws, and the user answers by operating it: pressing its buttons, filling
-its forms, typing into its fields. The transcript is still there, one tap away,
-holding every detail; the canvas is what the user works in.
+agent draws, and the user works in it: a page that does things by itself —
+its tabs switch, its lists filter and sort, its rows expand and its fields edit
+in place — and that sends to the agent only what needs the agent. The things on
+the page are the controls: a card is pressed, a field sits next to what it is
+about. The transcript is still there, one tap away, holding every detail; the
+canvas is what the user works in.
 
 This document is the whole design: what the screen looks like, how the agent
 draws, how sizes are handled, how the user talks back, what the server checks,
@@ -113,6 +116,18 @@ call drew revision 8 at 14:02 is a fact, recorded on the call's result and kept
 as a snapshot forever. The frontend never finds the current page by looking for
 the last drawing in the transcript — that page of the transcript may not even be
 loaded.
+
+**The page works by itself; it sends only what needs the agent.** Whatever the
+page can do with its own scripts — switching a tab, filtering, sorting,
+expanding, editing — never goes back to the agent: a round trip there costs the
+user a whole turn, and the agent's attention, for something the page could have
+done at once. What the page sends is a decision that changes what the agent
+does next, or work only the agent can do, and it carries what it is about with
+it (§6.1). A page that sends nothing is a page too — one that only shows, or
+does everything itself — since the input under the canvas is always there for
+the user to type into (§2). So nothing requires a page to send (§7), and the
+agent is told to build the page this way, not as a report with buttons under it
+(§9).
 
 **Agent content is trusted.** The page sends what the agent wrote it to send.
 There are no anti-forgery tokens and no rate limits on sending: a page that
@@ -561,7 +576,14 @@ designed for without looking back for the last message.
 
 ### 6.1 In the page
 
-Three attributes and one function. All of them go through the bridge (§8).
+Most of what the user does in the page never reaches this section: the page's
+own scripts handle it, and the agent is not told (§1). What follows is the way
+the page sends something to the agent when it needs to — three attributes and
+one function, all through the bridge (§8). What a send is about travels with it
+by what the markup already has: a button's `name` and `value`
+(`<button data-pk-send="open" name="id" value="42">` sends `{"id":"42"}`),
+hidden inputs in the form, or the `data` of `pockode.send`. There is no
+attribute of its own for it.
 
 | Markup | Sends | When | Data |
 |---|---|---|---|
@@ -620,8 +642,8 @@ stops one sending by removing its `data-pk-send`.
 - **Form data** is the form's `FormData`: a field with a `name` is included; a
   name that occurs once is a string, a name that occurs more than once (checkboxes,
   a multiple select) an array of strings; file inputs are left out — a file is
-  not something a page can send (§7.2 warns about one). Unchecked checkboxes are
-  absent, as in any form.
+  not something a page can send (§7.2 warns about one on a page with no
+  script). Unchecked checkboxes are absent, as in any form.
 - **`<input data-pk-send>` is cleared** once the send is accepted, and keeps its
   text when it is refused, so a refused message is never lost — and when the
   user has typed on while it was being sent, so the new text is not lost either.
@@ -777,8 +799,9 @@ stored document read back — what every client and the next update will parse �
 not the tree before serialization, so the two cannot disagree. Fields inside a
 `<template>` are not checked: they are inert until a script clones them. They are deliberately simple. **An error is
 raised only when the check is sure**; where the page may do something the server
-cannot see — a script loaded from a file, code that builds its calls at run time
-— the error is not raised, and a warning is used where one helps.
+cannot see — a script loaded from a file, a script that draws the page or reads
+its fields at run time — the error is not raised, and a warning is used where
+one helps, or nothing is said at all.
 
 ### 7.1 Errors
 
@@ -786,7 +809,6 @@ cannot see — a script loaded from a file, code that builds its calls at run ti
 |---|---|
 | Empty: whitespace only, or a body with no element and no text, and no script anywhere (a script alone may draw the page, and a leading one is parsed into `<head>`) | `The page is empty: pass the whole page to draw, or use canvas_update to change part of it.` |
 | Over 256KB (the render's `html`, an op's `html` — prefixed `ops[<i>]: ` and refused before anything is parsed — or the document an update produces) | `The page is <n> bytes, over the 256KB limit: move large data, images or libraries into project files and reference them by path.` |
-| Nothing can send: no `data-pk-send` anywhere, the word `pockode` in no inline script, `on*` attribute or `javascript:` URL (any mention: `pockode?.send` and `const { send } = pockode` send too), and no script loaded from a file — a `<script src>`, an svg `<script href>`, or an inline script that `import`s — `import "x"`, `import(`, `import {`, not a word like `important` (a file may send, and is not read) | `Nothing on this page can send anything back: add a button with data-pk-send="action", a form with data-pk-send, or call pockode.send(action, data) from a script.` For an update: `After this update nothing on the page could send anything back — <the same fix>.` |
 | A `form[data-pk-send]` with a field (`input` other than `submit`/`button`/`reset`/`image`/`hidden`/`file`, `select`, `textarea`; inside the form or naming it with `form="id"`) that has no `name`, is not itself `data-pk-send`, has no `on*` handler of its own (a filter or a toggle the page acts on) and is not disabled (itself or by a `fieldset`) | `The form data-pk-send="<action>" has fields without a name, which are not sent: give each field a name attribute (for example <input name="title">). Unnamed: <tag#id or tag[type] list>.` |
 | `<input data-pk-send>` whose `type` cannot hold text: `checkbox`, `radio`, `file`, `hidden`, `range`, `color`, `date`, `datetime-local`, `month`, `time`, `week`, or a button type (`submit`, `button`, `reset`, `image` — a click on an input sends nothing, §6.1). An unknown `type` is a text input to the browser, so it passes | `<input type="<type>" data-pk-send="<action>"> cannot be sent with Enter: put it in a form with data-pk-send and a submit button, or use a text input.` |
 | `data-pk-send` on a `select` or `textarea` | `<<tag> data-pk-send="<action>"> cannot send by itself: put it in a form with data-pk-send and a submit button.` |
@@ -805,6 +827,12 @@ cannot see — a script loaded from a file, code that builds its calls at run ti
 All errors found are listed, not only the first: an agent fixing one at a time
 pays one call per problem.
 
+**A page that cannot send is not an error.** It once was, and agents answered
+it by inventing buttons to get past it — the report-with-buttons page §1 turns
+away from. A page that only shows something, or acts only through its own
+scripts, is a page the user can still answer by typing (§2), so there is
+nothing to refuse.
+
 ### 7.2 Warnings
 
 | Check | Message |
@@ -814,7 +842,17 @@ pays one call per problem.
 | `position: fixed` | `position: fixed may put content off screen on a small device, and the canvas scrolls: prefer normal flow.` |
 | A hard-coded `width`/`min-width` (CSS, or a `width` attribute) in `px` larger than the drawn width. Not inside `@media` or `@container` (it applies only where the query says it fits) nor in an `@import`'s media query, and not a `width` attribute on an element whose own `style` sets its width (a high-DPI `<canvas>`) | `Fixed widths wider than the canvas (<w>px): <values>. The user will have to scroll sideways; use max-width or percentages.` (Not checked when the size is unknown.) |
 | Colour literals (`#…`, `rgb(`, `hsl(`) in CSS declarations, outside `var()` fallbacks and `url()`s (a `data:` image's colours are its own) | `<n> hard-coded colours: they will not follow the user's light/dark theme. Use the --pk-* variables (for example color: var(--pk-text)).` With one, `1 hard-coded colour: it will not follow …`. |
-| A field (`input` other than a button type or `hidden`, `select`, `textarea`) that no send carries — its form (the one around it, or the one its `form="id"` names) is neither a `form[data-pk-send]` nor a form holding a `data-pk-send` button (§6.1), or it has no `name` in a form only a button sends — is not itself `data-pk-send` and has no `on*` handler of its own, while nothing can send from a script by the rule of the "Nothing can send" error (§7.1) | `<n> fields can never be sent: <list>. Put them in a form with data-pk-send, or send them from a script with pockode.send.` A file input is listed here too, wherever it is, unless it has a handler of its own. With one field, the singular: `1 field can never be sent: <field>. Put it … send it …`. |
+| On a page with **no script at all** — no inline `<script>`, no `on*` attribute, no `javascript:` URL, no `<script src>` and no svg `<script href>` — a field (`input` other than a button type or `hidden`, `select`, `textarea`) that no send carries: its form (the one around it, or the one its `form="id"` names) is neither a `form[data-pk-send]` nor a form holding a `data-pk-send` button (§6.1), or it has no `name` in a form only a button sends; and it is not itself `data-pk-send`. A file input is listed wherever it is, last | `<n> fields do nothing: no send carries them and no script reads them: <list>. To send a field, give it a name inside a form with data-pk-send; otherwise remove it.` With one field, the singular: `1 field does nothing: no send carries it and no script reads it: <field>. To send a field, …`. When file inputs are listed, `A file input is never sent: read the file from a script, or ask for a project path instead.` is added — and is the only fix sentence when every listed field is one. |
+
+**Why only a page with no script.** Any script may read any field — to filter
+a list, sort a table, edit in place, read a file with a `FileReader` — and the
+server cannot tell which fields a script reads. A field that no send carries is
+the page's own business the moment a script exists (§1), and warning about it
+would teach the agent that a local control is a mistake. On a page with no
+script, nothing sends or reads the field, so it really is one. The
+unnamed-field error of §7.1 stays even with scripts: a `form[data-pk-send]`
+exists to send its fields, so an unnamed one there is a mistake whatever else
+the page does.
 
 **An update reports only the warnings it introduced**: a kind of warning the
 previous revision did not have, or one that grew — a host, field or width it did
@@ -1019,21 +1057,37 @@ the tool descriptions, which the agent reads once it reaches for the tool.
 ### 9.2 The guidance
 
 ```
-This session is a Pockode canvas: the user's whole screen is a page you draw, and they answer by operating it.
+This session is a Pockode canvas: the user's whole screen is a page you draw. Make it work by itself, not a report with buttons under it.
 
-- Draw with canvas_render (the whole page) and canvas_update (replace, append or remove parts marked data-pk-region); load them through your tool search first if you only have their names. Their descriptions show how the page sends things back to you.
-- Draw every decision and input you need from the user into the canvas: choices as buttons, details as a form. Do not ask in your reply text. Never ask for passwords, tokens or API keys; tell the user which environment variable or file to set instead.
+- Draw with canvas_render (the whole page) and canvas_update (replace, append or remove parts marked data-pk-region); load them through your tool search first if you only have their names.
+- What the page can do itself never comes back to you: tabs, filters, sorting, expanding, editing are the page's own scripts. The things on the page are the controls: a card or a row is a <button> unless it holds fields (a div or li with data-pk-send acts as one too), a field sits next to what it is about.
+- Send only when you are needed: a decision that changes what you do next, or work only you can do. Carry what a send is about with it: a button's name and value, hidden inputs in a form, or pockode.send(action, data).
+- Draw what you need from the user into the page; do not ask in your reply text. Never ask for passwords, tokens or API keys; tell the user which environment variable or file to set instead.
 - Keep your reply text to short progress notes: the user sees only its latest line, beside the canvas. Never repeat what the canvas shows.
 - Every message from the user ends with the size of their canvas. Design for the latest one; the canvas scrolls, so use normal flow and avoid position: fixed and 100vh.
 - Do not draw permission confirmations: Pockode asks the user for permissions itself, outside your page.
-- A send fired when the page loads fires again every time the page is drawn again, on every device showing it, and starts a new turn each time: do it only on purpose.
-- Change the regions that changed with canvas_update rather than redrawing everything, so what the user typed elsewhere stays.
-- Minimal examples: <button data-pk-send="approve">Approve</button> · <form data-pk-send="create"><input name="title"><button>Create</button></form> · <input data-pk-send="search" name="q"> (Enter sends) · <script>pockode.send("pick", {id: 3})</script> · <ul data-pk-region="results"></ul>, changed later with canvas_update.
+- A send fired on page load fires again on every redraw, on every device showing it, each starting a turn: do it only on purpose.
+- Change the regions that changed with canvas_update rather than redrawing everything, so what the user typed and the page's scripts changed elsewhere stays.
+- Minimal examples: <button data-pk-send="open" name="id" value="42">Open</button> · <form data-pk-send="rename"><input type="hidden" name="id" value="42"><input name="title"><button>Save</button></form> · <input data-pk-send="search" name="q"> (Enter sends) · <ul data-pk-region="results"></ul>.
 ```
 
 The examples are here as well as in `canvas_render`'s description on purpose:
 this text is read before any tool is loaded, and an agent that has not seen the
-markup yet plans its first page without it.
+markup yet plans its first page without it. The button and the form carry what
+the send is about — an `id` in a button's `value` or a hidden input — because a
+send that says only "open" leaves the agent to guess which. `pockode.send` is
+named in the text but has no example of its own there, for the 2048-character
+limit; `canvas_render`'s description has one.
+
+The text leads with what the page should be, not with how it sends, because
+an earlier text led with sending ("they answer by operating it", "choices as
+buttons, details as a form") and agents built exactly that: a report with a
+row of buttons under it, every one a turn. It says what the page does by
+itself before it says when to send, and says nothing that would make a page
+send for its own sake (§1). "A card or a row is a `<button>` unless it holds
+fields" because a field inside a `<button>` is invalid markup; a card that holds
+a checkbox is a `div` with `data-pk-send` instead, which the bridge makes a
+button while the checkbox in it still toggles without sending (§6.1).
 
 ### 9.3 The tool descriptions
 
@@ -1043,11 +1097,12 @@ markup yet plans its first page without it.
 Draw the whole canvas: the page that fills the user's screen in this session, replacing what was there.
 Free HTML, a full document or a fragment, at most 256KB: scripts, SVG and <canvas> run. Project files load by path (relative to the worktree root); other hosts are blocked until the user allows them, so prefer project files or inline code.
 Pockode adds only theme colours that follow light/dark — --pk-bg, --pk-bg-secondary, --pk-bg-tertiary, --pk-text, --pk-text-secondary, --pk-text-muted, --pk-border, --pk-accent, --pk-accent-text, --pk-accent-hover, --pk-success, --pk-error, --pk-warning, --pk-code-bg, --pk-code-text — and default styling of native inputs. Use the variables instead of fixed colours.
-How the page sends you something:
-  <button data-pk-send="approve">Approve</button>
-  <form data-pk-send="create"><input name="title"><button>Create</button></form>   (fields with a name are sent)
+Make the page work by itself: tabs, filters, sorting, expanding and editing are its own scripts and never reach you. Send only what needs you — a decision that changes what you do next, or work only you can do:
+  <button data-pk-send="open" name="id" value="42">…a card…</button>   (sends {id: "42"}; inside a form, also the form's named fields)
+  <form data-pk-send="rename"><input type="hidden" name="id" value="42"><input name="title"><button>Save</button></form>   (fields with a name are sent)
   <input data-pk-send="search" name="q">   (sends its value on Enter)
-  <script>pockode.send("pick", {id: 3})</script>   (returns a promise; rejects with a reason when it cannot send)
+  <script>pockode.send("pick", {ids: [3, 5]})</script>   (returns a promise; rejects with a reason when it cannot send)
+Prefer <button> for anything pressable — a card or a row can be one, unless it holds fields; a div or li with data-pk-send is made a button too.
 Each arrives as a message naming the action, its data and the canvas revision it was sent from.
 Mark parts you will change later in the markup itself: <ul data-pk-region="results"></ul>, then change them with canvas_update. Region names are unique.
 The result gives the new revision, the size it was drawn for, and warnings. An error leaves the canvas unchanged and says how to fix it.
@@ -1056,7 +1111,7 @@ The result gives the new revision, the size it was drawn for, and warnings. An e
 `canvas_update`:
 
 ```
-Change parts of the canvas without redrawing it: what the user typed or scrolled elsewhere on the page stays.
+Change parts of the canvas without redrawing it: what the user typed or scrolled, and what the page's scripts changed, elsewhere on the page stays. Scripts in the new HTML run.
 Each op targets a region, an element marked data-pk-region="name": replace swaps its contents (the element stays), append adds to the end of its contents, remove deletes the element. Ops apply in order and all or nothing; a replace may create regions a later op uses.
 The whole resulting page is checked as canvas_render's is. The result gives the new revision, the size it was drawn for, and new warnings; an error leaves the canvas unchanged, lists the regions that exist when one is missing, and says how to fix it.
 ```
@@ -2053,6 +2108,12 @@ Exactly one of `anchor_seq` and `canvas_revision`; both or neither is
   unpressable buttons; scrolling keeps both (§5).
 - **Questions as cards over the canvas.** Two ways to ask, one inside the page
   and one over it, would compete; the canvas is how a canvas session asks (§3.4).
+- **Requiring every page to send** (a lint error, §7.1). Agents answered it by
+  adding buttons the page did not need; the input under the canvas already
+  lets the user answer any page (§1).
+- **An attribute of its own for what a send carries.** A button's
+  `name`/`value`, hidden inputs and `pockode.send`'s `data` already carry it
+  (§6.1); a fourth way would only be one more to learn.
 - **Anti-forgery tokens on sends.** The page is the agent's own output and can
   only ask to send what the agent could have asked for anyway (§1).
 - **An "Allow all" in the permission panel.** §10.1.

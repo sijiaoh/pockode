@@ -143,10 +143,10 @@ func TestCanvasCalls_RefusedCallsLeaveTheCanvas(t *testing.T) {
 			want:  "Canvas not changed (still revision 1):\n- There is no region \"resluts\". Regions on the page: results.",
 		},
 		{
-			name:  "render that cannot send anything",
+			name:  "render of an empty page",
 			first: true,
 			tool:  canvas.RenderTool,
-			args:  map[string]string{"html": "<p>hello</p>"},
+			args:  map[string]string{"html": "<!-- nothing -->"},
 			want:  "Canvas not changed (still revision 1):\n- ",
 		},
 	}

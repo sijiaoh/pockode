@@ -34,8 +34,8 @@ func TestCheckRender_Normalizes(t *testing.T) {
 func TestCheckRender_VoidElementListsEveryError(t *testing.T) {
 	_, err := CheckRender(`<svg><track><rect/></track></svg><p data-pk-region="a"></p><p data-pk-region="a"></p>`, 0)
 	got := problems(t, err)
-	if len(got) != 3 || !strings.HasPrefix(got[0], "<track> cannot hold anything") {
-		t.Errorf("problems = %q, want the <track> one, then nothing-can-send and the duplicate region", got)
+	if len(got) != 2 || !strings.HasPrefix(got[0], "<track> cannot hold anything") {
+		t.Errorf("problems = %q, want the <track> one, then the duplicate region", got)
 	}
 }
 
@@ -295,16 +295,9 @@ func TestApplyUpdate_Refusals(t *testing.T) {
 			want: []string{"<source> cannot hold anything, but the page puts content inside one: it has no closing tag, so put that content after it, or use another element."},
 		},
 		{
-			name: "the result is linted, with the update's wording",
+			name: "the result is linted",
 			ops:  []Op{{Op: OpReplace, Region: "rows", HTML: ptr(`<tr data-pk-region="results"></tr>`)}, {Op: OpReplace, Region: "log", HTML: ptr("")}},
 			want: []string{`Region "results" is used 2 times: region names must be unique — rename one, or remove the duplicate.`},
-		},
-		{
-			name: "an update that leaves nothing to send",
-			current: `<html><head></head><body><div data-pk-region="a"><button data-pk-send="go"></button></div>` +
-				`<p>text</p></body></html>`,
-			ops:  []Op{{Op: OpRemove, Region: "a"}},
-			want: []string{`After this update nothing on the page could send anything back — add a button with data-pk-send="action", a form with data-pk-send, or call pockode.send(action, data) from a script.`},
 		},
 		{
 			name:    "an update that leaves the page empty",
@@ -368,7 +361,7 @@ func TestApplyUpdate_ReportsOnlyNewWarnings(t *testing.T) {
 			// Unnamed fields without an id are all listed as "input".
 			name: "one more field like one already listed is",
 			html: `<input><input>`,
-			want: []string{"2 fields can never be sent: input, input. Put them in a form with data-pk-send, or send them from a script with pockode.send."},
+			want: []string{"2 fields do nothing: no send carries them and no script reads them: input, input. To send a field, give it a name inside a form with data-pk-send; otherwise remove it."},
 		},
 		{
 			name: "a new kind is",

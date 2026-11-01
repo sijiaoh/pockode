@@ -57,21 +57,23 @@ const renderingGuidance = "Showing the user something in Pockode:\n\n" +
 // The markup examples are here as well as in canvas_render's description on
 // purpose: this text is read before any tool is loaded, and an agent that has
 // not seen the markup plans its first page without it.
-const CanvasGuidance = "This session is a Pockode canvas: the user's whole screen is a page you draw, and they answer by operating it.\n\n" +
-	"- Draw with canvas_render (the whole page) and canvas_update (replace, append or remove parts marked data-pk-region); load them through your tool search first if you only have their names. " +
-	"Their descriptions show how the page sends things back to you.\n" +
-	"- Draw every decision and input you need from the user into the canvas: choices as buttons, details as a form. Do not ask in your reply text. " +
+const CanvasGuidance = "This session is a Pockode canvas: the user's whole screen is a page you draw. Make it work by itself, not a report with buttons under it.\n\n" +
+	"- Draw with canvas_render (the whole page) and canvas_update (replace, append or remove parts marked data-pk-region); load them through your tool search first if you only have their names.\n" +
+	"- What the page can do itself never comes back to you: tabs, filters, sorting, expanding, editing are the page's own scripts. " +
+	"The things on the page are the controls: a card or a row is a <button> unless it holds fields (a div or li with data-pk-send acts as one too), a field sits next to what it is about.\n" +
+	"- Send only when you are needed: a decision that changes what you do next, or work only you can do. " +
+	"Carry what a send is about with it: a button's name and value, hidden inputs in a form, or pockode.send(action, data).\n" +
+	"- Draw what you need from the user into the page; do not ask in your reply text. " +
 	"Never ask for passwords, tokens or API keys; tell the user which environment variable or file to set instead.\n" +
 	"- Keep your reply text to short progress notes: the user sees only its latest line, beside the canvas. Never repeat what the canvas shows.\n" +
 	"- Every message from the user ends with the size of their canvas. Design for the latest one; the canvas scrolls, so use normal flow and avoid position: fixed and 100vh.\n" +
 	"- Do not draw permission confirmations: Pockode asks the user for permissions itself, outside your page.\n" +
-	"- A send fired when the page loads fires again every time the page is drawn again, on every device showing it, and starts a new turn each time: do it only on purpose.\n" +
-	"- Change the regions that changed with canvas_update rather than redrawing everything, so what the user typed elsewhere stays.\n" +
-	"- Minimal examples: <button data-pk-send=\"approve\">Approve</button> · " +
-	"<form data-pk-send=\"create\"><input name=\"title\"><button>Create</button></form> · " +
+	"- A send fired on page load fires again on every redraw, on every device showing it, each starting a turn: do it only on purpose.\n" +
+	"- Change the regions that changed with canvas_update rather than redrawing everything, so what the user typed and the page's scripts changed elsewhere stays.\n" +
+	"- Minimal examples: <button data-pk-send=\"open\" name=\"id\" value=\"42\">Open</button> · " +
+	"<form data-pk-send=\"rename\"><input type=\"hidden\" name=\"id\" value=\"42\"><input name=\"title\"><button>Save</button></form> · " +
 	"<input data-pk-send=\"search\" name=\"q\"> (Enter sends) · " +
-	"<script>pockode.send(\"pick\", {id: 3})</script> · " +
-	"<ul data-pk-region=\"results\"></ul>, changed later with canvas_update."
+	"<ul data-pk-region=\"results\"></ul>."
 
 // GuidanceFor is the guidance a session gets: CanvasGuidance in a canvas
 // session, Guidance in any other.
