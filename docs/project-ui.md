@@ -909,7 +909,7 @@ menu, or Back leaving the page under a sheet.
 | `ConfirmDialog` | yes, as Cancel | Back on a question is "no" — Android's dialog convention |
 | The session sidebar *drawer* (below the expanded tier) | yes | Material's navigation drawer |
 | `ResponsivePanel`, both as the drawer and as the expanded tier's dropdown | yes | one component, one rule; see *Desktop* |
-| `InputBar`'s menu | yes | an open popup menu is a layer on every platform |
+| `InputBar`'s `+` menu and command palette | yes | an open popup menu is a layer on every platform; Back on the palette keeps the draft |
 | The expanded tier's sidebar *column* | no | part of the page, not drawn over it; it counts as no layer |
 | The chat's answer panel | no | raised by the agent and part of the chat surface, not something the user opened ([answering-ui.md](answering-ui.md#3-the-answer-panel)); it counts as no layer. Closing it by Back would hide a question that is still waiting |
 | Pages over the chat — Stories, work detail, Settings, the Git workspace, every route overlay | no — they are pages | §5.1 governs them: they have URLs, Back retraces them |

@@ -1217,7 +1217,7 @@ them:
 | the Git History search field | the field, and it calls `stopPropagation` | clears the search and closes its row — or, mid-composition, only cancels the composition ([git-history-ui.md](git-history-ui.md#entering-them)) |
 | `ResponsivePanel` — the header's session panel, the worktree and session-filter dropdowns | `document`, and it calls `preventDefault` | closes itself and **marks the press handled**; while open, at every width, it counts itself as covering the page |
 | `Sidebar` — the session drawer, below the expanded tier | `document`, and it calls `preventDefault` | closes itself and **marks the press handled**; while open as a drawer, it counts itself as covering the page |
-| `InputBar`'s command palette | the textarea, and it calls `preventDefault` | closes the palette; the press never gets past it unmarked |
+| `InputBar`'s command palette | `document`, and it calls `preventDefault` | closes itself — wherever focus is, not only from the textarea — and **marks the press handled**, unless it is already `defaultPrevented` or cancels a composition; while open, it counts itself as covering the page |
 | `InputBar`'s `+` menu | `document`, and it calls `preventDefault` | closes itself and **marks the press handled**; while open, it counts itself as covering the page |
 | the Git review's selection bar | `document`, and it calls `preventDefault` | clears the line selection — standing down while anything counts itself as covering the page, or the press is already `defaultPrevented` ([git-changes-ui.md](git-changes-ui.md#how-it-goes-away)) |
 | the answer panel | **`window`** | closes, unless the press is already `defaultPrevented` |
@@ -1273,7 +1273,8 @@ not wait to be told — it **asks whether the page is covered** before it acts:
   with `useCoverPage` — so the fork sheet, a Git sheet, a sheet raised from
   anywhere in the app is counted by having been written as one. The surfaces
   that only mark the press — `ResponsivePanel` (the header's session panel is
-  one), the composer's `+` menu and the session drawer — take no shared lock (`ResponsivePanel` locks the body by hand, and
+  one), the composer's `+` menu and command palette, and the session drawer —
+  take no shared lock (`ResponsivePanel` locks the body by hand, and
   only below the expanded tier; its migration is deferred in
   [cluster-ui.md](cluster-ui.md)), so each joins the count with a
   `useCoverPage(isOpen, { onBack })` of its own. They have to: each re-adds its listener
@@ -1326,9 +1327,7 @@ the frame's document, never the app's, so none of the listeners above hears it.
 A surface with no backdrop stays open, and the press goes on into the agent's
 page. The live canvas deals with this by laying a shield over its frame while
 any layer is up, so the press lands in the app's document instead
-([canvas-ui.md](canvas-ui.md#under-a-layer)). The command palette is not a
-layer, so it raises no shield, and a press on the canvas with it open still
-reaches the page. `HtmlFrame`, the `html_render`
+([canvas-ui.md](canvas-ui.md#under-a-layer)). `HtmlFrame`, the `html_render`
 card in the transcript, has no shield yet: a press on one with any surface in the table
 open still goes to the page and leaves the surface open.
 
@@ -1712,7 +1711,7 @@ silent, and this design simply never enters it.
 | `web/src/components/Chat/AnswerPanel.tsx` | the panel, its blocks, the footer (§3); a card centred in the transcript's rectangle over a backdrop that covers that rectangle alone, capped at 85% of it — all of it, with the header folded into a slimmer footer, when told `chromeCollapsed` — sizing itself without measuring anything; keeps the focused text field and a line either side of it in its body's view (§3); owns Escape and the backdrop press on `window` (§4); reports whether focus is inside it and decides nothing about the screen around it (§3); steps aside — `invisible` + `inert`, still mounted — when told it has `yielded` (§3); reports whether a submit is in flight, for the one way out of it that is not its own (§2) |
 | `web/src/components/ui/ResponsivePanel.tsx` | marks its Escape handled, and claims the click it dismisses on, so the answer panel underneath it does not close on the same press; counts itself as covering the page while open, so the chat's interrupt stands down (§4) |
 | `web/src/components/Layout/Sidebar.tsx` | the same Escape line, for the same reason: it opens from the session header, which the backdrop leaves lit, so it can be the thing on top of the panel. The same cover line too, only while it is a drawer. It needs no click line: it draws a backdrop of its own outside `ChatPanel` (§4) |
-| `web/src/components/Chat/InputBar.tsx` | claims the click its command palette and `+` menu dismiss on — both hang over the composer with no backdrop, at every width (§4) |
+| `web/src/components/Chat/InputBar.tsx` | claims the click its command palette and `+` menu dismiss on — both hang over the composer with no backdrop, at every width — and the Escape each closes on, on `document`; both count themselves as covering the page while open (§4) |
 | `packages/shared/src/hooks/useOutsideClick.ts` | hands the caller the event beside the target, which is what lets a caller claim the gesture at all (§4) |
 | `web/src/components/Chat/QuestionForm.tsx` | extracted from `AskUserQuestionItem.tsx`; the one renderer of a question, across every host that draws one — including the third shape, a textarea for a question with no options — and of the note beside an answer, editable or read-only (§3) |
 | `web/src/components/Chat/ChoiceInput.tsx` | new — the drawn radio and checkbox for options, Other and Won't answer, in three tones (§3) |

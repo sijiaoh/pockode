@@ -1,8 +1,10 @@
 import {
+	LayerHistoryContext,
 	useCoverPage,
 	useHasCoarsePointer,
 	useIsPageCovered,
 } from "@pockode/shared";
+import { createMemoryHistory } from "@tanstack/react-router";
 import {
 	act,
 	fireEvent,
@@ -18,6 +20,7 @@ import {
 	uploadChatAttachment,
 } from "../../lib/chatAttachments";
 import { inputActions, useInputStore } from "../../lib/inputStore";
+import { layerHistoryFor } from "../../lib/layerHistory";
 import {
 	resetChatUIConfig,
 	type SendOutcome,
@@ -645,6 +648,88 @@ describe("InputBar", () => {
 
 			expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
 			expect(textarea).toHaveValue("/he");
+		});
+
+		// A layer like the `+` menu: what raises the canvas's shield, and what
+		// keeps the chat's Escape-to-interrupt off the press that closes it.
+		it("covers the page while it is open", async () => {
+			function CoverProbe() {
+				return <output>{useIsPageCovered() ? "covered" : "clear"}</output>;
+			}
+			render(
+				<>
+					<InputBar sessionId={TEST_SESSION_ID} onSend={sendAccepted} />
+					<CoverProbe />
+				</>,
+			);
+			const textarea = screen.getByRole("textbox");
+			const probe = screen.getByRole("status");
+			expect(probe).toHaveTextContent("clear");
+
+			fireEvent.change(textarea, { target: { value: "/he" } });
+			expect(probe).toHaveTextContent("covered");
+
+			fireEvent.change(textarea, { target: { value: "/help " } });
+			expect(probe).toHaveTextContent("clear");
+
+			fireEvent.change(textarea, { target: { value: "/" } });
+			expect(probe).toHaveTextContent("covered");
+			fireEvent.keyDown(textarea, { key: "Escape" });
+			expect(probe).toHaveTextContent("clear");
+			await commandsLoaded();
+		});
+
+		it("closes on Back, keeping the draft and the page", async () => {
+			const history = createMemoryHistory({ initialEntries: ["/a", "/b"] });
+			render(
+				<LayerHistoryContext value={layerHistoryFor(history)}>
+					<InputBar sessionId={TEST_SESSION_ID} onSend={sendAccepted} />
+				</LayerHistoryContext>,
+			);
+			const textarea = screen.getByRole("textbox");
+			fireEvent.change(textarea, { target: { value: "/he" } });
+			await waitFor(() => expect(history.location.state.__TSR_index).toBe(2));
+
+			act(() => history.back());
+
+			expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+			expect(textarea).toHaveValue("/he");
+			expect(history.location.pathname).toBe("/b");
+			await commandsLoaded();
+		});
+
+		// Tab past a list that matched nothing leaves focus on Send; the chat's
+		// interrupt stands down under a layer, so the key is the palette's.
+		it("claims Escape from wherever focus is", async () => {
+			render(<InputBar sessionId={TEST_SESSION_ID} onSend={sendAccepted} />);
+			const textarea = screen.getByRole("textbox");
+			fireEvent.change(textarea, { target: { value: "/he" } });
+			screen.getByRole("button", { name: "Send" }).focus();
+
+			const press = new KeyboardEvent("keydown", {
+				key: "Escape",
+				bubbles: true,
+				cancelable: true,
+			});
+			act(() => {
+				document.dispatchEvent(press);
+			});
+
+			expect(press.defaultPrevented).toBe(true);
+			expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+			expect(textarea).toHaveFocus();
+			await commandsLoaded();
+		});
+
+		it("leaves an Escape that cancels a composition alone", async () => {
+			render(<InputBar sessionId={TEST_SESSION_ID} onSend={sendAccepted} />);
+			const textarea = screen.getByRole("textbox");
+			fireEvent.change(textarea, { target: { value: "/he" } });
+
+			fireEvent.keyDown(textarea, { key: "Escape", isComposing: true });
+
+			expect(screen.getByRole("listbox")).toBeInTheDocument();
+			await commandsLoaded();
 		});
 
 		// The palette hangs over the composer with no backdrop of its own, so the
