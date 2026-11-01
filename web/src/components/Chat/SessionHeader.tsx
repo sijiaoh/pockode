@@ -72,8 +72,8 @@ interface Props {
 	onEffortChange: (effort: string) => Promise<void>;
 	onModeChange: (mode: SessionMode) => Promise<void>;
 	/**
-	 * A canvas session's **Canvas | Chat** switch, drawn after the title
-	 * (docs/canvas-ui.md §2). Absent on an ordinary session.
+	 * A canvas session's **Chat view** toggle, drawn after the title
+	 * (docs/canvas-ui.md §2.1). Absent on an ordinary session.
 	 */
 	viewSwitch?: ReactNode;
 	/**

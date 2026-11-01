@@ -83,7 +83,7 @@ exist.
 | `web/src/lib/canvasSize.ts` | The size rule (§5): a measurement in whole pixels (`canvasSizeOf`), which measurement is kept (`keepsMeasurement`), and what counts as editable in the app (`isEditableElement`) |
 | `web/src/components/Canvas/CanvasComposer.tsx` | The collapsed input (§2), which opens into the ordinary composer (`CanvasComposer`), with a control of the host's leading it (`leading`), and the bars under the canvas floating over it while it is open (`ComposerDock`), saying how far they cover it (`onCover`, §5); its Stop is the composer's own (`StopButton` in `Chat/SendStopSlot.tsx`); the float tested in real engines by `CanvasComposer.browser.test.tsx` |
 | `web/src/components/Canvas/CanvasHistoryButton.tsx` | The history view's entry from canvas view, leading the collapsed input (§15.1) |
-| `web/src/components/Canvas/CanvasViewSwitch.tsx`, `web/src/components/Chat/SessionHeader.tsx` | The header's **Canvas \| Chat** switch, drawn after the session's title (`viewSwitch`); the session panel's **Canvas** section and its **History** row (`canvasHistory`, §15.1) |
+| `web/src/components/Canvas/CanvasViewSwitch.tsx`, `web/src/components/Chat/SessionHeader.tsx` | The header's view switch — the **Chat view** toggle (§2.1), drawn after the session's title (`viewSwitch`); the session panel's **Canvas** section and its **History** row (`canvasHistory`, §15.1) |
 | `web/src/components/Chat/ChatPanel.tsx` | The canvas screen's place in the session screen: which view is up, both kept mounted, the canvas wired to `useChatMessages`' `sendCanvasAction`, the input in canvas view and the History button leading it; which revision the history view is open on, over either view (§15.1), and the view and the fork sheet replacing one another, Cancel reopening the view (§15.6); what it hands the canvas for §10 and §11 (§10.1's list), and what the floating composer covers of it (§5) |
 | `web/src/components/Canvas/PermissionPanel.tsx`, `web/src/components/Canvas/PermissionBanner.tsx`, `web/src/components/Canvas/usePermissionBatch.ts` | The panel (§10.1); the banner, the expiry line and the refused-send flash (`PermissionBanner`, `PermissionExpiryLine`, `RefusalFlash`); the batch, open-or-collapsed, waiting behind another layer and the refused-send sentence (`usePermissionBatch`, §10.2, §10.3), held by `CanvasView`, which draws them in its column and registers the panel as a layer |
 | `web/src/components/Chat/PermissionRequestItem.tsx` | The permission card (`PermissionRequestItem`, with its `armKey` and `endingTurn` for the panel), `PERMISSION_EXPIRY_COPY` and the batch's sentence (`permissionExpiryText`), and the card of a blocker with no record (`UnreadablePermissionItem`) — moved out of `MessageItem.tsx` so the chat, the panel and the expiry line use the same ones (§10.1) |
@@ -145,7 +145,7 @@ engine-specific except where guidance is delivered (§9).
 
 ```
 ┌──────────────────────────────────────────────┐
-│ ←  Release checklist        [Canvas│Chat]  ⋯ │  session header
+│ ☰  Release checklist ⌄            [💬]    ⚙ │  session header; 💬 = the Chat view toggle
 ├──────────────────────────────────────────────┤
 │ 🔒 2 permission requests waiting     [Show] │  permission banner — only when collapsed or waiting (§10)
 ├──────────────────────────────────────────────┤
@@ -165,19 +165,20 @@ engine-specific except where guidance is delivered (§9).
 └──────────────────────────────────────────────┘
 ```
 
-- **The header** is the session header every chat has, with a **Canvas | Chat**
-  segmented control. Which view is up is the device's own UI state — not session
-  state, not in the URL's history: the session screen holds it, so switching
-  touches no history entry at all, and Back leaves the session as it does from
-  either view. A canvas session opens on Canvas, every time it is opened. **The
-  canvas frame stays mounted while chat view is up** — hidden, not unmounted —
-  so switching views neither loses what the user did in the page nor runs its
-  scripts again; so does the transcript while canvas view is up, keeping the
-  reader's place. Both stay mounted under a page drawn over the session (a file,
-  the work list) too. The session list's row says a session is a canvas one
-  before its detail arrives, so the screen does not open on chat and flip. A
-  session read out of another worktree (read-only) is shown as chat only: its
-  canvas is not pushed to this client.
+- **The header** is the session header every chat has, with one control added
+  after the title: the **Chat view** toggle (§2.1). Which view is up is the
+  device's own UI state — not session state, not in the URL's history: the
+  session screen holds it, so switching touches no history entry at all, and
+  Back leaves the session as it does from either view. A canvas session opens
+  on Canvas, every time it is opened. **The canvas frame stays mounted while
+  chat view is up** — hidden, not unmounted — so switching views neither loses
+  what the user did in the page nor runs its scripts again; so does the
+  transcript while canvas view is up, keeping the reader's place. Both stay
+  mounted under a page drawn over the session (a file, the work list) too. The
+  session list's row says a session is a canvas one before its detail arrives,
+  so the screen does not open on chat and flip. A session read out of another
+  worktree (read-only) is shown as chat only: its canvas is not pushed to this
+  client.
 - **The canvas** takes every pixel the bars leave. It is the page frame of §4.
 - **The activity strip** is one line saying what the agent is doing or last
   said (§11).
@@ -250,6 +251,74 @@ its centre: `Nothing drawn yet`, or `The agent is drawing…` while the session'
 turn is running (`turn.phase` is `running`). Never a spinner of its own:
 liveness is the strip's. Before the subscription has said anything about the
 canvas, the area is blank.
+
+### 2.1 The view switch
+
+One header icon button, at every width: **Chat view**, a toggle that is
+pressed while chat view is up and not pressed while canvas view is. Canvas is
+the view a canvas session opens on and the one the user works in; the
+transcript is the detour, "one tap away" — so the control is named for the
+detour, and pressing it is going there and back.
+
+- **Box and glyph.** `headerIconButtonClass` — the 44px box of the menu, Back,
+  the port preview and the settings beside it, on every pointer — with
+  `MessageSquare` at `size-5`, the glyph the header already uses for the chat
+  (`Back to chat` over a page). The glyph never changes: a glyph that swapped
+  with the view would leave the user to guess whether it names where they are
+  or where it goes.
+- **Not pressed (canvas view up)** is the header's resting icon button,
+  `text-th-text-muted`, and its hover — nothing to tell it apart from the
+  settings beside it, which is right: canvas view is the session's ordinary
+  state.
+- **Pressed (chat view up)** fills the box `bg-th-bg-tertiary` and colours the
+  glyph `text-th-accent` (`aria-pressed:` variants), and keeps both on hover:
+  Tailwind emits `aria-*` variants after `hover:`, at the same specificity, so
+  the accent outlasts the class's own `hover:text-th-text-primary`
+  (`CanvasViewSwitch.browser.test.tsx` holds it). The fill alone would not do:
+  it is every header button's hover, so on a mouse "on" and "pointed at" would
+  look alike. The accent glyph is the difference — in the header's own weight,
+  not `ToggleIconButton`'s solid accent box, which is for a bottom bar's
+  settings and would be the loudest thing on the row for as long as the user
+  reads the transcript.
+- **Name and state.** `aria-label="Chat view"` and `aria-pressed`, the name
+  fixed whichever view is up: a screen reader hears `Chat view, toggle button,
+  pressed` in the transcript and `not pressed` over the canvas, which says the
+  view that is up and what one press does. Not `ToggleIconButton`'s name that
+  swings with the state: next to `aria-pressed` it would contradict itself
+  (`Show canvas, pressed`). `title="Chat view"` too, for a mouse: the row
+  carries no word for the view, and the tooltip is where a pointer that can
+  hover finds one. Not a `group`, and no second button: there is one control.
+- **One press, either way.** A press goes to the other view; Enter and Space
+  do the same. The button stays where it was — the header does not change when
+  the view does — and so does focus, with the one exception every chat has:
+  under a fine pointer chat view's composer takes the caret as it comes up
+  (`InputBar`'s focus on open), so the user going to the transcript can type
+  at once. Nothing else about switching changes: no history entry, Back leaves
+  the session from either view, the composer collapses and keeps its draft
+  (§2), and the places that switch views for the user — **Open in chat**
+  (§11.3), **Go to canvas** (§15.4) — set the same state the toggle reads, so
+  it is pressed or not by the view, not by who switched it.
+- **Where.** After the title, inside the session's heading (`SessionHeader`'s
+  `viewSwitch`), 8px off the title box and off the cluster at the header's end
+  — the gap the header keeps between any two targets. It is the session's
+  control, so it goes with the title; the end cluster (connection, port
+  preview, settings) is the app's. Absent on an ordinary session, on a
+  session read out of another worktree (chat only), and under a page drawn
+  over the session, whose own heading replaces the session's.
+- **What it buys a phone.** At 360px on a coarse pointer the segmented
+  control it replaced (§14) took about 132px of the row with its gaps; the
+  toggle and its gap take 52. The title box goes from about 109px to about
+  189 — from some ten characters to some twenty — and, with the port
+  preview's button in the header too, from about 57 to about 137.
+  (Arithmetic from the classes, not a measurement.) The title stays the
+  session's identity: it is still the one thing on the row that grows, and the
+  only one that gives way.
+- **The same at every width.** The header changes no control's shape by width
+  — every button on it is an icon in the same box from a phone to a desktop —
+  and a switch that turned into a different control at `lg:` would be two
+  things to specify, test and learn, for a user who picks up the phone after
+  the desktop. A desktop has the room for words; it loses only them, and the
+  tooltip gives them back.
 
 ---
 
@@ -2293,6 +2362,15 @@ Exactly one of `anchor_seq` and `canvas_revision`; both or neither is
   input share (§2), take Back from a page that is not a layer, and make the
   page the user works in sometimes not the current one. A sheet over the screen
   has all of Back and the cover for free (§15.2).
+- **A Canvas | Chat segmented control in the header.** It was the switch, and
+  its two worded segments took about 132px of a 360px header, leaving the
+  title some ten characters — a few with the port preview's button. Two icon
+  segments would still take about 100px for what one button says (§2.1);
+  keeping the words at `lg:` only would give one switch two shapes.
+- **A glyph that names the other view** (a page icon in chat view, a chat icon
+  in canvas view). One press either way, but the control would no longer say
+  which view is up, and nobody can tell from a single glyph whether it means
+  "here" or "there" (§2.1).
 - **Thumbnails of every page.** Each would be a whole page with its scripts in
   a frame of its own, scaled down — the scaling §5 refuses, multiplied by the
   list. The list names revisions and times; the page is one press away (§15.3).
@@ -2367,10 +2445,11 @@ reads.
   Users went to chat and hunted for a row's **Show**. The input line is canvas
   view's own bar, drawn by the app outside the page and always there, so the
   button costs the canvas area nothing. Elsewhere it would: in the header it
-  would cut a phone's title, already truncated beside the switch and the gear,
-  to a few characters; floating over the canvas it would cover what the agent
-  drew; in the activity strip it would be a second target in a line that is
-  one tap (§11.3), and the strip speaks for the agent, not the canvas.
+  would take another 52px from a phone's title, the width the view switch was
+  made a single button to give back (§2.1); floating over the canvas it would
+  cover what the agent drew; in the activity strip it would be a second target
+  in a line that is one tap (§11.3), and the strip speaks for the agent, not
+  the canvas.
 - **Show** opens the view rather than switching to canvas view. The user was
   reading the transcript; a page they look at and put away should put them
   back in it, and the live canvas is not the place to show an old revision —
