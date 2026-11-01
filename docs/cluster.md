@@ -430,9 +430,10 @@ alternatives that were rejected on the way to it, are in
   them.
 - **The cluster version** is a button in the header. It is marked when the
   executable installed on the host is a different version, and gets a dot when
-  a newer latest release is out (none for an alpha). It opens the
-  **Pockode cluster** sheet, which shows both versions, offers the newer
-  releases with **Update**, and restarts the cluster manager (nodes keep
+  a check has found a newer latest release (none for an alpha). It opens the
+  **Pockode cluster** sheet, which shows both versions, checks GitHub for newer
+  releases only when the user asks it to, offers what it
+  finds with **Update**, and restarts the cluster manager (nodes keep
   running). The panel reloads itself when a reconnect finds the cluster running
   another version than the page was built for. The screens and their copy are
   [restart-ui.md](restart-ui.md#web-cluster-the-header) and

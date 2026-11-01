@@ -138,14 +138,17 @@ export function ClusterUpdates({
 	if (!checksForUpdates(running, state)) return null;
 
 	const check = updateCheckOf(state);
+	// One button with three labels: Check for updates, Check again, Try again.
+	// "Checking..." follows the user's press only, never a connect or
+	// visibility read.
 	const checkAgain = (label: string) => (
 		<button
 			type="button"
 			onClick={() => state.refresh(true)}
-			disabled={state.pending || busy}
+			disabled={state.forcing || busy}
 			className={TEXT_BUTTON}
 		>
-			{state.pending ? "Checking..." : label}
+			{state.forcing ? "Checking..." : label}
 		</button>
 	);
 
@@ -157,11 +160,9 @@ export function ClusterUpdates({
 			</p>
 		);
 	}
-	if (check === null || (!check.checked_at && !check.check_error)) {
-		return (
-			<p className="text-xs text-th-text-muted">Checking for updates...</p>
-		);
-	}
+	// Before the first read lands there is nothing to say: no request to
+	// GitHub is out to say "Checking" about.
+	if (check === null) return null;
 
 	const cannot = check.cannot_install
 		? cannotInstallCopy(check.cannot_install)
@@ -173,6 +174,15 @@ export function ClusterUpdates({
 	let checkLine: React.ReactNode;
 	if (check.installing) {
 		checkLine = "Another Pockode on this machine is installing a new version.";
+	} else if (!check.checked_at && !check.check_error) {
+		// The server answers unforced reads from what it last found, and it has
+		// found nothing since it started: neither up to date nor checking.
+		checkLine = (
+			<>
+				Not checked since the cluster started ·{" "}
+				{checkAgain("Check for updates")}
+			</>
+		);
 	} else if (check.check_error) {
 		checkLine = (
 			<>

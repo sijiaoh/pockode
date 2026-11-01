@@ -10,19 +10,11 @@ import (
 )
 
 const (
-	// checkInterval is how long a successful answer is trusted. Releases come
-	// days apart, so an hour costs nothing in freshness, and it keeps even a
-	// dozen pockode processes behind one address well inside GitHub's 60
-	// unauthenticated API requests an hour.
-	checkInterval = time.Hour
-	// retryInterval is the wait after a failed check: shorter than
-	// checkInterval because most failures (no network yet, a timeout) clear up
-	// on their own, long enough that a client polling an offline server does
-	// not turn into a request per poll.
-	retryInterval = 5 * time.Minute
-	// recheckInterval is the least time between two checks Recheck starts:
-	// a user pressing "Check again" repeatedly, or from several devices, must
-	// not spend the address's 60 API requests an hour.
+	// recheckInterval is the least time between two checks: a user pressing
+	// "Check again" repeatedly, or from several devices, must not spend the
+	// address's 60 unauthenticated GitHub API requests an hour. Several
+	// pockode processes behind one address share that budget too, which holds
+	// because none of them checks unless a user asks it to.
 	recheckInterval = time.Minute
 	// fetchTimeout bounds one check. The check runs detached from whichever
 	// caller started it, so this is the only thing that ends a stuck one.
@@ -49,17 +41,19 @@ type Status struct {
 	// Empty when there is none, or no check has succeeded.
 	Latest string
 	// CheckedAt is when Candidates was last confirmed; zero until a check has
-	// succeeded. Zero with no Err means the first check has not finished yet,
-	// which is not the same as there being nothing to update to.
+	// succeeded. Zero with no Err means this process has not checked yet —
+	// nobody has asked it to, or the first check has not finished — which is
+	// not the same as there being nothing to update to.
 	CheckedAt time.Time
 	// Err is why the most recent check failed, or ErrDevBuild.
 	Err error
 }
 
-// Checker answers Status, asking its Source at most once per checkInterval
-// however many clients ask it. It checks lazily — only when asked, and only
-// when the last answer is stale — so a server nobody opens costs GitHub
-// nothing.
+// Checker answers Status from what this process last learned, and asks its
+// Source only when a user asks it to look (Recheck), at most once per
+// recheckInterval however many clients ask. It never looks on its own: a
+// server nobody checks costs GitHub nothing, and opening a client is not
+// asking to check.
 type Checker struct {
 	current      string
 	isRelease    bool
@@ -72,7 +66,6 @@ type Checker struct {
 	releases  []Release
 	checkedAt time.Time
 	lastErr   error
-	nextCheck time.Time
 	lastStart time.Time
 	inflight  chan struct{} // closed when the running check finishes
 }
@@ -91,17 +84,17 @@ func NewChecker(log *slog.Logger, currentVersion string, source Source) *Checker
 	}
 }
 
-// Status returns the current answer, first refreshing it if it is stale. A
-// refresh already under way is joined rather than repeated. If ctx ends before
-// the refresh does, the answer as it stood is returned and the refresh carries
-// on for the next caller.
+// Status returns the answer as this process knows it, never starting a check.
+// A check already under way is joined, so that a caller arriving during
+// another's Recheck gets its answer. If ctx ends first, the answer as it stood
+// is returned and the check carries on.
 func (c *Checker) Status(ctx context.Context) Status {
 	return c.status(ctx, false)
 }
 
-// Recheck is Status for a user asking to look now: the cached answer counts as
-// stale, unless a check started less than recheckInterval ago, whose answer is
-// returned instead.
+// Recheck is Status for a user asking to look now: it starts a check, unless
+// one started less than recheckInterval ago, whose answer is returned (joined
+// if it is still running) instead.
 func (c *Checker) Recheck(ctx context.Context) Status {
 	return c.status(ctx, true)
 }
@@ -110,7 +103,7 @@ func (c *Checker) status(ctx context.Context, force bool) Status {
 	if !c.isRelease {
 		return Status{Err: ErrDevBuild}
 	}
-	if done := c.startCheckIfDue(force); done != nil {
+	if done := c.running(force); done != nil {
 		select {
 		case <-done:
 		case <-ctx.Done():
@@ -119,12 +112,13 @@ func (c *Checker) status(ctx context.Context, force bool) Status {
 	return c.snapshot()
 }
 
-func (c *Checker) startCheckIfDue(force bool) <-chan struct{} {
+// running returns the check under way, if any, first starting one when start
+// is set and no check has started within recheckInterval.
+func (c *Checker) running(start bool) <-chan struct{} {
 	c.stateMu.Lock()
 	defer c.stateMu.Unlock()
 	now := c.now()
-	due := !now.Before(c.nextCheck) || (force && !now.Before(c.lastStart.Add(recheckInterval)))
-	if c.inflight == nil && due {
+	if start && c.inflight == nil && !now.Before(c.lastStart.Add(recheckInterval)) {
 		c.lastStart = now
 		c.inflight = make(chan struct{})
 		go c.check(c.inflight)
@@ -141,18 +135,14 @@ func (c *Checker) check(done chan struct{}) {
 	defer c.stateMu.Unlock()
 	defer close(done)
 	c.inflight = nil
-	now := c.now()
 	if err == nil {
 		c.releases = releases
-		c.checkedAt = now
+		c.checkedAt = c.now()
 		c.lastErr = nil
-		c.nextCheck = now.Add(checkInterval)
 		return
 	}
 	c.lastErr = err
-	c.nextCheck = now.Add(retryInterval)
-	c.log.Warn("checking for new pockode releases failed",
-		"error", err, "nextAttempt", c.nextCheck.Format(time.RFC3339))
+	c.log.Warn("checking for new pockode releases failed", "error", err)
 }
 
 func (c *Checker) snapshot() Status {

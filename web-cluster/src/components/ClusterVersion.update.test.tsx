@@ -46,6 +46,19 @@ function check(fields: Partial<ServerUpdateCheck> = {}): ServerUpdateCheck {
 	};
 }
 
+/** What the server says before anyone has pressed since it started. */
+function notChecked(fields: Partial<ServerUpdateCheck> = {}) {
+	return check({ checked_at: undefined, candidates: [], ...fields });
+}
+
+function deferred<T>() {
+	let resolve!: (value: T) => void;
+	const promise = new Promise<T>((r) => {
+		resolve = r;
+	});
+	return { promise, resolve };
+}
+
 function updateFailed(reason: string, message: string) {
 	return Object.assign(new Error(message), { code: -32012, data: { reason } });
 }
@@ -321,6 +334,138 @@ describe("the sheet's candidates", () => {
 		expect(
 			within(sheet).queryByRole("button", { name: /^Update to/ }),
 		).not.toBeInTheDocument();
+	});
+});
+
+describe("not checked yet", () => {
+	it("says so and offers the check, which looks past the cache", async () => {
+		actions.serverUpdateCheck.mockResolvedValue(notChecked());
+		render(<Harness />);
+		const { user, sheet } = await openSheet();
+
+		expect(
+			await within(sheet).findByText(/Not checked since the cluster started/),
+		).toBeInTheDocument();
+		expect(within(sheet).queryByText(/Up to date/)).not.toBeInTheDocument();
+		expect(within(sheet).queryByText(/Checking/)).not.toBeInTheDocument();
+		expect(
+			screen.queryByRole("button", { name: /^Update to/ }),
+		).not.toBeInTheDocument();
+
+		const answer = deferred<ServerUpdateCheck>();
+		actions.serverUpdateCheck.mockReturnValue(answer.promise);
+		await user.click(
+			within(sheet).getByRole("button", { name: "Check for updates" }),
+		);
+		expect(actions.serverUpdateCheck).toHaveBeenLastCalledWith(true);
+		expect(
+			within(sheet).getByRole("button", { name: "Checking..." }),
+		).toBeDisabled();
+		expect(
+			within(sheet).getByText(/Not checked since the cluster started/),
+		).toBeInTheDocument();
+
+		await act(async () => answer.resolve(check({ candidates: [] })));
+		expect(
+			within(sheet).getByText(/Up to date · checked 3 min ago/),
+		).toBeInTheDocument();
+		expect(
+			within(sheet).getByRole("button", { name: "Check again" }),
+		).toBeEnabled();
+	});
+
+	// Those reads ask the server's memory, not GitHub.
+	it("does not say Checking for a connect or visibility read", async () => {
+		const first = deferred<ServerUpdateCheck>();
+		actions.serverUpdateCheck.mockReturnValue(first.promise);
+		render(<Harness />);
+		const { sheet } = await openSheet();
+
+		await act(async () => {});
+		expect(within(sheet).queryByText(/[Cc]heck/)).not.toBeInTheDocument();
+		await act(async () => first.resolve(notChecked()));
+		await within(sheet).findByRole("button", { name: "Check for updates" });
+
+		actions.serverUpdateCheck.mockReturnValue(
+			deferred<ServerUpdateCheck>().promise,
+		);
+		act(() => {
+			document.dispatchEvent(new Event("visibilitychange"));
+		});
+		expect(actions.serverUpdateCheck).toHaveBeenLastCalledWith(false);
+		expect(
+			within(sheet).getByRole("button", { name: "Check for updates" }),
+		).toBeEnabled();
+	});
+
+	// The server holds that read for the running check, so its answer is the
+	// check's.
+	it("keeps Checking through a read started meanwhile, until that settles", async () => {
+		actions.serverUpdateCheck.mockResolvedValue(notChecked());
+		render(<Harness />);
+		const { user, sheet } = await openSheet();
+		const press = await within(sheet).findByRole("button", {
+			name: "Check for updates",
+		});
+
+		const forced = deferred<ServerUpdateCheck>();
+		const unforced = deferred<ServerUpdateCheck>();
+		actions.serverUpdateCheck
+			.mockReturnValueOnce(forced.promise)
+			.mockReturnValueOnce(unforced.promise);
+		await user.click(press);
+		act(() => {
+			document.dispatchEvent(new Event("visibilitychange"));
+		});
+
+		await act(async () => forced.resolve(check({ candidates: [] })));
+		expect(
+			within(sheet).getByRole("button", { name: "Checking..." }),
+		).toBeDisabled();
+
+		await act(async () => unforced.resolve(check()));
+		expect(
+			within(sheet).getByRole("button", { name: "Update to 0.25.0 (latest)" }),
+		).toBeInTheDocument();
+		expect(within(sheet).getByText(/Checked 3 min ago/)).toBeInTheDocument();
+		expect(
+			within(sheet).getByRole("button", { name: "Check again" }),
+		).toBeEnabled();
+	});
+
+	it("ends Checking when the socket drops, without a message", async () => {
+		actions.serverUpdateCheck.mockResolvedValue(notChecked());
+		render(<Harness />);
+		const { user, sheet } = await openSheet();
+		const press = await within(sheet).findByRole("button", {
+			name: "Check for updates",
+		});
+
+		actions.serverUpdateCheck.mockImplementationOnce(async () => {
+			wsState.status = "reconnecting";
+			throw new Error("Connection lost");
+		});
+		await user.click(press);
+
+		expect(
+			within(sheet).getByRole("button", { name: "Check for updates" }),
+		).toBeEnabled();
+		expect(
+			within(sheet).queryByText(/Connection lost/),
+		).not.toBeInTheDocument();
+	});
+
+	it("is outranked by an install running elsewhere", async () => {
+		actions.serverUpdateCheck.mockResolvedValue(notChecked({ installing: {} }));
+		render(<Harness />);
+		const { sheet } = await openSheet();
+
+		expect(
+			await within(sheet).findByText(
+				"Another Pockode on this machine is installing a new version.",
+			),
+		).toBeInTheDocument();
+		expect(within(sheet).queryByText(/Not checked/)).not.toBeInTheDocument();
 	});
 });
 
