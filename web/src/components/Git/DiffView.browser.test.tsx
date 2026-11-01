@@ -19,14 +19,14 @@ vi.mock("@pockode/shared", async (importOriginal) => ({
 vi.mock("@tanstack/react-router", () => ({
 	useNavigate: () => () => {},
 	useRouter: () => ({
-		history: {
-			location: { state: {} },
-			back: () => {},
-			subscribe: () => () => {},
-		},
 		buildLocation: () => ({ pathname: "" }),
 		latestLocation: { pathname: "" },
 	}),
+}));
+// The way up is not what this file measures: DiffView.test.tsx checks that the
+// review asks for it, useGoToParent.test.tsx where it lands.
+vi.mock("../../hooks/useGoToParent", () => ({
+	useGoToParent: () => () => {},
 }));
 vi.mock("../../hooks/useRouteState", () => ({
 	useRouteState: () => ({ worktree: "", sessionId: null }),

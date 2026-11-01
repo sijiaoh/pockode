@@ -383,6 +383,13 @@ renders, not at the test: a module that many pages import should not pull in
 what only one caller needs (worked example:
 the scroll-restoration split in
 [frontend-state.md](code/frontend-state.md#why-a-pages-scroll-position-outlives-the-page)).
+When that import belongs where it is, and the file renders the importing module
+without measuring it, mock the importing module at its own path. Do not copy the
+new name into the old mock: the next import breaks it again. Spreading
+`importOriginal` into it does not help either when the mocked module's real code
+imports from something else the file mocks: it then fails to link on a
+different name. `web/src/components/Git/DiffView.browser.test.tsx` mocks
+`useGoToParent` for this reason.
 
 **A local-only red: Vite reloading mid-run.** With a warm Vite cache
 (`web/node_modules/.vite`), a dependency imported for the first time is only
