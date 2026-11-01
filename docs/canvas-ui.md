@@ -69,7 +69,7 @@ exist.
 | `web/src/lib/rpc/chat.ts` | `chat.canvas_action` (`sendCanvasAction`) and `chat.message`'s `canvas_size`; `chat.canvas_history` / `chat.canvas_snapshot` (`canvasHistory`, `canvasSnapshot`) |
 | `web/src/lib/rpc/session.ts`, `web/src/lib/sessionCreate.ts`, `web/src/hooks/useSession.ts`, `web/src/components/AppShell.tsx`, `web/src/components/Session/SessionsTab.tsx`, `web/src/components/Session/SessionItem.tsx` | Creating a canvas session (§13.1): `session.create`'s option (`SessionCreateParams`), one create in flight per kind, the retry of a failed create with its own params (`createErrorParams`, retried by `AppShell`); the **Canvas** button beside **New Chat**; a canvas row's glyph. Also `session.fork`'s `canvas_revision` (`forkSessionAtCanvasRevision`, §13.6) |
 | `web/src/utils/forkAnchor.ts`, `web/src/utils/discardedMessage.ts`, `web/src/utils/sendAgain.ts` | A canvas action never becoming a draft (§6.2) |
-| `web/src/lib/canvasBridge.ts` | The script injected into the page (`canvasBridgeScript`), the base stylesheet (`canvasBaseStylesheet`, `canvasBaseCss`, the variables' tokens `CANVAS_THEME_TOKENS` and `canvasThemeFrom`), and the messages of the bridge (`CanvasPageMessage`, `CanvasAppMessage`, `readCanvasPageMessage`, `SEND_REFUSAL_MESSAGES`, and `readonly`'s two wordings, `READONLY_REFUSAL_MESSAGES` by `CanvasReadOnly`); tested in real engines by `canvasBridge.browser.test.ts` |
+| `web/src/lib/canvasBridge.ts` | The script injected into the page (`canvasBridgeScript`), the base stylesheet (`canvasBaseStylesheet`, `canvasBaseCss`, the variables' tokens `CANVAS_THEME_TOKENS` and `canvasThemeFrom`), and the messages of the bridge (`CanvasPageMessage`, `CanvasAppMessage`, `readCanvasPageMessage`, `SEND_REFUSAL_MESSAGES`, and `readonly`'s two wordings, `READONLY_REFUSAL_MESSAGES` by `CanvasReadOnly`); tested in real engines by `canvasBridge.browser.test.ts`, and the variables against `canvas_render`'s list and the app's tokens by `web/tests/canvasThemeVars.test.ts` |
 | `web/src/lib/messageReducer.ts`, `web/src/lib/toolSummary.ts`, `web/src/lib/subagentRun.ts`, `web/src/lib/toolRun.ts`, `web/src/lib/toolGroups.ts`, `web/src/components/Chat/ToolRow.tsx` | Chat view's canvas rows (§12): `canvas_revision` read off the result record onto the run (`messageReducer`), the rows' wording by outcome (`toolSummary`, and a subagent's latest-child line through `subagentRun`), a refusal's second line (`toolRun`), never folding them (`toolGroups`), and `rev N` as their meta (`ToolMeta`) |
 | `web/src/components/Chat/ToolCallItem.tsx`, `web/src/components/Chat/canvasShowContext.ts` | A canvas row's **Show** in its body (§12, §15.1), through `CanvasShowContext`, which `ChatPanel` provides only for a canvas session it can read |
 | `web/src/components/Chat/CanvasActionBubble.tsx`, `web/src/lib/messagePreview.ts` | A canvas action's bubble in chat view (§12), chosen in `MessageItem`; a canvas action quoted by its name |
@@ -335,6 +335,7 @@ chosen, and change live when the user switches theme (§8.4):
 | `--pk-border` | `--th-border` | lines, field borders |
 | `--pk-accent` | `--th-accent` | the primary action, links, focus |
 | `--pk-accent-text` | `--th-accent-text` | text on `--pk-accent` |
+| `--pk-accent-hover` | `--th-accent-hover` | the primary action under a hovering pointer |
 | `--pk-success` | `--th-success` | |
 | `--pk-error` | `--th-error` | |
 | `--pk-warning` | `--th-warning` | |
@@ -343,7 +344,10 @@ chosen, and change live when the user switches theme (§8.4):
 
 The names are the contract with the agent; what each maps to is the app's. A
 theme token added to the app is not automatically a `--pk-*` variable — every
-one is a promise to every page ever drawn.
+one is a promise to every page ever drawn. The agent reads the names in
+`canvas_render`'s description (§9.3), a second copy of `CANVAS_THEME_TOKENS`:
+`web/tests/canvasThemeVars.test.ts` keeps the two the same list, and fails when
+a token they map to is not defined in `web/src/index.css`.
 
 The **base stylesheet** is placed before the agent's markup, in a cascade layer
 of its own (`@layer pockode-base`), and written entirely inside `:where()`, so
@@ -365,7 +369,30 @@ its rules in layers wins too — and zero specificity settles the rest:
   accent through `accent-color` on `:root`. A submitting button inside a
   `form[data-pk-send]` (not `type="button"` or `reset`, which send nothing), and
   any `[data-pk-send]` button, takes the accent fill.
+- What a press acts on looks pressable: buttons, `input` of type `button`,
+  `submit` or `reset`, and any other element that sends (§6.1) get a pointer
+  cursor and Pockode's own colour transition (`color`, `background-color`,
+  `border-color`, 150ms) — none under `prefers-reduced-motion: reduce`.
+- Under a hovering pointer a pressable takes the hover fill of Pockode's own
+  buttons: `--pk-bg-tertiary`, and on the accent-filled primary
+  `--pk-accent-hover` for background and border alike. Only the colour changes —
+  no brightness filter, no scale, no pressed state. The hover is gated on
+  `(hover: hover) and (pointer: fine)`, the app's `pointer-fine:`
+  ([responsive-ui.md](responsive-ui.md)), because on a touch screen a tap
+  leaves `:hover` stuck on the button until the next tap elsewhere. A disabled
+  control takes no hover fill; it excludes them by `:not(:disabled)` rather than
+  `:enabled`, which matches nothing that cannot be disabled — every element
+  that sends but is not a button among them.
+- An element that sends but is not a button — a card, a list row — gets the
+  pointer, the plain hover fill and the focus ring, and never the accent fill:
+  a card painted in the primary's colour would not be the agent's card any
+  more. It gets no box, no padding and no 44px floor either; its look is the
+  agent's.
 - Disabled controls are dimmed.
+
+Order matters inside the layer, since every rule weighs the same: the accent
+comes after the plain fill, the hover fills after the accent, and the dimming
+last, so a disabled control keeps its `not-allowed` cursor.
 
 Unlike an `html_render` page, which is a white sheet of paper whatever the theme,
 the canvas *is* the screen: it follows the theme, because a white page filling a
@@ -538,7 +565,7 @@ Three attributes and one function. All of them go through the bridge (§8).
 
 | Markup | Sends | When | Data |
 |---|---|---|---|
-| `<button data-pk-send="approve">` — any element but a `form`, `input`, `select` or `textarea` | `approve` | on click on it or anything inside it (`closest("[data-pk-send]")`) but a field or `label` — a checkbox in a card that sends still toggles | inside a form: every named field of that form; plus, when the element has a `name`, `{ [name]: value }` (`value` being its `value` attribute, `""` without one) |
+| `<button data-pk-send="approve">` — any element but a `form`, `input`, `select` or `textarea`; one that is not natively a control, a `div` or an `li`, is made a button (below) | `approve` | on click on it or anything inside it (`closest("[data-pk-send]")`) but a field or `label` — a checkbox in a card that sends still toggles; on one made a button, also Enter or Space on it | inside a form: every named field of that form; plus, when the element has a `name`, `{ [name]: value }` (`value` being its `value` attribute, `""` without one) |
 | `<form data-pk-send="create">` | `create` | on submit (a submit button in it, or Enter in a text field — also where the form has no submit button, or its first one carries a `data-pk-send` of its own or sits inside one, which the browser's click on it would send instead; a disabled first button submits nothing, as in any form) | every named field of the form, and the submitter's `name`/`value` |
 | `<input data-pk-send="search" name="q">` | `search` | on Enter | `{ q: <value> }`, or `{ value: <value> }` when it has no `name` |
 | `pockode.send(action, data)` | `action` | when called | `data`, any JSON value; `{}` when omitted |
@@ -558,6 +585,37 @@ Precedence, so one press never sends twice:
 - `select` and `textarea` take no `data-pk-send` of their own (a lint error,
   §7.1): a select's change and a textarea's Enter are not a send anyone means.
   Put them in a form.
+
+**An element that sends but is not a button is made one.** A `<button>` is the
+markup to reach for, but an agent writes a sending card or list row as a `div`
+or `li` as often, and that is a thing a mouse can press and a keyboard can
+neither reach nor press. The bridge follows the
+[WAI-ARIA button pattern](https://www.w3.org/WAI/ARIA/apg/patterns/button/)
+for every element with a non-empty `data-pk-send` that is not a `button`,
+`input`, `select`, `textarea`, `form`, `a[href]` or `summary` — those the
+browser already makes reachable and operable, or they send by a gesture of
+their own:
+
+- it gets `role="button"` when it has no `role` attribute, and `tabindex="0"`
+  when it has no `tabindex`. A role or tab stop the agent set is the agent's
+  and is never touched;
+- **Enter** on it presses on keydown, once for a held key; **Space** presses on
+  release, only when the key goes up on the same element and focus never left
+  it in between, and does not scroll the page. A press is `click()`, as on a
+  native button (a dispatched `click` event on an SVG element, which has no
+  `click()`): the page's own click handlers see it, and the click sends what
+  a pointer's would — a form's fields included;
+- the keys count on the element itself, not on a field inside it, so a checkbox
+  in a sending card still toggles on Space and sends nothing; a key the page's
+  own handler `preventDefault`ed, a key while composing, and one in
+  `contenteditable` are left alone;
+- it holds for what is added or changed later — by a patch or by the page's
+  scripts. When an element stops sending (its `data-pk-send` removed or
+  emptied, or an `<a>` given an `href`), the bridge takes back what it added,
+  and only where the value is still the one it set.
+
+Such an element has no disabled state: `aria-disabled` is not read. A page
+stops one sending by removing its `data-pk-send`.
 
 - **Form data** is the form's `FormData`: a field with a `name` is included; a
   name that occurs once is a string, a name that occurs more than once (checkboxes,
@@ -777,6 +835,15 @@ teach the agent to ignore the list.
 - takes `click`, `submit` and `keydown` (Enter) in the capture phase on the
   document, so an element the agent added later works without wiring, and calls
   `preventDefault()` on what it sends;
+- makes a button of every element that sends but is not one (§6.1): a
+  `MutationObserver` on the document, started before the agent's markup is
+  parsed, watches insertions and `data-pk-send` / `href` changes, and a sweep
+  when the document is ready catches what was parsed before it. The `role` and
+  `tabindex` it adds are real attributes of the live DOM, which the page's own
+  scripts see, and they never reach the server — the app never reads the page's
+  DOM back. Its Enter and Space are taken on the document in the *bubble*
+  phase, unlike the sends above, so a page handler that took the key first
+  keeps it;
 - applies patches and theme changes the app posts (§8.3, §8.4);
 - reports whether an editable element has focus, for the size rule (§5), and
   that the page is parsed and ready (§8.2);
@@ -975,7 +1042,7 @@ markup yet plans its first page without it.
 ```
 Draw the whole canvas: the page that fills the user's screen in this session, replacing what was there.
 Free HTML, a full document or a fragment, at most 256KB: scripts, SVG and <canvas> run. Project files load by path (relative to the worktree root); other hosts are blocked until the user allows them, so prefer project files or inline code.
-Pockode adds only theme colours that follow light/dark — --pk-bg, --pk-bg-secondary, --pk-bg-tertiary, --pk-text, --pk-text-secondary, --pk-text-muted, --pk-border, --pk-accent, --pk-accent-text, --pk-success, --pk-error, --pk-warning, --pk-code-bg, --pk-code-text — and default styling of native inputs. Use the variables instead of fixed colours.
+Pockode adds only theme colours that follow light/dark — --pk-bg, --pk-bg-secondary, --pk-bg-tertiary, --pk-text, --pk-text-secondary, --pk-text-muted, --pk-border, --pk-accent, --pk-accent-text, --pk-accent-hover, --pk-success, --pk-error, --pk-warning, --pk-code-bg, --pk-code-text — and default styling of native inputs. Use the variables instead of fixed colours.
 How the page sends you something:
   <button data-pk-send="approve">Approve</button>
   <form data-pk-send="create"><input name="title"><button>Create</button></form>   (fields with a name are sent)

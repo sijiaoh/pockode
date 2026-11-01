@@ -1,3 +1,4 @@
+import { MEDIA_QUERIES } from "@pockode/shared";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { userEvent } from "vitest/browser";
 import {
@@ -360,6 +361,206 @@ describe("data-pk-send", () => {
 	});
 });
 
+describe("a sending element that is not a button", () => {
+	/** Draws, then lets the bridge's mutation observer see what was drawn. */
+	async function drawn(html: string) {
+		draw(html);
+		await Promise.resolve();
+	}
+
+	function key(target: Element, type: "keydown" | "keyup", init = {}) {
+		const event = new KeyboardEvent(type, {
+			bubbles: true,
+			cancelable: true,
+			...init,
+		});
+		target.dispatchEvent(event);
+		return event;
+	}
+
+	it("is a button with a tab stop, where the page set neither itself", async () => {
+		await drawn(`<li data-pk-send="a">A</li>
+			<div data-pk-send="b" role="option" tabindex="-1">B</div>
+			<div data-pk-send="">empty</div>
+			<button data-pk-send="c">C</button>
+			<a href="#x" data-pk-send="d">D</a>
+			<form data-pk-send="e"><input data-pk-send="f"></form>`);
+		const li = el("li");
+		expect(li.getAttribute("role")).toBe("button");
+		expect(li.getAttribute("tabindex")).toBe("0");
+		const own = el("[role=option]");
+		expect(own.getAttribute("tabindex")).toBe("-1");
+		for (const untouched of document.querySelectorAll(
+			'[data-pk-send=""],button,a,form,input',
+		)) {
+			expect(untouched.hasAttribute("role")).toBe(false);
+			expect(untouched.hasAttribute("tabindex")).toBe(false);
+		}
+		await userEvent.tab();
+		expect(document.activeElement).toBe(li);
+	});
+
+	it("sends by Enter on press and by Space on release, as a click would", async () => {
+		await drawn(
+			'<form><input name="q" value="x"><div data-pk-send="open" name="id">Card</div></form>',
+		);
+		const card = el<HTMLElement>("[data-pk-send]");
+		const clicked = vi.fn();
+		card.addEventListener("click", clicked);
+		card.focus();
+		await userEvent.keyboard("{Enter}");
+		expect((await nextSend()).action).toBe("open");
+
+		const down = key(card, "keydown", { key: " " });
+		expect(down.defaultPrevented).toBe(true);
+		await settle();
+		expect(sends()).toEqual([]);
+		key(card, "keyup", { key: " " });
+		const send = await nextSend();
+		expect(send).toMatchObject({ action: "open", data: { q: "x" } });
+		expect(clicked).toHaveBeenCalledTimes(2);
+
+		await userEvent.keyboard(" ");
+		expect((await nextSend()).action).toBe("open");
+	});
+
+	it("sends nothing for a held key's repeats, a Space released elsewhere, or a key the page took", async () => {
+		await drawn(`<div data-pk-send="open">Card</div><input name="q">`);
+		const card = el<HTMLElement>("[data-pk-send]");
+		card.focus();
+		expect(key(card, "keydown", { key: "Enter", repeat: true })).toMatchObject({
+			defaultPrevented: true,
+		});
+		key(card, "keydown", { key: " " });
+		key(card, "keydown", { key: " ", repeat: true });
+		el<HTMLInputElement>("input").focus();
+		key(el("input"), "keyup", { key: " " });
+		key(card, "keyup", { key: " " });
+
+		card.focus();
+		const took = (e: Event) => e.preventDefault();
+		card.addEventListener("keydown", took);
+		key(card, "keydown", { key: "Enter" });
+		card.removeEventListener("keydown", took);
+		await settle();
+		expect(sends()).toEqual([]);
+	});
+
+	it("leaves the keys of a field inside it to the field", async () => {
+		await drawn(
+			'<div data-pk-send="open"><input type="checkbox" name="done"></div>',
+		);
+		const box = el<HTMLInputElement>("input");
+		box.focus();
+		await userEvent.keyboard(" ");
+		expect(box.checked).toBe(true);
+		await settle();
+		expect(sends()).toEqual([]);
+	});
+
+	// An SVG element has no click() of its own, and a chart's bars are a
+	// likely thing for an agent to make press.
+	it("presses an SVG element too", async () => {
+		await drawn(
+			'<svg><rect data-pk-send="bar" width="10" height="10"></rect></svg>',
+		);
+		const bar = el<SVGRectElement>("rect");
+		expect(bar.getAttribute("role")).toBe("button");
+		bar.focus();
+		await userEvent.keyboard("{Enter}");
+		expect((await nextSend()).action).toBe("bar");
+		await userEvent.keyboard(" ");
+		expect((await nextSend()).action).toBe("bar");
+	});
+
+	it("follows what is added or changed later, and gives back only what it gave", async () => {
+		await drawn(
+			'<div id="a">A</div><div id="b" role="tab">B</div><div id="c" tabindex="0">C</div>',
+		);
+		const [a, b, c] = [el("#a"), el("#b"), el("#c")];
+		for (const pressable of [a, b, c]) {
+			pressable.setAttribute("data-pk-send", "x");
+		}
+		await Promise.resolve();
+		expect(a.getAttribute("role")).toBe("button");
+		expect(b.getAttribute("role")).toBe("tab");
+		expect(b.getAttribute("tabindex")).toBe("0");
+		expect(c.getAttribute("role")).toBe("button");
+		for (const pressable of [a, b, c]) {
+			pressable.removeAttribute("data-pk-send");
+		}
+		await Promise.resolve();
+		expect(a.hasAttribute("role")).toBe(false);
+		expect(a.hasAttribute("tabindex")).toBe(false);
+		expect(b.getAttribute("role")).toBe("tab");
+		expect(b.hasAttribute("tabindex")).toBe(false);
+		expect(c.hasAttribute("role")).toBe(false);
+		expect(c.getAttribute("tabindex")).toBe("0");
+
+		await drawn('<div data-pk-region="r"></div>');
+		received = [];
+		toPage({
+			type: "pockode:canvas-patch",
+			from_revision: 1,
+			revision: 2,
+			ops: [
+				{
+					op: "replace",
+					region: "r",
+					html: '<p><span data-pk-send="z">Z</span></p>',
+				},
+			],
+		});
+		await vi.waitFor(() =>
+			expect(el("span").getAttribute("role")).toBe("button"),
+		);
+		expect(el("span").getAttribute("tabindex")).toBe("0");
+	});
+
+	it("looks like a plain button: a pointer, the plain hover fill, a focus ring", async () => {
+		await drawn(`<div data-pk-send="a" role="option" tabindex="-1">A</div>
+			<div data-pk-send="b" class="mine">B</div>
+			<style>.mine{background:rgb(9, 9, 9)}</style>`);
+		toPage({
+			type: "pockode:canvas-theme",
+			scheme: "light",
+			vars: {
+				"--pk-bg-tertiary": "rgb(8, 8, 8)",
+				"--pk-accent": "rgb(1, 1, 1)",
+			},
+		});
+		const [card, mine] = document.querySelectorAll("div[data-pk-send]");
+		await vi.waitFor(() =>
+			expect(
+				getComputedStyle(document.documentElement)
+					.getPropertyValue("--pk-bg-tertiary")
+					.trim(),
+			).toBe("rgb(8, 8, 8)"),
+		);
+		// A role of the page's own: the app's stylesheet, loaded here too,
+		// gives every [role=button] a pointer by itself.
+		expect(getComputedStyle(card).cursor).toBe("pointer");
+		await userEvent.hover(card);
+		await vi.waitFor(() =>
+			expect(getComputedStyle(card).backgroundColor).toBe("rgb(8, 8, 8)"),
+		);
+		await userEvent.hover(mine);
+		await settle();
+		expect(getComputedStyle(mine).backgroundColor).toBe("rgb(9, 9, 9)");
+		await userEvent.unhover(mine);
+		// At rest it keeps the agent's (here none), never the accent fill.
+		await vi.waitFor(() =>
+			expect(getComputedStyle(card).backgroundColor).toBe("rgba(0, 0, 0, 0)"),
+		);
+
+		await userEvent.tab();
+		expect(document.activeElement).toBe(mine);
+		expect(mine.matches(":focus-visible")).toBe(true);
+		expect(getComputedStyle(mine).outlineStyle).toBe("solid");
+		expect(getComputedStyle(mine).outlineColor).toBe("rgb(1, 1, 1)");
+	});
+});
+
 describe("patches", () => {
 	async function patched(ops: unknown[], revision = 2) {
 		received = [];
@@ -548,6 +749,35 @@ describe("patches", () => {
 	});
 });
 
+/** The base stylesheet's style rules, each with the media query it is under. */
+function baseRules() {
+	const sheet = el<HTMLStyleElement>("style[data-pockode-canvas-base]").sheet;
+	if (!sheet) throw new Error("no base stylesheet");
+	const rules: { rule: CSSStyleRule; media: string | null }[] = [];
+	function walk(list: CSSRuleList, media: string | null) {
+		for (const rule of Array.from(list)) {
+			if (rule instanceof CSSStyleRule) rules.push({ rule, media });
+			else if (rule instanceof CSSMediaRule)
+				walk(rule.cssRules, rule.conditionText);
+			else if (rule instanceof CSSGroupingRule) walk(rule.cssRules, media);
+		}
+	}
+	walk(sheet.cssRules, null);
+	return rules;
+}
+
+/** Whether the `:where(` a selector opens with is the one it closes with. */
+function isWhollyWhere(selector: string) {
+	if (!selector.startsWith(":where(")) return false;
+	let depth = 0;
+	for (let i = ":where".length; i < selector.length; i++) {
+		if (selector[i] === "(") depth++;
+		else if (selector[i] === ")" && --depth === 0)
+			return i === selector.length - 1;
+	}
+	return false;
+}
+
 describe("the page's state", () => {
 	it("rewrites the base stylesheet for a theme, which the agent's own rules still win over", async () => {
 		const dark: CanvasTheme = {
@@ -596,6 +826,117 @@ describe("the page's state", () => {
 		);
 		expect(getComputedStyle(b).backgroundColor).toBe("rgb(9, 9, 9)");
 		expect(getComputedStyle(cancel).backgroundColor).toBe("rgb(7, 7, 7)");
+	});
+
+	it("makes a press look pressable: a pointer, and the app's own hover fills", async () => {
+		// The hover fills are gated on a hovering pointer, which these
+		// engines have; without it the hovers below would prove nothing.
+		expect(matchMedia(MEDIA_QUERIES.finePointer).matches).toBe(true);
+		draw(`<button>Plain</button>
+			<button data-pk-send="go">Go</button>
+			<form data-pk-send="f"><input type="submit" value="Save"><input type="reset"></form>
+			<input type="button" value="Off" disabled>
+			<input name="q">`);
+		toPage({
+			type: "pockode:canvas-theme",
+			scheme: "light",
+			vars: {
+				"--pk-bg-secondary": "rgb(7, 7, 7)",
+				"--pk-bg-tertiary": "rgb(8, 8, 8)",
+				"--pk-accent": "rgb(1, 1, 1)",
+				"--pk-accent-hover": "rgb(2, 2, 2)",
+			},
+		});
+		const [plain, go] = document.querySelectorAll("button");
+		const off = el<HTMLInputElement>("input[disabled]");
+		const submit = el<HTMLInputElement>("input[type=submit]");
+		const reset = el<HTMLInputElement>("input[type=reset]");
+		// Not waited for on a pressable: the pointer is wherever the last test
+		// left it, which may be over one of these.
+		await vi.waitFor(() =>
+			expect(
+				getComputedStyle(document.documentElement)
+					.getPropertyValue("--pk-accent-hover")
+					.trim(),
+			).toBe("rgb(2, 2, 2)"),
+		);
+		// The app's stylesheet, loaded here too, gives every <button> a pointer
+		// of its own; the inputs are what hold the base stylesheet's.
+		for (const pressable of [submit, reset, plain, go]) {
+			expect(getComputedStyle(pressable).cursor).toBe("pointer");
+		}
+		expect(getComputedStyle(el("input[name=q]")).cursor).not.toBe("pointer");
+		expect(getComputedStyle(off).cursor).toBe("not-allowed");
+
+		const hovered = [
+			[plain, "rgb(8, 8, 8)", "rgb(7, 7, 7)"],
+			[reset, "rgb(8, 8, 8)", "rgb(7, 7, 7)"],
+			[go, "rgb(2, 2, 2)", "rgb(1, 1, 1)"],
+			[submit, "rgb(2, 2, 2)", "rgb(1, 1, 1)"],
+		] as const;
+		for (const [control, fill, rest] of hovered) {
+			await userEvent.hover(control);
+			await vi.waitFor(() =>
+				expect(getComputedStyle(control).backgroundColor).toBe(fill),
+			);
+			if (fill === "rgb(2, 2, 2)") {
+				expect(getComputedStyle(control).borderTopColor).toBe(fill);
+			}
+			await userEvent.unhover(control);
+			await vi.waitFor(() =>
+				expect(getComputedStyle(control).backgroundColor).toBe(rest),
+			);
+		}
+
+		// Forced: a disabled control takes no pointer events, so hovering it
+		// through the driver may be refused rather than shown.
+		await userEvent.hover(off, { force: true });
+		await settle();
+		expect(off.matches(":hover")).toBe(true);
+		expect(getComputedStyle(off).backgroundColor).toBe("rgb(7, 7, 7)");
+	});
+
+	it("leaves an agent's own fill on hover", async () => {
+		draw(`<style>.mine{background:rgb(9, 9, 9)}</style>
+			<button class="mine">Mine</button>`);
+		const mine = el("button");
+		await userEvent.hover(mine);
+		await settle();
+		expect(mine.matches(":hover")).toBe(true);
+		expect(getComputedStyle(mine).backgroundColor).toBe("rgb(9, 9, 9)");
+	});
+
+	it("weighs nothing: every selector is wholly one :where()", () => {
+		const loose = baseRules()
+			.map(({ rule }) => rule.selectorText)
+			.filter((selector) => !isWhollyWhere(selector));
+		expect(loose).toEqual([]);
+	});
+
+	it("hovers only on a pointer that can, and transitions only where motion is welcome", () => {
+		const rules = baseRules();
+		const hovers = rules.filter(({ rule }) =>
+			rule.selectorText.includes(":hover"),
+		);
+		expect(hovers.length).toBeGreaterThan(0);
+		for (const { media } of hovers) {
+			expect(media).toBe(MEDIA_QUERIES.finePointer);
+		}
+
+		const transitions = rules.filter(
+			({ rule }) => rule.style.transitionDuration !== "",
+		);
+		const moving = transitions.filter(({ media }) => media === null);
+		const still = transitions.filter(
+			({ media }) => media === "(prefers-reduced-motion: reduce)",
+		);
+		expect(moving.length).toBeGreaterThan(0);
+		expect(still.map(({ rule }) => rule.selectorText)).toEqual(
+			moving.map(({ rule }) => rule.selectorText),
+		);
+		for (const { rule } of still) {
+			expect(rule.style.transitionProperty).toBe("none");
+		}
 	});
 
 	it("loses to an agent's rule in a cascade layer of its own", async () => {

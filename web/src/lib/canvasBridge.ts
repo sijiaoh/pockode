@@ -6,6 +6,7 @@
  * answering sends — consumes these.
  */
 
+import { MEDIA_QUERIES } from "@pockode/shared";
 import type { CanvasOp } from "../types/canvas";
 
 export type SendRefusal =
@@ -119,6 +120,7 @@ export const CANVAS_THEME_TOKENS = {
 	"--pk-border": "--th-border",
 	"--pk-accent": "--th-accent",
 	"--pk-accent-text": "--th-accent-text",
+	"--pk-accent-hover": "--th-accent-hover",
 	"--pk-success": "--th-success",
 	"--pk-error": "--th-error",
 	"--pk-warning": "--th-warning",
@@ -166,6 +168,41 @@ const BOXED = `button,${BOXED_INPUT},select,textarea`;
 const CONTROL = "button,input,select,textarea";
 
 /**
+ * The elements a `data-pk-send` is on that the browser already lets the
+ * keyboard reach and operate, or that send by a gesture of their own (a form's
+ * submit, a field's Enter). Any other element with an action the bridge makes
+ * a button of (§6.1).
+ */
+const NATIVE_SEND = "button,input,select,textarea,form,a[href],summary";
+
+/**
+ * A `div`, `li` or card that sends: the bridge gives it a button's role, tab
+ * stop and keys. It looks like a plain button, never the accent — a card
+ * painted in the primary's fill would not be the agent's card any more.
+ */
+const CUSTOM_PRESSABLE = `[data-pk-send]:not([data-pk-send=""],${NATIVE_SEND})`;
+
+/**
+ * What a press acts on, and so looks pressable: a pointer cursor, a hover
+ * fill. Its rules leave out the disabled by `:not(:disabled)` rather than
+ * `:enabled`, which matches no element without a disabled state — a
+ * `CUSTOM_PRESSABLE` among them.
+ */
+const PRESSABLE = `button,input:is([type=button],[type=submit],[type=reset]),${CUSTOM_PRESSABLE}`;
+
+/**
+ * The pressables that send: the page's primary action, in the accent. A
+ * `type="button"` or `reset` button in a sending form is no send, so it keeps
+ * the plain fill.
+ */
+const PRIMARY =
+	"button[data-pk-send],form[data-pk-send] :is(button:not([type=button],[type=reset]),input[type=submit])";
+
+/** Pockode's own `transition-colors` (Tailwind's 150ms ease). */
+const COLOR_TRANSITION =
+	"transition-property:color,background-color,border-color;transition-timing-function:cubic-bezier(.4,0,.2,1);transition-duration:.15s";
+
+/**
  * The cascade layer the whole base stylesheet is in. Zero specificity alone
  * would lose to every agent rule in a layer — Tailwind's browser build and
  * Pico put all of theirs in one — since unlayered rules beat layered ones; a
@@ -177,16 +214,22 @@ const LAYER = "pockode-base";
 /**
  * The theme-independent half of the base stylesheet. Every selector is also
  * wholly inside `:where()`, pseudo-classes included, so each rule weighs
- * nothing (§3.3). Order matters among them for that reason: the accent and the
- * dimming come after the fill they override. A
- * `type="button"` or `reset` button in a sending form is no send, so it keeps
- * the plain fill.
+ * nothing (§3.3). Order matters among them for that reason: the accent, the
+ * hover fills and the dimming each come after what they override.
+ *
+ * The hover fills are Pockode's own buttons' — the tertiary background, and
+ * the accent's hover shade on a primary — and only where the primary pointer
+ * can hover, as the app's `pointer-fine:` gate: a tap would otherwise leave
+ * the fill stuck on. A disabled control takes none.
  */
 const STATIC_CSS = [
 	`:where(${CONTROL}){font:inherit}`,
 	`:where(${BOXED}){box-sizing:border-box;color:inherit;background:var(--pk-bg-secondary);border:1px solid var(--pk-border);border-radius:6px;padding:.375em .75em}`,
-	`:where(button[data-pk-send],form[data-pk-send] :is(button:not([type=button],[type=reset]),input[type=submit])){background:var(--pk-accent);border-color:var(--pk-accent);color:var(--pk-accent-text)}`,
-	`:where(:is(${CONTROL}):focus-visible){outline:2px solid var(--pk-accent);outline-offset:1px}`,
+	`:where(${PRIMARY}){background:var(--pk-accent);border-color:var(--pk-accent);color:var(--pk-accent-text)}`,
+	`:where(${PRESSABLE}){cursor:pointer;${COLOR_TRANSITION}}`,
+	`@media ${MEDIA_QUERIES.finePointer}{:where(:is(${PRESSABLE}):not(:disabled):hover){background-color:var(--pk-bg-tertiary)}:where(:is(${PRIMARY}):not(:disabled):hover){background-color:var(--pk-accent-hover);border-color:var(--pk-accent-hover)}}`,
+	`@media (prefers-reduced-motion:reduce){:where(${PRESSABLE}){transition:none}}`,
+	`:where(:is(${CONTROL},${CUSTOM_PRESSABLE}):focus-visible){outline:2px solid var(--pk-accent);outline-offset:1px}`,
 	`:where(:is(${CONTROL}):disabled){opacity:.5;cursor:not-allowed}`,
 	// The coarse-pointer hit-area floor (docs/responsive-ui.md).
 	`@media (pointer:coarse){:where(${BOXED}){min-height:44px}}`,
@@ -240,7 +283,12 @@ export function canvasBaseStylesheet(theme: CanvasTheme): string {
  *   The browser does that itself through the form's first submit button,
  *   unless there is none, or that button carries an action of its own — which
  *   its synthetic click would send instead — so there the bridge submits the
- *   form, with no submitter.
+ *   form, with no submitter;
+ * - any other element that sends (`CUSTOM_PRESSABLE`) is a button, by the
+ *   WAI-ARIA button pattern: a `role` and a tab stop, unless the page gave it
+ *   its own, and Enter (on press) or Space (on release) on it clicks it. That
+ *   holds for what a patch or the page's scripts add or change later, and is
+ *   taken back from an element that stops sending.
  *
  * A well-formed send is never refused here, not even while the app has said
  * the page cannot send: the app refuses it, because each refused attempt is
@@ -272,6 +320,7 @@ var NAMES=${JSON.stringify(THEME_VARS)};
 var ROOT_CSS=${JSON.stringify(ROOT_CSS)};
 var LAYER=${JSON.stringify(LAYER)};
 var STATIC_CSS=${JSON.stringify(STATIC_CSS)};
+var NATIVE_SEND=${JSON.stringify(NATIVE_SEND)};
 var TEXT_TYPES=["text","search","url","tel","email","password","number"];
 var pending=Object.create(null);
 // Per document: a page that reloads itself keeps its window, and an answer
@@ -377,6 +426,71 @@ function defaultButton(form){
   }
   return null;
 }
+// What the bridge itself put on each element it made a button of, so that it
+// takes back only that once the element stops sending.
+var made=new WeakMap();
+function pressable(el){
+  return !!el.getAttribute("data-pk-send")&&!el.matches(NATIVE_SEND);
+}
+function make(el){
+  var mine=made.get(el);
+  if(pressable(el)){
+    if(mine)return;
+    mine={role:!el.hasAttribute("role"),tab:!el.hasAttribute("tabindex")};
+    if(mine.role)el.setAttribute("role","button");
+    if(mine.tab)el.setAttribute("tabindex","0");
+    made.set(el,mine);
+  }else if(mine){
+    made.delete(el);
+    if(mine.role&&el.getAttribute("role")==="button")el.removeAttribute("role");
+    if(mine.tab&&el.getAttribute("tabindex")==="0")el.removeAttribute("tabindex");
+  }
+}
+function makeAll(node){
+  if(node.nodeType!==1)return;
+  if(node.hasAttribute("data-pk-send"))make(node);
+  var all=node.querySelectorAll("[data-pk-send]");
+  for(var i=0;i<all.length;i++)make(all[i]);
+}
+// From before the agent's markup is parsed, so the parser's insertions are
+// seen too, as are a patch's and the page's own scripts'.
+new MutationObserver(function(records){
+  records.forEach(function(r){
+    if(r.type==="attributes")make(r.target);
+    else for(var i=0;i<r.addedNodes.length;i++)makeAll(r.addedNodes[i]);
+  });
+}).observe(document,{subtree:true,childList:true,attributes:true,attributeFilter:["data-pk-send","href"]});
+// The button pattern's keys, on the element itself — not a field inside it.
+// In the bubble phase, so a key the page's own handler took is left to it.
+// Each presses by a click, as on a native button: the page's click handlers
+// see it, and the click sends. An SVG or MathML element has no click() of
+// its own, so it is dispatched.
+function press(el){
+  if(typeof el.click==="function")el.click();
+  else el.dispatchEvent(new MouseEvent("click",{bubbles:true,cancelable:true,composed:true,view:window}));
+}
+var spaceOn=null;
+document.addEventListener("keydown",function(e){
+  var t=e.target;
+  if(e.defaultPrevented||e.isComposing||!t||!made.has(t)||t.isContentEditable)return;
+  if(e.key==="Enter"){
+    e.preventDefault();
+    if(!e.repeat)press(t);
+  }else if(e.key===" "){
+    // Space presses on release, and not when focus has left before it.
+    e.preventDefault();
+    if(!e.repeat)spaceOn=t;
+  }
+});
+document.addEventListener("keyup",function(e){
+  if(e.key!==" ")return;
+  var on=spaceOn;
+  spaceOn=null;
+  if(!on||on!==e.target||e.defaultPrevented||!made.has(on))return;
+  e.preventDefault();
+  press(on);
+});
+document.addEventListener("focusout",function(){spaceOn=null;},true);
 function isEditable(el){
   if(!el||el.nodeType!==1)return false;
   if(el.isContentEditable)return true;
@@ -508,7 +622,8 @@ addEventListener("message",function(e){
   else if(d.type==="${SENDABLE}")sendable(d);
 });
 window.pockode={send:send};
-function ready(){post({type:"${READY}"});}
+// And whatever was parsed before the bridge ran.
+function ready(){makeAll(document.documentElement);post({type:"${READY}"});}
 if(document.readyState==="loading")document.addEventListener("DOMContentLoaded",ready);
 else ready();
 })();`;
