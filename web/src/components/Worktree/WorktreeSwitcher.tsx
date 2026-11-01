@@ -216,8 +216,8 @@ function WorktreeSwitcher({ onClose, isExpanded = true }: Props) {
  * Its floor matches the close button beside it, with or without one.
  *
  * `relative` sits inside the `px-2` inset: the dropdown stretches to its
- * positioned ancestor, and this way it spans exactly the New Chat row below
- * (New Chat and the session filter together).
+ * positioned ancestor, and this way it spans exactly the New Session row below
+ * (New Session and the session filter together).
  */
 function SwitcherRow({
 	closeButton,

@@ -83,7 +83,7 @@ export default function SessionsTab() {
 					className="flex min-h-[44px] w-full items-center justify-center gap-2 rounded-lg bg-th-accent px-3 text-sm font-medium text-th-accent-text hover:bg-th-accent-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent focus-visible:ring-offset-2 focus-visible:ring-offset-th-bg-secondary"
 				>
 					<Plus className="size-4" aria-hidden="true" />
-					New Chat
+					New Session
 				</button>
 			</div>
 			<div className="flex-1 overflow-y-auto">

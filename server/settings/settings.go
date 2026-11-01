@@ -14,6 +14,11 @@ type Settings struct {
 	DefaultAgentRoleID string            `json:"default_agent_role_id,omitempty"`
 	DefaultAgentType   session.AgentType `json:"default_agent_type,omitempty"`
 	DefaultMode        session.Mode      `json:"default_mode,omitempty"`
+	// DefaultCanvas is the kind a session created without one starts as; unset
+	// is chat. Only where it starts: each session can still be switched until
+	// its first message (docs/new-session-ui.md §5). The work system's sessions
+	// are chat whatever this says.
+	DefaultCanvas bool `json:"default_canvas,omitempty"`
 
 	// DefaultModel and DefaultEffort are the model and effort new sessions get,
 	// and belong to DefaultAgentType: both are agent-specific lists (see

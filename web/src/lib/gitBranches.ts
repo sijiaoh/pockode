@@ -232,7 +232,7 @@ export function branchSwitchUnavailableReason(
 	if (row.worktree) return `Checked out in ${row.worktree}.`;
 	if (state.switching) return "Wait for the branch switch to finish.";
 	if (state.deleting) return "Wait for the branch delete to finish.";
-	if (state.handingOff) return "Wait for the new chat to open.";
+	if (state.handingOff) return "Wait for the new session to open.";
 	return null;
 }
 
@@ -278,7 +278,7 @@ export function branchMergeUnavailableReason(
 	if (head.detached) return "Switch to a branch to merge into.";
 	if (state.switching) return "Wait for the branch switch to finish.";
 	if (state.deleting) return "Wait for the branch delete to finish.";
-	if (state.handingOff) return "Wait for the new chat to open.";
+	if (state.handingOff) return "Wait for the new session to open.";
 	return null;
 }
 

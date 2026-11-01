@@ -287,7 +287,7 @@ describe("usePrefillComposer", () => {
 
 		expect(createSession).not.toHaveBeenCalled();
 		expect(route.navigate).not.toHaveBeenCalled();
-		expect(result.current.error?.summary).toBe("Couldn't start a new chat");
+		expect(result.current.error?.summary).toBe("Couldn't start a new session");
 	});
 
 	it("stays put and reports a failed create", async () => {
@@ -298,7 +298,7 @@ describe("usePrefillComposer", () => {
 		await act(() => result.current.prefill("Explain this"));
 
 		expect(result.current.error).toEqual({
-			summary: "Couldn't start a new chat",
+			summary: "Couldn't start a new session",
 			detail: "Not connected",
 		});
 		expect(route.navigate).not.toHaveBeenCalled();

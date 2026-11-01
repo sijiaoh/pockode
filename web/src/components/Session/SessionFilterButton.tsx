@@ -73,7 +73,7 @@ export default function SessionFilterButton({ disabled }: Props) {
 		(c) => filter.kind === "worktree" && c.worktree === filter.worktree,
 	);
 
-	// No positioned box of its own: the dropdown stretches to the New Chat row
+	// No positioned box of its own: the dropdown stretches to the New Session row
 	// it sits in, as the worktree switcher's does to the same row. A panel of
 	// its own width hung off this button outgrew the sidebar at its narrowest,
 	// and the column clips it.

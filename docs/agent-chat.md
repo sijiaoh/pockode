@@ -21,7 +21,7 @@ React SPA ──WebSocket──▶ Go Server ──spawn──▶ AI CLI (subpro
 | Layer | Path | Role |
 |-------|------|------|
 | RPC handlers | `server/ws/rpc_chat.go`, `server/ws/rpc_canvas.go` (the `chat.canvas_*` methods) | `chat.message`, `chat.interrupt`, `chat.messages.subscribe` / `chat.messages.history` ([paging](#history-paging)), permission responses |
-| Session config | `server/ws/rpc_session.go` | `session.set_agent_type` / `set_mode` / `set_model` / `set_effort`, each closing the running process because a CLI is told these only at launch; `session.models` and `session.efforts` list the choices ([models](code/agent-integration.md#session-models), [effort](code/agent-integration.md#session-effort)). None of them answer with the new value: the settings in force reach the panel through `session.detail` ([why](code/subscription-system.md#why-a-session-is-two-subscriptions)) |
+| Session config | `server/ws/rpc_session.go` | `session.set_agent_type` / `set_mode` / `set_model` / `set_effort`, each closing the running process because a CLI is told these only at launch; `session.models` and `session.efforts` list the choices ([models](code/agent-integration.md#session-models), [effort](code/agent-integration.md#session-effort)). None of them answer with the new value: the settings in force reach the panel through `session.detail` ([why](code/subscription-system.md#why-a-session-is-two-subscriptions)). `session.set_canvas` changes the session's kind the same way, and only until its first message ([new-session-ui.md §4.1](new-session-ui.md#41-sessionset_canvas)) |
 | Another worktree's sessions | `server/ws/rpc_session_view.go` | `session_view.*` — reading (and discarding) a session stored under a worktree the connection is not in, including one that no longer exists ([how](#sessions-outlive-their-worktree)) |
 | Attachments | `server/ws/rpc_attachment.go` | `attachment.get` — the content a chat event references by id, answered in `file.get`'s own shape so one client path renders both ([why](code/agent-integration.md#content-blocks-and-attachments)) |
 | Sending files | `server/filetransfer/attachment.go`, `server/chat/attachments.go` | `POST /api/chat/attachments` stores a file in the session's store; `chat.message`'s `attachments` names it by id and each agent delivers it its own way ([how](code/agent-integration.md#files-the-user-sends)). Client side: `web/src/lib/chatAttachments.ts`; the composer's `+` menu (Photos / Files), a drop on the chat or a paste into the composer ([how](#attaching-by-drop-or-paste)) uploads each file as it arrives (`inputStore`), holds Send until every one is stored, and takes the files back if the message is refused |
@@ -74,7 +74,9 @@ words. The engine truncates first; the mode, which says whether the agent's own
 permission settings still stand, stays whole. Until the session has described
 itself the second line is a skeleton rather than a placeholder "Default", so a
 session with every gate down never wears the name of one that keeps them. A
-session still called `New Chat` reads as a placeholder (secondary colour), and
+session still called `New Session` (or `New Chat`, the name sessions were
+created with before [new-session-ui.md](new-session-ui.md)) reads as a
+placeholder (secondary colour), and
 one whose title has not arrived yet is a skeleton too; one read out of another
 worktree says `Read-only` instead of an engine, and `Unavailable session` if it
 cannot be read at all. A route naming no session has nothing to describe, so the

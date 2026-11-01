@@ -46,8 +46,8 @@ func TestFileStore_Create(t *testing.T) {
 	if sess.ID != "test-session-id" {
 		t.Errorf("expected ID 'test-session-id', got %q", sess.ID)
 	}
-	if sess.Title != "New Chat" {
-		t.Errorf("expected title 'New Chat', got %q", sess.Title)
+	if sess.Title != "New Session" {
+		t.Errorf("expected title 'New Session', got %q", sess.Title)
 	}
 	if sess.CreatedAt.IsZero() {
 		t.Error("expected non-zero CreatedAt")
@@ -163,8 +163,8 @@ func TestFileStore_Update(t *testing.T) {
 	store, _ := NewFileStore(t.TempDir())
 
 	sess, _ := store.Create(ctx, "session-to-update", CreateSpec{})
-	if sess.Title != "New Chat" {
-		t.Fatalf("expected initial title 'New Chat', got %q", sess.Title)
+	if sess.Title != "New Session" {
+		t.Fatalf("expected initial title 'New Session', got %q", sess.Title)
 	}
 	backdated := backdateUpdatedAt(t, store, sess.ID)
 
@@ -976,5 +976,67 @@ func TestFileStore_StampsIndexVersion(t *testing.T) {
 	}
 	if got := usageOf(t, reopened, "claude-session").ContextTokens; got != 24537 {
 		t.Errorf("expected the fresh reading to survive a restart, got %d", got)
+	}
+}
+
+// The kind can change until MarkStarted and never after it; a session stored
+// before Started existed counts as started once it has been activated.
+func TestFileStore_SetCanvasUntilStarted(t *testing.T) {
+	store, err := NewFileStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewFileStore failed: %v", err)
+	}
+	if _, err := store.Create(ctx, "s", CreateSpec{}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := store.SetCanvas(ctx, "s", true); err != nil {
+		t.Fatalf("SetCanvas before start: %v", err)
+	}
+	marked, err := store.MarkStarted(ctx, "s")
+	if err != nil {
+		t.Fatalf("MarkStarted: %v", err)
+	}
+	if !marked.Started || !marked.Canvas {
+		t.Errorf("marked = started %v canvas %v, want both", marked.Started, marked.Canvas)
+	}
+	if err := store.SetCanvas(ctx, "s", false); !errors.Is(err, ErrSessionStarted) {
+		t.Errorf("SetCanvas after start = %v, want ErrSessionStarted", err)
+	}
+	if err := store.SetCanvas(ctx, "s", true); err != nil {
+		t.Errorf("setting the kind a started session already has: %v", err)
+	}
+
+	if _, err := store.Create(ctx, "legacy", CreateSpec{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Activate(ctx, "legacy"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetCanvas(ctx, "legacy", true); !errors.Is(err, ErrSessionStarted) {
+		t.Errorf("SetCanvas on an activated session = %v, want ErrSessionStarted", err)
+	}
+
+	if err := store.SetCanvas(ctx, "missing", true); !errors.Is(err, ErrSessionNotFound) {
+		t.Errorf("SetCanvas on a missing session = %v, want ErrSessionNotFound", err)
+	}
+}
+
+// A fork's history has been told to an agent, so it is born started.
+func TestFileStore_CreateForkIsStarted(t *testing.T) {
+	store, err := NewFileStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewFileStore failed: %v", err)
+	}
+	source, err := store.Create(ctx, "src", CreateSpec{Canvas: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fork, err := store.CreateFork(ctx, "fork", ForkSpec{Source: source})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !fork.Started || !fork.Canvas {
+		t.Errorf("fork = started %v canvas %v, want both", fork.Started, fork.Canvas)
 	}
 }

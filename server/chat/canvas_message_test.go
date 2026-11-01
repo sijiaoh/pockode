@@ -26,6 +26,17 @@ func (f *midTurnFixture) reportedSize(t *testing.T) *canvas.Size {
 	return got
 }
 
+// newCanvasMidTurnFixture is newMidTurnFixture with the session switched to
+// canvas before anything was sent to it.
+func newCanvasMidTurnFixture(t *testing.T) *midTurnFixture {
+	t.Helper()
+	f := newMidTurnFixture(t)
+	if err := f.client.SetCanvas(context.Background(), "sess", true); err != nil {
+		t.Fatalf("SetCanvas: %v", err)
+	}
+	return f
+}
+
 func (f *midTurnFixture) lastRecord(t *testing.T) agent.EventRecord {
 	t.Helper()
 	records, err := f.store.GetHistory(context.Background(), "sess")
@@ -43,7 +54,7 @@ func (f *midTurnFixture) lastRecord(t *testing.T) agent.EventRecord {
 // the size line under it, and the record keeps the action text alone beside
 // its structured copy and the size (docs/canvas-ui.md §6.2, §6.3).
 func TestClient_CanvasActionReachesTheAgentAsAMessage(t *testing.T) {
-	f := newMidTurnFixture(t)
+	f := newCanvasMidTurnFixture(t)
 	sess := f.startTurn(t)
 
 	size := canvas.Size{Width: 390, Height: 664}
@@ -94,7 +105,7 @@ func TestClient_CanvasActionReachesTheAgentAsAMessage(t *testing.T) {
 // A typed message carries the size the same way, and its content stays what
 // the user typed, so a fork's dropped prompt comes back without a size line.
 func TestClient_TypedMessageCarriesTheCanvasSize(t *testing.T) {
-	f := newMidTurnFixture(t)
+	f := newCanvasMidTurnFixture(t)
 	size := canvas.Size{Width: 820, Height: 1100}
 
 	if _, err := f.client.SendMessageExcluding(context.Background(), "sess", "make it blue", nil, Sender{CanvasSize: &size}); err != nil {
@@ -112,10 +123,30 @@ func TestClient_TypedMessageCarriesTheCanvasSize(t *testing.T) {
 	}
 }
 
+// A size sent with a message that starts a chat session is dropped: the kind
+// is the one fixed at the send's mark, whatever the caller thought it was.
+func TestClient_ChatSessionDropsTheCanvasSize(t *testing.T) {
+	f := newMidTurnFixture(t)
+	size := canvas.Size{Width: 820, Height: 1100}
+
+	if _, err := f.client.SendMessageExcluding(context.Background(), "sess", "hello", nil, Sender{CanvasSize: &size}); err != nil {
+		t.Fatalf("SendMessageExcluding: %v", err)
+	}
+	if got := f.agent.session(t, 1).sentPrompts(); got[0] != "hello" {
+		t.Errorf("the agent read %q", got[0])
+	}
+	if rec := f.lastRecord(t); rec.CanvasSize != nil {
+		t.Errorf("record canvas_size = %+v, want none", rec.CanvasSize)
+	}
+	if got := f.reportedSize(t); got != nil {
+		t.Errorf("reported size = %+v, want none", got)
+	}
+}
+
 // A message refused because a permission request is open reached no agent,
 // so the size it carried is not the canvas's (docs/canvas-ui.md §6.4).
 func TestClient_RefusedMessageReportsNoSize(t *testing.T) {
-	f := newMidTurnFixture(t)
+	f := newCanvasMidTurnFixture(t)
 	sess := f.startTurn(t)
 	sess.events <- agent.PermissionRequestEvent{RequestID: "req-1", ToolName: "Bash"}
 	f.waitForRecords(t, 2)

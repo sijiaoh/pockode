@@ -154,7 +154,7 @@ Five rungs. Existing Tailwind and `th-*` tokens only; nothing here is a new toke
 | **L2** Panel header row | The Git workspace's top bar, search row, the worktree switcher | `min-h-[44px]`, label `text-sm text-th-text-primary`, icons `text-th-text-muted`, bottom border `border-th-border` where the row is the whole header — the Files search row omits it, since the option chips render directly beneath it and a border would cut the header block in half. The worktree switcher is the header *control* GitHub Desktop puts above its list: a transparent button, `th-bg-tertiary` only on hover or while open, name `text-sm font-medium`, and 36px rather than 44 under a fine pointer, since it is a control and not a row — see [The top of the sidebar](#the-top-of-the-sidebar) |
 | **L3** Group header | The session filter's `Worktrees` / `Deleted` (the Git workspace's `Staged` / `Changes` were these until its list became one, under an L4-height header of its own; its groups came back as `Unstaged` / `Staged`, but with `min-h-[44px]` headers that carry a `Stage all` text button and read in `text-sm` — [git-changes-ui.md](git-changes-ui.md#the-groups)) | `min-h-[32px] px-3 text-xs uppercase tracking-wide text-th-text-muted`, no hover fill. A header carrying L5 actions grows to their 36px — the touch target wins over the nominal height — and grows again where a finger may land ([responsive-ui.md](responsive-ui.md#hit-areas-and-spacing)) |
 | **L4** List row | Tree node, changed file (two lines tall, with its stage button and `⋯` beside the row's button), commit, branch | `min-h-[44px]`, `text-sm text-th-text-secondary`; hover `bg-th-bg-tertiary` on the row itself, spanning the actions beside its button, never on the button alone; active `bg-th-bg-tertiary text-th-text-primary` |
-| **L5** Inline icon action | Entry menu, a Git file row's stage button and `⋯`, collapse, dismiss | 36×36, no border and no fill at rest (a hover fill is allowed). Two shapes, by where the control sits: square where it sits inside a **list** row or a group header, over the list itself (`rounded-md text-th-text-secondary`, defined once in `ui/iconButtonClass.ts`), round where it does not — the project root's `…` in the L2 search row, the session filter beside New Chat, the search field's clear button inside the input (`rounded-full text-th-text-muted hover:bg-th-bg-tertiary`). The filter is the `…`'s classes with `hover:` and `active:` behind `enabled:` and a `disabled:` dimming added, since it alone is disabled while its list is stale. 36 is the visual size only; the hit area a coarse pointer gets on top of it is [responsive-ui.md](responsive-ui.md#hit-areas-and-spacing)'s |
+| **L5** Inline icon action | Entry menu, a Git file row's stage button and `⋯`, collapse, dismiss | 36×36, no border and no fill at rest (a hover fill is allowed). Two shapes, by where the control sits: square where it sits inside a **list** row or a group header, over the list itself (`rounded-md text-th-text-secondary`, defined once in `ui/iconButtonClass.ts`), round where it does not — the project root's `…` in the L2 search row, the session filter beside New Session, the search field's clear button inside the input (`rounded-full text-th-text-muted hover:bg-th-bg-tertiary`). The filter is the `…`'s classes with `hover:` and `active:` behind `enabled:` and a `disabled:` dimming added, since it alone is disabled while its list is stale. 36 is the visual size only; the hit area a coarse pointer gets on top of it is [responsive-ui.md](responsive-ui.md#hit-areas-and-spacing)'s |
 
 The two rungs that matter most are L3 and L5, because that is where the panels
 had it wrong: the old `▾ Changes` header was L2-weight text on an L2-height row,
@@ -405,7 +405,7 @@ row above it.
 ## The top of the sidebar
 
 Above every tab sit two rows the whole sidebar shares — the worktree switcher
-and the tab bar — and the Sessions tab adds a third, New Chat with the session
+and the tab bar — and the Sessions tab adds a third, New Session with the session
 filter beside it. All three are chrome over a list, so principle 1 applies to
 them as much as to either panel: each is as tall as its controls need and no
 taller.
@@ -429,18 +429,18 @@ taller.
   font-medium`, because it is the same place showing different content. An
   error may wrap and grow the row. The row is `px-2 py-1`: the inset lines the hover fill up with the
   rows below it and the text with theirs, and the dropdown is positioned inside
-  the inset, so on desktop it spans exactly the New Chat row below — New Chat
+  the inset, so on desktop it spans exactly the New Session row below — New Session
   and the filter together.
 - **Tab bar** (`Layout/TabbedSidebar.tsx`). Each tab is `min-h-11`, which is the
   coarse-pointer floor and not slack — this row is not compressed.
-- **New Chat** is L1 (`Session/SessionsTab.tsx`): `min-h-[44px] px-3 text-sm
+- **New Session** is L1 (`Session/SessionsTab.tsx`): `min-h-[44px] px-3 text-sm
   font-medium`, `flex-1` instead of `w-full` because the filter shares its row.
   Its focus ring is offset by 2px onto `th-bg-secondary`, the sidebar's surface
   in both the drawer and the desktop column, since an accent ring drawn
   straight onto an accent fill cannot be seen. The row keeps the search row's
   `p-2`, and `gap-2` keeps 8px between the two 44px hit areas on a coarse
   pointer. The filter's dropdown is positioned inside that inset the way the
-  worktree switcher's is, so on desktop it too spans exactly the New Chat row.
+  worktree switcher's is, so on desktop it too spans exactly the New Session row.
   A panel of its own width hung off the filter button would outgrow a column at
   its minimum, and the column clips it.
 

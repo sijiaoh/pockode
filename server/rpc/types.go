@@ -309,12 +309,31 @@ type SessionSetModeParams struct {
 	Mode      session.Mode `json:"mode"`
 }
 
-// SessionCreateParams is everything session.create may be told. Absent params
-// are an ordinary session, as before the method took any.
+// SessionCreateParams is everything session.create may be told.
 type SessionCreateParams struct {
-	// Canvas makes a canvas session (docs/canvas-ui.md §13.1). Fixed at birth;
-	// see session.SessionMeta.Canvas.
-	Canvas bool `json:"canvas,omitempty"`
+	// Canvas is the kind the session starts as: absent is the project's
+	// default (settings.Settings.DefaultCanvas), present is that kind. It can
+	// still be changed until the session starts (session.set_canvas;
+	// docs/new-session-ui.md §4.3).
+	Canvas *bool `json:"canvas,omitempty"`
+}
+
+// SessionSetCanvasParams changes an unstarted session's kind.
+type SessionSetCanvasParams struct {
+	SessionID string `json:"session_id"`
+	Canvas    bool   `json:"canvas"`
+}
+
+// SessionSetCanvasReasonStarted is the reason session.set_canvas is refused
+// with once the session's first message has been delivered: the kind is
+// fixed, and a client says so rather than offering the choice again
+// (docs/new-session-ui.md §3.4).
+const SessionSetCanvasReasonStarted = "session_started"
+
+// SessionSetCanvasErrorData is the data member of the error session.set_canvas
+// refuses a started session with.
+type SessionSetCanvasErrorData struct {
+	Reason string `json:"reason"`
 }
 
 // SessionForkParams asks for a new session holding this session's conversation
@@ -849,9 +868,13 @@ type SessionListItem struct {
 	UnansweredQuestions int                 `json:"unanswered_questions,omitempty"`
 	Unread              bool                `json:"unread"`
 	ForkedFrom          *session.ForkOrigin `json:"forked_from,omitempty"`
-	// Canvas marks a canvas session's row. A copy of a fact fixed at birth, so
-	// it cannot disagree with session detail's.
+	// Canvas marks a canvas session's row. It can change until Started, and
+	// is read from the same stored record and pushed by the same update as
+	// session detail's, so the two cannot disagree.
 	Canvas bool `json:"canvas,omitempty"`
+	// Started says the session's first message has been delivered, so its kind
+	// is fixed (session.SessionMeta.Started). Absent is false.
+	Started bool `json:"started,omitempty"`
 }
 
 // Turn is session.TurnState as a client receives it: the instant the open turn
@@ -948,6 +971,7 @@ func NewSessionListItem(meta session.SessionMeta, sw SessionWork) SessionListIte
 		Unread:              meta.Unread,
 		ForkedFrom:          meta.ForkedFrom,
 		Canvas:              meta.Canvas,
+		Started:             meta.Started,
 	}
 }
 

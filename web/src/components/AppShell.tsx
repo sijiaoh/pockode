@@ -34,7 +34,6 @@ import { useSessionStore } from "../lib/sessionStore";
 import { resolveSessionView } from "../lib/sessionView";
 import { useWorktreeStore, worktreeActions } from "../lib/worktreeStore";
 import { useWSStore, wsActions } from "../lib/wsStore";
-import type { SessionCreateParams } from "../types/message";
 import {
 	type BranchRef,
 	type CommitOrigin,
@@ -258,7 +257,6 @@ function AppShell() {
 		needsNewSession,
 		createSession,
 		createError,
-		createErrorParams,
 		clearCreateError,
 		deleteSession,
 		updateTitle,
@@ -551,37 +549,30 @@ function AppShell() {
 		[navigate, urlWorktree, sessionTarget],
 	);
 
-	const handleCreateSession = useCallback(
-		async (params?: SessionCreateParams) => {
-			try {
-				const newSession = await createSession(params);
-				setDrawerOpen(false);
-				navigate(
-					buildNavigation({
-						type: "session",
-						worktree: urlWorktree,
-						sessionId: newSession.id,
-					}),
-				);
-			} catch (error) {
-				// Reported through createError below; logged for the console trail.
-				console.error("Failed to create session:", error);
-			}
-		},
-		[createSession, navigate, urlWorktree],
-	);
+	const handleCreateSession = useCallback(async () => {
+		try {
+			const newSession = await createSession();
+			setDrawerOpen(false);
+			navigate(
+				buildNavigation({
+					type: "session",
+					worktree: urlWorktree,
+					sessionId: newSession.id,
+				}),
+			);
+		} catch (error) {
+			// Reported through createError below; logged for the console trail.
+			console.error("Failed to create session:", error);
+		}
+	}, [createSession, navigate, urlWorktree]);
 
 	// Serves both create paths: clearing the error lets the auto-create effect run
 	// again, and createSession deduplicates, so the effect joins the request
-	// started here rather than adding a second one. The params are read before
-	// the clear, which forgets them: a canvas that failed is retried as a
-	// canvas — and then joins nothing, as a chat create is no answer for it, so
-	// an empty worktree retrying one gets the canvas and the chat it needed.
+	// started here rather than adding a second one.
 	const handleRetryCreateSession = useCallback(() => {
-		const params = createErrorParams;
 		clearCreateError();
-		void handleCreateSession(params);
-	}, [createErrorParams, clearCreateError, handleCreateSession]);
+		void handleCreateSession();
+	}, [clearCreateError, handleCreateSession]);
 
 	const handleDeleteSession = useCallback(
 		async (id: string, worktree: string | null) => {

@@ -243,7 +243,16 @@ export const useSessionStore = create<SessionStore>((set) => ({
  * The title the server gives a session it creates, which the chat replaces with
  * the first message — so a session still wearing it has not been named yet.
  */
-export const NEW_SESSION_TITLE = "New Chat";
+export const NEW_SESSION_TITLE = "New Session";
+
+/**
+ * Whether a session still wears a placeholder title. `New Chat` is what the
+ * server wrote before sessions had a kind to choose; stored sessions keep it,
+ * so it still reads as a placeholder (docs/new-session-ui.md §2).
+ */
+export function isPlaceholderTitle(title: string): boolean {
+	return title === NEW_SESSION_TITLE || title === "New Chat";
+}
 
 /**
  * The title of the session with this id, and null for one the list has no row

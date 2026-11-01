@@ -47,7 +47,8 @@ import {
 	selectSessionDetail,
 	useSessionDetailStore,
 } from "../../lib/sessionDetailStore";
-import { NEW_SESSION_TITLE, useSessionStore } from "../../lib/sessionStore";
+import { sessionKindOf } from "../../lib/sessionKind";
+import { isPlaceholderTitle, useSessionStore } from "../../lib/sessionStore";
 import { type SessionView, SessionViewProvider } from "../../lib/sessionView";
 import { useWorkStore } from "../../lib/workStore";
 import { useIsGitRepo } from "../../lib/worktreeStore";
@@ -118,7 +119,9 @@ import type { PromptError } from "./MessageItem";
 import MessageList, { type MessageListHandle } from "./MessageList";
 import ReadOnlyBar from "./ReadOnlyBar";
 import SessionHeader from "./SessionHeader";
+import SessionKindChooser from "./SessionKindChooser";
 import SessionOriginBar from "./SessionOriginBar";
+import { useSessionKindSwitch } from "./useSessionKindSwitch";
 
 const noop = () => {};
 
@@ -373,11 +376,24 @@ function ChatPanel({
 	// (docs/canvas-ui.md §2). The row says so before the detail lands, so the
 	// screen does not open on chat and flip. Not for a viewed session: its
 	// canvas is not pushed, there being no subscription to push it.
-	const rowIsCanvas = useSessionStore((s) =>
-		s.sessions.some((row) => row.id === sessionId && row.canvas === true),
+	//
+	// The detail first, the row only until it lands: the kind can change until
+	// the session starts, and the two are pushed separately, so a row lagging
+	// behind the detail must not keep a switched session on the old screen.
+	const sessionRow = useSessionStore((s) =>
+		s.sessions.find((row) => row.id === sessionId),
 	);
-	const isCanvasSession =
-		!isReadOnly && (sessionDetail?.canvas === true || rowIsCanvas);
+	const storedCanvas = sessionDetail
+		? sessionDetail.canvas === true
+		: sessionRow?.canvas === true;
+	const isCanvasSession = !isReadOnly && storedCanvas;
+	// The kind is fixed from here on (docs/new-session-ui.md §1). `activated`
+	// stands in for sessions stored before `started` existed, as the server's
+	// refusal does.
+	const isSessionStarted =
+		(sessionDetail
+			? sessionDetail.started === true
+			: sessionRow?.started === true) || isSessionActivated;
 	// Which view is up is the device's UI state, not the session's, and not
 	// history's: it is held here, so a switch adds no entry and Back leaves the
 	// session from either view. Each session opens on Canvas, with its input
@@ -396,6 +412,18 @@ function ChatPanel({
 		defaultTitle: string;
 	} | null>(null);
 	const [canvasViewSessionId, setCanvasViewSessionId] = useState(sessionId);
+	// A switch of kind puts the session on the view the kind opens on, as a
+	// session opened afresh would be (docs/new-session-ui.md §3.3). Only before
+	// the start, the one time the kind moves: after it, a kind read off the row
+	// and then the detail must not take a reader off the view they chose.
+	const [canvasViewKind, setCanvasViewKind] = useState(isCanvasSession);
+	if (canvasViewKind !== isCanvasSession) {
+		setCanvasViewKind(isCanvasSession);
+		if (!isSessionStarted) {
+			setCanvasView("canvas");
+			setCanvasComposerExpanded(false);
+		}
+	}
 	if (canvasViewSessionId !== sessionId) {
 		setCanvasViewSessionId(sessionId);
 		setCanvasView("canvas");
@@ -417,6 +445,32 @@ function ChatPanel({
 		(revision: number) => setCanvasHistoryAt({ revision }),
 		[],
 	);
+
+	// The choice between chat and canvas, on the empty state of a session that
+	// has not started (docs/new-session-ui.md §3.5). The transcript being empty
+	// is what makes it go at the press of Send — the echo lands at once — and
+	// come back if the send is refused. A history holding only a process's end
+	// is still empty: a switch closes a process spawned for a refused send.
+	const kindChooserShown =
+		!isReadOnly &&
+		sessionId !== "" &&
+		!isSessionStarted &&
+		!isChatPending &&
+		messages.length === 0 &&
+		!(sessionDetail ?? sessionRow)?.work_id;
+	const sessionKind = sessionKindOf(storedCanvas);
+	const kindSwitch = useSessionKindSwitch(
+		sessionId,
+		sessionKind,
+		kindChooserShown,
+	);
+	const kindChooser = kindChooserShown ? (
+		<SessionKindChooser
+			kind={sessionKind}
+			valueState={sessionDetail || sessionRow ? "known" : "pending"}
+			kindSwitch={kindSwitch}
+		/>
+	) : undefined;
 
 	// The one thing that still refuses a send. An open turn is not it — both CLIs
 	// steer the running turn with whatever arrives — but a permission or question
@@ -542,15 +596,14 @@ function ChatPanel({
 			// A message that is only files is named after them.
 			const titleSource =
 				content || (attachments ?? []).map((a) => a.name).join(", ");
-			const rename =
-				resolvedTitle === NEW_SESSION_TITLE
-					? () =>
-							onUpdateTitle(
-								titleSource.length > 30
-									? `${titleSource.slice(0, 30).replace(/\n/g, " ")}...`
-									: titleSource.replace(/\n/g, " "),
-							)
-					: undefined;
+			const rename = isPlaceholderTitle(resolvedTitle)
+				? () =>
+						onUpdateTitle(
+							titleSource.length > 30
+								? `${titleSource.slice(0, 30).replace(/\n/g, " ")}...`
+								: titleSource.replace(/\n/g, " "),
+						)
+				: undefined;
 			// A message the server may refuse names the session only once it is
 			// accepted, or a typo would stay behind as the title — a command, or
 			// files the agent cannot receive. Still the session it was sent to: this
@@ -1462,7 +1515,10 @@ function ChatPanel({
 				// the same statement made where it cannot drift.
 				onPermissionRespond={isReadOnly ? undefined : handlePermissionRespond}
 				onAnswerQuestion={isReadOnly ? undefined : handleAnswerQuestion}
-				onHintClick={isReadOnly ? undefined : handleSend}
+				// Held like Send while a switch of kind answers (§3.3).
+				onHintClick={
+					isReadOnly ? undefined : kindSwitch.pending ? noop : handleSend
+				}
 				isReadOnly={isReadOnly}
 				promptError={promptError ?? undefined}
 				onOpenWorkDetail={onOpenWorkDetail}
@@ -1481,6 +1537,8 @@ function ChatPanel({
 				}
 				onSignIn={isReadOnly ? undefined : handleSignIn}
 				onRestoreMessages={isReadOnly ? undefined : handleRestoreMessages}
+				// One chooser on screen: canvas view draws its own.
+				kindChooser={canvasViewUp ? undefined : kindChooser}
 			/>
 		);
 	};
@@ -1516,13 +1574,17 @@ function ChatPanel({
 				onModelChange={setModel}
 				onEffortChange={setEffort}
 				onModeChange={setMode}
+				// Both wait for the first message: before it there is no transcript
+				// to detour to and no page to look back on, and a Chat view toggle
+				// above a chooser offering Chat would read as the same choice made
+				// twice (docs/new-session-ui.md §3.6).
 				viewSwitch={
-					isCanvasSession ? (
+					isCanvasSession && isSessionStarted ? (
 						<CanvasViewSwitch view={canvasView} onSelect={selectCanvasView} />
 					) : undefined
 				}
 				canvasHistory={
-					isCanvasSession
+					isCanvasSession && isSessionStarted
 						? {
 								revision: canvasRevision,
 								onOpen: openCanvasHistory,
@@ -1707,6 +1769,7 @@ function ChatPanel({
 						turnRunning={turn.phase === "running"}
 						onSend={sendCanvasAction}
 						sendBlocked={promptOwnsInput ? "permission" : null}
+						kindChooser={canvasViewUp ? kindChooser : undefined}
 						permissions={{
 							turn,
 							turnKnown: isSessionDetailLoaded,
@@ -1790,14 +1853,22 @@ function ChatPanel({
 	const inputBarProps: InputBarProps = {
 		sessionId,
 		onSend: handleSend,
-		canSend: status === "connected" && !isChatPending && !promptOwnsInput,
+		// Held while a switch of kind answers, so the first message goes to the
+		// kind on screen (docs/new-session-ui.md §3.3).
+		canSend:
+			status === "connected" &&
+			!isChatPending &&
+			!promptOwnsInput &&
+			!kindSwitch.pending,
 		sendBlockedReason: promptOwnsInput ? "Allow or deny to send" : undefined,
 		disabled: !isSessionResolved,
 		turnOpen,
 		onStop: handleInterrupt,
 		focusRequest: inputFocusRequest,
 		// A Git page is there to be read: the user writes once they have read it.
-		focusOnOpen: !isGitOverlay(overlay),
+		// Nor while the user is choosing the session's kind: the composer a
+		// switch to chat brings up is not where they were (§3.3).
+		focusOnOpen: !isGitOverlay(overlay) && !kindSwitch.choosing,
 	};
 
 	// Focus is read from outside the bar, the way the card reports its own: the

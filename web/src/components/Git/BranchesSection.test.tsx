@@ -805,7 +805,7 @@ describe("asking the agent to merge", () => {
 	});
 
 	// The prompt names the current branch; a switch now would make it wrong.
-	it("holds switching while a new chat is being created for the merge", async () => {
+	it("holds switching while a new session is being created for the merge", async () => {
 		mergeHandoff = { ...mergeHandoff, handingOff: "local:old-spike" };
 		render(<Section />);
 
@@ -813,14 +813,14 @@ describe("asking the agent to merge", () => {
 		expect(rowFor("topic")).toBeEnabled();
 		expect(screen.getByText(/New branch/).closest("button")).toBeDisabled();
 		expect(
-			screen.getByRole("status", { name: "Opening a new chat" }),
+			screen.getByRole("status", { name: "Opening a new session" }),
 		).toBeInTheDocument();
 
 		const { item } = await openMerge("topic");
-		expect(item).toHaveTextContent("Wait for the new chat to open.");
+		expect(item).toHaveTextContent("Wait for the new session to open.");
 		expect(
 			screen.getByRole("button", { name: /^Switch to this branch/ }),
-		).toHaveTextContent("Wait for the new chat to open.");
+		).toHaveTextContent("Wait for the new session to open.");
 	});
 
 	it("waits for a delete of the same branch to finish", async () => {
@@ -852,12 +852,12 @@ describe("asking the agent to merge", () => {
 		const user = userEvent.setup();
 		mergeHandoff = {
 			...mergeHandoff,
-			error: { summary: "Couldn't start a new chat", detail: "boom" },
+			error: { summary: "Couldn't start a new session", detail: "boom" },
 		};
 		render(<Section />);
 
 		const alert = screen.getByRole("alert");
-		expect(alert).toHaveTextContent("Couldn't start a new chat");
+		expect(alert).toHaveTextContent("Couldn't start a new session");
 		expect(alert.closest(".sticky")).not.toBeNull();
 		await user.click(screen.getByRole("button", { name: "Dismiss error" }));
 		expect(dismissHandoffError).toHaveBeenCalled();

@@ -239,7 +239,7 @@ describe("branchSwitchUnavailableReason", () => {
 		).toBe("Wait for the branch delete to finish.");
 		expect(
 			branchSwitchUnavailableReason(row(), { ...idle, handingOff: true }),
-		).toBe("Wait for the new chat to open.");
+		).toBe("Wait for the new session to open.");
 	});
 });
 
@@ -313,7 +313,7 @@ describe("branchMergeUnavailableReason", () => {
 		).toBe("Wait for the branch delete to finish.");
 		expect(
 			branchMergeUnavailableReason(makeHead(), { ...idle, handingOff: true }),
-		).toBe("Wait for the new chat to open.");
+		).toBe("Wait for the new session to open.");
 	});
 });
 

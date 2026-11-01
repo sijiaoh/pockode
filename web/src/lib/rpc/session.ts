@@ -1,4 +1,8 @@
-import type { JSONRPCRequester } from "json-rpc-2.0";
+import {
+	JSONRPCErrorCode,
+	JSONRPCErrorException,
+	type JSONRPCRequester,
+} from "json-rpc-2.0";
 import type {
 	AgentEfforts,
 	AgentModels,
@@ -11,12 +15,28 @@ import type {
 	SessionMode,
 	SessionModelsResult,
 	SessionSetAgentTypeParams,
+	SessionSetCanvasParams,
 	SessionSetEffortParams,
 	SessionSetModelParams,
 	SessionSetModeParams,
 	SessionUpdateTitleParams,
 } from "../../types/message";
 import type { AgentType } from "../../types/settings";
+
+/**
+ * Whether `session.set_canvas` was refused because the session's first message
+ * got there first: its kind is fixed from then on (docs/new-session-ui.md
+ * §4.1). Read from the error's data, which the server keeps stable, rather
+ * than from the message, which it may reword.
+ */
+export function isSessionStartedRefusal(error: unknown): boolean {
+	return (
+		error instanceof JSONRPCErrorException &&
+		error.code === JSONRPCErrorCode.InvalidParams &&
+		(error.data as { reason?: unknown } | undefined)?.reason ===
+			"session_started"
+	);
+}
 
 export interface SessionActions {
 	createSession: (params?: SessionCreateParams) => Promise<SessionListItem>;
@@ -51,6 +71,8 @@ export interface SessionActions {
 		agentType: AgentType,
 	) => Promise<void>;
 	setSessionModel: (sessionId: string, model: string) => Promise<void>;
+	/** Refused once the session has started; see `isSessionStartedRefusal`. */
+	setSessionCanvas: (sessionId: string, canvas: boolean) => Promise<void>;
 	setSessionEffort: (sessionId: string, effort: string) => Promise<void>;
 	/** The models selectable per agent type. Server-wide constants. */
 	listModels: () => Promise<AgentModels>;
@@ -135,6 +157,16 @@ export function createSessionActions(
 				session_id: sessionId,
 				agent_type: agentType,
 			} as SessionSetAgentTypeParams);
+		},
+
+		setSessionCanvas: async (
+			sessionId: string,
+			canvas: boolean,
+		): Promise<void> => {
+			await requireClient().request("session.set_canvas", {
+				session_id: sessionId,
+				canvas,
+			} as SessionSetCanvasParams);
 		},
 
 		setSessionModel: async (

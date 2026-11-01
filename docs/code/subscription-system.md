@@ -395,8 +395,8 @@ on both, but it is stored on neither — each side resolves it from
 readings of it. Why the detail needs its own reading at all is
 [above](#which-sessions-belong-to-work).
 
-`title` and `unread` are on both sides and read from both, and they pass on the
-same terms as `turn`: stored with the session, so both watchers read one record
+`title`, `unread`, `canvas` and `started` are on both sides and read from both,
+and they pass on the same terms as `turn`: stored with the session, so both watchers read one record
 and send one value. Each reader takes the copy that is about the thing it is
 about — a row displays the row's, while the back-to-chat dot reads the detail's,
 because the session that button is about is the one the list is allowed not to
@@ -404,7 +404,9 @@ have a row for ([above](#which-sessions-belong-to-work)). The chat's title does
 choose between the two copies — the row first, the detail when there is no row —
 and that is sound here for the reason `turn` is: two narrowings of one stored
 record, not two accounts of it. A field that cannot say that much has to stay on
-one side.
+one side. `canvas` was once the birth fact beside `forked_from`; it can now
+change until the session starts ([new-session-ui.md §4.4](../new-session-ui.md#44-everything-that-reads-the-kind)),
+so it passes on these terms rather than those.
 
 Detail's wire type carries them without listing them: `rpc.SessionDetail`
 *embeds* `SessionMeta` rather than re-stating its fields, which is what keeps a
@@ -431,7 +433,10 @@ answers a canvas session with its current `canvas.State`, and `canvas.Store` pus
 is state, not a record: no `seq`, not in history, sent beside the record queue
 rather than through it — each carries the whole state, so arriving out of order
 costs nothing, the highest revision wins. The canvas is read after the
-subscription is registered, for the same reason the history page is.
+subscription is registered, for the same reason the history page is. A
+session switched to canvas before it starts (`session.set_canvas`) was
+subscribed to as a chat session and answered no canvas, so the switch pushes
+its revision-0 state the same way.
 On the client, `useChatMessages` takes the canvas out of the subscription
 before `useSubscription` sees it — the reply's and every push's — and hands
 it to `canvasStore`, bound to the session that subscription is for: there is

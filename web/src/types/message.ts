@@ -52,11 +52,11 @@ export interface SessionUsage extends TokenUsage {
  * open; the list goes to every client on every change, and a model chosen in one
  * session is not news to a client reading another.
  *
- * Three fields are also on `SessionDetail`, and none of them can drift: `turn`
- * and `forked_from` are read straight off the session the server stores, so the
- * row and the detail are two narrowings of one record rather than two accounts
- * of it, and `work_id` is stored on neither — each side derives it from the work
- * item that names this session.
+ * Some fields are also on `SessionDetail`, and none of them can drift: `turn`,
+ * `forked_from`, `canvas` and `started` are read straight off the session the
+ * server stores, so the row and the detail are two narrowings of one record
+ * rather than two accounts of it, and `work_id` is stored on neither — each
+ * side derives it from the work item that names this session.
  */
 export interface SessionListItem {
 	id: string;
@@ -96,10 +96,16 @@ export interface SessionListItem {
 	/** Absent on a session that was created rather than forked. */
 	forked_from?: ForkOrigin;
 	/**
-	 * A canvas session (docs/canvas-ui.md §13.1). Fixed at birth, so this copy
-	 * cannot disagree with `SessionDetail.canvas`. Absent on an ordinary one.
+	 * A canvas session (docs/canvas-ui.md §13.1). Absent on an ordinary one. It
+	 * can change until `started` (`session.set_canvas`), and is pushed with the
+	 * detail's copy by the same update (docs/new-session-ui.md §4.4).
 	 */
 	canvas?: true;
+	/**
+	 * The session's first message has been delivered, which fixes its kind for
+	 * good (docs/new-session-ui.md §4.2). Never cleared; a fork is born with it.
+	 */
+	started?: true;
 }
 
 /** One story a session watches: enough to list it and open its detail. */
@@ -1090,6 +1096,8 @@ export interface SessionDetail {
 	watched_stories?: WatchedStory[];
 	/** See `SessionListItem.canvas`. */
 	canvas?: boolean;
+	/** See `SessionListItem.started`. */
+	started?: boolean;
 	/**
 	 * Always present: a session that has spent nothing carries an empty usage,
 	 * not a missing one, which is what "nothing reported yet" is keyed on.
@@ -1228,15 +1236,20 @@ export interface ChatMessagesHistoryParams {
 
 export type ChatMessagesHistoryResult = ChatMessagesHistoryPage;
 
-/** `session.create`'s params; absent fields are an ordinary session. */
+/** `session.create`'s params; the app sends none (docs/new-session-ui.md §4.3). */
 export interface SessionCreateParams {
-	/** A canvas session (docs/canvas-ui.md §13.1). Fixed at birth. */
+	/** The kind to start as; absent means the project's `default_canvas`. */
 	canvas?: boolean;
 }
 
 export interface SessionSetModeParams {
 	session_id: string;
 	mode: SessionMode;
+}
+
+export interface SessionSetCanvasParams {
+	session_id: string;
+	canvas: boolean;
 }
 
 export interface SessionSetAgentTypeParams {

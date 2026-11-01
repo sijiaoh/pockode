@@ -128,22 +128,23 @@ describe("SessionsTab", () => {
 
 	// A session created now would land in whichever worktree the connection is
 	// still bound to, which is not the one the user is on their way to.
-	it("blocks new chats while the worktree switch is in flight", () => {
+	it("blocks new sessions while the worktree switch is in flight", () => {
 		render(tab(0, true));
 
-		expect(screen.getByRole("button", { name: /New Chat/ })).toBeDisabled();
+		expect(screen.getByRole("button", { name: /New Session/ })).toBeDisabled();
 	});
 
-	// Canvas is fixed at birth, so creating is the one place it is chosen.
-	it("creates a canvas session or a chat session", async () => {
+	// The kind is chosen inside the session, so the one button asks for none
+	// (docs/new-session-ui.md §2).
+	it("creates a session without asking for a kind", async () => {
 		const user = userEvent.setup();
 		const onCreateSession = vi.fn();
 		render(tab(0, false, vi.fn(), onCreateSession));
 
-		await user.click(screen.getByRole("button", { name: "New Canvas" }));
-		await user.click(screen.getByRole("button", { name: "New Chat" }));
+		await user.click(screen.getByRole("button", { name: "New Session" }));
 
-		expect(onCreateSession.mock.calls).toEqual([[{ canvas: true }], []]);
+		expect(screen.queryByRole("button", { name: /Canvas/ })).toBeNull();
+		expect(onCreateSession.mock.calls).toEqual([[]]);
 	});
 });
 

@@ -1,5 +1,6 @@
 import { ArrowDown } from "lucide-react";
 import {
+	type ReactNode,
 	type Ref,
 	useCallback,
 	useEffect,
@@ -135,6 +136,11 @@ interface Props {
 	tail?: TurnTail;
 	/** See `useChatMessages`. */
 	openedThoughtIds?: ReadonlySet<string>;
+	/**
+	 * The kind chooser, drawn in place of the empty state's line while the
+	 * session has not started (docs/new-session-ui.md §3.1).
+	 */
+	kindChooser?: ReactNode;
 }
 
 const NO_OPENED_THOUGHTS: ReadonlySet<string> = new Set();
@@ -163,6 +169,7 @@ function MessageList({
 	isReadOnly = false,
 	tail,
 	openedThoughtIds = NO_OPENED_THOUGHTS,
+	kindChooser,
 }: Props) {
 	const { EmptyState: CustomEmptyState } = useChatUIConfig();
 	const scrollRef = useRef<HTMLDivElement>(null);
@@ -395,6 +402,19 @@ function MessageList({
 			return (
 				<div className="flex min-h-0 flex-1 items-center justify-center text-th-text-muted">
 					<p>Nothing was said in this conversation.</p>
+				</div>
+			);
+		}
+		// Above an extension's empty state, which is still drawn under it. The
+		// area scrolls rather than squeezing the block: with a soft keyboard up a
+		// phone in landscape is shorter than it.
+		if (kindChooser) {
+			return (
+				<div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
+					<div className="m-auto flex w-full flex-col items-center px-4 py-6">
+						{kindChooser}
+					</div>
+					{CustomEmptyState && <CustomEmptyState onHintClick={onHintClick} />}
 				</div>
 			);
 		}

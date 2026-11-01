@@ -109,28 +109,30 @@ describe("Sidebar", () => {
 	it("is a modal dialog that takes focus as it opens", () => {
 		const { rerender } = render(
 			<Sidebar isOpen={false} onClose={vi.fn()} isExpanded={false}>
-				<button type="button">New Chat</button>
+				<button type="button">New Session</button>
 			</Sidebar>,
 		);
 		expect(document.body).toHaveFocus();
 
 		rerender(
 			<Sidebar isOpen onClose={vi.fn()} isExpanded={false}>
-				<button type="button">New Chat</button>
+				<button type="button">New Session</button>
 			</Sidebar>,
 		);
 
 		const dialog = screen.getByRole("dialog", { name: "Sidebar" });
 		expect(dialog).toHaveAttribute("aria-modal", "true");
 		expect(dialog).toContainElement(document.activeElement as HTMLElement);
-		expect(screen.getByRole("button", { name: "New Chat" })).not.toHaveFocus();
+		expect(
+			screen.getByRole("button", { name: "New Session" }),
+		).not.toHaveFocus();
 	});
 
 	// The column is part of the page, not drawn over it.
 	it("is no dialog in the expanded tier", () => {
 		render(
 			<Sidebar isOpen onClose={vi.fn()} isExpanded>
-				<button type="button">New Chat</button>
+				<button type="button">New Session</button>
 			</Sidebar>,
 		);
 
@@ -155,7 +157,7 @@ describe("Sidebar", () => {
 	it("takes focus when expanded back, and only then", () => {
 		const renderSidebar = (isOpen: boolean, isExpanded: boolean) => (
 			<Sidebar isOpen={isOpen} onClose={vi.fn()} isExpanded={isExpanded}>
-				<button type="button">New Chat</button>
+				<button type="button">New Session</button>
 			</Sidebar>
 		);
 		const { rerender } = render(renderSidebar(false, false));

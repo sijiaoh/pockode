@@ -1,4 +1,4 @@
-import { act, render, screen } from "@testing-library/react";
+import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useAgentOptionsStore } from "../../../lib/agentOptionsStore";
@@ -88,6 +88,33 @@ describe("SessionSection", () => {
 		expect(await screen.findByRole("alert")).toHaveTextContent(
 			"snapshot has not arrived",
 		);
+	});
+
+	it("sets the kind new sessions start as", async () => {
+		const user = userEvent.setup();
+		render(<SessionSection />);
+		const group = screen.getByRole("group", { name: "New sessions" });
+
+		expect(within(group).getByRole("button", { name: /Chat/ })).toHaveAttribute(
+			"aria-pressed",
+			"true",
+		);
+		await user.click(within(group).getByRole("button", { name: /Canvas/ }));
+
+		expect(updateSettings).toHaveBeenCalledWith({ default_canvas: true });
+	});
+
+	it("reports a rejected default kind under its own toggle", async () => {
+		const user = userEvent.setup();
+		updateSettings.mockRejectedValue(new Error("disk full"));
+		useSettingsStore.setState({ settings: { default_canvas: true } });
+		render(<SessionSection />);
+		const group = screen.getByRole("group", { name: "New sessions" });
+
+		await user.click(within(group).getByRole("button", { name: /Chat/ }));
+
+		expect(updateSettings).toHaveBeenCalledWith({ default_canvas: false });
+		expect(await screen.findByRole("alert")).toHaveTextContent("disk full");
 	});
 
 	it("reports a rejected engine choice without changing the shown value", async () => {

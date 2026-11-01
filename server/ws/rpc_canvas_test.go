@@ -11,12 +11,14 @@ import (
 	"github.com/pockode/server/canvas"
 	"github.com/pockode/server/chat"
 	"github.com/pockode/server/rpc"
+	"github.com/pockode/server/settings"
+	"github.com/pockode/server/work"
 	"github.com/sourcegraph/jsonrpc2"
 )
 
 func (e *testEnv) createCanvasSession() rpc.SessionListItem {
 	e.t.Helper()
-	resp := e.call("session.create", rpc.SessionCreateParams{Canvas: true})
+	resp := e.call("session.create", rpc.SessionCreateParams{Canvas: new(true)})
 	if resp.Error != nil {
 		e.t.Fatalf("session.create failed: %s", resp.Error.Message)
 	}
@@ -391,5 +393,93 @@ func TestChatSubscribe_PendingPermissionRequests(t *testing.T) {
 	}
 	if got := env.subscribeChatMessages(row.ID).PermissionRequests; got != nil {
 		t.Errorf("permission_requests after the answer = %s", got)
+	}
+}
+
+// A session created without a kind starts as the project's default; one that
+// names a kind gets it whatever the default says.
+func TestSessionCreate_DefaultCanvas(t *testing.T) {
+	env := newTestEnv(t, &mockAgent{})
+	if resp := env.call("settings.update", rpc.SettingsUpdateParams{Settings: settings.Settings{DefaultCanvas: true}}); resp.Error != nil {
+		t.Fatalf("settings.update: %s", resp.Error.Message)
+	}
+
+	row, meta := env.createSession()
+	if !row.Canvas || !meta.Canvas {
+		t.Error("a session created without a kind ignored the default")
+	}
+
+	resp := env.call("session.create", rpc.SessionCreateParams{Canvas: new(false)})
+	if resp.Error != nil {
+		t.Fatalf("session.create: %s", resp.Error.Message)
+	}
+	var chatRow rpc.SessionListItem
+	if err := json.Unmarshal(resp.Result, &chatRow); err != nil {
+		t.Fatal(err)
+	}
+	if chatRow.Canvas {
+		t.Error("a session created as chat was made a canvas session by the default")
+	}
+}
+
+// The kind can be switched until the first message, which is refused with a
+// reason a client branches on once it has been delivered.
+func TestSessionSetCanvas(t *testing.T) {
+	env := newTestEnv(t, &mockAgent{})
+	row, _ := env.createSession()
+	env.subscribeChatMessages(row.ID)
+
+	if resp := env.call("session.set_canvas", rpc.SessionSetCanvasParams{SessionID: row.ID, Canvas: true}); resp.Error != nil {
+		t.Fatalf("session.set_canvas: %s", resp.Error.Message)
+	}
+	if meta, _, _ := env.getMainWorktree().SessionStore.Get(row.ID); !meta.Canvas || meta.Started {
+		t.Fatalf("meta = canvas %v started %v, want a canvas session not yet started", meta.Canvas, meta.Started)
+	}
+	notif := env.awaitNotification("chat.canvas_state")
+	var params struct {
+		Canvas canvas.State `json:"canvas"`
+	}
+	if err := json.Unmarshal(notif.Params, &params); err != nil {
+		t.Fatal(err)
+	}
+	if params.Canvas.Revision != 0 {
+		t.Errorf("chat.canvas_state on switching = %s, want revision 0", notif.Params)
+	}
+
+	if resp := env.call("session.set_canvas", rpc.SessionSetCanvasParams{SessionID: row.ID, Canvas: true}); resp.Error != nil {
+		t.Errorf("setting the kind a session already has: %s", resp.Error.Message)
+	}
+
+	if resp := env.call("chat.message", rpc.MessageParams{SessionID: row.ID, Content: "draw"}); resp.Error != nil {
+		t.Fatalf("chat.message: %s", resp.Error.Message)
+	}
+	resp := env.call("session.set_canvas", rpc.SessionSetCanvasParams{SessionID: row.ID, Canvas: false})
+	if resp.Error == nil || resp.Error.Code != jsonrpc2.CodeInvalidParams || resp.Error.Data == nil {
+		t.Fatalf("switching a started session = %+v, want InvalidParams with data", resp.Error)
+	}
+	var data rpc.SessionSetCanvasErrorData
+	if err := json.Unmarshal(*resp.Error.Data, &data); err != nil {
+		t.Fatal(err)
+	}
+	if data.Reason != rpc.SessionSetCanvasReasonStarted {
+		t.Errorf("reason = %q, want %q", data.Reason, rpc.SessionSetCanvasReasonStarted)
+	}
+	meta, _, _ := env.getMainWorktree().SessionStore.Get(row.ID)
+	if !meta.Canvas || !meta.Started {
+		t.Errorf("meta = canvas %v started %v, want a started canvas session", meta.Canvas, meta.Started)
+	}
+	if got := rpc.NewSessionListItem(meta, rpc.SessionWork{}); !got.Started {
+		t.Error("the row of a started session does not say so")
+	}
+
+	resp = env.call("session.set_canvas", rpc.SessionSetCanvasParams{SessionID: "missing", Canvas: true})
+	if resp.Error == nil || resp.Error.Message != "session not found" {
+		t.Errorf("a session that is not there: %+v", resp.Error)
+	}
+
+	_, workSession := startWorkWaiting(t, env, work.WaitNone)
+	resp = env.call("session.set_canvas", rpc.SessionSetCanvasParams{SessionID: workSession, Canvas: true})
+	if resp.Error == nil || resp.Error.Message != "a work session's kind cannot be changed" {
+		t.Errorf("a work session: %+v", resp.Error)
 	}
 }
