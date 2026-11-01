@@ -362,7 +362,7 @@ var canvasToolDefinitions = []toolDefinition{
 		Name: canvas.RenderTool,
 		Description: "Draw the whole canvas: the page that fills the user's screen in this session, replacing what was there.\n" +
 			"Free HTML, a full document or a fragment, at most 256KB: scripts, SVG and <canvas> run. Project files load by path (relative to the worktree root); other hosts are blocked until the user allows them, so prefer project files or inline code.\n" +
-			"Pockode adds only theme colours that follow light/dark — --pk-bg, --pk-bg-secondary, --pk-bg-tertiary, --pk-text, --pk-text-secondary, --pk-text-muted, --pk-border, --pk-accent, --pk-accent-text, --pk-success, --pk-error, --pk-warning, --pk-code-bg, --pk-code-text — and default styling of native inputs. Use the variables instead of fixed colours.\n" +
+			"Pockode adds only theme colours that follow light/dark — --pk-bg, --pk-bg-secondary, --pk-bg-tertiary, --pk-text, --pk-text-secondary, --pk-text-muted, --pk-border, --pk-accent, --pk-accent-text, --pk-accent-hover, --pk-success, --pk-error, --pk-warning, --pk-code-bg, --pk-code-text — and default styling of native inputs. Use the variables instead of fixed colours.\n" +
 			"How the page sends you something:\n" +
 			"  <button data-pk-send=\"approve\">Approve</button>\n" +
 			"  <form data-pk-send=\"create\"><input name=\"title\"><button>Create</button></form>   (fields with a name are sent)\n" +
