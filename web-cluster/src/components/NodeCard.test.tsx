@@ -37,7 +37,7 @@ function installedState(
 		},
 		last: null,
 		landed: 0,
-		pending: false,
+		forcing: false,
 		refresh: () => 0,
 	};
 }
@@ -467,7 +467,7 @@ describe("NodeCard: Restart", () => {
 							read: { kind: "failed", message: "x" },
 							last: null,
 							landed: 0,
-							pending: false,
+							forcing: false,
 							refresh: () => 0,
 						}
 					: installedState(target),

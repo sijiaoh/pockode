@@ -12,9 +12,9 @@ export function updateCheckOf(state: UpdateCheckState) {
 /**
  * The cluster's release check (`server.update_check`), apart from the
  * installed read so that a slow GitHub never holds up the version list or
- * Restart. Never on the node poll: the server's cache keeps GitHub's rate
- * down only if nobody asks for checks nobody looks at
- * (docs/self-update-ui.md, "When it checks").
+ * Restart. An unforced read only says what the server last found, so the
+ * connect and visibility reads are free; only a forced one — the user's press
+ * — asks GitHub (docs/self-update-ui.md, "When it checks").
  */
 export function useUpdateCheck(): UpdateCheckState {
 	const { actions } = useWSStore();
