@@ -149,29 +149,67 @@ describe("the canvas frame in a real browser", () => {
 	});
 
 	describe("size", () => {
-		it("keeps the size a page was drawn for, larger than the area, and scrolls to it", async () => {
+		/** A page that says its own viewport's size at load and on every resize. */
+		const SIZED = `<p>sized</p><script>function say(){${signal("'size '+innerWidth+'x'+innerHeight")}}addEventListener("load",say);addEventListener("resize",say)</script>`;
+
+		// The area is the app's own document, which must never move a frame:
+		// Chromium on some tablets drops the bars around the canvas while it
+		// does (docs/canvas-ui.md §5). What is larger scrolls inside the frame.
+		function expectAreaStill(frame: HTMLIFrameElement) {
+			if (!area) throw new Error("no canvas area");
+			expect(area.scrollWidth).toBe(area.clientWidth);
+			expect(area.scrollHeight).toBe(area.clientHeight);
+			const box = frame.getBoundingClientRect();
+			const areaBox = area.getBoundingClientRect();
+			expect(box.left).toBe(areaBox.left);
+			expect(box.top).toBe(areaBox.top);
+			expect(box.width).toBe(AREA.width);
+			expect(box.height).toBe(AREA.height);
+		}
+
+		it("shows a page drawn for a larger screen at its size, scrolled inside the frame", async () => {
 			renderFrame({
-				canvas: rendered(1, "<p>wide</p>", { width: 800, height: 1200 }),
+				canvas: rendered(1, SIZED, { width: 800, height: 1200 }),
 			});
 			const frame = await wrapper();
-
-			// Never scaled: the frame is the drawn size, and the area scrolls.
-			const box = frame.getBoundingClientRect();
-			expect(box.width).toBe(800);
-			expect(box.height).toBe(1200);
-			if (!area) throw new Error("no canvas area");
-			expect(area.clientWidth).toBeLessThanOrEqual(AREA.width);
-			expect(area.scrollWidth).toBe(800);
-			expect(area.scrollHeight).toBe(1200);
+			// Never scaled: the page's own viewport is the drawn size.
+			await signalled("size 800x1200");
+			expectAreaStill(frame);
 		});
 
 		it("fills an area larger than the size the page was drawn for", async () => {
 			renderFrame({
-				canvas: rendered(1, "<p>narrow</p>", { width: 200, height: 100 }),
+				canvas: rendered(1, SIZED, { width: 200, height: 100 }),
 			});
-			const box = (await wrapper()).getBoundingClientRect();
-			expect(box.width).toBe(AREA.width);
-			expect(box.height).toBe(AREA.height);
+			await signalled(`size ${AREA.width}x${AREA.height}`);
+			expectAreaStill(await wrapper());
+		});
+
+		it("follows the size of a patched revision, keeping the page", async () => {
+			const page = `${SIZED}<ul data-pk-region="r"><li>old</li></ul>`;
+			renderFrame({
+				canvas: rendered(1, page, { width: 800, height: 1200 }),
+			});
+			const before = await wrapper();
+			await signalled("size 800x1200");
+
+			rerender(
+				frameUi({
+					canvas: {
+						revision: 2,
+						html: page,
+						drawn_for: { width: 500, height: 900 },
+						change: {
+							kind: "update",
+							from_revision: 1,
+							ops: [{ op: "replace", region: "r", html: "<li>new</li>" }],
+						},
+					},
+				}),
+			);
+			await signalled("size 500x900");
+			expect(await wrapper()).toBe(before);
+			expectAreaStill(before);
 		});
 
 		it("keeps the page's own scrolling inside the frame", async () => {
@@ -182,28 +220,28 @@ describe("the canvas frame in a real browser", () => {
 				),
 			});
 			await signalled("scrolled 500");
-			if (!area) throw new Error("no canvas area");
-			expect(area.scrollHeight).toBe(AREA.height);
-			expect(area.scrollTop).toBe(0);
+			expectAreaStill(await wrapper());
 		});
 
 		// A real touch drag, which only Chromium's protocol can make: a page
-		// that cannot scroll itself hands the gesture to the area around it.
+		// that cannot scroll itself hands the gesture on — to the frame's own
+		// scroller, never to the app's document.
 		it.runIf(server.browser === "chromium")(
-			"scrolls the area with a touch drag over the frame",
+			"scrolls a page larger than the area inside the frame with a touch drag",
 			async () => {
 				renderFrame({
 					canvas: rendered(
 						1,
-						`<p>tall</p><script>addEventListener("load",function(){${signal("'loaded'")}})</script>`,
+						// Seen against the screen, past every frame's clip.
+						`<div id="top" style="height:40px">top</div><script>addEventListener("load",function(){new IntersectionObserver(function(es){${signal("es[0].isIntersecting?'top shown':'top hidden'")}}).observe(document.getElementById("top"))})</script>`,
 						{ width: 300, height: 1200 },
 					),
 				});
 				const frame = await wrapper();
-				await signalled("loaded");
-				if (!area) throw new Error("no canvas area");
+				await signalled("top shown");
 				await touchDrag(frame, 150);
-				await waitFor(() => expect(area?.scrollTop).toBeGreaterThan(100));
+				await signalled("top hidden");
+				expectAreaStill(frame);
 			},
 		);
 	});

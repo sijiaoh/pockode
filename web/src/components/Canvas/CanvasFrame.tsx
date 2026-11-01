@@ -56,13 +56,30 @@ function currentTheme(): CanvasTheme {
 	);
 }
 
+/** The app telling a wrapper the size the page in it is shown at. */
+const FRAME_SIZE = "pockode:canvas-frame-size";
+
+/** The size a revision is shown at (§5); none drawn for fills the area. */
+function shownSize(drawnFor: CanvasSize | undefined): CanvasSize {
+	return drawnFor ?? { width: 0, height: 0 };
+}
+
 /**
  * The page's own window, past the wrapper: transparent, so the page's root —
  * `--pk-bg` from the base stylesheet — is what shows, and under the theme's
  * scheme, so nothing white flashes in a dark app while it loads.
+ *
+ * The wrapper is also what scrolls to a page drawn for a larger screen (§5):
+ * the page's frame is in each dimension the larger of the wrapper and the
+ * drawn size, never scaled. Not the canvas area around the wrapper: a frame
+ * moved by a scroller of the app's own document makes Chromium on some
+ * tablets (Huawei Browser) drop the app's bars around it, white or blank, for
+ * as long as the scroll lasts — moved inside the wrapper it does not. A patch
+ * may bring another size, which the app posts here (`FRAME_SIZE`): the page
+ * keeps its document, as it does through any patch.
  */
-function wrapperStyle(scheme: CanvasTheme["scheme"]): string {
-	return `<style>html,body{margin:0;height:100%;overflow:hidden;background:transparent;color-scheme:${scheme}}iframe{display:block;width:100%;height:100%;border:0}</style>`;
+function wrapperStyle(scheme: CanvasTheme["scheme"], size: CanvasSize): string {
+	return `<style>:root{--pk-frame-width:${size.width}px;--pk-frame-height:${size.height}px}html{overflow:auto}html,body{margin:0;height:100%;background:transparent;color-scheme:${scheme}}iframe{display:block;width:max(100%,var(--pk-frame-width));height:max(100%,var(--pk-frame-height));border:0}</style><script>addEventListener("message",function(e){var d=e.data;if(e.source!==parent||!d||d.type!=="${FRAME_SIZE}")return;var s=document.documentElement.style;s.setProperty("--pk-frame-width",Number(d.width)+"px");s.setProperty("--pk-frame-height",Number(d.height)+"px");});</script>`;
 }
 
 /** Which document is in the frame, and what it was drawn under. */
@@ -84,21 +101,9 @@ function wrapperDocument(doc: CanvasDocument, project: PageProject | null) {
 		before: `${canvasBridgeScript(APP_FROM_PAGE)}${canvasBaseStylesheet(doc.theme)}`,
 	});
 	return agentWrapperDocument(page, doc.title, doc.hosts, project, {
-		style: wrapperStyle(doc.theme.scheme),
+		style: wrapperStyle(doc.theme.scheme, shownSize(doc.state.drawn_for)),
 		sandbox: CANVAS_FRAME_SANDBOX,
 	});
-}
-
-/**
- * In each dimension the larger of the canvas area and the size the revision
- * was drawn for (§5): a page drawn for a larger screen keeps its size and the
- * area scrolls to it, never scaled.
- */
-function frameSize(drawnFor: CanvasSize | undefined) {
-	return {
-		width: drawnFor ? `max(100%, ${drawnFor.width}px)` : "100%",
-		height: drawnFor ? `max(100%, ${drawnFor.height}px)` : "100%",
-	};
 }
 
 function post(page: Window | null, message: CanvasAppMessage) {
@@ -138,7 +143,7 @@ interface Props {
 	onEditableFocus?: (editable: boolean) => void;
 	/** False while the canvas is hidden under chat view, as `HtmlFrame`'s. */
 	shown?: boolean;
-	/** The canvas area: what scrolls, and what the size is measured from. */
+	/** The canvas area, which the frame fills: what the size is measured from. */
 	areaRef?: Ref<HTMLDivElement>;
 	className?: string;
 	title?: string;
@@ -167,8 +172,6 @@ export function CanvasFrame({
 	const pageKey = `canvas:${sessionId}`;
 	const allowed = useAllowedPageHosts(pageKey);
 	const [doc, setDoc] = useState<CanvasDocument | null>(null);
-	/** What the page shows now, patches included: its size follows it. */
-	const [shownState, setShownState] = useState<CanvasState | null>(null);
 	const askProject = usePageProject();
 
 	// Read by the bridge's handlers, which outlive the render they were made in.
@@ -295,7 +298,6 @@ export function CanvasFrame({
 					project: initialPageProject(),
 					projectError: null,
 				}));
-				setShownState(state);
 				// What the last document was refused is not this one's.
 				clear();
 				// Its focused field went with it.
@@ -304,7 +306,15 @@ export function CanvasFrame({
 					latest.current.onEditableFocus?.(false);
 				}
 			},
-			patched: setShownState,
+			// The size follows the revision shown, a patched one included (§5);
+			// a drawn one has it in its wrapper already.
+			patched: (state) => {
+				const { width, height } = shownSize(state.drawn_for);
+				ref.current?.contentWindow?.postMessage(
+					{ type: FRAME_SIZE, width, height },
+					"*",
+				);
+			},
 			patch: (patch) => {
 				const page = pageWindowOf(ref.current);
 				if (!page) return false;
@@ -427,22 +437,22 @@ export function CanvasFrame({
 					Project files won't load on this page: {doc.projectError.message}
 				</PageNotice>
 			)}
-			<div ref={areaRef} className="min-h-0 flex-1 overflow-auto">
-				<div style={frameSize(shownState?.drawn_for)}>
-					{/* A new frame for a new document, as in `HtmlFrame`: a new
-					    `srcdoc` in the old one would add a history entry. */}
-					{srcDoc !== null && (
-						<iframe
-							key={doc?.id}
-							ref={ref}
-							title={doc?.title}
-							srcDoc={srcDoc}
-							sandbox={CANVAS_FRAME_SANDBOX}
-							className="block h-full w-full border-0 bg-th-bg-primary"
-							style={{ colorScheme: scheme }}
-						/>
-					)}
-				</div>
+			{/* Never a scroller: the frame always fills it, and what is larger
+			    than it scrolls inside the wrapper (see `wrapperStyle`). */}
+			<div ref={areaRef} className="min-h-0 flex-1">
+				{/* A new frame for a new document, as in `HtmlFrame`: a new
+				    `srcdoc` in the old one would add a history entry. */}
+				{srcDoc !== null && (
+					<iframe
+						key={doc?.id}
+						ref={ref}
+						title={doc?.title}
+						srcDoc={srcDoc}
+						sandbox={CANVAS_FRAME_SANDBOX}
+						className="block h-full w-full border-0 bg-th-bg-primary"
+						style={{ colorScheme: scheme }}
+					/>
+				)}
 			</div>
 		</div>
 	);

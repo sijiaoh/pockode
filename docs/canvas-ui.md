@@ -458,7 +458,7 @@ What differs:
 
 | | `html_render` card | Canvas |
 |---|---|---|
-| Size | as tall as the page, capped | the canvas area, or the drawn size (§5) |
+| Size | as tall as the page, capped | the canvas area; a page drawn larger keeps its size, scrolled inside the wrapper (§5) |
 | Height reporter | appended | not used |
 | Sandbox | the floor (`HTML_FRAME_SANDBOX`) | the floor and `allow-forms` (`CANVAS_FRAME_SANDBOX`), on both frames — [forms](#forms) |
 | Background | white, `color-scheme: light` | the theme (§3.3) |
@@ -576,13 +576,13 @@ window, not a keyboard. With no measurement kept yet, the first one is kept
 whatever has focus, until a better one replaces it: a size a little short is
 closer than none.
 
-How the app does this: it observes the canvas area's content box — the area
-less its own scrollbars, which is what a page drawn for that size gets at 100% —
-only while canvas view is on the screen with nothing over it, since under chat
-view or a page the hidden area is not the rectangle canvas view has — nor while
-the answer panel is up over it, where the composer sits in the column and the
-canvas gives way to it (§2). At each
-change it asks where focus is *now*: an editable element of the app's own (the
+How the app does this: it observes the canvas area's content box — what a page
+drawn for that size gets at 100%; the area never scrolls, so it has no
+scrollbars to leave out — only while canvas view is on the screen with nothing
+over it, since under chat view or a page the hidden area is not the rectangle
+canvas view has — nor while the answer panel is up over it, where the composer
+sits in the column and the canvas gives way to it (§2). At each change it asks
+where focus is *now*: an editable element of the app's own (the
 composer), or the canvas frame while the bridge last said the page's focus is
 editable. Focus is not re-measured when it leaves a field: at that moment the
 keyboard is often still up, and the resize that follows its going is what
@@ -606,16 +606,31 @@ canvas area and `drawn_for`:
   fills the canvas area. A page drawn narrower than the screen gets the whole
   width, which a page laid out in normal flow handles; letterboxing it would
   waste a tablet to protect a page that did not need it.
-- Screen smaller than `drawn_for`: the frame keeps `drawn_for` in that dimension
-  and the canvas area scrolls to it. **Never scaled**: text scaled down to fit is
+- Screen smaller than `drawn_for`: the page keeps `drawn_for` in that dimension
+  and the frame scrolls to it. **Never scaled**: text scaled down to fit is
   text too small to read and buttons too small to press; scrolling keeps both
   real. The page's own scrolling stays inside the frame.
 
-The frame is the canvas area's one child, sized `max(100%, <drawn_for>px)` in
-each dimension, and the area is what scrolls; it is also what the canvas size is
-measured from. The size followed is the revision the frame shows, a patched one
-included. A touch drag over a page that does not scroll itself in that
-direction scrolls the area, as any nested scroller hands on a gesture.
+The frame is the canvas area's one child and always fills it; the area is what
+the canvas size is measured from, and never scrolls. What scrolls is the
+frame's wrapper (§4): the page's own frame inside it is sized
+`max(100%, <drawn_for>px)` in each dimension, so the page's viewport — its
+`vw`, its media queries — is the size it was drawn for. The size followed is
+the revision the frame shows, a patched one included: the app posts a patched
+revision's size to the wrapper, which resizes the page's frame in place, the
+page keeping its document as through any patch. A touch drag over a page that
+does not scroll itself in that direction scrolls the wrapper, as any nested
+scroller hands on a gesture.
+
+**Why not the area.** A frame moved by a scroller in the app's own document —
+the area scrolling a frame larger than itself, in either direction — makes
+Chromium on some tablets (Huawei Browser, seen at 658×744) drop the app's bars
+around the canvas for as long as the scroll lasts: they flash white or the
+background colour at every frame. The same frame scrolled inside its wrapper,
+or a page scrolling itself, does not; giving the area a compositing layer of
+its own or `contain: paint` does not help. Confirmed on the device, not
+reproducible in desktop Chromium. So no scroller in the app's document may
+ever contain the canvas frame — `CanvasFrame.browser.test.tsx` holds it.
 
 So after the user rotates their phone, the page they see is still the one the
 agent drew, with a scroll — and the next message they send tells the agent the
@@ -1044,8 +1059,9 @@ The frontend receives a new state (§13.2) and decides how to show it:
   script removed it — fails whole (`ok: false`); nothing is half-applied.
 - Otherwise — a render, a frame two revisions behind, a patch that answered
   `ok: false`, no answer within 2 seconds, or a capability about to expire (§4):
-  **draw the revision whole** from its `html`. Local state is lost; the page is
-  what the agent drew.
+  **draw the revision whole** from its `html`. Local state is lost — the
+  scroll into a page drawn larger than the screen too, which belongs to the
+  wrapper (§5) — and the page is what the agent drew.
 
 **One patch at a time.** The app keeps the revision the frame shows, and it is
 the app's record, not the page's: it moves to a patch's `revision` only on a
@@ -2311,11 +2327,12 @@ scroll in both directions at once.
   and time before).
 - **The body** is one `CanvasFrame` with `readOnly` (§15.4), filling `Sheet`'s
   body exactly — its height is the body's, so the body itself never scrolls and
-  the only scroller is the frame's area, as in canvas view; nested scrollers
+  the only scroller is the frame's wrapper, as in canvas view; nested scrollers
   would fight over every drag. The size rule is §5's, applied to this area: in
   each dimension the larger of the area and the snapshot's `drawn_for`, the
-  area scrolling to it. This area is never measured and never reported (§5): it
-  is not the canvas area of anything, and only canvas view's area is.
+  frame's wrapper scrolling to it. This area is never measured and never
+  reported (§5): it is not the canvas area of anything, and only canvas view's
+  area is.
 - **One frame per revision.** The frame is keyed by the revision it shows, so
   each page is a document drawn whole from its snapshot, never a patch (§8.3)
   applied to the page before — whose scripts may have changed its DOM — which
@@ -2358,7 +2375,7 @@ never overtaken by an older one.
 
 - **‹ and ›** step to the next older and next newer listed revision. They are
   buttons, 44px under a coarse pointer, and disabled at either end. There is
-  no swipe: a horizontal drag over the page is the page's, or the area's
+  no swipe: a horizontal drag over the page is the page's, or its wrapper's
   scroll (§5).
 - **`Revision 7 of 12 ▾`** — the revision shown, of the current revision —
   opens the list in place of the body (sheets do not nest): one row per

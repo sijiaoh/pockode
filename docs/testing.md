@@ -359,6 +359,15 @@ silently. Two canvas tests are: a real touch drag, which only Chromium's
 DevTools protocol can dispatch (`cdp()`), and focus moving into a frame, which
 WebKit will not do without a press.
 
+**What a real browser still cannot show you** is a device's compositor: a
+symptom such as the canvas's bars flickering
+([canvas-ui.md §5](canvas-ui.md#5-size)) can appear on one tablet's browser and
+on no desktop engine, emulation and traces included. Telling its causes apart
+takes the device itself — a test page of variants served to it through
+[Port Preview](port-preview.md), the user saying which ones fail. What the
+browser entry can then hold is the structure the fix relies on, not the symptom,
+so a green run there says nothing about whether the device is fixed.
+
 **The transcript fixture.** `renderTranscript` in
 `web/src/test/transcriptFixture.tsx` renders the real `MessageList`, fed by the
 real `useChatMessages`, in a box of fixed height. A test gives it a session's
