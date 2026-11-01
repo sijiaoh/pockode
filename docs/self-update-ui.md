@@ -388,6 +388,11 @@ Unchanged, plus one marker:
 - The accessible name adds ", 0.25.0 out" after what it says today:
   "Pockode cluster v0.24.0, 0.25.0 out".
 - The button never says "Update": it opens the sheet, which says the rest.
+- The dot needs a check, and only a press checks (*When it checks*): a
+  cluster nobody has checked on since it started shows no dot even when a
+  release is out. That is the price of not spending the machine's shared
+  GitHub limit on a page load, and accepted; the sheet's *Not checked yet*
+  line is where the user finds out.
 
 ### The sheet
 
@@ -412,6 +417,16 @@ panel reconnects by itself.
 ──────────────────────────────────────
 ```
 
+Until someone checks, the rows are not there and the check line is the way in:
+
+```
+Running     0.24.0
+Installed   0.24.0
+
+Not checked since the cluster started ·
+Check for updates
+```
+
 - **The candidate rows** are the `web` rows in this panel's parts: the text
   block a link (`min-h-[44px]`), **Update** a `PRIMARY_BUTTON` for latest and
   `NEUTRAL_BUTTON` for alpha, the accessible names as in `web`. No icons: the
@@ -428,8 +443,56 @@ panel reconnects by itself.
   shows no rows and no check line: the dl already reads "development build".
 - **Another install running** — "Another Pockode on this machine is installing
   a new version." in place of the check line, no **Update**.
-- **Before the first check answers**, "Checking for updates..." stands in
-  for the check line.
+- **Not checked yet** — a check that answers with neither `checked_at` nor
+  a `check_error` (*When it checks*: nobody has pressed since the cluster
+  started) has no rows, and its check line reads "Not checked since the
+  cluster started · **Check for updates**", the button the same 44px text
+  button as **Check again**, sending a forced check. The sentence is what
+  the cluster can truthfully say: it is not "up to date", and it is not
+  "checking" — nothing is out until the press. It also explains the sheet
+  after any restart, this page's update included: the new process has
+  checked nothing, so the rows and the version button's dot are gone until
+  someone checks again.
+- **While a forced check is out** — from the press until a read started at
+  or after it settles (lands, fails, or goes with the socket) — the button
+  reads "Checking..." and is disabled, the rest of the line kept: "Not
+  checked since the cluster started · Checking...", "Checked 3 min ago ·
+  Checking...". That is how **Check again** and **Try again** already behave,
+  so all three are one button with three labels. *Checking* follows the
+  forced read only: the connect and visibility reads are answered from the
+  server's memory and must not flash "Checking..." for a request that asks
+  nobody. A connect or visibility read started meanwhile takes the forced
+  one's place (only the latest read lands) and ends *Checking* when it
+  settles, which is right: once the check has started, the server makes it
+  wait for that check, so it carries the check's answer. The cluster runs
+  each request on its own, though, so an unforced read that reaches the
+  server in the instant before the forced check has started does not wait:
+  it answers with what the server had before the press, and being the
+  latest read it lands, so the sheet shows that older state — *Not checked
+  yet* on a first check — although the check ran. It takes a
+  connect or visibility read within moments of the press, and pressing again
+  answers from the cache; closing it would mean `useServerRead` treating
+  forced and unforced reads differently, which is not worth the cost.
+- **It settles** into the line the answer calls for, with no state of its
+  own: candidates → their rows and "Checked just now · Check again"; none →
+  "Up to date · checked just now · Check again"; the server couldn't reach
+  GitHub → "Couldn't check for updates: <reason> · Try again"; the request
+  itself failed → the same line with its message. A forced check within the
+  server's minute answers from its cache, with that cache's `checked_at` —
+  "Checked 1 min ago" after a press is the truth, not a fault. A socket
+  that drops mid-check ends *Checking*; the reconnect's read says where the
+  server got to (back to *Not checked yet* if it was the server that went
+  away).
+- **Before the first read lands** (a moment after connect) the check line is
+  not drawn: "Checking for updates..." would claim a request to GitHub that
+  is not being made.
+- **Which line wins**, top first: a development build (none at all), a
+  failed request (there is no answer to read anything else from), *Another
+  install running*, *Not checked yet*, *Couldn't check*, then the checked
+  lines. `installing` and `cannot_install` do not depend on
+  a check, so an install elsewhere shows on a cluster that never checked; a
+  *Can't update* paragraph needs candidates and so never shows before a
+  check.
 
 ### Confirming, in the sheet
 
@@ -504,16 +567,17 @@ nodes their version lines — the shared-file sentence in `web`'s dialog said so
 | The page becomes visible again | ✓ | ✓ |
 | The confirmation opens | ✓ (cache is fine) | ✓ |
 | A failed install, a dropped install | ✓ | ✓ |
-| **Check again** / **Try again** | ✓, forced | ✓, forced |
+| **Check again** / **Try again** | ✓, forced | ✓, forced (and **Check for updates**) |
 | A timer | — | — |
 
 The check is a separate request from `server.version`, so a slow GitHub never
 holds up the version row or the Restart button — the reason the CLI check is
 separate from sign-in status. Never on the node poll, never on a timer.
 
-On the server, only a forced check (**Check again**, **Try again**) asks
-GitHub; every other row above is answered from what the process already
-knows, which on a fresh process is nothing (no `checked_at`, no error).
+On the server, only a forced check (**Check again**, **Try again**,
+web-cluster's **Check for updates**) asks GitHub; every other row above is
+answered from what the process already knows, which on a fresh process is
+nothing (no `checked_at`, no error).
 Every Pockode behind one address — each node, the cluster, a second server —
 spends from one GitHub rate limit, so none of them asks unless a user does
 ([code/self-update.md](code/self-update.md#asking-github-rarely)). Until
@@ -572,6 +636,12 @@ cluster serve the same methods. What the screens above rely on it for:
   with the path unchanged.
 - Leaving Settings during an install still sends the restart, and coming back
   shows *Installing*.
+- web-cluster: a check with neither `checked_at` nor `check_error` draws *Not
+  checked yet* — never "Checking for updates..." nor *Up to date* — and its
+  **Check for updates** sends `force`; the button reads "Checking..."
+  (disabled) only while a forced read is out, not during a connect or
+  visibility read, and a non-forced read started meanwhile ends it only when it
+  settles, carrying the answer; an install elsewhere outranks *Not checked yet*.
 - web-cluster: the dot only for a latest candidate; the sheet's rows and check line;
   the in-sheet confirmation is not dismissible while out; failure and a dropped
   connection return to the first view with the message.

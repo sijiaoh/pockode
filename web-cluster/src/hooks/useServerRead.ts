@@ -18,17 +18,23 @@ export interface ServerReadState<T> {
 	last: T | null;
 	/** The id of the latest read that landed; 0 before any. */
 	landed: number;
-	/** The latest read started has neither landed nor gone with the socket. */
-	pending: boolean;
+	/**
+	 * A forced read was started and no read started at or after it has
+	 * settled (landed, failed or gone with the socket). Only forced ones: the
+	 * connect and visibility reads are not the user's press, so they must not
+	 * read as one.
+	 */
+	forcing: boolean;
 	/** Starts a read and returns its id, for `useFreshRead`. */
 	refresh: (force?: boolean) => number;
 }
 
 /**
  * A read of something about the cluster's host that is never polled — each
- * one costs the host work (running the executable, asking GitHub) — so it
- * happens on connect, on returning to the tab and when a sheet asks; only the
- * latest one started is allowed to land.
+ * one costs the host work — so it happens on connect, on returning to the tab
+ * and when a sheet asks; only the latest one started is allowed to land. A
+ * forced read is the one a user's press asks for: what it forces is the
+ * caller's (`useUpdateCheck`: asking GitHub).
  */
 export function useServerRead<T>(
 	load: (force: boolean) => Promise<T>,
@@ -37,8 +43,8 @@ export function useServerRead<T>(
 	const [read, setRead] = useState<ServerRead<T> | null>(null);
 	const [last, setLast] = useState<T | null>(null);
 	const [landed, setLanded] = useState(0);
-	const [requested, setRequested] = useState(0);
 	const [settled, setSettled] = useState(0);
+	const [forced, setForced] = useState(0);
 	const lastReadRef = useRef(0);
 	// Read at call time, so a caller need not keep `load` stable.
 	const loadRef = useRef(load);
@@ -46,7 +52,7 @@ export function useServerRead<T>(
 
 	const refresh = useCallback((force = false) => {
 		const id = ++lastReadRef.current;
-		setRequested(id);
+		if (force) setForced(id);
 		void (async () => {
 			let next: ServerRead<T>;
 			try {
@@ -89,7 +95,13 @@ export function useServerRead<T>(
 			document.removeEventListener("visibilitychange", onVisibilityChange);
 	}, [refresh]);
 
-	return { read, last, landed, pending: requested > settled, refresh };
+	return {
+		read,
+		last,
+		landed,
+		forcing: forced > settled,
+		refresh,
+	};
 }
 
 /**
