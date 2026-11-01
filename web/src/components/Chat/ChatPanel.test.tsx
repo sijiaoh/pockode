@@ -2282,6 +2282,25 @@ describe("ChatPanel", () => {
 			within(screen.getByRole("group", { name: "View" })).getByRole("button", {
 				name,
 			});
+		// Revision 2 is the current page; 1 is the newest earlier one.
+		const drawTwoPages = () => {
+			subscribeWithCanvas({
+				revision: 2,
+				html: "<p>two</p>",
+				change: { kind: "render" },
+			});
+			mockState.canvasHistory.mockResolvedValue([
+				{ revision: 2, change_kind: "update", drawn_at: "", bytes: 1 },
+				{ revision: 1, change_kind: "render", drawn_at: "", bytes: 1 },
+			]);
+			mockState.canvasSnapshot.mockImplementation(
+				async (_: string, revision: number) => ({
+					revision,
+					html: `<p>${revision}</p>`,
+					change: { kind: "render" },
+				}),
+			);
+		};
 
 		beforeEach(() => {
 			seedSessionDetail({ canvas: true });
@@ -2361,28 +2380,33 @@ describe("ChatPanel", () => {
 			expect(screen.queryByRole("textbox")).toBeNull();
 		});
 
+		it("opens the history on the newest earlier page from beside the input line", async () => {
+			const user = userEvent.setup();
+			drawTwoPages();
+			render(<ChatPanel {...defaultProps} />);
+			await screen.findByTitle("Canvas");
+
+			await user.click(screen.getByRole("button", { name: "Canvas history" }));
+			expect(await screen.findByTitle("Canvas revision 1")).toBeVisible();
+
+			await user.click(screen.getByRole("button", { name: "Close" }));
+			await waitFor(() =>
+				expect(screen.queryByTitle("Canvas revision 1")).toBeNull(),
+			);
+			// The line's, so chat view has none.
+			await user.click(view("Chat"));
+			expect(
+				screen.queryByRole("button", { name: /^Canvas history/ }),
+			).toBeNull();
+		});
+
 		// The view and the fork sheet replace one another (§15.6).
 		describe("forking from a page of its history", () => {
 			const openForkFromHistory = async (
 				user: ReturnType<typeof userEvent.setup>,
 				onSelectSession = vi.fn(),
 			) => {
-				subscribeWithCanvas({
-					revision: 2,
-					html: "<p>two</p>",
-					change: { kind: "render" },
-				});
-				mockState.canvasHistory.mockResolvedValue([
-					{ revision: 2, change_kind: "update", drawn_at: "", bytes: 1 },
-					{ revision: 1, change_kind: "render", drawn_at: "", bytes: 1 },
-				]);
-				mockState.canvasSnapshot.mockImplementation(
-					async (_: string, revision: number) => ({
-						revision,
-						html: `<p>${revision}</p>`,
-						change: { kind: "render" },
-					}),
-				);
+				drawTwoPages();
 				render(
 					<ChatPanel {...defaultProps} onSelectSession={onSelectSession} />,
 				);
@@ -2589,6 +2613,42 @@ describe("ChatPanel", () => {
 			expect(mockState.permissionResponse).toHaveBeenCalledWith(
 				expect.objectContaining({ request_id: "req-c", choice: "allow" }),
 			);
+		});
+
+		// Reading history sends nothing, so a request owning the input does not
+		// turn it off; the view stacks over the panel, which waits as it was.
+		it("opens the history over a permission request's panel", async () => {
+			const user = userEvent.setup();
+			drawTwoPages();
+			render(<ChatPanel {...defaultProps} />);
+			await screen.findByTitle("Canvas");
+			act(() => {
+				mockState.onNotification?.({
+					type: "permission_request",
+					request_id: "req-h",
+					tool_name: "Bash",
+					tool_input: { command: "npm test" },
+					tool_use_id: "tool-h",
+				});
+			});
+			act(() => blockOn("req-h"));
+			expect(
+				screen.getByRole("dialog", { name: "Permission request" }),
+			).toBeVisible();
+			expect(
+				screen.getByRole("button", { name: "Allow or deny to send" }),
+			).toBeDisabled();
+
+			await user.click(screen.getByRole("button", { name: "Canvas history" }));
+			expect(await screen.findByTitle("Canvas revision 1")).toBeVisible();
+
+			await user.click(screen.getByRole("button", { name: "Close" }));
+			await waitFor(() =>
+				expect(screen.queryByTitle("Canvas revision 1")).toBeNull(),
+			);
+			expect(
+				screen.getByRole("dialog", { name: "Permission request" }),
+			).toBeVisible();
 		});
 
 		it("lists a request from the subscribe reply that the transcript does not have", async () => {

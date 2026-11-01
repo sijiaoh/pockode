@@ -79,6 +79,7 @@ import {
 } from "../../utils/sendAgain";
 import ActivityStrip from "../Canvas/ActivityStrip";
 import { CanvasComposer, ComposerDock } from "../Canvas/CanvasComposer";
+import { CanvasHistoryButton } from "../Canvas/CanvasHistoryButton";
 import {
 	type CanvasForkPage,
 	CanvasHistorySheet,
@@ -409,6 +410,9 @@ function ChatPanel({
 	};
 	const canvasViewUp = isCanvasSession && canvasView === "canvas";
 	const canvasRevision = useCanvasRevision(sessionId);
+	// Both entries that open on the newest earlier page: the panel's row and
+	// canvas view's button (§15.1).
+	const openCanvasHistory = () => setCanvasHistoryAt({ revision: null });
 	const showCanvasRevision = useCallback(
 		(revision: number) => setCanvasHistoryAt({ revision }),
 		[],
@@ -1518,7 +1522,7 @@ function ChatPanel({
 					isCanvasSession
 						? {
 								revision: canvasRevision,
-								onOpen: () => setCanvasHistoryAt({ revision: null }),
+								onOpen: openCanvasHistory,
 							}
 						: undefined
 				}
@@ -2002,6 +2006,12 @@ function ChatPanel({
 									onStop={handleInterrupt}
 									disabled={inputBarProps.disabled || promptOwnsInput}
 									blockedReason={inputBarProps.sendBlockedReason}
+									leading={
+										<CanvasHistoryButton
+											revision={canvasRevision}
+											onOpen={openCanvasHistory}
+										/>
+									}
 								>
 									{renderTrackedBar({
 										...inputBarProps,

@@ -20,10 +20,12 @@ function Host({
 	turnOpen = false,
 	onStop = () => {},
 	disabled = false,
+	onLeading = () => {},
 }: {
 	turnOpen?: boolean;
 	onStop?: () => void;
 	disabled?: boolean;
+	onLeading?: () => void;
 }) {
 	const [expanded, setExpanded] = useState(false);
 	const draft = useInputStore((s) => s.inputs.s1 ?? "");
@@ -37,6 +39,11 @@ function Host({
 				onStop={onStop}
 				disabled={disabled}
 				blockedReason="Allow or deny to send"
+				leading={
+					<button type="button" onClick={onLeading}>
+						Leading
+					</button>
+				}
 			>
 				<textarea
 					aria-label="Draft"
@@ -167,5 +174,24 @@ describe("CanvasComposer", () => {
 		expect(
 			screen.getByRole("button", { name: "Allow or deny to send" }),
 		).toBeDisabled();
+	});
+
+	it("draws its leading control beside the line, and not while expanded", async () => {
+		const user = userEvent.setup();
+		render(<Host />);
+		expect(screen.getByRole("button", { name: "Leading" })).toBeVisible();
+
+		await user.click(screen.getByRole("button", { name: "Message…" }));
+		expect(screen.queryByRole("button", { name: "Leading" })).toBeNull();
+	});
+
+	// Reading history is not sending.
+	it("leaves its leading control usable while sending is refused", async () => {
+		const user = userEvent.setup();
+		const onLeading = vi.fn();
+		render(<Host disabled onLeading={onLeading} />);
+
+		await user.click(screen.getByRole("button", { name: "Leading" }));
+		expect(onLeading).toHaveBeenCalledOnce();
 	});
 });
