@@ -59,7 +59,9 @@ function setup(
 	return history;
 }
 
-const layered = () => Boolean(window.history.state?.pockodeLayers);
+const layersOf = (state: unknown) =>
+	(state as { pockodeLayers?: unknown[] } | null)?.pockodeLayers ?? [];
+const layered = () => layersOf(window.history.state).length > 0;
 
 describe("a layer's entry on the window's history", () => {
 	it("closes the sheet on Back, and the next Back leaves the page", async () => {
@@ -107,9 +109,20 @@ describe("a layer's entry on the window's history", () => {
 		await screen.findByText("no sheet");
 		await expect.poll(layered).toBe(false);
 
+		// Each landing is recorded as it happens: the layers go back off the
+		// closed sheet's entry as soon as Forward lands on it, a millisecond or
+		// two later — too soon for a poll of the current entry ever to see it.
+		const arrivals: unknown[] = [];
+		const hear = (event: PopStateEvent) => arrivals.push(event.state);
+		window.addEventListener("popstate", hear);
+		cleanups.push(() => window.removeEventListener("popstate", hear));
+
 		window.history.forward();
-		await expect.poll(layered).toBe(true);
-		await expect.poll(layered).toBe(false);
+		await expect
+			.poll(() => arrivals.map((state) => layersOf(state).length > 0))
+			.toEqual([true, false]);
+		expect(layered()).toBe(false);
+		expect(window.history.state?.tag).toBe("page");
 		expect(screen.getByText("no sheet")).toBeInTheDocument();
 		expect(location.pathname).toBe("/page");
 	});

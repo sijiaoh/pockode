@@ -268,6 +268,15 @@ appear only once `listCommands` answers.
   after a real delay of about 100ms. Every test with this shape then fails on
   an idle machine, which shows you all of them at once instead of whichever one
   happened to lose the race.
+- **A state that does not last cannot be polled for.** A poll reads the
+  present, so it misses a state the code leaves again within a millisecond or
+  two. A test polling for one fails every time, never intermittently, and a
+  longer timeout changes nothing. Record each arrival as it happens instead —
+  a listener pushing each event's payload — and assert on the sequence and on
+  where it ends. The Forward test in `web/src/lib/layerHistory.browser.test.tsx`
+  is the worked example: Forward lands on a closed sheet's entry and is taken
+  straight back off it
+  ([project-ui.md §5.2](project-ui.md#reload-deep-links-forward)).
 
 ## Frontend: the real-browser entry
 
