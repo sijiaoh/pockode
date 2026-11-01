@@ -96,11 +96,17 @@ function rendered(revision: number, html: string, drawnFor?: CanvasSize) {
 
 interface FrameProps {
 	canvas: CanvasState;
+	covered?: number;
 	onSend?: (input: CanvasActionInput) => Promise<void>;
 	readOnly?: CanvasReadOnly;
 }
 
-function frameUi({ canvas, onSend = async () => {}, readOnly }: FrameProps) {
+function frameUi({
+	canvas,
+	covered,
+	onSend = async () => {},
+	readOnly,
+}: FrameProps) {
 	return (
 		<QueryClientProvider client={queryClient}>
 			<div style={{ ...AREA, display: "flex", flexDirection: "column" }}>
@@ -109,6 +115,7 @@ function frameUi({ canvas, onSend = async () => {}, readOnly }: FrameProps) {
 					canvas={canvas}
 					onSend={onSend}
 					readOnly={readOnly}
+					covered={covered}
 					className="h-full"
 					areaRef={(element) => {
 						area = element;
@@ -242,6 +249,64 @@ describe("the canvas frame in a real browser", () => {
 				await touchDrag(frame, 150);
 				await signalled("top hidden");
 				expectAreaStill(frame);
+			},
+		);
+	});
+
+	// What the composer floats over the bottom of the area (§2): scrolled past
+	// inside the frame, with neither the area nor the page's viewport giving
+	// up anything for it — so the canvas size the agent is told stays.
+	describe("covered", () => {
+		/**
+		 * A page exactly the area's height, which cannot scroll itself: its
+		 * viewport's size at load and on every resize, and whether its top
+		 * 50px are on the screen.
+		 */
+		const FITTED = `<div id="top" style="height:50px">top</div><script>function say(){${signal("'size '+innerWidth+'x'+innerHeight")}}addEventListener("resize",say);addEventListener("load",function(){say();new IntersectionObserver(function(es){${signal("es[0].isIntersecting?'top shown':'top hidden'")}}).observe(document.getElementById("top"))})</script>`;
+
+		it("keeps the page's viewport and the area while covered", async () => {
+			renderFrame({ canvas: rendered(1, FITTED) });
+			const frame = await wrapper();
+			await signalled(`size ${AREA.width}x${AREA.height}`, "top shown");
+
+			signals = [];
+			rerender(frameUi({ canvas: rendered(1, FITTED), covered: 100 }));
+			// Past a frame for the wrapper to take it; a resize would say so.
+			for (let i = 0; i < 4; i++) {
+				await new Promise((resolve) => requestAnimationFrame(resolve));
+			}
+			expect(signals).not.toContainEqual(expect.stringMatching(/^size /));
+			expect(await wrapper()).toBe(frame);
+			if (!area) throw new Error("no canvas area");
+			expect(area.getBoundingClientRect().height).toBe(AREA.height);
+			expect(frame.getBoundingClientRect().height).toBe(AREA.height);
+		});
+
+		// A real touch drag, which only Chromium's protocol can make. Without
+		// the cover the page fits and nothing scrolls; with it, the frame
+		// scrolls on by the cover, which the page's top leaves the screen for.
+		it.runIf(server.browser === "chromium")(
+			"scrolls a page that fits the area on by what is covered, drawn covered or covered later",
+			async () => {
+				renderFrame({ canvas: rendered(1, FITTED) });
+				const frame = await wrapper();
+				await signalled("top shown");
+				await touchDrag(frame, 150);
+				for (let i = 0; i < 4; i++) {
+					await new Promise((resolve) => requestAnimationFrame(resolve));
+				}
+				expect(signals).not.toContain("top hidden");
+
+				rerender(frameUi({ canvas: rendered(1, FITTED), covered: 100 }));
+				await touchDrag(frame, 150);
+				await signalled("top hidden");
+
+				// A page drawn while covered starts with the room.
+				signals = [];
+				rerender(frameUi({ canvas: rendered(2, FITTED), covered: 100 }));
+				await signalled("top shown");
+				await touchDrag(await wrapper(), 150);
+				await signalled("top hidden");
 			},
 		);
 	});

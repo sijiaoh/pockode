@@ -59,6 +59,12 @@ function currentTheme(): CanvasTheme {
 /** The app telling a wrapper the size the page in it is shown at. */
 const FRAME_SIZE = "pockode:canvas-frame-size";
 
+/**
+ * The app telling a wrapper how much of the bottom of the area something of
+ * the app's own floats over — the expanded composer (§2).
+ */
+const FRAME_COVERED = "pockode:canvas-frame-covered";
+
 /** The size a revision is shown at (§5); none drawn for fills the area. */
 function shownSize(drawnFor: CanvasSize | undefined): CanvasSize {
 	return drawnFor ?? { width: 0, height: 0 };
@@ -77,9 +83,18 @@ function shownSize(drawnFor: CanvasSize | undefined): CanvasSize {
  * as long as the scroll lasts — moved inside the wrapper it does not. A patch
  * may bring another size, which the app posts here (`FRAME_SIZE`): the page
  * keeps its document, as it does through any patch.
+ *
+ * What the app floats over the bottom of the area (`FRAME_COVERED`) is room
+ * the wrapper scrolls on past the page, so the page's bottom can be brought
+ * above it. Room after the page's frame, not a shorter frame: the page's
+ * viewport stays the size it was drawn for, and nothing goes into the page.
  */
-function wrapperStyle(scheme: CanvasTheme["scheme"], size: CanvasSize): string {
-	return `<style>:root{--pk-frame-width:${size.width}px;--pk-frame-height:${size.height}px}html{overflow:auto}html,body{margin:0;height:100%;background:transparent;color-scheme:${scheme}}iframe{display:block;width:max(100%,var(--pk-frame-width));height:max(100%,var(--pk-frame-height));border:0}</style><script>addEventListener("message",function(e){var d=e.data;if(e.source!==parent||!d||d.type!=="${FRAME_SIZE}")return;var s=document.documentElement.style;s.setProperty("--pk-frame-width",Number(d.width)+"px");s.setProperty("--pk-frame-height",Number(d.height)+"px");});</script>`;
+function wrapperStyle(
+	scheme: CanvasTheme["scheme"],
+	size: CanvasSize,
+	covered: number,
+): string {
+	return `<style>:root{--pk-frame-width:${size.width}px;--pk-frame-height:${size.height}px;--pk-covered:${covered}px}html{overflow:auto}html,body{margin:0;height:100%;background:transparent;color-scheme:${scheme}}iframe{display:block;width:max(100%,var(--pk-frame-width));height:max(100%,var(--pk-frame-height));border:0}body::after{content:"";display:block;height:var(--pk-covered)}</style><script>addEventListener("message",function(e){var d=e.data;if(e.source!==parent||!d)return;var s=document.documentElement.style;if(d.type==="${FRAME_SIZE}"){s.setProperty("--pk-frame-width",Number(d.width)+"px");s.setProperty("--pk-frame-height",Number(d.height)+"px");}else if(d.type==="${FRAME_COVERED}"){s.setProperty("--pk-covered",Number(d.covered)+"px");}});</script>`;
 }
 
 /** Which document is in the frame, and what it was drawn under. */
@@ -96,12 +111,20 @@ interface CanvasDocument {
 	projectError: Error | null;
 }
 
-function wrapperDocument(doc: CanvasDocument, project: PageProject | null) {
+function wrapperDocument(
+	doc: CanvasDocument,
+	project: PageProject | null,
+	covered: number,
+) {
 	const page = agentPageDocument(doc.state.html ?? "", doc.hosts, project, {
 		before: `${canvasBridgeScript(APP_FROM_PAGE)}${canvasBaseStylesheet(doc.theme)}`,
 	});
 	return agentWrapperDocument(page, doc.title, doc.hosts, project, {
-		style: wrapperStyle(doc.theme.scheme, shownSize(doc.state.drawn_for)),
+		style: wrapperStyle(
+			doc.theme.scheme,
+			shownSize(doc.state.drawn_for),
+			covered,
+		),
 		sandbox: CANVAS_FRAME_SANDBOX,
 	});
 }
@@ -143,6 +166,13 @@ interface Props {
 	onEditableFocus?: (editable: boolean) => void;
 	/** False while the canvas is hidden under chat view, as `HtmlFrame`'s. */
 	shown?: boolean;
+	/**
+	 * How much of the bottom of the area the app floats something over — the
+	 * expanded composer (§2): the frame scrolls on that far past the page, so
+	 * all of it can be brought above. The area and the page's viewport keep
+	 * their size, and with them the canvas size (§5).
+	 */
+	covered?: number;
 	/** The canvas area, which the frame fills: what the size is measured from. */
 	areaRef?: Ref<HTMLDivElement>;
 	className?: string;
@@ -164,6 +194,7 @@ export function CanvasFrame({
 	onSendRefused,
 	onEditableFocus,
 	shown = true,
+	covered = 0,
 	areaRef,
 	className,
 	title = "Canvas",
@@ -195,6 +226,8 @@ export function CanvasFrame({
 		pageKey,
 		title,
 	};
+	const coveredRef = useRef(covered);
+	coveredRef.current = covered;
 	const canvasRef = useRef(canvas);
 	canvasRef.current = canvas;
 	const redrawRef = useRef<CanvasRedraw | null>(null);
@@ -237,6 +270,7 @@ export function CanvasFrame({
 		}
 		postTheme();
 		sendable();
+		postCovered();
 		redraw?.loaded();
 	}
 
@@ -385,6 +419,17 @@ export function CanvasFrame({
 	// biome-ignore lint/correctness/useExhaustiveDependencies: posted whenever what it says changes, which these name
 	useEffect(sendable, [readOnly, sendBlocked]);
 
+	// Also on every page ready: what changed while the wrapper was loading
+	// was posted to a document that was not listening yet.
+	const postCovered = useCallback(() => {
+		ref.current?.contentWindow?.postMessage(
+			{ type: FRAME_COVERED, covered: coveredRef.current },
+			"*",
+		);
+	}, []);
+	// biome-ignore lint/correctness/useExhaustiveDependencies: posted whenever it changes, which `covered` names
+	useEffect(postCovered, [covered]);
+
 	const theme = useThemeStore((s) => s.theme);
 	const scheme = useThemeStore((s) => s.resolvedMode);
 	const postTheme = useCallback(() => {
@@ -400,7 +445,9 @@ export function CanvasFrame({
 		() =>
 			doc === null || doc.project === undefined || !doc.state.html
 				? null
-				: wrapperDocument(doc, doc.project),
+				: // The wrapper starts at the cover there is now; later ones are
+					// posted to it, without drawing the page again.
+					wrapperDocument(doc, doc.project, coveredRef.current),
 		[doc],
 	);
 

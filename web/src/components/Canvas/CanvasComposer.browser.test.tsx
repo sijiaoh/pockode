@@ -1,5 +1,5 @@
 import { render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { ComposerDock } from "./CanvasComposer";
 
 /**
@@ -7,11 +7,15 @@ import { ComposerDock } from "./CanvasComposer";
  * the dock leaves, a strip in the dock above a composer of `composer` px —
  * open, and floating, whenever `floating` is.
  */
-function ui(floating: boolean, composer: number) {
+function ui(
+	floating: boolean,
+	composer: number,
+	onCover?: (height: number) => void,
+) {
 	return (
 		<div style={{ height: 400, display: "flex", flexDirection: "column" }}>
 			<div data-testid="canvas" style={{ flex: 1, minHeight: 0 }} />
-			<ComposerDock floating={floating} open={floating}>
+			<ComposerDock floating={floating} open={floating} onCover={onCover}>
 				<div data-testid="strip" style={{ height: 30 }} />
 				<div data-testid="composer" style={{ height: composer }} />
 			</ComposerDock>
@@ -77,5 +81,30 @@ describe("the composer dock in a real browser", () => {
 		}
 		expect(box("canvas").height).toBe(320);
 		expect(box("composer").bottom).toBe(400);
+	});
+
+	it("says how far it reaches over the canvas while floating, and none in the column", async () => {
+		const onCover = vi.fn();
+		const { rerender } = render(ui(false, 50, onCover));
+		await new Promise((resolve) => requestAnimationFrame(resolve));
+		expect(onCover).toHaveBeenLastCalledWith(0);
+
+		// Held at the closed 80px; 230px floating over the canvas's bottom.
+		rerender(ui(true, 200, onCover));
+		expect(onCover).toHaveBeenLastCalledWith(150);
+
+		// A draft growing.
+		rerender(ui(true, 260, onCover));
+		await vi.waitFor(() => expect(onCover).toHaveBeenLastCalledWith(210));
+
+		// Put away: back in the column.
+		rerender(ui(false, 50, onCover));
+		expect(onCover).toHaveBeenLastCalledWith(0);
+		await new Promise((resolve) => requestAnimationFrame(resolve));
+
+		// Too tall to float: in the column, the canvas gives way instead.
+		onCover.mockClear();
+		rerender(ui(true, 450, onCover));
+		await vi.waitFor(() => expect(onCover).toHaveBeenLastCalledWith(0));
 	});
 });
