@@ -5,6 +5,11 @@ only difference between them is the guidance the agent starts with: in an HTML
 first session it is told to say things with pages (`html_render`, `html_edit`,
 `html_get`) and keep its text to a sentence or two. The tools, the screen and
 the transcript are the same.
+How a page sends to the agent and follows the theme is the same in both
+([tool-call-ui.md § Sending to the agent](tool-call-ui.md#sending-to-the-agent),
+[§ Theme](tool-call-ui.md#theme-a-page-that-asks-for-it)): a page follows the
+theme because it uses the `--pk-*` variables, never because of the session's
+style.
 
 This document covers the two places the UI shows the choice: the switch on a
 new session's empty state, and the glyph on an HTML first session's row. It also

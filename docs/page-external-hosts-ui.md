@@ -369,9 +369,15 @@ is what a link is for, as a Markdown link's URL is the agent's and a tap
 follows it; here nothing says the reader pressed anything, so an Open would
 invite a tap to finish a trip they never started.
 
-Two navigations never read as `Page left`. A `<form>` is held by the sandbox,
-which has no `allow-forms`, and behind it by `form-action`: it goes nowhere and
-nothing is listed. A frame the page makes itself, navigating to another host,
+Two navigations do not read as `Page left`. A `<form>` goes nowhere and
+nothing is listed: in a workspace page it is held by the sandbox, which has no
+`allow-forms`, and behind it by `form-action`, as is an agent page that does
+not send; an agent page that sends allows forms, and there the wrapper's
+`frame-src`, `form-action` and the bridge's cancel of an unhandled submit hold
+it instead. The exception is that page's two gaps — a submit the page stops,
+`form.submit()` — whose outcome differs by engine: in Chromium one aimed at
+another host is refused by the wrapper and does read `Page left`
+([forms in a page](tool-call-ui.md#forms-in-a-page)). A frame the page makes itself, navigating to another host,
 is refused by the page's own `frame-src` — the page is that frame's embedder —
 and is listed as a document the page embeds, `(can't be allowed)`.
 
@@ -379,7 +385,9 @@ and is listed as a document the page embeds, `(can't be allowed)`.
 
 Two documents per frame: a **wrapper** the app draws, which exists for its
 `frame-src`, and inside it the **page**, under a policy that refuses every host
-the reader has not allowed. Both are sandboxed with `HTML_FRAME_SANDBOX` (and
+the reader has not allowed. Both are sandboxed with `HTML_FRAME_SANDBOX` —
+an agent page that sends with `AGENT_PAGE_SANDBOX`, the same plus
+`allow-forms` (and
 the page from `/api/raw` with its sandbox header too): the policy is added to
 the sandbox, never traded for it.
 

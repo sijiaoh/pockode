@@ -754,6 +754,24 @@ for a session of another worktree) — a page never changes, so there is nothing
 to subscribe to. A record without `html_page` is a page drawn before pages were
 stored, and is drawn from its call's input.
 
+**A page sends back.** What a page sends on the reader's press
+(`pockode.send`, `data-pk-send`) arrives as `chat.html_action {session_id,
+page, action, data?}` (`server/ws/rpc_chat.go`, `handleHTMLAction`): the
+session must be this worktree's, `page` a page it has (`htmlpage.Get` — any
+page, not only the latest), `action` 1–128 characters with no control
+characters, `data` any JSON, compacted, at most 64KB, `{}` when omitted. It is
+sent as the user's message through `chat.Client.SendHTMLActionExcluding`, the
+typed message's path — refused while a permission request is open (with
+`data.reason: "awaiting_permission"`, `rpc.ChatErrorData`), folded into a
+running turn, handed to the work engine after a successful send. Its content
+is `htmlpage.ActionText` (`Page action "approve" from p3:` and the data on the
+next line), and its record carries the structured copy as `html_action
+{page, action, data}`, as a command's carries `command`; the reply echoes both.
+The contract and the UI around it are in
+[tool-call-ui.md](../tool-call-ui.md#sending-to-the-agent); how a page sends,
+and the `--pk-*` theme variables, are told to the agent in both page tools'
+descriptions (`mcp.pageSendingAndTheme`).
+
 When to reach for the tool at all is in the guidance every session gets before
 it has loaded one
 ([agent-integration.md](agent-integration.md#telling-the-agent-when-to-ask)).

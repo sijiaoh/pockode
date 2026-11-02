@@ -362,6 +362,9 @@ parsed — or, for a message carrying `answering`, `content` alone: the body the
 server wrote from the answers ([agent-integration.md](agent-integration.md#answering)),
 and, for a message carrying files, `attachments` — each file as its record
 describes it ([agent-integration.md](agent-integration.md#files-the-user-sends)).
+`chat.html_action`, a page's send ([tool-call-ui.md](../tool-call-ui.md#the-action-message)),
+answers the same result with `content` and `html_action` — the text the server
+wrote for the agent and the action as its record holds it.
 It needs one because the sender is deliberately left out of the
 broadcast that carries every other record's `seq` (it has already echoed the
 message into its own transcript), so the reply is the only place that address —
@@ -1097,7 +1100,12 @@ mapping of the same errors. The chat handlers
 keep their own `replyErrorForChat`: what is not the server's fault (no such session, no live
 process) becomes a client error, and anything else is logged there and forwarded
 as the cause — a failing agent start has to leave a trace even when the client
-stopped waiting for the reply.
+stopped waiting for the reply. One of those client errors carries a `data`
+member: a send refused because the turn is blocked on a permission request
+(`chat.ErrTurnAwaitingAnswer`) is `InvalidParams` with `data.reason:
+"awaiting_permission"` (`rpc.ChatErrorData`), so a sender that cannot show the
+message — a page's `chat.html_action` — tells it from the rest without reading
+the words ([tool-call-ui.md](../tool-call-ui.md#while-the-session-is-busy)).
 
 **A refusal that is nobody's failure gets a code of its own.** `git.*` write
 methods answer `-32001` (`rpc.CodeGitBusy`) when a git operation they would

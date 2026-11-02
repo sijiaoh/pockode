@@ -13,6 +13,7 @@ Pockode integrates AI Agents (Claude and Codex) through subprocess management. T
 ┌─────────────────────────────────────────────────────────────────────┐
 │  ws/rpc_chat.go                                                      │
 │  ├─ chat.message → ChatClient.SendMessageExcluding() / SendAnswers()│
+│  ├─ chat.html_action → ChatClient.SendHTMLActionExcluding()         │
 │  ├─ chat.interrupt → ChatClient.Interrupt()                         │
 │  └─ chat.permission_response → ChatClient.SendPermissionResponse()  │
 └───────────────────────────────┬─────────────────────────────────────┘
