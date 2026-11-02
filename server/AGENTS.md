@@ -99,6 +99,7 @@ Windows 与 darwin/linux 一样是发布目标（产物见 [docs/platforms.md](.
 | `git/command.go` | `terminate_{unix,windows}.go` — 超时的 git 怎么停：SIGTERM（git 自己清锁文件）/ 杀进程树（Windows 没有可发的停止请求）|
 | `agent/command.go` | `command_{unix,windows}.go` — AI CLI 的平台通用兜底目录（Windows 的 npm 目录）、PATH 变量名的大小写、自带环境时补上 `PWD`（只有 unix 用它）+ `.cmd` 包装器的命令行构造 |
 | `agent/codex/install_dir.go` | `install_dir_{unix,windows}.go` — Codex 官方安装器的默认目录：`~/.local/bin` / `%LOCALAPPDATA%\Programs\OpenAI\Codex\bin` |
+| `cliupdate/install.go` | `installer_{unix,windows}.go` — 装缺失的 CLI 时跑哪份官方安装脚本：各 CLI 在 `agent/*/update.go` 里同时声明 `Unix`（`install.sh`，bash / sh）与 `Windows`（`install.ps1`，`cliupdate.PowerShell`），这里按平台取一份 |
 | `agent/codex/view_image.go` | `fileuri_{unix,windows}.go` — `file://` URI 的 path 段转原生路径：Windows 上盘符是 URI 语法里的又一段，前导斜杠要去掉 |
 | `worktree/setup.go` | `hook_shell_{unix,windows}.go` — setup hook 的解释器（Windows 无 bash，探测 Git for Windows） |
 | `internal/pathutil/pathutil.go` | `equal_{unix,windows}.go` — Windows 路径比较大小写不敏感 |

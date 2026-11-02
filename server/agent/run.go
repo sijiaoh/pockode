@@ -38,7 +38,13 @@ type RunResult struct {
 //
 // stdin is closed at once, so a command that would wait for input ends instead.
 func Run(ctx context.Context, log *slog.Logger, name, dir string, args ...string) (RunResult, error) {
-	proc, err := StartProcess(ctx, log, name, args, dir)
+	return RunEnv(ctx, log, name, dir, nil, args...)
+}
+
+// RunEnv is Run with env ("KEY=value") added to the environment the command
+// inherits from this process, as StartProcessEnv adds it.
+func RunEnv(ctx context.Context, log *slog.Logger, name, dir string, env []string, args ...string) (RunResult, error) {
+	proc, err := StartProcessEnv(ctx, log, name, args, dir, env)
 	if err != nil {
 		return RunResult{}, err
 	}

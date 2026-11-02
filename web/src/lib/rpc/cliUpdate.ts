@@ -25,7 +25,7 @@ const CLI_INSTALL_REFUSED_CODE = -32003;
 
 const INSTALL_REFUSED_REASONS: readonly string[] = [
 	"already_installed",
-	"npm_not_found",
+	"installer_tool_not_found",
 	"busy",
 ] satisfies CliInstallRefusedReason[];
 

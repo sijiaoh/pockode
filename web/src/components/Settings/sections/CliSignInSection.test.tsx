@@ -167,7 +167,7 @@ describe("CliSignInSection", () => {
 	it("offers to install a missing CLI, with sign-in waiting for it", async () => {
 		renderWith({ state: "not_installed", error: "claude CLI not found" });
 		const claude = await card("Claude");
-		await findRow(claude, "Not installed", "Installs with npm");
+		await findRow(claude, "Not installed", "Official installer");
 		expect(claude.getByRole("button", { name: "Install" })).toBeInTheDocument();
 		await findRow(claude, "Sign-in", "Available once Claude is installed");
 		expect(
@@ -983,7 +983,7 @@ describe("CliSignInSection", () => {
 		it("confirms, shows the install running, then the CLI ready to sign in to", async () => {
 			const user = userEvent.setup();
 			renderMissing();
-			// Past two minutes: npm's silence no longer looks like progress.
+			// Past two minutes: the installer's silence no longer looks like progress.
 			server.actions.cliUpdateInstall.mockResolvedValue(
 				makeInstall({
 					started_at: new Date(Date.now() - 130_000).toISOString(),
@@ -996,7 +996,7 @@ describe("CliSignInSection", () => {
 				name: "Install Claude?",
 			});
 			expect(dialog).toHaveTextContent(
-				"npm install --global for the latest Claude (latest channel)",
+				"downloads and runs Claude's official installer on the server, for the latest release (latest channel)",
 			);
 			expect(dialog).toHaveTextContent("every project and cluster node");
 			expect(server.actions.cliUpdateInstall).not.toHaveBeenCalled();
@@ -1167,18 +1167,18 @@ describe("CliSignInSection", () => {
 		});
 
 		describe("refused", () => {
-			it("says npm is missing, pointing at the other ways", async () => {
+			it("says the installer's tool is missing, pointing at the other ways", async () => {
 				renderMissing();
 				server.actions.cliUpdateInstall.mockRejectedValue(
 					refusal(
-						"npm_not_found",
-						"npm was not found on the server's PATH; install Node.js and restart pockode",
+						"installer_tool_not_found",
+						"cannot run the official installer: claude's official installer (https://claude.ai/install.sh) runs with bash, which is not on the PATH of the process running pockode; install it, then restart pockode",
 					),
 				);
 				const claude = await confirmInstall();
 
 				expect(await claude.findByRole("alert")).toHaveTextContent(
-					"npm was not found on the server's PATH",
+					"runs with bash, which is not on the PATH",
 				);
 				expect(
 					claude.getByRole("link", { name: /Install instructions/ }),
@@ -1227,32 +1227,34 @@ describe("CliSignInSection", () => {
 		describe("failed", () => {
 			it.each([
 				{
-					reason: "permission_denied" as const,
-					title: "npm can't write its global folder",
-					body: "npm config set prefix ~/.npm-global), add its bin to the PATH pockode starts with, restart pockode",
+					reason: "download_failed" as const,
+					detail:
+						"could not download the official installer (https://claude.ai/install.sh): 404 Not Found",
+					title: "Couldn't download Claude's installer",
+					body: "network and proxy settings",
 					tryAgain: true,
 					instructions: true,
 				},
 				{
 					reason: "not_on_path" as const,
 					title: "Claude installed, but Pockode can't find it",
-					body: "isn't on the PATH pockode was started with",
+					body: "in a folder Pockode doesn't look in",
 					tryAgain: false,
 					instructions: false,
 				},
 				{
 					reason: "command_failed" as const,
 					detail:
-						"npm install --global exited 1\nnpm error 404 Not Found - GET https://registry.npmjs.org/@anthropic-ai%2fclaude-code\nnpm error A complete log of this run can be found in: /home/ada/.npm/_logs/debug.log",
-					title: "npm couldn't install Claude",
-					body: "npm error 404 Not Found - GET https://registry.npmjs.org/@anthropic-ai%2fclaude-code Install it on the server yourself, or try again.",
+						"the official installer (https://claude.ai/install.sh) exited with status 1:\nSetting up Claude Code...\nChecksum verification failed",
+					title: "Claude's installer failed",
+					body: "Checksum verification failed Install it on the server yourself, or try again.",
 					tryAgain: true,
 					instructions: true,
 				},
 				{
 					reason: "timeout" as const,
 					title: "The install took too long",
-					body: "Pockode stopped npm after 10 minutes.",
+					body: "Pockode stopped the installer after 10 minutes.",
 					tryAgain: true,
 					instructions: false,
 				},
@@ -1294,6 +1296,27 @@ describe("CliSignInSection", () => {
 				expect(claude.getByRole("button", { name: "Dismiss" })).toBeEnabled();
 			});
 
+			it("leaves the server's heading out of a silent installer's failure", async () => {
+				server.setLatestUpdate(
+					"claude",
+					makeInstall({
+						phase: "failed",
+						failure: {
+							reason: "command_failed",
+							detail:
+								"the official installer (https://claude.ai/install.sh) exited with status 1",
+						},
+					}),
+				);
+				renderMissing();
+
+				const claude = await card("Claude");
+				await findRow(claude, "Claude's installer failed", "Not installed");
+				expect(
+					claude.getByText("Install it on the server yourself, or try again."),
+				).toBeInTheDocument();
+			});
+
 			it("is dismissed back to Not installed", async () => {
 				const user = userEvent.setup();
 				server.setLatestUpdate(
@@ -1309,7 +1332,7 @@ describe("CliSignInSection", () => {
 				expect(server.actions.cliUpdateDismiss).toHaveBeenCalledWith(
 					"update-1",
 				);
-				await findRow(claude, "Not installed", "Installs with npm");
+				await findRow(claude, "Not installed", "Official installer");
 			});
 
 			it("confirms Try again before installing again", async () => {
@@ -1330,14 +1353,17 @@ describe("CliSignInSection", () => {
 				expect(server.actions.cliUpdateInstall).not.toHaveBeenCalled();
 			});
 
-			it("keeps Dismiss when Try again is refused for lack of npm", async () => {
+			it("keeps Dismiss when Try again is refused for lack of the installer's tool", async () => {
 				const user = userEvent.setup();
 				server.setLatestUpdate(
 					"claude",
 					makeInstall({ phase: "failed", failure: { reason: "timeout" } }),
 				);
 				server.actions.cliUpdateInstall.mockRejectedValue(
-					refusal("npm_not_found", "npm was not found on the server's PATH"),
+					refusal(
+						"installer_tool_not_found",
+						"cannot run the official installer: claude's official installer (https://claude.ai/install.sh) runs with bash, which is not on the PATH of the process running pockode; install it, then restart pockode",
+					),
 				);
 				renderMissing();
 
@@ -1353,7 +1379,7 @@ describe("CliSignInSection", () => {
 				);
 
 				expect(await claude.findByRole("alert")).toHaveTextContent(
-					"npm was not found on the server's PATH",
+					"runs with bash, which is not on the PATH",
 				);
 				expect(
 					claude.getByRole("link", { name: /Install instructions/ }),

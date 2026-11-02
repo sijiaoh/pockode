@@ -82,8 +82,8 @@ func cliInstallRefusal(err error) string {
 	switch {
 	case errors.Is(err, cliupdate.ErrAlreadyInstalled):
 		return rpc.CLIInstallRefusedAlreadyInstalled
-	case errors.Is(err, cliupdate.ErrInstallerNotFound):
-		return rpc.CLIInstallRefusedNPMNotFound
+	case errors.Is(err, cliupdate.ErrInstallerToolNotFound):
+		return rpc.CLIInstallRefusedInstallerToolNotFound
 	case errors.Is(err, cliupdate.ErrBusy):
 		return rpc.CLIInstallRefusedBusy
 	}

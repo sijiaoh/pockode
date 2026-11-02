@@ -414,9 +414,11 @@ describe("cliLoginStore", () => {
 
 		it("leaves the reads alone on any other refusal", async () => {
 			server.actions.cliUpdateInstall.mockRejectedValue(
-				new JSONRPCErrorException("npm is not on the PATH", -32003, {
-					reason: "npm_not_found",
-				}),
+				new JSONRPCErrorException(
+					"cannot run the official installer: claude's official installer (https://claude.ai/install.sh) downloads with curl or wget, and neither is on the PATH of the process running pockode; install it, then restart pockode",
+					-32003,
+					{ reason: "installer_tool_not_found" },
+				),
 			);
 
 			await expect(cliLoginActions.startInstall("claude")).rejects.toThrow();
