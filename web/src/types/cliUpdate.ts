@@ -38,9 +38,12 @@ export type CliUpdateFailureReason =
 	| "not_applied"
 	| "timeout"
 	| "not_installed"
-	/** install only: npm could not write its global prefix (EACCES / EPERM) */
-	| "permission_denied"
-	/** install only: npm succeeded, but its bin directory is not on the PATH */
+	/** install only: the official installer script could not be downloaded */
+	| "download_failed"
+	/**
+	 * install only: the installer finished, but the CLI is on neither PATH nor
+	 * its official install directory
+	 */
 	| "not_on_path"
 	| "other";
 
@@ -88,6 +91,7 @@ export interface CliUpdateChangedNotification {
  */
 export type CliInstallRefusedReason =
 	| "already_installed"
-	| "npm_not_found"
+	/** The shell or downloader the official installer needs is not on the server's PATH. */
+	| "installer_tool_not_found"
 	/** Being updated or installed, here or by another Pockode, or signed in to. */
 	| "busy";

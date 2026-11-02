@@ -3416,9 +3416,9 @@ implementations of it. Nothing caches it; every launch looks again.
 
    | | Directory | Where it comes from |
    |---|---|---|
-   | claude | `~/.local/bin` (`%USERPROFILE%\.local\bin` on Windows) | where `claude install` — what `claude.ai/install.sh` and `install.ps1` run — puts the launcher |
-   | codex | `$CODEX_INSTALL_DIR` when set, else `~/.local/bin`; on Windows `%LOCALAPPDATA%\Programs\OpenAI\Codex\bin` | the defaults in `chatgpt.com/codex/install.sh` and `install.ps1`; the override is honoured because the installers honour it — with it set, that is where codex went |
-   | any, Windows only | `%APPDATA%\npm` | where `npm install --global` puts its `.cmd` shims — still a common way to install either CLI, and how [cli-update](cli-update.md#installing-a-missing-cli) installs a missing one |
+   | claude | `~/.local/bin` (`%USERPROFILE%\.local\bin` on Windows) | where `claude install` — what `claude.ai/install.sh` and `install.ps1` run, and so where [cli-update](cli-update.md#installing-a-missing-cli) installs a missing one — puts the launcher |
+   | codex | `$CODEX_INSTALL_DIR` when set, else `~/.local/bin`; on Windows `%LOCALAPPDATA%\Programs\OpenAI\Codex\bin` | the defaults in `chatgpt.com/codex/install.sh` and `install.ps1`, the scripts [cli-update](cli-update.md#installing-a-missing-cli) installs a missing one with; the override is honoured because the installers honour it — with it set, that is where codex went |
+   | any, Windows only | `%APPDATA%\npm` | where `npm install --global` puts its `.cmd` shims — still a common way to install either CLI by hand |
 
    Each CLI declares its own directory with `agent.RegisterInstallDir` from its
    package's `init` (`agent/claude/install_dir.go`, `agent/codex/install_dir*.go`),

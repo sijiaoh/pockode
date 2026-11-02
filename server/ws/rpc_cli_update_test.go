@@ -52,7 +52,7 @@ func TestCLIInstallRefusal(t *testing.T) {
 		want string
 	}{
 		{fmt.Errorf("claude %w at /usr/bin/claude", cliupdate.ErrAlreadyInstalled), rpc.CLIInstallRefusedAlreadyInstalled},
-		{fmt.Errorf("%w: install Node.js", cliupdate.ErrInstallerNotFound), rpc.CLIInstallRefusedNPMNotFound},
+		{fmt.Errorf("%w: bash is missing", cliupdate.ErrInstallerToolNotFound), rpc.CLIInstallRefusedInstallerToolNotFound},
 		{fmt.Errorf("wrapped: %w", cliupdate.ErrBusy), rpc.CLIInstallRefusedBusy},
 		{cliupdate.ErrShuttingDown, ""},
 		{errors.New("no home directory"), ""},

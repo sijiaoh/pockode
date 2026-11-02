@@ -9,7 +9,7 @@ weight: 10
 
 ## 1. Install an AI CLI
 
-Pockode drives the [Claude Code](https://docs.anthropic.com/en/docs/claude-code) or [Codex](https://github.com/openai/codex) CLI on the same machine. Install one yourself, or start Pockode without one and install it from the app, under **Settings → AI CLIs**; that needs `npm` ([Node.js](https://nodejs.org/)) on the machine. A CLI that is not signed in yet is signed in from the same place.
+Pockode drives the [Claude Code](https://docs.anthropic.com/en/docs/claude-code) or [Codex](https://github.com/openai/codex) CLI on the same machine. Install one yourself, or start Pockode without one and install it from the app, under **Settings → AI CLIs**, which runs the CLI's official installer on the machine. A CLI that is not signed in yet is signed in from the same place.
 
 ## 2. Install and start Pockode
 

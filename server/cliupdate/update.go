@@ -40,10 +40,12 @@ type FailureReason string
 const (
 	// FailureNotInstalled is a CLI this server cannot find.
 	FailureNotInstalled FailureReason = "not_installed"
-	// FailureCommandFailed is the CLI's update command exiting non-zero:
-	// usually an install directory the server's user cannot write (an npm
-	// prefix owned by root), no network, or a file a running process holds on
-	// Windows. Detail is the end of what it printed, which says which.
+	// FailureCommandFailed is the CLI's update command, or an install's
+	// official install script, exiting non-zero: usually an install directory
+	// the server's user cannot write (an npm prefix owned by root), no network,
+	// a tool the script needs (tar, a checksum command) missing, or a file a
+	// running process holds on Windows. Detail is the end of what it printed,
+	// which says which.
 	FailureCommandFailed FailureReason = "command_failed"
 	// FailureNotApplied is an update command that said it succeeded while the
 	// CLI Pockode runs is still older than the latest release — it updated an
@@ -53,12 +55,15 @@ const (
 	// FailureTimeout is an update that ran past UpdateTimeout; its process
 	// tree was killed.
 	FailureTimeout FailureReason = "timeout"
-	// FailurePermissionDenied is an install npm could not write: its global
-	// prefix belongs to another user (root, usually). Detail is npm's output.
-	FailurePermissionDenied FailureReason = "permission_denied"
-	// FailureNotOnPath is an install npm finished while this server still
-	// cannot find the CLI: npm's global bin directory is not on the server's
-	// PATH. Detail names npm's global prefix when it could be read.
+	// FailureDownloadFailed is an install whose official install script could
+	// not be downloaded: no network, a proxy, or a region the CLI's download
+	// service does not serve. Detail is the URL and the error.
+	FailureDownloadFailed FailureReason = "download_failed"
+	// FailureNotOnPath is an install the script finished while this server
+	// still cannot find the CLI, neither on its PATH nor in the directory the
+	// official installer uses. Detail is where it looked, how to make the CLI
+	// found, and the end of what the script printed, which may say where it
+	// put the CLI.
 	FailureNotOnPath FailureReason = "not_on_path"
 	// FailureOther is anything else; Detail says what.
 	FailureOther FailureReason = "other"

@@ -27,7 +27,7 @@ const binaryNotFoundHint = " A CLI installed inside WSL is not visible to pockod
 // there; only the PATH we inherited is stale.
 func fallbackBinaryDirs() []string {
 	// `npm install -g` writes its .cmd shims here, which is how both CLIs are
-	// still commonly installed, and how Pockode itself installs a missing one.
+	// still commonly installed by hand.
 	if appData := os.Getenv("APPDATA"); appData != "" {
 		return []string{filepath.Join(appData, "npm")}
 	}

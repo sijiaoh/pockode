@@ -52,7 +52,7 @@ pillars:
         text: "`-relay=false` keeps the app on your network"
 
 quickstart:
-  prerequisite: Pockode drives the `claude` or `codex` CLI. Have neither? Install one and sign in from the app; that needs `npm` (Node.js).
+  prerequisite: Pockode drives the `claude` or `codex` CLI. Have neither? Install one with its official installer and sign in, both from the app.
   run_where: on your dev machine, in your project directory
   next: Scan the QR code with your phone.
   installers:

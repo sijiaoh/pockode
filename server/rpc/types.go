@@ -1285,9 +1285,11 @@ const (
 	// CLIInstallRefusedAlreadyInstalled is a CLI the server finds already;
 	// reading cli_update.check again shows it.
 	CLIInstallRefusedAlreadyInstalled = "already_installed"
-	// CLIInstallRefusedNPMNotFound is a server without npm on its PATH. It
-	// needs Node.js installed and the server restarted.
-	CLIInstallRefusedNPMNotFound = "npm_not_found"
+	// CLIInstallRefusedInstallerToolNotFound is a server without a command
+	// the CLI's official install script needs on its PATH: its shell (bash,
+	// sh, PowerShell) or a downloader (curl or wget). The message names which;
+	// it needs installing and the server restarting.
+	CLIInstallRefusedInstallerToolNotFound = "installer_tool_not_found"
 	// CLIInstallRefusedBusy is a CLI being updated, being updated or installed
 	// by another Pockode on the machine, or signed in to. Trying again once
 	// that has ended works.
