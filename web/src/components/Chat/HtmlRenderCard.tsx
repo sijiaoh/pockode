@@ -138,9 +138,15 @@ export function HtmlRenderCard({
 						noun: "page",
 						from: "start",
 						copyText: html,
-						content: { kind: "html", html, showSource, pageKey: run.id },
+						content: {
+							kind: "html",
+							html,
+							showSource,
+							pageKey: run.id,
+							...(pageId ? { page: pageId } : {}),
+						},
 					},
-		[name, html, showSource, run.id],
+		[name, html, showSource, run.id, pageId],
 	);
 	const openFullScreen = useFullScreen(fullScreenKey, source);
 	const opener = openFullScreen && {
@@ -234,6 +240,7 @@ export function HtmlRenderCard({
 						html={html}
 						title={name}
 						pageKey={run.id}
+						page={pageId}
 						onHeight={onHeight}
 						shown={!showSource}
 						boxRef={boxRef}

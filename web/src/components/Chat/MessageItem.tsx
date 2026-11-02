@@ -53,6 +53,7 @@ import AttachmentStrip from "./AttachmentStrip";
 import AuthFailureNotice from "./AuthFailureNotice";
 import { DiscardedNote, DiscardedSummary } from "./DiscardedMessage";
 import { HeaderlessMainBlock } from "./HeaderlessMainBlock";
+import { HtmlActionBubble } from "./HtmlActionBubble";
 import { HtmlRenderCard } from "./HtmlRenderCard";
 import MessageActions from "./MessageActions";
 import MessageMenuTrigger, { type ForkBlocked } from "./MessageMenuTrigger";
@@ -1427,6 +1428,20 @@ const MessageItem = memo(function MessageItem({
 				</div>
 			) : (
 				item
+			);
+		}
+		if (message.htmlAction) {
+			return (
+				<div className="flex items-end justify-end gap-2">
+					{slot}
+					<HtmlActionBubble
+						id={message.id}
+						htmlAction={message.htmlAction}
+						discarded={isDiscarded}
+						className={userBubbleClass}
+					/>
+					{UserAvatar && <UserAvatar className="size-10 shrink-0" />}
+				</div>
 			);
 		}
 		return (

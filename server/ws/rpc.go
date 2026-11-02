@@ -729,6 +729,8 @@ func (h *rpcMethodHandler) Handle(ctx context.Context, conn *jsonrpc2.Conn, req 
 		h.handleWatcherUnsubscribe(ctx, conn, req, wt.ChatMessagesWatcher, "chat-messages")
 	case "chat.message":
 		h.handleMessage(ctx, conn, req, wt)
+	case "chat.html_action":
+		h.handleHTMLAction(ctx, conn, req, wt)
 	case "chat.interrupt":
 		h.handleInterrupt(ctx, conn, req, wt)
 	case "chat.permission_response":

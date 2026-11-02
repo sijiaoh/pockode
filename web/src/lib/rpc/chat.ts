@@ -2,6 +2,8 @@ import type { JSONRPCRequester } from "json-rpc-2.0";
 import type { FileBlock } from "../../types/content";
 import type {
 	HistorySeq,
+	HtmlAction,
+	HtmlActionParams,
 	InterruptParams,
 	MessageAttachmentParams,
 	MessageParams,
@@ -11,7 +13,11 @@ import type {
 	QuestionAnswerParams,
 } from "../../types/message";
 import { parseFileBlocks } from "../contentBlocks";
-import { normalizeCommand, readHistorySeq } from "../messageReducer";
+import {
+	normalizeCommand,
+	normalizeHtmlAction,
+	readHistorySeq,
+} from "../messageReducer";
 
 /** What the server said about a message it accepted; see `MessageResult`. */
 export interface SentMessage {
@@ -27,6 +33,25 @@ export interface SentMessage {
 	expanded?: { content: string; command?: PockodeCommandInvocation };
 	/** The files the message carried, as the server described them. */
 	attachments?: FileBlock[];
+}
+
+/** What a page sent, as the app sends it on (`chat.html_action`). */
+export interface HtmlActionInput {
+	/** The card's id; the app's, never the page's. */
+	page: string;
+	action: string;
+	/** Any JSON; omitted means `{}`. */
+	data?: unknown;
+}
+
+/** What the server said about a page's send it accepted. */
+export interface SentHtmlAction {
+	seq?: HistorySeq;
+	messageId?: string;
+	/** The action as the agent reads it: the record's `content`. */
+	content?: string;
+	/** The action as its record carries it, `data` normalized. */
+	htmlAction?: HtmlAction;
 }
 
 export interface ChatActions {
@@ -51,6 +76,16 @@ export interface ChatActions {
 		 */
 		attachments?: MessageAttachmentParams[],
 	) => Promise<SentMessage>;
+	/**
+	 * Sends what a page sent (`chat.html_action`, docs/tool-call-ui.md § The
+	 * action message). Refusals are `InvalidParams` in the server's words; one
+	 * while the turn awaits a permission answer carries `data.reason:
+	 * "awaiting_permission"` (`isAwaitingPermissionRejection`).
+	 */
+	sendHtmlAction: (
+		sessionId: string,
+		action: HtmlActionInput,
+	) => Promise<SentHtmlAction>;
 	interrupt: (sessionId: string) => Promise<void>;
 	permissionResponse: (params: PermissionResponseParams) => Promise<void>;
 }
@@ -109,6 +144,33 @@ export function createChatActions(
 							},
 						}
 					: {}),
+			};
+		},
+
+		sendHtmlAction: async (
+			sessionId: string,
+			{ page, action, data }: HtmlActionInput,
+		): Promise<SentHtmlAction> => {
+			// Through the agent-start requester for the reason `chat.message` is:
+			// a page's send is a message, and may be what starts the agent.
+			const result = (await requireClient(getAgentStartClient).request(
+				"chat.html_action",
+				{
+					session_id: sessionId,
+					page,
+					action,
+					...(data !== undefined ? { data } : {}),
+				} satisfies HtmlActionParams,
+			)) as MessageResult | undefined;
+			const seq = readHistorySeq(result);
+			const htmlAction = normalizeHtmlAction(result?.html_action);
+			return {
+				...(seq !== undefined ? { seq } : {}),
+				...(result?.message_id ? { messageId: result.message_id } : {}),
+				...(typeof result?.content === "string"
+					? { content: result.content }
+					: {}),
+				...(htmlAction ? { htmlAction } : {}),
 			};
 		},
 

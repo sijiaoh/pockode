@@ -1,14 +1,20 @@
 package ws
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"strings"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/pockode/server/agent"
 	"github.com/pockode/server/chat"
 	"github.com/pockode/server/command"
+	"github.com/pockode/server/htmlpage"
 	"github.com/pockode/server/process"
 	"github.com/pockode/server/rpc"
 	"github.com/pockode/server/session"
@@ -269,6 +275,104 @@ func (h *rpcMethodHandler) handleMessage(ctx context.Context, conn *jsonrpc2.Con
 	}
 }
 
+// The bounds of chat.html_action (docs/tool-call-ui.md § The action message),
+// the canvas's own.
+const (
+	maxHTMLActionRunes = 128
+	maxHTMLActionData  = 64 * 1024
+)
+
+// checkHTMLAction turns chat.html_action's params into the action its record
+// will carry, or refuses them with the words of the contract. Whether the page
+// exists is the caller's to check.
+func checkHTMLAction(params rpc.HTMLActionParams) (htmlpage.Action, error) {
+	if _, ok := htmlpage.ParseID(params.Page); !ok {
+		return htmlpage.Action{}, fmt.Errorf("page must be a page id such as p1, not %q", params.Page)
+	}
+
+	n := utf8.RuneCountInString(params.Action)
+	if n < 1 || n > maxHTMLActionRunes || strings.IndexFunc(params.Action, unicode.IsControl) >= 0 {
+		return htmlpage.Action{}, errors.New("action must be 1–128 characters with no control characters")
+	}
+
+	// Compacted, so that the agent reads and the record holds one line of it
+	// whatever whitespace the page's JSON.stringify left in. Omitted is `{}`;
+	// an explicit null is a value the page sent, and is kept.
+	data := json.RawMessage("{}")
+	if len(params.Data) > 0 {
+		var buf bytes.Buffer
+		// Unreachable for a request that unmarshalled, which already parsed
+		// the data; checked because Compact says it can fail.
+		if err := json.Compact(&buf, params.Data); err != nil {
+			return htmlpage.Action{}, fmt.Errorf("data is not JSON: %w", err)
+		}
+		data = buf.Bytes()
+	}
+	if len(data) > maxHTMLActionData {
+		return htmlpage.Action{}, fmt.Errorf("data is %d bytes, over the 64KB limit", len(data))
+	}
+	return htmlpage.Action{Page: params.Page, Action: params.Action, Data: data}, nil
+}
+
+// handleHTMLAction delivers what a page in the chat sent on the reader's press
+// to the agent, as a message of its own. Any card with a page id may send, an
+// old one as much as the latest: the message names the page, so it is never
+// ambiguous. No token and no rate limit (docs/tool-call-ui.md § The action
+// message).
+func (h *rpcMethodHandler) handleHTMLAction(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request, wt *worktree.Worktree) {
+	var params rpc.HTMLActionParams
+	if err := unmarshalParams(req, &params); err != nil {
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "invalid params")
+		return
+	}
+
+	log := h.log.With("sessionId", params.SessionID)
+
+	// Before the page is read: the session id picks the directory it is read
+	// from, as for html_page.get.
+	_, found, err := wt.SessionStore.Get(params.SessionID)
+	if err != nil {
+		h.replyInternalError(ctx, conn, req.ID, "failed to get session", err, "sessionId", params.SessionID)
+		return
+	}
+	if !found {
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "session not found")
+		return
+	}
+
+	action, err := checkHTMLAction(params)
+	if err != nil {
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, err.Error())
+		return
+	}
+
+	if _, err := htmlpage.Get(wt.DataDir, params.SessionID, action.Page); errors.Is(err, htmlpage.ErrNotFound) {
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams,
+			fmt.Sprintf("page %s does not exist in this session", action.Page))
+		return
+	} else if err != nil {
+		h.replyInternalError(ctx, conn, req.ID, "failed to read html page", err, "sessionId", params.SessionID, "pageId", action.Page)
+		return
+	}
+
+	log.Info("received page action", "page", action.Page, "dataBytes", len(action.Data))
+
+	sent, content, err := wt.ChatClient.SendHTMLActionExcluding(ctx, params.SessionID, action, h.state.getNotifier())
+	if err != nil {
+		h.replyErrorForChat(ctx, conn, req, params.SessionID, err)
+		return
+	}
+
+	// After the send; see handleMessage. A press is the reader speaking to the
+	// work as much as typing is.
+	h.workEngine.HandleUserMessage(params.SessionID)
+
+	result := rpc.MessageResult{Seq: sent.Seq, MessageID: sent.MessageID, Content: content, HTMLAction: &action}
+	if err := conn.Reply(ctx, req.ID, result); err != nil {
+		log.Error("failed to send response", "error", err)
+	}
+}
+
 // chatAnswers narrows the wire shape of an answer to the one the chat client
 // takes. The two are separate types for the reason rpc.MessageParams is not
 // chat's own: what a client may send is decided at the boundary, not by
@@ -354,8 +458,12 @@ func (h *rpcMethodHandler) handlePermissionResponse(ctx context.Context, conn *j
 func (h *rpcMethodHandler) replyErrorForChat(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request, sessionID string, err error) {
 	if errors.Is(err, chat.ErrSessionNotFound) {
 		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "session not found")
+	} else if errors.Is(err, chat.ErrTurnAwaitingAnswer) {
+		// The words are for the user; the reason is what lets a sender that
+		// cannot show them — a page's send — tell this refusal from the rest.
+		h.replyErrorData(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, err.Error(),
+			rpc.ChatErrorData{Reason: rpc.ChatReasonAwaitingPermission})
 	} else if errors.Is(err, chat.ErrSessionNotRunning) ||
-		errors.Is(err, chat.ErrTurnAwaitingAnswer) ||
 		errors.Is(err, chat.ErrQuestionNotPending) ||
 		errors.Is(err, chat.ErrAnswerShape) ||
 		errors.Is(err, process.ErrRequestNotPending) ||
@@ -367,8 +475,7 @@ func (h *rpcMethodHandler) replyErrorForChat(ctx context.Context, conn *jsonrpc2
 		// whose process is gone or which is no longer being waited on, a message
 		// answering a question somebody already resolved (the text names every
 		// such request id and what became of it, which is what lets a client grey
-		// those answers out and keep the rest of the draft), a message
-		// sent into a turn that is holding a request open, a fork anchored past
+		// those answers out and keep the rest of the draft), a fork anchored past
 		// the end of the history or at the very first message, a fork of a
 		// session whose agent cannot be forked, files for an agent that cannot
 		// receive them.

@@ -6,12 +6,13 @@ import (
 	"testing"
 
 	"github.com/pockode/server/agent"
+	"github.com/pockode/server/htmlpage"
 	"github.com/pockode/server/rpc"
 	"github.com/pockode/server/work"
 )
 
 // Every entry point that counts as a user message clears the work's wait. They
-// are three separate call sites, so a new one forgetting to say so is exactly
+// are separate call sites, so a new one forgetting to say so is exactly
 // the kind of omission this pins down.
 //
 // The WaitNone half of the table is not filler: it is the case where there is
@@ -27,19 +28,27 @@ func TestHandler_UserMessage_ClearsTheWait(t *testing.T) {
 			// answer below is one it will take. Nil for the message case, which
 			// answers nothing.
 			raises agent.AgentEvent
+			// page is a page the session has to have drawn first.
+			page bool
 		}{
 			{"message", "chat.message", func(s string) any {
 				return rpc.MessageParams{SessionID: s, Content: "carry on"}
-			}, nil},
+			}, nil, false},
+			{"html_action", "chat.html_action", func(s string) any {
+				return rpc.HTMLActionParams{SessionID: s, Page: "p1", Action: "approve"}
+			}, nil, true},
 			{"permission_response", "chat.permission_response", func(s string) any {
 				return rpc.PermissionResponseParams{SessionID: s, RequestID: "req-1", Choice: "allow"}
-			}, agent.PermissionRequestEvent{RequestID: "req-1", ToolName: "Bash"}},
+			}, agent.PermissionRequestEvent{RequestID: "req-1", ToolName: "Bash"}, false},
 		} {
 			t.Run("wait="+string(paused)+"/"+action.name, func(t *testing.T) {
 				env := newTestEnv(t, &mockAgent{})
 				workID, sessionID := startWorkWaiting(t, env, paused)
 				if action.raises != nil {
 					raisePrompt(t, env, sessionID, "req-1", action.raises)
+				}
+				if action.page {
+					storePage(t, env, sessionID, htmlpage.Draft{Title: "T", HTML: "<p>1</p>"})
 				}
 
 				resp := env.call(action.method, action.params(sessionID))

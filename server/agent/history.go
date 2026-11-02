@@ -3,6 +3,8 @@ package agent
 import (
 	"encoding/json"
 	"time"
+
+	"github.com/pockode/server/htmlpage"
 )
 
 // EventRecord is the serialized form of an AgentEvent.
@@ -71,6 +73,9 @@ type EventRecord struct {
 	// Command is the Pockode command a message record was expanded from; see
 	// CommandInvocation.
 	Command *CommandInvocation `json:"command,omitempty"`
+	// HTMLAction is the page action a message record was written from; see
+	// MessageEvent.HTMLAction.
+	HTMLAction *htmlpage.Action `json:"html_action,omitempty"`
 	// Attachments are the files the user sent with a message record; see
 	// MessageEvent.Attachments.
 	Attachments []FileBlock   `json:"attachments,omitempty"`

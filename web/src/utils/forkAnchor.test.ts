@@ -177,6 +177,26 @@ describe("resolveForkAnchor", () => {
 		);
 	});
 
+	// Its text is the action written out for the agent, which no user typed:
+	// in the fork the user presses the page again (docs/tool-call-ui.md § The
+	// action message).
+	it("hands nothing back for a page's action", () => {
+		const messages: Message[] = [
+			userMessage({ id: "u1" }),
+			assistantMessage({ id: "a1" }),
+			userMessage({
+				id: "u2",
+				anchorSeq: 3,
+				content: 'Page action "go" from p2:\n{}',
+				htmlAction: { page: "p2", action: "go", data: {} },
+			}),
+		];
+
+		const anchor = resolveForkAnchor(messages, "u2", false);
+		expect(anchor?.droppedCount).toBe(1);
+		expect(anchor?.droppedText).toBeUndefined();
+	});
+
 	// A fork returns to before the anchor was sent, so a message the user typed
 	// is one of the things left behind rather than the last thing kept.
 	it("counts a user anchor itself as staying behind", () => {

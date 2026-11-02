@@ -1316,6 +1316,34 @@ exposed:
 | `InputBar`'s `+` menu | the same, at every width, for the same reason |
 | the answer panel | closes, on a **`window`** listener, if the press landed on the backdrop element itself |
 
+**A press into a page frame is invisible to all of them.** It is dispatched in
+the frame's document, never the app's, so none of the listeners above hears it.
+A surface with no backdrop stays open, and the press goes on into the agent's
+page — which, in a page that sends, may send to the agent. So the frame of
+every page that sends shields itself: `HtmlFrame` (an `html_render` card, and
+the page in its full-screen viewer) lays a `FrameShield` — a transparent
+`aria-hidden` element over the frame alone — while a layer is drawn over it,
+and the press lands in the app's document instead, where the surface closes on
+it the usual way. Because the shield is in the way physically, the page cannot
+get the press whichever layer is up, even one that does not claim its
+dismissing click. A page that cannot send is not shielded: under a layer it
+could no longer be pressed or scrolled, a change with nothing to prevent
+([tool-call-ui.md § Under a layer](tool-call-ui.md#under-a-layer)).
+
+"Drawn over it" is `useIsDrawnOver` from `@pockode/shared`, read over the same
+registry as `useIsPageCovered` but not the same question:
+
+- **A frame on the page** is shielded while any layer is up — any counted by
+  `useIsPageCovered`.
+- **A frame inside a `Sheet`** is shielded only by a layer that went up *after*
+  its sheet. Never by its own sheet — the sheet is a layer, and a shield would
+  cover the very page it shows, which could then never be pressed: the page in
+  the full-screen viewer. Nor by a layer it was opened over. A sheet gives its
+  layer to its content for this (`CoverLayerContext`, internal to the shared
+  package), which is why the registry is ordered rather than a count.
+
+The rule is unit-tested in `web/src/components/ui/pageCover.test.tsx`.
+
 The two rules, restated for the pointer:
 
 1. **A surface drawn over the answer panel claims the gesture** — here

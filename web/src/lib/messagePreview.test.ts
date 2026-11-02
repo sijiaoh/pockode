@@ -17,6 +17,21 @@ describe("messagePreview", () => {
 		).toBe("/pockode-lead backend first");
 	});
 
+	// Its content is written for the agent (docs/tool-call-ui.md § The action
+	// bubble).
+	it("quotes a page's action by its name and page, not the agent's text", () => {
+		expect(
+			messagePreview({
+				id: "u3",
+				role: "user",
+				content: 'Page action "approve" from p3:\n{"id":"42"}',
+				status: "complete",
+				createdAt: new Date(),
+				htmlAction: { page: "p3", action: "approve", data: { id: "42" } },
+			}),
+		).toBe("approve · p3");
+	});
+
 	it("names a message that is only files by the files", () => {
 		expect(
 			messagePreview({
