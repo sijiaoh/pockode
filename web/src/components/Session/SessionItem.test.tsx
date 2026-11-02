@@ -260,3 +260,33 @@ describe("a row read out of another worktree", () => {
 		expect(onDelete).toHaveBeenCalledWith("s1", "old-fix");
 	});
 });
+
+// The glyph is decoration; what a screen reader hears is the words beside the
+// title, and a Chat row says nothing (docs/html-first-session-ui.md §3).
+describe("an HTML first row", () => {
+	it("says so after the title, before the fork", () => {
+		useSessionStore.getState().setSessions({
+			sessions: [makeSessionListItem({ id: "p1", title: "Parent" })],
+			nextCursor: null,
+			hasUnread: false,
+		});
+		renderRow({
+			title: "Compare",
+			work_id: undefined,
+			html_first: true,
+			forked_from: { session_id: "p1" },
+		});
+
+		expect(
+			screen.getByRole("button", {
+				name: /^Compare, HTML first, forked from Parent/,
+			}),
+		).toBeInTheDocument();
+	});
+
+	it("says nothing on a Chat row", () => {
+		renderRow({ title: "Compare", work_id: undefined });
+
+		expect(screen.queryByText(/HTML first/)).not.toBeInTheDocument();
+	});
+});

@@ -94,6 +94,11 @@ export interface SessionListItem {
 	unanswered_questions?: number;
 	/** Absent on a session that was created rather than forked. */
 	forked_from?: ForkOrigin;
+	/**
+	 * `SessionDetail.html_first`, on the row because the row draws it
+	 * (docs/html-first-session-ui.md §3). Absent means an ordinary chat.
+	 */
+	html_first?: boolean;
 }
 
 /** One story a session watches: enough to list it and open its detail. */
@@ -1024,6 +1029,18 @@ export interface SessionDetail {
 	effort: string;
 	/** True once the agent has produced output in this session. */
 	activated: boolean;
+	/**
+	 * True from just before the first message is delivered, and never cleared;
+	 * a fork is started from birth. It is what fixes `html_first`, and it is not
+	 * `activated`, which waits for the agent's first output.
+	 */
+	started: boolean;
+	/**
+	 * The agent starts told to say things with pages. A draft until `started`,
+	 * fixed after (docs/html-first-session-ui.md §1). Absent means an ordinary
+	 * chat.
+	 */
+	html_first?: boolean;
 	/** What the session is doing. The same value the session's row carries. */
 	turn: SessionTurn;
 	unread: boolean;
@@ -1169,6 +1186,11 @@ export interface ChatMessagesHistoryParams {
 }
 
 export type ChatMessagesHistoryResult = ChatMessagesHistoryPage;
+
+export interface SessionSetHTMLFirstParams {
+	session_id: string;
+	html_first: boolean;
+}
 
 export interface SessionSetModeParams {
 	session_id: string;

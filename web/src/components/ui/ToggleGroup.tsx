@@ -15,6 +15,7 @@ export default function ToggleGroup<T extends string>({
 	hint,
 	error,
 	valueState = "known",
+	disabled = false,
 }: {
 	label: string;
 	items: readonly T[];
@@ -33,6 +34,11 @@ export default function ToggleGroup<T extends string>({
 	 * The hint goes with it, being derived from the same value.
 	 */
 	valueState?: ValueState;
+	/**
+	 * Presses are ignored while a write is in flight. `aria-disabled` rather than
+	 * the native attribute, which would drop focus from the segment just pressed.
+	 */
+	disabled?: boolean;
 }) {
 	const hasValue = valueState === "known";
 
@@ -49,7 +55,8 @@ export default function ToggleGroup<T extends string>({
 				<div
 					role="group"
 					aria-label={label}
-					className="flex gap-1 rounded-lg bg-th-bg-secondary p-1"
+					aria-disabled={disabled || undefined}
+					className={`flex gap-1 rounded-lg bg-th-bg-secondary p-1 ${disabled ? "opacity-50" : ""}`}
 				>
 					{items.map((item) => {
 						const info = getInfo(item);
@@ -58,9 +65,12 @@ export default function ToggleGroup<T extends string>({
 							<button
 								key={item}
 								type="button"
-								onClick={() => onSelect(item)}
+								onClick={() => {
+									if (!disabled) onSelect(item);
+								}}
 								aria-pressed={isSelected}
-								className={`flex min-h-11 flex-1 items-center justify-center gap-1.5 rounded-md px-3 py-2 text-sm transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent active:scale-95 ${
+								aria-disabled={disabled || undefined}
+								className={`flex min-h-11 flex-1 items-center justify-center gap-1.5 rounded-md px-3 py-2 text-sm transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent ${disabled ? "cursor-default" : "active:scale-95"} ${
 									isSelected
 										? "bg-th-bg-tertiary text-th-text-primary shadow-sm"
 										: "text-th-text-muted hover:text-th-text-secondary"

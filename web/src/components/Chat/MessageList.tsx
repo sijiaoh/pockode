@@ -1,5 +1,6 @@
 import { ArrowDown } from "lucide-react";
 import {
+	type ReactNode,
 	type Ref,
 	useCallback,
 	useEffect,
@@ -122,6 +123,12 @@ interface Props {
 	 * the handler it would call is withheld.
 	 */
 	isReadOnly?: boolean;
+	/**
+	 * Drawn at the top of the empty state, in place of its invitation: the new
+	 * session's Chat / HTML first switch, when the session offers one
+	 * (docs/html-first-session-ui.md §2.1).
+	 */
+	emptyStateSwitch?: ReactNode;
 	/** What the reply being written ends on; see `TurnTail`. */
 	tail?: TurnTail;
 	/** See `useChatMessages`. */
@@ -152,6 +159,7 @@ function MessageList({
 	onSignIn,
 	onRestoreMessages,
 	isReadOnly = false,
+	emptyStateSwitch,
 	tail,
 	openedThoughtIds = NO_OPENED_THOUGHTS,
 }: Props) {
@@ -368,6 +376,21 @@ function MessageList({
 			return (
 				<div className="flex min-h-0 flex-1 items-center justify-center text-th-text-muted">
 					<p>Nothing was said in this conversation.</p>
+				</div>
+			);
+		}
+		// One centred column holding the switch and then the extension's content,
+		// rather than two blocks each centring itself. `m-auto` rather than
+		// `justify-center`: an auto margin collapses when the column is taller
+		// than the area, so a short view scrolls to its top instead of cutting
+		// it off.
+		if (emptyStateSwitch) {
+			return (
+				<div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
+					<div className="m-auto flex w-full flex-col items-center gap-6 px-4 py-6">
+						<div className="w-full max-w-sm">{emptyStateSwitch}</div>
+						{CustomEmptyState && <CustomEmptyState onHintClick={onHintClick} />}
+					</div>
 				</div>
 			);
 		}
