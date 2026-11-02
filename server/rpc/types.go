@@ -242,11 +242,36 @@ type MessageResult struct {
 	MessageID string                   `json:"message_id,omitempty"`
 	Content   string                   `json:"content,omitempty"`
 	Command   *agent.CommandInvocation `json:"command,omitempty"`
+	// HTMLAction is the page action a chat.html_action message was written
+	// from, as its record holds it, with Content beside it.
+	HTMLAction *htmlpage.Action `json:"html_action,omitempty"`
 	// Attachments describe the files the message carried as its record does —
 	// type, size and dimensions read from the stored bytes — for the same
 	// reason as Content: the sender is left out of the broadcast.
 	Attachments []agent.FileBlock `json:"attachments,omitempty"`
 }
+
+// HTMLActionParams is what a page in the chat sent on the reader's press
+// (docs/tool-call-ui.md § The action message). Page is the card's id, which
+// the client fills in from the card, never from the page.
+type HTMLActionParams struct {
+	SessionID string `json:"session_id"`
+	Page      string `json:"page"`
+	Action    string `json:"action"`
+	// Data is any JSON value; absent means {}.
+	Data json.RawMessage `json:"data,omitempty"`
+}
+
+// ChatErrorData is the data member of a chat send refused for a reason a
+// client acts on rather than only shows.
+type ChatErrorData struct {
+	Reason string `json:"reason"`
+}
+
+// ChatReasonAwaitingPermission: the turn is blocked on a permission request,
+// so no message can be delivered until it is answered
+// (chat.ErrTurnAwaitingAnswer).
+const ChatReasonAwaitingPermission = "awaiting_permission"
 
 type InterruptParams struct {
 	SessionID string `json:"session_id"`

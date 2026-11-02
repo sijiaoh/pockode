@@ -68,10 +68,12 @@ func FormatID(n int) string {
 }
 
 // ParseID is the number in a page id, false for anything that is not one —
-// including a number with a leading zero, so one page has exactly one id.
+// including a number with a leading zero or a sign, which Atoi alone would
+// take, so one page has exactly one id.
 func ParseID(id string) (int, bool) {
 	digits, ok := strings.CutPrefix(id, idPrefix)
-	if !ok || digits == "" || digits[0] == '0' {
+	if !ok || digits == "" || digits[0] == '0' ||
+		strings.IndexFunc(digits, func(r rune) bool { return r < '0' || r > '9' }) >= 0 {
 		return 0, false
 	}
 	n, err := strconv.Atoi(digits)

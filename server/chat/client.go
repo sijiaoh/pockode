@@ -167,6 +167,19 @@ func (c *Client) SendCommandExcluding(ctx context.Context, sessionID, content st
 	return c.sendEvent(ctx, sessionID, agent.MessageEvent{Content: content, Command: &cmd}, attachments, exclude)
 }
 
+// SendHTMLActionExcluding is SendMessageExcluding for something a page in the
+// chat sent on the reader's press, and returns the content the agent was sent
+// (htmlpage.ActionText). It is the user's message like any other — refused
+// while a permission request is open, folded into a running turn — but its
+// content is machine text, which is what the record's html_action says.
+//
+// The caller has checked that the page exists in the session.
+func (c *Client) SendHTMLActionExcluding(ctx context.Context, sessionID string, action htmlpage.Action, exclude any) (Sent, string, error) {
+	content := htmlpage.ActionText(action)
+	sent, err := c.sendEvent(ctx, sessionID, agent.MessageEvent{Content: content, HTMLAction: &action}, nil, exclude)
+	return sent, content, err
+}
+
 // SendSystemMessage sends a system-driven automatic message (kickoff, restart,
 // auto-continue, etc.). It is tagged with origin "system" plus a subtype and
 // optional meta so the frontend can fold it into the receiving work's progress

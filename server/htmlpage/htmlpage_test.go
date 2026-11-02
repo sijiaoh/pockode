@@ -164,7 +164,7 @@ func TestGetNotFound(t *testing.T) {
 	mustAppend(t, NewStore(), dataDir, "a", Draft{Title: "T", HTML: "x"})
 
 	// Ids that are not page ids never become a path.
-	for _, id := range []string{"p2", "", "1", "p0", "p01", "p-1", "../a", "p1/../p1"} {
+	for _, id := range []string{"p2", "", "1", "p0", "p01", "p-1", "p+1", "p 1", "../a", "p1/../p1"} {
 		if _, err := Get(dataDir, "a", id); !errors.Is(err, ErrNotFound) {
 			t.Errorf("Get(%q) err = %v, want ErrNotFound", id, err)
 		}
