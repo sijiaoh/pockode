@@ -2730,6 +2730,38 @@ folded and then pulled out. A subagent's Process goes through the same
   `min-height: 100vh` — or pinned to 100% with the body's default margin, which
   overflows the frame by that margin — settles at the cap instead of growing
   with its frame.
+- **Width is the chat pane's, not the reading column's.** Prose reads best at
+  the column's 768px ([agent-chat.md](agent-chat.md)), but a page is a
+  dashboard, a table, a timeline as often as prose, and squeezed to the column
+  on a desktop it wastes most of the screen. So a reply's card takes the
+  transcript's width inside its gutters, up to 1280px — past that a desktop is
+  mostly margin — centred on the transcript like the column it leaves
+  (`WIDE_BLOCK_STYLE`, `Chat/transcriptWidth.ts`; the width is
+  `TRANSCRIPT_SPAN_VAR`, which `MessageList` publishes beside the height). It is
+  never narrower than the column, so on a phone, where the pane is narrower than
+  768px, nothing changes. Everything in the card goes with it — the source, the
+  placeholder, the strip, the error. Two kinds of card stay in the column: one
+  inside a subagent's Process, which stays in the box it was drawn in, and
+  every card under an extension that puts an avatar beside the column or a
+  bubble around it, since a card centred on the pane would cover the one or
+  break out of the other.
+- **A page wider than its card scrolls sideways, inside itself.** The card and
+  the transcript never get wider: the page's own document scrolls, in the card
+  as in the full-screen view, which needed nothing new. A vertical swipe is not
+  caught by it: the browser locks a gesture to the axis it started on, and a
+  page with no vertical room to scroll hands it on to the transcript, so no
+  `touch-action` or script is involved. Where a scrollbar takes room (desktop
+  Linux and Windows), the reported height adds it back, or a wide page would
+  also scroll down by the scrollbar's height.
+- **The agent is told a range, never the width.** One page is opened on a phone
+  and a desktop, today and next month, so no width the card had once is the
+  page's width. Both `html_render`'s description and the
+  [HTML-first guidance](code/agent-integration.md#html-first-sessions) say the
+  same thing — about 320–1280px, a fluid layout usually suits, and what is wide
+  by nature (big tables, timelines, diffs) may be drawn wide, since it scrolls —
+  and `TestHTMLRender_WidthMatchesTheHTMLFirstGuidance` keeps the two ranges
+  equal. It is a recommendation: nothing measures or refuses a page by its
+  width.
 - **Mounted near the viewport, never unmounted.** Opening a long session must
   not run every old page at once, so a frame mounts only when its card comes
   within 200px of the viewport (`useInView`); before that it is a
@@ -2870,8 +2902,13 @@ never reaches the viewer — ✕ closes it. A link in the page does not navigate
 the frame, except into the page itself (`#section`): it opens in a new tab, on
 the reader's tap or from the strip
 ([links](page-external-hosts-ui.md#links-inside-the-page)). A frame scrolled out of view is
-throttled by the browser and reports nothing until it comes back. The height
-reporting has been watched in headless Chromium only, not across engines.
+throttled by the browser and reports nothing until it comes back. A page whose
+script widens it later without changing its height is not measured again, so
+where a scrollbar takes room it may cover the last line; a phone's overlay
+scrollbar does not. The height reporting, the scrollbar's room in it and the
+sideways scroll are watched in Chromium and WebKit
+(`HtmlRenderCard.browser.test.tsx`; WebKit draws the page's styled scrollbar,
+headless Chromium hides it), not on an iOS device.
 
 ### Sending to the agent
 
@@ -2938,7 +2975,7 @@ What differs from the canvas:
 | | Canvas | Chat card |
 |---|---|---|
 | Where it came from | `revision`, the app's record of what the frame shows | `page`, the card's id (`p3`) — the app's, never the page's: a page cannot claim to be another |
-| Size | `canvas_size` on every message | none: a card's width is the transcript's |
+| Size | `canvas_size` on every message | none: the agent is told a range ([width](#a-page-the-agent-drew-html_render)) |
 | Before the reader has used the page | sent; a send on load runs on every device | refused, `inactive` ([below](#a-send-before-the-page-was-used)) |
 | Read-only frame | the history view | a session viewed from another worktree |
 | `data-pk-blocked` on the page's root | reflects whether sending is possible | not offered: every refusal is answered on the send itself |
@@ -3400,6 +3437,9 @@ omission.
 | `sm:` (640–1023) | `p-2` → `sm:p-2.5`, the [full screen](#full-screen) viewer's `p-3` / `px-3` → `sm:p-4` / `sm:px-4`, and nothing else |
 | `lg:` (≥1024) | nothing — the transcript column does not change shape |
 
+A page's card is the one thing wider than the column, and it follows the pane's
+own width rather than a tier ([width](#a-page-the-agent-drew-html_render)).
+
 **No width tier gets a second title line, a tooltip, or a wider truncation
 budget.** A rule like "wrap the command at `sm:`" makes the same call look like
 a different thing on a tablet and a phone, and it would mean the phone — the
@@ -3776,6 +3816,12 @@ the virtualizer measures it.
     page with no `--pk-*` beside it stays white, and so does one that only
     defines a name of its own (`--pk-gap`). An old page with a plain form and
     no `data-pk-send` behaves as before: its form goes nowhere.
+60. A page in a wide desktop pane: its card is 1280px, centred, wider than the
+    text above it; in a 900px pane it fills the pane inside the gutters; on a
+    phone it is the column's width. A 3000px-wide table in it scrolls sideways
+    in the card and full screen, the transcript never does, and a vertical
+    swipe over it scrolls the transcript. Under an extension with an avatar,
+    and inside a subagent's Process, the card stays in its column.
 
 ## Out of scope
 
@@ -3800,8 +3846,7 @@ the virtualizer measures it.
   link from an action bubble back to its card, no per-page or per-session rate
   limit, no anti-forgery token: each is a second way to say what the send's
   own answer already says, or a defence against an agent's page, which is not
-  an adversary ([sending](#sending-to-the-agent)). Card width and wide content
-  are the next story's.
+  an adversary ([sending](#sending-to-the-agent)).
 - **`BashOutput` and `KillShell`.** They are the same shape as `TaskOutput` and
   the rules above would apply to them unchanged, but whether they should be
   absorbed is a decision about each of them, not a consequence of this one.

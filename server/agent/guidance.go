@@ -28,7 +28,7 @@ const askingGuidance = "Asking the user something in Pockode:\n\n" +
 	"- When you need a decision from the user, ask it with the question_post tool; load it through your tool search first if you only have its name. " +
 	"It is the only way to ask here: your CLI's own ask-the-user tool does not reach the user.\n" +
 	"- Ask only for a decision that belongs to the user and changes what you do next. " +
-	"Do not ask what you can find out yourself — read the code, the docs and the history first. " +
+	"Do not ask what you can find out yourself — read the code, docs and history first. " +
 	"Where a choice has a conventional default, take it and say so. " +
 	"Do not ask for permission to act; the permission system handles that. " +
 	"Do not ask \"shall I continue?\" or \"is this OK?\" — ask the decision itself.\n" +
@@ -57,18 +57,19 @@ const HTMLFirstGuidance = askingGuidance + "\n\n" + htmlFirstRenderingGuidance
 
 // htmlFirstRenderingGuidance: that structured content goes on a page and the
 // reply stays short, that the page works by itself, that a page is changed from
-// the old one rather than redrawn, and that it is seen at any width.
+// the old one rather than redrawn, and what widths it is seen at — a
+// recommendation, since content that is wide by nature may be drawn wide.
 //
 // A choice on a page and question_post do not compete: the page is for what the
 // user explores and fills in, question_post still for the decision the agent
 // waits on — said here because the asking section above it says "a decision"
 // without that distinction.
-const htmlFirstRenderingGuidance = "Showing the user something in Pockode — this session is HTML-first:\n\n" +
-	"- Show anything structured — comparisons, reports, choices, forms — as an html_render page (load it, html_edit and html_get through tool search first if you only have their names). " +
+const htmlFirstRenderingGuidance = "Showing the user something in this HTML-first Pockode session:\n\n" +
+	"- Show anything structured — comparisons, reports, choices, forms — as an html_render page (load it, html_edit and html_get via tool search if you only have their names). " +
 	"Reply in a sentence or two; never repeat the page.\n" +
-	"- Make the page work by itself and send to you only when it needs you. A decision you wait on is still asked with question_post.\n" +
-	"- Change a page by deriving it from the old one with html_edit; read an old one with html_get.\n" +
-	"- Pages are seen at any width: make them responsive. Reference project files by path, not inlined."
+	"- Make the page work by itself and send to you only when it needs you. Still ask a decision you wait on with question_post.\n" +
+	"- Change a page with html_edit; html_get reads an old one.\n" +
+	"- Pages show at ~320–1280px: prefer a fluid layout; draw what is wide by nature (big tables, timelines, diffs) wide; it scrolls sideways. Reference project files by path, not inlined."
 
 // GuidanceFor is the guidance a session starts with: HTMLFirstGuidance in an
 // HTML-first session, Guidance in any other.

@@ -63,8 +63,9 @@ func TestHTMLFirstGuidance_KeepsAskingAndCarriesThePageRules(t *testing.T) {
 		"a sentence or two",
 		"work by itself",
 		"only when it needs you",
-		"question_post", // a page's choice does not replace asking a decision
-		"responsive",
+		"question_post",  // a page's choice does not replace asking a decision
+		"320–1280px",     // a recommendation, not a rule:
+		"wide by nature", // what may be drawn wide anyway
 	} {
 		if !strings.Contains(htmlFirstRenderingGuidance, want) {
 			t.Errorf("the HTML-first rendering guidance does not say %q", want)

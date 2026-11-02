@@ -25,6 +25,7 @@ import { CodeBlock } from "../ui/CodeBlock";
 import { useFullScreen } from "./FullScreenHost";
 import { HtmlFrame } from "./HtmlFrame";
 import { useTranscriptView } from "./transcriptViewContext";
+import { WIDE_BLOCK_STYLE } from "./transcriptWidth";
 
 /**
  * Inline, a page takes at most this share of the transcript and scrolls inside
@@ -55,10 +56,17 @@ const measuredHeights = new Map<string, number>();
 export function HtmlRenderCard({
 	run,
 	sessionId,
+	wide = false,
 }: {
 	run: ToolRun;
 	/** The session the page was stored under, for an edit's to be read. */
 	sessionId: string;
+	/**
+	 * Drawn to the transcript's width rather than the reading column's: a page
+	 * is laid out, not read line by line, and one drawn wide scrolls sideways
+	 * inside its own frame past it.
+	 */
+	wide?: boolean;
 }) {
 	const edit = isHtmlEditTool(run.name);
 	const pageId = run.htmlPage;
@@ -159,6 +167,7 @@ export function HtmlRenderCard({
 		<section
 			aria-label={name}
 			className="overflow-clip rounded-lg border border-th-border text-xs"
+			style={wide ? WIDE_BLOCK_STYLE : undefined}
 		>
 			<div className="flex min-h-9 items-center gap-1.5 border-b border-th-border px-2 py-1.5 pointer-coarse:min-h-11 pointer-coarse:gap-2 sm:px-2.5">
 				<AppWindow

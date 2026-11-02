@@ -30,6 +30,7 @@ import MessageItem, {
 } from "./MessageItem";
 import { anchorCandidateProps } from "./scrollAnchor";
 import { TranscriptViewContext } from "./transcriptViewContext";
+import { TRANSCRIPT_SPAN_VAR } from "./transcriptWidth";
 import {
 	IDLE_TAIL,
 	OpenedThoughtsContext,
@@ -183,20 +184,41 @@ function MessageList({
 
 	// The view's height, for the blocks inside it whose budget is a share of it
 	// (`ClampedContent`) — a share of the window would be most of a transcript
-	// squeezed under the software keyboard, or between a header and an input.
+	// squeezed under the software keyboard, or between a header and an input —
+	// and its width, for the blocks drawn wider than the reading column.
 	const hasContainer = messages.length > 0;
 	// biome-ignore lint/correctness/useExhaustiveDependencies: hasContainer triggers re-observe when the scroll container mounts
 	useLayoutEffect(() => {
 		const el = scrollRef.current;
 		if (!el) return;
-		const publish = () =>
+		const publish = () => {
 			el.style.setProperty(TRANSCRIPT_HEIGHT_VAR, `${el.clientHeight}px`);
+			// Inside the track's gutters, read off the track so they are written
+			// once. Floored: `clientWidth` is rounded, and a span half a pixel
+			// past the pane would let the scroller be scrolled sideways by it.
+			const track = trackRef.current;
+			if (!track) return;
+			const gutters = getComputedStyle(track);
+			const scrollbar = el.offsetWidth - el.clientWidth;
+			const span =
+				Math.floor(el.getBoundingClientRect().width) -
+				scrollbar -
+				Number.parseFloat(gutters.paddingLeft) -
+				Number.parseFloat(gutters.paddingRight);
+			el.style.setProperty(TRANSCRIPT_SPAN_VAR, `${span}px`);
+		};
 		// At once as well as on resize: the first observation arrives after the
 		// sections have already measured themselves against the fallback.
 		publish();
 		const observer = new ResizeObserver(publish);
 		observer.observe(el);
-		return () => observer.disconnect();
+		// The gutters follow the window's breakpoint, which a pane of a fixed
+		// width can cross without resizing.
+		window.addEventListener("resize", publish);
+		return () => {
+			observer.disconnect();
+			window.removeEventListener("resize", publish);
+		};
 	}, [hasContainer]);
 
 	// Mirrors the prop rather than closing over it: `requestOlderPage` must keep

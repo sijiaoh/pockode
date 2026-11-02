@@ -105,10 +105,15 @@ const APP_FROM_PAGE = "parent.parent";
  * quirks mode, so it is as tall as its content and not as the frame — unless
  * the page pins it to the frame (`html, body { height: 100% }`, common in
  * generated pages), when only its overflow, the scroll height, says how tall
- * the content is. Below the frame's height the scroll height is the frame's,
- * so it is read only past it, or a page could never shrink.
+ * the content is. Below the root's client height the scroll height is that
+ * height, so it is read only past it, or a page could never shrink.
+ *
+ * A page wider than the frame scrolls sideways inside it, and where scrollbars
+ * take room that scrollbar takes it off the client height: the frame is the
+ * content plus the scrollbar — the viewport's height past the client height —
+ * or the page would scroll down by the scrollbar's height as well.
  */
-const HEIGHT_REPORTER = `<script>(function(){var last=-1;function report(){var d=document.documentElement;var h=Math.ceil(d.scrollHeight>innerHeight?d.scrollHeight:d.getBoundingClientRect().height);if(h!==last){last=h;${APP_FROM_PAGE}.postMessage({type:"${HEIGHT_MESSAGE}",height:h},"*");}}new ResizeObserver(report).observe(document.documentElement);addEventListener("load",report);})();</script>`;
+const HEIGHT_REPORTER = `<script>(function(){var last=-1;function report(){var d=document.documentElement;var h=Math.ceil((d.scrollHeight>d.clientHeight?d.scrollHeight:d.getBoundingClientRect().height)+innerHeight-d.clientHeight);if(h!==last){last=h;${APP_FROM_PAGE}.postMessage({type:"${HEIGHT_MESSAGE}",height:h},"*");}}new ResizeObserver(report).observe(document.documentElement);addEventListener("load",report);})();</script>`;
 
 /**
  * What a page reaches of the project: a root capability for the worktree the

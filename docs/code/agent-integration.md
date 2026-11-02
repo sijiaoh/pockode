@@ -1617,9 +1617,15 @@ word and swaps the rendering one for a section that makes a page the default
 for anything structured — comparisons, reports, choices, forms — with
 the reply cut to a sentence or two; the page works by itself and sends to the
 agent only when it needs it; a page is changed by deriving it from the old one
-with `html_edit` and read back with `html_get`; and it is made responsive,
-since it is seen at any width. A choice on a page does not replace
-`question_post`: the decision the agent waits on is still asked there.
+with `html_edit` and read back with `html_get`; and it is drawn for about
+320–1280px — fluid where it can be, wide where its content is, since a wide
+page scrolls sideways in its card. That range is a recommendation, and the same
+one `html_render`'s description gives
+(`TestHTMLRender_WidthMatchesTheHTMLFirstGuidance`); why the agent is never
+told the actual width is in
+[tool-call-ui.md](../tool-call-ui.md#a-page-the-agent-drew-html_render). A
+choice on a page does not replace `question_post`: the decision the agent waits
+on is still asked there.
 `agent.StartOptions.HTMLFirst` carries the mode to the spawn, through the same
 two channels: both CLIs' proxies are started with `--html-first`, which changes
 only the `initialize` instructions (Claude's channel; Codex shows them once a
