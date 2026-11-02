@@ -1117,9 +1117,10 @@ is not a git repository at all; it needs no `data`, since what would make the
 request work — the repository appearing — arrives as `worktree.changed`
 ([git.md](../git.md#projects-without-a-repository)).
 `-32003` (`rpc.CodeCLIInstallRefused`) refuses a `cli_update.install` before
-anything ran, with `data.reason` — `already_installed`, `npm_not_found` or
-`busy` — because each asks the user for something different: nothing, Node.js,
-or waiting ([cli-update.md](cli-update.md#refused-before-it-starts)).
+anything ran, with `data.reason` — `already_installed`,
+`installer_tool_not_found` or `busy` — because each asks the user for something
+different: nothing, a shell or downloader on the server, or waiting
+([cli-update.md](cli-update.md#refused-before-it-starts)).
 `-32004` (`rpc.CodeCommitDraftFailed`) is not a refusal but a failure with
 several causes the user acts on differently: a `git.commit.draft` that produced
 no message, with `data.reason` (`timeout`, `auth_failed`, `cli_not_found`,
