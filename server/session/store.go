@@ -34,6 +34,11 @@ type Store interface {
 	SetMode(ctx context.Context, sessionID string, mode Mode) error
 	SetModel(ctx context.Context, sessionID string, model string) error
 	SetEffort(ctx context.Context, sessionID string, effort string) error
+	// SetHTMLFirst refuses with ErrSessionStarted once the session has started.
+	SetHTMLFirst(ctx context.Context, sessionID string, htmlFirst bool) error
+	// MarkStarted sets Started — idempotently — and returns the session as it
+	// stands afterwards, whose HTMLFirst can no longer change.
+	MarkStarted(ctx context.Context, sessionID string) (SessionMeta, error)
 	// ApplyTurn folds one thing that happened into the session's TurnState and
 	// returns what changed. It is the only way turn state is ever written; see
 	// ReduceTurn.
@@ -277,6 +282,10 @@ func migrateIndex(idx *indexData) {
 		if idx.Sessions[i].Mode == "" {
 			idx.Sessions[i].Mode = ModeDefault
 		}
+		// Started is younger than Activated; a session that has run has started.
+		if idx.Sessions[i].Activated {
+			idx.Sessions[i].Started = true
+		}
 	}
 
 	// Against the version that introduced this repair, not against indexVersion:
@@ -443,10 +452,15 @@ func (s *FileStore) CreateFork(ctx context.Context, sessionID string, fork ForkS
 		// different agent, or answered by a different model, is not a fork of
 		// this one. No validation is needed on the way in, because the source's
 		// values were already judged against the agent the fork also runs.
-		AgentType:  fork.Source.AgentType,
-		Mode:       fork.Source.Mode,
-		Model:      fork.Source.Model,
-		Effort:     fork.Source.Effort,
+		AgentType: fork.Source.AgentType,
+		Mode:      fork.Source.Mode,
+		Model:     fork.Source.Model,
+		Effort:    fork.Source.Effort,
+		// The guidance goes with the engine, for the same reason, and the fork
+		// is started from birth: its copied history was told under the source's
+		// guidance, so there is no first message left for a switch to precede.
+		HTMLFirst:  fork.Source.HTMLFirst,
+		Started:    true,
 		ForkedFrom: &ForkOrigin{SessionID: fork.Source.ID},
 		// The fork starts idle, and the source's turn is not consulted. A fork
 		// can be cut from a session that is mid-turn, and what the source is in
@@ -626,6 +640,37 @@ func (s *FileStore) SetEffort(ctx context.Context, sessionID string, effort stri
 		meta.UpdatedAt = time.Now()
 		return true, nil
 	})
+}
+
+// SetHTMLFirst is judged under the store lock against Started, which MarkStarted
+// writes under the same lock: a switch either lands before the first message is
+// delivered, and the sender sees it, or is refused.
+func (s *FileStore) SetHTMLFirst(ctx context.Context, sessionID string, htmlFirst bool) error {
+	return s.updateMeta(ctx, sessionID, func(meta *SessionMeta) (bool, error) {
+		if meta.Started {
+			return false, ErrSessionStarted
+		}
+		if meta.HTMLFirst == htmlFirst {
+			return false, nil
+		}
+		meta.HTMLFirst = htmlFirst
+		meta.UpdatedAt = time.Now()
+		return true, nil
+	})
+}
+
+func (s *FileStore) MarkStarted(ctx context.Context, sessionID string) (SessionMeta, error) {
+	var started SessionMeta
+	err := s.updateMeta(ctx, sessionID, func(meta *SessionMeta) (bool, error) {
+		changed := !meta.Started
+		meta.Started = true
+		started = *meta
+		return changed, nil
+	})
+	if err != nil {
+		return SessionMeta{}, err
+	}
+	return started, nil
 }
 
 // ApplyTurn runs the reducer against the stored state and writes the result.

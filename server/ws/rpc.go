@@ -741,6 +741,8 @@ func (h *rpcMethodHandler) Handle(ctx context.Context, conn *jsonrpc2.Conn, req 
 		h.handleSessionSetAgentType(ctx, conn, req, wt)
 	case "session.set_mode":
 		h.handleSessionSetMode(ctx, conn, req, wt)
+	case "session.set_html_first":
+		h.handleSessionSetHTMLFirst(ctx, conn, req, wt)
 	case "session.fork":
 		h.handleSessionFork(ctx, conn, req, wt)
 	case "session.set_model":
