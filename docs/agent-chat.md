@@ -236,8 +236,10 @@ width, and so does the transcript's scroll box, so its scrollbar sits at the
 window's edge and the wheel works over the margins. The header is not
 constrained: it is the window's chrome. With the sidebar open at its default
 320px, the column only starts to bind at a window of roughly 1090px, so phones
-and tablets are untouched. The scroll-to-bottom button belongs to the column too
-([Where the View Sits](#where-the-view-sits)).
+and tablets are untouched. One block leaves the column where it binds: a page
+the agent drew takes the pane's width, up to 1280px
+([why](tool-call-ui.md#a-page-the-agent-drew-html_render)). The scroll-to-bottom
+button belongs to the column too ([Where the View Sits](#where-the-view-sits)).
 
 **Only the user speaks in bubbles.** The agent's message has no bubble: its text,
 tool calls and cards run the full width of the column in `text-th-text-primary`,
