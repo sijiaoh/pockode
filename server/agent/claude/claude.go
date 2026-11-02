@@ -76,6 +76,10 @@ func writeMCPConfig(opts agent.StartOptions) (string, func(), error) {
 	if opts.Worktree != "" {
 		args = append(args, "--worktree", opts.Worktree)
 	}
+	// The proxy's instructions are how Claude gets the session's guidance.
+	if opts.HTMLFirst {
+		args = append(args, "--html-first")
+	}
 
 	config := map[string]interface{}{
 		"mcpServers": map[string]interface{}{

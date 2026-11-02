@@ -123,3 +123,18 @@ func TestDeveloperInstructions_OnlyANewThreadReadsTheConfig(t *testing.T) {
 		t.Errorf("methods sent = %v, want no config/read for a resume", s.methodsSent())
 	}
 }
+
+// An HTML-first session starts its thread with that session's guidance in place
+// of agent.Guidance, after the user's own as always.
+func TestDeveloperInstructions_HTMLFirstCarriesItsGuidance(t *testing.T) {
+	opts := newThreadOpts(t)
+	opts.HTMLFirst = true
+	s := openWithMCP(t, opts, map[string]*rpcResponse{
+		"config/read":  {Result: json.RawMessage(`{"config":{"developer_instructions":"Answer tersely."}}`)},
+		"thread/start": threadReply("thread-new"),
+	})
+
+	if got, _ := startedWith(t, s); got != "Answer tersely.\n\n"+agent.HTMLFirstGuidance {
+		t.Errorf("developerInstructions = %q, want the user's followed by agent.HTMLFirstGuidance", got)
+	}
+}

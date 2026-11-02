@@ -30,10 +30,13 @@ import (
 type Server struct {
 	client  *Client
 	version string
+	// htmlFirst is a proxy spawned for an HTML-first session: it gives that
+	// session's guidance as its instructions.
+	htmlFirst bool
 }
 
-func NewServer(client *Client, version string) *Server {
-	return &Server{client: client, version: version}
+func NewServer(client *Client, version string, htmlFirst bool) *Server {
+	return &Server{client: client, version: version, htmlFirst: htmlFirst}
 }
 
 // Run starts the stdio JSON-RPC 2.0 loop.
@@ -85,7 +88,7 @@ func (s *Server) handleRequest(ctx context.Context, w io.Writer, req *jsonRPCReq
 				Name:    "pockode",
 				Version: s.version,
 			},
-			Instructions: agent.Guidance,
+			Instructions: agent.GuidanceFor(s.htmlFirst),
 		})
 	case "tools/list":
 		writeJSONRPCResult(w, req.ID, toolsListResult{Tools: toolDefinitions})
@@ -185,7 +188,7 @@ type initializeResult struct {
 	Capabilities    capabilities `json:"capabilities"`
 	ServerInfo      serverInfo   `json:"serverInfo"`
 	// Instructions is how Claude learns when to ask or render before it has
-	// loaded any tool; see agent.Guidance.
+	// loaded any tool; see agent.Guidance and agent.HTMLFirstGuidance.
 	Instructions string `json:"instructions,omitempty"`
 }
 

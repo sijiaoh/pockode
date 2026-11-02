@@ -1423,6 +1423,22 @@ func TestWriteMCPConfig_MainWorktreeIsUnnamed(t *testing.T) {
 	}
 }
 
+// TestWriteMCPConfig_HTMLFirstFlag: the proxy's instructions are the channel
+// Claude gets the session's guidance through, so an HTML-first session's proxy
+// is told, and no other's is.
+func TestWriteMCPConfig_HTMLFirstFlag(t *testing.T) {
+	for _, htmlFirst := range []bool{false, true} {
+		path, _, err := writeMCPConfig(agent.StartOptions{DataDir: t.TempDir(), SessionID: "s1", HTMLFirst: htmlFirst})
+		if err != nil {
+			t.Fatalf("writeMCPConfig: %v", err)
+		}
+		args := readMCPArgs(t, path)
+		if got := slices.Contains(args, "--html-first"); got != htmlFirst {
+			t.Errorf("HTMLFirst=%v: args %v, --html-first present = %v", htmlFirst, args, got)
+		}
+	}
+}
+
 // TestWriteMCPConfig_PerProcessRun: a replaced process cleans up while its
 // successor is already starting, so two runs of the same session must not share
 // a file name — otherwise that cleanup deletes the config the successor's CLI
