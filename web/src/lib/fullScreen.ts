@@ -47,6 +47,11 @@ export type FullScreenContent =
 			showSource: boolean;
 			/** Whose allowance of external hosts the page is drawn under. */
 			pageKey: string;
+			/**
+			 * The id the page is stored under, which a send from the viewer
+			 * names as the card's would; absent on a card from before ids.
+			 */
+			page?: string;
 	  }
 	/** Drawn by `ProposedChange`: an edit's or a Codex change's diffs, never a Write. */
 	| { kind: "change"; change: ProposedChangeData }

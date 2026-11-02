@@ -102,6 +102,7 @@ import HtmlFirstSwitch, { useHtmlFirstSwitch } from "./HtmlFirstSwitch";
 import DefaultInputBar from "./InputBar";
 import type { PromptError } from "./MessageItem";
 import MessageList, { type MessageListHandle } from "./MessageList";
+import { PageSendContext, type PageSender } from "./pageSendContext";
 import ReadOnlyBar from "./ReadOnlyBar";
 import SessionHeader from "./SessionHeader";
 import SessionOriginBar from "./SessionOriginBar";
@@ -325,6 +326,7 @@ function ChatPanel({
 		settingError,
 		clearSettingError,
 		sendUserMessage,
+		sendHtmlAction,
 		interrupt,
 		permissionResponse,
 		setMode,
@@ -366,6 +368,10 @@ function ChatPanel({
 	const promptOwnsInput =
 		turn.phase === "blocked" &&
 		(turn.blockers ?? []).some((b) => b.kind === "permission");
+	const pageSender = useMemo<PageSender>(
+		() => ({ send: sendHtmlAction, awaitingPermission: promptOwnsInput }),
+		[sendHtmlAction, promptOwnsInput],
+	);
 
 	// The strip says the session is watching by the rule its row is drawn by, so
 	// the row's Eye and the strip's line come and go together
@@ -1527,7 +1533,11 @@ function ChatPanel({
 				}
 			>
 				<CoveredSurface covered={transcriptCovered}>
-					<FullScreenHost>{renderTranscript()}</FullScreenHost>
+					{/* Around the viewer too: a page sends from full screen as
+					    from its card. */}
+					<PageSendContext value={pageSender}>
+						<FullScreenHost>{renderTranscript()}</FullScreenHost>
+					</PageSendContext>
 				</CoveredSurface>
 			</div>
 			<PageHeaderTarget value={pageHeader.target}>

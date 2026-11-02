@@ -519,6 +519,12 @@ export interface UserMessage {
 	 * server's description (type and dimensions read from the stored bytes).
 	 */
 	attachments?: FileBlock[];
+	/**
+	 * What a page sent, when the message is a page's send rather than typed.
+	 * The bubble is drawn from this; `content` is the agent's text, written by
+	 * the server and empty on the sender's echo until its reply arrives.
+	 */
+	htmlAction?: HtmlAction;
 }
 
 /**
@@ -923,6 +929,30 @@ export interface MessageResult {
 	command?: PockodeCommandInvocation;
 	/** The files the message carried, as its record describes them. */
 	attachments?: FileBlock[];
+	/** On `chat.html_action`'s reply: the action as its record carries it. */
+	html_action?: HtmlAction;
+}
+
+/**
+ * What a page sent the agent (docs/tool-call-ui.md § The action message): a
+ * `message` record's `html_action`. An event — what was pressed on which
+ * page — never state.
+ */
+export interface HtmlAction {
+	/** The card's id (`p3`), filled in by the app, never by the page. */
+	page: string;
+	action: string;
+	/** Any JSON; `{}` when the page sent none. */
+	data: unknown;
+}
+
+export interface HtmlActionParams {
+	session_id: string;
+	page: string;
+	/** 1–128 characters, no control characters. */
+	action: string;
+	/** Any JSON; omitted = `{}`; at most 64KB serialized. */
+	data?: unknown;
 }
 
 export interface InterruptParams {
@@ -1294,6 +1324,8 @@ export type ServerNotification =
 			meta?: SystemMessageMeta;
 			/** The posted questions this message answers; see QuestionAnswerRecord. */
 			answering?: QuestionAnswerRecord[];
+			/** What a page sent, when it is a page's send; see `HtmlAction`. */
+			html_action?: HtmlAction;
 	  }
 	| {
 			type: "tool_call";

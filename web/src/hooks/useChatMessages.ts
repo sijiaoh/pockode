@@ -30,6 +30,7 @@ import {
 	stampMessageAnchorSeq,
 	updatePermissionRequestStatus,
 } from "../lib/messageReducer";
+import type { HtmlActionInput } from "../lib/rpc";
 import {
 	selectSessionDetail,
 	useSessionDetailStore,
@@ -177,6 +178,15 @@ interface UseChatMessagesReturn {
 		answering?: QuestionAnswerRecord[],
 		attachments?: ChatAttachment[],
 	) => Promise<boolean>;
+	/**
+	 * Sends what a page sent (docs/tool-call-ui.md § The action message),
+	 * echoed into the transcript as a typed message is — the sender is left
+	 * out of the broadcast. Rejects on every failure, since the page that sent
+	 * it is told the outcome: a refusal takes the echo back, as nothing was
+	 * recorded; anything else leaves it with the failure under it, as a typed
+	 * message's, because it may have been delivered.
+	 */
+	sendHtmlAction: (input: HtmlActionInput) => Promise<void>;
 	interrupt: () => Promise<void>;
 	permissionResponse: (params: PermissionResponseParams) => Promise<void>;
 	setMode: (mode: SessionMode) => Promise<void>;
@@ -199,6 +209,7 @@ interface UseChatMessagesReturn {
 // Actions are stable references - get once at module level
 const {
 	sendMessage,
+	sendHtmlAction,
 	invalidateCommandCache,
 	chatMessagesSubscribe,
 	chatMessagesHistory,
@@ -757,36 +768,32 @@ export function useChatMessages({
 		}
 	}, [sessionId, isView, sourceWorktree]);
 
-	const sendUserMessageHandler = useCallback(
+	/**
+	 * The one path a message sent from this screen takes: echoed at once, as
+	 * `echo` with a placeholder for the reply when it opens a turn, then filled
+	 * in from the server's reply — or taken back, or left with the failure
+	 * under it. Typed messages and page actions differ only in what they send
+	 * and what the reply fills in.
+	 */
+	const deliverEcho = useCallback(
 		async (
-			content: string,
-			answering?: QuestionAnswerRecord[],
-			attachments?: ChatAttachment[],
+			echo: UserMessage,
+			send: () => Promise<{ seq?: HistorySeq; update: Partial<UserMessage> }>,
+			{
+				takeBack,
+				rethrow,
+				settle,
+			}: {
+				/** Whether a failure means nothing was recorded, so the echo goes. */
+				takeBack: (error: unknown) => boolean;
+				/** Rethrow a failure that was reported into the transcript too. */
+				rethrow: boolean;
+				/** What the sent message settles beyond itself. */
+				settle?: (messages: Message[], messageId?: string) => Message[];
+			},
 		): Promise<boolean> => {
-			// Normalised once, so "present" and "non-empty" cannot come apart: an
-			// empty list would otherwise echo a bubble drawn from no answers, send
-			// no `answering`, and take the wrong branch on failure.
-			const answers = answering?.length ? answering : undefined;
-			const files = attachments?.length ? attachments : undefined;
-			// Drawn as the command row from the first frame rather than as a bubble
-			// that turns into one: the prompt it stands for is the server's to
-			// expand, and arrives with the reply.
-			const command = parsePockodeCommand(content) ?? undefined;
-			const userMessageId = generateUUID();
+			const userMessageId = echo.id;
 			const assistantMessageId = generateUUID();
-
-			const userMessage: UserMessage = {
-				id: userMessageId,
-				role: "user",
-				content: command ? "" : content,
-				status: "complete",
-				createdAt: new Date(),
-				...(command ? { command } : {}),
-				// Echoed with the bubble so an answer draws as answers rather than
-				// as the flattened text the agent reads.
-				...(answers ? { answering: answers } : {}),
-				...(files ? { attachments: toEchoFileBlocks(files) } : {}),
-			};
 
 			// Empty assistant message ready to receive streaming content
 			const assistantMessage: AssistantMessage = {
@@ -803,7 +810,7 @@ export function useChatMessages({
 			// turn. The placeholder is passed as a thunk because the mid-turn shape
 			// does not want one.
 			setMessages((prev) =>
-				appendUserMessage(prev, userMessage, () => assistantMessage),
+				appendUserMessage(prev, echo, () => assistantMessage),
 			);
 
 			try {
@@ -812,38 +819,16 @@ export function useChatMessages({
 				// Without it the bubble just added could not be forked from until the
 				// session was reloaded. An older server sends none, which simply leaves
 				// the message unaddressable, as every locally sent one used to be.
-				const {
-					seq,
-					messageId,
-					expanded,
-					attachments: described,
-				} = await sendMessage(
-					sessionId,
-					content,
-					answers && toAnswerParams(answers),
-					// Only when there are any, so a message without files is sent with
-					// exactly the arguments it always was.
-					...(files ? [toAttachmentParams(files)] : []),
-				);
+				const { seq, update } = await send();
 				setMessages((prev) => {
-					// The server's text over the echo's — a command's parse and prompt,
-					// or the body written from the answers: the sender is left out of
-					// the broadcast, so this is its one copy of what the agent was
-					// actually sent.
-					//
-					// The files likewise: the echo had only the browser's guess at each
-					// type, the reply has what the stored bytes are.
-					//
-					// And the record's id, which is how a Stop throwing this message
-					// away names it: without it the one tab that pressed Stop is the
-					// one that could not show the message's ending.
-					const update = {
-						...expanded,
-						...(described ? { attachments: described } : {}),
-						...(messageId ? { messageId } : {}),
-					};
+					// The sender is left out of the broadcast, so the reply is its one
+					// copy of what the record holds — what the agent was actually
+					// sent, the files as stored, and the record's id, which is how a
+					// Stop throwing this message away names it: without it the one tab
+					// that pressed Stop is the one that could not show the message's
+					// ending.
 					const filled =
-						expanded || described || messageId
+						Object.keys(update).length > 0
 							? prev.map((m) =>
 									m.id === userMessageId && m.role === "user"
 										? { ...m, ...update }
@@ -851,40 +836,12 @@ export function useChatMessages({
 								)
 							: prev;
 					const stamped = stampMessageAnchorSeq(filled, userMessageId, seq);
-					// The cards this message settled, and this client has to settle
-					// them itself: the sender is left out of the broadcast that
-					// carries the record, so nothing else is coming to do it. Only
-					// after the send — a refused answer settles nothing.
-					return answers
-						? applyAnswering(stamped, answers, messageId)
-						: stamped;
+					return settle ? settle(stamped, update.messageId) : stamped;
 				});
-				// Not at click time: the server records a slash command's use only
-				// once the send has gone through, and a list fetched in between would
-				// be cached without it.
-				if (content.startsWith("/")) invalidateCommandCache();
 				return true;
 			} catch (error) {
 				console.error("Failed to send message:", error);
-				// An answering send is refused whole — nothing was written, nothing
-				// was delivered, and the questions are all still open — so the echo
-				// is taken back out rather than left looking sent with a failure
-				// pinned under it. The sheet is where the reason belongs: it holds
-				// the drafts, and it is what the user is looking at.
-				//
-				// A command the server refused (an unknown name, a worktree with no
-				// branch, or a send refused as any message's would be) is gone the
-				// same way, and the caller restores what was typed and says why.
-				// Only a refusal: a timeout or a dropped socket may have been
-				// delivered, and handing the draft back would invite running the
-				// command twice — that takes the ordinary path below. A message
-				// carrying files is taken back on a refusal for the same reason: the
-				// files are the composer's to keep, and an agent that cannot receive
-				// them is said so there.
-				if (
-					answers ||
-					((command || files) && isInvalidParamsRejection(error))
-				) {
+				if (takeBack(error)) {
 					setMessages((prev) =>
 						prev.filter(
 							(m) => m.id !== userMessageId && m.id !== assistantMessageId,
@@ -933,10 +890,148 @@ export function useChatMessages({
 					});
 					return reported;
 				});
+				if (rethrow) throw error;
 				return false;
 			}
 		},
-		[sessionId],
+		[],
+	);
+
+	const sendUserMessageHandler = useCallback(
+		async (
+			content: string,
+			answering?: QuestionAnswerRecord[],
+			attachments?: ChatAttachment[],
+		): Promise<boolean> => {
+			// Normalised once, so "present" and "non-empty" cannot come apart: an
+			// empty list would otherwise echo a bubble drawn from no answers, send
+			// no `answering`, and take the wrong branch on failure.
+			const answers = answering?.length ? answering : undefined;
+			const files = attachments?.length ? attachments : undefined;
+			// Drawn as the command row from the first frame rather than as a bubble
+			// that turns into one: the prompt it stands for is the server's to
+			// expand, and arrives with the reply.
+			const command = parsePockodeCommand(content) ?? undefined;
+
+			const echo: UserMessage = {
+				id: generateUUID(),
+				role: "user",
+				content: command ? "" : content,
+				status: "complete",
+				createdAt: new Date(),
+				...(command ? { command } : {}),
+				// Echoed with the bubble so an answer draws as answers rather than
+				// as the flattened text the agent reads.
+				...(answers ? { answering: answers } : {}),
+				...(files ? { attachments: toEchoFileBlocks(files) } : {}),
+			};
+
+			const sent = await deliverEcho(
+				echo,
+				async () => {
+					const {
+						seq,
+						messageId,
+						expanded,
+						attachments: described,
+					} = await sendMessage(
+						sessionId,
+						content,
+						answers && toAnswerParams(answers),
+						// Only when there are any, so a message without files is sent with
+						// exactly the arguments it always was.
+						...(files ? [toAttachmentParams(files)] : []),
+					);
+					// A command's parse and prompt, or the body written from the
+					// answers; the files with the type the stored bytes are, where the
+					// echo had only the browser's guess.
+					return {
+						seq,
+						update: {
+							...expanded,
+							...(described ? { attachments: described } : {}),
+							...(messageId ? { messageId } : {}),
+						},
+					};
+				},
+				{
+					// An answering send is refused whole — nothing was written, nothing
+					// was delivered, and the questions are all still open — so the echo
+					// is taken back out rather than left looking sent with a failure
+					// pinned under it. The sheet is where the reason belongs: it holds
+					// the drafts, and it is what the user is looking at.
+					//
+					// A command the server refused (an unknown name, a worktree with no
+					// branch, or a send refused as any message's would be) is gone the
+					// same way, and the caller restores what was typed and says why.
+					// Only a refusal: a timeout or a dropped socket may have been
+					// delivered, and handing the draft back would invite running the
+					// command twice — that takes the ordinary path. A message carrying
+					// files is taken back on a refusal for the same reason: the files
+					// are the composer's to keep, and an agent that cannot receive them
+					// is said so there.
+					takeBack: (error) =>
+						answers !== undefined ||
+						((command !== undefined || files !== undefined) &&
+							isInvalidParamsRejection(error)),
+					rethrow: false,
+					// The cards this message settled, and this client has to settle
+					// them itself: the sender is left out of the broadcast that
+					// carries the record, so nothing else is coming to do it. Only
+					// after the send — a refused answer settles nothing.
+					settle: answers
+						? (messages, messageId) =>
+								applyAnswering(messages, answers, messageId)
+						: undefined,
+				},
+			);
+			// Not at click time: the server records a slash command's use only
+			// once the send has gone through, and a list fetched in between would
+			// be cached without it.
+			if (sent && content.startsWith("/")) invalidateCommandCache();
+			return sent;
+		},
+		[sessionId, deliverEcho],
+	);
+
+	const sendHtmlActionHandler = useCallback(
+		async (input: HtmlActionInput): Promise<void> => {
+			// Drawn from `htmlAction` from the first frame; `content` is the
+			// agent's text, which only the server writes.
+			const echo: UserMessage = {
+				id: generateUUID(),
+				role: "user",
+				content: "",
+				status: "complete",
+				createdAt: new Date(),
+				htmlAction: {
+					page: input.page,
+					action: input.action,
+					data: input.data === undefined ? {} : input.data,
+				},
+			};
+			await deliverEcho(
+				echo,
+				async () => {
+					const { seq, messageId, content, htmlAction } = await sendHtmlAction(
+						sessionId,
+						input,
+					);
+					return {
+						seq,
+						update: {
+							...(content !== undefined ? { content } : {}),
+							...(htmlAction ? { htmlAction } : {}),
+							...(messageId ? { messageId } : {}),
+						},
+					};
+				},
+				// A refusal recorded nothing, so its echo goes; the page that sent
+				// it is told either way, and says it under the card.
+				{ takeBack: isInvalidParamsRejection, rethrow: true },
+			);
+		},
+		[sessionId, deliverEcho],
 	);
 
 	const resetPrompt = useCallback(
@@ -1063,6 +1158,7 @@ export function useChatMessages({
 		settingError,
 		clearSettingError,
 		sendUserMessage: sendUserMessageHandler,
+		sendHtmlAction: sendHtmlActionHandler,
 		interrupt: useCallback(
 			() => actions.interrupt(sessionId),
 			[actions, sessionId],

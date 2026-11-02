@@ -5,6 +5,7 @@ import type {
 	ContentPart,
 	ExpiryReason,
 	HistorySeq,
+	HtmlAction,
 	Message,
 	MessageOrigin,
 	PermissionUpdate,
@@ -100,6 +101,19 @@ export function normalizeCommand(
 	return typeof fields.args === "string" && fields.args
 		? { name: fields.name, args: fields.args }
 		: { name: fields.name };
+}
+
+// A message record's `html_action`, kept only when it names a page and an
+// action. Also reads the same field on the `chat.html_action` reply.
+export function normalizeHtmlAction(raw: unknown): HtmlAction | undefined {
+	const fields = raw as Record<string, unknown> | null | undefined;
+	if (typeof fields?.page !== "string" || !fields.page) return undefined;
+	if (typeof fields.action !== "string" || !fields.action) return undefined;
+	return {
+		page: fields.page,
+		action: fields.action,
+		data: fields.data === undefined ? {} : fields.data,
+	};
 }
 
 // A cancelled question is stored with a nil answers map, and `omitempty` on the
@@ -214,6 +228,7 @@ export type NormalizedEvent =
 			command?: PockodeCommandInvocation;
 			/** The files the user sent with the message. */
 			attachments?: FileBlock[];
+			htmlAction?: HtmlAction;
 	  }
 	| {
 			type: "permission_request";
@@ -406,6 +421,7 @@ export function normalizeEvent(
 				answering: normalizeAnswering(record.answering),
 				command: normalizeCommand(record.command),
 				attachments: parseFileBlocks(record.attachments),
+				htmlAction: normalizeHtmlAction(record.html_action),
 			};
 		case "permission_request":
 			return {
@@ -998,6 +1014,7 @@ export function applyServerEvent(
 			answering: event.answering,
 			command: event.command,
 			attachments: event.attachments,
+			htmlAction: event.htmlAction,
 		});
 	}
 
@@ -2285,6 +2302,7 @@ interface UserMessageOptions {
 	answering?: QuestionAnswerRecord[];
 	command?: PockodeCommandInvocation;
 	attachments?: FileBlock[];
+	htmlAction?: HtmlAction;
 }
 
 /**
@@ -2388,6 +2406,7 @@ export function applyUserMessage(
 		...(options?.answering ? { answering: options.answering } : {}),
 		...(options?.command ? { command: options.command } : {}),
 		...(options?.attachments ? { attachments: options.attachments } : {}),
+		...(options?.htmlAction ? { htmlAction: options.htmlAction } : {}),
 	};
 
 	return appendUserMessage(messages, userMessage, () =>

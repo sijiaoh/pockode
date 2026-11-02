@@ -47,11 +47,15 @@ export function discardedMessages(
 
 /**
  * Whether the message holds words the user can take back. An answer to posted
- * questions does not — its text is the answers flattened for the agent — and
- * neither does anything Pockode or another agent sent.
+ * questions does not — its text is the answers flattened for the agent — nor
+ * does a page's action, whose text is the action written out for the agent
+ * (docs/tool-call-ui.md § The action message), and neither does anything
+ * Pockode or another agent sent.
  */
 export function isRestorable(message: UserMessage): boolean {
-	return message.source === undefined && !message.answering;
+	return (
+		message.source === undefined && !message.answering && !message.htmlAction
+	);
 }
 
 /** The message as the user would type it again. A command comes back as typed. */

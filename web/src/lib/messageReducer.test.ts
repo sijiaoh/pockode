@@ -180,6 +180,27 @@ describe("settleAgainstTurn", () => {
 
 describe("messageReducer", () => {
 	describe("normalizeEvent", () => {
+		// Drawn from on every tab and after a reload, not only on the sender's
+		// echo; `content` is the agent's text.
+		it("reads a page's send off a message record", () => {
+			expect(
+				normalizeEvent({
+					type: "message",
+					content: 'Page action "go" from p3:\n{}',
+					html_action: { page: "p3", action: "go", data: { id: "42" } },
+				}),
+			).toMatchObject({
+				htmlAction: { page: "p3", action: "go", data: { id: "42" } },
+			});
+			expect(
+				normalizeEvent({
+					type: "message",
+					content: "hi",
+					html_action: { page: "", action: "go", data: {} },
+				}),
+			).toMatchObject({ htmlAction: undefined });
+		});
+
 		it("normalizes tool_call event with snake_case to camelCase", () => {
 			const event = normalizeEvent({
 				type: "tool_call",

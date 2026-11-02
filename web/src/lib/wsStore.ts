@@ -601,6 +601,21 @@ export function isInvalidParamsRejection(error: unknown): boolean {
 	);
 }
 
+/**
+ * Whether the server refused a message because the turn awaits a permission
+ * answer (`chat.ErrTurnAwaitingAnswer`), told by its `data.reason` rather
+ * than its words. The server sets it on every chat send refused this way;
+ * only a page's send (`chat.html_action`) reads it today.
+ */
+export function isAwaitingPermissionRejection(error: unknown): boolean {
+	if (!isInvalidParamsRejection(error)) return false;
+	const data = (error as JSONRPCErrorException).data as
+		| { reason?: unknown }
+		| null
+		| undefined;
+	return data?.reason === "awaiting_permission";
+}
+
 function getClient(): JSONRPCRequester<void> | null {
 	return rpcClients?.withTimeout ?? null;
 }

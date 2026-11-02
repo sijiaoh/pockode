@@ -3,6 +3,7 @@ import { JSONRPCErrorCode, JSONRPCErrorException } from "json-rpc-2.0";
 import { useLayoutEffect } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SentMessage } from "../lib/rpc";
+import type { SentHtmlAction } from "../lib/rpc/chat";
 import { useSessionDetailStore } from "../lib/sessionDetailStore";
 import { makeSessionDetail } from "../test/sessionFixtures";
 import type {
@@ -25,6 +26,7 @@ const mockState = vi.hoisted(() => ({
 	// Mirrors ChatActions.sendMessage: it resolves with what the server said
 	// about the message — its seq, when it has an address to give.
 	sendMessage: vi.fn((): Promise<SentMessage> => Promise.resolve({})),
+	sendHtmlAction: vi.fn((): Promise<SentHtmlAction> => Promise.resolve({})),
 	invalidateCommandCache: vi.fn(),
 }));
 
@@ -38,6 +40,7 @@ vi.mock("../lib/wsStore", () => {
 			chatMessagesHistory: mockState.chatMessagesHistory,
 			chatMessagesUnsubscribe: mockState.chatMessagesUnsubscribe,
 			sendMessage: mockState.sendMessage,
+			sendHtmlAction: mockState.sendHtmlAction,
 			invalidateCommandCache: mockState.invalidateCommandCache,
 		},
 	};
@@ -96,6 +99,26 @@ function renderSendProbe() {
 	return { latest, send };
 }
 
+function renderActionProbe() {
+	const latest: { messages: Message[] } = { messages: [] };
+	const send: {
+		current: ReturnType<typeof useChatMessages>["sendHtmlAction"];
+	} = { current: async () => {} };
+	function ActionProbe() {
+		const { messages, sendHtmlAction } = useChatMessages({ sessionId: "s1" });
+		latest.messages = messages;
+		send.current = sendHtmlAction;
+		return null;
+	}
+	render(<ActionProbe />);
+	return { latest, send };
+}
+
+function findAction(messages: Message[]): UserMessage | undefined {
+	const found = messages.find((m) => m.role === "user" && m.htmlAction);
+	return found?.role === "user" ? found : undefined;
+}
+
 function findSent(messages: Message[]): UserMessage {
 	const sent = messages.find(
 		(m) => m.role === "user" && m.content === "Try again",
@@ -112,6 +135,8 @@ describe("useChatMessages", () => {
 		mockState.status = "connected";
 		mockState.sendMessage.mockReset();
 		mockState.sendMessage.mockResolvedValue({});
+		mockState.sendHtmlAction.mockReset();
+		mockState.sendHtmlAction.mockResolvedValue({});
 		mockState.invalidateCommandCache.mockClear();
 		mockState.chatMessagesHistory.mockReset();
 		useSessionDetailStore.getState().clear();
@@ -689,6 +714,85 @@ describe("useChatMessages", () => {
 	// The tail line's half of the hook: what the main agent is thinking now is
 	// state of its own beside the transcript, and its clock is the server's
 	// reading carried over to this device (docs/turn-progress-ui.md §2.3).
+	describe("a page's send", () => {
+		const ACTION = { page: "p3", action: "approve", data: { id: "42" } };
+
+		// Drawn from the action at once; the agent's text is the server's, and
+		// the sender is left out of the broadcast that would carry it.
+		it("is echoed as the action, then filled in from the reply", async () => {
+			let reply: (result: SentHtmlAction) => void = () => {};
+			mockState.sendHtmlAction.mockReturnValueOnce(
+				new Promise((resolve) => {
+					reply = resolve;
+				}),
+			);
+			const { latest, send } = renderActionProbe();
+			await waitFor(() => expect(latest.messages.length).toBeGreaterThan(0));
+
+			let sending: Promise<void> = Promise.resolve();
+			act(() => {
+				sending = send.current(ACTION);
+			});
+			expect(mockState.sendHtmlAction).toHaveBeenCalledWith("s1", ACTION);
+			expect(findAction(latest.messages)).toMatchObject({
+				content: "",
+				htmlAction: ACTION,
+			});
+
+			await act(async () => {
+				reply({
+					seq: 6,
+					messageId: "m6",
+					content: 'Page action "approve" from p3:\n{"id":"42"}',
+					htmlAction: ACTION,
+				});
+				await sending;
+			});
+			expect(findAction(latest.messages)).toMatchObject({
+				content: 'Page action "approve" from p3:\n{"id":"42"}',
+				messageId: "m6",
+				anchorSeq: 6,
+			});
+		});
+
+		// Nothing was recorded, and the page that sent says why under its card.
+		it("takes a refused send back out and rethrows", async () => {
+			mockState.sendHtmlAction.mockRejectedValueOnce(
+				new JSONRPCErrorException(
+					"page p9 does not exist in this session",
+					JSONRPCErrorCode.InvalidParams,
+				),
+			);
+			const { latest, send } = renderActionProbe();
+			await waitFor(() => expect(latest.messages.length).toBeGreaterThan(0));
+			const before = latest.messages;
+
+			await act(async () => {
+				await expect(send.current(ACTION)).rejects.toThrow("page p9");
+			});
+			expect(latest.messages).toEqual(before);
+		});
+
+		// It may have been delivered, so it stays — and the page still hears.
+		it("keeps a send that failed without a refusal, and rethrows", async () => {
+			mockState.sendHtmlAction.mockRejectedValueOnce(
+				new JSONRPCErrorException("Request timed out", 0),
+			);
+			const { latest, send } = renderActionProbe();
+			await waitFor(() => expect(latest.messages.length).toBeGreaterThan(0));
+
+			await act(async () => {
+				await expect(send.current(ACTION)).rejects.toThrow("timed out");
+			});
+			expect(findAction(latest.messages)).toBeDefined();
+			expect(latest.messages.at(-1)).toMatchObject({
+				role: "assistant",
+				status: "error",
+				error: "Failed to send message: Request timed out",
+			});
+		});
+	});
+
 	describe("the tail line", () => {
 		const RUNNING = {
 			phase: "running" as const,

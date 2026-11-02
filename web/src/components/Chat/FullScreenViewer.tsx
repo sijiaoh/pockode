@@ -246,6 +246,7 @@ function ContentView({
 					html={content.html}
 					title={title}
 					pageKey={content.pageKey}
+					page={content.page}
 					className="flex h-full flex-col"
 					boxClassName="min-h-0 flex-1"
 				/>

@@ -2,6 +2,7 @@ import {
 	ConfirmDialog,
 	Sheet,
 	useCoverPage,
+	useIsDrawnOver,
 	useIsPageCovered,
 } from "@pockode/shared";
 import { render, screen } from "@testing-library/react";
@@ -94,5 +95,70 @@ describe("useIsPageCovered", () => {
 
 		expect(probe()).toBe("clear");
 		expect(document.body.style.overflow).toBe("");
+	});
+});
+
+function DrawnOverProbe() {
+	return <output>{useIsDrawnOver() ? "drawn over" : "clear"}</output>;
+}
+
+describe("useIsDrawnOver", () => {
+	it("counts any layer outside a sheet", () => {
+		const { rerender } = render(
+			<>
+				<DrawnOverProbe />
+				<Panel open={false} />
+			</>,
+		);
+		expect(probe()).toBe("clear");
+		rerender(
+			<>
+				<DrawnOverProbe />
+				<Panel open />
+			</>,
+		);
+		expect(probe()).toBe("drawn over");
+	});
+
+	it("does not count the sheet it is drawn in, only a layer over it", () => {
+		const { rerender } = render(
+			<Sheet title="Viewer" onClose={() => {}}>
+				<DrawnOverProbe />
+				<Panel open={false} />
+			</Sheet>,
+		);
+		expect(probe()).toBe("clear");
+		rerender(
+			<Sheet title="Viewer" onClose={() => {}}>
+				<DrawnOverProbe />
+				<Panel open />
+			</Sheet>,
+		);
+		expect(probe()).toBe("drawn over");
+	});
+
+	// Effects run child first: the panel registers before the sheet it is in.
+	it("counts a layer opened inside its sheet as the sheet opens", () => {
+		render(
+			<Sheet title="Viewer" onClose={() => {}}>
+				<DrawnOverProbe />
+				<Panel open />
+			</Sheet>,
+		);
+		expect(probe()).toBe("drawn over");
+	});
+
+	// A panel left up under a sheet opened over it is not over the sheet.
+	it("does not count a layer already up when its sheet opened", () => {
+		const { rerender } = render(<Panel open />);
+		rerender(
+			<>
+				<Panel open />
+				<Sheet title="Viewer" onClose={() => {}}>
+					<DrawnOverProbe />
+				</Sheet>
+			</>,
+		);
+		expect(probe()).toBe("clear");
 	});
 });
