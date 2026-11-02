@@ -97,7 +97,8 @@ Windows 与 darwin/linux 一样是发布目标（产物见 [docs/platforms.md](.
 | `filestore/rename.go` | `rename_{unix,windows}.go` — Windows 上替换目标可能被临时占用，需重试 |
 | `internal/proctree/proctree.go` | `tree_{unix,windows}.go` — 进程树终止：进程组 / Job Object，Windows 另加 `CREATE_NO_WINDOW` |
 | `git/command.go` | `terminate_{unix,windows}.go` — 超时的 git 怎么停：SIGTERM（git 自己清锁文件）/ 杀进程树（Windows 没有可发的停止请求）|
-| `agent/command.go` | `command_{unix,windows}.go` — AI CLI 的查找兜底目录 + `.cmd` 包装器的命令行构造 |
+| `agent/command.go` | `command_{unix,windows}.go` — AI CLI 的平台通用兜底目录（Windows 的 npm 目录）、PATH 变量名的大小写、自带环境时补上 `PWD`（只有 unix 用它）+ `.cmd` 包装器的命令行构造 |
+| `agent/codex/install_dir.go` | `install_dir_{unix,windows}.go` — Codex 官方安装器的默认目录：`~/.local/bin` / `%LOCALAPPDATA%\Programs\OpenAI\Codex\bin` |
 | `agent/codex/view_image.go` | `fileuri_{unix,windows}.go` — `file://` URI 的 path 段转原生路径：Windows 上盘符是 URI 语法里的又一段，前导斜杠要去掉 |
 | `worktree/setup.go` | `hook_shell_{unix,windows}.go` — setup hook 的解释器（Windows 无 bash，探测 Git for Windows） |
 | `internal/pathutil/pathutil.go` | `equal_{unix,windows}.go` — Windows 路径比较大小写不敏感 |
@@ -120,7 +121,7 @@ Windows 与 darwin/linux 一样是发布目标（产物见 [docs/platforms.md](.
 
 参数一律是**原生路径**。外部来的值默认不是：git 的输出、手写的设置、我们自己 API 里的路径都用 `/`，进来时 `filepath.FromSlash`，出去时 `filepath.ToSlash`。
 
-**启动 AI CLI 一律走 `agent.Command`**，不要直接 `exec.Command(claude.Binary, …)`。它做两件各自都容易漏掉的事：`lookupBinary` 在 PATH 之外补上安装器的默认目录（Windows 上 PATH 是进程启动时定死的，装在 pockode.exe 启动之后的 CLI 就是看不见的），以及在可执行文件是 npm 装出来的 `.cmd` 时自己构造命令行——Windows 跑批处理文件是把命令行交给 cmd.exe，而 `os/exec` 按 `CommandLineToArgvW` 的规则加引号，两套规则对不上（Go 只在文档里提了一句，没有修，见 `agent/cmdline.go`）。需要能放弃的短命探测（如 `codex --help`）走 `agent.CommandContext`，它是同一条路加一个 ctx；跑完就要输出、超时要连子孙一起杀掉的一次性命令（如 `claude auth status`）走 `agent.Run`，它是跑到结束的 `agent.StartProcess`；要把输入写进 stdin、边跑边读输出的一次性调用（会话之外的 AI 请求，见 `agent.OneShotRunner`）走 `agent.RunStream`；会话进程走 `agent.StartProcess`，那边自己持有生命周期；要给 CLI 额外加环境变量时用 `agent.StartProcessEnv`（如 `claude auth login` 的 `BROWSER`）。
+**启动 AI CLI 一律走 `agent.Command`**，不要直接 `exec.Command(claude.Binary, …)`。它做几件各自都容易漏掉的事：`lookupBinary` 先查 PATH（找到就用它，环境不动），PATH 上完全没有时才查该 CLI 官方安装器的目录（各 CLI 包在 `init` 里用 `agent.RegisterInstallDir` 声明自己的）和平台通用的兜底目录（PATH 是进程启动时定死的，安装器改了 shell profile / 用户 PATH 之后、pockode 重启之前的 CLI 就是看不见的），从那里找到时把该目录**追加**到 CLI 子进程 PATH 的末尾（所以给 CLI 加环境变量要基于 `cmd.Environ()` 而不是 `os.Environ()`），以及在可执行文件是 npm 装出来的 `.cmd` 时自己构造命令行——Windows 跑批处理文件是把命令行交给 cmd.exe，而 `os/exec` 按 `CommandLineToArgvW` 的规则加引号，两套规则对不上（Go 只在文档里提了一句，没有修，见 `agent/cmdline.go`）。需要能放弃的短命探测（如 `codex --help`）走 `agent.CommandContext`，它是同一条路加一个 ctx；跑完就要输出、超时要连子孙一起杀掉的一次性命令（如 `claude auth status`）走 `agent.Run`，它是跑到结束的 `agent.StartProcess`；要把输入写进 stdin、边跑边读输出的一次性调用（会话之外的 AI 请求，见 `agent.OneShotRunner`）走 `agent.RunStream`；会话进程走 `agent.StartProcess`，那边自己持有生命周期；要给 CLI 额外加环境变量时用 `agent.StartProcessEnv`（如 `claude auth login` 的 `BROWSER`）。
 
 **存凭据的地方用 `internal/fsperm` 收紧，收紧的对象是目录不是文件**。`os.WriteFile(path, data, 0600)` 在 Windows 上什么也没做——Go 只把 perm 映射到只读属性，实际访问权来自父目录继承来的 ACL，而盘符根下建出来的目录一律继承一条 `BUILTIN\Users` 读权限。收紧目录才有两个逐个收紧文件拿不到的性质：**新建的文件自动继承**（`.pockode` 里的 session 记录、`server.log`、work store 都归它管，不必在每个写入点重复一遍），以及**扛得住 temp+rename**（`filestore` 和 git 的 `store` helper 都是先写临时文件再改名覆盖，改名进来的文件带的是它自己创建时的权限，逐个文件收紧会被下一次写入静默抹掉）。
 

@@ -471,10 +471,14 @@ Finding them is where Windows differs, in three ways:
   ([Restarting into a New Version](#restarting-into-a-new-version)). A process keeps the environment it
   was started with, so the `PATH` entry an installer appends is not visible to an
   already-running `pockode.exe` — the CLI is right there, but the `PATH` Pockode
-  inherited is stale. To soften that, it also looks in `%APPDATA%\npm`,
-  `%USERPROFILE%\.local\bin` and `%USERPROFILE%\.cargo\bin`, which is where the
-  CLI installers actually write. The "not found" error lists every directory it
-  tried, so the conclusion is checkable from your side.
+  inherited is stale. To soften that, a CLI that is not on `PATH` is also
+  looked for where its installer writes — `%USERPROFILE%\.local\bin` for
+  Claude Code, `%LOCALAPPDATA%\Programs\OpenAI\Codex\bin` for Codex, and
+  `%APPDATA%\npm` for either — and its directory is added to the end of the
+  CLI's own `PATH`
+  ([details](code/agent-integration.md#finding-the-binary)). The "not found"
+  error lists every directory it tried, so the conclusion is checkable from
+  your side.
 - **A `%VARIABLE%` in your project path can be rejected.** `npm install -g`
   installs the CLIs as `claude.cmd` / `codex.cmd`, and Windows runs batch files
   through `cmd.exe`, which expands `%NAME%` even inside quotes. Pockode hands the

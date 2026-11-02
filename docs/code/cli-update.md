@@ -177,12 +177,12 @@ version.
 
 So before running it, the Service reads the installed version and the latest
 release (`from_version`, `target_version`); afterwards, the version of the
-binary `agent` resolves (`to_version`). The update succeeded when that is at
-least the target. With no target — the registry could not be read — the CLI's
-word is taken: exit 0 is success, whatever the version. A target or a result
-that does not parse as a version fails as `other`, as the check reports it
-`unavailable`. The version afterwards is read on the server's own budget, not
-what the update left of its 10 minutes.
+binary `agent` [resolves](#where-the-cli-is-found) (`to_version`). The update
+succeeded when that is at least the target. With no target — the registry
+could not be read — the CLI's word is taken: exit 0 is success, whatever the
+version. A target or a result that does not parse as a version fails as
+`other`, as the check reports it `unavailable`. The version afterwards is read
+on the server's own budget, not what the update left of its 10 minutes.
 
 | `failure.reason` | When |
 |---|---|
@@ -220,6 +220,17 @@ second install never will, so the update is offered again rather than never.
 Six hours is meant to outlast a package manager's usual lag without leaving
 the card offering an update that has just failed.
 In memory: a restart offers it at once.
+
+## Where the CLI is found
+
+Everything here — `check`'s version, an update's `binary_path` and
+`to_version`, the install's success — runs the CLI through `agent.Command`, so
+it finds the same copy a session start and a sign-in do: PATH first, then, only
+when the CLI is not on PATH at all, its official installer's directory (and on
+Windows `%APPDATA%\npm`, where [an install](#installing-a-missing-cli) from here
+lands). The lookup, the directories and why are in
+[agent-integration.md](agent-integration.md#finding-the-binary). Nothing caches
+the answer, so a CLI installed a moment ago is found on the next read.
 
 ## Installing a missing CLI
 
@@ -266,14 +277,14 @@ shows while it runs, and empty when the registry could not be read. There is
 no `from_version`. The install succeeded when npm exited 0 and the CLI's
 `--version` then reads: `to_version` is that version, and `binary_path` where
 the CLI was found. Nothing caches where a CLI is — `check`, `cli_auth.status`
-and every session start search the PATH afresh — so the next read after a
-success finds it; a client reads both again when it sees an install end, as
-it does for an update.
+and every session start [search afresh](#where-the-cli-is-found) — so the next
+read after a success finds it; a client reads both again when it sees an
+install end, as it does for an update.
 
 | `failure.reason` | When |
 |---|---|
 | `permission_denied` | npm could not write its global prefix — its error block names `code EACCES` (Linux, macOS) or `code EPERM` (Windows), usually a prefix owned by root. `detail` is npm's output |
-| `not_on_path` | npm exited 0 but the server still cannot find the CLI: the directory npm puts commands in (its bin directory, or the prefix itself on Windows) is not on the server's PATH. `detail` names the prefix (`npm prefix --global`) when npm says; pockode has to be restarted with that directory on its PATH |
+| `not_on_path` | npm exited 0 but the server still cannot find the CLI: the directory npm puts commands in (its bin directory, or the prefix itself on Windows) is neither on the server's PATH nor one of the directories [searched after it](#where-the-cli-is-found) (`%APPDATA%\npm` on Windows, npm's default). `detail` names the prefix (`npm prefix --global`) when npm says; pockode has to be restarted with that directory on its PATH |
 | `command_failed` | npm exited non-zero for any other reason. `detail` starts with the npm command and its exit status, then npm's output |
 | `timeout` | it ran past the budget; its process tree was killed. `to_version` is read anyway |
 | `other` | anything else — npm could not be started, the installed CLI's `--version` failed, the server shut down — `detail` says what |
@@ -374,6 +385,11 @@ Much less than a sign-in does:
   where the PATH finds them, and npm's error block naming `code EACCES` /
   `code EPERM` when it cannot write. If that wording changes, a permission
   failure reads `command_failed` with npm's output — explained, not silent.
+- Each installer keeping the default directory registered for it
+  ([agent-integration.md](agent-integration.md#finding-the-binary)). If one
+  moves, a CLI it installed that is not yet on pockode's PATH reads
+  `not_installed`, with the old directory in the message's `also looked in` —
+  explained, not silent.
 - Claude's `autoUpdatesChannel` keeping its name and values. If it changes,
   a `stable` user is offered the `latest` release, and the update ends
   `not_applied` — explained, not silent.
