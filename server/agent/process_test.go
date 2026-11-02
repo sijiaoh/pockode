@@ -40,6 +40,12 @@ const (
 	// roleEcho stands in for a one-shot CLI: it prints back what it read on
 	// stdin, then stays up as a CLI still working would, until it is killed.
 	roleEcho = "echo"
+	// rolePath prints the PATH it was started with and POCKODE_TEST_EXTRA, one
+	// per line: what an off-PATH CLI's own children would resolve through, and
+	// whether variables added on top survived beside it.
+	rolePath = "path"
+	// rolePWD prints the PWD it was started with.
+	rolePWD = "pwd"
 
 	// leafLifetime only has to outlast the assertions; every test kills the leaf
 	// long before it elapses.
@@ -60,6 +66,13 @@ func TestMain(m *testing.M) {
 		runFailRole()
 	case roleEcho:
 		runEchoRole()
+	case rolePath:
+		fmt.Println(os.Getenv("PATH"))
+		fmt.Println(os.Getenv("POCKODE_TEST_EXTRA"))
+		os.Exit(0)
+	case rolePWD:
+		fmt.Println(os.Getenv("PWD"))
+		os.Exit(0)
 	default:
 		os.Exit(m.Run())
 	}

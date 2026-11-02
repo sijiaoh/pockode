@@ -5,6 +5,7 @@ package agent
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -153,7 +154,17 @@ func TestCommandFallsBackToInstallDirectories(t *testing.T) {
 	if err != nil {
 		t.Fatalf("lookupBinary did not fall back to the npm install directory: %v", err)
 	}
-	if want := filepath.Join(npmDir, "pockode-fake-cli.cmd"); got != want {
-		t.Errorf("lookupBinary returned %q, want %q", got, want)
+	if want := filepath.Join(npmDir, "pockode-fake-cli.cmd"); got.Path != want {
+		t.Errorf("lookupBinary returned %q, want %q", got.Path, want)
+	}
+}
+
+// TestAppendToPathMatchesWindowsSpelling pins that the system's own "Path" is
+// the variable extended: adding a second, upper-case PATH beside it would leave
+// which one the child sees to whoever dedups the environment.
+func TestAppendToPathMatchesWindowsSpelling(t *testing.T) {
+	got := appendToPath([]string{`Path=C:\a`}, `C:\x`)
+	if want := []string{`Path=C:\a;C:\x`}; !slices.Equal(got, want) {
+		t.Errorf("appendToPath = %q, want %q", got, want)
 	}
 }
