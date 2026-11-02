@@ -1587,6 +1587,64 @@ For the same reason a `question_posted` record left unclosed by the cut is
 a call that never returns, while a question the fork can still answer is the
 point.
 
+## HTML-First Sessions
+
+A session is either an ordinary chat or **HTML-first**, and the one difference
+between them is the guidance the agent starts with: the tools, the screen and
+the transcript are the same, and so is the asking guidance
+([above](#telling-the-agent-when-to-ask)). The mode exists because how much an
+agent should put on a page is not one answer for every conversation — a
+comparison or a report reads better as a page, a quick fix as two lines of
+text — and the place to say which is the guidance, not a second view. What
+the user sees of the choice is in
+[html-first-session-ui.md](../html-first-session-ui.md).
+
+An HTML-first session starts with `agent.HTMLFirstGuidance` in place of
+`agent.Guidance` (`agent.GuidanceFor`). It keeps the asking section word for
+word and swaps the rendering one for a section that makes a page the default
+for anything structured — comparisons, reports, choices, forms — with
+the reply cut to a sentence or two; the page works by itself and sends to the
+agent only when it needs it; a page is changed by deriving it from the old one
+with `html_edit` and read back with `html_get`; and it is made responsive,
+since it is seen at any width. A choice on a page does not replace
+`question_post`: the decision the agent waits on is still asked there.
+`agent.StartOptions.HTMLFirst` carries the mode to the spawn, through the same
+two channels: both CLIs' proxies are started with `--html-first`, which changes
+only the `initialize` instructions (Claude's channel; Codex shows them once a
+tool is loaded, so they have to agree), and Codex's `developerInstructions` are
+built from the same choice. The guidance is fixed when the CLI starts, so the
+mode has to be fixed for the session's life.
+`TestToolDefinitions_FitClaudesLimit` holds this text under Claude's limit
+too — with little room to spare, and since both texts share the asking
+section, growing that section grows both.
+
+The mode is the session's `html_first` (`session.SessionMeta.HTMLFirst`,
+switched with `session.set_html_first`), and what fixes it is `Started`, not
+`Activated`. `Activated` is set when the agent first *answers*; between the
+first delivery and that answer a switch would still be accepted for an agent
+already told the other guidance. `Started` is written by `chat.Client` right
+before a message is recorded and handed over — after the checks that can
+refuse it, so a refused first message leaves the switch open, while one that
+fails in the handover does not, being in the transcript already — under the same store lock
+`SetHTMLFirst` judges it by, so a switch either lands first or is refused with
+`session_started`. The sender reads the value back from that write and, if it
+differs from the one its process was started with (a switch that slipped in
+after the process was fetched), fetches again: `process.Manager` never reuses
+a process started with the other value, it replaces it. That is also why the
+switch itself closes nothing, unlike `session.set_mode`: a close there could
+land on the process a concurrent first message had just been delivered to. For
+the same reason the manager judges "the other value" against the store, not
+against the meta its caller passes: a sender that read the meta before the
+switch would otherwise replace a process another sender had already started
+with the new value, and perhaps delivered to. A
+fork copies the value and is started from birth: it carries on the parent's
+conversation, and that conversation was had under the parent's guidance. A
+work's session is always an ordinary chat, and the switch refuses it with
+`work_session`: the work claims the session's id before it creates the
+session and starts it with its kickoff message, so there is no moment at which
+it is a draft anyone could choose for. The refusal is judged on that claim
+rather than on `Started`, so it holds from the session's first moment.
+
 ## Claude Implementation
 
 ### stream-json Protocol
@@ -4182,6 +4240,8 @@ type SessionMeta struct {
     Unread     bool        // Has unread changes
     ForkedFrom *ForkOrigin // Set on a fork, naming the session it came from
     Usage      Usage       // Tokens and cost, as the agent reported them
+    HTMLFirst  bool        // The guidance it starts with; see HTML-First Sessions
+    Started    bool        // Set just before the first message is delivered
 }
 ```
 
@@ -4310,7 +4370,9 @@ reason at all is not a choice worth offering.
 
 ### Activation
 
-`Activated` marks a session as *started*, and three things read it:
+`Activated` marks a session the agent has answered in, and three things read it
+— not to be confused with `Started`, set earlier, when the first message is
+handed over, which fixes only the [HTML-first mode](#html-first-sessions):
 
 - Claude's [recovery ladder](#session-recovery-ladder), which receives it as
   `StartOptions.Resume` — overridden for a forked session, whose transcript is

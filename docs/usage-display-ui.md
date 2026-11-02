@@ -258,7 +258,10 @@ honour:
 
 Usage is drawn here alone because this document is about usage, not because it
 is the panel's only section or its first: Engine and Permissions come first on a
-live session, and a Work section sits above Usage on a session a work item
+live session, an HTML first session that has started carries a read-only
+Session section after them
+([html-first-session-ui.md](html-first-session-ui.md#4-once-started-the-session-panel)),
+and a Work section sits above Usage on a session a work item
 drives, absent on every other
 ([work-system.md](code/work-system.md#session-to-work-navigation)). Order is the
 panel's to own — a section does not know where it sits, which is what keeps that
