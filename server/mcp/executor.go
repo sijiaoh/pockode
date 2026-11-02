@@ -10,6 +10,7 @@ import (
 
 	"github.com/pockode/server/agentrole"
 	"github.com/pockode/server/chat"
+	"github.com/pockode/server/htmlpage"
 	"github.com/pockode/server/session"
 	"github.com/pockode/server/settings"
 	"github.com/pockode/server/work"
@@ -103,6 +104,8 @@ type Executor struct {
 	worktrees      WorktreeProvisioner
 	sessions       Sessions
 	workEngine     WorkEngine
+	pages          *htmlpage.Store
+	pageDirs       PageDirs
 }
 
 // SetWorkEngine installs what the question tools report to. Left unset, a
@@ -173,7 +176,11 @@ func (e *Executor) Execute(ctx context.Context, caller Caller, name string, args
 	case "agent_role_reset_defaults":
 		return e.agentRoleResetDefaults(ctx)
 	case "html_render":
-		return htmlRender(args)
+		return e.htmlRender(caller, args)
+	case "html_get":
+		return e.htmlGet(caller, args)
+	case "html_edit":
+		return e.htmlEdit(caller, args)
 	case "question_post":
 		return e.questionPost(ctx, caller, args)
 	case "question_cancel":

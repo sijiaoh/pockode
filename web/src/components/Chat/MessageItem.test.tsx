@@ -1,5 +1,7 @@
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import type { ReactElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { layOutClamp } from "../../test/clampLayout";
 import type {
@@ -16,8 +18,10 @@ const RUNNING = { ...IDLE_TAIL, phase: "running" as const };
 const mockWorkDir = vi.hoisted(() => ({ value: "/Users/test/project" }));
 
 vi.mock("../../lib/wsStore", () => ({
-	useWSStore: (selector: (state: { workDir: string }) => string) =>
-		selector({ workDir: mockWorkDir.value }),
+	useWSStore: (
+		selector: (state: { workDir: string; actions: object }) => unknown,
+	) => selector({ workDir: mockWorkDir.value, actions: {} }),
+	isRPCTimeout: () => false,
 }));
 
 describe("MessageItem", () => {
@@ -577,12 +581,20 @@ describe("MessageItem", () => {
 			status: "complete",
 			createdAt: new Date(),
 		});
+		// A card reads its page through the query cache, as the app's root
+		// provides.
+		const renderPage = (ui: ReactElement) =>
+			render(
+				<QueryClientProvider client={new QueryClient()}>
+					{ui}
+				</QueryClientProvider>,
+			);
 
 		it.each([
 			"mcp__pockode__html_render",
 			"pockode:html_render",
 		])("is drawn as a page card once %s succeeds", (name) => {
-			render(
+			renderPage(
 				<MessageItem sessionId="session-1" message={page(name, "success")} />,
 			);
 			const card = screen.getByRole("region", { name: "Latency report" });
@@ -592,8 +604,20 @@ describe("MessageItem", () => {
 			expect(screen.queryByText("html_render")).toBeNull();
 		});
 
+		// Its page is the server's, read by id; the card stands in for it
+		// until then rather than a row that would turn into one.
+		it("draws a succeeded html_edit as a card of the page it stored", () => {
+			const message = page("pockode:html_edit", "success");
+			const part = (message as AssistantMessage).parts[0];
+			if (part.type !== "tool_call") throw new Error("not a call");
+			part.tool.htmlPage = "p2";
+			renderPage(<MessageItem sessionId="session-1" message={message} />);
+			expect(screen.getByRole("region")).toHaveTextContent("p2");
+			expect(screen.queryByText("html_edit")).toBeNull();
+		});
+
 		it("stays a tool row while it runs", () => {
-			render(
+			renderPage(
 				<MessageItem
 					sessionId="session-1"
 					message={page("mcp__pockode__html_render", "running")}

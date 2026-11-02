@@ -88,6 +88,7 @@ import {
 	createCommandActions,
 	createFileActions,
 	createGitActions,
+	createHtmlPageActions,
 	createPortPreviewActions,
 	createRawActions,
 	createScheduleActions,
@@ -99,6 +100,7 @@ import {
 	createWorktreeActions,
 	type FileActions,
 	type GitActions,
+	type HtmlPageActions,
 	type PortPreviewActions,
 	type RawActions,
 	type ScheduleActions,
@@ -327,6 +329,7 @@ type RPCActions = ConnectionActions &
 	SettingsActions &
 	FileActions &
 	GitActions &
+	HtmlPageActions &
 	WatchActions &
 	WorkActions &
 	WorktreeActions;
@@ -968,6 +971,7 @@ const sessionActions = createSessionActions(getClient);
 const sessionViewActions = createSessionViewActions(getClient);
 const settingsActions = createSettingsActions(getClient);
 const fileActions = createFileActions(getClient);
+const htmlPageActions = createHtmlPageActions(getClient);
 const gitActions = createGitActions(getClient, getCommitDraftClient);
 const workActions = createWorkActions(getClient, getAgentStartClient);
 const worktreeRpcActions = createWorktreeActions(getClient);
@@ -1708,6 +1712,7 @@ export const useWSStore = create<WSState>((set, get) => ({
 		...settingsActions,
 		...fileActions,
 		...gitActions,
+		...htmlPageActions,
 		...workActions,
 		...worktreeRpcActions,
 	},

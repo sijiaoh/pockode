@@ -445,6 +445,14 @@ func (m *Manager) AttachmentDataDir(name, sessionID string) (string, error) {
 	return m.StoredAttachmentDataDir(name, sessionID)
 }
 
+// PageDataDir is the data directory a page the agent of one of the named
+// worktree's sessions draws is stored under (see package htmlpage). The same
+// vouching as AttachmentDataDir, for the same reason: the session id becomes a
+// path, and a session of a deleted worktree is never continued.
+func (m *Manager) PageDataDir(name, sessionID string) (string, error) {
+	return m.AttachmentDataDir(name, sessionID)
+}
+
 // StoredAttachmentDataDir is the data directory one of the named worktree's
 // sessions keeps its attachments under, once the session is known to be stored
 // there — whether or not the worktree still exists, since a deleted worktree's

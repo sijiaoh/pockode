@@ -3212,6 +3212,20 @@ describe("messageReducer", () => {
 			]);
 		});
 
+		// Replay and live both arrive through normalizeEvent.
+		it("carries the page a page tool stored onto its run", () => {
+			const event = normalizeEvent({
+				type: "tool_result",
+				tool_use_id: "t1",
+				tool_result: "Page p3 ...",
+				html_page: "p3",
+			});
+			let messages: Message[] = [streamingRun()];
+			messages = applyServerEvent(messages, call("t1", "pockode:html_render"));
+			messages = applyServerEvent(messages, event);
+			expect(runsOf(messages[0])).toMatchObject([{ htmlPage: "p3" }]);
+		});
+
 		// Claude reports no duration at all, and zero is how that arrives.
 		it("treats a reported duration of zero as no duration", () => {
 			expect(

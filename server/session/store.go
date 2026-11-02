@@ -15,6 +15,7 @@ import (
 
 	"github.com/pockode/server/attachments"
 	"github.com/pockode/server/filestore"
+	"github.com/pockode/server/htmlpage"
 )
 
 type Store interface {
@@ -481,6 +482,12 @@ func (s *FileStore) CreateFork(ctx context.Context, sessionID string, fork ForkS
 	// copy, and then the store waits on it.
 	if err := attachments.Clone(s.dataDir, fork.Source.ID, sessionID); err != nil {
 		slog.Warn("failed to copy attachments into forked session",
+			"sessionId", sessionID, "sourceSessionId", fork.Source.ID, "error", err)
+	}
+	// The same holds for the pages the copied tool results name, and the same
+	// trade: a fork whose cards cannot be fetched still has the conversation.
+	if err := htmlpage.Clone(s.dataDir, fork.Source.ID, sessionID, fork.PagesThrough); err != nil {
+		slog.Warn("failed to copy html pages into forked session",
 			"sessionId", sessionID, "sourceSessionId", fork.Source.ID, "error", err)
 	}
 

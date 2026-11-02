@@ -665,12 +665,13 @@ See [Posted Questions](agent-integration.md#posted-questions).
 | Tool | Purpose | Key Parameters |
 |------|---------|----------------|
 | `html_render` | Show the user an HTML page — a comparison, a chart, a structured report — that Markdown carries badly | `title`, `html` |
+| `html_get` | Read back one of the session's pages, with the list of all of them | `id` |
+| `html_edit` | Show a changed version of a page as a new page, without sending the whole page again | `base`, `title?`, `edits` |
 
-**The call's input is the page.** The server only validates it
-(`server/mcp/html_render.go`): it stores nothing and emits no event, because the
-frontend draws the page straight from the tool call recorded in the session
-history, like any other tool call's input. So the contract the frontend reads is
-the input schema, and nothing else:
+**Every page is stored, and named by a short id.** `html_render`
+(`server/mcp/html_render.go`) validates the input, stores it as the session's
+next page (`server/htmlpage`), and answers with the page's id. The input schema
+is still what the agent writes:
 
 - `title` — required; a short name for what the page shows.
 - `html` — required; a full document or a fragment, rendered as written in a
@@ -682,13 +683,77 @@ the input schema, and nothing else:
 
 Either one empty or whitespace-only is refused as a user error — blank HTML is
 a blank frame, not a page, and a page with no title leaves the user nothing to
-tell it by. `html` over 256KB
-(`maxHTMLRenderBytes`) is refused too, naming the size: that history keeps the
-whole input, so the cap is what it can afford to carry, not what a browser could
-draw. The refusal points the agent at a project file for large data or
-libraries — referenced, it costs the history a path instead of its bytes. The
-reply on success tells the agent the page is shown and not to repeat its
-content, which is the one rule worth restating at the moment it applies.
+tell it by. `html` over 256KB (`htmlpage.MaxHTMLBytes`) is refused too, naming
+the size: the page is kept for as long as the session, and the call's input in
+the history carries it as well, so the cap is what those can afford, not what
+a browser could draw. The refusal points the agent at a project file for large
+data or libraries — referenced, it costs a path instead of its bytes. One check
+(`htmlpage.Draft.Validate`) serves every tool that stores a page, so a page
+derived from another one is held to the same limits. A call from outside a
+session is refused: there is no chat to show the page in.
+
+**Deriving a page.** `html_edit` (`server/mcp/html_edit.go`) reads `base`,
+applies its `edits` (`htmlpage.ApplyEdits`) and stores the result as a new
+page with `base` recorded; the base page is never touched, and stays in the
+chat as it was. An edit is an exact-string replacement, the str_replace the
+agent already makes to files: `old` non-empty, different from `new`, and found
+exactly once unless `replace_all`. Plain text rather than anything that parses
+HTML — the alternative was regions the page marks (`data-pk-region`) replaced
+by name, which costs a parser dependency, works only on a page whose agent
+remembered to mark it in advance, and asks for a skill the agent does not
+already have, where str_replace is the one it uses all day; and a parser's idea
+of the document could change where the agent's copy of the text cannot.
+
+Edits apply in order, each to what the ones before it left, and the set is all
+or nothing: the first that fails is named by its position and nothing is
+stored. Each edit's resulting size is checked before it is applied — a short
+`old` all over the page times a long `new` would otherwise build a result far
+larger than any request before anything refused it. The result then passes the
+same `Draft.Validate` as any page, and an omitted `title` keeps the base's.
+`html_get` hands the HTML back raw after a marker line, not inside JSON, so
+that what the agent copies into `old` is what is stored — an escaped copy would
+carry a backslash before every quote. An id the session lacks is refused with
+the list of the pages it has.
+
+**Ids.** `p1`, `p2`, … in the order a session's pages were drawn — short
+because the agent quotes them back, and a CLI's own tool call id is far harder
+to repeat exactly. Numbered per session under a lock (`htmlpage.Store.Append`),
+so pages drawn in parallel never share one.
+
+**Storage.** One file per page, `sessions/<id>/html_pages/<n>.json`, holding
+`id`, `title`, `html`, `created_at` and, for a page derived from another,
+`base`. Written once, atomically, and never again: a page is an event, the
+snapshot of what was drawn, and is never rebuilt by replaying edits — a change
+to how edits apply would otherwise quietly turn an old page into a different
+one. Being under the session's directory, the pages go when the session is
+deleted; the directory is made one level at a time, so a call arriving after
+the delete cannot recreate it (`htmlpage.ErrSessionGone`). A fork gets the
+source's pages up to the highest one its copied history names
+(`htmlpage.HighestInRecords` → `ForkSpec.PagesThrough` → `htmlpage.Clone`,
+hard links where possible), but numbers its next page past the source's highest
+(`numbered_from.json`). The agent can remember more than the transcript it was
+forked with — Codex reopens a conversation at a turn, not at a record, so a cut
+inside a turn leaves it the pages drawn later in that turn — and an id it
+remembers must never come to name a different page; one the fork lacks is
+simply not found.
+
+**The record names the page.** The result begins `Page <id>`
+(`htmlpage.ResultLead`), followed by the title and the rule not to repeat the
+page's content — the one rule worth restating at the moment it applies. The
+executor cannot put the id on the record itself, because an MCP call does not
+carry the CLI's tool call id; so the process does it from the other side
+(`process.pageCalls`): it notes every tool call whose name is a page tool
+(`htmlpage.IsPageTool`, both engines' names — `mcp__pockode__<tool>` from
+Claude, `pockode:<tool>` from Codex), and stamps that call's successful result
+with the id read back from its first words, as `html_page` on the
+`tool_result` record, before it is recorded or broadcast. The name is checked,
+not just the text, since any other tool's output may begin with the same words.
+A client reads `html_page` to know which stored page a card is, and fetches it
+with `html_page.get` (`server/ws/rpc_html_page.go`; `session_view.html_page`
+for a session of another worktree) — a page never changes, so there is nothing
+to subscribe to. A record without `html_page` is a page drawn before pages were
+stored, and is drawn from its call's input.
+
 When to reach for the tool at all is in the guidance every session gets before
 it has loaded one
 ([agent-integration.md](agent-integration.md#telling-the-agent-when-to-ask)).

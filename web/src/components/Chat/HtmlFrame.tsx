@@ -175,8 +175,8 @@ interface Props {
 	html: string;
 	title: string;
 	/**
-	 * The page the reader's allowance is for: one `html_render` call, whichever
-	 * view it is drawn in.
+	 * The page the reader's allowance is for: one `html_render` or `html_edit`
+	 * call, whichever view it is drawn in.
 	 */
 	pageKey: string;
 	/** The page's height whenever it changes; the frame is then sized by it. */

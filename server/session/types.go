@@ -179,6 +179,10 @@ type ForkSpec struct {
 	// Their request ids are unchanged: the fork inherits the questions, it does
 	// not ask them again.
 	Unanswered []PendingQuestion
+	// PagesThrough is the highest html page the copied records name
+	// (htmlpage.HighestInRecords). The fork is given the source's pages up to
+	// it, and numbers its own past every page the source has (htmlpage.Clone).
+	PagesThrough int
 }
 
 // SessionMeta holds metadata for a chat session.

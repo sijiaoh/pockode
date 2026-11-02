@@ -29,6 +29,7 @@ import (
 	"github.com/pockode/server/datadir"
 	"github.com/pockode/server/filetransfer"
 	"github.com/pockode/server/git"
+	"github.com/pockode/server/htmlpage"
 	"github.com/pockode/server/internal/fsperm"
 	"github.com/pockode/server/internal/netutil"
 	"github.com/pockode/server/internal/pathutil"
@@ -484,6 +485,7 @@ Flags:
 	// A question an agent posts, and an answer another agent gives, are both
 	// things that happen to a work item; the engine is what they are reported to.
 	mcpExecutor.SetWorkEngine(workEngine)
+	mcpExecutor.SetPages(htmlpage.NewStore(), worktreeManager)
 	mcpHandler := mcp.NewAPIHandler(mcpExecutor, mcpToken)
 
 	cloudURL := *cloudURLFlag

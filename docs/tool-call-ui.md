@@ -275,8 +275,8 @@ the last and an older page in front of the first, and the oldest is the one
 neither displaces. A card that takes a row's place takes its id too, so the
 card does not rename the list either. Only a member *leaving* renames it — a
 `question_post` row replaced by its card when it was the oldest, an
-`html_render` call drawn on its own once it succeeds — and that remounts the
-list.
+`html_render` or `html_edit` call drawn on its own once it succeeds — and that
+remounts the list.
 
 Whether the user opened a row is remembered apart from its key: under its call
 (`tool_call:<tool_use_id>`) for a tool row, under its part for anything else. A
@@ -735,6 +735,8 @@ afterwards cannot word the same call differently.
 | `TaskOutput` | `TaskOutput` | the `task_id`, in mono | right |
 | `server:tool` (Codex MCP) or `mcp__server__tool` (Claude MCP) | the tool half | the server half as a chip, then the first scalar argument, else compact JSON | right |
 | `html_render` (Pockode's own MCP tool), while it is a row | `html_render` | `pockode` as a chip, then the `title` — never the first argument, which is as often the whole page | right |
+| `html_edit`, while it is a row | `html_edit` | `pockode` as a chip, then `<title> · from <base>`, or `from <base>` without a title | right |
+| `html_get` | `html_get` | `pockode` as a chip, then the `id` | right |
 | anything else | the name | first non-empty scalar in `input` | right |
 
 Six decisions inside that table:
@@ -2623,9 +2625,47 @@ renderer infers nothing.
 `html_render` is Pockode's own MCP tool: the agent passes a `title` and an
 `html` document (or fragment) to show the user something richer than Markdown.
 It arrives as an ordinary tool call — `mcp__pockode__html_render` from Claude,
-`pockode:html_render` from Codex — whose input already holds the whole page, so
-the frontend draws straight from the call and there is no event of its own. Both
-names, and which state is a card, are `lib/htmlRender.ts`, and nowhere else.
+`pockode:html_render` from Codex — with no event of its own. Both names of each
+of the three page tools (`html_render`, `html_edit`, `html_get`), and which
+state is a card, are `lib/htmlRender.ts`, and nowhere else.
+
+**Every page has an id, and is never changed.** The server stores each page a
+session draws as a snapshot and names it `p1`, `p2`, … in drawing order; the
+call's `tool_result` record carries that id as `html_page`, and `html_page.get`
+reads the stored page back ([how](code/work-system.md#rendering-tool)). A
+change to a page is a new page: `html_edit` derives one from an earlier page,
+which stays as it was. A page is the whole snapshot, never a base plus edits
+replayed on display — a change to how edits apply would otherwise quietly
+redraw an old page as something it never was. Ids can skip a number in a
+forked chat, which never reuses one its source had drawn when it was forked.
+A record with no `html_page` is a page from before pages were stored, and its
+card is drawn from its call's input, as it always was.
+
+**Two tools draw a card, the third only a row.** `html_edit` derives a new page
+from an earlier one, and its input holds only the edits (`base`, `title?`,
+`edits`), so its card reads the page from the server by the id on its result —
+`html_page.get`, or `session_view.html_page` in a
+[viewed transcript](cross-worktree-session-ui.md) — through `useHtmlPage`,
+never refetched while cached and never subscribed to, since a page never
+changes. An `html_render` card still draws from its input, which is the stored
+page byte for byte. The base's card is left as it was: both pages stand in the
+chat, each in its own card. An `html_edit` that succeeded without an id has no
+way to its page and stays a row. `html_get` only reads a page back for the
+agent and is always a row, its detail the id it read.
+
+- **The id is in the header**, muted mono after the title — `p3`, or `p4 · from
+  p2` for a derived page — because it is how the reader asks for a change
+  ("make p3's bars blue"), and the agent understands nothing else as precisely.
+  A card from before ids has none.
+- **An edit's page loads as an attachment's thumbnail does**: not before the
+  card is near the viewport, and the grey placeholder until it arrives, titled
+  with the input's `title`, else *Loading page…*; `</>` and ⤢ wait for the
+  page, since there is nothing yet to show or open.
+- **A page that does not load says so**: *Couldn't load page p3: <the server's
+  reason>* with *Retry*, in place of the page, as an `alert` — never a
+  placeholder that would read as still loading. So an InvalidParams answer —
+  `page not found`, `session not found` — is final and shown at once; a lost
+  connection or an internal error is retried by itself first.
 
 **It is a row until it succeeds, and then a card.** `running`, `background`,
 `error` and `interrupted` are drawn exactly as any other call's, detail = the
@@ -3182,6 +3222,12 @@ the virtualizer measures it.
     (`docs/.vitepress/dist/logo.png`); a `.env`, `.env.local`, `.envrc` or
     `.git/config` it fetches does not. A `#section` link scrolls the page.
     Offline, the page draws without them and the strip names the app's host.
+56. Ask for a page, then for a change to it, from Claude and from Codex: the
+    first card says `p1`, the second `p2 · from p1`, and both stand, the first
+    unchanged. Reopen the session: both draw, the second loaded from the
+    server. Fork the chat between them and ask again: the fork's next page is
+    not `p2`. Ask the agent to change `p9`: it is told which pages exist, and
+    nothing new is drawn.
 
 ## Out of scope
 

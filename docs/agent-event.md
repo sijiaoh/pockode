@@ -376,9 +376,12 @@ A `thinking` record keeps its text in `Content` and adds `FullReasoning`,
 
 A `tool_result` also uses `Subtype`, for the three kinds of result that are not
 simply "what the call produced", and carries `DurationMs` / `ExitCode` when the
-CLI reported them as figures. A `tool_activity` record — which exists on the wire
-only — carries `Activity` and `OutputDelta`. What each means is
-[tool-call-model.md](tool-call-model.md); the field-by-field notes are
+CLI reported them as figures. A page tool's successful result carries
+`HTMLPage` (`html_page`), the id of the page it stored, which the server stamps
+since no CLI knows it ([code/work-system.md](code/work-system.md#rendering-tool)).
+A `tool_activity` record — which exists on the wire only — carries `Activity`
+and `OutputDelta`. What each means is [tool-call-model.md](tool-call-model.md);
+the field-by-field notes are
 [code/agent-integration.md](code/agent-integration.md#eventrecord-unified-event-format).
 
 `Contents` and `ToolResult` are one field in two shapes, and a `tool_result`
@@ -527,6 +530,7 @@ file too large to send and a binary read the same in both places.
 | Backend | `server/agent/content.go` | Content block and file block shapes shared by both agents |
 | Backend | `server/attachments/attachments.go` | Per-session store for content a record references by id — what a tool returned, and the files the user sends ([how](code/agent-integration.md#files-the-user-sends)) |
 | Backend | `server/ws/rpc_attachment.go` | `attachment.get` — serving that content to a client |
+| Backend | `server/htmlpage/` | Per-session store of the pages an agent drew, and the `html_page` id a result record names one by |
 | Backend | `server/agent/claude/claude.go` | CLI output parsing and event emission |
 | Backend | `server/process/manager.go` | Event distribution |
 | Backend | `server/watch/chat_messages.go` | WebSocket broadcast to subscribers |

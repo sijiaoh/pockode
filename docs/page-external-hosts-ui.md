@@ -4,8 +4,8 @@ How an HTML page shown in the app holds back every request to another host
 until the reader allows it, how the reader learns what was held back, and what
 allowing does. It covers both kinds of page frame:
 
-- **An agent's page** — an `html_render` card in the chat and its full-screen
-  view ([tool-call-ui.md](tool-call-ui.md#a-page-the-agent-drew-html_render)).
+- **An agent's page** — an `html_render` or `html_edit` card in the chat and
+  its full-screen view ([tool-call-ui.md](tool-call-ui.md#a-page-the-agent-drew-html_render)).
 - **A workspace page** — an `.html` file in the Files tab, in a commit, and in
   the media viewer, served from `/api/raw`
   ([file.md](file.md#html-pages), [media-viewer.md](media-viewer.md#the-html-stage)).
@@ -220,9 +220,10 @@ show it.
   for no reason they can judge; a reader who distrusts one host should not
   load the page's hosts at all, and `</>` shows them what the page does.
 - **"This page" means:**
-  - *An agent page* — that `html_render` call: its card and its full-screen
-    view. Another call, even with the same HTML, is another page and asks
-    again; this is the Markdown rule's "for this text".
+  - *An agent page* — that `html_render` or `html_edit` call: its card and
+    its full-screen view. Another call, even with the same HTML — a page
+    derived from it included — is another page and asks again; this is the
+    Markdown rule's "for this text".
   - *A workspace page* — that file (its tree origin: the worktree, or the
     commit, and its path), wherever it is shown: in place, and in the media
     viewer opened from it. A page the reader follows a link to inside the
@@ -512,9 +513,10 @@ by writing a Markdown image. Suppressed reports only break the page itself.
 
 The allowance is a map from page to hosts in the app's own memory
 (`allowPageHosts` / `useAllowedPageHosts`, `web/src/lib/pageHosts.ts`), keyed
-by the `html_render` call's id for an agent page and by worktree and tree
-origin (`file:<worktree>:<origin>`) for a workspace page. Only the strip's
-Load writes to it. From there it reaches a policy through the app alone:
+by the page tool call's id (`html_render` or `html_edit`) for an agent page
+and by worktree and tree origin (`file:<worktree>:<origin>`) for a workspace
+page. Only the strip's Load writes to it. From there it reaches a policy
+through the app alone:
 
 - **Agent page:** a new `srcdoc` the app writes.
 - **Workspace page:** a capability the app asks for over the authenticated
