@@ -15,6 +15,8 @@ export interface TranscriptOptions {
 	pages: unknown[][];
 	/** The height of the box the transcript fills, in CSS pixels. */
 	height?: number;
+	/** Its width, in CSS pixels; the window's when absent. */
+	width?: number;
 }
 
 export interface RenderedTranscript {
@@ -117,13 +119,14 @@ async function rest() {
 export async function renderTranscript({
 	pages,
 	height = 600,
+	width,
 }: TranscriptOptions): Promise<RenderedTranscript> {
 	resetChatHistoryServer(pages);
 	const { container } = render(
 		// The app's root provides one, and a picture in the transcript reads
 		// through it.
 		<QueryClientProvider client={new QueryClient()}>
-			<div className="flex flex-col" style={{ height }}>
+			<div className="flex flex-col" style={{ height, width }}>
 				<Transcript />
 			</div>
 		</QueryClientProvider>,
