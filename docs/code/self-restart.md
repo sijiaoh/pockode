@@ -70,10 +70,11 @@ be asked for reliably later:
 The environment is not saved: the new run inherits the old process's as it is
 at the moment of the restart, the password aside (below). A `PATH` a CLI
 installer has changed since in the user's profile is therefore not seen — a
-restart is no substitute for starting from a new terminal there. On Windows,
-AI CLIs installed into the usual installer directories (`%APPDATA%\npm` and
-the others in `server/agent/command_windows.go`) are found anyway, without any
-restart: `agent.Command` searches those on every lookup.
+restart is no substitute for starting from a new terminal there. An AI CLI
+installed into its official installer's directory (or, on Windows, npm's) is
+found anyway, without any restart: `agent.Command` searches that directory on
+every lookup when the CLI is not on `PATH`
+([agent-integration.md](agent-integration.md#finding-the-binary)).
 
 `newRestarter` runs after `--version` is handled, not before: `--version` is
 what the probe below runs, and it must not depend on the working directory

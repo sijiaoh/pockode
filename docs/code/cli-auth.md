@@ -88,7 +88,9 @@ fail for them: the CLI is in the list with its reason in `error`, and only a
 request naming an agent the server does not know is refused.
 
 `not_installed` comes from `agent.BinaryNotFoundError`, the same lookup a
-session start uses, including the Windows fallback directories.
+session start uses: `PATH`, then the CLI's official installer directory (and
+on Windows npm's)
+([agent-integration.md](agent-integration.md#finding-the-binary)).
 
 ## Deciding "external"
 

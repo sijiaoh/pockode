@@ -3395,21 +3395,67 @@ equivalent — its answer is one `decision` field, and always-allow becomes
 ### Starting the CLI
 
 Every AI CLI launch goes through `agent.Command` (`server/agent/command.go`)
-rather than `exec.Command`, because on Windows two things have to happen before
-`Start` that `exec.Cmd` will not do.
+rather than `exec.Command`, because two things have to happen before `Start`
+that `exec.Cmd` will not do: finding the binary where `PATH` alone does not,
+and, on Windows, building the command line by hand.
 
-**Resolving the binary cannot rely on `PATH` alone.** A process keeps the
-environment it was started with, so the `PATH` entry an installer appends is
-invisible to an already-running `pockode.exe` — the CLI exists, but the inherited
-`PATH` predates it. `agent.Command` tries `PATH` first (whatever the user's
-own shell would run is the right answer when it exists), then the directories the
-CLI installers actually write to. When it still fails, the error names the CLI,
-every directory that was searched, the need to restart Pockode, and — on Windows
-— that a CLI installed inside WSL is not reachable from a Windows process. Naming
-the search set is the point: without it "not found" is a conclusion the user
-cannot check. The same lookup feeds the startup banner, so what the banner
-reports and what a session gets are the same answer, not two implementations of
-it.
+#### Finding the binary
+
+`lookupBinary` is the one answer to "which `claude` / `codex` does Pockode run",
+for every caller: session start, one-shot requests, sign-in
+([cli-auth.md](cli-auth.md)), `--version`, update and install
+([cli-update.md](cli-update.md#where-the-cli-is-found)), and the startup banner —
+so what the banner reports and what a session gets are the same answer, not two
+implementations of it. Nothing caches it; every launch looks again.
+
+1. **`PATH` first, and it always wins.** Whatever the user's own shell would run
+   is the copy Pockode runs, and the one an update has to reach. A CLI found
+   there runs with the environment exactly as inherited.
+2. **Only when the name is not on `PATH` at all**, the CLI's official installer
+   directory, then the platform's:
+
+   | | Directory | Where it comes from |
+   |---|---|---|
+   | claude | `~/.local/bin` (`%USERPROFILE%\.local\bin` on Windows) | where `claude install` — what `claude.ai/install.sh` and `install.ps1` run — puts the launcher |
+   | codex | `$CODEX_INSTALL_DIR` when set, else `~/.local/bin`; on Windows `%LOCALAPPDATA%\Programs\OpenAI\Codex\bin` | the defaults in `chatgpt.com/codex/install.sh` and `install.ps1`; the override is honoured because the installers honour it — with it set, that is where codex went |
+   | any, Windows only | `%APPDATA%\npm` | where `npm install --global` puts its `.cmd` shims — still a common way to install either CLI, and how [cli-update](cli-update.md#installing-a-missing-cli) installs a missing one |
+
+   Each CLI declares its own directory with `agent.RegisterInstallDir` from its
+   package's `init` (`agent/claude/install_dir.go`, `agent/codex/install_dir*.go`),
+   because the installers disagree: one list for all of them would be right for
+   some and a guess for the rest. The directory is read from the environment at
+   lookup time, not at registration. Unix adds no platform directory: package
+   managers there install onto `PATH` already, so guessing further would be a
+   second, worse `PATH`. Each directory is probed with `LookPath(<dir>/<name>)`,
+   so on Windows `PATHEXT` finds `claude.cmd` or `codex.exe` as `PATH` would.
+3. **Otherwise not found**: `agent.BinaryNotFoundError`, which every caller
+   reports as the CLI not being installed. The message names the CLI, says it
+   has to be on the `PATH` of the process running pockode and that pockode must
+   be restarted, lists every directory tried after `PATH` (`also looked in:`),
+   and on Windows adds that a CLI installed inside WSL is not reachable from a
+   Windows process. Naming the search set is the point: without it "not found"
+   is a conclusion the user cannot check.
+
+The fallback exists because an installer puts its directory on `PATH` by
+editing a shell profile (on Windows, the user `PATH`), and a process keeps the
+environment it was started with. When the CLI was installed a moment ago, or
+pockode was started from something that predates the profile change — a
+service, an app launcher, a terminal opened earlier — the CLI is sitting in
+exactly that directory and nowhere on the `PATH` pockode inherited.
+
+A CLI found in step 2 runs with that directory **appended** to the end of its
+child process's `PATH` (Windows' `Path` matched case-insensitively; just the
+directory when there is none). Whatever the CLI runs in turn — a hook, or
+itself again by name — then resolves the way it would from the user's shell,
+and appending rather than prepending shadows nothing the user already had. So a
+caller adding environment variables builds on `cmd.Environ()`, not
+`os.Environ()`, or drops that `PATH`; `agent.StartProcessEnv` does. It also
+sets `PWD` to the working directory on unix, which exec does by itself only for
+a command with no environment of its own. The startup
+log says which case it was: `AI CLI found`, or `AI CLI found outside PATH;
+appending its directory to the PATH it runs with` with the directory.
+
+#### Building the command line
 
 **The command line has to be built by hand for `.cmd` wrappers.** `npm install
 -g` installs the CLIs as batch files, and Windows runs a batch file by handing
@@ -3427,7 +3473,7 @@ outcome. The string-building half lives in `agent/cmdline.go`, deliberately
 platform-independent so it can be tested everywhere rather than only on a Windows
 runner.
 
-Both halves are the same code path for every caller. A short probe that has to
+Both are the same code path for every caller. A short probe that has to
 be abandonable — `codex --help` behind a timeout — uses `agent.CommandContext`,
 which is `agent.Command` plus a context; a session process uses
 `agent.StartProcess`, which owns its own lifecycle (below).
@@ -3435,7 +3481,8 @@ which is `agent.Command` plus a context; a session process uses
 `server/AGENTS.md` carries this as a rule: start an AI CLI through that path,
 never `exec.Command`. `lookupBinary` is unexported for the same reason —
 resolving a path separately and then calling `exec.Command` on it would bypass
-exactly the quoting that the resolved path determines.
+exactly the quoting that the resolved path determines, and the `PATH` a CLI
+found off `PATH` needs.
 
 ### Subprocess Lifecycle
 
