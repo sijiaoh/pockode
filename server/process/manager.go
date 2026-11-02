@@ -112,8 +112,12 @@ var ErrRequestNotPending = errors.New("this request is no longer waiting for an 
 
 // Process holds a running agent process. Do not cache references.
 type Process struct {
-	sessionID    string
-	agentType    session.AgentType
+	sessionID string
+	agentType session.AgentType
+	// htmlFirst is the guidance this process was started with. It cannot be
+	// changed on a running CLI, so a process whose value is not the session's is
+	// replaced rather than reused (GetOrCreateProcess).
+	htmlFirst    bool
 	agentSession agent.Session
 	sessionStore session.Store
 	manager      *Manager // back-reference for broadcasting to subscribers
@@ -243,19 +247,42 @@ func (m *Manager) EmitMessage(sessionID string, event agent.AgentEvent, seq sess
 // already running for meta.ID. A session that has been activated is resumed.
 func (m *Manager) GetOrCreateProcess(ctx context.Context, meta session.SessionMeta) (*Process, bool, error) {
 	sessionID := meta.ID
-	m.processesMu.Lock()
+	for {
+		m.processesMu.Lock()
 
-	// Checked under processesMu, which Shutdown also holds while cancelling, so a
-	// process can never be registered after Shutdown stopped waiting for it.
-	if m.ctx.Err() != nil {
-		m.processesMu.Unlock()
-		return nil, false, ErrManagerClosed
-	}
+		// Checked under processesMu, which Shutdown also holds while cancelling, so a
+		// process can never be registered after Shutdown stopped waiting for it.
+		if m.ctx.Err() != nil {
+			m.processesMu.Unlock()
+			return nil, false, ErrManagerClosed
+		}
 
-	if proc, exists := m.processes[sessionID]; exists {
-		proc.touch()
+		proc, exists := m.processes[sessionID]
+		if !exists {
+			break
+		}
+		if proc.htmlFirst == meta.HTMLFirst {
+			proc.touch()
+			m.processesMu.Unlock()
+			return proc, false, nil
+		}
 		m.processesMu.Unlock()
-		return proc, false, nil
+		// Which of the two is out of date is the store's to say. A caller whose
+		// meta was read before a switch can arrive after another sender already
+		// started this process with the switched value, and perhaps handed it a
+		// first message: that process is the session's, so it is kept.
+		current, found, err := m.sessionStore.Get(sessionID)
+		if err != nil {
+			return nil, false, fmt.Errorf("get session: %w", err)
+		}
+		if found && current.HTMLFirst == proc.htmlFirst {
+			meta = current
+			continue
+		}
+		// Started before session.set_html_first changed the value. Only an
+		// unstarted session can be in this state, so nothing the agent was told
+		// is lost by replacing it. Closed outside the lock, which Close takes.
+		m.Close(sessionID)
 	}
 
 	ag, err := m.agents.Get(meta.AgentType)
@@ -275,6 +302,7 @@ func (m *Manager) GetOrCreateProcess(ctx context.Context, meta session.SessionMe
 		Mode:         meta.Mode,
 		Model:        meta.Model,
 		Effort:       meta.Effort,
+		HTMLFirst:    meta.HTMLFirst,
 		OnUsage:      m.usageRecorder(sessionID),
 	}
 	sess, err := ag.Start(m.ctx, opts)
@@ -286,6 +314,7 @@ func (m *Manager) GetOrCreateProcess(ctx context.Context, meta session.SessionMe
 	proc := &Process{
 		sessionID:    sessionID,
 		agentType:    meta.AgentType,
+		htmlFirst:    meta.HTMLFirst,
 		agentSession: sess,
 		sessionStore: m.sessionStore,
 		manager:      m,
@@ -356,7 +385,7 @@ func (m *Manager) GetOrCreateProcess(ctx context.Context, meta session.SessionMe
 		m.onStateChange(StateChangeEvent{SessionID: sessionID, State: ProcessStateIdle, IsInitial: true})
 	}
 	slog.Info("process created", "sessionId", sessionID, "resume", meta.Activated,
-		"agentType", meta.AgentType, "mode", meta.Mode, "model", meta.Model, "effort", meta.Effort)
+		"agentType", meta.AgentType, "mode", meta.Mode, "model", meta.Model, "effort", meta.Effort, "htmlFirst", meta.HTMLFirst)
 	return proc, true, nil
 }
 
@@ -1015,6 +1044,9 @@ func (p *Process) ReportsMessageIngest() bool {
 	_, ok := p.agentSession.(agent.MessageIngestReporter)
 	return ok
 }
+
+// HTMLFirst is the guidance this process was started with.
+func (p *Process) HTMLFirst() bool { return p.htmlFirst }
 
 // ReceivesAttachments reports whether this session's agent can be handed the
 // files a message carries. See agent.AttachmentReceiver.

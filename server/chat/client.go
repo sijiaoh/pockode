@@ -193,25 +193,9 @@ type Sent struct {
 // sendEvent delivers one message to the agent, records it, and tells subscribers.
 // It returns what names the record, or the zero Sent if there is none.
 func (c *Client) sendEvent(ctx context.Context, sessionID string, event agent.MessageEvent, attachments []agent.Attachment, exclude any) (Sent, error) {
-	proc, err := c.getOrCreateProcess(ctx, sessionID)
+	proc, err := c.processToDeliverTo(ctx, sessionID, len(attachments) > 0)
 	if err != nil {
 		return Sent{}, err
-	}
-
-	// Before the append, not after: a refused message must leave no trace. A
-	// record written here would be in the transcript on the next reload of a
-	// conversation the agent never heard it in, which is a worse answer than the
-	// error — the send failed, and only the client that tried knows that.
-	//
-	// Asked of the process rather than of the agent, and asked for every sender:
-	// a kickoff or an auto-continuation lands in the same silence a typed message
-	// does, and a work nudged into a session that is holding a request open is
-	// nudged into nothing.
-	if proc.TurnState().AwaitingUserAnswer() {
-		return Sent{}, ErrTurnAwaitingAnswer
-	}
-	if len(attachments) > 0 && !proc.ReceivesAttachments() {
-		return Sent{}, ErrAttachmentsUnsupported
 	}
 	for _, a := range attachments {
 		event.Attachments = append(event.Attachments, a.File)
@@ -258,6 +242,55 @@ func (c *Client) sendEvent(ctx context.Context, sessionID string, event agent.Me
 	}
 
 	return Sent{Seq: seq, MessageID: event.MessageID}, nil
+}
+
+// processToDeliverTo returns the process a message is about to be handed to,
+// with the session marked started, or the reason the message is refused.
+//
+// Before the append, not after: a refused message must leave no trace. A
+// record written here would be in the transcript on the next reload of a
+// conversation the agent never heard it in, which is a worse answer than the
+// error — the send failed, and only the client that tried knows that.
+//
+// Asked of the process rather than of the agent, and asked for every sender:
+// a kickoff or an auto-continuation lands in the same silence a typed message
+// does, and a work nudged into a session that is holding a request open is
+// nudged into nothing.
+//
+// The session is marked started only once nothing above can refuse the
+// message, so a first message refused here leaves the session's guidance still
+// open to a switch. A failure past this point (the handover itself) leaves it
+// started: the message is in the transcript by then.
+//
+// Marking it fixes HTMLFirst, and the value it is fixed at is the one that
+// counts: a switch that landed after the process was fetched but before the
+// mark is honoured by fetching again, which replaces a process started with
+// the old value. The second pass always matches — nothing can change the
+// value of a started session.
+func (c *Client) processToDeliverTo(ctx context.Context, sessionID string, hasAttachments bool) (*process.Process, error) {
+	for {
+		proc, err := c.getOrCreateProcess(ctx, sessionID)
+		if err != nil {
+			return nil, err
+		}
+		if proc.TurnState().AwaitingUserAnswer() {
+			return nil, ErrTurnAwaitingAnswer
+		}
+		if hasAttachments && !proc.ReceivesAttachments() {
+			return nil, ErrAttachmentsUnsupported
+		}
+
+		started, err := c.store.MarkStarted(ctx, sessionID)
+		if err != nil {
+			if errors.Is(err, session.ErrSessionNotFound) {
+				return nil, ErrSessionNotFound
+			}
+			return nil, fmt.Errorf("mark session started: %w", err)
+		}
+		if proc.HTMLFirst() == started.HTMLFirst {
+			return proc, nil
+		}
+	}
 }
 
 // noteIngested writes the read point for an agent that cannot report its own:

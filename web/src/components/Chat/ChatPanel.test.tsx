@@ -145,6 +145,10 @@ const mockState = vi.hoisted(() => ({
 	setSessionEffort: vi.fn(
 		(_sessionId: string, _effort: string): Promise<void> => Promise.resolve(),
 	),
+	setSessionHTMLFirst: vi.fn(
+		(_sessionId: string, _htmlFirst: boolean): Promise<void> =>
+			Promise.resolve(),
+	),
 	startWork: vi.fn(() => Promise.resolve()),
 	// Read only once the project is a repository; the review row's count.
 	getStatus: vi.fn(
@@ -192,6 +196,7 @@ vi.mock("../../lib/wsStore", () => {
 		setSessionAgentType: mockState.setSessionAgentType,
 		setSessionModel: mockState.setSessionModel,
 		setSessionEffort: mockState.setSessionEffort,
+		setSessionHTMLFirst: mockState.setSessionHTMLFirst,
 		startWork: mockState.startWork,
 		getStatus: mockState.getStatus,
 		forkSession: mockState.forkSession,
@@ -357,6 +362,9 @@ describe("ChatPanel", () => {
 		);
 		mockState.setSessionEffort.mockImplementation(async (_id, effort) =>
 			acceptSetting({ effort }),
+		);
+		mockState.setSessionHTMLFirst.mockImplementation(async (_id, htmlFirst) =>
+			acceptSetting({ html_first: htmlFirst }),
 		);
 		// Default: subscribe returns empty history and ended state
 		mockState.chatMessagesSubscribe.mockImplementation(() =>
@@ -2571,7 +2579,7 @@ describe("ChatPanel", () => {
 			render(<ChatPanel {...defaultProps} />);
 			await waitForHistoryLoad();
 
-			const drag = dragFiles(screen.getByText("Start a conversation..."), [
+			const drag = dragFiles(screen.getByRole("group", { name: "Session" }), [
 				dropItem(file()),
 			]);
 			expect(drag.dataTransfer.dropEffect).toBe("copy");
@@ -4245,6 +4253,225 @@ describe("ChatPanel", () => {
 		});
 	});
 
+	// docs/html-first-session-ui.md: a draft until the first message, then fixed.
+	describe("the Chat / HTML first switch", () => {
+		const sessionGroup = () => screen.queryByRole("group", { name: "Session" });
+		const segment = (name: string) => screen.getByRole("button", { name });
+
+		it("offers Chat on a new session, and lights HTML first once the server says so", async () => {
+			const user = userEvent.setup();
+			render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+
+			expect(segment("Chat")).toHaveAttribute("aria-pressed", "true");
+			expect(
+				screen.getByText(/answers in text, and draws a page/),
+			).toBeInTheDocument();
+
+			await user.click(segment("HTML first"));
+
+			expect(mockState.setSessionHTMLFirst).toHaveBeenCalledWith(
+				"test-session",
+				true,
+			);
+			expect(segment("HTML first")).toHaveAttribute("aria-pressed", "true");
+			expect(
+				screen.getByText(/answers with pages you can work in/),
+			).toBeInTheDocument();
+		});
+
+		it("holds Send until both the reply and a fresh detail are in", async () => {
+			let reply: () => void = () => {};
+			mockState.setSessionHTMLFirst.mockReturnValueOnce(
+				new Promise<void>((resolve) => {
+					reply = resolve;
+				}),
+			);
+			const user = userEvent.setup();
+			render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+			await user.type(screen.getByRole("textbox"), "Hello");
+
+			await user.click(segment("HTML first"));
+			const send = screen.getByRole("button", { name: /Send/ });
+			expect(send).toBeDisabled();
+			expect(sessionGroup()).toHaveAttribute("aria-disabled", "true");
+			// Still the stored value: nothing is lit ahead of the server.
+			expect(segment("Chat")).toHaveAttribute("aria-pressed", "true");
+
+			await act(async () => reply());
+			expect(send).toBeDisabled();
+
+			act(() => acceptSetting({ html_first: true }));
+			await waitFor(() => expect(send).toBeEnabled());
+			await user.click(send);
+			expect(mockState.sendMessage).toHaveBeenCalledWith(
+				"test-session",
+				"Hello",
+				undefined,
+			);
+		});
+
+		// Another device switched it there and back before this render saw
+		// either: the value never moves, and Send must not wait for it.
+		it("releases Send on a fresh detail even when the value did not move", async () => {
+			mockState.setSessionHTMLFirst.mockResolvedValueOnce(undefined);
+			const user = userEvent.setup();
+			render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+			await user.type(screen.getByRole("textbox"), "Hello");
+
+			await user.click(segment("HTML first"));
+			const send = screen.getByRole("button", { name: /Send/ });
+			expect(send).toBeDisabled();
+
+			act(() => acceptSetting({ html_first: false }));
+			await waitFor(() => expect(send).toBeEnabled());
+			expect(segment("Chat")).toHaveAttribute("aria-pressed", "true");
+		});
+
+		describe("with an extension's hints", () => {
+			afterEach(() => resetChatUIConfig());
+
+			it("sends a hint pressed during a switch once the switch has landed", async () => {
+				setChatUIConfig({
+					EmptyState: ({ onHintClick }) => (
+						<button type="button" onClick={() => onHintClick?.("Hi")}>
+							Say hi
+						</button>
+					),
+				});
+				let reply: () => void = () => {};
+				mockState.setSessionHTMLFirst.mockReturnValueOnce(
+					new Promise<void>((resolve) => {
+						reply = resolve;
+					}),
+				);
+				const user = userEvent.setup();
+				render(<ChatPanel {...defaultProps} />);
+				await waitForHistoryLoad();
+
+				await user.click(segment("HTML first"));
+				await user.click(screen.getByRole("button", { name: "Say hi" }));
+				expect(mockState.sendMessage).not.toHaveBeenCalled();
+
+				await act(async () => reply());
+				act(() => acceptSetting({ html_first: true }));
+
+				await waitFor(() =>
+					expect(mockState.sendMessage).toHaveBeenCalledWith(
+						"test-session",
+						"Hi",
+						undefined,
+					),
+				);
+			});
+		});
+
+		it("goes away with the first message", async () => {
+			const user = userEvent.setup();
+			render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+
+			await user.type(screen.getByRole("textbox"), "Hello");
+			await user.click(screen.getByRole("button", { name: /Send/ }));
+
+			expect(screen.getByText("Hello")).toBeInTheDocument();
+			expect(sessionGroup()).not.toBeInTheDocument();
+		});
+
+		it.each([
+			["a started session (a fork)", { started: true }],
+			["an activated session", { activated: true }],
+			["a work session", { work_id: "w1" }],
+		])("is not offered on %s", async (_name, overrides) => {
+			seedSessionDetail(overrides);
+			render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+
+			expect(sessionGroup()).not.toBeInTheDocument();
+		});
+
+		it("is not offered over a conversation", async () => {
+			mockState.mockHistory = [{ type: "message", content: "go", seq: 1 }];
+			render(<ChatPanel {...defaultProps} />);
+			expect(await screen.findByText("go")).toBeInTheDocument();
+
+			expect(sessionGroup()).not.toBeInTheDocument();
+		});
+
+		it("says the session has started when the first message got there first", async () => {
+			mockState.setSessionHTMLFirst.mockRejectedValueOnce(
+				new JSONRPCErrorException(
+					"session has already started",
+					JSONRPCErrorCode.InvalidParams,
+					{ reason: "session_started" },
+				),
+			);
+			const user = userEvent.setup();
+			render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+
+			await user.click(segment("HTML first"));
+
+			expect(await screen.findByRole("alert")).toHaveTextContent(
+				"This session has already started, so it stays a Chat session.",
+			);
+			expect(segment("Chat")).toHaveAttribute("aria-pressed", "true");
+			// Never held: the send is the one that won.
+			expect(sessionGroup()).not.toHaveAttribute("aria-disabled");
+
+			act(() => acceptSetting({ started: true }));
+			expect(sessionGroup()).not.toBeInTheDocument();
+			expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+		});
+
+		it("reports any other failure, and lets the next press retry", async () => {
+			mockState.setSessionHTMLFirst.mockRejectedValueOnce(
+				new Error("Not connected"),
+			);
+			const user = userEvent.setup();
+			render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+
+			await user.click(segment("HTML first"));
+			expect(await screen.findByRole("alert")).toHaveTextContent(
+				"Couldn't switch: Not connected",
+			);
+
+			await user.click(segment("HTML first"));
+			expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+			expect(segment("HTML first")).toHaveAttribute("aria-pressed", "true");
+		});
+
+		it("is read in the session panel once an HTML first session has started", async () => {
+			const user = userEvent.setup();
+			seedSessionDetail({ html_first: true, started: true });
+			render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+
+			await user.click(sessionTrigger());
+			const section = await screen.findByRole("region", { name: "Session" });
+			expect(section).toHaveTextContent("HTML first");
+			expect(section).toHaveTextContent(
+				"Fixed when the first message was sent.",
+			);
+		});
+
+		it("is not in the session panel of a Chat session", async () => {
+			const user = userEvent.setup();
+			seedSessionDetail({ started: true });
+			render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+
+			await user.click(sessionTrigger());
+			await screen.findByRole("region", { name: "Usage" });
+			expect(
+				screen.queryByRole("region", { name: "Session" }),
+			).not.toBeInTheDocument();
+		});
+	});
+
 	// A work's life and its chat process are two separate clocks, and the chat
 	// now reads neither off the other: an interrupt stops the work without
 	// emitting any message, so anything in the transcript claiming to know the
@@ -5553,6 +5780,10 @@ describe("ChatPanel", () => {
 			).toBeInTheDocument();
 			expect(
 				screen.queryByText("Start a conversation..."),
+			).not.toBeInTheDocument();
+			// Not this screen's to change.
+			expect(
+				screen.queryByRole("group", { name: "Session" }),
 			).not.toBeInTheDocument();
 		});
 

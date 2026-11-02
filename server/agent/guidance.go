@@ -47,3 +47,34 @@ const renderingGuidance = "Showing the user something in Pockode:\n\n" +
 	"- When a comparison, a chart or a structured report is shown better by something richer than Markdown, show it with the html_render tool; load it through your tool search first if you only have its name.\n" +
 	"- A rendered page can show project files — screenshots, recordings, sounds, data — by path: reference them instead of inlining them.\n" +
 	"- Do not repeat or summarize in your reply what you rendered: the user already sees it."
+
+// HTMLFirstGuidance replaces Guidance in an HTML-first session. The tools are
+// the same in both, so it keeps the asking section as it is and swaps only the
+// rendering one: Guidance's says when a page is worth it, this one makes the
+// page the default for anything structured. It reaches each CLI through the
+// channel Guidance does, under the same 2048-character limit.
+const HTMLFirstGuidance = askingGuidance + "\n\n" + htmlFirstRenderingGuidance
+
+// htmlFirstRenderingGuidance: that structured content goes on a page and the
+// reply stays short, that the page works by itself, that a page is changed from
+// the old one rather than redrawn, and that it is seen at any width.
+//
+// A choice on a page and question_post do not compete: the page is for what the
+// user explores and fills in, question_post still for the decision the agent
+// waits on — said here because the asking section above it says "a decision"
+// without that distinction.
+const htmlFirstRenderingGuidance = "Showing the user something in Pockode — this session is HTML-first:\n\n" +
+	"- Show anything structured — comparisons, reports, choices, forms — as an html_render page (load it, html_edit and html_get through tool search first if you only have their names). " +
+	"Reply in a sentence or two; never repeat the page.\n" +
+	"- Make the page work by itself and send to you only when it needs you. A decision you wait on is still asked with question_post.\n" +
+	"- Change a page by deriving it from the old one with html_edit; read an old one with html_get.\n" +
+	"- Pages are seen at any width: make them responsive. Reference project files by path, not inlined."
+
+// GuidanceFor is the guidance a session starts with: HTMLFirstGuidance in an
+// HTML-first session, Guidance in any other.
+func GuidanceFor(htmlFirst bool) string {
+	if htmlFirst {
+		return HTMLFirstGuidance
+	}
+	return Guidance
+}

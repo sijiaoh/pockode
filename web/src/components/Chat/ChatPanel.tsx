@@ -98,6 +98,7 @@ import ChatDropOverlay from "./ChatDropOverlay";
 import ChatSkeleton from "./ChatSkeleton";
 import ForkSessionSheet from "./ForkSessionSheet";
 import { FullScreenHost } from "./FullScreenHost";
+import HtmlFirstSwitch, { useHtmlFirstSwitch } from "./HtmlFirstSwitch";
 import DefaultInputBar from "./InputBar";
 import type { PromptError } from "./MessageItem";
 import MessageList, { type MessageListHandle } from "./MessageList";
@@ -402,6 +403,26 @@ function ChatPanel({
 		});
 	}, [turn.blockers, messages]);
 
+	// The new session's Chat / HTML first switch, offered only while the choice
+	// is still a draft: before the first message, on a session that is this
+	// screen's to change and is not a work item's (always Chat). Its detail has
+	// to have landed — `started` is only there, and a fork is told apart by it —
+	// and so has the transcript, so the switch never appears for a moment over a
+	// conversation still loading (docs/html-first-session-ui.md §2.5).
+	const htmlFirstOffered =
+		!isReadOnly &&
+		!isChatPending &&
+		messages.length === 0 &&
+		sessionDetail !== null &&
+		!sessionDetail.started &&
+		!sessionDetail.activated &&
+		sessionDetail.work_id === undefined;
+	const htmlFirstSwitch = useHtmlFirstSwitch({
+		sessionId,
+		detail: sessionDetail,
+		offered: htmlFirstOffered,
+	});
+
 	const markSessionRead = useWSStore((s) => s.actions.markSessionRead);
 
 	// Subscribe already marks read server-side, but we also need to mark read
@@ -492,6 +513,26 @@ function ChatPanel({
 			);
 		},
 		[resolvedTitle, onUpdateTitle, sendUserMessage, sessionId],
+	);
+
+	// The extension's empty-state hints send without going through the composer,
+	// so they wait for a switch in flight here; the composer waits on `canSend`.
+	// Through a ref, so the send that runs is the one rendered after the switch
+	// settled — and dropped if that render is another session's: a hint pressed
+	// here is not a message for wherever the user went in the meantime.
+	const handleSendRef = useRef(handleSend);
+	handleSendRef.current = handleSend;
+	const sessionIdRef = useRef(sessionId);
+	sessionIdRef.current = sessionId;
+	const { whenSettled: whenHtmlFirstSettled } = htmlFirstSwitch;
+	const handleHintSend = useCallback(
+		(hint: string) => {
+			const pressedIn = sessionIdRef.current;
+			void whenHtmlFirstSettled().then(() => {
+				if (sessionIdRef.current === pressedIn) handleSendRef.current(hint);
+			});
+		},
+		[whenHtmlFirstSettled],
 	);
 
 	// An answer only reaches the process that raised the prompt, so a card whose
@@ -1280,8 +1321,13 @@ function ChatPanel({
 				// the same statement made where it cannot drift.
 				onPermissionRespond={isReadOnly ? undefined : handlePermissionRespond}
 				onAnswerQuestion={isReadOnly ? undefined : handleAnswerQuestion}
-				onHintClick={isReadOnly ? undefined : handleSend}
+				onHintClick={isReadOnly ? undefined : handleHintSend}
 				isReadOnly={isReadOnly}
+				emptyStateSwitch={
+					htmlFirstOffered ? (
+						<HtmlFirstSwitch control={htmlFirstSwitch} />
+					) : undefined
+				}
 				promptError={promptError ?? undefined}
 				onOpenWorkDetail={onOpenWorkDetail}
 				onOpenFile={onOpenFile}
@@ -1513,7 +1559,13 @@ function ChatPanel({
 	const inputBarProps: InputBarProps = {
 		sessionId,
 		onSend: handleSend,
-		canSend: status === "connected" && !isChatPending && !promptOwnsInput,
+		// A switch in flight holds the first message until the session it lands
+		// in is the one the screen shows (docs/html-first-session-ui.md §2.3).
+		canSend:
+			status === "connected" &&
+			!isChatPending &&
+			!promptOwnsInput &&
+			!htmlFirstSwitch.pending,
 		sendBlockedReason: promptOwnsInput ? "Allow or deny to send" : undefined,
 		disabled: !isSessionResolved,
 		turnOpen,

@@ -277,6 +277,29 @@ type SessionSetAgentTypeParams struct {
 	AgentType session.AgentType `json:"agent_type"`
 }
 
+type SessionSetHTMLFirstParams struct {
+	SessionID string `json:"session_id"`
+	HTMLFirst bool   `json:"html_first"`
+}
+
+// Reasons a session.set_html_first is refused, carried as
+// SessionSetHTMLFirstErrorData. The message says the same thing in prose; the
+// reason is what a client branches on.
+const (
+	// SessionHTMLFirstStarted: the first message has been delivered, and the
+	// agent was started with the guidance the session already has.
+	SessionHTMLFirstStarted = "session_started"
+	// SessionHTMLFirstWorkSession: the session runs a work item, whose sessions
+	// are always ordinary chats.
+	SessionHTMLFirstWorkSession = "work_session"
+)
+
+// SessionSetHTMLFirstErrorData is the data member of a refused
+// session.set_html_first.
+type SessionSetHTMLFirstErrorData struct {
+	Reason string `json:"reason"`
+}
+
 type SessionSetModeParams struct {
 	SessionID string       `json:"session_id"`
 	Mode      session.Mode `json:"mode"`
@@ -821,6 +844,9 @@ type SessionListItem struct {
 	UnansweredQuestions int                 `json:"unanswered_questions,omitempty"`
 	Unread              bool                `json:"unread"`
 	ForkedFrom          *session.ForkOrigin `json:"forked_from,omitempty"`
+	// HTMLFirst is session.SessionMeta.HTMLFirst, on the row because the row
+	// draws it (docs/html-first-session-ui.md §3).
+	HTMLFirst bool `json:"html_first,omitempty"`
 }
 
 // Turn is session.TurnState as a client receives it: the instant the open turn
@@ -916,6 +942,7 @@ func NewSessionListItem(meta session.SessionMeta, sw SessionWork) SessionListIte
 		UnansweredQuestions: len(meta.Turn.Unanswered),
 		Unread:              meta.Unread,
 		ForkedFrom:          meta.ForkedFrom,
+		HTMLFirst:           meta.HTMLFirst,
 	}
 }
 

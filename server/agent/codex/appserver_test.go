@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -209,6 +210,21 @@ func TestBuildThreadParams_MainWorktreeIsUnnamed(t *testing.T) {
 	for _, arg := range args {
 		if arg == "--worktree" {
 			t.Errorf("main worktree session passed --worktree: %v", args)
+		}
+	}
+}
+
+// The proxy's instructions are what Codex shows once a tool is loaded, so an
+// HTML-first session's proxy is told, and no other's is.
+func TestBuildThreadParams_HTMLFirstFlag(t *testing.T) {
+	for _, htmlFirst := range []bool{false, true} {
+		sess := &appSession{
+			opts: agent.StartOptions{WorkDir: "/tmp/work", DataDir: "/tmp/data", SessionID: "s1", HTMLFirst: htmlFirst},
+			exe:  "/usr/local/bin/pockode",
+		}
+		args := sess.buildThreadParams()["config"].(map[string]interface{})["mcp_servers"].(map[string]interface{})["pockode"].(map[string]interface{})["args"].([]string)
+		if got := slices.Contains(args, "--html-first"); got != htmlFirst {
+			t.Errorf("HTMLFirst=%v: args %v, --html-first present = %v", htmlFirst, args, got)
 		}
 	}
 }

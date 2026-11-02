@@ -79,6 +79,7 @@ type startCall struct {
 	sessionID string
 	resume    bool
 	mode      session.Mode
+	htmlFirst bool
 }
 
 type mockAgent struct {
@@ -160,7 +161,7 @@ func (m attachmentMockAgent) Start(ctx context.Context, opts agent.StartOptions)
 
 func (m *mockAgent) Start(ctx context.Context, opts agent.StartOptions) (agent.Session, error) {
 	m.mu.Lock()
-	m.startCalls = append(m.startCalls, startCall{sessionID: opts.SessionID, resume: opts.Resume, mode: opts.Mode})
+	m.startCalls = append(m.startCalls, startCall{sessionID: opts.SessionID, resume: opts.Resume, mode: opts.Mode, htmlFirst: opts.HTMLFirst})
 	m.mu.Unlock()
 
 	if m.startErr != nil {

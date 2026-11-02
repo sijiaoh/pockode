@@ -259,7 +259,7 @@ if err := json.Unmarshal(data, &parsed); err != nil {
 
 ### MCP 本地 API
 
-MCP 子进程为客户端模式：由 AI CLI 通过 `pockode mcp --data-dir <dir> [--session-id <id>] [--worktree <name>]` 启动，从 `server.json` 读取 `local_url` 和 `token`，将工具调用通过 HTTP（`POST /api/mcp/tools/call`，Bearer token）转发给主服务器执行（`server/mcp/` 的 `Executor`）。`--session-id` / `--worktree` 是 spawn 时写入的调用方身份（`mcp.Caller`），随每次调用带上，让工具作用于调用来源的 session 而不必由模型填 id；它是自报的来源标识，不是凭据（见 [docs/code/agent-integration.md](../docs/code/agent-integration.md#mcp-caller-identity)）。子进程不直接读写文件或启动 watcher。`middleware.Auth` 仅对该精确路由放行，由 `APIHandler` 自行校验本地 token；relay 拒绝转发 `/api/mcp/*`，因此该接口实际仅 loopback 可达。
+MCP 子进程为客户端模式：由 AI CLI 通过 `pockode mcp --data-dir <dir> [--session-id <id>] [--worktree <name>] [--html-first]` 启动，从 `server.json` 读取 `local_url` 和 `token`，将工具调用通过 HTTP（`POST /api/mcp/tools/call`，Bearer token）转发给主服务器执行（`server/mcp/` 的 `Executor`）。`--session-id` / `--worktree` 是 spawn 时写入的调用方身份（`mcp.Caller`），随每次调用带上，让工具作用于调用来源的 session 而不必由模型填 id；它是自报的来源标识，不是凭据（见 [docs/code/agent-integration.md](../docs/code/agent-integration.md#mcp-caller-identity)）。`--html-first` 只换 `initialize` 返回的 instructions（`agent.GuidanceFor`），工具列表不变。子进程不直接读写文件或启动 watcher。`middleware.Auth` 仅对该精确路由放行，由 `APIHandler` 自行校验本地 token；relay 拒绝转发 `/api/mcp/*`，因此该接口实际仅 loopback 可达。
 
 ## 边界
 

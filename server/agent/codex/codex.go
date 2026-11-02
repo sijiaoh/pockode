@@ -625,6 +625,11 @@ func (s *appSession) buildThreadParams() map[string]interface{} {
 		if s.opts.Worktree != "" {
 			args = append(args, "--worktree", s.opts.Worktree)
 		}
+		// Codex takes the guidance from developerInstructions, but shows the
+		// proxy's instructions too once a tool is loaded; they have to agree.
+		if s.opts.HTMLFirst {
+			args = append(args, "--html-first")
+		}
 		overrides["mcp_servers"] = map[string]interface{}{
 			"pockode": map[string]interface{}{
 				"command": s.exe,
