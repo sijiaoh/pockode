@@ -2,27 +2,61 @@ import type { ContentPart } from "../types/message";
 import { splitNativePath } from "../utils/path";
 
 /**
- * Pockode's own `html_render` MCP tool, by both names it arrives under: Claude
- * passes `mcp__server__tool` through, Codex's adapter joins `server:tool`.
+ * Pockode's own page tools, by both names each arrives under: Claude passes
+ * `mcp__server__tool` through, Codex's adapter joins `server:tool`.
  */
+type PageTool = "html_render" | "html_edit" | "html_get";
+
+function pageTool(toolName: string): PageTool | null {
+	const tool = toolName.startsWith("mcp__pockode__")
+		? toolName.slice("mcp__pockode__".length)
+		: toolName.startsWith("pockode:")
+			? toolName.slice("pockode:".length)
+			: null;
+	return tool === "html_render" || tool === "html_edit" || tool === "html_get"
+		? tool
+		: null;
+}
+
 export function isHtmlRenderTool(toolName: string): boolean {
-	return (
-		toolName === "mcp__pockode__html_render" ||
-		toolName === "pockode:html_render"
-	);
+	return pageTool(toolName) === "html_render";
+}
+
+/** Draws a new page from an earlier one; its input holds edits, not the page. */
+export function isHtmlEditTool(toolName: string): boolean {
+	return pageTool(toolName) === "html_edit";
+}
+
+/** Reads a page back for the agent; it draws nothing. */
+export function isHtmlGetTool(toolName: string): boolean {
+	return pageTool(toolName) === "html_get";
 }
 
 /**
  * Whether the part is drawn as an HTML card rather than a row. Only once it
  * has succeeded: running, failed or cut short it is a call like any other, and
- * a page that never arrived is no part of the reply.
+ * a page that never arrived is no part of the reply. An `html_edit` needs the
+ * id of the page it stored as well, since that id is the only way to its page;
+ * an `html_render` carries its page in its input, so one from before pages had
+ * ids is still a card.
  */
 export function isHtmlRenderCard(part: ContentPart): boolean {
+	if (part.type !== "tool_call" || part.tool.status !== "success") return false;
+	const tool = pageTool(part.tool.name);
 	return (
-		part.type === "tool_call" &&
-		part.tool.status === "success" &&
-		isHtmlRenderTool(part.tool.name)
+		tool === "html_render" || (tool === "html_edit" && !!part.tool.htmlPage)
 	);
+}
+
+function asRecord(input: unknown): Record<string, unknown> {
+	return (input && typeof input === "object" ? input : {}) as Record<
+		string,
+		unknown
+	>;
+}
+
+function str(value: unknown): string {
+	return typeof value === "string" ? value : "";
 }
 
 export interface HtmlRenderInput {
@@ -31,14 +65,24 @@ export interface HtmlRenderInput {
 }
 
 export function htmlRenderInput(input: unknown): HtmlRenderInput {
-	const obj = (input && typeof input === "object" ? input : {}) as Record<
-		string,
-		unknown
-	>;
-	return {
-		title: typeof obj.title === "string" ? obj.title : "",
-		html: typeof obj.html === "string" ? obj.html : "",
-	};
+	const obj = asRecord(input);
+	return { title: str(obj.title), html: str(obj.html) };
+}
+
+export interface HtmlEditInput {
+	/** The page the edits apply to. */
+	base: string;
+	/** The new page's title; empty keeps the base's. */
+	title: string;
+}
+
+export function htmlEditInput(input: unknown): HtmlEditInput {
+	const obj = asRecord(input);
+	return { base: str(obj.base), title: str(obj.title) };
+}
+
+export function htmlGetInput(input: unknown): { id: string } {
+	return { id: str(asRecord(input).id) };
 }
 
 /** A Windows drive, the first segment of an absolute path there. */

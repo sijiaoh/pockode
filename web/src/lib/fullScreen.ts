@@ -37,8 +37,9 @@ export type FullScreenContent =
 			onOpenFile?: (path: string) => void;
 	  }
 	/**
-	 * An agent's page (`html_render`), rendered or — `showSource` — read as its
-	 * code; the viewer switches between the two, opening on the card's choice.
+	 * An agent's page (`html_render`, `html_edit`), rendered or — `showSource` —
+	 * read as its code; the viewer switches between the two, opening on the
+	 * card's choice.
 	 */
 	| {
 			kind: "html";

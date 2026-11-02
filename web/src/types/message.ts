@@ -232,6 +232,12 @@ export interface ToolRun {
 	/** The command's exit status, when the engine reports one separately. */
 	exitCode?: number;
 	/**
+	 * The page a successful page tool stored (`p3`), from its result's
+	 * `html_page`. Absent on any other call, and on an `html_render` from before
+	 * pages were stored.
+	 */
+	htmlPage?: string;
+	/**
 	 * When this client first saw the call. Live only — a history record carries
 	 * no timestamp, so a replayed run gets none and draws no stopwatch.
 	 */
@@ -1306,6 +1312,11 @@ export type ServerNotification =
 			duration_ms?: number;
 			/** Absent for every tool that is not a command that ran. */
 			exit_code?: number;
+			/**
+			 * The id of the page a successful page tool (`html_render`,
+			 * `html_edit`) stored; absent on every other result.
+			 */
+			html_page?: string;
 			/** See the `text` record. */
 			parent_tool_use_id?: string;
 	  }

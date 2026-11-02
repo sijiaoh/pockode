@@ -57,6 +57,7 @@ filestore/              # 文件存储基础设施（原子写 / 文件锁 / JSO
 filetransfer/           # 文件上传 / 下载 HTTP 端点；以 capability 为凭据的 /api/raw（含 HTML 页面的外部主机策略与上报脚本注入）
 fuzzy/                  # fzf 的模糊匹配、评分与扩展搜索语法（移植自 fzf，MIT；评分方案由调用方传入，纯算法无 IO，见 docs/code/fuzzy-matching.md）
 git/                    # Git 操作
+htmlpage/               # 代理在聊天里画的页面（html_render 等）：按 session 存不可变快照，id 为 p1、p2…；结果记录上的 html_page 由 process 打上（见 docs/code/work-system.md#rendering-tool）
 internal/cmd/marketingbanner/  # 打印启动横幅供营销视频截取（不是服务器的一部分；放在本模块里是为了让 CI 的 vet/build 覆盖它，见 docs/marketing-assets.md §3.3）
 internal/cmd/thirdpartynotices/  # 打印服务器二进制的第三方许可声明：按 `go list -deps` 得出的实际链接模块 + Go 标准库 + 手工条目（`manual.go`，fzf 移植）；许可证无法识别时非零退出（不是服务器的一部分，licensecheck 不进二进制；来龙去脉与报错处理见 scripts/README.md「Third-party notices」）
 logger/                 # 结构化日志 (slog)

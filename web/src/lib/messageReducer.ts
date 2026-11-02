@@ -157,6 +157,7 @@ export type NormalizedEvent =
 			subtype?: string;
 			durationMs?: number;
 			exitCode?: number;
+			htmlPage?: string;
 	  }
 	| {
 			/**
@@ -335,6 +336,10 @@ export function normalizeEvent(
 						: undefined,
 				exitCode:
 					typeof record.exit_code === "number" ? record.exit_code : undefined,
+				htmlPage:
+					typeof record.html_page === "string" && record.html_page !== ""
+						? record.html_page
+						: undefined,
 				// No `parent_tool_use_id`: a result joins its call by id at any
 				// depth, so whose call it was is already known where it lands.
 			};
@@ -1842,6 +1847,7 @@ function settleToolRun(
 		...run,
 		...(event.durationMs !== undefined ? { durationMs: event.durationMs } : {}),
 		...(event.exitCode !== undefined ? { exitCode: event.exitCode } : {}),
+		...(event.htmlPage !== undefined ? { htmlPage: event.htmlPage } : {}),
 	};
 
 	if (event.subtype === "background_started") {

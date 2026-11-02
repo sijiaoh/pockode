@@ -388,9 +388,9 @@ worktree's conversation beside another worktree's list.
 - **File links open the current worktree's file.** A path in a viewed transcript
   may name a file whose content differs, or which does not exist. Files belong to
   the worktree the user is standing in, by design. A page an agent drew
-  (`html_render`) in a viewed transcript loads its project files from the
-  current worktree the same way, and the viewed worktree's absolute paths in it
-  stay out of reach ([project files](tool-call-ui.md#project-files)).
+  (`html_render`, `html_edit`) in a viewed transcript loads its project files
+  from the current worktree the same way, and the viewed worktree's absolute
+  paths in it stay out of reach ([project files](tool-call-ui.md#project-files)).
 - **A current-worktree row under `All worktrees` is a snapshot** like every other
   row in that list, so a session running right now may show a stale state there.
   `All worktrees` is a way of finding something, not a view to sit in; one

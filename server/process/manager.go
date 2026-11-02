@@ -147,6 +147,8 @@ type Process struct {
 	// toolActivity is what the calls still in flight are doing, for a client that
 	// subscribes after they said so. Its own lock; see toolActivity.
 	toolActivity toolActivity
+	// pageCalls stamps a page tool's result with the page it stored.
+	pageCalls pageCalls
 	// timedOut names the prompts this process's answer lease gave up on, which
 	// is what tells their expiry apart from every other kind: the wait was not
 	// abandoned by the agent or overtaken by the user, it ran out of time.
@@ -1445,6 +1447,7 @@ func (p *Process) inject(events ...agent.AgentEvent) {
 // handleEvent is what one event does to a session: it may start the session, it
 // may move the turn, it is usually recorded, and it is always broadcast.
 func (p *Process) handleEvent(ctx context.Context, log *slog.Logger, event agent.AgentEvent) {
+	event = p.pageCalls.stamp(event)
 	eventType := event.EventType()
 	log.Debug("streaming event", "type", eventType)
 

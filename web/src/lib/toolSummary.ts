@@ -4,7 +4,14 @@ import {
 	splitNativePath,
 } from "../utils/path";
 import { codexChangePaths } from "./codexChanges";
-import { htmlRenderInput, isHtmlRenderTool } from "./htmlRender";
+import {
+	htmlEditInput,
+	htmlGetInput,
+	htmlRenderInput,
+	isHtmlEditTool,
+	isHtmlGetTool,
+	isHtmlRenderTool,
+} from "./htmlRender";
 import { firstLine } from "./subagentRun";
 
 /**
@@ -331,6 +338,19 @@ export function toolSummary(
 	// Named by its title: the first value would as often be the whole page.
 	if (mcp && isHtmlRenderTool(toolName)) {
 		return { ...mcpSummary(mcp, {}), detail: htmlRenderInput(input).title };
+	}
+	// Named by the page it starts from, the one thing the reader can find
+	// above; the edits are as long as they like.
+	if (mcp && isHtmlEditTool(toolName)) {
+		const { base, title } = htmlEditInput(input);
+		const from = base ? `from ${base}` : "";
+		return {
+			...mcpSummary(mcp, {}),
+			detail: title && from ? `${title} · ${from}` : title || from,
+		};
+	}
+	if (mcp && isHtmlGetTool(toolName)) {
+		return { ...mcpSummary(mcp, {}), detail: htmlGetInput(input).id };
 	}
 	if (mcp) return mcpSummary(mcp, input);
 

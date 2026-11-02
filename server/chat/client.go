@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/pockode/server/agent"
+	"github.com/pockode/server/htmlpage"
 	"github.com/pockode/server/process"
 	"github.com/pockode/server/session"
 )
@@ -402,6 +403,10 @@ func (c *Client) Fork(ctx context.Context, sourceID string, anchor session.Histo
 		// the fork inherits is what was unanswered *at the cut*, and the source
 		// may have answered three of them since. See agent.UnansweredQuestions.
 		Unanswered: agent.UnansweredQuestions(history),
+		// Only the pages the cut keeps a record of: one drawn past it is not
+		// in the fork's transcript (htmlpage.Clone says why its number is
+		// still not reused).
+		PagesThrough: htmlpage.HighestInRecords(history),
 	})
 	if err != nil {
 		return session.SessionMeta{}, fmt.Errorf("create forked session: %w", err)

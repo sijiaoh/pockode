@@ -22,6 +22,11 @@ export {
 export { createFileActions, type FileActions } from "./file";
 export { createGitActions, type GitActions } from "./git";
 export {
+	createHtmlPageActions,
+	type HtmlPage,
+	type HtmlPageActions,
+} from "./htmlPage";
+export {
 	createPortPreviewActions,
 	type PortPreviewActions,
 } from "./portPreview";

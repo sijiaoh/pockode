@@ -168,9 +168,9 @@ export function oldestPart<T extends { part: ContentPart }>(items: T[]): T {
 /**
  * Whether a part is drawn as a row: a tool call (a subagent call included), a
  * permission card whatever its state, or a thinking. Everything else — text, a
- * question card, a notice, a page an `html_render` call drew — is drawn as
- * itself. That call is a row until it succeeds: the page is the reply, not a
- * line in the tool log.
+ * question card, a notice, a page an `html_render` or `html_edit` call drew —
+ * is drawn as itself. That call is a row until it has a page to show
+ * (`isHtmlRenderCard`): the page is the reply, not a line in the tool log.
  */
 export function isRowPart(part: ContentPart): boolean {
 	return (

@@ -37,6 +37,7 @@ import (
 	"github.com/pockode/server/command"
 	"github.com/pockode/server/contents"
 	"github.com/pockode/server/git"
+	"github.com/pockode/server/htmlpage"
 	"github.com/pockode/server/schedule"
 	"github.com/pockode/server/session"
 	"github.com/pockode/server/settings"
@@ -354,6 +355,19 @@ type AttachmentGetParams struct {
 // file, so a client renders both with one code path.
 type AttachmentGetResult struct {
 	File *contents.FileContent `json:"file"`
+}
+
+// HTMLPageGetParams reads one page an agent drew in a session, by the id the
+// page's tool_result record carries (html_page). See package htmlpage.
+type HTMLPageGetParams struct {
+	SessionID string `json:"session_id"`
+	ID        string `json:"id"`
+}
+
+// HTMLPageGetResult is the page whole. A page never changes once drawn, so
+// there is nothing to subscribe to: a client may keep what it read.
+type HTMLPageGetResult struct {
+	Page htmlpage.Page `json:"page"`
 }
 
 type FileWriteParams struct {
@@ -1891,6 +1905,18 @@ type SessionViewAttachmentParams struct {
 
 type SessionViewAttachmentResult struct {
 	File *contents.FileContent `json:"file"`
+}
+
+// SessionViewHTMLPageParams is HTMLPageGetParams for a session of another
+// worktree, named by the request rather than by the bound one.
+type SessionViewHTMLPageParams struct {
+	Worktree  string `json:"worktree"`
+	SessionID string `json:"session_id"`
+	ID        string `json:"id"`
+}
+
+type SessionViewHTMLPageResult struct {
+	Page htmlpage.Page `json:"page"`
 }
 
 // SessionViewDeleteParams discards one session stored under another worktree,

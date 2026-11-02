@@ -399,6 +399,8 @@ type ToolResultEvent struct {
 	// result came out of, when the agent puts ids on them. See
 	// EventRecord.ProviderMessageID.
 	ProviderMessageID string
+	// HTMLPage is the page the call stored; see EventRecord.HTMLPage.
+	HTMLPage string
 }
 
 func (ToolResultEvent) EventType() EventType { return EventTypeToolResult }
@@ -427,6 +429,7 @@ func (e ToolResultEvent) ToRecord() EventRecord {
 		IsError:           e.IsError,
 		ParentToolUseID:   e.ParentToolUseID,
 		ProviderMessageID: e.ProviderMessageID,
+		HTMLPage:          e.HTMLPage,
 	}
 }
 

@@ -6,6 +6,7 @@ import type {
 	SessionDetail,
 	SessionListPage,
 } from "../../types/message";
+import type { HtmlPage, HtmlPageGetResult } from "./htmlPage";
 
 interface SessionViewListParams {
 	worktree: string;
@@ -59,6 +60,12 @@ interface SessionViewAttachmentParams {
 
 interface SessionViewAttachmentResult {
 	file: FileContent;
+}
+
+interface SessionViewHtmlPageParams {
+	worktree: string;
+	session_id: string;
+	id: string;
 }
 
 /**
@@ -117,6 +124,12 @@ export interface SessionViewActions {
 		sessionId: string,
 		id: string,
 	) => Promise<FileContent>;
+	/** `getHtmlPage`, for a session of the named worktree. */
+	sessionViewHtmlPage: (
+		worktree: string,
+		sessionId: string,
+		id: string,
+	) => Promise<HtmlPage>;
 }
 
 export function createSessionViewActions(
@@ -177,6 +190,15 @@ export function createSessionViewActions(
 				id,
 			} satisfies SessionViewAttachmentParams)) as SessionViewAttachmentResult;
 			return result.file;
+		},
+
+		sessionViewHtmlPage: async (worktree, sessionId, id) => {
+			const result = (await requireClient().request("session_view.html_page", {
+				worktree,
+				session_id: sessionId,
+				id,
+			} satisfies SessionViewHtmlPageParams)) as HtmlPageGetResult;
+			return result.page;
 		},
 	};
 }

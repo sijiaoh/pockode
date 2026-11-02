@@ -694,6 +694,9 @@ func (h *rpcMethodHandler) Handle(ctx context.Context, conn *jsonrpc2.Conn, req 
 	case "session_view.attachment":
 		h.handleSessionViewAttachment(ctx, conn, req)
 		return
+	case "session_view.html_page":
+		h.handleSessionViewHTMLPage(ctx, conn, req)
+		return
 	case "session_view.delete":
 		h.handleSessionViewDelete(ctx, conn, req)
 		return
@@ -766,6 +769,9 @@ func (h *rpcMethodHandler) Handle(ctx context.Context, conn *jsonrpc2.Conn, req 
 	// attachment namespace
 	case "attachment.get":
 		h.handleAttachmentGet(ctx, conn, req, wt)
+	// html_page namespace
+	case "html_page.get":
+		h.handleHTMLPageGet(ctx, conn, req, wt)
 	// file namespace
 	case "file.get":
 		h.handleFileGet(ctx, conn, req, wt)

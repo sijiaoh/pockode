@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/pockode/server/agent"
+	"github.com/pockode/server/htmlpage"
 	"github.com/pockode/server/process"
 	"github.com/pockode/server/session"
 )
@@ -44,6 +45,8 @@ type forkFixture struct {
 	// seqs holds the sequence number the store gave each appended record, which is
 	// what a client would have been told and is all it may quote back.
 	seqs []session.HistorySeq
+	// dataDir is the store's, where the sessions' own files live.
+	dataDir string
 }
 
 // newForkFixture registers ag for claude sessions; a nil ag registers the plain
@@ -52,7 +55,8 @@ type forkFixture struct {
 func newForkFixture(t *testing.T, ag *forkingAgent, history []agent.EventRecord) forkFixture {
 	t.Helper()
 
-	store, err := session.NewFileStore(t.TempDir())
+	dataDir := t.TempDir()
+	store, err := session.NewFileStore(dataDir)
 	if err != nil {
 		t.Fatalf("NewFileStore: %v", err)
 	}
@@ -90,7 +94,7 @@ func newForkFixture(t *testing.T, ag *forkingAgent, history []agent.EventRecord)
 		seqs = append(seqs, seq)
 	}
 
-	return forkFixture{store: store, client: NewClient(store, pm), seqs: seqs}
+	return forkFixture{store: store, client: NewClient(store, pm), seqs: seqs, dataDir: dataDir}
 }
 
 func forkedHistory(t *testing.T, store session.Store, sessionID string) []agent.EventRecord {
@@ -604,5 +608,47 @@ func TestFork_InheritsTheQuestionsOpenAtTheCut(t *testing.T) {
 		// records were appended directly — which is exactly the asymmetry the
 		// derivation exists for.
 		t.Errorf("source's unanswered = %+v, want the fork to have changed nothing here", source.Turn.Unanswered)
+	}
+}
+
+// A fork has the pages its copied history drew and none the source drew after
+// the cut, and numbers its next page past every page the source had.
+func TestFork_CopiesThePagesDrawnBeforeTheCut(t *testing.T) {
+	f := newForkFixture(t, &forkingAgent{carried: true}, []agent.EventRecord{
+		{Type: agent.EventTypeMessage, Content: "draw"},
+		{Type: agent.EventTypeToolCall, ToolUseID: "c1", ToolName: "mcp__pockode__html_render"},
+		{Type: agent.EventTypeToolResult, ToolUseID: "c1", HTMLPage: "p1"},
+		{Type: agent.EventTypeToolCall, ToolUseID: "c2", ToolName: "mcp__pockode__html_render"},
+		{Type: agent.EventTypeToolResult, ToolUseID: "c2", HTMLPage: "p2"},
+		{Type: agent.EventTypeDone},
+		{Type: agent.EventTypeMessage, Content: "again"},
+		{Type: agent.EventTypeToolCall, ToolUseID: "c3", ToolName: "mcp__pockode__html_render"},
+		{Type: agent.EventTypeToolResult, ToolUseID: "c3", HTMLPage: "p3"},
+	})
+	pages := htmlpage.NewStore()
+	for _, title := range []string{"one", "two", "three"} {
+		if _, err := pages.Append(f.dataDir, "source", htmlpage.Draft{Title: title, HTML: "<p>" + title + "</p>"}); err != nil {
+			t.Fatalf("Append: %v", err)
+		}
+	}
+
+	meta, err := f.client.Fork(context.Background(), "source", f.seqs[5], "")
+	if err != nil {
+		t.Fatalf("Fork: %v", err)
+	}
+
+	list, err := htmlpage.List(f.dataDir, meta.ID)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(list) != 2 || list[0].ID != "p1" || list[1].ID != "p2" {
+		t.Errorf("fork's pages = %+v, want p1 and p2", list)
+	}
+	if page, err := htmlpage.Get(f.dataDir, meta.ID, "p2"); err != nil || page.HTML != "<p>two</p>" {
+		t.Errorf("fork's p2 = %+v, %v", page, err)
+	}
+	next, err := pages.Append(f.dataDir, meta.ID, htmlpage.Draft{Title: "fresh", HTML: "x"})
+	if err != nil || next.ID != "p4" {
+		t.Errorf("fork's next page = %+v, %v; want p4", next, err)
 	}
 }

@@ -1013,7 +1013,7 @@ function ContentPartItem(props: ContentPartItemProps) {
 		);
 	}
 	if (isHtmlRenderCard(part)) {
-		return <HtmlRenderCard run={part.tool} />;
+		return <HtmlRenderCard run={part.tool} sessionId={sessionId} />;
 	}
 	return (
 		<ToolCallItem

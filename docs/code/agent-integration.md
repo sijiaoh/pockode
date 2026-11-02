@@ -568,6 +568,7 @@ type EventRecord struct {
     Meta                  *MessageMeta       `json:"meta,omitempty"`
     DurationMs            int64              `json:"duration_ms,omitempty"`
     ExitCode              *int               `json:"exit_code,omitempty"`
+    HTMLPage              string             `json:"html_page,omitempty"`
     Activity              string             `json:"activity,omitempty"`
     OutputDelta           string             `json:"output_delta,omitempty"`
     FullReasoning         string             `json:"full_reasoning,omitempty"`
@@ -666,7 +667,12 @@ still running. An ordinary result carries none
 
 `DurationMs` and `ExitCode` are what a CLI reported about a finished call as
 figures instead of as prose — Codex does, Claude does not — and are never
-inferred from arrival times, which would be wrong on replay. `Activity` and
+inferred from arrival times, which would be wrong on replay. `HTMLPage` is the
+id (`p3`) of the page a successful `html_render` or `html_edit` stored, on that
+call's `tool_result` and nowhere else; no CLI reports it — the server stamps it
+on the way in, because the MCP call that stores the page never learns the CLI's
+tool call id, so the id is matched up from the result's text
+([work-system.md](work-system.md#rendering-tool)). `Activity` and
 `OutputDelta` belong to `tool_activity` records, which are broadcast and never
 stored; they are fields here anyway because `EventRecord` is the whole of how an
 event is serialized, for the wire as much as for history.
@@ -822,7 +828,12 @@ into the *source's* directory and vanish the day that session was deleted. The c
 is immutable and addressed by its own hash, so the bytes outlive whichever
 session is deleted first and are freed when the last one naming them goes — and
 a clone that fails warns rather than aborting the fork, because a fork missing
-its images is still the conversation the user asked for.
+its images is still the conversation the user asked for. The pages an agent
+drew live beside them under the session's directory and are deleted and forked
+the same way (`htmlpage.Clone`, also from `CreateFork`, also warning rather than
+aborting), except that a fork takes only the pages up to the highest its copied
+history names, and keeps numbering past the source's
+([why](work-system.md#rendering-tool)).
 
 ### Reading It Back
 

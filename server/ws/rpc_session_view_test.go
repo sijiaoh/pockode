@@ -9,6 +9,7 @@ import (
 
 	"github.com/pockode/server/attachments"
 	"github.com/pockode/server/contents"
+	"github.com/pockode/server/htmlpage"
 	"github.com/pockode/server/rpc"
 	"github.com/pockode/server/session"
 )
@@ -35,8 +36,8 @@ func createWorktree(t *testing.T, env *testEnv, name string) {
 }
 
 // seedSession leaves a session behind in the named worktree — a title, a
-// transcript and an attachment the transcript refers to — and returns the
-// attachment's id. Written through the worktree's own store rather than over
+// transcript, an attachment the transcript refers to and a page (p1) the agent
+// drew — and returns the attachment's id. Written through the worktree's own store rather than over
 // the wire because the conversation being reconstructed afterwards is the point,
 // not how it got there.
 func seedSession(t *testing.T, env *testEnv, worktreeName, sessionID, title string) string {
@@ -58,6 +59,9 @@ func seedSession(t *testing.T, env *testEnv, worktreeName, sessionID, title stri
 			map[string]any{"type": "text", "content": text}); err != nil {
 			t.Fatalf("append to history: %v", err)
 		}
+	}
+	if _, err := htmlpage.NewStore().Append(wt.DataDir, sessionID, htmlpage.Draft{Title: "Kept page", HTML: "<p>kept</p>"}); err != nil {
+		t.Fatalf("store page: %v", err)
 	}
 	id, err := attachments.NewStore(wt.DataDir, sessionID).Put(pngPixel, "")
 	if err != nil {
@@ -159,6 +163,19 @@ func TestSessionView_SessionDataSurvivesItsWorktree(t *testing.T) {
 	// The bytes themselves are fetched over HTTP; this describes the ones kept.
 	if attachment.File.Encoding != contents.EncodingHTTP || attachment.File.Size != int64(len(pngPixel)) {
 		t.Errorf("attachment = %+v, want the %d stored bytes described for fetching over http", attachment.File, len(pngPixel))
+	}
+	pageResp := env.call("session_view.html_page", rpc.SessionViewHTMLPageParams{
+		Worktree: "feature", SessionID: "sess-kept", ID: "p1",
+	})
+	if pageResp.Error != nil {
+		t.Fatalf("session_view.html_page: %s", pageResp.Error.Message)
+	}
+	var page rpc.SessionViewHTMLPageResult
+	if err := json.Unmarshal(pageResp.Result, &page); err != nil {
+		t.Fatalf("unmarshal session_view.html_page: %v", err)
+	}
+	if page.Page.ID != "p1" || page.Page.HTML != "<p>kept</p>" {
+		t.Errorf("page = %+v, want the page the session kept", page.Page)
 	}
 }
 
