@@ -1,6 +1,5 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import { CodeHighlighter } from "../../lib/shikiUtils";
 import type { FileViewState } from "../../utils/fileView";
 import FileBody from "./FileBody";
 
@@ -96,15 +95,5 @@ describe("line numbers", () => {
 		);
 
 		expect(gutterNumbers(container)).toEqual(["1"]);
-	});
-
-	it("cannot be asked of a wrapped block, whose lines take more than a row", () => {
-		const block = (
-			// @ts-expect-error -- `wrap` and `lineNumbers` are exclusive.
-			<CodeHighlighter wrap lineNumbers>
-				{"a"}
-			</CodeHighlighter>
-		);
-		expect(block).toBeTruthy();
 	});
 });

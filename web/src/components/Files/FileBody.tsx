@@ -1,5 +1,6 @@
 import { Binary, File, FileQuestion, FileWarning } from "lucide-react";
 import { useLineLanding } from "../../hooks/useLineLanding";
+import { useWrapKeepingPlace } from "../../hooks/useWrapKeepingPlace";
 import { formatBytes } from "../../utils/bytes";
 import {
 	type FileViewState,
@@ -55,6 +56,12 @@ interface Props {
 	 */
 	lineNumbers?: boolean;
 	/**
+	 * Wrap the numbered lines instead of scrolling them sideways — the reader's
+	 * setting. Applied only where `offersWrap` says it can change something;
+	 * elsewhere a numbered view stays unwrapped.
+	 */
+	wrap?: boolean;
+	/**
 	 * The line to open at: scrolled to and flashed on a fresh visit
 	 * (`useLineLanding`). Only a numbered view has lines; elsewhere it is
 	 * ignored.
@@ -64,12 +71,38 @@ interface Props {
 	onOpenFile?: (path: string) => void;
 }
 
-/** Said where a file's size, not the reader, turned its colours off. */
-export function PlainTextNotice() {
+/**
+ * Said where a file's size, not the reader, turned its colours off. `wrap` is
+ * the reader's wrap setting: on, the size has turned that off too, and saying
+ * so keeps the setting's silence from reading as a bug.
+ */
+export function PlainTextNotice({ wrap = false }: { wrap?: boolean }) {
 	return (
 		<div className="shrink-0 border-b border-th-border bg-th-bg-secondary px-4 py-2 text-xs text-th-text-muted">
-			Large file — showing plain text only.
+			{wrap
+				? "Large file — showing plain text without line wrapping."
+				: "Large file — showing plain text only."}
 		</div>
+	);
+}
+
+/**
+ * Whether wrapping can change how `FileBody` draws `state`: numbered text
+ * within the highlight limit, drawn as text — a page shown as its source
+ * included. Past the limit wrapping would need an element per line the plain
+ * path cannot afford; rendered Markdown and pages lay themselves out.
+ */
+export function offersWrap(
+	state: FileViewState,
+	path: string,
+	{ plain, source }: Pick<Props, "plain" | "source"> = {},
+): boolean {
+	if (state.kind === "page")
+		return (plain || source) === true && offersWrap(state.source, path);
+	return (
+		state.kind === "text" &&
+		state.highlight &&
+		!rendersMarkdown(path, plain || source)
 	);
 }
 
@@ -89,6 +122,7 @@ function FileBody({
 	readOnly,
 	imageDimensions,
 	lineNumbers,
+	wrap,
 	line,
 	onOpenFile,
 }: Props) {
@@ -113,6 +147,7 @@ function FileBody({
 					plain={plain}
 					source={source}
 					lineNumbers={lineNumbers}
+					wrap={wrap}
 					line={line}
 					onOpenFile={onOpenFile}
 				/>
@@ -126,6 +161,7 @@ function FileBody({
 					downloadAction={downloadAction}
 					readOnly={readOnly}
 					lineNumbers={lineNumbers}
+					wrap={wrap}
 					line={line}
 				/>
 			) : (
@@ -228,23 +264,34 @@ function TextBody({
 	plain,
 	source,
 	lineNumbers,
+	wrap,
 	line,
 	onOpenFile,
 }: Pick<
 	Props,
-	"path" | "plain" | "source" | "lineNumbers" | "line" | "onOpenFile"
+	"path" | "plain" | "source" | "lineNumbers" | "wrap" | "line" | "onOpenFile"
 > & { content: string; highlight: boolean }) {
 	const textPlain = !highlight || plain;
 	const numbered = lineNumbers && !rendersMarkdown(path, textPlain || source);
+	const wrappable =
+		numbered === true &&
+		offersWrap({ kind: "text", content, highlight }, path, { plain, source });
 	const { containerRef, mark, clearMark } = useLineLanding(
 		numbered ? line : undefined,
 		content,
 	);
+	// A running flash was measured in the layout a toggle leaves.
+	const wrapped = useWrapKeepingPlace(wrappable && wrap === true, {
+		wrappable,
+		content,
+		containerRef,
+		onRelayout: clearMark,
+	});
 	return (
 		<>
 			{/* Only the forced case is worth a banner: when the reader asked
 			    for plain text themselves, saying so back is noise. */}
-			{!highlight && <PlainTextNotice />}
+			{!highlight && <PlainTextNotice wrap={numbered && wrap} />}
 			<div ref={containerRef} className={numbered ? undefined : "p-2"}>
 				<FileContentDisplay
 					content={content}
@@ -252,6 +299,7 @@ function TextBody({
 					plain={textPlain}
 					source={source}
 					lineNumbers={numbered}
+					wrap={wrapped}
 					mark={mark}
 					onMarkEnd={clearMark}
 					onOpenFile={onOpenFile}

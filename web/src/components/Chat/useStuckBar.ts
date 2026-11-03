@@ -1,14 +1,7 @@
 import { type RefObject, useEffect } from "react";
+import { scrollParent } from "../../utils/scrollParent";
 
 const STUCK_ATTR = "data-stuck";
-
-function scrollParent(el: HTMLElement): HTMLElement | null {
-	for (let node = el.parentElement; node; node = node.parentElement) {
-		const { overflowY } = getComputedStyle(node);
-		if (overflowY === "auto" || overflowY === "scroll") return node;
-	}
-	return null;
-}
 
 /**
  * Marks a `row-bar` or a `section-bar` with `data-stuck` while it is pinned

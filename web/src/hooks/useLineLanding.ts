@@ -7,8 +7,7 @@ import {
 } from "react";
 import {
 	type LineMark,
-	lineTop,
-	measureCodeRows,
+	lineBox,
 	NUMBERED_CODE_SELECTOR,
 } from "../lib/codeRows";
 import { fileLineCount } from "../lib/textLines";
@@ -55,19 +54,19 @@ export function useLineLanding(line: number | undefined, content: string) {
 		const count = fileLineCount(contentRef.current);
 		if (line < 1 || line > count) return;
 		// Measured once: the scroll and the mark use the same numbers.
-		const rows = measureCodeRows(pre, count);
+		const box = lineBox(pre, line, count);
 		return land(
 			(scroller) => {
 				const lineY =
 					pre.getBoundingClientRect().top -
 					scroller.getBoundingClientRect().top +
 					scroller.scrollTop +
-					lineTop(rows, line);
+					box.top;
 				const max = Math.max(scroller.scrollHeight - scroller.clientHeight, 0);
 				const top = Math.round(lineY - scroller.clientHeight / 3);
 				return Math.min(Math.max(top, 0), max);
 			},
-			() => setMark({ line, rows, key }),
+			() => setMark({ line, top: box.top, height: box.height, key }),
 		);
 	}, [key, line, land]);
 

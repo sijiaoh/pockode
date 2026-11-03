@@ -15,6 +15,7 @@ import { useFileDownload } from "../../hooks/useFileDownload";
 import { useFSWatch } from "../../hooks/useFSWatch";
 import { useCurrentWorktree, useRouteState } from "../../hooks/useRouteState";
 import { useTakenNames } from "../../hooks/useTakenNames";
+import { useCodeWrap } from "../../lib/diffSettingsStore";
 import { applyEntryGone } from "../../lib/fileCache";
 import { overlayToNavigation } from "../../lib/navigation";
 import { isAlreadyExistsError } from "../../lib/rpc/file";
@@ -35,9 +36,10 @@ import {
 	ContentView,
 	getActionIconButtonClass,
 	ToggleIconButton,
+	WrapToggle,
 } from "../ui";
 import EntryNameDialog from "./EntryNameDialog";
-import FileBody from "./FileBody";
+import FileBody, { offersWrap } from "./FileBody";
 import { DownloadButton } from "./FileDownloadControls";
 
 interface Props {
@@ -89,6 +91,7 @@ function FileView({ path, source = false, line, onBack }: Props) {
 	const isMarkdown =
 		state?.kind === "text" && state.highlight && isMarkdownFile(path);
 	const hasSourceToggle = isPage || isMarkdown;
+	const { wrap } = useCodeWrap();
 
 	const download = useFileDownload({
 		path,
@@ -276,6 +279,7 @@ function FileView({ path, source = false, line, onBack }: Props) {
 						path={path}
 						source={showSource}
 						lineNumbers
+						wrap={wrap}
 						line={line}
 						onOpenFile={openFile}
 						downloadAction={{
@@ -290,7 +294,9 @@ function FileView({ path, source = false, line, onBack }: Props) {
 			</ContentView>
 			{state && (
 				<BottomActionBar>
-					<div className="flex items-center gap-2">
+					{/* Wraps: with every action present the row is wider than a
+					    phone under a coarse pointer (docs/file.md#viewer-ui). */}
+					<div className="flex flex-wrap items-center gap-2">
 						<button
 							type="button"
 							onClick={navigateToEdit}
@@ -344,6 +350,7 @@ function FileView({ path, source = false, line, onBack }: Props) {
 								}
 							/>
 						)}
+						{offersWrap(state, path, { source: showSource }) && <WrapToggle />}
 						{/* Last on purpose: the destructive action is the one a thumb
 						    should not reach by accident on a small screen. */}
 						<button

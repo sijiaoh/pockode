@@ -4,6 +4,10 @@ import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { contentsQueryKey } from "../../hooks/useContents";
+import {
+	diffSettingsActions,
+	useDiffSettingsStore,
+} from "../../lib/diffSettingsStore";
 import { overlayToNavigation } from "../../lib/navigation";
 import { useWorktreeStore } from "../../lib/worktreeStore";
 import {
@@ -71,10 +75,16 @@ vi.mock("../../lib/shikiUtils", () => ({
 	CodeHighlighter: ({
 		children,
 		lineNumbers,
+		wrap,
 	}: {
 		children: string;
 		lineNumbers?: boolean;
-	}) => <pre data-numbered={lineNumbers || undefined}>{children}</pre>,
+		wrap?: boolean;
+	}) => (
+		<pre data-numbered={lineNumbers || undefined} data-wrap={wrap || undefined}>
+			{children}
+		</pre>
+	),
 	getLanguageFromPath: () => undefined,
 	isMarkdownFile: (path: string) => path.endsWith(".md"),
 }));
@@ -149,6 +159,8 @@ describe("FileView", () => {
 	});
 
 	beforeEach(() => {
+		localStorage.clear();
+		useDiffSettingsStore.setState({ codeWrap: false });
 		getFile.mockReset();
 		saveRawFile.mockReset();
 		saveRawFile.mockResolvedValue(undefined);
@@ -378,6 +390,24 @@ describe("FileView", () => {
 			);
 		});
 
+		it("offers wrapping on its source only, beside the source toggle", async () => {
+			const { unmount } = await renderFileView(page());
+			await frame();
+			expect(screen.queryByRole("button", { name: "Wrap lines" })).toBeNull();
+			unmount();
+
+			await renderFileView(page(), [], { source: true });
+			const labels = screen
+				.getAllByRole("button")
+				.map((button) => button.getAttribute("aria-label"))
+				.filter((label): label is string =>
+					["Download", "Show page", "Wrap lines", "Delete"].includes(
+						label ?? "",
+					),
+				);
+			expect(labels).toEqual(["Download", "Show page", "Wrap lines", "Delete"]);
+		});
+
 		it("places the toggle after Download and before Delete", async () => {
 			await renderFileView(page());
 
@@ -470,6 +500,53 @@ describe("FileView", () => {
 		).toBeInTheDocument();
 		expect(screen.getByText("big")).toBeInTheDocument();
 		expect(editButton()).toBeEnabled();
+	});
+
+	describe("line wrapping", () => {
+		function wrapToggle() {
+			return screen.queryByRole("button", { name: /wrap lines$/i });
+		}
+
+		it("wraps numbered code by the reader's setting, from the bar", async () => {
+			await renderFileView(fileContent({ content: "const a = 1;" }));
+			expect(screen.getByText("const a = 1;")).not.toHaveAttribute("data-wrap");
+
+			await userEvent.click(screen.getByRole("button", { name: "Wrap lines" }));
+
+			expect(screen.getByText("const a = 1;")).toHaveAttribute("data-wrap");
+			expect(
+				screen.getByRole("button", { name: "Don't wrap lines" }),
+			).toHaveAttribute("aria-pressed", "true");
+		});
+
+		it("is offered on Markdown's source, not on its rendering", async () => {
+			const markdown = fileContent({
+				name: "guide.md",
+				path: "docs/guide.md",
+				content: "# Guide",
+			});
+			const { unmount } = await renderFileView(markdown);
+			expect(wrapToggle()).toBeNull();
+			unmount();
+
+			await renderFileView(markdown, [], { source: true });
+			expect(wrapToggle()).not.toBeNull();
+		});
+
+		it("is absent past the highlight limit, where the banner says so if wrap is on", async () => {
+			diffSettingsActions.setCodeWrap(true);
+			await renderFileView(
+				fileContent({ content: "big", size: HIGHLIGHT_LIMIT + 1 }),
+			);
+
+			expect(wrapToggle()).toBeNull();
+			expect(screen.getByText("big")).not.toHaveAttribute("data-wrap");
+			expect(
+				screen.getByText(
+					"Large file — showing plain text without line wrapping.",
+				),
+			).toBeInTheDocument();
+		});
 	});
 
 	describe("Markdown", () => {

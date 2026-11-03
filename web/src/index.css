@@ -1299,7 +1299,8 @@ samp {
 	text-indent: 0;
 }
 
-/* A numbered file (`CodeHighlighter lineNumbers`): a gutter column beside the
+/* A numbered file (`CodeHighlighter lineNumbers`), unwrapped — the wrapped one
+ * is `.code-block-wrapper--numbered-wrap` below: a gutter column beside the
  * untouched <pre>, both scrolled by the page body. The gutter is sticky within
  * it, so code scrolls sideways under the hairline like a frozen column, and the
  * horizontal scrollbar stays at the viewport rather than at the end of a long
@@ -1349,6 +1350,91 @@ samp {
 	padding-left: 0.5rem;
 	border-radius: 0;
 	background: transparent;
+}
+
+/* A numbered file whose long lines wrap (`CodeHighlighter lineNumbers wrap`).
+ * The lines stay shiki's inline `.line`s, and each draws its own number as
+ * generated content in its first fragment, so the number sits on the row the
+ * line starts on and a continuation row carries none. Nothing scrolls
+ * sideways, so there is no column to freeze: the gutter is an empty column
+ * left for its hairline and the mark's redrawn number. lineBox in
+ * lib/codeRows.ts measures each line off its `.line`. */
+.code-block-wrapper--numbered-wrap {
+	/* The corner copy button's `touch-target` hit area overhangs the block's
+	 * right edge (1px on a fine pointer, ~5px on a coarse one), which would
+	 * scroll the page body sideways. `clip` cuts it without making a scroll
+	 * container. */
+	overflow-x: clip;
+}
+
+.code-block-wrapper--numbered-wrap .code-lines,
+.code-block-wrapper--numbered-wrap .code-block--numbered {
+	min-width: 0;
+}
+
+.code-block-wrapper--numbered-wrap .code-gutter {
+	/* Still positioned: the containing block of `.line-arrival--number`. */
+	position: relative;
+	z-index: auto;
+	/* A positioned box paints after the <pre>'s inline content, so a
+	 * background here would cover the numbers; the block's own is the same
+	 * colour. The hairline is the box-shadow, where no number reaches. */
+	background: none;
+}
+
+.code-block-wrapper--numbered-wrap pre,
+.code-block-wrapper--numbered-wrap code {
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+}
+
+.code-block-wrapper--numbered-wrap code {
+	counter-reset: line;
+}
+
+/* The corner the copy button covers, kept clear on the first row only: with
+ * the <pre>'s 1rem right padding it is `.code-block--corner`'s 2.25rem. */
+.code-block-wrapper--numbered-wrap .code-copy-button
+	~ .code-lines
+	code::before {
+	content: "";
+	float: right;
+	width: 1.25rem;
+	height: 1lh;
+}
+
+.code-block-wrapper--numbered-wrap code > .line {
+	counter-increment: line;
+}
+
+.code-block-wrapper--numbered-wrap code > .line::before {
+	/* The fallback where alt text is unsupported: numbers read aloud beat no
+	 * numbers. The empty alt keeps a screen reader from saying each one, which
+	 * it would — generated content in the <pre> is exposed, unlike the
+	 * `aria-hidden` gutter's. */
+	content: counter(line);
+	content: counter(line) / "";
+	/* Out of flow, at its static position — the start of the line's first
+	 * row — so it takes no room and offers no break: an inline-block number
+	 * is a break opportunity, and a line opening on a word longer than a row
+	 * would leave its number alone on a row of its own. Taking no room keeps
+	 * a leading tab's stop. Under the code in `.code-lines`' isolated
+	 * stacking order, after the band (earlier in the tree), and under the
+	 * mark's redrawn number in the positioned gutter. */
+	position: absolute;
+	z-index: -1;
+	width: calc(var(--line-digits) * 1ch);
+	/* Back over the gutter's content box: its 0.5rem right padding and the
+	 * <pre>'s 0.5rem left one. */
+	margin-left: calc(-1 * (var(--line-digits) * 1ch + 1rem));
+	text-align: right;
+	color: var(--th-text-muted);
+}
+
+/* The empty line shiki draws after a final newline — the one
+ * `fileLineCount` does not count. */
+.code-block-wrapper--numbered-wrap code > .line:last-child:empty::before {
+	content: none;
 }
 
 /* In a tool call's body a code block draws no box of its own: the body is
@@ -1741,7 +1827,8 @@ samp {
 
 /* Under the code text: `.code-lines` isolates, so -1 is still above its
  * background. Spans the full `fit-content` width, however far it is scrolled
- * sideways; the opaque gutter covers its start. */
+ * sideways; the opaque gutter covers its start. Wrapped, the gutter is
+ * transparent and the band runs under it too, beside every row of the line. */
 .line-arrival--band {
 	left: 0;
 	right: 0;
