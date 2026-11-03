@@ -1217,6 +1217,17 @@ remove it, and it sits last in the bar because a destructive action is the one a
 thumb should not reach by accident. The whole bar is hidden only while loading
 or after a failure, when there is nothing to act on.
 
+The bar reads Edit, Rename, Download, History (in a git repository), Source (a
+page or Markdown), Wrap, Delete. Source and Wrap sit together as the two
+controls for how the file is drawn; each is there only where it can change
+something — Wrap on numbered text within `HIGHLIGHT_LIMIT`
+([Wrapped](#wrapped)). The row wraps rather than overflowing: all seven appear
+for a Markdown file or a page in a git repository, shown as source, and seven
+44px thumb targets with their gaps are 380px, wider than a 375px phone, so
+there the last ones drop to a second row — Delete still last, still the
+farthest from where the thumb starts. Six (328px) already did not fit 320px
+before Wrap was added.
+
 Two ceilings keep syntax highlighting from freezing the main thread. Shiki
 tokenizes synchronously — roughly 3 ms/KiB on a desktop and several times that
 on a phone — and awaiting it does not help, so oversized input is never handed
@@ -1259,7 +1270,8 @@ bottom bar tells the same story — no write action, but Download as here — an
 adds one control the viewer above does not have: a toggle that drops text to
 plain, which is how a reader gets at a rendered Markdown file's source and the
 copy button that comes with it, there being no Edit to open it in. For a page
-it is the page/source toggle the viewer above has.
+it is the page/source toggle the viewer above has. Wrap follows it, as here and
+under the same rule, so code dropped to plain still offers it.
 See [git-ui.md](git-ui.md#viewing-a-file-from-a-commit).
 
 ### Where the viewer opens
@@ -1301,11 +1313,13 @@ link, say). Two parameters beside `session`, both read by `readFileMode` in
 (`hooks/useLineLanding.ts`) puts the line a third of the way down the page body
 and flashes its row.
 
-- **Geometry, not an element.** The line's position is
-  `lineTop(measureCodeRows(…), N)` ([Line numbers](#line-numbers)), measured
-  once and used for the scroll and the mark alike. Plain text past the
-  highlight limit has no element per line to look up. Highlighting arriving
-  later moves no row, so the landing does not wait for it.
+- **One measurement for scroll and mark.** The line's position is
+  `lineBox(pre, N, lineCount)` in `lib/codeRows.ts`, read once and used for the
+  scroll and the mark alike. Unwrapped it is arithmetic
+  ([Line numbers](#line-numbers)), since plain text past the highlight limit
+  has no element per line to look up; wrapped it is measured off the line's
+  element ([Wrapped](#wrapped)). Highlighting arriving later moves no row in
+  either layout, so the landing does not wait for it.
 - **A third of the body, clamped.** `scrollTop = clamp(lineY − clientHeight/3,
   0, max)`: a line near the top stays where it is, one near the end sits
   lower; nothing is padded. The scroll is instant (it is a navigation, and a
@@ -1320,8 +1334,8 @@ and flashes its row.
   file changed on disk) neither lands again nor restarts the flash.
 - **Past the end** (the file shrank since the search): the top of the file, no
   mark, no error.
-- **The flash.** A band under the row's code and the number redrawn bold in
-  `--th-accent` over the gutter's muted one, both `aria-hidden` and placed from
+- **The flash.** A band under the line's code — every row of it, when it
+  wraps — and the number redrawn bold in `--th-accent` over the muted one, both `aria-hidden` and placed from
   the same geometry (`.line-arrival` in `index.css`). They appear whole 250 ms
   after the landing, hold for about 0.6 s, and fade out over about 1.1 s — some
   2 s from the pick; under reduced motion they appear and go without the fade.
@@ -1343,6 +1357,8 @@ element per line ([git-changes-ui.md](git-changes-ui.md#selecting),
 opts in, and the default is off: `FileView` and `CommitFileView` pass
 `lineNumbers` to `FileBody`, which forwards it to the page's source and on
 through `FileContentDisplay` to `CodeHighlighter`. A rendered `.md` ignores it.
+They pass the reader's `wrap` the same way; this section is the unwrapped
+view, and [Wrapped](#wrapped) is what changes under it.
 
 - **Generated content.** The numbers are `attr(data-numbers)` on `::before`,
   in blocks of 1000 rows (`LineGutter` in `lib/shikiUtils.tsx`). A single block
@@ -1352,7 +1368,8 @@ through `FileContentDisplay` to `CodeHighlighter`. A rendered `.md` ignores it.
   copy button and the browser's find all see the code alone. The gutter is
   `aria-hidden`.
 - **Width from the line count alone.** The gutter is `fileLineCount` digits
-  wide (`lib/textLines.ts`). Unlike `outputLineCount`, `fileLineCount` drops
+  wide (`lib/textLines.ts`), set as `--line-digits` on `.code-lines` so a
+  wrapped view's numbers read the same width. Unlike `outputLineCount`, `fileLineCount` drops
   one trailing newline, not all of them: `"a\n\n"` is two rows, because shiki
   and a `<pre>` both draw two. It is computed from the text, not from shiki's
   lines, so the gutter is final on the first render and nothing moves when the
@@ -1365,25 +1382,25 @@ through `FileContentDisplay` to `CodeHighlighter`. A rendered `.md` ignores it.
   long file. A numbered file is drawn as a page, as diffs are: `FileBody` drops
   its `p-2` and the block its corners. That gives a phone back 16px. Rendered
   Markdown keeps its padding.
-- **Never wrapped.** A wrapped line takes two rows beside one number, so the
-  props type of `CodeHighlighter` makes `wrap` and `lineNumbers` exclusive.
 - **Uniform rows, located by arithmetic.** The gutter and the code share one
   font rule and one vertical padding, so every row is the same height in both
-  columns, highlighted or not. `lib/codeRows.ts` reads that height back:
-  `measureCodeRows` divides the `<code>`'s height by the line count, unrounded,
-  because line boxes are fractional and a rounded height drifts by pixels a few
-  thousand lines down. `lineTop` then gives line N's top. That is the one way
-  to find a line, for scrolling to it or marking it. The plain path past
+  columns, highlighted or not. `lineBox` in `lib/codeRows.ts` reads that height
+  back by dividing the `<code>`'s height by the line count, unrounded, because
+  line boxes are fractional and a rounded height drifts by pixels a few
+  thousand lines down; line N is N−1 rows down. That is the one way to find an
+  unwrapped line, for scrolling to it or marking it. The plain path past
   `HIGHLIGHT_LIMIT` has no element per line, by decision: it stays one text
   node, because a `span` per line costs 0.6–1 s of build and layout at 50k lines
   on a desktop, and more on a phone, only for files already too big to colour.
 - **Known limitation: U+2028 / U+2029 in WebKit.** WebKit forces a line break
   at the line and paragraph separators; Chromium does not. Shiki and
   `fileLineCount` split on `\n` only, so on iOS a file containing one of them
-  shows its code a row below its numbers from that point on, and `lineTop` is a
+  shows its code a row below its numbers from that point on, and `lineBox` is a
   row off there too. CSS cannot suppress a mandatory break, and replacing the
   character would change what is copied. Such files are rare, so this is left
-  as is.
+  as is. It is the unwrapped view's alone: wrapped, the forced break is one
+  more unnumbered row inside its own line's element, so numbers and `lineBox`
+  stay right.
 
 Each of these was tried and measured, and none should come back:
 
@@ -1400,6 +1417,138 @@ Each of these was tried and measured, and none should come back:
 
 `FileBody.browser.test.tsx` checks in Chromium and WebKit that the gutter
 matches the rows, stays pinned under a sideways scroll and is never copied.
+
+#### Wrapped
+
+The reader can wrap long lines instead of scrolling them sideways:
+`WrapToggle` (`components/ui`; `WrapText`, `Wrap lines` / `Don't wrap lines`,
+`aria-pressed`) in the bottom bar of both the Files tab and a commit's file. It
+is the diff review's control and the diff review's remembered setting
+(`useCodeWrap`, on by default below `expanded`) — one choice for a whole
+file's code wherever it is read, for the reasons in
+[git-changes-ui.md](git-changes-ui.md#the-diff-itself). It is a reader
+preference, not a state of the file: not in the URL, no history entry, no
+effect on `line` or `mode`.
+
+- **Offered only where it changes something.** `offersWrap` beside `FileBody`
+  decides, for both bars and for the body itself: numbered text within
+  `HIGHLIGHT_LIMIT` drawn as text — code, code the reader dropped to plain in a
+  commit, the source of Markdown or of a page. Elsewhere the toggle is absent
+  rather than inert: rendered Markdown (prose wraps already; its fenced blocks
+  are chat blocks under the chat's `wrapLines`), a rendered page (it lays
+  itself out), media, binary, too-large, empty — and text past the limit.
+- **Not past the limit.** Numbers under wrap need an element per line, which
+  the plain path declines for the cost above; wrapping without numbers would
+  take away the numbers. When the reader's setting is on, the large-file
+  banner says so — `Large file — showing plain text without line wrapping.`
+  instead of `…plain text only.` — so the setting's silence does not read as a
+  bug. With it off, wrapping is not mentioned.
+- **Each line numbers itself.** The DOM is the unwrapped one — shiki's inline
+  `<span class="line">`s in the `<code>`, separated by `\n` text nodes — under
+  `pre-wrap` and `overflow-wrap: anywhere`, with `WRAPPED_NUMBERED_CLASS` on
+  the wrapper (`index.css`). Each `.line` draws `counter(line)` on its
+  `::before`, out of flow at its static position: the start of the line's
+  first row, in the gutter's column. A continuation row carries no number, and
+  that absence is what marks it. The number takes no room, so a leading tab
+  keeps its stop, and offers no break. The empty line shiki draws after a final
+  newline — the one `fileLineCount` does not count — draws none.
+- **Neither copied nor read aloud.** The numbers are generated content, so copy, select-all
+  and find see the code alone, as with the gutter. Generated content inside the
+  `<pre>` *is* exposed to screen readers, though, so the number is
+  `counter(line) / ""` — empty alt text — after a plain `counter(line)` that an
+  engine without alt text keeps instead: numbers read aloud beat none.
+- **The gutter stays, empty.** No number blocks are built; the column is left
+  for its width and hairline. It is `position: relative` rather than sticky —
+  still positioned, since it holds the flash's redrawn number, which would
+  otherwise stretch across the code — and has no background, which as a
+  positioned box would paint over the numbers.
+- **Nothing scrolls sideways.** `min-width: 0` replaces the `fit-content`
+  width, and the wrapper is `overflow-x: clip`: the corner copy button's
+  `touch-target` hit area overhangs the block by 1px under a mouse and about
+  5px under a thumb, which would otherwise scroll the page body sideways a few
+  pixels. `clip` cuts it without making a scroll box. The corner itself is
+  kept clear on the first row only, by a `1.25rem × 1lh` float, rather than on
+  every row as `.code-block--corner` does.
+- **No hanging indent, by decision.** A continuation row starts at the code's
+  left edge, as in GitHub's wrapped view and the diff review. The chat hangs
+  its wrapped lines because its blocks have no numbers to show where a line
+  starts; here the numbers do.
+- **Breaks fall anywhere.** `overflow-wrap: anywhere` breaks inside a long
+  token or after a hyphen (`call(--` / `reporter=verbose)`). The chat holds
+  words together because a command is audited there before it runs; nothing
+  runs from here, and holding words would add a span per word.
+- **Measured off the element.** `lineBox` reads `code.children[N − 1]` — the
+  element whose counter shows N, so number and box cannot disagree — and its
+  `getClientRects()`, one per row: the line runs from the first rect's middle
+  less half a line box to the last one's middle plus half. Middles, because a
+  rect is the font's content area rather than the line box; from the line's own
+  font, so CJK and emoji fallbacks do not skew it. One lookup on a 10k-line
+  file takes 2–3 ms. The landing, the flash and keeping the place all use it.
+- **Colours move no row.** Before shiki answers, and when the reader chose
+  plain, the wrapped block draws `NumberedLines` (`lib/shikiUtils.tsx`): one
+  `.line` per piece of `text.split(/\r?\n/)`, joined by `"\n"` — shiki's
+  shape, `\r` dropped as shiki drops it — so the rows break at the same
+  points, and Geist Mono keeps its advance across weights and its synthesized
+  italic. The landing does not wait for colours here either.
+- **Toggling keeps the reader's place.** A wrapped file is several times
+  taller, so without this a toggle at line 3000 would land anywhere.
+  `useWrapKeepingPlace` (`hooks/`) applies wrap one commit behind the setting:
+  while the old layout is still drawn it reads the line at the top of the page
+  body (`lineAt`, a binary search over `lineBox`) and drops a running flash,
+  whose geometry is the old layout's; then the new layout is applied and
+  scrolled to put that line back — both before paint, so no frame in between
+  shows, and wrapping resets `scrollLeft`. The anchor is how far into the line
+  the top edge is, **as a share of its height**, not in pixels: a line cut 25px
+  down while it wraps to five rows is one 19px row unwrapped, and a pixel
+  offset would put it above the page. Only where the whole first line is still
+  below the edge (the top of the file) is the anchor the pixel distance down to
+  it. A tier change with no choice made — a tablet rotating across `expanded`
+  — takes the same path. A change of content, or between a wrappable and a
+  non-wrappable drawing (a rendered `.md` switching to source), applies wrap at
+  once: there is no old layout of the same lines to keep, and a step's wait
+  would have the landing measure the wrong one.
+- **Accepted limitations.** A width change during the 2-second flash leaves
+  the mark where it was drawn. Back to an entry whose position was saved under
+  the other setting restores a pixel offset that now points elsewhere, as any
+  layout change would; likewise a tier change while that restoration is still
+  retrying, since both move the scroller.
+
+**Cost.** Within the limit the highlighted path gains no element — shiki
+already emits a `.line` per line — and each line gains one generated box,
+against the 1000-row number blocks not built. The placeholder and the reader's
+plain gain a span per line, cheaper than the highlighting the same file gets
+anyway. Measured in headless Chromium on a contended machine, so as relative
+numbers only:
+
+| 360px column, long wrapping lines | Median scroll frame | First layout |
+|---|---|---|
+| 4000 lines, unwrapped + gutter | 17–20 ms | 2.6–3.9 s |
+| 4000 lines, wrapped | 17–20 ms | 3.3–3.8 s |
+| 8000 lines, wrapped: positioned number vs `inline-block` vs `float` | 17 ms each | 410–563 ms, all within noise |
+
+Frames are vsync-bound: a wrapped document has no sticky box to update on
+scroll. The 200k-line budget above is untouched, since wrap never applies past
+the limit. CSS counters are linear in current Chromium and WebKit; if one ever
+profiles badly, the fallback is a `data-line` per `.line` read by
+`attr(data-line)`.
+
+Tried and rejected:
+
+- The number as an `inline-block`: it is a break opportunity, so a line
+  opening on a token longer than a row (minified code, base64, a URL) put its
+  number alone on row 1 and its text on row 2.
+- A hanging indent through `inline-block; width: 100%` lines with
+  `padding-left` / `text-indent`: it copies correctly, but moves tab stops (a
+  leading tab drew 2ch) and makes every line an atomic box.
+- A static gutter: it stops being the flash number's containing block, which
+  then stretches across the code.
+- Wrapping the plain path without numbers: the reader loses the numbers.
+
+`FileBody.browser.test.tsx` holds the wrapped view, highlighted and plain, at
+320px: each number on its line's first row, consecutive lines abutting, no
+sideways overflow, one number per counted line for CRLF, a trailing newline
+and none, and an exact copy. `FileLanding.browser.test.tsx` holds landing on a
+wrapped line and keeping the place across a toggle both ways.
 
 ### Frontmatter
 
@@ -1606,8 +1755,8 @@ over `Media/usePageFrame.ts`). Diffs and chat attachments still show text.
   ceiling still renders, since the frame reads it over HTTP; only its source
   side shows the too-large card, and Edit follows the source.
 - **Page or source.** A `ToggleIconButton` (`Code`, "Show source" / "Show
-  page") in the bottom bar. In the Files tab it sits after Download and before
-  Delete, and is `mode=source` in the URL
+  page") in the bottom bar, beside Wrap ([order](#viewer-ui)). In the Files tab
+  it is `mode=source` in the URL
   ([Where the viewer opens](#where-the-viewer-opens)), so a file opened next
   starts rendered. The source is the ordinary text view, highlighted and
   editable through Edit as before. In a commit the same toggle shares the
@@ -1888,8 +2037,7 @@ a name and not a path is the server's reason, written once under
 [`file.rename`](#operations).
 
 **Two entry points, deliberately.** The tree row's `…`, and the file viewer's
-bottom bar (`Edit → Rename → Download → Delete`, four 44px targets and their
-gaps fitting the narrowest phone). The viewer's is not a convenience: a search
+bottom bar, second after Edit ([its order](#viewer-ui)). The viewer's is not a convenience: a search
 result row has no `…`, and a file opened from a chat link has no row at all, so
 without it those files could be deleted but not renamed. Search rows are left
 without a `…` on purpose — in content mode that slot already holds the match
