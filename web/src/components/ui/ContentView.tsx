@@ -35,6 +35,15 @@ export const getActionIconButtonClass = (enabled: boolean) =>
 	enabled ? actionIconButtonClass : actionIconButtonDisabledClass;
 
 /**
+ * The same box for an action that takes something away: in the error colour
+ * whether or not it can be pressed, so it reads as what it is before a press.
+ */
+export const getDestructiveIconButtonClass = (enabled: boolean) =>
+	`${actionButtonBase} ${actionIconButtonSize} text-th-error ${
+		enabled ? "hover:border-th-border-focus" : "opacity-50 cursor-not-allowed"
+	}`;
+
+/**
  * The scrolling body of a file, diff or commit page, standing in for it while
  * it loads or fails. The page's heading is its own `PageHeader`, drawn in the
  * app header.

@@ -215,8 +215,9 @@ The review layer is the `diff` layer redesigned: one file at a time, in [review 
 ```
 ┌──────────────────────────────────┐
 │ ←  GitTab.tsx                    │  app header — file name; tap opens the file
+│    web/src/components/Git        │  its folder, the header's subtitle
 ├──────────────────────────────────┤
-│ ‹  2 / 5  ›  web/src/compo…  ↵ ␣ │  review toolbar — no top bar over a layer
+│ ‹  2 / 5  ›                  ↵ ␣ │  review toolbar — no top bar over a layer
 ├──────────────────────────────────┤
 │ ⚠ Stage failed · Details       ✕ │  the layer's banner
 │  40   import { Foo }             │
@@ -232,25 +233,24 @@ The review layer is the `diff` layer redesigned: one file at a time, in [review 
 └──────────────────────────────────┘
 ```
 
-**App header.** The file name as the title, tappable to open the working-tree file (`Open <path>`) as the diff's title is today — except for a deleted file, where it is plain text. `←` goes to the parent, the Changes list (`Back to changes`), the way every way out of the review does ([below](#what-the-two-bottom-buttons-say)). At `expanded` the same press is drawn as the way back to the chat: the Changes list's URL is the chat there, with the list in the sidebar beside it ([At `expanded`](#at-expanded)).
+**App header.** `FilePageHeader`, as on every file screen: the file name as the title, tappable to open the working-tree file (`Open <file>`) — except for a deleted file, where it is plain text — and its folder as the subtitle, truncated rather than wrapped. `←` goes to the parent, the Changes list (`Back to changes`), the way every way out of the review does ([below](#what-the-two-bottom-buttons-say)). At `expanded` the same press is drawn as the way back to the chat: the Changes list's URL is the chat there, with the list in the sidebar beside it ([At `expanded`](#at-expanded)).
 
-**Review toolbar**, one row, `min-h-[44px]`, under the app header:
+**Review toolbar**, the file screens' `ViewToolbar` ([file-actions-ui.md](file-actions-ui.md#two-zones)), one row, `min-h-[44px]`, under the app header:
 
 | Part | Content |
 |---|---|
 | `‹` `›` | L5 buttons, `Previous file` / `Next file`: move without staging. Disabled at the ends |
 | Position | `2 / 5`, tabular figures; `aria-live` off. Its accessible text is `File 2 of 5` |
-| Path | The directory, muted, truncated from the head — the full path is the header plus this |
 | `↵` wrap | `ToggleIconButton` (`WrapText`), `Wrap lines` / `Don't wrap lines` |
 | `␣` whitespace | The existing `ALargeSmall` toggle and store, moved here from the bottom bar |
 | Split | `Columns2`, at `expanded` only ([below](#at-expanded)) |
-| The file's actions | At `expanded` only: the bottom bar's two buttons, at the row's end ([below](#at-expanded)) |
+| The file's actions | At `expanded` only: the bottom bar's two buttons, after a divider at the row's end ([below](#at-expanded)) |
 
-The toggles go in the toolbar rather than the bottom bar because the bottom bar now carries two text buttons and is for deciding about the file; the toolbar is for how to read it. When the row is too narrow, the path is what gives way — it is the row's one `flex-1 min-w-0` element and truncates to nothing before any control moves. At 360px on a coarse pointer the fixed parts are four 44px buttons, `2 / 5` and the 8px gaps between them, about 260px, so they always fit.
+The toggles go in the toolbar rather than the bottom bar because the bottom bar is for deciding about the file; the toolbar is for how to read it ([file-actions-ui.md](file-actions-ui.md#two-zones)). The folder used to be the toolbar's shrinking part; it is the header's subtitle now, and an empty spacer gives way instead. At 360px on a coarse pointer the fixed parts are four 44px buttons, `2 / 5` and the 8px gaps between them, about 260px, so they always fit.
 
 **Side row**, only for a partially staged file: a second row under the toolbar, `Partly staged` in muted text and a segmented control `Unstaged | Staged` ([Partially and fully staged files](#partially-and-fully-staged-files)). It is a row of its own rather than a toolbar part because a 140px control beside four buttons and the position would overflow a phone's toolbar, and because it only exists for the one case in which it says something.
 
-**Bottom bar** (`BottomActionBar`): a secondary button on the left, the L1 primary on the right taking the remaining width, with a gap between them so the destructive one is not flush against the one used all day. It stands above the chat's composer, which is under every Git detail, and goes while the composer holds a soft keyboard; at `expanded` its buttons are in the toolbar instead. Which of the three is [git-ui.md](git-ui.md#where-a-details-actions-go)'s rule, shared with a commit's file layers.
+**Bottom bar** (`DetailActionBottomBar`): the leading text action on the left (`LeadingTextActionButton`), the L1 primary on the right taking the remaining width (`PrimaryActionButton`), with a gap between them so the destructive one is not flush against the one used all day — the file screens' one layout ([file-actions-ui.md](file-actions-ui.md#the-actions-group)). It stands above the chat's composer, which is under every Git detail, and goes while the composer holds a soft keyboard; at `expanded` its buttons are in the toolbar instead ([placement](file-actions-ui.md#placement)).
 
 ### What the two bottom buttons say
 
@@ -316,7 +316,7 @@ A file discarded from the list while it is under review is done with, as the rev
 - **Word-level highlight.** Within a modified line pair, the changed words carry a stronger tint than the line's own — `@git-diff-view` does this from the hunks and both contents, which the diff result already carries, and `index.css` already themes it (`--diff-add-content-highlight--` and its pair). Syntax highlighting stays.
 - **Collapsed context.** Three lines of context around each hunk, as git produces. Between hunks, and before the first and after the last, a separator row says `24 unchanged lines` with an expand control; each press reveals more of the gap, and a gap fully revealed joins the hunks. The separator row is `min-h-[44px]` on a coarse pointer and its whole width is the target — the library's own expand rows (themed in `index.css` as `--diff-expand-*`) are too small for a thumb and are restyled, not replaced. Expansion is lost when the file changes; it is a reading state. Between two hunks the library has two controls, one carrying on down from the hunk above and one up from the hunk below; on a coarse pointer each is 44px, stacked, and a press elsewhere on the row is the downward one — reading order (`components/ui/collapsedContext.ts`).
 - **Ignore whitespace** is the existing toggle and store. When hiding whitespace leaves no diff, the area says `Only whitespace changed` with a text button `Show whitespace`, rather than the bare `No changes` that read as a bug.
-- **A commit's file diff reads the same way.** It is drawn by the same `DiffContent`, so wrap — the same remembered setting — word highlight, collapsed context and the whitespace notice all apply there too; its bottom bar carries the wrap toggle beside the whitespace one. Reading a file's change does not depend on whether it has been committed yet.
+- **A commit's file diff reads the same way.** It is drawn by the same `DiffContent`, so wrap — the same remembered setting — word highlight, collapsed context and the whitespace notice all apply there too; its toolbar carries the wrap toggle beside the whitespace one, and `‹ k / n ›` through the commit's files. Reading a file's change does not depend on whether it has been committed yet.
 
 ### Special files
 
@@ -327,7 +327,7 @@ A file discarded from the list while it is under review is done with, as the rev
 | Untracked | `+n` (all added), `· Untracked` | All lines added; left button `Delete file`, with the untracked copy |
 | Added (staged) | `· Added` | All lines added |
 | Deleted | name struck through, `−n`, `· Deleted` | All lines removed; the title is plain text and `Open file` is disabled — there is no working-tree file |
-| Renamed | `· Renamed from <old>` | The staged diff against the old path ([git.md](git.md#status)); the toolbar's path is the new path. A rename with no edit shows `No content changes`. git reports a rename on the staged side; an unstaged move is a deletion plus an untracked file, and is shown as exactly that |
+| Renamed | `· Renamed from <old>` | The staged diff against the old path ([git.md](git.md#status)); the header's path is the new path. A rename with no edit shows `No content changes`. git reports a rename on the staged side; an unstaged move is a deletion plus an untracked file, and is shown as exactly that |
 | Mode change only, or empty | no counts | `No content changes` |
 | Inside a submodule | `· Submodule` | Like any file. Staging goes to the submodule's index; the commit button's existing submodule rules explain what is not committed |
 
@@ -501,7 +501,7 @@ The commit's diff takes everything above from the same code (`useLineSelection`,
 
 - **Hunk bars without Stage.** Every hunk gets its bar — range, function context, Select — so a keyboard has its way in and focus has a Select to return to, as in the review; nothing in a commit can be staged, so there is no Stage button on any of them. The range is in the commit's numbering.
 - **Fewer reading-state rules.** There is no side, no staging and no split view (that toggle is the review's), so of the rules that clear it only the whitespace toggle, another file or commit, and leaving the page remain — with ✕, Escape and a click outside. A commit's diff does not change under the user, but a refetch is held to the same refresh rule, and clears a selection whose rows it no longer has.
-- **Where the bar sits** follows the page's own action bar ([git-ui.md](git-ui.md#where-a-details-actions-go)): above it below `expanded`, above the composer at `expanded`, where the actions are under the header.
+- **Where the bar sits** follows the page's own actions ([git-ui.md](git-ui.md#where-a-details-actions-go)): above it below `expanded`, above the composer at `expanded`, where the actions are under the header.
 - A failed handoff is the layer's `ErrorBanner`, as in the review.
 
 ### At `expanded`
@@ -509,7 +509,7 @@ The commit's diff takes everything above from the same code (`useLineSelection`,
 ```
 ┌──────────────────────────┬──────────────────────────────────────────┐
 │ ⑂ feature/git-ui  ↓ Pull │ ←  git.md                                │  top bar | app header — ← back to the chat
-│ [Changes] History Branc… │ ‹1/5› docs ↵ ␣ ⫴ [Discard file] [Stage…] │  segments | review toolbar, with the file's actions
+│ [Changes] History Branc… │ ‹1/5›   ↵ ␣ ⫴ ┊ [Discard file] [Stage…] │  segments | review toolbar, with the file's actions
 │   5 files +142 −37     ≣ │                                          │
 │ Unstaged 3   [Stage all] │                                          │
 │▌+ git.md        +80 −12⋯ │   (the diff, unified or split)           │
@@ -525,7 +525,7 @@ The commit's diff takes everything above from the same code (`useLineSelection`,
 - **Changes are on screen without opening anything**: with nothing open the main area is the chat, and the sidebar's Git tab, once selected, shows the list, as the sidebar's Git panel once did.
 - **Split view**: a `Columns2` toggle in the toolbar, `Side by side` / `Inline`, `aria-pressed`, remembered (`pockode:gitReviewSplit`). Default inline. It is offered only at `expanded` — below it there is no width for two columns — and follows the tier, not the measured width, as the layout does ([git-ui.md](git-ui.md#at-expanded-the-sidebars-list-and-the-detail)); at 1024 with an open sidebar the main area is narrow enough that inline is the better choice, which is why it is the default. Split keeps wrap, word highlight and collapsed context: the separator row carries its label on the old side, and a press on either half expands it — unwrapped, each side is a table of its own and the new side's half of the row is an empty placeholder whose buttons are in the other table (`components/ui/collapsedContext.ts`). Unwrapped, each half also scrolls sideways on its own, in step with the other, rather than handing that to the page as inline view does. A commit's file diff stays inline: the toggle is the review's.
 - Staging or unstaging a file from the list while it is in the review changes the review's buttons with it, since both read the same status.
-- **The file's actions are in the review's toolbar**, at its end: the bottom of the screen is the composer's alone ([git-ui.md](git-ui.md#where-a-details-actions-go)). The buttons keep their full labels — the folder path beside them is what gives way — and fit at 480px (`DiffView.browser.test.tsx`), under the narrowest main area at `expanded`. The commit hint, which on a phone is a line above the bottom bar's buttons, is a line under the toolbar.
+- **The file's actions are in the review's toolbar**, at its end: the bottom of the screen is the composer's alone ([git-ui.md](git-ui.md#where-a-details-actions-go)). The buttons keep their full labels — the toolbar's spacer is what gives way — and fit at 480px ([file-actions-ui.md](file-actions-ui.md#widths)). The commit hint, which on a phone is a line above the bottom bar's buttons, is a line under the toolbar.
 - Two primary buttons are on screen at once: the list's in its bottom bar in the sidebar, the review's in its toolbar. On the last file both read `Commit n files` and open the same sheet.
 
 ## The sidebar's overview

@@ -1,14 +1,7 @@
-import { ConfirmDialog } from "@pockode/shared";
+import { ConfirmDialog, useIsExpanded } from "@pockode/shared";
 import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useRouter } from "@tanstack/react-router";
-import {
-	Code,
-	History,
-	Loader2,
-	Pencil,
-	PencilLine,
-	Trash2,
-} from "lucide-react";
+import { History, Loader2, Pencil, PencilLine, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { contentsQueryKey, useContents } from "../../hooks/useContents";
 import { useFileDownload } from "../../hooks/useFileDownload";
@@ -19,7 +12,6 @@ import { useCodeWrap } from "../../lib/diffSettingsStore";
 import { applyEntryGone } from "../../lib/fileCache";
 import { overlayToNavigation } from "../../lib/navigation";
 import { isAlreadyExistsError } from "../../lib/rpc/file";
-import { isMarkdownFile } from "../../lib/shikiUtils";
 import { useIsGitRepo } from "../../lib/worktreeStore";
 import { useWSStore } from "../../lib/wsStore";
 import { isFileContent } from "../../types/contents";
@@ -32,10 +24,15 @@ import {
 import { parentDir, splitPath } from "../../utils/path";
 import { FilePageHeader } from "../Layout/PageHeader";
 import {
-	BottomActionBar,
 	ContentView,
+	DetailActionBottomBar,
+	type DetailActions,
+	detailActionsPlacement,
 	getActionIconButtonClass,
-	ToggleIconButton,
+	getDestructiveIconButtonClass,
+	SourceToggle,
+	sourceRenderingOf,
+	ViewToolbar,
 	WrapToggle,
 } from "../ui";
 import EntryNameDialog from "./EntryNameDialog";
@@ -52,9 +49,21 @@ interface Props {
 	 */
 	line?: number;
 	onBack: () => void;
+	/**
+	 * Whether the chat's composer under the viewer holds a soft keyboard,
+	 * which takes the actions off the screen (`DetailActionsPlacement`).
+	 */
+	keyboardUp?: boolean;
 }
 
-function FileView({ path, source = false, line, onBack }: Props) {
+function FileView({
+	path,
+	source = false,
+	line,
+	onBack,
+	keyboardUp = false,
+}: Props) {
+	const actionsAt = detailActionsPlacement(useIsExpanded(), keyboardUp);
 	const queryClient = useQueryClient();
 	const navigate = useNavigate();
 	const router = useRouter();
@@ -86,11 +95,8 @@ function FileView({ path, source = false, line, onBack }: Props) {
 		[file, path],
 	);
 	const isPage = state?.kind === "page";
-	// What has a rendering to switch away from. Markdown past the highlight
-	// limit is already drawn as its source, with a banner saying so.
-	const isMarkdown =
-		state?.kind === "text" && state.highlight && isMarkdownFile(path);
-	const hasSourceToggle = isPage || isMarkdown;
+	const sourceRendering = sourceRenderingOf(state, path);
+	const hasSourceToggle = sourceRendering !== null;
 	const { wrap } = useCodeWrap();
 
 	const download = useFileDownload({
@@ -260,9 +266,93 @@ function FileView({ path, source = false, line, onBack }: Props) {
 	const canEdit = state !== null && canEditFileView(state);
 	const { fileName } = splitPath(path);
 
+	const wrapToggle = state &&
+		offersWrap(state, path, { source: showSource }) && <WrapToggle />;
+	const toggles = (hasSourceToggle || wrapToggle) && (
+		<>
+			{sourceRendering && (
+				<SourceToggle
+					rendering={sourceRendering}
+					showingSource={showSource}
+					onToggle={toggleSource}
+				/>
+			)}
+			{wrapToggle}
+		</>
+	);
+	const actions: DetailActions = state
+		? {
+				// At the leading edge, the farthest from Edit's corner, as the
+				// review keeps Discard farthest from its primary.
+				leading: (
+					<button
+						type="button"
+						onClick={handleDeleteClick}
+						disabled={isDeleting}
+						className={getDestructiveIconButtonClass(!isDeleting)}
+						aria-label="Delete"
+						title="Delete"
+					>
+						{isDeleting ? (
+							<Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+						) : (
+							<Trash2 className="h-4 w-4" aria-hidden="true" />
+						)}
+					</button>
+				),
+				utilities: (
+					<>
+						{/* A different pencil from Edit's on purpose: the two sit in
+						    one row, and one changes the contents while the other
+						    changes the name. */}
+						<button
+							type="button"
+							onClick={() => {
+								setActionError(null);
+								setRenameError(null);
+								setShowRename(true);
+							}}
+							disabled={isDeleting || isRenaming}
+							className={getActionIconButtonClass(!isDeleting && !isRenaming)}
+							aria-label="Rename"
+							title="Rename"
+						>
+							<PencilLine className="h-4 w-4" aria-hidden="true" />
+						</button>
+						<DownloadButton download={download} disabled={isDeleting} />
+						{isGitRepo && (
+							<button
+								type="button"
+								onClick={openHistory}
+								className={getActionIconButtonClass(true)}
+								aria-label="History of this file"
+								title="History of this file"
+							>
+								<History className="h-4 w-4" aria-hidden="true" />
+							</button>
+						)}
+						{/* The trailing corner, where the editor's Save stands: the
+						    viewer has no primary, and this is its most-used action.
+						    An icon still — editing by hand comes second here. */}
+						<button
+							type="button"
+							onClick={navigateToEdit}
+							disabled={isDeleting || !canEdit}
+							className={getActionIconButtonClass(!isDeleting && canEdit)}
+							aria-label={getEditLabel(state)}
+							title={getEditLabel(state)}
+						>
+							<Pencil className="h-4 w-4" aria-hidden="true" />
+						</button>
+					</>
+				),
+			}
+		: {};
+
 	return (
 		<div className="flex flex-1 flex-col overflow-hidden">
 			<FilePageHeader path={path} back={{ to: "chat", onClick: onBack }} />
+			<ViewToolbar toggles={toggles} actions={actions} actionsAt={actionsAt} />
 			<ContentView
 				isLoading={isLoading}
 				error={error instanceof Error ? error : null}
@@ -292,83 +382,7 @@ function FileView({ path, source = false, line, onBack }: Props) {
 					/>
 				)}
 			</ContentView>
-			{state && (
-				<BottomActionBar>
-					{/* Wraps: with every action present the row is wider than a
-					    phone under a coarse pointer (docs/file.md#viewer-ui). */}
-					<div className="flex flex-wrap items-center gap-2">
-						<button
-							type="button"
-							onClick={navigateToEdit}
-							disabled={isDeleting || !canEdit}
-							className={getActionIconButtonClass(!isDeleting && canEdit)}
-							aria-label={getEditLabel(state)}
-							title={getEditLabel(state)}
-						>
-							<Pencil className="h-4 w-4" aria-hidden="true" />
-						</button>
-						{/* A different pencil from Edit's on purpose: the two sit side by
-						    side, and one changes the contents while the other changes the
-						    name. */}
-						<button
-							type="button"
-							onClick={() => {
-								setActionError(null);
-								setRenameError(null);
-								setShowRename(true);
-							}}
-							disabled={isDeleting || isRenaming}
-							className={getActionIconButtonClass(!isDeleting && !isRenaming)}
-							aria-label="Rename"
-							title="Rename"
-						>
-							<PencilLine className="h-4 w-4" aria-hidden="true" />
-						</button>
-						<DownloadButton download={download} disabled={isDeleting} />
-						{isGitRepo && (
-							<button
-								type="button"
-								onClick={openHistory}
-								className={getActionIconButtonClass(true)}
-								aria-label="History of this file"
-								title="History of this file"
-							>
-								<History className="h-4 w-4" aria-hidden="true" />
-							</button>
-						)}
-						{hasSourceToggle && (
-							<ToggleIconButton
-								icon={Code}
-								pressed={showSource}
-								onClick={toggleSource}
-								label={
-									showSource
-										? isPage
-											? "Show page"
-											: "Show rendered"
-										: "Show source"
-								}
-							/>
-						)}
-						{offersWrap(state, path, { source: showSource }) && <WrapToggle />}
-						{/* Last on purpose: the destructive action is the one a thumb
-						    should not reach by accident on a small screen. */}
-						<button
-							type="button"
-							onClick={handleDeleteClick}
-							disabled={isDeleting}
-							className={getActionIconButtonClass(!isDeleting)}
-							aria-label="Delete"
-						>
-							{isDeleting ? (
-								<Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
-							) : (
-								<Trash2 className="h-4 w-4" aria-hidden="true" />
-							)}
-						</button>
-					</div>
-				</BottomActionBar>
-			)}
+			<DetailActionBottomBar actions={actions} actionsAt={actionsAt} />
 			{showRename && (
 				<EntryNameDialog
 					mode="rename"

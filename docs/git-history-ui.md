@@ -239,8 +239,8 @@ A `git.changed` while the list is on screen re-reads it from the top, as many ro
 
   | From | Where | Entry |
   |---|---|---|
-  | `FileView` (the Files tab's file page) | Bottom bar, after Download; absent where the project has no repository ([git-ui.md](git-ui.md#projects-without-a-repository)) | `History` icon, `History of this file` |
-  | `CommitDiffView` | Its action bar — under the header at `expanded`, at the bottom below it ([git-ui.md](git-ui.md#where-a-details-actions-go)) — beside `View this file at <hash>` | the same |
+  | `FileView` (the Files tab's file page) | Its actions, after Download, before Edit ([file.md](file.md#viewer-ui)); absent where the project has no repository ([git-ui.md](git-ui.md#projects-without-a-repository)) | `History` icon, `History of this file` |
+  | `CommitDiffView` | Its actions — in the toolbar at `expanded`, at the bottom below it ([file-actions-ui.md](file-actions-ui.md#placement)) — before `View this file at <hash>` | the same |
   | The Changes segment's file menu (`ChangedFileMenu`) | After `Open file`; absent for an untracked file, which has none | `History of this file` row |
 
   Each navigates (push) to `/git?segment=history&file=<path>` in the same worktree — except the Changes menu in the sidebar at `expanded` beside a page it must leave open, which turns the sidebar instead (below). Typing a path by hand is not offered: the Files tree and its search are how a file is found. The server filters a directory as readily as a file; a folder's `History of this folder` in the Files tree's menu is left for later.

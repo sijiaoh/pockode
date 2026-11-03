@@ -12,13 +12,13 @@ import {
 	historyQueryOf,
 } from "../../types/overlay";
 import PageHeader from "../Layout/PageHeader";
+import { detailActionsPlacement } from "../ui";
 import BranchBar from "./BranchBar";
 import BranchDetail from "./BranchDetail";
 import CommitDiffView from "./CommitDiffView";
 import CommitFileView from "./CommitFileView";
 import CommitView from "./CommitView";
 import DiffView from "./DiffView";
-import { detailActionsPlacement } from "./detailActions";
 import GitSegmentList, { activeRowsOf } from "./GitSegmentList";
 import OperationBanner from "./OperationBanner";
 

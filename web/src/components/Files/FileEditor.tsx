@@ -1,7 +1,7 @@
 import { useIsExpanded } from "@pockode/shared";
 import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
-import { Check, Eye, Loader2 } from "lucide-react";
+import { Eye } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import Editor from "react-simple-code-editor";
 import { contentsQueryKey, useContents } from "../../hooks/useContents";
@@ -18,14 +18,24 @@ import { useWSStore } from "../../lib/wsStore";
 import { isFileContent } from "../../types/contents";
 import { EDITOR_HIGHLIGHT_LIMIT } from "../../utils/fileView";
 import { FilePageHeader } from "../Layout/PageHeader";
-import { BottomActionBar, ContentView, getActionIconButtonClass } from "../ui";
+import {
+	ContentView,
+	DetailActionBottomBar,
+	type DetailActions,
+	detailActionsPlacement,
+	getActionIconButtonClass,
+	PrimaryActionButton,
+	ViewToolbar,
+} from "../ui";
 
 interface Props {
 	path: string;
 	onBack: () => void;
+	/** The composer holds a soft keyboard (`DetailActionsPlacement`). */
+	keyboardUp?: boolean;
 }
 
-function FileEditor({ path, onBack }: Props) {
+function FileEditor({ path, onBack, keyboardUp = false }: Props) {
 	const queryClient = useQueryClient();
 	const navigate = useNavigate();
 	const worktree = useCurrentWorktree();
@@ -33,6 +43,7 @@ function FileEditor({ path, onBack }: Props) {
 	const { data, isLoading, error } = useContents(path);
 	const writeFile = useWSStore((s) => s.actions.writeFile);
 	const isExpanded = useIsExpanded();
+	const actionsAt = detailActionsPlacement(isExpanded, keyboardUp);
 
 	const [content, setContent] = useState("");
 	const [isSaving, setIsSaving] = useState(false);
@@ -102,6 +113,31 @@ function FileEditor({ path, onBack }: Props) {
 
 	const displayError = error instanceof Error ? error : null;
 
+	// View leaves without saving, so it takes the leading edge, farthest from
+	// Save.
+	const actions: DetailActions = {
+		leading: (
+			<button
+				type="button"
+				onClick={navigateToView}
+				disabled={isSaving}
+				className={getActionIconButtonClass(!isSaving)}
+				aria-label="View"
+				title="View"
+			>
+				<Eye className="h-4 w-4" aria-hidden="true" />
+			</button>
+		),
+		primary: (
+			<PrimaryActionButton
+				label="Save"
+				onClick={handleSave}
+				disabled={!canSave}
+				pendingLabel={isSaving ? "Saving…" : null}
+			/>
+		),
+	};
+
 	return (
 		<div className="flex flex-1 flex-col overflow-hidden">
 			<FilePageHeader
@@ -109,6 +145,7 @@ function FileEditor({ path, onBack }: Props) {
 				status="Editing"
 				back={{ to: "chat", onClick: onBack }}
 			/>
+			<ViewToolbar actions={actions} actionsAt={actionsAt} />
 			<ContentView isLoading={isLoading} error={displayError}>
 				{/* `min-h-full` fills the scroll area even for a short file and `grow`
 				    hands the spare height to the editor, whose textarea covers its whole
@@ -139,37 +176,7 @@ function FileEditor({ path, onBack }: Props) {
 					/>
 				</div>
 			</ContentView>
-			<BottomActionBar>
-				<div className="flex items-center justify-between">
-					<button
-						type="button"
-						onClick={navigateToView}
-						disabled={isSaving}
-						className={getActionIconButtonClass(!isSaving)}
-						aria-label="View"
-					>
-						<Eye className="h-4 w-4" aria-hidden="true" />
-					</button>
-					<button
-						type="button"
-						onClick={handleSave}
-						disabled={!canSave}
-						className={`flex items-center gap-1.5 rounded border border-th-border bg-th-bg-tertiary h-9 px-3 text-xs transition-all pointer-coarse:h-11 focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent active:scale-95 ${
-							canSave
-								? "text-th-success hover:border-th-border-focus"
-								: "opacity-50 cursor-not-allowed text-th-text-muted"
-						}`}
-						aria-label="Save"
-					>
-						{isSaving ? (
-							<Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
-						) : (
-							<Check className="h-4 w-4" aria-hidden="true" />
-						)}
-						Save
-					</button>
-				</div>
-			</BottomActionBar>
+			<DetailActionBottomBar actions={actions} actionsAt={actionsAt} />
 		</div>
 	);
 }

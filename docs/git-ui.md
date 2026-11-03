@@ -167,7 +167,7 @@ Each segment's root is a flex column whose scroll area is a plain `min-h-0 flex-
 ┌──────────────────────────────────┐
 │ ←  git.md                        │  app header — the layer's own title; ← to its list
 ├──────────────────────────────────┤
-│ ‹ 2 / 3 ›  docs          ↵ ␣     │  the review's toolbar — no top bar over a layer
+│ ‹ 2 / 3 ›               ↵ ␣      │  the review's toolbar — no top bar over a layer
 │ (DiffView, with its own banner)  │
 ├──────────────────────────────────┤
 │ 3 lines selected  [Copy] [Ask…]✕ │  selection bar — only with lines selected
@@ -182,18 +182,10 @@ A layer has **no segmented control** — the segments filter the lists, and a la
 
 ### Where a detail's actions go
 
-The composer is under every detail, so the bottom of the screen is shared, and three bars and a soft keyboard leave a phone no room to read. Where a detail draws its action bar is one decision, `detailActionsPlacement` in `Git/detailActions.tsx`, made by `GitWorkspace` from the width and the keyboard and handed to every detail that has a bar (the review, `commit-diff`, `commit-file`):
+The composer is under every detail, so the bottom of the screen is shared. Where a detail draws its actions is the rule every file screen follows, `detailActionsPlacement` in `ui/detailActions.tsx` ([file-actions-ui.md](file-actions-ui.md#placement)): in the detail's toolbar at `expanded`, above the composer on narrow, and gone on narrow while the composer holds a soft keyboard. `GitWorkspace` makes it from the width and `ChatPanel`'s `keyboardUp` and hands it to every detail that has actions (the review, `commit-diff`, `commit-file`); a commit and a branch have none.
 
-| | Placement | Bottom of the screen, top to bottom |
-|---|---|---|
-| `expanded` | `top` — the actions join the detail's toolbar | the composer alone, keyboard or not |
-| Narrow | `bottom` — above the composer, in the thumb's reach | selection bar (lines selected), action bar, composer |
-| Narrow, keyboard up | `hidden` | selection bar (lines selected), composer, keyboard |
-
-- **The composer stays last**, where it is on the chat page, so the thumb finds it in the same place on both.
 - **The selection bar is never hidden.** Typing is exactly when the user wants a selected piece of code in the draft, so it stays over the composer with the keyboard up — and a press on it does not take focus from a text field (`LineSelectionBar`'s `onMouseDown`): taking it would drop the keyboard, and the action bar would come back under the selection bar before the press's click arrived, moving the button out from under the finger.
-- **"Keyboard up" is the caret in one of the composer's text fields, on a coarse primary pointer** (`ChatPanel`'s `composerTyping`, passed as `GitWorkspace`'s `keyboardUp`). The field, not the bar: a tap on Send leaves focus on the button with the keyboard gone, and the actions must come back then. The pointer gate is the answer panel's yield's ([answering-ui.md](answering-ui.md)): a fine pointer — a narrow desktop window — has no soft keyboard to make room for, and clicking into the composer must not take the actions away.
-- **At `expanded`, the review's toolbar** carries `Discard file` / `Delete file` / `Unstage` (or a conflict's `Ask agent`) and `Stage & next` / `Next` / `Commit` / `Mark resolved` at its end, whole — the folder path beside them is what gives way; the commit hint is a line under the toolbar. It fits at 480px (`DiffView.browser.test.tsx`), under the narrowest main area `expanded` gives a detail — about 524px, at 1024 beside the sidebar at its 500px maximum. A commit file's bar, which is a toolbar already, is drawn under its header.
+- **At `expanded`, the review's toolbar** carries its actions at its end, whole; the commit hint is a line under the toolbar. How wide that row is, and that it fits, is [file-actions-ui.md](file-actions-ui.md#widths)'s.
 
 ### At `expanded`: the sidebar's list and the detail
 
@@ -203,7 +195,7 @@ The composer is under every detail, so the bottom of the screen is shared, and t
 ├──────────────────────────┼─────────────────────────────────────────────┤
 │ Sessions Files [Git] Pro │ ⚠ Rebase stopped on conflicts · 2/5          │  tab bar | one-line operation banner, only mid-operation
 ├──────────────────────────┼─────────────────────────────────────────────┤
-│ ⑂ feature/git-ui ↓ Pull 2│ ‹ 2/3 › docs ↵ ␣  [Discard file] [Stage…]   │  top bar | the review's toolbar, with its actions
+│ ⑂ feature/git-ui ↓ Pull 2│ ‹ 2/3 ›       ↵ ␣ ┊ [Discard file] [Stage…] │  top bar | the review's toolbar, with its actions
 │ ⚠ Push failed · Det…   ✕ │   (the diff, the main area's whole width)    │  top-bar banners
 │ [Changes] History Branc… │                                             │  segmented control
 │   3 files +142 −37     ≣ │                                             │
@@ -466,24 +458,24 @@ A failing `git.log` is said in the list's place (`Failed to load history` and th
 
 ### Viewing a file from a commit
 
-A commit's diff is one file at two versions, so `CommitDiffView` — the layer a file in `CommitView`'s list opens, one file as one commit changed it — offers both, in two different places — the header and the action bar, which on a phone is the other end of the screen — and with no overlap in what they mean:
+A commit's diff is one file at two versions, so `CommitDiffView` — the layer a file in `CommitView`'s list opens, one file as one commit changed it — offers both, in two different places — the header and the actions, which on a phone are at the other end of the screen — and with no overlap in what they mean:
 
 | Entry | Where | Opens |
 |-------|-------|-------|
 | The title | The app header, as in `DiffView` | `{ type: "file" }` — the **working tree** file, editable |
-| `View this file at <hash>` | The action bar ([where it goes](#where-a-details-actions-go)), a `FileClock` icon | `{ type: "commit-file" }` — that commit's version, read-only |
+| `View this file at <hash>` | The actions ([where they go](#where-a-details-actions-go)), a `FileClock` icon in the trailing corner, after History | `{ type: "commit-file" }` — that commit's version, read-only |
 
 The title keeps the meaning it already has one screen over in `DiffView`, so there is no second rule to learn; only its accessible name changes, to `Open current <file>`, since "open" alone is ambiguous where two versions exist. Nothing special happens when the working-tree file is gone or renamed — the viewer says "File not found", which is the truth.
 
 **A commit that deletes a file has no version of it to show.** The blob lives in the parent, and `git.show.file` on this hash returns not-found ([git.md](git.md#historical-file-contents)). The button is therefore disabled for `status: "D"`, with the reason in its accessible name — `... (deleted in this commit)` — the same rule the Edit button follows. Showing `hash^` instead was rejected: a merge commit has more than one parent, so "the version before" is not always a single thing, and the deletion diff already carries the whole old content.
 
-`CommitFileView` is read-only in three ways that do not repeat each other: the title is plain text rather than a button, one banner names both the version and the constraint (`Read-only — this file as of <hash> · <subject>`), and **the action bar carries no write action at all**. A greyed-out Edit would read as a bug or a permission problem; editing history is not a thing that exists. Download is not a write, so it stays, as on the binary and too-large cards — streamed from a raw capability for the commit's file, since the working tree is not where that version lives ([file.md](file.md#downloading)). The same rule reaches inside the body: `FileBody` takes `readOnly`, which drops the `Editing is disabled for …` footnote from the binary and too-large cards. That footnote explains `FileView`'s disabled Edit button; with no such button on screen it would point at a control that is not there, and imply that a file which happened not to be binary could be edited here.
+`CommitFileView` is read-only in three ways that do not repeat each other: the title is plain text rather than a button, one banner names both the version and the constraint (`Read-only — this file as of <hash> · <subject>`), and **its actions hold no write action at all**. A greyed-out Edit would read as a bug or a permission problem; editing history is not a thing that exists. Download is not a write, so it stays, as on the binary and too-large cards — streamed from a raw capability for the commit's file, since the working tree is not where that version lives ([file.md](file.md#downloading)). The same rule reaches inside the body: `FileBody` takes `readOnly`, which drops the `Editing is disabled for …` footnote from the binary and too-large cards. That footnote explains `FileView`'s disabled Edit button; with no such button on screen it would point at a control that is not there, and imply that a file which happened not to be binary could be edited here.
 
-The body is `getFileViewState` + `FileBody` — empty, image, binary and too-large are rendered by the same code as for a current file, the subtraction above aside, which is the point of `git.show.file` returning the `file.get` shape; text is line-numbered as there ([file.md](file.md#line-numbers)). The one addition is a plain-text toggle in the action bar: it drops Markdown to its source so `CodeHighlighter`'s copy button can take the whole file, which rendered Markdown offers no way to do. It stays off by default and is **not** reset when the file changes. Beside it is the file viewer's wrap toggle, with the same setting and the same rule for when it is offered ([file.md](file.md#wrapped)) — so code dropped to plain offers it, and rendered Markdown does not.
+The body is `getFileViewState` + `FileBody` — empty, image, binary and too-large are rendered by the same code as for a current file, the subtraction above aside, which is the point of `git.show.file` returning the `file.get` shape; text is line-numbered as there ([file.md](file.md#line-numbers)). The one addition is a toggle in the toolbar's Source slot ([file-actions-ui.md](file-actions-ui.md#two-zones)) that drops a rendering to its source, so `CodeHighlighter`'s copy button can take the whole file, which rendered Markdown offers no way to do. For Markdown it is the Files tab's `SourceToggle` (`Code`, "Show source" / "Show rendered"); for other highlighted text, which has no rendering but its colours, a `Type` toggle ("Show plain text" / "Show rendered"). It stays off by default and is **not** reset when the file changes. After it is the file viewer's wrap toggle, with the same setting and the same rule for when it is offered ([file.md](file.md#wrapped)) — so code dropped to plain offers it, and rendered Markdown does not. Download is the one action, in the trailing corner.
 
-An HTML page renders here as in the Files tab ([file.md](file.md#html-pages)), from the commit's own files, so it shows as it stood in that commit; with nothing to watch it never reloads by itself. For a page — of any size — the same toggle and the same state switch between the page and its source (`Code` icon, "Show source" / "Show page"): it means the same thing, dropping the rendering to source.
+An HTML page renders here as in the Files tab ([file.md](file.md#html-pages)), from the commit's own files, so it shows as it stood in that commit; with nothing to watch it never reloads by itself. For a page — of any size — the same toggle and the same state switch between the page and its source (`SourceToggle`, "Show source" / "Show page"): it means the same thing, dropping the rendering to source.
 
-The plain-text toggle appears only where pressing it could change something — a highlighted `text` body, or a page. An image, a binary and an empty file have no rendering to drop to source, and a file past `HIGHLIGHT_LIMIT` is already plain with a banner saying so; in all of those the control is **absent rather than inert**, by the same rule that keeps a disabled Edit off this screen. The action bar itself stays regardless — the soft keyboard aside ([Where a detail's actions go](#where-a-details-actions-go)) — because the hash on it is identity, not an action. One consequence: an SVG's source, which `FileView` reaches through Edit, has no route here — a read-only screen has no Edit to borrow.
+The source toggle appears only where pressing it could change something — a highlighted `text` body, or a page. An image, a binary and an empty file have no rendering to drop to source, and a file past `HIGHLIGHT_LIMIT` is already plain with a banner saying so; in all of those the control is **absent rather than inert**, by the same rule that keeps a disabled Edit off this screen. With neither it nor Wrap, the toolbar is not drawn. The hash is not repeated in a bar: the header's subtitle and the read-only banner already name it. One consequence: an SVG's source, which `FileView` reaches through Edit, has no route here — a read-only screen has no Edit to borrow.
 
 `useCommitFile` neither watches the filesystem nor expires (`staleTime: Infinity`): what a commit holds is immutable. It does not retry a request its own clock gave up on either — a blob is as large as a working-tree file, and `useContents` skips that retry for the same reason ([code/websocket-rpc.md](code/websocket-rpc.md#request-timeout)).
 

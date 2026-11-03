@@ -1,14 +1,7 @@
 import { ConfirmDialog } from "@pockode/shared";
 import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useRouter } from "@tanstack/react-router";
-import {
-	ALargeSmall,
-	ChevronLeft,
-	ChevronRight,
-	Columns2,
-	Loader2,
-	Sparkles,
-} from "lucide-react";
+import { ALargeSmall, Columns2, Loader2, Sparkles } from "lucide-react";
 import {
 	useCallback,
 	useEffect,
@@ -60,20 +53,22 @@ import {
 	type GitFailure,
 	isHunkStale,
 } from "../../utils/gitErrors";
-import { splitPath } from "../../utils/path";
-import PageHeader, { type PageBack } from "../Layout/PageHeader";
+import { FilePageHeader, type PageBack } from "../Layout/PageHeader";
 import {
-	BottomActionBar,
 	ContentView,
-	getActionIconButtonClass,
+	DetailActionBottomBar,
+	type DetailActions,
+	type DetailActionsPlacement,
+	LeadingTextActionButton,
+	PrimaryActionButton,
 	ToggleIconButton,
+	ViewToolbar,
 	WrapToggle,
 } from "../ui";
-import { FileNameTitle } from "../ui/HeaderTitle";
 import ConflictView, { useConflictFile } from "./ConflictView";
 import DiffContent from "./DiffContent";
-import type { DetailActionsPlacement } from "./detailActions";
 import ErrorBanner from "./ErrorBanner";
+import FileSequenceNav from "./FileSequenceNav";
 import GitCommitSheet from "./GitCommitSheet";
 import HunkBar, {
 	HUNK_BAR_ATTRIBUTE,
@@ -130,13 +125,6 @@ interface HunkAnchor {
 	 */
 	focused: boolean;
 }
-
-const bottomButtonBase =
-	"flex min-h-[44px] items-center justify-center gap-1.5 rounded-lg px-4 text-sm transition-opacity hover:opacity-90 focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent disabled:cursor-not-allowed disabled:opacity-50";
-// The same buttons in the toolbar, sized to its row; whole, since the folder
-// beside them is what gives way.
-const toolbarButtonBase =
-	"flex min-h-9 shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-lg px-3 text-sm transition-opacity hover:opacity-90 pointer-coarse:min-h-11 focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent disabled:cursor-not-allowed disabled:opacity-50";
 
 /**
  * The review layer: one changed file at a time, in the order the Changes list
@@ -607,18 +595,15 @@ function DiffView({
 	const deleted = file ? changeKindOf(file) === "deleted" : wasDeleted.current;
 	const openFile = () =>
 		navigate(overlayToNavigation({ type: "file", path }, worktree, sessionId));
-	const { fileName, directory } = splitPath(path);
-	const dir = directory.replace(/\/$/, "");
 	const total = files.length;
 
-	const inToolbar = actionsAt === "top";
 	const hint = primary?.hint && (
 		<span
 			id={hintId}
 			className={
 				primary.hint.alreadyOnScreen
 					? "sr-only"
-					: inToolbar
+					: actionsAt === "top"
 						? "shrink-0 border-b border-th-border px-3 py-1 text-xs text-th-text-muted"
 						: "mb-1.5 block text-xs text-th-text-muted"
 			}
@@ -626,146 +611,109 @@ function DiffView({
 			{primary.hint.text}
 		</span>
 	);
-	// A conflict has neither side to unstage or discard: git refuses to restore
-	// an unmerged path, and resetting one would throw its conflict away. The
-	// handoff takes the secondary's place; the banner's primary is one Back
-	// away.
-	const secondaryAction = conflict ? (
-		<button
-			type="button"
-			onClick={handleAskAgent}
-			disabled={prefill.isPending}
-			aria-label="Ask agent to resolve the conflicts"
-			className={`${inToolbar ? toolbarButtonBase : `${bottomButtonBase} max-w-[50%] shrink-0`} bg-th-bg-tertiary text-th-text-primary`}
-		>
-			{prefill.isPending ? (
-				<Loader2 className="h-4 w-4 shrink-0 animate-spin" aria-hidden="true" />
-			) : (
-				<Sparkles className="h-4 w-4 shrink-0" aria-hidden="true" />
-			)}
-			Ask agent
-		</button>
-	) : (
-		file &&
-		(side ? (
-			<button
-				type="button"
-				onClick={() => handleUnstage(file)}
-				disabled={isBusy}
-				className={`${inToolbar ? toolbarButtonBase : `${bottomButtonBase} max-w-[40%] shrink-0`} bg-th-bg-tertiary text-th-text-primary`}
+	const actions: DetailActions = {
+		// A conflict has neither side to unstage or discard: git refuses to
+		// restore an unmerged path, and resetting one would throw its conflict
+		// away. The handoff takes the leading slot; the banner's primary is one
+		// Back away.
+		leading: conflict ? (
+			<LeadingTextActionButton
+				onClick={handleAskAgent}
+				disabled={prefill.isPending}
+				aria-label="Ask agent to resolve the conflicts"
 			>
-				Unstage
-			</button>
-		) : (
-			<button
-				type="button"
-				onClick={() => setConfirmingDiscard(true)}
-				disabled={isBusy}
-				className={`${inToolbar ? toolbarButtonBase : `${bottomButtonBase} max-w-[40%] shrink-0`} bg-th-bg-tertiary text-th-error`}
-			>
-				{untracked ? "Delete file" : "Discard file"}
-			</button>
-		))
-	);
-	const primaryAction = primary && (
-		<button
-			type="button"
-			onClick={primary.onClick}
-			disabled={!primary.enabled}
-			aria-describedby={primary.hint ? hintId : undefined}
-			className={`${inToolbar ? toolbarButtonBase : `${bottomButtonBase} min-w-0 flex-1`} bg-th-accent font-medium text-th-accent-text`}
-		>
-			{pendingLabel ? (
-				<>
+				{prefill.isPending ? (
 					<Loader2
 						className="h-4 w-4 shrink-0 animate-spin"
 						aria-hidden="true"
 					/>
-					{pendingLabel}
-				</>
+				) : (
+					<Sparkles className="h-4 w-4 shrink-0" aria-hidden="true" />
+				)}
+				Ask agent
+			</LeadingTextActionButton>
+		) : (
+			file &&
+			(side ? (
+				<LeadingTextActionButton
+					onClick={() => handleUnstage(file)}
+					disabled={isBusy}
+				>
+					Unstage
+				</LeadingTextActionButton>
 			) : (
-				primary.label
-			)}
-		</button>
-	);
+				<LeadingTextActionButton
+					onClick={() => setConfirmingDiscard(true)}
+					disabled={isBusy}
+					tone="error"
+				>
+					{untracked ? "Delete file" : "Discard file"}
+				</LeadingTextActionButton>
+			))
+		),
+		primary: primary && (
+			<PrimaryActionButton
+				label={primary.label}
+				onClick={primary.onClick}
+				disabled={!primary.enabled}
+				pendingLabel={pendingLabel}
+				aria-describedby={primary.hint ? hintId : undefined}
+			/>
+		),
+	};
 
 	return (
 		<div className="flex flex-1 flex-col overflow-hidden">
-			<PageHeader
+			<FilePageHeader
+				path={path}
 				back={back}
-				title={<FileNameTitle name={fileName} />}
-				fullText={path}
 				onTitleClick={deleted ? undefined : openFile}
-				titleActionLabel={deleted ? undefined : `Open ${fileName}`}
 			/>
 
-			<div className="flex min-h-[44px] shrink-0 items-center gap-1 border-b border-th-border px-2 pointer-coarse:gap-2">
-				<button
-					type="button"
-					disabled={!prev}
-					onClick={() => prev && goToFile(prev)}
-					className={getActionIconButtonClass(!!prev)}
-					aria-label="Previous file"
-				>
-					<ChevronLeft className="h-4 w-4" aria-hidden="true" />
-				</button>
-				{status && (
-					<span className="shrink-0 px-1 text-xs tabular-nums text-th-text-muted">
-						<span aria-hidden="true">
-							{position ?? "–"} / {total}
-						</span>
-						<span className="sr-only">
-							{position
-								? `File ${position} of ${total}`
-								: `No longer changed, ${total} changed files`}
-						</span>
-					</span>
-				)}
-				<button
-					type="button"
-					disabled={!next}
-					onClick={() => next && goToFile(next)}
-					className={getActionIconButtonClass(!!next)}
-					aria-label="Next file"
-				>
-					<ChevronRight className="h-4 w-4" aria-hidden="true" />
-				</button>
-				{/* The one part that gives way: from the head, since the deepest
-				    folder is what tells files apart. `bdi` keeps rtl from
-				    reordering the path. */}
-				<span className="min-w-0 flex-1 truncate px-1 text-xs text-th-text-muted [direction:rtl]">
-					<bdi>{dir}</bdi>
-				</span>
-				<WrapToggle />
-				{/* A conflict is the file, not a diff: nothing to filter or split. */}
-				{!conflict && (
-					<ToggleIconButton
-						icon={ALargeSmall}
-						pressed={hideWhitespace}
-						onClick={toggleHideWhitespace}
-						label={
-							hideWhitespace
-								? "Show whitespace changes"
-								: "Hide whitespace changes"
+			<ViewToolbar
+				nav={
+					<FileSequenceNav
+						onPrevious={prev ? () => goToFile(prev) : undefined}
+						onNext={next ? () => goToFile(next) : undefined}
+						count={
+							status && {
+								position,
+								total,
+								absentLabel: `No longer changed, ${total} changed files`,
+							}
 						}
 					/>
-				)}
-				{splitAvailable && !conflict && (
-					<ToggleIconButton
-						icon={Columns2}
-						pressed={split}
-						onClick={toggleSplit}
-						label={split ? "Inline" : "Side by side"}
-					/>
-				)}
-				{inToolbar && (secondaryAction || primaryAction) && (
-					<div className="ml-1 flex shrink-0 gap-2 pointer-coarse:ml-2">
-						{secondaryAction}
-						{primaryAction}
-					</div>
-				)}
-			</div>
-			{inToolbar && hint}
+				}
+				toggles={
+					<>
+						<WrapToggle />
+						{/* A conflict is the file, not a diff: nothing to filter or split. */}
+						{!conflict && (
+							<ToggleIconButton
+								icon={ALargeSmall}
+								pressed={hideWhitespace}
+								onClick={toggleHideWhitespace}
+								label={
+									hideWhitespace
+										? "Show whitespace changes"
+										: "Hide whitespace changes"
+								}
+							/>
+						)}
+						{splitAvailable && !conflict && (
+							<ToggleIconButton
+								icon={Columns2}
+								pressed={split}
+								onClick={toggleSplit}
+								label={split ? "Inline" : "Side by side"}
+							/>
+						)}
+					</>
+				}
+				actions={actions}
+				actionsAt={actionsAt}
+				below={hint}
+			/>
 
 			{file?.staged && file.unstaged && (
 				<div className="flex min-h-[44px] shrink-0 items-center gap-2 border-b border-th-border px-3">
@@ -863,19 +811,12 @@ function DiffView({
 
 			{bar}
 
-			{actionsAt === "bottom" && (file || primary) && (
-				<BottomActionBar>
-					{/* Above the buttons, as on the list's bar: a line under them is
-					    the first thing an on-screen keyboard covers. */}
-					{hint}
-					{/* A gap between the two, so the one that takes something away is
-					    not flush against the one pressed all day. */}
-					<div className="flex gap-3">
-						{secondaryAction}
-						{primaryAction}
-					</div>
-				</BottomActionBar>
-			)}
+			{/* The hint above the buttons, as on the list's bar. */}
+			<DetailActionBottomBar
+				actions={actions}
+				actionsAt={actionsAt}
+				above={hint}
+			/>
 
 			{/* Read from the live file: a confirmation for a side that has gone
 			    meanwhile would discard nothing and report a failure. */}
