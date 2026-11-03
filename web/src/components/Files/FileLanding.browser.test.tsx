@@ -9,14 +9,10 @@ import {
 } from "@tanstack/react-router";
 import { act, render, screen } from "@testing-library/react";
 import { StrictMode, useSyncExternalStore } from "react";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { ScrollRestorationContext } from "../../hooks/useScrollRestoration";
 import { useScrollRestorationScope } from "../../hooks/useScrollRestorationScope";
-import {
-	lineTop,
-	measureCodeRows,
-	NUMBERED_CODE_SELECTOR,
-} from "../../lib/codeRows";
+import { lineAt, lineBox, NUMBERED_CODE_SELECTOR } from "../../lib/codeRows";
 import { scrollMemoryFor } from "../../lib/scrollMemory";
 import { fileLineCount } from "../../lib/textLines";
 import PageBody from "../ui/PageBody";
@@ -50,6 +46,31 @@ function useContent() {
 	);
 }
 
+/** Highlighted and wrapped, against the default plain and unwrapped. */
+let wrapped = false;
+/** The reader's wrap setting, changed while the view is up; null follows `wrapped`. */
+let wrapSetting: boolean | null = null;
+const wrapListeners = new Set<() => void>();
+function setWrap(next: boolean) {
+	wrapSetting = next;
+	for (const listener of wrapListeners) listener();
+}
+function useWrap() {
+	return (
+		useSyncExternalStore(
+			(listener) => {
+				wrapListeners.add(listener);
+				return () => wrapListeners.delete(listener);
+			},
+			() => wrapSetting,
+		) ?? wrapped
+	);
+}
+afterEach(() => {
+	wrapped = false;
+	wrapSetting = null;
+});
+
 function Shell() {
 	return (
 		<ScrollRestorationContext value={useScrollRestorationScope()}>
@@ -64,15 +85,17 @@ function Shell() {
 function File() {
 	const { line } = useSearch({ strict: false }) as { line?: number };
 	const text = useContent();
+	const wrap = useWrap();
 	return (
 		<PageBody>
 			{text === null ? (
 				<p>loading</p>
 			) : (
 				<FileBody
-					state={{ kind: "text", content: text, highlight: false }}
+					state={{ kind: "text", content: text, highlight: wrapped }}
 					path="a.ts"
 					lineNumbers
+					wrap={wrap}
 					line={line}
 				/>
 			)}
@@ -119,11 +142,10 @@ async function view() {
 
 /** Where line `line` is drawn, from the top of the scroller's viewport. */
 function lineOnScreen(pre: HTMLElement, scroller: HTMLElement, line: number) {
-	const rows = measureCodeRows(pre, fileLineCount(pre.textContent ?? ""));
 	return (
 		pre.getBoundingClientRect().top -
 		scroller.getBoundingClientRect().top +
-		lineTop(rows, line)
+		lineBox(pre, line, fileLineCount(pre.textContent ?? "")).top
 	);
 }
 
@@ -169,6 +191,37 @@ describe("a file opened at a line", () => {
 			mark.getBoundingClientRect().top,
 			0,
 		);
+	});
+
+	it("lands a wrapped line a third of the way down and flashes all its rows", async () => {
+		wrapped = true;
+		setContent(fixture());
+		renderFile("/file?line=200");
+		const { pre, scroller } = await view();
+		const third = Math.round(scroller.clientHeight / 3);
+
+		expect(lineOnScreen(pre, scroller, 200)).toBeCloseTo(third, -0.5);
+		const mark = band();
+		if (!mark) throw new Error("no mark");
+		// Line 200 is a long one, several rows tall.
+		const box = lineBox(pre, 200, LINES);
+		expect(box.height).toBeGreaterThan(
+			1.5 * Number.parseFloat(getComputedStyle(pre).lineHeight),
+		);
+		expect(mark.getBoundingClientRect().top).toBeCloseTo(
+			scroller.getBoundingClientRect().top + lineOnScreen(pre, scroller, 200),
+			0,
+		);
+		expect(mark.getBoundingClientRect().height).toBeCloseTo(box.height, 0);
+		expect(number()).toHaveAttribute("data-line", "200");
+		expect(number()?.getBoundingClientRect().top).toBeCloseTo(
+			mark.getBoundingClientRect().top,
+			0,
+		);
+
+		// The colours arriving move no row: the landing did not wait for them.
+		await expect.poll(() => pre.querySelector(".shiki .line")).toBeTruthy();
+		expect(lineOnScreen(pre, scroller, 200)).toBeCloseTo(third, -0.5);
 	});
 
 	it("leaves a line near the end lower than a third, at the end of the file", async () => {
@@ -296,5 +349,83 @@ describe("a file opened at a line", () => {
 
 		await expect.poll(() => band(), { timeout: 4_000 }).toBeNull();
 		expect(number()).toBeNull();
+	});
+});
+
+describe("toggling wrap on an open file", () => {
+	/** The line at the top of the scroller, and how far into it the top is. */
+	function topLine(pre: HTMLElement, scroller: HTMLElement) {
+		const top =
+			scroller.getBoundingClientRect().top - pre.getBoundingClientRect().top;
+		const line = lineAt(pre, top, LINES);
+		const box = lineBox(pre, line, LINES);
+		return { line, share: (top - box.top) / box.height, height: box.height };
+	}
+
+	/** Within a pixel and a half of the same share: a scroll offset is rounded. */
+	function sameShare(
+		after: ReturnType<typeof topLine>,
+		before: ReturnType<typeof topLine>,
+	) {
+		expect(after.line).toBe(before.line);
+		expect(Math.abs(after.share - before.share) * after.height).toBeLessThan(
+			1.5,
+		);
+	}
+
+	function onWrapped() {
+		return (
+			document.querySelector(".code-block-wrapper--numbered-wrap") !== null
+		);
+	}
+
+	it("keeps the line at the top of the page, both ways", async () => {
+		wrapped = true;
+		setContent(fixture());
+		renderFile("/file");
+		const { pre, scroller } = await view();
+		await expect.poll(() => pre.querySelector(".shiki .line")).toBeTruthy();
+		// A third of the way into a long line, several rows tall when wrapped.
+		const long = lineBox(pre, 200, LINES);
+		await scrollTo(
+			scroller,
+			scroller.scrollTop + lineOnScreen(pre, scroller, 200) + long.height / 3,
+		);
+		const wrappedTop = topLine(pre, scroller);
+		expect(wrappedTop.line).toBe(200);
+
+		act(() => setWrap(false));
+		expect(onWrapped()).toBe(false);
+		sameShare(topLine(pre, scroller), wrappedTop);
+
+		// Elsewhere, and sideways, which a wrapped view has no room for.
+		await scrollTo(
+			scroller,
+			scroller.scrollTop + lineOnScreen(pre, scroller, 300) + 5,
+		);
+		scroller.scrollLeft = 100;
+		expect(scroller.scrollLeft).toBe(100);
+		const before = topLine(pre, scroller);
+		expect(before.line).toBe(300);
+
+		act(() => setWrap(true));
+		expect(onWrapped()).toBe(true);
+		sameShare(topLine(pre, scroller), before);
+		expect(scroller.scrollLeft).toBe(0);
+	});
+
+	it("drops a running flash, measured in the layout it leaves", async () => {
+		wrapped = true;
+		setContent(fixture());
+		renderFile("/file?line=200");
+		const { pre, scroller } = await view();
+		expect(band()).toBeTruthy();
+		const before = topLine(pre, scroller);
+
+		act(() => setWrap(false));
+
+		expect(band()).toBeNull();
+		expect(number()).toBeNull();
+		expect(topLine(pre, scroller).line).toBe(before.line);
 	});
 });

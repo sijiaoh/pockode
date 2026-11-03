@@ -946,7 +946,7 @@ function withDiffLibrary() {
 		);
 	});
 	beforeEach(() => {
-		useDiffSettingsStore.setState({ gitDiffWrap: true, hideWhitespace: false });
+		useDiffSettingsStore.setState({ codeWrap: true, hideWhitespace: false });
 	});
 }
 
@@ -1427,7 +1427,7 @@ describe("DiffView line selection", () => {
 		await user.click(screen.getByRole("button", { name: "Don't wrap lines" }));
 		expect(bar()).not.toBeNull();
 
-		useDiffSettingsStore.setState({ gitDiffWrap: true });
+		useDiffSettingsStore.setState({ codeWrap: true });
 		const code = (await gutter(8)).nextElementSibling;
 		if (!code) throw new Error("no code cell for line 8");
 		await user.click(code);

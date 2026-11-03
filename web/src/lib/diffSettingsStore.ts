@@ -3,7 +3,9 @@ import { create } from "zustand";
 
 const HIDE_WHITESPACE_KEY = "pockode:hideWhitespace";
 const WRAP_LINES_KEY = "pockode:diffWrapLines";
-const GIT_REVIEW_WRAP_KEY = "pockode:gitReviewWrap";
+// Named for the review, which had the setting first; kept now that the file
+// viewer shares it, since renaming it would drop every reader's choice.
+const CODE_WRAP_KEY = "pockode:gitReviewWrap";
 const GIT_REVIEW_SPLIT_KEY = "pockode:gitReviewSplit";
 
 function getStoredFlag(key: string): boolean {
@@ -21,10 +23,11 @@ interface DiffSettingsState {
 	/** Wrap long lines in a tool call's diff instead of scrolling them sideways. */
 	wrapLines: boolean;
 	/**
-	 * Wrap long lines in a Git file diff. `null` until the reader chooses, and
-	 * then the width tier decides — see `useGitDiffWrap`.
+	 * Wrap long lines of a whole file's code — a Git file diff, or a file
+	 * viewed with line numbers. `null` until the reader chooses, and then the
+	 * width tier decides — see `useCodeWrap`.
 	 */
-	gitDiffWrap: boolean | null;
+	codeWrap: boolean | null;
 	/** Show a Git file diff side by side; only ever applied at `expanded`. */
 	gitDiffSplit: boolean;
 }
@@ -32,7 +35,7 @@ interface DiffSettingsState {
 export const useDiffSettingsStore = create<DiffSettingsState>(() => ({
 	hideWhitespace: getStoredFlag(HIDE_WHITESPACE_KEY),
 	wrapLines: getStoredFlag(WRAP_LINES_KEY),
-	gitDiffWrap: getStoredChoice(GIT_REVIEW_WRAP_KEY),
+	codeWrap: getStoredChoice(CODE_WRAP_KEY),
 	gitDiffSplit: getStoredFlag(GIT_REVIEW_SPLIT_KEY),
 }));
 
@@ -53,9 +56,9 @@ export const diffSettingsActions = {
 		useDiffSettingsStore.setState({ wrapLines: value });
 	},
 
-	setGitDiffWrap: (value: boolean) => {
-		localStorage.setItem(GIT_REVIEW_WRAP_KEY, String(value));
-		useDiffSettingsStore.setState({ gitDiffWrap: value });
+	setCodeWrap: (value: boolean) => {
+		localStorage.setItem(CODE_WRAP_KEY, String(value));
+		useDiffSettingsStore.setState({ codeWrap: value });
 	},
 
 	toggleGitDiffSplit: () => {
@@ -75,21 +78,24 @@ export function useDiffSettings() {
 }
 
 /**
- * Whether a Git file diff wraps, and the switch for it.
+ * Whether a whole file's code wraps — in a Git file diff and in the file
+ * viewer alike — and the switch for it.
  *
  * Until the reader chooses, it wraps below `expanded` — on a phone, sideways
  * scrolling inside a vertically scrolling page fights the page — and not at
  * `expanded`, where wide lines read better unbroken. Once chosen, the choice
- * holds at every width. Separate from the chat's `wrapLines`, whose tool-call
- * snippets are short and default the other way (docs/git-changes-ui.md).
+ * holds at every width. One choice serves both views, since readers move
+ * between a file and its diff in one motion. Separate from the chat's
+ * `wrapLines`, whose tool-call snippets are short and default the other way
+ * (docs/git-changes-ui.md).
  */
-export function useGitDiffWrap() {
-	const chosen = useDiffSettingsStore((s) => s.gitDiffWrap);
+export function useCodeWrap() {
+	const chosen = useDiffSettingsStore((s) => s.codeWrap);
 	const isExpanded = useIsExpanded();
 	const wrap = chosen ?? !isExpanded;
 	return {
 		wrap,
-		toggleWrap: () => diffSettingsActions.setGitDiffWrap(!wrap),
+		toggleWrap: () => diffSettingsActions.setCodeWrap(!wrap),
 	};
 }
 

@@ -28,6 +28,8 @@ interface Props {
 	/** See `CodeHighlighter`; a rendered `.md` file has no lines to number. */
 	lineNumbers?: boolean;
 	/** See `CodeHighlighter`; only where `lineNumbers` is set. */
+	wrap?: boolean;
+	/** See `CodeHighlighter`; only where `lineNumbers` is set. */
 	mark?: LineMark | null;
 	onMarkEnd?: () => void;
 	/** Offered by a rendered `.md` file's images; takes a work-directory-relative path. */
@@ -41,6 +43,7 @@ export function FileContentDisplay({
 	source,
 	copyable,
 	lineNumbers = false,
+	wrap,
 	mark,
 	onMarkEnd,
 	onOpenFile,
@@ -62,6 +65,7 @@ export function FileContentDisplay({
 			plain={plain}
 			copyable={copyable}
 			lineNumbers
+			wrap={wrap}
 			mark={mark}
 			onMarkEnd={onMarkEnd}
 		>

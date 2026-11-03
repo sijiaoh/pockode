@@ -14,7 +14,11 @@ import {
 } from "shiki";
 import { CopyButton } from "../components/ui/CopyButton";
 import { splitNativePath } from "../utils/path";
-import { type LineMark, lineTop, NUMBERED_CODE_CLASS } from "./codeRows";
+import {
+	type LineMark,
+	NUMBERED_CODE_CLASS,
+	WRAPPED_NUMBERED_CLASS,
+} from "./codeRows";
 import { fileLineCount } from "./textLines";
 
 export const CODE_FONT_SIZE_MOBILE = 12;
@@ -234,6 +238,27 @@ export function WrappedPlain({
 }
 
 /**
+ * A wrapped numbered block's text before shiki answers, or where the reader
+ * chose it plain: shiki's own shape — an inline `.line` per line, split where
+ * shiki splits and with its `\r` dropped as shiki drops it, `\n` between — so
+ * the rows break where the coloured ones will and the landing need not wait
+ * for colours. Each `.line` draws its own number (index.css).
+ */
+function NumberedLines({ text }: { text: string }) {
+	return (
+		<code>
+			{text.split(/\r?\n/).map((line, index) => (
+				// biome-ignore lint/suspicious/noArrayIndexKey: the lines of one fixed string
+				<React.Fragment key={index}>
+					{index > 0 && "\n"}
+					<span className="line">{line}</span>
+				</React.Fragment>
+			))}
+		</code>
+	);
+}
+
+/**
  * Rows per gutter block. One block holding every number made 52ms frames at
  * 200k lines in Chromium; split this way they stay at a plain block's 19ms.
  */
@@ -242,21 +267,26 @@ const GUTTER_BLOCK_ROWS = 1000;
 /**
  * The numbers beside a numbered block. They are generated content
  * (`attr(data-numbers)`, index.css), which no engine selects, copies or finds,
- * so a copied selection holds the code alone. Drawn from the text, not from
- * shiki's lines, so it is there and final before the colours arrive.
+ * so a copied selection holds the code alone. Drawn from the line count, not
+ * from shiki's lines, so it is there and final before the colours arrive.
+ *
+ * Under `wrap` the lines number themselves and the gutter is an empty column,
+ * kept for its width, its hairline and the redrawn number of a mark.
  */
 function LineGutter({
-	text,
+	count,
+	wrap,
 	mark,
 	onMarkEnd,
 }: {
-	text: string;
+	count: number;
+	wrap: boolean;
 	mark?: LineMark | null;
 	onMarkEnd?: () => void;
 }) {
-	const count = React.useMemo(() => fileLineCount(text), [text]);
 	const blocks = React.useMemo(() => {
 		const result: { start: number; numbers: string }[] = [];
+		if (wrap) return result;
 		for (let start = 1; start <= count; start += GUTTER_BLOCK_ROWS) {
 			const end = Math.min(start + GUTTER_BLOCK_ROWS - 1, count);
 			const numbers: number[] = [];
@@ -264,13 +294,9 @@ function LineGutter({
 			result.push({ start, numbers: numbers.join("\n") });
 		}
 		return result;
-	}, [count]);
+	}, [count, wrap]);
 	return (
-		<div
-			className="code-gutter"
-			aria-hidden="true"
-			style={{ "--line-digits": String(count).length } as React.CSSProperties}
-		>
+		<div className="code-gutter" aria-hidden="true">
 			{blocks.map(({ start, numbers }) => (
 				<span key={start} data-numbers={numbers} />
 			))}
@@ -290,13 +316,16 @@ function LineGutter({
 	);
 }
 
-function lineArrivalBox({ rows, line }: LineMark): React.CSSProperties {
-	return { top: lineTop(rows, line), height: rows.height };
+function lineArrivalBox({ top, height }: LineMark): React.CSSProperties {
+	return { top, height };
 }
 
 /**
- * Numbers need one row per line — a wrapped line would take two rows beside
- * one number — so a block either wraps or is numbered.
+ * Two ways to wrap, one per kind of block. A snippet wraps as blocks of whole
+ * words with a hanging indent, since nothing else marks where its lines start.
+ * A numbered file wraps as inline lines that each draw their own number: the
+ * number on a line's first row is what marks it, so the code neither hangs nor
+ * holds its words together (docs/file.md).
  */
 type CodeLayout =
 	| {
@@ -310,15 +339,22 @@ type CodeLayout =
 			onMarkEnd?: undefined;
 	  }
 	| {
-			wrap?: false;
 			/**
-			 * Number the lines in a gutter pinned to the left. For a whole file being
+			 * Break long lines instead of scrolling them sideways, each line
+			 * numbered on its first row. Every line becomes an element, which the
+			 * plain text past the highlight limit cannot afford: not for that.
+			 */
+			wrap?: boolean;
+			/**
+			 * Number the lines — unwrapped, in a gutter pinned to the left while the
+			 * code scrolls sideways under it. For a whole file being
 			 * read; a snippet, a diff or a conflict has numbers of its own or none
 			 * worth reading. The block is drawn full-bleed, with no card corners.
 			 */
 			lineNumbers: true;
 			/**
-			 * Flash a row — band and number — as the line a file was opened at.
+			 * Flash a line — band over every row of it, and its number — as the
+			 * line a file was opened at.
 			 * See `useLineLanding`, which supplies both.
 			 */
 			mark?: LineMark | null;
@@ -347,6 +383,10 @@ export function CodeHighlighter({
 	copyable?: boolean;
 } & CodeLayout) {
 	const isExpanded = useIsExpanded();
+	const lineCount = React.useMemo(
+		() => (lineNumbers ? fileLineCount(children) : 0),
+		[lineNumbers, children],
+	);
 	const fontSize = isExpanded ? CODE_FONT_SIZE_DESKTOP : CODE_FONT_SIZE_MOBILE;
 
 	// Highlighting is synchronous CPU work proportional to the input, and awaiting
@@ -356,7 +396,8 @@ export function CodeHighlighter({
 		plain ? "" : children,
 		plain ? undefined : language,
 		cssVarTheme,
-		wrap ? WRAP_OPTIONS : undefined,
+		// A numbered block wraps shiki's lines as they come (`CodeLayout`).
+		wrap && !lineNumbers ? WRAP_OPTIONS : undefined,
 	);
 
 	// On the wrapper, not the <pre>: a gutter beside it reads the same size.
@@ -372,7 +413,9 @@ export function CodeHighlighter({
 	const pre = (
 		<pre className={preClass}>
 			{(!plain && highlighted) ||
-				(wrap ? (
+				(lineNumbers && wrap ? (
+					<NumberedLines text={children} />
+				) : wrap ? (
 					<WrappedPlain text={children} words={!plain} />
 				) : (
 					<code>{children}</code>
@@ -381,7 +424,14 @@ export function CodeHighlighter({
 	);
 
 	return (
-		<div className="code-block-wrapper" style={style}>
+		<div
+			className={
+				lineNumbers && wrap
+					? `code-block-wrapper ${WRAPPED_NUMBERED_CLASS}`
+					: "code-block-wrapper"
+			}
+			style={style}
+		>
 			{copyable && (
 				<CopyButton
 					text={children}
@@ -390,8 +440,22 @@ export function CodeHighlighter({
 				/>
 			)}
 			{lineNumbers ? (
-				<div className="code-lines">
-					<LineGutter text={children} mark={mark} onMarkEnd={onMarkEnd} />
+				<div
+					className="code-lines"
+					// Both columns' width: the gutter's, and the numbers a wrapped
+					// block's lines draw themselves.
+					style={
+						{
+							"--line-digits": String(lineCount).length,
+						} as React.CSSProperties
+					}
+				>
+					<LineGutter
+						count={lineCount}
+						wrap={wrap}
+						mark={mark}
+						onMarkEnd={onMarkEnd}
+					/>
 					{mark && (
 						<div
 							key={mark.key}

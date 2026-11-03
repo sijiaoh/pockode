@@ -5,12 +5,13 @@ import { useCommitFile } from "../../hooks/useCommitFile";
 import { useFileDownload } from "../../hooks/useFileDownload";
 import { useGitCommit } from "../../hooks/useGitCommit";
 import { useRouteState } from "../../hooks/useRouteState";
+import { useCodeWrap } from "../../lib/diffSettingsStore";
 import { overlayToNavigation } from "../../lib/navigation";
 import { getFileViewState } from "../../utils/fileView";
-import FileBody from "../Files/FileBody";
+import FileBody, { offersWrap } from "../Files/FileBody";
 import { DownloadButton } from "../Files/FileDownloadControls";
 import { FilePageHeader } from "../Layout/PageHeader";
-import { ContentView, ToggleIconButton } from "../ui";
+import { ContentView, ToggleIconButton, WrapToggle } from "../ui";
 import { DetailActionBar, type DetailActionsPlacement } from "./detailActions";
 
 interface Props {
@@ -35,6 +36,7 @@ function CommitFileView({ hash, path, onBack, actionsAt = "bottom" }: Props) {
 	// Kept across files: someone reading several historical files in a row
 	// should not have to press it again for each.
 	const [plain, setPlain] = useState(false);
+	const { wrap } = useCodeWrap();
 	const { data: commit } = useGitCommit(hash);
 	const { data: file, isLoading, error } = useCommitFile(hash, path);
 	const [downloadError, setDownloadError] = useState<string | null>(null);
@@ -99,6 +101,7 @@ function CommitFileView({ hash, path, onBack, actionsAt = "bottom" }: Props) {
 					label={plain ? "Show page" : "Show source"}
 				/>
 			)}
+			{state && offersWrap(state, path, { plain }) && <WrapToggle />}
 			{state && <DownloadButton download={download} />}
 			<div className="ml-auto text-xs text-th-text-muted">{shortHash}</div>
 		</div>
@@ -140,6 +143,7 @@ function CommitFileView({ hash, path, onBack, actionsAt = "bottom" }: Props) {
 						plain={plain}
 						readOnly
 						lineNumbers
+						wrap={wrap}
 						onOpenFile={openFile}
 						downloadAction={{ label: download.label, onClick: download.toggle }}
 					/>
