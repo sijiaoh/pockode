@@ -187,7 +187,7 @@ A conflicted file's diff route opens the **conflict view** in the review layer �
 │ ⑂ feature/git-ui · rebasing      │
 │ ⚠ Rebase stopped on co… · 3 of 7 │  the layer's one-line form
 ├──────────────────────────────────┤
-│ ‹  2 / 5  ›  web/src/compo…  ↵   │  review toolbar — no whitespace toggle
+│ ‹  2 / 5  ›                  ↵   │  review toolbar — no whitespace toggle
 │ Conflict 1 of 3          ⌃   ⌄   │  conflict row
 ├──────────────────────────────────┤
 │  38   const a = 1;               │
@@ -224,7 +224,7 @@ These are the agent's to resolve: none has a text whose markers could be checked
 
 Who deleted it is deliberately not named: in a rebase "ours" is the branch being rebased onto and "theirs" the user's own commit, the opposite of a merge, and getting that backwards on screen is worse than not saying it. The agent reads the stages itself.
 
-**Bottom bar.** The review's, so it is placed by the same rule: in the toolbar at `expanded`, above the chat's composer below it, and gone while the composer holds a soft keyboard ([git-ui.md](git-ui.md#where-a-details-actions-go)).
+**Bottom bar.** The review's, so it is laid out and placed by the same rule: in the toolbar at `expanded`, above the chat's composer below it, and gone while the composer holds a soft keyboard ([file-actions-ui.md](file-actions-ui.md#placement)). `Ask agent` takes the leading slot, in the neutral colour.
 
 | File | Left (secondary) | Primary |
 |---|---|---|

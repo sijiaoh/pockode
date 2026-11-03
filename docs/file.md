@@ -1210,23 +1210,23 @@ is a toggle away ("Show source" / "Show rendered", `Code`), as a page's is;
 past `HIGHLIGHT_LIMIT` the file is already shown as plain source, and the
 toggle is not offered.
 
+The viewer's controls follow the file screens' one layout
+([file-actions-ui.md](file-actions-ui.md)): the toolbar under the header holds
+how the file is drawn — Source (a page or Markdown), then Wrap, each there only
+where it can change something ([Wrapped](#wrapped)) — and the actions hold what
+to do with it: Delete at the leading edge, then Rename, Download, History (in a
+git repository), and Edit in the trailing corner. Below `expanded` the actions
+are a bar above the chat's composer, gone while the composer holds a soft
+keyboard; at `expanded` they join the toolbar's end. The editor's are View at
+the leading edge and Save, the accent primary, placed by the same rule.
+
 Edit is disabled rather than hidden, with the reason in its accessible name, and
 `binary`/`too-large` repeat it visibly on the card. **Delete stays available in
 every state** — being unable to preview a file is no reason to be unable to
-remove it, and it sits last in the bar because a destructive action is the one a
-thumb should not reach by accident. The whole bar is hidden only while loading
-or after a failure, when there is nothing to act on.
-
-The bar reads Edit, Rename, Download, History (in a git repository), Source (a
-page or Markdown), Wrap, Delete. Source and Wrap sit together as the two
-controls for how the file is drawn; each is there only where it can change
-something — Wrap on numbered text within `HIGHLIGHT_LIMIT`
-([Wrapped](#wrapped)). The row wraps rather than overflowing: all seven appear
-for a Markdown file or a page in a git repository, shown as source, and seven
-44px thumb targets with their gaps are 380px, wider than a 375px phone, so
-there the last ones drop to a second row — Delete still last, still the
-farthest from where the thumb starts. Six (328px) already did not fit 320px
-before Wrap was added.
+remove it. It leads, in the error colour, farthest from Edit's corner, where the
+thumb rests, as the review keeps Discard farthest from its primary. The actions
+are absent only while loading or after a failure, when there is nothing to act
+on.
 
 Two ceilings keep syntax highlighting from freezing the main thread. Shiki
 tokenizes synchronously — roughly 3 ms/KiB on a desktop and several times that
@@ -1266,12 +1266,11 @@ A file as it stood in a commit reuses this same `FileViewState` and `FileBody`,
 so a historical binary or oversized blob is described by the same card,
 Download included — less the footnote naming why Edit is disabled, which only
 makes sense beside an Edit button that screen does not have. That screen's
-bottom bar tells the same story — no write action, but Download as here — and
-adds one control the viewer above does not have: a toggle that drops text to
-plain, which is how a reader gets at a rendered Markdown file's source and the
-copy button that comes with it, there being no Edit to open it in. For a page
-it is the page/source toggle the viewer above has. Wrap follows it, as here and
-under the same rule, so code dropped to plain still offers it.
+actions tell the same story — no write action, but Download as here. Its Source
+toggle is this one for a page or Markdown, and for other highlighted text a
+toggle that drops it to plain, which is how a reader gets at the copy button
+that comes with it, there being no Edit to open it in. Wrap follows it, as here
+and under the same rule, so code dropped to plain still offers it.
 See [git-ui.md](git-ui.md#viewing-a-file-from-a-commit).
 
 ### Where the viewer opens
@@ -1422,7 +1421,7 @@ matches the rows, stays pinned under a sideways scroll and is never copied.
 
 The reader can wrap long lines instead of scrolling them sideways:
 `WrapToggle` (`components/ui`; `WrapText`, `Wrap lines` / `Don't wrap lines`,
-`aria-pressed`) in the bottom bar of both the Files tab and a commit's file. It
+`aria-pressed`) in the toolbar of both the Files tab and a commit's file. It
 is the diff review's control and the diff review's remembered setting
 (`useCodeWrap`, on by default below `expanded`) — one choice for a whole
 file's code wherever it is read, for the reasons in
@@ -1431,7 +1430,7 @@ preference, not a state of the file: not in the URL, no history entry, no
 effect on `line` or `mode`.
 
 - **Offered only where it changes something.** `offersWrap` beside `FileBody`
-  decides, for both bars and for the body itself: numbered text within
+  decides, for both toolbars and for the body itself: numbered text within
   `HIGHLIGHT_LIMIT` drawn as text — code, code the reader dropped to plain in a
   commit, the source of Markdown or of a page. Elsewhere the toggle is absent
   rather than inert: rendered Markdown (prose wraps already; its fenced blocks
@@ -1754,8 +1753,8 @@ over `Media/usePageFrame.ts`). Diffs and chat attachments still show text.
   client reads only `mime`. A page over the `file.get`
   ceiling still renders, since the frame reads it over HTTP; only its source
   side shows the too-large card, and Edit follows the source.
-- **Page or source.** A `ToggleIconButton` (`Code`, "Show source" / "Show
-  page") in the bottom bar, beside Wrap ([order](#viewer-ui)). In the Files tab
+- **Page or source.** `SourceToggle` (`Code`, "Show source" / "Show
+  page") in the toolbar, before Wrap ([order](#viewer-ui)). In the Files tab
   it is `mode=source` in the URL
   ([Where the viewer opens](#where-the-viewer-opens)), so a file opened next
   starts rendered. The source is the ordinary text view, highlighted and
@@ -1764,7 +1763,7 @@ over `Media/usePageFrame.ts`). Diffs and chat attachments still show text.
   ([git-ui.md](git-ui.md#viewing-a-file-from-a-commit)).
 - **Layout.** A page bar (`HTML · 18.2 KB`, ↻ Reload page, ⤢ View full
   screen — the [media viewer](media-viewer.md#files-and-git-pagepreview)) over a frame that
-  fills the rest down to the bottom bar; nothing scrolls around it, so the
+  fills the rest of the page; nothing scrolls around it, so the
   page's own scroll is the only one. Between them, when the page was refused
   a host, the strip of hosts not loaded. The frame is a
   wrapper holding the page, both `HTML_FRAME_SANDBOX`, the page
@@ -1836,12 +1835,12 @@ over `Media/usePageFrame.ts`). Diffs and chat attachments still show text.
 
 ### Downloading
 
-Download sits between Edit and Delete and is available in every state.
-`binary` and `too-large` also carry the action on their placeholder card. Those
-are the files that cannot be previewed at all, which makes them the ones most
-likely to be wanted elsewhere, and a bare icon in the bottom bar is easy to miss
-under a card that says the file cannot be shown. A file as it stood in a commit
-downloads the same way — the same card action, bottom-bar icon, cancel and
+Download is one of the viewer's actions, after Rename, and is available in every
+state. `binary` and `too-large` also carry the action on their placeholder card.
+Those are the files that cannot be previewed at all, which makes them the ones
+most likely to be wanted elsewhere, and a bare icon among the actions is easy to
+miss under a card that says the file cannot be shown. A file as it stood in a
+commit downloads the same way — the same card action, action icon, cancel and
 banner, shared through `hooks/useFileDownload.ts`.
 
 Every state downloads the real bytes from the server, never the content already
@@ -2037,7 +2036,7 @@ a name and not a path is the server's reason, written once under
 [`file.rename`](#operations).
 
 **Two entry points, deliberately.** The tree row's `…`, and the file viewer's
-bottom bar, second after Edit ([its order](#viewer-ui)). The viewer's is not a convenience: a search
+actions, the first after Delete ([its order](#viewer-ui)). The viewer's is not a convenience: a search
 result row has no `…`, and a file opened from a chat link has no row at all, so
 without it those files could be deleted but not renamed. Search rows are left
 without a `…` on purpose — in content mode that slot already holds the match
