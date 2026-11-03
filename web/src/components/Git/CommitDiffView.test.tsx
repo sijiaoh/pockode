@@ -199,7 +199,7 @@ describe("CommitDiffView line selection", () => {
 		);
 	});
 	beforeEach(() => {
-		useDiffSettingsStore.setState({ gitDiffWrap: true, hideWhitespace: false });
+		useDiffSettingsStore.setState({ codeWrap: true, hideWhitespace: false });
 		const lines = (edit: string) =>
 			`${Array.from({ length: 20 }, (_, i) => (i === 9 ? edit : `line ${i + 1}`)).join("\n")}\n`;
 		diffRef.current = {

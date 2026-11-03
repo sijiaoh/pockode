@@ -5,7 +5,6 @@ import {
 	ChevronRight,
 	FileClock,
 	History,
-	WrapText,
 } from "lucide-react";
 import { useCallback, useMemo, useRef } from "react";
 import { useCommitDiff } from "../../hooks/useCommitDiff";
@@ -13,12 +12,17 @@ import { useGitCommit } from "../../hooks/useGitCommit";
 import { usePrefillComposer } from "../../hooks/usePrefillComposer";
 import { useRouteState } from "../../hooks/useRouteState";
 import { type DiffHunk, parseHunks } from "../../lib/diffHunks";
-import { useDiffSettings, useGitDiffWrap } from "../../lib/diffSettingsStore";
+import { useDiffSettings } from "../../lib/diffSettingsStore";
 import { overlayToNavigation } from "../../lib/navigation";
 import { commitOriginOf, fileHistoryOverlay } from "../../types/overlay";
 import { splitPath } from "../../utils/path";
 import { FilePageHeader } from "../Layout/PageHeader";
-import { ContentView, getActionIconButtonClass, ToggleIconButton } from "../ui";
+import {
+	ContentView,
+	getActionIconButtonClass,
+	ToggleIconButton,
+	WrapToggle,
+} from "../ui";
 import DiffContent from "./DiffContent";
 import { DetailActionBar, type DetailActionsPlacement } from "./detailActions";
 import ErrorBanner from "./ErrorBanner";
@@ -42,7 +46,6 @@ function CommitDiffView({ hash, path, onBack, actionsAt = "bottom" }: Props) {
 	// (docs/git-branches-ui.md#opening-a-commit).
 	const origin = commitOriginOf(overlay);
 	const { hideWhitespace, toggleHideWhitespace } = useDiffSettings();
-	const { wrap, toggleWrap } = useGitDiffWrap();
 	const { data: commit } = useGitCommit(hash);
 	const {
 		data: diff,
@@ -171,12 +174,7 @@ function CommitDiffView({ hash, path, onBack, actionsAt = "bottom" }: Props) {
 				>
 					<History className="h-4 w-4" aria-hidden="true" />
 				</button>
-				<ToggleIconButton
-					icon={WrapText}
-					pressed={wrap}
-					onClick={toggleWrap}
-					label={wrap ? "Don't wrap lines" : "Wrap lines"}
-				/>
+				<WrapToggle />
 				<ToggleIconButton
 					icon={ALargeSmall}
 					pressed={hideWhitespace}

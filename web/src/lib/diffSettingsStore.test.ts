@@ -1,9 +1,9 @@
 import { act, renderHook } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+	useCodeWrap,
 	useDiffSettingsStore,
 	useGitDiffSplit,
-	useGitDiffWrap,
 } from "./diffSettingsStore";
 
 let expanded = false;
@@ -12,15 +12,15 @@ vi.mock("@pockode/shared", async (importOriginal) => ({
 	useIsExpanded: () => expanded,
 }));
 
-describe("useGitDiffWrap", () => {
+describe("useCodeWrap", () => {
 	beforeEach(() => {
 		localStorage.clear();
-		useDiffSettingsStore.setState({ gitDiffWrap: null, wrapLines: false });
+		useDiffSettingsStore.setState({ codeWrap: null, wrapLines: false });
 	});
 
 	it("wraps below expanded and not at expanded until the reader chooses", () => {
 		expanded = false;
-		const { result, rerender } = renderHook(() => useGitDiffWrap());
+		const { result, rerender } = renderHook(() => useCodeWrap());
 		expect(result.current.wrap).toBe(true);
 
 		expanded = true;
@@ -30,7 +30,7 @@ describe("useGitDiffWrap", () => {
 
 	it("keeps the reader's choice at every width, and remembers it", () => {
 		expanded = false;
-		const { result, rerender } = renderHook(() => useGitDiffWrap());
+		const { result, rerender } = renderHook(() => useCodeWrap());
 		act(() => result.current.toggleWrap());
 		expect(result.current.wrap).toBe(false);
 
@@ -42,7 +42,7 @@ describe("useGitDiffWrap", () => {
 
 	it("is not the chat's wrap setting", () => {
 		expanded = true;
-		const { result } = renderHook(() => useGitDiffWrap());
+		const { result } = renderHook(() => useCodeWrap());
 		act(() => result.current.toggleWrap());
 		expect(result.current.wrap).toBe(true);
 		expect(useDiffSettingsStore.getState().wrapLines).toBe(false);

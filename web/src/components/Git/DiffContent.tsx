@@ -1,7 +1,7 @@
 import { memo, type ReactNode } from "react";
 import type { DiffHunk } from "../../lib/diffHunks";
 import type { LinePress, LineView } from "../../lib/diffRows";
-import { useDiffSettings, useGitDiffWrap } from "../../lib/diffSettingsStore";
+import { useCodeWrap, useDiffSettings } from "../../lib/diffSettingsStore";
 import type { GitDiffData } from "../../types/git";
 import FileBody from "../Files/FileBody";
 import { DiffViewer } from "../ui";
@@ -29,7 +29,7 @@ const DiffContent = memo(function DiffContent({
 	onLinePress,
 	selectedLines,
 }: Props) {
-	const { wrap } = useGitDiffWrap();
+	const { wrap } = useCodeWrap();
 	const { hideWhitespace, setHideWhitespace } = useDiffSettings();
 
 	// Withheld for the reason file.get withholds a file, so it reads the same as

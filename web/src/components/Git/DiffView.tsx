@@ -8,7 +8,6 @@ import {
 	Columns2,
 	Loader2,
 	Sparkles,
-	WrapText,
 } from "lucide-react";
 import {
 	useCallback,
@@ -29,9 +28,9 @@ import { usePrefillComposer } from "../../hooks/usePrefillComposer";
 import { useRouteState } from "../../hooks/useRouteState";
 import { type DiffHunk, parseHunks } from "../../lib/diffHunks";
 import {
+	useCodeWrap,
 	useDiffSettings,
 	useGitDiffSplit,
-	useGitDiffWrap,
 } from "../../lib/diffSettingsStore";
 import {
 	adjacentChange,
@@ -68,6 +67,7 @@ import {
 	ContentView,
 	getActionIconButtonClass,
 	ToggleIconButton,
+	WrapToggle,
 } from "../ui";
 import { FileNameTitle } from "../ui/HeaderTitle";
 import ConflictView, { useConflictFile } from "./ConflictView";
@@ -158,7 +158,7 @@ function DiffView({
 	const router = useRouter();
 	const { worktree, sessionId } = useRouteState();
 	const { hideWhitespace, toggleHideWhitespace } = useDiffSettings();
-	const { wrap, toggleWrap } = useGitDiffWrap();
+	const { wrap } = useCodeWrap();
 	const { available: splitAvailable, split, toggleSplit } = useGitDiffSplit();
 	const { data: status, isPending: statusPending } = useGitStatus();
 	const queryClient = useQueryClient();
@@ -736,12 +736,7 @@ function DiffView({
 				<span className="min-w-0 flex-1 truncate px-1 text-xs text-th-text-muted [direction:rtl]">
 					<bdi>{dir}</bdi>
 				</span>
-				<ToggleIconButton
-					icon={WrapText}
-					pressed={wrap}
-					onClick={toggleWrap}
-					label={wrap ? "Don't wrap lines" : "Wrap lines"}
-				/>
+				<WrapToggle />
 				{/* A conflict is the file, not a diff: nothing to filter or split. */}
 				{!conflict && (
 					<ToggleIconButton
