@@ -20,6 +20,13 @@ import type { Entry, FileContent } from "../../types/contents";
 import { HIGHLIGHT_LIMIT } from "../../utils/fileView";
 import FileView from "./FileView";
 
+const layout = vi.hoisted(() => ({ expanded: false }));
+
+vi.mock("@pockode/shared", async (importOriginal) => ({
+	...(await importOriginal<typeof import("@pockode/shared")>()),
+	useIsExpanded: () => layout.expanded,
+}));
+
 const getFile = vi.fn();
 const saveRawFile = vi.fn();
 const renameFile = vi.fn();
@@ -120,7 +127,7 @@ function fileContent(overrides: Partial<FileContent>): FileContent {
 async function renderFileView(
 	file: FileContent,
 	siblings: Entry[] = [],
-	view: { source?: boolean; line?: number } = {},
+	view: { source?: boolean; line?: number; keyboardUp?: boolean } = {},
 ) {
 	getFile.mockImplementation(async (path: string) =>
 		path === file.path
@@ -159,6 +166,7 @@ describe("FileView", () => {
 	});
 
 	beforeEach(() => {
+		layout.expanded = false;
 		localStorage.clear();
 		useDiffSettingsStore.setState({ codeWrap: false });
 		getFile.mockReset();
@@ -401,23 +409,9 @@ describe("FileView", () => {
 				.getAllByRole("button")
 				.map((button) => button.getAttribute("aria-label"))
 				.filter((label): label is string =>
-					["Download", "Show page", "Wrap lines", "Delete"].includes(
-						label ?? "",
-					),
+					["Show page", "Wrap lines"].includes(label ?? ""),
 				);
-			expect(labels).toEqual(["Download", "Show page", "Wrap lines", "Delete"]);
-		});
-
-		it("places the toggle after Download and before Delete", async () => {
-			await renderFileView(page());
-
-			const labels = screen
-				.getAllByRole("button")
-				.map((button) => button.getAttribute("aria-label"))
-				.filter((label): label is string =>
-					["Download", "Show source", "Delete"].includes(label ?? ""),
-				);
-			expect(labels).toEqual(["Download", "Show source", "Delete"]);
+			expect(labels).toEqual(["Show page", "Wrap lines"]);
 		});
 
 		it("renders a page too large to send, with editing disabled", async () => {
@@ -657,18 +651,6 @@ describe("FileView", () => {
 			);
 		});
 
-		it("keeps the destructive action last in the action bar", async () => {
-			await renderFileView(fileContent({}));
-
-			const labels = screen
-				.getAllByRole("button")
-				.map((button) => button.getAttribute("aria-label"))
-				.filter((label): label is string =>
-					["Edit", "Download", "Delete"].includes(label ?? ""),
-				);
-			expect(labels).toEqual(["Edit", "Download", "Delete"]);
-		});
-
 		it("offers the download from the card that stands in for a binary file", async () => {
 			const user = userEvent.setup();
 			await renderFileView(
@@ -760,6 +742,64 @@ describe("FileView", () => {
 			// surviving banner and make this pass either way.
 			expect(await screen.findByText("the next file")).toBeInTheDocument();
 			expect(screen.queryByText(/Download failed/)).not.toBeInTheDocument();
+		});
+	});
+
+	// docs/file-actions-ui.md: how the file is read at the top, what to do with
+	// it where the width and the composer leave room.
+	describe("where its controls are", () => {
+		const precedes = (a: Node, b: Node) =>
+			Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
+		const code = () => screen.getByText("const a = 1;");
+		const button = (name: string) => screen.getByRole("button", { name });
+
+		it("keeps Delete at the leading edge and Edit in the trailing corner", async () => {
+			await renderFileView(fileContent({}));
+
+			const labels = screen
+				.getAllByRole("button")
+				.map((b) => b.getAttribute("aria-label"))
+				.filter((label): label is string =>
+					["Delete", "Rename", "Download", "Edit"].includes(label ?? ""),
+				);
+			expect(labels).toEqual(["Delete", "Rename", "Download", "Edit"]);
+		});
+
+		it("puts the toggles above the file and the actions under it, below expanded", async () => {
+			await renderFileView(fileContent({ content: "const a = 1;" }));
+
+			expect(precedes(button("Wrap lines"), code())).toBe(true);
+			expect(precedes(code(), button("Delete"))).toBe(true);
+		});
+
+		it("joins the actions to the toolbar at expanded, keyboard or not", async () => {
+			layout.expanded = true;
+			await renderFileView(fileContent({ content: "const a = 1;" }), [], {
+				keyboardUp: true,
+			});
+
+			expect(precedes(button("Wrap lines"), button("Delete"))).toBe(true);
+			expect(precedes(button("Edit"), code())).toBe(true);
+		});
+
+		it("takes the actions off a phone while the composer has the keyboard, but not the toggles", async () => {
+			getFile.mockResolvedValue({
+				type: "file",
+				file: fileContent({ content: "const a = 1;" }),
+			});
+			const queryClient = new QueryClient({
+				defaultOptions: { queries: { retry: false } },
+			});
+			render(
+				<QueryClientProvider client={queryClient}>
+					<FileView path="src/app.ts" keyboardUp onBack={vi.fn()} />
+				</QueryClientProvider>,
+			);
+
+			await screen.findByText("const a = 1;", {}, { timeout: 10_000 });
+			expect(button("Wrap lines")).toBeInTheDocument();
+			expect(screen.queryByRole("button", { name: "Delete" })).toBeNull();
+			expect(screen.queryByRole("button", { name: /^Edit/ })).toBeNull();
 		});
 	});
 

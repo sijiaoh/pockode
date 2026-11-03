@@ -245,6 +245,13 @@ describe("DiffView review toolbar", () => {
 		expect(navigate).toHaveBeenLastCalledWith(toFile("b/c.ts", false));
 	});
 
+	// The folder is the header's subtitle, as on every other file page; the
+	// toolbar is left to how the diff is read.
+	it("names the file's folder under its name", () => {
+		render(<DiffView path="src/lib/gone.ts" staged={false} />);
+		expect(screen.getByText("src/lib")).toBeInTheDocument();
+	});
+
 	it("disables previous on the first file and next on the last", () => {
 		render(<DiffView path="a.ts" staged={false} />);
 		expect(
@@ -396,6 +403,16 @@ describe("DiffView bottom buttons", () => {
 		expect(toolbar).toContainElement(
 			screen.getByRole("button", { name: "Discard file" }),
 		);
+	});
+
+	it("puts the action that takes something away before the primary", () => {
+		render(<DiffView path="a.ts" staged={false} />);
+		const discard = screen.getByRole("button", { name: "Discard file" });
+		expect(
+			discard.compareDocumentPosition(
+				screen.getByRole("button", { name: "Stage & next" }),
+			) & Node.DOCUMENT_POSITION_FOLLOWING,
+		).toBeTruthy();
 	});
 
 	it("draws no buttons while hidden", () => {

@@ -224,7 +224,9 @@ describe("CommitFileView", () => {
 		file = binaryFile;
 		renderView();
 
-		expect(screen.queryByRole("button", { name: /plain text/i })).toBeNull();
+		expect(
+			screen.queryByRole("button", { name: /plain text|source/i }),
+		).toBeNull();
 	});
 
 	it("drops Markdown to its source so the whole file can be copied", async () => {
@@ -233,11 +235,15 @@ describe("CommitFileView", () => {
 
 		expect(screen.getByTestId("markdown")).toBeInTheDocument();
 
-		await user.click(screen.getByRole("button", { name: "Show plain text" }));
+		await user.click(screen.getByRole("button", { name: "Show source" }));
 
 		expect(screen.queryByTestId("markdown")).toBeNull();
 		expect(screen.getByText("# Title").tagName).toBe("PRE");
 		expect(screen.getByText("# Title")).toHaveAttribute("data-numbered");
+		// The same switch, named the same, as the Files tab's.
+		expect(
+			screen.getByRole("button", { name: "Show rendered" }),
+		).toHaveAttribute("aria-pressed", "true");
 	});
 
 	it("drops the toggle on a file already forced to plain text", () => {
@@ -249,7 +255,9 @@ describe("CommitFileView", () => {
 		};
 		renderView();
 
-		expect(screen.queryByRole("button", { name: /plain text/i })).toBeNull();
+		expect(
+			screen.queryByRole("button", { name: /plain text|source/i }),
+		).toBeNull();
 		expect(screen.getByText(/Large file/)).toBeInTheDocument();
 	});
 
@@ -291,7 +299,7 @@ describe("CommitFileView", () => {
 			renderView();
 			expect(wrapToggle()).toBeNull();
 
-			await user.click(screen.getByRole("button", { name: "Show plain text" }));
+			await user.click(screen.getByRole("button", { name: "Show source" }));
 			expect(wrapToggle()).not.toBeNull();
 		});
 

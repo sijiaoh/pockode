@@ -86,15 +86,31 @@ function render(ui: React.ReactElement) {
 vi.mock("../Files", async () => {
 	const { default: PageHeader } = await import("../Layout/PageHeader");
 	return {
-		FileView: ({ path, onBack }: { path: string; onBack: () => void }) => (
-			<div data-testid="file-view">
+		FileView: ({
+			path,
+			onBack,
+			keyboardUp,
+		}: {
+			path: string;
+			onBack: () => void;
+			keyboardUp?: boolean;
+		}) => (
+			<div
+				data-testid="file-view"
+				data-keyboard-up={keyboardUp ? "" : undefined}
+			>
 				<PageHeader
 					back={{ to: "parent", label: "Back", onClick: onBack }}
 					title={path}
 				/>
 			</div>
 		),
-		FileEditor: () => <div data-testid="file-editor" />,
+		FileEditor: ({ keyboardUp }: { keyboardUp?: boolean }) => (
+			<div
+				data-testid="file-editor"
+				data-keyboard-up={keyboardUp ? "" : undefined}
+			/>
+		),
 	};
 });
 
@@ -4795,9 +4811,9 @@ describe("ChatPanel", () => {
 			expect(screen.getByRole("textbox")).toHaveValue("look at this");
 		});
 
-		// What takes the review's bar off a phone's screen: the composer holding
+		// What takes a detail's actions off a phone's screen: the composer holding
 		// the caret where that raises a soft keyboard.
-		describe("the keyboard a Git detail makes room for", () => {
+		describe("the keyboard a detail makes room for", () => {
 			const withPointer = (coarse: boolean) => {
 				const original = window.matchMedia;
 				window.matchMedia = (query: string) =>
@@ -4841,6 +4857,25 @@ describe("ChatPanel", () => {
 					expect(workspace).toHaveAttribute("data-keyboard-up");
 					act(() => screen.getByRole("textbox").blur());
 					expect(workspace).not.toHaveAttribute("data-keyboard-up");
+				} finally {
+					restore();
+				}
+			});
+
+			it.each([
+				["viewer", { type: "file", path: "a.ts" }, "file-view"],
+				["editor", { type: "file", path: "a.ts", edit: true }, "file-editor"],
+			] as const)("reaches the file %s too", async (_, overlay, testId) => {
+				const restore = withPointer(true);
+				try {
+					const user = userEvent.setup();
+					render(<ChatPanel {...defaultProps} overlay={overlay} />);
+					await waitForHistoryLoad();
+					const view = screen.getByTestId(testId);
+					expect(view).not.toHaveAttribute("data-keyboard-up");
+
+					await user.click(screen.getByRole("textbox"));
+					expect(view).toHaveAttribute("data-keyboard-up");
 				} finally {
 					restore();
 				}

@@ -27,9 +27,19 @@ export {
 	actionIconButtonClass,
 	default as ContentView,
 	getActionIconButtonClass,
+	getDestructiveIconButtonClass,
 } from "./ContentView";
 export { CopyButton } from "./CopyButton";
 export { DiffViewer } from "./DiffViewer";
+export {
+	DetailActionBottomBar,
+	type DetailActions,
+	type DetailActionsPlacement,
+	detailActionsPlacement,
+	LeadingTextActionButton,
+	PrimaryActionButton,
+	ViewToolbar,
+} from "./detailActions";
 export { FileContentDisplay, rendersMarkdown } from "./FileContentDisplay";
 export { FileStateCard } from "./FileStateCard";
 export { headerIconButtonClass } from "./headerIconButtonClass";
@@ -40,5 +50,10 @@ export { default as PageBody } from "./PageBody";
 export { default as PanelSection } from "./PanelSection";
 export { default as RecommendedTag } from "./RecommendedTag";
 export { default as ReconnectBanner } from "./ReconnectBanner";
+export {
+	default as SourceToggle,
+	type SourceRendering,
+	sourceRenderingOf,
+} from "./SourceToggle";
 export { default as ToggleIconButton } from "./ToggleIconButton";
 export { default as WrapToggle } from "./WrapToggle";

@@ -75,21 +75,41 @@ function renderView(
 }
 
 describe("CommitDiffView", () => {
-	// Where `GitWorkspace` places it: the composer is under the page.
+	const precedesDiff = (name: string | RegExp) =>
+		Boolean(
+			screen
+				.getByRole("button", { name })
+				.compareDocumentPosition(screen.getByText("No content changes")) &
+				Node.DOCUMENT_POSITION_FOLLOWING,
+		);
+
+	// Where `GitWorkspace` places them: the composer is under the page.
 	it.each([
 		["top", true],
 		["bottom", false],
-	] as const)("draws its bar at the %s of the page", (at, aboveDiff) => {
+	] as const)("draws its actions at the %s of the page", (at, aboveDiff) => {
 		renderView(undefined, at);
-		const order = screen
-			.getByRole("button", { name: "Next file" })
-			.compareDocumentPosition(screen.getByText("No content changes"));
-		expect(!!(order & Node.DOCUMENT_POSITION_FOLLOWING)).toBe(aboveDiff);
+		expect(precedesDiff("History of this file")).toBe(aboveDiff);
+		expect(precedesDiff("Next file")).toBe(true);
+		expect(precedesDiff(/wrap lines/i)).toBe(true);
 	});
 
-	it("draws no bar while hidden", () => {
+	it("keeps the toolbar while the actions are hidden", () => {
 		renderView(undefined, "hidden");
-		expect(screen.queryByRole("button", { name: "Next file" })).toBeNull();
+		expect(
+			screen.queryByRole("button", { name: "History of this file" }),
+		).toBeNull();
+		expect(precedesDiff("Next file")).toBe(true);
+	});
+
+	it("says where the file is among the commit's", () => {
+		files = [
+			{ path: "a.ts", status: "M" },
+			{ path: "b.ts", status: "M" },
+			{ path: "c.ts", status: "M" },
+		];
+		renderView("b.ts");
+		expect(screen.getByText("File 2 of 3")).toBeInTheDocument();
 	});
 
 	// Each file of the commit is a page Back retraces.
@@ -136,7 +156,7 @@ describe("CommitDiffView", () => {
 		);
 	});
 
-	it("opens the commit's own version from the bottom bar", async () => {
+	it("opens the commit's own version", async () => {
 		const user = userEvent.setup();
 		renderView();
 
@@ -152,7 +172,7 @@ describe("CommitDiffView", () => {
 		);
 	});
 
-	it("opens the file's history from the bottom bar", async () => {
+	it("opens the file's history", async () => {
 		const user = userEvent.setup();
 		renderView();
 

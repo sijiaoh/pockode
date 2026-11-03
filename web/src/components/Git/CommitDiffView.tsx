@@ -1,11 +1,5 @@
 import { useNavigate } from "@tanstack/react-router";
-import {
-	ALargeSmall,
-	ChevronLeft,
-	ChevronRight,
-	FileClock,
-	History,
-} from "lucide-react";
+import { ALargeSmall, FileClock, History } from "lucide-react";
 import { useCallback, useMemo, useRef } from "react";
 import { useCommitDiff } from "../../hooks/useCommitDiff";
 import { useGitCommit } from "../../hooks/useGitCommit";
@@ -19,13 +13,17 @@ import { splitPath } from "../../utils/path";
 import { FilePageHeader } from "../Layout/PageHeader";
 import {
 	ContentView,
+	DetailActionBottomBar,
+	type DetailActions,
+	type DetailActionsPlacement,
 	getActionIconButtonClass,
 	ToggleIconButton,
+	ViewToolbar,
 	WrapToggle,
 } from "../ui";
 import DiffContent from "./DiffContent";
-import { DetailActionBar, type DetailActionsPlacement } from "./detailActions";
 import ErrorBanner from "./ErrorBanner";
+import FileSequenceNav from "./FileSequenceNav";
 import HunkBar from "./HunkBar";
 import { useLineSelection } from "./useLineSelection";
 
@@ -34,7 +32,7 @@ interface Props {
 	path: string;
 	/** Up to its commit, which may not be the entry behind. */
 	onBack: () => void;
-	/** Where the bar is drawn; see `DetailActionsPlacement`. */
+	/** Where the file's actions are drawn; see `DetailActionsPlacement`. */
 	actionsAt?: DetailActionsPlacement;
 }
 
@@ -132,29 +130,18 @@ function CommitDiffView({ hash, path, onBack, actionsAt = "bottom" }: Props) {
 		? `View this file at ${shortHash} (deleted in this commit)`
 		: `View this file at ${shortHash}`;
 
-	const actions = (
-		<div className="flex items-center justify-between">
-			<div className="flex items-center gap-1 pointer-coarse:gap-2">
+	const actions: DetailActions = {
+		utilities: (
+			<>
 				<button
 					type="button"
-					disabled={!prev}
-					onClick={() => prev && navigateToFile(prev.path)}
-					className={getActionIconButtonClass(!!prev)}
-					aria-label="Previous file"
+					onClick={openHistory}
+					className={getActionIconButtonClass(true)}
+					aria-label="History of this file"
+					title="History of this file"
 				>
-					<ChevronLeft className="h-4 w-4" aria-hidden="true" />
+					<History className="h-4 w-4" aria-hidden="true" />
 				</button>
-				<button
-					type="button"
-					disabled={!next}
-					onClick={() => next && navigateToFile(next.path)}
-					className={getActionIconButtonClass(!!next)}
-					aria-label="Next file"
-				>
-					<ChevronRight className="h-4 w-4" aria-hidden="true" />
-				</button>
-			</div>
-			<div className="flex items-center gap-2">
 				<button
 					type="button"
 					disabled={deletedHere}
@@ -165,30 +152,9 @@ function CommitDiffView({ hash, path, onBack, actionsAt = "bottom" }: Props) {
 				>
 					<FileClock className="h-4 w-4" aria-hidden="true" />
 				</button>
-				<button
-					type="button"
-					onClick={openHistory}
-					className={getActionIconButtonClass(true)}
-					aria-label="History of this file"
-					title="History of this file"
-				>
-					<History className="h-4 w-4" aria-hidden="true" />
-				</button>
-				<WrapToggle />
-				<ToggleIconButton
-					icon={ALargeSmall}
-					pressed={hideWhitespace}
-					onClick={toggleHideWhitespace}
-					label={
-						hideWhitespace
-							? "Show whitespace changes"
-							: "Hide whitespace changes"
-					}
-				/>
-				<div className="text-xs text-th-text-muted">{shortHash}</div>
-			</div>
-		</div>
-	);
+			</>
+		),
+	};
 
 	return (
 		<div className="flex flex-1 flex-col overflow-hidden">
@@ -200,9 +166,38 @@ function CommitDiffView({ hash, path, onBack, actionsAt = "bottom" }: Props) {
 				onTitleClick={handlePathClick}
 				titleActionLabel={`Open current ${splitPath(path).fileName}`}
 			/>
-			<DetailActionBar end="top" placement={actionsAt}>
-				{actions}
-			</DetailActionBar>
+			<ViewToolbar
+				nav={
+					<FileSequenceNav
+						onPrevious={prev ? () => navigateToFile(prev.path) : undefined}
+						onNext={next ? () => navigateToFile(next.path) : undefined}
+						count={
+							commit && {
+								position: currentIndex >= 0 ? currentIndex + 1 : null,
+								total: files.length,
+								absentLabel: `Not in this commit, ${files.length} files`,
+							}
+						}
+					/>
+				}
+				toggles={
+					<>
+						<WrapToggle />
+						<ToggleIconButton
+							icon={ALargeSmall}
+							pressed={hideWhitespace}
+							onClick={toggleHideWhitespace}
+							label={
+								hideWhitespace
+									? "Show whitespace changes"
+									: "Hide whitespace changes"
+							}
+						/>
+					</>
+				}
+				actions={actions}
+				actionsAt={actionsAt}
+			/>
 			{prefill.error && (
 				<ErrorBanner
 					summary={prefill.error.summary}
@@ -227,9 +222,7 @@ function CommitDiffView({ hash, path, onBack, actionsAt = "bottom" }: Props) {
 				)}
 			</ContentView>
 			{bar}
-			<DetailActionBar end="bottom" placement={actionsAt}>
-				{actions}
-			</DetailActionBar>
+			<DetailActionBottomBar actions={actions} actionsAt={actionsAt} />
 		</div>
 	);
 }

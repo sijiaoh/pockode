@@ -1393,6 +1393,10 @@ function ChatPanel({
 	// Takes no argument: an `onBack` may be handed straight to `onClick`, and
 	// the click's event is no `to`.
 	const goUp = () => onGoUp?.();
+	// What takes a detail's actions off the screen (`DetailActionsPlacement`).
+	// The pointer gate is the answer panel's yield's: a fine pointer has no
+	// soft keyboard to make room for.
+	const keyboardUp = composerTyping && isPrimaryPointerCoarse;
 	const renderOverlay = (overlay: NonNullable<OverlayState>) => {
 		switch (overlay.type) {
 			// One element for every layer, so that moving between a list and its
@@ -1413,16 +1417,18 @@ function ChatPanel({
 						onRepointBranch={onRepointBranch ?? noop}
 						onCloseFile={onCloseGitFile ?? noop}
 						listBeside={gitListBeside}
-						// The pointer gate is the answer panel's yield's: a fine
-						// pointer has no soft keyboard to make room for.
-						keyboardUp={composerTyping && isPrimaryPointerCoarse}
+						keyboardUp={keyboardUp}
 					/>
 				);
 			case "file":
 				if (overlay.edit) {
 					// Past the view it was entered from: the editor's ← is the chat's.
 					return (
-						<FileEditor path={overlay.path} onBack={() => onGoUp?.(null)} />
+						<FileEditor
+							path={overlay.path}
+							onBack={() => onGoUp?.(null)}
+							keyboardUp={keyboardUp}
+						/>
 					);
 				}
 				return (
@@ -1431,6 +1437,7 @@ function ChatPanel({
 						source={overlay.source}
 						line={overlay.line}
 						onBack={goUp}
+						keyboardUp={keyboardUp}
 					/>
 				);
 			case "settings":
