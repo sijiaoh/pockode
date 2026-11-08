@@ -8,8 +8,9 @@ package agent
 // It cannot live in those descriptions alone. Both CLIs load MCP tools lazily,
 // and until a model loads one it sees the name and not the description — so an
 // agent that never thought of asking, or of rendering, never read why it
-// should. Each CLI gets this text through the one channel it shows before
-// loading:
+// should. It is the same in every session, whatever its mode — an HTML-first
+// session is told more besides (HTMLFirstGuidance), never something else. Each
+// CLI gets this text through the one channel it shows before loading:
 //   - Claude: the MCP server's initialize instructions, which it puts in the
 //     system prompt (mcp.Server). Codex shows those only once a tool from the
 //     server is loaded, as the description of its namespace.
@@ -48,34 +49,38 @@ const renderingGuidance = "Showing the user something in Pockode:\n\n" +
 	"- A rendered page can show project files — screenshots, recordings, sounds, data — by path: reference them instead of inlining them.\n" +
 	"- Do not repeat or summarize in your reply what you rendered: the user already sees it."
 
-// HTMLFirstGuidance replaces Guidance in an HTML-first session. The tools are
-// the same in both, so it keeps the asking section as it is and swaps only the
-// rendering one: Guidance's says when a page is worth it, this one makes the
-// page the default for anything structured. It reaches each CLI through the
-// channel Guidance does, under the same 2048-character limit.
-const HTMLFirstGuidance = askingGuidance + "\n\n" + htmlFirstRenderingGuidance
-
-// htmlFirstRenderingGuidance: that structured content goes on a page and the
-// reply stays short, that the page works by itself, that a page is changed from
-// the old one rather than redrawn, and what widths it is seen at — a
-// recommendation, since content that is wide by nature may be drawn wide.
+// HTMLFirstGuidance is what an HTML-first session is told on top of Guidance,
+// never in its place: the tools are the same in both, so the asking rules and
+// the base rendering rules still hold, and this changes one default of the
+// latter — Guidance's says when a page is worth it, this one makes the page the
+// default for anything structured, and says so, since an agent reads both.
+//
+// It is how the session is set up rather than what the tools are, so it goes
+// where a session's setup goes — the system-level channel of each CLI — and
+// not into the MCP server's instructions, which are Guidance in every session:
+//   - Claude: appended to the CLI's own system prompt (claude
+//     htmlFirstPromptArgs). Tool-server instructions carry less weight there
+//     than a real system prompt, which is why it moved out of them.
+//   - Codex: after Guidance in the thread's developer instructions (codex
+//     developerInstructions).
+//
+// Neither channel has Claude's 2048-character limit on server instructions,
+// but it is read on every turn: keep it short.
+//
+// What it says: that structured content goes on a page and the reply stays
+// short, that the page works by itself, that a page is changed from the old
+// one rather than redrawn, and what widths it is seen at — a recommendation,
+// since content that is wide by nature may be drawn wide.
 //
 // A choice on a page and question_post do not compete: the page is for what the
 // user explores and fills in, question_post still for the decision the agent
-// waits on — said here because the asking section above it says "a decision"
-// without that distinction.
-const htmlFirstRenderingGuidance = "Showing the user something in this HTML-first Pockode session:\n\n" +
+// waits on — said here because the asking rules say "a decision" without that
+// distinction.
+const HTMLFirstGuidance = "This is an HTML-first Pockode session. " +
+	"For it, the page is the default rather than something to reach for when it is worth it, " +
+	"overriding that part of \"Showing the user something in Pockode\":\n\n" +
 	"- Show anything structured — comparisons, reports, choices, forms — as an html_render page (load it, html_edit and html_get via tool search if you only have their names). " +
 	"Reply in a sentence or two; never repeat the page.\n" +
 	"- Make the page work by itself and send to you only when it needs you. Still ask a decision you wait on with question_post.\n" +
 	"- Change a page with html_edit; html_get reads an old one.\n" +
 	"- Pages show at ~320–1280px: prefer a fluid layout; draw what is wide by nature (big tables, timelines, diffs) wide; it scrolls sideways. Reference project files by path, not inlined."
-
-// GuidanceFor is the guidance a session starts with: HTMLFirstGuidance in an
-// HTML-first session, Guidance in any other.
-func GuidanceFor(htmlFirst bool) string {
-	if htmlFirst {
-		return HTMLFirstGuidance
-	}
-	return Guidance
-}

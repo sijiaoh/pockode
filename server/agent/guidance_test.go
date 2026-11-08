@@ -46,14 +46,10 @@ func TestGuidance_CarriesTheRenderingRulesNeededBeforeLoading(t *testing.T) {
 	}
 }
 
-// An HTML-first session has the same tools, so it keeps every asking rule
-// above; what it changes is that a page, not the reply, is where anything
-// structured goes. Those rules are what the session is for, and the tools they
-// name are only names until loaded.
-func TestHTMLFirstGuidance_KeepsAskingAndCarriesThePageRules(t *testing.T) {
-	if !strings.HasPrefix(HTMLFirstGuidance, askingGuidance) {
-		t.Error("the HTML-first guidance does not carry the asking guidance")
-	}
+// An HTML-first session is told this besides Guidance: what it changes is that
+// a page, not the reply, is where anything structured goes. Those rules are
+// what the session is for, and the tools they name are only names until loaded.
+func TestHTMLFirstGuidance_CarriesThePageRules(t *testing.T) {
 	for _, want := range []string{
 		"html_render",
 		"html_edit",
@@ -67,17 +63,18 @@ func TestHTMLFirstGuidance_KeepsAskingAndCarriesThePageRules(t *testing.T) {
 		"320–1280px",     // a recommendation, not a rule:
 		"wide by nature", // what may be drawn wide anyway
 	} {
-		if !strings.Contains(htmlFirstRenderingGuidance, want) {
-			t.Errorf("the HTML-first rendering guidance does not say %q", want)
+		if !strings.Contains(HTMLFirstGuidance, want) {
+			t.Errorf("the HTML-first guidance does not say %q", want)
 		}
 	}
 }
 
-func TestGuidanceFor(t *testing.T) {
-	if GuidanceFor(false) != Guidance {
-		t.Error("a session that is not HTML-first does not get Guidance")
-	}
-	if GuidanceFor(true) != HTMLFirstGuidance {
-		t.Error("an HTML-first session does not get HTMLFirstGuidance")
+// The agent reads HTMLFirstGuidance alongside the base rendering rules, which
+// say a page is for when it is worth it. It has to say which of the two wins,
+// naming the section it overrides by the heading the agent sees.
+func TestHTMLFirstGuidance_OverridesTheRenderingDefaultByName(t *testing.T) {
+	heading, _, _ := strings.Cut(renderingGuidance, ":\n")
+	if !strings.Contains(HTMLFirstGuidance, "overriding that part of \""+heading+"\"") {
+		t.Errorf("the HTML-first guidance does not say it overrides %q", heading)
 	}
 }

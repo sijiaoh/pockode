@@ -140,10 +140,8 @@ func TestToolDefinitions_FitClaudesLimit(t *testing.T) {
 			t.Errorf("%s's description is %d characters; Claude reads only the first %d", def.Name, n, claudeMCPTextLimit)
 		}
 	}
-	for name, text := range map[string]string{"Guidance": agent.Guidance, "HTMLFirstGuidance": agent.HTMLFirstGuidance} {
-		if n := utf16Len(text); n > claudeMCPTextLimit {
-			t.Errorf("the server instructions (%s) are %d characters; Claude reads only the first %d", name, n, claudeMCPTextLimit)
-		}
+	if n := utf16Len(agent.Guidance); n > claudeMCPTextLimit {
+		t.Errorf("the server instructions are %d characters; Claude reads only the first %d", n, claudeMCPTextLimit)
 	}
 }
 

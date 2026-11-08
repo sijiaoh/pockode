@@ -9,9 +9,8 @@ import (
 
 // proxyArgs is what the `mcp` subcommand is told on its command line.
 type proxyArgs struct {
-	dataDir   string
-	caller    Caller
-	htmlFirst bool
+	dataDir string
+	caller  Caller
 }
 
 // parseProxyArgs parses the arguments that follow the `mcp` subcommand's name.
@@ -27,9 +26,6 @@ func parseProxyArgs(args []string, errorHandling flag.ErrorHandling) (proxyArgs,
 	// it. Optional: a proxy started by hand has no session.
 	sessionID := flags.String("session-id", "", "session the calling CLI runs (optional)")
 	worktree := flags.String("worktree", "", "worktree that session lives in (optional; empty is the main worktree)")
-	// Chooses the instructions the proxy gives (agent.GuidanceFor); the tools are
-	// the same either way.
-	htmlFirst := flags.Bool("html-first", false, "the session is HTML-first (optional)")
 	if err := flags.Parse(args); err != nil {
 		return proxyArgs{}, err
 	}
@@ -38,9 +34,8 @@ func parseProxyArgs(args []string, errorHandling flag.ErrorHandling) (proxyArgs,
 		return proxyArgs{}, errors.New("--data-dir is required")
 	}
 	return proxyArgs{
-		dataDir:   *dataDir,
-		caller:    Caller{SessionID: *sessionID, Worktree: *worktree},
-		htmlFirst: *htmlFirst,
+		dataDir: *dataDir,
+		caller:  Caller{SessionID: *sessionID, Worktree: *worktree},
 	}, nil
 }
 
@@ -58,7 +53,7 @@ func RunProxy(args []string, version string) error {
 	if err != nil {
 		return err
 	}
-	if err := NewServer(client, version, parsed.htmlFirst).Run(context.Background()); err != nil {
+	if err := NewServer(client, version).Run(context.Background()); err != nil {
 		return fmt.Errorf("MCP server failed: %w", err)
 	}
 	return nil
