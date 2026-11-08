@@ -49,14 +49,19 @@ export function messagePreview(message: Message): string {
 	// A command is quoted as typed: its content is a template that opens the
 	// same way every time, and so identifies nothing.
 	//
+	// A page's action is quoted as `approve · p3`, by what its bubble shows: its
+	// content is written for the agent (docs/tool-call-ui.md § The action bubble).
+	//
 	// A message that is only files is named by them: their names are the words
 	// the user chose, as much as anything typed would have been.
 	const raw =
 		message.role === "user"
 			? message.command
 				? formatPockodeCommand(message.command)
-				: message.content ||
-					(message.attachments ?? []).map(attachmentName).join(", ")
+				: message.htmlAction
+					? `${message.htmlAction.action} · ${message.htmlAction.page}`
+					: message.content ||
+						(message.attachments ?? []).map(attachmentName).join(", ")
 			: message.parts.map(partPreview).filter(Boolean).join(" ");
 	return raw.replace(/\s+/g, " ").trim();
 }

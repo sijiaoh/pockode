@@ -6,16 +6,17 @@ cannot find. The screens that read this
 are in [cli-update-ui.md](../cli-update-ui.md); the sign-in state beside it is
 [cli-auth.md](cli-auth.md).
 
-Verified against Claude Code 2.1.280 → 2.1.285 and codex-cli 0.158.0 → 0.159.2,
-both installed with npm, on Linux.
+Updates verified against Claude Code 2.1.280 → 2.1.285 and codex-cli 0.158.0 →
+0.159.2, both installed with npm, on Linux. The install's scripts were read as
+their four URLs served them in November 2026.
 
 ## Where it lives
 
 | Path | Holds |
 |------|-------|
-| `server/cliupdate/` | `Service`: the check (`cliupdate.go`), the update flow (`update.go`), the install (`install.go`), the npm registry read (`registry.go`) |
-| `server/agent/claude/update.go` | Claude as `cliupdate` sees it: its npm package, and its release channel read from the user's settings |
-| `server/agent/codex/update.go` | Codex, likewise |
+| `server/cliupdate/` | `Service`: the check (`cliupdate.go`), the update flow (`update.go`), the install (`install.go`, with `installer_{unix,windows}.go` picking the platform's script), the npm registry read (`registry.go`) |
+| `server/agent/claude/update.go` | Claude as `cliupdate` sees it: its npm package, its release channel read from the user's settings, and its official install scripts |
+| `server/agent/codex/update.go` | Codex, likewise (it has no channel setting) |
 | `server/agent/version.go` | `agent.Version`, the `--version` read shared with sign-in status |
 | `server/agent/semver.go` | `agent.CompareVersions`, version ordering — shared with the Claude adapter, which gates a launch flag on the installed version |
 | `server/watch/cli_update.go` | `CLIUpdateWatcher`, which pushes update changes; the mechanism is `watch/cli_record.go`, shared with sign-ins |
@@ -177,12 +178,12 @@ version.
 
 So before running it, the Service reads the installed version and the latest
 release (`from_version`, `target_version`); afterwards, the version of the
-binary `agent` resolves (`to_version`). The update succeeded when that is at
-least the target. With no target — the registry could not be read — the CLI's
-word is taken: exit 0 is success, whatever the version. A target or a result
-that does not parse as a version fails as `other`, as the check reports it
-`unavailable`. The version afterwards is read on the server's own budget, not
-what the update left of its 10 minutes.
+binary `agent` [resolves](#where-the-cli-is-found) (`to_version`). The update
+succeeded when that is at least the target. With no target — the registry
+could not be read — the CLI's word is taken: exit 0 is success, whatever the
+version. A target or a result that does not parse as a version fails as
+`other`, as the check reports it `unavailable`. The version afterwards is read
+on the server's own budget, not what the update left of its 10 minutes.
 
 | `failure.reason` | When |
 |---|---|
@@ -221,22 +222,82 @@ Six hours is meant to outlast a package manager's usual lag without leaving
 the card offering an update that has just failed.
 In memory: a restart offers it at once.
 
+## Where the CLI is found
+
+Everything here — `check`'s version, an update's `binary_path` and
+`to_version`, the install's success — runs the CLI through `agent.Command`, so
+it finds the same copy a session start and a sign-in do: PATH first, then, only
+when the CLI is not on PATH at all, its official installer's directory — where
+[an install](#installing-a-missing-cli) from here lands — and on Windows
+`%APPDATA%\npm`. The lookup, the directories and why are in
+[agent-integration.md](agent-integration.md#finding-the-binary). Nothing caches
+the answer, so a CLI installed a moment ago is found on the next read.
+
 ## Installing a missing CLI
 
-`cli_update.install` installs a CLI `check` reports `not_installed`:
+`cli_update.install` installs a CLI `check` reports `not_installed` with that
+CLI's own official install script — the one its documentation tells a user to
+pipe into a shell:
 
-```
-npm install --global --no-fund --no-audit <package>@<channel>
-```
+| CLI | Unix | Windows |
+|---|---|---|
+| claude | `bash install.sh <channel>`, from `https://claude.ai/install.sh` | `install.ps1 <channel>`, from `https://claude.ai/install.ps1` |
+| codex | `sh install.sh`, from `https://chatgpt.com/codex/install.sh`, with `CODEX_NON_INTERACTIVE=1` | `install.ps1`, from `https://chatgpt.com/codex/install.ps1`, with `CODEX_NON_INTERACTIVE=1` |
 
-with the package and channel the check reads
-([above](#latest-the-npm-registry-on-the-clis-channel)). It is npm whichever
-way the user would otherwise install the CLI: both CLIs publish every release
-there, npm is the one installer both share, and the CLI it leaves updates
-itself the npm way. It runs [where an update runs](#running-the-update) — the
-user's home directory, as the server's own user, no `sudo` — under the same
-machine-wide lock, sign-in gate and 10-minute budget, and like `start` it
-answers at once; the rest arrives as `cli_update.changed`.
+A `.ps1` runs under `powershell -NoProfile -NonInteractive -ExecutionPolicy
+Bypass -File` (`cliupdate.PowerShell`): Windows PowerShell 5.1, the one every
+supported Windows has, without the user's profile, and past the execution
+policy, which refuses an unsigned downloaded script. Which of the two columns
+runs is decided at build time (`installer_{unix,windows}.go`).
+
+Why the official scripts and not npm: they need no Node.js, they install into
+the user's own directories rather than a global prefix that is often root's,
+and the CLI they leave is the native build, which `claude update` /
+`codex update` then update the native way. Both CLIs' instructions lead with
+them.
+
+- **Claude's channel** is the one the check reads
+  ([above](#latest-the-npm-registry-on-the-clis-channel)), handed to the script
+  as its one argument, its `TARGET`. The script passes it to `claude install`,
+  which records it as the channel the install updates from, so the later
+  `claude update` follows the same one. `install.sh` is bash, not sh — it uses
+  `[[ ]]` and `BASH_REMATCH`.
+- **Codex** has no channel argument: with no `--release` (`CODEX_RELEASE`) its
+  scripts install the latest release, the one `codex update` follows.
+  `CODEX_NON_INTERACTIVE=1` is not optional. Without it `install.sh` asks on
+  `/dev/tty`, not stdin — whether to remove an npm or Homebrew install it
+  found, whether to start Codex — so a server started from a terminal would
+  wait on a question nobody sees until the budget ran out; closing stdin does
+  not stop it. It is what Codex's own standalone update sets.
+
+**The URLs are constants** in each CLI's package, never anything a client, a
+project or a setting can change: what they serve runs as the server's user.
+
+**Downloaded, then run as a file** — not `curl … | sh` as the instructions
+have it. A download that fails halfway through a pipe hands the shell a
+truncated script, or none, which it runs without complaint; and a piped
+script's commands read the rest of the script as their stdin. The server
+fetches the script itself (`net/http`), into a directory `os.MkdirTemp` made
+for this install alone, removed when it ends:
+
+- Redirects are followed — every URL above redirects today, to its CLI's
+  download host — but never off HTTPS (`checkScriptRedirect`); a redirect to
+  plain `http` fails the download.
+- Anything but `200 OK` fails it, and so does a script over 1 MiB (the largest
+  today is about 70 KiB).
+- A `.ps1` without a UTF-8 byte-order mark is written with one: Windows
+  PowerShell 5.1 reads a script without it in the ANSI code page, where a
+  non-ASCII character is garbled and can end a string early. Both CLIs'
+  `.ps1` scripts are ASCII today.
+
+The script runs [where an update runs](#running-the-update) — the user's home
+directory, as the server's own user, no `sudo`, stdin closed, the whole process
+tree killed at the budget — under the same machine-wide lock, sign-in gate and
+10-minute budget, the download included. Like `start` it answers at once; the
+rest arrives as `cli_update.changed`. Codex's `install.sh` appends a block
+putting its directory on `PATH` to the user's shell profile, as it does for an
+install from a terminal; the server does not rely on it (*Success is the CLI
+found*, below).
 
 ### Refused before it starts
 
@@ -248,8 +309,12 @@ it is ([websocket-rpc.md](websocket-rpc.md#error-replies)).
 | `data.reason` | When |
 |---|---|
 | `already_installed` | the server finds the CLI already; the message names the path. Reading `check` again shows it |
-| `npm_not_found` | npm is not on the server's PATH. The message says to install Node.js and restart pockode |
+| `installer_tool_not_found` | what the script needs before it can start is not on the server's PATH: its shell (`bash`, `sh`, `powershell`), or, for a Unix script, both of `curl` and `wget`. The message names the script's URL and the missing tool, and says to install it and restart pockode |
 | `busy` | the CLI is being updated on this server, another Pockode on the machine is updating or installing it ([below](#one-update-per-cli-per-os-user)), or a sign-in to it is running. Trying again once that has ended works |
+
+Only what keeps the script from starting is checked here. What it needs once
+it runs — `tar`, `mktemp`, a SHA-256 tool for Codex's — the script checks
+itself, and its message arrives as `command_failed`.
 
 `-32602` is a missing or unknown `agent`; `-32603`, with a message only, is a
 server shutting down or one with no home or cache directory.
@@ -260,32 +325,37 @@ running update. An install and an update exclude each other: each is refused
 
 ### Success is the CLI found
 
-npm resolves the channel itself, so `target_version` — the channel's release,
-read from the registry once the install has begun — is only what a client
-shows while it runs, and empty when the registry could not be read. There is
-no `from_version`. The install succeeded when npm exited 0 and the CLI's
-`--version` then reads: `to_version` is that version, and `binary_path` where
-the CLI was found. Nothing caches where a CLI is — `check`, `cli_auth.status`
-and every session start search the PATH afresh — so the next read after a
-success finds it; a client reads both again when it sees an install end, as
-it does for an update.
+The script resolves the release itself, so `target_version` — the channel's
+release, read from the npm registry once the install has begun — is only what a
+client shows while it runs, and empty when the registry could not be read.
+There is no `from_version`. The install succeeded when the script exited 0 and
+the CLI's `--version` then reads: `to_version` is that version, and
+`binary_path` where the CLI was found. The script's own `PATH` edits are not
+needed for that: the lookup searches the official installer's directory when
+the CLI is not on PATH ([above](#where-the-cli-is-found)). Nothing caches where
+a CLI is — `check`, `cli_auth.status` and every session start search afresh —
+so the next read after a success finds it; a client reads both again when it
+sees an install end, as it does for an update.
+
+Every install `detail` names the script by its URL — `the official installer
+(<URL>)` — so it says which file the server ran.
 
 | `failure.reason` | When |
 |---|---|
-| `permission_denied` | npm could not write its global prefix — its error block names `code EACCES` (Linux, macOS) or `code EPERM` (Windows), usually a prefix owned by root. `detail` is npm's output |
-| `not_on_path` | npm exited 0 but the server still cannot find the CLI: the directory npm puts commands in (its bin directory, or the prefix itself on Windows) is not on the server's PATH. `detail` names the prefix (`npm prefix --global`) when npm says; pockode has to be restarted with that directory on its PATH |
-| `command_failed` | npm exited non-zero for any other reason. `detail` starts with the npm command and its exit status, then npm's output |
+| `download_failed` | the script could not be downloaded: no network, a proxy, a region the CLI's download service does not serve, a status other than 200, a redirect off HTTPS. `detail` is `could not download the official installer (<URL>): <error>` |
+| `command_failed` | the script exited non-zero. `detail` is `the official installer (<URL>) exited with status N`, then, after a `:` and a newline, the end of what it printed — where the script says why: a failed download or checksum, an unsupported platform, `tar` or a checksum tool missing |
+| `not_on_path` | the script exited 0 but the server still cannot find the CLI, on its PATH or in the official installer's directory — an installer whose default directory moved ([below](#what-it-depends-on)). `detail` is the lookup's own message — where it looked, and to put the CLI on pockode's PATH and restart pockode — then the end of the script's output, which usually says where it put the CLI |
 | `timeout` | it ran past the budget; its process tree was killed. `to_version` is read anyway |
-| `other` | anything else — npm could not be started, the installed CLI's `--version` failed, the server shut down — `detail` says what |
+| `other` | anything else — the temporary directory could not be made, the shell could not be started, the installed CLI's `--version` failed, the server shut down — `detail` says what |
 
 `detail` is cut and redacted as an update's is ([above](#success-is-the-target-reached)).
 
 ## One update per CLI per OS user
 
 Every Pockode of the OS user — other projects, the nodes of a cluster —
-updates the same install and installs into the same npm prefix, and two
-package managers replacing one directory at once can leave neither version
-whole. So a start takes an exclusive lock on
+updates the same install and installs into the same home directory, and two
+installers replacing one directory at once can leave neither version whole.
+So a start takes an exclusive lock on
 `<user cache dir>/pockode/cli-update-<agent>.lock` (`os.UserCacheDir`:
 `~/.cache`, `~/Library/Caches`, `%LocalAppData%`) and a second Pockode's start is
 refused, not queued. An install takes the same lock, so an update and an
@@ -351,7 +421,7 @@ turns out to happen.
 | registry read | 10s, beside `--version` |
 | `update --help` probe | 10s, inside the update's 10 minutes; running out of it fails as `other`, naming the limit |
 | update command | 10 minutes, everything from the start of the update on; a timed-out one then reads `--version` for up to 10s more |
-| install | the same 10 minutes; `--version` afterwards, and `npm prefix --global` for a `not_on_path` detail, 10s each on top |
+| install | the same 10 minutes, the script's download included; `--version` afterwards, 10s on top |
 
 `check` is at most the longer of the first two, inside the client's default
 30s. `start`, `install`, `dismiss` and `subscribe` run nothing while the
@@ -370,10 +440,18 @@ Much less than a sign-in does:
   but not silent.
 - `<cli> --version` printing the version (`agent/version.go`).
 - Both packages on npm carrying every release, with the dist-tags above.
-- For an install: `npm install --global` installing the package's commands
-  where the PATH finds them, and npm's error block naming `code EACCES` /
-  `code EPERM` when it cannot write. If that wording changes, a permission
-  failure reads `command_failed` with npm's output — explained, not silent.
+- For an install: the four script URLs staying where they are, and the
+  scripts installing unattended — Claude's taking the channel as its first
+  argument, Codex's not asking while `CODEX_NON_INTERACTIVE` is set, both
+  exiting non-zero when they fail. A moved URL fails as `download_failed`, and
+  a Codex script that asked again waits out the budget and ends `timeout` —
+  explained, not silent. A Claude script that stopped reading its argument
+  would install `latest` for a `stable` user without saying so.
+- Each installer keeping the default directory registered for it
+  ([agent-integration.md](agent-integration.md#finding-the-binary)). If one
+  moves, a CLI it installed that is not yet on pockode's PATH reads
+  `not_installed`, with the old directory in the message's `also looked in` —
+  explained, not silent.
 - Claude's `autoUpdatesChannel` keeping its name and values. If it changes,
   a `stable` user is offered the `latest` release, and the update ends
   `not_applied` — explained, not silent.

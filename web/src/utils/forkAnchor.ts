@@ -107,7 +107,8 @@ export interface ForkAnchor {
 	 * be restored into the new session's input box: the user wrote that prompt
 	 * and the fork returns to before they sent it, so it belongs where an unsent
 	 * prompt lives, not in the transcript. Absent on an assistant anchor, which
-	 * the fork keeps.
+	 * the fork keeps, and on a page's action, whose text no user wrote: the user
+	 * presses the page again instead (docs/tool-call-ui.md § The action message).
 	 */
 	droppedText?: string;
 	/**
@@ -164,10 +165,11 @@ export function resolveForkAnchor(
 		anchorSeq,
 		droppedCount,
 		// The same question `dropsAnchor` asked, asked again: a boolean does not
-		// carry the narrowing that reaching `content` needs. A command goes back
-		// as typed, not as the prompt it expanded to.
+		// carry the narrowing that reaching `content` needs. A page's action is
+		// dropped but hands nothing back, its text being no user's. A command goes
+		// back as typed, not as the prompt it expanded to.
 		droppedText:
-			message.role !== "user"
+			message.role !== "user" || message.htmlAction
 				? undefined
 				: message.command
 					? formatPockodeCommand(message.command)

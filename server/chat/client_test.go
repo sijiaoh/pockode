@@ -30,9 +30,14 @@ type mockAgent struct {
 
 	mu       sync.Mutex
 	sessions []*mockSession
+	// htmlFirst is StartOptions.HTMLFirst of every start, in order.
+	htmlFirst []bool
 }
 
-func (a *mockAgent) Start(context.Context, agent.StartOptions) (agent.Session, error) {
+func (a *mockAgent) Start(_ context.Context, opts agent.StartOptions) (agent.Session, error) {
+	a.mu.Lock()
+	a.htmlFirst = append(a.htmlFirst, opts.HTMLFirst)
+	a.mu.Unlock()
 	if a.receivesAttachments {
 		sess := &attachmentReceivingSession{mockSession{events: make(chan agent.AgentEvent)}}
 		a.mu.Lock()

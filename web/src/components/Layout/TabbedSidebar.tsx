@@ -23,11 +23,23 @@ export interface TabConfig {
 	countBadge?: { value: number; label: string };
 }
 
+/** A request to select `tab`; a new `request` number is a new request. */
+export interface TabReveal {
+	tab: string;
+	request: number;
+}
+
 interface Props {
 	isOpen: boolean;
 	onClose: () => void;
 	tabs: TabConfig[];
 	defaultTab: string;
+	/**
+	 * A tab to bring to the front, selected each time a new `request` is made.
+	 * A request at one moment rather than a lock: a tab the user picks
+	 * afterwards stays picked until the next request.
+	 */
+	reveal?: TabReveal | null;
 	isExpanded: boolean;
 	children: React.ReactNode;
 	/** Render function for header slot, receives onClose and isExpanded for the drawer's close or the column's collapse button */
@@ -56,12 +68,20 @@ function TabbedSidebar({
 	onClose,
 	tabs,
 	defaultTab,
+	reveal = null,
 	isExpanded,
 	children,
 	renderHeader,
 }: Props) {
-	const [activeTab, setActiveTab] = useState(defaultTab);
+	const [activeTab, setActiveTab] = useState(reveal?.tab ?? defaultTab);
 	const [refreshSignal, setRefreshSignal] = useState(0);
+	const [prevReveal, setPrevReveal] = useState(reveal);
+	if (reveal?.request !== prevReveal?.request) {
+		setPrevReveal(reveal);
+		// No refresh signal, unlike a click: a refresh is the user asking for
+		// one, and a tab turned for them is not that.
+		if (reveal) setActiveTab(reveal.tab);
+	}
 	const idPrefix = useId();
 	const tabId = (id: string) => `${idPrefix}-tab-${id}`;
 	const panelId = `${idPrefix}-panel`;

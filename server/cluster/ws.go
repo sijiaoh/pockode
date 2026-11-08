@@ -7,11 +7,13 @@ import (
 	"log/slog"
 	"net/http"
 	"sync"
+	"time"
 
 	"github.com/coder/websocket"
 	"github.com/google/uuid"
 	"github.com/pockode/server/authguard"
 	"github.com/pockode/server/cluster/node"
+	"github.com/pockode/server/internal/restart"
 	"github.com/pockode/server/logger"
 	"github.com/pockode/server/password"
 	"github.com/pockode/server/rpc"
@@ -43,9 +45,11 @@ type wsHandler struct {
 	nodeStore      node.Store
 	processManager *node.ProcessManager
 	log            *slog.Logger
+	conns          *ws.Connections
+	server         ws.ServerControl
 }
 
-func newWSHandler(password string, passwordGuard *authguard.Guard, sessions ws.SessionStore, version string, devMode bool, nodeStore node.Store, processManager *node.ProcessManager, log *slog.Logger) *wsHandler {
+func newWSHandler(password string, passwordGuard *authguard.Guard, sessions ws.SessionStore, version string, devMode bool, nodeStore node.Store, processManager *node.ProcessManager, restarter *restart.Restarter, updater *ws.Updater, log *slog.Logger) *wsHandler {
 	return &wsHandler{
 		password:       password,
 		passwordGuard:  passwordGuard,
@@ -55,7 +59,19 @@ func newWSHandler(password string, passwordGuard *authguard.Guard, sessions ws.S
 		nodeStore:      nodeStore,
 		processManager: processManager,
 		log:            log.With("component", "ws"),
+		conns:          ws.NewConnections(),
+		server:         ws.ServerControl{Restarter: restarter, Updater: updater, Subject: "The cluster"},
 	}
+}
+
+// connectionsCloseTimeout bounds how long stop waits for requests to notice
+// their connection is gone; see ws.Connections.Close.
+const connectionsCloseTimeout = 10 * time.Second
+
+// stop ends every connection, so that a client reconnects to whatever runs
+// next instead of staying on a cluster that has shut down.
+func (h *wsHandler) stop() {
+	h.conns.Close(connectionsCloseTimeout, h.log)
 }
 
 func (h *wsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -67,7 +83,9 @@ func (h *wsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.handleConnection(r.Context(), conn)
+	h.conns.Serve(r.Context(), conn, func(ctx context.Context) {
+		h.handleConnection(ctx, conn)
+	})
 }
 
 func (h *wsHandler) handleConnection(ctx context.Context, wsConn *websocket.Conn) {
@@ -93,11 +111,13 @@ func (h *wsHandler) handleStream(ctx context.Context, stream jsonrpc2.ObjectStre
 		version:        h.version,
 		nodeStore:      h.nodeStore,
 		processManager: h.processManager,
+		server:         h.server,
+		stream:         stream,
 		log:            log,
 		authenticated:  false,
 	}
 
-	rpcConn := jsonrpc2.NewConn(ctx, stream, jsonrpc2.AsyncHandler(handler))
+	rpcConn := jsonrpc2.NewConn(ctx, stream, h.conns.AsyncHandler(handler))
 	<-rpcConn.DisconnectNotify()
 	log.Info("connection closed")
 }
@@ -109,6 +129,8 @@ type clusterRPCHandler struct {
 	version        string
 	nodeStore      node.Store
 	processManager *node.ProcessManager
+	server         ws.ServerControl
+	stream         jsonrpc2.ObjectStream // what the connection runs on
 	log            *slog.Logger
 	authenticated  bool
 	mu             sync.Mutex
@@ -135,6 +157,17 @@ func (h *clusterRPCHandler) Handle(ctx context.Context, conn *jsonrpc2.Conn, req
 		if err := conn.Reply(ctx, req.ID, "pong"); err != nil {
 			h.log.Error("failed to send pong", "error", err)
 		}
+	case "server.version":
+		result := rpc.ClusterVersionResult{Installed: h.server.Installed(ctx)}
+		if err := conn.Reply(ctx, req.ID, result); err != nil {
+			h.log.Error("failed to send server.version response", "error", err)
+		}
+	case "server.restart":
+		h.server.HandleRestart(ctx, conn, req, h.stream, h.log)
+	case "server.update_check":
+		h.server.HandleUpdateCheck(ctx, conn, req, h.log)
+	case "server.update":
+		h.server.HandleUpdate(ctx, conn, req, h.log)
 	case "node.list":
 		h.handleNodeList(ctx, conn, req)
 	case "node.get":
@@ -153,6 +186,8 @@ func (h *clusterRPCHandler) Handle(ctx context.Context, conn *jsonrpc2.Conn, req
 		h.handleNodeStop(ctx, conn, req)
 	case "node.cleanup":
 		h.handleNodeCleanup(ctx, conn, req)
+	case "node.restart":
+		h.handleNodeRestart(ctx, conn, req)
 	default:
 		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeMethodNotFound, "method not found")
 	}
@@ -307,6 +342,10 @@ type NodeStopParams struct {
 }
 
 type NodeCleanupParams struct {
+	ID string `json:"id"`
+}
+
+type NodeRestartParams struct {
 	ID string `json:"id"`
 }
 
@@ -522,6 +561,10 @@ func (h *clusterRPCHandler) handleNodeStart(ctx context.Context, conn *jsonrpc2.
 			h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "node already running")
 			return
 		}
+		if errors.Is(err, node.ErrNodeRestarting) {
+			h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "This node is restarting.")
+			return
+		}
 		if errors.Is(err, node.ErrInvalidNode) {
 			h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, err.Error())
 			return
@@ -626,4 +669,69 @@ func (h *clusterRPCHandler) handleNodeCleanup(ctx context.Context, conn *jsonrpc
 	if err := conn.Reply(ctx, req.ID, status); err != nil {
 		h.log.Error("failed to send node.cleanup response", "error", err)
 	}
+}
+
+// handleNodeRestart asks a node to restart itself, without its password, and
+// answers with its status — restarting — once it has been asked, not once it
+// is back. It does not move last_used_at: a restart is upkeep, like a stop,
+// and a batch of them must not reorder the list it runs on.
+func (h *clusterRPCHandler) handleNodeRestart(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request) {
+	var params NodeRestartParams
+	if err := unmarshalParams(req, &params); err != nil {
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "invalid params")
+		return
+	}
+
+	if params.ID == "" {
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "id is required")
+		return
+	}
+
+	n, found, err := h.nodeStore.Get(params.ID)
+	if err != nil {
+		h.log.Error("failed to get node", "error", err)
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInternalError, "internal error")
+		return
+	}
+	if !found {
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "node not found")
+		return
+	}
+
+	if err := h.processManager.Restart(ctx, n); err != nil {
+		if reason, message := h.nodeRestartRefusal(err); reason != "" {
+			h.log.Info("node restart refused", "nodeId", n.ID, "reason", reason, "error", err)
+			h.replyErrorData(ctx, conn, req.ID, rpc.CodeRestartRefused, message, rpc.RestartRefusedData{Reason: reason})
+			return
+		}
+		h.log.Error("failed to restart node", "error", err, "nodeId", n.ID)
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInternalError, err.Error())
+		return
+	}
+
+	h.log.Info("node restart requested", "nodeId", n.ID)
+
+	status := h.processManager.GetNodeStatus(n)
+	if err := conn.Reply(ctx, req.ID, status); err != nil {
+		h.log.Error("failed to send node.restart response", "error", err)
+	}
+}
+
+// nodeRestartRefusal is the reason and the copy of a node.restart that sent
+// nothing, or no reason for an error that is not a refusal. The copy is
+// docs/restart-ui.md's.
+func (h *clusterRPCHandler) nodeRestartRefusal(err error) (reason, message string) {
+	switch {
+	case errors.Is(err, node.ErrNodeRestarting):
+		return rpc.RestartRefusedAlreadyRestarting, "This node is already restarting."
+	case errors.Is(err, node.ErrRestartUnsupported):
+		return rpc.RestartRefusedOlderNode, "This node was started by an older Pockode, which can't be restarted by the cluster. Stop and start it instead."
+	case errors.Is(err, node.ErrNodeNotRunning):
+		return rpc.RestartRefusedNotRunning, "This node is not running."
+	}
+	var notRunnable *restart.NotRunnableError
+	if errors.As(err, &notRunnable) {
+		return rpc.RestartRefusedNotRunnable, ws.NotRunnableRefusal(h.processManager.ExecutablePath(), notRunnable, "The node")
+	}
+	return "", ""
 }

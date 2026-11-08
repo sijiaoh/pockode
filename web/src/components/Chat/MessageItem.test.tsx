@@ -1,11 +1,14 @@
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import type { ReactElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { layOutClamp } from "../../test/clampLayout";
 import type {
 	AssistantMessage,
 	Message,
 	PermissionRequest,
+	UserMessage,
 } from "../../types/message";
 import { FullScreenHost } from "./FullScreenHost";
 import MessageItem from "./MessageItem";
@@ -16,8 +19,10 @@ const RUNNING = { ...IDLE_TAIL, phase: "running" as const };
 const mockWorkDir = vi.hoisted(() => ({ value: "/Users/test/project" }));
 
 vi.mock("../../lib/wsStore", () => ({
-	useWSStore: (selector: (state: { workDir: string }) => string) =>
-		selector({ workDir: mockWorkDir.value }),
+	useWSStore: (
+		selector: (state: { workDir: string; actions: object }) => unknown,
+	) => selector({ workDir: mockWorkDir.value, actions: {} }),
+	isRPCTimeout: () => false,
 }));
 
 describe("MessageItem", () => {
@@ -55,6 +60,143 @@ describe("MessageItem", () => {
 
 		render(<MessageItem sessionId="session-1" message={message} />);
 		expect(screen.getByText("report.pdf")).toBeInTheDocument();
+	});
+
+	describe("a page's action", () => {
+		const actionMessage = (
+			data: unknown,
+			content = 'Page action "approve" from p3:\n…',
+		): UserMessage => ({
+			id: "a1",
+			role: "user",
+			content,
+			status: "complete",
+			createdAt: new Date(),
+			htmlAction: { page: "p3", action: "approve", data },
+		});
+
+		// `content` is for the agent (docs/tool-call-ui.md § The action bubble);
+		// the sender's echo has none until the reply, and must already read right.
+		it("names the action and the page, never the text the agent read", () => {
+			render(
+				<MessageItem
+					sessionId="session-1"
+					message={actionMessage({ id: "42" })}
+				/>,
+			);
+			expect(screen.getByText("approve")).toBeInTheDocument();
+			expect(screen.getByText("from p3")).toBeInTheDocument();
+			expect(screen.getByText('{"id":"42"}')).toBeInTheDocument();
+			expect(screen.queryByText(/Page action "approve"/)).toBeNull();
+		});
+
+		it("reads right in the sender's echo, before the reply brings content", () => {
+			render(
+				<MessageItem
+					sessionId="session-1"
+					message={actionMessage({ id: "42" }, "")}
+				/>,
+			);
+			expect(screen.getByText("approve")).toBeInTheDocument();
+			expect(screen.getByText("from p3")).toBeInTheDocument();
+			expect(screen.getByText('{"id":"42"}')).toBeInTheDocument();
+		});
+
+		it("shows no data when the page sent none", () => {
+			render(<MessageItem sessionId="session-1" message={actionMessage({})} />);
+			expect(screen.queryByText("{}")).toBeNull();
+		});
+
+		// A page may send any JSON value as its data (docs/tool-call-ui.md
+		// § The action message): each is drawn as itself.
+		it.each([
+			[null, "null"],
+			["yes", '"yes"'],
+			[0, "0"],
+			[false, "false"],
+			[[], "[]"],
+		])("draws data %j as %s", (data, shown) => {
+			render(
+				<MessageItem sessionId="session-1" message={actionMessage(data)} />,
+			);
+			expect(screen.getByText(shown)).toBeInTheDocument();
+		});
+
+		it("folds data longer than a line, and opens it on request", async () => {
+			const user = userEvent.setup();
+			const data = { title: "Fix login", body: "x".repeat(60) };
+			render(
+				<MessageItem sessionId="session-1" message={actionMessage(data)} />,
+			);
+
+			const toggle = screen.getByRole("button", { name: /^Data ?\{"title"/ });
+			expect(toggle).toHaveAttribute("aria-expanded", "false");
+			expect(screen.queryByText(/"title": "Fix login"/)).toBeNull();
+
+			await user.click(toggle);
+			expect(toggle).toHaveAttribute("aria-expanded", "true");
+			expect(screen.getByText(/"title": "Fix login"/)).toBeInTheDocument();
+		});
+
+		it("opens long data in part, and all of it full screen", async () => {
+			const user = userEvent.setup();
+			layOutClamp(2000);
+			const data = Object.fromEntries(
+				Array.from({ length: 30 }, (_, i) => [`field${i}`, i]),
+			);
+			render(
+				<FullScreenHost>
+					<MessageItem sessionId="session-1" message={actionMessage(data)} />
+				</FullScreenHost>,
+			);
+
+			await user.click(screen.getByRole("button", { name: /^Data/ }));
+			expect(screen.getByText(/"field0": 0/)).toBeInTheDocument();
+			expect(screen.queryByText(/"field29": 29/)).toBeNull();
+
+			await user.click(screen.getByRole("button", { name: "Show all data" }));
+			// The viewer draws its lines virtually; its count is of the whole.
+			expect(screen.getByRole("dialog")).toHaveTextContent("32 lines");
+		});
+
+		// One value can be the whole 64KB: a count of lines alone would let it
+		// all into the bubble.
+		it("opens one long value in part too", async () => {
+			const user = userEvent.setup();
+			const body = `${"a".repeat(3000)}TAIL`;
+			render(
+				<FullScreenHost>
+					<MessageItem
+						sessionId="session-1"
+						message={actionMessage({ body })}
+					/>
+				</FullScreenHost>,
+			);
+
+			await user.click(screen.getByRole("button", { name: /^Data/ }));
+			expect(screen.queryByText(/TAIL/)).toBeNull();
+			expect(
+				screen.getByRole("button", { name: "Show all data" }),
+			).toBeInTheDocument();
+		});
+
+		it("says when the agent never read it, and offers nothing to restore", () => {
+			render(
+				<MessageItem
+					sessionId="session-1"
+					message={{ ...actionMessage({ id: "42" }), messageId: "m1" }}
+					isDiscarded
+					onRestoreMessages={vi.fn()}
+				/>,
+			);
+			expect(
+				screen.getByText("Not read — won't be answered"),
+			).toBeInTheDocument();
+			// Restoring is the menu's only entry here, so no menu is offered.
+			expect(
+				screen.queryByRole("button", { name: "Actions for your message" }),
+			).toBeNull();
+		});
 	});
 
 	describe("a Pockode command", () => {
@@ -577,12 +719,20 @@ describe("MessageItem", () => {
 			status: "complete",
 			createdAt: new Date(),
 		});
+		// A card reads its page through the query cache, as the app's root
+		// provides.
+		const renderPage = (ui: ReactElement) =>
+			render(
+				<QueryClientProvider client={new QueryClient()}>
+					{ui}
+				</QueryClientProvider>,
+			);
 
 		it.each([
 			"mcp__pockode__html_render",
 			"pockode:html_render",
 		])("is drawn as a page card once %s succeeds", (name) => {
-			render(
+			renderPage(
 				<MessageItem sessionId="session-1" message={page(name, "success")} />,
 			);
 			const card = screen.getByRole("region", { name: "Latency report" });
@@ -592,8 +742,20 @@ describe("MessageItem", () => {
 			expect(screen.queryByText("html_render")).toBeNull();
 		});
 
+		// Its page is the server's, read by id; the card stands in for it
+		// until then rather than a row that would turn into one.
+		it("draws a succeeded html_edit as a card of the page it stored", () => {
+			const message = page("pockode:html_edit", "success");
+			const part = (message as AssistantMessage).parts[0];
+			if (part.type !== "tool_call") throw new Error("not a call");
+			part.tool.htmlPage = "p2";
+			renderPage(<MessageItem sessionId="session-1" message={message} />);
+			expect(screen.getByRole("region")).toHaveTextContent("p2");
+			expect(screen.queryByText("html_edit")).toBeNull();
+		});
+
 		it("stays a tool row while it runs", () => {
-			render(
+			renderPage(
 				<MessageItem
 					sessionId="session-1"
 					message={page("mcp__pockode__html_render", "running")}

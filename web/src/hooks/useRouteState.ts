@@ -1,7 +1,22 @@
 import { useMatch, useParams } from "@tanstack/react-router";
-import { ROUTES, WT_ROUTES } from "../lib/routes";
-import type { OverlaySearchParams, SessionSearchParams } from "../router";
-import type { OverlayState, WorkSegment } from "../types/overlay";
+import { ROUTES, type RouteKey, WT_ROUTES } from "../lib/routes";
+import type {
+	BranchSearchParams,
+	CommitSearchParams,
+	FileSearchParams,
+	GitSearchParams,
+	HistorySearchParams,
+	OverlaySearchParams,
+	SessionSearchParams,
+} from "../router";
+import type {
+	CommitOrigin,
+	FileOverlayMode,
+	GitSegment,
+	HistoryQuery,
+	OverlayState,
+	WorkSegment,
+} from "../types/overlay";
 
 export interface RouteInfo {
 	overlay: OverlayState;
@@ -35,6 +50,210 @@ function readSegment(search: OverlaySearchParams): WorkSegment {
 	return search.segment === "closed" ? "closed" : "current";
 }
 
+/**
+ * `mode=source` beside a `line` is accepted and dropped: the line already
+ * implies the source, and the overlay has one shape for one state.
+ */
+function readFileMode(search: FileSearchParams): FileOverlayMode {
+	if (search.mode === "edit") return { edit: true };
+	if (search.line !== undefined) return { line: search.line };
+	return search.mode === "source" ? { source: true } : {};
+}
+
+/** As `readSegment`: `changes` is whatever does not name another segment. */
+function readGitSegment(search: GitSearchParams): GitSegment {
+	return search.segment ?? "changes";
+}
+
+/**
+ * Left off the overlay when the URL says nothing, so the default has one
+ * shape. An empty `q` or `file` is no filter.
+ */
+function readHistoryQuery(
+	search: HistorySearchParams,
+): HistoryQuery | undefined {
+	const { scope, q, file } = search;
+	if (!scope && !q && !file) return undefined;
+	return {
+		scope: scope ?? "current",
+		...(q ? { q } : {}),
+		...(file ? { file } : {}),
+	};
+}
+
+/**
+ * A commit layer's origin. A URL naming both a branch and a History query —
+ * typed, never written — is taken as the branch's: the narrower of the two.
+ */
+function readCommitOrigin(search: CommitSearchParams): CommitOrigin {
+	if (search.branch) {
+		return { branch: { ref: search.branch, remote: search.remote === 1 } };
+	}
+	const history = readHistoryQuery(search);
+	return history ? { history } : {};
+}
+
+/**
+ * What a matched route says, for the route the URL matched — `useRouteState`'s
+ * reading of the location on screen, and `pageAt`'s of any other. Null is a
+ * route with nothing to read: the index, or no match.
+ */
+export function routeInfoOf(
+	route: RouteKey | null,
+	rawParams: object,
+	rawSearch: object,
+	worktree: string,
+): RouteInfo {
+	const params = rawParams as Record<string, string | undefined>;
+	switch (route) {
+		case "session": {
+			const search = rawSearch as SessionSearchParams;
+			return {
+				overlay: null,
+				sessionId: params.sessionId ?? null,
+				worktree,
+				viewWorktree: search.from ?? null,
+			};
+		}
+		case "staged":
+		case "unstaged": {
+			const search = rawSearch as OverlaySearchParams;
+			return {
+				overlay: {
+					type: "diff",
+					path: params._splat ?? "",
+					staged: route === "staged",
+				},
+				sessionId: search.session ?? null,
+				worktree,
+				viewWorktree: null,
+			};
+		}
+		case "files": {
+			const search = rawSearch as FileSearchParams;
+			return {
+				overlay: {
+					type: "file",
+					path: params._splat ?? "",
+					...readFileMode(search),
+				},
+				sessionId: search.session ?? null,
+				worktree,
+				viewWorktree: null,
+			};
+		}
+		case "git": {
+			const search = rawSearch as GitSearchParams;
+			const segment = readGitSegment(search);
+			// Only History reads it: a stray query on another segment is not
+			// carried back into History when the reader switches to it.
+			const history =
+				segment === "history" ? readHistoryQuery(search) : undefined;
+			return {
+				overlay: { type: "git", segment, ...(history ? { history } : {}) },
+				sessionId: search.session ?? null,
+				worktree,
+				viewWorktree: null,
+			};
+		}
+		case "branch": {
+			const search = rawSearch as BranchSearchParams;
+			return {
+				overlay: {
+					type: "branch",
+					ref: params._splat ?? "",
+					remote: search.remote === 1,
+				},
+				sessionId: search.session ?? null,
+				worktree,
+				viewWorktree: null,
+			};
+		}
+		case "commit": {
+			const search = rawSearch as CommitSearchParams;
+			return {
+				overlay: {
+					type: "commit",
+					hash: params._splat ?? "",
+					...readCommitOrigin(search),
+				},
+				sessionId: search.session ?? null,
+				worktree,
+				viewWorktree: null,
+			};
+		}
+		case "commitDiff":
+		case "commitFile": {
+			const search = rawSearch as CommitSearchParams;
+			return {
+				overlay: {
+					type: route === "commitDiff" ? "commit-diff" : "commit-file",
+					hash: params.hash ?? "",
+					path: params._splat ?? "",
+					...readCommitOrigin(search),
+				},
+				sessionId: search.session ?? null,
+				worktree,
+				viewWorktree: null,
+			};
+		}
+		case "settings":
+		case "works":
+		case "workDetail":
+		case "agentRoles":
+		case "agentRoleDetail":
+		case "schedules":
+		case "scheduleDetail": {
+			const search = rawSearch as OverlaySearchParams;
+			return {
+				overlay: projectOverlayOf(route, params, search),
+				sessionId: search.session ?? null,
+				worktree,
+				viewWorktree: null,
+			};
+		}
+		default:
+			return { overlay: null, sessionId: null, worktree, viewWorktree: null };
+	}
+}
+
+function projectOverlayOf(
+	route:
+		| "settings"
+		| "works"
+		| "workDetail"
+		| "agentRoles"
+		| "agentRoleDetail"
+		| "schedules"
+		| "scheduleDetail",
+	params: Record<string, string | undefined>,
+	search: OverlaySearchParams,
+): OverlayState {
+	switch (route) {
+		case "settings":
+			return { type: "settings" };
+		case "works":
+			return { type: "work-list", segment: readSegment(search) };
+		case "workDetail":
+			return {
+				type: "work-detail",
+				workId: params.workId ?? "",
+				segment: readSegment(search),
+			};
+		case "agentRoles":
+			return { type: "agent-role-list" };
+		case "agentRoleDetail":
+			return { type: "agent-role-detail", roleId: params.roleId ?? "" };
+		case "schedules":
+			return { type: "schedule-list" };
+		case "scheduleDetail":
+			return {
+				type: "schedule-detail",
+				scheduleId: params.scheduleId ?? "",
+			};
+	}
+}
+
 export function useRouteState(): RouteInfo {
 	const worktree = useCurrentWorktree();
 
@@ -59,6 +278,13 @@ export function useRouteState(): RouteInfo {
 	});
 	const wtFileMatch = useMatch({
 		from: WT_ROUTES.files,
+		shouldThrow: false,
+	});
+	const gitMatch = useMatch({ from: ROUTES.git, shouldThrow: false });
+	const wtGitMatch = useMatch({ from: WT_ROUTES.git, shouldThrow: false });
+	const branchMatch = useMatch({ from: ROUTES.branch, shouldThrow: false });
+	const wtBranchMatch = useMatch({
+		from: WT_ROUTES.branch,
 		shouldThrow: false,
 	});
 	const commitMatch = useMatch({
@@ -142,181 +368,27 @@ export function useRouteState(): RouteInfo {
 		shouldThrow: false,
 	});
 
-	const sessionId =
-		sessionMatch?.params.sessionId ?? wtSessionMatch?.params.sessionId ?? null;
-	if (sessionId) {
-		const search = (sessionMatch?.search ??
-			wtSessionMatch?.search) as SessionSearchParams;
-		return {
-			overlay: null,
-			sessionId,
-			worktree,
-			viewWorktree: search.from ?? null,
-		};
-	}
-
-	const stagedPath = stagedMatch?.params._splat ?? wtStagedMatch?.params._splat;
-	if (stagedPath !== undefined) {
-		const search = (stagedMatch?.search ??
-			wtStagedMatch?.search) as OverlaySearchParams;
-		return {
-			overlay: { type: "diff", path: stagedPath, staged: true },
-			sessionId: search.session ?? null,
-			worktree,
-			viewWorktree: null,
-		};
-	}
-
-	const unstagedPath =
-		unstagedMatch?.params._splat ?? wtUnstagedMatch?.params._splat;
-	if (unstagedPath !== undefined) {
-		const search = (unstagedMatch?.search ??
-			wtUnstagedMatch?.search) as OverlaySearchParams;
-		return {
-			overlay: { type: "diff", path: unstagedPath, staged: false },
-			sessionId: search.session ?? null,
-			worktree,
-			viewWorktree: null,
-		};
-	}
-
-	const filePath = fileMatch?.params._splat ?? wtFileMatch?.params._splat;
-	if (filePath !== undefined) {
-		const search = (fileMatch?.search ??
-			wtFileMatch?.search) as OverlaySearchParams;
-		return {
-			overlay: { type: "file", path: filePath, edit: search.mode === "edit" },
-			sessionId: search.session ?? null,
-			worktree,
-			viewWorktree: null,
-		};
-	}
-
-	const commitHash = commitMatch?.params._splat ?? wtCommitMatch?.params._splat;
-	if (commitHash !== undefined) {
-		const search = (commitMatch?.search ??
-			wtCommitMatch?.search) as OverlaySearchParams;
-		return {
-			overlay: { type: "commit", hash: commitHash },
-			sessionId: search.session ?? null,
-			worktree,
-			viewWorktree: null,
-		};
-	}
-
-	const commitDiffParams = commitDiffMatch?.params ?? wtCommitDiffMatch?.params;
-	if (commitDiffParams) {
-		const hash = (commitDiffParams as { hash: string }).hash;
-		const path = (commitDiffParams as { _splat: string })._splat;
-		const search = (commitDiffMatch?.search ??
-			wtCommitDiffMatch?.search) as OverlaySearchParams;
-		return {
-			overlay: { type: "commit-diff", hash, path },
-			sessionId: search.session ?? null,
-			worktree,
-			viewWorktree: null,
-		};
-	}
-
-	const commitFileParams = commitFileMatch?.params ?? wtCommitFileMatch?.params;
-	if (commitFileParams) {
-		const hash = (commitFileParams as { hash: string }).hash;
-		const path = (commitFileParams as { _splat: string })._splat;
-		const search = (commitFileMatch?.search ??
-			wtCommitFileMatch?.search) as OverlaySearchParams;
-		return {
-			overlay: { type: "commit-file", hash, path },
-			sessionId: search.session ?? null,
-			worktree,
-			viewWorktree: null,
-		};
-	}
-
-	if (settingsMatch || wtSettingsMatch) {
-		const search = (settingsMatch?.search ??
-			wtSettingsMatch?.search) as OverlaySearchParams;
-		return {
-			overlay: { type: "settings" },
-			sessionId: search.session ?? null,
-			worktree,
-			viewWorktree: null,
-		};
-	}
-
-	const workDetailParams = workDetailMatch?.params ?? wtWorkDetailMatch?.params;
-	if (workDetailParams) {
-		const workId = (workDetailParams as { workId: string }).workId;
-		const search = (workDetailMatch?.search ??
-			wtWorkDetailMatch?.search) as OverlaySearchParams;
-		return {
-			overlay: { type: "work-detail", workId, segment: readSegment(search) },
-			sessionId: search.session ?? null,
-			worktree,
-			viewWorktree: null,
-		};
-	}
-
-	if (worksMatch || wtWorksMatch) {
-		const search = (worksMatch?.search ??
-			wtWorksMatch?.search) as OverlaySearchParams;
-		return {
-			overlay: { type: "work-list", segment: readSegment(search) },
-			sessionId: search.session ?? null,
-			worktree,
-			viewWorktree: null,
-		};
-	}
-
-	const agentRoleDetailParams =
-		agentRoleDetailMatch?.params ?? wtAgentRoleDetailMatch?.params;
-	if (agentRoleDetailParams) {
-		const roleId = (agentRoleDetailParams as { roleId: string }).roleId;
-		const search = (agentRoleDetailMatch?.search ??
-			wtAgentRoleDetailMatch?.search) as OverlaySearchParams;
-		return {
-			overlay: { type: "agent-role-detail", roleId },
-			sessionId: search.session ?? null,
-			worktree,
-			viewWorktree: null,
-		};
-	}
-
-	if (agentRolesMatch || wtAgentRolesMatch) {
-		const search = (agentRolesMatch?.search ??
-			wtAgentRolesMatch?.search) as OverlaySearchParams;
-		return {
-			overlay: { type: "agent-role-list" },
-			sessionId: search.session ?? null,
-			worktree,
-			viewWorktree: null,
-		};
-	}
-
-	const scheduleDetailParams =
-		scheduleDetailMatch?.params ?? wtScheduleDetailMatch?.params;
-	if (scheduleDetailParams) {
-		const scheduleId = (scheduleDetailParams as { scheduleId: string })
-			.scheduleId;
-		const search = (scheduleDetailMatch?.search ??
-			wtScheduleDetailMatch?.search) as OverlaySearchParams;
-		return {
-			overlay: { type: "schedule-detail", scheduleId },
-			sessionId: search.session ?? null,
-			worktree,
-			viewWorktree: null,
-		};
-	}
-
-	if (schedulesMatch || wtSchedulesMatch) {
-		const search = (schedulesMatch?.search ??
-			wtSchedulesMatch?.search) as OverlaySearchParams;
-		return {
-			overlay: { type: "schedule-list" },
-			sessionId: search.session ?? null,
-			worktree,
-			viewWorktree: null,
-		};
-	}
-
-	return { overlay: null, sessionId: null, worktree, viewWorktree: null };
+	const leaf = (
+		[
+			["session", sessionMatch ?? wtSessionMatch],
+			["staged", stagedMatch ?? wtStagedMatch],
+			["unstaged", unstagedMatch ?? wtUnstagedMatch],
+			["files", fileMatch ?? wtFileMatch],
+			["git", gitMatch ?? wtGitMatch],
+			["branch", branchMatch ?? wtBranchMatch],
+			["commit", commitMatch ?? wtCommitMatch],
+			["commitDiff", commitDiffMatch ?? wtCommitDiffMatch],
+			["commitFile", commitFileMatch ?? wtCommitFileMatch],
+			["settings", settingsMatch ?? wtSettingsMatch],
+			["workDetail", workDetailMatch ?? wtWorkDetailMatch],
+			["works", worksMatch ?? wtWorksMatch],
+			["agentRoleDetail", agentRoleDetailMatch ?? wtAgentRoleDetailMatch],
+			["agentRoles", agentRolesMatch ?? wtAgentRolesMatch],
+			["scheduleDetail", scheduleDetailMatch ?? wtScheduleDetailMatch],
+			["schedules", schedulesMatch ?? wtSchedulesMatch],
+		] as const
+	).find(([, match]) => match !== undefined);
+	if (!leaf) return routeInfoOf(null, {}, {}, worktree);
+	const [route, match] = leaf;
+	return routeInfoOf(route, match?.params ?? {}, match?.search ?? {}, worktree);
 }

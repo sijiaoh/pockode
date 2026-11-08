@@ -78,8 +78,6 @@ function View({
 				content,
 			}}
 			onClose={onClose}
-			closeThen={(after) => after()}
-			afterCloseRef={{ current: null }}
 		/>
 	);
 }

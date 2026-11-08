@@ -1,4 +1,13 @@
-import type { OverlayState, WorkSegment } from "../types/overlay";
+import {
+	type BranchRef,
+	type CommitOrigin,
+	commitOriginOf,
+	type FileOverlayMode,
+	type GitSegment,
+	type HistoryQuery,
+	type OverlayState,
+	type WorkSegment,
+} from "../types/overlay";
 import { ROUTES, WT_ROUTES } from "./routes";
 import { SESSION_VIEW_PARAM } from "./sessionView";
 
@@ -24,31 +33,45 @@ interface NavToOverlayBase {
 	sessionId: string | null;
 }
 
-interface NavToPathOverlay extends NavToOverlayBase {
-	overlayType: "staged" | "unstaged" | "file";
-	path: string;
-	edit?: boolean;
-}
-
-interface NavToCommitOverlay extends NavToOverlayBase {
-	overlayType: "commit";
-	hash: string;
-}
-
-interface NavToCommitDiffOverlay extends NavToOverlayBase {
-	overlayType: "commit-diff";
-	hash: string;
+interface NavToDiffOverlay extends NavToOverlayBase {
+	overlayType: "staged" | "unstaged";
 	path: string;
 }
 
-interface NavToCommitFileOverlay extends NavToOverlayBase {
-	overlayType: "commit-file";
-	hash: string;
-	path: string;
+type NavToPathOverlay =
+	| NavToDiffOverlay
+	| (NavToOverlayBase &
+			FileOverlayMode & { overlayType: "file"; path: string });
+
+interface NavToBranchOverlay extends NavToOverlayBase {
+	overlayType: "branch";
+	ref: string;
+	remote: boolean;
 }
+
+type NavToCommitOverlay = NavToOverlayBase &
+	CommitOrigin & {
+		overlayType: "commit";
+		hash: string;
+	};
+
+type NavToCommitDiffOverlay = NavToOverlayBase &
+	CommitOrigin & {
+		overlayType: "commit-diff";
+		hash: string;
+		path: string;
+	};
+
+type NavToCommitFileOverlay = NavToOverlayBase &
+	CommitOrigin & {
+		overlayType: "commit-file";
+		hash: string;
+		path: string;
+	};
 
 type NavToFileOverlay =
 	| NavToPathOverlay
+	| NavToBranchOverlay
 	| NavToCommitOverlay
 	| NavToCommitDiffOverlay
 	| NavToCommitFileOverlay;
@@ -57,6 +80,16 @@ interface NavToSettingsOverlay {
 	type: "overlay";
 	worktree: string;
 	overlayType: "settings";
+	sessionId: string | null;
+}
+
+interface NavToGitOverlay {
+	type: "overlay";
+	worktree: string;
+	overlayType: "git";
+	segment: GitSegment;
+	/** Read on the History segment only. */
+	history?: HistoryQuery;
 	sessionId: string | null;
 }
 
@@ -110,6 +143,7 @@ interface NavToScheduleDetailOverlay {
 type NavToOverlay =
 	| NavToFileOverlay
 	| NavToSettingsOverlay
+	| NavToGitOverlay
 	| NavToWorkListOverlay
 	| NavToWorkDetailOverlay
 	| NavToAgentRoleListOverlay
@@ -127,38 +161,93 @@ export type NavTarget = NavToSession | NavToOverlay | NavToHome;
 interface NavigationResult {
 	to: string;
 	params?: Record<string, string>;
-	search?: Record<string, string>;
+	/**
+	 * A number only where the route's schema takes one (`remote=1`): the
+	 * router quotes a string that would parse as JSON.
+	 */
+	search?: Record<string, string | number>;
 	replace?: boolean;
 }
 
 /**
  * The query most overlay routes carry: the chat underneath it, and — on the two
- * work routes — which segment of the list the reader is in. The file routes
- * build their own, because they also carry `mode`.
+ * work routes and the Git workspace — which segment of the list the reader is
+ * in. The file routes add their own mode on top (`assignFileSearch`).
  *
- * `Current` is the *absence* of `segment` rather than `segment=current`, so that
- * the default landing place has exactly one URL; it is what lets the Project
- * entry button's plain `/works` mean `Current` on its own
- * (docs/project-ui.md §5). A query with nothing in it is left off the result
- * entirely rather than handed over empty.
+ * A default segment (`current`, `changes`) is the *absence* of `segment`
+ * rather than spelled out, so that the default landing place has exactly one
+ * URL; it is what lets the Project entry button's plain `/works` mean
+ * `Current` on its own (docs/project-ui.md §5). A query with nothing in it is
+ * left off the result entirely rather than handed over empty. The History
+ * segment's query follows the same rule: `scope=current` is never written.
  */
 function assignSearch(
 	result: NavigationResult,
 	sessionId: string | null,
-	segment?: WorkSegment,
+	segment?: WorkSegment | GitSegment,
+	history?: HistoryQuery,
 ) {
 	const search: Record<string, string> = {};
 	if (sessionId) search.session = sessionId;
-	if (segment === "closed") search.segment = segment;
+	if (segment && segment !== "current" && segment !== "changes") {
+		search.segment = segment;
+	}
+	if (history) {
+		if (history.scope !== "current") search.scope = history.scope;
+		if (history.q) search.q = history.q;
+		if (history.file) search.file = history.file;
+	}
 	if (Object.keys(search).length > 0) result.search = search;
+}
+
+/**
+ * A branch as its detail's URL names it, and a commit opened from it: `remote=1`
+ * for a remote-only branch (docs/git-branches-ui.md#the-branch).
+ */
+function assignBranchSearch(
+	result: NavigationResult,
+	branch: BranchRef,
+	withRef: boolean,
+) {
+	const search: Record<string, string | number> = { ...result.search };
+	if (withRef) search.branch = branch.ref;
+	if (branch.remote) search.remote = 1;
+	if (Object.keys(search).length > 0) result.search = search;
+}
+
+/**
+ * The file overlay's mode as its URL spells it. A line implies the source, so
+ * the source is written only where no line already says it.
+ */
+function assignFileSearch(result: NavigationResult, mode: FileOverlayMode) {
+	const search: Record<string, string | number> = { ...result.search };
+	if (mode.edit) {
+		search.mode = "edit";
+	} else if (mode.line !== undefined) {
+		search.line = mode.line;
+	} else if (mode.source) {
+		search.mode = "source";
+	}
+	if (Object.keys(search).length > 0) result.search = search;
+}
+
+/** Only the fields of `FileOverlayMode`, so nothing else rides along. */
+function fileModeOf(mode: FileOverlayMode): FileOverlayMode {
+	if (mode.edit) return { edit: true };
+	return {
+		...(mode.source ? { source: true } : {}),
+		...(mode.line !== undefined ? { line: mode.line } : {}),
+	};
 }
 
 /**
  * Convert OverlayState to navigation result.
  *
- * `options.replace` is for the cases where the overlay is being *corrected*
- * rather than opened — a file renamed under it, say. Pushing there would leave
- * a history entry pointing at a path that no longer resolves.
+ * `options.replace` is for the cases where no page is visited
+ * (docs/project-ui.md §5.1): a setting of the page on screen, an overlay being
+ * *corrected* — a file renamed under it, say, where a push would leave a
+ * history entry pointing at a path that no longer resolves — or a page the
+ * user's own action destroyed.
  */
 export function overlayToNavigation(
 	overlay: NonNullable<OverlayState>,
@@ -168,6 +257,15 @@ export function overlayToNavigation(
 ): NavigationResult {
 	const target: NavToOverlay = (() => {
 		switch (overlay.type) {
+			case "git":
+				return {
+					type: "overlay" as const,
+					worktree,
+					overlayType: "git" as const,
+					segment: overlay.segment,
+					history: overlay.history,
+					sessionId,
+				};
 			case "diff":
 				return {
 					type: "overlay" as const,
@@ -185,7 +283,16 @@ export function overlayToNavigation(
 					overlayType: "file" as const,
 					path: overlay.path,
 					sessionId,
-					edit: overlay.edit,
+					...fileModeOf(overlay),
+				};
+			case "branch":
+				return {
+					type: "overlay" as const,
+					worktree,
+					overlayType: "branch" as const,
+					ref: overlay.ref,
+					remote: overlay.remote,
+					sessionId,
 				};
 			case "commit":
 				return {
@@ -193,6 +300,7 @@ export function overlayToNavigation(
 					worktree,
 					overlayType: "commit" as const,
 					hash: overlay.hash,
+					...commitOriginOf(overlay),
 					sessionId,
 				};
 			case "commit-diff":
@@ -202,6 +310,7 @@ export function overlayToNavigation(
 					overlayType: "commit-diff" as const,
 					path: overlay.path,
 					hash: overlay.hash,
+					...commitOriginOf(overlay),
 					sessionId,
 				};
 			case "commit-file":
@@ -211,6 +320,7 @@ export function overlayToNavigation(
 					overlayType: "commit-file" as const,
 					path: overlay.path,
 					hash: overlay.hash,
+					...commitOriginOf(overlay),
 					sessionId,
 				};
 			case "settings":
@@ -328,12 +438,14 @@ export function buildNavigation(
 				assignSearch(result, target.sessionId, target.segment);
 			} else if (
 				target.overlayType === "settings" ||
+				target.overlayType === "git" ||
 				target.overlayType === "work-list" ||
 				target.overlayType === "agent-role-list" ||
 				target.overlayType === "schedule-list"
 			) {
 				const routeKeyMap = {
 					settings: "settings",
+					git: "git",
 					"work-list": "works",
 					"agent-role-list": "agentRoles",
 					"schedule-list": "schedules",
@@ -346,15 +458,29 @@ export function buildNavigation(
 				assignSearch(
 					result,
 					target.sessionId,
-					target.overlayType === "work-list" ? target.segment : undefined,
+					target.overlayType === "work-list" || target.overlayType === "git"
+						? target.segment
+						: undefined,
+					target.overlayType === "git" && target.segment === "history"
+						? target.history
+						: undefined,
 				);
+			} else if (target.overlayType === "branch") {
+				result.to = isMain ? ROUTES.branch : WT_ROUTES.branch;
+				result.params = { _splat: target.ref };
+				if (!isMain) {
+					result.params.worktree = target.worktree;
+				}
+				assignSearch(result, target.sessionId);
+				assignBranchSearch(result, target, false);
 			} else if (target.overlayType === "commit") {
 				result.to = isMain ? ROUTES.commit : WT_ROUTES.commit;
 				result.params = { _splat: target.hash };
 				if (!isMain) {
 					result.params.worktree = target.worktree;
 				}
-				assignSearch(result, target.sessionId);
+				assignSearch(result, target.sessionId, undefined, target.history);
+				if (target.branch) assignBranchSearch(result, target.branch, true);
 			} else if (
 				target.overlayType === "commit-diff" ||
 				target.overlayType === "commit-file"
@@ -366,7 +492,8 @@ export function buildNavigation(
 				if (!isMain) {
 					result.params.worktree = target.worktree;
 				}
-				assignSearch(result, target.sessionId);
+				assignSearch(result, target.sessionId, undefined, target.history);
+				if (target.branch) assignBranchSearch(result, target.branch, true);
 			} else {
 				const routeMap = {
 					staged: isMain ? ROUTES.staged : WT_ROUTES.staged,
@@ -379,15 +506,8 @@ export function buildNavigation(
 				if (!isMain) {
 					result.params.worktree = target.worktree;
 				}
-				if (target.sessionId || target.edit) {
-					result.search = {};
-					if (target.sessionId) {
-						result.search.session = target.sessionId;
-					}
-					if (target.edit) {
-						result.search.mode = "edit";
-					}
-				}
+				assignSearch(result, target.sessionId);
+				if (target.overlayType === "file") assignFileSearch(result, target);
 			}
 			break;
 		}

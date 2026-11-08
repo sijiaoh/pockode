@@ -1,4 +1,5 @@
 import { useMemo } from "react";
+import type { LineMark } from "../../lib/codeRows";
 import { readMarkdownFile } from "../../lib/frontmatter";
 import {
 	CodeHighlighter,
@@ -20,8 +21,17 @@ interface Props {
 	 * as a megabyte of source does.
 	 */
 	plain?: boolean;
+	/** Draw a Markdown file as its source, still highlighted, instead of rendering it. */
+	source?: boolean;
 	/** See `CodeHighlighter`. */
 	copyable?: boolean;
+	/** See `CodeHighlighter`; a rendered `.md` file has no lines to number. */
+	lineNumbers?: boolean;
+	/** See `CodeHighlighter`; only where `lineNumbers` is set. */
+	wrap?: boolean;
+	/** See `CodeHighlighter`; only where `lineNumbers` is set. */
+	mark?: LineMark | null;
+	onMarkEnd?: () => void;
 	/** Offered by a rendered `.md` file's images; takes a work-directory-relative path. */
 	onOpenFile?: (path: string) => void;
 }
@@ -30,10 +40,15 @@ export function FileContentDisplay({
 	content,
 	filePath,
 	plain,
+	source,
 	copyable,
+	lineNumbers = false,
+	wrap,
+	mark,
+	onMarkEnd,
 	onOpenFile,
 }: Props) {
-	if (!plain && filePath && isMarkdownFile(filePath)) {
+	if (filePath && rendersMarkdown(filePath, plain || source)) {
 		return (
 			<MarkdownFileContent
 				content={content}
@@ -44,11 +59,28 @@ export function FileContentDisplay({
 	}
 
 	const language = filePath ? getLanguageFromPath(filePath) : undefined;
-	return (
+	return lineNumbers ? (
+		<CodeHighlighter
+			language={language}
+			plain={plain}
+			copyable={copyable}
+			lineNumbers
+			wrap={wrap}
+			mark={mark}
+			onMarkEnd={onMarkEnd}
+		>
+			{content}
+		</CodeHighlighter>
+	) : (
 		<CodeHighlighter language={language} plain={plain} copyable={copyable}>
 			{content}
 		</CodeHighlighter>
 	);
+}
+
+/** Whether `FileContentDisplay` draws the file as Markdown rather than as text. */
+export function rendersMarkdown(filePath: string, plain?: boolean): boolean {
+	return !plain && isMarkdownFile(filePath);
 }
 
 function MarkdownFileContent({

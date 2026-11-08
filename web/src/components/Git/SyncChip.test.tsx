@@ -1,20 +1,25 @@
 import { render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import type { SyncOperation } from "../../lib/gitSyncStore";
+import type { SyncRun } from "../../lib/gitSyncStore";
 import { makeSync } from "../../test/gitFixtures";
 import type { GitSync } from "../../types/git";
+import { describeSyncStatus } from "../../utils/gitSyncStatus";
 import SyncChip from "./SyncChip";
 
-function renderChip(
-	sync: Partial<GitSync> = {},
-	running: SyncOperation | null = null,
-) {
+const IDLE: SyncRun = { running: null, outcome: null, auto: false };
+
+function renderChip(sync: Partial<GitSync> = {}, run: Partial<SyncRun> = {}) {
 	render(
-		<SyncChip sync={makeSync(sync)} running={running} onClick={vi.fn()} />,
+		<SyncChip
+			status={describeSyncStatus(makeSync(sync), { ...IDLE, ...run })}
+			onClick={vi.fn()}
+		/>,
 	);
 	return screen.getByRole("button");
 }
 
+// Which step the chip names, and in what order of priority, is
+// describeSyncStatus's; these cover how each is drawn and announced.
 describe("SyncChip", () => {
 	it("shows both counts when the branch has diverged", () => {
 		const chip = renderChip({ ahead: 1, behind: 2 });
@@ -25,9 +30,14 @@ describe("SyncChip", () => {
 		expect(chip).toHaveAccessibleName("Sync with remote, 2 to pull, 1 to push");
 	});
 
+	it("names the step and its count in one direction", () => {
+		expect(renderChip({ behind: 2 }).textContent).toBe("Pull2");
+	});
+
 	it("stays a button with nothing to do, since fetch lives behind it", () => {
 		const chip = renderChip();
 
+		expect(chip).toHaveTextContent("Synced");
 		expect(chip).toHaveAccessibleName("Sync with remote, up to date");
 		expect(chip).toBeEnabled();
 	});
@@ -36,18 +46,32 @@ describe("SyncChip", () => {
 		expect(renderChip({ upstream: "" })).toHaveTextContent("Publish");
 	});
 
-	// The counts behind a missing upstream ref are unknown, not zero.
-	it("offers to publish when the upstream ref is missing locally", () => {
-		expect(renderChip({ upstream_gone: true })).toHaveTextContent("Publish");
-	});
-
 	// Where a run whose sheet has been closed reports that it is still going.
 	// The counts stay put: nothing has refreshed them yet.
 	it("spins and says which operation runs", () => {
-		const chip = renderChip({ ahead: 1, behind: 2 }, "pull");
+		const chip = renderChip({ ahead: 1, behind: 2 }, { running: "pull" });
 
 		expect(chip).toHaveAccessibleName("Sync with remote, pulling…");
 		expect(chip.textContent).toBe("21");
 		expect(within(chip).getByRole("status")).toBeInTheDocument();
+	});
+
+	it("marks a failed automatic fetch and says so", () => {
+		const chip = renderChip(
+			{ behind: 2 },
+			{
+				auto: true,
+				outcome: {
+					kind: "error",
+					summary: "Automatic fetch failed.",
+					detail: "x",
+				},
+			},
+		);
+
+		expect(chip).toHaveAccessibleName(
+			"Sync with remote, 2 to pull, automatic fetch failed",
+		);
+		expect(chip.querySelector("svg.text-th-warning")).not.toBeNull();
 	});
 });

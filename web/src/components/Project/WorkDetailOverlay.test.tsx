@@ -77,11 +77,10 @@ const renderWithWork = (
 	return render(
 		<WorkDetailOverlay
 			workId="work-1"
-			onBack={vi.fn()}
+			segment="current"
+			onGoUp={vi.fn()}
 			onNavigateToSession={vi.fn()}
 			onOpenWorkDetail={vi.fn()}
-			onOpenScheduleDetail={vi.fn()}
-			onOpenScheduleList={vi.fn()}
 		/>,
 	);
 };
@@ -199,11 +198,10 @@ describe("WorkDetailOverlay", () => {
 		render(
 			<WorkDetailOverlay
 				workId="work-1"
-				onBack={vi.fn()}
+				segment="current"
+				onGoUp={vi.fn()}
 				onNavigateToSession={vi.fn()}
 				onOpenWorkDetail={vi.fn()}
-				onOpenScheduleDetail={vi.fn()}
-				onOpenScheduleList={vi.fn()}
 			/>,
 		);
 
@@ -245,11 +243,10 @@ describe("WorkDetailOverlay", () => {
 		render(
 			<WorkDetailOverlay
 				workId="work-1"
-				onBack={vi.fn()}
+				segment="current"
+				onGoUp={vi.fn()}
 				onNavigateToSession={vi.fn()}
 				onOpenWorkDetail={onOpenWorkDetail}
-				onOpenScheduleDetail={vi.fn()}
-				onOpenScheduleList={vi.fn()}
 			/>,
 		);
 
@@ -283,11 +280,10 @@ describe("WorkDetailOverlay", () => {
 		render(
 			<WorkDetailOverlay
 				workId="task-1"
-				onBack={vi.fn()}
+				segment="current"
+				onGoUp={vi.fn()}
 				onNavigateToSession={vi.fn()}
 				onOpenWorkDetail={vi.fn()}
-				onOpenScheduleDetail={vi.fn()}
-				onOpenScheduleList={vi.fn()}
 			/>,
 		);
 
@@ -312,11 +308,10 @@ describe("WorkDetailOverlay", () => {
 		render(
 			<WorkDetailOverlay
 				workId="work-1"
-				onBack={vi.fn()}
+				segment="current"
+				onGoUp={vi.fn()}
 				onNavigateToSession={vi.fn()}
 				onOpenWorkDetail={vi.fn()}
-				onOpenScheduleDetail={vi.fn()}
-				onOpenScheduleList={vi.fn()}
 			/>,
 		);
 
@@ -341,11 +336,10 @@ describe("WorkDetailOverlay", () => {
 		const { rerender } = render(
 			<WorkDetailOverlay
 				workId="work-1"
-				onBack={vi.fn()}
+				segment="current"
+				onGoUp={vi.fn()}
 				onNavigateToSession={vi.fn()}
 				onOpenWorkDetail={vi.fn()}
-				onOpenScheduleDetail={vi.fn()}
-				onOpenScheduleList={vi.fn()}
 			/>,
 		);
 		const heading = screen.getByRole("heading", { level: 1 });
@@ -364,11 +358,10 @@ describe("WorkDetailOverlay", () => {
 		rerender(
 			<WorkDetailOverlay
 				workId="work-1"
-				onBack={vi.fn()}
+				segment="current"
+				onGoUp={vi.fn()}
 				onNavigateToSession={vi.fn()}
 				onOpenWorkDetail={vi.fn()}
-				onOpenScheduleDetail={vi.fn()}
-				onOpenScheduleList={vi.fn()}
 			/>,
 		);
 		expect(
@@ -381,10 +374,15 @@ describe("WorkDetailOverlay", () => {
 	// from its story's Tasks section. It was already right before the rewrite and
 	// nothing asserted it, which is the shape of thing a rewrite drops.
 	describe("going back", () => {
-		it("leaves a story for the project list", async () => {
+		const storyPage = {
+			type: "work-detail",
+			workId: "story-1",
+			segment: "current",
+		};
+
+		it("goes up from a story to the segment it was opened from", async () => {
 			const user = userEvent.setup();
-			const onBack = vi.fn();
-			const onOpenWorkDetail = vi.fn();
+			const onGoUp = vi.fn();
 			mockUseWorkDetailSubscription.mockReturnValue({
 				work: createWork(),
 				activity: "idle",
@@ -398,22 +396,23 @@ describe("WorkDetailOverlay", () => {
 			render(
 				<WorkDetailOverlay
 					workId="work-1"
-					onBack={onBack}
+					segment="closed"
+					onGoUp={onGoUp}
 					onNavigateToSession={vi.fn()}
-					onOpenWorkDetail={onOpenWorkDetail}
-					onOpenScheduleDetail={vi.fn()}
-					onOpenScheduleList={vi.fn()}
+					onOpenWorkDetail={vi.fn()}
 				/>,
 			);
 
 			await user.click(screen.getByRole("button", { name: "Back to stories" }));
-			expect(onBack).toHaveBeenCalled();
-			expect(onOpenWorkDetail).not.toHaveBeenCalled();
+			expect(onGoUp).toHaveBeenCalledWith({
+				type: "work-list",
+				segment: "closed",
+			});
 		});
 
-		it("leaves a task for the story it belongs to", async () => {
+		it("goes up from a task to the story it belongs to", async () => {
 			const user = userEvent.setup();
-			const onBack = vi.fn();
+			const onGoUp = vi.fn();
 			const onOpenWorkDetail = vi.fn();
 			mockUseWorkDetailSubscription.mockReturnValue({
 				parent: {
@@ -437,19 +436,20 @@ describe("WorkDetailOverlay", () => {
 			render(
 				<WorkDetailOverlay
 					workId="work-1"
-					onBack={onBack}
+					segment="current"
+					onGoUp={onGoUp}
 					onNavigateToSession={vi.fn()}
 					onOpenWorkDetail={onOpenWorkDetail}
-					onOpenScheduleDetail={vi.fn()}
-					onOpenScheduleList={vi.fn()}
 				/>,
 			);
 
 			await user.click(
 				screen.getByRole("button", { name: "Back to parent story" }),
 			);
-			expect(onOpenWorkDetail).toHaveBeenCalledWith("story-1");
-			expect(onBack).not.toHaveBeenCalled();
+			// Up, not a push of the story: a pushed story left the task right
+			// behind it for the browser's Back to reopen.
+			expect(onGoUp).toHaveBeenCalledWith(storyPage);
+			expect(onOpenWorkDetail).not.toHaveBeenCalled();
 		});
 	});
 
@@ -457,6 +457,12 @@ describe("WorkDetailOverlay", () => {
 	// above the title and Delete all go to what the work belongs to, read off
 	// the data (docs/schedule-ui.md §2, §7).
 	describe("what the work belongs to", () => {
+		const storyPage = {
+			type: "work-detail",
+			workId: "story-1",
+			segment: "current",
+		};
+		const schedulePage = { type: "schedule-detail", scheduleId: "sched-1" };
 		const parentStory = {
 			id: "story-1",
 			type: "story" as const,
@@ -485,15 +491,11 @@ describe("WorkDetailOverlay", () => {
 				schedule: null,
 				...detail,
 			});
-			const nav = {
-				onBack: vi.fn(),
-				onOpenWorkDetail: vi.fn(),
-				onOpenScheduleDetail: vi.fn(),
-				onOpenScheduleList: vi.fn(),
-			};
+			const nav = { onGoUp: vi.fn(), onOpenWorkDetail: vi.fn() };
 			render(
 				<WorkDetailOverlay
 					workId="work-1"
+					segment="current"
 					onNavigateToSession={vi.fn()}
 					{...nav}
 				/>,
@@ -535,14 +537,13 @@ describe("WorkDetailOverlay", () => {
 					name: "Schedule: Nightly audit schedule",
 				}),
 			);
-			expect(nav.onOpenScheduleDetail).toHaveBeenCalledWith("sched-1");
+			expect(nav.onGoUp).toHaveBeenCalledWith(schedulePage);
 
-			nav.onOpenScheduleDetail.mockClear();
+			nav.onGoUp.mockClear();
 			await user.click(
 				screen.getByRole("button", { name: "Back to schedule" }),
 			);
-			expect(nav.onOpenScheduleDetail).toHaveBeenCalledWith("sched-1");
-			expect(nav.onBack).not.toHaveBeenCalled();
+			expect(nav.onGoUp).toHaveBeenCalledWith(schedulePage);
 		});
 
 		it("says a deleted schedule is gone, and goes back to the schedules", async () => {
@@ -555,8 +556,7 @@ describe("WorkDetailOverlay", () => {
 			await user.click(
 				screen.getByRole("button", { name: "Back to schedules" }),
 			);
-			expect(nav.onOpenScheduleList).toHaveBeenCalled();
-			expect(nav.onBack).not.toHaveBeenCalled();
+			expect(nav.onGoUp).toHaveBeenCalledWith({ type: "schedule-list" });
 		});
 
 		it("tells a job's description apart from its schedule's prompt", () => {
@@ -586,8 +586,7 @@ describe("WorkDetailOverlay", () => {
 				schedule: { id: "sched-1", title: "Nightly" },
 			});
 			await deleteFromPage();
-			expect(nav.onOpenScheduleDetail).toHaveBeenCalledWith("sched-1");
-			expect(nav.onBack).not.toHaveBeenCalled();
+			expect(nav.onGoUp).toHaveBeenCalledWith(schedulePage);
 		});
 
 		// A behaviour change, named in the design: Delete used to land a task on
@@ -598,8 +597,7 @@ describe("WorkDetailOverlay", () => {
 				createWork({ type: "task", story_id: "story-1" }),
 			);
 			await deleteFromPage();
-			expect(nav.onOpenWorkDetail).toHaveBeenCalledWith("story-1");
-			expect(nav.onBack).not.toHaveBeenCalled();
+			expect(nav.onGoUp).toHaveBeenCalledWith(storyPage);
 		});
 	});
 
@@ -634,11 +632,10 @@ describe("WorkDetailOverlay", () => {
 		render(
 			<WorkDetailOverlay
 				workId="work-1"
-				onBack={vi.fn()}
+				segment="current"
+				onGoUp={vi.fn()}
 				onNavigateToSession={vi.fn()}
 				onOpenWorkDetail={vi.fn()}
-				onOpenScheduleDetail={vi.fn()}
-				onOpenScheduleList={vi.fn()}
 			/>,
 		);
 
@@ -665,11 +662,10 @@ describe("WorkDetailOverlay", () => {
 		render(
 			<WorkDetailOverlay
 				workId="work-1"
-				onBack={vi.fn()}
+				segment="current"
+				onGoUp={vi.fn()}
 				onNavigateToSession={vi.fn()}
 				onOpenWorkDetail={vi.fn()}
-				onOpenScheduleDetail={vi.fn()}
-				onOpenScheduleList={vi.fn()}
 			/>,
 		);
 
@@ -696,11 +692,10 @@ describe("WorkDetailOverlay", () => {
 		render(
 			<WorkDetailOverlay
 				workId="work-1"
-				onBack={vi.fn()}
+				segment="current"
+				onGoUp={vi.fn()}
 				onNavigateToSession={vi.fn()}
 				onOpenWorkDetail={vi.fn()}
-				onOpenScheduleDetail={vi.fn()}
-				onOpenScheduleList={vi.fn()}
 			/>,
 		);
 
@@ -761,11 +756,10 @@ describe("WorkDetailOverlay", () => {
 			rerender(
 				<WorkDetailOverlay
 					workId={work.id}
-					onBack={vi.fn()}
+					segment="current"
+					onGoUp={vi.fn()}
 					onNavigateToSession={vi.fn()}
 					onOpenWorkDetail={vi.fn()}
-					onOpenScheduleDetail={vi.fn()}
-					onOpenScheduleList={vi.fn()}
 				/>,
 			);
 		};
@@ -947,11 +941,10 @@ describe("the unanswered questions section", () => {
 		render(
 			<WorkDetailOverlay
 				workId="work-1"
-				onBack={vi.fn()}
+				segment="current"
+				onGoUp={vi.fn()}
 				onNavigateToSession={onNavigateToSession}
 				onOpenWorkDetail={vi.fn()}
-				onOpenScheduleDetail={vi.fn()}
-				onOpenScheduleList={vi.fn()}
 			/>,
 		);
 
@@ -1005,11 +998,10 @@ describe("the watcher line", () => {
 		render(
 			<WorkDetailOverlay
 				workId="work-1"
-				onBack={vi.fn()}
+				segment="current"
+				onGoUp={vi.fn()}
 				onNavigateToSession={onNavigateToSession}
 				onOpenWorkDetail={vi.fn()}
-				onOpenScheduleDetail={vi.fn()}
-				onOpenScheduleList={vi.fn()}
 			/>,
 		);
 

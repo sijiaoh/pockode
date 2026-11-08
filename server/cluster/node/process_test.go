@@ -6,12 +6,15 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/pockode/server/internal/restarttest"
 	"github.com/pockode/server/internal/shutdown"
 	"github.com/pockode/server/internal/termtest"
+	"github.com/pockode/server/password"
 	"github.com/pockode/server/serverinfo"
 )
 
@@ -54,7 +57,7 @@ func TestProcessExists_NonexistentPID(t *testing.T) {
 // --- GetNodeStatus ---
 
 func TestGetNodeStatus_Stopped(t *testing.T) {
-	pm := NewProcessManager()
+	pm := NewProcessManager(os.Args[0])
 	node := Node{
 		ID:   "test-id",
 		Path: t.TempDir(), // Empty directory, no server.json
@@ -77,7 +80,7 @@ func TestGetNodeStatus_Stopped(t *testing.T) {
 }
 
 func TestGetNodeStatus_Running(t *testing.T) {
-	pm := NewProcessManager()
+	pm := NewProcessManager(os.Args[0])
 	nodeDir := t.TempDir()
 	writeServerJSON(t, nodeDir, serverinfo.Info{
 		PID:       os.Getpid(),
@@ -85,6 +88,7 @@ func TestGetNodeStatus_Running(t *testing.T) {
 		StartedAt: "2025-06-14T10:00:00Z",
 		LocalURL:  "http://localhost:9870",
 		RemoteURL: "https://example.com",
+		Version:   "1.2.3",
 	})
 
 	node := Node{
@@ -112,10 +116,13 @@ func TestGetNodeStatus_Running(t *testing.T) {
 	if status.RemoteURL == nil || *status.RemoteURL != "https://example.com" {
 		t.Errorf("status.RemoteURL = %v, want https://example.com", status.RemoteURL)
 	}
+	if status.Version == nil || *status.Version != "1.2.3" {
+		t.Errorf("status.Version = %v, want 1.2.3", status.Version)
+	}
 }
 
 func TestGetNodeStatus_Running_EmptyURLs(t *testing.T) {
-	pm := NewProcessManager()
+	pm := NewProcessManager(os.Args[0])
 	nodeDir := t.TempDir()
 	writeServerJSON(t, nodeDir, serverinfo.Info{
 		PID:       os.Getpid(),
@@ -139,10 +146,13 @@ func TestGetNodeStatus_Running_EmptyURLs(t *testing.T) {
 	if status.RemoteURL != nil {
 		t.Errorf("status.RemoteURL = %v, want nil for empty URL", status.RemoteURL)
 	}
+	if status.Version != nil {
+		t.Errorf("status.Version = %v, want nil for a node that predates the field", status.Version)
+	}
 }
 
 func TestGetNodeStatus_Stale_ProcessNotRunning(t *testing.T) {
-	pm := NewProcessManager()
+	pm := NewProcessManager(os.Args[0])
 	nodeDir := t.TempDir()
 	requireDeadPID(t)
 	writeServerJSON(t, nodeDir, serverinfo.Info{
@@ -167,7 +177,7 @@ func TestGetNodeStatus_Stale_ProcessNotRunning(t *testing.T) {
 }
 
 func TestGetNodeStatus_Stale_CorruptedJSON(t *testing.T) {
-	pm := NewProcessManager()
+	pm := NewProcessManager(os.Args[0])
 	nodeDir := t.TempDir()
 	writeRawServerJSON(t, nodeDir, []byte("not valid json"))
 
@@ -186,7 +196,7 @@ func TestGetNodeStatus_Stale_CorruptedJSON(t *testing.T) {
 // --- IsRunning ---
 
 func TestIsRunning_NotRunning(t *testing.T) {
-	pm := NewProcessManager()
+	pm := NewProcessManager(os.Args[0])
 	node := Node{
 		ID:   "test-id",
 		Path: t.TempDir(),
@@ -198,7 +208,7 @@ func TestIsRunning_NotRunning(t *testing.T) {
 }
 
 func TestIsRunning_Running(t *testing.T) {
-	pm := NewProcessManager()
+	pm := NewProcessManager(os.Args[0])
 	nodeDir := t.TempDir()
 	dataDir := filepath.Join(nodeDir, ".pockode")
 	if err := os.MkdirAll(dataDir, 0755); err != nil {
@@ -233,7 +243,7 @@ func TestIsRunning_Running(t *testing.T) {
 // --- Start ---
 
 func TestStart_EmptyPassword(t *testing.T) {
-	pm := NewProcessManager()
+	pm := NewProcessManager(os.Args[0])
 	node := Node{
 		ID:   "test-id",
 		Path: t.TempDir(),
@@ -249,7 +259,7 @@ func TestStart_EmptyPassword(t *testing.T) {
 }
 
 func TestStart_AlreadyRunning(t *testing.T) {
-	pm := NewProcessManager()
+	pm := NewProcessManager(os.Args[0])
 	nodeDir := t.TempDir()
 	writeServerJSON(t, nodeDir, serverinfo.Info{
 		PID:       os.Getpid(),
@@ -270,25 +280,33 @@ func TestStart_AlreadyRunning(t *testing.T) {
 
 // --- nodeEnv ---
 
-func TestNodeEnv_SetsPasswordAndPreservesBase(t *testing.T) {
-	base := []string{"PATH=/usr/bin", "HOME=/home/user"}
+// Stripping inherited credentials is password.WithEnv's, tested there.
+func TestNodeEnv_SetsPasswordAndMarkerAndPreservesBase(t *testing.T) {
+	base := []string{"PATH=/usr/bin", "HOME=/home/user", MarkerEnvVar + "=stale"}
 	env := nodeEnv(base, "secret-password")
 
-	for _, kv := range base {
-		if !containsEnv(env, kv) {
+	for _, kv := range base[:2] {
+		if !slices.Contains(env, kv) {
 			t.Errorf("nodeEnv dropped base entry %q", kv)
 		}
 	}
-	if !containsEnv(env, "POCKODE_PASSWORD=secret-password") {
+	if !slices.Contains(env, "POCKODE_PASSWORD=secret-password") {
 		t.Errorf("nodeEnv did not set the password env var, got %v", env)
 	}
-	if !containsEnv(env, MarkerEnvVar+"=1") {
-		t.Errorf("nodeEnv did not mark the child as a node, got %v", env)
+	markers := 0
+	for _, kv := range env {
+		if strings.HasPrefix(kv, MarkerEnvVar+"=") {
+			markers++
+		}
+	}
+	if markers != 1 || !slices.Contains(env, MarkerEnvVar+"=1") {
+		t.Errorf("nodeEnv did not mark the child as a node exactly once, got %v", env)
 	}
 }
 
 // The marker is a claim about the process it was set for, never about whatever
-// that process goes on to spawn.
+// that process goes on to spawn — but it is the same claim about the process
+// that replaces it on a restart.
 func TestTakeMarker(t *testing.T) {
 	t.Setenv(MarkerEnvVar, "1")
 	if !TakeMarker() {
@@ -300,44 +318,16 @@ func TestTakeMarker(t *testing.T) {
 	if TakeMarker() {
 		t.Error("TakeMarker() = true once the marker was taken")
 	}
-}
-
-// A child that inherited either spelling would be given two answers to the same
-// question, and which one it obeys depends on its own build's precedence rules.
-func TestNodeEnv_OverridesInheritedCredentials(t *testing.T) {
-	base := []string{"POCKODE_PASSWORD=stale", "POCKODE_AUTH_TOKEN=stale-legacy", "PATH=/usr/bin"}
-	env := nodeEnv(base, "fresh")
-
-	count := 0
-	for _, kv := range env {
-		if strings.HasPrefix(kv, "POCKODE_AUTH_TOKEN=") {
-			t.Errorf("nodeEnv kept the deprecated env var %q", kv)
-		}
-		if strings.HasPrefix(kv, "POCKODE_PASSWORD=") {
-			count++
-			if kv != "POCKODE_PASSWORD=fresh" {
-				t.Errorf("password env = %q, want POCKODE_PASSWORD=fresh", kv)
-			}
-		}
+	RestoreMarker()
+	if !TakeMarker() {
+		t.Error("TakeMarker() = false after RestoreMarker")
 	}
-	if count != 1 {
-		t.Errorf("expected exactly one password env entry, got %d", count)
-	}
-}
-
-func containsEnv(env []string, kv string) bool {
-	for _, e := range env {
-		if e == kv {
-			return true
-		}
-	}
-	return false
 }
 
 // --- Stop ---
 
 func TestStop_NotRunning(t *testing.T) {
-	pm := NewProcessManager()
+	pm := NewProcessManager(os.Args[0])
 	node := Node{
 		ID:   "test-id",
 		Path: t.TempDir(),
@@ -350,7 +340,7 @@ func TestStop_NotRunning(t *testing.T) {
 }
 
 func TestStop_StaleProcess(t *testing.T) {
-	pm := NewProcessManager()
+	pm := NewProcessManager(os.Args[0])
 	nodeDir := t.TempDir()
 	requireDeadPID(t)
 	serverJSONPath := writeServerJSON(t, nodeDir, serverinfo.Info{
@@ -408,9 +398,18 @@ const (
 	// when asked, like helperListens.
 	helperWritesServerInfo = "writes-server-info"
 
+	// helperRestarts waits for a restart request and records that it arrived
+	// in the file named by helperRestartedEnv, then exits — the part of a
+	// node's restart Restart is responsible for.
+	helperRestarts     = "restarts"
+	helperRestartedEnv = "POCKODE_TEST_NODE_HELPER_RESTARTED"
+
 	// helperDataDirEnv names the data directory helperWritesServerInfo writes
 	// its server.json into.
 	helperDataDirEnv = "POCKODE_TEST_NODE_HELPER_DATA_DIR"
+	// helperEnvReportEnv, when set, names a file helperWritesServerInfo writes
+	// the password and node marker it was started with into, one per line.
+	helperEnvReportEnv = "POCKODE_TEST_NODE_HELPER_ENV_REPORT"
 	// serverInfoDelay is how long that helper waits first. It has to outlast the
 	// first read in waitForServerInfo (100ms) by enough that a machine under
 	// load cannot reorder the two, while staying well inside the retries that
@@ -430,7 +429,9 @@ var platformHelperModes = map[string]func(){}
 func TestMain(m *testing.M) {
 	mode := os.Getenv(helperEnv)
 	if mode == "" {
-		os.Exit(m.Run())
+		// The test binary also stands in for the installed executable that
+		// Restart checks before it asks a node (see restarttest).
+		restarttest.Main(m)
 	}
 
 	l := shutdown.Listen()
@@ -447,13 +448,28 @@ func TestMain(m *testing.M) {
 	case helperReports:
 		// The report was the whole job.
 	case helperWritesServerInfo:
+		if path := os.Getenv(helperEnvReportEnv); path != "" {
+			report := os.Getenv(password.EnvVar) + "\n" + os.Getenv(MarkerEnvVar)
+			if err := os.WriteFile(path, []byte(report), 0600); err != nil {
+				panic(err)
+			}
+		}
 		time.Sleep(serverInfoDelay)
-		if err := serverinfo.Write(os.Getenv(helperDataDirEnv), 9871, "http://localhost:9871", "", ""); err != nil {
+		if err := serverinfo.Write(os.Getenv(helperDataDirEnv), "1.2.3", 9871, "http://localhost:9871", "", ""); err != nil {
 			panic(err)
 		}
 		// Then behave like helperListens, so the test can stop it the way the
 		// cluster stops a node instead of leaving it to the backstop.
 		select {
+		case <-l.Done():
+		case <-time.After(helperLifetime):
+		}
+	case helperRestarts:
+		select {
+		case <-l.Restarts():
+			if err := os.WriteFile(os.Getenv(helperRestartedEnv), nil, 0600); err != nil {
+				panic(err)
+			}
 		case <-l.Done():
 		case <-time.After(helperLifetime):
 		}
@@ -491,7 +507,7 @@ func TestStop_TerminatesProcessAndClearsServerInfo(t *testing.T) {
 				StartedAt: "2025-06-14T10:00:00Z",
 			})
 
-			if err := NewProcessManager().Stop(Node{ID: "test-id", Path: nodeDir}); err != nil {
+			if err := NewProcessManager(os.Args[0]).Stop(Node{ID: "test-id", Path: nodeDir}); err != nil {
 				t.Fatalf("Stop() = %v, want nil", err)
 			}
 
@@ -620,14 +636,14 @@ func TestCleanup_RemovesServerInfoThatIsAllThatIsLeftOfANode(t *testing.T) {
 			serverJSONPath := tc.write(t, nodeDir)
 			n := Node{ID: "test-id", Path: nodeDir}
 
-			if err := NewProcessManager().Cleanup(n); err != nil {
+			if err := NewProcessManager(os.Args[0]).Cleanup(n); err != nil {
 				t.Fatalf("Cleanup() = %v, want nil", err)
 			}
 
 			if _, err := os.Stat(serverJSONPath); !os.IsNotExist(err) {
 				t.Errorf("server.json still present after Cleanup: %v", err)
 			}
-			if status := NewProcessManager().GetNodeStatus(n); status.Status != StatusStopped {
+			if status := NewProcessManager(os.Args[0]).GetNodeStatus(n); status.Status != StatusStopped {
 				t.Errorf("status after Cleanup = %q, want %q", status.Status, StatusStopped)
 			}
 		})
@@ -640,7 +656,7 @@ func TestCleanup_RemovesServerInfoThatIsAllThatIsLeftOfANode(t *testing.T) {
 func TestCleanup_OnANodeWithNothingToCleanUp(t *testing.T) {
 	n := Node{ID: "test-id", Path: t.TempDir()}
 
-	if err := NewProcessManager().Cleanup(n); err != nil {
+	if err := NewProcessManager(os.Args[0]).Cleanup(n); err != nil {
 		t.Fatalf("Cleanup() on a stopped node = %v, want nil", err)
 	}
 }
@@ -652,7 +668,7 @@ func TestCleanup_RefusesARunningNode(t *testing.T) {
 	nodeDir := t.TempDir()
 	serverJSONPath := writeServerJSON(t, nodeDir, serverinfo.Info{PID: os.Getpid(), Port: 9870})
 
-	err := NewProcessManager().Cleanup(Node{ID: "test-id", Path: nodeDir})
+	err := NewProcessManager(os.Args[0]).Cleanup(Node{ID: "test-id", Path: nodeDir})
 	if !errors.Is(err, ErrNodeStillRunning) {
 		t.Errorf("Cleanup() on a running node = %v, want ErrNodeStillRunning", err)
 	}
@@ -677,12 +693,12 @@ func TestStart_WaitsForTheNodeItStartedRatherThanTheFileItFound(t *testing.T) {
 	n := Node{ID: "test-id", Path: nodeDir}
 
 	// The helper inherits these: Start hands the child os.Environ() plus the
-	// node's password.
+	// node's password and marker.
 	t.Setenv(helperEnv, helperWritesServerInfo)
 	t.Setenv(helperReadyEnv, filepath.Join(t.TempDir(), "helper-ready"))
 	t.Setenv(helperDataDirEnv, dataDir)
 
-	pm := &ProcessManager{executablePath: os.Args[0]}
+	pm := NewProcessManager(os.Args[0])
 	t.Cleanup(func() { _ = pm.Stop(n) })
 
 	if err := pm.Start(n, "test-password"); err != nil {
@@ -695,6 +711,38 @@ func TestStart_WaitsForTheNodeItStartedRatherThanTheFileItFound(t *testing.T) {
 	}
 	if status.Port == nil || *status.Port != 9871 {
 		t.Errorf("status.Port = %v, want the started node's 9871, not the stale file's", status.Port)
+	}
+}
+
+// What a node is started with is what it reads at startup: the password it
+// serves under, and the marker that makes it list itself as a node in a linked
+// cloud account.
+func TestStart_HandsTheNodeItsPasswordAndMarker(t *testing.T) {
+	nodeDir := t.TempDir()
+	n := Node{ID: "test-id", Path: nodeDir}
+	reportPath := filepath.Join(t.TempDir(), "env-report")
+
+	t.Setenv(helperEnv, helperWritesServerInfo)
+	t.Setenv(helperReadyEnv, filepath.Join(t.TempDir(), "helper-ready"))
+	t.Setenv(helperDataDirEnv, filepath.Join(nodeDir, ".pockode"))
+	t.Setenv(helperEnvReportEnv, reportPath)
+	// What the cluster itself inherited must not reach the node.
+	t.Setenv(password.EnvVar, "cluster-password")
+	t.Setenv(MarkerEnvVar, "stale")
+
+	pm := NewProcessManager(os.Args[0])
+	t.Cleanup(func() { _ = pm.Stop(n) })
+
+	if err := pm.Start(n, "node-password"); err != nil {
+		t.Fatalf("Start() = %v, want nil", err)
+	}
+
+	report, err := os.ReadFile(reportPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := string(report), "node-password\n1"; got != want {
+		t.Errorf("node started with password and marker %q, want %q", got, want)
 	}
 }
 

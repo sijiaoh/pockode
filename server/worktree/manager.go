@@ -71,6 +71,11 @@ func (m *Manager) AgentForkSupports() map[session.AgentType]agent.ForkSupport {
 	return m.agents.ForkSupports()
 }
 
+// AgentOneShot returns the registered agent of agentType as a one-shot runner.
+func (m *Manager) AgentOneShot(agentType session.AgentType) (agent.OneShotRunner, error) {
+	return m.agents.OneShot(agentType)
+}
+
 func (m *Manager) Registry() *Registry {
 	return m.registry
 }
@@ -440,6 +445,14 @@ func (m *Manager) AttachmentDataDir(name, sessionID string) (string, error) {
 	return m.StoredAttachmentDataDir(name, sessionID)
 }
 
+// PageDataDir is the data directory a page the agent of one of the named
+// worktree's sessions draws is stored under (see package htmlpage). The same
+// vouching as AttachmentDataDir, for the same reason: the session id becomes a
+// path, and a session of a deleted worktree is never continued.
+func (m *Manager) PageDataDir(name, sessionID string) (string, error) {
+	return m.AttachmentDataDir(name, sessionID)
+}
+
 // StoredAttachmentDataDir is the data directory one of the named worktree's
 // sessions keeps its attachments under, once the session is known to be stored
 // there — whether or not the worktree still exists, since a deleted worktree's
@@ -480,6 +493,34 @@ func (m *Manager) AgentProcessCount(agentType session.AgentType) int {
 		n += pm.AgentProcessCount(agentType)
 	}
 	return n
+}
+
+// RunningTurns is how many sessions, across every worktree, have a turn that
+// stopping their process would end: one under way, running or blocked, or a
+// permission request still waiting for an answer after its turn has ended.
+// Only loaded worktrees are looked at, which is exact for the reason
+// StopSession gives — every such session has a process.
+func (m *Manager) RunningTurns() (int, error) {
+	m.mu.Lock()
+	worktrees := make([]*Worktree, 0, len(m.worktrees))
+	for _, wt := range m.worktrees {
+		worktrees = append(worktrees, wt)
+	}
+	m.mu.Unlock()
+
+	n := 0
+	for _, wt := range worktrees {
+		metas, err := wt.SessionStore.List()
+		if err != nil {
+			return 0, fmt.Errorf("list sessions of worktree %q: %w", wt.Name, err)
+		}
+		for _, meta := range metas {
+			if meta.Turn.InProgress() || meta.Turn.AwaitingUserAnswer() {
+				n++
+			}
+		}
+	}
+	return n, nil
 }
 
 // loaded reports the worktree of that name only if it already exists, without

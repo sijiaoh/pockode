@@ -9,6 +9,7 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import { useLockBodyScroll } from "../hooks/useLockBodyScroll.ts";
+import { CoverLayerContext, useCoverPage } from "../hooks/usePageCover.ts";
 import { useIsExpanded } from "../hooks/useResponsive.ts";
 import { useCloseWhenCovered } from "./CoveredSurface.tsx";
 
@@ -167,6 +168,8 @@ export function Sheet({
 	}, [onClose, dismissible]);
 
 	useLockBodyScroll();
+	// Back closes the sheet as ✕ does, and is refused while ✕ is.
+	const layer = useCoverPage(true, { onBack: onClose, refuse: !dismissible });
 	useSheetFocus(sheetRef, initialFocusRef);
 	// This sheet is portalled to the body, so nothing its opener does to put
 	// itself away reaches it. Closing with the surface it was raised from is
@@ -219,7 +222,9 @@ export function Sheet({
 		<>
 			<div className="min-h-0 flex-1 overflow-y-auto">
 				<InSheetContext.Provider value={true}>
-					{children}
+					<CoverLayerContext.Provider value={layer}>
+						{children}
+					</CoverLayerContext.Provider>
 				</InSheetContext.Provider>
 			</div>
 			{footer && (

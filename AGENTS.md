@@ -67,9 +67,9 @@ The `packages/shared` package contains UI components, hooks, stores, and utiliti
 
 **Available exports**:
 - Components: `Spinner`, `ConfirmDialog`, `Sheet`, `ReconnectBanner`, `CoveredSurface`
-- Hooks: `useMediaQuery`, `useOutsideClick`, `useIsExpanded`, `useHasCoarsePointer`, `useHasFinePointer`, `useCoverPage`, `useIsPageCovered`, `useSecondsUntil`, `useIsInSheet` (whether a `Sheet` is around — something that would open a sheet of its own offers something else there, since sheets do not nest)
+- Hooks: `useMediaQuery`, `useOutsideClick`, `useIsExpanded`, `useHasCoarsePointer`, `useHasFinePointer`, `useCoverPage` (with `LayerHistoryContext`), `useIsPageCovered`, `useIsDrawnOver` (whether a layer went up over the caller — over the page, or after the `Sheet` it is drawn in; what a page's frame shields itself on), `useSecondsUntil`, `useIsInSheet` (whether a `Sheet` is around — something that would open a sheet of its own offers something else there, since sheets do not nest)
 - Stores: `createAuthStore` (factory function for the auth store, with configurable localStorage keys)
-- Utils: `getWebSocketUrl`, `BREAKPOINTS`, `MEDIA_QUERIES`, `hasCoarsePointer`, `credentialParams` / `authFailureReason` / `authRetryAfterMs` (the `auth` RPC contract both frontends share with the server — see [docs/code/authentication.md](docs/code/authentication.md))
+- Utils: `createLayerHistory` (the layers' history entries, over an app's own history — see `useCoverPage`), `getWebSocketUrl`, `BREAKPOINTS`, `MEDIA_QUERIES`, `hasCoarsePointer`, `credentialParams` / `authFailureReason` / `authRetryAfterMs` (the `auth` RPC contract both frontends share with the server — see [docs/code/authentication.md](docs/code/authentication.md)), `InstalledVersion` / `restartRefusedReason` / `RESTART_NOT_BACK_MS` (the `server.version` / `server.restart` contract, likewise — see [docs/restart-ui.md](docs/restart-ui.md)), `ServerUpdateCheck` / `UpdateCandidate` / `updateFailedReason` / `updateFailureKind` / `updateCandidateName` / `UPDATE_BUDGET_MS` / `UPDATE_RPC_TIMEOUT_MS` (the `server.update_check` / `server.update` contract, and what each failure reason means for the row in both frontends — see [docs/self-update-ui.md](docs/self-update-ui.md))
 - `@pockode/shared/vitest`: `vitestRuntimeOptions` — the worker and timeout settings every Vitest config spreads in (both `vitest.config.ts` files and `web/vitest.browser.config.ts`). A separate subpath because it needs Node types, which the browser entry must not pull in; it lives outside `src` for the same reason. It is the one plain-JavaScript file here: vite leaves a config's bare imports external, so Node loads this one itself, and Node before 22.18 — which the frontends' `engines: >=22` still admit — cannot read `.ts`.
 
 These components carry Tailwind classes, which puts two obligations on the
@@ -97,18 +97,26 @@ and leave the page permanently unscrollable.
 Anything in this package that locks the page uses it; exporting it would invite
 a third, separate counter, which is the bug itself.
 
-Whether something is drawn over the page is a separate count, because not
+Whether something is drawn over the page is a separate registry, because not
 everything that covers the page locks it: a dropdown or a drawer can leave the
-page scrollable and still be what a key press is meant for. `useCoverPage(active)`
-registers a layer and `useIsPageCovered` reads whether any is up, for a listener
-that has to stand down while one is. Locking the body registers a layer too,
-so `Sheet` and `ConfirmDialog` are counted without asking; a panel of a
-project's own that leaves the body alone calls `useCoverPage(isOpen)`. It *is*
-exported, and that is safe where the scroll lock is not: the export is the one
-counter, balanced by each caller's own effect cleanup, so there is nothing to
-write by hand. The rule it carries is the converse — a panel tracking "open"
-anywhere else is invisible to the listener reading this one. "Covered" here is
-not `CoveredSurface`'s: that one is a surface taken off the screen.
+page scrollable and still be what a key press — and the back gesture — is meant
+for. `useCoverPage(active, { onBack, refuse? })` registers a layer:
+`useIsPageCovered` reads whether any is up, for a listener that has to stand
+down while one is, and the layer holds a history entry of its own while up, so
+Back closes the topmost layer by calling its `onBack` — its plain close, and
+nothing else, since a held navigation calls it too
+([docs/project-ui.md §5.2](docs/project-ui.md#52-back-closes-the-topmost-layer)).
+`Sheet` and `ConfirmDialog` call it themselves (Back is ✕ and Cancel, refused
+while a sheet is not dismissible or a dialog's action runs); a panel of a project's own calls it with its close. The
+entries go through whatever the app puts in `LayerHistoryContext` —
+`createLayerHistory` over an adapter to its history; without one, a unit test,
+a layer holds no entry and is still counted. It *is* exported, and that is
+safe where the scroll lock is not: the export is the one registry, balanced by
+each caller's own effect cleanup, so there is nothing to write by hand. The
+rule it carries is the converse — a panel tracking "open" anywhere else is
+invisible to the listener reading this one, and Back leaves the page under it.
+"Covered" here is not `CoveredSurface`'s: that one is a surface taken off the
+screen.
 
 `CoveredSurface` marks a subtree that something else can be drawn over, and
 every overlay this package portals to `document.body` closes when it is: a

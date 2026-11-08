@@ -15,13 +15,13 @@ export function useGitDiscard() {
 
 	return useMutation({
 		mutationFn: (paths: string[]) => discard(paths),
-		// onSettled rather than onSuccess, unlike the panel's other mutations: a
+		// onSettled rather than onSuccess, unlike the workspace's other mutations: a
 		// discard is several git invocations, and a failure part-way through has
 		// already removed files. Refreshing only on success would leave the list
 		// showing files that are gone until GitWatcher's next poll.
 		//
 		// Deliberately not returned: react-query would fold the refetch into the
-		// mutation's outcome, and the panel would report a discard that did happen
+		// mutation's outcome, and the workspace would report a discard that did happen
 		// as a failure because the refresh behind it failed.
 		onSettled: () => {
 			invalidateGitQueries(queryClient);

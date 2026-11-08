@@ -51,6 +51,7 @@ cliauth/                # AI CLI 登录状态查询、远程登录流程与登�
 cliupdate/              # AI CLI 新版本检查与更新（跑 CLI 自己的 update，再核对版本；各 CLI 的定义在 agent/*/update.go，见 docs/code/cli-update.md）
 cloudcred/              # 机器凭据 cloud.json（OS 用户配置目录下、本 OS 用户的所有进程共享；只对签发它的 cloud 使用，见 docs/code/cloud-account.md）
 cloudlogin/             # `pockode login` / `pockode logout`：RFC 8628 device flow 关联机器、吊销并删除 cloud.json
+commitdraft/            # 为暂存内容起草提交信息：提示词 + 一次性 AI 调用（见 docs/git.md#drafting-a-commit-message）
 command/                # 命令存储 + Pockode 命令（`/pockode-*` 的解析与展开，见 docs/pockode-commands.md）
 contents/               # 文件内容获取
 datadir/                # 默认数据目录（<work>/.pockode）自带的 .gitignore（首行标记在时归 Pockode 管理、每次启动覆盖为当前版本的内容，用户删掉标记即接管，见 docs/projects/data-model.md）
@@ -58,14 +59,16 @@ filestore/              # 文件存储基础设施（原子写 / 文件锁 / JSO
 filetransfer/           # 文件上传 / 下载 HTTP 端点；以 capability 为凭据的 /api/raw（含 HTML 页面的外部主机策略与上报脚本注入）
 fuzzy/                  # fzf 的模糊匹配、评分与扩展搜索语法（移植自 fzf，MIT；评分方案由调用方传入，纯算法无 IO，见 docs/code/fuzzy-matching.md）
 git/                    # Git 操作
+htmlpage/               # 代理在聊天里画的页面（html_render 等）：按 session 存不可变快照，id 为 p1、p2…；结果记录上的 html_page 由 process 打上；页面发给代理的 action（`Action` / `ActionText`，chat.html_action 用）也在这里（见 docs/code/work-system.md#rendering-tool）
 internal/cmd/marketingbanner/  # 打印启动横幅供营销视频截取（不是服务器的一部分；放在本模块里是为了让 CI 的 vet/build 覆盖它，见 docs/marketing-assets.md §3.3）
 internal/cmd/thirdpartynotices/  # 打印服务器二进制的第三方许可声明：按 `go list -deps` 得出的实际链接模块 + Go 标准库 + 手工条目（`manual.go`，fzf 移植）；许可证无法识别时非零退出（不是服务器的一部分，licensecheck 不进二进制；来龙去脉与报错处理见 scripts/README.md「Third-party notices」）
 logger/                 # 结构化日志 (slog)
 mcp/                    # MCP：stdio 代理客户端 + 服务端 Executor/APIHandler
 middleware/             # 密码 / session token 认证中间件
-password/               # 服务器密码的来源（--password / POCKODE_PASSWORD + 弃用别名）与比较（各认证入口共用）
+password/               # 服务器密码的来源（--password / POCKODE_PASSWORD + 弃用别名）与比较（各认证入口共用）；经环境变量把密码交给另一个 pockode 进程（WithEnv：集群启动的节点、重启后的自己；ClearFlags 清空重放命令行里的密码参数）
 process/                # 进程管理器
 relay/                  # NAT 穿透：yamux over WSS 隧道 + 本地反向代理 + 端口预览（认证与转发）
+selfinstall/            # 把一个 release 装到磁盘上的可执行文件位置（下载 → 用同一 release 的 checksums.txt 校验 → 跑 --version → rename 替换；只换文件不重启，同一 OS 用户同时只有一次安装；server 与 cluster 共用，见 docs/code/self-update.md）
 serverinfo/             # 服务器运行时信息（server.json）
 rpc/                    # RPC 消息类型定义
 session/                # Session 存储 + 清理
@@ -97,13 +100,17 @@ Windows 与 darwin/linux 一样是发布目标（产物见 [docs/platforms.md](.
 | `filestore/rename.go` | `rename_{unix,windows}.go` — Windows 上替换目标可能被临时占用，需重试 |
 | `internal/proctree/proctree.go` | `tree_{unix,windows}.go` — 进程树终止：进程组 / Job Object，Windows 另加 `CREATE_NO_WINDOW` |
 | `git/command.go` | `terminate_{unix,windows}.go` — 超时的 git 怎么停：SIGTERM（git 自己清锁文件）/ 杀进程树（Windows 没有可发的停止请求）|
-| `agent/command.go` | `command_{unix,windows}.go` — AI CLI 的查找兜底目录 + `.cmd` 包装器的命令行构造 |
+| `agent/command.go` | `command_{unix,windows}.go` — AI CLI 的平台通用兜底目录（Windows 的 npm 目录）、PATH 变量名的大小写、自带环境时补上 `PWD`（只有 unix 用它）+ `.cmd` 包装器的命令行构造 |
+| `agent/codex/install_dir.go` | `install_dir_{unix,windows}.go` — Codex 官方安装器的默认目录：`~/.local/bin` / `%LOCALAPPDATA%\Programs\OpenAI\Codex\bin` |
+| `cliupdate/install.go` | `installer_{unix,windows}.go` — 装缺失的 CLI 时跑哪份官方安装脚本：各 CLI 在 `agent/*/update.go` 里同时声明 `Unix`（`install.sh`，bash / sh）与 `Windows`（`install.ps1`，`cliupdate.PowerShell`），这里按平台取一份 |
 | `agent/codex/view_image.go` | `fileuri_{unix,windows}.go` — `file://` URI 的 path 段转原生路径：Windows 上盘符是 URI 语法里的又一段，前导斜杠要去掉 |
 | `worktree/setup.go` | `hook_shell_{unix,windows}.go` — setup hook 的解释器（Windows 无 bash，探测 Git for Windows） |
 | `internal/pathutil/pathutil.go` | `equal_{unix,windows}.go` — Windows 路径比较大小写不敏感 |
 | `internal/fsperm/fsperm.go` | `fsperm_{unix,windows}.go` — 0700/0600 mode 位 / 显式 DACL |
 | `cluster/node/process.go` | `process_{unix,windows}.go` — 与终端脱钩（`Setsid` / `CREATE_NO_WINDOW`）、优雅关闭与强杀的等待方式 |
-| `internal/shutdown/shutdown.go` | `request_{unix,windows}.go` — SIGTERM / 命名事件 |
+| `internal/shutdown/shutdown.go` | `request_{unix,windows}.go` — 退出请求 SIGTERM / 命名事件 `pockode-shutdown-<pid>`；重启请求 SIGUSR1 / 命名事件 `pockode-restart-<pid>`（`RequestRestart`，Windows 上事件不存在即 `ErrRestartUnsupported`） |
+| `internal/restart/restart.go` | `replace_{unix,windows}.go` — 自我重启：原地 exec（PID、终端、session 不变）/ 后继进程（前台终端里等它并沿用退出码，否则直接退出）；探测版本的子进程在 Windows 上加 `CREATE_NO_WINDOW` |
+| `selfinstall/selfinstall.go` | `replace_{unix,windows}.go` — 换上新的可执行文件：一次 rename 覆盖 / 运行中的 exe 只能改名：先等 Defender 放开新文件（把它改个名，`filestore.RenamePatiently` 退避重试），再背靠背地把旧 exe 改成带时间戳的 `.old`（之前的可能还被别的节点占用）、把新文件改进来，失败就改回去——这样路径上没有可执行文件的空档只有两次 rename 那么长；容器检测与目录不可写时给用户的提示也按平台分 |
 | `filetransfer/folder.go` | `folder_{unix,windows}.go` — 文件夹上传 merge 覆盖文件、文件夹下载读取文件时以非阻塞方式打开（防止换成 fifo 后卡死；Windows 工作目录里没有 fifo）、识别文件系统自己拒绝的名字（unix 的 `ENAMETOOLONG` / `EINVAL` / `EILSEQ`，Windows 的 `ERROR_INVALID_NAME` / `ERROR_FILENAME_EXCED_RANGE`）|
 | `contents/within.go`、`filetransfer/raw.go` | `contents/realname_{unix,windows}.go`（`contents.ResolvedName`）— `contents.OpenDirWithin` 要求跟随链接后的真实路径仍在工作目录内（`file.move` 的两个目录、文件夹上传的目标目录与文件夹下载的文件夹）；根 capability（`scope: "root"`）拒绝敏感名单（任意层级的 `.git`、`.env`、`.env.*`、`.envrc`、`.envrc.*`，所有平台都不区分大小写）、数据目录和其他 worktree 时也看它：unix 上 `EvalSymlinks` 跟完所有链接再核对与打开的是同一个文件；Windows 取句柄的最终长名，8.3 短名（`ENV~1`）是 `.env` 的另一种写法 |
 
@@ -118,7 +125,7 @@ Windows 与 darwin/linux 一样是发布目标（产物见 [docs/platforms.md](.
 
 参数一律是**原生路径**。外部来的值默认不是：git 的输出、手写的设置、我们自己 API 里的路径都用 `/`，进来时 `filepath.FromSlash`，出去时 `filepath.ToSlash`。
 
-**启动 AI CLI 一律走 `agent.Command`**，不要直接 `exec.Command(claude.Binary, …)`。它做两件各自都容易漏掉的事：`lookupBinary` 在 PATH 之外补上安装器的默认目录（Windows 上 PATH 是进程启动时定死的，装在 pockode.exe 启动之后的 CLI 就是看不见的），以及在可执行文件是 npm 装出来的 `.cmd` 时自己构造命令行——Windows 跑批处理文件是把命令行交给 cmd.exe，而 `os/exec` 按 `CommandLineToArgvW` 的规则加引号，两套规则对不上（Go 只在文档里提了一句，没有修，见 `agent/cmdline.go`）。需要能放弃的短命探测（如 `codex --help`）走 `agent.CommandContext`，它是同一条路加一个 ctx；跑完就要输出、超时要连子孙一起杀掉的一次性命令（如 `claude auth status`）走 `agent.Run`，它是跑到结束的 `agent.StartProcess`；会话进程走 `agent.StartProcess`，那边自己持有生命周期；要给 CLI 额外加环境变量时用 `agent.StartProcessEnv`（如 `claude auth login` 的 `BROWSER`）。
+**启动 AI CLI 一律走 `agent.Command`**，不要直接 `exec.Command(claude.Binary, …)`。它做几件各自都容易漏掉的事：`lookupBinary` 先查 PATH（找到就用它，环境不动），PATH 上完全没有时才查该 CLI 官方安装器的目录（各 CLI 包在 `init` 里用 `agent.RegisterInstallDir` 声明自己的）和平台通用的兜底目录（PATH 是进程启动时定死的，安装器改了 shell profile / 用户 PATH 之后、pockode 重启之前的 CLI 就是看不见的），从那里找到时把该目录**追加**到 CLI 子进程 PATH 的末尾（所以给 CLI 加环境变量要基于 `cmd.Environ()` 而不是 `os.Environ()`），以及在可执行文件是 npm 装出来的 `.cmd` 时自己构造命令行——Windows 跑批处理文件是把命令行交给 cmd.exe，而 `os/exec` 按 `CommandLineToArgvW` 的规则加引号，两套规则对不上（Go 只在文档里提了一句，没有修，见 `agent/cmdline.go`）。需要能放弃的短命探测（如 `codex --help`）走 `agent.CommandContext`，它是同一条路加一个 ctx；跑完就要输出、超时要连子孙一起杀掉的一次性命令（如 `claude auth status`）走 `agent.Run`，它是跑到结束的 `agent.StartProcess`；要把输入写进 stdin、边跑边读输出的一次性调用（会话之外的 AI 请求，见 `agent.OneShotRunner`）走 `agent.RunStream`；会话进程走 `agent.StartProcess`，那边自己持有生命周期；要给 CLI 额外加环境变量时用 `agent.StartProcessEnv`（如 `claude auth login` 的 `BROWSER`）。
 
 **存凭据的地方用 `internal/fsperm` 收紧，收紧的对象是目录不是文件**。`os.WriteFile(path, data, 0600)` 在 Windows 上什么也没做——Go 只把 perm 映射到只读属性，实际访问权来自父目录继承来的 ACL，而盘符根下建出来的目录一律继承一条 `BUILTIN\Users` 读权限。收紧目录才有两个逐个收紧文件拿不到的性质：**新建的文件自动继承**（`.pockode` 里的 session 记录、`server.log`、work store 都归它管，不必在每个写入点重复一遍），以及**扛得住 temp+rename**（`filestore` 和 git 的 `store` helper 都是先写临时文件再改名覆盖，改名进来的文件带的是它自己创建时的权限，逐个文件收紧会被下一次写入静默抹掉）。
 
@@ -127,6 +134,8 @@ Windows 与 darwin/linux 一样是发布目标（产物见 [docs/platforms.md](.
 **别加「收紧单个文件」的口子。** `.git/.git-credentials` 看着像是需要它，其实不是：git 的 `store` helper 在每次认证成功后都会重写这个文件（写 `.lock` 再改名覆盖），设在文件上的权限第一次 push 就没了——它自己的 `umask(077)` 在 unix 上兜住了 0600，但 umask 在 Windows 上不代表任何东西。所以收紧的是 `.git` 目录，而且只在 `git.Init` 亲手 `git init` 出来的那个仓库上做（`.git` 已存在时 `Init` 直接返回，不碰用户自己的仓库）。
 
 **退出请求统一走 `internal/shutdown`**：`Listen()` 让本进程知道该退出了，`RequestExit(pid)` 让别的进程退出。别在别处再写一遍 `signal.Notify`。Windows 没有 SIGTERM 可发，官方的替代品 Ctrl+Break 只能送到与**调用方**共享控制台的进程，服务 / 计划任务 / detached 启动的集群一律送不到，所以那边走的是命名事件；等待方和发信方必须对上同一个名字，两半因此放在同一个包里。来龙去脉见 [docs/cluster.md](../docs/cluster.md#asking-a-node-to-exit-on-windows)。
+
+**自我重启走 `internal/restart`**（设计与取舍见 [docs/code/self-restart.md](../docs/code/self-restart.md)）：重启是结局不同的同一次优雅关闭。`main` 里 `newRestarter()` 尽早调用（在 `--version` 之后）：`shutdown.HoldRestartRequests()` 从这里起接住 SIGUSR1（否则启动期间收到会按默认动作被杀，且只捕获不忽略——忽略会被子进程继承），`restart.Current()` 记下可执行文件（绝对路径，argv[0] 指向同一个文件时保留它——符号链接是升级会挪动的那一个）、参数和工作目录。`Restarter.Request(ctx)` 先跑一次磁盘上的 `<exe> --version`，跑不起来就拒绝、进程照常运行；关闭循环取到的是退出请求就调 `Restarter.Close()`（之后的请求一律拒绝，期间刚被接受的重启也作废——先到的请求决定结局），关闭结束后 `Restarter.Pending()` 为真才 `Restarter.Restart(password)`：密码只经 `password.WithEnv` 走环境变量，命令行上的 `-password` / `-auth-token` 由 `password.ClearFlags` 清空成 `-password=`（清空而不删除，其余参数位置不变，`pockode -password x cluster` 不会被重放成 cluster）。这一步失败就记日志并以 1 退出。`Program.Version` 也是读取「已装版本」的入口。UI 的 `server.version` / `server.restart`（普通模式与 cluster 共用 `ws.ServerControl`）用 `Restarter.RequestHeld`：请求先被接受、关闭流程等成功回复的 WebSocket 关闭握手完成才开始，否则经 relay 的客户端收不到回复（见 [docs/code/websocket-rpc.md](../docs/code/websocket-rpc.md#server-installed-version-and-restart)）；测试里用 `internal/restarttest` 让测试二进制冒充磁盘上的可执行文件。从 UI 升级的 `server.update_check` / `server.update` 也挂在 `ServerControl` 上（`ws.Updater`，每进程一个，由 `ws.NewReleaseUpdater` 在启动时建好并清理上次安装的残留）：只装文件，重启仍是客户端随后发的 `server.restart`；关闭流程在关 WebSocket 之前调 `Updater.Close()`：停掉还在下载的安装、等已开始的替换做完再退出或重启（Windows 的两次 rename 之间不能停），关闭连接时因此不必等还在安装的 handler 到超时（回复本身通常送不出去，客户端看到的是断线）。集群启动节点用的也是这里记下的路径（`node.NewProcessManager`），不是当下的 `os.Executable()`：它会解析符号链接，包管理器把链接挪到新版本目录、删掉旧目录之后，它指向的文件已经不存在；集群 exec 之后节点仍是它的子进程却没人 wait，所以 unix 的 `processExists` 会先 `wait4(WNOHANG)` 收掉僵尸。
 
 **节点与集群的终端脱钩，两个平台都是**：unix 用 `Setsid`，Windows 用 `CREATE_NO_WINDOW`——节点要活过启动集群的那个 shell，就不能待在它的终端/控制台上，否则关掉终端窗口会把节点一起带走（Windows 会给控制台上所有进程发 `CTRL_CLOSE_EVENT`）。Windows 上用的**不是** `DETACHED_PROCESS`：完全没有控制台的进程每启动一个控制台程序，Windows 都会给它新分配一个**可见**的控制台窗口，而节点不停地调 git、hook 的 shell，结果就是持续闪黑窗（AI CLI 经 `internal/proctree` 启动，本来就有自己的隐藏控制台）。`CREATE_NO_WINDOW` 给节点一个属于它自己、没有窗口的控制台，子孙进程默认继承它，所以**节点里新增的 `exec.Command` 不需要任何 flag**，孙进程（git 拉起的 ssh、credential helper）也一并覆盖——除非某个程序自己用 `DETACHED_PROCESS` / `CREATE_NEW_CONSOLE` 启动子进程、主动放弃继承，那是它自己的行为，我们管不到。别给它再加 `DETACHED_PROCESS` / `CREATE_NEW_CONSOLE`——与二者组合时 `CREATE_NO_WINDOW` 被忽略。`internal/proctree` 的 `CREATE_NO_WINDOW` 与此是一对，覆盖的是不经集群、本身就没有控制台的服务器（服务 / 计划任务），且只覆盖经它启动的进程；改其中一处务必看另一处。
 
@@ -141,11 +150,11 @@ Windows 与 darwin/linux 一样是发布目标（产物见 [docs/platforms.md](.
   | 来源 | 调用点 | 为什么 Windows 上做不到 |
   |---|---|---|
   | `internal/fifotest` | `agent/codex`×1、`contents`×1、`filetransfer`×3 | 命名管道只存在于 `\\.\pipe`，根本进不了工作目录，被测的阻塞隐患在那里不成立 |
-  | `internal/symlinktest` | `contents`×4、`filetransfer`×13、`git`×1、`search`×1 | 未开开发者模式时建符号链接要特权；开了就一条都不 skip |
-  | `internal/unwritabletest` | `filestore`×1、`ws`×1 | 目录忽略只读属性，`os.Chmod` 挡不住写入；要真挡住得给当前用户的 SID 加一条 deny ACE |
+  | `internal/symlinktest` | `contents`×4、`filetransfer`×13、`git`×2、`internal/restart`×1、`search`×1、`selfinstall`×1 | 未开开发者模式时建符号链接要特权；开了就一条都不 skip |
+  | `internal/unwritabletest` | `filestore`×1、`selfinstall`×1、`ws`×1 | 目录忽略只读属性，`os.Chmod` 挡不住写入；要真挡住得给当前用户的 SID 加一条 deny ACE |
   | `filetransfer/realname_windows_test.go` 的 `shortName` | `filetransfer`×0~2 | 临时目录所在的卷关掉了 8.3 短名（`fsutil 8dot3name`）时没有别名可测；开着就一条都不 skip |
 
-  **合计 7~27 条**，两个区间端点都是对的：`filetransfer` 的「refuses to overwrite anything but a regular file」一个子测试里同时要符号链接和 fifo，谁先 skip 就记在谁名下，于是前两行的条数此消彼长——没开开发者模式是 4+19，开了是 5+0。别按单行的数去对账，按合计。
+  **合计 8~31 条**，两个区间端点都是对的：`filetransfer` 的「refuses to overwrite anything but a regular file」一个子测试里同时要符号链接和 fifo，谁先 skip 就记在谁名下，于是前两行的条数此消彼长——没开开发者模式是 4+22，开了是 5+0。别按单行的数去对账，按合计。
 
   能用平台分表（如 `settings_test.go` 的路径用例）就不要 skip；断言本身在两个平台上形状不同时，把它抽成平台分文件的测试辅助（如 `internal/fspermtest`、`internal/termtest`、`internal/fifotest`），而不是在 Windows 上 skip 掉——权限测试恰恰在权限有问题的那个平台上 skip，等于什么都没证明。
 
@@ -234,7 +243,8 @@ if err := json.Unmarshal(data, &parsed); err != nil {
   "port": 9870,
   "started_at": "2025-05-31T10:00:00Z",
   "local_url": "http://localhost:9870",
-  "token": "<random hex>"
+  "token": "<random hex>",
+  "version": "0.21.0"
 }
 ```
 
@@ -246,12 +256,13 @@ if err := json.Unmarshal(data, &parsed); err != nil {
 | `local_url` | string | 本地访问 URL（可选） |
 | `remote_url` | string | Relay 远程访问 URL（可选） |
 | `token` | string | 本地 API（MCP）认证 token，每次启动随机生成，区别于用户的 `--password`，不写入磁盘外的任何位置 |
+| `version` | string | 正在运行的版本（与 `--version` 输出去掉 `pockode ` 前缀后相同，集群直接与已装版本做字符串比较）。缺失 = 早于该字段的旧版本，它也不认识重启请求（见 [docs/cluster.md](../docs/cluster.md#restarting-and-upgrading)） |
 
-生命周期：启动时写入 → 运行期间保持 → 优雅关闭时删除。唯一的例外是 `remote_url`：relay 凭据更新导致远程 URL 变化时，文件会被重写，只换 `remote_url`，其余字段（包括 `started_at`）不变；relay 永久停止时该字段被移除（原因见 [relay-system.md](../docs/code/relay-system.md#when-the-remote-url-changes)）。读取方需要最新 URL 时应每次现读，不要缓存。
+生命周期：启动时写入 → 运行期间保持 → 优雅关闭时删除（unix 上的自我重启例外：PID 不变，文件保留到新程序重写，免得集群在这段时间里把节点看成已停止、再起一个）。另一个例外是 `remote_url`：relay 凭据更新导致远程 URL 变化时，文件会被重写，只换 `remote_url`，其余字段（包括 `started_at`）不变；relay 永久停止时该字段被移除（原因见 [relay-system.md](../docs/code/relay-system.md#when-the-remote-url-changes)）。读取方需要最新 URL 时应每次现读，不要缓存。
 
 ### MCP 本地 API
 
-MCP 子进程为客户端模式：由 AI CLI 通过 `pockode mcp --data-dir <dir> [--session-id <id>] [--worktree <name>]` 启动，从 `server.json` 读取 `local_url` 和 `token`，将工具调用通过 HTTP（`POST /api/mcp/tools/call`，Bearer token）转发给主服务器执行（`server/mcp/` 的 `Executor`）。`--session-id` / `--worktree` 是 spawn 时写入的调用方身份（`mcp.Caller`），随每次调用带上，让工具作用于调用来源的 session 而不必由模型填 id；它是自报的来源标识，不是凭据（见 [docs/code/agent-integration.md](../docs/code/agent-integration.md#mcp-caller-identity)）。子进程不直接读写文件或启动 watcher。`middleware.Auth` 仅对该精确路由放行，由 `APIHandler` 自行校验本地 token；relay 拒绝转发 `/api/mcp/*`，因此该接口实际仅 loopback 可达。
+MCP 子进程为客户端模式：由 AI CLI 通过 `pockode mcp --data-dir <dir> [--session-id <id>] [--worktree <name>]` 启动，从 `server.json` 读取 `local_url` 和 `token`，将工具调用通过 HTTP（`POST /api/mcp/tools/call`，Bearer token）转发给主服务器执行（`server/mcp/` 的 `Executor`）。`--session-id` / `--worktree` 是 spawn 时写入的调用方身份（`mcp.Caller`），随每次调用带上，让工具作用于调用来源的 session 而不必由模型填 id；它是自报的来源标识，不是凭据（见 [docs/code/agent-integration.md](../docs/code/agent-integration.md#mcp-caller-identity)）。`initialize` 返回的 instructions 在所有 session 中都是 `agent.Guidance`；HTML-first session 的附加说明不走这里，而走 CLI 的 system prompt（见 [docs/code/agent-integration.md](../docs/code/agent-integration.md#html-first-sessions)）。子进程不直接读写文件或启动 watcher。`middleware.Auth` 仅对该精确路由放行，由 `APIHandler` 自行校验本地 token；relay 拒绝转发 `/api/mcp/*`，因此该接口实际仅 loopback 可达。
 
 ## 边界
 

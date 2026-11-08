@@ -21,9 +21,10 @@ React SPA ──WebSocket──▶ Go Server ──spawn──▶ AI CLI (subpro
 | Layer | Path | Role |
 |-------|------|------|
 | RPC handlers | `server/ws/rpc_chat.go` | `chat.message`, `chat.interrupt`, `chat.messages.subscribe` / `chat.messages.history` ([paging](#history-paging)), permission responses |
-| Session config | `server/ws/rpc_session.go` | `session.set_agent_type` / `set_mode` / `set_model` / `set_effort`, each closing the running process because a CLI is told these only at launch; `session.models` and `session.efforts` list the choices ([models](code/agent-integration.md#session-models), [effort](code/agent-integration.md#session-effort)). None of them answer with the new value: the settings in force reach the panel through `session.detail` ([why](code/subscription-system.md#why-a-session-is-two-subscriptions)) |
+| Session config | `server/ws/rpc_session.go` | `session.set_agent_type` / `set_mode` / `set_model` / `set_effort`, each closing the running process because a CLI is told these only at launch; `session.set_html_first`, refused once the session has `started`, which closes nothing — the first send replaces a process started with the other value ([why](code/agent-integration.md#html-first-sessions)); `session.models` and `session.efforts` list the choices ([models](code/agent-integration.md#session-models), [effort](code/agent-integration.md#session-effort)). None of them answer with the new value: the settings in force reach the panel through `session.detail` ([why](code/subscription-system.md#why-a-session-is-two-subscriptions)) |
 | Another worktree's sessions | `server/ws/rpc_session_view.go` | `session_view.*` — reading (and discarding) a session stored under a worktree the connection is not in, including one that no longer exists ([how](#sessions-outlive-their-worktree)) |
 | Attachments | `server/ws/rpc_attachment.go` | `attachment.get` — the content a chat event references by id, answered in `file.get`'s own shape so one client path renders both ([why](code/agent-integration.md#content-blocks-and-attachments)) |
+| Agent pages | `server/ws/rpc_html_page.go` | `html_page.get` `{session_id, id}` → `{page: {id, title, html, base?, created_at}}` — a page an agent drew, by the id its `tool_result` record carries as `html_page`; immutable, so never subscribed to ([how](code/work-system.md#rendering-tool)) |
 | Sending files | `server/filetransfer/attachment.go`, `server/chat/attachments.go` | `POST /api/chat/attachments` stores a file in the session's store; `chat.message`'s `attachments` names it by id and each agent delivers it its own way ([how](code/agent-integration.md#files-the-user-sends)). Client side: `web/src/lib/chatAttachments.ts`; the composer's `+` menu (Photos / Files), a drop on the chat or a paste into the composer ([how](#attaching-by-drop-or-paste)) uploads each file as it arrives (`inputStore`), holds Send until every one is stored, and takes the files back if the message is refused |
 | Chat client | `server/chat/client.go` | Session coordination, message persistence, event broadcast; `SendMessageExcluding` (user) and `SendSystemMessage` (system automation) share one persist+broadcast path |
 | Agent interface | `server/agent/agent.go` | `Session` and `AgentEvent` interfaces |
@@ -234,9 +235,11 @@ messages' left edge and Send with their right. Borders and backgrounds stay full
 width, and so does the transcript's scroll box, so its scrollbar sits at the
 window's edge and the wheel works over the margins. The header is not
 constrained: it is the window's chrome. With the sidebar open at its default
-288px, the column only starts to bind at a window of roughly 1060px, so phones
-and tablets are untouched. The scroll-to-bottom button belongs to the column too
-([Where the View Sits](#where-the-view-sits)).
+320px, the column only starts to bind at a window of roughly 1090px, so phones
+and tablets are untouched. One block leaves the column where it binds: a page
+the agent drew takes the pane's width, up to 1280px
+([why](tool-call-ui.md#a-page-the-agent-drew-html_render)). The scroll-to-bottom
+button belongs to the column too ([Where the View Sits](#where-the-view-sits)).
 
 **Only the user speaks in bubbles.** The agent's message has no bubble: its text,
 tool calls and cards run the full width of the column in `text-th-text-primary`,
@@ -271,7 +274,7 @@ the first of these that holds is the reason given:
 |---|-----------|--------------|
 | 1 | Read-only session | `Read-only — files can't be attached here` |
 | 2 | The route names no session | `Open a session to attach files` |
-| 3 | A page that hides the composer (the Work pages, agent roles) | `Go back to the chat to attach files` |
+| 3 | A page that hides the composer (the Work pages, agent roles, the Git workspace's lists — `overlayKeepsComposer`) | `Go back to the chat to attach files` |
 | 4 | A registry `InputBar` replaces the default one | `This message box doesn't take files` |
 | 5 | The session has not resolved yet | `Wait for the session to load` |
 | 6 | The composer is folded: a short screen with the answer card focused | `Close the question card to attach files` |
@@ -1057,6 +1060,7 @@ and it has no method that can say anything to a session
 | `session_view.get` | `worktree`, `session_id` | `session` |
 | `session_view.history` | `worktree`, `session_id`, `before_seq?`, `limit?` | `history`, `has_more`, `next_before_seq?` |
 | `session_view.attachment` | `worktree`, `session_id`, `id` | `file` |
+| `session_view.html_page` | `worktree`, `session_id`, `id` | `page` |
 | `session_view.delete` | `worktree`, `session_id` | — |
 
 - `worktree` is a name and `""` is the main worktree. It is checked with

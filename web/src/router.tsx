@@ -1,11 +1,15 @@
 import {
+	createBrowserHistory,
 	createRootRoute,
 	createRoute,
 	createRouter,
 } from "@tanstack/react-router";
 import { z } from "zod";
 import AppShell from "./components/AppShell";
+import { historyTrailFor } from "./lib/historyTrail";
+import { layerHistoryFor } from "./lib/layerHistory";
 import { ROUTES, WT_CHILD_ROUTES, WT_ROUTES } from "./lib/routes";
+import { scrollMemoryFor } from "./lib/scrollMemory";
 
 const overlaySearchSchema = z.object({
 	session: z.string().optional(),
@@ -19,6 +23,75 @@ const overlaySearchSchema = z.object({
 });
 
 export type OverlaySearchParams = z.infer<typeof overlaySearchSchema>;
+
+/**
+ * The file routes': `mode=edit` is the editor, and in the viewer `mode=source`
+ * the source of a file that would otherwise render (Markdown, a page) and
+ * `line` the line to open at (docs/file.md#where-the-viewer-opens). `line` is
+ * a positive integer, coerced because a URL carries text; anything else fails
+ * the schema, as `mode` does. Only the file routes take them: a diff has no
+ * line of one file to stand at.
+ */
+const fileSearchSchema = overlaySearchSchema.extend({
+	mode: z.enum(["edit", "source"]).optional(),
+	line: z.coerce.number().int().positive().optional(),
+});
+
+export type FileSearchParams = z.infer<typeof fileSearchSchema>;
+
+/**
+ * The History segment's query (docs/git-history-ui.md#url), on the list and on
+ * the commit layers alike. `scope=current` is the default, accepted spelled
+ * out and never written.
+ */
+const historySearchSchema = z.object({
+	scope: z.enum(["current", "all", "mainline"]).optional(),
+	// Coerced: the router reads `q=2024` from a typed or shared URL as a
+	// number, and a search for a year or an issue number is a string.
+	q: z.coerce.string().optional(),
+	file: z.coerce.string().optional(),
+});
+
+export type HistorySearchParams = z.infer<typeof historySearchSchema>;
+
+/**
+ * The Git workspace's own query: the same `session`, and a `segment` with its
+ * own words. As with the project list, only the non-default segments are ever
+ * written, and the default is accepted spelled out.
+ */
+const gitSearchSchema = historySearchSchema.extend({
+	session: z.string().optional(),
+	segment: z.enum(["changes", "history", "branches"]).optional(),
+});
+
+export type GitSearchParams = z.infer<typeof gitSearchSchema>;
+
+/**
+ * A branch detail's: `remote=1` names a remote-only branch, whose `ref` a
+ * local branch may share (docs/git-branches-ui.md#the-branch). A number, not
+ * a string: the router writes the validated value back, and quotes a string
+ * that would parse as JSON (`remote=%221%22`).
+ */
+const branchSearchSchema = overlaySearchSchema.extend({
+	remote: z.coerce.number().optional(),
+});
+
+export type BranchSearchParams = z.infer<typeof branchSearchSchema>;
+
+/**
+ * The commit layers': the History query of the list a commit was opened from,
+ * or `branch` (and `remote=1`) for one opened from a branch's detail
+ * (docs/git-branches-ui.md#opening-a-commit). `branch` is coerced as `q` is:
+ * a branch may be named `2024`.
+ */
+const commitSearchSchema = overlaySearchSchema
+	.extend(historySearchSchema.shape)
+	.extend({
+		branch: z.coerce.string().optional(),
+		remote: z.coerce.number().optional(),
+	});
+
+export type CommitSearchParams = z.infer<typeof commitSearchSchema>;
 
 /**
  * The session routes carry one parameter, and only they do: which worktree the
@@ -63,25 +136,37 @@ const unstagedDiffRoute = createRoute({
 const fileViewRoute = createRoute({
 	getParentRoute: () => rootRoute,
 	path: ROUTES.files,
-	validateSearch: (search) => overlaySearchSchema.parse(search),
+	validateSearch: (search) => fileSearchSchema.parse(search),
+});
+
+const gitRoute = createRoute({
+	getParentRoute: () => rootRoute,
+	path: ROUTES.git,
+	validateSearch: (search) => gitSearchSchema.parse(search),
+});
+
+const branchRoute = createRoute({
+	getParentRoute: () => rootRoute,
+	path: ROUTES.branch,
+	validateSearch: (search) => branchSearchSchema.parse(search),
 });
 
 const commitRoute = createRoute({
 	getParentRoute: () => rootRoute,
 	path: ROUTES.commit,
-	validateSearch: (search) => overlaySearchSchema.parse(search),
+	validateSearch: (search) => commitSearchSchema.parse(search),
 });
 
 const commitDiffRoute = createRoute({
 	getParentRoute: () => rootRoute,
 	path: ROUTES.commitDiff,
-	validateSearch: (search) => overlaySearchSchema.parse(search),
+	validateSearch: (search) => commitSearchSchema.parse(search),
 });
 
 const commitFileRoute = createRoute({
 	getParentRoute: () => rootRoute,
 	path: ROUTES.commitFile,
-	validateSearch: (search) => overlaySearchSchema.parse(search),
+	validateSearch: (search) => commitSearchSchema.parse(search),
 });
 
 const settingsRoute = createRoute({
@@ -158,25 +243,37 @@ const wtUnstagedDiffRoute = createRoute({
 const wtFileViewRoute = createRoute({
 	getParentRoute: () => worktreeLayoutRoute,
 	path: WT_CHILD_ROUTES.files,
-	validateSearch: (search) => overlaySearchSchema.parse(search),
+	validateSearch: (search) => fileSearchSchema.parse(search),
+});
+
+const wtGitRoute = createRoute({
+	getParentRoute: () => worktreeLayoutRoute,
+	path: WT_CHILD_ROUTES.git,
+	validateSearch: (search) => gitSearchSchema.parse(search),
+});
+
+const wtBranchRoute = createRoute({
+	getParentRoute: () => worktreeLayoutRoute,
+	path: WT_CHILD_ROUTES.branch,
+	validateSearch: (search) => branchSearchSchema.parse(search),
 });
 
 const wtCommitRoute = createRoute({
 	getParentRoute: () => worktreeLayoutRoute,
 	path: WT_CHILD_ROUTES.commit,
-	validateSearch: (search) => overlaySearchSchema.parse(search),
+	validateSearch: (search) => commitSearchSchema.parse(search),
 });
 
 const wtCommitDiffRoute = createRoute({
 	getParentRoute: () => worktreeLayoutRoute,
 	path: WT_CHILD_ROUTES.commitDiff,
-	validateSearch: (search) => overlaySearchSchema.parse(search),
+	validateSearch: (search) => commitSearchSchema.parse(search),
 });
 
 const wtCommitFileRoute = createRoute({
 	getParentRoute: () => worktreeLayoutRoute,
 	path: WT_CHILD_ROUTES.commitFile,
-	validateSearch: (search) => overlaySearchSchema.parse(search),
+	validateSearch: (search) => commitSearchSchema.parse(search),
 });
 
 const wtSettingsRoute = createRoute({
@@ -227,6 +324,8 @@ export const routeTree = rootRoute.addChildren([
 	stagedDiffRoute,
 	unstagedDiffRoute,
 	fileViewRoute,
+	gitRoute,
+	branchRoute,
 	commitDiffRoute, // Must be before commitRoute (more specific path)
 	commitFileRoute, // Must be before commitRoute (more specific path)
 	commitRoute,
@@ -243,6 +342,8 @@ export const routeTree = rootRoute.addChildren([
 		wtStagedDiffRoute,
 		wtUnstagedDiffRoute,
 		wtFileViewRoute,
+		wtGitRoute,
+		wtBranchRoute,
 		wtCommitDiffRoute, // Must be before wtCommitRoute (more specific path)
 		wtCommitFileRoute, // Must be before wtCommitRoute (more specific path)
 		wtCommitRoute,
@@ -256,10 +357,24 @@ export const routeTree = rootRoute.addChildren([
 	]),
 ]);
 
+// The layers first: a reload under one strips its marker from the entry the
+// app starts on, and from then on every push is held behind their entries.
+// Then the trail, before the router: it
+// starts at the page the app was opened on, and may first have to rewrite
+// that page (lib/historyTrail.ts), which the router reads as it is created.
+// Kept for the tab, so a reload still knows what is behind the page.
+const history = createBrowserHistory();
+export const layerHistory = layerHistoryFor(history);
+historyTrailFor(history, sessionStorage);
+
 export const router = createRouter({
 	routeTree,
+	history,
 	defaultPreload: "intent",
 });
+
+// Before the first navigation, so that it has seen the first page.
+scrollMemoryFor(router.history);
 
 declare module "@tanstack/react-router" {
 	interface Register {

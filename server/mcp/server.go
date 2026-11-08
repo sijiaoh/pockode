@@ -185,7 +185,9 @@ type initializeResult struct {
 	Capabilities    capabilities `json:"capabilities"`
 	ServerInfo      serverInfo   `json:"serverInfo"`
 	// Instructions is how Claude learns when to ask or render before it has
-	// loaded any tool; see agent.Guidance.
+	// loaded any tool; see agent.Guidance. They describe the tools, so they are
+	// the same in every session: an HTML-first session's own guidance goes
+	// through the CLI's system prompt instead (agent.HTMLFirstGuidance).
 	Instructions string `json:"instructions,omitempty"`
 }
 

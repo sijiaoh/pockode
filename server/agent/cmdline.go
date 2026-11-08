@@ -134,8 +134,9 @@ func checkCmdSafe(s string) error {
 // Matching the whole span against the environment would miss both.
 //
 // The environment consulted is our own, which is the one the child inherits:
-// nothing here sets Cmd.Env. StartProcessEnv adds to it afterwards, and its
-// callers keep to variables no argument names.
+// all Command changes is PATH, which only grows (and a %PATH% is refused here
+// either way), and StartProcessEnv adds to it afterwards, its callers keeping
+// to variables no argument names.
 func expandedVarIn(s string) (span, name string, ok bool) {
 	for {
 		start := strings.IndexByte(s, '%')

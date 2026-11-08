@@ -154,8 +154,8 @@ func TestBusy_ReadsAreNotBlocked(t *testing.T) {
 	if _, err := Status(dir); err != nil {
 		t.Errorf("Status() during a commit: %v", err)
 	}
-	if _, err := Log(dir, 10); err != nil {
-		t.Errorf("Log() during a commit: %v", err)
+	if _, err := History(dir, HistoryQuery{}); err != nil {
+		t.Errorf("History() during a commit: %v", err)
 	}
 	if _, err := Branches(dir); err != nil {
 		t.Errorf("Branches() during a commit: %v", err)
@@ -279,6 +279,10 @@ func TestLock_OperationsExcludeOnlyWhatTheyShare(t *testing.T) {
 		{opPush, opStage, false},
 		{opStage, opFetch, false},
 		{opCommit, opPush, false},
+		// A delete moves no ref a commit moves, and a commit's hooks can take
+		// as long as they like.
+		{opCommit, opBranchDelete, false},
+		{opBranchDelete, opStage, false},
 
 		// Two writers of the same refs still collide — FETCH_HEAD.lock is real,
 		// and a guard in one client cannot see the other one.
@@ -287,6 +291,8 @@ func TestLock_OperationsExcludeOnlyWhatTheyShare(t *testing.T) {
 		{opFetch, opPull, true},
 		{opFetch, opCheckout, true},
 		{opPush, opBranchCreate, true},
+		{opFetch, opBranchDelete, true},
+		{opCheckout, opBranchDelete, true},
 
 		// And the index is still one at a time.
 		{opCommit, opStage, true},

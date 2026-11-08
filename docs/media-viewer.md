@@ -18,7 +18,7 @@ strip, and in the composer before it is sent
 | `web/src/components/Media/doubleTap.ts` | Touch double-tap recognition from pointer events |
 | `web/src/components/Media/VideoStage.tsx` | The video stage: native controls, keys, the handover |
 | `web/src/components/Media/HtmlStage.tsx` | The HTML stage: the page's frame, ↻, the focus sentinel |
-| `web/src/hooks/useBackToClose.ts` | The viewer's history entry, and taking it back on close |
+| `web/src/lib/layerHistory.ts` | The router-history adapter the viewer's entry — held by `Sheet`, as every layer's — is pushed and gone back over through, by the Navigation API where there is one ([project-ui.md §5.2](project-ui.md#52-back-closes-the-topmost-layer)) |
 
 ## Opening it
 
@@ -47,10 +47,9 @@ dimensions, and an optional `revision` (see [the HTML stage](#the-html-stage)).
 
 The host owns the open state and renders the viewer while it is open. Pass
 `openInFiles` only when the item is a work-directory file *and* the host can
-navigate. Without it the viewer offers no Open in Files. The viewer runs it
-after its own history entry is gone (see below), so the host does not have to
-handle that. `afterClose`, for any host, runs then too, however the viewer
-closed itself (✕, Escape, Back); a host unmounting it runs nothing.
+navigate. Without it the viewer offers no Open in Files. The viewer closes and
+runs it at once; the navigation is held until the viewer's history entry is
+gone (see below), so the host does not have to handle that.
 
 **Never open the viewer from inside another `Sheet`.** Both listen for Escape on
 `document`, and `stopPropagation` does not silence a sibling listener there, so
@@ -71,15 +70,14 @@ MediaViewer            shared chrome: Sheet fullScreen, back gesture, title + ca
 
 What the viewer gets from where:
 
-- **`Sheet fullScreen`** gives the scroll lock, the Escape claim, the focus trap
-  and handback, and closing when covered
+- **`Sheet fullScreen`** gives the scroll lock, the Escape claim, the back
+  gesture, the focus trap and handback, and closing when covered
   ([AGENTS.md](../AGENTS.md#shared-code-pockodeshared)). The viewer adds no
-  portal, no lock and no `document` key listener of its own.
-- **`useBackToClose`** makes the back gesture close it, as it closes the
-  transcript's full-screen viewer
-  ([tool-call-ui.md](tool-call-ui.md#full-screen)). Open in Files is run through
-  its `afterClose`, because navigating while the viewer's history entry is still
-  current would be undone by the Back that takes it.
+  portal, no lock and no `document` key listener of its own. Back closes it as
+  it closes every layer ([project-ui.md §5.2](project-ui.md#52-back-closes-the-topmost-layer)),
+  and Open in Files needs nothing of its own: a push made while a layer's entry
+  is up is held until the entry is gone, so it is never undone by the Back that
+  takes the entry.
 - **The caption** (`PNG · 2000×1333 · 433 KB`, `MOV · 1080×1920 · 0:42 · 38.2 MB`)
   is `formatMediaCaption`, the same line the in-place preview shows. An external
   image (an `ImageSource` of kind `external`, which only a Markdown image makes)
@@ -142,7 +140,7 @@ reloading the page is then the way out.
   find — are nothing an image needs.
 - **Not a lightbox library.** A lightbox brings its own portal, scroll lock,
   Escape handling and focus trap, and often a history entry. Each of those
-  duplicates what `Sheet` and `useBackToClose` do, and sits outside what `Sheet`
+  duplicates what `Sheet` does, and sits outside what `Sheet`
   shares with every other overlay here: the one scroll lock, the covering count
   `ChatPanel`'s interrupt reads, the Escape claim, and closing when its
   `CoveredSurface` is taken off the screen
@@ -391,8 +389,8 @@ Download, since Save is in the toolbar.
   instances run at once meanwhile; a page that plays sound plays twice.
 - **A rewrite** (the item's `revision`, the opener's) reloads the viewer's
   page, as it reloads the page in place. The opener's frame holds back until
-  the viewer has closed and its history entry is gone (`afterClose`), then
-  catches up: reloading under the viewer would be an entry after the viewer's,
+  the viewer has closed and its history entry is gone (`LayerHistory.settled`),
+  then catches up: reloading under the viewer would be an entry after the viewer's,
   and closing, which goes back to the entry before it, would put the opener's
   frame back on the page from before the edit.
 
@@ -446,10 +444,11 @@ new capability — a renewal, a Load of hosts ([file.md](file.md#html-pages)) �
 gets a new frame, since its wrapper holds it to one capability, and the old
 frame's entries stay behind as Back steps that change nothing on screen.
 
-So `useBackToClose` closes with `navigation.back()` where the browser has it,
-as Chromium and WebKit both do, and with `history.back()` elsewhere, at the
-cost of those silent steps — and of `afterClose` (Open in Files, the opener's
-held reload) waiting out the one-second fallback, since a step onto a frame's
+So the layer's entry is gone back over by the Navigation API — a traversal to
+the top-level entry before it — where the browser has it, as Chromium and
+WebKit both do, and with `history.go()` elsewhere, at the cost of those silent
+steps — and of whatever waits on the entry (Open in Files, the opener's held
+reload) waiting out the one-second fallback, since a step onto a frame's
 entry fires no `popstate` to say the viewer's entry is gone. The router hears the traversal as an ordinary
 `popstate`. With nothing navigated in a frame the two do the same thing.
 
@@ -572,11 +571,10 @@ phone.
   cases open two linked pages (`src/test/page/`) on the window's own history:
   closing with ✕ after navigating in the frame lands on the opener's entry and
   one Back leaves it, and Tab and Shift+Tab across the page stay in the sheet.
-- `MediaViewer.test.tsx` (jsdom) covers the chrome: Escape, Open in Files and its
-  ordering against the history entry, Save (a video's straight from its
+- `MediaViewer.test.tsx` (jsdom) covers the chrome: Escape, Back, Open in Files
+  made from the page's own entry, Save (a video's straight from its
   capability, never a Blob; a page's only once it is served), the video
-  caption, the failed-load retry, and
-  `afterClose` running once the entry is gone, after ✕ and after Back.
+  caption, and the failed-load retry.
 - `VideoStage.test.tsx` covers the stage's keys (and leaving the `<video>`'s own
   to it) and both halves of the handover on the stage's side.
 - `imageScale.test.ts` and `doubleTap.test.ts` cover the pure parts.

@@ -16,6 +16,8 @@ Index of Pockode code explanation documents. These documents focus on "why it's 
 | [Cloud Account Linking](cloud-account.md) | `cloud.json`, `pockode login` / `logout`, and attaching each relay to the account | `server/cloudcred/`, `server/cloudlogin/`, `server/relay/account.go` |
 | [AI CLI Sign-in](cli-auth.md) | Whether each AI CLI is signed in on the server machine, signing in from a phone, and signing out | `server/cliauth/`, `server/agent/*/auth.go`, `server/agent/*/login.go` |
 | [AI CLI Update](cli-update.md) | Whether each AI CLI has a newer release, and updating it from a phone | `server/cliupdate/`, `server/agent/*/update.go` |
+| [Self-Restart](self-restart.md) | Replacing a running server or cluster with the executable on disk: what is saved at startup, the check before anything stops, the password hand-over, unix exec and the Windows successor | `server/internal/restart/`, `server/internal/shutdown/`, `server/ws/rpc_server.go` |
+| [Self-Update](self-update.md) | Installing a newer release over the running executable from the UI: which releases are offered, what the installer trusts, one install per OS user, and the two renames on Windows | `server/internal/release/`, `server/selfinstall/`, `server/ws/rpc_server_update.go` |
 | [Fuzzy Matching](fuzzy-matching.md) | fzf's matching, scoring and query syntax ported in: why a port, the third-party boundary, and wiring it into a search | `server/fuzzy/` |
 
 Two of these — [Agent Integration](agent-integration.md) and

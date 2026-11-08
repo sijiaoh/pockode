@@ -2,28 +2,29 @@ package git
 
 import (
 	"path/filepath"
+	"slices"
 	"testing"
 )
 
 // `git init` leaves a branch with no commits, where git log fails; the history
 // panel has to read that as empty rather than as an error.
-func TestLog_Unborn(t *testing.T) {
+func TestHistory_Unborn(t *testing.T) {
 	dir, cleanup := setupTestRepo(t)
 	defer cleanup()
 
-	commits, err := Log(dir, 50)
-	if err != nil || len(commits) != 0 {
-		t.Errorf("Log() = %v, %v; want no commits and no error", commits, err)
+	page, err := History(dir, HistoryQuery{})
+	if err != nil || len(page.Commits) != 0 || page.Next != nil {
+		t.Errorf("History() = %+v, %v; want no commits and no error", page, err)
 	}
 }
 
 // Only an unborn branch reads as empty; no repository at all is still a failure.
-func TestLog_NotARepository(t *testing.T) {
+func TestHistory_NotARepository(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("GIT_CEILING_DIRECTORIES", filepath.Dir(dir))
 
-	if _, err := Log(dir, 50); err == nil {
-		t.Error("Log() outside a repository succeeded, want an error")
+	if _, err := History(dir, HistoryQuery{}); err == nil {
+		t.Error("History() outside a repository succeeded, want an error")
 	}
 }
 
@@ -42,6 +43,7 @@ func TestParseLogOutput(t *testing.T) {
 			name: "single commit without body",
 			input: `---COMMIT_START---
 d6f9947789f16ed6736042f10d58271c23b36ad0
+aaaa111122223333444455556666777788889999 bbbb111122223333444455556666777788889999
 Merge branch 'feature/settings-registry-v2'
 ---BODY_START---
 ---BODY_END---
@@ -51,6 +53,7 @@ sijiaoh
 			expected: []Commit{
 				{
 					Hash:    "d6f9947789f16ed6736042f10d58271c23b36ad0",
+					Parents: []string{"aaaa111122223333444455556666777788889999", "bbbb111122223333444455556666777788889999"},
 					Subject: "Merge branch 'feature/settings-registry-v2'",
 					Body:    "",
 					Author:  "sijiaoh",
@@ -62,6 +65,7 @@ sijiaoh
 			name: "single commit with body",
 			input: `---COMMIT_START---
 1d35cb97443e41199cddc35f34d578e57bb268e2
+aaaa111122223333444455556666777788889999
 Decouple watchers from WebSocket dependency with Notifier interface
 ---BODY_START---
 Introduce watch.Notifier interface to abstract notification mechanism,
@@ -74,6 +78,7 @@ sijiaoh
 			expected: []Commit{
 				{
 					Hash:    "1d35cb97443e41199cddc35f34d578e57bb268e2",
+					Parents: []string{"aaaa111122223333444455556666777788889999"},
 					Subject: "Decouple watchers from WebSocket dependency with Notifier interface",
 					Body:    "Introduce watch.Notifier interface to abstract notification mechanism,\nallowing non-WebSocket clients (agent teams, internal goroutines) to\nsubscribe to watchers.",
 					Author:  "sijiaoh",
@@ -82,9 +87,12 @@ sijiaoh
 			},
 		},
 		{
-			name: "multiple commits",
+			// A root commit's parents line and an empty subject are both blank
+			// lines that must not collapse into each other.
+			name: "root commit and a commit with an empty subject",
 			input: `---COMMIT_START---
 aaaa111122223333444455556666777788889999
+
 First commit
 ---BODY_START---
 ---BODY_END---
@@ -93,7 +101,8 @@ author1
 ---COMMIT_END---
 ---COMMIT_START---
 bbbb111122223333444455556666777788889999
-Second commit
+aaaa111122223333444455556666777788889999
+
 ---BODY_START---
 Some body text
 ---BODY_END---
@@ -103,6 +112,7 @@ author2
 			expected: []Commit{
 				{
 					Hash:    "aaaa111122223333444455556666777788889999",
+					Parents: []string{},
 					Subject: "First commit",
 					Body:    "",
 					Author:  "author1",
@@ -110,7 +120,8 @@ author2
 				},
 				{
 					Hash:    "bbbb111122223333444455556666777788889999",
-					Subject: "Second commit",
+					Parents: []string{"aaaa111122223333444455556666777788889999"},
+					Subject: "",
 					Body:    "Some body text",
 					Author:  "author2",
 					Date:    "2026-01-02T10:00:00+09:00",
@@ -131,6 +142,9 @@ author2
 				exp := tt.expected[i]
 				if commit.Hash != exp.Hash {
 					t.Errorf("commit[%d].Hash: expected %q, got %q", i, exp.Hash, commit.Hash)
+				}
+				if !slices.Equal(commit.Parents, exp.Parents) || commit.Parents == nil {
+					t.Errorf("commit[%d].Parents: expected %q, got %q", i, exp.Parents, commit.Parents)
 				}
 				if commit.Subject != exp.Subject {
 					t.Errorf("commit[%d].Subject: expected %q, got %q", i, exp.Subject, commit.Subject)

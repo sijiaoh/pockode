@@ -1,6 +1,7 @@
 import { Spinner } from "@pockode/shared";
 import type { ReactNode } from "react";
 import { isNotFoundError } from "../../hooks/useContents";
+import PageBody from "./PageBody";
 
 interface Props {
 	isLoading?: boolean;
@@ -34,6 +35,15 @@ export const getActionIconButtonClass = (enabled: boolean) =>
 	enabled ? actionIconButtonClass : actionIconButtonDisabledClass;
 
 /**
+ * The same box for an action that takes something away: in the error colour
+ * whether or not it can be pressed, so it reads as what it is before a press.
+ */
+export const getDestructiveIconButtonClass = (enabled: boolean) =>
+	`${actionButtonBase} ${actionIconButtonSize} text-th-error ${
+		enabled ? "hover:border-th-border-focus" : "opacity-50 cursor-not-allowed"
+	}`;
+
+/**
  * The scrolling body of a file, diff or commit page, standing in for it while
  * it loads or fails. The page's heading is its own `PageHeader`, drawn in the
  * app header.
@@ -46,9 +56,7 @@ export default function ContentView({
 }: Props) {
 	return (
 		<div className="flex min-h-0 flex-1 flex-col">
-			<div
-				className={`min-h-0 flex-1 ${fill ? "flex flex-col overflow-hidden" : "overflow-auto"}`}
-			>
+			<Body fill={fill}>
 				{isLoading ? (
 					<div className="flex items-center justify-center p-8">
 						<Spinner variant="current" className="text-th-text-muted" />
@@ -67,7 +75,18 @@ export default function ContentView({
 				) : (
 					children
 				)}
-			</div>
+			</Body>
 		</div>
 	);
+}
+
+function Body({ fill, children }: { fill?: boolean; children: ReactNode }) {
+	if (fill) {
+		return (
+			<div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+				{children}
+			</div>
+		);
+	}
+	return <PageBody>{children}</PageBody>;
 }

@@ -3,6 +3,11 @@ import {
 	authFailureReason,
 	authRetryAfterMs,
 	credentialParams,
+	restartRefusedReason,
+	UPDATE_RPC_TIMEOUT_MS,
+	type UpdateCandidate,
+	type UpdateFailedReason,
+	updateFailedReason,
 } from "@pockode/shared";
 import {
 	createJSONRPCErrorResponse,
@@ -63,6 +68,7 @@ import type {
 	WorkListSubscribeResult,
 } from "../types/work";
 import { getWebSocketUrl } from "../utils/config";
+import { errorMessage } from "../utils/errorMessage";
 import { generateUUID } from "../utils/uuid";
 import { authActions } from "./authStore";
 import {
@@ -82,9 +88,11 @@ import {
 	createCommandActions,
 	createFileActions,
 	createGitActions,
+	createHtmlPageActions,
 	createPortPreviewActions,
 	createRawActions,
 	createScheduleActions,
+	createServerActions,
 	createSessionActions,
 	createSessionViewActions,
 	createSettingsActions,
@@ -92,9 +100,11 @@ import {
 	createWorktreeActions,
 	type FileActions,
 	type GitActions,
+	type HtmlPageActions,
 	type PortPreviewActions,
 	type RawActions,
 	type ScheduleActions,
+	type ServerActions,
 	type SessionActions,
 	type SessionViewActions,
 	type SettingsActions,
@@ -117,7 +127,59 @@ interface ConnectionActions {
 	disconnect: () => void;
 	/** Skip the remaining backoff and attempt to reconnect immediately. */
 	retryNow: () => void;
+	/**
+	 * Ask the server to restart (`server.restart`). Resolves once a restart is
+	 * under way and `restartRequestedAt` is set — accepted here, already under
+	 * way from elsewhere, or with this connection gone before its reply could
+	 * arrive (the reconnect's version says how it went). Rejects with the
+	 * server's refusal, which changed nothing.
+	 */
+	restartServer: () => Promise<void>;
+	/**
+	 * Install `candidate` (`server.update`), then restart into it the way
+	 * `restartServer` does, with no second question: the user confirmed both
+	 * (docs/self-update-ui.md, "Installing, and after"). Never rejects; how it
+	 * went is `serverUpdate`. Ignored while an install of this page's is out.
+	 */
+	updateServer: (candidate: UpdateCandidate) => Promise<void>;
+	/** Forget an install that has ended — its failure, once read. */
+	dismissServerUpdate: () => void;
 }
+
+/**
+ * An install this page asked for, from the press until the restart that follows
+ * it is accepted. Every ending but a lost one is the server's answer.
+ */
+export type ServerUpdateRun =
+	| { phase: "installing"; candidate: UpdateCandidate; startedAt: number }
+	| {
+			/** The server answered with a failure; the file is unchanged but for `restore_failed`. */
+			phase: "failed";
+			candidate: UpdateCandidate;
+			endedAt: number;
+			/** Null for a failure no reason describes; `message` still says it. */
+			reason: UpdateFailedReason | null;
+			message: string;
+	  }
+	| {
+			/**
+			 * No answer came — the connection went, or this page's clock gave up.
+			 * The install runs on regardless, so only a check can say how it went,
+			 * and no restart is sent for it.
+			 */
+			phase: "lost";
+			candidate: UpdateCandidate;
+			endedAt: number;
+			/** `timeout`: the connection stayed, and this page stopped waiting. */
+			cause: "connection" | "timeout";
+	  }
+	| {
+			/** Installed, and then `server.restart` was refused. */
+			phase: "restart_refused";
+			candidate: UpdateCandidate;
+			endedAt: number;
+			message: string;
+	  };
 
 // TODO: Implement retry logic for watcher subscriptions.
 // Currently callers must handle failures; retry only happens on WebSocket reconnect.
@@ -261,11 +323,13 @@ type RPCActions = ConnectionActions &
 	PortPreviewActions &
 	RawActions &
 	ScheduleActions &
+	Pick<ServerActions, "serverVersion" | "serverUpdateCheck"> &
 	SessionActions &
 	SessionViewActions &
 	SettingsActions &
 	FileActions &
 	GitActions &
+	HtmlPageActions &
 	WatchActions &
 	WorkActions &
 	WorktreeActions;
@@ -299,6 +363,19 @@ interface WSState {
 	 * refuses every password until then, the right one included.
 	 */
 	authRetryAt: number | null;
+	/**
+	 * When the server accepted a restart this page asked for (epoch ms), until
+	 * the next successful `auth` — the restarted process, or the same one if it
+	 * never went down. This page's memory only: gone on a reload, which a new
+	 * version causes anyway (docs/restart-ui.md, "While it restarts").
+	 */
+	restartRequestedAt: number | null;
+	/**
+	 * A request already sent, so it outlives the Settings section that sent it:
+	 * leaving the page must not lose the restart that follows the install. This
+	 * page's memory only, gone on a reload or a logout.
+	 */
+	serverUpdate: ServerUpdateRun | null;
 	actions: RPCActions;
 }
 
@@ -429,7 +506,7 @@ function releaseSocket(reason: string): void {
 	const socket = ws;
 	ws = null;
 	socket.close(1000, reason);
-	rpcClients?.base.rejectAllPendingRequests("Connection lost");
+	rpcClients?.base.rejectAllPendingRequests(CONNECTION_LOST_MESSAGE);
 	rpcClients = null;
 	clearAllWatchSubscriptions();
 }
@@ -524,12 +601,39 @@ export function isInvalidParamsRejection(error: unknown): boolean {
 	);
 }
 
+/**
+ * Whether the server refused a message because the turn awaits a permission
+ * answer (`chat.ErrTurnAwaitingAnswer`), told by its `data.reason` rather
+ * than its words. The server sets it on every chat send refused this way;
+ * only a page's send (`chat.html_action`) reads it today.
+ */
+export function isAwaitingPermissionRejection(error: unknown): boolean {
+	if (!isInvalidParamsRejection(error)) return false;
+	const data = (error as JSONRPCErrorException).data as
+		| { reason?: unknown }
+		| null
+		| undefined;
+	return data?.reason === "awaiting_permission";
+}
+
 function getClient(): JSONRPCRequester<void> | null {
 	return rpcClients?.withTimeout ?? null;
 }
 
 function getAgentStartClient(): JSONRPCRequester<void> | null {
 	return rpcClients?.withAgentStartTimeout ?? null;
+}
+
+function getCommitDraftClient(): JSONRPCRequester<void> | null {
+	return rpcClients?.withCommitDraftTimeout ?? null;
+}
+
+function getServerUpdateClient(): JSONRPCRequester<void> | null {
+	return rpcClients?.withServerUpdateTimeout ?? null;
+}
+
+function getUpdateCheckClient(): JSONRPCRequester<void> | null {
+	return rpcClients?.withUpdateCheckTimeout ?? null;
 }
 
 /**
@@ -541,6 +645,17 @@ function getAgentStartClient(): JSONRPCRequester<void> | null {
 export const RPC_TIMEOUT_MS = 30000;
 
 const RPC_TIMEOUT_MESSAGE = "Request timed out";
+
+const CONNECTION_LOST_MESSAGE = "Connection lost";
+
+/** Whether a request's socket went away before its answer came down it. */
+function isConnectionLost(error: unknown): boolean {
+	return (
+		error instanceof JSONRPCErrorException &&
+		error.code === 0 &&
+		error.message === CONNECTION_LOST_MESSAGE
+	);
+}
 
 /**
  * Whether a request was given up on by our own clock rather than answered.
@@ -594,11 +709,42 @@ const CODEX_START_BUDGET_MS = 10000 + 45000;
  */
 export const AGENT_START_RPC_TIMEOUT_MS = CODEX_START_BUDGET_MS + 20000;
 
+// Where: server/commitdraft's Timeout, after which the server kills the CLI and
+// answers `timeout` itself (docs/git.md#drafting-a-commit-message).
+const COMMIT_DRAFT_SERVER_TIMEOUT_MS = 90000;
+
+/**
+ * Timeout for `git.commit.draft`, which runs an AI CLI for as long as the
+ * server's own 90s allow and only answers then. Shorter, and a slow draft would
+ * be reported as "Request timed out" while the CLI went on running and its
+ * answer was thrown away. The margin covers reading the diff and the round trip.
+ */
+export const COMMIT_DRAFT_RPC_TIMEOUT_MS =
+	COMMIT_DRAFT_SERVER_TIMEOUT_MS + 20000;
+
+// Where: server/ws/rpc_server_update.go's HandleUpdateCheck runs the installed
+// executable with `--version` (server/internal/restart's versionTimeout, 10s)
+// and then waits on the release check (server/internal/release's
+// fetchTimeout, 20s), one after the other.
+const UPDATE_CHECK_SERVER_BUDGET_MS = 10_000 + 20_000;
+
+/**
+ * Timeout for `server.update_check`. At the default 30s a check that had to
+ * wait out both of the server's limits would be given up on as it answered.
+ */
+const UPDATE_CHECK_RPC_TIMEOUT_MS = UPDATE_CHECK_SERVER_BUDGET_MS + 15_000;
+
 interface RPCClients {
 	base: JSONRPCClient;
 	withTimeout: JSONRPCRequester<void>;
 	/** For agent-starting requests only; see AGENT_START_RPC_TIMEOUT_MS. */
 	withAgentStartTimeout: JSONRPCRequester<void>;
+	/** For `git.commit.draft` only; see COMMIT_DRAFT_RPC_TIMEOUT_MS. */
+	withCommitDraftTimeout: JSONRPCRequester<void>;
+	/** For `server.update` only; see UPDATE_RPC_TIMEOUT_MS. */
+	withServerUpdateTimeout: JSONRPCRequester<void>;
+	/** For `server.update_check` only; see UPDATE_CHECK_RPC_TIMEOUT_MS. */
+	withUpdateCheckTimeout: JSONRPCRequester<void>;
 }
 
 function createRPCClient(socket: WebSocket): RPCClients {
@@ -617,6 +763,9 @@ function createRPCClient(socket: WebSocket): RPCClients {
 		base,
 		withTimeout: base.timeout(RPC_TIMEOUT_MS, timedOut),
 		withAgentStartTimeout: base.timeout(AGENT_START_RPC_TIMEOUT_MS, timedOut),
+		withCommitDraftTimeout: base.timeout(COMMIT_DRAFT_RPC_TIMEOUT_MS, timedOut),
+		withServerUpdateTimeout: base.timeout(UPDATE_RPC_TIMEOUT_MS, timedOut),
+		withUpdateCheckTimeout: base.timeout(UPDATE_CHECK_RPC_TIMEOUT_MS, timedOut),
 	};
 }
 
@@ -828,11 +977,17 @@ const commandActions = createCommandActions(getClient);
 const portPreviewRpcActions = createPortPreviewActions(getClient);
 const rawActions = createRawActions(getClient);
 const scheduleActions = createScheduleActions(getClient);
+const serverActions = createServerActions(
+	getClient,
+	getUpdateCheckClient,
+	getServerUpdateClient,
+);
 const sessionActions = createSessionActions(getClient);
 const sessionViewActions = createSessionViewActions(getClient);
 const settingsActions = createSettingsActions(getClient);
 const fileActions = createFileActions(getClient);
-const gitActions = createGitActions(getClient);
+const htmlPageActions = createHtmlPageActions(getClient);
+const gitActions = createGitActions(getClient, getCommitDraftClient);
 const workActions = createWorkActions(getClient, getAgentStartClient);
 const worktreeRpcActions = createWorktreeActions(getClient);
 
@@ -869,6 +1024,8 @@ export const useWSStore = create<WSState>((set, get) => ({
 	maxAttachmentSize: 0,
 	maxImagePreviewSize: 0,
 	authRetryAt: null,
+	restartRequestedAt: null,
+	serverUpdate: null,
 
 	actions: {
 		connect: (credential: AuthCredential) => {
@@ -951,6 +1108,7 @@ export const useWSStore = create<WSState>((set, get) => ({
 						maxUploadSize: result.max_upload_size,
 						maxAttachmentSize: result.max_attachment_size ?? 0,
 						maxImagePreviewSize: result.max_image_preview_size ?? 0,
+						restartRequestedAt: null,
 					});
 				} catch (error) {
 					// Not a rejection: the request timed out or the socket died
@@ -1043,7 +1201,7 @@ export const useWSStore = create<WSState>((set, get) => ({
 				ws = null;
 				// Their answers can only have come down this socket, so waiting out
 				// the RPC timeout would just be a slower way of failing.
-				rpcClients?.base.rejectAllPendingRequests("Connection lost");
+				rpcClients?.base.rejectAllPendingRequests(CONNECTION_LOST_MESSAGE);
 				rpcClients = null;
 				clearAllWatchSubscriptions();
 
@@ -1086,7 +1244,12 @@ export const useWSStore = create<WSState>((set, get) => ({
 			// onclose ignores a socket releaseSocket has let go of. Reset the
 			// attempt count so a later connect() starts at the short end of the
 			// backoff.
-			set({ status: "disconnected", reconnectAttempts: 0 });
+			set({
+				status: "disconnected",
+				reconnectAttempts: 0,
+				restartRequestedAt: null,
+				serverUpdate: null,
+			});
 			releaseSocket("disconnect");
 		},
 
@@ -1098,6 +1261,97 @@ export const useWSStore = create<WSState>((set, get) => ({
 			// recovery events could retry without limit.
 			get().actions.connect(currentCredential);
 		},
+
+		restartServer: async () => {
+			try {
+				await serverActions.serverRestart();
+			} catch (error) {
+				// Either way the process is going down, and the reconnect says
+				// what came back. A reply lost with the connection — through
+				// the relay it may not have been delivered — is not a failure to
+				// show; nothing would be left to retry against anyway. A drop
+				// that took the request with it before the server saw it reads
+				// the same, and comes back to an unchanged process: accepted, as
+				// it cannot be told from a same-version restart from here.
+				if (
+					restartRefusedReason(error) !== "already_restarting" &&
+					!isConnectionLost(error)
+				) {
+					throw error;
+				}
+				// Logged out mid-request: there is no page left to wait on it.
+				if (get().status === "disconnected") return;
+			}
+			// A second press while the first is still going down is refused as
+			// already restarting; the clock runs from the first acceptance.
+			set((state) => ({
+				restartRequestedAt: state.restartRequestedAt ?? Date.now(),
+				// The restart an install could not get is the one now under way.
+				serverUpdate:
+					state.serverUpdate?.phase === "restart_refused"
+						? null
+						: state.serverUpdate,
+			}));
+		},
+
+		updateServer: async (candidate) => {
+			if (get().serverUpdate?.phase === "installing") return;
+			const run: ServerUpdateRun = {
+				phase: "installing",
+				candidate,
+				startedAt: Date.now(),
+			};
+			set({ serverUpdate: run });
+			// Only this run's ending is its to write: a logout in between has
+			// forgotten it, and nothing may bring it back.
+			const end = (next: ServerUpdateRun | null) => {
+				if (get().serverUpdate === run) set({ serverUpdate: next });
+			};
+
+			try {
+				await serverActions.serverUpdate({ version: candidate.version });
+			} catch (error) {
+				const endedAt = Date.now();
+				end(
+					isConnectionLost(error) || isRPCTimeout(error)
+						? {
+								phase: "lost",
+								candidate,
+								endedAt,
+								cause: isRPCTimeout(error) ? "timeout" : "connection",
+							}
+						: {
+								phase: "failed",
+								candidate,
+								endedAt,
+								reason: updateFailedReason(error),
+								message: errorMessage(error),
+							},
+				);
+				return;
+			}
+
+			if (get().serverUpdate !== run) return;
+			try {
+				await get().actions.restartServer();
+				end(null);
+			} catch (error) {
+				end({
+					phase: "restart_refused",
+					candidate,
+					endedAt: Date.now(),
+					message: errorMessage(error),
+				});
+			}
+		},
+
+		dismissServerUpdate: () => {
+			if (get().serverUpdate?.phase !== "installing")
+				set({ serverUpdate: null });
+		},
+
+		serverVersion: serverActions.serverVersion,
+		serverUpdateCheck: serverActions.serverUpdateCheck,
 
 		fsSubscribe: async (path: string, callback: () => void) => {
 			const { id } = await openSubscription(
@@ -1473,6 +1727,7 @@ export const useWSStore = create<WSState>((set, get) => ({
 		...settingsActions,
 		...fileActions,
 		...gitActions,
+		...htmlPageActions,
 		...workActions,
 		...worktreeRpcActions,
 	},
@@ -1585,6 +1840,14 @@ worktreeActions.onWorktreeChange(() => {
 	void runWorktreeSwitchLoop();
 });
 
+/**
+ * Whether the connection may still be bound to a worktree the app has left,
+ * for a reader that mounts mid-switch and so never heard the switch start.
+ */
+export function isWorktreeSwitchInFlight(): boolean {
+	return switchInFlight;
+}
+
 // command.list leaves out the commands that need a repository, so the palette's
 // copy is stale the moment the answer changes.
 worktreeActions.onGitRepoChange(() => {
@@ -1614,5 +1877,7 @@ export function resetWSStore() {
 		workDir: "",
 		remoteUrl: "",
 		authRetryAt: null,
+		restartRequestedAt: null,
+		serverUpdate: null,
 	});
 }

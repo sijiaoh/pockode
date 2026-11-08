@@ -665,12 +665,13 @@ See [Posted Questions](agent-integration.md#posted-questions).
 | Tool | Purpose | Key Parameters |
 |------|---------|----------------|
 | `html_render` | Show the user an HTML page — a comparison, a chart, a structured report — that Markdown carries badly | `title`, `html` |
+| `html_get` | Read back one of the session's pages, with the list of all of them | `id` |
+| `html_edit` | Show a changed version of a page as a new page, without sending the whole page again | `base`, `title?`, `edits` |
 
-**The call's input is the page.** The server only validates it
-(`server/mcp/html_render.go`): it stores nothing and emits no event, because the
-frontend draws the page straight from the tool call recorded in the session
-history, like any other tool call's input. So the contract the frontend reads is
-the input schema, and nothing else:
+**Every page is stored, and named by a short id.** `html_render`
+(`server/mcp/html_render.go`) validates the input, stores it as the session's
+next page (`server/htmlpage`), and answers with the page's id. The input schema
+is still what the agent writes:
 
 - `title` — required; a short name for what the page shows.
 - `html` — required; a full document or a fragment, rendered as written in a
@@ -682,13 +683,95 @@ the input schema, and nothing else:
 
 Either one empty or whitespace-only is refused as a user error — blank HTML is
 a blank frame, not a page, and a page with no title leaves the user nothing to
-tell it by. `html` over 256KB
-(`maxHTMLRenderBytes`) is refused too, naming the size: that history keeps the
-whole input, so the cap is what it can afford to carry, not what a browser could
-draw. The refusal points the agent at a project file for large data or
-libraries — referenced, it costs the history a path instead of its bytes. The
-reply on success tells the agent the page is shown and not to repeat its
-content, which is the one rule worth restating at the moment it applies.
+tell it by. `html` over 256KB (`htmlpage.MaxHTMLBytes`) is refused too, naming
+the size: the page is kept for as long as the session, and the call's input in
+the history carries it as well, so the cap is what those can afford, not what
+a browser could draw. The refusal points the agent at a project file for large
+data or libraries — referenced, it costs a path instead of its bytes. One check
+(`htmlpage.Draft.Validate`) serves every tool that stores a page, so a page
+derived from another one is held to the same limits. A call from outside a
+session is refused: there is no chat to show the page in.
+
+**Deriving a page.** `html_edit` (`server/mcp/html_edit.go`) reads `base`,
+applies its `edits` (`htmlpage.ApplyEdits`) and stores the result as a new
+page with `base` recorded; the base page is never touched, and stays in the
+chat as it was. An edit is an exact-string replacement, the str_replace the
+agent already makes to files: `old` non-empty, different from `new`, and found
+exactly once unless `replace_all`. Plain text rather than anything that parses
+HTML — the alternative was regions the page marks (`data-pk-region`) replaced
+by name, which costs a parser dependency, works only on a page whose agent
+remembered to mark it in advance, and asks for a skill the agent does not
+already have, where str_replace is the one it uses all day; and a parser's idea
+of the document could change where the agent's copy of the text cannot.
+
+Edits apply in order, each to what the ones before it left, and the set is all
+or nothing: the first that fails is named by its position and nothing is
+stored. Each edit's resulting size is checked before it is applied — a short
+`old` all over the page times a long `new` would otherwise build a result far
+larger than any request before anything refused it. The result then passes the
+same `Draft.Validate` as any page, and an omitted `title` keeps the base's.
+`html_get` hands the HTML back raw after a marker line, not inside JSON, so
+that what the agent copies into `old` is what is stored — an escaped copy would
+carry a backslash before every quote. An id the session lacks is refused with
+the list of the pages it has.
+
+**Ids.** `p1`, `p2`, … in the order a session's pages were drawn — short
+because the agent quotes them back, and a CLI's own tool call id is far harder
+to repeat exactly. Numbered per session under a lock (`htmlpage.Store.Append`),
+so pages drawn in parallel never share one.
+
+**Storage.** One file per page, `sessions/<id>/html_pages/<n>.json`, holding
+`id`, `title`, `html`, `created_at` and, for a page derived from another,
+`base`. Written once, atomically, and never again: a page is an event, the
+snapshot of what was drawn, and is never rebuilt by replaying edits — a change
+to how edits apply would otherwise quietly turn an old page into a different
+one. Being under the session's directory, the pages go when the session is
+deleted; the directory is made one level at a time, so a call arriving after
+the delete cannot recreate it (`htmlpage.ErrSessionGone`). A fork gets the
+source's pages up to the highest one its copied history names
+(`htmlpage.HighestInRecords` → `ForkSpec.PagesThrough` → `htmlpage.Clone`,
+hard links where possible), but numbers its next page past the source's highest
+(`numbered_from.json`). The agent can remember more than the transcript it was
+forked with — Codex reopens a conversation at a turn, not at a record, so a cut
+inside a turn leaves it the pages drawn later in that turn — and an id it
+remembers must never come to name a different page; one the fork lacks is
+simply not found.
+
+**The record names the page.** The result begins `Page <id>`
+(`htmlpage.ResultLead`), followed by the title and the rule not to repeat the
+page's content — the one rule worth restating at the moment it applies. The
+executor cannot put the id on the record itself, because an MCP call does not
+carry the CLI's tool call id; so the process does it from the other side
+(`process.pageCalls`): it notes every tool call whose name is a page tool
+(`htmlpage.IsPageTool`, both engines' names — `mcp__pockode__<tool>` from
+Claude, `pockode:<tool>` from Codex), and stamps that call's successful result
+with the id read back from its first words, as `html_page` on the
+`tool_result` record, before it is recorded or broadcast. The name is checked,
+not just the text, since any other tool's output may begin with the same words.
+A client reads `html_page` to know which stored page a card is, and fetches it
+with `html_page.get` (`server/ws/rpc_html_page.go`; `session_view.html_page`
+for a session of another worktree) — a page never changes, so there is nothing
+to subscribe to. A record without `html_page` is a page drawn before pages were
+stored, and is drawn from its call's input.
+
+**A page sends back.** What a page sends on the reader's press
+(`pockode.send`, `data-pk-send`) arrives as `chat.html_action {session_id,
+page, action, data?}` (`server/ws/rpc_chat.go`, `handleHTMLAction`): the
+session must be this worktree's, `page` a page it has (`htmlpage.Get` — any
+page, not only the latest), `action` 1–128 characters with no control
+characters, `data` any JSON, compacted, at most 64KB, `{}` when omitted. It is
+sent as the user's message through `chat.Client.SendHTMLActionExcluding`, the
+typed message's path — refused while a permission request is open (with
+`data.reason: "awaiting_permission"`, `rpc.ChatErrorData`), folded into a
+running turn, handed to the work engine after a successful send. Its content
+is `htmlpage.ActionText` (`Page action "approve" from p3:` and the data on the
+next line), and its record carries the structured copy as `html_action
+{page, action, data}`, as a command's carries `command`; the reply echoes both.
+The contract and the UI around it are in
+[tool-call-ui.md](../tool-call-ui.md#sending-to-the-agent); how a page sends,
+and the `--pk-*` theme variables, are told to the agent in both page tools'
+descriptions (`mcp.pageSendingAndTheme`).
+
 When to reach for the tool at all is in the guidance every session gets before
 it has loaded one
 ([agent-integration.md](agent-integration.md#telling-the-agent-when-to-ask)).
@@ -2009,7 +2092,7 @@ Design decisions specific to this display:
 - **The badge resolves that verdict itself rather than being told it.** `isWorktreeBound` (`workStore.ts`) owns the rule and `WorktreeBadge` reads it through a `useWorkStore` selector, so no call site can forget it. Reaching the story needs the whole work list, which is why the badge subscribes to the store instead of taking the verdict as a prop. It is one lookup and no walk — `story_id` names a story, and a story names nothing — so a story missing from that list (subscription not synced yet) leaves the task itself as the answer, which is `open`, which errs toward hiding.
 - **The binding is read-only, but the badge is a navigation link.** The worktree binding is frozen once a work starts (see *Worktree Binding*), so — unlike the editable role — the badge never *reassigns* a work's worktree. It is, however — for as long as that worktree exists (see below) — a clickable `<Link>` (target from `buildNavigation({ type: "home", worktree })`) that jumps to that worktree's root URL (main → `/`, feature → `/w/<worktree>/`), letting the user pivot from the mixed global list straight into the context of any work's worktree. It carries no work/chat context — just the worktree switch — and uses real anchor semantics (middle-click / open-in-new-tab) rather than a button.
 - **Stories and tasks are treated alike — the work's type is not part of the rule.** Visibility is the binding verdict above and nothing else, so every place the badge appears asks `useWorktreeBadgeVisible` the same question: the list's rows, the story detail's Tasks rows (the same `WorkRow`) and the detail header. Type did decide it on the list once, and the reason was sound for the list it was written for: a task was reachable only by expanding its story, so its badge would have restated the story badge directly above it. The list has no task rows now (docs/project-ui.md §2.2), so a task's row is drawn only in its story's Tasks section, under a header that does carry the story's badge — the old reason, back in its usual case. It still does not decide the rule, because the badge is not only on rows: a task detail can be opened without its story on screen at all. And a story subtree does normally share one worktree, but a task started ahead of its story (see *Worktree Binding*) is the case where it does not — exactly the row where a task's badge says something its story's does not, and the one a type rule would hide.
-- **Feature name comes straight from the stored `Worktree` string**, so a work still shows its original worktree name even after that worktree is deleted. The live worktree list is consulted for one thing only: whether that worktree is still there. Once it is not, the badge is a muted `Archive` marker instead of a link — there is nowhere to go, and the link used to bounce off the redirect guard back to main (the glyph and the ban on `th-error` for this state are [cross-worktree-session-ui.md](../cross-worktree-session-ui.md#gitbranch-and-archive)). An empty list reads as *not loaded yet* rather than *no worktrees*, the same reading the redirect guard takes.
+- **Feature name comes straight from the stored `Worktree` string**, so a work still shows its original worktree name even after that worktree is deleted. The live worktree list is consulted for one thing only: whether that worktree is still there. Once it is not, the badge is a muted `Archive` marker instead of a link — there is nowhere to go, and the link used to bounce off the redirect guard back to main (the glyph and the ban on `th-error` for this state are [cross-worktree-session-ui.md](../cross-worktree-session-ui.md#foldergit2-and-archive)). An empty list reads as *not loaded yet* rather than *no worktrees*, the same reading the redirect guard takes.
 - **Empty `Worktree` (main) resolves to the main branch name**, matching `WorktreeSwitcher`, and falls back to a neutral `Default` until the worktree list loads (never a guessed `main`/`master` literal). Only this main path reads the worktree list, and it reuses the existing `["worktrees"]` react-query cache read-only rather than opening a new subscription. On non-git projects the main badge renders nothing, since there is no worktree concept to show — and it renders nothing while `isGitRepo` is still unknown, so a project without git never shows it for a frame. A non-main name left over from when the project was a repository needs no rule of its own: outside a repository the list holds only main, so that name is *gone* and gets the `Archive` marker above ([git-ui.md](../git-ui.md#projects-without-a-repository)).
 - **Visual hierarchy encodes the exception.** A feature worktree is accented (it is the noteworthy case, and accent doubles as the app's interactive/link color, so the chip also reads as clickable); the main worktree is muted, matching that it is the silent default.
 

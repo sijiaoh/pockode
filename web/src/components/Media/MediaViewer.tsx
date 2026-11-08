@@ -1,7 +1,6 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { CircleAlert, Download, ExternalLink, Globe } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { useBackToClose } from "../../hooks/useBackToClose";
 import { imageSourceBlob } from "../../hooks/useImageSrc";
 import { saveRawFile } from "../../hooks/useRawMediaSource";
 import { saveBlob } from "../../lib/fileDownload";
@@ -29,13 +28,6 @@ export interface MediaViewerProps {
 	 */
 	openInFiles?: () => void;
 	onClose: () => void;
-	/**
-	 * Runs once the viewer has closed — by any of the viewer's own ways — and
-	 * its history entry is gone, for an opener that must not change the history
-	 * under it before then: a navigation it makes then would be undone, or
-	 * stepped over, by the Back that takes the entry.
-	 */
-	afterClose?: () => void;
 }
 
 type StageState =
@@ -133,37 +125,18 @@ async function saveItem(
 
 /**
  * A piece of media on a screen of its own (docs/media-viewer.md): the chrome
- * every kind shares — title and caption, Save, Open in Files, the back
- * gesture, the frame that holds focus — around the stage for the item's kind.
+ * every kind shares — title and caption, Save, Open in Files, the frame that
+ * holds focus — around the stage for the item's kind.
  *
  * Built on `Sheet fullScreen`, which brings the scroll lock, the Escape claim,
- * the focus trap and closing when covered. Never open one from inside another
- * sheet: both listen for Escape on `document`, and one press would close both.
+ * the back gesture, the focus trap and closing when covered. Never open one
+ * from inside another sheet: both listen for Escape on `document`, and one
+ * press would close both.
  */
-export function MediaViewer({
-	item,
-	openInFiles,
-	onClose,
-	afterClose,
-}: MediaViewerProps) {
+export function MediaViewer({ item, openInFiles, onClose }: MediaViewerProps) {
 	const queryClient = useQueryClient();
-	/** Run once the viewer's history entry is gone; see `useBackToClose`. */
-	const afterCloseRef = useRef<(() => void) | null>(null);
-	// Set as the viewer closes rather than ahead of time: `useBackToClose` runs
-	// and clears it at any unmount, StrictMode's rehearsal included.
-	const closeThen = (then?: () => void) => {
-		afterCloseRef.current =
-			afterClose || then
-				? () => {
-						afterClose?.();
-						then?.();
-					}
-				: null;
-		onClose();
-	};
 	// What the sheet gets: its backdrop passes the click on as an argument.
-	const close = () => closeThen();
-	useBackToClose(close, afterCloseRef);
+	const close = () => onClose();
 
 	const frameRef = useRef<HTMLElement>(null);
 	const keysRef = useRef<StageKeyHandler | null>(null);
@@ -196,9 +169,14 @@ export function MediaViewer({
 		}
 	};
 
-	// Navigating lands after the history entry is gone, or the Back that takes
-	// it would undo the navigation.
-	const openFiles = openInFiles && (() => closeThen(openInFiles));
+	// The navigation is held until the viewer's history entry is gone
+	// (docs/project-ui.md §5.2), so Back from Files lands on the page.
+	const openFiles =
+		openInFiles &&
+		(() => {
+			onClose();
+			openInFiles();
+		});
 
 	return (
 		<Sheet

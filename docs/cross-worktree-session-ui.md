@@ -63,8 +63,12 @@ Overlay routes deliberately do not carry it (see [Known gaps](#known-gaps)).
 
 ### The filter panel
 
-`Filter sessions` holds one flat level of grouping — the panel's own title is its
-heading, so the existing checkbox has no group header of its own:
+At `expanded` the panel drops down across the whole New Chat row, the same
+width as the worktree switcher's
+([sidebar-ui.md](sidebar-ui.md#the-top-of-the-sidebar)); below it the panel is
+a bottom sheet. `Filter sessions` holds one flat level of grouping — the
+panel's own title is its heading, so the existing checkbox has no group header
+of its own:
 
 ```
 Show task sessions
@@ -72,9 +76,9 @@ Show task sessions
 WORKTREES
   ○ This worktree
   ○ All worktrees
-  ○ <GitBranch> feature-x     12
+  ○ <FolderGit2> feature-x     12
 DELETED
-  ○ <Archive>   old-fix        3
+  ○ <Archive>    old-fix        3
 ```
 
 - **A single choice, not a set.** The intent is "go and look at another
@@ -108,11 +112,11 @@ While the filter is anything but `This worktree`, the trigger button carries a
 else's once the panel is closed, and the filter is not persisted, so there is no
 other way to find out.
 
-### `GitBranch` and `Archive`
+### `FolderGit2` and `Archive`
 
 Two glyphs carry "still there" against "deleted", in the filter rows, on the list
 rows, on the context line, on both strips of the read-only screen, and on a
-work's `WorktreeBadge`. A 240px row has no space for the word `(deleted)`, and
+work's `WorktreeBadge`. A 280px row has no space for the word `(deleted)`, and
 `Archive` says exactly the right thing — *kept, but no longer running*. Screen
 readers get the word: `, deleted worktree`.
 
@@ -133,7 +137,7 @@ and the list:
 | `All worktrees` | `Sessions from every worktree. Opening one may switch worktree.` |
 
 The difference belongs to the list, not to any session in it: on a row it would
-repeat dozens of times and compete with the title for a 240px line. Under
+repeat dozens of times and compete with the title for a 280px line. Under
 `All worktrees` the per-row glyph carries the distinction instead.
 
 **It must not look like a group header.** Sentence case, no uppercase, no letter
@@ -148,7 +152,7 @@ third group header.
 - Otherwise the marker goes in the row's **subtitle**, not its left slot: the
   left slot is fork's, and a forked session from another worktree would otherwise
   need two. The subtitle reads `<glyph> feature-x · 14:22`, the name truncating
-  and the time holding its width — the name is what gives way in a 240px column.
+  and the time holding its width — the name is what gives way in a 280px column.
 - A row of the worktree the user is standing in is unmarked even under
   `All worktrees`, and opens and deletes exactly as it always has.
 - **The open session's row is highlighted whichever list it came from.** A viewed
@@ -249,7 +253,7 @@ there for. The deleted wording is the one the app reaches on its own.
 
 ### Top: whose conversation this is
 
-`SessionOriginBar` — `<GitBranch> Session from "feature-x"`, or
+`SessionOriginBar` — `<FolderGit2> Session from "feature-x"`, or
 `<Archive> Session from "feature-x" (deleted)`.
 
 It does not scroll with the transcript: *this is not the worktree you are in* has
@@ -384,9 +388,9 @@ worktree's conversation beside another worktree's list.
 - **File links open the current worktree's file.** A path in a viewed transcript
   may name a file whose content differs, or which does not exist. Files belong to
   the worktree the user is standing in, by design. A page an agent drew
-  (`html_render`) in a viewed transcript loads its project files from the
-  current worktree the same way, and the viewed worktree's absolute paths in it
-  stay out of reach ([project files](tool-call-ui.md#project-files)).
+  (`html_render`, `html_edit`) in a viewed transcript loads its project files
+  from the current worktree the same way, and the viewed worktree's absolute
+  paths in it stay out of reach ([project files](tool-call-ui.md#project-files)).
 - **A current-worktree row under `All worktrees` is a snapshot** like every other
   row in that list, so a session running right now may show a stale state there.
   `All worktrees` is a way of finding something, not a view to sit in; one

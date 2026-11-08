@@ -21,9 +21,76 @@ const GIT_BUSY_CODE = -32001;
 const NOT_GIT_REPO_CODE = -32002;
 
 /**
+ * Where: server/rpc/types.go's CodeGitOperationInProgress. A commit, branch
+ * switch, new branch, branch delete or pull the repository's merge, rebase,
+ * cherry-pick or revert would have been finished or derailed by; `data.kind`
+ * names it.
+ */
+const OPERATION_IN_PROGRESS_CODE = -32006;
+
+/**
+ * Where: server/rpc/types.go's CodeGitConflicted. A stage, unstage or discard
+ * naming paths with unresolved conflicts, refused before any path in it was
+ * touched; `data.action` names the write and `data.paths` the paths.
+ */
+const CONFLICTED_CODE = -32007;
+
+/**
+ * Where: server/rpc/types.go's CodeGitHunkStale. The hunk named is no longer
+ * in the file's diff — the file changed after the diff on screen was read —
+ * and nothing was written.
+ */
+const GIT_HUNK_STALE_CODE = -32005;
+
+/**
+ * Where: server/rpc/types.go's CodeGitBranchChanged. The branch no longer
+ * points at the tip the user confirmed deleting, or — `data.gone` — no longer
+ * exists at all. Nothing was deleted.
+ */
+const GIT_BRANCH_CHANGED_CODE = -32009;
+
+/**
+ * Where: server/rpc/types.go's CodeGitBranchCheckedOut. A delete of the
+ * current branch, or of one `data.worktree` has checked out. Nothing was
+ * deleted.
+ */
+const GIT_BRANCH_CHECKED_OUT_CODE = -32010;
+
+/**
+ * The sentence for a branch inspect or delete the server refused because of
+ * where the branch is now, or null for any other failure. It names the branch,
+ * which the refusal itself cannot be relied on to do in the user's words.
+ */
+export function branchRefusalSummary(
+	error: unknown,
+	branch: string,
+): string | null {
+	if (!(error instanceof JSONRPCErrorException)) return null;
+	if (error.code === GIT_BRANCH_CHANGED_CODE) {
+		return dataField(error.data, "gone") === true
+			? `${branch} no longer exists.`
+			: `${branch} has changed since. Open its menu again to see what deleting it would lose.`;
+	}
+	if (error.code === GIT_BRANCH_CHECKED_OUT_CODE) {
+		const worktree = dataField(error.data, "worktree");
+		return typeof worktree === "string" && worktree !== ""
+			? `Could not delete ${branch}: it is checked out in ${worktree}.`
+			: `Could not delete ${branch}: it is the current branch.`;
+	}
+	return null;
+}
+
+/** Whether a hunk write was refused because the diff it was read from is out of date. */
+export function isHunkStale(error: unknown): boolean {
+	return (
+		error instanceof JSONRPCErrorException && error.code === GIT_HUNK_STALE_CODE
+	);
+}
+
+/**
  * The operations the server names in a refusal, each as the gerund that goes
  * after "busy". The keys are the contract (server/git/lock.go); the values are
- * the only part a user reads, so they say what the panel calls the action
+ * the only part a user reads, so they say what the workspace calls the action
  * rather than what the RPC is called.
  */
 const BUSY_OPERATIONS: Record<string, string> = {
@@ -33,9 +100,21 @@ const BUSY_OPERATIONS: Record<string, string> = {
 	commit: "committing",
 	checkout: "switching branches",
 	"branch-create": "creating a branch",
+	"branch-delete": "deleting a branch",
 	fetch: "fetching",
 	pull: "pulling",
 	push: "pushing",
+	abort: "aborting an operation",
+};
+
+/**
+ * The writes the server refuses over a conflicted path, each as the participle
+ * after "Nothing was". The keys are the contract (server/git/lock.go's names).
+ */
+const CONFLICTED_ACTIONS: Record<string, string> = {
+	stage: "staged",
+	unstage: "unstaged",
+	discard: "discarded",
 };
 
 /** How a failed git request is shown: a sentence, and git's own words if any. */
@@ -53,14 +132,30 @@ export interface GitFailure {
  * The plain-language sentence for a request the server refused before git ran,
  * or null if the failure is anything else.
  *
- * Exported for the two sheets that put the sentence inside one of their own,
- * naming the branch the refusal cannot name; anything that renders a failure
- * as it comes wants describeGitFailure.
+ * Exported for the messages that put the sentence inside one of their own,
+ * naming the branch the refusal cannot name — the two create sheets and a
+ * branch switch's failure; anything that renders a failure as it comes wants
+ * describeGitFailure.
  */
 export function gitRefusalSummary(error: unknown): string | null {
 	if (!(error instanceof JSONRPCErrorException)) return null;
 	if (error.code === NOT_GIT_REPO_CODE) {
 		return "This project is no longer a git repository.";
+	}
+	if (error.code === OPERATION_IN_PROGRESS_CODE) {
+		const kind = dataField(error.data, "kind");
+		return typeof kind === "string"
+			? `This worktree is in the middle of a ${kind}. Abort it, or let the agent finish it.`
+			: "This worktree is in the middle of an operation. Abort it, or let the agent finish it.";
+	}
+	if (error.code === CONFLICTED_CODE) {
+		const data = dataField(error.data, "paths");
+		const paths = Array.isArray(data) ? data : [];
+		const done =
+			CONFLICTED_ACTIONS[String(dataField(error.data, "action"))] ?? "changed";
+		return paths.length > 0
+			? `Nothing was ${done}: ${paths.join(", ")} ${paths.length === 1 ? "has" : "have"} unresolved conflicts.`
+			: `Nothing was ${done}: some of the files have unresolved conflicts.`;
 	}
 	if (error.code !== GIT_BUSY_CODE) return null;
 
@@ -73,13 +168,17 @@ export function gitRefusalSummary(error: unknown): string | null {
 }
 
 function busyOperation(data: unknown): string | null {
-	if (typeof data !== "object" || data === null) return null;
-	const operation = (data as { operation?: unknown }).operation;
+	const operation = dataField(data, "operation");
 	return typeof operation === "string" ? operation : null;
 }
 
+function dataField(data: unknown, key: string): unknown {
+	if (typeof data !== "object" || data === null) return undefined;
+	return (data as Record<string, unknown>)[key];
+}
+
 /**
- * A failed git request as the panel shows it, keeping the two kinds of failure
+ * A failed git request as the workspace shows it, keeping the two kinds of failure
  * apart: a refusal is the server's own sentence about a request that never ran,
  * while everything else is git failing and gets its output quoted verbatim —
  * the reader is a developer who needs git's words, not a paraphrase of them.

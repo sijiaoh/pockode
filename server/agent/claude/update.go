@@ -13,13 +13,35 @@ import (
 
 // UpdateCLI is Claude Code as cliupdate updates it: `claude update`, which
 // knows whether it is the native build, an npm install or a package manager's.
+// A missing one is installed with the native installer, on the channel the
+// user's settings name, so that the later `claude update` follows it too.
 func UpdateCLI() cliupdate.CLI {
 	return cliupdate.CLI{
 		Binary:  Binary,
 		Package: "@anthropic-ai/claude-code",
 		Channel: func() string { return updateChannel(configDir()) },
+		Installer: cliupdate.Installer{
+			// install.sh is bash, not sh: it uses [[ ]] and BASH_REMATCH. It
+			// refuses to run on Windows; install.ps1 is the one there.
+			Unix: cliupdate.Script{
+				URL:         "https://claude.ai/install.sh",
+				Shell:       []string{"bash"},
+				Args:        installTarget,
+				Downloaders: cliupdate.CurlOrWget,
+			},
+			Windows: cliupdate.Script{
+				URL:   "https://claude.ai/install.ps1",
+				Shell: cliupdate.PowerShell,
+				Args:  installTarget,
+			},
+		},
 	}
 }
+
+// installTarget is the native installers' one argument, their TARGET: stable,
+// latest or a version. It is handed on to `claude install`, which records it
+// as the channel the install updates from.
+func installTarget(channel string) []string { return []string{channel} }
 
 // updateChannel is the release channel `claude update` installs from: the
 // autoUpdatesChannel of the user's settings in dir, "latest" or "stable", and

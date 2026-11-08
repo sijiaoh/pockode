@@ -3,6 +3,7 @@
 package shutdown
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -18,6 +19,90 @@ import (
 // always in the same session, while no other session can reach in.
 func eventName(pid int) string {
 	return `Local\pockode-shutdown-` + strconv.Itoa(pid)
+}
+
+// restartEventName is the kernel event a pockode process waits on to be asked
+// to restart: Windows has no signal to spare, so it is the stand-in for unix's
+// SIGUSR1, in the same namespace as eventName and for the same reason.
+func restartEventName(pid int) string {
+	return `Local\pockode-restart-` + strconv.Itoa(pid)
+}
+
+// watchRestartRequests publishes this process's restart event and calls
+// deliver each time it is signalled, for the rest of the process's life — as
+// the signal handler on unix is never removed.
+//
+// Auto reset, unlike the shutdown event: a restart can be refused (the
+// executable on disk does not run) and the process carries on, so a request is
+// consumed by being taken, and the next one must be seen as new. Requests that
+// arrive before the previous one is taken coalesce, as the signals do.
+//
+// If the event cannot be published, the process can still restart from its own
+// UI; only a request from outside is lost, and RequestRestart reports that to
+// the caller as ErrRestartUnsupported.
+func watchRestartRequests(deliver func()) {
+	name, err := windows.UTF16PtrFromString(restartEventName(os.Getpid()))
+	if err != nil {
+		slog.Error("failed to build restart event name", "error", err)
+		return
+	}
+
+	event, err := windows.CreateEvent(nil, 0, 0, name)
+	if err != nil {
+		// As in watchExitRequests: a name already taken is not adopted.
+		if event != 0 {
+			windows.CloseHandle(event)
+		}
+		slog.Error("failed to publish restart event", "name", restartEventName(os.Getpid()), "error", err)
+		return
+	}
+
+	go func() {
+		for {
+			result, err := windows.WaitForSingleObject(event, windows.INFINITE)
+			if err != nil {
+				slog.Error("restart event wait failed", "error", err)
+				return
+			}
+			if result == windows.WAIT_OBJECT_0 {
+				deliver()
+			}
+		}
+	}()
+}
+
+// RequestRestart asks the process with the given PID to restart itself by
+// signalling its restart event. It returns once the request is made; whether
+// the process accepts it is the process's to decide (internal/restart), and it
+// does not answer.
+//
+// No event under the PID is ErrRestartUnsupported: the process is a pockode
+// build that predates restarts, or not pockode at all, or gone, or one that
+// failed to publish the event (it logs that). Unlike RequestExit there is no
+// console fallback — Ctrl+Break means exit, never restart.
+//
+// The PID is checked as in RequestExit, for symmetry rather than safety: an
+// event name cannot address a group.
+func RequestRestart(pid int) error {
+	if pid <= 0 {
+		return fmt.Errorf("cannot ask process %d to restart: pid must be positive", pid)
+	}
+
+	name, err := windows.UTF16PtrFromString(restartEventName(pid))
+	if err != nil {
+		return err
+	}
+
+	handle, err := windows.OpenEvent(windows.EVENT_MODIFY_STATE, false, name)
+	if err != nil {
+		if errors.Is(err, windows.ERROR_FILE_NOT_FOUND) {
+			return fmt.Errorf("process %d: %w", pid, ErrRestartUnsupported)
+		}
+		return fmt.Errorf("open restart event: %w", err)
+	}
+	defer windows.CloseHandle(handle)
+
+	return windows.SetEvent(handle)
 }
 
 // RequestExit asks the process with the given PID to shut down gracefully.

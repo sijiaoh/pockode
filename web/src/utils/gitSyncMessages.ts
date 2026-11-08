@@ -1,3 +1,4 @@
+import type { SyncOperation } from "../lib/gitSyncStore";
 import { describeGitSync, type GitSync } from "../types/git";
 
 /** git's own words when --ff-only meets a diverged branch. */
@@ -17,7 +18,7 @@ export const FETCH_FAILURE = "Fetch failed.";
 
 /**
  * The count comes back from the pull itself: it fetches first, so it can bring
- * in more than the panel's numbers promised.
+ * in more than the workspace's numbers promised.
  */
 export function pullSuccess(pulled: number): string {
 	return pulled > 0 ? `Pulled ${commits(pulled)}.` : "Already up to date.";
@@ -41,7 +42,7 @@ export function pushSuccess(sync: GitSync): string {
 
 /**
  * Both rejections mean the same thing to the user — the remote moved — but only
- * after a fetch can the panel tell them whether pulling is enough. Anything else
+ * after a fetch can the workspace tell them whether pulling is enough. Anything else
  * gets no guessed summary; git's own message is below it either way.
  */
 export function pushFailureSummary(detail: string): string {
@@ -52,4 +53,25 @@ export function pushFailureSummary(detail: string): string {
 		return "Push rejected: the remote has commits you do not have. Fetch, then pull or force push.";
 	}
 	return "Push failed.";
+}
+
+/**
+ * Why a plain push could not follow a commit right now, null when it could.
+ * Only the reasons that hold whatever is committed: amending a pushed commit is
+ * the commit sheet's own to say, beside the amend toggle.
+ *
+ * A branch behind its upstream would diverge with one more commit, and a
+ * diverged push is a force push — which stays behind the Sync sheet's
+ * confirmation. `behind` means nothing while the branch still needs publishing.
+ */
+export function commitPushBlocker(
+	sync: GitSync,
+	running: SyncOperation | null,
+): string | null {
+	// The sync store refuses a second run, so the push would never start.
+	if (running) return `Waiting for the ${running} to finish.`;
+	if (!describeGitSync(sync).needsPublish && sync.behind > 0) {
+		return `${sync.upstream} has ${commits(sync.behind)} this branch does not — pull before pushing.`;
+	}
+	return null;
 }

@@ -331,6 +331,26 @@ describe("overlayToNavigation", () => {
 	});
 });
 
+// docs/file.md#where-the-viewer-opens: a line implies the source, so one state
+// has one URL.
+describe("the file view's mode in the URL", () => {
+	const searchOf = (mode: { source?: boolean; line?: number }) =>
+		overlayToNavigation({ type: "file", path: "a.md", ...mode }, "", "s1")
+			.search;
+
+	it("writes the source, and the line without the source it implies", () => {
+		expect(searchOf({ source: true })).toEqual({
+			session: "s1",
+			mode: "source",
+		});
+		expect(searchOf({ source: true, line: 42 })).toEqual({
+			session: "s1",
+			line: 42,
+		});
+		expect(searchOf({})).toEqual({ session: "s1" });
+	});
+});
+
 // docs/project-ui.md §5. `Current` is the absence of the parameter, so that one
 // state has one URL and the Stories button's plain `/works` means `Current`.
 describe("the work list segment in the URL", () => {
@@ -355,6 +375,28 @@ describe("the work list segment in the URL", () => {
 			to: "/w/$worktree/works/$workId",
 			params: { workId: "w1", worktree: "feature-x" },
 			search: { session: "sess123", segment: "closed" },
+		});
+	});
+});
+
+// The Git workspace follows the same rule: `changes` is the absence of the
+// parameter, never `segment=changes`.
+describe("the Git workspace segment in the URL", () => {
+	it("writes nothing for Changes and the word for the others", () => {
+		expect(
+			overlayToNavigation({ type: "git", segment: "changes" }, "", null),
+		).toEqual({ to: "/git" });
+
+		expect(
+			overlayToNavigation(
+				{ type: "git", segment: "branches" },
+				"feature-x",
+				"sess123",
+			),
+		).toEqual({
+			to: "/w/$worktree/git",
+			params: { worktree: "feature-x" },
+			search: { session: "sess123", segment: "branches" },
 		});
 	});
 });
@@ -385,5 +427,109 @@ describe("the schedule routes", () => {
 			params: { worktree: "feature-x", scheduleId: "s1" },
 			search: { session: "sess123" },
 		});
+	});
+});
+
+describe("the History query in the URL", () => {
+	it("writes the default range as absence", () => {
+		expect(
+			overlayToNavigation(
+				{ type: "git", segment: "history", history: { scope: "current" } },
+				"",
+				null,
+			).search,
+		).toEqual({ segment: "history" });
+	});
+
+	it("carries the range and filters on the commit layers", () => {
+		const history = { scope: "all" as const, q: "lane", file: "a/b.ts" };
+		const expected = { scope: "all", q: "lane", file: "a/b.ts" };
+
+		expect(
+			overlayToNavigation({ type: "commit", hash: "abc", history }, "", null)
+				.search,
+		).toEqual(expected);
+		expect(
+			overlayToNavigation(
+				{ type: "commit-diff", hash: "abc", path: "x", history },
+				"",
+				null,
+			).search,
+		).toEqual(expected);
+		expect(
+			overlayToNavigation(
+				{ type: "commit-file", hash: "abc", path: "x", history },
+				"",
+				null,
+			).search,
+		).toEqual(expected);
+	});
+
+	it("is History's alone: another segment drops it", () => {
+		expect(
+			overlayToNavigation(
+				{ type: "git", segment: "branches", history: { scope: "all" } },
+				"",
+				null,
+			).search,
+		).toEqual({ segment: "branches" });
+	});
+});
+
+describe("the branch detail route", () => {
+	it("names the branch in the path, and a remote-only one in the search", () => {
+		expect(
+			overlayToNavigation(
+				{ type: "branch", ref: "feature/x", remote: false },
+				"",
+				null,
+			),
+		).toEqual({ to: "/branch/$", params: { _splat: "feature/x" } });
+		expect(
+			overlayToNavigation(
+				{ type: "branch", ref: "origin/x", remote: true },
+				"feature-x",
+				"sess123",
+			),
+		).toEqual({
+			to: "/w/$worktree/branch/$",
+			params: { worktree: "feature-x", _splat: "origin/x" },
+			search: { session: "sess123", remote: 1 },
+		});
+	});
+});
+
+describe("a commit opened from a branch", () => {
+	// docs/git-branches-ui.md#opening-a-commit: the branch's whole identity,
+	// carried on by every layer stacked under the commit.
+	it("carries the branch, and says when it is a remote one", () => {
+		expect(
+			overlayToNavigation(
+				{
+					type: "commit-diff",
+					hash: "abc",
+					path: "src/a.ts",
+					branch: { ref: "feature/x", remote: false },
+				},
+				"",
+				"sess123",
+			),
+		).toEqual({
+			to: "/commit/$hash/diff/$",
+			params: { hash: "abc", _splat: "src/a.ts" },
+			search: { session: "sess123", branch: "feature/x" },
+		});
+		expect(
+			overlayToNavigation(
+				{
+					type: "commit-file",
+					hash: "abc",
+					path: "src/a.ts",
+					branch: { ref: "origin/x", remote: true },
+				},
+				"",
+				null,
+			).search,
+		).toEqual({ branch: "origin/x", remote: 1 });
 	});
 });

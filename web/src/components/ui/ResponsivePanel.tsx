@@ -17,7 +17,7 @@ interface Props {
 	/** Panel content */
 	children: ReactNode;
 	/** Desktop panel position relative to trigger */
-	desktopPosition?: "left" | "right" | "stretch";
+	desktopPosition?: "left" | "stretch";
 	/**
 	 * Which side of the trigger the dropdown grows towards. "above" is for
 	 * triggers that sit at the bottom of the viewport, where a panel hanging below
@@ -100,8 +100,10 @@ function ResponsivePanel({
 	// In either tier, not only the drawer that locks the body: the dropdown sits
 	// between the user and the page just the same. Covering is what keeps the
 	// chat's interrupt off the press — it is a sibling `document` listener, and
-	// if it was registered first it runs before the mark below is made.
-	useCoverPage(isOpen);
+	// if it was registered first it runs before the mark below is made. And it
+	// is one step of Back in either tier, so a resize while it is open changes
+	// nothing in history (docs/project-ui.md §5.2).
+	useCoverPage(isOpen, { onBack: onClose });
 
 	// Close on Escape, and mark the press handled. This panel opens from the
 	// session header, which stays live under surfaces
@@ -137,11 +139,7 @@ function ResponsivePanel({
 	if (!isOpen) return null;
 
 	const desktopPositionClass =
-		desktopPosition === "left"
-			? "left-0"
-			: desktopPosition === "right"
-				? "right-0"
-				: "left-0 right-0";
+		desktopPosition === "left" ? "left-0" : "left-0 right-0";
 
 	const desktopPlacementClass =
 		desktopPlacement === "above" ? "bottom-full mb-1" : "top-full mt-1";

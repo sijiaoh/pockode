@@ -34,7 +34,7 @@ Method names are organized using the `namespace.method` format, solving two prob
 | `session_view.*` | app | `ws/rpc_session_view.go` |
 | `file.*` | worktree | `ws/rpc_file.go` |
 | `attachment.*` | worktree | `ws/rpc_attachment.go` |
-| `git.*` | worktree | `ws/rpc_git.go` |
+| `git.*` | worktree | `ws/rpc_git.go`; `git.commit.draft*` in `ws/rpc_git_draft.go` — its `.cancel` is connection-level, so it reaches a draft whose worktree was deleted or switched away from |
 | `fs.*` | worktree | `ws/rpc_fs.go` |
 | `worktree.*` | app | `ws/rpc_worktree.go` |
 | `command.*` | app | `ws/rpc_command.go` |
@@ -48,6 +48,7 @@ Method names are organized using the `namespace.method` format, solving two prob
 | `port_preview.*` | app | `ws/rpc_port_preview.go` |
 | `raw.*` | app | `ws/rpc_raw.go` |
 | `remote_url.*` | app | `ws/rpc_remote_url.go` |
+| `server.*` | app | `ws/rpc_server.go` and `ws/rpc_server_update.go`; a cluster serves the same methods from `cluster/ws.go` |
 
 - **Worktree scope**: Operations that depend on the current working directory (files, Git, etc.)
 - **App scope**: Global operations across worktrees (settings, project management, etc.)
@@ -66,6 +67,156 @@ ticket that logs a [port preview](relay-system.md#logging-in) tab in without
 the password. It is refused with `CodeInvalidRequest` when the relay is
 disabled or has stopped — the same signal as an empty `remote_url` in the
 `auth` reply — since previews do not exist then.
+
+### Server: Installed Version and Restart
+
+`server.version` and `server.restart` are the process itself: the version
+installed on disk, and restarting into it (`server/internal/restart`; the UI is
+[restart-ui.md](../restart-ui.md)). A pockode server and a cluster serve both,
+through one `ws.ServerControl`; the running version is not here, it is the
+`auth` reply's.
+
+| Method | Params | Result |
+|---|---|---|
+| `server.version` | none | `installed: { version?, error?, path }`; on a pockode server also `running_turns` |
+| `server.restart` | none | `{}`, then the connection closes with `1012 Service Restart` |
+
+`installed` is read by running `<path> --version` for every request — an
+upgrade replaces the file without the server hearing of it, so nothing is cached
+and nothing is pushed. `version` is what it printed (`0.21.0`, `dev`); `error`,
+when it could not be read, says why in English, and is also why a restart would
+be refused. `path` is the executable saved at startup, the one a restart runs.
+`running_turns` counts the sessions, across every worktree, whose turn a
+restart stops: one under way, running or blocked, or a permission request still
+waiting for its answer after its turn ended. A question an agent posted is not
+one — it belongs to the session and survives the restart.
+
+A refusal is `CodeRestartRefused` (`-32011`) with `data.reason`, and changes
+nothing. The message is written to be shown as it is, with "Pockode" or "The
+cluster" as its subject:
+
+| `reason` | When | Message |
+|---|---|---|
+| `not_runnable` | `<path> --version` fails, or the working directory the process started in is gone — a restart runs there | "The installed pockode at `<path>` didn't run: `<why>`. Pockode kept running; nothing was stopped." |
+| `already_restarting` | A restart was accepted already — another client, `kill -USR1` | "Pockode is already restarting." The connection drops for it shortly |
+| `shutting_down` | The process is shutting down to exit | "Pockode is shutting down." |
+
+A cluster's `node.restart` refuses with the same code, and `not_runnable` and
+`already_restarting` mean the same of the node; it adds `older_node` and
+`not_running` ([cluster.md](../cluster.md#restarting-from-the-cluster)).
+`@pockode/shared`'s `restartRefusedReason` reads all five, so the code is known
+in one place on each side.
+
+**A success reaches the client before the process starts going down.** The
+shutdown begins by stopping the relay, so a reply that has merely been written
+to the socket may still be in the tunnel when it is torn down, and a client
+that sees its connection drop without a reply cannot tell a restart from a
+failure. So the request is accepted *held* (`Restarter.RequestHeld`): it is
+pending and refuses every later request, but the shutdown loop does not see it
+yet. The handler queues the reply, closes the connection with `1012` behind
+it, and releases the hold only once the close handshake is over — the client
+has answered the close frame — or after 10 s. A client that answers a close has
+read every frame before it, and that holds end to end: the relay carries the
+connection's frames in order, the close among them, through the local reverse
+proxy that reaches `/ws`. `WebSocketStream.CloseAfterFlush` is the close that
+can be waited on. The other connections end in the shutdown that follows: the
+relayed ones when the relay stops, which comes first, and the direct ones with
+`1001` ([Closing on Shutdown](#closing-on-shutdown)).
+
+### Server: Updating to a Release
+
+`server.update_check` and `server.update` install a published release over the
+executable a restart runs; the restart into it is the client's ordinary
+`server.restart` that follows, refused or accepted exactly as above. Both modes
+serve them through the same `ws.ServerControl`, whose `Updater` is one per
+process — `server/internal/release` finds the candidates,
+`server/selfinstall` replaces the file. The screens are
+[self-update-ui.md](../self-update-ui.md); the shapes on the client are
+`@pockode/shared`'s, beside `InstalledVersion`.
+
+| Method | Params | Result |
+|---|---|---|
+| `server.update_check` | `force?` | `{ checked_at?, candidates, latest_version?, check_error?, cannot_install?, installing?, platform, asset }` |
+| `server.update` | `version` | `{}` once the file has been replaced |
+
+The check's parts are independent, so each can be drawn on its own:
+
+- **`candidates`** — `{ channel, version, notes_url, unavailable? }`, latest
+  then alpha, never `null`. Each is newer than the running version (the
+  release package's rule) **and** than the installed one, read afresh as for
+  `server.version`: a release already on disk is a restart away, not an
+  update. An installed version that is not a release (`dev`, unreadable) sets
+  no floor. `unavailable` is `{ reason: no_asset | no_checksums, message }`
+  for a release with nothing this platform can install.
+- **`latest_version`** — the newest final release whether or not it is a
+  candidate: what an alpha candidate is a prerelease beside when latest is
+  not offered (the running or installed version is past it).
+- **`checked_at`** — when the candidates were last confirmed. Absent with no
+  `check_error` means this process has not checked yet: nobody has sent
+  `force` since it started, or the first forced check is still running past
+  the caller's own deadline. It is never "up to date".
+- **`check_error`** — `{ reason, message }`: `dev_build` (never checked) or
+  `unavailable` (the GitHub API and `releases.atom` both failed). The
+  candidates of the last good check stay beside it.
+- **`cannot_install`** — `{ reason, message, dir?, hint? }`: `dev_build`,
+  `container` or `not_writable`, the last with the real file's directory and
+  the OS-specific advice (`hint`, commands in backticks) that ends `message`.
+  An error finding out — the executable at the saved path is gone, say — has
+  `reason` `""`. Restarting is unaffected.
+- **`installing`** — `{ version, channel, started_at }` for this process's
+  install, whichever client asked for it; `{}` for one another Pockode of the
+  same OS user runs (it holds the install lock).
+- **`platform`**, **`asset`** — `linux/amd64`, `pockode-linux-amd64`: what
+  this server downloads, for copy about a release without it.
+
+Only `force` makes the server ask GitHub. Without it the answer is what the
+process already knows — nothing at all on a fresh process — and the only wait
+is for a check already under way, which the call joins (at most the check's
+own 20 s) so that a second device asking during one gets its answer. With it
+the server starts a check, unless one started less than a minute ago, whose
+answer it returns instead (joined if still running): one real request a
+minute per process at most, a failed one included — a failure is not retried
+sooner. Nothing checks on a timer or on connect: every Pockode behind one
+address shares GitHub's 60 unauthenticated requests an hour, and a
+per-process floor cannot keep them inside it
+([self-update.md](self-update.md#asking-github-rarely)).
+
+`server.update` installs `version` only if it is a candidate of the cached
+check, measured against the installed version as above — the client never
+makes the server install something older, or what is already on disk. It
+never checks by itself: until a forced check has answered on this process
+there is nothing on offer, and every version is `release_gone`. It answers
+when the install ends. The install belongs to the process, not the request:
+a dropped connection does not stop it, and the next check shows how it ended;
+only its 5-minute budget, counted from the request's arrival, does —
+up to the replacement, which is not cut short once begun (on Windows it may
+wait out antivirus). The shutdown before an exit or a restart, before it
+closes the connections, stops an install still downloading, waits for a
+replacement already begun, and keeps a later one from starting
+(`Updater.Close`), so a process never goes down between Windows' two renames.
+The stopped install answers with reason `""` if its connection still carries
+it — a restart's own client sees its connection close either way — and the
+next check, from whatever runs next, shows the file unchanged. A failure is `CodeUpdateFailed`
+(`-32012`) with `data.reason`, and the message can be shown as it is:
+
+| `reason` | When |
+|---|---|
+| `release_gone` | `version` is not a candidate (any more) — or, found under the install lock, the file on disk is already that version or newer: another install finished first |
+| `not_installable` | This server cannot install at all (`cannot_install`'s reasons) |
+| `already_installing` | An install of this process or of another Pockode of the OS user is under way |
+| `no_asset` | No build for this platform: the candidate's own `unavailable`, or found while downloading — a 404, or `checksums.txt` not listing it — which is the only way to know when the check came from `releases.atom` |
+| `no_checksums` | The release has no usable `checksums.txt`: likewise from the candidate, or from the download |
+| `download_failed` | A file of the release could not be fetched or written |
+| `checksum_mismatch` | The download is not what the release published |
+| `not_runnable` | The download does not run here with `--version`, or reports another version |
+| `replace_failed` | The new file could not be renamed into place |
+| `restore_failed` | Windows only: the old file was moved aside and could not be put back; the message says where it is |
+| `timeout` | The 5-minute budget ran out before the rename |
+| `""` | Anything else, by its message |
+
+Every reason but `restore_failed` leaves the executable as it was.
+`@pockode/shared`'s `updateFailedReason` reads them, and `UPDATE_BUDGET_MS`
+is the budget a client's request timeout has to exceed.
 
 ### Raw Capabilities
 
@@ -197,7 +348,7 @@ Follows standard JSON-RPC 2.0; Pockode has no custom extensions.
 {
   "jsonrpc": "2.0",
   "id": 1,
-  "result": { "files": [...] }
+  "result": { "staged": [...], "unstaged": [...], "submodules": {} }
 }
 ```
 
@@ -211,6 +362,9 @@ parsed — or, for a message carrying `answering`, `content` alone: the body the
 server wrote from the answers ([agent-integration.md](agent-integration.md#answering)),
 and, for a message carrying files, `attachments` — each file as its record
 describes it ([agent-integration.md](agent-integration.md#files-the-user-sends)).
+`chat.html_action`, a page's send ([tool-call-ui.md](../tool-call-ui.md#the-action-message)),
+answers the same result with `content` and `html_action` — the text the server
+wrote for the agent and the action as its record holds it.
 It needs one because the sender is deliberately left out of the
 broadcast that carries every other record's `seq` (it has already echoed the
 message into its own transcript), so the reply is the only place that address —
@@ -751,7 +905,13 @@ rather than showing a loading spinner indefinitely.
 Because reconnection never gives up, the banner is the only thing that tells a
 blip apart from an outage: after the fifth drop (about 15 s of accumulated
 backoff) it escalates from "Reconnecting..." to "Can't reach the server" and
-offers a manual retry. The escalation and the copy live in
+offers a manual retry. While the page waits on a restart it asked for
+(`restartRequestedAt`, set by `restartServer` and cleared by the next
+successful `auth`) the banner says "Restarting..." instead, and escalates on the
+attempts or a minute after the reply, whichever comes first
+([restart-ui.md](../restart-ui.md#while-it-restarts)). A restart whose
+connection drops before its reply arrives is waited on the same way: the
+reconnect's version says how it went. The escalation and the copy live in
 `packages/shared/src/components/ReconnectBanner.tsx`, because web-cluster's
 banner is the same one; `web/src/components/ui/ReconnectBanner.tsx` is the
 wrapper that reads this project's store.
@@ -815,6 +975,26 @@ with a normal closure, so a reply sent just before closing — an auth refusal �
 still reaches the client. It does not wait for that to finish, because jsonrpc2
 calls it while holding the lock every send takes.
 
+### Closing on Shutdown
+
+`http.Server.Shutdown` does not end a WebSocket: the connection was hijacked,
+and the server stopped tracking it at that moment. Left alone, it lives until
+the process exits, and so does every request running on it — a commit message
+draft among them, whose AI CLI is killed only when its connection's context
+ends. Where the process does not exit right away (a restart on Windows waits on
+its successor, see [self-restart.md](self-restart.md#windows-a-successor)) a client would also stay attached
+to a server that has stopped instead of reconnecting to the new one.
+
+So both `/ws` handlers serve their connections through `ws.Connections`
+(`server/ws/connections.go`). Shutdown calls its `Close` after `srv.Shutdown`:
+every connection is closed with `1001 Going Away`, every request sees its
+context end, and `Close` waits — up to 10 s, a backstop for a request that
+ignores its context — for the connections and the requests that were running
+on them. A connection that arrives after that is closed at once, and a request
+that arrives after it is dropped — possible, because a handler that closes its
+own connection (an auth refusal) lets the connection end while its read loop
+may still dispatch one more request.
+
 ### Compression
 
 `websocket.Accept` negotiates permessage-deflate with the browser
@@ -833,7 +1013,7 @@ message cannot expand past it.
 ### Request Timeout
 
 RPC requests in web carry a client-side timeout, 30 seconds by default; in
-web-cluster only `auth` does:
+web-cluster only `auth` and `server.update` do:
 
 ```typescript
 const RPC_TIMEOUT_MS = 30000;
@@ -858,7 +1038,7 @@ the status is still `connected`, and refetches once reconnected. A user action
 that fails this way still reports it, because whether it took effect is
 unknown.
 
-The exception is `AGENT_START_RPC_TIMEOUT_MS`, a longer clock for the requests
+One exception is `AGENT_START_RPC_TIMEOUT_MS`, a longer clock for the requests
 that start an agent CLI on their own path.
 [Lock Strategy](agent-integration.md#lock-strategy) names those requests and the
 deadlines the server bounds a start with before it answers. Give up first and
@@ -869,6 +1049,23 @@ client timeout must outlast the deadlines the server spends answering it. A test
 pins those requests to a longer clock than the default, but nothing ties that
 clock to the Go deadlines it is derived from — the two sides only name each other
 in comments.
+
+The other exception is `COMMIT_DRAFT_RPC_TIMEOUT_MS`, for `git.commit.draft`
+alone, on the same rule: the server answers it only once the AI CLI has, after up
+to 90 seconds of its own, and a client that gave up first would throw away the
+`timeout` it says then while the paid run went on
+([Drafting a Commit Message](../git.md#drafting-a-commit-message)). It is never
+retried.
+
+The update RPCs follow the same rule. `server.update` answers only once the
+install has ended, within `UPDATE_BUDGET_MS` but for a replacement already
+begun ([Server: Updating to a Release](#server-updating-to-a-release)), so
+both frontends give it that budget plus minutes of margin: the shared
+`UPDATE_RPC_TIMEOUT_MS` (`@pockode/shared`).
+`server.update_check` can spend the installed-version probe and then the
+release check before it answers, which together reach 30 s, so web gives it
+`UPDATE_CHECK_RPC_TIMEOUT_MS`. Each constant's comment names the server
+deadlines it is derived from.
 
 **A timeout is not a failure the caller may retry blindly.** The server is likely
 still working on the request, so a retry stacks a second copy of that work on top
@@ -903,7 +1100,12 @@ mapping of the same errors. The chat handlers
 keep their own `replyErrorForChat`: what is not the server's fault (no such session, no live
 process) becomes a client error, and anything else is logged there and forwarded
 as the cause — a failing agent start has to leave a trace even when the client
-stopped waiting for the reply.
+stopped waiting for the reply. One of those client errors carries a `data`
+member: a send refused because the turn is blocked on a permission request
+(`chat.ErrTurnAwaitingAnswer`) is `InvalidParams` with `data.reason:
+"awaiting_permission"` (`rpc.ChatErrorData`), so a sender that cannot show the
+message — a page's `chat.html_action` — tells it from the rest without reading
+the words ([tool-call-ui.md](../tool-call-ui.md#while-the-session-is-busy)).
 
 **A refusal that is nobody's failure gets a code of its own.** `git.*` write
 methods answer `-32001` (`rpc.CodeGitBusy`) when a git operation they would
@@ -923,16 +1125,45 @@ is not a git repository at all; it needs no `data`, since what would make the
 request work — the repository appearing — arrives as `worktree.changed`
 ([git.md](../git.md#projects-without-a-repository)).
 `-32003` (`rpc.CodeCLIInstallRefused`) refuses a `cli_update.install` before
-anything ran, with `data.reason` — `already_installed`, `npm_not_found` or
-`busy` — because each asks the user for something different: nothing, Node.js,
-or waiting ([cli-update.md](cli-update.md#refused-before-it-starts)).
+anything ran, with `data.reason` — `already_installed`,
+`installer_tool_not_found` or `busy` — because each asks the user for something
+different: nothing, a shell or downloader on the server, or waiting
+([cli-update.md](cli-update.md#refused-before-it-starts)).
+`-32004` (`rpc.CodeCommitDraftFailed`) is not a refusal but a failure with
+several causes the user acts on differently: a `git.commit.draft` that produced
+no message, with `data.reason` (`timeout`, `auth_failed`, `cli_not_found`,
+`tool_use`, `cancelled`, …) for the commit sheet to pick its sentence by
+([git.md](../git.md#drafting-a-commit-message)).
+`-32005` (`rpc.CodeGitHunkStale`) refuses a `git.hunk.stage` / `git.hunk.unstage`
+whose hunk the file's current diff no longer has: nothing was written, and the
+client rereads the diff rather than retrying ([git.md](../git.md#staging-hunks)).
+`-32006` (`rpc.CodeGitOperationInProgress`) refuses a commit, checkout, new
+branch, branch delete or pull while the repository is in the middle of a merge, rebase,
+cherry-pick or revert, with `data.kind` naming it
+([git.md](../git.md#writes-refused-during-an-operation)); `-32007`
+(`rpc.CodeGitConflicted`) refuses a `git.add` (unless it says `resolve`),
+`git.reset`, `git.hunk.stage`, `git.hunk.unstage` or `git.discard` naming
+conflicted paths, with `data.action` and `data.paths`
+([git.md](../git.md#writes-refused-during-an-operation)). Both mean nothing ran.
+`-32008` (`rpc.CodeGitOperationChanged`) refuses a `git.abort` whose operation
+is no longer the one in progress, with `data.current` naming the one that is
+(empty when none): the user confirmed losing one particular merge or rebase, and
+the client has to be able to say it already ended rather than show a git failure
+([git.md](../git.md#aborting)).
+`-32009` (`rpc.CodeGitBranchChanged`) refuses a `git.branch.delete` whose
+branch no longer points at the tip the user confirmed, or — `data.gone` — no
+longer exists (an inspect of a missing branch too): nothing was deleted, and a
+moved branch is inspected again rather than retried; `-32010`
+(`rpc.CodeGitBranchCheckedOut`) refuses deleting the current branch or one
+another worktree has checked out, with `data.worktree`
+([git.md](../git.md#deleting-a-branch)).
 
 A server's error message is therefore text to put in front of a user, never a
 value to branch on — it embeds an arbitrary error string, and its fixed half is
 free to be reworded. Nothing on the client matches text against a server reply:
 `isAuthRejection` ([above](#auto-reconnect)) reads the code alone, and
 `isRPCTimeout` ([above](#request-timeout)) compares text only after code 0 has
-established that the error never came from the server at all. The git panel's
+established that the error never came from the server at all. The Git workspace's
 `web/src/utils/gitErrors.ts` is where that rule pays off: a refusal is
 recognised by `-32001` and never by its wording, so a git command that really
 ran and failed with prose that happens to read the same is still shown as what
@@ -950,6 +1181,7 @@ means the server never started it.
 | Server RPC handler | `server/ws/rpc.go` |
 | Server method handlers | `server/ws/rpc_*.go` |
 | Server WebSocket adapter | `server/ws/stream.go` |
+| Connections closed on shutdown | `server/ws/connections.go` |
 | Server watchers | `server/watch/*.go` |
 | Client store | `web/src/lib/wsStore.ts` |
 | Client actions | `web/src/lib/rpc/*.ts` |

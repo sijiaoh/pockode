@@ -30,3 +30,28 @@ func Rename(oldpath, newpath string) error {
 		time.Sleep(renameRetryDelay)
 	}
 }
+
+// Patient renames back off from patientRenameFirstDelay, doubling up to
+// patientRenameMaxDelay between attempts.
+const (
+	patientRenameFirstDelay = 50 * time.Millisecond
+	patientRenameMaxDelay   = time.Second
+)
+
+// RenamePatiently is Rename for a file that is expected to be held for longer
+// than Rename waits: an executable just written, which Windows Defender opens
+// to scan for seconds rather than milliseconds. It retries the same failures
+// as Rename, backing off, until budget has passed, and then returns the last
+// error. On unix it is a single os.Rename, as Rename is.
+func RenamePatiently(oldpath, newpath string, budget time.Duration) error {
+	deadline := time.Now().Add(budget)
+	delay := patientRenameFirstDelay
+	for {
+		err := os.Rename(oldpath, newpath)
+		if err == nil || !isRetryableRenameError(err) || time.Now().Add(delay).After(deadline) {
+			return err
+		}
+		time.Sleep(delay)
+		delay = min(2*delay, patientRenameMaxDelay)
+	}
+}

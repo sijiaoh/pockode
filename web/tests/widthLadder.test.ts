@@ -16,25 +16,57 @@ import { ROOTS, repoPath, sourceFiles } from "./sourceScan";
 // stacked behind another variant (`dark:md:hidden`) or follow an interpolation
 // (`${base}md:hidden`), and anything that only accepted quotes and whitespace
 // would skip exactly those and report a clean scan.
-const RETIRED = /(?<![\w-])((?:max-)?(?:md|xl|2xl)):/g;
+const RETIRED = /(?<![\w@-])((?:max-)?(?:md|xl|2xl)):/g;
+
+// Container queries are not the ladder, but Tailwind's default container sizes
+// read like it: `@sm:` is 384, not 640. They cannot be retired — `max-w-sm`
+// reads the same tokens — so they are turned away here instead. A row that
+// switches on its list's width uses that list's named size (`@git-row:`, see
+// the `--container-*` tokens in src/index.css).
+const DEFAULT_CONTAINER =
+	/(?<![\w-])(@(?:max-)?(?:3xs|2xs|xs|sm|md|lg|xl|[2-7]xl)):/g;
 
 /** Anything that could be a class list. Cheap and deliberately over-inclusive. */
 function stringLiterals(source: string): string[] {
 	return source.match(/"[^"\n]*"|`[^`]*`/g) ?? [];
 }
 
-function inspect(file: string): string[] {
-	const source = readFileSync(file, "utf8");
-	return stringLiterals(source).flatMap((literal) =>
-		[...literal.matchAll(RETIRED)].map(
-			([, rung]) =>
-				`${repoPath(file)}\n  \`${rung}:\` is not on the ladder — use \`sm:\` (640) or \`lg:\` (1024)\n  ${literal}`,
-		),
-	);
+function inspect(
+	pattern: RegExp,
+	message: (match: string) => string,
+): (file: string) => string[] {
+	return (file) =>
+		stringLiterals(readFileSync(file, "utf8")).flatMap((literal) =>
+			[...literal.matchAll(pattern)].map(
+				([, match]) => `${repoPath(file)}\n  ${message(match)}\n  ${literal}`,
+			),
+		);
 }
 
 describe("width ladder", () => {
+	const files = ROOTS.flatMap(sourceFiles);
+
 	it("uses only the two authorized breakpoints", () => {
-		expect(ROOTS.flatMap(sourceFiles).flatMap(inspect)).toEqual([]);
+		expect(
+			files.flatMap(
+				inspect(
+					RETIRED,
+					(rung) =>
+						`\`${rung}:\` is not on the ladder — use \`sm:\` (640) or \`lg:\` (1024)`,
+				),
+			),
+		).toEqual([]);
+	});
+
+	it("queries containers only by their named sizes", () => {
+		expect(
+			files.flatMap(
+				inspect(
+					DEFAULT_CONTAINER,
+					(size) =>
+						`\`${size}:\` is Tailwind's default container size — query a named one from src/index.css`,
+				),
+			),
+		).toEqual([]);
 	});
 });

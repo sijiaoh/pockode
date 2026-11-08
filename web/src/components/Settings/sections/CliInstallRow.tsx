@@ -162,9 +162,13 @@ export default function CliInstallRow(props: Props) {
 		}
 	}
 
-	// npm is the install's one requirement, and the guide is the way without it.
-	// A failure's footer offers the guide itself (`failedState`), beside Dismiss.
-	if (props.installRefusal === "npm_not_found" && !state.notice?.footer) {
+	// The installer's shell and downloader are its one requirement, and the
+	// guide is the way without them. A failure's footer offers the guide itself
+	// (`failedState`), beside Dismiss.
+	if (
+		props.installRefusal === "installer_tool_not_found" &&
+		!state.notice?.footer
+	) {
 		state.notice = {
 			...state.notice,
 			footer: <InstallLink agent={agent} variant="text" />,
@@ -248,7 +252,7 @@ function checkState({
 		return {
 			icon: <CircleSlash className="h-4 w-4 text-th-text-muted" />,
 			title: "Not installed",
-			subtitle: "Installs with npm",
+			subtitle: "Official installer",
 			action: (
 				<InstallButton
 					label="Install"
@@ -377,7 +381,7 @@ function runningState(
 	};
 }
 
-// An npm install that has run this long is still within the server's
+// An install that has run this long is still within the server's
 // 10-minute budget (docs/code/cli-update.md), but no longer looks it.
 const SLOW_SECONDS = 120;
 
@@ -476,7 +480,10 @@ interface FailureCopy {
 	/** What to do. Enough on its own, without opening the details. */
 	body: ReactNode;
 	retry: boolean;
-	/** The CLI's install page, for the way npm did not take. */
+	/**
+	 * The CLI's install page, for installing it by hand when the official
+	 * installer did not.
+	 */
 	installLink?: boolean;
 	/** Install instead of Try again: the CLI the update needs is gone. */
 	offerInstall?: boolean;
@@ -484,14 +491,16 @@ interface FailureCopy {
 	detailsOpen?: boolean;
 }
 
-// npm ends every failure with where it wrote its log, after the line saying
-// why, and that log is on the server, where the terminal answer points anyway.
+// An npm-backed update ends every failure with where npm wrote its log, after
+// the line saying why, and that log is on the server, where the terminal
+// answer points anyway.
 const NPM_LOG_TRAILER = /complete log of this run can be found in/i;
 
-// npm closes a permissions failure with a paragraph of advice ("If you believe
-// this might be a permissions issue, … try running the command again as
-// root/Administrator"), after the paragraph saying why. Everything from it on
-// is dropped, and so are the bare "npm error" lines between paragraphs.
+// An npm-backed update closes a permissions failure with a paragraph of advice
+// ("If you believe this might be a permissions issue, … try running the
+// command again as root/Administrator"), after the paragraph saying why.
+// Everything from it on is dropped, and so are the bare "npm error" lines
+// between paragraphs.
 const NPM_ADVICE = /^npm (error|ERR!) If you believe\b/;
 const NPM_BLANK = /^npm (error|ERR!)$/;
 
@@ -616,24 +625,14 @@ function describeInstallFailure(
 	update: CliUpdate,
 ): FailureCopy {
 	const label = getAgentLabel(agent);
+	const command = AGENT_CLI_INFO[agent].command;
 	const detail = update.failure?.detail;
 
 	switch (update.failure?.reason) {
-		case "permission_denied":
-			// Without the PATH step, following this would fail as not_on_path.
+		case "download_failed":
 			return {
-				title: "npm can't write its global folder",
-				body: (
-					<>
-						npm's global folder belongs to another user (usually root). Give it
-						to this user, or set a prefix in your home directory (
-						<code className="font-mono">
-							npm config set prefix ~/.npm-global
-						</code>
-						), add its <code className="font-mono">bin</code> to the PATH
-						pockode starts with, restart pockode, then try again.
-					</>
-				),
+				title: `Couldn't download ${label}'s installer`,
+				body: "The server couldn't fetch it. Check the server's network and proxy settings — the download may also not be offered in your region. Then try again.",
 				retry: true,
 				installLink: true,
 				details: detail,
@@ -643,23 +642,27 @@ function describeInstallFailure(
 				title: `${label} installed, but Pockode can't find it`,
 				body: (
 					<>
-						npm installed it, but the folder npm puts commands in isn't on the
-						PATH pockode was started with. Add it (
-						<code className="font-mono">npm prefix --global</code>, plus{" "}
-						<code className="font-mono">/bin</code> on Linux and macOS) and
+						The installer finished, but put{" "}
+						<code className="font-mono">{command}</code> in a folder Pockode
+						doesn't look in — what the installer said, in the details, should
+						name it. Add that folder to the PATH pockode starts with, then
 						restart pockode.
 					</>
 				),
 				// Installing again lands in the same folder.
 				retry: false,
-				// They name the prefix, when npm said.
+				// They list the folders searched and the installer's last words.
 				details: detail,
 				detailsOpen: true,
 			};
 		case "command_failed": {
-			const why = detail ? lastLine(detail) : undefined;
+			// The first line is the server's own heading ("the official installer
+			// (<URL>) exited with status N"), not the script's words.
+			const why = detail
+				? lastLine(detail.split("\n").slice(1).join("\n"))
+				: undefined;
 			return {
-				title: `npm couldn't install ${label}`,
+				title: `${label}'s installer failed`,
 				body: (
 					<>
 						{why && <>{why} </>}
@@ -674,7 +677,7 @@ function describeInstallFailure(
 		case "timeout":
 			return {
 				title: "The install took too long",
-				body: `Pockode stopped npm after 10 minutes. Try again, or install ${label} on the server yourself.`,
+				body: `Pockode stopped the installer after 10 minutes. Try again, or install ${label} on the server yourself.`,
 				retry: true,
 				details: detail,
 			};
@@ -762,7 +765,8 @@ function failedState(
 							Finish or cancel the sign-in first.
 						</p>
 					)}
-					{(copy.installLink || installRefusal === "npm_not_found") && (
+					{(copy.installLink ||
+						installRefusal === "installer_tool_not_found") && (
 						<InstallLink agent={agent} variant="text" />
 					)}
 					<button

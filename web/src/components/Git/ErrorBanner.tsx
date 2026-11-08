@@ -16,11 +16,12 @@ interface Props {
 }
 
 /**
- * Where an inline action reports its failure.
+ * Where a failure is reported when nothing on screen is holding it.
  *
  * Sheets keep their errors inside themselves, but the actions taken straight
  * from a row — stage, unstage, discard — have no sheet to hold the outcome, so
- * the panel carries a banner under the branch bar instead. The summary does not
+ * the workspace carries a banner instead; so do a sync whose sheet is closed
+ * and a branch switch whose segment has been left. The summary does not
  * replace git's text: the reader is a developer who needs the path git could
  * not write, not a paraphrase of it.
  */

@@ -20,6 +20,7 @@ import (
 	"github.com/pockode/server/command"
 	"github.com/pockode/server/contents"
 	"github.com/pockode/server/filetransfer"
+	"github.com/pockode/server/internal/restart"
 	"github.com/pockode/server/logger"
 	"github.com/pockode/server/password"
 	"github.com/pockode/server/rpc"
@@ -87,9 +88,11 @@ type RPCHandler struct {
 	cliLoginWatcher       *watch.CLILoginWatcher
 	cliUpdate             *cliupdate.Service
 	cliUpdateWatcher      *watch.CLIUpdateWatcher
+	conns                 *Connections
+	server                ServerControl
 }
 
-func NewRPCHandler(password string, passwordGuard *authguard.Guard, sessions SessionStore, version string, remoteURL func() string, previewTickets PreviewTickets, rawCapabilities RawCapabilities, devMode bool, commandStore *command.Store, worktreeManager *worktree.Manager, settingsStore *settings.Store, workStore work.Store, workOps *work.Operations, workEngine *work.Engine, agentRoleStore agentrole.Store, scheduleStore schedule.Store, scheduler *schedule.Scheduler, cliAuth *cliauth.Service, cliUpdate *cliupdate.Service) *RPCHandler {
+func NewRPCHandler(password string, passwordGuard *authguard.Guard, sessions SessionStore, version string, remoteURL func() string, previewTickets PreviewTickets, rawCapabilities RawCapabilities, devMode bool, commandStore *command.Store, worktreeManager *worktree.Manager, settingsStore *settings.Store, workStore work.Store, workOps *work.Operations, workEngine *work.Engine, agentRoleStore agentrole.Store, scheduleStore schedule.Store, scheduler *schedule.Scheduler, cliAuth *cliauth.Service, cliUpdate *cliupdate.Service, restarter *restart.Restarter, updater *Updater) *RPCHandler {
 	settingsWatcher := watch.NewSettingsWatcher(settingsStore)
 	settingsWatcher.Start()
 
@@ -131,6 +134,8 @@ func NewRPCHandler(password string, passwordGuard *authguard.Guard, sessions Ses
 	remoteURLWatcher.Start()
 
 	return &RPCHandler{
+		conns:                 NewConnections(),
+		server:                ServerControl{Restarter: restarter, Updater: updater, Subject: "Pockode"},
 		password:              password,
 		passwordGuard:         passwordGuard,
 		sessions:              sessions,
@@ -164,6 +169,10 @@ func NewRPCHandler(password string, passwordGuard *authguard.Guard, sessions Ses
 
 // Stop stops the RPC handler and releases resources.
 func (h *RPCHandler) Stop() {
+	// Connections first: their requests are what still reads the watchers, and
+	// a commit message draft among them is an AI CLI that has to be gone before
+	// the process exits or restarts.
+	h.conns.Close(connectionsCloseTimeout, slog.Default())
 	h.settingsWatcher.Stop()
 	h.workListWatcher.Stop()
 	h.workDetailWatcher.Stop()
@@ -237,8 +246,15 @@ func (h *RPCHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	conn.SetReadLimit(maxClientMessage)
 
-	h.handleConnection(r.Context(), conn)
+	h.conns.Serve(r.Context(), conn, func(ctx context.Context) {
+		h.handleConnection(ctx, conn)
+	})
 }
+
+// connectionsCloseTimeout bounds how long Stop waits for requests to notice
+// their connection is gone. A draft's CLI is killed as soon as its context
+// ends, so this is a backstop for a request that does not look.
+const connectionsCloseTimeout = 10 * time.Second
 
 func (h *RPCHandler) handleConnection(ctx context.Context, wsConn *websocket.Conn) {
 	connID := uuid.Must(uuid.NewV7()).String()
@@ -258,6 +274,7 @@ func (h *RPCHandler) handleStream(ctx context.Context, stream jsonrpc2.ObjectStr
 
 	state := &rpcConnState{
 		connID: connID,
+		stream: stream,
 		log:    log,
 		ready:  make(chan struct{}),
 		// worktree is set after auth
@@ -274,7 +291,7 @@ func (h *RPCHandler) handleStream(ctx context.Context, stream jsonrpc2.ObjectStr
 	// dispatched before setConn runs. That is not hypothetical on a relay
 	// stream: the cloud's first message is often already buffered by the time
 	// this goroutine gets here. state.ready makes handlers wait for the wiring.
-	rpcConn := jsonrpc2.NewConn(ctx, stream, jsonrpc2.AsyncHandler(handler))
+	rpcConn := jsonrpc2.NewConn(ctx, stream, h.conns.AsyncHandler(handler))
 	state.setConn(rpcConn)
 
 	<-rpcConn.DisconnectNotify()
@@ -297,12 +314,15 @@ type subscriptionKey struct {
 type rpcConnState struct {
 	mu            sync.Mutex
 	connID        string
+	stream        jsonrpc2.ObjectStream // what conn runs on; set before any handler runs
 	conn          *jsonrpc2.Conn
 	notifier      *JSONRPCNotifier
 	log           *slog.Logger
 	worktree      *worktree.Worktree           // set after auth
 	subscriptions map[subscriptionKey]struct{} // what this connection must give back
 	closed        bool                         // set by cleanup; guards against binds/subscribes racing disconnect
+	// drafts are the commit message drafts this connection is waiting on.
+	drafts commitDrafts
 	// ready is closed by setConn. Handlers must wait on it before touching the
 	// state: a handler that runs first would subscribe the still-nil notifier
 	// to the worktree — an entry cleanup can never find (it unsubscribes the
@@ -536,6 +556,18 @@ func (h *rpcMethodHandler) Handle(ctx context.Context, conn *jsonrpc2.Conn, req 
 	case "cli_update.unsubscribe":
 		h.handleWatcherUnsubscribe(ctx, conn, req, h.cliUpdateWatcher, "cli update")
 		return
+	case "server.version":
+		h.handleServerVersion(ctx, conn, req)
+		return
+	case "server.restart":
+		h.server.HandleRestart(ctx, conn, req, h.state.stream, h.log)
+		return
+	case "server.update_check":
+		h.server.HandleUpdateCheck(ctx, conn, req, h.log)
+		return
+	case "server.update":
+		h.server.HandleUpdate(ctx, conn, req, h.log)
+		return
 	case "port_preview.ticket":
 		h.handlePortPreviewTicket(ctx, conn, req)
 		return
@@ -662,8 +694,16 @@ func (h *rpcMethodHandler) Handle(ctx context.Context, conn *jsonrpc2.Conn, req 
 	case "session_view.attachment":
 		h.handleSessionViewAttachment(ctx, conn, req)
 		return
+	case "session_view.html_page":
+		h.handleSessionViewHTMLPage(ctx, conn, req)
+		return
 	case "session_view.delete":
 		h.handleSessionViewDelete(ctx, conn, req)
+		return
+	// A connection's drafts are its own, not its worktree's: a cancel has to
+	// reach one whose worktree was deleted or switched away from mid-draft.
+	case "git.commit.draft.cancel":
+		h.handleGitCommitDraftCancel(ctx, conn, req)
 		return
 	}
 
@@ -689,6 +729,8 @@ func (h *rpcMethodHandler) Handle(ctx context.Context, conn *jsonrpc2.Conn, req 
 		h.handleWatcherUnsubscribe(ctx, conn, req, wt.ChatMessagesWatcher, "chat-messages")
 	case "chat.message":
 		h.handleMessage(ctx, conn, req, wt)
+	case "chat.html_action":
+		h.handleHTMLAction(ctx, conn, req, wt)
 	case "chat.interrupt":
 		h.handleInterrupt(ctx, conn, req, wt)
 	case "chat.permission_response":
@@ -704,6 +746,8 @@ func (h *rpcMethodHandler) Handle(ctx context.Context, conn *jsonrpc2.Conn, req 
 		h.handleSessionSetAgentType(ctx, conn, req, wt)
 	case "session.set_mode":
 		h.handleSessionSetMode(ctx, conn, req, wt)
+	case "session.set_html_first":
+		h.handleSessionSetHTMLFirst(ctx, conn, req, wt)
 	case "session.fork":
 		h.handleSessionFork(ctx, conn, req, wt)
 	case "session.set_model":
@@ -729,6 +773,9 @@ func (h *rpcMethodHandler) Handle(ctx context.Context, conn *jsonrpc2.Conn, req 
 	// attachment namespace
 	case "attachment.get":
 		h.handleAttachmentGet(ctx, conn, req, wt)
+	// html_page namespace
+	case "html_page.get":
+		h.handleHTMLPageGet(ctx, conn, req, wt)
 	// file namespace
 	case "file.get":
 		h.handleFileGet(ctx, conn, req, wt)
@@ -759,10 +806,16 @@ func (h *rpcMethodHandler) Handle(ctx context.Context, conn *jsonrpc2.Conn, req 
 		h.handleGitAdd(ctx, conn, req, wt)
 	case "git.reset":
 		h.handleGitReset(ctx, conn, req, wt)
+	case "git.hunk.stage":
+		h.handleGitHunk(ctx, conn, req, wt, false)
+	case "git.hunk.unstage":
+		h.handleGitHunk(ctx, conn, req, wt, true)
 	case "git.discard":
 		h.handleGitDiscard(ctx, conn, req, wt)
 	case "git.commit":
 		h.handleGitCommit(ctx, conn, req, wt)
+	case "git.commit.draft":
+		h.handleGitCommitDraft(ctx, conn, req, wt)
 	case "git.log":
 		h.handleGitLog(ctx, conn, req, wt)
 	case "git.show":
@@ -777,12 +830,18 @@ func (h *rpcMethodHandler) Handle(ctx context.Context, conn *jsonrpc2.Conn, req 
 		h.handleGitCheckout(ctx, conn, req, wt)
 	case "git.branch.create":
 		h.handleGitBranchCreate(ctx, conn, req, wt)
+	case "git.branch.inspect":
+		h.handleGitBranchInspect(ctx, conn, req, wt)
+	case "git.branch.delete":
+		h.handleGitBranchDelete(ctx, conn, req, wt)
 	case "git.fetch":
 		h.handleGitFetch(ctx, conn, req, wt)
 	case "git.pull":
 		h.handleGitPull(ctx, conn, req, wt)
 	case "git.push":
 		h.handleGitPush(ctx, conn, req, wt)
+	case "git.abort":
+		h.handleGitAbort(ctx, conn, req, wt)
 	// fs namespace
 	case "fs.subscribe":
 		h.handleFSSubscribe(ctx, conn, req, wt)

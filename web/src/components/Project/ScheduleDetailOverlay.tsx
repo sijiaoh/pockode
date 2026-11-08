@@ -40,6 +40,7 @@ import { MarkdownContent } from "../ui";
 import BottomActionBar from "../ui/BottomActionBar";
 import InlineEditableHeading from "../ui/InlineEditableHeading";
 import { inputClass } from "../ui/inputClass";
+import PageBody from "../ui/PageBody";
 import Skeleton from "../ui/Skeleton";
 import Switch from "../ui/Switch";
 import PeriodField from "./PeriodField";
@@ -117,7 +118,7 @@ function ScheduleDetailPage({
 
 	return (
 		<>
-			<div className="min-h-0 flex-1 overflow-auto">
+			<PageBody>
 				{/* What changes goes above what does not, the work detail's rule:
 				    the state and the runs are what a schedule is opened for. */}
 				<div className="mx-auto max-w-2xl space-y-5 px-4 py-4">
@@ -152,7 +153,7 @@ function ScheduleDetailPage({
 					<WorktreeSection schedule={schedule} />
 					<DeleteSection schedule={schedule} onDeleted={onBack} />
 				</div>
-			</div>
+			</PageBody>
 			<RunNowBar schedule={schedule} />
 		</>
 	);

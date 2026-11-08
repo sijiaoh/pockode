@@ -13,6 +13,7 @@ import {
 import PageHeader from "../Layout/PageHeader";
 import { ActivityIcon } from "../ui";
 import BottomActionBar from "../ui/BottomActionBar";
+import PageBody from "../ui/PageBody";
 import Switch from "../ui/Switch";
 import CreateScheduleSheet from "./CreateScheduleSheet";
 import PeriodWords from "./PeriodWords";
@@ -54,7 +55,7 @@ export default function ScheduleListOverlay({
 		<div className="flex min-h-0 flex-1 flex-col">
 			<PageHeader back={{ to: "chat", onClick: onBack }} title="Schedules" />
 
-			<div className="min-h-0 flex-1 overflow-auto">
+			<PageBody>
 				<div className="mx-auto max-w-2xl px-4 py-4">
 					{isLoading ? (
 						<div className="flex items-center justify-center py-8">
@@ -87,7 +88,7 @@ export default function ScheduleListOverlay({
 						</ul>
 					)}
 				</div>
-			</div>
+			</PageBody>
 
 			{/* Usable while the list loads or fails, as `New Role` is: creating does
 			    not depend on the list, and a failure is reported in the sheet. */}

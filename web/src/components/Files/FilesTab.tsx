@@ -58,7 +58,11 @@ import UploadQueue from "./UploadQueue";
 import { useFileDrop } from "./useFileDrop";
 
 interface Props {
-	onSelectFile: (path: string) => void;
+	/**
+	 * Opens a file, at `line` when a matched line of content search was picked
+	 * rather than the file (docs/file.md#search-ui).
+	 */
+	onSelectFile: (path: string, line?: number) => void;
 	activeFilePath: string | null;
 	/** Whether that file is open in the editor rather than the viewer. */
 	activeFileEdit: boolean;
@@ -255,11 +259,11 @@ function FilesTab({
 
 	const inputRef = useRef<HTMLInputElement>(null);
 	const handleSelectFile = useCallback(
-		(path: string) => {
+		(path: string, line?: number) => {
 			// Dismiss the mobile keyboard before the sidebar closes, otherwise it
 			// lingers on top of the closing animation.
 			inputRef.current?.blur();
-			onSelectFile(path);
+			onSelectFile(path, line);
 		},
 		[onSelectFile],
 	);

@@ -1,4 +1,4 @@
-import { Archive, GitBranch } from "lucide-react";
+import { Archive, FolderGit2, GitBranch } from "lucide-react";
 import { memo } from "react";
 import { isWorkActive, sessionActivity } from "../../lib/activity";
 import type { SessionOrigin } from "../../lib/sessionFilter";
@@ -7,6 +7,7 @@ import {
 	UNLISTED_SESSION_NAME,
 	useSessionStore,
 } from "../../lib/sessionStore";
+import { getSessionStyleInfo } from "../../lib/sessionStyle";
 import { useWorkStore } from "../../lib/workStore";
 import type { SessionListItem } from "../../types/message";
 import { formatCompactDateTime } from "../../utils/dateTime";
@@ -29,6 +30,8 @@ interface Props {
 	onDelete: (id: string, worktree: string | null) => void;
 }
 
+const HTML_FIRST = getSessionStyleInfo("html_first");
+
 const SessionItem = memo(function SessionItem({
 	session,
 	origin = null,
@@ -37,6 +40,7 @@ const SessionItem = memo(function SessionItem({
 	onDelete,
 }: Props) {
 	const forkedFrom = session.forked_from?.session_id;
+	const htmlFirst = session.html_first === true;
 	// Resolved against the list rather than copied onto the fork, so a rename
 	// shows through. A parent with no row is not necessarily gone — what may be
 	// said about it is `UNLISTED_SESSION_NAME`'s call, not this row's.
@@ -64,26 +68,42 @@ const SessionItem = memo(function SessionItem({
 			// forks of forks and for parents that are gone. It answers the only
 			// question the list is asked — why two rows look alike.
 			title={
-				forkedFrom ? (
+				htmlFirst || forkedFrom ? (
 					<>
 						{session.title}
 						{/* Said in words for a screen reader, next to the title rather
 						    than as the row's aria-label, which would replace the whole
 						    name and take the row's own state indicator down with it. */}
-						<span className="sr-only">
-							, forked from {parentTitle ?? UNLISTED_SESSION_NAME}
-						</span>
+						{htmlFirst && <span className="sr-only">, {HTML_FIRST.label}</span>}
+						{forkedFrom && (
+							<span className="sr-only">
+								, forked from {parentTitle ?? UNLISTED_SESSION_NAME}
+							</span>
+						)}
 					</>
 				) : (
 					session.title
 				)
 			}
+			// The style first, then the fork: the style is what the session is, the
+			// fork where it came from. A Chat row gets no glyph — the default needs
+			// no mark (docs/html-first-session-ui.md §3).
 			leftSlot={
-				forkedFrom ? (
-					<GitBranch
-						className="size-3 shrink-0 text-th-text-muted"
-						aria-hidden="true"
-					/>
+				htmlFirst || forkedFrom ? (
+					<span className="flex shrink-0 items-center gap-1">
+						{htmlFirst && (
+							<HTML_FIRST.icon
+								className="size-3 shrink-0 text-th-text-muted"
+								aria-hidden="true"
+							/>
+						)}
+						{forkedFrom && (
+							<GitBranch
+								className="size-3 shrink-0 text-th-text-muted"
+								aria-hidden="true"
+							/>
+						)}
+					</span>
 				) : undefined
 			}
 			// The worktree goes in the subtitle rather than a second left slot: the
@@ -95,7 +115,7 @@ const SessionItem = memo(function SessionItem({
 				origin ? (
 					<span className="flex min-w-0 items-center gap-1">
 						{origin.exists ? (
-							<GitBranch
+							<FolderGit2
 								className="size-3 shrink-0 text-th-text-muted"
 								aria-hidden="true"
 							/>

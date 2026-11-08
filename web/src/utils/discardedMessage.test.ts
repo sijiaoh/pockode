@@ -141,4 +141,14 @@ describe("turnRestore", () => {
 	it("offers nothing for an answer to posted questions", () => {
 		expect(turnRestore(["a"], new Map([["a", answer]])).messages).toEqual([]);
 	});
+
+	// Likewise the text of a page's action: the user presses the page again.
+	it("offers nothing for a page's action", () => {
+		const action = message({
+			messageId: "x",
+			content: 'Page action "go" from p2:\n{}',
+			htmlAction: { page: "p2", action: "go", data: {} },
+		});
+		expect(turnRestore(["x"], new Map([["x", action]])).messages).toEqual([]);
+	});
 });

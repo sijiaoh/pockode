@@ -101,7 +101,7 @@ Nothing about the account fields fails the request — short of making the body 
 | A node a cluster started | `node` | Its working directory, as for `server` |
 
 - **A cluster reports its data directory** because it has no working directory of its own: the directory it was started from is arbitrary, while the data directory is what tells one cluster from another on the same machine.
-- **A node knows it is one** from `POCKODE_CLUSTER_NODE`, which the cluster sets in `nodeEnv` (dropping any inherited value). The node reads and **unsets** it at startup, before spawning anything, so the AI CLIs, terminals or nested `pockode` it starts do not inherit the claim. `cluster/node.MarkerEnvVar` and `TakeMarker` hold both halves.
+- **A node knows it is one** from `POCKODE_CLUSTER_NODE`, which the cluster sets in `nodeEnv` (dropping any inherited value). The node reads and **unsets** it at startup, before spawning anything, so the AI CLIs, terminals or nested `pockode` it starts do not inherit the claim. A node that [restarts itself](self-restart.md) puts it back (`RestoreMarker`) once its shutdown is done and nothing more will be spawned, right before the restart, so its successor comes back as the same node rather than as a `server`. `cluster/node.MarkerEnvVar`, `TakeMarker` and `RestoreMarker` hold all three.
 - `path` is shown to the account owner only; it exists to tell apart projects of the same name.
 - The [privacy policy](../../site/content/privacy.md) tells users what `pockode login` and a linked instance send; a change to either must update it in the same change.
 
@@ -131,5 +131,5 @@ An unreadable `cloud.json` likewise means guest, with the warning logged once ra
 | Login / logout | `server/cloudlogin/` | Device flow, existing-link check, revoke |
 | Attachment | `server/relay/account.go` | `Instance`, `Attachment`, `Account` and the reading of `account_error` |
 | Manager | `server/relay/relay.go` | Attaching on register/refresh, the 413 guest fallback, the 5 s watcher |
-| Node marker | `server/cluster/node/process.go` | `POCKODE_CLUSTER_NODE`: `nodeEnv` sets it, `TakeMarker` reads and unsets it |
+| Node marker | `server/cluster/node/process.go` | `POCKODE_CLUSTER_NODE`: `nodeEnv` sets it, `TakeMarker` reads and unsets it, `RestoreMarker` puts it back for a restart |
 | Banner | `server/startup/banner.go` | The account line, and the QR code login reuses |

@@ -502,8 +502,8 @@ Three things to be exact about:
   and the server does not know it exists. It is written to `lib/inputStore`, the
   per-session store that already holds "what this session has typed but not
   sent" — no new state was introduced for this, and no history record was
-  touched (AGENTS.md, *Events are events, state is state*). The store now has a
-  second writer; it still has exactly one reader, `InputBar`.
+  touched (AGENTS.md, *Events are events, state is state*). The store has
+  several writers; `InputBar` is still the only thing that shows it.
 - **It does not happen on an assistant anchor.** That message is kept by the
   fork, so there is nothing to hand back.
 - **A command comes back as typed.** A message that invoked a
@@ -793,7 +793,11 @@ document already specifies wording for.
 The new session inherits the parent's whole engine choice — `agent_type`,
 `mode`, `model` and `effort` — and its worktree; a fork that lands in a different
 worktree, or answers on a different agent or model, is a different session, not a
-fork. It is born `activated: true` — it has a transcript — which by the existing
+fork. It inherits the parent's `html_first` too, and is born `started`, so it is
+never offered the Chat / HTML first switch: it carries on a conversation had
+under the parent's guidance
+([html-first-session-ui.md](html-first-session-ui.md#1-the-rule)). It is born
+`activated: true` — it has a transcript — which by the existing
 rule locks the agent half of its engine selector, and that is the behaviour we
 want: the inherited transcript was produced by that agent. Model and effort stay
 changeable, as on any activated session. `unread` starts false, and so does the

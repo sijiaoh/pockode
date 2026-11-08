@@ -5,7 +5,7 @@ import { invalidateGitQueries } from "./gitQueries";
 /**
  * Records a commit. (`useGitCommit` reads one; this one writes.)
  *
- * Committing empties the index and moves HEAD, so it refreshes the whole panel:
+ * Committing empties the index and moves HEAD, so it refreshes the whole workspace:
  * the staged list, the history and the branch bar's ahead count all change at
  * once.
  */

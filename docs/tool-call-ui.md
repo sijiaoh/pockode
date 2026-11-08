@@ -275,8 +275,8 @@ the last and an older page in front of the first, and the oldest is the one
 neither displaces. A card that takes a row's place takes its id too, so the
 card does not rename the list either. Only a member *leaving* renames it — a
 `question_post` row replaced by its card when it was the oldest, an
-`html_render` call drawn on its own once it succeeds — and that remounts the
-list.
+`html_render` or `html_edit` call drawn on its own once it succeeds — and that
+remounts the list.
 
 Whether the user opened a row is remembered apart from its key: under its call
 (`tool_call:<tool_use_id>`) for a tool row, under its part for anything else. A
@@ -735,6 +735,8 @@ afterwards cannot word the same call differently.
 | `TaskOutput` | `TaskOutput` | the `task_id`, in mono | right |
 | `server:tool` (Codex MCP) or `mcp__server__tool` (Claude MCP) | the tool half | the server half as a chip, then the first scalar argument, else compact JSON | right |
 | `html_render` (Pockode's own MCP tool), while it is a row | `html_render` | `pockode` as a chip, then the `title` — never the first argument, which is as often the whole page | right |
+| `html_edit`, while it is a row | `html_edit` | `pockode` as a chip, then `<title> · from <base>`, or `from <base>` without a title | right |
+| `html_get` | `html_get` | `pockode` as a chip, then the `id` | right |
 | anything else | the name | first non-empty scalar in `input` | right |
 
 Six decisions inside that table:
@@ -2026,18 +2028,12 @@ again refocuses it and selects the query.
   noun, `tabIndex=0`, through `initialFocusRef`), so arrows, Page Up / Down and
   Home / End scroll at once.
 - **Closing**: ✕, Escape, the **back gesture** — Android's back, iOS's edge
-  swipe, the browser's Back — or the key going away. Back-to-close is
-  `useBackToClose` (`web/src/hooks/`), shared with the media viewer: the viewer pushes a
-  same-href entry through the router's own history (never a raw `pushState`,
-  which would bypass TanStack's index and state) and closes on its `BACK` / `GO`
-  notification. Every other close takes that entry back, once, but only if it is
-  still the current one, so a page opened over the chat keeps its own entry, at
-  the cost of one later Back that changes nothing on screen. It goes back with
-  the Navigation API's `back()` where the browser has it, which skips the
-  entries an `<iframe>` inside left behind
-  ([media-viewer.md](media-viewer.md#history)). A file row's *Open*
-  closes the viewer first and navigates only once that entry is gone, or the
-  Back would undo it.
+  swipe, the browser's Back — or the key going away. Back closes it as it
+  closes every layer ([project-ui.md §5.2](project-ui.md#52-back-closes-the-topmost-layer)):
+  the viewer is a `Sheet`, which holds a same-href entry while it is up, and
+  every other close takes that entry back. A file row's *Open* closes the
+  viewer and navigates; the navigation is held until the entry is gone, so
+  Back from the file lands on the chat with nothing open.
 - **The transcript is where it was.** The page is scroll-locked under the sheet
   and focus returns to the opener without scrolling. What changes behind it — a
   diff wrap toggled in the viewer, live output growing — is held by the
@@ -2629,9 +2625,47 @@ renderer infers nothing.
 `html_render` is Pockode's own MCP tool: the agent passes a `title` and an
 `html` document (or fragment) to show the user something richer than Markdown.
 It arrives as an ordinary tool call — `mcp__pockode__html_render` from Claude,
-`pockode:html_render` from Codex — whose input already holds the whole page, so
-the frontend draws straight from the call and there is no event of its own. Both
-names, and which state is a card, are `lib/htmlRender.ts`, and nowhere else.
+`pockode:html_render` from Codex — with no event of its own. Both names of each
+of the three page tools (`html_render`, `html_edit`, `html_get`), and which
+state is a card, are `lib/htmlRender.ts`, and nowhere else.
+
+**Every page has an id, and is never changed.** The server stores each page a
+session draws as a snapshot and names it `p1`, `p2`, … in drawing order; the
+call's `tool_result` record carries that id as `html_page`, and `html_page.get`
+reads the stored page back ([how](code/work-system.md#rendering-tool)). A
+change to a page is a new page: `html_edit` derives one from an earlier page,
+which stays as it was. A page is the whole snapshot, never a base plus edits
+replayed on display — a change to how edits apply would otherwise quietly
+redraw an old page as something it never was. Ids can skip a number in a
+forked chat, which never reuses one its source had drawn when it was forked.
+A record with no `html_page` is a page from before pages were stored, and its
+card is drawn from its call's input, as it always was.
+
+**Two tools draw a card, the third only a row.** `html_edit` derives a new page
+from an earlier one, and its input holds only the edits (`base`, `title?`,
+`edits`), so its card reads the page from the server by the id on its result —
+`html_page.get`, or `session_view.html_page` in a
+[viewed transcript](cross-worktree-session-ui.md) — through `useHtmlPage`,
+never refetched while cached and never subscribed to, since a page never
+changes. An `html_render` card still draws from its input, which is the stored
+page byte for byte. The base's card is left as it was: both pages stand in the
+chat, each in its own card. An `html_edit` that succeeded without an id has no
+way to its page and stays a row. `html_get` only reads a page back for the
+agent and is always a row, its detail the id it read.
+
+- **The id is in the header**, muted mono after the title — `p3`, or `p4 · from
+  p2` for a derived page — because it is how the reader asks for a change
+  ("make p3's bars blue"), and the agent understands nothing else as precisely.
+  A card from before ids has none.
+- **An edit's page loads as an attachment's thumbnail does**: not before the
+  card is near the viewport, and the grey placeholder until it arrives, titled
+  with the input's `title`, else *Loading page…*; `</>` and ⤢ wait for the
+  page, since there is nothing yet to show or open.
+- **A page that does not load says so**: *Couldn't load page p3: <the server's
+  reason>* with *Retry*, in place of the page, as an `alert` — never a
+  placeholder that would read as still loading. So an InvalidParams answer —
+  `page not found`, `session not found` — is final and shown at once; a lost
+  connection or an internal error is retried by itself first.
 
 **It is a row until it succeeds, and then a card.** `running`, `background`,
 `error` and `interrupted` are drawn exactly as any other call's, detail = the
@@ -2696,6 +2730,38 @@ folded and then pulled out. A subagent's Process goes through the same
   `min-height: 100vh` — or pinned to 100% with the body's default margin, which
   overflows the frame by that margin — settles at the cap instead of growing
   with its frame.
+- **Width is the chat pane's, not the reading column's.** Prose reads best at
+  the column's 768px ([agent-chat.md](agent-chat.md)), but a page is a
+  dashboard, a table, a timeline as often as prose, and squeezed to the column
+  on a desktop it wastes most of the screen. So a reply's card takes the
+  transcript's width inside its gutters, up to 1280px — past that a desktop is
+  mostly margin — centred on the transcript like the column it leaves
+  (`WIDE_BLOCK_STYLE`, `Chat/transcriptWidth.ts`; the width is
+  `TRANSCRIPT_SPAN_VAR`, which `MessageList` publishes beside the height). It is
+  never narrower than the column, so on a phone, where the pane is narrower than
+  768px, nothing changes. Everything in the card goes with it — the source, the
+  placeholder, the strip, the error. Two kinds of card stay in the column: one
+  inside a subagent's Process, which stays in the box it was drawn in, and
+  every card under an extension that puts an avatar beside the column or a
+  bubble around it, since a card centred on the pane would cover the one or
+  break out of the other.
+- **A page wider than its card scrolls sideways, inside itself.** The card and
+  the transcript never get wider: the page's own document scrolls, in the card
+  as in the full-screen view, which needed nothing new. A vertical swipe is not
+  caught by it: the browser locks a gesture to the axis it started on, and a
+  page with no vertical room to scroll hands it on to the transcript, so no
+  `touch-action` or script is involved. Where a scrollbar takes room (desktop
+  Linux and Windows), the reported height adds it back, or a wide page would
+  also scroll down by the scrollbar's height.
+- **The agent is told a range, never the width.** One page is opened on a phone
+  and a desktop, today and next month, so no width the card had once is the
+  page's width. Both `html_render`'s description and the
+  [HTML-first guidance](code/agent-integration.md#html-first-sessions) say the
+  same thing — about 320–1280px, a fluid layout usually suits, and what is wide
+  by nature (big tables, timelines, diffs) may be drawn wide, since it scrolls —
+  and `TestHTMLRender_WidthMatchesTheHTMLFirstGuidance` keeps the two ranges
+  equal. It is a recommendation: nothing measures or refuses a page by its
+  width.
 - **Mounted near the viewport, never unmounted.** Opening a long session must
   not run every old page at once, so a frame mounts only when its card comes
   within 200px of the viewport (`useInView`); before that it is a
@@ -2704,17 +2770,21 @@ folded and then pulled out. A subagent's Process goes through the same
   measured height, kept by call across remounts (160px the first time), so a
   reopened session does not jump as frames arrive. Once mounted the frame
   stays: unmounting would throw away what the user did in the page.
-- **White, whatever the theme.** The frame is `bg-white` under `color-scheme:
-  light` — without it a dark parent paints the canvas dark under a page that
-  assumed white. In the dark theme it reads as a sheet of paper on the
-  transcript, deliberately: it is an ordinary page, and the only colour here
-  that is not a `th-` token.
+- **White, unless the page follows the theme.** A page that does not use the
+  `--pk-*` variables is a sheet of paper: the frame is `bg-white` under
+  `color-scheme: light` — without it a dark parent paints the canvas dark under
+  a page that assumed white — and in the dark theme it reads as paper on the
+  transcript, deliberately, the only colour here that is not a `th-` token. A
+  page that uses them is drawn in the theme instead
+  ([theme](#theme-a-page-that-asks-for-it)).
 
 ### The sandbox and the policy
 
-The page is drawn **as the agent wrote it**: no base stylesheet, no filtering
-— only the base and the absolute paths that let it reach
-[project files](#project-files).
+The page is drawn **as the agent wrote it**: no filtering, and no base
+stylesheet unless the page asks for one by using the theme's variables
+([theme](#theme-a-page-that-asks-for-it)) — only the base and the absolute
+paths that let it reach [project files](#project-files), and the bridge that
+lets it [send](#sending-to-the-agent).
 It is the agent's own output, written for the user, and every rule added on top
 of how it looks would be a page that renders wrong for a reason nobody can see.
 Two things are protected instead, and neither is the page: Pockode around it,
@@ -2728,10 +2798,16 @@ takes the policy from `lib/pageHosts.ts`. The frame the app holds is a wrapper w
 
 ```
 <iframe srcdoc="<policy><wrapper's listener>
-                <iframe srcdoc='<policy><base><reporter>…the page…<height script>'
+                <iframe srcdoc='<policy><base><reporter>[<bridge>][<base stylesheet>]…the page…<height script>'
                         sandbox='…'>"
-        sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox">
+        sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox[ allow-forms]">
 ```
+
+The bracketed parts are only in a page that asks for them: the bridge in one
+that [sends](#sending-to-the-agent) or follows the
+[theme](#theme-a-page-that-asks-for-it), `allow-forms` on both frames of one
+that sends, the base stylesheet in one that follows the theme. A page that
+asks for nothing is drawn as it was before either existed.
 
 The floor is `HTML_FRAME_SANDBOX`, on both frames:
 
@@ -2747,6 +2823,9 @@ The floor is `HTML_FRAME_SANDBOX`, on both frames:
   throw it up from an old message each time.
 - **`allow-popups` and `allow-popups-to-escape-sandbox`** so a link the user
   presses opens in a new tab as a normal page, not a crippled one.
+- **`allow-forms`, only on a page that sends** (`AGENT_PAGE_SANDBOX`), so a
+  form can send; the three guards that keep a submission from going anywhere
+  are in [forms in a page](#forms-in-a-page). Every other page keeps the floor.
 
 `HtmlFrame.test.tsx` holds both forbidden tokens out, on both frames.
 
@@ -2823,8 +2902,528 @@ never reaches the viewer — ✕ closes it. A link in the page does not navigate
 the frame, except into the page itself (`#section`): it opens in a new tab, on
 the reader's tap or from the strip
 ([links](page-external-hosts-ui.md#links-inside-the-page)). A frame scrolled out of view is
-throttled by the browser and reports nothing until it comes back. The height
-reporting has been watched in headless Chromium only, not across engines.
+throttled by the browser and reports nothing until it comes back. A page whose
+script widens it later without changing its height is not measured again, so
+where a scrollbar takes room it may cover the last line; a phone's overlay
+scrollbar does not. The height reporting, the scrollbar's room in it and the
+sideways scroll are watched in Chromium and WebKit
+(`HtmlRenderCard.browser.test.tsx`; WebKit draws the page's styled scrollbar,
+headless Chromium hides it), not on an iOS device.
+
+### Sending to the agent
+
+A page can send something to the agent — the canvas branch's contract
+(`feature/canvas-mode`, `docs/canvas-ui.md` §6.1 and §8 there), adapted to many
+cards in one transcript instead of one canvas. **Most of what the reader does
+in a page never reaches the agent**: switching a tab, filtering, expanding,
+editing a value are the page's own scripts. A send is for what needs the agent
+— *approve this*, *try the second option*, *redo it with these values* — and
+each one is a user message that starts or joins a turn.
+
+**Every card that sends can send whenever, an old one too.** The message
+names the page it came from, so a press on `p2` while `p5` is the latest is not
+ambiguous: the agent is told it is `p2`, and can `html_get` it.
+
+**A page sends when its HTML says it does**: it contains `data-pk-send` or
+`pockode.send` (`sendsToAgent`, `lib/pageBridge.ts`), read from the page as
+stored, as the theme's test is ([below](#theme-a-page-that-asks-for-it)). Only
+such a page gets the bridge's send and `allow-forms`; any other keeps the
+floor, so a page that never meant to send — every page stored before this —
+keeps its forms exactly as they behaved: in Chromium dropped before their
+`submit`; in WebKit `submit` fires, then the sandbox blocks the submission,
+with `form-action` behind it. A page that reaches the function
+some other way (`window["pock" + "ode"]`) is not one the test sees; the tool
+descriptions say to write it plainly. A card with no page id — from before ids
+— has no page to name and is drawn as a page that does not send, whatever its
+HTML says: the floor and no `pockode`; it gets the bridge only for the theme,
+when it [asks for that](#theme-a-page-that-asks-for-it).
+
+#### In the page
+
+Three attributes and one function — `docs/canvas-ui.md` §6.1, taken as it is,
+table, precedence and all:
+
+| Markup | Sends | When | Data |
+|---|---|---|---|
+| `<button data-pk-send="approve">` — any element but a `form`, `input`, `select` or `textarea`; a `div` or `li` is made a button | `approve` | click on it or inside it (`closest`), but not on a field or `label` inside it | in a form, its named fields; plus `{ [name]: value }` when the element has a `name` |
+| `<form data-pk-send="create">` | `create` | submit — a submit button, or Enter in a text field | the form's named fields, and the submitter's `name`/`value` |
+| `<input data-pk-send="search" name="q">` | `search` | Enter | `{ q: <value> }`, `{ value: <value> }` without a `name` |
+| `pockode.send(action, data)` | `action` | when called | `data`, any JSON value; `{}` when omitted |
+
+What is copied unchanged, with the canvas's reasons:
+
+- the nearest `data-pk-send` wins, so one press never sends twice; Enter in an
+  `<input data-pk-send>` sends the input's action only;
+- **Enter while an input method is composing** (`isComposing`, or `keyCode`
+  229) sends nothing — it confirms a Chinese or Japanese word;
+- an element that sends but is not a button gets `role="button"` and
+  `tabindex="0"` (only where the agent set none), Enter on keydown and Space on
+  release, and gives them back when it stops sending;
+- form data is `FormData` — a repeated name an array, files left out,
+  unchecked boxes absent; a disabled element sends nothing; a held Enter sends
+  once;
+- an `<input data-pk-send>` is cleared once the send is accepted, and keeps its
+  text when it is refused or when the reader typed on meanwhile;
+- `pockode.send` returns a `Promise`: resolved once the server accepted the
+  message, rejected with an `Error` whose `code` is one of the reasons below
+  and whose `message` is a sentence the page may show. `data` goes through
+  `JSON.stringify` / `JSON.parse` in the bridge, so what is sent is what the
+  agent reads; what JSON cannot hold rejects with `invalid`, unsent.
+
+What differs from the canvas:
+
+| | Canvas | Chat card |
+|---|---|---|
+| Where it came from | `revision`, the app's record of what the frame shows | `page`, the card's id (`p3`) — the app's, never the page's: a page cannot claim to be another |
+| Size | `canvas_size` on every message | none: the agent is told a range ([width](#a-page-the-agent-drew-html_render)) |
+| Before the reader has used the page | sent; a send on load runs on every device | refused, `inactive` ([below](#a-send-before-the-page-was-used)) |
+| Read-only frame | the history view | a session viewed from another worktree |
+| `data-pk-blocked` on the page's root | reflects whether sending is possible | not offered: every refusal is answered on the send itself |
+| Patches, focus reports | yes | none — a card is never redrawn in place |
+
+#### The bridge
+
+`pageBridgeScript` (`lib/pageBridge.ts`, from the canvas branch's
+`canvasBridge.ts`) runs in the page after the reporter and before the agent's
+markup, in every card and full-screen view of a page that sends or follows the
+theme. In every such page it reports when the page is ready and applies the
+theme the app posts (in a page that follows it). In a page that sends it also
+defines `window.pockode.send` and nothing else; takes `click`, `submit` and
+Enter in the capture phase on the document, so markup added later needs no
+wiring; makes buttons of sending non-buttons; and, last in the bubble phase,
+cancels a submit nobody handled ([forms](#forms-in-a-page)). It posts
+to the app (`parent.parent`), and takes only from the app's window. Every
+message, in one place:
+
+```ts
+// page → app
+{ type: "pockode:page-send", id: string, action: string, data: unknown, active: boolean }
+{ type: "pockode:page-ready", scheme?: "light" | "dark" }  // parsed, and on every load; scheme in a themed page
+{ type: "pockode:page-themed", scheme: "light" | "dark" }  // a themed page, after applying a page-theme
+// app → page
+{ type: "pockode:page-send-result", id: string, ok: true }
+{ type: "pockode:page-send-result", id: string, ok: false, code: SendRefusal, message: string }
+{ type: "pockode:page-theme", scheme: "light" | "dark", vars: Record<string, string> }  // a themed page
+// app → wrapper (no bridge there; its listener takes this alone, from parent)
+{ type: "pockode:page-frame-scheme", scheme: "light" | "dark" }  // a themed page's wrapper
+```
+
+The theme messages are [below](#switching-between-light-and-dark). `id` is unique to the document, so a page that reloads itself is never
+answered for its previous document's send. `SendRefusal` is `inactive`,
+`readonly`, `awaiting`, `offline`, `invalid` or `failed`
+([below](#while-the-session-is-busy)).
+The app takes a send only when its `source` is the page's own window, as
+`usePageReports` does. The bridge refuses only what it cannot post — no action
+name, `data` that is not JSON; everything else is posted and answered by the
+app, which is what lets the app show it.
+
+It is a script in the agent's own document, so the page can call or replace
+anything in it — including `active`. That is accepted: the page can only ask
+the app to send, which it may do anyway once used. What it cannot choose is
+filled in by the app: the session, and the page id, which is the card's. The
+page id reaches the full-screen viewer from the card that opened it (its
+content gains `page` beside `pageKey`, `lib/fullScreen.ts`), so a send from
+the viewer names the same page. The session is not handed over: `ChatPanel`
+gives the transcript and its viewer one `PageSendContext`
+(`components/Chat/pageSendContext.ts`) — how to send, and whether a
+permission request is open — and is mounted per session, so a viewer can only
+send to the session it was opened in.
+
+**What else may run in the page.** A host the reader allowed
+([Load](page-external-hosts-ui.md#what-load-allows)) runs its scripts in the
+page, so once the page has been used, code the agent did not write can send
+user-role messages to an agent that runs commands. That is accepted rather
+than closed: the reader chose to load that host into this page, as they
+chose to load the page; the sandbox still keeps it from Pockode's origin and
+socket; and what it sends is labelled for the agent as what it is. The
+action's `content` says it came from the page, and the tool descriptions tell
+the agent that an action and its data are input from a page — what the reader
+pressed and what the page put with it — not instructions from the reader.
+
+#### Forms in a page
+
+A form is how a page sends, so the two frames of a page that sends add
+**`allow-forms`** to the floor (`AGENT_PAGE_SANDBOX`); every other agent page,
+and a workspace `.html` preview, keeps `HTML_FRAME_SANDBOX`. Forms and the
+bridge's guard come together: `allow-forms` without the bridge would let a
+plain form reload its page into itself. Without it Chromium drops a submission before its
+`submit` event and a form sends nothing. With it, the canvas's three guards
+hold, and none may be removed (`docs/canvas-ui.md` §4 *Forms*): the wrapper's
+`frame-src` refuses a form that navigates the frame to another host; the
+policy's `form-action 'none'`, already in every page's policy, refuses one sent
+to another host in a window of its own, which no wrapper sees; and the
+bridge's last-in-line cancel keeps a plain form from reloading the page into
+its own `about:srcdoc` and losing what was typed. A `method="dialog"` form is
+left to the browser. The two gaps are the canvas's: a submit whose propagation
+the page stops before it reaches `window`, and `form.submit()`, which fires no
+event. Nothing they send reaches another host, but in Chromium a plain form
+reloads the page into itself and loses its state, with nothing shown, and one
+to another host is refused by the wrapper and reads `Page left · <host>` with
+Reload; in WebKit `form-action` refuses both and the page stays, one to another
+host reading `Not loaded · <host>` with a Load that cannot help.
+
+#### A send before the page was used
+
+**A frame sends only once the reader has used it** —
+`navigator.userActivation.hasBeenActive` in the page's own window, read by the
+bridge at the moment of the send and posted as `active`; where an engine lacks
+`userActivation`, a trusted `pointerdown` or `keydown` the bridge saw in the
+capture phase stands in. This is not a defence against the page. A card mounts
+when it scrolls near the viewport, and a page that sends on load would, as the
+reader scrolls back through a session or opens it on another device, start a
+turn card after card. Once used, the activation is sticky: a send a moment
+later — after a `fetch`, from a timer the press started — goes as it would.
+
+Activation belongs to one document. A press in the card does not count for its
+full-screen view, which is another document; a Load or Reload in the hosts
+strip draws a new document, used by nobody yet. A press in the app does not
+reach into a frame, and a press in a frame does not reach its neighbours.
+
+A refused send is said three ways, because three different people need it:
+
+- **the page** — the promise rejects with `code: "inactive"`, message
+  `Nothing was sent: this page sends only after you have pressed or typed in
+  it.`;
+- **the developer** — the bridge also writes that sentence and the action to
+  the frame's console with `console.warn`;
+- **the reader** — the card's send line (below) reads
+  `Not sent · "refresh" — the page tried to send before you used it`, muted,
+  not an alert: nobody pressed anything, so nothing is announced, but a page
+  that misbehaves on load is not hidden either.
+
+#### While the session is busy
+
+- **A turn running**: the send is an ordinary mid-turn message and folds into
+  the running turn at its read point
+  ([agent-event.md](agent-event.md#the-read-point-message_ingested)), exactly
+  as typing would. It is not queued, held or refused: pressing *Try option B*
+  while the agent is still writing option A is a thing the reader means.
+- **A turn blocked on a permission request**: refused, `awaiting`, `Answer
+  the permission request first.` Both CLIs read nothing while one is open, so
+  the server refuses any message then (`chat.ErrTurnAwaitingAnswer`, which is
+  `TurnState.AwaitingUserAnswer()`, a permission blocker and nothing else); the
+  app checks first — `PageSendContext.awaitingPermission`, the same test
+  `ChatPanel` hands the input to the permission prompt by (`promptOwnsInput`:
+  the turn is `blocked` and one of its `blockers` is a `permission`) — so the
+  refusal is immediate. An open `question_post` question does not
+  block — a typed message may answer it, and a send is a message — nor does a
+  turn parked on background work.
+- **Not connected**: refused, `offline`, `Not connected — try again when the
+  connection is back.`
+- **A session viewed from another worktree**: refused, `readonly`, `This
+  session is read-only here.` — its cards draw, but nothing can be sent to it.
+  Read-only is where the transcript is read from (`useSessionView()`,
+  `lib/sessionView.ts`, as `useHtmlPage` already asks), not a fact about the session
+  ([cross-worktree-session-ui.md](cross-worktree-session-ui.md)), so a send
+  from such a card is refused on receipt and `chat.html_action` is never
+  called from it.
+
+The app refuses in that order on the client — `inactive`, `readonly`,
+`awaiting`, `offline` — then calls `chat.html_action`
+(`useChatMessages().sendHtmlAction`, which echoes the bubble at once and takes
+it back when the server refuses). Between `readonly` and `awaiting`, a frame
+drawn with no `PageSendContext` around it has nowhere to send and answers
+`failed`, `This page can't send from here.`; in the app every transcript has
+one. The server's own
+permission refusal carries `data.reason: "awaiting_permission"`, so the race
+the server check exists for — a permission request that arrived after the
+client looked — still reads `awaiting` with the sentence above; any other
+`InvalidParams` answer is `invalid` with the server's words, any other failure
+`failed` with the error's message. Every send is answered, so no promise is left pending.
+
+#### The card's send line
+
+What became of the card's last send is one line **under the page**, above
+*⤢ Full screen* when that is shown, in the app's document — the place the
+press was made, which on an old card may be far from the bottom of the
+transcript where the bubble lands:
+
+```
+├──────────────────────────────────────────────┤
+│   …the page…                                 │
+├──────────────────────────────────────────────┤
+│ ✓ Sent "approve"                             │  muted
+│ ⚠ Not sent · "approve" — Answer the permiss… │  error colour, role="alert"
+└──────────────────────────────────────────────┘
+```
+
+- One line, the latest outcome only, `truncate`d; the whole sentence is its
+  `title` and its accessible text. It replaces the previous outcome. It is
+  kept by call in memory, as the card's measured height is, and is shared by
+  the card and its full-screen view: the latest send from either document of
+  the page. It goes when the app reloads — the reader's memory of this
+  sitting, not part of the page.
+- From the press to the answer it reads `Sending "approve"…`, muted, so a slow
+  round trip is not a press that did nothing; the page's own element is not
+  disabled meanwhile — the page decides that, from its promise.
+- It goes with the page under `</>`: hidden with the page and *⤢ Full
+  screen*, and back as it was when the page is.
+- `Sending…` and `Sent` are muted and polite (an `<output>`, role `status`); a
+  refusal after a press is in the error colour and `role="alert"`; `inactive`
+  is muted and silent, as above, in neither region. Both regions are mounted,
+  empty, from the frame's first render on, and a line is put into one or the
+  other: a live region that appears already holding its text, or whose role
+  changes under it, is announced unreliably (`PageSendLine.tsx`; the memory is
+  `lib/pageSends.ts`).
+- The full-screen view shows the same line under its page. A send from it
+  lands under the viewer; the viewer stays open, and the card shows the same
+  line when it is closed.
+- **The transcript does not jump to the bubble.** Following the bottom it
+  follows, as for any message; scrolled up on an old card it stays there, and
+  the line is the confirmation. Moving the reader away from a page they are
+  working in, on every press, would be the worse failure.
+
+#### Under a layer
+
+A press meant to put away a panel with no backdrop must not also press a
+button in a card under it and send. While a layer of the app's own is drawn
+over the transcript, each frame lies under a `FrameShield` — the canvas
+branch's (`docs/canvas-ui.md` §4 *Under a layer*) — so the press lands in the
+app's document and the page never sees it. `FrameShield`
+(`components/ui/FrameShield.tsx`) reads `useIsDrawnOver` from
+`@pockode/shared` — whether a layer is drawn over the surface the frame is on,
+which `useIsPageCovered` alone does not say for a frame inside a sheet; the
+rule is in [answering-ui.md](answering-ui.md#who-owns-the-dismissing-click).
+**Only the
+frames of pages that send take it**: under a layer a shielded page cannot be
+pressed or scrolled, which for a page that cannot send would be a change with
+nothing to prevent. The strip
+and the send line are the app's already and are not shielded. The full-screen
+view is a layer over the cards, which are shielded under it, but not over its
+own page: that one is shielded only by a layer opened over the viewer.
+
+#### The action message
+
+What reaches the agent is a **user message with a structured page action**:
+the `message` record, origin user, with one field added, as `command` is:
+
+```jsonc
+{
+  "type": "message",
+  "content": "Page action \"approve\" from p3:\n{\"id\":\"42\"}",
+  "html_action": { "page": "p3", "action": "approve", "data": { "id": "42" } }
+}
+```
+
+- `content` is what the agent reads (`htmlpage.ActionText`): the action
+  quoted, the page, then `data` as compact JSON on the next line — `{}` when
+  the page sent none; a `null`, a string, a number or an array the page sent
+  is kept as it is. The card's id is the one the agent already knows from the
+  tool result. Quoting the action, refusing control characters in it and
+  compacting the data keep a page from writing a second line that would read
+  as anything but its data.
+- It is an event: it says what was pressed on which page, and nothing on it
+  changes later. A forked chat keeps the source's ids, so it still names the
+  right page there.
+- **It never becomes a draft**, for the canvas's reason (`docs/canvas-ui.md`
+  §6.2): a fork anchored on it drops it and leaves the input empty, a
+  discarded one is drawn discarded with no restore, and a turn it opened that
+  failed on sign-in offers no *Send again*. The reader presses the page again
+  instead.
+
+```
+chat.html_action {
+  session_id: string,
+  page: string,            // the card's id, "p3"
+  action: string,          // 1–128 characters, no control characters
+  data?: unknown,          // any JSON; omitted = {}; at most 64KB compacted
+} -> MessageResult         // chat.message's, plus html_action echoed back
+```
+
+Refusals are `InvalidParams`, checked in this order, and leave nothing
+behind:
+
+1. `session not found`;
+2. `page must be a page id such as p1, not "<page>"` — digits only after the
+   `p`, and no leading zero (`htmlpage.ParseID`), so `p+3` or `p03` cannot
+   reach `p3` while the record says otherwise;
+3. `action must be 1–128 characters with no control characters`;
+4. `data is <n> bytes, over the 64KB limit`;
+5. `page p9 does not exist in this session` — any page the session has, not
+   only the latest;
+6. `chat.ErrTurnAwaitingAnswer`'s message, unchanged, with `data.reason:
+   "awaiting_permission"` (`rpc.ChatErrorData`) so the client can tell it
+   apart without reading the words ([above](#while-the-session-is-busy)).
+   `replyErrorForChat` adds the reason for every chat send refused this way,
+   `chat.message`'s too.
+
+It takes the typed
+message's path — refused before anything is recorded when the turn awaits an
+answer, then persisted, delivered, broadcast, with a read point mid-turn, and
+in a work item's session handed to the work engine after a successful send
+(`HandleUserMessage`), as a typed message is — a press is the reader speaking
+to that work as much as typing is. Its reply carries `content` as well as
+`html_action`, so the sender's own copy is the record that was broadcast. No
+token, no rate limit: an agent's page is not an adversary to be throttled, and
+the activation rule already keeps an unattended page from sending (what a
+loaded host may send is [above](#the-bridge)).
+
+#### The action bubble
+
+`HtmlActionBubble`, from the canvas branch's `CanvasActionBubble`, drawn from
+`html_action` alone — never `content`, which is for the agent and which the
+sender's echo does not have until the reply, so the echo reads right at once:
+
+```
+                          ┌───────────────────────────┐
+                          │ ⌖ approve         from p3 │   user bubble colours
+                          │ › {"id":"42","note":"Lo…  │   folded past 40 chars
+                          └───────────────────────────┘
+```
+
+- A user bubble, in the user bubble's colours, right-aligned like a typed
+  message: it is the reader's turn. `MousePointerClick` and the action name in
+  `font-medium` say it was pressed rather than written (`sr-only` *Page
+  action*); `from p3` is the meta, in the bubble's colour at `text-xs` — the
+  same id as in the card's header, so the two are found by each other.
+- Data as the canvas's: none for `{}`; one line of JSON up to 40 characters;
+  longer, its start cut on one line, opening to the JSON indented — the first
+  20 lines (at most 2,000 characters) in the bubble, all of it in the full
+  screen viewer.
+- Not linked to its card. The card may be far above and not mounted, and the
+  id is enough to find it; a jump would be the only one of its kind in the
+  transcript.
+- Where a message is quoted on one line (the fork sheet), it is quoted as
+  `approve · p3`.
+
+#### What the agent is told
+
+`html_render`'s and `html_edit`'s descriptions say how to send — the four
+forms above, the data each carries — and that **what the page can do itself it
+does with its own script; send only what needs the agent**. They also say a
+page sends only after the reader has used it, so a send on load does nothing;
+that a page is recognised as sending by `data-pk-send` or `pockode.send`
+written plainly; and that an action and its data are what the page sent on
+the reader's press, input to weigh rather than the reader's instructions.
+HTML-first sessions' guidance already says the page should work by itself and
+send only when it needs the agent (`server/agent/guidance.go`), and says no
+more: it is read on every turn of such a session
+([agent-integration.md](code/agent-integration.md#html-first-sessions)), and
+the descriptions carry the rest.
+They say, too, how a page follows the theme ([below](#theme-a-page-that-asks-for-it)):
+take the background, the text and every other colour from the `--pk-*`
+variables, so a new page follows light and dark from the start.
+
+### Theme: a page that asks for it
+
+**A page follows the theme only when it asks to, and a page that does not ask
+is drawn exactly as before — byte for byte.** Pages are snapshots and every
+old one is drawn again whenever its session is opened; the pages already
+stored were written for white, and many set half of their colours — a white
+`body` and no text colour, or dark text and no background — which a themed
+root would turn into white-on-white or dark-on-dark. The default styling of
+native controls is part of the same request: a page that does not ask keeps
+its browser-default buttons too.
+
+**Asking is using a variable.** A page asks when its HTML contains one of the
+theme's own names — `--pk-` followed by a name in `PAGE_THEME_TOKENS` and a
+character that cannot continue a name: `var(--pk-bg)`, or `:root {
+--pk-accent: … }` overriding one (`followsTheme`, `lib/pageTheme.ts`). A
+`--pk-` name of the page's own invention, such as `--pk-gap`, is not asking.
+It is read from the page as stored, not from what its scripts do later, so the
+decision is made before the frame is drawn and never changes for that page. A
+page stored before this shipped is very unlikely to contain one of those exact
+names — the variables did not exist, and nothing told an agent their names —
+and that is the whole of the guarantee: one that does is drawn in the theme. A flag of its own (a
+`<meta>`, an attribute) was considered and left out: a page that uses the
+variables and forgets the flag would be drawn with them undefined, and a page
+with the flag and no variables gains nothing from it. The price is the rare
+page that only *mentions* `--pk-` in its prose; it follows the theme, which it
+can still override.
+
+For an `html_edit` page the test reads the derived page whole, as it is drawn,
+so an edit that introduces the variables opts the new page in and leaves its
+base as it was.
+
+#### What a page that asks gets
+
+The canvas's styling, as it is (`docs/canvas-ui.md` §3.3 and §8.4), so the two
+are one contract to the agent:
+
+- **The variables** — `--pk-bg`, `--pk-bg-secondary`, `--pk-bg-tertiary`,
+  `--pk-text`, `--pk-text-secondary`, `--pk-text-muted`, `--pk-border`,
+  `--pk-accent`, `--pk-accent-text`, `--pk-accent-hover`, `--pk-success`,
+  `--pk-error`, `--pk-warning`, `--pk-code-bg`, `--pk-code-text` — each the
+  computed value of the `--th-*` token the canvas maps it to, in the palette
+  and scheme shown now. The names are a promise to every page ever drawn, so
+  the list lives once (`PAGE_THEME_TOKENS`) and a test holds the tool
+  descriptions to it.
+- **The base stylesheet**, after the reporter and the bridge and before the
+  agent's markup, in `@layer pockode-base` and entirely inside `:where()`, so
+  any rule of the agent's wins: `:root` gets the variables, `color-scheme`,
+  `background: var(--pk-bg); color: var(--pk-text)` and the accent as
+  `accent-color`, for the controls left native (checkboxes, radios, ranges);
+  buttons and fields get
+  the theme's fill, border, radius, focus ring and the 44px floor under a
+  coarse pointer; a `[data-pk-send]` button and a sending form's submit take the
+  accent; hover only under a fine pointer; disabled dimmed. Nothing else of the
+  document: no font, no margin, no layout.
+- **A frame in the theme.** The frame element is `bg-th-bg-primary` under the
+  theme's `color-scheme`, the wrapper transparent, so where the page does not
+  paint, the transcript's ground shows — never white. The card's border keeps
+  it a card.
+
+A page that does not ask gets none of these — no variables, no base
+stylesheet — and the white frame. Whether it sends is a separate question
+([sending](#sending-to-the-agent)): a white page may send, and a themed page
+need not. Nor does following the theme need a page id: a card from before
+ids, which never sends, follows the theme if its HTML asks.
+
+**The full-screen view follows the same rule**: a page that asks is drawn
+there on `bg-th-bg-primary` under the theme's scheme, one that does not on the
+white it has now.
+
+**The theme is not part of what the document is.** The base stylesheet is
+written into the `srcdoc` with the theme current when the document is drawn,
+but the theme is no part of the frame's `Source`: a theme change never makes a
+new document, which would reload the page and lose its state. Every change
+after the drawing goes by message (below).
+
+#### Switching between light and dark
+
+- **A page that asks follows live.** On every theme change, palette included
+  — and when a custom theme is registered after the app started
+  (`subscribeThemeRegistry`), which changes the palette and nothing in the
+  theme store — the app posts `{ type: "pockode:page-theme", scheme, vars }` to the bridge,
+  which rewrites the base stylesheet's `<style>` element — never an inline
+  style on `:root`, which would outrank the agent's own `:root { --pk-…: … }`.
+  The page is not redrawn and keeps its state, its scroll and what was typed
+  in it. The bridge answers each with `pockode:page-themed`. On **every**
+  `pockode:page-ready` the app posts `pockode:page-theme` to the page and
+  `pockode:page-frame-scheme` to the wrapper again, unconditionally, as the
+  canvas does: what it posted before may have reached no listener, and a
+  palette change keeps the scheme, so comparing schemes would miss it.
+- **The frame never disagrees with its document** — the canvas's rule (§4
+  there): where a frame element and its document disagree on `color-scheme`,
+  Chromium and WebKit paint an opaque canvas of the document's scheme in the
+  frame. So the wrapper's `color-scheme` follows the theme shown now
+  (`{ type: "pockode:page-frame-scheme", scheme }`, posted with every theme
+  change). The wrapper has no bridge: its listener, beside `LEFT_LISTENER`,
+  takes that one message, from `parent` only, and sets its own
+  `color-scheme`. And **a new document the app draws of a page that asks is
+  hidden until it is ready and in the scheme shown** (`visibility: hidden`
+  until a `pockode:page-ready` or `pockode:page-themed` in the current scheme,
+  or 2 seconds): WebKit may paint a fresh `srcdoc` document white before its
+  style applies, which in the dark theme is a white flash on every card that
+  scrolls into view. Meanwhile what shows is the `bg-th-bg-primary` of the box
+  around the frame — a hidden frame paints no background of its own — at the
+  card's kept height. A page that reloads itself is not hidden again: its
+  frame has been shown, and its new document is put in the theme by the
+  ready it says. The focus a Load hands the frame
+  ([on Load](page-external-hosts-ui.md#what-happens-on-load)) waits until it
+  is shown, since a hidden frame takes none, and is not handed at all if the
+  reader has put it somewhere else meanwhile.
+- **A page that does not ask does not change.** It stays white under `light`
+  in both themes, and nothing is posted to it.
+- `</>` shows the page as stored, never the injected parts, in either case.
+
+#### In an HTML-first session
+
+The same rule: the session's style changes what the agent is told, not how a
+page is drawn ([html-first-session-ui.md](html-first-session-ui.md)). Its
+pages follow the theme because `html_render`'s and `html_edit`'s descriptions
+tell every agent to use the variables, in both session styles — not because the
+session is HTML first; one that does not use them is paper there too.
 
 ## Width and pointer
 
@@ -2836,6 +3435,9 @@ omission.
 | compact (<640) | the baseline described above, and a diff's line numbers in one narrow column |
 | `sm:` (640–1023) | `p-2` → `sm:p-2.5`, the [full screen](#full-screen) viewer's `p-3` / `px-3` → `sm:p-4` / `sm:px-4`, and nothing else |
 | `lg:` (≥1024) | nothing — the transcript column does not change shape |
+
+A page's card is the one thing wider than the column, and it follows the pane's
+own width rather than a tier ([width](#a-page-the-agent-drew-html_render)).
 
 **No width tier gets a second title line, a tooltip, or a wider truncation
 budget.** A rule like "wrap the command at `sm:`" makes the same call look like
@@ -3166,8 +3768,9 @@ the virtualizer measures it.
     before the viewer opened.
 50. An `html_render` call, from Claude and from Codex: a `pockode` row titled by
     the page while it runs (or if it fails), then on success a card that splits
-    the list around it — never inside a group. In the dark theme the page is
-    white; its placeholder is not.
+    the list around it — never inside a group. In the dark theme a page that
+    uses no `--pk-*` variable is white, with browser-default buttons, exactly
+    as before; its placeholder is not white.
 51. A page taller than the screen: the card stops at 70% of the transcript with
     *⤢ Full screen* under it; a short page has no footer and no inner scroll.
     Toggle `</>` and back: the page has kept its state. A page that tries
@@ -3188,6 +3791,36 @@ the virtualizer measures it.
     (`docs/.vitepress/dist/logo.png`); a `.env`, `.env.local`, `.envrc` or
     `.git/config` it fetches does not. A `#section` link scrolls the page.
     Offline, the page draws without them and the strip names the app's host.
+56. Ask for a page, then for a change to it, from Claude and from Codex: the
+    first card says `p1`, the second `p2 · from p1`, and both stand, the first
+    unchanged. Reopen the session: both draw, the second loaded from the
+    server. Fork the chat between them and ask again: the fork's next page is
+    not `p2`. Ask the agent to change `p9`: it is told which pages exist, and
+    nothing new is drawn.
+57. A page with a `data-pk-send` button, a sending form and a sending input, in
+    Chromium and WebKit: each sends once — by click, by Enter, and not by an
+    Enter that confirms an IME word — and the bubble reads the action, `from
+    p3` and the data. A plain form does not reload the page. Press a button on
+    an older card while a newer one is the latest: the bubble names the older
+    id, the transcript does not jump, and the old card's line reads `Sent`.
+58. A page that calls `pockode.send` on load: nothing is sent, on reopening the
+    session or on a second device; its card says *Not sent … before you used
+    it*, its console says why, and its promise rejects with `inactive`. A send
+    a second after a press goes. With a permission request open, a press is
+    refused with *Answer the permission request first.*; with only a question
+    open, or while the agent is merely running, it joins the turn.
+59. Switch light ↔ dark with a page that uses `--pk-*` on screen: it follows
+    without reloading — text typed in it stays — and never flashes white, not
+    on the switch and not when a card scrolls into view in the dark theme. A
+    page with no `--pk-*` beside it stays white, and so does one that only
+    defines a name of its own (`--pk-gap`). An old page with a plain form and
+    no `data-pk-send` behaves as before: its form goes nowhere.
+60. A page in a wide desktop pane: its card is 1280px, centred, wider than the
+    text above it; in a 900px pane it fills the pane inside the gutters; on a
+    phone it is the column's width. A 3000px-wide table in it scrolls sideways
+    in the card and full screen, the transcript never does, and a vertical
+    swipe over it scrolls the transcript. Under an extension with an avatar,
+    and inside a subagent's Process, the card stays in its column.
 
 ## Out of scope
 
@@ -3205,8 +3838,14 @@ the virtualizer measures it.
 - **Per-call token cost.** Usage has an owner
   ([usage-display-ui.md](usage-display-ui.md)) and a row is not it.
 - **Re-theming.** Every colour here is an existing `th-` token; no new one is
-  introduced, and none is needed. The one fixed colour, a page's white, is not
-  the theme's to change ([above](#a-page-the-agent-drew-html_render)).
+  introduced, and none is needed. The one fixed colour, the white of a page
+  that does not use the theme's variables, is not the theme's to change
+  ([above](#theme-a-page-that-asks-for-it)).
+- **More from a page than a send.** No `data-pk-blocked` on a card's root, no
+  link from an action bubble back to its card, no per-page or per-session rate
+  limit, no anti-forgery token: each is a second way to say what the send's
+  own answer already says, or a defence against an agent's page, which is not
+  an adversary ([sending](#sending-to-the-agent)).
 - **`BashOutput` and `KillShell`.** They are the same shape as `TaskOutput` and
   the rules above would apply to them unchanged, but whether they should be
   absorbed is a decision about each of them, not a consequence of this one.

@@ -1,5 +1,5 @@
 import type { AuthCredential } from "@pockode/shared";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // Every case loads the store fresh, since its connection state lives in the
 // module. Importing it here as well pays the transform, which survives
 // resetModules, in the untimed import phase instead of in the first case's
@@ -16,6 +16,9 @@ const TEST_PASSWORD: AuthCredential = {
 	value: "test-password",
 };
 const TEST_SESSION_TOKEN = "test-session-token";
+// The version the cluster answers auth with. "test" is this build's own
+// (vitest.config.ts); a case that restarts into another version changes it.
+let serverVersion = "test";
 
 let mockWsInstances: MockWebSocket[] = [];
 let currentMockWs: MockWebSocket | null = null;
@@ -42,7 +45,7 @@ class MockWebSocket {
 				this.simulateMessage({
 					jsonrpc: "2.0",
 					id: parsed.id,
-					result: { version: "test", session_token: TEST_SESSION_TOKEN },
+					result: { version: serverVersion, session_token: TEST_SESSION_TOKEN },
 				});
 			});
 		}
@@ -114,6 +117,7 @@ beforeEach(() => {
 	vi.useFakeTimers();
 	mockWsInstances = [];
 	currentMockWs = null;
+	serverVersion = "test";
 	globalThis.WebSocket = MockWebSocket as unknown as typeof WebSocket;
 	return () => {
 		vi.useRealTimers();
@@ -456,5 +460,155 @@ describe("wsStore reconnect attempts", () => {
 		// socket on top of the one retryNow just made.
 		await vi.advanceTimersByTimeAsync(30_000);
 		expect(mockWsInstances.length).toBe(socketsBefore + 1);
+	});
+});
+
+function sentRequest(ws: MockWebSocket | null, method: string) {
+	const frames = (ws?.send.mock.calls ?? []).map((call) =>
+		JSON.parse(String(call[0])),
+	);
+	return frames.find((frame) => frame.method === method);
+}
+
+describe("wsStore version reload", () => {
+	afterEach(() => {
+		vi.unstubAllGlobals();
+	});
+
+	function stubReload() {
+		const reload = vi.fn();
+		vi.stubGlobal("location", { ...window.location, reload });
+		return reload;
+	}
+
+	// A restart into a newly installed version, from here or anywhere else:
+	// the page running the old frontend against the new cluster is the worse
+	// failure.
+	it("reloads when the cluster reports another version than this build", async () => {
+		const reload = stubReload();
+		const useWSStore = await connectAndAuth();
+		expect(reload).not.toHaveBeenCalled();
+
+		serverVersion = "0.17.0";
+		currentMockWs?.simulateClose();
+		await vi.advanceTimersByTimeAsync(3000);
+		currentMockWs?.simulateOpen();
+		await vi.advanceTimersByTimeAsync(0);
+
+		expect(reload).toHaveBeenCalledTimes(1);
+		expect(useWSStore.getState().status).toBe("reconnecting");
+	});
+});
+
+describe("wsStore restartServer", () => {
+	async function requestRestart() {
+		const useWSStore = await connectAndAuth();
+		const ws = currentMockWs;
+		const pending = useWSStore.getState().actions.restartServer();
+		await vi.advanceTimersByTimeAsync(0);
+		const request = sentRequest(ws, "server.restart");
+		expect(request).toBeDefined();
+		return { useWSStore, ws, request, pending };
+	}
+
+	function refuse(
+		ws: MockWebSocket | null,
+		id: unknown,
+		reason: string,
+		message: string,
+	) {
+		ws?.simulateMessage({
+			jsonrpc: "2.0",
+			id,
+			error: { code: -32011, message, data: { reason } },
+		});
+	}
+
+	it("remembers the accepted restart until the next connection", async () => {
+		const { useWSStore, ws, request, pending } = await requestRestart();
+		ws?.simulateMessage({ jsonrpc: "2.0", id: request.id, result: {} });
+		await pending;
+		expect(useWSStore.getState().restartRequestedAt).not.toBeNull();
+
+		// The cluster closes with 1012 after its reply; the reconnect is ordinary.
+		ws?.simulateClose();
+		expect(useWSStore.getState().status).toBe("reconnecting");
+		expect(useWSStore.getState().restartRequestedAt).not.toBeNull();
+
+		await vi.advanceTimersByTimeAsync(3000);
+		currentMockWs?.simulateOpen();
+		await vi.advanceTimersByTimeAsync(0);
+		expect(useWSStore.getState().status).toBe("connected");
+		expect(useWSStore.getState().restartRequestedAt).toBeNull();
+	});
+
+	it("rejects a refusal with the cluster's message and remembers nothing", async () => {
+		const { useWSStore, ws, request, pending } = await requestRestart();
+		const rejection = expect(pending).rejects.toThrow(
+			"The installed pockode at /x didn't run",
+		);
+		refuse(
+			ws,
+			request.id,
+			"not_runnable",
+			"The installed pockode at /x didn't run",
+		);
+		await rejection;
+		expect(useWSStore.getState().restartRequestedAt).toBeNull();
+	});
+
+	// Another device or `kill -USR1` got there first: the page waits on it as
+	// if it had asked.
+	it("takes a restart already under way as accepted", async () => {
+		const { useWSStore, ws, request, pending } = await requestRestart();
+		refuse(
+			ws,
+			request.id,
+			"already_restarting",
+			"The cluster is already restarting.",
+		);
+		await pending;
+		expect(useWSStore.getState().restartRequestedAt).not.toBeNull();
+	});
+
+	// The banner's "hasn't come back" runs from the first acceptance; a second
+	// press before the drop must not push it back.
+	it("keeps the first acceptance's time when pressed again", async () => {
+		vi.setSystemTime(1_000_000);
+		const { useWSStore, ws, request, pending } = await requestRestart();
+		ws?.simulateMessage({ jsonrpc: "2.0", id: request.id, result: {} });
+		await pending;
+
+		vi.setSystemTime(1_005_000);
+		const again = useWSStore.getState().actions.restartServer();
+		await vi.advanceTimersByTimeAsync(0);
+		const frames = (ws?.send.mock.calls ?? []).map((call) =>
+			JSON.parse(String(call[0])),
+		);
+		const second = frames.filter((f) => f.method === "server.restart")[1];
+		refuse(
+			ws,
+			second.id,
+			"already_restarting",
+			"The cluster is already restarting.",
+		);
+		await again;
+
+		expect(useWSStore.getState().restartRequestedAt).toBe(1_000_000);
+	});
+
+	// Through the relay the reply may not arrive before the tunnel goes.
+	it("takes a reply lost with the connection as accepted", async () => {
+		const { useWSStore, ws, pending } = await requestRestart();
+		ws?.simulateClose();
+		await pending;
+		expect(useWSStore.getState().restartRequestedAt).not.toBeNull();
+	});
+
+	it("remembers nothing when the user logged out while it was out", async () => {
+		const { useWSStore, pending } = await requestRestart();
+		useWSStore.getState().actions.disconnect();
+		await pending;
+		expect(useWSStore.getState().restartRequestedAt).toBeNull();
 	});
 });

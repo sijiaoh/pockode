@@ -1,4 +1,12 @@
 @import "tailwindcss";
+/* The diff library's stylesheet, in the layer between Tailwind's base and its
+ * utilities: above preflight, which its rules were written to beat, and below
+ * the utilities and the unlayered theme rules further down. Imported from JS,
+ * unlayered, it beat both: its
+ * `.diff-line-extend-wrapper * { color: initial }` painted our hunk bar in
+ * CanvasText, and its `[data-theme] .diff-style-root` colours outranked ours
+ * in DIFF VIEW STYLES. components/ui/DiffViewer.browser.test.tsx holds it. */
+@import "@git-diff-view/react/styles/diff-view-pure.css" layer(components);
 @plugin "@tailwindcss/typography";
 
 /* Tailwind's automatic source detection stops at the project directory and
@@ -37,6 +45,19 @@
 	--breakpoint-md: initial;
 	--breakpoint-xl: initial;
 	--breakpoint-2xl: initial;
+}
+
+/* The Git lists' row widths: container widths, not rungs of the ladder, so not
+ * in BREAKPOINTS. Each list's scroll box is the `@container` its rows query,
+ * one per list, so every row of a list switches together whatever its indent.
+ * A row goes wide only where its primary text keeps the room the 320px default
+ * column gives it today — files and branches at 600, History's meta columns
+ * and graph at 768. Tailwind's default container sizes (`@sm:` = 384, …) are
+ * not for these rows; tests/widthLadder.test.ts rejects them. See
+ * docs/git-ui.md#layout. */
+@theme {
+	--container-git-row: 600px;
+	--container-git-commit-row: 768px;
 }
 
 /* The two pointer gates. Deliberately NOT complements: a touchscreen laptop
@@ -783,6 +804,39 @@ samp {
 }
 
 /* =============================================================================
+ * COMMIT GRAPH LINES
+ *
+ * One palette per mode, the same in every theme: lines are told apart by
+ * colour, never told what they mean by it, so a theme has nothing to say here.
+ * Not the accent, which reads as "selected". Each clears 4:1 against every
+ * theme's primary, secondary and tertiary background — the test
+ * (tests/graphColors.test.ts) holds the 3:1 floor — but not 4.5:1, so these are never text colours
+ * (docs/git-history-ui.md#line-colours).
+ * ============================================================================= */
+
+:root {
+	--th-graph-1: #1d4ed8;
+	--th-graph-2: #c2410c;
+	--th-graph-3: #047857;
+	--th-graph-4: #a21caf;
+	--th-graph-5: #0369a1;
+	--th-graph-6: #b45309;
+	--th-graph-7: #be123c;
+	--th-graph-8: #6d28d9;
+}
+
+.dark {
+	--th-graph-1: #60a5fa;
+	--th-graph-2: #fb923c;
+	--th-graph-3: #34d399;
+	--th-graph-4: #e879f9;
+	--th-graph-5: #38bdf8;
+	--th-graph-6: #fbbf24;
+	--th-graph-7: #fb7185;
+	--th-graph-8: #a78bfa;
+}
+
+/* =============================================================================
  * DIFF VIEW STYLES (@git-diff-view/react)
  *
  * Font size is controlled via diffViewFontSize prop (12px mobile, 13px desktop)
@@ -806,6 +860,20 @@ samp {
 	--diff-hunk-content--: var(--th-bg-tertiary);
 	--diff-hunk-lineNumber--: var(--th-bg-tertiary);
 	--diff-hunk-content-color--: var(--th-text-muted);
+	color: var(--th-text-primary);
+}
+
+/* A row of ours drawn inside the diff (the Git review's hunk bar) inherits
+ * colour like anywhere else. The library resets every element in it to
+ * `color: initial` — CanvasText, black or white whatever the theme — which the
+ * layer alone only lifts from elements naming a colour of their own: an icon
+ * taking its button's would still get CanvasText. In the library's layer, so
+ * a `text-th-*` utility on the row still wins over this. */
+@layer components {
+	.diff-tailwindcss-wrapper .diff-line-extend-wrapper *,
+	.diff-tailwindcss-wrapper .diff-line-widget-wrapper * {
+		color: inherit;
+	}
 }
 
 /* Light mode - subtle colors for light backgrounds */
@@ -876,6 +944,124 @@ samp {
 	);
 }
 
+/*
+ * Collapsed context (components/ui/collapsedContext.ts): a gap's row says how
+ * many unchanged lines it hides in place of git's `@@` header, and the whole
+ * row expands it.
+ */
+.diff-tailwindcss-wrapper .diff-style-root
+	.diff-line-hunk:has(.diff-line-hunk-action button),
+.diff-tailwindcss-wrapper
+	.diff-style-root
+	.diff-line-hunk:has(.diff-line-hunk-placeholder[data-unchanged]) {
+	cursor: pointer;
+}
+
+.diff-tailwindcss-wrapper
+	.diff-style-root
+	.diff-line-hunk-content[data-unchanged]
+	> div {
+	display: none;
+}
+
+.diff-tailwindcss-wrapper
+	.diff-style-root
+	.diff-line-hunk-content[data-unchanged]::before {
+	content: attr(data-unchanged);
+	padding-left: 1.5em;
+	color: var(--diff-hunk-content-color--);
+}
+
+/* The library gives its expand buttons no focus style of its own. */
+.diff-tailwindcss-wrapper .diff-style-root
+	.diff-line-hunk-action
+	button:focus-visible {
+	outline: 2px solid var(--th-accent);
+	outline-offset: -2px;
+}
+
+/* The library's expand buttons are a few pixels tall: a thumb gets the floor.
+   Between hunks there are two of them, stacked, so that row is twice it. */
+@media (any-pointer: coarse) {
+	.diff-tailwindcss-wrapper .diff-style-root .diff-line-hunk-action button {
+		min-height: 44px;
+	}
+}
+
+/*
+ * Line selection (components/ui/lineGutter.ts). The numbers are the control;
+ * a selected line is tinted over its add or remove colour rather than in
+ * place of it, so the change still reads as the diff. The tint is a
+ * background image because the library writes each cell's colour inline.
+ */
+.diff-tailwindcss-wrapper .diff-style-root td[data-line-selected],
+.diff-tailwindcss-wrapper .diff-style-root tr[data-line-selected] > td {
+	background-image: linear-gradient(
+		color-mix(in srgb, var(--th-accent) 18%, transparent),
+		color-mix(in srgb, var(--th-accent) 18%, transparent)
+	);
+}
+
+.diff-tailwindcss-wrapper
+	.diff-style-root
+	:is(
+		.diff-line-num,
+		.diff-line-old-num,
+		.diff-line-new-num
+	)[data-line-selected] {
+	box-shadow: inset 2px 0 0 var(--th-accent);
+	/* biome-ignore lint/complexity/noImportantStyles: Override library's inline colour */
+	color: var(--th-accent) !important;
+}
+
+/* The library dims an unchanged line's numbers, inline in split view. */
+.diff-tailwindcss-wrapper .diff-style-root
+	:is(
+		.diff-line-num,
+		.diff-line-old-num,
+		.diff-line-new-num
+	)[data-line-selected]
+	:is(div, span) {
+	/* biome-ignore lint/complexity/noImportantStyles: Override library's inline opacity */
+	opacity: 1 !important;
+}
+
+/* Tapping the only selected line again clears it: two quick taps on one
+   cell, which must not read as a double-tap zoom. */
+[data-line-select]
+	.diff-style-root
+	:is(.diff-line-num, .diff-line-old-num, .diff-line-new-num) {
+	touch-action: manipulation;
+}
+
+/* Split view sizes each side's number cell to its numbers, from 40px. */
+[data-line-select]
+	.diff-style-root
+	:is(.diff-line-old-num, .diff-line-new-num) {
+	/* biome-ignore lint/complexity/noImportantStyles: Override library's inline width */
+	min-width: 44px !important;
+}
+
+/* What the gutter does is shown only to a mouse; a tap shows it at once. */
+@media (hover: hover) and (pointer: fine) {
+	[data-line-select]
+		.diff-style-root
+		:is(.diff-line-num, .diff-line-old-num, .diff-line-new-num) {
+		cursor: pointer;
+	}
+
+	[data-line-select]
+		.diff-style-root
+		:is(.diff-line-num, .diff-line-old-num, .diff-line-new-num):not(
+			[data-line-selected]
+		):hover {
+		background-image: linear-gradient(
+			color-mix(in srgb, var(--th-accent) 10%, transparent),
+			color-mix(in srgb, var(--th-accent) 10%, transparent)
+		);
+	}
+}
+
 /* Mobile: Let line numbers scroll with content instead of staying fixed */
 /* biome-ignore lint/correctness/noUnknownFunction: Tailwind CSS v4 theme() function */
 @media (width < theme(--breakpoint-sm)) {
@@ -893,9 +1079,6 @@ samp {
 	 * The library writes the column's width inline as twice
 	 * --diff-aside-width-- (its measure of the widest number, at least 40px),
 	 * so one of them is the narrow column, and only !important reaches it.
-	 * Every selector goes through .diff-style-root because the library's own
-	 * utilities are `.diff-tailwindcss-wrapper .pl-[10px]` and the like: a tie
-	 * would leave the result to whichever stylesheet happened to load last.
 	 */
 	.diff-tailwindcss-wrapper .diff-style-root .diff-line-num,
 	.diff-tailwindcss-wrapper .diff-style-root .diff-line-hunk-action {
@@ -921,10 +1104,23 @@ samp {
 	.diff-tailwindcss-wrapper .diff-style-root .diff-line-num span {
 		width: 100%;
 	}
+
+	/* Where the numbers select lines, the narrowed column is still 44px. */
+	[data-line-select] .diff-style-root .diff-line-num,
+	[data-line-select] .diff-style-root .diff-line-hunk-action {
+		/* biome-ignore lint/complexity/noImportantStyles: Override library's inline width */
+		width: max(44px, var(--diff-aside-width--)) !important;
+		/* biome-ignore lint/complexity/noImportantStyles: Override library's inline width */
+		min-width: max(44px, var(--diff-aside-width--)) !important;
+		/* biome-ignore lint/complexity/noImportantStyles: Override library's inline width */
+		max-width: max(44px, var(--diff-aside-width--)) !important;
+	}
 }
 
-/* Let parent container handle scrolling instead of child components' internal scroll */
-.diff-table-scroll-container {
+/* Let parent container handle scrolling instead of child components' internal
+   scroll. Not split view's: without wrap each side is a half-width scroll box
+   of its own, kept in step by the library, and let out they overlap. */
+.diff-table-scroll-container:not(.split-diff-view *) {
 	/* biome-ignore lint/complexity/noImportantStyles: Override library's scroll container */
 	overflow-x: visible !important;
 	/* biome-ignore lint/complexity/noImportantStyles: Override library's scroll container */
@@ -1026,15 +1222,22 @@ samp {
 	scale: 0.9;
 }
 
-.code-block {
-	margin: 0;
-	padding: 0.75rem 1rem;
-	border-radius: 0.375rem;
-	background-color: var(--th-code-bg);
-	color: var(--shiki-foreground);
+/* One rule for the code and the numbers beside it: a gutter whose font or
+ * line-height differs by a hair drifts off its rows thousands of lines down. */
+.code-block,
+.code-gutter {
+	--code-padding-y: 0.75rem;
 	font-family: var(--font-mono);
 	font-size: var(--code-font-size, 12px);
 	line-height: 1.6;
+}
+
+.code-block {
+	margin: 0;
+	padding: var(--code-padding-y) 1rem;
+	border-radius: 0.375rem;
+	background-color: var(--th-code-bg);
+	color: var(--shiki-foreground);
 	min-width: fit-content;
 	overflow-x: visible;
 	overflow-y: visible;
@@ -1094,6 +1297,144 @@ samp {
 	display: inline-block;
 	max-width: 100%;
 	text-indent: 0;
+}
+
+/* A numbered file (`CodeHighlighter lineNumbers`), unwrapped — the wrapped one
+ * is `.code-block-wrapper--numbered-wrap` below: a gutter column beside the
+ * untouched <pre>, both scrolled by the page body. The gutter is sticky within
+ * it, so code scrolls sideways under the hairline like a frozen column, and the
+ * horizontal scrollbar stays at the viewport rather than at the end of a long
+ * file. The numbers are generated content, one block per 1000 rows
+ * (`LineGutter` in lib/shikiUtils.tsx), so no copy or find picks them up. Its
+ * vertical padding is the <pre>'s (`--code-padding-y`), so row 1 lines up; row
+ * geometry is read back by lib/codeRows.ts. Full-bleed: a file is a page, not
+ * a card. */
+.code-lines {
+	/* The line-arrival band's containing block. */
+	position: relative;
+	display: flex;
+	min-width: fit-content;
+	/* Keeps the gutter's z-index among the block's own layers. */
+	isolation: isolate;
+	background-color: var(--th-code-bg);
+}
+
+.code-gutter {
+	position: sticky;
+	left: 0;
+	/* Over the code scrolling under it, under .code-copy-button. */
+	z-index: 1;
+	flex: none;
+	box-sizing: content-box;
+	width: calc(var(--line-digits) * 1ch);
+	padding: var(--code-padding-y) 0.5rem;
+	white-space: pre;
+	text-align: right;
+	color: var(--th-text-muted);
+	background-color: var(--th-code-bg);
+	box-shadow: inset -1px 0 var(--th-border);
+	user-select: none;
+	-webkit-user-select: none;
+}
+
+.code-gutter > span {
+	display: block;
+}
+
+.code-gutter > span::before {
+	content: attr(data-numbers);
+}
+
+.code-block--numbered {
+	flex: 1;
+	padding-left: 0.5rem;
+	border-radius: 0;
+	background: transparent;
+}
+
+/* A numbered file whose long lines wrap (`CodeHighlighter lineNumbers wrap`).
+ * The lines stay shiki's inline `.line`s, and each draws its own number as
+ * generated content in its first fragment, so the number sits on the row the
+ * line starts on and a continuation row carries none. Nothing scrolls
+ * sideways, so there is no column to freeze: the gutter is an empty column
+ * left for its hairline and the mark's redrawn number. lineBox in
+ * lib/codeRows.ts measures each line off its `.line`. */
+.code-block-wrapper--numbered-wrap {
+	/* The corner copy button's `touch-target` hit area overhangs the block's
+	 * right edge (1px on a fine pointer, ~5px on a coarse one), which would
+	 * scroll the page body sideways. `clip` cuts it without making a scroll
+	 * container. */
+	overflow-x: clip;
+}
+
+.code-block-wrapper--numbered-wrap .code-lines,
+.code-block-wrapper--numbered-wrap .code-block--numbered {
+	min-width: 0;
+}
+
+.code-block-wrapper--numbered-wrap .code-gutter {
+	/* Still positioned: the containing block of `.line-arrival--number`. */
+	position: relative;
+	z-index: auto;
+	/* A positioned box paints after the <pre>'s inline content, so a
+	 * background here would cover the numbers; the block's own is the same
+	 * colour. The hairline is the box-shadow, where no number reaches. */
+	background: none;
+}
+
+.code-block-wrapper--numbered-wrap pre,
+.code-block-wrapper--numbered-wrap code {
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+}
+
+.code-block-wrapper--numbered-wrap code {
+	counter-reset: line;
+}
+
+/* The corner the copy button covers, kept clear on the first row only: with
+ * the <pre>'s 1rem right padding it is `.code-block--corner`'s 2.25rem. */
+.code-block-wrapper--numbered-wrap .code-copy-button
+	~ .code-lines
+	code::before {
+	content: "";
+	float: right;
+	width: 1.25rem;
+	height: 1lh;
+}
+
+.code-block-wrapper--numbered-wrap code > .line {
+	counter-increment: line;
+}
+
+.code-block-wrapper--numbered-wrap code > .line::before {
+	/* The fallback where alt text is unsupported: numbers read aloud beat no
+	 * numbers. The empty alt keeps a screen reader from saying each one, which
+	 * it would — generated content in the <pre> is exposed, unlike the
+	 * `aria-hidden` gutter's. */
+	content: counter(line);
+	content: counter(line) / "";
+	/* Out of flow, at its static position — the start of the line's first
+	 * row — so it takes no room and offers no break: an inline-block number
+	 * is a break opportunity, and a line opening on a word longer than a row
+	 * would leave its number alone on a row of its own. Taking no room keeps
+	 * a leading tab's stop. Under the code in `.code-lines`' isolated
+	 * stacking order, after the band (earlier in the tree), and under the
+	 * mark's redrawn number in the positioned gutter. */
+	position: absolute;
+	z-index: -1;
+	width: calc(var(--line-digits) * 1ch);
+	/* Back over the gutter's content box: its 0.5rem right padding and the
+	 * <pre>'s 0.5rem left one. */
+	margin-left: calc(-1 * (var(--line-digits) * 1ch + 1rem));
+	text-align: right;
+	color: var(--th-text-muted);
+}
+
+/* The empty line shiki draws after a final newline — the one
+ * `fileLineCount` does not count. */
+.code-block-wrapper--numbered-wrap code > .line:last-child:empty::before {
+	content: none;
 }
 
 /* In a tool call's body a code block draws no box of its own: the body is
@@ -1429,6 +1770,103 @@ samp {
 @media (prefers-reduced-motion: reduce) {
 	[data-permission-request-id] {
 		transition: none;
+	}
+}
+
+/* =============================================================================
+ * COMPOSER ARRIVAL
+ *
+ * The ring a prefill handed in from outside the chat puts on the composer, once
+ * (docs/agent-handoff-ui.md §1.3). The jump's grammar in `th-accent`: an
+ * arrival, not a warning. An animation rather than a class swap with a
+ * transition, so the ring is there at once and only its going fades; its end is
+ * what `InputBar` takes the class off on.
+ * ============================================================================= */
+
+.composer-arrival {
+	animation: composer-arrival 1500ms ease-out;
+}
+
+@keyframes composer-arrival {
+	0%,
+	30% {
+		box-shadow: inset 0 0 0 2px var(--th-accent);
+	}
+	100% {
+		box-shadow: inset 0 0 0 2px transparent;
+	}
+}
+
+/* Shows and goes with no fade, like the jump's; still an animation, so its end
+ * still arrives. */
+@media (prefers-reduced-motion: reduce) {
+	.composer-arrival {
+		animation-timing-function: step-end;
+	}
+}
+
+/* =============================================================================
+ * LINE ARRIVAL
+ *
+ * The flash on the line a file was opened at (`useLineLanding`,
+ * docs/file.md#where-the-viewer-opens): a band under the row's code in
+ * `.code-lines` and the number redrawn over the gutter's, both placed from the
+ * row geometry (lib/codeRows.ts) and fading as one. The composer arrival's
+ * grammar — on at once, a hold, then only the going fades — after a delay for
+ * the eye to find the page it just landed on. Resting opacity is 0, so the
+ * delay before it and the end after it are both invisible; its end is what
+ * takes the mark off.
+ * ============================================================================= */
+
+.line-arrival {
+	position: absolute;
+	opacity: 0;
+	animation: line-arrival 1700ms ease-out 250ms;
+	pointer-events: none;
+}
+
+/* Under the code text: `.code-lines` isolates, so -1 is still above its
+ * background. Spans the full `fit-content` width, however far it is scrolled
+ * sideways; the opaque gutter covers its start. Wrapped, the gutter is
+ * transparent and the band runs under it too, beside every row of the line. */
+.line-arrival--band {
+	left: 0;
+	right: 0;
+	z-index: -1;
+	background: color-mix(in srgb, var(--th-accent) 20%, transparent);
+}
+
+/* Opaque, so the muted number under it shows through only as it fades — a
+ * cross-fade back. Clear of the gutter's 1px inset hairline on the right. */
+.line-arrival--number {
+	left: 0;
+	right: 1px;
+	padding-right: calc(0.5rem - 1px);
+	text-align: right;
+	color: var(--th-accent);
+	font-weight: 600;
+	background: color-mix(in srgb, var(--th-accent) 20%, var(--th-code-bg));
+}
+
+.line-arrival--number::before {
+	content: attr(data-line);
+}
+
+@keyframes line-arrival {
+	0%,
+	35% {
+		opacity: 1;
+	}
+	100% {
+		opacity: 0;
+	}
+}
+
+/* Shows after the same delay, stays, and goes with no fade; still an
+ * animation, so its end still arrives. */
+@media (prefers-reduced-motion: reduce) {
+	.line-arrival {
+		animation-timing-function: step-end;
 	}
 }
 

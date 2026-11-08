@@ -76,19 +76,19 @@ export default Dialog;
 - hover 揭示只能「加」不能「还」：隐藏与揭示两半必须同挂 `pointer-fine:`，用 `opacity` 而非 `display`，并配 `group-focus-within` 孪生
 - 指针事件按用途选：手势跟踪用 `pointerdown/move/up` + `setPointerCapture`；outside-click 用 `click`（走 `useOutsideClick`），不用 `pointerdown`（触摸滚动会误关）。**自己没有遮罩的浮层**，在真的因此关闭时必须 `event.stopPropagation()` 认领这次点击，否则同一次按压会连带关掉它背后那层（规则与已暴露的 surface 见 [docs/answering-ui.md](../docs/answering-ui.md#who-owns-the-dismissing-click)）
 - 滚动边界只有一个主人：**外壳**（就是视口那一层，全站只该有一个，现在是 `AppShell`）写 `h-dvh` 且必须 `overflow-hidden`；外壳里的子元素**不许重复写视口高度**，高度由所在行给。**独立整页**（加载 / 错误 / 密码这类自己就是一整页的屏）写 `min-h-dvh`，长文案该能滚到。整屏跟着内层列表一起动，说明有个不该可滚的祖先可滚了 —— 去改那个祖先，不要给列表加 `overscroll-behavior` 把滚动链堵在下面一层。规则与理由见 [docs/responsive-ui.md](../docs/responsive-ui.md#who-owns-the-scroll-boundary)，`viewportHeight.test.ts` 守拼写这一半
+- **页面的滚动主体写成 `ui/PageBody`**，别手写 `min-h-0 flex-1 overflow-auto` 的 div：页面被替换时会卸载，返回时滚动位置靠它记住并恢复（`ContentView` 已内置）。不能用 `PageBody` 的滚动容器用 `useScrollRestoration(ownRef)`。契约、什么算「返回」、哪些不覆盖见 [docs/code/frontend-state.md](../docs/code/frontend-state.md#why-a-pages-scroll-position-outlives-the-page)
 - **放 `sticky` 子元素的滚动容器自己不带竖向 padding**：`sticky` 的 `top-0` 贴的是滚动容器的 padding 边而不是边框边，容器上的 `p-*` / `pt-*` / `py-*` 会在吸顶的 header 上方留出一条缝，滚过去的行从缝里露出来。内边距交给里面再包一层的内容 div（范例见 `Project/WorkListOverlay.tsx`；它的测试只守这一处，别处靠自觉）
 - **表单控件焦点**：有边框的文本框 / textarea / select 一律用 `ui/inputClass.ts` 的 `inputClass`（边框 + 焦点边框 + 光晕，用 `focus:`），padding、字号、背景、圆角留在调用处；按钮类控件仍用 `focus-visible:`。不要手写 `focus:border-*` —— 浅色主题下只变 1px 边框几乎看不出来。**无边框的行内控件**（如步骤编辑器里与序号、把手并排的 textarea）不走 `inputClass`，由包住它的带边框容器挂同文件的 `inputFocusWithinClass`（同一套 token，用 `focus-within:`）显示焦点 —— 光晕加在控件本身会压到旁边的序号和把手
 - **主题**：必须用 `th-` 前缀颜色，禁止硬编码（详见 `index.css` 中的主题定义）
+- **第三方库的样式表放进 `components` layer**：在 `index.css` 里 `@import "…" layer(components);`，不要从 JS `import "…css"`。未分层的样式压过所有 layer 里的规则，于是库的样式同时盖掉我们的 utilities 和主题覆盖，且不报任何错（`@git-diff-view` 曾因此把 hunk 栏画成黑字、让 `index.css` 里的 diff 主题从未生效）。`components` 在 preflight 之上（库的规则本来就是写来压它的）、utilities 之下；理由写在 `index.css` 那行 import 上，`ui/DiffViewer.browser.test.tsx` 守着它
 
 ### Zustand
 
 **领域数据**用 Zustand，**UI 状态**用 React —— 除非该状态的寿命必须长于组件。三类：
 需要持久化；代表「用户已经做过的选择」而组件何时卸载不由它自己决定；以及**已经发出去
 的请求**——它的寿命由请求本身决定，组件卸载了请求还在跑。如 `filesSearchStore`（持久化）、
-`gitPanelStore`（用户手动展开/收起 History 的选择，不能因为布局换了挂载方式就被悄悄推翻，
-理由见 [docs/code/frontend-state.md](../docs/code/frontend-state.md#why-a-store-for-panel-ui-state)）、
-`gitSyncStore` / `gitWriteStore`（正在跑的 git 写操作及其排队，理由见
-[同一文档](../docs/code/frontend-state.md#why-a-run-in-flight-is-a-store)）。
+`gitSyncStore` / `gitCheckoutStore` / `gitWriteStore`（正在跑的同步、切换和删除分支、排队中的暂存类写操作，理由见
+[docs/code/frontend-state.md](../docs/code/frontend-state.md#why-a-run-in-flight-is-a-store)）。
 
 - 按领域划分 store，组件只调用 action 不处理业务逻辑
 - 选择器订阅具体字段，多字段用 `useShallow`
@@ -124,7 +124,7 @@ describe("MyComponent", () => {
 
 ## 边界
 
-✅ **Always**: `pnpm -w run lint` + `pnpm run build` + `pnpm run test` · 函数组件 · Props 定义类型 · 直接调 HTTP API 时用 `lib/api.ts` 的 `apiUrl()` / `authHeaders()` / `fetchWithAuth()`，401 走 `logoutIfUnauthorized()`（凭证拼装与登出规则全站只有这一处） · 显示日期/时间一律用 `utils/dateTime.ts`（时长与「几分钟前」用 `utils/relativeTime.ts`），按设备时区显示（schedule 自己的时间除外）、没有时区设置；别处自己格式化日期会被 `tests/dateFormatting.test.ts` 拦下（形状与理由见 [docs/time-display-ui.md](../docs/time-display-ui.md)）
+✅ **Always**: `pnpm -w run lint` + `pnpm run build` + `pnpm run test` · 函数组件 · Props 定义类型 · 直接调 HTTP API 时用 `lib/api.ts` 的 `apiUrl()` / `authHeaders()` / `fetchWithAuth()`，401 走 `logoutIfUnauthorized()`（凭证拼装与登出规则全站只有这一处） · 显示日期/时间一律用 `utils/dateTime.ts`（时长与「几分钟前」用 `utils/relativeTime.ts`），按设备时区显示（schedule 自己的时间除外）、没有时区设置；别处自己格式化日期会被 `tests/dateFormatting.test.ts` 拦下（形状与理由见 [docs/time-display-ui.md](../docs/time-display-ui.md)） · 从聊天之外把一段文字交给 agent（Git 工作区等）一律用 `hooks/usePrefillComposer.ts`：只写草稿、永不发送、永不覆盖（`prefill` 追加整条消息；`insert` 把引用的代码插在用户放置的光标处），输入框已在页面上（Git 详情层，以及 `expanded` 下 sidebar Git 列表旁的聊天；`overlayKeepsComposer(mainAreaOverlay(…))`）时原地写入、不跳转，hook 放在能活过这次按下的 surface（页面或 bar）上，不放在选中即关闭的菜单行里；不要自己写 `inputStore`（契约见 [docs/agent-handoff-ui.md §1](../docs/agent-handoff-ui.md#1-prefill-handoff)）
 
 ⚠️ **Ask First**: 添加 pnpm 依赖（打进 bundle 的包会进入发布的第三方声明；许可证无法确定时 Frontend 的 `notices` job 会失败，见 [scripts/README.md](../scripts/README.md#notices--third-party-notices)） · 修改 Vite/TS 配置 · 新建全局 store
 

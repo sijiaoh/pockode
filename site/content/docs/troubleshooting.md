@@ -16,16 +16,17 @@ Pass `-password`, or set the `POCKODE_PASSWORD` environment variable; there is n
 
 ## No AI CLI found
 
-The banner's **Agents** line shows `(not found)` for a CLI Pockode cannot find, and warns when neither is there. Install Claude Code or Codex from **Settings → AI CLIs**, or yourself. The app runs `npm install --global` as the user running `pockode`, without `sudo`, so it needs `npm` on the `PATH` `pockode` was started with; if it is missing, install Node.js and restart `pockode`. Pockode looks for the CLI each time a session starts, so one installed into a directory already on its `PATH` works at once; if the installer added a new `PATH` entry, restart `pockode` from a new terminal so it inherits it (the banner's **Agents** line is only refreshed by a restart). On Windows, install it on the Windows side, not inside WSL.
+The banner's **Agents** line shows `(not found)` for a CLI Pockode cannot find, and warns when neither is there. Install Claude Code or Codex from **Settings → AI CLIs**, or yourself. The app downloads and runs the CLI's official installer as the user running `pockode`, without `sudo`, into that user's home directory. On macOS and Linux that needs `bash` (Claude Code) or `sh` (Codex), and `curl` or `wget`, on the `PATH` `pockode` was started with; on Windows, PowerShell. If one is missing, the app names it: install it and restart `pockode`. Pockode looks for the CLI each time a session starts, so one installed into a directory already on its `PATH` works at once; if the installer added a new `PATH` entry, restart `pockode` from a new terminal so it inherits it (the banner's **Agents** line is only refreshed by a restart). On Windows, install it on the Windows side, not inside WSL.
 
 ## Installing a CLI from the app fails
 
-The card says why and what to do; **Details** has npm's output. The two that need a change on the machine:
+The card says why and what to do; **Details** has the installer's output. The ones that need a change on the machine:
 
-- **npm can't write its global folder** — it belongs to another user, usually root. Make your user its owner, or set a prefix in your home directory (`npm config set prefix ~/.npm-global`) and add its `bin` to the `PATH`, then restart `pockode` and try again.
-- **Installed, but Pockode can't find it** — the folder npm puts commands in (`npm prefix --global`, plus `/bin` on macOS and Linux) is not on the `PATH` `pockode` was started with. Add it and restart `pockode`.
+- **Couldn't download the installer** — the machine could not fetch it from `claude.ai` or `chatgpt.com`. Check its network and proxy settings; the download may also not be offered in your region.
+- **The installer failed** — the card shows the installer's last line, which says why: a download or checksum that failed, or a tool it needs (such as `tar`) missing. Fix that and try again, or install the CLI yourself.
+- **Installed, but Pockode can't find it** — the installer put the CLI in a folder Pockode does not look in; **Details** shows what it said, which should name the folder. Add it to the `PATH` `pockode` starts with and restart `pockode`.
 
-An install is refused while the same CLI is being installed, updated or signed in; try again once that ends. npm gets 10 minutes.
+An install is refused while the same CLI is being installed, updated or signed in; try again once that ends. The installer gets 10 minutes.
 
 ## A session fails to sign in
 

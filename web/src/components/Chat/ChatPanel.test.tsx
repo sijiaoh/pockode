@@ -37,6 +37,7 @@ import {
 	makeSessionDetail,
 	makeSessionListItem,
 } from "../../test/sessionFixtures";
+import type { GitStatus } from "../../types/git";
 import type {
 	ServerNotification,
 	SessionDetail,
@@ -85,23 +86,41 @@ function render(ui: React.ReactElement) {
 vi.mock("../Files", async () => {
 	const { default: PageHeader } = await import("../Layout/PageHeader");
 	return {
-		FileView: ({ path, onBack }: { path: string; onBack: () => void }) => (
-			<div data-testid="file-view">
+		FileView: ({
+			path,
+			onBack,
+			keyboardUp,
+		}: {
+			path: string;
+			onBack: () => void;
+			keyboardUp?: boolean;
+		}) => (
+			<div
+				data-testid="file-view"
+				data-keyboard-up={keyboardUp ? "" : undefined}
+			>
 				<PageHeader
 					back={{ to: "parent", label: "Back", onClick: onBack }}
 					title={path}
 				/>
 			</div>
 		),
-		FileEditor: () => <div data-testid="file-editor" />,
+		FileEditor: ({ keyboardUp }: { keyboardUp?: boolean }) => (
+			<div
+				data-testid="file-editor"
+				data-keyboard-up={keyboardUp ? "" : undefined}
+			/>
+		),
 	};
 });
 
 vi.mock("../Git", () => ({
-	DiffView: () => <div data-testid="diff-view" />,
-	CommitView: () => null,
-	CommitDiffView: () => null,
-	CommitFileView: () => null,
+	GitWorkspace: ({ keyboardUp }: { keyboardUp?: boolean }) => (
+		<div
+			data-testid="git-workspace"
+			data-keyboard-up={keyboardUp ? "" : undefined}
+		/>
+	),
 }));
 
 vi.mock("../Settings", () => ({
@@ -142,7 +161,15 @@ const mockState = vi.hoisted(() => ({
 	setSessionEffort: vi.fn(
 		(_sessionId: string, _effort: string): Promise<void> => Promise.resolve(),
 	),
+	setSessionHTMLFirst: vi.fn(
+		(_sessionId: string, _htmlFirst: boolean): Promise<void> =>
+			Promise.resolve(),
+	),
 	startWork: vi.fn(() => Promise.resolve()),
+	// Read only once the project is a repository; the review row's count.
+	getStatus: vi.fn(
+		(): Promise<GitStatus> => Promise.resolve({ staged: [], unstaged: [] }),
+	),
 	forkSession: vi.fn(),
 	// The read-only pair: one session's metadata and one page of its transcript,
 	// out of a worktree the connection is not bound to.
@@ -185,7 +212,9 @@ vi.mock("../../lib/wsStore", () => {
 		setSessionAgentType: mockState.setSessionAgentType,
 		setSessionModel: mockState.setSessionModel,
 		setSessionEffort: mockState.setSessionEffort,
+		setSessionHTMLFirst: mockState.setSessionHTMLFirst,
 		startWork: mockState.startWork,
+		getStatus: mockState.getStatus,
 		forkSession: mockState.forkSession,
 		listAgents: mockState.listAgents,
 		sessionViewGet: mockState.sessionViewGet,
@@ -350,6 +379,9 @@ describe("ChatPanel", () => {
 		mockState.setSessionEffort.mockImplementation(async (_id, effort) =>
 			acceptSetting({ effort }),
 		);
+		mockState.setSessionHTMLFirst.mockImplementation(async (_id, htmlFirst) =>
+			acceptSetting({ html_first: htmlFirst }),
+		);
 		// Default: subscribe returns empty history and ended state
 		mockState.chatMessagesSubscribe.mockImplementation(() =>
 			Promise.resolve({
@@ -481,6 +513,161 @@ describe("ChatPanel", () => {
 			await waitForHistoryLoad();
 
 			expect(screen.queryByText(/^Watching/)).toBeNull();
+		});
+	});
+
+	describe("the files the idle agent left changed", () => {
+		const changed: GitStatus = {
+			staged: [{ path: "b.ts", status: "M" }],
+			unstaged: [
+				{ path: "b.ts", status: "M" },
+				{ path: "a.ts", status: "?" },
+			],
+		};
+
+		beforeEach(() => {
+			mockState.getStatus.mockResolvedValue(changed);
+			worktreeActions.setIsGitRepo(true);
+		});
+		afterEach(() =>
+			mockState.getStatus.mockResolvedValue({ staged: [], unstaged: [] }),
+		);
+
+		it("says how many once the agent is idle, and opens the review", async () => {
+			const user = userEvent.setup();
+			const onOpenReview = vi.fn();
+			const onCanShow = vi.fn();
+			render(
+				<ChatPanel
+					{...defaultProps}
+					onOpenReview={onOpenReview}
+					onReviewRowCanShowChange={onCanShow}
+				/>,
+			);
+
+			expect(await screen.findByText("2 changed files")).toBeInTheDocument();
+			expect(onCanShow).toHaveBeenLastCalledWith(true);
+			await user.click(screen.getByRole("button", { name: "Review" }));
+			expect(onOpenReview).toHaveBeenCalledOnce();
+		});
+
+		// The optimistic half of `turnOpen`: gone in the frame Send is pressed,
+		// and the sidebar's watch told to stop with it.
+		it("goes the moment the user sends", async () => {
+			const user = userEvent.setup();
+			const onCanShow = vi.fn();
+			render(
+				<ChatPanel
+					{...defaultProps}
+					onOpenReview={vi.fn()}
+					onReviewRowCanShowChange={onCanShow}
+				/>,
+			);
+			await screen.findByText("2 changed files");
+
+			await user.type(screen.getByRole("textbox"), "commit it");
+			await user.click(screen.getByRole("button", { name: /Send/ }));
+
+			expect(screen.queryByText("2 changed files")).toBeNull();
+			expect(onCanShow).toHaveBeenLastCalledWith(false);
+		});
+
+		// With the answer panel up the questions row is hidden, and this row
+		// must not rise into its place under the card.
+		it("stands down while a question waits", async () => {
+			const onCanShow = vi.fn();
+			seedSessionDetail({
+				turn: {
+					phase: "idle",
+					open: false,
+					since: "",
+					unanswered: [
+						{
+							request_id: "q1",
+							header: "Database",
+							question: "Which database should I use?",
+							options: [],
+							multi_select: false,
+							asked_at: "2024-01-01T00:00:00Z",
+						},
+					],
+				},
+			});
+			render(
+				<ChatPanel
+					{...defaultProps}
+					onOpenReview={vi.fn()}
+					onReviewRowCanShowChange={onCanShow}
+				/>,
+			);
+			await waitForHistoryLoad();
+
+			expect(onCanShow).not.toHaveBeenCalledWith(true);
+		});
+
+		// The gate is what the sidebar's watch follows, so it is asserted
+		// directly: the row would also stay away for want of a count.
+		it("is not offered in a project without a repository", async () => {
+			const onCanShow = vi.fn();
+			act(() => worktreeActions.setIsGitRepo(false));
+			render(
+				<ChatPanel
+					{...defaultProps}
+					onOpenReview={vi.fn()}
+					onReviewRowCanShowChange={onCanShow}
+				/>,
+			);
+			await waitForHistoryLoad();
+
+			expect(screen.queryByText(/changed files/)).toBeNull();
+			expect(onCanShow).not.toHaveBeenCalledWith(true);
+		});
+
+		// Until the detail lands the turn is a placeholder that says idle, and a
+		// running session would flash the row for a round trip.
+		it("waits for the session's detail to say it is idle", async () => {
+			const onCanShow = vi.fn();
+			useSessionDetailStore.getState().clear();
+			render(
+				<ChatPanel
+					{...defaultProps}
+					onOpenReview={vi.fn()}
+					onReviewRowCanShowChange={onCanShow}
+				/>,
+			);
+			await waitForHistoryLoad();
+			expect(onCanShow).not.toHaveBeenCalledWith(true);
+
+			act(() => seedSessionDetail());
+			expect(await screen.findByText("2 changed files")).toBeInTheDocument();
+		});
+
+		// A story waiting on its tasks is not done with the tree: they may be
+		// editing it.
+		it("stands down while the chat's work waits on its subtasks", async () => {
+			const onCanShow = vi.fn();
+			useWorkStore.getState().setWorks([
+				{
+					id: "w1",
+					type: "story",
+					title: "Ship the importer",
+					status: "active",
+					wait: "child",
+					activity: "waiting_children",
+					updated_at: "2024-01-01T00:00:00Z",
+				},
+			]);
+			seedSessionDetail({ work_id: "w1" });
+			render(
+				<ChatPanel
+					{...defaultProps}
+					onOpenReview={vi.fn()}
+					onReviewRowCanShowChange={onCanShow}
+				/>,
+			);
+			await waitForHistoryLoad();
+
+			expect(onCanShow).not.toHaveBeenCalledWith(true);
 		});
 	});
 
@@ -1410,6 +1597,29 @@ describe("ChatPanel", () => {
 
 				expect(composer()).not.toBeInTheDocument();
 				expect(cardTakesTheRoom()).toBe(true);
+			});
+
+			// Folded only by a card on the screen: one focused when a Git detail
+			// opened is unmounted without a blur, and must not take the composer
+			// away from the page with it.
+			it("leaves the composer to a Git detail opened from the card", async () => {
+				const user = userEvent.setup();
+				viewport.set(true);
+				worktreeActions.setIsGitRepo(true);
+				seedUnansweredQuestion();
+				const { rerender } = render(<ChatPanel {...defaultProps} />);
+				await waitForHistoryLoad();
+				await answerInThePanel(user);
+				expect(composer()).not.toBeInTheDocument();
+
+				rerender(
+					<ChatPanel
+						{...defaultProps}
+						overlay={{ type: "diff", path: "a.ts", staged: false }}
+					/>,
+				);
+
+				expect(composer()).toBeInTheDocument();
 			});
 
 			// Files dropped there would go into a draft nobody can see.
@@ -2385,7 +2595,7 @@ describe("ChatPanel", () => {
 			render(<ChatPanel {...defaultProps} />);
 			await waitForHistoryLoad();
 
-			const drag = dragFiles(screen.getByText("Start a conversation..."), [
+			const drag = dragFiles(screen.getByRole("group", { name: "Session" }), [
 				dropItem(file()),
 			]);
 			expect(drag.dataTransfer.dropEffect).toBe("copy");
@@ -3389,13 +3599,37 @@ describe("ChatPanel", () => {
 				<ChatPanel
 					{...defaultProps}
 					overlay={{ type: "work-list", segment: "current" }}
-					onCloseOverlay={vi.fn()}
+					onGoUp={vi.fn()}
 				/>,
 			);
 
 			await user.keyboard("{Escape}");
 
 			expect(mockState.interrupt).not.toHaveBeenCalled();
+		});
+
+		// Escape on a Git page belongs to the page — the review's line selection
+		// clears on it — even where the composer, and its Stop, are there.
+		it("does not interrupt on Escape over a Git detail", async () => {
+			const user = userEvent.setup();
+			worktreeActions.setIsGitRepo(true);
+			render(
+				<ChatPanel
+					{...defaultProps}
+					overlay={{ type: "diff", path: "a.ts", staged: false }}
+				/>,
+			);
+			await waitForHistoryLoad();
+			act(() => {
+				acceptSetting({
+					turn: { phase: "running", open: true, since: "2024-01-01T00:00:00Z" },
+				});
+			});
+
+			await user.keyboard("{Escape}");
+
+			expect(mockState.interrupt).not.toHaveBeenCalled();
+			expect(screen.getByRole("button", { name: /Stop/ })).toBeInTheDocument();
 		});
 
 		// A panel raised from outside the chat — a Git sheet, a header dropdown,
@@ -4035,6 +4269,225 @@ describe("ChatPanel", () => {
 		});
 	});
 
+	// docs/html-first-session-ui.md: a draft until the first message, then fixed.
+	describe("the Chat / HTML first switch", () => {
+		const sessionGroup = () => screen.queryByRole("group", { name: "Session" });
+		const segment = (name: string) => screen.getByRole("button", { name });
+
+		it("offers Chat on a new session, and lights HTML first once the server says so", async () => {
+			const user = userEvent.setup();
+			render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+
+			expect(segment("Chat")).toHaveAttribute("aria-pressed", "true");
+			expect(
+				screen.getByText(/answers in text, and draws a page/),
+			).toBeInTheDocument();
+
+			await user.click(segment("HTML first"));
+
+			expect(mockState.setSessionHTMLFirst).toHaveBeenCalledWith(
+				"test-session",
+				true,
+			);
+			expect(segment("HTML first")).toHaveAttribute("aria-pressed", "true");
+			expect(
+				screen.getByText(/answers with pages you can work in/),
+			).toBeInTheDocument();
+		});
+
+		it("holds Send until both the reply and a fresh detail are in", async () => {
+			let reply: () => void = () => {};
+			mockState.setSessionHTMLFirst.mockReturnValueOnce(
+				new Promise<void>((resolve) => {
+					reply = resolve;
+				}),
+			);
+			const user = userEvent.setup();
+			render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+			await user.type(screen.getByRole("textbox"), "Hello");
+
+			await user.click(segment("HTML first"));
+			const send = screen.getByRole("button", { name: /Send/ });
+			expect(send).toBeDisabled();
+			expect(sessionGroup()).toHaveAttribute("aria-disabled", "true");
+			// Still the stored value: nothing is lit ahead of the server.
+			expect(segment("Chat")).toHaveAttribute("aria-pressed", "true");
+
+			await act(async () => reply());
+			expect(send).toBeDisabled();
+
+			act(() => acceptSetting({ html_first: true }));
+			await waitFor(() => expect(send).toBeEnabled());
+			await user.click(send);
+			expect(mockState.sendMessage).toHaveBeenCalledWith(
+				"test-session",
+				"Hello",
+				undefined,
+			);
+		});
+
+		// Another device switched it there and back before this render saw
+		// either: the value never moves, and Send must not wait for it.
+		it("releases Send on a fresh detail even when the value did not move", async () => {
+			mockState.setSessionHTMLFirst.mockResolvedValueOnce(undefined);
+			const user = userEvent.setup();
+			render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+			await user.type(screen.getByRole("textbox"), "Hello");
+
+			await user.click(segment("HTML first"));
+			const send = screen.getByRole("button", { name: /Send/ });
+			expect(send).toBeDisabled();
+
+			act(() => acceptSetting({ html_first: false }));
+			await waitFor(() => expect(send).toBeEnabled());
+			expect(segment("Chat")).toHaveAttribute("aria-pressed", "true");
+		});
+
+		describe("with an extension's hints", () => {
+			afterEach(() => resetChatUIConfig());
+
+			it("sends a hint pressed during a switch once the switch has landed", async () => {
+				setChatUIConfig({
+					EmptyState: ({ onHintClick }) => (
+						<button type="button" onClick={() => onHintClick?.("Hi")}>
+							Say hi
+						</button>
+					),
+				});
+				let reply: () => void = () => {};
+				mockState.setSessionHTMLFirst.mockReturnValueOnce(
+					new Promise<void>((resolve) => {
+						reply = resolve;
+					}),
+				);
+				const user = userEvent.setup();
+				render(<ChatPanel {...defaultProps} />);
+				await waitForHistoryLoad();
+
+				await user.click(segment("HTML first"));
+				await user.click(screen.getByRole("button", { name: "Say hi" }));
+				expect(mockState.sendMessage).not.toHaveBeenCalled();
+
+				await act(async () => reply());
+				act(() => acceptSetting({ html_first: true }));
+
+				await waitFor(() =>
+					expect(mockState.sendMessage).toHaveBeenCalledWith(
+						"test-session",
+						"Hi",
+						undefined,
+					),
+				);
+			});
+		});
+
+		it("goes away with the first message", async () => {
+			const user = userEvent.setup();
+			render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+
+			await user.type(screen.getByRole("textbox"), "Hello");
+			await user.click(screen.getByRole("button", { name: /Send/ }));
+
+			expect(screen.getByText("Hello")).toBeInTheDocument();
+			expect(sessionGroup()).not.toBeInTheDocument();
+		});
+
+		it.each([
+			["a started session (a fork)", { started: true }],
+			["an activated session", { activated: true }],
+			["a work session", { work_id: "w1" }],
+		])("is not offered on %s", async (_name, overrides) => {
+			seedSessionDetail(overrides);
+			render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+
+			expect(sessionGroup()).not.toBeInTheDocument();
+		});
+
+		it("is not offered over a conversation", async () => {
+			mockState.mockHistory = [{ type: "message", content: "go", seq: 1 }];
+			render(<ChatPanel {...defaultProps} />);
+			expect(await screen.findByText("go")).toBeInTheDocument();
+
+			expect(sessionGroup()).not.toBeInTheDocument();
+		});
+
+		it("says the session has started when the first message got there first", async () => {
+			mockState.setSessionHTMLFirst.mockRejectedValueOnce(
+				new JSONRPCErrorException(
+					"session has already started",
+					JSONRPCErrorCode.InvalidParams,
+					{ reason: "session_started" },
+				),
+			);
+			const user = userEvent.setup();
+			render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+
+			await user.click(segment("HTML first"));
+
+			expect(await screen.findByRole("alert")).toHaveTextContent(
+				"This session has already started, so it stays a Chat session.",
+			);
+			expect(segment("Chat")).toHaveAttribute("aria-pressed", "true");
+			// Never held: the send is the one that won.
+			expect(sessionGroup()).not.toHaveAttribute("aria-disabled");
+
+			act(() => acceptSetting({ started: true }));
+			expect(sessionGroup()).not.toBeInTheDocument();
+			expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+		});
+
+		it("reports any other failure, and lets the next press retry", async () => {
+			mockState.setSessionHTMLFirst.mockRejectedValueOnce(
+				new Error("Not connected"),
+			);
+			const user = userEvent.setup();
+			render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+
+			await user.click(segment("HTML first"));
+			expect(await screen.findByRole("alert")).toHaveTextContent(
+				"Couldn't switch: Not connected",
+			);
+
+			await user.click(segment("HTML first"));
+			expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+			expect(segment("HTML first")).toHaveAttribute("aria-pressed", "true");
+		});
+
+		it("is read in the session panel once an HTML first session has started", async () => {
+			const user = userEvent.setup();
+			seedSessionDetail({ html_first: true, started: true });
+			render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+
+			await user.click(sessionTrigger());
+			const section = await screen.findByRole("region", { name: "Session" });
+			expect(section).toHaveTextContent("HTML first");
+			expect(section).toHaveTextContent(
+				"Fixed when the first message was sent.",
+			);
+		});
+
+		it("is not in the session panel of a Chat session", async () => {
+			const user = userEvent.setup();
+			seedSessionDetail({ started: true });
+			render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+
+			await user.click(sessionTrigger());
+			await screen.findByRole("region", { name: "Usage" });
+			expect(
+				screen.queryByRole("region", { name: "Session" }),
+			).not.toBeInTheDocument();
+		});
+	});
+
 	// A work's life and its chat process are two separate clocks, and the chat
 	// now reads neither off the other: an interrupt stops the work without
 	// emitting any message, so anything in the transcript claiming to know the
@@ -4228,22 +4681,229 @@ describe("ChatPanel", () => {
 			const diff = { type: "diff", path: "a.ts", staged: false } as const;
 			render(<ChatPanel {...defaultProps} overlay={diff} />);
 			await waitForHistoryLoad();
-			expect(screen.queryByTestId("diff-view")).toBeNull();
+			expect(screen.queryByTestId("git-workspace")).toBeNull();
 
 			act(() => worktreeActions.setIsGitRepo(true));
-			expect(screen.getByTestId("diff-view")).toBeInTheDocument();
+			expect(screen.getByTestId("git-workspace")).toBeInTheDocument();
+		});
+
+		// A list's bottom is its commit bar, and a list holds no code to talk
+		// about.
+		it("draws no composer under a Git list", async () => {
+			worktreeActions.setIsGitRepo(true);
+			render(
+				<ChatPanel
+					{...defaultProps}
+					overlay={{ type: "git", segment: "changes" }}
+				/>,
+			);
+			await waitForHistoryLoad();
+
+			expect(screen.getByTestId("git-workspace")).toBeInTheDocument();
+			expect(screen.queryByRole("textbox")).toBeNull();
+		});
+
+		// A detail is where the user reads what the agent changed and tells it
+		// what to change next, so the chat's own composer is there — and a send
+		// leaves them on the page, which `git.changed` keeps up to date.
+		it.each([
+			{ type: "diff", path: "a.ts", staged: false },
+			{ type: "commit", hash: "abc123" },
+			{ type: "commit-diff", hash: "abc123", path: "a.ts" },
+			{ type: "commit-file", hash: "abc123", path: "a.ts" },
+			{ type: "branch", ref: "topic", remote: false },
+		] as const)("keeps the composer under a Git $type layer", async (layer) => {
+			const user = userEvent.setup();
+			const onGoUp = vi.fn();
+			worktreeActions.setIsGitRepo(true);
+			render(<ChatPanel {...defaultProps} overlay={layer} onGoUp={onGoUp} />);
+			await waitForHistoryLoad();
+
+			const textarea = screen.getByRole("textbox");
+			// The page is there to be read: the caret is not taken from it.
+			expect(textarea).not.toHaveFocus();
+			await user.type(textarea, "rename it");
+			await user.click(screen.getByRole("button", { name: /Send/ }));
+
+			expect(mockState.sendMessage).toHaveBeenCalledWith(
+				"test-session",
+				"rename it",
+				undefined,
+			);
+			expect(screen.getByTestId("git-workspace")).toBeInTheDocument();
+			expect(onGoUp).not.toHaveBeenCalled();
+		});
+
+		// The transcript that reports a failed send is covered by the page, so
+		// the composer says it — until the chat is back to say why.
+		it("says a send failed over a Git detail", async () => {
+			mockState.sendMessage.mockRejectedValueOnce(new Error("socket closed"));
+			const user = userEvent.setup();
+			worktreeActions.setIsGitRepo(true);
+			const diff = { type: "diff", path: "a.ts", staged: false } as const;
+			const { rerender } = render(
+				<ChatPanel {...defaultProps} overlay={diff} />,
+			);
+			await waitForHistoryLoad();
+
+			await user.type(screen.getByRole("textbox"), "rename it");
+			await user.click(screen.getByRole("button", { name: /Send/ }));
+
+			expect(
+				await screen.findByText(
+					"Your message couldn't be sent. The chat says why.",
+				),
+			).toBeInTheDocument();
+
+			rerender(<ChatPanel {...defaultProps} />);
+			expect(
+				screen.queryByText("Your message couldn't be sent. The chat says why."),
+			).toBeNull();
+			expect(screen.getByText(/socket closed/)).toBeInTheDocument();
+		});
+
+		// The refused text is back in the draft under the page, so its reason
+		// is said there too.
+		it("says why a command was refused over a Git detail", async () => {
+			mockState.isInvalidParamsRejection.mockReturnValue(true);
+			mockState.sendMessage.mockRejectedValueOnce(
+				new Error('Unknown Pockode command "/pockode-foo"'),
+			);
+			const user = userEvent.setup();
+			worktreeActions.setIsGitRepo(true);
+			render(
+				<ChatPanel
+					{...defaultProps}
+					overlay={{ type: "diff", path: "a.ts", staged: false }}
+				/>,
+			);
+			await waitForHistoryLoad();
+
+			await user.type(screen.getByRole("textbox"), "/pockode-foo");
+			await user.keyboard("{Escape}");
+			await user.click(screen.getByRole("button", { name: /Send/ }));
+
+			expect(
+				await screen.findByText(/Unknown Pockode command/),
+			).toBeInTheDocument();
+			expect(screen.getByRole("textbox")).toHaveValue("/pockode-foo");
+		});
+
+		// The draft is the session's, not the page's: what was typed in the chat
+		// is what the composer under a diff holds, and the other way round.
+		it("shares the draft between the chat and a Git detail", async () => {
+			const user = userEvent.setup();
+			worktreeActions.setIsGitRepo(true);
+			const { rerender } = render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+			await user.type(screen.getByRole("textbox"), "look at");
+
+			rerender(
+				<ChatPanel
+					{...defaultProps}
+					overlay={{ type: "diff", path: "a.ts", staged: false }}
+				/>,
+			);
+			expect(screen.getByRole("textbox")).toHaveValue("look at");
+			await user.type(screen.getByRole("textbox"), " this");
+
+			rerender(<ChatPanel {...defaultProps} />);
+			expect(screen.getByRole("textbox")).toHaveValue("look at this");
+		});
+
+		// What takes a detail's actions off a phone's screen: the composer holding
+		// the caret where that raises a soft keyboard.
+		describe("the keyboard a detail makes room for", () => {
+			const withPointer = (coarse: boolean) => {
+				const original = window.matchMedia;
+				window.matchMedia = (query: string) =>
+					({
+						...original(query),
+						matches:
+							query === MEDIA_QUERIES.primaryCoarsePointer ? coarse : false,
+					}) as MediaQueryList;
+				return () => {
+					window.matchMedia = original;
+				};
+			};
+			const renderOverDiff = async () => {
+				worktreeActions.setIsGitRepo(true);
+				render(
+					<ChatPanel
+						{...defaultProps}
+						overlay={{ type: "diff", path: "a.ts", staged: false }}
+					/>,
+				);
+				await waitForHistoryLoad();
+				return screen.getByTestId("git-workspace");
+			};
+
+			it("is up while the composer has the caret under a thumb", async () => {
+				const restore = withPointer(true);
+				try {
+					const user = userEvent.setup();
+					const workspace = await renderOverDiff();
+					expect(workspace).not.toHaveAttribute("data-keyboard-up");
+
+					await user.type(screen.getByRole("textbox"), "fix");
+					expect(workspace).toHaveAttribute("data-keyboard-up");
+
+					// Where a tap on Send leaves focus under a finger: still in the
+					// composer, with the keyboard gone.
+					act(() => screen.getByRole("button", { name: "Send" }).focus());
+					expect(workspace).not.toHaveAttribute("data-keyboard-up");
+
+					await user.click(screen.getByRole("textbox"));
+					expect(workspace).toHaveAttribute("data-keyboard-up");
+					act(() => screen.getByRole("textbox").blur());
+					expect(workspace).not.toHaveAttribute("data-keyboard-up");
+				} finally {
+					restore();
+				}
+			});
+
+			it.each([
+				["viewer", { type: "file", path: "a.ts" }, "file-view"],
+				["editor", { type: "file", path: "a.ts", edit: true }, "file-editor"],
+			] as const)("reaches the file %s too", async (_, overlay, testId) => {
+				const restore = withPointer(true);
+				try {
+					const user = userEvent.setup();
+					render(<ChatPanel {...defaultProps} overlay={overlay} />);
+					await waitForHistoryLoad();
+					const view = screen.getByTestId(testId);
+					expect(view).not.toHaveAttribute("data-keyboard-up");
+
+					await user.click(screen.getByRole("textbox"));
+					expect(view).toHaveAttribute("data-keyboard-up");
+				} finally {
+					restore();
+				}
+			});
+
+			it("is never up under a fine pointer", async () => {
+				const restore = withPointer(false);
+				try {
+					const user = userEvent.setup();
+					const workspace = await renderOverDiff();
+					await user.click(screen.getByRole("textbox"));
+					expect(workspace).not.toHaveAttribute("data-keyboard-up");
+				} finally {
+					restore();
+				}
+			});
 		});
 
 		// An overlay is a page of its own: the header names it, and the session
 		// behind it is neither shown nor reconfigurable from there.
 		it("puts the page's heading in the header in place of the session's", async () => {
 			const user = userEvent.setup();
-			const onCloseOverlay = vi.fn();
+			const onGoUp = vi.fn();
 			render(
 				<ChatPanel
 					{...defaultProps}
 					overlay={{ type: "file", path: "a.ts" }}
-					onCloseOverlay={onCloseOverlay}
+					onGoUp={onGoUp}
 				/>,
 			);
 			await waitForHistoryLoad();
@@ -4255,7 +4915,8 @@ describe("ChatPanel", () => {
 			expect(screen.queryByRole("button", { name: /^Session:/ })).toBeNull();
 
 			await user.click(header.getByRole("button", { name: "Back" }));
-			expect(onCloseOverlay).toHaveBeenCalled();
+			// With nothing: the page goes up to its own parent, and the click is no `to`.
+			expect(onGoUp).toHaveBeenCalledWith();
 		});
 
 		it("offers no way to Settings over the Settings page itself", async () => {
@@ -5154,6 +5815,10 @@ describe("ChatPanel", () => {
 			).toBeInTheDocument();
 			expect(
 				screen.queryByText("Start a conversation..."),
+			).not.toBeInTheDocument();
+			// Not this screen's to change.
+			expect(
+				screen.queryByRole("group", { name: "Session" }),
 			).not.toBeInTheDocument();
 		});
 

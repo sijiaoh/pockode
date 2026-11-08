@@ -3,8 +3,9 @@ import { sliceRanges } from "./searchRange";
 
 const TAB_REPLACEMENT = "  ";
 
-// A sidebar row is only ~250px wide on mobile, so a match sitting past this
-// many characters would never be visible and the snippet is re-anchored on it.
+// A sidebar row can be under 300px wide (a small phone's drawer, the column at
+// its narrowest), so a match sitting past this many characters would never be
+// visible and the snippet is re-anchored on it.
 const MAX_LEADING_CHARS = 24;
 const LEADING_CONTEXT_CHARS = 16;
 

@@ -4,7 +4,12 @@ import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { contentsQueryKey } from "../../hooks/useContents";
+import {
+	diffSettingsActions,
+	useDiffSettingsStore,
+} from "../../lib/diffSettingsStore";
 import { overlayToNavigation } from "../../lib/navigation";
+import { useWorktreeStore } from "../../lib/worktreeStore";
 import {
 	reportEverythingInView,
 	stubImageFetch,
@@ -15,10 +20,20 @@ import type { Entry, FileContent } from "../../types/contents";
 import { HIGHLIGHT_LIMIT } from "../../utils/fileView";
 import FileView from "./FileView";
 
+const layout = vi.hoisted(() => ({ expanded: false }));
+
+vi.mock("@pockode/shared", async (importOriginal) => ({
+	...(await importOriginal<typeof import("@pockode/shared")>()),
+	useIsExpanded: () => layout.expanded,
+}));
+
 const getFile = vi.fn();
 const saveRawFile = vi.fn();
 const renameFile = vi.fn();
 const navigate = vi.fn();
+// What the router's location says; a case moves it to stand for the reader
+// having navigated away.
+const routerState = { location: { href: "/files/src/app.ts" } };
 
 // Only the hand-over to the browser is replaced; the players' capabilities
 // are the real ones.
@@ -49,6 +64,7 @@ vi.mock("../../lib/wsStore", () => {
 
 vi.mock("@tanstack/react-router", () => ({
 	useNavigate: () => navigate,
+	useRouter: () => ({ state: routerState }),
 }));
 
 vi.mock("../../hooks/useFSWatch", () => ({
@@ -63,8 +79,18 @@ vi.mock("../../hooks/useRouteState", () => ({
 // Shiki loads real grammars and tokenizes on the main thread; the viewer's own
 // branching is what these cases are about.
 vi.mock("../../lib/shikiUtils", () => ({
-	CodeHighlighter: ({ children }: { children: string }) => (
-		<pre>{children}</pre>
+	CodeHighlighter: ({
+		children,
+		lineNumbers,
+		wrap,
+	}: {
+		children: string;
+		lineNumbers?: boolean;
+		wrap?: boolean;
+	}) => (
+		<pre data-numbered={lineNumbers || undefined} data-wrap={wrap || undefined}>
+			{children}
+		</pre>
 	),
 	getLanguageFromPath: () => undefined,
 	isMarkdownFile: (path: string) => path.endsWith(".md"),
@@ -98,7 +124,11 @@ function fileContent(overrides: Partial<FileContent>): FileContent {
  * sheet checks a new name against. A file reached from search or a chat link
  * has no listing cached for that folder, so the sheet fetches one.
  */
-async function renderFileView(file: FileContent, siblings: Entry[] = []) {
+async function renderFileView(
+	file: FileContent,
+	siblings: Entry[] = [],
+	view: { source?: boolean; line?: number; keyboardUp?: boolean } = {},
+) {
 	getFile.mockImplementation(async (path: string) =>
 		path === file.path
 			? { type: "file", file }
@@ -112,9 +142,10 @@ async function renderFileView(file: FileContent, siblings: Entry[] = []) {
 		<QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
 	);
 
-	const result = render(<FileView path={file.path} onBack={vi.fn()} />, {
-		wrapper,
-	});
+	const result = render(
+		<FileView path={file.path} {...view} onBack={vi.fn()} />,
+		{ wrapper },
+	);
 	// Every case needs the fetch to have landed before it can assert anything,
 	// and the default 1s outruns a query round trip on a loaded machine.
 	await screen.findByRole("button", { name: /^Edit/ }, { timeout: 10_000 });
@@ -135,12 +166,16 @@ describe("FileView", () => {
 	});
 
 	beforeEach(() => {
+		layout.expanded = false;
+		localStorage.clear();
+		useDiffSettingsStore.setState({ codeWrap: false });
 		getFile.mockReset();
 		saveRawFile.mockReset();
 		saveRawFile.mockResolvedValue(undefined);
 		renameFile.mockReset();
 		renameFile.mockResolvedValue(undefined);
 		navigate.mockReset();
+		routerState.location.href = "/files/src/app.ts";
 	});
 
 	it("shows text content and allows editing", async () => {
@@ -148,6 +183,11 @@ describe("FileView", () => {
 
 		expect(screen.getByText("const a = 1;")).toBeInTheDocument();
 		expect(editButton()).toBeEnabled();
+	});
+
+	it("numbers the lines of text", async () => {
+		await renderFileView(fileContent({ content: "const a = 1;" }));
+		expect(screen.getByText("const a = 1;")).toHaveAttribute("data-numbered");
 	});
 
 	it("reads a raster image over HTTP from the server's MIME type, and blocks editing", async () => {
@@ -320,7 +360,21 @@ describe("FileView", () => {
 			await userEvent.click(
 				screen.getByRole("button", { name: "Show source" }),
 			);
-			expect(screen.getByText("<h1>Hi</h1>")).toBeInTheDocument();
+			// Replaced: how the file is drawn is not a place for Back to return to.
+			expect(navigate).toHaveBeenCalledWith(
+				overlayToNavigation(
+					{ type: "file", path: "site/index.html", source: true },
+					"",
+					null,
+					{ replace: true },
+				),
+			);
+		});
+
+		it("shows its source where the URL asks, still editable", async () => {
+			await renderFileView(page(), [], { source: true });
+
+			expect(screen.getByText("<h1>Hi</h1>")).toHaveAttribute("data-numbered");
 			expect(screen.queryByTitle("index.html")).not.toBeInTheDocument();
 			expect(editButton()).toBeEnabled();
 			expect(screen.getByRole("button", { name: "Show page" })).toHaveAttribute(
@@ -329,16 +383,35 @@ describe("FileView", () => {
 			);
 		});
 
-		it("places the toggle after Download and before Delete", async () => {
-			await renderFileView(page());
+		it("leaves the line behind on the way back to the page", async () => {
+			await renderFileView(page(), [], { line: 3 });
+			expect(screen.getByText("<h1>Hi</h1>")).toBeInTheDocument();
 
+			await userEvent.click(screen.getByRole("button", { name: "Show page" }));
+			expect(navigate).toHaveBeenCalledWith(
+				overlayToNavigation(
+					{ type: "file", path: "site/index.html" },
+					"",
+					null,
+					{ replace: true },
+				),
+			);
+		});
+
+		it("offers wrapping on its source only, beside the source toggle", async () => {
+			const { unmount } = await renderFileView(page());
+			await frame();
+			expect(screen.queryByRole("button", { name: "Wrap lines" })).toBeNull();
+			unmount();
+
+			await renderFileView(page(), [], { source: true });
 			const labels = screen
 				.getAllByRole("button")
 				.map((button) => button.getAttribute("aria-label"))
 				.filter((label): label is string =>
-					["Download", "Show source", "Delete"].includes(label ?? ""),
+					["Show page", "Wrap lines"].includes(label ?? ""),
 				);
-			expect(labels).toEqual(["Download", "Show source", "Delete"]);
+			expect(labels).toEqual(["Show page", "Wrap lines"]);
 		});
 
 		it("renders a page too large to send, with editing disabled", async () => {
@@ -354,9 +427,21 @@ describe("FileView", () => {
 
 			await frame();
 			expect(editButton()).toBeDisabled();
-			await userEvent.click(
-				screen.getByRole("button", { name: "Show source" }),
+		});
+
+		it("says a page too large to send has no source to show", async () => {
+			await renderFileView(
+				page({
+					encoding: "none",
+					omitted: "too_large",
+					content: "",
+					size: 5 * 1024 * 1024,
+					limit: 2 * 1024 * 1024,
+				}),
+				[],
+				{ source: true },
 			);
+
 			expect(
 				screen.getByText("File is too large to preview"),
 			).toBeInTheDocument();
@@ -397,21 +482,6 @@ describe("FileView", () => {
 			});
 			expect(await frame()).toBe(element);
 		});
-
-		it("does not carry a page's source view over to text that is not a page", async () => {
-			const { rerender } = await renderFileView(page());
-			await userEvent.click(
-				screen.getByRole("button", { name: "Show source" }),
-			);
-
-			const text = fileContent({ content: "const a = 1;" });
-			getFile.mockImplementation(async () => ({ type: "file", file: text }));
-			rerender(<FileView path={text.path} onBack={vi.fn()} />);
-			expect(await screen.findByText("const a = 1;")).toBeInTheDocument();
-			expect(
-				screen.queryByRole("button", { name: /Show (source|page)/ }),
-			).not.toBeInTheDocument();
-		});
 	});
 
 	it("warns that a large text file is shown unhighlighted", async () => {
@@ -424,6 +494,146 @@ describe("FileView", () => {
 		).toBeInTheDocument();
 		expect(screen.getByText("big")).toBeInTheDocument();
 		expect(editButton()).toBeEnabled();
+	});
+
+	describe("line wrapping", () => {
+		function wrapToggle() {
+			return screen.queryByRole("button", { name: /wrap lines$/i });
+		}
+
+		it("wraps numbered code by the reader's setting, from the bar", async () => {
+			await renderFileView(fileContent({ content: "const a = 1;" }));
+			expect(screen.getByText("const a = 1;")).not.toHaveAttribute("data-wrap");
+
+			await userEvent.click(screen.getByRole("button", { name: "Wrap lines" }));
+
+			expect(screen.getByText("const a = 1;")).toHaveAttribute("data-wrap");
+			expect(
+				screen.getByRole("button", { name: "Don't wrap lines" }),
+			).toHaveAttribute("aria-pressed", "true");
+		});
+
+		it("is offered on Markdown's source, not on its rendering", async () => {
+			const markdown = fileContent({
+				name: "guide.md",
+				path: "docs/guide.md",
+				content: "# Guide",
+			});
+			const { unmount } = await renderFileView(markdown);
+			expect(wrapToggle()).toBeNull();
+			unmount();
+
+			await renderFileView(markdown, [], { source: true });
+			expect(wrapToggle()).not.toBeNull();
+		});
+
+		it("is absent past the highlight limit, where the banner says so if wrap is on", async () => {
+			diffSettingsActions.setCodeWrap(true);
+			await renderFileView(
+				fileContent({ content: "big", size: HIGHLIGHT_LIMIT + 1 }),
+			);
+
+			expect(wrapToggle()).toBeNull();
+			expect(screen.getByText("big")).not.toHaveAttribute("data-wrap");
+			expect(
+				screen.getByText(
+					"Large file — showing plain text without line wrapping.",
+				),
+			).toBeInTheDocument();
+		});
+	});
+
+	describe("Markdown", () => {
+		const guide = (overrides: Partial<FileContent> = {}) =>
+			fileContent({
+				name: "guide.md",
+				path: "docs/guide.md",
+				content: "# Guide",
+				...overrides,
+			});
+
+		it("opens rendered, with its source a toggle away", async () => {
+			await renderFileView(guide());
+			expect(
+				screen.getByRole("button", { name: "Image · Open in Files" }),
+			).toBeInTheDocument();
+			expect(screen.queryByText("# Guide")).not.toBeInTheDocument();
+
+			await userEvent.click(
+				screen.getByRole("button", { name: "Show source" }),
+			);
+			expect(navigate).toHaveBeenCalledWith(
+				overlayToNavigation(
+					{ type: "file", path: "docs/guide.md", source: true },
+					"",
+					null,
+					{ replace: true },
+				),
+			);
+		});
+
+		it("shows its numbered source where the URL asks, or names a line", async () => {
+			for (const view of [{ source: true }, { line: 1 }]) {
+				const { unmount } = await renderFileView(guide(), [], view);
+				expect(screen.getByText("# Guide")).toHaveAttribute("data-numbered");
+				expect(
+					screen.getByRole("button", { name: "Show rendered" }),
+				).toHaveAttribute("aria-pressed", "true");
+				unmount();
+			}
+		});
+
+		it("offers no toggle where the file is too large to render anyway", async () => {
+			await renderFileView(guide({ size: HIGHLIGHT_LIMIT + 1 }));
+			expect(screen.getByText("# Guide")).toBeInTheDocument();
+			expect(
+				screen.queryByRole("button", { name: /Show (source|rendered)/ }),
+			).not.toBeInTheDocument();
+		});
+	});
+
+	// The line is where the reader was sent; anything that moves them off it
+	// must not write it into the next URL (docs/file.md#where-the-viewer-opens).
+	describe("leaving the line", () => {
+		it("does not carry it into the editor", async () => {
+			const user = userEvent.setup();
+			await renderFileView(fileContent({}), [], { line: 1 });
+
+			await user.click(editButton());
+			expect(navigate).toHaveBeenCalledWith(
+				overlayToNavigation(
+					{ type: "file", path: "src/app.ts", edit: true },
+					"",
+					null,
+				),
+			);
+		});
+
+		it("does not carry it to a renamed file, but keeps the source", async () => {
+			const user = userEvent.setup();
+			await renderFileView(
+				fileContent({ name: "guide.md", path: "docs/guide.md" }),
+				[],
+				{ line: 1 },
+			);
+
+			await user.click(screen.getByRole("button", { name: "Rename" }));
+			const sheet = screen.getByRole("dialog", { name: "Rename file" });
+			await user.clear(screen.getByLabelText("Name"));
+			await user.type(screen.getByLabelText("Name"), "intro.md");
+			await user.click(within(sheet).getByRole("button", { name: "Rename" }));
+
+			await waitFor(() =>
+				expect(navigate).toHaveBeenCalledWith(
+					overlayToNavigation(
+						{ type: "file", path: "docs/intro.md", source: true },
+						"",
+						null,
+						{ replace: true },
+					),
+				),
+			);
+		});
 	});
 
 	describe("download", () => {
@@ -439,18 +649,6 @@ describe("FileView", () => {
 				"app.ts",
 				expect.any(AbortSignal),
 			);
-		});
-
-		it("keeps the destructive action last in the action bar", async () => {
-			await renderFileView(fileContent({}));
-
-			const labels = screen
-				.getAllByRole("button")
-				.map((button) => button.getAttribute("aria-label"))
-				.filter((label): label is string =>
-					["Edit", "Download", "Delete"].includes(label ?? ""),
-				);
-			expect(labels).toEqual(["Edit", "Download", "Delete"]);
 		});
 
 		it("offers the download from the card that stands in for a binary file", async () => {
@@ -547,6 +745,64 @@ describe("FileView", () => {
 		});
 	});
 
+	// docs/file-actions-ui.md: how the file is read at the top, what to do with
+	// it where the width and the composer leave room.
+	describe("where its controls are", () => {
+		const precedes = (a: Node, b: Node) =>
+			Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
+		const code = () => screen.getByText("const a = 1;");
+		const button = (name: string) => screen.getByRole("button", { name });
+
+		it("keeps Delete at the leading edge and Edit in the trailing corner", async () => {
+			await renderFileView(fileContent({}));
+
+			const labels = screen
+				.getAllByRole("button")
+				.map((b) => b.getAttribute("aria-label"))
+				.filter((label): label is string =>
+					["Delete", "Rename", "Download", "Edit"].includes(label ?? ""),
+				);
+			expect(labels).toEqual(["Delete", "Rename", "Download", "Edit"]);
+		});
+
+		it("puts the toggles above the file and the actions under it, below expanded", async () => {
+			await renderFileView(fileContent({ content: "const a = 1;" }));
+
+			expect(precedes(button("Wrap lines"), code())).toBe(true);
+			expect(precedes(code(), button("Delete"))).toBe(true);
+		});
+
+		it("joins the actions to the toolbar at expanded, keyboard or not", async () => {
+			layout.expanded = true;
+			await renderFileView(fileContent({ content: "const a = 1;" }), [], {
+				keyboardUp: true,
+			});
+
+			expect(precedes(button("Wrap lines"), button("Delete"))).toBe(true);
+			expect(precedes(button("Edit"), code())).toBe(true);
+		});
+
+		it("takes the actions off a phone while the composer has the keyboard, but not the toggles", async () => {
+			getFile.mockResolvedValue({
+				type: "file",
+				file: fileContent({ content: "const a = 1;" }),
+			});
+			const queryClient = new QueryClient({
+				defaultOptions: { queries: { retry: false } },
+			});
+			render(
+				<QueryClientProvider client={queryClient}>
+					<FileView path="src/app.ts" keyboardUp onBack={vi.fn()} />
+				</QueryClientProvider>,
+			);
+
+			await screen.findByText("const a = 1;", {}, { timeout: 10_000 });
+			expect(button("Wrap lines")).toBeInTheDocument();
+			expect(screen.queryByRole("button", { name: "Delete" })).toBeNull();
+			expect(screen.queryByRole("button", { name: /^Edit/ })).toBeNull();
+		});
+	});
+
 	it("opens an image of a Markdown file in Files, over the document", async () => {
 		const user = userEvent.setup();
 		await renderFileView(
@@ -561,6 +817,42 @@ describe("FileView", () => {
 		expect(navigate).toHaveBeenCalledWith(
 			overlayToNavigation({ type: "file", path: "docs/a.png" }, "", null),
 		);
+	});
+
+	describe("history of this file", () => {
+		afterEach(() => {
+			useWorktreeStore.setState({ isGitRepo: null });
+		});
+
+		it("opens the file's history in the Git workspace", async () => {
+			const user = userEvent.setup();
+			useWorktreeStore.setState({ isGitRepo: true });
+			await renderFileView(fileContent({ path: "src/app.ts" }));
+
+			await user.click(
+				screen.getByRole("button", { name: "History of this file" }),
+			);
+
+			// Pushed: Back returns to the file.
+			expect(navigate).toHaveBeenCalledWith(
+				expect.objectContaining({
+					to: "/git",
+					search: { segment: "history", file: "src/app.ts" },
+				}),
+			);
+			expect(navigate).toHaveBeenCalledWith(
+				expect.not.objectContaining({ replace: true }),
+			);
+		});
+
+		it("is not offered where the project has no repository", async () => {
+			useWorktreeStore.setState({ isGitRepo: false });
+			await renderFileView(fileContent({ content: "const a = 1;" }));
+
+			expect(
+				screen.queryByRole("button", { name: "History of this file" }),
+			).not.toBeInTheDocument();
+		});
 	});
 
 	describe("renaming", () => {
@@ -584,6 +876,36 @@ describe("FileView", () => {
 					expect.objectContaining({ params: { _splat: "src/main.ts" } }),
 				),
 			);
+		});
+
+		it("leaves a reader who moved on while the rename was out", async () => {
+			const user = userEvent.setup();
+			let answer = () => {};
+			renameFile.mockImplementation(
+				() =>
+					new Promise<void>((resolve) => {
+						answer = resolve;
+					}),
+			);
+			await renderFileView(fileContent({ content: "const a = 1;" }));
+
+			await user.click(screen.getByRole("button", { name: "Rename" }));
+			const sheet = screen.getByRole("dialog", { name: "Rename file" });
+			await user.clear(screen.getByLabelText("Name"));
+			await user.type(screen.getByLabelText("Name"), "main.ts");
+			await user.click(within(sheet).getByRole("button", { name: "Rename" }));
+			await waitFor(() => expect(renameFile).toHaveBeenCalled());
+
+			routerState.location.href = "/settings";
+			navigate.mockClear();
+			answer();
+
+			await waitFor(() =>
+				expect(
+					screen.queryByRole("dialog", { name: "Rename file" }),
+				).not.toBeInTheDocument(),
+			);
+			expect(navigate).not.toHaveBeenCalled();
 		});
 
 		it("stays available for a file the viewer cannot render", async () => {

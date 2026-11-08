@@ -1,5 +1,5 @@
 // Package serverinfo handles the server.json runtime file.
-// This file contains server metadata (PID, port, start time) for orchestration programs.
+// This file contains server metadata (PID, port, start time, version) for orchestration programs.
 package serverinfo
 
 import (
@@ -26,15 +26,22 @@ type Info struct {
 	// server's local API. It is randomly generated at each startup, so it never
 	// outlives the process and is not the user-facing --password.
 	Token string `json:"token,omitempty"`
+	// Version is the pockode version running under PID — what `--version` of
+	// the binary it was started from printed, so a cluster compares it with
+	// the installed version as two strings to find an out-of-date node. Absent
+	// in a file from a build that predates it, and only those: such a build
+	// knows no restart request either, and on unix the restart signal would
+	// terminate it.
+	Version string `json:"version,omitempty"`
 }
 
 // Write creates the server.json file in the given data directory.
 // Creates the data directory if it doesn't exist.
-func Write(dataDir string, port int, localURL, remoteURL, token string) error {
-	return write(dataDir, newInfo(port, localURL, remoteURL, token))
+func Write(dataDir, version string, port int, localURL, remoteURL, token string) error {
+	return write(dataDir, newInfo(version, port, localURL, remoteURL, token))
 }
 
-func newInfo(port int, localURL, remoteURL, token string) Info {
+func newInfo(version string, port int, localURL, remoteURL, token string) Info {
 	return Info{
 		PID:       os.Getpid(),
 		Port:      port,
@@ -42,6 +49,7 @@ func newInfo(port int, localURL, remoteURL, token string) Info {
 		LocalURL:  localURL,
 		RemoteURL: remoteURL,
 		Token:     token,
+		Version:   version,
 	}
 }
 
@@ -81,11 +89,11 @@ type Publisher struct {
 	published bool
 }
 
-func NewPublisher(dataDir string, port int, localURL, token string, remoteURL func() string) *Publisher {
+func NewPublisher(dataDir, version string, port int, localURL, token string, remoteURL func() string) *Publisher {
 	return &Publisher{
 		dataDir:   dataDir,
 		remoteURL: remoteURL,
-		info:      newInfo(port, localURL, "", token),
+		info:      newInfo(version, port, localURL, "", token),
 	}
 }
 

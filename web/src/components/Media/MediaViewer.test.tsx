@@ -1,3 +1,4 @@
+import { LayerHistoryContext } from "@pockode/shared";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
 	createMemoryHistory,
@@ -11,6 +12,7 @@ import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { apiUrl } from "../../lib/api";
 import { saveBlob, saveUrl } from "../../lib/fileDownload";
+import { layerHistoryFor } from "../../lib/layerHistory";
 import { wsActions } from "../../lib/wsStore";
 import { MediaViewer } from "./MediaViewer";
 import { loadStage } from "./stages";
@@ -81,9 +83,8 @@ const PageStage: StageComponent = ({ saveUrlRef }) => {
 };
 
 function setup(
-	openInFiles?: () => void,
+	openInFiles?: (history: ReturnType<typeof createMemoryHistory>) => void,
 	shown: MediaItem = item,
-	afterClose?: () => void,
 ) {
 	const history = createMemoryHistory({ initialEntries: ["/chat"] });
 	function Root() {
@@ -91,9 +92,8 @@ function setup(
 		return open ? (
 			<MediaViewer
 				item={shown}
-				openInFiles={openInFiles}
+				openInFiles={openInFiles && (() => openInFiles(history))}
 				onClose={() => setOpen(false)}
-				afterClose={afterClose}
 			/>
 		) : (
 			<p>closed</p>
@@ -105,7 +105,9 @@ function setup(
 	});
 	render(
 		<QueryClientProvider client={new QueryClient()}>
-			<RouterProvider router={router} />
+			<LayerHistoryContext value={layerHistoryFor(history)}>
+				<RouterProvider router={router} />
+			</LayerHistoryContext>
 		</QueryClientProvider>,
 	);
 	return { history };
@@ -140,46 +142,29 @@ describe("MediaViewer", () => {
 		).not.toBeInTheDocument();
 	});
 
-	it("opens Files once the viewer's history entry is gone", async () => {
+	it("closes on Back, leaving the page where it was", async () => {
+		const { history } = setup();
+		await screen.findByText("stage");
+		await waitFor(() => expect(history.canGoBack()).toBe(true));
+
+		act(() => history.back());
+		expect(await screen.findByText("closed")).toBeInTheDocument();
+		expect(history.location.pathname).toBe("/chat");
+	});
+
+	it("opens Files from the page's own entry, not over the viewer's", async () => {
 		const user = userEvent.setup();
-		const statesAtOpen: unknown[] = [];
-		const { history } = setup(() => statesAtOpen.push(history.location.state));
-		await waitFor(() =>
-			expect(history.location.state).toHaveProperty("fullScreen"),
-		);
+		const { history } = setup((h) => h.push("/files"));
+		await screen.findByText("stage");
+		await waitFor(() => expect(history.canGoBack()).toBe(true));
 
 		await user.click(screen.getByRole("button", { name: "Open in Files" }));
 
-		await waitFor(() => expect(statesAtOpen).toHaveLength(1));
-		expect(statesAtOpen[0]).not.toHaveProperty("fullScreen");
+		await waitFor(() => expect(history.location.pathname).toBe("/files"));
 		expect(screen.getByText("closed")).toBeInTheDocument();
-	});
-
-	it("tells the host once its history entry is gone, however it closed", async () => {
-		const user = userEvent.setup();
-		const states: unknown[] = [];
-		const { history } = setup(undefined, item, () =>
-			states.push(history.location.state),
-		);
-		await waitFor(() =>
-			expect(history.location.state).toHaveProperty("fullScreen"),
-		);
-
-		await user.click(screen.getByRole("button", { name: "Close" }));
-		await waitFor(() => expect(states).toHaveLength(1));
-		expect(states[0]).not.toHaveProperty("fullScreen");
-	});
-
-	it("tells the host after a Back closed it", async () => {
-		const afterClose = vi.fn();
-		const { history } = setup(undefined, item, afterClose);
-		await waitFor(() =>
-			expect(history.location.state).toHaveProperty("fullScreen"),
-		);
-
 		act(() => history.back());
-		await screen.findByText("closed");
-		expect(afterClose).toHaveBeenCalledOnce();
+		expect(history.location.pathname).toBe("/chat");
+		expect(history.canGoBack()).toBe(false);
 	});
 
 	it("saves the bytes under the item's file name", async () => {

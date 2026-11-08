@@ -22,6 +22,7 @@ import PageHeader from "../Layout/PageHeader";
 import { MarkdownContent } from "../ui";
 import InlineEditableHeading from "../ui/InlineEditableHeading";
 import { inputClass, inputFocusWithinClass } from "../ui/inputClass";
+import PageBody from "../ui/PageBody";
 import Skeleton from "../ui/Skeleton";
 import Tag from "../ui/Tag";
 import AgentRoleEngineSelector from "./AgentRoleEngineSelector";
@@ -77,7 +78,7 @@ export default function AgentRoleDetailOverlay({ roleId, onBack }: Props) {
 	return (
 		<div className="flex min-h-0 flex-1 flex-col">
 			<DetailHeader onBack={onBack} />
-			<div className="min-h-0 flex-1 overflow-auto">
+			<PageBody>
 				<div className="mx-auto max-w-2xl space-y-6 px-4 py-4">
 					<div>
 						<RoleName role={role} />
@@ -100,7 +101,7 @@ export default function AgentRoleDetailOverlay({ roleId, onBack }: Props) {
 						onDeleted={onBack}
 					/>
 				</div>
-			</div>
+			</PageBody>
 		</div>
 	);
 }

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -210,6 +211,22 @@ func TestBuildThreadParams_MainWorktreeIsUnnamed(t *testing.T) {
 		if arg == "--worktree" {
 			t.Errorf("main worktree session passed --worktree: %v", args)
 		}
+	}
+}
+
+// The proxy's instructions describe the tools, the same in every session: an
+// HTML-first session differs in its developer instructions, not in the proxy
+// it spawns.
+func TestBuildThreadParams_ProxyIsTheSameInEveryMode(t *testing.T) {
+	proxy := func(htmlFirst bool) []string {
+		sess := &appSession{
+			opts: agent.StartOptions{WorkDir: "/tmp/work", DataDir: "/tmp/data", SessionID: "s1", HTMLFirst: htmlFirst},
+			exe:  "/usr/local/bin/pockode",
+		}
+		return sess.buildThreadParams()["config"].(map[string]interface{})["mcp_servers"].(map[string]interface{})["pockode"].(map[string]interface{})["args"].([]string)
+	}
+	if plain, htmlFirst := proxy(false), proxy(true); !slices.Equal(plain, htmlFirst) {
+		t.Errorf("proxy args differ by mode: %v vs %v", plain, htmlFirst)
 	}
 }
 

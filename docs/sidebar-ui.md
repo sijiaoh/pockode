@@ -1,22 +1,28 @@
 # Sidebar UI
 
 The two work panels in the tabbed sidebar — **Files** (`web/src/components/Files/`,
-entry `FilesTab`) and **Git** (`web/src/components/Git/`, entry `DiffTab`) — grew
+entry `FilesTab`) and **Git** (`web/src/components/Git/`) — grew
 one feature at a time: search, then upload, then branch/commit/sync. Each landed
 as an addition to whatever row had space, and the result was a panel whose chrome
-competed with its content.
+competed with its content. Git then moved out of the sidebar into the Git
+workspace, a page of the main area, and below `expanded` it is still there,
+with the sidebar's Git tab (`GitTab`) an overview and the way in. At
+`expanded` the workspace's list came back into the tab, and the main area shows
+what a row opens ([The Git tab](#the-git-tab)).
 
-This document holds what the two panels have to agree on: the principles behind
-the redesign that fixed that, the visual weight ladder, what `th-accent` is
-allowed to mean, the narrow-width rule every fixed row obeys, and the rows at
-the top of the sidebar that every tab sits under. It does **not**
-describe either panel's own shape — [file.md](file.md) owns the Files panel
-(backend, search behaviour, the entry `…` menu and everything that hangs off it,
-the upload queue) and [git-ui.md](git-ui.md) owns the Git panel (layout, group
-headers, commit bar, amend, the sheets). A rule stated here is referenced from
-there, not copied. Nor does it describe how either panel answers the *viewport*:
+This document holds what the Files panel and the Git surfaces have to agree on:
+the principles behind the redesign that fixed that, the visual weight ladder,
+what `th-accent` is allowed to mean, the narrow-width rule every fixed row
+obeys, the rows at the top of the sidebar that every tab sits under, and the
+Git tab's shape. It does **not** describe the Files panel's or the Git
+workspace's own shape — [file.md](file.md) owns the Files panel (backend,
+search behaviour, the entry `…` menu and everything that hangs off it, the
+upload queue) and [git-ui.md](git-ui.md) owns the Git workspace (routes and
+segments, the top bar, layout, commit bar, amend, the sheets), with its
+Changes list in [git-changes-ui.md](git-changes-ui.md).
+A rule stated here is referenced from there, not copied. Nor does it describe how either panel answers the *viewport*:
 the width ladder, the pointer gates and the hit-area floors are
-[responsive-ui.md](responsive-ui.md)'s. The 240px below is a **container** width,
+[responsive-ui.md](responsive-ui.md)'s. The 280px below is a **container** width,
 which is why it lives here.
 
 ## What went wrong, and what it teaches
@@ -24,7 +30,7 @@ which is why it lives here.
 Both panels had the same three faults, in different clothes. The rules below are
 each an answer to one of them.
 
-**Chrome outweighed content.** On a phone the Git panel spent the worktree
+**Chrome outweighed content.** On a phone the old Git panel spent the worktree
 switcher (~40px), the tab bar (~44px), the branch bar (44px), a `▾ Changes`
 section header (44px), a group header (~36px) and a commit bar (56px) — roughly
 265px of a ~640px drawer — before the first changed file appeared. The Files
@@ -37,9 +43,9 @@ and fill, and the standing upload destination on a folder row. Six meanings for
 one colour, three of them on screen at once, and the loudest of them (the filled
 upload button) belonged to the rarest action in the panel.
 
-**Fixed rows were not built to be narrow.** The panel is 288px on a phone and
-resizes down to 240px on desktop, but rows were composed at whatever width the
-author had. Two of them broke; the search row broke visibly.
+**Fixed rows were not built to be narrow.** The sidebar was then 288px on a
+phone and resized down to 240px on desktop, but rows were composed at whatever
+width the author had. Two of them broke; the search row broke visibly.
 
 ## Principles
 
@@ -57,7 +63,7 @@ author had. Two of them broke; the search row broke visibly.
    never wears accent merely to announce that it exists.
 4. **One hierarchy level per panel.** Groups have headers; groups do not live
    inside a section that also has a header.
-5. **Every fixed row survives 240px.** Stated as a rule in
+5. **Every fixed row survives 280px.** Stated as a rule in
    [The narrow-width rule](#the-narrow-width-rule), because both width bugs were
    the same bug.
 6. **Nothing new is introduced to fix layout.** No new dependency, no new token,
@@ -93,9 +99,28 @@ not on the commit button**.
 
 ## The narrow-width rule
 
-The sidebar is `w-72` (288px) as a mobile drawer and 240–500px as a resizable,
-collapsible desktop column (`web/src/components/Layout/Sidebar.tsx`). 240px is
-the design width; anything wider is slack.
+The sidebar is a drawer below `expanded` and a resizable, collapsible column
+at and above it (`web/src/components/Layout/Sidebar.tsx`; the column's edge is
+the [column resize handle](responsive-ui.md#the-column-resize-handle)). Its
+widths are one rule for every tab — no tab gets a width of its own, the Git
+tab's list at `expanded` included:
+
+| | Width | Why |
+|---|---|---|
+| Drawer | viewport − 56px, at most 400px | The 56px strip of chat left showing says the panel is a drawer over the chat rather than a page, is where a tap closes it, and shows where that tap goes back to. The 56 is Material Design's mobile navigation drawer, which is the screen width less 56dp, the mobile app bar's height. 400px caps it on a tablet, where the screen less 56 would be far wider than the panel's rows need |
+| Column minimum | 280px | The narrowest a column in this app has been built and checked at — the Git tab's list, whose fixed rows are built to this width ([git-ui.md](git-ui.md#at-expanded-the-sidebars-list-and-the-detail)) |
+| Column default | 320px | The width the Git list had by default when it was a column of the main area, before it moved into the Git tab ([git-ui.md](git-ui.md#at-expanded-the-sidebars-list-and-the-detail)) |
+| Column maximum | 500px | A user who drags it out that far has made their own trade with the chat beside it ([responsive-ui.md](responsive-ui.md#why-the-two-column-threshold-is-1024-and-not-768)) |
+
+A width the user stored is kept as it was and only drawn within the limits, so
+a stored width below a raised minimum shows at the minimum — the nearest to the
+narrow column they chose — rather than falling back to the default they had
+moved away from. `useResizableWidth` holds this.
+
+**280px is the design width**; anything wider is slack. The drawer meets it on a
+336px screen and only a narrower phone takes it below — 264px on a 320px
+screen. The rule below is what keeps that case honest: a row built to it only
+truncates further, it does not break.
 
 > In a fixed row, **exactly one** element is `flex-1 min-w-0` and truncates.
 > Every other element is `shrink-0` and is either icon-only or at most two short
@@ -105,16 +130,18 @@ the design width; anything wider is slack.
 The Files search row broke all three clauses at once, which is why it was the row
 that visibly failed. Its field wrapper was `flex-1` without `min-w-0`, so its
 floor was the sum of its own icons (~84px); beside it sat an upload button that
-was `shrink-0` and carried a folder name up to `max-w-[7rem]` (112px). At 240px
-the row's minimum was ~266px: the field was crushed to 84px first, then the row
-overflowed the panel and the button left the screen. On the 288px drawer the
+was `shrink-0` and carried a folder name up to `max-w-[7rem]` (112px). At the
+240px minimum the column had then, the row's minimum was ~266px: the field was
+crushed to 84px first, then the row overflowed the panel and the button left the
+screen. On the 288px drawer of the time the
 field was left ~106px, which is the "the search box disappeared" report. With the
 `min-w-0` added and the row's one other element icon-only — today the project
 root's `…`, which replaced that button — the floor is ~144px and the field takes
 every pixel above it.
 
-The branch bar, by contrast, already obeyed the rule — one truncating branch name,
-one icon-only chip — and does not break at any width. The rule is not new
+The branch bar — now the Git workspace's top bar, in the Git tab at `expanded` — by contrast, already obeyed
+the rule — one truncating branch name, one chip of fixed copy — and does not
+break at any width. The rule is not new
 guidance; it is what the rows that work already did.
 
 ## Visual weight
@@ -124,10 +151,10 @@ Five rungs. Existing Tailwind and `th-*` tokens only; nothing here is a new toke
 | Rung | Used for | Classes |
 |------|----------|---------|
 | **L1** Primary action | At most one per panel, and only while it applies | `min-h-[44px] w-full rounded-lg bg-th-accent text-sm font-medium text-th-accent-text` |
-| **L2** Panel header row | Branch bar, search row, the worktree switcher | `min-h-[44px]`, label `text-sm text-th-text-primary`, icons `text-th-text-muted`, bottom border `border-th-border` where the row is the whole header — the Files search row omits it, since the option chips render directly beneath it and a border would cut the header block in half. The worktree switcher is the header *control* GitHub Desktop puts above its list: a transparent button, `th-bg-tertiary` only on hover or while open, name `text-sm font-medium`, and 36px rather than 44 under a fine pointer, since it is a control and not a row — see [The top of the sidebar](#the-top-of-the-sidebar) |
-| **L3** Group header | `Staged`, `Changes`, `History` | `min-h-[32px] px-3 text-xs uppercase tracking-wide text-th-text-muted`, no hover fill. A header carrying L5 actions grows to their 36px — the touch target wins over the nominal height — and grows again where a finger may land ([responsive-ui.md](responsive-ui.md#hit-areas-and-spacing)) |
-| **L4** List row | Tree node, changed file, commit | `min-h-[44px]`, `text-sm text-th-text-secondary`; active `bg-th-bg-tertiary text-th-text-primary` |
-| **L5** Inline icon action | Entry menu, stage, unstage, discard, collapse, dismiss | 36×36, no border and no fill at rest (a hover fill is allowed). Two shapes, by where the control sits: square where it sits inside a **list** row or a group header, over the list itself (`rounded-md text-th-text-secondary`, defined once in `ui/iconButtonClass.ts`), round where it does not — the project root's `…` in the L2 search row, the session filter beside New Chat, the search field's clear button inside the input (`rounded-full text-th-text-muted hover:bg-th-bg-tertiary`). The filter is the `…`'s classes with `hover:` and `active:` behind `enabled:` and a `disabled:` dimming added, since it alone is disabled while its list is stale. 36 is the visual size only; the hit area a coarse pointer gets on top of it is [responsive-ui.md](responsive-ui.md#hit-areas-and-spacing)'s |
+| **L2** Panel header row | The Git workspace's top bar, search row, the worktree switcher | `min-h-[44px]`, label `text-sm text-th-text-primary`, icons `text-th-text-muted`, bottom border `border-th-border` where the row is the whole header — the Files search row omits it, since the option chips render directly beneath it and a border would cut the header block in half. The worktree switcher is the header *control* GitHub Desktop puts above its list: a transparent button, `th-bg-tertiary` only on hover or while open, name `text-sm font-medium`, and 36px rather than 44 under a fine pointer, since it is a control and not a row — see [The top of the sidebar](#the-top-of-the-sidebar) |
+| **L3** Group header | The session filter's `Worktrees` / `Deleted` (the Git workspace's `Staged` / `Changes` were these until its list became one, under an L4-height header of its own; its groups came back as `Unstaged` / `Staged`, but with `min-h-[44px]` headers that carry a `Stage all` text button and read in `text-sm` — [git-changes-ui.md](git-changes-ui.md#the-groups)) | `min-h-[32px] px-3 text-xs uppercase tracking-wide text-th-text-muted`, no hover fill. A header carrying L5 actions grows to their 36px — the touch target wins over the nominal height — and grows again where a finger may land ([responsive-ui.md](responsive-ui.md#hit-areas-and-spacing)) |
+| **L4** List row | Tree node, changed file (two lines tall, with its stage button and `⋯` beside the row's button), commit, branch | `min-h-[44px]`, `text-sm text-th-text-secondary`; hover `bg-th-bg-tertiary` on the row itself, spanning the actions beside its button, never on the button alone; active `bg-th-bg-tertiary text-th-text-primary` |
+| **L5** Inline icon action | Entry menu, a Git file row's stage button and `⋯`, collapse, dismiss | 36×36, no border and no fill at rest (a hover fill is allowed). Two shapes, by where the control sits: square where it sits inside a **list** row or a group header, over the list itself (`rounded-md text-th-text-secondary`, defined once in `ui/iconButtonClass.ts`), round where it does not — the project root's `…` in the L2 search row, the session filter beside New Chat, the search field's clear button inside the input (`rounded-full text-th-text-muted hover:bg-th-bg-tertiary`). The filter is the `…`'s classes with `hover:` and `active:` behind `enabled:` and a `disabled:` dimming added, since it alone is disabled while its list is stale. 36 is the visual size only; the hit area a coarse pointer gets on top of it is [responsive-ui.md](responsive-ui.md#hit-areas-and-spacing)'s |
 
 The two rungs that matter most are L3 and L5, because that is where the panels
 had it wrong: the old `▾ Changes` header was L2-weight text on an L2-height row,
@@ -155,6 +182,7 @@ Colour, restated as rules rather than as a list of places:
 | `th-bg-tertiary` | The row you are looking at (selected file, selected commit), and the fill of secondary buttons inside sheets |
 | `th-text-muted` | Group headers, metadata, and the icon of an action rare enough to sit below the row it lives on (a tree row's `…`). Quieter than the body colour, never quiet enough to stop being read — it owes AA 4.5 over the worst surface it lands on |
 | `th-error` / `th-success` | A failure / a completed outcome. Never a state that is merely unusual |
+| `th-graph-1` … `th-graph-8` | One line of the History commit graph, told from its neighbours — never text, never a state; what a commit is, its shape says ([git-history-ui.md](git-history-ui.md#line-colours)) |
 
 **`th-accent-text` on `th-accent` clears WCAG AA's 4.5:1 in every variant, and
 `web/tests/contrast.test.ts` holds the line.** The test finds the variants by
@@ -411,7 +439,190 @@ taller.
   in both the drawer and the desktop column, since an accent ring drawn
   straight onto an accent fill cannot be seen. The row keeps the search row's
   `p-2`, and `gap-2` keeps 8px between the two 44px hit areas on a coarse
-  pointer.
+  pointer. The filter's dropdown is positioned inside that inset the way the
+  worktree switcher's is, so on desktop it too spans exactly the New Chat row.
+  A panel of its own width hung off the filter button would outgrow a column at
+  its minimum, and the column clips it.
+
+## The Git tab
+
+The Git tab (`Git/GitTab.tsx`) takes one of two shapes, by the tier: at
+`expanded` it is the [Git workspace](git-ui.md)'s list, and below it the
+workspace's doorplate. Either way **every write appears in one place** — the
+sidebar's at `expanded`, the Git page's below it.
+
+### At `expanded`: the list
+
+```
+┌──────────────────────────────┐
+│ ⑂ feature/git-ui    ↓ Pull 2 │  top bar — branch name and sync chip
+│ ⚠ Push failed · Details    ✕ │  top-bar banners
+│ ⚠ Rebase stopped on conf…  ⌃ │  operation banner, whole, with its actions
+│ [Changes] History  Branches  │  segmented control
+│   3 files  +142 −37    [≣|⌸] │  the segment's list
+│ Unstaged 2       [Stage all] │
+│▌+ git.md          +80 −12  ⋯ │  the open detail's row, lit
+├──────────────────────────────┤
+│ [Discard unstaged…][Commit…] │  commit bar
+└──────────────────────────────┘
+```
+
+- **The whole list, nothing else.** What the Git page holds over its list —
+  top bar and sync chip, their banners, the operation banner, segments, list,
+  commit bar — drawn by the same components (`GitSegmentList` for the segments
+  and lists), so the two shapes cannot drift apart. The read-only overview of
+  the narrow shape is not drawn: it says what the top bar says, and the top
+  bar's sync chip is the pressable way into the sync sheet. Laid out and
+  navigated as [git-ui.md](git-ui.md#at-expanded-the-sidebars-list-and-the-detail)
+  says; the rules the sidebar itself owns are below.
+- **Its width is the sidebar's.** No width of its own and no handle of its own:
+  280–500px by the column's handle, 320 by default
+  ([The narrow-width rule](#the-narrow-width-rule)). A user who wants a wider
+  list drags the column.
+- **A row opens its detail in the main area**, and the column stays: a press
+  here never collapses it.
+- **Arriving decides the automatic fetch.** The list coming on screen — the tab
+  selected and the column not collapsed — is arriving in the workspace, as
+  opening the Git page is ([git-ui.md](git-ui.md#automatic-fetch)).
+- **The tab turns to Git when the route arrives at Git** — a list URL, or a
+  detail opened from outside a detail — whatever made it arrive, so the list
+  and the row it lights are on screen; once, not as a lock, never expanding a
+  collapsed column — and the lit row is scrolled into view ([git-ui.md](git-ui.md#at-expanded-the-sidebars-list-and-the-detail)).
+  It is `TabbedSidebar`'s `reveal`: a tab selected each time a new request is
+  made, and left alone between requests, so a tab the user picks afterwards
+  stays picked.
+- **Its segment is its own.** Turning it is navigation within the sidebar and
+  never changes what the main area shows; the tab follows the route only when
+  the route arrives somewhere new, and where the route names no Git layer — a
+  session, a file — it stays at the segment and History query it was left at
+  ([git-ui.md](git-ui.md#routes-segments-and-back)).
+
+**Why the sidebar may write at `expanded`.** The rule used to be that nothing in
+the sidebar writes. Its reasons were the drawer's: a phone's drawer is too
+short to hold a list that writes — its groups, its stage buttons and a pinned
+commit bar — under the tab bar and the worktree switcher, and the rows had not
+been built for its width. Neither holds for the column at `expanded`, which is
+the window's height and whose width is the 280px the rows are now built for.
+What the rule was protecting is kept as its own statement: a write is on screen
+in one place. On a desktop that place is the sidebar, and the main area beside
+it shows only details; on a phone it is the Git page, and the drawer holds no
+write. A list that only reads fits the drawer, and it has one
+([below](#below-expanded-the-doorplate)).
+
+### Below `expanded`: the doorplate
+
+The same shape as the Project tab: something to read, and doors. The changed
+files under `Changes` are part of the reading.
+
+```
+┌──────────────────────────────┐
+│ ⑂ feature/git-workspace      │  overview — read-only
+│   2 to pull · ⟳ Pulling…     │
+├──────────────────────────────┤
+│ ▤  Changes     5 +142 −37  › │  door — L4 row, ProjectTab's style
+│    GitTab.tsx        +12 −3  │  ┐ changed files, read-only, the name
+│    web/src/components/Git    │  │ in line with "Changes"
+│▌   git.md            +88 −20 │  │ the file under review, lit
+│    docs                      │  │
+│ ⚠  merge.go            +4 −1 │  │ a conflict: ⚠ in the icon column
+│    server · Conflict         │  │
+│    notes.txt              +9 │  │
+│    Untracked                 │  │
+│    old.ts                −14 │  ┘ at most five rows
+│    server · Deleted          │
+│    Show all 14 files         │  expands in place
+│ ⏱  History                 › │  door
+│ ⑂  Branches                › │  door
+└──────────────────────────────┘
+```
+
+- **The tab scrolls as one; nothing in it is pinned.** Overview, doors and
+  files are one scroller (`Doorplate` in `Git/GitTab.tsx`). Pinning the
+  overview and the doors around a scrolling list would spend about 245px of a
+  phone's drawer before the first file — the old panel's ~265px
+  ([What went wrong](#what-went-wrong-and-what-it-teaches)) again.
+- **The overview is read-only.** The branch name — drawn as the top bar
+  draws it (`CurrentBranch` in `Git/BranchBar.tsx`), `detached @ <hash>` when
+  detached, the shared skeleton while loading and `Branch unavailable` with
+  nothing cached (`Git/HeadPlaceholder.tsx`, as in the workspace's top bar) —
+  and one line of sync state. That line is `describeSyncStep` of the very
+  `SyncStatus` the workspace's sync chip draws (`describeSyncStatus`), so the
+  two cannot disagree about what the branch needs; a run in flight appends
+  `· ⟳ Fetching…` / `Pulling…` / `Pushing…`, and a failed automatic fetch
+  `· ⚠ Automatic fetch failed` in `th-warning`. With no remote or a detached
+  HEAD there is no line, by the chip's own `hasSyncStatus`. None of it is a
+  button and none of it is drawn like the chip: something that looks pressable
+  and does nothing is worse than nothing, and the doors below already go
+  everywhere it could. While a merge, rebase, cherry-pick or revert is in
+  progress the sync line gives way to what the workspace's banner says
+  ([git-conflict-ui.md](git-conflict-ui.md#the-sidebars-git-tab)).
+- **Three doors**, `min-h-[44px]`, in the Project tab's row style:
+  `Changes`, `History`, `Branches`. Each lands on its segment's **list**, never
+  on a detail it remembers — the Stories entry's rule — through the same
+  `handleSelectGitSegment` the workspace's own segment control uses, so it is
+  pushed and a press on the list already on screen adds nothing. Each ends in a
+  muted `ChevronRight`: beside rows that open a file, `›` is what says a row
+  opens a page. The Project tab has only doors and does without it.
+- **`Changes` carries the tab badge's number** (`useGitChangeCount`, capped by
+  `formatBadgeCount`), named `Changes, 5 changed files` through the badge's own
+  `describeChangeCount`. A clean tree reads a muted `No changes`, never `0`,
+  and no file rows follow — it is not said twice. A status with no answer yet
+  shows nothing, like the badge. Beside the number, the lines added and
+  removed across every file (`useGitChangeLines`), in the Changes list
+  header's muted figures — `5  +142 −37`, named `Changes, 5 changed files, 142
+  lines added, 37 removed` — and left out, never `+0 −0`, when nothing could be
+  counted ([git-changes-ui.md](git-changes-ui.md#the-sidebars-overview)).
+- **Under it, the changed files, read-only.** The Changes list's own row
+  (`ChangedFileRow` with `readOnly`): name, directory and status words, line
+  counts, its accessible name `Review <path>` (`, conflicted`). No stage
+  button, no `⋯`, and the staging state is not drawn — a control that looks
+  pressable and does nothing is the overview's sync-chip case again; staging is
+  the Git page's. One row per path, not per side as in the list's groups: a
+  partly staged file is listed once, as the review walks it. The row's name is in line with the
+  doors' text, so it reads as under `Changes`, and a conflicted file puts
+  `TriangleAlert` in `th-warning` in that icon column, where the list's
+  `StageGutter` would put it. They are a `<ul>` named `Changed files`.
+- **In the review's order, always flat.** `useOrderedChanges` — the order the
+  Changes list and the review share, in whichever view the list is set to — so
+  row k is the review's `k / n`; files in a collapsed folder are listed too,
+  since the review walks them. No folder rows, no Flat / Tree toggle, no
+  header: a folder row would be a second thing to press that opens nothing.
+- **At most five rows**, then `Show all n files`, a muted text button indented
+  as the rows, `min-h-[44px]`, that expands the list in place and moves focus
+  to the first row it brought. Six files are drawn as six rows rather than a
+  button standing in for one. The cap keeps History and Branches near the
+  first screen of a phone; the operation banner's conflicted files use the same
+  pattern ([git-conflict-ui.md](git-conflict-ui.md#the-banner)). `Show all` reads
+  the list here and `Changes ›` goes to where it can be written; it does not
+  close the drawer. **Each opening of the drawer starts collapsed**, and so
+  does a worktree switch: the tab stays mounted, and an expansion kept would
+  push History and Branches away for good. Turning to another tab and back
+  keeps it.
+- **One thing lit.** With a review open its file's row is lit — the list's
+  `isActive`, a 2px accent bar and `aria-current="true"` — and the `Changes`
+  door is not; a door is lit, `bg-th-bg-tertiary` and `aria-current="page"`,
+  only while the route is that segment's list, and stays pressable as the way
+  back to it. A file under review past the cap opens the list expanded, and
+  each time the tab comes on screen — the drawer opened on it, or the tab
+  turned to — that row is scrolled into view (`useRevealLitRow` over
+  `Git/revealRow.ts`), waiting for the status if it has not arrived: the drawer
+  is opened from where the reader is. A file under review that has stopped
+  changing has no row, and nothing in the tab is lit.
+- **A file row opens its review**, by `handleSelectDiffFile`'s history rules
+  ([git-changes-ui.md](git-changes-ui.md#what-the-two-bottom-buttons-say)):
+  it replaces an open review, and otherwise is pushed as the chat's review row
+  is, or as the list's row when the Changes list is under the drawer. It opens
+  on the side the list would; the row of the file already under review keeps
+  the side being read, so pressing it only closes the drawer.
+- **A failed status with nothing cached** reads a muted `Changes unavailable`
+  under the door, not pressable — left blank, a list's place would read as a
+  clean tree that forgot to say so; the reason and Retry are on the Git page.
+  With a status cached, the cached files stay.
+- **A door or a file row closes the drawer behind it**, as every pick in the
+  sidebar does.
+- The tab badge keeps its rule ([git-ui.md](git-ui.md#the-change-count-on-the-tab)),
+  and **nothing in the tab writes**: every write appears once, on the Git page.
+  No operation banner, no queued-write state on a row.
 
 ## No manual refresh
 
@@ -451,17 +662,17 @@ pull-to-refresh from reloading the app
 
 ## Where each panel is described
 
-The rules above are general; each panel's shape is documented with the panel.
+The rules above are general; each surface's shape is documented with it.
 
 | Panel | Document | What it now covers that this file does not |
 |-------|----------|--------------------------------------------|
 | Files | [file.md](file.md) | The row's [`…` menu](file.md#entry-actions) and the create / delete flows it opens, the [two upload paths](file.md#uploading) and why neither leaves a destination behind. The search row's narrow-width fix and the wrapping option chips |
-| Git | [git-ui.md](git-ui.md) | The layout and its L3 group headers (sticky, `Staged` / `Changes` / `History`), the commit bar's render conditions, amend on HEAD's row, History's default, `canPull`, the sync sheet's state-dependent button list, and the branch sheet's overflow root cause. Also the [change count on the tab](git-ui.md#the-change-count-on-the-tab) — what it counts, and why the `git.changed` subscription that feeds it sits in the sidebar rather than in the panel |
+| Git | [git-ui.md](git-ui.md) | The workspace's routes, segments and Back, the top bar and its sync chip, the automatic fetch, the one-layer layout and the sidebar's list beside the detail at `expanded`, the commit bar's render conditions, amend on HEAD's row, `canPull`, the sync sheet's state-dependent button list, the `Sheet` overflow root cause, and which results outlive the page. Also the [change count on the tab](git-ui.md#the-change-count-on-the-tab) — what it counts, and why the `git.changed` subscription that feeds it sits in the sidebar rather than in the workspace |
 
 Two of the redesign's outcomes reach past the panel they were found in, so they
 are flagged here rather than left where they were diagnosed:
 
-- **The `Sheet` height cap is not a Git fix.** The branch sheet is where an
+- **The `Sheet` height cap is not a Git fix.** The old branch sheet is where an
   uncapped desktop content box was found, but the cap landed in the shared
   `Sheet` and every sheet in the app benefits — including
   `WorktreeCreateSheet`, which belongs to neither panel. The root cause is
@@ -470,10 +681,12 @@ are flagged here rather than left where they were diagnosed:
   Files or Git rule, and it applies to the project screen too, so the session
   sidebar's infinite scroll — and what it does to the live updates the list is
   pushed — lives in [list-paging-ui.md](list-paging-ui.md).
-- **Sticky group headers are still owed a check on a real device.** The
-  reasoning behind them is from source and spec, not from a rendered page.
-  [git-ui.md](git-ui.md#group-headers) states the check and the one-line
-  fallback.
+- **The Changes list's sticky header is still owed a check on a real device.**
+  The reasoning behind it ([git-changes-ui.md](git-changes-ui.md#the-list-header))
+  is from source and spec, not from a rendered page.
+- **So is the drawer's five-row cap.** That History and Branches stay roughly
+  on the first screen of a 667px-class phone is an estimate — two-line rows of
+  about 48px, the rest of the chrome about 330px — not a measurement.
 
 ---
 
@@ -481,4 +694,4 @@ are flagged here rather than left where they were diagnosed:
 `docs/code/` explains the code of a *core module*, and `docs/projects/` the
 project-management system. A set of rules two feature panels share is none of
 those, so it sits beside them as `sidebar-ui.md` — and it holds only what neither
-panel document owns, so that no fact here has a second copy there.
+feature document owns, so that no fact here has a second copy there.

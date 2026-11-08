@@ -3,6 +3,10 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+	diffSettingsActions,
+	useDiffSettingsStore,
+} from "../../lib/diffSettingsStore";
 import { overlayToNavigation } from "../../lib/navigation";
 import { useWSStore, wsActions } from "../../lib/wsStore";
 import { reportEverythingInView } from "../../test/imageFixtures";
@@ -48,8 +52,18 @@ vi.mock("../../hooks/useCommitFile", () => ({
 // Shiki tokenizes on the main thread with real grammars; what matters here is
 // which of the two renderers the toggle picks.
 vi.mock("../../lib/shikiUtils", () => ({
-	CodeHighlighter: ({ children }: { children: string }) => (
-		<pre>{children}</pre>
+	CodeHighlighter: ({
+		children,
+		lineNumbers,
+		wrap,
+	}: {
+		children: string;
+		lineNumbers?: boolean;
+		wrap?: boolean;
+	}) => (
+		<pre data-numbered={lineNumbers || undefined} data-wrap={wrap || undefined}>
+			{children}
+		</pre>
 	),
 	getLanguageFromPath: () => undefined,
 	isMarkdownFile: (path: string) => path.endsWith(".md"),
@@ -76,6 +90,8 @@ vi.mock("../ui/MarkdownContent", () => ({
 }));
 
 beforeEach(() => {
+	localStorage.clear();
+	useDiffSettingsStore.setState({ codeWrap: false });
 	navigate.mockClear();
 	saveRawFile.mockReset();
 	saveRawFile.mockResolvedValue(undefined);
@@ -115,11 +131,11 @@ const tooLargeFile: FileContent = {
 	limit: 2 * 1024 * 1024,
 };
 
-function renderView() {
+function renderView(path = "docs/readme.md") {
 	const queryClient = new QueryClient();
 	const view = render(
 		<QueryClientProvider client={queryClient}>
-			<CommitFileView hash="abc1234def" path="docs/readme.md" />
+			<CommitFileView onBack={() => {}} hash="abc1234def" path={path} />
 		</QueryClientProvider>,
 	);
 	return {
@@ -137,20 +153,6 @@ describe("CommitFileView", () => {
 
 		expect(screen.getByText(/Read-only/)).toHaveTextContent("abc1234");
 		expect(screen.getByText(/Do a thing/)).toBeInTheDocument();
-	});
-
-	it("goes back to the diff it came from", async () => {
-		const user = userEvent.setup();
-		renderView();
-
-		await user.click(screen.getByRole("button", { name: "Back to diff" }));
-
-		expect(navigate).toHaveBeenCalledWith(
-			expect.objectContaining({
-				to: "/commit/$hash/diff/$",
-				params: { hash: "abc1234def", _splat: "docs/readme.md" },
-			}),
-		);
 	});
 
 	it("offers no way to change or delete the file", () => {
@@ -198,7 +200,13 @@ describe("CommitFileView", () => {
 
 		// The view is reused across commits, so a banner about one version would
 		// otherwise sit above another.
-		rerender(<CommitFileView hash="fedcba9876" path="docs/readme.md" />);
+		rerender(
+			<CommitFileView
+				onBack={() => {}}
+				hash="fedcba9876"
+				path="docs/readme.md"
+			/>,
+		);
 
 		expect(screen.queryByText(/Download failed/)).toBeNull();
 	});
@@ -216,7 +224,9 @@ describe("CommitFileView", () => {
 		file = binaryFile;
 		renderView();
 
-		expect(screen.queryByRole("button", { name: /plain text/i })).toBeNull();
+		expect(
+			screen.queryByRole("button", { name: /plain text|source/i }),
+		).toBeNull();
 	});
 
 	it("drops Markdown to its source so the whole file can be copied", async () => {
@@ -225,10 +235,15 @@ describe("CommitFileView", () => {
 
 		expect(screen.getByTestId("markdown")).toBeInTheDocument();
 
-		await user.click(screen.getByRole("button", { name: "Show plain text" }));
+		await user.click(screen.getByRole("button", { name: "Show source" }));
 
 		expect(screen.queryByTestId("markdown")).toBeNull();
 		expect(screen.getByText("# Title").tagName).toBe("PRE");
+		expect(screen.getByText("# Title")).toHaveAttribute("data-numbered");
+		// The same switch, named the same, as the Files tab's.
+		expect(
+			screen.getByRole("button", { name: "Show rendered" }),
+		).toHaveAttribute("aria-pressed", "true");
 	});
 
 	it("drops the toggle on a file already forced to plain text", () => {
@@ -240,8 +255,80 @@ describe("CommitFileView", () => {
 		};
 		renderView();
 
-		expect(screen.queryByRole("button", { name: /plain text/i })).toBeNull();
+		expect(
+			screen.queryByRole("button", { name: /plain text|source/i }),
+		).toBeNull();
 		expect(screen.getByText(/Large file/)).toBeInTheDocument();
+	});
+
+	describe("line wrapping", () => {
+		const code: FileContent = {
+			name: "app.ts",
+			type: "file",
+			path: "src/app.ts",
+			size: 12,
+			mime: "text/plain; charset=utf-8",
+			content: "const a = 1;",
+			encoding: "text",
+		};
+
+		function wrapToggle() {
+			return screen.queryByRole("button", { name: /wrap lines$/i });
+		}
+
+		it("is offered on numbered code, also when it is plain, beside its toggle", async () => {
+			const user = userEvent.setup();
+			file = code;
+			renderView(code.path);
+
+			const labels = screen
+				.getAllByRole("button")
+				.map((button) => button.getAttribute("aria-label"));
+			expect(labels.slice(labels.indexOf("Show plain text"))).toEqual([
+				"Show plain text",
+				"Wrap lines",
+				"Download",
+			]);
+
+			await user.click(screen.getByRole("button", { name: "Show plain text" }));
+			expect(wrapToggle()).not.toBeNull();
+		});
+
+		it("is offered on Markdown only as its source", async () => {
+			const user = userEvent.setup();
+			renderView();
+			expect(wrapToggle()).toBeNull();
+
+			await user.click(screen.getByRole("button", { name: "Show source" }));
+			expect(wrapToggle()).not.toBeNull();
+		});
+
+		it("is absent past the highlight limit, with the banner saying wrap is off", () => {
+			diffSettingsActions.setCodeWrap(true);
+			file = { ...code, size: HIGHLIGHT_LIMIT + 1 };
+			renderView(code.path);
+
+			expect(wrapToggle()).toBeNull();
+			expect(screen.getByText("const a = 1;")).not.toHaveAttribute("data-wrap");
+			expect(
+				screen.getByText(
+					"Large file — showing plain text without line wrapping.",
+				),
+			).toBeInTheDocument();
+		});
+
+		// The diff review reads the same choice, under the same key.
+		it("wraps the file by the choice the diff review shares", async () => {
+			const user = userEvent.setup();
+			file = code;
+			renderView(code.path);
+			expect(screen.getByText("const a = 1;")).not.toHaveAttribute("data-wrap");
+
+			await user.click(screen.getByRole("button", { name: "Wrap lines" }));
+
+			expect(screen.getByText("const a = 1;")).toHaveAttribute("data-wrap");
+			expect(localStorage.getItem("pockode:gitReviewWrap")).toBe("true");
+		});
 	});
 
 	describe("HTML page", () => {
@@ -281,7 +368,11 @@ describe("CommitFileView", () => {
 			});
 			return render(
 				<QueryClientProvider client={queryClient}>
-					<CommitFileView hash="abc1234def" path={version.path} />
+					<CommitFileView
+						onBack={() => {}}
+						hash="abc1234def"
+						path={version.path}
+					/>
 				</QueryClientProvider>,
 			);
 		}
@@ -295,6 +386,19 @@ describe("CommitFileView", () => {
 				scope: "root",
 				page: { hosts: [] },
 			});
+		});
+
+		it("offers wrapping on the page's source, not on the page", async () => {
+			const user = userEvent.setup();
+			renderPage();
+			await screen.findByTitle("index.html");
+			expect(screen.queryByRole("button", { name: "Wrap lines" })).toBeNull();
+
+			await user.click(screen.getByRole("button", { name: "Show source" }));
+
+			expect(
+				screen.getByRole("button", { name: "Wrap lines" }),
+			).toBeInTheDocument();
 		});
 
 		it("turns the plain toggle into page and source, for a page of any size", async () => {

@@ -1,5 +1,5 @@
 import { useIsExpanded } from "@pockode/shared";
-import { Archive, GitBranch, ListFilter } from "lucide-react";
+import { Archive, FolderGit2, ListFilter } from "lucide-react";
 import { useCallback, useMemo, useRef, useState } from "react";
 import { useSessionViewSources } from "../../hooks/sessionViewQueries";
 import { useWorktreeList } from "../../hooks/useWorktreeList";
@@ -73,8 +73,12 @@ export default function SessionFilterButton({ disabled }: Props) {
 		(c) => filter.kind === "worktree" && c.worktree === filter.worktree,
 	);
 
+	// No positioned box of its own: the dropdown stretches to the New Chat row
+	// it sits in, as the worktree switcher's does to the same row. A panel of
+	// its own width hung off this button outgrew the sidebar at its narrowest,
+	// and the column clips it.
 	return (
-		<div className="relative">
+		<>
 			<button
 				ref={triggerRef}
 				type="button"
@@ -103,7 +107,6 @@ export default function SessionFilterButton({ disabled }: Props) {
 				title="Filter sessions"
 				triggerRef={triggerRef}
 				isExpanded={isExpanded}
-				desktopPosition="right"
 				mobileMaxHeight="50dvh"
 			>
 				{/* The panel caps its own height and clips, so the one thing in it
@@ -174,7 +177,7 @@ export default function SessionFilterButton({ disabled }: Props) {
 					)}
 				</div>
 			</ResponsivePanel>
-		</div>
+		</>
 	);
 }
 
@@ -198,7 +201,7 @@ function WorktreeChoiceRow({
 	// Two glyphs rather than the word "(deleted)": a 240px row has no space for
 	// it, and `Archive` says the thing that has to be said — kept, but no longer
 	// running. The word is there for a screen reader, which has the room.
-	const Icon = choice.exists ? GitBranch : Archive;
+	const Icon = choice.exists ? FolderGit2 : Archive;
 	return (
 		<FilterOption
 			type="radio"

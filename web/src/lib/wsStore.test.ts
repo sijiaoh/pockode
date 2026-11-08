@@ -1,9 +1,14 @@
-import type { AuthCredential } from "@pockode/shared";
+import {
+	type AuthCredential,
+	UPDATE_BUDGET_MS,
+	UPDATE_RPC_TIMEOUT_MS,
+} from "@pockode/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { authActions, useAuthStore } from "./authStore";
 import { worktreeActions } from "./worktreeStore";
 import {
 	AGENT_START_RPC_TIMEOUT_MS,
+	COMMIT_DRAFT_RPC_TIMEOUT_MS,
 	isRPCTimeout,
 	RPC_TIMEOUT_MS,
 	reconnectWebSocket,
@@ -622,6 +627,249 @@ describe("wsStore", () => {
 		});
 	});
 
+	// docs/restart-ui.md, "While it restarts": the page remembers a restart it
+	// asked for until the next connection says what came back.
+	describe("restartServer", () => {
+		async function requestRestart() {
+			await connectAndAuth();
+			const ws = getMockWs();
+			ws?.deferMethod("server.restart");
+			const pending = wsActions.restartServer();
+			await vi.advanceTimersByTimeAsync(0);
+			return { ws, pending };
+		}
+
+		function refuse(ws: MockWebSocket | null, reason: string, message: string) {
+			const request = ws?.deferred[0];
+			ws?.simulateMessage({
+				jsonrpc: "2.0",
+				id: request?.id,
+				error: { code: -32011, message, data: { reason } },
+			});
+		}
+
+		it("remembers the accepted restart until the next connection", async () => {
+			const { ws, pending } = await requestRestart();
+			ws?.releaseDeferred(0, {});
+			await pending;
+			expect(useWSStore.getState().restartRequestedAt).not.toBeNull();
+
+			// The server closes with 1012 after its reply; the reconnect is ordinary.
+			ws?.simulateClose();
+			expect(useWSStore.getState().status).toBe("reconnecting");
+			expect(useWSStore.getState().restartRequestedAt).not.toBeNull();
+
+			await vi.advanceTimersByTimeAsync(RECONNECT_MAX_DELAY);
+			getMockWs()?.simulateOpen();
+			await vi.advanceTimersByTimeAsync(0);
+			expect(useWSStore.getState().status).toBe("connected");
+			expect(useWSStore.getState().restartRequestedAt).toBeNull();
+		});
+
+		it("rejects a refusal with the server's message and remembers nothing", async () => {
+			const { ws, pending } = await requestRestart();
+			const rejection = expect(pending).rejects.toThrow(
+				"The installed pockode at /x didn't run",
+			);
+			refuse(ws, "not_runnable", "The installed pockode at /x didn't run");
+			await rejection;
+			expect(useWSStore.getState().restartRequestedAt).toBeNull();
+		});
+
+		it("waits on a restart already under way as if it had asked", async () => {
+			const { ws, pending } = await requestRestart();
+			refuse(ws, "already_restarting", "Pockode is already restarting.");
+			await pending;
+			expect(useWSStore.getState().restartRequestedAt).not.toBeNull();
+		});
+
+		it("forgets a restart whose page logged out while it was out", async () => {
+			const { pending } = await requestRestart();
+			wsActions.disconnect();
+			await pending;
+			expect(useWSStore.getState().restartRequestedAt).toBeNull();
+		});
+
+		// Through the relay the reply may not arrive before the tunnel goes; the
+		// reconnect's version decides, not a failure shown for a restart that ran.
+		it("waits for the reconnect when the connection drops before the reply", async () => {
+			const { ws, pending } = await requestRestart();
+			ws?.simulateClose();
+			await pending;
+			expect(useWSStore.getState().restartRequestedAt).not.toBeNull();
+		});
+	});
+
+	// docs/self-update-ui.md, "Installing, and after": the install is a request
+	// in flight, so the store holds it and sends the restart that follows it.
+	describe("updateServer", () => {
+		const candidate = {
+			channel: "latest" as const,
+			version: "0.25.0",
+			notes_url: "https://github.com/sijiaoh/pockode/releases/tag/v0.25.0",
+		};
+
+		async function requestUpdate() {
+			await connectAndAuth();
+			const ws = getMockWs();
+			ws?.deferMethod("server.update");
+			ws?.deferMethod("server.restart");
+			const pending = wsActions.updateServer(candidate);
+			await vi.advanceTimersByTimeAsync(0);
+			return { ws, pending };
+		}
+
+		function methods(ws: MockWebSocket | null) {
+			return ws?.deferred.map((r) => r.method);
+		}
+
+		function fail(ws: MockWebSocket | null, reason: string, message: string) {
+			ws?.simulateMessage({
+				jsonrpc: "2.0",
+				id: ws?.deferred[0].id,
+				error: { code: -32012, message, data: { reason } },
+			});
+		}
+
+		it("installs, then restarts once with no second question", async () => {
+			const { ws, pending } = await requestUpdate();
+			expect(useWSStore.getState().serverUpdate).toMatchObject({
+				phase: "installing",
+				candidate,
+			});
+			expect(ws?.deferred[0].params).toEqual({ version: "0.25.0" });
+
+			ws?.releaseDeferred(0, {});
+			await vi.advanceTimersByTimeAsync(0);
+			expect(methods(ws)).toEqual(["server.update", "server.restart"]);
+			ws?.releaseDeferred(1, {});
+			await pending;
+
+			expect(useWSStore.getState().serverUpdate).toBeNull();
+			expect(useWSStore.getState().restartRequestedAt).not.toBeNull();
+		});
+
+		it("waits out the install's budget, then gives up without restarting", async () => {
+			const { ws, pending } = await requestUpdate();
+			await vi.advanceTimersByTimeAsync(UPDATE_BUDGET_MS);
+			expect(useWSStore.getState().serverUpdate?.phase).toBe("installing");
+
+			await vi.advanceTimersByTimeAsync(
+				UPDATE_RPC_TIMEOUT_MS - UPDATE_BUDGET_MS,
+			);
+			await pending;
+			expect(useWSStore.getState().serverUpdate).toMatchObject({
+				phase: "lost",
+				cause: "timeout",
+			});
+			expect(methods(ws)).toEqual(["server.update"]);
+		});
+
+		it("gives the check longer than the ordinary timeout", async () => {
+			await connectAndAuth();
+			getMockWs()?.deferMethod("server.update_check");
+			const check = wsActions.serverUpdateCheck({});
+			let settled = false;
+			check.then(
+				() => {
+					settled = true;
+				},
+				() => {
+					settled = true;
+				},
+			);
+			await vi.advanceTimersByTimeAsync(RPC_TIMEOUT_MS + 5_000);
+			expect(settled).toBe(false);
+			getMockWs()?.releaseDeferred(0, { candidates: [] });
+			await expect(check).resolves.toEqual({ candidates: [] });
+		});
+
+		it("remembers a failure, and restarts nothing", async () => {
+			const { ws, pending } = await requestUpdate();
+			fail(ws, "checksum_mismatch", "pockode-linux-amd64 does not match");
+			await pending;
+
+			expect(useWSStore.getState().serverUpdate).toMatchObject({
+				phase: "failed",
+				reason: "checksum_mismatch",
+				message: "pockode-linux-amd64 does not match",
+			});
+			expect(methods(ws)).toEqual(["server.update"]);
+			expect(useWSStore.getState().restartRequestedAt).toBeNull();
+		});
+
+		it("keeps the message of a failure no reason describes", async () => {
+			const { ws, pending } = await requestUpdate();
+			fail(ws, "", "something new");
+			await pending;
+			expect(useWSStore.getState().serverUpdate).toMatchObject({
+				phase: "failed",
+				reason: null,
+				message: "something new",
+			});
+		});
+
+		// The install runs on; a restart nobody is watching is not sent blind.
+		it("never restarts after a connection lost during the install", async () => {
+			const { ws, pending } = await requestUpdate();
+			ws?.simulateClose();
+			await pending;
+			expect(useWSStore.getState().serverUpdate).toMatchObject({
+				phase: "lost",
+				cause: "connection",
+			});
+
+			await vi.advanceTimersByTimeAsync(RECONNECT_MAX_DELAY);
+			const next = getMockWs();
+			next?.simulateOpen();
+			await vi.advanceTimersByTimeAsync(0);
+			expect(useWSStore.getState().status).toBe("connected");
+
+			const sent = next?.send.mock.calls.map(
+				([data]) => JSON.parse(data as string).method,
+			);
+			expect(sent).not.toContain("server.restart");
+			expect(useWSStore.getState().serverUpdate?.phase).toBe("lost");
+		});
+
+		it("says the file was installed when the restart is refused", async () => {
+			const { ws, pending } = await requestUpdate();
+			ws?.releaseDeferred(0, {});
+			await vi.advanceTimersByTimeAsync(0);
+			ws?.simulateMessage({
+				jsonrpc: "2.0",
+				id: ws?.deferred[1].id,
+				error: {
+					code: -32011,
+					message: "Pockode is shutting down.",
+					data: { reason: "shutting_down" },
+				},
+			});
+			await pending;
+
+			expect(useWSStore.getState().serverUpdate).toMatchObject({
+				phase: "restart_refused",
+				message: "Pockode is shutting down.",
+			});
+			expect(useWSStore.getState().restartRequestedAt).toBeNull();
+		});
+
+		it("forgets an install whose page logged out while it was out", async () => {
+			const { ws, pending } = await requestUpdate();
+			wsActions.disconnect();
+			ws?.releaseDeferred(0, {});
+			await pending;
+			expect(useWSStore.getState().serverUpdate).toBeNull();
+		});
+
+		it("ignores a second press while one is out", async () => {
+			const { ws } = await requestUpdate();
+			void wsActions.updateServer({ ...candidate, version: "0.26.0" });
+			await vi.advanceTimersByTimeAsync(0);
+			expect(methods(ws)).toEqual(["server.update"]);
+		});
+	});
+
 	describe("unanswered requests", () => {
 		it("fails them as soon as the socket closes", async () => {
 			await connectAndAuth();
@@ -692,6 +940,34 @@ describe("wsStore", () => {
 			for (const { caught } of agentStarters) {
 				expect(isRPCTimeout(await caught)).toBe(true);
 			}
+		});
+
+		// The server answers a draft only once the CLI has, for up to 90s, and
+		// gives up with a `timeout` of its own. Stop waiting first and that
+		// answer is thrown away while the paid run goes on.
+		it("waits out the server's own draft deadline on a commit draft", async () => {
+			await connectAndAuth();
+			getMockWs()?.mockNoResponse();
+
+			const settled = { done: false };
+			const caught = wsActions
+				.draftCommitMessage({
+					draftId: "d1",
+					agentType: "claude",
+					model: "",
+					effort: "",
+					amend: false,
+				})
+				.catch((error) => error)
+				.finally(() => {
+					settled.done = true;
+				});
+
+			await vi.advanceTimersByTimeAsync(90000);
+			expect(settled.done).toBe(false);
+
+			await vi.advanceTimersByTimeAsync(COMMIT_DRAFT_RPC_TIMEOUT_MS - 90000);
+			expect(isRPCTimeout(await caught)).toBe(true);
 		});
 	});
 

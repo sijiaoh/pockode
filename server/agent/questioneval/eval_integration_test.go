@@ -360,7 +360,7 @@ func startToolServer(t *testing.T, sessionID string) *toolServer {
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 
-	if err := serverinfo.Write(dir, 0, srv.URL, "", token); err != nil {
+	if err := serverinfo.Write(dir, "dev", 0, srv.URL, "", token); err != nil {
 		t.Fatalf("write server.json: %v", err)
 	}
 	return s

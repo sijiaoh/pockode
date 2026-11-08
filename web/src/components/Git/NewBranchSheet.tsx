@@ -6,16 +6,30 @@ import { inputClass } from "../ui/inputClass";
 interface Props {
 	/** What the new branch forks from, already rendered for display. */
 	base: string;
+	/**
+	 * Why no branch can be created right now — an operation that began with the
+	 * sheet open — null when one can. The sheet stays, since it holds the name.
+	 */
+	paused: string | null;
+	/** What switching to the new branch costs, where HEAD's default does not say it. */
+	note?: string;
 	onClose: () => void;
 	onCreate: (name: string) => Promise<void>;
 }
 
-function NewBranchSheet({ base, onClose, onCreate }: Props) {
+function NewBranchSheet({
+	base,
+	paused,
+	note = "Uncommitted changes come with you to the new branch.",
+	onClose,
+	onCreate,
+}: Props) {
 	const [name, setName] = useState("");
 	const [error, setError] = useState<string | null>(null);
 	const [isCreating, setIsCreating] = useState(false);
 	const inputRef = useRef<HTMLInputElement>(null);
 	const inputId = useId();
+	const pausedId = useId();
 
 	useEffect(() => {
 		inputRef.current?.focus();
@@ -24,7 +38,7 @@ function NewBranchSheet({ base, onClose, onCreate }: Props) {
 	const handleSubmit = async (e: React.FormEvent) => {
 		e.preventDefault();
 		const trimmed = name.trim();
-		if (!trimmed || isCreating) return;
+		if (!trimmed || isCreating || paused) return;
 
 		setError(null);
 		setIsCreating(true);
@@ -60,7 +74,8 @@ function NewBranchSheet({ base, onClose, onCreate }: Props) {
 					</button>
 					<button
 						type="submit"
-						disabled={!name.trim() || isCreating}
+						disabled={!name.trim() || isCreating || paused !== null}
+						aria-describedby={paused ? pausedId : undefined}
 						className="flex flex-1 items-center justify-center gap-2 rounded-lg bg-th-accent px-4 py-2.5 text-sm text-th-accent-text transition-colors hover:bg-th-accent-hover disabled:cursor-not-allowed disabled:opacity-50"
 					>
 						{/* The gerund label already announces the state; the spinner's
@@ -72,11 +87,17 @@ function NewBranchSheet({ base, onClose, onCreate }: Props) {
 			}
 		>
 			<div className="space-y-4 p-4">
-				{/* Above the field, like the panel's other sheets: pushed below it the
+				{/* Above the field, like the workspace's other sheets: pushed below it the
 				    refusal would sit under the on-screen keyboard on a phone. */}
 				{error && (
 					<p className="whitespace-pre-wrap text-sm text-th-error" role="alert">
 						{error}
+					</p>
+				)}
+
+				{paused && (
+					<p id={pausedId} className="text-sm text-th-text-muted">
+						{paused}
 					</p>
 				)}
 
@@ -100,7 +121,7 @@ function NewBranchSheet({ base, onClose, onCreate }: Props) {
 				</div>
 
 				<p className="rounded-lg bg-th-bg-tertiary px-3 py-2 text-sm text-th-text-secondary">
-					Uncommitted changes come with you to the new branch.
+					{note}
 				</p>
 			</div>
 		</Sheet>

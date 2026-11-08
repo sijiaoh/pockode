@@ -37,7 +37,9 @@ export function sendAgainTarget(
  * a person typed: an older turn's message is one the conversation has moved
  * past, and a turn Pockode or another agent started holds words the user never
  * wrote. An answer to posted questions is left out too — its text is the answers
- * flattened for the agent, which is not what the user entered.
+ * flattened for the agent, which is not what the user entered — and so is a
+ * page's action, whose text is the action written out for the agent: the user
+ * presses the page again (docs/tool-call-ui.md § The action message).
  */
 export function sendAgainMessage(
 	messages: readonly Message[],
@@ -58,7 +60,11 @@ export function sendAgainMessage(
 		last.id === target.messageId ||
 		(target.askedSeq !== undefined && asked.anchorSeq === target.askedSeq);
 	if (!isTarget) return undefined;
-	if ((asked.source && asked.source !== "user") || asked.answering) {
+	if (
+		(asked.source && asked.source !== "user") ||
+		asked.answering ||
+		asked.htmlAction
+	) {
 		return undefined;
 	}
 	return asked;

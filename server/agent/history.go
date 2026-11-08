@@ -3,6 +3,8 @@ package agent
 import (
 	"encoding/json"
 	"time"
+
+	"github.com/pockode/server/htmlpage"
 )
 
 // EventRecord is the serialized form of an AgentEvent.
@@ -71,6 +73,9 @@ type EventRecord struct {
 	// Command is the Pockode command a message record was expanded from; see
 	// CommandInvocation.
 	Command *CommandInvocation `json:"command,omitempty"`
+	// HTMLAction is the page action a message record was written from; see
+	// MessageEvent.HTMLAction.
+	HTMLAction *htmlpage.Action `json:"html_action,omitempty"`
 	// Attachments are the files the user sent with a message record; see
 	// MessageEvent.Attachments.
 	Attachments []FileBlock   `json:"attachments,omitempty"`
@@ -97,6 +102,12 @@ type EventRecord struct {
 	// record carries DurationMs too, measured by the server; see ThinkingEvent.
 	DurationMs int64 `json:"duration_ms,omitempty"`
 	ExitCode   *int  `json:"exit_code,omitempty"`
+	// HTMLPage is the page a successful page tool call stored (package
+	// htmlpage), on that call's tool_result record and on no other. It is how
+	// a client knows which stored page a card is, and how a fork knows which
+	// pages its copied history drew. The CLI does not report it: the server
+	// stamps it when it records the result (process.pageCalls).
+	HTMLPage string `json:"html_page,omitempty"`
 	// Activity and OutputDelta belong to tool_activity records, which are
 	// broadcast and never stored — see EventType.Persisted. They are fields of
 	// EventRecord anyway because EventRecord is the whole of how an event is

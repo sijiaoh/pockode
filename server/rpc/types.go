@@ -37,6 +37,7 @@ import (
 	"github.com/pockode/server/command"
 	"github.com/pockode/server/contents"
 	"github.com/pockode/server/git"
+	"github.com/pockode/server/htmlpage"
 	"github.com/pockode/server/schedule"
 	"github.com/pockode/server/session"
 	"github.com/pockode/server/settings"
@@ -241,11 +242,36 @@ type MessageResult struct {
 	MessageID string                   `json:"message_id,omitempty"`
 	Content   string                   `json:"content,omitempty"`
 	Command   *agent.CommandInvocation `json:"command,omitempty"`
+	// HTMLAction is the page action a chat.html_action message was written
+	// from, as its record holds it, with Content beside it.
+	HTMLAction *htmlpage.Action `json:"html_action,omitempty"`
 	// Attachments describe the files the message carried as its record does —
 	// type, size and dimensions read from the stored bytes — for the same
 	// reason as Content: the sender is left out of the broadcast.
 	Attachments []agent.FileBlock `json:"attachments,omitempty"`
 }
+
+// HTMLActionParams is what a page in the chat sent on the reader's press
+// (docs/tool-call-ui.md § The action message). Page is the card's id, which
+// the client fills in from the card, never from the page.
+type HTMLActionParams struct {
+	SessionID string `json:"session_id"`
+	Page      string `json:"page"`
+	Action    string `json:"action"`
+	// Data is any JSON value; absent means {}.
+	Data json.RawMessage `json:"data,omitempty"`
+}
+
+// ChatErrorData is the data member of a chat send refused for a reason a
+// client acts on rather than only shows.
+type ChatErrorData struct {
+	Reason string `json:"reason"`
+}
+
+// ChatReasonAwaitingPermission: the turn is blocked on a permission request,
+// so no message can be delivered until it is answered
+// (chat.ErrTurnAwaitingAnswer).
+const ChatReasonAwaitingPermission = "awaiting_permission"
 
 type InterruptParams struct {
 	SessionID string `json:"session_id"`
@@ -274,6 +300,29 @@ type SessionUpdateTitleParams struct {
 type SessionSetAgentTypeParams struct {
 	SessionID string            `json:"session_id"`
 	AgentType session.AgentType `json:"agent_type"`
+}
+
+type SessionSetHTMLFirstParams struct {
+	SessionID string `json:"session_id"`
+	HTMLFirst bool   `json:"html_first"`
+}
+
+// Reasons a session.set_html_first is refused, carried as
+// SessionSetHTMLFirstErrorData. The message says the same thing in prose; the
+// reason is what a client branches on.
+const (
+	// SessionHTMLFirstStarted: the first message has been delivered, and the
+	// agent was started with the guidance the session already has.
+	SessionHTMLFirstStarted = "session_started"
+	// SessionHTMLFirstWorkSession: the session runs a work item, whose sessions
+	// are always ordinary chats.
+	SessionHTMLFirstWorkSession = "work_session"
+)
+
+// SessionSetHTMLFirstErrorData is the data member of a refused
+// session.set_html_first.
+type SessionSetHTMLFirstErrorData struct {
+	Reason string `json:"reason"`
 }
 
 type SessionSetModeParams struct {
@@ -354,6 +403,19 @@ type AttachmentGetParams struct {
 // file, so a client renders both with one code path.
 type AttachmentGetResult struct {
 	File *contents.FileContent `json:"file"`
+}
+
+// HTMLPageGetParams reads one page an agent drew in a session, by the id the
+// page's tool_result record carries (html_page). See package htmlpage.
+type HTMLPageGetParams struct {
+	SessionID string `json:"session_id"`
+	ID        string `json:"id"`
+}
+
+// HTMLPageGetResult is the page whole. A page never changes once drawn, so
+// there is nothing to subscribe to: a client may keep what it read.
+type HTMLPageGetResult struct {
+	Page htmlpage.Page `json:"page"`
 }
 
 type FileWriteParams struct {
@@ -446,9 +508,18 @@ type GitDiffChangedParams struct {
 	*git.DiffResult
 }
 
-// GitPathsParams is used for git.add, git.reset and git.discard operations.
+// GitPathsParams is used for git.reset and git.discard operations.
 type GitPathsParams struct {
 	Paths []string `json:"paths"`
+}
+
+// GitAddParams is the params for git.add.
+type GitAddParams struct {
+	Paths []string `json:"paths"`
+	// Resolve marks conflicted paths resolved by staging them (git.Resolve).
+	// Without it a conflicted path is refused with CodeGitConflicted: a stage
+	// chosen from a status older than the conflict would record its markers.
+	Resolve bool `json:"resolve,omitempty"`
 }
 
 // GitCommitParams is the params for git.commit request.
@@ -458,14 +529,96 @@ type GitCommitParams struct {
 	Amend bool `json:"amend"`
 }
 
-// GitLogParams is the params for git.log request.
-type GitLogParams struct {
-	Limit int `json:"limit,omitempty"` // default 50
+// GitCommitDraftParams is the params for git.commit.draft.
+type GitCommitDraftParams struct {
+	// DraftID is the client's name for this draft, which
+	// git.commit.draft.cancel names it by. Never reused on a connection: a
+	// cancel that arrives after its draft ended is kept (see commitDrafts), and
+	// would stop a later draft under the same id.
+	DraftID string `json:"draft_id"`
+	// AgentType, Model and Effort are the engine that writes the draft. The
+	// server does not pick one: the client knows which CLI the user is working
+	// with. They are validated as a session's are (session.ValidateEngine);
+	// empty Model and Effort let the CLI decide.
+	AgentType session.AgentType `json:"agent_type"`
+	Model     string            `json:"model,omitempty"`
+	Effort    string            `json:"effort,omitempty"`
+	// Amend drafts the message of the commit that would replace HEAD, so the
+	// change described is HEAD's own plus whatever is staged.
+	Amend bool `json:"amend"`
 }
 
-// GitLogResult is the result of git.log request.
-type GitLogResult struct {
-	Commits []git.Commit `json:"commits"`
+// GitCommitDraftResult is the result of git.commit.draft.
+type GitCommitDraftResult struct {
+	Message string `json:"message"`
+}
+
+// GitCommitDraftCancelParams is the params for git.commit.draft.cancel.
+type GitCommitDraftCancelParams struct {
+	DraftID string `json:"draft_id"`
+}
+
+// CodeCommitDraftFailed answers a git.commit.draft that produced no message;
+// CommitDraftFailedData says why. The message says it in English, with the
+// CLI's own words where there are any; the reason is what a client picks its
+// own copy by.
+const CodeCommitDraftFailed = -32004
+
+// Reasons of a CodeCommitDraftFailed error.
+const (
+	// CommitDraftNothingStaged: the index matches HEAD and this is no amend.
+	CommitDraftNothingStaged = "nothing_staged"
+	// CommitDraftCLINotFound: the CLI is not installed where the server can
+	// see it.
+	CommitDraftCLINotFound = "cli_not_found"
+	// CommitDraftAuthFailed: the CLI is not signed in, or its sign-in expired.
+	CommitDraftAuthFailed = "auth_failed"
+	// CommitDraftTimeout: no answer within commitdraft.Timeout.
+	CommitDraftTimeout = "timeout"
+	// CommitDraftCancelled: git.commit.draft.cancel stopped it, or the
+	// connection closed.
+	CommitDraftCancelled = "cancelled"
+	// CommitDraftToolUse: the model called a tool, so the run was stopped and
+	// its answer discarded.
+	CommitDraftToolUse = "tool_use"
+	// CommitDraftEmpty: the CLI finished with an empty message.
+	CommitDraftEmpty = "empty"
+	// CommitDraftFailed: the CLI ran and ended without a message; the error
+	// message carries what it said.
+	CommitDraftFailed = "failed"
+)
+
+// CommitDraftFailedData is the data member of a CodeCommitDraftFailed error.
+type CommitDraftFailedData struct {
+	Reason string `json:"reason"`
+}
+
+// GitHunkParams is the params for git.hunk.stage and git.hunk.unstage. The
+// hunk is one of the hunk_ids of the path's diff on the side the method takes
+// it from: the unstaged diff for stage, the staged one for unstage.
+type GitHunkParams struct {
+	Path   string `json:"path"`
+	HunkID string `json:"hunk_id"`
+}
+
+// GitLogParams is the params for git.log request; the result is a
+// git.HistoryPage.
+type GitLogParams struct {
+	// Scope is "current" (the default), "all", "mainline" or "branch"
+	// (git.HistoryScope). A later page is asked with the same Scope, Branch,
+	// Query and Path as the first: the cursor holds where the scope started,
+	// not how it walks.
+	Scope string `json:"scope,omitempty"`
+	// Branch is what scope "branch" lists against the default branch, as the
+	// branch list names it: BranchInfo.Name or RemoteBranch.Ref
+	// (git.HistoryQuery.Branch). Required with that scope, refused with any
+	// other.
+	Branch string `json:"branch,omitempty"`
+	Query  string `json:"query,omitempty"` // in the commit message
+	Path   string `json:"path,omitempty"`  // touched by the commit
+	Limit  int    `json:"limit,omitempty"` // default 50, at most 200
+	// Cursor is the previous page's next, sent back as received.
+	Cursor *git.HistoryCursor `json:"cursor,omitempty"`
 }
 
 // GitShowParams is the params for git.show request.
@@ -494,6 +647,49 @@ type GitCheckoutParams struct {
 // GitBranchCreateParams is the params for git.branch.create request.
 type GitBranchCreateParams struct {
 	Name string `json:"name"`
+	// Start is the commit to branch from, the current HEAD when empty.
+	Start string `json:"start,omitempty"`
+}
+
+// GitBranchInspectParams is the params for git.branch.inspect; the result is
+// a git.BranchInspection.
+type GitBranchInspectParams struct {
+	Name string `json:"name"`
+}
+
+// GitBranchDeleteParams is the params for git.branch.delete.
+type GitBranchDeleteParams struct {
+	Name string `json:"name"`
+	// Tip is git.branch.inspect's full hash: the delete is refused with
+	// CodeGitBranchChanged if the branch points anywhere else.
+	Tip string `json:"tip"`
+}
+
+// CodeGitBranchChanged answers a git.branch.delete whose branch no longer
+// points at the tip the user confirmed (git.ErrBranchChanged) — something
+// committed to it or reset it since the inspect — and a git.branch.inspect or
+// git.branch.delete whose branch no longer exists (git.ErrBranchNotFound).
+// Nothing was deleted. A moved branch is inspected again rather than retried;
+// a gone one leaves nothing to inspect.
+const CodeGitBranchChanged = -32009
+
+// GitBranchChangedData is the data member of a CodeGitBranchChanged error.
+type GitBranchChangedData struct {
+	// Gone is true when the branch no longer exists, rather than having moved.
+	Gone bool `json:"gone"`
+}
+
+// CodeGitBranchCheckedOut answers a git.branch.delete of the current branch
+// or of a branch another worktree has checked out (git.BranchCheckedOutError).
+// Nothing was deleted.
+const CodeGitBranchCheckedOut = -32010
+
+// GitBranchCheckedOutData is the data member of a CodeGitBranchCheckedOut
+// error.
+type GitBranchCheckedOutData struct {
+	// Worktree labels the worktree holding the branch, as git.branches does;
+	// empty when it is this worktree's current branch.
+	Worktree string `json:"worktree"`
 }
 
 // GitPullResult is the result of git.pull request.
@@ -528,12 +724,75 @@ const CodeGitBusy = -32001
 // from worktree.changed.
 const CodeNotGitRepo = -32002
 
+// CodeGitHunkStale answers git.hunk.stage or git.hunk.unstage when the hunk it
+// names is no longer in the file's current diff (git.ErrHunkStale): the file
+// changed after the client read the diff. Nothing was written; the client
+// rereads the diff and lets the user pick again, rather than retrying.
+const CodeGitHunkStale = -32005
+
 // GitBusyData is the data member of a CodeGitBusy error.
 type GitBusyData struct {
 	// Operation is what holds the worktree, in git.BusyError's vocabulary:
 	// "stage", "unstage", "discard", "commit", "checkout", "branch-create",
-	// "fetch", "pull", "push".
+	// "branch-delete", "fetch", "pull", "push", "abort".
 	Operation string `json:"operation"`
+}
+
+// GitAbortParams is the params for git.abort.
+type GitAbortParams struct {
+	// Kind is the operation the user confirmed abandoning, as git.status
+	// reported it: "merge", "rebase", "cherry-pick" or "revert".
+	Kind string `json:"kind"`
+}
+
+// GitAbortResult is the result of git.abort.
+type GitAbortResult struct {
+	// HeadKept is true when git ended the operation but left the branch where
+	// it was rather than moving it back: commits were made on it during a
+	// sequence of picks or reverts (git.Abort). The client has to say so — the
+	// user confirmed losing that work, and it is still there.
+	HeadKept bool `json:"head_kept"`
+}
+
+// CodeGitOperationChanged answers a git.abort whose operation is no longer the
+// one in progress (git.OperationChangedError): it was finished or aborted
+// elsewhere, or another one started, since the user confirmed. Nothing ran —
+// whatever is in progress now is not what the user agreed to lose.
+const CodeGitOperationChanged = -32008
+
+// GitOperationChangedData is the data member of a CodeGitOperationChanged
+// error.
+type GitOperationChangedData struct {
+	// Current is the operation in progress now, empty when there is none.
+	Current string `json:"current"`
+}
+
+// CodeGitOperationInProgress answers a write refused because the repository is
+// in the middle of a merge, rebase, cherry-pick or revert that the write would
+// finish or derail (git.OperationInProgressError): commit, checkout, branch
+// create, branch delete, pull. Nothing ran; it works again once the operation
+// is finished or aborted.
+const CodeGitOperationInProgress = -32006
+
+// GitOperationInProgressData is the data member of a
+// CodeGitOperationInProgress error.
+type GitOperationInProgressData struct {
+	// Kind is the operation in the way: "merge", "rebase", "cherry-pick" or
+	// "revert".
+	Kind string `json:"kind"`
+}
+
+// CodeGitConflicted answers a git.add (without resolve), git.reset,
+// git.hunk.stage, git.hunk.unstage or git.discard naming paths with unresolved
+// conflicts (git.ConflictedPathsError). Nothing ran, the other paths included.
+const CodeGitConflicted = -32007
+
+// GitConflictedData is the data member of a CodeGitConflicted error.
+type GitConflictedData struct {
+	// Action is the refused write: "stage", "unstage" or "discard".
+	Action string `json:"action"`
+	// Paths are the refused paths, as the request named them.
+	Paths []string `json:"paths"`
 }
 
 // Command namespace
@@ -610,6 +869,9 @@ type SessionListItem struct {
 	UnansweredQuestions int                 `json:"unanswered_questions,omitempty"`
 	Unread              bool                `json:"unread"`
 	ForkedFrom          *session.ForkOrigin `json:"forked_from,omitempty"`
+	// HTMLFirst is session.SessionMeta.HTMLFirst, on the row because the row
+	// draws it (docs/html-first-session-ui.md §3).
+	HTMLFirst bool `json:"html_first,omitempty"`
 }
 
 // Turn is session.TurnState as a client receives it: the instant the open turn
@@ -705,6 +967,7 @@ func NewSessionListItem(meta session.SessionMeta, sw SessionWork) SessionListIte
 		UnansweredQuestions: len(meta.Turn.Unanswered),
 		Unread:              meta.Unread,
 		ForkedFrom:          meta.ForkedFrom,
+		HTMLFirst:           meta.HTMLFirst,
 	}
 }
 
@@ -1088,9 +1351,11 @@ const (
 	// CLIInstallRefusedAlreadyInstalled is a CLI the server finds already;
 	// reading cli_update.check again shows it.
 	CLIInstallRefusedAlreadyInstalled = "already_installed"
-	// CLIInstallRefusedNPMNotFound is a server without npm on its PATH. It
-	// needs Node.js installed and the server restarted.
-	CLIInstallRefusedNPMNotFound = "npm_not_found"
+	// CLIInstallRefusedInstallerToolNotFound is a server without a command
+	// the CLI's official install script needs on its PATH: its shell (bash,
+	// sh, PowerShell) or a downloader (curl or wget). The message names which;
+	// it needs installing and the server restarting.
+	CLIInstallRefusedInstallerToolNotFound = "installer_tool_not_found"
 	// CLIInstallRefusedBusy is a CLI being updated, being updated or installed
 	// by another Pockode on the machine, or signed in to. Trying again once
 	// that has ended works.
@@ -1694,6 +1959,18 @@ type SessionViewAttachmentResult struct {
 	File *contents.FileContent `json:"file"`
 }
 
+// SessionViewHTMLPageParams is HTMLPageGetParams for a session of another
+// worktree, named by the request rather than by the bound one.
+type SessionViewHTMLPageParams struct {
+	Worktree  string `json:"worktree"`
+	SessionID string `json:"session_id"`
+	ID        string `json:"id"`
+}
+
+type SessionViewHTMLPageResult struct {
+	Page htmlpage.Page `json:"page"`
+}
+
 // SessionViewDeleteParams discards one session stored under another worktree,
 // including one whose worktree no longer exists.
 //
@@ -1776,4 +2053,215 @@ type RawCapabilityResult struct {
 // remote_url.changed notifications.
 type RemoteURLSubscribeResult struct {
 	RemoteURL string `json:"remote_url"`
+}
+
+// Server namespace: the pockode process itself — the version installed on disk
+// and restarting into it (see package restart). A cluster serves the same two
+// methods for itself, without the turns.
+
+// InstalledVersion is what running the executable on disk with --version
+// reported, read afresh for every request: an upgrade can replace the file at
+// any time without this process hearing of it.
+type InstalledVersion struct {
+	// Version is the installed version, as `pockode --version` prints it
+	// ("0.21.0", "dev"); empty when it could not be read.
+	Version string `json:"version,omitempty"`
+	// Error is why it could not be read, in English; empty when Version is set.
+	// A restart is refused for the same reason.
+	Error string `json:"error,omitempty"`
+	// Path is the executable a restart runs: the one this process was started
+	// from, resolved at startup.
+	Path string `json:"path"`
+}
+
+// ServerVersionResult answers server.version on a pockode server.
+type ServerVersionResult struct {
+	Installed InstalledVersion `json:"installed"`
+	// RunningTurns is how many sessions have a turn a restart would stop,
+	// across every worktree — running, or blocked on a permission request or
+	// on background work. A question an agent posted is not one: it belongs
+	// to the session and survives a restart.
+	RunningTurns int `json:"running_turns"`
+}
+
+// ClusterVersionResult answers server.version on a cluster.
+type ClusterVersionResult struct {
+	Installed InstalledVersion `json:"installed"`
+}
+
+// CodeRestartRefused answers a server.restart, or a cluster's node.restart,
+// that changed nothing; RestartRefusedData says why. The message is written to
+// be shown as it is.
+const CodeRestartRefused = -32011
+
+// Reasons of a CodeRestartRefused error.
+const (
+	// RestartRefusedNotRunnable is an installed executable that does not run
+	// (server.version reports the same error), or a working directory the
+	// process started in that has since been removed. The process carries on.
+	// For node.restart, the cluster's own check of the executable it starts
+	// nodes from.
+	RestartRefusedNotRunnable = "not_runnable"
+	// RestartRefusedAlreadyRestarting is a restart already under way, asked
+	// for elsewhere: another client, or SIGUSR1. The connection is about to
+	// drop for it.
+	RestartRefusedAlreadyRestarting = "already_restarting"
+	// RestartRefusedShuttingDown is a process already shutting down to exit.
+	RestartRefusedShuttingDown = "shutting_down"
+	// RestartRefusedOlderNode is a node.restart of a node that cannot be
+	// asked: started by a build that predates restarts (no version in its
+	// server.json), or on Windows one without a restart event. Only stopping
+	// and starting it again brings it up to date.
+	RestartRefusedOlderNode = "older_node"
+	// RestartRefusedNotRunning is a node.restart of a node that is not
+	// running: stopped, or stale.
+	RestartRefusedNotRunning = "not_running"
+)
+
+// RestartRefusedData is the data member of a CodeRestartRefused error.
+type RestartRefusedData struct {
+	Reason string `json:"reason"`
+}
+
+// ServerUpdateCheckParams asks server.update_check for the releases this
+// process could be updated to. Without Force the answer is what the process
+// already knows, and the release feed is not contacted; Force asks the feed,
+// which the server does at most once a minute, answering from its cache
+// within that minute (see package release).
+type ServerUpdateCheckParams struct {
+	Force bool `json:"force,omitempty"`
+}
+
+// ServerUpdateCheckResult answers server.update_check, on a pockode server and
+// on a cluster alike. Every part is independent of the others: candidates can
+// be listed beside a reason nothing can be installed, and beside the error of
+// a later check that failed.
+type ServerUpdateCheckResult struct {
+	// CheckedAt is when Candidates was last confirmed against the release
+	// feed; nil until a check has answered. Nil with no CheckError means this
+	// process has not checked yet — not that nothing is newer.
+	CheckedAt *time.Time `json:"checked_at,omitempty"`
+	// Candidates is latest, then alpha, each only when newer than both the
+	// running and the installed version. Never null.
+	Candidates []UpdateCandidate `json:"candidates"`
+	// LatestVersion is the newest final release, a candidate or not — the
+	// release an alpha candidate is a pre-release beside, when latest is not
+	// offered because the running or installed version is past it. Omitted
+	// when there is none.
+	LatestVersion string `json:"latest_version,omitempty"`
+	// CheckError is why the most recent check did not answer.
+	CheckError *UpdateCheckError `json:"check_error,omitempty"`
+	// CannotInstall is why this process cannot install any release; Restart
+	// is unaffected.
+	CannotInstall *UpdateCannotInstall `json:"cannot_install,omitempty"`
+	// Installing is set while an install of this OS user runs.
+	Installing *UpdateInstalling `json:"installing,omitempty"`
+	// Platform ("linux/amd64") and Asset ("pockode-linux-amd64") are what
+	// this process would download, for the copy of a release without it.
+	Platform string `json:"platform"`
+	Asset    string `json:"asset"`
+}
+
+// UpdateCandidate is one release this process could be updated to.
+type UpdateCandidate struct {
+	// Channel is "latest" or "alpha".
+	Channel string `json:"channel"`
+	// Version is without the tag's "v", as the binary reports it.
+	Version string `json:"version"`
+	// NotesURL is the release's GitHub page.
+	NotesURL string `json:"notes_url"`
+	// Unavailable is why this release cannot be installed here.
+	Unavailable *UpdateUnavailable `json:"unavailable,omitempty"`
+}
+
+// Reasons of an UpdateUnavailable.
+const (
+	UpdateUnavailableNoAsset     = "no_asset"
+	UpdateUnavailableNoChecksums = "no_checksums"
+)
+
+// UpdateUnavailable is why one release has nothing this platform can install.
+type UpdateUnavailable struct {
+	Reason  string `json:"reason"`
+	Message string `json:"message"`
+}
+
+// Reasons of an UpdateCheckError.
+const (
+	// UpdateCheckDevBuild is a development build, which is never checked.
+	UpdateCheckDevBuild = "dev_build"
+	// UpdateCheckUnavailable is a check that failed: the GitHub API and the
+	// releases.atom fallback both.
+	UpdateCheckUnavailable = "unavailable"
+)
+
+// UpdateCheckError is why there is no fresh answer.
+type UpdateCheckError struct {
+	Reason  string `json:"reason"`
+	Message string `json:"message"`
+}
+
+// Reasons of an UpdateCannotInstall. A reason not listed here is an error
+// finding out, shown by its message.
+const (
+	CannotInstallDevBuild    = "dev_build"
+	CannotInstallContainer   = "container"
+	CannotInstallNotWritable = "not_writable"
+)
+
+// UpdateCannotInstall is why this process cannot replace its own executable.
+type UpdateCannotInstall struct {
+	Reason  string `json:"reason"`
+	Message string `json:"message"`
+	// Dir, for not_writable, is the directory of the real executable — the
+	// one a symlink points into — which would have to be writable.
+	Dir string `json:"dir,omitempty"`
+	// Hint, for not_writable, is what to do instead on this OS, in prose with
+	// commands in backticks.
+	Hint string `json:"hint,omitempty"`
+}
+
+// UpdateInstalling is an install under way. Version, Channel and StartedAt
+// are set for one this process runs (asked for from any client); one run by
+// another Pockode of the same OS user — a cluster node, another project —
+// holds the lock and is reported without them.
+type UpdateInstalling struct {
+	Version   string     `json:"version,omitempty"`
+	Channel   string     `json:"channel,omitempty"`
+	StartedAt *time.Time `json:"started_at,omitempty"`
+}
+
+// ServerUpdateParams asks server.update to install Version, which has to be a
+// current candidate. A success is the empty object once the executable has
+// been replaced; restarting into it is a separate server.restart.
+type ServerUpdateParams struct {
+	Version string `json:"version"`
+}
+
+// CodeUpdateFailed answers a server.update that did not replace the
+// executable; UpdateFailedData says why. The message can be shown as it is.
+const CodeUpdateFailed = -32012
+
+// Reasons of a CodeUpdateFailed error. Every one leaves the executable as it
+// was, but restore_failed.
+const (
+	// Refused before anything was downloaded.
+	UpdateFailedReleaseGone       = "release_gone"
+	UpdateFailedNotInstallable    = "not_installable"
+	UpdateFailedAlreadyInstalling = "already_installing"
+	UpdateFailedNoChecksums       = "no_checksums"
+	// Failed on the way (selfinstall.Failure).
+	UpdateFailedNoAsset          = "no_asset"
+	UpdateFailedDownload         = "download_failed"
+	UpdateFailedChecksumMismatch = "checksum_mismatch"
+	UpdateFailedNotRunnable      = "not_runnable"
+	UpdateFailedReplace          = "replace_failed"
+	UpdateFailedRestore          = "restore_failed"
+	UpdateFailedTimeout          = "timeout"
+)
+
+// UpdateFailedData is the data member of a CodeUpdateFailed error. Reason is
+// empty for a failure none of the reasons describes.
+type UpdateFailedData struct {
+	Reason string `json:"reason"`
 }

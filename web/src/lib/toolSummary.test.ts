@@ -147,6 +147,24 @@ describe("toolSummary", () => {
 		});
 	});
 
+	it.each([
+		[{ base: "p2", edits: [] }, "from p2"],
+		[
+			{ edits: [], title: "Latency (p50)", base: "p2" },
+			"Latency (p50) · from p2",
+		],
+	])("names an html_edit call by the page it starts from", (input, detail) => {
+		expect(
+			toolSummary("mcp__pockode__html_edit", input, WORK_DIR),
+		).toMatchObject({ title: "html_edit", chip: "pockode", detail });
+	});
+
+	it("names an html_get call by the page it reads", () => {
+		expect(
+			toolSummary("pockode:html_get", { id: "p3" }, WORK_DIR),
+		).toMatchObject({ title: "html_get", chip: "pockode", detail: "p3" });
+	});
+
 	it("counts a todo list rather than quoting one of them", () => {
 		expect(
 			toolSummary(

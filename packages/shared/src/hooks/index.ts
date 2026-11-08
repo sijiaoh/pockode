@@ -1,6 +1,12 @@
 export { useMediaQuery } from "./useMediaQuery.ts";
 export { useOutsideClick } from "./useOutsideClick.ts";
-export { useCoverPage, useIsPageCovered } from "./usePageCover.ts";
+export {
+	type CoverPageBack,
+	LayerHistoryContext,
+	useCoverPage,
+	useIsDrawnOver,
+	useIsPageCovered,
+} from "./usePageCover.ts";
 export {
 	useHasCoarsePointer,
 	useHasFinePointer,

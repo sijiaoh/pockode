@@ -14,7 +14,7 @@ ladder, the two pointer gates, hover reveal, hit areas, which event primitive to
 use for which job, and which box owns the scroll boundary. It does **not** cover
 any single panel's shape: [sidebar-ui.md](sidebar-ui.md) owns what the two
 sidebar panels share, including the visual weight rungs this file sizes hit
-areas against and the narrow-width rule for what fits **inside** a 240px
+areas against and the narrow-width rule for what fits **inside** a 280px
 container.
 
 > **The dividing line with sidebar-ui.md:** if a number is a **viewport** width,
@@ -96,8 +96,8 @@ available. The shell and its contents reached opposite conclusions about the
 same screen. That is not "a bit cramped", it is self-contradiction.
 
 1024 is the smallest number that makes the contradiction go away: with the
-sidebar at its [240px minimum](sidebar-ui.md#the-narrow-width-rule), the content
-area gets 784px, comfortably above
+sidebar at its [280px minimum](sidebar-ui.md#the-narrow-width-rule), the content
+area gets 744px, and 704px beside its 320px default — both comfortably above
 `sm`. (A user who then drags the sidebar out to 500px has made their own
 trade-off; that is not the rule failing.)
 
@@ -140,7 +140,7 @@ it *off* screen (closes the drawer, or collapses the column). Anything that once
 read `isExpanded` as "the sidebar is visible" reads `isOpen` now — the
 [`git.changed` watch](git-ui.md#who-subscribes-to-gitchanged) is the case that
 had to change. The `if (!isExpanded) onClose()` after picking a session, a file
-or a diff is the opposite case and stays: it means "close the drawer behind the
+or one of the Git tab's entries is the opposite case and stays: it means "close the drawer behind the
 pick", and without the guard every pick on a wide screen would collapse the
 column.
 
@@ -435,7 +435,7 @@ reason.
 2. **Folded into a `…` menu opening a sheet.** For rows with ≥2 secondary
    actions, where always-visible icons would eat the title's room to truncate.
    [sidebar-ui.md's narrow-width rule](sidebar-ui.md#the-narrow-width-rule)
-   decides when: two standing icons are enough to break a 240px row.
+   decides when: two standing icons are enough to break a 280px row.
 3. **A separate entry point** (long-press menu, swipe). **Only ever in addition
    to 1 or 2, never as the only path** — it is invisible, therefore
    undiscoverable.
@@ -499,8 +499,8 @@ measurement.
 
 Growing the box is safe precisely because it is gated: the fine-pointer weight
 ladder does not move at all, so the old worry about "a bigger box pushing its
-container out of its rung" only applies to *unconditional* growth. `GroupHeader`
-is `min-h-[32px] pointer-coarse:min-h-11` — 32 under a mouse, 44 under a thumb.
+container out of its rung" only applies to *unconditional* growth. `ToggleChip`
+is `min-h-[36px] pointer-coarse:min-h-11` — 36 under a mouse, 44 under a thumb.
 
 The overlay (`touch-target`, defined in `web/src/index.css`) lays a centred
 `::after` over a control without resizing it: **both** floors, 36 always and 44
@@ -617,7 +617,7 @@ The shared definitions, so the common cases cannot drift apart:
 
 - `web/src/components/ui/iconButtonClass.ts` — the inline icon action inside a
   list row, a group header or the slot beside a chat bubble (36 / coarse 44).
-  Shared by both sidebar panels and chat; it moved out of `Git/` once the file
+  Shared by the Files panel, the Git workspace and chat; it moved out of `Git/` once the file
   tree stopped writing its own copy. It takes `grow`, which picks **which of the
   two techniques above** pays for the coarse floor: growing the box by default,
   or `size-9 touch-target` when the box may not change size. Chat's `…` is the
@@ -658,23 +658,46 @@ that cannot. That is what `web/tests/touchTarget.test.ts`
 enforces: the rule is the floor, not the helper, so a button that never reaches
 for a helper still has to state a number.
 
-### The one deliberate exemption
+### Deliberate exemptions
 
-The sidebar's resize handle stays **8px** and is not grown to 44. Widening it
-would lay a 44px drag strip down the right edge of every row in the list —
-exactly where Delete sits — and taps that work today would become drags. Sidebar
-width is a preference (P2); Delete is an operation.
+Two controls are kept under the floor on purpose, each for a reason of its own.
+They are written down so the next reader does not "fix" them in passing.
+
+#### The column resize handle
+
+A column's resize handle stays **8px** and is not grown to 44. There is one
+handle, `ui/ResizeHandle` driven by `hooks/useResizableWidth`, on the sidebar's
+column — which at `expanded` holds the Git workspace's list too
+([git-ui.md](git-ui.md#at-expanded-the-sidebars-list-and-the-detail)). Widening
+it would lay a 44px drag strip down the right edge of every row in the column —
+exactly where the sidebar's Delete and a Git row's `⋯` sit — and taps that
+work today would become drags. A column's width is a preference (P2); Delete is an operation.
 
 > **The floor exists to make operations reachable, not to make a preference
 > easier at the cost of an operation.**
-
-This is written down so the next reader does not "fix" it in passing.
 
 A keyboard does not need the strip to be wider either. The handle is a focusable
 WAI-ARIA window splitter (`role="separator"` with its value): the arrow keys move
 it a step at a time, and Home and End jump to its limits. Its focus
 indicator is the same accent line that hover shows. A focus ring around an 8px
 strip would be drawn over the column's own border.
+
+#### A diff's line numbers
+
+In the Git review and a commit's file diff a line's number cell selects the
+line, for handing it to the agent or copying it
+([git-changes-ui.md](git-changes-ui.md#selecting)). A cell
+is one line of code tall, about 20px on a phone. Growing every line to 44px
+would double the height of the code the review exists to read, and what a miss
+costs is small: it selects the neighbouring line, which shows at once in the
+highlight and in the selection bar's range, executes nothing, and is undone by
+the next tap. The one neighbour that does execute something, the hunk bar's
+Stage button, keeps the floor's spacing from the gutter. The cells are not
+narrow: the unified column is at least 90px (the library sizes it to twice its
+widest number), held at 44px where a phone narrows it to one number, and split
+view's per-side cells, which the library sizes from 40px, get a 44px minimum width. These are
+table cells rather than buttons, so the scan below does not see them; the
+widths are in `index.css`, under the line selection rules.
 
 ### Outside the floor today
 
@@ -1083,7 +1106,7 @@ of the source — and it has to hold for components nobody has written yet.
 | Test | What it guards |
 |---|---|
 | `web/tests/responsiveTokens.test.ts` | Both stylesheets' `@theme` values **and** both their `@custom-variant` queries still match `packages/shared`; `md:` / `xl:` / `2xl:` stay retired in both; every scanned source root is mapped to a stylesheet that redeclares the two gates (the mapping is a written claim about the build, not read out of it — a line naming the wrong stylesheet would still pass); and `touch-target` really declares the two floors the scans credit it with — in **both** stylesheets, since the `Sheet` that reaches its floor through that overlay is compiled into both. Tailwind's font-size scale is untouched in both `@theme` blocks as well: the heights in [Outside the floor today](#outside-the-floor-today) are computed against a written copy of those defaults, so overriding a step — or adding one, which the scan would read as a colour — moves every height while the register goes on agreeing with itself |
-| `web/tests/widthLadder.test.ts` | No retired rung (`md:` / `xl:` / `2xl:`, stacked or interpolated) appears in source. A retired rung compiles to nothing, which is silent; this makes it loud |
+| `web/tests/widthLadder.test.ts` | No retired rung (`md:` / `xl:` / `2xl:`, stacked or interpolated) appears in source. A retired rung compiles to nothing, which is silent; this makes it loud. Nor does any of Tailwind's default container sizes (`@sm:`, `@max-lg:`, `@3xs`…`@7xl`), which read like the ladder and are other numbers: a container query names its own size ([git-ui.md](git-ui.md#rows-follow-their-columns-width)) |
 | `web/tests/hoverReveal.test.ts` | Hover-revealed visibility carries no width prefix; both halves share one gate; every reveal pair has a `group-focus-within` twin and does not hide with `display` |
 | `web/tests/pointerEvents.test.ts` | Nothing tracks a gesture with mouse events (a bare `onMouseDown` prop is allowed — see the exception above) |
 | `web/tests/touchTarget.test.ts` | Every interactive element — `<button>`, `<a>`, or anything with `role="button"` — is held to the floors as far as its source can be read ([scope](#which-controls-the-floor-is-asked-of)): an icon-only one states a box on both axes, one with text is held to whatever height it wrote down itself, and a tag that is inline by default has to blockify or the size it wrote does not count. Neighbouring controls sit ≥8px apart, over that same set of tags, wherever their container states a gap at all. A class helper with a conditional box is read one class list per branch and **every** branch has to clear the floors, since the scan does not evaluate the argument that picks one. The same run rebuilds the register of controls the floor does not reach and fails if [Outside the floor today](#outside-the-floor-today) has drifted from it |
@@ -1134,9 +1157,9 @@ Known blind spots, recorded as they are rather than as they should be:
    belongs to the layout", so the check credits the control with the full 44 and
    stops — but a container is not an interactive element, so no assertion ever
    reads its height. A `self-stretch` button in a 32px row is 32px with the suite
-   green. Both of today's uses do hold, read one by one: `GroupHeader`'s row is
-   `min-h-[32px] pointer-coarse:min-h-11` and `FileTreeNode`'s is
-   `min-h-[44px]`. **No violation today, listed anyway** — the guard is green for
+   green. Today's uses do hold, read one by one: `FileTreeNode`'s row and the
+   Changes list's file and folder rows (`ChangedFileRow`, `ChangesSection`) are
+   all `min-h-[44px]`. **No violation today, listed anyway** — the guard is green for
    a reason it cannot verify, and that is worth knowing before the third one is
    written. (`w-full` / `flex-1` are credited the same way on the width axis,
    where a control that fills its row is rarely the one a thumb misses.)
@@ -1253,5 +1276,5 @@ overlays (hence `click`), and the drawer's open state survived a rotation into
 project-management system. A rule set that cuts across every panel in both
 front ends is none of those, so it sits beside [sidebar-ui.md](sidebar-ui.md),
 which is here for the same reason. It holds only what no other document owns:
-the 240px container floor stays in `sidebar-ui.md`, the 36px visual rung stays
+the 280px container floor stays in `sidebar-ui.md`, the 36px visual rung stays
 in `sidebar-ui.md`, and only the 44px coarse hit-area floor is defined here.

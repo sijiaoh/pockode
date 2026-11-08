@@ -153,7 +153,7 @@ and the button stays next to the thing it acts on.
 | Update failed | `AlertTriangle` `text-th-error` | See *Failed* | See *Failed* | See *Failed* |
 | Couldn't check | `Info` `text-th-text-muted` | "Version 2.1.283" / "Couldn't check for updates" | — Refresh is the retry | the server's reason |
 | Version unreadable | `AlertTriangle` `text-th-error` | "Couldn't read the version" / "Version unknown" | — | the server's reason |
-| Not installed | `CircleSlash` `text-th-text-muted` | "Not installed" / "Installs with npm" — short enough to stay whole beside the button at 320px; the dialog says the rest | **Install** (primary) | — |
+| Not installed | `CircleSlash` `text-th-text-muted` | "Not installed" / "Official installer" — short enough to stay whole beside the button at 320px; the dialog says the rest | **Install** (primary) | — |
 | Installing | Spinner | "Installing Claude 2.1.290…" (no version when the server could not read the channel's release) / "Started 0:42 ago", from two minutes on "Started 2:10 ago · up to 10 min", the server's budget; "Started earlier." when this page did not start it | — no Cancel, for the reason an update has none | why it can't be followed, if it can't |
 | Installed | `CheckCircle2` `text-th-success` | "Installed Claude 2.1.290" / "Checking for updates…" until the check read after it answers, then "Version 2.1.290 · Up to date" (or "· 2.1.291 available", with **Update** offered once the row draws the check again); "Couldn't check for updates" if that read fails | — | the failed read's reason |
 | Install failed | `AlertTriangle` `text-th-error` | See *Failed* | See *Failed* | See *Failed* |
@@ -217,22 +217,36 @@ why it is not one per phase. The elapsed time is outside it.
 
 ## Installing a missing CLI
 
-**Install** runs the server's npm install
-([code/cli-update.md](code/cli-update.md#installing-a-missing-cli)) — npm
-whichever way the user would otherwise install the CLI. It opens a
-`ConfirmDialog` (default variant), for the reasons **Update** does: Pockode
-cannot undo it, and it reaches the whole machine.
+**Install** has the server download and run the CLI's official install script
+([code/cli-update.md](code/cli-update.md#installing-a-missing-cli)), the one
+its own instructions give. It opens a `ConfirmDialog` (default variant), for
+the reasons **Update** does: Pockode cannot undo it, and it reaches every
+project on the server.
 
 > **Install Claude?**
-> Pockode runs npm install --global for the latest Claude (latest channel) on
-> the server, as the user running Pockode. It is for the whole machine: every
-> project and cluster node here will use it.
+> Pockode downloads and runs Claude's official installer on the server, for
+> the latest release (latest channel), as the user running Pockode. It installs
+> into that user's home directory, and every project and cluster node here will
+> use it.
 >
 > Cancel · **Install**
 
+- The channel is the check's, "latest" when it has none. Codex has no channel
+  setting and its check reads "latest", so the sentence is true for it as well.
+- No copy here or in the failures names npm, bash, curl or PowerShell, or a
+  URL: which script runs depends on the server's OS, which the client does not
+  know, and the server owns the URLs. Where a tool is missing, the server's
+  message names it.
+- "Into that user's home directory", not "for the whole machine": the scripts
+  write only there. Every project and cluster node here runs as that user, so
+  they all get it. That Codex's script also adds its folder to the user's shell
+  profile is left out — a manual install does the same, and the dialog has to
+  fit a phone.
+
 The message is plain text (`ConfirmDialog` takes a string), so it holds no
-link; the install page is offered where the npm route has failed instead
-(*Failed*). Opening the dialog reads the check again, and the dialog closes when
+link; the install page is offered where the official installer has failed
+instead (*Failed*). Opening the dialog reads the check again, and the dialog
+closes when
 that read — or the record — shows the CLI there, or an update or install
 already running.
 
@@ -254,7 +268,9 @@ and a failure's **Try again** opens its dialog.
 
 **Refused installs** leave no record and are drawn as a refused update start:
 the server's message in the row's notice, gone when the check or record moves.
-`npm_not_found` adds **Install instructions ↗** to the notice's footer. A
+`installer_tool_not_found` — the shell or downloader the script needs is not on
+the server's PATH, which the message names — adds **Install instructions ↗** to
+the notice's footer: the CLI's own setup page is the way round a missing tool. A
 refusal for `already_installed` shows nothing: the store reads the CLI again
 and the row moves on by itself.
 
@@ -350,10 +366,10 @@ to get past the failure, since pressing again mostly fails the same way:
 
 | Reason | Title | Body | Trailing · footer |
 |--------|-------|------|-------------------|
-| `permission_denied` | "npm can't write its global folder" | "npm's global folder belongs to another user (usually root). Give it to this user, or set a prefix in your home directory (`npm config set prefix ~/.npm-global`), add its `bin` to the PATH pockode starts with, restart pockode, then try again." — without the PATH step, following it would fail as `not_on_path` | **Try again** · Install instructions ↗, Dismiss |
-| `not_on_path` | "Claude installed, but Pockode can't find it" | "npm installed it, but the folder npm puts commands in isn't on the PATH pockode was started with. Add it (`npm prefix --global`, plus `/bin` on Linux and macOS) and restart pockode." Details start open: they name the prefix when npm said | — (installing again lands in the same folder) · Dismiss |
-| `command_failed` | "npm couldn't install Claude" | npm's last line, picked as an update's is, then "Install it on the server yourself, or try again." | **Try again** · Install instructions ↗, Dismiss |
-| `timeout` | "The install took too long" | "Pockode stopped npm after 10 minutes. Try again, or install Claude on the server yourself." | **Try again** · Dismiss |
+| `download_failed` | "Couldn't download Claude's installer" | "The server couldn't fetch it. Check the server's network and proxy settings — the download may also not be offered in your region. Then try again." Details, closed, name the URL and the error (`404 Not Found`, `no such host`, a refused redirect off HTTPS) | **Try again** · Install instructions ↗, Dismiss |
+| `not_on_path` | "Claude installed, but Pockode can't find it" | "The installer finished, but put `claude` in a folder Pockode doesn't look in — what the installer said, in the details, should name it. Add that folder to the PATH pockode starts with, then restart pockode." Details start open: they list the folders searched and the installer's last words | — (installing again lands in the same folder) · Dismiss |
+| `command_failed` | "Claude's installer failed" | The script's last line, picked as an update's is from the detail without its first line — the server's own "the official installer (…) exited with status N" — then "Install it on the server yourself, or try again." A script that printed nothing leaves the second sentence alone | **Try again** · Install instructions ↗, Dismiss |
+| `timeout` | "The install took too long" | "Pockode stopped the installer after 10 minutes. Try again, or install Claude on the server yourself." | **Try again** · Dismiss |
 | Anything else | "Install failed" | The server's message, verbatim | **Try again** · Install instructions ↗, Dismiss |
 
 - The command in the bodies — `claude update`, `codex update` — is the CLI's own
@@ -469,7 +485,8 @@ cannot be drawn without:
   account row from dimmed to its read state, without a reload. Each install
   failure reason renders its row of the table, **Try again** reopens the
   dialog, and a failed install is hidden once the check finds the CLI. Refusals
-  show the server's message (with the install page for `npm_not_found`), except
+  show the server's message (with the install page for
+  `installer_tool_not_found`), except
   `already_installed`, which reads the CLI again.
 
 ## Considered and not done
@@ -497,8 +514,13 @@ cannot be drawn without:
   records the versions its CLI integration was verified with
   ([code/cli-auth.md](code/cli-auth.md)), but newer versions usually work, and a
   warning on every update would be noise.
-- **Choosing how to install a missing CLI.** npm is the one installer both
-  CLIs share; the install page covers the rest, offered wherever npm failed.
+- **Choosing how to install a missing CLI.** Each CLI's official installer is
+  the way its own instructions lead with, and needs nothing but a shell and a
+  downloader; the install page covers the rest, offered wherever it failed.
+- **Installing with npm.** It was the first install here, as the one installer
+  both CLIs share. It needed Node.js on the server, and a global prefix the
+  server's user could write, which on Linux is often root's; its failures were
+  mostly npm's — a root-owned prefix, a prefix not on PATH — not the CLI's.
 - **Showing each session's CLI version.** Useful for "which version did this
   turn run on", but it is per-turn history, not something the update needs.
 - **Stopping sessions to let an update through.** It would trade the user's

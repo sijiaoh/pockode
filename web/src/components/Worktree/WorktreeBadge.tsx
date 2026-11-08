@@ -1,5 +1,5 @@
 import { Link } from "@tanstack/react-router";
-import { Archive, GitBranch } from "lucide-react";
+import { Archive, FolderGit2 } from "lucide-react";
 import { useWorktreeDisplay } from "../../hooks/useWorktreeDisplay";
 import { useWorktreeList } from "../../hooks/useWorktreeList";
 import { buildNavigation } from "../../lib/navigation";
@@ -109,7 +109,7 @@ function WorktreeBadge({ work, className }: Props) {
 			title={displayName}
 			aria-label={label}
 		>
-			<GitBranch
+			<FolderGit2
 				className={`size-3 shrink-0 ${isMain ? "" : "text-th-accent"}`}
 				aria-hidden="true"
 			/>

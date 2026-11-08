@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"time"
 
+	"github.com/pockode/server/htmlpage"
 	"github.com/pockode/server/session"
 )
 
@@ -399,6 +400,8 @@ type ToolResultEvent struct {
 	// result came out of, when the agent puts ids on them. See
 	// EventRecord.ProviderMessageID.
 	ProviderMessageID string
+	// HTMLPage is the page the call stored; see EventRecord.HTMLPage.
+	HTMLPage string
 }
 
 func (ToolResultEvent) EventType() EventType { return EventTypeToolResult }
@@ -427,6 +430,7 @@ func (e ToolResultEvent) ToRecord() EventRecord {
 		IsError:           e.IsError,
 		ParentToolUseID:   e.ParentToolUseID,
 		ProviderMessageID: e.ProviderMessageID,
+		HTMLPage:          e.HTMLPage,
 	}
 }
 
@@ -965,6 +969,11 @@ type MessageEvent struct {
 	// Command is the Pockode command the user typed, when Content is what it
 	// expanded to rather than what they wrote. See CommandInvocation.
 	Command *CommandInvocation
+	// HTMLAction is what a page in the chat sent on the reader's press, when
+	// Content is the text the agent was written from it (htmlpage.ActionText)
+	// rather than anything the reader typed. Still the user's message: it
+	// opens or joins a turn and drives a work like any other.
+	HTMLAction *htmlpage.Action
 	// Attachments describe the files the user sent with the message, by their
 	// ids in the session's attachment store. What the agent was handed for each
 	// is not recorded: that is the agent's business, decided at delivery.
@@ -993,6 +1002,7 @@ func (e MessageEvent) ToRecord() EventRecord {
 		Answering:   e.Answering,
 		MessageID:   e.MessageID,
 		Command:     e.Command,
+		HTMLAction:  e.HTMLAction,
 		Attachments: e.Attachments,
 	}
 }

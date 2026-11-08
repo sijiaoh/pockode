@@ -1,81 +1,95 @@
-import { ArrowDown, ArrowUp, RefreshCw } from "lucide-react";
-import type { SyncOperation } from "../../lib/gitSyncStore";
-import { describeGitSync, type GitSync } from "../../types/git";
+import {
+	ArrowDown,
+	ArrowUp,
+	type LucideIcon,
+	RefreshCw,
+	TriangleAlert,
+} from "lucide-react";
+import type { SyncStatus, SyncStep } from "../../utils/gitSyncStatus";
 import { Spinner } from "../ui";
 
 interface Props {
-	sync: GitSync;
-	/** The operation in flight, which may have been started from a sheet that is now closed. */
-	running: SyncOperation | null;
+	status: SyncStatus;
 	onClick: () => void;
 }
 
 /**
- * The branch bar's right-hand target: how this branch stands against its
- * upstream, and the way into the sync sheet.
+ * The branch bar's right-hand target: the one step this branch most needs
+ * against its upstream, and the way into the sync sheet.
  *
- * The counts are as old as the last fetch, which only the sheet has room to
- * say — so the chip is a button in every state, including "up to date".
+ * Every state only opens the sheet — "Pull 2" names the next step, it does not
+ * take it. The counts are as old as the last fetch, which only the sheet has
+ * room to say, so the chip is a button in every state, including "Synced".
  *
- * It also carries the progress of a run whose sheet has been closed: the sheet
- * is this chip expanded, so this is where the action was started from.
+ * It also carries the progress of a run whose sheet has been closed (the sheet
+ * is this chip expanded, so this is where the action was started from), and
+ * the failure of an automatic fetch, which nobody started and so has no banner;
+ * the chip, the sheet behind it and the sidebar's Git overview are where it is
+ * reported.
  */
-function SyncChip({ sync, running, onClick }: Props) {
-	const { needsPublish } = describeGitSync(sync);
-
+function SyncChip({ status, onClick }: Props) {
 	return (
 		<button
 			type="button"
 			onClick={onClick}
-			className="flex min-h-[36px] shrink-0 items-center gap-1 rounded px-2 pointer-coarse:min-h-11 text-xs text-th-text-secondary transition-colors hover:bg-th-bg-tertiary focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent"
-			aria-label={`Sync with remote, ${running ? RUNNING_STATE[running] : describeState(sync, needsPublish)}`}
+			className="flex min-h-[36px] min-w-[36px] shrink-0 items-center justify-center gap-1 rounded px-2 pointer-coarse:min-h-11 pointer-coarse:min-w-11 text-xs text-th-text-secondary transition-colors hover:bg-th-bg-tertiary focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent"
+			aria-label={`Sync with remote, ${status.description}`}
 		>
-			{/* Leads rather than replaces: the "Publish" state has no icon to take
-			    over, and the counts are still the truth until the run refreshes
-			    them. */}
-			{running && (
+			{/* Leads rather than replaces: the counts are still the truth until the
+			    run refreshes them. */}
+			{status.running && (
 				<Spinner variant="current" size="h-3.5 w-3.5" srText={null} />
 			)}
-			{needsPublish ? (
-				"Publish"
-			) : sync.behind === 0 && sync.ahead === 0 ? (
-				<RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />
-			) : (
-				<>
-					{sync.behind > 0 && (
-						<span className="flex items-center">
-							<ArrowDown className="h-3 w-3" aria-hidden="true" />
-							{sync.behind}
-						</span>
-					)}
-					{sync.ahead > 0 && (
-						<span className="flex items-center">
-							<ArrowUp className="h-3 w-3" aria-hidden="true" />
-							{sync.ahead}
-						</span>
-					)}
-				</>
+			{status.autoFetchFailed && (
+				<TriangleAlert
+					className="h-3.5 w-3.5 text-th-warning"
+					aria-hidden="true"
+				/>
 			)}
+			<StepLabel step={status.step} />
 		</button>
 	);
 }
 
-const RUNNING_STATE: Record<SyncOperation, string> = {
-	fetch: "fetching…",
-	pull: "pulling…",
-	push: "pushing…",
-};
-
-/** Spells the arrows out, since a screen reader gets nothing from them. */
-function describeState(sync: GitSync, needsPublish: boolean): string {
-	if (needsPublish) {
-		return "branch not published";
+function StepLabel({ step }: { step: SyncStep }) {
+	switch (step.kind) {
+		case "publish":
+			return "Publish";
+		// Two verbs do not fit; the sheet says it as a sentence.
+		case "diverged":
+			return (
+				<>
+					<Count icon={ArrowDown} count={step.behind} />
+					<Count icon={ArrowUp} count={step.ahead} />
+				</>
+			);
+		case "pull":
+			return <Count icon={ArrowDown} count={step.behind} verb="Pull" />;
+		case "push":
+			return <Count icon={ArrowUp} count={step.ahead} verb="Push" />;
+		case "unfetched":
+			return <Count icon={RefreshCw} verb="Fetch" />;
+		case "synced":
+			return <Count icon={RefreshCw} verb="Synced" />;
 	}
+}
 
-	const parts: string[] = [];
-	if (sync.behind > 0) parts.push(`${sync.behind} to pull`);
-	if (sync.ahead > 0) parts.push(`${sync.ahead} to push`);
-	return parts.length > 0 ? parts.join(", ") : "up to date";
+function Count({
+	icon: Icon,
+	count,
+	verb,
+}: {
+	icon: LucideIcon;
+	count?: number;
+	verb?: string;
+}) {
+	return (
+		<span className={`flex items-center ${verb ? "gap-1" : ""}`}>
+			<Icon className="h-3 w-3" aria-hidden="true" />
+			{verb && <span>{verb}</span>}
+			{count !== undefined && <span className="tabular-nums">{count}</span>}
+		</span>
+	);
 }
 
 export default SyncChip;

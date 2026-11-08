@@ -5,20 +5,24 @@ import {
 	ListChecks,
 	MessageSquare,
 } from "lucide-react";
-import { useCallback, useMemo } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { invalidateGitQueries } from "../../hooks/gitQueries";
-import { useGitChangeCount } from "../../hooks/useGitChangeCount";
+import {
+	describeChangeCount,
+	useGitChangeCount,
+} from "../../hooks/useGitChangeCount";
 import { useGitWatch } from "../../hooks/useGitWatch";
 import { useSidebarAttention } from "../../hooks/useSidebarAttention";
 import { useSidebarUIConfig } from "../../lib/registries/sidebarUIRegistry";
 import { SidebarContainerContext } from "../../lib/sidebarContainerContext";
 import { useHasUnfinishedUploads } from "../../lib/uploadStore";
 import { useIsGitRepo } from "../../lib/worktreeStore";
+import type { GitLayer, GitSegment } from "../../types/overlay";
 import { FilesTab } from "../Files";
-import { DiffTab } from "../Git";
+import { GitTab } from "../Git";
+import type { GitNavigation } from "../Git/GitTab";
 import { Sidebar, TabbedSidebar, type TabConfig } from "../Layout";
 import { ProjectTab } from "../Project";
-import { formatBadgeCount } from "../ui";
 import { WorktreeSwitcher } from "../Worktree";
 import SessionsTab from "./SessionsTab";
 
@@ -34,13 +38,18 @@ interface Props {
 	onSelectSession: (id: string, worktree: string | null) => void;
 	onCreateSession: () => void;
 	onDeleteSession: (id: string, worktree: string | null) => void;
-	onSelectDiffFile: (path: string, staged: boolean) => void;
-	/** Closes the content area when the diff it shows is discarded away. */
-	onCloseDiffFile: () => void;
-	activeDiffFile: { path: string; staged: boolean } | null;
-	onSelectCommit: (hash: string) => void;
-	activeCommitHash: string | null;
-	onSelectFile: (path: string) => void;
+	/** The Git layer the route names, and null when it names none. */
+	gitLayer: GitLayer | null;
+	gitNavigation: GitNavigation;
+	/** See `GitTab`'s `onListShownChange`. Must be stable. */
+	onGitListShownChange?: (shown: boolean) => void;
+	/**
+	 * Whether the chat's strip may show its review row, which reads the same
+	 * count as the tab's badge. Reported by the chat, which owns the gate.
+	 */
+	reviewRowCanShow?: boolean;
+	/** See `FilesTab`'s. */
+	onSelectFile: (path: string, line?: number) => void;
 	activeFilePath: string | null;
 	/** Whether that file is open in the editor rather than the viewer. */
 	activeFileEdit: boolean;
@@ -70,11 +79,10 @@ function SessionSidebar({
 	onSelectSession,
 	onCreateSession,
 	onDeleteSession,
-	onSelectDiffFile,
-	onCloseDiffFile,
-	activeDiffFile,
-	onSelectCommit,
-	activeCommitHash,
+	gitLayer,
+	gitNavigation,
+	onGitListShownChange,
+	reviewRowCanShow = false,
 	onSelectFile,
 	activeFilePath,
 	activeFileEdit,
@@ -102,10 +110,15 @@ function SessionSidebar({
 
 	// The watcher belongs to the sidebar, not to the Git tab: it feeds the tab's
 	// count badge, which has to keep up while another tab is on top. Each term
-	// below closes a case where nobody is left to read the number — including the
-	// one easily dropped, a diff still open behind a drawer the tap closed.
-	// `isOpen` is whether the sidebar is on screen in either tier, so a collapsed
-	// column stops watching exactly as a closed drawer does.
+	// below closes a case where nobody is left to read the number. `isOpen` is
+	// whether the sidebar is on screen in either tier, so a collapsed column
+	// stops watching exactly as a closed drawer does — and an extension's
+	// sidebar has no badge to feed. The Git workspace is read whatever sidebar
+	// is beside it, open or not, so it is watched on its own term: without it
+	// its lists would freeze under the reader. The chat's review row reads the
+	// count too, on a phone with the drawer closed, and is on its own term for
+	// the same reason; it is only true while no turn is open, so a turn ending
+	// resubscribes and refetches at the moment the row may appear.
 	// See docs/git-ui.md, *Who subscribes to `git.changed`*.
 	const queryClient = useQueryClient();
 	const refreshGit = useCallback(
@@ -114,7 +127,9 @@ function SessionSidebar({
 	);
 	useGitWatch({
 		onChanged: refreshGit,
-		enabled: isGitRepo && !SidebarContent && (isOpen || !!activeDiffFile),
+		enabled:
+			isGitRepo &&
+			((!SidebarContent && isOpen) || gitLayer !== null || reviewRowCanShow),
 	});
 
 	const gitChangeCount = useGitChangeCount();
@@ -125,9 +140,7 @@ function SessionSidebar({
 			gitChangeCount
 				? {
 						value: gitChangeCount,
-						label: `${formatBadgeCount(gitChangeCount)} changed ${
-							gitChangeCount === 1 ? "file" : "files"
-						}`,
+						label: describeChangeCount(gitChangeCount),
 					}
 				: undefined,
 		[gitChangeCount],
@@ -177,6 +190,36 @@ function SessionSidebar({
 		],
 	);
 
+	// At `expanded` a Git route is this tab beside the main area — the chat
+	// for a list URL, a detail for a layer — so arriving at one turns to the
+	// tab, whatever made the arrival (the chat's review row, a link, Back):
+	// without it a list URL shows nothing of Git, and a detail's lit row is off
+	// screen. Arriving is coming to Git at all, or opening a detail from a list
+	// URL, which is the chat. Moving between details, or leaving one for the
+	// chat, is not: the user may have turned elsewhere since, and is not pulled
+	// back. Waits for the repository to be confirmed, since a link opened on
+	// load arrives before the tab does.
+	const gitPlace =
+		isGitRepo && isExpanded && gitLayer
+			? gitLayer.type === "git"
+				? "list"
+				: "detail"
+			: null;
+	const [gitArrival, setGitArrival] = useState({
+		place: gitPlace,
+		count: gitPlace ? 1 : 0,
+	});
+	if (gitPlace !== gitArrival.place) {
+		const arrives =
+			gitPlace !== null && (gitArrival.place === null || gitPlace === "detail");
+		setGitArrival({
+			place: gitPlace,
+			count: gitArrival.count + (arrives ? 1 : 0),
+		});
+	}
+	const gitReveal =
+		gitArrival.count > 0 ? { tab: "git", request: gitArrival.count } : null;
+
 	const handleSelectSession = useCallback(
 		(id: string, worktree: string | null) => {
 			onSelectSession(id, worktree);
@@ -185,25 +228,30 @@ function SessionSidebar({
 		[onSelectSession, isExpanded, onClose],
 	);
 
-	const handleSelectDiffFile = useCallback(
-		(path: string, staged: boolean) => {
-			onSelectDiffFile(path, staged);
-			if (!isExpanded) onClose();
-		},
-		[onSelectDiffFile, isExpanded, onClose],
-	);
-
-	const handleSelectCommit = useCallback(
-		(hash: string) => {
-			onSelectCommit(hash);
-			if (!isExpanded) onClose();
-		},
-		[onSelectCommit, isExpanded, onClose],
+	// Below `expanded` the tab's doors and file rows lead to a page under the
+	// drawer, which closes for it; at `expanded` the list stays where it is
+	// beside what a row opens.
+	const tabGitNavigation = useMemo(
+		() =>
+			isExpanded
+				? gitNavigation
+				: {
+						...gitNavigation,
+						onSelectSegment: (segment: GitSegment) => {
+							gitNavigation.onSelectSegment(segment);
+							onClose();
+						},
+						onSelectFile: (path: string, staged: boolean) => {
+							gitNavigation.onSelectFile(path, staged);
+							onClose();
+						},
+					},
+		[gitNavigation, isExpanded, onClose],
 	);
 
 	const handleSelectFile = useCallback(
-		(path: string) => {
-			onSelectFile(path);
+		(path: string, line?: number) => {
+			onSelectFile(path, line);
 			// Closing the drawer on a phone takes the upload queue — and the tab bar
 			// that badges it — off screen with it, leaving a running upload with
 			// nothing to report to. The file still opens behind the drawer.
@@ -239,6 +287,7 @@ function SessionSidebar({
 			onClose={onClose}
 			tabs={tabs}
 			defaultTab="sessions"
+			reveal={gitReveal}
 			isExpanded={isExpanded}
 			renderHeader={({ onClose, isExpanded }) => (
 				<WorktreeSwitcher onClose={onClose} isExpanded={isExpanded} />
@@ -259,12 +308,12 @@ function SessionSidebar({
 				onCloseFile={onCloseFile}
 			/>
 			{isGitRepo && (
-				<DiffTab
-					onSelectFile={handleSelectDiffFile}
-					onSelectCommit={handleSelectCommit}
-					onCloseFile={onCloseDiffFile}
-					activeFile={activeDiffFile}
-					activeCommitHash={activeCommitHash}
+				<GitTab
+					isExpanded={isExpanded}
+					isOpen={isOpen}
+					layer={gitLayer}
+					navigation={tabGitNavigation}
+					onListShownChange={onGitListShownChange}
 				/>
 			)}
 			<ProjectTab

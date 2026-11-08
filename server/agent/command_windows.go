@@ -17,31 +17,26 @@ import (
 // the Linux one.
 const binaryNotFoundHint = " A CLI installed inside WSL is not visible to pockode.exe running on Windows."
 
-// fallbackBinaryDirs lists where the AI CLI installers put their executables.
+// fallbackBinaryDirs lists where installers put an AI CLI on Windows whichever
+// CLI it is, after the CLI's own installer directory (RegisterInstallDir).
 //
 // PATH is not the whole picture on Windows: a process keeps the environment it
 // was started with, so an installer that appended to the user PATH — which is
-// what all of these do — leaves the CLI invisible to an already-running
+// what npm's does — leaves the CLI invisible to an already-running
 // pockode.exe, and to any shell that was open at the time. The install is right
 // there; only the PATH we inherited is stale.
 func fallbackBinaryDirs() []string {
-	var dirs []string
-
 	// `npm install -g` writes its .cmd shims here, which is how both CLIs are
-	// most commonly installed.
+	// still commonly installed by hand.
 	if appData := os.Getenv("APPDATA"); appData != "" {
-		dirs = append(dirs, filepath.Join(appData, "npm"))
+		return []string{filepath.Join(appData, "npm")}
 	}
-
-	if home := os.Getenv("USERPROFILE"); home != "" {
-		// Where the native (non-npm) Claude Code installer puts claude.exe.
-		dirs = append(dirs, filepath.Join(home, ".local", "bin"))
-		// `cargo install`, which is how Codex ships outside npm.
-		dirs = append(dirs, filepath.Join(home, ".cargo", "bin"))
-	}
-
-	return dirs
+	return nil
 }
+
+// isPathKey reports whether an environment key is PATH. Windows environment
+// names are case-insensitive, and the system's own spelling is "Path".
+func isPathKey(key string) bool { return strings.EqualFold(key, "PATH") }
 
 // prepareCommandLine takes over the command line when the executable turns out
 // to be a batch file, so the arguments survive cmd.exe. See cmdline.go for why
@@ -113,3 +108,7 @@ func commandProcessor() (string, error) {
 	}
 	return "", errors.New("cannot locate cmd.exe: neither COMSPEC nor SystemRoot is set")
 }
+
+// withPWD returns env unchanged: Windows does not use PWD, which is why exec
+// leaves it alone there too.
+func withPWD(env []string, dir string) []string { return env }

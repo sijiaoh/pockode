@@ -1,6 +1,7 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useLockBodyScroll } from "../hooks/useLockBodyScroll.ts";
+import { useCoverPage } from "../hooks/usePageCover.ts";
 import { useCloseWhenCovered } from "./CoveredSurface.tsx";
 import { Spinner } from "./Spinner.tsx";
 
@@ -20,6 +21,12 @@ export interface ConfirmDialogProps {
 	 */
 	onConfirm: () => unknown;
 	onCancel: () => void;
+	/**
+	 * The confirm button is shown but refuses, while what the message speaks
+	 * of is still being read: confirming on the values from before would be
+	 * agreeing to something other than what is about to happen.
+	 */
+	confirmDisabled?: boolean;
 }
 
 /**
@@ -35,6 +42,7 @@ export function ConfirmDialog({
 	zIndex = 70,
 	onConfirm,
 	onCancel,
+	confirmDisabled = false,
 }: ConfirmDialogProps) {
 	const cancelButtonRef = useRef<HTMLButtonElement>(null);
 	const titleId = useId();
@@ -45,7 +53,7 @@ export function ConfirmDialog({
 	const runningRef = useRef(false);
 
 	const confirm = () => {
-		if (runningRef.current) return;
+		if (runningRef.current || confirmDisabled) return;
 		const result = onConfirm();
 		if (!(result instanceof Promise)) return;
 		runningRef.current = true;
@@ -69,6 +77,8 @@ export function ConfirmDialog({
 	};
 
 	useLockBodyScroll();
+	// Back on a question is "no", and is refused while Cancel is.
+	useCoverPage(true, { onBack: onCancel, refuse: running });
 	// Portalled to the body, so the surface that raised it cannot take it away
 	// by covering itself; cancelling is what a question about a surface the
 	// user has left comes to (CoveredSurface). Even while an action runs: it
@@ -95,10 +105,11 @@ export function ConfirmDialog({
 		return () => document.removeEventListener("keydown", handleKeyDown);
 	}, [onCancel]);
 
+	// No hover while refusing: a button that lights up reads as pressable.
 	const confirmButtonStyle =
 		variant === "danger"
-			? "bg-th-error text-th-text-inverse hover:opacity-90"
-			: "bg-th-accent text-th-accent-text hover:bg-th-accent-hover";
+			? `bg-th-error text-th-text-inverse ${confirmDisabled ? "" : "hover:opacity-90"}`
+			: `bg-th-accent text-th-accent-text ${confirmDisabled ? "" : "hover:bg-th-accent-hover"}`;
 
 	// Isolate all events from parent components
 	const stopEvent = (e: React.SyntheticEvent) => e.stopPropagation();
@@ -143,9 +154,9 @@ export function ConfirmDialog({
 						// aria-disabled rather than disabled: a disabled button drops
 						// focus to the body, and a failed action would hand the dialog
 						// back with nothing focused in it.
-						aria-disabled={running || undefined}
+						aria-disabled={running || confirmDisabled || undefined}
 						aria-busy={running || undefined}
-						className={`flex items-center gap-2 rounded-lg px-4 py-2 text-sm transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent aria-disabled:cursor-wait ${confirmButtonStyle}`}
+						className={`flex items-center gap-2 rounded-lg px-4 py-2 text-sm transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent ${running ? "aria-disabled:cursor-wait" : "aria-disabled:cursor-not-allowed aria-disabled:opacity-50"} ${confirmButtonStyle}`}
 					>
 						{running && (
 							<Spinner variant="current" size="h-3.5 w-3.5" srText={null} />

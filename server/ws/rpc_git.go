@@ -13,14 +13,53 @@ import (
 )
 
 // replyGitError answers a git operation that did not run, as distinct from one
-// that ran and failed. A worktree already running an operation this one would
-// collide with is the only case so far: nothing was attempted, so it is not an
-// internal error, and the client is told which operation to wait for rather
-// than being left to read it out of a sentence.
+// that ran and failed: a worktree already running an operation this one would
+// collide with, an abort of an operation that is no longer in progress, a
+// write paused by an operation in progress, a stage, unstage or discard of
+// conflicted paths, a hunk no longer in the file's diff, a branch delete whose
+// branch moved, went or is checked out, or an argument refused before git was
+// run. Nothing was attempted, so none is an internal error, and the client is
+// told what is going on rather than being left to read it out of a sentence.
 func (h *rpcMethodHandler) replyGitError(ctx context.Context, conn *jsonrpc2.Conn, id jsonrpc2.ID, err error) {
 	var busy *git.BusyError
 	if errors.As(err, &busy) {
 		h.replyErrorData(ctx, conn, id, rpc.CodeGitBusy, err.Error(), rpc.GitBusyData{Operation: busy.Running})
+		return
+	}
+	var changed *git.OperationChangedError
+	if errors.As(err, &changed) {
+		h.replyErrorData(ctx, conn, id, rpc.CodeGitOperationChanged, err.Error(), rpc.GitOperationChangedData{Current: changed.Current})
+		return
+	}
+	var inProgress *git.OperationInProgressError
+	if errors.As(err, &inProgress) {
+		h.replyErrorData(ctx, conn, id, rpc.CodeGitOperationInProgress, err.Error(), rpc.GitOperationInProgressData{Kind: inProgress.Kind})
+		return
+	}
+	var conflicted *git.ConflictedPathsError
+	if errors.As(err, &conflicted) {
+		h.replyErrorData(ctx, conn, id, rpc.CodeGitConflicted, err.Error(), rpc.GitConflictedData{Action: conflicted.Action, Paths: conflicted.Paths})
+		return
+	}
+	if errors.Is(err, git.ErrHunkStale) {
+		h.replyError(ctx, conn, id, rpc.CodeGitHunkStale, err.Error())
+		return
+	}
+	if errors.Is(err, git.ErrBranchChanged) || errors.Is(err, git.ErrBranchNotFound) {
+		h.replyErrorData(ctx, conn, id, rpc.CodeGitBranchChanged, err.Error(), rpc.GitBranchChangedData{Gone: errors.Is(err, git.ErrBranchNotFound)})
+		return
+	}
+	var checkedOut *git.BranchCheckedOutError
+	if errors.As(err, &checkedOut) {
+		h.replyErrorData(ctx, conn, id, rpc.CodeGitBranchCheckedOut, err.Error(), rpc.GitBranchCheckedOutData{Worktree: checkedOut.Worktree})
+		return
+	}
+	if errors.Is(err, git.ErrInvalidArgument) {
+		h.replyError(ctx, conn, id, jsonrpc2.CodeInvalidParams, err.Error())
+		return
+	}
+	if errors.Is(err, git.ErrHunkUnsupported) {
+		h.replyError(ctx, conn, id, jsonrpc2.CodeInvalidParams, err.Error())
 		return
 	}
 	h.replyError(ctx, conn, id, jsonrpc2.CodeInternalError, err.Error())
@@ -140,7 +179,7 @@ func (h *rpcMethodHandler) handleGitSubscribe(ctx context.Context, conn *jsonrpc
 }
 
 func (h *rpcMethodHandler) handleGitAdd(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request, wt *worktree.Worktree) {
-	var params rpc.GitPathsParams
+	var params rpc.GitAddParams
 	if err := unmarshalParams(req, &params); err != nil {
 		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "invalid params")
 		return
@@ -156,7 +195,11 @@ func (h *rpcMethodHandler) handleGitAdd(ctx context.Context, conn *jsonrpc2.Conn
 		return
 	}
 
-	if err := git.Add(workDir, params.Paths...); err != nil {
+	add := git.Add
+	if params.Resolve {
+		add = git.Resolve
+	}
+	if err := add(workDir, params.Paths...); err != nil {
 		h.replyGitError(ctx, conn, req.ID, err)
 		return
 	}
@@ -190,6 +233,36 @@ func (h *rpcMethodHandler) handleGitReset(ctx context.Context, conn *jsonrpc2.Co
 
 	if err := conn.Reply(ctx, req.ID, nil); err != nil {
 		h.log.Error("failed to send git reset response", "error", err)
+	}
+}
+
+// handleGitHunk is git.hunk.stage (staged false) and git.hunk.unstage (staged
+// true).
+func (h *rpcMethodHandler) handleGitHunk(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request, wt *worktree.Worktree, staged bool) {
+	var params rpc.GitHunkParams
+	if err := unmarshalParams(req, &params); err != nil {
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "invalid params")
+		return
+	}
+	if params.Path == "" || params.HunkID == "" {
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "path and hunk_id required")
+		return
+	}
+	if !h.validateGitPaths(ctx, conn, req, wt.WorkDir, []string{params.Path}) {
+		return
+	}
+
+	apply := git.StageHunk
+	if staged {
+		apply = git.UnstageHunk
+	}
+	if err := apply(wt.WorkDir, params.Path, params.HunkID); err != nil {
+		h.replyGitError(ctx, conn, req.ID, err)
+		return
+	}
+
+	if err := conn.Reply(ctx, req.ID, nil); err != nil {
+		h.log.Error("failed to send git hunk response", "error", err, "staged", staged)
 	}
 }
 
@@ -257,15 +330,28 @@ func (h *rpcMethodHandler) handleGitLog(ctx context.Context, conn *jsonrpc2.Conn
 		return
 	}
 
-	commits, err := git.Log(wt.WorkDir, params.Limit)
-	if err != nil {
-		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInternalError, err.Error())
+	if !git.IsHistoryScope(params.Scope) {
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "unknown scope: "+params.Scope)
+		return
+	}
+	if params.Path != "" && !h.validateGitPaths(ctx, conn, req, wt.WorkDir, []string{params.Path}) {
 		return
 	}
 
-	result := rpc.GitLogResult{Commits: commits}
+	page, err := git.History(wt.WorkDir, git.HistoryQuery{
+		Scope:  git.HistoryScope(params.Scope),
+		Branch: params.Branch,
+		Grep:   params.Query,
+		Path:   params.Path,
+		Limit:  params.Limit,
+		Cursor: params.Cursor,
+	})
+	if err != nil {
+		h.replyGitError(ctx, conn, req.ID, err)
+		return
+	}
 
-	if err := conn.Reply(ctx, req.ID, result); err != nil {
+	if err := conn.Reply(ctx, req.ID, page); err != nil {
 		h.log.Error("failed to send git log response", "error", err)
 	}
 }
@@ -393,13 +479,58 @@ func (h *rpcMethodHandler) handleGitBranchCreate(ctx context.Context, conn *json
 		return
 	}
 
-	if err := git.CreateBranch(wt.WorkDir, params.Name); err != nil {
+	if err := git.CreateBranch(wt.WorkDir, params.Name, params.Start); err != nil {
 		h.replyGitError(ctx, conn, req.ID, err)
 		return
 	}
 
 	if err := conn.Reply(ctx, req.ID, nil); err != nil {
 		h.log.Error("failed to send git branch create response", "error", err)
+	}
+}
+
+func (h *rpcMethodHandler) handleGitBranchInspect(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request, wt *worktree.Worktree) {
+	var params rpc.GitBranchInspectParams
+	if err := unmarshalParams(req, &params); err != nil {
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "invalid params")
+		return
+	}
+
+	if params.Name == "" {
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "name required")
+		return
+	}
+
+	inspection, err := git.InspectBranch(wt.WorkDir, params.Name)
+	if err != nil {
+		h.replyGitError(ctx, conn, req.ID, err)
+		return
+	}
+
+	if err := conn.Reply(ctx, req.ID, inspection); err != nil {
+		h.log.Error("failed to send git branch inspect response", "error", err)
+	}
+}
+
+func (h *rpcMethodHandler) handleGitBranchDelete(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request, wt *worktree.Worktree) {
+	var params rpc.GitBranchDeleteParams
+	if err := unmarshalParams(req, &params); err != nil {
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "invalid params")
+		return
+	}
+
+	if params.Name == "" || params.Tip == "" {
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "name and tip required")
+		return
+	}
+
+	if err := git.DeleteBranch(wt.WorkDir, params.Name, params.Tip); err != nil {
+		h.replyGitError(ctx, conn, req.ID, err)
+		return
+	}
+
+	if err := conn.Reply(ctx, req.ID, nil); err != nil {
+		h.log.Error("failed to send git branch delete response", "error", err)
 	}
 }
 
@@ -450,5 +581,27 @@ func (h *rpcMethodHandler) handleGitPush(ctx context.Context, conn *jsonrpc2.Con
 
 	if err := conn.Reply(ctx, req.ID, nil); err != nil {
 		h.log.Error("failed to send git push response", "error", err)
+	}
+}
+
+func (h *rpcMethodHandler) handleGitAbort(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request, wt *worktree.Worktree) {
+	var params rpc.GitAbortParams
+	if err := unmarshalParams(req, &params); err != nil {
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "invalid params")
+		return
+	}
+	if !git.IsOperationKind(params.Kind) {
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "unknown operation: "+params.Kind)
+		return
+	}
+
+	headKept, err := git.Abort(wt.WorkDir, params.Kind)
+	if err != nil {
+		h.replyGitError(ctx, conn, req.ID, err)
+		return
+	}
+
+	if err := conn.Reply(ctx, req.ID, rpc.GitAbortResult{HeadKept: headKept}); err != nil {
+		h.log.Error("failed to send git abort response", "error", err)
 	}
 }

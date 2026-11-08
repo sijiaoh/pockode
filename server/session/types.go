@@ -9,6 +9,10 @@ import (
 
 var ErrSessionNotFound = errors.New("session not found")
 
+// ErrSessionStarted refuses a change to something fixed when the first message
+// was delivered (SessionMeta.Started).
+var ErrSessionStarted = errors.New("session has already started")
+
 // AgentType identifies which AI agent backend a session uses.
 type AgentType string
 
@@ -179,6 +183,10 @@ type ForkSpec struct {
 	// Their request ids are unchanged: the fork inherits the questions, it does
 	// not ask them again.
 	Unanswered []PendingQuestion
+	// PagesThrough is the highest html page the copied records name
+	// (htmlpage.HighestInRecords). The fork is given the source's pages up to
+	// it, and numbers its own past every page the source has (htmlpage.Clone).
+	PagesThrough int
 }
 
 // SessionMeta holds metadata for a chat session.
@@ -201,6 +209,17 @@ type SessionMeta struct {
 	// created before this field existed carries — means the CLI is passed no
 	// effort level and keeps its own default.
 	Effort string `json:"effort"`
+	// HTMLFirst is how the agent is set up: false is an ordinary chat, true adds
+	// agent.HTMLFirstGuidance to its system prompt, telling it to say things
+	// with pages.
+	// It is a draft until Started and fixed from then on — see SetHTMLFirst.
+	HTMLFirst bool `json:"html_first,omitempty"`
+	// Started is set immediately before the first message is delivered to the
+	// agent, and never cleared. It is what fixes HTMLFirst, and it cannot be
+	// Activated: that is set when the agent first *answers*, so between the
+	// first delivery and the first output a switch would still be accepted for
+	// an agent already told the other guidance. A fork is started from birth.
+	Started bool `json:"started"`
 	// Turn is what this session is doing, and the only place that is recorded.
 	// It is written by nothing but the reducer (see turn.go), and everything that
 	// used to be a flag of its own — the session's needs_input, the process's

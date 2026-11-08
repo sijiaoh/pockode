@@ -1,4 +1,10 @@
-import type { GitHead, GitSync } from "../types/git";
+import type {
+	GitBranch,
+	GitBranches,
+	GitHead,
+	GitRemoteBranch,
+	GitSync,
+} from "../types/git";
 
 /**
  * A branch in sync with its upstream, the state every other one is a deviation
@@ -24,6 +30,49 @@ export function makeHead(overrides: Partial<GitHead> = {}): GitHead {
 		hash: "abc1234",
 		detached: false,
 		message: "Add branch bar to git panel",
+		...overrides,
+	};
+}
+
+/** A local branch nobody else holds, with nothing to say against main. */
+export function makeBranch(
+	name: string,
+	overrides: Partial<GitBranch> = {},
+): GitBranch {
+	return {
+		name,
+		current: false,
+		committed_at: new Date().toISOString(),
+		committer: "Test",
+		...overrides,
+	};
+}
+
+/** `origin/<name>`, with no local branch of that name. */
+export function makeRemoteBranch(
+	name: string,
+	overrides: Partial<GitRemoteBranch> = {},
+): GitRemoteBranch {
+	return {
+		ref: `origin/${name}`,
+		name,
+		committed_at: new Date().toISOString(),
+		committer: "Test",
+		...overrides,
+	};
+}
+
+/** No branches listed beyond HEAD, in sync with its upstream. */
+export function makeBranches(
+	overrides: Partial<GitBranches> = {},
+): GitBranches {
+	return {
+		head: makeHead(),
+		local: [],
+		remote_only: [],
+		sync: makeSync(),
+		default_branch: "main",
+		recent: [],
 		...overrides,
 	};
 }

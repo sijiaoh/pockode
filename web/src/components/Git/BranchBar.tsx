@@ -1,50 +1,85 @@
 import { GitBranch } from "lucide-react";
 import { useState } from "react";
-import {
-	useGitBranchActions,
-	useGitBranches,
-} from "../../hooks/useGitBranches";
+import type { BranchMergeHandoff } from "../../hooks/useBranchMergeHandoff";
+import { useGitBranches } from "../../hooks/useGitBranches";
+import { useGitStatus } from "../../hooks/useGitStatus";
+import { gitCheckoutActions, useCheckoutRun } from "../../lib/gitCheckoutStore";
+import { rebasingBranch } from "../../lib/gitOperation";
 import { gitSyncActions, useSyncRun } from "../../lib/gitSyncStore";
 import { useWorktreeStore } from "../../lib/worktreeStore";
 import type { GitHead } from "../../types/git";
+import { describeSyncStatus, hasSyncStatus } from "../../utils/gitSyncStatus";
 import BranchName from "./BranchName";
-import BranchSheet from "./BranchSheet";
 import ErrorBanner from "./ErrorBanner";
-import NewBranchSheet from "./NewBranchSheet";
+import HeadPlaceholder from "./HeadPlaceholder";
 import SyncChip from "./SyncChip";
 import SyncSheet from "./SyncSheet";
 
+interface Props {
+	/**
+	 * Whether the list under the bar is the Branches list, which pins the
+	 * branch failures itself; under any other list they are shown here.
+	 */
+	branchFailureSurface: boolean;
+	/** Its failure follows the same rule as a switch's. */
+	mergeHandoff: Pick<BranchMergeHandoff, "error" | "dismissError">;
+}
+
 /**
- * The panel's fixed top row: which branch this worktree is on, and the way into
- * the branch sheet.
+ * The top row of the Git workspace's lists: which branch this worktree is on,
+ * and the sync chip. A narrow detail layer goes without it; what it reports is
+ * kept until the user is back on a list.
  *
- * It renders outside DiffTab's loading/error branch on purpose — a failing
+ * The name is not pressable: the segment control right under the bar is the
+ * way to Branches, and the bar names and reports rather than navigates.
+ *
+ * It renders outside the lists' loading/error branches on purpose — a failing
  * git.status must not take branch identity down with it.
  */
-function BranchBar() {
+function BranchBar({ branchFailureSurface, mergeHandoff }: Props) {
 	const { data: branches, isLoading, error } = useGitBranches();
-	const { checkoutMutation, createMutation } = useGitBranchActions();
-	const [sheet, setSheet] = useState<"branches" | "new" | "sync" | null>(null);
+	const [syncSheetOpen, setSyncSheetOpen] = useState(false);
 	const worktree = useWorktreeStore((s) => s.current);
-	const { running, outcome } = useSyncRun(worktree);
+	const run = useSyncRun(worktree);
+	const { outcome } = run;
+	const checkoutRun = useCheckoutRun(worktree);
+	// A rebase detaches HEAD: `detached @ hash` would be true and useless.
+	const rebasing = rebasingBranch(useGitStatus().data?.operation);
 
 	const head = branches?.head;
 	const sync = branches?.sync;
-	// A detached HEAD tracks nothing, and a repository without a remote has
-	// nothing to sync with: in both cases the chip would have no state to show.
-	const showChip = Boolean(sync?.has_remote) && head?.detached === false;
+	const showChip = hasSyncStatus(head, sync);
 
 	// A sync failure belongs in the sheet whenever the sheet is on screen, and
 	// under the bar whenever it is not — one outcome, shown wherever the user is.
-	// The test is whether the sheet actually renders, not whether it is selected:
+	// The test is whether the sheet actually renders, not whether it was opened:
 	// without `sync` there is no sheet to hold the message.
-	const syncSheetOpen = sheet === "sync" && Boolean(sync);
+	const syncSheetShown = syncSheetOpen && Boolean(sync);
 	// Deliberately not gated on showChip either. A run that ends after HEAD went
 	// detached, or after the branch query failed, has lost its chip but still has
 	// a failure to report; losing the spinner is acceptable, losing the error is
 	// a silent failure.
+	// An automatic fetch's failure is the exception: nobody asked for that run,
+	// so it is marked on the chip and explained in the sheet, never a banner.
+	// Hiding the chip hides the mark, and with it nothing: the mark says the
+	// counts are stale, and without the chip there are no counts on screen. The
+	// outcome stays in the store, so the mark is back with the chip.
 	const syncError =
-		!syncSheetOpen && outcome?.kind === "error" ? outcome : null;
+		!syncSheetShown && outcome?.kind === "error" && !run.auto ? outcome : null;
+	// The same rule for a branch switch, which can be walked away from while it
+	// runs: over the Branches list it is pinned there, over any other list it
+	// is shown under the bar that names the branch the user is actually on.
+	// One failure, in one place. The list draws it only once there are
+	// branches to draw (the read failed with nothing cached leaves it only that
+	// failure), so then it is shown here.
+	const listHoldsFailures = branchFailureSurface && Boolean(branches);
+	const checkoutError = listHoldsFailures ? null : checkoutRun.error;
+	// A delete's failure follows the same rule: its confirm closes when the
+	// user navigates away, and the request keeps running.
+	const deleteError = listHoldsFailures ? null : checkoutRun.deleteError;
+	// And a merge handoff's: the user can move to another segment while its
+	// new session is being created.
+	const handoffError = listHoldsFailures ? null : mergeHandoff.error;
 
 	return (
 		<>
@@ -52,82 +87,34 @@ function BranchBar() {
 				{/*
 				 * Data first: a background refetch that fails still leaves the branch
 				 * name we already have, and replacing it with an error would take the
-				 * bar down for exactly the reason it renders outside DiffTab's error
-				 * branch in the first place.
+				 * bar down for exactly the reason it renders outside the lists' error
+				 * branches in the first place.
 				 */}
 				{!head ? (
-					isLoading ? (
-						<div className="flex flex-1 items-center gap-2 px-2">
-							<div className="h-4 w-4 shrink-0 animate-pulse rounded bg-th-text-muted/20" />
-							<div className="h-4 flex-1 animate-pulse rounded bg-th-text-muted/20" />
-						</div>
-					) : (
-						<div className="flex min-w-0 flex-1 items-center gap-2 px-2 text-sm text-th-error">
-							<GitBranch className="h-4 w-4 shrink-0" aria-hidden="true" />
-							<span
-								className="truncate"
-								title={error instanceof Error ? error.message : undefined}
-							>
-								Branch unavailable
-							</span>
-						</div>
-					)
+					<HeadPlaceholder isLoading={isLoading} error={error} />
 				) : (
-					<button
-						type="button"
-						onClick={() => setSheet("branches")}
-						className="flex min-h-[36px] min-w-0 flex-1 items-center gap-2 rounded px-2 text-th-text-primary pointer-coarse:min-h-11 transition-colors hover:bg-th-bg-tertiary focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent"
-						aria-label={`Switch branch, currently ${headLabel(head)}`}
-					>
-						<GitBranch
-							className="h-4 w-4 shrink-0 text-th-text-muted"
-							aria-hidden="true"
-						/>
-						<BranchName name={headLabel(head)} />
-					</button>
+					<div className="flex min-w-0 flex-1 items-center gap-2 px-2 text-th-text-primary">
+						<CurrentBranch head={head} rebasing={rebasing} />
+					</div>
 				)}
 
 				{showChip && sync && (
 					<SyncChip
-						sync={sync}
-						running={running}
-						onClick={() => setSheet("sync")}
+						status={describeSyncStatus(sync, run)}
+						onClick={() => setSyncSheetOpen(true)}
 					/>
 				)}
 
-				{sheet === "branches" && branches && (
-					<BranchSheet
-						branches={branches}
-						onClose={() => setSheet(null)}
-						onCheckout={async (branch) => {
-							await checkoutMutation.mutateAsync(branch);
-							setSheet(null);
-						}}
-						onNewBranch={() => setSheet("new")}
-					/>
-				)}
-
-				{sheet === "sync" && sync && (
-					<SyncSheet sync={sync} onClose={() => setSheet(null)} />
-				)}
-
-				{sheet === "new" && head && (
-					<NewBranchSheet
-						base={headLabel(head)}
-						// Back to the branch list it was opened from; only a successful
-						// create closes the flow outright.
-						onClose={() => setSheet("branches")}
-						onCreate={async (name) => {
-							await createMutation.mutateAsync(name);
-							setSheet(null);
-						}}
-					/>
+				{syncSheetShown && sync && (
+					<SyncSheet sync={sync} onClose={() => setSyncSheetOpen(false)} />
 				)}
 			</div>
 
-			{/* Its own banner rather than a shared slot: the banner DiffTab renders
-			    below this one for its inline actions is a different unacknowledged
-			    failure, and hiding either of them would be hiding a failure. */}
+			{/* A banner each rather than a shared slot: a sync's failure, a
+			    switch's, a branch delete's, a merge handoff's, and the one
+			    ChangesSection renders further down for its inline actions are
+			    different unacknowledged failures, and hiding any of them would be
+			    hiding a failure. */}
 			{syncError && (
 				<ErrorBanner
 					summary={syncError.summary}
@@ -135,11 +122,71 @@ function BranchBar() {
 					onDismiss={() => gitSyncActions.dismissOutcome(worktree)}
 				/>
 			)}
+			{checkoutError && (
+				<ErrorBanner
+					summary={checkoutError.summary}
+					details={checkoutError.detail}
+					onDismiss={() => gitCheckoutActions.dismissError(worktree)}
+				/>
+			)}
+			{deleteError && (
+				<ErrorBanner
+					summary={deleteError.summary}
+					details={deleteError.detail}
+					onDismiss={() => gitCheckoutActions.dismissDeleteError(worktree)}
+				/>
+			)}
+			{handoffError && (
+				<ErrorBanner
+					summary={handoffError.summary}
+					details={handoffError.detail}
+					onDismiss={mergeHandoff.dismissError}
+				/>
+			)}
 		</>
 	);
 }
 
-function headLabel(head: GitHead): string {
+/**
+ * The branch icon and HEAD's name, as plain text: the top bar and the
+ * sidebar's overview name the branch the same way. Each caller keeps its own
+ * row around it.
+ */
+export function CurrentBranch({
+	head,
+	rebasing,
+}: {
+	head: GitHead;
+	rebasing: string | null;
+}) {
+	return (
+		<>
+			<GitBranch
+				className="h-4 w-4 shrink-0 text-th-text-muted"
+				aria-hidden="true"
+			/>
+			<span className="sr-only">Current branch: </span>
+			<HeadName head={head} rebasing={rebasing} />
+		</>
+	);
+}
+
+/** HEAD's name, or the branch a rebase is rewriting while it runs. */
+function HeadName({
+	head,
+	rebasing,
+}: {
+	head: GitHead;
+	rebasing: string | null;
+}) {
+	return rebasing ? (
+		<BranchName name={rebasing} suffix="· rebasing" />
+	) : (
+		<BranchName name={headLabel(head)} />
+	);
+}
+
+export function headLabel(head: GitHead): string {
 	return head.detached ? `detached @ ${head.hash}` : head.branch;
 }
 

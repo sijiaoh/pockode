@@ -32,6 +32,38 @@ describe("gitRefusalSummary", () => {
 		).toBe("This project is no longer a git repository.");
 	});
 
+	// server/rpc/types.go's CodeGitOperationInProgress and CodeGitConflicted.
+	it("names the operation a paused write was refused for", () => {
+		expect(
+			gitRefusalSummary(
+				new JSONRPCErrorException("can't commit during a rebase", -32006, {
+					kind: "rebase",
+				}),
+			),
+		).toBe(
+			"This worktree is in the middle of a rebase. Abort it, or let the agent finish it.",
+		);
+	});
+
+	it("names the write and the conflicted paths it was refused for", () => {
+		expect(
+			gitRefusalSummary(
+				new JSONRPCErrorException("can't discard a.ts", -32007, {
+					action: "discard",
+					paths: ["a.ts", "b.ts"],
+				}),
+			),
+		).toBe("Nothing was discarded: a.ts, b.ts have unresolved conflicts.");
+		expect(
+			gitRefusalSummary(
+				new JSONRPCErrorException("can't stage a.ts", -32007, {
+					action: "stage",
+					paths: ["a.ts"],
+				}),
+			),
+		).toBe("Nothing was staged: a.ts has unresolved conflicts.");
+	});
+
 	// The refusal is told apart by its code: git's own failures are prose the
 	// panel must not try to read, and matching on English would break the moment
 	// either side rewords a sentence.

@@ -53,6 +53,7 @@ import AttachmentStrip from "./AttachmentStrip";
 import AuthFailureNotice from "./AuthFailureNotice";
 import { DiscardedNote, DiscardedSummary } from "./DiscardedMessage";
 import { HeaderlessMainBlock } from "./HeaderlessMainBlock";
+import { HtmlActionBubble } from "./HtmlActionBubble";
 import { HtmlRenderCard } from "./HtmlRenderCard";
 import MessageActions from "./MessageActions";
 import MessageMenuTrigger, { type ForkBlocked } from "./MessageMenuTrigger";
@@ -920,6 +921,12 @@ interface ContentPartItemProps {
 	 * subagent's words are a note, not a message.
 	 */
 	depth?: number;
+	/**
+	 * Whether a page may be drawn wider than the column, which it can only be
+	 * centered under when the column is the bare reading column: an avatar
+	 * beside it or a bubble around it would be drawn over or broken out of.
+	 */
+	wideCards?: boolean;
 }
 
 /**
@@ -941,6 +948,7 @@ function ContentPartItem(props: ContentPartItemProps) {
 		onAnswerQuestion,
 		promptError,
 		depth = 0,
+		wideCards = false,
 	} = props;
 	if (part.type === "text") {
 		return (
@@ -1013,7 +1021,15 @@ function ContentPartItem(props: ContentPartItemProps) {
 		);
 	}
 	if (isHtmlRenderCard(part)) {
-		return <HtmlRenderCard run={part.tool} />;
+		// Only a reply's own page is wider than the column: inside a subagent's
+		// body it stays in the box it was drawn in.
+		return (
+			<HtmlRenderCard
+				run={part.tool}
+				sessionId={sessionId}
+				wide={wideCards && depth === 0}
+			/>
+		);
 	}
 	return (
 		<ToolCallItem
@@ -1429,6 +1445,20 @@ const MessageItem = memo(function MessageItem({
 				item
 			);
 		}
+		if (message.htmlAction) {
+			return (
+				<div className="flex items-end justify-end gap-2">
+					{slot}
+					<HtmlActionBubble
+						id={message.id}
+						htmlAction={message.htmlAction}
+						discarded={isDiscarded}
+						className={userBubbleClass}
+					/>
+					{UserAvatar && <UserAvatar className="size-10 shrink-0" />}
+				</div>
+			);
+		}
 		return (
 			<div className="flex items-end justify-end gap-2">
 				{slot}
@@ -1533,6 +1563,7 @@ const MessageItem = memo(function MessageItem({
 										onPermissionRespond={onPermissionRespond}
 										onAnswerQuestion={onAnswerQuestion}
 										promptError={promptError}
+										wideCards={!AssistantAvatar && !assistantBubbleClass}
 									/>
 								)
 							}

@@ -52,7 +52,12 @@ type StartOptions struct {
 	// Effort is the agent-specific reasoning effort level
 	// (session.EffortsForAgent). Empty means pass nothing and let the CLI keep
 	// its own default.
-	Effort     string
+	Effort string
+	// HTMLFirst starts the session with agent.HTMLFirstGuidance in its system
+	// prompt, on top of agent.Guidance; the tools, and the MCP server's
+	// instructions, are the same. The system prompt is fixed when the CLI
+	// starts, so this has to be fixed for the session's life too.
+	HTMLFirst  bool
 	DisableMCP bool // skip MCP config (for testing)
 
 	// OnUsage receives what the CLI reports about the session's consumption, as

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { makeSync } from "../test/gitFixtures";
 import type { FileStatus, GitStatus, GitSync, GitSyncState } from "./git";
 import {
+	allConflicted,
 	describeCommitAction,
 	describeDiscard,
 	describeGitSync,
@@ -121,7 +122,7 @@ describe("describeCommitAction", () => {
 
 	it("offers the staged count", () => {
 		expect(describeCommitAction(status(["a.ts", "b.ts"], []))).toEqual({
-			label: "Commit (2)",
+			label: "Commit 2 files",
 			enabled: true,
 			hint: null,
 		});
@@ -172,6 +173,43 @@ describe("describeCommitAction", () => {
 		});
 	});
 
+	// Committing would continue the operation, or insert a commit into a
+	// rebase; the reason is visible, since nothing beside the button says it.
+	it("disables commit with a visible reason during an operation", () => {
+		expect(
+			describeCommitAction({
+				...status(["a.ts"], []),
+				operation: { kind: "rebase" },
+			}),
+		).toEqual({
+			label: "Commit",
+			enabled: false,
+			hint: { text: "Can't commit during a rebase.", alreadyOnScreen: false },
+		});
+	});
+
+	// A stash that did not apply cleanly leaves conflicts with no operation;
+	// git refuses to commit over them, and they are not files to count.
+	it("disables commit over conflicts left without an operation", () => {
+		expect(
+			describeCommitAction({
+				staged: [
+					{ path: "a.ts", status: "M" },
+					{ path: "c.ts", status: "U" },
+				],
+				unstaged: [{ path: "c.ts", status: "U" }],
+				conflicted: ["c.ts"],
+			}),
+		).toEqual({
+			label: "Commit",
+			enabled: false,
+			hint: {
+				text: "Resolve the conflicts to commit.",
+				alreadyOnScreen: false,
+			},
+		});
+	});
+
 	// Nothing to commit and nothing on its way to being committed: the bar itself
 	// is what goes away, not just its button.
 	it("renders no bar on a clean tree", () => {
@@ -205,6 +243,22 @@ describe("stagedSubmodules", () => {
 		).toEqual([{ path: "vendor/sdk", count: 2 }]);
 	});
 
+	it("leaves a submodule's conflicts out of its count", () => {
+		expect(
+			stagedSubmodules({
+				staged: [],
+				unstaged: [],
+				submodules: {
+					sdk: {
+						staged: [{ path: "a.ts", status: "U" }],
+						unstaged: [{ path: "a.ts", status: "U" }],
+						conflicted: ["a.ts"],
+					},
+				},
+			}),
+		).toEqual([]);
+	});
+
 	it("is empty when nothing is staged in a submodule", () => {
 		expect(
 			stagedSubmodules({
@@ -215,6 +269,28 @@ describe("stagedSubmodules", () => {
 	});
 });
 
+describe("allConflicted", () => {
+	it("names nested submodules' conflicts by their full path", () => {
+		expect(
+			allConflicted({
+				staged: [],
+				unstaged: [],
+				conflicted: ["root.ts"],
+				submodules: {
+					sdk: {
+						staged: [],
+						unstaged: [],
+						conflicted: ["a.ts"],
+						submodules: {
+							inner: { staged: [], unstaged: [], conflicted: ["b.ts"] },
+						},
+					},
+				},
+			}),
+		).toEqual(["root.ts", "sdk/a.ts", "sdk/inner/b.ts"]);
+	});
+});
+
 describe("describeDiscard", () => {
 	const modified = (path: string): FileStatus => ({ path, status: "M" });
 	const untracked = (path: string): FileStatus => ({ path, status: "?" });
@@ -222,6 +298,7 @@ describe("describeDiscard", () => {
 	const cases: {
 		name: string;
 		files: FileStatus[];
+		keepsStaged?: boolean;
 		title: string;
 		message: string;
 		confirmLabel: string;
@@ -232,6 +309,18 @@ describe("describeDiscard", () => {
 			files: [modified("src/foo.ts")],
 			title: "Discard changes?",
 			message: "Your edits to src/foo.ts will be lost. This cannot be undone.",
+			confirmLabel: "Discard",
+			failureSummary: "Discard failed.",
+		},
+		{
+			// Discard takes the unstaged side only, so "your edits" would claim the
+			// staged ones too.
+			name: "a single partly staged file loses only its unstaged edits",
+			files: [modified("src/foo.ts")],
+			keepsStaged: true,
+			title: "Discard unstaged changes?",
+			message:
+				"Your unstaged edits to src/foo.ts will be lost. Its staged changes are kept. This cannot be undone.",
 			confirmLabel: "Discard",
 			failureSummary: "Discard failed.",
 		},
@@ -254,17 +343,18 @@ describe("describeDiscard", () => {
 				modified("c.ts"),
 				untracked("notes.txt"),
 			],
-			title: "Discard all changes?",
+			title: "Discard unstaged changes?",
 			message:
-				"3 files will lose their edits and 1 untracked file will be deleted. This cannot be undone.",
+				"The unstaged edits in 3 files will be lost and 1 untracked file will be deleted. Staged changes are kept. This cannot be undone.",
 			confirmLabel: "Discard",
 			failureSummary: "Discard failed.",
 		},
 		{
 			name: "several tracked files",
 			files: [modified("a.ts"), modified("b.ts")],
-			title: "Discard all changes?",
-			message: "2 files will lose their edits. This cannot be undone.",
+			title: "Discard unstaged changes?",
+			message:
+				"The unstaged edits in 2 files will be lost. Staged changes are kept. This cannot be undone.",
 			confirmLabel: "Discard",
 			failureSummary: "Discard failed.",
 		},
@@ -272,9 +362,9 @@ describe("describeDiscard", () => {
 			// Nothing is discarded here, so the wording says what it does.
 			name: "several untracked files",
 			files: [untracked("a.txt"), untracked("b.txt")],
-			title: "Delete all files?",
+			title: "Delete untracked files?",
 			message:
-				"2 untracked files will be permanently deleted. This cannot be undone.",
+				"2 untracked files will be permanently deleted. Staged changes are kept. This cannot be undone.",
 			confirmLabel: "Delete",
 			failureSummary: "Delete failed.",
 		},
@@ -291,9 +381,9 @@ describe("describeDiscard", () => {
 		{
 			name: "one tracked and one untracked agree in number",
 			files: [modified("a.ts"), untracked("b.txt")],
-			title: "Discard all changes?",
+			title: "Discard unstaged changes?",
 			message:
-				"1 file will lose its edits and 1 untracked file will be deleted. This cannot be undone.",
+				"The unstaged edits in 1 file will be lost and 1 untracked file will be deleted. Staged changes are kept. This cannot be undone.",
 			confirmLabel: "Discard",
 			failureSummary: "Discard failed.",
 		},
@@ -311,7 +401,7 @@ describe("describeDiscard", () => {
 
 	for (const c of cases) {
 		it(c.name, () => {
-			expect(describeDiscard(c.files)).toEqual({
+			expect(describeDiscard(c.files, c.keepsStaged)).toEqual({
 				title: c.title,
 				message: c.message,
 				confirmLabel: c.confirmLabel,

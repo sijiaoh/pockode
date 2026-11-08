@@ -33,8 +33,12 @@ export type PageBack =
 	| { to: "parent"; label: string; onClick: () => void };
 
 interface Props {
-	/** `null` while it cannot be known yet: a placeholder of the same size. */
-	back: PageBack | null;
+	/**
+	 * `null` while it cannot be known yet: a placeholder of the same size.
+	 * Absent for a page with no way back of its own, because the page it was
+	 * opened from is on screen beside it.
+	 */
+	back?: PageBack | null;
 	/**
 	 * A string is drawn as a title; pass `FileNameTitle` for a file name, so its
 	 * extension survives truncation. `null` while it has not arrived.
@@ -50,6 +54,8 @@ interface Props {
 	/** Makes the title a button, which then needs `titleActionLabel`. */
 	onTitleClick?: () => void;
 	titleActionLabel?: string;
+	/** Header icon buttons (`headerIconButtonClass`) at the heading's end. */
+	actions?: ReactNode;
 }
 
 interface Target {
@@ -122,15 +128,18 @@ export default function PageHeader(props: Props) {
 	// rather than showing whatever stood there for a frame.
 	useLayoutEffect(() => claim?.(), [claim]);
 
-	const content = <PageHeading {...props} />;
 	if (target === undefined) {
 		return (
 			<div className="flex h-11 shrink-0 items-center border-b border-th-border px-3 sm:h-12 sm:px-4">
-				<div className={outletClass}>{content}</div>
+				<div className={outletClass}>
+					<PageHeading {...props} inline />
+				</div>
 			</div>
 		);
 	}
-	return target.element ? createPortal(content, target.element) : null;
+	return target.element
+		? createPortal(<PageHeading {...props} />, target.element)
+		: null;
 }
 
 interface FileProps extends Pick<Props, "back" | "onTitleClick"> {
@@ -184,7 +193,9 @@ function PageHeading({
 	fullText,
 	onTitleClick,
 	titleActionLabel,
-}: Props) {
+	actions,
+	inline,
+}: Props & { inline?: boolean }) {
 	const loading = title === null;
 	const lines = (
 		<HeaderTitleLines
@@ -231,11 +242,20 @@ function PageHeading({
 					</span>
 				)}
 			</h1>
+			{actions && (
+				// On a bar of its own the last icon sits on the padding line, as the
+				// way back does at the start; in the app header the header's own
+				// buttons follow it.
+				<div className={`flex shrink-0 items-center ${inline ? "-mr-2" : ""}`}>
+					{actions}
+				</div>
+			)}
 		</>
 	);
 }
 
-function PageBackButton({ back }: { back: PageBack | null }) {
+function PageBackButton({ back }: { back: PageBack | null | undefined }) {
+	if (back === undefined) return null;
 	if (back === null) {
 		return (
 			<span

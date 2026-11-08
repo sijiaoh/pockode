@@ -11,9 +11,10 @@ import {
 import type { WorkSegment } from "../../types/overlay";
 import type { WorkListItem } from "../../types/work";
 import PageHeader from "../Layout/PageHeader";
-import { ActivityIcon } from "../ui";
+import { ActivityIcon, PageBody } from "../ui";
 import BottomActionBar from "../ui/BottomActionBar";
 import ListGroupHeading from "../ui/ListGroupHeading";
+import SegmentedControl from "../ui/SegmentedControl";
 import ArchivePager from "./ArchivePager";
 import CreateStorySheet from "./CreateStorySheet";
 import WorkRow from "./WorkRow";
@@ -235,7 +236,12 @@ export default function WorkListOverlay({
 
 			{/* Outside the scroll area on purpose: the archive is one tap away from
 			    wherever the list has been scrolled to. */}
-			<SegmentedControl segment={segment} onSelect={onSelectSegment} />
+			<SegmentedControl
+				label="Which work to list"
+				items={SEGMENTS}
+				selected={segment}
+				onSelect={onSelectSegment}
+			/>
 
 			{/* The inset belongs to the content, not the scroller: a sticky
 			    heading pins to the scroller's padding edge, so padding here
@@ -247,11 +253,7 @@ export default function WorkListOverlay({
 			    A scroller of their own opens each at the top on its first
 			    paint, where resetting a shared one from an effect would show
 			    the old offset for a frame (docs/project-ui.md §2.1). */}
-			<div
-				key={segment}
-				ref={scrollRef}
-				className="min-h-0 flex-1 overflow-auto"
-			>
+			<PageBody key={segment} ref={scrollRef}>
 				<div className="p-2">
 					{isLoading ? (
 						<div className="flex items-center justify-center py-8">
@@ -340,7 +342,7 @@ export default function WorkListOverlay({
 						</div>
 					)}
 				</div>
-			</div>
+			</PageBody>
 
 			{/* Fixed above the bottom bar rather than at the end of the list, and
 			    absent entirely while there is only one page (docs/list-paging-ui.md
@@ -382,57 +384,21 @@ export default function WorkListOverlay({
 	);
 }
 
-const SEGMENT_LABEL: Record<WorkSegment, string> = {
-	current: "Current",
-	closed: "Closed",
-};
-
 /**
- * Two segments, and the words are chosen against the state vocabulary rather
- * than for brevity: "Closed" is exactly the status of what is in it, while
- * "Current" names nothing in the vocabulary on purpose — "Open" and "Active"
- * are both status values, and a segment wearing either would claim a
- * membership it does not have (docs/project-ui.md §2.1).
+ * The words are chosen against the state vocabulary rather than for brevity:
+ * "Closed" is exactly the status of what is in it, while "Current" names
+ * nothing in the vocabulary on purpose — "Open" and "Active" are both status
+ * values, and a segment wearing either would claim a membership it does not
+ * have (docs/project-ui.md §2.1).
  *
- * Neither segment carries a count: a count is a signal to act, the group
- * headings inside `Current` already carry the ones that are, and a running
- * total of finished work is a number nobody acts on.
+ * Neither segment carries a count: the group headings inside `Current` already
+ * carry the ones that are a signal to act, and a running total of finished
+ * work is a number nobody acts on.
  */
-function SegmentedControl({
-	segment,
-	onSelect,
-}: {
-	segment: WorkSegment;
-	onSelect: (segment: WorkSegment) => void;
-}) {
-	return (
-		// A group and not a tablist: the tab pattern promises a panel per tab and
-		// an arrow-key walk between them, and this is one list under a filter.
-		<fieldset
-			aria-label="Which work to list"
-			// `min-w-0` against the one thing a fieldset does that a div does not:
-			// its `min-inline-size: min-content` would stop the two segments
-			// sharing the width of a narrow phone.
-			className="flex min-w-0 gap-1 border-b border-th-border bg-th-bg-secondary p-1"
-		>
-			{(["current", "closed"] as const).map((value) => (
-				<button
-					key={value}
-					type="button"
-					aria-pressed={segment === value}
-					onClick={() => onSelect(value)}
-					className={`min-h-[44px] flex-1 rounded-md px-3 text-sm transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent ${
-						segment === value
-							? "bg-th-bg-tertiary font-medium text-th-text-primary"
-							: "text-th-text-muted hover:text-th-text-primary"
-					}`}
-				>
-					{SEGMENT_LABEL[value]}
-				</button>
-			))}
-		</fieldset>
-	);
-}
+const SEGMENTS = [
+	{ value: "current", label: "Current" },
+	{ value: "closed", label: "Closed" },
+] as const satisfies readonly { value: WorkSegment; label: string }[];
 
 /**
  * The four groups of the `Current` segment (docs/project-ui.md §2.3).

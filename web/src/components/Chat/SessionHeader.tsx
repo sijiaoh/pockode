@@ -6,6 +6,7 @@ import { useChatUIConfig } from "../../lib/registries/chatUIRegistry";
 import { useHeaderUIConfig } from "../../lib/registries/headerUIRegistry";
 import { getSessionModeInfo, SESSION_MODES } from "../../lib/sessionMode";
 import { NEW_SESSION_TITLE } from "../../lib/sessionStore";
+import { getSessionStyleInfo } from "../../lib/sessionStyle";
 import type { SessionDetail, SessionMode } from "../../types/message";
 import type { AgentType } from "../../types/settings";
 import { PanelSection } from "../ui";
@@ -430,6 +431,7 @@ function SessionHeader({
 							<div>
 								{showEngine && renderEngineSection()}
 								{showMode && renderModeSection()}
+								{detail?.html_first && detail.started && <HtmlFirstSection />}
 								<SessionWorkSection
 									detail={detail}
 									onOpenWorkDetail={onOpenWorkDetail}
@@ -445,6 +447,31 @@ function SessionHeader({
 				</div>
 			</ResponsivePanel>
 		</div>
+	);
+}
+
+/**
+ * The fixed choice, read-only: before the start the switch on the screen is
+ * the one place to read it, and a Chat session gets no section — the default
+ * needs no mention (docs/html-first-session-ui.md §4).
+ */
+function HtmlFirstSection() {
+	const { label, icon: Icon } = getSessionStyleInfo("html_first");
+	return (
+		<PanelSection title="Session">
+			<div className="flex items-start gap-2 px-3 py-2">
+				<Icon
+					className="mt-0.5 size-4 shrink-0 text-th-text-muted"
+					aria-hidden="true"
+				/>
+				<div className="min-w-0">
+					<p className="text-sm text-th-text-primary">{label}</p>
+					<p className="text-xs text-th-text-muted">
+						Fixed when the first message was sent.
+					</p>
+				</div>
+			</div>
+		</PanelSection>
 	);
 }
 

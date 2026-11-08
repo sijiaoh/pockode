@@ -94,6 +94,11 @@ export interface SessionListItem {
 	unanswered_questions?: number;
 	/** Absent on a session that was created rather than forked. */
 	forked_from?: ForkOrigin;
+	/**
+	 * `SessionDetail.html_first`, on the row because the row draws it
+	 * (docs/html-first-session-ui.md §3). Absent means an ordinary chat.
+	 */
+	html_first?: boolean;
 }
 
 /** One story a session watches: enough to list it and open its detail. */
@@ -231,6 +236,12 @@ export interface ToolRun {
 	durationMs?: number;
 	/** The command's exit status, when the engine reports one separately. */
 	exitCode?: number;
+	/**
+	 * The page a successful page tool stored (`p3`), from its result's
+	 * `html_page`. Absent on any other call, and on an `html_render` from before
+	 * pages were stored.
+	 */
+	htmlPage?: string;
 	/**
 	 * When this client first saw the call. Live only — a history record carries
 	 * no timestamp, so a replayed run gets none and draws no stopwatch.
@@ -508,6 +519,12 @@ export interface UserMessage {
 	 * server's description (type and dimensions read from the stored bytes).
 	 */
 	attachments?: FileBlock[];
+	/**
+	 * What a page sent, when the message is a page's send rather than typed.
+	 * The bubble is drawn from this; `content` is the agent's text, written by
+	 * the server and empty on the sender's echo until its reply arrives.
+	 */
+	htmlAction?: HtmlAction;
 }
 
 /**
@@ -912,6 +929,30 @@ export interface MessageResult {
 	command?: PockodeCommandInvocation;
 	/** The files the message carried, as its record describes them. */
 	attachments?: FileBlock[];
+	/** On `chat.html_action`'s reply: the action as its record carries it. */
+	html_action?: HtmlAction;
+}
+
+/**
+ * What a page sent the agent (docs/tool-call-ui.md § The action message): a
+ * `message` record's `html_action`. An event — what was pressed on which
+ * page — never state.
+ */
+export interface HtmlAction {
+	/** The card's id (`p3`), filled in by the app, never by the page. */
+	page: string;
+	action: string;
+	/** Any JSON; `{}` when the page sent none. */
+	data: unknown;
+}
+
+export interface HtmlActionParams {
+	session_id: string;
+	page: string;
+	/** 1–128 characters, no control characters. */
+	action: string;
+	/** Any JSON; omitted = `{}`; at most 64KB serialized. */
+	data?: unknown;
 }
 
 export interface InterruptParams {
@@ -1024,6 +1065,18 @@ export interface SessionDetail {
 	effort: string;
 	/** True once the agent has produced output in this session. */
 	activated: boolean;
+	/**
+	 * True from just before the first message is delivered, and never cleared;
+	 * a fork is started from birth. It is what fixes `html_first`, and it is not
+	 * `activated`, which waits for the agent's first output.
+	 */
+	started: boolean;
+	/**
+	 * The agent starts told to say things with pages. A draft until `started`,
+	 * fixed after (docs/html-first-session-ui.md §1). Absent means an ordinary
+	 * chat.
+	 */
+	html_first?: boolean;
 	/** What the session is doing. The same value the session's row carries. */
 	turn: SessionTurn;
 	unread: boolean;
@@ -1170,6 +1223,11 @@ export interface ChatMessagesHistoryParams {
 
 export type ChatMessagesHistoryResult = ChatMessagesHistoryPage;
 
+export interface SessionSetHTMLFirstParams {
+	session_id: string;
+	html_first: boolean;
+}
+
 export interface SessionSetModeParams {
 	session_id: string;
 	mode: SessionMode;
@@ -1266,6 +1324,8 @@ export type ServerNotification =
 			meta?: SystemMessageMeta;
 			/** The posted questions this message answers; see QuestionAnswerRecord. */
 			answering?: QuestionAnswerRecord[];
+			/** What a page sent, when it is a page's send; see `HtmlAction`. */
+			html_action?: HtmlAction;
 	  }
 	| {
 			type: "tool_call";
@@ -1306,6 +1366,11 @@ export type ServerNotification =
 			duration_ms?: number;
 			/** Absent for every tool that is not a command that ran. */
 			exit_code?: number;
+			/**
+			 * The id of the page a successful page tool (`html_render`,
+			 * `html_edit`) stored; absent on every other result.
+			 */
+			html_page?: string;
 			/** See the `text` record. */
 			parent_tool_use_id?: string;
 	  }

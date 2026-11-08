@@ -1,8 +1,10 @@
 package git
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -302,5 +304,101 @@ func TestDiscard_RejectsEmptyPathList(t *testing.T) {
 
 	if err := Discard(dir, nil); err == nil {
 		t.Error("Discard() accepted an empty path list")
+	}
+}
+
+// A conflicted path is refused by name, and nothing else in the batch is
+// touched: the refusal comes before any group runs.
+func TestDiscard_RefusesConflictedPaths(t *testing.T) {
+	dir, _, _ := setupDivergedRepo(t)
+	writeTestFile(t, dir, "untracked.txt", "keep me\n")
+	gitConflicts(t, dir, "merge", "feature")
+
+	err := Discard(dir, []string{"untracked.txt", "conflict.txt"})
+	var conflicted *ConflictedPathsError
+	if !errors.As(err, &conflicted) {
+		t.Fatalf("Discard() error = %v, want ConflictedPathsError", err)
+	}
+	if !reflect.DeepEqual(conflicted.Paths, []string{"conflict.txt"}) {
+		t.Errorf("Paths = %v, want [conflict.txt]", conflicted.Paths)
+	}
+	if got := readTestFile(t, dir, "untracked.txt"); got != "keep me\n" {
+		t.Errorf("untracked.txt = %q, want it left alone", got)
+	}
+	if got := mustStatus(t, dir).Conflicted; !reflect.DeepEqual(got, []string{"conflict.txt"}) {
+		t.Errorf("Conflicted = %v, want [conflict.txt]", got)
+	}
+}
+
+// Staging or unstaging a conflicted path would end its conflict unresolved,
+// so the batch is refused whole; Resolve is the stage that means it.
+func TestStaging_RefusesConflictedPaths(t *testing.T) {
+	dir, _, _ := setupDivergedRepo(t)
+	writeTestFile(t, dir, "other.txt", "x\n")
+	gitConflicts(t, dir, "merge", "feature")
+
+	for name, write := range map[string]func(string, ...string) error{"Add": Add, "Reset": Reset} {
+		err := write(dir, "other.txt", "conflict.txt")
+		var conflicted *ConflictedPathsError
+		if !errors.As(err, &conflicted) {
+			t.Fatalf("%s() error = %v, want ConflictedPathsError", name, err)
+		}
+		if !reflect.DeepEqual(conflicted.Paths, []string{"conflict.txt"}) {
+			t.Errorf("%s(): Paths = %v, want [conflict.txt]", name, conflicted.Paths)
+		}
+	}
+	status := mustStatus(t, dir)
+	if !reflect.DeepEqual(status.Conflicted, []string{"conflict.txt"}) {
+		t.Errorf("Conflicted = %v, want [conflict.txt]", status.Conflicted)
+	}
+	if status.HasFile("other.txt", true) {
+		t.Error("other.txt was staged alongside the refused path")
+	}
+
+	if err := Resolve(dir, "conflict.txt"); err != nil {
+		t.Fatalf("Resolve() error: %v", err)
+	}
+	if got := mustStatus(t, dir).Conflicted; got != nil {
+		t.Errorf("Conflicted after Resolve = %v, want none", got)
+	}
+}
+
+// Inside a submodule, and by the directory that holds them, conflicted files
+// are found where the write would reach them, and named as the list names them.
+func TestStaging_RefusesConflictedPathsInSubmoduleAndDirectory(t *testing.T) {
+	dir, cleanup := setupTestRepoWithSubmodule(t)
+	defer cleanup()
+	sub := filepath.Join(dir, "mysub")
+	writeTestFile(t, sub, "d/x.txt", "base\n")
+	runGit(t, sub, "add", "d/x.txt")
+	runGit(t, sub, "commit", "--no-gpg-sign", "-qm", "base")
+	runGit(t, sub, "checkout", "-q", "-b", "other")
+	writeTestFile(t, sub, "d/x.txt", "other\n")
+	runGit(t, sub, "commit", "--no-gpg-sign", "-qam", "other")
+	runGit(t, sub, "checkout", "-q", "-")
+	writeTestFile(t, sub, "d/x.txt", "mine\n")
+	runGit(t, sub, "commit", "--no-gpg-sign", "-qam", "mine")
+	gitConflicts(t, sub, "merge", "other")
+
+	discard := func(dir string, paths ...string) error { return Discard(dir, paths) }
+	writes := map[string]func(string, ...string) error{"Add": Add, "Reset": Reset, "Discard": discard}
+	for name, write := range writes {
+		for _, path := range []string{"mysub/d/x.txt", "mysub/d"} {
+			err := write(dir, "parent.txt", path)
+			var conflicted *ConflictedPathsError
+			if !errors.As(err, &conflicted) {
+				t.Fatalf("%s(%s) error = %v, want ConflictedPathsError", name, path, err)
+			}
+			if !reflect.DeepEqual(conflicted.Paths, []string{"mysub/d/x.txt"}) {
+				t.Errorf("%s(%s): Paths = %v, want [mysub/d/x.txt]", name, path, conflicted.Paths)
+			}
+		}
+	}
+
+	if err := Resolve(dir, "mysub/d/x.txt"); err != nil {
+		t.Fatalf("Resolve() error: %v", err)
+	}
+	if got := mustStatus(t, dir).Submodules["mysub"].Conflicted; got != nil {
+		t.Errorf("submodule Conflicted after Resolve = %v, want none", got)
 	}
 }

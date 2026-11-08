@@ -41,6 +41,29 @@ interface InputState {
 	 * Not persisted: neither the `File` nor its `blob:` URL survives a reload.
 	 */
 	attachments: Record<string, DraftAttachment[]>;
+	/**
+	 * A prefill waiting for the composer to show it arrived, keyed by session:
+	 * written by the handoff before it navigates, taken by `InputBar` when it
+	 * next renders that session. Passing device state, so not persisted, and not
+	 * the draft's: the draft is what was written, this is that it was just
+	 * written (docs/agent-handoff-ui.md §1.3).
+	 */
+	reveals: Record<string, PrefillReveal>;
+}
+
+/**
+ * How the prefill landed: `ready` when the draft is the prefill and nothing
+ * else, `added` when it went in beside the user's own words.
+ */
+export type ComposerReveal = "ready" | "added";
+
+export interface PrefillReveal {
+	landed: ComposerReveal;
+	/**
+	 * Where the caret goes, for a prefill put in at the caret
+	 * (`insertIntoDraft`); absent for one appended, which leaves it at the end.
+	 */
+	caret?: number;
 }
 
 export const useInputStore = create<InputState>()(
@@ -48,6 +71,7 @@ export const useInputStore = create<InputState>()(
 		() => ({
 			inputs: {},
 			attachments: {},
+			reveals: {},
 		}),
 		{
 			name: "input_drafts",
@@ -55,6 +79,9 @@ export const useInputStore = create<InputState>()(
 		},
 	),
 );
+
+// A handle on a mounted field, not state: nothing renders from it.
+const caretReaders = new Map<string, () => number | null>();
 
 export const inputActions = {
 	set: (sessionId: string, content: string) =>
@@ -66,6 +93,36 @@ export const inputActions = {
 			const { [sessionId]: _, ...rest } = state.inputs;
 			return { inputs: rest };
 		}),
+	requestReveal: (sessionId: string, reveal: PrefillReveal) =>
+		useInputStore.setState((state) => ({
+			reveals: { ...state.reveals, [sessionId]: reveal },
+		})),
+	takeReveal: (sessionId: string): PrefillReveal | undefined => {
+		const reveal = useInputStore.getState().reveals[sessionId];
+		if (reveal === undefined) return undefined;
+		useInputStore.setState((state) => {
+			const { [sessionId]: _, ...rest } = state.reveals;
+			return { reveals: rest };
+		});
+		return reveal;
+	},
+	/**
+	 * Lets the composer drawn for a session say where its caret is, for a
+	 * prefill put in there rather than at the end. Read live, not recorded:
+	 * the caret moves with every key, and a press that keeps the keyboard up
+	 * leaves focus in the field, so no blur would have recorded the last move.
+	 * A reader answers null until the user has been in the field — a caret
+	 * nobody placed is no place to put anything. Returns the unregister.
+	 */
+	registerCaret: (sessionId: string, read: () => number | null) => {
+		caretReaders.set(sessionId, read);
+		return () => {
+			if (caretReaders.get(sessionId) === read) caretReaders.delete(sessionId);
+		};
+	},
+	/** Null with no composer for the session on the page, or a custom one. */
+	readCaret: (sessionId: string): number | null =>
+		caretReaders.get(sessionId)?.() ?? null,
 };
 
 const controllers = new Map<string, AbortController>();

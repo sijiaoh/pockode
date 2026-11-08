@@ -1,13 +1,19 @@
-import { AppWindow, Code, Maximize2 } from "lucide-react";
+import { AppWindow, Code, Maximize2, TriangleAlert } from "lucide-react";
 import { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useHtmlPage } from "../../hooks/useHtmlPage";
 import { useInView } from "../../hooks/useInView";
 import {
 	FULL_SCREEN_OPENER_ATTR,
 	type FullScreenSource,
 } from "../../lib/fullScreen";
-import { htmlRenderInput } from "../../lib/htmlRender";
+import {
+	htmlEditInput,
+	htmlRenderInput,
+	isHtmlEditTool,
+} from "../../lib/htmlRender";
 import { outputLineCount } from "../../lib/textLines";
 import type { ToolRun } from "../../types/message";
+import { errorMessage } from "../../utils/errorMessage";
 import {
 	BlockHeader,
 	ClampedContent,
@@ -19,6 +25,7 @@ import { CodeBlock } from "../ui/CodeBlock";
 import { useFullScreen } from "./FullScreenHost";
 import { HtmlFrame } from "./HtmlFrame";
 import { useTranscriptView } from "./transcriptViewContext";
+import { WIDE_BLOCK_STYLE } from "./transcriptWidth";
 
 /**
  * Inline, a page takes at most this share of the transcript and scrolls inside
@@ -38,21 +45,63 @@ const PLACEHOLDER_HEIGHT = 160;
 const measuredHeights = new Map<string, number>();
 
 /**
- * A successful `html_render` call: the page the agent wrote for the user, drawn
- * as part of the reply rather than as a row (docs/tool-call-ui.md).
+ * A successful `html_render` or `html_edit` call: the page the agent wrote for
+ * the user, drawn as part of the reply rather than as a row
+ * (docs/tool-call-ui.md).
+ *
+ * A render's input is its page. An edit's holds only the edits, so its page is
+ * read from the server by the id its result carries — once, since a page never
+ * changes — and the card that drew the page it started from stays as it was.
  */
-export function HtmlRenderCard({ run }: { run: ToolRun }) {
-	const { title, html } = useMemo(
-		() => htmlRenderInput(run.input),
-		[run.input],
-	);
-	const name = title || "Untitled page";
+export function HtmlRenderCard({
+	run,
+	sessionId,
+	wide = false,
+}: {
+	run: ToolRun;
+	/** The session the page was stored under, for an edit's to be read. */
+	sessionId: string;
+	/**
+	 * Drawn to the transcript's width rather than the reading column's: a page
+	 * is laid out, not read line by line, and one drawn wide scrolls sideways
+	 * inside its own frame past it.
+	 */
+	wide?: boolean;
+}) {
+	const edit = isHtmlEditTool(run.name);
+	const pageId = run.htmlPage;
 	const view = useTranscriptView();
 	const [showSource, setShowSource] = useState(false);
 	// Mounted once near the viewport and never unmounted after: a long session
 	// does not run every old page at once, and a page the user has used keeps
-	// its state.
+	// its state. An edit's page is not even read before then.
 	const { ref: inViewRef, inView } = useInView<HTMLDivElement>();
+	const stored = useHtmlPage(
+		sessionId,
+		pageId ?? "",
+		edit && !!pageId && inView,
+	);
+	const { title, html, base } = useMemo(() => {
+		if (!edit) return { ...htmlRenderInput(run.input), base: undefined };
+		const asked = htmlEditInput(run.input);
+		// Undefined html is a page not here yet: an empty page is still a page.
+		return stored.data
+			? {
+					title: stored.data.title,
+					html: stored.data.html,
+					base: stored.data.base ?? asked.base,
+				}
+			: { title: asked.title, html: undefined, base: asked.base };
+	}, [edit, run.input, stored.data]);
+	// A retry in flight is loading again, not still failed.
+	const failed = edit && !stored.data && stored.isError && !stored.isFetching;
+	const name =
+		title ||
+		(html !== undefined
+			? "Untitled page"
+			: failed
+				? "Page not loaded"
+				: "Loading page…");
 	const [height, setHeight] = useState(() => measuredHeights.get(run.id));
 	const [cut, setCut] = useState(false);
 	const boxRef = useRef<HTMLDivElement>(null);
@@ -87,16 +136,25 @@ export function HtmlRenderCard({ run }: { run: ToolRun }) {
 
 	const boxHeight = `min(${height ?? PLACEHOLDER_HEIGHT}px, ${CAP})`;
 	const fullScreenKey = `${run.id}:page`;
-	const source = useMemo<FullScreenSource>(
-		() => ({
-			title: name,
-			label: "Page",
-			noun: "page",
-			from: "start",
-			copyText: html,
-			content: { kind: "html", html, showSource, pageKey: run.id },
-		}),
-		[name, html, showSource, run.id],
+	const source = useMemo<FullScreenSource | undefined>(
+		() =>
+			html === undefined
+				? undefined
+				: {
+						title: name,
+						label: "Page",
+						noun: "page",
+						from: "start",
+						copyText: html,
+						content: {
+							kind: "html",
+							html,
+							showSource,
+							pageKey: run.id,
+							...(pageId ? { page: pageId } : {}),
+						},
+					},
+		[name, html, showSource, run.id, pageId],
 	);
 	const openFullScreen = useFullScreen(fullScreenKey, source);
 	const opener = openFullScreen && {
@@ -109,6 +167,7 @@ export function HtmlRenderCard({ run }: { run: ToolRun }) {
 		<section
 			aria-label={name}
 			className="overflow-clip rounded-lg border border-th-border text-xs"
+			style={wide ? WIDE_BLOCK_STYLE : undefined}
 		>
 			<div className="flex min-h-9 items-center gap-1.5 border-b border-th-border px-2 py-1.5 pointer-coarse:min-h-11 pointer-coarse:gap-2 sm:px-2.5">
 				<AppWindow
@@ -118,34 +177,45 @@ export function HtmlRenderCard({ run }: { run: ToolRun }) {
 				<div className="min-w-0 flex-1">
 					<BlockHeader
 						label={
-							<span className="truncate font-medium text-th-text-primary">
-								{name}
-							</span>
-						}
-						actions={
 							<>
-								<button
-									type="button"
-									aria-label="Show source"
-									aria-pressed={showSource}
-									onClick={() => setShowSource(!showSource)}
-									className={headerButtonClass("sm", showSource)}
-								>
-									<Code size={14} aria-hidden="true" />
-								</button>
-								{/* Always offered, and last: a card is never the best place
-								    to read a page. */}
-								{opener && (
-									<button
-										type="button"
-										aria-label="Open page in full screen"
-										{...opener}
-										className={headerButtonClass()}
-									>
-										<Maximize2 size={14} aria-hidden="true" />
-									</button>
+								<span className="truncate font-medium text-th-text-primary">
+									{name}
+								</span>
+								{/* The id is how the agent is asked about a page — "change
+								    p3" — so it is shown where the reader can read it off. */}
+								{pageId && (
+									<span className="ml-1.5 shrink-0 font-mono">
+										{base ? `${pageId} · from ${base}` : pageId}
+									</span>
 								)}
 							</>
+						}
+						actions={
+							html !== undefined && (
+								<>
+									<button
+										type="button"
+										aria-label="Show source"
+										aria-pressed={showSource}
+										onClick={() => setShowSource(!showSource)}
+										className={headerButtonClass("sm", showSource)}
+									>
+										<Code size={14} aria-hidden="true" />
+									</button>
+									{/* Always offered, and last: a card is never the best
+									    place to read a page. */}
+									{opener && (
+										<button
+											type="button"
+											aria-label="Open page in full screen"
+											{...opener}
+											className={headerButtonClass()}
+										>
+											<Maximize2 size={14} aria-hidden="true" />
+										</button>
+									)}
+								</>
+							)
 						}
 					/>
 				</div>
@@ -154,11 +224,32 @@ export function HtmlRenderCard({ run }: { run: ToolRun }) {
 			    its state and its scripts do not run again. The strip of hosts it
 			    was refused goes with it: the source has nothing to load. */}
 			<div ref={inViewRef} hidden={showSource}>
-				{inView ? (
+				{failed ? (
+					<div
+						role="alert"
+						className="flex items-center gap-2 px-2 py-2 sm:px-2.5"
+					>
+						<TriangleAlert
+							className="size-3.5 shrink-0 text-th-error"
+							aria-hidden="true"
+						/>
+						<span className="min-w-0 flex-1 break-words text-th-text-secondary">
+							Couldn't load page {pageId}: {errorMessage(stored.error)}
+						</span>
+						<button
+							type="button"
+							onClick={() => stored.refetch()}
+							className={TEXT_BUTTON}
+						>
+							Retry
+						</button>
+					</div>
+				) : inView && html !== undefined ? (
 					<HtmlFrame
 						html={html}
 						title={name}
 						pageKey={run.id}
+						page={pageId}
 						onHeight={onHeight}
 						shown={!showSource}
 						boxRef={boxRef}
@@ -194,7 +285,7 @@ export function HtmlRenderCard({ run }: { run: ToolRun }) {
 					</div>
 				)}
 			</div>
-			{showSource && (
+			{showSource && html !== undefined && (
 				<div className="p-2 sm:p-2.5">
 					<ClampedContent
 						budget="main"

@@ -7,7 +7,12 @@ export {
 	type AttachmentActions,
 	createAttachmentActions,
 } from "./attachment";
-export { type ChatActions, createChatActions, type SentMessage } from "./chat";
+export {
+	type ChatActions,
+	createChatActions,
+	type HtmlActionInput,
+	type SentMessage,
+} from "./chat";
 export { type CliAuthActions, createCliAuthActions } from "./cliAuth";
 export {
 	type CliUpdateActions,
@@ -22,6 +27,11 @@ export {
 export { createFileActions, type FileActions } from "./file";
 export { createGitActions, type GitActions } from "./git";
 export {
+	createHtmlPageActions,
+	type HtmlPage,
+	type HtmlPageActions,
+} from "./htmlPage";
+export {
 	createPortPreviewActions,
 	type PortPreviewActions,
 } from "./portPreview";
@@ -32,6 +42,11 @@ export {
 	type RawTarget,
 } from "./raw";
 export { createScheduleActions, type ScheduleActions } from "./schedule";
+export {
+	createServerActions,
+	type ServerActions,
+	type ServerVersion,
+} from "./server";
 export { createSessionActions, type SessionActions } from "./session";
 export {
 	createSessionViewActions,

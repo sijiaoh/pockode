@@ -116,8 +116,16 @@ func StartProcessEnv(ctx context.Context, log *slog.Logger, name string, args []
 	}
 
 	cmd.Dir = dir
+	if cmd.Env != nil {
+		// Command gave a CLI found off PATH an environment of its own, and exec
+		// keeps PWD in step with Dir only while Env is nil (go.dev/issue/50599):
+		// without this the CLI and its hooks would see pockode's directory there.
+		cmd.Env = withPWD(cmd.Env, dir)
+	}
 	if len(env) > 0 {
-		cmd.Env = append(os.Environ(), env...)
+		// Environ, not os.Environ: it keeps the PATH Command gave a CLI found
+		// off PATH.
+		cmd.Env = append(cmd.Environ(), env...)
 	}
 	// Handing exec.Cmd *os.File values (rather than an arbitrary io.Reader) makes
 	// it pass the descriptors straight to the child: no copying goroutines, and

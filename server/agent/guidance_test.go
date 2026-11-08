@@ -45,3 +45,36 @@ func TestGuidance_CarriesTheRenderingRulesNeededBeforeLoading(t *testing.T) {
 		}
 	}
 }
+
+// An HTML-first session is told this besides Guidance: what it changes is that
+// a page, not the reply, is where anything structured goes. Those rules are
+// what the session is for, and the tools they name are only names until loaded.
+func TestHTMLFirstGuidance_CarriesThePageRules(t *testing.T) {
+	for _, want := range []string{
+		"html_render",
+		"html_edit",
+		"html_get",
+		"tool search",
+		"choices, forms",
+		"a sentence or two",
+		"work by itself",
+		"only when it needs you",
+		"question_post",  // a page's choice does not replace asking a decision
+		"320–1280px",     // a recommendation, not a rule:
+		"wide by nature", // what may be drawn wide anyway
+	} {
+		if !strings.Contains(HTMLFirstGuidance, want) {
+			t.Errorf("the HTML-first guidance does not say %q", want)
+		}
+	}
+}
+
+// The agent reads HTMLFirstGuidance alongside the base rendering rules, which
+// say a page is for when it is worth it. It has to say which of the two wins,
+// naming the section it overrides by the heading the agent sees.
+func TestHTMLFirstGuidance_OverridesTheRenderingDefaultByName(t *testing.T) {
+	heading, _, _ := strings.Cut(renderingGuidance, ":\n")
+	if !strings.Contains(HTMLFirstGuidance, "overriding that part of \""+heading+"\"") {
+		t.Errorf("the HTML-first guidance does not say it overrides %q", heading)
+	}
+}

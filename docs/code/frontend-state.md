@@ -18,9 +18,11 @@ Pockode uses Zustand for state management, pure reducers for event processing, a
 │  ├─ inputStore (localStorage)                               │   │
 │  ├─ questionDraftStore (localStorage)                       │   │
 │  ├─ filesSearchStore (localStorage)                         │   │
-│  ├─ gitPanelStore                                           │   │
 │  ├─ gitSyncStore                                            │   │
+│  ├─ gitCheckoutStore                                        │   │
+│  ├─ gitOperationStore                                       │   │
 │  ├─ gitWriteStore                                           │   │
+│  ├─ gitChangesViewStore (localStorage)                      │   │
 │  ├─ portPreviewStore (localStorage)                         │   │
 │  └─ worktreeStore + listeners                               │   │
 ├─────────────────────────────────────────────────────────────────┤
@@ -58,12 +60,14 @@ Pockode uses Zustand for state management, pure reducers for event processing, a
 | settingsStore | App settings, and why they are missing when they are | Holds the subscription's `refresh` too: the Retry is far below the hook that owns it |
 | cliLoginStore | Each AI CLI's sign-in status and update check on the server machine, and its latest sign-in flow and update or install ([cli-update.md](cli-update.md#the-web-client)) | Status is read on demand, never pushed ([why](cli-auth.md#no-subscription)); a flow outlives the sheet showing it. In memory only: a flow's link and codes are secrets |
 | authStore | The credential to connect with: the session token that survives a reload, or the password just typed | localStorage init; a leaf module written to by wsStore, never the other way round |
-| inputStore | The draft, per session: its text, and the files picked for it with their uploads | persist middleware for the text only — neither a `File` nor its `blob:` preview survives a reload. The files are here, not in the bar, because the bar is unmounted mid-draft and an upload outlives it |
+| inputStore | The draft, per session: its text, the files picked for it with their uploads, and a prefill's one-shot reveal request (beside it, not in the state: the mounted composer's caret reader, for a prefill put in at the caret) | persist middleware for the text only — neither a `File` nor its `blob:` preview survives a reload. The files are here, not in the bar, because the bar is unmounted mid-draft and an upload outlives it. A surface outside the chat writes it only through `usePrefillComposer` ([why](../agent-handoff-ui.md#1-prefill-handoff)) |
 | questionDraftStore | What has been typed into each unanswered question, per session | persist middleware, plus a second map: what came out of storage waits there until the session's unanswered list vouches for it, so an answer to a withdrawn question can never reach the screen ([answering-ui.md §5](../answering-ui.md#5-drafts)) |
 | filesSearchStore | File search options | localStorage init |
-| gitPanelStore | Git panel UI state (History expanded) | Session-scoped override |
-| gitSyncStore | The fetch/pull/push in flight in each worktree, and how the last one ended | Keyed by worktree; outlives the sheet that started the run |
-| gitWriteStore | Each worktree's serial queue of stage/unstage/discard writes, and the paths they have pending | Keyed by worktree; one write at a time, so two taps cannot race |
+| gitSyncStore | The fetch/pull/push in flight in each worktree, whether the user or the Git workspace started it, and how the last one ended | Keyed by worktree; outlives the sheet that started the run |
+| gitCheckoutStore | The branch switch and the branch delete in flight in each worktree, and how the last of each failed | Keyed by worktree; outlives the Branches list or branch detail that started it |
+| gitOperationStore | The abort of an in-progress merge/rebase/cherry-pick/revert in each worktree, how it ended, and which operation's banner is collapsed ([git-conflict-ui.md](../git-conflict-ui.md#abort)) | Keyed by worktree; outlives the workspace the abort was pressed in |
+| gitWriteStore | Each worktree's serial queue of stage/unstage/discard writes, the paths they have pending, and the Changes list's unacknowledged failure | Keyed by worktree; one write at a time, so two taps cannot race |
+| gitChangesViewStore | The Changes list's flat/tree choice, and which tree folders are collapsed in each worktree ([git-changes-ui.md](../git-changes-ui.md#flat-and-tree)) | localStorage init for the view, which the review also reads for its order; collapse state in memory, keyed by worktree |
 | portPreviewStore | The ports a preview was recently opened for ([port-preview.md](../port-preview.md#opening-a-preview-from-the-app)) | localStorage init; one key for every worktree, since ports belong to the machine |
 | worktreeStore | Current worktree, whether the project is a git repository, and whether the server can run the setup hook | External listener pattern; `isGitRepo` is `null` until the server has answered |
 | themeStore | Theme mode/name | Registry subscription |
@@ -120,7 +124,7 @@ export const worktreeActions = {
 
 wsStore subscribes to these listeners to clean up worktree-scoped subscriptions before worktree switch completes — React's async rendering would be too late. App-level subscriptions (work list/detail, agent role list, settings, worktree list) are preserved across switches because the server keeps pushing to them.
 
-`isGitRepo` has listeners of its own, for the moment the project becomes or stops being a git repository. It is live state the server owns, three-valued — `null` (not answered yet), `true`, `false` — and written only from the server's answers: the `worktree.list` result (`fetchWorktrees`), the `worktree.subscribe` reply, and each `worktree.changed` ([git.md](../git.md#projects-without-a-repository)). A failed `git.*` request never writes it: one failure proves nothing, and the server has already read the answer. `null` is not a stand-in for either answer; git-only UI treats it as "not yet" and stays hidden ([git-ui.md](../git-ui.md#projects-without-a-repository)). Those replies can arrive out of order, so a newer answer cancels the list request in flight before refetching, and `fetchWorktrees` does not write from a request that was cancelled — otherwise the older reply would put the older answer back. `onGitRepoChange` fires only when the value actually changes; its three listeners are the caches that depend on it — `queryClient.ts` invalidates the git queries when a repository appears and removes them when it goes (an invalidation then would refetch through readers that have not yet re-rendered as disabled, straight into `-32002`), wsStore drops the cached `command.list`, which leaves out commands that need git, and `gitSyncStore` drops the last fetch/pull/push outcomes, which belong to the repository before the change.
+`isGitRepo` has listeners of its own, for the moment the project becomes or stops being a git repository. It is live state the server owns, three-valued — `null` (not answered yet), `true`, `false` — and written only from the server's answers: the `worktree.list` result (`fetchWorktrees`), the `worktree.subscribe` reply, and each `worktree.changed` ([git.md](../git.md#projects-without-a-repository)). A failed `git.*` request never writes it: one failure proves nothing, and the server has already read the answer. `null` is not a stand-in for either answer; git-only UI treats it as "not yet" and stays hidden ([git-ui.md](../git-ui.md#projects-without-a-repository)). Those replies can arrive out of order, so a newer answer cancels the list request in flight before refetching, and `fetchWorktrees` does not write from a request that was cancelled — otherwise the older reply would put the older answer back. `onGitRepoChange` fires only when the value actually changes; its five listeners are the caches that depend on it — `queryClient.ts` invalidates the git queries when a repository appears and removes them when it goes (an invalidation then would refetch through readers that have not yet re-rendered as disabled, straight into `-32002`), wsStore drops the cached `command.list`, which leaves out commands that need git, `gitSyncStore` drops the last fetch/pull/push outcomes, and `gitCheckoutStore` and `gitWriteStore` drop their failures — all of which belong to the repository before the change.
 
 **Pattern C: Registry Subscription** — themeStore subscribes to themeRegistry changes:
 
@@ -190,36 +194,7 @@ The reasoning behind all of it — cursors, the two update strategies, what the
 server only approximates — is
 [subscription-system.md](subscription-system.md#paging-and-pushing-on-one-list).
 
-### Why a Store for Panel UI State
-
-`gitPanelStore` holds one field — whether the Git panel's `History` group is
-expanded — which looks like a case for `useState` in `DiffTab`. It is in the
-store instead, because **the decision has to outlive the component, and how long
-the component lives is not this panel's to decide.**
-
-Today it usually survives: `TabbedSidebar` renders all four tabs at once and
-each hides itself with a class, and the drawer form does the same (`Sidebar`
-says why — CSS hiding preserves scroll position). But that is a layout
-implementation detail, not a contract, and it does not hold everywhere:
-crossing the `expanded` breakpoint (1024) swaps `Sidebar` between two structurally
-different trees and remounts everything inside, and an extension that registers
-`SidebarContent` replaces the tabbed sidebar outright. Component state would
-quietly revert the user's explicit choice in exactly those cases, and would
-break the moment someone changes a tab from `hidden` to conditional
-rendering.
-
-The field is `boolean | null`, not `boolean`. `null` means "still following the
-change count" and a boolean means "the user has decided"; `useHistoryExpanded`
-resolves it as `override ?? changeCount === 0`. Storing the resolved boolean
-instead would erase the difference between a default that happens to be
-collapsed and a user who chose collapsed — and a section that keeps re-deciding
-for someone who has already decided is worse than one occasionally in the wrong
-state.
-
-It is deliberately **not** persisted. The default is derived from the working
-tree, which is where the answer usually comes from; a stale choice restored
-across restarts would outlive the situation that produced it. See
-[git-ui.md](../git-ui.md#history).
+### Why a Segment Is Not State
 
 Which segment of the project list is on screen — `Current` or `Closed` — used
 to be a store here (`projectPanelStore`) and is **not state at all any more**:
@@ -227,28 +202,83 @@ it is in the URL. There is no third option in between. Component state would
 hand a user browsing the archive back to `Current` every time they opened a
 work, which is why a store was reached for; but the store bought that at the
 price of a segment no link could name and a Back button that skipped the whole
-visit. Back stepping through the user's own filter changes turned out to be the
-behaviour users asked for by name, and it is the one a browser gives for free.
+visit. Back stepping through the segments the user chose turned out to be the
+behaviour users asked for by name, and it is the one a browser gives for free —
+a segment is a place, where a filter on the page is a setting and is replaced
+([project-ui.md §5.1](../project-ui.md#51-back-up-and-replace)).
 The round trip into a work is paid for in the URL instead: the detail carries
 the segment it was opened from, which a store never had to and a component never
 could. See [project-ui.md](../project-ui.md#5-where-the-segment-lives).
 
+The Git workspace's three segments are in the URL for the same reasons
+([git-ui.md](../git-ui.md#routes-segments-and-back)) — all but the sidebar's at
+`expanded`, which holds its segment and History query as component state
+(`GitTabLists`), set from the URL each time the route arrives somewhere new:
+there the URL names the page the main area has open, and turning the list must
+not change it. A store for the Git
+panel's UI, `gitPanelStore`, held whether its `History` group was expanded, and
+went when History stopped being a collapsible group and became a segment.
+
 ### Why a Run in Flight Is a Store
 
-`gitSyncStore` and `gitWriteStore` hold neither server data nor a user
-preference: they hold **a request that is already on its way**, and they are
-stores for a reason the section above does not cover. A run outlives the
-component that started it, and not as an accident of layout — it outlives it *by
-definition*. Staging from an open diff and navigating away unmounts that view
-while the request is in flight; closing the sync sheet mid-push is a documented
-interaction rather than an edge case ([git-ui.md](../git-ui.md#remote-sync)).
+`gitSyncStore`, `gitCheckoutStore` and `gitWriteStore` hold neither server
+data nor a user preference: they hold **a request that is already on its way**,
+and what it left behind. A run outlives the component that started it, and not
+as an accident of layout — it outlives it *by definition*. Staging from an open
+diff and navigating away unmounts that view while the request is in flight;
+closing the sync sheet mid-push is a documented interaction rather than an edge
+case ([git-ui.md](../git-ui.md#remote-sync)); and the Git workspace is a page,
+so its segment control and Back both leave a list while something
+started from it is still running
+([git-ui.md](../git-ui.md#results-that-outlive-the-page)).
 Component state would lose the outcome of something that is still happening —
 a silent failure — and there is nothing to ask again, because the request has
 already been made.
 
-Both are keyed by worktree for the same reason: switching worktrees mid-run is
-reachable, and a single record would show A's outcome under B, or let A's run
-disable B's controls.
+All three are keyed by worktree for the same reason: switching worktrees mid-run
+is reachable, and a single record would show A's outcome under B, or let A's run
+disable B's controls. And all three drop their failures — never what is still
+running, whose settling is what lifts the guard — whenever the project starts or
+stops being a repository (`worktreeActions.onGitRepoChange`): a failure is about
+the repository it ran against, and one refused after `.git` went would otherwise
+come back as a banner after a later `git init`.
+
+What each holds:
+
+- **`gitSyncStore`** — per worktree, the running operation, the outcome of the
+  last one, and `auto`: whether that run was the fetch the Git workspace starts
+  by itself on the way in rather than one the user asked for.
+  `startAutoFetch` shares `start`'s guard, so an automatic fetch and a manual
+  one can never run on top of each other, but leaves nothing on success and a
+  failure marked `auto` — which the sync chip carries as a mark rather than
+  the banner a manual failure gets, since nobody asked for that run
+  ([git-ui.md](../git-ui.md#automatic-fetch)). The next run of either kind
+  replaces it.
+- **`gitCheckoutStore`** — per worktree, the branch a switch is running to and
+  how the last switch failed. It has `gitSyncStore`'s shape and semantics —
+  one switch per worktree, a new one clears the last failure, success leaves
+  nothing — and it is a store of its own rather than a field of
+  `gitWriteStore` on purpose. `gitWriteStore` queues the fast local writes —
+  stage, unstage, discard — one after another; a branch switch moves HEAD and
+  the working tree, is guarded rather than queued (a second switch while one
+  runs is refused, not lined up), and is behind a control that cannot be
+  double-tapped into a collision. Put in that queue it would make a tap on a
+  file wait behind a checkout, and put beside it as one more field it would
+  blur what the store is: a queue of quick writes. A branch delete keeps its
+  own run and failure here, beside the switch's (`deleting`, `deleteError`),
+  for the same reason: its confirm closes when the user leaves while the
+  request runs, and one delete per worktree is guarded, not queued.
+- **`gitWriteStore`** — per worktree, the queue, the paths with a write pending
+  (whole-file writes by path, hunk writes by path and hunk ID — a path holds
+  many hunks, and `isPathWriting` counts both as the file being busy:
+  [git-changes-ui.md](../git-changes-ui.md#in-flight-and-after)),
+  and `failures`: the Changes list's banner. `fail` replaces whatever failure
+  the worktree was showing, `succeed(paths)` clears it only when the success
+  covers one of the paths that failed — another file succeeding says nothing
+  about the one that did not — and `dismissFailure` is the banner's `✕`. It is
+  here rather than in the list for the reason the pending sets are: the write
+  outlives the list, and a failure that settles while the user is on another
+  segment has to be on screen when they come back.
 
 Keying is not the whole answer for `gitWriteStore`, though, because a queued
 write is not yet a request: the server applies a `git.*` write to whatever
@@ -283,9 +313,8 @@ They are not in a store because **they must not outlive the component**. The
 list is keyed by the session id and remounts on every switch, and every one of
 these values describes a view that no longer exists once it does; a store would
 carry "the user had scrolled up" into a session they have not looked at yet.
-Where `gitPanelStore` holds a decision the user made and the two stores above
-hold a run that is still going, these hold facts about a layout that no longer
-exists.
+Where the stores above hold a run that is still going, these hold facts about
+a layout that no longer exists.
 
 They are refs rather than `useState` because **nothing should re-render when
 they change**, and more than that: they are read at moments a render cannot
@@ -303,6 +332,167 @@ What the scroll-to-bottom button draws is state, and it marks the boundary:
 whether it is showing and whether it carries the new-content dot, because those
 are drawn. Something is state when a render has to happen because of it; the rest of this is
 bookkeeping the render must not see.
+
+### Why a Page's Scroll Position Outlives the Page
+
+**The contract: going back to a page puts the reader where they left it; any
+other way of arriving starts at the top.** A browser does this for a page that
+scrolls the window. Here the window never scrolls — the shell clips
+([responsive-ui.md](../responsive-ui.md#who-owns-the-scroll-boundary)) — and
+every page scrolls a container of its own. A page is unmounted when another
+replaces it (`ChatPanel`'s overlay switch, `GitWorkspace`'s detail), and its
+container goes with it. So unless something else remembers, nothing does.
+
+This is the opposite of the transcript above, and the difference is the
+page's lifetime. The transcript's scroll facts describe a view that stays
+mounted under every overlay, so they die with it. A page's offset is wanted
+exactly *after* the page is gone, so it has to live outside it, in
+`lib/scrollMemory.ts`. It is still not a store and not state: nothing renders
+from it, and it is read when a page mounts, or when the entry changes under
+a page that stayed mounted.
+
+**Keyed by history entry, not by URL.** A fresh push of a URL the reader has
+seen before is a new visit, just as following a link is in a browser. Opening
+the same commit again from History starts at its top. The one exception is a
+layer's entry — a sheet, a dialog, a drawer holds one while it is up
+([project-ui.md §5.2](../project-ui.md#52-back-closes-the-topmost-layer)) —
+which is keyed as the page's own under it (`visitKeyOf`,
+`web/src/lib/layerHistory.ts`): a sheet going up or down is no new visit, and
+the page under it keeps its scroll. What counts as *back*:
+
+- **The browser's Back, or any `history.go()` back.** It returns to an entry
+  that is still in the history, so the entry's key finds what was saved. That
+  includes every in-app `←`: it goes up (`useGoToParent`,
+  [project-ui.md §5.1](../project-ui.md#51-back-up-and-replace)), which is a
+  `go()` back to the parent's own entry whenever that entry is behind. Nothing
+  that pushes is a return: a push of the page the reader came down from — the
+  Stories button pressed from a work — is an entrance, and starts at the top.
+  No `←` pushes, so there is no push to take for one.
+
+**Why not TanStack Router's `scrollRestoration`.** It fails on all three
+counts:
+
+- It records every scroller in the app by CSS path, including the sidebar and
+  the transcript, which manage their own place.
+- It restores at `onRendered`, before content that is still loading has any
+  height to scroll into.
+- It keys by entry alone, so every sheet's entry would be a new visit and the
+  page under it would scroll to the top as the sheet opened.
+
+**The entry is the one on screen, not the router's location.** The router's
+location moves to the next entry as soon as a navigation starts. The page
+being left is still mounted at that point, and a scroll there would be saved
+under the next page. `useScrollRestorationScope` therefore moves to a new entry
+only once the rendered matches have been committed. `PageBody.test.tsx` holds
+this with a loader that is kept open.
+
+**A page that stays mounted is restored too.** Some views are one instance for
+every page they show: `ChatPanel` renders `FileView` with no key, so a
+document and the one it links to are the same mounted scroller, and coming
+back to the first is no mount. So when the entry changes under a mounted
+scroller, the scroller goes to the new entry's offset, or to the top when it
+has none — a fresh visit, even though nothing remounted. A replace is the same
+visit (a diff's side switched, a file renamed), so `scrollMemory.ts` moves the
+replaced entry's offsets to the new one, and the page stays where it is —
+unless the replace puts another page in its place: a parent standing in for
+the child its `←` was pressed on, the next file for one just discarded. That
+replace carries `FRESH_VISIT_STATE` and starts at the top, since every page's
+scroller is named alike and the offsets left are the other page's.
+
+**A fresh visit can start somewhere other than the top.** A file opened at a
+line starts with that line in view ([file.md](../file.md#landing-on-the-line)).
+The content cannot write `scrollTop` itself: picking another line of the open
+file keeps the page mounted, and the scroller answers the entry change in its
+own layout effect — an ancestor's, so it runs after the content's and would
+put the fresh entry back at the top. So the content *asks*
+(`useFreshVisitLanding`, provided by `PageBody`) and the restoration does the
+writing: when it shows a fresh entry with a landing waiting for it, it lands
+there instead of at the top, and saves the offset at once so nothing resets
+it. Whether the entry is fresh is judged when it is shown, not when the
+landing is asked for — by then a page whose content was still loading has
+already saved its reset to the top as the entry's offset. A return is never
+landed, and an entry is landed at most once, so a refresh of the content
+cannot pull the reader back.
+
+**Restoring waits for content, and gives way to the reader.** A page usually
+remounts before its data is back, so the restore keeps writing the target every
+frame until the scroller is tall enough, for up to `RESTORE_WINDOW_MS`. It
+stops as soon as the reader reaches for the page — a wheel or touch on the
+scroller, or a pointer press or key anywhere, since a pager, a next-conflict
+button or a settings section moves the scroller from outside it. Its own
+clamped writes are never saved, or a short page would overwrite the target.
+This is the same "waits, and gives way" rule the Git list's row reveal follows
+([git-ui.md](../git-ui.md#at-expanded-the-sidebars-list-and-the-detail)).
+
+#### What a page has to do
+
+**Write the page's scrolling body as `PageBody`** (`components/ui/PageBody.tsx`)
+instead of a bare `min-h-0 flex-1 overflow-auto` div. That is the whole opt-in.
+`ContentView` renders its non-`fill` body as one, so the file, diff and
+commit pages built on it have it already. A page that needs its own handle on the scroller
+passes `ref` to `PageBody`; the ref is filled alongside the restore's.
+
+A scroller that cannot be `PageBody` — a different element, or a ref that has
+to stay a `setState` — uses `useScrollRestoration(ownRef)` directly
+(`hooks/useScrollRestoration.ts`). `BranchDetail`, `ConflictView` and
+`SettingsPage` do this. Give the second argument only when one page has two
+scrollers that should both be remembered.
+
+Rendered outside `AppShell` — in a test that mocks the router, say — there is
+no `ScrollRestorationContext`, and `PageBody` is a plain scroller. Nothing has
+to be arranged for it. That holds only while the scrollers' module leaves the
+router alone, so the shell's half, which reads it, is a module of its own
+(`hooks/useScrollRestorationScope.ts`): a browser test's router mock exports
+only what it lists, and one missing name fails every file that imports it.
+
+#### What it deliberately does not cover
+
+| Scroller | Why not |
+|---|---|
+| The chat transcript | It is covered, never unmounted, under overlays, and its own model decides where it sits on a session switch ([agent-chat.md](../agent-chat.md#where-the-view-sits)) |
+| The Git lists below `expanded`, and every sidebar list | Kept mounted under the layer above them, so they never lose their place ([git-ui.md](../git-ui.md#routes-segments-and-back)) |
+| A sidebar tab turned away from (`GitTab`, `FilesTab`) | A tab switch is not a navigation. A tab hidden with `display: none` loses its scroll box, and covering it instead is that surface's decision to make, not this mechanism's |
+| An HTML page preview (`ContentView fill`) | The scroll is inside a sandboxed iframe this code cannot reach. A Markdown preview is a plain `ContentView` body, so it is covered |
+
+**Known edges, accepted:**
+
+- **A reload forgets everything.** The memory is in-process, and nothing goes
+  to `sessionStorage` — unlike the history trail (below), which a `←` needs to
+  survive a reload and offsets do not.
+- **A child page opened directly has no parent behind it.** Its `←` lands on a
+  fresh parent, at the top.
+
+#### The history trail is not the scroll memory
+
+Going up needs to know what is behind the page, which the browser never tells
+a page. `lib/historyTrail.ts` is the one record of that: `{ key, href }` at
+each `__TSR_index`, written on every push, replace and traversal. It is not a
+store either — nothing renders from it; `useGoToParent` reads it at a press —
+and it is kept in `sessionStorage`, which lives exactly as long as the tab's
+history, so a reload still knows what is behind. What it stored is believed
+only while the entry on screen is the one stored at its index; a typed URL
+starts a document the router numbers from 0 again, and the trail then knows
+that entry alone, which is always the safe answer (the parent replaces the
+page). An entry from before a reload belongs to a document that is gone, so a
+`go()` to it loads the app afresh; the rewrite owed on arrival is kept in
+storage too and made by the next document's trail as it starts. Each entry
+says which document wrote it, because such a `go()` may be slow to begin
+unloading this one: when `←`'s wait for it runs out, the parent is put in place
+here and that rewrite is still kept, since an entry the browser has dropped
+can never be arrived at. That is why
+`router.tsx` creates the browser history itself and starts the trail before
+`createRouter({ history })`: the router reads the location as it is created.
+
+Before the trail, `router.tsx` wraps that history in the layers'
+(`layerHistoryFor`, `lib/layerHistory.ts`;
+[project-ui.md §5.2](../project-ui.md#52-back-closes-the-topmost-layer)): a
+push made while a sheet or a drawer holds an entry waits until the entries are
+gone back over, a replace under one keeps the entry the layer's, and a reload
+under one strips the marker from the entry the app starts on. The trail sees
+a layer's entry as any other — it has the page's href, so `←`'s walk passes it
+as a duplicate of the page — and the strip is a `replaceState` that keeps the
+entry's key, because a router replace would give it a new one and the trail
+would no longer know what is behind the page.
 
 ## Server Cache vs Store
 
@@ -1130,10 +1320,13 @@ Key features:
 | `web/src/lib/extensions.ts` | Extension loading and context creation |
 | `web/src/lib/registries/*.ts` | Runtime registries for themes, UI, settings |
 | `web/src/lib/*Store.ts` | Domain data stores |
-| `web/src/lib/gitPanelStore.ts` | Git panel UI state that must outlive remounts |
-| `web/src/lib/gitWriteStore.ts` | The Git panel's serial queue per worktree, for writes that outlive the view that started them |
+| `web/src/lib/gitSyncStore.ts` / `gitCheckoutStore.ts` | The Git workspace's fetch/pull/push and branch switch and delete per worktree, for runs that outlive the view that started them |
+| `web/src/lib/gitOperationStore.ts` | The abort of an in-progress git operation per worktree, its failure kept while that operation lasts |
+| `web/src/lib/gitWriteStore.ts` | The Git workspace's serial queue per worktree, for writes — and their failures — that outlive the view that started them |
 | `web/src/lib/worktreeQuery.ts` | Worktree list query key + fetcher, kept together |
 | `web/src/hooks/useSubscription.ts` | Subscription lifecycle hook |
+| `web/src/lib/historyTrail.ts` / `web/src/hooks/useGoToParent.ts` | What is behind the page in the tab's history, and the in-app ← that reads it to go up ([why](#the-history-trail-is-not-the-scroll-memory)) |
+| `web/src/lib/scrollMemory.ts` / `web/src/hooks/useScrollRestoration.ts` / `web/src/hooks/useScrollRestorationScope.ts` / `web/src/components/ui/PageBody.tsx` | A page's scroll position per history entry, put back when the reader returns ([why](#why-a-pages-scroll-position-outlives-the-page)) |
 | `web/src/lib/valueState.ts` | Stored / still coming / not coming, named once for every control that waits on a snapshot ([why three states](subscription-system.md#why-the-controls-wait-for-the-session-to-describe-itself)) |
 
 `worktreeQuery.ts` exists because two hooks (`useWorktree`, `useWorktreeDisplay`)

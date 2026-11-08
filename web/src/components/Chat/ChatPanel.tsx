@@ -22,6 +22,7 @@ import {
 } from "../../hooks/useFileDragZone";
 import { useForkSession } from "../../hooks/useForkSession";
 import { useForkSupport } from "../../hooks/useForkSupport";
+import { useGitChangeCount } from "../../hooks/useGitChangeCount";
 import { useShortViewport } from "../../hooks/useShortViewport";
 import { useViewedSession } from "../../hooks/useViewedSession";
 import { sessionActivity } from "../../lib/activity";
@@ -56,8 +57,11 @@ import type {
 	UserMessage,
 } from "../../types/message";
 import {
+	type BranchRef,
+	type GitSegment,
 	isGitOverlay,
 	type OverlayState,
+	overlayKeepsComposer,
 	type WorkSegment,
 } from "../../types/overlay";
 import type { AgentType } from "../../types/settings";
@@ -73,7 +77,7 @@ import {
 } from "../../utils/sendAgain";
 import CliLoginSheet from "../CliLogin/CliLoginSheet";
 import { FileEditor, FileView } from "../Files";
-import { CommitDiffView, CommitFileView, CommitView, DiffView } from "../Git";
+import { GitWorkspace } from "../Git";
 import MainContainer from "../Layout/MainContainer";
 import PageHeader, {
 	PageHeaderTarget,
@@ -94,9 +98,11 @@ import ChatDropOverlay from "./ChatDropOverlay";
 import ChatSkeleton from "./ChatSkeleton";
 import ForkSessionSheet from "./ForkSessionSheet";
 import { FullScreenHost } from "./FullScreenHost";
+import HtmlFirstSwitch, { useHtmlFirstSwitch } from "./HtmlFirstSwitch";
 import DefaultInputBar from "./InputBar";
 import type { PromptError } from "./MessageItem";
 import MessageList, { type MessageListHandle } from "./MessageList";
+import { PageSendContext, type PageSender } from "./pageSendContext";
 import ReadOnlyBar from "./ReadOnlyBar";
 import SessionHeader from "./SessionHeader";
 import SessionOriginBar from "./SessionOriginBar";
@@ -109,19 +115,6 @@ const noop = () => {};
  */
 const FOLDER_ATTACH_REFUSED =
 	"Folders can't be attached. Upload them in the Files tab.";
-
-const inputBarHiddenOverlays: NonNullable<OverlayState>["type"][] = [
-	"work-list",
-	"work-detail",
-	"agent-role-list",
-	"agent-role-detail",
-	"schedule-list",
-	"schedule-detail",
-];
-
-function isInputBarHidden(overlay: OverlayState | undefined): boolean {
-	return !!overlay && inputBarHiddenOverlays.includes(overlay.type);
-}
 
 /**
  * A refusal of something the user just did from the composer, in the server's
@@ -192,7 +185,11 @@ interface Props {
 	sidebarToggleRef?: Ref<HTMLButtonElement>;
 	onOpenSettings?: () => void;
 	overlay?: OverlayState;
-	onCloseOverlay?: () => void;
+	/**
+	 * The ← of the overlay on screen: up to its parent, or to `to` where the
+	 * page names a parent its URL cannot (`useGoToParent`).
+	 */
+	onGoUp?: (to?: OverlayState) => void;
 	onNavigateToSession?: (sessionId: string, worktree: string) => void;
 	/** Opens another session of this worktree, which a fork's parent and child both are. */
 	onSelectSession?: (sessionId: string) => void;
@@ -202,13 +199,27 @@ interface Props {
 	 * the memoized `MessageItem`.
 	 */
 	onOpenFile?: (path: string) => void;
-	onOpenWorkList?: () => void;
 	workSegment?: WorkSegment;
 	onSelectWorkSegment?: (segment: WorkSegment) => void;
-	onOpenAgentRoleList?: () => void;
 	onOpenAgentRoleDetail?: (roleId: string) => void;
-	onOpenScheduleList?: () => void;
 	onOpenScheduleDetail?: (scheduleId: string) => void;
+	/** The Git workspace's navigations; see `GitWorkspace`. */
+	onSelectGitSegment?: (segment: GitSegment) => void;
+	onSelectDiffFile?: (path: string, staged: boolean) => void;
+	onSelectCommit?: (hash: string) => void;
+	onSelectBranch?: (branch: BranchRef) => void;
+	onRepointBranch?: (
+		from: BranchRef,
+		to: BranchRef | null,
+		worktree: string,
+	) => void;
+	onCloseGitFile?: (
+		path: string,
+		worktree: string,
+		next: { path: string; staged: boolean } | null,
+	) => void;
+	/** Whether the sidebar's Git list is on screen; see `GitWorkspace`. */
+	gitListBeside?: boolean;
 	/**
 	 * Set when the session's data is being read out of another worktree, which
 	 * is the whole of what makes this screen read-only: the data comes from
@@ -218,6 +229,13 @@ interface Props {
 	view?: SessionView | null;
 	/** Opens the viewed session in its own worktree; see `ReadOnlyBar`. */
 	onOpenSessionThere?: () => void;
+	/** Opens the review from the strip's review row; see `AttentionStrip`. */
+	onOpenReview?: () => void;
+	/**
+	 * Told whether the review row may show, so the sidebar's Git watch keeps its
+	 * count live meanwhile. Must be stable.
+	 */
+	onReviewRowCanShowChange?: (canShow: boolean) => void;
 }
 
 function ChatPanel({
@@ -230,20 +248,26 @@ function ChatPanel({
 	sidebarToggleRef,
 	onOpenSettings,
 	overlay,
-	onCloseOverlay,
+	onGoUp,
 	onNavigateToSession,
 	onSelectSession,
 	onOpenWorkDetail,
 	onOpenFile,
-	onOpenWorkList,
 	workSegment = "current",
 	onSelectWorkSegment,
-	onOpenAgentRoleList,
 	onOpenAgentRoleDetail,
-	onOpenScheduleList,
 	onOpenScheduleDetail,
+	onSelectGitSegment,
+	onSelectDiffFile,
+	onSelectCommit,
+	onSelectBranch,
+	onRepointBranch,
+	onCloseGitFile,
+	gitListBeside = false,
 	view = null,
 	onOpenSessionThere,
+	onOpenReview,
+	onReviewRowCanShowChange,
 }: Props) {
 	const isReadOnly = view !== null;
 	const projectTitle = useWSStore((state) => state.projectTitle);
@@ -302,6 +326,7 @@ function ChatPanel({
 		settingError,
 		clearSettingError,
 		sendUserMessage,
+		sendHtmlAction,
 		interrupt,
 		permissionResponse,
 		setMode,
@@ -343,6 +368,10 @@ function ChatPanel({
 	const promptOwnsInput =
 		turn.phase === "blocked" &&
 		(turn.blockers ?? []).some((b) => b.kind === "permission");
+	const pageSender = useMemo<PageSender>(
+		() => ({ send: sendHtmlAction, awaitingPermission: promptOwnsInput }),
+		[sendHtmlAction, promptOwnsInput],
+	);
 
 	// The strip says the session is watching by the rule its row is drawn by, so
 	// the row's Eye and the strip's line come and go together
@@ -351,10 +380,9 @@ function ChatPanel({
 	const sessionWork = useWorkStore((s) =>
 		sessionWorkId ? s.works.find((w) => w.id === sessionWorkId) : undefined,
 	);
+	const activity = sessionActivity(turn, sessionWork, sessionDetail?.watching);
 	const watchedStories =
-		sessionActivity(turn, sessionWork, sessionDetail?.watching) === "watching"
-			? sessionDetail?.watched_stories
-			: undefined;
+		activity === "watching" ? sessionDetail?.watched_stories : undefined;
 
 	// The cards behind those blockers, for the strip to answer from. Looked up
 	// at every depth: a subagent's request is filed under its Task call.
@@ -380,6 +408,26 @@ function ChatPanel({
 			return card ? [{ request: card.request, status: card.status }] : [];
 		});
 	}, [turn.blockers, messages]);
+
+	// The new session's Chat / HTML first switch, offered only while the choice
+	// is still a draft: before the first message, on a session that is this
+	// screen's to change and is not a work item's (always Chat). Its detail has
+	// to have landed — `started` is only there, and a fork is told apart by it —
+	// and so has the transcript, so the switch never appears for a moment over a
+	// conversation still loading (docs/html-first-session-ui.md §2.5).
+	const htmlFirstOffered =
+		!isReadOnly &&
+		!isChatPending &&
+		messages.length === 0 &&
+		sessionDetail !== null &&
+		!sessionDetail.started &&
+		!sessionDetail.activated &&
+		sessionDetail.work_id === undefined;
+	const htmlFirstSwitch = useHtmlFirstSwitch({
+		sessionId,
+		detail: sessionDetail,
+		offered: htmlFirstOffered,
+	});
 
 	const markSessionRead = useWSStore((s) => s.actions.markSessionRead);
 
@@ -409,6 +457,16 @@ function ChatPanel({
 	useEffect(() => {
 		setAttachError(null);
 	}, [sessionId]);
+	// A send that failed is reported under the message in the transcript, which
+	// a page keeping the composer — a Git detail — covers: there the user would
+	// see the draft go and nothing come of it. So the composer says it, keyed
+	// like `commandError`, until the transcript is back on the screen to say why.
+	const [undeliveredTo, setUndeliveredTo] = useState<string | null>(null);
+	const overlayRef = useRef(overlay);
+	overlayRef.current = overlay;
+	useEffect(() => {
+		if (!overlay) setUndeliveredTo(null);
+	}, [overlay]);
 
 	const handleSend = useCallback(
 		(content: string, attachments?: ChatAttachment[]): Promise<SendOutcome> => {
@@ -434,6 +492,7 @@ function ChatPanel({
 
 			setCommandError(null);
 			setAttachError(null);
+			setUndeliveredTo(null);
 			const sentTo = sessionId;
 			// Only a refused command or message with files rejects here (see
 			// `sendUserMessage`): its echo is gone, so what was typed goes back into
@@ -441,6 +500,7 @@ function ChatPanel({
 			return sendUserMessage(content, undefined, attachments).then(
 				(sent): SendOutcome => {
 					if (sent && mayBeRefused) rename?.();
+					if (!sent && overlayRef.current) setUndeliveredTo(sentTo);
 					return "sent";
 				},
 				(error: unknown): SendOutcome => {
@@ -459,6 +519,26 @@ function ChatPanel({
 			);
 		},
 		[resolvedTitle, onUpdateTitle, sendUserMessage, sessionId],
+	);
+
+	// The extension's empty-state hints send without going through the composer,
+	// so they wait for a switch in flight here; the composer waits on `canSend`.
+	// Through a ref, so the send that runs is the one rendered after the switch
+	// settled — and dropped if that render is another session's: a hint pressed
+	// here is not a message for wherever the user went in the meantime.
+	const handleSendRef = useRef(handleSend);
+	handleSendRef.current = handleSend;
+	const sessionIdRef = useRef(sessionId);
+	sessionIdRef.current = sessionId;
+	const { whenSettled: whenHtmlFirstSettled } = htmlFirstSwitch;
+	const handleHintSend = useCallback(
+		(hint: string) => {
+			const pressedIn = sessionIdRef.current;
+			void whenHtmlFirstSettled().then(() => {
+				if (sessionIdRef.current === pressedIn) handleSendRef.current(hint);
+			});
+		},
+		[whenHtmlFirstSettled],
 	);
 
 	// An answer only reaches the process that raised the prompt, so a card whose
@@ -701,6 +781,10 @@ function ChatPanel({
 	// Whether the caret is in the composer, which on a short touch screen is
 	// what makes the panel step aside (see `answerPanelYielded` below).
 	const [composerFocused, setComposerFocused] = useState(false);
+	// Narrower: whether the caret is in one of the composer's text fields, which
+	// is what holds a soft keyboard up. A tap on Send leaves focus on the button
+	// under a finger, with the keyboard gone.
+	const [composerTyping, setComposerTyping] = useState(false);
 
 	// Clearing `composerFocused` is what ends a yield, and it is done here rather
 	// than left to the composer's blur: the card is `inert` while it has yielded,
@@ -784,6 +868,37 @@ function ChatPanel({
 	}, [sessionId, isChatPending, isReadOnly, overlayOpen, openAnswerPanel]);
 
 	const unanswered = turn.unanswered ?? [];
+
+	// Whether the strip may say "N changed files · Review": the strip is up
+	// (no overlay, a writable session that has loaded), the agent is idle by the
+	// composer's own test — `turnOpen` takes the optimistic half too, so the row
+	// goes in the frame Send is pressed — and by the session's activity, which
+	// is not `watching` or `waiting_children` (other agents may still be editing
+	// this tree), and no question waits, panel up or not
+	// (docs/agent-handoff-ui.md §2.3). The detail has to have landed: until then
+	// the turn is a placeholder that says idle whatever the session is doing.
+	// So does a work's session whose work the store has not paged in, which
+	// costs the activity its wait: not knowing whether it waits on its tasks,
+	// the row stays away.
+	// Everything but the count, which is reported up so the sidebar keeps the
+	// count live while this holds: the gate must not depend on the answer it
+	// enables.
+	const reviewRowCanShow =
+		!overlay &&
+		!isChatPending &&
+		!isReadOnly &&
+		isSessionDetailLoaded &&
+		isGitRepo === true &&
+		!turnOpen &&
+		activity === "idle" &&
+		(!sessionWorkId || sessionWork !== undefined) &&
+		unanswered.length === 0;
+	useEffect(() => {
+		if (!reviewRowCanShow) return;
+		onReviewRowCanShowChange?.(true);
+		return () => onReviewRowCanShowChange?.(false);
+	}, [reviewRowCanShow, onReviewRowCanShowChange]);
+	const changeCount = useGitChangeCount();
 
 	// The seen set below holds only what is still waiting. A question that
 	// leaves the list leaves the set too, so one coming back — its answer
@@ -952,23 +1067,27 @@ function ChatPanel({
 	// folded into the footer — exists only while the chrome is folded, and one
 	// flag is what keeps the two from ever disagreeing.
 	const [answerPanelFocused, setAnswerPanelFocused] = useState(false);
-	// A closed panel has no focus to report, and its last word on the way out is
-	// not always delivered — a card unmounted under the caret fires no blur. So
-	// the flag is cleared from the fact that owns it, and a panel that opens
-	// again starts from "not in it yet".
+	// A panel that is not drawn has no focus to report, and its last word on
+	// the way out is not always delivered — a card unmounted under the caret
+	// fires no blur. So the flag is cleared from the fact that owns it, and a
+	// panel drawn again starts from "not in it yet". Drawn, not open: an overlay
+	// unmounts an open card too, and a page that keeps the composer must not
+	// have it folded away by a card that is not there.
 	useEffect(() => {
-		if (!answerPanelShown) setAnswerPanelFocused(false);
-	}, [answerPanelShown]);
+		if (!answerPanelDrawn) setAnswerPanelFocused(false);
+	}, [answerPanelDrawn]);
 	const chromeCollapsed =
-		answerPanelShown && answerPanelFocused && isShortViewport;
+		answerPanelDrawn && answerPanelFocused && isShortViewport;
 	// The same reasoning as the card's flag above, for the composer: it is
 	// unmounted by the fold and by an overlay, and a bar removed under the caret
 	// fires no blur — left standing, the flag would make the card yield to a
 	// composer that is not there.
 	const composerMounted =
-		!view && !isInputBarHidden(overlay) && !chromeCollapsed;
+		!view && overlayKeepsComposer(overlay) && !chromeCollapsed;
 	useEffect(() => {
-		if (!composerMounted) setComposerFocused(false);
+		if (composerMounted) return;
+		setComposerFocused(false);
+		setComposerTyping(false);
 	}, [composerMounted]);
 
 	// Dropping is a shortcut for the composer's `+`, so it is taken exactly where
@@ -980,7 +1099,7 @@ function ChatPanel({
 		? "Read-only — files can't be attached here"
 		: sessionId === ""
 			? "Open a session to attach files"
-			: isInputBarHidden(overlay)
+			: !overlayKeepsComposer(overlay)
 				? "Go back to the chat to attach files"
 				: CustomInputBar
 					? "This message box doesn't take files"
@@ -1137,7 +1256,11 @@ function ChatPanel({
 		const handleKeyDown = (e: KeyboardEvent) => {
 			// Skip if already handled (e.g., by CommandPalette)
 			if (e.defaultPrevented) return;
-			if (isInputBarHidden(overlay)) return;
+			// Not on a Git page even where it keeps the composer: Escape there
+			// clears the review's line selection, whose listener is added after
+			// this one and so runs after it — too late to claim the key. Stop is
+			// in the composer.
+			if (!overlayKeepsComposer(overlay) || isGitOverlay(overlay)) return;
 			// A sheet takes Escape for dismissing itself; interrupting the agent as
 			// well would make one key do two unrelated things.
 			if (isSheetOpen) return;
@@ -1204,8 +1327,13 @@ function ChatPanel({
 				// the same statement made where it cannot drift.
 				onPermissionRespond={isReadOnly ? undefined : handlePermissionRespond}
 				onAnswerQuestion={isReadOnly ? undefined : handleAnswerQuestion}
-				onHintClick={isReadOnly ? undefined : handleSend}
+				onHintClick={isReadOnly ? undefined : handleHintSend}
 				isReadOnly={isReadOnly}
+				emptyStateSwitch={
+					htmlFirstOffered ? (
+						<HtmlFirstSwitch control={htmlFirstSwitch} />
+					) : undefined
+				}
 				promptError={promptError ?? undefined}
 				onOpenWorkDetail={onOpenWorkDetail}
 				onOpenFile={onOpenFile}
@@ -1262,39 +1390,64 @@ function ChatPanel({
 		);
 	};
 
+	// Takes no argument: an `onBack` may be handed straight to `onClick`, and
+	// the click's event is no `to`.
+	const goUp = () => onGoUp?.();
+	// What takes a detail's actions off the screen (`DetailActionsPlacement`).
+	// The pointer gate is the answer panel's yield's: a fine pointer has no
+	// soft keyboard to make room for.
+	const keyboardUp = composerTyping && isPrimaryPointerCoarse;
 	const renderOverlay = (overlay: NonNullable<OverlayState>) => {
 		switch (overlay.type) {
+			// One element for every layer, so that moving between a list and its
+			// layers keeps the workspace — and the list's place — mounted.
+			case "git":
 			case "diff":
+			case "branch":
+			case "commit":
+			case "commit-diff":
+			case "commit-file":
 				return (
-					<DiffView
-						path={overlay.path}
-						staged={overlay.staged}
-						onBack={onCloseOverlay ?? noop}
+					<GitWorkspace
+						layer={overlay}
+						onSelectSegment={onSelectGitSegment ?? noop}
+						onSelectFile={onSelectDiffFile ?? noop}
+						onSelectCommit={onSelectCommit ?? noop}
+						onSelectBranch={onSelectBranch ?? noop}
+						onRepointBranch={onRepointBranch ?? noop}
+						onCloseFile={onCloseGitFile ?? noop}
+						listBeside={gitListBeside}
+						keyboardUp={keyboardUp}
 					/>
 				);
 			case "file":
 				if (overlay.edit) {
+					// Past the view it was entered from: the editor's ← is the chat's.
 					return (
-						<FileEditor path={overlay.path} onBack={onCloseOverlay ?? noop} />
+						<FileEditor
+							path={overlay.path}
+							onBack={() => onGoUp?.(null)}
+							keyboardUp={keyboardUp}
+						/>
 					);
 				}
-				return <FileView path={overlay.path} onBack={onCloseOverlay ?? noop} />;
-			case "commit":
 				return (
-					<CommitView hash={overlay.hash} onBack={onCloseOverlay ?? noop} />
+					<FileView
+						path={overlay.path}
+						source={overlay.source}
+						line={overlay.line}
+						onBack={goUp}
+						keyboardUp={keyboardUp}
+					/>
 				);
-			case "commit-diff":
-				return <CommitDiffView hash={overlay.hash} path={overlay.path} />;
-			case "commit-file":
-				return <CommitFileView hash={overlay.hash} path={overlay.path} />;
 			case "settings":
-				return <SettingsPage onBack={onCloseOverlay ?? noop} />;
+				return <SettingsPage onBack={goUp} />;
 			case "work-list":
 				return (
 					<WorkListOverlay
 						segment={workSegment}
 						onSelectSegment={onSelectWorkSegment ?? noop}
-						onBack={onCloseOverlay ?? noop}
+						onBack={goUp}
 						onOpenWorkDetail={onOpenWorkDetail ?? noop}
 						onNavigateToSession={onNavigateToSession ?? noop}
 					/>
@@ -1303,31 +1456,25 @@ function ChatPanel({
 				return (
 					<WorkDetailOverlay
 						workId={overlay.workId}
-						onBack={onOpenWorkList ?? onCloseOverlay ?? noop}
+						segment={overlay.segment}
+						onGoUp={onGoUp ?? noop}
 						onNavigateToSession={onNavigateToSession ?? noop}
 						onOpenWorkDetail={onOpenWorkDetail ?? noop}
-						onOpenScheduleDetail={onOpenScheduleDetail ?? noop}
-						onOpenScheduleList={onOpenScheduleList ?? noop}
 					/>
 				);
 			case "agent-role-list":
 				return (
 					<AgentRoleListOverlay
-						onBack={onCloseOverlay ?? noop}
+						onBack={goUp}
 						onOpenAgentRoleDetail={onOpenAgentRoleDetail ?? noop}
 					/>
 				);
 			case "agent-role-detail":
-				return (
-					<AgentRoleDetailOverlay
-						roleId={overlay.roleId}
-						onBack={onOpenAgentRoleList ?? onCloseOverlay ?? noop}
-					/>
-				);
+				return <AgentRoleDetailOverlay roleId={overlay.roleId} onBack={goUp} />;
 			case "schedule-list":
 				return (
 					<ScheduleListOverlay
-						onBack={onCloseOverlay ?? noop}
+						onBack={goUp}
 						onOpenScheduleDetail={onOpenScheduleDetail ?? noop}
 					/>
 				);
@@ -1335,7 +1482,7 @@ function ChatPanel({
 				return (
 					<ScheduleDetailOverlay
 						scheduleId={overlay.scheduleId}
-						onBack={onOpenScheduleList ?? onCloseOverlay ?? noop}
+						onBack={goUp}
 						onOpenWorkDetail={onOpenWorkDetail ?? noop}
 						onNavigateToSession={onNavigateToSession ?? noop}
 					/>
@@ -1393,7 +1540,11 @@ function ChatPanel({
 				}
 			>
 				<CoveredSurface covered={transcriptCovered}>
-					<FullScreenHost>{renderTranscript()}</FullScreenHost>
+					{/* Around the viewer too: a page sends from full screen as
+					    from its card. */}
+					<PageSendContext value={pageSender}>
+						<FullScreenHost>{renderTranscript()}</FullScreenHost>
+					</PageSendContext>
 				</CoveredSurface>
 			</div>
 			<PageHeaderTarget value={pageHeader.target}>
@@ -1425,12 +1576,20 @@ function ChatPanel({
 	const inputBarProps: InputBarProps = {
 		sessionId,
 		onSend: handleSend,
-		canSend: status === "connected" && !isChatPending && !promptOwnsInput,
+		// A switch in flight holds the first message until the session it lands
+		// in is the one the screen shows (docs/html-first-session-ui.md §2.3).
+		canSend:
+			status === "connected" &&
+			!isChatPending &&
+			!promptOwnsInput &&
+			!htmlFirstSwitch.pending,
 		sendBlockedReason: promptOwnsInput ? "Allow or deny to send" : undefined,
 		disabled: !isSessionResolved,
 		turnOpen,
 		onStop: handleInterrupt,
 		focusRequest: inputFocusRequest,
+		// A Git page is there to be read: the user writes once they have read it.
+		focusOnOpen: !isGitOverlay(overlay),
 	};
 
 	return (
@@ -1482,20 +1641,32 @@ function ChatPanel({
 							promptError={promptError ?? undefined}
 							watchedStories={watchedStories}
 							onOpenWorkDetail={onOpenWorkDetail}
+							changeCount={reviewRowCanShow ? changeCount : undefined}
+							onReview={onOpenReview}
 						/>
 					)}
-					{/* Held back by an overlay like the composer's errors: the session
-					    panel that raised it is not reachable from a page either. */}
+					{/* Held back by an overlay: the session panel that raised it is
+					    not reachable from a page. */}
 					{!overlay && settingError && (
 						<ComposerErrorBar
 							message={settingError}
 							onDismiss={clearSettingError}
 						/>
 					)}
-					{!overlay && commandError?.sessionId === sessionId && (
+					{/* With the composer it was typed into, wherever that is: the
+					    refused text is back in the draft, and this is the only place
+					    that says why. */}
+					{overlayKeepsComposer(overlay) &&
+						commandError?.sessionId === sessionId && (
+							<ComposerErrorBar
+								message={commandError.message}
+								onDismiss={() => setCommandError(null)}
+							/>
+						)}
+					{composerMounted && overlay && undeliveredTo === sessionId && (
 						<ComposerErrorBar
-							message={commandError.message}
-							onDismiss={() => setCommandError(null)}
+							message="Your message couldn't be sent. The chat says why."
+							onDismiss={() => setUndeliveredTo(null)}
 						/>
 					)}
 					{/* Not held back by an overlay: a drop is taken over the pages that
@@ -1555,7 +1726,7 @@ function ChatPanel({
 					    lives in the bar and folds with it, though it is one of the
 					    user's two exits from a blocked turn: one press outside the card
 					    brings it back. */}
-					{!isInputBarHidden(overlay) &&
+					{overlayKeepsComposer(overlay) &&
 						!chromeCollapsed &&
 						(view ? (
 							<ReadOnlyBar view={view} onOpenThere={onOpenSessionThere} />
@@ -1567,10 +1738,14 @@ function ChatPanel({
 							// biome-ignore lint/a11y/noStaticElementInteractions: listens to focus moving through the bar; nothing here is a control
 							<div
 								className="contents"
-								onFocus={() => setComposerFocused(true)}
+								onFocus={(e) => {
+									setComposerFocused(true);
+									setComposerTyping(e.target.matches("textarea, input"));
+								}}
 								onBlur={(e) => {
 									if (e.currentTarget.contains(e.relatedTarget)) return;
 									setComposerFocused(false);
+									setComposerTyping(false);
 								}}
 							>
 								{CustomInputBar ? (

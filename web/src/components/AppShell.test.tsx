@@ -8,7 +8,9 @@ import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { JSONRPCErrorCode, JSONRPCErrorException } from "json-rpc-2.0";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { gitStatusQueryKey } from "../hooks/gitQueries";
 import { useAuthStore } from "../lib/authStore";
+import { FRESH_VISIT_STATE } from "../lib/scrollMemory";
 import { useSessionDetailStore } from "../lib/sessionDetailStore";
 import { useSessionStore } from "../lib/sessionStore";
 import { useWorkStore } from "../lib/workStore";
@@ -23,6 +25,7 @@ import {
 	makeSessionDetail,
 	makeSessionListItem,
 } from "../test/sessionFixtures";
+import type { GitStatus } from "../types/git";
 import type { SessionListChangedNotification } from "../types/message";
 
 // ChatPanel is the attach point; render the session it was handed and whether
@@ -33,7 +36,8 @@ import type { SessionListChangedNotification } from "../types/message";
 // opens, which names the button.
 // The work-list wiring is reported too: which segment the shell hands down, and
 // the three navigations that read it back (switch segment, open a work, come
-// back out of one). They are the shell's, not the list's.
+// back out of one). They are the shell's, not the list's. So are the Git
+// workspace's: the segment it is handed, and the two navigations it asks for.
 vi.mock("./Chat", () => ({
 	ChatPanel: ({
 		sessionId,
@@ -44,10 +48,17 @@ vi.mock("./Chat", () => ({
 		workSegment,
 		onSelectWorkSegment,
 		onOpenWorkDetail,
-		onOpenWorkList,
 		onNavigateToSession,
-		onOpenScheduleList,
 		onOpenScheduleDetail,
+		onSelectGitSegment,
+		onSelectDiffFile,
+		onSelectBranch,
+		onSelectCommit,
+		onRepointBranch,
+		onCloseGitFile,
+		onGoUp,
+		onOpenReview,
+		onReviewRowCanShowChange,
 		overlay,
 		view,
 	}: {
@@ -59,11 +70,37 @@ vi.mock("./Chat", () => ({
 		workSegment?: string;
 		onSelectWorkSegment?: (segment: "current" | "closed") => void;
 		onOpenWorkDetail?: (workId: string) => void;
-		onOpenWorkList?: () => void;
 		onNavigateToSession?: (sessionId: string, worktree: string) => void;
-		onOpenScheduleList?: () => void;
 		onOpenScheduleDetail?: (scheduleId: string) => void;
-		overlay?: { type: string; scheduleId?: string } | null;
+		onSelectGitSegment?: (segment: "changes" | "history" | "branches") => void;
+		onSelectDiffFile?: (path: string, staged: boolean) => void;
+		onSelectBranch?: (branch: { ref: string; remote: boolean }) => void;
+		onSelectCommit?: (hash: string) => void;
+		onRepointBranch?: (
+			from: { ref: string; remote: boolean },
+			to: { ref: string; remote: boolean } | null,
+			worktree: string,
+		) => void;
+		onCloseGitFile?: (
+			path: string,
+			worktree: string,
+			next: { path: string; staged: boolean } | null,
+		) => void;
+		onGoUp?: (to?: { type: string; workId?: string; segment?: string }) => void;
+		onOpenReview?: () => void;
+		onReviewRowCanShowChange?: (canShow: boolean) => void;
+		overlay?: {
+			type: string;
+			scheduleId?: string;
+			segment?: string;
+			ref?: string;
+			remote?: boolean;
+			branch?: { ref: string; remote: boolean };
+			path?: string;
+			edit?: boolean;
+			source?: boolean;
+			line?: number;
+		} | null;
 		view?: { worktree: string; exists: boolean } | null;
 	}) => (
 		<div
@@ -72,7 +109,27 @@ vi.mock("./Chat", () => ({
 			data-can-open-sidebar={String(Boolean(onOpenSidebar))}
 			data-work-segment={workSegment}
 			data-overlay={overlay?.type}
+			data-file={
+				overlay?.type === "file"
+					? JSON.stringify({
+							path: overlay.path,
+							edit: overlay.edit,
+							source: overlay.source,
+							line: overlay.line,
+						})
+					: undefined
+			}
 			data-schedule-id={overlay?.scheduleId}
+			data-git-segment={overlay?.type === "git" ? overlay.segment : undefined}
+			data-branch={
+				overlay?.type === "branch"
+					? `${overlay.remote ? "remote" : "local"}:${overlay.ref}`
+					: undefined
+			}
+			data-commit-branch={
+				overlay?.branch &&
+				`${overlay.branch.remote ? "remote" : "local"}:${overlay.branch.ref}`
+			}
 			// Absent rather than empty when there is no view: "" is a worktree here.
 			data-view-worktree={view?.worktree}
 			data-view-exists={view ? String(view.exists) : undefined}
@@ -98,14 +155,106 @@ vi.mock("./Chat", () => ({
 			<button type="button" onClick={() => onOpenWorkDetail?.("w1")}>
 				Open w1
 			</button>
-			<button type="button" onClick={() => onOpenWorkList?.()}>
+			<button type="button" onClick={() => onGoUp?.()}>
 				Back to list
+			</button>
+			<button
+				type="button"
+				onClick={() =>
+					onGoUp?.({ type: "work-detail", workId: "w0", segment: "current" })
+				}
+			>
+				Back to story w0
 			</button>
 			<button type="button" onClick={() => onOpenScheduleDetail?.("s1")}>
 				Open s1
 			</button>
-			<button type="button" onClick={() => onOpenScheduleList?.()}>
+			<button type="button" onClick={() => onGoUp?.()}>
 				Back to schedules
+			</button>
+			<button type="button" onClick={() => onSelectGitSegment?.("changes")}>
+				Git Changes
+			</button>
+			<button type="button" onClick={() => onSelectGitSegment?.("history")}>
+				Git History
+			</button>
+			<button
+				type="button"
+				onClick={() => onSelectDiffFile?.("src/b.ts", false)}
+			>
+				Review src/b.ts
+			</button>
+			<button
+				type="button"
+				onClick={() => onSelectDiffFile?.("src/b.ts", true)}
+			>
+				Review staged src/b.ts
+			</button>
+			<button
+				type="button"
+				onClick={() => onCloseGitFile?.("src/a.ts", "A", null)}
+			>
+				Discarded src/a.ts
+			</button>
+			<button
+				type="button"
+				onClick={() =>
+					onCloseGitFile?.("src/a.ts", "A", { path: "src/b.ts", staged: true })
+				}
+			>
+				Discarded src/a.ts before src/b.ts
+			</button>
+			<button
+				type="button"
+				onClick={() => onCloseGitFile?.("src/a.ts", "B", null)}
+			>
+				Discarded src/a.ts in B
+			</button>
+			<button
+				type="button"
+				onClick={() =>
+					onSelectBranch?.({ ref: "origin/colleague", remote: true })
+				}
+			>
+				Open origin/colleague
+			</button>
+			<button type="button" onClick={() => onSelectCommit?.("a".repeat(40))}>
+				Open commit aaaaaaa
+			</button>
+			<button type="button" onClick={() => onSelectCommit?.("b".repeat(40))}>
+				Open commit bbbbbbb
+			</button>
+			<button
+				type="button"
+				onClick={() =>
+					onRepointBranch?.(
+						{ ref: "origin/colleague", remote: true },
+						{ ref: "colleague", remote: false },
+						"A",
+					)
+				}
+			>
+				origin/colleague became local
+			</button>
+			<button
+				type="button"
+				onClick={() =>
+					onRepointBranch?.({ ref: "topic", remote: false }, null, "A")
+				}
+			>
+				Deleted topic
+			</button>
+			<button type="button" onClick={() => onGoUp?.()}>
+				Leave the page
+			</button>
+			<button type="button" onClick={() => onOpenReview?.()}>
+				Review from the chat
+			</button>
+			<button type="button" onClick={() => onReviewRowCanShowChange?.(true)}>
+				Agent goes idle
+			</button>
+			<button type="button" onClick={() => onReviewRowCanShowChange?.(false)}>
+				Agent starts a turn
 			</button>
 		</div>
 	),
@@ -125,6 +274,7 @@ vi.mock("./Session", () => ({
 		onDeleteSession,
 		onOpenWorkList,
 		onOpenScheduleList,
+		onSelectFile,
 		isExpanded,
 	}: {
 		isOpen: boolean;
@@ -135,6 +285,7 @@ vi.mock("./Session", () => ({
 		onDeleteSession: (id: string, worktree: string | null) => void;
 		onOpenWorkList: () => void;
 		onOpenScheduleList: () => void;
+		onSelectFile: (path: string, line?: number) => void;
 		isExpanded: boolean;
 	}) => (
 		<div
@@ -169,6 +320,21 @@ vi.mock("./Session", () => ({
 				onClick={() => onDeleteSession("gone-session", "old-fix")}
 			>
 				Delete a deleted worktree's row
+			</button>
+			<button
+				type="button"
+				onClick={() => onDeleteSession(currentSessionId ?? "", null)}
+			>
+				Delete the open session
+			</button>
+			<button type="button" onClick={() => onSelectFile("docs/a.md")}>
+				Pick docs/a.md
+			</button>
+			<button type="button" onClick={() => onSelectFile("docs/a.md", 42)}>
+				Pick line 42 of docs/a.md
+			</button>
+			<button type="button" onClick={() => onSelectFile("docs/a.md", 7)}>
+				Pick line 7 of docs/a.md
 			</button>
 		</div>
 	),
@@ -254,6 +420,9 @@ const mockDetailSubscribe = vi.fn(async (sessionId: string, _cb: unknown) => {
 const mockDetailUnsubscribe = vi.fn(async () => {});
 const mockListModels = vi.fn(async () => ({ claude: [], codex: [] }));
 const mockListEfforts = vi.fn(async () => ({ claude: [], codex: [] }));
+const mockGetStatus = vi.fn(
+	async (): Promise<GitStatus> => ({ staged: [], unstaged: [] }),
+);
 
 const ws = vi.hoisted(() => ({ status: "connected" }));
 
@@ -269,22 +438,28 @@ vi.mock("../lib/wsStore", async (importOriginal) => ({
 				sessionDetailUnsubscribe: mockDetailUnsubscribe,
 				listModels: mockListModels,
 				listEfforts: mockListEfforts,
+				getStatus: mockGetStatus,
 			},
 		}),
 	wsActions: {
 		createSession: vi.fn(),
+		deleteSession: vi.fn(async () => {}),
 		disconnect: vi.fn(),
 		sessionViewDelete: vi.fn(async () => {}),
 	},
 }));
 
-function renderAppShell(initialPath: string) {
+const shell = { queryClient: undefined as QueryClient | undefined };
+
+function renderAppShell(initialPath: string, gitStatus?: GitStatus) {
 	const queryClient = new QueryClient({
 		defaultOptions: {
 			queries: { retry: false },
 			mutations: { retry: false },
 		},
 	});
+	if (gitStatus) queryClient.setQueryData(gitStatusQueryKey, gitStatus);
+	shell.queryClient = queryClient;
 	const router = createRouter({
 		routeTree,
 		history: createMemoryHistory({ initialEntries: [initialPath] }),
@@ -713,6 +888,26 @@ describe("AppShell sidebar form and its switch", () => {
 		expect(sidebarOpen()).toBe("false");
 		expect(document.querySelector("[inert]")).toBeNull();
 	});
+
+	// docs/git-ui.md: at `expanded` a Git list is the sidebar's Git tab, so
+	// its URL leaves the main area to the chat. The same URL is the list page
+	// once the window is narrow.
+	it("leaves the main area to the chat beside a Git list at expanded", async () => {
+		setExpanded(true);
+		renderAppShell("/w/A/git?session=a1");
+		await waitFor(() => {
+			expect(screen.getByTestId("chat-panel")).toHaveTextContent("a1");
+		});
+		expect(screen.getByTestId("chat-panel")).not.toHaveAttribute(
+			"data-overlay",
+		);
+
+		resize(false);
+		expect(screen.getByTestId("chat-panel")).toHaveAttribute(
+			"data-overlay",
+			"git",
+		);
+	});
 });
 
 // A git view has nothing to show outside a repository — reached by a saved URL,
@@ -752,6 +947,700 @@ describe("AppShell git views outside a git repository", () => {
 
 		await screen.findByTestId("chat-panel");
 		expect(router.state.location.pathname).toBe("/w/A/unstaged/src/a.ts");
+	});
+});
+
+// The Git workspace follows the project list's rules (docs/project-ui.md §5):
+// the segment is in the URL, `changes` is the absence of the parameter, Back
+// walks the segments, and the last Back returns to the chat. Worktree A, for
+// the same session adoption as below.
+describe("AppShell Git workspace", () => {
+	beforeEach(() => {
+		vi.clearAllMocks();
+		resetWorktreeStore();
+		useSessionDetailStore.getState().clear();
+		useSessionStore.setState({
+			sessions: [],
+			isLoading: true,
+			isSuccess: false,
+			showTaskSessions: false,
+		});
+		useWorkStore.setState({ works: [] });
+		useAuthStore.setState({ sessionToken: "test-session-token" });
+	});
+
+	afterEach(() => {
+		repo.isGitRepo = true;
+	});
+
+	const panel = () => screen.getByTestId("chat-panel");
+	const search = (router: ReturnType<typeof renderAppShell>) =>
+		router.state.location.search as { segment?: string; session?: string };
+
+	it("opens the segment the URL names, and keeps it through the session redirect", async () => {
+		const router = renderAppShell("/w/A/git?segment=history");
+
+		await waitFor(() => expect(search(router).session).toBe("a1"));
+		expect(router.state.location.pathname).toBe("/w/A/git");
+		expect(search(router).segment).toBe("history");
+		expect(panel()).toHaveAttribute("data-git-segment", "history");
+	});
+
+	it("leaves a history entry per segment, and the last Back returns to the chat", async () => {
+		const user = userEvent.setup();
+		const router = renderAppShell("/w/A/s/a1");
+		await waitFor(() => expect(panel()).toHaveTextContent("a1"));
+
+		await user.click(screen.getByRole("button", { name: "Git Changes" }));
+		await waitFor(() =>
+			expect(router.state.location.pathname).toBe("/w/A/git"),
+		);
+		// Changes is the absence of the parameter, never `segment=changes`.
+		expect(search(router)).toEqual({ session: "a1" });
+
+		await user.click(screen.getByRole("button", { name: "Git History" }));
+		await waitFor(() => expect(search(router).segment).toBe("history"));
+
+		router.history.back();
+		await waitFor(() =>
+			expect(panel()).toHaveAttribute("data-git-segment", "changes"),
+		);
+
+		router.history.back();
+		await waitFor(() =>
+			expect(router.state.location.pathname).toBe("/w/A/s/a1"),
+		);
+	});
+
+	// Otherwise a second press of the lit segment would cost the reader one more
+	// Back to get out.
+	it("adds no entry for the segment already on screen", async () => {
+		const user = userEvent.setup();
+		const router = renderAppShell("/w/A/s/a1");
+		await waitFor(() => expect(panel()).toHaveTextContent("a1"));
+
+		await user.click(screen.getByRole("button", { name: "Git Changes" }));
+		await waitFor(() =>
+			expect(router.state.location.pathname).toBe("/w/A/git"),
+		);
+		await user.click(screen.getByRole("button", { name: "Git Changes" }));
+
+		router.history.back();
+		await waitFor(() =>
+			expect(router.state.location.pathname).toBe("/w/A/s/a1"),
+		);
+	});
+
+	// docs/git-history-ui.md#url: back from a commit is the list it was picked
+	// from; History entered from another segment is History's default.
+	it("returns from a commit to History with the list's range and search", async () => {
+		const user = userEvent.setup();
+		const router = renderAppShell(
+			`/w/A/commit/${"a".repeat(40)}?session=a1&scope=all&q=lane`,
+		);
+		await waitFor(() =>
+			expect(panel()).toHaveAttribute("data-overlay", "commit"),
+		);
+
+		await user.click(screen.getByRole("button", { name: "Git History" }));
+
+		await waitFor(() =>
+			expect(router.state.location.pathname).toBe("/w/A/git"),
+		);
+		expect(search(router)).toEqual({
+			session: "a1",
+			segment: "history",
+			scope: "all",
+			q: "lane",
+		});
+
+		await user.click(screen.getByRole("button", { name: "Git Changes" }));
+		await waitFor(() => expect(search(router)).toEqual({ session: "a1" }));
+		await user.click(screen.getByRole("button", { name: "Git History" }));
+		await waitFor(() =>
+			expect(search(router)).toEqual({ session: "a1", segment: "history" }),
+		);
+	});
+
+	// A diff's way back goes up to its list: one reached from a link has no
+	// list behind it in the history, so the list takes the diff's place.
+	it("goes back from a diff opened by link to the list it belongs to", async () => {
+		const user = userEvent.setup();
+		const router = renderAppShell("/w/A/unstaged/src/a.ts?session=a1");
+		await waitFor(() =>
+			expect(panel()).toHaveAttribute("data-overlay", "diff"),
+		);
+
+		await user.click(screen.getByRole("button", { name: "Git Changes" }));
+
+		await waitFor(() =>
+			expect(router.state.location.pathname).toBe("/w/A/git"),
+		);
+		expect(search(router)).toEqual({ session: "a1" });
+	});
+
+	it("replaces a discarded diff with the list, so Back skips it", async () => {
+		const user = userEvent.setup();
+		const router = renderAppShell("/w/A/s/a1");
+		await waitFor(() => expect(panel()).toHaveTextContent("a1"));
+		await act(() =>
+			router.navigate({
+				to: "/w/$worktree/unstaged/$",
+				params: { worktree: "A", _splat: "src/a.ts" },
+				search: { session: "a1" },
+			}),
+		);
+
+		await user.click(
+			screen.getByRole("button", { name: "Discarded src/a.ts" }),
+		);
+		await waitFor(() =>
+			expect(router.state.location.pathname).toBe("/w/A/git"),
+		);
+
+		router.history.back();
+		await waitFor(() =>
+			expect(router.state.location.pathname).toBe("/w/A/s/a1"),
+		);
+	});
+
+	// A file discarded from the list beside its review is done with: the review
+	// goes on to the next file, on either side, in the entry of the file it
+	// replaces — Back to an emptied page would be a dead end.
+	it.each([
+		["unstaged", "/w/A/unstaged/src/a.ts"],
+		["staged", "/w/A/staged/src/a.ts"],
+	])("moves a discarded file's review on to the next file, from the %s side", async (_, from) => {
+		const user = userEvent.setup();
+		const router = renderAppShell("/w/A/s/a1");
+		await waitFor(() => expect(panel()).toHaveTextContent("a1"));
+		await act(() => router.navigate({ to: from, search: { session: "a1" } }));
+
+		await user.click(
+			screen.getByRole("button", {
+				name: "Discarded src/a.ts before src/b.ts",
+			}),
+		);
+		await waitFor(() =>
+			expect(router.state.location.pathname).toBe("/w/A/staged/src/b.ts"),
+		);
+		expect(search(router)).toEqual({ session: "a1" });
+		// Another page, so not scrolled to where the emptied one was left.
+		expect(router.history.location.state).toMatchObject(FRESH_VISIT_STATE);
+
+		router.history.back();
+		await waitFor(() =>
+			expect(router.state.location.pathname).toBe("/w/A/s/a1"),
+		);
+	});
+
+	// Each file reviewed is a step of its own, also one opened from a row
+	// tapped beside a review already open: Back retraces the files one at a
+	// time, then returns to the list.
+	it("pushes the review from the list, and again from another row", async () => {
+		const user = userEvent.setup();
+		const router = renderAppShell("/w/A/git?session=a1");
+		await waitFor(() => expect(panel()).toHaveAttribute("data-overlay", "git"));
+
+		await user.click(screen.getByRole("button", { name: "Review src/b.ts" }));
+		await waitFor(() =>
+			expect(router.state.location.pathname).toBe("/w/A/unstaged/src/b.ts"),
+		);
+		// The review paging on, as its ‹ › do.
+		await act(() =>
+			router.navigate({
+				to: "/w/$worktree/unstaged/$",
+				params: { worktree: "A", _splat: "src/a.ts" },
+				search: { session: "a1" },
+			}),
+		);
+		await waitFor(() =>
+			expect(router.state.location.pathname).toBe("/w/A/unstaged/src/a.ts"),
+		);
+		await user.click(screen.getByRole("button", { name: "Review src/b.ts" }));
+		await waitFor(() =>
+			expect(router.state.location.pathname).toBe("/w/A/unstaged/src/b.ts"),
+		);
+
+		router.history.back();
+		await waitFor(() =>
+			expect(router.state.location.pathname).toBe("/w/A/unstaged/src/a.ts"),
+		);
+		router.history.back();
+		await waitFor(() =>
+			expect(router.state.location.pathname).toBe("/w/A/unstaged/src/b.ts"),
+		);
+		router.history.back();
+		await waitFor(() =>
+			expect(router.state.location.pathname).toBe("/w/A/git"),
+		);
+	});
+
+	// The file under review is no new page: its own row adds no step, and its
+	// other side's takes the review's entry over.
+	it("adds no step for the row of the file under review", async () => {
+		const user = userEvent.setup();
+		const router = renderAppShell("/w/A/s/a1");
+		await waitFor(() => expect(panel()).toHaveTextContent("a1"));
+		await user.click(screen.getByRole("button", { name: "Git Changes" }));
+		await waitFor(() =>
+			expect(router.state.location.pathname).toBe("/w/A/git"),
+		);
+		await user.click(screen.getByRole("button", { name: "Review src/b.ts" }));
+		await waitFor(() =>
+			expect(router.state.location.pathname).toBe("/w/A/unstaged/src/b.ts"),
+		);
+
+		await user.click(screen.getByRole("button", { name: "Review src/b.ts" }));
+		await user.click(
+			screen.getByRole("button", { name: "Review staged src/b.ts" }),
+		);
+		await waitFor(() =>
+			expect(router.state.location.pathname).toBe("/w/A/staged/src/b.ts"),
+		);
+
+		router.history.back();
+		await waitFor(() =>
+			expect(router.state.location.pathname).toBe("/w/A/git"),
+		);
+	});
+
+	// The chat's review row starts where the list's Review does, and with no
+	// list behind it: leaving it goes to the list, and from there to the chat.
+	it("opens the review from the chat at the list's first file", async () => {
+		const user = userEvent.setup();
+		const router = renderAppShell("/w/A/s/a1", {
+			staged: [{ path: "src/b.ts", status: "M" }],
+			unstaged: [{ path: "src/a.ts", status: "M" }],
+		});
+		await waitFor(() => expect(panel()).toHaveTextContent("a1"));
+
+		await user.click(screen.getByRole("button", { name: "Agent goes idle" }));
+		await user.click(
+			screen.getByRole("button", { name: "Review from the chat" }),
+		);
+		await waitFor(() =>
+			expect(router.state.location.pathname).toBe("/w/A/unstaged/src/a.ts"),
+		);
+		expect(search(router)).toEqual({ session: "a1" });
+
+		await user.click(
+			screen.getByRole("button", { name: "Discarded src/a.ts" }),
+		);
+		await waitFor(() =>
+			expect(router.state.location.pathname).toBe("/w/A/git"),
+		);
+		router.history.back();
+		await waitFor(() =>
+			expect(router.state.location.pathname).toBe("/w/A/s/a1"),
+		);
+	});
+
+	// The row drew from the cache as it was; a refresh that has been asked for
+	// since is what the press goes by — here, the file the row counted is
+	// committed and another one changed.
+	it("opens the file the status says at the press, not the one cached", async () => {
+		const user = userEvent.setup();
+		mockGetStatus.mockResolvedValueOnce({
+			staged: [],
+			unstaged: [{ path: "src/c.ts", status: "M" }],
+		});
+		const router = renderAppShell("/w/A/s/a1", {
+			staged: [],
+			unstaged: [{ path: "src/a.ts", status: "M" }],
+		});
+		await waitFor(() => expect(panel()).toHaveTextContent("a1"));
+		await act(() =>
+			shell.queryClient?.invalidateQueries({
+				queryKey: gitStatusQueryKey,
+				refetchType: "none",
+			}),
+		);
+
+		await user.click(screen.getByRole("button", { name: "Agent goes idle" }));
+		await user.click(
+			screen.getByRole("button", { name: "Review from the chat" }),
+		);
+		await waitFor(() =>
+			expect(router.state.location.pathname).toBe("/w/A/unstaged/src/c.ts"),
+		);
+	});
+
+	// A press whose read outlives the row — the user sent meanwhile — must not
+	// push the review over the turn they just started.
+	it("drops a press the chat has moved past while the status was read", async () => {
+		const user = userEvent.setup();
+		let answer: (status: GitStatus) => void = () => {};
+		mockGetStatus.mockImplementationOnce(
+			() =>
+				new Promise<GitStatus>((resolve) => {
+					answer = resolve;
+				}),
+		);
+		const router = renderAppShell("/w/A/s/a1");
+		await waitFor(() => expect(panel()).toHaveTextContent("a1"));
+		await user.click(screen.getByRole("button", { name: "Agent goes idle" }));
+		await user.click(
+			screen.getByRole("button", { name: "Review from the chat" }),
+		);
+		await user.click(
+			screen.getByRole("button", { name: "Agent starts a turn" }),
+		);
+
+		await act(async () =>
+			answer({ staged: [], unstaged: [{ path: "src/a.ts", status: "M" }] }),
+		);
+		expect(router.state.location.pathname).toBe("/w/A/s/a1");
+	});
+
+	it("opens the Changes list from the chat once the tree is clean", async () => {
+		const user = userEvent.setup();
+		const router = renderAppShell("/w/A/s/a1", { staged: [], unstaged: [] });
+		await waitFor(() => expect(panel()).toHaveTextContent("a1"));
+
+		await user.click(screen.getByRole("button", { name: "Agent goes idle" }));
+		await user.click(
+			screen.getByRole("button", { name: "Review from the chat" }),
+		);
+		await waitFor(() =>
+			expect(router.state.location.pathname).toBe("/w/A/git"),
+		);
+	});
+
+	// Leaving a review pushed from the list goes up to that list's entry, past
+	// a replace made inside it: the history is as if the review had never been
+	// opened, rather than holding the list twice.
+	it("goes back to the list a review was pushed from when it ends", async () => {
+		const user = userEvent.setup();
+		const router = renderAppShell("/w/A/s/a1");
+		await waitFor(() => expect(panel()).toHaveTextContent("a1"));
+		await user.click(screen.getByRole("button", { name: "Git Changes" }));
+		await waitFor(() =>
+			expect(router.state.location.pathname).toBe("/w/A/git"),
+		);
+
+		await user.click(screen.getByRole("button", { name: "Review src/b.ts" }));
+		await waitFor(() =>
+			expect(router.state.location.pathname).toBe("/w/A/unstaged/src/b.ts"),
+		);
+		// A replace inside the review as the review itself makes it — moving on
+		// from a discard, or to the file's other side.
+		await act(() =>
+			router.navigate({
+				to: "/w/$worktree/unstaged/$",
+				params: { worktree: "A", _splat: "src/a.ts" },
+				search: { session: "a1" },
+				replace: true,
+			}),
+		);
+		await user.click(
+			screen.getByRole("button", { name: "Discarded src/a.ts" }),
+		);
+		await waitFor(() =>
+			expect(router.state.location.pathname).toBe("/w/A/git"),
+		);
+
+		router.history.back();
+		await waitFor(() =>
+			expect(router.state.location.pathname).toBe("/w/A/s/a1"),
+		);
+	});
+
+	// The discard answers after the press; a reader who has moved to another
+	// diff meanwhile keeps the page they moved to.
+	it("leaves alone a page the reader moved to before the discard answered", async () => {
+		const user = userEvent.setup();
+		const router = renderAppShell("/w/A/unstaged/src/b.ts?session=a1");
+		await waitFor(() =>
+			expect(panel()).toHaveAttribute("data-overlay", "diff"),
+		);
+
+		await user.click(
+			screen.getByRole("button", { name: "Discarded src/a.ts" }),
+		);
+		await expectPageKept(user, router, "/w/A/unstaged/src/b.ts");
+	});
+
+	// The same path in another worktree is another file: a discard in B that
+	// answers after the reader switched to A must not take A's diff away — nor
+	// the reader back to B.
+	it("leaves alone the same path's diff in another worktree", async () => {
+		const user = userEvent.setup();
+		const router = renderAppShell("/w/A/unstaged/src/a.ts?session=a1");
+		await waitFor(() =>
+			expect(panel()).toHaveAttribute("data-overlay", "diff"),
+		);
+
+		await user.click(
+			screen.getByRole("button", { name: "Discarded src/a.ts in B" }),
+		);
+		await expectPageKept(user, router, "/w/A/unstaged/src/a.ts");
+	});
+
+	/**
+	 * A replace would not show yet if checked straight after the press, so a
+	 * step is pushed after it and Back walked: it lands on the page that was
+	 * there before the press only if nothing replaced it.
+	 */
+	async function expectPageKept(
+		user: ReturnType<typeof userEvent.setup>,
+		router: ReturnType<typeof renderAppShell>,
+		pathname: string,
+	) {
+		await user.click(screen.getByRole("button", { name: "Git History" }));
+		await waitFor(() =>
+			expect(router.state.location.pathname).toBe("/w/A/git"),
+		);
+		router.history.back();
+		await waitFor(() => expect(router.state.location.pathname).toBe(pathname));
+	}
+
+	it("leaves for the chat it was opened over", async () => {
+		const user = userEvent.setup();
+		const router = renderAppShell("/w/A/git?segment=branches&session=a1");
+		await waitFor(() =>
+			expect(panel()).toHaveAttribute("data-git-segment", "branches"),
+		);
+
+		await user.click(screen.getByRole("button", { name: "Leave the page" }));
+
+		await waitFor(() =>
+			expect(router.state.location.pathname).toBe("/w/A/s/a1"),
+		);
+	});
+
+	// docs/git-branches-ui.md#the-branch: a remote-only branch's ref can be a
+	// local branch's name too, so the URL says which.
+	it("pushes a branch's detail, saying when it is a remote one", async () => {
+		const user = userEvent.setup();
+		const router = renderAppShell("/w/A/git?segment=branches&session=a1");
+		await waitFor(() =>
+			expect(panel()).toHaveAttribute("data-git-segment", "branches"),
+		);
+
+		await user.click(
+			screen.getByRole("button", { name: "Open origin/colleague" }),
+		);
+
+		await waitFor(() =>
+			expect(router.state.location.pathname).toBe(
+				"/w/A/branch/origin/colleague",
+			),
+		);
+		expect(router.state.location.searchStr).toBe("?session=a1&remote=1");
+		expect(panel()).toHaveAttribute("data-branch", "remote:origin/colleague");
+
+		router.history.back();
+		await waitFor(() =>
+			expect(router.state.location.pathname).toBe("/w/A/git"),
+		);
+	});
+
+	// docs/git-branches-ui.md#opening-a-commit: the commit stacks on the
+	// branch, carrying its whole identity.
+	it("opens a commit from a branch's detail stacked on that branch", async () => {
+		const user = userEvent.setup();
+		const router = renderAppShell(
+			"/w/A/branch/origin/colleague?session=a1&remote=1",
+		);
+		await waitFor(() =>
+			expect(panel()).toHaveAttribute("data-branch", "remote:origin/colleague"),
+		);
+
+		await user.click(
+			screen.getByRole("button", { name: "Open commit aaaaaaa" }),
+		);
+
+		await waitFor(() =>
+			expect(router.state.location.pathname).toBe(
+				`/w/A/commit/${"a".repeat(40)}`,
+			),
+		);
+		expect(router.state.location.searchStr).toBe(
+			"?session=a1&branch=origin%2Fcolleague&remote=1",
+		);
+		expect(panel()).toHaveAttribute(
+			"data-commit-branch",
+			"remote:origin/colleague",
+		);
+
+		// Another commit opened from it carries the branch on.
+		await user.click(
+			screen.getByRole("button", { name: "Open commit bbbbbbb" }),
+		);
+		await waitFor(() =>
+			expect(router.state.location.pathname).toBe(
+				`/w/A/commit/${"b".repeat(40)}`,
+			),
+		);
+		expect(router.state.location.searchStr).toBe(
+			"?session=a1&branch=origin%2Fcolleague&remote=1",
+		);
+
+		router.history.back();
+		router.history.back();
+		await waitFor(() =>
+			expect(panel()).toHaveAttribute("data-branch", "remote:origin/colleague"),
+		);
+	});
+
+	it("opens a local branch's detail from a link", async () => {
+		renderAppShell("/w/A/branch/feature/x?session=a1");
+
+		await waitFor(() =>
+			expect(panel()).toHaveAttribute("data-branch", "local:feature/x"),
+		);
+	});
+
+	// Back must not reopen a page for a row that left the list.
+	it("replaces a branch's detail once its branch is listed by another name", async () => {
+		const user = userEvent.setup();
+		const router = renderAppShell("/w/A/git?segment=branches&session=a1");
+		await waitFor(() =>
+			expect(panel()).toHaveAttribute("data-git-segment", "branches"),
+		);
+		await user.click(
+			screen.getByRole("button", { name: "Open origin/colleague" }),
+		);
+		await waitFor(() =>
+			expect(panel()).toHaveAttribute("data-branch", "remote:origin/colleague"),
+		);
+
+		await user.click(
+			screen.getByRole("button", { name: "origin/colleague became local" }),
+		);
+		await waitFor(() =>
+			expect(panel()).toHaveAttribute("data-branch", "local:colleague"),
+		);
+
+		router.history.back();
+		await waitFor(() =>
+			expect(panel()).toHaveAttribute("data-git-segment", "branches"),
+		);
+	});
+
+	// Leaving goes up: the deleted page, and every branch read on the way to
+	// it, leave the way back.
+	it("leaves a deleted branch's detail for the list, and only that one's", async () => {
+		const user = userEvent.setup();
+		const router = renderAppShell("/w/A/s/a1");
+		await waitFor(() => expect(panel()).toHaveTextContent("a1"));
+		const openBranch = (ref: string) =>
+			act(() =>
+				router.navigate({
+					to: "/w/$worktree/branch/$",
+					params: { worktree: "A", _splat: ref },
+					search: { session: "a1" },
+				}),
+			);
+		await openBranch("main");
+		await waitFor(() =>
+			expect(panel()).toHaveAttribute("data-branch", "local:main"),
+		);
+
+		// Another branch's delete answering leaves this page alone.
+		await user.click(screen.getByRole("button", { name: "Deleted topic" }));
+		expect(panel()).toHaveAttribute("data-branch", "local:main");
+
+		await openBranch("topic");
+		await user.click(screen.getByRole("button", { name: "Deleted topic" }));
+		await waitFor(() =>
+			expect(panel()).toHaveAttribute("data-git-segment", "branches"),
+		);
+		expect(router.state.location.search).toEqual({
+			session: "a1",
+			segment: "branches",
+		});
+
+		router.history.back();
+		await waitFor(() =>
+			expect(router.state.location.pathname).toBe("/w/A/s/a1"),
+		);
+	});
+
+	it("is replaced by the chat outside a repository", async () => {
+		repo.isGitRepo = false;
+		const router = renderAppShell("/w/A/git?segment=history&session=a1");
+
+		await waitFor(() =>
+			expect(router.state.location.pathname).toBe("/w/A/s/a1"),
+		);
+	});
+});
+
+// docs/file.md#where-the-viewer-opens: the line and the source are the URL's,
+// so a reload keeps them and Back walks the lines the reader picked.
+describe("AppShell file view URL", () => {
+	beforeEach(() => {
+		vi.clearAllMocks();
+		resetWorktreeStore();
+		useSessionDetailStore.getState().clear();
+		useSessionStore.setState({
+			sessions: [],
+			isLoading: true,
+			isSuccess: false,
+			showTaskSessions: false,
+		});
+		useWorkStore.setState({ works: [] });
+		useAuthStore.setState({ sessionToken: "test-session-token" });
+	});
+
+	const fileOnScreen = () => {
+		const file = screen.getByTestId("chat-panel").getAttribute("data-file");
+		return file ? JSON.parse(file) : null;
+	};
+	const searchOf = (router: ReturnType<typeof renderAppShell>) =>
+		router.state.location.search as Record<string, unknown>;
+
+	it.each([
+		["?line=42", { line: 42 }],
+		["?mode=source", { source: true }],
+		// The line implies the source; spelled out as well, it is the same state.
+		["?mode=source&line=42", { line: 42 }],
+		// The editor has no line to stand at.
+		["?mode=edit&line=42", { edit: true }],
+	])("reads %s", async (query, expected) => {
+		renderAppShell(`/w/A/files/docs/a.md${query}`);
+
+		await waitFor(() =>
+			expect(fileOnScreen()).toEqual({ path: "docs/a.md", ...expected }),
+		);
+	});
+
+	it("keeps the line through the session redirect", async () => {
+		const router = renderAppShell("/w/A/files/docs/a.md?line=42");
+
+		await waitFor(() => expect(searchOf(router).session).toBeDefined());
+		expect(searchOf(router).line).toBe(42);
+		expect(fileOnScreen()).toEqual({ path: "docs/a.md", line: 42 });
+	});
+
+	it("opens a picked line, a history entry per pick, and the file row at the top", async () => {
+		const user = userEvent.setup();
+		const router = renderAppShell("/w/A/files/docs/a.md");
+		await waitFor(() => expect(searchOf(router).session).toBeDefined());
+
+		await user.click(
+			screen.getByRole("button", { name: "Pick line 42 of docs/a.md" }),
+		);
+		await waitFor(() => expect(fileOnScreen()?.line).toBe(42));
+		// Only the line is written: it already says the source.
+		expect(searchOf(router).line).toBe(42);
+		expect(searchOf(router).mode).toBeUndefined();
+
+		await user.click(
+			screen.getByRole("button", { name: "Pick line 7 of docs/a.md" }),
+		);
+		await waitFor(() => expect(fileOnScreen()?.line).toBe(7));
+
+		await user.click(screen.getByRole("button", { name: "Pick docs/a.md" }));
+		await waitFor(() => expect(fileOnScreen()).toEqual({ path: "docs/a.md" }));
+		expect(searchOf(router).line).toBeUndefined();
+
+		router.history.back();
+		await waitFor(() => expect(fileOnScreen()?.line).toBe(7));
+		router.history.back();
+		await waitFor(() => expect(fileOnScreen()?.line).toBe(42));
 	});
 });
 
@@ -825,10 +1714,18 @@ describe("AppShell work list segment", () => {
 	});
 
 	// The list unmounts on the way into a work, so without carrying the segment
-	// the trip out would hand an archive reader back to `Current`.
+	// the trip out would hand an archive reader back to `Current`. And it goes
+	// up, back to the list's own entry: Back from there is the chat, not the
+	// work just left (docs/project-ui.md §5.1).
 	it("returns to the segment a work was opened from", async () => {
 		const user = userEvent.setup();
-		const router = renderAppShell("/w/A/works?segment=closed");
+		const router = renderAppShell("/w/A/s/a1");
+		await waitFor(() =>
+			expect(screen.getByTestId("chat-panel")).toHaveTextContent("a1"),
+		);
+		await user.click(screen.getByRole("button", { name: "Stories" }));
+		await waitFor(() => expect(segmentOnScreen()).toBe("current"));
+		await user.click(screen.getByRole("button", { name: "Show Closed" }));
 
 		await waitFor(() => expect(segmentOnScreen()).toBe("closed"));
 		await user.click(screen.getByRole("button", { name: "Open w1" }));
@@ -844,6 +1741,74 @@ describe("AppShell work list segment", () => {
 			expect(router.state.location.pathname).toBe("/w/A/works"),
 		);
 		expect(segmentInUrl(router)).toBe("closed");
+
+		// Back walks the segments, then leaves for the chat.
+		router.history.back();
+		await waitFor(() => expect(segmentOnScreen()).toBe("current"));
+		router.history.back();
+		await waitFor(() =>
+			expect(router.state.location.pathname).toBe("/w/A/s/a1"),
+		);
+	});
+
+	it("adds no step for the segment already on screen", async () => {
+		const user = userEvent.setup();
+		const router = renderAppShell("/w/A/s/a1");
+		await waitFor(() =>
+			expect(screen.getByTestId("chat-panel")).toHaveTextContent("a1"),
+		);
+		await user.click(screen.getByRole("button", { name: "Stories" }));
+		await waitFor(() => expect(segmentOnScreen()).toBe("current"));
+		await user.click(screen.getByRole("button", { name: "Show Closed" }));
+		await waitFor(() => expect(segmentOnScreen()).toBe("closed"));
+		await user.click(screen.getByRole("button", { name: "Show Closed" }));
+
+		router.history.back();
+		await waitFor(() => expect(segmentOnScreen()).toBe("current"));
+	});
+
+	// A task's parent is its story, which only the work's data says: a story
+	// behind is gone back to, and one that is not takes the task's place.
+	it("goes up from a task to its story, whether or not the story is behind", async () => {
+		const user = userEvent.setup();
+		const router = renderAppShell("/w/A/works/w0");
+		await waitFor(() =>
+			expect(screen.getByTestId("chat-panel")).toHaveAttribute(
+				"data-overlay",
+				"work-detail",
+			),
+		);
+		await user.click(screen.getByRole("button", { name: "Open w1" }));
+		await waitFor(() =>
+			expect(router.state.location.pathname).toBe("/w/A/works/w1"),
+		);
+
+		await user.click(screen.getByRole("button", { name: "Back to story w0" }));
+		await waitFor(() =>
+			expect(router.state.location.pathname).toBe("/w/A/works/w0"),
+		);
+		// Gone back to, not pushed: nothing is in front of the story.
+		await act(() => router.history.forward());
+		await waitFor(() =>
+			expect(router.state.location.pathname).toBe("/w/A/works/w1"),
+		);
+
+		// With no story right behind — another page between, as a link leaves
+		// it — the story is put in the task's place.
+		await act(() =>
+			router.navigate({
+				to: "/w/$worktree/works/$workId",
+				params: { worktree: "A", workId: "w1" },
+			}),
+		);
+		await user.click(screen.getByRole("button", { name: "Back to story w0" }));
+		await waitFor(() =>
+			expect(router.state.location.pathname).toBe("/w/A/works/w0"),
+		);
+		router.history.back();
+		await waitFor(() =>
+			expect(router.state.location.pathname).toBe("/w/A/works/w1"),
+		);
 	});
 });
 
@@ -905,6 +1870,11 @@ describe("AppShell schedule routes", () => {
 		await user.click(screen.getByRole("button", { name: "Back to schedules" }));
 		await waitFor(() =>
 			expect(router.state.location.pathname).toBe("/w/A/schedules"),
+		);
+		// Up to the list's own entry: Back from it is the chat, not the schedule.
+		router.history.back();
+		await waitFor(() =>
+			expect(router.state.location.pathname).toBe("/w/A/s/a1"),
 		);
 	});
 });
@@ -1120,5 +2090,136 @@ describe("AppShell reading a session of another worktree", () => {
 				kind: "current",
 			}),
 		);
+	});
+});
+
+// A session corrected under a page — none yet, or one just deleted — is no
+// page the user moved to: the route's session is replaced, and whatever is
+// open over the chat stays open (docs/project-ui.md §5.1).
+describe("AppShell correcting the session under a page", () => {
+	let unsubscribeSwitch: (() => void) | null = null;
+
+	beforeEach(() => {
+		vi.clearAllMocks();
+		resetWorktreeStore();
+		useSessionDetailStore.getState().clear();
+		useSessionStore.setState({
+			sessions: [],
+			isLoading: true,
+			isSuccess: false,
+			// B's list then holds both its sessions, so deleting one leaves the
+			// other to fall back to.
+			showTaskSessions: true,
+		});
+		useWorkStore.setState({ works: [] });
+		useAuthStore.setState({ sessionToken: "test-session-token" });
+		unsubscribeSwitch = worktreeActions.onWorktreeChange(() => {
+			worktreeActions.notifyWorktreeSwitchEnd();
+		});
+	});
+
+	afterEach(() => {
+		unsubscribeSwitch?.();
+		unsubscribeSwitch = null;
+		useSessionStore.setState({ showTaskSessions: false });
+	});
+
+	const panel = () => screen.getByTestId("chat-panel");
+	const search = (router: ReturnType<typeof renderAppShell>) =>
+		router.state.location.search as { segment?: string; session?: string };
+
+	// A switch made from the Git workspace stays in it — also into a worktree
+	// whose first session is still being made, as a just-created one's is.
+	it("keeps the Git workspace through the first session of a worktree switched to", async () => {
+		vi.mocked(wsActions.createSession).mockResolvedValueOnce(session("fresh"));
+		const router = renderAppShell("/w/A/git?segment=history");
+		await waitFor(() => expect(search(router).session).toBe("a1"));
+
+		await router.navigate({ to: "/git", search: { segment: "history" } });
+
+		await waitFor(() => expect(search(router).session).toBe("fresh"));
+		expect(router.state.location.pathname).toBe("/git");
+		expect(search(router).segment).toBe("history");
+
+		// The switch is the one step: the session was written into it.
+		router.history.back();
+		await waitFor(() =>
+			expect(router.state.location.pathname).toBe("/w/A/git"),
+		);
+		expect(search(router).session).toBe("a1");
+	});
+
+	// The create answers after the render that asked: a session opened
+	// meanwhile — here one read from a deleted worktree, which leaves the
+	// worktree in the path as it was — is the reader's, not the create's.
+	it("leaves alone a session opened before the first session was made", async () => {
+		let answer = (_: ReturnType<typeof session>) => {};
+		vi.mocked(wsActions.createSession).mockImplementationOnce(
+			() =>
+				new Promise((resolve) => {
+					answer = resolve;
+				}),
+		);
+		const router = renderAppShell("/");
+		await waitFor(() => expect(wsActions.createSession).toHaveBeenCalled());
+
+		await router.navigate({
+			to: "/s/$sessionId",
+			params: { sessionId: "gone-session" },
+			search: { from: "old-fix" },
+		});
+		await waitFor(() =>
+			expect(panel()).toHaveAttribute("data-view-worktree", "old-fix"),
+		);
+		await act(async () => answer(session("fresh")));
+
+		expect(router.state.location.pathname).toBe("/s/gone-session");
+		expect(panel()).toHaveAttribute("data-view-worktree", "old-fix");
+	});
+
+	it("keeps the page open over a deleted session, and adds no step", async () => {
+		const user = userEvent.setup();
+		const router = renderAppShell("/w/B/s/b1");
+		await waitFor(() => expect(panel()).toHaveTextContent("b1"));
+		await user.click(screen.getByRole("button", { name: "Git Changes" }));
+		await waitFor(() =>
+			expect(router.state.location.pathname).toBe("/w/B/git"),
+		);
+		const length = router.history.length;
+
+		await user.click(
+			screen.getByRole("button", { name: "Delete the open session" }),
+		);
+
+		await waitFor(() => expect(search(router).session).toBe("x"));
+		expect(router.state.location.pathname).toBe("/w/B/git");
+		expect(router.history.length).toBe(length);
+	});
+
+	// The delete answers after the press: a reader who has gone to another
+	// worktree meanwhile must not be pulled back into the one they left.
+	it("leaves alone a worktree the reader moved to before the delete answered", async () => {
+		let answer = () => {};
+		vi.mocked(wsActions.deleteSession).mockImplementationOnce(
+			() =>
+				new Promise<void>((resolve) => {
+					answer = resolve;
+				}),
+		);
+		const user = userEvent.setup();
+		const router = renderAppShell("/w/B/s/b1");
+		await waitFor(() => expect(panel()).toHaveTextContent("b1"));
+
+		await user.click(
+			screen.getByRole("button", { name: "Delete the open session" }),
+		);
+		await router.navigate({
+			to: "/w/$worktree/s/$sessionId",
+			params: { worktree: "A", sessionId: "a1" },
+		});
+		await waitFor(() => expect(panel()).toHaveTextContent("a1"));
+		await act(async () => answer());
+
+		expect(router.state.location.pathname).toBe("/w/A/s/a1");
 	});
 });

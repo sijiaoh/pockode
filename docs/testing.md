@@ -92,7 +92,7 @@ tests. That has held for every red run looked at here but one, where a test
 asked jsdom for an accessible name once per row. `getByRole(..., { name })`
 computes one for **every** element carrying that role, and each computation
 goes through `getComputedStyle`, which jsdom re-cascades from scratch. Two
-`BranchSheet` tests did that over a sheet's worth of branch rows — and a dozen
+branch-list tests did that over a screen's worth of branch rows — and a dozen
 buttons is already enough for one such query to cost seconds.
 
 A slow test and a busy box compound, and it is the product that reaches
@@ -146,7 +146,7 @@ Querying by text stops checking the accessible name; it does not stop the name
 from mattering. So one test still asks by name and the rest go by text, which
 pays the cost once — and a name that drifts from the visible text, which no
 text query can see, still turns one test red.
-`web/src/components/Git/BranchSheet.test.tsx` does this with "names each row by
+`web/src/components/Git/BranchesSection.test.tsx` does this with "names each row by
 its branch", and `web/src/components/ui/Sheet.test.tsx` with "names the box by
 its title and the close button by its job".
 
@@ -268,6 +268,15 @@ appear only once `listCommands` answers.
   after a real delay of about 100ms. Every test with this shape then fails on
   an idle machine, which shows you all of them at once instead of whichever one
   happened to lose the race.
+- **A state that does not last cannot be polled for.** A poll reads the
+  present, so it misses a state the code leaves again within a millisecond or
+  two. A test polling for one fails every time, never intermittently, and a
+  longer timeout changes nothing. Record each arrival as it happens instead —
+  a listener pushing each event's payload — and assert on the sequence and on
+  where it ends. The Forward test in `web/src/lib/layerHistory.browser.test.tsx`
+  is the worked example: Forward lands on a closed sheet's entry and is taken
+  straight back off it
+  ([project-ui.md §5.2](project-ui.md#reload-deep-links-forward)).
 
 ## Frontend: the real-browser entry
 
@@ -371,6 +380,25 @@ things about writing tests with it:
   correct code.
 - **Marker text must be unique across every page**, because `viewTopOf` finds
   its element with `getByText`.
+
+**A module mock is a real module here.** `vi.mock(path, factory)` in a
+browser file becomes an ES module that exports only what the factory returns,
+so a module anywhere under the file that imports a name the factory leaves out
+fails to link, and the whole file fails to import — in both browsers, before any
+test runs, with "does not provide an export named …". jsdom fails only when the
+missing name is read, so the same mock stays green there. When a browser file
+suddenly fails this way, look at the imports the change added to a module it
+renders, not at the test: a module that many pages import should not pull in
+what only one caller needs (worked example:
+the scroll-restoration split in
+[frontend-state.md](code/frontend-state.md#why-a-pages-scroll-position-outlives-the-page)).
+When that import belongs where it is, and the file renders the importing module
+without measuring it, mock the importing module at its own path. Do not copy the
+new name into the old mock: the next import breaks it again. Spreading
+`importOriginal` into it does not help either when the mocked module's real code
+imports from something else the file mocks: it then fails to link on a
+different name. `web/src/components/Git/DiffView.browser.test.tsx` mocks
+`useGoToParent` for this reason.
 
 **A local-only red: Vite reloading mid-run.** With a warm Vite cache
 (`web/node_modules/.vite`), a dependency imported for the first time is only

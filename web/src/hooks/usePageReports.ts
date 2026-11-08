@@ -22,8 +22,11 @@ interface Options {
 	hosts: readonly string[];
 	/** The hosts the reader has allowed for the page, now. */
 	allowed: ReadonlySet<string>;
-	/** A message from the page that is no report, such as its height. */
-	onPageMessage?: (data: unknown) => void;
+	/**
+	 * A message from the page that is no report, such as its height, with the
+	 * page's window it came from — the one to answer.
+	 */
+	onPageMessage?: (data: unknown, page: Window) => void;
 	/** The wrapper's page has loaded. */
 	onLoaded?: () => void;
 }
@@ -76,7 +79,7 @@ export function usePageReports(
 			}
 			const report = readPageReport(event.data);
 			if (report === null) {
-				onPageMessage?.(event.data);
+				onPageMessage?.(event.data, wrapper[0]);
 			} else if (report.type === "refused") {
 				const refused = refusedHost(report.url, ownHostname);
 				if (!refused) return;

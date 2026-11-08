@@ -187,6 +187,55 @@ func (h *rpcMethodHandler) handleSessionSetMode(ctx context.Context, conn *jsonr
 	}
 }
 
+// handleSessionSetHTMLFirst switches the guidance an unstarted session's agent
+// will start with.
+//
+// No process is closed here, unlike session.set_mode. A process an unstarted
+// session has is one spawned for a first message that was refused, and the next
+// send replaces it when its value is not the session's (process.Manager
+// GetOrCreateProcess). Closing it here instead would race that send: a first
+// message delivered between this write and the close would go to a process
+// killed under it.
+func (h *rpcMethodHandler) handleSessionSetHTMLFirst(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request, wt *worktree.Worktree) {
+	var params rpc.SessionSetHTMLFirstParams
+	if err := unmarshalParams(req, &params); err != nil {
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "invalid params")
+		return
+	}
+
+	refuse := func(reason, message string) {
+		h.replyErrorData(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, message, rpc.SessionSetHTMLFirstErrorData{Reason: reason})
+	}
+
+	// The work claims a session's id before it creates the session, so this
+	// holds from the session's first moment until its kickoff starts it.
+	if _, isWork, err := h.workStore.FindBySessionID(params.SessionID); err != nil {
+		h.replyInternalError(ctx, conn, req.ID, "failed to look up the session's work", err, "sessionId", params.SessionID)
+		return
+	} else if isWork {
+		refuse(rpc.SessionHTMLFirstWorkSession, "a work item's session is always an ordinary chat")
+		return
+	}
+
+	if err := wt.SessionStore.SetHTMLFirst(ctx, params.SessionID, params.HTMLFirst); err != nil {
+		switch {
+		case errors.Is(err, session.ErrSessionNotFound):
+			h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "session not found")
+		case errors.Is(err, session.ErrSessionStarted):
+			refuse(rpc.SessionHTMLFirstStarted, "cannot change html_first after the first message was sent")
+		default:
+			h.replyInternalError(ctx, conn, req.ID, "failed to set html_first", err, "sessionId", params.SessionID)
+		}
+		return
+	}
+
+	h.log.Info("session html_first changed", "sessionId", params.SessionID, "htmlFirst", params.HTMLFirst)
+
+	if err := conn.Reply(ctx, req.ID, struct{}{}); err != nil {
+		h.log.Error("failed to send session set html_first response", "error", err)
+	}
+}
+
 func (h *rpcMethodHandler) handleSessionSetModel(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request, wt *worktree.Worktree) {
 	var params rpc.SessionSetModelParams
 	if err := unmarshalParams(req, &params); err != nil {

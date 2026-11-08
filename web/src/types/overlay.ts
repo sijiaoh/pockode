@@ -1,15 +1,79 @@
+import type { GitHistoryScope } from "./git";
+
 /**
  * Which half of the project list is on screen: the work to triage, or the
  * archive (docs/project-ui.md §2.1).
  */
 export type WorkSegment = "current" | "closed";
 
+/**
+ * Which list of the Git workspace is on screen. `changes` is the default, and
+ * like `current` above it is the absence of the URL parameter.
+ */
+export type GitSegment = "changes" | "history" | "branches";
+
+/**
+ * Which history the History segment lists (docs/git-history-ui.md#url). The
+ * history layers carry it as well as the list, so that the list beside a
+ * commit, and the one Back returns to, is the one the commit was picked from.
+ * Absent on an overlay means the default: the current range, unfiltered.
+ */
+export interface HistoryQuery {
+	scope: GitHistoryScope;
+	/** Commit message search; empty is no search. */
+	q?: string;
+	/** A path whose history is listed. */
+	file?: string;
+}
+
+export const DEFAULT_HISTORY_QUERY: HistoryQuery = { scope: "current" };
+
+/**
+ * A branch as a row of the Branches list names it
+ * (docs/git-branches-ui.md#the-branch). `ref` is what the row shows and
+ * `git.log`'s `branch` takes — `topic`, or `origin/topic` for a remote-only
+ * branch — and `remote` says which of the two it is: a local branch may itself
+ * be named `origin/topic`, beside a remote-only one that reads the same.
+ */
+export interface BranchRef {
+	ref: string;
+	remote: boolean;
+}
+
+/** The list row's key for `branch`, what `findBranchRow` takes. */
+export function branchRowKey(branch: BranchRef): string {
+	return `${branch.remote ? "remote" : "local"}:${branch.ref}`;
+}
+
+/**
+ * Which list a commit layer was opened from, carried by every layer stacked
+ * under it so that its way back, and the row lit beside it, are that list's:
+ * a History query (docs/git-history-ui.md#url), or the branch whose detail it
+ * was picked in (docs/git-branches-ui.md#opening-a-commit). Never both.
+ */
+export type CommitOrigin =
+	| { history?: HistoryQuery; branch?: never }
+	| { branch: BranchRef; history?: never };
+
+/**
+ * How the file overlay shows its file (docs/file.md#where-the-viewer-opens).
+ * The editor takes neither of the viewer's two, so entering it cannot carry
+ * them along. `source` is the source of a file that would otherwise render —
+ * Markdown, a page — and `line` a line of the file's text to open at. Only the
+ * source has lines, so `line` implies it.
+ */
+export type FileOverlayMode =
+	| { edit: true; source?: never; line?: never }
+	| { edit?: false; source?: boolean; line?: number };
+
 export type OverlayState =
+	| { type: "git"; segment: GitSegment; history?: HistoryQuery }
 	| { type: "diff"; path: string; staged: boolean }
-	| { type: "file"; path: string; edit?: boolean }
-	| { type: "commit"; hash: string }
-	| { type: "commit-diff"; hash: string; path: string }
-	| { type: "commit-file"; hash: string; path: string }
+	| ({ type: "file"; path: string } & FileOverlayMode)
+	| ({ type: "branch" } & BranchRef)
+	| ({ type: "commit"; hash: string } & CommitOrigin)
+	| ({ type: "commit-diff"; hash: string; path: string } & CommitOrigin)
+	| ({ type: "commit-file"; hash: string; path: string } & CommitOrigin)
 	| { type: "settings" }
 	| { type: "work-list"; segment: WorkSegment }
 	// `segment` is not shown here — it is the segment of the list this detail
@@ -23,15 +87,280 @@ export type OverlayState =
 	| { type: "schedule-detail"; scheduleId: string }
 	| null;
 
-/** The overlays that read the repository, and so have nothing to show without one. */
+// The Git workspace's list page is here and its details are not: a list's
+// bottom belongs to its commit bar and holds no code to talk about, while a
+// detail is where the user reads what the agent changed and tells it what to
+// change next (docs/git-ui.md). At `expanded` a list URL is the chat, so read
+// this of `mainAreaOverlay`.
+const composerHiddenOverlays: NonNullable<OverlayState>["type"][] = [
+	"git",
+	"work-list",
+	"work-detail",
+	"agent-role-list",
+	"agent-role-detail",
+	"schedule-list",
+	"schedule-detail",
+];
+
+/**
+ * Whether the chat's composer is under `overlay` — the chat itself, with no
+ * overlay, included. The one rule for the composer being on screen, read by
+ * the chat that draws it and by a handoff deciding whether it has to take the
+ * user to it.
+ */
+export function overlayKeepsComposer(
+	overlay: OverlayState | undefined,
+): boolean {
+	return !overlay || !composerHiddenOverlays.includes(overlay.type);
+}
+
+/**
+ * What of `overlay` the main area draws. At `expanded` a Git list is the
+ * sidebar's Git tab, so the main area beside it is the chat; only a detail
+ * takes the main area over (docs/git-ui.md). The same URL at either width.
+ */
+export function mainAreaOverlay(
+	overlay: OverlayState | undefined,
+	isExpanded: boolean,
+): OverlayState | undefined {
+	return isExpanded && overlay?.type === "git" ? undefined : overlay;
+}
+
+/**
+ * The overlays that read the repository, and so have nothing to show without
+ * one. Every one of them is a layer of the Git workspace.
+ */
 export function isGitOverlay(overlay: OverlayState | undefined): boolean {
+	return gitSegmentOf(overlay) !== null;
+}
+
+/** A layer of the Git workspace: the overlays `gitSegmentOf` gives a segment. */
+export type GitLayer = Extract<
+	NonNullable<OverlayState>,
+	{
+		type: "git" | "diff" | "branch" | "commit" | "commit-diff" | "commit-file";
+	}
+>;
+
+export function gitLayerOf(overlay: OverlayState | undefined): GitLayer | null {
 	switch (overlay?.type) {
+		case "git":
 		case "diff":
+		case "branch":
 		case "commit":
 		case "commit-diff":
 		case "commit-file":
-			return true;
+			return overlay;
 		default:
-			return false;
+			return null;
 	}
+}
+
+/**
+ * The workspace segment a Git layer belongs to, and null for anything that is
+ * not one. A detail does not carry its segment the way a work detail does: a
+ * diff can only have been opened from Changes and a branch only from
+ * Branches, and a commit carries the branch it was opened from or else is
+ * History's, so the layer itself already says which list is its parent.
+ */
+export function gitSegmentOf(
+	overlay: OverlayState | undefined,
+): GitSegment | null {
+	switch (overlay?.type) {
+		case "git":
+			return overlay.segment;
+		case "diff":
+			return "changes";
+		case "branch":
+			return "branches";
+		case "commit":
+		case "commit-diff":
+		case "commit-file":
+			return overlay.branch ? "branches" : "history";
+		default:
+			return null;
+	}
+}
+
+/**
+ * The history query the overlay carries, the default where it carries none —
+ * including every overlay that is not a history layer.
+ */
+export function historyQueryOf(
+	overlay: OverlayState | undefined,
+): HistoryQuery {
+	switch (overlay?.type) {
+		case "git":
+		case "commit":
+		case "commit-diff":
+		case "commit-file":
+			return overlay.history ?? DEFAULT_HISTORY_QUERY;
+		default:
+			return DEFAULT_HISTORY_QUERY;
+	}
+}
+
+/**
+ * What a commit opened from `overlay` carries on: the branch whose detail it
+ * is, or the branch or History query a commit layer already carries.
+ */
+export function commitOriginOf(
+	overlay: OverlayState | undefined,
+): CommitOrigin {
+	switch (overlay?.type) {
+		case "branch":
+			return { branch: { ref: overlay.ref, remote: overlay.remote } };
+		case "git":
+			return overlay.history ? { history: overlay.history } : {};
+		case "commit":
+		case "commit-diff":
+		case "commit-file":
+			if (overlay.branch) return { branch: overlay.branch };
+			return overlay.history ? { history: overlay.history } : {};
+		default:
+			return {};
+	}
+}
+
+/**
+ * Where every `History of this file` entry goes: the default range, filtered
+ * to the path (docs/git-history-ui.md#entering-them).
+ */
+export function fileHistoryOverlay(path: string): NonNullable<OverlayState> {
+	return {
+		type: "git",
+		segment: "history",
+		history: { ...DEFAULT_HISTORY_QUERY, file: path },
+	};
+}
+
+/**
+ * A page as the history knows it: an overlay in a worktree, where a null
+ * overlay is the worktree's chat. The session the URL carries is not part of
+ * it — every overlay carries one, and it names the chat underneath, not the
+ * page.
+ */
+export interface Page {
+	worktree: string;
+	overlay: OverlayState;
+}
+
+/**
+ * The page an in-app ← goes up to (docs/project-ui.md): a list's is the chat, a
+ * detail's the list or branch it belongs to, a commit's file its commit and a
+ * file's version its diff. A parent commit opened from a commit goes up as
+ * any commit does — to its list, not to the child it was opened from: up is
+ * not Back. Undefined for the chat, which has none.
+ *
+ * Read off the URL alone. A work's own parent is in its data — a task's story,
+ * a job's schedule — so the work detail names it to `useGoToParent` itself;
+ * this is the list every work detail is at least under.
+ */
+export function parentOf(overlay: OverlayState): OverlayState | undefined {
+	switch (overlay?.type) {
+		case "git":
+		case "settings":
+		case "work-list":
+		case "agent-role-list":
+		case "schedule-list":
+			return null;
+		// The editor is entered from the file's view and returns to it; the view
+		// itself is opened over the chat, from a row, a link or a search.
+		case "file":
+			return overlay.edit ? { type: "file", path: overlay.path } : null;
+		case "work-detail":
+			return { type: "work-list", segment: overlay.segment };
+		case "agent-role-detail":
+			return { type: "agent-role-list" };
+		case "schedule-detail":
+			return { type: "schedule-list" };
+		case "diff":
+			return { type: "git", segment: "changes" };
+		case "branch":
+			return { type: "git", segment: "branches" };
+		case "commit":
+			if (overlay.branch) return { type: "branch", ...overlay.branch };
+			return {
+				type: "git",
+				segment: "history",
+				...(overlay.history ? { history: overlay.history } : {}),
+			};
+		case "commit-diff":
+			return {
+				type: "commit",
+				hash: overlay.hash,
+				...commitOriginOf(overlay),
+			};
+		case "commit-file":
+			return {
+				type: "commit-diff",
+				hash: overlay.hash,
+				path: overlay.path,
+				...commitOriginOf(overlay),
+			};
+		default:
+			return undefined;
+	}
+}
+
+function sameBranch(a: BranchRef | undefined, b: BranchRef | undefined) {
+	return a?.ref === b?.ref && a?.remote === b?.remote;
+}
+
+/**
+ * Whether `a` and `b` are one page: the route and what identifies it, without
+ * what is only a setting of it — a list's History query, a diff's side, how a
+ * file is drawn and the line it opened at, the segment a work detail carries. A
+ * commit opened from a branch is not the same page as that commit opened from
+ * History, since the two go up to different places.
+ */
+export function samePage(a: Page, b: Page): boolean {
+	if (a.worktree !== b.worktree) return false;
+	const x = a.overlay;
+	const y = b.overlay;
+	if (x === null || y === null) return x === y;
+	switch (x.type) {
+		case "git":
+			return y.type === "git" && x.segment === y.segment;
+		case "diff":
+			return y.type === "diff" && x.path === y.path;
+		case "branch":
+			return y.type === "branch" && sameBranch(x, y);
+		case "commit":
+			return (
+				y.type === "commit" &&
+				x.hash === y.hash &&
+				sameBranch(x.branch, y.branch)
+			);
+		case "commit-diff":
+		case "commit-file":
+			return (
+				y.type === x.type &&
+				x.hash === y.hash &&
+				x.path === y.path &&
+				sameBranch(x.branch, y.branch)
+			);
+		case "file":
+			return y.type === "file" && x.path === y.path && !x.edit === !y.edit;
+		case "work-detail":
+			return y.type === "work-detail" && x.workId === y.workId;
+		default:
+			return JSON.stringify(x) === JSON.stringify(y);
+	}
+}
+
+/**
+ * Whether `page` was opened under `ancestor`: `ancestor` is on its chain of
+ * parents. Every page of a worktree is under that worktree's chat, and
+ * nothing of another worktree is.
+ */
+export function isUnder(page: Page, ancestor: Page): boolean {
+	let up = parentOf(page.overlay);
+	while (up !== undefined) {
+		if (samePage({ worktree: page.worktree, overlay: up }, ancestor)) {
+			return true;
+		}
+		up = parentOf(up);
+	}
+	return false;
 }

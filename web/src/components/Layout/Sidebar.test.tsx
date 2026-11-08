@@ -1,6 +1,15 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { LayerHistoryContext } from "@pockode/shared";
+import { createMemoryHistory } from "@tanstack/react-router";
+import {
+	act,
+	fireEvent,
+	render,
+	screen,
+	waitFor,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { layerHistoryFor } from "../../lib/layerHistory";
 import Sidebar from "./Sidebar";
 
 // Stands in for the answer panel, which listens on `window` precisely so that
@@ -34,6 +43,46 @@ describe("Sidebar", () => {
 
 		expect(onClose).toHaveBeenCalledTimes(1);
 		expect(unhandled).toBe(0);
+	});
+
+	// Material's navigation drawer: the back gesture puts it away before it
+	// ever leaves the page (docs/project-ui.md §5.2).
+	it("closes the drawer on Back, leaving the page", async () => {
+		const history = createMemoryHistory({ initialEntries: ["/a", "/b"] });
+		const onClose = vi.fn();
+		render(
+			<LayerHistoryContext value={layerHistoryFor(history)}>
+				<Sidebar isOpen onClose={onClose} isExpanded={false}>
+					<p>sessions</p>
+				</Sidebar>
+			</LayerHistoryContext>,
+		);
+		await waitFor(() => expect(history.location.state.__TSR_index).toBe(2));
+
+		act(() => history.back());
+
+		expect(onClose).toHaveBeenCalledOnce();
+		expect(history.location.pathname).toBe("/b");
+	});
+
+	// The drawer becomes the column, which is part of the page: its entry goes,
+	// and no resize ever raises one.
+	it("takes the drawer's entry back as it becomes the column", async () => {
+		const history = createMemoryHistory({ initialEntries: ["/a", "/b"] });
+		const sidebar = (expanded: boolean) => (
+			<LayerHistoryContext value={layerHistoryFor(history)}>
+				<Sidebar isOpen onClose={() => {}} isExpanded={expanded}>
+					<p>sessions</p>
+				</Sidebar>
+			</LayerHistoryContext>
+		);
+		const { rerender } = render(sidebar(false));
+		await waitFor(() => expect(history.location.state.__TSR_index).toBe(2));
+
+		rerender(sidebar(true));
+
+		await waitFor(() => expect(history.location.state.__TSR_index).toBe(1));
+		expect(history.location.pathname).toBe("/b");
 	});
 
 	// Closed, it is a drawer nobody can see: the key belongs to whatever is on
@@ -139,14 +188,14 @@ describe("Sidebar resize handle", () => {
 
 		const handle = screen.getByRole("separator", { name: "Resize sidebar" });
 		expect(handle).toHaveAttribute("aria-orientation", "vertical");
-		expect(handle).toHaveAttribute("aria-valuenow", "288");
-		expect(handle).toHaveAttribute("aria-valuemin", "240");
+		expect(handle).toHaveAttribute("aria-valuenow", "320");
+		expect(handle).toHaveAttribute("aria-valuemin", "280");
 		expect(handle).toHaveAttribute("aria-valuemax", "500");
 		const column = document.getElementById(
 			handle.getAttribute("aria-controls") ?? "",
 		);
 		expect(column).toContainElement(screen.getByText("sessions"));
-		expect(column).toHaveStyle({ width: "288px" });
+		expect(column).toHaveStyle({ width: "320px" });
 	});
 
 	// Each press is final, so it is kept the way a released drag is.
@@ -159,19 +208,19 @@ describe("Sidebar resize handle", () => {
 		expect(handle).toHaveFocus();
 
 		await user.keyboard("{ArrowRight}");
-		expect(handle).toHaveAttribute("aria-valuenow", "304");
-		expect(localStorage.getItem("pockode:sidebar-width")).toBe("304");
+		expect(handle).toHaveAttribute("aria-valuenow", "336");
+		expect(localStorage.getItem("pockode:sidebar-width")).toBe("336");
 
 		await user.keyboard("{ArrowLeft}{ArrowLeft}");
-		expect(handle).toHaveAttribute("aria-valuenow", "272");
+		expect(handle).toHaveAttribute("aria-valuenow", "304");
 
 		await user.keyboard("{End}{ArrowRight}");
 		expect(handle).toHaveAttribute("aria-valuenow", "500");
 		expect(localStorage.getItem("pockode:sidebar-width")).toBe("500");
 
 		await user.keyboard("{Home}{ArrowLeft}");
-		expect(handle).toHaveAttribute("aria-valuenow", "240");
-		expect(localStorage.getItem("pockode:sidebar-width")).toBe("240");
+		expect(handle).toHaveAttribute("aria-valuenow", "280");
+		expect(localStorage.getItem("pockode:sidebar-width")).toBe("280");
 	});
 
 	it("leaves modified arrows to the browser", async () => {
@@ -184,7 +233,7 @@ describe("Sidebar resize handle", () => {
 			"{Alt>}{ArrowLeft}{/Alt}{Control>}{ArrowRight}{/Control}",
 		);
 
-		expect(handle).toHaveAttribute("aria-valuenow", "288");
+		expect(handle).toHaveAttribute("aria-valuenow", "320");
 		expect(localStorage.getItem("pockode:sidebar-width")).toBeNull();
 	});
 

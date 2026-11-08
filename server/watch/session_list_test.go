@@ -83,6 +83,14 @@ func (m *mockSessionStore) SetEffort(ctx context.Context, sessionID string, effo
 	return nil
 }
 
+func (m *mockSessionStore) SetHTMLFirst(ctx context.Context, sessionID string, htmlFirst bool) error {
+	return nil
+}
+
+func (m *mockSessionStore) MarkStarted(ctx context.Context, sessionID string) (session.SessionMeta, error) {
+	return session.SessionMeta{}, nil
+}
+
 func (m *mockSessionStore) ApplyTurn(ctx context.Context, sessionID string, in session.TurnInput) (session.TurnTransition, error) {
 	return session.TurnTransition{}, nil
 }

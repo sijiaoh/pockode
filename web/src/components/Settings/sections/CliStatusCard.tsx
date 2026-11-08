@@ -259,7 +259,7 @@ export default function CliStatusCard({ agent, onOpenSignIn }: Props) {
 			{confirmingInstall && (
 				<ConfirmDialog
 					title={`Install ${label}?`}
-					message={`Pockode runs npm install --global for the latest ${label} (${check?.channel || "latest"} channel) on the server, as the user running Pockode. It is for the whole machine: every project and cluster node here will use it.`}
+					message={`Pockode downloads and runs ${label}'s official installer on the server, for the latest release (${check?.channel || "latest"} channel), as the user running Pockode. It installs into that user's home directory, and every project and cluster node here will use it.`}
 					confirmLabel="Install"
 					cancelLabel="Cancel"
 					onConfirm={confirmInstall}

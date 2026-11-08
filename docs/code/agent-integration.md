@@ -13,6 +13,7 @@ Pockode integrates AI Agents (Claude and Codex) through subprocess management. T
 ┌─────────────────────────────────────────────────────────────────────┐
 │  ws/rpc_chat.go                                                      │
 │  ├─ chat.message → ChatClient.SendMessageExcluding() / SendAnswers()│
+│  ├─ chat.html_action → ChatClient.SendHTMLActionExcluding()         │
 │  ├─ chat.interrupt → ChatClient.Interrupt()                         │
 │  └─ chat.permission_response → ChatClient.SendPermissionResponse()  │
 └───────────────────────────────┬─────────────────────────────────────┘
@@ -500,6 +501,39 @@ needs no validation pass, either — the source's values were already checked
 against the source's agent ([Session Models](#session-models)), and the fork runs
 the same agent.
 
+## One-Shot Requests
+
+Some features want one piece of text from the model and nothing else — drafting a commit message is the first ([git.md](../git.md#drafting-a-commit-message)). An agent offers that by implementing the optional `agent.OneShotRunner`: `RunOneShot(ctx, OneShotRequest{WorkDir, Prompt, Model, Effort})` returns the model's answer. `Registry.OneShot` (reached through `worktree.Manager.AgentOneShot`) hands it out by agent type; an agent that does not implement it is refused there, before anything starts.
+
+### How It Differs From a Session
+
+Everything else in this document is about sessions. A one-shot request shares only the binary, the launch path and the model/effort ids with them:
+
+| | Session | One-shot request |
+|---|---|---|
+| Process | Long-lived, leased, resumed after an idle exit ([Process Management](#process-management)) | Started per request, gone when it answers |
+| Channel | claude stream-json in both directions; codex `app-server` | claude `--print` with stream-json output; codex `exec --json` — there is no thread to keep |
+| History | Recorded, listed, forkable | None: claude `--no-session-persistence`, codex `--ephemeral`; nothing reaches the session list or `ProcessManager` |
+| Tools | The user's, behind the permission mode | None (below) |
+| Input | Messages over stdin, one per turn | One prompt on stdin, closed after it — never on the command line: it can run to tens of kilobytes, past what Windows allows a command line (32 KiB) and far past the npm `.cmd` wrapper (8 KiB, and no newlines; see `agent/cmdline.go`) |
+| Model, effort | Validated per session ([Session Models](#session-models)) | The same ids, validated by the caller with `session.ValidateEngine`, passed with the same flags a session uses; empty lets the CLI decide |
+| Lifetime | Stop, idle timeout, lease expiry | The caller's ctx: when it ends the whole process tree is killed. The caller sets the deadline and owns cancellation — commit drafts take 90 seconds and a cancel RPC ([git.md](../git.md#drafting-a-commit-message)) |
+
+It runs in `WorkDir`, so each CLI still reads the project's own instructions (`CLAUDE.md`, `AGENTS.md`) — a question about the project should be answered with them.
+
+### No Tools
+
+A one-shot prompt is built from project data — a diff, earlier commit messages — and a line in it that reads like an instruction must not get to act on anything. So the contract an implementation owes is: it switches off every tool its CLI lets it switch off, makes whatever is left unable to act, and if the CLI reports a tool call anyway, kills the run there and returns `ErrOneShotToolUse` instead of an answer. Reading the output as it streams is what makes the kill immediate rather than after the run; `agent.RunStream` does that (it is `StartProcess` plus a prompt written to stdin and a callback per stdout line, and kills the tree when the callback errors).
+
+- **claude** — `--tools ""` removes every built-in tool; `--strict-mcp-config` with no `--mcp-config` drops the MCP servers of the user's and the project's settings, which `--tools` does not cover; `--disable-slash-commands` keeps skills out. Asked to name its tools, the model answers that it has none. `--bare` would go further, but it reads credentials from `ANTHROPIC_API_KEY` alone and so breaks an OAuth sign-in. That leaves the hooks of the user's and the project's settings running (only `--bare` skips them): they are commands the user configured, not something the model can call, but a hook that fires on every session start or stop fires on a one-shot request too. Any `tool_use` or `server_tool_use` block (a tool the API runs itself, such as web search) stops the run.
+- **codex** — has no switch that removes all tools. The flags remove what can be removed — the shell (`features.shell_tool=false`), web search, the features that bring tools of their own, and the user's MCP servers via `--ignore-user-config` (MCP servers run outside the sandbox; `-c mcp_servers={}` merges rather than replaces, so it removes nothing) — and make the rest unable to change anything: `--sandbox read-only` with `approval_policy=never` refuses a write without asking anyone. apply_patch, view_image, code-mode exec and the MCP resource readers remain. Any item that is not an answer, reasoning, a CLI warning or the model's own plan (`todo_list`, which writes only into its context and cannot be switched off) counts as a tool call and stops the run. Two gaps are left, and callers have to account for them: calls made inside code mode are not reported as items, so the sandbox — not the check — is what the guarantee rests on; and the sandbox stops writes, not **reads**, so the model can still read any file the user can and quote it into its answer. `--ignore-user-config` costs the user's provider settings and default model (a model the request names is still passed); sign-in lives beside the config, not in it, and is kept. Feature switches go through `-c` rather than `--disable`, which fails the whole run on a feature name the installed version does not know.
+
+The reader fails closed: the fields the check needs (a frame's type, its content blocks' or item's type) are decoded on their own, and a line that is JSON but does not decode into them stops the run as failed rather than being skipped — skipping would let exactly the frame that matters through unread. The exact flag lists, with the CLI versions they were measured on, are in `agent/claude/oneshot.go` and `agent/codex/oneshot.go`.
+
+### Errors
+
+An implementation returns `*BinaryNotFoundError` (not installed), `*OneShotAuthError` (not signed in — claude's `authentication_failed` frame, codex's `401 Unauthorized` in its turn failure, since `exec` carries none of the structured auth info `app-server` does), `*OneShotFailedError` (the CLI ended without an answer, carrying its own words — or the tail of its stderr, kept to 16 KiB), `ErrOneShotToolUse`, or `ctx.Err()`. What an empty answer means is the caller's to decide.
+
 ## EventRecord: Unified Event Format
 
 `EventRecord` is the standard serialization format for events, used for both:
@@ -535,6 +569,7 @@ type EventRecord struct {
     Meta                  *MessageMeta       `json:"meta,omitempty"`
     DurationMs            int64              `json:"duration_ms,omitempty"`
     ExitCode              *int               `json:"exit_code,omitempty"`
+    HTMLPage              string             `json:"html_page,omitempty"`
     Activity              string             `json:"activity,omitempty"`
     OutputDelta           string             `json:"output_delta,omitempty"`
     FullReasoning         string             `json:"full_reasoning,omitempty"`
@@ -633,7 +668,12 @@ still running. An ordinary result carries none
 
 `DurationMs` and `ExitCode` are what a CLI reported about a finished call as
 figures instead of as prose — Codex does, Claude does not — and are never
-inferred from arrival times, which would be wrong on replay. `Activity` and
+inferred from arrival times, which would be wrong on replay. `HTMLPage` is the
+id (`p3`) of the page a successful `html_render` or `html_edit` stored, on that
+call's `tool_result` and nowhere else; no CLI reports it — the server stamps it
+on the way in, because the MCP call that stores the page never learns the CLI's
+tool call id, so the id is matched up from the result's text
+([work-system.md](work-system.md#rendering-tool)). `Activity` and
 `OutputDelta` belong to `tool_activity` records, which are broadcast and never
 stored; they are fields here anyway because `EventRecord` is the whole of how an
 event is serialized, for the wire as much as for history.
@@ -789,7 +829,12 @@ into the *source's* directory and vanish the day that session was deleted. The c
 is immutable and addressed by its own hash, so the bytes outlive whichever
 session is deleted first and are freed when the last one naming them goes — and
 a clone that fails warns rather than aborting the fork, because a fork missing
-its images is still the conversation the user asked for.
+its images is still the conversation the user asked for. The pages an agent
+drew live beside them under the session's directory and are deleted and forked
+the same way (`htmlpage.Clone`, also from `CreateFork`, also warning rather than
+aborting), except that a fork takes only the pages up to the highest its copied
+history names, and keeps numbering past the source's
+([why](work-system.md#rendering-tool)).
 
 ### Reading It Back
 
@@ -1554,6 +1599,88 @@ For the same reason a `question_posted` record left unclosed by the cut is
 a call that never returns, while a question the fork can still answer is the
 point.
 
+## HTML-First Sessions
+
+A session is either an ordinary chat or **HTML-first**, and the one difference
+between them is the guidance the agent starts with: the tools, the screen and
+the transcript are the same, and so is the asking guidance
+([above](#telling-the-agent-when-to-ask)). The mode exists because how much an
+agent should put on a page is not one answer for every conversation — a
+comparison or a report reads better as a page, a quick fix as two lines of
+text — and the place to say which is the guidance, not a second view. What
+the user sees of the choice is in
+[html-first-session-ui.md](../html-first-session-ui.md).
+
+An HTML-first session is told `agent.HTMLFirstGuidance` *on top of*
+`agent.Guidance`, never in its place. The asking section and the base rendering
+section still hold; the addition overrides one default of the latter, naming
+that section so the agent knows which of the two it reads wins
+(`TestHTMLFirstGuidance_OverridesTheRenderingDefaultByName`): a page is the
+default for anything structured (comparisons, reports, choices, forms), with
+the reply cut to a sentence or two, rather than something to reach for when it
+is worth it. It adds that the page works by itself and
+sends to the agent only when it needs it; that a page is changed by deriving it
+from the old one with `html_edit` and read back with `html_get`; and that it is
+drawn for about 320–1280px — fluid where it can be, wide where its content is,
+since a wide page scrolls sideways in its card. That range is a recommendation,
+and the same one `html_render`'s description gives
+(`TestHTMLRender_WidthMatchesTheHTMLFirstGuidance`); why the agent is never
+told the actual width is in
+[tool-call-ui.md](../tool-call-ui.md#a-page-the-agent-drew-html_render). A
+choice on a page does not replace `question_post`: the decision the agent waits
+on is still asked there.
+
+**The addition goes where a session's setup goes, not where the tools are
+described.** The MCP server's `initialize` instructions are `agent.Guidance` in
+every session, and the proxy takes no mode of its own: they describe the tools,
+which are the same in both modes. `agent.StartOptions.HTMLFirst` carries the
+mode to each CLI's system-level channel instead:
+
+| CLI | Channel | Notes |
+|-----|---------|-------|
+| Claude | `--append-system-prompt-file <session dir>/html-first-prompt.md` (`htmlFirstPromptArgs`) | *Appends* to the CLI's default system prompt rather than replacing it. Instructions from a tool server carry less weight than the system prompt proper, which is why the text left them. It goes by file, not inline `--append-system-prompt`: on Windows every argument passes npm's `.cmd` wrapper, and `agent.checkCmdSafe` refuses the newlines and quotes the text contains. One name per session is safe because the content is a constant — a successor's atomic rewrite hands a predecessor the same bytes — and it is removed with the session directory. |
+| Codex | `developerInstructions` on `thread/start` | After `agent.Guidance`, which already goes there ([above](#telling-the-agent-when-to-ask)); the same rules apply — the user's own value first, fixed when the thread starts. |
+
+An ordinary chat gets nothing beyond `agent.Guidance`, and a session started
+without the MCP server gets neither text on either CLI: both point at tools it
+would not have. The addition is outside Claude's 2048-character cut on server
+instructions, so `TestToolDefinitions_FitClaudesLimit` checks `agent.Guidance`
+alone; it is still read on every turn, so it is kept short.
+
+The system prompt is fixed when the CLI starts — and Claude records it on a
+conversation's first request and resends that record on every resume until the
+conversation is compacted (`--system-prompt-snapshot`, on by default; measured
+on claude 2.1.319) — so the mode has to be fixed for the session's life. It
+also means a conversation begun before a change to the text goes on with the
+text it began with, as on Codex.
+
+The mode is the session's `html_first` (`session.SessionMeta.HTMLFirst`,
+switched with `session.set_html_first`), and what fixes it is `Started`, not
+`Activated`. `Activated` is set when the agent first *answers*; between the
+first delivery and that answer a switch would still be accepted for an agent
+already told the other guidance. `Started` is written by `chat.Client` right
+before a message is recorded and handed over — after the checks that can
+refuse it, so a refused first message leaves the switch open, while one that
+fails in the handover does not, being in the transcript already — under the same store lock
+`SetHTMLFirst` judges it by, so a switch either lands first or is refused with
+`session_started`. The sender reads the value back from that write and, if it
+differs from the one its process was started with (a switch that slipped in
+after the process was fetched), fetches again: `process.Manager` never reuses
+a process started with the other value, it replaces it. That is also why the
+switch itself closes nothing, unlike `session.set_mode`: a close there could
+land on the process a concurrent first message had just been delivered to. For
+the same reason the manager judges "the other value" against the store, not
+against the meta its caller passes: a sender that read the meta before the
+switch would otherwise replace a process another sender had already started
+with the new value, and perhaps delivered to. A
+fork copies the value and is started from birth: it carries on the parent's
+conversation, and that conversation was had under the parent's guidance. A
+work's session is always an ordinary chat, and the switch refuses it with
+`work_session`: the work claims the session's id before it creates the
+session and starts it with its kickoff message, so there is no moment at which
+it is a draft anyone could choose for. The refusal is judged on that claim
+rather than on `Started`, so it holds from the session's first moment.
+
 ## Claude Implementation
 
 ### stream-json Protocol
@@ -1604,6 +1731,8 @@ if mcpConfig != "" {
 
 `resolve()` is what decides between `--session-id`, `--resume` and
 `--resume --fork-session`; see [Session Recovery Ladder](#session-recovery-ladder).
+`Start` appends `--append-system-prompt-file` to these in an HTML-first session
+(`htmlFirstPromptArgs`); see [HTML-First Sessions](#html-first-sessions).
 An empty model or effort is how a session says "let the CLI pick", so neither
 flag is passed at all in that case; see [Session Models](#session-models) and
 [Session Effort](#session-effort).
@@ -3362,21 +3491,67 @@ equivalent — its answer is one `decision` field, and always-allow becomes
 ### Starting the CLI
 
 Every AI CLI launch goes through `agent.Command` (`server/agent/command.go`)
-rather than `exec.Command`, because on Windows two things have to happen before
-`Start` that `exec.Cmd` will not do.
+rather than `exec.Command`, because two things have to happen before `Start`
+that `exec.Cmd` will not do: finding the binary where `PATH` alone does not,
+and, on Windows, building the command line by hand.
 
-**Resolving the binary cannot rely on `PATH` alone.** A process keeps the
-environment it was started with, so the `PATH` entry an installer appends is
-invisible to an already-running `pockode.exe` — the CLI exists, but the inherited
-`PATH` predates it. `agent.Command` tries `PATH` first (whatever the user's
-own shell would run is the right answer when it exists), then the directories the
-CLI installers actually write to. When it still fails, the error names the CLI,
-every directory that was searched, the need to restart Pockode, and — on Windows
-— that a CLI installed inside WSL is not reachable from a Windows process. Naming
-the search set is the point: without it "not found" is a conclusion the user
-cannot check. The same lookup feeds the startup banner, so what the banner
-reports and what a session gets are the same answer, not two implementations of
-it.
+#### Finding the binary
+
+`lookupBinary` is the one answer to "which `claude` / `codex` does Pockode run",
+for every caller: session start, one-shot requests, sign-in
+([cli-auth.md](cli-auth.md)), `--version`, update and install
+([cli-update.md](cli-update.md#where-the-cli-is-found)), and the startup banner —
+so what the banner reports and what a session gets are the same answer, not two
+implementations of it. Nothing caches it; every launch looks again.
+
+1. **`PATH` first, and it always wins.** Whatever the user's own shell would run
+   is the copy Pockode runs, and the one an update has to reach. A CLI found
+   there runs with the environment exactly as inherited.
+2. **Only when the name is not on `PATH` at all**, the CLI's official installer
+   directory, then the platform's:
+
+   | | Directory | Where it comes from |
+   |---|---|---|
+   | claude | `~/.local/bin` (`%USERPROFILE%\.local\bin` on Windows) | where `claude install` — what `claude.ai/install.sh` and `install.ps1` run, and so where [cli-update](cli-update.md#installing-a-missing-cli) installs a missing one — puts the launcher |
+   | codex | `$CODEX_INSTALL_DIR` when set, else `~/.local/bin`; on Windows `%LOCALAPPDATA%\Programs\OpenAI\Codex\bin` | the defaults in `chatgpt.com/codex/install.sh` and `install.ps1`, the scripts [cli-update](cli-update.md#installing-a-missing-cli) installs a missing one with; the override is honoured because the installers honour it — with it set, that is where codex went |
+   | any, Windows only | `%APPDATA%\npm` | where `npm install --global` puts its `.cmd` shims — still a common way to install either CLI by hand |
+
+   Each CLI declares its own directory with `agent.RegisterInstallDir` from its
+   package's `init` (`agent/claude/install_dir.go`, `agent/codex/install_dir*.go`),
+   because the installers disagree: one list for all of them would be right for
+   some and a guess for the rest. The directory is read from the environment at
+   lookup time, not at registration. Unix adds no platform directory: package
+   managers there install onto `PATH` already, so guessing further would be a
+   second, worse `PATH`. Each directory is probed with `LookPath(<dir>/<name>)`,
+   so on Windows `PATHEXT` finds `claude.cmd` or `codex.exe` as `PATH` would.
+3. **Otherwise not found**: `agent.BinaryNotFoundError`, which every caller
+   reports as the CLI not being installed. The message names the CLI, says it
+   has to be on the `PATH` of the process running pockode and that pockode must
+   be restarted, lists every directory tried after `PATH` (`also looked in:`),
+   and on Windows adds that a CLI installed inside WSL is not reachable from a
+   Windows process. Naming the search set is the point: without it "not found"
+   is a conclusion the user cannot check.
+
+The fallback exists because an installer puts its directory on `PATH` by
+editing a shell profile (on Windows, the user `PATH`), and a process keeps the
+environment it was started with. When the CLI was installed a moment ago, or
+pockode was started from something that predates the profile change — a
+service, an app launcher, a terminal opened earlier — the CLI is sitting in
+exactly that directory and nowhere on the `PATH` pockode inherited.
+
+A CLI found in step 2 runs with that directory **appended** to the end of its
+child process's `PATH` (Windows' `Path` matched case-insensitively; just the
+directory when there is none). Whatever the CLI runs in turn — a hook, or
+itself again by name — then resolves the way it would from the user's shell,
+and appending rather than prepending shadows nothing the user already had. So a
+caller adding environment variables builds on `cmd.Environ()`, not
+`os.Environ()`, or drops that `PATH`; `agent.StartProcessEnv` does. It also
+sets `PWD` to the working directory on unix, which exec does by itself only for
+a command with no environment of its own. The startup
+log says which case it was: `AI CLI found`, or `AI CLI found outside PATH;
+appending its directory to the PATH it runs with` with the directory.
+
+#### Building the command line
 
 **The command line has to be built by hand for `.cmd` wrappers.** `npm install
 -g` installs the CLIs as batch files, and Windows runs a batch file by handing
@@ -3394,7 +3569,7 @@ outcome. The string-building half lives in `agent/cmdline.go`, deliberately
 platform-independent so it can be tested everywhere rather than only on a Windows
 runner.
 
-Both halves are the same code path for every caller. A short probe that has to
+Both are the same code path for every caller. A short probe that has to
 be abandonable — `codex --help` behind a timeout — uses `agent.CommandContext`,
 which is `agent.Command` plus a context; a session process uses
 `agent.StartProcess`, which owns its own lifecycle (below).
@@ -3402,7 +3577,8 @@ which is `agent.Command` plus a context; a session process uses
 `server/AGENTS.md` carries this as a rule: start an AI CLI through that path,
 never `exec.Command`. `lookupBinary` is unexported for the same reason —
 resolving a path separately and then calling `exec.Command` on it would bypass
-exactly the quoting that the resolved path determines.
+exactly the quoting that the resolved path determines, and the `PATH` a CLI
+found off `PATH` needs.
 
 ### Subprocess Lifecycle
 
@@ -4102,6 +4278,8 @@ type SessionMeta struct {
     Unread     bool        // Has unread changes
     ForkedFrom *ForkOrigin // Set on a fork, naming the session it came from
     Usage      Usage       // Tokens and cost, as the agent reported them
+    HTMLFirst  bool        // Told HTMLFirstGuidance too; see HTML-First Sessions
+    Started    bool        // Set just before the first message is delivered
 }
 ```
 
@@ -4230,7 +4408,9 @@ reason at all is not a choice worth offering.
 
 ### Activation
 
-`Activated` marks a session as *started*, and three things read it:
+`Activated` marks a session the agent has answered in, and three things read it
+— not to be confused with `Started`, set earlier, when the first message is
+handed over, which fixes only the [HTML-first mode](#html-first-sessions):
 
 - Claude's [recovery ladder](#session-recovery-ladder), which receives it as
   `StartOptions.Resume` — overridden for a forked session, whose transcript is
@@ -4512,6 +4692,7 @@ The following conditions send an `ErrorEvent` and end the session:
 | Codex implementation | `server/agent/codex/codex.go` (process, JSON-RPC, thread lifecycle), `events.go` (notification mapping), `approval.go` (server requests), `resume.go` (`codex_resume.json`), `view_image.go` (the image an `imageView` item names) |
 | Thinking | `server/agent/claude/thinking.go` (the `--thinking-display` gate, `thinkingClock`), `server/agent/codex/reasoning.go` |
 | Content blocks and attachments | `server/agent/content.go` (block shapes), `server/agent/claude/tool_result.go` (Claude's blocks), `server/attachments/attachments.go` (per-session store), `server/ws/rpc_attachment.go` (`attachment.get`), `server/filetransfer/attachment.go` (an image's bytes), `web/src/lib/contentBlocks.ts`, `web/src/components/Chat/AttachmentStrip.tsx` |
+| One-shot requests | `server/agent/oneshot.go` (`OneShotRunner`, `RunStream`), `claude/oneshot.go`, `codex/oneshot.go`, `server/agent/registry.go` (`OneShot`) |
 | Session forking | `server/agent/fork.go`, `claude/fork.go`, `codex/fork.go` |
 | Codex protocol drift check | `server/agent/codex/schema_integration_test.go` |
 | Fork capability over the wire | `server/ws/rpc_agent.go`, `web/src/lib/rpc/agent.ts`, `web/src/hooks/useForkSupport.ts` |

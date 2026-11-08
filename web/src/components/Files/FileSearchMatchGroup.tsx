@@ -11,7 +11,8 @@ const MAX_PREVIEW_LINES = 3;
 interface Props {
 	match: FileMatch;
 	isActive: boolean;
-	onSelect: (path: string) => void;
+	/** `line` for a matched line's row, absent for the file's own. */
+	onSelect: (path: string, line?: number) => void;
 }
 
 const FileSearchMatchGroup = memo(function FileSearchMatchGroup({
@@ -50,7 +51,7 @@ const FileSearchMatchGroup = memo(function FileSearchMatchGroup({
 					<button
 						key={line.number}
 						type="button"
-						onClick={() => onSelect(match.path)}
+						onClick={() => onSelect(match.path, line.number)}
 						className="flex min-h-[36px] w-full items-center gap-2 rounded-md py-1 pr-2 pl-8 pointer-coarse:min-h-11 text-left transition-colors hover:bg-th-bg-tertiary focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent focus-visible:ring-inset"
 						aria-label={`Open ${match.path}, match on line ${line.number}`}
 					>

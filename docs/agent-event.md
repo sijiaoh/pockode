@@ -182,6 +182,8 @@ The `message` event covers both messages a user types and the automatic prompts 
 
 A [Pockode command](pockode-commands.md) is **not** a system message, though Pockode wrote the text the agent reads. The user sent it, so its origin is theirs: it forks, and it drives a work as a user message does. What marks it is a `command` field — `{name, args?}`, what the user typed — beside a `content` that holds the prompt the command expanded to. Like `answering`, it is a structured copy the client draws from, never sent to the CLI.
 
+What a page in the chat sends on the reader's press (`chat.html_action`) is a user message the same way: origin user, it joins or opens a turn and drives a work, and it is refused while a permission request is open. What marks it is an `html_action` field — `{page, action, data}`, the card's page id, the action the page named and the JSON it put with it — beside a `content` the server wrote for the agent from it (`Page action "approve" from p3:` and the data on the next line). The client draws its bubble from `html_action` alone, and never turns it back into a draft ([tool-call-ui.md](tool-call-ui.md#the-action-message)).
+
 A message can carry the files the user sent with it, in `attachments`: a list of the same file block a tool result uses (`name`, `mime`, `size`, `width`/`height`, `attachment_id`), described from the stored bytes and fetched through `attachment.get`. The record names each file by id only; how it reached the agent — inline, or by a path in the prompt — is the adapter's business and is not recorded ([code/agent-integration.md](code/agent-integration.md#files-the-user-sends)).
 
 #### The Read Point (`message_ingested`)
@@ -376,9 +378,12 @@ A `thinking` record keeps its text in `Content` and adds `FullReasoning`,
 
 A `tool_result` also uses `Subtype`, for the three kinds of result that are not
 simply "what the call produced", and carries `DurationMs` / `ExitCode` when the
-CLI reported them as figures. A `tool_activity` record — which exists on the wire
-only — carries `Activity` and `OutputDelta`. What each means is
-[tool-call-model.md](tool-call-model.md); the field-by-field notes are
+CLI reported them as figures. A page tool's successful result carries
+`HTMLPage` (`html_page`), the id of the page it stored, which the server stamps
+since no CLI knows it ([code/work-system.md](code/work-system.md#rendering-tool)).
+A `tool_activity` record — which exists on the wire only — carries `Activity`
+and `OutputDelta`. What each means is [tool-call-model.md](tool-call-model.md);
+the field-by-field notes are
 [code/agent-integration.md](code/agent-integration.md#eventrecord-unified-event-format).
 
 `Contents` and `ToolResult` are one field in two shapes, and a `tool_result`
@@ -419,7 +424,7 @@ owns them.
 
 `server/watch/chat_messages.go` — `ChatMessagesWatcher` implements `process.ChatMessageListener`. Receives already-persisted events (persistence happens in `ProcessManager.streamEvents()` via `store.AppendToHistory`), converts them to `EventRecord` via `ToRecord()`, then broadcasts JSON-RPC notifications with method `"chat.<event-type>"` and the subscription ID for client-side routing. Each notification also carries the record's `seq`, the same address a history page carries on its records ([paging](agent-chat.md#history-paging)), so a client cannot tell a replayed record from a live one when it names a point in the conversation ([code/agent-integration.md](code/agent-integration.md#history-storage)). Events that were not persisted carry none.
 
-A user message is broadcast to every subscriber except the tab that sent it, which has already echoed the message into its own transcript. That tab therefore learns its own record's address from a third source — the reply to the `chat.message` call it made (`rpc.MessageResult`), the only channel that reaches it. Replayed history, live notification and that reply all carry the same `seq` and `message_id`, so what a client can name does not depend on which of the three delivered the record. For a message that invoked a [Pockode command](pockode-commands.md) the reply also carries the record's `content` and `command`, for the same reason: the sender typed `/pockode-lead`, and the prompt the agent was sent instead reaches it nowhere else. A message carrying `answering` gets `content` back the same way: the sender sent none, and the body the server wrote from the answers reaches it nowhere else. A message carrying files gets `attachments` back too: the sender knew only what the browser guessed about each file. A message no record names stays unaddressable, and a client must not number it itself.
+A user message is broadcast to every subscriber except the tab that sent it, which has already echoed the message into its own transcript. That tab therefore learns its own record's address from a third source — the reply to the `chat.message` call it made (`rpc.MessageResult`), the only channel that reaches it. Replayed history, live notification and that reply all carry the same `seq` and `message_id`, so what a client can name does not depend on which of the three delivered the record. For a message that invoked a [Pockode command](pockode-commands.md) the reply also carries the record's `content` and `command`, for the same reason: the sender typed `/pockode-lead`, and the prompt the agent was sent instead reaches it nowhere else. A message carrying `answering` gets `content` back the same way: the sender sent none, and the body the server wrote from the answers reaches it nowhere else. A message carrying files gets `attachments` back too: the sender knew only what the browser guessed about each file. A page's action gets `content` and `html_action` back: the sender echoed only the action, and the text the agent was sent reaches it nowhere else. A message no record names stays unaddressable, and a client must not number it itself.
 
 ## Frontend
 
@@ -527,6 +532,7 @@ file too large to send and a binary read the same in both places.
 | Backend | `server/agent/content.go` | Content block and file block shapes shared by both agents |
 | Backend | `server/attachments/attachments.go` | Per-session store for content a record references by id — what a tool returned, and the files the user sends ([how](code/agent-integration.md#files-the-user-sends)) |
 | Backend | `server/ws/rpc_attachment.go` | `attachment.get` — serving that content to a client |
+| Backend | `server/htmlpage/` | Per-session store of the pages an agent drew, and the `html_page` id a result record names one by |
 | Backend | `server/agent/claude/claude.go` | CLI output parsing and event emission |
 | Backend | `server/process/manager.go` | Event distribution |
 | Backend | `server/watch/chat_messages.go` | WebSocket broadcast to subscribers |

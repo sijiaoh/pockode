@@ -2,6 +2,7 @@ import {
 	hasCoarsePointer,
 	useCoverPage,
 	useHasCoarsePointer,
+	useIsPageCovered,
 	useOutsideClick,
 } from "@pockode/shared";
 import { ArrowUp, Image, Paperclip, Plus, Slash, Square } from "lucide-react";
@@ -23,6 +24,7 @@ import { useInputHistory } from "../../hooks/useInputHistory";
 import type { ChatAttachment } from "../../lib/chatAttachments";
 import {
 	attachmentActions,
+	type ComposerReveal,
 	type DraftAttachment,
 	inputActions,
 	useInputStore,
@@ -66,6 +68,8 @@ interface Props {
 	onStop?: () => void;
 	/** See `InputBarProps.focusRequest`. */
 	focusRequest?: number;
+	/** See `InputBarProps.focusOnOpen`. */
+	focusOnOpen?: boolean;
 	/**
 	 * Takes files pasted into the textarea; absent where the host would refuse
 	 * them, which leaves the paste to the browser. The host's rather than the
@@ -89,6 +93,7 @@ function InputBar({
 	turnOpen = false,
 	onStop,
 	focusRequest = 0,
+	focusOnOpen = true,
 	onPasteFiles,
 }: Props) {
 	const input = useInputStore((state) => state.inputs[sessionId] ?? "");
@@ -137,6 +142,34 @@ function InputBar({
 		setSelectedIndex(0);
 	}, [filter]);
 
+	// Where a prefill put in at the caret goes (`inputActions.registerCaret`).
+	// Placed means the field has been focused since it was drawn for this
+	// session, or is focused now: one that kept focus through a session switch
+	// is typed in without another focus event. Ahead of the autofocus below,
+	// so the reset never undoes the focus that gives.
+	//
+	// `heldCaret` is where an insert left it on a touch screen with the field
+	// unfocused: placing it there would raise the keyboard, and the DOM caret
+	// went to the end when the draft was written — so a second insert would
+	// land under the user's last words instead of under the first block. A tap
+	// in the field places the caret itself, and drops it; so does any other
+	// rewrite of the draft (Send again), which the offset no longer points into.
+	const caretPlaced = useRef(false);
+	const heldCaret = useRef<{ at: number; draft: string } | null>(null);
+	useEffect(() => {
+		caretPlaced.current = false;
+		heldCaret.current = null;
+		return inputActions.registerCaret(sessionId, () => {
+			const textarea = textareaRef.current;
+			if (!textarea) return null;
+			if (heldCaret.current?.draft === textarea.value) {
+				return heldCaret.current.at;
+			}
+			const placed = caretPlaced.current || document.activeElement === textarea;
+			return placed ? textarea.selectionEnd : null;
+		});
+	}, [sessionId]);
+
 	// Focus input on session change. Also re-runs when the bar is re-enabled: a
 	// switch disables it before this effect can focus, and without the second
 	// pass the input would stay unfocused on the session just opened.
@@ -149,12 +182,72 @@ function InputBar({
 	// focus), so this is `hasCoarsePointer`, not the any-pointer gate hit areas
 	// use.
 	//
-	// A focus request is answered the same way, for the same reason.
-	// biome-ignore lint/correctness/useExhaustiveDependencies: intentionally re-run when sessionId changes or focus is requested
+	// A focus request is answered the same way, for the same reason — and even
+	// where opening takes no focus, since it is the host asking. Counted as
+	// answered only once the bar is enabled, so one made while it is disabled
+	// is still answered when it comes back. Leaving a page that took no focus
+	// for one that does — a Git detail for the chat — counts as opening: the
+	// bar stays mounted across it, so no remount opens it.
+	const answeredFocusRequest = useRef(focusRequest);
+	// biome-ignore lint/correctness/useExhaustiveDependencies: intentionally re-run when sessionId changes, focus is requested or opening starts taking focus
 	useEffect(() => {
 		if (disabled) return;
-		if (!isPrimaryPointerCoarse) textareaRef.current?.focus();
-	}, [sessionId, disabled, focusRequest]);
+		const requested = focusRequest !== answeredFocusRequest.current;
+		answeredFocusRequest.current = focusRequest;
+		if (!focusOnOpen && !requested) return;
+		const textarea = textareaRef.current;
+		if (isPrimaryPointerCoarse || !textarea) return;
+		if (document.activeElement === textarea) return;
+		textarea.focus();
+		// At the end: a field drawn with a saved draft can have its caret ahead
+		// of it, where typing — and a prefill at the caret — would go first.
+		const end = textarea.value.length;
+		textarea.setSelectionRange(end, end);
+	}, [sessionId, disabled, focusRequest, focusOnOpen]);
+
+	// A prefill handed in from outside the chat, made noticeable once
+	// (docs/agent-handoff-ui.md §1.3). Taken only once the bar is enabled: a
+	// session just created is still resolving when the bar first renders it.
+	// And only once nothing covers the page: a handoff made from a page that
+	// keeps this bar — a menu row in a sheet over a Git detail — lands while
+	// the sheet is still up, and the sheet hands focus back to its opener as it
+	// closes, taking the caret from the draft and the ring from view.
+	const reveal = useInputStore((state) => state.reveals[sessionId]);
+	const isPageCovered = useIsPageCovered();
+	const [arrival, setArrival] = useState<ComposerReveal | null>(null);
+	// Ahead of the effect below, so a reveal waiting for the session being
+	// opened is set after the previous session's is cleared.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: an arrival belongs to the session it was made for
+	useEffect(() => {
+		setArrival(null);
+	}, [sessionId]);
+
+	useEffect(() => {
+		if (!reveal || disabled || isPageCovered) return;
+		inputActions.takeReveal(sessionId);
+		const textarea = textareaRef.current;
+		if (textarea) {
+			// Explicitly at the end after an append: a caret anywhere else would be
+			// in the middle of the user's own words. After an insert, just under
+			// what went in. The pointer gate is the autofocus rule's — except that
+			// a field already holding the keyboard raises nothing, and its caret
+			// is where the next key goes.
+			const end = textarea.value.length;
+			const caret = Math.min(reveal.caret ?? end, end);
+			if (!isPrimaryPointerCoarse || document.activeElement === textarea) {
+				textarea.focus();
+				textarea.setSelectionRange(caret, caret);
+				heldCaret.current = null;
+			} else {
+				heldCaret.current =
+					reveal.caret === undefined
+						? null
+						: { at: caret, draft: textarea.value };
+			}
+			scrollToCaret(textarea, caret);
+		}
+		setArrival(reveal.landed);
+	}, [reveal, disabled, isPageCovered, sessionId, isPrimaryPointerCoarse]);
 
 	useEffect(() => {
 		if (!isPaletteOpen) return;
@@ -197,8 +290,6 @@ function InputBar({
 		setMenu("closed");
 	}, [sessionId, disabled]);
 
-	useCoverPage(isMenuOpen);
-
 	// For a control that is about to leave the screen with focus on it — a
 	// menu row, Send giving way to Stop. Focus goes to the draft, except where
 	// that would raise an on-screen keyboard nobody asked for: the autofocus
@@ -221,6 +312,8 @@ function InputBar({
 		setMenu("closed");
 		returnFocusToDraft(fromKeyboard);
 	}, [menu, returnFocusToDraft]);
+
+	useCoverPage(isMenuOpen, { onBack: closeMenu });
 
 	const handleMenuTabOut = useCallback((backward: boolean) => {
 		setMenu("closed");
@@ -534,8 +627,20 @@ function InputBar({
 			    do the palette and the menu, which hang from this box. */}
 			<div
 				ref={containerRef}
-				className="relative mx-auto w-full max-w-3xl px-3 py-2 sm:px-4 sm:py-3"
+				className={`relative mx-auto w-full max-w-3xl px-3 py-2 sm:px-4 sm:py-3 ${
+					arrival ? "composer-arrival" : ""
+				}`}
+				onAnimationEnd={(e) => {
+					if (e.target === e.currentTarget) setArrival(null);
+				}}
 			>
+				<span className="sr-only" aria-live="polite">
+					{arrival === "ready"
+						? "Message ready to send."
+						: arrival === "added"
+							? "Added to your message."
+							: ""}
+				</span>
 				{hasFiles && (
 					<ComposerAttachments
 						items={files}
@@ -624,6 +729,10 @@ function InputBar({
 						onKeyDown={handleKeyDown}
 						onKeyUp={handleKeyUp}
 						onPaste={handlePaste}
+						onFocus={() => {
+							caretPlaced.current = true;
+							heldCaret.current = null;
+						}}
 						// The autosizer measures the placeholder when the draft is
 						// empty, so a reason that wraps on a narrow phone would grow
 						// the bar by a line exactly as a permission request arrives.
@@ -689,6 +798,20 @@ function InputBar({
 			</div>
 		</div>
 	);
+}
+
+/**
+ * Scrolls a field that has grown past its height to `caret`: to the bottom for
+ * one at the end, and with the caret's line mid-field otherwise, so the text
+ * just put in above it is in view.
+ */
+function scrollToCaret(textarea: HTMLTextAreaElement, caret: number) {
+	if (caret >= textarea.value.length) {
+		textarea.scrollTop = textarea.scrollHeight;
+		return;
+	}
+	const { top } = getCaretCoordinates(textarea, caret);
+	textarea.scrollTop = Math.max(0, top - textarea.clientHeight / 2);
 }
 
 export default InputBar;

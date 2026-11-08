@@ -5,6 +5,7 @@ import type {
 	ContentPart,
 	ExpiryReason,
 	HistorySeq,
+	HtmlAction,
 	Message,
 	MessageOrigin,
 	PermissionUpdate,
@@ -102,6 +103,19 @@ export function normalizeCommand(
 		: { name: fields.name };
 }
 
+// A message record's `html_action`, kept only when it names a page and an
+// action. Also reads the same field on the `chat.html_action` reply.
+export function normalizeHtmlAction(raw: unknown): HtmlAction | undefined {
+	const fields = raw as Record<string, unknown> | null | undefined;
+	if (typeof fields?.page !== "string" || !fields.page) return undefined;
+	if (typeof fields.action !== "string" || !fields.action) return undefined;
+	return {
+		page: fields.page,
+		action: fields.action,
+		data: fields.data === undefined ? {} : fields.data,
+	};
+}
+
 // A cancelled question is stored with a nil answers map, and `omitempty` on the
 // Go side then drops the key from the record entirely — so cancellation reaches
 // the client as an absent field, not as null. Both mean cancelled.
@@ -157,6 +171,7 @@ export type NormalizedEvent =
 			subtype?: string;
 			durationMs?: number;
 			exitCode?: number;
+			htmlPage?: string;
 	  }
 	| {
 			/**
@@ -213,6 +228,7 @@ export type NormalizedEvent =
 			command?: PockodeCommandInvocation;
 			/** The files the user sent with the message. */
 			attachments?: FileBlock[];
+			htmlAction?: HtmlAction;
 	  }
 	| {
 			type: "permission_request";
@@ -335,6 +351,10 @@ export function normalizeEvent(
 						: undefined,
 				exitCode:
 					typeof record.exit_code === "number" ? record.exit_code : undefined,
+				htmlPage:
+					typeof record.html_page === "string" && record.html_page !== ""
+						? record.html_page
+						: undefined,
 				// No `parent_tool_use_id`: a result joins its call by id at any
 				// depth, so whose call it was is already known where it lands.
 			};
@@ -401,6 +421,7 @@ export function normalizeEvent(
 				answering: normalizeAnswering(record.answering),
 				command: normalizeCommand(record.command),
 				attachments: parseFileBlocks(record.attachments),
+				htmlAction: normalizeHtmlAction(record.html_action),
 			};
 		case "permission_request":
 			return {
@@ -993,6 +1014,7 @@ export function applyServerEvent(
 			answering: event.answering,
 			command: event.command,
 			attachments: event.attachments,
+			htmlAction: event.htmlAction,
 		});
 	}
 
@@ -1842,6 +1864,7 @@ function settleToolRun(
 		...run,
 		...(event.durationMs !== undefined ? { durationMs: event.durationMs } : {}),
 		...(event.exitCode !== undefined ? { exitCode: event.exitCode } : {}),
+		...(event.htmlPage !== undefined ? { htmlPage: event.htmlPage } : {}),
 	};
 
 	if (event.subtype === "background_started") {
@@ -2279,6 +2302,7 @@ interface UserMessageOptions {
 	answering?: QuestionAnswerRecord[];
 	command?: PockodeCommandInvocation;
 	attachments?: FileBlock[];
+	htmlAction?: HtmlAction;
 }
 
 /**
@@ -2382,6 +2406,7 @@ export function applyUserMessage(
 		...(options?.answering ? { answering: options.answering } : {}),
 		...(options?.command ? { command: options.command } : {}),
 		...(options?.attachments ? { attachments: options.attachments } : {}),
+		...(options?.htmlAction ? { htmlAction: options.htmlAction } : {}),
 	};
 
 	return appendUserMessage(messages, userMessage, () =>

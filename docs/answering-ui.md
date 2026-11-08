@@ -200,7 +200,7 @@ to find without hunting, so it is drawn as a small filled control:
 `rounded bg-th-accent px-2 py-0.5 text-th-accent-text`, `touch-target` for its
 hit area the way the text actions get theirs. Breaking the grammar once, for the
 one row that is a call to action rather than a statement, is what keeps the
-other three readable as statements.
+others readable as statements.
 
 `text-th-accent-text` and **not** `text-th-bg`: no stylesheet declares a
 `--color-th-bg`, so a utility naming it is dropped and the button inherits the
@@ -209,7 +209,7 @@ strip's muted text on an accent fill — a contrast failure nothing goes red ove
 guards, and `colorTokens.test.ts` now guards against naming a colour that does
 not exist at all.
 
-**The glyph stays muted like the other three.** `text-th-warning` on a glyph is
+**The glyph stays muted like the others.** `text-th-warning` on a glyph is
 under the 3:1 non-text floor in every light variant
 ([project-ui.md §3](project-ui.md#3-the-row) holds the numbers), so a hue here
 would be saying nothing in half the themes while costing the strip its one
@@ -506,7 +506,7 @@ each of them the whole answer to a different way of getting this wrong:
 
 | Condition | What it stops |
 |---|---|
-| the panel is up | there is something to make room for |
+| the panel is **drawn** (`answerPanelDrawn`) | there is something to make room for. Drawn, not merely up: an overlay unmounts an open card, and a page that keeps the composer — a Git detail ([git-ui.md](git-ui.md#the-composer)) — must not have it folded away by a card that is not there. A card unmounted under the caret fires no blur, so the card's focus flag is cleared from this same fact |
 | focus is on a control **inside the card** | a question arriving while somebody is mid-sentence in the composer must not take the sentence, the composer and the keyboard away under them (§4 forbids exactly this shape of thing) |
 | the viewport is short | on a desktop nothing is crowding the composer, and folding it would be a change for its own sake |
 
@@ -1199,7 +1199,8 @@ because it has scrolled once already.
 ### Who owns Escape
 
 The panel claims Escape for as long as it is up (§3), and several surfaces in
-this one chat want that key. The order between them is a cross-component convention,
+this one chat want that key — as do surfaces elsewhere in the app that follow the
+same convention, listed here so that there is one table to check. The order between them is a cross-component convention,
 and it lives in **this document** because every part of it is a single line in a
 different file — the next person to add an Escape listener will read none of
 them:
@@ -1209,10 +1210,13 @@ them:
 | `ConfirmDialog` | `document`, and it calls `stopPropagation` | closes itself — or, while the action it confirmed is still running, swallows the press without closing — and the press never reaches `window` at all |
 | `Sheet` — a message's menu, and every other sheet | `document`, and it calls `stopPropagation` | the same, and it claims the press even while it is refusing to be dismissed — then it swallows without closing |
 | the full screen viewer's find bar | the viewer's column inside its `Sheet`, and it calls `stopPropagation` | while the bar is open, closes the bar — or, mid-composition, only cancels the composition — and the press never reaches the `Sheet`'s `document` listener, so the next press is the one that closes the viewer |
+| the commit sheet's replace strip (`Replace your message with an AI draft?`) | the strip inside its `Sheet`, and it calls `stopPropagation` | answers `Keep mine` and the press never reaches the `Sheet`'s `document` listener, so the sheet and the message stay |
+| the Git History search field | the field, and it calls `stopPropagation` | clears the search and closes its row — or, mid-composition, only cancels the composition ([git-history-ui.md](git-history-ui.md#entering-them)) |
 | `ResponsivePanel` — the header's session panel, the worktree and session-filter dropdowns | `document`, and it calls `preventDefault` | closes itself and **marks the press handled**; while open, at every width, it counts itself as covering the page |
 | `Sidebar` — the session drawer, below the expanded tier | `document`, and it calls `preventDefault` | closes itself and **marks the press handled**; while open as a drawer, it counts itself as covering the page |
 | `InputBar`'s command palette | the textarea, and it calls `preventDefault` | closes the palette; the press never gets past it unmarked |
 | `InputBar`'s `+` menu | `document`, and it calls `preventDefault` | closes itself and **marks the press handled**; while open, it counts itself as covering the page |
+| the Git review's selection bar | `document`, and it calls `preventDefault` | clears the line selection — standing down while anything counts itself as covering the page, or the press is already `defaultPrevented` ([git-changes-ui.md](git-changes-ui.md#how-it-goes-away)) |
 | the answer panel | **`window`** | closes, unless the press is already `defaultPrevented` |
 | `ChatPanel`'s interrupt | `document` | ends the agent's turn — the fallback, and the only one that cannot be undone. It stands down (`isSheetOpen`) while anything counts itself as covering the page (`useIsPageCovered`) or the answer panel is up |
 
@@ -1261,14 +1265,14 @@ not wait to be told — it **asks whether the page is covered** before it acts:
 
 - **Every overlay drawn over the page** is answered by `useIsPageCovered`
   from `@pockode/shared`, which reads one count of covering layers. Every shared
-  `Sheet` and `ConfirmDialog` is in it without asking — locking the body
-  registers a layer — so the fork sheet, a Git sheet, a sheet raised from
+  `Sheet` and `ConfirmDialog` is in it without asking — each registers itself
+  with `useCoverPage` — so the fork sheet, a Git sheet, a sheet raised from
   anywhere in the app is counted by having been written as one. The surfaces
   that only mark the press — `ResponsivePanel` (the header's session panel is
   one), the composer's `+` menu and the session drawer — take no shared lock (`ResponsivePanel` locks the body by hand, and
   only below the expanded tier; its migration is deferred in
   [cluster-ui.md](cluster-ui.md)), so each joins the count with a
-  `useCoverPage(isOpen)` of its own. They have to: each re-adds its listener
+  `useCoverPage(isOpen, { onBack })` of its own. They have to: each re-adds its listener
   when it opens, so it usually runs after `ChatPanel`'s, and its
   `preventDefault` arrives too late. `ResponsivePanel` counts in both tiers,
   since its dropdown sits between the user and the page as much as its drawer
@@ -1311,6 +1315,34 @@ exposed:
 | `InputBar`'s command palette | the same. It hangs over the composer at *every* width, so it is the one that overlaps here on a phone as well as on a desktop |
 | `InputBar`'s `+` menu | the same, at every width, for the same reason |
 | the answer panel | closes, on a **`window`** listener, if the press landed on the backdrop element itself |
+
+**A press into a page frame is invisible to all of them.** It is dispatched in
+the frame's document, never the app's, so none of the listeners above hears it.
+A surface with no backdrop stays open, and the press goes on into the agent's
+page — which, in a page that sends, may send to the agent. So the frame of
+every page that sends shields itself: `HtmlFrame` (an `html_render` card, and
+the page in its full-screen viewer) lays a `FrameShield` — a transparent
+`aria-hidden` element over the frame alone — while a layer is drawn over it,
+and the press lands in the app's document instead, where the surface closes on
+it the usual way. Because the shield is in the way physically, the page cannot
+get the press whichever layer is up, even one that does not claim its
+dismissing click. A page that cannot send is not shielded: under a layer it
+could no longer be pressed or scrolled, a change with nothing to prevent
+([tool-call-ui.md § Under a layer](tool-call-ui.md#under-a-layer)).
+
+"Drawn over it" is `useIsDrawnOver` from `@pockode/shared`, read over the same
+registry as `useIsPageCovered` but not the same question:
+
+- **A frame on the page** is shielded while any layer is up — any counted by
+  `useIsPageCovered`.
+- **A frame inside a `Sheet`** is shielded only by a layer that went up *after*
+  its sheet. Never by its own sheet — the sheet is a layer, and a shield would
+  cover the very page it shows, which could then never be pressed: the page in
+  the full-screen viewer. Nor by a layer it was opened over. A sheet gives its
+  layer to its content for this (`CoverLayerContext`, internal to the shared
+  package), which is why the registry is ordered rather than a count.
+
+The rule is unit-tested in `web/src/components/ui/pageCover.test.tsx`.
 
 The two rules, restated for the pointer:
 

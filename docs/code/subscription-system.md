@@ -289,7 +289,7 @@ const gitPollInterval = 3 * time.Second
 
 2. **Cross-platform consistency**: Git behavior varies across platforms; polling `git status` works everywhere.
 
-3. **Simplicity**: Two commands (`rev-parse HEAD` + `status --porcelain`) capture all relevant state.
+3. **Simplicity**: `rev-parse HEAD` plus the `git.status` answer itself capture all relevant state — the answer rather than `status --porcelain`, because a file edited again keeps its porcelain line while its line counts move ([git.md](../git.md#status)).
 
 4. **Skip when idle**: Polling only runs when there are subscribers, so no overhead when unused.
 
@@ -308,7 +308,8 @@ go func() {
 
 go func() {
     defer wg.Done()
-    status = w.runGitCmd(ctx, "status", "--porcelain=v1", ...)
+    result, err := git.StatusContext(ctx, w.workDir)
+    ... // status = the JSON encoding of result
 }()
 
 wg.Wait()
@@ -402,8 +403,12 @@ because the session that button is about is the one the list is allowed not to
 have a row for ([above](#which-sessions-belong-to-work)). The chat's title does
 choose between the two copies — the row first, the detail when there is no row —
 and that is sound here for the reason `turn` is: two narrowings of one stored
-record, not two accounts of it. A field that cannot say that much has to stay on
-one side.
+record, not two accounts of it. `html_first` passes on the same terms: stored
+with the session, read by the row for its glyph and by the chat panel for the
+switch. `started`, which decides whether the switch is offered at all, stays on
+the detail alone — no row is drawn with it
+([html-first-session-ui.md](../html-first-session-ui.md#25-when-it-is-offered-and-what-happens-on-send)).
+A field that cannot say that much has to stay on one side.
 
 Detail's wire type carries them without listing them: `rpc.SessionDetail`
 *embeds* `SessionMeta` rather than re-stating its fields, which is what keeps a

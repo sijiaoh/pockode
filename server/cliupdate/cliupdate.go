@@ -16,11 +16,11 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
-	"path/filepath"
 	"sync"
 	"time"
 
 	"github.com/pockode/server/agent"
+	"github.com/pockode/server/filestore"
 	"github.com/pockode/server/session"
 )
 
@@ -35,6 +35,8 @@ type CLI struct {
 	// Channel returns the dist-tag the CLI's own update command installs from;
 	// nil is "latest".
 	Channel func() string
+	// Installer is how StartInstall installs the CLI when it is missing.
+	Installer Installer
 }
 
 func (c CLI) channel() string {
@@ -130,9 +132,10 @@ var (
 	ErrBusy = errors.New("the CLI is busy")
 	// ErrAlreadyInstalled is an install of a CLI this server already finds.
 	ErrAlreadyInstalled = errors.New("is already installed")
-	// ErrInstallerNotFound is an install refused because npm, which installs
-	// every CLI, is not on this server's PATH.
-	ErrInstallerNotFound = errors.New("npm not found")
+	// ErrInstallerToolNotFound is an install refused because a command the
+	// CLI's official install script needs to run — its shell, or a downloader
+	// — is not on this server's PATH.
+	ErrInstallerToolNotFound = errors.New("cannot run the official installer")
 )
 
 // busyError marks a refusal as ErrBusy while keeping its own message.
@@ -153,8 +156,6 @@ type Service struct {
 	// the user has no home directory, which refuses every update.
 	updateDir    string
 	updateDirErr error
-	// installer is the npm an install runs; "npm" everywhere but in tests.
-	installer string
 	// lockDir holds the machine-wide update locks, one file per CLI: every
 	// Pockode of the OS user — other projects, other cluster nodes — updates
 	// the same install, and two package managers replacing one directory at
@@ -211,19 +212,13 @@ const NotAppliedFor = 6 * time.Hour
 // sessions and gate may be nil, which count no sessions and keep nothing
 // apart.
 //
-// The update commands run in the user's home directory, not the project's: a
-// global install is the user's, and a project's .npmrc must not be able to
-// point it at another prefix or registry.
+// The update and install commands run in the user's home directory, not the
+// project's: an install is the user's, and a project's .npmrc must not be able
+// to point an update at another prefix or registry.
 func NewService(log *slog.Logger, sessions SessionCounter, gate Gate) *Service {
 	baseCtx, cancelBase := context.WithCancelCause(context.Background())
 	home, homeErr := os.UserHomeDir()
-	// The user's cache directory: the locks are per OS user, like the installs
-	// they guard, and hold nothing worth keeping.
-	var lockDir string
-	cacheDir, lockDirErr := os.UserCacheDir()
-	if lockDirErr == nil {
-		lockDir = filepath.Join(cacheDir, "pockode")
-	}
+	lockDir, lockDirErr := filestore.UserLockDir()
 	return &Service{
 		log:           log,
 		clis:          make(map[session.AgentType]CLI),
@@ -232,7 +227,6 @@ func NewService(log *slog.Logger, sessions SessionCounter, gate Gate) *Service {
 		gate:          gate,
 		updateDir:     home,
 		updateDirErr:  homeErr,
-		installer:     "npm",
 		lockDir:       lockDir,
 		lockDirErr:    lockDirErr,
 		updates:       make(map[session.AgentType]*Update),

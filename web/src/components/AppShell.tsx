@@ -3,29 +3,53 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
+import { gitStatusQueryKey } from "../hooks/gitQueries";
 import { invalidateSessionViewQueries } from "../hooks/sessionViewQueries";
 import { useAgentOptions } from "../hooks/useAgentOptions";
 import { useAgentRoleSubscription } from "../hooks/useAgentRoleSubscription";
+import {
+	BranchMergeHandoffContext,
+	useBranchMergeHandoff,
+} from "../hooks/useBranchMergeHandoff";
 import { useDocumentTitle } from "../hooks/useDocumentTitle";
 import { useFileDropGuard } from "../hooks/useFileDropGuard";
+import { useGoToParent } from "../hooks/useGoToParent";
 import { useRemoteUrlSubscription } from "../hooks/useRemoteUrlSubscription";
 import { useRouteState } from "../hooks/useRouteState";
 import { useScheduleSubscription } from "../hooks/useScheduleSubscription";
+import { ScrollRestorationContext } from "../hooks/useScrollRestoration";
+import { useScrollRestorationScope } from "../hooks/useScrollRestorationScope";
 import { useSession } from "../hooks/useSession";
 import { useSessionDetailSubscription } from "../hooks/useSessionDetailSubscription";
 import { useSettingsSubscription } from "../hooks/useSettingsSubscription";
 import { useWorkSubscription } from "../hooks/useWorkSubscription";
 import { useWorktree } from "../hooks/useWorktree";
 import { authActions, selectCredential, useAuthStore } from "../lib/authStore";
+import { collectChanges, firstReviewTarget } from "../lib/gitChanges";
+import { useGitChangesViewStore } from "../lib/gitChangesViewStore";
 import { buildNavigation, overlayToNavigation } from "../lib/navigation";
+import { FRESH_VISIT_STATE } from "../lib/scrollMemory";
 import { filterShowing, isVisibleUnder } from "../lib/sessionFilter";
 import { useSessionStore } from "../lib/sessionStore";
 import { resolveSessionView } from "../lib/sessionView";
 import { useWorktreeStore, worktreeActions } from "../lib/worktreeStore";
 import { useWSStore, wsActions } from "../lib/wsStore";
-import { isGitOverlay, type WorkSegment } from "../types/overlay";
+import {
+	type BranchRef,
+	type CommitOrigin,
+	commitOriginOf,
+	type GitSegment,
+	gitLayerOf,
+	gitSegmentOf,
+	historyQueryOf,
+	isGitOverlay,
+	mainAreaOverlay,
+	type OverlayState,
+	type WorkSegment,
+} from "../types/overlay";
 import PasswordInput from "./Auth/PasswordInput";
 import { ChatPanel } from "./Chat";
+import type { GitNavigation } from "./Git/GitTab";
 import { SessionSidebar } from "./Session";
 import { ReconnectBanner } from "./ui";
 
@@ -35,6 +59,26 @@ const SIDEBAR_COLLAPSED_KEY = "pockode:sidebar-collapsed";
 
 function readColumnCollapsed(): boolean {
 	return localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === "true";
+}
+
+/**
+ * The route with its session corrected to `sessionId`: one that no longer
+ * exists, or none yet. Replaced, as no page was visited (docs/project-ui.md
+ * §5.1), and the page open over the chat stays — only the session under it
+ * changes, the way every overlay carries it.
+ */
+function replaceSession(
+	sessionId: string,
+	route: { overlay: OverlayState; urlWorktree: string },
+) {
+	return route.overlay
+		? overlayToNavigation(route.overlay, route.urlWorktree, sessionId, {
+				replace: true,
+			})
+		: buildNavigation(
+				{ type: "session", worktree: route.urlWorktree, sessionId },
+				{ replace: true },
+			);
 }
 
 function AppShell() {
@@ -196,17 +240,11 @@ function AppShell() {
 		navigate,
 	]);
 
-	const activeDiffFile =
-		overlay?.type === "diff"
-			? { path: overlay.path, staged: overlay.staged }
-			: null;
-
 	const activeFilePath = overlay?.type === "file" ? overlay.path : null;
 	// Coarse on purpose: whether the editor is on screen, not whether it has
 	// unsaved text. The dirty flag belongs to the editor, and lifting it here to
 	// gate one menu row would run a state line across the whole shell.
 	const activeFileEdit = overlay?.type === "file" && overlay.edit === true;
-	const activeCommitHash = overlay?.type === "commit" ? overlay.hash : null;
 
 	const {
 		sessions,
@@ -275,18 +313,16 @@ function AppShell() {
 		hasRenderedShell.current = true;
 	}
 
-	// sessions/currentSessionId get a fresh identity on every session-store
-	// update (new message, state change over WebSocket). Read them from a ref inside
-	// handleDeleteSession so its identity stays stable and doesn't defeat the memo on
-	// every SessionItem row.
+	// sessions gets a fresh identity on every session-store update (new message,
+	// state change over WebSocket). Read it from a ref inside handleDeleteSession
+	// so its identity stays stable and doesn't defeat the memo on every
+	// SessionItem row.
 	const deleteSessionCtxRef = useRef({
 		sessions,
-		currentSessionId,
 		viewedSessionId: null as string | null,
 	});
 	deleteSessionCtxRef.current = {
 		sessions,
-		currentSessionId,
 		// The session the read-only screen is showing, which has no row in this
 		// worktree's list and so is not `currentSessionId`.
 		viewedSessionId: sessionView ? routeSessionId : null,
@@ -301,19 +337,23 @@ function AppShell() {
 		redirectSessionId !== null ||
 		needsNewSession;
 
+	// The route as it is now, for an answer that arrives after the press or the
+	// render that asked for it: the reader may have moved on meanwhile.
+	// `routeSessionId` beside `currentSessionId`: a viewed session is in the
+	// former only.
+	const routeRef = useRef({
+		overlay,
+		urlWorktree,
+		routeSessionId,
+		currentSessionId,
+	});
+	routeRef.current = { overlay, urlWorktree, routeSessionId, currentSessionId };
+
 	useEffect(() => {
 		if (worktreeSwitchInFlight) return;
 		if (sessionView) return;
 		if (redirectSessionId) {
-			// When overlay is active, preserve it and only update session query param
-			const navResult = overlay
-				? overlayToNavigation(overlay, urlWorktree, redirectSessionId)
-				: buildNavigation({
-						type: "session",
-						worktree: urlWorktree,
-						sessionId: redirectSessionId,
-					});
-			navigate({ ...navResult, replace: true });
+			navigate(replaceSession(redirectSessionId, { overlay, urlWorktree }));
 		}
 	}, [
 		worktreeSwitchInFlight,
@@ -367,18 +407,19 @@ function AppShell() {
 		if (sessionView) return;
 		if (createError) return;
 		if (needsNewSession) {
+			const asked = routeRef.current;
 			createSession()
 				.then((newSession) => {
-					navigate(
-						buildNavigation(
-							{
-								type: "session",
-								worktree: urlWorktree,
-								sessionId: newSession.id,
-							},
-							{ replace: true },
-						),
-					);
+					// Only onto the route that had no session: a reader who opened
+					// another session or worktree meanwhile keeps the page they chose.
+					const now = routeRef.current;
+					if (
+						now.urlWorktree !== asked.urlWorktree ||
+						now.routeSessionId !== asked.routeSessionId
+					) {
+						return;
+					}
+					navigate(replaceSession(newSession.id, now));
 				})
 				.catch((error) => {
 					// Reported through createError below; logged for the console trail.
@@ -392,7 +433,6 @@ function AppShell() {
 		createError,
 		createSession,
 		navigate,
-		urlWorktree,
 	]);
 
 	const handlePasswordSubmit = (password: string) => {
@@ -536,8 +576,7 @@ function AppShell() {
 
 	const handleDeleteSession = useCallback(
 		async (id: string, worktree: string | null) => {
-			const { sessions, currentSessionId, viewedSessionId } =
-				deleteSessionCtxRef.current;
+			const { sessions } = deleteSessionCtxRef.current;
 
 			// A row of another worktree — or of one that is gone — is deleted by
 			// name rather than through the connection's own worktree, and nothing
@@ -545,13 +584,13 @@ function AppShell() {
 			if (worktree !== null) {
 				await wsActions.sessionViewDelete(worktree, id);
 				invalidateSessionViewQueries(queryClient);
-				if (viewedSessionId === id) {
-					// The screen is reading the conversation that just went. There is
-					// no neighbour to fall back to — this worktree's list is not the
-					// list the row came from.
+				// Only while the screen is still reading the conversation that just
+				// went. There is no neighbour to fall back to — this worktree's list
+				// is not the list the row came from.
+				if (deleteSessionCtxRef.current.viewedSessionId === id) {
 					navigate(
 						buildNavigation(
-							{ type: "home", worktree: urlWorktree },
+							{ type: "home", worktree: routeRef.current.urlWorktree },
 							{ replace: true },
 						),
 					);
@@ -559,45 +598,60 @@ function AppShell() {
 				return;
 			}
 
-			const isCurrentSession = id === currentSessionId;
 			const remaining = sessions.filter((s) => s.id !== id);
 
 			await deleteSession(id);
 
-			if (isCurrentSession && remaining.length > 0) {
-				navigate(
-					buildNavigation(
-						{
-							type: "session",
-							worktree: urlWorktree,
-							sessionId: remaining[0].id,
-						},
-						{ replace: true },
-					),
-				);
+			// Replaced, not pushed: the session is gone and Back to it would be a
+			// dead end. A page open over it stays (`replaceSession`), and a reader
+			// who moved on before the delete answered is not moved.
+			const now = routeRef.current;
+			if (now.currentSessionId === id && remaining.length > 0) {
+				navigate(replaceSession(remaining[0].id, now));
 			}
 		},
-		[deleteSession, navigate, urlWorktree, queryClient],
+		[deleteSession, navigate, queryClient],
 	);
 
+	/**
+	 * Opens the review at a file of the Changes list, or at a conflicted file
+	 * of the operation banner. Pushed, also from a row tapped beside a review
+	 * already open (at `expanded`): each file is a page Back retraces, as the
+	 * review's own ‹ › are (docs/git-conflict-ui.md).
+	 *
+	 * The file already under review is no new page: its own row adds nothing,
+	 * and a press on its other side replaces, as the review's side switch does.
+	 */
+	const reviewing = overlay?.type === "diff" ? overlay : null;
 	const handleSelectDiffFile = useCallback(
 		(path: string, staged: boolean) => {
+			const samePage = reviewing?.path === path;
+			if (samePage && reviewing.staged === staged) return;
 			navigate(
 				overlayToNavigation(
 					{ type: "diff", path, staged },
 					urlWorktree,
 					currentSessionId,
+					{ replace: samePage },
 				),
 			);
 		},
-		[navigate, urlWorktree, currentSessionId],
+		[navigate, urlWorktree, currentSessionId, reviewing],
 	);
 
+	// Reported by the chat, which owns the gate, for the sidebar's Git watch and
+	// for a press on the row whose read outlived the row (`handleOpenReview`).
+	const [reviewRowCanShow, setReviewRowCanShow] = useState(false);
+	const reviewRowCanShowRef = useRef(reviewRowCanShow);
+	reviewRowCanShowRef.current = reviewRowCanShow;
+
+	// Pushed even for another line of the file already open, so that Back
+	// returns to the line the reader was at.
 	const handleSelectFile = useCallback(
-		(path: string) => {
+		(path: string, line?: number) => {
 			navigate(
 				overlayToNavigation(
-					{ type: "file", path },
+					{ type: "file", path, line },
 					urlWorktree,
 					currentSessionId,
 				),
@@ -629,11 +683,64 @@ function AppShell() {
 		[navigate, urlWorktree, currentSessionId],
 	);
 
+	// A commit is opened from the History list, or in place of another commit,
+	// and carries the list's query along; or from a branch's detail, and stacks
+	// on that branch (docs/git-branches-ui.md#opening-a-commit). The sidebar's
+	// list at `expanded` names its own origin: it can stand at a list the route
+	// no longer names.
 	const handleSelectCommit = useCallback(
-		(hash: string) => {
+		(hash: string, origin: CommitOrigin = commitOriginOf(overlay)) => {
 			navigate(
 				overlayToNavigation(
-					{ type: "commit", hash },
+					{ type: "commit", hash, ...origin },
+					urlWorktree,
+					currentSessionId,
+				),
+			);
+		},
+		[navigate, overlay, urlWorktree, currentSessionId],
+	);
+
+	/**
+	 * A segment of the Git workspace, at its list: a press on the segment
+	 * control or on one of the sidebar's Git entries — an entrance that always
+	 * lands on the list, never on a detail it remembers. A detail's way back to
+	 * its list is not this but `useGoToParent`. Pushed,
+	 * so Back walks the segments the way it walks the project list's
+	 * (docs/project-ui.md §5). A press that names the layer already on screen —
+	 * the list itself, with nothing open under it — is not a step, and adds
+	 * none. At `expanded` the sidebar's segment control asks for it only while
+	 * the route is a bare list: beside anything else the segment is the
+	 * sidebar's own, and the main area keeps what it has open (`GitTab`).
+	 */
+	const handleSelectGitSegment = useCallback(
+		(segment: GitSegment) => {
+			if (overlay?.type === "git" && overlay.segment === segment) return;
+			// History pressed over a commit is the list it was picked from;
+			// arriving from another segment is History's default
+			// (docs/git-history-ui.md#url).
+			const history =
+				segment === "history" && gitSegmentOf(overlay) === "history"
+					? historyQueryOf(overlay)
+					: undefined;
+			navigate(
+				overlayToNavigation(
+					{ type: "git", segment, history },
+					urlWorktree,
+					currentSessionId,
+				),
+			);
+		},
+		[navigate, overlay, urlWorktree, currentSessionId],
+	);
+
+	// Pushed from a row, as a commit is from History: each branch read is a
+	// step Back retraces.
+	const handleSelectBranch = useCallback(
+		(branch: BranchRef) => {
+			navigate(
+				overlayToNavigation(
+					{ type: "branch", ...branch },
 					urlWorktree,
 					currentSessionId,
 				),
@@ -642,19 +749,190 @@ function AppShell() {
 		[navigate, urlWorktree, currentSessionId],
 	);
 
-	const handleCloseOverlay = useCallback(() => {
-		if (currentSessionId) {
+	const goToParent = useGoToParent();
+
+	/**
+	 * The ← of the page over the chat: up to its parent, or to `to` where the
+	 * page knows better than its URL (`useGoToParent`). From the page on screen
+	 * when this was rendered, not when it is called: a delete answering after
+	 * the reader moved on moves nobody.
+	 */
+	const handleGoUp = useCallback(
+		(to?: OverlayState) => {
+			if (overlay) goToParent({ worktree: urlWorktree, overlay }, to);
+		},
+		[goToParent, overlay, urlWorktree],
+	);
+
+	// The open file deleted from the tree, or a folder holding it: its view
+	// and its editor alike are gone, and both go up to the chat.
+	const handleCloseFile = useCallback(() => handleGoUp(null), [handleGoUp]);
+
+	/**
+	 * Moves the review of `path` in `worktree`, just discarded from the list,
+	 * on to `next`, or to the Changes list when nothing follows. Either side:
+	 * a file discarded is done with, as the review's own Discard treats it,
+	 * even one whose staged side is still there (docs/git-changes-ui.md).
+	 * Replaced, as the review's own Discard moves on: the page under review is
+	 * gone, and Back to it would be a dead end. With nothing to move on to it
+	 * goes up to the list, as the review's own last Discard does.
+	 *
+	 * Only while that review is still the page: the discard answers after the
+	 * press, and a reader who has moved on meanwhile — to another file, or to
+	 * the same path in another worktree — must not have the page they moved to
+	 * replaced under them. Read from a ref for the same reason: the route the
+	 * caller saw is the one it pressed in, not the one now.
+	 */
+	const handleCloseGitFile = useCallback(
+		(
+			path: string,
+			worktree: string,
+			next: { path: string; staged: boolean } | null,
+		) => {
+			const { overlay: open, urlWorktree, currentSessionId } = routeRef.current;
+			if (urlWorktree !== worktree) return;
+			if (open?.type !== "diff" || open.path !== path) return;
+			if (!next) {
+				goToParent({ worktree, overlay: open });
+				return;
+			}
+			navigate({
+				...overlayToNavigation(
+					{ type: "diff", ...next },
+					urlWorktree,
+					currentSessionId,
+					{ replace: true },
+				),
+				state: FRESH_VISIT_STATE,
+			});
+		},
+		[navigate, goToParent],
+	);
+
+	/**
+	 * Replaces the detail of `from` in `worktree` with `to`'s: the branch is now
+	 * listed under another name, and it is the same page under it. Or, with `to`
+	 * null, leaves it for the Branches list: this workspace deleted it
+	 * (docs/git-branches-ui.md#when-the-branch-goes-away), and going up takes
+	 * the deleted page off the way back.
+	 *
+	 * Only while that detail is still the page, for `handleCloseGitFile`'s
+	 * reason: the answer behind it can arrive after the reader moved on.
+	 */
+	const handleRepointBranch = useCallback(
+		(from: BranchRef, to: BranchRef | null, worktree: string) => {
+			const { overlay: open, urlWorktree, currentSessionId } = routeRef.current;
+			if (urlWorktree !== worktree) return;
+			if (
+				open?.type !== "branch" ||
+				open.ref !== from.ref ||
+				open.remote !== from.remote
+			) {
+				return;
+			}
+			if (!to) {
+				goToParent({ worktree, overlay: open });
+				return;
+			}
 			navigate(
-				buildNavigation({
-					type: "session",
-					worktree: urlWorktree,
-					sessionId: currentSessionId,
-				}),
+				overlayToNavigation(
+					{ type: "branch", ...to },
+					urlWorktree,
+					currentSessionId,
+					{ replace: true },
+				),
 			);
-		} else {
-			navigate(buildNavigation({ type: "home", worktree: urlWorktree }));
+		},
+		[navigate, goToParent],
+	);
+
+	const gitNavigation: GitNavigation = useMemo(
+		() => ({
+			onSelectSegment: handleSelectGitSegment,
+			onSelectFile: handleSelectDiffFile,
+			onCloseFile: handleCloseGitFile,
+			onSelectCommit: handleSelectCommit,
+			onSelectBranch: handleSelectBranch,
+			onRepointBranch: handleRepointBranch,
+		}),
+		[
+			handleSelectGitSegment,
+			handleSelectDiffFile,
+			handleCloseGitFile,
+			handleSelectCommit,
+			handleSelectBranch,
+			handleRepointBranch,
+		],
+	);
+	// One for the app rather than one per Git surface: at `expanded` the
+	// Branches list is in the sidebar and a branch's detail in the main area,
+	// and a merge handed off from either is the same one.
+	const mergeHandoff = useBranchMergeHandoff();
+	const scrollRestoration = useScrollRestorationScope();
+	// Reported by the sidebar's Git tab, for the detail beside it.
+	const [gitListShown, setGitListShown] = useState(false);
+
+	/**
+	 * Opens the review from the chat's review row, at the file the Changes
+	 * list's `Review` would open (docs/agent-handoff-ui.md §2.5).
+	 *
+	 * The status is the one as it is at the press, not the one the row drew
+	 * from: a cached answer that has not been invalidated is used as it is,
+	 * and one that has — a `git.changed`, the refresh as a turn ends, a worktree
+	 * switch landing — is waited for, so a file committed meanwhile, or another
+	 * worktree's, is never opened. A tree clean by then, a read that fails, or a
+	 * switch still in flight open the list instead, which is true in every case.
+	 * A reader who has moved on while the read was out keeps the page they moved
+	 * to, and one who has sent meanwhile keeps the chat: the row's gate closing
+	 * is the press expiring.
+	 *
+	 * Pushed with no list behind it: leaving goes up to the list, in the
+	 * review's place, and from there back to the chat.
+	 */
+	const getGitStatus = useWSStore((s) => s.actions.getStatus);
+	const handleOpenReview = useCallback(async () => {
+		const pressed = routeRef.current;
+		let first: { path: string; staged: boolean } | null = null;
+		if (!worktreeSwitchInFlight) {
+			try {
+				// A refresh already under way carries the readers' retries, and
+				// fetchQuery would join it rather than start its own.
+				await queryClient.cancelQueries({ queryKey: gitStatusQueryKey });
+				const status = await queryClient.fetchQuery({
+					queryKey: gitStatusQueryKey,
+					queryFn: getGitStatus,
+					staleTime: Number.POSITIVE_INFINITY,
+					// A press waits on this read; a retry's backoff would leave it
+					// doing nothing for seconds, where the list can say what failed.
+					retry: false,
+				});
+				first = firstReviewTarget(
+					collectChanges(status),
+					useGitChangesViewStore.getState().view,
+				);
+			} catch {
+				// The list says what the status read could not, in its own banner.
+			}
 		}
-	}, [navigate, urlWorktree, currentSessionId]);
+		const now = routeRef.current;
+		if (
+			!reviewRowCanShowRef.current ||
+			now.overlay ||
+			now.urlWorktree !== pressed.urlWorktree ||
+			now.currentSessionId !== pressed.currentSessionId
+		) {
+			return;
+		}
+		navigate(
+			overlayToNavigation(
+				first
+					? { type: "diff", path: first.path, staged: first.staged }
+					: { type: "git", segment: "changes" },
+				pressed.urlWorktree,
+				pressed.currentSessionId,
+			),
+		);
+	}, [navigate, queryClient, getGitStatus, worktreeSwitchInFlight]);
 
 	const handleOpenSettings = useCallback(() => {
 		navigate(
@@ -684,20 +962,11 @@ function AppShell() {
 		);
 	}, [navigate, urlWorktree, currentSessionId]);
 
-	// Back out of a work detail, which is a return rather than an entrance: it
-	// goes to the segment the reader opened the work from.
-	const handleBackToWorkList = useCallback(() => {
-		navigate(
-			overlayToNavigation(
-				{ type: "work-list", segment: workSegment },
-				urlWorktree,
-				currentSessionId,
-			),
-		);
-	}, [navigate, urlWorktree, currentSessionId, workSegment]);
-
+	// Pushed, so Back walks the segments (docs/project-ui.md §5); the segment
+	// already on screen is no step.
 	const handleSelectWorkSegment = useCallback(
 		(segment: WorkSegment) => {
+			if (overlay?.type === "work-list" && overlay.segment === segment) return;
 			navigate(
 				overlayToNavigation(
 					{ type: "work-list", segment },
@@ -706,7 +975,7 @@ function AppShell() {
 				),
 			);
 		},
-		[navigate, urlWorktree, currentSessionId],
+		[navigate, overlay, urlWorktree, currentSessionId],
 	);
 
 	const handleOpenWorkDetail = useCallback(
@@ -939,71 +1208,82 @@ function AppShell() {
 				)}
 				<ReconnectBanner />
 			</div>
-			<div className="flex min-h-0 flex-1">
-				<SessionSidebar
-					isOpen={sidebarVisible}
-					onClose={handleCloseSidebar}
-					// The session on screen, whichever list it came from. A viewed
-					// one has no row in this worktree's list and so is not
-					// `currentSessionId` — but the filter has moved to the list it
-					// does have a row in, and that row is the one to highlight.
-					currentSessionId={sessionView ? routeSessionId : currentSessionId}
-					onSelectSession={handleSelectSession}
-					onCreateSession={handleCreateSession}
-					onDeleteSession={handleDeleteSession}
-					onSelectDiffFile={handleSelectDiffFile}
-					onCloseDiffFile={handleCloseOverlay}
-					activeDiffFile={activeDiffFile}
-					onSelectCommit={handleSelectCommit}
-					activeCommitHash={activeCommitHash}
-					onSelectFile={handleSelectFile}
-					activeFilePath={activeFilePath}
-					activeFileEdit={activeFileEdit}
-					onRepointFile={handleRepointFile}
-					onCloseFile={handleCloseOverlay}
-					onOpenWorkList={handleOpenWorkList}
-					onOpenScheduleList={handleOpenScheduleList}
-					onOpenAgentRoleList={handleOpenAgentRoleList}
-					isExpanded={isExpanded}
-					isSwitchingWorktree={worktreeSwitchInFlight}
-				/>
-				<div className="contents" inert={isDrawerUp}>
-					<ChatPanel
-						view={sessionView}
-						onOpenSessionThere={handleOpenSessionThere}
-						sessionId={
-							sessionView ? (routeSessionId ?? "") : (currentSessionId ?? "")
-						}
-						sessionTitle={currentSession?.title ?? ""}
-						isSessionResolved={isSessionResolved}
-						onUpdateTitle={(title) => {
-							if (currentSessionId) updateTitle(currentSessionId, title);
-						}}
-						// Only while the sidebar is off the screen, with one exception:
-						// the drawer's opener has to stay mounted under it, since that is
-						// where focus goes back when it closes.
-						onOpenSidebar={
-							isExpanded && !columnCollapsed ? undefined : handleOpenSidebar
-						}
-						sidebarKind={isExpanded ? "column" : "drawer"}
-						sidebarToggleRef={sidebarToggleRef}
-						onOpenSettings={handleOpenSettings}
-						overlay={overlay}
-						onCloseOverlay={handleCloseOverlay}
-						onNavigateToSession={handleNavigateToSession}
-						onSelectSession={handleSelectChatSession}
-						onOpenWorkDetail={handleOpenWorkDetail}
-						onOpenFile={handleSelectFile}
-						onOpenWorkList={handleBackToWorkList}
-						workSegment={workSegment}
-						onSelectWorkSegment={handleSelectWorkSegment}
-						onOpenAgentRoleList={handleOpenAgentRoleList}
-						onOpenAgentRoleDetail={handleOpenAgentRoleDetail}
-						onOpenScheduleList={handleOpenScheduleList}
-						onOpenScheduleDetail={handleOpenScheduleDetail}
-					/>
-				</div>
-			</div>
+			<ScrollRestorationContext value={scrollRestoration}>
+				<BranchMergeHandoffContext value={mergeHandoff}>
+					<div className="flex min-h-0 flex-1">
+						<SessionSidebar
+							isOpen={sidebarVisible}
+							onClose={handleCloseSidebar}
+							// The session on screen, whichever list it came from. A viewed
+							// one has no row in this worktree's list and so is not
+							// `currentSessionId` — but the filter has moved to the list it
+							// does have a row in, and that row is the one to highlight.
+							currentSessionId={sessionView ? routeSessionId : currentSessionId}
+							onSelectSession={handleSelectSession}
+							onCreateSession={handleCreateSession}
+							onDeleteSession={handleDeleteSession}
+							gitLayer={gitLayerOf(overlay)}
+							gitNavigation={gitNavigation}
+							onGitListShownChange={setGitListShown}
+							reviewRowCanShow={reviewRowCanShow}
+							onSelectFile={handleSelectFile}
+							activeFilePath={activeFilePath}
+							activeFileEdit={activeFileEdit}
+							onRepointFile={handleRepointFile}
+							onCloseFile={handleCloseFile}
+							onOpenWorkList={handleOpenWorkList}
+							onOpenScheduleList={handleOpenScheduleList}
+							onOpenAgentRoleList={handleOpenAgentRoleList}
+							isExpanded={isExpanded}
+							isSwitchingWorktree={worktreeSwitchInFlight}
+						/>
+						<div className="contents" inert={isDrawerUp}>
+							<ChatPanel
+								view={sessionView}
+								onOpenSessionThere={handleOpenSessionThere}
+								sessionId={
+									sessionView
+										? (routeSessionId ?? "")
+										: (currentSessionId ?? "")
+								}
+								sessionTitle={currentSession?.title ?? ""}
+								isSessionResolved={isSessionResolved}
+								onUpdateTitle={(title) => {
+									if (currentSessionId) updateTitle(currentSessionId, title);
+								}}
+								// Only while the sidebar is off the screen, with one exception:
+								// the drawer's opener has to stay mounted under it, since that is
+								// where focus goes back when it closes.
+								onOpenSidebar={
+									isExpanded && !columnCollapsed ? undefined : handleOpenSidebar
+								}
+								sidebarKind={isExpanded ? "column" : "drawer"}
+								sidebarToggleRef={sidebarToggleRef}
+								onOpenSettings={handleOpenSettings}
+								overlay={mainAreaOverlay(overlay, isExpanded)}
+								onGoUp={handleGoUp}
+								onNavigateToSession={handleNavigateToSession}
+								onSelectSession={handleSelectChatSession}
+								onOpenWorkDetail={handleOpenWorkDetail}
+								onOpenFile={handleSelectFile}
+								workSegment={workSegment}
+								onSelectWorkSegment={handleSelectWorkSegment}
+								onOpenAgentRoleDetail={handleOpenAgentRoleDetail}
+								onOpenScheduleDetail={handleOpenScheduleDetail}
+								onSelectGitSegment={handleSelectGitSegment}
+								onSelectDiffFile={handleSelectDiffFile}
+								onSelectCommit={handleSelectCommit}
+								onSelectBranch={handleSelectBranch}
+								onRepointBranch={handleRepointBranch}
+								onCloseGitFile={handleCloseGitFile}
+								gitListBeside={isExpanded && gitListShown}
+								onOpenReview={handleOpenReview}
+								onReviewRowCanShowChange={setReviewRowCanShow}
+							/>
+						</div>
+					</div>
+				</BranchMergeHandoffContext>
+			</ScrollRestorationContext>
 		</div>
 	);
 }

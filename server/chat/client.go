@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/pockode/server/agent"
+	"github.com/pockode/server/htmlpage"
 	"github.com/pockode/server/process"
 	"github.com/pockode/server/session"
 )
@@ -166,6 +167,19 @@ func (c *Client) SendCommandExcluding(ctx context.Context, sessionID, content st
 	return c.sendEvent(ctx, sessionID, agent.MessageEvent{Content: content, Command: &cmd}, attachments, exclude)
 }
 
+// SendHTMLActionExcluding is SendMessageExcluding for something a page in the
+// chat sent on the reader's press, and returns the content the agent was sent
+// (htmlpage.ActionText). It is the user's message like any other — refused
+// while a permission request is open, folded into a running turn — but its
+// content is machine text, which is what the record's html_action says.
+//
+// The caller has checked that the page exists in the session.
+func (c *Client) SendHTMLActionExcluding(ctx context.Context, sessionID string, action htmlpage.Action, exclude any) (Sent, string, error) {
+	content := htmlpage.ActionText(action)
+	sent, err := c.sendEvent(ctx, sessionID, agent.MessageEvent{Content: content, HTMLAction: &action}, nil, exclude)
+	return sent, content, err
+}
+
 // SendSystemMessage sends a system-driven automatic message (kickoff, restart,
 // auto-continue, etc.). It is tagged with origin "system" plus a subtype and
 // optional meta so the frontend can fold it into the receiving work's progress
@@ -192,25 +206,9 @@ type Sent struct {
 // sendEvent delivers one message to the agent, records it, and tells subscribers.
 // It returns what names the record, or the zero Sent if there is none.
 func (c *Client) sendEvent(ctx context.Context, sessionID string, event agent.MessageEvent, attachments []agent.Attachment, exclude any) (Sent, error) {
-	proc, err := c.getOrCreateProcess(ctx, sessionID)
+	proc, err := c.processToDeliverTo(ctx, sessionID, len(attachments) > 0)
 	if err != nil {
 		return Sent{}, err
-	}
-
-	// Before the append, not after: a refused message must leave no trace. A
-	// record written here would be in the transcript on the next reload of a
-	// conversation the agent never heard it in, which is a worse answer than the
-	// error — the send failed, and only the client that tried knows that.
-	//
-	// Asked of the process rather than of the agent, and asked for every sender:
-	// a kickoff or an auto-continuation lands in the same silence a typed message
-	// does, and a work nudged into a session that is holding a request open is
-	// nudged into nothing.
-	if proc.TurnState().AwaitingUserAnswer() {
-		return Sent{}, ErrTurnAwaitingAnswer
-	}
-	if len(attachments) > 0 && !proc.ReceivesAttachments() {
-		return Sent{}, ErrAttachmentsUnsupported
 	}
 	for _, a := range attachments {
 		event.Attachments = append(event.Attachments, a.File)
@@ -257,6 +255,55 @@ func (c *Client) sendEvent(ctx context.Context, sessionID string, event agent.Me
 	}
 
 	return Sent{Seq: seq, MessageID: event.MessageID}, nil
+}
+
+// processToDeliverTo returns the process a message is about to be handed to,
+// with the session marked started, or the reason the message is refused.
+//
+// Before the append, not after: a refused message must leave no trace. A
+// record written here would be in the transcript on the next reload of a
+// conversation the agent never heard it in, which is a worse answer than the
+// error — the send failed, and only the client that tried knows that.
+//
+// Asked of the process rather than of the agent, and asked for every sender:
+// a kickoff or an auto-continuation lands in the same silence a typed message
+// does, and a work nudged into a session that is holding a request open is
+// nudged into nothing.
+//
+// The session is marked started only once nothing above can refuse the
+// message, so a first message refused here leaves the session's guidance still
+// open to a switch. A failure past this point (the handover itself) leaves it
+// started: the message is in the transcript by then.
+//
+// Marking it fixes HTMLFirst, and the value it is fixed at is the one that
+// counts: a switch that landed after the process was fetched but before the
+// mark is honoured by fetching again, which replaces a process started with
+// the old value. The second pass always matches — nothing can change the
+// value of a started session.
+func (c *Client) processToDeliverTo(ctx context.Context, sessionID string, hasAttachments bool) (*process.Process, error) {
+	for {
+		proc, err := c.getOrCreateProcess(ctx, sessionID)
+		if err != nil {
+			return nil, err
+		}
+		if proc.TurnState().AwaitingUserAnswer() {
+			return nil, ErrTurnAwaitingAnswer
+		}
+		if hasAttachments && !proc.ReceivesAttachments() {
+			return nil, ErrAttachmentsUnsupported
+		}
+
+		started, err := c.store.MarkStarted(ctx, sessionID)
+		if err != nil {
+			if errors.Is(err, session.ErrSessionNotFound) {
+				return nil, ErrSessionNotFound
+			}
+			return nil, fmt.Errorf("mark session started: %w", err)
+		}
+		if proc.HTMLFirst() == started.HTMLFirst {
+			return proc, nil
+		}
+	}
 }
 
 // noteIngested writes the read point for an agent that cannot report its own:
@@ -402,6 +449,10 @@ func (c *Client) Fork(ctx context.Context, sourceID string, anchor session.Histo
 		// the fork inherits is what was unanswered *at the cut*, and the source
 		// may have answered three of them since. See agent.UnansweredQuestions.
 		Unanswered: agent.UnansweredQuestions(history),
+		// Only the pages the cut keeps a record of: one drawn past it is not
+		// in the fork's transcript (htmlpage.Clone says why its number is
+		// still not reused).
+		PagesThrough: htmlpage.HighestInRecords(history),
 	})
 	if err != nil {
 		return session.SessionMeta{}, fmt.Errorf("create forked session: %w", err)

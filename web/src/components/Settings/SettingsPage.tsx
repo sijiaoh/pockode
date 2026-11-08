@@ -1,4 +1,5 @@
 import { useCallback, useMemo, useRef, useSyncExternalStore } from "react";
+import { useScrollRestoration } from "../../hooks/useScrollRestoration";
 import {
 	type SettingsSectionConfig,
 	useSettingsSections,
@@ -12,6 +13,7 @@ interface Props {
 
 export default function SettingsPage({ onBack }: Props) {
 	const scrollContainerRef = useRef<HTMLElement>(null);
+	const restoringRef = useScrollRestoration(scrollContainerRef);
 	const sections = useVisibleSettingsSections();
 
 	const navItems = sections.map((section) => ({
@@ -25,7 +27,7 @@ export default function SettingsPage({ onBack }: Props) {
 
 			<SettingsNav items={navItems} scrollContainerRef={scrollContainerRef} />
 
-			<main ref={scrollContainerRef} className="min-h-0 flex-1 overflow-auto">
+			<main ref={restoringRef} className="min-h-0 flex-1 overflow-auto">
 				<div className="mx-auto max-w-2xl px-4 py-4 pb-[max(1rem,env(safe-area-inset-bottom))]">
 					{sections.map((section) => {
 						const Component = section.component;

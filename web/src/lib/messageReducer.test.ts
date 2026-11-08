@@ -180,6 +180,27 @@ describe("settleAgainstTurn", () => {
 
 describe("messageReducer", () => {
 	describe("normalizeEvent", () => {
+		// Drawn from on every tab and after a reload, not only on the sender's
+		// echo; `content` is the agent's text.
+		it("reads a page's send off a message record", () => {
+			expect(
+				normalizeEvent({
+					type: "message",
+					content: 'Page action "go" from p3:\n{}',
+					html_action: { page: "p3", action: "go", data: { id: "42" } },
+				}),
+			).toMatchObject({
+				htmlAction: { page: "p3", action: "go", data: { id: "42" } },
+			});
+			expect(
+				normalizeEvent({
+					type: "message",
+					content: "hi",
+					html_action: { page: "", action: "go", data: {} },
+				}),
+			).toMatchObject({ htmlAction: undefined });
+		});
+
 		it("normalizes tool_call event with snake_case to camelCase", () => {
 			const event = normalizeEvent({
 				type: "tool_call",
@@ -3210,6 +3231,20 @@ describe("messageReducer", () => {
 			expect(runsOf(messages[0])).toMatchObject([
 				{ durationMs: 4200, exitCode: 1 },
 			]);
+		});
+
+		// Replay and live both arrive through normalizeEvent.
+		it("carries the page a page tool stored onto its run", () => {
+			const event = normalizeEvent({
+				type: "tool_result",
+				tool_use_id: "t1",
+				tool_result: "Page p3 ...",
+				html_page: "p3",
+			});
+			let messages: Message[] = [streamingRun()];
+			messages = applyServerEvent(messages, call("t1", "pockode:html_render"));
+			messages = applyServerEvent(messages, event);
+			expect(runsOf(messages[0])).toMatchObject([{ htmlPage: "p3" }]);
 		});
 
 		// Claude reports no duration at all, and zero is how that arrives.

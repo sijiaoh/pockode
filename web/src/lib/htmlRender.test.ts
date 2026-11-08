@@ -1,5 +1,34 @@
 import { describe, expect, it } from "vitest";
-import { projectRelativeHtml } from "./htmlRender";
+import type { ContentPart, ToolRunStatus } from "../types/message";
+import { isHtmlRenderCard, projectRelativeHtml } from "./htmlRender";
+
+describe("isHtmlRenderCard", () => {
+	const part = (
+		name: string,
+		status: ToolRunStatus,
+		htmlPage?: string,
+	): ContentPart =>
+		({
+			type: "tool_call",
+			tool: { id: "t", name, input: {}, status, htmlPage },
+		}) as ContentPart;
+
+	it.each([
+		// A render carries its page, so one from before ids is still a card.
+		["mcp__pockode__html_render", "success", undefined, true],
+		["pockode:html_render", "success", "p1", true],
+		["pockode:html_render", "error", undefined, false],
+		// An edit's page is reached only by its id.
+		["pockode:html_edit", "success", "p2", true],
+		["mcp__pockode__html_edit", "success", undefined, false],
+		["pockode:html_edit", "running", undefined, false],
+		// A read draws nothing.
+		["pockode:html_get", "success", undefined, false],
+		["mcp__other__html_render", "success", undefined, false],
+	] as const)("%s %s with page %s is a card: %s", (name, status, page, card) => {
+		expect(isHtmlRenderCard(part(name, status, page))).toBe(card);
+	});
+});
 
 describe("projectRelativeHtml", () => {
 	it("makes a work-directory path relative where an attribute or url() starts one", () => {

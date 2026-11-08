@@ -1,18 +1,21 @@
-import { ConfirmDialog } from "@pockode/shared";
+import { ConfirmDialog, useIsExpanded } from "@pockode/shared";
 import { useQueryClient } from "@tanstack/react-query";
-import { useNavigate } from "@tanstack/react-router";
-import { Code, Loader2, Pencil, PencilLine, Trash2 } from "lucide-react";
+import { useNavigate, useRouter } from "@tanstack/react-router";
+import { History, Loader2, Pencil, PencilLine, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { contentsQueryKey, useContents } from "../../hooks/useContents";
 import { useFileDownload } from "../../hooks/useFileDownload";
 import { useFSWatch } from "../../hooks/useFSWatch";
 import { useCurrentWorktree, useRouteState } from "../../hooks/useRouteState";
 import { useTakenNames } from "../../hooks/useTakenNames";
+import { useCodeWrap } from "../../lib/diffSettingsStore";
 import { applyEntryGone } from "../../lib/fileCache";
 import { overlayToNavigation } from "../../lib/navigation";
 import { isAlreadyExistsError } from "../../lib/rpc/file";
+import { useIsGitRepo } from "../../lib/worktreeStore";
 import { useWSStore } from "../../lib/wsStore";
 import { isFileContent } from "../../types/contents";
+import { fileHistoryOverlay } from "../../types/overlay";
 import {
 	canEditFileView,
 	getEditLabel,
@@ -21,23 +24,49 @@ import {
 import { parentDir, splitPath } from "../../utils/path";
 import { FilePageHeader } from "../Layout/PageHeader";
 import {
-	BottomActionBar,
 	ContentView,
+	DetailActionBottomBar,
+	type DetailActions,
+	detailActionsPlacement,
 	getActionIconButtonClass,
-	ToggleIconButton,
+	getDestructiveIconButtonClass,
+	SourceToggle,
+	sourceRenderingOf,
+	ViewToolbar,
+	WrapToggle,
 } from "../ui";
 import EntryNameDialog from "./EntryNameDialog";
-import FileBody from "./FileBody";
+import FileBody, { offersWrap } from "./FileBody";
 import { DownloadButton } from "./FileDownloadControls";
 
 interface Props {
 	path: string;
+	/** The source rather than the rendering, for a file that renders. */
+	source?: boolean;
+	/**
+	 * The line to open at, from the URL (docs/file.md#where-the-viewer-opens).
+	 * It implies `source`: a rendering has no lines.
+	 */
+	line?: number;
 	onBack: () => void;
+	/**
+	 * Whether the chat's composer under the viewer holds a soft keyboard,
+	 * which takes the actions off the screen (`DetailActionsPlacement`).
+	 */
+	keyboardUp?: boolean;
 }
 
-function FileView({ path, onBack }: Props) {
+function FileView({
+	path,
+	source = false,
+	line,
+	onBack,
+	keyboardUp = false,
+}: Props) {
+	const actionsAt = detailActionsPlacement(useIsExpanded(), keyboardUp);
 	const queryClient = useQueryClient();
 	const navigate = useNavigate();
+	const router = useRouter();
 	const worktree = useCurrentWorktree();
 	const { sessionId } = useRouteState();
 	const { data, isLoading, error } = useContents(path);
@@ -51,10 +80,6 @@ function FileView({ path, onBack }: Props) {
 	const [isRenaming, setIsRenaming] = useState(false);
 	const [renameError, setRenameError] = useState<string | null>(null);
 	const [isDeleting, setIsDeleting] = useState(false);
-	// A page's source rather than the page. Kept across files, as the commit
-	// view's toggle is: someone reading several pages' source in a row should
-	// not have to press it again for each.
-	const [showSource, setShowSource] = useState(false);
 	// One banner for every file-level action: two stacked error bars would read
 	// as two separate failures.
 	const [actionError, setActionError] = useState<string | null>(null);
@@ -62,11 +87,18 @@ function FileView({ path, onBack }: Props) {
 	// search or a chat link has never been listed here.
 	const takenNames = useTakenNames(showRename ? parentDir(path) : null);
 
+	const showSource = source || line !== undefined;
+
 	const file = data && isFileContent(data) ? data : null;
 	const state = useMemo(
 		() => (file ? getFileViewState(file, { kind: "file", path }) : null),
 		[file, path],
 	);
+	const isPage = state?.kind === "page";
+	const sourceRendering = sourceRenderingOf(state, path);
+	const hasSourceToggle = sourceRendering !== null;
+	const { wrap } = useCodeWrap();
+
 	const download = useFileDownload({
 		path,
 		worktree,
@@ -83,6 +115,20 @@ function FileView({ path, onBack }: Props) {
 		);
 	}, [navigate, path, worktree, sessionId]);
 
+	// Replaced: switching how the file is drawn is not a place Back should
+	// return to. Either way the line is left behind — leaving the source leaves
+	// its lines, and a switch to it starts at the top like any other opening.
+	const toggleSource = useCallback(() => {
+		navigate(
+			overlayToNavigation(
+				{ type: "file", path, source: !showSource },
+				worktree,
+				sessionId,
+				{ replace: true },
+			),
+		);
+	}, [navigate, path, showSource, worktree, sessionId]);
+
 	// Pushed, so Back returns to the document the image was opened from.
 	const openFile = useCallback(
 		(target: string) => {
@@ -97,10 +143,20 @@ function FileView({ path, onBack }: Props) {
 		[navigate, worktree, sessionId],
 	);
 
+	// A project without a repository has no history to show
+	// (docs/git-ui.md#projects-without-a-repository).
+	const isGitRepo = useIsGitRepo() === true;
+	const openHistory = useCallback(() => {
+		navigate(
+			overlayToNavigation(fileHistoryOverlay(path), worktree, sessionId),
+		);
+	}, [navigate, path, worktree, sessionId]);
+
 	const handleRename = useCallback(
 		async (name: string) => {
 			const dir = parentDir(path);
 			const newPath = dir ? `${dir}/${name}` : name;
+			const pressedAt = router.state.location.href;
 
 			setIsRenaming(true);
 			setRenameError(null);
@@ -124,13 +180,22 @@ function FileView({ path, onBack }: Props) {
 
 			setShowRename(false);
 			applyEntryGone(queryClient, path);
+			// A reader who left meanwhile — a traversal of several steps passes a
+			// sheet that refuses Back — keeps the page they went to.
+			if (router.state.location.href !== pressedAt) return;
 			// Followed to the new path rather than closed: the file is still there,
 			// and the user is still reading it. Replaced rather than pushed —
 			// nobody navigated, and the entry left behind would only send Back to
 			// a path that no longer resolves.
 			navigate(
+				// The way of reading it goes along; the line does not, as it would
+				// were the file left any other way.
 				overlayToNavigation(
-					{ type: "file", path: newPath },
+					{
+						type: "file",
+						path: newPath,
+						source: hasSourceToggle && showSource,
+					},
 					worktree,
 					sessionId,
 					{
@@ -139,7 +204,17 @@ function FileView({ path, onBack }: Props) {
 				),
 			);
 		},
-		[renameFile, path, queryClient, navigate, worktree, sessionId],
+		[
+			renameFile,
+			path,
+			queryClient,
+			navigate,
+			router,
+			worktree,
+			sessionId,
+			hasSourceToggle,
+			showSource,
+		],
 	);
 
 	const handleDeleteClick = useCallback(() => {
@@ -190,53 +265,46 @@ function FileView({ path, onBack }: Props) {
 	// failed to load there is nothing to act on at all.
 	const canEdit = state !== null && canEditFileView(state);
 	const { fileName } = splitPath(path);
-	const isPage = state?.kind === "page";
 
-	return (
-		<div className="flex flex-1 flex-col overflow-hidden">
-			<FilePageHeader path={path} back={{ to: "chat", onClick: onBack }} />
-			<ContentView
-				isLoading={isLoading}
-				error={error instanceof Error ? error : null}
-				fill={isPage && !showSource}
-			>
-				{actionError && (
-					<div className="border-b border-th-error/20 bg-th-error/10 px-4 py-2 text-sm text-th-error">
-						{actionError}
-					</div>
-				)}
-				{state && (
-					<FileBody
-						state={state}
-						path={path}
-						plain={isPage && showSource}
-						onOpenFile={openFile}
-						downloadAction={{
-							label: download.label,
-							onClick: download.toggle,
-							// Matches the bottom bar's button: two entry points for one
-							// action must not disagree about when it is available.
-							disabled: isDeleting,
-						}}
-					/>
-				)}
-			</ContentView>
-			{state && (
-				<BottomActionBar>
-					<div className="flex items-center gap-2">
-						<button
-							type="button"
-							onClick={navigateToEdit}
-							disabled={isDeleting || !canEdit}
-							className={getActionIconButtonClass(!isDeleting && canEdit)}
-							aria-label={getEditLabel(state)}
-							title={getEditLabel(state)}
-						>
-							<Pencil className="h-4 w-4" aria-hidden="true" />
-						</button>
-						{/* A different pencil from Edit's on purpose: the two sit side by
-						    side, and one changes the contents while the other changes the
-						    name. */}
+	const wrapToggle = state &&
+		offersWrap(state, path, { source: showSource }) && <WrapToggle />;
+	const toggles = (hasSourceToggle || wrapToggle) && (
+		<>
+			{sourceRendering && (
+				<SourceToggle
+					rendering={sourceRendering}
+					showingSource={showSource}
+					onToggle={toggleSource}
+				/>
+			)}
+			{wrapToggle}
+		</>
+	);
+	const actions: DetailActions = state
+		? {
+				// At the leading edge, the farthest from Edit's corner, as the
+				// review keeps Discard farthest from its primary.
+				leading: (
+					<button
+						type="button"
+						onClick={handleDeleteClick}
+						disabled={isDeleting}
+						className={getDestructiveIconButtonClass(!isDeleting)}
+						aria-label="Delete"
+						title="Delete"
+					>
+						{isDeleting ? (
+							<Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+						) : (
+							<Trash2 className="h-4 w-4" aria-hidden="true" />
+						)}
+					</button>
+				),
+				utilities: (
+					<>
+						{/* A different pencil from Edit's on purpose: the two sit in
+						    one row, and one changes the contents while the other
+						    changes the name. */}
 						<button
 							type="button"
 							onClick={() => {
@@ -252,32 +320,69 @@ function FileView({ path, onBack }: Props) {
 							<PencilLine className="h-4 w-4" aria-hidden="true" />
 						</button>
 						<DownloadButton download={download} disabled={isDeleting} />
-						{isPage && (
-							<ToggleIconButton
-								icon={Code}
-								pressed={showSource}
-								onClick={() => setShowSource((v) => !v)}
-								label={showSource ? "Show page" : "Show source"}
-							/>
+						{isGitRepo && (
+							<button
+								type="button"
+								onClick={openHistory}
+								className={getActionIconButtonClass(true)}
+								aria-label="History of this file"
+								title="History of this file"
+							>
+								<History className="h-4 w-4" aria-hidden="true" />
+							</button>
 						)}
-						{/* Last on purpose: the destructive action is the one a thumb
-						    should not reach by accident on a small screen. */}
+						{/* The trailing corner, where the editor's Save stands: the
+						    viewer has no primary, and this is its most-used action.
+						    An icon still — editing by hand comes second here. */}
 						<button
 							type="button"
-							onClick={handleDeleteClick}
-							disabled={isDeleting}
-							className={getActionIconButtonClass(!isDeleting)}
-							aria-label="Delete"
+							onClick={navigateToEdit}
+							disabled={isDeleting || !canEdit}
+							className={getActionIconButtonClass(!isDeleting && canEdit)}
+							aria-label={getEditLabel(state)}
+							title={getEditLabel(state)}
 						>
-							{isDeleting ? (
-								<Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
-							) : (
-								<Trash2 className="h-4 w-4" aria-hidden="true" />
-							)}
+							<Pencil className="h-4 w-4" aria-hidden="true" />
 						</button>
+					</>
+				),
+			}
+		: {};
+
+	return (
+		<div className="flex flex-1 flex-col overflow-hidden">
+			<FilePageHeader path={path} back={{ to: "chat", onClick: onBack }} />
+			<ViewToolbar toggles={toggles} actions={actions} actionsAt={actionsAt} />
+			<ContentView
+				isLoading={isLoading}
+				error={error instanceof Error ? error : null}
+				fill={isPage && !showSource}
+			>
+				{actionError && (
+					<div className="border-b border-th-error/20 bg-th-error/10 px-4 py-2 text-sm text-th-error">
+						{actionError}
 					</div>
-				</BottomActionBar>
-			)}
+				)}
+				{state && (
+					<FileBody
+						state={state}
+						path={path}
+						source={showSource}
+						lineNumbers
+						wrap={wrap}
+						line={line}
+						onOpenFile={openFile}
+						downloadAction={{
+							label: download.label,
+							onClick: download.toggle,
+							// Matches the bottom bar's button: two entry points for one
+							// action must not disagree about when it is available.
+							disabled: isDeleting,
+						}}
+					/>
+				)}
+			</ContentView>
+			<DetailActionBottomBar actions={actions} actionsAt={actionsAt} />
 			{showRename && (
 				<EntryNameDialog
 					mode="rename"

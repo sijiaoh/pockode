@@ -16,6 +16,7 @@ import {
 	matchAtOrAfter,
 	stepMatch,
 } from "../../lib/find";
+import { composing } from "../../utils/keyboard";
 import { headerButtonClass, inputClass } from "../ui";
 import { LINE_INDEX_ATTR, type VirtualLinesHandle } from "./VirtualLines";
 
@@ -554,13 +555,6 @@ function useFind({
 	};
 
 	return { ...state, next: () => step(1), previous: () => step(-1) };
-}
-
-/** Whether a key press is part of an IME composition rather than its own. */
-export function composing(event: KeyboardEvent): boolean {
-	// 229 is what macOS and iOS Safari send for the Enter that commits a
-	// composition, which arrives after `compositionend`.
-	return event.nativeEvent.isComposing || event.keyCode === 229;
 }
 
 /**

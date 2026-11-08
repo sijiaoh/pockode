@@ -44,6 +44,14 @@ func Discard(dir string, paths []string) error {
 			return fmt.Errorf("failed to read status: %w", err)
 		}
 
+		conflicted, err := unmergedPaths(dir, submodules, paths)
+		if err != nil {
+			return err
+		}
+		if len(conflicted) > 0 {
+			return &ConflictedPathsError{Action: opDiscard.name, Paths: conflicted}
+		}
+
 		groups, err := groupForDiscard(status, submodules, dir, paths)
 		if err != nil {
 			return err
@@ -56,6 +64,25 @@ func Discard(dir string, paths []string) error {
 		}
 		return nil
 	})
+}
+
+// ConflictedPathsError refuses a stage, unstage or discard naming paths with
+// unresolved conflicts, before anything in the batch has run. Each would end
+// the conflict without resolving it: staging records the markers as the
+// resolution, unstaging drops the conflict stages, and discarding has no
+// version in the index to restore. Marking a path resolved is Resolve.
+type ConflictedPathsError struct {
+	// Action is the refused write, in BusyError's vocabulary: "stage",
+	// "unstage" or "discard".
+	Action string
+	Paths  []string
+}
+
+func (e *ConflictedPathsError) Error() string {
+	return fmt.Sprintf(
+		"can't %s %s: unresolved conflicts; resolve them, or abort the operation",
+		e.Action, strings.Join(e.Paths, ", "),
+	)
 }
 
 // discardPath is one file of a group, in the three forms the operation needs.

@@ -1,4 +1,4 @@
-import { Loader2, type LucideIcon } from "lucide-react";
+import { Check, Loader2, type LucideIcon } from "lucide-react";
 
 /**
  * One full-bleed row of a menu sheet: 48px tall, flush to the sheet's edges
@@ -45,6 +45,12 @@ interface Props {
 	 * Tab stop of its own.
 	 */
 	role?: "menuitem";
+	/**
+	 * The current choice of a sheet that picks one of its rows, as the range
+	 * picker does: a check at the row's end, and `aria-current` for a screen
+	 * reader. Undefined on rows that are actions rather than choices.
+	 */
+	checked?: boolean;
 	onClick: () => void;
 }
 
@@ -56,6 +62,7 @@ function MenuRow({
 	disabled,
 	busy,
 	role,
+	checked,
 	onClick,
 }: Props) {
 	return (
@@ -66,6 +73,7 @@ function MenuRow({
 			onClick={disabled ? undefined : onClick}
 			aria-disabled={disabled || undefined}
 			aria-busy={busy || undefined}
+			aria-current={checked || undefined}
 			className={`${menuRowClass} ${focusClass} ${
 				danger ? "text-th-error" : "text-th-text-primary"
 			} ${
@@ -77,7 +85,7 @@ function MenuRow({
 			) : (
 				<Icon className="h-4 w-4 shrink-0" aria-hidden="true" />
 			)}
-			<span className="min-w-0">
+			<span className={checked === undefined ? "min-w-0" : "min-w-0 flex-1"}>
 				{label}
 				{description && (
 					<span className="block text-xs text-th-text-muted">
@@ -85,6 +93,9 @@ function MenuRow({
 					</span>
 				)}
 			</span>
+			{checked && (
+				<Check className="h-4 w-4 shrink-0 text-th-accent" aria-hidden="true" />
+			)}
 		</button>
 	);
 }

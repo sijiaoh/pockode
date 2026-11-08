@@ -42,13 +42,13 @@ const (
 // without saying what it locks — the mistake would not fail, it would either
 // let a real conflict through or block something that never conflicted.
 type operation struct {
-	// name is a contract: a client renders BusyError from it, so these nine
+	// name is a contract: a client renders BusyError from it, so these eleven
 	// strings are not log text and do not change.
 	name  string
 	locks need
 }
 
-// The nine writing operations, and why each one locks what it does.
+// The eleven writing operations, and why each one locks what it does.
 //
 // Reads take no lock at all; see the note at the bottom of this file.
 var (
@@ -70,6 +70,12 @@ var (
 	opCheckout     = operation{"checkout", needIndex | needRefs}
 	opBranchCreate = operation{"branch-create", needIndex | needRefs}
 
+	// Deleting a branch removes a ref and its config section and touches
+	// neither the index nor the working tree, so it does not wait behind a
+	// commit's hooks — and a commit only moves the current branch, which is
+	// never the one deleted.
+	opBranchDelete = operation{"branch-delete", needRefs}
+
 	// Fetch writes remote-tracking refs and FETCH_HEAD; push reads refs and may
 	// write the branch's upstream into config. Neither goes near the index, so
 	// neither may stop the user from staging a file — a fetch of a large
@@ -82,6 +88,10 @@ var (
 	// Pull is the only network operation that fast-forwards the working tree
 	// and the index, so it is the only one that takes both.
 	opPull = operation{"pull", needIndex | needRefs}
+
+	// Aborting a merge, rebase, cherry-pick or revert resets the index and
+	// working tree and moves HEAD back — a rebase's to another branch entirely.
+	opAbort = operation{"abort", needIndex | needRefs}
 )
 
 // lockWait is how long an operation waits for a busy worktree before refusing:

@@ -148,3 +148,19 @@ func TestToolDefinitions_FitClaudesLimit(t *testing.T) {
 func utf16Len(s string) int {
 	return len(utf16.Encode([]rune(s)))
 }
+
+// Width is handled the same in both modes; only the prompts differ. An agent in
+// an HTML-first session reads the range in the guidance before it loads
+// html_render, every agent reads it in the description after — so the two have
+// to name the same range, or one of them recommends a width the card is not.
+func TestHTMLRender_WidthMatchesTheHTMLFirstGuidance(t *testing.T) {
+	const pageWidthRange = "320–1280px"
+	for _, def := range toolDefinitions {
+		if def.Name == "html_render" && !strings.Contains(def.Description, pageWidthRange) {
+			t.Errorf("html_render's description does not give the width range %s", pageWidthRange)
+		}
+	}
+	if !strings.Contains(agent.HTMLFirstGuidance, pageWidthRange) {
+		t.Errorf("the HTML-first guidance does not give the width range %s", pageWidthRange)
+	}
+}

@@ -10,7 +10,7 @@ import {
 } from "react";
 import type { ThemedToken } from "shiki";
 import type { FullScreenContent } from "../../lib/fullScreen";
-import { highlightLines, lineHang } from "../../lib/shikiUtils";
+import { highlightLines, lineHang, tokenStyle } from "../../lib/shikiUtils";
 import { outputLines } from "../../lib/textLines";
 import { HIGHLIGHT_LIMIT } from "../../utils/fileView";
 import {
@@ -139,21 +139,6 @@ export function OutputLines({
 			/>
 		</>
 	);
-}
-
-/** shiki's `FontStyle` flags. */
-const ITALIC = 1;
-const BOLD = 2;
-const UNDERLINE = 4;
-
-function tokenStyle(token: ThemedToken): CSSProperties {
-	const flags = token.fontStyle ?? 0;
-	return {
-		color: token.color,
-		fontStyle: flags & ITALIC ? "italic" : undefined,
-		fontWeight: flags & BOLD ? "bold" : undefined,
-		textDecoration: flags & UNDERLINE ? "underline" : undefined,
-	};
 }
 
 /**

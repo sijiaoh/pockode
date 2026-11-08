@@ -1423,6 +1423,68 @@ func TestWriteMCPConfig_MainWorktreeIsUnnamed(t *testing.T) {
 	}
 }
 
+// TestWriteMCPConfig_SameInEveryMode: the proxy's instructions describe the
+// tools, so they must not change with the session's mode — an HTML-first
+// session is told so through the system prompt instead (htmlFirstPromptArgs).
+func TestWriteMCPConfig_SameInEveryMode(t *testing.T) {
+	proxy := func(htmlFirst bool) []string {
+		path, _, err := writeMCPConfig(agent.StartOptions{DataDir: t.TempDir(), SessionID: "s1", HTMLFirst: htmlFirst})
+		if err != nil {
+			t.Fatalf("writeMCPConfig: %v", err)
+		}
+		args := readMCPArgs(t, path)
+		// The data dir is a fresh temp dir per call; it is not what is compared.
+		for i := range args {
+			if i > 0 && args[i-1] == "--data-dir" {
+				args[i] = "<data-dir>"
+			}
+		}
+		return args
+	}
+	if plain, htmlFirst := proxy(false), proxy(true); !slices.Equal(plain, htmlFirst) {
+		t.Errorf("proxy args differ by mode: %v vs %v", plain, htmlFirst)
+	}
+}
+
+// An HTML-first session's guidance is appended to Claude's own system prompt,
+// on top of the ordinary guidance the proxy gives; any other session gets
+// nothing extra.
+func TestHTMLFirstPromptArgs(t *testing.T) {
+	opts := agent.StartOptions{DataDir: t.TempDir(), SessionID: "s1"}
+	if args, err := htmlFirstPromptArgs(opts); err != nil || args != nil {
+		t.Errorf("ordinary session: args %v, err %v; want none", args, err)
+	}
+
+	opts.HTMLFirst = true
+	withoutMCP := opts
+	withoutMCP.DisableMCP = true
+	if args, err := htmlFirstPromptArgs(withoutMCP); err != nil || args != nil {
+		t.Errorf("session without the MCP server: args %v, err %v; want none — it would point at tools that are not there", args, err)
+	}
+
+	args, err := htmlFirstPromptArgs(opts)
+	if err != nil {
+		t.Fatalf("htmlFirstPromptArgs: %v", err)
+	}
+	// Appended, never --system-prompt[-file]: that would replace the CLI's own.
+	if len(args) != 2 || args[0] != "--append-system-prompt-file" {
+		t.Fatalf("args = %v, want --append-system-prompt-file <path>", args)
+	}
+	data, err := os.ReadFile(args[1])
+	if err != nil {
+		t.Fatalf("read prompt file: %v", err)
+	}
+	if string(data) != agent.HTMLFirstGuidance {
+		t.Errorf("prompt file = %q, want agent.HTMLFirstGuidance", data)
+	}
+
+	// A successor process writes the same file again while its predecessor may
+	// still be running; that has to work.
+	if again, err := htmlFirstPromptArgs(opts); err != nil || !slices.Equal(again, args) {
+		t.Errorf("second launch: args %v, err %v; want %v", again, err, args)
+	}
+}
+
 // TestWriteMCPConfig_PerProcessRun: a replaced process cleans up while its
 // successor is already starting, so two runs of the same session must not share
 // a file name — otherwise that cleanup deletes the config the successor's CLI

@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	gitWriteActions,
+	isPathWriting,
 	useGitWriteStore,
 	WorktreeChangedError,
 } from "./gitWriteStore";
@@ -141,5 +142,97 @@ describe("gitWriteStore", () => {
 		expect(queuedAction).not.toHaveBeenCalled();
 		// And it leaves no row spinning in the worktree it was queued for.
 		expect(writes("").toggling.size).toBe(0);
+	});
+
+	describe("failures", () => {
+		const failure = (worktree: string) =>
+			useGitWriteStore.getState().failures[worktree];
+		const FAILURE = { summary: "Stage failed.", detail: null, paths: ["a.ts"] };
+
+		// Only a retry of what failed clears it: another file succeeding says
+		// nothing about the one that did not.
+		it("is cleared only by a success on one of its paths", () => {
+			gitWriteActions.fail("", FAILURE);
+
+			gitWriteActions.succeed("", ["b.ts"]);
+			expect(failure("")).toEqual(FAILURE);
+
+			gitWriteActions.succeed("", ["a.ts", "b.ts"]);
+			expect(failure("")).toBeUndefined();
+		});
+
+		it("is kept per worktree", () => {
+			gitWriteActions.fail("feature", FAILURE);
+
+			gitWriteActions.succeed("", ["a.ts"]);
+
+			expect(failure("feature")).toEqual(FAILURE);
+			expect(failure("")).toBeUndefined();
+		});
+
+		// Its paths belong to a repository that has gone; a later `git init`
+		// must not bring the banner back.
+		it("is cleared when the repository changes", () => {
+			gitWriteActions.fail("", FAILURE);
+			gitWriteActions.fail("feature", FAILURE);
+
+			worktreeActions.setIsGitRepo(false);
+
+			expect(useGitWriteStore.getState().failures).toEqual({});
+		});
+	});
+
+	describe("hunks", () => {
+		// Keyed by path alone, the second hunk's press would be dropped as a
+		// duplicate of the first and still report success.
+		it("queues two hunks of one file, and drops only a repeat of the same one", async () => {
+			const first = deferred();
+			const firstAction = vi.fn(() => first.promise);
+			const second = vi.fn(async () => {});
+			const repeat = vi.fn(async () => {});
+
+			const running = gitWriteActions.runHunk("", "a.ts", "h1", firstAction);
+			const queued = gitWriteActions.runHunk("", "a.ts", "h2", second);
+			await gitWriteActions.runHunk("", "a.ts", "h1", repeat);
+
+			await vi.waitFor(() => expect(firstAction).toHaveBeenCalled());
+			expect(second).not.toHaveBeenCalled();
+			first.settle();
+			await running;
+			await queued;
+			expect(second).toHaveBeenCalledOnce();
+			expect(repeat).not.toHaveBeenCalled();
+		});
+
+		// While a hunk is in flight the file's own controls wait for it, and the
+		// file's write would move the hunk before the hunk's turn came.
+		it("makes the path busy, and is dropped behind a write of the whole file", async () => {
+			const hunk = deferred();
+			const running = gitWriteActions.runHunk(
+				"",
+				"a.ts",
+				"h1",
+				() => hunk.promise,
+			);
+			expect(isPathWriting(writes(""), "a.ts")).toBe(true);
+			expect(isPathWriting(writes(""), "b.ts")).toBe(false);
+
+			hunk.settle();
+			await running;
+			expect(isPathWriting(writes(""), "a.ts")).toBe(false);
+
+			const file = deferred();
+			const staging = gitWriteActions.run(
+				"",
+				"toggle",
+				["a.ts"],
+				() => file.promise,
+			);
+			const behind = vi.fn(async () => {});
+			await gitWriteActions.runHunk("", "a.ts", "h1", behind);
+			expect(behind).not.toHaveBeenCalled();
+			file.settle();
+			await staging;
+		});
 	});
 });

@@ -32,9 +32,11 @@ import (
 	"github.com/pockode/server/datadir"
 	"github.com/pockode/server/filetransfer"
 	"github.com/pockode/server/git"
+	"github.com/pockode/server/htmlpage"
 	"github.com/pockode/server/internal/fsperm"
 	"github.com/pockode/server/internal/netutil"
 	"github.com/pockode/server/internal/pathutil"
+	"github.com/pockode/server/internal/restart"
 	"github.com/pockode/server/internal/shutdown"
 	"github.com/pockode/server/logger"
 	"github.com/pockode/server/mcp"
@@ -147,6 +149,25 @@ func generateToken() (string, error) {
 	return hex.EncodeToString(b), nil
 }
 
+// newRestarter prepares a server or a cluster to restart itself. It is called
+// as early as each can: restart requests are held from here on rather than
+// left to SIGUSR1's default action, which is to terminate, and the program is
+// resolved while the executable and the working directory are still the ones
+// the process started with.
+//
+// Not before --version, though, which must answer wherever it is run — the
+// check before a restart runs it in the server's working directory, which may
+// have been removed since.
+func newRestarter() *restart.Restarter {
+	shutdown.HoldRestartRequests()
+	program, err := restart.Current()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+	return restart.New(program)
+}
+
 func main() {
 	// Handle subcommands before flag.Parse()
 	if len(os.Args) > 1 && os.Args[0] != "-" {
@@ -155,7 +176,7 @@ func main() {
 			runMCP()
 			return
 		case "cluster":
-			runCluster()
+			runCluster(newRestarter())
 			return
 		case "login":
 			runLogin()
@@ -167,8 +188,8 @@ func main() {
 	}
 
 	portFlag := flag.Int("port", defaultPort, "server port")
-	passwordFlag := flag.String("password", "", "password for the web UI (required; or set "+password.EnvVar+")")
-	legacyPasswordFlag := flag.String("auth-token", "", "deprecated alias for -password (removed in "+password.RemovalVersion+")")
+	passwordFlag := flag.String(password.Flag, "", "password for the web UI (required; or set "+password.EnvVar+")")
+	legacyPasswordFlag := flag.String(password.LegacyFlag, "", "deprecated alias for -password (removed in "+password.RemovalVersion+")")
 	workDirFlag := flag.String("work", ".", "working directory")
 	dataDirFlag := flag.String("data", "", "data directory (default: <work>/.pockode)")
 	devModeFlag := flag.Bool("dev", false, "enable development mode")
@@ -219,6 +240,8 @@ Flags:
 		fmt.Printf("pockode %s\n", version)
 		os.Exit(0)
 	}
+
+	restarter := newRestarter()
 
 	port := netutil.FindAvailablePort(*portFlag)
 
@@ -291,6 +314,7 @@ Flags:
 	if cred.DeprecationWarning != "" {
 		slog.Warn(cred.DeprecationWarning)
 	}
+	updater := ws.NewReleaseUpdater(slog.Default(), restarter.Program(), version)
 
 	// Sessions are loaded before anything can authenticate. This is also where a
 	// changed password takes effect: every session issued under the old one is
@@ -480,6 +504,7 @@ Flags:
 	// A question an agent posts, and an answer another agent gives, are both
 	// things that happen to a work item; the engine is what they are reported to.
 	mcpExecutor.SetWorkEngine(workEngine)
+	mcpExecutor.SetPages(htmlpage.NewStore(), worktreeManager)
 	mcpHandler := mcp.NewAPIHandler(mcpExecutor, mcpToken)
 
 	cloudURL := *cloudURLFlag
@@ -528,8 +553,8 @@ Flags:
 	}
 	// Both assigned before the relay starts, so the reconnect loop that calls
 	// OnRemoteURLChange never sees them unset.
-	serverInfo = serverinfo.NewPublisher(dataDir, port, localURL, mcpToken, remoteURL)
-	wsHandler = ws.NewRPCHandler(cred.Password, passwordGuard, sessions, version, remoteURL, previewTickets, rawHandler, devMode, commandStore, worktreeManager, settingsStore, workStore, workOps, workEngine, agentRoleStore, scheduleStore, scheduler, cliAuth, cliUpdate)
+	serverInfo = serverinfo.NewPublisher(dataDir, version, port, localURL, mcpToken, remoteURL)
+	wsHandler = ws.NewRPCHandler(cred.Password, passwordGuard, sessions, version, remoteURL, previewTickets, rawHandler, devMode, commandStore, worktreeManager, settingsStore, workStore, workOps, workEngine, agentRoleStore, scheduleStore, scheduler, cliAuth, cliUpdate, restarter, updater)
 
 	if relayManager != nil {
 		url, err := relayManager.Start(context.Background())
@@ -553,6 +578,7 @@ Flags:
 	// is how a cluster finds this process, and it may ask us to stop the moment
 	// the file appears.
 	exitRequests := shutdown.Listen()
+	go restarter.Watch(exitRequests.Restarts())
 
 	// Write server.json for orchestration programs to discover the running server
 	if err := serverInfo.Publish(); err != nil {
@@ -563,12 +589,22 @@ Flags:
 	// Graceful shutdown
 	shutdownDone := make(chan struct{})
 	go func() {
-		<-exitRequests.Done()
+		// Whichever request is taken here decides how the shutdown ends: an
+		// exit request drops a restart that was accepted while it was taken.
+		restarting := false
+		select {
+		case <-exitRequests.Done():
+			restarter.Close()
+		case <-restarter.Requested():
+			restarting = true
+		}
 		// Restore the default handling, so a second Ctrl+C aborts a shutdown
 		// that is taking too long.
 		exitRequests.Stop()
-
-		slog.Info("shutting down server")
+		// A restart runs exactly this shutdown: every AI CLI is ended below,
+		// rather than left to outlive the process — or, on unix, to be inherited
+		// by the program exec'd in its place.
+		slog.Info("shutting down server", "restart", restarting)
 		// Close the relay before draining srv, not after: every relayed request
 		// is served by srv, so a tunnel still delivering traffic into a server
 		// that has stopped accepting would turn those requests into errors, and
@@ -581,6 +617,10 @@ Flags:
 		if err := srv.Shutdown(ctx); err != nil {
 			slog.Error("server shutdown error", "error", err)
 		}
+		// Before the connections: an install under way is stopped short of
+		// its replacement (or its replacement awaited), so closing them does
+		// not wait out its timeout on a handler still installing.
+		updater.Close()
 		wsHandler.Stop()
 		// Before the worktree manager: a firing in progress is still starting
 		// a session through it.
@@ -599,8 +639,16 @@ Flags:
 		worktreeManager.Shutdown()
 		settingsStore.StopWatching()
 		agentRoleStore.StopWatching()
-		if err := serverinfo.Delete(dataDir); err != nil {
-			slog.Error("failed to delete server.json", "error", err)
+		// Kept across a restart that keeps the PID: the file still names this
+		// process, which comes back under it. Deleted, a cluster would see the
+		// node stopped until the new program republishes it, and a Start in
+		// between would put a second server on the same project. The price is
+		// a restart whose new program fails to come up: it leaves the file
+		// naming a dead PID, which a cluster reports as stale.
+		if !restarting || !restart.KeepsPID {
+			if err := serverinfo.Delete(dataDir); err != nil {
+				slog.Error("failed to delete server.json", "error", err)
+			}
 		}
 		close(shutdownDone)
 	}()
@@ -641,6 +689,12 @@ Flags:
 	}
 	<-shutdownDone
 	slog.Info("server stopped")
+	if restarter.Pending() {
+		if instanceKind == relay.InstanceNode {
+			node.RestoreMarker()
+		}
+		restarter.Restart(cred.Password)
+	}
 }
 
 // stores holds the shared data stores used by both the main server and MCP subcommand.
@@ -709,11 +763,11 @@ func newCloudLinker() (*cloudlogin.Linker, error) {
 	return cloudlogin.NewLinker(store, os.Stdout), nil
 }
 
-func runCluster() {
+func runCluster(restarter *restart.Restarter) {
 	clusterFlags := flag.NewFlagSet("cluster", flag.ExitOnError)
 	portFlag := clusterFlags.Int("port", cluster.DefaultPort, "server port")
-	passwordFlag := clusterFlags.String("password", "", "password for the web UI (required; or set "+password.EnvVar+")")
-	legacyPasswordFlag := clusterFlags.String("auth-token", "", "deprecated alias for -password (removed in "+password.RemovalVersion+")")
+	passwordFlag := clusterFlags.String(password.Flag, "", "password for the web UI (required; or set "+password.EnvVar+")")
+	legacyPasswordFlag := clusterFlags.String(password.LegacyFlag, "", "deprecated alias for -password (removed in "+password.RemovalVersion+")")
 	dataDirFlag := clusterFlags.String("data", "", "data directory (default: ~/.pockode-cluster)")
 	relayFlag := clusterFlags.Bool("relay", true, "relay for remote access (use -relay=false to disable)")
 	relayFrontendPortFlag := clusterFlags.Int("relay-frontend-port", 0, "relay frontend port (default: same as server port)")
@@ -763,10 +817,14 @@ func runCluster() {
 		CloudURL:                   *cloudURLFlag,
 		Version:                    version,
 		DevMode:                    *devModeFlag,
+		Restarter:                  restarter,
 	}
 
 	if err := cluster.Run(cfg); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: cluster mode failed: %v\n", err)
 		os.Exit(1)
+	}
+	if cfg.Restarter.Pending() {
+		cfg.Restarter.Restart(cred.Password)
 	}
 }
