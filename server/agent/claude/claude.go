@@ -76,10 +76,6 @@ func writeMCPConfig(opts agent.StartOptions) (string, func(), error) {
 	if opts.Worktree != "" {
 		args = append(args, "--worktree", opts.Worktree)
 	}
-	// The proxy's instructions are how Claude gets the session's guidance.
-	if opts.HTMLFirst {
-		args = append(args, "--html-first")
-	}
 
 	config := map[string]interface{}{
 		"mcpServers": map[string]interface{}{
@@ -108,6 +104,42 @@ func writeMCPConfig(opts agent.StartOptions) (string, func(), error) {
 			slog.Warn("failed to remove mcp config", "path", configPath, "error", err)
 		}
 	}, nil
+}
+
+// htmlFirstPromptFile holds agent.HTMLFirstGuidance for an HTML-first session,
+// in the session's own data dir.
+const htmlFirstPromptFile = "html-first-prompt.md"
+
+// htmlFirstPromptArgs is how an HTML-first session's guidance reaches Claude:
+// appended to the CLI's own system prompt, which it adds to rather than
+// replaces. Any other session gets no args, and so does one without the MCP
+// server: the text points at html_render and question_post, which it would not
+// have (codex's developerInstructions is skipped for the same reason).
+//
+// It goes by file (--append-system-prompt-file), not inline: on Windows every
+// argument passes the .cmd wrapper npm installs the CLI as, which cannot carry
+// the newlines and quotes in the text (agent.checkCmdSafe refuses them).
+//
+// Unlike the MCP config, one name per session is safe: the content is a
+// constant, so an atomic rewrite by a successor hands a predecessor still
+// reading it the same bytes, and nothing removes it — it goes with the
+// session's directory.
+//
+// The CLI records its system prompt on a conversation's first request and
+// sends the record from then on, every resume included, until the
+// conversation is compacted (--system-prompt-snapshot, on by default; claude
+// 2.1.319). That matches a session whose mode is fixed at its first message,
+// and means a conversation begun before a change to this text goes on with the
+// text it began with.
+func htmlFirstPromptArgs(opts agent.StartOptions) ([]string, error) {
+	if !opts.HTMLFirst || opts.DisableMCP {
+		return nil, nil
+	}
+	path := filepath.Join(sessionDir(opts.DataDir, opts.SessionID), htmlFirstPromptFile)
+	if err := filestore.WriteFileAtomic(path, []byte(agent.HTMLFirstGuidance), 0644); err != nil {
+		return nil, fmt.Errorf("write HTML-first system prompt: %w", err)
+	}
+	return []string{"--append-system-prompt-file", path}, nil
 }
 
 // disallowedAskTool is the CLI's own ask-the-user tool, by the name the CLI
@@ -187,6 +219,13 @@ func (a *Agent) Start(ctx context.Context, opts agent.StartOptions) (agent.Sessi
 
 	resumeState := newClaudeResumeStateManager(opts, log)
 	claudeArgs := buildArgs(opts, resumeState.resolve())
+
+	promptArgs, err := htmlFirstPromptArgs(opts)
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+	claudeArgs = append(claudeArgs, promptArgs...)
 
 	// Add MCP config for work management tools (unless disabled for testing).
 	// The proxy must reach the single running server, whose server.json lives in

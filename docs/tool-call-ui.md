@@ -3297,10 +3297,9 @@ written plainly; and that an action and its data are what the page sent on
 the reader's press, input to weigh rather than the reader's instructions.
 HTML-first sessions' guidance already says the page should work by itself and
 send only when it needs the agent (`server/agent/guidance.go`), and says no
-more: it is within a few characters of the 2,048-character cap Claude puts on
-a server's instructions
-([agent-integration.md](code/agent-integration.md#telling-the-agent-when-to-ask)),
-and the descriptions carry the rest.
+more: it is read on every turn of such a session
+([agent-integration.md](code/agent-integration.md#html-first-sessions)), and
+the descriptions carry the rest.
 They say, too, how a page follows the theme ([below](#theme-a-page-that-asks-for-it)):
 take the background, the text and every other colour from the `--pk-*`
 variables, so a new page follows light and dark from the start.

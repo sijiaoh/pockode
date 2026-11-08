@@ -1611,30 +1611,48 @@ text — and the place to say which is the guidance, not a second view. What
 the user sees of the choice is in
 [html-first-session-ui.md](../html-first-session-ui.md).
 
-An HTML-first session starts with `agent.HTMLFirstGuidance` in place of
-`agent.Guidance` (`agent.GuidanceFor`). It keeps the asking section word for
-word and swaps the rendering one for a section that makes a page the default
-for anything structured — comparisons, reports, choices, forms — with
-the reply cut to a sentence or two; the page works by itself and sends to the
-agent only when it needs it; a page is changed by deriving it from the old one
-with `html_edit` and read back with `html_get`; and it is drawn for about
-320–1280px — fluid where it can be, wide where its content is, since a wide
-page scrolls sideways in its card. That range is a recommendation, and the same
-one `html_render`'s description gives
+An HTML-first session is told `agent.HTMLFirstGuidance` *on top of*
+`agent.Guidance`, never in its place. The asking section and the base rendering
+section still hold; the addition overrides one default of the latter, naming
+that section so the agent knows which of the two it reads wins
+(`TestHTMLFirstGuidance_OverridesTheRenderingDefaultByName`): a page is the
+default for anything structured (comparisons, reports, choices, forms), with
+the reply cut to a sentence or two, rather than something to reach for when it
+is worth it. It adds that the page works by itself and
+sends to the agent only when it needs it; that a page is changed by deriving it
+from the old one with `html_edit` and read back with `html_get`; and that it is
+drawn for about 320–1280px — fluid where it can be, wide where its content is,
+since a wide page scrolls sideways in its card. That range is a recommendation,
+and the same one `html_render`'s description gives
 (`TestHTMLRender_WidthMatchesTheHTMLFirstGuidance`); why the agent is never
 told the actual width is in
 [tool-call-ui.md](../tool-call-ui.md#a-page-the-agent-drew-html_render). A
 choice on a page does not replace `question_post`: the decision the agent waits
 on is still asked there.
-`agent.StartOptions.HTMLFirst` carries the mode to the spawn, through the same
-two channels: both CLIs' proxies are started with `--html-first`, which changes
-only the `initialize` instructions (Claude's channel; Codex shows them once a
-tool is loaded, so they have to agree), and Codex's `developerInstructions` are
-built from the same choice. The guidance is fixed when the CLI starts, so the
-mode has to be fixed for the session's life.
-`TestToolDefinitions_FitClaudesLimit` holds this text under Claude's limit
-too — with little room to spare, and since both texts share the asking
-section, growing that section grows both.
+
+**The addition goes where a session's setup goes, not where the tools are
+described.** The MCP server's `initialize` instructions are `agent.Guidance` in
+every session, and the proxy takes no mode of its own: they describe the tools,
+which are the same in both modes. `agent.StartOptions.HTMLFirst` carries the
+mode to each CLI's system-level channel instead:
+
+| CLI | Channel | Notes |
+|-----|---------|-------|
+| Claude | `--append-system-prompt-file <session dir>/html-first-prompt.md` (`htmlFirstPromptArgs`) | *Appends* to the CLI's default system prompt rather than replacing it. Instructions from a tool server carry less weight than the system prompt proper, which is why the text left them. It goes by file, not inline `--append-system-prompt`: on Windows every argument passes npm's `.cmd` wrapper, and `agent.checkCmdSafe` refuses the newlines and quotes the text contains. One name per session is safe because the content is a constant — a successor's atomic rewrite hands a predecessor the same bytes — and it is removed with the session directory. |
+| Codex | `developerInstructions` on `thread/start` | After `agent.Guidance`, which already goes there ([above](#telling-the-agent-when-to-ask)); the same rules apply — the user's own value first, fixed when the thread starts. |
+
+An ordinary chat gets nothing beyond `agent.Guidance`, and a session started
+without the MCP server gets neither text on either CLI: both point at tools it
+would not have. The addition is outside Claude's 2048-character cut on server
+instructions, so `TestToolDefinitions_FitClaudesLimit` checks `agent.Guidance`
+alone; it is still read on every turn, so it is kept short.
+
+The system prompt is fixed when the CLI starts — and Claude records it on a
+conversation's first request and resends that record on every resume until the
+conversation is compacted (`--system-prompt-snapshot`, on by default; measured
+on claude 2.1.319) — so the mode has to be fixed for the session's life. It
+also means a conversation begun before a change to the text goes on with the
+text it began with, as on Codex.
 
 The mode is the session's `html_first` (`session.SessionMeta.HTMLFirst`,
 switched with `session.set_html_first`), and what fixes it is `Started`, not
@@ -1713,6 +1731,8 @@ if mcpConfig != "" {
 
 `resolve()` is what decides between `--session-id`, `--resume` and
 `--resume --fork-session`; see [Session Recovery Ladder](#session-recovery-ladder).
+`Start` appends `--append-system-prompt-file` to these in an HTML-first session
+(`htmlFirstPromptArgs`); see [HTML-First Sessions](#html-first-sessions).
 An empty model or effort is how a session says "let the CLI pick", so neither
 flag is passed at all in that case; see [Session Models](#session-models) and
 [Session Effort](#session-effort).
@@ -4258,7 +4278,7 @@ type SessionMeta struct {
     Unread     bool        // Has unread changes
     ForkedFrom *ForkOrigin // Set on a fork, naming the session it came from
     Usage      Usage       // Tokens and cost, as the agent reported them
-    HTMLFirst  bool        // The guidance it starts with; see HTML-First Sessions
+    HTMLFirst  bool        // Told HTMLFirstGuidance too; see HTML-First Sessions
     Started    bool        // Set just before the first message is delivered
 }
 ```

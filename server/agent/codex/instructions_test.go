@@ -124,8 +124,8 @@ func TestDeveloperInstructions_OnlyANewThreadReadsTheConfig(t *testing.T) {
 	}
 }
 
-// An HTML-first session starts its thread with that session's guidance in place
-// of agent.Guidance, after the user's own as always.
+// An HTML-first session starts its thread with that session's guidance on top
+// of agent.Guidance — never in its place — after the user's own as always.
 func TestDeveloperInstructions_HTMLFirstCarriesItsGuidance(t *testing.T) {
 	opts := newThreadOpts(t)
 	opts.HTMLFirst = true
@@ -134,7 +134,7 @@ func TestDeveloperInstructions_HTMLFirstCarriesItsGuidance(t *testing.T) {
 		"thread/start": threadReply("thread-new"),
 	})
 
-	if got, _ := startedWith(t, s); got != "Answer tersely.\n\n"+agent.HTMLFirstGuidance {
-		t.Errorf("developerInstructions = %q, want the user's followed by agent.HTMLFirstGuidance", got)
+	if got, _ := startedWith(t, s); got != "Answer tersely.\n\n"+agent.Guidance+"\n\n"+agent.HTMLFirstGuidance {
+		t.Errorf("developerInstructions = %q, want the user's, then agent.Guidance, then agent.HTMLFirstGuidance", got)
 	}
 }

@@ -209,8 +209,9 @@ type SessionMeta struct {
 	// created before this field existed carries — means the CLI is passed no
 	// effort level and keeps its own default.
 	Effort string `json:"effort"`
-	// HTMLFirst picks the guidance the agent starts with: false is an ordinary
-	// chat, true tells the agent to say things with pages (agent.GuidanceFor).
+	// HTMLFirst is how the agent is set up: false is an ordinary chat, true adds
+	// agent.HTMLFirstGuidance to its system prompt, telling it to say things
+	// with pages.
 	// It is a draft until Started and fixed from then on — see SetHTMLFirst.
 	HTMLFirst bool `json:"html_first,omitempty"`
 	// Started is set immediately before the first message is delivered to the

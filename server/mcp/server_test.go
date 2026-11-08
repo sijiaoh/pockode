@@ -44,7 +44,7 @@ func callMethod(t *testing.T, s *Server, method string, params interface{}) json
 // --- Protocol tests (handled locally, no server round-trip) ---
 
 func TestInitialize(t *testing.T) {
-	resp := callMethod(t, NewServer(nil, "test", false), "initialize", nil)
+	resp := callMethod(t, NewServer(nil, "test"), "initialize", nil)
 	if resp.Error != nil {
 		t.Fatalf("unexpected error: %+v", resp.Error)
 	}
@@ -66,28 +66,8 @@ func TestInitialize(t *testing.T) {
 	}
 }
 
-// An HTML-first proxy differs in its instructions alone: the tools it lists are
-// the same.
-func TestInitialize_HTMLFirst(t *testing.T) {
-	resp := callMethod(t, NewServer(nil, "test", true), "initialize", nil)
-	b, _ := json.Marshal(resp.Result)
-	var result initializeResult
-	json.Unmarshal(b, &result)
-	if result.Instructions != agent.HTMLFirstGuidance {
-		t.Errorf("instructions = %q, want agent.HTMLFirstGuidance", result.Instructions)
-	}
-
-	list := func(htmlFirst bool) string {
-		b, _ := json.Marshal(callMethod(t, NewServer(nil, "test", htmlFirst), "tools/list", nil).Result)
-		return string(b)
-	}
-	if list(true) != list(false) {
-		t.Error("an HTML-first proxy lists different tools")
-	}
-}
-
 func TestToolsList(t *testing.T) {
-	resp := callMethod(t, NewServer(nil, "test", false), "tools/list", nil)
+	resp := callMethod(t, NewServer(nil, "test"), "tools/list", nil)
 
 	b, _ := json.Marshal(resp.Result)
 	var result toolsListResult
@@ -109,7 +89,7 @@ func TestToolsList(t *testing.T) {
 }
 
 func TestUnknownMethod(t *testing.T) {
-	resp := callMethod(t, NewServer(nil, "test", false), "nonexistent", nil)
+	resp := callMethod(t, NewServer(nil, "test"), "nonexistent", nil)
 	if resp.Error == nil {
 		t.Fatal("expected error for unknown method")
 	}
@@ -129,7 +109,7 @@ func newProxyToAPI(t *testing.T, serverToken, clientToken string) (*Server, stri
 	t.Cleanup(httpSrv.Close)
 
 	client := &Client{baseURL: httpSrv.URL, token: clientToken, http: httpSrv.Client()}
-	return NewServer(client, "test", false), ts.roleID
+	return NewServer(client, "test"), ts.roleID
 }
 
 func callToolViaProxy(t *testing.T, s *Server, name string, args interface{}) jsonRPCResponse {
@@ -228,7 +208,7 @@ func newProxyToRecorder(t *testing.T, caller Caller) (*Server, *recordingExecuto
 	t.Cleanup(httpSrv.Close)
 
 	client := &Client{baseURL: httpSrv.URL, token: "secret", caller: caller, http: httpSrv.Client()}
-	return NewServer(client, "test", false), rec
+	return NewServer(client, "test"), rec
 }
 
 // The identity the CLI was spawned with has to reach the executor on every

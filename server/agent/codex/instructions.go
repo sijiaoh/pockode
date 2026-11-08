@@ -12,7 +12,8 @@ import (
 // before a tool is loaded: an MCP server's instructions only become the
 // description of its tool namespace once the model has searched for one of its
 // tools (codex-cli 0.159.3). The thread's developer instructions are seen from
-// the first turn, so the guidance goes there.
+// the first turn, so the guidance goes there — and, being Codex's system-level
+// channel, so does what makes a session HTML-first (agent.HTMLFirstGuidance).
 //
 // Two measured facts (0.159.3) shape how:
 //   - developerInstructions replaces the user's own developer_instructions
@@ -24,8 +25,8 @@ import (
 //     or before a change to it, goes on without it.
 
 // developerInstructions is the user's own developer_instructions for this
-// working directory, if any, followed by Pockode's guidance for this session
-// (agent.GuidanceFor).
+// working directory, if any, followed by Pockode's guidance (agent.Guidance)
+// and, in an HTML-first session, agent.HTMLFirstGuidance after it.
 func (s *appSession) developerInstructions(ctx context.Context) string {
 	user, err := s.readUserDeveloperInstructions(ctx)
 	// Not reading them is not a reason to refuse the session: the user is told
@@ -40,7 +41,10 @@ func (s *appSession) developerInstructions(ctx context.Context) string {
 		})
 	}
 
-	guidance := agent.GuidanceFor(s.opts.HTMLFirst)
+	guidance := agent.Guidance
+	if s.opts.HTMLFirst {
+		guidance += "\n\n" + agent.HTMLFirstGuidance
+	}
 	if user == "" {
 		return guidance
 	}
