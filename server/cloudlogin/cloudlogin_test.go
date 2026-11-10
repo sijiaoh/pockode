@@ -40,16 +40,34 @@ type fakeCloud struct {
 	polls      []pollAnswer
 	authorized *machineIdentity
 	bearers    map[string][]string // path → Authorization tokens seen
+	// revokeStatus, when set, answers every revoke with it, as a cloud that
+	// cannot be told does.
+	revokeStatus int
+	// expiresIn is the code lifetime authorize hands out.
+	expiresIn int
+	// machineStatus, when set, answers every GET /api/machine with it.
+	machineStatus int
+	// gate, when set, holds every request for gatedPath until it yields,
+	// after saying so on gateArrived if that is set too.
+	gatedPath   string
+	gate        chan struct{}
+	gateArrived chan struct{}
 }
 
 func newFakeCloud(t *testing.T, polls ...pollAnswer) *fakeCloud {
-	c := &fakeCloud{t: t, polls: polls, bearers: map[string][]string{}}
+	c := &fakeCloud{t: t, polls: polls, bearers: map[string][]string{}, expiresIn: 600}
 	c.Server = httptest.NewServer(http.HandlerFunc(c.serve))
 	t.Cleanup(c.Close)
 	return c
 }
 
 func (c *fakeCloud) serve(w http.ResponseWriter, r *http.Request) {
+	if c.gate != nil && r.URL.Path == c.gatedPath {
+		if c.gateArrived != nil {
+			c.gateArrived <- struct{}{}
+		}
+		<-c.gate
+	}
 	c.callsMu.Lock()
 	defer c.callsMu.Unlock()
 
@@ -65,7 +83,7 @@ func (c *fakeCloud) serve(w http.ResponseWriter, r *http.Request) {
 		c.authorized = &id
 		writeJSON(w, http.StatusOK, deviceAuthorization{
 			DeviceCode: "device-code", UserCode: testUserCode,
-			VerificationURIComplete: testLinkURI, Interval: 5, ExpiresIn: 600,
+			VerificationURIComplete: testLinkURI, Interval: 5, ExpiresIn: c.expiresIn,
 		})
 	case "POST /api/device/token":
 		var req struct {
@@ -90,13 +108,21 @@ func (c *fakeCloud) serve(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusOK, map[string]string{"machine_token": issuedToken})
 		}
 	case "GET /api/machine":
-		if token != linkedToken {
+		if c.machineStatus != 0 {
+			w.WriteHeader(c.machineStatus)
+			return
+		}
+		if token != linkedToken && token != issuedToken {
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
 			return
 		}
 		writeJSON(w, http.StatusOK, linkedMachine{Email: "alice@example.com", Name: "alice@devbox"})
 	case "POST /api/machine/revoke":
-		if token != linkedToken {
+		if c.revokeStatus != 0 {
+			w.WriteHeader(c.revokeStatus)
+			return
+		}
+		if token != linkedToken && token != issuedToken {
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
 			return
 		}

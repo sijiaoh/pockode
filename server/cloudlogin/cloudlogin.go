@@ -1,5 +1,7 @@
-// Package cloudlogin links this machine to a cloud account (pockode login)
-// and unlinks it (pockode logout), keeping the result in cloudcred's store.
+// Package cloudlogin links this machine to a cloud account and unlinks it,
+// keeping the result in cloudcred's store. It has two front ends over one
+// implementation: Linker, for `pockode login` / `pockode logout` in a
+// terminal, and Service, for a running process acting on its UI's behalf.
 //
 // Linking is the OAuth device authorization grant (RFC 8628): the cloud hands
 // out a code, the user approves it in a browser where they are signed in, and
@@ -11,81 +13,57 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
-	"os/user"
-	"runtime"
-	"time"
 
 	"github.com/pockode/server/cloudcred"
 	"github.com/pockode/server/startup"
-)
-
-// RFC 8628: the interval when the cloud names none (§3.2), and how much each
-// slow_down adds to it (§3.5).
-const (
-	defaultInterval = 5 * time.Second
-	slowDownStep    = 5 * time.Second
 )
 
 // Linker runs login and logout against one credential store, reporting to out.
 type Linker struct {
 	store *cloudcred.Store
 	out   io.Writer
-
-	// wait sleeps between polls; tests replace it to run the flow at once.
-	wait func(ctx context.Context, d time.Duration) error
+	wait  waitFunc
 }
 
 func NewLinker(store *cloudcred.Store, out io.Writer) *Linker {
 	return &Linker{store: store, out: out, wait: sleep}
 }
 
-func sleep(ctx context.Context, d time.Duration) error {
-	t := time.NewTimer(d)
-	defer t.Stop()
-	select {
-	case <-t.C:
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
-	}
-}
-
 // Login links this machine to an account on cloudURL, unless it already is.
 func (l *Linker) Login(ctx context.Context, cloudURL string) error {
 	c := newClient(cloudURL)
 
-	existing, err := l.store.MachineToken(cloudURL)
-	if err != nil {
-		return fmt.Errorf("read the cloud credential: %w", err)
-	}
-	if existing != "" {
-		m, err := c.machine(ctx, existing)
-		switch {
-		case err == nil:
-			fmt.Fprintf(l.out, "This machine is already linked to %s as %s.\n", m.Email, m.Name)
-			fmt.Fprintln(l.out, "To link it to another account, run pockode logout first.")
-			return nil
-		case isUnauthorized(err):
-			fmt.Fprintln(l.out, "This machine's link to its cloud account is no longer valid; linking it again.")
-		default:
-			return fmt.Errorf("check the existing link with %s: %w", cloudURL, err)
-		}
-	} else if cred, err := l.store.Load(); err == nil && cred != nil {
-		fmt.Fprintf(l.out, "This machine is linked to %s; linking it to %s instead.\n", cred.CloudURL, cloudURL)
-	}
-
-	id, err := currentMachine()
+	existing, err := checkExistingLink(ctx, l.store, c)
 	if err != nil {
 		return err
 	}
-	auth, err := c.authorize(ctx, id)
+	switch {
+	case existing.machine != nil:
+		fmt.Fprintf(l.out, "This machine is already linked to %s as %s.\n", existing.machine.Email, existing.machine.Name)
+		fmt.Fprintln(l.out, "To link it to another account, run pockode logout first.")
+		return nil
+	case existing.token != "":
+		fmt.Fprintln(l.out, "This machine's link to its cloud account is no longer valid; linking it again.")
+	case existing.otherCloud != "":
+		fmt.Fprintf(l.out, "This machine is linked to %s; linking it to %s instead.\n", existing.otherCloud, cloudURL)
+	}
+
+	auth, err := authorizeDevice(ctx, c)
 	if err != nil {
-		return fmt.Errorf("start linking with %s: %w", cloudURL, err)
+		return err
 	}
 	l.showAuthorization(auth)
 
-	token, err := l.poll(ctx, c, auth)
+	pollCtx, cancel := withCodeLifetime(ctx, auth, 0)
+	defer cancel()
+	token, err := pollForToken(pollCtx, c, auth, l.wait, func(err error) {
+		if err != nil {
+			fmt.Fprintf(l.out, "Cannot reach the cloud, still trying: %v\n", err)
+		}
+	})
+	if errors.Is(err, errCodeExpired) {
+		return errExpired
+	}
 	if err != nil {
 		return err
 	}
@@ -96,6 +74,8 @@ func (l *Linker) Login(ctx context.Context, cloudURL string) error {
 	fmt.Fprintln(l.out, "This machine is now linked. Running Pockode processes pick up the link within a few seconds.")
 	return nil
 }
+
+var errExpired = fmt.Errorf("%w; run pockode login again", errCodeExpired)
 
 func (l *Linker) showAuthorization(auth *deviceAuthorization) {
 	fmt.Fprintln(l.out, "To link this machine to your cloud account, open this link where you are signed in:")
@@ -117,100 +97,21 @@ func formatUserCode(code string) string {
 	return code[:4] + "-" + code[4:]
 }
 
-func (l *Linker) poll(ctx context.Context, c *client, auth *deviceAuthorization) (string, error) {
-	interval := time.Duration(auth.Interval) * time.Second
-	if interval <= 0 {
-		interval = defaultInterval
-	}
-	if auth.ExpiresIn > 0 {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, time.Duration(auth.ExpiresIn)*time.Second)
-		defer cancel()
-	}
-
-	unreachable := false
-	for {
-		if err := l.wait(ctx, interval); err != nil {
-			if errors.Is(err, context.DeadlineExceeded) {
-				return "", errExpired
-			}
-			return "", err
-		}
-
-		token, err := c.token(ctx, auth.DeviceCode)
-		switch {
-		case err == nil:
-			return token, nil
-		case hasCode(err, codeAuthorizationPending):
-		case hasCode(err, codeSlowDown):
-			interval += slowDownStep
-		case hasCode(err, codeExpiredToken):
-			return "", errExpired
-		case hasCode(err, codeAccessDenied):
-			return "", errors.New("linking was declined in the browser")
-		case ctx.Err() != nil:
-			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-				return "", errExpired
-			}
-			return "", ctx.Err()
-		case isTransient(err):
-			// The cloud may be back before the code expires, so keep polling,
-			// and say so once rather than on every poll.
-			if !unreachable {
-				fmt.Fprintf(l.out, "Cannot reach the cloud, still trying: %v\n", err)
-			}
-			unreachable = true
-			continue
-		default:
-			return "", fmt.Errorf("linking failed: %w", err)
-		}
-		unreachable = false
-	}
-}
-
-var errExpired = errors.New("the link code expired before it was approved; run pockode login again")
-
-// Logout unlinks this machine. The local credential goes regardless of
-// whether the cloud could be told: the user asked for this machine to stop
-// acting for the account, and a link left behind can be removed on the web.
+// Logout unlinks this machine; see unlink for why the local credential goes
+// whatever the cloud answers.
 func (l *Linker) Logout(ctx context.Context) error {
-	cred, err := l.store.Load()
+	done, err := unlink(ctx, l.store)
 	if err != nil {
-		return fmt.Errorf("read the cloud credential: %w", err)
+		return err
 	}
-	if cred == nil {
+	switch {
+	case done == nil:
 		fmt.Fprintln(l.out, "This machine is not linked to a cloud account.")
-		return nil
+	case done.revokeErr != nil:
+		fmt.Fprintf(l.out, "Logged out locally, but could not tell %s: %v\n", done.cloudURL, done.revokeErr)
+		fmt.Fprintf(l.out, "Unlink this machine from your account on the web at %s.\n", done.cloudURL)
+	default:
+		fmt.Fprintln(l.out, "Logged out: this machine is no longer linked to a cloud account.")
 	}
-
-	revokeErr := newClient(cred.CloudURL).revoke(ctx, cred.MachineToken)
-	// 401 means the cloud no longer knows the token: already unlinked.
-	if isUnauthorized(revokeErr) {
-		revokeErr = nil
-	}
-
-	if err := l.store.Delete(); err != nil {
-		return fmt.Errorf("delete the cloud credential: %w", err)
-	}
-
-	if revokeErr != nil {
-		fmt.Fprintf(l.out, "Logged out locally, but could not tell %s: %v\n", cred.CloudURL, revokeErr)
-		fmt.Fprintf(l.out, "Unlink this machine from your account on the web at %s.\n", cred.CloudURL)
-		return nil
-	}
-	fmt.Fprintln(l.out, "Logged out: this machine is no longer linked to a cloud account.")
 	return nil
-}
-
-// currentMachine is what the cloud names this machine by (os_user@hostname).
-func currentMachine() (machineIdentity, error) {
-	hostname, err := os.Hostname()
-	if err != nil {
-		return machineIdentity{}, fmt.Errorf("get hostname: %w", err)
-	}
-	u, err := user.Current()
-	if err != nil {
-		return machineIdentity{}, fmt.Errorf("get current user: %w", err)
-	}
-	return machineIdentity{Hostname: hostname, OSUser: u.Username, OS: runtime.GOOS}, nil
 }
