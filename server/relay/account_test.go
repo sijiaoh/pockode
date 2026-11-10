@@ -12,6 +12,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/pockode/server/cloudcred"
 )
@@ -378,5 +379,79 @@ func TestSyncCloudCredentialsRetriesAFailedRefresh(t *testing.T) {
 	}
 	if got, want := m.Account(), (Account{Email: "alice@example.com"}); got != want {
 		t.Errorf("Account() = %+v, want %+v", got, want)
+	}
+}
+
+// AccountFor tells an account settled for cloud.json as it is from one left
+// over from before a change, and OnAccountChange hears each new settlement —
+// not a refresh that settles the same way again.
+func TestAccountForFollowsWhatWasPresented(t *testing.T) {
+	cloud := newFakeAccountCloud(t)
+	creds := cloudcred.NewStore(t.TempDir())
+	m := newAccountTestManager(t, cloud, creds, "/home/alice/app")
+	var changes atomic.Int32
+	m.config.OnAccountChange = func() { changes.Add(1) }
+	if _, err := m.credentials(context.Background()); err != nil {
+		t.Fatalf("credentials: %v", err)
+	}
+
+	if err := creds.Save(&cloudcred.Credential{CloudURL: cloud.URL, MachineToken: validMachineToken}); err != nil {
+		t.Fatal(err)
+	}
+	if _, settled := m.AccountFor(validMachineToken); settled {
+		t.Error("AccountFor reports a token the relay has not presented yet as settled")
+	}
+	before := changes.Load()
+	if err := m.syncCloudCredentials(context.Background()); err != nil {
+		t.Fatalf("syncCloudCredentials: %v", err)
+	}
+	if account, settled := m.AccountFor(validMachineToken); !settled || account.Email != "alice@example.com" {
+		t.Errorf("AccountFor = %+v, %v; want alice@example.com, settled", account, settled)
+	}
+	if got := changes.Load() - before; got != 1 {
+		t.Errorf("OnAccountChange called %d times for the login, want once", got)
+	}
+
+	before = changes.Load()
+	if _, err := m.credentials(context.Background()); err != nil {
+		t.Fatalf("credentials: %v", err)
+	}
+	if got := changes.Load() - before; got != 0 {
+		t.Errorf("OnAccountChange called %d times for a refresh that changed nothing, want none", got)
+	}
+}
+
+// CheckCloudCredentials has the watcher pick up a change ahead of its poll,
+// which is what a link made in this process relies on to show at once.
+func TestCheckCloudCredentialsWakesTheWatcher(t *testing.T) {
+	cloud := newFakeAccountCloud(t)
+	creds := cloudcred.NewStore(t.TempDir())
+	m := newAccountTestManager(t, cloud, creds, "/home/alice/app")
+	if _, err := m.credentials(context.Background()); err != nil {
+		t.Fatalf("credentials: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		m.watchCloudCredentials(ctx)
+	}()
+	t.Cleanup(func() { cancel(); <-done })
+
+	if err := creds.Save(&cloudcred.Credential{CloudURL: cloud.URL, MachineToken: validMachineToken}); err != nil {
+		t.Fatal(err)
+	}
+	m.CheckCloudCredentials()
+
+	// Well inside the 5 s poll, so only the recheck can have done it.
+	deadline := time.Now().Add(credentialPollInterval / 2)
+	for {
+		if _, settled := m.AccountFor(validMachineToken); settled {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the watcher did not re-read cloud.json before its next poll")
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }

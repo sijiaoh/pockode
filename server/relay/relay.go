@@ -63,6 +63,14 @@ type Config struct {
 	// good, because the cloud requires a newer Pockode to register again. It
 	// runs on the reconnect loop, which waits for it before dialing again.
 	OnRemoteURLChange func(remoteURL string)
+	// OnAccountChange, if set, is called whenever the account state is settled
+	// differently than before: another account, another reason for not
+	// attaching, or the same answer for another machine token — so AccountFor
+	// may now answer differently. It runs inside Start when the first register
+	// or refresh settles the account, and later on the reconnect loop or the
+	// credential watcher, always holding the lock those share, so it must be
+	// in place before Start and must not block.
+	OnAccountChange func()
 }
 
 // SessionStore is what a preview login needs of the app's session store;
@@ -106,8 +114,14 @@ type Manager struct {
 	// than every poll.
 	syncFailing bool
 
+	// recheck wakes the credential watcher ahead of its next poll.
+	recheck chan struct{}
+
 	accountMu sync.Mutex
 	account   Account
+	// accountToken is the machine token account was settled for. Unlike
+	// presentedToken it moves only with account, so the pair always agrees.
+	accountToken string
 
 	connectTimeout time.Duration
 }
@@ -121,6 +135,7 @@ func NewManager(cfg Config, backendPort, frontendPort int, log *slog.Logger) *Ma
 		client:         NewClientWithVersion(cfg.CloudURL, cfg.ClientVersion),
 		log:            log.With("module", "relay"),
 		connectTimeout: connectTimeout,
+		recheck:        make(chan struct{}, 1),
 	}
 }
 
@@ -252,7 +267,7 @@ func (m *Manager) call(machineToken string, do func(*Attachment) (*Registration,
 
 	m.presentedToken = machineToken
 	m.syncFailing = false
-	m.setAccount(reg.Account)
+	m.setAccount(reg.Account, machineToken)
 	switch {
 	case reg.Email != "":
 		m.log.Info("attached to cloud account")
@@ -294,10 +309,24 @@ func (m *Manager) watchCloudCredentials(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			if errors.Is(m.syncCloudCredentials(ctx), ErrUpgradeRequired) {
-				return
-			}
+		case <-m.recheck:
 		}
+		if errors.Is(m.syncCloudCredentials(ctx), ErrUpgradeRequired) {
+			return
+		}
+	}
+}
+
+// CheckCloudCredentials has the credential watcher re-read cloud.json now
+// rather than at its next poll. It is for whoever has just changed cloud.json
+// in this process, so the change shows at once; a change made elsewhere waits
+// for the poll. It never blocks and does not wait for the refresh, whose
+// outcome OnAccountChange reports.
+func (m *Manager) CheckCloudCredentials() {
+	select {
+	case m.recheck <- struct{}{}:
+	default:
+		// A recheck is already pending, and it will read cloud.json as it is.
 	}
 }
 
@@ -351,10 +380,25 @@ func (m *Manager) Account() Account {
 	return m.account
 }
 
-func (m *Manager) setAccount(account Account) {
+// AccountFor reports the relay's cloud account like Account, and whether it
+// was settled for machineToken ("" for none) — that is, whether it already
+// answers for cloud.json as the caller has just read it, or the relay has yet
+// to present that token.
+func (m *Manager) AccountFor(machineToken string) (Account, bool) {
 	m.accountMu.Lock()
 	defer m.accountMu.Unlock()
+	return m.account, m.accountToken == machineToken
+}
+
+func (m *Manager) setAccount(account Account, machineToken string) {
+	m.accountMu.Lock()
+	changed := account != m.account || machineToken != m.accountToken
 	m.account = account
+	m.accountToken = machineToken
+	m.accountMu.Unlock()
+	if changed && m.config.OnAccountChange != nil {
+		m.config.OnAccountChange()
+	}
 }
 
 // renewCredentials is how the reconnect loop recovers from an uplink rejected
