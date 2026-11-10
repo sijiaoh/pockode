@@ -49,6 +49,7 @@ Method names use the `namespace.method` format with namespaces.
 | `agent.*` | app | `ws/rpc_agent.go` |
 | `cli_auth.*` | app | `ws/rpc_cli_auth.go` |
 | `cli_update.*` | app | `ws/rpc_cli_update.go` |
+| `cloud_link.*` | app | `ws/rpc_cloud_link.go` |
 | `port_preview.*` | app | `ws/rpc_port_preview.go` |
 | `raw.*` | app | `ws/rpc_raw.go` |
 | `remote_url.*` | app | `ws/rpc_remote_url.go` |

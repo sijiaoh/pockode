@@ -122,8 +122,8 @@ relied on it by keying its subscription set on the id alone. Under the new
 contract that map silently merged two unrelated subscriptions: the second
 evicted the first, unsubscribing one cancelled the other, and the evicted one
 was never given back on disconnect — it outlived the connection entirely.
-`rpcConnState` therefore keys on the **pair** (watcher, id), and
-`untrackSubscription` takes the watcher as well.
+A connection's `ws.Subscriptions` therefore keys on the **pair** (watcher, id),
+and `Untrack` takes the watcher as well.
 
 Our own frontend generates a fresh UUID every time and would never collide. That
 is exactly why this has to be stated as a property of the wire contract instead
@@ -1301,7 +1301,7 @@ places, and that the names never say "loading" where nothing is loading.
 | SessionDetail | 64 | Same store events as SessionList; see [above](#why-a-session-is-two-subscriptions) |
 | Settings | 16 | Low frequency; settings rarely change |
 | CLILogin, CLIUpdate | none | A set of CLIs with a pending change instead of a queue (`watch/cli_record.go`): every notification is the whole sign-in or update as it is when sent, so changes collapse and none is ever dropped ([cli-auth.md](cli-auth.md#signing-in), [cli-update.md](cli-update.md#the-rpc)) |
-| RemoteURL | 1 (wake only) | No queue: the URL is read when sent, so a dropped wake loses nothing ([watcher.md](../watcher.md#event-driven)) |
+| RemoteURL, CloudLink | 1 (wake only) | No queue (`watch/latest.go`): the value is read when sent, so a dropped wake loses nothing ([watcher.md](../watcher.md#event-driven)) |
 
 These values were chosen empirically. The key insight: buffer overflow triggers full sync, which is more expensive than the incremental update but still correct. Thus, buffers should be large enough to handle typical bursts, but not so large that they consume excessive memory.
 

@@ -13,7 +13,7 @@ Index of Pockode code explanation documents. These documents focus on "why it's 
 | [Real-time Subscription System](subscription-system.md) | Who names a subscription, watcher architecture, backpressure handling | `server/watch/`, `web/src/hooks/useSubscription.ts` |
 | [Frontend State Management](frontend-state.md) | Zustand stores and extension system | `web/src/lib/` |
 | [Relay NAT Traversal](relay-system.md) | Mobile access to local PC, and port previews | `server/relay/` |
-| [Cloud Account Linking](cloud-account.md) | `cloud.json`, `pockode login` / `logout`, and attaching each relay to the account | `server/cloudcred/`, `server/cloudlogin/`, `server/relay/account.go` |
+| [Cloud Account Linking](cloud-account.md) | `cloud.json`, the device flow behind `pockode login` / `logout` and the UI's `cloud_link.*`, and attaching each relay to the account | `server/cloudcred/`, `server/cloudlogin/`, `server/ws/rpc_cloud_link.go`, `server/relay/account.go` |
 | [AI CLI Sign-in](cli-auth.md) | Whether each AI CLI is signed in on the server machine, signing in from a phone, and signing out | `server/cliauth/`, `server/agent/*/auth.go`, `server/agent/*/login.go` |
 | [AI CLI Update](cli-update.md) | Whether each AI CLI has a newer release, and updating it from a phone | `server/cliupdate/`, `server/agent/*/update.go` |
 | [Self-Restart](self-restart.md) | Replacing a running server or cluster with the executable on disk: what is saved at startup, the check before anything stops, the password hand-over, unix exec and the Windows successor | `server/internal/restart/`, `server/internal/shutdown/`, `server/ws/rpc_server.go` |

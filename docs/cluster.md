@@ -502,6 +502,7 @@ After authentication:
 | `node.stop` | Stops a node's server (params: `{id}`) |
 | `node.cleanup` | Removes a stale node's leftover `server.json` (params: `{id}`); returns the node's status |
 | `node.restart` | Asks a running node to restart itself into the installed executable (params: `{id}`); returns the node's status — `restarting` — once it has been asked. Refusals and the status it reports meanwhile: [Restarting from the cluster](#restarting-from-the-cluster) |
+| `cloud_link.*` | Links this machine to a cloud account, or unlinks it, with the cluster running the device flow against its own `-cloud-url` — the same methods and handler as the main server ([Cloud Account Linking](code/cloud-account.md#the-cloud_link-rpc)). `cloud_link.subscribe` is the one subscription a cluster connection holds; it is given back when the connection closes |
 
 ## Startup Output
 

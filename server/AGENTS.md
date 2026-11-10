@@ -50,7 +50,7 @@ chat/                   # Chat 客户端
 cliauth/                # AI CLI 登录状态查询、远程登录流程与登出（各 CLI 的实现在 agent/*/auth.go、login.go，见 docs/code/cli-auth.md）
 cliupdate/              # AI CLI 新版本检查与更新（跑 CLI 自己的 update，再核对版本；各 CLI 的定义在 agent/*/update.go，见 docs/code/cli-update.md）
 cloudcred/              # 机器凭据 cloud.json（OS 用户配置目录下、本 OS 用户的所有进程共享；只对签发它的 cloud 使用，见 docs/code/cloud-account.md）
-cloudlogin/             # `pockode login` / `pockode logout`：RFC 8628 device flow 关联机器、吊销并删除 cloud.json
+cloudlogin/             # 关联 / 解除关联本机：RFC 8628 device flow 与吊销（flow.go）为一份实现，两个前端——`pockode login` / `pockode logout`（Linker）与运行中进程替 UI 跑 flow 的 Service（`cloud_link.*` RPC，见 docs/code/cloud-account.md）
 commitdraft/            # 为暂存内容起草提交信息：提示词 + 一次性 AI 调用（见 docs/git.md#drafting-a-commit-message）
 command/                # 命令存储 + Pockode 命令（`/pockode-*` 的解析与展开，见 docs/pockode-commands.md）
 contents/               # 文件内容获取
@@ -175,6 +175,7 @@ if err := json.Unmarshal(data, &parsed); err != nil {
 | 场景 | API |
 |------|-----|
 | 整文件重写 | `filestore.WriteFileAtomic(path, data, perm)`（写临时文件 → fsync → rename；含 token 的传 `0600`，替换后的文件不继承旧权限） |
+| 读出来、据内容决定是否改写（读-改-写） | `filestore.UpdateFileAtomic(path, perm, update)`（读与写在同一把排他锁内，别的写入者插不进来；`cloudcred.Store.SaveIfUnchanged` 即此例） |
 | store 读回自己的状态文件 | `filestore.ReadFileLocked(path)`（共享锁；`filestore.New` 的 `File.Read` 走的就是它） |
 | 启动时加载 JSON 状态 | `filestore.ReadJSONOrQuarantine(path, label, v)`——解析失败则隔离为 `<path>.corrupt` 并以空状态启动，**不要**因为一个文件坏了就让服务器起不来 |
 | 大到不能整块进内存的文件 | 自己写临时文件 → fsync → `filestore.Rename`（带 Windows 重试的 rename；`attachments.Store.PutStream` 即此例；不加锁只在同名写入必然内容相同时成立，如内容寻址；`os.CreateTemp` 建出的是 0600，需要自己 chmod） |

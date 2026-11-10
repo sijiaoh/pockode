@@ -45,6 +45,7 @@ Method names are organized using the `namespace.method` format, solving two prob
 | `agent.*` | app | `ws/rpc_agent.go` |
 | `cli_auth.*` | app | `ws/rpc_cli_auth.go` |
 | `cli_update.*` | app | `ws/rpc_cli_update.go` |
+| `cloud_link.*` | app | `ws/rpc_cloud_link.go`; a cluster serves the same methods from `cluster/ws.go` ([cloud-account.md](cloud-account.md#the-cloud_link-rpc)) |
 | `port_preview.*` | app | `ws/rpc_port_preview.go` |
 | `raw.*` | app | `ws/rpc_raw.go` |
 | `remote_url.*` | app | `ws/rpc_remote_url.go` |
@@ -295,6 +296,14 @@ relay moves the server or remote access ends. Every notification is the whole
 current URL, never a delta, and `""` means remote access is over; the field is
 never omitted. The `auth` reply keeps its `remote_url` so a client has the
 address the moment it connects, before any subscription.
+
+The reply is followed by a `remote_url.changed` carrying the URL as it is
+then — sent to every subscriber, for whom it is a harmless repeat, since each
+notification carries the whole value. The snapshot is read after the subscription is registered, so no change is
+lost between the two — but a change notified in between reaches the client
+before the reply, which would then overwrite it with the older URL. The
+notification after the reply puts the current one back on top
+(`watch/latest.go`, which `cloud_link.subscribe` shares).
 
 The web client subscribes once per connection (`useRemoteUrlSubscription`,
 mounted by `AppShell` and not re-subscribed on a worktree switch) and writes both
@@ -701,8 +710,8 @@ The fix funnels every state mutation through `rpcConnState.bindWorktree`, which
 holds the connection lock while it checks a `closed` flag (set first thing by
 `cleanup`), swaps `state.worktree`, and subscribes the notifier as one atomic step.
 When `closed` is already set the bind is refused and the caller releases the
-reference it acquired, so nothing leaks. `trackSubscription` mirrors this: after
-`closed` it immediately unsubscribes rather than storing into a map that will never
+reference it acquired, so nothing leaks. `Subscriptions.Track` mirrors this: after
+`Close` it immediately unsubscribes rather than storing into a map that will never
 be cleaned up. The no-op check (already bound to this worktree) compares worktree
 *pointers*, not names, so a stale instance left over from a force-shutdown +
 same-name recreate is replaced by the live one instead of being silently reused.
@@ -717,7 +726,8 @@ imposes it — one switch in flight at a time, re-aimed at the current target af
 each reply. What a stale bind did to the session list is in
 [subscription-system.md](subscription-system.md#why-only-one-worktreeswitch-is-ever-in-flight).
 
-Code: `server/ws/rpc.go` (`bindWorktree`, `trackSubscription`, `cleanup`),
+Code: `server/ws/rpc.go` (`bindWorktree`, `cleanup`), `server/ws/subscriptions.go`
+(`Subscriptions`, which a cluster connection uses too),
 `server/ws/rpc_worktree.go` (`handleWorktreeSwitch`); regression coverage in
 `server/ws/rpc_lifecycle_test.go`.
 
@@ -747,14 +757,14 @@ deleted, for as long as anything still holds it.
 The same connection state races again at the opposite end of its life — setup
 rather than teardown. `jsonrpc2.NewConn` starts its read loop before it returns,
 while `handleStream` only wires the state (`setConn`, which installs the notifier
-and the subscriptions map) once `NewConn` has returned. A request arriving in that
+and the connection's `Subscriptions`) once `NewConn` has returned. A request arriving in that
 window is dispatched against a half-built state.
 
 Two things then go wrong, neither of them gracefully. `handleAuth` would call
 `bindWorktree` while the notifier is still `nil`, subscribing that nil to the
 worktree; `cleanup` later unsubscribes the *real* notifier, so the nil entry is
 unreachable, outlives the connection, and panics the next watcher that notifies
-that worktree. `trackSubscription` would write to a still-`nil` map and panic
+that worktree. Tracking a subscription would call a still-`nil` `Subscriptions` and panic
 immediately — recovered, but the recover only logs, so the client gets no reply
 at all and waits out its full timeout.
 
