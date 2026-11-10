@@ -7,6 +7,7 @@
 package cloudcred
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -51,14 +52,23 @@ func (s *Store) Load() (*Credential, error) {
 }
 
 // MachineToken returns the stored token if it was issued by cloudURL, and ""
-// otherwise. A token is never sent to any other cloud: whoever runs that one
-// would receive a credential for this machine's account elsewhere.
+// otherwise; see Credential.TokenFor.
 func (s *Store) MachineToken(cloudURL string) (string, error) {
 	cred, err := s.Load()
-	if err != nil || cred == nil || cred.CloudURL != cloudURL {
+	if err != nil {
 		return "", err
 	}
-	return cred.MachineToken, nil
+	return cred.TokenFor(cloudURL), nil
+}
+
+// TokenFor returns the machine token if cloudURL issued it, and "" otherwise
+// or for no credential. A token is never sent to any other cloud: whoever runs
+// that one would receive a credential for this machine's account elsewhere.
+func (c *Credential) TokenFor(cloudURL string) string {
+	if c == nil || c.CloudURL != cloudURL {
+		return ""
+	}
+	return c.MachineToken
 }
 
 // Save restricts the directory before writing, for the reason relay.Store.Save
@@ -75,6 +85,42 @@ func (s *Store) Save(cred *Credential) error {
 	}
 
 	return filestore.WriteFileAtomic(s.path, data, 0600)
+}
+
+// SaveIfUnchanged saves cred only if the token stored for cred.CloudURL is
+// still expected ("" for none). Otherwise it leaves the file alone and returns
+// the token found in its place. Check and save are one step under the file's
+// lock, which Save takes too, so no writer can slip in between: it is for a
+// caller that decided to replace expected and must not overwrite anything
+// else.
+//
+// A damaged file counts as no token, as it does for Load; it is replaced
+// rather than quarantined, since nothing in it could be used.
+func (s *Store) SaveIfUnchanged(cred *Credential, expected string) (saved bool, current string, err error) {
+	if err := fsperm.RestrictDir(filepath.Dir(s.path)); err != nil {
+		return false, "", err
+	}
+	data, err := filestore.MarshalIndex(cred)
+	if err != nil {
+		return false, "", err
+	}
+
+	err = filestore.UpdateFileAtomic(s.path, 0600, func(old []byte) ([]byte, error) {
+		var stored *Credential
+		if old != nil && json.Unmarshal(old, &stored) != nil {
+			stored = nil
+		}
+		current = stored.TokenFor(cred.CloudURL)
+		if current != expected {
+			return nil, nil
+		}
+		saved = true
+		return data, nil
+	})
+	if err != nil {
+		return false, "", err
+	}
+	return saved, current, nil
 }
 
 func (s *Store) Delete() error {

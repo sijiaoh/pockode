@@ -56,6 +56,28 @@ func WriteFileAtomic(path string, data []byte, perm os.FileMode) error {
 	})
 }
 
+// UpdateFileAtomic is a read-modify-write of path: update is handed its
+// contents (nil when it does not exist) and returns what to replace them with,
+// or nil to leave the file as it is. The read and the write happen under the
+// exclusive lock WriteFileAtomic takes, so no other writer can slip in between
+// them. perm is as for WriteFileAtomic.
+func UpdateFileAtomic(path string, perm os.FileMode, update func(data []byte) ([]byte, error)) error {
+	if err := os.MkdirAll(filepath.Dir(path), dirPerm); err != nil {
+		return fmt.Errorf("create directory: %w", err)
+	}
+	return withLock(path, true, func() error {
+		data, err := os.ReadFile(path)
+		if err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return err
+		}
+		next, err := update(data)
+		if err != nil || next == nil {
+			return err
+		}
+		return writeAtomic(path, next, perm)
+	})
+}
+
 // ReadJSONOrQuarantine reads path and unmarshals it into v. It reports false
 // when there is nothing to load — either the file does not exist, or it failed
 // to parse and was quarantined, so a file damaged by a crash degrades the store

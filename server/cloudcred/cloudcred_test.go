@@ -63,3 +63,56 @@ func TestStoreLoadWithoutDirectory(t *testing.T) {
 		t.Errorf("Load created the directory (stat error %v)", err)
 	}
 }
+
+// A save that was decided over one token never replaces another: it reports
+// what it found instead. Another cloud's token and a damaged file are no token
+// for this cloud.
+func TestStoreSaveIfUnchanged(t *testing.T) {
+	const cloudURL = "https://cloud.pockode.com"
+	mine := &Credential{CloudURL: cloudURL, MachineToken: "mine"}
+	for _, tt := range []struct {
+		name string
+		// file is cloud.json's contents beforehand; nil for none.
+		file        *string
+		expected    string
+		wantSaved   bool
+		wantCurrent string
+	}{
+		{"no file, expected none", nil, "", true, ""},
+		{"expected token still there", ptr(`{"cloud_url":"` + cloudURL + `","machine_token":"old"}`), "old", true, "old"},
+		{"another token written", ptr(`{"cloud_url":"` + cloudURL + `","machine_token":"theirs"}`), "old", false, "theirs"},
+		{"token written over none", ptr(`{"cloud_url":"` + cloudURL + `","machine_token":"theirs"}`), "", false, "theirs"},
+		{"another cloud's token", ptr(`{"cloud_url":"https://other.example","machine_token":"theirs"}`), "", true, ""},
+		{"damaged file", ptr(`{"cloud_url":`), "", true, ""},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			store := NewStore(t.TempDir())
+			if tt.file != nil {
+				if err := os.MkdirAll(filepath.Dir(store.path), 0700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(store.path, []byte(*tt.file), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			saved, current, err := store.SaveIfUnchanged(mine, tt.expected)
+			if err != nil || saved != tt.wantSaved || current != tt.wantCurrent {
+				t.Fatalf("SaveIfUnchanged = %v, %q, %v; want %v, %q", saved, current, err, tt.wantSaved, tt.wantCurrent)
+			}
+			got, err := store.MachineToken(cloudURL)
+			if err != nil {
+				t.Fatalf("MachineToken: %v", err)
+			}
+			want := tt.wantCurrent
+			if tt.wantSaved {
+				want = mine.MachineToken
+			}
+			if got != want {
+				t.Errorf("stored token = %q, want %q", got, want)
+			}
+		})
+	}
+}
+
+func ptr(s string) *string { return &s }

@@ -3,6 +3,8 @@ package filestore
 import (
 	"os"
 	"path/filepath"
+	"strconv"
+	"sync"
 	"testing"
 
 	"github.com/pockode/server/internal/unwritabletest"
@@ -60,6 +62,37 @@ func TestWriteFileAtomic_FailedWriteKeepsPreviousContents(t *testing.T) {
 	}
 	if string(data) != "original" {
 		t.Errorf("expected the previous contents to survive, got %q", data)
+	}
+}
+
+// Each update sees the previous one's result: concurrent read-modify-writes
+// lose nothing, and an update that declines to write leaves the file alone.
+func TestUpdateFileAtomic(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "nested", "counter")
+
+	const writers = 20
+	var wg sync.WaitGroup
+	for range writers {
+		wg.Go(func() {
+			err := UpdateFileAtomic(path, 0600, func(data []byte) ([]byte, error) {
+				n := 0
+				if data != nil {
+					n, _ = strconv.Atoi(string(data))
+				}
+				return []byte(strconv.Itoa(n + 1)), nil
+			})
+			if err != nil {
+				t.Errorf("UpdateFileAtomic: %v", err)
+			}
+		})
+	}
+	wg.Wait()
+
+	if err := UpdateFileAtomic(path, 0600, func([]byte) ([]byte, error) { return nil, nil }); err != nil {
+		t.Fatalf("UpdateFileAtomic: %v", err)
+	}
+	if data, err := os.ReadFile(path); err != nil || string(data) != strconv.Itoa(writers) {
+		t.Errorf("counter = %q, %v; want %d", data, err, writers)
 	}
 }
 
