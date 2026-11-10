@@ -59,7 +59,7 @@ func (h *rpcMethodHandler) handleChatMessagesSubscribe(ctx context.Context, conn
 		h.replyInternalError(ctx, conn, req.ID, "failed to read session history", err, "sessionId", params.SessionID)
 		return
 	}
-	h.state.trackSubscription(params.ID, wt.ChatMessagesWatcher)
+	h.state.subscriptions.Track(params.ID, wt.ChatMessagesWatcher)
 
 	wt.SessionListWatcher.MarkRead(params.SessionID)
 

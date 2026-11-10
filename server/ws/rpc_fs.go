@@ -25,7 +25,7 @@ func (h *rpcMethodHandler) handleFSSubscribe(ctx context.Context, conn *jsonrpc2
 		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, err.Error())
 		return
 	}
-	h.state.trackSubscription(params.ID, wt.FSWatcher)
+	h.state.subscriptions.Track(params.ID, wt.FSWatcher)
 	h.log.Debug("subscribed", "watcher", "fs", "watchId", params.ID, "path", params.Path)
 
 	if err := conn.Reply(ctx, req.ID, struct{}{}); err != nil {

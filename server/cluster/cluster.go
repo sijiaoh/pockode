@@ -13,6 +13,7 @@ import (
 	"github.com/pockode/server/agent/codex"
 	"github.com/pockode/server/authguard"
 	"github.com/pockode/server/authsession"
+	"github.com/pockode/server/cloudlogin"
 	"github.com/pockode/server/cluster/node"
 	"github.com/pockode/server/internal/netutil"
 	"github.com/pockode/server/internal/restart"
@@ -91,14 +92,11 @@ func Run(cfg Config) error {
 	// The cluster's own lockout, shared by every place it checks the password;
 	// the nodes it starts each keep theirs.
 	passwordGuard := authguard.New()
-	wsHandler := newWSHandler(cfg.Password, passwordGuard, sessions, cfg.Version, cfg.DevMode, nodeStore, processManager, cfg.Restarter, updater, log)
-	handler := newHandler(cfg.Password, passwordGuard, sessions, cfg.DevMode, wsHandler)
 
-	srv := &http.Server{
-		Addr:    ":" + strconv.Itoa(port),
-		Handler: handler,
-	}
-
+	// One store for the relay and the cloud link service, nil on a system
+	// with no configuration directory to keep cloud.json in.
+	cloudCredentials := relay.DefaultCloudCredentials(log)
+	var cloudLinks *cloudlogin.Service
 	var relayManager *relay.Manager
 	if cfg.RelayEnabled {
 		relayCfg := relay.Config{
@@ -108,12 +106,17 @@ func Run(cfg Config) error {
 			Password:         cfg.Password,
 			PasswordGuard:    passwordGuard,
 			Sessions:         sessions,
-			CloudCredentials: relay.DefaultCloudCredentials(log),
+			CloudCredentials: cloudCredentials,
 			// A cluster has no working directory of its own; its data
 			// directory is what tells one apart from another.
 			Instance: relay.NewInstance(relay.InstanceCluster, cfg.DataDir),
 			// The banner is the only place the cluster shows its remote URL.
 			OnRemoteURLChange: startup.PrintRemoteURLChanged,
+			OnAccountChange: func() {
+				if cloudLinks != nil {
+					cloudLinks.RelayAccountChanged()
+				}
+			},
 		}
 
 		frontendPort := port
@@ -121,7 +124,21 @@ func Run(cfg Config) error {
 			frontendPort = cfg.RelayFrontendPort
 		}
 		relayManager = relay.NewManager(relayCfg, port, frontendPort, log)
+	}
+	// Before the relay starts: OnAccountChange is called from within Start.
+	if cloudCredentials != nil {
+		cloudLinks = cloudlogin.NewService(cfg.CloudURL, cloudCredentials, cloudlogin.RelayOf(relayManager), log)
+	}
 
+	wsHandler := newWSHandler(cfg.Password, passwordGuard, sessions, cfg.Version, cfg.DevMode, nodeStore, processManager, cfg.Restarter, updater, cloudLinks, log)
+	handler := newHandler(cfg.Password, passwordGuard, sessions, cfg.DevMode, wsHandler)
+
+	srv := &http.Server{
+		Addr:    ":" + strconv.Itoa(port),
+		Handler: handler,
+	}
+
+	if relayManager != nil {
 		url, err := relayManager.Start(context.Background())
 		if err != nil {
 			return fmt.Errorf("failed to start relay: %w", err)
@@ -200,6 +217,12 @@ func Run(cfg Config) error {
 		// not wait out its timeout on a handler still installing.
 		updater.Close()
 		wsHandler.stop()
+		// A link flow ends with the cluster, but one the user has already
+		// approved is let finish saving or revoking its token, and an unlink
+		// under way finishes deleting cloud.json.
+		if cloudLinks != nil {
+			cloudLinks.Close()
+		}
 		if err := sessions.Flush(); err != nil {
 			log.Error("failed to persist sessions", "error", err)
 		}

@@ -8,12 +8,13 @@ import (
 )
 
 // DefaultCloudCredentials is the store Config.CloudCredentials takes outside
-// tests, or nil — leaving the relay a guest — on a system with no
+// tests, and the one a process's cloud link service shares with it; or nil —
+// leaving the relay a guest and linking unavailable — on a system with no
 // configuration directory to keep it in.
 func DefaultCloudCredentials(log *slog.Logger) *cloudcred.Store {
 	store, err := cloudcred.DefaultStore()
 	if err != nil {
-		log.Warn("cannot locate the cloud credential, the relay will not attach to a cloud account", "error", err)
+		log.Warn("cannot locate the cloud credential, this process will neither attach to nor link a cloud account", "error", err)
 		return nil
 	}
 	return store

@@ -335,7 +335,7 @@ func (h *rpcMethodHandler) handleSessionListSubscribe(ctx context.Context, conn 
 		h.replySubscriptionError(ctx, conn, req.ID, err, "failed to subscribe to session list")
 		return
 	}
-	h.state.trackSubscription(id, wt.SessionListWatcher)
+	h.state.subscriptions.Track(id, wt.SessionListWatcher)
 	h.log.Debug("subscribed", "watcher", "session list", "watchId", id)
 
 	result := rpc.SessionListSubscribeResult{
@@ -405,7 +405,7 @@ func (h *rpcMethodHandler) handleSessionDetailSubscribe(ctx context.Context, con
 		h.replyInternalError(ctx, conn, req.ID, "failed to subscribe to session detail", err, "sessionId", params.SessionID)
 		return
 	}
-	h.state.trackSubscription(params.ID, wt.SessionDetailWatcher)
+	h.state.subscriptions.Track(params.ID, wt.SessionDetailWatcher)
 	h.log.Debug("subscribed", "watcher", "session detail", "watchId", params.ID, "sessionId", params.SessionID)
 
 	result := rpc.SessionDetailSubscribeResult{

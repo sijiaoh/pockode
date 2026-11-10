@@ -65,6 +65,7 @@ func TestHandler_SubscribeTakesTheClientsID(t *testing.T) {
 			return rpc.WorkDetailSubscribeParams{ID: id, WorkID: item.ID}
 		}},
 		{"agent_role.list.subscribe", func(id string) any { return rpc.SubscribeParams{ID: id} }},
+		{"cloud_link.subscribe", func(id string) any { return rpc.SubscribeParams{ID: id} }},
 	}
 
 	for _, tt := range tests {

@@ -208,7 +208,7 @@ func (h *rpcMethodHandler) handleWorkDetailSubscribe(ctx context.Context, conn *
 		h.replyWorkError(ctx, conn, req.ID, err, "failed to subscribe")
 		return
 	}
-	h.state.trackSubscription(params.ID, h.workDetailWatcher)
+	h.state.subscriptions.Track(params.ID, h.workDetailWatcher)
 	h.log.Debug("subscribed", "watcher", "work detail", "watchId", params.ID, "workId", params.WorkID)
 
 	result := rpc.WorkDetailSubscribeResult{
@@ -239,7 +239,7 @@ func (h *rpcMethodHandler) handleWorkListSubscribe(ctx context.Context, conn *js
 		h.replySubscriptionError(ctx, conn, req.ID, err, "failed to subscribe to work list")
 		return
 	}
-	h.state.trackSubscription(id, h.workListWatcher)
+	h.state.subscriptions.Track(id, h.workListWatcher)
 	h.log.Debug("subscribed", "watcher", "work list", "watchId", id)
 
 	result := rpc.WorkListSubscribeResult{

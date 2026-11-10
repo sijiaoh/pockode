@@ -17,6 +17,7 @@ import (
 	"github.com/pockode/server/authguard"
 	"github.com/pockode/server/cliauth"
 	"github.com/pockode/server/cliupdate"
+	"github.com/pockode/server/cloudlogin"
 	"github.com/pockode/server/command"
 	"github.com/pockode/server/contents"
 	"github.com/pockode/server/filetransfer"
@@ -88,11 +89,12 @@ type RPCHandler struct {
 	cliLoginWatcher       *watch.CLILoginWatcher
 	cliUpdate             *cliupdate.Service
 	cliUpdateWatcher      *watch.CLIUpdateWatcher
+	cloudLink             *CloudLink
 	conns                 *Connections
 	server                ServerControl
 }
 
-func NewRPCHandler(password string, passwordGuard *authguard.Guard, sessions SessionStore, version string, remoteURL func() string, previewTickets PreviewTickets, rawCapabilities RawCapabilities, devMode bool, commandStore *command.Store, worktreeManager *worktree.Manager, settingsStore *settings.Store, workStore work.Store, workOps *work.Operations, workEngine *work.Engine, agentRoleStore agentrole.Store, scheduleStore schedule.Store, scheduler *schedule.Scheduler, cliAuth *cliauth.Service, cliUpdate *cliupdate.Service, restarter *restart.Restarter, updater *Updater) *RPCHandler {
+func NewRPCHandler(password string, passwordGuard *authguard.Guard, sessions SessionStore, version string, remoteURL func() string, previewTickets PreviewTickets, rawCapabilities RawCapabilities, devMode bool, commandStore *command.Store, worktreeManager *worktree.Manager, settingsStore *settings.Store, workStore work.Store, workOps *work.Operations, workEngine *work.Engine, agentRoleStore agentrole.Store, scheduleStore schedule.Store, scheduler *schedule.Scheduler, cliAuth *cliauth.Service, cliUpdate *cliupdate.Service, cloudLink *cloudlogin.Service, restarter *restart.Restarter, updater *Updater) *RPCHandler {
 	settingsWatcher := watch.NewSettingsWatcher(settingsStore)
 	settingsWatcher.Start()
 
@@ -164,6 +166,7 @@ func NewRPCHandler(password string, passwordGuard *authguard.Guard, sessions Ses
 		cliLoginWatcher:       cliLoginWatcher,
 		cliUpdate:             cliUpdate,
 		cliUpdateWatcher:      cliUpdateWatcher,
+		cloudLink:             NewCloudLink(cloudLink),
 	}
 }
 
@@ -182,6 +185,7 @@ func (h *RPCHandler) Stop() {
 	h.cliLoginWatcher.Stop()
 	h.cliUpdateWatcher.Stop()
 	h.remoteURLWatcher.Stop()
+	h.cloudLink.Stop()
 }
 
 // RemoteURLChanged pushes the current remote URL to every client following it.
@@ -300,16 +304,6 @@ func (h *RPCHandler) handleStream(ctx context.Context, stream jsonrpc2.ObjectStr
 	log.Info("connection closed")
 }
 
-// subscriptionKey identifies one of a connection's subscriptions. The id alone
-// would not: a subscription id is the client's, and is unique only within the
-// watcher it was registered on, so two watchers can hold the same id for two
-// unrelated subscriptions. Keyed by id alone, the second would evict the first
-// from this map and the first would never be given back.
-type subscriptionKey struct {
-	watcher watch.Watcher
-	id      string
-}
-
 // rpcConnState tracks per-connection state.
 type rpcConnState struct {
 	mu            sync.Mutex
@@ -318,16 +312,16 @@ type rpcConnState struct {
 	conn          *jsonrpc2.Conn
 	notifier      *JSONRPCNotifier
 	log           *slog.Logger
-	worktree      *worktree.Worktree           // set after auth
-	subscriptions map[subscriptionKey]struct{} // what this connection must give back
-	closed        bool                         // set by cleanup; guards against binds/subscribes racing disconnect
+	worktree      *worktree.Worktree // set after auth
+	subscriptions *Subscriptions     // what this connection must give back
+	closed        bool               // set by cleanup; guards against binds racing disconnect
 	// drafts are the commit message drafts this connection is waiting on.
 	drafts commitDrafts
 	// ready is closed by setConn. Handlers must wait on it before touching the
 	// state: a handler that runs first would subscribe the still-nil notifier
 	// to the worktree — an entry cleanup can never find (it unsubscribes the
 	// real one), so it outlives the connection and panics the next watcher that
-	// notifies it — and would write to the still-nil subscriptions map.
+	// notifies it — and would track into the still-nil subscriptions.
 	ready chan struct{}
 }
 
@@ -374,7 +368,7 @@ func (s *rpcConnState) setConn(conn *jsonrpc2.Conn) {
 	s.mu.Lock()
 	s.conn = conn
 	s.notifier = NewJSONRPCNotifier(conn)
-	s.subscriptions = make(map[subscriptionKey]struct{})
+	s.subscriptions = NewSubscriptions()
 	s.mu.Unlock()
 	close(s.ready)
 }
@@ -390,46 +384,13 @@ func (s *rpcConnState) getNotifier() watch.Notifier {
 	return s.notifier
 }
 
-func (s *rpcConnState) trackSubscription(id string, watcher watch.Watcher) {
-	s.mu.Lock()
-	if s.closed {
-		s.mu.Unlock()
-		// Connection was cleaned up while this handler was subscribing; drop the
-		// just-created subscription so its watcher slot isn't leaked.
-		watcher.Unsubscribe(id)
-		return
-	}
-	s.subscriptions[subscriptionKey{watcher: watcher, id: id}] = struct{}{}
-	s.mu.Unlock()
-}
-
-func (s *rpcConnState) untrackSubscription(id string, watcher watch.Watcher) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	delete(s.subscriptions, subscriptionKey{watcher: watcher, id: id})
-}
-
 // unsubscribeWorktreeWatchers removes and unsubscribes all subscriptions
 // belonging to watchers of the given worktree.
 func (s *rpcConnState) unsubscribeWorktreeWatchers(wt *worktree.Worktree) {
 	if wt == nil {
 		return
 	}
-
-	wtWatchers := make(map[watch.Watcher]struct{}, len(wt.Watchers()))
-	for _, w := range wt.Watchers() {
-		wtWatchers[w] = struct{}{}
-	}
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	for key := range s.subscriptions {
-		if _, belongs := wtWatchers[key.watcher]; belongs {
-			key.watcher.Unsubscribe(key.id)
-			delete(s.subscriptions, key)
-		}
-	}
+	s.subscriptions.UnsubscribeFrom(wt.Watchers())
 }
 
 func (s *rpcConnState) cleanup(worktreeManager *worktree.Manager) {
@@ -437,15 +398,10 @@ func (s *rpcConnState) cleanup(worktreeManager *worktree.Manager) {
 	defer s.mu.Unlock()
 
 	// Mark closed before releasing anything so in-flight handlers racing this
-	// cleanup (bindWorktree/trackSubscription) observe it and don't re-bind a
-	// worktree or re-track a subscription after we've torn everything down.
+	// cleanup (bindWorktree, Subscriptions.Track) observe it and don't re-bind
+	// a worktree or re-track a subscription after we've torn everything down.
 	s.closed = true
-
-	// Unsubscribe all tracked subscriptions
-	for key := range s.subscriptions {
-		key.watcher.Unsubscribe(key.id)
-	}
-	s.subscriptions = nil
+	s.subscriptions.Close()
 
 	if s.worktree == nil {
 		return // Not authenticated yet (e.g., connection closed before auth)
@@ -555,6 +511,21 @@ func (h *rpcMethodHandler) Handle(ctx context.Context, conn *jsonrpc2.Conn, req 
 		return
 	case "cli_update.unsubscribe":
 		h.handleWatcherUnsubscribe(ctx, conn, req, h.cliUpdateWatcher, "cli update")
+		return
+	case "cloud_link.subscribe":
+		h.cloudLink.HandleSubscribe(ctx, conn, req, h.state.getNotifier(), h.state.subscriptions, h.log)
+		return
+	case "cloud_link.unsubscribe":
+		h.cloudLink.HandleUnsubscribe(ctx, conn, req, h.state.subscriptions, h.log)
+		return
+	case "cloud_link.start":
+		h.cloudLink.HandleStart(ctx, conn, req, h.log)
+		return
+	case "cloud_link.cancel":
+		h.cloudLink.HandleCancel(ctx, conn, req, h.log)
+		return
+	case "cloud_link.unlink":
+		h.cloudLink.HandleUnlink(ctx, conn, req, h.log)
 		return
 	case "server.version":
 		h.handleServerVersion(ctx, conn, req)
@@ -1053,8 +1024,12 @@ func (h *rpcMethodHandler) replyListPageError(ctx context.Context, conn *jsonrpc
 // rather than being dropped — a bare "failed to X" leaves a real failure
 // without a trace on either side. logArgs add locating context (session ID).
 func (h *rpcMethodHandler) replyInternalError(ctx context.Context, conn *jsonrpc2.Conn, id jsonrpc2.ID, message string, err error, logArgs ...any) {
-	h.log.With(logArgs...).Error(message, "error", err)
-	h.replyError(ctx, conn, id, jsonrpc2.CodeInternalError, message+": "+err.Error())
+	sendInternalError(ctx, conn, h.log.With(logArgs...), id, message, err)
+}
+
+func sendInternalError(ctx context.Context, conn *jsonrpc2.Conn, log *slog.Logger, id jsonrpc2.ID, message string, err error) {
+	log.Error(message, "error", err)
+	sendError(ctx, conn, log, id, jsonrpc2.CodeInternalError, message+": "+err.Error(), nil)
 }
 
 func (h *rpcMethodHandler) replyError(ctx context.Context, conn *jsonrpc2.Conn, id jsonrpc2.ID, code int64, message string) {
@@ -1064,11 +1039,17 @@ func (h *rpcMethodHandler) replyError(ctx context.Context, conn *jsonrpc2.Conn, 
 // replyErrorData is replyError with a data member, for the errors a client is
 // expected to act on rather than only display. The message still says the whole
 // thing: data is the machine-readable half, not the only half.
+func (h *rpcMethodHandler) replyErrorData(ctx context.Context, conn *jsonrpc2.Conn, id jsonrpc2.ID, code int64, message string, data any) {
+	sendError(ctx, conn, h.log, id, code, message, data)
+}
+
+// sendError is the reply behind every error, for handlers that run on a
+// cluster's connections as well as a server's.
 //
 // data has to be marshalable — SetError panics otherwise — which is why every
 // caller passes a type declared in the rpc package rather than something
 // assembled here.
-func (h *rpcMethodHandler) replyErrorData(ctx context.Context, conn *jsonrpc2.Conn, id jsonrpc2.ID, code int64, message string, data any) {
+func sendError(ctx context.Context, conn *jsonrpc2.Conn, log *slog.Logger, id jsonrpc2.ID, code int64, message string, data any) {
 	err := &jsonrpc2.Error{
 		Code:    code,
 		Message: message,
@@ -1077,7 +1058,7 @@ func (h *rpcMethodHandler) replyErrorData(ctx context.Context, conn *jsonrpc2.Co
 		err.SetError(data)
 	}
 	if replyErr := conn.ReplyWithError(ctx, id, err); replyErr != nil {
-		h.log.Error("failed to send error response", "error", replyErr)
+		log.Error("failed to send error response", "error", replyErr)
 	}
 }
 
@@ -1111,10 +1092,14 @@ func (h *rpcMethodHandler) subscriptionID(ctx context.Context, conn *jsonrpc2.Co
 // *.subscribe request belongs to the client (see
 // watch.BaseWatcher.AddSubscription), so only the client can supply a usable one.
 func (h *rpcMethodHandler) replySubscriptionIDError(ctx context.Context, conn *jsonrpc2.Conn, id jsonrpc2.ID, err error) bool {
+	return sendSubscriptionIDError(ctx, conn, h.log, id, err)
+}
+
+func sendSubscriptionIDError(ctx context.Context, conn *jsonrpc2.Conn, log *slog.Logger, id jsonrpc2.ID, err error) bool {
 	if !errors.Is(err, watch.ErrSubscriptionIDRequired) && !errors.Is(err, watch.ErrSubscriptionIDInUse) {
 		return false
 	}
-	h.replyError(ctx, conn, id, jsonrpc2.CodeInvalidParams, err.Error())
+	sendError(ctx, conn, log, id, jsonrpc2.CodeInvalidParams, err.Error(), nil)
 	return true
 }
 
@@ -1122,34 +1107,38 @@ func (h *rpcMethodHandler) replySubscriptionIDError(ctx context.Context, conn *j
 // other failure is its own: an id the client got wrong is invalid params,
 // anything else is the server failing to read the snapshot it owes the reply.
 func (h *rpcMethodHandler) replySubscriptionError(ctx context.Context, conn *jsonrpc2.Conn, id jsonrpc2.ID, err error, message string, logArgs ...any) {
-	if h.replySubscriptionIDError(ctx, conn, id, err) {
-		return
-	}
-	h.replyInternalError(ctx, conn, id, message, err, logArgs...)
+	sendSubscriptionError(ctx, conn, h.log.With(logArgs...), id, err, message)
 }
 
-func (h *rpcMethodHandler) handleWatcherUnsubscribe(
-	ctx context.Context,
-	conn *jsonrpc2.Conn,
-	req *jsonrpc2.Request,
-	watcher watch.Watcher,
-	logName string,
-) {
+func sendSubscriptionError(ctx context.Context, conn *jsonrpc2.Conn, log *slog.Logger, id jsonrpc2.ID, err error, message string) {
+	if sendSubscriptionIDError(ctx, conn, log, id, err) {
+		return
+	}
+	sendInternalError(ctx, conn, log, id, message, err)
+}
+
+func (h *rpcMethodHandler) handleWatcherUnsubscribe(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request, watcher watch.Watcher, logName string) {
+	handleUnsubscribe(ctx, conn, req, watcher, h.state.subscriptions, logName, h.log)
+}
+
+// handleUnsubscribe answers a *.unsubscribe for watcher, whose subscriptions
+// on this connection subs keeps.
+func handleUnsubscribe(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request, watcher watch.Watcher, subs *Subscriptions, logName string, log *slog.Logger) {
 	var params unsubscribeParams
 	if err := unmarshalParams(req, &params); err != nil {
-		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "invalid params")
+		sendError(ctx, conn, log, req.ID, jsonrpc2.CodeInvalidParams, "invalid params", nil)
 		return
 	}
 	if params.ID == "" {
-		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "id is required")
+		sendError(ctx, conn, log, req.ID, jsonrpc2.CodeInvalidParams, "id is required", nil)
 		return
 	}
 
 	watcher.Unsubscribe(params.ID)
-	h.state.untrackSubscription(params.ID, watcher)
-	h.log.Debug("unsubscribed", "watcher", logName, "watchId", params.ID)
+	subs.Untrack(params.ID, watcher)
+	log.Debug("unsubscribed", "watcher", logName, "watchId", params.ID)
 
 	if err := conn.Reply(ctx, req.ID, struct{}{}); err != nil {
-		h.log.Error("failed to send "+logName+" unsubscribe response", "error", err)
+		log.Error("failed to send "+logName+" unsubscribe response", "error", err)
 	}
 }

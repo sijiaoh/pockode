@@ -23,7 +23,7 @@ func (h *rpcMethodHandler) handleSettingsSubscribe(ctx context.Context, conn *js
 		h.replySubscriptionError(ctx, conn, req.ID, err, "failed to subscribe to settings")
 		return
 	}
-	h.state.trackSubscription(id, h.settingsWatcher)
+	h.state.subscriptions.Track(id, h.settingsWatcher)
 	h.log.Debug("subscribed to settings", "watchId", id)
 
 	result := rpc.SettingsSubscribeResult{

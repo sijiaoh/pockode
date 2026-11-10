@@ -123,7 +123,7 @@ func (h *rpcMethodHandler) handleCLIUpdateSubscribe(ctx context.Context, conn *j
 		h.replySubscriptionError(ctx, conn, req.ID, err, "failed to subscribe to CLI update")
 		return
 	}
-	h.state.trackSubscription(params.ID, h.cliUpdateWatcher)
+	h.state.subscriptions.Track(params.ID, h.cliUpdateWatcher)
 
 	if err := conn.Reply(ctx, req.ID, rpc.CLIUpdateSubscribeResult{Update: update}); err != nil {
 		h.log.Error("failed to send cli update subscribe response", "error", err)

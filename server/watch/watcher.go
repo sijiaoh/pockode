@@ -24,4 +24,5 @@ var (
 	_ Watcher = (*CLILoginWatcher)(nil)
 	_ Watcher = (*CLIUpdateWatcher)(nil)
 	_ Watcher = (*RemoteURLWatcher)(nil)
+	_ Watcher = (*CloudLinkWatcher)(nil)
 )

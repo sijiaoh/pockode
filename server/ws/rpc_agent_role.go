@@ -170,7 +170,7 @@ func (h *rpcMethodHandler) handleAgentRoleListSubscribe(ctx context.Context, con
 		h.replySubscriptionError(ctx, conn, req.ID, err, "failed to subscribe to agent role list")
 		return
 	}
-	h.state.trackSubscription(id, h.agentRoleListWatcher)
+	h.state.subscriptions.Track(id, h.agentRoleListWatcher)
 	h.log.Debug("subscribed", "watcher", "agent role list", "watchId", id)
 
 	result := rpc.AgentRoleListSubscribeResult{

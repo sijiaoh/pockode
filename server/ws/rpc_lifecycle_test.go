@@ -6,22 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pockode/server/watch"
 	"github.com/sourcegraph/jsonrpc2"
 )
-
-// recordingWatcher captures Unsubscribe calls so tests can assert that a
-// subscription created by an in-flight handler is torn down when the
-// connection has already been cleaned up.
-type recordingWatcher struct {
-	unsubscribed []string
-}
-
-var _ watch.Watcher = (*recordingWatcher)(nil)
-
-func (w *recordingWatcher) Start() error          { return nil }
-func (w *recordingWatcher) Stop()                 {}
-func (w *recordingWatcher) Unsubscribe(id string) { w.unsubscribed = append(w.unsubscribed, id) }
 
 // idleStream is a jsonrpc2 stream that never yields a message and records what
 // is written to it, so a test can build a real *jsonrpc2.Conn and observe when
@@ -94,9 +80,8 @@ func TestRPCConnState_BindWorktree_RejectedAfterClose(t *testing.T) {
 	defer env.worktreeManager.Release(wt)
 
 	state := &rpcConnState{
-		notifier:      NewJSONRPCNotifier(nil),
-		subscriptions: map[subscriptionKey]struct{}{},
-		closed:        true, // connection already cleaned up
+		notifier: NewJSONRPCNotifier(nil),
+		closed:   true, // connection already cleaned up
 	}
 
 	prev, noop, ok := state.bindWorktree(wt)
@@ -119,8 +104,7 @@ func TestRPCConnState_BindWorktree_NoopOnSameInstance(t *testing.T) {
 	defer env.worktreeManager.Release(wt)
 
 	state := &rpcConnState{
-		notifier:      NewJSONRPCNotifier(nil),
-		subscriptions: map[subscriptionKey]struct{}{},
+		notifier: NewJSONRPCNotifier(nil),
 	}
 
 	if prev, noop, ok := state.bindWorktree(wt); !ok || noop || prev != nil {
@@ -135,41 +119,5 @@ func TestRPCConnState_BindWorktree_NoopOnSameInstance(t *testing.T) {
 	}
 	if prev != wt {
 		t.Error("no-op bind should report the already-bound worktree as prev")
-	}
-}
-
-// trackSubscription must drop (and unsubscribe) a subscription created by an
-// in-flight handler once the connection is closed, otherwise the watcher slot
-// leaks because cleanup already ran and will never see it.
-func TestRPCConnState_TrackSubscription_UnsubscribesAfterClose(t *testing.T) {
-	watcher := &recordingWatcher{}
-	state := &rpcConnState{
-		subscriptions: map[subscriptionKey]struct{}{},
-		closed:        true,
-	}
-
-	state.trackSubscription("sub-1", watcher)
-
-	if len(watcher.unsubscribed) != 1 || watcher.unsubscribed[0] != "sub-1" {
-		t.Errorf("expected orphaned subscription to be unsubscribed, got %v", watcher.unsubscribed)
-	}
-	if _, tracked := state.subscriptions[subscriptionKey{watcher: watcher, id: "sub-1"}]; tracked {
-		t.Error("closed connection must not retain the subscription")
-	}
-}
-
-func TestRPCConnState_TrackSubscription_TracksWhenOpen(t *testing.T) {
-	watcher := &recordingWatcher{}
-	state := &rpcConnState{
-		subscriptions: map[subscriptionKey]struct{}{},
-	}
-
-	state.trackSubscription("sub-1", watcher)
-
-	if len(watcher.unsubscribed) != 0 {
-		t.Errorf("open connection should not unsubscribe, got %v", watcher.unsubscribed)
-	}
-	if _, tracked := state.subscriptions[subscriptionKey{watcher: watcher, id: "sub-1"}]; !tracked {
-		t.Error("open connection should retain the subscription for later cleanup")
 	}
 }

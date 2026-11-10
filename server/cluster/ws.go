@@ -12,6 +12,7 @@ import (
 	"github.com/coder/websocket"
 	"github.com/google/uuid"
 	"github.com/pockode/server/authguard"
+	"github.com/pockode/server/cloudlogin"
 	"github.com/pockode/server/cluster/node"
 	"github.com/pockode/server/internal/restart"
 	"github.com/pockode/server/logger"
@@ -47,9 +48,11 @@ type wsHandler struct {
 	log            *slog.Logger
 	conns          *ws.Connections
 	server         ws.ServerControl
+	cloudLink      *ws.CloudLink
 }
 
-func newWSHandler(password string, passwordGuard *authguard.Guard, sessions ws.SessionStore, version string, devMode bool, nodeStore node.Store, processManager *node.ProcessManager, restarter *restart.Restarter, updater *ws.Updater, log *slog.Logger) *wsHandler {
+// cloudLinks is nil when the cluster has no cloud credential store.
+func newWSHandler(password string, passwordGuard *authguard.Guard, sessions ws.SessionStore, version string, devMode bool, nodeStore node.Store, processManager *node.ProcessManager, restarter *restart.Restarter, updater *ws.Updater, cloudLinks *cloudlogin.Service, log *slog.Logger) *wsHandler {
 	return &wsHandler{
 		password:       password,
 		passwordGuard:  passwordGuard,
@@ -61,6 +64,7 @@ func newWSHandler(password string, passwordGuard *authguard.Guard, sessions ws.S
 		log:            log.With("component", "ws"),
 		conns:          ws.NewConnections(),
 		server:         ws.ServerControl{Restarter: restarter, Updater: updater, Subject: "The cluster"},
+		cloudLink:      ws.NewCloudLink(cloudLinks),
 	}
 }
 
@@ -72,6 +76,7 @@ const connectionsCloseTimeout = 10 * time.Second
 // next instead of staying on a cluster that has shut down.
 func (h *wsHandler) stop() {
 	h.conns.Close(connectionsCloseTimeout, h.log)
+	h.cloudLink.Stop()
 }
 
 func (h *wsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -112,6 +117,8 @@ func (h *wsHandler) handleStream(ctx context.Context, stream jsonrpc2.ObjectStre
 		nodeStore:      h.nodeStore,
 		processManager: h.processManager,
 		server:         h.server,
+		cloudLink:      h.cloudLink,
+		subscriptions:  ws.NewSubscriptions(),
 		stream:         stream,
 		log:            log,
 		authenticated:  false,
@@ -119,6 +126,7 @@ func (h *wsHandler) handleStream(ctx context.Context, stream jsonrpc2.ObjectStre
 
 	rpcConn := jsonrpc2.NewConn(ctx, stream, h.conns.AsyncHandler(handler))
 	<-rpcConn.DisconnectNotify()
+	handler.subscriptions.Close()
 	log.Info("connection closed")
 }
 
@@ -130,6 +138,8 @@ type clusterRPCHandler struct {
 	nodeStore      node.Store
 	processManager *node.ProcessManager
 	server         ws.ServerControl
+	cloudLink      *ws.CloudLink
+	subscriptions  *ws.Subscriptions     // what this connection must give back
 	stream         jsonrpc2.ObjectStream // what the connection runs on
 	log            *slog.Logger
 	authenticated  bool
@@ -151,7 +161,8 @@ func (h *clusterRPCHandler) Handle(ctx context.Context, conn *jsonrpc2.Conn, req
 		return
 	}
 
-	// After authentication, cluster mode supports node management and basic methods
+	// After authentication, cluster mode supports node management, cloud linking
+	// and basic methods
 	switch req.Method {
 	case "ping":
 		if err := conn.Reply(ctx, req.ID, "pong"); err != nil {
@@ -168,6 +179,16 @@ func (h *clusterRPCHandler) Handle(ctx context.Context, conn *jsonrpc2.Conn, req
 		h.server.HandleUpdateCheck(ctx, conn, req, h.log)
 	case "server.update":
 		h.server.HandleUpdate(ctx, conn, req, h.log)
+	case "cloud_link.subscribe":
+		h.cloudLink.HandleSubscribe(ctx, conn, req, ws.NewJSONRPCNotifier(conn), h.subscriptions, h.log)
+	case "cloud_link.unsubscribe":
+		h.cloudLink.HandleUnsubscribe(ctx, conn, req, h.subscriptions, h.log)
+	case "cloud_link.start":
+		h.cloudLink.HandleStart(ctx, conn, req, h.log)
+	case "cloud_link.cancel":
+		h.cloudLink.HandleCancel(ctx, conn, req, h.log)
+	case "cloud_link.unlink":
+		h.cloudLink.HandleUnlink(ctx, conn, req, h.log)
 	case "node.list":
 		h.handleNodeList(ctx, conn, req)
 	case "node.get":

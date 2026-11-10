@@ -18,9 +18,10 @@ func (h *rpcMethodHandler) handleRemoteURLSubscribe(ctx context.Context, conn *j
 		h.replySubscriptionError(ctx, conn, req.ID, err, "failed to subscribe to remote url")
 		return
 	}
-	h.state.trackSubscription(id, h.remoteURLWatcher)
+	h.state.subscriptions.Track(id, h.remoteURLWatcher)
 
 	if err := conn.Reply(ctx, req.ID, rpc.RemoteURLSubscribeResult{RemoteURL: remoteURL}); err != nil {
 		h.log.Error("failed to send remote url subscribe response", "error", err)
 	}
+	h.remoteURLWatcher.Resend()
 }

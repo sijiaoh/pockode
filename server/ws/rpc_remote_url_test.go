@@ -63,9 +63,17 @@ func TestHandler_RemoteURLSubscribe_ReachesAConnectedClient(t *testing.T) {
 		t.Errorf("subscribe remote_url = %q, want %q", result.RemoteURL, oldURL)
 	}
 
+	// Pushed again after the reply, so a notification that overtook the reply
+	// cannot leave the client holding the older URL.
+	expectRemoteURLChanged(t, ctx, conn, "remote-1", oldURL)
+
 	setRemoteURL(newURL)
 	h.RemoteURLChanged()
+	expectRemoteURLChanged(t, ctx, conn, "remote-1", newURL)
+}
 
+func expectRemoteURLChanged(t *testing.T, ctx context.Context, conn *websocket.Conn, id, url string) {
+	t.Helper()
 	_, data, err := conn.Read(ctx)
 	if err != nil {
 		t.Fatalf("waiting for remote_url.changed: %v", err)
@@ -80,7 +88,7 @@ func TestHandler_RemoteURLSubscribe_ReachesAConnectedClient(t *testing.T) {
 	if err := json.Unmarshal(data, &notif); err != nil {
 		t.Fatalf("unmarshal notification: %v", err)
 	}
-	if notif.Method != "remote_url.changed" || notif.Params.ID != "remote-1" || notif.Params.RemoteURL != newURL {
-		t.Errorf("got %s, want remote_url.changed for remote-1 carrying %q", data, newURL)
+	if notif.Method != "remote_url.changed" || notif.Params.ID != id || notif.Params.RemoteURL != url {
+		t.Errorf("got %s, want remote_url.changed for %s carrying %q", data, id, url)
 	}
 }

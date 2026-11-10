@@ -14,6 +14,7 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/pockode/server/authguard"
+	"github.com/pockode/server/cloudlogin"
 	"github.com/pockode/server/cluster/node"
 	"github.com/pockode/server/internal/authsessiontest"
 	"github.com/pockode/server/rpc"
@@ -40,12 +41,20 @@ func newAuthTestServer(t *testing.T, sessions *authsessiontest.Sessions) *httpte
 
 func newTestServer(t *testing.T, sessions *authsessiontest.Sessions, restarter *restart.Restarter) *httptest.Server {
 	t.Helper()
+	return newTestServerWithCloudLinks(t, sessions, restarter, nil)
+}
+
+// newTestServerWithCloudLinks is newTestServer serving cloudLinks, which may
+// be nil, as on a cluster with no cloud credential store.
+func newTestServerWithCloudLinks(t *testing.T, sessions *authsessiontest.Sessions, restarter *restart.Restarter, cloudLinks *cloudlogin.Service) *httptest.Server {
+	t.Helper()
 	nodeStore, err := node.NewFileStore(t.TempDir())
 	if err != nil {
 		t.Fatalf("failed to create node store: %v", err)
 	}
 	h := newWSHandler(testPassword, authguard.NewFrozen(), sessions, "test", true, nodeStore, node.NewProcessManager(os.Args[0]), restarter,
-		ws.NewUpdater(publishedRelease{}, &acceptingInstaller{}), slog.New(slog.DiscardHandler))
+		ws.NewUpdater(publishedRelease{}, &acceptingInstaller{}), cloudLinks, slog.New(slog.DiscardHandler))
+	t.Cleanup(h.stop)
 	server := httptest.NewServer(h)
 	t.Cleanup(server.Close)
 	return server

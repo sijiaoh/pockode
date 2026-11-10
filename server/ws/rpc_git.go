@@ -150,7 +150,7 @@ func (h *rpcMethodHandler) handleGitDiffSubscribe(ctx context.Context, conn *jso
 		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInternalError, err.Error())
 		return
 	}
-	h.state.trackSubscription(params.ID, wt.GitDiffWatcher)
+	h.state.subscriptions.Track(params.ID, wt.GitDiffWatcher)
 
 	h.log.Debug("subscribed", "watcher", "git-diff", "watchId", params.ID, "path", params.Path, "staged", params.Staged)
 
@@ -170,7 +170,7 @@ func (h *rpcMethodHandler) handleGitSubscribe(ctx context.Context, conn *jsonrpc
 		h.replySubscriptionError(ctx, conn, req.ID, err, "failed to subscribe to git")
 		return
 	}
-	h.state.trackSubscription(id, wt.GitWatcher)
+	h.state.subscriptions.Track(id, wt.GitWatcher)
 	h.log.Debug("subscribed", "watcher", "git", "watchId", id)
 
 	if err := conn.Reply(ctx, req.ID, struct{}{}); err != nil {

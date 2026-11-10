@@ -523,6 +523,10 @@ Flags:
 	remoteURL := func() string { return "" }
 	var serverInfo *serverinfo.Publisher
 	var wsHandler *ws.RPCHandler
+	// One store for the relay and the cloud link service, nil on a system
+	// with no configuration directory to keep cloud.json in.
+	cloudCredentials := relay.DefaultCloudCredentials(slog.Default())
+	var cloudLinks *cloudlogin.Service
 	relayEnabled := *relayFlag
 	if relayEnabled {
 		relayCfg := relay.Config{
@@ -533,7 +537,7 @@ Flags:
 			PasswordGuard:    passwordGuard,
 			Sessions:         sessions,
 			Tickets:          previewTickets,
-			CloudCredentials: relay.DefaultCloudCredentials(slog.Default()),
+			CloudCredentials: cloudCredentials,
 			Instance:         relay.NewInstance(instanceKind, workDir),
 			OnRemoteURLChange: func(url string) {
 				startup.PrintRemoteURLChanged(url)
@@ -541,6 +545,11 @@ Flags:
 					slog.Error("failed to update server.json with the new remote URL", "error", err)
 				}
 				wsHandler.RemoteURLChanged()
+			},
+			OnAccountChange: func() {
+				if cloudLinks != nil {
+					cloudLinks.RelayAccountChanged()
+				}
 			},
 		}
 
@@ -551,10 +560,13 @@ Flags:
 		relayManager = relay.NewManager(relayCfg, port, frontendPort, slog.Default())
 		remoteURL = relayManager.RemoteURL
 	}
-	// Both assigned before the relay starts, so the reconnect loop that calls
-	// OnRemoteURLChange never sees them unset.
+	// All assigned before the relay starts, so the callbacks it makes —
+	// OnAccountChange from within Start itself — never see them unset.
 	serverInfo = serverinfo.NewPublisher(dataDir, version, port, localURL, mcpToken, remoteURL)
-	wsHandler = ws.NewRPCHandler(cred.Password, passwordGuard, sessions, version, remoteURL, previewTickets, rawHandler, devMode, commandStore, worktreeManager, settingsStore, workStore, workOps, workEngine, agentRoleStore, scheduleStore, scheduler, cliAuth, cliUpdate, restarter, updater)
+	if cloudCredentials != nil {
+		cloudLinks = cloudlogin.NewService(cloudURL, cloudCredentials, cloudlogin.RelayOf(relayManager), slog.Default())
+	}
+	wsHandler = ws.NewRPCHandler(cred.Password, passwordGuard, sessions, version, remoteURL, previewTickets, rawHandler, devMode, commandStore, worktreeManager, settingsStore, workStore, workOps, workEngine, agentRoleStore, scheduleStore, scheduler, cliAuth, cliUpdate, cloudLinks, restarter, updater)
 
 	if relayManager != nil {
 		url, err := relayManager.Start(context.Background())
@@ -632,6 +644,12 @@ Flags:
 		cliUpdate.Close()
 		// Sign-ins end with the server; their CLIs are not left waiting.
 		cliAuth.Close()
+		// A link flow ends with the server, but one the user has already
+		// approved is let finish saving or revoking its token, and an unlink
+		// under way finishes deleting cloud.json.
+		if cloudLinks != nil {
+			cloudLinks.Close()
+		}
 		if err := sessions.Flush(); err != nil {
 			slog.Error("failed to persist sessions", "error", err)
 		}

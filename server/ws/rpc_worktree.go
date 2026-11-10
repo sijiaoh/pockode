@@ -216,7 +216,7 @@ func (h *rpcMethodHandler) handleWorktreeSubscribe(ctx context.Context, conn *js
 		h.replySubscriptionError(ctx, conn, req.ID, err, "failed to subscribe to worktree list")
 		return
 	}
-	h.state.trackSubscription(id, h.worktreeManager.WorktreeWatcher)
+	h.state.subscriptions.Track(id, h.worktreeManager.WorktreeWatcher)
 	h.log.Debug("subscribed", "watcher", "worktree", "watchId", id)
 
 	if err := conn.Reply(ctx, req.ID, rpc.WorktreeSubscribeResult{IsGitRepo: isGitRepo}); err != nil {

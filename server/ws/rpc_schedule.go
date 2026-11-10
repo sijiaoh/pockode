@@ -176,7 +176,7 @@ func (h *rpcMethodHandler) handleScheduleListSubscribe(ctx context.Context, conn
 		h.replySubscriptionError(ctx, conn, req.ID, err, "failed to subscribe to schedule list")
 		return
 	}
-	h.state.trackSubscription(id, h.scheduleListWatcher)
+	h.state.subscriptions.Track(id, h.scheduleListWatcher)
 	h.log.Debug("subscribed", "watcher", "schedule list", "watchId", id)
 
 	if err := conn.Reply(ctx, req.ID, rpc.ScheduleListSubscribeResult{Items: items}); err != nil {
@@ -203,7 +203,7 @@ func (h *rpcMethodHandler) handleScheduleDetailSubscribe(ctx context.Context, co
 		h.replyScheduleError(ctx, conn, req.ID, err, "failed to subscribe to schedule detail")
 		return
 	}
-	h.state.trackSubscription(params.ID, h.scheduleDetailWatcher)
+	h.state.subscriptions.Track(params.ID, h.scheduleDetailWatcher)
 	h.log.Debug("subscribed", "watcher", "schedule detail", "watchId", params.ID, "scheduleId", params.ScheduleID)
 
 	result := rpc.ScheduleDetailSubscribeResult{

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 
 	"github.com/pockode/server/cliauth"
 	"github.com/pockode/server/rpc"
@@ -70,13 +71,17 @@ func (h *rpcMethodHandler) replyCLIAuthError(ctx context.Context, conn *jsonrpc2
 // replyReasonError replies with err's own message, as invalid params when it
 // is one of clientErrs and as an internal error otherwise.
 func (h *rpcMethodHandler) replyReasonError(ctx context.Context, conn *jsonrpc2.Conn, id jsonrpc2.ID, err error, clientErrs ...error) {
+	sendReasonError(ctx, conn, h.log, id, err, clientErrs...)
+}
+
+func sendReasonError(ctx context.Context, conn *jsonrpc2.Conn, log *slog.Logger, id jsonrpc2.ID, err error, clientErrs ...error) {
 	code := int64(jsonrpc2.CodeInternalError)
 	for _, clientErr := range clientErrs {
 		if errors.Is(err, clientErr) {
 			code = jsonrpc2.CodeInvalidParams
 		}
 	}
-	h.replyError(ctx, conn, id, code, err.Error())
+	sendError(ctx, conn, log, id, code, err.Error(), nil)
 }
 
 // handleCLIAuthLoginStart starts a sign-in, or answers with the one already
@@ -132,7 +137,7 @@ func (h *rpcMethodHandler) handleCLIAuthLoginSubscribe(ctx context.Context, conn
 		h.replySubscriptionError(ctx, conn, req.ID, err, "failed to subscribe to CLI sign-in")
 		return
 	}
-	h.state.trackSubscription(params.ID, h.cliLoginWatcher)
+	h.state.subscriptions.Track(params.ID, h.cliLoginWatcher)
 
 	if err := conn.Reply(ctx, req.ID, rpc.CLIAuthLoginSubscribeResult{Login: login}); err != nil {
 		h.log.Error("failed to send cli auth login subscribe response", "error", err)

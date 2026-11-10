@@ -34,6 +34,7 @@ import (
 	"github.com/pockode/server/agentrole"
 	"github.com/pockode/server/cliauth"
 	"github.com/pockode/server/cliupdate"
+	"github.com/pockode/server/cloudlogin"
 	"github.com/pockode/server/command"
 	"github.com/pockode/server/contents"
 	"github.com/pockode/server/git"
@@ -2264,4 +2265,40 @@ const (
 // empty for a failure none of the reasons describes.
 type UpdateFailedData struct {
 	Reason string `json:"reason"`
+}
+
+// Cloud link namespace: linking this machine to a cloud account from the UI,
+// with the process running the device flow (see package cloudlogin). A server,
+// a node and a cluster each serve it for themselves.
+
+// CodeCloudLinkUnavailable answers every cloud_link request on a process that
+// cannot keep a cloud credential — the OS user has no configuration directory
+// to keep cloud.json in. Nothing changes that short of a restart, so a client
+// shows linking as unavailable rather than retrying.
+const CodeCloudLinkUnavailable = -32013
+
+// CloudLinkSubscribeResult is the link's status now. Changes arrive as
+// cloud_link.changed notifications carrying the whole status again, with the
+// subscription id beside it: a flow's progress, a link or unlink made here,
+// and the relay's account result changing — which is also how a link or unlink
+// of this cloud's token made by another process or the CLI shows up. Any other
+// outside change to cloud.json, and every one with the relay disabled, shows
+// only once the status is read again — for a later notification or a new
+// subscribe. A notification follows the reply, so one that overtook the reply
+// does not leave the client on the older status.
+type CloudLinkSubscribeResult struct {
+	Status cloudlogin.Status `json:"status"`
+}
+
+// CloudLinkFlowResult is the flow a command acted on, as it is afterwards.
+type CloudLinkFlowResult struct {
+	Flow cloudlogin.Flow `json:"flow"`
+}
+
+type CloudLinkCancelParams struct {
+	FlowID string `json:"flow_id"`
+}
+
+type CloudLinkUnlinkResult struct {
+	Unlinked cloudlogin.Unlinked `json:"unlinked"`
 }

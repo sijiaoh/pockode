@@ -26,11 +26,14 @@ import (
 	"github.com/pockode/server/cliauth"
 	"github.com/pockode/server/cliauth/cliauthtest"
 	"github.com/pockode/server/cliupdate"
+	"github.com/pockode/server/cloudcred"
+	"github.com/pockode/server/cloudlogin"
 	"github.com/pockode/server/command"
 	"github.com/pockode/server/contents"
 	"github.com/pockode/server/filetransfer"
 	"github.com/pockode/server/git"
 	"github.com/pockode/server/internal/authsessiontest"
+	"github.com/pockode/server/internal/cloudlinktest"
 	"github.com/pockode/server/internal/unwritabletest"
 	"github.com/pockode/server/rpc"
 	"github.com/pockode/server/schedule"
@@ -95,8 +98,10 @@ type testEnv struct {
 	handler         *RPCHandler
 	raw             *rawCapabilitiesStub
 	restarter       *restart.Restarter
-	releases        *fakeReleaseChecker // what server.update_check finds published
-	installer       *fakeInstaller      // what server.update installs with
+	releases        *fakeReleaseChecker  // what server.update_check finds published
+	installer       *fakeInstaller       // what server.update installs with
+	cloud           *cloudlinktest.Cloud // the cloud cloud_link.* links to
+	cloudCredential *cloudcred.Store     // cloud.json as cloud_link.* sees it
 	server          *httptest.Server
 	conn            *websocket.Conn
 	ctx             context.Context
@@ -188,10 +193,15 @@ func newTestEnvWithAgent(t *testing.T, mock *mockAgent, ag agent.Agent, workDir 
 	cliAuthService := cliauth.NewService(slog.Default())
 	cliAuthService.Register(session.AgentTypeClaude, cliAuth)
 
+	cloud := cloudlinktest.New(t)
+	cloudCredential := cloudcred.NewStore(t.TempDir())
+	cloudLinks := cloudlogin.NewService(cloud.URL, cloudCredential, nil, slog.Default())
+	t.Cleanup(cloudLinks.Close)
+
 	restarter := restart.New(restarttest.Executable(workDir))
 	checker, installer := &fakeReleaseChecker{}, &fakeInstaller{}
 	raw := &rawCapabilitiesStub{}
-	h := NewRPCHandler(testPassword, authguard.New(), authsessiontest.New(), "test", func() string { return "" }, authsession.NewTickets(), raw, true, cmdStore, worktreeManager, settingsStore, workStore, workOps, workEngine, agentRoleStore, scheduleStore, scheduler, cliAuthService, cliupdate.NewService(slog.Default(), nil, nil), restarter, NewUpdater(checker, installer))
+	h := NewRPCHandler(testPassword, authguard.New(), authsessiontest.New(), "test", func() string { return "" }, authsession.NewTickets(), raw, true, cmdStore, worktreeManager, settingsStore, workStore, workOps, workEngine, agentRoleStore, scheduleStore, scheduler, cliAuthService, cliupdate.NewService(slog.Default(), nil, nil), cloudLinks, restarter, NewUpdater(checker, installer))
 	server := httptest.NewServer(h)
 
 	// No deadline of its own: every read and write is bounded individually (see
@@ -218,6 +228,8 @@ func newTestEnvWithAgent(t *testing.T, mock *mockAgent, ag agent.Agent, workDir 
 		restarter:       restarter,
 		releases:        checker,
 		installer:       installer,
+		cloud:           cloud,
+		cloudCredential: cloudCredential,
 		handler:         h,
 		raw:             raw,
 		server:          server,
@@ -585,7 +597,7 @@ func newMinimalTestHandler(t *testing.T, password string, remoteURL func() strin
 	scheduler := schedule.NewScheduler(scheduleStore, workOps)
 	workOps.SetRunRecorder(scheduler)
 
-	h := NewRPCHandler(password, authguard.NewFrozen(), sessions, "test", remoteURL, tickets, &rawCapabilitiesStub{}, true, cmdStore, worktreeManager, settingsStore, workStore, workOps, work.NewEngine(workStore, work.DefaultMaxNudges), agentRoleStore, scheduleStore, scheduler, cliauth.NewService(slog.Default()), cliupdate.NewService(slog.Default(), nil, nil), restart.New(restarttest.Executable(workDir)), NewUpdater(&fakeReleaseChecker{}, &fakeInstaller{}))
+	h := NewRPCHandler(password, authguard.NewFrozen(), sessions, "test", remoteURL, tickets, &rawCapabilitiesStub{}, true, cmdStore, worktreeManager, settingsStore, workStore, workOps, work.NewEngine(workStore, work.DefaultMaxNudges), agentRoleStore, scheduleStore, scheduler, cliauth.NewService(slog.Default()), cliupdate.NewService(slog.Default(), nil, nil), nil, restart.New(restarttest.Executable(workDir)), NewUpdater(&fakeReleaseChecker{}, &fakeInstaller{}))
 	t.Cleanup(h.Stop)
 	return h
 }
