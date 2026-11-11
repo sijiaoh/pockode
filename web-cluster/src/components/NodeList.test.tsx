@@ -451,6 +451,28 @@ describe("NodeList: polling", () => {
 			wsState.status = "connected";
 		}
 	});
+
+	// A poll the cluster refused is the list's failure, not the page's: the
+	// header — and a sheet it holds open, such as a cloud link waiting for
+	// approval — stays, and the next poll that answers puts the list back.
+	it("says a failed poll in place of the list, under a header that stays", async () => {
+		render(<NodeList />);
+		await screen.findByRole("heading", { name: "only" });
+
+		actions.listNodes.mockRejectedValueOnce(new Error("disk unreadable"));
+		await act(async () => {
+			await vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS);
+		});
+		expect(screen.getByText("disk unreadable")).toBeVisible();
+		expect(screen.queryByRole("heading", { name: "only" })).toBeNull();
+		expect(screen.getByRole("button", { name: "Cloud account" })).toBeVisible();
+
+		await act(async () => {
+			await vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS);
+		});
+		expect(screen.getByRole("heading", { name: "only" })).toBeVisible();
+		expect(screen.queryByText("disk unreadable")).toBeNull();
+	});
 });
 
 describe("NodeList: a half-finished Stop and delete", () => {

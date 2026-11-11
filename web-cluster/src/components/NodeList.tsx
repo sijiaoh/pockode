@@ -483,17 +483,6 @@ export function NodeList() {
 		);
 	}
 
-	if (loadError) {
-		return (
-			<div className="flex flex-1 flex-col items-center justify-center gap-4 px-4 text-center">
-				<div className="text-th-error">{loadError}</div>
-				<button type="button" onClick={fetchNodes} className={PRIMARY_BUTTON}>
-					Retry
-				</button>
-			</div>
-		);
-	}
-
 	return (
 		<div className="flex flex-1 flex-col">
 			<header className="flex min-h-14 shrink-0 items-center justify-between border-b border-th-border px-4 py-2">
@@ -562,7 +551,20 @@ export function NodeList() {
 				    window does; past the expanded tier the spare width becomes a
 				    second column instead. */}
 				<div className="mx-auto max-w-3xl py-4">
-					{nodes.length === 0 ? (
+					{/* In the body, not in place of the page: the header's sheets — a
+					    cloud link waiting for approval, say — outlive one failed poll. */}
+					{loadError ? (
+						<div className="flex flex-col items-center justify-center gap-4 py-16 text-center">
+							<div className="text-th-error">{loadError}</div>
+							<button
+								type="button"
+								onClick={fetchNodes}
+								className={PRIMARY_BUTTON}
+							>
+								Retry
+							</button>
+						</div>
+					) : nodes.length === 0 ? (
 						<div className="flex flex-col items-center justify-center py-16 text-center">
 							<div className="flex h-16 w-16 items-center justify-center rounded-full bg-th-bg-tertiary text-th-text-muted">
 								<svg
