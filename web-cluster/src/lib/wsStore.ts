@@ -2,14 +2,22 @@ import {
 	type AuthCredential,
 	authFailureReason,
 	authRetryAfterMs,
+	type CloudLinkChangedNotification,
+	type CloudLinkStatus,
 	credentialParams,
 	getWebSocketUrl,
 	restartRefusedReason,
 } from "@pockode/shared";
-import { JSONRPCClient, JSONRPCErrorException } from "json-rpc-2.0";
+import {
+	JSONRPCClient,
+	JSONRPCErrorCode,
+	JSONRPCErrorException,
+} from "json-rpc-2.0";
 import { create } from "zustand";
 import { authActions } from "./authStore";
 import {
+	type CloudLinkActions,
+	createCloudLinkActions,
 	createNodeActions,
 	createServerActions,
 	type NodeActions,
@@ -22,11 +30,22 @@ const RPC_TIMEOUT_MS = 30000;
 const CONNECTION_LOST_MESSAGE = "Connection lost";
 
 /** Whether a request's socket went away before its answer came down it. */
-function isConnectionLost(error: unknown): boolean {
+export function isConnectionLost(error: unknown): boolean {
 	return (
 		error instanceof JSONRPCErrorException &&
 		error.code === 0 &&
 		error.message === CONNECTION_LOST_MESSAGE
+	);
+}
+
+/**
+ * Whether the server answered that the request named something wrong, as
+ * opposed to failing to answer it. Mirrors the web client.
+ */
+export function isInvalidParamsRejection(error: unknown): boolean {
+	return (
+		error instanceof JSONRPCErrorException &&
+		error.code === JSONRPCErrorCode.InvalidParams
 	);
 }
 
@@ -73,6 +92,7 @@ interface AuthResult {
 
 interface RPCActions
 	extends NodeActions,
+		CloudLinkActions,
 		Pick<
 			ServerActions,
 			"serverVersion" | "serverUpdateCheck" | "serverUpdate"
@@ -88,6 +108,16 @@ interface RPCActions
 	 * cluster's refusal, which changed nothing. Mirrors the web client.
 	 */
 	restartServer: () => Promise<void>;
+	/**
+	 * Follow the machine's cloud link: the reply is the status now, and
+	 * `callback` gets every `cloud_link.changed` after it, each the whole
+	 * status. The subscription dies with the connection; subscribe again
+	 * after a reconnect.
+	 */
+	cloudLinkSubscribe: (
+		callback: (params: CloudLinkChangedNotification) => void,
+	) => Promise<{ id: string; status: CloudLinkStatus }>;
+	cloudLinkUnsubscribe: (id: string) => Promise<void>;
 }
 
 interface WSState {
@@ -132,6 +162,30 @@ const internal: InternalState = {
 	reconnectTimeout: null,
 };
 
+/** By subscription id; a subscription lives as long as its connection. */
+const cloudLinkCallbacks = new Map<
+	string,
+	(params: CloudLinkChangedNotification) => void
+>();
+
+/**
+ * A subscription id. The server shares one id space among all its clients
+ * and refuses one in use, so it is random rather than a per-page counter;
+ * `crypto.randomUUID` is missing outside a secure context, which a cluster
+ * reached over plain HTTP on a LAN is.
+ */
+function subscriptionId(): string {
+	const bytes = crypto.getRandomValues(new Uint8Array(16));
+	return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+function handleNotification(method: string, params: unknown): void {
+	if (method === "cloud_link.changed") {
+		const changed = params as CloudLinkChangedNotification;
+		cloudLinkCallbacks.get(changed.id)?.(changed);
+	}
+}
+
 /**
  * Stop holding the current socket and close it.
  *
@@ -146,6 +200,7 @@ function releaseSocket(): void {
 	socket?.close();
 	internal.client?.rejectAllPendingRequests(CONNECTION_LOST_MESSAGE);
 	internal.client = null;
+	cloudLinkCallbacks.clear();
 }
 
 function createRPCClient(socket: WebSocket): JSONRPCClient {
@@ -163,6 +218,7 @@ export const useWSStore = create<WSState>()((set, get) => {
 
 	const nodeActions = createNodeActions(getClient);
 	const serverActions = createServerActions(getClient);
+	const cloudLinkActions = createCloudLinkActions(getClient);
 
 	const clearReconnectTimeout = () => {
 		if (internal.reconnectTimeout) {
@@ -314,6 +370,8 @@ export const useWSStore = create<WSState>()((set, get) => {
 				// Route responses to pending requests
 				if ("id" in data && data.id !== null) {
 					internal.client?.receive(data);
+				} else if ("method" in data) {
+					handleNotification(data.method, data.params);
 				}
 			} catch {
 				// Ignore parse errors
@@ -336,6 +394,7 @@ export const useWSStore = create<WSState>()((set, get) => {
 			// carry no timeout, so without this they would hang for good.
 			internal.client?.rejectAllPendingRequests(CONNECTION_LOST_MESSAGE);
 			internal.client = null;
+			cloudLinkCallbacks.clear();
 
 			const currentStatus = get().status;
 
@@ -365,6 +424,7 @@ export const useWSStore = create<WSState>()((set, get) => {
 		restartRequestedAt: null,
 		actions: {
 			...nodeActions,
+			...cloudLinkActions,
 			serverVersion: serverActions.serverVersion,
 			serverUpdateCheck: serverActions.serverUpdateCheck,
 			serverUpdate: serverActions.serverUpdate,
@@ -409,6 +469,32 @@ export const useWSStore = create<WSState>()((set, get) => {
 					restartRequestedAt: null,
 				});
 				releaseSocket();
+			},
+			cloudLinkSubscribe: async (callback) => {
+				const client = getClient();
+				if (!client) throw new Error("Not connected");
+				const id = subscriptionId();
+				// Registered before the request: a change can be notified before
+				// the reply arrives.
+				cloudLinkCallbacks.set(id, callback);
+				try {
+					const result: { status: CloudLinkStatus } = await client.request(
+						"cloud_link.subscribe",
+						{ id },
+					);
+					return { id, status: result.status };
+				} catch (err) {
+					cloudLinkCallbacks.delete(id);
+					throw err;
+				}
+			},
+			cloudLinkUnsubscribe: async (id) => {
+				cloudLinkCallbacks.delete(id);
+				try {
+					await getClient()?.request("cloud_link.unsubscribe", { id });
+				} catch {
+					// The connection may be gone, and the subscription with it.
+				}
 			},
 			restartServer: async () => {
 				try {

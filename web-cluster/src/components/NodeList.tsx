@@ -9,6 +9,7 @@ import { isOlderNode, nodeVersionKind, olderNodeKey } from "../lib/version";
 import { useWSStore } from "../lib/wsStore";
 import type { NodeStatus, NodeWithStatus } from "../types/node";
 import { PRIMARY_BUTTON } from "./buttons";
+import { CloudLink } from "./CloudLink";
 import { ClusterVersion } from "./ClusterVersion";
 import { NodeCard, type RestartResult } from "./NodeCard";
 import { NodeForm } from "./NodeForm";
@@ -523,6 +524,7 @@ export function NodeList() {
 					</p>
 				</div>
 				<div className="flex items-center gap-2">
+					<CloudLink />
 					{version && (
 						<ClusterVersion running={version} installedState={installedState} />
 					)}

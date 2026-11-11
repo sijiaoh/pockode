@@ -19,6 +19,9 @@ const actions = {
 	// The release check is ClusterVersion.update.test.tsx's; here it never answers.
 	serverUpdateCheck: vi.fn(() => new Promise(() => {})),
 	restartServer: vi.fn(),
+	// The header's Cloud button is CloudLink.test.tsx's; here it never answers.
+	cloudLinkSubscribe: vi.fn(() => new Promise(() => {})),
+	cloudLinkUnsubscribe: vi.fn(),
 };
 
 const wsState = {
@@ -29,7 +32,11 @@ const wsState = {
 };
 
 vi.mock("../lib/wsStore", () => ({
-	useWSStore: Object.assign(() => wsState, { getState: () => wsState }),
+	useWSStore: Object.assign(
+		(select?: (state: typeof wsState) => unknown) =>
+			select ? select(wsState) : wsState,
+		{ getState: () => wsState },
+	),
 }));
 
 const INSTALLED = "0.17.0";

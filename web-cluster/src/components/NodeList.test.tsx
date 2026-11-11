@@ -24,6 +24,9 @@ const actions = {
 	// The release check is ClusterVersion.update.test.tsx's; here it never answers.
 	serverUpdateCheck: vi.fn(() => new Promise(() => {})),
 	restartServer: vi.fn(),
+	// The header's Cloud button is CloudLink.test.tsx's; here it never answers.
+	cloudLinkSubscribe: vi.fn(() => new Promise(() => {})),
+	cloudLinkUnsubscribe: vi.fn(),
 };
 
 // Mutable so a test can speak for the store: the header renders the version
@@ -36,7 +39,11 @@ const wsState: {
 } = { status: "connected", version: null, restartRequestedAt: null, actions };
 
 vi.mock("../lib/wsStore", () => ({
-	useWSStore: Object.assign(() => wsState, { getState: () => wsState }),
+	useWSStore: Object.assign(
+		(select?: (state: typeof wsState) => unknown) =>
+			select ? select(wsState) : wsState,
+		{ getState: () => wsState },
+	),
 }));
 
 describe("NodeList: a refused cleanup", () => {

@@ -17,3 +17,6 @@ export const NEUTRAL_BUTTON = `${BUTTON_BASE} border border-th-border text-th-te
 export const DANGER_BUTTON = `${BUTTON_BASE} bg-th-error text-th-text-inverse hover:opacity-90`;
 export const MENU_ITEM =
 	"flex min-h-[44px] items-center rounded-lg px-3 py-2 text-left hover:bg-th-overlay-hover";
+/** An action beside the text it acts on: a link-coloured word, still a thumb's width. */
+export const TEXT_BUTTON =
+	"inline-flex min-h-9 shrink-0 items-center gap-1.5 rounded-md px-2 text-sm text-th-accent hover:bg-th-overlay-hover disabled:opacity-50 pointer-coarse:min-h-11";

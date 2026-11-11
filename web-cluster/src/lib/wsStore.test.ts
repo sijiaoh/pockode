@@ -612,3 +612,56 @@ describe("wsStore restartServer", () => {
 		expect(useWSStore.getState().restartRequestedAt).toBeNull();
 	});
 });
+
+describe("wsStore cloud_link subscription", () => {
+	/** Answers the next `cloud_link.subscribe` the socket sends with `status`. */
+	function answerSubscribe(status: unknown) {
+		const ws = currentMockWs;
+		const calls = ws?.send.mock.calls ?? [];
+		const frame = calls
+			.map(([data]) => JSON.parse(String(data)))
+			.findLast((f) => f.method === "cloud_link.subscribe");
+		ws?.simulateMessage({ jsonrpc: "2.0", id: frame.id, result: { status } });
+		return frame.params.id as string;
+	}
+
+	it("routes cloud_link.changed to the subscription it names, and only while its connection lives", async () => {
+		const useWSStore = await connectAndAuth();
+		const callback = vi.fn();
+		const subscribed = useWSStore
+			.getState()
+			.actions.cloudLinkSubscribe(callback);
+		const id = answerSubscribe({ credential: "none" });
+		await expect(subscribed).resolves.toEqual({
+			id,
+			status: { credential: "none" },
+		});
+
+		const changed = { id, status: { credential: "linked" } };
+		currentMockWs?.simulateMessage({
+			jsonrpc: "2.0",
+			method: "cloud_link.changed",
+			params: changed,
+		});
+		currentMockWs?.simulateMessage({
+			jsonrpc: "2.0",
+			method: "cloud_link.changed",
+			params: { id: "someone-else", status: { credential: "none" } },
+		});
+		expect(callback).toHaveBeenCalledTimes(1);
+		expect(callback).toHaveBeenCalledWith(changed);
+
+		// The subscription died with the socket: a late notification for it on
+		// the next connection is nobody's.
+		currentMockWs?.simulateClose();
+		await vi.advanceTimersByTimeAsync(3000);
+		currentMockWs?.simulateOpen();
+		await vi.runAllTimersAsync();
+		currentMockWs?.simulateMessage({
+			jsonrpc: "2.0",
+			method: "cloud_link.changed",
+			params: changed,
+		});
+		expect(callback).toHaveBeenCalledTimes(1);
+	});
+});
