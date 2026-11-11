@@ -128,9 +128,11 @@ projects and cluster nodes — from your cloud account.
   the page becomes visible, as the AI CLIs section re-reads. The read is local
   and cheap.
 - **The card is focusable** (`tabIndex={-1}`, as `PockodeSection`'s): when the
-  sheet or a dialog closes into a state whose row no longer has the button that
-  opened it — Link became Continue, Unlink became Link — focus goes to the
-  card, never to `body`.
+  sheet or a dialog closes and the button that opened it has gone — the
+  notice's Unlink, once the link it was about is gone, or a dialog the status
+  closed by itself — focus goes to the card, never to `body`. A row's action
+  button stays the same element when its label changes (Link becomes
+  Continue), so focus returns to it as usual.
 
 Desktop gets the same layout: Settings is `max-w-2xl`, and the action belongs
 next to the line it acts on.
@@ -168,7 +170,9 @@ account.
 "started earlier" and not "on another screen", for the reason
 [cli-login-ui.md](cli-login-ui.md#the-card-states) gives: after a reload this
 page is new, and nothing tells it apart from a second device. "This page
-started it" is the set of flow ids this section's `start` calls returned.
+started it" is the set of flow ids this page's `start` calls returned, kept
+in memory until a reload — leaving Settings and coming back does not make the
+user's own flow one "started earlier".
 
 "Status unavailable" exists so a failed read is never drawn as "Not linked"
 (*No silent failures*): the benign guess would send the user into a link that
@@ -284,7 +288,7 @@ The section keeps one copy of the latest flow, fed by the subscription's
 snapshot, `cloud_link.changed`, and the replies of `start` and `cancel`. Within
 one subscription, the copy with the higher `revision` wins whatever its `id` —
 the process's revision counter is shared by all its flows, so a higher revision
-is always the newer news (a contract change, *What the UI needs to read*). A new
+is always the newer news (*What the UI needs to read*). A new
 snapshot (after a reconnect) replaces the copy outright: revisions restart with
 the process.
 
@@ -294,7 +298,9 @@ the process.
   started it a moment earlier; the reply will be that same flow), and an
   *ended* flow is ignored: it is an earlier attempt, not this one.
 - After that the sheet shows the copy. A flow started elsewhere while the sheet
-  is up replaces the one it showed: it is still the user's own.
+  is up replaces the one it showed: it is still the user's own. An ending
+  already on screen gives way only to a running flow, never to another ended
+  one — that is an attempt the sheet never showed.
 - **`start` rejected**: the sheet stays on *Starting*'s layout with the error
   under it (`text-xs text-th-error role="alert"`) and **Try again** · Close. A
   `-32013` here closes the sheet into the card's *Unavailable*.
@@ -481,8 +487,8 @@ Cancel closes the sheet. It is for a screen that was following the flow.
 
 `left_behind` on *Already linked* or *Failed* adds a warning block under the
 body: "An extra entry for this machine may be left in your cloud account.
-Remove it on {host} ↗." The approval created a link nothing on this machine
-uses, and only the web can remove it.
+Remove it on {host}." with **Open {host} ↗** under it. The approval created a
+link nothing on this machine uses, and only the web can remove it.
 
 ### Closing and cancelling
 
@@ -587,25 +593,29 @@ node's Settings links the cluster and every node with it.
 | Piece | Where | What |
 |-------|-------|------|
 | `useCloudLinkSubscription` | `web/src/hooks/` | `cloud_link.subscribe` over `useSubscription` (`resubscribeOnWorktreeChange: false` — the status is the process's, not a worktree's); the latest-flow copy and its revision rule; the flow ids this page started; re-subscribes on page visibility. No global store: nothing outside this section reads the link, and the flow comes back with the snapshot |
-| `cloudLink` RPC actions | `web/src/lib/rpc/cloudLink.ts` | `subscribe`, `unsubscribe`, `start`, `cancel`, `unlink` (long requester); `-32013` surfaced as its own error kind |
+| `cloudLinkSubscribe` / `cloudLinkUnsubscribe` | `web/src/lib/wsStore.ts` | Beside the other watch subscriptions, which open through the store's own `openSubscription` |
+| `cloudLink` RPC actions | `web/src/lib/rpc/cloudLink.ts` | `start`, `cancel`, `unlink` (long requester); `isCloudLinkUnavailable` reads `-32013` |
 | `CloudLinkSection` | `web/src/components/Settings/sections/` | The intro, the card (machine row, instance row, *Last attempt*, the two confirms and the revoke notice), the sheet |
 | `CloudLinkSheet` | `web/src/components/CloudLink/` | Every phase above |
+| `cloudLinkText` | `web/src/components/CloudLink/` | The words the card and the sheet share: the instance line, the user code's two spellings, hosts |
 | `QrCode` | `web/src/components/ui/` | An SVG drawn from a module matrix; knows nothing about links |
 
-Reused: `CliRow` / `CliRowNotice`, `ExpiryLine`, `Details`, the button classes
-in `CliLogin/loginParts.tsx`, `useCopyToClipboard`, `Sheet`, `ConfirmDialog`,
-`useHasFinePointer`. `SignInLink` gains `label` and `primary` props. The card's
-countdown ("Expires in m:ss" in a subtitle) and `ExpiryLine` share one
-`useExpiryText(expiresAt)`, moved out of `ExpiryLine`, so there is one
-countdown. `CliRow` and the button classes are by now shared by three sections
-and two sheets; moving them to `components/ui/` is a fair follow-up, not part of
-this change.
+Reused: `CliRow` / `CliRowNotice` and its status `Dot` (moved there from
+`CliAccountRow`), `ExpiryLine`, `Details`, `Outcome` (moved out of
+`CliLoginSheet` into `CliLogin/loginParts.tsx`), the button classes there,
+`Sheet`, `ConfirmDialog`, `useHasFinePointer`. `SignInLink` gains `label` and
+`primary` props. The card's countdown ("Expires in m:ss" in a subtitle) and
+`ExpiryLine` share one `useExpiryText(expiresAt)`, moved out of `ExpiryLine`,
+so there is one countdown. `CliRow` puts a cut title or subtitle's full text in
+its `title` attribute, for every card built on it. `CliRow` and the button
+classes are by now shared by three sections and two sheets; moving them to
+`components/ui/` is a fair follow-up, not part of this change.
 
 None of it goes into `@pockode/shared`: `web-cluster` does not use it.
 
 ### The QR code library
 
-`web` has none today. Use **`uqr`** — no dependencies, ESM, a few kB, and
+`web` had none before this. It uses **`uqr`** — no dependencies, ESM, a few kB, and
 `encode()` returns the module matrix, so `QrCode` draws its own SVG with the
 theme-proof colours above instead of styling a library's markup or a canvas.
 `qrcode` (canvas and data-URL oriented, with Node-only dependencies) and
@@ -614,13 +624,13 @@ give less for more.
 
 ## What the UI needs to read
 
-Everything in [The Status](code/cloud-account.md#the-status), plus two fields
-it does not have yet, both read locally like the rest, and one promise it does
-not make yet:
+Everything in [The Status](code/cloud-account.md#the-status). Three parts of it
+were added for this UI — two fields, read locally like the rest, and one
+promise:
 
 - **`machine_name`** — `os_user@hostname` as the device flow sends it
   (`currentMachine`): this machine's name as it would be linked now. The card,
-  the sheet's subtitle and both confirms are drawn from it; today it arrives
+  the sheet's subtitle and both confirms are drawn from it; before, it arrived
   only on a flow that ended `linked` or `already_linked`. The cloud named the
   machine when it was linked, so after a hostname change the two can differ;
   the UI names the machine the user is looking at, which is the one that
@@ -628,14 +638,13 @@ not make yet:
   copy then says "this machine".
 - **`other_cloud_url`** — `cloud.json`'s `cloud_url`, with `credential:
   other_cloud`. The other cloud is named on the card and in the confirm before
-  the user replaces its link; today it arrives only in the unlink reply, after
-  the fact.
-- **`revision` comparable across flows.** The process already keeps one
-  counter for all its flows, but `Flow.Revision`'s comment and
-  [The Status](code/cloud-account.md#the-status) promise only that copies with
-  the same id compare. *Which flow it shows* needs the stronger promise —
-  within one process, any two copies compare — written into both, so a later
-  change to the server cannot quietly break it.
+  the user replaces its link; before, it arrived only in the unlink reply,
+  after the fact.
+- **`revision` comparable across flows.** The process keeps one counter for
+  all its flows, and `Flow.Revision`'s comment and
+  [The Status](code/cloud-account.md#the-status) promise it: within one
+  process, any two copies compare. *Which flow it shows* depends on that, so it
+  is written down where a later change to the server would meet it.
 
 ## Privacy policy
 

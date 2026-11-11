@@ -38,7 +38,7 @@ import {
 import DeviceCodeStep from "./DeviceCodeStep";
 import { describeFailure } from "./loginOutcome";
 import {
-	Details,
+	Outcome,
 	primaryButtonClass,
 	secondaryButtonClass,
 } from "./loginParts";
@@ -640,38 +640,5 @@ function SignedIn({
 		>
 			{summary || null}
 		</Outcome>
-	);
-}
-
-function Outcome({
-	icon,
-	title,
-	children,
-	details,
-	detailsOpen = false,
-}: {
-	icon: ReactNode;
-	title: string;
-	children?: ReactNode;
-	details?: string;
-	detailsOpen?: boolean;
-}) {
-	return (
-		<div className="space-y-3">
-			<div className="flex gap-3">
-				<span className="mt-0.5 shrink-0" aria-hidden="true">
-					{icon}
-				</span>
-				<div className="min-w-0 space-y-1">
-					<h3 className="text-sm font-medium text-th-text-primary">{title}</h3>
-					{children && (
-						<p className="break-words text-sm text-th-text-secondary">
-							{children}
-						</p>
-					)}
-				</div>
-			</div>
-			{details && <Details details={details} defaultOpen={detailsOpen} />}
-		</div>
 	);
 }

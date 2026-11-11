@@ -27,6 +27,10 @@ import type {
 	CliUpdate,
 	CliUpdateChangedNotification,
 } from "../types/cliUpdate";
+import type {
+	CloudLinkChangedNotification,
+	CloudLinkStatus,
+} from "../types/cloudLink";
 import type { GitDiffChangedNotification, GitDiffData } from "../types/git";
 import type {
 	AuthParams,
@@ -78,6 +82,7 @@ import {
 	type ChatActions,
 	type CliAuthActions,
 	type CliUpdateActions,
+	type CloudLinkActions,
 	type CommandActions,
 	createAgentActions,
 	createAgentRoleActions,
@@ -85,6 +90,7 @@ import {
 	createChatActions,
 	createCliAuthActions,
 	createCliUpdateActions,
+	createCloudLinkActions,
 	createCommandActions,
 	createFileActions,
 	createGitActions,
@@ -310,6 +316,11 @@ export interface WatchActions {
 		callback: (params: RemoteUrlChangedNotification) => void,
 	) => Promise<WatchSubscribeResult<string>>;
 	remoteUrlUnsubscribe: (id: string) => Promise<void>;
+	/** This process's link to its cloud account, as it is now. */
+	cloudLinkSubscribe: (
+		callback: (params: CloudLinkChangedNotification) => void,
+	) => Promise<WatchSubscribeResult<CloudLinkStatus>>;
+	cloudLinkUnsubscribe: (id: string) => Promise<void>;
 }
 
 type RPCActions = ConnectionActions &
@@ -317,6 +328,7 @@ type RPCActions = ConnectionActions &
 	AgentRoleActions &
 	CliAuthActions &
 	CliUpdateActions &
+	CloudLinkActions &
 	AttachmentActions &
 	ChatActions &
 	CommandActions &
@@ -451,6 +463,10 @@ const remoteUrlWatchCallbacks = new Map<
 	string,
 	(params: RemoteUrlChangedNotification) => void
 >();
+const cloudLinkWatchCallbacks = new Map<
+	string,
+	(params: CloudLinkChangedNotification) => void
+>();
 
 /**
  * Clear worktree-scoped watch subscriptions. Called when switching worktrees.
@@ -489,6 +505,7 @@ function clearAllWatchSubscriptions(): void {
 	cliLoginWatchCallbacks.clear();
 	cliUpdateWatchCallbacks.clear();
 	remoteUrlWatchCallbacks.clear();
+	cloudLinkWatchCallbacks.clear();
 }
 
 /**
@@ -636,6 +653,10 @@ function getUpdateCheckClient(): JSONRPCRequester<void> | null {
 	return rpcClients?.withUpdateCheckTimeout ?? null;
 }
 
+function getCloudUnlinkClient(): JSONRPCRequester<void> | null {
+	return rpcClients?.withCloudUnlinkTimeout ?? null;
+}
+
 /**
  * This and AGENT_START_RPC_TIMEOUT_MS are exported because the tests advance a
  * fake clock across them: a second copy of either number goes stale the moment
@@ -734,6 +755,19 @@ const UPDATE_CHECK_SERVER_BUDGET_MS = 10_000 + 20_000;
  */
 const UPDATE_CHECK_RPC_TIMEOUT_MS = UPDATE_CHECK_SERVER_BUDGET_MS + 15_000;
 
+// Where: server/cloudlogin's client timeout (30s) bounds the revoke, and an
+// unlink first waits for a flow the user has just approved to save its token,
+// which is bounded by finishTimeout (30s) — one after the other
+// (docs/code/cloud-account.md#the-cloud_link-rpc).
+const CLOUD_UNLINK_SERVER_BUDGET_MS = 30_000 + 30_000;
+
+/**
+ * Timeout for `cloud_link.unlink`. At the default 30s an unlink waiting on a
+ * slow cloud would be reported as failed just as the server finished it.
+ */
+export const CLOUD_UNLINK_RPC_TIMEOUT_MS =
+	CLOUD_UNLINK_SERVER_BUDGET_MS + 15_000;
+
 interface RPCClients {
 	base: JSONRPCClient;
 	withTimeout: JSONRPCRequester<void>;
@@ -745,6 +779,8 @@ interface RPCClients {
 	withServerUpdateTimeout: JSONRPCRequester<void>;
 	/** For `server.update_check` only; see UPDATE_CHECK_RPC_TIMEOUT_MS. */
 	withUpdateCheckTimeout: JSONRPCRequester<void>;
+	/** For `cloud_link.unlink` only; see CLOUD_UNLINK_RPC_TIMEOUT_MS. */
+	withCloudUnlinkTimeout: JSONRPCRequester<void>;
 }
 
 function createRPCClient(socket: WebSocket): RPCClients {
@@ -766,6 +802,7 @@ function createRPCClient(socket: WebSocket): RPCClients {
 		withCommitDraftTimeout: base.timeout(COMMIT_DRAFT_RPC_TIMEOUT_MS, timedOut),
 		withServerUpdateTimeout: base.timeout(UPDATE_RPC_TIMEOUT_MS, timedOut),
 		withUpdateCheckTimeout: base.timeout(UPDATE_CHECK_RPC_TIMEOUT_MS, timedOut),
+		withCloudUnlinkTimeout: base.timeout(CLOUD_UNLINK_RPC_TIMEOUT_MS, timedOut),
 	};
 }
 
@@ -861,6 +898,11 @@ const watchNotificationHandlers: Record<string, WatchNotificationHandler> = {
 	"remote_url.changed": (params) => {
 		const changedParams = params as RemoteUrlChangedNotification;
 		remoteUrlWatchCallbacks.get(changedParams.id)?.(changedParams);
+		return true;
+	},
+	"cloud_link.changed": (params) => {
+		const changedParams = params as CloudLinkChangedNotification;
+		cloudLinkWatchCallbacks.get(changedParams.id)?.(changedParams);
 		return true;
 	},
 };
@@ -971,6 +1013,10 @@ const agentActions = createAgentActions(getClient);
 const agentRoleActions = createAgentRoleActions(getClient);
 const cliAuthActions = createCliAuthActions(getClient, getAgentStartClient);
 const cliUpdateActions = createCliUpdateActions(getClient);
+const cloudLinkActions = createCloudLinkActions(
+	getClient,
+	getCloudUnlinkClient,
+);
 const attachmentActions = createAttachmentActions(getClient);
 const chatActions = createChatActions(getClient, getAgentStartClient);
 const commandActions = createCommandActions(getClient);
@@ -1711,11 +1757,27 @@ export const useWSStore = create<WSState>((set, get) => ({
 		remoteUrlUnsubscribe: (id: string) =>
 			closeSubscription("remote_url.unsubscribe", id, remoteUrlWatchCallbacks),
 
+		cloudLinkSubscribe: async (
+			callback: (params: CloudLinkChangedNotification) => void,
+		) => {
+			const { id, result } = await openSubscription(
+				"cloud_link.subscribe",
+				{},
+				cloudLinkWatchCallbacks,
+				callback,
+			);
+			return { id, initial: (result as { status: CloudLinkStatus }).status };
+		},
+
+		cloudLinkUnsubscribe: (id: string) =>
+			closeSubscription("cloud_link.unsubscribe", id, cloudLinkWatchCallbacks),
+
 		// Spread namespace-specific actions
 		...agentActions,
 		...agentRoleActions,
 		...cliAuthActions,
 		...cliUpdateActions,
+		...cloudLinkActions,
 		...attachmentActions,
 		...chatActions,
 		...commandActions,

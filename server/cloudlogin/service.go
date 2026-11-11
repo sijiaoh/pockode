@@ -52,7 +52,16 @@ type Status struct {
 	// CloudURL is this process's -cloud-url, the cloud a flow links to.
 	CloudURL   string          `json:"cloud_url"`
 	Credential CredentialState `json:"credential"`
-	Relay      RelayState      `json:"relay"`
+	// OtherCloudURL is the cloud that issued the stored token, with
+	// CredentialOtherCloud: the one an unlink would revoke at.
+	OtherCloudURL string     `json:"other_cloud_url,omitempty"`
+	Relay         RelayState `json:"relay"`
+	// MachineName is this machine as a flow would identify it to the cloud
+	// now (os_user@hostname), read locally; empty when it cannot be worked
+	// out. The name the cloud lists is the one it was given at linking, so
+	// after a hostname change the two can differ: this one is the machine a
+	// link or an unlink acts on.
+	MachineName string `json:"machine_name,omitempty"`
 	// Email is the account the relay is attached to, with RelayAttached.
 	Email string `json:"email,omitempty"`
 	// Flow is the latest flow — the running one, or the last to end — or nil
@@ -105,10 +114,12 @@ const (
 // token never appear here: they stay in this process.
 type Flow struct {
 	ID string `json:"id"`
-	// Revision grows with every change to any flow. A reply and a change
-	// notification travel separately and can arrive in either order, so a
-	// client keeps whichever copy of a flow has the higher revision. Only
-	// copies with the same ID compare: revisions restart with the process.
+	// Revision grows with every change to any flow: one counter for all of a
+	// process's flows. A reply and a change notification travel separately
+	// and can arrive in either order, so a client keeps whichever copy has
+	// the higher revision — of the same flow or of another, since a newer
+	// flow's copies are always above an older one's. Only copies from the
+	// same process compare: revisions restart with it.
 	Revision  int64     `json:"revision"`
 	Phase     FlowPhase `json:"phase"`
 	StartedAt time.Time `json:"started_at"`
@@ -276,7 +287,10 @@ func (s *Service) Status() (Status, error) {
 	case token != "":
 		st.Credential = CredentialLinked
 	case cred != nil:
-		st.Credential = CredentialOtherCloud
+		st.Credential, st.OtherCloudURL = CredentialOtherCloud, cred.CloudURL
+	}
+	if m, err := currentMachine(); err == nil {
+		st.MachineName = m.name()
 	}
 
 	if s.relay != nil {

@@ -8,6 +8,7 @@ import { authActions, useAuthStore } from "./authStore";
 import { worktreeActions } from "./worktreeStore";
 import {
 	AGENT_START_RPC_TIMEOUT_MS,
+	CLOUD_UNLINK_RPC_TIMEOUT_MS,
 	COMMIT_DRAFT_RPC_TIMEOUT_MS,
 	isRPCTimeout,
 	RPC_TIMEOUT_MS,
@@ -967,6 +968,30 @@ describe("wsStore", () => {
 			expect(settled.done).toBe(false);
 
 			await vi.advanceTimersByTimeAsync(COMMIT_DRAFT_RPC_TIMEOUT_MS - 90000);
+			expect(isRPCTimeout(await caught)).toBe(true);
+		});
+
+		// An unlink may wait for an approved flow to save before it revokes, each
+		// bounded by the cloud client's 30s. Giving up at the default reports a
+		// failure the server is about to turn into success.
+		it("waits longer on an unlink than on other requests", async () => {
+			await connectAndAuth();
+			getMockWs()?.mockNoResponse();
+
+			const settled = { done: false };
+			const caught = wsActions
+				.cloudLinkUnlink()
+				.catch((error) => error)
+				.finally(() => {
+					settled.done = true;
+				});
+
+			await vi.advanceTimersByTimeAsync(RPC_TIMEOUT_MS);
+			expect(settled.done).toBe(false);
+
+			await vi.advanceTimersByTimeAsync(
+				CLOUD_UNLINK_RPC_TIMEOUT_MS - RPC_TIMEOUT_MS,
+			);
 			expect(isRPCTimeout(await caught)).toBe(true);
 		});
 	});

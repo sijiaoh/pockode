@@ -2,6 +2,7 @@ import {
 	AccountSection,
 	AppearanceSection,
 	CliSignInSection,
+	CloudLinkSection,
 	PockodeSection,
 	SessionSection,
 	ThemeSection,
@@ -17,6 +18,7 @@ const PRIORITY = {
 	WORKTREE: 30,
 	SESSION: 40,
 	CLI_SIGN_IN: 50,
+	CLOUD_LINK: 60,
 	POCKODE: 80,
 	ACCOUNT: 90,
 } as const;
@@ -62,6 +64,13 @@ export const activate: Extension["activate"] = (ctx) => {
 		label: "AI CLIs",
 		priority: PRIORITY.CLI_SIGN_IN,
 		component: CliSignInSection,
+	});
+
+	ctx.settings.register({
+		id: "cloud-link",
+		label: "Cloud",
+		priority: PRIORITY.CLOUD_LINK,
+		component: CloudLinkSection,
 	});
 
 	ctx.settings.register({

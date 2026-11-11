@@ -1,5 +1,5 @@
 import { ChevronRight, Clock, ExternalLink } from "lucide-react";
-import { type MouseEvent, useEffect, useState } from "react";
+import { type MouseEvent, type ReactNode, useEffect, useState } from "react";
 import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
 import { CollapsibleBody } from "../ui";
 
@@ -45,15 +45,30 @@ export function formatMinutes(ms: number): string {
 }
 
 /**
- * "Expires in m:ss", drawn from the server's `expires_at`. The server is the
- * clock: at zero this only stops counting, and the server ends the flow. Not a
- * live region — it would talk every second.
+ * "Expires in m:ss", drawn from the server's `expires_at`, and whether it is
+ * in its last minute. The server is the clock: at zero this only stops
+ * counting, and the server ends the flow. One countdown for every place that
+ * shows an expiry — a sheet's line and a card's subtitle.
  */
-export function ExpiryLine({ expiresAt }: { expiresAt: string }) {
+export function useExpiryText(expiresAt: string): {
+	text: string;
+	lastMinute: boolean;
+} {
 	const now = useNow();
 	// Never below 0: at the deadline the server ends the flow, not this.
 	const remaining = Math.max(0, Date.parse(expiresAt) - now);
-	const lastMinute = remaining <= 60_000;
+	return {
+		text: `Expires in ${formatMinutes(remaining)}`,
+		lastMinute: remaining <= 60_000,
+	};
+}
+
+/**
+ * The expiry under a flow's waiting line. Not a live region — it would talk
+ * every second.
+ */
+export function ExpiryLine({ expiresAt }: { expiresAt: string }) {
+	const { text, lastMinute } = useExpiryText(expiresAt);
 
 	return (
 		<p
@@ -64,7 +79,7 @@ export function ExpiryLine({ expiresAt }: { expiresAt: string }) {
 			{lastMinute && (
 				<Clock className="h-3.5 w-3.5 text-th-warning" aria-hidden="true" />
 			)}
-			Expires in {formatMinutes(remaining)}
+			{text}
 		</p>
 	);
 }
@@ -84,17 +99,23 @@ function displayUrl(url: string): string {
 }
 
 /**
- * "Open sign-in page" and "Copy link", with the page named under them. Copy
+ * A link to the page where the user approves in a browser — "Open sign-in
+ * page" by default — and "Copy link", with the page named under them. Copy
  * link is for doing the browser half on another device; when it fails, the
  * link is shown whole so it can be copied by hand.
  */
 export function SignInLink({
 	url,
 	onOpen,
+	label = "Open sign-in page",
+	primary = true,
 }: {
 	url: string;
 	/** Runs as the link opens, before the user has left. */
 	onOpen?: (e: MouseEvent<HTMLAnchorElement>) => void;
+	label?: string;
+	/** False where another way to the page leads, as a QR code does. */
+	primary?: boolean;
 }) {
 	const { state: copyState, copy } = useCopyToClipboard();
 
@@ -106,9 +127,9 @@ export function SignInLink({
 					target="_blank"
 					rel="noopener noreferrer"
 					onClick={onOpen}
-					className={`${primaryButtonClass} flex-1`}
+					className={`${primary ? primaryButtonClass : secondaryButtonClass} flex-1`}
 				>
-					Open sign-in page
+					{label}
 					<ExternalLink className="h-4 w-4" aria-hidden="true" />
 				</a>
 				<button
@@ -185,6 +206,40 @@ export function Details({
 					{details}
 				</pre>
 			</CollapsibleBody>
+		</div>
+	);
+}
+
+/** How a flow ended: an icon, a title that says what happened, and what to do. */
+export function Outcome({
+	icon,
+	title,
+	children,
+	details,
+	detailsOpen = false,
+}: {
+	icon: ReactNode;
+	title: string;
+	children?: ReactNode;
+	details?: string;
+	detailsOpen?: boolean;
+}) {
+	return (
+		<div className="space-y-3">
+			<div className="flex gap-3">
+				<span className="mt-0.5 shrink-0" aria-hidden="true">
+					{icon}
+				</span>
+				<div className="min-w-0 space-y-1">
+					<h3 className="text-sm font-medium text-th-text-primary">{title}</h3>
+					{children && (
+						<p className="break-words text-sm text-th-text-secondary">
+							{children}
+						</p>
+					)}
+				</div>
+			</div>
+			{details && <Details details={details} defaultOpen={detailsOpen} />}
 		</div>
 	);
 }

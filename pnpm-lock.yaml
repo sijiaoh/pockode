@@ -129,6 +129,9 @@ importers:
       textarea-caret:
         specifier: ^3.1.0
         version: 3.1.0
+      uqr:
+        specifier: ^0.1.3
+        version: 0.1.3
       yaml:
         specifier: ^2.9.1
         version: 2.9.1
@@ -3398,6 +3401,9 @@ packages:
     hasBin: true
     peerDependencies:
       browserslist: '>= 4.21.0'
+
+  uqr@0.1.3:
+    resolution: {integrity: sha512-0rjE8iEJe4YmT9TOhwsZtqCMRLc5DXZUI2UEYUUg63ikBkqqE5EYWaI0etFe/5KUcmcYwLih2RND1kq+hrUJXA==}
 
   use-composed-ref@1.4.0:
     resolution: {integrity: sha512-djviaxuOOh7wkj0paeO1Q/4wMZ8Zrnag5H6yBvzN7AKKe8beOaED9SF5/ByLqsku8NP4zQqsvM2u3ew/tJK8/w==}
@@ -7285,6 +7291,8 @@ snapshots:
       browserslist: 4.28.1
       escalade: 3.2.0
       picocolors: 1.1.1
+
+  uqr@0.1.3: {}
 
   use-composed-ref@1.4.0(@types/react@19.2.13)(react@19.2.4):
     dependencies:

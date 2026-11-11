@@ -92,7 +92,12 @@ func TestCloudLink_Flow(t *testing.T) {
 	env := newTestEnv(t, &mockAgent{})
 
 	subID, before := env.subscribeCloudLink()
-	want := cloudlogin.Status{CloudURL: env.cloud.URL, Credential: cloudlogin.CredentialNone, Relay: cloudlogin.RelayDisabled}
+	// The machine is named before it is linked, so the UI can say which one
+	// a link would cover; its value is the host's and pinned in cloudlogin.
+	if before.MachineName == "" {
+		t.Errorf("status before linking = %+v, want machine_name", before)
+	}
+	want := cloudlogin.Status{CloudURL: env.cloud.URL, Credential: cloudlogin.CredentialNone, Relay: cloudlogin.RelayDisabled, MachineName: before.MachineName}
 	if before != want {
 		t.Fatalf("status before linking = %+v, want %+v", before, want)
 	}

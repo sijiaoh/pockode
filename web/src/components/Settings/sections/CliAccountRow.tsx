@@ -14,7 +14,11 @@ import {
 } from "../../CliLogin/loginParts";
 import { Spinner } from "../../ui";
 import Skeleton from "../../ui/Skeleton";
-import CliRow, { CliRowNotice, type CliRowState as RowState } from "./CliRow";
+import CliRow, {
+	CliRowNotice,
+	Dot,
+	type CliRowState as RowState,
+} from "./CliRow";
 
 interface Props {
 	agent: AgentType;
@@ -190,14 +194,4 @@ function accountState(props: Props): RowState {
 				notice: { body: status?.error },
 			};
 	}
-}
-
-function Dot({ className, filled }: { className: string; filled?: boolean }) {
-	return (
-		<span
-			className={`inline-block h-2.5 w-2.5 rounded-full border-2 border-current ${
-				filled ? "bg-current" : ""
-			} ${className}`}
-		/>
-	);
 }

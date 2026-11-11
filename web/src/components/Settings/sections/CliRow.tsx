@@ -74,10 +74,16 @@ export default function CliRow({
 									className={`text-sm leading-5 ${wrap ? "break-words" : "truncate"} ${
 										dimmed ? "text-th-text-muted" : "text-th-text-primary"
 									}`}
+									// A cut line keeps its full value here: an email or a
+									// machine name is no use truncated.
+									title={wrap ? undefined : title}
 								>
 									{title}
 								</p>
-								<p className="truncate text-xs leading-4 text-th-text-muted">
+								<p
+									className="truncate text-xs leading-4 text-th-text-muted"
+									title={typeof subtitle === "string" ? subtitle : undefined}
+								>
 									{subtitle || " "}
 								</p>
 							</>
@@ -131,5 +137,22 @@ export function CliRowNotice({
 			)}
 			{footer && <div className="flex justify-end gap-2">{footer}</div>}
 		</div>
+	);
+}
+
+/** A row's status dot: hollow, or filled. Coloured by the caller. */
+export function Dot({
+	className,
+	filled,
+}: {
+	className: string;
+	filled?: boolean;
+}) {
+	return (
+		<span
+			className={`inline-block h-2.5 w-2.5 rounded-full border-2 border-current ${
+				filled ? "bg-current" : ""
+			} ${className}`}
+		/>
 	);
 }

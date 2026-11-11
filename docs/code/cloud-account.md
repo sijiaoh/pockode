@@ -87,6 +87,8 @@ What a client shows is one value, read entirely locally:
 |---|---|
 | `cloud_url` | The process's `-cloud-url`, the cloud a flow links to |
 | `credential` | `none`, `linked` (a token from this cloud), `other_cloud` (a token this process never uses; linking replaces it, unlinking revokes it there) |
+| `other_cloud_url` | With `other_cloud`: the cloud that issued the stored token, where an unlink would revoke it |
+| `machine_name` | `os_user@hostname`, as a flow would identify this machine to the cloud now; absent when it cannot be worked out. The cloud lists the name it was given at linking, so after a hostname change the two can differ |
 | `relay` | `disabled`; `pending` — the relay has not yet presented `cloud.json` as it is now; `guest`; `attached` (with `email`); `link_invalid` — linking again fixes it; `not_attached` — it does not ([why](#why-an-instance-is-not-attached)) |
 | `flow` | The running flow, or the last one to end, so a client that was away still learns how it ended; absent when there has been none since the process started |
 
@@ -102,7 +104,7 @@ A flow carries `id`, `phase` and `started_at`, plus what its phase needs:
 | `failed` | `failure.reason`: `expired`, `declined` or `other` (with `detail`); `left_behind` |
 | `canceled` | |
 
-`revision` grows with every change to any flow. A reply and a notification travel separately and can arrive in either order, so a client keeps whichever copy of a flow with the same `id` has the higher revision.
+`revision` grows with every change to any flow, from one counter per process, so any two copies from the same process compare — of one flow or of two, a newer flow's always being above an older one's. A reply and a notification travel separately and can arrive in either order, so a client keeps whichever copy has the higher revision. Revisions restart with the process: a client that subscribes again (after a reconnect) takes the new snapshot's flow as it is.
 
 `relay: pending` lets the UI tell "just linked, the relay is catching up" from a real guest. It reads that from `relay.Manager.AccountFor`, which reports whether the relay's last account result was for the token `cloud.json` holds now.
 

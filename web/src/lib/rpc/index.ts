@@ -20,6 +20,11 @@ export {
 	createCliUpdateActions,
 } from "./cliUpdate";
 export {
+	type CloudLinkActions,
+	createCloudLinkActions,
+	isCloudLinkUnavailable,
+} from "./cloudLink";
+export {
 	type Command,
 	type CommandActions,
 	createCommandActions,

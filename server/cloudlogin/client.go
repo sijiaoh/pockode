@@ -69,6 +69,11 @@ type machineIdentity struct {
 	OS       string `json:"os"`
 }
 
+// name is the machine as a person reads it: os_user@hostname.
+func (m machineIdentity) name() string {
+	return m.OSUser + "@" + m.Hostname
+}
+
 type deviceAuthorization struct {
 	DeviceCode              string `json:"device_code"`
 	UserCode                string `json:"user_code"`

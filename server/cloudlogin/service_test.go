@@ -218,10 +218,15 @@ func TestServiceRunsOneFlowAtATime(t *testing.T) {
 	}
 
 	s.poll()
-	s.awaitEnd()
+	ended := s.awaitEnd()
 	third, err := s.Start()
 	if err != nil || third.ID == first.ID {
 		t.Errorf("Start after the end = %+v, %v; want a new flow", third, err)
+	}
+	// One counter for every flow: a client keeps whichever copy has the
+	// higher revision, whatever its id.
+	if third.Revision <= ended.Revision {
+		t.Errorf("new flow's revision %d, want above the ended flow's %d", third.Revision, ended.Revision)
 	}
 }
 
@@ -341,6 +346,13 @@ func TestServiceKeepsAValidLink(t *testing.T) {
 
 func TestServiceStatus(t *testing.T) {
 	const cloudURL = "https://cloud.example"
+	machine, err := currentMachine()
+	if err != nil {
+		t.Fatalf("currentMachine: %v", err)
+	}
+	// The name a flow would send, so the UI can name the machine before it is
+	// linked.
+	machineName := machine.OSUser + "@" + machine.Hostname
 	for _, tt := range []struct {
 		name string
 		// stored is cloud.json's cloud and token; "" cloud for no file.
@@ -349,22 +361,23 @@ func TestServiceStatus(t *testing.T) {
 		wantCredential           CredentialState
 		wantRelay                RelayState
 		wantEmail                string
+		wantOtherCloud           string
 	}{
-		{"guest", "", "", &fakeRelay{}, CredentialNone, RelayGuest, ""},
+		{"guest", "", "", &fakeRelay{}, CredentialNone, RelayGuest, "", ""},
 		{"attached", cloudURL, linkedToken,
 			&fakeRelay{token: linkedToken, account: relay.Account{Email: "alice@example.com"}},
-			CredentialLinked, RelayAttached, "alice@example.com"},
+			CredentialLinked, RelayAttached, "alice@example.com", ""},
 		{"link invalid", cloudURL, revokedToken,
 			&fakeRelay{token: revokedToken, account: relay.Account{Error: "invalid_machine_token"}},
-			CredentialLinked, RelayLinkInvalid, ""},
+			CredentialLinked, RelayLinkInvalid, "", ""},
 		{"not attached", cloudURL, linkedToken,
 			&fakeRelay{token: linkedToken, account: relay.Account{Error: "internal_error"}},
-			CredentialLinked, RelayNotAttached, ""},
+			CredentialLinked, RelayNotAttached, "", ""},
 		// Linked by another process; the relay's watcher has yet to notice.
-		{"pending", cloudURL, linkedToken, &fakeRelay{}, CredentialLinked, RelayPending, ""},
+		{"pending", cloudURL, linkedToken, &fakeRelay{}, CredentialLinked, RelayPending, "", ""},
 		// A token from another cloud is not this process's: it is a guest.
-		{"other cloud", "https://other.example", linkedToken, &fakeRelay{}, CredentialOtherCloud, RelayGuest, ""},
-		{"relay disabled", cloudURL, linkedToken, nil, CredentialLinked, RelayDisabled, ""},
+		{"other cloud", "https://other.example", linkedToken, &fakeRelay{}, CredentialOtherCloud, RelayGuest, "", "https://other.example"},
+		{"relay disabled", cloudURL, linkedToken, nil, CredentialLinked, RelayDisabled, "", ""},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			var r Relay
@@ -380,7 +393,14 @@ func TestServiceStatus(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Status: %v", err)
 			}
-			want := Status{CloudURL: cloudURL, Credential: tt.wantCredential, Relay: tt.wantRelay, Email: tt.wantEmail}
+			want := Status{
+				CloudURL:      cloudURL,
+				Credential:    tt.wantCredential,
+				OtherCloudURL: tt.wantOtherCloud,
+				Relay:         tt.wantRelay,
+				Email:         tt.wantEmail,
+				MachineName:   machineName,
+			}
 			if st != want {
 				t.Errorf("Status = %+v, want %+v", st, want)
 			}
