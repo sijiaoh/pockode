@@ -18,7 +18,15 @@ const remedyButtonClass =
 	"min-h-[44px] px-3 text-sm text-th-accent focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent";
 
 function FileSearchResults({ search, onSelectFile, activeFilePath }: Props) {
-	const { status, result, error, mode, minQueryLength, matchedQuery } = search;
+	const {
+		status,
+		result,
+		error,
+		mode,
+		minQueryLength,
+		minCjkQueryLength,
+		matchedQuery,
+	} = search;
 
 	return (
 		<div className="flex min-h-0 flex-1 flex-col">
@@ -35,7 +43,8 @@ function FileSearchResults({ search, onSelectFile, activeFilePath }: Props) {
 					<div className={stateContainerClass}>
 						<Search className="h-8 w-8 text-th-text-muted" aria-hidden="true" />
 						<div className="text-sm text-th-text-muted">
-							Type at least {minQueryLength} characters to search file contents
+							Type at least {minQueryLength} characters, or {minCjkQueryLength}{" "}
+							in Chinese, Japanese or Korean, to search file contents
 						</div>
 					</div>
 				)}

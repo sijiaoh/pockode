@@ -26,10 +26,32 @@ export const FILE_SEARCH_DEBOUNCE_MS = 300;
 // them, and the ranked list it returns is mostly ties. Three is where a fuzzy
 // query starts to pick lines out. Matching names is cheap by comparison, so name
 // mode starts at one.
-const MIN_QUERY_LENGTH: Record<FileSearchMode, number> = {
+const MIN_QUERY_WEIGHT: Record<FileSearchMode, number> = {
 	name: 1,
 	content: 3,
 };
+
+// What the minimum guards is selectivity, not length. Two Latin letters occur in
+// order on nearly every line; two CJK characters rarely do, because a script
+// with thousands of characters spreads them thin — 超时, 検索 or 설정 already
+// picks lines out. Weighing each at 1.5 lets a two-character word reach three
+// while a single character, which still matches too broadly, stays short.
+const CJK_CHARACTER_WEIGHT = 1.5;
+const CJK_CHARACTER =
+	/[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u;
+
+/**
+ * Iterates code points, so a character outside the BMP weighs once. Composed
+ * first because a decomposed Hangul syllable — text pasted from a macOS file
+ * name — is two or three jamo, which would let one syllable pass as a word.
+ */
+function queryWeight(query: string): number {
+	let weight = 0;
+	for (const character of query.normalize("NFC")) {
+		weight += CJK_CHARACTER.test(character) ? CJK_CHARACTER_WEIGHT : 1;
+	}
+	return weight;
+}
 
 type FileSearchQueryKey = readonly [string, string, FileSearchMode, boolean];
 
@@ -47,7 +69,10 @@ export interface FileSearchState {
 	/** A request is in flight; previous results may still be on screen. */
 	isFetching: boolean;
 	mode: FileSearchMode;
+	/** Characters a query needs to search in this mode… */
 	minQueryLength: number;
+	/** …or, when written in Chinese, Japanese or Korean, this many. */
+	minCjkQueryLength: number;
 	/** The query `result` was produced from — use this to describe `result`. */
 	matchedQuery: string;
 	retry: () => void;
@@ -78,11 +103,11 @@ export function useFileSearch(query: string, active: boolean): FileSearchState {
 	);
 
 	const mode: FileSearchMode = searchContent ? "content" : "name";
-	const minQueryLength = MIN_QUERY_LENGTH[mode];
+	const minQueryWeight = MIN_QUERY_WEIGHT[mode];
 
 	const debouncedQuery = useDebouncedValue(query, FILE_SEARCH_DEBOUNCE_MS);
 	const requestedQuery = debouncedQuery.trim();
-	const enabled = active && requestedQuery.length >= minQueryLength;
+	const enabled = active && queryWeight(requestedQuery) >= minQueryWeight;
 
 	const { data, error, isError, isFetching, refetch } =
 		useQuery<FileSearchData>({
@@ -131,7 +156,7 @@ export function useFileSearch(query: string, active: boolean): FileSearchState {
 	return {
 		status: resolveStatus({
 			liveQuery: query.trim(),
-			minQueryLength,
+			minQueryWeight,
 			isError,
 			hasResult: data !== undefined,
 		}),
@@ -139,7 +164,8 @@ export function useFileSearch(query: string, active: boolean): FileSearchState {
 		error,
 		isFetching,
 		mode,
-		minQueryLength,
+		minQueryLength: minQueryWeight,
+		minCjkQueryLength: Math.ceil(minQueryWeight / CJK_CHARACTER_WEIGHT),
 		matchedQuery: data?.query ?? requestedQuery,
 		retry,
 	};
@@ -147,12 +173,12 @@ export function useFileSearch(query: string, active: boolean): FileSearchState {
 
 function resolveStatus({
 	liveQuery,
-	minQueryLength,
+	minQueryWeight,
 	isError,
 	hasResult,
 }: {
 	liveQuery: string;
-	minQueryLength: number;
+	minQueryWeight: number;
 	isError: boolean;
 	hasResult: boolean;
 }): FileSearchStatus {
@@ -161,7 +187,7 @@ function resolveStatus({
 	}
 	// Derived from the live query, not the debounced one, so shortening a query
 	// below the minimum reports it immediately instead of after the debounce.
-	if (liveQuery.length < minQueryLength) {
+	if (queryWeight(liveQuery) < minQueryWeight) {
 		return "too-short";
 	}
 	if (isError) {

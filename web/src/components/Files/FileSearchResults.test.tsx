@@ -34,6 +34,7 @@ function renderResults(
 		isFetching: false,
 		mode: "content",
 		minQueryLength: 3,
+		minCjkQueryLength: 2,
 		matchedQuery: "needle",
 		retry: vi.fn(),
 		...overrides,
@@ -216,7 +217,12 @@ describe("FileSearchResults highlighting", () => {
 				],
 				truncated: false,
 			},
-			{ mode: "name", minQueryLength: 1, matchedQuery: "h/us" },
+			{
+				mode: "name",
+				minQueryLength: 1,
+				minCjkQueryLength: 1,
+				matchedQuery: "h/us",
+			},
 		);
 
 		// The file name is the row's title, drawn above its directory.
@@ -231,7 +237,12 @@ describe("FileSearchResults highlighting", () => {
 				matches: [{ path: "src/test.ts", name: "test.ts" }],
 				truncated: false,
 			},
-			{ mode: "name", minQueryLength: 1, matchedQuery: "!spec" },
+			{
+				mode: "name",
+				minQueryLength: 1,
+				minCjkQueryLength: 1,
+				matchedQuery: "!spec",
+			},
 		);
 
 		expect(container.querySelector("mark")).toBeNull();

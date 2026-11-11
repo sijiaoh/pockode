@@ -432,7 +432,9 @@ describe("FilesTab search", () => {
 		await settleSearch();
 
 		expect(
-			screen.getByText("Type at least 3 characters to search file contents"),
+			screen.getByText(
+				"Type at least 3 characters, or 2 in Chinese, Japanese or Korean, to search file contents",
+			),
 		).toBeInTheDocument();
 		expect(searchFiles).not.toHaveBeenCalled();
 
@@ -440,6 +442,26 @@ describe("FilesTab search", () => {
 		await settleSearch();
 
 		expect(lastSearchParams()).toMatchObject({ query: "abc", mode: "content" });
+	});
+
+	it("searches file contents from two Chinese, Japanese or Korean characters", async () => {
+		searchFiles.mockResolvedValue(result([]));
+		useFilesSearchStore.setState({ searchContent: true });
+		renderFilesTab();
+
+		typeSearch("超");
+		await settleSearch();
+
+		expect(screen.getByText(/^Type at least/)).toBeInTheDocument();
+		expect(searchFiles).not.toHaveBeenCalled();
+
+		typeSearch("超时");
+		await settleSearch();
+
+		expect(lastSearchParams()).toMatchObject({
+			query: "超时",
+			mode: "content",
+		});
 	});
 });
 

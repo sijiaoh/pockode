@@ -1105,9 +1105,28 @@ content mode. A fuzzy content query matches any line holding its characters in
 order, and at two characters that is nearly every line of code: the server
 scores them all and returns a ranked list that is mostly ties, so in effect an
 arbitrary set of files. Three is where a fuzzy query starts to pick lines out.
-The cost falls on a two-character CJK word such as `超时`, a specific query that
-now counts as too short; `'超时` reaches the minimum and asks for the exact word
-anyway. Previous results stay on screen while a new query loads — the
+What the minimum stands for is selectivity, though, not length.
+
+A Han character is drawn from thousands, a Hangul syllable likewise, so two of
+them in order are already rare: `超时`, `検索` or `설정` picks lines out. Content
+mode therefore weighs each character — 1.5 for Han, Hiragana, Katakana and
+Hangul, 1 for everything else — and searches once the query weighs 3. A
+two-character CJK word qualifies; a single CJK character (1.5) or `a超` (2.5)
+does not, and the too-short message names both counts ("at least 3 characters,
+or 2 in Chinese, Japanese or Korean"). The script is the Unicode Script
+property, so characters shared across scripts — the long-vowel mark `ー`, `・`,
+CJK punctuation, full-width ASCII — weigh 1. The query is weighed in code
+points after NFC, so neither a character outside the BMP nor a decomposed
+Hangul syllable counts more than once. The accepted cost is that kana weigh
+the same as kanji, though in a syllabary of under a hundred characters each
+one is far more common: a two-kana query such as `して` searches and matches
+broadly.
+That failure is cheap — a long list the user narrows by typing on — where the
+one it replaced, a specific word that could not be searched at all, was not.
+Name mode keeps its minimum of 1, and the server applies no minimum of its
+own, so the rule is the client's alone.
+
+Previous results stay on screen while a new query loads — the
 icon in the search box turns into a spinner rather than the list going blank
 between keystrokes — but only while the options are unchanged, since name-mode
 results have no place in the content-mode layout. The cache holds each result
