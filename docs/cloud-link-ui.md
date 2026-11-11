@@ -646,14 +646,6 @@ promise:
   process, any two copies compare. *Which flow it shows* depends on that, so it
   is written down where a later change to the server would meet it.
 
-## Privacy policy
-
-The privacy policy names `pockode login` as the way a machine is linked in three
-places — what linking sends, what a never-linked machine sends, and how long a
-link request is kept. Linking from Settings sends and keeps exactly the same,
-so all three have to name it too, in the same change
-([What an Instance Reports](code/cloud-account.md#what-an-instance-reports)).
-
 ## What to test
 
 - Each machine-row and instance-row state renders its row of the tables;
