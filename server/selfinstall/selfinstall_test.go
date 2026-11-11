@@ -476,6 +476,25 @@ func TestBusyDoesNotRefuseAnInstall(t *testing.T) {
 	}
 }
 
+// identity is the file at path, as it is now. On Windows os.Stat leaves the
+// file id for os.SameFile to fetch later by reopening the path, which by then
+// may name another file; a stat of an open handle reads it at once. The
+// handle is closed again because Windows refuses to rename a file another
+// handle has open.
+func identity(t *testing.T, path string) os.FileInfo {
+	t.Helper()
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return info
+}
+
 // The case the whole package is for: the executable is running while it is
 // replaced. The running process is unaffected, the path now runs the new
 // version, and on Windows the moved-aside file outlives Cleanup until the
@@ -487,10 +506,7 @@ func TestInstallOverARunningExecutable(t *testing.T) {
 	if err := os.WriteFile(exe, binary, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	before, err := os.Stat(exe)
-	if err != nil {
-		t.Fatal(err)
-	}
+	before := identity(t, exe)
 	cmd := exec.Command(exe)
 	cmd.Env = append(os.Environ(), runningEnv+"=1")
 	stdin, err := cmd.StdinPipe()

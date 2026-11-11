@@ -492,6 +492,22 @@ gets a rule of its own. Linux checks out what Windows does in a clone made with
 `git clone -c core.autocrlf=true`: there `git ls-files --eol <file>` shows
 `w/crlf` for a file no rule pins, and its test fails as it does on Windows.
 
+**An identity check across a rename: `os.Stat` remembers a path, not a file.**
+On Windows, `os.Stat` of a regular file records only the path; `os.SameFile`
+fetches the file id later, by reopening that path. A test that stats a file,
+renames or replaces it, and then compares the two results therefore reads both
+ids from whatever the path names *now*, and both kinds of assertion go red
+whatever the code did: "the file was replaced, not written into" sees the new
+file twice and calls it the same one, and "the file kept its identity" cannot
+reopen a path the rename has taken away. Take the earlier identity from
+something that does not move: `f.Stat()` on an open handle reads the id at
+once (close the handle before the rename — Windows refuses to rename a file
+another handle has open), or a hard link, a second name the rename leaves in
+place. `TestInstallOverARunningExecutable` in `server/selfinstall` uses the
+handle; "keeps the file's identity" in `server/contents` uses the link. Linux
+cannot reproduce this — its `os.Stat` reads the inode at once — so the mistake
+shows only on the Windows runner.
+
 ## Shell: a suite neither entry point runs
 
 `go test ./...` and `pnpm run test` do not reach every test in the repository.
