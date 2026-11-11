@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"time"
 )
 
@@ -93,6 +94,12 @@ func (c *client) authorize(ctx context.Context, id machineIdentity) (*deviceAuth
 	var auth deviceAuthorization
 	if err := c.do(ctx, http.MethodPost, "/api/device/authorize", "", id, &auth); err != nil {
 		return nil, err
+	}
+	// The link is opened from Pockode's UI and printed as a QR code: anything
+	// but a web page (a javascript: or data: URL) is refused here, not
+	// trusted to every place that shows it.
+	if u, err := url.Parse(auth.VerificationURIComplete); err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {
+		return nil, fmt.Errorf("cloud answered with a verification link that is not a web page: %q", auth.VerificationURIComplete)
 	}
 	return &auth, nil
 }

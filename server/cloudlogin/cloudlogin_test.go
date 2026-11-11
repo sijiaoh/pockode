@@ -45,6 +45,8 @@ type fakeCloud struct {
 	revokeStatus int
 	// expiresIn is the code lifetime authorize hands out.
 	expiresIn int
+	// linkURI, when set, replaces testLinkURI in authorize's answer.
+	linkURI string
 	// machineStatus, when set, answers every GET /api/machine with it.
 	machineStatus int
 	// gate, when set, holds every request for gatedPath until it yields,
@@ -81,9 +83,13 @@ func (c *fakeCloud) serve(w http.ResponseWriter, r *http.Request) {
 			c.t.Errorf("decode authorize: %v", err)
 		}
 		c.authorized = &id
+		linkURI := testLinkURI
+		if c.linkURI != "" {
+			linkURI = c.linkURI
+		}
 		writeJSON(w, http.StatusOK, deviceAuthorization{
 			DeviceCode: "device-code", UserCode: testUserCode,
-			VerificationURIComplete: testLinkURI, Interval: 5, ExpiresIn: c.expiresIn,
+			VerificationURIComplete: linkURI, Interval: 5, ExpiresIn: c.expiresIn,
 		})
 	case "POST /api/device/token":
 		var req struct {

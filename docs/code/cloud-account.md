@@ -24,7 +24,7 @@ Linking is the OAuth device authorization grant ([RFC 8628](https://www.rfc-edit
 
 1. **An existing link is checked first.** If `cloud.json` names this cloud, `GET /api/machine` with `Authorization: Bearer <machine_token>`: 200 (`{email, name}`) means the machine is already linked — the flow ends there, reporting to whom; 401 means the link is no longer valid and the flow below runs; anything else is an error. A `cloud.json` naming another cloud is never shown to this one: the flow runs and replaces it.
 2. **Authorize.** `POST /api/device/authorize` with `{hostname, os_user, os}` (`os.Hostname()`, the current user name, `runtime.GOOS`). The cloud names the machine `os_user@hostname`. The answer carries `device_code`, `user_code`, `verification_uri_complete`, `interval` and `expires_in`.
-3. **Show the link.** `verification_uri_complete` and the user code, so the user can check the code against the page before approving.
+3. **Show the link.** `verification_uri_complete` and the user code, so the user can check the code against the page before approving. A link that is not an `http` or `https` URL with a host fails the flow here: it would otherwise reach the UI as a link and a QR code.
 4. **Poll.** `POST /api/device/token` with `{device_code}`, waiting `interval` seconds (5 when the cloud names none) before each request:
 
    | Answer | What happens |

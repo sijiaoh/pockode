@@ -279,6 +279,23 @@ func TestServiceFailures(t *testing.T) {
 	}
 }
 
+// The link reaches a browser through the UI's href and QR code, so a cloud
+// answering with anything but a web page ends the flow before it is shown.
+func TestServiceRefusesALinkThatIsNotAWebPage(t *testing.T) {
+	cloud := newFakeCloud(t)
+	cloud.linkURI = "javascript:alert(1)"
+	s := newTestService(t, cloud.URL, nil)
+
+	s.Start()
+	f := s.awaitEnd()
+	if f.Phase != FlowFailed || f.Failure == nil || f.Failure.Reason != FailureOther {
+		t.Errorf("flow = %+v (failure %+v), want failed with %q", f, f.Failure, FailureOther)
+	}
+	if f.VerificationURL != "" || f.UserCode != "" {
+		t.Errorf("flow = %+v, want no link or code", f)
+	}
+}
+
 // A machine already linked to this cloud stays as it is, whether the link was
 // there at the start or written by another process while the flow ran. In
 // the second case the flow's own token is revoked, so the account is not left
