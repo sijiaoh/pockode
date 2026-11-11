@@ -373,6 +373,18 @@ describe("CloudLink: linking", () => {
 		await findRow("Not linked", MACHINE);
 	});
 
+	it("goes back to the status, unavailable, when start answers -32013", async () => {
+		server.start = () =>
+			Promise.reject(new JSONRPCErrorException("no config dir", -32013));
+		const user = await openSheet();
+		await user.click(await screen.findByRole("button", { name: "Link" }));
+
+		await findRow("Linking unavailable");
+		expect(
+			screen.queryByRole("dialog", { name: "Link this machine" }),
+		).not.toBeInTheDocument();
+	});
+
 	it("stays on the phase the approval reached when Cancel comes too late", async () => {
 		const running = waiting();
 		server.snapshot = status({ flow: running });

@@ -407,10 +407,22 @@ function Row({ state, children }: { state: CardRow; children?: ReactNode }) {
 						</>
 					) : (
 						<>
-							<p className={`text-sm text-th-text-primary ${line}`}>
+							<p
+								className={`text-sm text-th-text-primary ${line}`}
+								// A cut line keeps its full value here: an email or a
+								// machine name is no use truncated.
+								title={state.wrap ? undefined : state.title}
+							>
 								{state.title}
 							</p>
-							<p className={`text-xs text-th-text-muted ${line}`}>
+							<p
+								className={`text-xs text-th-text-muted ${line}`}
+								title={
+									!state.wrap && typeof state.subtitle === "string"
+										? state.subtitle
+										: undefined
+								}
+							>
 								{state.subtitle}
 							</p>
 						</>
