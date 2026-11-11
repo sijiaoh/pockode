@@ -1,5 +1,28 @@
 package agent
 
+// MCPServerName is the name Pockode's MCP server is registered under in each
+// CLI's config, and so the name its tools are known by (mcp__pockode__* on
+// Claude, the pockode namespace on Codex). EnvironmentStatement names it.
+const MCPServerName = "pockode"
+
+// EnvironmentStatement is what every session with Pockode's MCP server is told
+// at the system level, ahead of the rest of Pockode's text there: where it is
+// running and where Pockode's own tools come from. It states the environment only —
+// no tool, and nothing about using them: that is Guidance's and the tools'
+// descriptions', which stay inside the MCP structure.
+//
+// It goes through the same system-level channel as HTMLFirstGuidance, in every
+// session rather than only an HTML-first one:
+//   - Claude: appended to the CLI's own system prompt (claude
+//     systemPromptArgs), ahead of HTMLFirstGuidance in an HTML-first session.
+//   - Codex: first of Pockode's part of the thread's developer instructions,
+//     ahead of Guidance (codex developerInstructions).
+//
+// Both channels are fixed when a conversation starts, so one begun before this
+// text existed goes on without it.
+const EnvironmentStatement = "You are running inside Pockode, which lets the user work with coding agents from a browser. " +
+	"Pockode's own tools come from its MCP server, \"" + MCPServerName + "\"."
+
 // Guidance is what an agent has to know about Pockode's own tools before it has
 // loaded any of them: when to reach for them, and what not to do in their place.
 // How to call a tool stays in its description, which the agent reads once it
@@ -56,11 +79,13 @@ const renderingGuidance = "Showing the user something in Pockode:\n\n" +
 // default for anything structured, and says so, since an agent reads both.
 //
 // It is how the session is set up rather than what the tools are, so it goes
-// where a session's setup goes — the system-level channel of each CLI — and
-// not into the MCP server's instructions, which are Guidance in every session:
-//   - Claude: appended to the CLI's own system prompt (claude
-//     htmlFirstPromptArgs). Tool-server instructions carry less weight there
-//     than a real system prompt, which is why it moved out of them.
+// where a session's setup goes — the system-level channel of each CLI, after
+// EnvironmentStatement — and not into the MCP server's instructions, which are
+// Guidance in every session:
+//   - Claude: appended to the CLI's own system prompt after
+//     EnvironmentStatement (claude systemPromptArgs). Tool-server instructions
+//     carry less weight there than a real system prompt, which is why it moved
+//     out of them.
 //   - Codex: after Guidance in the thread's developer instructions (codex
 //     developerInstructions).
 //

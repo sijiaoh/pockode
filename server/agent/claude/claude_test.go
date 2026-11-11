@@ -1425,7 +1425,7 @@ func TestWriteMCPConfig_MainWorktreeIsUnnamed(t *testing.T) {
 
 // TestWriteMCPConfig_SameInEveryMode: the proxy's instructions describe the
 // tools, so they must not change with the session's mode — an HTML-first
-// session is told so through the system prompt instead (htmlFirstPromptArgs).
+// session is told so through the system prompt instead (systemPromptArgs).
 func TestWriteMCPConfig_SameInEveryMode(t *testing.T) {
 	proxy := func(htmlFirst bool) []string {
 		path, _, err := writeMCPConfig(agent.StartOptions{DataDir: t.TempDir(), SessionID: "s1", HTMLFirst: htmlFirst})
@@ -1446,42 +1446,47 @@ func TestWriteMCPConfig_SameInEveryMode(t *testing.T) {
 	}
 }
 
-// An HTML-first session's guidance is appended to Claude's own system prompt,
-// on top of the ordinary guidance the proxy gives; any other session gets
-// nothing extra.
-func TestHTMLFirstPromptArgs(t *testing.T) {
+// Every session with the MCP server appends the environment statement to
+// Claude's own system prompt, and an HTML-first one its guidance after it, on
+// top of the ordinary guidance the proxy gives.
+func TestSystemPromptArgs(t *testing.T) {
+	promptFile := func(opts agent.StartOptions) string {
+		t.Helper()
+		args, err := systemPromptArgs(opts)
+		if err != nil {
+			t.Fatalf("systemPromptArgs: %v", err)
+		}
+		// Appended, never --system-prompt[-file]: that would replace the CLI's own.
+		if len(args) != 2 || args[0] != "--append-system-prompt-file" {
+			t.Fatalf("args = %v, want --append-system-prompt-file <path>", args)
+		}
+		data, err := os.ReadFile(args[1])
+		if err != nil {
+			t.Fatalf("read prompt file: %v", err)
+		}
+		// A successor process writes the same file again while its predecessor
+		// may still be running; that has to work.
+		if again, err := systemPromptArgs(opts); err != nil || !slices.Equal(again, args) {
+			t.Errorf("second launch: args %v, err %v; want %v", again, err, args)
+		}
+		return string(data)
+	}
+
 	opts := agent.StartOptions{DataDir: t.TempDir(), SessionID: "s1"}
-	if args, err := htmlFirstPromptArgs(opts); err != nil || args != nil {
-		t.Errorf("ordinary session: args %v, err %v; want none", args, err)
+	if got := promptFile(opts); got != agent.EnvironmentStatement {
+		t.Errorf("ordinary session's prompt file = %q, want agent.EnvironmentStatement", got)
 	}
 
 	opts.HTMLFirst = true
-	withoutMCP := opts
-	withoutMCP.DisableMCP = true
-	if args, err := htmlFirstPromptArgs(withoutMCP); err != nil || args != nil {
-		t.Errorf("session without the MCP server: args %v, err %v; want none — it would point at tools that are not there", args, err)
+	if got := promptFile(opts); got != agent.EnvironmentStatement+"\n\n"+agent.HTMLFirstGuidance {
+		t.Errorf("HTML-first session's prompt file = %q, want agent.EnvironmentStatement then agent.HTMLFirstGuidance", got)
 	}
 
-	args, err := htmlFirstPromptArgs(opts)
-	if err != nil {
-		t.Fatalf("htmlFirstPromptArgs: %v", err)
-	}
-	// Appended, never --system-prompt[-file]: that would replace the CLI's own.
-	if len(args) != 2 || args[0] != "--append-system-prompt-file" {
-		t.Fatalf("args = %v, want --append-system-prompt-file <path>", args)
-	}
-	data, err := os.ReadFile(args[1])
-	if err != nil {
-		t.Fatalf("read prompt file: %v", err)
-	}
-	if string(data) != agent.HTMLFirstGuidance {
-		t.Errorf("prompt file = %q, want agent.HTMLFirstGuidance", data)
-	}
-
-	// A successor process writes the same file again while its predecessor may
-	// still be running; that has to work.
-	if again, err := htmlFirstPromptArgs(opts); err != nil || !slices.Equal(again, args) {
-		t.Errorf("second launch: args %v, err %v; want %v", again, err, args)
+	for _, htmlFirst := range []bool{false, true} {
+		withoutMCP := agent.StartOptions{DataDir: t.TempDir(), SessionID: "s1", HTMLFirst: htmlFirst, DisableMCP: true}
+		if args, err := systemPromptArgs(withoutMCP); err != nil || args != nil {
+			t.Errorf("session without the MCP server (HTML-first %v): args %v, err %v; want none — it would point at a server that is not there", htmlFirst, args, err)
+		}
 	}
 }
 

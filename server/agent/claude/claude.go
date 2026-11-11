@@ -79,7 +79,7 @@ func writeMCPConfig(opts agent.StartOptions) (string, func(), error) {
 
 	config := map[string]interface{}{
 		"mcpServers": map[string]interface{}{
-			"pockode": map[string]interface{}{
+			agent.MCPServerName: map[string]interface{}{
 				"command": exe,
 				"args":    args,
 			},
@@ -106,24 +106,33 @@ func writeMCPConfig(opts agent.StartOptions) (string, func(), error) {
 	}, nil
 }
 
-// htmlFirstPromptFile holds agent.HTMLFirstGuidance for an HTML-first session,
-// in the session's own data dir.
-const htmlFirstPromptFile = "html-first-prompt.md"
+// systemPromptFile holds what a session with the MCP server appends to the
+// CLI's system prompt (systemPrompt), in the session's own data dir.
+const systemPromptFile = "system-prompt.md"
 
-// htmlFirstPromptArgs is how an HTML-first session's guidance reaches Claude:
-// appended to the CLI's own system prompt, which it adds to rather than
-// replaces. Any other session gets no args, and so does one without the MCP
-// server: the text points at html_render and question_post, which it would not
-// have (codex's developerInstructions is skipped for the same reason).
+// systemPrompt is agent.EnvironmentStatement, followed in an HTML-first
+// session by agent.HTMLFirstGuidance.
+func systemPrompt(opts agent.StartOptions) string {
+	if opts.HTMLFirst {
+		return agent.EnvironmentStatement + "\n\n" + agent.HTMLFirstGuidance
+	}
+	return agent.EnvironmentStatement
+}
+
+// systemPromptArgs is how Pockode's system-level text reaches Claude: appended
+// to the CLI's own system prompt, which it adds to rather than replaces. A
+// session without the MCP server gets no args: the text points at the pockode
+// server and its tools, which it would not have (codex's developerInstructions
+// is skipped for the same reason).
 //
 // It goes by file (--append-system-prompt-file), not inline: on Windows every
 // argument passes the .cmd wrapper npm installs the CLI as, which cannot carry
 // the newlines and quotes in the text (agent.checkCmdSafe refuses them).
 //
-// Unlike the MCP config, one name per session is safe: the content is a
-// constant, so an atomic rewrite by a successor hands a predecessor still
-// reading it the same bytes, and nothing removes it — it goes with the
-// session's directory.
+// Unlike the MCP config, one name per session is safe: the content depends only
+// on the session's mode, which is fixed once it starts, so an atomic rewrite by
+// a successor hands a predecessor still reading it the same bytes, and nothing
+// removes it — it goes with the session's directory.
 //
 // The CLI records its system prompt on a conversation's first request and
 // sends the record from then on, every resume included, until the
@@ -131,13 +140,13 @@ const htmlFirstPromptFile = "html-first-prompt.md"
 // 2.1.319). That matches a session whose mode is fixed at its first message,
 // and means a conversation begun before a change to this text goes on with the
 // text it began with.
-func htmlFirstPromptArgs(opts agent.StartOptions) ([]string, error) {
-	if !opts.HTMLFirst || opts.DisableMCP {
+func systemPromptArgs(opts agent.StartOptions) ([]string, error) {
+	if opts.DisableMCP {
 		return nil, nil
 	}
-	path := filepath.Join(sessionDir(opts.DataDir, opts.SessionID), htmlFirstPromptFile)
-	if err := filestore.WriteFileAtomic(path, []byte(agent.HTMLFirstGuidance), 0644); err != nil {
-		return nil, fmt.Errorf("write HTML-first system prompt: %w", err)
+	path := filepath.Join(sessionDir(opts.DataDir, opts.SessionID), systemPromptFile)
+	if err := filestore.WriteFileAtomic(path, []byte(systemPrompt(opts)), 0644); err != nil {
+		return nil, fmt.Errorf("write system prompt: %w", err)
 	}
 	return []string{"--append-system-prompt-file", path}, nil
 }
@@ -220,7 +229,7 @@ func (a *Agent) Start(ctx context.Context, opts agent.StartOptions) (agent.Sessi
 	resumeState := newClaudeResumeStateManager(opts, log)
 	claudeArgs := buildArgs(opts, resumeState.resolve())
 
-	promptArgs, err := htmlFirstPromptArgs(opts)
+	promptArgs, err := systemPromptArgs(opts)
 	if err != nil {
 		cancel()
 		return nil, err
