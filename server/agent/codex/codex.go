@@ -520,7 +520,8 @@ func (s *appSession) openRecordedThread(ctx context.Context, state codexResumeSt
 func (s *appSession) startThread(ctx context.Context) error {
 	params := s.buildThreadParams()
 	params["threadSource"] = threadSource
-	// The guidance is about question_post, which only the MCP server offers.
+	// All of it is about the pockode MCP server and its tools, which a session
+	// without that server does not have.
 	if !s.opts.DisableMCP {
 		params["developerInstructions"] = s.developerInstructions(ctx)
 	}
@@ -626,7 +627,7 @@ func (s *appSession) buildThreadParams() map[string]interface{} {
 			args = append(args, "--worktree", s.opts.Worktree)
 		}
 		overrides["mcp_servers"] = map[string]interface{}{
-			"pockode": map[string]interface{}{
+			agent.MCPServerName: map[string]interface{}{
 				"command": s.exe,
 				"args":    args,
 			},

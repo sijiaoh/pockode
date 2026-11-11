@@ -145,6 +145,16 @@ func TestToolDefinitions_FitClaudesLimit(t *testing.T) {
 	}
 }
 
+// The environment statement names the server, never a tool on it: how the
+// tools are used is said by the MCP server itself.
+func TestEnvironmentStatement_NamesNoTool(t *testing.T) {
+	for _, def := range toolDefinitions {
+		if strings.Contains(agent.EnvironmentStatement, def.Name) {
+			t.Errorf("the environment statement names the %s tool", def.Name)
+		}
+	}
+}
+
 func utf16Len(s string) int {
 	return len(utf16.Encode([]rune(s)))
 }

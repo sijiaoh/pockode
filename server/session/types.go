@@ -210,8 +210,8 @@ type SessionMeta struct {
 	// effort level and keeps its own default.
 	Effort string `json:"effort"`
 	// HTMLFirst is how the agent is set up: false is an ordinary chat, true adds
-	// agent.HTMLFirstGuidance to its system prompt, telling it to say things
-	// with pages.
+	// agent.HTMLFirstGuidance to its system prompt after the environment
+	// statement every session has, telling it to say things with pages.
 	// It is a draft until Started and fixed from then on — see SetHTMLFirst.
 	HTMLFirst bool `json:"html_first,omitempty"`
 	// Started is set immediately before the first message is delivered to the

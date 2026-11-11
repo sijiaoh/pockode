@@ -5,6 +5,23 @@ import (
 	"testing"
 )
 
+// The environment statement says where the session runs and which MCP server is
+// Pockode's, and nothing about the tools: those are explained inside the MCP
+// structure (Guidance, each tool's description). mcp's
+// TestEnvironmentStatement_NamesNoTool checks it against every tool name.
+func TestEnvironmentStatement_NamesPockodeAndItsServerOnly(t *testing.T) {
+	for _, want := range []string{"Pockode", "\"" + MCPServerName + "\""} {
+		if !strings.Contains(EnvironmentStatement, want) {
+			t.Errorf("the environment statement does not say %q", want)
+		}
+	}
+	for _, unwanted := range []string{"work_", "story_", "task_", "agent_role_", "question_post", "html_render"} {
+		if strings.Contains(EnvironmentStatement, unwanted) {
+			t.Errorf("the environment statement names a tool (%q)", unwanted)
+		}
+	}
+}
+
 // These are the rules an agent breaks before it has any reason to load
 // question_post — found by the question eval, where no agent that could not see
 // them called it once: it asked in the reply text, wrote the options out there,

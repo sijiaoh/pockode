@@ -33,6 +33,10 @@ func startedWith(t *testing.T, s *scriptedSession) (string, bool) {
 	return di, ok
 }
 
+// pockodeInstructions is Pockode's part of every session's developer
+// instructions: where the session runs comes first, then the guidance.
+const pockodeInstructions = agent.EnvironmentStatement + "\n\n" + agent.Guidance
+
 func newThreadOpts(t *testing.T) agent.StartOptions {
 	return agent.StartOptions{DataDir: t.TempDir(), SessionID: "s1", WorkDir: "/tmp/work"}
 }
@@ -43,8 +47,8 @@ func TestDeveloperInstructions_ANewThreadCarriesTheGuidance(t *testing.T) {
 		"thread/start": threadReply("thread-new"),
 	})
 
-	if got, _ := startedWith(t, s); got != agent.Guidance {
-		t.Errorf("developerInstructions = %q, want agent.Guidance", got)
+	if got, _ := startedWith(t, s); got != pockodeInstructions {
+		t.Errorf("developerInstructions = %q, want agent.EnvironmentStatement then agent.Guidance", got)
 	}
 	// Project config layers are resolved from the directory asked about.
 	var params struct {
@@ -63,8 +67,8 @@ func TestDeveloperInstructions_KeepTheUsersOwn(t *testing.T) {
 		"thread/start": threadReply("thread-new"),
 	})
 
-	if got, _ := startedWith(t, s); got != "Answer tersely.\n\n"+agent.Guidance {
-		t.Errorf("developerInstructions = %q, want the user's followed by the guidance", got)
+	if got, _ := startedWith(t, s); got != "Answer tersely.\n\n"+pockodeInstructions {
+		t.Errorf("developerInstructions = %q, want the user's followed by Pockode's", got)
 	}
 }
 
@@ -74,8 +78,8 @@ func TestDeveloperInstructions_UnreadableConfigWarnsAndCarriesOn(t *testing.T) {
 		"thread/start": threadReply("thread-new"),
 	})
 
-	if got, _ := startedWith(t, s); got != agent.Guidance {
-		t.Errorf("developerInstructions = %q, want agent.Guidance", got)
+	if got, _ := startedWith(t, s); got != pockodeInstructions {
+		t.Errorf("developerInstructions = %q, want agent.EnvironmentStatement then agent.Guidance", got)
 	}
 	var warned bool
 	for _, ev := range drainEvents(s.sess.events) {
@@ -88,7 +92,8 @@ func TestDeveloperInstructions_UnreadableConfigWarnsAndCarriesOn(t *testing.T) {
 	}
 }
 
-// The guidance would point at a question_post that is not there.
+// The instructions would point at a pockode server and a question_post that are
+// not there.
 func TestDeveloperInstructions_NoneWithoutTheMCPServer(t *testing.T) {
 	s := newScriptedSession(t, newThreadOpts(t), map[string]*rpcResponse{
 		"thread/start": threadReply("thread-new"),
@@ -134,7 +139,7 @@ func TestDeveloperInstructions_HTMLFirstCarriesItsGuidance(t *testing.T) {
 		"thread/start": threadReply("thread-new"),
 	})
 
-	if got, _ := startedWith(t, s); got != "Answer tersely.\n\n"+agent.Guidance+"\n\n"+agent.HTMLFirstGuidance {
-		t.Errorf("developerInstructions = %q, want the user's, then agent.Guidance, then agent.HTMLFirstGuidance", got)
+	if got, _ := startedWith(t, s); got != "Answer tersely.\n\n"+pockodeInstructions+"\n\n"+agent.HTMLFirstGuidance {
+		t.Errorf("developerInstructions = %q, want the user's, then agent.EnvironmentStatement and agent.Guidance, then agent.HTMLFirstGuidance", got)
 	}
 }

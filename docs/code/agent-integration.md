@@ -1236,7 +1236,7 @@ Codex 0.159.3:
 | CLI | Channel | Why this one |
 |-----|---------|--------------|
 | Claude | `instructions` in the MCP server's `initialize` reply (`mcp.Server`) | Claude puts server instructions in the system prompt whether or not the server's tools are deferred. |
-| Codex | `developerInstructions` on `thread/start` | Codex shows server instructions only once a tool of the server is loaded, as the description of its namespace. The parameter *replaces* the user's own `developer_instructions`, so the user's value is read with `config/read` first and sent ahead of the guidance; a failed read warns the user and carries on. It is fixed when the thread starts: `thread/resume` and `thread/fork` ignore the parameter and keep what the thread started with, so it is sent on `thread/start` alone, and a thread started before the guidance existed, or before a change to it, goes on without it. |
+| Codex | `developerInstructions` on `thread/start` | Codex shows server instructions only once a tool of the server is loaded, as the description of its namespace. The parameter *replaces* the user's own `developer_instructions`, so the user's value is read with `config/read` first and sent ahead of Pockode's part ([The Environment Statement](#the-environment-statement) has the order); a failed read warns the user and carries on. It is fixed when the thread starts: `thread/resume` and `thread/fork` ignore the parameter and keep what the thread started with, so it is sent on `thread/start` alone, and a thread started before the guidance existed, or before a change to it, goes on without it. |
 
 Both go only where the MCP server does: a session started without it has no
 `question_post` or `html_render` to point at. Codex receives the server
@@ -1599,6 +1599,48 @@ For the same reason a `question_posted` record left unclosed by the cut is
 a call that never returns, while a question the fork can still answer is the
 point.
 
+## The Environment Statement
+
+Every session with the MCP server is told, at the system level and ahead of
+the rest of Pockode's text there, where it is running: `agent.EnvironmentStatement`
+says the agent is inside Pockode, what Pockode is in one clause, and that
+Pockode's own tools come from its MCP server, named by `agent.MCPServerName`.
+That name is the key the server is registered under in each CLI's config
+(Claude's `mcpServers`, Codex's `mcp_servers` override), and so what its tools
+are known by — the `mcp__pockode__*` prefix on Claude, the namespace on Codex;
+the server's own `serverInfo.Name` in the `initialize` reply is not what the
+model sees. Without the statement an ordinary session was never told what
+Pockode is, although `agent.Guidance` says "in Pockode" in its headings.
+
+It states the environment and nothing else: no tool, nothing on how to use one,
+nothing on how to reply. What the tools are for stays in the MCP structure —
+`agent.Guidance` ([above](#telling-the-agent-when-to-ask)) and each tool's
+description — and `agent`'s
+`TestEnvironmentStatement_NamesPockodeAndItsServerOnly` and `mcp`'s
+`TestEnvironmentStatement_NamesNoTool` hold it to naming none.
+
+**It goes where a session's setup goes, not where the tools are described.**
+The MCP server's `initialize` instructions are `agent.Guidance` in every
+session, and the proxy takes no mode of its own: they describe the tools.
+What sets a session up — this statement, and in an HTML-first session the
+guidance [below](#html-first-sessions) — goes to each CLI's system-level
+channel instead:
+
+| CLI | Channel | Notes |
+|-----|---------|-------|
+| Claude | `--append-system-prompt-file <session dir>/system-prompt.md` (`systemPromptArgs`) | *Appends* to the CLI's default system prompt rather than replacing it; the file holds the statement, followed in an HTML-first session by `agent.HTMLFirstGuidance` (`systemPrompt`). Instructions from a tool server carry less weight than the system prompt proper, which is why session setup is not put in them. It goes by file, not inline `--append-system-prompt`: on Windows every argument passes npm's `.cmd` wrapper, and `agent.checkCmdSafe` refuses the newlines and quotes the text contains. One name per session is safe because the content depends only on the session's mode, which is fixed once it starts — a successor's atomic rewrite hands a predecessor the same bytes — and it is removed with the session directory. A session started by an earlier version may still have an `html-first-prompt.md` there, from when only an HTML-first session had a file; nothing reads it, and it goes with the directory. |
+| Codex | `developerInstructions` on `thread/start` | In this order: the user's own `developer_instructions`, the statement, `agent.Guidance` ([above](#telling-the-agent-when-to-ask)), and `agent.HTMLFirstGuidance` in an HTML-first session. The same rules apply as for the guidance — the user's own value first, fixed when the thread starts. |
+
+A session started without the MCP server (`DisableMCP`) gets none of this on
+either CLI: every text points at a server it would not have.
+
+The system prompt is fixed when the CLI starts — and Claude records it on a
+conversation's first request and resends that record on every resume until the
+conversation is compacted (`--system-prompt-snapshot`, on by default; measured
+on claude 2.1.319). So a conversation begun before a change to the text, or
+before the statement existed, goes on with what it began with, as on Codex;
+there is no migration.
+
 ## HTML-First Sessions
 
 A session is either an ordinary chat or **HTML-first**, and the one difference
@@ -1631,28 +1673,20 @@ choice on a page does not replace `question_post`: the decision the agent waits
 on is still asked there.
 
 **The addition goes where a session's setup goes, not where the tools are
-described.** The MCP server's `initialize` instructions are `agent.Guidance` in
-every session, and the proxy takes no mode of its own: they describe the tools,
-which are the same in both modes. `agent.StartOptions.HTMLFirst` carries the
-mode to each CLI's system-level channel instead:
+described**, for the same reason as the environment statement: the tools are
+the same in both modes. `agent.StartOptions.HTMLFirst` carries the mode to each
+CLI's system-level channel, where the addition comes after the statement — the
+table and its rules are in [The Environment Statement](#the-environment-statement).
+An ordinary chat gets the statement and `agent.Guidance` and nothing more, and
+a session started without the MCP server gets none of them. The addition is
+outside Claude's 2048-character cut on server instructions, so
+`TestToolDefinitions_FitClaudesLimit` checks `agent.Guidance` alone; it is
+still read on every turn, so it is kept short.
 
-| CLI | Channel | Notes |
-|-----|---------|-------|
-| Claude | `--append-system-prompt-file <session dir>/html-first-prompt.md` (`htmlFirstPromptArgs`) | *Appends* to the CLI's default system prompt rather than replacing it. Instructions from a tool server carry less weight than the system prompt proper, which is why the text left them. It goes by file, not inline `--append-system-prompt`: on Windows every argument passes npm's `.cmd` wrapper, and `agent.checkCmdSafe` refuses the newlines and quotes the text contains. One name per session is safe because the content is a constant — a successor's atomic rewrite hands a predecessor the same bytes — and it is removed with the session directory. |
-| Codex | `developerInstructions` on `thread/start` | After `agent.Guidance`, which already goes there ([above](#telling-the-agent-when-to-ask)); the same rules apply — the user's own value first, fixed when the thread starts. |
-
-An ordinary chat gets nothing beyond `agent.Guidance`, and a session started
-without the MCP server gets neither text on either CLI: both point at tools it
-would not have. The addition is outside Claude's 2048-character cut on server
-instructions, so `TestToolDefinitions_FitClaudesLimit` checks `agent.Guidance`
-alone; it is still read on every turn, so it is kept short.
-
-The system prompt is fixed when the CLI starts — and Claude records it on a
-conversation's first request and resends that record on every resume until the
-conversation is compacted (`--system-prompt-snapshot`, on by default; measured
-on claude 2.1.319) — so the mode has to be fixed for the session's life. It
-also means a conversation begun before a change to the text goes on with the
-text it began with, as on Codex.
+The system prompt is fixed when the CLI starts, and Claude resends the one a
+conversation began with on every resume
+([above](#the-environment-statement)), so the mode has to be fixed for the
+session's life.
 
 The mode is the session's `html_first` (`session.SessionMeta.HTMLFirst`,
 switched with `session.set_html_first`), and what fixes it is `Started`, not
@@ -1731,8 +1765,9 @@ if mcpConfig != "" {
 
 `resolve()` is what decides between `--session-id`, `--resume` and
 `--resume --fork-session`; see [Session Recovery Ladder](#session-recovery-ladder).
-`Start` appends `--append-system-prompt-file` to these in an HTML-first session
-(`htmlFirstPromptArgs`); see [HTML-First Sessions](#html-first-sessions).
+`Start` appends `--append-system-prompt-file` to these in every session with
+the MCP server (`systemPromptArgs`); see
+[The Environment Statement](#the-environment-statement).
 An empty model or effort is how a session says "let the CLI pick", so neither
 flag is passed at all in that case; see [Session Models](#session-models) and
 [Session Effort](#session-effort).
