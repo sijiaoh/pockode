@@ -3,6 +3,7 @@ export {
 	CoveredSurface,
 	type CoveredSurfaceProps,
 } from "./CoveredSurface.tsx";
+export { QrCode, type QrCodeProps } from "./QrCode.tsx";
 export {
 	ReconnectBanner,
 	type ReconnectBannerProps,

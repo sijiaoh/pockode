@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 import { encode } from "uqr";
 
-interface Props {
+export interface QrCodeProps {
 	value: string;
 	/** What the code leads to, for a screen reader. */
 	label: string;
@@ -20,7 +20,7 @@ const MODULE_PX = 4;
  * the contrast, not the theme, and a light code on a dark ground is one many
  * cannot read. The value is drawn in the page and kept nowhere.
  */
-export default function QrCode({ value, label }: Props) {
+export function QrCode({ value, label }: QrCodeProps) {
 	const { size, path } = useMemo(() => {
 		const { size, data } = encode(value, { border: QUIET_ZONE });
 		// One subpath per dark module: a single path element keeps the DOM small

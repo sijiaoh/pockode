@@ -2,6 +2,8 @@ import {
 	type AuthCredential,
 	authFailureReason,
 	authRetryAfterMs,
+	type CloudLinkChangedNotification,
+	type CloudLinkStatus,
 	credentialParams,
 	restartRefusedReason,
 	UPDATE_RPC_TIMEOUT_MS,
@@ -27,10 +29,6 @@ import type {
 	CliUpdate,
 	CliUpdateChangedNotification,
 } from "../types/cliUpdate";
-import type {
-	CloudLinkChangedNotification,
-	CloudLinkStatus,
-} from "../types/cloudLink";
 import type { GitDiffChangedNotification, GitDiffData } from "../types/git";
 import type {
 	AuthParams,

@@ -1,4 +1,10 @@
-import { ConfirmDialog } from "@pockode/shared";
+import {
+	type CloudLinkFlow,
+	type CloudLinkStatus,
+	ConfirmDialog,
+	hostOf,
+	isFlowRunning,
+} from "@pockode/shared";
 import { AlertTriangle, ExternalLink, Info } from "lucide-react";
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import {
@@ -7,11 +13,6 @@ import {
 } from "../../../hooks/useCloudLinkSubscription";
 import { isRPCTimeout, useWSStore } from "../../../lib/wsStore";
 import {
-	type CloudLinkFlow,
-	type CloudLinkStatus,
-	isFlowRunning,
-} from "../../../types/cloudLink";
-import {
 	cardTextButtonClass,
 	primaryButtonClass,
 	textButtonClass,
@@ -19,7 +20,6 @@ import {
 } from "../../CliLogin/loginParts";
 import CloudLinkSheet from "../../CloudLink/CloudLinkSheet";
 import {
-	hostOf,
 	instanceLine,
 	leftBehindText,
 	machineLabel,

@@ -6,6 +6,22 @@ export {
 	authRetryAfterMs,
 	credentialParams,
 } from "./auth.ts";
+export {
+	type CloudLinkChangedNotification,
+	type CloudLinkCredential,
+	type CloudLinkFailureReason,
+	type CloudLinkFlow,
+	type CloudLinkPhase,
+	type CloudLinkRelay,
+	type CloudLinkStatus,
+	type CloudLinkUnlinked,
+	displayUserCode,
+	hostOf,
+	isCloudLinkUnavailable,
+	isFlowRunning,
+	newerFlow,
+	spokenUserCode,
+} from "./cloudLink.ts";
 export { getWebSocketUrl } from "./getWebSocketUrl.ts";
 export {
 	createLayerHistory,

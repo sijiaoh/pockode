@@ -1,11 +1,12 @@
+import {
+	type CloudLinkChangedNotification,
+	type CloudLinkFlow,
+	type CloudLinkStatus,
+	isCloudLinkUnavailable,
+	newerFlow,
+} from "@pockode/shared";
 import { useCallback, useEffect, useState } from "react";
-import { isCloudLinkUnavailable } from "../lib/rpc";
 import { useWSStore } from "../lib/wsStore";
-import type {
-	CloudLinkChangedNotification,
-	CloudLinkFlow,
-	CloudLinkStatus,
-} from "../types/cloudLink";
 import { errorMessage } from "../utils/errorMessage";
 import { useSubscription } from "./useSubscription";
 
@@ -47,20 +48,6 @@ export interface CloudLinkSubscription {
 const startedByThisPage = new Set<string>();
 
 /**
- * Of two copies from the same process, the one with the higher revision: the
- * process's one counter is shared by all its flows, so that is the newer news
- * whatever the ids (docs/code/cloud-account.md#the-status).
- */
-function newer(
-	held: CloudLinkFlow | null,
-	incoming: CloudLinkFlow | undefined,
-): CloudLinkFlow | null {
-	if (!incoming) return held;
-	if (!held || incoming.revision > held.revision) return incoming;
-	return held;
-}
-
-/**
  * Follows `cloud_link.subscribe` for the Cloud section, and keeps one copy of
  * the latest flow fed by it and by the replies of `start` and `cancel`
  * (docs/cloud-link-ui.md, "Which flow it shows").
@@ -94,7 +81,7 @@ export function useCloudLinkSubscription(): CloudLinkSubscription {
 	const onChanged = useCallback((params: CloudLinkChangedNotification) => {
 		setRead({ kind: "status", status: params.status });
 		setStatus(params.status);
-		setFlow((held) => newer(held, params.status.flow));
+		setFlow((held) => newerFlow(held, params.status.flow));
 	}, []);
 
 	const { refresh } = useSubscription<
@@ -128,7 +115,7 @@ export function useCloudLinkSubscription(): CloudLinkSubscription {
 				startedByThisPage.add(incoming.id);
 				setStartedCount(startedByThisPage.size);
 			}
-			setFlow((held) => newer(held, incoming));
+			setFlow((held) => newerFlow(held, incoming));
 		},
 		[],
 	);

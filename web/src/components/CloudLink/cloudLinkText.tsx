@@ -1,18 +1,9 @@
+import { type CloudLinkRelay, hostOf } from "@pockode/shared";
 import { AlertTriangle, CheckCircle2, Info } from "lucide-react";
 import type { ReactNode } from "react";
-import type { CloudLinkRelay } from "../../types/cloudLink";
 import { Spinner } from "../ui";
 
 // The words the Cloud card and the link sheet share (docs/cloud-link-ui.md).
-
-/** A cloud named by its host, so a self-hosted one names itself. */
-export function hostOf(url: string): string {
-	try {
-		return new URL(url).host;
-	} catch {
-		return url;
-	}
-}
 
 /**
  * The machine a link or an unlink acts on, as the copy names it; `start` for
@@ -23,25 +14,6 @@ export function machineLabel(
 	start = false,
 ): string {
 	return machineName || (start ? "This machine" : "this machine");
-}
-
-/**
- * The user code as `pockode login` prints it: an eight-character code split
- * in two (`BCDF-GHJK`), any other left as it is.
- */
-export function displayUserCode(code: string): string {
-	return code.length === 8 ? `${code.slice(0, 4)}-${code.slice(4)}` : code;
-}
-
-/**
- * The user code for a screen reader, one character at a time ("B C D F, G H
- * J K"), so it is not read out as a word.
- */
-export function spokenUserCode(code: string): string {
-	return displayUserCode(code)
-		.split("-")
-		.map((part) => part.split("").join(" "))
-		.join(", ");
 }
 
 export interface InstanceLine {

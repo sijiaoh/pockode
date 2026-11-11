@@ -1,14 +1,14 @@
-import { MEDIA_QUERIES } from "@pockode/shared";
+import {
+	type CloudLinkChangedNotification,
+	type CloudLinkFlow,
+	type CloudLinkStatus,
+	type CloudLinkUnlinked,
+	MEDIA_QUERIES,
+} from "@pockode/shared";
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { JSONRPCErrorCode, JSONRPCErrorException } from "json-rpc-2.0";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type {
-	CloudLinkChangedNotification,
-	CloudLinkFlow,
-	CloudLinkStatus,
-	CloudLinkUnlinked,
-} from "../../../types/cloudLink";
 import CloudLinkSection from "./CloudLinkSection";
 
 /**

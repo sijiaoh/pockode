@@ -1,4 +1,14 @@
-import { useHasFinePointer } from "@pockode/shared";
+import {
+	type CloudLinkFlow,
+	type CloudLinkStatus,
+	displayUserCode,
+	hostOf,
+	isCloudLinkUnavailable,
+	isFlowRunning,
+	QrCode,
+	spokenUserCode,
+	useHasFinePointer,
+} from "@pockode/shared";
 import {
 	AlertTriangle,
 	CheckCircle2,
@@ -7,13 +17,7 @@ import {
 	XCircle,
 } from "lucide-react";
 import { type ReactNode, useEffect, useRef, useState } from "react";
-import { isCloudLinkUnavailable } from "../../lib/rpc";
 import { isInvalidParamsRejection, useWSStore } from "../../lib/wsStore";
-import {
-	type CloudLinkFlow,
-	type CloudLinkStatus,
-	isFlowRunning,
-} from "../../types/cloudLink";
 import { errorMessage } from "../../utils/errorMessage";
 import {
 	ExpiryLine,
@@ -23,15 +27,8 @@ import {
 	secondaryButtonClass,
 	textButtonClass,
 } from "../CliLogin/loginParts";
-import { QrCode, Sheet, Spinner } from "../ui";
-import {
-	displayUserCode,
-	hostOf,
-	instanceLine,
-	leftBehindText,
-	SCOPE_SENTENCE,
-	spokenUserCode,
-} from "./cloudLinkText";
+import { Sheet, Spinner } from "../ui";
+import { instanceLine, leftBehindText, SCOPE_SENTENCE } from "./cloudLinkText";
 
 interface Props {
 	/**

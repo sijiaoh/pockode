@@ -1,5 +1,5 @@
-import { JSONRPCErrorException, type JSONRPCRequester } from "json-rpc-2.0";
-import type { CloudLinkFlow, CloudLinkUnlinked } from "../../types/cloudLink";
+import type { CloudLinkFlow, CloudLinkUnlinked } from "@pockode/shared";
+import type { JSONRPCRequester } from "json-rpc-2.0";
 import { requireClient } from "./client";
 
 export interface CloudLinkActions {
@@ -11,21 +11,6 @@ export interface CloudLinkActions {
 	 */
 	cloudLinkCancel: (flowId: string) => Promise<CloudLinkFlow>;
 	cloudLinkUnlink: () => Promise<CloudLinkUnlinked>;
-}
-
-/** Where: server/rpc/types.go's CodeCloudLinkUnavailable. */
-const CLOUD_LINK_UNAVAILABLE_CODE = -32013;
-
-/**
- * Whether the server answered that this process cannot keep a cloud link at
- * all — the OS user has no configuration directory. Nothing short of a
- * restart changes that, so it is shown, never retried.
- */
-export function isCloudLinkUnavailable(error: unknown): boolean {
-	return (
-		error instanceof JSONRPCErrorException &&
-		error.code === CLOUD_LINK_UNAVAILABLE_CODE
-	);
 }
 
 // `cloud_link.cancel` waits at most 10 s on the server and keeps the default
