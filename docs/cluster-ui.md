@@ -14,14 +14,18 @@ finished screens no longer show.
 
 A cluster is a machine with several project directories on it. The panel's whole
 job is **see which projects are up, and get into one**. Everything else —
-registering a directory, stopping a server, clearing leftovers — is housekeeping
-that happens a handful of times a year. A change that improves the housekeeping
-at the expense of that first sentence is going the wrong way.
+registering a directory, stopping a server, clearing leftovers, linking the
+machine to a cloud account — is housekeeping that happens a handful of times a
+year. That is why the cloud link is one icon in the header and nothing on the
+list ([cloud-link-ui.md](cloud-link-ui.md#the-cluster-panel)). A change that
+improves the housekeeping at the expense of that first sentence is going the
+wrong way.
 
 It is a lightweight operations panel, not a second Pockode client. It borrows
-`web`'s visual language and its overlay primitive, and deliberately borrows
-nothing else: no router (there is one screen), no query cache (there is one
-poll), no icon library (a handful of inline SVGs instead — see
+`web`'s visual language, its overlay primitive and the server contracts both
+frontends read (see the table below), and deliberately borrows nothing else:
+no router (there is one screen), no query cache (there is one poll), no icon
+library (a handful of inline SVGs instead — see
 [what it shares and what it does not](#what-is-shared-with-web-and-what-is-not)).
 
 ## The three rules
@@ -53,7 +57,9 @@ primitive for every interruption in the app. A second question is asked *inside*
 the surface that raised it: same sheet, new title, new footer. Besides removing
 a whole class of dismissal and focus bugs, it is the better mobile shape — the
 question lands where the thumb already is instead of in the middle of the
-screen.
+screen. The Cloud account sheet goes furthest: its status, every phase of the
+link flow and both of its confirms are views of one sheet, and each goes back
+to the status view instead of stacking on it.
 
 ## What was rejected, and why
 
@@ -87,11 +93,14 @@ duplication. Cluster has no anchored-dropdown use case at all: none of its
 overlays hangs off a toolbar, and a centred modal is the correct desktop form
 for every one of them. The duplicate was removed rather than promoted.
 
-**Keeping `ConfirmDialog` for the cluster's two confirmations.** It stays in
-`@pockode/shared` and `web` still uses it, but both cluster call sites were
-confirmations raised from inside an open sheet — exactly the stacking rule 3
-exists to remove. The running-node Delete needs three actions besides, which a
-confirm/cancel pair cannot express and a `Sheet` footer can.
+**Keeping `ConfirmDialog` for the cluster's confirmations.** It stays in
+`@pockode/shared` and `web` still uses it, but both of the cluster's original
+call sites were confirmations raised from inside an open sheet — exactly the
+stacking rule 3 exists to remove. The running-node Delete needs three actions
+besides, which a confirm/cancel pair cannot express and a `Sheet` footer can.
+The cloud link's two confirms, Unlink and linking over another cloud's link,
+are `ConfirmDialog`s in `web`'s Settings and in-sheet views here for the same
+reason: both are raised from the Cloud account sheet.
 
 **Remembering the node start password.** It was held in memory for the tab's
 lifetime — one password for every node — so the first Start of a session opened
@@ -128,7 +137,8 @@ rest diverge.
 | `Sheet` | **Promoted.** The one genuine overlap — both projects want the same drawer/modal at the same width. Its `lucide-react` icon became an inline SVG on the way: `@pockode/shared` compiles into both bundles, so an icon library added for it would be paid for twice. |
 | `ReconnectBanner` | **Presentational half promoted.** The escalation threshold and the copy are the same in both; *whether* the connection is down is not — the two stores answer it differently enough that a shared component reading either would have to know about both. Each project keeps a thin store-connected wrapper. |
 | `Spinner`, `createAuthStore`, `getWebSocketUrl`, `useIsExpanded`, `BREAKPOINTS` | **Already shared, and used here** — some directly, the width ladder through `Sheet`. |
-| `ConfirmDialog` | **Shared, but unused here.** Both of its cluster call sites became in-sheet confirmations (above); `web` is unaffected. |
+| `ConfirmDialog` | **Shared, but unused here.** Every cluster confirmation is asked inside its sheet (above); `web` is unaffected. |
+| The `cloud_link` contract (types, the revision rule, `-32013`, the user code's spellings) and `QrCode` | **Promoted** when the panel gained cloud linking — the same pattern as the `auth`, restart and update contracts: one copy of what the server means, read by both. The card, the link sheet and their words are not: the panel draws its own, saying "this cluster" where `web` says "this Pockode" ([cloud-link-ui.md](cloud-link-ui.md#the-cluster-panel)). |
 | `ResponsivePanel` (anchored dropdown) | **Stays in `web`.** No cluster use case; do not promote it here later either. |
 | `ActivityBadge` | **Not reused.** Typed to `Activity`, which is derived from a work and a session's turn — neither of which the cluster panel has. Cluster keeps its own three-state dot/pill. Its *contrast* reasoning — hue on the border, not on the letters — is worth copying; the component is not. |
 | `BottomActionBar`, `PanelSection` | **Not reused.** They would drag `web`'s complexity into a panel whose whole argument is that it is small. |

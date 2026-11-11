@@ -416,7 +416,9 @@ alternatives that were rejected on the way to it, are in
   cluster frontend opens on top of another.
 - **An error belonging to one node is shown in that node's card**, not above a
   list the user may have scrolled away from; a failure to load the list at all
-  replaces the list with its own message and a Retry. Neither expires on a timer
+  replaces the list with its own message and a Retry, under a header that
+  stays — so a sheet open from the header, such as a cloud link waiting for
+  approval, is not taken with it. Neither expires on a timer
   — a notice reporting something the user must act on should not vanish while it
   is being read — and a node's error clears when the next action on that node
   succeeds.
@@ -440,6 +442,14 @@ alternatives that were rejected on the way to it, are in
   another version than the page was built for. The screens and their copy are
   [restart-ui.md](restart-ui.md#web-cluster-the-header) and
   [self-update-ui.md](self-update-ui.md#web-cluster-the-header).
+- **The cloud account** is a cloud icon button in the header, before the
+  version. It opens the **Cloud account** sheet: whether this machine is linked
+  and to which account, whether this cluster is in the account's list, **Link**
+  (the device flow's code and link, and on a computer a QR code) and **Unlink**
+  with a confirmation, all as views of that one sheet. The link is the OS
+  user's, so it covers the cluster, its nodes and every other Pockode of that
+  user, whichever of them it was made from. The screens and their copy are
+  [cloud-link-ui.md](cloud-link-ui.md#the-cluster-panel).
 - **Nodes restart without their password.** A running node whose `version`
   differs from the cluster's *installed* one — the file it would be started
   from — is outdated: its card gains a version line and a **Restart** beside
@@ -502,7 +512,7 @@ After authentication:
 | `node.stop` | Stops a node's server (params: `{id}`) |
 | `node.cleanup` | Removes a stale node's leftover `server.json` (params: `{id}`); returns the node's status |
 | `node.restart` | Asks a running node to restart itself into the installed executable (params: `{id}`); returns the node's status — `restarting` — once it has been asked. Refusals and the status it reports meanwhile: [Restarting from the cluster](#restarting-from-the-cluster) |
-| `cloud_link.*` | Links this machine to a cloud account, or unlinks it, with the cluster running the device flow against its own `-cloud-url` — the same methods and handler as the main server ([Cloud Account Linking](code/cloud-account.md#the-cloud_link-rpc)). `cloud_link.subscribe` is the one subscription a cluster connection holds; it is given back when the connection closes |
+| `cloud_link.*` | Links this machine to a cloud account, or unlinks it, with the cluster running the device flow against its own `-cloud-url` — the same methods and handler as the main server ([Cloud Account Linking](code/cloud-account.md#the-cloud_link-rpc)); the header's cloud button is their client. `cloud_link.subscribe` is the one subscription a cluster connection holds; it is given back when the connection closes |
 
 ## Startup Output
 

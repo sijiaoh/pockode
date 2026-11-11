@@ -1,9 +1,11 @@
 # Cloud Link UI
 
 How a user sees whether this machine is linked to their cloud account, links
-it, and unlinks it, from Pockode's Settings — on a phone, or on a desktop with
-the phone doing the approving. What each status reads as, the link sheet and
-its phases, what unlinking costs and how that is said before the press.
+it, and unlinks it, from Pockode's Settings or from the cluster panel — on a
+phone, or on a desktop with the phone doing the approving. What each status
+reads as, the link sheet and its phases, what unlinking costs and how that is
+said before the press. Settings is described in full; the cluster panel follows
+it and differs only where [The cluster panel](#the-cluster-panel) says.
 
 The process side — the device flow it runs for the UI, the status it reports
 and the `cloud_link.*` RPCs — is
@@ -583,25 +585,78 @@ into success, so unlink gets a requester of its own, as `server.update` and
 `wsStore` beside the others, with the derivation in its comment. `cancel` waits
 at most 10 seconds on the server and keeps the default with the other methods.
 
-## Cluster
+## The cluster panel
 
-Nodes serve this UI: they run `web`. The cluster frontend (`web-cluster`) gets
-none of it in this change. The link is the OS user's, so linking from any
-node's Settings links the cluster and every node with it.
+The cluster frontend (`web-cluster`) offers the same status, link sheet and
+unlink, and this document is its specification too: the rules, the rows, the
+phases, the replies and the wording all apply unless listed here. The link is
+the OS user's, so linking from the panel or from any node's Settings links the
+cluster and every node with it.
+
+**Where it lives.** A cloud icon button in the node list's header, before the
+version button (`aria-label="Cloud account"`). Linking is housekeeping, not
+what the panel is for, so it gets an icon and nothing on the list
+([cluster-ui.md](cluster-ui.md#what-the-panel-is-for)). It opens one sheet,
+**Cloud account**, holding the intro and the card.
+
+**One sheet, its views swapped in place.** The panel stacks no overlays
+([cluster-ui.md](cluster-ui.md#the-three-rules), rule 3), so the card, the link
+sheet's phases and both confirms are views of that one sheet:
+
+- **Status** — the intro and the card: machine row, instance row, *Last
+  attempt* and the revoke notice.
+- **Link** — every phase of [The link sheet](#the-link-sheet). **Back** (and
+  **Done** on an ended phase) returns to the status view; ✕, Escape and the
+  backdrop close the whole sheet. None of them cancels — only Cancel does. A
+  running flow has no Back: ✕, then reopening shows *Linking…* with
+  **Continue**. Where Settings closes its sheet — Cancel answered `canceled`,
+  a start answered `-32013` — the panel returns to the status view instead,
+  which already says where the link stands.
+- **Unlink** and **link over another cloud** — asked in the sheet in place of
+  `ConfirmDialog`, with **Back** to the status view.
+
+What was said while the sheet was up — *Last attempt*, the revoke notice — goes
+when it closes, as it does on leaving Settings. The status is followed for as
+long as the header is up, not only while the sheet is, so a flow that ends
+while the sheet is closed is told the next time it opens. The header stays up
+when a node poll fails ([cluster.md](cluster.md#frontend-ux)), so a failed poll
+does not take an open sheet or a running unlink with it.
+
+**"This cluster" for "this Pockode".** Every line that names the instance
+names the cluster: "This cluster is listed", "Adding this cluster…", "This
+cluster isn't listed", "This cluster can't store a cloud link". The intro and
+the scope sentence read "this cluster, its nodes and other projects". Where
+Settings points at the server log or at restarting Pockode, the panel says "the
+cluster's log" and "restart the cluster"; the `not_attached` notice names the
+cluster's data directory, the `-relay=false` notice the cluster, and a restart
+reads "The cluster restarted, so linking stopped." and "The cluster restarted,
+so your last attempt to link stopped."
+
+**Unlink has no client timeout**: like the panel's node requests, its
+`cloud_link.*` requests carry none of their own ([Timeouts](#timeouts) is
+`web`'s). If the connection drops while it is out, the view says "No answer
+came before the connection dropped. The status will show whether it went
+through." — the unlink may well have gone through.
 
 ## Components
 
-| Piece | Where | What |
-|-------|-------|------|
-| `useCloudLinkSubscription` | `web/src/hooks/` | `cloud_link.subscribe` over `useSubscription` (`resubscribeOnWorktreeChange: false` — the status is the process's, not a worktree's); the latest-flow copy and its revision rule; the flow ids this page started; re-subscribes on page visibility. No global store: nothing outside this section reads the link, and the flow comes back with the snapshot |
-| `cloudLinkSubscribe` / `cloudLinkUnsubscribe` | `web/src/lib/wsStore.ts` | Beside the other watch subscriptions, which open through the store's own `openSubscription` |
-| `cloudLink` RPC actions | `web/src/lib/rpc/cloudLink.ts` | `start`, `cancel`, `unlink` (long requester); `isCloudLinkUnavailable` reads `-32013` |
-| `CloudLinkSection` | `web/src/components/Settings/sections/` | The intro, the card (machine row, instance row, *Last attempt*, the two confirms and the revoke notice), the sheet |
-| `CloudLinkSheet` | `web/src/components/CloudLink/` | Every phase above |
-| `cloudLinkText` | `web/src/components/CloudLink/` | The words the card and the sheet share: the instance line, the user code's two spellings, hosts |
-| `QrCode` | `web/src/components/ui/` | An SVG drawn from a module matrix; knows nothing about links |
+The `cloud_link` contract and the rules both frontends read it by are in
+`@pockode/shared` (`packages/shared/src/utils/cloudLink.ts`): the types,
+`isFlowRunning`, `newerFlow` (the revision rule), `isCloudLinkUnavailable`
+(`-32013`), `hostOf`, `displayUserCode`, `spokenUserCode`. So is `QrCode`, an
+SVG drawn from a module matrix that knows nothing about links. Each frontend
+keeps what it draws and its own socket:
 
-Reused: `CliRow` / `CliRowNotice` and its status `Dot` (moved there from
+| Piece | `web` | `web-cluster` |
+|-------|-------|---------------|
+| `useCloudLinkSubscription` — `cloud_link.subscribe`, the latest-flow copy, the flow ids this page started, re-subscribing on page visibility. No global store: nothing else reads the link, and the flow comes back with the snapshot | `src/hooks/`, over `useSubscription` (`resubscribeOnWorktreeChange: false` — the status is the process's, not a worktree's) | `src/hooks/`, on the panel's own socket: subscribes again on every connect |
+| `cloudLinkSubscribe` / `cloudLinkUnsubscribe` | `src/lib/wsStore.ts`, through the store's `openSubscription` | `src/lib/wsStore.ts`, which routes the notifications to it |
+| `cloudLink` RPC actions — `start`, `cancel`, `unlink` | `src/lib/rpc/cloudLink.ts`; unlink on the long requester | `src/lib/rpc/cloudLink.ts` |
+| The card | `CloudLinkSection` in `src/components/Settings/sections/` | `CloudLink` in `src/components/`: the header button and the sheet's status, unlink and link-over views |
+| The link sheet | `CloudLinkSheet` in `src/components/CloudLink/` | `CloudLinkFlowSheet` in `src/components/` |
+| The words and parts the card and the sheet share | `cloudLinkText` in `src/components/CloudLink/` | `cloudLinkParts.tsx` in `src/components/`, with its inline icons |
+
+Reused in `web`: `CliRow` / `CliRowNotice` and its status `Dot` (moved there from
 `CliAccountRow`), `ExpiryLine`, `Details`, `Outcome` (moved out of
 `CliLoginSheet` into `CliLogin/loginParts.tsx`), the button classes there,
 `Sheet`, `ConfirmDialog`, `useHasFinePointer`. `SignInLink` gains `label` and
@@ -612,13 +667,16 @@ its `title` attribute, for every card built on it. `CliRow` and the button
 classes are by now shared by three sections and two sheets; moving them to
 `components/ui/` is a fair follow-up, not part of this change.
 
-None of it goes into `@pockode/shared`: `web-cluster` does not use it.
+`web-cluster` imports none of `web`'s: its rows, notices and views are its own,
+built on the shared `Sheet` and its own `buttons.ts`
+([cluster-ui.md](cluster-ui.md#what-is-shared-with-web-and-what-is-not)).
 
 ### The QR code library
 
-`web` had none before this. It uses **`uqr`** — no dependencies, ESM, a few kB, and
-`encode()` returns the module matrix, so `QrCode` draws its own SVG with the
-theme-proof colours above instead of styling a library's markup or a canvas.
+`QrCode` uses **`uqr`**, a dependency of `@pockode/shared` — no dependencies,
+ESM, a few kB, and `encode()` returns the module matrix, so `QrCode` draws its
+own SVG with the theme-proof colours above instead of styling a library's
+markup or a canvas.
 `qrcode` (canvas and data-URL oriented, with Node-only dependencies) and
 `qrcode.react` (a component with its own markup) are the usual alternatives and
 give less for more.

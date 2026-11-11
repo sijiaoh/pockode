@@ -64,7 +64,7 @@ Switching accounts is unlinking, then linking again.
 
 ## Linking from the UI
 
-A running server, node or cluster can run the device flow itself, so the user links the machine from Pockode's UI instead of a terminal. The UI only watches: it shows the user code and the link, and on a phone the user opens the link in a browser that is usually already signed in to the cloud, so approving is one tap. Nothing changes on the cloud's side — it is the same device flow, the same `cloud.json`, and the same revoke. `cloudlogin.Service` is the process's half; [`cloud_link.*`](#the-cloud_link-rpc) is what the UI sees of it. What the user sees — Settings → Cloud and its link sheet — is [cloud-link-ui.md](../cloud-link-ui.md).
+A running server, node or cluster can run the device flow itself, so the user links the machine from Pockode's UI instead of a terminal. The UI only watches: it shows the user code and the link, and on a phone the user opens the link in a browser that is usually already signed in to the cloud, so approving is one tap. Nothing changes on the cloud's side — it is the same device flow, the same `cloud.json`, and the same revoke. `cloudlogin.Service` is the process's half; [`cloud_link.*`](#the-cloud_link-rpc) is what the UI sees of it. What the user sees — Settings → Cloud, the cluster panel's Cloud account sheet, and their link sheet — is [cloud-link-ui.md](../cloud-link-ui.md).
 
 Because `cloud.json` belongs to the OS user, linking from any one process links the machine for all of them: every server, every node of a cluster and the cluster itself. Each process still runs its flow against its own `-cloud-url`.
 

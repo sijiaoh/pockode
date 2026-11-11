@@ -63,6 +63,6 @@ See [Cluster mode](/docs/cluster/).
 | `pockode login` | Shows a link and a QR code; open it where you are signed in to the cloud and approve the code it shows. The machine is then listed in your account, and every Pockode on it — already running ones included, within a few seconds — appears there. `-cloud-url` picks the cloud, as for the server |
 | `pockode logout` | Unlinks the machine. If the cloud cannot be reached, the machine is still unlinked here; remove it from your account on the web |
 
-A running Pockode can do the same from its web UI, under Settings → Cloud: it shows the link and its code (and a QR code on a computer), and unlinks with a confirmation. Linking from any one Pockode links the machine for all of them.
+A running Pockode can do the same from its web UI, under Settings → Cloud, and a cluster from its panel, under the cloud button in the header: each shows the link and its code (and a QR code on a computer), and unlinks with a confirmation. Linking from any one Pockode links the machine for all of them.
 
 The link is kept per OS user, in `pockode/cloud.json` under the user's configuration directory. Without it Pockode works exactly as before. What linking shares with the cloud is listed in the [privacy policy](/privacy/#12-cloud-account-information).
