@@ -725,6 +725,22 @@ describe("CloudLinkSection", () => {
 			expect(screen.queryByText(/Your last link code expired/)).toBeNull();
 		});
 
+		it("tells a start refused after the sheet was closed", async () => {
+			const user = userEvent.setup();
+			const reply = deferred<CloudLinkFlow>();
+			server.start = () => reply.promise;
+			render(<CloudLinkSection />);
+			await user.click(await screen.findByRole("button", { name: "Link" }));
+			await user.keyboard("{Escape}");
+			await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+
+			await act(async () => reply.reject(new Error("cloud.json unreadable")));
+			expect(
+				await screen.findByText("Your last attempt to link couldn't start."),
+			).toBeInTheDocument();
+			await findRow("Not linked");
+		});
+
 		it("says nothing of a flow it never saw running", async () => {
 			server.snapshot = status({
 				flow: flow({ phase: "failed", failure: { reason: "expired" } }),
@@ -829,6 +845,32 @@ describe("CloudLinkSection", () => {
 			expect(
 				screen.getByRole("link", { name: /Open cloud\.example\.com/ }),
 			).toHaveAttribute("href", CLOUD);
+		});
+
+		it("drops the revoke notice when a link started before the reply", async () => {
+			const user = userEvent.setup();
+			const reply = deferred<CloudLinkUnlinked>();
+			server.snapshot = LINKED;
+			server.unlink = () => reply.promise;
+			render(<CloudLinkSection />);
+			await user.click(await screen.findByRole("button", { name: "Unlink" }));
+			await user.click(
+				within(screen.getByRole("dialog")).getByRole("button", {
+					name: /Unlink/,
+				}),
+			);
+			push(status());
+			push(status({ flow: waiting() }));
+			await findRow("Linking…");
+
+			await act(async () =>
+				reply.resolve({
+					was_linked: true,
+					cloud_url: CLOUD,
+					revoke_error: "connection refused",
+				}),
+			);
+			expect(screen.queryByText(/couldn't be told/)).toBeNull();
 		});
 
 		it("reads its own timeout as no answer yet, not a failure", async () => {

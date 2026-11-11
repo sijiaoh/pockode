@@ -258,6 +258,7 @@ state as usual:
 | `failed`, `declined` | "Your last link was declined on the approval page." |
 | `failed`, `other` | "Your last attempt to link failed." and **Details** with the `detail` |
 | The process restarted ([*Leaving the app*](#closing-and-cancelling)) | "Pockode restarted, so your last attempt to link stopped." |
+| A `start` from this page refused after the sheet was closed — Cancel waits for the flow's id, but ✕ does not. Not shown while a sheet is open again (it shows its own error) or a flow is running | "Your last attempt to link couldn't start." and **Details** with the error |
 | `canceled` | — (a cancel is somebody's deliberate act) |
 | `linked`, `already_linked` without `left_behind` | — (the row already says it) |
 
@@ -266,10 +267,10 @@ behind* sentence to the same notice, in warning style, with **Open {host} ↗**:
 one notice per attempt, never two. Every notice ends with **Dismiss** in its
 footer.
 
-It is shown only for a flow this page watched running, so a reload never brings
-it back, and it is gone on **Dismiss**, on leaving Settings, and when a new flow
-starts. It is an event told once, not state: the card never draws the link
-from it.
+It is shown only for a flow this page watched running (or a start it sent), so
+a reload never brings it back, and it is gone on **Dismiss**, on leaving
+Settings, and when a new flow starts. It is an event told once, not state: the
+card never draws the link from it.
 
 ## The link sheet
 
@@ -565,7 +566,7 @@ What the reply says:
 | `unlinked` | What the user sees |
 |------------|-------------------|
 | `was_linked`, no `revoke_error` | The dialog closes; the card follows the status to *Not linked* |
-| `was_linked`, `revoke_error` | The dialog closes; under *Not linked* a warning notice: "Unlinked here, but {host of `unlinked.cloud_url`} couldn't be told: {revoke_error}. Remove {machine} there so it isn't left in your list." with **Open {host} ↗**. Kept until the user leaves Settings or starts a link |
+| `was_linked`, `revoke_error` | The dialog closes; under *Not linked* a warning notice: "Unlinked here, but {host of `unlinked.cloud_url`} couldn't be told: {revoke_error}. Remove {machine} there so it isn't left in your list." with **Open {host} ↗**. Kept until the user leaves Settings or starts a link — a reply that lands after a link started is not shown |
 | not `was_linked` | The dialog closes; the status already says *Not linked* — another process or a terminal got there first. Nothing more to say |
 
 The host in the revoke notice is the reply's, not the status's: unlinking a

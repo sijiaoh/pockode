@@ -31,10 +31,14 @@ import CliRow, {
 	type CliRowState as RowState,
 } from "./CliRow";
 
-/** How a flow this page watched running ended while the sheet was closed. */
+/**
+ * How a flow this page watched running ended while the sheet was closed — or
+ * a start from this page refused after the sheet was put away.
+ */
 type LastAttempt =
 	| { kind: "ended"; flow: CloudLinkFlow }
-	| { kind: "restarted" };
+	| { kind: "restarted" }
+	| { kind: "refused"; error: string };
 
 /** An unlink the cloud could not be told about. */
 interface RevokeFailure {
@@ -68,6 +72,9 @@ export default function CloudLinkSection() {
 	);
 	// Bumped on every close of the sheet or a dialog; see the focus effect.
 	const [closings, setClosings] = useState(0);
+	// Counts the flows this page has seen start, so an unlink reply that lands
+	// after a new link began does not bring back a notice that link cleared.
+	const flowsSeen = useRef(0);
 
 	// Whenever the status shows the link gone the dialog has nothing left to
 	// do, whether or not its request has answered; and a link to another cloud
@@ -100,6 +107,7 @@ export default function CloudLinkSection() {
 		if (isFlowRunning(flow)) {
 			if (!watched.current.has(flow.id)) {
 				watched.current.add(flow.id);
+				flowsSeen.current++;
 				// A new attempt: what was said about earlier ones is moot.
 				setLastAttempt(null);
 				setRevokeFailure(null);
@@ -148,10 +156,15 @@ export default function CloudLinkSection() {
 
 	const machine = machineLabel(status?.machine_name);
 	const unlink = async () => {
+		const flowsBefore = flowsSeen.current;
 		try {
 			const unlinked = await cloudLinkUnlink();
 			closeConfirm();
-			if (unlinked.was_linked && unlinked.revoke_error) {
+			if (
+				unlinked.was_linked &&
+				unlinked.revoke_error &&
+				flowsSeen.current === flowsBefore
+			) {
 				setRevokeFailure({
 					// The reply's cloud, not the status's: a link to another cloud is
 					// revoked there.
@@ -182,6 +195,15 @@ export default function CloudLinkSection() {
 	// Drawn from `read`, as the machine row is: a failed read is not drawn
 	// over a listing it can no longer vouch for.
 	const instance = read.kind === "status" ? instanceRow(read.status) : null;
+
+	// Called by a sheet already gone, so it reads the refs, not this render.
+	// A sheet open again shows its own start's error, and a running flow makes
+	// the refusal moot — the sheet drops its own start error then too.
+	const onStartRefused = (error: string) => {
+		const current = previousFlow.current;
+		if (sheetOpen.current || (current && isFlowRunning(current))) return;
+		setLastAttempt({ kind: "refused", error });
+	};
 
 	const dismissLastAttempt = () => {
 		setLastAttempt(null);
@@ -226,6 +248,7 @@ export default function CloudLinkSection() {
 					startOnOpen={sheet.startOnOpen}
 					onFlow={link.applyFlow}
 					onUnavailable={link.markUnavailable}
+					onStartRefused={onStartRefused}
 					onClose={closeSheet}
 				/>
 			)}
@@ -560,6 +583,15 @@ function LastAttemptNotice({
 			Dismiss
 		</button>
 	);
+	if (attempt.kind === "refused") {
+		return (
+			<CliRowNotice
+				body="Your last attempt to link couldn't start."
+				details={attempt.error}
+				footer={dismiss}
+			/>
+		);
+	}
 	if (attempt.kind === "restarted") {
 		return (
 			<CliRowNotice

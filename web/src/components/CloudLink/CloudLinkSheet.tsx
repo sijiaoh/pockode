@@ -47,6 +47,11 @@ interface Props {
 	onFlow: (flow: CloudLinkFlow, startedHere?: boolean) => void;
 	/** `start` answered that this process cannot keep a link. */
 	onUnavailable: () => void;
+	/**
+	 * `start` was refused after the sheet was put away, so the sheet cannot
+	 * say so itself.
+	 */
+	onStartRefused: (error: string) => void;
 	/** Puts the sheet away. The flow keeps running: only Cancel ends it. */
 	onClose: () => void;
 }
@@ -96,6 +101,7 @@ export default function CloudLinkSheet({
 	startOnOpen,
 	onFlow,
 	onUnavailable,
+	onStartRefused,
 	onClose,
 }: Props) {
 	const cloudLinkStart = useWSStore((s) => s.actions.cloudLinkStart);
@@ -140,7 +146,10 @@ export default function CloudLinkSheet({
 				if (mounted.current) onClose();
 				return;
 			}
-			if (!mounted.current) return;
+			if (!mounted.current) {
+				onStartRefused(errorMessage(err));
+				return;
+			}
 			setStartError(errorMessage(err));
 			setStarting(false);
 		}
