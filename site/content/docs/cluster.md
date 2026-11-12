@@ -34,6 +34,10 @@ Every running node's menu has **Restart** too. On Windows the install command ca
 
 Every node runs as your user, so installing Claude Code or Codex, signing them in or out, or updating them, from any project's **Settings → AI CLIs** applies to all of them.
 
+## Cloud account
+
+The cloud button in the page's header links the machine to your [cloud account](/docs/cloud/), which then lists the cluster and every node it starts.
+
 ## Flags
 
 `pockode cluster` takes `-password`, `-port`, `-data`, `-relay`, `-relay-frontend-port`, `-cloud-url` and `-dev`; see [Command-line flags](/docs/flags/#cluster-mode). The password can come from `POCKODE_PASSWORD` instead, as for the normal server.

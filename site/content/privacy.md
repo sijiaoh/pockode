@@ -23,7 +23,7 @@ The Pockode server also fetches a short announcement from us each time it starts
 
 ### 1.2 Cloud Account Information
 
-A cloud account is optional. If you sign in to the cloud, we receive your email address; if you also link a machine — with `pockode login`, or from Pockode's Settings or cluster panel — we receive information about that machine and the Pockode instances on it, so that we can show you your instances:
+A cloud account is optional; [Cloud account](/docs/cloud/) describes how it works. If you sign in to the cloud, we receive your email address; if you also link a machine — with `pockode login`, or from Pockode's Settings or cluster panel — we receive information about that machine and the Pockode instances on it, so that we can show you your instances:
 
 - **Account:** Your email address, which identifies your account (there is no password). We send a one-time sign-in code to it each time you sign in.
 - **Linked Machine:** The machine's hostname, your operating system user name on it, and its operating system, sent when you link it. The machine is named `user@hostname` in your account.
