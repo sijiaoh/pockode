@@ -32,6 +32,8 @@ Scan the QR code under the banner and enter your password. The phone reaches you
 
 To stay off the relay, start with `-relay=false` and open `http://<your machine's IP>:9870` from a phone on the same network. That connection is plain HTTP; read [Security](/security/) first.
 
+With Pockode on more than one project or machine, an optional [cloud account](/docs/cloud/) lists them all on one page.
+
 ## 4. Run your first story
 
 {{< shot "phone-story" >}}

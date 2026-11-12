@@ -13,7 +13,7 @@
     "lint": "biome check --error-on-warnings web web-cluster packages",
     "format": "biome check --write --linter-enabled=false web web-cluster packages",
     "readme": "node scripts/messaging/readme.mjs",
-    "check:messaging": "node scripts/messaging/readme.mjs --check && node scripts/messaging/flags.mjs",
+    "check:messaging": "node scripts/messaging/readme.mjs --check && node scripts/messaging/budget.mjs && node scripts/messaging/flags.mjs",
     "notices:frontend": "node scripts/notices/frontend.mjs",
     "test:notices": "node --test \"scripts/notices/*.test.mjs\"",
     "test:messaging": "node --test \"scripts/messaging/*.test.mjs\" \"scripts/ui-walkthrough/marketing/*.test.mjs\""

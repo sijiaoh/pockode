@@ -23,22 +23,24 @@
 name: Pockode
 url: https://pockode.com
 repo: https://github.com/sijiaoh/pockode
+# Where the optional cloud account signs in and lists the linked machines.
+cloud: https://cloud.pockode.com
 
 tagline: Your coding agents keep working. Steer them from your phone.
-subtitle: Hand stories to a team of Claude Code and Codex agents on your own machine, answer their questions and ship the result from any browser.
+subtitle: Hand stories to Claude Code and Codex agents on your machine, answer their questions and ship from any browser.
 
-# The homepage's screens 2-5, in order; the README lists the same title and
+# The homepage's screens 2-6, in order; the README lists the same title and
 # description.
 pillars:
   - id: delegate
     title: Delegate
-    description: Split a story into tasks, each run by a Claude Code or Codex agent in its own role.
+    description: Split a story into tasks, each run by an agent in its own role.
   - id: loop
     title: Stay in the loop
     description: When an agent needs a decision, it stops and asks; you answer from anywhere.
   - id: ship
     title: Review & ship
-    description: Read the diff, commit, and open your dev server on your phone with Port Preview.
+    description: Read the diff, commit, and preview your dev server with Port Preview.
   - id: machine
     title: Your machine
     description: Pockode dials out from beside your project, so there is no port to forward.
@@ -50,9 +52,12 @@ pillars:
         text: TLS on both relay hops
       - id: local
         text: "`-relay=false` keeps the app on your network"
+  - id: cloud
+    title: All your machines
+    description: Link your machines to an optional cloud account and open each Pockode from one list.
 
 quickstart:
-  prerequisite: Pockode drives the `claude` or `codex` CLI. Have neither? Install one with its official installer and sign in, both from the app.
+  prerequisite: Pockode drives the `claude` or `codex` CLI. Have neither? Install one from the app.
   run_where: on your dev machine, in your project directory
   next: Scan the QR code with your phone.
   installers:
@@ -107,6 +112,8 @@ homepage:
   security: How it is secured
   faq: Questions
   docs: More in the docs
+  sign_in: Sign in
+  cloud_docs: How it works and what it shares
 
 # How the pictures are described to a screen reader, on the site and in the
 # README alike. Plain text only: an alt text cannot show `code`. Describe what

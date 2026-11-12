@@ -320,6 +320,38 @@ summary,
   background: var(--accent);
 }
 
+/* A ghost button whose box is 36 tall while the link keeps the 44 row as its
+   target (§3.1), so the box, and the focus ring with it, is drawn behind the
+   text rather than on the link. */
+.nav-sign-in {
+  padding: 0 var(--s-3);
+  font-weight: 600;
+  color: var(--text);
+}
+
+.nav-sign-in::before {
+  content: "";
+  position: absolute;
+  inset: 4px 0;
+  z-index: -1;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-md);
+  transition: background-color 150ms var(--ease);
+}
+
+.nav-sign-in:hover::before {
+  background: var(--card);
+}
+
+.nav-sign-in:focus-visible {
+  outline: none;
+}
+
+.nav-sign-in:focus-visible::before {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
 .menu-toggle {
   display: none;
   align-items: center;
@@ -362,6 +394,22 @@ summary,
     height: 48px;
     padding: 0 var(--s-4);
     font-size: 1rem;
+  }
+
+  .js .nav-sign-in {
+    font-weight: 500;
+    color: var(--text-2);
+  }
+
+  /* In the panel Sign in is a plain row. The box stays only to carry the
+     focus ring, so it spans the row and sits in front of the panel's fill,
+     which would otherwise hide it. */
+  .js .nav-sign-in::before {
+    inset: 0;
+    z-index: auto;
+    border: 0;
+    border-radius: 0;
+    background: none;
   }
 
   .js .nav-link[aria-current]::after {
@@ -1138,7 +1186,8 @@ details[open] > summary .chevron {
   line-height: 1.8;
 }
 
-/* Homepage (§4): six screens, each a headline, a sentence and a visual */
+/* Homepage (§4): seven screens, each a headline, a sentence and a visual
+   (Cloud has its links instead) */
 
 .hero {
   position: relative;
@@ -1343,6 +1392,19 @@ details[open] > summary .chevron {
 
 .text-link:hover {
   color: var(--accent-hover);
+}
+
+.cloud-cta {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: center;
+  gap: var(--s-3);
+  margin-top: var(--s-6);
+}
+
+.cloud-cta .text-link {
+  margin-top: 0;
 }
 
 .shot-delegate,
