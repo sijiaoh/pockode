@@ -36,7 +36,7 @@ Every node runs as your user, so installing Claude Code or Codex, signing them i
 
 ## Cloud account
 
-The cloud button in the page's header links the machine to your [cloud account](/docs/cloud/), which then lists the cluster and every node it starts.
+The **Cloud account** button in the page's header links the machine to your [cloud account](/docs/cloud/), which then lists the cluster and every node it starts.
 
 ## Flags
 
