@@ -423,6 +423,9 @@ pnpm run test:messaging    # the checks' own tests, and the marketing palette's
 `check:messaging` fails when:
 
 - the README's blocks disagree with the source (`readme.mjs --check`);
+- the homepage's prose reaches its word budget of 150 (`budget.mjs`), which
+  [docs/site-design.md §4.8](../docs/site-design.md#48-word-budget) defines;
+  a field the homepage starts showing as prose is added to its list;
 - the README or anything under `site/` names a `pockode` flag the server does
   not have, one it marks deprecated, or one written with two dashes
   (`flags.mjs`). The server is the truth: the check builds it (Go required)
