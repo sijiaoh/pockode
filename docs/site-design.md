@@ -12,10 +12,10 @@ no others. Every layout is written mobile first, at 375 wide.
 
 ## 1. Principles
 
-- **A page is read at a glance.** The homepage is six screens, and each one is a
-  headline, one sentence and one picture. Nothing on it needs scrolling
-  sideways or opening to make sense. The FAQ is the one exception, and its
-  answers stay folded until someone opens them.
+- **A page is read at a glance.** The homepage is seven screens, and each one is
+  a headline, one sentence and one picture (Cloud has its links instead).
+  Nothing on it needs scrolling sideways or opening to make sense. The FAQ is
+  the one exception, and its answers stay folded until someone opens them.
 - **The pictures are the product.** Every visual is a generated capture of
   the real app or the architecture figure from `static/marketing/`. There are no
   illustrations or stock art, and no icon stands in for a picture; the only
@@ -159,17 +159,24 @@ and a 1px `--border` bottom edge. Its contents sit in the container.
 - **Left:** a Home link with the logo (28×28) followed by the wordmark
   (`name`, 600 1.0625rem, −0.02em), 8 apart.
 - **Right, regular and expanded:** the nav row is Home · Docs · Security ·
-  Changelog · GitHub, 0.875rem 500 `--text-2`, items 24 apart, each a 44-tall
-  target. GitHub carries its 16px mark before the word and opens in a new tab
-  with `rel="noopener"`. The current section (`aria-current="page"`, or
-  `"true"` for a page inside Docs) is `--text`, with a 2px `--accent` bar 6
-  under the text.
+  Changelog · GitHub · Sign in, 0.875rem 500 `--text-2`, items 24 apart, each
+  a 44-tall target. GitHub carries its 16px mark before the word and opens in
+  a new tab with `rel="noopener"`. The current section
+  (`aria-current="page"`, or `"true"` for a page inside Docs) is `--text`, with
+  a 2px `--accent` bar 6 under the text.
+- **Sign in** links to the cloud account (`cloud` in the messaging source) in
+  the same tab: it is Pockode's own sign-in, not a third party's. It is a ghost
+  button (§2.4) scaled to the nav: 0.875rem 600 `--text`, 12 side padding and a
+  box 36 tall, drawn inside the link's 44-tall target; the hover fill and the
+  focus ring go on that box, not on the target. At 640 the row is 448 wide
+  beside the 106 of the brand, inside 592, so it stays one line.
 - **Right, compact:** a 44×44 **Menu** button (hamburger icon, `aria-label="Menu"`,
   `aria-expanded`, `aria-controls`). It opens a panel under the header, full
   width, on `--surface` with a `--border` bottom edge. The panel lists the same
-  five items as 48-tall rows, 1rem, with 16 side padding. It closes on Escape,
-  on a click outside it and on following a link. It does not lock the page
-  scroll.
+  six items as 48-tall rows, 1rem, with 16 side padding; Sign in is a row like
+  the others, with no button box, and is not kept in the bar. It closes on
+  Escape, on a click outside it and on following a link. It does not lock the
+  page scroll.
 - A **Skip to content** link is the first focusable element. It is visually
   hidden until focused, then shown at the top left as a primary button.
 
@@ -186,7 +193,8 @@ Compact (stacked, 32 apart):
 
 1. Logo and wordmark, and under them the `tagline` in `--text-2` 0.875rem.
 2. Two link lists side by side, 50/50:
-   - **Product:** Docs, Security, Changelog
+   - **Product:** Docs, Cloud (`/docs/cloud/`, which the docs menu calls
+     Cloud account), Security, Changelog, Sign in (the cloud, same tab)
    - **Project:** GitHub, Issues, License, Privacy
 
    Each list has an eyebrow label in `--text-3`, and its links are 0.875rem
@@ -252,9 +260,9 @@ and no third-party request at all.
 
 ## 4. Homepage
 
-Six `<section>`s, each with an `id` and an `aria-labelledby` pointing at its
+Seven `<section>`s, each with an `id` and an `aria-labelledby` pointing at its
 heading. They share one background, separated by space alone: padding block 72
-compact and 120 expanded. Screens 2–5 are the four `pillars`, in their order,
+compact and 120 expanded. Screens 2–6 are the five `pillars`, in their order,
 with `id` = pillar `id`.
 
 | # | `id` | Headline | Sentence | Visual |
@@ -264,13 +272,14 @@ with `id` = pillar `id`.
 | 3 | `loop` | pillar `title` | pillar `description` | `phone-question.png` |
 | 4 | `ship` | pillar `title` | pillar `description` | compact: `phone-diff.png`; regular, expanded: `phone-commit.png` + `phone-diff.png` + `phone-preview.png` |
 | 5 | `machine` | pillar `title` | pillar `description` + three `facts` | below 1024: `architecture-dark-portrait.png`; expanded: `architecture-dark.png` |
-| 6 | `get-started` | "Get started" | `quickstart.prerequisite`, install box, `quickstart.next` | the install box itself; then the FAQ |
+| 6 | `cloud` | pillar `title` | pillar `description` | none: a Sign in button and a link to `/docs/cloud/` |
+| 7 | `get-started` | "Get started" | `quickstart.prerequisite`, install box, `quickstart.next` | the install box itself; then the FAQ |
 
 Within a screen the order is always headline, sentence, visual. Compact and
 regular stack them centred. Expanded layouts are given per screen. Their order
-is a rhythm on purpose: stacked, stacked, split, split, stacked, stacked. The
-wide pictures (video, desktop, diagram) get the full width and the phones get
-a column.
+is a rhythm on purpose: stacked, stacked, split, split, stacked, stacked,
+stacked. The wide pictures (video, desktop, diagram) get the full width and the
+phones get a column.
 
 ### 4.1 Hero
 
@@ -379,7 +388,21 @@ a column.
 - The figure's one alt text, for both variants, is `images.architecture` in
   the messaging source.
 
-### 4.6 Get started and FAQ
+### 4.6 All your machines
+
+The optional cloud account. It is words alone: the instance list is a plain
+list, and a picture of it would say no more than the sentence.
+
+- Stacked and centred at every width, the headline and sentence styled as on
+  every screen, in the 640 text column. Having no visual, it has no reveal.
+- 32 below the sentence, a row of two, 12 apart, wrapping centred: a ghost
+  button **Sign in** (`homepage.sign_in`, at least 140 wide and 48 tall) to the
+  cloud, in the same tab and under the same name as the header's, and the text
+  link **How it works and what it shares →** (`homepage.cloud_docs`) to
+  `/docs/cloud/`. Privacy is the link's to carry: the sentence has no room for
+  it.
+
+### 4.7 Get started and FAQ
 
 - The headline is `homepage.get_started`, the hero button's label. Then
   `quickstart.prerequisite` as the lead, the install box, and
@@ -403,14 +426,16 @@ a column.
   item, below its answer when open. All are closed by default.
 - Under the FAQ: "More in the docs →" links to `/docs/`.
 
-### 4.7 Word budget
+### 4.8 Word budget
 
-These counts cover the prose a visitor reads without opening anything, as
-`messaging.yaml` has it: the hero 35, the four screens 88 including the facts,
-and Get started 26, which totals 149. A word is anything between spaces but a
-lone "&". Buttons, nav and link labels are not counted, and neither are the
-folded FAQ answers. The total must stay under 150.
-A copy edit that pushes it over is a reason to cut words, not to raise the
+The budget covers the prose a visitor reads without opening anything, as
+`messaging.yaml` has it: the hero (`tagline`, `subtitle`), the five screens
+(each pillar's `title`, `description` and `facts`) and Get started
+(`quickstart.prerequisite` and `quickstart.next`). A word is anything between
+spaces but a lone "&". Buttons, nav and link labels are not counted, and
+neither are the install box or the folded FAQ answers. The total must stay
+under 150. `pnpm run check:messaging` holds it and prints the counts per part;
+a copy edit that pushes it over is a reason to cut words, not to raise the
 limit.
 
 ## 5. Docs (`/docs/`)
@@ -632,8 +657,8 @@ fields the homepage reads and which words stay in the templates is in
 site/README.md, *Where the words come from*. This section gives only why the
 copy has the shape it does:
 
-- The four pillar descriptions are short so the homepage fits its word budget
-  (§4.7). The README's pillar list gets the same words, which is the point.
+- The five pillar descriptions are short so the homepage fits its word budget
+  (§4.8). The README's pillar list gets the same words, which is the point.
 - "Your machine"'s sentence is the tunnel alone, because its three `facts`
   carry the CLI and `-relay=false`. The README shows no facts; its *How it
   works* section links to `/security/` instead.

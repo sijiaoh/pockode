@@ -12,13 +12,16 @@
       <nav class="footer-col" aria-labelledby="footer-product">
         <p class="eyebrow" id="footer-product">Product</p>
         <ul>
-          {{- range slice "/docs" "/security" "/changelog" }}
-          {{- with site.GetPage . }}
-          <li><a href="{{ .RelPermalink }}">{{ .LinkTitle }}</a></li>
+          {{- /* Cloud is the cloud account's docs page, under a shorter name
+          than its menu title. */}}
+          {{- range $item := slice (dict "path" "/docs") (dict "path" "/docs/cloud" "label" "Cloud") (dict "path" "/security") (dict "path" "/changelog") }}
+          {{- with site.GetPage $item.path }}
+          <li><a href="{{ .RelPermalink }}">{{ $item.label | default .LinkTitle }}</a></li>
           {{- else }}
-          {{- errorf "footer.html: no page at %s for the footer" . }}
+          {{- errorf "footer.html: no page at %s for the footer" $item.path }}
           {{- end }}
           {{- end }}
+          <li><a href="{{ $m.cloud }}">Sign in</a></li>
         </ul>
       </nav>
       <nav class="footer-col" aria-labelledby="footer-project">

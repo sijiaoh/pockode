@@ -9,7 +9,7 @@
 <!-- messaging:tagline -->
 **Your coding agents keep working. Steer them from your phone.**
 
-Hand stories to a team of Claude Code and Codex agents on your own machine, answer their questions and ship the result from any browser.
+Hand stories to Claude Code and Codex agents on your machine, answer their questions and ship from any browser.
 <!-- /messaging:tagline -->
 
 [![Server](https://github.com/sijiaoh/pockode/actions/workflows/server.yml/badge.svg)](https://github.com/sijiaoh/pockode/actions/workflows/server.yml)
@@ -27,7 +27,7 @@ Hand stories to a team of Claude Code and Codex agents on your own machine, answ
 ## Quick Start
 
 <!-- messaging:quickstart -->
-Pockode drives the `claude` or `codex` CLI. Have neither? Install one with its official installer and sign in, both from the app.
+Pockode drives the `claude` or `codex` CLI. Have neither? Install one from the app.
 
 **macOS / Linux**
 
@@ -60,10 +60,11 @@ Install options, verifying the download and upgrading: [platform support](docs/p
 ## Features
 
 <!-- messaging:pillars -->
-- **Delegate** — Split a story into tasks, each run by a Claude Code or Codex agent in its own role.
+- **Delegate** — Split a story into tasks, each run by an agent in its own role.
 - **Stay in the loop** — When an agent needs a decision, it stops and asks; you answer from anywhere.
-- **Review & ship** — Read the diff, commit, and open your dev server on your phone with Port Preview.
+- **Review & ship** — Read the diff, commit, and preview your dev server with Port Preview.
 - **Your machine** — Pockode dials out from beside your project, so there is no port to forward.
+- **All your machines** — Link your machines to an optional cloud account and open each Pockode from one list.
 <!-- /messaging:pillars -->
 
 <!-- messaging:screenshots -->

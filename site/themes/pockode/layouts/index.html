@@ -53,8 +53,18 @@
       {{- end }}
       {{- if eq .id "machine" }}
       <a class="text-link" href="{{ "security/" | relURL }}">{{ $h.security }} →</a>
+      {{- else if eq .id "cloud" }}
+      <div class="cloud-cta">
+        <a class="btn btn-ghost" href="{{ $m.cloud }}">{{ $h.sign_in }}</a>
+        {{- with site.GetPage "/docs/cloud" }}
+        <a class="text-link" href="{{ .RelPermalink }}">{{ $h.cloud_docs }} →</a>
+        {{- else }}
+        {{- errorf "index.html: no page at /docs/cloud for the Cloud screen" }}
+        {{- end }}
+      </div>
       {{- end }}
     </div>
+    {{- if ne .id "cloud" }}
     <div class="screen-visual reveal">
       {{- if eq .id "delegate" }}
       {{- partial "picture.html" (dict
@@ -91,6 +101,7 @@
       {{- errorf "index.html: no homepage screen for pillar %q in data/messaging.yaml" .id }}
       {{- end }}
     </div>
+    {{- end }}
   </div>
 </section>
 {{- end }}
