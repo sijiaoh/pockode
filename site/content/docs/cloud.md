@@ -15,7 +15,7 @@ Open [cloud.pockode.com](https://cloud.pockode.com/) and enter your email addres
 
 ## Link a machine
 
-A machine is one OS user on one computer, listed as `user@hostname`. Linking it adds every Pockode that user runs there — this project, other projects, clusters and their nodes — to the account, including ones already running (within a few seconds, no restart). Start it in either of two ways:
+A machine is one OS user on one computer, listed as `user@hostname`. Linking it adds to the account every Pockode that user runs there, in any project and in clusters alike, already running ones too (within a few seconds, no restart). Start it in either of two ways:
 
 - **From a terminal**, run `pockode login`. It prints a link and a QR code.
 - **From a running Pockode**, open **Settings → Cloud**, or in a cluster the **Cloud account** button in the header, and tap **Link**. It shows the link, its code and, on a computer, a QR code.
