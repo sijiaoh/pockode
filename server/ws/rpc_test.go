@@ -25,6 +25,7 @@ import (
 	"github.com/pockode/server/authsession"
 	"github.com/pockode/server/cliauth"
 	"github.com/pockode/server/cliauth/cliauthtest"
+	"github.com/pockode/server/cliprofile"
 	"github.com/pockode/server/cliupdate"
 	"github.com/pockode/server/cloudcred"
 	"github.com/pockode/server/cloudlogin"
@@ -190,7 +191,7 @@ func newTestEnvWithAgent(t *testing.T, mock *mockAgent, ag agent.Agent, workDir 
 	workOps.SetRunRecorder(scheduler)
 
 	cliAuth := cliauthtest.New(cliauthtest.State{})
-	cliAuthService := cliauth.NewService(slog.Default())
+	cliAuthService := cliauth.NewService(slog.Default(), cliprofile.NewStore(t.TempDir()))
 	cliAuthService.Register(session.AgentTypeClaude, cliAuth)
 
 	cloud := cloudlinktest.New(t)
@@ -597,7 +598,7 @@ func newMinimalTestHandler(t *testing.T, password string, remoteURL func() strin
 	scheduler := schedule.NewScheduler(scheduleStore, workOps)
 	workOps.SetRunRecorder(scheduler)
 
-	h := NewRPCHandler(password, authguard.NewFrozen(), sessions, "test", remoteURL, tickets, &rawCapabilitiesStub{}, true, cmdStore, worktreeManager, settingsStore, workStore, workOps, work.NewEngine(workStore, work.DefaultMaxNudges), agentRoleStore, scheduleStore, scheduler, cliauth.NewService(slog.Default()), cliupdate.NewService(slog.Default(), nil, nil), nil, restart.New(restarttest.Executable(workDir)), NewUpdater(&fakeReleaseChecker{}, &fakeInstaller{}))
+	h := NewRPCHandler(password, authguard.NewFrozen(), sessions, "test", remoteURL, tickets, &rawCapabilitiesStub{}, true, cmdStore, worktreeManager, settingsStore, workStore, workOps, work.NewEngine(workStore, work.DefaultMaxNudges), agentRoleStore, scheduleStore, scheduler, cliauth.NewService(slog.Default(), cliprofile.NewStore(t.TempDir())), cliupdate.NewService(slog.Default(), nil, nil), nil, restart.New(restarttest.Executable(workDir)), NewUpdater(&fakeReleaseChecker{}, &fakeInstaller{}))
 	t.Cleanup(h.Stop)
 	return h
 }

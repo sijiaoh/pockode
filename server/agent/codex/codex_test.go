@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/pockode/server/agent"
+	"github.com/pockode/server/cliprofile/cliprofiletest"
 )
 
 // newCodexAgent pins the approval settings the shared suite's approval
@@ -13,7 +14,7 @@ import (
 // developer whose own config.toml says otherwise would see them fail for a
 // reason that is not a defect. Yolo still overrides these per thread.
 func newCodexAgent() agent.Agent {
-	return &Agent{configOverrides: []string{
+	return &Agent{profiles: cliprofiletest.UserStore(), configOverrides: []string{
 		`approval_policy="on-request"`,
 		`sandbox_mode="workspace-write"`,
 	}}

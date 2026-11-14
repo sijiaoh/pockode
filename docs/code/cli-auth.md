@@ -17,9 +17,10 @@ Verified against Claude Code 2.1.283 and codex-cli 0.153.0.
 | `server/agent/codex/login.go` | Codex's sign-in: the app-server's device-code `account/login/*` |
 | `server/watch/cli_login.go` | `CLILoginWatcher`, which pushes sign-in changes; the mechanism is `watch/cli_record.go`, shared with [updates](cli-update.md) |
 | `server/cliauth/cliauthtest/` | a `Provider` for tests that need a CLI's sign-in without running one |
-| `server/agent/run.go` | `agent.Run`, the one-shot command runner: Claude's commands and every `--version` |
+| `server/agent/run.go` | `agent.Run` / `agent.RunEnv`, the one-shot command runner: Claude's commands and every `--version` |
 | `server/agent/version.go` | `agent.Version`, the `--version` read, shared with [updates](cli-update.md) |
 | `server/ws/rpc_cli_auth.go` | the `cli_auth.*` methods |
+| `server/cliprofile/` | the CLI's profiles (accounts): which one a command runs as, and what it is started with ([cli-profiles.md](cli-profiles.md)) |
 
 What a CLI prints and how it is read belongs with the rest of that CLI's
 integration, so each provider sits in its CLI's package, beside the code that
@@ -41,6 +42,7 @@ The sign-in methods are [below](#signing-in).
 // Status
 {
   "agent": "claude",               // session.AgentType
+  "profile_id": "...",             // the profile asked about; absent for the default one
   "state": "signed_in",            // signed_in | signed_out | external | not_installed | signing_in | updating | unavailable
   "version": "2.1.283",            // optional
   "account": { "email": "...", "organization": "...", "plan": "max" },  // signed_in; every field optional
@@ -164,10 +166,42 @@ the 75s that timeout allows; a call that waited that long without its turn is
 answered as `unavailable` (or, for a sign-out, an error) saying another command
 was still running.
 
+## Which profile
+
+Every command runs as one of the CLI's profiles
+([agent-integration.md](agent-integration.md#which-account-a-cli-runs-as)):
+the one the caller names, or the current one. `Service` resolves "current"
+when the call is made and hands the provider an ID, so the status it returns,
+and a sign-in, carry `profile_id` — the profile they were for, absent for the
+default one — even when the current profile changes while they run. A sign-in
+is pinned to its profile from `StartLogin` on, not from when its CLI starts
+after waiting for the lock. The RPC methods ask for the current profile today;
+naming another is for the profile screens to come.
+
+The lock below stays one per CLI, not per profile: an update replaces the
+binary every profile runs, and a CLI signs in one profile at a time — a second
+`StartLogin` for the same profile lands in the running sign-in, one for another
+is `ErrLoginInProgress`. While it runs, a status read for *any* of the CLI's
+profiles answers `signing_in`; its `login_id` names the sign-in, whose
+`profile_id` says which profile that is.
+
+Profiles are separate down to the OS keyring. On macOS Claude Code keeps its
+credentials in a Keychain item named after its configuration directory
+(`Claude Code-credentials-<first 8 hex of sha256(dir)>` whenever
+`CLAUDE_CONFIG_DIR` is set; Claude Code 2.1.325, read from the CLI and
+measured: a status read and a sign-out under another directory left the
+default sign-in untouched). The directory it hashes is
+`CLAUDE_SECURESTORAGE_CONFIG_DIR` when that is set — set but empty, the
+default item — so a profile sets it to its own directory too, rather than
+inherit one from the environment Pockode was started in. Codex is told to keep
+its credentials in the profile's `auth.json`
+([agent-integration.md](agent-integration.md#which-account-a-cli-runs-as)).
+
 ## Running the commands
 
-Claude's commands and every `--version` go through `agent.Run`, which is
-`agent.StartProcess` run to completion; Codex's app-server goes through
+Claude's commands go through `agent.RunEnv`, with what the profile adds, and
+every `--version` through `agent.Run` — both `agent.StartProcess` run to
+completion; Codex's app-server goes through
 `agent.StartProcess` directly. Not `exec.CommandContext`: on a timeout the whole
 tree is killed
 (an npm-installed CLI on Windows is a grandchild of the `cmd.exe` wrapper), and
@@ -232,6 +266,7 @@ notification cli_auth.login.changed { id, login: Login }
 {
   "id": "...",
   "agent": "claude",
+  "profile_id": "...",             // the profile signing in; absent for the default one
   "revision": 42,                  // grows with every change; keep the higher copy
   "account_kind": "claude_ai",     // Claude only: claude_ai (default) | console
   "phase": "waiting",              // starting | waiting | verifying | succeeded | failed | canceled
@@ -248,7 +283,8 @@ notification cli_auth.login.changed { id, login: Login }
 ### One per CLI, owned by the server
 
 A CLI has at most one running sign-in. `start` on a CLI that has one returns it —
-whatever `account_kind` was asked for — so two screens that both read "signed
+whatever `account_kind` was asked for, provided it is for the same
+[profile](#which-profile); one for another is refused — so two screens that both read "signed
 out" land in the same sign-in, and switching between the subscription and the
 Console is `cancel` then `start`. A sign-in belongs to the server, not to the
 request or the connection that started it: a reload or a dropped socket leaves
@@ -278,7 +314,8 @@ after it ends and a terminal can sign out meanwhile, so the status card reads
 
 "One per CLI" is one per server. Cluster nodes on one machine share the CLIs'
 stored credentials but each runs its own `Service`, so two nodes could run a
-sign-in to the same CLI at once; the second to finish wins.
+sign-in to the same CLI at once; for the same profile, the second to finish
+wins.
 
 ### Phases and failures
 

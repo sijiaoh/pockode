@@ -11,16 +11,17 @@ import (
 	"github.com/pockode/server/agent"
 	"github.com/pockode/server/cliauth"
 	"github.com/pockode/server/cliauth/cliauthtest"
+	"github.com/pockode/server/cliprofile"
 	"github.com/pockode/server/session"
 )
 
 func TestStatuses(t *testing.T) {
-	s := cliauth.NewService(slog.Default())
+	s := cliauth.NewService(slog.Default(), cliprofile.NewStore(t.TempDir()))
 	s.Register(session.AgentTypeClaude, cliauthtest.New(cliauthtest.State{Status: cliauth.Status{State: cliauth.StateSignedIn}}))
 	s.Register(session.AgentTypeCodex, cliauthtest.New(cliauthtest.State{StatusErr: &agent.BinaryNotFoundError{Name: "codex"}}))
 	s.Register("gemini", cliauthtest.New(cliauthtest.State{StatusErr: errors.New("account/read did not finish within 45s")}))
 
-	got, err := s.Statuses(context.Background(), "")
+	got, err := s.Statuses(context.Background(), "", cliprofile.SelectCurrent())
 	if err != nil {
 		t.Fatalf("Statuses: %v", err)
 	}
@@ -46,11 +47,11 @@ func TestStatuses(t *testing.T) {
 }
 
 func TestStatuses_OneAgent(t *testing.T) {
-	s := cliauth.NewService(slog.Default())
+	s := cliauth.NewService(slog.Default(), cliprofile.NewStore(t.TempDir()))
 	s.Register(session.AgentTypeClaude, cliauthtest.New(cliauthtest.State{Status: cliauth.Status{State: cliauth.StateSignedIn}}))
 	s.Register(session.AgentTypeCodex, cliauthtest.New(cliauthtest.State{Status: cliauth.Status{State: cliauth.StateSignedOut}}))
 
-	got, err := s.Statuses(context.Background(), session.AgentTypeCodex)
+	got, err := s.Statuses(context.Background(), session.AgentTypeCodex, cliprofile.SelectCurrent())
 	if err != nil {
 		t.Fatalf("Statuses: %v", err)
 	}
@@ -58,17 +59,17 @@ func TestStatuses_OneAgent(t *testing.T) {
 		t.Errorf("got %+v, want codex alone", got)
 	}
 
-	if _, err := s.Statuses(context.Background(), "gemini"); !errors.Is(err, cliauth.ErrUnknownAgent) {
+	if _, err := s.Statuses(context.Background(), "gemini", cliprofile.SelectCurrent()); !errors.Is(err, cliauth.ErrUnknownAgent) {
 		t.Errorf("unknown agent: got %v, want ErrUnknownAgent", err)
 	}
 }
 
 func TestLogout(t *testing.T) {
 	t.Run("answers with the status read afterwards", func(t *testing.T) {
-		s := cliauth.NewService(slog.Default())
+		s := cliauth.NewService(slog.Default(), cliprofile.NewStore(t.TempDir()))
 		s.Register(session.AgentTypeClaude, cliauthtest.New(cliauthtest.State{Status: cliauth.Status{State: cliauth.StateSignedIn}}))
 
-		got, err := s.Logout(context.Background(), session.AgentTypeClaude)
+		got, err := s.Logout(context.Background(), session.AgentTypeClaude, cliprofile.SelectCurrent())
 		if err != nil {
 			t.Fatalf("Logout: %v", err)
 		}
@@ -81,10 +82,10 @@ func TestLogout(t *testing.T) {
 	// show, not a failed sign-out to retry.
 	t.Run("a failed read afterwards is a status, not an error", func(t *testing.T) {
 		after := cliauth.ErrorStatus(errors.New("codex account/read did not finish within 45s"))
-		s := cliauth.NewService(slog.Default())
+		s := cliauth.NewService(slog.Default(), cliprofile.NewStore(t.TempDir()))
 		s.Register(session.AgentTypeCodex, cliauthtest.New(cliauthtest.State{Status: cliauth.Status{State: cliauth.StateSignedIn}, AfterLogout: &after}))
 
-		got, err := s.Logout(context.Background(), session.AgentTypeCodex)
+		got, err := s.Logout(context.Background(), session.AgentTypeCodex, cliprofile.SelectCurrent())
 		if err != nil {
 			t.Fatalf("Logout: %v", err)
 		}
@@ -95,17 +96,17 @@ func TestLogout(t *testing.T) {
 
 	t.Run("a refusal is the error, as the provider worded it", func(t *testing.T) {
 		refusal := errors.New("claude auth logout failed: Logout failed: network down")
-		s := cliauth.NewService(slog.Default())
+		s := cliauth.NewService(slog.Default(), cliprofile.NewStore(t.TempDir()))
 		s.Register(session.AgentTypeClaude, cliauthtest.New(cliauthtest.State{Status: cliauth.Status{State: cliauth.StateSignedIn}, LogoutErr: refusal}))
 
-		if _, err := s.Logout(context.Background(), session.AgentTypeClaude); !errors.Is(err, refusal) {
+		if _, err := s.Logout(context.Background(), session.AgentTypeClaude, cliprofile.SelectCurrent()); !errors.Is(err, refusal) {
 			t.Errorf("got %v, want %v", err, refusal)
 		}
 	})
 
 	t.Run("unknown agent", func(t *testing.T) {
-		s := cliauth.NewService(slog.Default())
-		if _, err := s.Logout(context.Background(), "gemini"); !errors.Is(err, cliauth.ErrUnknownAgent) {
+		s := cliauth.NewService(slog.Default(), cliprofile.NewStore(t.TempDir()))
+		if _, err := s.Logout(context.Background(), "gemini", cliprofile.SelectCurrent()); !errors.Is(err, cliauth.ErrUnknownAgent) {
 			t.Errorf("got %v, want ErrUnknownAgent", err)
 		}
 	})
@@ -119,10 +120,10 @@ type blockingProvider struct {
 	release chan struct{}
 }
 
-func (b blockingProvider) Status(ctx context.Context) (cliauth.Status, error) {
+func (b blockingProvider) Status(ctx context.Context, profileID string) (cliauth.Status, error) {
 	b.entered <- struct{}{}
 	<-b.release
-	return b.Provider.Status(ctx)
+	return b.Provider.Status(ctx, profileID)
 }
 
 // One command per CLI at a time — a status read can rewrite the credentials a
@@ -133,13 +134,13 @@ func TestService_OneCommandPerCLI(t *testing.T) {
 		entered:  make(chan struct{}),
 		release:  make(chan struct{}),
 	}
-	s := cliauth.NewService(slog.Default())
+	s := cliauth.NewService(slog.Default(), cliprofile.NewStore(t.TempDir()))
 	s.Register(session.AgentTypeClaude, p)
 
 	readDone := make(chan struct{})
 	go func() {
 		defer close(readDone)
-		if _, err := s.Statuses(context.Background(), session.AgentTypeClaude); err != nil {
+		if _, err := s.Statuses(context.Background(), session.AgentTypeClaude, cliprofile.SelectCurrent()); err != nil {
 			t.Errorf("Statuses: %v", err)
 		}
 	}()
@@ -147,13 +148,13 @@ func TestService_OneCommandPerCLI(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
-	if _, err := s.Logout(ctx, session.AgentTypeClaude); !errors.Is(err, context.DeadlineExceeded) {
+	if _, err := s.Logout(ctx, session.AgentTypeClaude, cliprofile.SelectCurrent()); !errors.Is(err, context.DeadlineExceeded) {
 		t.Errorf("sign-out during a read: got %v, want it to wait and then give up", err)
 	}
 
 	close(p.release)
 	<-readDone
-	if _, err := s.Logout(context.Background(), session.AgentTypeClaude); err != nil {
+	if _, err := s.Logout(context.Background(), session.AgentTypeClaude, cliprofile.SelectCurrent()); err != nil {
 		t.Errorf("sign-out after the read: %v", err)
 	}
 }
@@ -166,7 +167,7 @@ type ctxProvider struct {
 	exited  chan struct{}
 }
 
-func (c ctxProvider) Status(ctx context.Context) (cliauth.Status, error) {
+func (c ctxProvider) Status(ctx context.Context, profileID string) (cliauth.Status, error) {
 	close(c.entered)
 	<-ctx.Done()
 	close(c.exited)
@@ -182,10 +183,10 @@ func TestClose_EndsRunningCommands(t *testing.T) {
 		entered:  make(chan struct{}),
 		exited:   make(chan struct{}),
 	}
-	s := cliauth.NewService(slog.Default())
+	s := cliauth.NewService(slog.Default(), cliprofile.NewStore(t.TempDir()))
 	s.Register(session.AgentTypeClaude, p)
 
-	go func() { _, _ = s.Statuses(context.Background(), session.AgentTypeClaude) }()
+	go func() { _, _ = s.Statuses(context.Background(), session.AgentTypeClaude, cliprofile.SelectCurrent()) }()
 	<-p.entered
 
 	s.Close()
@@ -195,10 +196,10 @@ func TestClose_EndsRunningCommands(t *testing.T) {
 		t.Fatal("Close returned while the status read was still running")
 	}
 
-	if _, err := s.Statuses(context.Background(), session.AgentTypeClaude); !errors.Is(err, cliauth.ErrShuttingDown) {
+	if _, err := s.Statuses(context.Background(), session.AgentTypeClaude, cliprofile.SelectCurrent()); !errors.Is(err, cliauth.ErrShuttingDown) {
 		t.Errorf("status after Close: got %v, want ErrShuttingDown", err)
 	}
-	if _, err := s.Logout(context.Background(), session.AgentTypeClaude); !errors.Is(err, cliauth.ErrShuttingDown) {
+	if _, err := s.Logout(context.Background(), session.AgentTypeClaude, cliprofile.SelectCurrent()); !errors.Is(err, cliauth.ErrShuttingDown) {
 		t.Errorf("sign-out after Close: got %v, want ErrShuttingDown", err)
 	}
 }

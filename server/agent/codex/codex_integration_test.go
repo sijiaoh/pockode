@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/pockode/server/agent"
+	"github.com/pockode/server/cliprofile/cliprofiletest"
 )
 
 // TestIntegration_ResumesAcrossProcesses is the check behind the whole change.
@@ -22,7 +23,7 @@ func TestIntegration_ResumesAcrossProcesses(t *testing.T) {
 	dataDir := t.TempDir()
 	sessionID := uuid.Must(uuid.NewV7()).String()
 
-	agent.RunPrompt(t, New(), workDir, dataDir, sessionID, false,
+	agent.RunPrompt(t, New(cliprofiletest.UserStore()), workDir, dataDir, sessionID, false,
 		"Remember this code word: BANANA-42. Reply with exactly: ok")
 
 	state, found := newResumeStateStore(
@@ -32,7 +33,7 @@ func TestIntegration_ResumesAcrossProcesses(t *testing.T) {
 	}
 
 	// A brand new process, resuming only from what was written to disk.
-	said := agent.RunPrompt(t, New(), workDir, dataDir, sessionID, true,
+	said := agent.RunPrompt(t, New(cliprofiletest.UserStore()), workDir, dataDir, sessionID, true,
 		"What was the code word I gave you? Reply with just the word, or UNKNOWN if you were never given one.")
 	if !strings.Contains(said, "BANANA-42") {
 		t.Fatalf("the resumed session does not remember the code word, it said: %q", said)
@@ -60,7 +61,7 @@ func TestIntegration_UnresumableThreadDegrades(t *testing.T) {
 	dead := uuid.Must(uuid.NewV7()).String()
 	newResumeStateStore(agent.StartOptions{DataDir: dataDir, SessionID: sessionID}, testLogger()).record(dead)
 
-	warnings := agent.RunPromptCollecting(t, New(), workDir, dataDir, sessionID, true, "Reply with exactly: ok").Warnings
+	warnings := agent.RunPromptCollecting(t, New(cliprofiletest.UserStore()), workDir, dataDir, sessionID, true, "Reply with exactly: ok").Warnings
 
 	var warned bool
 	for _, w := range warnings {

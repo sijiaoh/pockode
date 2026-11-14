@@ -13,7 +13,7 @@ import (
 // and it travels as a wire field, so this is the declaration the whole feature
 // hangs off.
 func TestForkSupport(t *testing.T) {
-	if got := agent.ForkSupportOf(New()); got != agent.ForkFromAnyMessage {
+	if got := agent.ForkSupportOf(New(nil)); got != agent.ForkFromAnyMessage {
 		t.Errorf("ForkSupportOf(codex) = %q, want %q", got, agent.ForkFromAnyMessage)
 	}
 }
@@ -107,7 +107,7 @@ func TestForkSession(t *testing.T) {
 			if len(history) == 0 {
 				history = []json.RawMessage{json.RawMessage(`{"type":"text"}`)}
 			}
-			carried, err := New().ForkSession(context.Background(), agent.ForkOptions{
+			carried, err := New(nil).ForkSession(context.Background(), agent.ForkOptions{
 				DataDir:         dataDir,
 				SourceSessionID: "pockode-source",
 				SessionID:       "pockode-fork",

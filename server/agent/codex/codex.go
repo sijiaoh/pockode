@@ -31,6 +31,7 @@ import (
 
 	"github.com/pockode/server/agent"
 	"github.com/pockode/server/attachments"
+	"github.com/pockode/server/cliprofile"
 	"github.com/pockode/server/contents"
 	"github.com/pockode/server/logger"
 	"github.com/pockode/server/session"
@@ -93,11 +94,14 @@ type Agent struct {
 	// that sits above the user's config.toml. Production sends none; the
 	// integration suite uses them to pin settings over a developer's own config.
 	configOverrides []string
+	// profiles decides which account every CLI this Agent starts runs as: the
+	// current one, read at each start.
+	profiles *cliprofile.Store
 }
 
 // New creates a new Codex Agent.
-func New() *Agent {
-	return &Agent{}
+func New(profiles *cliprofile.Store) *Agent {
+	return &Agent{profiles: profiles}
 }
 
 // Start launches a persistent `codex app-server` process and opens this
@@ -118,17 +122,24 @@ func (a *Agent) Start(ctx context.Context, opts agent.StartOptions) (agent.Sessi
 
 	log := slog.With("sessionId", opts.SessionID, "agent", "codex")
 
+	profile, err := a.profiles.Launch(session.AgentTypeCodex, cliprofile.SelectCurrent())
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+
 	args := []string{appServerSubcommand}
 	for _, kv := range a.configOverrides {
 		args = append(args, "-c", kv)
 	}
-	proc, err := agent.StartProcess(procCtx, log, Binary, args, opts.WorkDir)
+	args = append(args, profile.Args...)
+	proc, err := agent.StartProcessEnv(procCtx, log, Binary, args, opts.WorkDir, profile.Env)
 	if err != nil {
 		cancel()
 		return nil, fmt.Errorf("failed to start codex: %w", err)
 	}
 
-	log.Info("codex process started", "pid", proc.Pid(), "subcommand", appServerSubcommand)
+	log.Info("codex process started", "pid", proc.Pid(), "subcommand", appServerSubcommand, "profile", profile.ProfileID)
 
 	events := make(chan agent.AgentEvent, 100)
 

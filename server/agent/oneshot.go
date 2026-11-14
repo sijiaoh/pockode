@@ -83,11 +83,14 @@ const maxOneShotStderr = 16 << 10
 // the exit code and stderr (Stdout is left empty — it went to onLine). err is
 // onLine's error, ctx.Err() when ctx ended first, a *BinaryNotFoundError, or a
 // failure to run the CLI at all.
-func RunStream(ctx context.Context, log *slog.Logger, name, dir string, args []string, input string, onLine func(line []byte) error) (RunResult, error) {
+//
+// env ("KEY=value") is added to the environment the CLI inherits, as
+// StartProcessEnv adds it.
+func RunStream(ctx context.Context, log *slog.Logger, name, dir string, env, args []string, input string, onLine func(line []byte) error) (RunResult, error) {
 	procCtx, stop := context.WithCancel(ctx)
 	defer stop()
 
-	proc, err := StartProcess(procCtx, log, name, args, dir)
+	proc, err := StartProcessEnv(procCtx, log, name, args, dir, env)
 	if err != nil {
 		return RunResult{}, err
 	}
