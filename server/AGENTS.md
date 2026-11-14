@@ -48,6 +48,7 @@ authguard/              # 失败密码登录的全局退避锁（仅内存；各
 authsession/            # 登录会话：密码换取的 session token + 密码指纹（sessions.json）；端口预览的一次性登录 ticket、绑定 session 的资源 capability（均仅内存）
 chat/                   # Chat 客户端
 cliauth/                # AI CLI 登录状态查询、远程登录流程与登出（各 CLI 的实现在 agent/*/auth.go、login.go，见 docs/code/cli-auth.md）
+cliprofile/             # AI CLI 账号（profile）列表与当前账号 cli-profiles.json（与 cloud.json 同目录、本 OS 用户的所有进程共享；默认账号隐含不存；账号目录 cli-profiles/<cli>/<id>/）；账号目录的准备（prepare.go：除凭据外全部符号链接回默认目录，冲突只报告不搬动）与本机能否建符号链接的探测（availability.go；平台差异在 platform_*.go）；启动 CLI 时按哪个账号、带什么环境变量与参数（launch.go 的 `Resolve` / `Launch`）；cliprofiletest/ 给测试准备账号、把假 CLI 放上 PATH 并记录每次启动的环境与参数（见 docs/code/cli-profiles.md）
 cliupdate/              # AI CLI 新版本检查与更新（跑 CLI 自己的 update，再核对版本；各 CLI 的定义在 agent/*/update.go，见 docs/code/cli-update.md）
 cloudcred/              # 机器凭据 cloud.json（OS 用户配置目录下、本 OS 用户的所有进程共享；只对签发它的 cloud 使用，见 docs/code/cloud-account.md）
 cloudlogin/             # 关联 / 解除关联本机：RFC 8628 device flow 与吊销（flow.go）为一份实现，两个前端——`pockode login` / `pockode logout`（Linker）与运行中进程替 UI 跑 flow 的 Service（`cloud_link.*` RPC，见 docs/code/cloud-account.md）
@@ -106,6 +107,7 @@ Windows 与 darwin/linux 一样是发布目标（产物见 [docs/platforms.md](.
 | `agent/codex/view_image.go` | `fileuri_{unix,windows}.go` — `file://` URI 的 path 段转原生路径：Windows 上盘符是 URI 语法里的又一段，前导斜杠要去掉 |
 | `worktree/setup.go` | `hook_shell_{unix,windows}.go` — setup hook 的解释器（Windows 无 bash，探测 Git for Windows） |
 | `internal/pathutil/pathutil.go` | `equal_{unix,windows}.go` — Windows 路径比较大小写不敏感 |
+| `cliprofile/prepare.go`、`availability.go` | `platform_{unix,windows}.go` — 建不了符号链接时给用户的原因（Windows 上 `ERROR_PRIVILEGE_NOT_HELD` 即「要开开发者模式」）；Codex 的 SQLite 库是否共享：Windows 上的 SQLite 不解析符号链接，会把 `-wal`/`-shm` 建在链接旁边、与默认账号的各写一份而损坏库，所以那边全部 `*.sqlite*` 都留在账号里 |
 | `internal/fsperm/fsperm.go` | `fsperm_{unix,windows}.go` — 0700/0600 mode 位 / 显式 DACL |
 | `cluster/node/process.go` | `process_{unix,windows}.go` — 与终端脱钩（`Setsid` / `CREATE_NO_WINDOW`）、优雅关闭与强杀的等待方式 |
 | `internal/shutdown/shutdown.go` | `request_{unix,windows}.go` — 退出请求 SIGTERM / 命名事件 `pockode-shutdown-<pid>`；重启请求 SIGUSR1 / 命名事件 `pockode-restart-<pid>`（`RequestRestart`，Windows 上事件不存在即 `ErrRestartUnsupported`） |
@@ -125,7 +127,7 @@ Windows 与 darwin/linux 一样是发布目标（产物见 [docs/platforms.md](.
 
 参数一律是**原生路径**。外部来的值默认不是：git 的输出、手写的设置、我们自己 API 里的路径都用 `/`，进来时 `filepath.FromSlash`，出去时 `filepath.ToSlash`。
 
-**启动 AI CLI 一律走 `agent.Command`**，不要直接 `exec.Command(claude.Binary, …)`。它做几件各自都容易漏掉的事：`lookupBinary` 先查 PATH（找到就用它，环境不动），PATH 上完全没有时才查该 CLI 官方安装器的目录（各 CLI 包在 `init` 里用 `agent.RegisterInstallDir` 声明自己的）和平台通用的兜底目录（PATH 是进程启动时定死的，安装器改了 shell profile / 用户 PATH 之后、pockode 重启之前的 CLI 就是看不见的），从那里找到时把该目录**追加**到 CLI 子进程 PATH 的末尾（所以给 CLI 加环境变量要基于 `cmd.Environ()` 而不是 `os.Environ()`），以及在可执行文件是 npm 装出来的 `.cmd` 时自己构造命令行——Windows 跑批处理文件是把命令行交给 cmd.exe，而 `os/exec` 按 `CommandLineToArgvW` 的规则加引号，两套规则对不上（Go 只在文档里提了一句，没有修，见 `agent/cmdline.go`）。需要能放弃的短命探测（如 `codex --help`）走 `agent.CommandContext`，它是同一条路加一个 ctx；跑完就要输出、超时要连子孙一起杀掉的一次性命令（如 `claude auth status`）走 `agent.Run`，它是跑到结束的 `agent.StartProcess`；要把输入写进 stdin、边跑边读输出的一次性调用（会话之外的 AI 请求，见 `agent.OneShotRunner`）走 `agent.RunStream`；会话进程走 `agent.StartProcess`，那边自己持有生命周期；要给 CLI 额外加环境变量时用 `agent.StartProcessEnv`（如 `claude auth login` 的 `BROWSER`）。
+**启动 AI CLI 一律走 `agent.Command`**，不要直接 `exec.Command(claude.Binary, …)`。它做几件各自都容易漏掉的事：`lookupBinary` 先查 PATH（找到就用它，环境不动），PATH 上完全没有时才查该 CLI 官方安装器的目录（各 CLI 包在 `init` 里用 `agent.RegisterInstallDir` 声明自己的）和平台通用的兜底目录（PATH 是进程启动时定死的，安装器改了 shell profile / 用户 PATH 之后、pockode 重启之前的 CLI 就是看不见的），从那里找到时把该目录**追加**到 CLI 子进程 PATH 的末尾（所以给 CLI 加环境变量要基于 `cmd.Environ()` 而不是 `os.Environ()`），以及在可执行文件是 npm 装出来的 `.cmd` 时自己构造命令行——Windows 跑批处理文件是把命令行交给 cmd.exe，而 `os/exec` 按 `CommandLineToArgvW` 的规则加引号，两套规则对不上（Go 只在文档里提了一句，没有修，见 `agent/cmdline.go`）。需要能放弃的短命探测（如 `codex --help`）走 `agent.CommandContext`，它是同一条路加一个 ctx；跑完就要输出、超时要连子孙一起杀掉的一次性命令（如 `claude auth status`）走 `agent.Run`（要加环境变量时是 `agent.RunEnv`），它是跑到结束的 `agent.StartProcess`；要把输入写进 stdin、边跑边读输出的一次性调用（会话之外的 AI 请求，见 `agent.OneShotRunner`）走 `agent.RunStream`（直接收 `env`）；会话进程走 `agent.StartProcess`，那边自己持有生命周期；`agent.StartProcess` 的进程要给 CLI 额外加环境变量时用 `agent.StartProcessEnv`（如 `claude auth login` 的 `BROWSER`）。**每个启动点都要按账号（profile）启动**：启动前调 `cliprofile.Store.Launch`，把它给的 `Env` 加进环境、`Args` 放进 CLI 的选项里（会话与一次性调用用当前账号，登录状态 / 登录 / 登出用调用方指定的账号）；它返回 error 就让启动失败，不要退回默认账号。只有 `--version`、Codex 的 `--help` 探测和 CLI 更新不走它（见 [docs/code/agent-integration.md](../docs/code/agent-integration.md#which-account-a-cli-runs-as)）。
 
 **存凭据的地方用 `internal/fsperm` 收紧，收紧的对象是目录不是文件**。`os.WriteFile(path, data, 0600)` 在 Windows 上什么也没做——Go 只把 perm 映射到只读属性，实际访问权来自父目录继承来的 ACL，而盘符根下建出来的目录一律继承一条 `BUILTIN\Users` 读权限。收紧目录才有两个逐个收紧文件拿不到的性质：**新建的文件自动继承**（`.pockode` 里的 session 记录、`server.log`、work store 都归它管，不必在每个写入点重复一遍），以及**扛得住 temp+rename**（`filestore` 和 git 的 `store` helper 都是先写临时文件再改名覆盖，改名进来的文件带的是它自己创建时的权限，逐个文件收紧会被下一次写入静默抹掉）。
 
@@ -151,10 +153,11 @@ Windows 与 darwin/linux 一样是发布目标（产物见 [docs/platforms.md](.
   |---|---|---|
   | `internal/fifotest` | `agent/codex`×1、`contents`×1、`filetransfer`×3 | 命名管道只存在于 `\\.\pipe`，根本进不了工作目录，被测的阻塞隐患在那里不成立 |
   | `internal/symlinktest` | `contents`×4、`filetransfer`×13、`git`×2、`internal/restart`×1、`search`×1、`selfinstall`×1 | 未开开发者模式时建符号链接要特权；开了就一条都不 skip |
+  | `cliprofile` 的 `newPreparing`、`cliprofile/cliprofiletest` 的 `UseProfile` | `cliprofile`×15、`agent/claude`×1、`agent/codex`×1 | 同上：账号目录由符号链接组成，`Store.Availability` 探测不到建链接的权限时 `Prepare` 直接拒绝；拒绝本身由不 skip 的 `TestPrepareRefusesWithoutSymlinks`、`TestLaunchWithoutSymlinks` 覆盖 |
   | `internal/unwritabletest` | `filestore`×1、`selfinstall`×1、`ws`×1 | 目录忽略只读属性，`os.Chmod` 挡不住写入；要真挡住得给当前用户的 SID 加一条 deny ACE |
   | `filetransfer/realname_windows_test.go` 的 `shortName` | `filetransfer`×0~2 | 临时目录所在的卷关掉了 8.3 短名（`fsutil 8dot3name`）时没有别名可测；开着就一条都不 skip |
 
-  **合计 8~31 条**，两个区间端点都是对的：`filetransfer` 的「refuses to overwrite anything but a regular file」一个子测试里同时要符号链接和 fifo，谁先 skip 就记在谁名下，于是前两行的条数此消彼长——没开开发者模式是 4+22，开了是 5+0。别按单行的数去对账，按合计。
+  **合计 8~48 条**，两个区间端点都是对的：`filetransfer` 的「refuses to overwrite anything but a regular file」一个子测试里同时要符号链接和 fifo，谁先 skip 就记在谁名下，于是前两行的条数此消彼长——没开开发者模式是 4+22（另加 `cliprofile` 一行的 17），开了是 5+0+0。别按单行的数去对账，按合计。
 
   能用平台分表（如 `settings_test.go` 的路径用例）就不要 skip；断言本身在两个平台上形状不同时，把它抽成平台分文件的测试辅助（如 `internal/fspermtest`、`internal/termtest`、`internal/fifotest`），而不是在 Windows 上 skip 掉——权限测试恰恰在权限有问题的那个平台上 skip，等于什么都没证明。
 

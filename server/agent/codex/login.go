@@ -70,11 +70,15 @@ func (a *Auth) AccountKinds() []cliauth.AccountKind { return nil }
 //
 // Only the start is bounded here (authTimeout, like any other account call);
 // the wait for the user is ctx's, whose deadline the Service sets.
-func (a *Auth) Login(ctx context.Context, _ cliauth.LoginOptions, flow cliauth.LoginFlow) (cliauth.Status, error) {
+func (a *Auth) Login(ctx context.Context, opts cliauth.LoginOptions, flow cliauth.LoginFlow) (cliauth.Status, error) {
+	profile, err := a.launch(opts.ProfileID)
+	if err != nil {
+		return cliauth.Status{}, err
+	}
 	startCtx, cancel := context.WithTimeout(ctx, authTimeout)
 	defer cancel()
 
-	c, err := startAuthClient(ctx, startCtx, a.log, a.binary, a.workDir)
+	c, err := startAuthClient(ctx, startCtx, a.log, a.binary, a.workDir, profile)
 	if err != nil {
 		return cliauth.Status{}, cliauth.TimeoutError(startCtx, err, "starting the codex app-server", authTimeout)
 	}

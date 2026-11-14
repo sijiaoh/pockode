@@ -10,6 +10,8 @@ import (
 
 	"github.com/pockode/server/agent"
 	"github.com/pockode/server/cliauth"
+	"github.com/pockode/server/cliprofile"
+	"github.com/pockode/server/session"
 )
 
 // The auth commands' budgets. `auth status` answered in under a second in every
@@ -34,15 +36,18 @@ type Auth struct {
 	// API key or an apiKeyHelper in front of the sign-in — so the status has to
 	// be read where the sessions run, or it describes credentials they do not use.
 	workDir string
+	// profiles is where the account each command runs as is prepared.
+	profiles *cliprofile.Store
 	// linkTimeout and verifyTimeout bound the steps of a sign-in; see login.go.
 	linkTimeout, verifyTimeout time.Duration
 }
 
-func NewAuth(workDir string) *Auth {
+func NewAuth(workDir string, profiles *cliprofile.Store) *Auth {
 	return &Auth{
 		log:           slog.With("cli", Binary),
 		binary:        Binary,
 		workDir:       workDir,
+		profiles:      profiles,
 		linkTimeout:   linkTimeout,
 		verifyTimeout: verifyTimeout,
 	}
@@ -50,35 +55,48 @@ func NewAuth(workDir string) *Auth {
 
 func (a *Auth) Binary() string { return a.binary }
 
-func (a *Auth) Status(ctx context.Context) (cliauth.Status, error) {
+// launch prepares the profile a command runs as.
+func (a *Auth) launch(profileID string) (cliprofile.Launch, error) {
+	return a.profiles.Launch(session.AgentTypeClaude, cliprofile.Select(profileID))
+}
+
+func (a *Auth) Status(ctx context.Context, profileID string) (cliauth.Status, error) {
+	profile, err := a.launch(profileID)
+	if err != nil {
+		return cliauth.Status{}, err
+	}
 	ctx, cancel := context.WithTimeout(ctx, authStatusTimeout)
 	defer cancel()
 
 	// --json is the default, and asked for anyway: the text form is the one a
 	// future version is free to reword.
-	res, err := agent.Run(ctx, a.log, a.binary, a.workDir, "auth", "status", "--json")
+	res, err := agent.RunEnv(ctx, a.log, a.binary, a.workDir, profile.Env, "auth", "status", "--json")
 	if err != nil {
 		return cliauth.Status{}, cliauth.TimeoutError(ctx, err, "claude auth status", authStatusTimeout)
 	}
 	return parseAuthStatus(res)
 }
 
-func (a *Auth) Logout(ctx context.Context) (cliauth.Status, error) {
-	if err := a.logout(ctx); err != nil {
+func (a *Auth) Logout(ctx context.Context, profileID string) (cliauth.Status, error) {
+	if err := a.logout(ctx, profileID); err != nil {
 		return cliauth.Status{}, err
 	}
-	st, err := a.Status(ctx)
+	st, err := a.Status(ctx, profileID)
 	if err != nil {
 		return cliauth.ErrorStatus(err), nil
 	}
 	return st, nil
 }
 
-func (a *Auth) logout(ctx context.Context) error {
+func (a *Auth) logout(ctx context.Context, profileID string) error {
+	profile, err := a.launch(profileID)
+	if err != nil {
+		return err
+	}
 	ctx, cancel := context.WithTimeout(ctx, authLogoutTimeout)
 	defer cancel()
 
-	res, err := agent.Run(ctx, a.log, a.binary, a.workDir, "auth", "logout")
+	res, err := agent.RunEnv(ctx, a.log, a.binary, a.workDir, profile.Env, "auth", "logout")
 	if err != nil {
 		return cliauth.TimeoutError(ctx, err, "claude auth logout", authLogoutTimeout)
 	}

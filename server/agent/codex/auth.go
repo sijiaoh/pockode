@@ -12,6 +12,8 @@ import (
 
 	"github.com/pockode/server/agent"
 	"github.com/pockode/server/cliauth"
+	"github.com/pockode/server/cliprofile"
+	"github.com/pockode/server/session"
 )
 
 // authTimeout bounds one Auth call from start to finish: the `--help` probe,
@@ -46,19 +48,21 @@ type Auth struct {
 	// .codex/config.toml can choose a model provider that needs no OpenAI sign-in,
 	// so the answer depends on it: it has to be read where the sessions run.
 	workDir string
+	// profiles is where the account each call runs as is prepared.
+	profiles *cliprofile.Store
 }
 
-func NewAuth(workDir string) *Auth {
-	return &Auth{log: slog.With("cli", Binary), binary: Binary, workDir: workDir}
+func NewAuth(workDir string, profiles *cliprofile.Store) *Auth {
+	return &Auth{log: slog.With("cli", Binary), binary: Binary, workDir: workDir, profiles: profiles}
 }
 
 func (a *Auth) Binary() string { return a.binary }
 
-func (a *Auth) Status(ctx context.Context) (cliauth.Status, error) {
+func (a *Auth) Status(ctx context.Context, profileID string) (cliauth.Status, error) {
 	ctx, cancel := context.WithTimeout(ctx, authTimeout)
 	defer cancel()
 
-	c, err := a.start(ctx)
+	c, err := a.start(ctx, profileID)
 	if err != nil {
 		return cliauth.Status{}, err
 	}
@@ -72,11 +76,11 @@ func (a *Auth) Status(ctx context.Context) (cliauth.Status, error) {
 // the cache that makes a session's answer stale is the one this sign-out has
 // just updated. Measured: after account/logout, the same app-server's
 // account/read answered account null.
-func (a *Auth) Logout(ctx context.Context) (cliauth.Status, error) {
+func (a *Auth) Logout(ctx context.Context, profileID string) (cliauth.Status, error) {
 	ctx, cancel := context.WithTimeout(ctx, authTimeout)
 	defer cancel()
 
-	c, err := a.start(ctx)
+	c, err := a.start(ctx, profileID)
 	if err != nil {
 		return cliauth.Status{}, fmt.Errorf("codex sign-out failed: %w", err)
 	}
@@ -92,12 +96,21 @@ func (a *Auth) Logout(ctx context.Context) (cliauth.Status, error) {
 	return st, nil
 }
 
-func (a *Auth) start(ctx context.Context) (*authClient, error) {
-	c, err := startAuthClient(ctx, ctx, a.log, a.binary, a.workDir)
+func (a *Auth) start(ctx context.Context, profileID string) (*authClient, error) {
+	profile, err := a.launch(profileID)
+	if err != nil {
+		return nil, err
+	}
+	c, err := startAuthClient(ctx, ctx, a.log, a.binary, a.workDir, profile)
 	if err != nil {
 		return nil, cliauth.TimeoutError(ctx, err, "starting the codex app-server", authTimeout)
 	}
 	return c, nil
+}
+
+// launch prepares the profile an app-server runs as.
+func (a *Auth) launch(profileID string) (cliprofile.Launch, error) {
+	return a.profiles.Launch(session.AgentTypeCodex, cliprofile.Select(profileID))
 }
 
 func (a *Auth) read(ctx context.Context, c *authClient) (cliauth.Status, error) {
@@ -213,13 +226,14 @@ type authClient struct {
 // startAuthClient starts an app-server that lives until procCtx is done or the
 // client is closed, and completes its handshake within callCtx. The two differ
 // for a sign-in, whose app-server has to outlast the budget its start is given.
-func startAuthClient(procCtx, callCtx context.Context, log *slog.Logger, binary, workDir string) (*authClient, error) {
+func startAuthClient(procCtx, callCtx context.Context, log *slog.Logger, binary, workDir string, profile cliprofile.Launch) (*authClient, error) {
 	if err := checkAppServerSupport(callCtx, binary); err != nil {
 		return nil, err
 	}
 
 	procCtx, cancel := context.WithCancel(procCtx)
-	proc, err := agent.StartProcess(procCtx, log, binary, []string{appServerSubcommand}, workDir)
+	args := append([]string{appServerSubcommand}, profile.Args...)
+	proc, err := agent.StartProcessEnv(procCtx, log, binary, args, workDir, profile.Env)
 	if err != nil {
 		cancel()
 		return nil, err

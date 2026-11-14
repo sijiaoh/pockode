@@ -12,12 +12,13 @@ import (
 	"github.com/pockode/server/agent"
 	"github.com/pockode/server/cliauth"
 	"github.com/pockode/server/cliauth/cliauthtest"
+	"github.com/pockode/server/cliprofile"
 	"github.com/pockode/server/session"
 )
 
 func newLoginService(t *testing.T, state cliauthtest.State) *cliauth.Service {
 	t.Helper()
-	s := cliauth.NewService(slog.Default())
+	s := cliauth.NewService(slog.Default(), cliprofile.NewStore(t.TempDir()))
 	s.Register(session.AgentTypeClaude, cliauthtest.New(state))
 	t.Cleanup(s.Close)
 	return s
@@ -48,7 +49,7 @@ func inPhase(phase cliauth.LoginPhase) func(cliauth.Login) bool {
 
 func startWaiting(t *testing.T, s *cliauth.Service) cliauth.Login {
 	t.Helper()
-	login, err := s.StartLogin(session.AgentTypeClaude, "")
+	login, err := s.StartLogin(session.AgentTypeClaude, "", cliprofile.SelectCurrent())
 	if err != nil {
 		t.Fatalf("StartLogin: %v", err)
 	}
@@ -71,7 +72,7 @@ func TestStartLogin(t *testing.T) {
 
 	// A second start — another screen, or the same one after a reload — lands
 	// in the same sign-in.
-	again, err := s.StartLogin(session.AgentTypeClaude, cliauth.AccountConsole)
+	again, err := s.StartLogin(session.AgentTypeClaude, cliauth.AccountConsole, cliprofile.SelectCurrent())
 	if err != nil {
 		t.Fatalf("second StartLogin: %v", err)
 	}
@@ -83,15 +84,15 @@ func TestStartLogin(t *testing.T) {
 func TestStartLogin_Refusals(t *testing.T) {
 	s := newLoginService(t, cliauthtest.State{})
 
-	if _, err := s.StartLogin("gemini", ""); !errors.Is(err, cliauth.ErrUnknownAgent) {
+	if _, err := s.StartLogin("gemini", "", cliprofile.SelectCurrent()); !errors.Is(err, cliauth.ErrUnknownAgent) {
 		t.Errorf("unknown agent: got %v", err)
 	}
-	if _, err := s.StartLogin(session.AgentTypeClaude, "enterprise"); !errors.Is(err, cliauth.ErrInvalidAccountKind) {
+	if _, err := s.StartLogin(session.AgentTypeClaude, "enterprise", cliprofile.SelectCurrent()); !errors.Is(err, cliauth.ErrInvalidAccountKind) {
 		t.Errorf("unknown account kind: got %v", err)
 	}
 
 	s.Close()
-	if _, err := s.StartLogin(session.AgentTypeClaude, ""); !errors.Is(err, cliauth.ErrShuttingDown) {
+	if _, err := s.StartLogin(session.AgentTypeClaude, "", cliprofile.SelectCurrent()); !errors.Is(err, cliauth.ErrShuttingDown) {
 		t.Errorf("after Close: got %v", err)
 	}
 }
@@ -215,7 +216,7 @@ func TestCancelLogin(t *testing.T) {
 	}
 
 	// An ended sign-in is replaced by the next start.
-	next, err := s.StartLogin(session.AgentTypeClaude, "")
+	next, err := s.StartLogin(session.AgentTypeClaude, "", cliprofile.SelectCurrent())
 	if err != nil || next.ID == login.ID {
 		t.Errorf("start after cancel: got %+v, %v, want a new sign-in", next, err)
 	}
@@ -225,7 +226,7 @@ func TestLogin_Expires(t *testing.T) {
 	s := newLoginService(t, cliauthtest.State{})
 	s.SetLoginTimeout(50 * time.Millisecond)
 
-	if _, err := s.StartLogin(session.AgentTypeClaude, ""); err != nil {
+	if _, err := s.StartLogin(session.AgentTypeClaude, "", cliprofile.SelectCurrent()); err != nil {
 		t.Fatalf("StartLogin: %v", err)
 	}
 	done := awaitLogin(t, s, func(l cliauth.Login) bool { return l.Phase.Ended() })
@@ -250,7 +251,7 @@ func TestLogin_ProviderFailures(t *testing.T) {
 			s := newLoginService(t, cliauthtest.State{Login: func(context.Context, cliauth.LoginOptions, cliauth.LoginFlow) (cliauth.Status, error) {
 				return cliauth.Status{}, tt.err
 			}})
-			if _, err := s.StartLogin(session.AgentTypeClaude, ""); err != nil {
+			if _, err := s.StartLogin(session.AgentTypeClaude, "", cliprofile.SelectCurrent()); err != nil {
 				t.Fatalf("StartLogin: %v", err)
 			}
 			done := awaitLogin(t, s, func(l cliauth.Login) bool { return l.Phase.Ended() })
@@ -268,14 +269,14 @@ func TestLogin_OwnsTheCLI(t *testing.T) {
 	s := newLoginService(t, cliauthtest.State{Status: cliauth.Status{State: cliauth.StateSignedOut}})
 	login := startWaiting(t, s)
 
-	statuses, err := s.Statuses(context.Background(), session.AgentTypeClaude)
+	statuses, err := s.Statuses(context.Background(), session.AgentTypeClaude, cliprofile.SelectCurrent())
 	if err != nil {
 		t.Fatalf("Statuses: %v", err)
 	}
 	if got := statuses[0]; got.State != cliauth.StateSigningIn || got.LoginID != login.ID {
 		t.Errorf("status during sign-in = %+v, want signing_in naming %s", got, login.ID)
 	}
-	if _, err := s.Logout(context.Background(), session.AgentTypeClaude); err == nil || !strings.Contains(err.Error(), "in progress") {
+	if _, err := s.Logout(context.Background(), session.AgentTypeClaude, cliprofile.SelectCurrent()); err == nil || !strings.Contains(err.Error(), "in progress") {
 		t.Errorf("sign-out during sign-in: got %v, want a refusal", err)
 	}
 
@@ -283,7 +284,7 @@ func TestLogin_OwnsTheCLI(t *testing.T) {
 		t.Fatalf("SubmitCode: %v", err)
 	}
 	awaitLogin(t, s, inPhase(cliauth.LoginSucceeded))
-	statuses, err = s.Statuses(context.Background(), session.AgentTypeClaude)
+	statuses, err = s.Statuses(context.Background(), session.AgentTypeClaude, cliprofile.SelectCurrent())
 	if err != nil {
 		t.Fatalf("Statuses: %v", err)
 	}
@@ -300,21 +301,21 @@ func TestLogin_WakesAReadWaitingForTheCLI(t *testing.T) {
 		entered:  make(chan struct{}),
 		release:  make(chan struct{}),
 	}
-	s := cliauth.NewService(slog.Default())
+	s := cliauth.NewService(slog.Default(), cliprofile.NewStore(t.TempDir()))
 	s.Register(session.AgentTypeClaude, p)
 	t.Cleanup(s.Close)
 
 	// The first read holds the lock; the second waits for it.
-	go s.Statuses(context.Background(), session.AgentTypeClaude)
+	go s.Statuses(context.Background(), session.AgentTypeClaude, cliprofile.SelectCurrent())
 	<-p.entered
 	second := make(chan cliauth.Status, 1)
 	go func() {
-		statuses, _ := s.Statuses(context.Background(), session.AgentTypeClaude)
+		statuses, _ := s.Statuses(context.Background(), session.AgentTypeClaude, cliprofile.SelectCurrent())
 		second <- statuses[0]
 	}()
 	time.Sleep(20 * time.Millisecond)
 
-	login, err := s.StartLogin(session.AgentTypeClaude, "")
+	login, err := s.StartLogin(session.AgentTypeClaude, "", cliprofile.SelectCurrent())
 	if err != nil {
 		t.Fatalf("StartLogin: %v", err)
 	}
@@ -330,7 +331,7 @@ func TestLogin_WakesAReadWaitingForTheCLI(t *testing.T) {
 }
 
 func TestClose_EndsRunningSignIns(t *testing.T) {
-	s := cliauth.NewService(slog.Default())
+	s := cliauth.NewService(slog.Default(), cliprofile.NewStore(t.TempDir()))
 	s.Register(session.AgentTypeClaude, cliauthtest.New(cliauthtest.State{}))
 	startWaiting(t, s)
 

@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/pockode/server/agent"
+	"github.com/pockode/server/cliprofile"
 	"github.com/pockode/server/session"
 )
 
@@ -97,6 +98,8 @@ const (
 type Login struct {
 	ID    string            `json:"id"`
 	Agent session.AgentType `json:"agent"`
+	// ProfileID is the profile being signed in, "" for the default one.
+	ProfileID string `json:"profile_id,omitempty"`
 	// Revision grows with every change to any sign-in. A command's reply and a
 	// change notification travel separately and can arrive in either order, so
 	// a client keeps whichever copy of a sign-in has the higher revision.
@@ -140,6 +143,8 @@ type LoginOptions struct {
 	// AccountKind is one of the Provider's AccountKinds, or empty when it has
 	// none.
 	AccountKind AccountKind
+	// ProfileID is the profile to sign in, "" for the default one.
+	ProfileID string
 }
 
 // Prompt is what a Provider's sign-in hands the user.
@@ -187,6 +192,9 @@ var (
 	ErrCodeNotExpected    = errors.New("this sign-in is not waiting for a code")
 	ErrInvalidCode        = errors.New("the code must be a single, non-empty line")
 	ErrShuttingDown       = errors.New("the server is shutting down")
+	// ErrLoginInProgress is a sign-in asked for while one to another profile
+	// of the same CLI runs: a CLI signs in one profile at a time.
+	ErrLoginInProgress = errors.New("another sign-in is in progress")
 )
 
 // Why a sign-in's context ended, when Pockode ended it rather than the CLI.
@@ -275,17 +283,26 @@ func (h flowHandle) CodeMalformed() {
 	})
 }
 
-// StartLogin starts a sign-in for agentType, or returns the one already running
-// for it: two screens that both read "signed out" and both press start land in
-// the same sign-in rather than racing two CLIs over one credential file.
+// StartLogin starts a sign-in for profile of agentType, or returns the one
+// already running for it: two screens that both read "signed out" and both
+// press start land in the same sign-in rather than racing two CLIs over one
+// credential file. One running for another profile of the CLI is
+// ErrLoginInProgress.
 //
 // The sign-in belongs to the server, not to the request or the connection that
 // started it: it goes on through a reload or a dropped socket, until it ends,
 // the user cancels it, or LoginTimeout passes.
-func (s *Service) StartLogin(agentType session.AgentType, kind AccountKind) (Login, error) {
+func (s *Service) StartLogin(agentType session.AgentType, kind AccountKind, profile cliprofile.Selector) (Login, error) {
 	p, ok := s.providers[agentType]
 	if !ok {
 		return Login{}, fmt.Errorf("%w: %q", ErrUnknownAgent, agentType)
+	}
+	// Resolved now rather than when the CLI starts: the sign-in is for the
+	// profile that was current when the user asked, even if it changes while
+	// the sign-in waits for the CLI's lock.
+	profileID, err := s.profiles.Resolve(agentType, profile)
+	if err != nil {
+		return Login{}, err
 	}
 	kinds := p.AccountKinds()
 	switch {
@@ -303,6 +320,9 @@ func (s *Service) StartLogin(agentType session.AgentType, kind AccountKind) (Log
 	if f := s.logins[agentType]; f != nil && !f.login.Phase.Ended() {
 		login := f.login
 		s.loginsMu.Unlock()
+		if login.ProfileID != profileID {
+			return Login{}, fmt.Errorf("%w: a sign-in to another %s profile is in progress; finish or cancel it first", ErrLoginInProgress, agentType)
+		}
 		return login, nil
 	}
 	if s.updating[agentType] != "" {
@@ -315,6 +335,7 @@ func (s *Service) StartLogin(agentType session.AgentType, kind AccountKind) (Log
 		login: Login{
 			ID:          uuid.NewString(),
 			Agent:       agentType,
+			ProfileID:   profileID,
 			AccountKind: kind,
 			Phase:       LoginStarting,
 			StartedAt:   now,
@@ -338,11 +359,11 @@ func (s *Service) StartLogin(agentType session.AgentType, kind AccountKind) (Log
 	s.loginWG.Go(func() {
 		defer cancel(nil)
 		defer cancelDeadline()
-		s.runLogin(ctx, f, p, LoginOptions{AccountKind: kind})
+		s.runLogin(ctx, f, p, LoginOptions{AccountKind: kind, ProfileID: profileID})
 	})
 	s.loginsMu.Unlock()
 
-	s.log.Info("AI CLI sign-in started", "cli", agentType, "loginId", login.ID, "accountKind", kind)
+	s.log.Info("AI CLI sign-in started", "cli", agentType, "profile", profileID, "loginId", login.ID, "accountKind", kind)
 	s.notifyLogin(agentType)
 	return login, nil
 }
@@ -403,9 +424,9 @@ func (s *Service) runLogin(ctx context.Context, f *loginFlow, p Provider, opts L
 	s.loginsMu.Unlock()
 	switch login.Phase {
 	case LoginFailed:
-		s.log.Warn("AI CLI sign-in failed", "cli", agentType, "loginId", login.ID, "reason", login.Failure.Reason, "detail", login.Failure.Detail)
+		s.log.Warn("AI CLI sign-in failed", "cli", agentType, "profile", login.ProfileID, "loginId", login.ID, "reason", login.Failure.Reason, "detail", login.Failure.Detail)
 	default:
-		s.log.Info("AI CLI sign-in ended", "cli", agentType, "loginId", login.ID, "phase", login.Phase)
+		s.log.Info("AI CLI sign-in ended", "cli", agentType, "profile", login.ProfileID, "loginId", login.ID, "phase", login.Phase)
 	}
 }
 

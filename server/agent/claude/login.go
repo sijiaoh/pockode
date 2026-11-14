@@ -74,7 +74,7 @@ func (a *Auth) AccountKinds() []cliauth.AccountKind {
 func (a *Auth) Login(ctx context.Context, opts cliauth.LoginOptions, flow cliauth.LoginFlow) (cliauth.Status, error) {
 	// Credentials from the environment or settings outrank the file a sign-in
 	// writes, so a sign-in would succeed and change nothing a session uses.
-	st, err := a.Status(ctx)
+	st, err := a.Status(ctx, opts.ProfileID)
 	if err != nil {
 		return cliauth.Status{}, err
 	}
@@ -87,7 +87,11 @@ func (a *Auth) Login(ctx context.Context, opts cliauth.LoginOptions, flow cliaut
 		args = append(args, "--console")
 	}
 
-	proc, err := agent.StartProcessEnv(ctx, a.log, a.binary, args, a.workDir, []string{loginBrowser})
+	profile, err := a.launch(opts.ProfileID)
+	if err != nil {
+		return cliauth.Status{}, err
+	}
+	proc, err := agent.StartProcessEnv(ctx, a.log, a.binary, args, a.workDir, append(profile.Env, loginBrowser))
 	if err != nil {
 		return cliauth.Status{}, err
 	}
@@ -108,7 +112,7 @@ func (a *Auth) Login(ctx context.Context, opts cliauth.LoginOptions, flow cliaut
 		return cliauth.Status{}, loginFailure(res)
 	}
 
-	st, err = a.Status(ctx)
+	st, err = a.Status(ctx, opts.ProfileID)
 	if err != nil {
 		return cliauth.ErrorStatus(err), nil
 	}

@@ -23,6 +23,7 @@ import (
 	"github.com/pockode/server/authguard"
 	"github.com/pockode/server/authsession"
 	"github.com/pockode/server/cliauth"
+	"github.com/pockode/server/cliprofile"
 	"github.com/pockode/server/cliupdate"
 	"github.com/pockode/server/command"
 	"github.com/pockode/server/filetransfer"
@@ -37,9 +38,9 @@ import (
 	"github.com/sourcegraph/jsonrpc2"
 )
 
-func newAgentRegistry() *agent.Registry {
+func newAgentRegistry(t *testing.T) *agent.Registry {
 	r := agent.NewRegistry()
-	r.Register(session.AgentTypeClaude, claude.New())
+	r.Register(session.AgentTypeClaude, claude.New(cliprofile.NewStore(t.TempDir())))
 	return r
 }
 
@@ -59,7 +60,7 @@ func newTestServer(t *testing.T, serverPassword, mcpToken string) (http.Handler,
 		t.Fatalf("failed to create session store: %v", err)
 	}
 	registry := worktree.NewRegistry(workDir, dataDir)
-	scopeManager := worktree.NewManager(registry, newAgentRegistry(), dataDir, session.LeaseBudgets{Idle: 10 * time.Minute})
+	scopeManager := worktree.NewManager(registry, newAgentRegistry(t), dataDir, session.LeaseBudgets{Idle: 10 * time.Minute})
 	t.Cleanup(scopeManager.Shutdown)
 
 	workStarter := worktree.NewWorkStarter(scopeManager, agentRoleStore, settingsStore)
@@ -71,7 +72,7 @@ func newTestServer(t *testing.T, serverPassword, mcpToken string) (http.Handler,
 	transferHandler := filetransfer.NewHandler(registry, dataDir, slog.Default())
 	attachmentHandler := filetransfer.NewAttachmentHandler(scopeManager, worktree.ErrWorktreeNotFound, worktree.ErrSessionNotFound, slog.Default())
 	rawHandler := filetransfer.NewRawHandler(sessions, transferHandler, attachmentHandler)
-	wsHandler := ws.NewRPCHandler(serverPassword, authguard.New(), sessions, "test", func() string { return "" }, authsession.NewTickets(), rawHandler, true, cmdStore, scopeManager, settingsStore, workStore, workOps, work.NewEngine(workStore, work.DefaultMaxNudges), agentRoleStore, scheduleStore, scheduler, cliauth.NewService(slog.Default()), cliupdate.NewService(slog.Default(), nil, nil), nil, restart.New(restarttest.Executable(workDir)), ws.NewReleaseUpdater(slog.Default(), restarttest.Executable(workDir), "test"))
+	wsHandler := ws.NewRPCHandler(serverPassword, authguard.New(), sessions, "test", func() string { return "" }, authsession.NewTickets(), rawHandler, true, cmdStore, scopeManager, settingsStore, workStore, workOps, work.NewEngine(workStore, work.DefaultMaxNudges), agentRoleStore, scheduleStore, scheduler, cliauth.NewService(slog.Default(), cliprofile.NewStore(t.TempDir())), cliupdate.NewService(slog.Default(), nil, nil), nil, restart.New(restarttest.Executable(workDir)), ws.NewReleaseUpdater(slog.Default(), restarttest.Executable(workDir), "test"))
 	mcpHandler := mcp.NewAPIHandler(mcp.NewExecutor(workStore, agentRoleStore, workOps, settingsStore, registry, scopeManager), mcpToken)
 	return newHandler(serverPassword, authguard.New(), sessions, true, wsHandler, mcpHandler, transferHandler, attachmentHandler, rawHandler), workDir, sessions, rawHandler
 }

@@ -20,6 +20,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/pockode/server/agent"
+	"github.com/pockode/server/cliprofile/cliprofiletest"
 	"github.com/pockode/server/session"
 )
 
@@ -31,7 +32,7 @@ func TestIntegration_ClaudeCliAvailable(t *testing.T) {
 }
 
 func TestIntegration(t *testing.T) {
-	agent.RunIntegrationTests(t, func() agent.Agent { return New() }, agent.IntegrationTestOptions{
+	agent.RunIntegrationTests(t, func() agent.Agent { return New(cliprofiletest.UserStore()) }, agent.IntegrationTestOptions{
 		DenyEndsInterrupted: true,
 		ForkedSessions:      checkForkedSessions,
 	})
@@ -46,7 +47,7 @@ func TestIntegration_ReportsCost(t *testing.T) {
 	defer cancel()
 
 	costs := make(chan float64, 16)
-	sess, err := New().Start(ctx, agent.StartOptions{
+	sess, err := New(cliprofiletest.UserStore()).Start(ctx, agent.StartOptions{
 		WorkDir:    t.TempDir(),
 		DataDir:    t.TempDir(),
 		DisableMCP: true,
@@ -122,7 +123,7 @@ func TestIntegration_NoInternalSystemNoise(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 240*time.Second)
 	defer cancel()
 
-	sess, err := New().Start(ctx, agent.StartOptions{
+	sess, err := New(cliprofiletest.UserStore()).Start(ctx, agent.StartOptions{
 		WorkDir:    t.TempDir(),
 		DataDir:    t.TempDir(),
 		Mode:       session.ModeYolo,
@@ -231,7 +232,7 @@ func TestIntegration_RecoversBurnedSessionID(t *testing.T) {
 // runTurn drives one complete message through a real CLI process.
 func runTurn(t *testing.T, workDir, dataDir, sessionID string, resume bool) {
 	t.Helper()
-	agent.RunPrompt(t, New(), workDir, dataDir, sessionID, resume, "Reply with exactly: ok")
+	agent.RunPrompt(t, New(cliprofiletest.UserStore()), workDir, dataDir, sessionID, resume, "Reply with exactly: ok")
 }
 
 // TestIntegration_ForkSessionCarriesContext is the check behind the whole
@@ -248,7 +249,7 @@ func TestIntegration_ForkSessionCarriesContext(t *testing.T) {
 	dataDir := t.TempDir()
 	sourceID := uuid.Must(uuid.NewV7()).String()
 
-	source, err := New().Start(ctx, agent.StartOptions{
+	source, err := New(cliprofiletest.UserStore()).Start(ctx, agent.StartOptions{
 		WorkDir:    workDir,
 		DataDir:    dataDir,
 		SessionID:  sourceID,
@@ -273,7 +274,7 @@ func TestIntegration_ForkSessionCarriesContext(t *testing.T) {
 	// fork is a cut named by a message in it, so a fork given no history has
 	// nothing to reopen however complete the source is.
 	forkID := uuid.Must(uuid.NewV7()).String()
-	carried, err := New().ForkSession(ctx, agent.ForkOptions{
+	carried, err := New(cliprofiletest.UserStore()).ForkSession(ctx, agent.ForkOptions{
 		WorkDir:         workDir,
 		DataDir:         dataDir,
 		SourceSessionID: sourceID,
@@ -288,7 +289,7 @@ func TestIntegration_ForkSessionCarriesContext(t *testing.T) {
 	}
 
 	const question = "What word did I ask you to remember? Reply with exactly that word."
-	said := agent.RunPrompt(t, New(), workDir, dataDir, forkID, true, question)
+	said := agent.RunPrompt(t, New(cliprofiletest.UserStore()), workDir, dataDir, forkID, true, question)
 	if !strings.Contains(said, "BANANA") {
 		t.Fatalf("the forked session did not remember the conversation, it said: %s", said)
 	}
@@ -443,7 +444,7 @@ func TestIntegration_BackgroundTaskDoesNotEndTheTurn(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 240*time.Second)
 	defer cancel()
 
-	sess, err := New().Start(ctx, agent.StartOptions{
+	sess, err := New(cliprofiletest.UserStore()).Start(ctx, agent.StartOptions{
 		WorkDir:    t.TempDir(),
 		DataDir:    t.TempDir(),
 		Mode:       session.ModeYolo,
@@ -510,7 +511,7 @@ func TestIntegration_StopDuringBackgroundWait(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 240*time.Second)
 	defer cancel()
 
-	sess, err := New().Start(ctx, agent.StartOptions{
+	sess, err := New(cliprofiletest.UserStore()).Start(ctx, agent.StartOptions{
 		WorkDir:    t.TempDir(),
 		DataDir:    t.TempDir(),
 		Mode:       session.ModeYolo,
@@ -637,7 +638,7 @@ func TestIntegration_LostBackgroundTasksAreReportedOnRestart(t *testing.T) {
 	dataDir := t.TempDir()
 	sessionID := uuid.Must(uuid.NewV7()).String()
 
-	sess, err := New().Start(ctx, agent.StartOptions{
+	sess, err := New(cliprofiletest.UserStore()).Start(ctx, agent.StartOptions{
 		WorkDir:    workDir,
 		DataDir:    dataDir,
 		SessionID:  sessionID,
@@ -683,7 +684,7 @@ waitForKill:
 	for range sess.Events() {
 	}
 
-	resumed, err := New().Start(ctx, agent.StartOptions{
+	resumed, err := New(cliprofiletest.UserStore()).Start(ctx, agent.StartOptions{
 		WorkDir:    workDir,
 		DataDir:    dataDir,
 		SessionID:  sessionID,

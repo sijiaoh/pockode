@@ -22,6 +22,7 @@ import (
 
 	"github.com/pockode/server/agent"
 	"github.com/pockode/server/attachments"
+	"github.com/pockode/server/cliprofile"
 	"github.com/pockode/server/filestore"
 	"github.com/pockode/server/logger"
 	"github.com/pockode/server/session"
@@ -33,11 +34,15 @@ const Binary = "claude"
 const resumeStateFile = "claude_resume.json"
 
 // Agent implements agent.Agent using Claude CLI.
-type Agent struct{}
+type Agent struct {
+	// profiles decides which account every CLI this Agent starts runs as: the
+	// current one, read at each start.
+	profiles *cliprofile.Store
+}
 
 // New creates a new Claude Agent.
-func New() *Agent {
-	return &Agent{}
+func New(profiles *cliprofile.Store) *Agent {
+	return &Agent{profiles: profiles}
 }
 
 // mcpConfigPrefix starts the name of a process run's MCP config, written in the
@@ -226,6 +231,12 @@ func (a *Agent) Start(ctx context.Context, opts agent.StartOptions) (agent.Sessi
 
 	log := slog.With("sessionId", opts.SessionID)
 
+	profile, err := a.profiles.Launch(session.AgentTypeClaude, cliprofile.SelectCurrent())
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+
 	resumeState := newClaudeResumeStateManager(opts, log)
 	claudeArgs := buildArgs(opts, resumeState.resolve())
 
@@ -271,14 +282,14 @@ func (a *Agent) Start(ctx context.Context, opts agent.StartOptions) (agent.Sessi
 		}
 	}
 
-	proc, err := agent.StartProcess(procCtx, log, Binary, claudeArgs, opts.WorkDir)
+	proc, err := agent.StartProcessEnv(procCtx, log, Binary, claudeArgs, opts.WorkDir, profile.Env)
 	if err != nil {
 		removeMCPConfig()
 		cancel()
 		return nil, fmt.Errorf("failed to start claude: %w", err)
 	}
 
-	log.Info("claude process started", "pid", proc.Pid(), "mode", opts.Mode)
+	log.Info("claude process started", "pid", proc.Pid(), "mode", opts.Mode, "profile", profile.ProfileID)
 
 	events := make(chan agent.AgentEvent)
 	pendingRequests := &sync.Map{}
