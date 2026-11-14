@@ -35,14 +35,20 @@ const resumeStateFile = "claude_resume.json"
 
 // Agent implements agent.Agent using Claude CLI.
 type Agent struct {
-	// profiles decides which account every CLI this Agent starts runs as: the
-	// current one, read at each start.
+	// profiles decides which account every CLI this Agent starts runs as: a
+	// session's, the one its StartOptions names; a one-shot's, the current one,
+	// read at each start.
 	profiles *cliprofile.Store
 }
 
 // New creates a new Claude Agent.
 func New(profiles *cliprofile.Store) *Agent {
 	return &Agent{profiles: profiles}
+}
+
+// CurrentProfile implements agent.ProfileResolver.
+func (a *Agent) CurrentProfile() (string, error) {
+	return a.profiles.Resolve(session.AgentTypeClaude, cliprofile.SelectCurrent())
 }
 
 // mcpConfigPrefix starts the name of a process run's MCP config, written in the
@@ -67,7 +73,14 @@ const mcpConfigPrefix = "mcp-config-"
 //
 // A hard crash leaves the file behind; it is removed with the session's
 // directory when the session is deleted.
-func writeMCPConfig(opts agent.StartOptions) (string, func(), error) {
+//
+// userServers (see userMCPServers) go in beside Pockode's own server, which
+// wins a clash of names: a session without it has no work_* tools, and its
+// args carry the identity of the session being spawned. They may carry the
+// user's secrets (an API key in an env or a header), which the file is no
+// more exposed with than in their own .claude.json: it is in the data
+// directory, which main restricts to the user.
+func writeMCPConfig(opts agent.StartOptions, userServers map[string]json.RawMessage, log *slog.Logger) (string, func(), error) {
 	exe, err := os.Executable()
 	if err != nil {
 		return "", nil, fmt.Errorf("resolve executable path: %w", err)
@@ -82,14 +95,18 @@ func writeMCPConfig(opts agent.StartOptions) (string, func(), error) {
 		args = append(args, "--worktree", opts.Worktree)
 	}
 
-	config := map[string]interface{}{
-		"mcpServers": map[string]interface{}{
-			agent.MCPServerName: map[string]interface{}{
-				"command": exe,
-				"args":    args,
-			},
-		},
+	servers := make(map[string]any, len(userServers)+1)
+	for name, server := range userServers {
+		servers[name] = server
 	}
+	if _, ok := servers[agent.MCPServerName]; ok {
+		log.Warn("a user-scope MCP server has the name of Pockode's own; using Pockode's", "name", agent.MCPServerName)
+	}
+	servers[agent.MCPServerName] = map[string]any{
+		"command": exe,
+		"args":    args,
+	}
+	config := map[string]any{"mcpServers": servers}
 
 	data, err := json.MarshalIndent(config, "", "  ")
 	if err != nil {
@@ -231,7 +248,7 @@ func (a *Agent) Start(ctx context.Context, opts agent.StartOptions) (agent.Sessi
 
 	log := slog.With("sessionId", opts.SessionID)
 
-	profile, err := a.profiles.Launch(session.AgentTypeClaude, cliprofile.SelectCurrent())
+	profile, err := a.profiles.Launch(session.AgentTypeClaude, opts.Profile)
 	if err != nil {
 		cancel()
 		return nil, err
@@ -251,8 +268,15 @@ func (a *Agent) Start(ctx context.Context, opts agent.StartOptions) (agent.Sessi
 	// The proxy must reach the single running server, whose server.json lives in
 	// the main data dir — not this session's per-worktree DataDir.
 	removeMCPConfig := func() {}
+	var userServersWarning *agent.WarningEvent
 	if !opts.DisableMCP {
-		mcpConfigPath, remove, err := writeMCPConfig(opts)
+		userServers, err := a.userMCPServers(ctx, profile.ProfileID, opts.WorkDir, log)
+		if err != nil {
+			log.Warn("could not read the user-scope MCP servers; starting without them", "profile", profile.ProfileID, "error", err)
+			w := userMCPServersWarning(err)
+			userServersWarning = &w
+		}
+		mcpConfigPath, remove, err := writeMCPConfig(opts, userServers, log)
 		if err != nil {
 			cancel()
 			return nil, fmt.Errorf("failed to create MCP config: %w", err)
@@ -347,6 +371,9 @@ func (a *Agent) Start(ctx context.Context, opts agent.StartOptions) (agent.Sessi
 
 		if warning, ok := resumeState.pendingWarning(); ok {
 			emitEvent(procCtx, events, warning)
+		}
+		if userServersWarning != nil {
+			emitEvent(procCtx, events, *userServersWarning)
 		}
 
 		if lostBackground.reportable() && deliverBackgroundLoss(procCtx, events, lostBackground) {
@@ -1642,6 +1669,30 @@ const syntheticModel = "<synthetic>"
 // label when there is one ("authentication_failed", "server_error", ...).
 const syntheticNoticeCode = "synthetic_message"
 
+// rateLimitError is the CLI's own label for a request refused with a 429 that
+// it gave up on. Where: the `error` field of a synthetic assistant frame, as
+// spelled by claude 2.1.325, which puts it on the five-hour and weekly limit
+// notices ("You've hit your limit · resets ...") and on its other 429 refusals:
+// usage credits required, a model blocked for the account, and a 429 it reads
+// as possibly a temporary capacity problem. All of them are marked; every one
+// is a refusal of this account's requests, which is the fact the mark records.
+//
+// The frame's finer `api_error` ("usage_limit_reached", ...) is deliberately
+// not what this goes by: the CLI documents it as internal, adds values over
+// time, and sets usage_limit_reached only when the notice's text starts with a
+// phrase it knows — a limit worded otherwise would go unmarked.
+const rateLimitError = "rate_limit"
+
+// usageLimitNotice marks a synthetic notice labelled code as a usage limit. Only
+// the notice is marked, not the failed ending the CLI writes after it: the
+// notice is where the CLI says it, and marking both would report one limit twice.
+func usageLimitNotice(code string) *agent.UsageLimit {
+	if code != rateLimitError {
+		return nil
+	}
+	return &agent.UsageLimit{Agent: session.AgentTypeClaude}
+}
+
 // assistantEnvelope holds the assistant frame fields that sit beside `message`
 // rather than inside it. Decoded here rather than added to cliEvent so that a
 // CLI spelling one of them differently costs this one label instead of the
@@ -1702,6 +1753,7 @@ func syntheticNotice(log *slog.Logger, line []byte, msg cliMessage, authFailures
 		Message:     strings.Join(textParts, ""),
 		Code:        code,
 		AuthFailure: authFailures.notice(code),
+		UsageLimit:  usageLimitNotice(code),
 	}}
 }
 

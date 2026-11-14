@@ -17,6 +17,21 @@ func codexAuthFailure() *agent.AuthFailure {
 // a turn error's codexErrorInfo. Where: the v2 schema of codex-cli 0.153.0.
 const unauthorizedErrorInfo = "unauthorized"
 
+// usageLimitErrorInfo is app-server's name, in a turn error's codexErrorInfo,
+// for the account having hit its usage limit. Where: the v2 schema of codex-cli
+// 0.153.0, and seen on a ChatGPT account's turns (docs/testing.md).
+const usageLimitErrorInfo = "usageLimitExceeded"
+
+// readUsageLimit reports whether a turn error's codexErrorInfo is the account's
+// usage limit.
+func readUsageLimit(info json.RawMessage) *agent.UsageLimit {
+	var name string
+	if json.Unmarshal(info, &name) != nil || name != usageLimitErrorInfo {
+		return nil
+	}
+	return &agent.UsageLimit{Agent: session.AgentTypeCodex}
+}
+
 // authVerdict is what one turn error's codexErrorInfo says about credentials.
 type authVerdict int
 

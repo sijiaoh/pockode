@@ -178,6 +178,12 @@ is pinned to its profile from `StartLogin` on, not from when its CLI starts
 after waiting for the lock. The RPC methods ask for the current profile today;
 naming another is for the profile screens to come.
 
+A refusal met mid-conversation is recorded the same way: the chat's auth-failure
+record carries the `profile_id` of the account the session's CLI was running as
+([agent-integration.md](agent-integration.md#auth-failures)), so the sign-in it
+offers is for the account that was refused, even after the session has moved to
+another one.
+
 The lock below stays one per CLI, not per profile: an update replaces the
 binary every profile runs, and a CLI signs in one profile at a time — a second
 `StartLogin` for the same profile lands in the running sign-in, one for another

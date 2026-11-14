@@ -558,6 +558,9 @@ type WarningEvent struct {
 	// credentials while the turn carries on (a retry), so the client can offer a
 	// way to sign in before the turn gives up. See AuthFailure.
 	AuthFailure *AuthFailure
+	// UsageLimit is set on the CLI's own notice that the account hit its usage
+	// limit. See UsageLimit.
+	UsageLimit *UsageLimit
 }
 
 func (WarningEvent) EventType() EventType { return EventTypeWarning }
@@ -569,6 +572,7 @@ func (e WarningEvent) ToRecord() EventRecord {
 		Message:     e.Message,
 		Code:        e.Code,
 		AuthFailure: e.AuthFailure,
+		UsageLimit:  e.UsageLimit,
 	}
 }
 
@@ -584,6 +588,35 @@ func (e WarningEvent) ToRecord() EventRecord {
 // Set by the adapter from the CLI's structured signal, never from its text.
 type AuthFailure struct {
 	Agent session.AgentType `json:"agent"`
+	// ProfileID is the account the refused CLI was running as; see
+	// UsageLimit.ProfileID, which it shares the meaning and the stamping of.
+	ProfileID string `json:"profile_id"`
+}
+
+// UsageLimit marks a record as the CLI saying the account it runs as has hit its
+// usage limit (Claude's five-hour or weekly limit, Codex's), and names the CLI.
+// Each adapter goes by the CLI's own label, and Claude's is coarser than that:
+// it covers every rate-limit refusal the CLI gave up on (claude.rateLimitError).
+// What a user does about one is sign in to another account and carry on, so the
+// record keeps which account it was.
+//
+// Like AuthFailure it says what happened on this turn: whether the limit has
+// lifted is not something a record can know.
+//
+// Set by the adapter from the CLI's structured signal, never from its text.
+type UsageLimit struct {
+	Agent session.AgentType `json:"agent"`
+	// ProfileID is the account the CLI that produced the record was running as
+	// — cliprofile's id, "" for the default account — which is a fact about the
+	// moment and stays one when the current account changes later. Only the id:
+	// a profile's name can change, and a client looks it up by id when it draws
+	// the record.
+	//
+	// Stamped by process, which launched the CLI as it (process.Process.ProfileID);
+	// the adapter leaves it empty. Not omitempty, so "" — the default account —
+	// is written out and a record without the key is one kept before accounts
+	// were recorded, whose account is unknown.
+	ProfileID string `json:"profile_id"`
 }
 
 type ErrorEvent struct {
@@ -592,13 +625,16 @@ type ErrorEvent struct {
 	// its credentials. It also changes what the turn ended as
 	// (session.OutcomeAuthFailed).
 	AuthFailure *AuthFailure
+	// UsageLimit is set when the turn failed because the account hit its usage
+	// limit. The turn ends as any other failure.
+	UsageLimit *UsageLimit
 }
 
 func (ErrorEvent) EventType() EventType { return EventTypeError }
 func (ErrorEvent) isAgentEvent()        {}
 
 func (e ErrorEvent) ToRecord() EventRecord {
-	return EventRecord{Type: e.EventType(), Error: e.Error, AuthFailure: e.AuthFailure}
+	return EventRecord{Type: e.EventType(), Error: e.Error, AuthFailure: e.AuthFailure, UsageLimit: e.UsageLimit}
 }
 
 type DoneEvent struct{}
