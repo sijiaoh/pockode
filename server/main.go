@@ -576,7 +576,7 @@ Flags:
 	if cloudCredentials != nil {
 		cloudLinks = cloudlogin.NewService(cloudURL, cloudCredentials, cloudlogin.RelayOf(relayManager), slog.Default())
 	}
-	wsHandler = ws.NewRPCHandler(cred.Password, passwordGuard, sessions, version, remoteURL, previewTickets, rawHandler, devMode, commandStore, worktreeManager, settingsStore, workStore, workOps, workEngine, agentRoleStore, scheduleStore, scheduler, cliAuth, cliUpdate, cloudLinks, restarter, updater)
+	wsHandler = ws.NewRPCHandler(cred.Password, passwordGuard, sessions, version, remoteURL, previewTickets, rawHandler, devMode, commandStore, worktreeManager, settingsStore, workStore, workOps, workEngine, agentRoleStore, scheduleStore, scheduler, cliAuth, cliProfiles, cliUpdate, cloudLinks, restarter, updater)
 
 	if relayManager != nil {
 		url, err := relayManager.Start(context.Background())

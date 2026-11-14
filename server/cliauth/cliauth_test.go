@@ -126,15 +126,22 @@ func (b blockingProvider) Status(ctx context.Context, profileID string) (cliauth
 	return b.Provider.Status(ctx, profileID)
 }
 
-// One command per CLI at a time — a status read can rewrite the credentials a
-// sign-out is removing — and a caller whose client has gone stops waiting.
-func TestService_OneCommandPerCLI(t *testing.T) {
+// One command per profile at a time — a status read can rewrite the
+// credentials a sign-out is removing — and a caller whose client has gone stops
+// waiting. Another profile keeps its credentials apart and is not held up, but
+// an update replaces the binary every profile runs and waits for them all.
+func TestService_OneCommandPerProfile(t *testing.T) {
 	p := blockingProvider{
 		Provider: cliauthtest.New(cliauthtest.State{Status: cliauth.Status{State: cliauth.StateSignedIn}}),
 		entered:  make(chan struct{}),
 		release:  make(chan struct{}),
 	}
-	s := cliauth.NewService(slog.Default(), cliprofile.NewStore(t.TempDir()))
+	profiles := cliprofile.NewStore(t.TempDir())
+	work, err := profiles.Add(session.AgentTypeClaude, "Work")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := cliauth.NewService(slog.Default(), profiles)
 	s.Register(session.AgentTypeClaude, p)
 
 	readDone := make(chan struct{})
@@ -151,6 +158,19 @@ func TestService_OneCommandPerCLI(t *testing.T) {
 	if _, err := s.Logout(ctx, session.AgentTypeClaude, cliprofile.SelectCurrent()); !errors.Is(err, context.DeadlineExceeded) {
 		t.Errorf("sign-out during a read: got %v, want it to wait and then give up", err)
 	}
+	if _, err := s.Logout(context.Background(), session.AgentTypeClaude, cliprofile.Select(work.ID)); err != nil {
+		t.Errorf("sign-out of another profile during a read: %v", err)
+	}
+	wait, end, err := s.BeginUpdate(session.AgentTypeClaude, "update-1")
+	if err != nil {
+		t.Fatalf("BeginUpdate: %v", err)
+	}
+	updateCtx, cancelUpdate := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancelUpdate()
+	if err := wait(updateCtx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("update during a read: got %v, want it to wait for the read", err)
+	}
+	end()
 
 	close(p.release)
 	<-readDone
