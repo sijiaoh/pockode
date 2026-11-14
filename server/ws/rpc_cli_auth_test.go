@@ -3,6 +3,7 @@ package ws
 import (
 	"encoding/json"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
@@ -246,6 +247,113 @@ func TestCLIAuthLogin_Errors(t *testing.T) {
 			}
 			if resp.Error.Code != jsonrpc2.CodeInvalidParams || !strings.Contains(resp.Error.Message, tt.wantMsg) {
 				t.Errorf("got %d %q, want invalid params containing %q", resp.Error.Code, resp.Error.Message, tt.wantMsg)
+			}
+		})
+	}
+}
+
+// Each cli_auth.* call is for the profile it names: absent is the current
+// one, which is all an older client ever asks for; "" is the default one.
+func TestCLIAuth_Profiles(t *testing.T) {
+	env := newTestEnv(t, &mockAgent{})
+	t.Cleanup(env.handler.cliAuth.Close)
+	env.cliAuth.Set(cliauthtest.State{Status: cliauth.Status{State: cliauth.StateSignedIn}})
+	work, err := env.cliProfiles.Add(session.AgentTypeClaude, "Work")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := env.cliProfiles.SetCurrent(session.AgentTypeClaude, work.ID); err != nil {
+		t.Fatal(err)
+	}
+	defaultID := ""
+
+	statuses := func(params any) []cliauth.Status {
+		t.Helper()
+		resp := env.call("cli_auth.status", params)
+		if resp.Error != nil {
+			t.Fatalf("cli_auth.status %+v: %s", params, resp.Error.Message)
+		}
+		var result rpc.CLIAuthStatusResult
+		if err := json.Unmarshal(resp.Result, &result); err != nil {
+			t.Fatal(err)
+		}
+		return result.Statuses
+	}
+	profileIDs := func(statuses []cliauth.Status) []string {
+		var ids []string
+		for _, st := range statuses {
+			ids = append(ids, st.ProfileID)
+		}
+		return ids
+	}
+
+	if got := profileIDs(statuses(nil)); !slices.Equal(got, []string{work.ID}) {
+		t.Errorf("no params: read %q, want the current profile", got)
+	}
+	named := rpc.CLIAuthStatusParams{Agent: session.AgentTypeClaude, CLIProfileParam: rpc.CLIProfileParam{ProfileID: &defaultID}}
+	if got := profileIDs(statuses(named)); !slices.Equal(got, []string{""}) {
+		t.Errorf("profile_id \"\": read %q, want the default profile", got)
+	}
+	all := rpc.CLIAuthStatusParams{AllProfiles: true}
+	if got := profileIDs(statuses(all)); !slices.Equal(got, []string{"", work.ID}) {
+		t.Errorf("all_profiles: read %q, want the default profile, then Work", got)
+	}
+
+	resp := env.call("cli_auth.logout", rpc.CLIAuthLogoutParams{Agent: session.AgentTypeClaude, CLIProfileParam: rpc.CLIProfileParam{ProfileID: &defaultID}})
+	if resp.Error != nil {
+		t.Fatalf("logout: %s", resp.Error.Message)
+	}
+	var logout rpc.CLIAuthLogoutResult
+	if err := json.Unmarshal(resp.Result, &logout); err != nil {
+		t.Fatal(err)
+	}
+	if logout.Status.ProfileID != "" {
+		t.Errorf("logout: signed out %q, want the default profile", logout.Status.ProfileID)
+	}
+
+	login := env.callCLIAuthLogin("cli_auth.login.start", rpc.CLIAuthLoginStartParams{Agent: session.AgentTypeClaude, CLIProfileParam: rpc.CLIProfileParam{ProfileID: &defaultID}})
+	if login.ProfileID != "" {
+		t.Errorf("login.start: signing in %q, want the default profile", login.ProfileID)
+	}
+	// Every profile is busy, and says which one is signing in.
+	for _, st := range statuses(all) {
+		if st.State != cliauth.StateSigningIn || st.LoginID != login.ID || st.LoginProfileID != "" {
+			t.Errorf("during the sign-in: got %+v, want signing_in by the default profile's %s", st, login.ID)
+		}
+	}
+	env.callCLIAuthLogin("cli_auth.login.cancel", rpc.CLIAuthLoginCancelParams{LoginID: login.ID})
+}
+
+func TestCLIAuth_ProfileErrors(t *testing.T) {
+	unknown := "0198f3c2-0000-7000-8000-000000000000"
+	traversal := "../../etc"
+	profile := func(id string) rpc.CLIProfileParam { return rpc.CLIProfileParam{ProfileID: &id} }
+	tests := []struct {
+		name    string
+		method  string
+		params  any
+		wantMsg string
+	}{
+		{"status of an unknown profile", "cli_auth.status", rpc.CLIAuthStatusParams{Agent: session.AgentTypeClaude, CLIProfileParam: profile(unknown)}, "profile not found"},
+		{"status of a path", "cli_auth.status", rpc.CLIAuthStatusParams{Agent: session.AgentTypeClaude, CLIProfileParam: profile(traversal)}, "profile not found"},
+		{"status of a profile without its CLI", "cli_auth.status", rpc.CLIAuthStatusParams{CLIProfileParam: profile("")}, "together with its AI CLI"},
+		{"one profile and all of them", "cli_auth.status", rpc.CLIAuthStatusParams{Agent: session.AgentTypeClaude, CLIProfileParam: profile(""), AllProfiles: true}, "do not go together"},
+		{"every profile of an unknown agent", "cli_auth.status", rpc.CLIAuthStatusParams{Agent: "gemini", AllProfiles: true}, "unknown agent"},
+		{"sign out an unknown profile", "cli_auth.logout", rpc.CLIAuthLogoutParams{Agent: session.AgentTypeClaude, CLIProfileParam: profile(unknown)}, "profile not found"},
+		{"sign in an unknown profile", "cli_auth.login.start", rpc.CLIAuthLoginStartParams{Agent: session.AgentTypeClaude, CLIProfileParam: profile(traversal)}, "profile not found"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			env := newTestEnv(t, &mockAgent{})
+			resp := env.call(tt.method, tt.params)
+			if resp.Error == nil {
+				t.Fatal("expected an error")
+			}
+			if resp.Error.Code != jsonrpc2.CodeInvalidParams || !strings.Contains(resp.Error.Message, tt.wantMsg) {
+				t.Errorf("got %d %q, want invalid params containing %q", resp.Error.Code, resp.Error.Message, tt.wantMsg)
+			}
+			if got := env.cliAuth.Profiles(); len(got) != 0 {
+				t.Errorf("the CLI ran as %q; want nothing run", got)
 			}
 		})
 	}

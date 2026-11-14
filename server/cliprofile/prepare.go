@@ -125,8 +125,9 @@ func DefaultDir(agent session.AgentType) (string, error) {
 // use splits it from its WAL), and never repoints a live link, which would
 // move a running CLI's files from under it.
 type Conflict struct {
-	Name string
-	Path string
+	// Name is the entry; Path is where the profile's own copy of it is.
+	Name string `json:"name"`
+	Path string `json:"path"`
 }
 
 // testHookLinked runs in Prepare once the directory is filled in, so a test can

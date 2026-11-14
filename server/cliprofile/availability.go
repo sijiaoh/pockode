@@ -14,16 +14,20 @@ import (
 // hard link to a SQLite database that is replaced or rewritten splits the two
 // copies, so nothing else will do.
 type Availability struct {
-	Available bool
+	Available bool `json:"available"`
 	// Reason says, for the user, why profiles are unavailable; "" when they
 	// are available.
-	Reason string
+	Reason string `json:"unavailable_reason,omitempty"`
 }
 
 // Availability probes once per Store, by creating a file symlink where profile
 // directories live; whether the OS allows it does not change while Pockode
-// runs (turning on Windows Developer Mode takes effect for new processes).
+// runs (turning on Windows Developer Mode takes effect for new processes). The
+// nil Store has no profiles to use, for want of a place to keep them.
 func (s *Store) Availability() Availability {
+	if s == nil {
+		return Availability{Reason: ErrNoStore.Error()}
+	}
 	s.availabilityOnce.Do(func() {
 		s.availability = probeSymlinks(filepath.Dir(s.path))
 	})

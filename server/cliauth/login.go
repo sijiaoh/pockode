@@ -297,6 +297,9 @@ func (s *Service) StartLogin(agentType session.AgentType, kind AccountKind, prof
 	if !ok {
 		return Login{}, fmt.Errorf("%w: %q", ErrUnknownAgent, agentType)
 	}
+	if err := s.profiles.Check(agentType, profile); err != nil {
+		return Login{}, err
+	}
 	// Resolved now rather than when the CLI starts: the sign-in is for the
 	// profile that was current when the user asked, even if it changes while
 	// the sign-in waits for the CLI's lock.
@@ -328,6 +331,12 @@ func (s *Service) StartLogin(agentType session.AgentType, kind AccountKind, prof
 	if s.updating[agentType] != "" {
 		s.loginsMu.Unlock()
 		return Login{}, updatingError(agentType)
+	}
+	// Under loginsMu, as RemoveProfile marks the profile: either the removal
+	// sees this sign-in running and refuses, or this sees the removal.
+	if s.removing[agentType][profileID] {
+		s.loginsMu.Unlock()
+		return Login{}, removingError(agentType)
 	}
 
 	now := time.Now()

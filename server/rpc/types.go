@@ -33,6 +33,7 @@ import (
 	"github.com/pockode/server/agent"
 	"github.com/pockode/server/agentrole"
 	"github.com/pockode/server/cliauth"
+	"github.com/pockode/server/cliprofile"
 	"github.com/pockode/server/cliupdate"
 	"github.com/pockode/server/cloudlogin"
 	"github.com/pockode/server/command"
@@ -1247,20 +1248,46 @@ type AgentListResult struct {
 // package cliauth).
 
 // CLIAuthStatusParams narrows cli_auth.status to one CLI. Params may be omitted
-// altogether to read every CLI.
+// altogether to read every CLI, each as its current profile.
+//
+// ProfileID reads one profile, and needs Agent; AllProfiles reads every
+// profile of Agent, or of every CLI without it, concurrently. The two do not
+// go together.
 type CLIAuthStatusParams struct {
 	Agent session.AgentType `json:"agent,omitempty"`
+	CLIProfileParam
+	AllProfiles bool `json:"all_profiles,omitempty"`
 }
 
-// CLIAuthStatusResult lists the CLIs in display order. A CLI whose status could
-// not be read is in the list as "unavailable" — the request itself only fails
-// for an agent the server does not know.
+// CLIProfileParam names the profile (account) of the CLI a cli_auth.* call is
+// for. Absent (or null) is the current profile, resolved when the call is made;
+// "" is the default one; anything else must be one of the CLI's stored
+// profiles, or the call is refused as invalid params. Every result names the
+// profile it was for in profile_id, absent for the default one.
+type CLIProfileParam struct {
+	ProfileID *string `json:"profile_id,omitempty"`
+}
+
+// Selector is the profile the param names, for cliauth.
+func (p CLIProfileParam) Selector() cliprofile.Selector {
+	if p.ProfileID == nil {
+		return cliprofile.SelectCurrent()
+	}
+	return cliprofile.Select(*p.ProfileID)
+}
+
+// CLIAuthStatusResult lists the CLIs in display order — with AllProfiles, each
+// CLI's default profile first and then its stored ones in their order. A CLI
+// whose status could not be read is in the list as "unavailable"; the request
+// itself only fails for an agent the server does not know or a profile the CLI
+// does not have.
 type CLIAuthStatusResult struct {
 	Statuses []cliauth.Status `json:"statuses"`
 }
 
 type CLIAuthLogoutParams struct {
 	Agent session.AgentType `json:"agent"`
+	CLIProfileParam
 }
 
 // CLIAuthLogoutResult is the CLI's status read after signing out, which is not
@@ -1272,9 +1299,13 @@ type CLIAuthLogoutResult struct {
 // CLIAuthLoginStartParams starts a sign-in. AccountKind picks the kind of
 // account for a CLI that offers more than one (Claude: claude_ai, the default,
 // or console); it is refused for one that does not.
+//
+// A CLI signs in one profile at a time: starting one for the profile already
+// signing in returns that sign-in, and for another is refused.
 type CLIAuthLoginStartParams struct {
 	Agent       session.AgentType   `json:"agent"`
 	AccountKind cliauth.AccountKind `json:"account_kind,omitempty"`
+	CLIProfileParam
 }
 
 // CLIAuthLoginResult is the sign-in a command acted on, as it is afterwards.
@@ -1302,6 +1333,130 @@ type CLIAuthLoginSubscribeParams struct {
 // Changes arrive as cli_auth.login.changed notifications of the same shape.
 type CLIAuthLoginSubscribeResult struct {
 	Login *cliauth.Login `json:"login"`
+}
+
+// CLI profile namespace: the accounts each AI CLI can run as, and which one is
+// current (see package cliprofile). Sign-in states stay with cli_auth.*.
+
+// CLIProfileSubscribeResult is every CLI's profiles, in display order, and
+// whether this machine can use them. Changes this server makes arrive as
+// cli_profile.changed notifications of the same shape; changes made by another
+// Pockode process of the OS user (another cluster node) are not pushed.
+type CLIProfileSubscribeResult struct {
+	Profiles cliprofile.Overview `json:"profiles"`
+}
+
+// CLIProfileInspectParams narrows cli_profile.inspect to one CLI. Params may
+// be omitted to read every CLI.
+type CLIProfileInspectParams struct {
+	Agent session.AgentType `json:"agent,omitempty"`
+}
+
+// CLIProfileInspectResult is every profile of the CLIs read, read afresh: CLIs
+// in display order, each with its default profile first and then its stored
+// ones in their order, as cli_auth.status with all_profiles.
+type CLIProfileInspectResult struct {
+	Profiles []CLIProfileInspection `json:"profiles"`
+}
+
+// CLIProfileInspection is one profile as its directory has it now. Status names
+// the profile (agent, profile_id). Conflicts are the entries the profile should
+// share with the default directory but has its own copy of, so it does not
+// share them; the default profile has none. ConflictsError is why they could
+// not be read, which says nothing about the sign-in.
+type CLIProfileInspection struct {
+	Status         cliauth.Status        `json:"status"`
+	Conflicts      []cliprofile.Conflict `json:"conflicts,omitempty"`
+	ConflictsError string                `json:"conflicts_error,omitempty"`
+}
+
+// CLIProfileAddParams adds a profile named Name, which is trimmed and must be
+// 1 to cliprofile.MaxNameLength characters with no control characters, and
+// unlike every other name of the CLI's profiles, case aside. It does not
+// become current.
+type CLIProfileAddParams struct {
+	Agent session.AgentType `json:"agent"`
+	Name  string            `json:"name"`
+}
+
+type CLIProfileAddResult struct {
+	Profile cliprofile.Profile `json:"profile"`
+}
+
+// CLIProfileRenameParams renames a stored profile, Name as for
+// cli_profile.add. The default profile has no name to change.
+type CLIProfileRenameParams struct {
+	Agent     session.AgentType `json:"agent"`
+	ProfileID string            `json:"profile_id"`
+	Name      string            `json:"name"`
+}
+
+// CLIProfileSwitchParams makes ProfileID the CLI's current profile; "" is the
+// default one, and the key is required either way. Sessions move to it on
+// their next message; a turn in progress is not interrupted.
+type CLIProfileSwitchParams struct {
+	Agent     session.AgentType `json:"agent"`
+	ProfileID *string           `json:"profile_id"`
+}
+
+// CLIProfileRemoveParams removes a stored profile: it is signed out first,
+// then taken off the list and its directory deleted. The default profile and
+// the current one cannot be removed.
+type CLIProfileRemoveParams struct {
+	Agent     session.AgentType `json:"agent"`
+	ProfileID string            `json:"profile_id"`
+}
+
+// CodeCLIProfileRemoveRefused answers a cli_profile.remove refused for a
+// state the user can change; CLIProfileRemoveRefusedData says which. The
+// profile is still listed and signed in as it was. The message says the whole
+// thing in English; the reason is what a client picks its own copy by.
+const CodeCLIProfileRemoveRefused = -32014
+
+// Reasons of a CodeCLIProfileRemoveRefused error.
+const (
+	// CLIProfileRemoveRefusedCurrent is the current profile: switching to
+	// another one first makes it removable.
+	CLIProfileRemoveRefusedCurrent = "current"
+	// CLIProfileRemoveRefusedInUse is a profile some sessions of this server
+	// are mid-turn on — running, parked on background work, or waiting on a
+	// permission answer. Sessions names them; trying again once their turns
+	// are over works. Idle sessions on it have already been stopped, and move
+	// to the current profile on their next message.
+	CLIProfileRemoveRefusedInUse = "in_use"
+	// CLIProfileRemoveRefusedSigningIn is a sign-in running on the CLI — to
+	// this profile or another one; the message says which. It holds the CLI
+	// until it ends or is cancelled.
+	CLIProfileRemoveRefusedSigningIn = "signing_in"
+	// CLIProfileRemoveRefusedUpdating is a CLI being updated.
+	CLIProfileRemoveRefusedUpdating = "updating"
+	// CLIProfileRemoveRefusedRemoving is a profile another request is
+	// removing right now.
+	CLIProfileRemoveRefusedRemoving = "removing"
+	// CLIProfileRemoveRefusedSignOutFailed is a sign-out that failed; the
+	// message carries the CLI's error. Removing the directory without it
+	// would leave credentials the CLI keeps elsewhere (Claude Code's Keychain
+	// item on macOS) beyond anyone's reach.
+	CLIProfileRemoveRefusedSignOutFailed = "sign_out_failed"
+	// CLIProfileRemoveRefusedStillExiting is CLIs of this server running as
+	// the profile that were told to stop and had not exited within the
+	// removal's budget. Trying again waits out what is left of them.
+	CLIProfileRemoveRefusedStillExiting = "still_exiting"
+)
+
+// CLIProfileRemoveRefusedData is the data member of a
+// CodeCLIProfileRemoveRefused error.
+type CLIProfileRemoveRefusedData struct {
+	Reason string `json:"reason"`
+	// Sessions are the sessions still mid-turn on the profile, with
+	// CLIProfileRemoveRefusedInUse.
+	Sessions []CLIProfileUser `json:"sessions,omitempty"`
+}
+
+// CLIProfileUser is a session of this server whose CLI runs as a profile.
+type CLIProfileUser struct {
+	Worktree  string `json:"worktree,omitempty"` // empty = main worktree
+	SessionID string `json:"session_id"`
 }
 
 // CLI update namespace: whether each AI CLI has a newer release, and updating

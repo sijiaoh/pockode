@@ -7,10 +7,11 @@ directory is made of. Which profile a start uses and what it is started with is
 in [agent-integration.md](agent-integration.md#which-account-a-cli-runs-as);
 signing a profile in, in [cli-auth.md](cli-auth.md#which-profile).
 
-What is wired up today is the running side: every start of a CLI runs as its
-current profile, and a session already open moves to a newly chosen one on its
-next message. Adding, choosing and removing profiles have no RPC or screen
-yet; `Store` already has them for the profile screens to come.
+Every start of a CLI runs as its current profile, and a session already open
+moves to a newly chosen one on its next message. The profiles are managed
+through the [`cli_profile.*` RPCs](#the-rpc) — listing, adding, renaming,
+choosing and removing; signing a profile in and out stays with `cli_auth.*`.
+The screens are still to come.
 
 Verified against Claude Code 2.1.325 and codex-cli 0.169.0, on macOS.
 
@@ -21,7 +22,11 @@ Verified against Claude Code 2.1.325 and codex-cli 0.169.0, on macOS.
 | `server/cliprofile/cliprofile.go` | `Store`: the profile list and the current profile, `cli-profiles.json` |
 | `server/cliprofile/prepare.go` | each CLI's layout — what a profile shares and what it keeps — and `Prepare`, which makes a profile's directory match it |
 | `server/cliprofile/availability.go`, `platform_{unix,windows}.go` | whether this machine can have profiles at all, and what differs on Windows |
-| `server/cliprofile/launch.go` | `Resolve` / `Launch`, the one way a CLI start asks for its profile |
+| `server/cliprofile/launch.go` | `Resolve` / `Launch`, the one way a CLI start asks for its profile; `Check`, which refuses a client's profile ID the list does not have |
+| `server/cliprofile/overview.go` | `Overview`, the lists and the availability as a client is shown them |
+| `server/cliauth/remove.go` | `Service.SwitchProfile` / `RemoveProfile`: a switch and a removal, which have to exclude each other and the CLI's sign-in commands |
+| `server/ws/rpc_cli_profile.go` | the `cli_profile.*` methods |
+| `server/watch/cli_profile.go` | `CLIProfileWatcher`, which pushes this server's changes to the lists |
 | `server/cliprofile/cliprofiletest/` | profiles for tests, with the default directory in a temporary one, and a fake CLI on `PATH` that records how it was started |
 
 ## One official mechanism, no copied credentials
@@ -84,8 +89,8 @@ under it, in `cli-profiles/<cli>/<id>/`.
   Keychain item for the profile outlives it unless the profile is signed out
   first, and a CLI still running as the profile recreates the directory and
   writes there instead of into the shared one. Both are the caller's to
-  prevent — sign out, and stop the profile's CLIs, before removing
-  ([below](#switching-and-removing)).
+  prevent — `cli_profile.remove` stops the profile's CLIs and signs it out
+  before calling it ([below](#removing-a-profile)).
 
 ## A profile directory: its own credentials, everything else linked
 
@@ -221,7 +226,7 @@ file: Codex's credential store is given on the command line instead
   before the default directory had it, say — is never moved: the CLI may have
   it open, and moving a SQLite database in use splits it from its WAL. It is
   reported as a `Conflict`, logged, and readable without changing anything
-  (`Store.Conflicts`, for the screens to come). The profile still works; it
+  (`Store.Conflicts`, which [`cli_profile.inspect`](#the-rpc) reports). The profile still works; it
   just does not share that entry until the user resolves it.
 - **A link into another directory that still exists** is a conflict too, not
   repointed: it is another Pockode process of the same user started with a
@@ -239,6 +244,99 @@ profile's directory as its default. `Prepare` refuses there — linking a profil
 into another would chain them instead of sharing the user's directory — and
 says to start Pockode without the variable.
 
+## The RPC
+
+```
+cli_profile.subscribe   { id }                       ->  { profiles: Overview }
+cli_profile.unsubscribe { id }                       ->  {}
+notification cli_profile.changed { id, profiles: Overview }
+cli_profile.inspect     { agent? }                   ->  { profiles: [Inspection] }
+cli_profile.add         { agent, name }              ->  { profile: { id, name } }
+cli_profile.rename      { agent, profile_id, name }  ->  {}
+cli_profile.switch      { agent, profile_id }        ->  {}
+cli_profile.remove      { agent, profile_id }        ->  {}
+```
+
+```jsonc
+// Overview
+{
+  "available": false,
+  "unavailable_reason": "...",       // when not available: why, for the user
+  "clis": [{
+    "agent": "claude",
+    "current_profile_id": "...",     // absent: the default profile is current
+    "profiles": [{ "id": "...", "name": "Work" }]   // the stored ones; never the default
+  }]
+}
+
+// Inspection
+{
+  "status": { ... },                 // a cli_auth.status Status, profile_id naming the profile
+  "conflicts": [{ "name": "history.jsonl", "path": "..." }],  // entries the profile fails to share
+  "conflicts_error": "..."           // why conflicts could not be read
+}
+```
+
+The CLIs are in display order in both, the ones `cli_auth.*` knows; a change
+naming any other CLI is invalid params. The default profile is every CLI's,
+with ID `""` and no name, so it is never in `profiles`: a client draws it
+itself. `add` does not make the new profile current, and `switch` takes
+`profile_id` whatever it is switched to — `""` for the default — because an
+absent one would otherwise read as "the current profile", as it does on
+`cli_auth.*`.
+
+**The lists are pushed, the states are read.** The lists are Pockode's own
+file, so what this server changes in it — an add, a rename, a switch, a
+removal — it pushes to its clients as `cli_profile.changed`, the whole
+`Overview` read afresh when sent (`watch/latest.go`, so changes that pile up
+collapse into one). A change another Pockode process makes is not heard of
+here; a client sees it on its next subscribe, or with the next change this
+server pushes. The sign-in states and the conflicts come from the CLIs'
+directories, which change with nothing in this file changing, so they are not
+in the pushed value at all: `inspect` reads them when asked, for the reason
+`cli_auth.status` gives ([cli-auth.md](cli-auth.md#no-subscription)). It is
+`cli_auth.status` with `all_profiles` underneath — every profile read
+concurrently, each CLI's default first — so its budget and the client timeout
+it needs are that method's ([cli-auth.md](cli-auth.md#timeouts)). The default
+profile has no conflicts: it is what the others link into.
+
+What a client needs to say why something does not work is in these two
+replies:
+
+- **No profiles on this machine** — `available: false` and its
+  `unavailable_reason`: symbolic links not allowed
+  ([below](#windows-symbolic-links-required)), or no configuration directory to
+  keep a list in. `current_profile_id` still shows the choice, since the list
+  is shared with every Pockode process of the OS user and one that can use
+  profiles follows it; here every CLI runs as its default profile, and a
+  status read for another profile answers `unavailable` saying why.
+  A switch is not refused for it, for the same reason. Without a
+  configuration directory there is no list to change: `add`, `rename` and
+  `switch` fail with that reason as an internal error (there is no stored
+  profile to remove).
+- **Profiles that cannot change the account** — `external` on every profile
+  of the CLI alike. `ANTHROPIC_API_KEY`, an `apiKeyHelper` in the shared
+  settings, a Codex model provider that needs no sign-in: these come from the
+  environment Pockode was started in or from shared configuration, not from a
+  profile, so a session uses that credential whichever profile is current. A
+  client that sees the same `external` on every profile can say switching
+  changes nothing, and name the source; `external` on one profile only is that
+  profile's own sign-in, a Codex API key
+  ([cli-auth.md](cli-auth.md#deciding-external)).
+- **An entry the profile does not share** — `conflicts`, each with the path of
+  the profile's own copy ([above](#every-link-is-pockodes-nothing-real-is-moved)).
+- **The CLI signing in** — while a sign-in runs, every profile of its CLI
+  reads `signing_in`; `login_profile_id` says which one is signing in
+  ([cli-auth.md](cli-auth.md#which-profile)).
+
+Input is checked at the boundary. A name is the user's: trimmed, then held
+to the rules [above](#the-store-one-per-os-user), refused with the reason as
+invalid params. A profile ID only selects: one that is not a stored profile of
+the CLI — a path among them — is `profile not found` before it is used for
+anything, and a directory is only ever named by an ID the server issued.
+Renaming the default profile is refused, since it has no name. A refused
+change writes nothing and pushes nothing.
+
 ## Switching and removing
 
 Choosing another profile changes no running CLI, and nothing has to be told:
@@ -252,15 +350,88 @@ file every Pockode process of the OS user shares, a switch made on another
 cluster node takes effect here on the next message just the same, as a sign-in
 or sign-out made elsewhere already does.
 
-Removing a profile has one more step before `Remove`: no CLI may still run as
-it, or that CLI recreates the directory and writes a real `projects/` into it,
-and from then on the shared conversations are split. The profile has to stop
-being current first, and then `worktree.Manager.ReleaseProfile` stops this
-server's idle sessions on it, waits for their CLIs to exit, and names the
-sessions still mid-turn on it, to be released once their turns end
-([agent-integration.md](agent-integration.md#releasing-a-profile)).
+### Removing a profile
 
-**Known risks, not covered by that step:**
+No CLI may still run as a profile when it is removed, or that CLI recreates the
+directory and writes a real `projects/` into it, and from then on the shared
+conversations are split. Nor may its sign-in be left behind: on macOS Claude
+Code keeps the credentials in a Keychain item named after the directory, and
+once the directory is gone nothing can find that item again. So
+`cli_profile.remove` (`cliauth.Service.RemoveProfile`) goes in this order, and
+any step that refuses leaves the profile as it was — listed, signed in, its
+directory untouched — and pushes nothing:
+
+1. **Refuse the default and the current profile.** The default is the CLI's own
+   directory; the current one is what every session's next CLI would start as.
+   The profile is marked as being removed, and from then on a switch to it, a
+   sign-in to it and a second removal of it are refused on this server
+   (`ErrProfileRemoving`).
+2. **Take the profile's sign-in lock**, the one a sign-out takes
+   ([cli-auth.md](cli-auth.md#one-command-per-profile-at-a-time)): a status read
+   or a sign-out for it waits until the removal is over, and then fails rather
+   than recreate the directory. A sign-in or an update of the CLI refuses the
+   removal.
+3. **Release this server's CLIs on it** — `worktree.Manager.ReleaseProfile`
+   stops the idle sessions on it, waits for their CLIs to exit, and names the
+   sessions still mid-turn on it, which refuse the removal
+   ([agent-integration.md](agent-integration.md#releasing-a-profile)). It runs
+   without the profile list's lock, which a process start takes under its own.
+   It has to return within the 20s the lock wait started, or the removal is
+   refused; the CLIs it stopped stay stopped, and a retry waits out the rest.
+4. **Sign it out.** A failure refuses the removal.
+5. **`Store.Remove`** — the list first, then the directory.
+
+Why this order, and these refusals:
+
+- **Release before signing out.** A removal refused because a turn is running
+  should leave the profile as the user had it, and a turn running on it should
+  not lose its credentials halfway. It also keeps a CLI of this server from
+  refreshing its token after the sign-out and writing the credentials back.
+- **A failed sign-out keeps the profile.** Removing the directory anyway would
+  leave the Keychain item beyond reach, while trying again is cheap. The one
+  exception is a machine where profiles cannot be used: no CLI can run as the
+  profile there to sign it out, and the only credentials kept outside the
+  directory are in the macOS Keychain, on a system where profiles can always
+  be used — so the directory is all there is, and it is removed without one.
+- **A sign-in refuses, it is not cancelled.** It may be a user halfway through
+  on another device, and any sign-in holds the whole CLI, so the sign-out the
+  removal needs could not run beside it anyway. A client that wants to go
+  ahead cancels it (`cli_auth.login.cancel`) and removes again.
+- **Switch and remove exclude each other** (`switchMu`, which every switch on
+  this server goes through: `cli_profile.switch` calls
+  `cliauth.Service.SwitchProfile`, never the store). Otherwise a switch landing
+  between "it is not current" and the release would start new CLIs as the
+  profile being removed.
+
+A refusal the user can act on is `CodeCLIProfileRemoveRefused` (`-32014`) with
+`data.reason`; the message says the whole thing in English:
+
+| `reason` | When |
+|---|---|
+| `current` | The profile is current: switch to another first. Also a switch made by another Pockode process after the check (`ReleaseProfile`'s `process.ErrProfileCurrent`) |
+| `in_use` | Sessions of this server are mid-turn on it; `data.sessions` names them (`{ worktree?, session_id }`, no `worktree` for the main one). The idle ones have been stopped already. Trying again once those turns are over works |
+| `signing_in` | The CLI is signing in — this profile or another; the message says which |
+| `updating` | The CLI is being updated or installed |
+| `removing` | Another request is removing the same profile |
+| `sign_out_failed` | The sign-out failed; the message carries the CLI's error |
+| `still_exiting` | CLIs of this server told to stop for the release had not exited 20s after the lock wait began. Trying again waits out what is left of them |
+
+The default profile, an ID that is not a stored profile and an unknown CLI are
+invalid params, as for the other methods. A removal that took the profile off
+the list but could not delete its directory (`cliprofile.ErrDirectoryLeft`) is
+an internal error naming the directory — and is pushed, since the list did
+change. Waiting more than 20s for the profile's lock is an internal error too.
+
+A removal can take the lock wait and the release (up to 20s together) and the
+sign-out (up to 45s) before it answers — the 65s a sign-out can take — so a
+client gives it the long timeout `cli_auth.logout` has
+([cli-auth.md](cli-auth.md#timeouts)). The release shares the lock's 20s
+rather than having a budget of its own because that is the whole margin: a
+release with its own time on top would push the worst case past the 75s the
+client waits, and the client would give up on a removal the server then
+finishes.
+
+**Known risks, not covered by that order:**
 
 - **Other Pockode processes.** `ReleaseProfile` sees only the CLIs its own
   server started. A CLI started by another cluster node, or by a server for
@@ -268,14 +439,25 @@ sessions still mid-turn on it, to be released once their turns end
   know; removing the profile under it splits the conversations as above. Those
   sessions do move off it on their next message, since the profile is no longer
   current — but one left idle keeps its CLI until its lease collects it.
-- **Starts that are not sessions.** A one-shot (a commit message draft, say) runs
-  as the current profile for seconds; one started before the switch may still be
-  running when the directory goes. A status read or a sign-out runs as the
-  profile it names, briefly and with a timeout. A sign-in runs as its profile for
-  up to the sign-in timeout, minutes, writing credentials into that very
-  directory — it is the caller's to cancel through `cliauth` before removing.
+  Another process's status reads, sign-outs and sign-ins are not held off by
+  this server's lock either.
+- **A switch made by another process.** `switchMu` covers this server only.
+  One landing before `ReleaseProfile` is caught there and refuses the removal
+  as `current`; one landing after it is not — `Remove` then leaves the default
+  profile current, but the other process may already have started a CLI as the
+  profile meanwhile, which splits the conversations as above. Two processes
+  removing the same profile at once: the later one finds it gone and fails.
+- **Starts that are not sessions.** A one-shot (a commit message draft, say)
+  runs as the current profile, which a profile being removed is not; only one
+  started before the switch away from it may still be running, for seconds,
+  when the directory goes.
+- **A CLI that is not installed** cannot sign out, so its profiles cannot be
+  removed until it is installed again. This is deliberate, for the Keychain
+  item above; there is no forced removal.
+- **Signed out, then `Remove` failed** — reading or writing the list — leaves
+  the profile listed and signed out. Removing it again finishes the job.
 
-
+## Windows: symbolic links required
 
 A profile directory is made of symbolic links, files among them, and nothing
 else will do: a junction links only directories, and a hard link to a SQLite

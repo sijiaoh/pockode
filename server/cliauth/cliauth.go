@@ -1,6 +1,8 @@
 // Package cliauth answers whether each AI CLI is signed in on this machine,
 // signs it in, and signs it out — each as one of the CLI's profiles
-// (cliprofile), the current one unless the caller names another.
+// (cliprofile), the current one unless the caller names another. Switching
+// and removing profiles go through it too (remove.go): a removal signs the
+// profile out, and has to be ordered against its sign-ins and switches.
 //
 // What a CLI is signed in as belongs to the CLI, not to Pockode: the credentials
 // sit in the CLI's own files, shared by every process of the OS user — other
@@ -19,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sync"
 	"time"
 
@@ -61,7 +64,7 @@ type Status struct {
 	// ProfileID is the profile the status was asked for, "" for the default
 	// one. A read for the current profile names the one that was current then.
 	// With StateSigningIn the sign-in may be another profile's — the CLI is
-	// busy whichever profile is asked about — and its Login names which.
+	// busy whichever profile is asked about — and LoginProfileID names which.
 	ProfileID string `json:"profile_id,omitempty"`
 	State     State  `json:"state"`
 	// Version is the CLI's version when it could be read. It is here for the day
@@ -75,6 +78,12 @@ type Status struct {
 	Error string `json:"error,omitempty"`
 	// LoginID is the running sign-in, with StateSigningIn.
 	LoginID string `json:"login_id,omitempty"`
+	// LoginProfileID is the profile the running sign-in is for, with
+	// StateSigningIn; "" (absent) for the default one, as ProfileID. A CLI
+	// signs in one profile at a time and every profile reads as signing in
+	// meanwhile, so this is how a client tells the profile being signed in
+	// (LoginProfileID == ProfileID) from one that is only waiting for it.
+	LoginProfileID string `json:"login_profile_id,omitempty"`
 	// UpdateID is the running update, with StateUpdating.
 	UpdateID string `json:"update_id,omitempty"`
 }
@@ -184,34 +193,21 @@ type Service struct {
 	profiles  *cliprofile.Store
 	agents    []session.AgentType // registration order, which is display order
 	providers map[session.AgentType]Provider
-	// cliLocks holds one lock per CLI, taken around everything that runs one of
-	// its auth commands. A sign-out and a sign-in rewrite the same credential
-	// file, and so may a status read: Claude refreshes expired credentials when
-	// asked for its status. Nothing inside a CLI coordinates two of its own
-	// processes doing that, so a read racing a sign-out could write back the
-	// credentials it just removed.
-	//
-	// A channel rather than a sync.Mutex so that waiting for it can be given up
-	// on: a caller whose client has gone must not stay queued behind a sign-out.
-	//
-	// One per CLI rather than per profile: an update replaces the binary every
-	// profile runs, and a CLI signs in one profile at a time.
-	//
-	// A running sign-in holds its CLI's lock throughout (see runLogin), and so
-	// does a running update (see BeginUpdate).
-	cliLocks map[session.AgentType]chan struct{}
-
-	// loginsMu guards logins, updating, busyStarted, closed and every
+	// loginsMu guards logins, updating, locks, removing, closed and every
 	// loginFlow's state.
 	loginsMu sync.Mutex
+	// switchMu orders a switch against the start of a removal; see
+	// SwitchProfile. Taken before loginsMu.
+	switchMu sync.Mutex
+	// removing is each CLI's profiles RemoveProfile is removing.
+	removing map[session.AgentType]map[string]bool
+	// locks holds each CLI's lock, taken around everything that runs one of
+	// its auth commands; see cliLock.
+	locks map[session.AgentType]*cliLock
 	// logins is each CLI's latest sign-in, running or ended.
 	logins map[session.AgentType]*loginFlow
 	// updating is the id of each CLI's running update.
-	updating map[session.AgentType]string
-	// busyStarted is closed, and replaced, when a sign-in or an update starts
-	// on the CLI: what waits for the CLI's lock has to learn that it is now
-	// held for minutes, rather than wait for it.
-	busyStarted    map[session.AgentType]chan struct{}
+	updating       map[session.AgentType]string
 	loginListeners []LoginListener
 	closed         bool
 	// baseCtx ends every sign-in, status read and sign-out; Close cancels it.
@@ -226,6 +222,9 @@ type Service struct {
 	loginRevision int64
 	// loginTimeout is LoginTimeout everywhere but in tests.
 	loginTimeout time.Duration
+	// releaseTimeout is lockWaitTimeout everywhere but in tests; see
+	// RemoveProfile.
+	releaseTimeout time.Duration
 }
 
 func NewService(log *slog.Logger, profiles *cliprofile.Store) *Service {
@@ -234,13 +233,16 @@ func NewService(log *slog.Logger, profiles *cliprofile.Store) *Service {
 		log:          log,
 		profiles:     profiles,
 		providers:    make(map[session.AgentType]Provider),
-		cliLocks:     make(map[session.AgentType]chan struct{}),
+		locks:        make(map[session.AgentType]*cliLock),
 		logins:       make(map[session.AgentType]*loginFlow),
 		updating:     make(map[session.AgentType]string),
-		busyStarted:  make(map[session.AgentType]chan struct{}),
+		removing:     make(map[session.AgentType]map[string]bool),
 		baseCtx:      baseCtx,
 		cancelBase:   cancelBase,
 		loginTimeout: LoginTimeout,
+		// A removal's wait for the lock and its release share the budget a
+		// sign-out's wait for the lock has alone.
+		releaseTimeout: lockWaitTimeout,
 	}
 }
 
@@ -249,78 +251,158 @@ func NewService(log *slog.Logger, profiles *cliprofile.Store) *Service {
 func (s *Service) Register(agentType session.AgentType, p Provider) {
 	if _, ok := s.providers[agentType]; !ok {
 		s.agents = append(s.agents, agentType)
-		s.cliLocks[agentType] = make(chan struct{}, 1)
-		s.busyStarted[agentType] = make(chan struct{})
+		s.locks[agentType] = newCLILock()
 	}
 	s.providers[agentType] = p
 }
+
+// Agents is the registered CLIs, in display order.
+func (s *Service) Agents() []session.AgentType { return slices.Clone(s.agents) }
 
 // Statuses reads every registered CLI at once, or only agentType when it is not
 // empty — each as its current profile, or as the one profile names, which needs
 // agentType. A CLI whose read failed is in the list as StateUnavailable, one
 // with a sign-in running as StateSigningIn — whichever of its profiles that
 // sign-in is for — and one being updated as StateUpdating; the only errors are
-// ErrUnknownAgent, ErrProfileWithoutAgent and ErrShuttingDown.
+// ErrUnknownAgent, ErrProfileWithoutAgent, cliprofile.ErrNotFound for a
+// profile the CLI does not have, and ErrShuttingDown.
 func (s *Service) Statuses(ctx context.Context, agentType session.AgentType, profile cliprofile.Selector) ([]Status, error) {
 	if agentType == "" && profile != cliprofile.SelectCurrent() {
 		return nil, ErrProfileWithoutAgent
 	}
-	agents := s.agents
-	if agentType != "" {
-		if _, ok := s.providers[agentType]; !ok {
-			return nil, fmt.Errorf("%w: %q", ErrUnknownAgent, agentType)
-		}
-		agents = []session.AgentType{agentType}
+	agents, err := s.agentsOrOne(agentType)
+	if err != nil {
+		return nil, err
 	}
+	if agentType != "" {
+		if err := s.profiles.Check(agentType, profile); err != nil {
+			return nil, err
+		}
+	}
+	targets := make([]target, len(agents))
+	for i, t := range agents {
+		targets[i] = target{agent: t, profile: profile}
+	}
+	return s.readStatuses(ctx, targets)
+}
+
+// ProfileStatuses reads the profiles ids of agentType ("" being the default
+// one) all at once, and returns their statuses in the same order. It is
+// Statuses for a list of profiles, with the same states and errors; an ID the
+// CLI does not have refuses the whole call.
+func (s *Service) ProfileStatuses(ctx context.Context, agentType session.AgentType, ids []string) ([]Status, error) {
+	if agentType == "" {
+		return nil, ErrProfileWithoutAgent
+	}
+	if _, err := s.agentsOrOne(agentType); err != nil {
+		return nil, err
+	}
+	known, err := s.profiles.IDs(agentType)
+	if err != nil {
+		return nil, err
+	}
+	targets := make([]target, len(ids))
+	for i, id := range ids {
+		if !slices.Contains(known, id) {
+			return nil, fmt.Errorf("%w: %q", cliprofile.ErrNotFound, id)
+		}
+		targets[i] = target{agent: agentType, profile: cliprofile.Select(id)}
+	}
+	return s.readStatuses(ctx, targets)
+}
+
+// EveryProfileStatuses reads every profile of every registered CLI, or of
+// agentType when it is not empty, all at once: CLIs in display order, each
+// with its default profile first and then its stored ones in their order.
+func (s *Service) EveryProfileStatuses(ctx context.Context, agentType session.AgentType) ([]Status, error) {
+	agents, err := s.agentsOrOne(agentType)
+	if err != nil {
+		return nil, err
+	}
+	var targets []target
+	for _, t := range agents {
+		ids, err := s.profiles.IDs(t)
+		if err != nil {
+			return nil, fmt.Errorf("list the %s profiles: %w", t, err)
+		}
+		for _, id := range ids {
+			targets = append(targets, target{agent: t, profile: cliprofile.Select(id)})
+		}
+	}
+	return s.readStatuses(ctx, targets)
+}
+
+// agentsOrOne is every registered CLI when agentType is empty, and agentType
+// alone otherwise.
+func (s *Service) agentsOrOne(agentType session.AgentType) ([]session.AgentType, error) {
+	if agentType == "" {
+		return s.agents, nil
+	}
+	if _, ok := s.providers[agentType]; !ok {
+		return nil, fmt.Errorf("%w: %q", ErrUnknownAgent, agentType)
+	}
+	return []session.AgentType{agentType}, nil
+}
+
+// target is one status to read: a CLI, as one of its profiles.
+type target struct {
+	agent   session.AgentType
+	profile cliprofile.Selector
+}
+
+// readStatuses reads every target concurrently: the CLIs are unrelated, and
+// so are a CLI's profiles, each with credentials of its own, while one read
+// (Codex) can take seconds that the others should not have to wait out. Two
+// targets naming the same profile of a CLI take turns; see cliLock.
+func (s *Service) readStatuses(ctx context.Context, targets []target) ([]Status, error) {
 	ctx, end, err := s.beginCommand(ctx)
 	if err != nil {
 		return nil, err
 	}
 	defer end()
 
-	// Concurrently: the CLIs are unrelated, and one of them (Codex) can take
-	// seconds to answer, which the other should not have to wait out.
-	statuses := make([]Status, len(agents))
+	statuses := make([]Status, len(targets))
 	var wg sync.WaitGroup
-	for i, t := range agents {
-		wg.Go(func() {
-			profileID, err := s.profiles.Resolve(t, profile)
-			if err != nil {
-				s.logReadFailure(ctx, t, err)
-				statuses[i] = ErrorStatus(err)
-				statuses[i].Agent = t
-				return
-			}
-			// The version is read under the lock too, though it touches no
-			// credentials: an update takes the lock before it replaces the
-			// CLI's files, and must not do so under a --version still running.
-			// A CLI that is busy, or whose lock could not be had, answers
-			// without one.
-			unlock, busy, err := s.lockUnlessBusy(ctx, t)
-			switch {
-			case err != nil:
-				statuses[i] = ErrorStatus(err)
-			case busy != nil:
-				statuses[i] = *busy
-			}
-			if unlock == nil {
-				statuses[i].Agent, statuses[i].ProfileID = t, profileID
-				return
-			}
-			defer unlock()
-
-			statuses[i] = s.withVersion(ctx, t, profileID, func() Status {
-				st, err := s.providers[t].Status(ctx, profileID)
-				if err != nil {
-					s.logReadFailure(ctx, t, err)
-					return ErrorStatus(err)
-				}
-				return st
-			})
-		})
+	for i, tg := range targets {
+		wg.Go(func() { statuses[i] = s.readStatus(ctx, tg.agent, tg.profile) })
 	}
 	wg.Wait()
 	return statuses, nil
+}
+
+func (s *Service) readStatus(ctx context.Context, t session.AgentType, profile cliprofile.Selector) Status {
+	profileID, err := s.profiles.Resolve(t, profile)
+	if err != nil {
+		s.logReadFailure(ctx, t, err)
+		st := ErrorStatus(err)
+		st.Agent = t
+		return st
+	}
+	// The version is read under the lock too, though it touches no
+	// credentials: an update takes the lock before it replaces the CLI's
+	// files, and must not do so under a --version still running. A CLI that
+	// is busy, or whose lock could not be had, answers without one.
+	unlock, busy, err := s.lockUnlessBusy(ctx, t, profileID)
+	if unlock == nil {
+		var st Status
+		if err != nil {
+			st = ErrorStatus(err)
+		} else {
+			st = *busy
+		}
+		st.Agent, st.ProfileID = t, profileID
+		return st
+	}
+	defer unlock()
+
+	return s.withVersion(ctx, t, profileID, func() Status {
+		st, err := s.providers[t].Status(ctx, profileID)
+		if err != nil {
+			s.logReadFailure(ctx, t, err)
+			return ErrorStatus(err)
+		}
+		return st
+	})
 }
 
 // Logout signs profile of agentType out and returns its status read
@@ -332,6 +414,9 @@ func (s *Service) Logout(ctx context.Context, agentType session.AgentType, profi
 	if !ok {
 		return Status{}, fmt.Errorf("%w: %q", ErrUnknownAgent, agentType)
 	}
+	if err := s.profiles.Check(agentType, profile); err != nil {
+		return Status{}, err
+	}
 	profileID, err := s.profiles.Resolve(agentType, profile)
 	if err != nil {
 		return Status{}, err
@@ -342,7 +427,7 @@ func (s *Service) Logout(ctx context.Context, agentType session.AgentType, profi
 	}
 	defer end()
 
-	unlock, busy, err := s.lockUnlessBusy(ctx, agentType)
+	unlock, busy, err := s.lockUnlessBusy(ctx, agentType, profileID)
 	if err != nil {
 		return Status{}, err
 	}
@@ -387,77 +472,6 @@ func (s *Service) beginCommand(ctx context.Context) (context.Context, func(), er
 		cancel(nil)
 		s.commandWG.Done()
 	}, nil
-}
-
-// lockWaitTimeout bounds how long a call waits for another command on the same
-// CLI to finish. The caller's own context is the connection's and ends only when
-// the client goes away, so without it a Codex read queued behind a Codex
-// sign-out could take both of their 45s budgets — past the point where the
-// client has stopped waiting. 20s on top of the longest budget (45s) keeps a
-// reply within the 75s the client gives agent-starting requests; see
-// docs/code/cli-auth.md.
-const lockWaitTimeout = 20 * time.Second
-
-// lockUntilDone takes agentType's lock for a sign-in or an update, waiting
-// until ctx is done. lockWaitTimeout is not for them: that bounds a request
-// someone is waiting on, and each has a deadline of its own. Queued behind a
-// slow Codex read, one would otherwise fail as "another command was running".
-func (s *Service) lockUntilDone(ctx context.Context, agentType session.AgentType) (unlock func(), err error) {
-	l := s.cliLocks[agentType]
-	select {
-	case l <- struct{}{}:
-		return func() { <-l }, nil
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	}
-}
-
-// lockUnlessBusy takes agentType's lock, or gives up after lockWaitTimeout or
-// when ctx is done, whichever comes first — unless a sign-in or an update is
-// running on the CLI, or starts while this waits: that holds the lock for
-// minutes, so the status it leaves the CLI in is returned instead, and no lock.
-func (s *Service) lockUnlessBusy(ctx context.Context, agentType session.AgentType) (unlock func(), busy *Status, err error) {
-	l := s.cliLocks[agentType]
-	timer := time.NewTimer(lockWaitTimeout)
-	defer timer.Stop()
-	for {
-		s.loginsMu.Lock()
-		busy = s.busyStatus(agentType)
-		started := s.busyStarted[agentType]
-		s.loginsMu.Unlock()
-		if busy != nil {
-			return nil, busy, nil
-		}
-
-		select {
-		case l <- struct{}{}:
-			return func() { <-l }, nil, nil
-		case <-started:
-		case <-timer.C:
-			return nil, nil, lockTimeoutError(agentType)
-		case <-ctx.Done():
-			return nil, nil, ctx.Err()
-		}
-	}
-}
-
-// busyStatus is agentType's status while a sign-in or an update holds it, or
-// nil. Callers hold loginsMu.
-func (s *Service) busyStatus(agentType session.AgentType) *Status {
-	if id := s.updating[agentType]; id != "" {
-		return &Status{State: StateUpdating, UpdateID: id}
-	}
-	if f := s.runningLogin(agentType); f != nil {
-		return &Status{State: StateSigningIn, LoginID: f.login.ID}
-	}
-	return nil
-}
-
-// markBusy wakes whatever waits for agentType's lock, which a sign-in or an
-// update has just taken over. Callers hold loginsMu.
-func (s *Service) markBusy(agentType session.AgentType) {
-	close(s.busyStarted[agentType])
-	s.busyStarted[agentType] = make(chan struct{})
 }
 
 // ErrUpdating is a sign-in or a sign-out asked for while the CLI is being
@@ -510,10 +524,6 @@ func (s *Service) BeginUpdate(agentType session.AgentType, updateID string) (wai
 		s.loginsMu.Unlock()
 	}
 	return wait, end, nil
-}
-
-func lockTimeoutError(agentType session.AgentType) error {
-	return fmt.Errorf("another %s sign-in command was still running after %s; try again", agentType, lockWaitTimeout)
 }
 
 // withVersion runs read while the CLI's version is asked for alongside it, and
