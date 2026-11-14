@@ -16,7 +16,6 @@ import type {
 	PermissionRequest,
 	UserMessage,
 } from "../../types/message";
-import type { AgentType } from "../../types/settings";
 import { TRANSCRIPT_HEIGHT_VAR } from "../ui";
 import {
 	DiscardedMessagesContext,
@@ -25,6 +24,7 @@ import {
 import ForkOriginBanner from "./ForkOriginBanner";
 import HistoryReserve from "./HistoryReserve";
 import MessageItem, {
+	type MessageItemProps,
 	type PermissionChoice,
 	type PromptError,
 } from "./MessageItem";
@@ -115,7 +115,9 @@ interface Props {
 	/** Must be stable: it reaches the memoized `MessageItem`. */
 	onForkMessage?: (messageId: string) => void;
 	/** Must be stable: it reaches the memoized `MessageItem`. */
-	onSignIn?: (agent: AgentType, messageId: string) => void;
+	onSignIn?: MessageItemProps["onSignIn"];
+	/** Must be stable: it reaches the memoized `MessageItem`. */
+	onSwitchAccount?: MessageItemProps["onSwitchAccount"];
 	/** Must be stable: it reaches the memoized `MessageItem`. */
 	onRestoreMessages?: (messages: UserMessage[]) => void;
 	/**
@@ -158,6 +160,7 @@ function MessageList({
 	onOpenSession,
 	onForkMessage,
 	onSignIn,
+	onSwitchAccount,
 	onRestoreMessages,
 	isReadOnly = false,
 	emptyStateSwitch,
@@ -499,6 +502,7 @@ function MessageList({
 															onOpenFile={onOpenFile}
 															onForkMessage={onForkMessage}
 															onSignIn={onSignIn}
+															onSwitchAccount={onSwitchAccount}
 															isDiscarded={
 																message.role === "user" &&
 																message.messageId !== undefined &&

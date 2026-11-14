@@ -6,6 +6,8 @@ interface Props {
 	icon?: ReactNode;
 	/** Undefined while the value is not read yet: the row draws its skeleton. */
 	title: string | undefined;
+	/** Drawn after the title and never cut with it, such as a `Tag`. */
+	tag?: ReactNode;
 	subtitle?: ReactNode;
 	/** At most one button. */
 	action?: ReactNode;
@@ -37,6 +39,7 @@ export type CliRowState = Omit<Props, "notice" | "loadingLabel"> & {
 export default function CliRow({
 	icon,
 	title,
+	tag,
 	subtitle,
 	action,
 	dimmed,
@@ -71,14 +74,23 @@ export default function CliRow({
 								{/* Dimmed by colour, not opacity: the muted subtitle under an
 								    opacity would fall below text contrast. */}
 								<p
-									className={`text-sm leading-5 ${wrap ? "break-words" : "truncate"} ${
+									className={`text-sm leading-5 ${tag ? "flex min-w-0 items-center" : wrap ? "break-words" : "truncate"} ${
 										dimmed ? "text-th-text-muted" : "text-th-text-primary"
 									}`}
 									// A cut line keeps its full value here: an email or a
 									// machine name is no use truncated.
-									title={wrap ? undefined : title}
+									title={wrap || tag ? undefined : title}
 								>
-									{title}
+									{tag ? (
+										<>
+											<span className="truncate" title={title}>
+												{title}
+											</span>
+											{tag}
+										</>
+									) : (
+										title
+									)}
 								</p>
 								<p
 									className="truncate text-xs leading-4 text-th-text-muted"

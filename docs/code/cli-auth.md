@@ -522,12 +522,15 @@ The screens are in [cli-login-ui.md](../cli-login-ui.md); the code behind them:
 
 | Path | Holds |
 |------|-------|
-| `web/src/lib/rpc/cliAuth.ts` | the `cli_auth.*` requests |
-| `web/src/lib/cliLoginStore.ts` | status per CLI and its latest sign-in, in memory only; the update half is in [cli-update.md](cli-update.md#the-web-client) |
+| `web/src/lib/rpc/cliAuth.ts` | the `cli_auth.*` requests, each naming a profile or none (the current one) |
+| `web/src/lib/rpc/cliProfile.ts` | the `cli_profile.*` requests, and `cliProfileRemoveRefusal`, which reads a `-32014` |
+| `web/src/lib/cliLoginStore.ts` | status per CLI (its current profile) and its latest sign-in, the profile lists and each profile's inspection, in memory only; the update half is in [cli-update.md](cli-update.md#the-web-client) |
+| `web/src/lib/cliProfiles.ts` | reading those: a record's account by id, the profile a sign-in is for, credentials every profile shares |
 | `web/src/hooks/useCliLoginSubscription.ts` | follows a CLI's sign-in into the store while a screen shows it |
+| `web/src/hooks/useCliProfileSubscription.ts` | follows the profile lists into the store while a screen shows them |
 | `web/src/components/CliLogin/` | `CliLoginSheet`, the one sign-in flow, and the wording it shares with the card |
 | `web/src/components/Settings/sections/CliSignInSection.tsx` | Settings → AI CLIs, one `CliStatusCard` per CLI |
-| `web/src/components/Chat/AuthFailureNotice.tsx` | the chat's way in: a turn that failed on its credentials ([agent-integration.md](agent-integration.md#auth-failures)), opening the same sheet from `ChatPanel` |
+| `web/src/components/Chat/CliRefusalNotice.tsx` | the chat's way in: a turn that failed on its credentials (or, with several accounts, on rate limits — [cli-profiles-ui.md](../cli-profiles-ui.md#the-notice)) ([agent-integration.md](agent-integration.md#auth-failures)), opening the same sheet from `ChatPanel` |
 
 The store applies the revision rule above in one place, `applyLogin`, which
 every reply and notification goes through. A subscribe snapshot, a notification
@@ -542,6 +545,22 @@ failed on its side. `ensureStatus` reads only when nothing has been read or is
 being read, or the last read came back `unavailable`, for the many notices a
 transcript can hold — each Codex read starts
 an app-server.
+
+Profiles are inspected one request each (`cli_profile.inspect` with
+`profile_id`), so each profile's status lands when it is read, not when the
+slowest of them is; an inspection follows the same newest-read-wins rule per
+profile. The status `statuses` holds is labelled with the profile it was read
+for — except one made up for a failed request, which says nothing of a profile
+and stands for the list's current one — which is how a sign-out of a named
+profile finds out whether it is the one on screen. On a pushed list it is read
+again only when the list names a different profile the CLI runs as than the
+list before it (the default one wherever profiles are unavailable): the server
+resends the same list to every screen whenever one subscribes, and each read
+spawns a CLI.
+A list also drops the inspections of profiles it no longer has. A chat record's
+account (`RecordedAccount`, from `auth_failure` / `usage_limit`) is only an
+id: its name, and which account is current now, are looked up in the list when
+drawn.
 
 The subscription is per screen, not one for the app: nothing needs to hear a
 sign-in nobody is looking at, and the snapshot a fresh `subscribe` answers with

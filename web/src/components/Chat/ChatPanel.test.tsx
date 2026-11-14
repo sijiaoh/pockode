@@ -31,6 +31,7 @@ import { worktreeActions } from "../../lib/worktreeStore";
 import {
 	createFakeCliAuth,
 	makeLogin,
+	makeOverview,
 	resetCliLoginStore,
 } from "../../test/cliAuthFixtures";
 import {
@@ -232,6 +233,10 @@ vi.mock("../../lib/wsStore", () => {
 				"cliLoginCancel",
 				"cliLoginSubscribe",
 				"cliLoginUnsubscribe",
+				"cliProfileSubscribe",
+				"cliProfileUnsubscribe",
+				"cliProfileInspect",
+				"cliProfileSwitch",
 			].map((name) => [
 				name,
 				(...args: never[]) => mockState.cliAuth[name](...args),
@@ -4989,12 +4994,11 @@ describe("ChatPanel", () => {
 			},
 		];
 
+		let server: ReturnType<typeof createFakeCliAuth>;
+
 		const signInAndFinish = async (
 			user: ReturnType<typeof userEvent.setup>,
 		) => {
-			const server = createFakeCliAuth();
-			mockState.cliAuth = server.actions as typeof mockState.cliAuth;
-			server.setStatuses([{ agent: "codex", state: "signed_out" }]);
 			server.actions.cliLoginStart.mockResolvedValue(
 				makeLogin({ id: "l1", agent: "codex", user_code: "ABCD-12345" }),
 			);
@@ -5016,6 +5020,10 @@ describe("ChatPanel", () => {
 		beforeEach(() => {
 			resetCliLoginStore();
 			mockState.mockHistory = failedHistory;
+			// From the first render: the notice follows the account list.
+			server = createFakeCliAuth();
+			mockState.cliAuth = server.actions as typeof mockState.cliAuth;
+			server.setStatuses([{ agent: "codex", state: "signed_out" }]);
 		});
 
 		it("puts the failed message back as a draft once signed in", async () => {
@@ -5101,6 +5109,153 @@ describe("ChatPanel", () => {
 			expect(screen.queryByRole("button", { name: "Send again" })).toBeNull();
 			expect(screen.getByRole("button", { name: "Done" })).toBeInTheDocument();
 			expect(useInputStore.getState().inputs.elsewhere).toBeUndefined();
+		});
+	});
+
+	// The chat's way to another account (docs/cli-profiles-ui.md#the-switch-sheet).
+	describe("switching accounts from a usage limit", () => {
+		const WORK = "p-work";
+		const overview = (current: string) =>
+			makeOverview({
+				clis: [
+					{
+						agent: "claude",
+						...(current ? { current_profile_id: current } : {}),
+						profiles: [{ id: WORK, name: "Work" }],
+					},
+					{ agent: "codex", profiles: [] },
+				],
+			});
+
+		let server: ReturnType<typeof createFakeCliAuth>;
+
+		beforeEach(() => {
+			resetCliLoginStore();
+			// Claude's: the limit on a warning, then an unmarked failed ending.
+			mockState.mockHistory = [
+				{ type: "message", content: "fix the build", seq: 1 },
+				{
+					type: "warning",
+					message: "You've hit your limit · resets 5pm",
+					code: "rate_limit",
+					usage_limit: { agent: "claude", profile_id: WORK },
+					seq: 2,
+				},
+				{ type: "error", error: "Claude exited", seq: 3 },
+			];
+			server = createFakeCliAuth();
+			mockState.cliAuth = server.actions as typeof mockState.cliAuth;
+			server.setOverview(overview(WORK));
+			server.setInspections(
+				["", WORK].map((id) => ({
+					status: {
+						agent: "claude" as const,
+						...(id ? { profile_id: id } : {}),
+						state: "signed_in" as const,
+					},
+				})),
+			);
+			server.actions.cliProfileSwitch.mockImplementation(async () => {
+				server.pushProfiles(overview(""));
+			});
+		});
+
+		it("puts the message back once another account is current", async () => {
+			const user = userEvent.setup();
+			render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+
+			await user.click(
+				await screen.findByRole("button", { name: "Switch account" }),
+			);
+			const sheet = await screen.findByRole("dialog");
+			expect(
+				within(sheet).queryByRole("button", { name: "Send again" }),
+			).toBeNull();
+			await user.click(
+				await within(sheet).findByRole("button", { name: "Use Default" }),
+			);
+			await user.click(
+				await within(sheet).findByRole("button", { name: "Send again" }),
+			);
+
+			expect(screen.queryByRole("dialog")).toBeNull();
+			expect(screen.getByRole("textbox")).toHaveValue("fix the build");
+			expect(mockState.sendMessage).not.toHaveBeenCalled();
+		});
+
+		// Another Pockode process added Work and ran the turn as it; its change
+		// was never pushed here.
+		it("catches up with an account the list had not heard of", async () => {
+			server.actions.cliProfileSubscribe.mockImplementationOnce(async () => ({
+				id: "stale",
+				initial: makeOverview(),
+			}));
+			render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+
+			expect(
+				await screen.findByText(/requests as Work were turned away/),
+			).toBeInTheDocument();
+			expect(server.actions.cliProfileSubscribe).toHaveBeenCalledTimes(2);
+		});
+
+		it("asks once about an account that really is gone", async () => {
+			server.setOverview(makeOverview());
+			render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+
+			await vi.waitFor(() =>
+				expect(server.actions.cliProfileSubscribe).toHaveBeenCalledTimes(2),
+			);
+			// Pushes keep coming; the id stays unheard of.
+			server.pushProfiles(makeOverview());
+			server.pushProfiles(makeOverview());
+			await new Promise((resolve) => setTimeout(resolve, 50));
+			expect(server.actions.cliProfileSubscribe).toHaveBeenCalledTimes(2);
+		});
+
+		it("offers the switch, but neither sign-in nor Send again, in a viewed session", async () => {
+			const user = userEvent.setup();
+			mockState.sessionViewHistory.mockResolvedValue({
+				history: mockState.mockHistory,
+				has_more: false,
+			});
+			server.setInspections([
+				{ status: { agent: "claude", state: "signed_in" } },
+				{
+					status: { agent: "claude", profile_id: WORK, state: "signed_out" },
+				},
+			]);
+			server.actions.cliProfileSwitch.mockImplementation(async () => {
+				server.pushProfiles(overview(WORK));
+			});
+			server.setOverview(overview(""));
+			render(
+				<ChatPanel
+					{...defaultProps}
+					view={{ worktree: "feature-x", exists: true, label: "feature-x" }}
+				/>,
+			);
+
+			await user.click(
+				await screen.findByRole("button", { name: "Switch account" }),
+			);
+			const sheet = await screen.findByRole("dialog");
+			await user.click(
+				await within(sheet).findByRole("button", { name: "Use Work" }),
+			);
+			// Work is current now and signed out: a writable session would offer
+			// its sign-in here.
+			expect(
+				await within(sheet).findByRole("button", { name: "Use Default" }),
+			).toBeInTheDocument();
+			expect(
+				within(sheet).queryByRole("button", { name: /Sign in/ }),
+			).toBeNull();
+			expect(
+				within(sheet).queryByRole("button", { name: "Send again" }),
+			).toBeNull();
 		});
 	});
 

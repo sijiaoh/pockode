@@ -15,6 +15,12 @@ export {
 } from "./chat";
 export { type CliAuthActions, createCliAuthActions } from "./cliAuth";
 export {
+	type CliProfileActions,
+	cliProfileRemoveRefusal,
+	createCliProfileActions,
+	removalMayHaveLeftDirectory,
+} from "./cliProfile";
+export {
 	type CliUpdateActions,
 	cliInstallRefusedReason,
 	createCliUpdateActions,

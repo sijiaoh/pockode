@@ -1,4 +1,5 @@
 import { ConfirmDialog } from "@pockode/shared";
+import { Plus } from "lucide-react";
 import { useState } from "react";
 import { useCliLoginSubscription } from "../../../hooks/useCliLoginSubscription";
 import { useCliUpdateSubscription } from "../../../hooks/useCliUpdateSubscription";
@@ -9,6 +10,7 @@ import {
 	isStaleRead,
 	useCliLoginStore,
 } from "../../../lib/cliLoginStore";
+import { hasStoredProfiles } from "../../../lib/cliProfiles";
 import { cliInstallRefusedReason } from "../../../lib/rpc";
 import type {
 	CliInstallRefusedReason,
@@ -16,13 +18,21 @@ import type {
 } from "../../../types/cliUpdate";
 import type { AgentType } from "../../../types/settings";
 import { errorMessage } from "../../../utils/errorMessage";
+import CliAccountList, { type SignInAccount } from "./CliAccountList";
 import CliAccountRow from "./CliAccountRow";
 import CliInstallRow, { shownUpdate } from "./CliInstallRow";
 
 interface Props {
 	agent: AgentType;
-	/** Opens the sign-in sheet, which starts a sign-in or resumes the running one. */
-	onOpenSignIn: () => void;
+	/**
+	 * Opens the sign-in sheet, which starts a sign-in or resumes the running
+	 * one: of `account`, or — on the one-account card — of the current one.
+	 */
+	onOpenSignIn: (account?: SignInAccount) => void;
+	/** Opens the sheet that names a new account. */
+	onAddAccount: () => void;
+	/** Opens the sheet that renames an account. */
+	onRename: (account: SignInAccount) => void;
 }
 
 /**
@@ -30,7 +40,12 @@ interface Props {
  * here: a header and two rows that are always there, so values arriving fill
  * the card in place (docs/cli-update-ui.md, "Where it lives").
  */
-export default function CliStatusCard({ agent, onOpenSignIn }: Props) {
+export default function CliStatusCard({
+	agent,
+	onOpenSignIn,
+	onAddAccount,
+	onRename,
+}: Props) {
 	// Follows the running sign-in and update, so the card moves on when they end.
 	useCliLoginSubscription(agent);
 	useCliUpdateSubscription(agent);
@@ -74,6 +89,9 @@ export default function CliStatusCard({ agent, onOpenSignIn }: Props) {
 		status?.login_id ? s.startedHere.includes(status.login_id) : false,
 	);
 	const label = getAgentLabel(agent);
+	const hasAccounts = useCliLoginStore((s) =>
+		hasStoredProfiles(s.profiles, agent),
+	);
 
 	const [signingOut, setSigningOut] = useState(false);
 	const loginError = useCliLoginStore((s) => s.loginErrors[agent]);
@@ -199,7 +217,21 @@ export default function CliStatusCard({ agent, onOpenSignIn }: Props) {
 
 	return (
 		<li className="space-y-1 px-4 py-3">
-			<h3 className="h-5 text-sm text-th-text-primary">{label}</h3>
+			<div className="flex h-5 items-center justify-between gap-2">
+				<h3 className="text-sm text-th-text-primary">{label}</h3>
+				{/* Only once the CLI is known to be there, so it never appears just
+				    to vanish. */}
+				{(liveCheck || status) && !notInstalled && !updating && (
+					<button
+						type="button"
+						onClick={onAddAccount}
+						className="touch-target inline-flex h-5 items-center gap-1 rounded-md text-xs text-th-accent hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent"
+					>
+						<Plus className="h-3.5 w-3.5" aria-hidden="true" />
+						Add account
+					</button>
+				)}
+			</div>
 
 			<CliInstallRow
 				agent={agent}
@@ -225,25 +257,35 @@ export default function CliStatusCard({ agent, onOpenSignIn }: Props) {
 				}
 			/>
 
-			<CliAccountRow
-				agent={agent}
-				status={status}
-				updating={updating && !installing}
-				notInstalled={notInstalled || installing}
-				awaitingStatus={
-					installed &&
-					reading &&
-					(!readStatus ||
-						readStatus.state === "not_installed" ||
-						readStatus.state === "updating")
-				}
-				startedHere={startedHere}
-				loginError={loginError}
-				signingOut={signingOut}
-				error={error}
-				onSignOut={() => setConfirmingSignOut(true)}
-				onOpenSignIn={onOpenSignIn}
-			/>
+			{hasAccounts ? (
+				<CliAccountList
+					agent={agent}
+					updating={updating && !installing}
+					notInstalled={notInstalled || installing}
+					onOpenSignIn={onOpenSignIn}
+					onRename={onRename}
+				/>
+			) : (
+				<CliAccountRow
+					agent={agent}
+					status={status}
+					updating={updating && !installing}
+					notInstalled={notInstalled || installing}
+					awaitingStatus={
+						installed &&
+						reading &&
+						(!readStatus ||
+							readStatus.state === "not_installed" ||
+							readStatus.state === "updating")
+					}
+					startedHere={startedHere}
+					loginError={loginError}
+					signingOut={signingOut}
+					error={error}
+					onSignOut={() => setConfirmingSignOut(true)}
+					onOpenSignIn={() => onOpenSignIn()}
+				/>
+			)}
 
 			{confirmingUpdate && (
 				<ConfirmDialog
