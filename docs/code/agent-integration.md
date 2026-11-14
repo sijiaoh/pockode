@@ -52,6 +52,39 @@ Pockode integrates AI Agents (Claude and Codex) through subprocess management. T
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
+## Which Account a CLI Runs As
+
+Every start of an AI CLI — a session's process, a one-shot, a sign-in, a status
+read, a sign-out — runs as one of that CLI's profiles, and asks
+`cliprofile.Store.Launch` what to start it with right before it starts: the
+profile is read afresh each time from the list every Pockode process of the OS
+user shares, and `Launch` prepares the profile's directory, picking up whatever
+the default directory has gained since. Where profiles are kept and what their
+directories are made of is [cli-profiles.md](cli-profiles.md). Sessions
+and one-shots run as the current profile; the sign-in commands as the one they
+are asked for ([cli-auth.md](cli-auth.md#which-profile)).
+
+The [default profile](cli-profiles.md#one-official-mechanism-no-copied-credentials)
+adds nothing, so the CLI runs exactly as it would without Pockode. Any other sets `CLAUDE_CONFIG_DIR` (with
+`CLAUDE_SECURESTORAGE_CONFIG_DIR`, for the Keychain) or `CODEX_HOME` to the
+profile's directory, and Codex also gets `-c cli_auth_credentials_store=file`:
+its credentials go in the profile's own `auth.json`, not in an OS keyring entry
+the profile might share with the default one — and as an override, because the
+profile's `config.toml` is a link to the default directory's, shared by every
+profile. A profile that cannot be prepared fails the start
+with its reason; it never starts as the default profile instead, which would
+run the user's work on an account they did not pick. Where profiles cannot
+exist at all — [Windows without Developer Mode](cli-profiles.md#windows-symbolic-links-required),
+or no configuration directory to keep them in — the current profile reads as
+the default one.
+
+Two starts are left out on purpose: `--version` (and Codex's `--help` probe),
+which read no account, and [CLI updates](cli-update.md), which replace the
+binary every profile shares.
+
+A session keeps the profile it started with until its process ends; moving a
+running session to a newly chosen profile is not done here.
+
 ## Why Subprocess Instead of SDK
 
 1. **Decoupled AI versions**: Users can upgrade CLI independently without waiting for Pockode updates

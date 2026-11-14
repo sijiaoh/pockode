@@ -480,13 +480,18 @@ alternatives that were rejected on the way to it, are in
   (Settings → AI CLIs) does it for all of them; the cluster frontend has
   no screen of its own for it ([cli-login-ui.md](cli-login-ui.md#cluster)).
   They share because every node inherits the manager's environment, and
-  Pockode sets neither `CLAUDE_CONFIG_DIR` nor `CODEX_HOME`, so each CLI finds
-  the same stored credentials. Sessions that are already running pick up the
-  new credentials on their next message, with no restart. A Pockode started
-  outside the cluster as another OS user, or with either variable set
-  differently, has credentials of its own and needs its own sign-in. Each node
-  still runs its own sign-in flows, so two nodes can sign the same CLI in at
-  once; the one that finishes last wins
+  which account each CLI runs as — its current profile — is one choice for
+  every Pockode process of the OS user ([cli-profiles.md](code/cli-profiles.md)).
+  On the default profile Pockode sets neither `CLAUDE_CONFIG_DIR` nor
+  `CODEX_HOME`, so each CLI finds the user's own stored credentials; on
+  another, every node sets the same profile directory. A sign-in to the
+  profile a running session uses is picked up on its next message, with no
+  restart. A Pockode started outside the cluster as another OS user has
+  profiles of its own altogether; one started with either variable set
+  differently has a default profile of its own, which needs its own sign-in,
+  and shares the other profiles' sign-ins. Each node still runs its own sign-in flows, so two
+  nodes can sign the same CLI in at once; for the same profile, the one that
+  finishes last wins
   ([cli-auth.md](code/cli-auth.md#one-per-cli-owned-by-the-server)).
 - **No AI CLI install or update.** The nodes share each CLI's install the same
   way, so installing or updating it from any node's Pockode (Settings → AI

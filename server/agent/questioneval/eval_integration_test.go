@@ -29,6 +29,7 @@ import (
 	"github.com/pockode/server/agent/claude"
 	"github.com/pockode/server/agent/codex"
 	"github.com/pockode/server/chat"
+	"github.com/pockode/server/cliprofile/cliprofiletest"
 	"github.com/pockode/server/mcp"
 	"github.com/pockode/server/serverinfo"
 	"github.com/pockode/server/session"
@@ -60,8 +61,8 @@ var clis = []struct {
 	name string
 	new  func() agent.Agent
 }{
-	{"claude", func() agent.Agent { return claude.New() }},
-	{"codex", func() agent.Agent { return codex.New() }},
+	{"claude", func() agent.Agent { return claude.New(cliprofiletest.UserStore()) }},
+	{"codex", func() agent.Agent { return codex.New(cliprofiletest.UserStore()) }},
 }
 
 // TestMain lets this test binary be the MCP proxy. Both CLIs spawn the proxy as

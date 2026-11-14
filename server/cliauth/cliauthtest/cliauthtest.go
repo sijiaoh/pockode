@@ -4,6 +4,7 @@ package cliauthtest
 
 import (
 	"context"
+	"slices"
 	"sync"
 
 	"github.com/pockode/server/cliauth"
@@ -19,6 +20,8 @@ type Provider struct {
 	logoutErr   error
 	afterLogout *cliauth.Status
 	login       LoginFunc
+	// profiles are the profiles each call was for, in order.
+	profiles []string
 }
 
 // LoginFunc is a scripted sign-in, run as Provider.Login.
@@ -52,15 +55,25 @@ func (p *Provider) Set(state State) {
 // for alongside is always empty.
 func (p *Provider) Binary() string { return "pockode-test-no-such-cli" }
 
-func (p *Provider) Status(context.Context) (cliauth.Status, error) {
+// Profiles are the profiles the Provider was asked to run as, one per Status,
+// Logout and Login, in order.
+func (p *Provider) Profiles() []string {
 	p.stateMu.Lock()
 	defer p.stateMu.Unlock()
+	return slices.Clone(p.profiles)
+}
+
+func (p *Provider) Status(_ context.Context, profileID string) (cliauth.Status, error) {
+	p.stateMu.Lock()
+	defer p.stateMu.Unlock()
+	p.profiles = append(p.profiles, profileID)
 	return p.status, p.statusErr
 }
 
-func (p *Provider) Logout(context.Context) (cliauth.Status, error) {
+func (p *Provider) Logout(_ context.Context, profileID string) (cliauth.Status, error) {
 	p.stateMu.Lock()
 	defer p.stateMu.Unlock()
+	p.profiles = append(p.profiles, profileID)
 	if p.logoutErr != nil {
 		return cliauth.Status{}, p.logoutErr
 	}
@@ -79,6 +92,7 @@ func (p *Provider) AccountKinds() []cliauth.AccountKind {
 func (p *Provider) Login(ctx context.Context, opts cliauth.LoginOptions, flow cliauth.LoginFlow) (cliauth.Status, error) {
 	p.stateMu.Lock()
 	login := p.login
+	p.profiles = append(p.profiles, opts.ProfileID)
 	p.stateMu.Unlock()
 	if login == nil {
 		login = DefaultLogin

@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"github.com/pockode/server/cliauth"
+	"github.com/pockode/server/cliprofile"
+	"github.com/pockode/server/cliprofile/cliprofiletest"
 )
 
 // The test binary re-execs itself as a fake `codex`, so that the account client
@@ -97,6 +99,7 @@ func TestMain(m *testing.M) {
 }
 
 func runFakeCodex(role string) {
+	cliprofiletest.RecordInvocation(os.Args[1:])
 	if len(os.Args) > 1 && os.Args[1] == "--help" {
 		fmt.Println("Commands:\n  app-server        [experimental] Run the app server or related tooling")
 		os.Exit(0)
@@ -157,11 +160,11 @@ func runFakeCodex(role string) {
 func fakeCodexAuth(t *testing.T, role string) *Auth {
 	t.Helper()
 	t.Setenv(fakeCodexRoleEnv, role)
-	return &Auth{log: slog.Default(), binary: os.Args[0], workDir: t.TempDir()}
+	return &Auth{log: slog.Default(), binary: os.Args[0], workDir: t.TempDir(), profiles: cliprofile.NewStore(t.TempDir())}
 }
 
 func TestAuth_Status(t *testing.T) {
-	got, err := fakeCodexAuth(t, fakeSignedIn).Status(context.Background())
+	got, err := fakeCodexAuth(t, fakeSignedIn).Status(context.Background(), "")
 	if err != nil {
 		t.Fatalf("Status: %v", err)
 	}
@@ -173,7 +176,7 @@ func TestAuth_Status(t *testing.T) {
 // The read after the sign-out goes to the same app-server: the fake forgets the
 // account only in the process that signed out.
 func TestAuth_LogoutReadsOnTheSameAppServer(t *testing.T) {
-	got, err := fakeCodexAuth(t, fakeSignedIn).Logout(context.Background())
+	got, err := fakeCodexAuth(t, fakeSignedIn).Logout(context.Background(), "")
 	if err != nil {
 		t.Fatalf("Logout: %v", err)
 	}
@@ -194,7 +197,7 @@ func TestAuth_Failures(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := fakeCodexAuth(t, tt.role).Status(context.Background())
+			_, err := fakeCodexAuth(t, tt.role).Status(context.Background(), "")
 			if err == nil || !strings.Contains(err.Error(), tt.wantMsg) {
 				t.Errorf("got %v, want an error containing %q", err, tt.wantMsg)
 			}
@@ -210,7 +213,7 @@ func TestAuth_SilentAppServerIsAbandoned(t *testing.T) {
 	defer cancel()
 
 	start := time.Now()
-	_, err := a.Status(ctx)
+	_, err := a.Status(ctx, "")
 	if !errors.Is(err, context.DeadlineExceeded) && (err == nil || !strings.Contains(err.Error(), "did not finish")) {
 		t.Errorf("got %v, want the deadline", err)
 	}

@@ -108,8 +108,9 @@ text to parse.
 
 The tag has to be the one **the CLI's own update installs from**, or the card
 would offer a release that update then declines. Claude has two:
-`autoUpdatesChannel` in the user's `settings.json` (under `CLAUDE_CONFIG_DIR`,
-else `~/.claude`) picks `latest` or `stable`, and `latest` is the default.
+`autoUpdatesChannel` in the user's `settings.json` (under the
+`CLAUDE_CONFIG_DIR` Pockode was started with, else `~/.claude` — the default
+profile's, which every [profile](cli-profiles.md) links to) picks `latest` or `stable`, and `latest` is the default.
 Only the user's settings are read: the update runs outside any project
 ([below](#running-the-update)), so a project's settings do not decide it
 either. Codex has one, `latest`.

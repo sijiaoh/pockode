@@ -1,5 +1,6 @@
 // Package cliauth answers whether each AI CLI is signed in on this machine,
-// signs it in, and signs it out.
+// signs it in, and signs it out — each as one of the CLI's profiles
+// (cliprofile), the current one unless the caller names another.
 //
 // What a CLI is signed in as belongs to the CLI, not to Pockode: the credentials
 // sit in the CLI's own files, shared by every process of the OS user — other
@@ -22,6 +23,7 @@ import (
 	"time"
 
 	"github.com/pockode/server/agent"
+	"github.com/pockode/server/cliprofile"
 	"github.com/pockode/server/session"
 )
 
@@ -56,7 +58,12 @@ const (
 // Status is one CLI's answer.
 type Status struct {
 	Agent session.AgentType `json:"agent"`
-	State State             `json:"state"`
+	// ProfileID is the profile the status was asked for, "" for the default
+	// one. A read for the current profile names the one that was current then.
+	// With StateSigningIn the sign-in may be another profile's — the CLI is
+	// busy whichever profile is asked about — and its Login names which.
+	ProfileID string `json:"profile_id,omitempty"`
+	State     State  `json:"state"`
 	// Version is the CLI's version when it could be read. It is here for the day
 	// a CLI update changes what Pockode reads: it is the first thing anyone asks.
 	Version string `json:"version,omitempty"`
@@ -122,6 +129,12 @@ type External struct {
 
 // Provider is one CLI's side of signing in and out.
 //
+// Every method runs the CLI as the profile it is given — profileID, or
+// LoginOptions.ProfileID — "" being the default one; the Service has resolved
+// "current" before calling. A profile that cannot be prepared is an error, never
+// a quiet fall back to the default profile, whose credentials are someone
+// else's choice.
+//
 // Status and Logout bound their own time: only the CLI's integration knows how
 // long its commands take. Login is bounded by the Service, which owns the
 // sign-in's deadline and its cancellation, and ends it through ctx. A status
@@ -132,7 +145,7 @@ type Provider interface {
 	Binary() string
 	// Status reads the CLI's sign-in state. Agent and Version are filled in by
 	// the Service.
-	Status(ctx context.Context) (Status, error)
+	Status(ctx context.Context, profileID string) (Status, error)
 	// Logout signs the CLI out and returns its status read afterwards — which is
 	// not necessarily signed out: credentials from the environment outlive a
 	// sign-out. Signing out a CLI that is not signed in succeeds.
@@ -140,7 +153,7 @@ type Provider interface {
 	// The error is the sign-out's alone, and is shown to the user as it is, so it
 	// has to say what went wrong in words they can act on. A read afterwards that
 	// fails is ErrorStatus(err) in the returned status: the sign-out did happen.
-	Logout(ctx context.Context) (Status, error)
+	Logout(ctx context.Context, profileID string) (Status, error)
 	// AccountKinds lists the kinds of account a sign-in can be for, the default
 	// first; nil for a CLI with one kind.
 	AccountKinds() []AccountKind
@@ -160,9 +173,15 @@ type Provider interface {
 // ErrUnknownAgent is a request naming a CLI no Provider is registered for.
 var ErrUnknownAgent = errors.New("unknown agent")
 
+// ErrProfileWithoutAgent is a request naming a profile but no CLI: profiles
+// belong to one CLI each.
+var ErrProfileWithoutAgent = errors.New("a profile can only be named together with its AI CLI")
+
 // Service is the one place the sign-in state of every CLI is read and changed.
 type Service struct {
-	log       *slog.Logger
+	log *slog.Logger
+	// profiles resolves which profile "current" is, at each call.
+	profiles  *cliprofile.Store
 	agents    []session.AgentType // registration order, which is display order
 	providers map[session.AgentType]Provider
 	// cliLocks holds one lock per CLI, taken around everything that runs one of
@@ -174,6 +193,9 @@ type Service struct {
 	//
 	// A channel rather than a sync.Mutex so that waiting for it can be given up
 	// on: a caller whose client has gone must not stay queued behind a sign-out.
+	//
+	// One per CLI rather than per profile: an update replaces the binary every
+	// profile runs, and a CLI signs in one profile at a time.
 	//
 	// A running sign-in holds its CLI's lock throughout (see runLogin), and so
 	// does a running update (see BeginUpdate).
@@ -206,10 +228,11 @@ type Service struct {
 	loginTimeout time.Duration
 }
 
-func NewService(log *slog.Logger) *Service {
+func NewService(log *slog.Logger, profiles *cliprofile.Store) *Service {
 	baseCtx, cancelBase := context.WithCancelCause(context.Background())
 	return &Service{
 		log:          log,
+		profiles:     profiles,
 		providers:    make(map[session.AgentType]Provider),
 		cliLocks:     make(map[session.AgentType]chan struct{}),
 		logins:       make(map[session.AgentType]*loginFlow),
@@ -233,10 +256,15 @@ func (s *Service) Register(agentType session.AgentType, p Provider) {
 }
 
 // Statuses reads every registered CLI at once, or only agentType when it is not
-// empty. A CLI whose read failed is in the list as StateUnavailable, one with
-// a sign-in running as StateSigningIn, and one being updated as StateUpdating;
-// the only errors are ErrUnknownAgent and ErrShuttingDown.
-func (s *Service) Statuses(ctx context.Context, agentType session.AgentType) ([]Status, error) {
+// empty — each as its current profile, or as the one profile names, which needs
+// agentType. A CLI whose read failed is in the list as StateUnavailable, one
+// with a sign-in running as StateSigningIn — whichever of its profiles that
+// sign-in is for — and one being updated as StateUpdating; the only errors are
+// ErrUnknownAgent, ErrProfileWithoutAgent and ErrShuttingDown.
+func (s *Service) Statuses(ctx context.Context, agentType session.AgentType, profile cliprofile.Selector) ([]Status, error) {
+	if agentType == "" && profile != cliprofile.SelectCurrent() {
+		return nil, ErrProfileWithoutAgent
+	}
 	agents := s.agents
 	if agentType != "" {
 		if _, ok := s.providers[agentType]; !ok {
@@ -256,6 +284,13 @@ func (s *Service) Statuses(ctx context.Context, agentType session.AgentType) ([]
 	var wg sync.WaitGroup
 	for i, t := range agents {
 		wg.Go(func() {
+			profileID, err := s.profiles.Resolve(t, profile)
+			if err != nil {
+				s.logReadFailure(ctx, t, err)
+				statuses[i] = ErrorStatus(err)
+				statuses[i].Agent = t
+				return
+			}
 			// The version is read under the lock too, though it touches no
 			// credentials: an update takes the lock before it replaces the
 			// CLI's files, and must not do so under a --version still running.
@@ -269,13 +304,13 @@ func (s *Service) Statuses(ctx context.Context, agentType session.AgentType) ([]
 				statuses[i] = *busy
 			}
 			if unlock == nil {
-				statuses[i].Agent = t
+				statuses[i].Agent, statuses[i].ProfileID = t, profileID
 				return
 			}
 			defer unlock()
 
-			statuses[i] = s.withVersion(ctx, t, func() Status {
-				st, err := s.providers[t].Status(ctx)
+			statuses[i] = s.withVersion(ctx, t, profileID, func() Status {
+				st, err := s.providers[t].Status(ctx, profileID)
 				if err != nil {
 					s.logReadFailure(ctx, t, err)
 					return ErrorStatus(err)
@@ -288,14 +323,18 @@ func (s *Service) Statuses(ctx context.Context, agentType session.AgentType) ([]
 	return statuses, nil
 }
 
-// Logout signs agentType out and returns its status read afterwards, so the
-// caller does not have to ask again to find out what the sign-out left behind.
-// A failed sign-out is the error; a failed read afterwards is not, and shows up
-// as StateUnavailable in the returned status.
-func (s *Service) Logout(ctx context.Context, agentType session.AgentType) (Status, error) {
+// Logout signs profile of agentType out and returns its status read
+// afterwards, so the caller does not have to ask again to find out what the
+// sign-out left behind. A failed sign-out is the error; a failed read
+// afterwards is not, and shows up as StateUnavailable in the returned status.
+func (s *Service) Logout(ctx context.Context, agentType session.AgentType, profile cliprofile.Selector) (Status, error) {
 	p, ok := s.providers[agentType]
 	if !ok {
 		return Status{}, fmt.Errorf("%w: %q", ErrUnknownAgent, agentType)
+	}
+	profileID, err := s.profiles.Resolve(agentType, profile)
+	if err != nil {
+		return Status{}, err
 	}
 	ctx, end, err := s.beginCommand(ctx)
 	if err != nil {
@@ -316,16 +355,16 @@ func (s *Service) Logout(ctx context.Context, agentType session.AgentType) (Stat
 	defer unlock()
 
 	var logoutErr error
-	st := s.withVersion(ctx, agentType, func() Status {
-		st, err := p.Logout(ctx)
+	st := s.withVersion(ctx, agentType, profileID, func() Status {
+		st, err := p.Logout(ctx, profileID)
 		logoutErr = err
 		return st
 	})
 	if logoutErr != nil {
-		s.log.Warn("AI CLI sign-out failed", "cli", agentType, "error", logoutErr)
+		s.log.Warn("AI CLI sign-out failed", "cli", agentType, "profile", profileID, "error", logoutErr)
 		return Status{}, logoutErr
 	}
-	s.log.Info("AI CLI signed out", "cli", agentType)
+	s.log.Info("AI CLI signed out", "cli", agentType, "profile", profileID)
 	if st.State == StateUnavailable {
 		s.log.Warn("could not read AI CLI sign-in status after signing out", "cli", agentType, "error", st.Error)
 	}
@@ -478,10 +517,10 @@ func lockTimeoutError(agentType session.AgentType) error {
 }
 
 // withVersion runs read while the CLI's version is asked for alongside it, and
-// stamps both the agent and the version on what read returns. Callers hold the
+// stamps the agent, the profile and the version on what read returns. Callers hold the
 // CLI's lock until it returns: `--version` touches no credentials, but an
 // update must not replace the CLI while it runs.
-func (s *Service) withVersion(ctx context.Context, agentType session.AgentType, read func() Status) Status {
+func (s *Service) withVersion(ctx context.Context, agentType session.AgentType, profileID string, read func() Status) Status {
 	var version string
 	var versions sync.WaitGroup
 	versions.Go(func() { version = s.version(ctx, s.providers[agentType].Binary()) })
@@ -489,6 +528,7 @@ func (s *Service) withVersion(ctx context.Context, agentType session.AgentType, 
 	st := read()
 	versions.Wait()
 	st.Agent = agentType
+	st.ProfileID = profileID
 	st.Version = version
 	return st
 }

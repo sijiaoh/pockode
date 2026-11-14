@@ -17,7 +17,7 @@ func TestRunStream(t *testing.T) {
 		t.Setenv(roleEnv, roleEcho)
 		var lines []string
 		stop := errors.New("seen enough")
-		_, err := RunStream(context.Background(), slog.Default(), os.Args[0], "", nil, "first\nsecond\n", func(line []byte) error {
+		_, err := RunStream(context.Background(), slog.Default(), os.Args[0], "", nil, nil, "first\nsecond\n", func(line []byte) error {
 			lines = append(lines, string(line))
 			if len(lines) == 2 {
 				return stop
@@ -37,7 +37,7 @@ func TestRunStream(t *testing.T) {
 	t.Run("an error from onLine kills the CLI rather than waiting for it", func(t *testing.T) {
 		t.Setenv(roleEnv, roleEcho)
 		start := time.Now()
-		_, err := RunStream(context.Background(), slog.Default(), os.Args[0], "", nil, "tool call\n", func([]byte) error {
+		_, err := RunStream(context.Background(), slog.Default(), os.Args[0], "", nil, nil, "tool call\n", func([]byte) error {
 			return ErrOneShotToolUse
 		})
 		if !errors.Is(err, ErrOneShotToolUse) {
@@ -52,7 +52,7 @@ func TestRunStream(t *testing.T) {
 		t.Setenv(roleEnv, roleEcho)
 		ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 		defer cancel()
-		_, err := RunStream(ctx, slog.Default(), os.Args[0], "", nil, "", func([]byte) error { return nil })
+		_, err := RunStream(ctx, slog.Default(), os.Args[0], "", nil, nil, "", func([]byte) error { return nil })
 		if !errors.Is(err, context.DeadlineExceeded) {
 			t.Fatalf("got %v, want the deadline", err)
 		}
@@ -60,7 +60,7 @@ func TestRunStream(t *testing.T) {
 
 	t.Run("a non-zero exit is a result carrying stderr", func(t *testing.T) {
 		t.Setenv(roleEnv, roleFail)
-		res, err := RunStream(context.Background(), slog.Default(), os.Args[0], "", nil, "", func([]byte) error { return nil })
+		res, err := RunStream(context.Background(), slog.Default(), os.Args[0], "", nil, nil, "", func([]byte) error { return nil })
 		if err != nil {
 			t.Fatalf("RunStream: %v", err)
 		}

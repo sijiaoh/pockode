@@ -13,6 +13,7 @@ import (
 
 	"github.com/pockode/server/cliauth"
 	"github.com/pockode/server/cliauth/cliauthtest"
+	"github.com/pockode/server/cliprofile"
 	"github.com/pockode/server/session"
 )
 
@@ -29,17 +30,17 @@ func TestBeginUpdate_HoldsTheCLI(t *testing.T) {
 		t.Fatalf("wait: %v", err)
 	}
 
-	statuses, err := s.Statuses(context.Background(), session.AgentTypeClaude)
+	statuses, err := s.Statuses(context.Background(), session.AgentTypeClaude, cliprofile.SelectCurrent())
 	if err != nil {
 		t.Fatalf("Statuses: %v", err)
 	}
 	if got := statuses[0]; got.State != cliauth.StateUpdating || got.UpdateID != "update-1" || got.Agent != session.AgentTypeClaude {
 		t.Errorf("status during update = %+v, want updating naming update-1", got)
 	}
-	if _, err := s.StartLogin(session.AgentTypeClaude, ""); !errors.Is(err, cliauth.ErrUpdating) {
+	if _, err := s.StartLogin(session.AgentTypeClaude, "", cliprofile.SelectCurrent()); !errors.Is(err, cliauth.ErrUpdating) {
 		t.Errorf("sign-in during update: got %v, want ErrUpdating", err)
 	}
-	if _, err := s.Logout(context.Background(), session.AgentTypeClaude); !errors.Is(err, cliauth.ErrUpdating) {
+	if _, err := s.Logout(context.Background(), session.AgentTypeClaude, cliprofile.SelectCurrent()); !errors.Is(err, cliauth.ErrUpdating) {
 		t.Errorf("sign-out during update: got %v, want ErrUpdating", err)
 	}
 	if _, _, err := s.BeginUpdate(session.AgentTypeClaude, "update-2"); !errors.Is(err, cliauth.ErrUpdating) {
@@ -47,14 +48,14 @@ func TestBeginUpdate_HoldsTheCLI(t *testing.T) {
 	}
 
 	end()
-	statuses, err = s.Statuses(context.Background(), session.AgentTypeClaude)
+	statuses, err = s.Statuses(context.Background(), session.AgentTypeClaude, cliprofile.SelectCurrent())
 	if err != nil {
 		t.Fatalf("Statuses: %v", err)
 	}
 	if got := statuses[0]; got.State != cliauth.StateSignedOut {
 		t.Errorf("status after update = %+v, want signed out", got)
 	}
-	if _, err := s.StartLogin(session.AgentTypeClaude, ""); err != nil {
+	if _, err := s.StartLogin(session.AgentTypeClaude, "", cliprofile.SelectCurrent()); err != nil {
 		t.Errorf("sign-in after update: %v", err)
 	}
 }
@@ -80,11 +81,11 @@ func TestBeginUpdate_WaitsForARunningRead(t *testing.T) {
 		entered:  make(chan struct{}),
 		release:  make(chan struct{}),
 	}
-	s := cliauth.NewService(slog.Default())
+	s := cliauth.NewService(slog.Default(), cliprofile.NewStore(t.TempDir()))
 	s.Register(session.AgentTypeClaude, p)
 	t.Cleanup(s.Close)
 
-	go s.Statuses(context.Background(), session.AgentTypeClaude)
+	go s.Statuses(context.Background(), session.AgentTypeClaude, cliprofile.SelectCurrent())
 	<-p.entered
 
 	wait, end, err := s.BeginUpdate(session.AgentTypeClaude, "update-1")
@@ -95,7 +96,7 @@ func TestBeginUpdate_WaitsForARunningRead(t *testing.T) {
 	waited := make(chan error, 1)
 	go func() { waited <- wait(context.Background()) }()
 
-	statuses, err := s.Statuses(context.Background(), session.AgentTypeClaude)
+	statuses, err := s.Statuses(context.Background(), session.AgentTypeClaude, cliprofile.SelectCurrent())
 	if err != nil {
 		t.Fatalf("Statuses: %v", err)
 	}
@@ -153,13 +154,13 @@ func (slowVersionProvider) Binary() string { return os.Args[0] }
 func TestBeginUpdate_WaitsForARunningVersion(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv(fakeVersionGateEnv, dir)
-	s := cliauth.NewService(slog.Default())
+	s := cliauth.NewService(slog.Default(), cliprofile.NewStore(t.TempDir()))
 	s.Register(session.AgentTypeClaude, slowVersionProvider{cliauthtest.New(cliauthtest.State{Status: cliauth.Status{State: cliauth.StateSignedIn}})})
 	t.Cleanup(s.Close)
 
 	read := make(chan cliauth.Status, 1)
 	go func() {
-		statuses, _ := s.Statuses(context.Background(), session.AgentTypeClaude)
+		statuses, _ := s.Statuses(context.Background(), session.AgentTypeClaude, cliprofile.SelectCurrent())
 		read <- statuses[0]
 	}()
 	// --version runs only under the lock, so once it has started the read

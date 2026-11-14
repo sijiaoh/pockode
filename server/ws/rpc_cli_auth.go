@@ -7,6 +7,7 @@ import (
 	"log/slog"
 
 	"github.com/pockode/server/cliauth"
+	"github.com/pockode/server/cliprofile"
 	"github.com/pockode/server/rpc"
 	"github.com/sourcegraph/jsonrpc2"
 )
@@ -26,7 +27,7 @@ func (h *rpcMethodHandler) handleCLIAuthStatus(ctx context.Context, conn *jsonrp
 		}
 	}
 
-	statuses, err := h.cliAuth.Statuses(ctx, params.Agent)
+	statuses, err := h.cliAuth.Statuses(ctx, params.Agent, cliprofile.SelectCurrent())
 	if err != nil {
 		h.replyCLIAuthError(ctx, conn, req.ID, err)
 		return
@@ -44,7 +45,7 @@ func (h *rpcMethodHandler) handleCLIAuthLogout(ctx context.Context, conn *jsonrp
 		return
 	}
 
-	status, err := h.cliAuth.Logout(ctx, params.Agent)
+	status, err := h.cliAuth.Logout(ctx, params.Agent, cliprofile.SelectCurrent())
 	if err != nil {
 		h.replyCLIAuthError(ctx, conn, req.ID, err)
 		return
@@ -61,6 +62,7 @@ func (h *rpcMethodHandler) handleCLIAuthLogout(ctx context.Context, conn *jsonrp
 func (h *rpcMethodHandler) replyCLIAuthError(ctx context.Context, conn *jsonrpc2.Conn, id jsonrpc2.ID, err error) {
 	h.replyReasonError(ctx, conn, id, err,
 		cliauth.ErrUnknownAgent,
+		cliauth.ErrProfileWithoutAgent,
 		cliauth.ErrInvalidAccountKind,
 		cliauth.ErrLoginNotFound,
 		cliauth.ErrCodeNotExpected,
@@ -94,7 +96,7 @@ func (h *rpcMethodHandler) handleCLIAuthLoginStart(ctx context.Context, conn *js
 		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "invalid params: agent is required")
 		return
 	}
-	login, err := h.cliAuth.StartLogin(params.Agent, params.AccountKind)
+	login, err := h.cliAuth.StartLogin(params.Agent, params.AccountKind, cliprofile.SelectCurrent())
 	h.replyCLIAuthLogin(ctx, conn, req.ID, login, err)
 }
 
