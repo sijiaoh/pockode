@@ -13,13 +13,18 @@ import {
 	useState,
 } from "react";
 import { useCliLoginSubscription } from "../../hooks/useCliLoginSubscription";
-import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
 import { getAgentLabel } from "../../lib/agentType";
 import {
 	cliLoginActions,
 	isLoginEnded,
 	useCliLoginStore,
 } from "../../lib/cliLoginStore";
+import {
+	chosenProfileIdOf,
+	isSigningInHere,
+	liveProfileName,
+	profileKey,
+} from "../../lib/cliProfiles";
 import type {
 	CliAccount,
 	CliAccountKind,
@@ -41,11 +46,18 @@ import {
 	Outcome,
 	primaryButtonClass,
 	secondaryButtonClass,
+	useSendAgainParts,
 } from "./loginParts";
 import PastedCodeStep from "./PastedCodeStep";
 
 interface Props {
 	agent: AgentType;
+	/**
+	 * The account to sign in, named by the caller wherever a CLI has several
+	 * (docs/cli-profiles-ui.md). Absent: the current one, as on the
+	 * one-account card.
+	 */
+	account?: { id: string; name: string };
 	/**
 	 * Puts the sheet away. The sign-in keeps running: only the sheet's own
 	 * Cancel ends it.
@@ -78,6 +90,8 @@ type View =
 	| { kind: "status"; status: CliAuthStatus }
 	/** A sign-in, by id; null while the request starting it is out. */
 	| { kind: "flow"; loginId: string | null }
+	/** The CLI is signing in another account, and signs in one at a time. */
+	| { kind: "busy"; otherProfileId: string }
 	| { kind: "start_failed"; error: string };
 
 /**
@@ -89,13 +103,29 @@ type View =
  * the sheet in any way but Cancel leaves the sign-in running on the server,
  * where the CLI's card and the next opening find it.
  */
-export default function CliLoginSheet({ agent, onClose, sendAgain }: Props) {
+export default function CliLoginSheet({
+	agent,
+	account,
+	onClose,
+	sendAgain,
+}: Props) {
 	useCliLoginSubscription(agent);
 	const label = getAgentLabel(agent);
+	const accountId = account?.id;
+	const chosenProfileId = useCliLoginStore((s) =>
+		chosenProfileIdOf(s.profiles, agent),
+	);
+	const canUseAccounts = useCliLoginStore((s) => !!s.profiles?.available);
+	const [switching, setSwitching] = useState(false);
 	const storedLogin = useCliLoginStore((s) => s.logins[agent]);
 	const loginError = useCliLoginStore((s) => s.loginErrors[agent]);
 
 	const [view, setView] = useState<View>({ kind: "resolving" });
+	const otherName = useCliLoginStore((s) =>
+		view.kind === "busy"
+			? liveProfileName(s.profiles, agent, view.otherProfileId)
+			: undefined,
+	);
 	const [code, setCode] = useState("");
 	const [submitting, setSubmitting] = useState(false);
 	const [cancelling, setCancelling] = useState(false);
@@ -103,7 +133,7 @@ export default function CliLoginSheet({ agent, onClose, sendAgain }: Props) {
 	// under the field, anything else about the sign-in above it.
 	const [actionError, setActionError] = useState<string | null>(null);
 	const [submitError, setSubmitError] = useState<string | null>(null);
-	const { state: messageCopy, copy: copyMessage } = useCopyToClipboard();
+	const sendAgainParts = useSendAgainParts(sendAgain);
 
 	// Each resolve or start bumps this; a continuation that finds it moved on
 	// was overtaken (another start, Cancel, the sheet closing) and does nothing.
@@ -131,7 +161,7 @@ export default function CliLoginSheet({ agent, onClose, sendAgain }: Props) {
 			setActionError(null);
 			setSubmitError(null);
 			setCode("");
-			const request = cliLoginActions.startLogin(agent, accountKind);
+			const request = cliLoginActions.startLogin(agent, accountKind, accountId);
 			pendingStart.current = request;
 			try {
 				const started = await request;
@@ -146,7 +176,7 @@ export default function CliLoginSheet({ agent, onClose, sendAgain }: Props) {
 				if (pendingStart.current === request) pendingStart.current = null;
 			}
 		},
-		[agent],
+		[agent, accountId],
 	);
 
 	const resolve = useCallback(async () => {
@@ -156,14 +186,33 @@ export default function CliLoginSheet({ agent, onClose, sendAgain }: Props) {
 
 		const known = useCliLoginStore.getState().logins[agent];
 		if (known && !isLoginEnded(known)) {
-			setView({ kind: "flow", loginId: known.id });
+			if (
+				accountId !== undefined &&
+				profileKey(known.profile_id) !== accountId
+			) {
+				setView({ kind: "busy", otherProfileId: profileKey(known.profile_id) });
+			} else {
+				setView({ kind: "flow", loginId: known.id });
+			}
 			return;
 		}
 
-		const [status] = await cliLoginActions.refreshStatus(agent);
+		const status =
+			accountId === undefined
+				? (await cliLoginActions.refreshStatus(agent))[0]
+				: (await cliLoginActions.inspectProfile(agent, accountId)).status;
 		if (generation.current !== gen) return;
 		if (status.state === "signed_out") {
 			void start();
+		} else if (
+			status.state === "signing_in" &&
+			accountId !== undefined &&
+			!isSigningInHere(status)
+		) {
+			setView({
+				kind: "busy",
+				otherProfileId: profileKey(status.login_profile_id),
+			});
 		} else if (status.state === "signing_in") {
 			setView({
 				kind: "flow",
@@ -175,7 +224,7 @@ export default function CliLoginSheet({ agent, onClose, sendAgain }: Props) {
 		} else {
 			setView({ kind: "status", status });
 		}
-	}, [agent, start]);
+	}, [agent, accountId, start]);
 
 	useEffect(() => {
 		void resolve();
@@ -186,11 +235,12 @@ export default function CliLoginSheet({ agent, onClose, sendAgain }: Props) {
 
 	// The sign-in on screen can be overtaken — another screen starts a newer
 	// one, or a restarted server has none — and waiting on it then would spin
-	// forever. A newer running one is followed. A running one gone with nothing
-	// after it is resolved afresh; an ended one gone is kept on screen, since
-	// resolving would start a sign-in nobody asked for. An ended copy of another
-	// id is not followed: it is an older one the subscription has not caught up
-	// past yet.
+	// forever. A newer running one is followed, unless it is another account's:
+	// that one is said instead. A running one gone with nothing after it is
+	// resolved afresh; an ended one gone is kept on screen, since resolving
+	// would start a sign-in nobody asked for. An ended copy of another id is
+	// not followed: it is an older one the subscription has not caught up past
+	// yet.
 	const lastStored = useRef(storedLogin);
 	useEffect(() => {
 		const before = lastStored.current;
@@ -199,15 +249,29 @@ export default function CliLoginSheet({ agent, onClose, sendAgain }: Props) {
 		if (
 			storedLogin &&
 			storedLogin.id !== view.loginId &&
-			!isLoginEnded(storedLogin)
+			!isLoginEnded(storedLogin) &&
+			// Another account's sign-in is not this sheet's to follow.
+			(accountId === undefined ||
+				profileKey(storedLogin.profile_id) === accountId)
 		) {
 			setView({ kind: "flow", loginId: storedLogin.id });
 			setCode("");
-		} else if (!storedLogin && before?.id === view.loginId) {
+		} else if (
+			before?.id === view.loginId &&
+			storedLogin?.id !== view.loginId
+		) {
+			// Gone, or replaced by a sign-in this sheet does not follow — another
+			// account's. An ended one is still what happened; a running one was
+			// overtaken.
 			if (isLoginEnded(before)) setForgotten(before);
-			else void resolve();
+			else if (storedLogin && !isLoginEnded(storedLogin)) {
+				setView({
+					kind: "busy",
+					otherProfileId: profileKey(storedLogin.profile_id),
+				});
+			} else void resolve();
 		}
-	}, [storedLogin, view, resolve]);
+	}, [storedLogin, view, resolve, accountId]);
 
 	const cancel = async () => {
 		generation.current++;
@@ -311,46 +375,52 @@ export default function CliLoginSheet({ agent, onClose, sendAgain }: Props) {
 			Done
 		</button>
 	);
+	// An account signed in that is not the current one does not make the next
+	// message work: sessions use the current account. So it offers the switch
+	// first; once switched, the sheet ends as it does for the current one.
+	// Where accounts can't be used every session runs as Default, whatever is
+	// chosen: a switch would change nothing here.
+	const offersSwitch =
+		canUseAccounts &&
+		accountId !== undefined &&
+		chosenProfileId !== undefined &&
+		chosenProfileId !== accountId;
+	const switchToAccount = async () => {
+		if (accountId === undefined) return;
+		setSwitching(true);
+		setActionError(null);
+		try {
+			await cliLoginActions.switchProfile(agent, accountId);
+			if (!sendAgain) onClose();
+		} catch (err) {
+			setActionError(`Couldn't switch: ${errorMessage(err)}`);
+		} finally {
+			setSwitching(false);
+		}
+	};
 	// What the sheet ends on once the CLI is signed in.
-	const signedInFooter = sendAgain ? (
+	const signedInFooter = offersSwitch ? (
 		<>
 			{closeButton("Done")}
-			{sendAgain.draftKept ? (
-				<button
-					type="button"
-					onClick={() => void copyMessage(sendAgain.text)}
-					className={`${primaryButtonClass} flex-1`}
-				>
-					{messageCopy === "copied" ? "Message copied" : "Copy message"}
-				</button>
-			) : (
-				<button
-					type="button"
-					onClick={sendAgain.onSendAgain}
-					className={`${primaryButtonClass} flex-1`}
-				>
-					Send again
-				</button>
-			)}
+			<button
+				type="button"
+				onClick={() => void switchToAccount()}
+				disabled={switching}
+				className={`${primaryButtonClass} flex-1`}
+			>
+				{switching && <Spinner variant="current" srText={null} />}
+				{`Switch to ${account?.name}`}
+			</button>
+		</>
+	) : sendAgain ? (
+		<>
+			{closeButton("Done")}
+			{sendAgainParts.button}
 		</>
 	) : (
 		doneButton
 	);
-	const signedInNote = sendAgain?.draftKept && (
-		<div className="space-y-1">
-			<p className="text-sm text-th-text-secondary">Your draft was kept.</p>
-			{messageCopy === "failed" && (
-				<>
-					<p className="text-xs text-th-error" role="alert">
-						Couldn't copy. Select the message below and copy it by hand.
-					</p>
-					<p className="select-all whitespace-pre-wrap break-words rounded-md bg-th-bg-tertiary p-3 text-sm text-th-text-primary">
-						{sendAgain.text}
-					</p>
-				</>
-			)}
-		</div>
-	);
+	const signedInNote = sendAgainParts.note;
 
 	let body: ReactNode;
 	let footer: ReactNode;
@@ -459,6 +529,26 @@ export default function CliLoginSheet({ agent, onClose, sendAgain }: Props) {
 				</>
 			);
 		}
+	} else if (view.kind === "busy") {
+		const title = otherName
+			? `${label} is signing in ${otherName}`
+			: `${label} is signing in another account`;
+		announcement = title;
+		body = (
+			<Outcome
+				icon={<Info className="h-5 w-5 text-th-text-muted" />}
+				title={title}
+			>
+				{label} signs in one account at a time. Finish or cancel that sign-in,
+				then try again.
+			</Outcome>
+		);
+		footer = (
+			<>
+				{closeButton()}
+				{retryAction("Try again", () => void resolve())}
+			</>
+		);
 	} else if (view.kind === "start_failed") {
 		announcement = "Sign-in failed";
 		body = (
@@ -499,7 +589,11 @@ export default function CliLoginSheet({ agent, onClose, sendAgain }: Props) {
 
 	return (
 		<Sheet
-			title={`Sign in to ${label}`}
+			title={
+				account
+					? `Sign in to ${label} · ${account.name}`
+					: `Sign in to ${label}`
+			}
 			onClose={onClose}
 			dismissible={!verifying}
 			onSubmit={pastingCode ? submit : undefined}

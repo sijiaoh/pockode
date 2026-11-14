@@ -366,11 +366,14 @@ export type ContentPart = { id: string } & (
 			message: string;
 			code: string;
 			/**
-			 * The CLI that was refused for its credentials, when the warning says
-			 * so — a retry the turn is still making. A record of that moment, never
-			 * whether the CLI is signed in now (docs/cli-login-ui.md).
+			 * The CLI and account that were refused for their credentials, when
+			 * the warning says so — a retry the turn is still making. A record of
+			 * that moment, never whether the CLI is signed in now
+			 * (docs/cli-login-ui.md).
 			 */
-			authFailure?: AgentType;
+			authFailure?: RecordedAccount;
+			/** The CLI and account that hit a usage limit; see `RecordedAccount`. */
+			usageLimit?: RecordedAccount;
 	  }
 	| {
 			type: "permission_request";
@@ -438,6 +441,21 @@ export type MessageOrigin = "user" | "system" | "agent";
  * recorded, whose account is unknown. Only the id; the name is looked up.
  */
 type RecordedProfileId = string;
+
+/**
+ * A CLI and the account it ran as, as a record names them: a fact about that
+ * moment. Which account is current now, and its name, are read from the
+ * profile list when drawn — never from here (AGENTS.md, "Events are events").
+ */
+export interface RecordedAccount {
+	agent: AgentType;
+	/**
+	 * `DEFAULT_PROFILE_ID` (`""`) for the default account. Undefined on records
+	 * kept before accounts were recorded: the account is unknown, not the
+	 * default one.
+	 */
+	profileId?: RecordedProfileId;
+}
 
 /** A record's mark that the CLI was refused for its credentials. */
 export interface AuthFailureRecord {
@@ -557,10 +575,16 @@ export interface AssistantMessage {
 	status: MessageStatus;
 	error?: string;
 	/**
-	 * The CLI whose credentials were refused, when `error` is an auth failure.
-	 * Absent on errors recorded before the server marked them.
+	 * The CLI and account whose credentials were refused, when `error` is an
+	 * auth failure. Absent on errors recorded before the server marked them.
 	 */
-	authFailure?: AgentType;
+	authFailure?: RecordedAccount;
+	/**
+	 * The CLI and account that hit a usage limit, when `error` says so. For
+	 * Claude the mark is wider than its name: every rate-limit refusal it gave
+	 * up retrying carries it (docs/agent-event.md).
+	 */
+	usageLimit?: RecordedAccount;
 	createdAt: Date;
 	/** See `UserMessage.anchorSeq`. */
 	anchorSeq?: HistorySeq;

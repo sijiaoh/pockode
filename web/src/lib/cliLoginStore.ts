@@ -5,18 +5,31 @@ import type {
 	CliLogin,
 	CliLoginPhase,
 } from "../types/cliAuth";
+import type {
+	CliProfile,
+	CliProfileInspection,
+	CliProfileOverview,
+} from "../types/cliProfile";
 import type { CliUpdate, CliUpdateCheck } from "../types/cliUpdate";
 import type { AgentType } from "../types/settings";
 import { errorMessage } from "../utils/errorMessage";
 import { AGENT_TYPES } from "./agentType";
+import {
+	currentProfileIdOf,
+	isSigningInHere,
+	profileIdsOf,
+	profileKey,
+} from "./cliProfiles";
 import { cliInstallRefusedReason } from "./rpc";
 import { useWSStore } from "./wsStore";
 
 interface CliLoginState {
 	/**
-	 * The last status read per CLI. Absent until the first read has answered: a
-	 * status is never guessed, and a failed read is `unavailable`, never
-	 * `signed_out` (docs/cli-login-ui.md, "The card states").
+	 * The last status read per CLI, for its current profile — the one the CLI
+	 * runs as, which the status's `profile_id` names. Absent until the first
+	 * read has answered: a status is never guessed, and a failed read is
+	 * `unavailable`, never `signed_out` (docs/cli-login-ui.md, "The card
+	 * states").
 	 */
 	statuses: Partial<Record<AgentType, CliAuthStatus>>;
 	/**
@@ -27,7 +40,36 @@ interface CliLoginState {
 	settledStatuses: Partial<Record<AgentType, CliAuthStatus>>;
 	/** CLIs with a status read in flight. */
 	reading: Partial<Record<AgentType, boolean>>;
-	/** The latest sign-in per CLI, as the server last reported it. */
+	/**
+	 * Every CLI's profiles, as the server last pushed them; null until a
+	 * subscription has answered (`useCliProfileSubscription`).
+	 */
+	profiles: CliProfileOverview | null;
+	/** Why the profiles could not be followed; cleared by the next copy. */
+	profilesError: string | null;
+	/**
+	 * The last inspection per CLI and profile ID (`DEFAULT_PROFILE_ID` for the
+	 * default one). Each profile is read with a request of its own, so each
+	 * lands when it is read rather than with the slowest. A failed read is an
+	 * `unavailable` status, as for `statuses`.
+	 */
+	inspections: Partial<Record<AgentType, Record<string, CliProfileInspection>>>;
+	/**
+	 * The last inspection per CLI and profile that said something of the
+	 * profile itself — not `updating`, not `signing_in` for another profile of
+	 * the CLI, not a failed request — so a profile only waiting goes on
+	 * showing what it read before (`settledStatuses`, per profile).
+	 */
+	settledInspections: Partial<
+		Record<AgentType, Record<string, CliProfileInspection>>
+	>;
+	/** Profiles with an inspection in flight, per CLI. */
+	inspecting: Partial<Record<AgentType, Record<string, boolean>>>;
+	/**
+	 * The latest sign-in per CLI, as the server last reported it. One per CLI,
+	 * whichever profile it is for (`profile_id`): a CLI signs in one profile at
+	 * a time.
+	 */
 	logins: Partial<Record<AgentType, CliLogin>>;
 	/**
 	 * Why the CLI's sign-in could not be followed, when subscribing to it
@@ -76,6 +118,11 @@ export const useCliLoginStore = create<CliLoginState>(() => ({
 	statuses: {},
 	settledStatuses: {},
 	reading: {},
+	profiles: null,
+	profilesError: null,
+	inspections: {},
+	settledInspections: {},
+	inspecting: {},
 	logins: {},
 	loginErrors: {},
 	startedHere: [],
@@ -146,14 +193,25 @@ function beginRead(kind: ReadKind, agents: readonly AgentType[]) {
  * about the request, not the sign-in, so it is not one the card can hold.
  */
 function setStatus(status: CliAuthStatus, requestFailed = false) {
-	useCliLoginStore.setState((s) => ({
-		statuses: { ...s.statuses, [status.agent]: status },
-		...(status.state === "updating" || requestFailed
-			? {}
-			: {
-					settledStatuses: { ...s.settledStatuses, [status.agent]: status },
-				}),
-	}));
+	useCliLoginStore.setState((s) => {
+		const settledStatuses = { ...s.settledStatuses };
+		const settled = settledStatuses[status.agent];
+		if (!requestFailed && status.state !== "updating") {
+			settledStatuses[status.agent] = status;
+		} else if (
+			!requestFailed &&
+			settled &&
+			profileKey(settled.profile_id) !== profileKey(status.profile_id)
+		) {
+			// Another profile became current meanwhile: what it read is not
+			// this one's to stand in for.
+			delete settledStatuses[status.agent];
+		}
+		return {
+			statuses: { ...s.statuses, [status.agent]: status },
+			settledStatuses,
+		};
+	});
 }
 
 function isUpdateEnded(update: CliUpdate): boolean {
@@ -189,6 +247,19 @@ function afterUpdateEnded(
 	if (seenEnding || (isStaleRead(statuses[agent], update) && !reading[agent])) {
 		void cliLoginActions.refreshStatus(agent);
 	}
+	const { inspections, inspecting } = useCliLoginStore.getState();
+	for (const [profileId, inspection] of Object.entries(
+		inspections[agent] ?? {},
+	)) {
+		if (
+			!seenEnding &&
+			isStaleRead(inspection.status, update) &&
+			!inspecting[agent]?.[profileId]
+		) {
+			void cliLoginActions.inspectProfile(agent, profileId);
+		}
+	}
+	if (seenEnding) refreshInspected(agent);
 }
 
 /**
@@ -238,6 +309,124 @@ function staleAgents(
 		.map((r) => r.agent);
 }
 
+// Per CLI and profile, as `generations` is per CLI: only the newest
+// inspection of a profile lands.
+const inspectGenerations = new Map<string, number>();
+
+function inspectKey(agent: AgentType, profileId: string): string {
+	return `${agent}\u0000${profileId}`;
+}
+
+function supersedeInspection(agent: AgentType, profileId: string): number {
+	const key = inspectKey(agent, profileId);
+	const generation = (inspectGenerations.get(key) ?? 0) + 1;
+	inspectGenerations.set(key, generation);
+	return generation;
+}
+
+function setInspecting(agent: AgentType, profileId: string, on: boolean) {
+	useCliLoginStore.setState((s) => {
+		const forAgent = { ...s.inspecting[agent] };
+		if (on) forAgent[profileId] = true;
+		else delete forAgent[profileId];
+		return { inspecting: { ...s.inspecting, [agent]: forAgent } };
+	});
+}
+
+/** `requestFailed` as for `setStatus`. */
+function setInspection(
+	agent: AgentType,
+	profileId: string,
+	inspection: CliProfileInspection,
+	requestFailed = false,
+) {
+	const { status } = inspection;
+	const settles =
+		!requestFailed &&
+		status.state !== "updating" &&
+		(status.state !== "signing_in" || isSigningInHere(status));
+	useCliLoginStore.setState((s) => ({
+		inspections: {
+			...s.inspections,
+			[agent]: { ...s.inspections[agent], [profileId]: inspection },
+		},
+		...(settles
+			? {
+					settledInspections: {
+						...s.settledInspections,
+						[agent]: {
+							...s.settledInspections[agent],
+							[profileId]: inspection,
+						},
+					},
+				}
+			: {}),
+	}));
+}
+
+// Inspections a stale read was retried for, once each, as `staleRetries`.
+const inspectStaleRetries = new Set<string>();
+
+/**
+ * Takes a status read some other way — a sign-out's — for the profile it
+ * names, as one newer than any inspection still in flight. Only for a
+ * profile already inspected: the conflicts are kept, and a profile nobody
+ * inspected has nobody to show it to.
+ */
+function takeInspectedStatus(status: CliAuthStatus) {
+	const profileId = profileKey(status.profile_id);
+	const previous =
+		useCliLoginStore.getState().inspections[status.agent]?.[profileId];
+	if (!previous) return;
+	supersedeInspection(status.agent, profileId);
+	setInspecting(status.agent, profileId, false);
+	setInspection(status.agent, profileId, { ...previous, status });
+}
+
+/**
+ * Reads again every profile of `agent` that has been inspected or is being
+ * inspected for the first time — that read may answer from before the change.
+ */
+function refreshInspected(agent: AgentType) {
+	const { inspections, inspecting } = useCliLoginStore.getState();
+	const ids = new Set([
+		...Object.keys(inspections[agent] ?? {}),
+		...Object.keys(inspecting[agent] ?? {}),
+	]);
+	for (const profileId of ids) {
+		void cliLoginActions.inspectProfile(agent, profileId);
+	}
+}
+
+// The statuses made up for a status request that failed. Such a status says
+// nothing of a profile — absent `profile_id` there is not the default one —
+// so nothing compares profiles against it.
+const failedReads = new WeakSet<CliAuthStatus>();
+
+/**
+ * The profile the status held for the current profile was read for: its own
+ * label, or for a failed request the list's current profile. Undefined when
+ * neither tells.
+ */
+function heldProfileOf(agent: AgentType): string | undefined {
+	const { statuses, profiles } = useCliLoginStore.getState();
+	const held = statuses[agent];
+	if (!held) return undefined;
+	if (failedReads.has(held)) return currentProfileIdOf(profiles, agent);
+	return profileKey(held.profile_id);
+}
+
+/**
+ * Takes a status for the current profile when it is the one `statuses`
+ * holds — as one newer than any read still in flight.
+ */
+function takeCurrentStatus(status: CliAuthStatus) {
+	if (heldProfileOf(status.agent) !== profileKey(status.profile_id)) return;
+	supersede("reading", [status.agent]);
+	setInFlight("reading", [status.agent], false);
+	setStatus(status);
+}
+
 /** Takes the reply to a start or install as an update this page started. */
 function followStarted(agent: AgentType, update: CliUpdate) {
 	useCliLoginStore.setState((s) => ({
@@ -270,7 +459,15 @@ export const cliLoginActions = {
 			statuses = await actions().cliAuthStatus(agent);
 		} catch (err) {
 			const error = errorMessage(err);
-			statuses = agents.map((a) => ({ agent: a, state: "unavailable", error }));
+			statuses = agents.map((a) => {
+				const placeholder: CliAuthStatus = {
+					agent: a,
+					state: "unavailable",
+					error,
+				};
+				failedReads.add(placeholder);
+				return placeholder;
+			});
 			requestFailed = true;
 		}
 		for (const status of statuses) {
@@ -346,6 +543,7 @@ export const cliLoginActions = {
 		// taken from the sign-in: its `account` is what happened then. Only an
 		// ending seen happen: one already over when first seen was over before
 		// the status on screen was read.
+		// Every profile of the CLI read `signing_in` while it ran.
 		if (
 			login &&
 			isLoginEnded(login) &&
@@ -353,6 +551,7 @@ export const cliLoginActions = {
 			!isLoginEnded(previous)
 		) {
 			void cliLoginActions.refreshStatus(agent);
+			refreshInspected(agent);
 		}
 	},
 
@@ -363,14 +562,17 @@ export const cliLoginActions = {
 	},
 
 	/**
-	 * Starts a sign-in, or joins the one already running (the server returns
-	 * it). Rejects when the server refused to start one.
+	 * Starts a sign-in of `profileId` — the current profile when absent — or
+	 * joins the one already running for it (the server returns it). Rejects
+	 * when the server refused to start one, which it does while the CLI signs
+	 * in another profile.
 	 */
 	startLogin: async (
 		agent: AgentType,
 		accountKind?: CliAccountKind,
+		profileId?: string,
 	): Promise<CliLogin> => {
-		const login = await actions().cliLoginStart(agent, accountKind);
+		const login = await actions().cliLoginStart(agent, accountKind, profileId);
 		useCliLoginStore.setState((s) => ({
 			startedHere: s.startedHere.includes(login.id)
 				? s.startedHere
@@ -505,12 +707,193 @@ export const cliLoginActions = {
 		useCliLoginStore.setState({ updatesSeenEnding: [] });
 	},
 
-	/** Rejects with the server's reason when the sign-out failed. */
-	logout: async (agent: AgentType): Promise<void> => {
-		const status = await actions().cliAuthLogout(agent);
-		// Newer than any read still in flight, which must not land over it.
-		supersede("reading", [agent]);
-		setInFlight("reading", [agent], false);
-		setStatus(status);
+	/**
+	 * Signs `profileId` out — the current profile when absent. Rejects with
+	 * the server's reason when the sign-out failed. The status read after it is
+	 * taken wherever that profile is shown, newer than any read in flight.
+	 */
+	logout: async (agent: AgentType, profileId?: string): Promise<void> => {
+		const status = await actions().cliAuthLogout(agent, profileId);
+		if (profileId === undefined) {
+			supersede("reading", [agent]);
+			setInFlight("reading", [agent], false);
+			setStatus(status);
+		} else {
+			takeCurrentStatus(status);
+		}
+		takeInspectedStatus(status);
+	},
+
+	/**
+	 * Takes a copy of every CLI's profiles, and forgets the inspections of
+	 * profiles it no longer lists — removed on another screen.
+	 *
+	 * The status held for a CLI's current profile is read again when the CLI
+	 * now runs as another profile — a switch, here or on another screen —
+	 * which a read in flight may not have seen either. Only on a change: the
+	 * server resends the same copy to every screen each time one subscribes.
+	 * The first copy only corrects a held status read for another profile.
+	 */
+	applyProfiles: (overview: CliProfileOverview): void => {
+		const previous = useCliLoginStore.getState().profiles;
+		useCliLoginStore.setState((s) => {
+			const inspections = { ...s.inspections };
+			const settledInspections = { ...s.settledInspections };
+			const inspecting = { ...s.inspecting };
+			for (const agent of AGENT_TYPES) {
+				const listed = new Set(profileIdsOf(overview, agent));
+				const keep = <T>(byId: Record<string, T> | undefined) =>
+					byId &&
+					Object.fromEntries(
+						Object.entries(byId).filter(([id]) => listed.has(id)),
+					);
+				for (const id of Object.keys(s.inspecting[agent] ?? {})) {
+					if (!listed.has(id)) supersedeInspection(agent, id);
+				}
+				inspections[agent] = keep(s.inspections[agent]);
+				settledInspections[agent] = keep(s.settledInspections[agent]);
+				inspecting[agent] = keep(s.inspecting[agent]);
+			}
+			return {
+				profiles: overview,
+				profilesError: null,
+				inspections,
+				settledInspections,
+				inspecting,
+			};
+		});
+		for (const list of overview.clis) {
+			const now = currentProfileIdOf(overview, list.agent);
+			const changed = previous
+				? currentProfileIdOf(previous, list.agent) !== now
+				: (heldProfileOf(list.agent) ?? now) !== now;
+			if (changed) void cliLoginActions.refreshStatus(list.agent);
+		}
+	},
+
+	setProfilesError: (error: string): void => {
+		useCliLoginStore.setState({ profilesError: error });
+	},
+
+	/**
+	 * Inspects one profile afresh and resolves to what it read — which the
+	 * store holds too unless a newer read overtook it. Never rejects: a failed
+	 * request is an `unavailable` status with its reason.
+	 */
+	inspectProfile: async (
+		agent: AgentType,
+		profileId: string,
+	): Promise<CliProfileInspection> => {
+		const generation = supersedeInspection(agent, profileId);
+		const isCurrent = () =>
+			inspectGenerations.get(inspectKey(agent, profileId)) === generation;
+		setInspecting(agent, profileId, true);
+		let inspection: CliProfileInspection;
+		let requestFailed = false;
+		try {
+			const [read] = await actions().cliProfileInspect(agent, profileId);
+			inspection = read;
+		} catch (err) {
+			requestFailed = true;
+			inspection = {
+				status: {
+					agent,
+					...(profileId ? { profile_id: profileId } : {}),
+					state: "unavailable",
+					error: errorMessage(err),
+				},
+			};
+		}
+		if (!isCurrent()) return inspection;
+		setInspection(agent, profileId, inspection, requestFailed);
+		setInspecting(agent, profileId, false);
+		// Answered while an update ran, landing after its ending re-read: once
+		// more, as `staleAgents` does for `statuses`.
+		const update = useCliLoginStore.getState().updates[agent];
+		const retryKey = `${update?.id}\u0000${inspectKey(agent, profileId)}`;
+		if (
+			isStaleRead(inspection.status, update) &&
+			!inspectStaleRetries.has(retryKey)
+		) {
+			inspectStaleRetries.add(retryKey);
+			void cliLoginActions.inspectProfile(agent, profileId);
+		}
+		return inspection;
+	},
+
+	/**
+	 * Inspects every profile of `agent` in the list heard last — the default
+	 * one alone before any — each with a request of its own, so each lands
+	 * when it is read, not when the slowest is.
+	 */
+	inspectProfiles: async (agent: AgentType): Promise<void> => {
+		const ids = profileIdsOf(useCliLoginStore.getState().profiles, agent);
+		await Promise.all(
+			ids.map((id) => cliLoginActions.inspectProfile(agent, id)),
+		);
+	},
+
+	/**
+	 * Inspects `profileId` unless it has been or is being inspected, by the
+	 * rule `ensureStatus` follows — for a surface that only needs *a* status
+	 * of a profile that may not be current, such as a record naming the
+	 * account that was refused.
+	 */
+	ensureInspection: (agent: AgentType, profileId: string): void => {
+		const { inspections, inspecting } = useCliLoginStore.getState();
+		if (inspecting[agent]?.[profileId]) return;
+		const state = inspections[agent]?.[profileId]?.status.state;
+		if (state && state !== "unavailable" && state !== "updating") return;
+		void cliLoginActions.inspectProfile(agent, profileId);
+	},
+
+	/**
+	 * Adds a profile; it does not become current. The list arrives through the
+	 * subscription. Rejects with the server's reason, such as a name in use.
+	 */
+	addProfile: (agent: AgentType, name: string): Promise<CliProfile> =>
+		actions().cliProfileAdd(agent, name),
+
+	/** As `addProfile`. The default profile has no name to change. */
+	renameProfile: (
+		agent: AgentType,
+		profileId: string,
+		name: string,
+	): Promise<void> => actions().cliProfileRename(agent, profileId, name),
+
+	/**
+	 * Makes `profileId` current — `DEFAULT_PROFILE_ID` for the default one.
+	 * Sessions move to it on their next message. The status held for the
+	 * current profile, or being read, was the old one's: the pushed list says
+	 * so to `applyProfiles`, and without a list followed it is read again here.
+	 */
+	switchProfile: async (agent: AgentType, profileId: string): Promise<void> => {
+		await actions().cliProfileSwitch(agent, profileId);
+		const { profiles, statuses, reading } = useCliLoginStore.getState();
+		if (!profiles && (statuses[agent] || reading[agent])) {
+			void cliLoginActions.refreshStatus(agent);
+		}
+	},
+
+	/**
+	 * Signs the profile out and deletes it. Rejects when the server refused;
+	 * `cliProfileRemoveRefusal` reads the refusals the user can act on.
+	 */
+	removeProfile: async (agent: AgentType, profileId: string): Promise<void> => {
+		await actions().cliProfileRemove(agent, profileId);
+		supersedeInspection(agent, profileId);
+		useCliLoginStore.setState((s) => {
+			const inspections = { ...s.inspections[agent] };
+			delete inspections[profileId];
+			const settled = { ...s.settledInspections[agent] };
+			delete settled[profileId];
+			const inspecting = { ...s.inspecting[agent] };
+			delete inspecting[profileId];
+			return {
+				inspections: { ...s.inspections, [agent]: inspections },
+				settledInspections: { ...s.settledInspections, [agent]: settled },
+				inspecting: { ...s.inspecting, [agent]: inspecting },
+			};
+		});
 	},
 };

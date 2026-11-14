@@ -25,6 +25,54 @@ export const textButtonClass = `${textButtonBase} text-th-accent hover:bg-th-bg-
  */
 export const busyTextButtonClass = `${textButtonBase} cursor-default text-th-text-muted`;
 
+/**
+ * What the chat's Send again offer draws at a sheet's end: the button —
+ * Copy message instead when a draft is in the way — and the note under the
+ * sheet's body saying the draft was kept, with the message to copy by hand
+ * when the clipboard refused it (docs/cli-login-ui.md#after-signing-in-send-again).
+ */
+export function useSendAgainParts(
+	sendAgain:
+		| { text: string; draftKept: boolean; onSendAgain: () => void }
+		| undefined,
+): { button: ReactNode; note: ReactNode } {
+	const { state: messageCopy, copy: copyMessage } = useCopyToClipboard();
+	if (!sendAgain) return { button: null, note: null };
+	const button = sendAgain.draftKept ? (
+		<button
+			type="button"
+			onClick={() => void copyMessage(sendAgain.text)}
+			className={`${primaryButtonClass} flex-1`}
+		>
+			{messageCopy === "copied" ? "Message copied" : "Copy message"}
+		</button>
+	) : (
+		<button
+			type="button"
+			onClick={sendAgain.onSendAgain}
+			className={`${primaryButtonClass} flex-1`}
+		>
+			Send again
+		</button>
+	);
+	const note = sendAgain.draftKept && (
+		<div className="space-y-1">
+			<p className="text-sm text-th-text-secondary">Your draft was kept.</p>
+			{messageCopy === "failed" && (
+				<>
+					<p className="text-xs text-th-error" role="alert">
+						Couldn't copy. Select the message below and copy it by hand.
+					</p>
+					<p className="select-all whitespace-pre-wrap break-words rounded-md bg-th-bg-tertiary p-3 text-sm text-th-text-primary">
+						{sendAgain.text}
+					</p>
+				</>
+			)}
+		</div>
+	);
+	return { button, note };
+}
+
 /** The current time, ticking once a second. */
 export function useNow(): number {
 	const [now, setNow] = useState(() => Date.now());

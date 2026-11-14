@@ -781,14 +781,14 @@ describe("messageReducer", () => {
 				}),
 			);
 			const assistant = messages[0] as AssistantMessage;
-			expect(assistant.authFailure).toBe("claude");
+			expect(assistant.authFailure).toEqual({ agent: "claude" });
 			expect(assistant.parts).toEqual([
 				{
 					id: expect.any(String),
 					type: "warning",
 					message: "Not logged in",
 					code: "authentication_failed",
-					authFailure: "claude",
+					authFailure: { agent: "claude" },
 				},
 			]);
 
@@ -802,6 +802,45 @@ describe("messageReducer", () => {
 			)[0] as AssistantMessage;
 			expect(unknown.status).toBe("error");
 			expect(unknown.authFailure).toBeUndefined();
+		});
+
+		// The record says which account it was then; a missing id is a record
+		// from before accounts were, whose account is unknown — not the default.
+		it("keeps the account a failure record names", () => {
+			const mark = (raw: Record<string, unknown>) =>
+				applyServerEvent(
+					[createStreamingMessage()],
+					normalizeEvent({ type: "error", error: "refused", ...raw }),
+				)[0] as AssistantMessage;
+
+			expect(
+				mark({ auth_failure: { agent: "claude", profile_id: "p1" } })
+					.authFailure,
+			).toEqual({ agent: "claude", profileId: "p1" });
+			expect(
+				mark({ auth_failure: { agent: "claude", profile_id: "" } }).authFailure,
+			).toEqual({ agent: "claude", profileId: "" });
+			expect(mark({ auth_failure: { agent: "claude" } }).authFailure).toEqual({
+				agent: "claude",
+			});
+
+			const limited = mark({ usage_limit: { agent: "codex", profile_id: "" } });
+			expect(limited.usageLimit).toEqual({ agent: "codex", profileId: "" });
+			expect(limited.authFailure).toBeUndefined();
+
+			const warned = applyServerEvent(
+				[createStreamingMessage()],
+				normalizeEvent({
+					type: "warning",
+					message: "rate limited",
+					code: "rate_limit",
+					usage_limit: { agent: "claude", profile_id: "p1" },
+				}),
+			)[0] as AssistantMessage;
+			expect(warned.parts[0]).toMatchObject({
+				type: "warning",
+				usageLimit: { agent: "claude", profileId: "p1" },
+			});
 		});
 
 		it("appends system message as content part", () => {
@@ -2590,17 +2629,27 @@ describe("messageReducer", () => {
 		});
 
 		// The turn ended at the boundary, so it is the older half that says how:
-		// losing the auth mark there would turn the sign-in notice back into a
-		// bare error line.
-		it("keeps an auth failure that ended the turn across a page boundary", () => {
+		// losing the mark there would turn the notice back into a bare error line.
+		it.each([
+			{
+				mark: { auth_failure: { agent: "claude" } },
+				field: "authFailure",
+				want: { agent: "claude" },
+			},
+			{
+				mark: { usage_limit: { agent: "codex", profile_id: "p1" } },
+				field: "usageLimit",
+				want: { agent: "codex", profileId: "p1" },
+			},
+		] as const)("keeps the $field that ended the turn across a page boundary", ({
+			mark,
+			field,
+			want,
+		}) => {
 			const older = replayHistory([
 				{ type: "message", content: "do the thing" },
 				{ type: "text", content: "partial" },
-				{
-					type: "error",
-					error: "Not logged in",
-					auth_failure: { agent: "claude" },
-				},
+				{ type: "error", error: "Refused", ...mark },
 			]);
 			const newer = replayHistory([{ type: "text", content: "late" }]);
 
@@ -2608,7 +2657,7 @@ describe("messageReducer", () => {
 			const turn = joined[joined.length - 1] as AssistantMessage;
 
 			expect(turn.status).toBe("error");
-			expect(turn.authFailure).toBe("claude");
+			expect(turn[field]).toEqual(want);
 		});
 
 		// The join that must still happen: a boundary falling *inside* the bubble a

@@ -12,6 +12,7 @@ import type {
 	PockodeCommandInvocation,
 	QuestionAnswerRecord,
 	QuestionRecordStatus,
+	RecordedAccount,
 	ServerNotification,
 	SessionTurn,
 	SystemMessageMeta,
@@ -20,7 +21,6 @@ import type {
 	ToolRun,
 	UserMessage,
 } from "../types/message";
-import type { AgentType } from "../types/settings";
 import { lookupAnswer, parseAnswer } from "../utils/questionAnswer";
 import { generateUUID } from "../utils/uuid";
 import { AGENT_TYPES } from "./agentType";
@@ -63,12 +63,18 @@ function normalizeExpiryReason(raw: unknown): ExpiryReason | undefined {
 		: undefined;
 }
 
-// The CLI a record says refused its credentials. An agent this build does not
-// know reads as no mark: the record then renders as an ordinary error or
-// warning, which is true of it, rather than offering a sign-in to nothing.
-function normalizeAuthFailure(raw: unknown): AgentType | undefined {
-	const agent = (raw as { agent?: unknown } | null | undefined)?.agent;
-	return AGENT_TYPES.find((type) => type === agent);
+// The CLI and account an `auth_failure` or `usage_limit` mark names. An agent
+// this build does not know reads as no mark: the record then renders as an
+// ordinary error or warning, which is true of it, rather than offering a
+// sign-in to nothing. A missing `profile_id` stays missing — the account of a
+// record kept before accounts were is unknown — and `""` is the default one.
+function normalizeRecordedAccount(raw: unknown): RecordedAccount | undefined {
+	const mark = raw as { agent?: unknown; profile_id?: unknown } | null;
+	const agent = AGENT_TYPES.find((type) => type === mark?.agent);
+	if (!agent) return undefined;
+	return typeof mark?.profile_id === "string"
+		? { agent, profileId: mark.profile_id }
+		: { agent };
 }
 
 // Boundary defense for one question's shape: the Go encoder emits `null` for a
@@ -204,9 +210,15 @@ export type NormalizedEvent =
 			message: string;
 			code: string;
 			/** See `ContentPart`'s warning. */
-			authFailure?: AgentType;
+			authFailure?: RecordedAccount;
+			usageLimit?: RecordedAccount;
 	  }
-	| { type: "error"; error: string; authFailure?: AgentType }
+	| {
+			type: "error";
+			error: string;
+			authFailure?: RecordedAccount;
+			usageLimit?: RecordedAccount;
+	  }
 	| { type: "done" }
 	| { type: "interrupted" }
 	| { type: "process_ended" }
@@ -390,13 +402,15 @@ export function normalizeEvent(
 				type: "warning",
 				message: (record.message as string) ?? "",
 				code: (record.code as string) ?? "",
-				authFailure: normalizeAuthFailure(record.auth_failure),
+				authFailure: normalizeRecordedAccount(record.auth_failure),
+				usageLimit: normalizeRecordedAccount(record.usage_limit),
 			};
 		case "error":
 			return {
 				type: "error",
 				error: (record.error as string) ?? "",
-				authFailure: normalizeAuthFailure(record.auth_failure),
+				authFailure: normalizeRecordedAccount(record.auth_failure),
+				usageLimit: normalizeRecordedAccount(record.usage_limit),
 			};
 		case "done":
 			return { type: "done" };
@@ -849,6 +863,7 @@ export function applyEventToParts(
 					message: event.message,
 					code: event.code,
 					authFailure: event.authFailure,
+					usageLimit: event.usageLimit,
 				},
 			];
 		case "raw":
@@ -1288,6 +1303,7 @@ function applyEvent(
 			message.status = "error";
 			message.error = event.error;
 			message.authFailure = event.authFailure;
+			message.usageLimit = event.usageLimit;
 		} else if (event.type === "process_ended") {
 			message.status = "process_ended";
 		}
@@ -2719,6 +2735,7 @@ export function prependHistoryPage(
 					status: tail.status,
 					error: tail.error,
 					authFailure: tail.authFailure,
+					usageLimit: tail.usageLimit,
 				}
 			: {}),
 		parts: endedAtBoundary
