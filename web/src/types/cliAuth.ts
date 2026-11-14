@@ -36,6 +36,11 @@ export interface CliExternal {
 
 export interface CliAuthStatus {
 	agent: AgentType;
+	/**
+	 * The profile (account) the status was read for — resolved by the server
+	 * when the request named none. Absent for the default profile.
+	 */
+	profile_id?: string;
 	state: CliAuthState;
 	version?: string;
 	/** signed_in */
@@ -46,6 +51,13 @@ export interface CliAuthStatus {
 	error?: string;
 	/** signing_in: the running sign-in */
 	login_id?: string;
+	/**
+	 * signing_in: the profile the running sign-in is for, absent for the
+	 * default one. A CLI signs in one profile at a time, and while it does every
+	 * profile of it reads `signing_in`: only the one this names is signing in,
+	 * the rest are waiting for it (`isSigningInHere`).
+	 */
+	login_profile_id?: string;
 	/** updating: the running update. Nothing else is read meanwhile. */
 	update_id?: string;
 }
@@ -82,6 +94,8 @@ export interface CliLoginFailure {
 export interface CliLogin {
 	id: string;
 	agent: AgentType;
+	/** The profile being signed in, absent for the default one. */
+	profile_id?: string;
 	/** Grows with every change of the same `id`; the higher copy is newer. */
 	revision: number;
 	account_kind?: CliAccountKind;

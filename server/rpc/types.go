@@ -1348,8 +1348,15 @@ type CLIProfileSubscribeResult struct {
 
 // CLIProfileInspectParams narrows cli_profile.inspect to one CLI. Params may
 // be omitted to read every CLI.
+//
+// ProfileID reads that one profile of Agent ("" being the default one), and
+// needs Agent: a client reading each profile with a request of its own gets
+// each answer as soon as that profile is read, rather than all of them once
+// the slowest is. Absent reads every profile — never "the current one", which
+// is what it would mean on cli_auth.*.
 type CLIProfileInspectParams struct {
-	Agent session.AgentType `json:"agent,omitempty"`
+	Agent     session.AgentType `json:"agent,omitempty"`
+	ProfileID *string           `json:"profile_id,omitempty"`
 }
 
 // CLIProfileInspectResult is every profile of the CLIs read, read afresh: CLIs

@@ -1,4 +1,5 @@
 import type { HistorySeq, Message, UserMessage } from "../types/message";
+import { failedOnRefusal } from "./cliRefusal";
 import { formatPockodeCommand } from "./pockodeCommand";
 
 /**
@@ -31,8 +32,9 @@ export function sendAgainTarget(
  * `target`, or undefined when it offers nothing
  * (docs/cli-login-ui.md#after-signing-in-send-again).
  *
- * Only once the turn has failed on its credentials: a notice on a turn still
- * retrying can be signed in from, but that turn may yet succeed, and its message
+ * Only once the turn has failed on a refusal — its credentials, or a rate
+ * limit another account may not have: a notice on a turn still retrying can
+ * be signed in or switched from, but that turn may yet succeed, and its message
  * sent again would then run twice. Only the session's latest turn, whose message
  * a person typed: an older turn's message is one the conversation has moved
  * past, and a turn Pockode or another agent started holds words the user never
@@ -46,14 +48,7 @@ export function sendAgainMessage(
 	target: SendAgainTarget,
 ): UserMessage | undefined {
 	const last = messages.at(-1);
-	if (
-		!last ||
-		last.role !== "assistant" ||
-		last.status !== "error" ||
-		!last.authFailure
-	) {
-		return undefined;
-	}
+	if (!last || !failedOnRefusal(last)) return undefined;
 	const asked = messages.findLast((message) => message.role === "user");
 	if (!asked || asked.role !== "user") return undefined;
 	const isTarget =

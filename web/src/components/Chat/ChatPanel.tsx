@@ -14,6 +14,7 @@ import {
 	useState,
 } from "react";
 import { useChatMessages } from "../../hooks/useChatMessages";
+import { useCliProfileSubscription } from "../../hooks/useCliProfileSubscription";
 import { readDraft } from "../../hooks/useComposerDraft";
 import { SKELETON_DELAY_MS, useDelayedFlag } from "../../hooks/useDelayedFlag";
 import {
@@ -28,6 +29,8 @@ import { useViewedSession } from "../../hooks/useViewedSession";
 import { sessionActivity } from "../../lib/activity";
 import { takeAnswerIntent } from "../../lib/answerIntent";
 import type { ChatAttachment } from "../../lib/chatAttachments";
+import { useCliLoginStore } from "../../lib/cliLoginStore";
+import { profileIdsOf } from "../../lib/cliProfiles";
 import {
 	attachmentActions,
 	inputActions,
@@ -54,6 +57,7 @@ import type {
 	HistorySeq,
 	PermissionRequest,
 	QuestionAnswerRecord,
+	RecordedAccount,
 	UserMessage,
 } from "../../types/message";
 import {
@@ -65,6 +69,7 @@ import {
 	type WorkSegment,
 } from "../../types/overlay";
 import type { AgentType } from "../../types/settings";
+import { type CliRefusal, refusalAccounts } from "../../utils/cliRefusal";
 import { restoreIntoDraft } from "../../utils/discardedMessage";
 import { type ForkAnchor, resolveForkAnchor } from "../../utils/forkAnchor";
 import { buildForkTitle } from "../../utils/forkTitle";
@@ -75,7 +80,8 @@ import {
 	sendAgainTarget,
 	sendAgainText,
 } from "../../utils/sendAgain";
-import CliLoginSheet from "../CliLogin/CliLoginSheet";
+import CliAccountSwitchSheet from "../CliLogin/CliAccountSwitchSheet";
+import CliLoginSheet, { type SendAgainOffer } from "../CliLogin/CliLoginSheet";
 import { FileEditor, FileView } from "../Files";
 import { GitWorkspace } from "../Git";
 import MainContainer from "../Layout/MainContainer";
@@ -676,28 +682,64 @@ function ChatPanel({
 		[forkSession, sessionId, onSelectSession],
 	);
 
-	// The CLI being signed in from a failed turn's notice, and that turn. Held
-	// here for the fork sheet's reason: the sign-in belongs to the session, not
-	// to the bubble it was opened from.
-	const [signInTarget, setSignInTarget] = useState<
-		(SendAgainTarget & { agent: AgentType; sessionId: string }) | null
-	>(null);
+	// The sheet a refused turn's notice opened — the CLI's sign-in or its
+	// account switch — and that turn. Held here for the fork sheet's reason: it
+	// belongs to the session, not to the bubble it was opened from. One at a
+	// time: the switch sheet hands over to the sign-in in this same slot.
+	const [refusalSheet, setRefusalSheet] = useState<RefusalSheet | null>(null);
 	const [inputFocusRequest, setInputFocusRequest] = useState(0);
 	// Read rather than subscribed, and inside the handler so it stays stable for
 	// the memoized bubbles: the turn's place in history is taken at the press.
 	const messagesRef = useRef(messages);
 	messagesRef.current = messages;
 	const handleSignIn = useCallback(
-		(agent: AgentType, messageId: string) => {
-			setSignInTarget({
+		(
+			agent: AgentType,
+			messageId: string,
+			account?: { id: string; name: string },
+		) => {
+			setRefusalSheet({
+				kind: "sign_in",
 				agent,
+				account,
 				sessionId,
 				...sendAgainTarget(messagesRef.current, messageId),
 			});
 		},
 		[sessionId],
 	);
-	const handleCloseSignIn = useCallback(() => setSignInTarget(null), []);
+	const handleSwitchAccount = useCallback(
+		(refusal: CliRefusal, messageId: string) => {
+			setRefusalSheet({
+				kind: "switch",
+				agent: refusal.agent,
+				refusal,
+				sessionId,
+				...sendAgainTarget(messagesRef.current, messageId),
+			});
+		},
+		[sessionId],
+	);
+	const handleCloseRefusalSheet = useCallback(() => setRefusalSheet(null), []);
+	// Sheets don't nest: signing an account in from the switch sheet takes its
+	// place, carrying the same turn and so the same Send again.
+	const handleSignInFromSwitch = useCallback(
+		(account: { id: string; name: string }) =>
+			setRefusalSheet((sheet) =>
+				sheet
+					? {
+							kind: "sign_in",
+							agent: sheet.agent,
+							account,
+							sessionId: sheet.sessionId,
+							messageId: sheet.messageId,
+							askedSeq: sheet.askedSeq,
+						}
+					: null,
+			),
+		[],
+	);
+	const refused = useMemo(() => refusalAccounts(messages), [messages]);
 	const hasDraft = useInputStore(
 		(state) => !!state.inputs[sessionId] || !!state.attachments[sessionId],
 	);
@@ -706,14 +748,17 @@ function ChatPanel({
 	// and one that was still retrying may have failed since. Only in the session
 	// it was opened from: the panel outlives a session switch (a swipe back while
 	// the sheet is up), and a history seq means nothing in another session.
-	const resendMessage =
-		signInTarget && signInTarget.sessionId === sessionId
-			? sendAgainMessage(messages, signInTarget)
-			: undefined;
-	const resendText =
-		signInTarget && signInTarget.sessionId === sessionId
-			? sendAgainText(messages, signInTarget)
-			: undefined;
+	// A viewed session has no composer to put the message back into.
+	const resendFrom =
+		refusalSheet && refusalSheet.sessionId === sessionId && !isReadOnly
+			? refusalSheet
+			: null;
+	const resendMessage = resendFrom
+		? sendAgainMessage(messages, resendFrom)
+		: undefined;
+	const resendText = resendFrom
+		? sendAgainText(messages, resendFrom)
+		: undefined;
 	const handleSendAgain = useCallback(() => {
 		if (resendText === undefined) return;
 		inputActions.set(sessionId, resendText);
@@ -721,11 +766,15 @@ function ChatPanel({
 		if (resendMessage?.attachments) {
 			attachmentActions.adopt(sessionId, resendMessage.attachments);
 		}
-		setSignInTarget(null);
+		setRefusalSheet(null);
 		// In the same commit as the sheet closing, whose cleanup hands focus
 		// back to the notice's button first; the bar's effect runs after it.
 		setInputFocusRequest((n) => n + 1);
 	}, [resendText, resendMessage, sessionId]);
+	const sendAgainOffer: SendAgainOffer | undefined =
+		resendText === undefined
+			? undefined
+			: { text: resendText, draftKept: hasDraft, onSendAgain: handleSendAgain };
 
 	// Messages a Stop threw away, back into the composer: added after whatever
 	// is there and never over it, only the parts it is missing, and never sent
@@ -1350,6 +1399,7 @@ function ChatPanel({
 						: undefined
 				}
 				onSignIn={isReadOnly ? undefined : handleSignIn}
+				onSwitchAccount={handleSwitchAccount}
 				onRestoreMessages={isReadOnly ? undefined : handleRestoreMessages}
 			/>
 		);
@@ -1702,19 +1752,27 @@ function ChatPanel({
 								onClose={handleCloseFork}
 							/>
 						)}
-						{signInTarget && (
+						{refused.length > 0 && <FollowCliProfiles accounts={refused} />}
+						{refusalSheet?.kind === "sign_in" && (
 							<CliLoginSheet
-								agent={signInTarget.agent}
-								onClose={handleCloseSignIn}
-								sendAgain={
-									resendText === undefined
-										? undefined
-										: {
-												text: resendText,
-												draftKept: hasDraft,
-												onSendAgain: handleSendAgain,
-											}
+								agent={refusalSheet.agent}
+								account={refusalSheet.account}
+								onClose={handleCloseRefusalSheet}
+								sendAgain={sendAgainOffer}
+							/>
+						)}
+						{refusalSheet?.kind === "switch" && (
+							<CliAccountSwitchSheet
+								agent={refusalSheet.agent}
+								recordedProfileId={refusalSheet.refusal.profileId}
+								recordedNote={
+									refusalSheet.refusal.kind === "auth"
+										? "Couldn't authenticate this turn"
+										: "Turned away this turn"
 								}
+								onClose={handleCloseRefusalSheet}
+								onSignIn={isReadOnly ? undefined : handleSignInFromSwitch}
+								sendAgain={sendAgainOffer}
 							/>
 						)}
 					</CoveredSurface>
@@ -1771,3 +1829,58 @@ function ChatPanel({
 }
 
 export default ChatPanel;
+
+type RefusalSheet = SendAgainTarget & {
+	agent: AgentType;
+	/** The session the sheet was opened in; Send again offers only there. */
+	sessionId: string;
+} & (
+		| { kind: "sign_in"; account?: { id: string; name: string } }
+		| { kind: "switch"; refusal: CliRefusal }
+	);
+
+/**
+ * Follows the account lists while the transcript holds a refusal mark, for
+ * the notices that name the record's account and offer the switch: only
+ * then, as most transcripts never carry one.
+ *
+ * Subscribes afresh when a mark names an account the list does not have:
+ * another Pockode process's additions are not pushed here, and without them
+ * an account added there reads as "a removed account" and a sign-in from the
+ * notice goes to the wrong one. Once per such id, so an account that really
+ * is gone costs one subscribe, not one per push.
+ */
+function FollowCliProfiles({
+	accounts,
+}: {
+	accounts: readonly RecordedAccount[];
+}) {
+	const unheard = useCliLoginStore((s) =>
+		s.profiles
+			? accounts
+					.filter(
+						({ agent, profileId }) =>
+							profileId !== undefined &&
+							!profileIdsOf(s.profiles, agent).includes(profileId),
+					)
+					.map(({ agent, profileId }) => `${agent}/${profileId}`)
+					.join(" ")
+			: "",
+	);
+	const askedFor = useRef(new Set<string>());
+	const [round, setRound] = useState(0);
+	useEffect(() => {
+		const fresh = unheard
+			.split(" ")
+			.filter((key) => key && !askedFor.current.has(key));
+		if (fresh.length === 0) return;
+		for (const key of fresh) askedFor.current.add(key);
+		setRound((n) => n + 1);
+	}, [unheard]);
+	return <SubscribeCliProfiles key={round} />;
+}
+
+function SubscribeCliProfiles() {
+	useCliProfileSubscription();
+	return null;
+}

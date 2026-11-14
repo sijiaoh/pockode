@@ -380,6 +380,10 @@ which account it was then, not which is current now. Only the id: the client
 looks the name up when it draws the record. The process stamps it, from the
 account it started the CLI as. A marker without the key was recorded before
 accounts were, and its account is unknown.
+The web client draws an auth failure, and a usage limit on a CLI with several
+accounts, as one notice that names the account where it can and offers a
+switch where there is one to make
+([cli-profiles-ui.md](cli-profiles-ui.md#in-the-chat)).
 
 `ParentToolUseID` (`parent_tool_use_id`) is on the `text`, `tool_call` and
 `tool_result` records a **subagent** produced, naming the subagent call it ran

@@ -26,6 +26,10 @@ import type {
 } from "../types/agentRole";
 import type { CliLogin, CliLoginChangedNotification } from "../types/cliAuth";
 import type {
+	CliProfileChangedNotification,
+	CliProfileOverview,
+} from "../types/cliProfile";
+import type {
 	CliUpdate,
 	CliUpdateChangedNotification,
 } from "../types/cliUpdate";
@@ -79,6 +83,7 @@ import {
 	type AttachmentActions,
 	type ChatActions,
 	type CliAuthActions,
+	type CliProfileActions,
 	type CliUpdateActions,
 	type CloudLinkActions,
 	type CommandActions,
@@ -87,6 +92,7 @@ import {
 	createAttachmentActions,
 	createChatActions,
 	createCliAuthActions,
+	createCliProfileActions,
 	createCliUpdateActions,
 	createCloudLinkActions,
 	createCommandActions,
@@ -303,6 +309,14 @@ export interface WatchActions {
 		callback: (params: CliLoginChangedNotification) => void,
 	) => Promise<WatchSubscribeResult<CliLogin | null>>;
 	cliLoginUnsubscribe: (id: string) => Promise<void>;
+	/**
+	 * Every CLI's profiles. Only changes this server makes are pushed; one made
+	 * by another Pockode process shows on the next subscribe.
+	 */
+	cliProfileSubscribe: (
+		callback: (params: CliProfileChangedNotification) => void,
+	) => Promise<WatchSubscribeResult<CliProfileOverview>>;
+	cliProfileUnsubscribe: (id: string) => Promise<void>;
 	/** The CLI's latest update, running or last ended, or null if none. */
 	cliUpdateSubscribe: (
 		agent: AgentType,
@@ -325,6 +339,7 @@ type RPCActions = ConnectionActions &
 	AgentActions &
 	AgentRoleActions &
 	CliAuthActions &
+	CliProfileActions &
 	CliUpdateActions &
 	CloudLinkActions &
 	AttachmentActions &
@@ -453,6 +468,10 @@ const cliLoginWatchCallbacks = new Map<
 	string,
 	(params: CliLoginChangedNotification) => void
 >();
+const cliProfileWatchCallbacks = new Map<
+	string,
+	(params: CliProfileChangedNotification) => void
+>();
 const cliUpdateWatchCallbacks = new Map<
 	string,
 	(params: CliUpdateChangedNotification) => void
@@ -501,6 +520,7 @@ function clearAllWatchSubscriptions(): void {
 	scheduleListWatchCallbacks.clear();
 	scheduleDetailWatchCallbacks.clear();
 	cliLoginWatchCallbacks.clear();
+	cliProfileWatchCallbacks.clear();
 	cliUpdateWatchCallbacks.clear();
 	remoteUrlWatchCallbacks.clear();
 	cloudLinkWatchCallbacks.clear();
@@ -704,9 +724,9 @@ const CODEX_START_BUDGET_MS = 10000 + 45000;
 
 /**
  * Timeout for the RPCs that are given room to wait out an agent CLI start:
- * `chat.message` and `work.start`. `cli_auth.status` and `cli_auth.logout`
- * borrow it: they run a CLI while waited on too, for at most 65s (see
- * lib/rpc/cliAuth.ts).
+ * `chat.message` and `work.start`. `cli_auth.status`, `cli_auth.logout`,
+ * `cli_profile.inspect` and `cli_profile.remove` borrow it: they run a CLI
+ * while waited on too, for at most 65s (see lib/rpc/cliAuth.ts).
  *
  * Both reach `GetOrCreateProcess` -> `Agent.Start` on their own request path —
  * `chat.message` directly, `work.start` through the kickoff (or restart) message
@@ -888,6 +908,11 @@ const watchNotificationHandlers: Record<string, WatchNotificationHandler> = {
 		cliLoginWatchCallbacks.get(changedParams.id)?.(changedParams);
 		return true;
 	},
+	"cli_profile.changed": (params) => {
+		const changedParams = params as CliProfileChangedNotification;
+		cliProfileWatchCallbacks.get(changedParams.id)?.(changedParams);
+		return true;
+	},
 	"cli_update.changed": (params) => {
 		const changedParams = params as CliUpdateChangedNotification;
 		cliUpdateWatchCallbacks.get(changedParams.id)?.(changedParams);
@@ -1010,6 +1035,10 @@ async function closeSubscription<TCallback>(
 const agentActions = createAgentActions(getClient);
 const agentRoleActions = createAgentRoleActions(getClient);
 const cliAuthActions = createCliAuthActions(getClient, getAgentStartClient);
+const cliProfileActions = createCliProfileActions(
+	getClient,
+	getAgentStartClient,
+);
 const cliUpdateActions = createCliUpdateActions(getClient);
 const cloudLinkActions = createCloudLinkActions(
 	getClient,
@@ -1721,6 +1750,28 @@ export const useWSStore = create<WSState>((set, get) => ({
 				cliLoginWatchCallbacks,
 			),
 
+		cliProfileSubscribe: async (
+			callback: (params: CliProfileChangedNotification) => void,
+		) => {
+			const { id, result } = await openSubscription(
+				"cli_profile.subscribe",
+				{},
+				cliProfileWatchCallbacks,
+				callback,
+			);
+			return {
+				id,
+				initial: (result as { profiles: CliProfileOverview }).profiles,
+			};
+		},
+
+		cliProfileUnsubscribe: (id: string) =>
+			closeSubscription(
+				"cli_profile.unsubscribe",
+				id,
+				cliProfileWatchCallbacks,
+			),
+
 		cliUpdateSubscribe: async (
 			agent: AgentType,
 			callback: (params: CliUpdateChangedNotification) => void,
@@ -1774,6 +1825,7 @@ export const useWSStore = create<WSState>((set, get) => ({
 		...agentActions,
 		...agentRoleActions,
 		...cliAuthActions,
+		...cliProfileActions,
 		...cliUpdateActions,
 		...cloudLinkActions,
 		...attachmentActions,

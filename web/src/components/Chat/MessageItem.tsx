@@ -42,6 +42,11 @@ import type {
 	UserMessage,
 } from "../../types/message";
 import type { AgentType } from "../../types/settings";
+import {
+	type CliRefusal,
+	isRepeatedByEnding,
+	refusalNotice,
+} from "../../utils/cliRefusal";
 import { isRestorable } from "../../utils/discardedMessage";
 import { HIGHLIGHT_LIMIT } from "../../utils/fileView";
 import { forkUnavailableReason } from "../../utils/forkAnchor";
@@ -50,7 +55,7 @@ import { formatFilePath } from "../../utils/path";
 import { workEventSubject, workEventWording } from "../../utils/systemMessage";
 import { CollapsibleBody, MarkdownContent, useEverExpanded } from "../ui";
 import AttachmentStrip from "./AttachmentStrip";
-import AuthFailureNotice from "./AuthFailureNotice";
+import CliRefusalNotice from "./CliRefusalNotice";
 import { DiscardedNote, DiscardedSummary } from "./DiscardedMessage";
 import { HeaderlessMainBlock } from "./HeaderlessMainBlock";
 import { HtmlActionBubble } from "./HtmlActionBubble";
@@ -1040,7 +1045,7 @@ function ContentPartItem(props: ContentPartItemProps) {
 	);
 }
 
-interface Props {
+export interface MessageItemProps {
 	message: Message;
 	/** The session this transcript belongs to; see `ToolCallItem`. */
 	sessionId: string;
@@ -1078,11 +1083,22 @@ interface Props {
 	 */
 	onForkMessage?: (messageId: string) => void;
 	/**
-	 * Opens the sign-in for the CLI an auth failure in this message names.
-	 * Absent where there is nothing to sign in from. Must be stable: this
+	 * Opens the sign-in for the CLI an auth failure in this message names —
+	 * for `account` where the CLI has several, else its current one. Absent
+	 * where there is nothing to sign in from. Must be stable: this
 	 * component is memoized.
 	 */
-	onSignIn?: (agent: AgentType, messageId: string) => void;
+	onSignIn?: (
+		agent: AgentType,
+		messageId: string,
+		account?: { id: string; name: string },
+	) => void;
+	/**
+	 * Opens the account switch for a refusal in this message — wherever it is
+	 * drawn, since a switch is global, not the session's. Must be stable: this
+	 * component is memoized.
+	 */
+	onSwitchAccount?: (refusal: CliRefusal, messageId: string) => void;
 	/**
 	 * A Stop threw this message away before the agent read it. Derived from the
 	 * whole transcript by `MessageList`, since the record saying so sits in a
@@ -1351,9 +1367,10 @@ const MessageItem = memo(function MessageItem({
 	onOpenWorkDetail,
 	onForkMessage,
 	onSignIn,
+	onSwitchAccount,
 	isDiscarded,
 	onRestoreMessages,
-}: Props) {
+}: MessageItemProps) {
 	const chatUIConfig = useChatUIConfig();
 	const UserAvatar = chatUIConfig.UserAvatar;
 	const AssistantAvatar = chatUIConfig.AssistantAvatar;
@@ -1494,26 +1511,24 @@ const MessageItem = memo(function MessageItem({
 		);
 	}
 
-	// One notice per turn, where the failure stands now: on the turn's error once
-	// it has failed, and until then on the latest refused retry of the turn still
-	// running. The turn's other auth warnings say the same thing again, so a
-	// failed turn draws none of them; a turn that recovered draws them as the
-	// warnings they were.
-	const authError =
-		message.status === "error" ? message.authFailure : undefined;
-	const liveAuthIndex =
-		!authError && isOpenTurn
-			? message.parts.findLastIndex(
-					(part) => part.type === "warning" && part.authFailure,
-				)
-			: -1;
+	// One notice per turn, where the refusal stands now; the turn's other
+	// marked retries saying the same as its marked ending are not drawn
+	// (`refusalNotice`). A turn that recovered draws them as the warnings they
+	// were.
+	const notice = refusalNotice(message, !!isOpenTurn);
 	const shownParts = message.parts
 		.map((part, index) => ({ part, index }))
-		.filter(
-			({ part }) => !(authError && part.type === "warning" && part.authFailure),
-		);
-	const signIn = (agent: AgentType) =>
-		onSignIn ? () => onSignIn(agent, message.id) : undefined;
+		.filter(({ part }) => !isRepeatedByEnding(message, part));
+	const refusalProps = (refusal: CliRefusal) => ({
+		refusal,
+		onSignIn: onSignIn
+			? (account?: { id: string; name: string }) =>
+					onSignIn(refusal.agent, message.id, account)
+			: undefined,
+		onSwitchAccount: onSwitchAccount
+			? () => onSwitchAccount(refusal, message.id)
+			: undefined,
+	});
 	// What the agent wrote, as it wrote it: top-level text only. Tool calls,
 	// cards and a subagent's notes are the transcript's, not this message's prose.
 	const copyText = message.parts
@@ -1545,16 +1560,8 @@ const MessageItem = memo(function MessageItem({
 						<PartBlocks
 							items={shownParts}
 							wrapperProps={anchorCandidateProps}
-							renderPart={({ part, index }) =>
-								index === liveAuthIndex &&
-								part.type === "warning" &&
-								part.authFailure ? (
-									<AuthFailureNotice
-										message={part.message}
-										agent={part.authFailure}
-										onSignIn={signIn(part.authFailure)}
-									/>
-								) : (
+							renderPart={({ part, index }) => {
+								const plain = (
 									<ContentPartItem
 										part={part}
 										sessionId={sessionId}
@@ -1565,19 +1572,29 @@ const MessageItem = memo(function MessageItem({
 										promptError={promptError}
 										wideCards={!AssistantAvatar && !assistantBubbleClass}
 									/>
-								)
-							}
+								);
+								return notice?.partIndex === index &&
+									part.type === "warning" ? (
+									<CliRefusalNotice
+										message={part.message}
+										{...refusalProps(notice.refusal)}
+										plain={plain}
+									/>
+								) : (
+									plain
+								);
+							}}
 						/>
 					</div>
 				)}
 
 				{message.status === "error" &&
-					(authError ? (
+					(notice && notice.partIndex === undefined ? (
 						<div className="mt-2">
-							<AuthFailureNotice
+							<CliRefusalNotice
 								message={message.error ?? ""}
-								agent={authError}
-								onSignIn={signIn(authError)}
+								{...refusalProps(notice.refusal)}
+								plain={<p className="text-sm text-th-error">{message.error}</p>}
 							/>
 						</div>
 					) : (

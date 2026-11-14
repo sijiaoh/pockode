@@ -73,6 +73,7 @@ describe("CliLoginSheet", () => {
 			expect(server.actions.cliLoginStart).toHaveBeenCalledWith(
 				"codex",
 				undefined,
+				undefined,
 			);
 			expect(
 				screen.getByRole("link", { name: /Open sign-in page/ }),
@@ -313,6 +314,7 @@ describe("CliLoginSheet", () => {
 			expect(server.actions.cliLoginStart).toHaveBeenCalledWith(
 				"claude",
 				"console",
+				undefined,
 			);
 			expect(
 				await screen.findByRole("button", {
@@ -477,6 +479,7 @@ describe("CliLoginSheet", () => {
 			expect(server.actions.cliLoginStart).toHaveBeenCalledWith(
 				"claude",
 				"console",
+				undefined,
 			);
 			expect(
 				await screen.findByRole("textbox", { name: "Sign-in code" }),
@@ -741,3 +744,163 @@ describe("CliLoginSheet", () => {
 		});
 	});
 });
+
+describe("CliLoginSheet for a named account", () => {
+	it("does not follow another account's sign-in", async () => {
+		cliLoginActions.applyProfiles({
+			available: true,
+			clis: [
+				{
+					agent: "claude",
+					profiles: [
+						{ id: "p-work", name: "Work" },
+						{ id: "p-spare", name: "Spare" },
+					],
+				},
+				{ agent: "codex", profiles: [] },
+			],
+		});
+		cliLoginActions.applyLogin(
+			"claude",
+			claudeWaiting({ profile_id: "p-spare" }),
+		);
+		render(
+			<CliLoginSheet
+				agent="claude"
+				account={{ id: "p-work", name: "Work" }}
+				onClose={vi.fn()}
+			/>,
+		);
+
+		expect(
+			await screen.findByRole("dialog", { name: "Sign in to Claude · Work" }),
+		).toBeInTheDocument();
+		expect(
+			await screen.findByRole("heading", {
+				name: "Claude is signing in Spare",
+			}),
+		).toBeInTheDocument();
+		expect(server.actions.cliLoginStart).not.toHaveBeenCalled();
+	});
+
+	it("keeps its ending when another account's sign-in starts after it", async () => {
+		const user = userEvent.setup();
+		cliLoginActions.applyProfiles(TWO_ACCOUNTS);
+		server.setInspections([
+			{
+				status: { agent: "claude", profile_id: "p-work", state: "signed_out" },
+			},
+		]);
+		server.actions.cliLoginStart.mockResolvedValue(
+			claudeWaiting({ profile_id: "p-work" }),
+		);
+		render(
+			<CliLoginSheet
+				agent="claude"
+				account={{ id: "p-work", name: "Work" }}
+				onClose={vi.fn()}
+			/>,
+		);
+		await screen.findByRole("textbox");
+		expect(server.actions.cliLoginStart).toHaveBeenCalledWith(
+			"claude",
+			undefined,
+			"p-work",
+		);
+
+		server.push(
+			claudeWaiting({ profile_id: "p-work", revision: 2, phase: "succeeded" }),
+		);
+		expect(
+			await screen.findByRole("button", { name: "Switch to Work" }),
+		).toBeInTheDocument();
+
+		server.push(
+			claudeWaiting({ id: "claude-2", profile_id: "p-spare", revision: 1 }),
+		);
+		expect(
+			screen.getByRole("button", { name: "Switch to Work" }),
+		).toBeInTheDocument();
+		expect(screen.queryByText("Starting sign-in…")).not.toBeInTheDocument();
+
+		// And a switch from the success page closes it.
+		await user.click(screen.getByRole("button", { name: "Switch to Work" }));
+		expect(server.actions.cliProfileSwitch).toHaveBeenCalledWith(
+			"claude",
+			"p-work",
+		);
+	});
+
+	// Every session runs as Default there, whichever account is chosen.
+	it("offers no switch where this machine can't use accounts", async () => {
+		cliLoginActions.applyProfiles({
+			...TWO_ACCOUNTS,
+			available: false,
+			clis: TWO_ACCOUNTS.clis.map((cli) =>
+				cli.agent === "claude" ? { ...cli, current_profile_id: "p-work" } : cli,
+			),
+		});
+		server.setInspections([
+			{ status: { agent: "claude", state: "signed_out" } },
+		]);
+		server.actions.cliLoginStart.mockResolvedValue(
+			claudeWaiting({ profile_id: "" }),
+		);
+		render(
+			<CliLoginSheet
+				agent="claude"
+				account={{ id: "", name: "Default" }}
+				onClose={vi.fn()}
+			/>,
+		);
+		await screen.findByRole("textbox");
+
+		server.push(
+			claudeWaiting({ profile_id: "", revision: 2, phase: "succeeded" }),
+		);
+		expect(
+			await screen.findByRole("button", { name: "Done" }),
+		).toBeInTheDocument();
+		expect(
+			screen.queryByRole("button", { name: "Switch to Default" }),
+		).not.toBeInTheDocument();
+	});
+
+	it("says when another account's running sign-in overtakes its own", async () => {
+		cliLoginActions.applyProfiles(TWO_ACCOUNTS);
+		server.setLatest(claudeWaiting({ profile_id: "p-work" }));
+		cliLoginActions.applyLogin(
+			"claude",
+			claudeWaiting({ profile_id: "p-work" }),
+		);
+		render(
+			<CliLoginSheet
+				agent="claude"
+				account={{ id: "p-work", name: "Work" }}
+				onClose={vi.fn()}
+			/>,
+		);
+		await screen.findByRole("textbox");
+
+		server.push(claudeWaiting({ id: "claude-2", profile_id: "p-spare" }));
+		expect(
+			await screen.findByRole("heading", {
+				name: "Claude is signing in Spare",
+			}),
+		).toBeInTheDocument();
+	});
+});
+
+const TWO_ACCOUNTS = {
+	available: true,
+	clis: [
+		{
+			agent: "claude" as const,
+			profiles: [
+				{ id: "p-work", name: "Work" },
+				{ id: "p-spare", name: "Spare" },
+			],
+		},
+		{ agent: "codex" as const, profiles: [] },
+	],
+};
