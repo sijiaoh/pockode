@@ -222,6 +222,9 @@ func (s *appSession) handleTurnCompleted(params json.RawMessage) {
 		if authFailed {
 			event.AuthFailure = codexAuthFailure()
 		}
+		if notif.Turn.Error != nil {
+			event.UsageLimit = readUsageLimit(notif.Turn.Error.CodexErrorInfo)
+		}
 		s.emitEvent(event)
 	default:
 		s.emitEvent(agent.DoneEvent{})

@@ -82,8 +82,83 @@ Two starts are left out on purpose: `--version` (and Codex's `--help` probe),
 which read no account, and [CLI updates](cli-update.md), which replace the
 binary every profile shares.
 
-A session keeps the profile it started with until its process ends; moving a
-running session to a newly chosen profile is not done here.
+### A Session Follows the Current Profile
+
+A CLI cannot change account while it runs, so a session moves to a newly chosen
+profile by having its process replaced. `process.Manager` resolves the current
+profile itself (`agent.ProfileResolver`) and starts the CLI as exactly that one
+(`StartOptions.Profile`), so `Process.ProfileID` — "" for the default — is the
+account the CLI really runs as, not one read a moment before or after.
+
+`GetOrCreateProcess`, the one way a message reaches a process, reads the
+current profile on every call. A process on another profile is stopped and a
+successor resumed in its place on the current one — the same thing that
+happens when the idle lease collects a process and the next message arrives,
+so the conversation carries on where it was. That makes a switch take effect
+on each session's next message wherever it was made: the current profile is
+shared by every Pockode process of the OS user, so a switch on another cluster
+node, or in a server for another project, reaches this one without any
+notice being sent. A current profile that cannot be read fails the message; it
+does not fall back to the process's old profile or to the default one.
+
+Only a process nothing is waiting on is replaced (`stopIfIdle`) — the same
+test the idle lease uses ([The Lease Table](#the-lease-table)): no turn open,
+no permission answer pending, not parked on background work. A session mid-turn
+keeps its process for this message and is asked again on the next: stopping a
+running turn to honour a switch would throw away work the user is waiting on.
+
+Two orderings carry the rest:
+
+- **One CLI per session across a replacement.** The replaced process stays in the map,
+  closed, until its CLI has exited; anyone fetching the session waits for that
+  before starting the successor, and the idle lease and a closed work's
+  retirement leave a closed process alone rather than take it out early. That
+  is all that keeps two CLIs from writing one conversation — Claude has no
+  writer lock of its own. This is stricter than [a replaced
+  process](#a-process-that-has-been-replaced) elsewhere, whose stream may end
+  after its successor is in the map — `Close` included, which takes the
+  process out before waiting for it.
+- **A message racing the stop goes to the successor.** `sendMu` makes "nothing
+  is waiting on this process, close it" and "this prompt opens a turn on it" one
+  step each: either the prompt opened its turn first and the process is kept,
+  or the process closed first and `SendMessage` refuses with
+  `ErrProcessReplaced` before anything is recorded. `chat.Client` then fetches
+  the session's process again and hands the same message, already in the
+  transcript, to that one. Only a replacement is retried: a process closed
+  because its session was deleted, its work stopped or its settings changed
+  answers `ErrProcessClosed`, and nothing is started in its place. The idle
+  test reads the turn from the store, not the process's copy, which can lag a
+  prompt and an event that raced and would call a turn that has just begun idle.
+
+The [HTML-first](#html-first-sessions) replacement keeps its own branch, ahead
+of this one: a process started with the other guidance is replaced whatever
+its profile.
+
+#### Releasing a profile
+
+Removing a profile while a CLI still runs as it would have the CLI recreate the
+directory and write a real `projects/` into it, splitting the conversations
+from the shared ones ([cli-profiles.md](cli-profiles.md#switching-and-removing)).
+`worktree.Manager.ReleaseProfile` is the step before that removal: across every
+loaded worktree — and the ones being unloaded, whose processes may still be
+running — it stops each process running as the profile that nothing is waiting
+on, waits until those CLIs and any already on their way out have exited, and
+returns the sessions still mid-turn on it. An empty answer means no CLI of this
+Pockode process runs as the profile; a later call, once those turns are over,
+releases the rest. A stopped session's next message starts on whichever profile
+is current, as after a switch.
+
+It refuses the profile that is still current (`process.ErrProfileCurrent`):
+whatever it stopped would come straight back. With the profile no longer
+current, nothing can start as it after the scan, because `GetOrCreateProcess`
+reads the current profile a second time under `processesMu`, where it starts a
+process and where `ReleaseProfile` scans — a process either was in the map
+before the scan, or started after it as the new current profile. That same
+lock order is why it must not be called with the profile list's lock held: a
+start holds `processesMu` while it reads that list.
+
+What it cannot see is in [cli-profiles.md](cli-profiles.md#switching-and-removing):
+other Pockode processes' CLIs, and starts that are not sessions.
 
 ## Why Subprocess Instead of SDK
 
@@ -392,6 +467,32 @@ covered. A process that has been refused needs no restart
 once the CLI is signed in: both CLIs read the new credentials on the next turn
 (measured on claude 2.1.283 and codex-cli 0.153.0), which is what makes resending
 the message enough.
+
+A record may carry `UsageLimit{Agent}` instead: the CLI said the account it runs
+as hit its usage limit, which a user answers by switching to another account and
+carrying on ([above](#a-session-follows-the-current-profile)). Again only the
+structured signal is read — Claude's synthetic notice labelled `rate_limit`, put
+on the warning rather than on the failed ending after it, which would report one
+limit twice; a Codex `turn/completed` whose error info is `usageLimitExceeded`.
+Claude's label is wider than its name: claude 2.1.325 puts it on every 429 it
+gave up on, temporary capacity among them, so the marker means "this account's
+requests were refused for rate", not "the quota is spent" — a client wording
+it must not claim more. The frame's finer `api_error` is not used: the CLI
+marks it internal and sets `usage_limit_reached` only when the notice's text
+starts with a phrase it knows. Unlike an auth failure, the turn ends as any
+other failure.
+
+Both markers carry `ProfileID`: the account the CLI that produced the record
+ran as. It is a fact about that moment, so it belongs in the record —
+"Events are events, state is state" ([AGENTS.md](../../AGENTS.md)) — and stays
+true after the current account changes, which is exactly when the user reads
+it. Only the id goes in: a profile's name can change, and the client looks it
+up when it draws the record. The adapter cannot know the account, so
+`process` stamps it (`stampProfile`, in `handleEvent`, the one place every
+event passes on its way to the transcript) from `Process.ProfileID` — the
+account the CLI was started as, not the one current when the event arrives.
+The field is not `omitempty`: `""` is the default account, and a marker
+without the key was recorded before accounts were, its account unknown.
 
 ### Session Forking
 
@@ -1820,6 +1921,12 @@ with no error message anywhere:
   shared name would let that cleanup delete the file the successor's CLI has not
   read yet, and a CLI that finds no config comes up with no `work_*` tools at
   all.
+
+On a profile other than the default, the file also carries the user's own
+user-scope MCP servers, which that profile's CLI would otherwise not see
+([cli-profiles.md](cli-profiles.md#a-profile-directory-its-own-credentials-everything-else-linked));
+Pockode's own server wins a clash of names. A session whose servers could not
+be read still starts, with a warning in the chat.
 
 It is still written atomically, for the reason every state file here is
 ([server/AGENTS.md](../../server/AGENTS.md)): a truncated config is a config

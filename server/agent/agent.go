@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 
+	"github.com/pockode/server/cliprofile"
 	"github.com/pockode/server/session"
 )
 
@@ -60,6 +61,12 @@ type StartOptions struct {
 	// session's life too.
 	HTMLFirst  bool
 	DisableMCP bool // skip MCP config (for testing)
+	// Profile is the account the CLI runs as. The zero value is whichever is
+	// current at the start; process.Manager names the one it resolved through
+	// ProfileResolver, so that what it records as the process's profile is
+	// the one the CLI was started as, even if the current one changes between
+	// the two.
+	Profile cliprofile.Selector
 
 	// OnUsage receives what the CLI reports about the session's consumption, as
 	// increments ready to be added to the session's totals. Agents feed it through
@@ -95,6 +102,17 @@ type Agent interface {
 	// Start launches a persistent agent process and returns a Session.
 	// The process stays alive until the context is cancelled or Close is called.
 	Start(ctx context.Context, opts StartOptions) (Session, error)
+}
+
+// ProfileResolver is implemented by an Agent whose CLI can run as one of
+// several accounts (cliprofile). An Agent that does not implement it always
+// runs as its CLI's default one.
+type ProfileResolver interface {
+	// CurrentProfile is the profile a session's CLI started now runs as, ""
+	// being the default one. Read afresh on every call: the current profile is
+	// shared by every Pockode process of the OS user, and any of them may have
+	// changed it.
+	CurrentProfile() (string, error)
 }
 
 // Session represents an active agent session with bidirectional communication.

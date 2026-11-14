@@ -432,9 +432,23 @@ export type ContentPart = { id: string } & (
  */
 export type MessageOrigin = "user" | "system" | "agent";
 
+/**
+ * The account the CLI that produced a record ran as: the cliprofile id, `""`
+ * for the default account. Absent on records kept before accounts were
+ * recorded, whose account is unknown. Only the id; the name is looked up.
+ */
+type RecordedProfileId = string;
+
 /** A record's mark that the CLI was refused for its credentials. */
 export interface AuthFailureRecord {
 	agent: string;
+	profile_id?: RecordedProfileId;
+}
+
+/** A record's mark that the CLI's account hit its usage limit. */
+export interface UsageLimitRecord {
+	agent: string;
+	profile_id?: RecordedProfileId;
 }
 
 export interface SystemMessageStep {
@@ -1421,8 +1435,14 @@ export type ServerNotification =
 			message: string;
 			code: string;
 			auth_failure?: AuthFailureRecord;
+			usage_limit?: UsageLimitRecord;
 	  }
-	| { type: "error"; error: string; auth_failure?: AuthFailureRecord }
+	| {
+			type: "error";
+			error: string;
+			auth_failure?: AuthFailureRecord;
+			usage_limit?: UsageLimitRecord;
+	  }
 	| { type: "done" }
 	| { type: "interrupted" }
 	| { type: "process_ended" }

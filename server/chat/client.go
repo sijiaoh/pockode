@@ -233,7 +233,20 @@ func (c *Client) sendEvent(ctx context.Context, sessionID string, event agent.Me
 		event.MessageID = ""
 	}
 
-	openedTurn, err := proc.SendMessage(agent.Prompt{Text: event.Content, ID: event.MessageID, Attachments: attachments})
+	prompt := agent.Prompt{Text: event.Content, ID: event.MessageID, Attachments: attachments}
+	openedTurn, err := proc.SendMessage(prompt)
+	for errors.Is(err, process.ErrProcessReplaced) {
+		// Stopped between the fetch and here for a successor — to run as the
+		// account chosen since, by another message's fetch. Nothing reached it,
+		// and the record above is this message's either way, so the message
+		// goes to the process the session has now. If that one cannot be had —
+		// the new account cannot start — the record stays without an answer,
+		// as it does for any send that fails after it was written.
+		if proc, err = c.processToDeliverTo(ctx, sessionID, len(attachments) > 0); err != nil {
+			return Sent{}, err
+		}
+		openedTurn, err = proc.SendMessage(prompt)
+	}
 	if err != nil {
 		return Sent{}, err
 	}
