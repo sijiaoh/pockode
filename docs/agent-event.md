@@ -356,7 +356,8 @@ Two field-level decisions worth knowing before adding one — why `AskedAt` and
 `answers` map) need not be here at all — are with the struct itself, in
 [code/agent-integration.md § EventRecord](code/agent-integration.md#eventrecord-unified-event-format).
 
-An `error` or `warning` record may carry `AuthFailure` (`auth_failure: {agent}`):
+An `error` or `warning` record may carry `AuthFailure` (`auth_failure: {agent,
+profile_id}`):
 the CLI named there was refused for its credentials — on the turn's ending, or on
 a retry the turn is still making. It is a fact about that moment; whether the CLI
 is signed in *now* is live status, read from `cli_auth.status`
@@ -366,6 +367,19 @@ one is in
 carrying it also ends the turn as `auth_failed` rather than `failed`, which is
 what stops a work session instead of nudging it
 ([code/work-system.md](code/work-system.md)).
+
+It may carry `UsageLimit` (`usage_limit: {agent, profile_id}`) instead: the CLI
+named there said the account it runs as hit its usage limit — Claude's notice
+labelled `rate_limit` (which Claude also puts on its other rate-limit refusals),
+a Codex turn that failed with `usageLimitExceeded`. The turn ends as any other
+failure.
+
+`profile_id` on both is the account ([code/cli-profiles.md](code/cli-profiles.md))
+the CLI that produced the record was running as, `""` for the default one —
+which account it was then, not which is current now. Only the id: the client
+looks the name up when it draws the record. The process stamps it, from the
+account it started the CLI as. A marker without the key was recorded before
+accounts were, and its account is unknown.
 
 `ParentToolUseID` (`parent_tool_use_id`) is on the `text`, `tool_call` and
 `tool_result` records a **subagent** produced, naming the subagent call it ran

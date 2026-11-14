@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"slices"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -48,6 +49,10 @@ type Manager struct {
 
 	mu        sync.Mutex
 	worktrees map[string]*Worktree
+	// stopping is every worktree taken out of worktrees whose Stop has not yet
+	// returned: its processes may still be running, and ReleaseProfile has to
+	// see them. Guarded by mu; see unloadLocked.
+	stopping map[*Worktree]struct{}
 }
 
 func NewManager(registry *Registry, agents *agent.Registry, dataDir string, budgets session.LeaseBudgets) *Manager {
@@ -495,6 +500,49 @@ func (m *Manager) AgentProcessCount(agentType session.AgentType) int {
 	return n
 }
 
+// ProfileUser is a session whose process still runs as a profile being
+// released, because its turn is not over.
+type ProfileUser struct {
+	Worktree  string // "" for the main one
+	SessionID string
+}
+
+// ReleaseProfile is process.Manager.ReleaseProfile across every worktree:
+// every session process running agentType's CLI as profileID that nothing is
+// waiting on is stopped and waited out, and the sessions still running as it
+// mid-turn are returned. profileID must no longer be current
+// (process.ErrProfileCurrent). Only loaded worktrees are looked at, and the
+// ones still stopping, which is exact: a worktree not loaded has no process,
+// and one loaded since starts its processes as the current profile.
+//
+// What it cannot see is a CLI started by another Pockode process — another
+// cluster node, a server for another project. Profiles are shared machine-wide,
+// so one of those may still run as profileID however this returns.
+func (m *Manager) ReleaseProfile(ctx context.Context, agentType session.AgentType, profileID string) ([]ProfileUser, error) {
+	m.mu.Lock()
+	worktrees := make([]*Worktree, 0, len(m.worktrees)+len(m.stopping))
+	for _, wt := range m.worktrees {
+		worktrees = append(worktrees, wt)
+	}
+	for wt := range m.stopping {
+		worktrees = append(worktrees, wt)
+	}
+	m.mu.Unlock()
+	slices.SortFunc(worktrees, func(a, b *Worktree) int { return strings.Compare(a.Name, b.Name) })
+
+	var busy []ProfileUser
+	for _, wt := range worktrees {
+		ids, err := wt.ProcessManager.ReleaseProfile(ctx, agentType, profileID)
+		if err != nil {
+			return nil, fmt.Errorf("release profile in worktree %q: %w", wt.Name, err)
+		}
+		for _, id := range ids {
+			busy = append(busy, ProfileUser{Worktree: wt.Name, SessionID: id})
+		}
+	}
+	return busy, nil
+}
+
 // RunningTurns is how many sessions, across every worktree, have a turn that
 // stopping their process would end: one under way, running or blocked, or a
 // permission request still waiting for an answer after its turn has ended.
@@ -671,14 +719,14 @@ func (m *Manager) ForceShutdown(name string) {
 	m.mu.Lock()
 	wt, exists := m.worktrees[name]
 	if exists {
-		delete(m.worktrees, name)
+		m.unloadLocked(wt)
 	}
 	m.mu.Unlock()
 
 	if exists {
 		wt.MarkDeleted()
 		wt.NotifyAll(context.Background(), "worktree.deleted", rpc.WorktreeDeletedParams{Name: name})
-		wt.Stop()
+		m.stopUnloaded(wt)
 		slog.Info("worktree force shutdown", "name", name)
 	}
 
@@ -696,11 +744,13 @@ func (m *Manager) Shutdown() {
 	for _, wt := range m.worktrees {
 		worktrees = append(worktrees, wt)
 	}
-	m.worktrees = make(map[string]*Worktree)
+	for _, wt := range worktrees {
+		m.unloadLocked(wt)
+	}
 	m.mu.Unlock()
 
 	for _, wt := range worktrees {
-		wt.Stop()
+		m.stopUnloaded(wt)
 	}
 
 	slog.Info("manager shutdown complete", "worktreesClosed", len(worktrees))
@@ -927,7 +977,7 @@ func (m *Manager) maybeCleanup(target *Worktree) {
 	m.mu.Unlock()
 
 	if shouldStop {
-		target.Stop()
+		m.stopUnloaded(target)
 		slog.Info("worktree idle cleanup", "name", target.Name)
 	}
 }
@@ -949,6 +999,28 @@ func (m *Manager) shouldCleanupLocked(wt *Worktree) bool {
 		return false
 	}
 
-	delete(m.worktrees, wt.Name)
+	m.unloadLocked(wt)
 	return true
+}
+
+// unloadLocked takes wt out of the loaded worktrees, to be stopped by
+// stopUnloaded. Until then it is still among the worktrees ReleaseProfile
+// looks at. Must be called with m.mu held.
+func (m *Manager) unloadLocked(wt *Worktree) {
+	delete(m.worktrees, wt.Name)
+	if m.stopping == nil {
+		m.stopping = make(map[*Worktree]struct{})
+	}
+	m.stopping[wt] = struct{}{}
+}
+
+// stopUnloaded stops a worktree unloadLocked took out, and forgets it once
+// nothing under it is running — or once Stop gave up waiting on a CLI that
+// would not let go of its output (process.Manager.Shutdown's drain timeout),
+// which by then has been killed, so ReleaseProfile stops seeing it too.
+func (m *Manager) stopUnloaded(wt *Worktree) {
+	wt.Stop()
+	m.mu.Lock()
+	delete(m.stopping, wt)
+	m.mu.Unlock()
 }
