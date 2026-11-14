@@ -94,14 +94,20 @@ type Agent struct {
 	// that sits above the user's config.toml. Production sends none; the
 	// integration suite uses them to pin settings over a developer's own config.
 	configOverrides []string
-	// profiles decides which account every CLI this Agent starts runs as: the
-	// current one, read at each start.
+	// profiles decides which account every CLI this Agent starts runs as: a
+	// session's, the one its StartOptions names; a one-shot's, the current one,
+	// read at each start.
 	profiles *cliprofile.Store
 }
 
 // New creates a new Codex Agent.
 func New(profiles *cliprofile.Store) *Agent {
 	return &Agent{profiles: profiles}
+}
+
+// CurrentProfile implements agent.ProfileResolver.
+func (a *Agent) CurrentProfile() (string, error) {
+	return a.profiles.Resolve(session.AgentTypeCodex, cliprofile.SelectCurrent())
 }
 
 // Start launches a persistent `codex app-server` process and opens this
@@ -122,7 +128,7 @@ func (a *Agent) Start(ctx context.Context, opts agent.StartOptions) (agent.Sessi
 
 	log := slog.With("sessionId", opts.SessionID, "agent", "codex")
 
-	profile, err := a.profiles.Launch(session.AgentTypeCodex, cliprofile.SelectCurrent())
+	profile, err := a.profiles.Launch(session.AgentTypeCodex, opts.Profile)
 	if err != nil {
 		cancel()
 		return nil, err

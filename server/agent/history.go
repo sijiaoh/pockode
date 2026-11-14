@@ -46,7 +46,10 @@ type EventRecord struct {
 	Code            string         `json:"code,omitempty"`
 	// AuthFailure marks an error or warning record as a credentials refusal;
 	// see the type.
-	AuthFailure           *AuthFailure       `json:"auth_failure,omitempty"`
+	AuthFailure *AuthFailure `json:"auth_failure,omitempty"`
+	// UsageLimit marks an error or warning record as the account's usage limit
+	// being hit; see the type.
+	UsageLimit            *UsageLimit        `json:"usage_limit,omitempty"`
 	RequestID             string             `json:"request_id,omitempty"`
 	PermissionSuggestions []PermissionUpdate `json:"permission_suggestions,omitempty"`
 	// Questions is a question_posted record's one question, in a one-element

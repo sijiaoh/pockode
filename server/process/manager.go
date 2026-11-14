@@ -5,11 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/pockode/server/agent"
+	"github.com/pockode/server/cliprofile"
 	"github.com/pockode/server/logger"
 	"github.com/pockode/server/session"
 )
@@ -67,6 +69,11 @@ type Manager struct {
 
 	processesMu sync.Mutex
 	processes   map[string]*Process
+	// exiting is every process taken out of processes whose stream has not yet
+	// ended — a CLI that may still be running though no session answers to it
+	// any more. ReleaseProfile waits these out too. Guarded by processesMu;
+	// added by deleteProcess, removed once the process's done is closed.
+	exiting map[*Process]struct{}
 	// agentCounts is how many of processes run each agent type, kept beside
 	// the map so it can be read without processesMu, which a process start
 	// holds for as long as the CLI takes to come up (a Codex handshake takes
@@ -110,6 +117,18 @@ var ErrManagerClosed = errors.New("process manager is shut down")
 // ordinary message (docs/lifecycle-ui.md §5.1, §8).
 var ErrRequestNotPending = errors.New("this request is no longer waiting for an answer")
 
+// ErrProcessClosed is returned when a message is handed to a process that has
+// been stopped since it was fetched — the session deleted, its work stopped,
+// its settings changed. The message reached nothing, and nothing is to be
+// started for it in that process's place.
+var ErrProcessClosed = errors.New("the session's process was stopped before the message reached it")
+
+// ErrProcessReplaced is ErrProcessClosed for a process stopped so that a
+// successor could take the session over (GetOrCreateProcess). The message
+// reached nothing, and the session is meant to go on: the sender fetches the
+// session's process again and hands it to that one.
+var ErrProcessReplaced = errors.New("the session's process was replaced before the message reached it")
+
 // Process holds a running agent process. Do not cache references.
 type Process struct {
 	sessionID string
@@ -117,7 +136,12 @@ type Process struct {
 	// htmlFirst is the guidance this process was started with. It cannot be
 	// changed on a running CLI, so a process whose value is not the session's is
 	// replaced rather than reused (GetOrCreateProcess).
-	htmlFirst    bool
+	htmlFirst bool
+	// profileID is the account this process's CLI was started as, "" for the
+	// default one (cliprofile). A CLI cannot change account while it runs, so a
+	// process whose profile is no longer the current one is replaced on the next
+	// message once its turn is over (GetOrCreateProcess).
+	profileID    string
 	agentSession agent.Session
 	sessionStore session.Store
 	manager      *Manager // back-reference for broadcasting to subscribers
@@ -140,6 +164,17 @@ type Process struct {
 	// Prevents stale buffered events from emitting state changes (e.g. running/idle)
 	// that would incorrectly interact with the work engine.
 	closed atomic.Bool
+	// replaced is set, with closed, by stopIfIdle: the process was stopped for a
+	// successor rather than for the session to stop, which is what tells a
+	// sender it raced to hand its message on (ErrProcessReplaced).
+	replaced atomic.Bool
+	// sendMu makes "is anything waiting on this process" and "a prompt opens a
+	// turn on it" one step each, so that stopIfIdle and SendMessage cannot
+	// interleave: either the prompt opened its turn first and the process is
+	// kept, or the process was closed first and the prompt is refused with
+	// ErrProcessReplaced, to go to the successor. Held over the turn reduction
+	// only — never over a callback, nor while processesMu is held.
+	sendMu sync.Mutex
 	// activated mirrors the session's Activated flag so the store is written once,
 	// on the transition, rather than on every event the agent produces.
 	activated atomic.Bool
@@ -187,6 +222,7 @@ func NewManager(agents *agent.Registry, worktree, workDir, dataDir, mcpServerDir
 		sessionStore: store,
 		budgets:      budgets,
 		processes:    make(map[string]*Process),
+		exiting:      make(map[*Process]struct{}),
 		agentCounts:  make(map[session.AgentType]int),
 		settler:      session.NewTurnSettler(session.DefaultSettleDelay),
 		ctx:          ctx,
@@ -245,8 +281,28 @@ func (m *Manager) EmitMessage(sessionID string, event agent.AgentEvent, seq sess
 
 // GetOrCreateProcess launches the CLI described by meta, or returns the process
 // already running for meta.ID. A session that has been activated is resumed.
+//
+// The account is checked on every call, because choosing one is machine-wide
+// and takes effect on each session's next message, wherever it was chosen: a
+// process started as a profile that is no longer current is stopped and a
+// successor resumed in its place as the current one — what happens anyway when
+// the idle lease collects a process and the next message arrives. Only a
+// process nothing is waiting on is stopped (stopIfIdle). One whose turn is
+// running, parked on background work or waiting on a permission answer is
+// kept for this message, and asked again on the next.
+//
+// The old process has exited before its successor starts: a session has one
+// CLI at a time, which is all that keeps two from writing one conversation —
+// Claude has no lock of its own for that.
 func (m *Manager) GetOrCreateProcess(ctx context.Context, meta session.SessionMeta) (*Process, bool, error) {
 	sessionID := meta.ID
+	profileID, err := m.currentProfile(meta.AgentType)
+	if err != nil {
+		return nil, false, err
+	}
+	// busy is a process on another profile that was found mid-turn, and is
+	// used as it is this time.
+	var busy *Process
 	for {
 		m.processesMu.Lock()
 
@@ -261,10 +317,33 @@ func (m *Manager) GetOrCreateProcess(ctx context.Context, meta session.SessionMe
 		if !exists {
 			break
 		}
-		if proc.htmlFirst == meta.HTMLFirst {
-			proc.touch()
+		if proc.closed.Load() {
+			// Being replaced. Its stream takes it out of the map once the CLI has
+			// exited, which is when a successor may start.
 			m.processesMu.Unlock()
-			return proc, false, nil
+			<-proc.done
+			continue
+		}
+		if proc.htmlFirst == meta.HTMLFirst {
+			if proc.profileID == profileID || proc == busy {
+				proc.touch()
+				m.processesMu.Unlock()
+				return proc, false, nil
+			}
+			m.processesMu.Unlock()
+			log := slog.With("sessionId", sessionID, "profile", proc.profileID, "currentProfile", profileID)
+			if stopped, err := proc.stopIfIdle(); !stopped {
+				if err != nil {
+					log.Warn("could not read the turn of a process to replace; keeping it", "error", err)
+				} else {
+					log.Info("process runs as a profile that is no longer current; keeping it until its turn is over")
+				}
+				busy = proc
+				continue
+			}
+			log.Info("process runs as a profile that is no longer current; replacing it")
+			<-proc.done
+			continue
 		}
 		m.processesMu.Unlock()
 		// Which of the two is out of date is the store's to say. A caller whose
@@ -290,6 +369,14 @@ func (m *Manager) GetOrCreateProcess(ctx context.Context, meta session.SessionMe
 		m.processesMu.Unlock()
 		return nil, false, err
 	}
+	// Read again under processesMu, where the process is started and put in the
+	// map: the one read above may predate a switch, and ReleaseProfile relies
+	// on no process starting, after it has looked, as a profile that was no
+	// longer current when it was called.
+	if profileID, err = m.currentProfile(meta.AgentType); err != nil {
+		m.processesMu.Unlock()
+		return nil, false, err
+	}
 
 	// Use manager's context for process lifecycle, not request context
 	opts := agent.StartOptions{
@@ -303,6 +390,7 @@ func (m *Manager) GetOrCreateProcess(ctx context.Context, meta session.SessionMe
 		Model:        meta.Model,
 		Effort:       meta.Effort,
 		HTMLFirst:    meta.HTMLFirst,
+		Profile:      cliprofile.Select(profileID),
 		OnUsage:      m.usageRecorder(sessionID),
 	}
 	sess, err := ag.Start(m.ctx, opts)
@@ -315,6 +403,7 @@ func (m *Manager) GetOrCreateProcess(ctx context.Context, meta session.SessionMe
 		sessionID:    sessionID,
 		agentType:    meta.AgentType,
 		htmlFirst:    meta.HTMLFirst,
+		profileID:    profileID,
 		agentSession: sess,
 		sessionStore: m.sessionStore,
 		manager:      m,
@@ -335,6 +424,11 @@ func (m *Manager) GetOrCreateProcess(ctx context.Context, meta session.SessionMe
 	m.wg.Add(1)
 	go func() {
 		defer m.wg.Done()
+		defer func() {
+			m.processesMu.Lock()
+			delete(m.exiting, proc)
+			m.processesMu.Unlock()
+		}()
 		defer close(proc.done)
 		defer func() {
 			if r := recover(); r != nil {
@@ -385,8 +479,108 @@ func (m *Manager) GetOrCreateProcess(ctx context.Context, meta session.SessionMe
 		m.onStateChange(StateChangeEvent{SessionID: sessionID, State: ProcessStateIdle, IsInitial: true})
 	}
 	slog.Info("process created", "sessionId", sessionID, "resume", meta.Activated,
-		"agentType", meta.AgentType, "mode", meta.Mode, "model", meta.Model, "effort", meta.Effort, "htmlFirst", meta.HTMLFirst)
+		"agentType", meta.AgentType, "mode", meta.Mode, "model", meta.Model, "effort", meta.Effort, "htmlFirst", meta.HTMLFirst, "profile", profileID)
 	return proc, true, nil
+}
+
+// currentProfile is the profile a process of agentType started now runs as,
+// "" for the default one and for an agent with no profiles at all.
+func (m *Manager) currentProfile(agentType session.AgentType) (string, error) {
+	ag, err := m.agents.Get(agentType)
+	if err != nil {
+		return "", err
+	}
+	resolver, ok := ag.(agent.ProfileResolver)
+	if !ok {
+		return "", nil
+	}
+	id, err := resolver.CurrentProfile()
+	if err != nil {
+		return "", fmt.Errorf("read the current %s profile: %w", agentType, err)
+	}
+	return id, nil
+}
+
+// ErrProfileCurrent is returned by ReleaseProfile for the profile that is still
+// the current one: any process stopped for it would come back as it on its
+// session's next message.
+var ErrProfileCurrent = errors.New("the profile is still the current one")
+
+// ReleaseProfile asks this manager's sessions to stop running agentType's CLI
+// as profileID, so that its directory can be removed: every such process
+// nothing is waiting on is stopped (stopIfIdle), and it and every process
+// already on its way out are waited out until their CLIs have exited. It
+// returns the sessions whose process still runs as the profile — each one
+// mid-turn, running, parked on background work or waiting on a permission
+// answer — which a later call, once their turns are over, can release too. A
+// session whose process was stopped starts its next one as whichever profile
+// is current, like any session moved by a switch, and a message racing the
+// stop goes to that successor (ErrProcessReplaced).
+//
+// profileID must no longer be current when this is called (ErrProfileCurrent
+// otherwise); then nothing starts as it afterwards — GetOrCreateProcess reads
+// the current profile again under processesMu, where it starts a process — and
+// an empty result means that no CLI of this manager runs as it. Only this
+// manager's processes are seen: a CLI another Pockode process started —
+// another cluster node, a server for another project — may still run as the
+// profile, and nothing here can know of it.
+//
+// Must not be called while holding the lock of the profile list
+// (cliprofile.Store): a process start holds processesMu while it reads that
+// list, and this takes processesMu.
+//
+// It returns early with ctx's error if ctx ends while a stopped CLI is still
+// exiting; a later call has only to wait for it.
+func (m *Manager) ReleaseProfile(ctx context.Context, agentType session.AgentType, profileID string) (busy []string, err error) {
+	current, err := m.currentProfile(agentType)
+	if err != nil {
+		return nil, err
+	}
+	if current == profileID {
+		return nil, fmt.Errorf("%w: %s profile %q", ErrProfileCurrent, agentType, profileID)
+	}
+
+	runsAs := func(p *Process) bool { return p.agentType == agentType && p.profileID == profileID }
+	var candidates, stopping []*Process
+	m.processesMu.Lock()
+	for _, p := range m.processes {
+		if runsAs(p) {
+			candidates = append(candidates, p)
+		}
+	}
+	// Taken out of the map, so no session answers to them, but their CLIs may
+	// not have exited yet: closed by a lease, a retirement, a shutdown.
+	for p := range m.exiting {
+		if runsAs(p) {
+			stopping = append(stopping, p)
+		}
+	}
+	m.processesMu.Unlock()
+
+	for _, p := range candidates {
+		stopped, err := p.stopIfIdle()
+		if err != nil {
+			return nil, err
+		}
+		// A process already closed — replaced, or closed for its session — is
+		// on its way out, and only has to be waited out.
+		if stopped || p.closed.Load() {
+			stopping = append(stopping, p)
+			continue
+		}
+		busy = append(busy, p.sessionID)
+	}
+	slog.Info("releasing a profile", "agentType", agentType, "profile", profileID,
+		"stopping", len(stopping), "busy", len(busy))
+	for _, p := range stopping {
+		select {
+		case <-p.done:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	slices.Sort(busy)
+	return busy, nil
 }
 
 // usageRecorder builds the callback the agent reports consumption through.
@@ -506,6 +700,7 @@ func (m *Manager) deleteProcess(sessionID string) {
 		return
 	}
 	delete(m.processes, sessionID)
+	m.exiting[p] = struct{}{}
 	m.agentCountsMu.Lock()
 	m.agentCounts[p.agentType]--
 	m.agentCountsMu.Unlock()
@@ -664,7 +859,9 @@ func (m *Manager) endRetirement(p *Process) {
 	if !p.retiring.Load() {
 		return
 	}
-	if len(m.removeWhere(func(candidate *Process) bool { return candidate == p })) == 0 {
+	// A process already closed is being replaced: it stays in the map until its
+	// CLI has exited, and removing it here would let a successor start beside it.
+	if len(m.removeWhere(func(candidate *Process) bool { return candidate == p && !p.closed.Load() })) == 0 {
 		return
 	}
 	p.closed.Store(true)
@@ -974,8 +1171,12 @@ func (m *Manager) endBackgroundWait(p *Process, lease session.Lease, now time.Ti
 // message moves lastActive or the turn state, so the lease it was condemned on
 // is no longer expired and it is spared instead.
 func (m *Manager) closeProcess(p *Process, now time.Time, reason string, log *slog.Logger) {
+	// A process already closed is being replaced (stopIfIdle): it is idle, so
+	// its lease may well have run out, but it stays in the map until its CLI has
+	// exited — removing it now would let a successor start beside it.
 	removed := m.removeWhere(func(candidate *Process) bool {
-		return candidate == p && m.budgets.LeaseFor(p.turnState(), p.getLastActive()).Expired(now)
+		return candidate == p && !p.closed.Load() &&
+			m.budgets.LeaseFor(p.turnState(), p.getLastActive()).Expired(now)
 	})
 	if len(removed) == 0 {
 		return
@@ -1028,9 +1229,27 @@ func (p *Process) noteAgent(note string) {
 // both believe they started it, and the second message would lose its boundary.
 // False when the send failed, which is the safe way round: nothing was
 // delivered, so nothing may claim it was read.
+//
+// A process stopped since it was fetched refuses with ErrProcessReplaced or
+// ErrProcessClosed, before anything is recorded; see sendMu.
 func (p *Process) SendMessage(prompt agent.Prompt) (openedTurn bool, err error) {
+	p.sendMu.Lock()
+	if p.closed.Load() {
+		p.sendMu.Unlock()
+		if p.replaced.Load() {
+			return false, ErrProcessReplaced
+		}
+		return false, ErrProcessClosed
+	}
+	// Before the turn opens: a retirement that sees the open turn while the
+	// flag is still up would end the turn this prompt is starting.
 	p.retiring.Store(false)
-	openedTurn = p.startTurn()
+	in := session.TurnInput{Signal: session.SignalPrompt, At: time.Now()}
+	transition := p.applyTurn(context.Background(), in)
+	p.sendMu.Unlock()
+	p.announceTurn(in, transition)
+
+	openedTurn = transition.Started
 	if err = p.agentSession.SendMessage(prompt); err != nil {
 		return false, err
 	}
@@ -1047,6 +1266,39 @@ func (p *Process) ReportsMessageIngest() bool {
 
 // HTMLFirst is the guidance this process was started with.
 func (p *Process) HTMLFirst() bool { return p.htmlFirst }
+
+// ProfileID is the account this process's CLI runs as, "" for the default one.
+func (p *Process) ProfileID() string { return p.profileID }
+
+// stopIfIdle closes the process for a successor if nothing is waiting on it —
+// no turn open, no prompt or background work in the way: what the idle lease
+// asks before collecting one — and reports whether it did; a turn that cannot
+// be read is an error, and the process is left as it is. The CLI is told to
+// stop; the process stays in the map, closed, until its stream has ended
+// (done), so that nothing starts the successor while the CLI is still running.
+//
+// The turn is read from the store, not from turnState: that copy can lag a
+// send and an event that raced, and a stale idle here would end a turn that
+// has just begun. The store is asked only when there is a stop to decide.
+func (p *Process) stopIfIdle() (bool, error) {
+	p.sendMu.Lock()
+	defer p.sendMu.Unlock()
+	if p.closed.Load() {
+		return false, nil
+	}
+	meta, found, err := p.sessionStore.Get(p.sessionID)
+	if err != nil {
+		return false, fmt.Errorf("read the turn of session %s: %w", p.sessionID, err)
+	}
+	var noBudgets session.LeaseBudgets
+	if found && noBudgets.LeaseFor(meta.Turn, time.Time{}).Kind != session.LeaseIdle {
+		return false, nil
+	}
+	p.replaced.Store(true)
+	p.closed.Store(true)
+	p.agentSession.Close()
+	return true, nil
+}
 
 // ReceivesAttachments reports whether this session's agent can be handed the
 // files a message carries. See agent.AttachmentReceiver.
@@ -1072,20 +1324,14 @@ func (p *Process) SendInterrupt() error {
 	return p.agentSession.SendInterrupt()
 }
 
-// startTurn records that a prompt has been handed to the agent, and reports
-// whether that prompt opened the turn rather than joining one already under way.
-func (p *Process) startTurn() bool {
-	return p.signal(session.SignalPrompt, "")
-}
-
 // answerPrompt records that the user has answered the prompt with this id.
 func (p *Process) answerPrompt(requestID string) {
 	p.signal(session.SignalAnswered, requestID)
 }
 
 // signal is the send path's way into the reducer, for the things that happen to
-// a session without an agent event to carry them: a prompt going out, an answer
-// going back.
+// a session without an agent event to carry them: an answer going back. A
+// prompt going out is the other, which SendMessage reduces itself, under sendMu.
 //
 // It reports whether the signal opened a turn; see session.TurnTransition.
 // A closed process reduces nothing, so it opened nothing either.
@@ -1093,12 +1339,18 @@ func (p *Process) signal(sig session.TurnSignal, requestID string) bool {
 	if p.closed.Load() {
 		return false
 	}
-	ctx := context.Background()
 	in := session.TurnInput{Signal: sig, RequestID: requestID, At: time.Now()}
-	transition := p.applyTurn(ctx, in)
-	p.manager.emitTurn(p.sessionID, transition)
-	p.recordExpiries(ctx, slog.With("sessionId", p.sessionID), in.Signal, transition.Expired)
+	transition := p.applyTurn(context.Background(), in)
+	p.announceTurn(in, transition)
 	return transition.Started
+}
+
+// announceTurn tells the listeners what a signal from the send path did to the
+// turn, and records the prompts it ended. Must not be called with sendMu or
+// processesMu held: the listeners take processesMu.
+func (p *Process) announceTurn(in session.TurnInput, transition session.TurnTransition) {
+	p.manager.emitTurn(p.sessionID, transition)
+	p.recordExpiries(context.Background(), slog.With("sessionId", p.sessionID), in.Signal, transition.Expired)
 }
 
 // recordExpiries writes what became of each prompt this input ended without an
@@ -1480,6 +1732,7 @@ func (p *Process) inject(events ...agent.AgentEvent) {
 // may move the turn, it is usually recorded, and it is always broadcast.
 func (p *Process) handleEvent(ctx context.Context, log *slog.Logger, event agent.AgentEvent) {
 	event = p.pageCalls.stamp(event)
+	event = stampProfile(event, p.profileID)
 	eventType := event.EventType()
 	log.Debug("streaming event", "type", eventType)
 

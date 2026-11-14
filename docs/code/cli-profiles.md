@@ -8,7 +8,8 @@ in [agent-integration.md](agent-integration.md#which-account-a-cli-runs-as);
 signing a profile in, in [cli-auth.md](cli-auth.md#which-profile).
 
 What is wired up today is the running side: every start of a CLI runs as its
-current profile. Adding, choosing and removing profiles have no RPC or screen
+current profile, and a session already open moves to a newly chosen one on its
+next message. Adding, choosing and removing profiles have no RPC or screen
 yet; `Store` already has them for the profile screens to come.
 
 Verified against Claude Code 2.1.325 and codex-cli 0.169.0, on macOS.
@@ -83,7 +84,8 @@ under it, in `cli-profiles/<cli>/<id>/`.
   Keychain item for the profile outlives it unless the profile is signed out
   first, and a CLI still running as the profile recreates the directory and
   writes there instead of into the shared one. Both are the caller's to
-  prevent — sign out, and stop the profile's CLIs, before removing.
+  prevent — sign out, and stop the profile's CLIs, before removing
+  ([below](#switching-and-removing)).
 
 ## A profile directory: its own credentials, everything else linked
 
@@ -130,11 +132,76 @@ private database with a shared write-ahead log corrupts both.
 
 Claude's `.claude.json` is private because it holds the signed-in account, but
 it is more than that: it also keeps user-scope MCP servers (`claude mcp add -s
-user`), per-project state and onboarding. Without `CLAUDE_CONFIG_DIR` the
+user`), local-scope ones (`claude mcp add`'s default, under `projects`),
+per-project state and onboarding. Without `CLAUDE_CONFIG_DIR` the
 default profile's copy is `~/.claude.json`, beside `~/.claude` rather than in
-it, so there is nothing to link either way: a profile starts with an empty one,
-and the user's own user-scope MCP servers are absent there until added again.
-Pockode's own MCP server is unaffected — it is given on the command line.
+it, so there is nothing to link either way: a profile starts with an empty one.
+
+Left at that, a session would lose the user's user-scope MCP servers the moment
+it switched accounts. So a session on another profile is given them on the
+command line (`server/agent/claude/user_mcp.go`): Pockode reads `mcpServers`
+from the default profile's file — only that key, so an entry elsewhere in a
+shape it does not expect cannot cost the user their servers — and puts the
+entries, as Claude wrote them, into the `--mcp-config` it already writes for
+its own server. It never writes the profile's `.claude.json`: Claude rewrites
+that file whenever it likes, and two writers would race. It reads without a
+lock, since Claude replaces the file by rename and a lock would leave a
+`.lock` beside a file that is not Pockode's.
+
+`--mcp-config` outranks every scope Claude reads itself (measured on claude
+2.1.325: a server named there replaces a local- or user-scope one of the same
+name). Given blindly, the user's server would override a project's `.mcp.json`
+or a local-scope server of the same name — the opposite of what the default
+profile does. So a server is left out when one of its name is in a scope that
+should win: the profile's own user scope, its local scope, or a `.mcp.json` in
+the working directory or any directory above it. For the same reason the
+default profile is given nothing: Claude reads its user scope itself. Pockode's
+own server wins a clash with the user's — without it a session has no `work_*`
+tools.
+
+The local scope is the one entry of `projects` Claude keys the working
+directory by, and the key is matched exactly as Claude picks it (measured on
+claude 2.1.325, which reads the files under `.git` rather than asking git):
+outside a repository, the directory itself and nothing above it; anywhere in a
+main worktree, its top level; in a linked worktree, the main one's — the parent
+of the common git directory, or that directory itself when it is not named
+`.git` (a bare repository, or one cloned with `--separate-git-dir`). Where a
+worktree sits says nothing about its repository — Pockode makes its own beside
+it, in `<repository>-worktrees/` — so Pockode asks git once (`git rev-parse
+--absolute-git-dir --git-common-dir --show-toplevel`, and only when the
+profile's file has any `projects` at all) and tells a linked worktree apart by
+its git directory. Git runs without the server's own `GIT_*` variables and across
+filesystem boundaries, so it finds the repository from the `.git` files upwards
+as Claude does, and in English, so that "not a git repository" can be told
+from other failures. Matching every directory above instead would be wrong both
+ways: it misses a worktree outside the repository, and it takes a local server
+added in, say, the home directory for one that should win, dropping the user's.
+
+When git cannot answer — not installed, a repository it refuses to read, a
+timeout, or a pruned linked worktree, for which the key Claude would use is
+not known — the session still starts: every directory from the working one up
+counts, which is still right inside a main worktree, and a warning is logged
+that the user's servers may override the profile's own. Only then can a
+worktree outside the repository miss the profile's local server of a name, or
+a local server keyed above the project drop the user's.
+
+A missing default file is no servers. One that cannot be read or parsed does
+not stop the session — a damaged file of the user's would otherwise stop every
+session on the profile — but it is not silent either: the session starts with
+Pockode's server alone and says so in the chat (`user_mcp_servers_unavailable`),
+on every start until it is fixed. A single bad entry is passed through as it
+is: Claude skips an invalid entry in `--mcp-config` and starts the rest.
+One-shots are unaffected: they run with `--strict-mcp-config` and no servers at
+all. Codex needs none of this — its MCP servers are in `config.toml`, which is
+shared.
+
+Still lost on another profile:
+
+- **Local-scope servers.** They live in the default profile's `projects`, and
+  only the user scope is carried over.
+- **A remote server's OAuth sign-in.** Its tokens are kept with the account's
+  credentials (the Keychain on macOS), so it has to be authorized again under
+  each profile.
 
 Configuration is shared on purpose — `settings.json`, `config.toml`, plugins,
 models cache. Both CLIs were measured writing through the link into the shared
@@ -172,7 +239,43 @@ profile's directory as its default. `Prepare` refuses there — linking a profil
 into another would chain them instead of sharing the user's directory — and
 says to start Pockode without the variable.
 
-## Windows: symbolic links required
+## Switching and removing
+
+Choosing another profile changes no running CLI, and nothing has to be told:
+every session reads the current profile again on its next message, and one
+whose process runs as another is moved over once its turn is over, carrying on
+the same conversation
+([agent-integration.md](agent-integration.md#a-session-follows-the-current-profile)).
+A turn in progress — running, parked on background work, or waiting on a
+permission answer — is not interrupted. Because the current profile lives in the
+file every Pockode process of the OS user shares, a switch made on another
+cluster node takes effect here on the next message just the same, as a sign-in
+or sign-out made elsewhere already does.
+
+Removing a profile has one more step before `Remove`: no CLI may still run as
+it, or that CLI recreates the directory and writes a real `projects/` into it,
+and from then on the shared conversations are split. The profile has to stop
+being current first, and then `worktree.Manager.ReleaseProfile` stops this
+server's idle sessions on it, waits for their CLIs to exit, and names the
+sessions still mid-turn on it, to be released once their turns end
+([agent-integration.md](agent-integration.md#releasing-a-profile)).
+
+**Known risks, not covered by that step:**
+
+- **Other Pockode processes.** `ReleaseProfile` sees only the CLIs its own
+  server started. A CLI started by another cluster node, or by a server for
+  another project, may still run as the profile, and nothing on this side can
+  know; removing the profile under it splits the conversations as above. Those
+  sessions do move off it on their next message, since the profile is no longer
+  current — but one left idle keeps its CLI until its lease collects it.
+- **Starts that are not sessions.** A one-shot (a commit message draft, say) runs
+  as the current profile for seconds; one started before the switch may still be
+  running when the directory goes. A status read or a sign-out runs as the
+  profile it names, briefly and with a timeout. A sign-in runs as its profile for
+  up to the sign-in timeout, minutes, writing credentials into that very
+  directory — it is the caller's to cancel through `cliauth` before removing.
+
+
 
 A profile directory is made of symbolic links, files among them, and nothing
 else will do: a junction links only directories, and a hard link to a SQLite

@@ -211,6 +211,17 @@ func TestParseLine(t *testing.T) {
 			}},
 		},
 		{
+			// The CLI's label for an account limit, as claude 2.1.325 writes it on
+			// the five-hour and weekly limit notices.
+			name:  "synthetic rate_limit message is marked as a usage limit",
+			input: `{"type":"assistant","message":{"model":"<synthetic>","role":"assistant","type":"message","content":[{"type":"text","text":"You've hit your limit \u00b7 resets 3pm"}]},"error":"rate_limit","is_api_error_message":true}`,
+			expected: []agent.AgentEvent{agent.WarningEvent{
+				Message:    "You've hit your limit \u00b7 resets 3pm",
+				Code:       "rate_limit",
+				UsageLimit: &agent.UsageLimit{Agent: session.AgentTypeClaude},
+			}},
+		},
+		{
 			// The CLI answers its own resume continuation prompt with this, and does
 			// not label it. Still not the agent talking, so it takes the same path.
 			name:  "synthetic assistant message without a label falls back to a generic code",
@@ -1381,7 +1392,7 @@ func TestWriteMCPConfig_CarriesIdentity(t *testing.T) {
 		MCPServerDir: serverDir,
 		SessionID:    "s1",
 		Worktree:     "feature-x",
-	})
+	}, nil, slog.Default())
 	if err != nil {
 		t.Fatalf("writeMCPConfig: %v", err)
 	}
@@ -1412,7 +1423,7 @@ func TestWriteMCPConfig_CarriesIdentity(t *testing.T) {
 // passing an empty --worktree would make the proxy's flags depend on which
 // worktree it happens to be in.
 func TestWriteMCPConfig_MainWorktreeIsUnnamed(t *testing.T) {
-	path, _, err := writeMCPConfig(agent.StartOptions{DataDir: t.TempDir(), SessionID: "s1"})
+	path, _, err := writeMCPConfig(agent.StartOptions{DataDir: t.TempDir(), SessionID: "s1"}, nil, slog.Default())
 	if err != nil {
 		t.Fatalf("writeMCPConfig: %v", err)
 	}
@@ -1428,7 +1439,7 @@ func TestWriteMCPConfig_MainWorktreeIsUnnamed(t *testing.T) {
 // session is told so through the system prompt instead (systemPromptArgs).
 func TestWriteMCPConfig_SameInEveryMode(t *testing.T) {
 	proxy := func(htmlFirst bool) []string {
-		path, _, err := writeMCPConfig(agent.StartOptions{DataDir: t.TempDir(), SessionID: "s1", HTMLFirst: htmlFirst})
+		path, _, err := writeMCPConfig(agent.StartOptions{DataDir: t.TempDir(), SessionID: "s1", HTMLFirst: htmlFirst}, nil, slog.Default())
 		if err != nil {
 			t.Fatalf("writeMCPConfig: %v", err)
 		}
@@ -1498,11 +1509,11 @@ func TestWriteMCPConfig_PerProcessRun(t *testing.T) {
 	dataDir := t.TempDir()
 	opts := agent.StartOptions{DataDir: dataDir, SessionID: "s1"}
 
-	first, removeFirst, err := writeMCPConfig(opts)
+	first, removeFirst, err := writeMCPConfig(opts, nil, slog.Default())
 	if err != nil {
 		t.Fatalf("writeMCPConfig first run: %v", err)
 	}
-	second, _, err := writeMCPConfig(opts)
+	second, _, err := writeMCPConfig(opts, nil, slog.Default())
 	if err != nil {
 		t.Fatalf("writeMCPConfig second run: %v", err)
 	}

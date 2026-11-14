@@ -222,3 +222,24 @@ func TestAuthFailure_SubagentItemsDoNotClearIt(t *testing.T) {
 		t.Errorf("a subagent's item cleared the turn's auth mark: %+v", got)
 	}
 }
+
+// A turn the account's usage limit failed is marked as one, and only that turn:
+// the usage limit is in the failed turn's own info (see docs/testing.md).
+func TestUsageLimit_LimitedTurnIsMarked(t *testing.T) {
+	sess := newTestSession()
+	defer sess.cancel()
+
+	sess.adoptTurn("u")
+	sess.notify("turn/completed", `{"threadId":"t","turn":{"id":"u","items":[],"status":"failed","error":{"message":"You've hit your usage limit.","codexErrorInfo":"usageLimitExceeded"}}}`)
+	got := drainEvents(sess.events)[0].(agent.ErrorEvent)
+	want := agent.UsageLimit{Agent: session.AgentTypeCodex}
+	if got.UsageLimit == nil || *got.UsageLimit != want || got.AuthFailure != nil {
+		t.Errorf("limited turn = %+v, want usage limit %v and no auth mark", got, want)
+	}
+
+	sess.adoptTurn("v")
+	sess.notify("turn/completed", `{"threadId":"t","turn":{"id":"v","items":[],"status":"failed","error":{"message":"boom","codexErrorInfo":"other"}}}`)
+	if got := drainEvents(sess.events)[0].(agent.ErrorEvent); got.UsageLimit != nil {
+		t.Errorf("another failure was marked as a usage limit: %+v", got)
+	}
+}

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/pockode/server/agent"
+	"github.com/pockode/server/cliprofile"
 	"github.com/pockode/server/session"
 )
 
@@ -44,6 +45,14 @@ func createActivatedSession(t *testing.T, store session.Store, id string) sessio
 	return meta
 }
 
+// startTurn hands proc a prompt, which opens a turn on an idle session.
+func startTurn(t *testing.T, proc *Process) {
+	t.Helper()
+	if _, err := proc.SendMessage(agent.Prompt{Text: "go"}); err != nil {
+		t.Fatalf("SendMessage: %v", err)
+	}
+}
+
 func mockRegistry(mock *mockAgent) *agent.Registry {
 	r := agent.NewRegistry()
 	r.Register(session.AgentTypeClaude, mock)
@@ -54,6 +63,31 @@ type mockAgent struct {
 	mu         sync.Mutex
 	startCalls []startCall
 	sessions   map[string]*mockSession
+	// profile is what CurrentProfile answers, and profileErr fails it.
+	profile    string
+	profileErr error
+	// exitGate, when set, holds every session's exit after Close until it is
+	// closed: a CLI that takes its time to go.
+	exitGate chan struct{}
+	// afterProfileRead, when set, runs after each CurrentProfile has been
+	// answered: a switch landing right after a read.
+	afterProfileRead func()
+}
+
+func (m *mockAgent) CurrentProfile() (string, error) {
+	m.mu.Lock()
+	id, err, after := m.profile, m.profileErr, m.afterProfileRead
+	m.mu.Unlock()
+	if after != nil {
+		after()
+	}
+	return id, err
+}
+
+func (m *mockAgent) setProfile(id string) {
+	m.mu.Lock()
+	m.profile = id
+	m.mu.Unlock()
 }
 
 type startCall struct {
@@ -63,6 +97,7 @@ type startCall struct {
 	dataDir      string
 	mcpServerDir string
 	worktree     string
+	profile      cliprofile.Selector
 	// onUsage is the callback the manager installed, so a test can report usage
 	// the way the real CLI parsers do.
 	onUsage func(session.UsageReport)
@@ -72,14 +107,15 @@ func (m *mockAgent) Start(ctx context.Context, opts agent.StartOptions) (agent.S
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	m.startCalls = append(m.startCalls, startCall{opts.SessionID, opts.Resume, opts.Mode, opts.DataDir, opts.MCPServerDir, opts.Worktree, opts.OnUsage})
+	m.startCalls = append(m.startCalls, startCall{opts.SessionID, opts.Resume, opts.Mode, opts.DataDir, opts.MCPServerDir, opts.Worktree, opts.Profile, opts.OnUsage})
 
 	if m.sessions == nil {
 		m.sessions = make(map[string]*mockSession)
 	}
 
 	sess := &mockSession{
-		events: make(chan agent.AgentEvent, 10),
+		events:   make(chan agent.AgentEvent, 10),
+		exitGate: m.exitGate,
 	}
 	m.sessions[opts.SessionID] = sess
 	return sess, nil
@@ -118,6 +154,7 @@ type mockSession struct {
 	events   chan agent.AgentEvent
 	closed   bool
 	closedMu sync.Mutex
+	exitGate chan struct{}
 
 	// interrupts and notes are what the lease reaper does to a CLI when a budget
 	// runs out: it asks the turn to stop, and leaves the agent an explanation.
@@ -170,10 +207,18 @@ func (s *mockSession) queuedNotes() []string {
 func (s *mockSession) Close() {
 	s.closedMu.Lock()
 	defer s.closedMu.Unlock()
-	if !s.closed {
-		s.closed = true
-		close(s.events)
+	if s.closed {
+		return
 	}
+	s.closed = true
+	if s.exitGate != nil {
+		go func() {
+			<-s.exitGate
+			close(s.events)
+		}()
+		return
+	}
+	close(s.events)
 }
 func (s *mockSession) isClosed() bool {
 	s.closedMu.Lock()
@@ -1148,8 +1193,12 @@ func TestProcess_ClosedFlagSuppressesStateChanges(t *testing.T) {
 	rec.waitForCount(t, 2) // initial idle + ended
 	rec.reset()
 
-	// After Close, nothing the send path reports may move the session.
-	proc.startTurn()
+	// After Close, nothing the send path reports may move the session, and a
+	// message is refused as reaching nothing — not as replaced, which would
+	// have its sender start the session up again.
+	if _, err := proc.SendMessage(agent.Prompt{Text: "late"}); !errors.Is(err, ErrProcessClosed) {
+		t.Errorf("SendMessage after Close = %v, want ErrProcessClosed", err)
+	}
 	proc.answerPrompt("req-1")
 
 	if events := rec.snapshot(); len(events) != 0 {
@@ -1177,7 +1226,7 @@ func TestProcess_EmitsOnlyRealTurnChanges(t *testing.T) {
 	}
 	rec.reset()
 
-	proc.startTurn()
+	startTurn(t, proc)
 	rec.waitForCount(t, 1)
 	if events := rec.snapshot(); events[0].State != ProcessStateRunning {
 		t.Fatalf("expected a running event, got %v", events)
@@ -1227,7 +1276,7 @@ func TestProcess_InterruptEndsTheTurnAsAborted(t *testing.T) {
 	proc, _, _ := m.GetOrCreateProcess(context.Background(), createSession(t, store, "sess-1"))
 	sess := mock.session(t, "sess-1")
 
-	proc.startTurn()
+	startTurn(t, proc)
 	rec.waitForCount(t, 2)
 	rec.reset()
 
