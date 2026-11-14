@@ -239,6 +239,32 @@ func TestCLIProfile_Inspect(t *testing.T) {
 	if resp := env.call("cli_profile.inspect", rpc.CLIProfileInspectParams{Agent: "gemini"}); resp.Error == nil || resp.Error.Code != jsonrpc2.CodeInvalidParams {
 		t.Errorf("unknown CLI: got %+v, want invalid params", resp.Error)
 	}
+
+	// One profile: the same inspection, alone.
+	var one rpc.CLIProfileInspectResult
+	if err := json.Unmarshal(env.mustCallCLIProfile("cli_profile.inspect", rpc.CLIProfileInspectParams{Agent: session.AgentTypeClaude, ProfileID: &work.ID}), &one); err != nil {
+		t.Fatal(err)
+	}
+	if len(one.Profiles) != 1 || one.Profiles[0].Status.ProfileID != work.ID || len(one.Profiles[0].Conflicts) != 1 {
+		t.Errorf("inspect Work alone = %+v, want Work with its conflict", one.Profiles)
+	}
+	defaultID := ""
+	var alone rpc.CLIProfileInspectResult
+	if err := json.Unmarshal(env.mustCallCLIProfile("cli_profile.inspect", rpc.CLIProfileInspectParams{Agent: session.AgentTypeClaude, ProfileID: &defaultID}), &alone); err != nil {
+		t.Fatal(err)
+	}
+	if len(alone.Profiles) != 1 || alone.Profiles[0].Status.ProfileID != "" {
+		t.Errorf("inspect the default alone = %+v, want the default profile", alone.Profiles)
+	}
+	unknown := "01900000-0000-7000-8000-000000000000"
+	for name, params := range map[string]rpc.CLIProfileInspectParams{
+		"unknown profile":   {Agent: session.AgentTypeClaude, ProfileID: &unknown},
+		"profile, no agent": {ProfileID: &work.ID},
+	} {
+		if resp := env.call("cli_profile.inspect", params); resp.Error == nil || resp.Error.Code != jsonrpc2.CodeInvalidParams {
+			t.Errorf("%s: got %+v, want invalid params", name, resp.Error)
+		}
+	}
 }
 
 // fakeReleaser stands in for worktree.Manager.ReleaseProfile.

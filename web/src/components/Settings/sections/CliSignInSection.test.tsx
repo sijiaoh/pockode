@@ -261,7 +261,10 @@ describe("CliSignInSection", () => {
 				within(dialog).getByRole("button", { name: "Sign out" }),
 			);
 
-			expect(server.actions.cliAuthLogout).toHaveBeenCalledWith("claude");
+			expect(server.actions.cliAuthLogout).toHaveBeenCalledWith(
+				"claude",
+				undefined,
+			);
 			expect(await claude.findByText("Not signed in")).toBeInTheDocument();
 		});
 

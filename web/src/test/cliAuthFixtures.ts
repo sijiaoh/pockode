@@ -7,6 +7,11 @@ import type {
 	CliLoginChangedNotification,
 } from "../types/cliAuth";
 import type {
+	CliProfileChangedNotification,
+	CliProfileInspection,
+	CliProfileOverview,
+} from "../types/cliProfile";
+import type {
 	CliUpdate,
 	CliUpdateChangedNotification,
 	CliUpdateCheck,
@@ -45,6 +50,11 @@ export function resetCliLoginStore() {
 		statuses: {},
 		settledStatuses: {},
 		reading: {},
+		profiles: null,
+		profilesError: null,
+		inspections: {},
+		settledInspections: {},
+		inspecting: {},
 		logins: {},
 		loginErrors: {},
 		startedHere: [],
@@ -58,11 +68,25 @@ export function resetCliLoginStore() {
 	});
 }
 
+export function makeOverview(
+	overrides: Partial<CliProfileOverview> = {},
+): CliProfileOverview {
+	return {
+		available: true,
+		clis: [
+			{ agent: "claude", profiles: [] },
+			{ agent: "codex", profiles: [] },
+		],
+		...overrides,
+	};
+}
+
 /**
- * The `cli_auth.*` and `cli_update.*` side of wsStore's actions, with a server
- * behind it that answers from what the test set: statuses for status reads,
- * checks for update checks, a sign-in or update for subscribe snapshots, and
- * `push` / `pushUpdate` for the notifications a running one sends.
+ * The `cli_auth.*`, `cli_profile.*` and `cli_update.*` side of wsStore's
+ * actions, with a server behind it that answers from what the test set:
+ * statuses for status reads, inspections for profile reads, checks for update
+ * checks, a sign-in, update or profile list for subscribe snapshots, and
+ * `push` / `pushUpdate` / `pushProfiles` for the notifications.
  */
 export function createFakeCliAuth() {
 	let statuses: CliAuthStatus[] = [];
@@ -84,6 +108,12 @@ export function createFakeCliAuth() {
 		}
 	>();
 	let nextId = 0;
+	let overview = makeOverview();
+	let inspections: CliProfileInspection[] = [];
+	const profileListeners = new Map<
+		string,
+		(params: CliProfileChangedNotification) => void
+	>();
 
 	const actions = {
 		cliAuthStatus: vi.fn(async (agent?: AgentType) =>
@@ -106,6 +136,30 @@ export function createFakeCliAuth() {
 		cliLoginUnsubscribe: vi.fn(async (id: string) => {
 			listeners.delete(id);
 		}),
+		cliProfileSubscribe: vi.fn(
+			async (callback: (params: CliProfileChangedNotification) => void) => {
+				const id = `profile-sub-${++nextId}`;
+				profileListeners.set(id, callback);
+				return { id, initial: overview };
+			},
+		),
+		cliProfileUnsubscribe: vi.fn(async (id: string) => {
+			profileListeners.delete(id);
+		}),
+		cliProfileInspect: vi.fn(async (agent?: AgentType, profileId?: string) =>
+			inspections.filter(
+				(i) =>
+					(!agent || i.status.agent === agent) &&
+					(profileId === undefined ||
+						(i.status.profile_id ?? "") === profileId),
+			),
+		),
+		cliProfileAdd: vi.fn(),
+		cliProfileRename: vi.fn(async () => {}),
+		cliProfileSwitch: vi.fn(async () => {}),
+		cliProfileRemove: vi.fn(
+			async (_agent: AgentType, _profileId: string): Promise<void> => {},
+		),
 		cliUpdateCheck: vi.fn(async (agent?: AgentType) =>
 			agent ? checks.filter((c) => c.agent === agent) : checks,
 		),
@@ -131,6 +185,23 @@ export function createFakeCliAuth() {
 		actions,
 		setStatuses(next: CliAuthStatus[]) {
 			statuses = next;
+		},
+		/** What `cli_profile.inspect` answers from, every profile of every CLI. */
+		setInspections(next: CliProfileInspection[]) {
+			inspections = next;
+		},
+		/** A `cli_profile.changed` notification. */
+		pushProfiles(next: CliProfileOverview) {
+			overview = next;
+			act(() => {
+				for (const [id, callback] of profileListeners) {
+					callback({ id, profiles: next });
+				}
+			});
+		},
+		/** What a fresh profile subscribe answers with. */
+		setOverview(next: CliProfileOverview) {
+			overview = next;
 		},
 		setChecks(next: CliUpdateCheck[]) {
 			checks = next;

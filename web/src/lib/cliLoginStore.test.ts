@@ -4,10 +4,12 @@ import {
 	createFakeCliAuth,
 	type FakeCliAuth,
 	makeLogin,
+	makeOverview,
 	makeUpdate,
 	resetCliLoginStore,
 } from "../test/cliAuthFixtures";
 import type { CliAuthStatus } from "../types/cliAuth";
+import type { CliProfileInspection } from "../types/cliProfile";
 import { cliLoginActions, useCliLoginStore } from "./cliLoginStore";
 
 const ws = vi.hoisted(() => ({ actions: {} as Record<string, unknown> }));
@@ -425,6 +427,367 @@ describe("cliLoginStore", () => {
 
 			expect(server.actions.cliUpdateCheck).not.toHaveBeenCalled();
 			expect(server.actions.cliAuthStatus).not.toHaveBeenCalled();
+		});
+	});
+
+	describe("profiles", () => {
+		const WORK = "0199a000-0000-7000-8000-000000000001";
+		const withWork = makeOverview({
+			clis: [
+				{ agent: "claude", profiles: [] },
+				{ agent: "codex", profiles: [{ id: WORK, name: "Work" }] },
+			],
+		});
+
+		const inspections = () => useCliLoginStore.getState().inspections.codex;
+
+		// A Codex read takes seconds; one slow profile must not hold the rest.
+		it("lands each profile's inspection on its own", async () => {
+			cliLoginActions.applyProfiles(withWork);
+			let answerWork: (value: CliProfileInspection[]) => void = () => {};
+			server.actions.cliProfileInspect.mockImplementation(
+				async (_agent?: unknown, profileId?: string) =>
+					profileId === WORK
+						? new Promise<CliProfileInspection[]>((resolve) => {
+								answerWork = resolve;
+							})
+						: [{ status: { agent: "codex", state: "signed_in" } }],
+			);
+
+			const all = cliLoginActions.inspectProfiles("codex");
+
+			await vi.waitFor(() =>
+				expect(inspections()?.[""]?.status.state).toBe("signed_in"),
+			);
+			expect(inspections()?.[WORK]).toBeUndefined();
+			expect(useCliLoginStore.getState().inspecting.codex).toEqual({
+				[WORK]: true,
+			});
+
+			answerWork([
+				{
+					status: { agent: "codex", profile_id: WORK, state: "signed_out" },
+					conflicts: [{ name: "config.toml", path: "/p/config.toml" }],
+				},
+			]);
+			await all;
+			expect(inspections()?.[WORK]?.conflicts).toHaveLength(1);
+			expect(useCliLoginStore.getState().inspecting.codex).toEqual({});
+		});
+
+		it("records a failed inspection as unavailable, for its profile", async () => {
+			server.actions.cliProfileInspect.mockRejectedValueOnce(
+				new Error("Request timed out"),
+			);
+			await cliLoginActions.inspectProfile("codex", WORK);
+			expect(inspections()?.[WORK]?.status).toEqual({
+				agent: "codex",
+				profile_id: WORK,
+				state: "unavailable",
+				error: "Request timed out",
+			});
+		});
+
+		// The status read after a sign-out is newer than any read in flight, and
+		// is the current profile's too when that is the one signed out.
+		it("takes a profile's sign-out wherever that profile is shown", async () => {
+			useCliLoginStore.setState({
+				statuses: {
+					codex: { agent: "codex", profile_id: WORK, state: "signed_in" },
+				},
+				inspections: {
+					codex: {
+						[WORK]: {
+							status: { agent: "codex", profile_id: WORK, state: "signed_in" },
+							conflicts: [{ name: "config.toml", path: "/p/config.toml" }],
+						},
+					},
+				},
+			});
+			const signedOut: CliAuthStatus = {
+				agent: "codex",
+				profile_id: WORK,
+				state: "signed_out",
+			};
+			server.actions.cliAuthLogout.mockResolvedValueOnce(signedOut);
+
+			await cliLoginActions.logout("codex", WORK);
+
+			expect(server.actions.cliAuthLogout).toHaveBeenCalledWith("codex", WORK);
+			expect(useCliLoginStore.getState().statuses.codex).toEqual(signedOut);
+			expect(inspections()?.[WORK]).toEqual({
+				status: signedOut,
+				conflicts: [{ name: "config.toml", path: "/p/config.toml" }],
+			});
+		});
+
+		it("does not take another profile's sign-out as the current one's", async () => {
+			const current: CliAuthStatus = { agent: "codex", state: "signed_in" };
+			useCliLoginStore.setState({ statuses: { codex: current } });
+			server.actions.cliAuthLogout.mockResolvedValueOnce({
+				agent: "codex",
+				profile_id: WORK,
+				state: "signed_out",
+			});
+
+			await cliLoginActions.logout("codex", WORK);
+
+			expect(useCliLoginStore.getState().statuses.codex).toBe(current);
+		});
+
+		// Sessions run as the profile now current; the status held was another's.
+		it("reads the current status again when another profile becomes current", async () => {
+			useCliLoginStore.setState({
+				statuses: { codex: { agent: "codex", state: "signed_in" } },
+			});
+			cliLoginActions.applyProfiles(withWork);
+			expect(server.actions.cliAuthStatus).not.toHaveBeenCalled();
+
+			server.setStatuses([
+				{ agent: "codex", profile_id: WORK, state: "signed_out" },
+			]);
+			cliLoginActions.applyProfiles(
+				makeOverview({
+					clis: [
+						{ agent: "claude", profiles: [] },
+						{
+							agent: "codex",
+							current_profile_id: WORK,
+							profiles: [{ id: WORK, name: "Work" }],
+						},
+					],
+				}),
+			);
+
+			await vi.waitFor(() =>
+				expect(useCliLoginStore.getState().statuses.codex?.profile_id).toBe(
+					WORK,
+				),
+			);
+		});
+
+		// While a sign-in runs, every profile of the CLI reads `signing_in`.
+		it("inspects the profiles again when a sign-in it followed ends", async () => {
+			useCliLoginStore.setState({
+				inspections: {
+					codex: {
+						"": {
+							status: {
+								agent: "codex",
+								state: "signing_in",
+								login_id: "a",
+								login_profile_id: WORK,
+							},
+						},
+					},
+				},
+			});
+			cliLoginActions.applyLogin(
+				"codex",
+				makeLogin({ id: "a", profile_id: WORK }),
+			);
+			server.setInspections([
+				{ status: { agent: "codex", state: "signed_in" } },
+			]);
+			cliLoginActions.applyLogin(
+				"codex",
+				makeLogin({
+					id: "a",
+					profile_id: WORK,
+					revision: 2,
+					phase: "succeeded",
+				}),
+			);
+
+			await vi.waitFor(() =>
+				expect(inspections()?.[""]?.status.state).toBe("signed_in"),
+			);
+		});
+
+		it("forgets a removed profile's inspection, and keeps it when refused", async () => {
+			useCliLoginStore.setState({
+				inspections: {
+					codex: {
+						[WORK]: {
+							status: { agent: "codex", profile_id: WORK, state: "signed_in" },
+						},
+					},
+				},
+			});
+			server.actions.cliProfileRemove.mockRejectedValueOnce(
+				new JSONRPCErrorException("in use", -32014, { reason: "in_use" }),
+			);
+			await expect(
+				cliLoginActions.removeProfile("codex", WORK),
+			).rejects.toThrow("in use");
+			expect(inspections()?.[WORK]).toBeDefined();
+
+			await cliLoginActions.removeProfile("codex", WORK);
+			expect(inspections()?.[WORK]).toBeUndefined();
+		});
+
+		// Only the profile signing in is; the others are waiting, and go on
+		// showing what they read before.
+		it("keeps a waiting profile's last result while another signs in", async () => {
+			server.setInspections([
+				{ status: { agent: "codex", profile_id: WORK, state: "signed_in" } },
+			]);
+			await cliLoginActions.inspectProfile("codex", WORK);
+			server.setInspections([
+				{
+					status: {
+						agent: "codex",
+						profile_id: WORK,
+						state: "signing_in",
+						login_profile_id: "",
+					},
+				},
+			]);
+			await cliLoginActions.inspectProfile("codex", WORK);
+
+			const s = useCliLoginStore.getState();
+			expect(s.inspections.codex?.[WORK]?.status.state).toBe("signing_in");
+			expect(s.settledInspections.codex?.[WORK]?.status.state).toBe(
+				"signed_in",
+			);
+		});
+
+		// An update that ended while nobody watched leaves `updating` behind.
+		it("re-inspects a profile read while an update ran, once it ended", async () => {
+			useCliLoginStore.setState({
+				inspections: {
+					codex: {
+						[WORK]: {
+							status: {
+								agent: "codex",
+								profile_id: WORK,
+								state: "updating",
+								update_id: "update-1",
+							},
+						},
+					},
+				},
+			});
+			server.setInspections([
+				{ status: { agent: "codex", profile_id: WORK, state: "signed_in" } },
+			]);
+			cliLoginActions.applyUpdate(
+				"codex",
+				makeUpdate({ agent: "codex", phase: "succeeded" }),
+			);
+
+			await vi.waitFor(() =>
+				expect(inspections()?.[WORK]?.status.state).toBe("signed_in"),
+			);
+		});
+
+		it("does not let a read from before a switch land after it", async () => {
+			let answerOld: (value: CliAuthStatus[]) => void = () => {};
+			server.actions.cliAuthStatus.mockImplementationOnce(
+				() =>
+					new Promise<CliAuthStatus[]>((resolve) => {
+						answerOld = resolve;
+					}),
+			);
+			const old = cliLoginActions.refreshStatus("codex");
+			server.setStatuses([
+				{ agent: "codex", profile_id: WORK, state: "signed_out" },
+			]);
+			await cliLoginActions.switchProfile("codex", WORK);
+			answerOld([{ agent: "codex", state: "signed_in" }]);
+			await old;
+
+			await vi.waitFor(() =>
+				expect(useCliLoginStore.getState().statuses.codex?.profile_id).toBe(
+					WORK,
+				),
+			);
+		});
+
+		// The server resends the list to every screen whenever one subscribes;
+		// a copy that changes nothing must not spawn a CLI per screen.
+		it("reads nothing again for a copy that changes nothing", () => {
+			useCliLoginStore.setState({
+				statuses: { codex: { agent: "codex", state: "signed_in" } },
+				reading: { codex: true },
+			});
+			cliLoginActions.applyProfiles(withWork);
+			cliLoginActions.applyProfiles(withWork);
+			expect(server.actions.cliAuthStatus).not.toHaveBeenCalled();
+		});
+
+		// There every CLI runs as its default profile, whatever is chosen.
+		it("takes the default profile as current where profiles cannot be used", () => {
+			useCliLoginStore.setState({
+				statuses: { codex: { agent: "codex", state: "signed_in" } },
+			});
+			cliLoginActions.applyProfiles({
+				...withWork,
+				available: false,
+				clis: withWork.clis.map((c) => ({
+					...c,
+					current_profile_id: c.agent === "codex" ? WORK : undefined,
+				})),
+			});
+			expect(server.actions.cliAuthStatus).not.toHaveBeenCalled();
+		});
+
+		it("forgets the inspections of profiles the list no longer has", () => {
+			useCliLoginStore.setState({
+				inspections: {
+					codex: {
+						"": { status: { agent: "codex", state: "signed_in" } },
+						[WORK]: {
+							status: { agent: "codex", profile_id: WORK, state: "signed_in" },
+						},
+					},
+				},
+			});
+			cliLoginActions.applyProfiles(makeOverview());
+			expect(Object.keys(inspections() ?? {})).toEqual([""]);
+		});
+
+		// A failed read says nothing of a profile; its missing `profile_id` is
+		// not the default one's.
+		it("does not take the default profile's sign-out over a failed read", async () => {
+			cliLoginActions.applyProfiles(
+				makeOverview({
+					clis: [
+						{ agent: "claude", profiles: [] },
+						{
+							agent: "codex",
+							current_profile_id: WORK,
+							profiles: [{ id: WORK, name: "Work" }],
+						},
+					],
+				}),
+			);
+			server.actions.cliAuthStatus.mockRejectedValueOnce(
+				new Error("timed out"),
+			);
+			await cliLoginActions.refreshStatus("codex");
+			server.actions.cliAuthLogout.mockResolvedValueOnce({
+				agent: "codex",
+				state: "signed_out",
+			});
+
+			await cliLoginActions.logout("codex", "");
+
+			expect(useCliLoginStore.getState().statuses.codex?.state).toBe(
+				"unavailable",
+			);
+		});
+
+		it("re-reads the current status after switching away from it", async () => {
+			useCliLoginStore.setState({
+				statuses: { codex: { agent: "codex", state: "signed_in" } },
+			});
+			await cliLoginActions.switchProfile("codex", WORK);
+			expect(server.actions.cliProfileSwitch).toHaveBeenCalledWith(
+				"codex",
+				WORK,
+			);
+			expect(server.actions.cliAuthStatus).toHaveBeenCalledWith("codex");
 		});
 	});
 });

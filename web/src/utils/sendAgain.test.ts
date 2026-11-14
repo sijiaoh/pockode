@@ -23,7 +23,7 @@ function failed(
 		parts: [],
 		status: "error",
 		error: "Not logged in",
-		authFailure: "claude",
+		authFailure: { agent: "claude" },
 		createdAt: new Date(),
 		...overrides,
 	};
@@ -129,5 +129,32 @@ describe("sendAgainText", () => {
 		expect(
 			sendAgainText([user(), otherFailure], { messageId: "a1" }),
 		).toBeUndefined();
+	});
+
+	// Claude marks the warning that gave up on a rate limit, not the failed
+	// ending after it; Codex marks the ending.
+	it("offers the message of a turn that failed on a usage limit", () => {
+		const claude = failed("a1", {
+			authFailure: undefined,
+			parts: [
+				{
+					id: "w",
+					type: "warning",
+					message: "You've hit your limit",
+					code: "rate_limit",
+					usageLimit: { agent: "claude", profileId: "" },
+				},
+			],
+		});
+		expect(sendAgainText([user(), claude], { messageId: "a1" })).toBe(
+			"fix the build",
+		);
+		const codex = failed("a1", {
+			authFailure: undefined,
+			usageLimit: { agent: "codex", profileId: "" },
+		});
+		expect(sendAgainText([user(), codex], { messageId: "a1" })).toBe(
+			"fix the build",
+		);
 	});
 });

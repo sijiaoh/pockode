@@ -38,7 +38,8 @@ func (h *rpcMethodHandler) handleCLIProfileSubscribe(ctx context.Context, conn *
 	h.cliProfileWatcher.Resend()
 }
 
-// handleCLIProfileInspect reads every profile as its directory has it now: the
+// handleCLIProfileInspect reads every profile, or the one asked for, as its
+// directory has it now: the
 // sign-in state, read as cli_auth.status reads it (concurrently, never cached),
 // and the entries it fails to share. Neither is pushed, for the reason
 // cli_auth.status gives.
@@ -51,7 +52,13 @@ func (h *rpcMethodHandler) handleCLIProfileInspect(ctx context.Context, conn *js
 		}
 	}
 
-	statuses, err := h.cliAuth.EveryProfileStatuses(ctx, params.Agent)
+	var statuses []cliauth.Status
+	var err error
+	if params.ProfileID != nil {
+		statuses, err = h.cliAuth.Statuses(ctx, params.Agent, cliprofile.Select(*params.ProfileID))
+	} else {
+		statuses, err = h.cliAuth.EveryProfileStatuses(ctx, params.Agent)
+	}
 	if err != nil {
 		h.replyCLIAuthError(ctx, conn, req.ID, err)
 		return

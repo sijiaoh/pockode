@@ -13,7 +13,9 @@ and hit-area floors, [answering-ui.md](answering-ui.md#who-owns-escape) for the
 Escape and dismissing-click conventions `Sheet` already follows,
 [cluster.md](cluster.md) for why the cluster frontend has none of this,
 [cli-update-ui.md](cli-update-ui.md) for the installation row the same cards carry
-and updating a CLI from it.
+and updating a CLI from it, [cli-profiles-ui.md](cli-profiles-ui.md) for a CLI
+with more than one account — its list replaces the account row below, and its
+sign-out dialog names the account.
 
 ## The rules
 
@@ -113,6 +115,9 @@ the same layout: Settings is already `max-w-2xl`, and a second column for two
 cards would only move the button away from the name.
 
 ### The card states
+
+These are the one-account card's. A CLI with stored accounts draws one row per
+account instead, in the same words ([cli-profiles-ui.md](cli-profiles-ui.md#several-accounts)).
 
 | State | Dot / icon | Title / subtitle | Action | Notice |
 |-------|------------|------------------|--------|--------|
@@ -390,6 +395,10 @@ whole of it.
 >
 > Cancel · **Sign out**
 
+That is the one-account card's wording. Once the CLI has several accounts the
+dialog names the account, and says whether it is the current one
+([cli-profiles-ui.md](cli-profiles-ui.md#sign-out)).
+
 It asks, where the login sheet's Cancel does not, because this one is not cheap
 to undo — getting back in is a full login in a browser — and because it reaches
 further than the screen it was pressed on: the credentials are machine-wide.
@@ -405,8 +414,8 @@ There is no sign-out from the chat.
 
 ### Where the failure lands
 
-The turn's error record carries `auth_failure: {agent}` — *that it is an auth
-failure* and *which CLI* — and so do the warnings that said so while the turn was
+The turn's error record carries `auth_failure: {agent, profile_id}` — *that it
+is an auth failure*, *which CLI* and which of its accounts — and so do the warnings that said so while the turn was
 still retrying. The adapters decide it from each CLI's structured signal
 ([code/agent-integration.md](code/agent-integration.md#auth-failures)); the UI
 never pattern-matches CLI text.
@@ -421,7 +430,9 @@ never pattern-matches CLI text.
 ### The notice
 
 For an error record marked as an auth failure, the transcript draws
-`AuthFailureNotice` **in place of the red error line**:
+`CliRefusalNotice` **in place of the red error line** (with several accounts
+it names the account and offers a switch too —
+[cli-profiles-ui.md](cli-profiles-ui.md#the-notice)):
 
 ```
 ┌ ⚠ Invalid API key · Fix external API key ─────────┐
@@ -550,9 +561,9 @@ cluster nodes.
 |-------|-------|------|
 | `cliLoginStore` | `web/src/lib/` | Zustand, not persisted. Status per CLI and the latest flow per CLI; the flow comes back through each screen's subscription on reconnect, the status through a fresh read. A new global store is an *Ask First* item in `web/AGENTS.md`; it is needed because the flow outlives every component that shows it |
 | `CliSignInSection` | `web/src/components/Settings/sections/` | The settings section: refresh, one `CliStatusCard` per CLI, the sheet |
-| `CliStatusCard` | same | One card: the header, the installation row and the account row (`CliAccountRow`, which renders the state table); owns its sign-out confirm |
-| `CliLoginSheet` | `web/src/components/CliLogin/` | The sheet, both flows, every phase. Takes the agent type; the chat's way in adds an optional `sendAgain` offer (the text, whether a draft is in the way, the hand-back) |
-| `AuthFailureNotice` | `web/src/components/Chat/` | The transcript notice; asks `ChatPanel` to open the sheet, and reads live status to leave the button off an externally managed CLI |
+| `CliStatusCard` | same | One card: the header, the installation row and the account row (`CliAccountRow`, which renders the state table) — or, with stored accounts, `CliAccountList`, which owns that list's sign-out and remove dialogs ([cli-profiles-ui.md](cli-profiles-ui.md#components)); owns the one-account card's sign-out confirm |
+| `CliLoginSheet` | `web/src/components/CliLogin/` | The sheet, both flows, every phase. Takes the agent type and, where a CLI has several accounts, the `account` to sign in; the chat's way in adds an optional `sendAgain` offer (the text, whether a draft is in the way, the hand-back) |
+| `CliRefusalNotice` | `web/src/components/Chat/` | The transcript notice (auth failures and, with several accounts, usage limits — [cli-profiles-ui.md](cli-profiles-ui.md#the-notice)); asks `ChatPanel` to open the sheet, and reads live status to leave the button off an externally managed CLI |
 | `useCopyToClipboard` | `web/src/hooks/` | Copy with idle / copied / failed; the code block moves onto it |
 
 None of it is in `@pockode/shared`: `web-cluster` does not use it.

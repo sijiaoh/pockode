@@ -46,12 +46,20 @@ function providerName(external: CliExternal | undefined): string | undefined {
 export function ExternalSource({
 	agent,
 	external,
+	shared = false,
 }: {
 	agent: AgentType;
 	external: CliExternal | undefined;
+	/**
+	 * Every account of the CLI reads the same source, so switching accounts
+	 * changes nothing (docs/cli-profiles-ui.md#the-same-credentials-on-every-account).
+	 */
+	shared?: boolean;
 }) {
 	return (
-		<>{describeSource(agent, external)} Change it on the server machine.</>
+		<>
+			{describeSource(agent, external, shared)} Change it on the server machine.
+		</>
 	);
 }
 
@@ -77,9 +85,22 @@ export function externalSourceLabel(external: CliExternal | undefined): string {
 	}
 }
 
-function describeSource(agent: AgentType, external: CliExternal | undefined) {
-	const fallback = `${getAgentLabel(agent)} is set up with credentials Pockode doesn't manage.`;
-	if (!external) return fallback;
+/**
+ * The sentence naming the source. `shared`: every account of the CLI reads
+ * it, so it says so and that switching accounts changes nothing.
+ */
+function describeSource(
+	agent: AgentType,
+	external: CliExternal | undefined,
+	shared = false,
+) {
+	const label = getAgentLabel(agent);
+	const using = shared ? `Every ${label} account uses` : "Using";
+	const end = shared
+		? ", so switching accounts doesn't change what sessions use."
+		: ".";
+	const fallback = `${shared ? `Every ${label} account is` : `${label} is`} set up with credentials Pockode doesn't manage`;
+	if (!external) return `${fallback}${end}`;
 
 	const provider = providerName(external);
 
@@ -88,32 +109,32 @@ function describeSource(agent: AgentType, external: CliExternal | undefined) {
 			if (external.source && ENV_NAME.test(external.source)) {
 				return (
 					<>
-						Using <code className="font-mono">{external.source}</code> from the
-						server's environment.
+						{using} <code className="font-mono">{external.source}</code> from
+						the server's environment{end}
 					</>
 				);
 			}
 			return external.source
-				? `Using an API key from ${external.source}.`
-				: "Using an API key.";
+				? `${using} an API key from ${external.source}${end}`
+				: `${using} an API key${end}`;
 		case "api_key_helper":
 			return (
 				<>
-					Using an API key from the{" "}
-					<code className="font-mono">apiKeyHelper</code> setting.
+					{using} an API key from the{" "}
+					<code className="font-mono">apiKeyHelper</code> setting{end}
 				</>
 			);
 		case "oauth_token":
-			return "Using a token from the server's environment.";
+			return `${using} a token from the server's environment${end}`;
 		case "cloud_provider":
-			return provider ? `Using ${provider}.` : fallback;
+			return provider ? `${using} ${provider}${end}` : `${fallback}${end}`;
 		case "no_sign_in_needed":
-			return "Using a model provider that doesn't need an OpenAI sign-in.";
+			return `${using} a model provider that doesn't need an OpenAI sign-in${end}`;
 		default:
-			if (provider) return `Using ${provider}.`;
+			if (provider) return `${using} ${provider}${end}`;
 			return external.method
-				? `${getAgentLabel(agent)} is set up with credentials Pockode doesn't manage (${external.method}).`
-				: fallback;
+				? `${fallback} (${external.method})${end}`
+				: `${fallback}${end}`;
 	}
 }
 

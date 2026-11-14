@@ -11,7 +11,7 @@ Every start of a CLI runs as its current profile, and a session already open
 moves to a newly chosen one on its next message. The profiles are managed
 through the [`cli_profile.*` RPCs](#the-rpc) — listing, adding, renaming,
 choosing and removing; signing a profile in and out stays with `cli_auth.*`.
-The screens are still to come.
+The screens that do it are in [cli-profiles-ui.md](../cli-profiles-ui.md).
 
 Verified against Claude Code 2.1.325 and codex-cli 0.169.0, on macOS.
 
@@ -250,7 +250,7 @@ says to start Pockode without the variable.
 cli_profile.subscribe   { id }                       ->  { profiles: Overview }
 cli_profile.unsubscribe { id }                       ->  {}
 notification cli_profile.changed { id, profiles: Overview }
-cli_profile.inspect     { agent? }                   ->  { profiles: [Inspection] }
+cli_profile.inspect     { agent?, profile_id? }      ->  { profiles: [Inspection] }
 cli_profile.add         { agent, name }              ->  { profile: { id, name } }
 cli_profile.rename      { agent, profile_id, name }  ->  {}
 cli_profile.switch      { agent, profile_id }        ->  {}
@@ -299,6 +299,13 @@ in the pushed value at all: `inspect` reads them when asked, for the reason
 concurrently, each CLI's default first — so its budget and the client timeout
 it needs are that method's ([cli-auth.md](cli-auth.md#timeouts)). The default
 profile has no conflicts: it is what the others link into.
+
+`profile_id` narrows `inspect` to one profile of `agent` (`""` the default
+one); absent, it reads them all — never "the current one", as it would mean
+on `cli_auth.*`. A client that asks for each profile separately gets each
+answer when that profile is read, rather than all of them once the slowest
+Codex read is over; the web client does that
+([cli-auth.md](cli-auth.md#the-web-client)).
 
 What a client needs to say why something does not work is in these two
 replies:
