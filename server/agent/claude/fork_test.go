@@ -128,7 +128,7 @@ func TestForkSession(t *testing.T) {
 				SessionID:       "pockode-fork",
 				History:         history,
 			}
-			carried, err := New().ForkSession(context.Background(), opts)
+			carried, err := New(nil).ForkSession(context.Background(), opts)
 			if err != nil {
 				t.Fatalf("ForkSession: %v", err)
 			}

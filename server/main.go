@@ -23,6 +23,7 @@ import (
 	"github.com/pockode/server/authguard"
 	"github.com/pockode/server/authsession"
 	"github.com/pockode/server/cliauth"
+	"github.com/pockode/server/cliprofile"
 	"github.com/pockode/server/cliupdate"
 	"github.com/pockode/server/cloudcred"
 	"github.com/pockode/server/cloudlogin"
@@ -421,18 +422,27 @@ Flags:
 		}
 	}
 
+	// Which account each AI CLI runs as: every start of one, in a session or
+	// not, reads the current profile from here. Without a configuration
+	// directory there is nowhere to keep profiles, which is no reason not to
+	// run the CLIs as they are: a nil store has only the default profiles.
+	cliProfiles, err := cliprofile.DefaultStore()
+	if err != nil {
+		slog.Warn("no configuration directory for AI CLI profiles; every AI CLI runs as its default profile", "error", err)
+	}
+
 	// Initialize agent registry
 	agents := agent.NewRegistry()
-	agents.Register(session.AgentTypeClaude, claude.New())
-	agents.Register(session.AgentTypeCodex, codex.New())
+	agents.Register(session.AgentTypeClaude, claude.New(cliProfiles))
+	agents.Register(session.AgentTypeCodex, codex.New(cliProfiles))
 	agentStatuses := agent.CheckBinaries(slog.Default(), claude.Binary, codex.Binary)
 
 	// Registered in the order the CLIs are listed everywhere else: Claude, then
 	// Codex. They run in workDir because both read project-level settings that
 	// can decide which credentials a session uses.
-	cliAuth := cliauth.NewService(slog.Default())
-	cliAuth.Register(session.AgentTypeClaude, claude.NewAuth(workDir))
-	cliAuth.Register(session.AgentTypeCodex, codex.NewAuth(workDir))
+	cliAuth := cliauth.NewService(slog.Default(), cliProfiles)
+	cliAuth.Register(session.AgentTypeClaude, claude.NewAuth(workDir, cliProfiles))
+	cliAuth.Register(session.AgentTypeCodex, codex.NewAuth(workDir, cliProfiles))
 
 	// Initialize worktree registry and manager
 	registry := worktree.NewRegistry(workDir, dataDir)

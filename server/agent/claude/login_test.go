@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -14,6 +15,8 @@ import (
 	"time"
 
 	"github.com/pockode/server/cliauth"
+	"github.com/pockode/server/cliprofile"
+	"github.com/pockode/server/cliprofile/cliprofiletest"
 )
 
 // The test binary re-execs itself as a fake `claude`, so that the sign-in is
@@ -39,6 +42,9 @@ const (
 	fakeManaged = "managed"
 	// fakeExternal reports an API key from the environment.
 	fakeExternal = "external"
+	// fakeSession plays a session — it runs until stdin closes — or, with
+	// --print, a one-shot that answers "ok".
+	fakeSession = "session"
 )
 
 const (
@@ -55,10 +61,24 @@ func TestMain(m *testing.M) {
 }
 
 func runFakeClaude(role string, args []string) {
+	cliprofiletest.RecordInvocation(args)
 	credentials := filepath.Join(os.Getenv(fakeClaudeDirEnv), "credentials")
 	switch {
 	case slices.Equal(args, []string{"--version"}):
 		fmt.Println("2.1.283 (Claude Code)")
+		os.Exit(0)
+	case role == fakeSession && slices.Contains(args, "--print"):
+		fmt.Println(`{"type":"result","subtype":"success","is_error":false,"result":"ok"}`)
+		os.Exit(0)
+	case role == fakeSession:
+		_, _ = io.Copy(io.Discard, os.Stdin)
+		os.Exit(0)
+	case slices.Equal(args, []string{"auth", "logout"}):
+		if err := os.Remove(credentials); err != nil && !os.IsNotExist(err) {
+			fmt.Fprintln(os.Stderr, "Logout failed:", err)
+			os.Exit(1)
+		}
+		fmt.Println("Successfully logged out from your Anthropic account.")
 		os.Exit(0)
 	case len(args) >= 2 && args[0] == "auth" && args[1] == "status":
 		if role == fakeExternal {
@@ -131,6 +151,7 @@ func fakeClaudeAuth(t *testing.T, role string) *Auth {
 		log:           slog.Default(),
 		binary:        os.Args[0],
 		workDir:       t.TempDir(),
+		profiles:      cliprofile.NewStore(t.TempDir()),
 		linkTimeout:   5 * time.Second,
 		verifyTimeout: 2 * time.Second,
 	}

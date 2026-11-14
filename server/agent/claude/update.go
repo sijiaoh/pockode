@@ -8,7 +8,9 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/pockode/server/cliprofile"
 	"github.com/pockode/server/cliupdate"
+	"github.com/pockode/server/session"
 )
 
 // UpdateCLI is Claude Code as cliupdate updates it: `claude update`, which
@@ -77,16 +79,14 @@ func updateChannel(dir string) string {
 	return fallback
 }
 
-// configDir is where Claude Code keeps the user's settings: CLAUDE_CONFIG_DIR,
-// or ~/.claude. Empty without a home: a relative ".claude" would be the
-// server's working directory, a project's settings.
+// configDir is where Claude Code keeps the user's settings. Every profile
+// shares the default directory's settings.json, so it is the one to read.
+// Empty without a home: a relative ".claude" would be the server's working
+// directory, a project's settings.
 func configDir() string {
-	if dir := os.Getenv("CLAUDE_CONFIG_DIR"); dir != "" {
-		return dir
-	}
-	home, err := os.UserHomeDir()
+	dir, err := cliprofile.DefaultDir(session.AgentTypeClaude)
 	if err != nil {
 		return ""
 	}
-	return filepath.Join(home, ".claude")
+	return dir
 }

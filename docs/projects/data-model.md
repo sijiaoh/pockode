@@ -351,7 +351,8 @@ rewrites whole: the stores built on `filestore.File` (work, agent-role,
 settings, the cluster node registry), the session and command indexes, plus
 `server.json`, `relay.json`, `sessions.json`, `mcp-config.json`, the data
 directory's `.gitignore` and the per-session Claude resume file — and, outside
-the data directory, the machine credential `cloud.json`. Files whose mode
+the data directory, the machine credential `cloud.json` and the AI CLI
+profile list `cli-profiles.json`. Files whose mode
 matters pass it explicitly — `server.json`, `relay.json`, `sessions.json` and
 `cloud.json` stay `0600` because they hold credentials.
 
