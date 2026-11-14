@@ -37,6 +37,12 @@ var (
 	ErrNotFound         = errors.New("profile not found")
 	ErrInvalidName      = fmt.Errorf("profile name must be 1 to %d characters with no control characters", MaxNameLength)
 	ErrNameTaken        = errors.New("another profile of this AI CLI already has that name")
+	// ErrNoStore is a change asked of the nil Store: Pockode found no
+	// configuration directory, so there is only the default profile.
+	ErrNoStore = errors.New("no configuration directory was found to keep AI CLI profiles in")
+	// ErrDirectoryLeft is a profile Remove took off the list but whose
+	// directory it could not delete: the profile is gone, the files are not.
+	ErrDirectoryLeft = errors.New("the profile was removed, but its directory could not be deleted")
 )
 
 // errDamaged is a file that failed to parse while a change held its lock; the
@@ -99,6 +105,9 @@ func NewStore(configDir string) *Store {
 // one this package could have issued, since it ends up in a path and may come
 // from a client.
 func (s *Store) Dir(agent session.AgentType, id string) (string, error) {
+	if s == nil {
+		return "", ErrNoStore
+	}
 	if !agent.IsValid() {
 		return "", fmt.Errorf("%w: %q", ErrUnsupportedAgent, agent)
 	}
@@ -109,10 +118,14 @@ func (s *Store) Dir(agent session.AgentType, id string) (string, error) {
 }
 
 // Load returns agent's profiles. No file, or a damaged one that had to be
-// quarantined, is an empty list with the default profile current.
+// quarantined, is an empty list with the default profile current, and so is
+// every list of the nil Store.
 func (s *Store) Load(agent session.AgentType) (List, error) {
 	if !agent.IsValid() {
 		return List{}, fmt.Errorf("%w: %q", ErrUnsupportedAgent, agent)
+	}
+	if s == nil {
+		return List{Profiles: []Profile{}}, nil
 	}
 	var f file
 	found, err := filestore.ReadJSONOrQuarantine(s.path, "AI CLI profiles", &f)
@@ -195,8 +208,8 @@ func (s *Store) SetCurrent(agent session.AgentType, id string) error {
 // profile, which would recreate the directory; the caller sees to that too.
 //
 // The metadata goes first, so a profile is never listed with half a
-// directory; a directory that then fails to go away is reported, and is
-// unreachable since no profile names it any more.
+// directory; a directory that then fails to go away is ErrDirectoryLeft, and
+// is unreachable since no profile names it any more.
 func (s *Store) Remove(agent session.AgentType, id string) error {
 	dir, err := s.Dir(agent, id)
 	if err != nil {
@@ -217,7 +230,7 @@ func (s *Store) Remove(agent session.AgentType, id string) error {
 		return err
 	}
 	if err := os.RemoveAll(dir); err != nil {
-		return fmt.Errorf("remove directory of profile %q: %w", id, err)
+		return fmt.Errorf("%w: %s: %w", ErrDirectoryLeft, dir, err)
 	}
 	return nil
 }
@@ -229,6 +242,9 @@ func (s *Store) Remove(agent session.AgentType, id string) error {
 func (s *Store) update(agent session.AgentType, change func(*List) error) error {
 	if !agent.IsValid() {
 		return fmt.Errorf("%w: %q", ErrUnsupportedAgent, agent)
+	}
+	if s == nil {
+		return ErrNoStore
 	}
 	if err := fsperm.RestrictDir(filepath.Dir(s.path)); err != nil {
 		return err

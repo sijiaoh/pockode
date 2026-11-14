@@ -53,6 +53,37 @@ func (s *Store) Resolve(agent session.AgentType, sel Selector) (string, error) {
 	return list.Current, nil
 }
 
+// Check refuses a selector naming a profile agent does not have, with
+// ErrNotFound. It is for a profile ID that came from a client, checked before
+// it is used for anything; the current profile and the default one ("") always
+// pass.
+func (s *Store) Check(agent session.AgentType, sel Selector) error {
+	if !sel.explicit || sel.id == "" {
+		return nil
+	}
+	if _, ok := layouts[agent]; !ok || s == nil {
+		return fmt.Errorf("%w: %q", ErrNotFound, sel.id)
+	}
+	return s.requireListed(agent, sel.id)
+}
+
+// IDs is every profile of agent: the default one ("") first, then the stored
+// ones in their order.
+func (s *Store) IDs(agent session.AgentType) ([]string, error) {
+	ids := []string{""}
+	if _, ok := layouts[agent]; !ok || s == nil {
+		return ids, nil
+	}
+	list, err := s.Load(agent)
+	if err != nil {
+		return nil, err
+	}
+	for _, p := range list.Profiles {
+		ids = append(ids, p.ID)
+	}
+	return ids, nil
+}
+
 // Launch is what an AI CLI is started with to run as one profile.
 type Launch struct {
 	// ProfileID is the profile, "" for the default one.
@@ -82,7 +113,7 @@ func (s *Store) Launch(agent session.AgentType, sel Selector) (Launch, error) {
 		return Launch{}, nil
 	}
 	if s == nil {
-		return Launch{}, fmt.Errorf("%w: Pockode found no configuration directory to keep profiles in", ErrSymlinksUnavailable)
+		return Launch{}, fmt.Errorf("%w: %w", ErrSymlinksUnavailable, ErrNoStore)
 	}
 	l, err := layoutOf(agent)
 	if err != nil {

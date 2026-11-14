@@ -96,6 +96,10 @@ type testEnv struct {
 	scheduleStore   schedule.Store
 	testRoleID      string                // pre-created agent role ID for tests
 	cliAuth         *cliauthtest.Provider // the claude CLI as cli_auth.* sees it
+	cliProfiles     *cliprofile.Store     // the CLIs' profiles as cli_auth.* and cli_profile.* see them
+	// cliProfilesDir is the configuration directory cliProfiles is kept in; a
+	// store of its own there is another Pockode process of the same OS user.
+	cliProfilesDir  string
 	handler         *RPCHandler
 	raw             *rawCapabilitiesStub
 	restarter       *restart.Restarter
@@ -191,7 +195,9 @@ func newTestEnvWithAgent(t *testing.T, mock *mockAgent, ag agent.Agent, workDir 
 	workOps.SetRunRecorder(scheduler)
 
 	cliAuth := cliauthtest.New(cliauthtest.State{})
-	cliAuthService := cliauth.NewService(slog.Default(), cliprofile.NewStore(t.TempDir()))
+	cliProfilesDir := t.TempDir()
+	cliProfiles := cliprofile.NewStore(cliProfilesDir)
+	cliAuthService := cliauth.NewService(slog.Default(), cliProfiles)
 	cliAuthService.Register(session.AgentTypeClaude, cliAuth)
 
 	cloud := cloudlinktest.New(t)
@@ -202,7 +208,7 @@ func newTestEnvWithAgent(t *testing.T, mock *mockAgent, ag agent.Agent, workDir 
 	restarter := restart.New(restarttest.Executable(workDir))
 	checker, installer := &fakeReleaseChecker{}, &fakeInstaller{}
 	raw := &rawCapabilitiesStub{}
-	h := NewRPCHandler(testPassword, authguard.New(), authsessiontest.New(), "test", func() string { return "" }, authsession.NewTickets(), raw, true, cmdStore, worktreeManager, settingsStore, workStore, workOps, workEngine, agentRoleStore, scheduleStore, scheduler, cliAuthService, cliupdate.NewService(slog.Default(), nil, nil), cloudLinks, restarter, NewUpdater(checker, installer))
+	h := NewRPCHandler(testPassword, authguard.New(), authsessiontest.New(), "test", func() string { return "" }, authsession.NewTickets(), raw, true, cmdStore, worktreeManager, settingsStore, workStore, workOps, workEngine, agentRoleStore, scheduleStore, scheduler, cliAuthService, cliProfiles, cliupdate.NewService(slog.Default(), nil, nil), cloudLinks, restarter, NewUpdater(checker, installer))
 	server := httptest.NewServer(h)
 
 	// No deadline of its own: every read and write is bounded individually (see
@@ -226,6 +232,8 @@ func newTestEnvWithAgent(t *testing.T, mock *mockAgent, ag agent.Agent, workDir 
 		scheduleStore:   scheduleStore,
 		testRoleID:      testRole.ID,
 		cliAuth:         cliAuth,
+		cliProfiles:     cliProfiles,
+		cliProfilesDir:  cliProfilesDir,
 		restarter:       restarter,
 		releases:        checker,
 		installer:       installer,
@@ -598,7 +606,8 @@ func newMinimalTestHandler(t *testing.T, password string, remoteURL func() strin
 	scheduler := schedule.NewScheduler(scheduleStore, workOps)
 	workOps.SetRunRecorder(scheduler)
 
-	h := NewRPCHandler(password, authguard.NewFrozen(), sessions, "test", remoteURL, tickets, &rawCapabilitiesStub{}, true, cmdStore, worktreeManager, settingsStore, workStore, workOps, work.NewEngine(workStore, work.DefaultMaxNudges), agentRoleStore, scheduleStore, scheduler, cliauth.NewService(slog.Default(), cliprofile.NewStore(t.TempDir())), cliupdate.NewService(slog.Default(), nil, nil), nil, restart.New(restarttest.Executable(workDir)), NewUpdater(&fakeReleaseChecker{}, &fakeInstaller{}))
+	cliProfiles := cliprofile.NewStore(t.TempDir())
+	h := NewRPCHandler(password, authguard.NewFrozen(), sessions, "test", remoteURL, tickets, &rawCapabilitiesStub{}, true, cmdStore, worktreeManager, settingsStore, workStore, workOps, work.NewEngine(workStore, work.DefaultMaxNudges), agentRoleStore, scheduleStore, scheduler, cliauth.NewService(slog.Default(), cliProfiles), cliProfiles, cliupdate.NewService(slog.Default(), nil, nil), nil, restart.New(restarttest.Executable(workDir)), NewUpdater(&fakeReleaseChecker{}, &fakeInstaller{}))
 	t.Cleanup(h.Stop)
 	return h
 }

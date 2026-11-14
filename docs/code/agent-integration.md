@@ -138,8 +138,9 @@ its profile.
 
 Removing a profile while a CLI still runs as it would have the CLI recreate the
 directory and write a real `projects/` into it, splitting the conversations
-from the shared ones ([cli-profiles.md](cli-profiles.md#switching-and-removing)).
-`worktree.Manager.ReleaseProfile` is the step before that removal: across every
+from the shared ones ([cli-profiles.md](cli-profiles.md#removing-a-profile)).
+`worktree.Manager.ReleaseProfile` is the step `cli_profile.remove` takes before
+that removal: across every
 loaded worktree — and the ones being unloaded, whose processes may still be
 running — it stops each process running as the profile that nothing is waiting
 on, waits until those CLIs and any already on their way out have exited, and
