@@ -20,6 +20,8 @@ Verified against Claude Code 2.1.283 and codex-cli 0.153.0.
 | `server/agent/run.go` | `agent.Run` / `agent.RunEnv`, the one-shot command runner: Claude's commands and every `--version` |
 | `server/agent/version.go` | `agent.Version`, the `--version` read, shared with [updates](cli-update.md) |
 | `server/ws/rpc_cli_auth.go` | the `cli_auth.*` methods |
+| `server/cliauth/lock.go` | the per-CLI lock: one profile per command, the whole CLI for a sign-in or an update ([below](#one-command-per-profile-at-a-time)) |
+| `server/cliauth/remove.go` | switching and removing a profile, which go through here because they have to exclude the sign-in commands ([cli-profiles.md](cli-profiles.md#removing-a-profile)) |
 | `server/cliprofile/` | the CLI's profiles (accounts): which one a command runs as, and what it is started with ([cli-profiles.md](cli-profiles.md)) |
 
 What a CLI prints and how it is read belongs with the rest of that CLI's
@@ -32,9 +34,19 @@ below — in `Service`.
 ## The RPC
 
 ```
-cli_auth.status  { agent? }  ->  { statuses: [Status] }
-cli_auth.logout  { agent }   ->  { status: Status }
+cli_auth.status  { agent?, profile_id?, all_profiles? }  ->  { statuses: [Status] }
+cli_auth.logout  { agent, profile_id? }                  ->  { status: Status }
 ```
+
+`profile_id` names the [profile](#which-profile) a call is for, on these and on
+`cli_auth.login.start`: absent (or `null`) is the current one, `""` the default
+one, anything else one of the CLI's stored profiles — an ID it does not have is
+refused as invalid params before anything runs. It needs `agent`.
+`all_profiles: true` reads every profile of `agent`, or of every CLI without
+it, and does not go with `profile_id`. Without either, a call is for the
+current profile, as it was before there were profiles. The profile list itself, and
+reading every profile with its conflicts, are
+[`cli_profile.*`](cli-profiles.md#the-rpc).
 
 The sign-in methods are [below](#signing-in).
 
@@ -49,6 +61,7 @@ The sign-in methods are [below](#signing-in).
   "external": { "kind": "api_key", "source": "ANTHROPIC_API_KEY" },     // external
   "error": "...",                  // unavailable, not_installed
   "login_id": "...",               // signing_in: the running sign-in
+  "login_profile_id": "...",       // signing_in: the profile it is for; absent for the default one
   "update_id": "..."               // updating: the running update or install
 }
 ```
@@ -61,8 +74,10 @@ Pockode's vocabulary, not either CLI's, so a client does not have to know that
 Claude says `third_party` where Codex says `amazonBedrock`. It names sources and
 never carries a value.
 
-`statuses` is in display order, Claude then Codex. Without `agent` every CLI is
-read, concurrently.
+`statuses` is in display order, Claude then Codex; with `all_profiles`, each
+CLI's default profile first and then its stored ones in their order. Every
+status in it is read concurrently, profiles included: a Codex read takes 3–12s,
+and reading a CLI's profiles one after another would add them up.
 
 ## No subscription
 
@@ -115,6 +130,15 @@ sessions do not use it. Otherwise `account: null` is `signed_out`, and only a
 case: the app-server does not read them, so an unsigned-in app-server with either
 set still fails its turn.
 
+Most sources of `external` are outside the profile's directory — the
+environment Pockode was started in, the shared settings or `config.toml`, a
+project's settings — so they apply to every profile of the CLI alike: each
+reads `external` with the same source, and choosing another profile changes
+nothing a session uses. The exception is a Codex API key signed in with
+`codex login --with-api-key`: it is kept in the profile's own `auth.json`, so
+it is that profile's alone. A client tells the two apart by reading every
+profile ([cli-profiles.md](cli-profiles.md#the-rpc)).
+
 ## Where the commands run
 
 In the server's work directory, not wherever the server process was started.
@@ -160,11 +184,16 @@ abandoned while the server is still on its way to an answer. The default RPC
 timeout in `web/src/lib/wsStore.ts` is 30s; `cli_auth.status` and
 `cli_auth.logout` use the longer one agent-starting requests already use
 (`web/src/lib/rpc/cliAuth.ts`). Raising a budget here eats into that
-margin, so the two grow together. Waiting for another command on the same CLI
+margin, so the two grow together. Waiting for another command on the same profile
 (below) comes on top and is capped at 20s, so the longest reply is 65s, inside
 the 75s that timeout allows; a call that waited that long without its turn is
 answered as `unavailable` (or, for a sign-out, an error) saying another command
 was still running.
+
+`cli_profile.inspect` is a status read of every profile and
+`cli_profile.remove` waits for the same lock — and stops the CLIs running as
+the profile, within the same 20s — and then signs out, so both need that
+timeout too ([cli-profiles.md](cli-profiles.md#removing-a-profile)).
 
 ## Which profile
 
@@ -175,8 +204,9 @@ when the call is made and hands the provider an ID, so the status it returns,
 and a sign-in, carry `profile_id` — the profile they were for, absent for the
 default one — even when the current profile changes while they run. A sign-in
 is pinned to its profile from `StartLogin` on, not from when its CLI starts
-after waiting for the lock. The RPC methods ask for the current profile today;
-naming another is for the profile screens to come.
+after waiting for the lock. A client names a profile with `profile_id`
+([above](#the-rpc)); one the CLI does not have is refused before it reaches a
+path, so a profile's directory is only ever one the server issued.
 
 A refusal met mid-conversation is recorded the same way: the chat's auth-failure
 record carries the `profile_id` of the account the session's CLI was running as
@@ -184,12 +214,18 @@ record carries the `profile_id` of the account the session's CLI was running as
 offers is for the account that was refused, even after the session has moved to
 another one.
 
-The lock below stays one per CLI, not per profile: an update replaces the
-binary every profile runs, and a CLI signs in one profile at a time — a second
-`StartLogin` for the same profile lands in the running sign-in, one for another
-is `ErrLoginInProgress`. While it runs, a status read for *any* of the CLI's
-profiles answers `signing_in`; its `login_id` names the sign-in, whose
-`profile_id` says which profile that is.
+A sign-in and an update hold the whole CLI ([below](#one-command-per-profile-at-a-time)):
+an update replaces the binary every profile runs, and a CLI signs in one
+profile at a time — a second `StartLogin` for the same profile lands in the
+running sign-in, one for another is `ErrLoginInProgress`. While it runs, a
+status read for *any* of the CLI's profiles answers `signing_in`; its
+`login_id` names the sign-in and `login_profile_id` the profile it is for, so a
+client tells the profile signing in from the ones only waiting for it without
+following the sign-in.
+
+A sign-in to a profile this server is removing is refused
+(`ErrProfileRemoving`, invalid params), and a removal is refused while the CLI
+signs in ([cli-profiles.md](cli-profiles.md#removing-a-profile)).
 
 Profiles are separate down to the OS keyring. On macOS Claude Code keeps its
 credentials in a Keychain item named after its configuration directory
@@ -214,15 +250,21 @@ tree is killed
 the CLI gets no console window of its own on a server that has none. A non-zero
 exit is a result, not an error, because the auth commands answer through it.
 
-## One command per CLI at a time
+## One command per profile at a time
 
 `Service` holds a lock per CLI around everything that runs one of its auth
-commands. A sign-out and a sign-in both rewrite the same credential file, and so
-may a status read: Claude refreshes expired credentials when asked for its
-status. Nothing inside a CLI coordinates two of its own processes doing that, so
+commands, and a command holds as little of it as it can (below). A sign-out
+and a sign-in both rewrite the same credential file, and so may a status read:
+Claude refreshes expired credentials when asked for its status. Nothing inside a CLI coordinates two of its own processes doing that, so
 a read racing a sign-out could write back the credentials it just removed.
 
-The lock is a channel, not a `sync.Mutex`, so a caller can stop waiting for it:
+A status read or a sign-out holds one profile of the CLI, so commands for
+different profiles — which keep their credentials apart, down to the Keychain
+item — run side by side; a sign-in or an update holds the whole CLI and waits
+for every command to finish.
+
+The lock is not a `sync.Mutex`: waiters watch a channel closed whenever it is
+released, so a caller can stop waiting for it:
 one whose client has gone does not stay queued behind a sign-out. `--version`
 touches no credentials, but runs under it all the same, beside the command it
 accompanies: an update takes the lock before replacing the CLI's files, and
@@ -259,10 +301,10 @@ server's shutdown does not wait for a WebSocket, so nothing else would stop a
 ## Signing in
 
 ```
-cli_auth.login.start       { agent, account_kind? }  ->  { login: Login }
-cli_auth.login.submit_code { login_id, code }        ->  { login: Login }   // Claude
-cli_auth.login.cancel      { login_id }              ->  { login: Login }
-cli_auth.login.subscribe   { id, agent }             ->  { login: Login | null }
+cli_auth.login.start       { agent, account_kind?, profile_id? }  ->  { login: Login }
+cli_auth.login.submit_code { login_id, code }                     ->  { login: Login }   // Claude
+cli_auth.login.cancel      { login_id }                           ->  { login: Login }
+cli_auth.login.subscribe   { id, agent }                          ->  { login: Login | null }
 cli_auth.login.unsubscribe { id }
 notification cli_auth.login.changed { id, login: Login }
 ```

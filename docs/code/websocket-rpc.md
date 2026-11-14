@@ -44,6 +44,7 @@ Method names are organized using the `namespace.method` format, solving two prob
 | `schedule.*` | app | `ws/rpc_schedule.go` |
 | `agent.*` | app | `ws/rpc_agent.go` |
 | `cli_auth.*` | app | `ws/rpc_cli_auth.go` |
+| `cli_profile.*` | app | `ws/rpc_cli_profile.go` |
 | `cli_update.*` | app | `ws/rpc_cli_update.go` |
 | `cloud_link.*` | app | `ws/rpc_cloud_link.go`; a cluster serves the same methods from `cluster/ws.go` ([cloud-account.md](cloud-account.md#the-cloud_link-rpc)) |
 | `port_preview.*` | app | `ws/rpc_port_preview.go` |
@@ -614,6 +615,7 @@ This pattern ensures:
 | `work.detail.subscribe` | ✅ Full details, with `children` / `parent` / `schedule` | `onSubscribed` replaces state |
 | `settings.subscribe` | ✅ Full settings | `onSubscribed` replaces state |
 | `remote_url.subscribe` | ✅ Current remote URL | `onSubscribed` replaces state; a reset keeps it ([why](#following-the-remote-url)) |
+| `cli_profile.subscribe` | ✅ Every CLI's profile list and availability | `onSubscribed` replaces state |
 | `agent_role.list.subscribe` | ✅ Full list | `onSubscribed` replaces state |
 | `schedule.list.subscribe` | ✅ Full list, each with its latest run | `onSubscribed` replaces state |
 | `schedule.detail.subscribe` | ✅ The schedule and its newest run page | `onSubscribed` replaces state ([run paging](../projects/api.md#schedule-runs)) |
@@ -1167,6 +1169,11 @@ moved branch is inspected again rather than retried; `-32010`
 (`rpc.CodeGitBranchCheckedOut`) refuses deleting the current branch or one
 another worktree has checked out, with `data.worktree`
 ([git.md](../git.md#deleting-a-branch)).
+`-32014` (`rpc.CodeCLIProfileRemoveRefused`) refuses a `cli_profile.remove`
+for a state the user can change — the profile is current, mid-turn in
+sessions `data.sessions` names, the CLI signing in or updating — with
+`data.reason`; the profile is left as it was
+([cli-profiles.md](cli-profiles.md#removing-a-profile)).
 
 A server's error message is therefore text to put in front of a user, never a
 value to branch on — it embeds an arbitrary error string, and its fixed half is

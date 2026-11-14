@@ -47,7 +47,7 @@ attachments/            # 按 session 存放事件里以 id 引用的内容（�
 authguard/              # 失败密码登录的全局退避锁（仅内存；各密码入口共用，session token / ticket / capability 不经过它）
 authsession/            # 登录会话：密码换取的 session token + 密码指纹（sessions.json）；端口预览的一次性登录 ticket、绑定 session 的资源 capability（均仅内存）
 chat/                   # Chat 客户端
-cliauth/                # AI CLI 登录状态查询、远程登录流程与登出（各 CLI 的实现在 agent/*/auth.go、login.go，见 docs/code/cli-auth.md）
+cliauth/                # AI CLI 登录状态查询、远程登录流程与登出，均可指定账号（各 CLI 的实现在 agent/*/auth.go、login.go，见 docs/code/cli-auth.md）；按账号加锁（lock.go：读状态 / 登出只占一个账号，登录 / 更新占整个 CLI）；账号的切换与删除（remove.go：要与登录命令互斥，所以经过这里；删除的顺序见 docs/code/cli-profiles.md#removing-a-profile）
 cliprofile/             # AI CLI 账号（profile）列表与当前账号 cli-profiles.json（与 cloud.json 同目录、本 OS 用户的所有进程共享；默认账号隐含不存；账号目录 cli-profiles/<cli>/<id>/）；账号目录的准备（prepare.go：除凭据外全部符号链接回默认目录，冲突只报告不搬动）与本机能否建符号链接的探测（availability.go；平台差异在 platform_*.go）；启动 CLI 时按哪个账号、带什么环境变量与参数（launch.go 的 `Resolve` / `Launch`）；cliprofiletest/ 给测试准备账号、把假 CLI 放上 PATH 并记录每次启动的环境与参数（见 docs/code/cli-profiles.md）
 cliupdate/              # AI CLI 新版本检查与更新（跑 CLI 自己的 update，再核对版本；各 CLI 的定义在 agent/*/update.go，见 docs/code/cli-update.md）
 cloudcred/              # 机器凭据 cloud.json（OS 用户配置目录下、本 OS 用户的所有进程共享；只对签发它的 cloud 使用，见 docs/code/cloud-account.md）

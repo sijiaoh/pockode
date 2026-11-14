@@ -18,6 +18,9 @@ import (
 // CLIs' own credential files, which a terminal, another project or another
 // cluster node can change without this server hearing of it, so there is no
 // change for a subscription to push. The client asks when it needs to know.
+// Every profile at once is still a read, not a subscription, for the same
+// reason; the profiles are read concurrently, since each Codex read takes
+// seconds.
 func (h *rpcMethodHandler) handleCLIAuthStatus(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request) {
 	var params rpc.CLIAuthStatusParams
 	if req.Params != nil {
@@ -27,7 +30,17 @@ func (h *rpcMethodHandler) handleCLIAuthStatus(ctx context.Context, conn *jsonrp
 		}
 	}
 
-	statuses, err := h.cliAuth.Statuses(ctx, params.Agent, cliprofile.SelectCurrent())
+	var statuses []cliauth.Status
+	var err error
+	if params.AllProfiles {
+		if params.ProfileID != nil {
+			h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "invalid params: profile_id and all_profiles do not go together")
+			return
+		}
+		statuses, err = h.cliAuth.EveryProfileStatuses(ctx, params.Agent)
+	} else {
+		statuses, err = h.cliAuth.Statuses(ctx, params.Agent, params.Selector())
+	}
 	if err != nil {
 		h.replyCLIAuthError(ctx, conn, req.ID, err)
 		return
@@ -45,7 +58,7 @@ func (h *rpcMethodHandler) handleCLIAuthLogout(ctx context.Context, conn *jsonrp
 		return
 	}
 
-	status, err := h.cliAuth.Logout(ctx, params.Agent, cliprofile.SelectCurrent())
+	status, err := h.cliAuth.Logout(ctx, params.Agent, params.Selector())
 	if err != nil {
 		h.replyCLIAuthError(ctx, conn, req.ID, err)
 		return
@@ -63,10 +76,12 @@ func (h *rpcMethodHandler) replyCLIAuthError(ctx context.Context, conn *jsonrpc2
 	h.replyReasonError(ctx, conn, id, err,
 		cliauth.ErrUnknownAgent,
 		cliauth.ErrProfileWithoutAgent,
+		cliprofile.ErrNotFound,
 		cliauth.ErrInvalidAccountKind,
 		cliauth.ErrLoginNotFound,
 		cliauth.ErrCodeNotExpected,
 		cliauth.ErrInvalidCode,
+		cliauth.ErrProfileRemoving,
 	)
 }
 
@@ -96,7 +111,7 @@ func (h *rpcMethodHandler) handleCLIAuthLoginStart(ctx context.Context, conn *js
 		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "invalid params: agent is required")
 		return
 	}
-	login, err := h.cliAuth.StartLogin(params.Agent, params.AccountKind, cliprofile.SelectCurrent())
+	login, err := h.cliAuth.StartLogin(params.Agent, params.AccountKind, params.Selector())
 	h.replyCLIAuthLogin(ctx, conn, req.ID, login, err)
 }
 

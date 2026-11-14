@@ -373,7 +373,7 @@ is refused while the other kind runs.
 
 An update or an install and the CLI's sign-in commands exclude each other
 through `cliauth.Service.BeginUpdate`; what each side is refused, and why, is in
-[cli-auth.md](cli-auth.md#one-command-per-cli-at-a-time). `cliupdate` sees
+[cli-auth.md](cli-auth.md#one-command-per-profile-at-a-time). `cliupdate` sees
 this as a `Gate`, so it has no dependency on sign-in. Sign-in does not know
 the kind: while an install runs, `cli_auth.status` answers `updating` with the
 install's id, and a client that wants to say *installing* reads the record's

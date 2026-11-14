@@ -16,6 +16,7 @@ import (
 	"github.com/pockode/server/attachments"
 	"github.com/pockode/server/authguard"
 	"github.com/pockode/server/cliauth"
+	"github.com/pockode/server/cliprofile"
 	"github.com/pockode/server/cliupdate"
 	"github.com/pockode/server/cloudlogin"
 	"github.com/pockode/server/command"
@@ -87,14 +88,19 @@ type RPCHandler struct {
 	scheduleDetailWatcher *watch.ScheduleDetailWatcher
 	cliAuth               *cliauth.Service
 	cliLoginWatcher       *watch.CLILoginWatcher
-	cliUpdate             *cliupdate.Service
-	cliUpdateWatcher      *watch.CLIUpdateWatcher
-	cloudLink             *CloudLink
-	conns                 *Connections
-	server                ServerControl
+	cliProfiles           *cliprofile.Store
+	cliProfileWatcher     *watch.CLIProfileWatcher
+	// profileReleaser is worktreeManager everywhere but in tests, which need
+	// a session mid-turn on a profile without driving one there.
+	profileReleaser  profileReleaser
+	cliUpdate        *cliupdate.Service
+	cliUpdateWatcher *watch.CLIUpdateWatcher
+	cloudLink        *CloudLink
+	conns            *Connections
+	server           ServerControl
 }
 
-func NewRPCHandler(password string, passwordGuard *authguard.Guard, sessions SessionStore, version string, remoteURL func() string, previewTickets PreviewTickets, rawCapabilities RawCapabilities, devMode bool, commandStore *command.Store, worktreeManager *worktree.Manager, settingsStore *settings.Store, workStore work.Store, workOps *work.Operations, workEngine *work.Engine, agentRoleStore agentrole.Store, scheduleStore schedule.Store, scheduler *schedule.Scheduler, cliAuth *cliauth.Service, cliUpdate *cliupdate.Service, cloudLink *cloudlogin.Service, restarter *restart.Restarter, updater *Updater) *RPCHandler {
+func NewRPCHandler(password string, passwordGuard *authguard.Guard, sessions SessionStore, version string, remoteURL func() string, previewTickets PreviewTickets, rawCapabilities RawCapabilities, devMode bool, commandStore *command.Store, worktreeManager *worktree.Manager, settingsStore *settings.Store, workStore work.Store, workOps *work.Operations, workEngine *work.Engine, agentRoleStore agentrole.Store, scheduleStore schedule.Store, scheduler *schedule.Scheduler, cliAuth *cliauth.Service, cliProfiles *cliprofile.Store, cliUpdate *cliupdate.Service, cloudLink *cloudlogin.Service, restarter *restart.Restarter, updater *Updater) *RPCHandler {
 	settingsWatcher := watch.NewSettingsWatcher(settingsStore)
 	settingsWatcher.Start()
 
@@ -128,6 +134,13 @@ func NewRPCHandler(password string, passwordGuard *authguard.Guard, sessions Ses
 
 	cliLoginWatcher := watch.NewCLILoginWatcher(cliAuth)
 	cliLoginWatcher.Start()
+
+	// The CLIs cli_auth.* knows are the ones whose profiles are listed, in the
+	// same order.
+	cliProfileWatcher := watch.NewCLIProfileWatcher(func() (cliprofile.Overview, error) {
+		return cliProfiles.Overview(cliAuth.Agents())
+	})
+	cliProfileWatcher.Start()
 
 	cliUpdateWatcher := watch.NewCLIUpdateWatcher(cliUpdate)
 	cliUpdateWatcher.Start()
@@ -164,6 +177,9 @@ func NewRPCHandler(password string, passwordGuard *authguard.Guard, sessions Ses
 		scheduleDetailWatcher: scheduleDetailWatcher,
 		cliAuth:               cliAuth,
 		cliLoginWatcher:       cliLoginWatcher,
+		cliProfiles:           cliProfiles,
+		cliProfileWatcher:     cliProfileWatcher,
+		profileReleaser:       worktreeManager,
 		cliUpdate:             cliUpdate,
 		cliUpdateWatcher:      cliUpdateWatcher,
 		cloudLink:             NewCloudLink(cloudLink),
@@ -183,6 +199,7 @@ func (h *RPCHandler) Stop() {
 	h.scheduleListWatcher.Stop()
 	h.scheduleDetailWatcher.Stop()
 	h.cliLoginWatcher.Stop()
+	h.cliProfileWatcher.Stop()
 	h.cliUpdateWatcher.Stop()
 	h.remoteURLWatcher.Stop()
 	h.cloudLink.Stop()
@@ -493,6 +510,27 @@ func (h *rpcMethodHandler) Handle(ctx context.Context, conn *jsonrpc2.Conn, req 
 		return
 	case "cli_auth.login.unsubscribe":
 		h.handleWatcherUnsubscribe(ctx, conn, req, h.cliLoginWatcher, "cli auth login")
+		return
+	case "cli_profile.subscribe":
+		h.handleCLIProfileSubscribe(ctx, conn, req)
+		return
+	case "cli_profile.unsubscribe":
+		h.handleWatcherUnsubscribe(ctx, conn, req, h.cliProfileWatcher, "cli profiles")
+		return
+	case "cli_profile.inspect":
+		h.handleCLIProfileInspect(ctx, conn, req)
+		return
+	case "cli_profile.add":
+		h.handleCLIProfileAdd(ctx, conn, req)
+		return
+	case "cli_profile.rename":
+		h.handleCLIProfileRename(ctx, conn, req)
+		return
+	case "cli_profile.switch":
+		h.handleCLIProfileSwitch(ctx, conn, req)
+		return
+	case "cli_profile.remove":
+		h.handleCLIProfileRemove(ctx, conn, req)
 		return
 	case "cli_update.check":
 		h.handleCLIUpdateCheck(ctx, conn, req)
