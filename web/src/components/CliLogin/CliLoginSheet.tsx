@@ -487,7 +487,11 @@ export default function CliLoginSheet({
 			announcement = `Signed in to ${label}`;
 			body = (
 				<>
-					<SignedIn title={`Signed in to ${label}`} account={login.account} />
+					<SignedIn
+						title={`Signed in to ${label}`}
+						account={login.account}
+						sharedBy={account?.name}
+					/>
 					{signedInNote}
 				</>
 			);
@@ -719,12 +723,19 @@ function describeStatus(
 	}
 }
 
+/**
+ * @param sharedBy The named account just signed in: a sign-in is the
+ * account's, so it reaches every Pockode on the machine using it, and the line
+ * under the heading says so (docs/cli-profiles-ui.md#adding-an-account).
+ */
 function SignedIn({
 	title,
 	account,
+	sharedBy,
 }: {
 	title: string;
 	account: CliAccount | undefined;
+	sharedBy?: string;
 }) {
 	const summary = accountSummary(account);
 	return (
@@ -732,7 +743,16 @@ function SignedIn({
 			icon={<CheckCircle2 className="h-5 w-5 text-th-success" />}
 			title={title}
 		>
-			{summary || null}
+			{summary || sharedBy ? (
+				<>
+					{summary}
+					{sharedBy && (
+						<span className="block text-xs text-th-text-muted">
+							{`${sharedBy} is signed in for other projects and cluster nodes on this machine too.`}
+						</span>
+					)}
+				</>
+			) : null}
 		</Outcome>
 	);
 }

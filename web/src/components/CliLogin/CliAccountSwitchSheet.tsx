@@ -7,6 +7,7 @@ import {
 	chosenProfileIdOf,
 	profileIdsOf,
 	recordedProfile,
+	SWITCH_SCOPE_CAPTION,
 } from "../../lib/cliProfiles";
 import type { AgentType } from "../../types/settings";
 import CliProfileRow, {
@@ -52,8 +53,9 @@ export interface CliAccountSwitchSheetProps {
  * Picks the CLI's current account, and does nothing else
  * (docs/cli-profiles-ui.md#the-switch-sheet): the rows are Settings', with
  * **Use** instead of a menu. Nothing switches on opening, and closing changes
- * nothing. A switch is global — every session on this machine — so the sheet
- * says so before anything can be pressed.
+ * nothing. A switch is this Pockode's — every session here, none elsewhere —
+ * so the sheet says so before anything can be pressed, in the Settings
+ * caption's words: it switches the same choice the card does.
  */
 export default function CliAccountSwitchSheet({
 	agent,
@@ -125,10 +127,7 @@ export default function CliAccountSwitchSheet({
 			}
 		>
 			<div className="space-y-2 p-4">
-				<p className="text-sm text-th-text-secondary">
-					Sessions use the current account from their next message, in every
-					project on this machine.
-				</p>
+				<p className="text-sm text-th-text-secondary">{SWITCH_SCOPE_CAPTION}</p>
 				<div className="space-y-1">
 					{ids.map((id) => (
 						<SwitchRow

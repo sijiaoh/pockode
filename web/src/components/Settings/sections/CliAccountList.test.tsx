@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { JSONRPCErrorException } from "json-rpc-2.0";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useCliLoginStore } from "../../../lib/cliLoginStore";
+import { SWITCH_SCOPE_CAPTION } from "../../../lib/cliProfiles";
 import {
 	createFakeCliAuth,
 	type FakeCliAuth,
@@ -177,15 +178,23 @@ describe("Settings → AI CLIs, accounts", () => {
 		).toBeInTheDocument();
 
 		const claude = await claudeCard();
-		expect(
-			claude.getByText(/New sessions and each session's next message/),
-		).toBeInTheDocument();
+		// Switching is this Pockode's: the caption never says it reaches others.
+		expect(claude.getByText(SWITCH_SCOPE_CAPTION)).toBeInTheDocument();
 		for (const id of ["", WORK, SPARE]) {
 			expect(server.actions.cliProfileInspect).toHaveBeenCalledWith(
 				"claude",
 				id,
 			);
 		}
+	});
+
+	// A first list after the upgrade to a choice per server has none.
+	it("tags Default current when the list names no current account", async () => {
+		setUpAccounts(undefined, overview({}, ""));
+		render(<CliSignInSection />);
+
+		expect((await row("Default")).getByText("Current")).toBeInTheDocument();
+		expect((await row("Work")).queryByText("Current")).not.toBeInTheDocument();
 	});
 
 	it("fills each row when its own read answers", async () => {
@@ -280,6 +289,11 @@ describe("Settings → AI CLIs, accounts", () => {
 		await user.click(
 			await claude.findByRole("button", { name: "Add account" }),
 		);
+		expect(
+			screen.getByText(
+				"You'll sign in to it next. Other projects and cluster nodes on this machine get it too. It becomes the current account only where you switch to it.",
+			),
+		).toBeInTheDocument();
 		await user.type(screen.getByLabelText("Name"), "  New ");
 		await user.click(screen.getByRole("button", { name: "Add" }));
 
@@ -302,6 +316,12 @@ describe("Settings → AI CLIs, accounts", () => {
 				phase: "succeeded",
 			}),
 		);
+		// A sign-in is the account's, so it reaches every Pockode using it.
+		expect(
+			await screen.findByText(
+				"New is signed in for other projects and cluster nodes on this machine too.",
+			),
+		).toBeInTheDocument();
 		await user.click(
 			await screen.findByRole("button", { name: "Switch to New" }),
 		);
@@ -410,11 +430,11 @@ describe("Settings → AI CLIs, accounts", () => {
 		it.each([
 			[
 				"Work",
-				"Work is the current Claude account, so sessions using Claude stop working until you sign in again or switch to another account.",
+				"Work is the current Claude account here, so sessions here stop working until you sign in again or switch to another account. Other projects and cluster nodes on this machine using Work stop working too.",
 			],
 			[
 				"Default",
-				"Sessions don't use Default while it isn't the current account.",
+				"Sessions here don't use Default while it isn't the current account, but other projects and cluster nodes on this machine may: they stop working on it until it's signed in again. A turn still running here as Default may fail.",
 			],
 		])("words the dialog for %s", async (name, message) => {
 			const user = userEvent.setup();
@@ -441,10 +461,33 @@ describe("Settings → AI CLIs, accounts", () => {
 				name === "Work" ? WORK : "",
 			);
 		});
+
+		// Sessions here run as Default there, whichever account is tagged.
+		it("words Default as current here where accounts can't be used", async () => {
+			const user = userEvent.setup();
+			setUpAccounts(
+				[
+					inspection(WORK, { state: "unavailable", error: "no profiles" }),
+					inspection("", signedIn("ada@example.com")),
+					inspection(SPARE, { state: "unavailable", error: "no profiles" }),
+				],
+				overview({ available: false }),
+			);
+			render(<CliSignInSection />);
+
+			await (await row("Default")).findByText("ada@example.com · Max");
+			await user.click(
+				screen.getByRole("button", { name: "Actions for Default" }),
+			);
+			await user.click(screen.getByRole("button", { name: "Sign out" }));
+			expect(
+				await screen.findByRole("dialog", { name: "Sign out of Default?" }),
+			).toHaveTextContent("Default is the current Claude account here");
+		});
 	});
 
 	describe("removing", () => {
-		it("offers no removal of the current account or of Default", async () => {
+		it("offers removal of the current account, but none of Default", async () => {
 			const user = userEvent.setup();
 			setUpAccounts();
 			render(<CliSignInSection />);
@@ -454,10 +497,7 @@ describe("Settings → AI CLIs, accounts", () => {
 			);
 			expect(
 				screen.getByRole("button", { name: /Remove account/ }),
-			).toHaveAttribute("aria-disabled", "true");
-			expect(
-				screen.getByText("Switch to another account first."),
-			).toBeInTheDocument();
+			).not.toHaveAttribute("aria-disabled", "true");
 			await user.keyboard("{Escape}");
 
 			await user.click(
@@ -473,21 +513,16 @@ describe("Settings → AI CLIs, accounts", () => {
 
 		it.each([
 			[
-				"current",
-				{},
-				"Spare is the current account. Switch to another account first, then remove it.",
-			],
-			[
 				"in_use",
 				{ sessions: [{ session_id: "a" }, { session_id: "b" }] },
-				"Spare is still running a turn in 2 sessions.",
+				"Spare is still running a turn in 2 sessions here.",
 			],
 			["updating", {}, "Claude is being updated. Try again when it's done."],
 			["removing", {}, "Spare is already being removed."],
 			[
 				"still_exiting",
 				{},
-				"Sessions on Spare are still stopping. Try again in a few seconds.",
+				"Some of Spare's runs here — sessions being stopped, or a one-off task such as drafting a commit message — haven't exited yet. Try again in a few seconds.",
 			],
 			[
 				"sign_out_failed",
@@ -495,6 +530,8 @@ describe("Settings → AI CLIs, accounts", () => {
 				"Pockode couldn't sign Spare out, so it kept the account.",
 			],
 			["something_new", {}, "the server's own words"],
+			// Refused by a server older than removing the current account.
+			["current", {}, "the server's own words"],
 		])("words a %s refusal", async (reason, data, text) => {
 			const user = userEvent.setup();
 			setUpAccounts();
@@ -577,6 +614,165 @@ describe("Settings → AI CLIs, accounts", () => {
 			});
 			await user.click(within(dialog).getByRole("button", { name: "Remove" }));
 		}
+
+		async function removeDialog(
+			user: ReturnType<typeof userEvent.setup>,
+			name: string,
+		) {
+			await user.click(
+				await screen.findByRole("button", { name: `Actions for ${name}` }),
+			);
+			await user.click(screen.getByRole("button", { name: /Remove account/ }));
+			return screen.findByRole("dialog", { name: `Remove ${name}?` });
+		}
+
+		const currentHere =
+			"Work is the current Claude account here, so sessions here move to Default from their next message.";
+		const defaultClause = "Default isn't signed in";
+
+		it("says what removing the current account does here, and to the others", async () => {
+			const user = userEvent.setup();
+			setUpAccounts();
+			render(<CliSignInSection />);
+			await (await row("Default")).findByText("ada@example.com · Max");
+
+			const dialog = await removeDialog(user, "Work");
+			expect(dialog).toHaveTextContent(currentHere);
+			expect(dialog).not.toHaveTextContent(defaultClause);
+			expect(dialog).toHaveTextContent(
+				"Pockode signs Work out of Claude and deletes it from this machine: other projects and cluster nodes lose it too, and any of them using it moves to Default.",
+			);
+			await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+
+			const spare = await removeDialog(user, "Spare");
+			expect(spare).not.toHaveTextContent("is the current Claude account");
+			expect(spare).toHaveTextContent(
+				"Sessions here idle on Spare are stopped",
+			);
+		});
+
+		it("warns that Default isn't signed in when the current account goes", async () => {
+			const user = userEvent.setup();
+			setUpAccounts([
+				inspection(WORK, signedIn("ada@work.example")),
+				inspection("", { state: "signed_out" }),
+				inspection(SPARE, { state: "signed_out" }),
+			]);
+			render(<CliSignInSection />);
+			await (await row("Default")).findByText("Not signed in");
+
+			const dialog = await removeDialog(user, "Work");
+			expect(dialog).toHaveTextContent(
+				`${currentHere} Default isn't signed in, so they won't work until you sign it in or switch to another account.`,
+			);
+		});
+
+		// Sessions there already run as Default whichever account is chosen.
+		it("says nothing of moving to Default where accounts can't be used", async () => {
+			const user = userEvent.setup();
+			setUpAccounts(
+				[
+					inspection(WORK, { state: "unavailable", error: "no profiles" }),
+					inspection("", { state: "signed_out" }),
+					inspection(SPARE, { state: "unavailable", error: "no profiles" }),
+				],
+				overview({ available: false }),
+			);
+			render(<CliSignInSection />);
+
+			const dialog = await removeDialog(user, "Work");
+			expect(dialog).not.toHaveTextContent("is the current Claude account");
+			expect(dialog).not.toHaveTextContent(defaultClause);
+		});
+
+		it("keeps Current on the account being removed and says new turns use Default", async () => {
+			const user = userEvent.setup();
+			setUpAccounts();
+			let refuse: () => void = () => {};
+			server.actions.cliProfileRemove.mockImplementation(
+				() =>
+					new Promise<void>((_, reject) => {
+						refuse = () =>
+							reject(
+								new JSONRPCErrorException("busy", -32014, {
+									reason: "in_use",
+									sessions: [{ session_id: "a" }],
+								}),
+							);
+					}),
+			);
+			render(<CliSignInSection />);
+			const work = await row("Work");
+			await work.findByText("ada@work.example · Max");
+
+			await removeFromMenu(user, "Work");
+			expect(
+				await work.findByText("New turns here use Default."),
+			).toBeInTheDocument();
+			expect(work.getByText("Current")).toBeInTheDocument();
+			expect(work.getByText("Removing…")).toBeInTheDocument();
+
+			act(() => refuse());
+			expect(await work.findByRole("alert")).toHaveTextContent(
+				"Work is still running a turn in 1 session here.",
+			);
+			expect(work.getByText("ada@work.example · Max")).toBeInTheDocument();
+			expect(work.getByText("Current")).toBeInTheDocument();
+			expect(
+				work.queryByText("New turns here use Default."),
+			).not.toBeInTheDocument();
+		});
+
+		it("drops the note once another account is switched to mid-removal", async () => {
+			const user = userEvent.setup();
+			setUpAccounts();
+			server.actions.cliProfileRemove.mockImplementation(
+				() => new Promise<void>(() => {}),
+			);
+			render(<CliSignInSection />);
+			const work = await row("Work");
+
+			await removeFromMenu(user, "Work");
+			expect(
+				await work.findByText("New turns here use Default."),
+			).toBeInTheDocument();
+			const def = await row("Default");
+			await user.click(def.getByRole("button", { name: "Switch to Default" }));
+			expect(server.actions.cliProfileSwitch).toHaveBeenCalledWith(
+				"claude",
+				"",
+			);
+
+			server.pushProfiles(overview({}, ""));
+			expect(await def.findByText("Current")).toBeInTheDocument();
+			expect(
+				work.queryByText("New turns here use Default."),
+			).not.toBeInTheDocument();
+			expect(work.getByText("Removing…")).toBeInTheDocument();
+		});
+
+		it("moves Current to Default in the push that takes the removed account away", async () => {
+			const user = userEvent.setup();
+			setUpAccounts();
+			render(<CliSignInSection />);
+
+			await removeFromMenu(user, "Work");
+			server.pushProfiles(
+				makeOverview({
+					clis: [
+						{ agent: "claude", profiles: [{ id: SPARE, name: "Spare" }] },
+						{ agent: "codex", profiles: [] },
+					],
+				}),
+			);
+			await vi.waitFor(() =>
+				expect(
+					screen.queryByRole("button", { name: "Actions for Work" }),
+				).not.toBeInTheDocument(),
+			);
+			expect((await row("Default")).getByText("Current")).toBeInTheDocument();
+			expect(screen.queryByText(/New turns here/)).not.toBeInTheDocument();
+		});
 
 		it("keeps the row removing until the list drops it, then returns to one account", async () => {
 			const user = userEvent.setup();
@@ -789,7 +985,9 @@ describe("Settings → AI CLIs, accounts", () => {
 				work.queryByRole("button", { name: "Retry reading Work" }),
 			).not.toBeInTheDocument();
 			expect(
-				screen.getByText("This machine uses Default whatever is current."),
+				screen.getByText(
+					"Pockode here uses Default whatever is current until it can use accounts.",
+				),
 			).toBeInTheDocument();
 		});
 

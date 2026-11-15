@@ -1095,8 +1095,8 @@ export interface MessageItemProps {
 	) => void;
 	/**
 	 * Opens the account switch for a refusal in this message — wherever it is
-	 * drawn, since a switch is global, not the session's. Must be stable: this
-	 * component is memoized.
+	 * drawn, since a switch is this Pockode's, not the session's. Must be
+	 * stable: this component is memoized.
 	 */
 	onSwitchAccount?: (refusal: CliRefusal, messageId: string) => void;
 	/**

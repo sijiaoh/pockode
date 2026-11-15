@@ -527,7 +527,7 @@ The screens are in [cli-login-ui.md](../cli-login-ui.md); the code behind them:
 | `web/src/lib/rpc/cliAuth.ts` | the `cli_auth.*` requests, each naming a profile or none (the current one) |
 | `web/src/lib/rpc/cliProfile.ts` | the `cli_profile.*` requests, and `cliProfileRemoveRefusal`, which reads a `-32014` |
 | `web/src/lib/cliLoginStore.ts` | status per CLI (its current profile) and its latest sign-in, the profile lists and each profile's inspection, in memory only; the update half is in [cli-update.md](cli-update.md#the-web-client) |
-| `web/src/lib/cliProfiles.ts` | reading those: a record's account by id, the profile a sign-in is for, credentials every profile shares |
+| `web/src/lib/cliProfiles.ts` | reading those: a record's account by id, this server's chosen profile and the one its CLI runs as, the profile a sign-in is for, credentials every profile shares, and the words for a refused removal and for what a switch reaches |
 | `web/src/hooks/useCliLoginSubscription.ts` | follows a CLI's sign-in into the store while a screen shows it |
 | `web/src/hooks/useCliProfileSubscription.ts` | follows the profile lists into the store while a screen shows them |
 | `web/src/components/CliLogin/` | `CliLoginSheet`, the one sign-in flow, and the wording it shares with the card |

@@ -45,7 +45,6 @@ export interface CliProfileActions {
 const CLI_PROFILE_REMOVE_REFUSED_CODE = -32014;
 
 const REMOVE_REFUSED_REASONS: readonly string[] = [
-	"current",
 	"in_use",
 	"signing_in",
 	"updating",

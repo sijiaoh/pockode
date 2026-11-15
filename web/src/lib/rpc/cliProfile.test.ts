@@ -29,6 +29,18 @@ describe("cliProfileRemoveRefusal", () => {
 			),
 		).toBeNull();
 	});
+
+	// An older server refused the current profile; this one removes it, so the
+	// reason is unknown here and its message is what gets shown.
+	it("does not know the retired current reason", () => {
+		expect(
+			cliProfileRemoveRefusal(
+				new JSONRPCErrorException("Work is current", -32014, {
+					reason: "current",
+				}),
+			),
+		).toBeNull();
+	});
 });
 
 // Absent is the current profile and "" the default one: dropping "" as falsy

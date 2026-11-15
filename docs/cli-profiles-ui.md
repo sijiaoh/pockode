@@ -5,9 +5,10 @@ uses, from a phone: the account list in Settings → AI CLIs, adding, switching,
 renaming, signing out and removing an account, and the way to switch from a
 chat turn that failed on its credentials or on a rate limit.
 
-> **Status:** built — Settings → AI CLIs, the chat's notice and the switch
-> sheet. The server side is done ([code/cli-profiles.md](code/cli-profiles.md),
-> [code/cli-auth.md](code/cli-auth.md)).
+> **Status:** built, with the current account chosen per Pockode server — the
+> client's data layer, Settings and the chat. The server side is done ([code/cli-profiles.md](code/cli-profiles.md),
+> [code/cli-auth.md](code/cli-auth.md)). What the revision changes in the
+> client is listed under [Moving to a choice per server](#moving-to-a-choice-per-server).
 
 Related: [cli-login-ui.md](cli-login-ui.md) — the card, the sign-in sheet and
 the auth-failure notice this extends, and whose words this keeps;
@@ -32,10 +33,25 @@ as an account named **Default** — the server gives it no name and refuses to
 rename it, so the client supplies the one word for it, from one place
 (`profileName` in `lib/cliProfiles.ts`).
 
-**Switching is global, and says so.** There is one current account per CLI
-for the whole OS user — every project, every cluster node on this machine. The
-UI never offers a per-session choice, and wherever it switches it says in one
-line what that reaches.
+**The list is shared, the choice is this Pockode's — and each says so.** The
+accounts, their names and their sign-ins belong to the OS user: every Pockode
+on this machine — each project's server, each cluster node — sees the same
+list, and an account signed in, signed out or removed from one is that for
+all. Which account is current is each Pockode's own: switching here changes
+what this Pockode's sessions run as, and nothing anywhere else. The UI never
+offers a per-session choice. Copy follows the split, in these words:
+
+- What only this Pockode does — switching, "Current", what sessions use — is
+  said as **here** ("sessions here", "the current account here"), and never
+  names other projects or cluster nodes, except to say they choose their own.
+- What reaches every Pockode — adding, sign-in, sign-out, removal — names
+  them: "other projects and cluster nodes on this machine", the phrase the
+  one-account sign-out already uses.
+
+**A Pockode that never chose is on Default.** That includes every Pockode after
+the upgrade to the per-server choice: an earlier global choice is not carried
+over. The UI says nothing about it — "Current" on Default is the truth, read
+from the list like any other choice ([not done](#considered-and-not-done)).
 
 **The list is pushed, each account's state is read, each on its own.** The
 list and the current account come from `cli_profile.subscribe`
@@ -98,8 +114,9 @@ unchanged. New words are listed where they appear.
 │    ada@example.com · Pro                          │
 │ ○  Spare                       [ Sign in ]    ⋯   │
 │    Not signed in                                  │
-│    New sessions and each session's next message   │  caption
-│    use the current account, in every project here.│
+│    Sessions here use the current account from     │  caption
+│    their next message. Other projects and cluster │
+│    nodes on this machine choose their own.        │
 └───────────────────────────────────────────────────┘
 ```
 
@@ -135,13 +152,14 @@ fixed height:
   is its own.
 - **`⋯`** — `iconButtonClass`, `Ellipsis`, `aria-label="Actions for Work"`,
   44px on a coarse pointer. Opens the account's menu (below). Every row has one.
-- **Caption** — under the last row, `text-xs text-th-text-muted`: "New
-  sessions and each session's next message use the current account, in every
-  project here." The rule that would otherwise surprise someone, said once per
-  card, not in every dialog.
+- **Caption** — under the last row, `text-xs text-th-text-muted`: "Sessions
+  here use the current account from their next message. Other projects and
+  cluster nodes on this machine choose their own." The two rules that would
+  otherwise surprise someone — a running turn keeps its account, and the list
+  is shared but the choice is not — said once per card, not in every dialog.
 
 No checkbox or radio: tapping a row does nothing. A switch reaches every
-session on the machine, so it is a button press, never a stray tap
+session of this Pockode, so it is a button press, never a stray tap
 ([git-branches-ui.md](git-branches-ui.md#the-branchs-menu-) made the same call
 for branches).
 
@@ -156,7 +174,7 @@ Order is frequency; the destructive item last, behind a divider, `danger`.
 | **Sign in** (`LogIn`) | signed out, and not the account signing in (its row has **Continue**) | the CLI is signing in another account — "Wait for Spare's sign-in to finish." ("Wait for the sign-in to finish." when status has not said which); the CLI is updating — "Wait for the update to finish." |
 | **Sign out** (`LogOut`) | signed in | the CLI is signing in — "Wait for the sign-in to finish."; updating — "Wait for the update to finish." |
 | **Rename…** (`Pencil`) | stored accounts (not Default) | — |
-| **Remove account…** (`Trash2`, danger) | stored accounts (not Default) | current — "Switch to another account first." |
+| **Remove account…** (`Trash2`, danger) | stored accounts (not Default), current one included | — |
 
 Following `MenuRow`'s rule: an item that never applies (renaming Default) is
 absent; one that applies but not now is disabled and says why. The server stays
@@ -173,8 +191,9 @@ signed in" with **Sign in** beside "Current", which is its own warning.
    one field labelled "Name", placeholder "e.g. Work", `maxLength={64}`,
    focused on a fine pointer, and **Add** as the sheet's submit
    (disabled while the trimmed field is empty, spinner "Adding…" while it
-   runs). Under the field, muted: "You'll sign in to it next. It won't become
-   the current account until you switch to it."
+   runs). Under the field, muted: "You'll sign in to it next. Other projects
+   and cluster nodes on this machine get it too. It becomes the current account
+   only where you switch to it." Only on add; the rename sheet has no note.
 2. `cli_profile.add`. A refusal (empty after trimming, too long, a control
    character, a name in use ignoring case) is the server's message under the
    field in `text-xs text-th-error role="alert"`, field kept and selected. The
@@ -189,6 +208,13 @@ signed in" with **Sign in** beside "Current", which is its own warning.
    on the sheet as "Couldn't switch:" and the error. Where this machine can't
    use accounts there is no switch to offer — every session runs as Default
    whichever is chosen — and it ends on **Done**.
+
+   Whatever it ends on, the success screen of a **named** account's sign-in
+   (the CLI has stored profiles) carries one muted line under its heading:
+   "Work is signed in for other projects and cluster nodes on this machine
+   too." A sign-in is the account's, not this Pockode's, and this is where the
+   user learns that it just fixed the other Pockodes using Work as well. The
+   one-account sheet is today's, without it.
 
 If the CLI is already signing in another account when the sheet opens for
 this one, the sheet says so instead of following that sign-in: "Claude is
@@ -210,8 +236,8 @@ refusals as for adding. The new name arrives through `cli_profile.changed`.
 
 **Switch** (row) or **Switch to this account** (menu) calls
 `cli_profile.switch` directly, no confirm: it is undone by switching back,
-interrupts nothing (a running turn keeps its account until it ends) and the
-caption has already said what it reaches. While it runs that row's slot shows a
+interrupts nothing (a running turn keeps its account until it ends), reaches
+only this Pockode and the caption has already said so. While it runs that row's slot shows a
 spinner and every Switch on the card is disabled. The "Current" tag moves when
 `cli_profile.changed` arrives — not optimistically, since another device may
 have switched meanwhile and the push is the truth. The switch counts as running
@@ -220,21 +246,38 @@ being followed — not merely until the next push, which may be the unchanged
 list the server sends again whenever another page subscribes. A failure is the
 row's notice (`CliRowNotice` error).
 
+A switch made on another project's server or cluster node is neither pushed
+nor applied here, so this card never moves "Current" for one; nothing needs
+handling.
+
 ### Sign out
 
-`ConfirmDialog`, `variant="danger"`, as today. The copy depends on what the
-sign-out reaches:
+`ConfirmDialog`, `variant="danger"`, as today. A sign-out is the account's, so
+it reaches every Pockode using it; the copy says what it does here, then what
+it does elsewhere:
 
 - **One account** (no stored profiles) — unchanged: "Sign out of Claude?" /
   "Every session using Claude on this server stops working until you sign in
   again. This includes other projects and cluster nodes on this machine."
-- **The current account, with others** — "Sign out of Work?" / "Work is the
-  current Claude account, so sessions using Claude stop working until you sign
-  in again or switch to another account. This includes other projects and
-  cluster nodes on this machine."
-- **Another account** — "Sign out of Work?" / "Sessions don't use Work while
-  it isn't the current account. A turn still running as Work may fail. You'll
-  need to sign in again before switching back to it."
+  Still exact: with no stored profiles every Pockode is on Default.
+- **The current account here, with others** — "Sign out of Work?" / "Work is
+  the current Claude account here, so sessions here stop working until you
+  sign in again or switch to another account. Other projects and cluster nodes
+  on this machine using Work stop working too."
+- **Another account** — "Sign out of Work?" / "Sessions here don't use Work
+  while it isn't the current account, but other projects and cluster nodes on
+  this machine may: they stop working on it until it's signed in again. A turn
+  still running here as Work may fail. You'll need to sign in again before
+  switching back to it."
+
+"The current account here" is the one sessions here run as
+(`currentProfileIdOf`), as for the removal dialog: where this machine can't use
+accounts that is Default, whichever account is tagged "Current".
+
+Default, among several accounts, is either of the last two like any other —
+the Pockodes "using" it include every one that never chose. This server
+cannot know which other Pockodes chose an account, so the copy says "using
+Work" / "may", never a count.
 
 The title names the account, not the CLI, once there is more than one: "Sign
 out of Claude?" would read as all of them. `cli_auth.logout { agent,
@@ -242,36 +285,97 @@ profile_id }`; spinner and error on that row as today.
 
 ### Removing
 
-**Remove account…** opens a `ConfirmDialog`, `variant="danger"`:
+Any stored account can be removed, the current one included: being current
+here, or anywhere, is no longer a reason to keep it. Removal is the account's,
+so it reaches every Pockode: the account leaves every Pockode's list, and every
+one that had it chosen — this one included, when it is current here — is on
+Default from then on.
+
+**Remove account…** opens a `ConfirmDialog`, `variant="danger"`. The body has
+one sentence more when the account is the one sessions here run as
+(`currentProfileIdOf` — so not on a machine that can't use accounts, where
+they already run as Default), and the rest is the same:
 
 > **Remove Work?**
-> Pockode signs Work out of Claude and deletes its sign-in from this machine.
-> Conversations are kept — they belong to every account. Sessions idle on Work
-> are stopped; if one is still running a turn, nothing is removed.
+> *(current here only)* Work is the current Claude account here, so sessions
+> here move to Default from their next message.
+> Pockode signs Work out of Claude and deletes it from this machine: other
+> projects and cluster nodes lose it too, and any of them using it moves to
+> Default. Conversations are kept — they belong to every account. Sessions
+> here idle on Work are stopped; if one is still running a turn, nothing is
+> removed.
 >
 > Cancel · **Remove**
+
+— and with that sentence, when Default's read (`inspections`) is *Not signed
+in*, it gains: "Default isn't signed in, so they won't work until you sign it
+in or switch to another account." Only on that read: an unread, failed,
+signing-in or external Default says nothing, since the dialog does not wait for
+a read. "Sessions here" and "running a turn" are this Pockode's: the
+server stops and checks only its own sessions
+([code/cli-profiles.md](code/cli-profiles.md#removing-a-profile)), and another
+Pockode's running turn does not refuse the removal, which is why the copy
+claims nothing about them beyond the move to Default.
 
 Then `cli_profile.remove` on the long requester (the server's budget is in
 [code/cli-profiles.md](code/cli-profiles.md#removing-a-profile)).
 Meanwhile that row's slot shows a spinner and "Removing…", its `⋯` is disabled,
-and the card's Switch buttons stay enabled — except to this row. On success the
-row disappears with the next `cli_profile.changed`; when it was the last stored
-account, the card goes back to the one-account layout.
+and the card's Switch buttons stay enabled — except to this row (the server
+would refuse it as `removing`). A switch to another account pressed meanwhile
+goes through at once, as any switch: "Current" moves to it on the push, and the
+removing row, no longer the current one, loses the subtitle below and keeps
+only "Removing…".
+
+**While the current account is being removed.** The server keeps it as the
+choice until the removal succeeds — so "Current" stays on the row, and a
+refusal leaves everything as it was — but already starts this Pockode's new
+turns on Default in its place. The removing row says so: while its removal
+runs and it is the account sessions here run as (`currentProfileIdOf`, as for
+the dialog), its subtitle reads "New turns here use Default." in place of its
+state — true whichever way the removal ends — and goes back to its state if
+the removal is refused. Not in the chat: the turn that starts on
+Default is an ordinary turn, and nothing recorded on it would stay true
+([not done](#considered-and-not-done)). The window is only as long as the
+removal request, and only the page that sent it knows it is running: on
+another device the row stays as it was until the push takes it away.
+
+**On success** the row disappears with the next `cli_profile.changed`. The push
+that follows removing the current account has no `current_profile_id`, which
+the client already reads as Default (`chosenProfileIdOf` → `""`): "Current"
+moves to Default in the same push that takes the row away, with no step of its
+own and no notice. When it was the last stored account, the card goes back to
+the one-account layout, where no account is tagged. A Switch on this card that
+is still counted as running settles on this push as on any other that moves
+"Current".
+
+**Removed by another Pockode.** Only the server that removes an account pushes
+it ([code/cli-profiles.md](code/cli-profiles.md#removing-a-profile)). This
+server is moved to Default all the same, but its clients are not told: the row
+— and "Current" on it, if it was chosen here — stays until this page follows
+the list afresh (a new subscription, as on coming back to Settings), which
+then has neither. An action pressed on it meanwhile is refused by the server
+(invalid params) and is that row's notice, like any failure. The UI adds
+nothing for this: it is the same staleness as another process's additions.
 
 A refusal (`-32014`, `data.reason`) is the row's notice; the profile is
-unchanged by definition. The client words each reason itself; the server's
-message is used only for a reason this build does not know:
+unchanged by definition, current here included. The client words each reason
+itself; the server's message is used only for a reason this build does not
+know:
 
 | `reason` | Notice |
 |---|---|
-| `current` | "Work is the current account. Switch to another account first, then remove it." |
-| `in_use` | "Work is still running a turn in 1 session (2 sessions, …). Idle sessions on it were stopped. Try again once the turn finishes." — the count from `data.sessions` |
+| `in_use` | "Work is still running a turn in 1 session here (2 sessions, …). Idle sessions on it were stopped. Try again once the turn finishes." — the count from `data.sessions` |
 | `signing_in` | "Claude is signing in Spare. Finish or cancel that sign-in, then try again." — the account the running sign-in is for (its login, else live status' `login_profile_id`; absent: Default); without "Spare" when it is this account, when nothing has said which, or when the list does not have it. The signing-in row already carries **Continue**, so the notice adds no button |
 | `updating` | "Claude is being updated. Try again when it's done." |
 | `removing` | "Work is already being removed." |
 | `sign_out_failed` | "Pockode couldn't sign Work out, so it kept the account. Its sign-in has to be removed first, or it stays on this machine." with the server's message (which carries the CLI's error) in a collapsed **Details**. When the CLI's status reads *not installed*: "Claude isn't installed, so Work can't be signed out first. Install Claude, then remove it." |
-| `still_exiting` | "Sessions on Work are still stopping. Try again in a few seconds." |
+| `still_exiting` | "Some of Work's runs here — sessions being stopped, or a one-off task such as drafting a commit message — haven't exited yet. Try again in a few seconds." |
 | anything else | the server's message, verbatim |
+
+There is no `current` reason any more; the client drops it from its type and
+its wording rather than keeping a sentence for something the server no longer
+says. An older server that still sends it gets "anything else" — its own
+message — which is the rule for every reason this build does not know.
 
 A removal that took the account off the list but left its directory is an
 internal error; the row is gone (the list was pushed), so the error goes to the
@@ -341,10 +445,12 @@ sentences and **Close**, with no field — the one-account card stays as it is.
 Then, on a card with stored profiles: the rows are drawn (the list is shared
 and real), every non-Default row reads `unavailable` and is drawn **dimmed**
 with "Can't be used on this machine" instead of *Couldn't read sign-in status*
-and no Retry. "Current" stays where the list puts it — another process follows
-it — but when it is not Default the caption reads "This machine uses Default
-whatever is current." Switch and Rename stay (the server takes them); Remove
-stays (the server removes without signing out here).
+and no Retry. "Current" stays where the list puts it — it is this Pockode's
+stored choice, which takes effect once it restarts where accounts can be used —
+but when it is not Default the caption reads "Pockode here uses Default
+whatever is current until it can use accounts." Switch and Rename stay (the
+server takes them); Remove stays (the server removes without signing out
+here).
 
 Without a configuration directory `add` / `rename` / `switch` fail with the
 reason; the failure is shown where the action was pressed, like any other.
@@ -456,8 +562,8 @@ notices on screen, as today once per CLI; the "every account external" check
 reads each account of that CLI once, and only when the CLI has stored
 profiles.
 
-**Switch account** is offered wherever the notice is drawn — a switch is
-global, not the session's. **Sign in** and **Send again** keep today's limits
+**Switch account** is offered wherever the notice is drawn — a switch is this
+Pockode's, not the session's, so it is the same switch from any session here. **Sign in** and **Send again** keep today's limits
 (no Sign in where today's notice has none, such as a viewed session — the
 switch sheet's rows included).
 
@@ -473,8 +579,9 @@ time):
 ```
 Switch Claude account                              ✕
 ─────────────────────────────────────────────────────
-Sessions use the current account from their next message,
-in every project on this machine.
+Sessions here use the current account from their next
+message. Other projects and cluster nodes on this machine
+choose their own.
 
  ●  Work  Current                                  ← the record's account
     ada@work.example · Max · Turned away this turn
@@ -512,32 +619,65 @@ footer has **Done** alone. After **Use** on Default, "Current" moves there and
   account reads signed in or external — today's rule. A draft in the way turns it into
   **Copy message**, as there. **Done** always.
 - No switch happens on opening, and closing changes nothing.
+- The header's sentence is the Settings caption, word for word, from one
+  place: the sheet switches the same choice the card does.
+- The record's account may have been removed since. Removed here, the push
+  has taken its row away — and, if it was current here, put "Current" on
+  Default — so the sheet needs no case for it: no "· Turned away" note, and
+  **Send again** follows the removed-account rule above. Removed by another
+  Pockode, the list here has not heard ([Removed by another Pockode](#removing)),
+  and the sheet shows it as before until the list is followed afresh.
 
 From Settings there is no switch sheet — the card is the list.
 
 ## Cluster
 
 `web-cluster` gets none of this, as it has no sign-in UI
-([cli-login-ui.md](cli-login-ui.md#cluster)). The list is shared by every
-Pockode process of the OS user, so a switch made from any node's Pockode
-applies to all of them — which is what the caption and the dialogs say.
+([cli-login-ui.md](cli-login-ui.md#cluster)). Each node is a Pockode of its
+own here: the list is shared by every Pockode process of the OS user, so an
+account added, signed in, signed out or removed from any node's Pockode is that
+on every node — which is what the add note, the sign-in line and the sign-out
+and removal dialogs say. Which account is current is each node's choice
+([cluster.md](cluster.md#frontend-ux)): switching in one node's Settings, or
+from a chat on it, changes what that node runs as and no other — which is what
+the caption and the switch sheet say. A node that never chose is on Default.
 
 ## Components
 
 | Piece | Where | What |
 |-------|-------|------|
-| `cli_profile.*` requests, types | `web/src/lib/rpc/cliProfile.ts`, `web/src/types/cliProfile.ts` | `inspect` and `remove` on the long requester; `cliProfileRemoveRefusal` reading `-32014`'s `data.reason` / `data.sessions` into a `CliProfileRemoveRefusal` |
+| `cli_profile.*` requests, types | `web/src/lib/rpc/cliProfile.ts`, `web/src/types/cliProfile.ts` | `inspect` and `remove` on the long requester; `cliProfileRemoveRefusal` reading `-32014`'s `data.reason` / `data.sessions` into a `CliProfileRemoveRefusal`; `current_profile_id` documented as this server's choice |
 | `cli_auth.*` requests, types | `web/src/lib/rpc/cliAuth.ts`, `web/src/types/cliAuth.ts` | `profileId` on `cliAuthStatus` / `cliAuthLogout` / `cliLoginStart`; `profile_id`, `login_profile_id` on `CliAuthStatus`, `profile_id` on `CliLogin` |
 | `cliLoginStore` | `web/src/lib/` | Also holds the `Overview` (`profiles`, followed per screen with `useCliProfileSubscription`) and each account's inspection, live and settled (`inspections`, `settledInspections`, `ensureInspection(agent, id)`); the login and update halves stay per CLI (one sign-in per CLI) — [code/cli-auth.md](code/cli-auth.md#the-web-client) |
-| `lib/cliProfiles.ts` | `web/src/lib/` | `profileName(overview, agent, id)` ("Default", the name, or "a removed account") for records, `liveProfileName` for live state (undefined rather than "removed" for an id not heard of — another process's changes are not pushed), `chosenProfileIdOf` (the list's current account, where "Current" is drawn) and `currentProfileIdOf` (the one the CLI runs as — Default where accounts can't be used), `hasStoredProfiles`, `sharedExternal(statuses)` / `profilesSharedExternal(ids, inspections)`, `removeRefusalText(…)`, `unavailableText(reason)` |
-| `CliProfileRow` | `web/src/components/Settings/sections/` | One account's row — `useProfileView` reads it, `profileNeed` / `offersSwitch` say what it asks for, the caller draws the button; `useProfileSwitch` runs a switch. Settings and the switch sheet both draw it |
-| `CliAccountList` | same | The rows of a CLI with stored profiles, their dialogs and refusals; `CliStatusCard` picks it or today's `CliAccountRow` |
+| `lib/cliProfiles.ts` | `web/src/lib/` | `profileName(overview, agent, id)` ("Default", the name, or "a removed account") for records, `liveProfileName` for live state (undefined rather than "removed" for an id not heard of — another process's changes are not pushed), `chosenProfileIdOf` (this server's chosen account, Default when the list names none — where "Current" is drawn) and `currentProfileIdOf` (the one the CLI runs as — Default where accounts can't be used), `hasStoredProfiles`, `sharedExternal(statuses)` / `profilesSharedExternal(ids, inspections)`, `removeRefusalText(…)`, `unavailableText(reason)`, `SWITCH_SCOPE_CAPTION` (the card's caption and the switch sheet's header, one string) |
+| `CliProfileRow` | `web/src/components/Settings/sections/` | One account's row — `useProfileView` reads it, `profileNeed` / `offersSwitch` say what it asks for, the caller draws the button; `useProfileSwitch` runs a switch; `subtitleOverride` says something in place of the state (the removing current row's "New turns here use Default."). Settings and the switch sheet both draw it |
+| `CliAccountList` | same | The rows of a CLI with stored profiles, their dialogs and refusals; the sign-out and removal dialogs key "current here" on `currentProfileIdOf`, not on the "Current" tag; `CliStatusCard` picks it or today's `CliAccountRow` |
 | `CliAccountMenu`, `CliAccountNameSheet` | same | The `⋯` sheet; add / rename, and the reason in place of the field on a machine without accounts |
-| `CliLoginSheet` | `web/src/components/CliLogin/` | Takes `account` (`{ id, name }`); its title names it; a signed-in account that is not current ends on **Switch to …** and **Done**; another account's running sign-in is said, not followed |
+| `CliLoginSheet` | `web/src/components/CliLogin/` | Takes `account` (`{ id, name }`, given only where the CLI has stored profiles); its title names it, and its success screen adds that the sign-in reaches other projects and cluster nodes; a signed-in account that is not current ends on **Switch to …** and **Done**; another account's running sign-in is said, not followed |
 | `cliRefusal` | `web/src/utils/` | `CliRefusal` (either mark, with its kind), `refusalNotice` (where a turn's one notice goes), `isRepeatedByEnding`, `failedOnRefusal` (what Send again asks of a turn), `refusalAccounts` (every account the transcript's marks name) |
 | `CliRefusalNotice` | `web/src/components/Chat/` | Replaces `AuthFailureNotice`; both markers. Draws the caller's `plain` record for a usage limit on one account, or where this machine can't use accounts. `ChatPanel` follows the account list (`useCliProfileSubscription`) only while its transcript holds a refusal, and subscribes afresh once for each recorded id the list lacks (another Pockode process's additions are not pushed); until the list arrives the notice offers no button, and a list that fails reads as one account |
 | `CliAccountSwitchSheet` | `web/src/components/CliLogin/` | The chat's switch sheet: `recordedProfileId` (the record's, as recorded) / `recordedNote` for its row while it still exists, `onSignIn(account)` to swap in `CliLoginSheet`, `sendAgain` — the offer, which the sheet shows only once the current account is signed in (or external) and is not the record's |
 | `useSendAgainParts` | `web/src/components/CliLogin/loginParts.tsx` | The Send again / Copy message button and the "draft kept" note, for both sheets |
+
+### Moving to a choice per server
+
+What this revision changes in code that is already built. Nothing in the
+RPC's shapes changed, so no request, store field or component is added; the
+changes are copy, one menu rule, one refusal and one subtitle (and the row prop that carries it).
+
+| Where | Change |
+|-------|--------|
+| `types/cliProfile.ts` | Drop `"current"` from the removal refusal reasons; `current_profile_id`'s comment says it is this server's choice (absent: Default, including after the upgrade and after the current account is removed) |
+| `lib/cliProfiles.ts` | `removeRefusalText`: drop `current`, add "here" to `in_use`, the new `still_exiting` sentence. `chosenProfileIdOf`'s comment: the choice is this server's, not shared with other processes. One exported caption string, used by the card and the switch sheet |
+| `CliAccountMenu.tsx` | **Remove account…** enabled on the current account (no "Switch to another account first.") |
+| `CliAccountList.tsx` | The caption; the two several-account sign-out bodies; the removal dialog (the current-here sentence, the Default-not-signed-in clause, "here" on sessions); the removing current row's subtitle; the unavailable caption |
+| `CliProfileRow.tsx` | `subtitleOverride`, which the removing current row says its note through |
+| `CliAccountNameSheet.tsx` | The add note |
+| `CliLoginSheet` | The shared sign-in line on a named account's success screen |
+| `CliAccountSwitchSheet.tsx` | The header sentence (the shared caption); its doc comment no longer calls a switch global |
+| `CliRefusalNotice.tsx`, `MessageItem.tsx` | `onSwitchAccount`'s doc comment: the switch is this Pockode's, not the session's |
+| `CliStatusCard.tsx` | Nothing: the one-account sign-out stays word for word |
+| `docs/cli-login-ui.md` | Its pointer to the several-account sign-out says "current here"; the one-account sign-out it describes is still true |
 
 ## What to test
 
@@ -561,6 +701,23 @@ applies to all of them — which is what the caption and the dialogs say.
   account, once the current one is); a sign-in from the notice to an account
   that is not current offers Switch, not Send again; the usage-limit words never say the
   limit was hit.
+- Scope words: the caption and the switch sheet's header say switching is
+  this Pockode's and never that it reaches other projects or cluster nodes;
+  the add note, a named account's sign-in success, both several-account
+  sign-outs and the removal dialog say what reaches them.
+- A list without `current_profile_id` tags Default "Current" — a first list
+  after the upgrade, with no notice.
+- **Remove account…** is enabled on the current account. Its dialog has the
+  current-here sentence only then (not where the machine can't use accounts),
+  and the Default clause only when Default reads *Not signed in*.
+- While the current account's removal runs, its row keeps "Current" and says
+  "New turns here use Default."; a refusal restores its subtitle and keeps "Current";
+  success — the push with no `current_profile_id` — removes the row and moves
+  "Current" to Default (or back to the one-account card) in one render.
+- `still_exiting` renders the one-off wording; a `current` reason from an older
+  server renders its message verbatim.
+- The switch sheet, open on a notice whose account was removed while it was
+  current here, shows Default as current and no "Turned away" note.
 
 ## Implementation notes
 
@@ -589,14 +746,30 @@ applies to all of them — which is what the caption and the dialogs say.
 
 ## Considered and not done
 
-- **Tapping a row to switch.** One stray tap would move every session on the
-  machine; a button costs nothing.
+- **Tapping a row to switch.** One stray tap would move every session of this
+  Pockode; a button costs nothing.
 - **Moving the current account to the top.** Rows that jump on switching put
   the wrong account under the finger.
 - **A confirm for switching.** Undone by switching back, interrupts nothing,
   and the caption already says what it reaches.
-- **Per-session account choice.** Out of scope by the story: one current
-  account per CLI.
+- **Per-session account choice.** Out of scope: one current account per CLI
+  per Pockode.
+- **Telling the user they were moved to Default by the upgrade.** The old
+  global choice is not carried over, so a Pockode that used Work is on Default
+  afterwards. A one-time notice would need the client to remember a choice the
+  server dropped — state the page doesn't own. "Current" on Default, and a
+  turn that then fails on Default's credentials offering **Switch account**,
+  say it where it matters.
+- **Showing which other Pockodes use an account.** This server does not know
+  other servers' choices, so dialogs say "any of them using it" rather than a
+  count or names.
+- **Marking turns that started on Default during a removal.** The turn is an
+  ordinary one on Default; a mark on its record would say something about a
+  removal that may then be refused. The removing row's subtitle is where the
+  window is visible, for as long as it lasts.
+- **Asking for a switch before removing the current account, or a dialog of
+  its own for it.** The removal moves this Pockode to Default anyway; the same
+  dialog with one sentence more says so.
 - **Offering "Add account" from a one-account usage-limit notice.** It would
   be the moment the feature is most useful, but it puts a new button on a
   screen the one-account rule promises to leave alone. Revisit if users ask.

@@ -1,6 +1,7 @@
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { SWITCH_SCOPE_CAPTION } from "../../lib/cliProfiles";
 import {
 	createFakeCliAuth,
 	type FakeCliAuth,
@@ -101,6 +102,12 @@ describe("CliAccountSwitchSheet", () => {
 		).toBeInTheDocument();
 	});
 
+	// It switches the same choice as the Settings card, so says it in its words.
+	it("says the switch is this Pockode's, in the card's caption", async () => {
+		render(<CliAccountSwitchSheet agent="claude" onClose={vi.fn()} />);
+		expect(await screen.findByText(SWITCH_SCOPE_CAPTION)).toBeInTheDocument();
+	});
+
 	it("switches on Use, and moves Current when the list is pushed", async () => {
 		const user = userEvent.setup();
 		render(
@@ -147,7 +154,7 @@ describe("CliAccountSwitchSheet", () => {
 		expect(screen.getByRole("button", { name: "Done" })).toBeInTheDocument();
 	});
 
-	// A viewed session signs nothing in; switching is global and stays.
+	// A viewed session signs nothing in; switching is this Pockode's and stays.
 	it("offers no sign-in without a way to open one", async () => {
 		server.setOverview(overview(SPARE));
 		render(<CliAccountSwitchSheet agent="claude" onClose={vi.fn()} />);
@@ -202,6 +209,37 @@ describe("CliAccountSwitchSheet", () => {
 			await screen.findByRole("button", { name: "Copy message" }),
 		).toBeInTheDocument();
 		expect(screen.getByText("Your draft was kept.")).toBeInTheDocument();
+	});
+
+	// Removed here while current: the push took its row and put Current on
+	// Default, so the sheet has no case of its own for it.
+	it("shows Default as current once the record's account was removed here", async () => {
+		server.setOverview(
+			makeOverview({
+				clis: [
+					{ agent: "claude", profiles: [{ id: SPARE, name: "Spare" }] },
+					{ agent: "codex", profiles: [] },
+				],
+			}),
+		);
+		render(
+			<CliAccountSwitchSheet
+				agent="claude"
+				recordedProfileId={WORK}
+				recordedNote="Turned away this turn"
+				onClose={vi.fn()}
+				onSignIn={vi.fn()}
+				sendAgain={offer()}
+			/>,
+		);
+
+		expect((await row("Default")).getByText("Current")).toBeInTheDocument();
+		expect(screen.queryByText("Work", { selector: "p, p > span" })).toBeNull();
+		expect(screen.queryByText(/Turned away this turn/)).toBeNull();
+		// A removed record's account: Send again once the current one is signed in.
+		expect(
+			await screen.findByRole("button", { name: "Send again" }),
+		).toBeInTheDocument();
 	});
 });
 

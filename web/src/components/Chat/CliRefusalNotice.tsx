@@ -24,7 +24,7 @@ export interface CliRefusalNoticeProps {
 	 * signed in from (a viewed session).
 	 */
 	onSignIn?: (account?: { id: string; name: string }) => void;
-	/** Opens the switch sheet. A switch is global, not the session's. */
+	/** Opens the switch sheet. A switch is this Pockode's, not the session's. */
 	onSwitchAccount?: () => void;
 	/**
 	 * What the record is drawn as when the notice has nothing to add: a usage

@@ -20,7 +20,11 @@ export interface CliProfile {
 /** One CLI's profiles. */
 export interface CliProfileList {
 	agent: AgentType;
-	/** Absent: the default profile is current. */
+	/**
+	 * This server's choice — each Pockode process chooses its own, so another
+	 * one may run the CLI as a different profile. Absent: the default profile,
+	 * as on a server that never chose and after its current profile is removed.
+	 */
 	current_profile_id?: string;
 	/** The stored profiles, in their order. Never the default one. */
 	profiles: CliProfile[];
@@ -66,8 +70,6 @@ export interface CliProfileChangedNotification {
  * listed, signed in, its directory untouched.
  */
 export type CliProfileRemoveRefusedReason =
-	/** The profile is current: switch to another first. */
-	| "current"
 	/** Sessions of this server are mid-turn on it; see `sessions`. */
 	| "in_use"
 	/** The CLI is signing in — this profile or another. */
@@ -78,7 +80,10 @@ export type CliProfileRemoveRefusedReason =
 	| "removing"
 	/** The sign-out failed; the message carries the CLI's error. */
 	| "sign_out_failed"
-	/** CLIs told to stop for the removal had not exited yet; a retry waits. */
+	/**
+	 * CLIs of this server running as the profile — sessions told to stop for
+	 * the removal, or one-shot runs — had not exited yet; a retry waits.
+	 */
 	| "still_exiting";
 
 /** A session of this server whose CLI runs as a profile. */

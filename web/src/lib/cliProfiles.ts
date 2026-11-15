@@ -24,11 +24,12 @@ export function profileIdsOf(
 }
 
 /**
- * The profile chosen as the CLI's current one, or undefined until a list has
- * been heard. Where profiles cannot be used it is not the one the CLI runs as
- * (`currentProfileIdOf`), but it is still the choice: the list is shared with
- * every Pockode process of the OS user, and one that can use profiles follows
- * it.
+ * The profile this server chose as the CLI's current one, or undefined until a
+ * list has been heard; a list without one is on the default profile. The
+ * choice is this server's own — the profiles are shared with every Pockode
+ * process of the OS user, but each chooses its own current one. Where profiles
+ * cannot be used it is not the one the CLI runs as (`currentProfileIdOf`), but
+ * it is still the choice, which takes effect once this server can use them.
  */
 export function chosenProfileIdOf(
 	overview: CliProfileOverview | null,
@@ -190,6 +191,13 @@ export function unavailableText(reason: string | undefined): string {
 		.join(" ");
 }
 
+/**
+ * Says what switching reaches, under the account list and in the chat's
+ * switch sheet: the sheet switches the same choice the card does.
+ */
+export const SWITCH_SCOPE_CAPTION =
+	"Sessions here use the current account from their next message. Other projects and cluster nodes on this machine choose their own.";
+
 /** What a refused `cli_profile.remove` says on the account's row. */
 export interface RemoveRefusalCopy {
 	body: string;
@@ -217,15 +225,11 @@ export function removeRefusalText(
 ): RemoveRefusalCopy {
 	const { label, name } = parts;
 	switch (refusal.reason) {
-		case "current":
-			return {
-				body: `${name} is the current account. Switch to another account first, then remove it.`,
-			};
 		case "in_use": {
 			const count = refusal.sessions.length;
 			const sessions = count === 1 ? "1 session" : `${count} sessions`;
 			return {
-				body: `${name} is still running a turn in ${sessions}. Idle sessions on it were stopped. Try again once the turn finishes.`,
+				body: `${name} is still running a turn in ${sessions} here. Idle sessions on it were stopped. Try again once the turn finishes.`,
 			};
 		}
 		case "signing_in":
@@ -249,7 +253,7 @@ export function removeRefusalText(
 					};
 		case "still_exiting":
 			return {
-				body: `Sessions on ${name} are still stopping. Try again in a few seconds.`,
+				body: `Some of ${name}'s runs here — sessions being stopped, or a one-off task such as drafting a commit message — haven't exited yet. Try again in a few seconds.`,
 			};
 	}
 }

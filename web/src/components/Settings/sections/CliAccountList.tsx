@@ -9,11 +9,13 @@ import {
 } from "../../../lib/cliLoginStore";
 import {
 	chosenProfileIdOf,
+	currentProfileIdOf,
 	liveProfileName,
 	profileIdsOf,
 	profileKey,
 	profilesSharedExternal,
 	removeRefusalText,
+	SWITCH_SCOPE_CAPTION,
 } from "../../../lib/cliProfiles";
 import {
 	cliProfileRemoveRefusal,
@@ -204,6 +206,10 @@ export default function CliAccountList({
 	};
 
 	const current = chosenProfileIdOf(overview, agent);
+	// The account sessions here run as, which a removal moves off of.
+	const runsAs = currentProfileIdOf(overview, agent);
+	const defaultSignedOut =
+		liveStatuses?.[DEFAULT_PROFILE_ID]?.status.state === "signed_out";
 
 	return (
 		<div className="space-y-1">
@@ -218,6 +224,7 @@ export default function CliAccountList({
 					switching={switching}
 					signingOut={signingOut.has(id)}
 					removing={removing.has(id)}
+					runsAs={runsAs === id}
 					error={errors[id]}
 					switchError={errorFor(id)}
 					loginError={loginError}
@@ -247,8 +254,8 @@ export default function CliAccountList({
 			)}
 			<p className="pt-1 text-xs text-th-text-muted">
 				{!available && current !== DEFAULT_PROFILE_ID
-					? "This machine uses Default whatever is current."
-					: "New sessions and each session's next message use the current account, in every project here."}
+					? "Pockode here uses Default whatever is current until it can use accounts."
+					: SWITCH_SCOPE_CAPTION}
 			</p>
 
 			{menuFor !== null && ids.includes(menuFor) && (
@@ -271,9 +278,11 @@ export default function CliAccountList({
 				<ConfirmDialog
 					title={`Sign out of ${confirmingSignOut.name}?`}
 					message={
-						confirmingSignOut.current
-							? `${confirmingSignOut.name} is the current ${label} account, so sessions using ${label} stop working until you sign in again or switch to another account. This includes other projects and cluster nodes on this machine.`
-							: `Sessions don't use ${confirmingSignOut.name} while it isn't the current account. A turn still running as ${confirmingSignOut.name} may fail. You'll need to sign in again before switching back to it.`
+						// What sessions here run as, not the tag: where accounts
+						// can't be used that is Default whichever is chosen.
+						runsAs === confirmingSignOut.id
+							? `${confirmingSignOut.name} is the current ${label} account here, so sessions here stop working until you sign in again or switch to another account. Other projects and cluster nodes on this machine using ${confirmingSignOut.name} stop working too.`
+							: `Sessions here don't use ${confirmingSignOut.name} while it isn't the current account, but other projects and cluster nodes on this machine may: they stop working on it until it's signed in again. A turn still running here as ${confirmingSignOut.name} may fail. You'll need to sign in again before switching back to it.`
 					}
 					confirmLabel="Sign out"
 					cancelLabel="Cancel"
@@ -286,7 +295,10 @@ export default function CliAccountList({
 			{confirmingRemove && (
 				<ConfirmDialog
 					title={`Remove ${confirmingRemove.name}?`}
-					message={`Pockode signs ${confirmingRemove.name} out of ${label} and deletes its sign-in from this machine. Conversations are kept — they belong to every account. Sessions idle on ${confirmingRemove.name} are stopped; if one is still running a turn, nothing is removed.`}
+					message={removeMessage(confirmingRemove.name, label, {
+						runsAs: runsAs === confirmingRemove.id,
+						defaultSignedOut,
+					})}
 					confirmLabel="Remove"
 					cancelLabel="Cancel"
 					variant="danger"
@@ -296,6 +308,28 @@ export default function CliAccountList({
 			)}
 		</div>
 	);
+}
+
+/**
+ * The removal dialog's body (docs/cli-profiles-ui.md#removing). What it does
+ * here comes first, and only for the account sessions here run as; what it
+ * does to every other Pockode follows.
+ */
+function removeMessage(
+	name: string,
+	label: string,
+	{ runsAs, defaultSignedOut }: { runsAs: boolean; defaultSignedOut: boolean },
+): string {
+	return [
+		runsAs &&
+			`${name} is the current ${label} account here, so sessions here move to Default from their next message.`,
+		runsAs &&
+			defaultSignedOut &&
+			"Default isn't signed in, so they won't work until you sign it in or switch to another account.",
+		`Pockode signs ${name} out of ${label} and deletes it from this machine: other projects and cluster nodes lose it too, and any of them using it moves to Default. Conversations are kept — they belong to every account. Sessions here idle on ${name} are stopped; if one is still running a turn, nothing is removed.`,
+	]
+		.filter(Boolean)
+		.join(" ");
 }
 
 /** The menu of one account, following its live state while it is up. */
@@ -348,6 +382,7 @@ function AccountRow({
 	switching,
 	signingOut,
 	removing,
+	runsAs,
 	error,
 	switchError,
 	loginError,
@@ -364,6 +399,8 @@ function AccountRow({
 	switching: string | null;
 	signingOut: boolean;
 	removing: boolean;
+	/** Sessions here run as this account (`currentProfileIdOf`). */
+	runsAs: boolean;
 	error: RowError | undefined;
 	switchError: string | null;
 	loginError: string | undefined;
@@ -450,6 +487,12 @@ function AccountRow({
 		<CliProfileRow
 			view={view}
 			sharedExternal={sharedExternal}
+			// The server keeps the account as the choice until the removal
+			// succeeds but already starts new turns here on Default. A refusal
+			// clears `removing`, and success takes the row away.
+			subtitleOverride={
+				removing && runsAs ? "New turns here use Default." : undefined
+			}
 			action={action}
 			menu={
 				<button
