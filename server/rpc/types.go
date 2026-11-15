@@ -1407,8 +1407,10 @@ type CLIProfileSwitchParams struct {
 }
 
 // CLIProfileRemoveParams removes a stored profile: it is signed out first,
-// then taken off the list and its directory deleted. The default profile and
-// the current one cannot be removed.
+// then taken off the list and its directory deleted. The default profile
+// cannot be removed. Removing the current one is allowed: every Pockode server
+// that had it current — this one included — is on the default profile from
+// then on, and its sessions move over on their next message.
 type CLIProfileRemoveParams struct {
 	Agent     session.AgentType `json:"agent"`
 	ProfileID string            `json:"profile_id"`
@@ -1422,14 +1424,13 @@ const CodeCLIProfileRemoveRefused = -32014
 
 // Reasons of a CodeCLIProfileRemoveRefused error.
 const (
-	// CLIProfileRemoveRefusedCurrent is the current profile: switching to
-	// another one first makes it removable.
-	CLIProfileRemoveRefusedCurrent = "current"
 	// CLIProfileRemoveRefusedInUse is a profile some sessions of this server
 	// are mid-turn on — running, parked on background work, or waiting on a
 	// permission answer. Sessions names them; trying again once their turns
 	// are over works. Idle sessions on it have already been stopped, and move
-	// to the current profile on their next message.
+	// to the current profile on their next message — if the profile was this
+	// server's current one, the default one while the removal runs, and after
+	// it if it succeeds.
 	CLIProfileRemoveRefusedInUse = "in_use"
 	// CLIProfileRemoveRefusedSigningIn is a sign-in running on the CLI — to
 	// this profile or another one; the message says which. It holds the CLI
@@ -1446,8 +1447,9 @@ const (
 	// item on macOS) beyond anyone's reach.
 	CLIProfileRemoveRefusedSignOutFailed = "sign_out_failed"
 	// CLIProfileRemoveRefusedStillExiting is CLIs of this server running as
-	// the profile that were told to stop and had not exited within the
-	// removal's budget. Trying again waits out what is left of them.
+	// the profile — sessions told to stop, or one-shot runs (a commit message
+	// draft) — that had not exited within the removal's budget. Trying again
+	// waits out what is left of them.
 	CLIProfileRemoveRefusedStillExiting = "still_exiting"
 )
 

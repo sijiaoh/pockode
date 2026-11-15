@@ -21,13 +21,14 @@ func SelectCurrent() Selector { return Selector{} }
 func Select(id string) Selector { return Selector{id: id, explicit: true} }
 
 // Resolve turns sel into a profile ID, "" for the default profile. The current
-// profile resolves to the default one where Availability says profiles cannot
-// be used: the list is shared with every Pockode process of this OS user, and
-// one that could make the directory may have chosen it. An explicit ID is not
-// looked up here — Launch refuses one that cannot be used. A CLI this package
-// has no layout for has only its default profile, and so does every CLI with a
-// nil Store: Pockode on a machine with no configuration directory to keep
-// profiles in.
+// profile is this server's choice (Load), or the default one while this
+// process is removing the chosen profile (Withdraw). It resolves to the default one where
+// Availability says profiles cannot be used: the choice is kept for when this
+// server restarts on a machine that allows symbolic links (see SetCurrent). An
+// explicit ID is not looked up here — Launch refuses one that cannot be used.
+// A CLI this package has no layout for has only its default profile, and so
+// does every CLI with a nil Store: Pockode on a machine with no configuration
+// directory to keep profiles in.
 func (s *Store) Resolve(agent session.AgentType, sel Selector) (string, error) {
 	if sel.explicit {
 		return sel.id, nil
@@ -39,7 +40,7 @@ func (s *Store) Resolve(agent session.AgentType, sel Selector) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if list.Current == "" {
+	if list.Current == "" || s.Withdrawn(agent, list.Current) {
 		return "", nil
 	}
 	if a := s.Availability(); !a.Available {
@@ -74,7 +75,7 @@ func (s *Store) IDs(agent session.AgentType) ([]string, error) {
 	if _, ok := layouts[agent]; !ok || s == nil {
 		return ids, nil
 	}
-	list, err := s.Load(agent)
+	list, err := s.loadList(agent)
 	if err != nil {
 		return nil, err
 	}

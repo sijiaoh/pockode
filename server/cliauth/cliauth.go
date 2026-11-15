@@ -193,14 +193,12 @@ type Service struct {
 	profiles  *cliprofile.Store
 	agents    []session.AgentType // registration order, which is display order
 	providers map[session.AgentType]Provider
-	// loginsMu guards logins, updating, locks, removing, closed and every
+	// loginsMu guards logins, updating, locks, closed and every
 	// loginFlow's state.
 	loginsMu sync.Mutex
 	// switchMu orders a switch against the start of a removal; see
 	// SwitchProfile. Taken before loginsMu.
 	switchMu sync.Mutex
-	// removing is each CLI's profiles RemoveProfile is removing.
-	removing map[session.AgentType]map[string]bool
 	// locks holds each CLI's lock, taken around everything that runs one of
 	// its auth commands; see cliLock.
 	locks map[session.AgentType]*cliLock
@@ -236,7 +234,6 @@ func NewService(log *slog.Logger, profiles *cliprofile.Store) *Service {
 		locks:        make(map[session.AgentType]*cliLock),
 		logins:       make(map[session.AgentType]*loginFlow),
 		updating:     make(map[session.AgentType]string),
-		removing:     make(map[session.AgentType]map[string]bool),
 		baseCtx:      baseCtx,
 		cancelBase:   cancelBase,
 		loginTimeout: LoginTimeout,

@@ -192,15 +192,17 @@ was still running.
 
 `cli_profile.inspect` is a status read of every profile and
 `cli_profile.remove` waits for the same lock — and stops the CLIs running as
-the profile, within the same 20s — and then signs out, so both need that
+the profile and waits for its one-shots, within the same 20s — and then signs
+out, so both need that
 timeout too ([cli-profiles.md](cli-profiles.md#removing-a-profile)).
 
 ## Which profile
 
 Every command runs as one of the CLI's profiles
 ([agent-integration.md](agent-integration.md#which-account-a-cli-runs-as)):
-the one the caller names, or the current one. `Service` resolves "current"
-when the call is made and hands the provider an ID, so the status it returns,
+the one the caller names, or this server's current one
+([cli-profiles.md](cli-profiles.md#the-store-a-list-per-os-user-a-choice-per-server)).
+`Service` resolves "current" when the call is made and hands the provider an ID, so the status it returns,
 and a sign-in, carry `profile_id` — the profile they were for, absent for the
 default one — even when the current profile changes while they run. A sign-in
 is pinned to its profile from `StartLogin` on, not from when its CLI starts

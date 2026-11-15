@@ -16,7 +16,7 @@ import (
 )
 
 func TestStatuses(t *testing.T) {
-	s := cliauth.NewService(slog.Default(), cliprofile.NewStore(t.TempDir()))
+	s := cliauth.NewService(slog.Default(), cliprofile.NewStore(t.TempDir(), t.TempDir()))
 	s.Register(session.AgentTypeClaude, cliauthtest.New(cliauthtest.State{Status: cliauth.Status{State: cliauth.StateSignedIn}}))
 	s.Register(session.AgentTypeCodex, cliauthtest.New(cliauthtest.State{StatusErr: &agent.BinaryNotFoundError{Name: "codex"}}))
 	s.Register("gemini", cliauthtest.New(cliauthtest.State{StatusErr: errors.New("account/read did not finish within 45s")}))
@@ -47,7 +47,7 @@ func TestStatuses(t *testing.T) {
 }
 
 func TestStatuses_OneAgent(t *testing.T) {
-	s := cliauth.NewService(slog.Default(), cliprofile.NewStore(t.TempDir()))
+	s := cliauth.NewService(slog.Default(), cliprofile.NewStore(t.TempDir(), t.TempDir()))
 	s.Register(session.AgentTypeClaude, cliauthtest.New(cliauthtest.State{Status: cliauth.Status{State: cliauth.StateSignedIn}}))
 	s.Register(session.AgentTypeCodex, cliauthtest.New(cliauthtest.State{Status: cliauth.Status{State: cliauth.StateSignedOut}}))
 
@@ -66,7 +66,7 @@ func TestStatuses_OneAgent(t *testing.T) {
 
 func TestLogout(t *testing.T) {
 	t.Run("answers with the status read afterwards", func(t *testing.T) {
-		s := cliauth.NewService(slog.Default(), cliprofile.NewStore(t.TempDir()))
+		s := cliauth.NewService(slog.Default(), cliprofile.NewStore(t.TempDir(), t.TempDir()))
 		s.Register(session.AgentTypeClaude, cliauthtest.New(cliauthtest.State{Status: cliauth.Status{State: cliauth.StateSignedIn}}))
 
 		got, err := s.Logout(context.Background(), session.AgentTypeClaude, cliprofile.SelectCurrent())
@@ -82,7 +82,7 @@ func TestLogout(t *testing.T) {
 	// show, not a failed sign-out to retry.
 	t.Run("a failed read afterwards is a status, not an error", func(t *testing.T) {
 		after := cliauth.ErrorStatus(errors.New("codex account/read did not finish within 45s"))
-		s := cliauth.NewService(slog.Default(), cliprofile.NewStore(t.TempDir()))
+		s := cliauth.NewService(slog.Default(), cliprofile.NewStore(t.TempDir(), t.TempDir()))
 		s.Register(session.AgentTypeCodex, cliauthtest.New(cliauthtest.State{Status: cliauth.Status{State: cliauth.StateSignedIn}, AfterLogout: &after}))
 
 		got, err := s.Logout(context.Background(), session.AgentTypeCodex, cliprofile.SelectCurrent())
@@ -96,7 +96,7 @@ func TestLogout(t *testing.T) {
 
 	t.Run("a refusal is the error, as the provider worded it", func(t *testing.T) {
 		refusal := errors.New("claude auth logout failed: Logout failed: network down")
-		s := cliauth.NewService(slog.Default(), cliprofile.NewStore(t.TempDir()))
+		s := cliauth.NewService(slog.Default(), cliprofile.NewStore(t.TempDir(), t.TempDir()))
 		s.Register(session.AgentTypeClaude, cliauthtest.New(cliauthtest.State{Status: cliauth.Status{State: cliauth.StateSignedIn}, LogoutErr: refusal}))
 
 		if _, err := s.Logout(context.Background(), session.AgentTypeClaude, cliprofile.SelectCurrent()); !errors.Is(err, refusal) {
@@ -105,7 +105,7 @@ func TestLogout(t *testing.T) {
 	})
 
 	t.Run("unknown agent", func(t *testing.T) {
-		s := cliauth.NewService(slog.Default(), cliprofile.NewStore(t.TempDir()))
+		s := cliauth.NewService(slog.Default(), cliprofile.NewStore(t.TempDir(), t.TempDir()))
 		if _, err := s.Logout(context.Background(), "gemini", cliprofile.SelectCurrent()); !errors.Is(err, cliauth.ErrUnknownAgent) {
 			t.Errorf("got %v, want ErrUnknownAgent", err)
 		}
@@ -136,7 +136,7 @@ func TestService_OneCommandPerProfile(t *testing.T) {
 		entered:  make(chan struct{}),
 		release:  make(chan struct{}),
 	}
-	profiles := cliprofile.NewStore(t.TempDir())
+	profiles := cliprofile.NewStore(t.TempDir(), t.TempDir())
 	work, err := profiles.Add(session.AgentTypeClaude, "Work")
 	if err != nil {
 		t.Fatal(err)
@@ -203,7 +203,7 @@ func TestClose_EndsRunningCommands(t *testing.T) {
 		entered:  make(chan struct{}),
 		exited:   make(chan struct{}),
 	}
-	s := cliauth.NewService(slog.Default(), cliprofile.NewStore(t.TempDir()))
+	s := cliauth.NewService(slog.Default(), cliprofile.NewStore(t.TempDir(), t.TempDir()))
 	s.Register(session.AgentTypeClaude, p)
 
 	go func() { _, _ = s.Statuses(context.Background(), session.AgentTypeClaude, cliprofile.SelectCurrent()) }()

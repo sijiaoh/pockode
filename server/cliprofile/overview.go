@@ -19,17 +19,18 @@ type Overview struct {
 // Profiles: every CLI has it, it has no ID ("") and no name of its own.
 type CLIOverview struct {
 	Agent session.AgentType `json:"agent"`
-	// CurrentProfileID is the profile chosen as current, absent for the
-	// default one. Where Availability says profiles cannot be used the CLI
-	// runs as its default profile whatever is chosen (see Resolve): the
-	// choice is still shown, since the list is shared with every Pockode
-	// process of this OS user and one that can use profiles follows it.
+	// CurrentProfileID is the profile this server has chosen as current,
+	// absent for the default one. No other Pockode process shares the choice.
+	// Where Availability says profiles cannot be used the CLI runs as its
+	// default profile whatever is chosen (see Resolve): the choice is still
+	// shown, since it takes effect once this server restarts on a machine that
+	// allows symbolic links.
 	CurrentProfileID string    `json:"current_profile_id,omitempty"`
 	Profiles         []Profile `json:"profiles"`
 }
 
-// Overview reads the lists of agents, in that order. The nil Store has an
-// empty list for each.
+// Overview reads the lists of agents, in that order, with this server's
+// choices among them. The nil Store has an empty list for each.
 func (s *Store) Overview(agents []session.AgentType) (Overview, error) {
 	o := Overview{Availability: s.Availability(), CLIs: make([]CLIOverview, 0, len(agents))}
 	for _, agent := range agents {

@@ -255,7 +255,7 @@ func (s *Store) Conflicts(agent session.AgentType, id string) ([]Conflict, error
 }
 
 func (s *Store) requireListed(agent session.AgentType, id string) error {
-	list, err := s.Load(agent)
+	list, err := s.loadList(agent)
 	if err != nil {
 		return err
 	}

@@ -516,8 +516,9 @@ type ProfileUser struct {
 // and one loaded since starts its processes as the current profile.
 //
 // What it cannot see is a CLI started by another Pockode process — another
-// cluster node, a server for another project. Profiles are shared machine-wide,
-// so one of those may still run as profileID however this returns.
+// cluster node, a server for another project. The list of profiles is shared
+// by every Pockode process of the OS user, so one of those may still run as
+// profileID however this returns.
 func (m *Manager) ReleaseProfile(ctx context.Context, agentType session.AgentType, profileID string) ([]ProfileUser, error) {
 	m.mu.Lock()
 	worktrees := make([]*Worktree, 0, len(m.worktrees)+len(m.stopping))

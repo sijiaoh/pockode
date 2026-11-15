@@ -72,6 +72,8 @@ type mockAgent struct {
 	// afterProfileRead, when set, runs after each CurrentProfile has been
 	// answered: a switch landing right after a read.
 	afterProfileRead func()
+	// startErr, when set, can fail a start, which is still recorded.
+	startErr func(agent.StartOptions) error
 }
 
 func (m *mockAgent) CurrentProfile() (string, error) {
@@ -108,6 +110,11 @@ func (m *mockAgent) Start(ctx context.Context, opts agent.StartOptions) (agent.S
 	defer m.mu.Unlock()
 
 	m.startCalls = append(m.startCalls, startCall{opts.SessionID, opts.Resume, opts.Mode, opts.DataDir, opts.MCPServerDir, opts.Worktree, opts.Profile, opts.OnUsage})
+	if m.startErr != nil {
+		if err := m.startErr(opts); err != nil {
+			return nil, err
+		}
+	}
 
 	if m.sessions == nil {
 		m.sessions = make(map[string]*mockSession)

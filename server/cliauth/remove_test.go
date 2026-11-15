@@ -30,7 +30,7 @@ type removeFixture struct {
 }
 
 func newRemoveFixture(t *testing.T) *removeFixture {
-	profiles := cliprofile.NewStore(t.TempDir())
+	profiles := cliprofile.NewStore(t.TempDir(), t.TempDir())
 	work := mustAddProfile(t, profiles, session.AgentTypeClaude, "Work")
 	dir, err := profiles.Dir(session.AgentTypeClaude, work.ID)
 	if err != nil {
@@ -106,7 +106,7 @@ func TestRemoveProfile(t *testing.T) {
 	}
 }
 
-func TestRemoveProfile_RefusesTheDefaultAndTheCurrentProfile(t *testing.T) {
+func TestRemoveProfile_RefusesTheDefault(t *testing.T) {
 	f := newRemoveFixture(t)
 	release := func(context.Context) error {
 		t.Error("release called for a removal that is refused")
@@ -115,13 +115,82 @@ func TestRemoveProfile_RefusesTheDefaultAndTheCurrentProfile(t *testing.T) {
 	if err := f.s.RemoveProfile(context.Background(), session.AgentTypeClaude, "", release); !errors.Is(err, cliauth.ErrRemoveDefault) {
 		t.Errorf("default profile: got %v, want ErrRemoveDefault", err)
 	}
+	f.requireKept()
+}
+
+// This server's current profile is removed like any other. While the
+// removal runs, nothing here starts as it unless it is named — what release
+// stops comes back as the default profile — and a refusal leaves it current
+// as it was; once it is removed this server is on the default profile.
+func TestRemoveProfile_TheCurrentProfile(t *testing.T) {
+	f := newRemoveFixture(t)
 	if err := f.s.SwitchProfile(session.AgentTypeClaude, f.work.ID); err != nil {
 		t.Fatal(err)
 	}
-	if err := f.remove(release); !errors.Is(err, cliauth.ErrRemoveCurrent) {
-		t.Errorf("current profile: got %v, want ErrRemoveCurrent", err)
+	chosen := ""
+	if f.profiles.Availability().Available {
+		chosen = f.work.ID
+	}
+	resolvesTo := func(when, want string) {
+		t.Helper()
+		if id, err := f.profiles.Resolve(session.AgentTypeClaude, cliprofile.SelectCurrent()); err != nil || id != want {
+			t.Errorf("%s: a CLI starts as %q, %v; want %q", when, id, err, want)
+		}
+	}
+
+	inUse := errors.New("1 session is mid-turn")
+	err := f.remove(func(context.Context) error {
+		resolvesTo("during the release", "")
+		return inUse
+	})
+	if !errors.Is(err, inUse) {
+		t.Fatalf("got %v, want release's error", err)
 	}
 	f.requireKept()
+	resolvesTo("after a refused removal", chosen)
+
+	if err := f.remove(noRelease); err != nil {
+		t.Fatalf("RemoveProfile: %v", err)
+	}
+	resolvesTo("after the removal", "")
+	if l, err := f.profiles.Load(session.AgentTypeClaude); err != nil || l.Current != "" {
+		t.Errorf("current after the removal = %q, %v; want the default profile", l.Current, err)
+	}
+}
+
+// A one-shot run still running as the profile holds the removal up, within
+// the release's budget: past it the profile is kept, and once the run is over
+// it can be removed. Where profiles cannot be used the run is on the default
+// profile, and what is checked there is the other half: a run on the default
+// profile holds no removal up.
+func TestRemoveProfile_WaitsForOneShots(t *testing.T) {
+	f := newRemoveFixture(t)
+	t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
+	if err := f.s.SwitchProfile(session.AgentTypeClaude, f.work.ID); err != nil {
+		t.Fatal(err)
+	}
+	l, release, err := f.profiles.LaunchOneShot(session.AgentTypeClaude)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	if l.ProfileID == "" {
+		if err := f.remove(noRelease); err != nil {
+			t.Fatalf("RemoveProfile: %v", err)
+		}
+		return
+	}
+
+	f.s.SetReleaseTimeout(50 * time.Millisecond)
+	if err := f.remove(noRelease); !errors.Is(err, cliauth.ErrReleaseTimedOut) {
+		t.Fatalf("with the run still going: got %v, want ErrReleaseTimedOut", err)
+	}
+	f.requireKept()
+
+	release()
+	if err := f.remove(noRelease); err != nil {
+		t.Fatalf("once the run is over: %v", err)
+	}
 }
 
 // A session mid-turn on the profile keeps it: what release reports is

@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -27,7 +28,8 @@ var defaultDirEnv = map[session.AgentType]string{
 	session.AgentTypeCodex:  "CODEX_HOME",
 }
 
-// Fixture is a profile store of the test's own. Both CLIs' default
+// Fixture is a profile store of the test's own, its list and its server's
+// choice in temporary directories. Both CLIs' default
 // directories are temporary ones, given the way a user would give them — in
 // CLAUDE_CONFIG_DIR and CODEX_HOME — so nothing the test prepares reaches the
 // real ~/.claude or ~/.codex. The test cannot be parallel.
@@ -38,7 +40,7 @@ type Fixture struct {
 
 func New(t *testing.T) *Fixture {
 	t.Helper()
-	f := &Fixture{Store: cliprofile.NewStore(t.TempDir()), defaultDirs: map[session.AgentType]string{}}
+	f := &Fixture{Store: cliprofile.NewStore(t.TempDir(), t.TempDir()), defaultDirs: map[session.AgentType]string{}}
 	for _, name := range LaunchEnv {
 		unsetenv(t, name)
 	}
@@ -50,22 +52,35 @@ func New(t *testing.T) *Fixture {
 	return f
 }
 
-// UserStore is the store Pockode itself uses, for the suites that run the real
-// CLIs: they run as the user's current profile, as a session would. Nil — the
-// default profiles only — where there is no configuration directory, as in
+// UserStore is the profile list Pockode itself uses, for the suites that run
+// the real CLIs, as a server that has made no choice of its own: they run as
+// the default profiles, as a new server's sessions would. Its data directory
+// is a fresh one of this test process — never a fixed path, where a choice
+// left by anyone else would pick the account the paid suites run as. Nil — the
+// default profiles too — where there is no configuration directory, as in
 // Pockode.
 func UserStore() *cliprofile.Store {
-	s, _ := cliprofile.DefaultStore()
+	dataDir, err := noChoiceDir()
+	if err != nil {
+		panic(fmt.Sprintf("create a data directory for the user's profile store: %v", err))
+	}
+	s, _ := cliprofile.DefaultStore(dataDir)
 	return s
 }
+
+// noChoiceDir is created once per test process and left behind: the suites
+// call UserStore outside any test, where there is no t.TempDir to clean up.
+var noChoiceDir = sync.OnceValues(func() (string, error) {
+	return os.MkdirTemp("", "pockode-cliprofiletest-")
+})
 
 // DefaultDir is agent's default directory, as the fake CLI sees it in its
 // environment when started as the default profile.
 func (f *Fixture) DefaultDir(agent session.AgentType) string { return f.defaultDirs[agent] }
 
-// UseProfile adds a profile of agent, makes it current and returns its ID and
-// directory. It skips the test on a machine that cannot have profiles
-// (Windows without Developer Mode).
+// UseProfile adds a profile of agent, makes it current on the fixture's server
+// and returns its ID and directory. It skips the test on a machine that cannot
+// have profiles (Windows without Developer Mode).
 func (f *Fixture) UseProfile(t *testing.T, agent session.AgentType) (id, dir string) {
 	t.Helper()
 	if a := f.Store.Availability(); !a.Available {

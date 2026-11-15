@@ -26,7 +26,7 @@ func newPreparing(t *testing.T, agent session.AgentType) *preparing {
 	t.Helper()
 	defaultDir := filepath.Join(t.TempDir(), "default")
 	t.Setenv(layouts[agent].envVar, defaultDir)
-	s := NewStore(t.TempDir())
+	s := NewStore(t.TempDir(), t.TempDir())
 	if a := s.Availability(); !a.Available {
 		t.Skipf("profiles are unavailable on this machine: %s", a.Reason)
 	}
@@ -383,7 +383,7 @@ func TestPrepareRefusesAProfileAsTheDefault(t *testing.T) {
 func TestPrepareRefusesWithoutSymlinks(t *testing.T) {
 	defaultDir := filepath.Join(t.TempDir(), "default")
 	t.Setenv("CLAUDE_CONFIG_DIR", defaultDir)
-	s := NewStore(t.TempDir())
+	s := NewStore(t.TempDir(), t.TempDir())
 	s.availabilityOnce.Do(func() { s.availability = Availability{Reason: "no symlinks here"} })
 	p := mustAdd(t, s, claude, "Work")
 
@@ -400,7 +400,7 @@ func TestPrepareRefusesWithoutSymlinks(t *testing.T) {
 // The probe answers, and leaves nothing behind where profiles live.
 func TestAvailabilityProbeCleansUp(t *testing.T) {
 	configDir := t.TempDir()
-	s := NewStore(configDir)
+	s := NewStore(configDir, t.TempDir())
 
 	a := s.Availability()
 

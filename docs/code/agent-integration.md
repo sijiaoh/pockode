@@ -57,12 +57,16 @@ Pockode integrates AI Agents (Claude and Codex) through subprocess management. T
 Every start of an AI CLI — a session's process, a one-shot, a sign-in, a status
 read, a sign-out — runs as one of that CLI's profiles, and asks
 `cliprofile.Store.Launch` what to start it with right before it starts: the
-profile is read afresh each time from the list every Pockode process of the OS
-user shares, and `Launch` prepares the profile's directory, picking up whatever
-the default directory has gained since. Where profiles are kept and what their
+profile is read afresh each time — the list every Pockode process of the OS
+user shares, and this server's own choice among it — and `Launch` prepares the
+profile's directory, picking up whatever the default directory has gained
+since. Where profiles are kept and what their
 directories are made of is [cli-profiles.md](cli-profiles.md). Sessions
-and one-shots run as the current profile; the sign-in commands as the one they
-are asked for ([cli-auth.md](cli-auth.md#which-profile)).
+and one-shots run as this server's current profile; the sign-in commands as the
+one they are asked for ([cli-auth.md](cli-auth.md#which-profile)). A
+choice naming a profile no longer listed — removed here or by another Pockode
+process — reads as the default one, and so does, on this server only, a
+profile it is removing ([cli-profiles.md](cli-profiles.md#removing-a-profile)).
 
 The [default profile](cli-profiles.md#one-official-mechanism-no-copied-credentials)
 adds nothing, so the CLI runs exactly as it would without Pockode. Any other sets `CLAUDE_CONFIG_DIR` (with
@@ -88,17 +92,23 @@ A CLI cannot change account while it runs, so a session moves to a newly chosen
 profile by having its process replaced. `process.Manager` resolves the current
 profile itself (`agent.ProfileResolver`) and starts the CLI as exactly that one
 (`StartOptions.Profile`), so `Process.ProfileID` — "" for the default — is the
-account the CLI really runs as, not one read a moment before or after.
+account the CLI really runs as, not one read a moment before or after. A start
+refused because another process removed the profile between the read and the
+start (`cliprofile.ErrNotFound` from `Prepare`) reads the current profile again
+— the default one by then — and starts as that, rather than failing the
+message.
 
 `GetOrCreateProcess`, the one way a message reaches a process, reads the
 current profile on every call. A process on another profile is stopped and a
 successor resumed in its place on the current one — the same thing that
 happens when the idle lease collects a process and the next message arrives,
-so the conversation carries on where it was. That makes a switch take effect
-on each session's next message wherever it was made: the current profile is
-shared by every Pockode process of the OS user, so a switch on another cluster
-node, or in a server for another project, reaches this one without any
-notice being sent. A current profile that cannot be read fails the message; it
+so the conversation carries on where it was. That makes a switch on this
+server take effect on each session's next message. The choice is this
+server's own, so a switch on another cluster node, or in a server for another
+project, does not reach this one. A removal of the profile this server had
+chosen does, by whichever Pockode process it was made, and without any notice
+being sent: the choice then names nothing and reads as the default. A current
+profile that cannot be read fails the message; it
 does not fall back to the process's old profile or to the default one.
 
 Only a process nothing is waiting on is replaced (`stopIfIdle`) — the same
@@ -144,22 +154,29 @@ that removal: across every
 loaded worktree — and the ones being unloaded, whose processes may still be
 running — it stops each process running as the profile that nothing is waiting
 on, waits until those CLIs and any already on their way out have exited, and
-returns the sessions still mid-turn on it. An empty answer means no CLI of this
-Pockode process runs as the profile; a later call, once those turns are over,
-releases the rest. A stopped session's next message starts on whichever profile
-is current, as after a switch.
+returns the sessions still mid-turn on it. An empty answer means no session's
+CLI of this Pockode process runs as the profile; a later call, once those turns
+are over, releases the rest. One-shots are not sessions and are not seen here:
+the removal waits for them separately (`cliprofile.Store.WaitUnheld`). A stopped
+session's next message starts on whichever profile is current, as after a
+switch — if the profile was this server's current one, the default while the
+removal runs, and after it if it succeeds.
 
-It refuses the profile that is still current (`process.ErrProfileCurrent`):
-whatever it stopped would come straight back. With the profile no longer
-current, nothing can start as it after the scan, because `GetOrCreateProcess`
+The profile must no longer be current when it is called, or whatever it stopped
+would come straight back (`process.ErrProfileCurrent`). Removing the current
+profile is allowed, so the removal makes that true first by withdrawing the
+profile (`cliprofile.Store.Withdraw`): this server's current profile reads as
+the default while it runs, without the stored choice changing. The error is
+therefore a check of that order, not a refusal a user can meet. With the
+profile no longer current, nothing can start as it after the scan, because `GetOrCreateProcess`
 reads the current profile a second time under `processesMu`, where it starts a
 process and where `ReleaseProfile` scans — a process either was in the map
 before the scan, or started after it as the new current profile. That same
 lock order is why it must not be called with the profile list's lock held: a
 start holds `processesMu` while it reads that list.
 
-What it cannot see is in [cli-profiles.md](cli-profiles.md#switching-and-removing):
-other Pockode processes' CLIs, and starts that are not sessions.
+What it cannot see — other Pockode processes' CLIs — is in
+[cli-profiles.md](cli-profiles.md#removing-a-profile).
 
 ## Why Subprocess Instead of SDK
 

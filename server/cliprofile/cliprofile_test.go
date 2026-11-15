@@ -47,8 +47,8 @@ func names(l List) []string {
 // With nothing stored, every CLI is on its default profile, and looking does
 // not create the directory.
 func TestLoadWithoutFile(t *testing.T) {
-	configDir := t.TempDir()
-	s := NewStore(configDir)
+	configDir, dataDir := t.TempDir(), t.TempDir()
+	s := NewStore(configDir, dataDir)
 	for _, agent := range []session.AgentType{claude, codex} {
 		l := mustLoad(t, s, agent)
 		if l.Current != "" || l.Profiles == nil || len(l.Profiles) != 0 {
@@ -61,13 +61,16 @@ func TestLoadWithoutFile(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(configDir, "pockode")); !os.IsNotExist(err) {
 		t.Errorf("Load created the directory (stat error %v)", err)
 	}
+	if entries, err := os.ReadDir(dataDir); err != nil || len(entries) != 0 {
+		t.Errorf("Load wrote %v into the data directory (%v)", entries, err)
+	}
 }
 
 // Profiles are kept per CLI, in the order they were added, and survive a new
-// store over the same directory — another process reads what this one wrote.
+// store over the same directory — another server reads what this one wrote.
 func TestAddKeepsProfilesPerCLI(t *testing.T) {
 	configDir := t.TempDir()
-	s := NewStore(configDir)
+	s := NewStore(configDir, t.TempDir())
 	work := mustAdd(t, s, claude, "  Work  ")
 	mustAdd(t, s, claude, "Personal")
 	mustAdd(t, s, codex, "Work")
@@ -79,7 +82,7 @@ func TestAddKeepsProfilesPerCLI(t *testing.T) {
 		t.Errorf("ID %q is not one Dir accepts", work.ID)
 	}
 
-	other := NewStore(configDir)
+	other := NewStore(configDir, t.TempDir())
 	if got := names(mustLoad(t, other, claude)); strings.Join(got, ",") != "Work,Personal" {
 		t.Errorf("claude profiles = %v", got)
 	}
@@ -91,8 +94,39 @@ func TestAddKeepsProfilesPerCLI(t *testing.T) {
 	}
 }
 
+// The choice is this server's: another server sharing the list — another
+// project's, a cluster node — does not follow it, and this one reads it again
+// after a restart.
+func TestCurrentIsPerServer(t *testing.T) {
+	configDir, here := t.TempDir(), t.TempDir()
+	s := NewStore(configDir, here)
+	other := NewStore(configDir, t.TempDir())
+	work := mustAdd(t, s, claude, "Work")
+	personal := mustAdd(t, s, claude, "Personal")
+
+	if err := s.SetCurrent(claude, work.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := other.SetCurrent(claude, personal.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := mustLoad(t, s, claude).Current; got != work.ID {
+		t.Errorf("this server's current = %q, want %q", got, work.ID)
+	}
+	if got := mustLoad(t, other, claude).Current; got != personal.ID {
+		t.Errorf("the other server's current = %q, want %q", got, personal.ID)
+	}
+	if got := mustLoad(t, NewStore(configDir, here), claude).Current; got != work.ID {
+		t.Errorf("after a restart, current = %q, want %q", got, work.ID)
+	}
+	if got := mustLoad(t, NewStore(configDir, t.TempDir()), claude).Current; got != "" {
+		t.Errorf("a new server's current = %q, want the default profile", got)
+	}
+}
+
 func TestSetCurrent(t *testing.T) {
-	s := NewStore(t.TempDir())
+	s := NewStore(t.TempDir(), t.TempDir())
 	p := mustAdd(t, s, claude, "Work")
 
 	if err := s.SetCurrent(claude, p.ID); err != nil {
@@ -118,7 +152,7 @@ func TestSetCurrent(t *testing.T) {
 }
 
 func TestRename(t *testing.T) {
-	s := NewStore(t.TempDir())
+	s := NewStore(t.TempDir(), t.TempDir())
 	work := mustAdd(t, s, claude, "Work")
 	personal := mustAdd(t, s, claude, "Personal")
 
@@ -140,7 +174,7 @@ func TestRename(t *testing.T) {
 }
 
 func TestNameValidation(t *testing.T) {
-	s := NewStore(t.TempDir())
+	s := NewStore(t.TempDir(), t.TempDir())
 	mustAdd(t, s, claude, "Work")
 	for _, tt := range []struct {
 		name string
@@ -162,14 +196,19 @@ func TestNameValidation(t *testing.T) {
 	}
 }
 
-// Removing the current profile falls back to the default one, and takes the
-// profile's directory with it — but never what its links point at.
+// Removing a profile takes its directory with it — but never what its links
+// point at — and every server that had it as current, the one removing it or
+// another, is on the default profile from then on.
 func TestRemove(t *testing.T) {
 	configDir := t.TempDir()
-	s := NewStore(configDir)
+	s := NewStore(configDir, t.TempDir())
+	elsewhere := NewStore(configDir, t.TempDir())
 	work := mustAdd(t, s, claude, "Work")
 	keep := mustAdd(t, s, claude, "Personal")
 	if err := s.SetCurrent(claude, work.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := elsewhere.SetCurrent(claude, work.ID); err != nil {
 		t.Fatal(err)
 	}
 
@@ -203,6 +242,9 @@ func TestRemove(t *testing.T) {
 	if _, err := os.Lstat(dir); !os.IsNotExist(err) {
 		t.Errorf("profile directory still there (lstat error %v)", err)
 	}
+	if got := mustLoad(t, elsewhere, claude).Current; got != "" {
+		t.Errorf("another server's current = %q after Remove, want the default profile", got)
+	}
 	if linked {
 		if _, err := os.Stat(filepath.Join(shared, "conversation.jsonl")); err != nil {
 			t.Errorf("Remove reached through a link: %v", err)
@@ -216,7 +258,7 @@ func TestRemove(t *testing.T) {
 
 // Removing the last profile leaves no trace of the CLI in the file.
 func TestRemoveLastProfileDropsTheCLI(t *testing.T) {
-	s := NewStore(t.TempDir())
+	s := NewStore(t.TempDir(), t.TempDir())
 	p := mustAdd(t, s, codex, "Work")
 	if err := s.Remove(codex, p.ID); err != nil {
 		t.Fatal(err)
@@ -232,7 +274,7 @@ func TestRemoveLastProfileDropsTheCLI(t *testing.T) {
 
 // An ID ends up in a path, and may come from a client.
 func TestDirRejectsWhatItCouldNotHaveIssued(t *testing.T) {
-	s := NewStore(t.TempDir())
+	s := NewStore(t.TempDir(), t.TempDir())
 	p := mustAdd(t, s, claude, "Work")
 	dir, err := s.Dir(claude, p.ID)
 	if err != nil {
@@ -253,7 +295,7 @@ func TestDirRejectsWhatItCouldNotHaveIssued(t *testing.T) {
 }
 
 func TestUnsupportedAgent(t *testing.T) {
-	s := NewStore(t.TempDir())
+	s := NewStore(t.TempDir(), t.TempDir())
 	if _, err := s.Add("gemini", "Work"); !errors.Is(err, ErrUnsupportedAgent) {
 		t.Errorf("Add: %v, want ErrUnsupportedAgent", err)
 	}
@@ -265,14 +307,14 @@ func TestUnsupportedAgent(t *testing.T) {
 // The directory holds every profile's credentials.
 func TestChangeRestrictsDirectory(t *testing.T) {
 	configDir := t.TempDir()
-	mustAdd(t, NewStore(configDir), claude, "Work")
+	mustAdd(t, NewStore(configDir, t.TempDir()), claude, "Work")
 	fspermtest.RequireOwnerOnly(t, filepath.Join(configDir, "pockode"))
 }
 
 // A damaged file is quarantined, not overwritten, and a change goes on over
 // the empty list instead of failing until someone looks.
 func TestChangeOverDamagedFile(t *testing.T) {
-	s := NewStore(t.TempDir())
+	s := NewStore(t.TempDir(), t.TempDir())
 	if err := os.MkdirAll(filepath.Dir(s.path), 0700); err != nil {
 		t.Fatal(err)
 	}
@@ -291,32 +333,33 @@ func TestChangeOverDamagedFile(t *testing.T) {
 }
 
 // Changes from separate stores — separate processes, as far as the file lock
-// is concerned, since it is held per open handle — never overwrite each other.
+// is concerned, since it is held per open handle — never overwrite each other,
+// and each server's choice stays its own.
 func TestConcurrentChangesAreAllKept(t *testing.T) {
 	configDir := t.TempDir()
 	const writers = 8
 	const perWriter = 5
 
 	var wg sync.WaitGroup
+	stores := make([]*Store, writers)
+	last := make([]string, writers)
 	errs := make(chan error, writers*perWriter*2)
 	for w := range writers {
+		stores[w] = NewStore(configDir, t.TempDir())
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			s := NewStore(configDir)
-			agent := claude
-			if w%2 == 1 {
-				agent = codex
-			}
+			s := stores[w]
 			for i := range perWriter {
-				p, err := s.Add(agent, fmt.Sprintf("writer %d profile %d", w, i))
+				p, err := s.Add(writerAgent(w), fmt.Sprintf("writer %d profile %d", w, i))
 				if err != nil {
 					errs <- err
 					continue
 				}
-				if err := s.SetCurrent(agent, p.ID); err != nil {
+				if err := s.SetCurrent(writerAgent(w), p.ID); err != nil {
 					errs <- err
 				}
+				last[w] = p.ID
 			}
 		}()
 	}
@@ -326,16 +369,24 @@ func TestConcurrentChangesAreAllKept(t *testing.T) {
 		t.Errorf("concurrent change: %v", err)
 	}
 
-	s := NewStore(configDir)
+	s := NewStore(configDir, t.TempDir())
 	for _, agent := range []session.AgentType{claude, codex} {
-		l := mustLoad(t, s, agent)
-		if want := writers / 2 * perWriter; len(l.Profiles) != want {
-			t.Errorf("%s has %d profiles, want %d", agent, len(l.Profiles), want)
-		}
-		if l.index(l.Current) < 0 {
-			t.Errorf("%s current %q is not one of its profiles", agent, l.Current)
+		if want, got := writers/2*perWriter, len(mustLoad(t, s, agent).Profiles); got != want {
+			t.Errorf("%s has %d profiles, want %d", agent, got, want)
 		}
 	}
+	for w, ws := range stores {
+		if got := mustLoad(t, ws, writerAgent(w)).Current; got != last[w] {
+			t.Errorf("writer %d current = %q, want the last profile it chose, %q", w, got, last[w])
+		}
+	}
+}
+
+func writerAgent(w int) session.AgentType {
+	if w%2 == 1 {
+		return codex
+	}
+	return claude
 }
 
 // The file is the user's to edit: what they may leave in it reads as the
@@ -346,22 +397,14 @@ func TestHandEditedFile(t *testing.T) {
 		contents string
 	}{
 		{"null", `null`},
-		{"current naming no profile", `{"claude":{"current":"019f0000-0000-7000-8000-000000000000","profiles":[]}}`},
+		{"a profile list with nothing in it", `{"claude":{"profiles":[]}}`},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			s := NewStore(t.TempDir())
-			if err := os.MkdirAll(filepath.Dir(s.path), 0700); err != nil {
-				t.Fatal(err)
-			}
-			if err := os.WriteFile(s.path, []byte(tt.contents), 0600); err != nil {
-				t.Fatal(err)
-			}
+			s := NewStore(t.TempDir(), t.TempDir())
+			writeFile(t, s.path, tt.contents)
 
-			if l := mustLoad(t, s, claude); l.Current != "" {
-				t.Errorf("Load current = %q, want the default profile", l.Current)
-			}
-			if p, err := s.Current(claude); err != nil || p != nil {
-				t.Errorf("Current = %+v, %v; want the default profile", p, err)
+			if l := mustLoad(t, s, claude); l.Current != "" || len(l.Profiles) != 0 {
+				t.Errorf("Load = %+v, want no profiles on the default one", l)
 			}
 			p := mustAdd(t, s, claude, "Work")
 			if err := s.SetCurrent(claude, p.ID); err != nil {
@@ -371,9 +414,83 @@ func TestHandEditedFile(t *testing.T) {
 	}
 }
 
+// The "current" every Pockode process once shared is carried over to no one:
+// a server that has not chosen is on the default profile, and the next change
+// to the list drops the key.
+func TestSharedCurrentOfOlderVersionsIsDropped(t *testing.T) {
+	const id = "019f0000-0000-7000-8000-000000000001"
+	s := NewStore(t.TempDir(), t.TempDir())
+	writeFile(t, s.path, `{"claude":{"current":"`+id+`","profiles":[{"id":"`+id+`","name":"Work"}]}}`)
+
+	if l := mustLoad(t, s, claude); l.Current != "" || len(l.Profiles) != 1 || l.Profiles[0].ID != id {
+		t.Errorf("Load = %+v, want Work listed and the default profile current", l)
+	}
+	if id, err := s.Resolve(claude, SelectCurrent()); err != nil || id != "" {
+		t.Errorf("Resolve = %q, %v; want the default profile", id, err)
+	}
+
+	mustAdd(t, s, claude, "Personal")
+	data, err := os.ReadFile(s.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "current") {
+		t.Errorf("file still has the shared current after a change: %s", data)
+	}
+}
+
+// This server's choice is read only for what it can mean: a profile no longer
+// listed, another CLI's, or a damaged file is the default profile. A damaged
+// file is quarantined, and a switch goes on over it.
+func TestHandEditedChoice(t *testing.T) {
+	for _, tt := range []struct {
+		name        string
+		contents    func(work, other Profile) string
+		quarantined bool
+	}{
+		{"no profile of that ID", func(Profile, Profile) string {
+			return `{"claude":"019f0000-0000-7000-8000-000000000000"}`
+		}, false},
+		{"another CLI's profile", func(_, other Profile) string { return `{"claude":"` + other.ID + `"}` }, false},
+		{"null", func(Profile, Profile) string { return `null` }, false},
+		{"damaged", func(Profile, Profile) string { return `{"claude":` }, true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			s := NewStore(t.TempDir(), t.TempDir())
+			work := mustAdd(t, s, claude, "Work")
+			other := mustAdd(t, s, codex, "Other")
+			contents := tt.contents(work, other)
+			writeFile(t, s.choicePath, contents)
+
+			if got := mustLoad(t, s, claude).Current; got != "" {
+				t.Errorf("current = %q, want the default profile", got)
+			}
+			if _, err := os.Stat(s.choicePath + ".corrupt"); (err == nil) != tt.quarantined {
+				t.Errorf("quarantined = %v, want %v", err == nil, tt.quarantined)
+			}
+			if err := s.SetCurrent(claude, work.ID); err != nil {
+				t.Fatalf("SetCurrent: %v", err)
+			}
+			if got := mustLoad(t, s, claude).Current; got != work.ID {
+				t.Errorf("current after SetCurrent = %q, want %q", got, work.ID)
+			}
+		})
+	}
+}
+
+func writeFile(t *testing.T, path, contents string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(contents), 0600); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // An ID that could not name a directory is refused before anything changes.
 func TestRemoveRejectsMalformedID(t *testing.T) {
-	s := NewStore(t.TempDir())
+	s := NewStore(t.TempDir(), t.TempDir())
 	mustAdd(t, s, claude, "Work")
 	if err := s.Remove(claude, "../.."); !errors.Is(err, ErrNotFound) {
 		t.Errorf("Remove: %v, want ErrNotFound", err)

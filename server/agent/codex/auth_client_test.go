@@ -160,7 +160,7 @@ func runFakeCodex(role string) {
 func fakeCodexAuth(t *testing.T, role string) *Auth {
 	t.Helper()
 	t.Setenv(fakeCodexRoleEnv, role)
-	return &Auth{log: slog.Default(), binary: os.Args[0], workDir: t.TempDir(), profiles: cliprofile.NewStore(t.TempDir())}
+	return &Auth{log: slog.Default(), binary: os.Args[0], workDir: t.TempDir(), profiles: cliprofile.NewStore(t.TempDir(), t.TempDir())}
 }
 
 func TestAuth_Status(t *testing.T) {

@@ -8,7 +8,6 @@ import (
 	"strings"
 
 	"github.com/pockode/server/agent"
-	"github.com/pockode/server/cliprofile"
 	"github.com/pockode/server/session"
 )
 
@@ -49,10 +48,13 @@ func (a *Agent) RunOneShot(ctx context.Context, req agent.OneShotRequest) (strin
 	if req.Effort != "" {
 		args = append(args, "--effort", req.Effort)
 	}
-	profile, err := a.profiles.Launch(session.AgentTypeClaude, cliprofile.SelectCurrent())
+	// Held until the CLI has exited, so that a removal of the profile waits
+	// for it rather than delete the directory under it.
+	profile, release, err := a.profiles.LaunchOneShot(session.AgentTypeClaude)
 	if err != nil {
 		return "", err
 	}
+	defer release()
 	var reader oneShotReader
 	res, err := agent.RunStream(ctx, log, Binary, req.WorkDir, profile.Env, args, req.Prompt, reader.line)
 	if err != nil {

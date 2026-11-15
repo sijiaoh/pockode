@@ -9,7 +9,6 @@ import (
 
 	"github.com/pockode/server/cliauth"
 	"github.com/pockode/server/cliprofile"
-	"github.com/pockode/server/process"
 	"github.com/pockode/server/rpc"
 	"github.com/pockode/server/session"
 	"github.com/pockode/server/worktree"
@@ -138,14 +137,17 @@ func (h *rpcMethodHandler) handleCLIProfileRename(ctx context.Context, conn *jso
 	}
 }
 
-// handleCLIProfileSwitch changes the current profile and nothing else: every
-// session reads it again on its next message and moves over by itself
-// (docs/code/agent-integration.md#a-session-follows-the-current-profile).
+// handleCLIProfileSwitch changes this server's current profile and nothing
+// else: every session of this server reads it again on its next message and
+// moves over by itself
+// (docs/code/agent-integration.md#a-session-follows-the-current-profile). No
+// other Pockode process — another project's server, another cluster node —
+// follows it.
 //
-// It is not refused where profiles cannot be used (Availability): the list is
-// shared with every Pockode process of the OS user, and one that can use them
-// follows the choice. Here the CLIs keep running as the default profile, which
-// the subscription's availability lets a client explain.
+// It is not refused where profiles cannot be used (Availability): the CLIs
+// keep running as the default profile, which the subscription's availability
+// lets a client explain, and the choice takes effect once this server restarts
+// where symbolic links are allowed (cliprofile.Store.SetCurrent).
 func (h *rpcMethodHandler) handleCLIProfileSwitch(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request) {
 	var params rpc.CLIProfileSwitchParams
 	if err := unmarshalParams(req, &params); err != nil {
@@ -217,8 +219,12 @@ func (e *profileInUseError) Error() string {
 // server's CLIs running as it have stopped; see cliauth.Service.RemoveProfile
 // for the order and why. A refusal changes nothing and pushes nothing.
 //
-// CLIs other Pockode processes started as the profile — another cluster node
-// — cannot be seen from here (docs/code/cli-profiles.md#switching-and-removing).
+// The profile being current here is no refusal: this server is on the default
+// profile once it is gone, and the change pushed says so
+// (current_profile_id ""), as a switch to the default one would. Every other
+// Pockode process that had it current falls back to its default as well, but
+// hears nothing; nor can the CLIs they started as it be seen from here
+// (docs/code/cli-profiles.md#switching-and-removing).
 func (h *rpcMethodHandler) handleCLIProfileRemove(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request) {
 	var params rpc.CLIProfileRemoveParams
 	if err := unmarshalParams(req, &params); err != nil {
@@ -278,10 +284,6 @@ func (h *rpcMethodHandler) replyCLIProfileRemoveError(ctx context.Context, conn 
 func cliProfileRemoveRefusal(err error) string {
 	var inUse *profileInUseError
 	switch {
-	case errors.Is(err, cliauth.ErrRemoveCurrent),
-		// Made current by another Pockode process after the removal checked.
-		errors.Is(err, process.ErrProfileCurrent):
-		return rpc.CLIProfileRemoveRefusedCurrent
 	case errors.As(err, &inUse):
 		return rpc.CLIProfileRemoveRefusedInUse
 	case errors.Is(err, cliauth.ErrLoginInProgress):

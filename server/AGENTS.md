@@ -48,7 +48,7 @@ authguard/              # 失败密码登录的全局退避锁（仅内存；各
 authsession/            # 登录会话：密码换取的 session token + 密码指纹（sessions.json）；端口预览的一次性登录 ticket、绑定 session 的资源 capability（均仅内存）
 chat/                   # Chat 客户端
 cliauth/                # AI CLI 登录状态查询、远程登录流程与登出，均可指定账号（各 CLI 的实现在 agent/*/auth.go、login.go，见 docs/code/cli-auth.md）；按账号加锁（lock.go：读状态 / 登出只占一个账号，登录 / 更新占整个 CLI）；账号的切换与删除（remove.go：要与登录命令互斥，所以经过这里；删除的顺序见 docs/code/cli-profiles.md#removing-a-profile）
-cliprofile/             # AI CLI 账号（profile）列表与当前账号 cli-profiles.json（与 cloud.json 同目录、本 OS 用户的所有进程共享；默认账号隐含不存；账号目录 cli-profiles/<cli>/<id>/）；账号目录的准备（prepare.go：除凭据外全部符号链接回默认目录，冲突只报告不搬动）与本机能否建符号链接的探测（availability.go；平台差异在 platform_*.go）；启动 CLI 时按哪个账号、带什么环境变量与参数（launch.go 的 `Resolve` / `Launch`）；cliprofiletest/ 给测试准备账号、把假 CLI 放上 PATH 并记录每次启动的环境与参数（见 docs/code/cli-profiles.md）
+cliprofile/             # AI CLI 账号（profile）列表 cli-profiles.json（与 cloud.json 同目录、本 OS 用户的所有进程共享；默认账号隐含不存；账号目录 cli-profiles/<cli>/<id>/）与本服务器自己选的当前账号 <dataDir>/current-cli-profiles.json（每个项目的服务器、每个集群节点各一份，互不跟随；没选过或选的账号已不在列表里就是默认账号）；账号目录的准备（prepare.go：除凭据外全部符号链接回默认目录，冲突只报告不搬动）与本机能否建符号链接的探测（availability.go；平台差异在 platform_*.go）；启动 CLI 时按哪个账号、带什么环境变量与参数（launch.go 的 `Resolve` / `Launch`）；本进程正在删除的账号与一次性调用对账号的占用（withdraw.go：删除期间，若被删的正是当前账号，按当前账号启动的一律用默认账号；删除失败则恢复；一次性调用经 `LaunchOneShot` 占住账号直到 CLI 退出，删除先等它们）；cliprofiletest/ 给测试准备账号、把假 CLI 放上 PATH 并记录每次启动的环境与参数（见 docs/code/cli-profiles.md）
 cliupdate/              # AI CLI 新版本检查与更新（跑 CLI 自己的 update，再核对版本；各 CLI 的定义在 agent/*/update.go，见 docs/code/cli-update.md）
 cloudcred/              # 机器凭据 cloud.json（OS 用户配置目录下、本 OS 用户的所有进程共享；只对签发它的 cloud 使用，见 docs/code/cloud-account.md）
 cloudlogin/             # 关联 / 解除关联本机：RFC 8628 device flow 与吊销（flow.go）为一份实现，两个前端——`pockode login` / `pockode logout`（Linker）与运行中进程替 UI 跑 flow 的 Service（`cloud_link.*` RPC，见 docs/code/cloud-account.md）
@@ -153,11 +153,11 @@ Windows 与 darwin/linux 一样是发布目标（产物见 [docs/platforms.md](.
   |---|---|---|
   | `internal/fifotest` | `agent/codex`×1、`contents`×1、`filetransfer`×3 | 命名管道只存在于 `\\.\pipe`，根本进不了工作目录，被测的阻塞隐患在那里不成立 |
   | `internal/symlinktest` | `contents`×4、`filetransfer`×13、`git`×2、`internal/restart`×1、`search`×1、`selfinstall`×1 | 未开开发者模式时建符号链接要特权；开了就一条都不 skip |
-  | `cliprofile` 的 `newPreparing`、`cliprofile/cliprofiletest` 的 `UseProfile` | `cliprofile`×15、`agent/claude`×1、`agent/codex`×1 | 同上：账号目录由符号链接组成，`Store.Availability` 探测不到建链接的权限时 `Prepare` 直接拒绝；拒绝本身由不 skip 的 `TestPrepareRefusesWithoutSymlinks`、`TestLaunchWithoutSymlinks` 覆盖 |
+  | `cliprofile` 的 `newPreparing`、`cliprofile/cliprofiletest` 的 `UseProfile` | `cliprofile`×16、`agent/claude`×7、`agent/codex`×1 | 同上：账号目录由符号链接组成，`Store.Availability` 探测不到建链接的权限时 `Prepare` 直接拒绝；拒绝本身由不 skip 的 `TestPrepareRefusesWithoutSymlinks`、`TestLaunchWithoutSymlinks` 覆盖 |
   | `internal/unwritabletest` | `filestore`×1、`selfinstall`×1、`ws`×1 | 目录忽略只读属性，`os.Chmod` 挡不住写入；要真挡住得给当前用户的 SID 加一条 deny ACE |
   | `filetransfer/realname_windows_test.go` 的 `shortName` | `filetransfer`×0~2 | 临时目录所在的卷关掉了 8.3 短名（`fsutil 8dot3name`）时没有别名可测；开着就一条都不 skip |
 
-  **合计 8~48 条**，两个区间端点都是对的：`filetransfer` 的「refuses to overwrite anything but a regular file」一个子测试里同时要符号链接和 fifo，谁先 skip 就记在谁名下，于是前两行的条数此消彼长——没开开发者模式是 4+22（另加 `cliprofile` 一行的 17），开了是 5+0+0。别按单行的数去对账，按合计。
+  **合计 8~55 条**，两个区间端点都是对的：`filetransfer` 的「refuses to overwrite anything but a regular file」一个子测试里同时要符号链接和 fifo，谁先 skip 就记在谁名下，于是前两行的条数此消彼长——没开开发者模式是 4+22（另加 `cliprofile` 一行的 24），开了是 5+0+0。别按单行的数去对账，按合计。
 
   能用平台分表（如 `settings_test.go` 的路径用例）就不要 skip；断言本身在两个平台上形状不同时，把它抽成平台分文件的测试辅助（如 `internal/fspermtest`、`internal/termtest`、`internal/fifotest`），而不是在 Windows 上 skip 掉——权限测试恰恰在权限有问题的那个平台上 skip，等于什么都没证明。
 

@@ -479,12 +479,18 @@ alternatives that were rejected on the way to it, are in
   credentials, so signing Claude or Codex in or out from any node's Pockode
   (Settings → AI CLIs) does it for all of them; the cluster frontend has
   no screen of its own for it ([cli-login-ui.md](cli-login-ui.md#cluster)).
-  They share because every node inherits the manager's environment, and
-  which account each CLI runs as — its current profile — is one choice for
-  every Pockode process of the OS user ([cli-profiles.md](code/cli-profiles.md)).
+  They share because every node inherits the manager's environment, and the
+  accounts each CLI has — its profiles — are one list for every Pockode
+  process of the OS user. Which of them a node runs each CLI as — its current
+  profile — is that node's own choice, kept in its data directory: choosing an
+  account on one node changes what no other node runs as, and a node that has
+  not chosen is on the default profile
+  ([cli-profiles.md](code/cli-profiles.md#the-store-a-list-per-os-user-a-choice-per-server)).
   On the default profile Pockode sets neither `CLAUDE_CONFIG_DIR` nor
   `CODEX_HOME`, so each CLI finds the user's own stored credentials; on
-  another, every node sets the same profile directory. A sign-in to the
+  another, every node that chose it sets the same profile directory. Removing
+  an account from one node puts every node that had chosen it back on the
+  default. A sign-in to the
   profile a running session uses is picked up on its next message, with no
   restart. A Pockode started outside the cluster as another OS user has
   profiles of its own altogether; one started with either variable set

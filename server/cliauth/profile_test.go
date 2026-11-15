@@ -17,7 +17,7 @@ import (
 // Each command runs as the profile it names, or the current one, and says
 // which one that was.
 func TestProfileSelection(t *testing.T) {
-	profiles := cliprofile.NewStore(t.TempDir())
+	profiles := cliprofile.NewStore(t.TempDir(), t.TempDir())
 	work, err := profiles.Add(session.AgentTypeClaude, "Work")
 	if err != nil {
 		t.Fatal(err)
@@ -71,7 +71,7 @@ func TestProfileSelection(t *testing.T) {
 // choosing.
 func TestUnknownProfileIsRefused(t *testing.T) {
 	provider := cliauthtest.New(cliauthtest.State{Status: cliauth.Status{State: cliauth.StateSignedIn}})
-	s := cliauth.NewService(slog.Default(), cliprofile.NewStore(t.TempDir()))
+	s := cliauth.NewService(slog.Default(), cliprofile.NewStore(t.TempDir(), t.TempDir()))
 	s.Register(session.AgentTypeClaude, provider)
 	t.Cleanup(s.Close)
 	ctx := context.Background()
@@ -97,7 +97,7 @@ func TestUnknownProfileIsRefused(t *testing.T) {
 }
 
 func TestEveryProfileStatuses(t *testing.T) {
-	profiles := cliprofile.NewStore(t.TempDir())
+	profiles := cliprofile.NewStore(t.TempDir(), t.TempDir())
 	work := mustAddProfile(t, profiles, session.AgentTypeClaude, "Work")
 	home := mustAddProfile(t, profiles, session.AgentTypeClaude, "Home")
 	codexWork := mustAddProfile(t, profiles, session.AgentTypeCodex, "Work")
@@ -155,7 +155,7 @@ func TestEveryProfileStatuses(t *testing.T) {
 // Each read of a CLI's profiles runs at once: one Codex read takes 3–12s, and
 // a screen listing several profiles must not wait them out one after another.
 func TestEveryProfileStatuses_ReadsConcurrently(t *testing.T) {
-	profiles := cliprofile.NewStore(t.TempDir())
+	profiles := cliprofile.NewStore(t.TempDir(), t.TempDir())
 	mustAddProfile(t, profiles, session.AgentTypeClaude, "Work")
 	mustAddProfile(t, profiles, session.AgentTypeClaude, "Home")
 	p := blockingProvider{
@@ -194,7 +194,7 @@ func TestEveryProfileStatuses_ReadsConcurrently(t *testing.T) {
 // each says which profile the sign-in is for, so a client can tell the one
 // signing in from the ones waiting for it.
 func TestStatusesDuringSignIn_NameTheProfileSigningIn(t *testing.T) {
-	profiles := cliprofile.NewStore(t.TempDir())
+	profiles := cliprofile.NewStore(t.TempDir(), t.TempDir())
 	work := mustAddProfile(t, profiles, session.AgentTypeClaude, "Work")
 	s := cliauth.NewService(slog.Default(), profiles)
 	s.Register(session.AgentTypeClaude, cliauthtest.New(cliauthtest.State{Status: cliauth.Status{State: cliauth.StateSignedOut}}))

@@ -119,7 +119,7 @@ func TestCLIProfile_OtherProcessesChangesAreNotPushed(t *testing.T) {
 	env := newTestEnv(t, &mockAgent{})
 	env.subscribeCLIProfiles()
 
-	otherNode := cliprofile.NewStore(env.cliProfilesDir)
+	otherNode := cliprofile.NewStore(env.cliProfilesDir, t.TempDir())
 	elsewhere, err := otherNode.Add(session.AgentTypeClaude, "Elsewhere")
 	if err != nil {
 		t.Fatal(err)
@@ -132,6 +132,39 @@ func TestCLIProfile_OtherProcessesChangesAreNotPushed(t *testing.T) {
 	got := env.awaitCLIProfiles().CLIs[0]
 	if len(got.Profiles) != 2 || got.Profiles[0] != elsewhere || got.Profiles[1].Name != "Here" {
 		t.Errorf("pushed = %+v, want both profiles, read afresh", got.Profiles)
+	}
+}
+
+// Which profile is current is each server's own: a switch on another cluster
+// node changes nothing here, and one here changes nothing there.
+func TestCLIProfile_SwitchIsThisServersAlone(t *testing.T) {
+	env := newTestEnv(t, &mockAgent{})
+	otherNode := cliprofile.NewStore(env.cliProfilesDir, t.TempDir())
+	here, err := env.cliProfiles.Add(session.AgentTypeClaude, "Here")
+	if err != nil {
+		t.Fatal(err)
+	}
+	there, err := otherNode.Add(session.AgentTypeClaude, "There")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := otherNode.SetCurrent(session.AgentTypeClaude, there.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := env.subscribeCLIProfiles().CLIs[0].CurrentProfileID; got != "" {
+		t.Errorf("current here = %q after another node switched, want the default profile", got)
+	}
+	if id, err := env.cliProfiles.Resolve(session.AgentTypeClaude, cliprofile.SelectCurrent()); err != nil || id != "" {
+		t.Errorf("a CLI here would start as %q, %v; want the default profile", id, err)
+	}
+
+	env.mustCallCLIProfile("cli_profile.switch", rpc.CLIProfileSwitchParams{Agent: session.AgentTypeClaude, ProfileID: &here.ID})
+	if got := env.awaitCLIProfiles().CLIs[0].CurrentProfileID; got != here.ID {
+		t.Errorf("pushed current = %q, want %q", got, here.ID)
+	}
+	if l, err := otherNode.Load(session.AgentTypeClaude); err != nil || l.Current != there.ID {
+		t.Errorf("the other node's current = %q, %v; want %q", l.Current, err, there.ID)
 	}
 }
 
@@ -311,6 +344,47 @@ func TestCLIProfile_Remove(t *testing.T) {
 	}
 }
 
+// Removing a profile that is current — here and on another node — is not
+// refused: both are on the default profile from then on, and this server
+// pushes that, as a switch to the default would be pushed. A removal refused
+// while it was current here leaves it current.
+func TestCLIProfile_RemoveCurrent(t *testing.T) {
+	env := newTestEnv(t, &mockAgent{})
+	otherNode := cliprofile.NewStore(env.cliProfilesDir, t.TempDir())
+	work, err := env.cliProfiles.Add(session.AgentTypeClaude, "Work")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := otherNode.SetCurrent(session.AgentTypeClaude, work.ID); err != nil {
+		t.Fatal(err)
+	}
+	env.subscribeCLIProfiles()
+	env.mustCallCLIProfile("cli_profile.switch", rpc.CLIProfileSwitchParams{Agent: session.AgentTypeClaude, ProfileID: &work.ID})
+	env.awaitCLIProfiles()
+
+	env.handler.profileReleaser = fakeReleaser{busy: []worktree.ProfileUser{{SessionID: "s1"}}}
+	if _, data := env.removeRefusal(work.ID); data.Reason != rpc.CLIProfileRemoveRefusedInUse {
+		t.Fatalf("reason = %q, want %q", data.Reason, rpc.CLIProfileRemoveRefusedInUse)
+	}
+	env.handler.profileReleaser = env.worktreeManager
+	if l, err := env.cliProfiles.Load(session.AgentTypeClaude); err != nil || l.Current != work.ID {
+		t.Errorf("current after a refused removal = %q, %v; want the profile, still current", l.Current, err)
+	}
+	if env.pushedCLIProfiles() {
+		t.Error("a refused removal was pushed")
+	}
+
+	env.mustCallCLIProfile("cli_profile.remove", rpc.CLIProfileRemoveParams{Agent: session.AgentTypeClaude, ProfileID: work.ID})
+	if got := env.awaitCLIProfiles().CLIs[0]; got.CurrentProfileID != "" || len(got.Profiles) != 0 {
+		t.Errorf("pushed after removing the current profile: %+v, want the default profile current and none stored", got)
+	}
+	for name, store := range map[string]*cliprofile.Store{"here": env.cliProfiles, "the other node": otherNode} {
+		if id, err := store.Resolve(session.AgentTypeClaude, cliprofile.SelectCurrent()); err != nil || id != "" {
+			t.Errorf("%s a CLI starts as %q, %v; want the default profile", name, id, err)
+		}
+	}
+}
+
 // A removal refused for a state the user can change says which, with the
 // sessions in the way when there are any, and changes and pushes nothing.
 func TestCLIProfile_RemoveRefused(t *testing.T) {
@@ -358,18 +432,6 @@ func TestCLIProfile_RemoveRefused(t *testing.T) {
 		if _, data := env.removeRefusal(work.ID); data.Reason != rpc.CLIProfileRemoveRefusedStillExiting {
 			t.Errorf("reason = %q, want %q", data.Reason, rpc.CLIProfileRemoveRefusedStillExiting)
 		}
-		kept()
-	})
-
-	t.Run("current", func(t *testing.T) {
-		env.mustCallCLIProfile("cli_profile.switch", rpc.CLIProfileSwitchParams{Agent: session.AgentTypeClaude, ProfileID: &work.ID})
-		env.awaitCLIProfiles()
-		if _, data := env.removeRefusal(work.ID); data.Reason != rpc.CLIProfileRemoveRefusedCurrent {
-			t.Errorf("reason %q, want current", data.Reason)
-		}
-		defaultID := ""
-		env.mustCallCLIProfile("cli_profile.switch", rpc.CLIProfileSwitchParams{Agent: session.AgentTypeClaude, ProfileID: &defaultID})
-		env.awaitCLIProfiles()
 		kept()
 	})
 
