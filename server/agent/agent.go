@@ -109,9 +109,9 @@ type Agent interface {
 // runs as its CLI's default one.
 type ProfileResolver interface {
 	// CurrentProfile is the profile a session's CLI started now runs as, ""
-	// being the default one. Read afresh on every call: the current profile is
-	// shared by every Pockode process of the OS user, and any of them may have
-	// changed it.
+	// being the default one. Read afresh on every call: it is this server's
+	// choice, which a switch changes at any time, and a removal of the profile
+	// by any Pockode process of the OS user turns it into the default one.
 	CurrentProfile() (string, error)
 }
 

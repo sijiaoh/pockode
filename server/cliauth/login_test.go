@@ -18,7 +18,7 @@ import (
 
 func newLoginService(t *testing.T, state cliauthtest.State) *cliauth.Service {
 	t.Helper()
-	s := cliauth.NewService(slog.Default(), cliprofile.NewStore(t.TempDir()))
+	s := cliauth.NewService(slog.Default(), cliprofile.NewStore(t.TempDir(), t.TempDir()))
 	s.Register(session.AgentTypeClaude, cliauthtest.New(state))
 	t.Cleanup(s.Close)
 	return s
@@ -301,7 +301,7 @@ func TestLogin_WakesAReadWaitingForTheCLI(t *testing.T) {
 		entered:  make(chan struct{}),
 		release:  make(chan struct{}),
 	}
-	s := cliauth.NewService(slog.Default(), cliprofile.NewStore(t.TempDir()))
+	s := cliauth.NewService(slog.Default(), cliprofile.NewStore(t.TempDir(), t.TempDir()))
 	s.Register(session.AgentTypeClaude, p)
 	t.Cleanup(s.Close)
 
@@ -331,7 +331,7 @@ func TestLogin_WakesAReadWaitingForTheCLI(t *testing.T) {
 }
 
 func TestClose_EndsRunningSignIns(t *testing.T) {
-	s := cliauth.NewService(slog.Default(), cliprofile.NewStore(t.TempDir()))
+	s := cliauth.NewService(slog.Default(), cliprofile.NewStore(t.TempDir(), t.TempDir()))
 	s.Register(session.AgentTypeClaude, cliauthtest.New(cliauthtest.State{}))
 	startWaiting(t, s)
 

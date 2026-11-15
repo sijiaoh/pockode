@@ -1,8 +1,12 @@
-// Package cliprofile keeps the accounts (profiles) registered for each AI CLI
-// and which one is current: cli-profiles.json in the OS user's configuration
-// directory, next to cloudcred's cloud.json and for the same reason — every
-// Pockode process the OS user runs, servers in different projects, a cluster
-// and the nodes it starts, reads and changes the same list.
+// Package cliprofile keeps the accounts (profiles) registered for each AI CLI,
+// and which one this Pockode server runs each CLI as.
+//
+// The list is cli-profiles.json in the OS user's configuration directory, next
+// to cloudcred's cloud.json and for the same reason — every Pockode process the
+// OS user runs, servers in different projects, a cluster and the nodes it
+// starts, reads and changes the same list. The choice of the current profile is
+// not shared: each server keeps its own in its data directory, so switching
+// accounts in one changes what no other runs as.
 //
 // The default profile is implicit and never stored: it is whatever directory
 // the CLI uses without Pockode's help (~/.claude, ~/.codex, or the
@@ -54,48 +58,71 @@ type Profile struct {
 	Name string `json:"name"`
 }
 
-// List is one CLI's profiles. Current is the ID of the profile in use, or ""
-// for the default one.
+// List is one CLI's profiles. Current is the ID of the profile this server has
+// chosen, or "" for the default one; it is never stored with the profiles.
 type List struct {
-	Current  string    `json:"current,omitempty"`
-	Profiles []Profile `json:"profiles"`
+	Current  string
+	Profiles []Profile
 }
 
 func (l *List) index(id string) int {
 	return slices.IndexFunc(l.Profiles, func(p Profile) bool { return p.ID == id })
 }
 
-// file is the stored document. A CLI with no profiles is absent rather than
-// stored empty.
-type file map[session.AgentType]*List
+// file is the stored list. A CLI with no profiles is absent rather than stored
+// empty.
+//
+// Before the choice was per server, each CLI's entry also had a "current", the
+// one choice every Pockode process followed. It is not carried over to anyone:
+// reading ignores it, and the next change to the list drops it from the file —
+// so a process of an older version still running, a cluster node not yet
+// restarted, is moved to the default profile by that change.
+type file map[session.AgentType]*storedList
+
+type storedList struct {
+	Profiles []Profile `json:"profiles"`
+}
+
+// choices is this server's choice of each CLI's current profile. A CLI it has
+// made no choice for, or chose the default profile for, is absent.
+type choices map[session.AgentType]string
 
 type Store struct {
 	path    string
 	baseDir string
+	// choicePath is this server's own file, in its data directory: what it
+	// runs each CLI as.
+	choicePath string
 
 	availabilityOnce sync.Once
 	availability     Availability
 	// unavailableWarning logs, once, that the current profile is passed over
 	// because profiles cannot be used here.
 	unavailableWarning sync.Once
+
+	local local
 }
 
-// DefaultStore is the store every Pockode process of this OS user shares.
-func DefaultStore() (*Store, error) {
+// DefaultStore is the list every Pockode process of this OS user shares, with
+// the choice of the server whose data directory is dataDir.
+func DefaultStore(dataDir string) (*Store, error) {
 	configDir, err := os.UserConfigDir()
 	if err != nil {
 		return nil, err
 	}
-	return NewStore(configDir), nil
+	return NewStore(configDir, dataDir), nil
 }
 
 // NewStore keeps cli-profiles.json, and the profile directories under
-// cli-profiles/, in configDir/pockode.
-func NewStore(configDir string) *Store {
+// cli-profiles/, in configDir/pockode, and this server's choice of current
+// profiles in dataDir — a project's server's, or a cluster node's, which is
+// one too.
+func NewStore(configDir, dataDir string) *Store {
 	dir := filepath.Join(configDir, "pockode")
 	return &Store{
-		path:    filepath.Join(dir, "cli-profiles.json"),
-		baseDir: filepath.Join(dir, "cli-profiles"),
+		path:       filepath.Join(dir, "cli-profiles.json"),
+		baseDir:    filepath.Join(dir, "cli-profiles"),
+		choicePath: filepath.Join(dataDir, "current-cli-profiles.json"),
 	}
 }
 
@@ -117,10 +144,29 @@ func (s *Store) Dir(agent session.AgentType, id string) (string, error) {
 	return filepath.Join(s.baseDir, string(agent), id), nil
 }
 
-// Load returns agent's profiles. No file, or a damaged one that had to be
-// quarantined, is an empty list with the default profile current, and so is
-// every list of the nil Store.
+// Load returns agent's profiles and this server's choice among them. No file,
+// or a damaged one that had to be quarantined, is an empty list, and so is
+// every list of the nil Store; no choice, a damaged one, or one naming a
+// profile no longer listed is the default profile.
 func (s *Store) Load(agent session.AgentType) (List, error) {
+	l, err := s.loadList(agent)
+	if err != nil || len(l.Profiles) == 0 {
+		return l, err
+	}
+	var c choices
+	found, err := filestore.ReadJSONOrQuarantine(s.choicePath, "current AI CLI profiles", &c)
+	if err != nil {
+		return List{}, err
+	}
+	if found && l.index(c[agent]) >= 0 {
+		l.Current = c[agent]
+	}
+	return l, nil
+}
+
+// loadList is Load without this server's choice, for what only asks which
+// profiles there are.
+func (s *Store) loadList(agent session.AgentType) (List, error) {
 	if !agent.IsValid() {
 		return List{}, fmt.Errorf("%w: %q", ErrUnsupportedAgent, agent)
 	}
@@ -135,7 +181,8 @@ func (s *Store) Load(agent session.AgentType) (List, error) {
 	return f.list(agent), nil
 }
 
-// Current returns agent's current profile, or nil for the default one.
+// Current returns agent's current profile on this server, or nil for the
+// default one.
 func (s *Store) Current(agent session.AgentType) (*Profile, error) {
 	list, err := s.Load(agent)
 	if err != nil {
@@ -186,21 +233,63 @@ func (s *Store) Rename(agent session.AgentType, id, name string) error {
 	})
 }
 
-// SetCurrent makes the profile id current for agent; "" makes it the default
-// one.
+// SetCurrent makes the profile id current for agent on this server; "" makes
+// it the default one. No other Pockode process follows it.
+//
+// It is not refused where Availability says profiles cannot be used: the CLIs
+// keep running as the default profile there (Resolve), and the choice takes
+// effect once this server restarts on a machine that allows symbolic links —
+// what the unavailable reason tells the user to do.
+//
+// The profile is looked up before the choice is written, under two different
+// locks: a removal by another process landing in between leaves a choice
+// naming no profile, which reads as the default one.
 func (s *Store) SetCurrent(agent session.AgentType, id string) error {
-	return s.update(agent, func(l *List) error {
-		if id != "" && l.index(id) < 0 {
-			return fmt.Errorf("%w: %q", ErrNotFound, id)
+	if !agent.IsValid() {
+		return fmt.Errorf("%w: %q", ErrUnsupportedAgent, agent)
+	}
+	if s == nil {
+		return ErrNoStore
+	}
+	if id != "" {
+		if err := s.requireListed(agent, id); err != nil {
+			return err
 		}
-		l.Current = id
-		return nil
-	})
+	}
+	apply := func(old []byte) ([]byte, error) {
+		var c choices
+		if old != nil && json.Unmarshal(old, &c) != nil {
+			return nil, errDamaged
+		}
+		if c == nil {
+			c = choices{}
+		}
+		if c[agent] == id {
+			return nil, nil
+		}
+		if id == "" {
+			delete(c, agent)
+		} else {
+			c[agent] = id
+		}
+		return filestore.MarshalIndex(c)
+	}
+	err := filestore.UpdateFileAtomic(s.choicePath, 0600, apply)
+	if !errors.Is(err, errDamaged) {
+		return err
+	}
+	var discard choices
+	if _, err := filestore.ReadJSONOrQuarantine(s.choicePath, "current AI CLI profiles", &discard); err != nil {
+		return err
+	}
+	return filestore.UpdateFileAtomic(s.choicePath, 0600, apply)
 }
 
 // Remove forgets the profile id and deletes its directory, with whatever
-// credentials are in it; the links in it are removed, never followed. If it
-// was current, the default profile becomes current.
+// credentials are in it; the links in it are removed, never followed. A
+// server that had it as its current profile — this one or any other — reads
+// the default one as current from then on, its choice naming no profile; the
+// stale choice is left in its file, harmless since IDs are never reused.
 //
 // Credentials kept outside the directory are not touched: Claude Code on
 // macOS keeps them in a Keychain item named after the directory, so a caller
@@ -221,9 +310,6 @@ func (s *Store) Remove(agent session.AgentType, id string) error {
 			return fmt.Errorf("%w: %q", ErrNotFound, id)
 		}
 		l.Profiles = slices.Delete(l.Profiles, i, i+1)
-		if l.Current == id {
-			l.Current = ""
-		}
 		return nil
 	})
 	if err != nil {
@@ -262,10 +348,10 @@ func (s *Store) update(agent session.AgentType, change func(*List) error) error 
 		if err := change(&list); err != nil {
 			return nil, err
 		}
-		if len(list.Profiles) == 0 && list.Current == "" {
+		if len(list.Profiles) == 0 {
 			delete(f, agent)
 		} else {
-			f[agent] = &list
+			f[agent] = &storedList{Profiles: list.Profiles}
 		}
 		return filestore.MarshalIndex(f)
 	}
@@ -276,21 +362,17 @@ func (s *Store) update(agent session.AgentType, change func(*List) error) error 
 	}
 	// Quarantining needs the lock the update held, so it happens between two
 	// attempts; Load is what quarantines.
-	if _, err := s.Load(agent); err != nil {
+	if _, err := s.loadList(agent); err != nil {
 		return err
 	}
 	return filestore.UpdateFileAtomic(s.path, 0600, apply)
 }
 
-// list copies agent's stored list. A current ID naming no profile — the file
-// is the user's to edit — reads as the default profile, as Current reports it.
+// list copies agent's stored list, with no choice made.
 func (f file) list(agent session.AgentType) List {
 	l := List{Profiles: []Profile{}}
 	if stored := f[agent]; stored != nil {
 		l.Profiles = append(l.Profiles, stored.Profiles...)
-		if l.index(stored.Current) >= 0 {
-			l.Current = stored.Current
-		}
 	}
 	return l
 }

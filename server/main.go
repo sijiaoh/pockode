@@ -423,10 +423,13 @@ Flags:
 	}
 
 	// Which account each AI CLI runs as: every start of one, in a session or
-	// not, reads the current profile from here. Without a configuration
-	// directory there is nowhere to keep profiles, which is no reason not to
-	// run the CLIs as they are: a nil store has only the default profiles.
-	cliProfiles, err := cliprofile.DefaultStore()
+	// not, reads the current profile from here. The list of profiles is the OS
+	// user's; which one is current is this server's own, kept in dataDir, so a
+	// switch here changes no other server or cluster node. Without a
+	// configuration directory there is nowhere to keep profiles, which is no
+	// reason not to run the CLIs as they are: a nil store has only the default
+	// profiles.
+	cliProfiles, err := cliprofile.DefaultStore(dataDir)
 	if err != nil {
 		slog.Warn("no configuration directory for AI CLI profiles; every AI CLI runs as its default profile", "error", err)
 	}

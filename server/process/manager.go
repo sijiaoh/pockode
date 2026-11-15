@@ -282,9 +282,10 @@ func (m *Manager) EmitMessage(sessionID string, event agent.AgentEvent, seq sess
 // GetOrCreateProcess launches the CLI described by meta, or returns the process
 // already running for meta.ID. A session that has been activated is resumed.
 //
-// The account is checked on every call, because choosing one is machine-wide
-// and takes effect on each session's next message, wherever it was chosen: a
-// process started as a profile that is no longer current is stopped and a
+// The account is checked on every call, because a switch on this server, or
+// the removal — by any Pockode process — of the profile it had chosen, takes
+// effect on each session's next message: a process started as a profile that
+// is no longer current is stopped and a
 // successor resumed in its place as the current one — what happens anyway when
 // the idle lease collects a process and the next message arrives. Only a
 // process nothing is waiting on is stopped (stopIfIdle). One whose turn is
@@ -394,6 +395,23 @@ func (m *Manager) GetOrCreateProcess(ctx context.Context, meta session.SessionMe
 		OnUsage:      m.usageRecorder(sessionID),
 	}
 	sess, err := ag.Start(m.ctx, opts)
+	// Another Pockode process removed the profile between the read above and
+	// the start, which refuses it: the current profile has become the default
+	// one by now, as it would have for a read a moment later.
+	for profileID != "" && errors.Is(err, cliprofile.ErrNotFound) {
+		next, readErr := m.currentProfile(meta.AgentType)
+		if readErr != nil {
+			err = fmt.Errorf("%w; and then: %w", err, readErr)
+			break
+		}
+		if next == profileID {
+			break
+		}
+		slog.Info("current profile was removed while a process was starting; starting as the current one", "sessionId", sessionID, "profile", profileID, "currentProfile", next)
+		profileID = next
+		opts.Profile = cliprofile.Select(profileID)
+		sess, err = ag.Start(m.ctx, opts)
+	}
 	if err != nil {
 		m.processesMu.Unlock()
 		return nil, false, err
@@ -503,7 +521,8 @@ func (m *Manager) currentProfile(agentType session.AgentType) (string, error) {
 
 // ErrProfileCurrent is returned by ReleaseProfile for the profile that is still
 // the current one: any process stopped for it would come back as it on its
-// session's next message.
+// session's next message. A removal withdraws the profile before releasing it,
+// so this is a check of that order rather than a refusal a user can meet.
 var ErrProfileCurrent = errors.New("the profile is still the current one")
 
 // ReleaseProfile asks this manager's sessions to stop running agentType's CLI
@@ -518,7 +537,8 @@ var ErrProfileCurrent = errors.New("the profile is still the current one")
 // stop goes to that successor (ErrProcessReplaced).
 //
 // profileID must no longer be current when this is called (ErrProfileCurrent
-// otherwise); then nothing starts as it afterwards — GetOrCreateProcess reads
+// otherwise) — a removal withdraws it first (cliprofile.Store.Withdraw); then
+// nothing starts as it afterwards — GetOrCreateProcess reads
 // the current profile again under processesMu, where it starts a process — and
 // an empty result means that no CLI of this manager runs as it. Only this
 // manager's processes are seen: a CLI another Pockode process started —

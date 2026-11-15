@@ -23,7 +23,7 @@ func mustLaunch(t *testing.T, s *Store, agent session.AgentType, sel Selector) L
 // The default profile is the CLI as it would run without Pockode: nothing is
 // added, whether it is current or named.
 func TestLaunchDefaultAddsNothing(t *testing.T) {
-	s := NewStore(t.TempDir())
+	s := NewStore(t.TempDir(), t.TempDir())
 	mustAdd(t, s, claude, "Work")
 
 	for name, sel := range map[string]Selector{"current": SelectCurrent(), "named": Select("")} {
@@ -68,10 +68,10 @@ func TestLaunchProfile(t *testing.T) {
 }
 
 // Where profiles cannot be made, the current one falls back to the default —
-// it may have been chosen by a process that could — but one named is refused
+// the choice is kept for a restart where they can — but one named is refused
 // rather than quietly run as the default.
 func TestLaunchWithoutSymlinks(t *testing.T) {
-	s := NewStore(t.TempDir())
+	s := NewStore(t.TempDir(), t.TempDir())
 	s.availabilityOnce.Do(func() { s.availability = Availability{Reason: "no symlinks here"} })
 	p := mustAdd(t, s, claude, "Work")
 	if err := s.SetCurrent(claude, p.ID); err != nil {
@@ -112,7 +112,7 @@ func TestLaunchArgsHaveNoQuotes(t *testing.T) {
 }
 
 func TestLaunchUnknownProfile(t *testing.T) {
-	s := NewStore(t.TempDir())
+	s := NewStore(t.TempDir(), t.TempDir())
 	s.availabilityOnce.Do(func() { s.availability = Availability{Available: true} })
 
 	if _, err := s.Launch(claude, Select(uuid.Must(uuid.NewV7()).String())); !errors.Is(err, ErrNotFound) {

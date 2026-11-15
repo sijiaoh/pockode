@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"slices"
 	"strconv"
 	"sync"
@@ -372,6 +373,31 @@ func TestManager_StartsAsTheProfileCurrentAtTheStart(t *testing.T) {
 	}
 	if proc.ProfileID() != "B" || mock.lastStart(t).profile != cliprofile.Select("B") {
 		t.Errorf("started as %q, want B: the profile current when the CLI starts", proc.ProfileID())
+	}
+}
+
+// Another Pockode process removing the current profile between the read and
+// the start makes the start refuse it; the session starts as the profile
+// current by then — the default one — rather than fail.
+func TestManager_StartsAsTheDefaultWhenTheProfileWasRemovedMeanwhile(t *testing.T) {
+	store, _ := session.NewFileStore(t.TempDir())
+	mock := &mockAgent{profile: "A"}
+	mock.startErr = func(opts agent.StartOptions) error {
+		if opts.Profile != cliprofile.Select("A") {
+			return nil
+		}
+		mock.profile = "" // Start holds mock.mu.
+		return fmt.Errorf("prepare the claude profile A: %w", cliprofile.ErrNotFound)
+	}
+	m := NewManager(mockRegistry(mock), "", t.TempDir(), "", "", store, idleOnly(time.Minute))
+	defer m.Shutdown()
+
+	proc, _, err := m.GetOrCreateProcess(context.Background(), createSession(t, store, "sess-1"))
+	if err != nil {
+		t.Fatalf("GetOrCreateProcess: %v", err)
+	}
+	if proc.ProfileID() != "" || mock.lastStart(t).profile != cliprofile.Select("") {
+		t.Errorf("started as %q, want the default profile", proc.ProfileID())
 	}
 }
 

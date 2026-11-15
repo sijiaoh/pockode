@@ -151,7 +151,7 @@ func fakeClaudeAuth(t *testing.T, role string) *Auth {
 		log:           slog.Default(),
 		binary:        os.Args[0],
 		workDir:       t.TempDir(),
-		profiles:      cliprofile.NewStore(t.TempDir()),
+		profiles:      cliprofile.NewStore(t.TempDir(), t.TempDir()),
 		linkTimeout:   5 * time.Second,
 		verifyTimeout: 2 * time.Second,
 	}

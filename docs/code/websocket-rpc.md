@@ -1170,8 +1170,8 @@ moved branch is inspected again rather than retried; `-32010`
 another worktree has checked out, with `data.worktree`
 ([git.md](../git.md#deleting-a-branch)).
 `-32014` (`rpc.CodeCLIProfileRemoveRefused`) refuses a `cli_profile.remove`
-for a state the user can change — the profile is current, mid-turn in
-sessions `data.sessions` names, the CLI signing in or updating — with
+for a state the user can change — the profile mid-turn in sessions
+`data.sessions` names, the CLI signing in or updating — with
 `data.reason`; the profile is left as it was
 ([cli-profiles.md](cli-profiles.md#removing-a-profile)).
 

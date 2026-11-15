@@ -332,9 +332,10 @@ func (s *Service) StartLogin(agentType session.AgentType, kind AccountKind, prof
 		s.loginsMu.Unlock()
 		return Login{}, updatingError(agentType)
 	}
-	// Under loginsMu, as RemoveProfile marks the profile: either the removal
-	// sees this sign-in running and refuses, or this sees the removal.
-	if s.removing[agentType][profileID] {
+	// Under loginsMu, where the removal later looks for a running sign-in
+	// (lockUnlessBusy) after withdrawing the profile: either the removal sees
+	// this sign-in and refuses, or this sees the removal.
+	if s.profiles.Withdrawn(agentType, profileID) {
 		s.loginsMu.Unlock()
 		return Login{}, removingError(agentType)
 	}

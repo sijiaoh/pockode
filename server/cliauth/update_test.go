@@ -81,7 +81,7 @@ func TestBeginUpdate_WaitsForARunningRead(t *testing.T) {
 		entered:  make(chan struct{}),
 		release:  make(chan struct{}),
 	}
-	s := cliauth.NewService(slog.Default(), cliprofile.NewStore(t.TempDir()))
+	s := cliauth.NewService(slog.Default(), cliprofile.NewStore(t.TempDir(), t.TempDir()))
 	s.Register(session.AgentTypeClaude, p)
 	t.Cleanup(s.Close)
 
@@ -154,7 +154,7 @@ func (slowVersionProvider) Binary() string { return os.Args[0] }
 func TestBeginUpdate_WaitsForARunningVersion(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv(fakeVersionGateEnv, dir)
-	s := cliauth.NewService(slog.Default(), cliprofile.NewStore(t.TempDir()))
+	s := cliauth.NewService(slog.Default(), cliprofile.NewStore(t.TempDir(), t.TempDir()))
 	s.Register(session.AgentTypeClaude, slowVersionProvider{cliauthtest.New(cliauthtest.State{Status: cliauth.Status{State: cliauth.StateSignedIn}})})
 	t.Cleanup(s.Close)
 

@@ -9,7 +9,7 @@ import (
 )
 
 func TestOverview(t *testing.T) {
-	s := NewStore(t.TempDir())
+	s := NewStore(t.TempDir(), t.TempDir())
 	work := mustAdd(t, s, codex, "Work")
 	if err := s.SetCurrent(codex, work.ID); err != nil {
 		t.Fatal(err)
@@ -31,10 +31,11 @@ func TestOverview(t *testing.T) {
 }
 
 // A client explains a machine that cannot use profiles from the overview, and
-// is still shown what was chosen: the list is shared with processes that can.
+// is still shown what this server chose: it takes effect once the server
+// restarts where symbolic links are allowed.
 func TestOverviewWhereProfilesAreUnavailable(t *testing.T) {
 	t.Run("no symlinks", func(t *testing.T) {
-		s := NewStore(t.TempDir())
+		s := NewStore(t.TempDir(), t.TempDir())
 		s.availabilityOnce.Do(func() { s.availability = Availability{Reason: "turn on Developer Mode"} })
 		work := mustAdd(t, s, claude, "Work")
 		if err := s.SetCurrent(claude, work.ID); err != nil {

@@ -15,9 +15,6 @@ var (
 	// ErrRemoveDefault is the default profile, which is the CLI's own directory
 	// and is never stored.
 	ErrRemoveDefault = errors.New("the default profile cannot be removed")
-	// ErrRemoveCurrent is the current profile: the sessions of every Pockode
-	// process would start their next CLI as it.
-	ErrRemoveCurrent = errors.New("the current profile cannot be removed; switch to another profile first")
 	// ErrProfileRemoving is a profile this server is removing right now. A
 	// second removal, a switch to it and a sign-in to it are refused with it.
 	ErrProfileRemoving = errors.New("the profile is being removed")
@@ -26,8 +23,8 @@ var (
 	// Claude Code's Keychain item on macOS — where nothing can reach it again.
 	ErrSignOutFailed = errors.New("the profile could not be signed out, so it was kept")
 	// ErrReleaseTimedOut is a release that did not return in time — CLIs that
-	// were told to stop still exiting. The ones stopped stay stopped; a later
-	// removal has only to wait out what is left of them.
+	// were told to stop, or one-shot runs, still running. The ones stopped stay
+	// stopped; a later removal has only to wait out what is left of them.
 	ErrReleaseTimedOut = errors.New("the CLIs running as the profile did not exit in time, so it was kept; try again")
 )
 
@@ -41,47 +38,62 @@ type refusal struct {
 func (r *refusal) Error() string { return r.message }
 func (r *refusal) Unwrap() error { return r.sentinel }
 
-// SwitchProfile makes id agentType's current profile ("" the default one),
-// unless this server is removing it.
+// SwitchProfile makes id agentType's current profile on this server ("" the
+// default one), unless this server is removing it.
 //
 // It goes through here rather than straight to the store because of that
-// check: a removal decides the profile is not current and then stops the CLIs
-// running as it, and a switch landing in between would start new ones.
+// check, made under switchMu as a removal withdraws the profile: a switch to
+// it is either stored before the removal starts, and then the removal takes
+// this server back to the default profile with it, or refused. Without it, a
+// switch reported as done would be undone by a removal already under way.
 func (s *Service) SwitchProfile(agentType session.AgentType, id string) error {
 	if _, ok := s.providers[agentType]; !ok {
 		return fmt.Errorf("%w: %q", ErrUnknownAgent, agentType)
 	}
 	s.switchMu.Lock()
 	defer s.switchMu.Unlock()
-	s.loginsMu.Lock()
-	removing := s.removing[agentType][id]
-	s.loginsMu.Unlock()
-	if removing {
+	if s.profiles.Withdrawn(agentType, id) {
 		return removingError(agentType)
 	}
 	return s.profiles.SetCurrent(agentType, id)
 }
 
 // RemoveProfile signs the profile id of agentType out and removes it, its
-// directory with it — or refuses, changing nothing.
+// directory with it — or refuses, changing nothing that outlasts the call:
+// while it runs the profile is withdrawn (step 1), so a turn of this server
+// that would start on it as the current profile starts on the default one
+// even if the removal is then refused. A sign-in or an update already running
+// refuses before the profile is withdrawn, so those refusals do not open that
+// window; what can is the wait for the profile's lock (and a sign-in or update
+// starting meanwhile), the release, and the sign-out.
+//
+// That it is this server's current profile, or another server's, is no
+// refusal: every server whose choice it was is on the default profile once it
+// is off the list (cliprofile.Store.Load), this one included, and moves its
+// sessions over on their next message as after a switch.
 //
 // In order:
 //
-//  1. The profile is marked as being removed, and refused if it is current
-//     (ErrRemoveCurrent). From here until the end no switch to it and no
-//     sign-in to it can start on this server (ErrProfileRemoving).
+//  1. The profile is withdrawn (cliprofile.Store.Withdraw): from here until
+//     the end this server starts nothing as it unless asked for it by name —
+//     a session or one-shot that would start as the current profile starts as
+//     the default one — and no switch to it and no sign-in to it can start
+//     (ErrProfileRemoving). A refusal puts it back, and if it was current it
+//     is current again.
 //  2. Its lock is taken, as a sign-out takes it, so that no status read or
 //     sign-out runs as it meanwhile. A sign-in or an update of the CLI refuses
 //     the removal (ErrLoginInProgress, ErrUpdating): either holds the CLI for
 //     minutes, and a sign-in writes into this very directory.
-//  3. release stops this server's CLIs running as the profile. An error from
-//     it is returned as it is, before anything else has changed: a session
-//     mid-turn on the profile keeps it, signed in, until the user tries again.
-//     Waiting for the lock and release share lockWaitTimeout, counted from
-//     when the wait starts; a release still running then is refused
-//     (ErrReleaseTimedOut). That keeps a removal within what a sign-out takes
-//     — 20s for the lock and the sign-out's own budget — and so within the
-//     time the client waits (docs/code/cli-auth.md#timeouts).
+//  3. release stops this server's sessions running as the profile, and the
+//     one-shot runs still running as it are waited for
+//     (cliprofile.Store.WaitUnheld). An error from release is returned as it
+//     is, before anything else has changed: a session mid-turn on the profile
+//     keeps it, signed in, until the user tries again. Waiting for the lock
+//     and the release share lockWaitTimeout, counted from when the wait
+//     starts; a release still running then is refused (ErrReleaseTimedOut).
+//     That keeps a removal within what a sign-out takes — 20s for the lock
+//     and the sign-out's own budget — and so within the time the client
+//     waits (docs/code/cli-auth.md#timeouts).
 //  4. The profile is signed out (ErrSignOutFailed otherwise). After release,
 //     so that a refusal there leaves the profile signed in, and so that no
 //     CLI of this server still running as it can write back the credentials.
@@ -112,6 +124,16 @@ func (s *Service) RemoveProfile(ctx context.Context, agentType session.AgentType
 	}
 	defer end()
 
+	// Checked again under the lock below, which is what makes the refusal
+	// exact; this one only keeps a refusal known at once from withdrawing the
+	// profile meanwhile.
+	s.loginsMu.Lock()
+	busy := s.busyStatus(agentType)
+	s.loginsMu.Unlock()
+	if busy != nil {
+		return removeBusyError(agentType, id, busy)
+	}
+
 	done, err := s.beginRemove(agentType, id)
 	if err != nil {
 		return err
@@ -135,7 +157,11 @@ func (s *Service) RemoveProfile(ctx context.Context, agentType session.AgentType
 		return err
 	}
 
-	if err := release(releaseCtx); err != nil {
+	err = release(releaseCtx)
+	if err == nil {
+		err = s.profiles.WaitUnheld(releaseCtx, agentType, id)
+	}
+	if err != nil {
 		if ctx.Err() == nil && errors.Is(err, context.DeadlineExceeded) {
 			s.log.Warn("AI CLIs running as a profile being removed did not exit in time", "cli", agentType, "profile", id, "error", err)
 			return ErrReleaseTimedOut
@@ -159,38 +185,14 @@ func (s *Service) RemoveProfile(ctx context.Context, agentType session.AgentType
 	return nil
 }
 
-// beginRemove marks id as being removed, unless it is current or already
-// being removed. done takes the mark off.
+// beginRemove withdraws id, unless this server is removing it already. done
+// puts it back.
 func (s *Service) beginRemove(agentType session.AgentType, id string) (done func(), err error) {
 	s.switchMu.Lock()
 	defer s.switchMu.Unlock()
-
-	s.loginsMu.Lock()
-	if s.removing[agentType][id] {
-		s.loginsMu.Unlock()
+	done, ok := s.profiles.Withdraw(agentType, id)
+	if !ok {
 		return nil, removingError(agentType)
-	}
-	if s.removing[agentType] == nil {
-		s.removing[agentType] = make(map[string]bool)
-	}
-	s.removing[agentType][id] = true
-	s.loginsMu.Unlock()
-	done = func() {
-		s.loginsMu.Lock()
-		delete(s.removing[agentType], id)
-		s.loginsMu.Unlock()
-	}
-
-	// Read with the mark set and switchMu held: a switch to the profile has
-	// either been written already, and is read here, or will see the mark.
-	list, err := s.profiles.Load(agentType)
-	if err != nil {
-		done()
-		return nil, err
-	}
-	if list.Current == id {
-		done()
-		return nil, ErrRemoveCurrent
 	}
 	return done, nil
 }

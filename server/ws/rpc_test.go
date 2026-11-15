@@ -196,7 +196,7 @@ func newTestEnvWithAgent(t *testing.T, mock *mockAgent, ag agent.Agent, workDir 
 
 	cliAuth := cliauthtest.New(cliauthtest.State{})
 	cliProfilesDir := t.TempDir()
-	cliProfiles := cliprofile.NewStore(cliProfilesDir)
+	cliProfiles := cliprofile.NewStore(cliProfilesDir, dataDir)
 	cliAuthService := cliauth.NewService(slog.Default(), cliProfiles)
 	cliAuthService.Register(session.AgentTypeClaude, cliAuth)
 
@@ -606,7 +606,7 @@ func newMinimalTestHandler(t *testing.T, password string, remoteURL func() strin
 	scheduler := schedule.NewScheduler(scheduleStore, workOps)
 	workOps.SetRunRecorder(scheduler)
 
-	cliProfiles := cliprofile.NewStore(t.TempDir())
+	cliProfiles := cliprofile.NewStore(t.TempDir(), t.TempDir())
 	h := NewRPCHandler(password, authguard.NewFrozen(), sessions, "test", remoteURL, tickets, &rawCapabilitiesStub{}, true, cmdStore, worktreeManager, settingsStore, workStore, workOps, work.NewEngine(workStore, work.DefaultMaxNudges), agentRoleStore, scheduleStore, scheduler, cliauth.NewService(slog.Default(), cliProfiles), cliProfiles, cliupdate.NewService(slog.Default(), nil, nil), nil, restart.New(restarttest.Executable(workDir)), NewUpdater(&fakeReleaseChecker{}, &fakeInstaller{}))
 	t.Cleanup(h.Stop)
 	return h
