@@ -209,6 +209,8 @@ interface Props {
 	sharedExternal?: boolean;
 	/** After the state, for a fact from elsewhere: "Turned away this turn". */
 	subtitleSuffix?: string;
+	/** Said in place of the state, which it outranks while it holds. */
+	subtitleOverride?: string;
 	/** The one button beside the line. */
 	action?: ReactNode;
 	/** The `⋯`, after `action`. */
@@ -226,6 +228,7 @@ export default function CliProfileRow({
 	view,
 	sharedExternal,
 	subtitleSuffix,
+	subtitleOverride,
 	action,
 	menu,
 	error,
@@ -251,7 +254,8 @@ export default function CliProfileRow({
 			title={view.name}
 			tag={view.current ? <Tag label="Current" /> : undefined}
 			subtitle={
-				subtitle === undefined ? (
+				subtitleOverride ??
+				(subtitle === undefined ? (
 					<Skeleton
 						className="my-0.5 h-3 w-40 max-w-full rounded"
 						label={`Checking ${view.name} sign-in status`}
@@ -260,7 +264,7 @@ export default function CliProfileRow({
 					`${subtitle} · ${subtitleSuffix}`
 				) : (
 					subtitle
-				)
+				))
 			}
 			dimmed={dimmed}
 			action={slot}

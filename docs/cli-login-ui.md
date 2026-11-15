@@ -396,7 +396,7 @@ whole of it.
 > Cancel · **Sign out**
 
 That is the one-account card's wording. Once the CLI has several accounts the
-dialog names the account, and says whether it is the current one
+dialog names the account, and says whether it is the current one here
 ([cli-profiles-ui.md](cli-profiles-ui.md#sign-out)).
 
 It asks, where the login sheet's Cancel does not, because this one is not cheap

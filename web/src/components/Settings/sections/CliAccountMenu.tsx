@@ -95,10 +95,6 @@ export default function CliAccountMenu({
 							icon={Trash2}
 							label="Remove account…"
 							danger
-							description={
-								view.current ? "Switch to another account first." : undefined
-							}
-							disabled={view.current}
 							onClick={act(onRemove)}
 						/>
 					</>

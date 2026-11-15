@@ -177,8 +177,9 @@ function NameForm({
 				)}
 				{adding && (
 					<p id={hintId} className="text-xs text-th-text-muted">
-						You'll sign in to it next. It won't become the current account until
-						you switch to it.
+						You'll sign in to it next. Other projects and cluster nodes on this
+						machine get it too. It becomes the current account only where you
+						switch to it.
 					</p>
 				)}
 			</div>
