@@ -33,6 +33,7 @@ import {
 import { type ContentsResponse, isFileContent } from "../../types/contents";
 import { getFileViewState, HIGHLIGHT_LIMIT } from "../../utils/fileView";
 import FileBody, { PlainTextNotice } from "../Files/FileBody";
+import WatchFailedNotice from "../Files/WatchFailedNotice";
 import { ContentView, FileStateCard, getActionIconButtonClass } from "../ui";
 
 interface ConflictText {
@@ -56,6 +57,8 @@ export interface ConflictFile {
 	 * may be a moment behind the disk, and staging records whatever is there.
 	 */
 	confirmResolvable: () => Promise<boolean>;
+	/** The file's watch, whose failure the view says rather than hides. */
+	watch: ReturnType<typeof useFSWatch>;
 }
 
 /**
@@ -79,7 +82,7 @@ export function useConflictFile(
 	const queryClient = useQueryClient();
 	const enabled = conflict !== undefined && conflict !== "deleted-both";
 	const contents = useContents(path, enabled);
-	useFSWatch({
+	const watch = useFSWatch({
 		path,
 		enabled,
 		onChanged: useCallback(() => {
@@ -105,7 +108,7 @@ export function useConflictFile(
 		const now = textOf(result.data);
 		return now !== null && !hasConflictMarkers(now.content);
 	}, [refetch]);
-	return { contents, text, regions, resolvable, confirmResolvable };
+	return { contents, text, regions, resolvable, confirmResolvable, watch };
 }
 
 interface Props {
@@ -154,6 +157,15 @@ export default function ConflictView({
 			// The text scrolls itself, under the conflict row that stays put.
 			fill={file.text !== null}
 		>
+			{/* As the Files viewer says it: a conflict resolved elsewhere would
+			    otherwise go on showing its markers here as if current. */}
+			{file.watch.error && (
+				<WatchFailedNotice
+					error={file.watch.error}
+					onRetry={file.watch.retry}
+					style={{ paddingLeft: 16 }}
+				/>
+			)}
 			<ConflictContent path={path} file={file} wrap={wrap} />
 		</ContentView>
 	);

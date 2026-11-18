@@ -4,6 +4,7 @@ import {
 	UPDATE_RPC_TIMEOUT_MS,
 } from "@pockode/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { TYPE_CHANGE_DIFF } from "../test/gitFixtures";
 import { authActions, useAuthStore } from "./authStore";
 import { worktreeActions } from "./worktreeStore";
 import {
@@ -1262,6 +1263,42 @@ describe("wsStore", () => {
 			ws.simulateNotification("fs.changed", { id: result.id });
 
 			expect(callback).not.toHaveBeenCalled();
+		});
+	});
+
+	describe("git diff watch", () => {
+		// The viewer reads one file's patch and throws on a second section, so a
+		// type change must never reach it in the two-section form git writes.
+		it("hands on a type change as one file's patch, first and on each change", async () => {
+			const callback = vi.fn();
+			await connectAndAuth();
+			const ws = getMockWs();
+			if (!ws) throw new Error("WebSocket not found");
+			ws.send = vi.fn((data: string) => {
+				const parsed = JSON.parse(data);
+				if (parsed.method !== "git.diff.subscribe") return;
+				queueMicrotask(() => {
+					ws.simulateMessage({
+						jsonrpc: "2.0",
+						id: parsed.id,
+						result: TYPE_CHANGE_DIFF,
+					});
+				});
+			});
+
+			const { id, initial } = await wsActions.gitDiffSubscribe(
+				"a.txt",
+				false,
+				false,
+				callback,
+			);
+			ws.simulateNotification("git.diff.changed", { ...TYPE_CHANGE_DIFF, id });
+
+			const sections = (diff: string) => diff.match(/^diff --git /gm)?.length;
+			expect(sections(initial?.diff ?? "")).toBe(1);
+			const notified = callback.mock.calls[0][0];
+			expect(notified.id).toBe(id);
+			expect(sections(notified.diff)).toBe(1);
 		});
 	});
 

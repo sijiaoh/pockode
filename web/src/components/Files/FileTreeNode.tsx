@@ -1,13 +1,6 @@
 import { useQueryClient } from "@tanstack/react-query";
-import {
-	ChevronDown,
-	ChevronRight,
-	File,
-	Folder,
-	FolderOpen,
-	MoreHorizontal,
-} from "lucide-react";
-import { memo, useCallback, useEffect, useState } from "react";
+import { ChevronDown, ChevronRight, MoreHorizontal } from "lucide-react";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { contentsQueryKey, useContents } from "../../hooks/useContents";
 import { useFSWatch } from "../../hooks/useFSWatch";
 import {
@@ -15,9 +8,14 @@ import {
 	prepareDragDownload,
 } from "../../hooks/useRawMediaSource";
 import { writeEntryDrag } from "../../lib/entryDrag";
+import { linkDescription, opensAt, opensInPlace } from "../../lib/symlink";
 import type { Entry } from "../../types/contents";
+import { errorMessage } from "../../utils/errorMessage";
 import { isAtOrUnder } from "../../utils/path";
+import { scrollParent, scrollToShow } from "../../utils/scrollParent";
 import { iconButtonClass, Spinner } from "../ui";
+import { EntryIcon, LinkStatusGlyph } from "./EntryIcon";
+import WatchFailedNotice from "./WatchFailedNotice";
 
 /** What the tree knows about a row's drag at the moment it starts. */
 export interface EntryDragStart {
@@ -79,7 +77,10 @@ const FileTreeNode = memo(function FileTreeNode({
 	movingPaths,
 }: Props) {
 	const queryClient = useQueryClient();
-	const isDirectory = entry.type === "dir";
+	// A folder that expands here. A cycle is typed as one too, but is never
+	// expanded in place: tapping it reveals its target instead.
+	const isDirectory = opensInPlace(entry);
+	const isCycle = entry.link?.state === "cycle";
 	const isActive = entry.path === activeFilePath;
 	const isInActivePath =
 		isDirectory && !!activeFilePath?.startsWith(`${entry.path}/`);
@@ -105,12 +106,12 @@ const FileTreeNode = memo(function FileTreeNode({
 		if (isDirectory && forceOpenPaths.includes(entry.path)) setIsExpanded(true);
 	}, [isDirectory, forceOpenPaths, entry.path]);
 
-	const { data, isLoading, error } = useContents(
+	const { data, isLoading, error, refetch } = useContents(
 		entry.path,
 		isDirectory && isExpanded,
 	);
 
-	useFSWatch({
+	const watch = useFSWatch({
 		path: entry.path,
 		onChanged: useCallback(() => {
 			queryClient.invalidateQueries({ queryKey: contentsQueryKey(entry.path) });
@@ -122,9 +123,37 @@ const FileTreeNode = memo(function FileTreeNode({
 		if (isDirectory) {
 			setIsExpanded(!isExpanded);
 		} else {
-			onSelectFile(entry.path);
+			onSelectFile(opensAt(entry.path, entry.link));
 		}
 	};
+
+	// The row opened from elsewhere — a revealed link target, a chat link — is
+	// brought into view, again whenever the tree comes back on screen
+	// (`expandSignal`): on a phone the drawer closes as the path opens, and a
+	// hidden tree has no layout to scroll then. One tapped here is already in
+	// view, so this does nothing for it. Only the tree's own container moves,
+	// never what holds it: `scrollIntoView` would scroll the app shell too.
+	const rowRef = useRef<HTMLDivElement>(null);
+	// biome-ignore lint/correctness/useExhaustiveDependencies: expandSignal is a trigger, not a value read
+	useEffect(() => {
+		const row = rowRef.current;
+		if (!isActive || !row) return;
+		// After the frame that shows a drawer just opened.
+		const frame = requestAnimationFrame(() => {
+			const container = scrollParent(row);
+			if (container) scrollToShow(container, row);
+		});
+		return () => cancelAnimationFrame(frame);
+	}, [isActive, expandSignal]);
+
+	const linkName = entry.link ? linkDescription(entry.name, entry.link) : null;
+	const rowLabel = isDirectory
+		? `${isExpanded ? "Collapse" : "Expand"} folder: ${linkName ?? entry.name}`
+		: isCycle
+			? `Reveal link target: ${linkName}`
+			: entry.type === "link"
+				? `Open link: ${linkName}`
+				: `Open file: ${linkName ?? entry.name}`;
 
 	const isDropTarget = isDirectory && entry.path === dropTargetPath;
 	const isMenuOpen = entry.path === menuPath;
@@ -145,7 +174,9 @@ const FileTreeNode = memo(function FileTreeNode({
 		// loading spinner, the failure line — are aimed somewhere too.
 		<div
 			data-entry-path={entry.path}
-			data-entry-type={entry.type}
+			// What a drop aims at: a cycle is not offered as a folder anywhere in
+			// the tree, a drop included (docs/symlinks.md#file-tree).
+			data-entry-type={isCycle ? "link" : entry.type}
 			// The subtree goes with the folder, so it fades with it.
 			className={
 				isMoving || entry.path === dragSourcePath ? "opacity-50" : undefined
@@ -160,6 +191,7 @@ const FileTreeNode = memo(function FileTreeNode({
 			    outside the browser, which `dragstart` cannot wait for. */}
 			{/* biome-ignore lint/a11y/noStaticElementInteractions: a mouse-only drag source; the buttons inside are the row's controls */}
 			<div
+				ref={rowRef}
 				draggable={canDrag || undefined}
 				onPointerDown={
 					canDrag
@@ -204,33 +236,31 @@ const FileTreeNode = memo(function FileTreeNode({
 					type="button"
 					onClick={handleClick}
 					className="flex min-w-0 flex-1 items-center gap-1.5 self-stretch py-1.5 text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent focus-visible:ring-inset"
-					aria-label={
-						isDirectory
-							? `${isExpanded ? "Collapse" : "Expand"} folder: ${entry.name}`
-							: `Open file: ${entry.name}`
-					}
+					aria-label={rowLabel}
+					title={linkName ?? undefined}
 					aria-expanded={isDirectory ? isExpanded : undefined}
 				>
 					{isDirectory ? (
-						<>
-							{isExpanded ? (
-								<ChevronDown className="h-4 w-4 shrink-0 text-th-text-muted" />
-							) : (
-								<ChevronRight className="h-4 w-4 shrink-0 text-th-text-muted" />
-							)}
-							{isDropTarget ? (
-								<FolderOpen className="h-4 w-4 shrink-0 text-th-accent" />
-							) : (
-								<Folder className="h-4 w-4 shrink-0 text-th-text-muted" />
-							)}
-						</>
+						isExpanded ? (
+							<ChevronDown className="h-4 w-4 shrink-0 text-th-text-muted" />
+						) : (
+							<ChevronRight className="h-4 w-4 shrink-0 text-th-text-muted" />
+						)
 					) : (
-						<>
-							<span className="w-4" />
-							<File className="h-4 w-4 shrink-0 text-th-text-muted" />
-						</>
+						<span className="w-4 shrink-0" />
 					)}
-					<span className="truncate">{entry.name}</span>
+					<EntryIcon
+						type={entry.type}
+						link={entry.link}
+						open={isDropTarget}
+						className={`h-4 w-4 shrink-0 ${isDropTarget ? "text-th-accent" : "text-th-text-muted"}`}
+					/>
+					<span
+						className={`truncate ${entry.type === "link" ? "text-th-text-muted" : ""}`}
+					>
+						{entry.name}
+					</span>
+					<LinkStatusGlyph link={entry.link} />
 				</button>
 
 				{/* A sibling of the row, never inside it: nested, every tap on it
@@ -268,31 +298,49 @@ const FileTreeNode = memo(function FileTreeNode({
 						</div>
 					) : error ? (
 						<div
-							className="py-1.5 text-xs text-th-error"
+							className="flex flex-wrap items-center gap-x-2 py-1 pr-2 text-xs text-th-error"
 							style={{ paddingLeft: paddingLeft + 20 }}
 						>
-							Failed to load
+							<span className="min-w-0 break-words">
+								Failed to load: {errorMessage(error)}
+							</span>
+							<button
+								type="button"
+								onClick={() => void refetch()}
+								className="inline-flex min-h-9 items-center rounded px-2 text-th-accent hover:underline pointer-coarse:min-h-11 focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent"
+							>
+								Retry
+							</button>
 						</div>
 					) : Array.isArray(data) ? (
-						data.map((child) => (
-							<FileTreeNode
-								key={child.path}
-								entry={child}
-								depth={depth + 1}
-								onSelectFile={onSelectFile}
-								activeFilePath={activeFilePath}
-								expandSignal={expandSignal}
-								watchEnabled={watchEnabled}
-								onOpenMenu={onOpenMenu}
-								menuPath={menuPath}
-								dropTargetPath={dropTargetPath}
-								springOpenPath={springOpenPath}
-								forceOpenPaths={forceOpenPaths}
-								onEntryDragStart={onEntryDragStart}
-								dragSourcePath={dragSourcePath}
-								movingPaths={movingPaths}
-							/>
-						))
+						<>
+							{watch.error && (
+								<WatchFailedNotice
+									error={watch.error}
+									onRetry={watch.retry}
+									style={{ paddingLeft: paddingLeft + 20 }}
+								/>
+							)}
+							{data.map((child) => (
+								<FileTreeNode
+									key={child.path}
+									entry={child}
+									depth={depth + 1}
+									onSelectFile={onSelectFile}
+									activeFilePath={activeFilePath}
+									expandSignal={expandSignal}
+									watchEnabled={watchEnabled}
+									onOpenMenu={onOpenMenu}
+									menuPath={menuPath}
+									dropTargetPath={dropTargetPath}
+									springOpenPath={springOpenPath}
+									forceOpenPaths={forceOpenPaths}
+									onEntryDragStart={onEntryDragStart}
+									dragSourcePath={dragSourcePath}
+									movingPaths={movingPaths}
+								/>
+							))}
+						</>
 					) : null}
 				</div>
 			)}

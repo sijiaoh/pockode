@@ -4,16 +4,24 @@ import { useSessionView } from "../lib/sessionView";
 import { useWorktreeStore } from "../lib/worktreeStore";
 import { isRPCTimeout, useWSStore } from "../lib/wsStore";
 import type { AttachmentSource } from "../types/content";
-import type { ContentOrigin, FileContent } from "../types/contents";
-import { contentsQueryKey } from "./useContents";
+import {
+	type ContentOrigin,
+	type ContentsResponse,
+	type FileContent,
+	isFileContent,
+	isLinkResult,
+} from "../types/contents";
+import { contentsQueryKey, readContents } from "./useContents";
 
 /**
  * Where the answer is cached.
  *
  * A path shares the Files tab's own key, so opening the file there after seeing
- * it here costs nothing. That is safe because a path names a file or a
- * directory and never both, and the blocks that reach here always name a file —
- * so the entry the two hooks share only ever holds a `FileContent`.
+ * it here costs nothing. The entry holds whatever `file.get` answered for the
+ * path, stored as `useContents` stores it: a block names a file, but a path the
+ * agent wrote can be a directory link, or a link that cannot be followed, and
+ * either may be cached there already. So it is read through `notAFile`, never
+ * taken to be a `FileContent`.
  */
 export function attachmentQueryKey(
 	source: AttachmentSource,
@@ -45,6 +53,13 @@ export function useAttachmentOrigin(source: AttachmentSource): ContentOrigin {
 }
 
 /**
+ * What a path turned out to be when it is not a file: a folder (a directory
+ * link the agent named, say) or a link that cannot be followed. Shown as a
+ * chip that opens in Files, never as content (docs/symlinks.md#chat).
+ */
+export type NotAFile = "folder" | "link";
+
+/**
  * Reads an attachment's description, which carries the content itself only
  * when it is text; a raster image's bytes are read separately (`useImageSrc`).
  *
@@ -67,20 +82,15 @@ export function useAttachmentContent(source: AttachmentSource, enabled = true) {
 	// rather than a prop through every memoized row.
 	const view = useSessionView();
 
-	return useQuery<FileContent>({
+	const query = useQuery<FileContent | ContentsResponse>({
 		queryKey: attachmentQueryKey(source, view?.worktree),
-		queryFn: async () => {
+		queryFn: () => {
 			if (source.kind === "attachment") {
 				return view
 					? sessionViewAttachment(view.worktree, source.sessionId, source.id)
 					: getAttachment(source.sessionId, source.id);
 			}
-			const result = await getFile(source.path);
-			// Only a directory answers without one, and a block never names a
-			// directory — so this says what happened rather than "not found",
-			// which would send the reader looking for a file that is right there.
-			if (!result.file) throw new Error(`not a file: ${source.path}`);
-			return result.file;
+			return readContents(getFile, source.path);
 		},
 		enabled,
 		staleTime: Number.POSITIVE_INFINITY,
@@ -90,4 +100,11 @@ export function useAttachmentContent(source: AttachmentSource, enabled = true) {
 		retry: (failureCount, error) =>
 			!isRPCTimeout(error) && failureCount < DEFAULT_RETRY_COUNT,
 	});
+	// Named fields rather than a spread: a query result tracks which fields are
+	// read, and spreading reads them all.
+	const { data, error, refetch } = query;
+	const file = data && isFileContent(data) ? data : undefined;
+	const notAFile: NotAFile | null =
+		data === undefined || file ? null : isLinkResult(data) ? "link" : "folder";
+	return { data: file, error, refetch, notAFile };
 }

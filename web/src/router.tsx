@@ -5,6 +5,7 @@ import {
 	createRouter,
 } from "@tanstack/react-router";
 import { z } from "zod";
+import AppCrashScreen from "./components/AppCrashScreen";
 import AppShell from "./components/AppShell";
 import { historyTrailFor } from "./lib/historyTrail";
 import { layerHistoryFor } from "./lib/layerHistory";
@@ -371,6 +372,10 @@ export const router = createRouter({
 	routeTree,
 	history,
 	defaultPreload: "intent",
+	// Every route renders inside AppShell, so this stands in for the whole app.
+	// Nearer boundaries keep a failing file or page to itself; this is for
+	// what they did not catch.
+	defaultErrorComponent: AppCrashScreen,
 });
 
 // Before the first navigation, so that it has seen the first page.

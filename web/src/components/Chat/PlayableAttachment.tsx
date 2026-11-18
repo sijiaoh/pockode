@@ -14,6 +14,7 @@ import {
 import { getFileViewState, type PlayableKind } from "../../utils/fileView";
 import { mediaFailureHeadline, mediaKindIcon } from "../Media/MediaFailureCard";
 import AttachmentChip from "../ui/AttachmentChip";
+import NotAFileChip from "./NotAFileChip";
 
 /** What a description says about the file to play. */
 export interface PlayableFile {
@@ -32,6 +33,8 @@ interface Props {
 	children: (playable: PlayableFile) => ReactNode;
 	/** The entry of the other playable kind, for a description that is one. */
 	other: (kind: PlayableKind) => ReactNode;
+	/** Opens the path in Files, for one that turns out not to be a file. */
+	onOpenInFiles?: () => void;
 }
 
 /**
@@ -47,12 +50,26 @@ function PlayableAttachment({
 	waiting,
 	children,
 	other,
+	onOpenInFiles,
 }: Props) {
 	const { ref, inView } = useInView<HTMLDivElement>();
 	const origin = useAttachmentOrigin(source);
-	const { data, error, refetch } = useAttachmentContent(source, inView);
+	const { data, error, refetch, notAFile } = useAttachmentContent(
+		source,
+		inView,
+	);
 	const view = data ? getFileViewState(data, origin) : null;
 	const name = attachmentName(file);
+
+	if (notAFile) {
+		return (
+			<NotAFileChip
+				name={name}
+				notAFile={notAFile}
+				onOpenInFiles={onOpenInFiles}
+			/>
+		);
+	}
 
 	if (error) {
 		const headline = mediaFailureHeadline(kind, { kind: "load", error });

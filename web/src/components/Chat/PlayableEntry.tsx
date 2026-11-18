@@ -10,6 +10,8 @@ interface Props {
 	kind: PlayableKind;
 	/** Hands over what the media viewer plays, should it be a video. */
 	onOpen: (item: VideoMediaItem) => void;
+	/** Opens the path in Files, for one that turns out not to be a file. */
+	onOpenInFiles?: () => void;
 }
 
 /**
@@ -19,19 +21,31 @@ interface Props {
  * written (a voice note in an MP4 or WebM container, before the server told
  * the two apart) is audio by what is said of it now.
  */
-function PlayableEntry({ file, source, kind, onOpen }: Props) {
+function PlayableEntry({ file, source, kind, onOpen, onOpenInFiles }: Props) {
 	const other = (otherKind: PlayableKind) => (
 		<PlayableEntry
 			file={file}
 			source={source}
 			kind={otherKind}
 			onOpen={onOpen}
+			onOpenInFiles={onOpenInFiles}
 		/>
 	);
 	return kind === "video" ? (
-		<VideoThumb file={file} source={source} onOpen={onOpen} other={other} />
+		<VideoThumb
+			file={file}
+			source={source}
+			onOpen={onOpen}
+			onOpenInFiles={onOpenInFiles}
+			other={other}
+		/>
 	) : (
-		<AudioEntry file={file} source={source} other={other} />
+		<AudioEntry
+			file={file}
+			source={source}
+			onOpenInFiles={onOpenInFiles}
+			other={other}
+		/>
 	);
 }
 

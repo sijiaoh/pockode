@@ -17,6 +17,7 @@ import { getFileViewState } from "../../utils/fileView";
 import type { MediaItem } from "../Media";
 import AttachmentChip from "../ui/AttachmentChip";
 import Skeleton from "../ui/Skeleton";
+import NotAFileChip from "./NotAFileChip";
 import PlayableEntry from "./PlayableEntry";
 
 /** Fallback shape for an image whose dimensions the agent did not report. */
@@ -27,6 +28,8 @@ interface Props {
 	source: AttachmentSource;
 	/** Hands over what the media viewer shows for this image. */
 	onOpen: (item: MediaItem) => void;
+	/** Opens the path in Files, for one that turns out not to be a file. */
+	onOpenInFiles?: () => void;
 }
 
 /**
@@ -41,10 +44,13 @@ interface Props {
  * refuses scripts and external references in an image loaded that way, so
  * content from a tool never becomes content of this document.
  */
-function AttachmentThumb({ file, source, onOpen }: Props) {
+function AttachmentThumb({ file, source, onOpen, onOpenInFiles }: Props) {
 	const { ref, inView } = useInView<HTMLDivElement>();
 	const origin = useAttachmentOrigin(source);
-	const { data, error, refetch } = useAttachmentContent(source, inView);
+	const { data, error, refetch, notAFile } = useAttachmentContent(
+		source,
+		inView,
+	);
 	const view = data ? getFileViewState(data, origin) : null;
 	const image = useImageSrc(
 		view?.kind === "image" ? view.source : null,
@@ -58,6 +64,16 @@ function AttachmentThumb({ file, source, onOpen }: Props) {
 	const name = attachmentName(file);
 	const aspect =
 		file.width && file.height ? file.width / file.height : FALLBACK_ASPECT;
+
+	if (notAFile) {
+		return (
+			<NotAFileChip
+				name={name}
+				notAFile={notAFile}
+				onOpenInFiles={onOpenInFiles}
+			/>
+		);
+	}
 
 	if (error || image.error || decodeFailed) {
 		return (
@@ -96,6 +112,7 @@ function AttachmentThumb({ file, source, onOpen }: Props) {
 				source={source}
 				kind={view.kind}
 				onOpen={onOpen}
+				onOpenInFiles={onOpenInFiles}
 			/>
 		);
 	}

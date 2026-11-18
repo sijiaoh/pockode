@@ -53,13 +53,11 @@ func Move(workDir, relPath, destDir string) (string, error) {
 	defer work.Close()
 
 	// Both directories are resolved, links and all, and have to land inside
-	// the work directory — stricter than Rename, which follows a symlinked
-	// parent wherever it goes. Move is new and has no such behavior to keep,
-	// and a destination that is a link out would hand a project file to a
-	// directory the user never opened. The syscalls below are then given the
-	// resolved paths, so a link checked here is not looked up a second time;
-	// one swapped in between is the same check-then-act race every file
-	// operation here has.
+	// the work directory, as on every file route (docs/symlinks.md): a
+	// destination that is a link out would hand a project file to a directory
+	// the user never opened. The syscalls below are then given the resolved
+	// paths, through the root, so a link checked here is not looked up a
+	// second time and one swapped in since is refused rather than followed.
 	//
 	// The source's parent is resolved before the source is looked at, so that
 	// nothing is ever looked up through a link out: "not found" against
@@ -84,13 +82,13 @@ func Move(workDir, relPath, destDir string) (string, error) {
 
 	// Lstat, as in Rename: a symlink is moved as the link, never as whatever
 	// it points at, and a dangling one is still an entry to move.
-	srcFull := filepath.Join(workDir, srcParent, name)
-	srcInfo, err := os.Lstat(srcFull)
+	src := filepath.Join(srcParent, name)
+	srcInfo, err := work.Lstat(src)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			return "", fmt.Errorf("%w: %s", ErrNotFound, relPath)
 		}
-		return "", fmt.Errorf("failed to stat path: %w", err)
+		return "", opFailed("failed to read "+filepath.ToSlash(relPath), err)
 	}
 
 	if os.SameFile(srcParentInfo, destInfo) {
@@ -103,7 +101,7 @@ func Move(workDir, relPath, destDir string) (string, error) {
 	// which reads as a server fault rather than as the user's mistake.
 	if srcInfo.IsDir() {
 		for d := dest; ; d = filepath.Dir(d) {
-			if info, err := os.Stat(filepath.Join(workDir, d)); err == nil && os.SameFile(info, srcInfo) {
+			if info, err := work.Stat(d); err == nil && os.SameFile(info, srcInfo) {
 				return "", fmt.Errorf("%w: %s into %s", ErrIntoItself, relPath, DisplayDir(destDir))
 			}
 			if d == "." {
@@ -112,21 +110,21 @@ func Move(workDir, relPath, destDir string) (string, error) {
 		}
 	}
 
-	newFull := filepath.Join(workDir, dest, name)
+	dst := filepath.Join(dest, name)
 
 	// The same check-then-rename as Rename, for the same reason: rename(2)
 	// replaces a destination silently. No allowance for a name that only looks
 	// taken here — the two directories differ, so whatever Lstat finds is
 	// another entry, even a hard link to the source.
-	if _, err := os.Lstat(newFull); err == nil {
+	if _, err := work.Lstat(dst); err == nil {
 		return "", existsError(newPath)
 	}
 
-	if err := os.Rename(srcFull, newFull); err != nil {
+	if err := work.Rename(src, dst); err != nil {
 		if errors.Is(err, os.ErrExist) {
 			return "", existsError(newPath)
 		}
-		return "", fmt.Errorf("failed to move %s to %s: %w", relPath, DisplayDir(destDir), err)
+		return "", opFailed(fmt.Sprintf("failed to move %s to %s", filepath.ToSlash(relPath), DisplayDir(destDir)), err)
 	}
 	return newPath, nil
 }

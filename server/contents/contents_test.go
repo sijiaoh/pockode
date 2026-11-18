@@ -661,91 +661,25 @@ func TestWriteFile(t *testing.T) {
 			t.Fatalf("WriteFile failed: %v", err)
 		}
 	})
-}
 
-func TestDeleteFile(t *testing.T) {
-	t.Run("deletes existing file", func(t *testing.T) {
+	// Opening a fifo for writing blocks until something reads it.
+	t.Run("refuses a named pipe instead of blocking on it", func(t *testing.T) {
 		workDir := t.TempDir()
-		path := "to-delete.txt"
+		fifotest.Make(t, workDir, "pipe")
 
-		if err := os.WriteFile(filepath.Join(workDir, path), []byte("content"), 0644); err != nil {
-			t.Fatalf("failed to create file: %v", err)
-		}
+		done := make(chan error, 1)
+		go func() { done <- WriteFile(workDir, "pipe", "x") }()
 
-		err := DeleteFile(workDir, path)
-		if err != nil {
-			t.Fatalf("DeleteFile failed: %v", err)
-		}
-
-		if _, err := os.Stat(filepath.Join(workDir, path)); !os.IsNotExist(err) {
-			t.Error("expected file to be deleted")
-		}
-	})
-
-	t.Run("returns error for empty path", func(t *testing.T) {
-		workDir := t.TempDir()
-
-		err := DeleteFile(workDir, "")
-		if err == nil {
-			t.Fatal("expected error for empty path")
-		}
-	})
-
-	t.Run("returns error for path traversal", func(t *testing.T) {
-		workDir := t.TempDir()
-
-		err := DeleteFile(workDir, "../outside.txt")
-		if err == nil {
-			t.Fatal("expected error for path traversal")
-		}
-	})
-
-	t.Run("returns error for non-existent file", func(t *testing.T) {
-		workDir := t.TempDir()
-
-		err := DeleteFile(workDir, "nonexistent.txt")
-		if err == nil {
-			t.Fatal("expected error for non-existent file")
-		}
-	})
-
-	t.Run("deletes empty directory", func(t *testing.T) {
-		workDir := t.TempDir()
-		dirPath := "subdir"
-
-		if err := os.Mkdir(filepath.Join(workDir, dirPath), 0755); err != nil {
-			t.Fatalf("failed to create directory: %v", err)
-		}
-
-		err := DeleteFile(workDir, dirPath)
-		if err != nil {
-			t.Fatalf("DeleteFile failed: %v", err)
-		}
-
-		if _, err := os.Stat(filepath.Join(workDir, dirPath)); !os.IsNotExist(err) {
-			t.Error("expected directory to be deleted")
-		}
-	})
-
-	t.Run("deletes file in nested directory", func(t *testing.T) {
-		workDir := t.TempDir()
-		path := "nested/deep/file.txt"
-
-		fullPath := filepath.Join(workDir, path)
-		if err := os.MkdirAll(filepath.Dir(fullPath), 0755); err != nil {
-			t.Fatalf("failed to create directories: %v", err)
-		}
-		if err := os.WriteFile(fullPath, []byte("content"), 0644); err != nil {
-			t.Fatalf("failed to create file: %v", err)
-		}
-
-		err := DeleteFile(workDir, path)
-		if err != nil {
-			t.Fatalf("DeleteFile failed: %v", err)
-		}
-
-		if _, err := os.Stat(fullPath); !os.IsNotExist(err) {
-			t.Error("expected file to be deleted")
+		select {
+		case err := <-done:
+			if !errors.Is(err, ErrInvalidPath) {
+				t.Errorf("got error %v, want ErrInvalidPath", err)
+			}
+			if got, want := PublicMessage(err), `"pipe" is not a regular file`; got != want {
+				t.Errorf("client message = %q, want %q", got, want)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("WriteFile blocked on the fifo")
 		}
 	})
 }

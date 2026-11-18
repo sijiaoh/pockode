@@ -57,6 +57,11 @@ let highlighterPromise: ReturnType<typeof getDiffViewHighlighter> | null = null;
 export function getDiffHighlighter() {
 	if (!highlighterPromise) {
 		highlighterPromise = getDiffViewHighlighter();
+		// A failed load (a chunk the network dropped) is not kept: the next
+		// diff, or the error card's Retry, loads it afresh.
+		highlighterPromise.catch(() => {
+			highlighterPromise = null;
+		});
 	}
 	return highlighterPromise;
 }

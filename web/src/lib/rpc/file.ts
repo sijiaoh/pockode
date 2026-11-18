@@ -3,7 +3,12 @@ import {
 	JSONRPCErrorException,
 	type JSONRPCRequester,
 } from "json-rpc-2.0";
-import type { Entry, EntryType, FileContent } from "../../types/contents";
+import type {
+	Entry,
+	EntryType,
+	FileContent,
+	LinkResult,
+} from "../../types/contents";
 import type { FileSearchMode, FileSearchResult } from "../../types/search";
 
 interface FileGetParams {
@@ -11,9 +16,10 @@ interface FileGetParams {
 }
 
 interface FileGetResult {
-	type: "directory" | "file";
+	type: "directory" | "file" | "link";
 	entries?: Entry[];
 	file?: FileContent;
+	link?: LinkResult;
 }
 
 interface FileWriteParams {

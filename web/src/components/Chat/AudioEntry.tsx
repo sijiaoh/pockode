@@ -18,6 +18,8 @@ interface Props {
 	source: AttachmentSource;
 	/** What it becomes when the file is described as video. */
 	other: (kind: PlayableKind) => ReactNode;
+	/** Opens the path in Files, for one that turns out not to be a file. */
+	onOpenInFiles?: () => void;
 }
 
 /**
@@ -29,13 +31,14 @@ interface Props {
  * description and what `preload="metadata"` asks for; the rest streams through
  * Range requests once the user plays it.
  */
-function AudioEntry({ file, source, other }: Props) {
+function AudioEntry({ file, source, onOpenInFiles, other }: Props) {
 	const name = attachmentName(file);
 	return (
 		<PlayableAttachment
 			file={file}
 			source={source}
 			kind="audio"
+			onOpenInFiles={onOpenInFiles}
 			other={other}
 			waiting={(boxRef) => (
 				<EntryBox boxRef={boxRef}>

@@ -52,7 +52,9 @@ vi.mock("../../hooks/usePrefillComposer", () => ({
 vi.mock("../../hooks/useGitStatus", () => ({
 	useGitStatus: () => ({ data: statusRef.current, isPending: false }),
 }));
-vi.mock("../../hooks/useFSWatch", () => ({ useFSWatch: () => {} }));
+vi.mock("../../hooks/useFSWatch", () => ({
+	useFSWatch: () => ({ error: null, retry: () => {} }),
+}));
 
 // Under the narrowest main area at `expanded`: about 524px, at 1024 beside the
 // sidebar at its 500px maximum (docs/git-ui.md#where-a-details-actions-go).

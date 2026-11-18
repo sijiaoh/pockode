@@ -115,7 +115,9 @@ vi.mock("../../hooks/useContents", async (importOriginal) => ({
 	...(await importOriginal<typeof import("../../hooks/useContents")>()),
 	useContents: () => contentsRef.current,
 }));
-vi.mock("../../hooks/useFSWatch", () => ({ useFSWatch: () => {} }));
+vi.mock("../../hooks/useFSWatch", () => ({
+	useFSWatch: () => ({ error: null, retry: () => {} }),
+}));
 vi.mock("@tanstack/react-query", async (importOriginal) => ({
 	...(await importOriginal<typeof import("@tanstack/react-query")>()),
 	useQueryClient: () => ({

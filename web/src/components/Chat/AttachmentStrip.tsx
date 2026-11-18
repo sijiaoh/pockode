@@ -91,12 +91,9 @@ function AttachmentStrip({
 					const key = `${file.attachment_id ?? file.path ?? file.mime}-${index}`;
 					const name = attachmentName(file);
 					const kind = attachmentKind(file.mime);
-					const open = (item: MediaItem) =>
-						setViewing({
-							item,
-							openInFiles:
-								path && onOpenFile ? () => onOpenFile(path) : undefined,
-						});
+					const openInFiles =
+						path && onOpenFile ? () => onOpenFile(path) : undefined;
+					const open = (item: MediaItem) => setViewing({ item, openInFiles });
 
 					if (source && previewsAsImage(file)) {
 						return (
@@ -105,6 +102,7 @@ function AttachmentStrip({
 								file={file}
 								source={source}
 								onOpen={open}
+								onOpenInFiles={openInFiles}
 							/>
 						);
 					}
@@ -116,6 +114,7 @@ function AttachmentStrip({
 								source={source}
 								kind={kind}
 								onOpen={open}
+								onOpenInFiles={openInFiles}
 							/>
 						);
 					}

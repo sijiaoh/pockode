@@ -51,7 +51,7 @@ import {
 import { NEW_SESSION_TITLE, useSessionStore } from "../../lib/sessionStore";
 import { type SessionView, SessionViewProvider } from "../../lib/sessionView";
 import { useWorkStore } from "../../lib/workStore";
-import { useIsGitRepo } from "../../lib/worktreeStore";
+import { useIsGitRepo, useWorktreeStore } from "../../lib/worktreeStore";
 import { useWSStore } from "../../lib/wsStore";
 import type {
 	HistorySeq,
@@ -85,6 +85,7 @@ import CliLoginSheet, { type SendAgainOffer } from "../CliLogin/CliLoginSheet";
 import { FileEditor, FileView } from "../Files";
 import { GitWorkspace } from "../Git";
 import MainContainer from "../Layout/MainContainer";
+import PageErrorBoundary from "../Layout/PageErrorBoundary";
 import PageHeader, {
 	PageHeaderTarget,
 	usePageHeaderHost,
@@ -1409,6 +1410,7 @@ function ChatPanel({
 	// the shell replaces the route if it is not. Mounting it early would send
 	// reads that can only fail and flash their error first.
 	const isOverlayHeld = isGitOverlay(overlay) && !isGitRepo;
+	const worktree = useWorktreeStore((s) => s.current);
 
 	// An overlay is a page of its own, so the header names that page rather than
 	// the session behind it: no session there to read or reconfigure. The page
@@ -1603,7 +1605,14 @@ function ChatPanel({
 						// Which page this will be is known, what it is about is not.
 						<PageHeader back={null} title={null} subtitle={null} />
 					) : (
-						renderOverlay(overlay)
+						<PageErrorBoundary
+							// The worktree too: the overlay names a path, and the same path
+							// in another worktree is another file.
+							resetKey={`${worktree}\0${JSON.stringify(overlay)}`}
+							onBack={() => onGoUp?.(null)}
+						>
+							{renderOverlay(overlay)}
+						</PageErrorBoundary>
 					))}
 			</PageHeaderTarget>
 			{answerPanelDrawn && (

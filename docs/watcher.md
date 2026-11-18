@@ -57,13 +57,15 @@ type Notification struct {
 
 | Strategy | Watchers | Mechanism |
 |----------|----------|-----------|
-| OS-level | FSWatcher | `fsnotify` library, 100ms debounce |
+| OS-level | FSWatcher | `fsnotify` library, 100ms debounce; directories also polled by mtime on kqueue (see below) |
 | Polling | GitWatcher, GitDiffWatcher, WorktreeWatcher | 3s interval, state hash comparison |
 | Event-driven | SessionList, SessionDetail, ChatMessages, WorkList, WorkDetail, Settings, AgentRoleList, CLILogin, CLIUpdate, RemoteURL, CloudLink | Store `OnChangeListener` callbacks via async channels (CLILogin, CLIUpdate: `cliauth.LoginListener` / `cliupdate.Listener` marking a pending set; RemoteURL: the relay's `OnRemoteURLChange` waking it; CloudLink: `cloudlogin.Listener` waking it) |
 
 ### OS-Level: FSWatcher
 
 `watch/fs.go` — Watches file paths using `fsnotify`. Reference-counted: multiple subscriptions to the same path share one OS watch. Notifies both the changed path and its parent directory. Debounced at 100ms to coalesce rapid changes.
+
+A subscribed path is resolved like any file route's (`contents.Resolve`), so one that leads out of the work directory is refused. A directory is also polled by its modification time on kqueue (`fs_poll_kqueue.go`), and by polling alone wherever fsnotify cannot add it — why, and what the client shows when a watch does fail, is in [symlinks.md](symlinks.md#live-updates-fs-watch).
 
 ### Polling-Based
 

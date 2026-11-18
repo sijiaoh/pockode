@@ -1,4 +1,9 @@
-import { createLayerHistory, LayerHistoryContext } from "@pockode/shared";
+import {
+	CrashScreen,
+	createLayerHistory,
+	ErrorBoundary,
+	LayerHistoryContext,
+} from "@pockode/shared";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import App from "./App";
@@ -12,9 +17,23 @@ const root = document.getElementById("root");
 if (root) {
 	createRoot(root).render(
 		<StrictMode>
-			<LayerHistoryContext value={layerHistory}>
-				<App />
-			</LayerHistoryContext>
+			{/* Without it a throw anywhere leaves a blank page. There is no URL
+			    state to escape here, so a reload is the way out. */}
+			<ErrorBoundary
+				fallback={(error) => (
+					<CrashScreen
+						error={error}
+						title="Something went wrong"
+						actions={[
+							{ label: "Reload", onClick: () => window.location.reload() },
+						]}
+					/>
+				)}
+			>
+				<LayerHistoryContext value={layerHistory}>
+					<App />
+				</LayerHistoryContext>
+			</ErrorBoundary>
 		</StrictMode>,
 	);
 }

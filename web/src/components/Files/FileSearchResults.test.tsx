@@ -249,3 +249,46 @@ describe("FileSearchResults highlighting", () => {
 		expect(container).toHaveTextContent("test.ts");
 	});
 });
+
+describe("FileSearchResults links", () => {
+	it("lists a link by its own name, and opens a cycle where it really is", async () => {
+		const user = userEvent.setup();
+		const onSelectFile = vi.fn();
+		renderResults(
+			{
+				matches: [
+					{
+						path: ".claude/skills",
+						name: "skills",
+						type: "dir",
+						link: {
+							target: "../.agent-skills",
+							state: "ok",
+							resolved: ".agent-skills",
+						},
+					},
+					{
+						path: "a/up",
+						name: "up",
+						type: "dir",
+						link: { target: "..", state: "cycle", resolved: "a" },
+					},
+				],
+				truncated: false,
+			},
+			{ mode: "name" },
+			onSelectFile,
+		);
+
+		await user.click(
+			screen.getByRole("button", {
+				name: "Open: .claude/skills, link to ../.agent-skills",
+			}),
+		);
+		expect(onSelectFile).toHaveBeenLastCalledWith(".claude/skills");
+		await user.click(
+			screen.getByRole("button", { name: "Open: a/up, link to .." }),
+		);
+		expect(onSelectFile).toHaveBeenLastCalledWith("a");
+	});
+});

@@ -209,8 +209,11 @@ export function ProposedChange({
 	switch (change.kind) {
 		case "edit":
 		case "multiEdit":
-			return (
+			// Every edit a no-op: said, as for a Codex change with nothing to draw.
+			return change.patches.length > 0 ? (
 				<PatchList fileName={change.input.file_path} patches={change.patches} />
+			) : (
+				<p className="text-th-text-muted">No changes</p>
 			);
 		case "write":
 			return (

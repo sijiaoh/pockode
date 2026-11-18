@@ -79,6 +79,11 @@ type FileMatch struct {
 	Name       string  `json:"name"`
 	PathRanges []Range `json:"path_ranges,omitempty"`
 	Lines      []Line  `json:"lines,omitempty"`
+	// Link is set when the match is a symlink, which only ModeName lists.
+	Link *contents.Link `json:"link,omitempty"`
+	// Type is set with Link: the entry's type as a directory listing gives it
+	// (a followed link takes its target's), which a path alone cannot say.
+	Type contents.EntryType `json:"type,omitempty"`
 }
 
 // Result holds search matches. Truncated reports that limits or the timeout
@@ -145,35 +150,50 @@ func Search(ctx context.Context, workDir string, opts Options) (Result, error) {
 		return Result{}, err
 	}
 
+	// Every listed path is looked up through the work directory's root. A
+	// listing can name a path whose parent has since become a link out — git
+	// keeps `a/b.txt` in its index after `a` is replaced by one — and a plain
+	// lookup would follow it, reading and naming files outside.
+	work, err := os.OpenRoot(workDir)
+	if err != nil {
+		return Result{}, fmt.Errorf("failed to open the work directory: %w", err)
+	}
+	defer work.Close()
+
 	var matches []FileMatch
 	var truncated bool
 	if opts.Mode == ModeName {
-		matches, truncated = searchNames(workDir, files, pattern, opts.MaxResults)
+		matches, truncated = searchNames(workDir, work, files, pattern, opts.MaxResults)
 	} else {
-		matches, truncated = searchContents(ctx, workDir, files, pattern, opts.MaxResults)
+		matches, truncated = searchContents(ctx, work, files, pattern, opts.MaxResults)
 	}
 
 	return Result{Matches: matches, Truncated: truncated || listTruncated}, nil
 }
 
-// resolveScope validates the requested subdirectory and normalizes it to a
-// slash-separated path relative to workDir ("" for the whole work directory).
-// Existence is checked here rather than during listing so that a bad path is
-// reported the same way whichever listing strategy runs.
+// resolveScope validates the requested subdirectory and normalizes it to the
+// slash-separated real path it names relative to workDir ("" for the whole
+// work directory). Existence is checked here rather than during listing so
+// that a bad path is reported the same way whichever listing strategy runs.
+//
+// Links on the way are followed only inside workDir, as on every file route:
+// a scope through a link out would otherwise walk, and read, outside it. A
+// scope through a link inside is searched at its real path, which is where
+// git lists those files too.
 func resolveScope(workDir, path string) (string, error) {
-	if err := contents.ValidatePath(workDir, path); err != nil {
-		return "", err
-	}
 	if path == "" {
-		return "", nil
+		return "", contents.ValidatePath(workDir, path)
 	}
 
-	scope := filepath.ToSlash(filepath.Clean(path))
-	if _, err := os.Stat(filepath.Join(workDir, filepath.FromSlash(scope))); err != nil {
-		if os.IsNotExist(err) {
-			return "", fmt.Errorf("%w: %s", contents.ErrNotFound, path)
-		}
-		return "", fmt.Errorf("failed to stat search path: %w", err)
+	res, err := contents.Resolve(workDir, path)
+	if err != nil {
+		return "", err
 	}
-	return scope, nil
+	if res.Link != nil && !res.Link.Followable() {
+		return "", contents.LinkRefusal(path, res.Link.State)
+	}
+	if res.Real == "." {
+		return "", nil
+	}
+	return filepath.ToSlash(res.Real), nil
 }

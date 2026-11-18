@@ -636,3 +636,42 @@ func TestFormatSize(t *testing.T) {
 		}
 	}
 }
+
+// A download follows a link only to a file inside the work directory
+// (docs/symlinks.md#per-route), and its refusal names no host path.
+func TestDownloadThroughLinks(t *testing.T) {
+	h, workDir := newTestHandler(t)
+	outside := t.TempDir()
+	writeFile(t, workDir, "real.txt", []byte("real"))
+	writeFile(t, outside, "secret.txt", []byte("secret"))
+	symlinktest.Make(t, "real.txt", filepath.Join(workDir, "flink"))
+	symlinktest.Make(t, filepath.Join(outside, "secret.txt"), filepath.Join(workDir, "ofile"))
+	symlinktest.Make(t, outside, filepath.Join(workDir, "odir"))
+	symlinktest.Make(t, "gone.txt", filepath.Join(workDir, "broken"))
+
+	rec := download(t, h, "path=flink")
+	if rec.Code != http.StatusOK || rec.Body.String() != "real" {
+		t.Errorf("flink: got %d %q, want the target's content", rec.Code, rec.Body.String())
+	}
+
+	for _, p := range []string{"ofile", "odir/secret.txt", "odir/missing.txt", "broken"} {
+		rec := download(t, h, "path="+p)
+		body := assertError(t, rec, http.StatusBadRequest, CodeInvalidPath)
+		if strings.Contains(rec.Body.String(), "secret\"") || strings.Contains(body.Error, outside) || strings.Contains(body.Error, workDir) {
+			t.Errorf("%s: answer %q leaks the target or a host path", p, rec.Body.String())
+		}
+	}
+}
+
+// The upload destination follows links only inside, like every route.
+func TestUploadThroughALinkOut(t *testing.T) {
+	h, workDir := newTestHandler(t)
+	outside := t.TempDir()
+	symlinktest.Make(t, outside, filepath.Join(workDir, "odir"))
+
+	rec := upload(t, h, "path=odir", uploadFile{name: "a.txt", content: []byte("a")})
+	assertError(t, rec, http.StatusBadRequest, CodeInvalidPath)
+	if entries, _ := os.ReadDir(outside); len(entries) != 0 {
+		t.Errorf("wrote outside the work directory: %v", entries)
+	}
+}

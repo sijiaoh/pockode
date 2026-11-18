@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
-	"path/filepath"
-	"syscall"
 )
 
 // ErrNotADirectory is a path that names something other than a directory
@@ -14,7 +12,8 @@ import (
 var ErrNotADirectory = errors.New("not a directory")
 
 // OpenDirWithin opens the existing directory rel beneath work with every link
-// on the way followed, provided where it leads is still inside work, and
+// on the way followed, provided every step of where it leads is still inside
+// work (the walk Resolve makes), and
 // returns it as a root along with that resolved path and the directory's info.
 //
 // Following links rather than refusing them is what lets a link that stays in
@@ -30,23 +29,33 @@ var ErrNotADirectory = errors.New("not a directory")
 // directory that resolves outside work — the wrapped reason holds host paths,
 // for a log, not for a client.
 func OpenDirWithin(work *os.Root, rel string) (*os.Root, string, os.FileInfo, error) {
-	full := filepath.Join(work.Name(), rel)
-	info, err := os.Stat(full)
+	// Walked first, without following anything out: "not found" against
+	// "invalid path" for a name behind a link out would tell which names
+	// exist out there.
+	r := newResolver(work.Name())
+	chain, err := r.dirChain(rel, nil)
 	if err != nil {
-		if errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ENOTDIR) {
+		if errors.Is(err, ErrNotADirectory) {
+			return nil, "", nil, ErrNotADirectory
+		}
+		if errors.Is(err, ErrNotFound) {
 			return nil, "", nil, ErrNotFound
+		}
+		if errors.Is(err, ErrInvalidPath) {
+			return nil, "", nil, err
 		}
 		return nil, "", nil, fmt.Errorf("failed to stat directory: %w", err)
 	}
-	if !info.IsDir() {
-		return nil, "", nil, ErrNotADirectory
-	}
+	real := realPath(chain[len(chain)-1])
 
 	// A root opens with O_DIRECTORY, so a directory swapped for a fifo since
-	// the Stat fails here instead of blocking the request forever, as a plain
+	// the walk fails here instead of blocking the request forever, as a plain
 	// os.Open of the fifo would.
-	dir, err := os.OpenRoot(full)
+	dir, err := work.OpenRoot(real)
 	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil, "", nil, ErrNotFound
+		}
 		return nil, "", nil, fmt.Errorf("failed to open directory: %w", err)
 	}
 	opened, err := dir.Open(".")
@@ -56,15 +65,19 @@ func OpenDirWithin(work *os.Root, rel string) (*os.Root, string, os.FileInfo, er
 	}
 	defer opened.Close()
 
-	resolved, err := ResolvedName(work, filepath.Join(".", rel), opened)
+	resolved, err := ResolvedName(work, real, opened)
 	if err != nil {
 		dir.Close()
 		return nil, "", nil, fmt.Errorf("%w: does not resolve inside the work directory: %w", ErrInvalidPath, err)
 	}
-	// The opened directory's, not the Stat's: it is the one resolved.
-	if info, err = opened.Stat(); err != nil {
+	info, err := opened.Stat()
+	if err != nil {
 		dir.Close()
 		return nil, "", nil, fmt.Errorf("failed to stat directory: %w", err)
+	}
+	if !info.IsDir() {
+		dir.Close()
+		return nil, "", nil, ErrNotADirectory
 	}
 	return dir, resolved, info, nil
 }

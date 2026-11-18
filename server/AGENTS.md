@@ -113,8 +113,10 @@ Windows 与 darwin/linux 一样是发布目标（产物见 [docs/platforms.md](.
 | `internal/shutdown/shutdown.go` | `request_{unix,windows}.go` — 退出请求 SIGTERM / 命名事件 `pockode-shutdown-<pid>`；重启请求 SIGUSR1 / 命名事件 `pockode-restart-<pid>`（`RequestRestart`，Windows 上事件不存在即 `ErrRestartUnsupported`） |
 | `internal/restart/restart.go` | `replace_{unix,windows}.go` — 自我重启：原地 exec（PID、终端、session 不变）/ 后继进程（前台终端里等它并沿用退出码，否则直接退出）；探测版本的子进程在 Windows 上加 `CREATE_NO_WINDOW` |
 | `selfinstall/selfinstall.go` | `replace_{unix,windows}.go` — 换上新的可执行文件：一次 rename 覆盖 / 运行中的 exe 只能改名：先等 Defender 放开新文件（把它改个名，`filestore.RenamePatiently` 退避重试），再背靠背地把旧 exe 改成带时间戳的 `.old`（之前的可能还被别的节点占用）、把新文件改进来，失败就改回去——这样路径上没有可执行文件的空档只有两次 rename 那么长；容器检测与目录不可写时给用户的提示也按平台分 |
-| `filetransfer/folder.go` | `folder_{unix,windows}.go` — 文件夹上传 merge 覆盖文件、文件夹下载读取文件时以非阻塞方式打开（防止换成 fifo 后卡死；Windows 工作目录里没有 fifo）、识别文件系统自己拒绝的名字（unix 的 `ENAMETOOLONG` / `EINVAL` / `EILSEQ`，Windows 的 `ERROR_INVALID_NAME` / `ERROR_FILENAME_EXCED_RANGE`）|
-| `contents/within.go`、`filetransfer/raw.go` | `contents/realname_{unix,windows}.go`（`contents.ResolvedName`）— `contents.OpenDirWithin` 要求跟随链接后的真实路径仍在工作目录内（`file.move` 的两个目录、文件夹上传的目标目录与文件夹下载的文件夹）；根 capability（`scope: "root"`）拒绝敏感名单（任意层级的 `.git`、`.env`、`.env.*`、`.envrc`、`.envrc.*`，所有平台都不区分大小写）、数据目录和其他 worktree 时也看它：unix 上 `EvalSymlinks` 跟完所有链接再核对与打开的是同一个文件；Windows 取句柄的最终长名，8.3 短名（`ENV~1`）是 `.env` 的另一种写法 |
+| `contents/links.go` 等 | `contents/nonblock_{unix,windows}.go`（`contents.OpenNonBlock`）— 检查过是普通文件、但打开前可能被换成 fifo 的地方一律以非阻塞方式打开再核对句柄（`file.get/write`、下载、搜索读文件、文件夹上传 merge 覆盖与文件夹下载；Windows 工作目录里没有 fifo，为 0）|
+| `filetransfer/folder.go` | `folder_{unix,windows}.go` — 识别文件系统自己拒绝的名字（unix 的 `ENAMETOOLONG` / `EINVAL` / `EILSEQ`，Windows 的 `ERROR_INVALID_NAME` / `ERROR_FILENAME_EXCED_RANGE`）|
+| `watch/fs.go` | `fs_poll_{kqueue,other}.go` — kqueue（macOS/BSD）上 fsnotify 遇到坏链接会漏报目录里新建的条目、遇到链接环会整个 `Add` 失败，所以那边每个被监视的目录再按 mtime 轮询一遍；`Add` 失败的目录在所有平台都退回只轮询 |
+| `contents/within.go`、`filetransfer/raw.go` | `contents/realname_{unix,windows}.go`（`contents.ResolvedName`）— `contents.Resolve` / `contents.OpenDirWithin` 用 `Lstat`/`Readlink` 逐段跟随链接、一出工作目录就停（不在边界外查任何东西），打开后再经 `os.Root` 与 `ResolvedName` 核对句柄仍在工作目录内——所有文件路由（`file.get/write/create/delete/rename/move`、下载上传、文件夹传输、`fs.watch`、搜索的 scope）都走它，规则见 docs/symlinks.md；根 capability（`scope: "root"`）拒绝敏感名单（任意层级的 `.git`、`.env`、`.env.*`、`.envrc`、`.envrc.*`，所有平台都不区分大小写）、数据目录和其他 worktree 时也看它：unix 上 `EvalSymlinks` 跟完所有链接再核对与打开的是同一个文件；Windows 取句柄的最终长名，8.3 短名（`ENV~1`）是 `.env` 的另一种写法 |
 
 **路径处理统一走 `internal/pathutil`**，不要在各包里重新实现一遍：
 
@@ -151,13 +153,13 @@ Windows 与 darwin/linux 一样是发布目标（产物见 [docs/platforms.md](.
 
   | 来源 | 调用点 | 为什么 Windows 上做不到 |
   |---|---|---|
-  | `internal/fifotest` | `agent/codex`×1、`contents`×1、`filetransfer`×3 | 命名管道只存在于 `\\.\pipe`，根本进不了工作目录，被测的阻塞隐患在那里不成立 |
-  | `internal/symlinktest` | `contents`×4、`filetransfer`×13、`git`×2、`internal/restart`×1、`search`×1、`selfinstall`×1 | 未开开发者模式时建符号链接要特权；开了就一条都不 skip |
+  | `internal/fifotest` | `agent/codex`×1、`contents`×3、`filetransfer`×3 | 命名管道只存在于 `\\.\pipe`，根本进不了工作目录，被测的阻塞隐患在那里不成立 |
+  | `internal/symlinktest` | `contents`×24、`filetransfer`×15、`git`×3、`internal/restart`×1、`search`×3、`selfinstall`×1、`watch`×2、`ws`×1 | 未开开发者模式时建符号链接要特权；开了就一条都不 skip |
   | `cliprofile` 的 `newPreparing`、`cliprofile/cliprofiletest` 的 `UseProfile` | `cliprofile`×16、`agent/claude`×7、`agent/codex`×1 | 同上：账号目录由符号链接组成，`Store.Availability` 探测不到建链接的权限时 `Prepare` 直接拒绝；拒绝本身由不 skip 的 `TestPrepareRefusesWithoutSymlinks`、`TestLaunchWithoutSymlinks` 覆盖 |
   | `internal/unwritabletest` | `filestore`×1、`selfinstall`×1、`ws`×1 | 目录忽略只读属性，`os.Chmod` 挡不住写入；要真挡住得给当前用户的 SID 加一条 deny ACE |
   | `filetransfer/realname_windows_test.go` 的 `shortName` | `filetransfer`×0~2 | 临时目录所在的卷关掉了 8.3 短名（`fsutil 8dot3name`）时没有别名可测；开着就一条都不 skip |
 
-  **合计 8~55 条**，两个区间端点都是对的：`filetransfer` 的「refuses to overwrite anything but a regular file」一个子测试里同时要符号链接和 fifo，谁先 skip 就记在谁名下，于是前两行的条数此消彼长——没开开发者模式是 4+22（另加 `cliprofile` 一行的 24），开了是 5+0+0。别按单行的数去对账，按合计。
+  **合计 10~85 条**，两个区间端点都是对的：`filetransfer` 的「refuses to overwrite anything but a regular file」一个子测试里同时要符号链接和 fifo，谁先 skip 就记在谁名下，于是前两行的条数此消彼长——没开开发者模式是 6+50（另加 `cliprofile` 一行的 24），开了是 7+0+0。别按单行的数去对账，按合计。
 
   能用平台分表（如 `settings_test.go` 的路径用例）就不要 skip；断言本身在两个平台上形状不同时，把它抽成平台分文件的测试辅助（如 `internal/fspermtest`、`internal/termtest`、`internal/fifotest`），而不是在 Windows 上 skip 掉——权限测试恰恰在权限有问题的那个平台上 skip，等于什么都没证明。
 

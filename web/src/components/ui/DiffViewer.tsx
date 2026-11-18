@@ -19,6 +19,8 @@ import {
 	getIsDarkMode,
 	subscribeToDarkMode,
 } from "../../lib/shikiUtils";
+import { splitPath } from "../../utils/path";
+import { ContentErrorBoundary } from "./ContentErrorBoundary";
 import { expandFromRowPress, labelCollapsedContext } from "./collapsedContext";
 import { attachLineGutter, markSelectedLines } from "./lineGutter";
 
@@ -57,7 +59,27 @@ interface DiffViewerProps {
 
 type HunkBarRows = Record<string, { data: ReactNode }>;
 
-export function DiffViewer({
+/**
+ * Callers hand it patches through `lib/drawablePatch.ts`; the boundary is for
+ * whatever input the library still turns out to choke on.
+ */
+export function DiffViewer(props: DiffViewerProps) {
+	const raw = props.hunks.join("\n");
+	return (
+		// Another file is drawn afresh by the key, another patch by the reset
+		// key — the patch itself, rather than a copy of it with the name.
+		<ContentErrorBoundary
+			key={props.fileName}
+			name={splitPath(props.fileName).fileName}
+			resetKey={raw}
+			raw={raw}
+		>
+			<DiffViewerContent {...props} />
+		</ContentErrorBoundary>
+	);
+}
+
+function DiffViewerContent({
 	fileName,
 	hunks,
 	oldContent,
@@ -73,11 +95,12 @@ export function DiffViewer({
 	const [highlighter, setHighlighter] = useState<Awaited<
 		ReturnType<typeof getDiffViewHighlighter>
 	> | null>(null);
+	const [highlighterError, setHighlighterError] = useState<unknown>(null);
 	const rootRef = useRef<HTMLDivElement>(null);
 	const viewRef = useRef<{ getDiffFileInstance: () => DiffFile }>(null);
 
 	useEffect(() => {
-		getDiffHighlighter().then(setHighlighter);
+		getDiffHighlighter().then(setHighlighter, setHighlighterError);
 	}, []);
 
 	// The library rebuilds its whole model whenever `data` is a new object —
@@ -157,6 +180,9 @@ export function DiffViewer({
 		return () => observer.disconnect();
 	}, [highlighter, data, split, wrap, selectsLines, selectedLines]);
 
+	// Rethrown for the boundary to say, in place of a "Loading..." that would
+	// never end.
+	if (highlighterError) throw highlighterError;
 	if (!highlighter) {
 		return <div className="p-2 text-th-text-muted">Loading...</div>;
 	}

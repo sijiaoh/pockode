@@ -2,6 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { overlayToNavigation } from "../../lib/navigation";
 import FileEditor from "./FileEditor";
 
 const layout = vi.hoisted(() => ({ expanded: false }));
@@ -44,8 +45,9 @@ vi.mock("../../hooks/useGoToParent", () => ({
 	useGoToParent: () => goToParent,
 }));
 
+const navigate = vi.fn();
 vi.mock("@tanstack/react-router", () => ({
-	useNavigate: () => vi.fn(),
+	useNavigate: () => navigate,
 }));
 
 vi.mock("../../hooks/useRouteState", () => ({
@@ -126,5 +128,25 @@ describe("FileEditor", () => {
 
 		finish();
 		await vi.waitFor(() => expect(goToParent).toHaveBeenCalled());
+	});
+
+	it("sends a link that cannot be followed back to the viewer, which shows it", () => {
+		const file = contents.data;
+		contents.data = {
+			name: "app.ts",
+			type: "link",
+			path: "src/app.ts",
+			link: { target: "missing.ts", state: "broken" },
+		} as unknown as typeof file;
+		try {
+			renderEditor();
+			expect(navigate).toHaveBeenCalledWith(
+				overlayToNavigation({ type: "file", path: "src/app.ts" }, "", null, {
+					replace: true,
+				}),
+			);
+		} finally {
+			contents.data = file;
+		}
 	});
 });

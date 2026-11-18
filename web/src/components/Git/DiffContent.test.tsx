@@ -1,8 +1,16 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useDiffSettingsStore } from "../../lib/diffSettingsStore";
+import { asOneFileDiff } from "../../lib/drawablePatch";
+import { TYPE_CHANGE_DIFF } from "../../test/gitFixtures";
 import DiffContent from "./DiffContent";
+
+// What reaches the viewer is not the point here; what is said around it is.
+vi.mock("../ui", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../ui")>()),
+	DiffViewer: () => <div>diff</div>,
+}));
 
 describe("DiffContent", () => {
 	it("explains a withheld diff the way the file viewer explains the file", () => {
@@ -85,6 +93,41 @@ describe("DiffContent", () => {
 			);
 
 			expect(screen.getByText("No content changes")).toBeTruthy();
+		});
+	});
+
+	describe("a symlink", () => {
+		it("says a file turned into a symlink above its diff", () => {
+			render(
+				<DiffContent
+					data={asOneFileDiff(TYPE_CHANGE_DIFF, "a.txt")}
+					fileName="a.txt"
+				/>,
+			);
+			expect(screen.getByText("Symlink")).toBeInTheDocument();
+			expect(
+				screen.getByText("Type changed: file → symlink"),
+			).toBeInTheDocument();
+			expect(screen.getByText("diff")).toBeInTheDocument();
+		});
+
+		it("marks a symlink's own diff, and nothing else", () => {
+			const link = {
+				diff: "diff --git a/l b/l\nindex 1111111..2222222 120000\n--- a/l\n+++ b/l\n@@ -1 +1 @@\n-a\n+b\n",
+				old_content: "a",
+				new_content: "b",
+			};
+			const { rerender } = render(<DiffContent data={link} fileName="l" />);
+			expect(screen.getByText("Symlink")).toBeInTheDocument();
+			expect(screen.queryByText(/Type changed/)).not.toBeInTheDocument();
+
+			rerender(
+				<DiffContent
+					data={{ ...link, diff: link.diff.replace("120000", "100644") }}
+					fileName="l"
+				/>,
+			);
+			expect(screen.queryByText("Symlink")).not.toBeInTheDocument();
 		});
 	});
 });

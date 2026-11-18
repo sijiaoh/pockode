@@ -41,6 +41,7 @@ function conflictFile(content: string): ConflictFile {
 		regions: findConflictRegions(content),
 		resolvable: false,
 		confirmResolvable: async () => false,
+		watch: { error: null, retry: () => {} },
 	};
 }
 

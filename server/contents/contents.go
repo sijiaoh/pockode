@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"math/bits"
 	"net/http"
 	"os"
@@ -13,6 +14,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"syscall"
 	"unicode/utf8"
 )
 
@@ -55,6 +57,9 @@ type EntryType string
 const (
 	TypeFile EntryType = "file"
 	TypeDir  EntryType = "dir"
+	// TypeLink is a symlink that cannot be followed (Link.Followable is
+	// false). A followed link has its target's type, and Link beside it.
+	TypeLink EntryType = "link"
 )
 
 const (
@@ -135,6 +140,8 @@ type Entry struct {
 	Name string    `json:"name"`
 	Type EntryType `json:"type"`
 	Path string    `json:"path"`
+	// Link is set on every symlink and on nothing else.
+	Link *Link `json:"link,omitempty"`
 }
 
 type FileContent struct {
@@ -152,21 +159,33 @@ type FileContent struct {
 	// OmitTooLarge. It travels with the response so the UI can name the
 	// threshold without keeping a second copy of the ceiling that applied.
 	Limit int64 `json:"limit,omitempty"`
+	// Link is set when the path asked for is a symlink that was followed to
+	// this file.
+	Link *Link `json:"link,omitempty"`
 }
 
-// ContentsResult holds the result of GetContents.
-// Either Entries (for directories) or File (for files) is set, never both.
+// ContentsResult holds the result of GetContents: a directory listing, a
+// file, or — for a symlink that cannot be followed — the link itself. Exactly
+// one of Entries, File and Link is set (Entries may be empty).
 type ContentsResult struct {
-	Entries []Entry      // Directory listing (nil if file)
-	File    *FileContent // File content (nil if directory)
+	Entries []Entry
+	File    *FileContent
+	// Link is an answer, not a failure: a broken link is an ordinary thing to
+	// find in a checkout, and a client shows a page for it.
+	Link *Entry
 }
 
 // IsDir returns true if the result is a directory listing.
 func (r ContentsResult) IsDir() bool {
-	return r.File == nil
+	return r.File == nil && r.Link == nil
 }
 
 // GetContents returns directory entries or file content.
+//
+// Symlinks are followed only to inside workDir (docs/symlinks.md): one on the
+// way that leads out is refused with ErrInvalidPath, and one in the last
+// component that cannot be followed comes back as a link result.
+//
 // Returns ErrNotFound if path doesn't exist, ErrInvalidPath for path traversal
 // attempts and for paths that are neither a directory nor a regular file.
 func GetContents(workDir, path string) (ContentsResult, error) {
@@ -174,82 +193,131 @@ func GetContents(workDir, path string) (ContentsResult, error) {
 		return ContentsResult{}, err
 	}
 
-	fullPath := filepath.Join(workDir, path)
-	info, err := os.Stat(fullPath)
+	r := newResolver(workDir)
+	res, err := r.resolve(path)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return ContentsResult{}, fmt.Errorf("%w: %s", ErrNotFound, path)
-		}
-		return ContentsResult{}, fmt.Errorf("failed to stat path: %w", err)
+		return ContentsResult{}, err
+	}
+	if res.Link != nil && !res.Link.Followable() {
+		return ContentsResult{Link: &Entry{
+			Name: filepath.Base(filepath.Clean(filepath.FromSlash(path))),
+			Type: TypeLink,
+			Path: path,
+			Link: res.Link,
+		}}, nil
 	}
 
-	if info.IsDir() {
-		entries, err := listDir(path, fullPath)
+	// Named pipes and device nodes are checked before opening, not after:
+	// opening a fifo blocks until someone writes to it, which would hang the
+	// request forever. Search refuses them for the same reason.
+	if !res.Info.IsDir() && !res.Info.Mode().IsRegular() {
+		return ContentsResult{}, notRegularError(path)
+	}
+
+	work, err := os.OpenRoot(workDir)
+	if err != nil {
+		return ContentsResult{}, opFailed("failed to open the work directory", err)
+	}
+	defer work.Close()
+
+	f, err := OpenWithin(work, path, res)
+	if err != nil {
+		return ContentsResult{}, err
+	}
+	defer f.Close()
+
+	if res.Info.IsDir() {
+		entries, err := r.listDir(path, res, f)
 		if err != nil {
 			return ContentsResult{}, err
 		}
 		return ContentsResult{Entries: entries}, nil
 	}
 
-	// Named pipes and device nodes are checked before opening, not after:
-	// opening a fifo blocks until someone writes to it, which would hang the
-	// request forever. Search refuses them for the same reason.
-	if !info.Mode().IsRegular() {
-		return ContentsResult{}, fmt.Errorf("%w: %s is not a regular file", ErrInvalidPath, path)
-	}
-
-	file, err := readFile(path, fullPath)
+	file, err := readFile(path, f)
 	if err != nil {
-		return ContentsResult{}, err
+		return ContentsResult{}, opFailed("failed to read "+path, err)
 	}
+	file.Link = res.Link
 	return ContentsResult{File: file}, nil
 }
 
-func listDir(relPath, fullPath string) ([]Entry, error) {
-	dirEntries, err := os.ReadDir(fullPath)
+// listDir lists dir, opened at res, under the path the client asked for.
+// Entries are classified, never followed out of the work directory.
+func (r *resolver) listDir(relPath string, res Resolution, dir *os.File) ([]Entry, error) {
+	dirEntries, err := dir.ReadDir(-1)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read directory: %w", err)
+		return nil, opFailed("failed to read directory "+DisplayDir(relPath), err)
 	}
+	sort.Slice(dirEntries, func(i, j int) bool { return dirEntries[i].Name() < dirEntries[j].Name() })
 
+	real := res.visited[len(res.visited)-1]
+	var ancestors []os.FileInfo
 	entries := make([]Entry, 0, len(dirEntries))
 	for _, de := range dirEntries {
 		entryPath := de.Name()
 		if relPath != "" {
-			entryPath = relPath + "/" + de.Name()
+			entryPath = strings.TrimSuffix(filepath.ToSlash(relPath), "/") + "/" + de.Name()
 		}
 		entry := Entry{
 			Name: de.Name(),
 			Path: entryPath,
 		}
 
-		if de.IsDir() {
+		switch {
+		// A directory too: a Windows junction can be listed as one.
+		case (de.IsDir() || de.Type()&(os.ModeSymlink|os.ModeIrregular) != 0) && isLinkEntry(r, real, de.Name()):
+			if ancestors == nil {
+				ancestors = r.passedThrough(res.visited)
+			}
+			link, walked := r.classify(real, de.Name(), ancestors)
+			entry.Link = link
+			switch {
+			case !link.Followable():
+				entry.Type = TypeLink
+			case walked.info.IsDir():
+				entry.Type = TypeDir
+			default:
+				entry.Type = TypeFile
+			}
+		case de.IsDir():
 			entry.Type = TypeDir
-		} else {
+		default:
 			entry.Type = TypeFile
 		}
 
 		entries = append(entries, entry)
 	}
 
-	sort.Slice(entries, func(i, j int) bool {
-		if entries[i].Type != entries[j].Type {
-			return entries[i].Type == TypeDir
-		}
-		return entries[i].Name < entries[j].Name
+	sort.SliceStable(entries, func(i, j int) bool {
+		return entries[i].Type == TypeDir && entries[j].Type != TypeDir
 	})
 
 	return entries, nil
+}
+
+// isLinkEntry reports whether the entry name in the real directory dir is a
+// link; a directory entry's type alone cannot tell a Windows junction from
+// any other reparse point.
+func isLinkEntry(r *resolver, dir []string, name string) bool {
+	full := filepath.Join(r.workDir, realPath(append(append([]string(nil), dir...), name)))
+	info, err := os.Lstat(full)
+	if err != nil {
+		return false
+	}
+	_, isLink := readLink(full, info)
+	return isLink
 }
 
 // readFile describes a file, carrying its content only when it is text small
 // enough to send. Anything else is described by metadata alone: media because
 // its bytes are fetched over HTTP, any other binary because a client that
 // cannot render it has no use for the megabytes it would cost to ship.
-func readFile(relPath, fullPath string) (*FileContent, error) {
+func readFile(relPath string, f *os.File) (*FileContent, error) {
 	// The head decides before the rest is read: media bytes are not going to
 	// be sent, so reading up to MaxFileSize of them only to drop them would
 	// make every picture's or recording's metadata cost the file.
-	size, content, err := readBounded(fullPath, func(head []byte) bool {
+	size, content, err := readBoundedFile(f, func(head []byte) bool {
 		return IsMedia(relPath, head)
 	})
 	if err != nil {
@@ -274,7 +342,11 @@ func readBounded(fullPath string, headOnly func(head []byte) bool) (size int64, 
 		return 0, nil, fmt.Errorf("failed to read file: %w", err)
 	}
 	defer f.Close()
+	return readBoundedFile(f, headOnly)
+}
 
+// readBoundedFile is readBounded for a file already open.
+func readBoundedFile(f *os.File, headOnly func(head []byte) bool) (size int64, content []byte, err error) {
 	// Stat the descriptor, not the path: an agent rewriting the file between
 	// the caller's stat and this read would otherwise have the reported size
 	// describe a different file than the content beside it.
@@ -808,11 +880,15 @@ func WriteFile(workDir, path, content string) error {
 		return fmt.Errorf("%w: %d bytes, limit %d", ErrTooLarge, len(content), MaxFileSize)
 	}
 
-	fullPath := filepath.Join(workDir, path)
+	work, err := os.OpenRoot(workDir)
+	if err != nil {
+		return opFailed("failed to open the work directory", err)
+	}
+	defer work.Close()
 
-	dir := filepath.Dir(fullPath)
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return fmt.Errorf("failed to create parent directories: %w", err)
+	real, err := createTarget(work, path)
+	if err != nil {
+		return err
 	}
 
 	// Deliberately a plain write, not filestore.WriteFileAtomic: these are files
@@ -820,7 +896,79 @@ func WriteFile(workDir, path, content string) error {
 	// reset an executable script back to 0644, swap the inode out from under
 	// anything watching it, and litter the working tree with .tmp/.lock files
 	// that show up in git status. In-place writing keeps the file the user's.
-	return os.WriteFile(fullPath, []byte(content), 0644)
+	//
+	// Truncated only once the opened file is known to be inside: O_TRUNC
+	// would empty a file swapped in from outside before the check could
+	// refuse it.
+	// Without blocking, and checked by the descriptor, as OpenWithin does:
+	// createTarget refuses a fifo, but one swapped in since would otherwise
+	// hold the request until something reads it.
+	f, err := openWithin(work, path, real, os.O_WRONLY|os.O_CREATE|OpenNonBlock, 0644)
+	if err != nil {
+		return err
+	}
+	if err := checkOpenedKind(f, path, false); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Truncate(0); err != nil {
+		f.Close()
+		return opFailed("failed to write "+path, err)
+	}
+	if _, err := f.Write([]byte(content)); err != nil {
+		f.Close()
+		return opFailed("failed to write "+path, err)
+	}
+	if err := f.Close(); err != nil {
+		return opFailed("failed to write "+path, err)
+	}
+	return nil
+}
+
+// createTarget resolves path for a route that writes there, creating the
+// missing parent directories — inside the work directory only, never through
+// a link out — and returns the real path to write. A link in the last
+// component is written through when it leads to a file inside, and refused
+// otherwise. Nothing at the last component is fine: that is what gets created.
+func createTarget(work *os.Root, path string) (string, error) {
+	r := newResolver(work.Name())
+	clean := filepath.Clean(filepath.FromSlash(path))
+	chain, err := r.dirChain(filepath.Dir(clean), func(real string) error {
+		return work.Mkdir(real, 0755)
+	})
+	if err != nil {
+		if errors.Is(err, ErrNotADirectory) || errors.Is(err, ErrNotFound) {
+			return "", opFailed("failed to create parent directories of "+path, err)
+		}
+		return "", retarget(err, path)
+	}
+	parent := chain[len(chain)-1]
+	name := filepath.Base(clean)
+	own := realPath(append(append([]string(nil), parent...), name))
+
+	info, err := work.Lstat(own)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return own, nil
+		}
+		return "", opFailed("failed to read "+path, err)
+	}
+	if _, isLink := readLink(filepath.Join(work.Name(), own), info); !isLink {
+		// A fifo or a device is refused before the open, which would wait
+		// on a fifo until something reads it.
+		if !info.IsDir() && !info.Mode().IsRegular() {
+			return "", notRegularError(path)
+		}
+		return own, nil
+	}
+	link, walked := r.classify(parent, name, nil)
+	if !link.Followable() {
+		return "", linkRefusal(path, link.State)
+	}
+	if walked.info.IsDir() {
+		return "", fmt.Errorf("%w: %s is a directory", ErrInvalidPath, path)
+	}
+	return realPath(walked.real), nil
 }
 
 // Create makes an empty file or an empty directory at path within workDir.
@@ -839,30 +987,55 @@ func Create(workDir, path string, isDir bool) error {
 		return err
 	}
 
-	fullPath := filepath.Join(workDir, path)
+	work, err := os.OpenRoot(workDir)
+	if err != nil {
+		return opFailed("failed to open the work directory", err)
+	}
+	defer work.Close()
 
-	if err := os.MkdirAll(filepath.Dir(fullPath), 0755); err != nil {
-		return fmt.Errorf("failed to create parent directories: %w", err)
+	real, err := createTarget(work, path)
+	if err != nil {
+		// A link on the name takes it, wherever it points.
+		if errors.Is(err, ErrInvalidPath) && takenIn(work, path) {
+			return existsError(path)
+		}
+		return err
 	}
 
 	// Refusing a taken name is left to the creating syscall rather than a stat
 	// before it: a check-then-create can be overtaken by an agent writing the
 	// same path, and both O_EXCL and Mkdir already refuse a symlink sitting on
-	// the name instead of creating through it to wherever it points.
-	var err error
+	// the name instead of creating through it to wherever it points. Through
+	// the root, so a parent swapped for a link out since createTarget is
+	// refused as well.
 	if isDir {
-		err = os.Mkdir(fullPath, 0755)
+		err = work.Mkdir(real, 0755)
 	} else {
-		err = createEmptyFile(fullPath)
+		var f *os.File
+		if f, err = work.OpenFile(real, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0644); err == nil {
+			err = f.Close()
+		}
 	}
 	if err != nil {
-		if errors.Is(err, os.ErrExist) || taken(fullPath) {
+		if errors.Is(err, os.ErrExist) || taken(work, real) {
 			return existsError(path)
 		}
-		return fmt.Errorf("failed to create %s: %w", path, err)
+		return opFailed("failed to create "+path, err)
 	}
 
 	return nil
+}
+
+// takenIn reports whether a link sits on path's own name, which is what makes
+// createTarget refuse a link that cannot be written through.
+func takenIn(work *os.Root, path string) bool {
+	r := newResolver(work.Name())
+	clean := filepath.Clean(filepath.FromSlash(path))
+	chain, err := r.dirChain(filepath.Dir(clean), nil)
+	if err != nil {
+		return false
+	}
+	return taken(work, realPath(append(chain[len(chain)-1], filepath.Base(clean))))
 }
 
 // taken reports whether something already sits at fullPath. Lstat, so a symlink
@@ -878,8 +1051,8 @@ func Create(workDir, path string, isDir bool) error {
 //
 // Rename has to ask *before* instead, because rename(2) refuses nothing, and it
 // also has to allow for a name that only *looks* taken; see blocks.
-func taken(fullPath string) bool {
-	_, err := os.Lstat(fullPath)
+func taken(work *os.Root, real string) bool {
+	_, err := work.Lstat(real)
 	return err == nil
 }
 
@@ -936,16 +1109,10 @@ func existsError(relPath string) error {
 	return fmt.Errorf("%s %w", relPath, ErrExists)
 }
 
-func createEmptyFile(fullPath string) error {
-	f, err := os.OpenFile(fullPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0644)
-	if err != nil {
-		return err
-	}
-	return f.Close()
-}
-
 // Delete removes a file or directory within workDir.
-// For directories, it recursively removes all contents.
+// For directories, it recursively removes all contents. A symlink is removed
+// as the link, never what it points at, so a broken one can be deleted; links
+// on the way are followed only inside workDir.
 // Returns ErrInvalidPath for path traversal attempts, absolute paths, or empty paths.
 // Returns ErrNotFound if the path doesn't exist.
 func Delete(workDir, path string) error {
@@ -957,22 +1124,46 @@ func Delete(workDir, path string) error {
 		return err
 	}
 
-	fullPath := filepath.Join(workDir, path)
-
-	if _, err := os.Stat(fullPath); err != nil {
-		if os.IsNotExist(err) {
-			return fmt.Errorf("%w: %s", ErrNotFound, path)
-		}
-		return fmt.Errorf("failed to stat path: %w", err)
+	own, err := ownEntry(workDir, path)
+	if err != nil {
+		return err
 	}
 
-	return os.RemoveAll(fullPath)
+	work, err := os.OpenRoot(workDir)
+	if err != nil {
+		return opFailed("failed to open the work directory", err)
+	}
+	defer work.Close()
+
+	// Through the root: a parent swapped for a link out since ownEntry is
+	// refused rather than followed.
+	if err := work.RemoveAll(own); err != nil {
+		return opFailed("failed to delete "+path, err)
+	}
+	return nil
 }
 
-// DeleteFile deletes a file within workDir.
-// Deprecated: Use Delete instead, which handles both files and directories.
-func DeleteFile(workDir, path string) error {
-	return Delete(workDir, path)
+// ownEntry is path's own entry — the link itself, when it is one — as a real
+// path beneath workDir, with the links on the way followed only inside.
+// Returns ErrNotFound when there is nothing there.
+func ownEntry(workDir, path string) (string, error) {
+	r := newResolver(workDir)
+	clean := filepath.Clean(filepath.FromSlash(path))
+	chain, err := r.dirChain(filepath.Dir(clean), nil)
+	if err != nil {
+		if errors.Is(err, ErrNotADirectory) {
+			return "", fmt.Errorf("%w: %s", ErrNotFound, path)
+		}
+		return "", retarget(err, path)
+	}
+	own := realPath(append(chain[len(chain)-1], filepath.Base(clean)))
+	if _, err := os.Lstat(filepath.Join(workDir, own)); err != nil {
+		if errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ENOTDIR) {
+			return "", fmt.Errorf("%w: %s", ErrNotFound, path)
+		}
+		return "", opFailed("failed to read "+path, err)
+	}
+	return own, nil
 }
 
 // Rename changes the name of the entry at path, leaving it in the directory it
@@ -1006,7 +1197,23 @@ func Rename(workDir, path, newName string) error {
 		return err
 	}
 
-	fullPath := filepath.Join(workDir, path)
+	// The source's parent is followed only inside the work directory, like
+	// every route's. The entry itself is the link when it is one: Lstat, not
+	// Stat, since os.Rename renames the link rather than what it points at,
+	// and Stat would call a dangling link missing and refuse to rename
+	// something that is plainly there in the listing.
+	own, err := ownEntry(workDir, path)
+	if err != nil {
+		return err
+	}
+
+	// Through the root from here on, so a parent swapped for a link out since
+	// ownEntry is refused rather than followed.
+	work, err := os.OpenRoot(workDir)
+	if err != nil {
+		return opFailed("failed to open the work directory", err)
+	}
+	defer work.Close()
 
 	// The destination comes from the source's own parent directory, not from
 	// rebuilding the relative path: "the same directory" then holds however the
@@ -1014,28 +1221,24 @@ func Rename(workDir, path, newName string) error {
 	// segment — where reconstruction would silently relocate the entry.
 	// newName has no separator and is neither "." nor "..", so this stays one
 	// component below a directory already known to be inside workDir.
-	newFullPath := filepath.Join(filepath.Dir(fullPath), newName)
+	dst := filepath.Join(filepath.Dir(own), newName)
 
 	// Only ever reported, never used to reach the file: it is the relative path
 	// the client speaks, so the client can match the name it asked about.
 	newPath := siblingPath(path, newName)
 
-	// Lstat, not Stat: a symlink is an entry with a name like any other, and
-	// os.Rename renames the link rather than what it points at. Stat would call
-	// a dangling link missing and refuse to rename something that is plainly
-	// there in the listing.
-	srcInfo, err := os.Lstat(fullPath)
+	srcInfo, err := work.Lstat(own)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return fmt.Errorf("%w: %s", ErrNotFound, path)
 		}
-		return fmt.Errorf("failed to stat path: %w", err)
+		return opFailed("failed to read "+path, err)
 	}
 
 	// Renaming an entry onto its own name is the state the caller asked for, so
 	// it is not an error — and it must be answered before the check below,
 	// which would otherwise report the entry as blocking itself.
-	if newFullPath == fullPath {
+	if dst == own {
 		return nil
 	}
 
@@ -1047,8 +1250,8 @@ func Rename(workDir, path, newName string) error {
 	// bad, but the window is between two adjacent syscalls and the alternative
 	// is overwriting every time. Lstat for the same reason as above: a symlink
 	// takes the name whether or not it points anywhere.
-	dstInfo, err := os.Lstat(newFullPath)
-	if err == nil && blocks(srcInfo, dstInfo, filepath.Dir(fullPath), newName) {
+	dstInfo, err := work.Lstat(dst)
+	if err == nil && blocks(srcInfo, dstInfo, filepath.Join(workDir, filepath.Dir(own)), newName) {
 		return existsError(newPath)
 	}
 
@@ -1056,11 +1259,11 @@ func Rename(workDir, path, newName string) error {
 	// Windows fails a rename that *replaces* a destination someone else has
 	// open, and that case is refused above. What is left — a source held open
 	// elsewhere — is a real failure to report, not a transient one to wait out.
-	if err := os.Rename(fullPath, newFullPath); err != nil {
+	if err := work.Rename(own, dst); err != nil {
 		if errors.Is(err, os.ErrExist) {
 			return existsError(newPath)
 		}
-		return fmt.Errorf("failed to rename %s: %w", path, err)
+		return opFailed("failed to rename "+path, err)
 	}
 
 	return nil

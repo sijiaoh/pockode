@@ -1,4 +1,7 @@
 import {
+	Check,
+	Copy,
+	Crosshair,
 	FilePlus,
 	FolderDown,
 	FolderPlus,
@@ -7,7 +10,9 @@ import {
 	Trash2,
 	Upload,
 } from "lucide-react";
+import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
 import { useFolderDownload } from "../../hooks/useFileDownload";
+import { opensInPlace, revealPath } from "../../lib/symlink";
 import type { Entry } from "../../types/contents";
 import MenuRow from "../common/MenuRow";
 import { Sheet } from "../ui";
@@ -30,6 +35,8 @@ interface Props {
 	onNewFile: () => void;
 	onNewFolder: () => void;
 	onRename: () => void;
+	/** Opens a link's target where it really is; see `revealPath`. */
+	onRevealTarget: (path: string) => void;
 	/**
 	 * Set when this entry is the file open in the editor, or a folder above it.
 	 * Renaming it would pull the path out from under a buffer being written to;
@@ -66,12 +73,21 @@ function FileEntryMenu({
 	onNewFile,
 	onNewFolder,
 	onRename,
+	onRevealTarget,
 	renameBlockedByEditor,
 	onDelete,
 	onDownloadError,
 }: Props) {
 	const isRoot = entry.path === "";
-	const isDirectory = entry.type === "dir";
+	// The folder rows add to the folder itself. A cycle is a folder already
+	// listed above it, which is where they belong.
+	const isDirectory = opensInPlace(entry);
+	const { link } = entry;
+	const revealTo = link ? revealPath(link) : null;
+	// The sheet stays up after a copy, so its row can say how it went; the
+	// target is in its description either way, to copy by hand when the
+	// browser has no clipboard (plain http on a LAN address).
+	const copyTarget = useCopyToClipboard();
 	// Lives with the sheet, so closing it any way — or a worktree switch, which
 	// closes it — cancels a download still being prepared.
 	const download = useFolderDownload({
@@ -110,6 +126,30 @@ function FileEntryMenu({
 								download.isDownloading ? "Preparing zip…" : undefined
 							}
 							onClick={download.toggle}
+						/>
+					</>
+				)}
+				{link && (
+					<>
+						{revealTo !== null && (
+							<MenuRow
+								icon={Crosshair}
+								label="Reveal target"
+								description={revealTo}
+								onClick={() => onRevealTarget(revealTo)}
+							/>
+						)}
+						<MenuRow
+							icon={copyTarget.state === "copied" ? Check : Copy}
+							label={
+								copyTarget.state === "copied"
+									? "Copied link target"
+									: copyTarget.state === "failed"
+										? "Couldn't copy link target"
+										: "Copy link target"
+							}
+							description={link.target}
+							onClick={() => void copyTarget.copy(link.target)}
 						/>
 					</>
 				)}

@@ -2,6 +2,8 @@ package watch
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"path"
@@ -10,6 +12,7 @@ import (
 	"time"
 
 	"github.com/fsnotify/fsnotify"
+	"github.com/pockode/server/contents"
 )
 
 const debounceInterval = 100 * time.Millisecond
@@ -24,6 +27,9 @@ type FSWatcher struct {
 	pathToIDs    map[string][]string // path -> subscription IDs
 	idToPath     map[string]string   // subscription ID -> path
 	pathRefCount map[string]int
+	// polled holds the directories watched by their modification time, by
+	// subscription key. Guarded by pathMu.
+	polled map[string]*polledDir
 
 	timerMu  sync.Mutex
 	timerMap map[string]*time.Timer
@@ -36,6 +42,7 @@ func NewFSWatcher(workDir string) *FSWatcher {
 		pathToIDs:    make(map[string][]string),
 		idToPath:     make(map[string]string),
 		pathRefCount: make(map[string]int),
+		polled:       make(map[string]*polledDir),
 		timerMap:     make(map[string]*time.Timer),
 	}
 }
@@ -48,6 +55,7 @@ func (w *FSWatcher) Start() error {
 	w.watcher = watcher
 
 	w.Go(w.eventLoop)
+	w.Go(w.pollLoop)
 	slog.Info("FSWatcher started", "workDir", w.workDir)
 	return nil
 }
@@ -82,11 +90,19 @@ func (w *FSWatcher) Subscribe(id, subPath string, notifier Notifier) error {
 		return err
 	}
 
-	fullPath := filepath.Join(w.workDir, subPath)
-	if _, err := os.Stat(fullPath); err != nil {
-		w.RemoveSubscription(id)
-		return err
+	// Followed only inside the work directory, like file.get: otherwise a
+	// client could learn when files outside change. The error names no host
+	// path, since it goes back to the client as is.
+	res, err := contents.Resolve(w.workDir, subPath)
+	if err == nil && res.Link != nil && !res.Link.Followable() {
+		err = contents.LinkRefusal(subPath, res.Link.State)
 	}
+	if err != nil {
+		w.RemoveSubscription(id)
+		slog.Debug("refused to watch path", "path", subPath, "error", err)
+		return errors.New(contents.PublicMessage(err))
+	}
+	fullPath := filepath.Join(w.workDir, subPath)
 
 	key := subscriptionKey(subPath)
 
@@ -94,12 +110,28 @@ func (w *FSWatcher) Subscribe(id, subPath string, notifier Notifier) error {
 
 	// Start fsnotify watch if first subscriber for this path
 	if w.pathRefCount[key] == 0 {
+		poll := pollDirs && res.Info.IsDir()
 		if err := w.watcher.Add(fullPath); err != nil {
-			w.pathMu.Unlock()
-			w.RemoveSubscription(id)
-			return err
+			// A directory is still watched, by polling, when fsnotify cannot
+			// take it: on kqueue, which opens every entry, one link in it that
+			// loops fails the whole Add, and a directory must not stop being
+			// watched over what one entry points at (docs/symlinks.md).
+			if !res.Info.IsDir() {
+				w.pathMu.Unlock()
+				w.RemoveSubscription(id)
+				slog.Warn("failed to watch path", "path", key, "error", err)
+				return fmt.Errorf("cannot watch %s for changes", contents.DisplayDir(key))
+			}
+			_ = w.watcher.Remove(fullPath) // what a failed Add left behind
+			slog.Warn("watching directory by polling instead", "path", key, "error", err)
+			poll = true
 		}
-		slog.Debug("started watching path", "path", key)
+		if poll {
+			dir := &polledDir{real: res.Real}
+			dir.modTime = w.modTime(dir.real)
+			w.polled[key] = dir
+		}
+		slog.Debug("started watching path", "path", key, "polled", poll)
 	}
 
 	w.pathToIDs[key] = append(w.pathToIDs[key], id)
@@ -142,6 +174,7 @@ func (w *FSWatcher) removePathMapping(id, key string) {
 		fullPath := filepath.Join(w.workDir, key)
 		w.watcher.Remove(fullPath)
 		delete(w.pathRefCount, key)
+		delete(w.polled, key)
 		slog.Debug("stopped watching path", "path", key)
 	}
 }
@@ -175,6 +208,74 @@ func (w *FSWatcher) eventLoop() {
 			slog.Error("fsnotify error", "error", err)
 		}
 	}
+}
+
+// pollInterval is how often a polled directory is looked at: about what a
+// person notices as "the tree did not update", at the cost of one stat per
+// polled directory.
+const pollInterval = time.Second
+
+// pollLoop notifies the subscribers of a polled directory when its
+// modification time changes, which creating, removing or renaming an entry
+// does on every platform.
+func (w *FSWatcher) pollLoop() {
+	ticker := time.NewTicker(pollInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-w.Context().Done():
+			return
+		case <-ticker.C:
+		}
+
+		w.pathMu.RLock()
+		dirs := make(map[string]string, len(w.polled))
+		for key, dir := range w.polled {
+			dirs[key] = dir.real
+		}
+		w.pathMu.RUnlock()
+
+		for key, real := range dirs {
+			current := w.modTime(real)
+			w.pathMu.Lock()
+			dir, ok := w.polled[key]
+			changed := ok && !dir.modTime.Equal(current)
+			if changed {
+				dir.modTime = current
+			}
+			w.pathMu.Unlock()
+			if changed {
+				w.notifyPath(key)
+			}
+		}
+	}
+}
+
+// polledDir is a directory watched by its modification time.
+type polledDir struct {
+	// real is where the subscribed path resolved inside the work directory
+	// when it was subscribed (contents.Resolution.Real): it has no link in
+	// it, so polling never follows one — a directory that later becomes a
+	// link out is not looked through.
+	real    string
+	modTime time.Time
+}
+
+// modTime is the modification time of real, beneath the work directory. It is
+// the zero time for a path that cannot be stat'ed, so that its disappearing,
+// and coming back, both count as a change.
+func (w *FSWatcher) modTime(real string) time.Time {
+	// Lstat, since real holds no link — except the work directory itself,
+	// which may be reached through one of the user's own.
+	stat := os.Lstat
+	if real == "." {
+		stat = os.Stat
+	}
+	info, err := stat(filepath.Join(w.workDir, real))
+	if err != nil {
+		return time.Time{}
+	}
+	return info.ModTime()
 }
 
 func (w *FSWatcher) handleEvent(event fsnotify.Event) {

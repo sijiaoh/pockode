@@ -88,10 +88,11 @@ func (h *rpcMethodHandler) readAttachment(ctx context.Context, conn *jsonrpc2.Co
 			h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "attachment not found")
 			return nil, false
 		}
-		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInternalError, err.Error())
+		h.log.Error("failed to read attachment", "id", id, "error", err)
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInternalError, contents.PublicMessage(err))
 		return nil, false
 	}
-	if result.IsDir() {
+	if result.File == nil {
 		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "attachment not found")
 		return nil, false
 	}

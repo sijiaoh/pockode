@@ -806,3 +806,74 @@ func initGitRepo(t *testing.T, dir string, add ...string) {
 		}
 	}
 }
+
+// Name search lists a link by its own name, classified as the tree does, and
+// never descends into one; a scope through a link out is refused rather than
+// walked.
+func TestSearchLinks(t *testing.T) {
+	workDir := t.TempDir()
+	outside := t.TempDir()
+	writeTree(t, workDir, map[string]string{"skills/real.md": "needle\n"})
+	writeTree(t, outside, map[string]string{"needle.md": "needle\n"})
+	symlinktest.Make(t, "skills", filepath.Join(workDir, "needle-link"))
+	symlinktest.Make(t, outside, filepath.Join(workDir, "odir"))
+
+	result, err := Search(context.Background(), workDir, Options{Query: "needle", Mode: ModeName})
+	if err != nil {
+		t.Fatalf("Search failed: %v", err)
+	}
+	var found bool
+	for _, m := range result.Matches {
+		if strings.HasPrefix(m.Path, "odir/") || strings.HasPrefix(m.Path, "needle-link/") {
+			t.Errorf("descended into a link: %s", m.Path)
+		}
+		if m.Path == "needle-link" {
+			found = true
+			if m.Link == nil || m.Link.State != contents.LinkOK {
+				t.Errorf("needle-link: link = %+v, want ok", m.Link)
+			}
+			if m.Type != contents.TypeDir {
+				t.Errorf("needle-link: type = %q, want dir", m.Type)
+			}
+		}
+	}
+	if !found {
+		t.Errorf("the link is not listed: %v", matchedPaths(result.Matches))
+	}
+
+	for _, mode := range []Mode{ModeName, ModeContent} {
+		_, err := Search(context.Background(), workDir, Options{Query: "needle", Mode: mode, Path: "odir"})
+		if !errors.Is(err, contents.ErrInvalidPath) {
+			t.Errorf("%s search in odir: got %v, want ErrInvalidPath", mode, err)
+		}
+	}
+}
+
+// A path git still lists after its parent became a link out — the index keeps
+// `a/b.txt` once `a` is replaced by one — is neither read nor named.
+func TestSearchIgnoresListedPathsThroughALinkOut(t *testing.T) {
+	workDir := t.TempDir()
+	outside := t.TempDir()
+	writeTree(t, workDir, map[string]string{"a/b.txt": "inside\n"})
+	initGitRepo(t, workDir, "a/b.txt")
+	writeTree(t, outside, map[string]string{"b.txt": "needle\n"})
+	if err := os.RemoveAll(filepath.Join(workDir, "a")); err != nil {
+		t.Fatal(err)
+	}
+	symlinktest.Make(t, outside, filepath.Join(workDir, "a"))
+
+	for _, tc := range []struct {
+		mode  Mode
+		query string
+	}{{ModeContent, "needle"}, {ModeName, "b.txt"}} {
+		result, err := Search(context.Background(), workDir, Options{Query: tc.query, Mode: tc.mode, RespectGitignore: true})
+		if err != nil {
+			t.Fatalf("%s search failed: %v", tc.mode, err)
+		}
+		for _, m := range result.Matches {
+			if strings.HasPrefix(m.Path, "a/") {
+				t.Errorf("%s search reached outside through a: %s", tc.mode, m.Path)
+			}
+		}
+	}
+}

@@ -1,6 +1,6 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { findConflictRegions } from "../../lib/gitOperation";
 import type { FileContent } from "../../types/contents";
 import ConflictView, { type ConflictFile } from "./ConflictView";
@@ -90,6 +90,7 @@ function conflictFile(content: string): ConflictFile {
 		regions: findConflictRegions(content),
 		resolvable: false,
 		confirmResolvable: async () => false,
+		watch: { error: null, retry: () => {} },
 	};
 }
 
@@ -152,5 +153,25 @@ describe("ConflictView", () => {
 		expect(row("b")).toHaveClass("border-th-warning");
 		expect(row("b")).not.toHaveClass("bg-th-warning/15");
 		expect(row("a")).toHaveClass("border-transparent");
+	});
+
+	it("says when the file stopped being watched, and retries", async () => {
+		const user = userEvent.setup();
+		const retry = vi.fn();
+		render(
+			<ConflictView
+				path="notes.unknownext"
+				conflict="content"
+				file={{
+					...conflictFile(markedText()),
+					watch: { error: new Error("watch failed"), retry },
+				}}
+				wrap={false}
+				onOpenFile={() => {}}
+			/>,
+		);
+		expect(screen.getByText("Not updating: watch failed")).toBeInTheDocument();
+		await user.click(screen.getByRole("button", { name: "Retry" }));
+		expect(retry).toHaveBeenCalled();
 	});
 });

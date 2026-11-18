@@ -1,5 +1,6 @@
 import { createPatch } from "diff";
 import { type CodexChangeView, parseCodexChanges } from "./codexChanges";
+import { drawablePatch } from "./drawablePatch";
 import { outputLineCount } from "./textLines";
 
 export interface EditInput {
@@ -94,6 +95,14 @@ export function proposedChange(
 	return change;
 }
 
+/**
+ * An edit whose two strings are the same has no hunk, and nothing to show:
+ * it is left out rather than handed to the viewer.
+ */
+function drawablePatches(patches: string[]): string[] {
+	return patches.flatMap((patch) => drawablePatch(patch) ?? []);
+}
+
 function buildProposedChange(
 	toolName: string,
 	input: unknown,
@@ -104,9 +113,9 @@ function buildProposedChange(
 				return {
 					kind: "edit",
 					input,
-					patches: [
+					patches: drawablePatches([
 						createPatch(input.file_path, input.old_string, input.new_string),
-					],
+					]),
 				};
 			}
 			const changes = parseCodexChanges(input);
@@ -117,8 +126,10 @@ function buildProposedChange(
 				? {
 						kind: "multiEdit",
 						input,
-						patches: input.edits.map((edit) =>
-							createPatch(input.file_path, edit.old_string, edit.new_string),
+						patches: drawablePatches(
+							input.edits.map((edit) =>
+								createPatch(input.file_path, edit.old_string, edit.new_string),
+							),
 						),
 					}
 				: null;

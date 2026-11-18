@@ -9,6 +9,7 @@ import {
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { contentsQueryKey } from "../../hooks/useContents";
 import { apiUrl } from "../../lib/api";
 import { saveBlob, saveUrl } from "../../lib/fileDownload";
 import {
@@ -105,13 +106,21 @@ function imageContent(overrides: Partial<FileContent> = {}): FileContent {
 	};
 }
 
-function renderStrip(files: FileBlock[], onOpenFile?: (path: string) => void) {
+function renderStrip(
+	files: FileBlock[],
+	onOpenFile?: (path: string) => void,
+	/** What the Files viewer already left in the cache, by path. */
+	cached: Record<string, unknown> = {},
+) {
 	const queryClient = new QueryClient({
 		// Same as `FilesTab.test.tsx`: `useAttachmentContent` passes a `retry` of
 		// its own, so `retry: false` does not reach it. Only the ~7s of backoff
 		// between attempts is taken away, not the attempts themselves.
 		defaultOptions: { queries: { retry: false, retryDelay: 0 } },
 	});
+	for (const [path, data] of Object.entries(cached)) {
+		queryClient.setQueryData(contentsQueryKey(path), data);
+	}
 	const wrapper = ({ children }: { children: ReactNode }) => (
 		<QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
 	);
@@ -270,6 +279,58 @@ describe("AttachmentStrip", () => {
 		await screen.findByRole("img", {}, { timeout: 10_000 });
 		expect(getFile).toHaveBeenCalledWith("shots/a.png");
 		expect(fetchedUrls()[0].pathname).toBe("/api/files/download");
+	});
+
+	// The entry is shared with the Files viewer's, which stores a listing or a
+	// link page there as readily as a file (docs/symlinks.md#chat).
+	it("shows a named path that is a folder or a link as a chip that opens in Files", async () => {
+		const user = userEvent.setup();
+		const onOpenFile = vi.fn();
+		getFile.mockImplementation(async (path: string) =>
+			path === "shots"
+				? { type: "directory", entries: [] }
+				: {
+						type: "link",
+						link: {
+							name: "gone.png",
+							type: "link",
+							path,
+							link: { target: "missing.png", state: "broken" },
+						},
+					},
+		);
+
+		renderStrip(
+			[
+				{ mime: "image/png", path: "/work/shots" },
+				{ mime: "image/png", path: "/work/gone.png" },
+			],
+			onOpenFile,
+		);
+
+		expect(
+			await screen.findByText("Folder", {}, { timeout: 10_000 }),
+		).toBeInTheDocument();
+		expect(await screen.findByText("Link")).toBeInTheDocument();
+		await user.click(
+			screen.getByRole("button", { name: "Open shots in Files" }),
+		);
+		expect(onOpenFile).toHaveBeenCalledWith("shots");
+		await user.click(
+			screen.getByRole("button", { name: "Open gone.png in Files" }),
+		);
+		expect(onOpenFile).toHaveBeenCalledWith("gone.png");
+	});
+
+	it("reads a folder the Files viewer left in the shared cache as a folder", async () => {
+		renderStrip([{ mime: "image/png", path: "/work/skills" }], vi.fn(), {
+			skills: [{ name: "a.md", type: "file", path: "skills/a.md" }],
+		});
+
+		expect(
+			await screen.findByText("Folder", {}, { timeout: 10_000 }),
+		).toBeInTheDocument();
+		expect(getFile).not.toHaveBeenCalled();
 	});
 
 	// `unavailable` says the server could not keep the content, not that there

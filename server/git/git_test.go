@@ -470,6 +470,26 @@ func TestDiffWithContent_SymlinkIsItsTarget(t *testing.T) {
 	}
 }
 
+// An untracked link is written with git's mode for one, as git itself writes
+// it once the link is added: the client marks a diff as a symlink's by it.
+func TestDiffWithContent_UntrackedSymlinkMode(t *testing.T) {
+	dir, cleanup := setupTestRepo(t)
+	defer cleanup()
+
+	writeTestFile(t, dir, "real.txt", "real\n")
+	symlinktest.Make(t, "real.txt", filepath.Join(dir, "link"))
+
+	for path, want := range map[string]string{"link": "new file mode 120000\n", "real.txt": "new file mode 100644\n"} {
+		result, err := DiffWithContent(dir, path, DiffOptions{})
+		if err != nil {
+			t.Fatalf("DiffWithContent(%s) error: %v", path, err)
+		}
+		if !strings.Contains(result.Diff, want) {
+			t.Errorf("%s: diff %q lacks %q", path, result.Diff, want)
+		}
+	}
+}
+
 func TestDiffWithContent_AtLimitIsSent(t *testing.T) {
 	dir, cleanup := setupTestRepo(t)
 	defer cleanup()

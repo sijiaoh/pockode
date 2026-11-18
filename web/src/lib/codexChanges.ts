@@ -1,5 +1,6 @@
 import { createPatch } from "diff";
 import type { GitFileStatus } from "../types/git";
+import { drawablePatch } from "./drawablePatch";
 
 export interface CodexChangeView {
 	/** Key of the changes map: the path before the patch. Absolute. */
@@ -11,25 +12,10 @@ export interface CodexChangeView {
 	patch: string | null;
 	/**
 	 * Shown in place of the diff when patch is null. Each branch sets it for the
-	 * hunkless payloads it knows about, but withHunks also drops patches no
+	 * hunkless payloads it knows about, but drawablePatch also drops patches no
 	 * branch anticipated, so the renderer still needs its own fallback text.
 	 */
 	note?: string;
-}
-
-/**
- * @git-diff-view throws "Expected hunk header but reached end of diff" when a
- * patch has a file header but no hunk, and nothing in web/ catches it: the
- * router only installs a CatchBoundary when an errorComponent is configured,
- * and none is, so the throw unmounts the whole app. Captured payloads that
- * produce a hunkless patch (codex-cli 0.153.0): {"type":"add","content":""}
- * and a pure rename ({"type":"update","unified_diff":"","move_path":...}).
- *
- * `/^@@/m` cannot misfire: diff content lines always carry a ` `/`+`/`-`
- * prefix, so `@@` at line start is only ever a hunk header.
- */
-function withHunks(patch: string): string | null {
-	return /^@@/m.test(patch) ? patch : null;
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -42,6 +28,11 @@ function asString(value: unknown): string {
 	return typeof value === "string" ? value : "";
 }
 
+/**
+ * Payloads captured with a hunkless patch, which `drawablePatch` turns into
+ * a note (codex-cli 0.153.0): {"type":"add","content":""} and a pure rename
+ * ({"type":"update","unified_diff":"","move_path":...}).
+ */
 function toChangeView(path: string, change: Record<string, unknown>) {
 	const type = asString(change.type);
 
@@ -52,7 +43,7 @@ function toChangeView(path: string, change: Record<string, unknown>) {
 				path,
 				newPath: path,
 				status: "A" as const,
-				patch: withHunks(createPatch(path, "", content)),
+				patch: drawablePatch(createPatch(path, "", content)),
 				note: content === "" ? "New empty file" : undefined,
 			};
 		}
@@ -62,7 +53,7 @@ function toChangeView(path: string, change: Record<string, unknown>) {
 				path,
 				newPath: path,
 				status: "D" as const,
-				patch: withHunks(createPatch(path, content, "")),
+				patch: drawablePatch(createPatch(path, content, "")),
 				note: content === "" ? "Deleted empty file" : undefined,
 			};
 		}
@@ -75,7 +66,7 @@ function toChangeView(path: string, change: Record<string, unknown>) {
 				path,
 				newPath,
 				status: movePath ? ("R" as const) : ("M" as const),
-				patch: withHunks(`--- a/${path}\n+++ b/${newPath}\n${unifiedDiff}`),
+				patch: drawablePatch(`--- a/${path}\n+++ b/${newPath}\n${unifiedDiff}`),
 				note:
 					unifiedDiff.trim() === ""
 						? movePath

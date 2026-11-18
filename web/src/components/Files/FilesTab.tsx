@@ -34,6 +34,7 @@ import {
 	readFolderEntry,
 } from "../../lib/folderRead";
 import { isAlreadyExistsError } from "../../lib/rpc/file";
+import { deleteLinkMessage } from "../../lib/symlink";
 import {
 	MAX_FILES_PER_UPLOAD,
 	type NewUpload,
@@ -1105,6 +1106,10 @@ function FilesTab({
 					onNewFile={() => openNaming("file")}
 					onNewFolder={() => openNaming("dir")}
 					onRename={openRename}
+					onRevealTarget={(path) => {
+						setMenuTarget(null);
+						handleSelectFile(path);
+					}}
 					renameBlockedByEditor={
 						activeFileEdit &&
 						activeFilePath !== null &&
@@ -1148,12 +1153,18 @@ function FilesTab({
 			{deleteTarget && (
 				<ConfirmDialog
 					title={
-						deleteTarget.type === "dir" ? "Delete folder?" : "Delete file?"
+						deleteTarget.link
+							? "Delete link?"
+							: deleteTarget.type === "dir"
+								? "Delete folder?"
+								: "Delete file?"
 					}
 					message={
-						deleteTarget.type === "dir"
-							? `This will delete "${deleteTarget.path}" and everything inside it. This action cannot be undone.`
-							: `This will delete "${deleteTarget.path}". This action cannot be undone.`
+						deleteTarget.link
+							? deleteLinkMessage(deleteTarget)
+							: deleteTarget.type === "dir"
+								? `This will delete "${deleteTarget.path}" and everything inside it. This action cannot be undone.`
+								: `This will delete "${deleteTarget.path}". This action cannot be undone.`
 					}
 					confirmLabel="Delete"
 					variant="danger"

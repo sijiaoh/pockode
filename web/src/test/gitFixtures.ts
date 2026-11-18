@@ -1,6 +1,7 @@
 import type {
 	GitBranch,
 	GitBranches,
+	GitDiffData,
 	GitHead,
 	GitRemoteBranch,
 	GitSync,
@@ -76,3 +77,29 @@ export function makeBranches(
 		...overrides,
 	};
 }
+/**
+ * `git diff a.txt` after `rm a.txt && ln -s real.txt a.txt`, as git 2.x writes
+ * it: one path, two sections. The server passes it through as is.
+ */
+export const TYPE_CHANGE_DIFF: GitDiffData = {
+	diff: [
+		"diff --git a/a.txt b/a.txt",
+		"deleted file mode 100644",
+		"index d95f3ad..0000000",
+		"--- a/a.txt",
+		"+++ /dev/null",
+		"@@ -1 +0,0 @@",
+		"-content",
+		"diff --git a/a.txt b/a.txt",
+		"new file mode 120000",
+		"index 0000000..c9c61fe",
+		"--- /dev/null",
+		"+++ b/a.txt",
+		"@@ -0,0 +1 @@",
+		"+real.txt",
+		"\\ No newline at end of file",
+		"",
+	].join("\n"),
+	old_content: "content\n",
+	new_content: "real.txt",
+};

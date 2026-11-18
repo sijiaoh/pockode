@@ -225,13 +225,20 @@ func (w *WorkListWatcher) eventLoop() {
 Multiple subscriptions can watch the same path, but fsnotify should only monitor it once:
 
 ```go
-// server/watch/fs.go — Subscribe
+// server/watch/fs.go — Subscribe (simplified)
 key := subscriptionKey(subPath)
 if w.pathRefCount[key] == 0 {
+    poll := pollDirs && res.Info.IsDir()
     if err := w.watcher.Add(fullPath); err != nil {
-        w.pathMu.Unlock()
-        w.RemoveSubscription(id)
-        return err
+        if !res.Info.IsDir() {
+            w.pathMu.Unlock()
+            w.RemoveSubscription(id)
+            return fmt.Errorf("cannot watch %s for changes", contents.DisplayDir(key))
+        }
+        poll = true // a directory is still watched, by its mtime
+    }
+    if poll {
+        w.polled[key] = &polledDir{real: res.Real}
     }
 }
 w.pathToIDs[key] = append(w.pathToIDs[key], id)
@@ -246,6 +253,8 @@ w.pathRefCount[key]++
 2. **Consistent behavior**: All subscribers to the same path receive identical notifications.
 
 3. **Clean teardown**: Unsubscribe decrements the count; the watch is only removed when the last subscriber leaves.
+
+A directory is polled beside fsnotify on kqueue, and instead of it wherever fsnotify cannot add it, because what one entry points at must not stop the directory's changes being reported ([symlinks.md](../symlinks.md#live-updates-fs-watch)). The poll shares the refcount: it starts with the first subscriber and stops with the last.
 
 Keys go through `subscriptionKey` (`filepath.ToSlash`) because the two sides of the map have different origins: subscribers name paths with `/`, as the rest of the API does, while filesystem events arrive with the platform's separator. On Windows the un-normalized spellings of `src/main.go` are two distinct keys, so every subscription below the work directory root would go unnotified — silently, with the client showing stale content.
 

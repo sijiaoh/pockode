@@ -1,4 +1,25 @@
-export type EntryType = "file" | "dir";
+/**
+ * `link` is a symlink that cannot be followed (`Link.state` says why). A link
+ * that can be followed has its target's type, and `link` beside it.
+ */
+export type EntryType = "file" | "dir" | "link";
+
+/** What following a symlink leads to; the server decides (docs/symlinks.md). */
+export type LinkState =
+	| "ok"
+	| "cycle"
+	| "broken"
+	| "loop"
+	| "outside"
+	| "unsupported";
+
+export interface Link {
+	/** The link's own content, verbatim; sent even for `outside`. */
+	target: string;
+	state: LinkState;
+	/** Project-relative real path, only for `ok` and `cycle`; may be `""`. */
+	resolved?: string;
+}
 /**
  * `none` means the server sent no content; `omitted` says why. `http` means
  * the content is media — a raster image, audio or video — whose bytes are read
@@ -17,6 +38,17 @@ export interface Entry {
 	name: string;
 	type: EntryType;
 	path: string;
+	/** Set on every symlink and on nothing else. */
+	link?: Link;
+}
+
+/**
+ * What `file.get` answers for a symlink that cannot be followed: the link
+ * itself, with no content. An answer, not an error.
+ */
+export interface LinkResult extends Entry {
+	type: "link";
+	link: Link;
 }
 
 export interface FileContent {
@@ -32,6 +64,8 @@ export interface FileContent {
 	omitted?: OmitReason;
 	/** Size ceiling that kept the content out; only sent with `too_large`. */
 	limit?: number;
+	/** Set when the path asked for is a symlink followed to this file. */
+	link?: Link;
 }
 
 /**
@@ -61,10 +95,16 @@ export type ContentOrigin =
  */
 export type TreeOrigin = Exclude<ContentOrigin, { kind: "attachment" }>;
 
-export type ContentsResponse = Entry[] | FileContent;
+export type ContentsResponse = Entry[] | FileContent | LinkResult;
 
 export function isFileContent(
 	response: ContentsResponse,
 ): response is FileContent {
 	return !Array.isArray(response) && response.type === "file";
+}
+
+export function isLinkResult(
+	response: ContentsResponse,
+): response is LinkResult {
+	return !Array.isArray(response) && response.type === "link";
 }
