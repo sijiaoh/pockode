@@ -1174,6 +1174,12 @@ for a state the user can change — the profile mid-turn in sessions
 `data.sessions` names, the CLI signing in or updating — with
 `data.reason`; the profile is left as it was
 ([cli-profiles.md](cli-profiles.md#removing-a-profile)).
+`-32015` (`rpc.CodeFileSearchSuperseded`) answers a `file.search` that a later
+one on the same connection and worktree stopped. It is not a refusal to show:
+the client asked a newer question and drops this reply
+([file.md](../file.md#operations)). Which of two requests is later cannot come
+from when their handlers run, so `ws.Connections`' handler numbers each request
+on the connection's read loop, before its goroutine starts (`requestArrival`).
 
 A server's error message is therefore text to put in front of a user, never a
 value to branch on — it embeds an arbitrary error string, and its fixed half is

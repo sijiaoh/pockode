@@ -27,6 +27,7 @@ import (
 	"github.com/pockode/server/password"
 	"github.com/pockode/server/rpc"
 	"github.com/pockode/server/schedule"
+	"github.com/pockode/server/search"
 	"github.com/pockode/server/session"
 	"github.com/pockode/server/settings"
 	"github.com/pockode/server/watch"
@@ -92,7 +93,10 @@ type RPCHandler struct {
 	cliProfileWatcher     *watch.CLIProfileWatcher
 	// profileReleaser is worktreeManager everywhere but in tests, which need
 	// a session mid-turn on a profile without driving one there.
-	profileReleaser  profileReleaser
+	profileReleaser profileReleaser
+	// searchFiles is search.Search everywhere but in tests, which need a
+	// search that is still running when the next one arrives.
+	searchFiles      func(ctx context.Context, workDir string, opts search.Options) (search.Result, error)
 	cliUpdate        *cliupdate.Service
 	cliUpdateWatcher *watch.CLIUpdateWatcher
 	cloudLink        *CloudLink
@@ -180,6 +184,7 @@ func NewRPCHandler(password string, passwordGuard *authguard.Guard, sessions Ses
 		cliProfiles:           cliProfiles,
 		cliProfileWatcher:     cliProfileWatcher,
 		profileReleaser:       worktreeManager,
+		searchFiles:           search.Search,
 		cliUpdate:             cliUpdate,
 		cliUpdateWatcher:      cliUpdateWatcher,
 		cloudLink:             NewCloudLink(cloudLink),
@@ -334,6 +339,8 @@ type rpcConnState struct {
 	closed        bool               // set by cleanup; guards against binds racing disconnect
 	// drafts are the commit message drafts this connection is waiting on.
 	drafts commitDrafts
+	// searches are the file searches running on this connection.
+	searches fileSearches
 	// ready is closed by setConn. Handlers must wait on it before touching the
 	// state: a handler that runs first would subscribe the still-nil notifier
 	// to the worktree — an entry cleanup can never find (it unsubscribes the

@@ -137,7 +137,17 @@ export interface FileActions {
 	 * to its path unchanged; see `fileMoveRefusedReason` for the refusals.
 	 */
 	moveFile: (path: string, destination: string) => Promise<string>;
-	searchFiles: (params: FileSearchParams) => Promise<FileSearchResult>;
+	/**
+	 * A search still running when the next one is sent is stopped by the
+	 * server, which answers it with -32015 (server/rpc/types.go's
+	 * CodeFileSearchSuperseded). Aborting `signal` is how the caller lets go of
+	 * a search it has moved past: the promise rejects with the signal's reason
+	 * at once, and that answer, when it comes, is never seen.
+	 */
+	searchFiles: (
+		params: FileSearchParams,
+		signal: AbortSignal,
+	) => Promise<FileSearchResult>;
 }
 
 export function createFileActions(
@@ -189,8 +199,25 @@ export function createFileActions(
 		},
 		searchFiles: async (
 			params: FileSearchParams,
+			signal: AbortSignal,
 		): Promise<FileSearchResult> => {
-			return requireClient().request("file.search", params);
+			signal.throwIfAborted();
+			const reply = requireClient().request("file.search", params);
+			return new Promise((resolve, reject) => {
+				const abandon = () => reject(signal.reason);
+				signal.addEventListener("abort", abandon, { once: true });
+				const settle = () => signal.removeEventListener("abort", abandon);
+				reply.then(
+					(value: FileSearchResult) => {
+						settle();
+						resolve(value);
+					},
+					(error: unknown) => {
+						settle();
+						reject(error);
+					},
+				);
+			});
 		},
 	};
 }

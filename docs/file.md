@@ -354,6 +354,14 @@ server makes the same substitution before it counts (`toClientText` in
 `truncated` reports that limits or the timeout cut the search short, so more
 matches may exist.
 
+The newest search wins. A `file.search` still running when another arrives on
+the same connection for the same worktree is stopped — its `git ls-files` is
+killed and the scan ends — and answered with `-32015`
+(`rpc.CodeFileSearchSuperseded`), never with the partial result it had reached.
+"Newer" is the order the server read the requests in, not the order their
+handlers happen to run, so an older request handled late is refused before it
+starts. Nothing failed, so a client drops this reply rather than showing it.
+
 Bad input — a blank or oversized `query`, an unknown `mode`, a `path` that
 escapes the work directory or doesn't exist — is rejected with `InvalidParams`.
 A missing `path` is reported the same way whichever listing strategy runs, so
@@ -1138,7 +1146,10 @@ next to the query that produced it, so a message naming the query ("No matches
 for …") describes the rows actually on screen instead of the query still in
 flight — a content search can take seconds. Requests are not retried:
 sitting through three attempts before learning a search failed is worse than
-seeing the error and a `Retry` button. Nothing is searched while the tab is
+seeing the error and a `Retry` button. A search typed past is let go
+rather than waited for: react-query aborts it, so the server's `-32015` for it
+is never seen and the query falls back instead of caching that refusal as an
+error. Nothing is searched while the tab is
 hidden, so an invalidation can't quietly re-run a content scan nobody is
 looking at.
 
