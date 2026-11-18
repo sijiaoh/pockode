@@ -2,9 +2,12 @@ package watch
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/fsnotify/fsnotify"
@@ -82,6 +85,66 @@ func TestFSWatcher_NotifiesSubscribers(t *testing.T) {
 			}
 		})
 	}
+}
+
+// Coalescing is per subscription, not per changed path: a batch of different
+// files changing in an open directory is one re-read of it.
+func TestFSWatcher_BatchOfChangesNotifiesOnce(t *testing.T) {
+	workDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(workDir, "src"), 0755); err != nil {
+		t.Fatalf("MkdirAll() failed: %v", err)
+	}
+
+	// Not Start()ed: the event loop would hand real events to the debouncer
+	// from outside the bubble, and a timer the bubble owns must not be touched
+	// from there. Events are fed by hand from inside it instead, so the debounce
+	// timers count fake time. The fsnotify watcher is created outside, because
+	// its reader sits in a syscall, which synctest does not count as blocked.
+	w := NewFSWatcher(workDir)
+	fsw, err := fsnotify.NewWatcher()
+	if err != nil {
+		t.Fatalf("fsnotify.NewWatcher() failed: %v", err)
+	}
+	w.watcher = fsw
+	defer w.Stop()
+
+	dirSub, fileSub := &countingNotifier{}, &countingNotifier{}
+	if err := w.Subscribe("dir", "src", dirSub); err != nil {
+		t.Fatalf("Subscribe(src) failed: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workDir, "src", "file-0.ts"), []byte("x"), 0644); err != nil {
+		t.Fatalf("WriteFile() failed: %v", err)
+	}
+	if err := w.Subscribe("file", "src/file-0.ts", fileSub); err != nil {
+		t.Fatalf("Subscribe(src/file-0.ts) failed: %v", err)
+	}
+
+	synctest.Test(t, func(t *testing.T) {
+		for i := range 200 {
+			w.handleEvent(fsnotify.Event{
+				Name: filepath.Join(workDir, "src", fmt.Sprintf("file-%d.ts", i)),
+				Op:   fsnotify.Create,
+			})
+		}
+		time.Sleep(2 * debounceMaxWait)
+		synctest.Wait()
+	})
+
+	if n := dirSub.count.Load(); n != 1 {
+		t.Errorf("directory subscriber got %d notifications for one batch, want 1", n)
+	}
+	if n := fileSub.count.Load(); n != 1 {
+		t.Errorf("file subscriber got %d notifications, want 1", n)
+	}
+}
+
+type countingNotifier struct {
+	count atomic.Int32
+}
+
+func (n *countingNotifier) Notify(context.Context, Notification) error {
+	n.count.Add(1)
+	return nil
 }
 
 type recordingNotifier struct {

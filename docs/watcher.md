@@ -57,13 +57,13 @@ type Notification struct {
 
 | Strategy | Watchers | Mechanism |
 |----------|----------|-----------|
-| OS-level | FSWatcher | `fsnotify` library, 100ms debounce |
+| OS-level | FSWatcher | `fsnotify` library, per-subscription debounce (100ms quiet, 500ms cap) |
 | Polling | GitWatcher, GitDiffWatcher, WorktreeWatcher | 3s interval, state hash comparison |
 | Event-driven | SessionList, SessionDetail, ChatMessages, WorkList, WorkDetail, Settings, AgentRoleList, CLILogin, CLIUpdate, RemoteURL, CloudLink | Store `OnChangeListener` callbacks via async channels (CLILogin, CLIUpdate: `cliauth.LoginListener` / `cliupdate.Listener` marking a pending set; RemoteURL: the relay's `OnRemoteURLChange` waking it; CloudLink: `cloudlogin.Listener` waking it) |
 
 ### OS-Level: FSWatcher
 
-`watch/fs.go` — Watches file paths using `fsnotify`. Reference-counted: multiple subscriptions to the same path share one OS watch. Notifies both the changed path and its parent directory. Debounced at 100ms to coalesce rapid changes.
+`watch/fs.go` — Watches file paths using `fsnotify`. Reference-counted: multiple subscriptions to the same path share one OS watch. Notifies both the changed path and its parent directory. Debounced per subscription: 100ms of quiet, capped at 500ms (see [code/subscription-system.md](code/subscription-system.md#why-fswatcher-debounces-per-subscription-with-a-cap)).
 
 ### Polling-Based
 
@@ -149,6 +149,7 @@ Watchers start with the worktree and stop on cleanup. Worktrees are reference-co
 | `server/watch/base.go` | BaseWatcher, Subscription |
 | `server/watch/notifier.go` | Notifier interface, Notification struct |
 | `server/watch/fs.go` | FSWatcher (fsnotify) |
+| `server/watch/fs_debounce.go` | Per-key debounce with a max wait, used by FSWatcher |
 | `server/watch/git.go` | GitWatcher (polling) |
 | `server/watch/git_diff.go` | GitDiffWatcher (polling with content) |
 | `server/watch/session_list.go` | SessionListWatcher |
