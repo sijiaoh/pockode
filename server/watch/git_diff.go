@@ -27,6 +27,9 @@ type gitDiffSubscription struct {
 type GitDiffWatcher struct {
 	*BaseWatcher
 	workDir string
+	// newSnapshot reads the status a poll diffs every subscription against;
+	// a test swaps it to count the reads.
+	newSnapshot func(dir string) (*git.DiffSnapshot, error)
 
 	dataMu  sync.RWMutex
 	subData map[string]*gitDiffSubscription // subscription ID -> extra data
@@ -36,6 +39,7 @@ func NewGitDiffWatcher(workDir string) *GitDiffWatcher {
 	return &GitDiffWatcher{
 		BaseWatcher: NewBaseWatcher(),
 		workDir:     workDir,
+		newSnapshot: git.NewDiffSnapshot,
 		subData:     make(map[string]*gitDiffSubscription),
 	}
 }
@@ -112,15 +116,28 @@ func (w *GitDiffWatcher) pollLoop() {
 	}
 }
 
+// checkAll reads the repository's status once and diffs every subscription
+// against it: the status is the costly part of a diff in a large repository,
+// and it is the same for every file in one poll. A file that changes after the
+// status was read is diffed against a status a moment older than its content;
+// the next poll reads both afresh and reports it then.
 func (w *GitDiffWatcher) checkAll() {
 	subs := w.GetAllSubscriptions()
+	if len(subs) == 0 {
+		return
+	}
 
+	snapshot, err := w.newSnapshot(w.workDir)
+	if err != nil {
+		slog.Debug("git status failed", "error", err)
+		return
+	}
 	for _, sub := range subs {
-		w.checkOne(sub)
+		w.checkOne(sub, snapshot)
 	}
 }
 
-func (w *GitDiffWatcher) checkOne(sub *Subscription) {
+func (w *GitDiffWatcher) checkOne(sub *Subscription, snapshot *git.DiffSnapshot) {
 	w.dataMu.RLock()
 	data := w.subData[sub.ID]
 	if data == nil {
@@ -135,7 +152,7 @@ func (w *GitDiffWatcher) checkOne(sub *Subscription) {
 	w.dataMu.RUnlock()
 
 	opts := git.DiffOptions{Staged: staged, HideWhitespace: hideWhitespace}
-	result, err := git.DiffWithContent(w.workDir, path, opts)
+	result, err := snapshot.DiffWithContent(path, opts)
 	if err != nil {
 		slog.Debug("git diff failed", "path", path, "staged", staged, "error", err)
 		return
