@@ -13,7 +13,7 @@ import { gitChangesViewActions } from "../../lib/gitChangesViewStore";
 import { gitWriteActions, useGitWriteStore } from "../../lib/gitWriteStore";
 import { overlayToNavigation } from "../../lib/navigation";
 import { FRESH_VISIT_STATE } from "../../lib/scrollMemory";
-import { getDiffHighlighter } from "../../lib/shikiUtils";
+import { getDiffHighlighterFor } from "../../lib/shikiUtils";
 import type { GitDiffData, GitStatus } from "../../types/git";
 import DiffView from "./DiffView";
 
@@ -953,7 +953,7 @@ const diffOf = (at: number[], hunkIds: string[] | undefined): GitDiffData => ({
 // and only wrapped does it draw extend rows without a laid-out table.
 function withDiffLibrary() {
 	beforeAll(async () => {
-		await getDiffHighlighter();
+		await getDiffHighlighterFor("typescript");
 		vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockImplementation(
 			() =>
 				({

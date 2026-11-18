@@ -4,6 +4,7 @@ import react from "@vitejs/plugin-react";
 import { playwright } from "@vitest/browser-playwright";
 import { defineConfig } from "vitest/config";
 import { APP_HOST } from "./src/test/testServerHosts";
+import { diffHighlighterAlias } from "./vite.alias";
 import { BROWSER_TEST_FILES } from "./vitest.files";
 import { rawPages } from "./vitest.rawPages";
 
@@ -18,6 +19,7 @@ import { rawPages } from "./vitest.rawPages";
  * Safari, the platform this app is mostly used on.
  */
 export default defineConfig({
+	...diffHighlighterAlias,
 	// rawPages: a test-only `/api/raw` so workspace pages run under the server's
 	// real policy; it reads raw-contract.json, which TestRawPageContract checks
 	// against server/filetransfer. Never in vite.config.ts.

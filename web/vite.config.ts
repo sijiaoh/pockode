@@ -2,12 +2,14 @@ import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
 import compression from "vite-plugin-compression";
+import { diffHighlighterAlias } from "./vite.alias";
 
 const serverPort = process.env.SERVER_PORT || "8080";
 const webPort = Number(process.env.WEB_PORT) || 5173;
 
 // https://vite.dev/config/
 export default defineConfig({
+	...diffHighlighterAlias,
 	clearScreen: false,
 	define: {
 		__APP_VERSION__: JSON.stringify(process.env.VERSION || "dev"),

@@ -11,6 +11,18 @@ import { formatBytes } from "./bytes";
 export const HIGHLIGHT_LIMIT = 256 * 1024;
 
 /**
+ * `HIGHLIGHT_LIMIT` for text already in hand, measured in UTF-8 bytes as the
+ * server measures a file's size: a file is then plain or coloured alike in
+ * every view of it. Only text near the ceiling is encoded, since a UTF-16
+ * code unit is one to three bytes.
+ */
+export function exceedsHighlightLimit(text: string): boolean {
+	if (text.length > HIGHLIGHT_LIMIT) return true;
+	if (text.length * 3 <= HIGHLIGHT_LIMIT) return false;
+	return new TextEncoder().encode(text).length > HIGHLIGHT_LIMIT;
+}
+
+/**
  * The same idea for the editor, where the ceiling has to be far lower.
  *
  * `react-simple-code-editor` re-highlights the entire document on every

@@ -1,5 +1,4 @@
 import { type DiffFile, DiffModeEnum, DiffView } from "@git-diff-view/react";
-import type { getDiffViewHighlighter } from "@git-diff-view/shiki";
 import { useIsExpanded } from "@pockode/shared";
 import {
 	type ReactNode,
@@ -15,10 +14,14 @@ import type { LinePress, LineView } from "../../lib/diffRows";
 import {
 	CODE_FONT_SIZE_DESKTOP,
 	CODE_FONT_SIZE_MOBILE,
-	getDiffHighlighter,
+	type DiffLanguage,
+	getDiffHighlighterFor,
+	getDiffLanguageFromPath,
 	getIsDarkMode,
+	getLoadedDiffHighlighter,
 	subscribeToDarkMode,
 } from "../../lib/shikiUtils";
+import { exceedsHighlightLimit } from "../../utils/fileView";
 import { expandFromRowPress, labelCollapsedContext } from "./collapsedContext";
 import { attachLineGutter, markSelectedLines } from "./lineGutter";
 
@@ -57,6 +60,18 @@ interface DiffViewerProps {
 
 type HunkBarRows = Record<string, { data: ReactNode }>;
 
+/** The text of each side a patch shows, its context counted on both. */
+function sidesOfHunks(hunks: string[]): [string, string] {
+	const old: string[] = [];
+	const next: string[] = [];
+	for (const line of hunks.join("\n").split("\n")) {
+		const mark = line[0];
+		if (mark === "-" || mark === " ") old.push(line.slice(1));
+		if (mark === "+" || mark === " ") next.push(line.slice(1));
+	}
+	return [old.join("\n"), next.join("\n")];
+}
+
 export function DiffViewer({
 	fileName,
 	hunks,
@@ -70,29 +85,62 @@ export function DiffViewer({
 }: DiffViewerProps) {
 	const isDark = useSyncExternalStore(subscribeToDarkMode, getIsDarkMode);
 	const isExpanded = useIsExpanded();
-	const [highlighter, setHighlighter] = useState<Awaited<
-		ReturnType<typeof getDiffViewHighlighter>
-	> | null>(null);
 	const rootRef = useRef<HTMLDivElement>(null);
 	const viewRef = useRef<{ getDiffFileInstance: () => DiffFile }>(null);
 
+	const hunksKey = hunks.join("\0");
+	// The library tokenizes each side whole, so either side past the ceiling
+	// the rest of the app uses would freeze the page — a minified bundle is
+	// a handful of lines but megabytes of text. Without the sides, it builds
+	// them from the hunks.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: `hunksKey` stands for `hunks`
+	const plain = useMemo(() => {
+		const sides =
+			oldContent !== undefined || newContent !== undefined
+				? [oldContent ?? "", newContent ?? ""]
+				: sidesOfHunks(hunks);
+		return sides.some(exceedsHighlightLimit);
+	}, [oldContent, newContent, hunksKey]);
+
+	// Drawn only once the file's grammar is in: the library colours a file once,
+	// when it builds its model, so a diff drawn before would stay plain — and
+	// one rebuilt after would flash from plain to coloured. A plain diff needs
+	// neither highlighter nor grammar, so nothing is fetched for it.
+	const pathLanguage = plain ? undefined : getDiffLanguageFromPath(fileName);
+	const loadedNow = plain ? null : getLoadedDiffHighlighter(pathLanguage);
+	const [fetched, setFetched] = useState<
+		({ for: string | undefined } & DiffLanguage) | null
+	>(null);
+	const hasLoaded = loadedNow !== null;
 	useEffect(() => {
-		getDiffHighlighter().then(setHighlighter);
-	}, []);
+		if (plain || hasLoaded) return;
+		let current = true;
+		getDiffHighlighterFor(pathLanguage).then((result) => {
+			if (current) setFetched({ for: pathLanguage, ...result });
+		});
+		return () => {
+			current = false;
+		};
+	}, [plain, pathLanguage, hasLoaded]);
+	const ready = loadedNow ?? (fetched?.for === pathLanguage ? fetched : null);
+	const highlighter = ready?.highlighter ?? null;
+	const fileLang = ready?.language;
+	const drawn = plain || highlighter !== null;
 
 	// The library rebuilds its whole model whenever `data` is a new object —
 	// re-parsing a large file and dropping every expanded gap — so it must
 	// change only with the diff itself, not with wrap, theme or font size.
 	// Keyed on the hunks' text, since callers build the array in render.
-	const hunksKey = hunks.join("\0");
+	// The language is passed rather than left to the library, which takes it
+	// from the extension alone: `Dockerfile` would be a language of its own.
 	// biome-ignore lint/correctness/useExhaustiveDependencies: `hunksKey` stands for `hunks`
 	const data = useMemo(
 		() => ({
-			oldFile: { fileName, content: oldContent },
-			newFile: { fileName, content: newContent },
+			oldFile: { fileName, fileLang, content: oldContent },
+			newFile: { fileName, fileLang, content: newContent },
 			hunks,
 		}),
-		[fileName, oldContent, newContent, hunksKey],
+		[fileName, fileLang, oldContent, newContent, hunksKey],
 	);
 
 	// biome-ignore lint/correctness/useExhaustiveDependencies: `hunksKey` stands for `hunks`
@@ -134,17 +182,17 @@ export function DiffViewer({
 			observer.disconnect();
 			root.removeEventListener("click", expandFromRowPress);
 		};
-	}, [highlighter, data, split]);
+	}, [drawn, data, split]);
 
 	const linePress = useRef(onLinePress);
 	linePress.current = onLinePress;
 	const selectsLines = !!onLinePress;
-	// biome-ignore lint/correctness/useExhaustiveDependencies: the root is drawn once the highlighter is in
+	// biome-ignore lint/correctness/useExhaustiveDependencies: the root is drawn once it needs nothing more
 	useEffect(() => {
 		const root = rootRef.current;
 		if (!root || !selectsLines) return;
 		return attachLineGutter(root, (press) => linePress.current?.(press));
-	}, [highlighter, selectsLines]);
+	}, [drawn, selectsLines]);
 
 	// biome-ignore lint/correctness/useExhaustiveDependencies: each of these redraws the rows the marks are on
 	useEffect(() => {
@@ -155,9 +203,9 @@ export function DiffViewer({
 		const observer = new MutationObserver(mark);
 		observer.observe(root, { childList: true, subtree: true });
 		return () => observer.disconnect();
-	}, [highlighter, data, split, wrap, selectsLines, selectedLines]);
+	}, [drawn, data, split, wrap, selectsLines, selectedLines]);
 
-	if (!highlighter) {
+	if (!drawn) {
 		return <div className="p-2 text-th-text-muted">Loading...</div>;
 	}
 
@@ -170,11 +218,11 @@ export function DiffViewer({
 			<DiffView
 				ref={viewRef}
 				data={data}
-				registerHighlighter={highlighter}
+				registerHighlighter={highlighter ?? undefined}
 				diffViewMode={split ? DiffModeEnum.Split : DiffModeEnum.Unified}
 				diffViewWrap={wrap}
 				diffViewTheme={isDark ? "dark" : "light"}
-				diffViewHighlight
+				diffViewHighlight={!plain}
 				extendData={extendData}
 				renderExtendLine={extendData ? renderExtendLine : undefined}
 				diffViewFontSize={

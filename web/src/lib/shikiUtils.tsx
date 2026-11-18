@@ -19,12 +19,126 @@ import {
 	NUMBERED_CODE_CLASS,
 	WRAPPED_NUMBERED_CLASS,
 } from "./codeRows";
+import {
+	highlighter as hljsHighlighter,
+	hljsLanguageForExtension,
+	isHljsLanguage,
+	loadHljsLanguage,
+} from "./diffFallbackHighlighter";
 import { fileLineCount } from "./textLines";
 
 export const CODE_FONT_SIZE_MOBILE = 12;
 export const CODE_FONT_SIZE_DESKTOP = 13;
 
-const EXT_MAP: Record<string, string> = {};
+/**
+ * Extensions that name none of shiki's language ids or aliases. shiki keys its
+ * languages by name, so `rs` and `yml` resolve on their own but `h` and `hpp`
+ * do not. These are the extensions highlight.js knows that shiki's names miss,
+ * mapped to the shiki grammar for the same language: diffs used to fall back
+ * to highlight.js by extension, and a file it coloured must stay coloured.
+ * `m` is the one exception, Objective-C where highlight.js read Mercury.
+ */
+const EXTRA_EXTENSIONS: Record<string, string> = {
+	h: "c",
+	cc: "cpp",
+	cxx: "cpp",
+	hh: "cpp",
+	hpp: "cpp",
+	hxx: "cpp",
+	"h++": "cpp",
+	ino: "cpp",
+	m: "objective-c",
+	mm: "objective-cpp",
+	svg: "xml",
+	xsd: "xml",
+	plist: "xml",
+	xhtml: "xml",
+	rss: "xml",
+	atom: "xml",
+	xjb: "xml",
+	wsf: "xml",
+	ex: "elixir",
+	exs: "elixir",
+	pl: "perl",
+	pm: "perl",
+	gemspec: "ruby",
+	podspec: "ruby",
+	thor: "ruby",
+	irb: "ruby",
+	mk: "make",
+	mak: "make",
+	patch: "diff",
+	gradle: "groovy",
+	jsp: "java",
+	ml: "ocaml",
+	mli: "ocaml",
+	cr: "crystal",
+	feature: "gherkin",
+	pas: "pascal",
+	dpr: "pascal",
+	dfm: "pascal",
+	hx: "haxe",
+	scm: "scheme",
+	pp: "puppet",
+	sv: "system-verilog",
+	svh: "system-verilog",
+	vbs: "vb",
+	mkd: "markdown",
+	mkdown: "markdown",
+	cson: "coffee",
+	iced: "coffee",
+	as: "actionscript-3",
+	edn: "clojure",
+	tk: "tcl",
+	st: "smalltalk",
+	do: "stata",
+	ado: "stata",
+	gyp: "python",
+	pgsql: "sql",
+	postgres: "sql",
+	postgresql: "sql",
+	mma: "wolfram",
+	mathematica: "wolfram",
+	actionscript: "actionscript-3",
+	apacheconf: "apache",
+	osascript: "applescript",
+	arduino: "cpp",
+	delphi: "pascal",
+	django: "jinja",
+	dos: "bat",
+	fortran: "fortran-free-form",
+	golang: "go",
+	htmlbars: "handlebars",
+	https: "http",
+	hylang: "hy",
+	pluto: "lua",
+	nginxconf: "nginx",
+	nixos: "nix",
+	objectivec: "objective-c",
+	"obj-c": "objective-c",
+	"obj-c++": "objective-cpp",
+	"objective-c++": "objective-cpp",
+	pwsh: "powershell",
+	ipython: "python",
+	qt: "qml",
+	craftcms: "twig",
+	vbnet: "vb",
+	vbscript: "vb",
+};
+
+/** Files known by their whole name, which has no extension to go by. */
+const FILE_NAMES: Record<string, string> = {
+	dockerfile: "docker",
+	containerfile: "docker",
+	gemfile: "ruby",
+	rakefile: "ruby",
+	podfile: "ruby",
+	brewfile: "ruby",
+	vagrantfile: "ruby",
+	"cmakelists.txt": "cmake",
+};
+
+const EXT_MAP: Record<string, string> = { ...EXTRA_EXTENSIONS };
 for (const lang of bundledLanguagesInfo) {
 	EXT_MAP[lang.id] = lang.id;
 	if (lang.aliases) {
@@ -34,17 +148,33 @@ for (const lang of bundledLanguagesInfo) {
 	}
 }
 
+/**
+ * The shiki language a file is written in, or undefined for one shiki has no
+ * grammar for. The one place a path becomes a language: every view that
+ * colours a file — viewer, editor, diff, conflict — asks here, so a file reads
+ * the same in each. A diff asks through `getDiffLanguageFromPath`, which adds
+ * only the languages shiki has no grammar for.
+ */
 export function getLanguageFromPath(path: string): string | undefined {
+	const fileName = baseName(path);
+	const byName = FILE_NAMES[fileName.toLowerCase()];
+	if (byName) return byName;
+	if (fileName.startsWith(".env")) return "shellscript";
+
+	const ext = fileExtension(fileName);
+	return ext ? EXT_MAP[ext] : undefined;
+}
+
+/** A file name's extension, or the whole name when it has none. */
+function fileExtension(fileName: string): string | undefined {
+	return fileName.split(".").pop()?.toLowerCase();
+}
+
+function baseName(path: string): string {
 	// Callers pass both kinds of path: a tool result's native `file_path` (which
 	// is backslash-separated on Windows) and a slash-separated path from
 	// Pockode's own API. Splitting on either separator is correct for both.
-	const fileName = splitNativePath(path).pop() ?? "";
-
-	if (fileName.toLowerCase() === "dockerfile") return "docker";
-	if (fileName.startsWith(".env")) return "shellscript";
-
-	const ext = fileName.split(".").pop()?.toLowerCase();
-	return ext ? EXT_MAP[ext] : undefined;
+	return splitNativePath(path).pop() ?? "";
 }
 
 export function isMarkdownFile(path: string): boolean {
@@ -52,13 +182,159 @@ export function isMarkdownFile(path: string): boolean {
 	return ext === "md" || ext === "mdx";
 }
 
-let highlighterPromise: ReturnType<typeof getDiffViewHighlighter> | null = null;
+type ShikiDiffHighlighter = Awaited<ReturnType<typeof getDiffViewHighlighter>>;
 
-export function getDiffHighlighter() {
+/** What a diff is drawn with: shiki's adapter, or the highlight.js fallback. */
+export type DiffHighlighter = ShikiDiffHighlighter | typeof hljsHighlighter;
+
+/**
+ * What a diff is coloured as when there is no grammar for it: shiki's plain
+ * text, which it draws without a grammar at all.
+ */
+const DIFF_PLAIN_LANGUAGE = "txt";
+
+export type DiffLanguage = { highlighter: DiffHighlighter; language: string };
+
+/**
+ * The language a diff of `path` is coloured as: shiki's, as everywhere else,
+ * or for a language shiki has no grammar for, highlight.js's — diffs were
+ * coloured by highlight.js before shiki, and a file it coloured stays so.
+ */
+export function getDiffLanguageFromPath(path: string): string | undefined {
+	const shiki = getLanguageFromPath(path);
+	if (shiki) return shiki;
+	const ext = fileExtension(baseName(path));
+	return ext ? hljsLanguageForExtension(ext) : undefined;
+}
+
+let highlighterPromise: Promise<ShikiDiffHighlighter> | null = null;
+let readyHighlighter: ShikiDiffHighlighter | null = null;
+/** Grammars being fetched, so diffs opened together fetch each once. */
+const diffLanguageLoads = new Map<string, Promise<unknown>>();
+
+function getDiffHighlighter() {
 	if (!highlighterPromise) {
-		highlighterPromise = getDiffViewHighlighter();
+		const loading = getDiffViewHighlighter().then((adapter) => {
+			readyHighlighter = withPlainText(adapter);
+			return readyHighlighter;
+		});
+		// Not remembered when it fails, like a grammar: the next diff tries again.
+		loading.catch(() => {
+			if (highlighterPromise === loading) highlighterPromise = null;
+		});
+		highlighterPromise = loading;
 	}
 	return highlighterPromise;
+}
+
+/**
+ * The adapter, answering for plain text and never throwing. The library hands
+ * any language the adapter says it lacks to highlight.js — and the adapter's
+ * check throws for one shiki has not loaded, plain text included, since shiki
+ * keeps no grammar for it.
+ *
+ * Derived rather than wrapped in a Proxy: the adapter's members are
+ * non-configurable, which a Proxy may not report differently.
+ */
+function withPlainText(adapter: ShikiDiffHighlighter): ShikiDiffHighlighter {
+	return Object.create(adapter, {
+		hasRegisteredCurrentLang: {
+			value: (language: string) => {
+				if (language === DIFF_PLAIN_LANGUAGE) return true;
+				try {
+					return adapter.hasRegisteredCurrentLang(language);
+				} catch {
+					return false;
+				}
+			},
+		},
+	});
+}
+
+/**
+ * What `getDiffHighlighterFor` would answer, when it can be had without
+ * waiting: the highlighter is up and the grammar is in. Lets a diff in a
+ * language already seen draw at once, with no loading frame.
+ */
+export function getLoadedDiffHighlighter(
+	language: string | undefined,
+): DiffLanguage | null {
+	if (language && isHljsLanguage(language)) {
+		return hljsHighlighter.hasRegisteredCurrentLang(language)
+			? { highlighter: hljsHighlighter, language }
+			: null;
+	}
+	const highlighter = readyHighlighter;
+	if (!highlighter) return null;
+	if (!language) return { highlighter, language: DIFF_PLAIN_LANGUAGE };
+	return highlighter.hasRegisteredCurrentLang(language)
+		? { highlighter, language }
+		: null;
+}
+
+/**
+ * The highlighter for a diff in `language`, with its grammar loaded, and the
+ * language to colour the diff as: `language` itself, or plain text when there
+ * is none or its grammar fails to load. Never rejects: a diff that cannot be
+ * coloured is still shown. The adapter preloads only a few dozen grammars, so
+ * every other one is loaded here, once, on first use.
+ */
+export async function getDiffHighlighterFor(
+	language: string | undefined,
+): Promise<DiffLanguage> {
+	const loaded = getLoadedDiffHighlighter(language);
+	if (loaded) return loaded;
+	if (language && isHljsLanguage(language)) {
+		try {
+			await loadHljsLanguage(language);
+			return { highlighter: hljsHighlighter, language };
+		} catch (error) {
+			return plainText(`the ${language} grammar`, error);
+		}
+	}
+	let highlighter: ShikiDiffHighlighter;
+	try {
+		highlighter = await getDiffHighlighter();
+	} catch (error) {
+		return plainText("the highlighter", error);
+	}
+	if (!language) return { highlighter, language: DIFF_PLAIN_LANGUAGE };
+	try {
+		await loadShikiGrammar(highlighter, language);
+	} catch (error) {
+		return plainText(`the ${language} grammar`, error);
+	}
+	return (
+		getLoadedDiffHighlighter(language) ?? plainText(`the ${language} grammar`)
+	);
+}
+
+function plainText(what: string, error?: unknown): DiffLanguage {
+	console.error(`Diff: could not load ${what}; showing plain text`, error);
+	return {
+		// The fallback draws a language it has no grammar for as plain text, so
+		// it stands in when shiki itself could not be had.
+		highlighter: readyHighlighter ?? hljsHighlighter,
+		language: DIFF_PLAIN_LANGUAGE,
+	};
+}
+
+function loadShikiGrammar(highlighter: ShikiDiffHighlighter, language: string) {
+	let loading = diffLanguageLoads.get(language);
+	if (!loading) {
+		// Async so that a load which throws rather than rejects is caught too:
+		// an escaped error would leave the diff on its loading line forever.
+		// Not remembered once settled: a grammar is a chunk fetched over the
+		// network, and the next diff in this language may well get it.
+		loading = (async () =>
+			highlighter
+				.getHighlighterEngine()
+				?.loadLanguage(language as BundledLanguage))().finally(() =>
+			diffLanguageLoads.delete(language),
+		);
+		diffLanguageLoads.set(language, loading);
+	}
+	return loading;
 }
 
 export function subscribeToDarkMode(callback: () => void) {

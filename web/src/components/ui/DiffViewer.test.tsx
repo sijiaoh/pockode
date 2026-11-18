@@ -1,6 +1,16 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import {
+	afterAll,
+	beforeAll,
+	describe,
+	expect,
+	it,
+	onTestFinished,
+	vi,
+} from "vitest";
+import { getDiffHighlighterFor } from "../../lib/shikiUtils";
+import { HIGHLIGHT_LIMIT } from "../../utils/fileView";
 import { DiffViewer } from "./DiffViewer";
 
 // The library measures its line-number column on a canvas, which jsdom lacks.
@@ -368,5 +378,228 @@ describe("DiffViewer hunk bars", () => {
 
 		await waitFor(() => expect(bars(container)).toHaveLength(1));
 		expect(bars(container)[0].after).toContain(last);
+	});
+});
+
+describe("DiffViewer syntax colours", () => {
+	/** A one-line change in a file only the hunk is known of. */
+	function change(fileName: string, oldLine: string, newLine: string) {
+		return render(
+			<DiffViewer
+				fileName={fileName}
+				hunks={[
+					`--- a/${fileName}\n+++ b/${fileName}\n@@ -1,1 +1,1 @@\n-${oldLine}\n+${newLine}\n`,
+				]}
+			/>,
+		);
+	}
+
+	/** The colours the line's tokens are drawn in, as shiki writes them. */
+	function colours(container: HTMLElement, text: string): Set<string> {
+		const line = Array.from(
+			container.querySelectorAll<HTMLElement>(".diff-line-syntax-raw"),
+		).find((cell) => cell.textContent?.includes(text));
+		if (!line) throw new Error(`no line holding ${text}`);
+		return new Set(
+			Array.from(line.querySelectorAll<HTMLElement>("[data-start]"), (token) =>
+				token.style.getPropertyValue("--diff-view-light"),
+			).filter(Boolean),
+		);
+	}
+
+	// highlight.js marks its tokens with classes, shiki with colours: a diff
+	// coloured by classes went to the fallback, not to shiki. Plain text looks
+	// the same from either; which one draws it is held in shikiUtils.test.ts.
+	function highlightJsTokens(container: HTMLElement) {
+		return container.querySelectorAll("[class*='hljs']");
+	}
+
+	// Languages the adapter does not preload, which used to reach highlight.js,
+	// and a file named with no extension at all.
+	it.each([
+		["src/main.rs", "fn main() {}", "fn main() { let x = 1; }", "let x"],
+		["config.yaml", "name: a", "name: b # set", "# set"],
+		["Dockerfile", "FROM node:20", 'RUN echo "hi"', "RUN"],
+		["include/util.hpp", "int a;", "class A {};", "class"],
+	])("colours %s with shiki", async (fileName, oldLine, newLine, newText) => {
+		const { container } = change(fileName, oldLine, newLine);
+
+		await screen.findByText((_, el) =>
+			Boolean(
+				el?.matches(".diff-line-syntax-raw") &&
+					el.textContent?.includes(newText),
+			),
+		);
+		expect(colours(container, newText).size).toBeGreaterThan(1);
+		expect(highlightJsTokens(container)).toHaveLength(0);
+	});
+
+	// Languages shiki has no grammar for, which highlight.js still colours.
+	it.each([
+		["api/service.thrift", "struct A {}", "service S { void ping() }", "ping"],
+		["hotkeys.ahk", "a::b", '^j::Send, "hi" ; greet', "greet"],
+	])("colours %s with highlight.js", async (fileName, oldLine, newLine, newText) => {
+		const { container } = change(fileName, oldLine, newLine);
+
+		await screen.findByText((_, el) =>
+			Boolean(
+				el?.matches(".diff-line-syntax-raw") &&
+					el.textContent?.includes(newText),
+			),
+		);
+		const classes = new Set(
+			Array.from(highlightJsTokens(container), (token) => token.className),
+		);
+		expect(classes.size).toBeGreaterThan(1);
+	});
+
+	it("draws a diff in a language already loaded without waiting", async () => {
+		const first = change("src/a.rs", "fn a() {}", "fn b() {}");
+		await screen.findByText((_, el) =>
+			Boolean(
+				el?.matches(".diff-line-syntax-raw") &&
+					el.textContent?.includes("fn b"),
+			),
+		);
+		first.unmount();
+
+		const { container } = change("src/c.rs", "fn c() {}", "fn d() {}");
+
+		expect(screen.queryByText("Loading...")).toBeNull();
+		expect(colours(container, "fn d").size).toBeGreaterThan(1);
+	});
+
+	describe("past HIGHLIGHT_LIMIT", () => {
+		// Half the limit in characters but over it in UTF-8 bytes, as one long
+		// line: the shape of a minified bundle, few lines and a lot of text.
+		const long = `// ${"中".repeat(HIGHLIGHT_LIMIT / 2)}`;
+		const short = "// x";
+		const fileName = "src/main.zig";
+		const change = "@@ -1,1 +1,1 @@\n-fn a() {}\n+fn b() {}";
+
+		it.each([
+			["the old side", `fn a() {}\n${long}\n`, `fn b() {}\n${short}\n`, change],
+			["the new side", `fn a() {}\n${short}\n`, `fn b() {}\n${long}\n`, change],
+			[
+				"the hunks",
+				undefined,
+				undefined,
+				`${change.replace("1,1", "1,2").replace("+1,1", "+1,2")}\n ${long}`,
+			],
+		])("draws plain text when %s is over, loading no grammar", async (_, oldContent, newContent, hunk) => {
+			const { highlighter } = await getDiffHighlighterFor(undefined);
+			const engine = highlighter.getHighlighterEngine();
+			if (!engine || !("loadLanguage" in engine)) {
+				throw new Error("the adapter has no shiki engine");
+			}
+			const load = vi.spyOn(engine, "loadLanguage");
+			onTestFinished(() => load.mockRestore());
+
+			const { container } = render(
+				<DiffViewer
+					fileName={fileName}
+					hunks={[`--- a/${fileName}\n+++ b/${fileName}\n${hunk}\n`]}
+					oldContent={oldContent}
+					newContent={newContent}
+				/>,
+			);
+
+			expect(screen.queryByText("Loading...")).toBeNull();
+			// Highlighting off, the library draws the raw text, not syntax lines.
+			await screen.findByText((_, el) =>
+				Boolean(
+					el?.matches(".diff-line-content-raw") &&
+						el.textContent?.includes("fn b"),
+				),
+			);
+			expect(container.querySelector(".diff-line-syntax-raw")).toBeNull();
+			expect(highlightJsTokens(container)).toHaveLength(0);
+			expect(load).not.toHaveBeenCalled();
+		});
+
+		it("still colours the same diff once it is back under", async () => {
+			const { container } = render(
+				<DiffViewer
+					fileName={fileName}
+					hunks={[`--- a/${fileName}\n+++ b/${fileName}\n${change}\n`]}
+					oldContent={`fn a() {}\n${short}\n`}
+					newContent={`fn b() {}\n${short}\n`}
+				/>,
+			);
+
+			await screen.findByText((_, el) =>
+				Boolean(
+					el?.matches(".diff-line-syntax-raw") &&
+						el.textContent?.includes("fn b"),
+				),
+			);
+			expect(colours(container, "fn b").size).toBeGreaterThan(1);
+		});
+
+		// A patch holds both sides at once: one rewriting a file each of whose
+		// sides is under the limit is over it as a whole, and still coloured.
+		it("measures a patch's sides apart", async () => {
+			const half = `// ${"x".repeat(HIGHLIGHT_LIMIT * 0.6)}`;
+			const { container } = render(
+				<DiffViewer
+					fileName={fileName}
+					hunks={[
+						`--- a/${fileName}\n+++ b/${fileName}\n@@ -1,2 +1,2 @@\n-fn a() {}\n-${half}\n+fn b() {}\n+${half}y\n`,
+					]}
+				/>,
+			);
+
+			await screen.findByText((_, el) =>
+				Boolean(
+					el?.matches(".diff-line-syntax-raw") &&
+						el.textContent?.includes("fn b"),
+				),
+			);
+			expect(colours(container, "fn b").size).toBeGreaterThan(1);
+		});
+	});
+
+	it("shows a language shiki has no grammar for as plain text", async () => {
+		const { container } = change("notes.qqq", "if (a) {", "while (b) {");
+
+		await screen.findByText((_, el) =>
+			Boolean(
+				el?.matches(".diff-line-syntax-raw") &&
+					el.textContent?.includes("while"),
+			),
+		);
+		expect(colours(container, "while").size).toBe(0);
+		expect(highlightJsTokens(container)).toHaveLength(0);
+	});
+
+	it("shows plain text when the grammar fails to load", async () => {
+		const { highlighter } = await getDiffHighlighterFor(undefined);
+		const engine = highlighter.getHighlighterEngine();
+		if (!engine || !("loadLanguage" in engine)) {
+			throw new Error("the adapter has no shiki engine");
+		}
+		const load = vi
+			.spyOn(engine, "loadLanguage")
+			.mockRejectedValueOnce(new Error("chunk failed"));
+		const error = vi.spyOn(console, "error").mockImplementation(() => {});
+		onTestFinished(() => {
+			load.mockRestore();
+			error.mockRestore();
+		});
+
+		const { container } = change("init.lua", "local a = 1", "local b = 2");
+
+		await screen.findByText((_, el) =>
+			Boolean(
+				el?.matches(".diff-line-syntax-raw") &&
+					el.textContent?.includes("local b"),
+			),
+		);
+		expect(colours(container, "local b").size).toBe(0);
+		expect(highlightJsTokens(container)).toHaveLength(0);
+		expect(error).toHaveBeenCalledWith(
+			expect.stringContaining("lua"),
+			expect.any(Error),
+		);
 	});
 });
