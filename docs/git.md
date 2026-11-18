@@ -17,7 +17,7 @@ React SPA ──WebSocket──▶ Go Server ──exec──▶ git CLI
 | Layer | Path | Role |
 |-------|------|------|
 | RPC handlers | `server/ws/rpc_git.go` | `git.status`, `git.add`, `git.reset`, `git.hunk.stage`, `git.hunk.unstage`, `git.discard`, `git.commit`, `git.log`, `git.show`, `git.show.diff`, `git.show.file`, `git.branches`, `git.checkout`, `git.branch.create`, `git.branch.inspect`, `git.branch.delete`, `git.fetch`, `git.pull`, `git.push`, `git.abort`, and the `git.subscribe` / `git.diff.subscribe` pairs with their unsubscribes; `server/ws/rpc_git_draft.go` has `git.commit.draft` and `git.commit.draft.cancel` |
-| Git operations | `server/git/git.go` | Init, Status, Add, Reset, Diff, DiffWithContent, Show, ShowFileDiff |
+| Git operations | `server/git/git.go` | Init, Status, Add, Reset, Diff, DiffWithContent (and `DiffSnapshot`, its status read once for several diffs), Show, ShowFileDiff |
 | History | `server/git/history.go` | History (the `git.log` listing: scopes, paging, search, refs, unpushed) |
 | Historical file contents | `server/git/showfile.go` | ShowFile |
 | Branch operations | `server/git/branch.go`, `server/git/divergence.go`, `server/git/branchdelete.go` | Head, Branches (with each branch's standing against the default branch, counted in `divergence.go`), Checkout, CreateBranch; InspectBranch and DeleteBranch ([Deleting a branch](#deleting-a-branch)) |
@@ -52,7 +52,7 @@ None of this helps when a filename is not valid UTF-8 (e.g. latin-1 byte sequenc
 
 ## Serialising Writes
 
-A worktree never runs two git writes that touch the same thing. The eleven writes take one or both of that worktree's **two** locks (`server/git/lock.go`) — one for the index and working tree, one for refs — and every read (`Status`, `Log`, `Diff`, `DiffWithContent`, `Show`, `ShowFileDiff`, `ShowFile`, `Branches`, `Head`, `InspectBranch`) takes neither.
+A worktree never runs two git writes that touch the same thing. The eleven writes take one or both of that worktree's **two** locks (`server/git/lock.go`) — one for the index and working tree, one for refs — and every read (`Status`, `Log`, `Diff`, `DiffWithContent` and `NewDiffSnapshot`, `Show`, `ShowFileDiff`, `ShowFile`, `Branches`, `Head`, `InspectBranch`) takes neither.
 
 | Write | index | refs | What it touches |
 |-------|:-----:|:----:|-----------------|
@@ -125,7 +125,7 @@ It is also why `Add` and `Reset` take a whole request's paths in one call rather
 
 A submodule's own entry in the parent is left out of the lists, as it always was; its files are counted inside its nested `GitStatus`.
 
-**Three processes per repository, not one per file.** The status and the two numstats run in parallel; untracked files are read in-process, since git has no way to count them in one invocation. That read is what can grow with the tree — GitWatcher repeats it every poll — so it stops at a budget, and only regular files and symlinks are opened (a fifo would block the status). Internal status reads (`DiffWithContent`, `Discard`) skip the counts — only the client displays them.
+**Three processes per repository, not one per file.** The status and the two numstats run in parallel; untracked files are read in-process, since git has no way to count them in one invocation. That read is what can grow with the tree — GitWatcher repeats it every poll — so it stops at a budget, and only regular files and symlinks are opened (a fifo would block the status). Internal status reads (`NewDiffSnapshot`, behind every diff; `Discard`) skip the counts — only the client displays them.
 
 **GitWatcher fingerprints the whole `git.status` answer.** A file edited again stays ` M` in the porcelain while its counts move, so comparing porcelain alone would leave the client showing stale numbers until something else changed.
 
@@ -443,6 +443,8 @@ Two watchers deliver live updates via the subscription system. Both poll every 3
 
 - **GitWatcher** — Polls `git rev-parse HEAD` + the `git.status` answer (counts included, see [Status](#status)) and compares the result against the previous one. Subscribers receive `git.changed` notifications when it differs (e.g., after `git add`).
 - **GitDiffWatcher** — Recomputes the diff behind each `git.diff.subscribe` subscription and sends `git.diff.changed` to that subscriber when the result changes. Each notification carries the full result described in [Diffs](#diffs), not a delta.
+
+**GitDiffWatcher reads the status once per poll, not once per subscription.** Every diff starts by looking its file up in the repository's status — whether it is changed at all, untracked, or renamed from what — and that whole-repository `git status` (submodules included) is the costly part, the same for every file in one poll. So a poll reads it once as a `git.DiffSnapshot` and diffs each subscription against it; the blob reads and `git diff` still run per file. The price is a moment's skew: a file that changes after the status was read is diffed against a status slightly older than its content, and the next poll, reading both afresh, reports it. A status that fails skips the whole poll, as it would have failed every diff in it. `git.diff.subscribe`'s first answer, and any one-off `DiffWithContent`, still read a status of their own.
 
 ## Projects Without a Repository
 

@@ -785,18 +785,43 @@ func diffSides(path string, oldSide, newSide diffSide) (oldContent, newContent s
 // DiffResult).
 // Supports submodule paths (e.g., "submodule/path/to/file").
 func DiffWithContent(dir, path string, opts DiffOptions) (*DiffResult, error) {
-	submodules := getSubmodulePaths(dir)
+	snapshot, err := NewDiffSnapshot(dir)
+	if err != nil {
+		return nil, err
+	}
+	return snapshot.DiffWithContent(path, opts)
+}
 
+// DiffSnapshot is the repository-wide part of DiffWithContent — the submodule
+// paths and one status — read once, for a caller diffing several files against
+// the same moment (GitDiffWatcher's poll). Only the status is frozen: each
+// diff still reads the file's blobs and runs git diff when it is asked for.
+type DiffSnapshot struct {
+	dir        string
+	submodules []string
+	status     *GitStatus
+}
+
+// NewDiffSnapshot reads the submodule paths and the status of dir.
+func NewDiffSnapshot(dir string) (*DiffSnapshot, error) {
+	submodules := getSubmodulePaths(dir)
 	status, err := statusWithSubmodules(dir, submodules)
 	if err != nil {
 		return nil, err
 	}
+	return &DiffSnapshot{dir: dir, submodules: submodules, status: status}, nil
+}
+
+// DiffWithContent is the package's DiffWithContent, against the snapshot's
+// status.
+func (s *DiffSnapshot) DiffWithContent(path string, opts DiffOptions) (*DiffResult, error) {
+	status := s.status
 	file := status.file(path, opts.Staged)
 	if file == nil {
 		return &DiffResult{}, nil
 	}
 
-	actualDir, relativePath := resolveSubmodulePathWith(submodules, dir, path)
+	actualDir, relativePath := resolveSubmodulePathWith(s.submodules, s.dir, path)
 
 	var oldSide, newSide diffSide
 	if opts.Staged {
