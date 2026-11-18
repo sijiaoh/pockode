@@ -2,7 +2,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { useDiffSettingsStore } from "../../lib/diffSettingsStore";
-import { getDiffHighlighter } from "../../lib/shikiUtils";
+import { getDiffHighlighterFor } from "../../lib/shikiUtils";
 import type { FileChange, GitDiffData, GitShowResult } from "../../types/git";
 import CommitDiffView from "./CommitDiffView";
 
@@ -209,7 +209,7 @@ describe("CommitDiffView line selection", () => {
 	// The library measures its line-number column on a canvas, which jsdom
 	// lacks; and only wrapped does it draw extend rows without a laid-out table.
 	beforeAll(async () => {
-		await getDiffHighlighter();
+		await getDiffHighlighterFor("typescript");
 		vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockImplementation(
 			() =>
 				({

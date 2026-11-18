@@ -1254,7 +1254,7 @@ to it at all.
 
 | Ceiling | Value | Past it |
 |---------|-------|---------|
-| `HIGHLIGHT_LIMIT` | 256 KiB | Viewer shows plain text: no shiki, and no Markdown either, since a megabyte of `.md` builds just as unmanageable a DOM |
+| `HIGHLIGHT_LIMIT` | 256 KiB | Viewer shows plain text: no shiki, and no Markdown either, since a megabyte of `.md` builds just as unmanageable a DOM. A diff is drawn plain when either side — taken from its hunks when the sides are not given — is past it, in UTF-8 bytes like a file (`exceedsHighlightLimit`), and loads no grammar for it |
 | `EDITOR_HIGHLIGHT_LIMIT` | 32 KiB | Editor drops colours only; the file stays fully editable |
 
 The editor's is far lower because `react-simple-code-editor` re-highlights the
