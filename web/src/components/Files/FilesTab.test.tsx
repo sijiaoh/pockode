@@ -7,6 +7,7 @@ import {
 	waitFor,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { JSONRPCErrorException } from "json-rpc-2.0";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { contentsQueryKey } from "../../hooks/useContents";
@@ -418,6 +419,50 @@ describe("FilesTab search", () => {
 		fireEvent.click(screen.getByRole("button", { name: "Retry" }));
 		await settleSearch();
 
+		expect(
+			screen.getByRole("button", { name: "Open file: src/app.ts" }),
+		).toBeInTheDocument();
+	});
+
+	// The server stops a search when the next one arrives and refuses it
+	// (CodeFileSearchSuperseded); the search typed past has to be let go of,
+	// so that refusal is never shown — not now, nor on coming back to it.
+	it("lets go of a search typed past, so the server's refusal of it never shows", async () => {
+		let refuseFirst = (_error: unknown) => {};
+		let firstSignal: AbortSignal | undefined;
+		searchFiles.mockImplementation(
+			(params: SearchParams, signal: AbortSignal) => {
+				if (searchFiles.mock.calls.length === 1) {
+					firstSignal = signal;
+					return new Promise((_resolve, reject) => {
+						refuseFirst = reject;
+					});
+				}
+				return Promise.resolve(result([`src/${params.query}.ts`]));
+			},
+		);
+		renderFilesTab();
+
+		typeSearch("app");
+		await settleSearch();
+		typeSearch("apps");
+		await settleSearch();
+
+		expect(firstSignal?.aborted).toBe(true);
+		await act(async () => {
+			refuseFirst(
+				new JSONRPCErrorException("superseded by a newer file search", -32015),
+			);
+		});
+		expect(screen.queryByText("Search failed")).not.toBeInTheDocument();
+		expect(
+			screen.getByRole("button", { name: "Open file: src/apps.ts" }),
+		).toBeInTheDocument();
+
+		typeSearch("app");
+		await settleSearch();
+
+		expect(screen.queryByText("Search failed")).not.toBeInTheDocument();
 		expect(
 			screen.getByRole("button", { name: "Open file: src/app.ts" }),
 		).toBeInTheDocument();

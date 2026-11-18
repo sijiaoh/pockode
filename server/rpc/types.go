@@ -491,6 +491,13 @@ type FileSearchParams struct {
 	MaxResults       int   `json:"max_results"`
 }
 
+// CodeFileSearchSuperseded answers a file.search that a later file.search on
+// the same connection and worktree replaced: the newest search wins, and the
+// ones still running when it arrives are stopped, their git and scanning work
+// with them. Nothing failed — the client asked a newer question — so a client
+// drops this reply rather than reporting it.
+const CodeFileSearchSuperseded = -32015
+
 // Git namespace
 
 // Git diff watch (subscription for file-specific diff changes)

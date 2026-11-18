@@ -10,7 +10,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
-	"strings"
 )
 
 // maxFilesScanned bounds memory and wall time on large repositories. Hitting it
@@ -22,13 +21,13 @@ const maxFilesScanned = 50000
 // The second return value reports that the listing hit maxFilesScanned.
 func listFiles(ctx context.Context, workDir, scope string, respectGitignore bool) ([]string, bool, error) {
 	if respectGitignore {
-		if files, truncated, ok := gitListFiles(ctx, workDir, scope); ok {
+		if files, truncated, ok := gitListFiles(ctx, workDir, scope, maxFilesScanned); ok {
 			return files, truncated, nil
 		}
 		// Not a git repository (or git is unavailable): fall back to walking,
 		// which simply cannot honor gitignore.
 	}
-	return walkFiles(ctx, workDir, scope)
+	return walkFiles(ctx, workDir, scope, maxFilesScanned)
 }
 
 // gitListFiles lists tracked and untracked-but-not-ignored files. git is the
@@ -36,44 +35,34 @@ func listFiles(ctx context.Context, workDir, scope string, respectGitignore bool
 // rules (global excludes, nested .gitignore, .git/info/exclude), so it is
 // reused instead of reimplementing the matcher.
 // Returns ok=false when git cannot answer, so the caller can fall back.
-func gitListFiles(ctx context.Context, workDir, scope string) (files []string, truncated, ok bool) {
-	cmd := exec.CommandContext(ctx, "git", "ls-files", "-z", "--cached", "--others", "--exclude-standard")
-	cmd.Dir = workDir
-	out, err := cmd.Output()
-	if err != nil {
-		return nil, false, false
-	}
-
+// limit is a parameter, not maxFilesScanned itself, so tests can exceed it
+// without creating that many files.
+func gitListFiles(ctx context.Context, workDir, scope string, limit int) (files []string, truncated, ok bool) {
 	prefix := ""
 	if scope != "" {
 		prefix = scope + "/"
 	}
 
-	// Cut over the raw bytes rather than Split: a string is allocated only for
-	// the paths actually kept, instead of one per entry in the repository.
-	// (The output itself is still buffered whole; maxFilesScanned bounds what is
-	// retained, not what git prints.)
+	// Tracked files are listed in a call of their own, before the untracked
+	// ones, so that they are the ones kept when the limit is hit: an unignored
+	// dependency or build directory can hold far more than the limit, and a
+	// single --cached --others call prints untracked files first, which would
+	// push every tracked file out of the result.
 	// --cached and --others can report the same path for unmerged entries, so
-	// duplicates are dropped here.
+	// duplicates are dropped across both calls.
 	seen := make(map[string]struct{})
 	files = make([]string, 0, 256)
-	nul := []byte{0}
-	for rest := out; len(rest) > 0; {
-		var raw []byte
-		raw, rest, _ = bytes.Cut(rest, nul)
-		if len(raw) == 0 {
-			continue
+	for _, args := range [][]string{
+		{"ls-files", "-z", "--cached"},
+		{"ls-files", "-z", "--others", "--exclude-standard"},
+	} {
+		cmd := exec.CommandContext(ctx, "git", args...)
+		cmd.Dir = workDir
+		out, err := cmd.Output()
+		if err != nil {
+			return nil, false, false
 		}
-		p := string(raw)
-		if prefix != "" && p != scope && !strings.HasPrefix(p, prefix) {
-			continue
-		}
-		if _, dup := seen[p]; dup {
-			continue
-		}
-		seen[p] = struct{}{}
-		files = append(files, p)
-		if len(files) >= maxFilesScanned {
+		if collectGitPaths(out, scope, prefix, seen, &files, limit) {
 			truncated = true
 			break
 		}
@@ -83,8 +72,42 @@ func gitListFiles(ctx context.Context, workDir, scope string) (files []string, t
 	return files, truncated, true
 }
 
-// walkFiles assumes scope has already been validated by resolveScope.
-func walkFiles(ctx context.Context, workDir, scope string) ([]string, bool, error) {
+// collectGitPaths appends the NUL-separated paths in out that fall under scope
+// to files, and reports whether a path had to be dropped because files already
+// held limit — so a listing of exactly limit files is not reported truncated.
+// It cuts over the raw bytes rather than Split: a string is allocated only for
+// the paths actually kept, instead of one per entry in the repository. (The
+// output itself is still buffered whole; the limit bounds what is retained,
+// not what git prints.)
+func collectGitPaths(out []byte, scope, prefix string, seen map[string]struct{}, files *[]string, limit int) bool {
+	nul := []byte{0}
+	prefixBytes := []byte(prefix)
+	for rest := out; len(rest) > 0; {
+		var raw []byte
+		raw, rest, _ = bytes.Cut(rest, nul)
+		if len(raw) == 0 {
+			continue
+		}
+		if prefix != "" && string(raw) != scope && !bytes.HasPrefix(raw, prefixBytes) {
+			continue
+		}
+		// string(raw) inside the index expression is not allocated.
+		if _, dup := seen[string(raw)]; dup {
+			continue
+		}
+		if len(*files) >= limit {
+			return true
+		}
+		p := string(raw)
+		seen[p] = struct{}{}
+		*files = append(*files, p)
+	}
+	return false
+}
+
+// walkFiles assumes scope has already been validated by resolveScope. limit
+// is a parameter for the same reason as gitListFiles'.
+func walkFiles(ctx context.Context, workDir, scope string, limit int) ([]string, bool, error) {
 	root := workDir
 	if scope != "" {
 		root = filepath.Join(workDir, filepath.FromSlash(scope))
@@ -124,11 +147,13 @@ func walkFiles(ctx context.Context, workDir, scope string) ([]string, bool, erro
 		if relErr != nil {
 			return nil
 		}
-		files = append(files, filepath.ToSlash(rel))
-		if len(files) >= maxFilesScanned {
+		// Checked before appending, so that a walk of exactly limit files is
+		// not reported truncated, as with gitListFiles.
+		if len(files) >= limit {
 			truncated = true
 			return fs.SkipAll
 		}
+		files = append(files, filepath.ToSlash(rel))
 		return nil
 	})
 	sort.Strings(files)

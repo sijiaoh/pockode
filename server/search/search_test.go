@@ -652,6 +652,82 @@ func TestSearchGitignore(t *testing.T) {
 	}
 }
 
+// An unignored dependency directory can hold more files than the listing keeps;
+// filling the limit with it must not push the repository's own files out.
+func TestGitListFilesKeepsTrackedFilesOverLimit(t *testing.T) {
+	workDir := t.TempDir()
+	tracked := []string{"src/a.go", "src/b.go", "z.txt"}
+	tree := map[string]string{}
+	for _, p := range tracked {
+		tree[p] = "x\n"
+	}
+	writeTree(t, workDir, tree)
+	initGitRepo(t, workDir, tracked...)
+
+	untracked := map[string]string{}
+	for i := range 10 {
+		untracked[fmt.Sprintf("node_modules/pkg%d.js", i)] = "x\n"
+	}
+	writeTree(t, workDir, untracked)
+
+	const limit = 5
+	files, truncated, ok := gitListFiles(context.Background(), workDir, "", limit)
+	if !ok {
+		t.Fatal("gitListFiles reported git unavailable")
+	}
+	if !truncated {
+		t.Error("got truncated = false, want true")
+	}
+	if len(files) != limit {
+		t.Errorf("got %d files, want %d: %v", len(files), limit, files)
+	}
+	for _, p := range tracked {
+		if !slices.Contains(files, p) {
+			t.Errorf("got %v, want tracked %s kept", files, p)
+		}
+	}
+}
+
+// Filling the limit exactly drops nothing, so the listing is complete.
+func TestGitListFilesExactlyAtLimitIsNotTruncated(t *testing.T) {
+	workDir := t.TempDir()
+	writeTree(t, workDir, map[string]string{"a.txt": "x\n", "b.txt": "x\n"})
+	initGitRepo(t, workDir, "a.txt", "b.txt")
+
+	files, truncated, ok := gitListFiles(context.Background(), workDir, "", 2)
+	if !ok {
+		t.Fatal("gitListFiles reported git unavailable")
+	}
+	if truncated || len(files) != 2 {
+		t.Errorf("got %v, truncated = %v; want both files, not truncated", files, truncated)
+	}
+}
+
+// The walk fallback reports truncation the same way as the git listing: only
+// when a file was left out.
+func TestWalkFilesTruncatedOnlyWhenAFileIsLeftOut(t *testing.T) {
+	workDir := t.TempDir()
+	writeTree(t, workDir, map[string]string{"a.txt": "x\n", "b.txt": "x\n", "c.txt": "x\n"})
+
+	for _, tc := range []struct {
+		limit         int
+		wantFiles     int
+		wantTruncated bool
+	}{
+		{limit: 3, wantFiles: 3, wantTruncated: false},
+		{limit: 2, wantFiles: 2, wantTruncated: true},
+	} {
+		files, truncated, err := walkFiles(context.Background(), workDir, "", tc.limit)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(files) != tc.wantFiles || truncated != tc.wantTruncated {
+			t.Errorf("limit %d: got %v, truncated = %v; want %d files, truncated = %v",
+				tc.limit, files, truncated, tc.wantFiles, tc.wantTruncated)
+		}
+	}
+}
+
 // A search that ran out of time must never look like a complete one, or the
 // client would show "no more results" for a scan that never finished.
 func TestSearchCancelledReportsTruncated(t *testing.T) {
