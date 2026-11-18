@@ -973,10 +973,14 @@ content at a path never changes.
 
 ## Search behavior
 
-Candidate files come from `git ls-files -z --cached --others --exclude-standard`
-when `respect_gitignore` is set — git is the only implementation guaranteed to
-agree with the repository's own ignore rules (global excludes, nested
-`.gitignore`, `.git/info/exclude`). Otherwise (or when git can't answer) the
+Candidate files come from `git ls-files -z --cached`, then
+`git ls-files -z --others --exclude-standard`, when `respect_gitignore` is set —
+git is the only implementation guaranteed to agree with the repository's own
+ignore rules (global excludes, nested `.gitignore`, `.git/info/exclude`). The
+tracked files are asked for first, in a call of their own, so they are the ones
+kept when the listing limit is hit: one combined call prints the untracked
+files first, and an unignored dependency or build directory can fill the whole
+limit with them. Otherwise (or when git can't answer) the
 directory is walked, always skipping `.git` — both the directory and the
 gitdir-pointer *file* that a linked worktree or submodule has in its place,
 which is the shape Pockode itself runs in. The `-z` is not optional: without
@@ -1028,7 +1032,7 @@ Limits keep large repositories responsive, but they are not all reported the sam
 | Limit | Value | On hit |
 |-------|-------|--------|
 | Timeout | 10s | The files scanned so far, ranked; `truncated` |
-| Files listed | 50,000 | `truncated` |
+| Files listed | 50,000 | `truncated`, set only if a file was left out. When git lists them, tracked files are kept first |
 | Files returned | `max_results` | The best ones; `truncated` |
 | Matching lines per file | 20 | The best-scoring ones; `truncated` |
 | File size scanned | 1 MiB | File skipped, unreported |
