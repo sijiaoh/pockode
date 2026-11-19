@@ -415,7 +415,7 @@ func (u *folderUpload) storeFile(part *multipart.Part, rel string) *apiError {
 			// Non-blocking as well, for a fifo swapped in after the Lstat: the
 			// open then fails, or succeeds and is refused below, instead of
 			// waiting for a reader that never comes.
-			flags = os.O_WRONLY | os.O_CREATE | os.O_TRUNC | openNonBlock
+			flags = os.O_WRONLY | os.O_CREATE | os.O_TRUNC | contents.OpenNonBlock
 		}
 	}
 

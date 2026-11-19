@@ -30,6 +30,7 @@ vi.mock("@pockode/shared", async (importOriginal) => ({
 const getFile = vi.fn();
 const saveRawFile = vi.fn();
 const renameFile = vi.fn();
+const deleteFile = vi.fn();
 const navigate = vi.fn();
 // What the router's location says; a case moves it to stand for the reader
 // having navigated away.
@@ -48,7 +49,7 @@ vi.mock("../../lib/wsStore", () => {
 	// Built on each read: the factory is hoisted above the mocks it closes over.
 	const state = () => ({
 		status: "connected",
-		actions: { getFile, deleteFile: vi.fn(), renameFile },
+		actions: { getFile, deleteFile, renameFile },
 	});
 	return {
 		useWSStore: Object.assign(
@@ -67,8 +68,15 @@ vi.mock("@tanstack/react-router", () => ({
 	useRouter: () => ({ state: routerState }),
 }));
 
+const watch = vi.hoisted(() => ({
+	error: null as Error | null,
+	enabled: [] as (boolean | undefined)[],
+}));
 vi.mock("../../hooks/useFSWatch", () => ({
-	useFSWatch: () => {},
+	useFSWatch: ({ enabled }: { enabled?: boolean }) => {
+		watch.enabled.push(enabled);
+		return { error: watch.error, retry: () => {} };
+	},
 }));
 
 vi.mock("../../hooks/useRouteState", () => ({
@@ -955,6 +963,130 @@ describe("FileView", () => {
 
 			expect(await screen.findByText("permission denied")).toBeInTheDocument();
 			expect(navigate).not.toHaveBeenCalled();
+		});
+	});
+
+	describe("symlinks", () => {
+		/** Renders the viewer at `path` over whatever `file.get` answers there. */
+		function renderAt(path: string, answer: unknown) {
+			getFile.mockImplementation(async () => answer);
+			const queryClient = new QueryClient({
+				defaultOptions: { queries: { retry: false } },
+			});
+			render(
+				<QueryClientProvider client={queryClient}>
+					<FileView path={path} onBack={vi.fn()} />
+				</QueryClientProvider>,
+			);
+		}
+
+		afterEach(() => {
+			watch.error = null;
+			watch.enabled = [];
+		});
+
+		it("shows a link that cannot be followed as a link page, deletable as a link", async () => {
+			const user = userEvent.setup();
+			watch.enabled = [];
+			// Refused for the link as a read through it is; not a failure here.
+			watch.error = new Error('"notes" leads outside the project');
+			deleteFile.mockReset();
+			deleteFile.mockResolvedValue(undefined);
+			renderAt("notes", {
+				type: "link",
+				link: {
+					name: "notes",
+					type: "link",
+					path: "notes",
+					link: { target: "../../.ssh/id_ed25519", state: "outside" },
+				},
+			});
+
+			expect(
+				await screen.findByRole("heading", {
+					name: "Link outside the project",
+				}),
+			).toBeInTheDocument();
+			expect(screen.getByText("../../.ssh/id_ed25519")).toBeInTheDocument();
+			expect(
+				screen.getByText(/Pockode only opens files inside the project/),
+			).toBeInTheDocument();
+			expect(
+				screen.getByRole("button", { name: "Copy target" }),
+			).toBeInTheDocument();
+			expect(screen.queryByText(/Not updating/)).toBeNull();
+			// Never subscribed at all: the server refuses it for such a link.
+			expect(watch.enabled).not.toContain(true);
+
+			await user.click(screen.getByRole("button", { name: "Delete link" }));
+			const dialog = await screen.findByRole("dialog");
+			expect(
+				within(dialog).getByText(
+					'Delete the link "notes"? What it points to is not affected.',
+				),
+			).toBeInTheDocument();
+			await user.click(within(dialog).getByRole("button", { name: "Delete" }));
+			expect(deleteFile).toHaveBeenCalledWith("notes");
+		});
+
+		it("lists a folder opened by its path instead of a blank pane", async () => {
+			const user = userEvent.setup();
+			renderAt(".claude/skills", {
+				type: "directory",
+				entries: [
+					{ name: "docs", type: "dir", path: ".claude/skills/docs" },
+					{ name: "a.md", type: "file", path: ".claude/skills/a.md" },
+					{
+						name: "gone",
+						type: "link",
+						path: ".claude/skills/gone",
+						link: { target: "missing", state: "broken" },
+					},
+				],
+			});
+
+			await user.click(
+				await screen.findByRole("button", { name: "Open: a.md" }),
+			);
+			expect(navigate).toHaveBeenLastCalledWith(
+				overlayToNavigation(
+					{ type: "file", path: ".claude/skills/a.md" },
+					"",
+					null,
+				),
+			);
+			expect(
+				screen.getByRole("button", {
+					name: "Open: gone, link to missing (broken link)",
+				}),
+			).toBeInTheDocument();
+			expect(
+				screen.getByRole("button", { name: "Open: docs" }),
+			).toBeInTheDocument();
+		});
+
+		it("marks a followed file link and opens its target", async () => {
+			const user = userEvent.setup();
+			watch.enabled = [];
+			await renderFileView(
+				fileContent({
+					name: "favicon.svg",
+					path: "web/favicon.svg",
+					link: {
+						target: "../site/logo.svg",
+						state: "ok",
+						resolved: "site/logo.svg",
+					},
+				}),
+			);
+
+			expect(screen.getByText("../site/logo.svg")).toBeInTheDocument();
+			// Unlike a link page, the file it reaches is watched.
+			expect(watch.enabled.at(-1)).toBe(true);
+			await user.click(screen.getByRole("button", { name: "Open target" }));
+			expect(navigate).toHaveBeenLastCalledWith(
+				overlayToNavigation({ type: "file", path: "site/logo.svg" }, "", null),
+			);
 		});
 	});
 });

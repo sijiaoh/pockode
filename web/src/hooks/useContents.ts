@@ -1,9 +1,33 @@
 import { useQuery } from "@tanstack/react-query";
 import { DEFAULT_RETRY_COUNT } from "../lib/queryClient";
 import { isRPCTimeout, useWSStore } from "../lib/wsStore";
-import type { ContentsResponse, FileContent } from "../types/contents";
+import type {
+	ContentsResponse,
+	FileContent,
+	LinkResult,
+} from "../types/contents";
 
 export const contentsQueryKey = (path: string) => ["contents", path] as const;
+
+type GetFile = ReturnType<typeof useWSStore.getState>["actions"]["getFile"];
+
+/**
+ * What the `contentsQueryKey` entry holds, in the one shape every reader of it
+ * stores: `useAttachmentContent` shares the entry for a path.
+ */
+export async function readContents(
+	getFile: GetFile,
+	path: string,
+): Promise<ContentsResponse> {
+	const result = await getFile(path);
+	if (result.type === "directory") {
+		return result.entries ?? [];
+	}
+	if (result.type === "link") {
+		return result.link as LinkResult;
+	}
+	return result.file as FileContent;
+}
 
 export function isNotFoundError(error: unknown): boolean {
 	if (!(error instanceof Error)) return false;
@@ -15,13 +39,7 @@ export function useContents(path = "", enabled = true) {
 
 	return useQuery<ContentsResponse>({
 		queryKey: contentsQueryKey(path),
-		queryFn: async () => {
-			const result = await getFile(path);
-			if (result.type === "directory") {
-				return result.entries ?? [];
-			}
-			return result.file as FileContent;
-		},
+		queryFn: () => readContents(getFile, path),
 		enabled,
 		staleTime: Number.POSITIVE_INFINITY,
 		// A timeout here means the read was slow, not that it failed, and this is

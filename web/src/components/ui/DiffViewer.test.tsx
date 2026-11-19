@@ -2,14 +2,18 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import {
 	afterAll,
+	afterEach,
 	beforeAll,
+	beforeEach,
 	describe,
 	expect,
 	it,
 	onTestFinished,
 	vi,
 } from "vitest";
+import { asOneFileDiff } from "../../lib/drawablePatch";
 import { getDiffHighlighterFor } from "../../lib/shikiUtils";
+import { TYPE_CHANGE_DIFF } from "../../test/gitFixtures";
 import { HIGHLIGHT_LIMIT } from "../../utils/fileView";
 import { DiffViewer } from "./DiffViewer";
 
@@ -378,6 +382,51 @@ describe("DiffViewer hunk bars", () => {
 
 		await waitFor(() => expect(bars(container)).toHaveLength(1));
 		expect(bars(container)[0].after).toContain(last);
+	});
+
+	describe("a patch the library cannot read", () => {
+		// React reports what a boundary caught on the console; the report is
+		// not what is under test.
+		beforeEach(() => {
+			vi.spyOn(console, "error").mockImplementation(() => {});
+		});
+		afterEach(() => {
+			vi.mocked(console.error).mockRestore();
+		});
+
+		it("fails in place, and draws the next diff it is given", async () => {
+			const { old_content, new_content } = TYPE_CHANGE_DIFF;
+			const view = (patch: string) => (
+				<>
+					<DiffViewer
+						fileName="a.txt"
+						hunks={[patch]}
+						oldContent={old_content}
+						newContent={new_content}
+					/>
+					<p>beside the diff</p>
+				</>
+			);
+			const { container, rerender } = render(view(TYPE_CHANGE_DIFF.diff));
+
+			const alert = await screen.findByRole("alert");
+			expect(alert.textContent).toContain("Couldn't show a.txt");
+			expect(alert.textContent).toContain("Invalid hunk header format");
+			expect(screen.getByText("beside the diff")).toBeTruthy();
+
+			const oneFile = asOneFileDiff(TYPE_CHANGE_DIFF, "a.txt");
+			rerender(view(oneFile.diff));
+
+			// Word highlighting splits a line into spans, so the line is read whole.
+			const lines = () =>
+				Array.from(
+					container.querySelectorAll(".diff-line-content-item"),
+					(line) => line.textContent,
+				);
+			await waitFor(() => expect(lines()).toContain("+real.txt"));
+			expect(lines()).toContain("-content");
+			expect(screen.queryByRole("alert")).toBeNull();
+		});
 	});
 });
 

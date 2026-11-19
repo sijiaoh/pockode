@@ -24,6 +24,10 @@ export {
 export { CollapsibleBody, useEverExpanded } from "./CollapsibleBody";
 export { default as ConnectionStatus } from "./ConnectionStatus";
 export {
+	ContentErrorBoundary,
+	RenderErrorCard,
+} from "./ContentErrorBoundary";
+export {
 	actionIconButtonClass,
 	default as ContentView,
 	getActionIconButtonClass,

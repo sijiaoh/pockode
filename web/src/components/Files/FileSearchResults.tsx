@@ -1,6 +1,7 @@
 import { AlertTriangle, Search, SearchX } from "lucide-react";
 import type { FileSearchState } from "../../hooks/useFileSearch";
 import { useFilesSearchStore } from "../../lib/filesSearchStore";
+import { opensAt } from "../../lib/symlink";
 import type { FileMatch, FileSearchResult } from "../../types/search";
 import { Spinner } from "../ui";
 import FileSearchFileRow from "./FileSearchFileRow";
@@ -168,7 +169,10 @@ function Matches({
 							key={match.path}
 							path={match.path}
 							pathRanges={match.path_ranges}
-							isActive={match.path === activeFilePath}
+							link={match.link}
+							type={match.type}
+							// Lit by where it opens, which for a cycle is not its path.
+							isActive={opensAt(match.path, match.link) === activeFilePath}
 							onSelect={onSelectFile}
 						/>
 					) : (

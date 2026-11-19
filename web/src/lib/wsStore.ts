@@ -77,6 +77,7 @@ import { getWebSocketUrl } from "../utils/config";
 import { errorMessage } from "../utils/errorMessage";
 import { generateUUID } from "../utils/uuid";
 import { authActions } from "./authStore";
+import { asOneFileDiff } from "./drawablePatch";
 import {
 	type AgentActions,
 	type AgentRoleActions,
@@ -1462,9 +1463,10 @@ export const useWSStore = create<WSState>((set, get) => ({
 				"git.diff.subscribe",
 				{ path, staged, hide_whitespace: hideWhitespace },
 				gitDiffWatchCallbacks,
-				callback,
+				(params: GitDiffChangedNotification) =>
+					callback({ ...asOneFileDiff(params, path), id: params.id }),
 			);
-			return { id, initial: result as GitDiffData };
+			return { id, initial: asOneFileDiff(result as GitDiffData, path) };
 		},
 
 		gitDiffUnsubscribe: (id: string) =>

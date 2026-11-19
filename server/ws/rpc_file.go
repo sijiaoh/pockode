@@ -21,25 +21,23 @@ func (h *rpcMethodHandler) handleFileGet(ctx context.Context, conn *jsonrpc2.Con
 
 	result, err := contents.GetContents(wt.WorkDir, params.Path)
 	if err != nil {
-		if errors.Is(err, contents.ErrNotFound) {
-			h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, err.Error())
-			return
-		}
-		if errors.Is(err, contents.ErrInvalidPath) {
-			h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "invalid path")
-			return
-		}
-		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInternalError, err.Error())
+		h.replyFileError(ctx, conn, req, err, contents.ErrNotFound)
 		return
 	}
 
 	var response rpc.FileGetResult
-	if result.IsDir() {
+	switch {
+	case result.Link != nil:
+		response = rpc.FileGetResult{
+			Type: "link",
+			Link: result.Link,
+		}
+	case result.IsDir():
 		response = rpc.FileGetResult{
 			Type:    "directory",
 			Entries: result.Entries,
 		}
-	} else {
+	default:
 		response = rpc.FileGetResult{
 			Type: "file",
 			File: result.File,
@@ -59,15 +57,7 @@ func (h *rpcMethodHandler) handleFileWrite(ctx context.Context, conn *jsonrpc2.C
 	}
 
 	if err := contents.WriteFile(wt.WorkDir, params.Path, params.Content); err != nil {
-		if errors.Is(err, contents.ErrInvalidPath) {
-			h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "invalid path")
-			return
-		}
-		if errors.Is(err, contents.ErrTooLarge) {
-			h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, err.Error())
-			return
-		}
-		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInternalError, err.Error())
+		h.replyFileError(ctx, conn, req, err, contents.ErrTooLarge)
 		return
 	}
 
@@ -94,14 +84,7 @@ func (h *rpcMethodHandler) handleFileCreate(ctx context.Context, conn *jsonrpc2.
 	}
 
 	if err := contents.Create(wt.WorkDir, params.Path, isDir); err != nil {
-		switch {
-		case errors.Is(err, contents.ErrInvalidPath):
-			h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "invalid path")
-		case errors.Is(err, contents.ErrExists):
-			h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, err.Error())
-		default:
-			h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInternalError, err.Error())
-		}
+		h.replyFileError(ctx, conn, req, err, contents.ErrExists)
 		return
 	}
 
@@ -117,16 +100,8 @@ func (h *rpcMethodHandler) handleFileDelete(ctx context.Context, conn *jsonrpc2.
 		return
 	}
 
-	if err := contents.DeleteFile(wt.WorkDir, params.Path); err != nil {
-		if errors.Is(err, contents.ErrInvalidPath) {
-			h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "invalid path")
-			return
-		}
-		if errors.Is(err, contents.ErrNotFound) {
-			h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, err.Error())
-			return
-		}
-		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInternalError, err.Error())
+	if err := contents.Delete(wt.WorkDir, params.Path); err != nil {
+		h.replyFileError(ctx, conn, req, err, contents.ErrNotFound)
 		return
 	}
 
@@ -143,14 +118,7 @@ func (h *rpcMethodHandler) handleFileRename(ctx context.Context, conn *jsonrpc2.
 	}
 
 	if err := contents.Rename(wt.WorkDir, params.Path, params.NewName); err != nil {
-		switch {
-		case errors.Is(err, contents.ErrInvalidPath):
-			h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "invalid path")
-		case errors.Is(err, contents.ErrNotFound), errors.Is(err, contents.ErrExists):
-			h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, err.Error())
-		default:
-			h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInternalError, err.Error())
-		}
+		h.replyFileError(ctx, conn, req, err, contents.ErrNotFound, contents.ErrExists)
 		return
 	}
 
@@ -173,7 +141,7 @@ func (h *rpcMethodHandler) handleFileMove(ctx context.Context, conn *jsonrpc2.Co
 		}
 		switch {
 		case errors.Is(err, contents.ErrInvalidPath):
-			refuse(rpc.FileMoveReasonInvalidPath, "invalid path")
+			refuse(rpc.FileMoveReasonInvalidPath, contents.PublicMessage(err))
 		case errors.Is(err, contents.ErrNotFound):
 			refuse(rpc.FileMoveReasonNotFound, err.Error())
 		case errors.Is(err, contents.ErrDestinationNotFound):
@@ -185,7 +153,8 @@ func (h *rpcMethodHandler) handleFileMove(ctx context.Context, conn *jsonrpc2.Co
 		case errors.Is(err, contents.ErrExists):
 			refuse(rpc.FileMoveReasonExists, err.Error())
 		default:
-			h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInternalError, err.Error())
+			h.log.Error("file.move failed", "path", params.Path, "error", err)
+			h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInternalError, contents.PublicMessage(err))
 		}
 		return
 	}
@@ -227,12 +196,12 @@ func (h *rpcMethodHandler) handleFileSearch(ctx context.Context, conn *jsonrpc2.
 	if err != nil {
 		switch {
 		case errors.Is(err, search.ErrEmptyQuery), errors.Is(err, search.ErrQueryTooLong),
-			errors.Is(err, search.ErrInvalidMode), errors.Is(err, contents.ErrNotFound):
+			errors.Is(err, search.ErrInvalidMode):
 			h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, err.Error())
-		case errors.Is(err, contents.ErrInvalidPath):
-			h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "invalid path")
 		default:
-			h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInternalError, err.Error())
+			// The scope is resolved like any file route's path, so it fails
+			// the same ways and is answered the same way.
+			h.replyFileError(ctx, conn, req, err, contents.ErrNotFound, contents.ErrNotADirectory)
 		}
 		return
 	}
@@ -240,6 +209,26 @@ func (h *rpcMethodHandler) handleFileSearch(ctx context.Context, conn *jsonrpc2.
 	if err := conn.Reply(ctx, req.ID, result); err != nil {
 		h.log.Error("failed to send file search response", "error", err)
 	}
+}
+
+// replyFileError answers a failed file route. ErrInvalidPath and the route's
+// expected refusals are the client's mistake; anything else is a fault here,
+// logged in full while the client gets only what contents.PublicMessage lets
+// through — an OS error names host paths (docs/symlinks.md#the-boundary).
+func (h *rpcMethodHandler) replyFileError(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request, err error, refusals ...error) {
+	message := contents.PublicMessage(err)
+	if errors.Is(err, contents.ErrInvalidPath) {
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, message)
+		return
+	}
+	for _, refusal := range refusals {
+		if errors.Is(err, refusal) {
+			h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, message)
+			return
+		}
+	}
+	h.log.Error("file operation failed", "method", req.Method, "error", err)
+	h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInternalError, message)
 }
 
 var errFileSearchSuperseded = errors.New("superseded by a newer file search")

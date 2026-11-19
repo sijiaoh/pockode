@@ -53,7 +53,12 @@ import { forkUnavailableReason } from "../../utils/forkAnchor";
 import { hasMessageActions } from "../../utils/messageActions";
 import { formatFilePath } from "../../utils/path";
 import { workEventSubject, workEventWording } from "../../utils/systemMessage";
-import { CollapsibleBody, MarkdownContent, useEverExpanded } from "../ui";
+import {
+	CollapsibleBody,
+	ContentErrorBoundary,
+	MarkdownContent,
+	useEverExpanded,
+} from "../ui";
 import AttachmentStrip from "./AttachmentStrip";
 import CliRefusalNotice from "./CliRefusalNotice";
 import { DiscardedNote, DiscardedSummary } from "./DiscardedMessage";
@@ -943,7 +948,19 @@ export interface PromptError {
 	message: string;
 }
 
+/**
+ * One part of a message, kept to itself: a renderer that throws on what an
+ * agent wrote costs that part, not the conversation.
+ */
 function ContentPartItem(props: ContentPartItemProps) {
+	return (
+		<ContentErrorBoundary name="this part of the message" resetKey={props.part}>
+			<ContentPartBody {...props} />
+		</ContentErrorBoundary>
+	);
+}
+
+function ContentPartBody(props: ContentPartItemProps) {
 	const {
 		part,
 		sessionId,

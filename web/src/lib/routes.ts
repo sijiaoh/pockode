@@ -54,6 +54,17 @@ export const WT_ROUTES = {
 	scheduleDetail: `${WT_PREFIX}${BASE.scheduleDetail}`,
 } as const;
 
+/**
+ * The start page of the worktree `pathname` is under, read off the path
+ * alone: for where nothing else can be trusted, as after a crash.
+ */
+export function startPathOf(pathname: string): string {
+	const [, prefix, worktree] = pathname.split("/");
+	return prefix === WT_PREFIX.split("/")[1] && worktree
+		? WT_ROUTES.index.replace("$worktree", worktree)
+		: ROUTES.index;
+}
+
 /** A route of the app, whichever worktree it is under. */
 export type RouteKey = keyof typeof BASE;
 

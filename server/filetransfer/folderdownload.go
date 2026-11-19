@@ -353,7 +353,7 @@ func (fw *folderWalk) survey(entry archiveEntry) *apiError {
 	if !entry.info.Mode().IsRegular() {
 		return nil
 	}
-	f, err := entry.dir.OpenFile(entry.name, os.O_RDONLY|openNonBlock, 0)
+	f, err := entry.dir.OpenFile(entry.name, os.O_RDONLY|contents.OpenNonBlock, 0)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			return nil
@@ -373,7 +373,7 @@ func (fw *folderWalk) survey(entry archiveEntry) *apiError {
 // archiving as a file what is now a link.
 func (fw *folderWalk) open(entry archiveEntry) (*os.File, os.FileInfo, *apiError) {
 	display := fw.display(entry.rel)
-	f, err := entry.dir.OpenFile(entry.name, os.O_RDONLY|openNonBlock, 0)
+	f, err := entry.dir.OpenFile(entry.name, os.O_RDONLY|contents.OpenNonBlock, 0)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			return nil, nil, nil

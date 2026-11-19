@@ -5,12 +5,14 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
 
 	"github.com/fsnotify/fsnotify"
+	"github.com/pockode/server/internal/symlinktest"
 )
 
 // Subscribers name paths with `/` (the form contents.GetContents hands out)
@@ -157,4 +159,129 @@ func (n *recordingNotifier) Notify(context.Context, Notification) error {
 	default:
 	}
 	return nil
+}
+
+// An entry that leads nowhere must not stop its directory from being watched:
+// kqueue opens every entry of a watched directory, and a dangling link there
+// used to fail the whole watch, leaving the tree silently stale. A loop fails
+// it still, and so does lose the events of names after a broken link; both
+// directories are watched all the same (pollDirs).
+func TestFSWatcher_WatchesADirectoryWithBrokenLinks(t *testing.T) {
+	workDir := t.TempDir()
+	symlinktest.Make(t, "gone.txt", filepath.Join(workDir, "broken"))
+	symlinktest.Make(t, "loop2", filepath.Join(workDir, "loop1"))
+	symlinktest.Make(t, "loop1", filepath.Join(workDir, "loop2"))
+
+	w := NewFSWatcher(workDir)
+	if err := w.Start(); err != nil {
+		t.Fatalf("Start() failed: %v", err)
+	}
+	defer w.Stop()
+
+	notifier := &recordingNotifier{notified: make(chan struct{}, 1)}
+	if err := w.Subscribe("client-1", "", notifier); err != nil {
+		t.Fatalf("Subscribe failed: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workDir, "new.txt"), nil, 0644); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-notifier.notified:
+	case <-time.After(5 * time.Second):
+		t.Error("no notification for a file created next to a broken link")
+	}
+}
+
+// Watching follows links only inside the work directory, as file.get does:
+// otherwise a client could learn when files outside change. The refusal
+// names no host path.
+func TestFSWatcher_RefusesALinkOut(t *testing.T) {
+	workDir := t.TempDir()
+	outside := t.TempDir()
+	symlinktest.Make(t, outside, filepath.Join(workDir, "odir"))
+
+	w := NewFSWatcher(workDir)
+	if err := w.Start(); err != nil {
+		t.Fatalf("Start() failed: %v", err)
+	}
+	defer w.Stop()
+
+	for _, p := range []string{"odir", "odir/x"} {
+		err := w.Subscribe("client-"+p, p, &recordingNotifier{notified: make(chan struct{}, 1)})
+		if err == nil {
+			t.Errorf("Subscribe(%s) succeeded, want a refusal", p)
+			continue
+		}
+		if strings.Contains(err.Error(), outside) || strings.Contains(err.Error(), workDir) {
+			t.Errorf("Subscribe(%s): %q names a host path", p, err)
+		}
+	}
+}
+
+// A polled directory's change goes through the same debounce as fsnotify's
+// events: on kqueue both see one change, and the subscription still hears of
+// it once. A poll on its own notifies as well.
+func TestFSWatcher_PollIsDebouncedWithEvents(t *testing.T) {
+	workDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(workDir, "src"), 0755); err != nil {
+		t.Fatalf("MkdirAll() failed: %v", err)
+	}
+	// A loop is what makes kqueue refuse the directory and poll it alone.
+	symlinktest.Make(t, "loop2", filepath.Join(workDir, "src", "loop1"))
+	symlinktest.Make(t, "loop1", filepath.Join(workDir, "src", "loop2"))
+
+	// Not Start()ed, for the reason TestFSWatcher_BatchOfChangesNotifiesOnce
+	// gives; the poll is driven by hand instead of by its ticker.
+	w := NewFSWatcher(workDir)
+	fsw, err := fsnotify.NewWatcher()
+	if err != nil {
+		t.Fatalf("fsnotify.NewWatcher() failed: %v", err)
+	}
+	w.watcher = fsw
+	defer w.Stop()
+
+	sub := &countingNotifier{}
+	if err := w.Subscribe("dir", "src", sub); err != nil {
+		t.Fatalf("Subscribe(src) failed: %v", err)
+	}
+	// Polled on every platform here, not only where pollDirs is set.
+	w.pathMu.Lock()
+	if w.polled["src"] == nil {
+		w.polled["src"] = &polledDir{real: "src", modTime: w.modTime("src")}
+	}
+	w.pathMu.Unlock()
+
+	// The directory's time is also set by hand, each create a day apart, so a
+	// filesystem with coarse timestamps still shows the poll a change.
+	stamp := time.Now()
+	create := func(name string) {
+		t.Helper()
+		dir := filepath.Join(workDir, "src")
+		if err := os.WriteFile(filepath.Join(dir, name), nil, 0644); err != nil {
+			t.Fatalf("WriteFile(%s) failed: %v", name, err)
+		}
+		stamp = stamp.Add(24 * time.Hour)
+		if err := os.Chtimes(dir, stamp, stamp); err != nil {
+			t.Fatalf("Chtimes failed: %v", err)
+		}
+	}
+
+	synctest.Test(t, func(t *testing.T) {
+		create("a.ts")
+		w.handleEvent(fsnotify.Event{Name: filepath.Join(workDir, "src", "a.ts"), Op: fsnotify.Create})
+		w.pollOnce()
+		time.Sleep(2 * debounceMaxWait)
+		synctest.Wait()
+		if n := sub.count.Load(); n != 1 {
+			t.Errorf("event and poll of one change: %d notifications, want 1", n)
+		}
+
+		create("b.ts")
+		w.pollOnce()
+		time.Sleep(2 * debounceMaxWait)
+		synctest.Wait()
+		if n := sub.count.Load(); n != 2 {
+			t.Errorf("after a change only the poll saw: %d notifications, want 2", n)
+		}
+	})
 }

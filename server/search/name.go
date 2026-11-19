@@ -3,8 +3,8 @@ package search
 import (
 	"cmp"
 	"math"
+	"os"
 	"path"
-	"path/filepath"
 	"slices"
 	"strings"
 	"unicode/utf8"
@@ -16,7 +16,7 @@ import (
 // best maxResults by score. Ties break the way fzf's path scheme breaks them
 // (docs/code/fuzzy-matching.md, "Ranking Is the Caller's"): pathname, then
 // length, then list order.
-func searchNames(workDir string, files []string, pattern *fuzzy.Pattern, maxResults int) ([]FileMatch, bool) {
+func searchNames(workDir string, work *os.Root, files []string, pattern *fuzzy.Pattern, maxResults int) ([]FileMatch, bool) {
 	type candidate struct {
 		path      string
 		score     int
@@ -57,17 +57,18 @@ func searchNames(workDir string, files []string, pattern *fuzzy.Pattern, maxResu
 
 	matches := make([]FileMatch, 0, min(len(candidates), maxResults))
 	for _, c := range candidates {
-		// The file list can name entries that are not readable regular files
-		// (submodule gitlinks, tracked-but-deleted files); drop them here so
-		// only results the client can actually open are returned.
-		if !isRegularFile(filepath.Join(workDir, filepath.FromSlash(c.path))) {
+		// The file list can name entries that are neither regular files nor
+		// links (submodule gitlinks, tracked-but-deleted files); drop them here
+		// so only results the client can actually open are returned.
+		link, typ, ok := nameMatchable(workDir, work, c.path)
+		if !ok {
 			continue
 		}
 		if len(matches) >= maxResults {
 			return matches, true
 		}
 		_, ranges := toClientText(c.path, positionsToByteRanges(c.path, c.positions))
-		matches = append(matches, FileMatch{Path: c.path, Name: path.Base(c.path), PathRanges: ranges})
+		matches = append(matches, FileMatch{Path: c.path, Name: path.Base(c.path), PathRanges: ranges, Link: link, Type: typ})
 	}
 	return matches, false
 }

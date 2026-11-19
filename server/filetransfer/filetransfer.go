@@ -151,12 +151,52 @@ func (h *Handler) Download(w http.ResponseWriter, r *http.Request) {
 		h.writeError(w, errf(http.StatusBadRequest, CodeInvalidPath, "path is required"), nil)
 		return
 	}
-	if err := contents.ValidatePath(workDir, relPath); err != nil {
-		h.writeError(w, errf(http.StatusBadRequest, CodeInvalidPath, "invalid path: %s", relPath), nil)
+	res, err := contents.Resolve(workDir, relPath)
+	if err != nil {
+		h.writeError(w, h.resolveFailure(relPath, err), nil)
+		return
+	}
+	// A link is downloaded as its target only when it leads to one inside
+	// (docs/symlinks.md#per-route).
+	if res.Link != nil && !res.Link.Followable() {
+		h.writeError(w, errf(http.StatusBadRequest, CodeInvalidPath, "%s", contents.PublicMessage(contents.LinkRefusal(relPath, res.Link.State))), nil)
 		return
 	}
 
-	h.serveFile(w, r, filepath.Join(workDir, relPath), relPath)
+	work, err := os.OpenRoot(workDir)
+	if err != nil {
+		h.writeError(w, h.internalFailure("open", "the work directory", err), nil)
+		return
+	}
+	defer work.Close()
+
+	// Through the work directory's root, then checked where the opened file
+	// is: the resolved path has no link left in it, and one swapped in since
+	// is refused rather than followed out.
+	f, fi, apiErr := h.openRegular(work, res.Real, relPath, h.internalFailure)
+	if apiErr != nil {
+		h.writeError(w, apiErr, nil)
+		return
+	}
+	defer f.Close()
+	if _, err := contents.ResolvedName(work, res.Real, f); err != nil {
+		h.log.Warn("download does not resolve inside the work directory", "path", relPath, "error", err)
+		h.writeError(w, errf(http.StatusBadRequest, CodeInvalidPath, "%s", contents.PublicMessage(contents.LinkRefusal(relPath, contents.LinkOutside))), nil)
+		return
+	}
+
+	h.serveOpened(w, r, f, fi)
+}
+
+// resolveFailure answers a path contents.Resolve refused.
+func (h *Handler) resolveFailure(relPath string, err error) *apiError {
+	switch {
+	case errors.Is(err, contents.ErrInvalidPath):
+		return errf(http.StatusBadRequest, CodeInvalidPath, "%s", contents.PublicMessage(err))
+	case errors.Is(err, contents.ErrNotFound), errors.Is(err, contents.ErrNotADirectory):
+		return errf(http.StatusNotFound, CodeNotFound, "not found: %s", relPath)
+	}
+	return h.internalFailure("resolve", relPath, err)
 }
 
 // serveFile streams the regular file at fullPath, naming it display in errors
@@ -168,7 +208,11 @@ func (h *Handler) serveFile(w http.ResponseWriter, r *http.Request, fullPath, di
 		return
 	}
 	defer f.Close()
+	h.serveOpened(w, r, f, fi)
+}
 
+// serveOpened streams f, a regular file openRegular opened.
+func (h *Handler) serveOpened(w http.ResponseWriter, r *http.Request, f *os.File, fi os.FileInfo) {
 	setContentHeaders(w, fi.Name())
 
 	// Empty name so ServeContent keeps the Content-Type set above; it still
@@ -181,13 +225,15 @@ func (h *Handler) serveFile(w http.ResponseWriter, r *http.Request, fullPath, di
 // an os.Root that holds names beneath one directory.
 type fileOpener interface {
 	Stat(name string) (os.FileInfo, error)
-	Open(name string) (*os.File, error)
+	OpenFile(name string, flag int, perm os.FileMode) (*os.File, error)
 }
 
 type osFS struct{}
 
 func (osFS) Stat(name string) (os.FileInfo, error) { return os.Stat(name) }
-func (osFS) Open(name string) (*os.File, error)    { return os.Open(name) }
+func (osFS) OpenFile(name string, flag int, perm os.FileMode) (*os.File, error) {
+	return os.OpenFile(name, flag, perm)
+}
 
 // openRegular opens name in fsys if it is a regular file, naming it display in
 // errors. A failure other than the file not existing is turned into the
@@ -210,7 +256,9 @@ func (h *Handler) openRegular(fsys fileOpener, name, display string, failed func
 		return nil, nil, errf(http.StatusBadRequest, CodeNotAFile, "%s is not a regular file", display)
 	}
 
-	f, err := fsys.Open(name)
+	// Without blocking as well, so that one swapped in fails the check below
+	// rather than holding the open itself.
+	f, err := fsys.OpenFile(name, os.O_RDONLY|contents.OpenNonBlock, 0)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil, errf(http.StatusNotFound, CodeNotFound, "not found: %s", display)
@@ -274,10 +322,10 @@ func (h *Handler) withheldDirs() withheld {
 }
 
 // internalFailure reports a file that exists but could not be read as a fault
-// on this side.
+// on this side. The OS error goes to the log only: it names host paths.
 func (h *Handler) internalFailure(op, display string, err error) *apiError {
 	h.log.Error("failed to read file for transfer", "op", op, "path", display, "error", err)
-	return errf(http.StatusInternalServerError, CodeInternal, "failed to %s %s: %v", op, display, err)
+	return errf(http.StatusInternalServerError, CodeInternal, "failed to %s %s", op, display)
 }
 
 // Upload stores the files of a multipart request into a directory of the work
@@ -312,21 +360,15 @@ func (h *Handler) Upload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	destDir := filepath.Join(workDir, destRel)
-	info, statErr := os.Stat(destDir)
-	if statErr != nil {
-		if os.IsNotExist(statErr) {
-			h.writeError(w, errf(http.StatusNotFound, CodeNotFound, "destination directory does not exist: %s", contents.DisplayDir(destRel)), nil)
-			return
-		}
-		h.log.Error("failed to stat upload destination", "path", destRel, "error", statErr)
-		h.writeError(w, errf(http.StatusInternalServerError, CodeInternal, "failed to stat %s: %v", contents.DisplayDir(destRel), statErr), nil)
+	// Links on the way to the destination are followed only inside the work
+	// directory, as for every route; the files are then written beneath the
+	// directory it resolved to.
+	dest, apiErr := h.openDir(workDir, destRel, "destination directory")
+	if apiErr != nil {
+		h.writeError(w, apiErr, nil)
 		return
 	}
-	if !info.IsDir() {
-		h.writeError(w, errf(http.StatusBadRequest, CodeNotADirectory, "destination is a file, not a directory: %s", contents.DisplayDir(destRel)), nil)
-		return
-	}
+	defer dest.Close()
 
 	reader, err := newMultipartBody(r)
 	if err != nil {
@@ -355,7 +397,7 @@ func (h *Handler) Upload(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
-		stored, size, apiErr := h.storePart(part, destDir, destRel, overwrite, remaining)
+		stored, size, apiErr := h.storePart(part, dest, destRel, overwrite, remaining)
 		part.Close()
 		if apiErr != nil {
 			h.writeError(w, apiErr, written)
@@ -383,8 +425,8 @@ func (h *Handler) Upload(w http.ResponseWriter, r *http.Request) {
 // used to answer 500 on Windows. It is checked before "exists" for the third of
 // those cases: "retry with overwrite=true" is advice that can never work on a
 // directory.
-func openConflict(fullPath, relPath string, err error) *apiError {
-	if info, statErr := os.Stat(fullPath); statErr == nil && info.IsDir() {
+func openConflict(dest *os.Root, name, relPath string, err error) *apiError {
+	if info, statErr := dest.Stat(name); statErr == nil && info.IsDir() {
 		return errf(http.StatusConflict, CodeConflict, "%s is a directory", relPath)
 	}
 	if errors.Is(err, os.ErrExist) {
@@ -396,21 +438,24 @@ func openConflict(fullPath, relPath string, err error) *apiError {
 
 // storePart writes one uploaded file and reports how many content bytes it
 // consumed of the request's remaining budget.
-func (h *Handler) storePart(part *multipart.Part, destDir, destRel string, overwrite bool, remaining int64) (UploadedFile, int64, *apiError) {
+//
+// Everything goes through dest, the destination directory's root, so a
+// directory on the way swapped for a link out while the body is still
+// arriving cannot redirect what is written.
+func (h *Handler) storePart(part *multipart.Part, dest *os.Root, destRel string, overwrite bool, remaining int64) (UploadedFile, int64, *apiError) {
 	fileName := part.FileName()
 
 	// Part.FileName has already dropped any directory part of the name (RFC
 	// 7578 §4.2), so an upload always lands directly in the destination; a
 	// folder keeps its paths through UploadFolder instead. Validated anyway,
 	// since what is left can still be "..".
-	if err := contents.ValidatePath(destDir, fileName); err != nil {
+	if err := contents.ValidateName(fileName); err != nil {
 		return UploadedFile{}, 0, errf(http.StatusBadRequest, CodeInvalidPath, "invalid file name: %s", fileName)
 	}
 
-	fullPath := filepath.Join(destDir, fileName)
 	relPath := path.Join(filepath.ToSlash(destRel), fileName)
 
-	existing, statErr := os.Lstat(fullPath)
+	existing, statErr := dest.Lstat(fileName)
 	existed := statErr == nil
 	// Only a regular file may be replaced, and this has to be settled before the
 	// open rather than from its error, because for these types the open is the
@@ -437,13 +482,13 @@ func (h *Handler) storePart(part *multipart.Part, destDir, destRel string, overw
 	if overwrite {
 		flags = os.O_WRONLY | os.O_CREATE | os.O_TRUNC
 	}
-	f, err := os.OpenFile(fullPath, flags, 0644)
+	f, err := dest.OpenFile(fileName, flags, 0644)
 	if err != nil {
-		if conflict := openConflict(fullPath, relPath, err); conflict != nil {
+		if conflict := openConflict(dest, fileName, relPath, err); conflict != nil {
 			return UploadedFile{}, 0, conflict
 		}
 		h.log.Error("failed to create uploaded file", "path", relPath, "error", err)
-		return UploadedFile{}, 0, errf(http.StatusInternalServerError, CodeInternal, "failed to write %s: %v", relPath, err)
+		return UploadedFile{}, 0, errf(http.StatusInternalServerError, CodeInternal, "failed to write %s", relPath)
 	}
 
 	size, copyErr := h.copyPart(f, part, relPath, remaining)
@@ -455,7 +500,7 @@ func (h *Handler) storePart(part *multipart.Part, destDir, destRel string, overw
 			// would turn a damaged file into a missing one.
 			return
 		}
-		if err := os.Remove(fullPath); err != nil && !os.IsNotExist(err) {
+		if err := dest.Remove(fileName); err != nil && !os.IsNotExist(err) {
 			h.log.Warn("failed to remove partial upload", "path", relPath, "error", err)
 		}
 	}
@@ -467,10 +512,10 @@ func (h *Handler) storePart(part *multipart.Part, destDir, destRel string, overw
 	if closeErr != nil {
 		discard()
 		h.log.Error("failed to close uploaded file", "path", relPath, "error", closeErr)
-		return UploadedFile{}, 0, errf(http.StatusInternalServerError, CodeInternal, "failed to write %s: %v", relPath, closeErr)
+		return UploadedFile{}, 0, errf(http.StatusInternalServerError, CodeInternal, "failed to write %s", relPath)
 	}
 
-	return UploadedFile{Path: relPath, Name: filepath.Base(fullPath), Size: size}, size, nil
+	return UploadedFile{Path: relPath, Name: fileName, Size: size}, size, nil
 }
 
 // copyPart streams one uploaded file into f, spending no more than remaining

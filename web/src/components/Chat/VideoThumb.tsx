@@ -21,6 +21,8 @@ interface Props {
 	onOpen: (item: VideoMediaItem) => void;
 	/** What it becomes when the file is described as audio. */
 	other: (kind: PlayableKind) => ReactNode;
+	/** Opens the path in Files, for one that turns out not to be a file. */
+	onOpenInFiles?: () => void;
 }
 
 /**
@@ -31,13 +33,14 @@ interface Props {
  * then only the description and what `preload="metadata"` asks for: the header
  * and the first frame, through Range requests, never the whole file.
  */
-function VideoThumb({ file, source, onOpen, other }: Props) {
+function VideoThumb({ file, source, onOpen, onOpenInFiles, other }: Props) {
 	const name = attachmentName(file);
 	return (
 		<PlayableAttachment
 			file={file}
 			source={source}
 			kind="video"
+			onOpenInFiles={onOpenInFiles}
 			other={other}
 			waiting={(boxRef) => <Placeholder name={name} boxRef={boxRef} />}
 		>

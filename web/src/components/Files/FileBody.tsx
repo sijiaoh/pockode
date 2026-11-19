@@ -8,7 +8,12 @@ import {
 	isImageMime,
 } from "../../utils/fileView";
 import { splitPath } from "../../utils/path";
-import { FileContentDisplay, FileStateCard, rendersMarkdown } from "../ui";
+import {
+	ContentErrorBoundary,
+	FileContentDisplay,
+	FileStateCard,
+	rendersMarkdown,
+} from "../ui";
 import ImagePreview from "./ImagePreview";
 import MediaPreview from "./MediaPreview";
 import PagePreview from "./PagePreview";
@@ -113,7 +118,25 @@ function fileDetails(mime: string, size: number) {
 	];
 }
 
-function FileBody({
+/**
+ * A file's content, kept to itself: a renderer that throws on this file costs
+ * this view, not the page, tree and chat around it.
+ */
+function FileBody(props: Props) {
+	return (
+		<ContentErrorBoundary
+			name={splitPath(props.path).fileName}
+			// The state, not only the path: a file changed since it failed may
+			// well draw now. A caller that rebuilds it on every render only makes
+			// a failure try again on each one.
+			resetKey={props.state}
+		>
+			<FileBodyContent {...props} />
+		</ContentErrorBoundary>
+	);
+}
+
+function FileBodyContent({
 	state,
 	path,
 	downloadAction,
@@ -155,7 +178,7 @@ function FileBody({
 
 		case "page":
 			return plain || source ? (
-				<FileBody
+				<FileBodyContent
 					state={state.source}
 					path={path}
 					downloadAction={downloadAction}

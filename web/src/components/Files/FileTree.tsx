@@ -3,8 +3,10 @@ import { useCallback } from "react";
 import { contentsQueryKey, useContents } from "../../hooks/useContents";
 import { useFSWatch } from "../../hooks/useFSWatch";
 import type { Entry } from "../../types/contents";
+import { errorMessage } from "../../utils/errorMessage";
 import { Spinner } from "../ui";
 import FileTreeNode, { type EntryDragStart } from "./FileTreeNode";
+import WatchFailedNotice from "./WatchFailedNotice";
 
 interface Props {
 	onSelectFile: (path: string) => void;
@@ -50,9 +52,9 @@ function FileTree({
 	movingPaths,
 }: Props) {
 	const queryClient = useQueryClient();
-	const { data, isLoading, error } = useContents();
+	const { data, isLoading, error, refetch } = useContents();
 
-	useFSWatch({
+	const watch = useFSWatch({
 		path: "",
 		onChanged: useCallback(() => {
 			queryClient.invalidateQueries({ queryKey: contentsQueryKey("") });
@@ -73,8 +75,15 @@ function FileTree({
 			<div className="p-4 text-center text-th-error">
 				<div className="">Failed to load files</div>
 				<div className="mt-1 text-sm text-th-text-muted">
-					{error instanceof Error ? error.message : String(error)}
+					{errorMessage(error)}
 				</div>
+				<button
+					type="button"
+					onClick={() => void refetch()}
+					className="mt-1 inline-flex min-h-9 items-center rounded px-2 text-sm text-th-accent hover:underline pointer-coarse:min-h-11 focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent"
+				>
+					Retry
+				</button>
 			</div>
 		);
 	}
@@ -91,6 +100,13 @@ function FileTree({
 		// The root has no row of its own, so the whole listing lights up to say a
 		// drop would land at the top level.
 		<div className={`py-1 ${dropTargetPath === "" ? "bg-th-accent/10" : ""}`}>
+			{watch.error && (
+				<WatchFailedNotice
+					error={watch.error}
+					onRetry={watch.retry}
+					style={{ paddingLeft: 12 }}
+				/>
+			)}
 			{data.map((entry) => (
 				<FileTreeNode
 					key={entry.path}

@@ -389,9 +389,12 @@ type FileGetParams struct {
 }
 
 type FileGetResult struct {
-	Type    string                `json:"type"` // "directory" or "file"
+	Type    string                `json:"type"` // "directory", "file" or "link"
 	Entries []contents.Entry      `json:"entries,omitempty"`
 	File    *contents.FileContent `json:"file,omitempty"`
+	// Link is a symlink that cannot be followed (docs/symlinks.md#wire-format):
+	// an answer, with no content, rather than an error.
+	Link *contents.Entry `json:"link,omitempty"`
 }
 
 // AttachmentGetParams reads content a chat event references by id. See

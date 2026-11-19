@@ -8,6 +8,8 @@ import {
 } from "../../lib/shikiUtils";
 import { useWSStore } from "../../lib/wsStore";
 import { markdownFileBaseDir } from "../../utils/markdownImage";
+import { splitPath } from "../../utils/path";
+import { ContentErrorBoundary } from "./ContentErrorBoundary";
 import { FrontmatterBlock } from "./FrontmatterBlock";
 import { MarkdownContent } from "./MarkdownContent";
 
@@ -36,7 +38,22 @@ interface Props {
 	onOpenFile?: (path: string) => void;
 }
 
-export function FileContentDisplay({
+export function FileContentDisplay(props: Props) {
+	// On the content, not the path: a file edited since it failed may well
+	// draw now.
+	return (
+		<ContentErrorBoundary
+			name={
+				props.filePath ? splitPath(props.filePath).fileName : "this content"
+			}
+			resetKey={props.content}
+		>
+			<FileContentDisplayInner {...props} />
+		</ContentErrorBoundary>
+	);
+}
+
+function FileContentDisplayInner({
 	content,
 	filePath,
 	plain,

@@ -71,7 +71,7 @@ type contentMatch struct {
 // order. Ranking needs every file's score, so unlike a plain grep the scan
 // cannot stop at the first maxResults matches; a timeout ranks what was
 // scanned so far.
-func searchContents(ctx context.Context, workDir string, files []string, pattern *fuzzy.Pattern, maxResults int) ([]FileMatch, bool) {
+func searchContents(ctx context.Context, work *os.Root, files []string, pattern *fuzzy.Pattern, maxResults int) ([]FileMatch, bool) {
 	var ranked []contentMatch
 	truncated := false
 
@@ -105,7 +105,7 @@ func searchContents(ctx context.Context, workDir string, files []string, pattern
 		}
 
 		chunk := files[start:min(start+chunkSize, len(files))]
-		found, more := scanChunk(ctx, workDir, chunk, pattern, scanners)
+		found, more := scanChunk(ctx, work, chunk, pattern, scanners)
 		if more {
 			truncated = true
 		}
@@ -140,7 +140,7 @@ func searchContents(ctx context.Context, workDir string, files []string, pattern
 // more matching lines than were kept.
 // Each worker owns scanners[w] for the duration of the chunk, so the buffers
 // need no synchronization.
-func scanChunk(ctx context.Context, workDir string, chunk []string, pattern *fuzzy.Pattern, scanners []*fileScanner) ([]*contentMatch, bool) {
+func scanChunk(ctx context.Context, work *os.Root, chunk []string, pattern *fuzzy.Pattern, scanners []*fileScanner) ([]*contentMatch, bool) {
 	results := make([]*contentMatch, len(chunk))
 	var more atomic.Bool
 
@@ -159,7 +159,7 @@ func scanChunk(ctx context.Context, workDir string, chunk []string, pattern *fuz
 					return
 				}
 				relPath := chunk[i]
-				match, hasMore := fs.scanFile(filepath.Join(workDir, filepath.FromSlash(relPath)), relPath, pattern)
+				match, hasMore := fs.scanFile(work, relPath, pattern)
 				results[i] = match
 				if hasMore {
 					more.Store(true)
@@ -188,8 +188,8 @@ type lineHit struct {
 // characters, then per line the linear FuzzyMatchV1 to decide whether it
 // matches, and FuzzyMatchV2's score only for the lines that do. The positions
 // are computed last, only for the lines that are kept.
-func (fs *fileScanner) scanFile(fullPath, relPath string, pattern *fuzzy.Pattern) (*contentMatch, bool) {
-	data, ok := fs.readFile(fullPath)
+func (fs *fileScanner) scanFile(work *os.Root, relPath string, pattern *fuzzy.Pattern) (*contentMatch, bool) {
+	data, ok := fs.readFile(work, filepath.FromSlash(relPath))
 	if !ok || !pattern.MayMatchWithin(data) {
 		return nil, false
 	}
@@ -277,19 +277,25 @@ func (fs *fileScanner) scanFile(fullPath, relPath string, pattern *fuzzy.Pattern
 // readFile reads a whole regular file into fs.buf, reporting false for a file
 // that cannot be read, is over maxFileSize or is binary. The result is valid
 // until the next call.
-func (fs *fileScanner) readFile(fullPath string) ([]byte, bool) {
+func (fs *fileScanner) readFile(work *os.Root, name string) ([]byte, bool) {
 	// Lstat rather than Stat: a symlink must not be followed, or a link listed
-	// by git could leak content from outside the work directory.
-	info, err := os.Lstat(fullPath)
+	// by git could leak content from outside the work directory. Through the
+	// root, so a parent on the way that is a link out is not followed either.
+	info, err := work.Lstat(name)
 	if err != nil || !info.Mode().IsRegular() || info.Size() > maxFileSize {
 		return nil, false
 	}
 
-	f, err := os.Open(fullPath)
+	// Without blocking, and checked again on the descriptor: a fifo swapped
+	// in since the Lstat would otherwise hold the worker until written to.
+	f, err := work.OpenFile(name, os.O_RDONLY|contents.OpenNonBlock, 0)
 	if err != nil {
 		return nil, false
 	}
 	defer f.Close()
+	if opened, err := f.Stat(); err != nil || !opened.Mode().IsRegular() {
+		return nil, false
+	}
 
 	// One byte past the stat size, so a file that grew since is still read to
 	// its end, and past maxFileSize so one that grew too much is noticed.

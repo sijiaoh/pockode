@@ -1,4 +1,4 @@
-import { renderHook, waitFor } from "@testing-library/react";
+import { act, renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useFSWatch } from "./useFSWatch";
 
@@ -111,5 +111,30 @@ describe("useFSWatch", () => {
 		await new Promise((r) => setTimeout(r, 50));
 		expect(mockFsSubscribe).toHaveBeenCalledTimes(1);
 		expect(mockFsUnsubscribe).not.toHaveBeenCalled();
+	});
+
+	it("says when the watch could not be opened, until a retry opens it", async () => {
+		vi.spyOn(console, "error").mockImplementation(() => {});
+		mockFsSubscribe.mockRejectedValueOnce(
+			new Error('watch "dir/broken": no such file or directory'),
+		);
+		const { result } = renderHook(() =>
+			useFSWatch({ path: "dir", onChanged: mockOnChanged }),
+		);
+
+		await waitFor(() => {
+			expect(result.current.error?.message).toBe(
+				'watch "dir/broken": no such file or directory',
+			);
+		});
+		expect(mockOnChanged).not.toHaveBeenCalled();
+
+		act(() => result.current.retry());
+
+		await waitFor(() => {
+			expect(result.current.error).toBeNull();
+		});
+		expect(mockOnChanged).toHaveBeenCalledTimes(1);
+		vi.mocked(console.error).mockRestore();
 	});
 });

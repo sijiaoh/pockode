@@ -10,6 +10,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+
+	"github.com/pockode/server/contents"
 )
 
 // maxFilesScanned bounds memory and wall time on large repositories. Hitting it
@@ -138,9 +140,11 @@ func walkFiles(ctx context.Context, workDir, scope string, limit int) ([]string,
 		if d.IsDir() {
 			return nil
 		}
-		// Symlinks and other irregular entries are skipped: following them can
-		// escape workDir or loop.
-		if !d.Type().IsRegular() {
+		// A symlink is listed as itself, the way git lists one: name search
+		// shows links (docs/symlinks.md#search). It is never descended into —
+		// following one can escape workDir or loop — and content search reads
+		// no link (fileScanner.readFile). Other irregular entries are skipped.
+		if !d.Type().IsRegular() && d.Type()&fs.ModeSymlink == 0 {
 			return nil
 		}
 		rel, relErr := filepath.Rel(workDir, p)
@@ -168,7 +172,31 @@ func walkFiles(ctx context.Context, workDir, scope string, limit int) ([]string,
 	return files, truncated, nil
 }
 
-func isRegularFile(fullPath string) bool {
-	info, err := os.Lstat(fullPath)
-	return err == nil && info.Mode().IsRegular()
+// nameMatchable reports whether the entry at p, slash-separated beneath
+// workDir, is one name search lists: a regular file, or a symlink, which comes
+// with its classification and its type in the tree's terms, so the client
+// draws and opens it as the tree does.
+func nameMatchable(workDir string, work *os.Root, p string) (*contents.Link, contents.EntryType, bool) {
+	info, err := work.Lstat(filepath.FromSlash(p))
+	if err != nil {
+		return nil, "", false
+	}
+	if info.Mode().IsRegular() {
+		return nil, "", true
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		return nil, "", false
+	}
+	res, err := contents.Resolve(workDir, p)
+	if err != nil || res.Link == nil {
+		return nil, "", false
+	}
+	switch {
+	case !res.Link.Followable():
+		return res.Link, contents.TypeLink, true
+	case res.Info.IsDir():
+		return res.Link, contents.TypeDir, true
+	default:
+		return res.Link, contents.TypeFile, true
+	}
 }

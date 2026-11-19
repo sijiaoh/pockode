@@ -474,7 +474,8 @@ A page that is itself withheld — an `.html` file under `.git`, or one named
 the failure ([file.md](../file.md#html-pages)).
 
 **Symlinks cannot widen a scope.** This is stricter than the rest of the file
-surface, which [does not resolve symlinks](#accepted-limitations). The
+surface, which follows a link that stays inside the work directory however it
+is spelled ([symlinks.md](../symlinks.md#the-boundary)). The
 difference is the holder: a capability may be in the hands of a page's script,
 not of the developer. A work-directory file is opened through an `os.Root`, so
 a link that leads out of the work directory is refused, and a link that stays
@@ -731,13 +732,6 @@ model (e.g. multi-user hosting) revisits them rather than rediscovering them:
   be read back into a usable credential, but anything that can write the file —
   including a prompt-injected agent — can log every other browser out. The
   recovery is to log in again with the password, which that writer does not have.
-- **Symlinks are not resolved during path validation.** `ValidatePath` rejects
-  `..` and absolute paths and re-checks that the joined path stays inside the work
-  directory, but it does not resolve symlinks, so a symlink inside a worktree can
-  point outside it. Again, this is a defense-in-depth gap, not a boundary crossing,
-  for a caller who already holds the one credential. The raw endpoint is the
-  exception, for the reason given in
-  [Raw capabilities](#raw-capabilities-urls-a-browser-element-loads-by-itself).
 - **Traffic on a plaintext LAN deployment is not encrypted.** See
   [The residual risk](#the-residual-risk-plaintext-http-on-a-lan) for why the
   client-side hashing that looks like a fix is not one, and what actually is.

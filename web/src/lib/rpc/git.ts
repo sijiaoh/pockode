@@ -14,6 +14,7 @@ import type {
 	GitShowResult,
 	GitStatus,
 } from "../../types/git";
+import { asOneFileDiff } from "../drawablePatch";
 
 export interface GitActions {
 	getStatus: () => Promise<GitStatus>;
@@ -113,11 +114,12 @@ export function createGitActions(
 			path: string,
 			hideWhitespace = false,
 		): Promise<GitDiffData> => {
-			return requireClient().request("git.show.diff", {
+			const data: GitDiffData = await requireClient().request("git.show.diff", {
 				hash,
 				path,
 				hide_whitespace: hideWhitespace,
 			});
+			return asOneFileDiff(data, path);
 		},
 		getCommitFile: async (hash: string, path: string): Promise<FileContent> => {
 			return requireClient().request("git.show.file", { hash, path });

@@ -27,10 +27,10 @@ served through it; it is addressed by id in the session's own attachment store
 | Layer | Path | Role |
 |-------|------|------|
 | RPC handlers | `server/ws/rpc_file.go` | `file.get`, `file.write`, `file.create`, `file.delete`, `file.rename`, `file.move`, `file.search` |
-| File operations | `server/contents/contents.go`, `server/contents/move.go`, `server/contents/within.go` | Path validation, read, write (upsert), create, delete, rename, move; opening a directory only where its links lead inside the work directory (`OpenDirWithin`, shared with the folder upload and download) |
+| File operations | `server/contents/contents.go`, `server/contents/move.go`, `server/contents/within.go`, `server/contents/links.go` | Path validation, read, write (upsert), create, delete, rename, move; resolving a path with its links followed only inside the work directory (`Resolve`, and `OpenDirWithin` for a directory, shared with the folder upload and download) and classifying a link ([symlinks.md](symlinks.md)) |
 | HTTP transfer | `server/filetransfer/filetransfer.go`, `server/filetransfer/folder.go`, `server/filetransfer/folderdownload.go` | Upload / download of whole files, upload of a folder, download of a folder as a zip archive (see [Transfer](#transfer)) |
 | Search | `server/search/` | Candidate listing (`list.go`), fuzzy matching and ranking on `server/fuzzy`, of names (`name.go`) and of lines (`scan.go`), ranges to UTF-16 (`utf16.go`) |
-| Frontend components | `web/src/components/Files/` | FileTree, FileEditor, FileView, FileTreeNode, FileSearchBar, FileSearchResults, FileEntryMenu, EntryNameDialog, UploadQueue, UploadConflictDialog |
+| Frontend components | `web/src/components/Files/` | FileTree, FileEditor, FileView, FileTreeNode, FileSearchBar, FileSearchResults, FileEntryMenu, EntryNameDialog, UploadQueue, UploadConflictDialog; LinkPage, FolderListing, EntryIcon and `web/src/lib/symlink.ts` for links ([symlinks.md](symlinks.md#surfaces)) |
 | Entry-action helpers | `web/src/hooks/useTakenNames.ts`, `web/src/lib/fileCache.ts` | Which names a directory has spoken for; the cache work a rename, a move or a delete implies |
 | Search UI state | `web/src/hooks/useFileSearch.ts`, `web/src/lib/filesSearchStore.ts` | Debounce + query cache, persisted options |
 | RPC actions | `web/src/lib/rpc/file.ts` | `getFile`, `writeFile`, `createFile`, `deleteFile`, `renameFile`, `moveFile`, `searchFiles`, `isAlreadyExistsError`, `fileMoveRefusedReason` |
@@ -46,8 +46,10 @@ served through it; it is addressed by id in the session's own attachment store
 ## Operations
 
 **`file.get`** — Read file or list directory.
-- Directory → returns `Entry[]` (name, type, path)
+- Directory → returns `Entry[]` (name, type, path, and `link` on a symlink)
 - File → returns metadata, and content only when the client can use it
+- A symlink that cannot be followed → returns the link's own entry and no
+  content: an answer, not an error ([symlinks.md](symlinks.md#wire-format))
 
 A file result always carries `name`, `type`, `path`, `size` (bytes) and `mime`,
 whether or not any content came with it. `encoding` says how to read `content`:
@@ -112,7 +114,8 @@ render. The client's counterpart of the type half is `getPlayableKind` beside
 
 Anything that is neither a directory nor a regular file — a named pipe, a
 device node — is rejected with `InvalidParams` from the stat, before it is
-opened: opening a fifo blocks until something writes to it, which would hang
+opened (a symlink to one is answered as a link, `unsupported`;
+[symlinks.md](symlinks.md#link-states)): opening a fifo blocks until something writes to it, which would hang
 the request for good.
 
 `mime` comes from the file's own bytes (`http.DetectContentType`), never from
@@ -159,6 +162,10 @@ rendered through an `<img>` never needs that Blob.
 - Creates parent directories automatically
 - Updates existing files
 - Rejects content over `contents.MaxFileSize` (**2 MiB**) with `InvalidParams`
+- Rejects a path holding something that is neither a file nor a directory (a
+  fifo, a device) with `InvalidParams`, for the reason `file.get` gives; the open
+  is non-blocking and checked on the descriptor as well, so one swapped in after
+  that check fails instead of hanging the request
 
 The same ceiling as `file.get`, for the same reason, and one constant rather
 than two: the content travels as one JSON-RPC message either way. Reaching it
@@ -321,8 +328,10 @@ alone: no client sent it, and one rule for the whole RPC is simpler than a flag
 that means something in only one mode.
 
 Result: `{ matches: FileMatch[], truncated: boolean }`, where `FileMatch` is
-`{ path, name, path_ranges?, lines? }` and each line is
-`{ number, text, ranges, rank }`. `matches` is ranked, best first, in both modes
+`{ path, name, path_ranges?, lines?, link?, type? }` and each line is
+`{ number, text, ranges, rank }`. `link` and `type` are set together, on a
+symlink only, which name mode lists by its own name: the same `link` object and
+`type` a directory listing gives it ([symlinks.md](symlinks.md#search)). `matches` is ranked, best first, in both modes
 (see [Search behavior](#search-behavior)); the client shows it in that order and
 never re-ranks.
 
@@ -1000,9 +1009,10 @@ score, best first, with fzf's path tiebreaks (a match starting in the base name,
 then the shorter path) — see
 [fuzzy-matching.md](code/fuzzy-matching.md#ranking-is-the-callers); the best
 `max_results` are kept. A query with no terms at all (`'` alone) matches every
-file and keeps the listing's order. Listed entries that are not readable regular
-files (submodule gitlinks, tracked-but-deleted files) are dropped, so every
-result can actually be opened.
+file and keeps the listing's order. Listed entries that are neither readable regular
+files nor symlinks (submodule gitlinks, tracked-but-deleted files) are dropped,
+so every result can actually be opened; a symlink is listed by its own name
+([symlinks.md](symlinks.md#search)).
 
 Content-mode lines are matched with `server/fuzzy`'s default scheme — a line is
 free text, not a path. A file ranks by its **best line's score**, best first;
@@ -1200,8 +1210,13 @@ the list, which is left as is — the pinned header keeps the search usable, and
 
 ## Viewer UI
 
-`FileView` derives one state from the `file.get` response and renders nothing
-else (`utils/fileView.ts`, priority order):
+A `file.get` answer that is not a file is drawn before any of this: a link
+result as the link page, a directory (a dir link, or any folder opened by URL)
+as a plain listing of its entries ([symlinks.md](symlinks.md#viewer)). Neither
+is ever a blank pane, and `?edit` on either goes back to the viewer.
+
+For a file, `FileView` derives one state from the `file.get` response and
+renders nothing else (`utils/fileView.ts`, priority order):
 
 | State | When | Body | Edit |
 |-------|------|------|------|
@@ -1934,8 +1949,7 @@ It works through the relay as the players do, on the same route.
   a symlink out of the work directory, so such a file is refused with
   `outside_scope`, worded "This file can't be read from here — it may link to
   outside the project, or not be readable". That is the capability's boundary
-  ([Security](#security)), kept rather than worked around through the bearer
-  routes, which do follow the link.
+  ([Security](#security)); the bearer routes refuse it too.
 
 **Progress and cancelling belong to the browser.** The spinner that replaces
 the icon, and "Cancel download" on a second click, cover only getting the
@@ -2816,7 +2830,7 @@ from Keep both starts over with nothing stored.
 
 ## Known transfer limits
 
-Two gaps rather than decisions, collected here because each of them is easy to
+One gap rather than a decision, collected here because it is easy to
 rediscover as a bug:
 
 - **A file rewritten in place mid-download is not caught**: the download is
@@ -2828,9 +2842,6 @@ rediscover as a bug:
   A folder's archive is the same, per file and across the folder: each file is
   read once as it then is, and nothing makes the archive one moment's
   snapshot of the folder ([Two walks](#folder-archive)).
-- **A file upload's destination directory still follows symlinks**, though the
-  file being written does not — see [Security](#security). A folder upload's
-  may follow one only to somewhere inside the work directory.
 
 Not in this version, and scope rather than limits: resuming an interrupted
 transfer, a queue that survives a
@@ -2850,74 +2861,26 @@ the operations for which it makes no sense — `WriteFile`, `Create` and `Delete
 refuse it on their own, so an empty path can never become an operation on the
 workspace root.
 
-Search applies the same validation to its `path` scope, and never follows
-symlinks (checked with `Lstat`) — following one could return content from
-outside the workspace.
+**Symlinks are followed only to inside the work directory, on every route.**
+The rule, how the check is made, what each route does with a link and why it
+refuses rather than allows are all in [symlinks.md](symlinks.md#the-boundary).
+What stays here is why some operations are built the way they are, since the
+same choice decides how they treat a link:
 
-The transfer routes inherit that same behavior on the read side —
-`/api/files/download` stats with `Stat`, exactly as `file.get` does — but not
-on the write side. The raw endpoint is an exception on the read side as well:
-it opens a work-directory file through an `os.Root` and refuses a link out of a
-capability's scope
-([why](code/authentication.md#raw-capabilities-urls-a-browser-element-loads-by-itself)).
-The app's Download goes through it, so a file that links out of the project
-cannot be downloaded from the app, though it still shows in the viewer
-(`file.get` and the image read follow the link; [Downloading](#downloading)). An
-upload replaces a **regular file** and nothing else: it checks the destination
-name with `Lstat`, so a symlink is the link itself rather than what it points
-at, and answers `409` for it even with `overwrite=true`. Following one would
-write outside the workspace, and an `O_WRONLY` open of a fifo would block until
-something read from it, hanging the request for good.
-
-That covers the file being written, not the directory it goes in: the upload's
-`path` is validated lexically and then used, so a symlinked directory is
-followed just as `file.write` follows one on the way to its target. It is the
-same long-standing trade-off as above, not a new one — closing it belongs with
-the decision that closes it for `file.get` and `file.write`. A folder upload is
-stricter, because it is new code with no existing behavior to keep: its
-destination may follow a link only to somewhere inside the work directory, a
-merge refuses a link it finds inside the folder, and nothing it writes can lead
-out of the folder ([Uploading a folder](#uploading-a-folder)).
-
-A folder download is new code on the read side, and as strict: it archives a
-symlink as a link and never follows one, opens every entry through the folder's
-own directory handles, and follows a link only on the requested path itself,
-and only to inside the work directory ([the archive](#folder-archive)).
-It leaves nothing out beneath the folder — not what a root raw capability
-withholds from a page, nor the data directory or other worktrees: it is the
-user's own download of what Files already lets them open, and a project root's
-carries the data directory's live tokens with it ([why, and the
-cost](#folder-archive)).
-
-`file.create` will not create *through* a symlink on the name it is given.
-`O_EXCL` and `os.Mkdir` both fail on a name that is already taken, and a
-symlink takes the name whether or not it points anywhere — so the same syscall
-that makes "already exists" atomic is what keeps a link from being followed out
-of the workspace. Nothing stats first; adding a check would not strengthen this,
-only add a window. The parents it creates along the way are `MkdirAll`, so a
-symlinked *directory* on the path is followed exactly as it is for `file.write`
-and for an upload.
-
-`file.rename` treats a symlink as an entry, never as a door: it looks for both
-the source and the destination with `Lstat` and hands both names to `os.Rename`,
-which renames links rather than following them. So a link inside the workspace
-is renamed like any other entry, and one sitting on the destination name blocks
-the rename instead of being followed out of the workspace — either way whether
-or not it still points anywhere. `Stat` would get both wrong: on the destination
-it would call a dangling link's name free and let the rename unlink it, and on
-the source it would report a link the tree is plainly showing as not found. The
-parent directory is a different matter — it comes from the source path, which is
-validated lexically, so a symlinked directory on the way there is followed
-exactly as it is for `file.write`.
-
-`file.move` treats the entry it moves the same way, but is stricter about the
-directories: it is new code, as the folder upload is, so both the source's
-parent and the destination may follow a link only to somewhere inside the work
-directory ([`file.move`](#operations)).
-
-`file.get` does follow them: it stats with `Stat`, so a symlink pointing outside
-the workspace reads the target. This is long-standing behavior, not a property
-anyone designed for. Closing it means resolving the link and re-checking
-containment, which is a deliberate change with a real cost — a pnpm workspace
-links `packages/shared` into `web/node_modules`, and a blanket rejection would
-make such directories unbrowsable. Left as is until that trade-off is decided.
+- `file.create` will not create *through* a symlink on the name it is given:
+  `O_EXCL` and `Mkdir` both fail on a taken name, and a symlink takes the name
+  whether or not it points anywhere — so the syscall that makes "already
+  exists" atomic is what keeps a link from being followed. Nothing stats first;
+  a check would only add a window.
+- `file.delete` and `file.rename` act on the link itself, looked up with
+  `Lstat`, never on what it points at — so a broken link can be deleted, and a
+  link on a rename's destination blocks it instead of being followed. `Stat`
+  would get both wrong: it would call a dangling link missing, and call its
+  name free. `file.move` treats the entry it moves the same way
+  ([`file.move`](#operations)).
+- An upload replaces a **regular file** and nothing else: it checks the
+  destination name with `Lstat` and answers `409` for a link even with
+  `overwrite=true`, since following one is what the boundary forbids and an
+  `O_WRONLY` open of a fifo would block until something read from it. A folder
+  upload refuses a link it finds inside the folder, and nothing it writes can
+  lead out of it ([Uploading a folder](#uploading-a-folder)).

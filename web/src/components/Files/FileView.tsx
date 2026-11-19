@@ -1,7 +1,14 @@
 import { ConfirmDialog, useIsExpanded } from "@pockode/shared";
 import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useRouter } from "@tanstack/react-router";
-import { History, Loader2, Pencil, PencilLine, Trash2 } from "lucide-react";
+import {
+	CornerDownRight,
+	History,
+	Loader2,
+	Pencil,
+	PencilLine,
+	Trash2,
+} from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { contentsQueryKey, useContents } from "../../hooks/useContents";
 import { useFileDownload } from "../../hooks/useFileDownload";
@@ -12,9 +19,10 @@ import { useCodeWrap } from "../../lib/diffSettingsStore";
 import { applyEntryGone } from "../../lib/fileCache";
 import { overlayToNavigation } from "../../lib/navigation";
 import { isAlreadyExistsError } from "../../lib/rpc/file";
+import { deleteLinkMessage, revealPath } from "../../lib/symlink";
 import { useIsGitRepo } from "../../lib/worktreeStore";
 import { useWSStore } from "../../lib/wsStore";
-import { isFileContent } from "../../types/contents";
+import { isFileContent, isLinkResult } from "../../types/contents";
 import { fileHistoryOverlay } from "../../types/overlay";
 import {
 	canEditFileView,
@@ -38,6 +46,9 @@ import {
 import EntryNameDialog from "./EntryNameDialog";
 import FileBody, { offersWrap } from "./FileBody";
 import { DownloadButton } from "./FileDownloadControls";
+import FolderListing from "./FolderListing";
+import LinkPage from "./LinkPage";
+import WatchFailedNotice from "./WatchFailedNotice";
 
 interface Props {
 	path: string;
@@ -90,6 +101,14 @@ function FileView({
 	const showSource = source || line !== undefined;
 
 	const file = data && isFileContent(data) ? data : null;
+	// Neither a file nor a link that cannot be followed is a folder — a
+	// directory link opened from a chat path, or any folder's URL — and is
+	// listed, never left blank.
+	const linkResult = data && isLinkResult(data) ? data : null;
+	const folder = Array.isArray(data) ? data : null;
+	// What delete removes: a link is deleted as itself, never its target.
+	const ownLink = linkResult?.link ?? file?.link;
+	const linkTarget = file?.link ? revealPath(file.link) : null;
 	const state = useMemo(
 		() => (file ? getFileViewState(file, { kind: "file", path }) : null),
 		[file, path],
@@ -253,11 +272,16 @@ function FileView({
 		setRenameError(null);
 	}, [path, worktree]);
 
-	useFSWatch({
+	const watch = useFSWatch({
 		path,
 		onChanged: useCallback(() => {
 			queryClient.invalidateQueries({ queryKey: contentsQueryKey(path) });
 		}, [queryClient, path]),
+		// A link that cannot be followed is refused a watch, as a read through
+		// it is: "Not updating" over a page that is the answer would read as a
+		// failure. The listing around it still watches the link itself. Held
+		// until the read says what is there, so a link page never asks at all.
+		enabled: data !== undefined && !linkResult,
 	});
 
 	// Deleting stays available for everything the viewer cannot render; only
@@ -363,6 +387,41 @@ function FileView({
 						{actionError}
 					</div>
 				)}
+				{watch.error && !linkResult && (
+					<WatchFailedNotice
+						error={watch.error}
+						onRetry={watch.retry}
+						style={{ paddingLeft: 16 }}
+					/>
+				)}
+				{file?.link && (
+					<div className="flex min-h-9 flex-wrap items-center gap-x-2 border-b border-th-border px-4 py-1 text-xs text-th-text-muted">
+						<CornerDownRight
+							className="h-3.5 w-3.5 shrink-0"
+							aria-hidden="true"
+						/>
+						<span className="min-w-0 break-all">
+							Link to <code className="font-mono">{file.link.target}</code>
+						</span>
+						{linkTarget !== null && (
+							<button
+								type="button"
+								onClick={() => openFile(linkTarget)}
+								className="inline-flex min-h-9 items-center rounded px-2 text-th-accent hover:underline pointer-coarse:min-h-11 focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent"
+							>
+								Open target
+							</button>
+						)}
+					</div>
+				)}
+				{linkResult && (
+					<LinkPage
+						link={linkResult}
+						onDelete={handleDeleteClick}
+						deleting={isDeleting}
+					/>
+				)}
+				{folder && <FolderListing entries={folder} onOpen={openFile} />}
 				{state && (
 					<FileBody
 						state={state}
@@ -398,8 +457,15 @@ function FileView({
 			)}
 			{showDeleteConfirm && (
 				<ConfirmDialog
-					title="Delete file?"
-					message={`This will delete "${fileName}". This action cannot be undone.`}
+					title={ownLink ? "Delete link?" : "Delete file?"}
+					message={
+						ownLink
+							? deleteLinkMessage({
+									name: fileName,
+									type: linkResult ? "link" : "file",
+								})
+							: `This will delete "${fileName}". This action cannot be undone.`
+					}
 					confirmLabel="Delete"
 					variant="danger"
 					onConfirm={handleDeleteConfirm}

@@ -1,3 +1,5 @@
+import type { EntryType, Link } from "./contents";
+
 /** What a search query is matched against. */
 export type FileSearchMode = "name" | "content";
 
@@ -38,6 +40,13 @@ export interface FileMatch {
 	path_ranges?: SearchRange[];
 	/** Only present in content mode, in line-number order; `rank` orders them by score. */
 	lines?: SearchLine[];
+	/** Set when the match is a symlink, which only name mode lists. */
+	link?: Link;
+	/**
+	 * Set with `link`: the type a listing gives the entry (a followed link
+	 * takes its target's), which the path alone cannot say.
+	 */
+	type?: EntryType;
 }
 
 export interface FileSearchResult {

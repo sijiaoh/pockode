@@ -621,13 +621,29 @@ func resolveSubmodulePathWith(submodules []string, dir, path string) (string, st
 	return dir, path
 }
 
+// Git's modes for what an untracked entry can be (readWorktree reads both).
+const (
+	modeRegular = "100644"
+	modeSymlink = "120000"
+)
+
+// untrackedMode is the mode untrackedDiff writes for an entry Lstat described:
+// a symlink's, whose content is its target, or a regular file's. The client
+// reads it off the header to mark a link (docs/symlinks.md).
+func untrackedMode(info os.FileInfo) string {
+	if info.Mode()&os.ModeSymlink != 0 {
+		return modeSymlink
+	}
+	return modeRegular
+}
+
 // untrackedDiff generates a diff-like output for an untracked file, which has
 // no diff against the index for git to produce.
-func untrackedDiff(path, content string) string {
+func untrackedDiff(path, mode, content string) string {
 	if len(content) == 0 {
 		var result strings.Builder
 		result.WriteString(fmt.Sprintf("diff --git a/%s b/%s\n", path, path))
-		result.WriteString("new file mode 100644\n")
+		result.WriteString("new file mode " + mode + "\n")
 		return result.String()
 	}
 
@@ -641,7 +657,7 @@ func untrackedDiff(path, content string) string {
 	var result strings.Builder
 
 	result.WriteString(fmt.Sprintf("diff --git a/%s b/%s\n", path, path))
-	result.WriteString("new file mode 100644\n")
+	result.WriteString("new file mode " + mode + "\n")
 	result.WriteString("--- /dev/null\n")
 	result.WriteString(fmt.Sprintf("+++ b/%s\n", path))
 	result.WriteString(fmt.Sprintf("@@ -0,0 +1,%d @@\n", len(lines)))
@@ -849,7 +865,11 @@ func (s *DiffSnapshot) DiffWithContent(path string, opts DiffOptions) (*DiffResu
 	if !opts.Staged && status.IsUntracked(path) {
 		// From the content already read rather than the file again, which may
 		// have grown past the limit in between.
-		diff = untrackedDiff(relativePath, newContent)
+		mode := modeRegular
+		if info, err := os.Lstat(filepath.Join(actualDir, filepath.FromSlash(relativePath))); err == nil {
+			mode = untrackedMode(info)
+		}
+		diff = untrackedDiff(relativePath, mode, newContent)
 		// A binary file is drawn as text here, but staged as the file it is.
 		if !strings.Contains(newContent[:min(len(newContent), binarySniffLen)], "\x00") {
 			hunkIDs = hunkIDsFor(path, file, opts, diff)

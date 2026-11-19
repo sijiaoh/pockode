@@ -64,6 +64,8 @@ export default Dialog;
 
 - **该抽象就抽象** — 重复的 UI 模式、已知会扩展的功能，应及时抽取为共用组件或 Hooks
 - **共性与个性分离** — 概念相同的 UI 共用骨架，通过 props/参数注入各自的业务逻辑
+- **交给第三方渲染的内容包在 `ui/ContentErrorBoundary` 里** — diff 解析器、高亮器、Markdown / 图表渲染器遇到没预料到的输入会在渲染时抛错，没有就近的 boundary，丢掉的就是整页（最坏是整个 app，且刷新后照旧，因为路由在 URL 里）。输入先在到达处弄成能画的：交给 `@git-diff-view` 的 patch 一律先过 `lib/drawablePatch.ts`（`drawablePatch` / `asOneFileDiff`），boundary 只兜底。三层 boundary、各自何时重置见 [docs/symlinks.md](../docs/symlinks.md#errors-stay-local)
+- **`["contents", path]` 缓存里不一定是文件** — 它可能是目录列表（`Entry[]`）或链接结果（`LinkResult`），读它的地方一律先用 `isFileContent` / `isLinkResult` 收窄（见 [docs/symlinks.md](../docs/symlinks.md#chat)）
 
 ### Tailwind
 

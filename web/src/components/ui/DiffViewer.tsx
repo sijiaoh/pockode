@@ -22,6 +22,8 @@ import {
 	subscribeToDarkMode,
 } from "../../lib/shikiUtils";
 import { exceedsHighlightLimit } from "../../utils/fileView";
+import { splitPath } from "../../utils/path";
+import { ContentErrorBoundary } from "./ContentErrorBoundary";
 import { expandFromRowPress, labelCollapsedContext } from "./collapsedContext";
 import { attachLineGutter, markSelectedLines } from "./lineGutter";
 
@@ -72,7 +74,27 @@ function sidesOfHunks(hunks: string[]): [string, string] {
 	return [old.join("\n"), next.join("\n")];
 }
 
-export function DiffViewer({
+/**
+ * Callers hand it patches through `lib/drawablePatch.ts`; the boundary is for
+ * whatever input the library still turns out to choke on.
+ */
+export function DiffViewer(props: DiffViewerProps) {
+	const raw = props.hunks.join("\n");
+	return (
+		// Another file is drawn afresh by the key, another patch by the reset
+		// key — the patch itself, rather than a copy of it with the name.
+		<ContentErrorBoundary
+			key={props.fileName}
+			name={splitPath(props.fileName).fileName}
+			resetKey={raw}
+			raw={raw}
+		>
+			<DiffViewerContent {...props} />
+		</ContentErrorBoundary>
+	);
+}
+
+function DiffViewerContent({
 	fileName,
 	hunks,
 	oldContent,

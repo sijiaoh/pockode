@@ -2,6 +2,12 @@ import { memo, type ReactNode } from "react";
 import type { DiffHunk } from "../../lib/diffHunks";
 import type { LinePress, LineView } from "../../lib/diffRows";
 import { useCodeWrap, useDiffSettings } from "../../lib/diffSettingsStore";
+import {
+	BINARY_DIFF,
+	hasHunk,
+	type SymlinkChange,
+	symlinkChange,
+} from "../../lib/drawablePatch";
 import type { GitDiffData } from "../../types/git";
 import FileBody from "../Files/FileBody";
 import { DiffViewer } from "../ui";
@@ -21,7 +27,37 @@ interface Props {
 	selectedLines?: { view: LineView; keys: ReadonlySet<string> } | null;
 }
 
-const DiffContent = memo(function DiffContent({
+const DiffContent = memo(function DiffContent(props: Props) {
+	const change = props.data.omitted ? null : symlinkChange(props.data.diff);
+	return (
+		<>
+			{change && <SymlinkLine change={change} />}
+			<DiffBody {...props} />
+		</>
+	);
+});
+
+/**
+ * Says a diff is a symlink's, whose content is the path it points to rather
+ * than a file's text — and, for a file that became a link or the reverse,
+ * which way it went (docs/symlinks.md#git-panel-changes-staged-commit-diffs).
+ */
+function SymlinkLine({ change }: { change: SymlinkChange }) {
+	return (
+		<div className="flex min-h-9 flex-wrap items-center gap-2 border-b border-th-border px-4 py-1 text-xs text-th-text-muted">
+			<span className="rounded-full bg-th-bg-tertiary px-2 py-0.5 text-th-text-secondary">
+				Symlink
+			</span>
+			{change.kind === "typechange" && (
+				<span>
+					Type changed: {change.from} → {change.to}
+				</span>
+			)}
+		</div>
+	);
+}
+
+function DiffBody({
 	data,
 	fileName,
 	split,
@@ -50,7 +86,7 @@ const DiffContent = memo(function DiffContent({
 	}
 
 	const { diff, old_content: oldContent, new_content: newContent } = data;
-	if (/^Binary files .+ and .+ differ$/m.test(diff)) {
+	if (BINARY_DIFF.test(diff)) {
 		return (
 			<div className="p-4 text-center text-th-text-muted">
 				Binary file - cannot display diff
@@ -60,7 +96,7 @@ const DiffContent = memo(function DiffContent({
 
 	// No hunk: git prints only headers for a mode change, a rename with no
 	// edit, or an empty file added or removed — or nothing at all.
-	if (!/^@@ /m.test(diff)) {
+	if (!hasHunk(diff)) {
 		// Hidden whitespace is the one way an empty diff can stand for a file
 		// whose content did change; a bare "No changes" there reads as a bug.
 		if (hideWhitespace && oldContent !== newContent) {
@@ -97,6 +133,6 @@ const DiffContent = memo(function DiffContent({
 			selectedLines={selectedLines}
 		/>
 	);
-});
+}
 
 export default DiffContent;

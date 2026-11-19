@@ -25,7 +25,9 @@ vi.mock("../../lib/wsStore", () => ({
 	isRPCTimeout: () => false,
 }));
 
-vi.mock("../../hooks/useFSWatch", () => ({ useFSWatch: () => {} }));
+vi.mock("../../hooks/useFSWatch", () => ({
+	useFSWatch: () => ({ error: null, retry: () => {} }),
+}));
 
 const prepareDragDownload = vi.fn();
 const heldDragDownloadUrl = vi.fn((..._args: unknown[]): string | null => null);
@@ -519,5 +521,95 @@ describe("FileTree forced open", () => {
 		// Created into, or moved into, a second time: the same path, asked again.
 		rerender(tree(["src"]));
 		expect(folder()).toHaveAttribute("aria-expanded", "true");
+	});
+});
+
+describe("FileTree symlinks", () => {
+	function renderLinks(
+		entries: Entry[],
+		listings: Record<string, Entry[]> = {},
+	) {
+		const onSelectFile = vi.fn();
+		const queryClient = new QueryClient({
+			defaultOptions: { queries: { retry: false } },
+		});
+		queryClient.setQueryData(contentsQueryKey(""), entries);
+		for (const [path, children] of Object.entries(listings)) {
+			queryClient.setQueryData(contentsQueryKey(path), children);
+		}
+		render(
+			<QueryClientProvider client={queryClient}>
+				<FileTree
+					onSelectFile={onSelectFile}
+					activeFilePath={null}
+					expandSignal={0}
+					watchEnabled={false}
+					onOpenMenu={vi.fn()}
+					menuPath={null}
+					dropTargetPath={null}
+					springOpenPath={null}
+					forceOpenPaths={NO_PATHS}
+					dragSourcePath={null}
+					movingPaths={NOTHING_MOVING}
+				/>
+			</QueryClientProvider>,
+		);
+		return { onSelectFile };
+	}
+
+	it("expands a directory link in place, listing it under its own path", async () => {
+		renderLinks(
+			[
+				{
+					name: "skills",
+					type: "dir",
+					path: "skills",
+					link: { target: "../shared", state: "ok", resolved: "shared" },
+				},
+			],
+			{ skills: [entry("a.md", "file", "skills")] },
+		);
+		fireEvent.click(
+			screen.getByRole("button", {
+				name: "Expand folder: skills, link to ../shared",
+			}),
+		);
+		expect(
+			await screen.findByRole("button", { name: "Open file: a.md" }),
+		).toBeInTheDocument();
+	});
+
+	it("reveals a cycle's target instead of expanding it", () => {
+		const { onSelectFile } = renderLinks([
+			{
+				name: "up",
+				type: "dir",
+				path: "a/up",
+				link: { target: "..", state: "cycle", resolved: "a" },
+			},
+		]);
+		const row = screen.getByRole("button", {
+			name: "Reveal link target: up, link to ..",
+		});
+		expect(row).not.toHaveAttribute("aria-expanded");
+		fireEvent.click(row);
+		expect(onSelectFile).toHaveBeenCalledWith("a");
+	});
+
+	it("opens a link that cannot be followed, saying why in its name", () => {
+		const { onSelectFile } = renderLinks([
+			{
+				name: "gone",
+				type: "link",
+				path: "gone",
+				link: { target: "missing.txt", state: "broken" },
+			},
+		]);
+		fireEvent.click(
+			screen.getByRole("button", {
+				name: "Open link: gone, link to missing.txt (broken link)",
+			}),
+		);
+		expect(onSelectFile).toHaveBeenCalledWith("gone");
 	});
 });

@@ -3,6 +3,12 @@ export {
 	CoveredSurface,
 	type CoveredSurfaceProps,
 } from "./CoveredSurface.tsx";
+export {
+	CrashScreen,
+	type CrashScreenAction,
+	type CrashScreenProps,
+} from "./CrashScreen.tsx";
+export { ErrorBoundary, type ErrorBoundaryProps } from "./ErrorBoundary.tsx";
 export { QrCode, type QrCodeProps } from "./QrCode.tsx";
 export {
 	ReconnectBanner,

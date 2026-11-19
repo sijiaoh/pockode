@@ -387,7 +387,7 @@ func stageUntrackedHunk(dir, relativePath, path, id string) error {
 	if size > contents.MaxFileSize {
 		return ErrHunkStale
 	}
-	if _, _, ok := parseDiff(untrackedDiff(relativePath, string(content))).find(path, false, id); !ok {
+	if _, _, ok := parseDiff(untrackedDiff(relativePath, untrackedMode(info), string(content))).find(path, false, id); !ok {
 		return ErrHunkStale
 	}
 

@@ -51,7 +51,10 @@ function FileEditor({ path, onBack, keyboardUp = false }: Props) {
 	const [isInitialized, setIsInitialized] = useState(false);
 
 	const file = data && isFileContent(data) ? data : null;
-	const isBinary = file !== null && file.encoding !== "text";
+	// Nothing to edit as text: a binary file, or no file at all — a folder or
+	// a link that cannot be followed, opened with `edit` by URL.
+	const hasNoEditor =
+		data !== undefined && (file === null || file.encoding !== "text");
 
 	// Large files stay editable and only lose their colours, which
 	// `useEditorHighlight` already falls back to when it has no language.
@@ -83,16 +86,16 @@ function FileEditor({ path, onBack, keyboardUp = false }: Props) {
 		}
 	}, [data, path]);
 
-	// A binary file has no editor: its URL is corrected to the view, in place.
+	// Its URL is corrected to the view, in place, which shows each of them.
 	useEffect(() => {
-		if (isBinary) {
+		if (hasNoEditor) {
 			navigate(
 				overlayToNavigation({ type: "file", path }, worktree, sessionId, {
 					replace: true,
 				}),
 			);
 		}
-	}, [isBinary, navigate, path, worktree, sessionId]);
+	}, [hasNoEditor, navigate, path, worktree, sessionId]);
 
 	const handleSave = useCallback(async () => {
 		setIsSaving(true);

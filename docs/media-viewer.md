@@ -119,9 +119,11 @@ is drawn, the gestures and keys that move it, and its loading and failure states
 
 **Loading a stage.** Each stage is a separate chunk, loaded on first use by
 `stages.ts`, so a zoom library never lands in the initial bundle. The viewer
-keeps the `import()` result in state rather than using `React.lazy`: the app has
-no error boundary, and a rejected lazy import (offline, or a relay link dropped
-mid-load) would take the whole tree down. A failed load shows "Couldn't load the
+keeps the `import()` result in state rather than using `React.lazy`: a rejected
+lazy import (offline, or a relay link dropped mid-load) is a throw while
+rendering, which only the nearest error boundary would catch, as a generic card
+in place of everything it guards ([symlinks.md](symlinks.md#errors-stay-local)).
+Kept in state, the failure is the viewer's own to word. A failed load shows "Couldn't load the
 image viewer" with the error and a Retry, which calls `import()` again. A
 browser that keeps a failed module fetch in its module map rejects that
 retry at once with the same error. That is still reported, never silent, and
