@@ -244,8 +244,6 @@ Flags:
 
 	restarter := newRestarter()
 
-	port := netutil.FindAvailablePort(*portFlag)
-
 	cred, err := password.Load(*passwordFlag, *legacyPasswordFlag)
 	if err != nil {
 		slog.Error(err.Error())
@@ -261,6 +259,7 @@ Flags:
 	if node.TakeMarker() {
 		instanceKind = relay.InstanceNode
 	}
+	startPort := restart.TakePort(*portFlag)
 
 	// Path flags are expanded here because no shell does it for us on Windows:
 	// `--work ~\projects` arrives verbatim there and would otherwise create a
@@ -311,6 +310,19 @@ Flags:
 		LogFormat: *logFormatFlag,
 		LogFile:   pathutil.ExpandTilde(*logFileFlag),
 	})
+
+	// Bound here and served on as is, never released in between: see
+	// netutil.ListenAvailable. Holding it also means server.json, published
+	// further down, can only ever name a port this process is listening on.
+	// After the logger, so a node that cannot bind says why in its server.log.
+	listener, err := netutil.ListenAvailable(startPort)
+	if err != nil {
+		slog.Error("failed to listen", "error", err)
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	port := netutil.ListenerPort(listener)
+	restarter.KeepPort(port)
 
 	if cred.DeprecationWarning != "" {
 		slog.Warn(cred.DeprecationWarning)
@@ -595,7 +607,6 @@ Flags:
 	handler := newHandler(cred.Password, passwordGuard, sessions, devMode, wsHandler, mcpHandler, transferHandler, attachmentHandler, rawHandler)
 
 	srv := &http.Server{
-		Addr:    ":" + portStr,
 		Handler: handler,
 	}
 
@@ -714,7 +725,7 @@ Flags:
 	startup.PrintFooter()
 
 	slog.Info("server starting", "port", port, "workDir", workDir, "dataDir", dataDir, "devMode", devMode, "leaseBudgets", leaseBudgets)
-	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+	if err := srv.Serve(listener); err != nil && err != http.ErrServerClosed {
 		slog.Error("server error", "error", err)
 		os.Exit(1)
 	}
@@ -837,7 +848,9 @@ func runCluster(restarter *restart.Restarter) {
 	}
 
 	cfg := cluster.Config{
-		Port:     *portFlag,
+		// Taken here rather than in Run, before Run starts any node: they
+		// inherit this process's environment.
+		Port:     restart.TakePort(*portFlag),
 		Password: cred.Password,
 		// Logging is not configured until cluster.Run initializes it, so the
 		// warning is handed over rather than emitted here.
