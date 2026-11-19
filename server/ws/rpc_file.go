@@ -3,6 +3,7 @@ package ws
 import (
 	"context"
 	"errors"
+	"sync"
 
 	"github.com/pockode/server/contents"
 	"github.com/pockode/server/rpc"
@@ -175,13 +176,23 @@ func (h *rpcMethodHandler) handleFileSearch(ctx context.Context, conn *jsonrpc2.
 		respectGitignore = *params.RespectGitignore
 	}
 
-	result, err := search.Search(ctx, wt.WorkDir, search.Options{
+	searchCtx, finish := h.state.searches.start(ctx, wt.Name, requestArrival(ctx))
+	defer finish()
+
+	result, err := h.searchFiles(searchCtx, wt.WorkDir, search.Options{
 		Query:            params.Query,
 		Mode:             search.Mode(params.Mode),
 		Path:             params.Path,
 		RespectGitignore: respectGitignore,
 		MaxResults:       params.MaxResults,
 	})
+	// Checked before err: a superseded search ends however its cancellation
+	// happened to stop it — usually as a truncated result, which must not
+	// reach the client looking like an answer.
+	if errors.Is(context.Cause(searchCtx), errFileSearchSuperseded) {
+		h.replyError(ctx, conn, req.ID, rpc.CodeFileSearchSuperseded, errFileSearchSuperseded.Error())
+		return
+	}
 	if err != nil {
 		switch {
 		case errors.Is(err, search.ErrEmptyQuery), errors.Is(err, search.ErrQueryTooLong),
@@ -218,4 +229,57 @@ func (h *rpcMethodHandler) replyFileError(ctx context.Context, conn *jsonrpc2.Co
 	}
 	h.log.Error("file operation failed", "method", req.Method, "error", err)
 	h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInternalError, message)
+}
+
+var errFileSearchSuperseded = errors.New("superseded by a newer file search")
+
+// fileSearches makes the newest file.search on a connection win, per
+// worktree: the one search UI sends a request per settled keystroke, each a
+// scan of the whole repository, and only the last one's answer is wanted. Left
+// to run, a few seconds of typing stack up several scans that compete with the
+// agent for CPU and disk until each reaches its timeout.
+type fileSearches struct {
+	searchesMu sync.Mutex
+	newest     map[string]fileSearch // by worktree name
+}
+
+type fileSearch struct {
+	arrival uint64
+	cancel  context.CancelCauseFunc // nil once the search has finished
+}
+
+// start registers a search and returns its context, which ends with
+// errFileSearchSuperseded as its cause when a search that arrived later
+// starts. arrival orders searches rather than the order start is called in:
+// handlers run concurrently, so the older of two can get here second, and is
+// then superseded before it begins. finish must be called when the search
+// ends.
+func (s *fileSearches) start(parent context.Context, worktree string, arrival uint64) (context.Context, func()) {
+	ctx, cancel := context.WithCancelCause(parent)
+
+	s.searchesMu.Lock()
+	defer s.searchesMu.Unlock()
+	newest, ok := s.newest[worktree]
+	if ok && newest.arrival > arrival {
+		cancel(errFileSearchSuperseded)
+		return ctx, func() {}
+	}
+	if ok && newest.cancel != nil {
+		newest.cancel(errFileSearchSuperseded)
+	}
+	if s.newest == nil {
+		s.newest = make(map[string]fileSearch)
+	}
+	// The entry outlives the search, keeping its arrival, so that an older
+	// search reaching start only after this one has finished still loses.
+	s.newest[worktree] = fileSearch{arrival: arrival, cancel: cancel}
+
+	return ctx, func() {
+		s.searchesMu.Lock()
+		if s.newest[worktree].arrival == arrival {
+			s.newest[worktree] = fileSearch{arrival: arrival}
+		}
+		s.searchesMu.Unlock()
+		cancel(nil)
+	}
 }

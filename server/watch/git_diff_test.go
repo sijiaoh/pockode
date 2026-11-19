@@ -9,25 +9,16 @@ import (
 	"testing"
 
 	"github.com/pockode/server/contents"
+	"github.com/pockode/server/git"
 )
 
 // A file that was unchanged and is now over the limit reads as an empty diff
 // both times — no diff, no contents — so only the omission can tell the poll
 // that anything happened.
 func TestGitDiffWatcher_NotifiesWhenFileGrowsPastLimit(t *testing.T) {
-	dir := t.TempDir()
-	for _, args := range [][]string{
-		{"init"},
-		{"config", "user.email", "test@test.com"},
-		{"config", "user.name", "Test"},
-		{"config", "commit.gpgsign", "false"},
-	} {
-		runGit(t, dir, args...)
-	}
+	dir := initRepo(t)
 	path := filepath.Join(dir, "big.txt")
-	if err := os.WriteFile(path, []byte("small\n"), 0644); err != nil {
-		t.Fatal(err)
-	}
+	writeFile(t, path, "small\n")
 	runGit(t, dir, "add", ".")
 	runGit(t, dir, "commit", "-m", "initial")
 
@@ -64,6 +55,70 @@ func TestGitDiffWatcher_NotifiesWhenFileGrowsPastLimit(t *testing.T) {
 		if got[k] != v {
 			t.Errorf("%s = %v, want %v", k, got[k], v)
 		}
+	}
+}
+
+// One poll reads the status once for every subscription, and each still
+// reports only its own file's changes.
+func TestGitDiffWatcher_PollSharesOneStatus(t *testing.T) {
+	dir := initRepo(t)
+	for _, name := range []string{"a.txt", "b.txt"} {
+		writeFile(t, filepath.Join(dir, name), "one\n")
+	}
+	runGit(t, dir, "add", ".")
+	runGit(t, dir, "commit", "-m", "initial")
+
+	w := NewGitDiffWatcher(dir)
+	snapshots := 0
+	w.newSnapshot = func(dir string) (*git.DiffSnapshot, error) {
+		snapshots++
+		return git.NewDiffSnapshot(dir)
+	}
+	notifierA, notifierB := &captureNotifier{}, &captureNotifier{}
+	if _, err := w.Subscribe("a", "a.txt", false, false, notifierA); err != nil {
+		t.Fatalf("Subscribe(a) error: %v", err)
+	}
+	if _, err := w.Subscribe("b", "b.txt", false, false, notifierB); err != nil {
+		t.Fatalf("Subscribe(b) error: %v", err)
+	}
+
+	poll := func(wantA, wantB int) {
+		t.Helper()
+		before := snapshots
+		w.checkAll()
+		if got := snapshots - before; got != 1 {
+			t.Errorf("poll read the status %d times, want 1", got)
+		}
+		if notifierA.count() != wantA || notifierB.count() != wantB {
+			t.Errorf("notifications a=%d b=%d, want a=%d b=%d", notifierA.count(), notifierB.count(), wantA, wantB)
+		}
+	}
+
+	writeFile(t, filepath.Join(dir, "a.txt"), "two\n")
+	poll(1, 0)
+	poll(1, 0)
+	writeFile(t, filepath.Join(dir, "b.txt"), "two\n")
+	poll(1, 1)
+}
+
+func initRepo(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	for _, args := range [][]string{
+		{"init"},
+		{"config", "user.email", "test@test.com"},
+		{"config", "user.name", "Test"},
+		{"config", "commit.gpgsign", "false"},
+	} {
+		runGit(t, dir, args...)
+	}
+	return dir
+}
+
+func writeFile(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatal(err)
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/coder/websocket"
@@ -67,19 +68,37 @@ func (c *Connections) Serve(ctx context.Context, conn *websocket.Conn, serve fun
 // Serve return while the read loop may still dispatch one more request, and
 // counting that one while Close is already waiting is what a WaitGroup
 // forbids.
+//
+// It serves one connection: each request's context carries its place in the
+// order the connection read them, which requestArrival reads back.
 func (c *Connections) AsyncHandler(h jsonrpc2.Handler) jsonrpc2.Handler {
-	return asyncHandler{h: h, conns: c}
+	return &asyncHandler{h: h, conns: c}
 }
 
 type asyncHandler struct {
-	h     jsonrpc2.Handler
-	conns *Connections
+	h        jsonrpc2.Handler
+	conns    *Connections
+	arrivals atomic.Uint64
 }
 
-func (a asyncHandler) Handle(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request) {
+type arrivalKey struct{}
+
+// requestArrival is the 1-based position of ctx's request among those its
+// connection has read. Handlers run concurrently and in no particular order,
+// so this, not when a handler gets to run, is what says which of two requests
+// the client sent later.
+func requestArrival(ctx context.Context) uint64 {
+	n, _ := ctx.Value(arrivalKey{}).(uint64)
+	return n
+}
+
+func (a *asyncHandler) Handle(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request) {
 	if !a.conns.add() {
 		return
 	}
+	// Numbered here, on the connection's read loop, before the goroutine: this
+	// is the one place requests are still in the order they arrived.
+	ctx = context.WithValue(ctx, arrivalKey{}, a.arrivals.Add(1))
 	go func() {
 		defer a.conns.running.Done()
 		a.h.Handle(ctx, conn, req)

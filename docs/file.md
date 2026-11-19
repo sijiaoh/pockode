@@ -363,6 +363,14 @@ server makes the same substitution before it counts (`toClientText` in
 `truncated` reports that limits or the timeout cut the search short, so more
 matches may exist.
 
+The newest search wins. A `file.search` still running when another arrives on
+the same connection for the same worktree is stopped — its `git ls-files` is
+killed and the scan ends — and answered with `-32015`
+(`rpc.CodeFileSearchSuperseded`), never with the partial result it had reached.
+"Newer" is the order the server read the requests in, not the order their
+handlers happen to run, so an older request handled late is refused before it
+starts. Nothing failed, so a client drops this reply rather than showing it.
+
 Bad input — a blank or oversized `query`, an unknown `mode`, a `path` that
 escapes the work directory or doesn't exist — is rejected with `InvalidParams`.
 A missing `path` is reported the same way whichever listing strategy runs, so
@@ -982,10 +990,14 @@ content at a path never changes.
 
 ## Search behavior
 
-Candidate files come from `git ls-files -z --cached --others --exclude-standard`
-when `respect_gitignore` is set — git is the only implementation guaranteed to
-agree with the repository's own ignore rules (global excludes, nested
-`.gitignore`, `.git/info/exclude`). Otherwise (or when git can't answer) the
+Candidate files come from `git ls-files -z --cached`, then
+`git ls-files -z --others --exclude-standard`, when `respect_gitignore` is set —
+git is the only implementation guaranteed to agree with the repository's own
+ignore rules (global excludes, nested `.gitignore`, `.git/info/exclude`). The
+tracked files are asked for first, in a call of their own, so they are the ones
+kept when the listing limit is hit: one combined call prints the untracked
+files first, and an unignored dependency or build directory can fill the whole
+limit with them. Otherwise (or when git can't answer) the
 directory is walked, always skipping `.git` — both the directory and the
 gitdir-pointer *file* that a linked worktree or submodule has in its place,
 which is the shape Pockode itself runs in. The `-z` is not optional: without
@@ -1038,7 +1050,7 @@ Limits keep large repositories responsive, but they are not all reported the sam
 | Limit | Value | On hit |
 |-------|-------|--------|
 | Timeout | 10s | The files scanned so far, ranked; `truncated` |
-| Files listed | 50,000 | `truncated` |
+| Files listed | 50,000 | `truncated`, set only if a file was left out. When git lists them, tracked files are kept first |
 | Files returned | `max_results` | The best ones; `truncated` |
 | Matching lines per file | 20 | The best-scoring ones; `truncated` |
 | File size scanned | 1 MiB | File skipped, unreported |
@@ -1144,7 +1156,10 @@ next to the query that produced it, so a message naming the query ("No matches
 for …") describes the rows actually on screen instead of the query still in
 flight — a content search can take seconds. Requests are not retried:
 sitting through three attempts before learning a search failed is worse than
-seeing the error and a `Retry` button. Nothing is searched while the tab is
+seeing the error and a `Retry` button. A search typed past is let go
+rather than waited for: react-query aborts it, so the server's `-32015` for it
+is never seen and the query falls back instead of caching that refusal as an
+error. Nothing is searched while the tab is
 hidden, so an invalidation can't quietly re-run a content scan nobody is
 looking at.
 
@@ -1269,7 +1284,7 @@ to it at all.
 
 | Ceiling | Value | Past it |
 |---------|-------|---------|
-| `HIGHLIGHT_LIMIT` | 256 KiB | Viewer shows plain text: no shiki, and no Markdown either, since a megabyte of `.md` builds just as unmanageable a DOM |
+| `HIGHLIGHT_LIMIT` | 256 KiB | Viewer shows plain text: no shiki, and no Markdown either, since a megabyte of `.md` builds just as unmanageable a DOM. A diff is drawn plain when either side — taken from its hunks when the sides are not given — is past it, in UTF-8 bytes like a file (`exceedsHighlightLimit`), and loads no grammar for it |
 | `EDITOR_HIGHLIGHT_LIMIT` | 32 KiB | Editor drops colours only; the file stays fully editable |
 
 The editor's is far lower because `react-simple-code-editor` re-highlights the

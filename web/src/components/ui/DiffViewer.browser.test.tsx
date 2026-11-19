@@ -119,3 +119,42 @@ describe("the diff library's styles in the cascade", () => {
 		}
 	});
 });
+
+// jsdom sees only that a token carries shiki's colour variable or a
+// highlight.js class; whether the cascade turns either into a colour on the
+// screen takes a real one.
+describe("syntax colours on the screen", () => {
+	it.each([
+		["src/main.rs", "fn main() { let x = 1; }", "[data-start]", "light"],
+		["src/main.rs", "fn main() { let x = 1; }", "[data-start]", "dark"],
+		["a.thrift", "service S { void ping() }", "[class*='hljs']", "light"],
+		["a.thrift", "service S { void ping() }", "[class*='hljs']", "dark"],
+	])("colour %s in %s", async (fileName, newLine, token, mode) => {
+		document.documentElement.classList.toggle("dark", mode === "dark");
+		try {
+			const { container } = render(
+				<DiffViewer
+					fileName={fileName}
+					hunks={[
+						`--- a/${fileName}\n+++ b/${fileName}\n@@ -1,1 +1,1 @@\n-x\n+${newLine}\n`,
+					]}
+				/>,
+			);
+
+			await waitFor(
+				() => {
+					const colours = new Set(
+						Array.from(
+							container.querySelectorAll(`.diff-line-syntax-raw ${token}`),
+							(el) => getComputedStyle(el).color,
+						),
+					);
+					expect(colours.size).toBeGreaterThan(1);
+				},
+				{ timeout: 20_000 },
+			);
+		} finally {
+			document.documentElement.classList.remove("dark");
+		}
+	});
+});

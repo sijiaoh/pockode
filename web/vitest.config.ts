@@ -1,9 +1,11 @@
 import { vitestRuntimeOptions } from "@pockode/shared/vitest";
 import react from "@vitejs/plugin-react";
 import { configDefaults, defineConfig } from "vitest/config";
+import { diffHighlighterAlias } from "./vite.alias";
 import { BROWSER_TEST_FILES } from "./vitest.files";
 
 export default defineConfig({
+	...diffHighlighterAlias,
 	plugins: [react()],
 	define: {
 		__APP_VERSION__: JSON.stringify("test"),
@@ -14,5 +16,8 @@ export default defineConfig({
 		setupFiles: ["./vitest.setup.ts", "./src/test/setup.ts"],
 		include: ["src/**/*.test.{ts,tsx}", "tests/**/*.test.ts"],
 		exclude: [...configDefaults.exclude, BROWSER_TEST_FILES],
+		// Node would load the diff library itself, and its import of
+		// `@git-diff-view/lowlight` would never see the alias.
+		server: { deps: { inline: [/@git-diff-view\//] } },
 	},
 });

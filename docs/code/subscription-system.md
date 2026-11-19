@@ -258,30 +258,34 @@ A directory is polled beside fsnotify on kqueue, and instead of it wherever fsno
 
 Keys go through `subscriptionKey` (`filepath.ToSlash`) because the two sides of the map have different origins: subscribers name paths with `/`, as the rest of the API does, while filesystem events arrive with the platform's separator. On Windows the un-normalized spellings of `src/main.go` are two distinct keys, so every subscription below the work directory root would go unnotified — silently, with the client showing stale content.
 
-### Why 100ms Debounce for FSWatcher?
+### Why FSWatcher Debounces per Subscription, with a Cap?
 
-File changes often come in bursts (editor save, build tools, git operations):
+File changes come in bursts (editor save, build tools, git operations), and every `fs.changed` costs the client a re-read of its path — a directory listing, carried back through the relay when remote. So each change is resolved to the subscriptions it affects (the path's own and its parent directory's) and touches a debouncer keyed by **subscription ID** (`touchPath`). An fsnotify event and a changed mtime on a [polled directory](#why-reference-counting-in-fswatcher) both go through it, so on kqueue a change that both see within one debounce window (the poll runs once a second) reaches a subscription once; a poll that lands later costs one more re-read:
 
 ```go
 // server/watch/fs.go
 const debounceInterval = 100 * time.Millisecond
+const debounceMaxWait = 500 * time.Millisecond
 
-// server/watch/fs.go
-w.timerMap[relPath] = time.AfterFunc(debounceInterval, func() {
-    w.notifyPath(relPath)
-    w.timerMu.Lock()
-    delete(w.timerMap, relPath)
-    w.timerMu.Unlock()
-})
+// server/watch/fs.go — touchPath, called by handleEvent and pollOnce
+for _, id := range ids {
+    w.debouncer.touch(id)
+}
 ```
+
+A subscription fires once nothing has touched it for 100ms, or 500ms after the first touch of the burst, whichever comes first (`keyDebouncer` in `server/watch/fs_debounce.go`).
 
 **Rationale:**
 
-1. **Noise reduction**: Editors often write to temp files then rename. Raw fsnotify events would trigger multiple notifications for a single logical change.
+1. **The unit is what the client re-reads.** The old design debounced per *changed path*, so writing 200 files into an open directory was 200 timers, each firing a notification at the same directory subscriber — 200 re-reads of one listing. Per subscription it is one. Nothing is lost by merging: the notification carries only the subscription ID ("read your path again"), never which entries changed.
 
-2. **Network efficiency**: Fewer notifications mean less WebSocket traffic, important for mobile clients.
+2. **Noise reduction**: Editors often write to a temp file then rename. Raw fsnotify events would trigger several notifications for one logical change.
 
-3. **100ms balance**: Fast enough for interactive response, slow enough to coalesce burst writes.
+3. **100ms quiet**: Fast enough for interactive response, slow enough to coalesce a burst.
+
+4. **500ms cap**: A pure quiet-period debounce never fires for something touched more often than every 100ms — a log being appended to, a build writing its output — so the view would freeze for as long as the writes go on. The cap keeps such a path live and bounds a subscription under constant writes to two re-reads a second.
+
+`Unsubscribe` cancels the subscription's pending call, and `notifySubscription` still skips an ID that is gone by the time it fires.
 
 ### Why Polling for Git Instead of fsnotify?
 
@@ -350,7 +354,7 @@ Every watcher's `Stop` goes through `BaseWatcher.CancelAndWait`, which cancels t
 
 The shortcut is hard to see as wrong from inside any one of those files: a cancelled context does stop the loop, just not before the caller moves on. It only reads as a bug once you look at what the caller does next. Stopping a worktree, deleting a session, or ending a test means the directory those goroutines write into is about to disappear, so anything outliving `Stop` writes into a tree already being torn down. That is how this surfaced — never as something a user could see, but as CI failing intermittently, when the event stream of a process that `Shutdown` had cancelled without waiting for wrote the session index into a `t.TempDir()` mid-cleanup.
 
-So teardown is synchronous on all three sides: watchers wait on their loops, the process manager on its event streams, the work engine on its follow-ups *and* on the inputs it answers inline — a settled turn ending arrives on a timer of the session layer's, so nothing else is holding it open while the engine writes the work store for it. The process manager's wait is the one with a deadline, because it is the only one waiting on something outside the process: an agent CLI that refuses to close its output would otherwise hold the whole server's shutdown open, so it is reported and abandoned instead. FSWatcher's debounce timers are the one deliberate exception — `time.AfterFunc` callbacks are not tracked, so `Stop` can return with one still in flight. They are exempt because of what they do rather than for convenience: they only notify subscribers, never write to a store, and `notifyPath` re-checks the context before it does even that.
+So teardown is synchronous on all three sides: watchers wait on their loops, the process manager on its event streams, the work engine on its follow-ups *and* on the inputs it answers inline — a settled turn ending arrives on a timer of the session layer's, so nothing else is holding it open while the engine writes the work store for it. The process manager's wait is the one with a deadline, because it is the only one waiting on something outside the process: an agent CLI that refuses to close its output would otherwise hold the whole server's shutdown open, so it is reported and abandoned instead. FSWatcher's debounce timers are the one deliberate exception — `time.AfterFunc` callbacks are not tracked, so `Stop` can return with one still in flight. They are exempt because of what they do rather than for convenience: they only notify subscribers, never write to a store, and `notifySubscription` re-checks the context before it does even that.
 
 ### Why a Session Is Two Subscriptions
 

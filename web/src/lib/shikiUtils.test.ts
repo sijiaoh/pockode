@@ -3,6 +3,8 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { codeToHtml } from "shiki";
 import { describe, expect, it } from "vitest";
 import {
+	getDiffHighlighterFor,
+	getDiffLanguageFromPath,
 	getLanguageFromPath,
 	isMarkdownFile,
 	WrappedPlain,
@@ -34,8 +36,66 @@ describe("getLanguageFromPath", () => {
 		expect(getLanguageFromPath(path)).toBe(expected);
 	});
 
+	// Extensions no shiki name matches, and files known by name alone.
+	it.each([
+		["include/util.h", "c"],
+		["src/engine.cpp", "cpp"],
+		["src/engine.hpp", "cpp"],
+		["lib/app.ex", "elixir"],
+		["icon.svg", "xml"],
+		["fix.patch", "diff"],
+		["build.gradle", "groovy"],
+		["Gemfile", "ruby"],
+		["Containerfile", "docker"],
+		["CMakeLists.txt", "cmake"],
+	])("resolves %s", (path, expected) => {
+		expect(getLanguageFromPath(path)).toBe(expected);
+	});
+
 	it("returns undefined for an unknown extension", () => {
 		expect(getLanguageFromPath("C:\\Users\\me\\notes.qqq")).toBeUndefined();
+	});
+});
+
+describe("getDiffHighlighterFor", () => {
+	// The diff library hands any language the highlighter says it lacks to its
+	// highlight.js fallback: plain text is shiki's to draw.
+	it("answers for its plain-text fallback, so highlight.js is never asked", async () => {
+		const { highlighter, language } = await getDiffHighlighterFor(undefined);
+
+		expect(highlighter.hasRegisteredCurrentLang(language)).toBe(true);
+	});
+
+	it("loads a grammar the adapter does not preload", async () => {
+		const { highlighter, language } = await getDiffHighlighterFor("rust");
+
+		expect(language).toBe("rust");
+		expect(highlighter.hasRegisteredCurrentLang("rust")).toBe(true);
+	});
+
+	it("loads highlight.js's grammar for a language shiki lacks", async () => {
+		const { highlighter, language } = await getDiffHighlighterFor("thrift");
+
+		expect(language).toBe("thrift");
+		expect(highlighter.name).toBe("lowlight");
+		expect(highlighter.hasRegisteredCurrentLang("thrift")).toBe(true);
+	});
+});
+
+describe("getDiffLanguageFromPath", () => {
+	it.each([
+		["src/main.rs", "rust"],
+		["Dockerfile", "docker"],
+		["api/service.thrift", "thrift"],
+		["C:\\scripts\\hotkeys.ahk", "autohotkey"],
+		["src/App.re", "reasonml"],
+	])("resolves %s", (path, expected) => {
+		expect(getDiffLanguageFromPath(path)).toBe(expected);
+	});
+
+	it("leaves a file nobody has a grammar for to plain text", () => {
+		expect(getDiffLanguageFromPath("notes.qqq")).toBeUndefined();
+		expect(getDiffLanguageFromPath("LICENSE")).toBeUndefined();
 	});
 });
 

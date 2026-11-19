@@ -15,7 +15,18 @@ import (
 	"github.com/pockode/server/contents"
 )
 
+// A batch of changes reaches each subscription as one fs.changed once no change
+// has reached it for debounceInterval. Every notification costs the
+// client a re-read of the path (a directory listing, carried back through the
+// relay when remote), so coalescing is per subscription rather than per changed
+// path: writing 200 files into an open directory is one re-read, not 200.
 const debounceInterval = 100 * time.Millisecond
+
+// debounceMaxWait caps how long a burst can hold a notification back, so a
+// file written continuously (a log, a build output) still shows up. 500ms is
+// short enough that a change being watched reads as live, and bounds a
+// subscription under constant writes to two re-reads a second.
+const debounceMaxWait = 500 * time.Millisecond
 
 // FSWatcher watches filesystem changes via fsnotify and notifies subscribers.
 type FSWatcher struct {
@@ -31,20 +42,21 @@ type FSWatcher struct {
 	// subscription key. Guarded by pathMu.
 	polled map[string]*polledDir
 
-	timerMu  sync.Mutex
-	timerMap map[string]*time.Timer
+	// debouncer is keyed by subscription ID.
+	debouncer *keyDebouncer
 }
 
 func NewFSWatcher(workDir string) *FSWatcher {
-	return &FSWatcher{
+	w := &FSWatcher{
 		BaseWatcher:  NewBaseWatcher(),
 		workDir:      workDir,
 		pathToIDs:    make(map[string][]string),
 		idToPath:     make(map[string]string),
 		pathRefCount: make(map[string]int),
 		polled:       make(map[string]*polledDir),
-		timerMap:     make(map[string]*time.Timer),
 	}
+	w.debouncer = newKeyDebouncer(debounceInterval, debounceMaxWait, w.notifySubscription)
+	return w
 }
 
 func (w *FSWatcher) Start() error {
@@ -66,13 +78,7 @@ func (w *FSWatcher) Stop() {
 		w.watcher.Close()
 	}
 
-	// Cancel any pending debounce timers
-	w.timerMu.Lock()
-	for _, timer := range w.timerMap {
-		timer.Stop()
-	}
-	w.timerMap = make(map[string]*time.Timer)
-	w.timerMu.Unlock()
+	w.debouncer.stop()
 
 	slog.Info("FSWatcher stopped")
 }
@@ -151,6 +157,7 @@ func (w *FSWatcher) Unsubscribe(id string) {
 	}
 	w.pathMu.Unlock()
 
+	w.debouncer.cancel(id)
 	w.RemoveSubscription(id)
 }
 
@@ -227,26 +234,30 @@ func (w *FSWatcher) pollLoop() {
 			return
 		case <-ticker.C:
 		}
+		w.pollOnce()
+	}
+}
 
-		w.pathMu.RLock()
-		dirs := make(map[string]string, len(w.polled))
-		for key, dir := range w.polled {
-			dirs[key] = dir.real
+// pollOnce looks at every polled directory once.
+func (w *FSWatcher) pollOnce() {
+	w.pathMu.RLock()
+	dirs := make(map[string]string, len(w.polled))
+	for key, dir := range w.polled {
+		dirs[key] = dir.real
+	}
+	w.pathMu.RUnlock()
+
+	for key, real := range dirs {
+		current := w.modTime(real)
+		w.pathMu.Lock()
+		dir, ok := w.polled[key]
+		changed := ok && !dir.modTime.Equal(current)
+		if changed {
+			dir.modTime = current
 		}
-		w.pathMu.RUnlock()
-
-		for key, real := range dirs {
-			current := w.modTime(real)
-			w.pathMu.Lock()
-			dir, ok := w.polled[key]
-			changed := ok && !dir.modTime.Equal(current)
-			if changed {
-				dir.modTime = current
-			}
-			w.pathMu.Unlock()
-			if changed {
-				w.notifyPath(key)
-			}
+		w.pathMu.Unlock()
+		if changed {
+			w.touchPath(key)
 		}
 	}
 }
@@ -284,28 +295,15 @@ func (w *FSWatcher) handleEvent(event fsnotify.Event) {
 		slog.Error("failed to get relative path", "path", event.Name, "error", err)
 		return
 	}
-	relPath := subscriptionKey(native)
-
-	w.timerMu.Lock()
-	if timer, exists := w.timerMap[relPath]; exists {
-		timer.Stop()
-	}
-	w.timerMap[relPath] = time.AfterFunc(debounceInterval, func() {
-		w.notifyPath(relPath)
-		w.timerMu.Lock()
-		delete(w.timerMap, relPath)
-		w.timerMu.Unlock()
-	})
-	w.timerMu.Unlock()
+	w.touchPath(subscriptionKey(native))
 }
 
-func (w *FSWatcher) notifyPath(changedPath string) {
-	// Skip if watcher is stopped (timer may fire after Stop)
-	if w.Context().Err() != nil {
-		return
-	}
-
-	// Notify subscribers of the changed path and its parent directory.
+// touchPath schedules fs.changed for the subscribers of changedPath and of its
+// parent directory. Polling goes through it too, so on kqueue a change that
+// fsnotify and the poll both see within one debounce window reaches a
+// subscription as one batch.
+func (w *FSWatcher) touchPath(changedPath string) {
+	// Subscribers of the changed path and of its parent directory.
 	w.pathMu.RLock()
 	ids := append([]string{}, w.pathToIDs[changedPath]...)
 	if changedPath != "" {
@@ -319,25 +317,29 @@ func (w *FSWatcher) notifyPath(changedPath string) {
 	}
 	w.pathMu.RUnlock()
 
-	if len(ids) == 0 {
+	for _, id := range ids {
+		w.debouncer.touch(id)
+	}
+}
+
+// notifySubscription sends fs.changed to one subscription. The notification
+// names only the subscription — it means "read your path again" — so a merged
+// batch loses nothing by not saying which entries changed.
+func (w *FSWatcher) notifySubscription(id string) {
+	// Skip if watcher is stopped (a timer may fire after Stop)
+	if w.Context().Err() != nil {
 		return
 	}
-
-	var notified int
-	for _, id := range ids {
-		sub := w.GetSubscription(id)
-		if sub == nil {
-			continue
-		}
-		n := Notification{
-			Method: "fs.changed",
-			Params: map[string]any{"id": sub.ID},
-		}
-		if err := sub.Notifier.Notify(context.Background(), n); err != nil {
-			slog.Debug("failed to notify subscriber", "watchId", sub.ID, "error", err)
-		}
-		notified++
+	// Gone if it was unsubscribed after the change was seen.
+	sub := w.GetSubscription(id)
+	if sub == nil {
+		return
 	}
-
-	slog.Debug("notified path change", "path", changedPath, "subscribers", notified)
+	n := Notification{
+		Method: "fs.changed",
+		Params: map[string]any{"id": sub.ID},
+	}
+	if err := sub.Notifier.Notify(context.Background(), n); err != nil {
+		slog.Debug("failed to notify subscriber", "watchId", sub.ID, "error", err)
+	}
 }

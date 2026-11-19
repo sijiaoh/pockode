@@ -57,13 +57,13 @@ type Notification struct {
 
 | Strategy | Watchers | Mechanism |
 |----------|----------|-----------|
-| OS-level | FSWatcher | `fsnotify` library, 100ms debounce; directories also polled by mtime on kqueue (see below) |
+| OS-level | FSWatcher | `fsnotify` library, per-subscription debounce (100ms quiet, 500ms cap); directories also polled by mtime on kqueue (see below) |
 | Polling | GitWatcher, GitDiffWatcher, WorktreeWatcher | 3s interval, state hash comparison |
 | Event-driven | SessionList, SessionDetail, ChatMessages, WorkList, WorkDetail, Settings, AgentRoleList, CLILogin, CLIUpdate, RemoteURL, CloudLink | Store `OnChangeListener` callbacks via async channels (CLILogin, CLIUpdate: `cliauth.LoginListener` / `cliupdate.Listener` marking a pending set; RemoteURL: the relay's `OnRemoteURLChange` waking it; CloudLink: `cloudlogin.Listener` waking it) |
 
 ### OS-Level: FSWatcher
 
-`watch/fs.go` — Watches file paths using `fsnotify`. Reference-counted: multiple subscriptions to the same path share one OS watch. Notifies both the changed path and its parent directory. Debounced at 100ms to coalesce rapid changes.
+`watch/fs.go` — Watches file paths using `fsnotify`. Reference-counted: multiple subscriptions to the same path share one OS watch. Notifies both the changed path and its parent directory. Debounced per subscription: 100ms of quiet, capped at 500ms (see [code/subscription-system.md](code/subscription-system.md#why-fswatcher-debounces-per-subscription-with-a-cap)).
 
 A subscribed path is resolved like any file route's (`contents.Resolve`), so one that leads out of the work directory is refused. A directory is also polled by its modification time on kqueue (`fs_poll_kqueue.go`), and by polling alone wherever fsnotify cannot add it — why, and what the client shows when a watch does fail, is in [symlinks.md](symlinks.md#live-updates-fs-watch).
 
@@ -72,10 +72,10 @@ A subscribed path is resolved like any file route's (`contents.Resolve`), so one
 | Watcher | File | What it polls | Notification |
 |---------|------|---------------|--------------|
 | GitWatcher | `watch/git.go` | `git rev-parse HEAD` + the `git.status` answer (`git.StatusContext`) | `git.changed` |
-| GitDiffWatcher | `watch/git_diff.go` | `git diff` for specific file (staged or unstaged) | `git.diff.changed` (includes diff content; see [git.md](git.md#diffs)) |
+| GitDiffWatcher | `watch/git_diff.go` | One repository-wide status per poll (`git.NewDiffSnapshot`), then `git diff` for each subscribed file (staged or unstaged) against it | `git.diff.changed` (includes diff content; see [git.md](git.md#diffs)) |
 | WorktreeWatcher | `watch/worktree.go` | `git worktree list --porcelain`, through the worktree registry | `worktree.changed` (includes `is_git_repo`; see [git.md](git.md#projects-without-a-repository)) |
 
-All skip polling when there are no subscribers. A GitWatcher poll that runs out of its 10 s is dropped rather than compared: its git commands were killed mid-read, and an empty answer would announce a change nobody made — and another when the next poll answers. A large tree can take that long: every poll is a whole `git.status`, line counts included ([git.md](git.md#status)).
+All skip polling when there are no subscribers. A GitWatcher poll that runs out of its 10 s is dropped rather than compared: its git commands were killed mid-read, and an empty answer would announce a change nobody made — and another when the next poll answers. A large tree can take that long: every poll is a whole `git.status`, line counts included ([git.md](git.md#status)). GitDiffWatcher reads one status per poll however many diffs are subscribed, since the status is what grows with the tree and is the same for every file ([git.md](git.md#real-time-updates)).
 
 ### Event-Driven
 
@@ -151,6 +151,7 @@ Watchers start with the worktree and stop on cleanup. Worktrees are reference-co
 | `server/watch/base.go` | BaseWatcher, Subscription |
 | `server/watch/notifier.go` | Notifier interface, Notification struct |
 | `server/watch/fs.go` | FSWatcher (fsnotify) |
+| `server/watch/fs_debounce.go` | Per-key debounce with a max wait, used by FSWatcher |
 | `server/watch/git.go` | GitWatcher (polling) |
 | `server/watch/git_diff.go` | GitDiffWatcher (polling with content) |
 | `server/watch/session_list.go` | SessionListWatcher |

@@ -277,7 +277,12 @@ explains itself rather than looking like a bug.
 - Every listed path is read and looked up through the work directory's
   `os.Root`, never by host path. git's index keeps `a/b.txt` after `a` is
   replaced by a link out, and a plain open would follow `a` and read, and name,
-  the file outside.
+  the file outside. These rules hold per listed path, whichever listing it came
+  from — git's tracked files, its untracked ones ([file.md](file.md#search-behavior)
+  lists them in that order), or the walk — so a committed link out is listed as
+  `outside` and never read, like an untracked one.
+- A search that a newer one has stopped is answered `-32015`, even when its
+  scope was refused: its client has already moved on ([file.md](file.md#operations)).
 
 ### Git panel (changes, staged, commit diffs)
 
@@ -287,7 +292,9 @@ explains itself rather than looking like a bug.
   `web/src/lib/drawablePatch.ts`). It sits above the diff rather than in the
   page header so that every diff page — changes, staged, commit — gets it from
   the one component they share. An untracked link gets it too
-  ([git.md](git.md#diffs)).
+  ([git.md](git.md#diffs)), whether its diff is read on its own or by a
+  GitDiffWatcher poll that shares one status between its subscriptions
+  ([git.md](git.md#real-time-updates)): both go through the same diff code.
 - **Typechange (`T`)**: git emits two file sections for one path, a deletion and
   a creation, and the diff parser reads only one; handed both, it threw while
   rendering and took the app down. The client turns
@@ -335,7 +342,10 @@ explains itself rather than looking like a bug.
   the first entry it cannot open, so names created after a broken link in sort
   order go unreported. So on kqueue every watched directory is also polled by its
   modification time (once a second), and a directory fsnotify refuses is watched
-  by polling alone, on any platform. A file still has to be watchable.
+  by polling alone, on any platform. A file still has to be watchable. What the
+  poll sees goes through the same per-subscription debounce as fsnotify's events
+  ([subscription-system.md](code/subscription-system.md#why-fswatcher-debounces-per-subscription-with-a-cap)),
+  so when both see one change inside that window it is one `fs.changed`.
 - A watch that does fail is not silent. `useFSWatch` returns the error, and the
   view that stopped following the files says so with `Not updating: <message>`
   and `Retry` (`Files/WatchFailedNotice.tsx`): the tree's root, each expanded
@@ -373,9 +383,10 @@ nested, so a throw costs the smallest thing that can stand in for it:
   error is never drawn for the new content. `Retry` draws the same content again.
 - **The console has the stack.** React logs every caught error with its
   component stack (`onCaughtError`); the boundaries add no logging of their own.
-- **A diff highlighter that fails to load is rethrown** into the pane boundary,
-  rather than leaving "Loading..." up for good, and `getDiffHighlighter` does not
-  keep the failed load, so `Retry` really loads again.
+- **A diff highlighter or grammar that fails to load is not an error** and never
+  reaches the pane boundary: the diff is drawn plain
+  ([git-changes-ui.md](git-changes-ui.md), *Syntax colours*), so it cannot leave
+  "Loading..." up for good.
 - **`web-cluster`** has no diff or file views; its root is one `ErrorBoundary`
   with `CrashScreen` and `Reload`, since it has no URL state to escape.
 - A link page is not an error and never goes through these boundaries. Neither do

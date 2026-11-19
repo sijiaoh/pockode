@@ -117,14 +117,21 @@ export function useFileSearch(query: string, active: boolean): FileSearchState {
 				mode,
 				respectGitignore,
 			] satisfies FileSearchQueryKey,
-			queryFn: async () => ({
+			// Passing the signal on is what makes react-query cancel a search the
+			// user typed past instead of leaving it to settle: the server stops
+			// that search when the next one arrives and refuses it, and a query
+			// still waiting on it would cache the refusal as its error.
+			queryFn: async ({ signal }) => ({
 				query: requestedQuery,
-				result: await searchFiles({
-					query: requestedQuery,
-					mode,
-					respect_gitignore: respectGitignore,
-					max_results: FILE_SEARCH_MAX_RESULTS,
-				}),
+				result: await searchFiles(
+					{
+						query: requestedQuery,
+						mode,
+						respect_gitignore: respectGitignore,
+						max_results: FILE_SEARCH_MAX_RESULTS,
+					},
+					signal,
+				),
 			}),
 			enabled,
 			// Backspacing to an earlier query should feel instant.

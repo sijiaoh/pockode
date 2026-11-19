@@ -154,12 +154,12 @@ Windows 与 darwin/linux 一样是发布目标（产物见 [docs/platforms.md](.
   | 来源 | 调用点 | 为什么 Windows 上做不到 |
   |---|---|---|
   | `internal/fifotest` | `agent/codex`×1、`contents`×3、`filetransfer`×3 | 命名管道只存在于 `\\.\pipe`，根本进不了工作目录，被测的阻塞隐患在那里不成立 |
-  | `internal/symlinktest` | `contents`×24、`filetransfer`×15、`git`×3、`internal/restart`×1、`search`×3、`selfinstall`×1、`watch`×2、`ws`×1 | 未开开发者模式时建符号链接要特权；开了就一条都不 skip |
+  | `internal/symlinktest` | `contents`×24、`filetransfer`×15、`git`×3、`internal/restart`×1、`search`×4、`selfinstall`×1、`watch`×3、`ws`×1 | 未开开发者模式时建符号链接要特权；开了就一条都不 skip |
   | `cliprofile` 的 `newPreparing`、`cliprofile/cliprofiletest` 的 `UseProfile` | `cliprofile`×16、`agent/claude`×7、`agent/codex`×1 | 同上：账号目录由符号链接组成，`Store.Availability` 探测不到建链接的权限时 `Prepare` 直接拒绝；拒绝本身由不 skip 的 `TestPrepareRefusesWithoutSymlinks`、`TestLaunchWithoutSymlinks` 覆盖 |
   | `internal/unwritabletest` | `filestore`×1、`selfinstall`×1、`ws`×1 | 目录忽略只读属性，`os.Chmod` 挡不住写入；要真挡住得给当前用户的 SID 加一条 deny ACE |
   | `filetransfer/realname_windows_test.go` 的 `shortName` | `filetransfer`×0~2 | 临时目录所在的卷关掉了 8.3 短名（`fsutil 8dot3name`）时没有别名可测；开着就一条都不 skip |
 
-  **合计 10~85 条**，两个区间端点都是对的：`filetransfer` 的「refuses to overwrite anything but a regular file」一个子测试里同时要符号链接和 fifo，谁先 skip 就记在谁名下，于是前两行的条数此消彼长——没开开发者模式是 6+50（另加 `cliprofile` 一行的 24），开了是 7+0+0。别按单行的数去对账，按合计。
+  **合计 10~87 条**，两个区间端点都是对的：`filetransfer` 的「refuses to overwrite anything but a regular file」一个子测试里同时要符号链接和 fifo，谁先 skip 就记在谁名下，于是前两行的条数此消彼长——没开开发者模式是 6+52（另加 `cliprofile` 一行的 24），开了是 7+0+0。别按单行的数去对账，按合计。
 
   能用平台分表（如 `settings_test.go` 的路径用例）就不要 skip；断言本身在两个平台上形状不同时，把它抽成平台分文件的测试辅助（如 `internal/fspermtest`、`internal/termtest`、`internal/fifotest`），而不是在 Windows 上 skip 掉——权限测试恰恰在权限有问题的那个平台上 skip，等于什么都没证明。
 

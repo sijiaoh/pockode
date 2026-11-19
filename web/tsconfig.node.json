@@ -27,6 +27,7 @@
 		"noUncheckedSideEffectImports": true
 	},
 	"include": [
+		"vite.alias.ts",
 		"vite.config.ts",
 		"vitest.config.ts",
 		"vitest.browser.config.ts",

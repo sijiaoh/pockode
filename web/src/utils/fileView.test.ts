@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { ContentOrigin, FileContent } from "../types/contents";
 import {
 	canEditFileView,
+	exceedsHighlightLimit,
 	formatMediaCaption,
 	formatMimeLabel,
 	getEditLabel,
@@ -298,6 +299,28 @@ describe("getFileViewState", () => {
 		expect(view(file({ size: HIGHLIGHT_LIMIT + 1 }))).toMatchObject({
 			kind: "text",
 			highlight: false,
+		});
+	});
+
+	describe("exceedsHighlightLimit", () => {
+		it.each([
+			["ASCII at the limit", "a".repeat(HIGHLIGHT_LIMIT), false],
+			["ASCII past it", "a".repeat(HIGHLIGHT_LIMIT + 1), true],
+			// Three bytes each: under the limit in code units, over it in bytes.
+			[
+				"CJK past it in bytes",
+				"中".repeat(Math.floor(HIGHLIGHT_LIMIT / 3) + 1),
+				true,
+			],
+			[
+				"CJK at it in bytes",
+				`${"中".repeat((HIGHLIGHT_LIMIT - 1) / 3)}a`,
+				false,
+			],
+			// Four bytes per surrogate pair, two per code unit.
+			["astral past it in bytes", "😀".repeat(HIGHLIGHT_LIMIT / 4 + 1), true],
+		])("%s", (_, text, over) => {
+			expect(exceedsHighlightLimit(text)).toBe(over);
 		});
 	});
 
