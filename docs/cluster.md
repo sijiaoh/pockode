@@ -91,7 +91,7 @@ When a node starts, Pockode writes runtime information to `{node.path}/.pockode/
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `pid` | int | Yes | Process ID of the running server |
-| `port` | int | Yes | Server port number |
+| `port` | int | Yes | The port the server is listening on — bound before the file is written, so never one it has yet to bind |
 | `started_at` | string | Yes | ISO 8601 timestamp of server start |
 | `local_url` | string | Yes | URL for local access |
 | `remote_url` | string | No | URL for remote access via relay (only present when relay is enabled; can change, or disappear, while the node runs) |
@@ -103,6 +103,19 @@ This file is used to:
 - Provide port, URL, and start time information
 
 The file is deleted when the server shuts down gracefully — except across a unix restart, which keeps the PID: the file is kept until the new program rewrites it, so the node never reads as stopped in between (see [Restarting and upgrading](#restarting-and-upgrading)). `remote_url` can be rewritten while the node runs (see [server.json](../server/AGENTS.md#serverjson)); the cluster reads the file on every status check, so it always reports the current URL.
+
+**Which port a node gets:** nodes are started with no arguments, so every node
+starts its search at the default `9870` and takes the first port from there
+upward that it can bind (up to 100 ports). The port is bound when it is chosen
+and held from then on (`netutil.ListenAvailable`), not probed and released, so
+nodes started at the same moment each get a port of their own — the kernel
+decides, and no node can pick a port another has just picked and then fail to
+bind it. A node that can bind none exits before writing `server.json`, with the
+reason in its `server.log`. Any refusal falls forward, not only a port in use:
+on Windows a port inside a reserved range is refused as access denied, and the
+next one may be free — which also means a non-root `-port 1000` on unix ends
+up on 1024. A restarted node keeps its port
+([Restarting and upgrading](#restarting-and-upgrading)).
 
 **Operations:**
 
@@ -205,7 +218,10 @@ node are restarted separately, and neither touches the other:
   if the version changed) by itself.
 - **A node** restarts from the cluster panel ([below](#restarting-from-the-cluster)),
   from Settings → Pockode in that node's own UI, or with `kill -USR1 <pid>` (the
-  PID in its `server.json`). It comes back with its own password and options.
+  PID in its `server.json`). It comes back with its own password and options,
+  and on the port it was listening on — or, if that has been taken meanwhile,
+  the next free one after it
+  ([code/self-restart.md](code/self-restart.md#keeping-the-port)).
   On unix the PID is kept; on Windows it changes, the old `server.json` is
   removed and the successor writes its own. A restart the cluster asked for
   reads `restarting` throughout; one asked for elsewhere reads running on unix,
@@ -284,7 +300,7 @@ How it works is [code/self-restart.md](code/self-restart.md).
 | Argument | Default | Description |
 |----------|---------|-------------|
 | `-password` | (required) | Password for the cluster UI (falls back to the `POCKODE_PASSWORD` environment variable when the flag is unset; `-auth-token` / `POCKODE_AUTH_TOKEN` are deprecated aliases — see [Authentication](code/authentication.md#where-the-password-comes-from)) |
-| `-port` | `9871` | HTTP server port |
+| `-port` | `9871` | Where the search for an HTTP port starts: the first free one from here upward (up to 100) is used. A restart keeps the port it was on |
 | `-data` | `~/.pockode-cluster` | Data directory |
 | `-relay` | `true` | Enable relay for remote access (`-relay=false` to disable) |
 | `-relay-frontend-port` | (same as server port) | Target port for relay HTTP proxy frontend requests |

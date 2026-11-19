@@ -190,6 +190,7 @@ type Restarter struct {
 	requested chan struct{}
 	pending   bool // a request was accepted
 	closed    bool // a shutdown is underway, for whatever reason
+	port      int  // the port to hand on (KeepPort); 0 for none
 }
 
 // New returns a Restarter for program. It logs to slog.Default as it is when
@@ -320,7 +321,8 @@ func (r *Restarter) Watch(requests <-chan struct{}) {
 // through the environment (password.WithEnv) — never through argv, where any
 // local user could read it — and does not return. A password the process was
 // started with on its command line is emptied out of the arguments it is run
-// with again (password.ClearFlags).
+// with again (password.ClearFlags). The port recorded with KeepPort goes
+// along the same way (PortEnvVar).
 //
 // Call it only once the graceful shutdown has finished: on unix nothing of this
 // process survives the exec but its PID, its terminal and whatever file
@@ -330,8 +332,12 @@ func (r *Restarter) Watch(requests <-chan struct{}) {
 func (r *Restarter) Restart(pw string) {
 	program := r.program
 	program.Args = password.ClearFlags(program.Args)
-	slog.Default().Info("restarting", "path", program.Path, "args", len(program.Args), "dir", program.Dir)
-	code, err := replace(program, password.WithEnv(os.Environ(), pw), slog.Default())
+	r.stateMu.Lock()
+	port := r.port
+	r.stateMu.Unlock()
+	slog.Default().Info("restarting", "path", program.Path, "args", len(program.Args), "dir", program.Dir, "port", port)
+	env := withPort(password.WithEnv(os.Environ(), pw), port)
+	code, err := replace(program, env, slog.Default())
 	if err != nil {
 		slog.Default().Error("restart failed", "path", r.program.Path, "error", err)
 		fmt.Fprintf(os.Stderr, "Error: restart failed: %v\n", err)

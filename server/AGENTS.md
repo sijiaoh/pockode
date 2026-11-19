@@ -139,7 +139,9 @@ Windows 与 darwin/linux 一样是发布目标（产物见 [docs/platforms.md](.
 
 **退出请求统一走 `internal/shutdown`**：`Listen()` 让本进程知道该退出了，`RequestExit(pid)` 让别的进程退出。别在别处再写一遍 `signal.Notify`。Windows 没有 SIGTERM 可发，官方的替代品 Ctrl+Break 只能送到与**调用方**共享控制台的进程，服务 / 计划任务 / detached 启动的集群一律送不到，所以那边走的是命名事件；等待方和发信方必须对上同一个名字，两半因此放在同一个包里。来龙去脉见 [docs/cluster.md](../docs/cluster.md#asking-a-node-to-exit-on-windows)。
 
-**自我重启走 `internal/restart`**（设计与取舍见 [docs/code/self-restart.md](../docs/code/self-restart.md)）：重启是结局不同的同一次优雅关闭。`main` 里 `newRestarter()` 尽早调用（在 `--version` 之后）：`shutdown.HoldRestartRequests()` 从这里起接住 SIGUSR1（否则启动期间收到会按默认动作被杀，且只捕获不忽略——忽略会被子进程继承），`restart.Current()` 记下可执行文件（绝对路径，argv[0] 指向同一个文件时保留它——符号链接是升级会挪动的那一个）、参数和工作目录。`Restarter.Request(ctx)` 先跑一次磁盘上的 `<exe> --version`，跑不起来就拒绝、进程照常运行；关闭循环取到的是退出请求就调 `Restarter.Close()`（之后的请求一律拒绝，期间刚被接受的重启也作废——先到的请求决定结局），关闭结束后 `Restarter.Pending()` 为真才 `Restarter.Restart(password)`：密码只经 `password.WithEnv` 走环境变量，命令行上的 `-password` / `-auth-token` 由 `password.ClearFlags` 清空成 `-password=`（清空而不删除，其余参数位置不变，`pockode -password x cluster` 不会被重放成 cluster）。这一步失败就记日志并以 1 退出。`Program.Version` 也是读取「已装版本」的入口。UI 的 `server.version` / `server.restart`（普通模式与 cluster 共用 `ws.ServerControl`）用 `Restarter.RequestHeld`：请求先被接受、关闭流程等成功回复的 WebSocket 关闭握手完成才开始，否则经 relay 的客户端收不到回复（见 [docs/code/websocket-rpc.md](../docs/code/websocket-rpc.md#server-installed-version-and-restart)）；测试里用 `internal/restarttest` 让测试二进制冒充磁盘上的可执行文件。从 UI 升级的 `server.update_check` / `server.update` 也挂在 `ServerControl` 上（`ws.Updater`，每进程一个，由 `ws.NewReleaseUpdater` 在启动时建好并清理上次安装的残留）：只装文件，重启仍是客户端随后发的 `server.restart`；关闭流程在关 WebSocket 之前调 `Updater.Close()`：停掉还在下载的安装、等已开始的替换做完再退出或重启（Windows 的两次 rename 之间不能停），关闭连接时因此不必等还在安装的 handler 到超时（回复本身通常送不出去，客户端看到的是断线）。集群启动节点用的也是这里记下的路径（`node.NewProcessManager`），不是当下的 `os.Executable()`：它会解析符号链接，包管理器把链接挪到新版本目录、删掉旧目录之后，它指向的文件已经不存在；集群 exec 之后节点仍是它的子进程却没人 wait，所以 unix 的 `processExists` 会先 `wait4(WNOHANG)` 收掉僵尸。
+**自我重启走 `internal/restart`**（设计与取舍见 [docs/code/self-restart.md](../docs/code/self-restart.md)）：重启是结局不同的同一次优雅关闭。`main` 里 `newRestarter()` 尽早调用（在 `--version` 之后）：`shutdown.HoldRestartRequests()` 从这里起接住 SIGUSR1（否则启动期间收到会按默认动作被杀，且只捕获不忽略——忽略会被子进程继承），`restart.Current()` 记下可执行文件（绝对路径，argv[0] 指向同一个文件时保留它——符号链接是升级会挪动的那一个）、参数和工作目录。`Restarter.Request(ctx)` 先跑一次磁盘上的 `<exe> --version`，跑不起来就拒绝、进程照常运行；关闭循环取到的是退出请求就调 `Restarter.Close()`（之后的请求一律拒绝，期间刚被接受的重启也作废——先到的请求决定结局），关闭结束后 `Restarter.Pending()` 为真才 `Restarter.Restart(password)`：密码只经 `password.WithEnv` 走环境变量，命令行上的 `-password` / `-auth-token` 由 `password.ClearFlags` 清空成 `-password=`（清空而不删除，其余参数位置不变，`pockode -password x cluster` 不会被重放成 cluster）；监听的端口由 `Restarter.KeepPort` 记下，经环境变量 `POCKODE_RESTART_PORT` 交给新进程，新进程启动时用 `restart.TakePort(*portFlag)` 取出并从环境里删掉（在 spawn 任何东西之前，AI CLI 和集群的节点都看不到），以它而不是 `-port` 作为端口搜索的起点。这一步失败就记日志并以 1 退出。`Program.Version` 也是读取「已装版本」的入口。UI 的 `server.version` / `server.restart`（普通模式与 cluster 共用 `ws.ServerControl`）用 `Restarter.RequestHeld`：请求先被接受、关闭流程等成功回复的 WebSocket 关闭握手完成才开始，否则经 relay 的客户端收不到回复（见 [docs/code/websocket-rpc.md](../docs/code/websocket-rpc.md#server-installed-version-and-restart)）；测试里用 `internal/restarttest` 让测试二进制冒充磁盘上的可执行文件。从 UI 升级的 `server.update_check` / `server.update` 也挂在 `ServerControl` 上（`ws.Updater`，每进程一个，由 `ws.NewReleaseUpdater` 在启动时建好并清理上次安装的残留）：只装文件，重启仍是客户端随后发的 `server.restart`；关闭流程在关 WebSocket 之前调 `Updater.Close()`：停掉还在下载的安装、等已开始的替换做完再退出或重启（Windows 的两次 rename 之间不能停），关闭连接时因此不必等还在安装的 handler 到超时（回复本身通常送不出去，客户端看到的是断线）。集群启动节点用的也是这里记下的路径（`node.NewProcessManager`），不是当下的 `os.Executable()`：它会解析符号链接，包管理器把链接挪到新版本目录、删掉旧目录之后，它指向的文件已经不存在；集群 exec 之后节点仍是它的子进程却没人 wait，所以 unix 的 `processExists` 会先 `wait4(WNOHANG)` 收掉僵尸。
+
+**监听端口统一走 `internal/netutil.ListenAvailable`**：它返回的是 listener 本身，拿到后直接 `srv.Serve(listener)`，不要只取端口号、关掉再 `ListenAndServe`——探测后释放的端口在重新 bind 之前谁都能拿，同时启动的几个节点会选中同一个，除第一个外全部 bind 失败。`server.json` 只在拿到 listener 之后发布，所以它写的端口一定是本进程正在监听的。
 
 **节点与集群的终端脱钩，两个平台都是**：unix 用 `Setsid`，Windows 用 `CREATE_NO_WINDOW`——节点要活过启动集群的那个 shell，就不能待在它的终端/控制台上，否则关掉终端窗口会把节点一起带走（Windows 会给控制台上所有进程发 `CTRL_CLOSE_EVENT`）。Windows 上用的**不是** `DETACHED_PROCESS`：完全没有控制台的进程每启动一个控制台程序，Windows 都会给它新分配一个**可见**的控制台窗口，而节点不停地调 git、hook 的 shell，结果就是持续闪黑窗（AI CLI 经 `internal/proctree` 启动，本来就有自己的隐藏控制台）。`CREATE_NO_WINDOW` 给节点一个属于它自己、没有窗口的控制台，子孙进程默认继承它，所以**节点里新增的 `exec.Command` 不需要任何 flag**，孙进程（git 拉起的 ssh、credential helper）也一并覆盖——除非某个程序自己用 `DETACHED_PROCESS` / `CREATE_NEW_CONSOLE` 启动子进程、主动放弃继承，那是它自己的行为，我们管不到。别给它再加 `DETACHED_PROCESS` / `CREATE_NEW_CONSOLE`——与二者组合时 `CREATE_NO_WINDOW` 被忽略。`internal/proctree` 的 `CREATE_NO_WINDOW` 与此是一对，覆盖的是不经集群、本身就没有控制台的服务器（服务 / 计划任务），且只覆盖经它启动的进程；改其中一处务必看另一处。
 
@@ -208,7 +210,7 @@ if err := json.Unmarshal(data, &parsed); err != nil {
 |------|:----:|------|------|
 | `--password` | ✓ | — | Web UI 密码（未设时回退到环境变量 `POCKODE_PASSWORD`；env 方式可避免密码出现在进程 argv 中被同机其他用户读取）|
 | `--auth-token` | | — | `--password` 的弃用别名（对应 env `POCKODE_AUTH_TOKEN`），启动时告警，`v0.20.0` 移除。新旧同名参数取值不同时直接启动失败 |
-| `--port` | | `9870` | 服务端口 |
+| `--port` | | `9870` | 端口搜索的起点：从这里往上（最多 100 个）取第一个能 bind 的端口。重启后沿用原来的端口（见 [self-restart.md](../docs/code/self-restart.md#keeping-the-port)） |
 | `--work` | | `.` | 工作目录 |
 | `--data` | | `<work>/.pockode` | 数据目录 |
 | `--dev` | | `false` | 开发模式（启用时不 serve 静态文件） |
@@ -257,14 +259,14 @@ if err := json.Unmarshal(data, &parsed); err != nil {
 | 字段 | 类型 | 说明 |
 |------|------|------|
 | `pid` | int | 服务器进程 ID |
-| `port` | int | 服务器监听端口 |
+| `port` | int | 服务器正在监听的端口：写文件前已经 bind 并一直持有，所以不会是一个还没拿到的端口 |
 | `started_at` | string | 启动时间（RFC3339 格式） |
 | `local_url` | string | 本地访问 URL（可选） |
 | `remote_url` | string | Relay 远程访问 URL（可选） |
 | `token` | string | 本地 API（MCP）认证 token，每次启动随机生成，区别于用户的 `--password`，不写入磁盘外的任何位置 |
 | `version` | string | 正在运行的版本（与 `--version` 输出去掉 `pockode ` 前缀后相同，集群直接与已装版本做字符串比较）。缺失 = 早于该字段的旧版本，它也不认识重启请求（见 [docs/cluster.md](../docs/cluster.md#restarting-and-upgrading)） |
 
-生命周期：启动时写入 → 运行期间保持 → 优雅关闭时删除（unix 上的自我重启例外：PID 不变，文件保留到新程序重写，免得集群在这段时间里把节点看成已停止、再起一个）。另一个例外是 `remote_url`：relay 凭据更新导致远程 URL 变化时，文件会被重写，只换 `remote_url`，其余字段（包括 `started_at`）不变；relay 永久停止时该字段被移除（原因见 [relay-system.md](../docs/code/relay-system.md#when-the-remote-url-changes)）。读取方需要最新 URL 时应每次现读，不要缓存。
+生命周期：bind 端口后才写入（bind 不到任何端口则直接退出，不写文件）→ 运行期间保持 → 优雅关闭时删除（unix 上的自我重启例外：PID 不变，文件保留到新程序重写，免得集群在这段时间里把节点看成已停止、再起一个）。另一个例外是 `remote_url`：relay 凭据更新导致远程 URL 变化时，文件会被重写，只换 `remote_url`，其余字段（包括 `started_at`）不变；relay 永久停止时该字段被移除（原因见 [relay-system.md](../docs/code/relay-system.md#when-the-remote-url-changes)）。读取方需要最新 URL 时应每次现读，不要缓存。
 
 ### MCP 本地 API
 

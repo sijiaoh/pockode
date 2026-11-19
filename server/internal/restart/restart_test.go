@@ -32,6 +32,9 @@ const (
 	helperRestarts = "restarts"
 	// helperRestartFails asks for a restart whose final step cannot work.
 	helperRestartFails = "restart-fails"
+	// helperKeepsPort listens, restarts, and listens again from the restarted
+	// process (see runPortHelper).
+	helperKeepsPort = "keeps-port"
 
 	// helperReportDirEnv is where helperRestarts writes its reports.
 	helperReportDirEnv = "POCKODE_TEST_RESTART_REPORT_DIR"
@@ -59,6 +62,8 @@ func TestMain(m *testing.M) {
 	switch mode {
 	case helperRestarts:
 		runRestartHelper()
+	case helperKeepsPort:
+		runPortHelper()
 	case helperRestartFails:
 		r := New(Program{Path: filepath.Join(os.TempDir(), "pockode-does-not-exist"), argv0: os.Args[0], Dir: "."})
 		r.Restart("secret")

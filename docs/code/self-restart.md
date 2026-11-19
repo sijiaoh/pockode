@@ -4,8 +4,8 @@ How a running `pockode` — a server or a cluster manager — replaces itself wi
 the executable that is on disk now, so an upgrade done with the install script
 takes effect without anyone stopping and starting it in a terminal. What is
 saved at startup to make that possible, what is checked before anything stops,
-how the password crosses over, and how unix and Windows differ in the final
-step.
+how the password and the port cross over, and how unix and Windows differ in
+the final step.
 
 The screens are [restart-ui.md](../restart-ui.md); the wire contract of
 `server.version` / `server.restart` and how their reply is delivered is
@@ -20,6 +20,7 @@ ordinary `server.restart`; nothing here changes for it
 | The program, the probe, the decision, the replacement | `server/internal/restart/` (`replace_unix.go`, `replace_windows.go`) |
 | SIGUSR1 and the Windows restart event, both ends; holding interrupts on Windows | `server/internal/shutdown/` |
 | The password across the boundary | `server/password/` — `WithEnv`, `ClearFlags` |
+| The port across the boundary | `server/internal/restart/port.go` — `TakePort`, `KeepPort`; the listener itself is `server/internal/netutil` — `ListenAvailable` |
 | The RPCs, shared by both modes | `server/ws/rpc_server.go` — `ServerControl`; the update ones in `rpc_server_update.go` — `Updater` |
 | Closing WebSockets on shutdown | `server/ws/connections.go` |
 | Wiring | `server/main.go` — `newRestarter`, the shutdown goroutine, `runCluster` |
@@ -68,9 +69,9 @@ be asked for reliably later:
   or `-data` means what it meant.
 
 The environment is not saved: the new run inherits the old process's as it is
-at the moment of the restart, the password aside (below) — and, for a node a
-cluster started, the node marker, which it took out of its environment at
-startup and puts back for the restart
+at the moment of the restart, the password and the port aside (below) — and,
+for a node a cluster started, the node marker, which it took out of its
+environment at startup and puts back for the restart
 ([cloud-account.md](cloud-account.md#what-an-instance-reports)). A `PATH` a CLI
 installer has changed since in the user's profile is therefore not seen — a
 restart is no substitute for starting from a new terminal there. An AI CLI
@@ -207,6 +208,49 @@ What this does not change: `/proc/<pid>/environ` holds the environment as of the
 exec, readable by the same user and root — the same exposure a cluster's nodes
 have always had.
 
+## Keeping the port
+
+A restart comes back on the port it was listening on. `-port` is only where
+the search for a free port starts: a server takes the first port from there
+upward that it can bind, so the port it ends up on is not something its
+arguments say. A node, started with no arguments, searches from the default
+every time; restarted while another node holds that port, it would come back
+on a different one, and every page and bookmark pointed at the old address
+would lose it.
+
+So the server records the port with `Restarter.KeepPort` once it is bound, and
+`Restart` hands it to the new run in `POCKODE_RESTART_PORT`, beside the
+password. The new run's `TakePort` reads it, and starts its search there
+instead of at `-port`. The kept port wins over a `-port` given explicitly: the
+old run searched from that same `-port`, so the kept port is what it resolved
+to — the one clients are using. `-port 9000` that landed on 9001 stays on 9001
+after a restart, even if 9000 has been freed meanwhile. It is still a starting
+point, not a demand: if another process has taken it in between, the search
+falls forward from it (9002…), not back to `-port`.
+
+**Through the environment, not a replayed `-port`.** The arguments are the
+user's. A rewritten flag would have to be found among them in every spelling
+the flag package accepts, past positional arguments and the `cluster`
+subcommand; it would show a port in the command line the user never chose;
+and a node would no longer be the process started with no arguments that
+[the last step](#when-the-last-step-fails) relies on.
+
+**Taken out at startup.** `TakePort` unsets the variable whatever it holds, in
+server mode beside `node.TakeMarker` and in `runCluster` before `cluster.Run`
+starts any node — before anything is spawned. Only the replacing run sees it:
+not the AI CLIs, and not a cluster's nodes, which inherit the cluster's
+environment and have ports of their own. A value that is not a port is ignored
+in favour of `-port`; only a restart writes it, so one that does not parse was
+not put there by pockode. A restart that happens before `KeepPort` (there is
+no such path today: requests are held until `Watch`) hands no port on, and the
+new run searches from `-port`.
+
+The old listener is closed by the shutdown before `replace` runs, and Go
+sockets are close-on-exec on unix and non-inheritable on Windows, so the new
+run binds afresh on both platforms rather than inheriting a socket. A unix
+restart with the port still in `TIME_WAIT` is not a problem: Go sets
+`SO_REUSEADDR` on listeners, so only a live listener counts as taken.
+
 ## Replacing the process
 
 `replace` is the platform-specific last step; both versions are given the
@@ -303,10 +347,11 @@ the server's log and terminal ([restart-ui.md](../restart-ui.md#while-it-restart
 
 The log of a restart, in order: `restart requested` (with the installed
 version), `shutting down server restart=true`, `server stopped`, `restarting`
-(the argument *count*, never the arguments — a `-password` may be among them),
-then the new process's `server starting`. A cluster manager logs the same
-around its own lines: `shutting down cluster server restart=true`, `cluster
-server stopped`, and the new run's `cluster server started`.
+(the argument *count*, never the arguments — a `-password` may be among them —
+and the `port` handed on), then the new process's `server starting`. A cluster
+manager logs the same around its own lines: `shutting down cluster server
+restart=true`, `cluster server stopped`, and the new run's `cluster server
+started`.
 
 ## Reading the installed version
 
@@ -345,4 +390,6 @@ fake.
 
 `internal/restart`'s own tests start real processes end to end: the arguments,
 the directory, the password in the environment and not in argv, the PID kept on
-unix, and the exit status 1 when the last step fails.
+unix, the exit status 1 when the last step fails, and the port: a restarted run
+comes back on its own port rather than its `-port`, falls forward from it when
+it has been taken, and leaves no `POCKODE_RESTART_PORT` for its children.

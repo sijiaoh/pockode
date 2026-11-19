@@ -34,7 +34,7 @@ Open **Settings → AI CLIs** and sign the CLI in from there, or run `claude` or
 
 ## The port is not 9870
 
-Another program had it, so Pockode took the next free port. The banner's **Local** line shows which. Choose one with `-port`.
+Another program had it, so Pockode took the next free port. The banner's **Local** line shows which. Choose one with `-port`. A restart comes back on the port Pockode was on (or the next free one, if something took it meanwhile), not on `-port`.
 
 ## Pockode exits at startup with a relay error
 

@@ -17,7 +17,7 @@ Flags use a single dash: `-port 9000` or `-port=9000`. Turn a boolean off with `
 |---|---|---|
 | `-password` | — | The password for the app. Required, unless the `POCKODE_PASSWORD` environment variable is set; [Security](/security/#authentication) says when to prefer it |
 | `-work` | current directory | The project directory Pockode works in |
-| `-port` | `9870` | Port to listen on. If it is taken, the next free port is used; the banner shows which |
+| `-port` | `9870` | Port to listen on. If it is taken, the next free port is used; the banner shows which. A restart keeps the port it was on |
 | `-relay` | `true` | Connect to the relay so the phone can reach the machine from anywhere. `-relay=false` keeps the app on your own network and turns off Port Preview |
 | `-data` | `<work>/.pockode` | Where sessions, settings, work items and logs are kept |
 | `-log-level` | `info` | `debug`, `info`, `warn` or `error` |
@@ -47,7 +47,7 @@ For running on a server or in a container:
 | Flag | Default | What it does |
 |---|---|---|
 | `-password` | — | The password for the cluster page; or set `POCKODE_PASSWORD` |
-| `-port` | `9871` | Port to listen on |
+| `-port` | `9871` | Port to listen on. If it is taken, the next free port is used. A restart keeps the port it was on |
 | `-data` | `~/.pockode-cluster` | Where the node list and logins are kept |
 | `-relay` | `true` | Connect to the relay; `-relay=false` keeps the page on your own network |
 | `-cloud-url` | `https://cloud.pockode.com` | The relay service to connect to |

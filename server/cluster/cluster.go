@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"strconv"
 	"time"
 
 	"github.com/pockode/server/agent"
@@ -27,6 +26,8 @@ import (
 const DefaultPort = 9871
 
 type Config struct {
+	// Port is where the search for a free port starts (netutil.ListenAvailable);
+	// the one bound is handed to Restarter.KeepPort.
 	Port     int
 	Password string
 	// PasswordDeprecationWarning is logged once at startup when the password
@@ -57,7 +58,15 @@ func Run(cfg Config) error {
 		DevMode: cfg.DevMode,
 	})
 
-	port := netutil.FindAvailablePort(cfg.Port)
+	// Held from here and served on as is: see netutil.ListenAvailable.
+	listener, err := netutil.ListenAvailable(cfg.Port)
+	if err != nil {
+		return fmt.Errorf("failed to listen: %w", err)
+	}
+	// Every return before Serve would otherwise leave the port held.
+	defer listener.Close()
+	port := netutil.ListenerPort(listener)
+	cfg.Restarter.KeepPort(port)
 
 	log := slog.Default().With("mode", "cluster")
 	if cfg.PasswordDeprecationWarning != "" {
@@ -134,7 +143,6 @@ func Run(cfg Config) error {
 	handler := newHandler(cfg.Password, passwordGuard, sessions, cfg.DevMode, wsHandler)
 
 	srv := &http.Server{
-		Addr:    ":" + strconv.Itoa(port),
 		Handler: handler,
 	}
 
@@ -229,8 +237,8 @@ func Run(cfg Config) error {
 		close(shutdownDone)
 	}()
 
-	log.Info("cluster server started", "addr", srv.Addr)
-	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+	log.Info("cluster server started", "port", port)
+	if err := srv.Serve(listener); err != nil && err != http.ErrServerClosed {
 		return fmt.Errorf("server error: %w", err)
 	}
 	<-shutdownDone
