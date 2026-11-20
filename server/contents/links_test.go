@@ -456,37 +456,96 @@ func TestNonASCIINamesAreOneComponent(t *testing.T) {
 	}
 }
 
-// A ".." in an absolute target applies after the links before it, as the
-// kernel applies it: "/w/l/../secret" with l a link out is outside, not the
-// project's own secret.
-func TestAbsoluteTargetDotDotFollowsLinksFirst(t *testing.T) {
+// dotDotPath spells a link target with its ".." intact: filepath.Join would
+// clean it away before the link is made.
+func dotDotPath(elem ...string) string {
+	return strings.Join(elem, string(filepath.Separator))
+}
+
+// A ".." in a link target applies where the OS applies it: after the links
+// before it on Unix, so "l/../secret" with l a link out is outside, not the
+// project's own secret; to the text on Windows, so there it is the project's
+// secret, and nothing outside is reached either way.
+func TestTargetDotDotAppliesAsTheOSDoes(t *testing.T) {
 	f := newLinkFixture(t)
-	if err := os.WriteFile(filepath.Join(f.work, "secret"), []byte("mine"), 0644); err != nil {
-		t.Fatal(err)
-	}
 	if err := os.Mkdir(filepath.Join(f.outside, "sub"), 0755); err != nil {
 		t.Fatal(err)
 	}
 	symlinktest.Make(t, filepath.Join(f.outside, "sub"), filepath.Join(f.work, "l"))
-	symlinktest.Make(t, strings.Join([]string{f.work, "l", "..", "secret"}, string(filepath.Separator)), filepath.Join(f.work, "x"))
 
-	result, err := GetContents(f.work, "x")
-	if err != nil {
-		t.Fatalf("GetContents failed: %v", err)
+	for _, tc := range []struct{ name, target string }{
+		{"absolute", dotDotPath(f.work, "l", "..", "secret")},
+		{"relative", dotDotPath("l", "..", "secret")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := os.WriteFile(filepath.Join(f.work, "secret"), []byte("mine"), 0644); err != nil {
+				t.Fatal(err)
+			}
+			symlinktest.Make(t, tc.target, filepath.Join(f.work, "x"))
+			t.Cleanup(func() { os.Remove(filepath.Join(f.work, "x")) })
+
+			result, err := GetContents(f.work, "x")
+			if err != nil {
+				t.Fatalf("GetContents failed: %v", err)
+			}
+			writeErr := WriteFile(f.work, "x", "x")
+			secret, _ := os.ReadFile(filepath.Join(f.work, "secret"))
+			if dotDotAppliesToText {
+				if result.File == nil || result.File.Content != "mine" {
+					t.Errorf("got %+v, want the project's secret", result)
+				}
+				if writeErr != nil || string(secret) != "x" {
+					t.Errorf("WriteFile = %v, secret = %q; want it written through the link", writeErr, secret)
+				}
+			} else {
+				if result.Link == nil || result.Link.Link.State != LinkOutside {
+					t.Errorf("got %+v, want an outside link result", result)
+				}
+				if !errors.Is(writeErr, ErrInvalidPath) {
+					t.Errorf("WriteFile = %v, want ErrInvalidPath", writeErr)
+				}
+				if string(secret) != "mine" {
+					t.Errorf("wrote a file the link does not name: %q", secret)
+				}
+			}
+		})
 	}
-	if result.Link == nil || result.Link.Link.State != LinkOutside {
-		t.Errorf("got %+v, want an outside link result", result)
-	}
-	if err := WriteFile(f.work, "x", "x"); !errors.Is(err, ErrInvalidPath) {
-		t.Errorf("WriteFile = %v, want ErrInvalidPath", err)
-	}
-	if b, _ := os.ReadFile(filepath.Join(f.work, "secret")); string(b) != "mine" {
-		t.Errorf("wrote a file the link does not name: %q", b)
-	}
+	// Remove refuses it if anything was written into it.
 	if err := os.Remove(filepath.Join(f.outside, "sub")); err != nil {
 		t.Fatal(err)
 	}
 	f.assertSecretIntact(t)
+}
+
+// Where the two readings of a ".." both stay inside, the OS can be asked
+// which one it takes: what the walk serves through the link is what opening
+// the link reads.
+func TestTargetDotDotMatchesTheOS(t *testing.T) {
+	work := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(work, "a", "b"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	for name, content := range map[string]string{"s": "text", "a/s": "links"} {
+		if err := os.WriteFile(filepath.Join(work, filepath.FromSlash(name)), []byte(content), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	symlinktest.Make(t, filepath.Join("a", "b"), filepath.Join(work, "l"))
+	symlinktest.Make(t, dotDotPath(work, "l", "..", "s"), filepath.Join(work, "abs"))
+	symlinktest.Make(t, dotDotPath("l", "..", "s"), filepath.Join(work, "rel"))
+
+	want := "links"
+	if dotDotAppliesToText {
+		want = "text"
+	}
+	for _, name := range []string{"abs", "rel"} {
+		if b, err := os.ReadFile(filepath.Join(work, name)); err != nil || string(b) != want {
+			t.Errorf("the OS reads %s as %q, %v; want %q", name, b, err, want)
+		}
+		if result, err := GetContents(work, name); err != nil || result.File == nil || result.File.Content != want {
+			t.Errorf("GetContents(%s) = %+v, %v; want %q", name, result, err, want)
+		}
+	}
 }
 
 // A cycle is told by identity: on a case-insensitive file system "../A" is

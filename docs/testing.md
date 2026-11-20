@@ -508,6 +508,20 @@ handle; "keeps the file's identity" in `server/contents` uses the link. Linux
 cannot reproduce this — its `os.Stat` reads the inode at once — so the mistake
 shows only on the Windows runner.
 
+**An expectation written from Unix semantics: ask the OS instead.** A test that
+hard-codes what the kernel would do is a claim about Unix, and Windows may
+disagree without either side being wrong. A `..` in a symlink target is the
+case in point: Unix applies it after the links before it, Windows to the text
+([symlinks.md](symlinks.md#how-the-check-is-made)), so a test expecting
+`outside` went red there on a link Windows really does follow to a file inside.
+Before changing code to match the expectation, build a layout where both
+readings are harmless and let the OS open it: `TestTargetDotDotMatchesTheOS` in
+`server/contents` reads through the link with `os.ReadFile` and asserts the
+walk serves the same bytes, which also proves the per-platform constant
+(`dotDotAppliesToText`) the other expectations branch on. Neither Linux nor
+macOS can reproduce this; the Windows runner, or a `workflow_dispatch` run of
+CI on a scratch branch, is the reproduction.
+
 ## Shell: a suite neither entry point runs
 
 `go test ./...` and `pnpm run test` do not reach every test in the repository.
