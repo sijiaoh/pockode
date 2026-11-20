@@ -134,8 +134,21 @@ route resolves its path with the one walk: `contents.Resolve` for a path,
    40 on Linux and 32 on macOS). It never looks anything up past the boundary,
    which is what keeps [`outside`](#why-outside-says-nothing-more) from saying whether the target
    exists. A link on the last component is classified rather than followed, and
-   the route decides what to do with it (below). An absolute target's `..` is
-   applied after the links before it, as the kernel does, not cleaned away first.
+   the route decides what to do with it (below). A `..` in a link target,
+   absolute or relative, is applied where the OS applies it, so what the walk
+   serves through a link is what opening the link reads:
+   - **Unix:** after the links before it are followed, as the kernel does. With
+     `l` a link out, `/w/l/../secret` and `l/../secret` are `outside`, not the
+     project's own `secret`.
+   - **Windows:** to the target's text, before any link in it is followed, as
+     Windows does: an absolute target is normalized when the link is created
+     (`Readlink` already reads back `C:\w\secret`), and a relative one is
+     normalized against the link's directory when it is followed. So
+     `C:\w\l\..\secret` and `l\..\secret` are the project's own `secret`, `ok`,
+     wherever `l` leads. A leading `..` still applies to the link's real
+     directory.
+
+   Either way the walk never reaches past the work directory to find out.
 3. **Then act on what the walk found through the work directory's `os.Root`.**
    The walk's result is a path with no link left in it, but a link can be
    swapped in after the walk, and the root refuses to follow one out. What is

@@ -196,6 +196,7 @@ func (r *resolver) walk(from []string, target string, hops *int) (walkResult, er
 // directory for an absolute target. It reports false for an absolute target
 // outside the work directory.
 func (r *resolver) start(cur *[]string, target string) ([]string, bool) {
+	target = asFollowed(target)
 	if !pathutil.IsAnchored(target) {
 		return splitPath(target), true
 	}
@@ -215,11 +216,11 @@ func (r *resolver) start(cur *[]string, target string) ([]string, bool) {
 
 // beneath returns the components of the absolute path target that follow the
 // spelling base, if target starts with it. Matched component by component and
-// never cleaned: a ".." in what follows has to be applied after the links
-// before it are followed, as the kernel applies it, and cleaning would apply
-// it to the text instead ("/w/l/../secret", l a link out, is not /w/secret).
-// A ".." inside the prefix itself is not matched, which only ever errs
-// towards "outside".
+// never cleaned here: where the OS applies a ".." after the links before it
+// ("/w/l/../secret", l a link out, is not /w/secret on Unix), cleaning would
+// apply it to the text instead. What the OS applies to the text, asFollowed
+// already has. A ".." inside the prefix itself is not matched, which only
+// ever errs towards "outside".
 func beneath(target, base string) ([]string, bool) {
 	if !pathutil.Equal(filepath.VolumeName(target), filepath.VolumeName(base)) {
 		return nil, false
