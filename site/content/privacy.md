@@ -59,7 +59,7 @@ We use the information we collect for the following purposes:
 - **Cloud Accounts:** To send you sign-in codes by email, and to show you the machines and instances linked to your account. Cloud account information is shown only to the account owner, except that a linked machine's terminal shows the email address of the account it is linked to
 - **Security:** To detect, prevent, and respond to security incidents, fraud, or abuse
 - **Troubleshooting:** To diagnose technical problems and improve service reliability
-- **Usage Measurement:** To estimate how widely Pockode is used, by counting the distinct networks that Pockode instances connect to the relay from or fetch the announcement from. For this, the log entries of relay connections and announcement requests record the network an IP address belongs to: an IPv4 address as is, an IPv6 address shortened to its /64 prefix. Several instances on one network are counted once. We use these records only to produce aggregate counts
+- **Usage Measurement:** To estimate how widely Pockode is used, by counting the distinct networks that Pockode instances connect to the relay from or fetch the announcement from. For this, the log entries of relay connections and announcement requests record the network an IP address belongs to: an IPv4 address as is, an IPv6 address shortened to its /64 prefix. Several instances on one network are counted once. For usage measurement, we use these records only to produce aggregate counts
 - **Legal Compliance:** To comply with applicable laws and legal obligations
 
 ## 3. Information Sharing
