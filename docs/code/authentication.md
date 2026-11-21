@@ -27,6 +27,58 @@ What follows from the name: tell users to generate this secret rather than reuse
 one. A machine-local secret that also unlocks their email is the one failure mode
 this model cannot contain, and no amount of hashing anywhere fixes it.
 
+### Local code is inside the boundary
+
+Code running on the host as the developer's OS user — the AI agents, the
+commands they run, setup hooks, terminals, the cluster and its nodes — is inside
+the trust boundary. It already has everything the password protects: it can
+read the data directory, read another process's starting environment (on unix,
+`/proc/<pid>/environ` or `ps -E`; on Windows `os.Unsetenv` does edit the live
+environment block, but the process's memory is still the same user's to read),
+and, in the usual per-user install, replace the `pockode` executable itself.
+Pockode therefore adds **no mechanism whose only purpose is to stop local code
+that goes looking for a credential**. Such a mechanism cannot hold, and it buys
+its appearance of safety with extra keys, extra handovers and extra ways to
+fail.
+
+What Pockode does keep from local code is **passive spread**: a credential put
+somewhere it travels on without anyone deciding to send it. An inherited
+environment variable reaches every child, and from there an `env` dump, a crash
+report, or an agent echoing its environment into a transcript the user later
+shares. A secret in a URL reaches history, sync and logs, so one is put there
+only when a browser leaves no other way, and is then made worth little. A secret
+in a log line is in every copy of the log. These are not attacks; they are leaks
+waiting for an ordinary action, so they are closed.
+
+The test for a new safeguard: does it stop a credential from landing where it
+would be carried on unasked? Keep it. Does it only make the credential harder to
+obtain for local code that deliberately asks for it? Leave it out, and say so
+here.
+
+- **Kept on that test:** [scrubbing the password from the
+  environment](#scrubbing-the-env-before-spawning-children-passwordload), the
+  password in the environment rather than argv (on Linux argv is readable by
+  *other* users, which is the boundary below), tickets and capabilities kept out
+  of logs and — where a browser forces one into a URL — made single-use and
+  short-lived (tickets) or bound to a session and scoped to what they name
+  (capabilities), so the copy that spreads is worth little.
+- **Left out on that test:** keeping the local API token (`server.json`) from
+  the agents; it is handed to them on purpose. A local endpoint that hands out
+  logins to a caller holding that token is acceptable for the same reason,
+  provided the token never leaves the host (it is not sent over the network,
+  logged or shown in the UI) and the route is one the relay refuses
+  (`apiroute.IsLocalOnly`). The server listens on every interface, so on a LAN
+  it is the token, not the address, that keeps a caller out.
+
+The boundary that *is* defended runs elsewhere: callers reaching the server over
+the network (relay or LAN), which need the password, a credential derived from
+it, or — on the relay-refused local API only — the local token, which never
+leaves the host; pages a browser loads, whose scripts are not the credential
+holder (see [Raw
+capabilities](#raw-capabilities-urls-a-browser-element-loads-by-itself)); and
+other OS users on a shared host, which is what [Credentials on
+Disk](#credentials-on-disk) and environment-over-argv delivery are for.
+
 ### The residual risk: plaintext HTTP on a LAN
 
 Reached over the relay, both hops are TLS — phone to cloud, cloud to this
@@ -137,7 +189,7 @@ a 256-bit hex string from `crypto/rand`, regenerated per server start
 (`server/main.go` — `generateToken`) and written to `server.json` inside the
 restricted data directory (`server/serverinfo/serverinfo.go`, see
 [Credentials on Disk](#credentials-on-disk)) — not the user-facing password.
-Two guards keep it local-only:
+Three guards keep it off the relay and closed to anyone without the token:
 
 - The auth middleware bypasses the MCP route by **exact match**, so a future
   `/api/mcp/*` route is auth-protected by default rather than silently exposed
@@ -192,9 +244,13 @@ still says which one to drop.
 Using the environment to *receive* the password introduces a second hazard: the
 server itself spawns many child processes — AI CLIs (`agent/claude`,
 `agent/codex`), git, worktree setup hooks — and they inherit `os.Environ()` by
-default. If the password stayed in the environment, AI-generated (and potentially
-prompt-injected) code could read it and exfiltrate it for durable remote access
-via the relay.
+default. If the password stayed in the environment, it would sit in every
+child's environment, where a routine `env` dump, a crash report or an agent
+echoing its environment into a transcript carries it on without anyone choosing
+to — the passive spread the [trust model](#local-code-is-inside-the-boundary)
+closes. A process that goes looking can still find it, in the server's own
+starting environment on unix; that is the line the trust model draws, not a
+gap in this fix.
 
 `password.Load` closes this at the source: it resolves the password and then
 **unconditionally** `os.Unsetenv`s **both** variable names, once, at startup —
@@ -731,7 +787,7 @@ model (e.g. multi-user hosting) revisits them rather than rediscovering them:
   confidentiality one: neither the token hashes nor the password fingerprint can
   be read back into a usable credential, but anything that can write the file —
   including a prompt-injected agent — can log every other browser out. The
-  recovery is to log in again with the password, which that writer does not have.
+  recovery is to log in again with the password.
 - **Traffic on a plaintext LAN deployment is not encrypted.** See
   [The residual risk](#the-residual-risk-plaintext-http-on-a-lan) for why the
   client-side hashing that looks like a fix is not one, and what actually is.

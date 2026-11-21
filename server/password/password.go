@@ -98,9 +98,10 @@ func Resolve(flagValue, legacyFlagValue string) (Credential, error) {
 // Load resolves the password (see Resolve) and then removes both EnvVar and
 // LegacyEnvVar from the process environment so neither is inherited by child
 // processes the server spawns (AI CLIs, git, worktree setup hooks). Leaving the
-// password in the environment would expose it to AI-generated — and potentially
-// prompt-injected — code, which could exfiltrate it for persistent remote
-// access via the relay.
+// password in the environment would put it in every child's environment, where
+// an env dump, a crash report or a transcript carries it on unasked — passive
+// spread, which is what this guards against (docs/code/authentication.md,
+// "Local code is inside the boundary").
 //
 // The unset is unconditional and covers both names: even when the password came
 // from a flag, a stale variable under either spelling must not reach children.
