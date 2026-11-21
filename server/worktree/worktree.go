@@ -7,6 +7,7 @@ import (
 	"sync/atomic"
 
 	"github.com/pockode/server/chat"
+	"github.com/pockode/server/permreview"
 	"github.com/pockode/server/process"
 	"github.com/pockode/server/session"
 	"github.com/pockode/server/watch"
@@ -30,6 +31,7 @@ type Worktree struct {
 	ChatMessagesWatcher  *watch.ChatMessagesWatcher
 	ProcessManager       *process.Manager
 	ChatClient           *chat.Client
+	PermissionReviews    *permreview.Service
 
 	watchers []watch.Watcher // for unified lifecycle management
 
@@ -58,6 +60,22 @@ func (w *Worktree) MarkDeleted() {
 // as anything still holds it.
 func (w *Worktree) Deleted() bool {
 	return w.deleted.Load()
+}
+
+// DeleteSession stops the session's process and deletes it, together with its
+// permission reviewer, whose process is stopped too. The store removes the
+// reviewer on its own (session.Store.Delete); only the worktree has the
+// processes, so this is the one way a session with a live process is deleted.
+func (w *Worktree) DeleteSession(ctx context.Context, sessionID string) error {
+	reviewer, hasReviewer, err := session.FindPermissionReviewer(w.SessionStore, sessionID)
+	if err != nil {
+		return fmt.Errorf("find permission reviewer of %s: %w", sessionID, err)
+	}
+	if hasReviewer {
+		w.ProcessManager.Close(reviewer.ID)
+	}
+	w.ProcessManager.Close(sessionID)
+	return w.SessionStore.Delete(ctx, sessionID)
 }
 
 func (w *Worktree) Subscribe(notifier watch.Notifier) {
@@ -109,10 +127,14 @@ func (w *Worktree) Start() error {
 // wait for their own background goroutines to return, so a returned Stop means
 // the data directory and the work tree are free to be torn down. Watchers go
 // first because they are the half that polls the work tree; the processes then
-// get however long they need to drain.
+// get however long they need to drain. The permission reviews go before
+// them, so that no timeout fires into a process on its way out.
 func (w *Worktree) Stop() {
 	for _, watcher := range w.watchers {
 		watcher.Stop()
+	}
+	if w.PermissionReviews != nil {
+		w.PermissionReviews.Close()
 	}
 	w.ProcessManager.Shutdown()
 }

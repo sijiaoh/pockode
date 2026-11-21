@@ -1056,7 +1056,7 @@ and it has no method that can say anything to a session
 | Method | Params | Result |
 |--------|--------|--------|
 | `session_view.worktrees` | — | `worktrees`: `worktree`, `exists`, `session_count` |
-| `session_view.list` | `worktree`, `exclude_work_sessions?`, `cursor?`, `limit?` | `sessions`, `next_cursor?`, `has_more` |
+| `session_view.list` | `worktree`, `exclude_work_sessions?`, `exclude_permission_reviewer_sessions?`, `cursor?`, `limit?` | `sessions`, `next_cursor?`, `has_more` |
 | `session_view.get` | `worktree`, `session_id` | `session` |
 | `session_view.history` | `worktree`, `session_id`, `before_seq?`, `limit?` | `history`, `has_more`, `next_before_seq?` |
 | `session_view.attachment` | `worktree`, `session_id`, `id` | `file` |

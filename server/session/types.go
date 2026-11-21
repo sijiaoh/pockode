@@ -57,17 +57,30 @@ const (
 	// and its sandbox at danger-full-access. See claude.buildArgs and
 	// codex.appSession.buildThreadParams.
 	ModeYolo Mode = "yolo"
+	// ModeUnattended is more permissive than YOLO, not a restriction of it: the
+	// agent runs exactly as under YOLO, and every permission request YOLO still
+	// raises (Claude's own safety checks that bypassPermissions cannot skip) is
+	// answered by the session's permission reviewer instead of waiting for a
+	// person. See docs/unattended-mode.md.
+	ModeUnattended Mode = "unattended"
 	// ModePlan Mode = "plan"    // Planning mode (future)
 )
 
 // IsValid returns true if the mode is a known valid mode.
 func (m Mode) IsValid() bool {
 	switch m {
-	case ModeDefault, ModeYolo:
+	case ModeDefault, ModeYolo, ModeUnattended:
 		return true
 	default:
 		return false
 	}
+}
+
+// BypassesAgentGate reports whether the agent CLI is launched with its own
+// permission gate given up (see ModeYolo). Unattended launches exactly as YOLO
+// does; what it adds happens in Pockode, after a request has been raised.
+func (m Mode) BypassesAgentGate() bool {
+	return m == ModeYolo || m == ModeUnattended
 }
 
 // HistorySeq names one record of a session's history: its 1-based position in
@@ -200,7 +213,7 @@ type SessionMeta struct {
 	UpdatedAt time.Time `json:"updated_at"`
 	Activated bool      `json:"activated"`  // true once the agent has produced output
 	AgentType AgentType `json:"agent_type"` // which AI backend (claude, codex)
-	Mode      Mode      `json:"mode"`       // agent mode (default, yolo, plan)
+	Mode      Mode      `json:"mode"`       // agent mode (default, yolo, unattended)
 	// Model is agent-specific (see model.go). Empty — the value every session
 	// created before this field existed carries — means no model flag is passed
 	// and the CLI picks for itself.
@@ -235,6 +248,12 @@ type SessionMeta struct {
 	// changes afterwards: where a conversation came from is a fact about its
 	// birth, not a live relationship.
 	ForkedFrom *ForkOrigin `json:"forked_from,omitempty"`
+	// PermissionReviewerOf is set on a permission reviewer session and names the
+	// main session whose permission requests it answers; empty on every other
+	// session. Like ForkedFrom it is fixed at birth (CreatePermissionReviewer):
+	// a reviewer belongs to one main session for life, is deleted with it, and
+	// takes no input from a person.
+	PermissionReviewerOf string `json:"permission_reviewer_of,omitempty"`
 	// Usage is what this session has consumed, accumulated from what its agent
 	// reported (see usage.go). A fork starts it empty rather than copying the
 	// source's: the tokens behind the copied history were spent by the source,
@@ -246,6 +265,12 @@ type SessionMeta struct {
 	// ws.handleSessionSetAgentType) — the spent tokens stay counted, so a cost
 	// recorded before the switch covers only the part the pricing agent ran.
 	Usage Usage `json:"usage"`
+}
+
+// IsPermissionReviewer reports whether this session is some main session's
+// permission reviewer (see PermissionReviewerOf).
+func (m SessionMeta) IsPermissionReviewer() bool {
+	return m.PermissionReviewerOf != ""
 }
 
 // Cursor is this session's position in the list's sort order. See ListCursor.

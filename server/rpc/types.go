@@ -294,6 +294,12 @@ type ChatErrorData struct {
 // (chat.ErrTurnAwaitingAnswer).
 const ChatReasonAwaitingPermission = "awaiting_permission"
 
+// ChatReasonPermissionReviewer: the session is a permission reviewer, which
+// takes no input from a person — no message, page action or permission answer,
+// and no change of agent, mode, model, effort or html_first. Reading it,
+// renaming it, stopping its turn and deleting it are allowed.
+const ChatReasonPermissionReviewer = "permission_reviewer"
+
 type InterruptParams struct {
 	SessionID string `json:"session_id"`
 }
@@ -903,6 +909,11 @@ type SessionListItem struct {
 	// HTMLFirst is session.SessionMeta.HTMLFirst, on the row because the row
 	// draws it (docs/html-first-session-ui.md §3).
 	HTMLFirst bool `json:"html_first,omitempty"`
+	// PermissionReviewerOf is session.SessionMeta.PermissionReviewerOf: the main
+	// session this row reviews permission requests for, absent on every other
+	// row. Unlike WorkID it is stored on the session, because it is fixed at the
+	// reviewer's birth and has no other record to be derived from.
+	PermissionReviewerOf string `json:"permission_reviewer_of,omitempty"`
 }
 
 // Turn is session.TurnState as a client receives it: the instant the open turn
@@ -989,16 +1000,17 @@ func SessionWorkBySession(works []work.Work) map[string]SessionWork {
 // because resolving it reads the work store — see watch.SessionListWatcher.
 func NewSessionListItem(meta session.SessionMeta, sw SessionWork) SessionListItem {
 	return SessionListItem{
-		ID:                  meta.ID,
-		WorkID:              sw.WorkID,
-		Watching:            len(sw.Watched),
-		Title:               meta.Title,
-		UpdatedAt:           meta.UpdatedAt,
-		Turn:                NewTurn(meta.Turn, time.Now()),
-		UnansweredQuestions: len(meta.Turn.Unanswered),
-		Unread:              meta.Unread,
-		ForkedFrom:          meta.ForkedFrom,
-		HTMLFirst:           meta.HTMLFirst,
+		ID:                   meta.ID,
+		WorkID:               sw.WorkID,
+		Watching:             len(sw.Watched),
+		Title:                meta.Title,
+		UpdatedAt:            meta.UpdatedAt,
+		Turn:                 NewTurn(meta.Turn, time.Now()),
+		UnansweredQuestions:  len(meta.Turn.Unanswered),
+		Unread:               meta.Unread,
+		ForkedFrom:           meta.ForkedFrom,
+		HTMLFirst:            meta.HTMLFirst,
+		PermissionReviewerOf: meta.PermissionReviewerOf,
 	}
 }
 
@@ -1024,6 +1036,11 @@ type SessionListSubscribeParams struct {
 	//
 	// Absent means "send everything", which is what this list always was.
 	ExcludeWorkSessions bool `json:"exclude_work_sessions,omitempty"`
+	// ExcludePermissionReviewerSessions drops every permission reviewer session
+	// (SessionListItem.PermissionReviewerOf). It is the server's for the same
+	// reason as ExcludeWorkSessions: the unread badge rides on every
+	// notification and is over the whole list, which only the server holds.
+	ExcludePermissionReviewerSessions bool `json:"exclude_permission_reviewer_sessions,omitempty"`
 }
 
 // SessionListSubscribeResult is the first page of the list, plus the two facts
@@ -2096,6 +2113,9 @@ type SessionViewListParams struct {
 	// ExcludeWorkSessions drops every session that belongs to a work item, the
 	// same narrowing SessionListSubscribeParams carries and for the same reason.
 	ExcludeWorkSessions bool `json:"exclude_work_sessions,omitempty"`
+	// ExcludePermissionReviewerSessions is
+	// SessionListSubscribeParams.ExcludePermissionReviewerSessions.
+	ExcludePermissionReviewerSessions bool `json:"exclude_permission_reviewer_sessions,omitempty"`
 	// Cursor is what the previous page reported as NextCursor; empty asks for
 	// the first page. Opaque (session.ListCursor).
 	Cursor string `json:"cursor,omitempty"`

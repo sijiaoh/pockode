@@ -70,8 +70,7 @@ func (h *rpcMethodHandler) handleSessionDelete(ctx context.Context, conn *jsonrp
 		return
 	}
 
-	wt.ProcessManager.Close(params.SessionID)
-	if err := wt.SessionStore.Delete(ctx, params.SessionID); err != nil {
+	if err := wt.DeleteSession(ctx, params.SessionID); err != nil {
 		h.replyInternalError(ctx, conn, req.ID, "failed to delete session", err, "sessionId", params.SessionID)
 		return
 	}
@@ -115,6 +114,10 @@ func (h *rpcMethodHandler) handleSessionSetAgentType(ctx context.Context, conn *
 	var params rpc.SessionSetAgentTypeParams
 	if err := unmarshalParams(req, &params); err != nil {
 		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "invalid params")
+		return
+	}
+
+	if h.refusePermissionReviewer(ctx, conn, req, wt, params.SessionID) {
 		return
 	}
 
@@ -163,6 +166,10 @@ func (h *rpcMethodHandler) handleSessionSetMode(ctx context.Context, conn *jsonr
 		return
 	}
 
+	if h.refusePermissionReviewer(ctx, conn, req, wt, params.SessionID) {
+		return
+	}
+
 	if !params.Mode.IsValid() {
 		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "invalid mode")
 		return
@@ -200,6 +207,10 @@ func (h *rpcMethodHandler) handleSessionSetHTMLFirst(ctx context.Context, conn *
 	var params rpc.SessionSetHTMLFirstParams
 	if err := unmarshalParams(req, &params); err != nil {
 		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "invalid params")
+		return
+	}
+
+	if h.refusePermissionReviewer(ctx, conn, req, wt, params.SessionID) {
 		return
 	}
 
@@ -243,6 +254,10 @@ func (h *rpcMethodHandler) handleSessionSetModel(ctx context.Context, conn *json
 		return
 	}
 
+	if h.refusePermissionReviewer(ctx, conn, req, wt, params.SessionID) {
+		return
+	}
+
 	// Which models are valid depends on the session's agent type, so the store
 	// judges the choice while holding that value still. Unlike session.set_mode
 	// the write therefore comes first: a model the agent cannot run must be
@@ -282,6 +297,10 @@ func (h *rpcMethodHandler) handleSessionSetEffort(ctx context.Context, conn *jso
 	var params rpc.SessionSetEffortParams
 	if err := unmarshalParams(req, &params); err != nil {
 		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "invalid params")
+		return
+	}
+
+	if h.refusePermissionReviewer(ctx, conn, req, wt, params.SessionID) {
 		return
 	}
 
@@ -329,7 +348,10 @@ func (h *rpcMethodHandler) handleSessionListSubscribe(ctx context.Context, conn 
 
 	id := params.ID
 	notifier := h.state.getNotifier()
-	filter := watch.SessionListFilter{ExcludeWorkSessions: params.ExcludeWorkSessions}
+	filter := watch.SessionListFilter{
+		ExcludeWorkSessions:               params.ExcludeWorkSessions,
+		ExcludePermissionReviewerSessions: params.ExcludePermissionReviewerSessions,
+	}
 	snapshot, err := wt.SessionListWatcher.Subscribe(id, notifier, filter)
 	if err != nil {
 		h.replySubscriptionError(ctx, conn, req.ID, err, "failed to subscribe to session list")

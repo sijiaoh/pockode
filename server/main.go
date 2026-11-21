@@ -44,6 +44,7 @@ import (
 	"github.com/pockode/server/mcp"
 	"github.com/pockode/server/middleware"
 	"github.com/pockode/server/password"
+	"github.com/pockode/server/permreview"
 	"github.com/pockode/server/relay"
 	"github.com/pockode/server/schedule"
 	"github.com/pockode/server/serverinfo"
@@ -474,6 +475,15 @@ Flags:
 	})
 	worktreeManager := worktree.NewManager(registry, agents, dataDir, leaseBudgets)
 	worktreeManager.SetWorkEngine(workEngine)
+	// Read at every review, so a settings change applies from the next one.
+	worktreeManager.SetPermissionReviewerEngine(func(agentType session.AgentType) session.Engine {
+		return settingsStore.Get().PermissionReviewer.For(agentType)
+	})
+	if dir, err := permreview.DefaultWorkDir(); err != nil {
+		slog.Warn("no configuration directory for permission reviewers to run in; unattended sessions' requests will be denied", "error", err)
+	} else {
+		worktreeManager.SetPermissionReviewerWorkDir(dir)
+	}
 	// A session list row names the work item its session runs: the store is where
 	// that is read, and the listener is what keeps a row up with it.
 	worktreeManager.SetWorkStore(workStore)
@@ -539,6 +549,9 @@ Flags:
 	// things that happen to a work item; the engine is what they are reported to.
 	mcpExecutor.SetWorkEngine(workEngine)
 	mcpExecutor.SetPages(htmlpage.NewStore(), worktreeManager)
+	mcpExecutor.SetPermissionReviews(func(name string) (mcp.PermissionReviewService, func(), error) {
+		return worktreeManager.ResolvePermissionReviews(name)
+	})
 	mcpHandler := mcp.NewAPIHandler(mcpExecutor, mcpToken)
 	loginTicketHandler := localapi.NewLoginTicketHandler(appLoginTickets, mcpToken)
 

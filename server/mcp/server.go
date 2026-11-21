@@ -30,10 +30,26 @@ import (
 type Server struct {
 	client  *Client
 	version string
+	// tools is what this proxy offers, and so all it forwards: a call to any
+	// other tool is refused here, which is what keeps a permission reviewer to
+	// its one tool and every other session away from it.
+	tools []toolDefinition
+	// instructions is the initialize instructions (see initializeResult).
+	instructions string
 }
 
+// NewServer is the proxy of an ordinary session: every Pockode tool but
+// permission_verdict, with agent.Guidance as its instructions.
 func NewServer(client *Client, version string) *Server {
-	return &Server{client: client, version: version}
+	return &Server{client: client, version: version, tools: toolDefinitions, instructions: agent.Guidance}
+}
+
+// NewPermissionReviewerServer is the proxy of a permission reviewer session:
+// permission_verdict and nothing else. No instructions, because Guidance is
+// about tools a reviewer does not have; what a reviewer is told goes through
+// the CLI's system-level channel (agent.PermissionReviewerInstructions).
+func NewPermissionReviewerServer(client *Client, version string) *Server {
+	return &Server{client: client, version: version, tools: reviewerToolDefinitions}
 }
 
 // Run starts the stdio JSON-RPC 2.0 loop.
@@ -85,10 +101,10 @@ func (s *Server) handleRequest(ctx context.Context, w io.Writer, req *jsonRPCReq
 				Name:    "pockode",
 				Version: s.version,
 			},
-			Instructions: agent.Guidance,
+			Instructions: s.instructions,
 		})
 	case "tools/list":
-		writeJSONRPCResult(w, req.ID, toolsListResult{Tools: toolDefinitions})
+		writeJSONRPCResult(w, req.ID, toolsListResult{Tools: s.tools})
 	case "tools/call":
 		s.handleToolCall(ctx, w, req)
 	default:
@@ -100,6 +116,11 @@ func (s *Server) handleToolCall(ctx context.Context, w io.Writer, req *jsonRPCRe
 	var params toolCallParams
 	if err := json.Unmarshal(req.Params, &params); err != nil {
 		writeJSONRPCError(w, req.ID, -32602, "Invalid params")
+		return
+	}
+
+	if !s.offers(params.Name) {
+		writeJSONRPCError(w, req.ID, -32602, fmt.Sprintf("%s: %s", ErrUnknownTool, params.Name))
 		return
 	}
 
@@ -124,6 +145,15 @@ func (s *Server) handleToolCall(ctx context.Context, w io.Writer, req *jsonRPCRe
 		Content: []contentBlock{{Type: "text", Text: resp.Text}},
 		IsError: resp.IsError,
 	})
+}
+
+func (s *Server) offers(name string) bool {
+	for _, def := range s.tools {
+		if def.Name == name {
+			return true
+		}
+	}
+	return false
 }
 
 // --- JSON-RPC 2.0 types ---

@@ -140,6 +140,10 @@ func (h *rpcMethodHandler) handleMessage(ctx context.Context, conn *jsonrpc2.Con
 		return
 	}
 
+	if h.refusePermissionReviewer(ctx, conn, req, wt, params.SessionID) {
+		return
+	}
+
 	log := h.log.With("sessionId", params.SessionID)
 
 	// A message answering questions is written by the server from the answers
@@ -326,6 +330,10 @@ func (h *rpcMethodHandler) handleHTMLAction(ctx context.Context, conn *jsonrpc2.
 		return
 	}
 
+	if h.refusePermissionReviewer(ctx, conn, req, wt, params.SessionID) {
+		return
+	}
+
 	log := h.log.With("sessionId", params.SessionID)
 
 	// Before the page is read: the session id picks the directory it is read
@@ -425,6 +433,10 @@ func (h *rpcMethodHandler) handlePermissionResponse(ctx context.Context, conn *j
 	var params rpc.PermissionResponseParams
 	if err := unmarshalParams(req, &params); err != nil {
 		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "invalid params")
+		return
+	}
+
+	if h.refusePermissionReviewer(ctx, conn, req, wt, params.SessionID) {
 		return
 	}
 

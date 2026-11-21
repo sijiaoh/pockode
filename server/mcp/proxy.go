@@ -11,6 +11,9 @@ import (
 type proxyArgs struct {
 	dataDir string
 	caller  Caller
+	// permissionReviewer selects the reviewer's tool set
+	// (NewPermissionReviewerServer).
+	permissionReviewer bool
 }
 
 // parseProxyArgs parses the arguments that follow the `mcp` subcommand's name.
@@ -26,6 +29,7 @@ func parseProxyArgs(args []string, errorHandling flag.ErrorHandling) (proxyArgs,
 	// it. Optional: a proxy started by hand has no session.
 	sessionID := flags.String("session-id", "", "session the calling CLI runs (optional)")
 	worktree := flags.String("worktree", "", "worktree that session lives in (optional; empty is the main worktree)")
+	permissionReviewer := flags.Bool("permission-reviewer", false, "the session is a permission reviewer: offer permission_verdict alone")
 	if err := flags.Parse(args); err != nil {
 		return proxyArgs{}, err
 	}
@@ -34,8 +38,9 @@ func parseProxyArgs(args []string, errorHandling flag.ErrorHandling) (proxyArgs,
 		return proxyArgs{}, errors.New("--data-dir is required")
 	}
 	return proxyArgs{
-		dataDir: *dataDir,
-		caller:  Caller{SessionID: *sessionID, Worktree: *worktree},
+		dataDir:            *dataDir,
+		caller:             Caller{SessionID: *sessionID, Worktree: *worktree},
+		permissionReviewer: *permissionReviewer,
 	}, nil
 }
 
@@ -53,7 +58,11 @@ func RunProxy(args []string, version string) error {
 	if err != nil {
 		return err
 	}
-	if err := NewServer(client, version).Run(context.Background()); err != nil {
+	server := NewServer(client, version)
+	if parsed.permissionReviewer {
+		server = NewPermissionReviewerServer(client, version)
+	}
+	if err := server.Run(context.Background()); err != nil {
 		return fmt.Errorf("MCP server failed: %w", err)
 	}
 	return nil

@@ -661,6 +661,15 @@ type PermissionRequestEvent struct {
 	ToolInput             json.RawMessage
 	ToolUseID             string
 	PermissionSuggestions []PermissionUpdate
+	// DecisionReason is the agent's own human-readable account of why this
+	// call needs a decision (Claude's decision_reason: a safety check's
+	// warning, the rule that asked, ...). It may carry ANSI escapes, which a
+	// renderer has to strip. Empty when the agent gives none — always, for
+	// Codex.
+	DecisionReason string
+	// BlockedPath is the path the request is about when the agent names one
+	// (Claude's blocked_path). Empty otherwise, and always for Codex.
+	BlockedPath string
 }
 
 func (PermissionRequestEvent) EventType() EventType { return EventTypePermissionRequest }
@@ -674,6 +683,8 @@ func (e PermissionRequestEvent) ToRecord() EventRecord {
 		ToolInput:             e.ToolInput,
 		ToolUseID:             e.ToolUseID,
 		PermissionSuggestions: e.PermissionSuggestions,
+		DecisionReason:        e.DecisionReason,
+		BlockedPath:           e.BlockedPath,
 	}
 }
 
@@ -1113,10 +1124,17 @@ func (e MessageDiscardedEvent) ToRecord() EventRecord {
 	return EventRecord{Type: e.EventType(), MessageID: e.MessageID}
 }
 
-// PermissionResponseEvent is for history replay only, not sent as RPC notification.
+// PermissionResponseEvent is the answer a permission request got. A person's
+// answer is for history replay only — the client that sent it already shows it —
+// while a permission reviewer's, or Pockode's own, is also broadcast, since no
+// client sent it.
 type PermissionResponseEvent struct {
 	RequestID string
 	Choice    string // "deny", "allow", "always_allow"
+	// By is who answered; empty is a person. See PermissionResponder.
+	By PermissionResponder
+	// Review is set whenever By is.
+	Review *PermissionReview
 }
 
 func (PermissionResponseEvent) EventType() EventType { return EventTypePermissionResponse }
@@ -1127,6 +1145,8 @@ func (e PermissionResponseEvent) ToRecord() EventRecord {
 		Type:      e.EventType(),
 		RequestID: e.RequestID,
 		Choice:    e.Choice,
+		By:        e.By,
+		Review:    e.Review,
 	}
 }
 

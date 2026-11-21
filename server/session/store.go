@@ -28,6 +28,13 @@ type Store interface {
 	Create(ctx context.Context, sessionID string, spec CreateSpec) (SessionMeta, error)
 	// CreateFork creates a session that begins life as a copy of another one.
 	CreateFork(ctx context.Context, sessionID string, fork ForkSpec) (SessionMeta, error)
+	// EnsurePermissionReviewer returns the permission reviewer of the main
+	// session, creating it under newSessionID if it has none yet. created says
+	// which happened. Find and create are one step under the store lock, so two
+	// requests racing for the first review get the same reviewer.
+	EnsurePermissionReviewer(ctx context.Context, mainSessionID, newSessionID string) (reviewer SessionMeta, created bool, err error)
+	// Delete removes the session and, with it, its permission reviewer if it
+	// has one: a reviewer outliving its main session would answer for nothing.
 	Delete(ctx context.Context, sessionID string) error
 	Update(ctx context.Context, sessionID string, title string) error
 	Activate(ctx context.Context, sessionID string) error
@@ -508,6 +515,54 @@ func (s *FileStore) CreateFork(ctx context.Context, sessionID string, fork ForkS
 	return session, nil
 }
 
+// EnsurePermissionReviewer: see Store.
+//
+// The reviewer runs on the main session's agent, and nothing else of the main
+// session's engine is copied: its model and effort come from the server's
+// permission reviewer settings, read at review time, so they are not fixed
+// here. Its mode is left at the default — the reviewer is launched for its own
+// job, not under the main session's permissions.
+func (s *FileStore) EnsurePermissionReviewer(ctx context.Context, mainSessionID, newSessionID string) (SessionMeta, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return SessionMeta{}, false, err
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	var main *SessionMeta
+	for i := range s.sessions {
+		switch {
+		case s.sessions[i].PermissionReviewerOf == mainSessionID:
+			return s.sessions[i], false, nil
+		case s.sessions[i].ID == mainSessionID:
+			main = &s.sessions[i]
+		}
+	}
+	if main == nil {
+		return SessionMeta{}, false, fmt.Errorf("%w: main session %s", ErrSessionNotFound, mainSessionID)
+	}
+	if main.IsPermissionReviewer() {
+		return SessionMeta{}, false, fmt.Errorf("%w: %s", ErrReviewerOfReviewer, mainSessionID)
+	}
+
+	now := time.Now()
+	reviewer := SessionMeta{
+		ID:                   newSessionID,
+		Title:                PermissionReviewerTitle,
+		CreatedAt:            now,
+		UpdatedAt:            now,
+		AgentType:            main.AgentType,
+		Mode:                 ModeDefault,
+		Turn:                 NewTurnState(now),
+		PermissionReviewerOf: mainSessionID,
+	}
+	if err := s.insertLocked(reviewer); err != nil {
+		return SessionMeta{}, false, err
+	}
+	return reviewer, true, nil
+}
+
 func (s *FileStore) Delete(ctx context.Context, sessionID string) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -516,28 +571,28 @@ func (s *FileStore) Delete(ctx context.Context, sessionID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	sessionDir := filepath.Join(s.dataDir, "sessions", sessionID)
-	if err := os.RemoveAll(sessionDir); err != nil {
-		return err
+	doomed := withPermissionReviewers(s.sessions, sessionID)
+	for _, id := range doomed {
+		if err := os.RemoveAll(filepath.Join(s.dataDir, "sessions", id)); err != nil {
+			return err
+		}
 	}
 
 	s.historyMu.Lock()
-	delete(s.historyLen, sessionID)
+	for _, id := range doomed {
+		delete(s.historyLen, id)
+	}
 	s.historyMu.Unlock()
 
-	newSessions := make([]SessionMeta, 0, len(s.sessions))
-	for _, sess := range s.sessions {
-		if sess.ID != sessionID {
-			newSessions = append(newSessions, sess)
-		}
-	}
-	s.sessions = newSessions
+	s.sessions = withoutSessions(s.sessions, doomed)
 
 	if err := s.persistIndex(); err != nil {
 		return err
 	}
 
-	s.notifyChange(SessionChangeEvent{Op: OperationDelete, Session: SessionMeta{ID: sessionID}})
+	for _, id := range doomed {
+		s.notifyChange(SessionChangeEvent{Op: OperationDelete, Session: SessionMeta{ID: id}})
+	}
 	return nil
 }
 

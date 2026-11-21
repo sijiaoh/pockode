@@ -272,6 +272,11 @@ type appSession struct {
 	usage  *usageObserver
 	resume *resumeStateStore
 
+	// hiddenMCPServers are the user's MCP servers a permission reviewer's
+	// threads switch off (reviewerConfigOverrides). Read by openThread before
+	// any thread is opened, and only read after that.
+	hiddenMCPServers []string
+
 	// eventsMu is held for reading by every sender and for writing by the one
 	// close, so that no send can be in flight while the channel is closed. See
 	// emitEvent.
@@ -375,6 +380,17 @@ func (s *appSession) SendPermissionResponse(data agent.PermissionRequestData, ch
 		decision = decisionDecline
 	}
 	s.answerApproval(data.RequestID, decision)
+	return nil
+}
+
+// DenyPermissionWithMessage declines, which leaves the turn running, but
+// cannot hand Codex the message: an approval's answer is a bare decision
+// (CommandExecutionApprovalDecision / FileChangeApprovalDecision, checked
+// against codex-cli 0.169.0's app-server schema), and the model reads a decline
+// only as "declined". The text is dropped here; it stays on the recorded
+// response for the user.
+func (s *appSession) DenyPermissionWithMessage(data agent.PermissionRequestData, _ string) error {
+	s.answerApproval(data.RequestID, decisionDecline)
 	return nil
 }
 
@@ -494,6 +510,17 @@ var initializedNotification = rpcRequest{JSONRPC: "2.0", Method: "initialized"}
 // instead and says so — the user needs to know the agent no longer remembers the
 // transcript they are looking at, and Pockode's own history is unaffected.
 func (s *appSession) openThread(ctx context.Context) error {
+	if s.opts.PermissionReviewer {
+		// Refused rather than started without: a reviewer that could reach
+		// the user's servers is the one thing it is launched to avoid, and
+		// a refused start denies the request it was for, saying why.
+		hidden, err := s.readUserMCPServers(ctx)
+		if err != nil {
+			return fmt.Errorf("read the MCP servers to keep from the permission reviewer: %w", err)
+		}
+		s.hiddenMCPServers = hidden
+	}
+
 	state, _ := s.resume.load()
 
 	switch {
@@ -634,19 +661,11 @@ func (s *appSession) buildThreadParams() map[string]interface{} {
 	overrides := map[string]interface{}{}
 	if !s.opts.DisableMCP {
 		// The proxy is spawned per thread, so it can be told which session it
-		// speaks for right here (see mcp.Caller). An empty worktree name is the
-		// main worktree, which the proxy assumes when not told.
-		args := []string{"mcp", "--data-dir", s.opts.MCPDir()}
-		if s.opts.SessionID != "" {
-			args = append(args, "--session-id", s.opts.SessionID)
-		}
-		if s.opts.Worktree != "" {
-			args = append(args, "--worktree", s.opts.Worktree)
-		}
+		// speaks for right here (see mcp.Caller).
 		overrides["mcp_servers"] = map[string]interface{}{
 			agent.MCPServerName: map[string]interface{}{
 				"command": s.exe,
-				"args":    args,
+				"args":    s.opts.MCPProxyArgs(),
 			},
 		}
 	}
@@ -671,8 +690,21 @@ func (s *appSession) buildThreadParams() map[string]interface{} {
 	}
 
 	// Default mode sends neither, so Codex applies the user's own config and
-	// defaults; only yolo overrides them.
-	if s.opts.Mode == session.ModeYolo {
+	// defaults; only yolo and unattended (which launches as yolo) override them.
+	//
+	// A permission reviewer cannot be given no tools the way a Claude one is:
+	// Codex's shell is not something a thread can turn off. A read-only sandbox
+	// is the nearest it comes — the reviewer can still read files — and
+	// on-request keeps anything beyond that a request of its own rather than
+	// something it may just do. Pockode denies every such request at once,
+	// without stopping the turn (permreview.Service.denyOwnRequest), so it
+	// never holds the reviewer — or the reviews queued behind it.
+	switch {
+	case s.opts.PermissionReviewer:
+		params["approvalPolicy"] = "on-request"
+		params["sandbox"] = "read-only"
+		reviewerConfigOverrides(overrides, s.hiddenMCPServers)
+	case s.opts.Mode.BypassesAgentGate():
 		params["approvalPolicy"] = "never"
 		params["sandbox"] = "danger-full-access"
 	}

@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"strings"
 
+	"github.com/pockode/server/agent"
 	"github.com/pockode/server/agentrole"
 	"github.com/pockode/server/chat"
 	"github.com/pockode/server/htmlpage"
@@ -106,6 +107,7 @@ type Executor struct {
 	workEngine     WorkEngine
 	pages          *htmlpage.Store
 	pageDirs       PageDirs
+	reviews        PermissionReviews
 }
 
 // SetWorkEngine installs what the question tools report to. Left unset, a
@@ -187,6 +189,8 @@ func (e *Executor) Execute(ctx context.Context, caller Caller, name string, args
 		return e.questionCancel(ctx, caller, args)
 	case "question_answer":
 		return e.questionAnswer(ctx, caller, args)
+	case agent.PermissionVerdictTool:
+		return e.permissionVerdict(ctx, caller, args)
 	default:
 		return "", fmt.Errorf("%w: %s", ErrUnknownTool, name)
 	}

@@ -34,6 +34,9 @@ func (s *idleSession) SendMessage(agent.Prompt) error  { return nil }
 func (s *idleSession) SendPermissionResponse(agent.PermissionRequestData, agent.PermissionChoice) error {
 	return nil
 }
+func (s *idleSession) DenyPermissionWithMessage(agent.PermissionRequestData, string) error {
+	return nil
+}
 func (s *idleSession) SendInterrupt() error { return nil }
 func (s *idleSession) Close()               { close(s.events) }
 

@@ -3,6 +3,7 @@ package session
 import (
 	"os"
 	"path/filepath"
+	"slices"
 
 	"github.com/pockode/server/filestore"
 )
@@ -22,6 +23,8 @@ import (
 // every read path here follows, so an id this directory does not know never
 // reaches the filesystem.
 //
+// The session's permission reviewer, if it has one, is removed with it.
+//
 // It must not be used on a directory a FileStore has open: that store holds the
 // index in memory and the next write of its own would put the session back.
 // worktree.Manager.DeleteSession is what picks the store whenever there is one.
@@ -31,22 +34,18 @@ func DeleteInDir(dataDir, sessionID string) (deleted bool, err error) {
 		return false, err
 	}
 
-	kept := make([]SessionMeta, 0, len(idx.Sessions))
-	found := false
-	for _, sess := range idx.Sessions {
-		if sess.ID == sessionID {
-			found = true
-			continue
-		}
-		kept = append(kept, sess)
-	}
-	if !found {
+	if !slices.ContainsFunc(idx.Sessions, func(sess SessionMeta) bool { return sess.ID == sessionID }) {
 		return false, nil
 	}
 
-	if err := os.RemoveAll(filepath.Join(dataDir, "sessions", sessionID)); err != nil {
-		return false, err
+	// Its permission reviewer goes with it, as FileStore.Delete does.
+	doomed := withPermissionReviewers(idx.Sessions, sessionID)
+	for _, id := range doomed {
+		if err := os.RemoveAll(filepath.Join(dataDir, "sessions", id)); err != nil {
+			return false, err
+		}
 	}
+	kept := withoutSessions(idx.Sessions, doomed)
 
 	// Written with this build's version, as persistIndex does: what is left
 	// behind has been through the same migrations a store would have applied.

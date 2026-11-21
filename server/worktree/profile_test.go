@@ -46,6 +46,9 @@ func (s *slowExitSession) SendMessage(agent.Prompt) error  { return nil }
 func (s *slowExitSession) SendPermissionResponse(agent.PermissionRequestData, agent.PermissionChoice) error {
 	return nil
 }
+func (s *slowExitSession) DenyPermissionWithMessage(agent.PermissionRequestData, string) error {
+	return nil
+}
 func (s *slowExitSession) SendInterrupt() error { return nil }
 func (s *slowExitSession) Close() {
 	s.closeOnce.Do(func() {

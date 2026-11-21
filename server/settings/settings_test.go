@@ -1,6 +1,7 @@
 package settings
 
 import (
+	"encoding/json"
 	"path/filepath"
 	"runtime"
 	"testing"
@@ -180,5 +181,31 @@ func TestSettings_ResolveEngine(t *testing.T) {
 				t.Errorf("resolved engine is not runnable: %v", err)
 			}
 		})
+	}
+}
+
+// The wire shape is the frontend's contract: one {model, effort} per agent,
+// and nothing at all while every choice is left to the CLIs.
+func TestPermissionReviewerSettings_JSON(t *testing.T) {
+	empty, err := json.Marshal(Settings{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(empty) != "{}" {
+		t.Errorf("empty settings = %s, want {}", empty)
+	}
+
+	var s Settings
+	if err := json.Unmarshal([]byte(`{"permission_reviewer":{"claude":{"model":"haiku","effort":"low"},"codex":{"model":"gpt-5.6-luna"}}}`), &s); err != nil {
+		t.Fatal(err)
+	}
+	if got := s.PermissionReviewer.For(session.AgentTypeClaude); got != (session.Engine{AgentType: session.AgentTypeClaude, Model: "haiku", Effort: "low"}) {
+		t.Errorf("claude reviewer = %+v", got)
+	}
+	if got := s.PermissionReviewer.For(session.AgentTypeCodex); got != (session.Engine{AgentType: session.AgentTypeCodex, Model: "gpt-5.6-luna"}) {
+		t.Errorf("codex reviewer = %+v", got)
+	}
+	if err := s.PermissionReviewer.Validate(); err != nil {
+		t.Errorf("Validate: %v", err)
 	}
 }

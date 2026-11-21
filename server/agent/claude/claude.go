@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -86,14 +87,7 @@ func writeMCPConfig(opts agent.StartOptions, userServers map[string]json.RawMess
 		return "", nil, fmt.Errorf("resolve executable path: %w", err)
 	}
 
-	args := []string{"mcp", "--data-dir", opts.MCPDir()}
-	if opts.SessionID != "" {
-		args = append(args, "--session-id", opts.SessionID)
-	}
-	// Empty is the main worktree, which the proxy assumes when not told.
-	if opts.Worktree != "" {
-		args = append(args, "--worktree", opts.Worktree)
-	}
+	args := opts.MCPProxyArgs()
 
 	servers := make(map[string]any, len(userServers)+1)
 	for name, server := range userServers {
@@ -133,8 +127,12 @@ func writeMCPConfig(opts agent.StartOptions, userServers map[string]json.RawMess
 const systemPromptFile = "system-prompt.md"
 
 // systemPrompt is agent.EnvironmentStatement, followed in an HTML-first
-// session by agent.HTMLFirstGuidance.
+// session by agent.HTMLFirstGuidance; a permission reviewer is told
+// agent.PermissionReviewerInstructions and nothing else.
 func systemPrompt(opts agent.StartOptions) string {
+	if opts.PermissionReviewer {
+		return agent.PermissionReviewerInstructions
+	}
 	if opts.HTMLFirst {
 		return agent.EnvironmentStatement + "\n\n" + agent.HTMLFirstGuidance
 	}
@@ -178,6 +176,48 @@ func systemPromptArgs(opts agent.StartOptions) ([]string, error) {
 // tool_name a can_use_tool request carries, which is why there is one constant.
 const disallowedAskTool = "AskUserQuestion"
 
+// reviewerArgs keep a permission reviewer away from everything but its one
+// tool. The first three are oneShotArgs' isolation (measured there): no built-in
+// tool, no MCP server but the --mcp-config one, which for a reviewer carries
+// Pockode's alone (Start), and no skills. --allowedTools lets the verdict tool
+// run without asking: a reviewer runs in the default mode, where an MCP tool
+// call would otherwise raise a permission request of its own.
+//
+// --setting-sources user keeps the project's settings, local settings and
+// hooks out even if the reviewer's working directory ever were the project
+// (process.Manager runs it in a directory of its own). The user's settings are
+// kept on purpose: they can carry what the CLI needs to reach the model at all
+// (env, apiKeyHelper — Bedrock, Vertex, a proxy), and an empty list would fail
+// every review for those users. Their hooks therefore still run
+// (docs/unattended-mode.md). CLAUDE.md is dropped separately, by reviewerEnv.
+// Measured on claude 2.1.325 against a local fake API: with both, no
+// CLAUDE.md of any scope reaches the request and no project hook runs, while
+// the --mcp-config tool and --append-system-prompt-file still do. --safe-mode
+// is not a substitute: it drops the --mcp-config server too.
+var reviewerArgs = []string{
+	"--tools", "",
+	"--strict-mcp-config",
+	"--disable-slash-commands",
+	"--setting-sources", "user",
+	"--allowedTools", "mcp__" + agent.MCPServerName + "__" + agent.PermissionVerdictTool,
+}
+
+// reviewerEnv stops a permission reviewer's CLI from reading any CLAUDE.md —
+// the user's, the project's and any in a parent directory — which
+// --setting-sources cannot do without also dropping the user's settings
+// (reviewerArgs). Measured with reviewerArgs.
+var reviewerEnv = []string{"CLAUDE_CODE_DISABLE_CLAUDE_MDS=1"}
+
+// sessionEnv is what a session's CLI gets added to its environment: the
+// profile's, and a reviewer's reviewerEnv after it, so that it wins over the
+// same name in the profile's.
+func sessionEnv(opts agent.StartOptions, profileEnv []string) []string {
+	if !opts.PermissionReviewer {
+		return profileEnv
+	}
+	return append(slices.Clone(profileEnv), reviewerEnv...)
+}
+
 // buildArgs assembles every CLI flag that follows from the session's own state.
 // The MCP config flag is added by Start instead: it needs a file written to
 // disk, which this must stay free of to be worth testing.
@@ -201,7 +241,9 @@ func buildArgs(opts agent.StartOptions, launch claudeLaunch) []string {
 	// exists rather than being refused after asking. parseControlRequest still
 	// refuses one, for the CLI version where this stops working.
 	args = append(args, "--disallowedTools", disallowedAskTool)
-	if opts.Mode == session.ModeYolo {
+	if opts.PermissionReviewer {
+		args = append(args, reviewerArgs...)
+	} else if opts.Mode.BypassesAgentGate() {
 		args = append(args, "--permission-mode", "bypassPermissions")
 	}
 
@@ -270,11 +312,15 @@ func (a *Agent) Start(ctx context.Context, opts agent.StartOptions) (agent.Sessi
 	removeMCPConfig := func() {}
 	var userServersWarning *agent.WarningEvent
 	if !opts.DisableMCP {
-		userServers, err := a.userMCPServers(ctx, profile.ProfileID, opts.WorkDir, log)
-		if err != nil {
-			log.Warn("could not read the user-scope MCP servers; starting without them", "profile", profile.ProfileID, "error", err)
-			w := userMCPServersWarning(err)
-			userServersWarning = &w
+		// A permission reviewer has Pockode's server alone (reviewerArgs).
+		var userServers map[string]json.RawMessage
+		if !opts.PermissionReviewer {
+			userServers, err = a.userMCPServers(ctx, profile.ProfileID, opts.WorkDir, log)
+			if err != nil {
+				log.Warn("could not read the user-scope MCP servers; starting without them", "profile", profile.ProfileID, "error", err)
+				w := userMCPServersWarning(err)
+				userServersWarning = &w
+			}
 		}
 		mcpConfigPath, remove, err := writeMCPConfig(opts, userServers, log)
 		if err != nil {
@@ -306,7 +352,7 @@ func (a *Agent) Start(ctx context.Context, opts agent.StartOptions) (agent.Sessi
 		}
 	}
 
-	proc, err := agent.StartProcessEnv(procCtx, log, Binary, claudeArgs, opts.WorkDir, profile.Env)
+	proc, err := agent.StartProcessEnv(procCtx, log, Binary, claudeArgs, opts.WorkDir, sessionEnv(opts, profile.Env))
 	if err != nil {
 		removeMCPConfig()
 		cancel()
@@ -576,6 +622,13 @@ func (s *cliSession) SendPermissionResponse(data agent.PermissionRequestData, ch
 	return s.sendControlResponse(data.RequestID, content)
 }
 
+// DenyPermissionWithMessage refuses without interrupting, so message reaches
+// the model verbatim and the turn carries on; see denyTool for why that takes
+// leaving Interrupt out.
+func (s *cliSession) DenyPermissionWithMessage(data agent.PermissionRequestData, message string) error {
+	return s.sendControlResponse(data.RequestID, toolDenial(data.ToolUseID, message))
+}
+
 func (s *cliSession) sendControlResponse(requestID string, content controlResponseContent) error {
 	response := controlResponse{
 		Type: "control_response",
@@ -609,7 +662,8 @@ func (s *cliSession) refusals() controlRefusals {
 // model verbatim as an is_error tool_result and the turn carries on — which is
 // the whole point here, since the message is an instruction to ask a different
 // way. SendPermissionResponse keeps the interrupting form: a person pressing
-// Deny means stop.
+// Deny means stop. DenyPermissionWithMessage is the same non-interrupting form,
+// for a permission request answered with advice.
 func (s *cliSession) denyTool(requestID, toolUseID, message string) {
 	if err := s.sendControlResponse(requestID, toolDenial(toolUseID, message)); err != nil {
 		s.log.Error("failed to deny a tool the CLI asked to use", "error", err, "requestId", requestID)
@@ -1246,6 +1300,8 @@ type controlPayload struct {
 	Input                 json.RawMessage          `json:"input,omitempty"`
 	ToolUseID             string                   `json:"tool_use_id,omitempty"`
 	PermissionSuggestions []agent.PermissionUpdate `json:"permission_suggestions,omitempty"`
+	BlockedPath           string                   `json:"blocked_path,omitempty"`
+	DecisionReason        string                   `json:"decision_reason,omitempty"`
 }
 
 type controlResponse struct {
@@ -1557,6 +1613,8 @@ func parseControlRequest(log *slog.Logger, line []byte, refusals controlRefusals
 			ToolInput:             req.Request.Input,
 			ToolUseID:             req.Request.ToolUseID,
 			PermissionSuggestions: req.Request.PermissionSuggestions,
+			DecisionReason:        req.Request.DecisionReason,
+			BlockedPath:           req.Request.BlockedPath,
 		}}
 
 	default:
@@ -2044,7 +2102,9 @@ func (r resultEvent) errorMessage() string {
 // attachmentDir is where this session's attachments live, or "" for a session
 // started without a data directory to keep any in.
 func attachmentDir(opts agent.StartOptions) string {
-	if opts.DataDir == "" || opts.SessionID == "" {
+	// Nobody can send a permission reviewer a file, and it has no tool to read
+	// one with.
+	if opts.DataDir == "" || opts.SessionID == "" || opts.PermissionReviewer {
 		return ""
 	}
 	return attachments.Dir(opts.DataDir, opts.SessionID)

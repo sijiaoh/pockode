@@ -63,6 +63,10 @@ func (m *mockSessionStore) CreateFork(ctx context.Context, sessionID string, for
 	return session.SessionMeta{}, nil
 }
 
+func (m *mockSessionStore) EnsurePermissionReviewer(ctx context.Context, mainSessionID, newSessionID string) (session.SessionMeta, bool, error) {
+	return session.SessionMeta{}, false, nil
+}
+
 func (m *mockSessionStore) WriteHistory(ctx context.Context, sessionID string, records []json.RawMessage) error {
 	return nil
 }
