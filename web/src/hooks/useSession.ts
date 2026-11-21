@@ -6,7 +6,7 @@ import {
 	selectSessionDetailStatus,
 	useSessionDetailStore,
 } from "../lib/sessionDetailStore";
-import { useSessionStore } from "../lib/sessionStore";
+import { useSessionListExclusions, useSessionStore } from "../lib/sessionStore";
 import { wsActions } from "../lib/wsStore";
 import { useSessionSubscription } from "./useSessionSubscription";
 
@@ -30,16 +30,13 @@ export function useSession({
 	const autoLoad = useSessionStore((s) => s.autoLoad);
 	const hasPaged = useSessionStore((s) => s.hasPaged);
 	const retryLoadMore = useSessionStore((s) => s.retryLoadMore);
-	const showTaskSessions = useSessionStore((s) => s.showTaskSessions);
-	// The filter is the server's, so the toggle is a subscription parameter
+	const exclusions = useSessionListExclusions();
+	// The filter is the server's, so the toggles are subscription parameters
 	// rather than a predicate applied to what came back. Deciding it here would
 	// mean holding the whole work list to invert it, which makes this list wrong
 	// for as long as that list is incomplete — and a work list that pages is
 	// never complete (docs/code/subscription-system.md#which-sessions-belong-to-work).
-	const { refresh, loadMore } = useSessionSubscription(
-		enabled,
-		!showTaskSessions,
-	);
+	const { refresh, loadMore } = useSessionSubscription(enabled, exclusions);
 
 	// The server's answer over the whole list, not `sessions.some(...)`: the list
 	// is a page, and an unread session is one an agent finished with while nobody

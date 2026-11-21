@@ -1,13 +1,25 @@
 import { useIsExpanded } from "@pockode/shared";
-import { ChevronDown, ChevronLeft, ChevronRight, Zap } from "lucide-react";
+import { Bot, ChevronDown, ChevronLeft, ChevronRight } from "lucide-react";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
+import {
+	useModeConfirmation,
+	useReviewerEngineLabel,
+} from "../../hooks/useModeConfirmation";
 import { AUTO_ID } from "../../lib/agentOptions";
 import { useChatUIConfig } from "../../lib/registries/chatUIRegistry";
 import { useHeaderUIConfig } from "../../lib/registries/headerUIRegistry";
-import { getSessionModeInfo, SESSION_MODES } from "../../lib/sessionMode";
+import {
+	getSessionModeInfo,
+	isKnownSessionMode,
+	SESSION_MODES,
+} from "../../lib/sessionMode";
 import { NEW_SESSION_TITLE } from "../../lib/sessionStore";
 import { getSessionStyleInfo } from "../../lib/sessionStyle";
-import type { SessionDetail, SessionMode } from "../../types/message";
+import type {
+	ReportedSessionMode,
+	SessionDetail,
+	SessionMode,
+} from "../../types/message";
 import type { AgentType } from "../../types/settings";
 import { PanelSection } from "../ui";
 import { ChoiceRow } from "../ui/ChoiceList";
@@ -40,10 +52,18 @@ interface Props {
 	 * the execution environment itself, not a moment's availability.
 	 */
 	readOnly: boolean;
+	/**
+	 * A permission reviewer session (docs/unattended-mode-ui.md §5): its engine
+	 * and mode are Pockode's, so the panel states the engine its next reviews
+	 * run on instead of offering a selector, and has no Permissions.
+	 */
+	isPermissionReviewer?: boolean;
+	/** Opens Settings, where a reviewer's engine is chosen. */
+	onOpenSettings?: () => void;
 	agentType: AgentType;
 	model: string;
 	effort: string;
-	mode: SessionMode;
+	mode: ReportedSessionMode;
 	/**
 	 * False while the session has yet to describe itself, so the engine and the
 	 * mode are placeholders. Neither is named then: the placeholder mode is the
@@ -73,6 +93,8 @@ function SessionHeader({
 	detail,
 	onOpenWorkDetail,
 	readOnly,
+	isPermissionReviewer = false,
+	onOpenSettings,
 	agentType,
 	model,
 	effort,
@@ -106,7 +128,16 @@ function SessionHeader({
 		hasSessionSettings,
 	});
 	const modeInfo = getSessionModeInfo(mode);
-	const isYolo = mode === "yolo";
+	const modeKnown = isKnownSessionMode(mode);
+	const { confirm: confirmMode, dialog: modeDialog } = useModeConfirmation(
+		"session",
+		agentType,
+	);
+	// Every way a mode is chosen goes through the confirmation, a custom
+	// selector's included: nothing is sent until Unattended is confirmed.
+	const requestModeChange = async (newMode: SessionMode) => {
+		if (await confirmMode(newMode)) await onModeChange(newMode);
+	};
 
 	const handleClose = useCallback(() => {
 		setIsOpen(false);
@@ -140,10 +171,16 @@ function SessionHeader({
 	// decides.
 	const engineText = model === AUTO_ID ? agentInfo.label : modelLabel;
 	const subtitleReady = readOnly || hasLabel;
+	// A reviewer's stored mode means nothing; what it is does. Its engine is the
+	// session's own, which the server writes as each review is sent — so this
+	// line is what the *last* review ran on.
+	const modeText = isPermissionReviewer
+		? "Permission reviewer"
+		: modeInfo.label;
 	const subtitleText = readOnly
 		? "Read-only"
 		: hasLabel
-			? `${engineText} · ${modeInfo.label}`
+			? `${engineText} · ${modeText}`
 			: "loading";
 
 	const isPlaceholderTitle = title === NEW_SESSION_TITLE;
@@ -159,7 +196,7 @@ function SessionHeader({
 
 	const handleModeSelect = async (newMode: SessionMode) => {
 		try {
-			await onModeChange(newMode);
+			await requestModeChange(newMode);
 		} catch {
 			// The caller reports the reason above the composer, which the drawer
 			// covers below the expanded tier.
@@ -167,8 +204,10 @@ function SessionHeader({
 		}
 	};
 
-	const showEngine = !readOnly && CustomEngineSelector !== null;
-	const showMode = !readOnly && CustomModeSelector !== null;
+	const showEngine =
+		!readOnly && !isPermissionReviewer && CustomEngineSelector !== null;
+	const showMode =
+		!readOnly && !isPermissionReviewer && CustomModeSelector !== null;
 
 	const renderEngineSection = () => {
 		if (CustomEngineSelector) {
@@ -253,7 +292,7 @@ function SessionHeader({
 					<CustomModeSelector
 						mode={mode}
 						agentType={agentType}
-						onModeChange={onModeChange}
+						onModeChange={requestModeChange}
 						hasSessionSettings={hasSessionSettings}
 						disabled={settingsLocked}
 					/>
@@ -277,9 +316,7 @@ function SessionHeader({
 									label={
 										<span className="flex items-center gap-1.5">
 											<info.icon
-												className={`size-3.5 ${
-													modeKey === "yolo" ? "text-th-warning" : ""
-												}`}
+												className={`size-3.5 ${info.iconClassName ?? ""}`}
 												aria-hidden="true"
 											/>
 											{info.label}
@@ -294,6 +331,12 @@ function SessionHeader({
 							);
 						})}
 					</fieldset>
+					{hasSessionSettings && !modeKnown && (
+						<p className="px-3 pt-1 text-xs text-th-text-muted">
+							Current mode: “{mode}”, which this version doesn't know. Choose
+							one to replace it.
+						</p>
+					)}
 					{/* Outside the fieldset, whose `opacity-50` would take the one
 					    line explaining it to roughly 1.6:1 against the panel. */}
 					{lockedReason && (
@@ -359,15 +402,25 @@ function SessionHeader({
 									    still stand. */}
 									<span className="min-w-0 truncate">{engineText}</span>
 									<span className="shrink-0 px-1">·</span>
-									<span className="flex shrink-0 items-center gap-0.5">
-										{isYolo && (
-											<Zap
-												className="size-3 text-th-warning"
+									{isPermissionReviewer ? (
+										<span className="flex shrink-0 items-center gap-0.5">
+											<Bot
+												className="size-3 text-th-text-muted"
 												aria-hidden="true"
 											/>
-										)}
-										{modeInfo.label}
-									</span>
+											{modeText}
+										</span>
+									) : (
+										<span className="flex shrink-0 items-center gap-0.5">
+											{modeInfo.iconClassName && (
+												<modeInfo.icon
+													className={`size-3 ${modeInfo.iconClassName}`}
+													aria-hidden="true"
+												/>
+											)}
+											{modeInfo.label}
+										</span>
+									)}
 								</>
 							)
 						}
@@ -375,6 +428,11 @@ function SessionHeader({
 				</button>
 			</h1>
 
+			{/* Outside the panel, which a refused change closes. Before it: the
+			    drawer locks the body by hand, outside the dialog's counted lock,
+			    so when both go in one commit the dialog has to restore first, or
+			    it puts back the "hidden" it found and the page stays locked. */}
+			{modeDialog}
 			<ResponsivePanel
 				isOpen={isOpen}
 				onClose={handleClose}
@@ -431,6 +489,19 @@ function SessionHeader({
 							<div>
 								{showEngine && renderEngineSection()}
 								{showMode && renderModeSection()}
+								{isPermissionReviewer && !readOnly && (
+									<NextReviewsSection
+										agentType={agentType}
+										onOpenSettings={
+											onOpenSettings
+												? () => {
+														handleClose();
+														onOpenSettings();
+													}
+												: undefined
+										}
+									/>
+								)}
 								{detail?.html_first && detail.started && <HtmlFirstSection />}
 								<SessionWorkSection
 									detail={detail}
@@ -447,6 +518,56 @@ function SessionHeader({
 				</div>
 			</ResponsivePanel>
 		</div>
+	);
+}
+
+/**
+ * A reviewer's engine as a fact, read from the settings rather than the
+ * session: not a selector, since the server refuses one, and the session's own
+ * engine is the last review's, which the header already says. Right after a
+ * settings change the two differ, and each says which it is.
+ */
+function NextReviewsSection({
+	agentType,
+	onOpenSettings,
+}: {
+	agentType: AgentType;
+	onOpenSettings?: () => void;
+}) {
+	const engine = useReviewerEngineLabel(agentType);
+	const text = `Next reviews: ${engine ?? "loading"}`;
+	const content = (
+		<>
+			<Bot className="size-4 shrink-0 text-th-text-muted" aria-hidden="true" />
+			<span className="min-w-0 flex-1">
+				<span className="block truncate">{text}</span>
+				<span className="block text-xs text-th-text-muted">
+					Chosen in Settings › Session
+				</span>
+			</span>
+		</>
+	);
+	return (
+		<PanelSection title="Engine">
+			{onOpenSettings ? (
+				<button
+					type="button"
+					onClick={onOpenSettings}
+					aria-label={`${text}. Open Settings`}
+					className="flex min-h-[48px] w-full items-center gap-3 px-3 text-left text-sm text-th-text-primary transition-colors hover:bg-th-bg-tertiary focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-th-accent"
+				>
+					{content}
+					<ChevronRight
+						className="size-4 shrink-0 text-th-text-muted"
+						aria-hidden="true"
+					/>
+				</button>
+			) : (
+				<div className="flex min-h-[48px] items-center gap-3 px-3 text-sm text-th-text-primary">
+					{content}
+				</div>
+			)}
+		</PanelSection>
 	);
 }
 

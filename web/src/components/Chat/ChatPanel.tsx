@@ -3,7 +3,7 @@ import {
 	useHasCoarsePointer,
 	useIsPageCovered,
 } from "@pockode/shared";
-import { AlertTriangle, X } from "lucide-react";
+import { AlertTriangle, Archive, Bot, FolderGit2, X } from "lucide-react";
 import {
 	type Ref,
 	useCallback,
@@ -24,6 +24,7 @@ import {
 import { useForkSession } from "../../hooks/useForkSession";
 import { useForkSupport } from "../../hooks/useForkSupport";
 import { useGitChangeCount } from "../../hooks/useGitChangeCount";
+import { useSessionTitleOf } from "../../hooks/useSessionTitleOf";
 import { useShortViewport } from "../../hooks/useShortViewport";
 import { useViewedSession } from "../../hooks/useViewedSession";
 import { sessionActivity } from "../../lib/activity";
@@ -52,7 +53,7 @@ import { NEW_SESSION_TITLE, useSessionStore } from "../../lib/sessionStore";
 import { type SessionView, SessionViewProvider } from "../../lib/sessionView";
 import { useWorkStore } from "../../lib/workStore";
 import { useIsGitRepo, useWorktreeStore } from "../../lib/worktreeStore";
-import { useWSStore } from "../../lib/wsStore";
+import { isPermissionReviewerRejection, useWSStore } from "../../lib/wsStore";
 import type {
 	HistorySeq,
 	PermissionRequest,
@@ -110,7 +111,13 @@ import DefaultInputBar from "./InputBar";
 import type { PromptError } from "./MessageItem";
 import MessageList, { type MessageListHandle } from "./MessageList";
 import { PageSendContext, type PageSender } from "./pageSendContext";
+import {
+	PermissionReviewContext,
+	type PermissionReviewView,
+	reviewingRequestIds,
+} from "./permissionReviewContext";
 import ReadOnlyBar from "./ReadOnlyBar";
+import ReviewerOriginBar from "./ReviewerOriginBar";
 import SessionHeader from "./SessionHeader";
 import SessionOriginBar from "./SessionOriginBar";
 
@@ -297,6 +304,24 @@ function ChatPanel({
 	);
 	const sessionDetail = viewedSession ? viewedSession.detail : liveDetail;
 
+	// A permission reviewer takes no input from a person, but it is a live
+	// session of this worktree — subscribed, marked read, forkable — so it is a
+	// second condition beside `isReadOnly`, not a wider one
+	// (docs/unattended-mode-ui.md §5). Until the detail lands it is not known; a
+	// send the server refuses as a reviewer's says so first.
+	const [refusedAsReviewer, setRefusedAsReviewer] = useState<string | null>(
+		null,
+	);
+	const reviewerOf = sessionDetail?.permission_reviewer_of;
+	const isReviewer = !!reviewerOf || refusedAsReviewer === sessionId;
+	// No composer, no answer handlers, no answer panel or strip: true of both.
+	const noInput = isReadOnly || isReviewer;
+	// From the main session's own detail, not the list, which often lacks it.
+	const reviewerMainTitle = useSessionTitleOf(
+		reviewerOf,
+		view?.worktree ?? null,
+	);
+
 	// The row is the fast source — it is on screen before the detail lands — but
 	// there is no row for a session the task-session filter hides, which is every
 	// session a work item drives. The detail speaks for the session itself and
@@ -416,6 +441,19 @@ function ChatPanel({
 		});
 	}, [turn.blockers, messages]);
 
+	// Who is answering each card, for the cards themselves; see
+	// `PermissionReviewContext`. Keyed on the ids so a turn update that changes
+	// nothing under review leaves the transcript alone.
+	const reviewingKey = [...reviewingRequestIds(turn)].join("\n");
+	const permissionReview = useMemo<PermissionReviewView>(
+		() => ({
+			reviewing: new Set(reviewingKey ? reviewingKey.split("\n") : []),
+			sessionId,
+			onOpenSession: onSelectSession,
+		}),
+		[reviewingKey, sessionId, onSelectSession],
+	);
+
 	// The new session's Chat / HTML first switch, offered only while the choice
 	// is still a draft: before the first message, on a session that is this
 	// screen's to change and is not a work item's (always Chat). Its detail has
@@ -423,7 +461,7 @@ function ChatPanel({
 	// and so has the transcript, so the switch never appears for a moment over a
 	// conversation still loading (docs/html-first-session-ui.md §2.5).
 	const htmlFirstOffered =
-		!isReadOnly &&
+		!noInput &&
 		!isChatPending &&
 		messages.length === 0 &&
 		sessionDetail !== null &&
@@ -513,6 +551,11 @@ function ChatPanel({
 				(error: unknown): SendOutcome => {
 					if (content && !useInputStore.getState().inputs[sentTo]) {
 						inputActions.set(sentTo, content);
+					}
+					// Not an error to show: the screen goes read-only, the draft kept.
+					if (isPermissionReviewerRejection(error)) {
+						setRefusedAsReviewer(sentTo);
+						return "refused";
 					}
 					setCommandError({
 						sessionId: sentTo,
@@ -751,7 +794,7 @@ function ChatPanel({
 	// the sheet is up), and a history seq means nothing in another session.
 	// A viewed session has no composer to put the message back into.
 	const resendFrom =
-		refusalSheet && refusalSheet.sessionId === sessionId && !isReadOnly
+		refusalSheet && refusalSheet.sessionId === sessionId && !noInput
 			? refusalSheet
 			: null;
 	const resendMessage = resendFrom
@@ -912,10 +955,10 @@ function ChatPanel({
 	// all. Re-running costs nothing — the intent is one-shot and names the
 	// session it belongs to.
 	useEffect(() => {
-		if (isChatPending || isReadOnly || overlayOpen) return;
+		if (isChatPending || noInput || overlayOpen) return;
 		const intent = takeAnswerIntent(sessionId);
 		if (intent) openAnswerPanel(intent.requestId);
-	}, [sessionId, isChatPending, isReadOnly, overlayOpen, openAnswerPanel]);
+	}, [sessionId, isChatPending, noInput, overlayOpen, openAnswerPanel]);
 
 	const unanswered = turn.unanswered ?? [];
 
@@ -936,7 +979,7 @@ function ChatPanel({
 	const reviewRowCanShow =
 		!overlay &&
 		!isChatPending &&
-		!isReadOnly &&
+		!noInput &&
 		isSessionDetailLoaded &&
 		isGitRepo === true &&
 		!turnOpen &&
@@ -996,7 +1039,7 @@ function ChatPanel({
 			// open would bring it straight back up.
 			for (const q of unanswered) seenQuestionIdsRef.current.add(q.request_id);
 		} else if (
-			!isReadOnly &&
+			!noInput &&
 			!isChatPending &&
 			!promptOwnsInput &&
 			unanswered.some((q) => !seenQuestionIdsRef.current.has(q.request_id))
@@ -1020,18 +1063,18 @@ function ChatPanel({
 	// A layout effect, so a panel that is already open is repainted with the
 	// draft in it rather than showing one frame of empty fields first.
 	useLayoutEffect(() => {
-		if (isReadOnly || !isSessionDetailLoaded) return;
+		if (noInput || !isSessionDetailLoaded) return;
 		questionDraftActions.restore(
 			sessionId,
 			(turn.unanswered ?? []).map((q) => q.request_id),
 		);
-	}, [sessionId, isReadOnly, isSessionDetailLoaded, turn.unanswered]);
+	}, [sessionId, noInput, isSessionDetailLoaded, turn.unanswered]);
 
 	// One expression for whether the panel is up, read by its own rendering, by
 	// the `inert` over the transcript it covers and by the Escape guard below,
 	// so those three cannot disagree — an `inert` outliving the panel would take
 	// the whole conversation out of reach with nothing on top of it.
-	const answerPanelShown = !isReadOnly && answerPanelOpen;
+	const answerPanelShown = !noInput && answerPanelOpen;
 
 	// The converse of the fold below (docs/answering-ui.md §3, "Room on a short
 	// viewport"): on a short touch screen the card and the chrome under it never
@@ -1133,7 +1176,7 @@ function ChatPanel({
 	// fires no blur — left standing, the flag would make the card yield to a
 	// composer that is not there.
 	const composerMounted =
-		!view && overlayKeepsComposer(overlay) && !chromeCollapsed;
+		!noInput && overlayKeepsComposer(overlay) && !chromeCollapsed;
 	useEffect(() => {
 		if (composerMounted) return;
 		setComposerFocused(false);
@@ -1145,7 +1188,7 @@ function ChatPanel({
 	// see. `canSend` is not here: it holds back the send, not the attaching.
 	// The order matters where two are true at once: with no session in the route
 	// it never resolves, so "wait" there would be a wait for ever.
-	const dropRefusal = isReadOnly
+	const dropRefusal = noInput
 		? "Read-only — files can't be attached here"
 		: sessionId === ""
 			? "Open a session to attach files"
@@ -1314,6 +1357,10 @@ function ChatPanel({
 			// A sheet takes Escape for dismissing itself; interrupting the agent as
 			// well would make one key do two unrelated things.
 			if (isSheetOpen) return;
+			// Stopping a reviewer denies every request it holds; the user who wants
+			// to decide answers the card in the main session instead
+			// (docs/unattended-mode-ui.md §5, "No Stop").
+			if (isReviewer) return;
 			if (e.key === "Escape" && turnOpen) {
 				handleInterrupt();
 			}
@@ -1321,7 +1368,7 @@ function ChatPanel({
 
 		document.addEventListener("keydown", handleKeyDown);
 		return () => document.removeEventListener("keydown", handleKeyDown);
-	}, [turnOpen, handleInterrupt, overlay, isSheetOpen]);
+	}, [turnOpen, handleInterrupt, overlay, isSheetOpen, isReviewer]);
 
 	// What the transcript region shows. Rendered whether or not an overlay is
 	// up: an overlay covers this, it no longer replaces it.
@@ -1352,57 +1399,64 @@ function ChatPanel({
 			return <ChatSkeleton showRows={showSkeleton} />;
 		}
 		return (
-			<MessageList
-				key={sessionId}
-				ref={messageListRef}
-				sessionId={sessionId}
-				messages={messages}
-				tail={tail}
-				openedThoughtIds={openedThoughtIds}
-				hasMoreHistory={hasMoreHistory}
-				isLoadingMoreHistory={isLoadingMoreHistory}
-				historyError={historyError}
-				loadedHistoryPages={loadedHistoryPages}
-				onLoadMoreHistory={loadMoreHistory}
-				isCodex={agentType === "codex"}
-				// The openers a transcript carries for answering back, all
-				// withheld on a viewed session for the one reason: there is no
-				// process there to hear any of them. Each card already draws
-				// itself without a control when it is given none — a pending
-				// card that offers nothing is the truth here, not the dead end
-				// it would be in a live session. The question card is the one
-				// that needs this: its status comes from the records, not from
-				// the turn, so "Answer this" otherwise survives into a screen
-				// whose answer panel is not rendered at all. The other two are
-				// the same statement made where it cannot drift.
-				onPermissionRespond={isReadOnly ? undefined : handlePermissionRespond}
-				onAnswerQuestion={isReadOnly ? undefined : handleAnswerQuestion}
-				onHintClick={isReadOnly ? undefined : handleHintSend}
-				isReadOnly={isReadOnly}
-				emptyStateSwitch={
-					htmlFirstOffered ? (
-						<HtmlFirstSwitch control={htmlFirstSwitch} />
-					) : undefined
-				}
-				promptError={promptError ?? undefined}
-				onOpenWorkDetail={onOpenWorkDetail}
-				onOpenFile={onOpenFile}
-				forkedFromSessionId={forkedFromSessionId}
-				onOpenSession={onSelectSession}
-				// Forking without a way to open the result would leave the user in
-				// the parent with no sign anything happened, so the fork row waits
-				// for a host that can navigate. Restoring a discarded message needs
-				// none and brings its own slot (docs/session-fork-ui.md, "Which rows
-				// reserve a slot").
-				onForkMessage={
-					!isReadOnly && onSelectSession && forkSupport !== "none"
-						? handleStartFork
-						: undefined
-				}
-				onSignIn={isReadOnly ? undefined : handleSignIn}
-				onSwitchAccount={handleSwitchAccount}
-				onRestoreMessages={isReadOnly ? undefined : handleRestoreMessages}
-			/>
+			<PermissionReviewContext.Provider value={permissionReview}>
+				<MessageList
+					key={sessionId}
+					ref={messageListRef}
+					sessionId={sessionId}
+					messages={messages}
+					tail={tail}
+					openedThoughtIds={openedThoughtIds}
+					hasMoreHistory={hasMoreHistory}
+					isLoadingMoreHistory={isLoadingMoreHistory}
+					historyError={historyError}
+					loadedHistoryPages={loadedHistoryPages}
+					onLoadMoreHistory={loadMoreHistory}
+					isCodex={agentType === "codex"}
+					// The openers a transcript carries for answering back, all
+					// withheld on a viewed session for the one reason: there is no
+					// process there to hear any of them. Each card already draws
+					// itself without a control when it is given none — a pending
+					// card that offers nothing is the truth here, not the dead end
+					// it would be in a live session. The question card is the one
+					// that needs this: its status comes from the records, not from
+					// the turn, so "Answer this" otherwise survives into a screen
+					// whose answer panel is not rendered at all. The other two are
+					// the same statement made where it cannot drift.
+					onPermissionRespond={noInput ? undefined : handlePermissionRespond}
+					onAnswerQuestion={noInput ? undefined : handleAnswerQuestion}
+					onHintClick={noInput ? undefined : handleHintSend}
+					isReadOnly={noInput}
+					readOnlyEmptyText={
+						isReviewer && !isReadOnly
+							? "No requests have been reviewed yet."
+							: undefined
+					}
+					emptyStateSwitch={
+						htmlFirstOffered ? (
+							<HtmlFirstSwitch control={htmlFirstSwitch} />
+						) : undefined
+					}
+					promptError={promptError ?? undefined}
+					onOpenWorkDetail={onOpenWorkDetail}
+					onOpenFile={onOpenFile}
+					forkedFromSessionId={forkedFromSessionId}
+					onOpenSession={onSelectSession}
+					// Forking without a way to open the result would leave the user in
+					// the parent with no sign anything happened, so the fork row waits
+					// for a host that can navigate. Restoring a discarded message needs
+					// none and brings its own slot (docs/session-fork-ui.md, "Which rows
+					// reserve a slot").
+					onForkMessage={
+						!isReadOnly && onSelectSession && forkSupport !== "none"
+							? handleStartFork
+							: undefined
+					}
+					onSignIn={isReadOnly ? undefined : handleSignIn}
+					onSwitchAccount={handleSwitchAccount}
+					onRestoreMessages={noInput ? undefined : handleRestoreMessages}
+				/>
+			</PermissionReviewContext.Provider>
 		);
 	};
 
@@ -1427,6 +1481,8 @@ function ChatPanel({
 				detail={sessionDetail}
 				onOpenWorkDetail={onOpenWorkDetail}
 				readOnly={isReadOnly}
+				isPermissionReviewer={isReviewer}
+				onOpenSettings={onOpenSettings}
 				agentType={agentType}
 				model={model}
 				effort={effort}
@@ -1675,10 +1731,13 @@ function ChatPanel({
 						<ChatTopContent sessionId={sessionId} />
 					)}
 					{!overlay && view && <SessionOriginBar view={view} />}
+					{!overlay && isReviewer && (
+						<ReviewerOriginBar mainTitle={reviewerMainTitle} />
+					)}
 					{renderContent()}
 					{/* What needs the user, stated where the transcript ends
 					    (docs/lifecycle-ui.md §2.2). */}
-					{!overlay && !isChatPending && !isReadOnly && (
+					{!overlay && !isChatPending && !noInput && (
 						<AttentionStrip
 							turn={turn}
 							onJumpToRequest={handleJumpToRequest}
@@ -1796,7 +1855,37 @@ function ChatPanel({
 					{overlayKeepsComposer(overlay) &&
 						!chromeCollapsed &&
 						(view ? (
-							<ReadOnlyBar view={view} onOpenThere={onOpenSessionThere} />
+							<ReadOnlyBar
+								icon={view.exists ? FolderGit2 : Archive}
+								sentence={
+									view.exists
+										? `Read-only — this session belongs to "${view.label}".`
+										: `Read-only — the worktree "${view.label}" no longer exists.`
+								}
+								action={
+									view.exists && onOpenSessionThere
+										? {
+												label: "Open there",
+												accessibleName: `Open this session in worktree ${view.label}`,
+												onClick: onOpenSessionThere,
+											}
+										: undefined
+								}
+							/>
+						) : isReviewer ? (
+							<ReadOnlyBar
+								icon={Bot}
+								sentence="Read-only — Pockode writes here, not you."
+								action={
+									reviewerOf && onSelectSession
+										? {
+												label: "Open main session",
+												accessibleName: `Open the session this reviewer answers for, ${reviewerMainTitle ?? "another session"}`,
+												onClick: () => onSelectSession(reviewerOf),
+											}
+										: undefined
+								}
+							/>
 						) : (
 							// Read from outside the bar, the way the card reports its own
 							// focus: the bar is a registry component, and what it renders

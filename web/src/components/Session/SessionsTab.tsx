@@ -16,7 +16,10 @@ import {
 	type SessionOrigin,
 	type SessionRow,
 } from "../../lib/sessionFilter";
-import { useSessionStore } from "../../lib/sessionStore";
+import {
+	useSessionListExclusions,
+	useSessionStore,
+} from "../../lib/sessionStore";
 import { describeWorktree } from "../../lib/sessionView";
 import { useWorktreeStore } from "../../lib/worktreeStore";
 import type { WorktreeInfo } from "../../types/message";
@@ -56,7 +59,7 @@ function SessionsTab({
 	} = useSession();
 
 	const filter = useSessionStore((s) => s.worktreeFilter);
-	const showTaskSessions = useSessionStore((s) => s.showTaskSessions);
+	const exclusions = useSessionListExclusions();
 	const currentWorktree = useWorktreeStore((s) => s.current);
 	const worktrees = useWorktreeList();
 
@@ -78,7 +81,7 @@ function SessionsTab({
 			available.map((source) => source.worktree),
 		);
 	}, [filter, available, isLoadingSources]);
-	const view = useSessionViewList(sources, !showTaskSessions);
+	const view = useSessionViewList(sources, exclusions);
 
 	// A worktree drops off the source list when its last session is deleted, and
 	// a filter pointing at one that is no longer there is a list that can only

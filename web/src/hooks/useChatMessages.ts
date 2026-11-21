@@ -43,6 +43,7 @@ import {
 import {
 	type ConnectionStatus,
 	isInvalidParamsRejection,
+	isPermissionReviewerRejection,
 	useWSStore,
 } from "../lib/wsStore";
 import type {
@@ -52,6 +53,7 @@ import type {
 	Message,
 	PermissionResponseParams,
 	QuestionAnswerRecord,
+	ReportedSessionMode,
 	ServerNotification,
 	SessionMode,
 	SessionTurn,
@@ -137,7 +139,7 @@ interface UseChatMessagesReturn {
 	 * arrives they read as the placeholders below — no session has been described
 	 * yet, and `isSessionDetailLoaded` is what says so.
 	 */
-	mode: SessionMode;
+	mode: ReportedSessionMode;
 	agentType: AgentType;
 	model: string;
 	effort: string;
@@ -970,8 +972,12 @@ export function useChatMessages({
 					// files is taken back on a refusal for the same reason: the files
 					// are the composer's to keep, and an agent that cannot receive them
 					// is said so there.
+					// A reviewer refusing a person is no failure of this message: the
+					// screen turns read-only and the draft goes back to the input
+					// store (docs/unattended-mode-ui.md §5).
 					takeBack: (error) =>
 						answers !== undefined ||
+						isPermissionReviewerRejection(error) ||
 						((command !== undefined || files !== undefined) &&
 							isInvalidParamsRejection(error)),
 					rethrow: false,

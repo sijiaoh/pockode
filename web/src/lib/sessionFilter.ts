@@ -21,6 +21,50 @@ export type SessionFilter =
 export const CURRENT_WORKTREE_FILTER: SessionFilter = { kind: "current" };
 
 /**
+ * The kinds of session the list leaves out: those a work item drives, and
+ * permission reviewers. Both are the server's to apply — they are parameters of
+ * `session.list.subscribe` and `session_view.list`, not predicates over what
+ * came back (docs/code/subscription-system.md#which-sessions-belong-to-work).
+ */
+export interface SessionListExclusions {
+	workSessions: boolean;
+	permissionReviewerSessions: boolean;
+}
+
+export const NO_EXCLUSIONS: SessionListExclusions = {
+	workSessions: false,
+	permissionReviewerSessions: false,
+};
+
+/**
+ * The request parameters for `exclusions`. A flag that is off is omitted, so
+ * the request is the one an older client sends; the server's default is "send
+ * everything" either way.
+ */
+export function sessionListExclusionParams(exclusions: SessionListExclusions): {
+	exclude_work_sessions?: true;
+	exclude_permission_reviewer_sessions?: true;
+} {
+	return {
+		...(exclusions.workSessions ? { exclude_work_sessions: true } : {}),
+		...(exclusions.permissionReviewerSessions
+			? { exclude_permission_reviewer_sessions: true }
+			: {}),
+	};
+}
+
+/** Whether `session` is one of the kinds `exclusions` leaves out. */
+export function isExcludedSession(
+	exclusions: SessionListExclusions,
+	session: SessionListItem,
+): boolean {
+	return (
+		(exclusions.workSessions && !!session.work_id) ||
+		(exclusions.permissionReviewerSessions && !!session.permission_reviewer_of)
+	);
+}
+
+/**
  * Where a row's session lives, and `null` when that is the worktree the user is
  * standing in — the ordinary case, and the one where nothing is drawn.
  *

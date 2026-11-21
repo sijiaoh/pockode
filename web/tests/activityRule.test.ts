@@ -20,7 +20,17 @@ interface ActivityCase {
 	name: string;
 	/** Absent for a session that runs no work — a plain chat. */
 	work?: { status: WorkStatus; wait?: WorkWait };
-	turn?: { phase: SessionTurn["phase"]; blockers?: TurnBlocker["kind"][] };
+	/**
+	 * A blocker is its kind, or an object for one that carries more — the
+	 * table's own header says which.
+	 */
+	turn?: {
+		phase: SessionTurn["phase"];
+		blockers?: (
+			| TurnBlocker["kind"]
+			| Pick<TurnBlocker, "kind" | "reviewing">
+		)[];
+	};
 	watching?: number;
 	want: Activity;
 }
@@ -46,8 +56,8 @@ describe("the shared activity rule", () => {
 			phase: c.turn.phase,
 			open: c.turn.phase !== "idle",
 			since: "2026-01-01T00:00:00Z",
-			blockers: c.turn.blockers?.map((kind) => ({
-				kind,
+			blockers: c.turn.blockers?.map((blocker) => ({
+				...(typeof blocker === "string" ? { kind: blocker } : blocker),
 				raised_at: "2026-01-01T00:00:00Z",
 			})),
 		};

@@ -266,6 +266,50 @@ func TestReduceTurnTwoPromptsNeedTwoAnswers(t *testing.T) {
 	}
 }
 
+// A request raised under review is still a request blocking the turn and
+// taking an answer — a person's too — but it is not one a person is the only
+// one answering. One that is outranks it: the turn waits on every request.
+func TestReduceTurnRaisedUnderReview(t *testing.T) {
+	state := drive(TurnState{}, in(SignalPrompt, 0))
+	reviewing := inReq(SignalPermissionRaised, "req-1", 1)
+	reviewing.Reviewing = true
+
+	got := ReduceTurn(state, reviewing)
+
+	if got.State.Phase != PhaseBlocked || !got.State.AwaitingAnswerTo("req-1") || !got.State.AwaitingUserAnswer() {
+		t.Fatalf("state = %+v, want a turn blocked on req-1", got.State)
+	}
+	if !got.State.Blockers[0].Reviewing || got.State.AwaitingPerson() {
+		t.Fatalf("blockers = %+v, want req-1 under review and nobody called", got.State.Blockers)
+	}
+
+	repeat := ReduceTurn(got.State, inReq(SignalPermissionRaised, "req-1", 2))
+	if repeat.Changed || !repeat.State.Blockers[0].Reviewing {
+		t.Fatalf("a re-sent request is the same request, still under review: %+v", repeat.State.Blockers)
+	}
+
+	mixed := ReduceTurn(got.State, inReq(SignalPermissionRaised, "req-2", 2))
+	if !mixed.State.AwaitingPerson() {
+		t.Fatal("a request nobody reviews waits on a person, whatever the reviewer does with the other")
+	}
+	answered := ReduceTurn(mixed.State, inReq(SignalAnswered, "req-2", 3))
+	if answered.State.AwaitingPerson() || !answered.State.AwaitingUserAnswer() {
+		t.Fatalf("state = %+v, want only req-1 left, under review", answered.State)
+	}
+}
+
+// Under review is part of the turn every client draws: a change to it alone
+// is news.
+func TestTurnStateEqualComparesReviewing(t *testing.T) {
+	plain := drive(TurnState{}, in(SignalPrompt, 0), inReq(SignalPermissionRaised, "req-1", 1))
+	reviewed := plain
+	reviewed.Blockers = []Blocker{plain.Blockers[0]}
+	reviewed.Blockers[0].Reviewing = true
+	if plain.equal(reviewed) {
+		t.Fatal("two turns differing in what is under review compare equal")
+	}
+}
+
 // A CLI that has not had an answer re-sends the same control request.
 func TestReduceTurnRepeatedRequestIDIsOneBlocker(t *testing.T) {
 	state := drive(TurnState{},

@@ -3,7 +3,15 @@ import type { ContentBlock, FileBlock } from "./content";
 import type { AgentType } from "./settings";
 import type { WorkType } from "./work";
 
-export type SessionMode = "default" | "yolo";
+/** The modes this build knows, and the only ones it ever sends. */
+export type SessionMode = "default" | "yolo" | "unattended";
+
+/**
+ * A mode as the server reports it. A newer server may report one this build
+ * has never heard of; it is shown by its raw id rather than mistaken for a
+ * known one (`getSessionModeInfo`).
+ */
+export type ReportedSessionMode = SessionMode | (string & {});
 
 /**
  * Where a forked session came from. Only the parent's id: the client resolves
@@ -99,6 +107,12 @@ export interface SessionListItem {
 	 * (docs/html-first-session-ui.md §3). Absent means an ordinary chat.
 	 */
 	html_first?: boolean;
+	/**
+	 * The main session this session is the permission reviewer of, absent on
+	 * every other session. Fixed at the reviewer's creation
+	 * (docs/unattended-mode.md#the-permission-reviewer-session).
+	 */
+	permission_reviewer_of?: string;
 }
 
 /** One story a session watches: enough to list it and open its detail. */
@@ -284,6 +298,29 @@ export type ExpiryReason =
 export type PermissionStatus = "pending" | "allowed" | "denied" | "expired";
 
 /**
+ * Who answered a permission request in a person's place: the session's
+ * permission reviewer, or Pockode denying it itself when the review fell
+ * through. Absent is a person. A newer server may name one this build does not
+ * know; it is kept as sent (docs/agent-event.md#permission-requests-and-their-answers).
+ */
+export type PermissionAnswerer =
+	| "permission_reviewer"
+	| "pockode"
+	| (string & {});
+
+/** The `review` of a `permission_response` a reviewer or Pockode gave. */
+export interface PermissionReview {
+	/** The reviewer session. Absent when the review failed before one existed. */
+	sessionId?: string;
+	/** Why the reviewer denied it; on a reviewer's deny only. */
+	category?: string;
+	/** Why Pockode denied it itself; on a `pockode` deny only. */
+	automatic?: string;
+	/** The reviewer's own words, or Pockode's account. Model output: plain text. */
+	reason?: string;
+}
+
+/**
  * How a posted question stands, derived by the reducer from the records that
  * name its `request_id` (docs/answering-ui.md §6).
  *
@@ -381,6 +418,14 @@ export type ContentPart = { id: string } & (
 			status: PermissionStatus;
 			/** Only ever set alongside `expired`; see ExpiryReason. */
 			reason?: ExpiryReason;
+			/**
+			 * Who gave the answer, from its `permission_response` record; absent for
+			 * a person's. History, not live state: whether the request is under
+			 * review right now is the session's turn's (`TurnBlocker.reviewing`).
+			 */
+			by?: PermissionAnswerer;
+			/** Set with `by`. */
+			review?: PermissionReview;
 			/** Carried over from the unfiled row it took the place of; see `text`. */
 			parentToolUseId?: string;
 	  }
@@ -1095,7 +1140,7 @@ export interface SessionDetail {
 	title: string;
 	created_at: string;
 	updated_at: string;
-	mode: SessionMode;
+	mode: ReportedSessionMode;
 	agent_type: AgentType;
 	/** Empty means "pass no model flag, let the CLI pick". */
 	model: string;
@@ -1131,6 +1176,12 @@ export interface SessionDetail {
 	/** `SessionListItem.watching`, here for the reason `work_id` is. */
 	watching?: number;
 	/**
+	 * `SessionListItem.permission_reviewer_of`, here for the reason `work_id` is:
+	 * the filter hides reviewers too. It is what makes the screen read-only
+	 * (docs/unattended-mode-ui.md §5).
+	 */
+	permission_reviewer_of?: string;
+	/**
 	 * The stories `watching` counts, for the open session: the chat that says it
 	 * is watching is the surface that lists what. A row is sent the count alone.
 	 * Absent means none.
@@ -1164,6 +1215,12 @@ export interface TurnBlocker {
 	/** The agent's id for the prompt an answer names. Absent on `background`. */
 	request_id?: string;
 	raised_at: string;
+	/**
+	 * A permission request the session's permission reviewer is answering, set
+	 * from the moment it is raised; absent means false. A person can still
+	 * answer it, but nobody is waiting on them (docs/unattended-mode.md).
+	 */
+	reviewing?: boolean;
 }
 
 /** `blocked` is exactly "there is at least one blocker": the server derives the

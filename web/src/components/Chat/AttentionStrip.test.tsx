@@ -714,6 +714,71 @@ describe("AttentionStrip", () => {
 		});
 
 		// Its event has not arrived, or it sits in history not paged in.
+		describe("under review", () => {
+			const reviewed = (...ids: string[]) =>
+				blockers(...ids).map((b) => ({ ...b, reviewing: true }));
+
+			it("says Reviewing and keeps both answers", () => {
+				vi.useFakeTimers();
+				const onRespond = vi.fn();
+				const entries = [entry("p1"), entry("p2")];
+				render(
+					<AttentionStrip
+						turn={turn("blocked", reviewed("p1", "p2"))}
+						onJumpToRequest={vi.fn()}
+						permissionRequests={entries}
+						onPermissionRespond={onRespond}
+					/>,
+				);
+
+				const summary = screen.getByRole("button", {
+					name: /^Show permission request under review: Bash/,
+				});
+				expect(summary).toHaveTextContent(/^Reviewing ·/);
+				expect(summary).toHaveTextContent("+1");
+				act(() => vi.advanceTimersByTime(ARM_MS));
+				const allow = screen.getByRole("button", { name: "Allow" });
+				// Nothing waits on the user, so no answer is the one to press.
+				expect(allow.className).not.toContain("bg-th-accent");
+				fireEvent.click(allow);
+				expect(onRespond).toHaveBeenCalledWith(entries[0].request, "allow");
+			});
+
+			// A request Pockode could not route needs the user.
+			it("is the ordinary row unless every request is under review", () => {
+				render(
+					<AttentionStrip
+						turn={turn("blocked", [...reviewed("p1"), ...blockers("p2")])}
+						onJumpToRequest={vi.fn()}
+						permissionRequests={[entry("p1"), entry("p2")]}
+						onPermissionRespond={vi.fn()}
+					/>,
+				);
+
+				expect(
+					screen.getByRole("button", { name: /^Show permission request: / }),
+				).not.toHaveTextContent("Reviewing");
+			});
+
+			it("says the reviewer is answering when the card is not loaded", () => {
+				render(
+					<AttentionStrip
+						turn={turn("blocked", reviewed("p1"))}
+						onJumpToRequest={vi.fn()}
+						permissionRequests={[]}
+						onPermissionRespond={vi.fn()}
+					/>,
+				);
+
+				expect(
+					screen.getByText(
+						"The permission reviewer is answering a request. Answer it yourself or Stop before sending.",
+					),
+				).toBeInTheDocument();
+				expect(screen.queryByText(/Waiting for your permission/)).toBeNull();
+			});
+		});
+
 		it("falls back to the statement row when the card is not loaded", () => {
 			render(
 				<AttentionStrip

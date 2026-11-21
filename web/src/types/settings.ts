@@ -1,4 +1,4 @@
-import type { SessionMode } from "./message";
+import type { ReportedSessionMode } from "./message";
 
 export type AgentType = "claude" | "codex";
 
@@ -20,7 +20,7 @@ export type ForkSupport = "none" | "any_message";
 export interface Settings {
 	default_agent_role_id?: string;
 	default_agent_type?: AgentType;
-	default_mode?: SessionMode;
+	default_mode?: ReportedSessionMode;
 	// The model and effort new sessions start with, both belonging to
 	// `default_agent_type`: each is picked from that agent's own list, so the
 	// server refuses a pair left over from the agent the user just switched away
@@ -32,6 +32,14 @@ export interface Settings {
 	// a repo-relative `./`/`../` path, or a home-relative `~/` path; the backend
 	// validates and rejects invalid values.
 	worktree_base_dir?: string;
+	// The engine unattended sessions' permission requests are reviewed on, per
+	// agent. Empty = the CLI decides (docs/unattended-mode.md#settings).
+	permission_reviewer?: Partial<Record<AgentType, PermissionReviewerEngine>>;
+}
+
+export interface PermissionReviewerEngine {
+	model?: string;
+	effort?: string;
 }
 
 export interface SettingsSubscribeResult {

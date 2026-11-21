@@ -667,7 +667,11 @@ by a child with a z-index, which an open card's sticky bar is, so the card
 restates its tint and frame for the bar
 ([the sticky title line](#the-sticky-title-line)). Its body
 keeps the tint. Once answered it is an ordinary row: no tint, and a body on
-`bg-th-bg-secondary` like a tool row's.
+`bg-th-bg-secondary` like a tool row's. A request the permission reviewer is
+answering is the exception while pending: it waits on nobody, so it keeps the
+frame (neutral, `outline-th-border`) without the tint, folds, and no button is
+the accent. A verdict line under the row says who answered in the user's place.
+Both are [unattended-mode-ui.md §3](unattended-mode-ui.md#3-the-permission-card).
 
 **The card's body is the row's Invocation.** `ToolInvocation`
 (`Chat/ToolInvocation.tsx`) draws both, so the command a user approved and the

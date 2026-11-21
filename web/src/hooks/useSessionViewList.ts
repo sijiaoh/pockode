@@ -1,5 +1,6 @@
 import { useInfiniteQuery } from "@tanstack/react-query";
 import { useCallback, useMemo } from "react";
+import type { SessionListExclusions } from "../lib/sessionFilter";
 import {
 	type MergedSessionRow,
 	mergeSessionRounds,
@@ -51,7 +52,7 @@ export interface SessionViewList {
  */
 export function useSessionViewList(
 	sources: string[] | null,
-	excludeWorkSessions: boolean,
+	exclusions: SessionListExclusions,
 ): SessionViewList | null {
 	const sessionViewList = useWSStore((s) => s.actions.sessionViewList);
 
@@ -60,9 +61,9 @@ export function useSessionViewList(
 	const key = useMemo(
 		() => [
 			SESSION_VIEW_LIST_KEY,
-			{ excludeWorkSessions, sources: sources ? [...sources].sort() : null },
+			{ ...exclusions, sources: sources ? [...sources].sort() : null },
 		],
-		[excludeWorkSessions, sources],
+		[exclusions, sources],
 	);
 
 	const query = useInfiniteQuery({
@@ -77,7 +78,7 @@ export function useSessionViewList(
 				Object.entries(pageParam).map(async ([worktree, cursor]) => {
 					const page = await sessionViewList(
 						worktree,
-						excludeWorkSessions,
+						exclusions,
 						cursor ?? undefined,
 					);
 					return {

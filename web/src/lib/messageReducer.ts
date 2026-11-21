@@ -8,6 +8,8 @@ import type {
 	HtmlAction,
 	Message,
 	MessageOrigin,
+	PermissionAnswerer,
+	PermissionReview,
 	PermissionUpdate,
 	PockodeCommandInvocation,
 	QuestionAnswerRecord,
@@ -61,6 +63,32 @@ function normalizeExpiryReason(raw: unknown): ExpiryReason | undefined {
 	return typeof raw === "string" && EXPIRY_REASONS.includes(raw)
 		? (raw as ExpiryReason)
 		: undefined;
+}
+
+function optionalString(raw: unknown): string | undefined {
+	return typeof raw === "string" && raw !== "" ? raw : undefined;
+}
+
+// Who answered a permission request and why, when it was not a person
+// (docs/agent-event.md#permission-requests-and-their-answers). A record with
+// no `by` is a person's and carries nothing more.
+function normalizePermissionAnswer(record: Record<string, unknown>): {
+	by?: PermissionAnswerer;
+	review?: PermissionReview;
+} {
+	const by = optionalString(record.by);
+	if (!by) return {};
+	const raw = record.review as Record<string, unknown> | null | undefined;
+	if (!raw || typeof raw !== "object") return { by };
+	return {
+		by,
+		review: {
+			sessionId: optionalString(raw.session_id),
+			category: optionalString(raw.category),
+			automatic: optionalString(raw.automatic),
+			reason: optionalString(raw.reason),
+		},
+	};
 }
 
 // The CLI and account an `auth_failure` or `usage_limit` mark names. An agent
@@ -254,6 +282,8 @@ export type NormalizedEvent =
 			type: "permission_response";
 			requestId: string;
 			choice: "deny" | "allow" | "always_allow";
+			by?: PermissionAnswerer;
+			review?: PermissionReview;
 	  }
 	| {
 			type: "request_cancelled";
@@ -453,6 +483,7 @@ export function normalizeEvent(
 				type: "permission_response",
 				requestId: record.request_id as string,
 				choice: record.choice as "deny" | "allow" | "always_allow",
+				...normalizePermissionAnswer(record),
 			};
 		case "request_cancelled":
 			return {
@@ -1057,7 +1088,12 @@ function applyEvent(
 	// Permission response updates existing permission_request across all messages
 	if (event.type === "permission_response") {
 		const newStatus = event.choice === "deny" ? "denied" : "allowed";
-		return updatePermissionRequestStatus(messages, event.requestId, newStatus);
+		return updatePermissionRequestStatus(
+			messages,
+			event.requestId,
+			newStatus,
+			event.by ? { by: event.by, review: event.review } : undefined,
+		);
 	}
 
 	// Request cancelled (the CLI withdrew it, or Pockode recorded what became of
@@ -1682,23 +1718,47 @@ export function resetPromptRequest(
 		const isTarget =
 			part.type === "permission_request" &&
 			part.request.requestId === requestId;
-		if (!isTarget || part.status === status) return part;
+		// A card a reviewer or Pockode answered keeps that answer: the press being
+		// undone here is the one it beat (`updatePermissionRequestStatus`).
+		if (!isTarget || part.status === status || part.by) return part;
 		return { ...part, status };
 	});
 }
 
+/**
+ * Settles a permission card with its answer.
+ *
+ * A person's answer moves only a pending card: anything else already said
+ * what happened. An answer naming who gave it (`answer`, a reviewer's or
+ * Pockode's) is the recorded one and wins over a press this client made on
+ * the same request — first answer wins on the server
+ * (docs/unattended-mode-ui.md §3.1), so the press it raced was refused, and
+ * the card must show what actually answered rather than the press.
+ */
 export function updatePermissionRequestStatus(
 	messages: Message[],
 	requestId: string,
 	newStatus: "allowed" | "denied",
+	answer?: { by: PermissionAnswerer; review?: PermissionReview },
 ): Message[] {
-	return mapAllParts(messages, (part) =>
-		part.type === "permission_request" &&
-		part.request.requestId === requestId &&
-		part.status === "pending"
-			? { ...part, status: newStatus }
-			: part,
-	);
+	return mapAllParts(messages, (part) => {
+		if (
+			part.type !== "permission_request" ||
+			part.request.requestId !== requestId
+		) {
+			return part;
+		}
+		if (answer) {
+			if (part.by) return part;
+			return {
+				...part,
+				status: newStatus,
+				by: answer.by,
+				review: answer.review,
+			};
+		}
+		return part.status === "pending" ? { ...part, status: newStatus } : part;
+	});
 }
 
 /**

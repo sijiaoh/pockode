@@ -125,6 +125,11 @@ import {
 	type WorkActions,
 	type WorktreeActions,
 } from "./rpc";
+import {
+	NO_EXCLUSIONS,
+	type SessionListExclusions,
+	sessionListExclusionParams,
+} from "./sessionFilter";
 import { APP_VERSION } from "./version";
 import { worktreeActions } from "./worktreeStore";
 
@@ -232,13 +237,13 @@ export interface WatchActions {
 	) => Promise<WatchSubscribeResult<WorktreeSubscribeResult>>;
 	worktreeUnsubscribe: (id: string) => Promise<void>;
 	/**
-	 * @param excludeWorkSessions Drops every session that belongs to a work item,
-	 * from the snapshot and from every notification after it. The filter belongs
-	 * to the subscription, so changing it means resubscribing.
+	 * @param exclusions The kinds of session dropped from the snapshot and from
+	 * every notification after it. The filter belongs to the subscription, so
+	 * changing it means resubscribing.
 	 */
 	sessionListSubscribe: (
 		callback: (params: SessionListChangedNotification) => void,
-		excludeWorkSessions?: boolean,
+		exclusions?: SessionListExclusions,
 	) => Promise<WatchSubscribeResult<SessionListSubscribeResult>>;
 	/**
 	 * The rows after `cursor`, for the list that subscription is following.
@@ -640,6 +645,16 @@ export function isInvalidParamsRejection(error: unknown): boolean {
 	);
 }
 
+/** The `data.reason` of an invalid-params refusal, if it carries one. */
+function refusalReason(error: unknown): unknown {
+	if (!isInvalidParamsRejection(error)) return undefined;
+	const data = (error as JSONRPCErrorException).data as
+		| { reason?: unknown }
+		| null
+		| undefined;
+	return data?.reason;
+}
+
 /**
  * Whether the server refused a message because the turn awaits a permission
  * answer (`chat.ErrTurnAwaitingAnswer`), told by its `data.reason` rather
@@ -647,12 +662,16 @@ export function isInvalidParamsRejection(error: unknown): boolean {
  * only a page's send (`chat.html_action`) reads it today.
  */
 export function isAwaitingPermissionRejection(error: unknown): boolean {
-	if (!isInvalidParamsRejection(error)) return false;
-	const data = (error as JSONRPCErrorException).data as
-		| { reason?: unknown }
-		| null
-		| undefined;
-	return data?.reason === "awaiting_permission";
+	return refusalReason(error) === "awaiting_permission";
+}
+
+/**
+ * Whether the server refused a request because the session is a permission
+ * reviewer, which a person cannot write to (`rpc.ChatReasonPermissionReviewer`,
+ * docs/unattended-mode.md#the-permission-reviewer-session).
+ */
+export function isPermissionReviewerRejection(error: unknown): boolean {
+	return refusalReason(error) === "permission_reviewer";
 }
 
 function getClient(): JSONRPCRequester<void> | null {
@@ -1505,13 +1524,11 @@ export const useWSStore = create<WSState>((set, get) => ({
 
 		sessionListSubscribe: async (
 			callback: (params: SessionListChangedNotification) => void,
-			excludeWorkSessions = false,
+			exclusions: SessionListExclusions = NO_EXCLUSIONS,
 		) => {
 			const { id, result } = await openSubscription(
 				"session.list.subscribe",
-				// Omitted when off so the request is the one every older client
-				// sends; the server's default is "send everything" either way.
-				excludeWorkSessions ? { exclude_work_sessions: true } : {},
+				sessionListExclusionParams(exclusions),
 				sessionListWatchCallbacks,
 				callback,
 			);

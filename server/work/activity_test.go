@@ -20,11 +20,26 @@ type activityCase struct {
 		Wait   WorkWait   `json:"wait"`
 	} `json:"work"`
 	Turn *struct {
-		Phase    session.TurnPhase     `json:"phase"`
-		Blockers []session.BlockerKind `json:"blockers"`
+		Phase    session.TurnPhase `json:"phase"`
+		Blockers []caseBlocker     `json:"blockers"`
 	} `json:"turn"`
 	Watching int      `json:"watching"`
 	Want     Activity `json:"want"`
+}
+
+// caseBlocker is a blocker as the table writes it: its kind alone, or an
+// object for one that carries more.
+type caseBlocker struct {
+	Kind      session.BlockerKind `json:"kind"`
+	Reviewing bool                `json:"reviewing"`
+}
+
+func (b *caseBlocker) UnmarshalJSON(data []byte) error {
+	if err := json.Unmarshal(data, &b.Kind); err == nil {
+		return nil
+	}
+	type plain caseBlocker
+	return json.Unmarshal(data, (*plain)(b))
 }
 
 func loadActivityCases(t *testing.T) []activityCase {
@@ -52,8 +67,8 @@ func TestDeriveActivity(t *testing.T) {
 			var turn session.TurnState
 			if tc.Turn != nil {
 				turn.Phase = tc.Turn.Phase
-				for _, kind := range tc.Turn.Blockers {
-					turn.Blockers = append(turn.Blockers, session.Blocker{Kind: kind, RaisedAt: time.Unix(1, 0)})
+				for _, b := range tc.Turn.Blockers {
+					turn.Blockers = append(turn.Blockers, session.Blocker{Kind: b.Kind, Reviewing: b.Reviewing, RaisedAt: time.Unix(1, 0)})
 				}
 			}
 
@@ -76,15 +91,16 @@ func TestDeriveActivity(t *testing.T) {
 // that quietly defaults to "no".
 func TestNeedsUserIsTheOneLeafTheUserCanActOn(t *testing.T) {
 	want := map[Activity]bool{
-		ActivityNeedsPermission: true,
-		ActivityOpen:            false,
-		ActivityRunning:         false,
-		ActivityBackground:      false,
-		ActivityWaitingChildren: false,
-		ActivityWatching:        false,
-		ActivityIdle:            false,
-		ActivityStopped:         false,
-		ActivityClosed:          false,
+		ActivityNeedsPermission:     true,
+		ActivityReviewingPermission: false,
+		ActivityOpen:                false,
+		ActivityRunning:             false,
+		ActivityBackground:          false,
+		ActivityWaitingChildren:     false,
+		ActivityWatching:            false,
+		ActivityIdle:                false,
+		ActivityStopped:             false,
+		ActivityClosed:              false,
 	}
 	for activity, needs := range want {
 		if got := activity.NeedsUser(); got != needs {

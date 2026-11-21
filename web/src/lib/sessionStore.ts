@@ -1,17 +1,24 @@
+import { useMemo } from "react";
 import { create } from "zustand";
 import type { SessionListItem } from "../types/message";
-import { CURRENT_WORKTREE_FILTER, type SessionFilter } from "./sessionFilter";
+import {
+	CURRENT_WORKTREE_FILTER,
+	type SessionFilter,
+	type SessionListExclusions,
+} from "./sessionFilter";
 import { compareSessions } from "./sessionMerge";
 
 const SHOW_TASK_SESSIONS_KEY = "show-task-sessions";
+const SHOW_REVIEWER_SESSIONS_KEY = "show-reviewer-sessions";
 
-function loadShowTaskSessions(): boolean {
-	return localStorage.getItem(SHOW_TASK_SESSIONS_KEY) === "true";
+function loadFlag(key: string): boolean {
+	return localStorage.getItem(key) === "true";
 }
 
 interface SessionState {
 	/**
-	 * The list as the server sent it, already narrowed by `showTaskSessions`.
+	 * The list as the server sent it, already narrowed by `showTaskSessions` and
+	 * `showReviewerSessions`.
 	 * Nothing filters it again on the way to the screen, and nothing may treat a
 	 * session's absence from it as proof the session is gone — with the filter on
 	 * it is also how a hidden work session looks
@@ -77,6 +84,12 @@ interface SessionState {
 	 */
 	showTaskSessions: boolean;
 	/**
+	 * Whether the list should include permission reviewer sessions. The same
+	 * kind of parameter as `showTaskSessions`, and persisted the same way
+	 * (docs/unattended-mode-ui.md §4).
+	 */
+	showReviewerSessions: boolean;
+	/**
 	 * Which worktree's sessions the sidebar lists.
 	 *
 	 * Beside `showTaskSessions` because it is the other half of one filter, and
@@ -132,6 +145,7 @@ interface SessionActions {
 	/** Soft reset for worktree switch: keep sessions, mark list as reloading. */
 	beginReload: () => void;
 	toggleShowTaskSessions: () => void;
+	toggleShowReviewerSessions: () => void;
 	setWorktreeFilter: (filter: SessionFilter) => void;
 	reset: () => void;
 }
@@ -150,7 +164,8 @@ export const useSessionStore = create<SessionStore>((set) => ({
 	isLoading: true,
 	isSuccess: false,
 	isReloading: false,
-	showTaskSessions: loadShowTaskSessions(),
+	showTaskSessions: loadFlag(SHOW_TASK_SESSIONS_KEY),
+	showReviewerSessions: loadFlag(SHOW_REVIEWER_SESSIONS_KEY),
 	worktreeFilter: CURRENT_WORKTREE_FILTER,
 	setSessions: (page, isResync = false) =>
 		set((state) => ({
@@ -222,6 +237,12 @@ export const useSessionStore = create<SessionStore>((set) => ({
 			localStorage.setItem(SHOW_TASK_SESSIONS_KEY, String(next));
 			return { showTaskSessions: next };
 		}),
+	toggleShowReviewerSessions: () =>
+		set((state) => {
+			const next = !state.showReviewerSessions;
+			localStorage.setItem(SHOW_REVIEWER_SESSIONS_KEY, String(next));
+			return { showReviewerSessions: next };
+		}),
 	setWorktreeFilter: (worktreeFilter) => set({ worktreeFilter }),
 	reset: () =>
 		set((state) => ({
@@ -238,6 +259,23 @@ export const useSessionStore = create<SessionStore>((set) => ({
 			isReloading: false,
 		})),
 }));
+
+/**
+ * What the list leaves out, as the two toggles say. One object for the
+ * subscription and the cross-worktree read alike, so the two lists cannot be
+ * narrowed differently; stable while neither toggle moves.
+ */
+export function useSessionListExclusions(): SessionListExclusions {
+	const showTaskSessions = useSessionStore((s) => s.showTaskSessions);
+	const showReviewerSessions = useSessionStore((s) => s.showReviewerSessions);
+	return useMemo(
+		() => ({
+			workSessions: !showTaskSessions,
+			permissionReviewerSessions: !showReviewerSessions,
+		}),
+		[showTaskSessions, showReviewerSessions],
+	);
+}
 
 /**
  * The title the server gives a session it creates, which the chat replaces with

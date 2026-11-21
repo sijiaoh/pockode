@@ -7,6 +7,7 @@ import { Spinner } from "./Spinner.tsx";
 
 export interface ConfirmDialogProps {
 	title: string;
+	/** Plain text; a blank line (`\n\n`) starts a new paragraph. */
 	message: string;
 	confirmLabel?: string;
 	cancelLabel?: string;
@@ -131,7 +132,9 @@ export function ConfirmDialog({
 				<h2 id={titleId} className="text-lg font-bold text-th-text-primary">
 					{title}
 				</h2>
-				<p className="mt-2 text-sm text-th-text-muted">{message}</p>
+				<p className="mt-2 whitespace-pre-line text-sm text-th-text-muted">
+					{message}
+				</p>
 				{error && (
 					<p className="mt-2 text-sm text-th-error" role="alert">
 						{error}

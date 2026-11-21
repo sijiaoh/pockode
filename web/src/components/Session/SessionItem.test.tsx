@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useSessionStore } from "../../lib/sessionStore";
@@ -89,6 +89,31 @@ describe("what a session row says it is waiting for", () => {
 	])("names a %s blocker as %s", (kind, label) => {
 		renderRow({ turn: turn("blocked", [kind]) });
 		expect(screen.getByLabelText(label)).toBeInTheDocument();
+	});
+
+	// The request is still a permission request, but the permission reviewer is
+	// the one answering it, so the row says who has it rather than calling the
+	// user (docs/unattended-mode-ui.md §6).
+	it("names a request under review for the reviewer, not the user", () => {
+		renderRow({
+			turn: {
+				...turn("blocked"),
+				blockers: [
+					{
+						kind: "permission",
+						request_id: "r1",
+						raised_at: AT,
+						reviewing: true,
+					},
+				],
+			},
+		});
+		expect(
+			screen.getByLabelText("Permission reviewer is answering a request"),
+		).toBeInTheDocument();
+		expect(
+			screen.queryByLabelText("Waiting for your permission"),
+		).not.toBeInTheDocument();
 	});
 
 	it("names a work waiting on its subtasks, which the turn cannot say", () => {
@@ -288,5 +313,45 @@ describe("an HTML first row", () => {
 		renderRow({ title: "Compare", work_id: undefined });
 
 		expect(screen.queryByText(/HTML first/)).not.toBeInTheDocument();
+	});
+});
+
+// Every reviewer has the same title; the subtitle is what tells two apart
+// (docs/unattended-mode-ui.md §4).
+describe("a permission reviewer row", () => {
+	it("names the session it reviews for, read live from the list", () => {
+		useSessionStore.getState().setSessions({
+			sessions: [makeSessionListItem({ id: "main", title: "Fix login" })],
+			nextCursor: null,
+			hasUnread: false,
+		});
+		renderRow({
+			title: "Permission reviewer",
+			work_id: undefined,
+			permission_reviewer_of: "main",
+			turn: turn("idle"),
+		});
+
+		expect(screen.getByText("for Fix login")).toBeInTheDocument();
+
+		act(() => {
+			useSessionStore
+				.getState()
+				.updateSessions((old) =>
+					old.map((s) => (s.id === "main" ? { ...s, title: "Renamed" } : s)),
+				);
+		});
+		expect(screen.getByText("for Renamed")).toBeInTheDocument();
+	});
+
+	it("does not claim a name for a main session the list has no row for", () => {
+		renderRow({
+			title: "Permission reviewer",
+			work_id: undefined,
+			permission_reviewer_of: "hidden-work-session",
+			turn: turn("idle"),
+		});
+
+		expect(screen.getByText("for another session")).toBeInTheDocument();
 	});
 });

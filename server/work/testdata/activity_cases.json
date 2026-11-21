@@ -11,7 +11,11 @@
     "",
     "`watching` is how many unclosed stories the session watches; absent is",
     "none. A case with no work is a session that runs none — a plain chat, which",
-    "is where a watch usually lives."
+    "is where a watch usually lives.",
+    "",
+    "A blocker is its kind, or an object for one that carries more: a permission",
+    "request the permission reviewer has taken is",
+    "{ \"kind\": \"permission\", \"reviewing\": true }."
   ],
   "cases": [
     {
@@ -54,6 +58,24 @@
       "work": { "status": "active" },
       "turn": { "phase": "blocked", "blockers": ["background", "permission"] },
       "want": "needs_permission"
+    },
+    {
+      "name": "a turn blocked on a permission request the permission reviewer has taken",
+      "work": { "status": "active" },
+      "turn": { "phase": "blocked", "blockers": [{ "kind": "permission", "reviewing": true }] },
+      "want": "reviewing_permission"
+    },
+    {
+      "name": "a request waiting on a person outranks one under review",
+      "work": { "status": "active" },
+      "turn": { "phase": "blocked", "blockers": [{ "kind": "permission", "reviewing": true }, "permission"] },
+      "want": "needs_permission"
+    },
+    {
+      "name": "a request under review outranks background: an answer is on its way",
+      "work": { "status": "active" },
+      "turn": { "phase": "blocked", "blockers": ["background", { "kind": "permission", "reviewing": true }] },
+      "want": "reviewing_permission"
     },
     {
       "name": "a turn parked on background work",

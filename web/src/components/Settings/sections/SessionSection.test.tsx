@@ -1,4 +1,4 @@
-import { act, render, screen } from "@testing-library/react";
+import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useAgentOptionsStore } from "../../../lib/agentOptionsStore";
@@ -83,11 +83,90 @@ describe("SessionSection", () => {
 		updateSettings.mockRejectedValue(new Error("snapshot has not arrived"));
 		render(<SessionSection />);
 
-		await user.click(screen.getByRole("button", { name: /YOLO/ }));
+		await user.click(screen.getByRole("button", { name: /^YOLO/ }));
 
 		expect(await screen.findByRole("alert")).toHaveTextContent(
 			"snapshot has not arrived",
 		);
+	});
+
+	describe("making Unattended the default", () => {
+		it("sends nothing until it is confirmed", async () => {
+			const user = userEvent.setup();
+			useSettingsStore.setState({
+				settings: {
+					default_agent_type: "codex",
+					permission_reviewer: { codex: { model: "gpt-5" } },
+				},
+			});
+			render(<SessionSection />);
+
+			await user.click(screen.getByRole("button", { name: /Unattended/ }));
+
+			const dialog = screen.getByRole("dialog", {
+				name: "Make Unattended the default?",
+			});
+			// The default agent's reviewer engine, as the Engine field names it.
+			expect(dialog).toHaveTextContent(
+				"New sessions' agents run every command without asking",
+			);
+			expect(dialog).toHaveTextContent(
+				"they run on GPT-5 (Settings › Session).",
+			);
+			expect(updateSettings).not.toHaveBeenCalled();
+
+			await user.click(screen.getByRole("button", { name: "Make default" }));
+
+			expect(updateSettings).toHaveBeenCalledWith({
+				default_mode: "unattended",
+			});
+		});
+
+		it("does not ask again when it already is the default", async () => {
+			const user = userEvent.setup();
+			useSettingsStore.setState({ settings: { default_mode: "unattended" } });
+			render(<SessionSection />);
+
+			await user.click(screen.getByRole("button", { name: /Unattended/ }));
+
+			expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+			expect(updateSettings).not.toHaveBeenCalled();
+		});
+
+		it("leaves the default where it was when cancelled", async () => {
+			const user = userEvent.setup();
+			render(<SessionSection />);
+
+			await user.click(screen.getByRole("button", { name: /Unattended/ }));
+			await user.click(screen.getByRole("button", { name: "Cancel" }));
+
+			expect(updateSettings).not.toHaveBeenCalled();
+			expect(screen.getByRole("button", { name: /Default/ })).toHaveAttribute(
+				"aria-pressed",
+				"true",
+			);
+		});
+	});
+
+	it("lights no segment for a default this build does not know", async () => {
+		const user = userEvent.setup();
+		useSettingsStore.setState({ settings: { default_mode: "turbo" } });
+		render(<SessionSection />);
+
+		for (const segment of within(
+			screen.getByRole("group", { name: "Mode" }),
+		).getAllByRole("button")) {
+			expect(segment).toHaveAttribute("aria-pressed", "false");
+		}
+		expect(
+			screen.getByText(
+				"Current default: “turbo”, which this version doesn't know.",
+			),
+		).toBeInTheDocument();
+
+		await user.click(screen.getByRole("button", { name: /^YOLO/ }));
+
+		expect(updateSettings).toHaveBeenCalledWith({ default_mode: "yolo" });
 	});
 
 	it("reports a rejected engine choice without changing the shown value", async () => {
@@ -119,9 +198,15 @@ describe("SessionSection", () => {
 			render(<SessionSection />);
 
 			expect(screen.queryByText(/Claude/)).not.toBeInTheDocument();
-			expect(screen.queryByText(/Auto/)).not.toBeInTheDocument();
+			// On the controls only: the reviewer's hint explains what Auto means,
+			// which is not a claim about anyone's settings.
 			expect(
-				screen.queryByRole("button", { name: /YOLO/ }),
+				screen
+					.getAllByRole("button")
+					.filter((b) => /Auto/.test(b.textContent ?? "")),
+			).toEqual([]);
+			expect(
+				screen.queryByRole("button", { name: /^YOLO/ }),
 			).not.toBeInTheDocument();
 			expect(
 				screen.queryByRole("button", { name: /Default/ }),

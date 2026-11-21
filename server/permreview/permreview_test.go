@@ -166,6 +166,26 @@ type fixture struct {
 	// holdRequests keeps the reviewer's own permission requests from reaching
 	// the service, so a test can leave one standing.
 	holdRequests atomic.Bool
+
+	// failGet makes every read of a session through the service's store fail.
+	failGet atomic.Bool
+
+	// mainIdles counts the main session falling idle after its process came
+	// up — what marks a session unread (watch.SessionListWatcher).
+	mainIdles atomic.Int32
+}
+
+// flakyStore is the service's store, with reads that fail on request.
+type flakyStore struct {
+	session.Store
+	f *fixture
+}
+
+func (s flakyStore) Get(sessionID string) (session.SessionMeta, bool, error) {
+	if s.f.failGet.Load() {
+		return session.SessionMeta{}, false, errors.New("index unreadable")
+	}
+	return s.Store.Get(sessionID)
 }
 
 func newFixture(t *testing.T, mode session.Mode) *fixture {
@@ -185,7 +205,7 @@ func newFixture(t *testing.T, mode session.Mode) *fixture {
 	f := &fixture{store: store, pm: pm, chat: chat.NewClient(store, pm), agent: ag, reviewerDir: reviewerDir}
 	f.engine = session.Engine{Model: "haiku", Effort: "low"}
 	f.service = New(Config{
-		Store:     store,
+		Store:     flakyStore{Store: store, f: f},
 		Chat:      f.chat,
 		Processes: pm,
 		Engine: func(agentType session.AgentType) session.Engine {
@@ -202,12 +222,18 @@ func newFixture(t *testing.T, mode session.Mode) *fixture {
 	f.service.afterFunc = f.timers.afterFunc
 	t.Cleanup(f.service.Close)
 	f.service.blockedRetry = time.Millisecond
-	pm.SetOnPermissionRequest(func(proc *process.Process, request agent.PermissionRequestEvent) {
+	pm.SetPermissionRouter(func(proc *process.Process, request agent.PermissionRequestEvent) process.PermissionRouting {
 		if proc.SessionID() == "main" || !f.holdRequests.Load() {
-			f.service.HandlePermissionRequest(proc, request)
+			return f.service.HandlePermissionRequest(proc, request)
 		}
+		return process.PermissionRouting{}
 	})
 	pm.SetOnTurnChanged(f.service.HandleTurnChanged)
+	pm.SetOnStateChange(func(e process.StateChangeEvent) {
+		if e.SessionID == "main" && e.State == process.ProcessStateIdle && !e.IsInitial {
+			f.mainIdles.Add(1)
+		}
+	})
 	store.AddOnChangeListener(f.service)
 
 	if _, err := store.Create(context.Background(), "main", session.CreateSpec{AgentType: session.AgentTypeClaude, Mode: mode}); err != nil {
@@ -406,6 +432,63 @@ func TestRoute_SendsTheRequestToANewReviewer(t *testing.T) {
 	}
 }
 
+// storedBlockers is the main session's turn as every client reads it: the
+// stored one, which is what session rows and work activity are drawn from.
+func (f *fixture) storedBlockers(t *testing.T) []session.Blocker {
+	t.Helper()
+	meta, _, err := f.store.Get("main")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	return meta.Turn.Blockers
+}
+
+// A request routed to the reviewer is raised under review on the session's
+// turn, so that no surface calls the person to it — not even for the moment
+// routing takes — and the session does not go unread for it; it still takes
+// their answer.
+func TestRoute_RaisesTheRequestUnderReview(t *testing.T) {
+	f := newFixture(t, session.ModeUnattended)
+	f.raise(t, bashRequest("req-1", "a"))
+
+	if blockers := f.storedBlockers(t); len(blockers) != 1 || !blockers[0].Reviewing {
+		t.Errorf("stored blockers = %+v, want the request under review from the raise", blockers)
+	}
+	if !f.pm.GetProcess("main").TurnState().Blockers[0].Reviewing {
+		t.Error("the process's copy of the turn does not say the request is under review")
+	}
+	f.reviewer(t, 1)
+	if n := f.mainIdles.Load(); n != 0 {
+		t.Errorf("the main session fell idle %d times; a request under review calls nobody", n)
+	}
+}
+
+// A request routing cannot decide on is the person's: not under review, and
+// raised the way it is anywhere else — the session going unread for it.
+func TestRoute_HandsBackARequestItCannotDecideOn(t *testing.T) {
+	f := newFixture(t, session.ModeUnattended)
+	f.failGet.Store(true)
+	f.raise(t, bashRequest("req-1", "a"))
+
+	waitFor(t, "the warning", func() bool {
+		for _, w := range f.records(t, "main", agent.EventTypeWarning) {
+			if w.Code == "permission_review_failed" {
+				return true
+			}
+		}
+		return false
+	})
+	if blockers := f.storedBlockers(t); len(blockers) != 1 || blockers[0].Reviewing {
+		t.Errorf("stored blockers = %+v, want the request waiting for a person", blockers)
+	}
+	if n := f.mainIdles.Load(); n != 1 {
+		t.Errorf("the main session fell idle %d times, want once: the request calls the person", n)
+	}
+	if answers := f.mainSession(t).sentAnswers(); len(answers) != 0 {
+		t.Errorf("main CLI got %q; the request is the person's to answer", answers)
+	}
+}
+
 // A later request goes to the same reviewer.
 func TestRoute_ReusesTheReviewer(t *testing.T) {
 	f := newFixture(t, session.ModeUnattended)
@@ -434,6 +517,12 @@ func TestRoute_IgnoresOtherModes(t *testing.T) {
 			time.Sleep(50 * time.Millisecond)
 			if _, found, _ := session.FindPermissionReviewer(f.store, "main"); found {
 				t.Error("a reviewer was created")
+			}
+			if reviewing := f.storedBlockers(t)[0].Reviewing; reviewing {
+				t.Error("the request is marked under review, but it waits for a person")
+			}
+			if n := f.mainIdles.Load(); n != 1 {
+				t.Errorf("the main session fell idle %d times, want once: the request calls the person", n)
 			}
 		})
 	}
@@ -893,7 +982,7 @@ func TestRoute_WaitsOutTheReviewersOwnRequest(t *testing.T) {
 	waitFor(t, "req-1 to be denied", func() bool { return len(f.mainSession(t).sentAnswers()) > 0 })
 
 	f.holdRequests.Store(false)
-	f.service.HandlePermissionRequest(f.pm.GetProcess(reviewerID), own)
+	f.service.HandlePermissionRequest(f.pm.GetProcess(reviewerID), own).Route()
 	f.reviewer(t, 2)
 
 	if answers := f.mainSession(t).sentAnswers(); len(answers) != 1 || !strings.HasPrefix(answers[0], "deny:req-1:") {

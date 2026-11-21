@@ -1,4 +1,5 @@
 import {
+	Bot,
 	Circle,
 	CircleCheck,
 	CircleDot,
@@ -13,7 +14,7 @@ import type { SessionTurn } from "../types/message";
 import type { WorkListItem, WorkStatus } from "../types/work";
 
 /**
- * The only state any surface paints. Nine leaves, and there is never more than
+ * The only state any surface paints. Ten leaves, and there is never more than
  * one at a time: the layers it is derived from are each exclusive
  * (docs/lifecycle-ui.md §1.1).
  *
@@ -25,6 +26,7 @@ export type Activity =
 	| "open"
 	| "running"
 	| "needs_permission"
+	| "reviewing_permission"
 	| "background"
 	| "waiting_children"
 	| "watching"
@@ -75,7 +77,10 @@ interface ActivityView {
  * `needs_permission` is the only leaf left in the warning hue, and it is the
  * whole of what an activity can say about the user being waited on. The other
  * dimension — questions waiting for an answer — is not an activity and is never
- * folded into one; see {@link needsAttention}.
+ * folded into one; see {@link needsAttention}. `reviewing_permission` is the
+ * same request with the permission reviewer answering it, so it is muted: the
+ * robot says who has it, and nothing about it asks the user to come
+ * (docs/unattended-mode-ui.md §6).
  */
 export const ACTIVITY_VIEW: Record<Activity, ActivityView> = {
 	open: { Icon: Circle, tone: "muted", label: "Open", ariaLabel: "Open" },
@@ -90,6 +95,12 @@ export const ACTIVITY_VIEW: Record<Activity, ActivityView> = {
 		tone: "warning",
 		label: "Needs permission",
 		ariaLabel: "Waiting for your permission",
+	},
+	reviewing_permission: {
+		Icon: Bot,
+		tone: "muted",
+		label: "Reviewing permission",
+		ariaLabel: "Permission reviewer is answering a request",
 	},
 	background: {
 		Icon: Hourglass,
@@ -165,9 +176,11 @@ export function normalizeActivity(raw: unknown): Activity {
  * user can act on one of the two, both are drawn side by side instead — a dot
  * cannot be aimed at, so it owes only the one bit.
  *
- * `background`, `waiting_children` and `watching` are deliberately outside it: there is
- * nothing to do, and a dot meaning "something is happening" is a dot the user
- * learns to ignore.
+ * `reviewing_permission`, `background`, `waiting_children` and `watching` are
+ * deliberately outside it: there is nothing to do, and a dot meaning "something
+ * is happening" is a dot the user learns to ignore. A request under review can
+ * still be answered by hand, but calling the user to it is exactly what
+ * unattended mode exists to spare them.
  */
 export function needsAttention(
 	activity: Activity,
@@ -210,7 +223,10 @@ export function isWorkActive(status: WorkStatus): boolean {
  * someone later "fixes".
  *
  * Permission outranks background when both are live: background is the one
- * nobody can act on, and those are the only two blockers a turn has.
+ * nobody can act on, and those are the only two blockers a turn has. Among
+ * permission requests, one waiting on a person outranks those under review: the
+ * turn resumes only once every request is answered, so the person is holding it
+ * up whatever the reviewer does.
  *
  * `watching` — how many active stories the session watches, counted by the
  * server (`SessionListItem.watching`) — comes last, below the work's own wait:
@@ -237,8 +253,11 @@ export function deriveActivity(
 
 	if (turn?.phase === "running") return "running";
 	if (turn?.phase === "blocked") {
-		const kinds = turn.blockers?.map((blocker) => blocker.kind) ?? [];
-		if (kinds.includes("permission")) return "needs_permission";
+		const permissions =
+			turn.blockers?.filter((blocker) => blocker.kind === "permission") ?? [];
+		if (permissions.some((blocker) => !blocker.reviewing))
+			return "needs_permission";
+		if (permissions.length > 0) return "reviewing_permission";
 		return "background";
 	}
 

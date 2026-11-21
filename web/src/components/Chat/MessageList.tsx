@@ -126,6 +126,8 @@ interface Props {
 	 * the handler it would call is withheld.
 	 */
 	isReadOnly?: boolean;
+	/** What a read-only empty transcript says, where the default does not fit. */
+	readOnlyEmptyText?: string;
 	/**
 	 * Drawn at the top of the empty state, in place of its invitation: the new
 	 * session's Chat / HTML first switch, when the session offers one
@@ -163,6 +165,7 @@ function MessageList({
 	onSwitchAccount,
 	onRestoreMessages,
 	isReadOnly = false,
+	readOnlyEmptyText = "Nothing was said in this conversation.",
 	emptyStateSwitch,
 	tail,
 	openedThoughtIds = NO_OPENED_THOUGHTS,
@@ -400,7 +403,7 @@ function MessageList({
 		if (isReadOnly) {
 			return (
 				<div className="flex min-h-0 flex-1 items-center justify-center text-th-text-muted">
-					<p>Nothing was said in this conversation.</p>
+					<p>{readOnlyEmptyText}</p>
 				</div>
 			);
 		}

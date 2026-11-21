@@ -217,4 +217,31 @@ describe("toolSummary", () => {
 			),
 		).toMatchObject({ title: "TaskOutput", detail: "bsbvhgo40", mono: true });
 	});
+
+	// A reviewer's answer is named by what it decided, by either CLI's spelling
+	// (docs/unattended-mode-ui.md §5.1).
+	it("names a permission verdict by its decision", () => {
+		expect(
+			toolSummary(
+				"mcp__pockode__permission_verdict",
+				{ request_id: "r1", verdict: "allow" },
+				WORK_DIR,
+			),
+		).toMatchObject({ title: "Verdict: Allow", detail: "" });
+		expect(
+			toolSummary(
+				"pockode:permission_verdict",
+				{
+					request_id: "r1",
+					verdict: "deny",
+					category: "system_reach_unverifiable",
+					reason: "$DIR may be empty.",
+				},
+				WORK_DIR,
+			),
+		).toMatchObject({
+			title: "Verdict: Deny · Can't verify what it reaches",
+			detail: "$DIR may be empty.",
+		});
+	});
 });

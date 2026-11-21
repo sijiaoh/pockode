@@ -976,7 +976,7 @@ func (m *Manager) create(name, workDir string) (*Worktree, error) {
 		WorkDir:     workDir,
 		ProjectRoot: m.registry.MainDir(),
 	})
-	processManager.SetOnPermissionRequest(permissionReviews.HandlePermissionRequest)
+	processManager.SetPermissionRouter(permissionReviews.HandlePermissionRequest)
 	processManager.SetOnTurnChanged(permissionReviews.HandleTurnChanged)
 	sessionStore.AddOnChangeListener(permissionReviews)
 

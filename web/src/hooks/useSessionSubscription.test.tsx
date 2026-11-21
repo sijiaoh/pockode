@@ -1,6 +1,10 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { JSONRPCErrorCode, JSONRPCErrorException } from "json-rpc-2.0";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+	NO_EXCLUSIONS,
+	type SessionListExclusions,
+} from "../lib/sessionFilter";
 import { useSessionStore } from "../lib/sessionStore";
 import { resetWorktreeStore, worktreeActions } from "../lib/worktreeStore";
 import { makeSessionListItem } from "../test/sessionFixtures";
@@ -24,7 +28,7 @@ let mockStatus = "connected";
 const mockSubscribe = vi.fn(
 	async (
 		callback: (p: SessionListChangedNotification) => void,
-		_excludeWorkSessions?: boolean,
+		_exclusions?: SessionListExclusions,
 	) => {
 		notificationCallback = callback;
 		return {
@@ -84,7 +88,7 @@ describe("useSessionSubscription", () => {
 		it("subscribes when enabled and connected", async () => {
 			mockSessions = [mockSessionItem("1")];
 
-			renderHook(() => useSessionSubscription(true, false));
+			renderHook(() => useSessionSubscription(true, NO_EXCLUSIONS));
 
 			await waitFor(() => {
 				expect(mockSubscribe).toHaveBeenCalled();
@@ -93,7 +97,7 @@ describe("useSessionSubscription", () => {
 		});
 
 		it("does not subscribe when disabled", async () => {
-			renderHook(() => useSessionSubscription(false, false));
+			renderHook(() => useSessionSubscription(false, NO_EXCLUSIONS));
 
 			await new Promise((r) => setTimeout(r, 50));
 
@@ -103,7 +107,7 @@ describe("useSessionSubscription", () => {
 		it("does not subscribe when disconnected", async () => {
 			mockStatus = "disconnected";
 
-			renderHook(() => useSessionSubscription(true, false));
+			renderHook(() => useSessionSubscription(true, NO_EXCLUSIONS));
 
 			await new Promise((r) => setTimeout(r, 50));
 
@@ -113,7 +117,9 @@ describe("useSessionSubscription", () => {
 		it("unsubscribes on unmount", async () => {
 			mockSessions = [mockSessionItem("1")];
 
-			const { unmount } = renderHook(() => useSessionSubscription(true, false));
+			const { unmount } = renderHook(() =>
+				useSessionSubscription(true, NO_EXCLUSIONS),
+			);
 
 			await waitFor(() => {
 				expect(mockSubscribe).toHaveBeenCalled();
@@ -129,7 +135,7 @@ describe("useSessionSubscription", () => {
 		it("handles create notification", async () => {
 			mockSessions = [mockSessionItem("1")];
 
-			renderHook(() => useSessionSubscription(true, false));
+			renderHook(() => useSessionSubscription(true, NO_EXCLUSIONS));
 
 			await waitFor(() => {
 				expect(useSessionStore.getState().sessions.length).toBe(1);
@@ -150,7 +156,7 @@ describe("useSessionSubscription", () => {
 		it("handles update notification", async () => {
 			mockSessions = [mockSessionItem("1", "Old")];
 
-			renderHook(() => useSessionSubscription(true, false));
+			renderHook(() => useSessionSubscription(true, NO_EXCLUSIONS));
 
 			await waitFor(() => {
 				expect(useSessionStore.getState().sessions[0].title).toBe("Old");
@@ -181,11 +187,11 @@ describe("useSessionSubscription", () => {
 			async function subscribeWith(
 				sessions: SessionListItem[],
 				nextCursor: string | null,
-				excludeWorkSessions = false,
+				exclusions = NO_EXCLUSIONS,
 			) {
 				mockSessions = sessions;
 				mockNextCursor = nextCursor;
-				renderHook(() => useSessionSubscription(true, excludeWorkSessions));
+				renderHook(() => useSessionSubscription(true, exclusions));
 				await waitFor(() => {
 					expect(useSessionStore.getState().sessions).toHaveLength(
 						sessions.length,
@@ -279,18 +285,33 @@ describe("useSessionSubscription", () => {
 			});
 
 			it("never inserts a work session the filter hides", async () => {
-				await subscribeWith([at("a", 30), at("b", 20)], null, true);
+				await subscribeWith([at("a", 30), at("b", 20)], null, {
+					...NO_EXCLUSIONS,
+					workSessions: true,
+				});
 
 				update({ ...at("hidden", 40), work_id: "w1" });
 
 				expect(ids()).toEqual(["a", "b"]);
+			});
+
+			it("never inserts a permission reviewer the filter hides", async () => {
+				await subscribeWith([at("a", 30), at("b", 20)], null, {
+					...NO_EXCLUSIONS,
+					permissionReviewerSessions: true,
+				});
+
+				update({ ...at("hidden", 40), permission_reviewer_of: "a" });
+				update({ ...at("shown", 50), work_id: "w1" });
+
+				expect(ids()).toEqual(["shown", "a", "b"]);
 			});
 		});
 
 		it("reflects server-side unread flag from update notification", async () => {
 			mockSessions = [mockSessionItem("1")];
 
-			renderHook(() => useSessionSubscription(true, false));
+			renderHook(() => useSessionSubscription(true, NO_EXCLUSIONS));
 
 			await waitFor(() => {
 				expect(useSessionStore.getState().sessions.length).toBe(1);
@@ -310,7 +331,7 @@ describe("useSessionSubscription", () => {
 		it("handles delete notification", async () => {
 			mockSessions = [mockSessionItem("1"), mockSessionItem("2")];
 
-			renderHook(() => useSessionSubscription(true, false));
+			renderHook(() => useSessionSubscription(true, NO_EXCLUSIONS));
 
 			await waitFor(() => {
 				expect(useSessionStore.getState().sessions.length).toBe(2);
@@ -331,7 +352,7 @@ describe("useSessionSubscription", () => {
 		it("handles update notification with a turn change", async () => {
 			mockSessions = [mockSessionItem("1")];
 
-			renderHook(() => useSessionSubscription(true, false));
+			renderHook(() => useSessionSubscription(true, NO_EXCLUSIONS));
 
 			await waitFor(() => {
 				expect(useSessionStore.getState().sessions[0].turn.phase).toBe("idle");
@@ -360,7 +381,7 @@ describe("useSessionSubscription", () => {
 		it("keeps previous sessions during switch and swaps in the new list", async () => {
 			mockSessions = [mockSessionItem("old")];
 
-			renderHook(() => useSessionSubscription(true, false));
+			renderHook(() => useSessionSubscription(true, NO_EXCLUSIONS));
 
 			await waitFor(() => {
 				expect(useSessionStore.getState().sessions).toHaveLength(1);
@@ -401,7 +422,9 @@ describe("useSessionSubscription", () => {
 				has_more: true,
 			});
 
-			const { result } = renderHook(() => useSessionSubscription(true, false));
+			const { result } = renderHook(() =>
+				useSessionSubscription(true, NO_EXCLUSIONS),
+			);
 
 			await waitFor(() => {
 				expect(useSessionStore.getState().sessions).toHaveLength(1);
@@ -421,7 +444,9 @@ describe("useSessionSubscription", () => {
 			mockSessions = [mockSessionItem("1")];
 			mockNextCursor = null;
 
-			const { result } = renderHook(() => useSessionSubscription(true, false));
+			const { result } = renderHook(() =>
+				useSessionSubscription(true, NO_EXCLUSIONS),
+			);
 
 			await waitFor(() => {
 				expect(useSessionStore.getState().sessions).toHaveLength(1);
@@ -467,7 +492,9 @@ describe("useSessionSubscription", () => {
 					return answer("watch-2");
 				});
 
-			const { result } = renderHook(() => useSessionSubscription(true, false));
+			const { result } = renderHook(() =>
+				useSessionSubscription(true, NO_EXCLUSIONS),
+			);
 
 			// The second subscribe starts while the first is still in flight, and
 			// answers first.
@@ -496,7 +523,9 @@ describe("useSessionSubscription", () => {
 			mockNextCursor = "cursor-1";
 			mockPage.mockRejectedValueOnce(new Error("boom"));
 
-			const { result } = renderHook(() => useSessionSubscription(true, false));
+			const { result } = renderHook(() =>
+				useSessionSubscription(true, NO_EXCLUSIONS),
+			);
 
 			await waitFor(() => {
 				expect(useSessionStore.getState().sessions).toHaveLength(1);
@@ -518,7 +547,7 @@ describe("useSessionSubscription", () => {
 			mockSessions = [mockSessionItem("1")];
 			mockNextCursor = "cursor-1";
 
-			renderHook(() => useSessionSubscription(true, false));
+			renderHook(() => useSessionSubscription(true, NO_EXCLUSIONS));
 
 			await waitFor(() => {
 				expect(useSessionStore.getState().sessions).toHaveLength(1);
@@ -554,7 +583,9 @@ describe("useSessionSubscription", () => {
 				),
 			);
 
-			const { result } = renderHook(() => useSessionSubscription(true, false));
+			const { result } = renderHook(() =>
+				useSessionSubscription(true, NO_EXCLUSIONS),
+			);
 
 			await waitFor(() => {
 				expect(mockSubscribe).toHaveBeenCalledTimes(1);
@@ -578,7 +609,7 @@ describe("useSessionSubscription", () => {
 			mockSessions = [mockSessionItem("1")];
 			mockHasUnread = true;
 
-			renderHook(() => useSessionSubscription(true, false));
+			renderHook(() => useSessionSubscription(true, NO_EXCLUSIONS));
 
 			await waitFor(() => {
 				expect(useSessionStore.getState().hasUnread).toBe(true);
@@ -602,14 +633,21 @@ describe("useSessionSubscription", () => {
 	// open a new one. Filtering what came back instead is what this replaced, and
 	// that needed the whole work list to do it
 	// (docs/code/subscription-system.md#which-sessions-belong-to-work).
-	describe("the task-session filter", () => {
+	describe("the session-kind filter", () => {
 		it("asks the server for it, rather than narrowing the answer", async () => {
 			mockSessions = [mockSessionItem("1")];
 
-			renderHook(() => useSessionSubscription(true, true));
+			const exclusions = {
+				workSessions: true,
+				permissionReviewerSessions: true,
+			};
+			renderHook(() => useSessionSubscription(true, exclusions));
 
 			await waitFor(() => {
-				expect(mockSubscribe).toHaveBeenCalledWith(expect.any(Function), true);
+				expect(mockSubscribe).toHaveBeenCalledWith(
+					expect.any(Function),
+					exclusions,
+				);
 			});
 		});
 
@@ -617,9 +655,9 @@ describe("useSessionSubscription", () => {
 			mockSessions = [mockSessionItem("1")];
 
 			const { rerender } = renderHook(
-				({ exclude }: { exclude: boolean }) =>
+				({ exclude }: { exclude: SessionListExclusions }) =>
 					useSessionSubscription(true, exclude),
-				{ initialProps: { exclude: false } },
+				{ initialProps: { exclude: NO_EXCLUSIONS } },
 			);
 
 			await waitFor(() => {
@@ -627,16 +665,17 @@ describe("useSessionSubscription", () => {
 			});
 			expect(mockSubscribe).toHaveBeenLastCalledWith(
 				expect.any(Function),
-				false,
+				NO_EXCLUSIONS,
 			);
 
 			mockSessions = [mockSessionItem("2")];
-			rerender({ exclude: true });
+			const flipped = { ...NO_EXCLUSIONS, permissionReviewerSessions: true };
+			rerender({ exclude: flipped });
 
 			await waitFor(() => {
 				expect(mockSubscribe).toHaveBeenLastCalledWith(
 					expect.any(Function),
-					true,
+					flipped,
 				);
 			});
 			await waitFor(() => {
@@ -653,7 +692,9 @@ describe("useSessionSubscription", () => {
 		it("re-subscribes and gets fresh data", async () => {
 			mockSessions = [mockSessionItem("1")];
 
-			const { result } = renderHook(() => useSessionSubscription(true, false));
+			const { result } = renderHook(() =>
+				useSessionSubscription(true, NO_EXCLUSIONS),
+			);
 
 			await waitFor(() => {
 				expect(useSessionStore.getState().sessions.length).toBe(1);

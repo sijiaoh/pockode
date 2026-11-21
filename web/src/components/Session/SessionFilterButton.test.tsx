@@ -140,6 +140,27 @@ describe("SessionFilterButton", () => {
 		expect(screen.getByText("Show task sessions")).toBeInTheDocument();
 	});
 
+	// A preference, kept like the task-session toggle — and like it, not
+	// "somebody else's list", so the button keeps its plain name.
+	it("toggles reviewer sessions and remembers the choice", async () => {
+		localStorage.removeItem("show-reviewer-sessions");
+		useSessionStore.setState({ showReviewerSessions: false });
+		const user = await openPanel();
+
+		const box = screen.getByRole("checkbox", {
+			name: /Show reviewer sessions/,
+		});
+		expect(box).not.toBeChecked();
+		await user.click(box);
+
+		expect(box).toBeChecked();
+		expect(useSessionStore.getState().showReviewerSessions).toBe(true);
+		expect(localStorage.getItem("show-reviewer-sessions")).toBe("true");
+		expect(
+			screen.getByRole("button", { name: "Filter sessions" }),
+		).toBeInTheDocument();
+	});
+
 	// One choice, not two: the headings separate the deleted from the live, and
 	// a radio group per heading would make picking one of each possible.
 	it("keeps every worktree in one choice", async () => {

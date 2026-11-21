@@ -35,6 +35,10 @@ export default function SessionFilterButton({ disabled }: Props) {
 
 	const showTaskSessions = useSessionStore((s) => s.showTaskSessions);
 	const toggleShow = useSessionStore((s) => s.toggleShowTaskSessions);
+	const showReviewerSessions = useSessionStore((s) => s.showReviewerSessions);
+	const toggleShowReviewers = useSessionStore(
+		(s) => s.toggleShowReviewerSessions,
+	);
 	const filter = useSessionStore((s) => s.worktreeFilter);
 	const setFilter = useSessionStore((s) => s.setWorktreeFilter);
 	const currentWorktree = useWorktreeStore((s) => s.current);
@@ -120,6 +124,12 @@ export default function SessionFilterButton({ disabled }: Props) {
 							description="Include sessions linked to tasks in the list"
 							checked={showTaskSessions}
 							onChange={toggleShow}
+						/>
+						<FilterOption
+							label="Show reviewer sessions"
+							description="Include the sessions that review unattended sessions' permission requests"
+							checked={showReviewerSessions}
+							onChange={toggleShowReviewers}
 						/>
 					</div>
 

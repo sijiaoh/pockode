@@ -18,7 +18,9 @@ sessions nobody is watching.
 This document is the server's contract for the frontend, and the user-facing
 account of what the mode does and does not promise. How the server implements
 it is in
-[agent-integration.md](code/agent-integration.md#answers-that-are-not-a-persons).
+[agent-integration.md](code/agent-integration.md#answers-that-are-not-a-persons);
+how the web app presents it is
+[unattended-mode-ui.md](unattended-mode-ui.md).
 
 ## The contract at a glance
 
@@ -32,6 +34,7 @@ it is in
 | `message` with `origin: "system"`, `subtype: "permission_review"` / `"permission_review_nudge"` | The reviewer session's history | [How a request is reviewed](#how-a-request-is-reviewed), [Every request gets an answer](#every-request-gets-an-answer) |
 | `permission_response` with `by: "permission_reviewer"` or `by: "pockode"`, and `review` | The main session's history, broadcast (a reviewer's own request: the reviewer's) | [agent-event.md](agent-event.md#permission-requests-and-their-answers) |
 | `warning` codes `permission_review_auto_denied`, `permission_review_failed` | The reviewer's / the main session's history | [Every request gets an answer](#every-request-gets-an-answer) |
+| `reviewing: true` on a `permission` blocker of a turn, and the activity `reviewing_permission` | A session's `turn` (`SessionListItem`, `SessionDetail`, turn updates); a work row's `activity` | [A request under review](#a-request-under-review) |
 
 ## The mode
 
@@ -142,6 +145,49 @@ Checked against a local fake API (claude 2.1.325, codex-cli 0.169.0): neither
 CLI's request carried a planted `CLAUDE.md` / `AGENTS.md` from the project or
 from a parent directory, no project hook ran, and Pockode's tool was still
 offered. What remains is under [Known accepted risks](#known-accepted-risks).
+
+### A request under review
+
+A request the reviewer is answering is not waiting on a person, and the
+session's turn says so: its blocker carries `reviewing: true`.
+
+```json
+"turn": {
+  "phase": "blocked",
+  "open": true,
+  "blockers": [
+    { "kind": "permission", "request_id": "toolu_01…", "raised_at": "…", "reviewing": true }
+  ],
+  "since": "…"
+}
+```
+
+- **Set** as the request is raised, when routing reads the session and finds
+  it `unattended` — the blocker never exists without it, so no surface calls
+  the person even for the seconds it takes to find, create or start the
+  reviewer. From then on every path answers the request (the reviewer's
+  verdict or Pockode's deny, [below](#every-request-gets-an-answer)) or ends
+  with its process, so the mark is never cleared: the blocker goes away with
+  the answer.
+- **Never set** on a request routing gives back to the person: when Pockode
+  cannot read the session it records `permission_review_failed` with
+  "… Answer it yourself." and leaves the request unmarked. Nor on a request of
+  a reviewer's own, which is denied at once.
+- **Absent** means `false`, and is what every other request reads.
+- A person may still answer a request under review; the first answer wins.
+
+What reads it: a work's `activity` is `reviewing_permission` while every
+permission request of its turn is under review — a request waiting on a person
+outranks it, and it outranks `background` — and that leaf is not one the
+person is needed for (`work.Activity.NeedsUser`), so the work is not counted
+under *Needs you*. A session row derives the same leaf from the same
+`work/testdata/activity_cases.json`. Nor does a request under review mark the
+session unread: raising one that waits on a person does, as in any mode, and
+so does one routing hands back — the point of the mode is that nobody is
+called for the rest. The session goes unread as any session does, when its
+turn ends. The send path still refuses a message
+while a request is pending (`chat.ErrTurnAwaitingAnswer`), reviewed or not:
+the CLI would not read it.
 
 ## Every request gets an answer
 

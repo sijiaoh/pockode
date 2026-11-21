@@ -1,5 +1,6 @@
 import type { ComponentType } from "react";
 import { useSyncExternalStore } from "react";
+import type { ReportedSessionMode, SessionMode } from "../../types/message";
 import type { ChatAttachment } from "../chatAttachments";
 
 export interface AvatarProps {
@@ -93,9 +94,11 @@ export interface InputBarProps {
 }
 
 export interface ModeSelectorProps {
-	mode: "default" | "yolo";
+	/** May be a mode this build does not know; see `getSessionModeInfo`. */
+	mode: ReportedSessionMode;
 	agentType: "claude" | "codex";
-	onModeChange: (mode: "default" | "yolo") => Promise<void>;
+	/** Asks for confirmation first where the mode calls for one. */
+	onModeChange: (mode: SessionMode) => Promise<void>;
 	/**
 	 * False while the session has yet to describe itself, so `mode` and
 	 * `agentType` are placeholders with no value to show — the same flag

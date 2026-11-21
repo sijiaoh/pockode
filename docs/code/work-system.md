@@ -379,7 +379,7 @@ session at all.
 ### Activity
 
 `Activity` is what a work is *doing*, as one value, and it is derived —
-never stored. Nine leaves; the rule, in full:
+never stored. Ten leaves; the rule, in full:
 
 > The session says what is happening; the work's wait says what it is waiting
 > for when nothing is happening.
@@ -388,7 +388,7 @@ never stored. Nine leaves; the rule, in full:
 activity(work, turn):
   status open / closed / stopped -> open / closed / stopped
   turn.phase == running          -> running
-  turn.phase == blocked          -> permission > background
+  turn.phase == blocked          -> permission > reviewing_permission > background
   otherwise (idle, or no turn):
     wait child   -> waiting_children
     watching > 0 -> watching
@@ -399,6 +399,14 @@ Phase outranks wait because a wait is a standing intention and a phase is a fact
 about this second: an agent that calls `story_wait` and then keeps writing for ten
 seconds *is* running. Permission outranks background because background is the one
 nobody can act on — and those are the only two blockers a turn has.
+
+`reviewing_permission` is a turn whose permission requests have all been taken
+by the session's permission reviewer (`reviewing` on the blocker — see
+[unattended-mode.md](../unattended-mode.md#a-request-under-review)). It is not
+`NeedsUser`: an answer is on its way without the person. One request still
+waiting on a person outranks it, because the turn resumes only once every
+request is answered; and it outranks background, because it is an answer on
+its way rather than a wait nobody can act on.
 
 `needs_answer` was a ninth leaf and is gone with the CLI's own blocking question.
 Its replacement is not a leaf at all: a question an agent posts leaves the work

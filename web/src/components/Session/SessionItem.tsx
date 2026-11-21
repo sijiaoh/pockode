@@ -1,4 +1,4 @@
-import { Archive, FolderGit2, GitBranch } from "lucide-react";
+import { Archive, Bot, FolderGit2, GitBranch } from "lucide-react";
 import { memo } from "react";
 import { isWorkActive, sessionActivity } from "../../lib/activity";
 import type { SessionOrigin } from "../../lib/sessionFilter";
@@ -46,6 +46,14 @@ const SessionItem = memo(function SessionItem({
 	// said about it is `UNLISTED_SESSION_NAME`'s call, not this row's.
 	const parentTitle = useSessionStore((s) =>
 		forkedFrom ? selectSessionTitle(forkedFrom)(s) : null,
+	);
+	// Every reviewer is titled "Permission reviewer", so the subtitle is what
+	// tells two apart. Read live from the list, never fetched: the main session
+	// often has no row here — a work session with task sessions hidden, or one on
+	// a page not loaded yet (docs/unattended-mode-ui.md §4).
+	const reviewerOf = session.permission_reviewer_of;
+	const mainTitle = useSessionStore((s) =>
+		reviewerOf ? selectSessionTitle(reviewerOf)(s) : null,
 	);
 
 	// The row names its own work, so this looks the item up by id rather than
@@ -112,22 +120,20 @@ const SessionItem = memo(function SessionItem({
 			// allowed to truncate — a row that ate its own timestamp to fit a
 			// worktree name would lose the one thing the list is sorted by.
 			subtitle={
-				origin ? (
+				origin || reviewerOf ? (
 					<span className="flex min-w-0 items-center gap-1">
-						{origin.exists ? (
-							<FolderGit2
-								className="size-3 shrink-0 text-th-text-muted"
-								aria-hidden="true"
-							/>
-						) : (
-							<Archive
-								className="size-3 shrink-0 text-th-text-muted"
-								aria-hidden="true"
-							/>
-						)}
-						<span className="truncate">{origin.label}</span>
-						{!origin.exists && (
-							<span className="sr-only">, deleted worktree</span>
+						{origin && <OriginLabel origin={origin} />}
+						{origin && reviewerOf && <span className="shrink-0">·</span>}
+						{reviewerOf && (
+							<>
+								<Bot
+									className="size-3 shrink-0 text-th-text-muted"
+									aria-hidden="true"
+								/>
+								<span className="truncate">
+									for {mainTitle ?? "another session"}
+								</span>
+							</>
 						)}
 						<span className="shrink-0">
 							· {formatCompactDateTime(session.updated_at)}
@@ -162,5 +168,16 @@ const SessionItem = memo(function SessionItem({
 		/>
 	);
 });
+
+function OriginLabel({ origin }: { origin: SessionOrigin }) {
+	const Icon = origin.exists ? FolderGit2 : Archive;
+	return (
+		<>
+			<Icon className="size-3 shrink-0 text-th-text-muted" aria-hidden="true" />
+			<span className="truncate">{origin.label}</span>
+			{!origin.exists && <span className="sr-only">, deleted worktree</span>}
+		</>
+	);
+}
 
 export default SessionItem;
