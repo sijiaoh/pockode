@@ -65,3 +65,11 @@ export interface NodeCleanupParams {
 export interface NodeRestartParams {
 	id: string;
 }
+
+export interface NodeLoginTicketParams {
+	id: string;
+}
+
+export interface NodeLoginTicketResult {
+	ticket: string;
+}

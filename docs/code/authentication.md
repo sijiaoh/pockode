@@ -418,6 +418,23 @@ little once used ([Local code is inside the
 boundary](#local-code-is-inside-the-boundary)). Anything that goes wrong falls
 back to the node's password page.
 
+The node's app takes it from the address fragment, `#login_ticket=<ticket>`,
+which no server, relay log or `Referer` ever sees. It takes it out of the
+address in `web/src/router.tsx`, before the router's history exists, because the
+history trail copies the page it starts on into `sessionStorage` the moment it
+is created (`web/src/lib/historyTrail.ts`); a statement there rather than an
+import's side effect, which import sorting could move. From then on the ticket
+lives only in memory (`web/src/lib/authStore.ts`) and is sent once, on the first
+`auth`, beside the stored session token if there is one — the server keeps a
+live session and spends the ticket regardless, so trying the session first
+would only add a round trip. It is gone after that attempt whatever came of it:
+a retry or a reconnect carries at most the session token. `invalid_ticket`
+returns to the password screen silently, as `session_expired` does. The ticket
+credential (`AppAuthCredential` in `web/src/lib/loginTicket.ts`) is the app's
+own superset of the shared `AuthCredential`, so the cluster's connect cannot
+send one — the cluster server would read an `auth` with a ticket and no
+password as an empty password.
+
 ### Raw capabilities: URLs a browser element loads by itself
 
 A `<video src>`, an `<audio src>`, an `<iframe src>` or an `<a download>` makes

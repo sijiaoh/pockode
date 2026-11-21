@@ -29,6 +29,7 @@ export {
 	type LayerEntries,
 	type LayerHistory,
 } from "./layerHistory.ts";
+export { isPlainClick, openDeferredTab } from "./openDeferredTab.ts";
 export { BREAKPOINTS, hasCoarsePointer, MEDIA_QUERIES } from "./responsive.ts";
 export {
 	type InstalledVersion,

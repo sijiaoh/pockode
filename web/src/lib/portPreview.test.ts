@@ -47,26 +47,21 @@ describe("openPreviewTab", () => {
 		vi.restoreAllMocks();
 	});
 
-	function fakeTab() {
-		return { opener: window, closed: false, location: { replace: vi.fn() } };
+	function openFakeTab() {
+		const tab = {
+			opener: window,
+			closed: false,
+			location: { replace: vi.fn() },
+		};
+		vi.spyOn(window, "open").mockReturnValue(tab as unknown as Window);
+		return tab;
 	}
 
-	it("opens a tab before the ticket arrives, then logs it in", async () => {
-		const tab = fakeTab();
-		const open = vi
-			.spyOn(window, "open")
-			.mockReturnValue(tab as unknown as Window);
-		let resolve = (_ticket: string) => {};
-		const promise = new Promise<string>((r) => {
-			resolve = r;
-		});
+	it("logs the tab in with the ticket", async () => {
+		const tab = openFakeTab();
 
-		expect(openPreviewTab(PREVIEW, () => promise)).toBe(true);
-		expect(open).toHaveBeenCalledWith("", "_blank");
-		expect(tab.opener).toBeNull();
-		expect(tab.location.replace).not.toHaveBeenCalled();
+		expect(openPreviewTab(PREVIEW, () => Promise.resolve("t/1+"))).toBe(true);
 
-		resolve("t/1+");
 		await vi.waitFor(() =>
 			expect(tab.location.replace).toHaveBeenCalledWith(
 				"https://abc-5173.example.com/__pockode/preview/login?ticket=t%2F1%2B",
@@ -75,8 +70,7 @@ describe("openPreviewTab", () => {
 	});
 
 	it("sends the tab to the preview itself when there is no ticket", async () => {
-		const tab = fakeTab();
-		vi.spyOn(window, "open").mockReturnValue(tab as unknown as Window);
+		const tab = openFakeTab();
 
 		openPreviewTab(PREVIEW, () => Promise.reject(new Error("Not connected")));
 

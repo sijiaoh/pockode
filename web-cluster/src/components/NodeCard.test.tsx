@@ -1,4 +1,10 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import {
+	fireEvent,
+	render,
+	screen,
+	waitFor,
+	within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { InstalledVersionState } from "../hooks/useInstalledVersion";
@@ -55,6 +61,7 @@ function renderCard(
 		onCleanup: vi.fn().mockResolvedValue(undefined),
 		onRestart: vi.fn().mockResolvedValue({ kind: "closed" }),
 		onRestartOlder: vi.fn(),
+		onLoginTicket: vi.fn().mockResolvedValue("tkt"),
 	};
 	render(
 		<NodeCard
@@ -101,6 +108,98 @@ describe("NodeCard: Open", () => {
 		expect(
 			screen.queryByRole("link", { name: /Local/ }),
 		).not.toBeInTheDocument();
+	});
+});
+
+// The click side of the login ticket; the tab mechanics themselves are
+// openDeferredTab's and are tested with it.
+describe("NodeCard: Open logs in with a ticket", () => {
+	const both = () =>
+		makeNode("running", {
+			local_url: "http://localhost:9870",
+			remote_url: "https://my-app.example",
+		});
+
+	function openTab() {
+		const tab = {
+			opener: window,
+			closed: false,
+			location: { replace: vi.fn() },
+		};
+		const open = vi
+			.spyOn(window, "open")
+			.mockReturnValue(tab as unknown as Window);
+		return { tab, open };
+	}
+
+	afterEach(() => {
+		vi.restoreAllMocks();
+	});
+
+	it.each([
+		["Open", "https://my-app.example/#login_ticket=tkt"],
+		[/Local/, "http://localhost:9870/#login_ticket=tkt"],
+	])("a plain click on %s sends a new tab to the address with the ticket in its fragment", async (name, expected) => {
+		const { tab, open } = openTab();
+		const { onLoginTicket } = renderCard(both());
+		const link = screen.getByRole("link", { name });
+
+		// false: the click's default was prevented, so the link itself opened nothing.
+		expect(fireEvent.click(link)).toBe(false);
+		expect(open).toHaveBeenCalledWith("", "_blank");
+		expect(onLoginTicket).toHaveBeenCalledWith("n1");
+		await waitFor(() =>
+			expect(tab.location.replace).toHaveBeenCalledWith(expected),
+		);
+		// The plain address stays the link's: copying it is never a login.
+		expect(link.getAttribute("href")).not.toContain("login_ticket");
+	});
+
+	it.each([
+		["middle", { button: 1 }],
+		["Cmd", { metaKey: true }],
+		["Ctrl", { ctrlKey: true }],
+		["Shift", { shiftKey: true }],
+		["Alt", { altKey: true }],
+	])("a %s click is left to the plain link and asks for no ticket", (_, init) => {
+		const { open } = openTab();
+		const { onLoginTicket } = renderCard(both());
+
+		expect(
+			fireEvent.click(screen.getByRole("link", { name: "Open" }), init),
+		).toBe(true);
+		expect(open).not.toHaveBeenCalled();
+		expect(onLoginTicket).not.toHaveBeenCalled();
+	});
+
+	it("sends the tab to the plain address when no ticket can be had, an older node's unsupported included", async () => {
+		const { tab } = openTab();
+		renderCard(both(), {
+			onLoginTicket: vi.fn().mockRejectedValue(
+				Object.assign(new Error("this node is too old"), {
+					code: -32016,
+					data: { reason: "unsupported" },
+				}),
+			),
+		});
+
+		fireEvent.click(screen.getByRole("link", { name: "Open" }));
+
+		await waitFor(() =>
+			expect(tab.location.replace).toHaveBeenCalledWith(
+				"https://my-app.example",
+			),
+		);
+	});
+
+	it("lets the click through to the plain link when the browser blocks the tab", () => {
+		vi.spyOn(window, "open").mockReturnValue(null);
+		const { onLoginTicket } = renderCard(both());
+
+		expect(fireEvent.click(screen.getByRole("link", { name: "Open" }))).toBe(
+			true,
+		);
+		expect(onLoginTicket).not.toHaveBeenCalled();
 	});
 });
 
@@ -514,6 +613,7 @@ describe("NodeCard: Restart", () => {
 			onCleanup: vi.fn(),
 			onRestart: vi.fn(),
 			onRestartOlder: vi.fn(),
+			onLoginTicket: vi.fn(),
 			installedState: installedState(),
 			versionKind: "outdated" as const,
 			older: false,

@@ -1,4 +1,4 @@
-import { useHasCoarsePointer } from "@pockode/shared";
+import { isPlainClick, useHasCoarsePointer } from "@pockode/shared";
 import { ExternalLink, X } from "lucide-react";
 import { useEffect, useId, useRef, useState } from "react";
 import { flushSync } from "react-dom";
@@ -235,10 +235,6 @@ function RecentPortRow({
 			</button>
 		</li>
 	);
-}
-
-function isPlainClick(e: React.MouseEvent): boolean {
-	return e.button === 0 && !(e.metaKey || e.ctrlKey || e.shiftKey || e.altKey);
 }
 
 export default PortPreviewSheet;
