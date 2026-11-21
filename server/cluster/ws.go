@@ -209,6 +209,8 @@ func (h *clusterRPCHandler) Handle(ctx context.Context, conn *jsonrpc2.Conn, req
 		h.handleNodeCleanup(ctx, conn, req)
 	case "node.restart":
 		h.handleNodeRestart(ctx, conn, req)
+	case "node.login_ticket":
+		h.handleNodeLoginTicket(ctx, conn, req)
 	default:
 		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeMethodNotFound, "method not found")
 	}
@@ -367,6 +369,10 @@ type NodeCleanupParams struct {
 }
 
 type NodeRestartParams struct {
+	ID string `json:"id"`
+}
+
+type NodeLoginTicketParams struct {
 	ID string `json:"id"`
 }
 
@@ -753,6 +759,65 @@ func (h *clusterRPCHandler) nodeRestartRefusal(err error) (reason, message strin
 	var notRunnable *restart.NotRunnableError
 	if errors.As(err, &notRunnable) {
 		return rpc.RestartRefusedNotRunnable, ws.NotRunnableRefusal(h.processManager.ExecutablePath(), notRunnable, "The node")
+	}
+	return "", ""
+}
+
+// handleNodeLoginTicket fetches a one-time login to a running node's web app
+// from the node itself, so the browser the panel opens on it skips the node
+// password. The cluster login is what authorises it: it already dominates every
+// node, which node.stop and node.start with a password of its choosing show.
+func (h *clusterRPCHandler) handleNodeLoginTicket(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request) {
+	var params NodeLoginTicketParams
+	if err := unmarshalParams(req, &params); err != nil {
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "invalid params")
+		return
+	}
+
+	if params.ID == "" {
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "id is required")
+		return
+	}
+
+	n, found, err := h.nodeStore.Get(params.ID)
+	if err != nil {
+		h.log.Error("failed to get node", "error", err)
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInternalError, "internal error")
+		return
+	}
+	if !found {
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "node not found")
+		return
+	}
+
+	ticket, err := h.processManager.LoginTicket(ctx, n)
+	if err != nil {
+		if reason, message := nodeLoginTicketRefusal(err); reason != "" {
+			h.log.Info("node login ticket refused", "nodeId", n.ID, "reason", reason)
+			h.replyErrorData(ctx, conn, req.ID, rpc.CodeNodeLoginTicketRefused, message, rpc.NodeLoginTicketRefusedData{Reason: reason})
+			return
+		}
+		h.log.Error("failed to get node login ticket", "error", err, "nodeId", n.ID)
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInternalError, "Couldn't log in to this node: "+err.Error())
+		return
+	}
+
+	if err := conn.Reply(ctx, req.ID, rpc.NodeLoginTicketResult{Ticket: ticket}); err != nil {
+		h.log.Error("failed to send node.login_ticket response", "error", err)
+	}
+}
+
+// nodeLoginTicketRefusal is the reason and the copy of a node.login_ticket
+// that got no ticket for a reason the panel acts on, or no reason for an error
+// that is not a refusal.
+func nodeLoginTicketRefusal(err error) (reason, message string) {
+	switch {
+	case errors.Is(err, node.ErrLoginTicketUnsupported):
+		return rpc.NodeLoginTicketRefusedUnsupported, "This node was started by an older Pockode, which can't log you in by itself. It asks for its password instead."
+	case errors.Is(err, node.ErrNodeRestarting):
+		return rpc.NodeLoginTicketRefusedRestarting, "This node is restarting."
+	case errors.Is(err, node.ErrNodeNotRunning):
+		return rpc.NodeLoginTicketRefusedNotRunning, "This node is not running."
 	}
 	return "", ""
 }

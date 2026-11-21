@@ -55,6 +55,20 @@ func TestAuth(t *testing.T) {
 			wantStatus: http.StatusOK,
 		},
 		{
+			// It authenticates itself with the local token; a Bearer sent to it
+			// must not reach the password check and count as a guess.
+			name:       "login ticket bypasses auth",
+			path:       "/api/pockode-local/login-ticket",
+			authHeader: "Bearer wrong-password",
+			wantStatus: http.StatusOK,
+		},
+		{
+			name:       "other local routes stay protected",
+			path:       "/api/pockode-local/other",
+			authHeader: "",
+			wantStatus: http.StatusUnauthorized,
+		},
+		{
 			name:       "missing auth header",
 			path:       "/api/ping",
 			authHeader: "",

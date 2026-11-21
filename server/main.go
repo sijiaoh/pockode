@@ -39,6 +39,7 @@ import (
 	"github.com/pockode/server/internal/pathutil"
 	"github.com/pockode/server/internal/restart"
 	"github.com/pockode/server/internal/shutdown"
+	"github.com/pockode/server/localapi"
 	"github.com/pockode/server/logger"
 	"github.com/pockode/server/mcp"
 	"github.com/pockode/server/middleware"
@@ -60,7 +61,7 @@ var version = "dev"
 //go:embed static/*
 var staticFS embed.FS
 
-func newHandler(serverPassword string, passwordGuard *authguard.Guard, sessions middleware.SessionValidator, devMode bool, wsHandler *ws.RPCHandler, mcpHandler http.Handler, transferHandler *filetransfer.Handler, attachmentHandler *filetransfer.AttachmentHandler, rawHandler *filetransfer.RawHandler) http.Handler {
+func newHandler(serverPassword string, passwordGuard *authguard.Guard, sessions middleware.SessionValidator, devMode bool, wsHandler *ws.RPCHandler, mcpHandler http.Handler, loginTicketHandler http.Handler, transferHandler *filetransfer.Handler, attachmentHandler *filetransfer.AttachmentHandler, rawHandler *filetransfer.RawHandler) http.Handler {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
@@ -87,8 +88,10 @@ func newHandler(serverPassword string, passwordGuard *authguard.Guard, sessions 
 
 	// Local MCP API. middleware.Auth bypasses this exact route; mcpHandler
 	// self-auths with the locally-generated MCP token instead of the user
-	// password. The relay also refuses to forward it (loopback-only).
+	// password. The relay also refuses to forward it.
 	mux.Handle("POST "+mcp.APIPath, mcpHandler)
+	// Likewise bypassed and self-authenticated with the same token.
+	mux.Handle("POST "+localapi.LoginTicketPath, loginTicketHandler)
 
 	authedMux := middleware.Auth(serverPassword, passwordGuard, sessions)(mux)
 
@@ -341,6 +344,11 @@ Flags:
 	// issued over the WebSocket and redeemed on the preview host, which must
 	// therefore share this one set.
 	previewTickets := authsession.NewTickets()
+	// One-time tickets the cluster fetches over the local API to log a browser
+	// into this node's app. A set of their own, so a preview ticket never logs
+	// into the app nor an app ticket into a preview; the WebSocket auth redeems
+	// them, so it must share this one.
+	appLoginTickets := authsession.NewTickets()
 	// Every place that checks the password counts its failures here: a guess is
 	// a guess whichever entry point it arrives at, so the lockout must be one.
 	passwordGuard := authguard.New()
@@ -517,7 +525,8 @@ Flags:
 		os.Exit(1)
 	}
 
-	// Local API token for the MCP subprocess. Randomly generated per startup and
+	// Local API token for the MCP subprocess and the cluster's login tickets
+	// (package localapi). Randomly generated per startup and
 	// published to server.json, so it never outlives the process and is distinct
 	// from the user-facing password.
 	mcpToken, err := generateToken()
@@ -531,6 +540,7 @@ Flags:
 	mcpExecutor.SetWorkEngine(workEngine)
 	mcpExecutor.SetPages(htmlpage.NewStore(), worktreeManager)
 	mcpHandler := mcp.NewAPIHandler(mcpExecutor, mcpToken)
+	loginTicketHandler := localapi.NewLoginTicketHandler(appLoginTickets, mcpToken)
 
 	cloudURL := *cloudURLFlag
 
@@ -591,7 +601,7 @@ Flags:
 	if cloudCredentials != nil {
 		cloudLinks = cloudlogin.NewService(cloudURL, cloudCredentials, cloudlogin.RelayOf(relayManager), slog.Default())
 	}
-	wsHandler = ws.NewRPCHandler(cred.Password, passwordGuard, sessions, version, remoteURL, previewTickets, rawHandler, devMode, commandStore, worktreeManager, settingsStore, workStore, workOps, workEngine, agentRoleStore, scheduleStore, scheduler, cliAuth, cliProfiles, cliUpdate, cloudLinks, restarter, updater)
+	wsHandler = ws.NewRPCHandler(cred.Password, passwordGuard, sessions, version, remoteURL, previewTickets, appLoginTickets, rawHandler, devMode, commandStore, worktreeManager, settingsStore, workStore, workOps, workEngine, agentRoleStore, scheduleStore, scheduler, cliAuth, cliProfiles, cliUpdate, cloudLinks, restarter, updater)
 
 	if relayManager != nil {
 		url, err := relayManager.Start(context.Background())
@@ -604,7 +614,7 @@ Flags:
 		slog.Info("remote access enabled", "url", url)
 	}
 
-	handler := newHandler(cred.Password, passwordGuard, sessions, devMode, wsHandler, mcpHandler, transferHandler, attachmentHandler, rawHandler)
+	handler := newHandler(cred.Password, passwordGuard, sessions, devMode, wsHandler, mcpHandler, loginTicketHandler, transferHandler, attachmentHandler, rawHandler)
 
 	srv := &http.Server{
 		Handler: handler,

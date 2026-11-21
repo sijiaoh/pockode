@@ -18,12 +18,17 @@ func IsAPI(path string) bool {
 // IsLocalOnly reports whether path belongs to an API that must never be served
 // to a client off this machine.
 //
-// The local MCP API is the one such API: it exists so an agent CLI running here
-// can drive this server's own tools, and it authenticates with a token of its
-// own rather than the user's. Nothing reaching this machine from outside has a
-// reason to call it.
+// There are two: the MCP API, through which an agent CLI running here drives
+// this server's own tools, and the Pockode-local API (package localapi),
+// through which the cluster that started this node logs browsers in. Both
+// authenticate with the server.json token rather than the user's password, and
+// nothing reaching this machine from outside has a reason to call them.
+//
+// The relay refuses these paths on every port it previews as well, so a
+// prefix here takes that path away from the user's own apps: keep each one
+// Pockode's own.
 func IsLocalOnly(path string) bool {
-	return strings.HasPrefix(path, "/api/mcp/")
+	return strings.HasPrefix(path, "/api/mcp/") || strings.HasPrefix(path, "/api/pockode-local/")
 }
 
 // RawPrefix is where the raw endpoint answers: RawPrefix + <capability> + "/"

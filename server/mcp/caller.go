@@ -7,9 +7,11 @@ import "github.com/pockode/server/work"
 // every forwarded call, and the executor uses it to act on the caller's own
 // session without the model having to name it.
 //
-// It is self-reported, not a credential: the local API is loopback-only and its
-// token already authorizes everything, so there is nothing an agent could gain
-// by claiming another session's id. Do not build authorization on it.
+// It is self-reported, not a credential: the local API's token already
+// authorizes everything, and only code on this machine holds it (the relay
+// refuses the route, and the token never leaves the host), so there is nothing
+// an agent could gain by claiming another session's id. Do not build
+// authorization on it.
 type Caller struct {
 	// SessionID is the session whose CLI process made the call. Empty when the
 	// proxy was started without an identity — a call from outside a session.

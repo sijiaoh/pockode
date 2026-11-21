@@ -855,8 +855,10 @@ a `0600` mode would protect it on unix only.
 It is distinct from the user-facing `--password` (which is never written to
 disk) and lives only for the lifetime of the process. `middleware.Auth` bypasses
 the exact `/api/mcp/tools/call` route; the `APIHandler` verifies the local token
-itself. The endpoint is loopback-only in practice — the relay explicitly refuses
-to forward `/api/mcp/*`, so it is never reachable remotely.
+itself. The relay refuses to forward `/api/mcp/*`, so it is unreachable through
+the relay; the server listens on every interface, so on a LAN it is the token,
+which never leaves the host, that keeps a caller out
+([Authentication → The local API](authentication.md#the-local-api-uses-a-separate-token)).
 
 All tool results are JSON (not formatted text) where structured data is
 returned, to prevent prompt injection and ensure stable parsing. A tool whose
@@ -1979,7 +1981,7 @@ make claims about, and no closed work at all. The archive is a separate, paged
 fetch ([websocket-rpc.md](websocket-rpc.md#paging-a-subscribed-list)), and
 `workStore` keeps it in its own field — the two halves obey opposite rules, one
 pushed to and one never
-([subscription-system.md](subscription-system.md#the-two-lists-update-live-in-opposite-ways)).
+([subscription-system.md](subscription-system.md#the-two-lists-update-live-in-different-ways)).
 
 **A job is never on this list**, in `Current` or in the archive. The Stories
 list is the tree; a run belongs under its schedule

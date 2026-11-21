@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/pockode/server/authguard"
+	"github.com/pockode/server/localapi"
 	"github.com/pockode/server/password"
 )
 
@@ -26,12 +27,13 @@ type SessionValidator interface {
 func Auth(serverPassword string, passwordGuard *authguard.Guard, sessions SessionValidator) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			// Health check, WebSocket, and the local MCP API bypass this middleware:
-			// WebSocket and the MCP API authenticate themselves (the MCP API uses a
-			// separate, locally-generated token, not the user-facing password).
-			// Match the MCP route exactly (not a prefix) so any future /api/mcp/*
-			// route is auth-protected by default rather than silently exposed.
-			if r.URL.Path == "/health" || r.URL.Path == "/ws" || r.URL.Path == "/api/mcp/tools/call" {
+			// Health check, WebSocket, and the local API routes bypass this
+			// middleware: WebSocket and the local routes authenticate themselves
+			// (the local ones with the server.json token, not the user-facing
+			// password). Match the local routes exactly (not a prefix) so any
+			// future route under them is auth-protected by default rather than
+			// silently exposed.
+			if r.URL.Path == "/health" || r.URL.Path == "/ws" || r.URL.Path == "/api/mcp/tools/call" || r.URL.Path == localapi.LoginTicketPath {
 				next.ServeHTTP(w, r)
 				return
 			}

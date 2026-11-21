@@ -53,7 +53,7 @@ A preview login is an ordinary app session: it expires after 30 days unused, end
 - **The app's own cookies pass through**; Pockode's preview cookie does not, so the previewed server never sees the session.
 - **The local server does not see the public URL**: `X-Forwarded-Host` and `-Proto` are not sent, since frameworks that read them (Next's Server Actions, Rails' host check) would refuse a request whose `Host` says `localhost`. The client address is still in `X-Forwarded-For`.
 - **`/__pockode/` belongs to Pockode** on every preview host and never reaches the previewed server.
-- **`/api/mcp/*` is never forwarded**, on any port: it is Pockode's local-only MCP API, and the port being previewed may be another Pockode on the machine, such as a cluster node. An app of your own with routes under that path cannot have them previewed.
+- **`/api/mcp/*` and `/api/pockode-local/*` are never forwarded**, on any port: they are Pockode's local-only API, and the port being previewed may be another Pockode on the machine, such as a cluster node. An app of your own with routes under those paths cannot have them previewed.
 
 ## Limitations
 
@@ -69,7 +69,7 @@ A preview login is an ordinary app session: it expires after 30 days unused, end
 | 401 with a login page | Not logged in on this host, or the session expired — enter the app's password |
 | 401 `Pockode preview: not logged in` | A non-page request without a session; load the page itself to log in |
 | 403 `Pockode preview: cross-origin request refused` | The request came from another origin — see [Limitations](#limitations) |
-| 404 | A `/__pockode/` path other than the login endpoint, or any `/api/mcp/*` path |
+| 404 | A `/__pockode/` path other than the login endpoint, or any `/api/mcp/*` or `/api/pockode-local/*` path |
 | Password page on a preview the app opened logged in | The app could not get a ticket (it was disconnected, or the request failed), or the ticket was spent, expired (about 60 s) or issued before a server restart — enter the app's password |
 | 502 `Pockode preview: nothing is listening on localhost:<port>` | Start the server on the PC, then reload |
 | 502 `Pockode preview: localhost:<port> did not answer: …` | The server is there but failed or took over 30 s to answer |

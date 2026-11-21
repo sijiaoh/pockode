@@ -38,6 +38,14 @@ func TestIsLocalOnly(t *testing.T) {
 		// mcp's own TestAPIPathStaysLocalOnly pins the two together.
 		{"/api/mcp/tools/call", true},
 		{"/api/mcp/", true},
+		// Where: localapi.Prefix, pinned the same way by localapi's
+		// TestPathsStayLocalOnly.
+		{"/api/pockode-local/login-ticket", true},
+		{"/api/pockode-local/", true},
+		// A generic local prefix would be taken from the user's previewed
+		// apps, which the relay refuses local-only paths for too.
+		{"/api/local/login-ticket", false},
+		{"/api/pockode-localx", false},
 		{"/api/ping", false},
 		{"/api", false},
 		{"/", false},

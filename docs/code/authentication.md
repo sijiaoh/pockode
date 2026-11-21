@@ -68,7 +68,9 @@ here.
   provided the token never leaves the host (it is not sent over the network,
   logged or shown in the UI) and the route is one the relay refuses
   (`apiroute.IsLocalOnly`). The server listens on every interface, so on a LAN
-  it is the token, not the address, that keeps a caller out.
+  it is the token, not the address, that keeps a caller out. That endpoint
+  exists: [a node can be logged in by its
+  cluster](#a-node-can-be-logged-in-by-its-cluster).
 
 The boundary that *is* defended runs elsewhere: callers reaching the server over
 the network (relay or LAN), which need the password, a credential derived from
@@ -102,9 +104,10 @@ network is not trusted, and to treat a LAN as trusted only when it is.
 | Surface | How the credential is presented | Code |
 |---------|---------------------------|------|
 | HTTP API | `Authorization: Bearer <password or session token>`; `/api/raw` takes a capability instead (below) | `server/middleware/auth.go` |
-| WebSocket | First RPC must be `auth { password }` or `auth { session_token }`; all other methods are rejected until it succeeds | `server/ws/rpc.go`, `server/cluster/ws.go` |
+| WebSocket | First RPC must be `auth { password }` or `auth { session_token }` — on a node server also `auth { login_ticket }`, with or without a session token ([the exchange](#sessions-what-the-browser-keeps)); all other methods are rejected until it succeeds | `server/ws/rpc.go`, `server/cluster/ws.go` |
 | Relay | The relay tunnels the same HTTP/WS traffic; no separate app credential | `server/relay/` |
 | Port preview | A session cookie, issued by posting the password to `/__pockode/preview/login` on the preview host, or by opening it with a one-time ticket the logged-in app got from `port_preview.ticket`; see [Port Previews](relay-system.md#logging-in) | `server/relay/preview_auth.go`, `server/authsession/ticket.go` |
+| Local API | The `server.json` token, never the password: `Authorization: Bearer` on `/api/mcp/tools/call`, `X-Pockode-Local-Token` on `/api/pockode-local/*`; see [The local API](#the-local-api-uses-a-separate-token) | `server/mcp/handler.go`, `server/localapi/` |
 | Raw content | A capability in the URL's path, `/api/raw/<capability>/<path>`, that the logged-in app got from `raw.capability`; see [Raw capabilities](#raw-capabilities-urls-a-browser-element-loads-by-itself) | `server/filetransfer/raw.go`, `server/authsession/capability.go` |
 
 Both credentials are accepted on HTTP so that `curl` and scripts have something
@@ -149,8 +152,8 @@ failed password attempts are slowed down (`server/authguard/`):
   guessing concurrently. The check, the comparison and the count happen under
   one lock, so concurrent guesses cannot all get past the check before any of
   them is counted.
-- **Session tokens, preview tickets and raw capabilities never go through the
-  guard.** A device
+- **Session tokens, preview tickets, login tickets and raw capabilities never
+  go through the guard.** None of them is something a person guesses at. A device
   already logged in keeps working while someone else is locked out; only a
   fresh password login waits. That is also the cost of the design: anyone who
   can reach the server can keep the *owner's* password login locked, in
@@ -181,24 +184,47 @@ so an invalid `session_token` is never counted.
 This slows online guessing; it does not make a weak password strong. Users are
 still told to generate the secret rather than choose one.
 
-### The MCP local API uses a *separate* token
+### The local API uses a *separate* token
 
-The in-process AI agent reaches the server over a loopback HTTP API
-(`/api/mcp/tools/call`). This path is authenticated with its **own** token —
-a 256-bit hex string from `crypto/rand`, regenerated per server start
-(`server/main.go` — `generateToken`) and written to `server.json` inside the
-restricted data directory (`server/serverinfo/serverinfo.go`, see
-[Credentials on Disk](#credentials-on-disk)) — not the user-facing password.
-Three guards keep it off the relay and closed to anyone without the token:
+Two APIs are for code on this machine rather than for a browser, and neither
+takes the user's password:
 
-- The auth middleware bypasses the MCP route by **exact match**, so a future
-  `/api/mcp/*` route is auth-protected by default rather than silently exposed
-  (`server/middleware/auth.go`).
-- The relay refuses to forward any `/api/mcp/` path before port selection, so the
-  MCP API is never reachable remotely even in the single-port setup
-  (`server/apiroute/` holds the predicate, `server/relay/proxy.go` enforces it).
-- The MCP handler **fails closed** on an empty token — an unset token never
-  matches — rather than accepting all callers (`server/mcp/handler.go`).
+| Route | Caller | Token in |
+|---|---|---|
+| `POST /api/mcp/tools/call` | The MCP subprocess an AI CLI runs, forwarding tool calls | `Authorization: Bearer` |
+| `POST /api/pockode-local/login-ticket` | The cluster that started this node, fetching a [login ticket](#a-node-can-be-logged-in-by-its-cluster) | `X-Pockode-Local-Token` |
+
+Both check one token — a 256-bit hex string from `crypto/rand`, regenerated per
+server start (`server/main.go` — `generateToken`) and written to `server.json`
+inside the restricted data directory (`server/serverinfo/serverinfo.go`, see
+[Credentials on Disk](#credentials-on-disk)) — through one comparison,
+`localapi.TokenMatches`.
+
+The login route does not take the token as a Bearer because of a node that
+predates it: such a node does not know the route, sends it through the password
+middleware, and would count a Bearer value there as a wrong password against
+the lockout. In its own header the token is never read as a password, and a
+Bearer sent to the route is refused.
+
+**The token is the guard.** The server listens on every interface, so a caller
+on the LAN reaches these routes as easily as one on the host; what keeps it out
+is that the token never leaves the host — not sent over the network, logged or
+shown in the UI. Around it:
+
+- The auth middleware bypasses each route by **exact match**, so a future route
+  under `/api/mcp/` or `/api/pockode-local/` is password-protected by default
+  rather than silently exposed (`server/middleware/auth.go`).
+- The token check **fails closed** on an empty token — an unset token never
+  matches — rather than accepting all callers (`server/localapi/`).
+- The relay refuses to forward either prefix before port selection, previews
+  included (`apiroute.IsLocalOnly` holds the predicate, `server/relay/proxy.go`
+  enforces it; [relay-system.md](relay-system.md#routing-rules) has why it must
+  come first). This is **defence in depth, not the guard**: the refusal is the
+  relaying server's, so it is only as current as that server. While an older
+  Pockode is still running beside a newer one — each of a cluster's nodes
+  moves to a new version only when it restarts — the older one's preview proxy does not know
+  `/api/pockode-local/` and forwards it to whatever port it previews, which may
+  be a newer node. The token is what that request still has to get past.
 
 ## Where the Password Comes From
 
@@ -288,14 +314,32 @@ so there is nothing on disk to brute-force; a per-request KDF would cost hundred
 of milliseconds to defend against an attack that cannot happen. The password is
 the opposite case and gets the opposite treatment — see below.
 
-**The exchange.** `auth` carries exactly one credential. A password issues a new
-token and returns it; a valid session token is returned **unchanged**, never
-rotated — two concurrent connections from one tab would otherwise invalidate each
-other's credential. So a client stores `session_token` unconditionally without
-tracking how it logged in. Sending both is refused (`invalid_params`), so a client
-cannot end up authenticated by a credential it did not think it was using. The
-pre-rename `token` parameter is still accepted as a spelling of `password`,
-because a PWA cached on a phone may still be sending it.
+**The exchange.** A password issues a new token and returns it; a valid
+session token is returned **unchanged**, never rotated — two concurrent
+connections from one tab would otherwise invalidate each other's credential. So
+a client stores `session_token` unconditionally without tracking how it logged
+in. A password with any other credential is refused (`invalid_params`), so a
+client cannot end up authenticated by a credential it did not think it was
+using. The pre-rename `token` parameter is still accepted as a spelling of
+`password`, because a PWA cached on a phone may still be sending it.
+
+A node server also takes a `login_ticket`, alone or beside a session token —
+the two are not alternatives, since a browser opened from the cluster carries
+a ticket and may already hold a session from an earlier visit
+([below](#a-node-can-be-logged-in-by-its-cluster)):
+
+1. The ticket is **redeemed first**, before anything can refuse the request, so
+   the first connect that carries it spends it whatever that connect's outcome —
+   the `invalid_params` above included. The copy the URL left in browser
+   history is then worthless.
+2. A live session token is kept and returned unchanged; the ticket, valid or
+   not, is merely spent. Issuing a session per Open would fill the cap and
+   evict other devices.
+3. A dead session token with no ticket is `session_expired`, as ever; with a
+   ticket, the ticket decides.
+4. A valid ticket issues a new session, like a password; an unknown, spent or
+   expired one is `invalid_ticket`. The password branch is never reached, so a
+   ticket request is never counted by the lockout.
 
 The server issues the token only **after** the requested worktree is bound. A
 client that keeps asking for a worktree that no longer exists would otherwise burn
@@ -310,8 +354,9 @@ clients branch on that rather than on the prose message:
 | `invalid_password` | The password is wrong | Stay on the password screen, show the error |
 | `rate_limited` | Too many wrong passwords; passwords are refused unchecked — the right one included — for `data.retry_after_ms` more milliseconds (see [Failed password attempts](#failed-password-attempts-are-rate-limited)) | Return to the password screen without a "wrong password" error, count the wait down there and hold submit until it is over; never retry on its own |
 | `session_expired` | The stored token is unknown or past its idle window | Drop it silently and ask for the password — the user did nothing wrong |
+| `invalid_ticket` | The login ticket is unknown, spent or past `authsession.TicketTTL`, and no live session token came with it | Ask for the password; never resend the ticket, which the attempt spent |
 | `not_authenticated` | Some other method arrived before `auth`; the connection is closed | A client that reaches this has a bug — nothing is sent before `auth` |
-| `worktree_not_found` | The credential was fine; the worktree asked for is gone | Fall back to the main worktree and retry once |
+| `worktree_not_found` | The credential was fine; the worktree asked for is gone | Fall back to the main worktree and retry once — with a session token or the password; a login ticket was spent by the refused attempt |
 
 `worktree_not_found` exists so that the retry is driven by a reason being
 present rather than by the credential reasons being absent. A client that
@@ -343,6 +388,35 @@ SHA-256, and anything that goes wrong with it falls back to the password page.
 A browser that already has a session on that host keeps it. Why it is a
 server-held ticket rather than a signed token, and the endpoint's rules, are in
 [Port Previews → Logging In](relay-system.md#logging-in).
+
+### A node can be logged in by its cluster
+
+Opening a node from the cluster panel does not ask for the node's password.
+The panel asks the cluster for a ticket (`node.login_ticket`); the cluster asks
+the node for one on its [local API](#the-local-api-uses-a-separate-token), with
+the token from that node's `server.json`; the browser opens the node with the
+ticket and its WebSocket `auth` redeems it for an ordinary session. The wire
+contract of each hop is in
+[WebSocket JSON-RPC → Logging In from the Cluster](websocket-rpc.md#logging-in-from-the-cluster).
+
+So **a cluster login now grants every running node.** That is no escalation,
+because it already did: the cluster can stop any node and start it again with a
+password of its own choosing, and it runs as the same OS user as every node, so
+it can read each `server.json` — [local code is inside the
+boundary](#local-code-is-inside-the-boundary). The ticket only spares the user
+the detour. What the cluster's password guards has not changed in kind, only in
+how directly it is used; it is one more reason to [generate that
+password](../cluster.md#usage) rather than choose one.
+
+The ticket is a set of its own (`appLoginTickets` in `server/main.go`), not
+the preview tickets': each kind is redeemed only by what it was issued for, so
+neither logs in as the other. Like a preview ticket it is single-use, lives
+`authsession.TicketTTL`, is held in memory as its SHA-256, and redeems only on
+the node that issued it. It has to travel in a URL — the browser is opened on
+another origin with nothing else to carry it — which is why it is worth so
+little once used ([Local code is inside the
+boundary](#local-code-is-inside-the-boundary)). Anything that goes wrong falls
+back to the node's password page.
 
 ### Raw capabilities: URLs a browser element loads by itself
 
@@ -695,7 +769,7 @@ in. Nodes keep receiving their password through `POCKODE_PASSWORD` in `cmd.Env`.
 
 ## Credentials on Disk
 
-Five files hold secrets: `server.json` (the MCP local token), `relay.json` (the
+Five files hold secrets: `server.json` (the local API token), `relay.json` (the
 relay token), `sessions.json` (the session hashes and the password fingerprint),
 `cloud.json` (the machine token linking this machine to a cloud account, kept in
 the OS user's configuration directory rather than a data directory — see
@@ -798,17 +872,18 @@ model (e.g. multi-user hosting) revisits them rather than rediscovering them:
 |---------|------|
 | Password source, env scrubbing & comparison | `server/password/` |
 | Failed-password lockout | `server/authguard/` |
-| Session issue/validate, password fingerprint, one-time preview tickets, raw capabilities | `server/authsession/` |
+| Session issue/validate, password fingerprint, one-time preview and login tickets, raw capabilities | `server/authsession/` |
 | HTTP Bearer auth | `server/middleware/auth.go` |
 | WebSocket `auth` gate | `server/ws/rpc.go`, `server/cluster/ws.go` |
 | Port preview login (password & ticket) & cookie | `server/relay/preview_auth.go` |
 | Preview ticket issue | `server/ws/rpc_port_preview.go` |
+| Login ticket issue (node) and fetch (cluster) | `server/localapi/`, `server/cluster/node/login_ticket.go` |
 | Raw capability issue | `server/ws/rpc_raw.go` |
 | Raw endpoint: scope, path safety, CORS and response headers | `server/filetransfer/raw.go`; resolved names for what the root scope withholds in `server/contents/realname_{unix,windows}.go` |
 | Raw endpoint routed ahead of auth; capability masked in logs | `server/main.go` (`newHandler`), `server/apiroute/`, `server/relay/proxy.go` |
 | Wire types and refusal reasons | `server/rpc/types.go` |
 | Frontend credential store | `packages/shared/src/stores/createAuthStore.ts`, `packages/shared/src/utils/auth.ts` |
-| MCP local API token | `server/mcp/handler.go`, `server/serverinfo/serverinfo.go` |
-| Relay MCP rejection | `server/apiroute/`, `server/relay/proxy.go` |
+| Local API token | `server/localapi/`, `server/mcp/handler.go`, `server/serverinfo/serverinfo.go` |
+| Relay refusal of local-only routes | `server/apiroute/`, `server/relay/proxy.go` |
 | Cluster node password delivery | `server/cluster/node/process.go` |
 | On-disk restriction of credentials | `server/internal/fsperm/` |
