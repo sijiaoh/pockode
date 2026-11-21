@@ -1,10 +1,8 @@
 import {
-	type AuthCredential,
 	authFailureReason,
 	authRetryAfterMs,
 	type CloudLinkChangedNotification,
 	type CloudLinkStatus,
-	credentialParams,
 	restartRefusedReason,
 	UPDATE_RPC_TIMEOUT_MS,
 	type UpdateCandidate,
@@ -79,6 +77,11 @@ import { generateUUID } from "../utils/uuid";
 import { authActions } from "./authStore";
 import { asOneFileDiff } from "./drawablePatch";
 import {
+	type AppAuthCredential,
+	appCredentialParams,
+	withoutLoginTicket,
+} from "./loginTicket";
+import {
 	type AgentActions,
 	type AgentRoleActions,
 	type AttachmentActions,
@@ -134,7 +137,7 @@ export type ConnectionStatus =
 	| "error";
 
 interface ConnectionActions {
-	connect: (credential: AuthCredential) => void;
+	connect: (credential: AppAuthCredential) => void;
 	disconnect: () => void;
 	/** Skip the remaining backoff and attempt to reconnect immediately. */
 	retryNow: () => void;
@@ -408,7 +411,7 @@ interface WSState {
 // Module-level state for mutable objects (not reactive)
 let ws: WebSocket | null = null;
 let rpcClients: RPCClients | null = null;
-let currentCredential: AuthCredential | null = null;
+let currentCredential: AppAuthCredential | null = null;
 let reconnectTimeout: number | undefined;
 // Worktree-scoped watch callbacks.
 // Their server-side watchers live on the worktree and are torn down when the
@@ -1102,7 +1105,7 @@ export const useWSStore = create<WSState>((set, get) => ({
 	serverUpdate: null,
 
 	actions: {
-		connect: (credential: AuthCredential) => {
+		connect: (credential: AppAuthCredential) => {
 			const currentStatus = get().status;
 			// "error" now means only "no credential to connect with", which
 			// genuinely needs the user; a connection that keeps failing stays in
@@ -1146,10 +1149,15 @@ export const useWSStore = create<WSState>((set, get) => ({
 				const clients = createRPCClient(socket);
 				rpcClients = clients;
 
+				// The server spends a login ticket on this attempt whatever comes of
+				// it, so a retry or a reconnect from here on has at most the session
+				// token that came with it.
+				currentCredential = withoutLoginTicket(credential);
+
 				try {
 					const currentWorktree = worktreeActions.getCurrent();
 					const result = (await clients.withTimeout.request("auth", {
-						...credentialParams(credential),
+						...appCredentialParams(credential),
 						worktree: currentWorktree || undefined,
 					} as AuthParams)) as AuthResult;
 
@@ -1196,13 +1204,16 @@ export const useWSStore = create<WSState>((set, get) => ({
 
 					const reason = authFailureReason(error);
 
-					// A stored session the server no longer knows is nobody's mistake:
-					// drop it and fall back to the password screen without an error.
-					if (reason === "session_expired") {
+					// A stored session the server no longer knows is nobody's mistake,
+					// and nor is a ticket that expired before the tab got to use it:
+					// drop them and fall back to the password screen without an error.
+					// A refused ticket says any session token beside it was dead too —
+					// a live one would have been kept.
+					if (reason === "session_expired" || reason === "invalid_ticket") {
 						authActions.forgetSession();
 						currentCredential = null;
 						set({ status: "disconnected" });
-						socket.close(1000, "session_expired");
+						socket.close(1000, reason);
 						return;
 					}
 
@@ -1233,6 +1244,11 @@ export const useWSStore = create<WSState>((set, get) => ({
 								: null,
 					});
 					socket.close(1000, "auth_failed");
+				} finally {
+					// Last, so that the credential the page reads goes straight from
+					// the ticket to what came of it — never through "none", which
+					// would tear down the connection being set up.
+					if (credential.kind === "login_ticket") authActions.dropLoginTicket();
 				}
 			};
 

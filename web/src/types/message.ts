@@ -1,4 +1,4 @@
-import type { AuthCredentialParams } from "@pockode/shared";
+import type { AppAuthCredentialParams } from "../lib/loginTicket";
 import type { ContentBlock, FileBlock } from "./content";
 import type { AgentType } from "./settings";
 import type { WorkType } from "./work";
@@ -800,8 +800,8 @@ export interface QuestionAnswerParams {
 
 // JSON-RPC 2.0 Request Params (Client → Server)
 
-/** The credential (see `AuthCredentialParams`) plus the worktree to bind to. */
-export interface AuthParams extends AuthCredentialParams {
+/** The credential (see `AppAuthCredentialParams`) plus the worktree to bind to. */
+export interface AuthParams extends AppAuthCredentialParams {
 	worktree?: string;
 }
 

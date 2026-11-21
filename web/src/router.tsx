@@ -7,8 +7,10 @@ import {
 import { z } from "zod";
 import AppCrashScreen from "./components/AppCrashScreen";
 import AppShell from "./components/AppShell";
+import { authActions } from "./lib/authStore";
 import { historyTrailFor } from "./lib/historyTrail";
 import { layerHistoryFor } from "./lib/layerHistory";
+import { takeLoginTicketFromAddress } from "./lib/loginTicket";
 import { ROUTES, WT_CHILD_ROUTES, WT_ROUTES } from "./lib/routes";
 import { scrollMemoryFor } from "./lib/scrollMemory";
 
@@ -357,6 +359,13 @@ export const routeTree = rootRoute.addChildren([
 		wtSchedulesRoute,
 	]),
 ]);
+
+// A login ticket out of the address before there is a history at all: the
+// trail below copies the page it starts on into sessionStorage, and the ticket
+// must never be in it (lib/loginTicket.ts). A statement here rather than an
+// import's side effect, which import sorting would be free to move.
+const loginTicket = takeLoginTicketFromAddress();
+if (loginTicket) authActions.holdLoginTicket(loginTicket);
 
 // The layers first: a reload under one strips its marker from the entry the
 // app starts on, and from then on every push is held behind their entries.

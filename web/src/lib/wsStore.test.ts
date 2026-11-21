@@ -329,6 +329,97 @@ describe("wsStore", () => {
 			expect(useWSStore.getState().status).toBe("disconnected");
 		});
 
+		describe("with a login ticket", () => {
+			function connectWithTicket(sessionToken?: string) {
+				if (sessionToken) authActions.rememberSession(sessionToken);
+				authActions.holdLoginTicket("the-ticket");
+				const credential = authActions.getCredential();
+				if (!credential) throw new Error("no credential");
+				wsActions.connect(credential);
+				return getMockWs() as MockWebSocket;
+			}
+
+			function authFrames() {
+				return mockWsInstances.flatMap((ws) =>
+					ws.send.mock.calls
+						.map(([data]) => JSON.parse(data))
+						.filter((frame) => frame.method === "auth")
+						.map((frame) => frame.params),
+				);
+			}
+
+			// The server spends the ticket and keeps a live session, so trying
+			// the session first would only cost a round trip.
+			it("sends it once, beside the stored session", async () => {
+				const ws = connectWithTicket("stored-session");
+				ws.simulateOpen();
+				await vi.runAllTimersAsync();
+				expect(useWSStore.getState().status).toBe("connected");
+
+				ws.simulateClose();
+				await vi.runAllTimersAsync();
+				getMockWs()?.simulateOpen();
+				await vi.runAllTimersAsync();
+
+				expect(authFrames()).toEqual([
+					{ login_ticket: "the-ticket", session_token: "stored-session" },
+					{ session_token: TEST_SESSION_TOKEN },
+				]);
+				expect(authActions.getCredential()).toEqual({
+					kind: "session_token",
+					value: TEST_SESSION_TOKEN,
+				});
+			});
+
+			it("keeps the session a ticket alone was exchanged for", async () => {
+				connectWithTicket().simulateOpen();
+				await vi.runAllTimersAsync();
+
+				expect(authFrames()).toEqual([{ login_ticket: "the-ticket" }]);
+				expect(localStorage.getItem("auth_session_token")).toBe(
+					TEST_SESSION_TOKEN,
+				);
+			});
+
+			// The ticket expired before the tab got to use it: the user did
+			// nothing wrong, so no "wrong password" screen.
+			it("falls back to the password screen quietly when refused", async () => {
+				const ws = connectWithTicket("dead-session");
+				ws.mockAuthFailure("invalid_ticket");
+				ws.simulateOpen();
+				await vi.runAllTimersAsync();
+
+				expect(useWSStore.getState().status).toBe("disconnected");
+				expect(authActions.getCredential()).toBeNull();
+				expect(mockWsInstances).toHaveLength(1);
+			});
+
+			// The refused attempt spent the ticket, so the retry against main
+			// has only the session that came with it.
+			it("does not resend it on the worktree retry", async () => {
+				worktreeActions.setCurrent("gone");
+				try {
+					const ws = connectWithTicket("stored-session");
+					ws.mockAuthFailure("worktree_not_found");
+					ws.simulateOpen();
+					await vi.runAllTimersAsync();
+					getMockWs()?.simulateOpen();
+					await vi.runAllTimersAsync();
+
+					expect(authFrames()).toEqual([
+						{
+							login_ticket: "the-ticket",
+							session_token: "stored-session",
+							worktree: "gone",
+						},
+						{ session_token: "stored-session" },
+					]);
+				} finally {
+					worktreeActions.reset();
+				}
+			});
+		});
+
 		// Every password is refused until the wait is over, so retrying on our
 		// own would only spend attempts that cannot succeed; the user is told
 		// when to try again instead.
