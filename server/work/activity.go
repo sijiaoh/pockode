@@ -12,7 +12,7 @@ import (
 // happening right now. Nothing on screen may spell a state out of those parts
 // itself — see docs/lifecycle-ui.md.
 //
-// Nine leaves, and there is never more than one: the layers it is derived from
+// Ten leaves, and there is never more than one: the layers it is derived from
 // are each exclusive.
 //
 // It is not the whole of what a row draws. "This work has questions waiting for
@@ -26,8 +26,13 @@ const (
 	ActivityOpen Activity = "open"
 	// ActivityRunning is a turn producing output.
 	ActivityRunning Activity = "running"
-	// ActivityNeedsPermission is a turn blocked on a permission request.
+	// ActivityNeedsPermission is a turn blocked on a permission request that
+	// waits on a person.
 	ActivityNeedsPermission Activity = "needs_permission"
+	// ActivityReviewingPermission is a turn blocked only on permission requests
+	// the session's permission reviewer has taken (session.Blocker.Reviewing):
+	// an answer is under way, and a person is not the one holding it up.
+	ActivityReviewingPermission Activity = "reviewing_permission"
 	// ActivityBackground is a turn parked on work that outlives the tool call
 	// that started it. Nothing for the user to do, and nothing is stuck.
 	ActivityBackground Activity = "background"
@@ -48,9 +53,10 @@ const (
 )
 
 // NeedsUser reports whether the user is the one holding this work up. It is
-// exactly one leaf now — a permission request — because a background wait and a
-// wait on children are things happening rather than things to do, and a question
-// an agent posted holds nothing up at all.
+// exactly one leaf now — a permission request nobody else is answering —
+// because a request under review is the reviewer's to answer, a background wait
+// and a wait on children are things happening rather than things to do, and a
+// question an agent posted holds nothing up at all.
 //
 // It is therefore not the whole of the attention dot: a work with unanswered
 // questions needs the user too, and no activity can say so (see RowState). The
@@ -118,12 +124,15 @@ func DeriveActivity(w Work, turn session.TurnState, watching int) Activity {
 // blockedActivity picks the leaf for a blocked turn. Permission outranks
 // background because background is the one nobody can act on — and those are
 // the only two blockers left, now that a question belongs to the session rather
-// than to a turn.
+// than to a turn. Among permission requests, one waiting on a person outranks
+// those under review: the turn resumes only once every request is answered, so
+// the person is holding it up whatever the reviewer does.
 func blockedActivity(turn session.TurnState) Activity {
-	for _, b := range turn.Blockers {
-		if b.Kind == session.BlockerPermission {
-			return ActivityNeedsPermission
-		}
+	switch {
+	case turn.AwaitingPerson():
+		return ActivityNeedsPermission
+	case turn.AwaitingUserAnswer():
+		return ActivityReviewingPermission
 	}
 	return ActivityBackground
 }

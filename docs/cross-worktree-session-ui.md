@@ -72,6 +72,7 @@ of its own:
 
 ```
 Show task sessions
+Show reviewer sessions
 ──────────────────────────────
 WORKTREES
   ○ This worktree
@@ -105,6 +106,12 @@ DELETED
 - Choosing a worktree closes the panel; the checkbox above it does not. A choice
   among several is over once made, and on a phone the panel sits over the very
   list it just changed. A toggle is flipped, looked at, and often flipped back.
+
+`Show reviewer sessions` is the second checkbox, the same kind as the first:
+persisted, sent as `exclude_permission_reviewer_sessions` to both
+`session.list.subscribe` and `session_view.list`, and no part of the dot or the
+rename below — both checkboxes are preferences, not somebody else's list
+([unattended-mode-ui.md §4](unattended-mode-ui.md#4-the-session-list)).
 
 While the filter is anything but `This worktree`, the trigger button carries a
 `BadgeDot` and renames itself (`Filter sessions, showing worktree feature-x` /
@@ -244,6 +251,14 @@ that worktree regardless.
 
 The same `ChatPanel`, with three strips changed and several controls gone.
 
+It is one of two kinds of read-only. The other is a permission reviewer, a live
+session of this worktree that takes no input from a person; it shares the
+composer's replacement and little else, and which features each kind turns off
+is tabled in
+[unattended-mode-ui.md §5](unattended-mode-ui.md#5-the-reviewer-session-page).
+In `ChatPanel` the two are separate conditions — `isReadOnly` for this screen,
+`noInput` for either — never one wider flag.
+
 **Which of its two wordings a user actually meets.** Nothing in the app routes
 here for a worktree that still exists: a sidebar row and a work's chat link both
 switch to it instead, and the only way to *read* a live worktree's session from
@@ -265,7 +280,9 @@ screen, next to where an answer would have been typed.
 
 ### Bottom: what stands where the composer stood
 
-`ReadOnlyBar` replaces `InputBar` — it does not disable it. A disabled box invites
+`ReadOnlyBar` replaces `InputBar` — it does not disable it. It takes its
+sentence and its one optional action from the caller; the copy below is this
+screen's. A disabled box invites
 the user to wait for it to come back, and nothing is coming back: the execution
 environment is elsewhere, or gone. It is as tall as the composer's single-line
 state, so moving between a live session and a viewed one does not make the page

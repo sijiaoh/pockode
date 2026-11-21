@@ -137,9 +137,12 @@ them it is the normal state, not an exception, and a mark that keeps warning
 about a choice made on purpose is one they learn to look past while it goes on
 pulling at the eye from the top of every screen. So the second line is one muted
 line (`text-xs text-th-text-muted`) in every mode, and the only colour on it is
-the mode's glyph: YOLO's `Zap`, `size-3`, in `text-th-warning`, with the word
-beside it muted like the engine's; Default has no glyph, since the mode that
-changes nothing needs no mark. That is less than the old mode bar's button
+the mode's glyph: YOLO's `Zap` or Unattended's `Bot`, `size-3`, in
+`text-th-warning`, with the word beside it muted like the engine's; Default has
+no glyph, since the mode that changes nothing needs no mark. A mode this build
+does not know is named by its raw id beside a muted `CircleHelp` — never as
+Default, since a session with its gates down must not read as one that keeps
+them ([unattended-mode-ui.md §2.4](unattended-mode-ui.md#24-a-mode-this-build-does-not-know)). That is less than the old mode bar's button
 spent — it tinted the word as well, on a bordered button down by the composer —
 and that much was already enough: one small spot of colour is findable by
 anyone who looks for it and too small to catch an eye that is not looking.
@@ -159,10 +162,15 @@ order, what decides the next message and then what describes the ones sent:
   three lists (`Chat/EngineSections.tsx`) in the same panel, with a `‹ Engine` row
   back. On a phone, three lists side by side would leave the drawer showing
   nothing but the engine.
-- **Permissions** — Default / YOLO, two rows, in place, each with its glyph
-  (`Shield`, `Zap`) and its description, coloured by the second line's rule
-  above. What a choice costs is said by the description ("Skips all
-  permissions"), at the one moment it is being made.
+- **Permissions** — Default / YOLO / Unattended, three rows, in place, each
+  with its glyph (`Shield`, `Zap`, `Bot`) and its description, coloured by the
+  second line's rule above. What a choice costs is said by the description
+  ("Skips all permissions"), at the one moment it is being made. Unattended's
+  cannot say it all — that it is *more* permissive than YOLO, and spends tokens
+  on a reviewer — so choosing it opens a confirmation first, which a custom
+  `ModeSelector` goes through too (`hooks/useModeConfirmation.tsx`,
+  [unattended-mode-ui.md §2.2](unattended-mode-ui.md#22-choosing-it-the-confirmation)).
+  Under an unknown mode no row is selected, and a line says so.
 - **Work** and **Usage** — the session's facts
   ([usage-display-ui.md](usage-display-ui.md),
   [work-system.md](code/work-system.md#session-to-work-navigation)).

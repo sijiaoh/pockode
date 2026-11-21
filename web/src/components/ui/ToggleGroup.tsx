@@ -16,10 +16,12 @@ export default function ToggleGroup<T extends string>({
 	error,
 	valueState = "known",
 	disabled = false,
+	compactBelowSm = false,
 }: {
 	label: string;
 	items: readonly T[];
-	selected: T;
+	/** Null lights no segment: the stored value is none of `items`. */
+	selected: T | null;
 	onSelect: (value: T) => void;
 	getInfo: (value: T) => {
 		label: string;
@@ -39,6 +41,14 @@ export default function ToggleGroup<T extends string>({
 	 * the native attribute, which would drop focus from the segment just pressed.
 	 */
 	disabled?: boolean;
+	/**
+	 * For a group whose labels and glyphs together do not fit one line on a
+	 * narrow phone, where a squeezed segment shrinks its glyph and breaks its
+	 * label mid-word rather than overflowing. Below `sm` every segment drops its
+	 * glyph, alike, and a segment never gets narrower than its label. Measured,
+	 * not assumed: see `ToggleGroup.browser.test.tsx`.
+	 */
+	compactBelowSm?: boolean;
 }) {
 	const hasValue = valueState === "known";
 
@@ -70,14 +80,17 @@ export default function ToggleGroup<T extends string>({
 								}}
 								aria-pressed={isSelected}
 								aria-disabled={disabled || undefined}
-								className={`flex min-h-11 flex-1 items-center justify-center gap-1.5 rounded-md px-3 py-2 text-sm transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent ${disabled ? "cursor-default" : "active:scale-95"} ${
+								className={`flex min-h-11 flex-1 items-center ${compactBelowSm ? "min-w-fit" : ""} justify-center gap-1.5 rounded-md px-3 py-2 text-sm transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent ${disabled ? "cursor-default" : "active:scale-95"} ${
 									isSelected
 										? "bg-th-bg-tertiary text-th-text-primary shadow-sm"
 										: "text-th-text-muted hover:text-th-text-secondary"
 								}`}
 							>
 								{info.icon && (
-									<info.icon className="h-4 w-4" aria-hidden="true" />
+									<info.icon
+										className={`h-4 w-4 ${compactBelowSm ? "hidden sm:block" : ""}`}
+										aria-hidden="true"
+									/>
 								)}
 								<span>{info.label}</span>
 							</button>

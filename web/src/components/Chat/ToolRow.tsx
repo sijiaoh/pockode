@@ -39,7 +39,14 @@ const settledGlyphs: Record<
  * Accent then, as the turn's tail line is, so the dot still reads as "live"
  * beside the muted ticks of the settled rows.
  */
-export function RunningGlyph({ label }: { label: string }) {
+export function RunningGlyph({
+	label,
+	muted,
+}: {
+	label: string;
+	/** For work that is not the user's to watch, such as a review under way. */
+	muted?: boolean;
+}) {
 	return (
 		// biome-ignore lint/a11y/useSemanticElements: not a form's output, as in Spinner itself
 		<span
@@ -47,7 +54,7 @@ export function RunningGlyph({ label }: { label: string }) {
 			aria-label={label}
 			// Aligned with line 1 rather than centred on a row that may have two
 			// lines, same as the chevron beside it.
-			className="mt-0.5 flex size-3 shrink-0 items-center justify-center"
+			className={`mt-0.5 flex size-3 shrink-0 items-center justify-center ${muted ? "text-th-text-muted" : ""}`}
 		>
 			{/* Hidden because `Spinner` is a status of its own, and the label is
 			    this span's: it has to outlive whichever glyph is showing. */}
@@ -56,7 +63,7 @@ export function RunningGlyph({ label }: { label: string }) {
 			</span>
 			<CircleDot
 				aria-hidden
-				className="hidden size-3 text-th-accent motion-reduce:block"
+				className={`hidden size-3 motion-reduce:block ${muted ? "text-th-text-muted" : "text-th-accent"}`}
 			/>
 		</span>
 	);
@@ -334,6 +341,28 @@ export function StaticRow({
 }) {
 	return (
 		<div className={ROW_BOX}>
+			<RowColumns lead={NO_CHEVRON} glyph={glyph}>
+				{children}
+			</RowColumns>
+		</div>
+	);
+}
+
+/**
+ * A line under a row, outside its button, on the row's columns: the text sits
+ * under the title, and `glyph` (blank by default) under the row's glyph. For
+ * what a row says beneath itself that holds a control of its own, which the
+ * row's button cannot contain.
+ */
+export function RowSubline({
+	glyph = NO_CHEVRON,
+	children,
+}: {
+	glyph?: ReactNode;
+	children: ReactNode;
+}) {
+	return (
+		<div className="px-2 pb-1.5 sm:px-2.5">
 			<RowColumns lead={NO_CHEVRON} glyph={glyph}>
 				{children}
 			</RowColumns>

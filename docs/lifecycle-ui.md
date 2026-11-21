@@ -26,7 +26,7 @@ The new model makes waiting explicit, so the UI's job becomes narrow:
 
 ### 1.1 Activity
 
-`Activity` is the only state any surface paints. Nine leaves, and there is never
+`Activity` is the only state any surface paints. Ten leaves, and there is never
 more than one — the layers it is derived from are each exclusive.
 
 It answers **what the session is doing**, and only that. What the user has to
@@ -39,7 +39,8 @@ two answers, and both halves are true at once.
 |---|---|---|---|---|
 | `open` | Work exists, never started | `Circle` | muted | Open |
 | `running` | A turn is producing output | `CircleDot` | accent | Running |
-| `needs_permission` | Turn blocked on a permission request | `Lock` | warning | Needs permission |
+| `needs_permission` | Turn blocked on a permission request that waits on a person | `Lock` | warning | Needs permission |
+| `reviewing_permission` | Turn blocked only on permission requests the permission reviewer is answering | `Bot` | muted | Reviewing permission |
 | `background` | Turn blocked on a background task | `Hourglass` | secondary | Background task |
 | `waiting_children` | Work waits on subtasks (`story_wait`) | `Clock` | accent | Waiting on subtasks |
 | `watching` | Session between turns watches stories that are `active` | `Eye` | accent | Watching stories |
@@ -48,11 +49,11 @@ two answers, and both halves are true at once.
 | `closed` | Finished | `CircleCheck` | muted | Closed |
 
 Glyphs are all lucide icons the app already imports, except `Lock` and
-`Hourglass` (`Eye` was already the file editor's). Nothing else is new: tones are the existing `th-*` semantic tokens
+`Hourglass` (`Eye` was already the file editor's, `Bot` the Unattended mode's). Nothing else is new: tones are the existing `th-*` semantic tokens
 (`text-th-accent`, `text-th-warning`, `text-th-text-secondary`,
 `text-th-text-muted`, `text-th-error`).
 
-Five decisions inside that table are load-bearing:
+Six decisions inside that table are load-bearing:
 
 - **`running` and `idle` share `CircleDot`; only the colour differs.** They are
   the same thing — a live, engine-driven work — differing in whether a turn is
@@ -67,6 +68,14 @@ Five decisions inside that table are load-bearing:
   they used to say is said by the question count instead — which is what lets it
   be true at the same time as `running`, and that is the one thing an exclusive
   leaf could never express.
+- **A request under review is not a "needs you" leaf.** In unattended mode the
+  session's permission reviewer answers what YOLO still asks, and the server
+  marks such a blocker `reviewing` from the moment it is raised
+  ([unattended-mode.md](unattended-mode.md#a-request-under-review)). It can
+  still be answered by hand — the chat shows how
+  ([unattended-mode-ui.md](unattended-mode-ui.md)) — but calling the user to it
+  from a list is exactly what the mode exists to spare them. So it is muted,
+  outside `needsAttention`, and its `Bot` glyph says who has it.
 - **`background` is deliberately quiet.** `text-th-text-secondary`, no spinner,
   no accent. There is nothing for the user to do and nothing is stuck; the whole
   point of surfacing it is to stop it *impersonating* activity. A tone louder
@@ -97,8 +106,9 @@ activity(work, turn, watching):  // work may be absent; turn may be absent
   work.status == "stopped" -> stopped
   // status == "active"
   turn.phase == "running"  -> running
-  turn.phase == "blocked"  -> permission in turn.blockers -> needs_permission
-                              otherwise (background)      -> background
+  turn.phase == "blocked"  -> a permission blocker not reviewing -> needs_permission
+                              permission blockers, all reviewing -> reviewing_permission
+                              otherwise (background)             -> background
   // turn.phase == "idle", or there is no turn at all
   work.wait == "child"     -> waiting_children
   watching > 0             -> watching
@@ -389,6 +399,7 @@ vocabulary outside the map that owns it.
 |---|---|---|
 | `running` | spinner, accent | "Agent is running" |
 | `needs_permission` | `Lock` warning | "Waiting for your permission" |
+| `reviewing_permission` | `Bot` muted | "Permission reviewer is answering a request" |
 | `waiting_children` | `Clock` accent | "Waiting on subtasks" |
 | `background` | `Hourglass` secondary | "Waiting on a background task" |
 | `watching` | `Eye` accent | "Watching 1 story" / "Watching {n} stories" |
@@ -514,6 +525,12 @@ one text line, read "what, then how" with the answers at the thumb's end:
 - **Card not loaded** — the event has not arrived, or the card sits in history
   not paged in: the row falls back to the old statement, "Waiting for your
   permission. Answer above or Stop before sending." with "Jump to request".
+- **Under review** — every permission blocker carries `reviewing`: the row
+  swaps `Lock` for a muted `Bot`, leads with `Reviewing ·`, and Allow loses its
+  accent; Deny and Allow still answer (first answer wins). Its fallback reads
+  "The permission reviewer is answering a request. Answer it yourself or Stop
+  before sending." One blocker not under review makes it the ordinary row
+  ([unattended-mode-ui.md §3.3](unattended-mode-ui.md#33-the-attention-strip)).
 
 The strip reads the cards as `ChatPanel` hands them over — the blockers'
 requests looked up at every depth of the transcript (a subagent's card is filed

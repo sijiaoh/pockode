@@ -11,14 +11,14 @@ import {
 
 function turn(
 	phase: SessionTurn["phase"],
-	blockers?: TurnBlocker["kind"][],
+	blockers?: (TurnBlocker["kind"] | Pick<TurnBlocker, "kind" | "reviewing">)[],
 ): SessionTurn {
 	return {
 		phase,
 		open: phase !== "idle",
 		since: "2026-01-01T00:00:00Z",
-		blockers: blockers?.map((kind) => ({
-			kind,
+		blockers: blockers?.map((blocker) => ({
+			...(typeof blocker === "string" ? { kind: blocker } : blocker),
 			raised_at: "2026-01-01T00:00:00Z",
 		})),
 	};
@@ -71,6 +71,18 @@ describe("sessionActivity", () => {
 		expect(sessionActivity(turn("blocked", ["permission"]), undefined, 0)).toBe(
 			"needs_permission",
 		);
+	});
+
+	// An unattended chat is usually a plain chat, so the case the shared table
+	// states for a work has to hold without one too.
+	it("says a plain chat's request is under review, not waiting on the user", () => {
+		const activity = sessionActivity(
+			turn("blocked", [{ kind: "permission", reviewing: true }]),
+			undefined,
+			0,
+		);
+		expect(activity).toBe("reviewing_permission");
+		expect(needsAttention(activity)).toBe(false);
 	});
 });
 

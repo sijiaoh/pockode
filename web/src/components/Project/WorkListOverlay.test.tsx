@@ -336,6 +336,14 @@ describe("WorkListOverlay", () => {
 				status: "active",
 				activity: "waiting_children",
 			}),
+			// The permission reviewer has its request: calling the user to it is
+			// what unattended mode exists to spare them.
+			createWork({
+				id: "s3",
+				title: "Unattended Story",
+				status: "active",
+				activity: "reviewing_permission",
+			}),
 		]);
 
 		renderList();
@@ -343,6 +351,7 @@ describe("WorkListOverlay", () => {
 		expect(screen.queryByText("Needs you")).not.toBeInTheDocument();
 		expect(groupOf("Background Story")).toBe("In progress");
 		expect(groupOf("Coordinating Story")).toBe("In progress");
+		expect(groupOf("Unattended Story")).toBe("In progress");
 	});
 
 	it("renders no group it has no rows for", () => {

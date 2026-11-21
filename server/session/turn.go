@@ -68,6 +68,17 @@ type Blocker struct {
 	// RaisedAt is when the blocker appeared, which is what a budget is measured
 	// from once one exists.
 	RaisedAt time.Time `json:"raised_at"`
+	// Reviewing says a permission request has been taken by the session's
+	// permission reviewer (docs/unattended-mode.md), so it is not waiting on a
+	// person — though a person may still answer it, and the first answer wins.
+	// Set as the request is raised (TurnInput.Reviewing), when routing commits
+	// to the reviewer: from then on the request is answered by the reviewer or
+	// by Pockode's own deny, or ends with its process. Deciding it at the raise
+	// rather than after is what keeps the raise itself from calling anyone —
+	// the session going unread, a row saying "Needs permission" for a moment.
+	// A request routing gives back to the person is never marked. Always false
+	// for BlockerBackground.
+	Reviewing bool `json:"reviewing,omitempty"`
 }
 
 // TurnOutcome is how the last turn ended. Empty until one has.
@@ -252,6 +263,9 @@ type TurnInput struct {
 	// or the one SignalMessageDiscarded says was thrown away. Ignored by every
 	// other signal.
 	MessageID string
+	// Reviewing is SignalPermissionRaised's request going to the session's
+	// permission reviewer (Blocker.Reviewing). Ignored by every other signal.
+	Reviewing bool
 	// At is when this happened. Supplied by the caller rather than read from the
 	// clock inside so that the reducer stays a function of its arguments.
 	At time.Time
@@ -377,6 +391,7 @@ func ReduceTurn(state TurnState, in TurnInput) TurnTransition {
 	case SignalPermissionRaised:
 		next.Blockers = addBlocker(next.Blockers, Blocker{
 			Kind: BlockerPermission, RequestID: in.RequestID, RaisedAt: in.At,
+			Reviewing: in.Reviewing,
 		})
 
 	case SignalBackgroundParked:
@@ -628,7 +643,8 @@ func (t TurnState) equal(other TurnState) bool {
 	for i := range t.Blockers {
 		if t.Blockers[i].Kind != other.Blockers[i].Kind ||
 			t.Blockers[i].RequestID != other.Blockers[i].RequestID ||
-			!t.Blockers[i].RaisedAt.Equal(other.Blockers[i].RaisedAt) {
+			!t.Blockers[i].RaisedAt.Equal(other.Blockers[i].RaisedAt) ||
+			t.Blockers[i].Reviewing != other.Blockers[i].Reviewing {
 			return false
 		}
 	}
@@ -727,13 +743,29 @@ func (t TurnState) PendingQuestionFor(requestID string) (PendingQuestion, bool) 
 	return PendingQuestion{}, false
 }
 
-// AwaitingUserAnswer reports whether the turn is stuck on something only a
-// person can clear. This is what the session's old NeedsInput flag used to be
-// stored as, and deriving it is why that flag is gone: a stored copy had to be
-// cleared by whoever cleared the thing it described, from three different
-// places, and a missed one left a session marked as waiting forever.
+// AwaitingUserAnswer reports whether the turn is stuck on an answer — a
+// permission request, including one under review (Blocker.Reviewing), which a
+// person may still answer and which still holds the CLI. Whether a person is
+// the one needed is AwaitingPerson's question, not this. This is what the
+// session's old NeedsInput flag used to be stored as, and deriving it is why
+// that flag is gone: a stored copy had to be cleared by whoever cleared the
+// thing it described, from three different places, and a missed one left a
+// session marked as waiting forever.
 func (t TurnState) AwaitingUserAnswer() bool {
 	return t.BlockedOn(BlockerPermission)
+}
+
+// AwaitingPerson reports whether the turn waits on a permission request that
+// nobody but a person is answering — one not under review (Blocker.Reviewing).
+// The turn resumes only once every request is answered, so one such request is
+// enough, whatever a reviewer does with the rest.
+func (t TurnState) AwaitingPerson() bool {
+	for _, b := range t.Blockers {
+		if b.Kind == BlockerPermission && !b.Reviewing {
+			return true
+		}
+	}
+	return false
 }
 
 // WaitingForBackground reports whether the turn is parked on background work.

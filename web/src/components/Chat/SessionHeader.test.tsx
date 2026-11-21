@@ -6,6 +6,7 @@ import {
 	resetChatUIConfig,
 	setChatUIConfig,
 } from "../../lib/registries/chatUIRegistry";
+import { useSettingsStore } from "../../lib/settingsStore";
 import { makeSessionDetail } from "../../test/sessionFixtures";
 import type { SessionDetail, SessionUsage } from "../../types/message";
 import SessionHeader from "./SessionHeader";
@@ -142,6 +143,29 @@ describe("SessionHeader", () => {
 			expect(mode.querySelector("svg")).toHaveClass("text-th-warning");
 		});
 
+		it("marks Unattended in the warning colour, as YOLO", () => {
+			render(<SessionHeader {...headerProps({ mode: "unattended" })} />);
+
+			expect(trigger()).toHaveAccessibleName(
+				"Session: Fix the login bug, Opus · Unattended",
+			);
+			const mode = screen.getByText("Unattended");
+			expect(mode.querySelector("svg")).toHaveClass("text-th-warning");
+		});
+
+		// A newer server's mode must not wear Default's name: a session with its
+		// gates down would read as one that keeps them.
+		it("names a mode this build does not know by its own id", () => {
+			render(<SessionHeader {...headerProps({ mode: "turbo" })} />);
+
+			expect(trigger()).toHaveAccessibleName(
+				"Session: Fix the login bug, Opus · turbo",
+			);
+			expect(screen.getByText("turbo").querySelector("svg")).toHaveClass(
+				"text-th-text-muted",
+			);
+		});
+
 		// The placeholder mode is the calm one: a session running with no
 		// prompts must not wear Default's name for a round trip.
 		it("names neither engine nor mode before the session describes itself", () => {
@@ -227,10 +251,150 @@ describe("SessionHeader", () => {
 		it("sends a new mode and stays open", async () => {
 			const { user, props } = await openHeader();
 
-			await user.click(screen.getByRole("radio", { name: /YOLO/ }));
+			await user.click(screen.getByRole("radio", { name: /^YOLO/ }));
 
 			expect(props.onModeChange).toHaveBeenCalledWith("yolo");
 			expect(panel()).toBeInTheDocument();
+		});
+
+		describe("choosing Unattended", () => {
+			const confirmDialog = () =>
+				screen.getByRole("dialog", { name: "Turn on Unattended?" });
+
+			beforeEach(() => {
+				useSettingsStore.setState({
+					settings: {
+						permission_reviewer: {
+							claude: { model: "opus", effort: "high" },
+						},
+					},
+				});
+			});
+			afterEach(() => {
+				useSettingsStore.setState({ settings: null });
+			});
+
+			// It is more permissive than YOLO, which its description cannot say.
+			it("sends nothing until it is confirmed", async () => {
+				const { user, props } = await openHeader();
+
+				await user.click(screen.getByRole("radio", { name: /Unattended/ }));
+
+				expect(confirmDialog()).toHaveTextContent(
+					"Unattended is YOLO and more.",
+				);
+				expect(props.onModeChange).not.toHaveBeenCalled();
+
+				await user.click(
+					screen.getByRole("button", { name: "Turn on Unattended" }),
+				);
+
+				expect(props.onModeChange).toHaveBeenCalledWith("unattended");
+			});
+
+			it("leaves the mode where it was when cancelled", async () => {
+				const { user, props } = await openHeader();
+
+				await user.click(screen.getByRole("radio", { name: /Unattended/ }));
+				await user.click(screen.getByRole("button", { name: "Cancel" }));
+
+				expect(
+					screen.queryByRole("dialog", { name: "Turn on Unattended?" }),
+				).not.toBeInTheDocument();
+				expect(props.onModeChange).not.toHaveBeenCalled();
+				expect(screen.getByRole("radio", { name: /Default/ })).toBeChecked();
+			});
+
+			// The question is the topmost layer: Escape answers it and leaves the
+			// panel it was asked over.
+			it("cancels on Escape and leaves the panel open", async () => {
+				const { user, props } = await openHeader();
+
+				await user.click(screen.getByRole("radio", { name: /Unattended/ }));
+				await user.keyboard("{Escape}");
+
+				expect(
+					screen.queryByRole("dialog", { name: "Turn on Unattended?" }),
+				).not.toBeInTheDocument();
+				expect(props.onModeChange).not.toHaveBeenCalled();
+				expect(
+					screen.getByRole("radio", { name: /Unattended/ }),
+				).toBeInTheDocument();
+			});
+
+			it("leaves the page scrollable when it goes with the panel", async () => {
+				const user = userEvent.setup();
+				const { unmount } = render(<SessionHeader {...headerProps()} />);
+				await user.click(trigger());
+				await user.click(screen.getByRole("radio", { name: /Unattended/ }));
+				expect(document.body.style.overflow).toBe("hidden");
+
+				unmount();
+
+				expect(document.body.style.overflow).toBe("");
+			});
+
+			// Reviews spend tokens on the session's agent's reviewer engine.
+			it("names the engine the reviews run on", async () => {
+				const { user } = await openHeader();
+
+				await user.click(screen.getByRole("radio", { name: /Unattended/ }));
+
+				expect(confirmDialog()).toHaveTextContent(
+					"they run on Opus · High (Settings › Session).",
+				);
+			});
+
+			it("leaves the engine out while settings have not loaded", async () => {
+				useSettingsStore.setState({ settings: null });
+				const { user } = await openHeader();
+
+				await user.click(screen.getByRole("radio", { name: /Unattended/ }));
+
+				expect(confirmDialog()).toHaveTextContent("Reviews use tokens.");
+				expect(confirmDialog()).not.toHaveTextContent("they run on");
+			});
+
+			it("confirms for a custom mode selector too", async () => {
+				const user = userEvent.setup();
+				const onModeChange = vi.fn(() => Promise.resolve());
+				setChatUIConfig({
+					ModeSelector: (p) => (
+						<button type="button" onClick={() => p.onModeChange("unattended")}>
+							Custom unattended
+						</button>
+					),
+				});
+				render(<SessionHeader {...headerProps({ onModeChange })} />);
+				await user.click(trigger());
+
+				await user.click(
+					screen.getByRole("button", { name: "Custom unattended" }),
+				);
+				expect(onModeChange).not.toHaveBeenCalled();
+				await user.click(
+					screen.getByRole("button", { name: "Turn on Unattended" }),
+				);
+
+				expect(onModeChange).toHaveBeenCalledWith("unattended");
+			});
+		});
+
+		it("selects no row for a mode this build does not know", async () => {
+			const { user, props } = await openHeader({ mode: "turbo" });
+
+			for (const radio of screen.getAllByRole("radio")) {
+				expect(radio).not.toBeChecked();
+			}
+			expect(
+				screen.getByText(
+					"Current mode: “turbo”, which this version doesn't know. Choose one to replace it.",
+				),
+			).toBeInTheDocument();
+
+			await user.click(screen.getByRole("radio", { name: /^YOLO/ }));
+
+			expect(props.onModeChange).toHaveBeenCalledWith("yolo");
 		});
 
 		// The reason is reported above the composer, which the drawer covers.
@@ -239,7 +403,7 @@ describe("SessionHeader", () => {
 				onModeChange: vi.fn(() => Promise.reject(new Error("nope"))),
 			});
 
-			await user.click(screen.getByRole("radio", { name: /YOLO/ }));
+			await user.click(screen.getByRole("radio", { name: /^YOLO/ }));
 
 			await vi.waitFor(() => expect(panel()).not.toBeInTheDocument());
 		});
@@ -261,7 +425,7 @@ describe("SessionHeader", () => {
 				screen.queryByRole("group", { name: "Model" }),
 			).not.toBeInTheDocument();
 
-			expect(screen.getByRole("radio", { name: /YOLO/ })).toBeDisabled();
+			expect(screen.getByRole("radio", { name: /^YOLO/ })).toBeDisabled();
 			expect(props.onModeChange).not.toHaveBeenCalled();
 		});
 

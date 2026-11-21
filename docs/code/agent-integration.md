@@ -3740,11 +3740,14 @@ is the main session's).
 
 ```
 main session's CLI raises a request
-  → process.Process.handleEvent: recorded, reduced, broadcast
-  → Manager.onPermissionRequest (SetOnPermissionRequest)
-  → permreview.Service.HandlePermissionRequest(proc, …) — returns at once; routes on its own goroutine
-       raised by a reviewer → denyOwnRequest (Pockode's deny, reviewer_request)
+  → process.Process.handleEvent: asks the PermissionRouter (SetPermissionRouter) before reducing
+  → permreview.Service.HandlePermissionRequest(proc, …) — decides from the session alone, at once
+       session unreadable → not reviewing; Route records permission_review_failed
+       raised by a reviewer → not reviewing; Route denies (denyOwnRequest, reviewer_request)
        main session not unattended → nothing
+       unattended → Reviewing: the blocker is raised under review
+  → reduced (TurnInput.Reviewing), recorded, broadcast
+  → PermissionRouting.Route — starts Service.route on its own goroutine
        Store.EnsurePermissionReviewer                 — find or create
        agent type must match the main session's
        Store.SetModel/SetEffort from EngineFunc        — the settings, read now
@@ -3833,7 +3836,7 @@ main session's CLI raises a request
   unattended at all, leaves a `permission_review_failed` warning instead.
 - **Tied to the raising process.** A routed request is keyed by a minted review
   id and holds the `*process.Process` that raised it, which is what
-  `SetOnPermissionRequest` now passes. Verdicts and denies go to that process
+  the `PermissionRouter` is handed. Verdicts and denies go to that process
   only (`chat.Client` refuses one the session no longer runs with
   `ErrRequestNotPending`), so a CLI request id reused by a successor process —
   Codex's `approval-<n>` — can never be answered by mistake.
@@ -4069,7 +4072,7 @@ person and one of them is not, and nothing else about them is shared:
 
 | Blocker | Raised by | Cleared by |
 |---|---|---|
-| `permission` | `permission_request` | the user's decision, `request_cancelled`, or the death of the process that raised it |
+| `permission` | `permission_request` | the user's decision (or a reviewer's, or Pockode's deny), `request_cancelled`, or the death of the process that raised it |
 | `background` | `background_wait` | the agent producing **content** again ([Background Waits](#background-waits)) |
 
 It used to be three: the CLI's own blocking question was one. That is gone in both
@@ -4106,6 +4109,17 @@ reads event types to decide what a session is doing.
 
 The send path supplies the two signals no event carries: `SignalPrompt` when a
 prompt goes out, `SignalAnswered` with the request id when an answer goes back.
+One input carries a decision made outside the reducer: a `permission_request`
+is shown to the process's `PermissionRouter` (the permission reviewer's
+routing) *before* it is reduced, and `SignalPermissionRaised` raises the blocker
+already `reviewing` when the router takes it — `TurnInput.Reviewing`. Before,
+not after, because the raise is itself what calls a person: a turn blocked on a
+request nobody else answers is a session falling idle and going unread
+([What Is Left of the Narrowing](#what-is-left-of-the-narrowing)), and a mark
+applied once routing had run would land after that. The router reads only the
+session's mode, so it can answer on the stream's goroutine; what takes seconds
+(starting the reviewer) is its `Route`, run once the request is in history and
+broadcast ([unattended-mode.md](../unattended-mode.md#a-request-under-review)).
 
 **Ended is reported once.** Agents can announce the same ending twice — Claude
 acknowledges an interrupt with a `control_response` and then ends the same turn
@@ -4152,14 +4166,19 @@ it. What is left is `process.viewTurn`:
 
 | Turn | State |
 |---|---|
-| a `permission` blocker, whatever else is true | `idle` |
+| a `permission` blocker not under review, whatever else is true | `idle` |
+| otherwise, a `permission` blocker under review, open turn or not | `running` |
 | otherwise, a turn is open (running, or blocked on `background`) | `running` |
 | otherwise | `idle` |
 
 and the reader is the unread mark: `SessionListWatcher.HandleProcessStateChange`
 marks a session unread when it falls idle and nobody is looking, and does nothing
 else. Blocked-on-a-person reading as `idle` is what that rule wants — nothing is
-being produced and the user has to look. Blocked on background work reading as
+being produced and the user has to look. Blocked only on requests the
+permission reviewer is answering reads `running`: someone is producing the
+answer, and calling the person to it is what an unattended session exists not
+to do. A request routing hands back to the person is never under review, so it
+still marks the session unread. Blocked on background work reading as
 `running` is where the narrowing still loses something real, which is why nothing
 but the unread mark may be written in terms of it.
 

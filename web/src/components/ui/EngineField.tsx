@@ -31,7 +31,19 @@ import Skeleton from "./Skeleton";
 /** Which section's update failed, so the reason lands under the rows that caused it. */
 type ErrorSection = "agent" | "model" | "effort";
 
-interface Props {
+/**
+ * Either the agent is one of the field's choices, or it is fixed by the caller
+ * and only its model and effort are — the permission reviewer, configured once
+ * per agent, has no agent to choose.
+ */
+type AgentChoice =
+	| {
+			agentFixed?: false;
+			onSelectAgent: (agentType: string) => Promise<void>;
+	  }
+	| { agentFixed: true; onSelectAgent?: never };
+
+type Props = AgentChoice & {
 	/** Undefined when nobody has picked one, which only an agent role may be. */
 	agentType: AgentType | undefined;
 	model: string;
@@ -56,7 +68,6 @@ interface Props {
 	 * while the global defaults are replaced as a whole and must clear the model
 	 * and effort themselves.
 	 */
-	onSelectAgent: (agentType: string) => Promise<void>;
 	onSelectModel: (model: string) => Promise<void>;
 	onSelectEffort: (effort: string) => Promise<void>;
 	/**
@@ -69,7 +80,14 @@ interface Props {
 	 * has already loaded has nothing to wait for.
 	 */
 	valueState?: ValueState;
-}
+	/** Names the field: its heading, the summary row's label and the panel title. */
+	label?: string;
+	/**
+	 * Leaves the heading to the caller, for rows that share one drawn above
+	 * them. The label still names the row and the panel.
+	 */
+	hideHeading?: boolean;
+};
 
 /**
  * An engine — agent, model and effort — behind a collapsed summary row, in the
@@ -90,10 +108,13 @@ function EngineField({
 	allowFollowSettings = false,
 	autoModelDescription = AUTO_MODEL_DESCRIPTION,
 	autoEffortDescription = AUTO_EFFORT_DESCRIPTION,
+	agentFixed,
 	onSelectAgent,
 	onSelectModel,
 	onSelectEffort,
 	valueState = "known",
+	label = "Engine",
+	hideHeading = false,
 }: Props) {
 	const [isOpen, setIsOpen] = useState(false);
 	const [error, setError] = useState<{
@@ -218,9 +239,11 @@ function EngineField({
 
 	return (
 		<div>
-			<h3 className="mb-1 text-xs font-medium uppercase text-th-text-muted">
-				Engine
-			</h3>
+			{!hideHeading && (
+				<h3 className="mb-1 text-xs font-medium uppercase text-th-text-muted">
+					{label}
+				</h3>
+			)}
 			<div className="relative">
 				<button
 					ref={triggerRef}
@@ -235,12 +258,12 @@ function EngineField({
 					aria-busy={valueState === "pending"}
 					aria-label={
 						!hasValues
-							? waitingLabel("Engine", valueState)
+							? waitingLabel(label, valueState)
 							: agentInfo
-								? `Engine: ${agentInfo.label}, ${modelLabel}${
+								? `${label}: ${agentInfo.label}, ${modelLabel}${
 										effortLabel ? `, ${effortLabel} effort` : ""
 									}`
-								: `Engine: ${FOLLOW_SETTINGS_LABEL}`
+								: `${label}: ${FOLLOW_SETTINGS_LABEL}`
 					}
 					className="flex min-h-11 w-full items-center gap-2 rounded-lg border border-th-border bg-th-bg-secondary px-3 py-2 text-left transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent hover:border-th-border-focus disabled:pointer-events-none disabled:opacity-50"
 				>
@@ -287,7 +310,7 @@ function EngineField({
 				<ResponsivePanel
 					isOpen={isOpen}
 					onClose={handleClose}
-					title="Engine"
+					title={label}
 					triggerRef={triggerRef}
 					isExpanded={isExpanded}
 					desktopPosition="stretch"
@@ -296,38 +319,42 @@ function EngineField({
 					desktopMaxHeight="70vh"
 				>
 					<div className="overflow-y-auto pb-2">
-						<Section title="Agent">
-							{allowFollowSettings && (
-								<ChoiceRow
-									group={`${groupId}-agent`}
-									value={FOLLOW_SETTINGS_ID}
-									label={FOLLOW_SETTINGS_LABEL}
-									description={FOLLOW_SETTINGS_DESCRIPTION}
-									selected={engineUnpicked}
-									onSelect={() =>
-										applyChoice("agent", () =>
-											onSelectAgent(FOLLOW_SETTINGS_ID),
-										)
-									}
-								/>
-							)}
-							{agentChoices.map(({ id, info }) => (
-								<ChoiceRow
-									key={id}
-									group={`${groupId}-agent`}
-									value={id}
-									label={
-										<>
-											<info.icon className="size-3.5" aria-hidden="true" />
-											{info.label}
-										</>
-									}
-									description={info.description}
-									selected={agentType === id}
-									onSelect={() => applyChoice("agent", () => onSelectAgent(id))}
-								/>
-							))}
-						</Section>
+						{!agentFixed && (
+							<Section title="Agent">
+								{allowFollowSettings && (
+									<ChoiceRow
+										group={`${groupId}-agent`}
+										value={FOLLOW_SETTINGS_ID}
+										label={FOLLOW_SETTINGS_LABEL}
+										description={FOLLOW_SETTINGS_DESCRIPTION}
+										selected={engineUnpicked}
+										onSelect={() =>
+											applyChoice("agent", () =>
+												onSelectAgent(FOLLOW_SETTINGS_ID),
+											)
+										}
+									/>
+								)}
+								{agentChoices.map(({ id, info }) => (
+									<ChoiceRow
+										key={id}
+										group={`${groupId}-agent`}
+										value={id}
+										label={
+											<>
+												<info.icon className="size-3.5" aria-hidden="true" />
+												{info.label}
+											</>
+										}
+										description={info.description}
+										selected={agentType === id}
+										onSelect={() =>
+											applyChoice("agent", () => onSelectAgent(id))
+										}
+									/>
+								))}
+							</Section>
+						)}
 						{errorFor("agent")}
 
 						<Section title="Model" disabled={engineUnpicked}>

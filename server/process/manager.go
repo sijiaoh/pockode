@@ -94,10 +94,9 @@ type Manager struct {
 	// Called when process running state changes
 	onStateChange func(StateChangeEvent)
 
-	// onPermissionRequest is told of every permission request a live process
-	// raises, once it has been recorded and broadcast; see
-	// SetOnPermissionRequest.
-	onPermissionRequest func(proc *Process, request agent.PermissionRequestEvent)
+	// permissionRouter decides where every permission request a live process
+	// raises goes, as it is raised; see SetPermissionRouter.
+	permissionRouter PermissionRouter
 	// onTurnChanged is told of every change to a live process's turn; see
 	// SetOnTurnChanged.
 	onTurnChanged func(sessionID string)
@@ -292,15 +291,32 @@ func (m *Manager) SetPermissionReviewerWorkDir(dir string) {
 	m.reviewerWorkDir = dir
 }
 
-// SetOnPermissionRequest names what to tell of every permission request a
-// session's agent raises — the permission reviewer's routing
-// (permreview.Service). It is told the process that raised it, because a
-// request id means something only to that process. It runs on the goroutine
-// reading that session's agent, after the request is in the history and on
-// its way to clients, so it must not block; it is not told of a request a
-// process being torn down left in its buffer.
-func (m *Manager) SetOnPermissionRequest(fn func(proc *Process, request agent.PermissionRequestEvent)) {
-	m.onPermissionRequest = fn
+// PermissionRouter decides, as a permission request is raised, whether it goes
+// to the session's permission reviewer (permreview.Service). It is handed the
+// process that raised it, because a request id means something only to that
+// process. It runs on the goroutine reading that session's agent, before the
+// request reaches the session's turn, so it must not block.
+type PermissionRouter func(proc *Process, request agent.PermissionRequestEvent) PermissionRouting
+
+// PermissionRouting is a router's decision about one request.
+type PermissionRouting struct {
+	// Reviewing raises the request already under review
+	// (session.Blocker.Reviewing). Decided before the turn is reduced because
+	// the raise is what would otherwise call a person: a turn blocked on a
+	// request nobody else answers is a session falling idle (viewTurn), and
+	// one marked afterwards has already gone unread.
+	Reviewing bool
+	// Route, if set, is run once the request is in the history and on its way
+	// to clients, so that nothing starts answering a request before it is on
+	// screen. Same goroutine, so it must not block either.
+	Route func()
+}
+
+// SetPermissionRouter names what decides where every permission request a
+// session's agent raises goes. It is not asked about a request a process being
+// torn down left in its buffer. Set before any process starts.
+func (m *Manager) SetPermissionRouter(router PermissionRouter) {
+	m.permissionRouter = router
 }
 
 // SetOnTurnChanged names what to tell whenever a session's turn changes — a
@@ -1678,12 +1694,14 @@ func (p *Process) State() ProcessState {
 // makes the session go unread — the one thing that still reads this. Blocked on
 // background work reads as running, which is where the narrowing loses something
 // real, and is why nothing but the unread mark is allowed to be written in terms
-// of it.
+// of it. So does blocked only on requests under review, even past the turn's
+// end: the reviewer is answering them, and calling a person to them is the one
+// thing an unattended session is for not doing (docs/unattended-mode.md).
 func viewTurn(turn session.TurnState) ProcessState {
-	if turn.AwaitingUserAnswer() {
+	if turn.AwaitingPerson() {
 		return ProcessStateIdle
 	}
-	if turn.InProgress() {
+	if turn.AwaitingUserAnswer() || turn.InProgress() {
 		return ProcessStateRunning
 	}
 	return ProcessStateIdle
@@ -1900,6 +1918,13 @@ func (p *Process) handleEvent(ctx context.Context, log *slog.Logger, event agent
 	// cannot go looking for a record that is not there yet.
 	in, reduce := turnInputFor(event)
 	reduce = reduce && p.acceptsTurnInput(in)
+	// Only what the reducer accepted: a closed process's leftover request has
+	// nobody to answer.
+	var routing PermissionRouting
+	if request, ok := event.(agent.PermissionRequestEvent); ok && reduce && p.manager.permissionRouter != nil {
+		routing = p.manager.permissionRouter(p, request)
+		in.Reviewing = routing.Reviewing
+	}
 	var transition session.TurnTransition
 	if reduce {
 		transition = p.applyTurn(ctx, in)
@@ -1946,10 +1971,9 @@ func (p *Process) handleEvent(ctx context.Context, log *slog.Logger, event agent
 	p.manager.EmitMessage(p.sessionID, event, seq)
 
 	// After the broadcast, so the request is on screen before anything else
-	// starts answering it. Only what the reducer accepted: a closed process's
-	// leftover request has nobody to answer.
-	if request, ok := event.(agent.PermissionRequestEvent); ok && reduce && p.manager.onPermissionRequest != nil {
-		p.manager.onPermissionRequest(p, request)
+	// starts answering it.
+	if routing.Route != nil {
+		routing.Route()
 	}
 
 	// Last, and after this event's own broadcast, so a subscriber sees the

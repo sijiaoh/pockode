@@ -742,8 +742,10 @@ carries the count too.
 
 #### What the Client Gives Up by Letting the Server Filter
 
-The "hide task sessions" toggle is a subscription parameter, so flipping it
-resubscribes (`useSessionSubscription`). The list already on screen is kept
+The "show task sessions" and "show reviewer sessions" toggles are subscription
+parameters, carried together as one `SessionListExclusions`
+(`lib/sessionFilter.ts`), so flipping either resubscribes
+(`useSessionSubscription`). The list already on screen is kept
 until the new snapshot replaces it — a filter the user flipped is not a reason to
 blank the sidebar and lose their place in it.
 
@@ -1211,8 +1213,8 @@ checked.
 **Showing nothing**, because a disabled control is still making a claim, and
 every placeholder here is the reassuring one: `default` mode and `claude` agent
 say, of a session nothing is known about, that it is a Claude session that asks
-before it acts. The mode is the sharp case — its two states are a calm label and
-an amber bolt, so the gap read as "this session prompts you" for a session
+before it acts. The mode is the sharp case — its states are a calm label or an amber
+glyph, so the gap read as "this session prompts you" for a session
 running with no prompts at all. The header's second line therefore draws a
 pulsing placeholder and names no value, and so does the panel's Engine row
 (`SessionHeader`, `useEngineSummary`); a registered `EngineSelector` or

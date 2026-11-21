@@ -26,6 +26,7 @@ import {
 import type { SentMessage } from "../../lib/rpc";
 import { useSessionDetailStore } from "../../lib/sessionDetailStore";
 import { useSessionStore } from "../../lib/sessionStore";
+import { useSettingsStore } from "../../lib/settingsStore";
 import { useWorkStore } from "../../lib/workStore";
 import { worktreeActions } from "../../lib/worktreeStore";
 import {
@@ -178,6 +179,12 @@ const mockState = vi.hoisted(() => ({
 	sessionViewHistory: vi.fn(),
 	/** Whether the server *refused* a read, as opposed to failing to answer. */
 	isInvalidParamsRejection: vi.fn((_error: unknown) => false),
+	/** A send refused because the session is a permission reviewer. */
+	isPermissionReviewerRejection: vi.fn((_error: unknown) => false),
+	// Another session's detail, which a reviewer's page follows for the main
+	// session's title.
+	sessionDetailSubscribe: vi.fn(),
+	sessionDetailUnsubscribe: vi.fn(() => Promise.resolve()),
 	// The agents the server declares. The fork UI here is tested on an agent that
 	// can be forked; the refusal has its own test below.
 	listAgents: vi.fn(() =>
@@ -220,6 +227,8 @@ vi.mock("../../lib/wsStore", () => {
 		listAgents: mockState.listAgents,
 		sessionViewGet: mockState.sessionViewGet,
 		sessionViewHistory: mockState.sessionViewHistory,
+		sessionDetailSubscribe: mockState.sessionDetailSubscribe,
+		sessionDetailUnsubscribe: mockState.sessionDetailUnsubscribe,
 		// The composer's command palette, which is one of the surfaces that can
 		// be open over the answer panel. An empty list still draws it.
 		listCommands: () => Promise.resolve([]),
@@ -264,6 +273,7 @@ vi.mock("../../lib/wsStore", () => {
 		useWSStore: mockStore,
 		wsActions: actions,
 		isInvalidParamsRejection: mockState.isInvalidParamsRejection,
+		isPermissionReviewerRejection: mockState.isPermissionReviewerRejection,
 	};
 });
 
@@ -3534,6 +3544,78 @@ describe("ChatPanel", () => {
 				).not.toBeInTheDocument();
 			});
 		});
+
+		// The card reads who is answering from the session's turn, and who
+		// answered from the answer's record (docs/unattended-mode-ui.md §3).
+		it("shows a request under review, then the reviewer's verdict with a way to it", async () => {
+			const user = userEvent.setup();
+			const onSelectSession = vi.fn();
+			render(<ChatPanel {...defaultProps} onSelectSession={onSelectSession} />);
+			await waitForHistoryLoad();
+
+			act(() => {
+				mockState.onNotification?.({
+					type: "permission_request",
+					request_id: "req-r",
+					tool_name: "Bash",
+					tool_input: { command: "rm -rf out" },
+					tool_use_id: "tool-r",
+				});
+			});
+			act(() =>
+				acceptSetting({
+					turn: {
+						phase: "blocked",
+						open: true,
+						since: "2024-01-01T00:00:00Z",
+						blockers: [
+							{
+								kind: "permission",
+								request_id: "req-r",
+								raised_at: "2024-01-01T00:00:00Z",
+								reviewing: true,
+							},
+						],
+					},
+				}),
+			);
+			const card = () => {
+				const el = document.querySelector<HTMLElement>(
+					"[data-permission-request-id='req-r']",
+				);
+				if (!el) throw new Error("no card");
+				return el;
+			};
+			expect(card()).toHaveTextContent("Permission reviewer is checking this");
+
+			act(() => {
+				mockState.onNotification?.({
+					type: "permission_response",
+					request_id: "req-r",
+					choice: "deny",
+					by: "permission_reviewer",
+					review: {
+						session_id: "reviewer-1",
+						category: "system_damage",
+						reason: "It deletes the build output.",
+					},
+				} as never);
+			});
+			act(() =>
+				acceptSetting({
+					turn: { phase: "running", open: true, since: "2024-01-01T00:00:00Z" },
+				}),
+			);
+
+			expect(card()).toHaveTextContent(
+				"Denied by the permission reviewer — Could damage the system",
+			);
+			expect(card()).not.toHaveTextContent("checking this");
+			await user.click(
+				within(card()).getByRole("button", { name: "View review" }),
+			);
+			expect(onSelectSession).toHaveBeenCalledWith("reviewer-1");
+		});
 	});
 
 	describe("interrupt", () => {
@@ -4210,7 +4292,7 @@ describe("ChatPanel", () => {
 			await waitForHistoryLoad();
 
 			await user.click(sessionTrigger());
-			await user.click(screen.getByRole("radio", { name: /YOLO/ }));
+			await user.click(screen.getByRole("radio", { name: /^YOLO/ }));
 
 			expect(await screen.findByRole("alert")).toHaveTextContent(
 				"Failed to change mode: no such mode",
@@ -4227,7 +4309,7 @@ describe("ChatPanel", () => {
 			const { rerender } = render(<ChatPanel {...defaultProps} />);
 			await waitForHistoryLoad();
 			await user.click(sessionTrigger());
-			await user.click(screen.getByRole("radio", { name: /YOLO/ }));
+			await user.click(screen.getByRole("radio", { name: /^YOLO/ }));
 			expect(await screen.findByRole("alert")).toHaveTextContent(
 				"Failed to change mode: no such mode",
 			);
@@ -6087,6 +6169,168 @@ describe("ChatPanel", () => {
 	// A Stop that threw away a message the agent had not read
 	// (docs/discarded-messages-ui.md). The ending is drawn on the message, and
 	// the end of the stopped turn offers it back to the composer.
+	// A reviewer takes no input from a person, but is a live session of this
+	// worktree: the read-only presentation is what keeps the user from meeting
+	// the server's `permission_reviewer` refusal (docs/unattended-mode-ui.md §5).
+	describe("a permission reviewer session", () => {
+		const mainDetail = makeSessionDetail({ id: "main-1", title: "Fix login" });
+
+		beforeEach(() => {
+			seedSessionDetail({
+				title: "Permission reviewer",
+				permission_reviewer_of: "main-1",
+				model: "sonnet",
+			});
+			mockState.sessionDetailSubscribe.mockResolvedValue({
+				id: "detail-main",
+				initial: { session: mainDetail },
+			});
+		});
+		afterEach(() => {
+			mockState.isPermissionReviewerRejection.mockReturnValue(false);
+			useSettingsStore.setState({ settings: null });
+		});
+
+		it("draws no composer, and offers the main session instead", async () => {
+			const user = userEvent.setup();
+			const onSelectSession = vi.fn();
+			render(
+				<ChatPanel
+					{...defaultProps}
+					sessionTitle="Permission reviewer"
+					onSelectSession={onSelectSession}
+				/>,
+			);
+			await waitForHistoryLoad();
+
+			expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
+			expect(
+				screen.getByText("Read-only — Pockode writes here, not you."),
+			).toBeInTheDocument();
+			// Live, not a foreign transcript: it is subscribed as any session is.
+			expect(mockState.chatMessagesSubscribe).toHaveBeenCalled();
+			expect(
+				screen.getByText("No requests have been reviewed yet."),
+			).toBeInTheDocument();
+
+			await user.click(
+				await screen.findByRole("button", {
+					name: "Open the session this reviewer answers for, Fix login",
+				}),
+			);
+			expect(onSelectSession).toHaveBeenCalledWith("main-1");
+		});
+
+		it("names the main session above the transcript, from its own detail", async () => {
+			render(
+				<ChatPanel {...defaultProps} sessionTitle="Permission reviewer" />,
+			);
+
+			expect(
+				await screen.findByText("Permission reviewer of “Fix login”"),
+			).toBeInTheDocument();
+			expect(mockState.sessionDetailSubscribe).toHaveBeenCalledWith(
+				"main-1",
+				expect.any(Function),
+			);
+		});
+
+		it("claims no name for a main session it cannot read", async () => {
+			mockState.sessionDetailSubscribe.mockRejectedValue(
+				new Error("not there"),
+			);
+			render(
+				<ChatPanel {...defaultProps} sessionTitle="Permission reviewer" />,
+			);
+			await waitForHistoryLoad();
+
+			expect(
+				await screen.findByText("Permission reviewer of another session"),
+			).toBeInTheDocument();
+		});
+
+		// Stopping a reviewer denies everything it holds.
+		it("offers no Stop, and Escape does not stop it", async () => {
+			const user = userEvent.setup();
+			render(
+				<ChatPanel {...defaultProps} sessionTitle="Permission reviewer" />,
+			);
+			await waitForHistoryLoad();
+
+			act(() => {
+				acceptSetting({
+					turn: { phase: "running", open: true, since: "2024-01-01T00:00:00Z" },
+				});
+			});
+			await user.keyboard("{Escape}");
+
+			expect(
+				screen.queryByRole("button", { name: /Stop/ }),
+			).not.toBeInTheDocument();
+			expect(mockState.interrupt).not.toHaveBeenCalled();
+		});
+
+		it("states the engine instead of offering one, and no Permissions", async () => {
+			const user = userEvent.setup();
+			useSettingsStore.setState({
+				settings: {
+					permission_reviewer: { claude: { model: "opus", effort: "low" } },
+				},
+			});
+			render(
+				<ChatPanel {...defaultProps} sessionTitle="Permission reviewer" />,
+			);
+			await waitForHistoryLoad();
+
+			// The header's engine is the session's own: what the last review ran on.
+			const trigger = sessionTrigger();
+			expect(trigger).toHaveAccessibleName(
+				"Session: Permission reviewer, Sonnet · Permission reviewer",
+			);
+			await user.click(trigger);
+
+			expect(
+				await screen.findByText("Next reviews: Opus · Low"),
+			).toBeInTheDocument();
+			expect(
+				screen.queryByRole("group", { name: "Permissions" }),
+			).not.toBeInTheDocument();
+			expect(
+				screen.queryByRole("button", { name: /^Engine:/ }),
+			).not.toBeInTheDocument();
+		});
+
+		// Before the detail lands nothing says it is a reviewer; the refusal does.
+		it("turns read-only when a send is refused as a reviewer's, keeping the draft", async () => {
+			const user = userEvent.setup();
+			seedSessionDetail({ title: "Permission reviewer" });
+			const refusal = new JSONRPCErrorException(
+				"this session is a permission reviewer",
+				JSONRPCErrorCode.InvalidParams,
+				{ reason: "permission_reviewer" },
+			);
+			mockState.sendMessage.mockRejectedValue(refusal);
+			mockState.isPermissionReviewerRejection.mockImplementation(
+				(error) => error === refusal,
+			);
+			render(
+				<ChatPanel {...defaultProps} sessionTitle="Permission reviewer" />,
+			);
+			await waitForHistoryLoad();
+
+			await user.type(screen.getByRole("textbox"), "Why?");
+			await user.click(screen.getByRole("button", { name: /Send/ }));
+
+			expect(
+				await screen.findByText("Read-only — Pockode writes here, not you."),
+			).toBeInTheDocument();
+			expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
+			expect(screen.queryByText(/Failed to send/)).not.toBeInTheDocument();
+			expect(screen.queryByText("Why?")).not.toBeInTheDocument();
+			expect(useInputStore.getState().inputs["test-session"]).toBe("Why?");
+		});
+	});
+
 	describe("discarded messages", () => {
 		const stoppedTurn = [
 			{ type: "message", content: "Start", message_id: "m-1", seq: 1 },

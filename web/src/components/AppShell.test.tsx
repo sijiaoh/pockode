@@ -12,6 +12,7 @@ import { gitStatusQueryKey } from "../hooks/gitQueries";
 import { useAuthStore } from "../lib/authStore";
 import { FRESH_VISIT_STATE } from "../lib/scrollMemory";
 import { useSessionDetailStore } from "../lib/sessionDetailStore";
+import type { SessionListExclusions } from "../lib/sessionFilter";
 import { useSessionStore } from "../lib/sessionStore";
 import { useWorkStore } from "../lib/workStore";
 import {
@@ -383,14 +384,16 @@ const worktreeSessions: Record<string, ReturnType<typeof session>[]> = {
 const mockSubscribe = vi.fn(
 	async (
 		_cb: (p: SessionListChangedNotification) => void,
-		excludeWorkSessions?: boolean,
+		exclusions?: SessionListExclusions,
 	) => {
 		const wt = worktreeActions.getCurrent();
 		const all = worktreeSessions[wt] ?? [];
 		return {
 			id: `watch-${wt}`,
 			initial: {
-				sessions: excludeWorkSessions ? all.filter((s) => !s.work_id) : all,
+				sessions: exclusions?.workSessions
+					? all.filter((s) => !s.work_id)
+					: all,
 				has_unread: false,
 			},
 		};
@@ -656,7 +659,7 @@ describe("AppShell cross-worktree navigation", () => {
 		// Delay the new worktree's session list so the switch stays mid-flight and
 		// we can observe what the shell renders during the transition.
 		let releaseSubscribe: () => void = () => {};
-		mockSubscribe.mockImplementationOnce(async (_cb, excludeWorkSessions) => {
+		mockSubscribe.mockImplementationOnce(async (_cb, exclusions) => {
 			await new Promise<void>((resolve) => {
 				releaseSubscribe = resolve;
 			});
@@ -665,7 +668,9 @@ describe("AppShell cross-worktree navigation", () => {
 			return {
 				id: `watch-${wt}`,
 				initial: {
-					sessions: excludeWorkSessions ? all.filter((s) => !s.work_id) : all,
+					sessions: exclusions?.workSessions
+						? all.filter((s) => !s.work_id)
+						: all,
 					has_unread: false,
 				},
 			};

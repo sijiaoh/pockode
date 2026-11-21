@@ -720,10 +720,10 @@ noticed. One representation with a test on it is the only thing that ends that.
      paste the expected side of its diff. Do not edit by hand. -->
 
 ```text
-45 controls render text, state no height of their own and carry no touch-target.
+46 controls render text, state no height of their own and carry no touch-target.
 
 29 state their own font size, so the height below is exact: 16–40px.
-16 inherit it, so the height below is an upper bound — the ancestor that
+17 inherit it, so the height below is an upper bound — the ancestor that
   sets it may well set a smaller one: 24–48px.
 
 5 are under the 36px fine-pointer floor.
@@ -744,6 +744,7 @@ noticed. One representation with a test on it is the only thing that ends that.
   40px  bound  web/src/components/Chat/ForkOriginBanner.tsx
   40px  bound  web/src/components/Chat/MessageItem.tsx ×4
   40px  bound  web/src/components/Chat/QuestionRecordItem.tsx
+  40px  bound  web/src/components/Chat/ReviewerEventItem.tsx
   40px  bound  web/src/components/Chat/TaskItem.tsx ×2
   40px  bound  web/src/components/common/SidebarListItem.tsx
   40px  bound  web/src/extensions/ExampleExtension/settings/AboutSection.tsx

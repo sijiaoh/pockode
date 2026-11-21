@@ -12,6 +12,7 @@ import {
 	isHtmlGetTool,
 	isHtmlRenderTool,
 } from "./htmlRender";
+import { reviewCategoryLabel } from "./permissionReview";
 import { firstLine } from "./subagentRun";
 
 /**
@@ -352,9 +353,38 @@ export function toolSummary(
 	if (mcp && isHtmlGetTool(toolName)) {
 		return { ...mcpSummary(mcp, {}), detail: htmlGetInput(input).id };
 	}
+	if (mcp?.server === "pockode" && mcp.tool === "permission_verdict") {
+		return verdictSummary(input);
+	}
 	if (mcp) return mcpSummary(mcp, input);
 
 	return fallbackSummary(toolName, input);
+}
+
+/**
+ * A permission reviewer's answer, named by what it decided rather than by its
+ * first field, which is a request id nobody reads (docs/unattended-mode-ui.md
+ * §5.1). The reason is the detail: it is what a reader of the reviewer's
+ * transcript wants to see beside the verdict.
+ */
+function verdictSummary(input: unknown): ToolSummary {
+	const obj = asObject(input);
+	const verdict = str(obj.verdict);
+	const category = str(obj.category);
+	const title =
+		verdict === "allow"
+			? "Verdict: Allow"
+			: verdict === "deny"
+				? category
+					? `Verdict: Deny · ${reviewCategoryLabel(category)}`
+					: "Verdict: Deny"
+				: "permission_verdict";
+	return {
+		title,
+		detail: str(obj.reason) ?? "",
+		detailTail: "",
+		mono: false,
+	};
 }
 
 /**

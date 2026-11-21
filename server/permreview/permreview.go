@@ -203,54 +203,69 @@ func (s *Service) Close() {
 	s.cancel()
 }
 
-// HandlePermissionRequest is told of every permission request a session of
-// this worktree raises (process.Manager.SetOnPermissionRequest): ones raised
+// HandlePermissionRequest decides where every permission request a session of
+// this worktree raises goes (process.Manager.SetPermissionRouter): ones raised
 // in an unattended session are routed to its reviewer, and ones a reviewer
-// raises itself are denied. It returns at once: routing starts the reviewer's
-// process, which can take seconds, and the caller is the stream the request
-// came from.
-func (s *Service) HandlePermissionRequest(proc *process.Process, request agent.PermissionRequestEvent) {
+// raises itself are denied. Everything else stays with the person.
+//
+// The decision is the session's mode, read here as the request is raised, so
+// that a request bound for the reviewer is raised already under review and
+// never calls anyone (process.PermissionRouting.Reviewing). Everything after
+// it runs on a goroutine of its own: routing starts the reviewer's process,
+// which can take seconds, and the caller is the stream the request came from.
+func (s *Service) HandlePermissionRequest(proc *process.Process, request agent.PermissionRequestEvent) process.PermissionRouting {
 	if s.ctx.Err() != nil {
-		return
+		return process.PermissionRouting{}
 	}
 	arrived := time.Now()
-	go s.route(proc, request, arrived)
-}
-
-func (s *Service) route(proc *process.Process, request agent.PermissionRequestEvent, arrived time.Time) {
 	mainID := proc.SessionID()
 	log := slog.With("sessionId", mainID, "requestId", request.RequestID)
-	data := agent.PermissionRequestData{
+
+	main, found, err := s.cfg.Store.Get(mainID)
+	switch {
+	case err != nil:
+		// Not denied: without the session there is no telling whether it is
+		// unattended at all, and a deny would refuse a person's own session.
+		// Nor under review: it is the person's to answer, and the raise calls
+		// them to it as it would anywhere else.
+		log.Error("permission request not routed: could not read the session", "error", err)
+		return process.PermissionRouting{Route: func() {
+			go s.recordWarning(log, mainID, "permission_review_failed",
+				fmt.Sprintf("Pockode could not tell whether this permission request needs a review: %v. Answer it yourself.", err))
+		}}
+	case !found:
+		return process.PermissionRouting{}
+	case main.IsPermissionReviewer():
+		return process.PermissionRouting{Route: func() {
+			go s.denyOwnRequest(log, proc, main, permissionData(request), request.ToolName)
+		}}
+	case main.Mode != session.ModeUnattended:
+		return process.PermissionRouting{}
+	}
+	// The request leaves the person's hands here, before the reviewer is ready:
+	// every path from this point answers it — with the reviewer's verdict or
+	// Pockode's own deny — or ends with its process, so nothing after this
+	// gives it back.
+	return process.PermissionRouting{
+		Reviewing: true,
+		Route:     func() { go s.route(log, proc, main, request, arrived) },
+	}
+}
+
+func permissionData(request agent.PermissionRequestEvent) agent.PermissionRequestData {
+	return agent.PermissionRequestData{
 		RequestID:             request.RequestID,
 		ToolInput:             request.ToolInput,
 		ToolUseID:             request.ToolUseID,
 		PermissionSuggestions: request.PermissionSuggestions,
 	}
+}
 
-	main, found, err := s.cfg.Store.Get(mainID)
-	if err != nil {
-		// Not denied: without the session there is no telling whether it is
-		// unattended at all, and a deny would refuse a person's own session.
-		log.Error("permission request not routed: could not read the session", "error", err)
-		s.recordWarning(log, mainID, "permission_review_failed",
-			fmt.Sprintf("Pockode could not tell whether this permission request needs a review: %v. Answer it yourself.", err))
-		return
-	}
-	if !found {
-		return
-	}
-	if main.IsPermissionReviewer() {
-		s.denyOwnRequest(log, proc, main, data, request.ToolName)
-		return
-	}
-	if main.Mode != session.ModeUnattended {
-		return
-	}
-
+func (s *Service) route(log *slog.Logger, proc *process.Process, main session.SessionMeta, request agent.PermissionRequestEvent, arrived time.Time) {
 	r := Routed{
 		ReviewID:      uuid.NewString(),
-		MainSessionID: mainID,
-		Data:          data,
+		MainSessionID: main.ID,
+		Data:          permissionData(request),
 		ToolName:      request.ToolName,
 		ArrivedAt:     arrived,
 		proc:          proc,

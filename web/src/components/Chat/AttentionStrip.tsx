@@ -1,5 +1,6 @@
 import {
 	AlertTriangle,
+	Bot,
 	Check,
 	CircleHelp,
 	CornerDownRight,
@@ -119,6 +120,17 @@ function leadingBlocker(blockers: TurnBlocker[]): TurnBlocker | undefined {
 }
 
 /**
+ * Whether the permission reviewer is answering every request the turn is
+ * blocked on. One it is not answering — a request Pockode could not route —
+ * needs the user, so the row is then the ordinary one
+ * (docs/unattended-mode-ui.md §3.3).
+ */
+function allUnderReview(blockers: TurnBlocker[]): boolean {
+	const permissions = blockers.filter((b) => b.kind === "permission");
+	return permissions.length > 0 && permissions.every((b) => b.reviewing);
+}
+
+/**
  * Which card the permission row speaks for, and how many more are waiting.
  *
  * A denial still listed first: on Claude a deny interrupts the turn, so every
@@ -196,6 +208,7 @@ const keepFocus = (e: MouseEvent) => e.preventDefault();
 function PermissionRow({
 	entry,
 	more,
+	reviewing,
 	error,
 	onRespond,
 	onJump,
@@ -203,6 +216,8 @@ function PermissionRow({
 }: {
 	entry: PermissionEntry;
 	more: number;
+	/** Every request the row stands for is under review; see `allUnderReview`. */
+	reviewing: boolean;
 	error?: string;
 	onRespond: (
 		request: PermissionRequest,
@@ -238,7 +253,9 @@ function PermissionRow({
 	};
 
 	const label = [
-		"Show permission request:",
+		reviewing
+			? "Show permission request under review:"
+			: "Show permission request:",
 		summary.chip
 			? `${summary.title} (${summary.chip}) ${detail}`
 			: `${summary.title} ${detail}`,
@@ -274,11 +291,19 @@ function PermissionRow({
 							className="size-3 shrink-0 text-th-error"
 							aria-hidden="true"
 						/>
+					) : reviewing ? (
+						<Bot
+							className="size-3 shrink-0 text-th-text-muted"
+							aria-hidden="true"
+						/>
 					) : (
 						<Lock
 							className="size-3 shrink-0 text-th-text-muted"
 							aria-hidden="true"
 						/>
+					)}
+					{reviewing && !error && (
+						<span className="shrink-0 text-th-text-muted">Reviewing ·</span>
 					)}
 					{/* The title stays through a refusal: Allow is still live beside
 					    it, and must not stand next to nothing but an error. */}
@@ -328,7 +353,9 @@ function PermissionRow({
 								type="button"
 								onMouseDown={keepFocus}
 								onClick={(e) => respond(e, "allow")}
-								className={PERMISSION_ALLOW}
+								// Under review nothing waits on the user, so no answer is
+								// the one to press — as on the card.
+								className={reviewing ? PERMISSION_DENY : PERMISSION_ALLOW}
 							>
 								Allow
 							</button>
@@ -540,6 +567,7 @@ function AttentionStrip({
 	const prompt = blocker?.kind === "permission" ? blocker : undefined;
 
 	if (prompt) {
+		const reviewing = allUnderReview(turn.blockers ?? []);
 		const shown =
 			onPermissionRespond && permissionRowEntry(permissionRequests ?? []);
 		if (shown) {
@@ -548,6 +576,7 @@ function AttentionStrip({
 				<PermissionRow
 					entry={entry}
 					more={more}
+					reviewing={reviewing}
 					error={
 						promptError?.requestId === entry.request.requestId &&
 						entry.status === "pending"
@@ -568,13 +597,20 @@ function AttentionStrip({
 		return (
 			<div className={STRIP_FRAME}>
 				<div className={STRIP_LINE}>
-					<Lock className="size-3 shrink-0" aria-hidden="true" />
+					{reviewing ? (
+						<Bot className="size-3 shrink-0" aria-hidden="true" />
+					) : (
+						<Lock className="size-3 shrink-0" aria-hidden="true" />
+					)}
 					{/* The second sentence is why the composer refuses to send: the
 					    request owns the agent's next line of input, and the server
 					    refuses a message sent over it too. A disabled Send with no reason
-					    on screen is the silent failure the project forbids. */}
+					    on screen is the silent failure the project forbids. It holds
+					    under review as well: the CLI still reads nothing else. */}
 					<span>
-						Waiting for your permission. Answer above or Stop before sending.
+						{reviewing
+							? "The permission reviewer is answering a request. Answer it yourself or Stop before sending."
+							: "Waiting for your permission. Answer above or Stop before sending."}
 					</span>
 					{requestId && (
 						<button

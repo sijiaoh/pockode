@@ -3,7 +3,10 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionViewWorktree } from "../../lib/rpc/sessionView";
-import { CURRENT_WORKTREE_FILTER } from "../../lib/sessionFilter";
+import {
+	CURRENT_WORKTREE_FILTER,
+	type SessionListExclusions,
+} from "../../lib/sessionFilter";
 import { useSessionStore } from "../../lib/sessionStore";
 import { makeSessionListItem } from "../../test/sessionFixtures";
 import type { SessionListItem, SessionListPage } from "../../types/message";
@@ -26,7 +29,7 @@ const sessionViewList =
 	vi.fn<
 		(
 			worktree: string,
-			excludeWorkSessions: boolean,
+			exclusions: SessionListExclusions,
 			cursor?: string,
 		) => Promise<SessionListPage>
 	>();
@@ -143,6 +146,7 @@ describe("SessionsTab showing another worktree", () => {
 		useSessionStore.setState({
 			worktreeFilter: { kind: "worktree", worktree: "feature-x" },
 			showTaskSessions: false,
+			showReviewerSessions: true,
 		});
 		sessionViewWorktrees.mockResolvedValue([
 			{ worktree: "feature-x", exists: true, session_count: 1 },
@@ -158,7 +162,11 @@ describe("SessionsTab showing another worktree", () => {
 		expect(await screen.findByText("Over there")).toBeInTheDocument();
 		// The live list's row is not merged in: the two lists are never both.
 		expect(screen.queryByText("a1")).not.toBeInTheDocument();
-		expect(sessionViewList).toHaveBeenCalledWith("feature-x", true, undefined);
+		expect(sessionViewList).toHaveBeenCalledWith(
+			"feature-x",
+			{ workSessions: true, permissionReviewerSessions: false },
+			undefined,
+		);
 	});
 
 	// The difference between the two kinds of row — one switches worktree, one

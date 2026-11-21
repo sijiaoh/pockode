@@ -143,9 +143,15 @@ export function useIsPageCovered(): boolean {
  * For what has to stand down under a layer from inside a surface that may be
  * one: a page's frame, which shielded by its own sheet could never be pressed
  * at all.
+ *
+ * `layer` asks about that layer instead of the one around the caller: a layer
+ * that registered itself with `useCoverPage` and listens for keys on
+ * `document`, where an overlay raised over it cannot silence it by claiming
+ * the press.
  */
-export function useIsDrawnOver(): boolean {
-	const own = useContext(CoverLayerContext);
+export function useIsDrawnOver(layer?: CoverLayer): boolean {
+	const context = useContext(CoverLayerContext);
+	const own = layer ?? context;
 	return useSyncExternalStore(subscribe, () => {
 		if (own === null) return coveringLayers.length > 0;
 		const at = coveringLayers.indexOf(own);

@@ -1,5 +1,9 @@
 import { useCallback, useRef } from "react";
 import {
+	isExcludedSession,
+	type SessionListExclusions,
+} from "../lib/sessionFilter";
+import {
 	placeSession,
 	prependSession,
 	useSessionStore,
@@ -20,14 +24,14 @@ import { useSubscription } from "./useSubscription";
  * rows are appended below the fold, so no page that lands here needs a scroll
  * measurement (docs/list-paging-ui.md §3.1).
  *
- * @param excludeWorkSessions Whether to ask the server for the list without the
- * sessions that belong to work items. The filter lives on the subscription, so
- * flipping it resubscribes; the list already on screen stays there until the new
- * snapshot replaces it, which is what keeps the sidebar from blanking.
+ * @param exclusions The kinds of session to ask the server to leave out of the
+ * list. The filter lives on the subscription, so changing it resubscribes; the
+ * list already on screen stays there until the new snapshot replaces it, which
+ * is what keeps the sidebar from blanking.
  */
 export function useSessionSubscription(
 	enabled: boolean,
-	excludeWorkSessions: boolean,
+	exclusions: SessionListExclusions,
 ) {
 	const sessionListSubscribe = useWSStore(
 		(s) => s.actions.sessionListSubscribe,
@@ -63,14 +67,11 @@ export function useSessionSubscription(
 			onNotification: (params: SessionListChangedNotification) => void,
 		) => {
 			const attempt = ++attemptRef.current;
-			const result = await sessionListSubscribe(
-				onNotification,
-				excludeWorkSessions,
-			);
+			const result = await sessionListSubscribe(onNotification, exclusions);
 			if (attempt === attemptRef.current) subscriptionIdRef.current = result.id;
 			return result;
 		},
-		[sessionListSubscribe, excludeWorkSessions],
+		[sessionListSubscribe, exclusions],
 	);
 
 	const applySnapshot = useCallback(
@@ -114,12 +115,13 @@ export function useSessionSubscription(
 						// Scroll anchoring absorbs it the same way as a create's prepend
 						// (docs/list-paging-ui.md §3.2).
 						//
-						// A work session never belongs in a list that filters them out.
+						// A work session — or a reviewer — never belongs in a list that
+						// filters them out.
 						// The server already keeps it out — a filtered subscriber is sent
 						// a removal or nothing (`SessionListWatcher.pushSession`) — but
 						// this is the line that would otherwise insert a row the user
 						// asked not to see, so it does not rest on that.
-						if (excludeWorkSessions && params.session.work_id) {
+						if (isExcludedSession(exclusions, params.session)) {
 							return old.filter((s) => s.id !== params.session.id);
 						}
 						return placeSession(
@@ -132,7 +134,7 @@ export function useSessionSubscription(
 				}
 			});
 		},
-		[setSessions, setHasUnread, updateSessions, excludeWorkSessions],
+		[setSessions, setHasUnread, updateSessions, exclusions],
 	);
 
 	const handleReset = useCallback(() => {

@@ -56,6 +56,11 @@ vi.mock("../lib/wsStore", () => {
 		isInvalidParamsRejection: (error: unknown) =>
 			error instanceof JSONRPCErrorException &&
 			error.code === JSONRPCErrorCode.InvalidParams,
+		isPermissionReviewerRejection: (error: unknown) =>
+			error instanceof JSONRPCErrorException &&
+			error.code === JSONRPCErrorCode.InvalidParams &&
+			(error.data as { reason?: unknown } | undefined)?.reason ===
+				"permission_reviewer",
 	};
 });
 

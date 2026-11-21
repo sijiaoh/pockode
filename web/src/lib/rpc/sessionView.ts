@@ -6,11 +6,16 @@ import type {
 	SessionDetail,
 	SessionListPage,
 } from "../../types/message";
+import {
+	type SessionListExclusions,
+	sessionListExclusionParams,
+} from "../sessionFilter";
 import type { HtmlPage, HtmlPageGetResult } from "./htmlPage";
 
 interface SessionViewListParams {
 	worktree: string;
 	exclude_work_sessions?: boolean;
+	exclude_permission_reviewer_sessions?: boolean;
 	cursor?: string;
 }
 
@@ -91,7 +96,7 @@ export interface SessionViewActions {
 	 */
 	sessionViewList: (
 		worktree: string,
-		excludeWorkSessions: boolean,
+		exclusions: SessionListExclusions,
 		cursor?: string,
 	) => Promise<SessionListPage>;
 	/**
@@ -152,10 +157,10 @@ export function createSessionViewActions(
 			return result.worktrees;
 		},
 
-		sessionViewList: async (worktree, excludeWorkSessions, cursor) => {
+		sessionViewList: async (worktree, exclusions, cursor) => {
 			return (await requireClient().request("session_view.list", {
 				worktree,
-				exclude_work_sessions: excludeWorkSessions,
+				...sessionListExclusionParams(exclusions),
 				...(cursor !== undefined ? { cursor } : {}),
 			} satisfies SessionViewListParams)) as SessionListPage;
 		},

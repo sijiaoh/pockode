@@ -18,9 +18,11 @@ import {
 	normalizeEvent,
 	prependHistoryPage,
 	replayHistory,
+	resetPromptRequest,
 	settleAgainstTurn,
 	settleRunningToolRuns,
 	stampMessageAnchorSeq,
+	updatePermissionRequestStatus,
 } from "./messageReducer";
 
 // Deterministic but distinct ids: whether a message keeps its id or gets a
@@ -387,6 +389,32 @@ describe("messageReducer", () => {
 				type: "permission_response",
 				requestId: "req-1",
 				choice: "allow",
+			});
+		});
+
+		it("keeps who answered a permission request, and the review", () => {
+			const event = normalizeEvent({
+				type: "permission_response",
+				request_id: "req-1",
+				choice: "deny",
+				by: "permission_reviewer",
+				review: {
+					session_id: "rev-1",
+					category: "system_damage",
+					reason: "It deletes /.",
+				},
+			});
+			expect(event).toEqual({
+				type: "permission_response",
+				requestId: "req-1",
+				choice: "deny",
+				by: "permission_reviewer",
+				review: {
+					sessionId: "rev-1",
+					category: "system_damage",
+					automatic: undefined,
+					reason: "It deletes /.",
+				},
 			});
 		});
 
@@ -916,6 +944,78 @@ describe("messageReducer", () => {
 			expect(assistant.parts[0]).toMatchObject({
 				type: "permission_request",
 				status: "denied",
+			});
+		});
+
+		describe("an answer a reviewer or Pockode gave", () => {
+			const card = (
+				status: "pending" | "allowed" | "denied",
+			): AssistantMessage => ({
+				id: "msg-1",
+				role: "assistant",
+				parts: [
+					{
+						id: "p1",
+						type: "permission_request",
+						request: {
+							requestId: "req-1",
+							toolName: "Bash",
+							toolInput: { command: "rm -rf /" },
+							toolUseId: "tool-1",
+						},
+						status,
+					},
+				],
+				status: "streaming",
+				createdAt: new Date(),
+			});
+			const reviewerDeny = {
+				type: "permission_response",
+				requestId: "req-1",
+				choice: "deny",
+				by: "permission_reviewer",
+				review: { sessionId: "rev-1", category: "system_damage" },
+			} as const;
+
+			it("settles the card with who answered", () => {
+				const [msg] = applyServerEvent([card("pending")], reviewerDeny);
+				expect((msg as AssistantMessage).parts[0]).toMatchObject({
+					status: "denied",
+					by: "permission_reviewer",
+					review: { sessionId: "rev-1", category: "system_damage" },
+				});
+			});
+
+			// First answer wins on the server: a press this client made on the same
+			// request was refused, and the card must not keep showing it.
+			it("wins over this client's press, which it beat", () => {
+				const [msg] = applyServerEvent([card("allowed")], reviewerDeny);
+				expect((msg as AssistantMessage).parts[0]).toMatchObject({
+					status: "denied",
+					by: "permission_reviewer",
+				});
+			});
+
+			it("is not undone when the press it beat is refused", () => {
+				const answered = applyServerEvent([card("allowed")], reviewerDeny);
+				const [msg] = resetPromptRequest(answered, "req-1", "expired");
+				expect((msg as AssistantMessage).parts[0]).toMatchObject({
+					status: "denied",
+					by: "permission_reviewer",
+				});
+			});
+
+			it("is not replaced by a person's answer arriving after it", () => {
+				const answered = applyServerEvent([card("pending")], reviewerDeny);
+				const [msg] = updatePermissionRequestStatus(
+					answered,
+					"req-1",
+					"allowed",
+				);
+				expect((msg as AssistantMessage).parts[0]).toMatchObject({
+					status: "denied",
+					by: "permission_reviewer",
+				});
 			});
 		});
 

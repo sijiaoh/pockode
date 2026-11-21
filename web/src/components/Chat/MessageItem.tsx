@@ -9,15 +9,20 @@ import {
 	SquareSlash,
 	X,
 } from "lucide-react";
-import { memo, useId, useMemo, useState } from "react";
+import { memo, useEffect, useId, useMemo, useRef, useState } from "react";
 import { type FullScreenSource, fullScreenSubject } from "../../lib/fullScreen";
 import { isHtmlRenderCard } from "../../lib/htmlRender";
+import {
+	reviewAutomaticLabel,
+	reviewCategoryLabel,
+} from "../../lib/permissionReview";
 import {
 	changeRowCount,
 	proposedChange,
 	proposedChangeText,
 } from "../../lib/proposedChange";
 import { useChatUIConfig } from "../../lib/registries/chatUIRegistry";
+import { isReviewerEventSubtype } from "../../lib/reviewerTranscript";
 import { CodeHighlighter } from "../../lib/shikiUtils";
 import { outputLineCount } from "../../lib/textLines";
 import {
@@ -31,7 +36,9 @@ import type {
 	ContentPart,
 	ExpiryReason,
 	Message,
+	PermissionAnswerer,
 	PermissionRequest,
+	PermissionReview,
 	PermissionRuleValue,
 	PermissionStatus,
 	PermissionUpdate,
@@ -72,7 +79,9 @@ import {
 	ProposedChange,
 	proposedChangeHeader,
 } from "./ProposedChange";
+import { usePermissionReview } from "./permissionReviewContext";
 import QuestionRecordItem from "./QuestionRecordItem";
+import ReviewerEventItem from "./ReviewerEventItem";
 import { useRowExpanded } from "./rowExpansionContext";
 import { anchorBlocksProps, anchorCandidateProps } from "./scrollAnchor";
 import TaskItem from "./TaskItem";
@@ -80,7 +89,7 @@ import ThinkingItem from "./ThinkingItem";
 import ToolCallItem from "./ToolCallItem";
 import { invocationView, ToolInvocation } from "./ToolInvocation";
 import { PartBlocks } from "./ToolList";
-import { ToolRow } from "./ToolRow";
+import { RowSubline, RunningGlyph, ToolRow } from "./ToolRow";
 import { Section, type SectionFullScreen } from "./ToolSection";
 import { TurnChangesCard } from "./TurnChangesCard";
 import TurnTail from "./TurnTail";
@@ -386,6 +395,9 @@ interface PermissionRequestItemProps {
 	status: PermissionStatus;
 	/** Why it expired, when the server could say; see ExpiryReason. */
 	reason?: ExpiryReason;
+	/** Who answered it, when not a person; see the card's `by`. */
+	by?: PermissionAnswerer;
+	review?: PermissionReview;
 	isCodex?: boolean;
 	onRespond?: (request: PermissionRequest, choice: PermissionChoice) => void;
 	onOpenFile?: (path: string) => void;
@@ -660,16 +672,142 @@ const PERMISSION_EXPIRY_COPY: Partial<Record<ExpiryReason, string>> = {
 const PERMISSION_EXPIRY_FALLBACK =
 	"The agent stopped waiting for this request, so it counted as a denial and the tool did not run.";
 
+/** Who answered a card in a person's place, as its verdict line says it. */
+type Verdict =
+	| { by: "permission_reviewer"; allowed: boolean; review?: PermissionReview }
+	| { by: "pockode"; review?: PermissionReview };
+
+// A `by` this build does not know draws no line: there is nothing true to say
+// about an answerer it cannot name beyond what the status glyph already says.
+function readVerdict(
+	status: PermissionStatus,
+	by: PermissionAnswerer | undefined,
+	review: PermissionReview | undefined,
+): Verdict | undefined {
+	if (status !== "allowed" && status !== "denied") return undefined;
+	if (by === "permission_reviewer") {
+		return { by: "permission_reviewer", allowed: status === "allowed", review };
+	}
+	if (by === "pockode") return { by: "pockode", review };
+	return undefined;
+}
+
+// Accent text over a text line rather than a box: the line is a statement, and
+// the link the one thing in it to press. At module scope for the hit-area scan
+// (web/tests/touchTarget.ts, `interactiveControls`).
+const VIEW_REVIEW =
+	"touch-target shrink-0 rounded text-th-accent hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent";
+
+/**
+ * The link to the reviewer session that answered, when there is one to go to:
+ * not when the review failed before a reviewer existed, and not when it is the
+ * session on screen — a reviewer's own request is denied in its own transcript
+ * (docs/unattended-mode-ui.md §3.2). Whether the reviewer still exists is not
+ * the record's to say; a deleted one lands on the session-not-found screen.
+ */
+function ViewReviewLink({ sessionId }: { sessionId?: string }) {
+	const view = usePermissionReview();
+	if (!sessionId || sessionId === view.sessionId || !view.onOpenSession) {
+		return null;
+	}
+	const open = view.onOpenSession;
+	return (
+		<>
+			<span aria-hidden="true">·</span>
+			<button
+				type="button"
+				onClick={() => open(sessionId)}
+				className={VIEW_REVIEW}
+			>
+				View review
+			</button>
+		</>
+	);
+}
+
+const REVIEWER_GLYPH = (
+	<Bot className="mt-0.5 size-3 shrink-0 text-th-text-muted" aria-hidden />
+);
+
+/**
+ * Who answered, or who is answering, under the card's row and outside its
+ * body, so it shows folded (docs/unattended-mode-ui.md §3). The reason is the
+ * reviewer's words or Pockode's, plain text whatever it says: it is model
+ * output a prompt injection may have written, so it is never markdown and never
+ * linked. Folded it is cut to two lines; open, the body has it whole.
+ */
+function VerdictLine({
+	verdict,
+	reviewing,
+	answerable,
+	expanded,
+}: {
+	verdict?: Verdict;
+	reviewing: boolean;
+	/** Whether this screen can answer; a read-only one cannot. */
+	answerable: boolean;
+	expanded: boolean;
+}) {
+	if (reviewing) {
+		return (
+			<RowSubline glyph={REVIEWER_GLYPH}>
+				<span className="text-th-text-muted">
+					{answerable
+						? "Permission reviewer is checking this. You can answer first."
+						: "Permission reviewer is checking this."}
+				</span>
+			</RowSubline>
+		);
+	}
+	if (!verdict) return null;
+
+	const review = verdict.review;
+	let headline: string;
+	if (verdict.by === "pockode") {
+		headline = `Denied by Pockode — ${reviewAutomaticLabel(review?.automatic)}`;
+	} else if (verdict.allowed) {
+		headline = "Allowed by the permission reviewer";
+	} else {
+		headline = review?.category
+			? `Denied by the permission reviewer — ${reviewCategoryLabel(review.category)}`
+			: "Denied by the permission reviewer";
+	}
+
+	return (
+		<RowSubline
+			glyph={verdict.by === "permission_reviewer" ? REVIEWER_GLYPH : undefined}
+		>
+			<span className="flex flex-wrap items-baseline gap-x-1.5 text-th-text-muted">
+				<span>{headline}</span>
+				<ViewReviewLink sessionId={review?.sessionId} />
+			</span>
+			{review?.reason && !expanded && (
+				<span className="line-clamp-2 whitespace-pre-wrap break-words text-th-text-secondary">
+					{review.reason}
+				</span>
+			)}
+		</RowSubline>
+	);
+}
+
 function PermissionRequestItem({
 	request,
 	status,
 	reason,
+	by,
+	review,
 	isCodex,
 	onRespond,
 	onOpenFile,
 	error,
 }: PermissionRequestItemProps) {
 	const isPending = status === "pending";
+	// Live state, read from the session's turn: the card's record cannot say
+	// whether anyone is answering it now.
+	const reviewingIds = usePermissionReview().reviewing;
+	const reviewing = isPending && reviewingIds.has(request.requestId);
+	const verdict = readVerdict(status, by, review);
+	const verdictReason = verdict?.review?.reason;
 	const workDir = useWSStore((state) => state.workDir);
 	// The same derivation the tool row uses: a user who approved a command and
 	// then reads the row that ran it is looking at one string, cut one way.
@@ -681,10 +819,25 @@ function PermissionRequestItem({
 	// The expired banner lives in the body, so a request with nothing else to
 	// show still has to be openable — otherwise the one thing the card has left
 	// to say is unreachable.
-	const hasExpandableContent = hasToolInput || status === "expired";
+	const hasExpandableContent =
+		hasToolInput || status === "expired" || Boolean(verdictReason);
+	// A request under review has nobody to ask, so it does not open itself.
 	const [expanded, setExpanded] = useRowExpanded(
-		isPending && hasExpandableContent,
+		isPending && !reviewing && hasExpandableContent,
 	);
+	// The open-by-default above is read once, at mount, and the turn that says
+	// a request is under review comes with the session's detail, which can land
+	// after the transcript. A card drawn open before then is folded the moment
+	// its review is known: a request is under review from its raise, so the
+	// flag only ever turns on here when the detail lands late.
+	const wasReviewing = useRef(reviewing);
+	useEffect(() => {
+		if (reviewing && !wasReviewing.current) setExpanded(false);
+		wasReviewing.current = reviewing;
+	}, [reviewing, setExpanded]);
+	// The warning card is for a request waiting on the user; one under review is
+	// not, and keeps only the frame, neutral, to read as live.
+	const asksUser = isPending && !reviewing;
 
 	const statusConfig = {
 		pending: { Icon: CircleHelp, color: "text-th-warning" },
@@ -693,7 +846,10 @@ function PermissionRequestItem({
 		expired: { Icon: X, color: "text-th-text-muted" },
 	};
 
-	const { Icon, color } = statusConfig[status];
+	// Pockode's deny is muted like an expired card: nobody judged the call, so it
+	// is no judgement against it.
+	const { Icon, color } =
+		verdict?.by === "pockode" ? statusConfig.expired : statusConfig[status];
 
 	return (
 		// The data attribute is how MessageList finds this card when the attention
@@ -714,17 +870,21 @@ function PermissionRequestItem({
 			// what it is pinned above, which also puts it over this outline, so
 			// the tint and the frame are restated for it as `--row-tint` and
 			// `--row-frame` (`row-bar`).
-			className={`scroll-mt-14 text-xs ${isPending ? "bg-th-warning/10 [--row-tint:color-mix(in_oklab,var(--th-warning)_10%,transparent)] outline-1 -outline-offset-1 outline-th-warning [--row-frame:var(--th-warning)]" : ""}`}
+			className={`scroll-mt-14 text-xs ${asksUser ? "bg-th-warning/10 [--row-tint:color-mix(in_oklab,var(--th-warning)_10%,transparent)] outline-1 -outline-offset-1 outline-th-warning [--row-frame:var(--th-warning)]" : reviewing ? "outline-1 -outline-offset-1 outline-th-border [--row-frame:var(--th-border)]" : ""}`}
 		>
 			<ToolRow
 				expanded={expanded}
 				toggleable={hasExpandableContent}
 				onToggle={() => hasExpandableContent && setExpanded(!expanded)}
 				glyph={
-					<Icon
-						className={`mt-0.5 size-3 shrink-0 ${color}`}
-						aria-label={status}
-					/>
+					reviewing ? (
+						<RunningGlyph label="under review" muted />
+					) : (
+						<Icon
+							className={`mt-0.5 size-3 shrink-0 ${color}`}
+							aria-label={status}
+						/>
+					)
 				}
 				title={summary.title}
 				chip={summary.chip}
@@ -733,13 +893,20 @@ function PermissionRequestItem({
 				detailMono={summary.mono}
 			/>
 
+			<VerdictLine
+				verdict={verdict}
+				reviewing={reviewing}
+				answerable={Boolean(onRespond)}
+				expanded={expanded}
+			/>
+
 			<CollapsibleBody expanded={expanded}>
 				{/* A settled card's body is an opened drawer like a tool row's; a
 				    pending one keeps the card's tint, being what the card asks
 				    about — and restates it for a pinned section header
 				    (`section-bar`), which would otherwise paint a drawer's. */}
 				<div
-					className={`space-y-3 border-t border-th-border p-2 ${isPending ? "[--section-ground:linear-gradient(var(--row-tint),var(--row-tint)),var(--row-ground,var(--th-bg-primary))]" : "bg-th-bg-secondary"}`}
+					className={`space-y-3 border-t border-th-border p-2 ${asksUser ? "[--section-ground:linear-gradient(var(--row-tint),var(--row-tint)),var(--row-ground,var(--th-bg-primary))]" : "bg-th-bg-secondary"}`}
 				>
 					{/* An expired permission can only have been a denial, and the card
 					    states that outcome rather than offering anything to press: the
@@ -750,6 +917,11 @@ function PermissionRequestItem({
 							{(reason && PERMISSION_EXPIRY_COPY[reason]) ??
 								PERMISSION_EXPIRY_FALLBACK}
 						</div>
+					)}
+					{verdictReason && (
+						<p className="whitespace-pre-wrap break-words text-th-text-secondary">
+							{verdictReason}
+						</p>
 					)}
 					{hasToolInput && (
 						<PermissionRequestBody request={request} onOpenFile={onOpenFile} />
@@ -806,7 +978,13 @@ function PermissionRequestItem({
 						<button
 							type="button"
 							onClick={() => onRespond(request, "allow")}
-							className={`${PERMISSION_BUTTON} flex-1 bg-th-accent text-th-accent-text hover:opacity-90`}
+							// Under review there is nothing the user has to do, so no
+							// answer is the one to press.
+							className={
+								reviewing
+									? `${PERMISSION_BUTTON} flex-1 border border-th-border bg-th-bg-primary text-th-text-primary hover:bg-th-overlay-hover`
+									: `${PERMISSION_BUTTON} flex-1 bg-th-accent text-th-accent-text hover:opacity-90`
+							}
 						>
 							Allow
 						</button>
@@ -993,6 +1171,8 @@ function ContentPartBody(props: ContentPartItemProps) {
 				request={part.request}
 				status={part.status}
 				reason={part.reason}
+				by={part.by}
+				review={part.review}
 				isCodex={isCodex}
 				onRespond={onPermissionRespond}
 				onOpenFile={onOpenFile}
@@ -1445,6 +1625,16 @@ const MessageItem = memo(function MessageItem({
 		// beside it runs to the reading column's edge now, so there is no bubble
 		// edge left for an empty slot to line up with.
 		if (message.source === "system") {
+			if (isReviewerEventSubtype(message.subtype)) {
+				return (
+					<ReviewerEventItem
+						id={message.id}
+						content={message.content}
+						subtype={message.subtype ?? ""}
+						discarded={isDiscarded}
+					/>
+				);
+			}
 			return (
 				<WorkEventItem
 					id={message.id}

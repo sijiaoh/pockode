@@ -1,4 +1,4 @@
-import { useCoverPage, useOutsideClick } from "@pockode/shared";
+import { useCoverPage, useIsDrawnOver, useOutsideClick } from "@pockode/shared";
 import { X } from "lucide-react";
 import { type ReactNode, useEffect, useId, useRef } from "react";
 import { createPortal } from "react-dom";
@@ -103,7 +103,11 @@ function ResponsivePanel({
 	// if it was registered first it runs before the mark below is made. And it
 	// is one step of Back in either tier, so a resize while it is open changes
 	// nothing in history (docs/project-ui.md §5.2).
-	useCoverPage(isOpen, { onBack: onClose });
+	const layer = useCoverPage(isOpen, { onBack: onClose });
+	// A dialog raised over the panel (a confirmation asked from inside it)
+	// answers Escape itself, and its claim cannot reach this sibling listener on
+	// `document`: one press would cancel the question and close the panel too.
+	const drawnOver = useIsDrawnOver(layer);
 
 	// Close on Escape, and mark the press handled. This panel opens from the
 	// session header, which stays live under surfaces
@@ -112,7 +116,7 @@ function ResponsivePanel({
 	// Without the mark, one press would put away both this panel and one the
 	// user was not even looking at.
 	useEffect(() => {
-		if (!isOpen) return;
+		if (!isOpen || drawnOver) return;
 
 		const handleEscape = (e: KeyboardEvent) => {
 			if (e.key !== "Escape" || e.defaultPrevented) return;
@@ -122,7 +126,7 @@ function ResponsivePanel({
 
 		document.addEventListener("keydown", handleEscape);
 		return () => document.removeEventListener("keydown", handleEscape);
-	}, [isOpen, onClose]);
+	}, [isOpen, drawnOver, onClose]);
 
 	// Prevent body scroll on mobile
 	useEffect(() => {
