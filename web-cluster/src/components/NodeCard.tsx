@@ -1,5 +1,5 @@
-import { Sheet, Spinner } from "@pockode/shared";
-import { useEffect, useState } from "react";
+import { isPlainClick, Sheet, Spinner } from "@pockode/shared";
+import { type MouseEvent, useEffect, useState } from "react";
 import { useElapsed } from "../hooks/useElapsed";
 import {
 	type InstalledVersionState,
@@ -7,6 +7,7 @@ import {
 	isUnreadable,
 	useFreshRead,
 } from "../hooks/useInstalledVersion";
+import { openNodeTab } from "../lib/nodeLogin";
 import {
 	displayVersion,
 	type NodeVersionKind,
@@ -56,6 +57,8 @@ interface Props {
 	onRestart: (node: NodeWithStatus) => Promise<RestartResult>;
 	/** Opens the older node's stop-and-start sheet, which the list holds. */
 	onRestartOlder: (node: NodeWithStatus) => void;
+	/** A one-time login to this running node, for the tab Open and Local open. */
+	onLoginTicket: (id: string) => Promise<string>;
 }
 
 /**
@@ -132,6 +135,7 @@ export function NodeCard({
 	older,
 	onRestart,
 	onRestartOlder,
+	onLoginTicket,
 }: Props) {
 	const [menuView, setMenuView] = useState<MenuView | null>(null);
 	// The restart confirmation, and where it was opened from: the menu's has
@@ -193,9 +197,17 @@ export function NodeCard({
 	// A phone on mobile data cannot reach localhost, so remote is the default
 	// target whenever the cluster has one; local stays as a second link.
 	const openUrl = node.status.remote_url ?? node.status.local_url;
-	const showLocalLink = Boolean(
-		node.status.remote_url && node.status.local_url,
-	);
+	const localUrl = node.status.remote_url ? node.status.local_url : undefined;
+
+	// The `href` stays the plain address and the ticket goes only to the tab a
+	// plain click opens: a middle click, a modifier, a long press or a copied
+	// address never carries a login. A blocked tab lets the click through to
+	// that plain `href`.
+	const openLoggedIn = (e: MouseEvent, url: string) => {
+		if (isPlainClick(e) && openNodeTab(url, () => onLoginTicket(node.id))) {
+			e.preventDefault();
+		}
+	};
 
 	const closeMenu = () => setMenuView(null);
 
@@ -369,15 +381,17 @@ export function NodeCard({
 								href={openUrl}
 								target="_blank"
 								rel="noopener noreferrer"
+								onClick={(e) => openLoggedIn(e, openUrl)}
 								className={`${PRIMARY_BUTTON} flex-1`}
 							>
 								Open
 							</a>
-							{showLocalLink && (
+							{localUrl && (
 								<a
-									href={node.status.local_url}
+									href={localUrl}
 									target="_blank"
 									rel="noopener noreferrer"
+									onClick={(e) => openLoggedIn(e, localUrl)}
 									// `touch-target` overlays a 44px hit area on a link that is
 									// only 36px of text: the secondary link sits one thumb-width
 									// from Open and has to be as hard to miss as it is to hit.

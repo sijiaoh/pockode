@@ -3,6 +3,8 @@ import type {
 	Node,
 	NodeCleanupParams,
 	NodeCreateParams,
+	NodeLoginTicketParams,
+	NodeLoginTicketResult,
 	NodeRestartParams,
 	NodeStartParams,
 	NodeStatusInfo,
@@ -22,6 +24,7 @@ export interface NodeActions {
 	stopNode: (params: NodeStopParams) => Promise<NodeStatusInfo>;
 	cleanupNode: (params: NodeCleanupParams) => Promise<NodeStatusInfo>;
 	restartNode: (params: NodeRestartParams) => Promise<NodeStatusInfo>;
+	loginTicket: (params: NodeLoginTicketParams) => Promise<string>;
 }
 
 export function createNodeActions(
@@ -81,6 +84,16 @@ export function createNodeActions(
 		// `restartRefusedReason` reads, having sent nothing.
 		restartNode: async (params: NodeRestartParams): Promise<NodeStatusInfo> => {
 			return requireClient().request("node.restart", params);
+		},
+
+		// A one-time login to the running node's web app, for the tab the panel
+		// opens on it (docs/code/websocket-rpc.md#logging-in-from-the-cluster).
+		loginTicket: async (params: NodeLoginTicketParams): Promise<string> => {
+			const result: NodeLoginTicketResult = await requireClient().request(
+				"node.login_ticket",
+				params,
+			);
+			return result.ticket;
 		},
 	};
 }

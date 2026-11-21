@@ -45,7 +45,9 @@ were. Records written before `LastUsedAt` existed are given `UpdatedAt` as their
 sort key when the store loads them, so nothing is sorted on a zero time.
 
 Opening a running node is deliberately *not* counted: it is a link the frontend
-follows, and the cluster never hears about it.
+follows. The cluster hears of it only when a plain click asks for a login
+ticket, and a modifier click or a copied address does not, so counting that
+request would count some opens and not others.
 
 The path must point to a directory. If the directory does not exist, the request is rejected with `invalid node: path does not exist`; the frontend detects this and offers to create it in place, retrying with `create_missing_dir` set (see [Frontend UX](#frontend-ux)). A path that exists but is not a directory (or is otherwise inaccessible, e.g. permission denied) is always rejected and never offered for creation. Duplicate paths are rejected.
 
@@ -420,8 +422,16 @@ alternatives that were rejected on the way to it, are in
 - **A node card's primary button** is **Open** for a running node, **Start** for
   a stopped or stale one. Open goes to `remote_url` when the cluster has one,
   since a phone on mobile data cannot reach `localhost`; `Local` appears beside
-  it only when both URLs exist. A running node that reported no address at all
-  says so rather than offering a button that leads nowhere. Restart and Stop
+  it only when both URLs exist. A plain click on either opens the node already
+  logged in: the panel opens a blank tab within the click, cuts its opener, asks
+  `node.login_ticket`, and sends the tab to the address with
+  `#login_ticket=<ticket>` — in the fragment, so it reaches no server, relay log
+  or `Referer`. The links' `href` stays the plain address, so a middle or
+  modifier click, a long press or a copied address is never a login; a blocked
+  tab, a failed request or an older node's `unsupported` lands on the plain
+  address, whose password page still lets the user in. A running node that
+  reported no address at all says so rather than offering a button that leads
+  nowhere. Restart and Stop
   (running only), Edit and Delete live in the card's overflow menu.
 - **Stale nodes are a recoverable state**: the card says the server exited
   without cleaning up and that nothing is running, and offers **Start** (which

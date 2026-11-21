@@ -326,6 +326,8 @@ export function NodeList() {
 			actions.stopNode({ id }),
 		);
 
+	const handleLoginTicket = (id: string) => actions.loginTicket({ id });
+
 	const handleCleanup = async (id: string) => {
 		await runNodeAction(id, CLEANUP_FAILED, () => actions.cleanupNode({ id }));
 	};
@@ -683,6 +685,7 @@ export function NodeList() {
 														older={isOlderNode(node, knownOlder)}
 														onRestart={handleRestart}
 														onRestartOlder={handleRestartOlder}
+														onLoginTicket={handleLoginTicket}
 													/>
 												))}
 											</div>
