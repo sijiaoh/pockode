@@ -30,7 +30,7 @@ An address you copy or share is not a login: whoever opens it gets a password pa
 - **One port per page.** `-5173` and `-8080` are different origins, so a frontend that calls its API on another port directly is refused (403). Route the API through the dev server's own proxy, such as Vite's `server.proxy`.
 - **No frames.** A preview cannot be embedded in another page; a page framing itself (a Storybook canvas) works.
 - **30 seconds to answer.** A dev server compiling a route on first request can take longer and return 502; reload.
-- **`/__pockode/` and `/api/mcp/` are Pockode's** and never reach your server.
+- **`/__pockode/`, `/api/mcp/` and `/api/pockode-local/` are Pockode's** and never reach your server.
 
 ## When it goes wrong
 

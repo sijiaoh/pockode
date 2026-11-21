@@ -46,7 +46,8 @@ export type AuthFailureReason =
 	| "session_expired"
 	| "not_authenticated"
 	| "worktree_not_found"
-	| "rate_limited";
+	| "rate_limited"
+	| "invalid_ticket";
 
 /**
  * The reason on an auth refusal, or null when the error carries none.

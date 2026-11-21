@@ -54,6 +54,14 @@ type PreviewTickets interface {
 	Issue() (string, error)
 }
 
+// LoginTickets redeems the one-time tickets the node's local login endpoint
+// hands out; authsession.Tickets implements it. That endpoint issues them, so
+// the two must be one instance — and not the preview ticket set, so that
+// neither kind of ticket logs in as the other.
+type LoginTickets interface {
+	Redeem(ticket string) bool
+}
+
 // RawCapabilities issues the capabilities /api/raw is read with;
 // filetransfer.RawHandler implements it. That handler resolves them, so the
 // two must be one instance.
@@ -70,6 +78,7 @@ type RPCHandler struct {
 	remoteURL             func() string // live: renewing the relay credentials can change it
 	remoteURLWatcher      *watch.RemoteURLWatcher
 	previewTickets        PreviewTickets
+	loginTickets          LoginTickets
 	rawCapabilities       RawCapabilities
 	devMode               bool
 	commandStore          *command.Store
@@ -104,7 +113,7 @@ type RPCHandler struct {
 	server           ServerControl
 }
 
-func NewRPCHandler(password string, passwordGuard *authguard.Guard, sessions SessionStore, version string, remoteURL func() string, previewTickets PreviewTickets, rawCapabilities RawCapabilities, devMode bool, commandStore *command.Store, worktreeManager *worktree.Manager, settingsStore *settings.Store, workStore work.Store, workOps *work.Operations, workEngine *work.Engine, agentRoleStore agentrole.Store, scheduleStore schedule.Store, scheduler *schedule.Scheduler, cliAuth *cliauth.Service, cliProfiles *cliprofile.Store, cliUpdate *cliupdate.Service, cloudLink *cloudlogin.Service, restarter *restart.Restarter, updater *Updater) *RPCHandler {
+func NewRPCHandler(password string, passwordGuard *authguard.Guard, sessions SessionStore, version string, remoteURL func() string, previewTickets PreviewTickets, loginTickets LoginTickets, rawCapabilities RawCapabilities, devMode bool, commandStore *command.Store, worktreeManager *worktree.Manager, settingsStore *settings.Store, workStore work.Store, workOps *work.Operations, workEngine *work.Engine, agentRoleStore agentrole.Store, scheduleStore schedule.Store, scheduler *schedule.Scheduler, cliAuth *cliauth.Service, cliProfiles *cliprofile.Store, cliUpdate *cliupdate.Service, cloudLink *cloudlogin.Service, restarter *restart.Restarter, updater *Updater) *RPCHandler {
 	settingsWatcher := watch.NewSettingsWatcher(settingsStore)
 	settingsWatcher.Start()
 
@@ -162,6 +171,7 @@ func NewRPCHandler(password string, passwordGuard *authguard.Guard, sessions Ses
 		remoteURL:             remoteURL,
 		remoteURLWatcher:      remoteURLWatcher,
 		previewTickets:        previewTickets,
+		loginTickets:          loginTickets,
 		rawCapabilities:       rawCapabilities,
 		devMode:               devMode,
 		commandStore:          commandStore,
@@ -994,30 +1004,53 @@ func (h *rpcMethodHandler) handleAuth(ctx context.Context, conn *jsonrpc2.Conn, 
 	}
 }
 
-// checkCredentials verifies the one credential the client sent. It returns the
-// session token the client authenticated with, or "" when it sent a password
-// and a token must be issued for it — deliberately not issuing one here, so
-// that nothing is spent before the rest of handleAuth has succeeded. Every
-// refusal closes the connection and is reported as ok=false.
+// checkCredentials verifies the credentials the client sent. It returns the
+// session token the client authenticated with, or "" when a token must be
+// issued for it (a password, or a login ticket without a live session) —
+// deliberately not issuing one here, so that nothing is spent before the rest
+// of handleAuth has succeeded. Every refusal closes the connection and is
+// reported as ok=false.
 func (h *rpcMethodHandler) checkCredentials(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request, params rpc.AuthParams) (string, bool) {
 	// Token is the pre-rename spelling of Password; a cached PWA may still be
 	// sending it. See rpc.AuthParams.
 	given := rpc.OrLegacy(params.Password, params.Token)
 
-	if given != "" && params.SessionToken != "" {
-		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "password and session_token are mutually exclusive")
+	// Redeemed before anything can refuse the request, so that a ticket is
+	// spent by the first connect that carries it whatever that connect's
+	// outcome; the copy the URL left in browser history is then worthless.
+	ticketSent := params.LoginTicket != ""
+	ticketValid := ticketSent && h.loginTickets.Redeem(params.LoginTicket)
+
+	if given != "" && (params.SessionToken != "" || ticketSent) {
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "password is mutually exclusive with session_token and login_ticket")
 		conn.Close()
 		return "", false
 	}
 
 	if params.SessionToken != "" {
-		if !h.sessions.Validate(params.SessionToken) {
+		// A live session is kept even when a ticket came with it: issuing one
+		// per Open would fill the session cap and evict other devices.
+		if h.sessions.Validate(params.SessionToken) {
+			return params.SessionToken, true
+		}
+		if !ticketSent {
 			h.log.Info("rejected an expired or unknown session token")
 			h.replyAuthError(ctx, conn, req.ID, "session expired", rpc.AuthReasonSessionExpired)
 			conn.Close()
 			return "", false
 		}
-		return params.SessionToken, true
+	}
+
+	// Decided before the password branch, so that the empty password of a
+	// ticket-only request never reaches authguard as a guess.
+	if ticketSent {
+		if !ticketValid {
+			h.log.Info("rejected an invalid, spent or expired login ticket")
+			h.replyAuthError(ctx, conn, req.ID, "invalid login ticket", rpc.AuthReasonInvalidTicket)
+			conn.Close()
+			return "", false
+		}
+		return "", true
 	}
 
 	ok, retryAfter := h.passwordGuard.Attempt(func() bool { return password.Matches(given, h.password) })

@@ -45,7 +45,7 @@ agentrole/              # AgentRole 存储 + 类型定义
 apiroute/               # 本进程 API 路径判定（SPA handler 与 relay 代理共用）；/api/raw 的路由判定与日志中 capability 的遮蔽
 attachments/            # 按 session 存放事件里以 id 引用的内容（内容寻址，流式落盘）
 authguard/              # 失败密码登录的全局退避锁（仅内存；各密码入口共用，session token / ticket / capability 不经过它）
-authsession/            # 登录会话：密码换取的 session token + 密码指纹（sessions.json）；端口预览的一次性登录 ticket、绑定 session 的资源 capability（均仅内存）
+authsession/            # 登录会话：密码换取的 session token + 密码指纹（sessions.json）；端口预览与 app 登录（集群经 localapi 取）的一次性 ticket（两套互不通用）、绑定 session 的资源 capability（均仅内存）
 chat/                   # Chat 客户端
 cliauth/                # AI CLI 登录状态查询、远程登录流程与登出，均可指定账号（各 CLI 的实现在 agent/*/auth.go、login.go，见 docs/code/cli-auth.md）；按账号加锁（lock.go：读状态 / 登出只占一个账号，登录 / 更新占整个 CLI）；账号的切换与删除（remove.go：要与登录命令互斥，所以经过这里；删除的顺序见 docs/code/cli-profiles.md#removing-a-profile）
 cliprofile/             # AI CLI 账号（profile）列表 cli-profiles.json（与 cloud.json 同目录、本 OS 用户的所有进程共享；默认账号隐含不存；账号目录 cli-profiles/<cli>/<id>/）与本服务器自己选的当前账号 <dataDir>/current-cli-profiles.json（每个项目的服务器、每个集群节点各一份，互不跟随；没选过或选的账号已不在列表里就是默认账号）；账号目录的准备（prepare.go：除凭据外全部符号链接回默认目录，冲突只报告不搬动）与本机能否建符号链接的探测（availability.go；平台差异在 platform_*.go）；启动 CLI 时按哪个账号、带什么环境变量与参数（launch.go 的 `Resolve` / `Launch`）；本进程正在删除的账号与一次性调用对账号的占用（withdraw.go：删除期间，若被删的正是当前账号，按当前账号启动的一律用默认账号；删除失败则恢复；一次性调用经 `LaunchOneShot` 占住账号直到 CLI 退出，删除先等它们）；cliprofiletest/ 给测试准备账号、把假 CLI 放上 PATH 并记录每次启动的环境与参数（见 docs/code/cli-profiles.md）
@@ -63,6 +63,7 @@ git/                    # Git 操作
 htmlpage/               # 代理在聊天里画的页面（html_render 等）：按 session 存不可变快照，id 为 p1、p2…；结果记录上的 html_page 由 process 打上；页面发给代理的 action（`Action` / `ActionText`，chat.html_action 用）也在这里（见 docs/code/work-system.md#rendering-tool）
 internal/cmd/marketingbanner/  # 打印启动横幅供营销视频截取（不是服务器的一部分；放在本模块里是为了让 CI 的 vet/build 覆盖它，见 docs/marketing-assets.md §3.3）
 internal/cmd/thirdpartynotices/  # 打印服务器二进制的第三方许可声明：按 `go list -deps` 得出的实际链接模块 + Go 标准库 + 手工条目（`manual.go`，fzf 移植）；许可证无法识别时非零退出（不是服务器的一部分，licensecheck 不进二进制；来龙去脉与报错处理见 scripts/README.md「Third-party notices」）
+localapi/               # 本机代码凭 server.json token 调用的路由（`/api/pockode-local/*`：集群取一次性 app 登录 ticket）+ 与 MCP API 共用的 token 校验
 logger/                 # 结构化日志 (slog)
 mcp/                    # MCP：stdio 代理客户端 + 服务端 Executor/APIHandler
 middleware/             # 密码 / session token 认证中间件
@@ -271,7 +272,7 @@ if err := json.Unmarshal(data, &parsed); err != nil {
 
 ### MCP 本地 API
 
-MCP 子进程为客户端模式：由 AI CLI 通过 `pockode mcp --data-dir <dir> [--session-id <id>] [--worktree <name>]` 启动，从 `server.json` 读取 `local_url` 和 `token`，将工具调用通过 HTTP（`POST /api/mcp/tools/call`，Bearer token）转发给主服务器执行（`server/mcp/` 的 `Executor`）。`--session-id` / `--worktree` 是 spawn 时写入的调用方身份（`mcp.Caller`），随每次调用带上，让工具作用于调用来源的 session 而不必由模型填 id；它是自报的来源标识，不是凭据（见 [docs/code/agent-integration.md](../docs/code/agent-integration.md#mcp-caller-identity)）。`initialize` 返回的 instructions 在所有 session 中都是 `agent.Guidance`，只讲工具；session 的设定不走这里，而走 CLI 的 system-level 通道（Claude 的 `--append-system-prompt-file`、Codex 的 `developerInstructions`）：每个带 MCP server 的 session 都有 `agent.EnvironmentStatement`，HTML-first session 在其后再加 `agent.HTMLFirstGuidance`（见 [docs/code/agent-integration.md](../docs/code/agent-integration.md#the-environment-statement)）。CLI 配置里注册该 server 的名字是 `agent.MCPServerName`。子进程不直接读写文件或启动 watcher。`middleware.Auth` 仅对该精确路由放行，由 `APIHandler` 自行校验本地 token；relay 拒绝转发 `/api/mcp/*`，因此该接口实际仅 loopback 可达。
+MCP 子进程为客户端模式：由 AI CLI 通过 `pockode mcp --data-dir <dir> [--session-id <id>] [--worktree <name>]` 启动，从 `server.json` 读取 `local_url` 和 `token`，将工具调用通过 HTTP（`POST /api/mcp/tools/call`，Bearer token）转发给主服务器执行（`server/mcp/` 的 `Executor`）。`--session-id` / `--worktree` 是 spawn 时写入的调用方身份（`mcp.Caller`），随每次调用带上，让工具作用于调用来源的 session 而不必由模型填 id；它是自报的来源标识，不是凭据（见 [docs/code/agent-integration.md](../docs/code/agent-integration.md#mcp-caller-identity)）。`initialize` 返回的 instructions 在所有 session 中都是 `agent.Guidance`，只讲工具；session 的设定不走这里，而走 CLI 的 system-level 通道（Claude 的 `--append-system-prompt-file`、Codex 的 `developerInstructions`）：每个带 MCP server 的 session 都有 `agent.EnvironmentStatement`，HTML-first session 在其后再加 `agent.HTMLFirstGuidance`（见 [docs/code/agent-integration.md](../docs/code/agent-integration.md#the-environment-statement)）。CLI 配置里注册该 server 的名字是 `agent.MCPServerName`。子进程不直接读写文件或启动 watcher。`middleware.Auth` 仅对该精确路由放行，由 `APIHandler` 自行校验本地 token。relay 拒绝转发 `/api/mcp/*` 与 `/api/pockode-local/*`（`apiroute.IsLocalOnly`），所以经 relay 不可达；但服务器监听所有网卡，局域网内挡住调用方的是不出本机的 token，relay 的拒绝只是纵深防御（见 [docs/code/authentication.md](../docs/code/authentication.md#the-local-api-uses-a-separate-token)）。
 
 ## 边界
 

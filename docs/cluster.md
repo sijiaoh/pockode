@@ -295,6 +295,12 @@ How it works is [code/self-restart.md](code/self-restart.md).
 ./pockode cluster -password=your-secret-password
 ```
 
+Use a generated password for the cluster, not one you made up or use
+elsewhere. Nothing enforces this, but the cluster login is worth more than any
+one node's: it opens every running node without that node's password, and
+could always stop a node and start it with a password of its choosing
+([Authentication](code/authentication.md#a-node-can-be-logged-in-by-its-cluster)).
+
 ## Command Line Arguments
 
 | Argument | Default | Description |
@@ -539,6 +545,7 @@ After authentication:
 | `node.stop` | Stops a node's server (params: `{id}`) |
 | `node.cleanup` | Removes a stale node's leftover `server.json` (params: `{id}`); returns the node's status |
 | `node.restart` | Asks a running node to restart itself into the installed executable (params: `{id}`); returns the node's status — `restarting` — once it has been asked. Refusals and the status it reports meanwhile: [Restarting from the cluster](#restarting-from-the-cluster) |
+| `node.login_ticket` | Fetches a one-time login to a running node's web app from the node itself (params: `{id}`; result `{ticket}`), so the browser the panel opens on it skips the node password. Contract and refusals: [WebSocket JSON-RPC → Logging In from the Cluster](code/websocket-rpc.md#logging-in-from-the-cluster) |
 | `cloud_link.*` | Links this machine to a cloud account, or unlinks it, with the cluster running the device flow against its own `-cloud-url` — the same methods and handler as the main server ([Cloud Account Linking](code/cloud-account.md#the-cloud_link-rpc)); the header's cloud button is their client. `cloud_link.subscribe` is the one subscription a cluster connection holds; it is given back when the connection closes |
 
 ## Startup Output

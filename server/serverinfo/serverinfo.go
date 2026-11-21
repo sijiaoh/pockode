@@ -4,8 +4,10 @@ package serverinfo
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -33,6 +35,16 @@ type Info struct {
 	// knows no restart request either, and on unix the restart signal would
 	// terminate it.
 	Version string `json:"version,omitempty"`
+}
+
+// LocalAPIBaseURL is where local clients reach this server's local API, with
+// no trailing slash. LocalURL is absent in a file written without one, and the
+// server listens on every interface, so localhost and Port reach it then.
+func (i *Info) LocalAPIBaseURL() string {
+	if i.LocalURL == "" {
+		return fmt.Sprintf("http://localhost:%d", i.Port)
+	}
+	return strings.TrimRight(i.LocalURL, "/")
 }
 
 // Write creates the server.json file in the given data directory.

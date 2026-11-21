@@ -57,17 +57,30 @@ type SubscribeParams struct {
 	ID string `json:"id"`
 }
 
-// AuthParams carries exactly one credential: the password the user typed, or
-// the session token a previous auth issued in exchange for it. Sending both is
+// AuthParams carries the credential a connection authenticates with: the
+// password the user typed, the session token a previous auth issued in
+// exchange for it, or a login ticket. A password with either of the others is
 // refused rather than resolved by precedence, so that a client cannot end up
 // authenticated by a credential it did not think it was using.
+//
+// A session token and a login ticket together are allowed, because they are
+// not alternatives: a browser opened from the cluster panel carries a ticket
+// and may already hold a session from an earlier visit. The session wins when
+// it is live, and the ticket is spent either way (see LoginTicket).
 type AuthParams struct {
 	Password string `json:"password"`
 	// Token is the pre-rename name of Password, accepted for one deprecation
 	// period because a PWA cached on a phone may still be sending it.
 	Token        string `json:"token"`
 	SessionToken string `json:"session_token"`
-	Worktree     string `json:"worktree,omitempty"` // empty = main worktree
+	// LoginTicket is a one-time ticket the node hands out on its local login
+	// endpoint (localapi.LoginTicketPath), which the cluster puts in the URL
+	// of the node it opens. It is redeemed whenever it is sent — even when a
+	// live session token makes it unnecessary, or the request is refused — so
+	// that the copy left behind in browser history is already spent. It
+	// issues a session only when no live session token came with it.
+	LoginTicket string `json:"login_ticket"`
+	Worktree    string `json:"worktree,omitempty"` // empty = main worktree
 }
 
 type AuthResult struct {
@@ -99,11 +112,12 @@ type AuthResult struct {
 	// image the transcript would not draw either.
 	MaxImagePreviewSize int64 `json:"max_image_preview_size"`
 	// SessionToken is what the client stores in place of the password. It is a
-	// freshly issued token when the client authenticated with a password, and
-	// the very same token it sent when it authenticated with one — never a
-	// rotation, because two concurrent connections from one tab would then
-	// invalidate each other's credential. So a client can store it
-	// unconditionally without tracking how it logged in.
+	// freshly issued token when the client authenticated with a password or a
+	// login ticket alone, and the very same token it sent when it
+	// authenticated with one — never a rotation, because two concurrent
+	// connections from one tab would then invalidate each other's credential.
+	// So a client can store it unconditionally without tracking how it logged
+	// in.
 	SessionToken string `json:"session_token"`
 }
 
@@ -130,6 +144,11 @@ const (
 	// says how long. Only a password is ever refused this way; a session token
 	// still works.
 	AuthReasonRateLimited = "rate_limited"
+	// AuthReasonInvalidTicket: the login ticket is unknown, already spent or
+	// past authsession.TicketTTL, and no live session token came with it. The
+	// client falls back to asking for the password. Never counted by authguard:
+	// a ticket is 256 random bits, not something a person can guess at.
+	AuthReasonInvalidTicket = "invalid_ticket"
 )
 
 // AuthErrorData is the `data` member of the JSON-RPC error an auth refusal
@@ -2295,6 +2314,45 @@ const (
 
 // RestartRefusedData is the data member of a CodeRestartRefused error.
 type RestartRefusedData struct {
+	Reason string `json:"reason"`
+}
+
+// NodeLoginTicketResult answers a cluster's node.login_ticket: a one-time
+// login to a running node's web app, so the browser the panel opens on it
+// needs no node password. It carries the ticket the node issued. It is redeemable
+// once, within authsession.TicketTTL, by that node's WebSocket auth — and by
+// no other node, nor as a port preview ticket.
+type NodeLoginTicketResult struct {
+	Ticket string `json:"ticket"`
+}
+
+// CodeNodeLoginTicketRefused answers a node.login_ticket that got no ticket
+// for a reason the panel acts on rather than reports; NodeLoginTicketRefusedData
+// says which. The message is written to be shown as it is. Any other failure —
+// a node that could not be reached or answered with an error — is a plain
+// internal error whose message says what happened.
+const CodeNodeLoginTicketRefused = -32016
+
+// Reasons of a CodeNodeLoginTicketRefused error.
+const (
+	// NodeLoginTicketRefusedUnsupported is a running node that cannot issue
+	// app login tickets: started by a build that predates them. Its
+	// server.json has no local token, or it answers 404 (no such route) or 401
+	// (its password middleware guarding a route it does not know). The panel
+	// opens the node's plain URL instead, where the node asks for its password.
+	NodeLoginTicketRefusedUnsupported = "unsupported"
+	// NodeLoginTicketRefusedNotRunning is a node that is not running: stopped,
+	// or stale.
+	NodeLoginTicketRefusedNotRunning = "not_running"
+	// NodeLoginTicketRefusedRestarting is a node this cluster asked to restart
+	// that is not back yet. Its server.json may still name the old start, whose
+	// ticket would die with it.
+	NodeLoginTicketRefusedRestarting = "restarting"
+)
+
+// NodeLoginTicketRefusedData is the data member of a
+// CodeNodeLoginTicketRefused error.
+type NodeLoginTicketRefusedData struct {
 	Reason string `json:"reason"`
 }
 

@@ -202,7 +202,9 @@ The split exists for dev mode, where the Vite dev server owns the UI. In product
 
 The predicate lives in `server/apiroute` rather than here because `main.go`'s SPA handler needs exactly the same rule to decide what to serve from the embedded static files. Two copies would silently diverge: add a backend endpoint, forget the relay's list, and the endpoint becomes unreachable through the relay in dev mode only.
 
-`/api/mcp/*` is refused outright, with a 404, before any port is chosen — a [preview](#port-previews)'s port included. It is the local MCP API: it drives this machine's tools on behalf of an agent CLI running here, and it authenticates with a token of its own rather than the user's. Nothing that reaches this machine from outside has a reason to call it. The refusal has to come first because in the default single-port setup `frontendPort == backendPort`, so routing alone would not keep it out of reach. `apiroute.IsLocalOnly` holds the predicate and `mcp.TestAPIPathStaysLocalOnly` pins the endpoint to it.
+`/api/mcp/*` and `/api/pockode-local/*` are refused outright, with a 404, before any port is chosen — a [preview](#port-previews)'s port included. They are the local API: the MCP API through which an agent CLI running here drives this machine's tools, and the routes through which the cluster that started this server logs browsers into it. Both authenticate with the `server.json` token rather than the user's password, and nothing that reaches this machine from outside has a reason to call them. The refusal has to come first because in the default single-port setup `frontendPort == backendPort`, so routing alone would not keep them out of reach. `apiroute.IsLocalOnly` holds the predicate; `mcp.TestAPIPathStaysLocalOnly` and `localapi.TestPathsStayLocalOnly` pin the endpoints to it.
+
+The refusal is defence in depth, not the guard: the token is ([Authentication → The local API](authentication.md#the-local-api-uses-a-separate-token) has why, and the mixed-version window in which an older server's preview proxy forwards `/api/pockode-local/`).
 
 ### Preserving the Public Request
 
@@ -220,7 +222,7 @@ The same-origin check is now the *only* origin defence for mobile clients — th
 
 What a preview looks like to its user — the address, logging in, the limitations — is in [port-preview.md](../port-preview.md). This section is why it works that way.
 
-The cloud also routes `<subdomain>-<port>.<relay server>` to this tunnel, Host unchanged. Such a request is not for this server at all: after the `/api/mcp/*` refusal and before any routing rule above, `newLocalProxy` recognizes the host and hands it to `previewProxy` (`server/relay/preview.go`), which dials `localhost:<port>` and nothing else. The host is matched against this tunnel's own subdomain and relay server, so the port is the only thing read from it.
+The cloud also routes `<subdomain>-<port>.<relay server>` to this tunnel, Host unchanged. Such a request is not for this server at all: after the local-only refusal and before any routing rule above, `newLocalProxy` recognizes the host and hands it to `previewProxy` (`server/relay/preview.go`), which dials `localhost:<port>` and nothing else. The host is matched against this tunnel's own subdomain and relay server, so the port is the only thing read from it.
 
 Here the public request is deliberately *not* preserved. Dev servers check `Host` (Vite's `allowedHosts`) and `Origin` (Next's `allowedDevOrigins`) against an allowlist that knows `localhost` and not the preview host, and answer 403. So the request is made to look as if the browser had opened `localhost:<port>` itself:
 
@@ -271,7 +273,7 @@ The cost: one preview cannot call or frame another directly, even on the same tu
 #### Paths That Stay Local
 
 - `/__pockode/` is reserved for Pockode on every preview host; only the login endpoint answers there.
-- `/api/mcp/*` is refused here too, by the same check as for the app's host and before the preview host is even recognized. It is not enough to refuse it on this server's own ports: the previewed port may be another Pockode on the machine — a cluster node, a second server — serving the same local-only API. The cost is that an app of the user's own with routes under `/api/mcp/` cannot have them previewed.
+- The local-only paths are refused here too, by the same check as for the app's host and before the preview host is even recognized. It is not enough to refuse them on this server's own ports: the previewed port may be another Pockode on the machine — a cluster node, a second server — serving the same local-only API. The cost is that an app of the user's own with routes under those prefixes cannot have them previewed, which is why each prefix is spelled as Pockode's own (`/api/pockode-local/`, not `/api/local/`).
 
 There is no port allowlist: the tunnel is the user's own, and so is everything listening on their machine. A port with nothing listening answers 502 with a message naming the port; a server that is there but fails to answer gets a 502 carrying the error instead, since the advice differs.
 

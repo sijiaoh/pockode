@@ -1186,10 +1186,13 @@ the pair as an `mcp.Caller` and sends it in the body of every forwarded tool
 call, so the `Executor` is handed the caller of each call rather than an
 Executor-wide identity — one Executor serves every session at once.
 
-**It is self-reported, not a credential.** The local API is loopback-only
-(`apiroute.IsLocalOnly`, and the relay refuses to forward `/api/mcp/*`) and its
-token already authorizes every tool, so claiming another session's id buys
-nothing. Nothing about it is an authorization decision.
+**It is self-reported, not a credential.** The local API's token already
+authorizes every tool, so claiming another session's id buys nothing. Whoever
+holds that token is code on this machine: the relay refuses to forward the
+route, and on the LAN, where the server listens too, the token is what keeps a
+caller out ([Authentication → The local
+API](authentication.md#the-local-api-uses-a-separate-token)). Nothing about the
+caller identity is an authorization decision.
 
 **The two CLIs carry it differently** because their spawns differ: Codex takes
 the whole server definition inline per thread, while Claude reads a config file

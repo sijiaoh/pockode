@@ -2,12 +2,13 @@ package mcp
 
 import (
 	"context"
-	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"
 	"strings"
+
+	"github.com/pockode/server/localapi"
 )
 
 // APIPath is the local HTTP endpoint the stdio proxy forwards tool calls to.
@@ -88,16 +89,11 @@ func (h *APIHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *APIHandler) authorized(r *http.Request) bool {
-	// Fail closed on a misconfigured (empty) token: ConstantTimeCompare("","")
-	// returns 1, which would otherwise authenticate an empty bearer.
-	if h.token == "" {
-		return false
-	}
 	parts := strings.SplitN(r.Header.Get("Authorization"), " ", 2)
 	if len(parts) != 2 || parts[0] != "Bearer" {
 		return false
 	}
-	return subtle.ConstantTimeCompare([]byte(parts[1]), []byte(h.token)) == 1
+	return localapi.TokenMatches(parts[1], h.token)
 }
 
 func writeJSON(w http.ResponseWriter, status int, v interface{}) {

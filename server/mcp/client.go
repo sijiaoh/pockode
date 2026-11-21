@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/pockode/server/serverinfo"
@@ -49,13 +48,8 @@ func NewClientFromServerInfo(dataDir string, caller Caller) (*Client, error) {
 		return nil, fmt.Errorf("server.json in %s has no token", dataDir)
 	}
 
-	baseURL := info.LocalURL
-	if baseURL == "" {
-		baseURL = fmt.Sprintf("http://localhost:%d", info.Port)
-	}
-
 	return &Client{
-		baseURL: strings.TrimRight(baseURL, "/"),
+		baseURL: info.LocalAPIBaseURL(),
 		token:   info.Token,
 		caller:  caller,
 		// Bounded so a wedged server can't hang the tool call (and the AI) forever.

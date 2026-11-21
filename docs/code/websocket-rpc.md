@@ -638,8 +638,8 @@ Client                              Server
   │◀───────────────────────────────────┤
   │                                    │
   │   auth { password | session_token, │
-  │          worktree? }               │
-  ├───────────────────────────────────▶│   Validate the one credential
+  │          login_ticket?, worktree? }│
+  ├───────────────────────────────────▶│   Validate the credential
   │                                    │   Bind to worktree
   │                                    │   Issue a session token
   │   { version, title, work_dir,      │
@@ -653,17 +653,23 @@ Client                              Server
   │   (Authenticated - can send other requests)
 ```
 
-- Exactly one credential: the password the user typed, or the `session_token` a
-  previous `auth` returned in exchange for it. Both at once is `invalid_params`
+- The credential is the password the user typed, the `session_token` a
+  previous `auth` returned in exchange for it, or a `login_ticket` the cluster
+  fetched ([below](#logging-in-from-the-cluster)); a session token and a ticket
+  may come together. A password with either is `invalid_params`. How the
+  combinations are decided is in
+  [Authentication → Sessions](authentication.md#sessions-what-the-browser-keeps)
 - Both are compared in constant time to prevent timing attacks
-- The reply always carries a `session_token` — freshly issued for a password,
-  the same one back for a token — so a client stores it unconditionally
+- The reply always carries a `session_token` — freshly issued for a password
+  or a ticket alone, the same one back for a live token — so a client stores it
+  unconditionally
 - A refusal carries `data.reason`, and clients branch on that rather than on the
   message: `invalid_password` keeps the user on the password screen with the
   error, `rate_limited` returns there with no wrong-password error, holding
   submit until `data.retry_after_ms` has passed (see
   [Authentication](authentication.md#failed-password-attempts-are-rate-limited)),
   `session_expired` drops the stored token and returns there silently,
+  `invalid_ticket` returns there too and does not resend the ticket,
   `not_authenticated` means a method arrived before `auth`, and
   `worktree_not_found` — the credential was fine, the worktree is gone — sends the
   client back to the main worktree for one retry
@@ -695,6 +701,59 @@ Client                              Server
   derive it from its own location, which is `localhost` on a local connection.
 
 For where the server's password comes from (`--password` / `POCKODE_PASSWORD`), how a session token is issued and expired, and the overall trust model, see [Authentication](authentication.md).
+
+### Logging In from the Cluster
+
+A browser the cluster panel opens on a node logs in with a one-time ticket
+instead of the node's password. Three hops carry it; why this grants nothing
+the cluster login did not already is in
+[Authentication](authentication.md#a-node-can-be-logged-in-by-its-cluster).
+
+**1. Panel → cluster: `node.login_ticket`.** Params `{ id }`, the node's id;
+result `{ ticket }` (`rpc.NodeLoginTicketResult`). There is no URL in it: the
+panel has the node's `local_url` / `remote_url` from its status already. A
+refusal the panel acts on is `rpc.CodeNodeLoginTicketRefused` (`-32016`) with
+`data.reason`, and its message can be shown as it is:
+
+| `reason` | When |
+|---|---|
+| `unsupported` | The node predates tickets: its `server.json` has no `token`, or the node answers 404 (no such route) or 401 (its password middleware guarding a route it does not know). The panel opens the node's plain URL instead, where the node asks for its password |
+| `not_running` | The node is stopped or stale |
+| `restarting` | A restart this cluster asked for is not back yet: the `server.json` may still name the old start, whose ticket would die with it |
+
+Any other failure — the node unreachable or past the 10 s timeout, an answer
+with another status (a redirect included), a reply that is not a ticket — is
+`-32603` with a message beginning `Couldn't log in to this node: ` that says
+which, and is logged. An unknown node or a missing `id` is `-32602`, as for
+the other node methods. The status and the token come from one read of
+`server.json`, so the token belongs to the start the status describes
+(`ProcessManager.LoginTicket` in `server/cluster/node/login_ticket.go`).
+
+**2. Cluster → node: `POST /api/pockode-local/login-ticket`** (`localapi.LoginTicketPath`),
+no body, the token in `X-Pockode-Local-Token` (`localapi.TokenHeader`), at the
+node's `local_url` (`http://localhost:<port>` without one). The cluster never
+follows a redirect, so the header cannot be carried elsewhere, and reads at
+most 4 KiB of the reply.
+
+| Status | Means |
+|---|---|
+| 200 | `{ "ticket": "<base64url>" }` (`localapi.LoginTicketResponse`), `Cache-Control: no-store` |
+| 401 | The token is missing or wrong, or the node has none (it fails closed); a Bearer value is never read |
+| 404 | A node too old to have the route |
+| 405 | Not a `POST` |
+| 500 | Issuing the ticket failed; the node logs why |
+
+The route, and why the token is its guard, are in
+[Authentication → The local API](authentication.md#the-local-api-uses-a-separate-token).
+
+**3. Browser → node: `auth { login_ticket }`.** The ticket redeems once, within
+`authsession.TicketTTL` (60 s), on the issuing node's WebSocket `auth` only —
+not on another node, and not as a [port preview](relay-system.md#logging-in)
+ticket. A client sends it on the first connect alone, because that attempt
+spends it whatever the outcome. A reconnect after a successful `auth` sends the
+`session_token` the reply gave it; a retry after a refusal —
+`worktree_not_found` included — has no ticket left, and a resent one gets
+`invalid_ticket`.
 
 ### Binding a Worktree vs. Disconnect
 
@@ -1180,6 +1239,10 @@ the client asked a newer question and drops this reply
 ([file.md](../file.md#operations)). Which of two requests is later cannot come
 from when their handlers run, so `ws.Connections`' handler numbers each request
 on the connection's read loop, before its goroutine starts (`requestArrival`).
+`-32016` (`rpc.CodeNodeLoginTicketRefused`) refuses a cluster's
+`node.login_ticket` for a node that cannot give one — too old, not running,
+restarting — with `data.reason`; for `unsupported` the panel opens the node's
+plain URL instead ([Logging In from the Cluster](#logging-in-from-the-cluster)).
 
 A server's error message is therefore text to put in front of a user, never a
 value to branch on — it embeds an arbitrary error string, and its fixed half is

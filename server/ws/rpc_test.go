@@ -208,7 +208,7 @@ func newTestEnvWithAgent(t *testing.T, mock *mockAgent, ag agent.Agent, workDir 
 	restarter := restart.New(restarttest.Executable(workDir))
 	checker, installer := &fakeReleaseChecker{}, &fakeInstaller{}
 	raw := &rawCapabilitiesStub{}
-	h := NewRPCHandler(testPassword, authguard.New(), authsessiontest.New(), "test", func() string { return "" }, authsession.NewTickets(), raw, true, cmdStore, worktreeManager, settingsStore, workStore, workOps, workEngine, agentRoleStore, scheduleStore, scheduler, cliAuthService, cliProfiles, cliupdate.NewService(slog.Default(), nil, nil), cloudLinks, restarter, NewUpdater(checker, installer))
+	h := NewRPCHandler(testPassword, authguard.New(), authsessiontest.New(), "test", func() string { return "" }, authsession.NewTickets(), authsession.NewTickets(), raw, true, cmdStore, worktreeManager, settingsStore, workStore, workOps, workEngine, agentRoleStore, scheduleStore, scheduler, cliAuthService, cliProfiles, cliupdate.NewService(slog.Default(), nil, nil), cloudLinks, restarter, NewUpdater(checker, installer))
 	server := httptest.NewServer(h)
 
 	// No deadline of its own: every read and write is bounded individually (see
@@ -578,6 +578,15 @@ func newAuthTestServer(t *testing.T, password, remoteURL string, sessions Sessio
 	return newTicketTestServer(t, password, func() string { return remoteURL }, sessions, authsession.NewTickets())
 }
 
+// newLoginTicketTestServer is newAuthTestServer with the login ticket set
+// chosen by the caller, so a test can issue the tickets it logs in with.
+func newLoginTicketTestServer(t *testing.T, sessions SessionStore, loginTickets LoginTickets) *httptest.Server {
+	t.Helper()
+	server := httptest.NewServer(newMinimalTestHandlerWith(t, testPassword, func() string { return "" }, sessions, authsession.NewTickets(), loginTickets))
+	t.Cleanup(server.Close)
+	return server
+}
+
 // newTicketTestServer is newAuthTestServer with the preview ticket set chosen
 // by the caller, which is the only way a test can redeem what it was handed.
 func newTicketTestServer(t *testing.T, password string, remoteURL func() string, sessions SessionStore, tickets PreviewTickets) *httptest.Server {
@@ -590,6 +599,11 @@ func newTicketTestServer(t *testing.T, password string, remoteURL func() string,
 // newMinimalTestHandler is the handler behind newTicketTestServer, for a test
 // that has to call it directly, as the relay does.
 func newMinimalTestHandler(t *testing.T, password string, remoteURL func() string, sessions SessionStore, tickets PreviewTickets) *RPCHandler {
+	t.Helper()
+	return newMinimalTestHandlerWith(t, password, remoteURL, sessions, tickets, authsession.NewTickets())
+}
+
+func newMinimalTestHandlerWith(t *testing.T, password string, remoteURL func() string, sessions SessionStore, tickets PreviewTickets, loginTickets LoginTickets) *RPCHandler {
 	t.Helper()
 	dataDir := t.TempDir()
 	workDir := t.TempDir()
@@ -607,7 +621,7 @@ func newMinimalTestHandler(t *testing.T, password string, remoteURL func() strin
 	workOps.SetRunRecorder(scheduler)
 
 	cliProfiles := cliprofile.NewStore(t.TempDir(), t.TempDir())
-	h := NewRPCHandler(password, authguard.NewFrozen(), sessions, "test", remoteURL, tickets, &rawCapabilitiesStub{}, true, cmdStore, worktreeManager, settingsStore, workStore, workOps, work.NewEngine(workStore, work.DefaultMaxNudges), agentRoleStore, scheduleStore, scheduler, cliauth.NewService(slog.Default(), cliProfiles), cliProfiles, cliupdate.NewService(slog.Default(), nil, nil), nil, restart.New(restarttest.Executable(workDir)), NewUpdater(&fakeReleaseChecker{}, &fakeInstaller{}))
+	h := NewRPCHandler(password, authguard.NewFrozen(), sessions, "test", remoteURL, tickets, loginTickets, &rawCapabilitiesStub{}, true, cmdStore, worktreeManager, settingsStore, workStore, workOps, work.NewEngine(workStore, work.DefaultMaxNudges), agentRoleStore, scheduleStore, scheduler, cliauth.NewService(slog.Default(), cliProfiles), cliProfiles, cliupdate.NewService(slog.Default(), nil, nil), nil, restart.New(restarttest.Executable(workDir)), NewUpdater(&fakeReleaseChecker{}, &fakeInstaller{}))
 	t.Cleanup(h.Stop)
 	return h
 }

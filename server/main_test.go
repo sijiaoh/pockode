@@ -27,6 +27,7 @@ import (
 	"github.com/pockode/server/cliupdate"
 	"github.com/pockode/server/command"
 	"github.com/pockode/server/filetransfer"
+	"github.com/pockode/server/localapi"
 	"github.com/pockode/server/mcp"
 	"github.com/pockode/server/rpc"
 	"github.com/pockode/server/schedule"
@@ -73,9 +74,11 @@ func newTestServer(t *testing.T, serverPassword, mcpToken string) (http.Handler,
 	attachmentHandler := filetransfer.NewAttachmentHandler(scopeManager, worktree.ErrWorktreeNotFound, worktree.ErrSessionNotFound, slog.Default())
 	rawHandler := filetransfer.NewRawHandler(sessions, transferHandler, attachmentHandler)
 	cliProfiles := cliprofile.NewStore(t.TempDir(), t.TempDir())
-	wsHandler := ws.NewRPCHandler(serverPassword, authguard.New(), sessions, "test", func() string { return "" }, authsession.NewTickets(), rawHandler, true, cmdStore, scopeManager, settingsStore, workStore, workOps, work.NewEngine(workStore, work.DefaultMaxNudges), agentRoleStore, scheduleStore, scheduler, cliauth.NewService(slog.Default(), cliProfiles), cliProfiles, cliupdate.NewService(slog.Default(), nil, nil), nil, restart.New(restarttest.Executable(workDir)), ws.NewReleaseUpdater(slog.Default(), restarttest.Executable(workDir), "test"))
+	appLoginTickets := authsession.NewTickets()
+	wsHandler := ws.NewRPCHandler(serverPassword, authguard.New(), sessions, "test", func() string { return "" }, authsession.NewTickets(), appLoginTickets, rawHandler, true, cmdStore, scopeManager, settingsStore, workStore, workOps, work.NewEngine(workStore, work.DefaultMaxNudges), agentRoleStore, scheduleStore, scheduler, cliauth.NewService(slog.Default(), cliProfiles), cliProfiles, cliupdate.NewService(slog.Default(), nil, nil), nil, restart.New(restarttest.Executable(workDir)), ws.NewReleaseUpdater(slog.Default(), restarttest.Executable(workDir), "test"))
 	mcpHandler := mcp.NewAPIHandler(mcp.NewExecutor(workStore, agentRoleStore, workOps, settingsStore, registry, scopeManager), mcpToken)
-	return newHandler(serverPassword, authguard.New(), sessions, true, wsHandler, mcpHandler, transferHandler, attachmentHandler, rawHandler), workDir, sessions, rawHandler
+	loginTicketHandler := localapi.NewLoginTicketHandler(appLoginTickets, mcpToken)
+	return newHandler(serverPassword, authguard.New(), sessions, true, wsHandler, mcpHandler, loginTicketHandler, transferHandler, attachmentHandler, rawHandler), workDir, sessions, rawHandler
 }
 
 func TestHealthEndpoint(t *testing.T) {
@@ -412,6 +415,66 @@ func TestMCPEndpoint(t *testing.T) {
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, newReq(""))
 		if rec.Code != http.StatusUnauthorized {
+			t.Errorf("got status %d, want %d", rec.Code, http.StatusUnauthorized)
+		}
+	})
+}
+
+// TestLoginTicketEndpoint verifies the login-ticket route is wired past the
+// password middleware and authenticates itself with the local token: what it
+// accepts and refuses in detail is localapi's to test.
+func TestLoginTicketEndpoint(t *testing.T) {
+	const userPassword = "test-password"
+	const localToken = "local-token"
+	handler, _, _, _ := newTestServer(t, userPassword, localToken)
+
+	post := func(header, value string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, localapi.LoginTicketPath, nil)
+		if header != "" {
+			req.Header.Set(header, value)
+		}
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		return rec
+	}
+
+	// The WebSocket redeeming it is what shows the two share one ticket set.
+	t.Run("issues a ticket the WebSocket logs in with", func(t *testing.T) {
+		rec := post(localapi.TokenHeader, localToken)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("got status %d, want %d (body: %s)", rec.Code, http.StatusOK, rec.Body.String())
+		}
+		var resp localapi.LoginTicketResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil || resp.Ticket == "" {
+			t.Fatalf("body %q: want a ticket (err %v)", rec.Body.String(), err)
+		}
+
+		server := httptest.NewServer(handler)
+		t.Cleanup(server.Close)
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		conn, _, err := websocket.Dial(ctx, "ws"+strings.TrimPrefix(server.URL, "http")+"/ws", nil)
+		if err != nil {
+			t.Fatalf("dial: %v", err)
+		}
+		defer conn.Close(websocket.StatusNormalClosure, "")
+		if err := wsjson.Write(ctx, conn, map[string]any{"jsonrpc": "2.0", "id": 1, "method": "auth", "params": rpc.AuthParams{LoginTicket: resp.Ticket}}); err != nil {
+			t.Fatalf("write auth: %v", err)
+		}
+		var reply struct {
+			Result rpc.AuthResult  `json:"result"`
+			Error  *jsonrpc2.Error `json:"error"`
+		}
+		if err := wsjson.Read(ctx, conn, &reply); err != nil {
+			t.Fatalf("read auth: %v", err)
+		}
+		if reply.Error != nil || reply.Result.SessionToken == "" {
+			t.Fatalf("auth with the ticket: error = %v, session token = %q; want a session", reply.Error, reply.Result.SessionToken)
+		}
+	})
+
+	t.Run("refuses the user password", func(t *testing.T) {
+		if rec := post("Authorization", "Bearer "+userPassword); rec.Code != http.StatusUnauthorized {
 			t.Errorf("got status %d, want %d", rec.Code, http.StatusUnauthorized)
 		}
 	})
