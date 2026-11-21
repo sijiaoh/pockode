@@ -365,6 +365,96 @@ func (c *Client) SendPermissionResponse(ctx context.Context, sessionID string, d
 	return nil
 }
 
+// SendPermissionVerdict answers a permission request on a permission
+// reviewer's behalf: allow approves that one request and nothing more, and deny
+// leaves the turn running and tells the agent review's reason, so it can
+// rewrite the call and carry on. The response is recorded as the reviewer's,
+// with review on it, and broadcast — unlike a person's answer, no client has
+// already drawn it.
+//
+// proc is the process that raised the request, not whichever one the session
+// has now: a request id is only unique within the process that minted it
+// (Codex's fallback ids restart with every process), so an answer meant for a
+// request of a process since replaced must not land on a namesake in its
+// successor.
+//
+// A request that is no longer waiting — a person answered first, it expired,
+// its process went away — fails with process.ErrRequestNotPending, and nothing
+// reaches the agent or the history: the first answer stands. The caller
+// decides whether that is worth reporting.
+func (c *Client) SendPermissionVerdict(ctx context.Context, proc *process.Process, data agent.PermissionRequestData, allow bool, review agent.PermissionReview) error {
+	if !allow && !review.Category.Valid() {
+		return fmt.Errorf("a permission reviewer's deny needs a category, got %q", review.Category)
+	}
+	return c.answerForReview(ctx, proc, data, allow, agent.RespondedByPermissionReviewer, review)
+}
+
+// DenyPermissionAutomatically is Pockode refusing a request that a permission
+// reviewer was meant to answer and did not — or that a reviewer raised
+// itself. Like a reviewer's deny it leaves the turn running and tells the
+// agent why; it is recorded as Pockode's own (agent.RespondedByPockode) with
+// review.Automatic saying which way the review fell through, so that no client
+// mistakes it for a verdict. Refused requests and their errors are as for
+// SendPermissionVerdict.
+func (c *Client) DenyPermissionAutomatically(ctx context.Context, proc *process.Process, data agent.PermissionRequestData, review agent.PermissionReview) error {
+	if review.Automatic == "" || review.Category != "" {
+		return fmt.Errorf("an automatic deny needs a reason kind and no category, got %q / %q", review.Automatic, review.Category)
+	}
+	return c.answerForReview(ctx, proc, data, false, agent.RespondedByPockode, review)
+}
+
+func (c *Client) answerForReview(ctx context.Context, proc *process.Process, data agent.PermissionRequestData, allow bool, by agent.PermissionResponder, review agent.PermissionReview) error {
+	sessionID := proc.SessionID()
+	// A replaced or closed process is not the one its session runs now. Its
+	// own turn copy stops changing once it is closed, so it cannot be trusted
+	// to say the request is over.
+	if c.pm.GetProcess(sessionID) != proc {
+		return process.ErrRequestNotPending
+	}
+	// Answering counts as activity, as in liveProcess.
+	c.pm.Touch(sessionID)
+
+	choice := agent.PermissionAllow
+	var err error
+	if allow {
+		err = proc.SendPermissionResponse(data, choice)
+	} else {
+		choice = agent.PermissionDeny
+		err = proc.DenyPermissionWithMessage(data, review.DenialMessage())
+	}
+	if err != nil {
+		return err
+	}
+
+	record := agent.NewEventRecord(agent.PermissionResponseEvent{
+		RequestID: data.RequestID,
+		Choice:    choiceToString(choice),
+		By:        by,
+		Review:    &review,
+	})
+	seq, err := c.store.AppendToHistory(ctx, sessionID, record)
+	if err != nil {
+		slog.Error("failed to persist permission response", "sessionId", sessionID, "by", by, "error", err)
+		return nil
+	}
+	c.broadcastRecord(sessionID, record, seq)
+	return nil
+}
+
+// RecordWarning writes a warning Pockode raises about a session — not one its
+// agent sent — into the session's history and shows it to every subscriber,
+// for what went wrong outside the agent's own stream that the person reading
+// the session has to know.
+func (c *Client) RecordWarning(ctx context.Context, sessionID string, warning agent.WarningEvent) error {
+	record := agent.NewEventRecord(warning)
+	seq, err := c.store.AppendToHistory(ctx, sessionID, record)
+	if err != nil {
+		return fmt.Errorf("record warning: %w", err)
+	}
+	c.broadcastRecord(sessionID, record, seq)
+	return nil
+}
+
 // Interrupt stops the turn a session is running. A session with no process has
 // nothing to stop, which counts as success — starting one would spawn the CLI the
 // user just asked to stop.

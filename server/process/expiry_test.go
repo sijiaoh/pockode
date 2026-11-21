@@ -50,6 +50,53 @@ func TestAnswer_AcceptedWhileThePromptIsLive(t *testing.T) {
 	}
 }
 
+// A person and a permission reviewer can answer one request at the same moment,
+// and the CLI must be handed exactly one of the answers: a second
+// control_response for the same request is noise on its stdin at best. The
+// answers here race on purpose, which is what the turn copy alone could not
+// settle — every one of them can read the prompt as still waiting.
+func TestAnswer_FirstOfRacingAnswersWins(t *testing.T) {
+	_, mock, _, proc := startedTurn(t, leaseTestBudgets)
+	sess := mock.session(t, "sess-1")
+
+	sess.emit(t, agent.PermissionRequestEvent{RequestID: "req-1", ToolName: "Bash"})
+	waitUntil(t, "the prompt", func() bool { return proc.turnState().AwaitingAnswerTo("req-1") })
+
+	const answers = 8
+	data := agent.PermissionRequestData{RequestID: "req-1"}
+	errs := make(chan error, answers)
+	var start sync.WaitGroup
+	start.Add(1)
+	for i := range answers {
+		go func() {
+			start.Wait()
+			if i%2 == 0 {
+				errs <- proc.SendPermissionResponse(data, agent.PermissionAllow)
+			} else {
+				errs <- proc.DenyPermissionWithMessage(data, "rewrite it")
+			}
+		}()
+	}
+	start.Done()
+
+	var accepted int
+	for range answers {
+		err := <-errs
+		switch {
+		case err == nil:
+			accepted++
+		case !errors.Is(err, ErrRequestNotPending):
+			t.Errorf("a later answer failed with %v, want %v", err, ErrRequestNotPending)
+		}
+	}
+	if accepted != 1 {
+		t.Errorf("answers accepted = %d, want 1", accepted)
+	}
+	if got := sess.answers.Load(); got != 1 {
+		t.Errorf("answers delivered to the CLI = %d, want 1", got)
+	}
+}
+
 // What became of a prompt nobody answered is Pockode's own record to write: the
 // CLI is killed with SIGKILL, so its transcript may not hold even the message
 // that raised the question, and a client paging back through history would

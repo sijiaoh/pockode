@@ -88,6 +88,24 @@ type mockSession struct {
 
 	promptsMu sync.Mutex
 	prompts   []agent.Prompt
+
+	// answers is every permission answer the CLI was handed, in order.
+	answersMu sync.Mutex
+	answers   []sentAnswer
+}
+
+// sentAnswer is one permission answer as the CLI received it: a choice, or a
+// non-interrupting deny with its message.
+type sentAnswer struct {
+	requestID   string
+	choice      agent.PermissionChoice
+	denyMessage string
+}
+
+func (s *mockSession) sentAnswers() []sentAnswer {
+	s.answersMu.Lock()
+	defer s.answersMu.Unlock()
+	return append([]sentAnswer(nil), s.answers...)
 }
 
 func (s *mockSession) Events() <-chan agent.AgentEvent { return s.events }
@@ -115,7 +133,16 @@ func (s *mockSession) sent() []agent.Prompt {
 	defer s.promptsMu.Unlock()
 	return append([]agent.Prompt(nil), s.prompts...)
 }
-func (s *mockSession) SendPermissionResponse(agent.PermissionRequestData, agent.PermissionChoice) error {
+func (s *mockSession) SendPermissionResponse(data agent.PermissionRequestData, choice agent.PermissionChoice) error {
+	s.answersMu.Lock()
+	defer s.answersMu.Unlock()
+	s.answers = append(s.answers, sentAnswer{requestID: data.RequestID, choice: choice})
+	return nil
+}
+func (s *mockSession) DenyPermissionWithMessage(data agent.PermissionRequestData, message string) error {
+	s.answersMu.Lock()
+	defer s.answersMu.Unlock()
+	s.answers = append(s.answers, sentAnswer{requestID: data.RequestID, choice: agent.PermissionDeny, denyMessage: message})
 	return nil
 }
 func (s *mockSession) SendInterrupt() error { return nil }

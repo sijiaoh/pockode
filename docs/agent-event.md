@@ -305,6 +305,71 @@ message carrying an agent's answers is itself marked `"origin": "agent"`, for th
 same reason in the other direction: a reader must not take it for something the
 user said.
 
+#### Permission Requests and Their Answers
+
+A `permission_request` record carries, beside the tool call it is about, the
+agent's own account of why the call needs a decision, when the agent gives one:
+
+| Field | Meaning |
+|---|---|
+| `decision_reason` | Human-readable reason the ask was raised — a safety check's warning, the rule that asked. Claude's `decision_reason`; may carry ANSI escapes, which a renderer strips. Never set for Codex. |
+| `blocked_path` | The path the request is about, when the agent names one. Claude's `blocked_path`; never set for Codex. |
+
+A `permission_response` record is the answer the request got: `request_id` and
+`choice` (`allow`, `always_allow`, `deny`). A person's answer has nothing more,
+and is recorded for replay only — the client that sent it already shows it. An
+answer a permission reviewer session gave says so, and is broadcast as well,
+since no client drew it:
+
+```json
+{
+  "type": "permission_response",
+  "request_id": "…",
+  "choice": "deny",
+  "by": "permission_reviewer",
+  "review": {
+    "session_id": "<the reviewer session>",
+    "category": "system_reach_unverifiable",
+    "reason": "$DIR may be empty, so this could delete /. Check it is set first."
+  }
+}
+```
+
+`review.category` is set on a deny only, and is one of `system_damage`,
+`prompt_injection`, `system_reach_unverifiable`. `review.reason` is the
+reviewer's own words. `review.session_id` is an id to link to, not a copy of
+the reviewer session: whatever a client shows about that session now — its
+name, whether it still exists — it reads from the session store, because the
+record says only what was true when the answer was given.
+
+When the review falls through — no verdict in time, none after the reviewer's
+nudges, the reviewer failed — or the request is a reviewer's own, Pockode denies
+it itself, and the record says so rather than posing as a verdict:
+
+```json
+{
+  "type": "permission_response",
+  "request_id": "…",
+  "choice": "deny",
+  "by": "pockode",
+  "review": {
+    "session_id": "<the reviewer session>",
+    "automatic": "timeout",
+    "reason": "the permission reviewer gave no verdict within 5 minutes."
+  }
+}
+```
+
+`review.automatic` is one of `timeout`, `no_verdict`, `reviewer_failed`,
+`reviewer_request` ([unattended-mode.md](unattended-mode.md#every-request-gets-an-answer));
+`review.reason` is Pockode's account of it, `review.category` is absent, and
+`review.session_id` is absent only when the review failed before a reviewer
+existed. For `reviewer_request` the record is in the reviewer session itself.
+
+A request is answered once. Whichever answer comes first, a person's, the
+reviewer's or Pockode's, is the one applied and recorded; the later one is refused
+(`process.ErrRequestNotPending`) and leaves no record.
+
 #### Legacy: `ask_user_question` and `question_response`
 
 Transcripts written before Pockode stopped letting a CLI ask its own blocking
@@ -331,7 +396,7 @@ answer it and the card offers none.
 
 `server/agent/history.go` — Flat struct used for both persistence and wire format. Each event type populates only its relevant fields; the rest are zero-valued and omitted from JSON.
 
-Key fields: `Type`, `Content`, `ToolName`, `ToolInput`, `ToolResult`, `ParentToolUseID`, `Error`, `RequestID`, `PermissionSuggestions`, `Questions`, `Reason`, `AskedAt`, `ResolvedAt`, `Answering`, `Command` (a message expanded from a [Pockode command](pockode-commands.md#what-is-recorded)), and (for system-driven `message` events) `Origin`, `Subtype`, `Meta`.
+Key fields: `Type`, `Content`, `ToolName`, `ToolInput`, `ToolResult`, `ParentToolUseID`, `Error`, `RequestID`, `PermissionSuggestions`, `DecisionReason`, `BlockedPath`, `By`, `Review` (see [Permission Requests and Their Answers](#permission-requests-and-their-answers)), `Questions`, `Reason`, `AskedAt`, `ResolvedAt`, `Answering`, `Command` (a message expanded from a [Pockode command](pockode-commands.md#what-is-recorded)), and (for system-driven `message` events) `Origin`, `Subtype`, `Meta`.
 
 `MessageID` is on three record types and joins them: Pockode's own id for a
 message, carried by the `message` record and quoted by the `message_ingested`

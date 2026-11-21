@@ -526,7 +526,8 @@ pushed.
 | `schedule.detail.runs` | app | `id`, `cursor?`, `limit?` | `items`, `next_cursor?`, `has_more?` |
 
 **`id` names a subscription, and is not a repeat of its parameters.** The
-session list is narrowed by `exclude_work_sessions`, and that narrowing is held
+session list is narrowed by `exclude_work_sessions` and
+`exclude_permission_reviewer_sessions`, and that narrowing is held
 on the subscription for its whole life
 ([the filter is the server's](subscription-system.md#which-sessions-belong-to-work)).
 A page asked for by repeating the filter is a page of whatever list the client

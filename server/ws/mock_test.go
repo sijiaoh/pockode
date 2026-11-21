@@ -58,6 +58,10 @@ func (s *mockSession) SendPermissionResponse(data agent.PermissionRequestData, _
 	return nil
 }
 
+func (s *mockSession) DenyPermissionWithMessage(agent.PermissionRequestData, string) error {
+	return nil
+}
+
 func (s *mockSession) SendInterrupt() error {
 	s.interruptOnce.Do(func() {
 		close(s.interruptCh)

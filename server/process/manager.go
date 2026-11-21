@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -61,8 +62,11 @@ type Manager struct {
 	// worktree is the name of the worktree this manager's sessions live in,
 	// empty for the main one. Handed to every CLI it spawns, which reports it
 	// back as the MCP caller's identity.
-	worktree     string
-	sessionStore session.Store
+	worktree string
+	// reviewerWorkDir is where a permission reviewer's CLI runs instead of
+	// workDir; see SetPermissionReviewerWorkDir.
+	reviewerWorkDir string
+	sessionStore    session.Store
 	// budgets is how long a session may hold its process in each kind of wait.
 	// The whole of this manager's lifecycle policy; see runLeaseReaper.
 	budgets session.LeaseBudgets
@@ -89,6 +93,14 @@ type Manager struct {
 
 	// Called when process running state changes
 	onStateChange func(StateChangeEvent)
+
+	// onPermissionRequest is told of every permission request a live process
+	// raises, once it has been recorded and broadcast; see
+	// SetOnPermissionRequest.
+	onPermissionRequest func(proc *Process, request agent.PermissionRequestEvent)
+	// onTurnChanged is told of every change to a live process's turn; see
+	// SetOnTurnChanged.
+	onTurnChanged func(sessionID string)
 
 	// settler holds a turn's ending back until the session has stayed ended.
 	// It is the session layer's, not the manager's, so that the one heuristic in
@@ -141,7 +153,15 @@ type Process struct {
 	// default one (cliprofile). A CLI cannot change account while it runs, so a
 	// process whose profile is no longer the current one is replaced on the next
 	// message once its turn is over (GetOrCreateProcess).
-	profileID    string
+	profileID string
+	// model and effort are what this process's CLI was started with. Like the
+	// profile they cannot change while it runs, and a process started with
+	// other values than the session's is replaced once its turn is over
+	// (GetOrCreateProcess). Set-model and set-effort close the process
+	// themselves; this is for the writer that does not, the permission
+	// reviewer's settings applied at review time.
+	model        string
+	effort       string
 	agentSession agent.Session
 	sessionStore session.Store
 	manager      *Manager // back-reference for broadcasting to subscribers
@@ -175,6 +195,19 @@ type Process struct {
 	// ErrProcessReplaced, to go to the successor. Held over the turn reduction
 	// only — never over a callback, nor while processesMu is held.
 	sendMu sync.Mutex
+	// answered names the permission requests this process has already handed
+	// an answer on to the agent, so that when two arrive for one request — a
+	// person and a permission reviewer, in either order — the first is applied
+	// and the second refused with ErrRequestNotPending instead of reaching a CLI
+	// that already has its answer. The turn copy cannot be the guard on its own:
+	// two answers can both read it before either has been reduced, and a racing
+	// apply can briefly put an answered request back in it (see turnState).
+	// Never pruned: one id per request answered, for the life of the process.
+	// Guarded by answerMu, which covers the claim only: an answer that loses
+	// it never sends, so there is no order between sends to keep, and the turn
+	// listeners answerPrompt runs stay outside the lock.
+	answerMu sync.Mutex
+	answered map[string]struct{}
 	// activated mirrors the session's Activated flag so the store is written once,
 	// on the transition, rather than on every event the agent produces.
 	activated atomic.Bool
@@ -246,6 +279,38 @@ func (m *Manager) SetMessageListener(l ChatMessageListener) {
 
 func (m *Manager) SetOnStateChange(fn func(StateChangeEvent)) {
 	m.onStateChange = fn
+}
+
+// SetPermissionReviewerWorkDir names the directory permission reviewers' CLIs
+// run in (permreview.DefaultWorkDir). Every CLI reads its instruction files,
+// settings and hooks from its working directory, and the main agent being
+// reviewed can write all of those in the project; a directory of Pockode's own
+// outside the project keeps them from the one session that is there to catch
+// that agent. Unset, a reviewer cannot be started: running it in the project
+// would quietly undo exactly that. Set before any process starts.
+func (m *Manager) SetPermissionReviewerWorkDir(dir string) {
+	m.reviewerWorkDir = dir
+}
+
+// SetOnPermissionRequest names what to tell of every permission request a
+// session's agent raises — the permission reviewer's routing
+// (permreview.Service). It is told the process that raised it, because a
+// request id means something only to that process. It runs on the goroutine
+// reading that session's agent, after the request is in the history and on
+// its way to clients, so it must not block; it is not told of a request a
+// process being torn down left in its buffer.
+func (m *Manager) SetOnPermissionRequest(fn func(proc *Process, request agent.PermissionRequestEvent)) {
+	m.onPermissionRequest = fn
+}
+
+// SetOnTurnChanged names what to tell whenever a session's turn changes — a
+// request answered, withdrawn or expired among it — for whoever holds on to
+// a request beyond the process and has to let go of it once it is over (the
+// permission reviewer's timers). The raw change, unsettled; it runs on the
+// goroutine that changed the turn and must not block. Set before any process
+// starts.
+func (m *Manager) SetOnTurnChanged(fn func(sessionID string)) {
+	m.onTurnChanged = fn
 }
 
 // SetOnTurnEnded names what to tell once a session's turn has ended and stayed
@@ -326,23 +391,25 @@ func (m *Manager) GetOrCreateProcess(ctx context.Context, meta session.SessionMe
 			continue
 		}
 		if proc.htmlFirst == meta.HTMLFirst {
-			if proc.profileID == profileID || proc == busy {
+			current := proc.profileID == profileID && proc.model == meta.Model && proc.effort == meta.Effort
+			if current || proc == busy {
 				proc.touch()
 				m.processesMu.Unlock()
 				return proc, false, nil
 			}
 			m.processesMu.Unlock()
-			log := slog.With("sessionId", sessionID, "profile", proc.profileID, "currentProfile", profileID)
+			log := slog.With("sessionId", sessionID, "profile", proc.profileID, "currentProfile", profileID,
+				"model", proc.model, "currentModel", meta.Model, "effort", proc.effort, "currentEffort", meta.Effort)
 			if stopped, err := proc.stopIfIdle(); !stopped {
 				if err != nil {
 					log.Warn("could not read the turn of a process to replace; keeping it", "error", err)
 				} else {
-					log.Info("process runs as a profile that is no longer current; keeping it until its turn is over")
+					log.Info("process runs as a profile or engine that is no longer current; keeping it until its turn is over")
 				}
 				busy = proc
 				continue
 			}
-			log.Info("process runs as a profile that is no longer current; replacing it")
+			log.Info("process runs as a profile or engine that is no longer current; replacing it")
 			<-proc.done
 			continue
 		}
@@ -391,8 +458,17 @@ func (m *Manager) GetOrCreateProcess(ctx context.Context, meta session.SessionMe
 		Model:        meta.Model,
 		Effort:       meta.Effort,
 		HTMLFirst:    meta.HTMLFirst,
-		Profile:      cliprofile.Select(profileID),
-		OnUsage:      m.usageRecorder(sessionID),
+		// Read off the session on every launch, which is what keeps a
+		// reviewer one: the kind is fixed when the session is created.
+		PermissionReviewer: meta.IsPermissionReviewer(),
+		Profile:            cliprofile.Select(profileID),
+		OnUsage:            m.usageRecorder(sessionID),
+	}
+	if opts.PermissionReviewer {
+		if opts.WorkDir, err = m.prepareReviewerWorkDir(); err != nil {
+			m.processesMu.Unlock()
+			return nil, false, err
+		}
 	}
 	sess, err := ag.Start(m.ctx, opts)
 	// Another Pockode process removed the profile between the read above and
@@ -422,6 +498,8 @@ func (m *Manager) GetOrCreateProcess(ctx context.Context, meta session.SessionMe
 		agentType:    meta.AgentType,
 		htmlFirst:    meta.HTMLFirst,
 		profileID:    profileID,
+		model:        meta.Model,
+		effort:       meta.Effort,
 		agentSession: sess,
 		sessionStore: m.sessionStore,
 		manager:      m,
@@ -663,6 +741,19 @@ func (m *Manager) ForkAgentSession(ctx context.Context, agentType session.AgentT
 	opts.WorkDir = m.workDir
 	opts.DataDir = m.dataDir
 	return forker.ForkSession(ctx, opts)
+}
+
+// prepareReviewerWorkDir returns the directory a permission reviewer runs in,
+// created if it is not there: nothing but Pockode puts anything in it, so it
+// can go missing (a cleaned-up config directory) with nothing lost.
+func (m *Manager) prepareReviewerWorkDir() (string, error) {
+	if m.reviewerWorkDir == "" {
+		return "", errors.New("no working directory for permission reviewers is configured, and a reviewer is not run in the project")
+	}
+	if err := os.MkdirAll(m.reviewerWorkDir, 0o700); err != nil {
+		return "", fmt.Errorf("create the permission reviewers' working directory: %w", err)
+	}
+	return m.reviewerWorkDir, nil
 }
 
 // GetProcess returns an existing process or nil.
@@ -1287,6 +1378,9 @@ func (p *Process) ReportsMessageIngest() bool {
 // HTMLFirst is the guidance this process was started with.
 func (p *Process) HTMLFirst() bool { return p.htmlFirst }
 
+// SessionID is the session this process runs.
+func (p *Process) SessionID() string { return p.sessionID }
+
 // ProfileID is the account this process's CLI runs as, "" for the default one.
 func (p *Process) ProfileID() string { return p.profileID }
 
@@ -1330,11 +1424,44 @@ func (p *Process) ReceivesAttachments() bool {
 // SendPermissionResponse answers a permission request, which clears the blocker
 // that request raised and lets the turn carry on.
 func (p *Process) SendPermissionResponse(data agent.PermissionRequestData, choice agent.PermissionChoice) error {
-	if !p.turnState().AwaitingAnswerTo(data.RequestID) {
+	return p.answerPermission(data.RequestID, func() error {
+		return p.agentSession.SendPermissionResponse(data, choice)
+	})
+}
+
+// DenyPermissionWithMessage refuses a permission request without stopping the
+// turn, telling the agent message instead; see
+// agent.Session.DenyPermissionWithMessage. Only the first answer a request gets
+// is applied, whichever of the two methods gives it.
+func (p *Process) DenyPermissionWithMessage(data agent.PermissionRequestData, message string) error {
+	return p.answerPermission(data.RequestID, func() error {
+		return p.agentSession.DenyPermissionWithMessage(data, message)
+	})
+}
+
+// answerPermission claims a permission request for one answer, clears the
+// blocker it raised, and sends the answer. A request that is no longer waiting,
+// or that another answer has claimed, is refused with ErrRequestNotPending.
+func (p *Process) answerPermission(requestID string, send func() error) error {
+	if !p.claimAnswer(requestID) {
 		return ErrRequestNotPending
 	}
-	p.answerPrompt(data.RequestID)
-	return p.agentSession.SendPermissionResponse(data, choice)
+	p.answerPrompt(requestID)
+	return send()
+}
+
+// claimAnswer reports whether this caller is the one to answer requestID.
+func (p *Process) claimAnswer(requestID string) bool {
+	p.answerMu.Lock()
+	defer p.answerMu.Unlock()
+	if _, done := p.answered[requestID]; done || !p.turnState().AwaitingAnswerTo(requestID) {
+		return false
+	}
+	if p.answered == nil {
+		p.answered = make(map[string]struct{})
+	}
+	p.answered[requestID] = struct{}{}
+	return true
 }
 
 // SendInterrupt sends an interrupt signal to the agent. The turn is not ended
@@ -1573,6 +1700,9 @@ func (m *Manager) observeTurn(sessionID string, transition session.TurnTransitio
 		return
 	}
 	m.settler.Observe(sessionID, transition)
+	if m.onTurnChanged != nil {
+		m.onTurnChanged(sessionID)
+	}
 }
 
 // emitTurn is observeTurn plus the state change the wire has always carried.
@@ -1814,6 +1944,13 @@ func (p *Process) handleEvent(ctx context.Context, log *slog.Logger, event agent
 
 	// Emit to listener (ChatMessagesWatcher)
 	p.manager.EmitMessage(p.sessionID, event, seq)
+
+	// After the broadcast, so the request is on screen before anything else
+	// starts answering it. Only what the reducer accepted: a closed process's
+	// leftover request has nobody to answer.
+	if request, ok := event.(agent.PermissionRequestEvent); ok && reduce && p.manager.onPermissionRequest != nil {
+		p.manager.onPermissionRequest(p, request)
+	}
 
 	// Last, and after this event's own broadcast, so a subscriber sees the
 	// records in the order history holds them: the ending, then what that

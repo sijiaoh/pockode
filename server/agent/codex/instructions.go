@@ -29,8 +29,13 @@ import (
 // developerInstructions is the user's own developer_instructions for this
 // working directory, if any, followed by agent.EnvironmentStatement, Pockode's
 // guidance (agent.Guidance) and, in an HTML-first session,
-// agent.HTMLFirstGuidance after it.
+// agent.HTMLFirstGuidance after it. A permission reviewer is told
+// agent.PermissionReviewerInstructions alone: the user's instructions are for
+// the work they do in the project, which is none of the reviewer's.
 func (s *appSession) developerInstructions(ctx context.Context) string {
+	if s.opts.PermissionReviewer {
+		return agent.PermissionReviewerInstructions
+	}
 	user, err := s.readUserDeveloperInstructions(ctx)
 	// Not reading them is not a reason to refuse the session: the user is told
 	// instead, since their instructions are what goes missing. Unless the

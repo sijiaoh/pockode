@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 
 	"github.com/pockode/server/cliprofile"
 	"github.com/pockode/server/session"
@@ -23,6 +24,109 @@ type PermissionRequestData struct {
 	ToolInput             json.RawMessage
 	ToolUseID             string
 	PermissionSuggestions []PermissionUpdate
+}
+
+// PermissionResponder says who answered a permission request, on the recorded
+// response. Empty is a person answering from a client, which is every response
+// recorded before this existed.
+type PermissionResponder string
+
+const (
+	// RespondedByPermissionReviewer is a permission reviewer session answering a
+	// request on its main session's behalf; the record's PermissionReview says
+	// which reviewer and why.
+	RespondedByPermissionReviewer PermissionResponder = "permission_reviewer"
+	// RespondedByPockode is Pockode itself refusing a request a permission
+	// reviewer was meant to answer and did not — or one the reviewer raised
+	// itself. The record's PermissionReview names the reviewer involved and,
+	// in Automatic and Reason, why nobody else answered.
+	RespondedByPockode PermissionResponder = "pockode"
+)
+
+// PermissionAutoDeny is why Pockode refused a request on its own
+// (RespondedByPockode): every request an unattended session raises gets an
+// answer, and these are the ways it gets one without a verdict.
+type PermissionAutoDeny string
+
+const (
+	// AutoDenyTimeout: no verdict within the review timeout of the request
+	// arriving.
+	AutoDenyTimeout PermissionAutoDeny = "timeout"
+	// AutoDenyNoVerdict: the reviewer kept ending its turns without a verdict,
+	// and the nudges telling it to give one ran out.
+	AutoDenyNoVerdict PermissionAutoDeny = "no_verdict"
+	// AutoDenyReviewerFailed: the reviewer could not give one — it could not be
+	// started or sent the request, its turn failed or was stopped, its sign-in
+	// failed, or its session was deleted.
+	AutoDenyReviewerFailed PermissionAutoDeny = "reviewer_failed"
+	// AutoDenyReviewerRequest: the request is the reviewer's own. A reviewer
+	// may call permission_verdict and nothing else, so whatever else it asks
+	// for is refused without a review.
+	AutoDenyReviewerRequest PermissionAutoDeny = "reviewer_request"
+)
+
+// PermissionDenyCategory is what a permission reviewer found wrong with a
+// request it denied. The reviewer checks nothing else, so a deny outside these
+// is not a verdict it may give.
+type PermissionDenyCategory string
+
+const (
+	// DenySystemDamage: the action would break the operating system or leave
+	// the computer unusable.
+	DenySystemDamage PermissionDenyCategory = "system_damage"
+	// DenyPromptInjection: the command itself shows signs of prompt injection.
+	DenyPromptInjection PermissionDenyCategory = "prompt_injection"
+	// DenySystemReachUnverifiable: whether the action could reach the system
+	// cannot be verified, e.g. `rm -rf $DIR/` with a possibly empty $DIR.
+	DenySystemReachUnverifiable PermissionDenyCategory = "system_reach_unverifiable"
+)
+
+// Valid reports whether c is one of the categories a reviewer may deny with.
+func (c PermissionDenyCategory) Valid() bool {
+	switch c {
+	case DenySystemDamage, DenyPromptInjection, DenySystemReachUnverifiable:
+		return true
+	}
+	return false
+}
+
+// PermissionReview is what became of a request's review: which reviewer
+// session, and for a deny, why. It is recorded on the response as it was given
+// and never updated, so it names the reviewer session by id and leaves
+// everything about that session's present state to the session store.
+//
+// On a reviewer's verdict (RespondedByPermissionReviewer) Category and Reason
+// are the reviewer's. On Pockode's own deny (RespondedByPockode) Automatic says
+// which way the review fell through, Reason is Pockode's account of it, and
+// Category is empty: the reviewer found nothing, it gave no verdict at all.
+type PermissionReview struct {
+	// SessionID is the permission reviewer session the request was for — the
+	// one that gave the answer, or the one that did not. For a reviewer's own
+	// request (AutoDenyReviewerRequest) it is that reviewer, which is also the
+	// session the record is in. Absent only when the review failed before a
+	// reviewer could be found or created.
+	SessionID string `json:"session_id,omitempty"`
+	// Category is set on a reviewer's deny only.
+	Category PermissionDenyCategory `json:"category,omitempty"`
+	// Automatic is set on Pockode's own deny only.
+	Automatic PermissionAutoDeny `json:"automatic,omitempty"`
+	// Reason is, on a verdict, the reviewer's own words: for a deny, what is
+	// dangerous and how to rewrite the call so it can be confirmed safe. On
+	// Pockode's own deny it is what went wrong with the review.
+	Reason string `json:"reason,omitempty"`
+}
+
+// DenialMessage is what the agent is told in place of the tool's result when
+// the call is denied, so that it can rewrite the call and carry on.
+func (r PermissionReview) DenialMessage() string {
+	if r.Automatic != "" {
+		return "Pockode denied this call: " + r.Reason
+	}
+	msg := fmt.Sprintf("Pockode's permission reviewer denied this call (%s).", r.Category)
+	if r.Reason != "" {
+		msg += " " + r.Reason
+	}
+	return msg
 }
 
 // StartOptions contains options for starting an agent session.
@@ -59,8 +163,20 @@ type StartOptions struct {
 	// tools, and the MCP server's instructions, are the same. The system
 	// prompt is fixed when the CLI starts, so this has to be fixed for the
 	// session's life too.
-	HTMLFirst  bool
-	DisableMCP bool // skip MCP config (for testing)
+	HTMLFirst bool
+	// PermissionReviewer launches the session as a permission reviewer
+	// (session.SessionMeta.PermissionReviewerOf): told
+	// PermissionReviewerInstructions instead of Pockode's usual text, offered
+	// the permission_verdict tool and no other Pockode tool, and kept from the
+	// project as far as the CLI allows: no project instruction files, settings
+	// or hooks (WorkDir is then process.Manager's reviewer directory, not the
+	// project), none of the user's MCP servers; Claude gets no built-in tools,
+	// and Codex, which cannot give up its shell, runs in a read-only sandbox
+	// with on-request approval. Mode is ignored: a reviewer
+	// is launched for its own job, not under any session's permissions. Fixed
+	// for the session's life, like HTMLFirst, because a reviewer stays one.
+	PermissionReviewer bool
+	DisableMCP         bool // skip MCP config (for testing)
 	// Profile is the account the CLI runs as. The zero value is whichever is
 	// current at the start; process.Manager names the one it resolved through
 	// ProfileResolver, so that what it records as the process's profile is
@@ -93,6 +209,25 @@ func (o StartOptions) MCPDir() string {
 		return o.MCPServerDir
 	}
 	return o.DataDir
+}
+
+// MCPProxyArgs is the command line, after the executable, that starts
+// Pockode's MCP stdio proxy for this session: `pockode mcp` told where the
+// server is, and who it speaks for (see mcp.Caller and mcp.parseProxyArgs).
+// An empty worktree name is the main worktree, which the proxy assumes when
+// not told.
+func (o StartOptions) MCPProxyArgs() []string {
+	args := []string{"mcp", "--data-dir", o.MCPDir()}
+	if o.SessionID != "" {
+		args = append(args, "--session-id", o.SessionID)
+	}
+	if o.Worktree != "" {
+		args = append(args, "--worktree", o.Worktree)
+	}
+	if o.PermissionReviewer {
+		args = append(args, "--permission-reviewer")
+	}
+	return args
 }
 
 // Agent defines the interface for an AI agent. What an agent can do beyond
@@ -160,6 +295,15 @@ type Session interface {
 
 	// SendPermissionResponse sends a permission response to the agent.
 	SendPermissionResponse(data PermissionRequestData, choice PermissionChoice) error
+
+	// DenyPermissionWithMessage refuses a permission request without stopping
+	// the turn: the agent reads message as the refusal and carries on, free to
+	// try another way. SendPermissionResponse's deny is a person pressing Deny,
+	// which means stop; this one is for an answer that is advice rather than a
+	// halt — a permission reviewer's. An agent whose protocol cannot carry the
+	// text still refuses without stopping, and drops the text (Codex; see
+	// codex.appSession.DenyPermissionWithMessage).
+	DenyPermissionWithMessage(data PermissionRequestData, message string) error
 
 	// SendInterrupt stops the current turn and the background work it left
 	// running, so the agent does not come back on its own once that work

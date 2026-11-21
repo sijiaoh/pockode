@@ -71,6 +71,11 @@ func (h *rpcMethodHandler) handleSettingsUpdate(ctx context.Context, conn *jsonr
 		return
 	}
 
+	if err := params.Settings.PermissionReviewer.Validate(); err != nil {
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, err.Error())
+		return
+	}
+
 	// Validate default mode if set
 	if params.Settings.DefaultMode != "" && !params.Settings.DefaultMode.IsValid() {
 		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "invalid default mode")

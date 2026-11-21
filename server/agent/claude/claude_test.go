@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -419,6 +420,19 @@ func TestParseLine(t *testing.T) {
 				ToolName:  "Bash",
 				ToolInput: json.RawMessage(`{"command":"ruby --version"}`),
 				ToolUseID: "toolu_abc",
+			}},
+		},
+		{
+			// What a reviewer is shown about why the call needs a decision.
+			name:  "control_request permission request with decision context",
+			input: `{"type":"control_request","request_id":"req-124","request":{"subtype":"can_use_tool","tool_name":"Bash","input":{"command":"rm -rf $DIR/"},"tool_use_id":"toolu_rm","decision_reason":"The target may expand to /","decision_reason_type":"safetyCheck","blocked_path":"/"}}`,
+			expected: []agent.AgentEvent{agent.PermissionRequestEvent{
+				RequestID:      "req-124",
+				ToolName:       "Bash",
+				ToolInput:      json.RawMessage(`{"command":"rm -rf $DIR/"}`),
+				ToolUseID:      "toolu_rm",
+				DecisionReason: "The target may expand to /",
+				BlockedPath:    "/",
 			}},
 		},
 		{
@@ -1178,6 +1192,37 @@ func TestSession_SendPermissionResponse_Deny(t *testing.T) {
 	}
 }
 
+// A reviewer's deny is advice, not a halt: the message has to reach the model,
+// and on claude that only happens when interrupt is left off (see denyTool).
+func TestSession_DenyPermissionWithMessage(t *testing.T) {
+	var buf bytes.Buffer
+	sess := &cliSession{
+		log:             testLogger(),
+		stdin:           nopWriteCloser{&buf},
+		pendingRequests: &sync.Map{},
+	}
+
+	data := agent.PermissionRequestData{RequestID: "req-review-1", ToolUseID: "toolu_review"}
+	if err := sess.DenyPermissionWithMessage(data, "rewrite it"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var response controlResponse
+	if err := json.Unmarshal(buf.Bytes(), &response); err != nil {
+		t.Fatalf("failed to unmarshal response: %v", err)
+	}
+	got := response.Response
+	if got.RequestID != "req-review-1" {
+		t.Errorf("request_id = %q, want req-review-1", got.RequestID)
+	}
+	if want := toolDenial("toolu_review", "rewrite it"); !reflect.DeepEqual(got.Response, want) {
+		t.Errorf("response = %+v, want %+v", got.Response, want)
+	}
+	if got.Response.Interrupt {
+		t.Error("interrupt = true, want the turn left running")
+	}
+}
+
 func TestSession_SendPermissionResponse_AlwaysAllow(t *testing.T) {
 	var buf bytes.Buffer
 	sess := &cliSession{
@@ -1545,6 +1590,68 @@ func TestBuildArgs_DisablesTheCLIsOwnQuestionTool(t *testing.T) {
 		if !hasFlagValue(args, "--disallowedTools", "AskUserQuestion") {
 			t.Errorf("mode %q: expected --disallowedTools AskUserQuestion in %v", mode, args)
 		}
+	}
+}
+
+// Unattended launches exactly as yolo: what it adds is a reviewer answering the
+// requests yolo still raises, which happens after launch.
+func TestBuildArgs_PermissionMode(t *testing.T) {
+	tests := []struct {
+		mode   session.Mode
+		bypass bool
+	}{
+		{session.ModeDefault, false},
+		{session.ModeYolo, true},
+		{session.ModeUnattended, true},
+	}
+	for _, tt := range tests {
+		args := buildArgs(agent.StartOptions{Mode: tt.mode}, claudeLaunch{})
+		if got := hasFlagValue(args, "--permission-mode", "bypassPermissions"); got != tt.bypass {
+			t.Errorf("mode %q: bypassPermissions = %v, want %v (args %v)", tt.mode, got, tt.bypass, args)
+		}
+	}
+}
+
+// A permission reviewer has no built-in tool and no MCP server but Pockode's,
+// loads none of the project's settings, may call the verdict tool without
+// asking, and gives up no permission gate whatever the mode it is stored with.
+func TestBuildArgs_PermissionReviewer(t *testing.T) {
+	args := buildArgs(agent.StartOptions{Mode: session.ModeUnattended, PermissionReviewer: true, DataDir: "/data", SessionID: "r1"}, claudeLaunch{})
+
+	for _, want := range [][2]string{{"--tools", ""}, {"--allowedTools", "mcp__pockode__permission_verdict"}, {"--setting-sources", "user"}} {
+		if !hasFlagValue(args, want[0], want[1]) {
+			t.Errorf("expected %s %q in %v", want[0], want[1], args)
+		}
+	}
+	for _, want := range []string{"--strict-mcp-config", "--disable-slash-commands"} {
+		if !slices.Contains(args, want) {
+			t.Errorf("expected %s in %v", want, args)
+		}
+	}
+	for _, unwanted := range []string{"--permission-mode", "--add-dir"} {
+		if slices.Contains(args, unwanted) {
+			t.Errorf("unexpected %s in %v", unwanted, args)
+		}
+	}
+	if got := systemPrompt(agent.StartOptions{PermissionReviewer: true, HTMLFirst: true}); got != agent.PermissionReviewerInstructions {
+		t.Errorf("system prompt = %q, want agent.PermissionReviewerInstructions alone", got)
+	}
+}
+
+// A reviewer reads no CLAUDE.md; an ordinary session's environment is the
+// profile's alone.
+func TestSessionEnv(t *testing.T) {
+	profileEnv := []string{"CLAUDE_CONFIG_DIR=/profile"}
+
+	if got := sessionEnv(agent.StartOptions{}, profileEnv); !slices.Equal(got, profileEnv) {
+		t.Errorf("session env = %v, want the profile's %v", got, profileEnv)
+	}
+	got := sessionEnv(agent.StartOptions{PermissionReviewer: true}, profileEnv)
+	if want := []string{"CLAUDE_CONFIG_DIR=/profile", "CLAUDE_CODE_DISABLE_CLAUDE_MDS=1"}; !slices.Equal(got, want) {
+		t.Errorf("reviewer env = %v, want %v", got, want)
+	}
+	if len(profileEnv) != 1 {
+		t.Errorf("the profile's env was changed: %v", profileEnv)
 	}
 }
 

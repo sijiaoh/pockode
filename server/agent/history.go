@@ -57,6 +57,15 @@ type EventRecord struct {
 	// carry several — share one renderer.
 	Questions []AskUserQuestion `json:"questions,omitempty"`
 	Choice    string            `json:"choice,omitempty"`
+	// DecisionReason and BlockedPath belong to permission_request records; see
+	// PermissionRequestEvent.
+	DecisionReason string `json:"decision_reason,omitempty"`
+	BlockedPath    string `json:"blocked_path,omitempty"`
+	// By and Review belong to permission_response records: who answered, and
+	// what became of the review (a reviewer's verdict, or Pockode's own deny).
+	// Both absent on a person's answer.
+	By     PermissionResponder `json:"by,omitempty"`
+	Review *PermissionReview   `json:"review,omitempty"`
 	// Reason says why a request stopped waiting for an answer; see CancelReason.
 	Reason CancelReason `json:"reason,omitempty"`
 	// AskedAt is when a question_posted record's question was asked, and

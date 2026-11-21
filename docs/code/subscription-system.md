@@ -647,6 +647,14 @@ The filter defaults to off, which is what this list did before it existed: a
 client that says nothing gets every session, so the field could be added without
 a client change landing first.
 
+`exclude_permission_reviewer_sessions` narrows the same list by
+`SessionListItem.permission_reviewer_of`, and is the simpler of the two because
+that relation is stored on the session and fixed at its birth: a row never moves
+into or out of the narrowing, so nothing is ever retracted for it, and a
+subscriber that hides reviewers is sent nothing at all about one. The unread
+badge is judged per subscriber against both narrowings, from the unread rows
+themselves (`watch.unreadTally`), rather than one flag per combination.
+
 **And the re-send is judged on the relation, not on the work item.** A work is
 written many times while it runs — a wait declared, a nudge counted, a step
 advanced — and almost none of it moves what a row takes from it. So the

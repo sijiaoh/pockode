@@ -16,6 +16,7 @@ import (
 
 	"github.com/pockode/server/agent"
 	"github.com/pockode/server/chat"
+	"github.com/pockode/server/permreview"
 	"github.com/pockode/server/process"
 	"github.com/pockode/server/rpc"
 	"github.com/pockode/server/session"
@@ -46,6 +47,12 @@ type Manager struct {
 	// a manager whose index nobody registered would answer "no such question"
 	// about every question there is.
 	questions *questionIndex
+	// reviewerEngine is the engine permission reviewers are launched with,
+	// read at review time; see SetPermissionReviewerEngine.
+	reviewerEngine permreview.EngineFunc
+	// reviewerWorkDir is where permission reviewers run; see
+	// SetPermissionReviewerWorkDir.
+	reviewerWorkDir string
 
 	mu        sync.Mutex
 	worktrees map[string]*Worktree
@@ -90,6 +97,33 @@ func (m *Manager) Registry() *Registry {
 // and its deleted sessions.
 func (m *Manager) SetWorkEngine(e *work.Engine) {
 	m.workEngine = e
+}
+
+// SetPermissionReviewerEngine installs where every worktree's permission
+// reviews read the reviewer's model and effort, at review time. Unset, each
+// CLI picks its own. Like SetWorkEngine, it reaches worktrees built after the
+// call.
+func (m *Manager) SetPermissionReviewerEngine(engine permreview.EngineFunc) {
+	m.reviewerEngine = engine
+}
+
+// SetPermissionReviewerWorkDir names the directory every worktree's
+// permission reviewers run in (process.Manager.SetPermissionReviewerWorkDir).
+// Like SetWorkEngine, it reaches worktrees built after the call.
+func (m *Manager) SetPermissionReviewerWorkDir(dir string) {
+	m.reviewerWorkDir = dir
+}
+
+// ResolvePermissionReviews hands back the named worktree's permission review
+// service and the release func to call when done with it — for
+// permission_verdict, which answers a request in the worktree of the reviewer
+// calling it.
+func (m *Manager) ResolvePermissionReviews(name string) (*permreview.Service, func(), error) {
+	wt, err := m.Get(name)
+	if err != nil {
+		return nil, nil, fmt.Errorf("get worktree %q for permission reviews: %w", name, err)
+	}
+	return wt.PermissionReviews, func() { m.Release(wt) }, nil
 }
 
 // SetWorkStore installs where a session's work item is looked up. Every worktree
@@ -256,12 +290,9 @@ func (m *Manager) DeleteSession(ctx context.Context, worktree, sessionID string)
 func (m *Manager) sessionDeleter(name string) (func(context.Context, string) error, func(), error) {
 	wt, err := m.Get(name)
 	if err == nil {
-		return func(ctx context.Context, sessionID string) error {
-				wt.ProcessManager.Close(sessionID)
-				return wt.SessionStore.Delete(ctx, sessionID)
-			}, func() {
-				m.Release(wt)
-			}, nil
+		return wt.DeleteSession, func() {
+			m.Release(wt)
+		}, nil
 	}
 	if !errors.Is(err, ErrWorktreeNotFound) {
 		// Anything else — a directory that is no longer a git repository, a
@@ -914,18 +945,12 @@ func (m *Manager) create(name, workDir string) (*Worktree, error) {
 	// session state lands next to the session store. MCP discovery still points at
 	// the main data dir (m.dataDir), the only place server.json is written.
 	processManager := process.NewManager(m.agents, name, workDir, wtDataDir, m.dataDir, sessionStore, m.leaseBudgets)
+	processManager.SetPermissionReviewerWorkDir(m.reviewerWorkDir)
 	processManager.SetMessageListener(chatMessagesWatcher)
 	sessionListWatcher.SetViewingChecker(chatMessagesWatcher)
 	processManager.SetOnStateChange(sessionListWatcher.HandleProcessStateChange)
 	if m.workEngine != nil {
-		// The engine hears a turn *ending*, not every state change: a settled
-		// ending is the only thing about a session it acts on, and the settling
-		// is the session layer's job (session.TurnSettler).
-		engine := m.workEngine
-		processManager.SetOnTurnEnded(func(end session.TurnEnd) {
-			engine.HandleTurnEnded(end.SessionID, end.Outcome)
-		})
-		sessionStore.AddOnChangeListener(sessionDeletions{engine: engine, worktree: name})
+		sessionStore.AddOnChangeListener(sessionDeletions{engine: m.workEngine, worktree: name})
 	}
 
 	chatClient := chat.NewClient(sessionStore, processManager)
@@ -943,6 +968,31 @@ func (m *Manager) create(name, workDir string) (*Worktree, error) {
 		chatClient.SetOnQuestionsSettled(m.workEngine.HandleQuestionsSettled)
 	}
 
+	permissionReviews := permreview.New(permreview.Config{
+		Store:       sessionStore,
+		Chat:        chatClient,
+		Processes:   processManager,
+		Engine:      m.reviewerEngine,
+		WorkDir:     workDir,
+		ProjectRoot: m.registry.MainDir(),
+	})
+	processManager.SetOnPermissionRequest(permissionReviews.HandlePermissionRequest)
+	processManager.SetOnTurnChanged(permissionReviews.HandleTurnChanged)
+	sessionStore.AddOnChangeListener(permissionReviews)
+
+	// Both hear a turn *ending*, not every state change: a settled ending is
+	// the only thing about a session they act on, and the settling is the
+	// session layer's job (session.TurnSettler). One settled answer, told to
+	// both — the work engine for a work's session, the permission reviews for
+	// a reviewer's; neither acts on the other's sessions.
+	engine := m.workEngine
+	processManager.SetOnTurnEnded(func(end session.TurnEnd) {
+		if engine != nil {
+			engine.HandleTurnEnded(end.SessionID, end.Outcome)
+		}
+		permissionReviews.HandleTurnEnded(end)
+	})
+
 	wt := &Worktree{
 		Name:                 name,
 		WorkDir:              workDir,
@@ -956,6 +1006,7 @@ func (m *Manager) create(name, workDir string) (*Worktree, error) {
 		ChatMessagesWatcher:  chatMessagesWatcher,
 		ProcessManager:       processManager,
 		ChatClient:           chatClient,
+		PermissionReviews:    permissionReviews,
 		watchers:             []watch.Watcher{fsWatcher, gitWatcher, gitDiffWatcher, sessionListWatcher, sessionDetailWatcher, chatMessagesWatcher},
 		subscribers:          make(map[watch.Notifier]struct{}),
 	}

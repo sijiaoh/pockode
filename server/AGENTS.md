@@ -68,6 +68,7 @@ logger/                 # 结构化日志 (slog)
 mcp/                    # MCP：stdio 代理客户端 + 服务端 Executor/APIHandler
 middleware/             # 密码 / session token 认证中间件
 password/               # 服务器密码的来源（--password / POCKODE_PASSWORD + 弃用别名）与比较（各认证入口共用）；经环境变量把密码交给另一个 pockode 进程（WithEnv：集群启动的节点、重启后的自己；ClearFlags 清空重放命令行里的密码参数）
+permreview/             # Unattended session 的权限审查：把权限请求路由给审查 session、应用 permission_verdict 的结论（见 docs/unattended-mode.md）
 process/                # 进程管理器
 relay/                  # NAT 穿透：yamux over WSS 隧道 + 本地反向代理 + 端口预览（认证与转发）
 selfinstall/            # 把一个 release 装到磁盘上的可执行文件位置（下载 → 用同一 release 的 checksums.txt 校验 → 跑 --version → rename 替换；只换文件不重启，同一 OS 用户同时只有一次安装；server 与 cluster 共用，见 docs/code/self-update.md）
@@ -272,7 +273,7 @@ if err := json.Unmarshal(data, &parsed); err != nil {
 
 ### MCP 本地 API
 
-MCP 子进程为客户端模式：由 AI CLI 通过 `pockode mcp --data-dir <dir> [--session-id <id>] [--worktree <name>]` 启动，从 `server.json` 读取 `local_url` 和 `token`，将工具调用通过 HTTP（`POST /api/mcp/tools/call`，Bearer token）转发给主服务器执行（`server/mcp/` 的 `Executor`）。`--session-id` / `--worktree` 是 spawn 时写入的调用方身份（`mcp.Caller`），随每次调用带上，让工具作用于调用来源的 session 而不必由模型填 id；它是自报的来源标识，不是凭据（见 [docs/code/agent-integration.md](../docs/code/agent-integration.md#mcp-caller-identity)）。`initialize` 返回的 instructions 在所有 session 中都是 `agent.Guidance`，只讲工具；session 的设定不走这里，而走 CLI 的 system-level 通道（Claude 的 `--append-system-prompt-file`、Codex 的 `developerInstructions`）：每个带 MCP server 的 session 都有 `agent.EnvironmentStatement`，HTML-first session 在其后再加 `agent.HTMLFirstGuidance`（见 [docs/code/agent-integration.md](../docs/code/agent-integration.md#the-environment-statement)）。CLI 配置里注册该 server 的名字是 `agent.MCPServerName`。子进程不直接读写文件或启动 watcher。`middleware.Auth` 仅对该精确路由放行，由 `APIHandler` 自行校验本地 token。relay 拒绝转发 `/api/mcp/*` 与 `/api/pockode-local/*`（`apiroute.IsLocalOnly`），所以经 relay 不可达；但服务器监听所有网卡，局域网内挡住调用方的是不出本机的 token，relay 的拒绝只是纵深防御（见 [docs/code/authentication.md](../docs/code/authentication.md#the-local-api-uses-a-separate-token)）。
+MCP 子进程为客户端模式：由 AI CLI 通过 `pockode mcp --data-dir <dir> [--session-id <id>] [--worktree <name>] [--permission-reviewer]` 启动，从 `server.json` 读取 `local_url` 和 `token`，将工具调用通过 HTTP（`POST /api/mcp/tools/call`，Bearer token）转发给主服务器执行（`server/mcp/` 的 `Executor`）。`--session-id` / `--worktree` 是 spawn 时写入的调用方身份（`mcp.Caller`），随每次调用带上，让工具作用于调用来源的 session 而不必由模型填 id；它是自报的来源标识，不是凭据（见 [docs/code/agent-integration.md](../docs/code/agent-integration.md#mcp-caller-identity)）。`initialize` 返回的 instructions 在所有 session 中都是 `agent.Guidance`，只讲工具（例外是 `--permission-reviewer` 启动的权限审查 session：只提供 `permission_verdict`、没有 instructions，见 docs/unattended-mode.md）；session 的设定不走这里，而走 CLI 的 system-level 通道（Claude 的 `--append-system-prompt-file`、Codex 的 `developerInstructions`）：每个带 MCP server 的 session 都有 `agent.EnvironmentStatement`，HTML-first session 在其后再加 `agent.HTMLFirstGuidance`（见 [docs/code/agent-integration.md](../docs/code/agent-integration.md#the-environment-statement)）。CLI 配置里注册该 server 的名字是 `agent.MCPServerName`。子进程不直接读写文件或启动 watcher。`middleware.Auth` 仅对该精确路由放行，由 `APIHandler` 自行校验本地 token。relay 拒绝转发 `/api/mcp/*` 与 `/api/pockode-local/*`（`apiroute.IsLocalOnly`），所以经 relay 不可达；但服务器监听所有网卡，局域网内挡住调用方的是不出本机的 token，relay 的拒绝只是纵深防御（见 [docs/code/authentication.md](../docs/code/authentication.md#the-local-api-uses-a-separate-token)）。
 
 ## 边界
 

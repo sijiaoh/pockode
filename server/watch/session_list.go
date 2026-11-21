@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sync/atomic"
 
 	"github.com/pockode/server/process"
@@ -27,10 +28,23 @@ type SessionListFilter struct {
 	// client-side means holding the whole work list, which makes the session
 	// list wrong for as long as that list is incomplete.
 	ExcludeWorkSessions bool
+	// ExcludePermissionReviewerSessions drops every permission reviewer session.
+	//
+	// Simpler than the work filter: whether a session is a reviewer is fixed at
+	// its birth, so a row can never move into or out of this narrowing, and
+	// nothing ever has to be retracted for it.
+	ExcludePermissionReviewerSessions bool
 }
 
-func (f SessionListFilter) keeps(item rpc.SessionListItem) bool {
-	return item.WorkID == "" || !f.ExcludeWorkSessions
+// Keeps reports whether the row belongs in the list this filter narrows to.
+func (f SessionListFilter) Keeps(item rpc.SessionListItem) bool {
+	if f.ExcludeWorkSessions && item.WorkID != "" {
+		return false
+	}
+	if f.ExcludePermissionReviewerSessions && item.PermissionReviewerOf != "" {
+		return false
+	}
+	return true
 }
 
 // sessionListState is everything a session list subscription remembers: the
@@ -267,7 +281,11 @@ func (w *SessionListWatcher) pushSession(op session.Operation, meta session.Sess
 
 	w.NotifyAll("session.list.changed", func(sub *Subscription) any {
 		filter := filterOf(sub)
-		if !filter.keeps(item) {
+		if filter.ExcludePermissionReviewerSessions && item.PermissionReviewerOf != "" {
+			// Never on this subscriber's screen, so there is nothing to retract.
+			return nil
+		}
+		if !filter.Keeps(item) {
 			if !retract {
 				return nil
 			}
@@ -300,8 +318,10 @@ func (w *SessionListWatcher) pushRemoval(sessionID string) {
 	})
 }
 
-// unreadTally is "is anything unread", for each of the two narrowings of the
-// list, or nothing at all when it could not be read.
+// unreadTally is "is anything unread", for any narrowing of the list, or
+// nothing at all when it could not be read. It holds the unread rows
+// themselves — few, on any list somebody reads — so that each subscriber's
+// filter is applied to them rather than a flag per combination of filters.
 //
 // It rides along on every notification because the sidebar's tab badge is an
 // "is there any" over the whole list, and a page cannot answer that: an unread
@@ -309,9 +329,8 @@ func (w *SessionListWatcher) pushRemoval(sessionID string) {
 // exactly the session a reader has not scrolled to (docs/list-paging-ui.md
 // §2.1).
 type unreadTally struct {
-	known bool
-	all   bool
-	plain bool
+	known  bool
+	unread []rpc.SessionListItem
 }
 
 // forFilter is nil when there is no answer, which leaves the client holding the
@@ -321,10 +340,7 @@ func (t unreadTally) forFilter(filter SessionListFilter) *bool {
 	if !t.known {
 		return nil
 	}
-	value := t.all
-	if filter.ExcludeWorkSessions {
-		value = t.plain
-	}
+	value := slices.ContainsFunc(t.unread, filter.Keeps)
 	return &value
 }
 
@@ -355,12 +371,11 @@ func (w *SessionListWatcher) unreadFlags() unreadTally {
 		slog.Error("failed to read work items for the unread flag", "error", err)
 		return unreadTally{}
 	}
-	for _, sess := range unread {
-		if relations[sess.ID].WorkID == "" {
-			return unreadTally{known: true, all: true, plain: true}
-		}
+	rows := make([]rpc.SessionListItem, len(unread))
+	for i, sess := range unread {
+		rows[i] = rpc.NewSessionListItem(sess, relations[sess.ID])
 	}
-	return unreadTally{known: true, all: true}
+	return unreadTally{known: true, unread: rows}
 }
 
 // listRows reads the whole session list and resolves each row's relation to
@@ -402,12 +417,12 @@ func (w *SessionListWatcher) resetSentWorkIDs(items []rpc.SessionListItem, relat
 // rather than filtered in place, so an empty one goes out as `[]` — which a
 // client can iterate — and not `null`, which it cannot.
 func filterRows(items []rpc.SessionListItem, filter SessionListFilter) []rpc.SessionListItem {
-	if !filter.ExcludeWorkSessions {
+	if filter == (SessionListFilter{}) {
 		return items
 	}
 	kept := make([]rpc.SessionListItem, 0, len(items))
 	for _, item := range items {
-		if filter.keeps(item) {
+		if filter.Keeps(item) {
 			kept = append(kept, item)
 		}
 	}
@@ -430,16 +445,18 @@ func (w *SessionListWatcher) notifySync() {
 		return
 	}
 	w.resetSentWorkIDs(items, relations)
-	// Both narrowings built once rather than per subscriber: there are only two,
-	// and a sync goes to every subscriber at once.
-	plain := filterRows(items, SessionListFilter{ExcludeWorkSessions: true})
+	// Each narrowing built once rather than per subscriber: there are only a
+	// handful, and a sync goes to every subscriber at once. NotifyAll calls back
+	// one subscriber at a time, so the cache needs no lock.
+	narrowed := map[SessionListFilter][]rpc.SessionListItem{}
 	unread := w.unreadFlags()
 
 	w.NotifyAll("session.list.changed", func(sub *Subscription) any {
 		filter := filterOf(sub)
-		sessions := items
-		if filter.ExcludeWorkSessions {
-			sessions = plain
+		sessions, built := narrowed[filter]
+		if !built {
+			sessions = filterRows(items, filter)
+			narrowed[filter] = sessions
 		}
 		// As much of the list as this subscriber had, not the first page of it:
 		// a resync that hands a reader five pages down a single page strands

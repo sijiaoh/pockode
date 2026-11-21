@@ -199,6 +199,7 @@ type Session interface {
     Events() <-chan AgentEvent       // Event stream
     SendMessage(prompt Prompt) error // Send user message (text + Pockode's id for it)
     SendPermissionResponse(...)      // Respond to permission request
+    DenyPermissionWithMessage(...)   // Refuse one without stopping the turn
     SendInterrupt() error            // Interrupt AI
     Close()                          // Close session
 }
@@ -695,40 +696,44 @@ An implementation returns `*BinaryNotFoundError` (not installed), `*OneShotAuthE
 ```go
 // agent/history.go
 type EventRecord struct {
-    Type                  EventType          `json:"type"`
-    Content               string             `json:"content,omitempty"`
-    ToolName              string             `json:"tool_name,omitempty"`
-    ToolInput             json.RawMessage    `json:"tool_input,omitempty"`
-    ToolUseID             string             `json:"tool_use_id,omitempty"`
-    OriginToolUseID       string             `json:"origin_tool_use_id,omitempty"`
-    ParentToolUseID       string             `json:"parent_tool_use_id,omitempty"`
-    ToolResult            string             `json:"tool_result,omitempty"`
-    Contents              []ContentBlock     `json:"contents,omitempty"`
-    IsError               bool               `json:"is_error,omitempty"`
-    Error                 string             `json:"error,omitempty"`
-    Message               string             `json:"message,omitempty"`
-    Code                  string             `json:"code,omitempty"`
-    RequestID             string             `json:"request_id,omitempty"`
-    PermissionSuggestions []PermissionUpdate `json:"permission_suggestions,omitempty"`
-    Questions             []AskUserQuestion  `json:"questions,omitempty"`
-    Choice                string             `json:"choice,omitempty"`
-    Reason                CancelReason       `json:"reason,omitempty"`
-    AskedAt               *time.Time         `json:"asked_at,omitempty"`
-    ResolvedAt            *time.Time         `json:"resolved_at,omitempty"`
-    Answering             []QuestionAnswer   `json:"answering,omitempty"`
-    Origin                MessageOrigin      `json:"origin,omitempty"`
-    Subtype               string             `json:"subtype,omitempty"`
-    Meta                  *MessageMeta       `json:"meta,omitempty"`
-    DurationMs            int64              `json:"duration_ms,omitempty"`
-    ExitCode              *int               `json:"exit_code,omitempty"`
-    HTMLPage              string             `json:"html_page,omitempty"`
-    Activity              string             `json:"activity,omitempty"`
-    OutputDelta           string             `json:"output_delta,omitempty"`
-    FullReasoning         string             `json:"full_reasoning,omitempty"`
-    Redacted              bool               `json:"redacted,omitempty"`
-    ContentDelta          string             `json:"content_delta,omitempty"`
-    FullReasoningDelta    string             `json:"full_reasoning_delta,omitempty"`
-    ProviderMessageID     string             `json:"provider_message_id,omitempty"`
+    Type                  EventType           `json:"type"`
+    Content               string              `json:"content,omitempty"`
+    ToolName              string              `json:"tool_name,omitempty"`
+    ToolInput             json.RawMessage     `json:"tool_input,omitempty"`
+    ToolUseID             string              `json:"tool_use_id,omitempty"`
+    OriginToolUseID       string              `json:"origin_tool_use_id,omitempty"`
+    ParentToolUseID       string              `json:"parent_tool_use_id,omitempty"`
+    ToolResult            string              `json:"tool_result,omitempty"`
+    Contents              []ContentBlock      `json:"contents,omitempty"`
+    IsError               bool                `json:"is_error,omitempty"`
+    Error                 string              `json:"error,omitempty"`
+    Message               string              `json:"message,omitempty"`
+    Code                  string              `json:"code,omitempty"`
+    RequestID             string              `json:"request_id,omitempty"`
+    PermissionSuggestions []PermissionUpdate  `json:"permission_suggestions,omitempty"`
+    DecisionReason        string              `json:"decision_reason,omitempty"`
+    BlockedPath           string              `json:"blocked_path,omitempty"`
+    By                    PermissionResponder `json:"by,omitempty"`
+    Review                *PermissionReview   `json:"review,omitempty"`
+    Questions             []AskUserQuestion   `json:"questions,omitempty"`
+    Choice                string              `json:"choice,omitempty"`
+    Reason                CancelReason        `json:"reason,omitempty"`
+    AskedAt               *time.Time          `json:"asked_at,omitempty"`
+    ResolvedAt            *time.Time          `json:"resolved_at,omitempty"`
+    Answering             []QuestionAnswer    `json:"answering,omitempty"`
+    Origin                MessageOrigin       `json:"origin,omitempty"`
+    Subtype               string              `json:"subtype,omitempty"`
+    Meta                  *MessageMeta        `json:"meta,omitempty"`
+    DurationMs            int64               `json:"duration_ms,omitempty"`
+    ExitCode              *int                `json:"exit_code,omitempty"`
+    HTMLPage              string              `json:"html_page,omitempty"`
+    Activity              string              `json:"activity,omitempty"`
+    OutputDelta           string              `json:"output_delta,omitempty"`
+    FullReasoning         string              `json:"full_reasoning,omitempty"`
+    Redacted              bool                `json:"redacted,omitempty"`
+    ContentDelta          string              `json:"content_delta,omitempty"`
+    FullReasoningDelta    string              `json:"full_reasoning_delta,omitempty"`
+    ProviderMessageID     string              `json:"provider_message_id,omitempty"`
 }
 ```
 
@@ -1192,7 +1197,13 @@ holds that token is code on this machine: the relay refuses to forward the
 route, and on the LAN, where the server listens too, the token is what keeps a
 caller out ([Authentication → The local
 API](authentication.md#the-local-api-uses-a-separate-token)). Nothing about the
-caller identity is an authorization decision.
+caller identity is an authorization decision — with one exception that leans on
+it without trusting it: `permission_verdict` answers only requests routed to
+the calling reviewer, keyed by a review id minted per request. That keeps an
+honest reviewer to its own main session's requests; it does not stop code that
+holds the token and has read a review id from the reviewer's history from
+answering in its name, which is an accepted risk
+([unattended-mode.md](../unattended-mode.md#known-accepted-risks)).
 
 **The two CLIs carry it differently** because their spawns differ: Codex takes
 the whole server definition inline per thread, while Claude reads a config file
@@ -3585,7 +3596,7 @@ behind its copied history were spent by the session it came from.
 
 ### Session Modes
 
-A session runs in one of two modes, `default` or `yolo`, and each CLI is told
+A session runs in one of three modes, `default`, `yolo` or `unattended`, and each CLI is told
 which one at startup and only there — Claude through its arguments, Codex through
 the thread parameters of `thread/start`, `thread/resume` and `thread/fork`.
 `session.set_mode` therefore closes the running process instead of retuning it.
@@ -3601,6 +3612,7 @@ would buy one agent a path the other cannot have.
 |---|---|---|
 | `default` | no `--permission-mode` | no `approvalPolicy`, no `sandbox` |
 | `yolo` | `--permission-mode bypassPermissions` | `approvalPolicy: never`, `sandbox: danger-full-access` |
+| `unattended` | same as `yolo` | same as `yolo` |
 
 **`default` overrides nothing.** Each CLI applies its user's own permission
 settings, and whatever those send for approval reaches the user — Claude's
@@ -3627,6 +3639,15 @@ describing it here would turn it into a promise Pockode has no means to keep.
 down, so each CLI is told to drop its own, Codex additionally dropping its
 sandbox. The mechanisms differ, but what the user is promised does not — nothing
 prompts, on either agent.
+
+**`unattended` is more permissive than `yolo`, not a restriction of it.** It
+launches exactly as `yolo` (`session.Mode.BypassesAgentGate` is the one check
+both agents read), and adds what happens *after* a request is raised: whatever
+`yolo` still sends for approval — Claude's own safety checks, which
+`bypassPermissions` cannot skip — is answered by the session's permission
+reviewer instead of waiting for a person. Codex under `yolo` raises nothing
+today, so there `unattended` behaves as `yolo`. The reviewer and the RPC
+contract around it are in [docs/unattended-mode.md](../unattended-mode.md).
 
 **The integration suite pins what production leaves unset.** Its Codex approval
 scenarios are written against `on-request` + `workspace-write`, and with
@@ -3657,6 +3678,182 @@ const (
     PermissionAlwaysAllow // Allow and persist the rule
 )
 ```
+
+### Answers That Are Not a Person's
+
+A permission request can be answered by a permission reviewer session rather
+than by a person (the record it leaves is in
+[agent-event.md](../agent-event.md#permission-requests-and-their-answers)).
+Three things in the permission path exist for that.
+
+**What the reviewer is shown.** `PermissionRequestEvent` carries Claude's
+`decision_reason` and `blocked_path` from the `can_use_tool` request as
+`DecisionReason` / `BlockedPath`. They say *why* the CLI asked even under
+`bypassPermissions` — a dangerous-`rm` check, a protected path — which is what
+a reviewer has to judge. Codex's approval request has no counterpart (its
+`reason` is the model's own request to escalate, and is already shown as the
+tool input when there is nothing better), so both stay empty there.
+
+**A deny that is advice, not a halt.** A person pressing Deny means stop, so
+`SendPermissionResponse`'s deny interrupts the turn. A reviewer's deny means
+"not like that": `Session.DenyPermissionWithMessage` refuses without stopping,
+and the agent reads the message as the refusal and can rewrite the call.
+
+| | Person's deny (`SendPermissionResponse`) | `DenyPermissionWithMessage` |
+|---|---|---|
+| Claude | `behavior: deny`, `interrupt: true`, fixed "User denied permission" | `behavior: deny`, no `interrupt`, the message verbatim — the form `denyTool` already uses ([why interrupt must be absent](#refusing-the-clis-own-question)) |
+| Codex | `decline` | `decline`; **the message is dropped** |
+
+The Codex row is a protocol limit, not a choice: an approval's answer is a bare
+`decision` enum (checked against codex-cli 0.169.0's app-server schema), so the
+model learns only that the call was declined, not why. The turn still carries
+on. Steering the turn with the text afterwards (`turn/steer`) would get it
+there, but would put a user-turn message into Codex's thread that Pockode's
+history does not have; Codex under YOLO raises no approvals today, so this is
+left until it does.
+
+The chat-level entry point is `chat.Client.SendPermissionVerdict`: allow is
+`PermissionAllow`, never always-allow, so a reviewer never persists a rule; a
+deny must name a `PermissionDenyCategory` and is sent with
+`PermissionReview.DenialMessage()`. Its sibling
+`chat.Client.DenyPermissionAutomatically` is Pockode's own deny when the review
+falls through: recorded `by: pockode` (`RespondedByPockode`) with
+`PermissionReview.Automatic` set and no category, and told to the agent as
+`Pockode denied this call: <reason>`. Both take the `*process.Process` that
+raised the request rather than a session id, and refuse with
+`ErrRequestNotPending` once the session runs another one.
+
+**One answer per request.** A request on screen can be answered by a person
+while the reviewer is still thinking, or after. `process.Process` claims a
+request (`claimAnswer`, under `answerMu`) before handing its answer to the CLI
+and remembers it in `answered`; any later answer, through either method, gets
+`ErrRequestNotPending` and reaches neither the CLI nor the history. The turn
+state alone was not enough: two answers could both read the prompt as still
+waiting before either was reduced, and both went to the CLI — a second
+`control_response` for a request Claude has already settled.
+
+### The Review Flow
+
+Package `permreview` is the reviewer side, one `Service` per worktree (a main
+session and its reviewer always share one: the store that creates the reviewer
+is the main session's).
+
+```
+main session's CLI raises a request
+  → process.Process.handleEvent: recorded, reduced, broadcast
+  → Manager.onPermissionRequest (SetOnPermissionRequest)
+  → permreview.Service.HandlePermissionRequest(proc, …) — returns at once; routes on its own goroutine
+       raised by a reviewer → denyOwnRequest (Pockode's deny, reviewer_request)
+       main session not unattended → nothing
+       Store.EnsurePermissionReviewer                 — find or create
+       agent type must match the main session's
+       Store.SetModel/SetEffort from EngineFunc        — the settings, read now
+       remember (review id → reviewer, proc, request)  — before the send; arms the timeout
+       chat.Client.SendSystemMessage(reviewer, …, "permission_review")
+       any failure → Pockode's deny, reviewer_failed
+  … reviewer's CLI calls permission_verdict
+  → mcp.Executor.permissionVerdict → Service.Verdict(caller session, verdict)
+       review id not routed to this reviewer → ErrNotRouted
+       deny without a valid category          → ErrDenyNeedsCategory, nothing sent
+       already settled                        → NoLongerPending
+       chat.Client.SendPermissionVerdict(proc, …)
+         ErrRequestNotPending → NoLongerPending (dropped, not a failure)
+  … or it does not:
+       Service.HandleTurnEnded (settled ending)  — nudge ≤ MaxNudges, then no_verdict;
+                                                   failed/aborted/auth_failed → reviewer_failed
+       timeout (DefaultTimeout from arrival)     — timeout
+       Service.OnSessionChange (reviewer deleted) — reviewer_failed
+         → chat.Client.DenyPermissionAutomatically(proc, …) — by: pockode, review.automatic
+  … or a person answers first:
+       Manager.onTurnChanged → Service.HandleTurnChanged — drops the request, stops its timeout
+```
+
+- **Launch.** `StartOptions.PermissionReviewer` is set from
+  `SessionMeta.IsPermissionReviewer()` on every launch. Claude gets
+  `--tools "" --strict-mcp-config --disable-slash-commands --setting-sources
+  user --allowedTools mcp__pockode__permission_verdict`,
+  `CLAUDE_CODE_DISABLE_CLAUDE_MDS=1`, no attachment dir, no user MCP servers, and
+  `agent.PermissionReviewerInstructions` as its appended system prompt. Codex
+  gets `sandbox: read-only`, `approvalPolicy: on-request`, `project_doc_max_bytes
+  = 0`, Pockode's server with `default_tools_approval_mode = "approve"` (the
+  counterpart of Claude's `--allowedTools`: asked first, the verdict call would
+  be the reviewer's own request, which Pockode denies), every MCP server of the
+  user's switched off by name, and the same text
+  as its developer instructions, the user's own left out. Both ignore the stored
+  mode. A Codex reviewer's own approval requests are denied by Pockode at once.
+- **Kept from the project.** The main agent can write the project's
+  instruction files, settings and hooks, so a reviewer must not read them.
+  `process.Manager` therefore runs a reviewer's CLI in a directory of its own
+  instead of the worktree (`SetPermissionReviewerWorkDir`, wired from
+  `permreview.DefaultWorkDir`: one empty directory under the OS user's config
+  dir). With none configured, it refuses to start one rather than fall back to
+  the project. The flags above are the second layer and also cover a parent
+  directory's files, which a working directory alone does not.
+  - **User settings are kept on purpose.** `--setting-sources user` rather than
+    `""`: user settings can carry what a sign-in needs (`env`,
+    `apiKeyHelper`). The `CLAUDE.md` they would bring is dropped by the env var
+    instead.
+  - **Codex's user MCP servers are switched off one at a time.** Thread config
+    overrides merge into `config.toml`, so naming Pockode's server alone would
+    leave the user's in place. The names come from `config/read` before the
+    thread opens, and a reviewer whose config cannot be read is not started.
+  - **Unaffected.** The review message's `cwd` / `project_root` come from the
+    worktree (`permreview.Config`), not from where the reviewer runs. Pockode
+    keeps the reviewer's transcript in its own history as for any session.
+    Claude finds a conversation by id from any directory (2.1.325), so
+    resuming, and forking a reviewer into an ordinary session, still work.
+  - **What remains** (user hooks, Codex's `CODEX_HOME/AGENTS.md`) is listed in
+    [unattended-mode.md](../unattended-mode.md#known-accepted-risks).
+- **Tools.** The proxy is spawned with `--permission-reviewer`
+  (`StartOptions.MCPProxyArgs`) and then offers `permission_verdict` alone, with
+  no initialize instructions (`mcp.NewPermissionReviewerServer`); every other
+  proxy offers everything but it. A proxy refuses a call to a tool it does not
+  offer without forwarding it. That only the routed reviewer can answer a request
+  is the service's check (`ErrNotRouted`), not the proxy's.
+- **Engine changes.** `process.Process` remembers the model and effort its CLI
+  was started with, and `GetOrCreateProcess` replaces a process whose values
+  are no longer the session's once nothing is waiting on it — the same rule as a
+  profile switch. That is what makes a settings change reach an existing
+  reviewer on its next review without killing a review in progress.
+- **No work follow-up.** A person's answer calls
+  `workEngine.HandleUserMessage`. A verdict does not: the reviewer is not a
+  person looking at the work, and its answer only resumes the turn the request
+  blocked.
+- **Every request gets an answer.** Whatever the reviewer does not answer,
+  Pockode denies (`chat.Client.DenyPermissionAutomatically`, recorded
+  `by: pockode` with `review.automatic`), without interrupting the turn. The
+  reviewer's settled turn endings come through the same `SetOnTurnEnded`
+  listener as the work engine's (worktree.Manager fans the one settled answer
+  out to both); the nudge count is per reviewer, in memory, reset by any verdict.
+  A turn ending acts only on `Routed.Delivered` requests, set once the review
+  message is in; `sendReview` re-offers a message refused with
+  `chat.ErrTurnAwaitingAnswer` (a reviewer held by its own request, until
+  `denyOwnRequest` lands). `autoDeny` does nothing once the service is closed.
+  Only a store read failure, where it is unknown whether the session is
+  unattended at all, leaves a `permission_review_failed` warning instead.
+- **Tied to the raising process.** A routed request is keyed by a minted review
+  id and holds the `*process.Process` that raised it, which is what
+  `SetOnPermissionRequest` now passes. Verdicts and denies go to that process
+  only (`chat.Client` refuses one the session no longer runs with
+  `ErrRequestNotPending`), so a CLI request id reused by a successor process —
+  Codex's `approval-<n>` — can never be answered by mistake.
+- **Clean-up.** `Manager.SetOnTurnChanged` tells the service of every turn
+  change; a main session's request that is no longer waiting is dropped and its
+  timer stopped. Answered review ids stay in a small `settled` set so a late
+  verdict hears "no longer pending" rather than "never sent". Deleting a session
+  (store change listener) drops what it held, and a deleted reviewer's process
+  is stopped too: `Worktree.DeleteSession` stops the reviewer it finds, but one
+  created by a request routed while that delete was under way is removed by the
+  store's cascade alone. `Service.Close`, called from
+  `Worktree.Stop`, stops every timer and cancels in-flight sends.
+- **In-memory routing.** The routed requests live only in the service, because a
+  request dies with the process that raised it. `Service.Pending` lists what a
+  reviewer still owes, pruning requests the raising process is no longer waiting
+  on or that its session no longer runs.
+  `permission_verdict`'s result ends with that list, so the reviewer can tell
+  which requests are still open. The tool input is decoded and re-encoded
+  without HTML escaping, so a command's `&`, `<` and `>` reach the reviewer as
+  written.
 
 ### Permission Updates
 
@@ -4463,19 +4660,20 @@ request and the last two to a posted question; no record ever carries one of eac
 ```go
 // session/types.go
 type SessionMeta struct {
-    ID         string
-    Title      string
-    Activated  bool        // True once the agent has produced output
-    AgentType  AgentType   // claude, codex
-    Mode       Mode        // default, yolo
-    Model      string      // agent-specific model id; empty = CLI decides
-    Effort     string      // agent-specific reasoning effort; empty = CLI decides
-    Turn       TurnState   // what the session is doing; see Turn State
-    Unread     bool        // Has unread changes
-    ForkedFrom *ForkOrigin // Set on a fork, naming the session it came from
-    Usage      Usage       // Tokens and cost, as the agent reported them
-    HTMLFirst  bool        // Told HTMLFirstGuidance too; see HTML-First Sessions
-    Started    bool        // Set just before the first message is delivered
+    ID                   string
+    Title                string
+    Activated            bool        // True once the agent has produced output
+    AgentType            AgentType   // claude, codex
+    Mode                 Mode        // default, yolo, unattended
+    Model                string      // agent-specific model id; empty = CLI decides
+    Effort               string      // agent-specific reasoning effort; empty = CLI decides
+    Turn                 TurnState   // what the session is doing; see Turn State
+    Unread               bool        // Has unread changes
+    ForkedFrom           *ForkOrigin // Set on a fork, naming the session it came from
+    PermissionReviewerOf string      // Set on a permission reviewer, naming its main session
+    Usage                Usage       // Tokens and cost, as the agent reported them
+    HTMLFirst            bool        // Told HTMLFirstGuidance too; see HTML-First Sessions
+    Started              bool        // Set just before the first message is delivered
 }
 ```
 

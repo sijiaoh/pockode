@@ -109,13 +109,15 @@ func (h *rpcMethodHandler) handleSessionViewList(ctx context.Context, conn *json
 		return
 	}
 
+	filter := watch.SessionListFilter{
+		ExcludeWorkSessions:               params.ExcludeWorkSessions,
+		ExcludePermissionReviewerSessions: params.ExcludePermissionReviewerSessions,
+	}
 	items := make([]rpc.SessionListItem, 0, len(sessions))
 	for _, sess := range sessions {
-		sw := relations[sess.ID]
-		if params.ExcludeWorkSessions && sw.WorkID != "" {
-			continue
+		if item := rpc.NewSessionListItem(sess, relations[sess.ID]); filter.Keeps(item) {
+			items = append(items, item)
 		}
-		items = append(items, rpc.NewSessionListItem(sess, sw))
 	}
 
 	// Cut after the filter, for the reason session.PageList gives.
