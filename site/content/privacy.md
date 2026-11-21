@@ -3,7 +3,7 @@ title: Privacy Policy
 description: What information the Pockode relay service, cloud accounts and pockode.com collect, and how it is used and shared.
 ---
 
-**Effective Date:** October 30, 2026
+**Effective Date:** November 21, 2026
 
 This Privacy Policy describes how Pockode ("we," "us," or "our") collects, uses, and shares information in connection with your use of the Pockode relay service, Pockode cloud accounts, and website (collectively, the "Service").
 
@@ -13,10 +13,10 @@ By using the Service, you agree to the collection and use of information in acco
 
 ### 1.1 Information Collected Automatically
 
-When you use our relay service or the cloud account pages, we automatically collect certain technical information necessary to provide and maintain the Service:
+When you use our relay service or the cloud account pages, we automatically collect certain technical information necessary to provide and maintain the Service and to measure how much it is used:
 
 - **Network Information:** IP addresses of connecting clients and servers
-- **Connection Data:** Timestamps, session identifiers, and connection duration
+- **Connection Data:** Timestamps, session identifiers, and connection duration, and, while a Pockode instance stays connected to the relay, an hourly record that it is still connected
 - **Technical Logs:** Error logs and diagnostic information for troubleshooting
 
 The Pockode server also fetches a short announcement from us each time it starts, even when the relay is turned off (`-relay=false`). That request sends nothing from your machine or projects; we receive only its IP address and the time it was made, which we handle as described in this policy.
@@ -59,6 +59,7 @@ We use the information we collect for the following purposes:
 - **Cloud Accounts:** To send you sign-in codes by email, and to show you the machines and instances linked to your account. Cloud account information is shown only to the account owner, except that a linked machine's terminal shows the email address of the account it is linked to
 - **Security:** To detect, prevent, and respond to security incidents, fraud, or abuse
 - **Troubleshooting:** To diagnose technical problems and improve service reliability
+- **Usage Measurement:** To estimate how widely Pockode is used, by counting the distinct networks that Pockode instances connect to the relay from or fetch the announcement from. For this, the log entries of relay connections and announcement requests record the network an IP address belongs to: an IPv4 address as is, an IPv6 address shortened to its /64 prefix. Several instances on one network are counted once. For usage measurement, we use these records only to produce aggregate counts
 - **Legal Compliance:** To comply with applicable laws and legal obligations
 
 ## 3. Information Sharing
@@ -79,7 +80,7 @@ We do not sell, rent, or trade your personal information. We may share informati
 - **Machine Link Requests:** When you start linking a machine, we keep the machine's name and operating system until the request is completed. It is deleted as soon as the machine is linked; a request that is not completed expires after 10 minutes and is then deleted automatically, normally within an hour.
 - **Linked Machines and Instances:** A linked machine, and the kind, name, path and last-seen time of each instance on it, are kept until you unlink the machine or delete your account. Each time an instance renews its registration, its kind, name and path are replaced with the current ones.
 - **Relay Addresses:** An instance's relay address and the credential it uses to keep that address are kept with no time limit, so that the instance keeps the same address. They are not deleted when the instance is unlinked or your account is deleted; they are then no longer associated with any account.
-- **Technical Logs:** Logs include the network information and connection data described in [Information Collected Automatically](#11-information-collected-automatically), and relay addresses. They are kept only as long as needed for troubleshooting and security, and identify an account by an internal number, never by email address.
+- **Technical Logs:** Logs include the network information and connection data described in [Information Collected Automatically](#11-information-collected-automatically), and relay addresses. They are kept only as long as needed for troubleshooting, security and usage measurement, and identify an account by an internal number, never by email address.
 
 ### 4.2 Unlinking a Machine or an Instance
 
