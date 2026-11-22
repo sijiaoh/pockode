@@ -12,6 +12,13 @@ import (
 	"github.com/pockode/server/cliprofile/cliprofiletest"
 )
 
+// Unattended mode has no live test here, unlike Claude's
+// (permreview.TestIntegration_UnattendedClaude). A Codex session in
+// unattended launches with yolo's arguments (approvalPolicy: never), under
+// which Codex never raises a permission request, so there is no request for a
+// reviewer to answer and Pockode has no reviewer for Codex at all
+// (docs/unattended-mode.md).
+
 // TestIntegration_ResumesAcrossProcesses is the check behind the whole change.
 // The MCP channel this package used to speak kept a thread in the memory of the
 // process that created it, so every restart started the agent over with no

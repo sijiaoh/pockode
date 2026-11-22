@@ -578,7 +578,8 @@ commands that do, and the requirement that each CLI be logged in, are in
 [server/AGENTS.md](../server/AGENTS.md). What that file does not say is what
 running them costs. The same tag also holds back the
 [`question_post` eval](#the-question_post-eval), which measures rather than
-asserts and has a gate of its own on top.
+asserts and has a gate of its own on top, and the
+[Unattended reviewer test](#the-unattended-reviewer-test).
 
 **Every turn in it is a real API call.** `TestIntegration_ReportsCost` prints
 one of the prices — `turn cost: 0.0725 USD`, for a turn whose whole prompt is
@@ -655,6 +656,49 @@ the two `Interrupt` rows in the table above. Mutation-verified: with
 
 That is the shape worth copying whenever a test depends on something that may
 not happen — the branch where it did not happen has to say so, not return.
+
+### The Unattended reviewer test
+
+`TestIntegration_UnattendedClaude` (`server/permreview/unattended_integration_test.go`)
+runs the whole [Unattended](unattended-mode.md) path against the real Claude
+CLI: a main session in `unattended` raises a permission request, its reviewer
+session is created and sent it, the reviewer answers through
+`permission_verdict`, and the main turn carries on to `done`. It stands up the
+real `worktree.Manager` and permission review wiring behind an `httptest` local
+API, and the test binary plays the `pockode mcp` proxy (`TestMain`); only the
+server's HTTP front and its binary are stand-ins.
+
+```sh
+cd server
+go test -tags=integration ./permreview -run '^TestIntegration_UnattendedClaude$' -v -count=1
+```
+
+- **Cheap, and not gated beyond the tag.** Both sessions run on haiku (the
+  reviewer at `low`); a run measured about $0.004 and 6–8 seconds on
+  claude 2.1.325. There is no environment switch, so `-tags=integration ./...`
+  runs it too. Its ceiling is `permreview.DefaultTimeout` plus three minutes,
+  inside `go test`'s default ten, so no `-timeout` is needed; it sits above the
+  review timeout so that a reviewer that never answers shows up as Pockode's
+  `timeout` deny rather than as the test giving up first.
+- **What the agent runs is harmless whatever the verdict.** The trigger is
+  `echo pockode-unattended-check`, made to ask by a `permissions.ask` rule the
+  test writes into its own temporary project's `.claude/settings.json` —
+  explicit ask rules hold under `bypassPermissions`. Claude Code's own safety
+  checks were the first choice, but none of their harmless forms (an `rm` whose
+  target is a command substitution or a variable, writes into `.claude/` or
+  `.git/`) raised a request on that version, and the flow after the request is
+  what is under test, not which check raises it. No `rm` is run.
+- **Either verdict passes; Pockode answering fails.** The model's decision is
+  not asserted, only that it gave one through the tool and that it reached the
+  main session as `by: "permission_reviewer"`. Any Pockode deny (`timeout`,
+  `no_verdict`, `reviewer_failed`, …) fails the run, and so does a run where no
+  request was raised at all — that is not a [skip](#skip-is-not-a-pass-and-it-is-not-a-failure):
+  it means the CLI stopped honouring the ask rule, and the test would otherwise
+  prove nothing every time. A failure logs both sessions' histories.
+- **Claude only.** Codex under `unattended` launches with `yolo`'s
+  `approvalPolicy: never` and raises no request, so it has no reviewer and
+  nothing to test ([unattended-mode.md](unattended-mode.md)); the note saying so
+  sits in `server/agent/codex/codex_integration_test.go`.
 
 ### The `question_post` eval
 
