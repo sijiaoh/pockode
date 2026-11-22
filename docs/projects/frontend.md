@@ -431,10 +431,11 @@ instead of claiming the CLI decides.
 
 Settings' permission reviewer (`Settings/sections/PermissionReviewerField.tsx`,
 [design](../unattended-mode-ui.md#7-settings-the-permission-reviewer)) is a third
-caller, with two rows — one per agent — passing `agentFixed`: the panel drops
-its Agent section and keeps Model and Effort, since a reviewer runs on its main
-session's agent and there is no agent to choose. `label` names each row and its
-panel, and `hideHeading` leaves the heading to the one the two rows share.
+caller, with one row — Claude's, the one agent with a reviewer — passing
+`agentFixed`: the panel drops its Agent section and keeps Model and Effort,
+since a reviewer runs on its main session's agent and there is no agent to
+choose. `label` names the row and its panel, and `hideHeading` leaves the
+heading to the field's own.
 
 `AgentRoleEngineSelector` is the role-shaped wrapper around it: the
 `Follow settings` row that leaves the agent unset, which only a role has

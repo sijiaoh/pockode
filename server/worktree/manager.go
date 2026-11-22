@@ -50,9 +50,6 @@ type Manager struct {
 	// reviewerEngine is the engine permission reviewers are launched with,
 	// read at review time; see SetPermissionReviewerEngine.
 	reviewerEngine permreview.EngineFunc
-	// reviewerWorkDir is where permission reviewers run; see
-	// SetPermissionReviewerWorkDir.
-	reviewerWorkDir string
 
 	mu        sync.Mutex
 	worktrees map[string]*Worktree
@@ -105,13 +102,6 @@ func (m *Manager) SetWorkEngine(e *work.Engine) {
 // call.
 func (m *Manager) SetPermissionReviewerEngine(engine permreview.EngineFunc) {
 	m.reviewerEngine = engine
-}
-
-// SetPermissionReviewerWorkDir names the directory every worktree's
-// permission reviewers run in (process.Manager.SetPermissionReviewerWorkDir).
-// Like SetWorkEngine, it reaches worktrees built after the call.
-func (m *Manager) SetPermissionReviewerWorkDir(dir string) {
-	m.reviewerWorkDir = dir
 }
 
 // ResolvePermissionReviews hands back the named worktree's permission review
@@ -945,7 +935,6 @@ func (m *Manager) create(name, workDir string) (*Worktree, error) {
 	// session state lands next to the session store. MCP discovery still points at
 	// the main data dir (m.dataDir), the only place server.json is written.
 	processManager := process.NewManager(m.agents, name, workDir, wtDataDir, m.dataDir, sessionStore, m.leaseBudgets)
-	processManager.SetPermissionReviewerWorkDir(m.reviewerWorkDir)
 	processManager.SetMessageListener(chatMessagesWatcher)
 	sessionListWatcher.SetViewingChecker(chatMessagesWatcher)
 	processManager.SetOnStateChange(sessionListWatcher.HandleProcessStateChange)

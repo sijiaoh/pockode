@@ -44,7 +44,6 @@ import (
 	"github.com/pockode/server/mcp"
 	"github.com/pockode/server/middleware"
 	"github.com/pockode/server/password"
-	"github.com/pockode/server/permreview"
 	"github.com/pockode/server/relay"
 	"github.com/pockode/server/schedule"
 	"github.com/pockode/server/serverinfo"
@@ -479,11 +478,6 @@ Flags:
 	worktreeManager.SetPermissionReviewerEngine(func(agentType session.AgentType) session.Engine {
 		return settingsStore.Get().PermissionReviewer.For(agentType)
 	})
-	if dir, err := permreview.DefaultWorkDir(); err != nil {
-		slog.Warn("no configuration directory for permission reviewers to run in; unattended sessions' requests will be denied", "error", err)
-	} else {
-		worktreeManager.SetPermissionReviewerWorkDir(dir)
-	}
 	// A session list row names the work item its session runs: the store is where
 	// that is read, and the listener is what keeps a row up with it.
 	worktreeManager.SetWorkStore(workStore)

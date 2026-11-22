@@ -4,8 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -159,10 +157,6 @@ type fixture struct {
 	engineMu sync.Mutex
 	engine   session.Engine
 
-	// reviewerDir is where reviewers are launched; it does not exist until
-	// the first one is.
-	reviewerDir string
-
 	// holdRequests keeps the reviewer's own permission requests from reaching
 	// the service, so a test can leave one standing.
 	holdRequests atomic.Bool
@@ -190,6 +184,12 @@ func (s flakyStore) Get(sessionID string) (session.SessionMeta, bool, error) {
 
 func newFixture(t *testing.T, mode session.Mode) *fixture {
 	t.Helper()
+	return newFixtureOn(t, session.AgentTypeClaude, mode)
+}
+
+// newFixtureOn is newFixture with the main session on agentType.
+func newFixtureOn(t *testing.T, agentType session.AgentType, mode session.Mode) *fixture {
+	t.Helper()
 	store, err := session.NewFileStore(t.TempDir())
 	if err != nil {
 		t.Fatalf("NewFileStore: %v", err)
@@ -197,12 +197,11 @@ func newFixture(t *testing.T, mode session.Mode) *fixture {
 	ag := &fakeAgent{}
 	registry := agent.NewRegistry()
 	registry.Register(session.AgentTypeClaude, ag)
+	registry.Register(session.AgentTypeCodex, ag)
 	pm := process.NewManager(registry, "", "/work/tree", t.TempDir(), "", store, session.LeaseBudgets{Idle: time.Minute})
 	t.Cleanup(pm.Shutdown)
-	reviewerDir := filepath.Join(t.TempDir(), "permission-reviewer")
-	pm.SetPermissionReviewerWorkDir(reviewerDir)
 
-	f := &fixture{store: store, pm: pm, chat: chat.NewClient(store, pm), agent: ag, reviewerDir: reviewerDir}
+	f := &fixture{store: store, pm: pm, chat: chat.NewClient(store, pm), agent: ag}
 	f.engine = session.Engine{Model: "haiku", Effort: "low"}
 	f.service = New(Config{
 		Store:     flakyStore{Store: store, f: f},
@@ -236,7 +235,7 @@ func newFixture(t *testing.T, mode session.Mode) *fixture {
 	})
 	store.AddOnChangeListener(f.service)
 
-	if _, err := store.Create(context.Background(), "main", session.CreateSpec{AgentType: session.AgentTypeClaude, Mode: mode}); err != nil {
+	if _, err := store.Create(context.Background(), "main", session.CreateSpec{AgentType: agentType, Mode: mode}); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 	if err := f.chat.SendSystemMessage(context.Background(), "main", "go", "kickoff", nil); err != nil {
@@ -373,9 +372,10 @@ func bashRequest(id, command string) agent.PermissionRequestEvent {
 }
 
 // The reviewer of an unattended session is created on its first request,
-// launched as a reviewer with the engine the settings name in a directory of
-// its own, and handed the request — and nothing of the main session — as JSON,
-// which still names the main session's directories.
+// launched as a reviewer with the engine the settings name in the main
+// session's worktree, and handed the request — and nothing of the main
+// session's conversation — as JSON, which names the main session's
+// directories.
 func TestRoute_SendsTheRequestToANewReviewer(t *testing.T) {
 	f := newFixture(t, session.ModeUnattended)
 	request := bashRequest("req-1", `rm -rf "$DIR/" && cat <x > /dev/null`)
@@ -396,14 +396,10 @@ func TestRoute_SendsTheRequestToANewReviewer(t *testing.T) {
 	if !start.PermissionReviewer || start.Model != "haiku" || start.Effort != "low" {
 		t.Errorf("reviewer launched with reviewer=%v model=%q effort=%q, want a reviewer on haiku/low", start.PermissionReviewer, start.Model, start.Effort)
 	}
-	if start.WorkDir != f.reviewerDir {
-		t.Errorf("reviewer launched in %q, want the reviewers' own directory %q", start.WorkDir, f.reviewerDir)
-	}
-	if info, err := os.Stat(f.reviewerDir); err != nil || !info.IsDir() {
-		t.Errorf("the reviewers' directory was not created: %v", err)
-	}
-	if main := f.agent.startsOf("main")[0].opts; main.WorkDir != "/work/tree" {
-		t.Errorf("main session launched in %q, want the worktree", main.WorkDir)
+	// In the main session's worktree, so that it loads the project's settings
+	// and signs in as the main session does.
+	if start.WorkDir != "/work/tree" {
+		t.Errorf("reviewer launched in %q, want the main session's worktree", start.WorkDir)
 	}
 
 	prompt := reviewer.sentPrompts()[0]
@@ -506,12 +502,23 @@ func TestRoute_ReusesTheReviewer(t *testing.T) {
 	}
 }
 
-// Only unattended sessions are reviewed: a yolo session's requests wait for a
-// person, as they always have.
+// Only unattended sessions of an agent with a reviewer are reviewed: a yolo
+// session's requests wait for a person, as they always have.
 func TestRoute_IgnoresOtherModes(t *testing.T) {
-	for _, mode := range []session.Mode{session.ModeYolo, session.ModeDefault} {
-		t.Run(string(mode), func(t *testing.T) {
-			f := newFixture(t, mode)
+	tests := []struct {
+		name      string
+		agentType session.AgentType
+		mode      session.Mode
+	}{
+		{"yolo", session.AgentTypeClaude, session.ModeYolo},
+		{"default", session.AgentTypeClaude, session.ModeDefault},
+		// Codex raises no request under YOLO, so Pockode has no reviewer for
+		// it; one that arrived anyway would be the person's, as under YOLO.
+		{"codex unattended", session.AgentTypeCodex, session.ModeUnattended},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := newFixtureOn(t, tt.agentType, tt.mode)
 			f.raise(t, bashRequest("req-1", "a"))
 			// Routing runs on its own goroutine; give it the time it would take.
 			time.Sleep(50 * time.Millisecond)

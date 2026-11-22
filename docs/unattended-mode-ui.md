@@ -40,9 +40,13 @@ reviewer at work is not an alarm).
 | `unattended` | `Bot` warning | Unattended | YOLO, and a reviewer agent\nanswers what YOLO still asks |
 
 Offered for Claude and Codex alike: each mode means the same on every agent.
-(On Codex it behaves as YOLO today, since Codex under YOLO raises nothing; the
-UI does not say so — it would be a statement about a CLI version, not about the
-mode.)
+Codex under YOLO never raises a permission request, so Pockode has no reviewer
+for it (`lib/agentType.ts`'s `hasPermissionReviewer`, the twin of the server's
+`session.AgentType.HasPermissionReviewer`) and a Codex session in Unattended
+never reaches a review
+([unattended-mode.md](unattended-mode.md#unattended-mode)). The UI says that in
+the confirmation and the Settings hint, in those terms — never as "Unattended is
+just YOLO on Codex", which would be a different definition of the mode.
 
 The header's second line follows the existing rule unchanged: one muted line,
 the glyph the only colour — `Opus · ⟨Bot⟩ Unattended`.
@@ -86,10 +90,18 @@ only place the fact is stated in full, and the choice is rare.
 - The settings dialog's title is `Make Unattended the default?` and its
   confirm `Make default`; the body is the same text, with "the agent" reading
   "new sessions' agents".
-- The engine line names `permission_reviewer` for the session's agent (for the
-  settings dialog: the default agent), through the same label code the Engine
-  row uses; an empty value reads `Auto`. While settings have not loaded, the
-  line is left out rather than guessed.
+- The engine line names `permission_reviewer.claude`, through the same label
+  code the Engine row uses; an empty value reads `Auto`. While settings have
+  not loaded, the line is left out rather than guessed.
+- For an agent without a reviewer (the session's agent; for the settings
+  dialog, the default agent) the first paragraph keeps the same definition —
+  "any permission request still raised under YOLO is answered by a permission
+  reviewer agent instead of you" — and the second says why none will be:
+  `Codex never raises one under YOLO, so this session never reaches a review.`
+  (settings dialog: `new Codex sessions never reach a review`). It names no
+  engine and says nothing about tokens, since none are spent. The agent is
+  named through `getAgentLabel`, so an agent id this build does not know reads
+  as itself rather than breaking the dialog.
 - `ConfirmDialog` takes a plain `message`; the body is two paragraphs, so it is
   passed as a string with `\n\n`, and the shared dialog draws its message with
   `whitespace-pre-line`.
@@ -342,6 +354,9 @@ refusal as an error. The echo of the refused message is taken back
   session: `Next reviews: Haiku · Low`, opening Settings (the settings page
   has no address for one section, so the row says `Chosen in Settings ›
   Session` under the value); not a selector, since the server refuses one.
+  Left out for a reviewer whose agent has no reviewer — a Codex reviewer an
+  earlier version created gets no more reviews, and showing Claude's settings
+  as its next ones would be wrong.
   Right after a settings change the header (last review) and this row (next
   review) differ, and each says which it is. Work and Usage stay — Usage is where review cost is read.
 - **No Stop.** The server allows `chat.interrupt`, but stopping a reviewer
@@ -375,7 +390,8 @@ refusal as an error. The echo of the refused message is taken back
   `Verdict: Allow` / `Verdict: Deny · <category label>`, detail the reason —
   via the tool-summary table, not a special component. Both names are read:
   Claude's `mcp__pockode__permission_verdict` and Codex's
-  `pockode:permission_verdict`.
+  `pockode:permission_verdict`, which a Codex reviewer an earlier version
+  created still has in its transcript.
 - `warning` `permission_review_auto_denied` (here) and `permission_review_failed`
   (main session) use the existing warning row unchanged.
 
@@ -419,23 +435,25 @@ In Settings › Session, under Mode, `Settings/sections/PermissionReviewerField.
 ```
 PERMISSION REVIEWER
 [⟨Claude⟩ Claude · Haiku · Low          ˅]
-[⟨Codex⟩  Codex · Auto                  ˅]
-Unattended sessions' permission requests are reviewed on
-these. Auto lets the CLI decide.
+Unattended Claude sessions' permission requests are reviewed
+on this. Auto lets the CLI decide. Codex never raises a
+permission request under YOLO, so its Unattended sessions
+never reach a review.
 ```
 
-- Each row is `EngineField` with the agent **fixed** (`agentFixed`, which drops
-  the Agent section, leaving Model and Effort — the same lists, labels and Auto
-  row the defaults use), labelled `<Agent> permission reviewer`, under the one
-  shared heading (`hideHeading`; see
-  [projects/frontend.md](projects/frontend.md)). Two rows rather than an agent
-  switch, because the two are configured independently and both apply.
+- One row, Claude's: the one agent with a reviewer. It is `EngineField` with
+  the agent **fixed** (`agentFixed`, which drops the Agent section, leaving
+  Model and Effort — the same lists, labels and Auto row the defaults use),
+  labelled `Claude permission reviewer`, under the field's own heading
+  (`hideHeading`; see [projects/frontend.md](projects/frontend.md)). There is
+  no Codex row: there is nothing to configure for a reviewer that never runs,
+  and the hint says why rather than leaving a Codex user to wonder.
 - Auto (empty on the wire) carries the CLI-decides description
   (`AUTO_MODEL_DESCRIPTION` / `AUTO_EFFORT_DESCRIPTION`).
 - `settings.update` replaces the settings object, so a change sends the whole
-  `permission_reviewer` with the other agent's values kept — read from the
-  store when the change is made, so two quick edits to different rows cannot
-  overwrite each other.
+  `permission_reviewer` (`{claude: {model, effort}}`) with the other field's
+  value kept — read from the store when the change is made, so two quick edits
+  cannot overwrite each other.
 - Same loading (`valueState`) and failure handling as the Engine field above:
   the reason under the row that caused it.
 - Shown whatever the default mode is: a session can be switched to Unattended

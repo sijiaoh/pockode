@@ -10,10 +10,20 @@ sessions nobody is watching.
 
 **Unattended is more permissive than YOLO, not a restriction of it.** It is
 `yolo`, plus every permission request `yolo` still raises answered by a
-**permission reviewer session** instead of a person. Its launch arguments are
-`yolo`'s on both agents
-([agent-integration.md](code/agent-integration.md#session-modes)); Codex under
-`yolo` raises nothing today, so there it behaves as `yolo`.
+**permission reviewer session** instead of a person. That definition is the
+same for every agent, and so are its launch arguments: `yolo`'s
+([agent-integration.md](code/agent-integration.md#session-modes)).
+
+Which agents need a reviewer follows from it. Claude under `yolo` still raises
+the requests above, so Claude has one. Codex under `yolo` (`approvalPolicy:
+never`) never raises a permission request, so there is nothing for a reviewer
+to answer and Pockode has no reviewer logic for Codex
+(`session.AgentType.HasPermissionReviewer`). The mode is still offered and
+accepted for Codex sessions; they simply never reach a review. Should a Codex
+session in `unattended` raise one anyway, it stays the person's, as under
+`yolo`, and the server logs a warning. A Codex reviewer session an earlier
+version created stays in the store as an ordinary reviewer row that nothing
+routes to.
 
 This document is the server's contract for the frontend, and the user-facing
 account of what the mode does and does not promise. How the server implements
@@ -30,7 +40,7 @@ how the web app presents it is
 | `permission_reviewer_of` | `SessionListItem`, `SessionDetail` | [The permission reviewer session](#the-permission-reviewer-session) |
 | `data.reason: "permission_reviewer"` | `InvalidParams` from the RPCs a person cannot send to a reviewer | [The permission reviewer session](#the-permission-reviewer-session) |
 | `exclude_permission_reviewer_sessions` | `session.list.subscribe`, `session_view.list` params | [The permission reviewer session](#the-permission-reviewer-session) |
-| `permission_reviewer: {claude, codex}` | `settings.subscribe` / `settings.update` | [Settings](#settings) |
+| `permission_reviewer: {claude}` | `settings.subscribe` / `settings.update` | [Settings](#settings) |
 | `message` with `origin: "system"`, `subtype: "permission_review"` / `"permission_review_nudge"` | The reviewer session's history | [How a request is reviewed](#how-a-request-is-reviewed), [Every request gets an answer](#every-request-gets-an-answer) |
 | `permission_response` with `by: "permission_reviewer"` or `by: "pockode"`, and `review` | The main session's history, broadcast (a reviewer's own request: the reviewer's) | [agent-event.md](agent-event.md#permission-requests-and-their-answers) |
 | `warning` codes `permission_review_auto_denied`, `permission_review_failed` | The reviewer's / the main session's history | [Every request gets an answer](#every-request-gets-an-answer) |
@@ -50,7 +60,8 @@ session's first permission request and reused for later ones.
 |---|---|---|
 | `permission_reviewer_of` | `SessionListItem`, `SessionDetail` | The main session this session reviews for. Absent on every other session. Fixed at creation. |
 
-- **Same agent as the main session.** Its model and effort come from the
+- **Same agent as the main session**, so a Claude session: only Claude has a
+  reviewer ([above](#unattended-mode)). Its model and effort come from the
   server settings below, not from the main session; the session's own `model`
   and `effort` are written from them each time a review is sent, so they show
   what its reviews run on now. Its stored `mode` is `default` and means nothing:
@@ -84,24 +95,26 @@ process along with the main session's.
 ```json
 {
   "permission_reviewer": {
-    "claude": { "model": "haiku", "effort": "low" },
-    "codex":  { "model": "", "effort": "" }
+    "claude": { "model": "haiku", "effort": "low" }
   }
 }
 ```
 
 Part of the object `settings.subscribe` returns and `settings.update` replaces.
-Each agent's `model` and `effort` are validated against that agent's lists, as
-`default_model` / `default_effort` are (`session.models`, `session.efforts`);
-empty, or absent, lets the CLI decide. The values are read when a review is
+There is one key per agent that has a reviewer, so only `claude`. Its `model`
+and `effort` are validated against Claude's lists, as `default_model` /
+`default_effort` are (`session.models`, `session.efforts`); empty, or absent,
+lets the CLI decide. A `codex` key, which an earlier version had, is ignored
+rather than refused, in `settings.update` and in a stored settings file alike,
+and is dropped on the next save. The values are read when a review is
 sent, so a change applies from the next review on, existing reviewer sessions
 included.
 
 ## How a request is reviewed
 
-When a session in `unattended` raises a permission request, on either agent, the
-server finds or creates the session's reviewer and sends it the request as a
-system message (`origin: "system"`, `subtype: "permission_review"`) in the
+When a Claude session in `unattended` raises a permission request, the server
+finds or creates the session's reviewer and sends it the request as a system
+message (`origin: "system"`, `subtype: "permission_review"`) in the
 reviewer's history. Meanwhile the request is recorded and broadcast in the main
 session as usual, and a person may answer it with `chat.permission_response`.
 **The first answer wins**: whichever comes second is dropped, and a person's
@@ -112,39 +125,44 @@ the main session. It never sees the main session's transcript.
 
 | Key | Meaning |
 |---|---|
-| `request_id` | The review id Pockode minted for this request, which `permission_verdict` names. Not the CLI's own request id: that is unique only within the process that raised it (Codex's fallback `approval-<n>` restarts with every process), and a verdict must never reach a different request |
+| `request_id` | The review id Pockode minted for this request, which `permission_verdict` names. Not the CLI's own request id: that is unique only within the process that raised it, and a verdict must never reach a different request |
 | `tool_name`, `tool_input` | The call, as the request carries it |
 | `cwd` | The main session's working directory (its worktree) |
 | `project_root` | The project's main directory |
-| `decision_reason`, `blocked_path` | Claude's own account of why it asked, with ANSI escapes stripped. Absent when the CLI gives none, which is always the case for Codex |
+| `decision_reason`, `blocked_path` | Claude's own account of why it asked, with ANSI escapes stripped. Absent when the CLI gives none |
 
 The reviewer runs on the main session's agent, with the model and effort from
 `permission_reviewer` settings as they are at the time of the review. A
 reviewer whose process runs on other values is restarted with the new ones once
 it is idle.
 
-| | Claude | Codex |
-|---|---|---|
-| Tools | `permission_verdict` alone: no built-in tools, no MCP servers of the user's own, no skills. It runs without asking (`--allowedTools`) | `permission_verdict` alone from Pockode, which runs without asking (`default_tools_approval_mode = "approve"` on Pockode's server); Codex cannot drop its shell, so it runs in a `read-only` sandbox with `on-request` approval |
-| Instructions | `agent.PermissionReviewerInstructions`, appended to the CLI's system prompt | The same text as the thread's developer instructions, without the user's own |
+| What | The reviewer's |
+|---|---|
+| Tools | `permission_verdict` alone: no built-in tools (`--tools ""`), no MCP server but Pockode's (`--strict-mcp-config`, so neither the user's nor the project's `.mcp.json`), no skills (`--disable-slash-commands`). It runs without asking (`--allowedTools`) |
+| Instructions | `agent.PermissionReviewerInstructions`, appended to the CLI's system prompt |
+| Working directory | The main session's worktree, the same directory the main session runs in |
+| Settings | Every source loads, as for any session there: the user's, the project's `.claude/settings.json` and `.claude/settings.local.json`. So the reviewer reaches the model exactly as the main session does, whichever of them holds the sign-in (`env`, `apiKeyHelper` — Bedrock, Vertex, a proxy) |
+| Instruction files | None. `--settings` points at a file of the reviewer's own (`reviewer-settings.json` in its session directory) setting `CLAUDE_CODE_DISABLE_CLAUDE_MDS=1`, which drops every `CLAUDE.md` — the user's, the project's with what it imports, `CLAUDE.local.md`, `.claude/rules`, any in a parent directory — and the project's auto memory (`MEMORY.md`), which the reviewer would otherwise share with the main session, since both run in the same directory |
 
-The main agent can write the project's instruction files, settings and hooks,
-and a reviewer that read them could be steered by the very agent it is there to
-catch. So a reviewer reads none of them. What it is told about — `cwd` and
-`project_root` in the review message — is still the main session's.
+The main agent can write the project's instruction files, and a reviewer that
+read them could be steered by the very agent it is there to catch; the reviewer
+judges from the request alone and needs none of them. The variable is set
+through `--settings` rather than the process environment because a settings
+`env` outranks the process's: a project `.claude/settings.json` setting it to
+`0` would otherwise turn the files back on. Flag settings outrank the user's,
+the project's and local settings; only managed policy is above them. What the
+reviewer still takes from the project — its settings and hooks — is under
+[Known accepted risks](#known-accepted-risks).
 
-| | Claude | Codex |
-|---|---|---|
-| Working directory | A directory of Pockode's own, outside every project: `pockode/permission-reviewer` under the OS user's configuration directory, beside `cli-profiles.json`. It is shared by every Pockode server of the user and stays empty. | The same |
-| Project's instruction files | None: `CLAUDE_CODE_DISABLE_CLAUDE_MDS=1` drops every `CLAUDE.md` (the user's, the project's, any in a parent directory) | None: the working directory has no `AGENTS.md`, and `project_doc_max_bytes = 0` stops discovery even if that directory ended up inside a git repository |
-| Project's settings and hooks | None: `--setting-sources user` drops project and local settings | None: a project's `.codex/` layer is read only in that project |
-| User's settings | Kept, including `env` and `apiKeyHelper`, which some sign-ins need to reach the model at all | Kept (`config.toml`): auth and the provider live there |
-| User's MCP servers | None (`--strict-mcp-config`) | Switched off one by one (`mcp_servers.<name>.enabled = false`, names from `config/read`); a reviewer whose config cannot be read is not started |
-
-Checked against a local fake API (claude 2.1.325, codex-cli 0.169.0): neither
-CLI's request carried a planted `CLAUDE.md` / `AGENTS.md` from the project or
-from a parent directory, no project hook ran, and Pockode's tool was still
-offered. What remains is under [Known accepted risks](#known-accepted-risks).
+Checked against a local fake API (claude 2.1.325) with the reviewer's exact
+flags, in a project with a `CLAUDE.md` importing `AGENTS.md`, a
+`CLAUDE.local.md`, `.claude/rules`, and settings holding the sign-in `env`, a
+hook and `CLAUDE_CODE_DISABLE_CLAUDE_MDS=0` (the process environment set to `0`
+too): the request went to the project's endpoint, the hook ran, Pockode's tool
+and the appended instructions were offered, and none of the instruction files
+reached the request. The project's auto memory stayed out too, even with the
+project's settings turning it on (`autoMemoryEnabled`,
+`CLAUDE_CODE_DISABLE_AUTO_MEMORY=0`), while a plain launch there read it.
 
 ### A request under review
 
@@ -209,14 +227,12 @@ by Pockode itself — never left waiting for a person nobody told.
   one: the main agent learns why, and a retry is routed afresh. Server shutdown
   denies nothing; the requests end with their processes.
 - **The reviewer's own requests.** Anything a reviewer session asks permission
-  for itself (a Codex reviewer's approval beyond its read-only sandbox, say) is
-  denied by Pockode at once, without stopping its turn (`reviewer_request`), so
-  it never holds the reviews queued behind it.
+  for itself is denied by Pockode at once, without stopping its turn
+  (`reviewer_request`), so it never holds the reviews queued behind it.
 
 These denies never interrupt the turn: the agent is told
-`Pockode denied this call: <reason>` and carries on (on Codex without the text,
-as for a reviewer's deny). They are recorded as the `permission_response` with
-`by: "pockode"` and `review: {session_id, automatic, reason}`, where `automatic`
+`Pockode denied this call: <reason>` and carries on. They are recorded as the
+`permission_response` with `by: "pockode"` and `review: {session_id, automatic, reason}`, where `automatic`
 is one of the kinds above ([agent-event.md](agent-event.md#permission-requests-and-their-answers)).
 For `timeout`, `no_verdict` and the failures after routing, the reviewer
 session also gets a `warning` record (code `permission_review_auto_denied`)
@@ -252,9 +268,7 @@ permission_verdict(request_id, verdict, category?, reason?)
   nothing is sent, and the reviewer has to resubmit. The deny does not interrupt
   the main session's turn. The main agent is told
   `Pockode's permission reviewer denied this call (<category>). <reason>` and may
-  rewrite the call. On Codex the reason does not reach the model
-  ([agent-integration.md](code/agent-integration.md#answers-that-are-not-a-persons)).
-  There is no cap on repeated denials.
+  rewrite the call. There is no cap on repeated denials.
 - **A request that is no longer pending** (a person answered it, Pockode denied
   it, it expired, the process ended) is not an error. The tool says so, and the verdict is dropped.
 - Each result ends with the requests that are still waiting for this
@@ -274,19 +288,18 @@ Unlike a person's answer, it is also broadcast.
   each review costs more than the last, and an earlier request (a
   prompt-injected one included) can colour a later verdict. Deleting the
   reviewer starts the next request on a fresh one.
-- On Codex a deny's reason never reaches the main agent, only the fact that the
-  call was declined
-  ([agent-integration.md](code/agent-integration.md#answers-that-are-not-a-persons));
-  it is still on the record for the user.
-- A reviewer still reads what the user configured for themselves, which a
-  main agent with a shell outside the project (`yolo`, `unattended`) could
-  rewrite:
-  - Claude: the user's own settings, hooks and plugins included. They are kept
-    because settings-based sign-ins (Bedrock, Vertex, a proxy, `apiKeyHelper`)
-    would otherwise fail every review. The hooks have little to act on, since
-    the reviewer's one tool is `permission_verdict`.
-  - Codex: `CODEX_HOME/AGENTS.md`, which it reads whatever the working
-    directory and has no setting to skip, and the user's own hooks and skills.
+- A reviewer loads the project's settings, which the main agent could have
+  written, and so runs the project's hooks as well as the user's, and takes the
+  project's `env`, `outputStyle` and the like. A hook's output (a
+  `UserPromptSubmit` hook's, say) can add context to a review. This is accepted
+  because the sign-in may live only in the project's settings, and dropping
+  them would fail every review there; and because adding a hook means writing
+  the project's `.claude` settings, a protected-path write that raises a
+  permission request even under `yolo` — one this reviewer reviews.
+  The hooks have little to act on, since the reviewer's one tool is
+  `permission_verdict`. A main agent with a shell outside the project could
+  likewise rewrite the user's own settings, hooks and plugins, which a reviewer
+  reads as every session does.
 - `permission_verdict`'s check of who is calling rests on the MCP caller
   identity, which is self-reported
   ([agent-integration.md](code/agent-integration.md#mcp-caller-identity)). A
@@ -294,9 +307,3 @@ Unlike a person's answer, it is also broadcast.
   token and a review id from the reviewer's history and give its own verdict.
   It gains little: that agent can already run whatever it likes without
   asking.
-- Sign-in settings kept only in the project (a project `.claude/settings.json`
-  `env` or `apiKeyHelper`, a project `.codex/config.toml` provider) do not reach
-  a reviewer, since project settings are exactly what it is kept from. Its
-  launch or turn then fails, and every request is denied with
-  `reviewer_failed`: loud, not silent. Put such settings in the user's own
-  configuration to use unattended mode.

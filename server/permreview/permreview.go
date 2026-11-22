@@ -140,9 +140,8 @@ type Routed struct {
 	// ReviewID is the id the reviewer knows the request by — its request_id
 	// in the review message and in permission_verdict. Minted per routing
 	// rather than the CLI's own request id, which is unique only within the
-	// process that raised it (Codex's fallback approval-<n> restarts with
-	// every process): a verdict, a timeout or a deny meant for one request
-	// can then never reach another.
+	// process that raised it: a verdict, a timeout or a deny meant for one
+	// request can then never reach another.
 	ReviewID      string
 	ReviewerID    string
 	MainSessionID string
@@ -205,8 +204,10 @@ func (s *Service) Close() {
 
 // HandlePermissionRequest decides where every permission request a session of
 // this worktree raises goes (process.Manager.SetPermissionRouter): ones raised
-// in an unattended session are routed to its reviewer, and ones a reviewer
-// raises itself are denied. Everything else stays with the person.
+// in an unattended session of an agent with reviewer logic
+// (session.AgentType.HasPermissionReviewer) are routed to its reviewer, and
+// ones a reviewer raises itself are denied. Everything else stays with the
+// person.
 //
 // The decision is the session's mode, read here as the request is raised, so
 // that a request bound for the reviewer is raised already under review and
@@ -240,6 +241,13 @@ func (s *Service) HandlePermissionRequest(proc *process.Process, request agent.P
 			go s.denyOwnRequest(log, proc, main, permissionData(request), request.ToolName)
 		}}
 	case main.Mode != session.ModeUnattended:
+		return process.PermissionRouting{}
+	case !main.AgentType.HasPermissionReviewer():
+		// Not expected: an agent without reviewer logic raises no request
+		// under YOLO, which is why it has none. Should one arrive anyway it
+		// stays the person's, as it would in YOLO, rather than going to a
+		// reviewer nothing here can launch.
+		log.Warn("permission request in an unattended session of an agent with no permission reviewer; leaving it to the person", "agentType", main.AgentType)
 		return process.PermissionRouting{}
 	}
 	// The request leaves the person's hands here, before the reviewer is ready:
@@ -352,7 +360,7 @@ func (s *Service) prepareReviewer(ctx context.Context, main session.SessionMeta)
 	}
 	// The agent type can only change before a session's first message, so a
 	// mismatch means the main session was switched after its reviewer existed
-	// — and a Claude reviewer cannot judge a Codex request by Codex's rules.
+	// — and a reviewer cannot judge a request by another agent's rules.
 	if reviewer.AgentType != main.AgentType {
 		return session.SessionMeta{}, fmt.Errorf("the permission reviewer %s runs %s, but the session runs %s; delete the reviewer session so a new one is created",
 			reviewer.ID, reviewer.AgentType.DisplayName(), main.AgentType.DisplayName())
@@ -389,8 +397,8 @@ func (s *Service) reviewFailed(log *slog.Logger, r Routed, cause error) {
 // denyOwnRequest refuses a request a reviewer raised itself. A reviewer has no
 // reviewer (session.ErrReviewerOfReviewer), and nothing to ask for: its job is
 // permission_verdict, which never asks. The deny leaves its turn running —
-// a Codex reviewer would otherwise sit on the approval until its lease ran
-// out, and every later review would queue behind it.
+// otherwise the turn would sit on the request until its lease ran out, and
+// every later review would queue behind it.
 func (s *Service) denyOwnRequest(log *slog.Logger, proc *process.Process, reviewer session.SessionMeta, data agent.PermissionRequestData, toolName string) {
 	log.Info("denying a permission reviewer's own permission request", "tool", toolName)
 	s.autoDeny(Routed{

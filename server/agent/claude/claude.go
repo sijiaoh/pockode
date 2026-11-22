@@ -14,7 +14,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -183,39 +182,61 @@ const disallowedAskTool = "AskUserQuestion"
 // run without asking: a reviewer runs in the default mode, where an MCP tool
 // call would otherwise raise a permission request of its own.
 //
-// --setting-sources user keeps the project's settings, local settings and
-// hooks out even if the reviewer's working directory ever were the project
-// (process.Manager runs it in a directory of its own). The user's settings are
-// kept on purpose: they can carry what the CLI needs to reach the model at all
-// (env, apiKeyHelper — Bedrock, Vertex, a proxy), and an empty list would fail
-// every review for those users. Their hooks therefore still run
-// (docs/unattended-mode.md). CLAUDE.md is dropped separately, by reviewerEnv.
-// Measured on claude 2.1.325 against a local fake API: with both, no
-// CLAUDE.md of any scope reaches the request and no project hook runs, while
-// the --mcp-config tool and --append-system-prompt-file still do. --safe-mode
-// is not a substitute: it drops the --mcp-config server too.
+// Every settings source is loaded, the project's included: a reviewer runs in
+// the main session's worktree (process.Manager) so that it reaches the model
+// exactly as the main session does, and what does that can live in any of
+// them (env, apiKeyHelper — Bedrock, Vertex, a proxy). The project's hooks
+// therefore run too, as the user's do (docs/unattended-mode.md): an accepted
+// cost, because adding one means writing the project's .claude settings,
+// a protected-path write that raises a request this reviewer reviews. What is
+// kept out is the project's instruction text, by reviewerSettingsArgs.
+// --safe-mode is not a substitute: it drops the --mcp-config server too.
 var reviewerArgs = []string{
 	"--tools", "",
 	"--strict-mcp-config",
 	"--disable-slash-commands",
-	"--setting-sources", "user",
 	"--allowedTools", "mcp__" + agent.MCPServerName + "__" + agent.PermissionVerdictTool,
 }
 
-// reviewerEnv stops a permission reviewer's CLI from reading any CLAUDE.md —
-// the user's, the project's and any in a parent directory — which
-// --setting-sources cannot do without also dropping the user's settings
-// (reviewerArgs). Measured with reviewerArgs.
-var reviewerEnv = []string{"CLAUDE_CODE_DISABLE_CLAUDE_MDS=1"}
+// reviewerSettingsFile holds reviewerSettings, in the reviewer's own session
+// dir.
+const reviewerSettingsFile = "reviewer-settings.json"
 
-// sessionEnv is what a session's CLI gets added to its environment: the
-// profile's, and a reviewer's reviewerEnv after it, so that it wins over the
-// same name in the profile's.
-func sessionEnv(opts agent.StartOptions, profileEnv []string) []string {
+// reviewerSettings stop a permission reviewer's CLI from reading any CLAUDE.md
+// — the user's, the project's (with what it imports, AGENTS.md say),
+// CLAUDE.local.md, .claude/rules and any in a parent directory — and the
+// project's auto memory, which a reviewer running in the main session's
+// directory would otherwise share with it. The main agent can write every one
+// of those, and so could use them to steer its own reviewer, which judges from
+// the request alone and needs none of them.
+//
+// Set as settings rather than in the process environment, because the
+// project's settings load (reviewerArgs) and their env outranks the
+// process's: a project env of CLAUDE_CODE_DISABLE_CLAUDE_MDS=0 would turn the
+// files back on. --settings outranks the user's, the project's and local
+// settings (only managed policy is above it). Measured with reviewerArgs on
+// claude 2.1.325 against a local fake API, in a project whose settings carry
+// the sign-in and a hook and set the variable to 0, with the process
+// environment set to 0 too: the request reaches the project's endpoint and the
+// hook runs, no instruction file reaches the request, while the --mcp-config
+// tool and --append-system-prompt-file still do. Auto memory stays out even with
+// the project's settings turning it on (autoMemoryEnabled,
+// CLAUDE_CODE_DISABLE_AUTO_MEMORY=0).
+const reviewerSettings = `{"env":{"CLAUDE_CODE_DISABLE_CLAUDE_MDS":"1"}}`
+
+// reviewerSettingsArgs point a permission reviewer's CLI at reviewerSettings.
+// By file, like systemPromptArgs and for the same reason: an inline JSON
+// argument cannot pass the .cmd wrapper on Windows. The content is constant,
+// so a successor's atomic rewrite hands a predecessor the same bytes.
+func reviewerSettingsArgs(opts agent.StartOptions) ([]string, error) {
 	if !opts.PermissionReviewer {
-		return profileEnv
+		return nil, nil
 	}
-	return append(slices.Clone(profileEnv), reviewerEnv...)
+	path := filepath.Join(sessionDir(opts.DataDir, opts.SessionID), reviewerSettingsFile)
+	if err := filestore.WriteFileAtomic(path, []byte(reviewerSettings), 0644); err != nil {
+		return nil, fmt.Errorf("write permission reviewer settings: %w", err)
+	}
+	return []string{"--settings", path}, nil
 }
 
 // buildArgs assembles every CLI flag that follows from the session's own state.
@@ -306,6 +327,13 @@ func (a *Agent) Start(ctx context.Context, opts agent.StartOptions) (agent.Sessi
 	}
 	claudeArgs = append(claudeArgs, promptArgs...)
 
+	settingsArgs, err := reviewerSettingsArgs(opts)
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+	claudeArgs = append(claudeArgs, settingsArgs...)
+
 	// Add MCP config for work management tools (unless disabled for testing).
 	// The proxy must reach the single running server, whose server.json lives in
 	// the main data dir — not this session's per-worktree DataDir.
@@ -352,7 +380,7 @@ func (a *Agent) Start(ctx context.Context, opts agent.StartOptions) (agent.Sessi
 		}
 	}
 
-	proc, err := agent.StartProcessEnv(procCtx, log, Binary, claudeArgs, opts.WorkDir, sessionEnv(opts, profile.Env))
+	proc, err := agent.StartProcessEnv(procCtx, log, Binary, claudeArgs, opts.WorkDir, profile.Env)
 	if err != nil {
 		removeMCPConfig()
 		cancel()

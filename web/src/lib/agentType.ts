@@ -31,6 +31,20 @@ export const AGENT_TYPES = Object.keys(AGENT_TYPE_INFO) as AgentType[];
 export const DEFAULT_AGENT_TYPE: AgentType = "claude";
 
 /**
+ * Whether Pockode has permission reviewer logic for the agent. Mirrors
+ * `session.AgentType.HasPermissionReviewer` in Go.
+ *
+ * Unattended means the same on every agent: YOLO, and any permission request
+ * the agent still raises under YOLO is answered by the permission reviewer.
+ * Claude still raises some, so it has a reviewer. Codex never raises one under
+ * YOLO, so nothing could trigger a reviewer and there is none. Its sessions can
+ * still be Unattended; they simply never reach a review.
+ */
+export function hasPermissionReviewer(agentType: AgentType): boolean {
+	return agentType === "claude";
+}
+
+/**
  * The agent's own name, or the id itself when this build has no entry for it.
  * Shown as itself rather than rewritten to a known agent: the record really is
  * set to it, and drawing Codex as Claude would be a lie about a stored value.

@@ -6,6 +6,7 @@ import {
 	useReviewerEngineLabel,
 } from "../../hooks/useModeConfirmation";
 import { AUTO_ID } from "../../lib/agentOptions";
+import { hasPermissionReviewer } from "../../lib/agentType";
 import { useChatUIConfig } from "../../lib/registries/chatUIRegistry";
 import { useHeaderUIConfig } from "../../lib/registries/headerUIRegistry";
 import {
@@ -489,19 +490,22 @@ function SessionHeader({
 							<div>
 								{showEngine && renderEngineSection()}
 								{showMode && renderModeSection()}
-								{isPermissionReviewer && !readOnly && (
-									<NextReviewsSection
-										agentType={agentType}
-										onOpenSettings={
-											onOpenSettings
-												? () => {
-														handleClose();
-														onOpenSettings();
-													}
-												: undefined
-										}
-									/>
-								)}
+								{/* A Codex reviewer an earlier version created gets no
+								    more reviews: Codex has no reviewer now. */}
+								{isPermissionReviewer &&
+									!readOnly &&
+									hasPermissionReviewer(agentType) && (
+										<NextReviewsSection
+											onOpenSettings={
+												onOpenSettings
+													? () => {
+															handleClose();
+															onOpenSettings();
+														}
+													: undefined
+											}
+										/>
+									)}
 								{detail?.html_first && detail.started && <HtmlFirstSection />}
 								<SessionWorkSection
 									detail={detail}
@@ -528,13 +532,11 @@ function SessionHeader({
  * settings change the two differ, and each says which it is.
  */
 function NextReviewsSection({
-	agentType,
 	onOpenSettings,
 }: {
-	agentType: AgentType;
 	onOpenSettings?: () => void;
 }) {
-	const engine = useReviewerEngineLabel(agentType);
+	const engine = useReviewerEngineLabel();
 	const text = `Next reviews: ${engine ?? "loading"}`;
 	const content = (
 		<>

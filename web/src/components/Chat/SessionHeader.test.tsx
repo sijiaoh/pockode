@@ -334,7 +334,26 @@ describe("SessionHeader", () => {
 				expect(document.body.style.overflow).toBe("");
 			});
 
-			// Reviews spend tokens on the session's agent's reviewer engine.
+			// Still offered, so switching agents never means switching the mode
+			// back; but the dialog must not promise a Codex reviewer.
+			it("tells a Codex session it never reaches a review", async () => {
+				const { user, props } = await openHeader({ agentType: "codex" });
+
+				await user.click(screen.getByRole("radio", { name: /Unattended/ }));
+
+				expect(confirmDialog()).toHaveTextContent(
+					"Codex never raises one under YOLO, so this session never reaches a review.",
+				);
+				expect(confirmDialog()).not.toHaveTextContent("they run on");
+
+				await user.click(
+					screen.getByRole("button", { name: "Turn on Unattended" }),
+				);
+
+				expect(props.onModeChange).toHaveBeenCalledWith("unattended");
+			});
+
+			// Reviews spend tokens on the reviewer engine.
 			it("names the engine the reviews run on", async () => {
 				const { user } = await openHeader();
 
