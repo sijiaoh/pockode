@@ -279,6 +279,22 @@ record, with `by: "permission_reviewer"` and `review: {session_id, category,
 reason}` ([agent-event.md](agent-event.md#permission-requests-and-their-answers)).
 Unlike a person's answer, it is also broadcast.
 
+## Checked against the real CLI
+
+The path from request to verdict is run end to end against the real Claude CLI
+and model by `TestIntegration_UnattendedClaude`; how to run it, what it costs
+and what it asserts are in
+[testing.md](testing.md#the-unattended-reviewer-test). On claude 2.1.325 it
+passed: one request, one `permission_verdict` call, the answer recorded with
+`by: "permission_reviewer"`, and the main turn carried on to its end.
+
+It raises the request with a project `permissions.ask` rule, not with one of
+the safety checks [above](#unattended-mode): on that version none of their
+harmless forms tried (an `rm` of a command substitution or a variable, a write
+into `.claude/` or `.git/`) asked under `bypassPermissions`. Which commands
+Claude Code still asks about is its own and changes between versions; the
+reviewer answers whatever it raises.
+
 ## Known accepted risks
 
 - Deny-and-retry loops have no cap and may keep spending tokens: each rewritten
