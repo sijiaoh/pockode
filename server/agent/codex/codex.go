@@ -272,11 +272,6 @@ type appSession struct {
 	usage  *usageObserver
 	resume *resumeStateStore
 
-	// hiddenMCPServers are the user's MCP servers a permission reviewer's
-	// threads switch off (reviewerConfigOverrides). Read by openThread before
-	// any thread is opened, and only read after that.
-	hiddenMCPServers []string
-
 	// eventsMu is held for reading by every sender and for writing by the one
 	// close, so that no send can be in flight while the channel is closed. See
 	// emitEvent.
@@ -510,17 +505,6 @@ var initializedNotification = rpcRequest{JSONRPC: "2.0", Method: "initialized"}
 // instead and says so — the user needs to know the agent no longer remembers the
 // transcript they are looking at, and Pockode's own history is unaffected.
 func (s *appSession) openThread(ctx context.Context) error {
-	if s.opts.PermissionReviewer {
-		// Refused rather than started without: a reviewer that could reach
-		// the user's servers is the one thing it is launched to avoid, and
-		// a refused start denies the request it was for, saying why.
-		hidden, err := s.readUserMCPServers(ctx)
-		if err != nil {
-			return fmt.Errorf("read the MCP servers to keep from the permission reviewer: %w", err)
-		}
-		s.hiddenMCPServers = hidden
-	}
-
 	state, _ := s.resume.load()
 
 	switch {
@@ -692,19 +676,13 @@ func (s *appSession) buildThreadParams() map[string]interface{} {
 	// Default mode sends neither, so Codex applies the user's own config and
 	// defaults; only yolo and unattended (which launches as yolo) override them.
 	//
-	// A permission reviewer cannot be given no tools the way a Claude one is:
-	// Codex's shell is not something a thread can turn off. A read-only sandbox
-	// is the nearest it comes — the reviewer can still read files — and
-	// on-request keeps anything beyond that a request of its own rather than
-	// something it may just do. Pockode denies every such request at once,
-	// without stopping the turn (permreview.Service.denyOwnRequest), so it
-	// never holds the reviewer — or the reviews queued behind it.
-	switch {
-	case s.opts.PermissionReviewer:
-		params["approvalPolicy"] = "on-request"
-		params["sandbox"] = "read-only"
-		reviewerConfigOverrides(overrides, s.hiddenMCPServers)
-	case s.opts.Mode.BypassesAgentGate():
+	// Unattended is YOLO plus a permission reviewer answering any permission
+	// request the agent still raises under YOLO. Under approvalPolicy "never"
+	// Codex never raises one, so a reviewer could never be triggered, and
+	// Pockode has no reviewer logic for Codex (session.AgentType.
+	// HasPermissionReviewer). The mode still applies to Codex sessions; it
+	// simply never reaches a review.
+	if s.opts.Mode.BypassesAgentGate() {
 		params["approvalPolicy"] = "never"
 		params["sandbox"] = "danger-full-access"
 	}

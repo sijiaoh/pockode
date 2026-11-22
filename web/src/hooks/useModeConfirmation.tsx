@@ -11,6 +11,7 @@ import {
 	useEffortsForAgent,
 	useModelsForAgent,
 } from "../lib/agentOptionsStore";
+import { getAgentLabel, hasPermissionReviewer } from "../lib/agentType";
 import { useSettingsStore } from "../lib/settingsStore";
 import type { SessionMode } from "../types/message";
 import type { AgentType, PermissionReviewerEngine } from "../types/settings";
@@ -39,7 +40,7 @@ export function useModeConfirmation(
 ): ModeConfirmation {
 	const [open, setOpen] = useState(false);
 	const pending = useRef<((ok: boolean) => void) | null>(null);
-	const reviewerEngine = useReviewerEngineLabel(agentType);
+	const reviewerEngine = useReviewerEngineLabel();
 
 	const settle = useCallback((ok: boolean) => {
 		pending.current?.(ok);
@@ -69,7 +70,7 @@ export function useModeConfirmation(
 					? "Turn on Unattended?"
 					: "Make Unattended the default?"
 			}
-			message={unattendedMessage(target, reviewerEngine)}
+			message={unattendedMessage(target, agentType, reviewerEngine)}
 			confirmLabel={
 				target === "session" ? "Turn on Unattended" : "Make default"
 			}
@@ -83,10 +84,22 @@ export function useModeConfirmation(
 
 function unattendedMessage(
 	target: ModeConfirmationTarget,
+	agentType: AgentType,
 	reviewerEngine: string | null,
 ): string {
 	const subject =
 		target === "session" ? "The agent runs" : "New sessions' agents run";
+	if (!hasPermissionReviewer(agentType)) {
+		// The same definition, with nothing to trigger it: never "it's just YOLO".
+		const label = getAgentLabel(agentType);
+		const sessions =
+			target === "session"
+				? "this session never reaches"
+				: `new ${label} sessions never reach`;
+		return `Unattended is YOLO and more. ${subject} every command without asking, and any permission request still raised under YOLO is answered by a permission reviewer agent instead of you.
+
+${label} never raises one under YOLO, so ${sessions} a review.`;
+	}
 	// The engine is left out rather than guessed while settings have not loaded.
 	const engine = reviewerEngine
 		? `; they run on ${reviewerEngine} (Settings › Session).`
@@ -100,18 +113,18 @@ Each answer and its reason is shown on the request. You can still answer one you
 const UNSET_ENGINE: PermissionReviewerEngine = {};
 
 /**
- * The reviewer engine for `agentType`, named the way the Engine field names a
- * model and effort; null until settings have loaded. What the next review of
- * an `agentType` session runs on.
+ * The reviewer engine, named the way the Engine field names a model and effort;
+ * null until settings have loaded. What the next review runs on — always
+ * Claude's, the one agent with a reviewer (`hasPermissionReviewer`).
  */
-export function useReviewerEngineLabel(agentType: AgentType): string | null {
+export function useReviewerEngineLabel(): string | null {
 	const engine = useSettingsStore((s) =>
 		s.settings
-			? (s.settings.permission_reviewer?.[agentType] ?? UNSET_ENGINE)
+			? (s.settings.permission_reviewer?.claude ?? UNSET_ENGINE)
 			: null,
 	);
-	const models = useModelsForAgent(agentType);
-	const efforts = useEffortsForAgent(agentType);
+	const models = useModelsForAgent("claude");
+	const efforts = useEffortsForAgent("claude");
 	if (!engine) return null;
 	const model = engine.model ?? AUTO_ID;
 	const effort = engine.effort ?? AUTO_ID;

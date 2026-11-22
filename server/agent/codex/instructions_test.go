@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"slices"
-	"strings"
 	"testing"
 
 	"github.com/pockode/server/agent"
@@ -142,67 +141,5 @@ func TestDeveloperInstructions_HTMLFirstCarriesItsGuidance(t *testing.T) {
 
 	if got, _ := startedWith(t, s); got != "Answer tersely.\n\n"+pockodeInstructions+"\n\n"+agent.HTMLFirstGuidance {
 		t.Errorf("developerInstructions = %q, want the user's, then agent.EnvironmentStatement and agent.Guidance, then agent.HTMLFirstGuidance", got)
-	}
-}
-
-// A permission reviewer is told its own job and nothing else: neither the
-// user's instructions for their project nor Pockode's guidance about tools it
-// does not have.
-func TestDeveloperInstructions_PermissionReviewer(t *testing.T) {
-	opts := newThreadOpts(t)
-	opts.PermissionReviewer = true
-	s := openWithMCP(t, opts, map[string]*rpcResponse{
-		"config/read":  {Result: json.RawMessage(`{"config":{"developer_instructions":"Answer tersely."}}`)},
-		"thread/start": threadReply("thread-new"),
-	})
-
-	if got, _ := startedWith(t, s); got != agent.PermissionReviewerInstructions {
-		t.Errorf("developerInstructions = %q, want agent.PermissionReviewerInstructions alone", got)
-	}
-}
-
-// A reviewer learns the user's MCP servers before opening its thread, so the
-// thread can switch them off.
-func TestOpenThread_PermissionReviewerReadsUserMCPServers(t *testing.T) {
-	opts := newThreadOpts(t)
-	opts.PermissionReviewer = true
-	s := openWithMCP(t, opts, map[string]*rpcResponse{
-		"config/read":  {Result: json.RawMessage(`{"config":{"mcp_servers":{"linear":{"command":"x"},"github":{"command":"y"},"pockode":{"command":"z"}}}}`)},
-		"thread/start": threadReply("thread-new"),
-	})
-
-	var params struct {
-		Config struct {
-			MCPServers map[string]json.RawMessage `json:"mcp_servers"`
-		} `json:"config"`
-	}
-	if err := json.Unmarshal(s.writer.waitForRequest(t, "thread/start").Params, &params); err != nil {
-		t.Fatal(err)
-	}
-	for _, name := range []string{"github", "linear"} {
-		if got := string(params.Config.MCPServers[name]); got != `{"enabled":false}` {
-			t.Errorf("server %q = %s, want it switched off", name, got)
-		}
-	}
-	if got := string(params.Config.MCPServers["pockode"]); !strings.Contains(got, "--permission-reviewer") {
-		t.Errorf("Pockode's server = %s, want the reviewer's proxy", got)
-	}
-}
-
-// A reviewer whose user's MCP servers cannot be read is not started: it could
-// reach them.
-func TestOpenThread_PermissionReviewerRefusedWhenConfigUnreadable(t *testing.T) {
-	opts := newThreadOpts(t)
-	opts.PermissionReviewer = true
-	s := newScriptedSession(t, opts, map[string]*rpcResponse{
-		"config/read":  {Error: &rpcError{Code: -32601, Message: "method not found"}},
-		"thread/start": threadReply("thread-new"),
-	})
-	s.sess.opts.DisableMCP = false
-	if err := s.sess.openThread(context.Background()); err == nil {
-		t.Fatal("openThread succeeded without knowing the user's MCP servers")
-	}
-	if slices.Contains(s.methodsSent(), "thread/start") {
-		t.Error("a thread was started anyway")
 	}
 }

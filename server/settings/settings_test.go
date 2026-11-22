@@ -184,8 +184,10 @@ func TestSettings_ResolveEngine(t *testing.T) {
 	}
 }
 
-// The wire shape is the frontend's contract: one {model, effort} per agent,
-// and nothing at all while every choice is left to the CLIs.
+// The wire shape is the frontend's contract: one {model, effort} per agent
+// with a reviewer, and nothing at all while every choice is left to the CLIs.
+// A Codex entry from before Codex lost its reviewer is read past, not refused,
+// and is gone from what is written back.
 func TestPermissionReviewerSettings_JSON(t *testing.T) {
 	empty, err := json.Marshal(Settings{})
 	if err != nil {
@@ -202,10 +204,14 @@ func TestPermissionReviewerSettings_JSON(t *testing.T) {
 	if got := s.PermissionReviewer.For(session.AgentTypeClaude); got != (session.Engine{AgentType: session.AgentTypeClaude, Model: "haiku", Effort: "low"}) {
 		t.Errorf("claude reviewer = %+v", got)
 	}
-	if got := s.PermissionReviewer.For(session.AgentTypeCodex); got != (session.Engine{AgentType: session.AgentTypeCodex, Model: "gpt-5.6-luna"}) {
-		t.Errorf("codex reviewer = %+v", got)
-	}
 	if err := s.PermissionReviewer.Validate(); err != nil {
 		t.Errorf("Validate: %v", err)
+	}
+	saved, err := json.Marshal(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := `{"permission_reviewer":{"claude":{"model":"haiku","effort":"low"}}}`; string(saved) != want {
+		t.Errorf("saved = %s, want %s", saved, want)
 	}
 }

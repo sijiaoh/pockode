@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"os"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -62,11 +61,8 @@ type Manager struct {
 	// worktree is the name of the worktree this manager's sessions live in,
 	// empty for the main one. Handed to every CLI it spawns, which reports it
 	// back as the MCP caller's identity.
-	worktree string
-	// reviewerWorkDir is where a permission reviewer's CLI runs instead of
-	// workDir; see SetPermissionReviewerWorkDir.
-	reviewerWorkDir string
-	sessionStore    session.Store
+	worktree     string
+	sessionStore session.Store
 	// budgets is how long a session may hold its process in each kind of wait.
 	// The whole of this manager's lifecycle policy; see runLeaseReaper.
 	budgets session.LeaseBudgets
@@ -280,17 +276,6 @@ func (m *Manager) SetOnStateChange(fn func(StateChangeEvent)) {
 	m.onStateChange = fn
 }
 
-// SetPermissionReviewerWorkDir names the directory permission reviewers' CLIs
-// run in (permreview.DefaultWorkDir). Every CLI reads its instruction files,
-// settings and hooks from its working directory, and the main agent being
-// reviewed can write all of those in the project; a directory of Pockode's own
-// outside the project keeps them from the one session that is there to catch
-// that agent. Unset, a reviewer cannot be started: running it in the project
-// would quietly undo exactly that. Set before any process starts.
-func (m *Manager) SetPermissionReviewerWorkDir(dir string) {
-	m.reviewerWorkDir = dir
-}
-
 // PermissionRouter decides, as a permission request is raised, whether it goes
 // to the session's permission reviewer (permreview.Service). It is handed the
 // process that raised it, because a request id means something only to that
@@ -479,12 +464,6 @@ func (m *Manager) GetOrCreateProcess(ctx context.Context, meta session.SessionMe
 		PermissionReviewer: meta.IsPermissionReviewer(),
 		Profile:            cliprofile.Select(profileID),
 		OnUsage:            m.usageRecorder(sessionID),
-	}
-	if opts.PermissionReviewer {
-		if opts.WorkDir, err = m.prepareReviewerWorkDir(); err != nil {
-			m.processesMu.Unlock()
-			return nil, false, err
-		}
 	}
 	sess, err := ag.Start(m.ctx, opts)
 	// Another Pockode process removed the profile between the read above and
@@ -757,19 +736,6 @@ func (m *Manager) ForkAgentSession(ctx context.Context, agentType session.AgentT
 	opts.WorkDir = m.workDir
 	opts.DataDir = m.dataDir
 	return forker.ForkSession(ctx, opts)
-}
-
-// prepareReviewerWorkDir returns the directory a permission reviewer runs in,
-// created if it is not there: nothing but Pockode puts anything in it, so it
-// can go missing (a cleaned-up config directory) with nothing lost.
-func (m *Manager) prepareReviewerWorkDir() (string, error) {
-	if m.reviewerWorkDir == "" {
-		return "", errors.New("no working directory for permission reviewers is configured, and a reviewer is not run in the project")
-	}
-	if err := os.MkdirAll(m.reviewerWorkDir, 0o700); err != nil {
-		return "", fmt.Errorf("create the permission reviewers' working directory: %w", err)
-	}
-	return m.reviewerWorkDir, nil
 }
 
 // GetProcess returns an existing process or nil.

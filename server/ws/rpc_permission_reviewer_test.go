@@ -102,8 +102,8 @@ func TestHandler_SessionSetMode_Unattended(t *testing.T) {
 	}
 }
 
-// Each agent's reviewer choice is judged against that agent, and a valid one is
-// what settings read back.
+// The Claude reviewer's choice is judged against Claude's lists, and a valid
+// one is what settings read back.
 func TestHandler_SettingsUpdate_PermissionReviewer(t *testing.T) {
 	env := newTestEnv(t, &mockAgent{})
 
@@ -116,7 +116,6 @@ func TestHandler_SettingsUpdate_PermissionReviewer(t *testing.T) {
 
 	want := settings.PermissionReviewerSettings{
 		Claude: settings.ReviewerEngine{Model: "haiku", Effort: "low"},
-		Codex:  settings.ReviewerEngine{Model: "gpt-5.6-luna"},
 	}
 	if resp := env.call("settings.update", rpc.SettingsUpdateParams{Settings: settings.Settings{PermissionReviewer: want}}); resp.Error != nil {
 		t.Fatalf("settings.update: %s", resp.Error.Message)

@@ -2,6 +2,7 @@ package claude
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
 	"maps"
 	"os"
@@ -29,7 +30,7 @@ func TestLaunchesRunAsCurrentProfile(t *testing.T) {
 		t.Setenv(fakeClaudeDirEnv, t.TempDir())
 		rec := cliprofiletest.Record(t)
 
-		startSession(t, New(profiles), rec)
+		startSession(t, New(profiles), rec, agent.StartOptions{WorkDir: t.TempDir(), DataDir: t.TempDir(), SessionID: "pockode-session", DisableMCP: true})
 		if got, err := New(profiles).RunOneShot(context.Background(), agent.OneShotRequest{Prompt: "hi", WorkDir: t.TempDir()}); err != nil || got != "ok" {
 			t.Fatalf("RunOneShot = %q, %v; want ok", got, err)
 		}
@@ -75,11 +76,9 @@ func TestLaunchesRunAsCurrentProfile(t *testing.T) {
 
 // startSession starts a session on the fake, waits for its process to have
 // recorded the start, and ends it.
-func startSession(t *testing.T, a *Agent, rec *cliprofiletest.Recorder) {
+func startSession(t *testing.T, a *Agent, rec *cliprofiletest.Recorder, opts agent.StartOptions) {
 	t.Helper()
-	sess, err := a.Start(context.Background(), agent.StartOptions{
-		WorkDir: t.TempDir(), DataDir: t.TempDir(), SessionID: "pockode-session", DisableMCP: true,
-	})
+	sess, err := a.Start(context.Background(), opts)
 	if err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -134,5 +133,41 @@ func checkLaunches(t *testing.T, invocations []cliprofiletest.Invocation, wantEn
 		if !kinds[kind] {
 			t.Errorf("no %s was started", kind)
 		}
+	}
+}
+
+// A permission reviewer's CLI is started with settings that turn every
+// CLAUDE.md off (reviewerSettings).
+func TestReviewerLaunchesWithItsSettings(t *testing.T) {
+	f := cliprofiletest.New(t)
+	cliprofiletest.FakeOnPath(t, Binary)
+	t.Setenv(fakeClaudeRoleEnv, fakeSession)
+	t.Setenv(fakeClaudeDirEnv, t.TempDir())
+	rec := cliprofiletest.Record(t)
+
+	startSession(t, New(f.Store), rec, agent.StartOptions{WorkDir: t.TempDir(), DataDir: t.TempDir(), SessionID: "reviewer", DisableMCP: true, PermissionReviewer: true})
+
+	var args []string
+	for _, inv := range rec.Invocations(t) {
+		if slices.Contains(inv.Args, "--input-format") {
+			args = inv.Args
+		}
+	}
+	i := slices.Index(args, "--settings")
+	if i < 0 || i+1 >= len(args) {
+		t.Fatalf("reviewer launched without --settings: %v", args)
+	}
+	data, err := os.ReadFile(args[i+1])
+	if err != nil {
+		t.Fatalf("read the reviewer's settings: %v", err)
+	}
+	var settings struct {
+		Env map[string]string `json:"env"`
+	}
+	if err := json.Unmarshal(data, &settings); err != nil {
+		t.Fatalf("the reviewer's settings are not JSON: %v (%s)", err, data)
+	}
+	if got := settings.Env["CLAUDE_CODE_DISABLE_CLAUDE_MDS"]; got != "1" {
+		t.Errorf("CLAUDE_CODE_DISABLE_CLAUDE_MDS = %q, want 1", got)
 	}
 }

@@ -1613,12 +1613,13 @@ func TestBuildArgs_PermissionMode(t *testing.T) {
 }
 
 // A permission reviewer has no built-in tool and no MCP server but Pockode's,
-// loads none of the project's settings, may call the verdict tool without
-// asking, and gives up no permission gate whatever the mode it is stored with.
+// loads every settings source like any session in the project (where its
+// sign-in may live), may call the verdict tool without asking, and gives up no
+// permission gate whatever the mode it is stored with.
 func TestBuildArgs_PermissionReviewer(t *testing.T) {
 	args := buildArgs(agent.StartOptions{Mode: session.ModeUnattended, PermissionReviewer: true, DataDir: "/data", SessionID: "r1"}, claudeLaunch{})
 
-	for _, want := range [][2]string{{"--tools", ""}, {"--allowedTools", "mcp__pockode__permission_verdict"}, {"--setting-sources", "user"}} {
+	for _, want := range [][2]string{{"--tools", ""}, {"--allowedTools", "mcp__pockode__permission_verdict"}} {
 		if !hasFlagValue(args, want[0], want[1]) {
 			t.Errorf("expected %s %q in %v", want[0], want[1], args)
 		}
@@ -1628,7 +1629,7 @@ func TestBuildArgs_PermissionReviewer(t *testing.T) {
 			t.Errorf("expected %s in %v", want, args)
 		}
 	}
-	for _, unwanted := range []string{"--permission-mode", "--add-dir"} {
+	for _, unwanted := range []string{"--permission-mode", "--add-dir", "--setting-sources"} {
 		if slices.Contains(args, unwanted) {
 			t.Errorf("unexpected %s in %v", unwanted, args)
 		}
@@ -1638,20 +1639,24 @@ func TestBuildArgs_PermissionReviewer(t *testing.T) {
 	}
 }
 
-// A reviewer reads no CLAUDE.md; an ordinary session's environment is the
-// profile's alone.
-func TestSessionEnv(t *testing.T) {
-	profileEnv := []string{"CLAUDE_CONFIG_DIR=/profile"}
+// An ordinary session gets no settings of Pockode's; a reviewer's are written
+// again on every launch, which a successor started while its predecessor still
+// runs has to be able to do. What they say: TestReviewerLaunchesWithItsSettings.
+func TestReviewerSettingsArgs(t *testing.T) {
+	if args, err := reviewerSettingsArgs(agent.StartOptions{DataDir: t.TempDir(), SessionID: "s1"}); err != nil || args != nil {
+		t.Errorf("ordinary session: args %v, err %v; want none", args, err)
+	}
 
-	if got := sessionEnv(agent.StartOptions{}, profileEnv); !slices.Equal(got, profileEnv) {
-		t.Errorf("session env = %v, want the profile's %v", got, profileEnv)
+	opts := agent.StartOptions{DataDir: t.TempDir(), SessionID: "r1", PermissionReviewer: true}
+	args, err := reviewerSettingsArgs(opts)
+	if err != nil {
+		t.Fatalf("reviewerSettingsArgs: %v", err)
 	}
-	got := sessionEnv(agent.StartOptions{PermissionReviewer: true}, profileEnv)
-	if want := []string{"CLAUDE_CONFIG_DIR=/profile", "CLAUDE_CODE_DISABLE_CLAUDE_MDS=1"}; !slices.Equal(got, want) {
-		t.Errorf("reviewer env = %v, want %v", got, want)
+	if len(args) != 2 || args[0] != "--settings" {
+		t.Fatalf("args = %v, want --settings <path>", args)
 	}
-	if len(profileEnv) != 1 {
-		t.Errorf("the profile's env was changed: %v", profileEnv)
+	if again, err := reviewerSettingsArgs(opts); err != nil || !slices.Equal(again, args) {
+		t.Errorf("second launch: args %v, err %v; want %v", again, err, args)
 	}
 }
 

@@ -29,18 +29,21 @@ type Settings struct {
 	// the repository), preserving legacy behavior.
 	WorktreeBaseDir string `json:"worktree_base_dir,omitempty"`
 
-	// PermissionReviewer is the model and effort each agent's permission
-	// reviewer sessions run with (see session.SessionMeta.PermissionReviewerOf).
-	// Read when a review is sent, not when a reviewer is created, so a change
-	// applies from the next review on — to reviewers that already exist too.
+	// PermissionReviewer is the model and effort permission reviewer sessions
+	// run with (see session.SessionMeta.PermissionReviewerOf). Read when a
+	// review is sent, not when a reviewer is created, so a change applies from
+	// the next review on — to reviewers that already exist too.
 	PermissionReviewer PermissionReviewerSettings `json:"permission_reviewer,omitzero"`
 }
 
-// PermissionReviewerSettings holds one choice per agent, because a reviewer runs
-// on its main session's agent and models and efforts are per-agent lists.
+// PermissionReviewerSettings holds one choice per agent with reviewer logic
+// (session.AgentType.HasPermissionReviewer), because a reviewer runs on its
+// main session's agent and models and efforts are per-agent lists. That is
+// Claude alone: Codex never raises a permission request under YOLO, so it has
+// no reviewer to choose for. A "codex" entry written by an earlier version is
+// ignored when read and dropped on the next save.
 type PermissionReviewerSettings struct {
 	Claude ReviewerEngine `json:"claude,omitzero"`
-	Codex  ReviewerEngine `json:"codex,omitzero"`
 }
 
 // ReviewerEngine is a model and effort for one agent. Empty means no flag is
@@ -54,22 +57,17 @@ type ReviewerEngine struct {
 // with. An agent with no entry here gets the CLI's own choices.
 func (p PermissionReviewerSettings) For(agentType session.AgentType) session.Engine {
 	var chosen ReviewerEngine
-	switch agentType {
-	case session.AgentTypeClaude:
+	if agentType == session.AgentTypeClaude {
 		chosen = p.Claude
-	case session.AgentTypeCodex:
-		chosen = p.Codex
 	}
 	return session.Engine{AgentType: agentType, Model: chosen.Model, Effort: chosen.Effort}
 }
 
-// Validate judges each agent's choice against that agent's lists, the way the
-// default engine is judged (session.ValidateEngine).
+// Validate judges the choice against its agent's lists, the way the default
+// engine is judged (session.ValidateEngine).
 func (p PermissionReviewerSettings) Validate() error {
-	for _, agentType := range []session.AgentType{session.AgentTypeClaude, session.AgentTypeCodex} {
-		if err := session.ValidateEngine(p.For(agentType)); err != nil {
-			return fmt.Errorf("permission reviewer: %w", err)
-		}
+	if err := session.ValidateEngine(p.For(session.AgentTypeClaude)); err != nil {
+		return fmt.Errorf("permission reviewer: %w", err)
 	}
 	return nil
 }

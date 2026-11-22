@@ -45,6 +45,21 @@ func (a AgentType) DisplayName() string {
 	}
 }
 
+// HasPermissionReviewer reports whether Pockode has permission reviewer logic
+// for the agent, which is what decides whether its unattended sessions'
+// requests are routed to a reviewer (permreview.Service).
+//
+// Unattended is defined the same way for every agent: YOLO, and any
+// permission request the agent still raises under YOLO is answered by the
+// permission reviewer. Claude still raises some (its own safety checks that
+// bypassPermissions cannot skip), so it has a reviewer. Codex under YOLO
+// (approvalPolicy "never") never raises one, so a reviewer could never be
+// triggered, and Pockode provides no reviewer logic for it. The mode is still
+// valid for Codex sessions; it simply never reaches a review.
+func (a AgentType) HasPermissionReviewer() bool {
+	return a == AgentTypeClaude
+}
+
 // Mode represents the agent mode for a session.
 type Mode string
 
@@ -58,10 +73,12 @@ const (
 	// codex.appSession.buildThreadParams.
 	ModeYolo Mode = "yolo"
 	// ModeUnattended is more permissive than YOLO, not a restriction of it: the
-	// agent runs exactly as under YOLO, and every permission request YOLO still
-	// raises (Claude's own safety checks that bypassPermissions cannot skip) is
-	// answered by the session's permission reviewer instead of waiting for a
-	// person. See docs/unattended-mode.md.
+	// agent runs exactly as under YOLO, and every permission request it still
+	// raises under YOLO (Claude's own safety checks that bypassPermissions
+	// cannot skip) is answered by the session's permission reviewer instead of
+	// waiting for a person. Codex raises none under YOLO, so for it there is
+	// nothing to review (AgentType.HasPermissionReviewer). See
+	// docs/unattended-mode.md.
 	ModeUnattended Mode = "unattended"
 	// ModePlan Mode = "plan"    // Planning mode (future)
 )

@@ -1,17 +1,17 @@
 package agent
 
-// PermissionVerdictTool is the one Pockode tool a permission reviewer session
-// has, and the only tool of any kind a Claude reviewer has (claude
-// buildArgs). The MCP proxy offers it to reviewers alone (mcp.Server).
+// PermissionVerdictTool is the one tool of any kind a permission reviewer
+// session has (claude buildArgs). The MCP proxy offers it to reviewers alone
+// (mcp.Server).
 const PermissionVerdictTool = "permission_verdict"
 
 // PermissionReviewerInstructions is the whole of what a permission reviewer
 // session is told at the system level, in place of EnvironmentStatement and
 // Guidance: it has none of the tools those describe, and nothing else to do.
-// Claude appends it to the CLI's system prompt; Codex takes it as the thread's
-// developer instructions. Both are fixed when the conversation starts, so a
-// reviewer begun before a change to this text goes on with the text it began
-// with.
+// Claude, the one agent with a reviewer (session.AgentType.
+// HasPermissionReviewer), appends it to the CLI's system prompt, which is fixed
+// when the conversation starts, so a reviewer begun before a change to this
+// text goes on with the text it began with.
 //
 // The scope is deliberately narrow (docs/unattended-mode.md): the reviewer is
 // the last safety net under a session that runs with the agent's own gate

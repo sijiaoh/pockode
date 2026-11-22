@@ -168,13 +168,14 @@ type StartOptions struct {
 	// (session.SessionMeta.PermissionReviewerOf): told
 	// PermissionReviewerInstructions instead of Pockode's usual text, offered
 	// the permission_verdict tool and no other Pockode tool, and kept from the
-	// project as far as the CLI allows: no project instruction files, settings
-	// or hooks (WorkDir is then process.Manager's reviewer directory, not the
-	// project), none of the user's MCP servers; Claude gets no built-in tools,
-	// and Codex, which cannot give up its shell, runs in a read-only sandbox
-	// with on-request approval. Mode is ignored: a reviewer
-	// is launched for its own job, not under any session's permissions. Fixed
-	// for the session's life, like HTMLFirst, because a reviewer stays one.
+	// main session's context: it runs in the main session's worktree with that
+	// project's settings, so it signs in as the main session does, but reads
+	// none of the project's instruction files — which the main agent can
+	// write — has none of the user's MCP servers, and has no built-in tools.
+	// Mode is ignored: a reviewer is launched for its own job, not under any
+	// session's permissions. Fixed for the session's life, like HTMLFirst,
+	// because a reviewer stays one. Only Claude implements it: Pockode has no
+	// reviewer logic for Codex (session.AgentType.HasPermissionReviewer).
 	PermissionReviewer bool
 	DisableMCP         bool // skip MCP config (for testing)
 	// Profile is the account the CLI runs as. The zero value is whichever is

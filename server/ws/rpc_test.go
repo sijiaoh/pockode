@@ -173,7 +173,6 @@ func newTestEnvWithAgent(t *testing.T, mock *mockAgent, ag agent.Agent, workDir 
 
 	registry := worktree.NewRegistry(workDir, dataDir)
 	worktreeManager := worktree.NewManager(registry, mockRegistry(ag), dataDir, session.LeaseBudgets{Idle: 10 * time.Minute})
-	worktreeManager.SetPermissionReviewerWorkDir(t.TempDir())
 	// Wired as main.go wires it, so that the env shows the real consequence of a
 	// user action on a session — and of the entry points that deliberately are
 	// not one. Without the engine any such assertion passes for the wrong reason.

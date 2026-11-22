@@ -95,8 +95,7 @@ describe("SessionSection", () => {
 			const user = userEvent.setup();
 			useSettingsStore.setState({
 				settings: {
-					default_agent_type: "codex",
-					permission_reviewer: { codex: { model: "gpt-5" } },
+					permission_reviewer: { claude: { model: "opus" } },
 				},
 			});
 			render(<SessionSection />);
@@ -106,14 +105,40 @@ describe("SessionSection", () => {
 			const dialog = screen.getByRole("dialog", {
 				name: "Make Unattended the default?",
 			});
-			// The default agent's reviewer engine, as the Engine field names it.
+			// The reviewer engine, as the Engine field names it.
 			expect(dialog).toHaveTextContent(
 				"New sessions' agents run every command without asking",
 			);
 			expect(dialog).toHaveTextContent(
-				"they run on GPT-5 (Settings › Session).",
+				"they run on Opus (Settings › Session).",
 			);
 			expect(updateSettings).not.toHaveBeenCalled();
+
+			await user.click(screen.getByRole("button", { name: "Make default" }));
+
+			expect(updateSettings).toHaveBeenCalledWith({
+				default_mode: "unattended",
+			});
+		});
+
+		// Same definition, nothing to trigger it: no reviewer engine to name.
+		it("tells a Codex default that it never reaches a review", async () => {
+			const user = userEvent.setup();
+			useSettingsStore.setState({
+				settings: { default_agent_type: "codex" },
+			});
+			render(<SessionSection />);
+
+			await user.click(screen.getByRole("button", { name: /Unattended/ }));
+
+			const dialog = screen.getByRole("dialog", {
+				name: "Make Unattended the default?",
+			});
+			expect(dialog).toHaveTextContent(
+				"Codex never raises one under YOLO, so new Codex sessions never reach a review.",
+			);
+			expect(dialog).not.toHaveTextContent("Reviews use tokens");
+			expect(dialog).not.toHaveTextContent("they run on");
 
 			await user.click(screen.getByRole("button", { name: "Make default" }));
 
@@ -197,13 +222,13 @@ describe("SessionSection", () => {
 		it("names none of the values it has not been told", () => {
 			render(<SessionSection />);
 
-			expect(screen.queryByText(/Claude/)).not.toBeInTheDocument();
-			// On the controls only: the reviewer's hint explains what Auto means,
-			// which is not a claim about anyone's settings.
+			// On the controls only: the reviewer's hint explains what Auto means
+			// and whose reviewer it is, which is not a claim about anyone's
+			// settings.
 			expect(
 				screen
 					.getAllByRole("button")
-					.filter((b) => /Auto/.test(b.textContent ?? "")),
+					.filter((b) => /Claude|Auto/.test(b.textContent ?? "")),
 			).toEqual([]);
 			expect(
 				screen.queryByRole("button", { name: /^YOLO/ }),

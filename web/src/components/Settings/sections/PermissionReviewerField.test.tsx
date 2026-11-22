@@ -14,8 +14,6 @@ vi.mock("../../../lib/wsStore", () => ({
 
 const claudeRow = () =>
 	screen.getByRole("button", { name: /^Claude permission reviewer:/ });
-const codexRow = () =>
-	screen.getByRole("button", { name: /^Codex permission reviewer:/ });
 
 beforeEach(() => {
 	updateSettings.mockReset().mockResolvedValue(undefined);
@@ -34,7 +32,8 @@ beforeEach(() => {
 });
 
 describe("PermissionReviewerField", () => {
-	it("shows each agent's reviewer engine, Auto where nothing is set", () => {
+	// Only Claude has a reviewer: no row may suggest a Codex one exists.
+	it("shows Claude's reviewer engine and no other agent's", () => {
 		useSettingsStore.setState({
 			settings: {
 				permission_reviewer: { claude: { model: "haiku", effort: "low" } },
@@ -43,47 +42,39 @@ describe("PermissionReviewerField", () => {
 		render(<PermissionReviewerField valueState="known" />);
 
 		expect(claudeRow()).toHaveTextContent("Claude · Haiku · Low");
-		expect(codexRow()).toHaveTextContent("Codex · Auto");
+		expect(
+			screen.queryByRole("button", { name: /Codex/ }),
+		).not.toBeInTheDocument();
 	});
 
-	// A reviewer runs on its main session's agent; the row configures that
-	// agent's reviewer, and switching the agent would mean editing the other row.
 	it("offers model and effort, but no agent", async () => {
 		const user = userEvent.setup();
 		render(<PermissionReviewerField valueState="known" />);
 
-		await user.click(codexRow());
+		await user.click(claudeRow());
 
-		expect(screen.getByRole("radio", { name: /GPT-5/ })).toBeInTheDocument();
-		expect(screen.getByRole("radio", { name: /High/ })).toBeInTheDocument();
+		expect(screen.getByRole("radio", { name: /Haiku/ })).toBeInTheDocument();
+		expect(screen.getByRole("radio", { name: /Low/ })).toBeInTheDocument();
 		expect(
-			screen.queryByRole("radio", { name: /Claude/ }),
+			screen.queryByRole("radio", { name: /Codex|GPT-5/ }),
 		).not.toBeInTheDocument();
 		expect(screen.queryByText("Agent")).not.toBeInTheDocument();
 	});
 
-	// `settings.update` replaces the object, so a change to one agent that left
-	// the other out would put the other back on Auto.
-	it("sends the other agent's values along with a change", async () => {
+	// `settings.update` replaces the object, so a change to the model that left
+	// the effort out would put the effort back on Auto.
+	it("sends the other field along with a change", async () => {
 		const user = userEvent.setup();
 		useSettingsStore.setState({
-			settings: {
-				permission_reviewer: {
-					claude: { model: "haiku", effort: "low" },
-					codex: { effort: "high" },
-				},
-			},
+			settings: { permission_reviewer: { claude: { effort: "low" } } },
 		});
 		render(<PermissionReviewerField valueState="known" />);
 
-		await user.click(codexRow());
-		await user.click(screen.getByRole("radio", { name: /GPT-5/ }));
+		await user.click(claudeRow());
+		await user.click(screen.getByRole("radio", { name: /Haiku/ }));
 
 		expect(updateSettings).toHaveBeenCalledWith({
-			permission_reviewer: {
-				claude: { model: "haiku", effort: "low" },
-				codex: { model: "gpt-5", effort: "high" },
-			},
+			permission_reviewer: { claude: { model: "haiku", effort: "low" } },
 		});
 	});
 
@@ -124,11 +115,6 @@ describe("PermissionReviewerField", () => {
 		expect(
 			screen.getByRole("button", {
 				name: "Claude permission reviewer: loading",
-			}),
-		).toBeDisabled();
-		expect(
-			screen.getByRole("button", {
-				name: "Codex permission reviewer: loading",
 			}),
 		).toBeDisabled();
 	});

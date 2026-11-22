@@ -3645,9 +3645,13 @@ launches exactly as `yolo` (`session.Mode.BypassesAgentGate` is the one check
 both agents read), and adds what happens *after* a request is raised: whatever
 `yolo` still sends for approval — Claude's own safety checks, which
 `bypassPermissions` cannot skip — is answered by the session's permission
-reviewer instead of waiting for a person. Codex under `yolo` raises nothing
-today, so there `unattended` behaves as `yolo`. The reviewer and the RPC
-contract around it are in [docs/unattended-mode.md](../unattended-mode.md).
+reviewer instead of waiting for a person. The definition is one for every
+agent; whether an agent needs reviewer logic follows from it. Codex under
+`approvalPolicy: never` never raises a request, so it has none
+(`session.AgentType.HasPermissionReviewer` is true for Claude alone), and the
+mode stays selectable for Codex without ever reaching a review. The reviewer
+and the RPC contract around it are in
+[docs/unattended-mode.md](../unattended-mode.md).
 
 **The integration suite pins what production leaves unset.** Its Codex approval
 scenarios are written against `on-request` + `workspace-write`, and with
@@ -3692,7 +3696,8 @@ Three things in the permission path exist for that.
 `bypassPermissions` — a dangerous-`rm` check, a protected path — which is what
 a reviewer has to judge. Codex's approval request has no counterpart (its
 `reason` is the model's own request to escalate, and is already shown as the
-tool input when there is nothing better), so both stay empty there.
+tool input when there is nothing better), so both stay empty there — moot
+today, since no Codex request reaches a reviewer.
 
 **A deny that is advice, not a halt.** A person pressing Deny means stop, so
 `SendPermissionResponse`'s deny interrupts the turn. A reviewer's deny means
@@ -3709,8 +3714,9 @@ The Codex row is a protocol limit, not a choice: an approval's answer is a bare
 model learns only that the call was declined, not why. The turn still carries
 on. Steering the turn with the text afterwards (`turn/steer`) would get it
 there, but would put a user-turn message into Codex's thread that Pockode's
-history does not have; Codex under YOLO raises no approvals today, so this is
-left until it does.
+history does not have. No Codex request is reviewed (Codex has no reviewer),
+so the method exists only because `agent.Session` requires it, and this is left
+until one is.
 
 The chat-level entry point is `chat.Client.SendPermissionVerdict`: allow is
 `PermissionAllow`, never always-allow, so a reviewer never persists a rule; a
@@ -3745,6 +3751,7 @@ main session's CLI raises a request
        session unreadable → not reviewing; Route records permission_review_failed
        raised by a reviewer → not reviewing; Route denies (denyOwnRequest, reviewer_request)
        main session not unattended → nothing
+       agent without a reviewer (!HasPermissionReviewer) → nothing, warning logged
        unattended → Reviewing: the blocker is raised under review
   → reduced (TurnInput.Reviewing), recorded, broadcast
   → PermissionRouting.Route — starts Service.route on its own goroutine
@@ -3772,41 +3779,45 @@ main session's CLI raises a request
 ```
 
 - **Launch.** `StartOptions.PermissionReviewer` is set from
-  `SessionMeta.IsPermissionReviewer()` on every launch. Claude gets
-  `--tools "" --strict-mcp-config --disable-slash-commands --setting-sources
-  user --allowedTools mcp__pockode__permission_verdict`,
-  `CLAUDE_CODE_DISABLE_CLAUDE_MDS=1`, no attachment dir, no user MCP servers, and
-  `agent.PermissionReviewerInstructions` as its appended system prompt. Codex
-  gets `sandbox: read-only`, `approvalPolicy: on-request`, `project_doc_max_bytes
-  = 0`, Pockode's server with `default_tools_approval_mode = "approve"` (the
-  counterpart of Claude's `--allowedTools`: asked first, the verdict call would
-  be the reviewer's own request, which Pockode denies), every MCP server of the
-  user's switched off by name, and the same text
-  as its developer instructions, the user's own left out. Both ignore the stored
-  mode. A Codex reviewer's own approval requests are denied by Pockode at once.
-- **Kept from the project.** The main agent can write the project's
-  instruction files, settings and hooks, so a reviewer must not read them.
-  `process.Manager` therefore runs a reviewer's CLI in a directory of its own
-  instead of the worktree (`SetPermissionReviewerWorkDir`, wired from
-  `permreview.DefaultWorkDir`: one empty directory under the OS user's config
-  dir). With none configured, it refuses to start one rather than fall back to
-  the project. The flags above are the second layer and also cover a parent
-  directory's files, which a working directory alone does not.
-  - **User settings are kept on purpose.** `--setting-sources user` rather than
-    `""`: user settings can carry what a sign-in needs (`env`,
-    `apiKeyHelper`). The `CLAUDE.md` they would bring is dropped by the env var
-    instead.
-  - **Codex's user MCP servers are switched off one at a time.** Thread config
-    overrides merge into `config.toml`, so naming Pockode's server alone would
-    leave the user's in place. The names come from `config/read` before the
-    thread opens, and a reviewer whose config cannot be read is not started.
+  `SessionMeta.IsPermissionReviewer()` on every launch; only Claude implements
+  it. A reviewer gets `--tools "" --strict-mcp-config --disable-slash-commands
+  --allowedTools mcp__pockode__permission_verdict`, `--settings` pointing at
+  `reviewer-settings.json` in its session dir, no attachment dir, and
+  `agent.PermissionReviewerInstructions` as its appended system prompt. It
+  ignores the stored mode. Routing reaches it only for an agent with
+  `HasPermissionReviewer`: a request from an unattended session of any other
+  agent is not expected, and if one arrives `HandlePermissionRequest` logs a
+  warning and leaves it to the person, as under `yolo`, rather than create a
+  reviewer nothing can launch as one.
+- **Runs in the project, without its instruction text.** `process.Manager`
+  starts a reviewer's CLI in the main session's worktree, like any session
+  there, and every settings source loads. That is so the reviewer reaches the
+  model exactly as the main session does: a sign-in (`env`, `apiKeyHelper` —
+  Bedrock, Vertex, a proxy) may live in the project's settings as well as the
+  user's, and a reviewer that skipped them would fail every review there.
+  - **Instruction files are what is kept out.** The main agent can write every
+    `CLAUDE.md` in the project — and the project's auto memory, which the
+    reviewer would share by running in the same directory — and the reviewer
+    judges from the request alone. `reviewer-settings.json` sets
+    `CLAUDE_CODE_DISABLE_CLAUDE_MDS=1`, which drops both. It is a
+    `--settings` file rather than the process environment because a settings
+    `env` outranks the process's, so a project setting the variable to `0`
+    would turn the files back on; flag settings sit above user, project and
+    local settings, under managed policy alone. It is a file rather than inline
+    JSON for the same reason the system prompt is: inline JSON cannot pass the
+    Windows `.cmd` wrapper.
+  - **Project hooks run.** That is the accepted cost of loading the project's
+    settings: adding a hook means writing `.claude/settings.json`, a
+    protected-path write that raises a request this very reviewer reviews
+    ([unattended-mode.md](../unattended-mode.md#known-accepted-risks)).
+    `--safe-mode` is not a way out: it drops the `--mcp-config` server too.
+  - **MCP servers stay Pockode's alone.** `--strict-mcp-config` keeps both the
+    user's servers and the project's `.mcp.json` out.
   - **Unaffected.** The review message's `cwd` / `project_root` come from the
-    worktree (`permreview.Config`), not from where the reviewer runs. Pockode
-    keeps the reviewer's transcript in its own history as for any session.
-    Claude finds a conversation by id from any directory (2.1.325), so
-    resuming, and forking a reviewer into an ordinary session, still work.
-  - **What remains** (user hooks, Codex's `CODEX_HOME/AGENTS.md`) is listed in
-    [unattended-mode.md](../unattended-mode.md#known-accepted-risks).
+    worktree (`permreview.Config`). Pockode keeps the reviewer's transcript in
+    its own history as for any session, and Claude resumes a conversation by
+    id, so a reviewer an earlier version started in a directory of its own
+    resumes from the worktree.
 - **Tools.** The proxy is spawned with `--permission-reviewer`
   (`StartOptions.MCPProxyArgs`) and then offers `permission_verdict` alone, with
   no initialize instructions (`mcp.NewPermissionReviewerServer`); every other

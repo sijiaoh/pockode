@@ -275,8 +275,8 @@ func TestBuildThreadParams_ApprovalPolicy(t *testing.T) {
 		// Default omits both, leaving them to the user's Codex config.
 		{session.ModeDefault, map[string]string{}},
 		{session.ModeYolo, map[string]string{"approvalPolicy": "never", "sandbox": "danger-full-access"}},
-		// Unattended launches exactly as yolo; its reviewer acts on requests
-		// after they are raised, not on the launch.
+		// Unattended launches exactly as yolo, under which Codex raises no
+		// request for a reviewer to answer.
 		{session.ModeUnattended, map[string]string{"approvalPolicy": "never", "sandbox": "danger-full-access"}},
 	}
 
@@ -2373,62 +2373,5 @@ func TestItemCompleted_MCPToolCallCarriesDuration(t *testing.T) {
 	result := drainEvents(sess.events)[0].(agent.ToolResultEvent)
 	if result.DurationMs != 42 {
 		t.Errorf("DurationMs = %d, want 42", result.DurationMs)
-	}
-}
-
-// Codex cannot drop its shell, so a reviewer gets the narrowest sandbox there
-// is, whatever mode it is stored with, and its proxy offers the verdict tool.
-func TestBuildThreadParams_PermissionReviewer(t *testing.T) {
-	for _, mode := range []session.Mode{session.ModeDefault, session.ModeUnattended} {
-		sess := &appSession{
-			opts: agent.StartOptions{WorkDir: "/tmp/work", DataDir: "/tmp/data", SessionID: "r1", Mode: mode, PermissionReviewer: true},
-			exe:  "/usr/local/bin/pockode",
-		}
-		params := sess.buildThreadParams()
-		if params["approvalPolicy"] != "on-request" || params["sandbox"] != "read-only" {
-			t.Errorf("mode %q: approvalPolicy = %v, sandbox = %v; want on-request, read-only", mode, params["approvalPolicy"], params["sandbox"])
-		}
-		config := params["config"].(map[string]interface{})
-		pockode := config["mcp_servers"].(map[string]interface{})["pockode"].(map[string]interface{})
-		if args := pockode["args"].([]string); !slices.Contains(args, "--permission-reviewer") {
-			t.Errorf("proxy args %v lack --permission-reviewer", args)
-		}
-		// Asked first, the verdict tool's call would be the reviewer's own
-		// request, which Pockode denies.
-		if pockode["default_tools_approval_mode"] != "approve" {
-			t.Errorf("mode %q: Pockode's tools approval mode = %v, want approve", mode, pockode["default_tools_approval_mode"])
-		}
-		if config["project_doc_max_bytes"] != 0 {
-			t.Errorf("mode %q: project_doc_max_bytes = %v, want 0", mode, config["project_doc_max_bytes"])
-		}
-	}
-}
-
-// A reviewer's threads switch off every MCP server the user configured,
-// leaving Pockode's as it is; an ordinary session's keep them all, and read
-// AGENTS.md as usual.
-func TestBuildThreadParams_PermissionReviewerHidesUserMCPServers(t *testing.T) {
-	sess := &appSession{
-		opts:             agent.StartOptions{WorkDir: "/tmp/work", DataDir: "/tmp/data", SessionID: "r1", PermissionReviewer: true},
-		exe:              "/usr/local/bin/pockode",
-		hiddenMCPServers: []string{"github", "linear"},
-	}
-	servers := sess.buildThreadParams()["config"].(map[string]interface{})["mcp_servers"].(map[string]interface{})
-	for _, name := range []string{"github", "linear"} {
-		if got, _ := json.Marshal(servers[name]); string(got) != `{"enabled":false}` {
-			t.Errorf("server %q = %s, want it switched off", name, got)
-		}
-	}
-	if _, ok := servers["pockode"].(map[string]interface{})["command"]; !ok {
-		t.Errorf("Pockode's server lost its command: %v", servers["pockode"])
-	}
-
-	ordinary := &appSession{opts: agent.StartOptions{WorkDir: "/tmp/work", SessionID: "s1"}, exe: "/usr/local/bin/pockode"}
-	config := ordinary.buildThreadParams()["config"].(map[string]interface{})
-	if _, ok := config["project_doc_max_bytes"]; ok {
-		t.Error("an ordinary session's AGENTS.md discovery was turned off")
-	}
-	if _, ok := config["mcp_servers"].(map[string]interface{})["pockode"].(map[string]interface{})["default_tools_approval_mode"]; ok {
-		t.Error("an ordinary session's Pockode tools were approved up front")
 	}
 }

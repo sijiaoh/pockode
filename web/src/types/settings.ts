@@ -32,9 +32,10 @@ export interface Settings {
 	// a repo-relative `./`/`../` path, or a home-relative `~/` path; the backend
 	// validates and rejects invalid values.
 	worktree_base_dir?: string;
-	// The engine unattended sessions' permission requests are reviewed on, per
-	// agent. Empty = the CLI decides (docs/unattended-mode.md#settings).
-	permission_reviewer?: Partial<Record<AgentType, PermissionReviewerEngine>>;
+	// The engine unattended sessions' permission requests are reviewed on. Keyed
+	// by agent, but only Claude has a reviewer (`hasPermissionReviewer`). Empty =
+	// the CLI decides (docs/unattended-mode.md#settings).
+	permission_reviewer?: { claude?: PermissionReviewerEngine };
 }
 
 export interface PermissionReviewerEngine {
