@@ -60,6 +60,11 @@ type Registry struct {
 // time out without waiting ten seconds.
 var worktreeListTimeout = 10 * time.Second
 
+// worktreeListCommand builds the `git worktree list` command. A var so a test
+// can count reads where they are made, in this process: a stand-in git that
+// records itself can be killed by the timeout before it gets to record anything.
+var worktreeListCommand = exec.CommandContext
+
 func NewRegistry(mainDir, dataDir string) *Registry {
 	// Resolve symlinks for consistent path comparison (e.g., /var -> /private/var on macOS)
 	if resolved, err := filepath.EvalSymlinks(mainDir); err == nil {
@@ -408,7 +413,7 @@ func (r *Registry) readLocked(ctx context.Context) (watch.WorktreeState, error) 
 
 	// --no-optional-locks: a read-only poll must not take .git/index.lock and
 	// collide with the git the user or an agent is running at the same moment.
-	cmd := exec.CommandContext(ctx, "git", "--no-optional-locks", "worktree", "list", "--porcelain")
+	cmd := worktreeListCommand(ctx, "git", "--no-optional-locks", "worktree", "list", "--porcelain")
 	cmd.Dir = r.mainDir
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
