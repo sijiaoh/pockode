@@ -260,14 +260,28 @@ func (f *fixture) mainSession(t *testing.T) *fakeSession {
 }
 
 // raise has the main session's CLI ask for permission and waits for the
-// request to be recorded, which is when it is routed.
+// request to be recorded, which is when it is routed. The record, not the
+// turn: the turn is decided before the record is written, but a request
+// routing denies at once may stop waiting before a poll of the turn sees it.
 func (f *fixture) raise(t *testing.T, request agent.PermissionRequestEvent) {
 	t.Helper()
+	before := f.requestRecords(t, request.RequestID)
 	f.mainSession(t).events <- request
-	waitFor(t, "the request to be waiting", func() bool {
-		proc := f.pm.GetProcess("main")
-		return proc != nil && proc.TurnState().AwaitingAnswerTo(request.RequestID)
-	})
+	waitFor(t, "the request to be recorded", func() bool { return f.requestRecords(t, request.RequestID) > before })
+}
+
+// requestRecords is how many times the main session's history records a
+// request named requestID — more than once when a replaced process reuses
+// the id.
+func (f *fixture) requestRecords(t *testing.T, requestID string) int {
+	t.Helper()
+	n := 0
+	for _, rec := range f.records(t, "main", agent.EventTypePermissionRequest) {
+		if rec.RequestID == requestID {
+			n++
+		}
+	}
+	return n
 }
 
 // reviewer waits for the main session's reviewer to have been sent n review
@@ -333,12 +347,23 @@ func (f *fixture) records(t *testing.T, sessionID string, typ agent.EventType) [
 	return out
 }
 
+// waitForResponse waits for sessionID's history to hold a permission response.
+// The record is what to wait on, not the answer reaching the CLI: an answer is
+// recorded only once the CLI took it (chat.Client), so a test that saw the
+// answer can still read a history without it.
+func (f *fixture) waitForResponse(t *testing.T, sessionID string) {
+	t.Helper()
+	waitFor(t, "the permission response to be recorded", func() bool {
+		return len(f.records(t, sessionID, agent.EventTypePermissionResponse)) > 0
+	})
+}
+
 // wantAutoDeny waits for the main session's CLI to be refused requestID by
 // Pockode, and checks the record says so: by pockode, of kind, naming the
 // reviewer.
 func (f *fixture) wantAutoDeny(t *testing.T, requestID, reviewerID string, kind agent.PermissionAutoDeny) {
 	t.Helper()
-	waitFor(t, "the request to be denied", func() bool { return len(f.mainSession(t).sentAnswers()) > 0 })
+	f.waitForResponse(t, "main")
 	answers := f.mainSession(t).sentAnswers()
 	if len(answers) != 1 || !strings.HasPrefix(answers[0], "deny:"+requestID+":Pockode denied this call: ") {
 		t.Errorf("main CLI got %q, want Pockode's deny of %s", answers, requestID)
@@ -520,8 +545,11 @@ func TestRoute_IgnoresOtherModes(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			f := newFixtureOn(t, tt.agentType, tt.mode)
 			f.raise(t, bashRequest("req-1", "a"))
-			// Routing runs on its own goroutine; give it the time it would take.
-			time.Sleep(50 * time.Millisecond)
+			// The routing decision is made as the request is raised, and one
+			// that leaves the request to the person starts nothing after it.
+			// What does follow the raise is its announcement, which is what
+			// calls the person.
+			waitFor(t, "the main session to fall idle", func() bool { return f.mainIdles.Load() > 0 })
 			if _, found, _ := session.FindPermissionReviewer(f.store, "main"); found {
 				t.Error("a reviewer was created")
 			}
@@ -849,7 +877,7 @@ func TestRoute_FailureDenies(t *testing.T) {
 
 	f.raise(t, bashRequest("req-1", "a"))
 
-	waitFor(t, "the request to be denied", func() bool { return len(f.mainSession(t).sentAnswers()) > 0 })
+	f.waitForResponse(t, "main")
 	reviewer, found, _ := session.FindPermissionReviewer(f.store, "main")
 	if !found {
 		t.Fatal("no reviewer was created")
@@ -897,7 +925,7 @@ func TestRoute_DeniesTheReviewersOwnRequest(t *testing.T) {
 	reviewerID, reviewer := f.reviewer(t, 1)
 
 	reviewer.events <- bashRequest("own-1", "cat /etc/hosts")
-	waitFor(t, "the reviewer's request to be denied", func() bool { return len(reviewer.sentAnswers()) > 0 })
+	f.waitForResponse(t, reviewerID)
 
 	answers := reviewer.sentAnswers()
 	if len(answers) != 1 || !strings.HasPrefix(answers[0], "deny:own-1:Pockode denied this call: ") {

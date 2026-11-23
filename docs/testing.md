@@ -16,7 +16,7 @@ Three of them are red. The fourth is the dangerous one, because it is green.
 | Kind | How it looks | What to change | Seen here |
 |---|---|---|---|
 | **The machine is oversubscribed** | More failures the busier the box; a different file fails each run; every failure is a timeout, none is an assertion; serial runs are all green | The runner's own concurrency. Give the timeout enough room for scheduling, not for slow tests — for the one measured exception, see [A test that really is slow](#a-test-that-really-is-slow) | frontend vitest; the `ws` 12 MiB deflate test |
-| **The test assumes a schedule** | Only fails under load, but always at the same line; there is a `time.Sleep` waiting out something, or real time elapsing where a debounce or timer is counting, or a wait that is satisfied by [something drawn before what is asserted on](#frontend-wait-for-what-you-assert-on) | Wait for the signal instead — or, for a timer the code under test owns, [move its clock yourself](#frontend-a-debounce-is-yours-to-run-out). **Not** a longer sleep — unless the budget is a backstop rather than the subject, as in the `relay` case below | `agentrole` `TestExternalChange_NotifiesListener`; `relay` `TestUplinkDialOptionsDoNotTruncateTheTunnel`; `web` `FilesTab search`; `web` `InputBar` command palette |
+| **The test assumes a schedule** | Only fails under load, but always at the same line; there is a `time.Sleep` waiting out something, or real time elapsing where a debounce or timer is counting, or a wait that is satisfied by [something drawn before what is asserted on](#frontend-wait-for-what-you-assert-on) | Wait for the signal instead — or, for a timer the code under test owns, [move its clock yourself](#frontend-a-debounce-is-yours-to-run-out). **Not** a longer sleep — unless the budget is a backstop rather than the subject, as in the `relay` case below | `agentrole` `TestExternalChange_NotifiesListener`; `relay` `TestUplinkDialOptionsDoNotTruncateTheTunnel`; `permreview` `TestRoute_FailureDenies`, `TestRoute_IgnoresOtherModes`; `web` `FilesTab search`; `web` `InputBar` command palette |
 | **The test fabricates an unreachable state** | Barely correlates with load; fails at a stable rate even on an idle machine running that package alone | Make the test drive a state the implementation can actually reach | `agent/claude` `TestBackgroundWait_OutputPushesTheDeadlineOut` |
 | **Silent pass** | Green. Always green | Make the test assert the precondition it depends on, then mutation-verify | `agent/claude` `TestBackgroundWait_SurvivesAnEmptyTaskList` |
 
@@ -422,7 +422,7 @@ dedicated runner, across three platforms with a 20-minute budget. The worst-case
 numbers measured locally under `-race` alongside a dozen other binaries do not
 describe CI at all.
 
-The four Go findings, and what each one did *not* change:
+The five Go findings, and what each one did *not* change:
 
 - **`server/ws` 12 MiB deflate test** — kind 1. `opTimeout` stayed at 60s; the
   test data, assertions and coverage stayed as they were. Only the comment
@@ -444,6 +444,21 @@ The four Go findings, and what each one did *not* change:
   barely twice the slowest handshake measured — so it timed out under `./...`
   and never alone. The budget was raised for that test only; the sibling keeps
   its 200ms, which is correct there.
+- **`server/permreview`** — kind 2, **zero implementation changes.** The
+  Go form of [wait for what you assert on](#frontend-wait-for-what-you-assert-on):
+  the tests waited for one effect and asserted on a later one. The code orders
+  them on purpose: an answer is recorded only after the CLI took it, so a
+  failed send is never recorded, and a turn is applied, then recorded, then
+  announced. A test that saw the CLI's answer could therefore read a history
+  without the response, and one that saw the turn could count idles before
+  the announcement. A 50ms sleep was covering for the second. The tests now
+  wait for the record or the announcement they check. Delaying the later
+  effect by 100ms in the code under test made every test with this shape fail
+  on an idle machine, the same move as delaying a frontend mock. Stress runs
+  then found one more: `raise` polled for the request to be waiting, and a
+  request that routing denies at once
+  [does not stay waiting long enough to be polled](#frontend-wait-for-what-you-assert-on).
+  It now waits for the request's history record, which lasts.
 - **`server/agent/claude`** — kind 3, **zero implementation changes.** Every
   write to the background wait's deadline either arms it from `time.Now()` or
   clears it to zero, so a deadline already in the past is a state the
