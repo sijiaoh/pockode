@@ -911,29 +911,34 @@ func TestRefresh_CancelledReadKeepsState(t *testing.T) {
 // TTL: otherwise every request queued behind cacheMu would start its own read
 // and wait out the timeout in turn.
 func TestRefresh_TimedOutReadBacksOffForTTL(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("uses a shell script as git")
-	}
 	dir := initGitRepo(t)
 	r := NewRegistry(dir, "")
 	if !r.IsGitRepo() {
 		t.Fatal("setup: expected a git repository")
 	}
 
-	bin := t.TempDir()
-	calls := filepath.Join(bin, "calls")
-	sleep, err := exec.LookPath("sleep")
-	if err != nil {
-		t.Skip("no sleep binary")
+	// The stuck git is a real git reading a stdin that stays open until the
+	// deadline, so the timeout is what ends the read. The pipe is closed on the
+	// deadline too: on Windows the git on PATH is a launcher whose child survives
+	// the kill and would otherwise hold stdout, and the read, open forever.
+	reads := 0
+	savedCommand, savedTimeout := worktreeListCommand, worktreeListTimeout
+	worktreeListCommand = func(ctx context.Context, _ string, _ ...string) *exec.Cmd {
+		reads++
+		stdin, hold, err := os.Pipe()
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { stdin.Close() })
+		context.AfterFunc(ctx, func() { hold.Close() })
+		cmd := exec.CommandContext(ctx, "git", "hash-object", "--stdin")
+		cmd.Stdin = stdin
+		return cmd
 	}
-	script := "#!/bin/sh\necho x >> " + calls + "\nexec " + sleep + " 5\n"
-	if err := os.WriteFile(filepath.Join(bin, "git"), []byte(script), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("PATH", bin)
-	saved := worktreeListTimeout
-	worktreeListTimeout = 500 * time.Millisecond
-	t.Cleanup(func() { worktreeListTimeout = saved })
+	worktreeListTimeout = 100 * time.Millisecond
+	t.Cleanup(func() { worktreeListCommand, worktreeListTimeout = savedCommand, savedTimeout })
+	// Long enough that the reads below cannot outlive it however slow the machine.
+	r.cacheTTL = time.Hour
 
 	r.invalidateCache()
 	for range 3 {
@@ -942,11 +947,7 @@ func TestRefresh_TimedOutReadBacksOffForTTL(t *testing.T) {
 		}
 	}
 
-	data, err := os.ReadFile(calls)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if n := strings.Count(string(data), "x"); n != 1 {
-		t.Errorf("git ran %d times, want 1: a timed-out read must hold for the TTL", n)
+	if reads != 1 {
+		t.Errorf("git ran %d times, want 1: a timed-out read must hold for the TTL", reads)
 	}
 }
