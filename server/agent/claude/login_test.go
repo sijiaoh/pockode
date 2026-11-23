@@ -101,6 +101,10 @@ func runFakeClaude(role string, args []string) {
 		fmt.Fprintln(os.Stderr, "fake claude: BROWSER is not the no-op Pockode is meant to set")
 		os.Exit(3)
 	}
+	if os.Getenv("CLAUDE_CODE_FULL_SIGN_IN_LINK") != "1" {
+		fmt.Fprintln(os.Stderr, "fake claude: CLAUDE_CODE_FULL_SIGN_IN_LINK is not set, so 2.1.330 would print the opaque link")
+		os.Exit(3)
+	}
 	if role == fakeManaged {
 		fmt.Fprintln(os.Stderr, "Managed settings on this machine configure a Cloud gateway sign-in; run claude to sign in")
 		os.Exit(1)
@@ -326,6 +330,8 @@ func TestCheckLink(t *testing.T) {
 		{"https://claude.com/cai/oauth/authorize?" + callback, false},
 		{"https://claude.com/cai/oauth/authorize?code=true&redirect_uri=http%3A%2F%2Flocalhost%3A1234%2Fcallback", false},
 		{"https://claude.com/cai/oauth/authorize?code=true", false},
+		// What 2.1.330 prints without CLAUDE_CODE_FULL_SIGN_IN_LINK.
+		{"https://claude.ai/oauth/authorize?z-u8E4vU4su64fjyr7AfgpAB6vpQI7ymTcOokKUTINRis", false},
 	}
 	for _, tt := range tests {
 		if err := checkLink(tt.link); (err == nil) != tt.ok {

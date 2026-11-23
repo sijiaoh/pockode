@@ -35,6 +35,17 @@ const (
 // the link is printed all the same (measured with a BROWSER naming nothing).
 const loginBrowser = "BROWSER=true"
 
+// loginFullLink asks the CLI to print the sign-in link in full. Claude Code
+// 2.1.283 always did: the link carries its client_id and its redirect_uri.
+// 2.1.330 shortens it to an opaque https://claude.ai/oauth/authorize?z-...,
+// which opened on a phone fails ("client_id parameter missing"), and which
+// says nothing checkLink could read; with this set, 2.1.330 prints the full
+// link (https://claude.com/cai/oauth/authorize?code=true&client_id=...&
+// redirect_uri=...) and the same prompt for a code. The variable is
+// undocumented, so checkLink stays the guard: should it stop working, the
+// short link comes back and is refused at once rather than handed out.
+const loginFullLink = "CLAUDE_CODE_FULL_SIGN_IN_LINK=1"
+
 // linkPattern finds the sign-in link in the line that offers it ("If the
 // browser didn't open, visit: https://...").
 var linkPattern = regexp.MustCompile(`https://\S+`)
@@ -91,7 +102,7 @@ func (a *Auth) Login(ctx context.Context, opts cliauth.LoginOptions, flow cliaut
 	if err != nil {
 		return cliauth.Status{}, err
 	}
-	proc, err := agent.StartProcessEnv(ctx, a.log, a.binary, args, a.workDir, append(profile.Env, loginBrowser))
+	proc, err := agent.StartProcessEnv(ctx, a.log, a.binary, args, a.workDir, append(profile.Env, loginBrowser, loginFullLink))
 	if err != nil {
 		return cliauth.Status{}, err
 	}

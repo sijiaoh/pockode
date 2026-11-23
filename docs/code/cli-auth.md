@@ -4,7 +4,8 @@ How the server tells a client whether Claude Code and Codex are signed in on the
 machine it runs on, signs them in from a phone, and signs them out. The screens
 that read this are in [cli-login-ui.md](../cli-login-ui.md).
 
-Verified against Claude Code 2.1.283 and codex-cli 0.153.0.
+Verified against Claude Code 2.1.283 and codex-cli 0.153.0; Claude's sign-in
+link also against 2.1.330.
 
 ## Where it lives
 
@@ -383,7 +384,7 @@ starting ──► waiting ──► (verifying) ──► succeeded
 | `device_auth_failed` | Codex reported the device-code sign-in failed; `detail` is its message |
 | `not_installed` | the CLI is not found |
 | `external` | credentials managed outside Pockode: Claude reporting an external method before the sign-in (`external` says which), Claude refusing because managed settings want a gateway, Codex refusing because its config forces API-key sign-in |
-| `flow_broken` | the CLI did not behave as driven: no link within 30s, a link that does not lead to the paste-a-code page, no answer to a code within 60s, a Codex response of the wrong shape or a missing account API. Usually a CLI update |
+| `flow_broken` | the CLI did not behave as driven: no link within 30s, a link that does not lead to the paste-a-code page (the short link among them, should a CLI stop honouring `CLAUDE_CODE_FULL_SIGN_IN_LINK`), no answer to a code within 60s, a Codex response of the wrong shape or a missing account API. Usually a CLI update |
 | `other` | anything else; `detail` says what |
 
 A code missing its `#state` part is not a failure: Claude says "Invalid code"
@@ -427,11 +428,26 @@ the page that shows a code to paste — the one way through a phone can finish.
 Its host is not checked (the Console's is another). `--console` goes through the
 same page.
 
-The CLI also opens a browser on the server and listens on a local port; either
-path finishing ends it. It is run with `BROWSER=true` so no browser pops up on a
-server's desktop; where `true` is not a command (Windows) the attempt fails
-quietly and the link is printed all the same (measured with a `BROWSER` naming
-nothing).
+Two variables are added to the login's environment:
+
+- `BROWSER=true`. The CLI also opens a browser on the server and listens on a
+  local port; either path finishing ends it. With this no browser pops up on a
+  server's desktop; where `true` is not a command (Windows) the attempt fails
+  quietly and the link is printed all the same (measured with a `BROWSER`
+  naming nothing).
+- `CLAUDE_CODE_FULL_SIGN_IN_LINK=1`. 2.1.283 always printed the full link.
+  2.1.330 prints a short one instead, `https://claude.ai/oauth/authorize?z-…`,
+  whose query shows neither a `client_id` nor a `redirect_uri`; opened on a
+  phone it fails with "client_id parameter missing" (measured). With the
+  variable set, 2.1.330 prints the full link
+  (`https://claude.com/cai/oauth/authorize?code=true&client_id=…&redirect_uri=…`)
+  and the same prompt.
+
+That variable is undocumented, which is why the link check stays a guard rather
+than being relaxed to let the short link through: a short link fails the check
+(no `code=true`) and the sign-in ends at once as `flow_broken`; handing it out
+would only move the failure to the user's browser. If a later CLI stops
+honouring the variable, that is how it shows.
 
 A pasted code is written to stdin as one line. The exit status is the verdict:
 0 is signed in; otherwise the last stderr line is the reason, and a 4xx after a
@@ -480,7 +496,8 @@ promise:
 - Run over pipes, it prints plain text, with the link on a line of its own.
 - The link leads to the paste-a-code page (checked as described
   [above](#claude-claude-auth-login-over-pipes)), not only to a callback on the
-  server's own localhost. The same holds with `--console`.
+  server's own localhost. The same holds with `--console`. From 2.1.330 this
+  holds only with the undocumented `CLAUDE_CODE_FULL_SIGN_IN_LINK=1` set.
 - It reads the pasted `code#state` as one line on stdin. After a line without
   `#` it prints `Invalid code.` and waits for another.
 - It exits 0 on success and non-zero otherwise, with the reason on the last line
@@ -497,7 +514,7 @@ the server's desktop.)
 
 | What changed | What the user sees |
 |---|---|
-| No link within 30s, a link to another kind of page, no answer to a code within 60s (a reworded `Invalid code.` lands here too, since the CLI then waits silently) | The sheet's *Flow broke* screen. It names the CLI and its version, says this usually follows a CLI update, offers the terminal command (`claude auth login`) as the way out, and shows the details (without link or code) already open |
+| No link within 30s, a link to another kind of page or the short link back (the variable no longer honoured), no answer to a code within 60s (a reworded `Invalid code.` lands here too, since the CLI then waits silently) | The sheet's *Flow broke* screen. It names the CLI and its version, says this usually follows a CLI update, offers the terminal command (`claude auth login`) as the way out, and shows the details (without link or code) already open |
 | A reworded refusal or managed-settings line, or `--console` no longer accepted | *Sign-in failed*, with the CLI's own line as the body |
 | `auth status` output without JSON or without the two fields | The card's *Status unavailable* row ("Couldn't read sign-in status") with the reason and Retry. There is no Sign in, since a sign-in could not fix it |
 | An `authMethod` this version does not know | *Managed outside Pockode*, showing the CLI's own word, or the platform when it names one |
