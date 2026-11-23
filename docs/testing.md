@@ -16,7 +16,7 @@ Three of them are red. The fourth is the dangerous one, because it is green.
 | Kind | How it looks | What to change | Seen here |
 |---|---|---|---|
 | **The machine is oversubscribed** | More failures the busier the box; a different file fails each run; every failure is a timeout, none is an assertion; serial runs are all green | The runner's own concurrency. Give the timeout enough room for scheduling, not for slow tests — for the one measured exception, see [A test that really is slow](#a-test-that-really-is-slow) | frontend vitest; the `ws` 12 MiB deflate test |
-| **The test assumes a schedule** | Only fails under load, but always at the same line; there is a `time.Sleep` waiting out something, or real time elapsing where a debounce or timer is counting, or a wait that is satisfied by [something drawn before what is asserted on](#frontend-wait-for-what-you-assert-on) | Wait for the signal instead — or, for a timer the code under test owns, [move its clock yourself](#frontend-a-debounce-is-yours-to-run-out). **Not** a longer sleep — unless the budget is a backstop rather than the subject, as in the `relay` case below | `agentrole` `TestExternalChange_NotifiesListener`; `relay` `TestUplinkDialOptionsDoNotTruncateTheTunnel`; `permreview` `TestRoute_FailureDenies`, `TestRoute_IgnoresOtherModes`; `web` `FilesTab search`; `web` `InputBar` command palette |
+| **The test assumes a schedule** | Only fails under load, but always at the same line; there is a `time.Sleep` waiting out something, or real time elapsing where a debounce or timer is counting, or a wait that is satisfied by [something drawn before what is asserted on](#frontend-wait-for-what-you-assert-on) | Wait for the signal instead — or, for a timer the code under test owns, [move its clock yourself](#frontend-a-debounce-is-yours-to-run-out). **Not** a longer sleep — unless the budget is a backstop rather than the subject, as in the `relay` case below | `agentrole` `TestExternalChange_NotifiesListener`; `relay` `TestUplinkDialOptionsDoNotTruncateTheTunnel`; `permreview` `TestRoute_FailureDenies`, `TestRoute_IgnoresOtherModes`; `worktree` `TestRefresh_TimedOutReadBacksOffForTTL`; `web` `FilesTab search`; `web` `InputBar` command palette |
 | **The test fabricates an unreachable state** | Barely correlates with load; fails at a stable rate even on an idle machine running that package alone | Make the test drive a state the implementation can actually reach | `agent/claude` `TestBackgroundWait_OutputPushesTheDeadlineOut` |
 | **Silent pass** | Green. Always green | Make the test assert the precondition it depends on, then mutation-verify | `agent/claude` `TestBackgroundWait_SurvivesAnEmptyTaskList` |
 
@@ -422,7 +422,7 @@ dedicated runner, across three platforms with a 20-minute budget. The worst-case
 numbers measured locally under `-race` alongside a dozen other binaries do not
 describe CI at all.
 
-The five Go findings, and what each one did *not* change:
+The six Go findings, and what each one did *not* change:
 
 - **`server/ws` 12 MiB deflate test** — kind 1. `opTimeout` stayed at 60s; the
   test data, assertions and coverage stayed as they were. Only the comment
@@ -459,6 +459,25 @@ The five Go findings, and what each one did *not* change:
   request that routing denies at once
   [does not stay waiting long enough to be polled](#frontend-wait-for-what-you-assert-on).
   It now waits for the request's history record, which lasts.
+- **`server/worktree`** — kind 2, **no behaviour change.** The test that a
+  timed-out `git worktree list` backs off for the cache TTL put a shell script
+  on `PATH` as `git` that appended to a file and then slept, and counted the
+  reads from that file. The recorder ran inside the process the deadline under
+  test kills, so it raced that deadline: on macOS the first exec of a freshly
+  written executable took 0.2–1.2s, against a 500ms timeout, and when it lost,
+  the file was never created. The registry had made exactly one read, as it
+  should; only the test's evidence of it was gone. Measured: 3/30 failed idle,
+  6/50 with every core busy. That it fails idle at all does not make it kind 3:
+  the slow step is the OS checking a new executable, not the scheduler, so
+  measurement 1 above cannot make it go away — but load still raises the rate,
+  and it always fails at the same line. The reads are now counted in the test
+  process, through a `worktreeListCommand` var where the command is built, so
+  the count exists before anything can be killed. The stand-in that hangs is a
+  real `git hash-object --stdin` on a pipe held open until the deadline, not a
+  script, which also lets the test run on Windows. Removing the backoff still
+  fails it ("git ran 3 times, want 1"). The shape to look for: **evidence
+  written by the thing the deadline kills.** Count where the request is made,
+  not where it is served.
 - **`server/agent/claude`** — kind 3, **zero implementation changes.** Every
   write to the background wait's deadline either arms it from `time.Now()` or
   clears it to zero, so a deadline already in the past is a state the
