@@ -185,7 +185,7 @@ type loginOutcome struct {
 	err    error
 }
 
-func startLogin(t *testing.T, a *Auth, kind cliauth.AccountKind) (*testFlow, <-chan loginOutcome, context.CancelFunc) {
+func loginInBackground(t *testing.T, a *Auth, kind cliauth.AccountKind) (*testFlow, <-chan loginOutcome, context.CancelFunc) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	t.Cleanup(cancel)
@@ -231,7 +231,7 @@ func wantLoginError(t *testing.T, err error, reason cliauth.FailureReason, detai
 }
 
 func TestLogin_PastedCode(t *testing.T) {
-	flow, done, _ := startLogin(t, fakeClaudeAuth(t, fakeLogin), cliauth.AccountClaudeAI)
+	flow, done, _ := loginInBackground(t, fakeClaudeAuth(t, fakeLogin), cliauth.AccountClaudeAI)
 
 	p := awaitPrompt(t, flow, done)
 	if !p.TakesCode || !strings.HasPrefix(p.URL, "https://claude.com/cai/oauth/authorize?") || !strings.HasSuffix(p.URL, fakeState) {
@@ -259,7 +259,7 @@ func TestLogin_PastedCode(t *testing.T) {
 }
 
 func TestLogin_Console(t *testing.T) {
-	flow, done, cancel := startLogin(t, fakeClaudeAuth(t, fakeLogin), cliauth.AccountConsole)
+	flow, done, cancel := loginInBackground(t, fakeClaudeAuth(t, fakeLogin), cliauth.AccountConsole)
 
 	if p := awaitPrompt(t, flow, done); !strings.HasPrefix(p.URL, "https://platform.claude.com/") {
 		t.Errorf("link = %q, want the Console's", p.URL)
@@ -272,7 +272,7 @@ func TestLogin_Console(t *testing.T) {
 
 // A wrong code ends the CLI, so the sign-in has to start over.
 func TestLogin_RejectedCode(t *testing.T) {
-	flow, done, _ := startLogin(t, fakeClaudeAuth(t, fakeLogin), "")
+	flow, done, _ := loginInBackground(t, fakeClaudeAuth(t, fakeLogin), "")
 	awaitPrompt(t, flow, done)
 
 	flow.codes <- "wrong-code-0123456789#" + fakeState
@@ -285,17 +285,17 @@ func TestLogin_FlowBroken(t *testing.T) {
 	t.Run("no link", func(t *testing.T) {
 		a := fakeClaudeAuth(t, fakeNoLink)
 		a.linkTimeout = 500 * time.Millisecond
-		_, done, _ := startLogin(t, a, "")
+		_, done, _ := loginInBackground(t, a, "")
 		wantLoginError(t, awaitOutcome(t, done).err, cliauth.FailureFlowBroken, "no sign-in link")
 	})
 
 	t.Run("a link to a local callback", func(t *testing.T) {
-		_, done, _ := startLogin(t, fakeClaudeAuth(t, fakeLocalLink), "")
+		_, done, _ := loginInBackground(t, fakeClaudeAuth(t, fakeLocalLink), "")
 		wantLoginError(t, awaitOutcome(t, done).err, cliauth.FailureFlowBroken, "does not lead to a page showing a code")
 	})
 
 	t.Run("no answer to a code", func(t *testing.T) {
-		flow, done, _ := startLogin(t, fakeClaudeAuth(t, fakeSilentVerify), "")
+		flow, done, _ := loginInBackground(t, fakeClaudeAuth(t, fakeSilentVerify), "")
 		awaitPrompt(t, flow, done)
 		flow.codes <- fakeGoodCode
 		wantLoginError(t, awaitOutcome(t, done).err, cliauth.FailureFlowBroken, "did not answer the pasted code")
@@ -304,7 +304,7 @@ func TestLogin_FlowBroken(t *testing.T) {
 
 func TestLogin_External(t *testing.T) {
 	t.Run("credentials from the environment", func(t *testing.T) {
-		_, done, _ := startLogin(t, fakeClaudeAuth(t, fakeExternal), "")
+		_, done, _ := loginInBackground(t, fakeClaudeAuth(t, fakeExternal), "")
 		err := awaitOutcome(t, done).err
 		var loginErr *cliauth.LoginError
 		if !errors.As(err, &loginErr) || loginErr.Reason != cliauth.FailureExternal || loginErr.External == nil || loginErr.External.Source != "ANTHROPIC_API_KEY" {
@@ -313,7 +313,7 @@ func TestLogin_External(t *testing.T) {
 	})
 
 	t.Run("managed settings", func(t *testing.T) {
-		_, done, _ := startLogin(t, fakeClaudeAuth(t, fakeManaged), "")
+		_, done, _ := loginInBackground(t, fakeClaudeAuth(t, fakeManaged), "")
 		wantLoginError(t, awaitOutcome(t, done).err, cliauth.FailureExternal, "Managed settings")
 	})
 }

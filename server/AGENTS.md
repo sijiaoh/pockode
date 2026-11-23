@@ -24,6 +24,7 @@ docker build -f server/Dockerfile -t pockode:local .
 go test -tags=integration ./agent/claude -v
 go test -tags=integration ./agent/codex -v
 go test -tags=integration ./permreview -run '^TestIntegration_UnattendedClaude$' -v -count=1  # Unattended 全流程，只有 Claude
+go test -tags=integration ./agent/claude -run '^TestIntegration_LoginReachesCodePrompt$' -v -count=1  # claude auth login 走到输入 code 为止；不登录、不花钱，不需要已登录（见 docs/testing.md）
 ```
 
 两端共用 `agent/integration_test_suite.go` 的同一套场景，CLI 之间的差异通过
