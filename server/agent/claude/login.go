@@ -83,37 +83,14 @@ func (a *Auth) AccountKinds() []cliauth.AccountKind {
 // The CLI has no timeout of its own and does not end when stdin closes, so it
 // ends when ctx does — cancelled or expired, the Service's call.
 func (a *Auth) Login(ctx context.Context, opts cliauth.LoginOptions, flow cliauth.LoginFlow) (cliauth.Status, error) {
-	// Credentials from the environment or settings outrank the file a sign-in
-	// writes, so a sign-in would succeed and change nothing a session uses.
-	st, err := a.Status(ctx, opts.ProfileID)
-	if err != nil {
-		return cliauth.Status{}, err
-	}
-	if st.State == cliauth.StateExternal {
-		return cliauth.Status{}, &cliauth.LoginError{Reason: cliauth.FailureExternal, External: st.External}
-	}
-
-	args := []string{"auth", "login"}
-	if opts.AccountKind == cliauth.AccountConsole {
-		args = append(args, "--console")
-	}
-
-	profile, err := a.launch(opts.ProfileID)
-	if err != nil {
-		return cliauth.Status{}, err
-	}
-	proc, err := agent.StartProcessEnv(ctx, a.log, a.binary, args, a.workDir, append(profile.Env, loginBrowser, loginFullLink))
+	proc, err := a.startLogin(ctx, opts)
 	if err != nil {
 		return cliauth.Status{}, err
 	}
 	// The CLI is gone before Login returns, whichever way it ends: the Service
 	// hands its lock to the next command then, and a cancel or a shutdown is
 	// reported as done. Left running, it would keep its local callback open.
-	defer func() {
-		proc.Terminate()
-		proc.Wait()
-		proc.OutputDone()
-	}()
+	defer stopLogin(proc)
 
 	res, err := a.driveLogin(ctx, proc, flow)
 	if err != nil {
@@ -123,11 +100,43 @@ func (a *Auth) Login(ctx context.Context, opts cliauth.LoginOptions, flow cliaut
 		return cliauth.Status{}, loginFailure(res)
 	}
 
-	st, err = a.Status(ctx, opts.ProfileID)
+	st, err := a.Status(ctx, opts.ProfileID)
 	if err != nil {
 		return cliauth.ErrorStatus(err), nil
 	}
 	return st, nil
+}
+
+// startLogin starts `claude auth login` as Login runs it. It is apart from
+// Login so that the real-CLI smoke test (login_integration_test.go) can start
+// the same command and watch its output, which Login does not expose.
+func (a *Auth) startLogin(ctx context.Context, opts cliauth.LoginOptions) (*agent.Process, error) {
+	// Credentials from the environment or settings outrank the file a sign-in
+	// writes, so a sign-in would succeed and change nothing a session uses.
+	st, err := a.Status(ctx, opts.ProfileID)
+	if err != nil {
+		return nil, err
+	}
+	if st.State == cliauth.StateExternal {
+		return nil, &cliauth.LoginError{Reason: cliauth.FailureExternal, External: st.External}
+	}
+
+	args := []string{"auth", "login"}
+	if opts.AccountKind == cliauth.AccountConsole {
+		args = append(args, "--console")
+	}
+
+	profile, err := a.launch(opts.ProfileID)
+	if err != nil {
+		return nil, err
+	}
+	return agent.StartProcessEnv(ctx, a.log, a.binary, args, a.workDir, append(profile.Env, loginBrowser, loginFullLink))
+}
+
+func stopLogin(proc *agent.Process) {
+	proc.Terminate()
+	proc.Wait()
+	proc.OutputDone()
 }
 
 // loginResult is how `claude auth login` ended.

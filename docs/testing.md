@@ -578,8 +578,10 @@ commands that do, and the requirement that each CLI be logged in, are in
 [server/AGENTS.md](../server/AGENTS.md). What that file does not say is what
 running them costs. The same tag also holds back the
 [`question_post` eval](#the-question_post-eval), which measures rather than
-asserts and has a gate of its own on top, and the
-[Unattended reviewer test](#the-unattended-reviewer-test).
+asserts and has a gate of its own on top, the
+[Unattended reviewer test](#the-unattended-reviewer-test), and the
+[`claude auth login` smoke test](#the-claude-auth-login-smoke-test), which
+calls no model.
 
 **Every turn in it is a real API call.** `TestIntegration_ReportsCost` prints
 one of the prices — `turn cost: 0.0725 USD`, for a turn whose whole prompt is
@@ -699,6 +701,40 @@ go test -tags=integration ./permreview -run '^TestIntegration_UnattendedClaude$'
   `approvalPolicy: never` and raises no request, so it has no reviewer and
   nothing to test ([unattended-mode.md](unattended-mode.md)); the note saying so
   sits in `server/agent/codex/codex_integration_test.go`.
+
+### The `claude auth login` smoke test
+
+`TestIntegration_LoginReachesCodePrompt` (`server/agent/claude/login_integration_test.go`)
+takes the installed claude's `auth login` as far as a person would take over,
+once per account kind (subscription and `--console`): it starts the command
+exactly as `Login` does, runs the production driver over it, and passes when the
+link it printed is accepted and the CLI is waiting for a code. Then it stops the
+CLI. The sign-in's unit tests drive a fake claude that prints what Pockode
+expects by construction, so this is the only test that sees the sign-in of a CLI
+that changed — what it catches, and why it matters, is in
+[cli-auth.md](code/cli-auth.md#what-the-flows-depend-on).
+
+```sh
+cd server
+go test -tags=integration ./agent/claude -run '^TestIntegration_LoginReachesCodePrompt$' -v -count=1
+```
+
+- **Free, and fast.** No code is ever written, so nothing signs in and no model
+  is called; the link is printed, never opened. Half a second on claude 2.1.330.
+  Run it after every Claude Code update — that is when it can go red.
+- **Needs claude installed, not signed in.** It runs against a temporary
+  `CLAUDE_CONFIG_DIR`, so your own sign-in is neither read nor touched (on
+  macOS that directory is a keychain entry of its own, too), and `auth status`
+  has to read signed out before and after.
+- **Credentials in the environment fail it on purpose.** With
+  `ANTHROPIC_API_KEY` or anything else that makes `auth status` read `external`,
+  `Login` refuses to start, so the run would prove nothing; it fails naming
+  what to unset rather than skipping. That includes a full
+  `-tags=integration ./agent/claude` run, which reaches this test too.
+- **A red says what to look at.** A `flow_broken` comes with the CLI's whole
+  stdout and a hint at the likeliest cause: a short link there means the CLI has
+  stopped honouring `CLAUDE_CODE_FULL_SIGN_IN_LINK`. A missing prompt is
+  reported as that, after 15s.
 
 ### The `question_post` eval
 

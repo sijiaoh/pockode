@@ -447,7 +447,9 @@ That variable is undocumented, which is why the link check stays a guard rather
 than being relaxed to let the short link through: a short link fails the check
 (no `code=true`) and the sign-in ends at once as `flow_broken`; handing it out
 would only move the failure to the user's browser. If a later CLI stops
-honouring the variable, that is how it shows.
+honouring the variable, that is how it shows — to a user, or first to the
+[`claude auth login` smoke test](../testing.md#the-claude-auth-login-smoke-test),
+which runs this check against the installed CLI without signing in.
 
 A pasted code is written to stdin as one line. The exit status is the verdict:
 0 is signed in; otherwise the last stderr line is the reason, and a 4xx after a
@@ -529,11 +531,14 @@ CLIs still works.
 
 Everything here was verified against the versions at the top of this document.
 When the CLIs are updated, check it again by running both sign-ins end to end.
-The fake-CLI tests cover only Pockode's side of the contract. The one cheap
-check of the CLI's side is Codex's schema drift test
-(`server/agent/codex/schema_integration_test.go`, integration tag, no tokens).
-It holds `account/read` against the schema codex generates, but not
-`account/login/*`. Claude has no equivalent.
+The fake-CLI tests cover only Pockode's side of the contract. Two cheap checks
+of the CLI's side run under the integration tag without spending tokens. Codex's
+schema drift test (`server/agent/codex/schema_integration_test.go`) holds
+`account/read` against the schema codex generates, but not `account/login/*`.
+Claude's [`claude auth login` smoke test](../testing.md#the-claude-auth-login-smoke-test)
+holds the first two points of the Claude list above for both account kinds, and that
+the CLI still asks for a code (`Paste code here`, which `Login` never reads
+itself); stopping short of a code, it cannot hold the rest.
 
 ## The web client
 
