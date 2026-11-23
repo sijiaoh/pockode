@@ -1,5 +1,4 @@
-import { ClipboardPaste } from "lucide-react";
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useId, useRef } from "react";
 import type { CliAccountKind, CliLogin } from "../../types/cliAuth";
 import { inputClass } from "../ui/inputClass";
 import { ExpiryLine, SignInLink, Step, textButtonClass } from "./loginParts";
@@ -33,9 +32,6 @@ export default function PastedCodeStep({
 	const inputRef = useRef<HTMLInputElement>(null);
 	const inputId = useId();
 	const errorId = useId();
-	const [pasteFailed, setPasteFailed] = useState(false);
-	const canReadClipboard =
-		typeof navigator !== "undefined" && !!navigator.clipboard?.readText;
 	const malformed = login.code_malformed && login.phase === "waiting";
 
 	// A rejected paste comes back selected, so the next paste replaces it.
@@ -44,16 +40,6 @@ export default function PastedCodeStep({
 		inputRef.current?.focus();
 		inputRef.current?.select();
 	}, [malformed]);
-
-	const paste = async () => {
-		try {
-			onCodeChange(await navigator.clipboard.readText());
-			setPasteFailed(false);
-		} catch {
-			// Several browsers ask first, and the user may say no.
-			setPasteFailed(true);
-		}
-	};
 
 	const isConsole = login.account_kind === "console";
 	const error = submitError ?? (malformed ? WRONG_CODE : null);
@@ -88,44 +74,26 @@ export default function PastedCodeStep({
 					<label htmlFor={inputId} className="sr-only">
 						Sign-in code
 					</label>
-					<div className="flex items-center gap-2">
-						<input
-							ref={inputRef}
-							id={inputId}
-							type="text"
-							value={code}
-							onChange={(e) => onCodeChange(e.target.value)}
-							readOnly={verifying}
-							// Plain text, not a password: the user has to see that what they
-							// pasted is the code and not the link they copied earlier.
-							autoComplete="off"
-							autoCapitalize="off"
-							autoCorrect="off"
-							spellCheck={false}
-							aria-invalid={error ? true : undefined}
-							aria-describedby={error ? errorId : undefined}
-							className={`min-w-0 flex-1 rounded-lg bg-th-bg-primary px-3 py-2.5 font-mono text-th-text-primary ${inputClass}`}
-						/>
-						{canReadClipboard && (
-							<button
-								type="button"
-								onClick={paste}
-								disabled={verifying}
-								className={`${textButtonClass} disabled:opacity-50`}
-							>
-								<ClipboardPaste className="h-4 w-4" aria-hidden="true" />
-								Paste
-							</button>
-						)}
-					</div>
+					<input
+						ref={inputRef}
+						id={inputId}
+						type="text"
+						value={code}
+						onChange={(e) => onCodeChange(e.target.value)}
+						readOnly={verifying}
+						// Plain text, not a password: the user has to see that what they
+						// pasted is the code and not the link they copied earlier.
+						autoComplete="off"
+						autoCapitalize="off"
+						autoCorrect="off"
+						spellCheck={false}
+						aria-invalid={error ? true : undefined}
+						aria-describedby={error ? errorId : undefined}
+						className={`w-full rounded-lg bg-th-bg-primary px-3 py-2.5 font-mono text-th-text-primary ${inputClass}`}
+					/>
 					{error && (
 						<p id={errorId} className="text-xs text-th-error" role="alert">
 							{error}
-						</p>
-					)}
-					{pasteFailed && (
-						<p className="text-xs text-th-text-muted">
-							Paste into the field instead.
 						</p>
 					)}
 					<ExpiryLine expiresAt={login.expires_at} />

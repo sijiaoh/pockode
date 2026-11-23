@@ -283,9 +283,9 @@ Sign in to Claude                                   ✕
 
 2  Paste the code shown after you sign in
 
-   ┌─────────────────────────────────┐
-   │                                 │   [ Paste ]
-   └─────────────────────────────────┘
+   ┌─────────────────────────────────────────────┐
+   │                                             │
+   └─────────────────────────────────────────────┘
    Expires in 9:41
 ─────────────────────────────────────────────────────
                           Cancel      [ Sign in ]
@@ -304,11 +304,12 @@ Sign in to Claude                                   ✕
   `font-mono`. Plain text, not a password field: the user has to see that what
   they pasted is the code and not the URL they copied earlier. It is one-time,
   and it is never persisted.
-- **Paste** calls `navigator.clipboard.readText()`, and is rendered only where
-  that exists. Several browsers answer it with a paste prompt of their own, which
-  the user can refuse; a refusal or error puts "Paste into the field instead."
-  under the field, and the button stays. Long-pressing the field works
-  everywhere.
+- **There is no Paste button**, on purpose: the field takes the system paste
+  (long-press, or the keyboard's), and a button calling
+  `navigator.clipboard.readText()` was never shorter than that. Safari always
+  answers it with a native Paste callout for content copied from another
+  origin — the code comes from claude.ai — so it cost a second tap. In Firefox
+  it resolves empty after the browser's own confirmation, so it pasted nothing.
 - The value is trimmed before it is sent — codes are pasted with a trailing
   newline more often than not.
 - **Sign in** is the sheet's submit (`Sheet` `onSubmit`, so Enter works), and is
