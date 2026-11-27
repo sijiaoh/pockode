@@ -839,11 +839,18 @@ measurement of the call. It is read only from a frame holding one
 outcome instead: `task_notification`'s `usage.duration_ms`, an optional field,
 is the `background_result`'s `DurationMs`. Arrival times are
 recorded separately, as what they are: `ObservedAt` is when the server saw a
-`tool_call`, `tool_result`, `permission_response`, `done`, `interrupted` or
-`process_ended` arrive (or wrote one it synthesized), stamped once where the
-event enters a session (`agent.ObserveAt`, called by `process.Process` for the
-agent's events and by `chat.Client` for a permission answer) so the stored and
-the broadcast record carry the same moment. It is Pockode's clock, never the
+`tool_call`, `tool_result`, `permission_response`, `done`, `interrupted`,
+`process_ended`, `error` or `message_ingested` arrive (or wrote one it
+synthesized), stamped once where the event enters a session (`agent.ObserveAt`,
+called by `process.Process` for the agent's events and by `chat.Client` for a
+permission answer and the read point it writes for Claude) so the stored and
+the broadcast record carry the same moment. A `message` record carries one too,
+minted once in `chat.Client.sendEvent` and handed to `process.Process.SendMessage`
+as the prompt's moment, so a turn the message opens has `TurnState.OpenedAt`
+equal to the record's stamp — the tail line's clock and the reply's settled
+span ([tool-call-ui.md](../tool-call-ui.md#where-the-duration-comes-from)) start
+together; the sender, left out of that record's broadcast, gets the same moment
+on `rpc.MessageResult`. It is Pockode's clock, never the
 CLI's: a call is measured from when it could start (its `tool_call`, or the
 answer that let it run) to the `tool_result` that settled it, and one replayed
 while still running is counted against the `server_time` reading

@@ -268,7 +268,7 @@ func (h *rpcMethodHandler) handleMessage(ctx context.Context, conn *jsonrpc2.Con
 
 	// This connection is the one excluded from the broadcast, so the reply is
 	// where it learns its own message's seq and id (see rpc.MessageResult).
-	result := rpc.MessageResult{Seq: sent.Seq, MessageID: sent.MessageID}
+	result := messageResult(sent)
 	if isCommand {
 		result.Content, result.Command = content, &cmd
 	} else if len(params.Answering) > 0 {
@@ -378,10 +378,21 @@ func (h *rpcMethodHandler) handleHTMLAction(ctx context.Context, conn *jsonrpc2.
 	// work as much as typing is.
 	h.workEngine.HandleUserMessage(params.SessionID)
 
-	result := rpc.MessageResult{Seq: sent.Seq, MessageID: sent.MessageID, Content: content, HTMLAction: &action}
+	result := messageResult(sent)
+	result.Content, result.HTMLAction = content, &action
 	if err := conn.Reply(ctx, req.ID, result); err != nil {
 		log.Error("failed to send response", "error", err)
 	}
+}
+
+// messageResult is the part of a send's answer every kind of send shares:
+// what names the record the message was written to.
+func messageResult(sent chat.Sent) rpc.MessageResult {
+	result := rpc.MessageResult{Seq: sent.Seq, MessageID: sent.MessageID}
+	if !sent.ObservedAt.IsZero() {
+		result.ObservedAt = &sent.ObservedAt
+	}
+	return result
 }
 
 // chatAnswers narrows the wire shape of an answer to the one the chat client

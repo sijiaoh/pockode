@@ -797,7 +797,12 @@ export function useChatMessages({
 	const deliverEcho = useCallback(
 		async (
 			echo: UserMessage,
-			send: () => Promise<{ seq?: HistorySeq; update: Partial<UserMessage> }>,
+			send: () => Promise<{
+				seq?: HistorySeq;
+				update: Partial<UserMessage>;
+				/** The record's moment; see `AssistantMessage.openedAt`. */
+				observedAt?: number;
+			}>,
 			{
 				takeBack,
 				rethrow,
@@ -838,7 +843,7 @@ export function useChatMessages({
 				// Without it the bubble just added could not be forked from until the
 				// session was reloaded. An older server sends none, which simply leaves
 				// the message unaddressable, as every locally sent one used to be.
-				const { seq, update } = await send();
+				const { seq, update, observedAt } = await send();
 				setMessages((prev) => {
 					// The sender is left out of the broadcast, so the reply is its one
 					// copy of what the record holds — what the agent was actually
@@ -854,7 +859,19 @@ export function useChatMessages({
 										: m,
 								)
 							: prev;
-					const stamped = stampMessageAnchorSeq(filled, userMessageId, seq);
+					// The reply this message opened began when the record says, and
+					// this is the one tab no record reaches. A message sent into a
+					// running turn made no placeholder, and the read point that opens
+					// its reply carries a moment of its own.
+					const opened =
+						observedAt !== undefined
+							? filled.map((m) =>
+									m.id === assistantMessageId && m.role === "assistant"
+										? { ...m, openedAt: observedAt }
+										: m,
+								)
+							: filled;
+					const stamped = stampMessageAnchorSeq(opened, userMessageId, seq);
 					return settle ? settle(stamped, update.messageId) : stamped;
 				});
 				return true;
@@ -953,6 +970,7 @@ export function useChatMessages({
 						messageId,
 						expanded,
 						attachments: described,
+						observedAt,
 					} = await sendMessage(
 						sessionId,
 						content,
@@ -966,6 +984,7 @@ export function useChatMessages({
 					// echo had only the browser's guess.
 					return {
 						seq,
+						observedAt,
 						update: {
 							...expanded,
 							...(described ? { attachments: described } : {}),
@@ -1036,12 +1055,11 @@ export function useChatMessages({
 			await deliverEcho(
 				echo,
 				async () => {
-					const { seq, messageId, content, htmlAction } = await sendHtmlAction(
-						sessionId,
-						input,
-					);
+					const { seq, messageId, content, htmlAction, observedAt } =
+						await sendHtmlAction(sessionId, input);
 					return {
 						seq,
+						observedAt,
 						update: {
 							...(content !== undefined ? { content } : {}),
 							...(htmlAction ? { htmlAction } : {}),

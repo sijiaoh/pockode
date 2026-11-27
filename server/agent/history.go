@@ -91,9 +91,14 @@ type EventRecord struct {
 	// process_ended it says when the turn or process ended, which is not when
 	// any call still open in it finished.
 	//
-	// Set on tool_call, tool_result, permission_response, done, interrupted and
-	// process_ended (see ObserveAt), and on none written before the field
-	// existed. Also absent where no honest moment exists: a background_lost
+	// On message it is when the message reached Pockode, the instant a turn it
+	// opened began; on message_ingested, when the read point was written; on
+	// error, when the turn failed. Those three, with done, interrupted and
+	// process_ended, are what a client measures a reply's span between.
+	//
+	// Set on tool_call, tool_result, permission_response, done, interrupted,
+	// process_ended, error and message_ingested (see ObserveAt), and on message
+	// (chat.Client.sendEvent); on none written before the field existed. Also absent where no honest moment exists: a background_lost
 	// result, and the process_ended a restarted server writes for a run nobody
 	// saw end. A record copied into a fork keeps its moment — it is when that
 	// event happened, which copying does not change. A pointer for the reason

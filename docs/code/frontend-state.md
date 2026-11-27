@@ -1172,6 +1172,22 @@ a field: the engine's `durationMs` and the observed `endedAt − startedAt` are
 kept apart in the run, and the precedence lives in one function so the row, the
 subagent row and any later summary read it the same way.
 
+#### Times on a reply
+
+A reply carries the two moments its span is read from, `openedAt` and
+`endedAt` on the `AssistantMessage`, copied from records for the same reason a
+run's are: they are history, so a reload draws what the live view did
+([tool-call-ui.md](../tool-call-ui.md#where-the-duration-comes-from) says which
+records). The reducer sets them where it already decides a reply's shape —
+the placeholder a turn-opening `message` leaves (`applyUserMessage`), the
+bubble a read point closes and the one it opens (`closePreviousTurn`, the
+`message_ingested` branch), the terminal-event status, and the join of a reply
+a page boundary cut in two (`prependHistoryPage`: the older half's start, the
+newer half's ending unless the older one had already ended). The sending tab
+gets no record for its own message, so `deliverEcho` writes `openedAt` onto its
+placeholder from the send's answer. A reply that opened without a message
+— resumed output, `openedByCard` — has none, and nothing is guessed.
+
 ### Why Pure Function Instead of Store
 
 - **Reusable** — same reducer replays history and processes live events

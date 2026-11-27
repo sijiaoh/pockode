@@ -5822,6 +5822,121 @@ describe("observed run times", () => {
 	});
 });
 
+// The moments a reply's span is read from (docs/tool-call-ui.md#where-the-duration-comes-from):
+// history on the reply, carried from the records that opened and ended it.
+describe("reply span", () => {
+	const T0 = Date.parse("2026-11-27T09:00:00Z");
+	const at = (ms: number) => new Date(T0 + ms).toISOString();
+	const text = (content: string) => ({ type: "text", content });
+	const replies = (messages: Message[]) =>
+		messages.filter((m): m is AssistantMessage => m.role === "assistant");
+
+	it("runs from the message that opened the turn to the turn's ending", () => {
+		for (const ending of ["done", "interrupted", "process_ended", "error"]) {
+			const [reply] = replies(
+				replayHistory([
+					{ type: "message", content: "go", observed_at: at(0) },
+					text("working"),
+					{ type: ending, error: "boom", observed_at: at(5000) },
+				]),
+			);
+			expect(reply, ending).toMatchObject({
+				openedAt: T0,
+				endedAt: T0 + 5000,
+			});
+		}
+	});
+
+	// A read point ends one reply and opens the next at one moment, so the
+	// two spans meet and add up to the turn's.
+	it("splits at a read point", () => {
+		const [first, second] = replies(
+			replayHistory([
+				{ type: "message", content: "go", observed_at: at(0) },
+				text("one"),
+				{ type: "message", content: "and", observed_at: at(1000) },
+				{ type: "message_ingested", observed_at: at(2000) },
+				text("two"),
+				{ type: "done", observed_at: at(5000) },
+			]),
+		);
+		expect(first).toMatchObject({ openedAt: T0, endedAt: T0 + 2000 });
+		expect(second).toMatchObject({ openedAt: T0 + 2000, endedAt: T0 + 5000 });
+	});
+
+	// A message sent into a running turn opens nothing: its moment is when it
+	// arrived, not when any reply began.
+	it("leaves the running reply's start alone when a message joins it", () => {
+		const [reply] = replies(
+			replayHistory([
+				{ type: "message", content: "go", observed_at: at(0) },
+				text("one"),
+				{ type: "message", content: "and", observed_at: at(1000) },
+			]),
+		);
+		expect(reply.openedAt).toBe(T0);
+		expect(reply.endedAt).toBeUndefined();
+	});
+
+	it("is unmeasured on records from before the stamps", () => {
+		const [reply] = replies(
+			replayHistory([
+				{ type: "message", content: "go" },
+				text("hi"),
+				{ type: "done" },
+			]),
+		);
+		expect(reply.openedAt).toBeUndefined();
+		expect(reply.endedAt).toBeUndefined();
+	});
+
+	// Output with no message before it — the CLI resuming by itself — has no
+	// start, and must not borrow one.
+	it("has no start for a reply no message opened", () => {
+		const [, resumed] = replies(
+			replayHistory([
+				{ type: "message", content: "go", observed_at: at(0) },
+				text("one"),
+				{ type: "done", observed_at: at(1000) },
+				text("resumed"),
+				{ type: "done", observed_at: at(9000) },
+			]),
+		);
+		expect(resumed.openedAt).toBeUndefined();
+		expect(resumed.endedAt).toBe(T0 + 9000);
+	});
+
+	// An ended turn keeps its ending; late output cannot move it.
+	it("keeps the ending when late output trails an aborted turn", () => {
+		const [reply] = replies(
+			replayHistory([
+				{ type: "message", content: "go", observed_at: at(0) },
+				text("one"),
+				{ type: "interrupted", observed_at: at(1000) },
+				text("late"),
+			]),
+		);
+		expect(reply.endedAt).toBe(T0 + 1000);
+	});
+
+	// A page boundary cuts one reply in two; joined, it is one span again.
+	it("is whole again when a page boundary is joined", () => {
+		const records = [
+			{ type: "message", content: "go", observed_at: at(0) },
+			text("one"),
+			text("two"),
+			{ type: "done", observed_at: at(4000) },
+		];
+		const newer = replayHistory(records.slice(2));
+		expect(replies(newer)[0].openedAt).toBeUndefined();
+
+		const [reply] = replies(
+			prependHistoryPage(replayHistory(records.slice(0, 2)), newer),
+		);
+		expect(reply).toMatchObject({ openedAt: T0, endedAt: T0 + 4000 });
+	});
+});
+
 describe("thinking", () => {
 	const think = (extra: Record<string, unknown> = {}) => ({
 		type: "thinking",

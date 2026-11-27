@@ -636,13 +636,15 @@ type ErrorEvent struct {
 	// UsageLimit is set when the turn failed because the account hit its usage
 	// limit. The turn ends as any other failure.
 	UsageLimit *UsageLimit
+	// ObservedAt is when Pockode saw the turn fail; see EventRecord.ObservedAt.
+	ObservedAt time.Time
 }
 
 func (ErrorEvent) EventType() EventType { return EventTypeError }
 func (ErrorEvent) isAgentEvent()        {}
 
 func (e ErrorEvent) ToRecord() EventRecord {
-	return EventRecord{Type: e.EventType(), Error: e.Error, AuthFailure: e.AuthFailure, UsageLimit: e.UsageLimit}
+	return EventRecord{Type: e.EventType(), Error: e.Error, AuthFailure: e.AuthFailure, UsageLimit: e.UsageLimit, ObservedAt: optionalTime(e.ObservedAt)}
 }
 
 type DoneEvent struct {
@@ -892,7 +894,8 @@ func UserResolver() QuestionResolver { return QuestionResolver{Kind: ResolverUse
 // ObserveAt stamps the events that carry EventRecord.ObservedAt with the moment
 // Pockode saw them, and returns every other event unchanged. It is called once
 // per event, where it enters a session — process.Process for everything an
-// agent sends, chat.Client for a permission answer — so the record that is
+// agent sends, chat.Client for a permission answer and the read point it writes
+// for an agent that reports none — so the record that is
 // stored and the one that is broadcast carry the same moment, and no adapter
 // has to remember to do it.
 //
@@ -920,6 +923,12 @@ func ObserveAt(event AgentEvent, at time.Time) AgentEvent {
 		e.ObservedAt = at
 		return e
 	case PermissionResponseEvent:
+		e.ObservedAt = at
+		return e
+	case ErrorEvent:
+		e.ObservedAt = at
+		return e
+	case MessageIngestedEvent:
 		e.ObservedAt = at
 		return e
 	}
@@ -1081,6 +1090,11 @@ type MessageEvent struct {
 	// ids in the session's attachment store. What the agent was handed for each
 	// is not recorded: that is the agent's business, decided at delivery.
 	Attachments []FileBlock
+	// ObservedAt is when the message reached Pockode, minted once where it is
+	// sent (chat.Client.sendEvent) and handed to the process as the prompt's
+	// moment too, so a turn this message opens began at exactly this instant
+	// (session.TurnState.OpenedAt). See EventRecord.ObservedAt.
+	ObservedAt time.Time
 }
 
 // CommandInvocation is a Pockode command as the user typed it: the name without
@@ -1107,6 +1121,7 @@ func (e MessageEvent) ToRecord() EventRecord {
 		Command:     e.Command,
 		HTMLAction:  e.HTMLAction,
 		Attachments: e.Attachments,
+		ObservedAt:  optionalTime(e.ObservedAt),
 	}
 }
 
@@ -1144,13 +1159,17 @@ type MessageIngestedEvent struct {
 	// carried and the only thing that says *which* of several queued messages a
 	// read point belongs to.
 	MessageID string
+	// ObservedAt is when Pockode wrote the read point — the moment the reply
+	// before it ended and the one answering this message began; see
+	// EventRecord.ObservedAt.
+	ObservedAt time.Time
 }
 
 func (MessageIngestedEvent) EventType() EventType { return EventTypeMessageIngested }
 func (MessageIngestedEvent) isAgentEvent()        {}
 
 func (e MessageIngestedEvent) ToRecord() EventRecord {
-	return EventRecord{Type: e.EventType(), MessageID: e.MessageID}
+	return EventRecord{Type: e.EventType(), MessageID: e.MessageID, ObservedAt: optionalTime(e.ObservedAt)}
 }
 
 // MessageDiscardedEvent says a Stop threw away a message the agent had not read

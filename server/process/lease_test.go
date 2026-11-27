@@ -44,7 +44,7 @@ func startedTurn(t *testing.T, budgets session.LeaseBudgets) (*Manager, *mockAge
 	if err != nil {
 		t.Fatalf("failed to create process: %v", err)
 	}
-	if _, err := proc.SendMessage(agent.Prompt{Text: "go"}); err != nil {
+	if _, err := proc.SendMessage(agent.Prompt{Text: "go"}, time.Now()); err != nil {
 		t.Fatalf("failed to send: %v", err)
 	}
 	return m, mock, store, proc
@@ -265,7 +265,7 @@ func TestLease_ASecondTurnGetsItsOwnAsk(t *testing.T) {
 	sess.emit(t, agent.InterruptedEvent{})
 	waitUntil(t, "the turn to end", func() bool { return holdOf(proc) == session.LeaseIdle })
 
-	if _, err := proc.SendMessage(agent.Prompt{Text: "again"}); err != nil {
+	if _, err := proc.SendMessage(agent.Prompt{Text: "again"}, time.Now()); err != nil {
 		t.Fatalf("failed to send: %v", err)
 	}
 	m.reapLeasesAsOf(pastBudget(leaseTestBudgets.Turn))

@@ -671,6 +671,23 @@ export interface AssistantMessage {
 	 */
 	openedAtReadPoint?: true;
 	/**
+	 * When this reply began, on the server's clock (epoch ms): the `observed_at`
+	 * of the `message` that opened its turn, or of the read point that opened
+	 * it. History, like a run's `startedAt` — what the reply's span is measured
+	 * from (docs/tool-call-ui.md#where-the-duration-comes-from). Absent when
+	 * nothing measured it: a record from before the stamp, or a reply opened
+	 * without a message (output the CLI resumed by itself, `openedByCard`).
+	 */
+	openedAt?: number;
+	/**
+	 * When this reply ended, on the server's clock (epoch ms): the `observed_at`
+	 * of the next read point, or of the `done` / `interrupted` /
+	 * `process_ended` / `error` that ended the turn. Absent while it runs, and
+	 * when the ending carried no moment or never came (a reply closed by the
+	 * page boundary or by a message opening the next turn).
+	 */
+	endedAt?: number;
+	/**
 	 * This bubble was opened by a permission card no turn was open for — a
 	 * background subagent asking after its turn had ended.
 	 *
@@ -1041,6 +1058,12 @@ export interface MessageResult {
 	attachments?: FileBlock[];
 	/** On `chat.html_action`'s reply: the action as its record carries it. */
 	html_action?: HtmlAction;
+	/**
+	 * The record's `observed_at`, omitted exactly when `seq` is: when the reply
+	 * this message opens began, which the sender — left out of the record's
+	 * broadcast — has no other way to learn.
+	 */
+	observed_at?: string;
 }
 
 /**
@@ -1455,6 +1478,12 @@ export type ServerNotification =
 			answering?: QuestionAnswerRecord[];
 			/** What a page sent, when it is a page's send; see `HtmlAction`. */
 			html_action?: HtmlAction;
+			/**
+			 * When the message reached the server (RFC 3339, its clock) — the
+			 * instant a turn it opened began. Absent on a record written before it
+			 * was stamped.
+			 */
+			observed_at?: string;
 	  }
 	| {
 			type: "tool_call";
@@ -1567,10 +1596,17 @@ export type ServerNotification =
 			error: string;
 			auth_failure?: AuthFailureRecord;
 			usage_limit?: UsageLimitRecord;
+			/** When the turn failed; see `tool_call`. */
+			observed_at?: string;
 	  }
-	| { type: "done" }
-	| { type: "interrupted" }
-	| { type: "process_ended" }
+	/**
+	 * `observed_at` on the three endings is when the turn ended (see
+	 * `tool_call`); also absent on the `process_ended` a restarted server
+	 * writes for a run nobody saw end.
+	 */
+	| { type: "done"; observed_at?: string }
+	| { type: "interrupted"; observed_at?: string }
+	| { type: "process_ended"; observed_at?: string }
 	| {
 			/**
 			 * The turn parked on work that outlives the tool call that started it.
@@ -1638,6 +1674,11 @@ export type ServerNotification =
 			 */
 			type: "message_ingested";
 			message_id?: string;
+			/**
+			 * When the server wrote the read point: where the reply above it ended
+			 * and the one below began. See `tool_call`.
+			 */
+			observed_at?: string;
 	  }
 	| {
 			/**

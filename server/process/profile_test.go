@@ -96,7 +96,7 @@ func TestManager_ReplacesAnIdleProcessOnAnotherProfile(t *testing.T) {
 	if m.GetProcess("sess-1") != proc {
 		t.Error("the successor is not the session's process")
 	}
-	if _, err := old.SendMessage(agent.Prompt{Text: "late"}); !errors.Is(err, ErrProcessReplaced) {
+	if _, err := old.SendMessage(agent.Prompt{Text: "late"}, time.Now()); !errors.Is(err, ErrProcessReplaced) {
 		t.Errorf("a message handed to the replaced process = %v, want ErrProcessReplaced", err)
 	}
 }
@@ -304,7 +304,7 @@ func TestManager_ReleaseProfile(t *testing.T) {
 	if m.GetProcess("other") != other || mock.session(t, "other").isClosed() {
 		t.Error("a process on another profile was stopped")
 	}
-	if _, err := idle.SendMessage(agent.Prompt{Text: "late"}); !errors.Is(err, ErrProcessReplaced) {
+	if _, err := idle.SendMessage(agent.Prompt{Text: "late"}, time.Now()); !errors.Is(err, ErrProcessReplaced) {
 		t.Errorf("a message racing the release = %v, want ErrProcessReplaced to go to a successor", err)
 	}
 
