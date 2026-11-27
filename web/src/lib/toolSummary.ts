@@ -412,6 +412,13 @@ export interface ToolVerbReading {
 	 * calls. Absent when the input names none; the call then counts once.
 	 */
 	paths?: string[];
+	/**
+	 * What a call counted as a call is named by in the summary, and the identity
+	 * its repeats are folded on: `pnpm test` twice is `pnpm test ×2`. Absent for
+	 * a file-counted call (its files name it) and for a call with nothing to name
+	 * it by, which is still counted.
+	 */
+	name?: string;
 }
 
 function filePaths(obj: Record<string, unknown>): string[] | undefined {
@@ -419,10 +426,62 @@ function filePaths(obj: Record<string, unknown>): string[] | undefined {
 	return path ? [path] : undefined;
 }
 
+// A lone `&` too: what follows a backgrounded command is another command.
+const SHELL_OPERATOR = /&&|\|\||\||;|⏎|&/;
+
+/** One shell word, quoted or not: what a `cd` or an assignment takes. */
+const SHELL_WORD = String.raw`(?:"[^"]*"|'[^']*'|\S+)`;
+const LEADING_CD = new RegExp(String.raw`^cd\s+${SHELL_WORD}\s*(?:&&|;|⏎)\s*`);
+/** A comment line ahead of the command, as a here-doc'd script opens. */
+const LEADING_COMMENT = /^#[^⏎]*⏎\s*/;
+const LEADING_ASSIGNMENT = new RegExp(
+	String.raw`^[A-Za-z_][A-Za-z0-9_]*=${SHELL_WORD}?\s+`,
+);
+
 /**
- * The verb a call is summarised under. The same table of knowledge as
- * `toolSummary`, and a Codex `Bash` is read through the same
- * `singleCommandAction`: the summary has to say what the rows under it say.
+ * What a reader recognises a command by: its first few words, before the
+ * flags, the quoted arguments and whatever it was piped or chained into. The
+ * `cd`, the variables and the comments in front are where and how it ran, or
+ * notes on it, not what ran. Nothing marks the cut — the row is one tap away
+ * and has the whole command.
+ */
+export function commandHead(command: string): string | undefined {
+	let rest = flattenCommand(command);
+	for (;;) {
+		const stripped = rest
+			.replace(LEADING_CD, "")
+			.replace(LEADING_COMMENT, "")
+			.replace(LEADING_ASSIGNMENT, "");
+		if (stripped === rest) break;
+		rest = stripped;
+	}
+	const words: string[] = [];
+	for (const word of rest.split(SHELL_OPERATOR)[0].split(/\s+/)) {
+		if (!word) continue;
+		// A flag, a quoted argument or a redirection (`2>&1`, `<<EOF`).
+		if (/^([-"'`]|\d*[<>])/.test(word) || words.length === 3) break;
+		words.push(word);
+	}
+	return words.length > 0 ? words.join(" ") : undefined;
+}
+
+function hostOf(url: string): string | undefined {
+	try {
+		return new URL(url).host || undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+const quoted = (text: string | undefined) =>
+	text === undefined ? undefined : `"${text}"`;
+
+/**
+ * The verb a call is summarised under, and what it is named by there. The
+ * same table of knowledge as `toolSummary`, and a Codex `Bash` is read through
+ * the same `singleCommandAction`: the summary has to say what the rows under
+ * it say. A search is named by what it looked for, never by where — the row
+ * has the scope.
  */
 export function toolVerb(toolName: string, input: unknown): ToolVerbReading {
 	const obj = asObject(input);
@@ -440,14 +499,19 @@ export function toolVerb(toolName: string, input: unknown): ToolVerbReading {
 			};
 		case "Bash": {
 			const action = singleCommandAction(input);
+			const path = str(action?.path);
 			if (action?.type === "read") {
-				const path = str(action.path);
 				return { verb: "read", paths: path ? [path] : undefined };
 			}
-			if (action?.type === "search" || action?.type === "listFiles") {
-				return { verb: "search" };
+			if (action?.type === "search") {
+				return { verb: "search", name: quoted(str(action.query)) };
 			}
-			return { verb: "run" };
+			if (action?.type === "listFiles") {
+				const dir = path && splitNativePath(path).at(-1);
+				return { verb: "search", name: dir ? `${dir}/` : undefined };
+			}
+			const command = str(obj.command);
+			return { verb: "run", name: command && commandHead(command) };
 		}
 		case "BashOutput":
 		case "KillShell":
@@ -455,15 +519,24 @@ export function toolVerb(toolName: string, input: unknown): ToolVerbReading {
 		case "Read":
 			return { verb: "read", paths: filePaths(obj) };
 		case "Grep":
-		case "Glob":
 		case "WebSearch":
-			return { verb: "search" };
-		case "WebFetch":
-			return { verb: "fetch" };
+			return {
+				verb: "search",
+				name: quoted(str(obj.pattern) ?? str(obj.query)),
+			};
+		case "Glob":
+			return { verb: "search", name: str(obj.pattern) };
+		case "WebFetch": {
+			const url = str(obj.url);
+			return { verb: "fetch", name: url && hostOf(url) };
+		}
 		case "TodoWrite":
 			return { verb: "todo" };
 		default:
-			return { verb: "other" };
+			return {
+				verb: "other",
+				name: splitMcpName(toolName)?.tool ?? toolName,
+			};
 	}
 }
 

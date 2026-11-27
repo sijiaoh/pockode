@@ -1514,7 +1514,7 @@ describe("MessageList following the tail", () => {
 			textMessage("m4"),
 		]);
 		const user = userEvent.setup();
-		const summary = screen.getByRole("button", { name: /Ran 2 commands/ });
+		const summary = screen.getByRole("button", { name: /Ran a,b/ });
 		// Open, m1 is its summary and both calls; folded, the summary alone.
 		const m1Parts = (parts: number[]) =>
 			layout({ partHeights: (id) => (id === "m1" ? parts : [100]) });

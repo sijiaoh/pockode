@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { toolSummary } from "./toolSummary";
+import { commandHead, toolSummary, toolVerb } from "./toolSummary";
 
 const WORK_DIR = "/Users/test/project";
 
@@ -243,5 +243,67 @@ describe("toolSummary", () => {
 			title: "Verdict: Deny · Can't verify what it reaches",
 			detail: "$DIR may be empty.",
 		});
+	});
+});
+
+describe("commandHead", () => {
+	it.each([
+		["pnpm run test", "pnpm run test"],
+		["go test ./relay/... -run TestX", "go test ./relay/..."],
+		['git commit -m "Fix it"', "git commit"],
+		["python3 -I x.py", "python3"],
+		["cd web && CI=1 pnpm test -- --run", "pnpm test"],
+		["cd a && cd b && make", "make"],
+		["cat x | rg foo", "cat x"],
+		["ls; pwd", "ls"],
+		["cat <<EOF\nhi\nEOF", "cat"],
+		["pnpm test 2>&1", "pnpm test"],
+		["cd web; pnpm test", "pnpm test"],
+		["cd web\npnpm test", "pnpm test"],
+		["pnpm dev & sleep 2", "pnpm dev"],
+		["# build it\npnpm build", "pnpm build"],
+		['cd "my dir" && make build', "make build"],
+		['FOO="a b" BAR= node x.js', "node x.js"],
+		["docker compose up web db", "docker compose up"],
+	])("reads %j as %j", (command, head) => {
+		expect(commandHead(command)).toBe(head);
+	});
+
+	it("has nothing to say for a command that is all flags", () => {
+		expect(commandHead("-x")).toBeUndefined();
+	});
+});
+
+describe("toolVerb names", () => {
+	it("names a Codex search by its query and a listing by its directory", () => {
+		expect(
+			toolVerb("Bash", {
+				command: "rg foo src",
+				command_actions: [{ type: "search", query: "foo", path: "src" }],
+			}),
+		).toEqual({ verb: "search", name: '"foo"' });
+		expect(
+			toolVerb("Bash", {
+				command: "ls web/src",
+				command_actions: [{ type: "listFiles", path: "/w/web/src" }],
+			}),
+		).toEqual({ verb: "search", name: "src/" });
+	});
+
+	it("names a fetch by its host, and nothing for a URL it cannot read", () => {
+		expect(toolVerb("WebFetch", { url: "https://a.dev:8080/x?y" }).name).toBe(
+			"a.dev:8080",
+		);
+		expect(toolVerb("WebFetch", { url: "not a url" }).name).toBeUndefined();
+	});
+
+	it("names a web search by its query", () => {
+		expect(toolVerb("WebSearch", { query: "vitest" }).name).toBe('"vitest"');
+	});
+
+	it("names any other tool by its row's title, without the MCP server", () => {
+		expect(toolVerb("mcp__pockode__work_get", {}).name).toBe("work_get");
+		expect(toolVerb("pockode:work_get", {}).name).toBe("work_get");
+		expect(toolVerb("TaskOutput", {}).name).toBe("TaskOutput");
 	});
 });
