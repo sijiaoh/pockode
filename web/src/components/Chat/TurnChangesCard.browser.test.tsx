@@ -144,7 +144,7 @@ describe("going to a subagent's call", () => {
 		await user.click(screen.getByRole("button", { name: /^a\.ts/ }));
 		await user.click(
 			screen.getByRole("button", {
-				name: "Go to the call that made this change",
+				name: "Go to call that made this change",
 			}),
 		);
 

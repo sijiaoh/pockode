@@ -531,7 +531,7 @@ much, to what was left behind — separated by `·` as a group summary's are:
 | Entry | Shown | What it counts |
 |---|---|---|
 | `Worked 2m 13s` | when the reply's span was measured and is at least 1s | the reply's span, from the moment it opened to the moment it ended ([below](#where-the-duration-comes-from)) |
-| `14 tool calls` | always — the line exists only for a reply with a call | the distinct `tool_use_id`s of the message's top-level `tool_call` and `permission_request` parts, whatever their status and however they are drawn. A failed, denied or interrupted call was still made — including one cut short while its card still stood in its row's place, which leaves only the card. A subagent is one call: its own steps are counted on its row's [second line](#the-second-line-steps-and-what-it-is-doing), so a step left flat because its parent is not loaded (it carries `parentToolUseId`) is not counted either. A [fetch](#a-fetch-reads-on-the-row-it-came-from) filed on the row it reads is not a part of this message and is not counted; one whose row is not loaded falls through to a row of its own and counts like any row — so an older page joining can lower the count by the fetches it gives a home. The same set of calls decides whether the line exists, where it goes ([above](#the-turns-changes): after the last call's block) and what it counts |
+| `14 tool calls` | always — the line exists only for a reply with a call | the distinct `tool_use_id`s of the message's top-level `tool_call` and `permission_request` parts, whatever their status and however they are drawn. A failed, denied or interrupted call was still made — including one cut short while its card still stood in its row's place, which leaves only the card. A subagent is one call: its own steps are counted on its row's [second line](#the-second-line-steps-and-what-it-is-doing), so a step left flat because its parent is not loaded (it carries `parentToolUseId`) is not counted either — though it is work drawn where it arrived, so the line still goes below it, and a reply whose loaded half has only such steps is [cut](#where-the-duration-comes-from) like the top of the loaded history. A [fetch](#a-fetch-reads-on-the-row-it-came-from) filed on the row it reads is not a part of this message and is not counted; one whose row is not loaded falls through to a row of its own and counts like any row — so an older page joining can lower the count by the fetches it gives a home. The same calls, with those flat steps, decide whether the line exists and where it goes ([above](#the-turns-changes): after the last call's block) |
 | `3 files changed` | when the turn changed a file | `turnChanges`' files — every file the card lists, folded behind `Show N more files` or not |
 
 The `+N −M` totals stay where the header always had them, at the right end, so
@@ -735,9 +735,10 @@ that is rarely long.
 about it is behind hover. On a phone the header has room for it: the section's
 label gives way first, and the actions never move.
 
-**Accessibility.** The button's name says which call: *"Go to the call that made
-this change"* for a file changed once, *"Go to call 2 · Edit"* when its changes
-are numbered. The jump moves focus to the row, whose own name is read; there is
+**Accessibility.** The button's name says which call, and starts with its
+visible words so a voice command by them finds it (WCAG 2.5.3): *"Go to call
+that made this change"* for a file changed once, *"Go to call 2 · Edit"* when
+its changes are numbered. The jump moves focus to the row, whose own name is read; there is
 no live announcement on top of it.
 
 ### What the work line leaves out

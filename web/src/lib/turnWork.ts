@@ -23,9 +23,9 @@ export interface TurnWork {
  * The calls are the distinct `tool_use_id`s of the top-level `tool_call` and
  * `permission_request` parts, whatever their status. A part carrying
  * `parentToolUseId` is a subagent's step left flat because its call is not
- * loaded: it belongs to that call, which counts as one, so it neither counts
- * nor places the line. Undefined for a reply that made no call — it draws no
- * line at all.
+ * loaded: it belongs to that call, which counts as one, so it is not counted —
+ * but it is work, drawn where it arrived, so the line goes below it too.
+ * Undefined for a reply that made no call — it draws no line at all.
  *
  * `olderPagesAbove` says the message is the first loaded one with history
  * still above it. Unless a read point opened it, its opening may be on the
@@ -38,22 +38,31 @@ export function turnWork(
 ): TurnWork | undefined {
 	const calls = new Set<string>();
 	let lastCallPartId: string | undefined;
+	let flatSteps = false;
 	for (const part of message.parts) {
-		if (part.type === "tool_call" && !part.parentToolUseId) {
-			calls.add(part.tool.id);
-		} else if (part.type === "permission_request" && !part.parentToolUseId) {
-			calls.add(part.request.toolUseId);
-		} else {
+		if (part.type !== "tool_call" && part.type !== "permission_request") {
 			continue;
 		}
+		// Work all the same, so the line goes below it — and a reply whose
+		// loaded half holds nothing else still has its changes card.
 		lastCallPartId = part.id;
+		if (part.parentToolUseId) {
+			flatSteps = true;
+		} else {
+			calls.add(
+				part.type === "tool_call" ? part.tool.id : part.request.toolUseId,
+			);
+		}
 	}
 	if (lastCallPartId === undefined) return undefined;
 
+	// A step left flat with no call loaded above it says outright that the
+	// reply's start is on a page not loaded.
 	const cut =
-		olderPagesAbove &&
-		!message.openedAtReadPoint &&
-		message.openedAt === undefined;
+		(calls.size === 0 && flatSteps) ||
+		(olderPagesAbove &&
+			!message.openedAtReadPoint &&
+			message.openedAt === undefined);
 	if (cut) return { lastCallPartId };
 
 	const { openedAt, endedAt } = message;

@@ -156,7 +156,7 @@ function EditSection({
 							label={
 								step
 									? `Go to call ${step} · ${run.name}`
-									: "Go to the call that made this change"
+									: "Go to call that made this change"
 							}
 							onClick={() => goToCall(run.id)}
 						/>

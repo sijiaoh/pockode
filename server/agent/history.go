@@ -98,9 +98,9 @@ type EventRecord struct {
 	//
 	// Set on tool_call, tool_result, permission_response, done, interrupted,
 	// process_ended, error and message_ingested (see ObserveAt), and on message
-	// (chat.Client.sendEvent); on none written before the field existed. Also absent where no honest moment exists: a background_lost
-	// result, and the process_ended a restarted server writes for a run nobody
-	// saw end. A record copied into a fork keeps its moment — it is when that
+	// (chat.Client.sendEvent); on none written before the field existed. Also
+	// absent where no honest moment exists: a background_lost result, and the
+	// process_ended a restarted server writes for a run nobody saw end. A record copied into a fork keeps its moment — it is when that
 	// event happened, which copying does not change. A pointer for the reason
 	// AskedAt is.
 	ObservedAt *time.Time `json:"observed_at,omitempty"`

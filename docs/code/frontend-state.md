@@ -1190,7 +1190,8 @@ placeholder from the send's answer. A reply that opened without a message
 `turnWork` (`lib/turnWork.ts`) reads the work line's span and call count off a
 settled reply; `MessageList` tells it when the reply is the first loaded one
 with older pages above, which without an `openedAt` may be the back half of a
-cut reply, so it counts nothing then.
+cut reply, so it counts nothing then — nor when the reply's only calls are a
+subagent's steps left flat, which says the same thing outright.
 
 ### Why Pure Function Instead of Store
 

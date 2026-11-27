@@ -459,6 +459,27 @@ describe("TurnChangesCard", () => {
 			expect(card()).toHaveAccessibleName("1 file changed");
 		});
 
+		// A subagent's steps left flat by the page boundary are the loaded
+		// half's work: its files are listed, below them, with nothing counted.
+		it("lists the files of a reply whose only calls are flat steps", () => {
+			const step = (part: ContentPart) => ({
+				...part,
+				parentToolUseId: "task-9",
+			});
+			render(
+				<MessageItem
+					sessionId="s"
+					message={message("complete", [
+						step(edit("1", "/repo/a.ts", "a", "b")),
+						text("1", "Done."),
+					])}
+				/>,
+			);
+			const group = card() as HTMLElement;
+			expect(group).toHaveAccessibleName("1 file changed");
+			expect(follows(group, screen.getByText("Done."))).toBe(true);
+		});
+
 		it("gives each reply a read point split off its own span", () => {
 			render(
 				<MessageItem
@@ -540,7 +561,7 @@ describe("TurnChangesCard", () => {
 			await openFile(/^a\.ts,/);
 			await user.click(
 				screen.getByRole("button", {
-					name: "Go to the call that made this change",
+					name: "Go to call that made this change",
 				}),
 			);
 
