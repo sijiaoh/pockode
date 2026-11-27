@@ -76,7 +76,7 @@ of it that already shipped.
 | | Claude | Codex |
 |---|---|---|
 | Identity | `tool_use.id` on an `assistant` message | `item.id` on `item/started` |
-| Name | `tool_use.name`, the real tool name | item type, mapped to Pockode's names (`commandExecution`→`Bash`, `fileChange`→`Edit`, `imageView`→`Read`, MCP → `server:tool`) |
+| Name | `tool_use.name`, the real tool name | item type, mapped to Pockode's names (`commandExecution`→`Bash`, `fileChange`→`Edit`, `imageView`→`Read`, MCP → `server:tool`, and the rest [below](#codex-items-beyond-commands-patches-and-mcp)) |
 | Input | `tool_use.input`, verbatim | rebuilt per item type (`toolCallOf`) |
 | Result | `tool_result` block on a `user` message | `item/completed` |
 | Failure | `tool_result.is_error` | item `status` ∈ `inProgress`/`completed`/`failed`/`declined` |
@@ -112,6 +112,80 @@ recorded here because it is a property of the engines, not of the client.
 three runs: one `tool_call`, one `permission_request`, one `tool_result`). An
 older CLI did, and a comment in the reducer still described that world. Nothing
 here may assume a second announcement arrives.
+
+### Codex items beyond commands, patches and MCP
+
+Until codex-cli 0.171.0's items were wired up, `toolCallOf` read four item
+types and dropped every other tool-shaped one on the floor, so a turn that
+searched the web, generated an image or waited on a subagent showed nothing at
+all for it — not even a row saying it happened. The `ThreadItem` union of
+0.171.0's app-server schema (`codex app-server generate-json-schema`) holds
+these tool-shaped items besides the four, and each becomes a tool call under a
+Pockode name, by the same rules as the others: the input rebuilt field by field
+(`server/agent/codex/tool_items.go`), the result from `item/completed`, failure
+from `status`:
+
+| Item | Pockode name | Input | Result |
+|---|---|---|---|
+| `webSearch`, `action.type` `search` or `other`, or no action | `WebSearch` | `query`, and `queries` when the action names several | the `results` entries that name a `url`, as Claude's result shape (`Links: [{title, url}]`); empty when there are none. The item has no `status`, so it never fails |
+| `webSearch`, `action.type` `openPage` / `findInPage` | `WebFetch` | `url`, and `pattern` for `findInPage` | empty: Codex hands the page to the model and reports none of it |
+| `imageGeneration` | `GenerateImage` | `prompt`, only when the start carries `revisedPrompt` — 0.171.0's does not | the `revisedPrompt` as a text block, then the image at `savedPath` as a file block, copied into the attachment store the way `imageView`'s is (`viewedImage`); a `failure` worded from its kind — `usageLimitExceeded` says the limit was reached and, with `resetsAt`, when it resets |
+| `sleep` | `Sleep` | `duration_ms`, the wait asked for | empty. The item's `durationMs` is what was asked, not a measurement, so it is not passed as one: the row's time is the observed one |
+| `collabAgentToolCall`, any `tool` but `spawnAgent` | `AgentControl` | `action` (the `tool`: `wait`, `sendInput`, `sendMessage`, `followupTask`, `resumeAgent`, `interruptAgent`, `closeAgent`, `listAgents`), `agents` (each receiver's agent path, where its spawn named one; `null` in its place otherwise — a thread id is no name), `prompt` when there is one | the receivers' states (`agentsStates`) as one line each, `<agent path>: <status>` (`agent` for one with no path), the named receivers first and any other state after them; failure from `status` |
+| `dynamicToolCall` | `<namespace>:<tool>`, or `dynamic:<tool>` with no namespace — an MCP-shaped name, since that is what it is: a tool the client offered | `arguments`, as for MCP | the `inputText` items joined; an image or audio item is not drawn and is counted in a last line (*1 image not shown*); failure from `status` / `success` |
+
+Five decisions inside that table:
+
+- **A web search reuses Claude's names, not a name of its own.** It is the same
+  call a reader already knows from Claude — a query, or a page — and the row,
+  the group summary's `search` / `fetch` verbs and the host naming all apply
+  unchanged. Its result is written in Claude's result shape for the same
+  reason: the one reading of a search result the frontend has
+  (`lib/webSearchResult.ts`) then draws Codex's links too. What Codex does not
+  report — a page's text, or a search with no usable entries — the body says
+  is not reported rather than drawing an empty section
+  ([tool-call-ui.md](tool-call-ui.md#the-remaining-tool-kinds)).
+- **`results` is read, though the schema calls it opaque.** The design first
+  left it unread on the strength of the schema's word; measured on 0.171.0, a
+  search's entries were `{type: "text_result", title, url, snippet, domain,
+  ref_id}`, and a body saying Codex reported nothing would have been false.
+  Only an entry's `url` and `title` are read, and an entry without a `url` is
+  passed over, so a change in the shape costs links, never a broken row. A
+  page open's one entry is the page itself, its snippet a line count
+  (*Total lines: 455*), so it adds nothing and is not read.
+- **A web search is announced on completion.** Measured on 0.171.0,
+  `item/started` carries `query: ""` and `action: null`, so there is nothing to
+  name the call by when it starts. It is announced at `item/completed`,
+  immediately followed by its result: a row that appears settled is honest, a
+  running row with nothing to name it by followed by a second announcement is
+  not — nothing in this model expects one ([above](#the-call-and-its-result)).
+  A start that does name its query or page is announced there, and not again.
+  The cost is a search cut off before it completes: it leaves no row, as it
+  left none before.
+  An image generation is announced at `item/started` either way — it ran 14s
+  when measured — with no prompt: 0.171.0's start carries `revisedPrompt:
+  null` and no `savedPath`, its completion both, plus `result`, the image again
+  as base64, which the schema does not list and which is not read.
+- **A generated image is not a file change.** It is written under Codex's own
+  directory (`~/.codex/generated_images/<thread>/<item>.png`), not the work
+  directory, and it is an artefact the agent made rather than an edit to
+  review, so it goes where `imageView`'s image goes — the row's attachment —
+  and not into the turn's changes. A completion with no `savedPath` is a file
+  block marked unavailable, said rather than decoded from the base64 copy.
+- **`dynamicToolCall` cannot arrive today.** Dynamic tools are tools the
+  client registers on `thread/start`, and Pockode registers none. It is mapped
+  anyway because the cost is one case and the alternative is a call that
+  vanishes the day one is registered — which is exactly the bug this section
+  closes. `sleep` and the agent calls are mapped from the schema too: the CLI
+  could not be made to produce them on demand, so their shapes are the
+  schema's, not a measurement's.
+
+Not tool calls, and still not drawn: `plan` (the agent's own plan text — the
+`turn/plan/updated` stream is the plan's channel), `contextCompaction`,
+`enteredReviewMode` / `exitedReviewMode`, `hookPrompt`, and
+`functionCallOutput`, which 0.171.0 added: the output of a call announced as
+some other item, with no call of its own to join to. What it carries in
+practice is unmeasured, and it is logged at debug and dropped until it is.
 
 ### Live progress
 
@@ -184,6 +258,7 @@ says what is true now.*
 | `tool_result` + `subtype: "background_started"` | yes | …and it is a placeholder; the work is still running |
 | `tool_result` + `subtype: "background_result"` | yes | the real outcome of that work, as the CLI reported it |
 | `tool_result` + `subtype: "background_lost"` | yes | …or the outcome Pockode wrote itself, because the CLI never will |
+| `tool_result` + `work_ref` | yes | …and the call acted on *this* work item, which was titled so at that moment ([below](#a-call-on-pockodes-own-work)) |
 | `tool_activity` | **no** | what a call that has not returned is doing right now |
 | `text` / `tool_call` / `tool_result` + `parent_tool_use_id` | yes | …and it happened inside *that* subagent call, not in the main conversation |
 
@@ -225,15 +300,29 @@ interface ToolRun {
     seenAt?: Date
     /** A subagent call's own text and calls, in arrival order. Replay-safe. */
     children?: ContentPart[]
+    /** The work item a Pockode work tool acted on, as of the call. Replay-safe. */
+    workRef?: WorkRef
 }
 
 type ToolRunStatus = 'running' | 'background' | 'success' | 'error' | 'interrupted'
 
 interface ToolFetch {
     id: string                 // the tool_use_id of the call that fetched this
+    /** running until its result arrives; interrupted when what ends a running run ended it first. */
+    state: 'running' | 'returned' | 'interrupted'
     result?: string            // read exactly as a run's own outcome is: contents first
-    contents?: ContentBlock[]  // both absent = the fetch never returned at all
+    contents?: ContentBlock[]  // both absent on a returned fetch = it came back empty
     isError?: boolean          // the fetch failed, not the task it was reading
+    /** The fetch waits for the task to finish (`block` not false), rather than reading at once. */
+    waits: boolean
+    /** The fetch's start on this client's clock, for its own counter — read as a run's seenAt is. */
+    seenAt?: Date
+}
+
+interface WorkRef {
+    id: string
+    type: 'story' | 'task' | 'job'
+    title: string              // as it stood when the call was made — never re-read
 }
 ```
 
@@ -336,13 +425,121 @@ Three things this is deliberately not:
   path**: a client has to read a fetch with no origin as a perfectly good call
   that simply stands alone.
 
-Nothing else emits it. Codex has no backgrounded call whose outcome a later
-tool fetches, so it has no tool shaped like this one.
+Codex has no backgrounded call whose outcome a later tool fetches, so it has no
+tool shaped like this one.
+
+**A stop is a call about an earlier call too.**
+`TaskStop` — `KillShell` before claude renamed it, which history still holds
+(2.1.330 lists `KillShell` and `KillBash` as aliases of `TaskStop`) — names a
+task the same way, by `task_id` (`shell_id` on the old name, still accepted as
+a deprecated field), and the adapter resolves it through the same map and
+stamps the same `origin_tool_use_id`. It arrives while the task is still
+running, so it resolves whenever the task was started by this process. Unlike
+a fetch it is **never filed under its origin**: stopping work is something the
+agent did, with consequences, and it keeps a row of its own; the field only
+lets that row point at the work it stopped
+([tool-call-ui.md](tool-call-ui.md#the-remaining-tool-kinds)). The origin row
+learns that it was stopped from its own `task_notification`, as it always did
+— never from the stop.
+
+**Which CLIs still fetch.** Measured on claude 2.1.330, the `init` frame offers
+`TaskStop` and neither `TaskOutput` nor `BashOutput`; the CLI keeps both, with
+`AgentOutput` and `BashOutputTool`, in a set of names it no longer offers. So
+this section, and the in-flight fetch below, are for the older CLIs Pockode
+still runs and for every history they wrote. How 2.1.330 reads a background
+task's output instead — a `Read` of its `output_file`, or `Monitor` — is
+unmeasured, and filing such a read under its origin is a separate decision.
+
+**A fetch in flight is state the reducer holds.**
+`TaskOutput` blocks for up to 30 seconds by default, and a fetch filed under its
+origin draws no row, so for those seconds nothing said the agent was waiting
+on it. The entry is therefore created `running` when the `tool_call` is filed,
+and becomes `returned` when its result arrives — carrying nothing for an empty
+answer, which is a returned fetch and not a missing one. It becomes
+`interrupted` exactly where a running run would: the turn's interrupt, a Stop's
+sweep, the process ending — on a `background` run too, whose task outlives the
+turn while the call reading it does not. A result reaching an interrupted fetch
+is kept and does not make it `returned`, as with a run. Replay settles it the same way: a fetch whose turn
+history shows ended without its result reads `interrupted`, while one reloaded
+in the middle of its own turn is still `running`, exactly as a run would be —
+the state is derived from records and endings, not from whether a result
+happens to be loaded. `waits` is read off the fetch's own input (`block`, true
+when absent) and only chooses a word. `seenAt` is a run's `seenAt` for the
+fetch's own `tool_call`: when this client saw it arrive, or its `observed_at`
+carried over through the history page's `server_time` on a reload, and absent
+without either — then no counter is drawn
+([above](#observed-times-and-reported-durations)).
 
 What the frontend does with it — when a fetch is filed under the row it names,
 when it keeps a row of its own, and why that is decided as the call arrives
 rather than when its result does — is in
 [code/frontend-state.md](code/frontend-state.md#a-fetch-filed-under-the-call-it-reads).
+
+### A call on Pockode's own work
+
+Pockode's work tools (`story_create`, `task_start`,
+`step_done`, … — [code/work-system.md](code/work-system.md#work-tools)) act on
+a work item, and the row for one wants to say which item and link to it. The
+input names it for most calls (`id`, `work_id`, `story_id`), but a creation
+names none — the id exists only once the call has returned, inside the
+executor's result prose (`Created task "…" (ID: …)`) — and no input carries the
+title.
+
+So the server stamps the result, exactly as it stamps a page tool's result with
+its page ([`HTMLPage`](agent-event.md#eventrecord-serialization),
+`process.pageCalls`): a `workCalls` beside it notes a Pockode work tool's
+`tool_call` by name, and when its result arrives successful, writes
+`work_ref: {id, type, title}` onto the `tool_result` before it is recorded or
+broadcast. For a call whose input names the work, the id is the input's and the
+type and title are read from the work store when the `tool_call` is noted — so
+a `work_delete` still says what it deleted. For a creation the id is the one
+the result reports — read by a parser kept beside the executor's own wording
+(`work.IDFromCreateResult`, tested against it, as `htmlpage.IDFromResult` is) —
+and the type and title are read once the result is in.
+
+That is an event and stays one:
+
+- **It says what was true when the call was made**, and stays true. The title
+  is the one the work had then; renaming the work later leaves the record — and
+  the row — saying the old one, the rule a work event line already follows
+  ([code/work-system.md](code/work-system.md#rendering-in-the-transcript)).
+- **It carries no status, no step and no activity.** Not even the status the
+  call itself just set: `story_start` leaves a story `active`, and a record
+  saying so would be wrong the moment the story stops. Whatever is shown about
+  the work *now* is read from the work store by `id`, by whoever shows it.
+- **Absent is ordinary.** A failed call, a call whose id names no work, a
+  comment edit (its input names a comment, not a work), and every record
+  written before this existed carry none, and a client reads the input's id
+  instead, where there is one.
+
+Only the main server can stamp it: the MCP process is a proxy and the executor
+never learns the CLI's tool call id, which is the same reason pages are stamped
+there. Both engines go through it, so a Codex `pockode:task_create` is stamped
+like a Claude `mcp__pockode__task_create`. `workRef` on `ToolRun` is copied
+from the record and nothing else.
+
+As built:
+
+- **The pieces.** `agent.PockodeTool` reads the bare tool name off either
+  engine's (`htmlpage.IsPageTool` takes the bare name too now);
+  `work.ToolTarget` is the table of which tool names its work by which argument
+  (`id`, `work_id`, `story_id`) and which two create one; `work.CreateResult`
+  is the executor's wording and `work.IDFromCreateResult` reads it back from
+  the end, since the quoted title before the id may hold anything. The work
+  store reaches the process through `Manager.SetWorkLookup`; a manager given
+  none stamps nothing.
+- **Which calls are stamped.** The twelve whose input names a work, and the two
+  creations. A comment edit, `story_list` and the role tools act on no work
+  and never are.
+- **The title is read when the `tool_call` arrives**, which both engines send
+  before the MCP call runs (Claude's assistant message ahead of its tool
+  execution, Codex's `item/started`). Were a CLI ever to report the call only
+  after running it, a `work_delete` would find nothing and go unstamped, and a
+  retitling `work_update` would record the new title — absent or late, never
+  a wrong work.
+- **A client reads `work_ref` strictly**: an id and a known type, or nothing.
+  A missing title reads as empty rather than dropping the work, since the id
+  is still where *Open* leads.
 
 ### `tool_activity` is not persisted
 
@@ -542,12 +739,9 @@ subagent nests exactly as a Claude one does
 
 ## Out of scope
 
-- **Codex item types Pockode still drops** — `webSearch`, `dynamicToolCall`,
-  `collabAgentToolCall`, `sleep`, `imageGeneration` (a spawn is drawn, as a
-  subagent call — above — whether `subAgentActivity` or a `spawnAgent`
-  `collabAgentToolCall` reports it). Each is
-  tool-shaped and each would fit this model unchanged, which is the point of
-  having one; adding them is its own decision about what belongs in a transcript.
+- **`functionCallOutput`**, until what it carries is measured
+  ([above](#codex-items-beyond-commands-patches-and-mcp)). Every other
+  tool-shaped Codex item is now a tool call.
 - **Per-call token cost.** Claude's `task_progress.usage` and
   `task_notification.usage` report it. Usage is session state with an owner
   ([usage-display-ui.md](usage-display-ui.md)), and attributing it per call is a

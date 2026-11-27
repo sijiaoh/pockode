@@ -104,6 +104,7 @@ import { TurnChangesCard } from "./TurnChangesCard";
 import TurnTail from "./TurnTail";
 import { useTranscriptView } from "./transcriptViewContext";
 import { keepClearProps } from "./useTranscriptScroll";
+import { WorkRefLine } from "./WorkRefLine";
 
 interface SystemItemProps {
 	/** The part's, naming its body in full screen. */
@@ -195,6 +196,7 @@ function WorkEventItem({
 	// The subject's own title, even where the collapsed line names something
 	// else (a finished child): expanded, it sits next to the link into that work.
 	const { workId, title } = workEventSubject(subtype, meta);
+	const child = meta?.child;
 	const view = useTranscriptView();
 	const source = useMemo<FullScreenSource>(
 		() => ({
@@ -246,6 +248,16 @@ function WorkEventItem({
 								</button>
 							)}
 						</div>
+					)}
+					{/* A line about a subtask (`child_*`, `wait_stranded`) opens it
+					    too: its Details opens the work it was delivered to. */}
+					{child && (
+						<WorkRefLine
+							label="Subtask"
+							title={child.title}
+							openId={child.id}
+							onOpen={onOpenWorkDetail}
+						/>
 					)}
 					<HeaderlessMainBlock
 						name="message"
@@ -1881,6 +1893,7 @@ const MessageItem = memo(function MessageItem({
 						// stopped a superseded reply from claiming to still be running.
 						writing={message.status === "sending" || !!isOpenTurn}
 						placeholder={message.status === "sending"}
+						awaitedFetch={message.awaitedFetch}
 					/>
 				) : (
 					<MessageActions

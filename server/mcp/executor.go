@@ -385,7 +385,7 @@ func (e *Executor) createWork(ctx context.Context, args json.RawMessage, storyID
 		return "", err
 	}
 
-	return fmt.Sprintf("Created %s %q (ID: %s)", created.Type(), created.Title, created.ID), nil
+	return work.CreateResult(created), nil
 }
 
 func (e *Executor) workUpdate(ctx context.Context, args json.RawMessage) (string, error) {

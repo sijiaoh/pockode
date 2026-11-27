@@ -984,6 +984,15 @@ because only it holds the map
 fetch takes no row at all, and what it brought back is recorded on that call's
 run as an entry in `fetches`.
 
+A stop (`TaskStop`, `KillShell`) carries the same field and is never filed: it
+is an act with consequences, and keeps its row (`isStopTool`, `lib/taskStop.ts`,
+is the reducer's one exception). The field is kept on its run as
+`originToolUseId`, and its body's `Go to call` is offered only while that row is
+loaded — `loadedStopTargets`, read over the whole transcript and provided by
+`StopTargetsContext`, for the reason `SubagentResumesContext` is a context: the
+work stopped is usually in an earlier bubble than the stop. A jump that could
+land nowhere would be a button that does nothing.
+
 Four rules, and each of them is the answer to a way of getting this wrong:
 
 - **Decided when the `tool_call` arrives, once, and never re-decided.** The call
@@ -1008,7 +1017,14 @@ Four rules, and each of them is the answer to a way of getting this wrong:
   task, it did not end it, and a failed *fetch* says nothing about the task at
   all — and not its `result`, which is what this call handed the agent. A fetch
   whose result never arrives (an interrupted turn) leaves an entry carrying
-  nothing, and a renderer draws nothing for it. An entry holds its text under
+  nothing, and the body draws no block for it. The entry has a `state` —
+  `running` from the moment it is filed, `returned` with its result,
+  `interrupted` by whatever sweep interrupts a running run (`settleRunningToolParts`,
+  which reaches the fetches of a `background` run it otherwise leaves alone),
+  replay included — so a fetch still waiting can be told from one that never
+  came back ([tool-call-model.md](../tool-call-model.md#a-call-about-an-earlier-call)).
+  A late result reaching an interrupted entry is kept and leaves it
+  `interrupted`, a run's rule. An entry holds its text under
   the same two names a run does — `result` and `contents` — and `toolRunText`
   reads either, so which of the two is the answer stays one rule rather than one
   per caller.
@@ -1018,6 +1034,17 @@ Unlike `activity` and `output` below, `fetches` is derived from persisted
 this document keep coming back to: a fetch is the event "at this moment, this
 much had been produced", while a progress line is the state "this is what it is
 doing now".
+
+**The turn waiting on a fetch is the bubble's `awaitedFetch`.** A filed fetch
+draws no row, so nothing in the parts says the main agent's newest call is
+one; the tail line needs exactly that
+([turn-progress-ui.md](../turn-progress-ui.md#23-what-it-says)). The reducer
+sets it on the open bubble when it files a fetch that has no
+`parent_tool_use_id` — a subagent's fetch is not what the turn is doing — and
+drops it with the fetch's result, with the sweep that settles running fetches,
+and with the main agent's next text, thinking or call. It is live state derived
+from records, like the bubble's `status`, and it replays the same way: a page
+reloaded in the middle of the fetch still has it.
 
 What the renderers make of the list — where it lands on the row and in the body,
 why each fetch keeps its own block, and what a failed or empty one says — is

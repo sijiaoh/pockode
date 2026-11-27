@@ -120,6 +120,10 @@ export function fullScreenSubject(
 			const path = str(obj.file_path);
 			return path ? { kind: "path", path } : undefined;
 		}
+		case "NotebookEdit": {
+			const path = str(obj.notebook_path);
+			return path ? { kind: "path", path } : undefined;
+		}
 		case "Grep":
 		case "Glob":
 			return text(obj.pattern);

@@ -29,8 +29,10 @@ import MessageItem, {
 	type PermissionChoice,
 	type PromptError,
 } from "./MessageItem";
+import { OpenWorkDetailContext } from "./openWorkDetailContext";
 import ScrollToBottomButton from "./ScrollToBottomButton";
 import { anchorCandidateProps } from "./scrollAnchor";
+import { StopTargetsContext, useStopTargetsValue } from "./stopTargetsContext";
 import {
 	SubagentResumesContext,
 	useSubagentResumesValue,
@@ -319,6 +321,7 @@ function MessageList({
 	const openIndex = openAssistantIndex(messages);
 	const unfiled = useUnfiledChildrenValue(messages);
 	const resumes = useSubagentResumesValue(messages);
+	const stopTargets = useStopTargetsValue(messages);
 	const discardedContext = useDiscardedMessagesValue(messages, hasMoreHistory);
 
 	// Where the view is meant to be now, so the target becomes the anchor: the
@@ -450,53 +453,57 @@ function MessageList({
 							<OpenedThoughtsContext value={openedThoughtIds}>
 								<UnfiledChildrenContext value={unfiled}>
 									<SubagentResumesContext value={resumes}>
-										<DiscardedMessagesContext value={discardedContext}>
-											<TranscriptViewContext value={view}>
-												<ToolJumpContext value={toolJump}>
-													{messages.map((message, index) => {
-														return (
-															<div
-																key={message.id}
-																data-message-id={message.id}
-																// This wrapper is the row the view can be held still over
-																// (see `scrollAnchor`).
-																{...anchorCandidateProps}
-																className="py-1.5 sm:py-2"
-															>
-																<MessageItem
-																	message={message}
-																	sessionId={sessionId}
-																	// Top of the loaded transcript is the session's own start
-																	// only once there are no older pages left above it.
-																	isFirst={index === 0 && !hasMoreHistory}
-																	olderPagesAbove={
-																		index === 0 && hasMoreHistory
-																	}
-																	isOpenTurn={index === openIndex}
-																	isCodex={isCodex}
-																	onPermissionRespond={onPermissionRespond}
-																	onAnswerQuestion={onAnswerQuestion}
-																	promptError={promptError}
-																	onOpenWorkDetail={onOpenWorkDetail}
-																	onOpenFile={onOpenFile}
-																	onForkMessage={onForkMessage}
-																	onSignIn={onSignIn}
-																	onSwitchAccount={onSwitchAccount}
-																	isDiscarded={
-																		message.role === "user" &&
-																		message.messageId !== undefined &&
-																		discardedContext.discarded.has(
-																			message.messageId,
-																		)
-																	}
-																	onRestoreMessages={onRestoreMessages}
-																/>
-															</div>
-														);
-													})}
-												</ToolJumpContext>
-											</TranscriptViewContext>
-										</DiscardedMessagesContext>
+										<StopTargetsContext value={stopTargets}>
+											<DiscardedMessagesContext value={discardedContext}>
+												<TranscriptViewContext value={view}>
+													<ToolJumpContext value={toolJump}>
+														<OpenWorkDetailContext value={onOpenWorkDetail}>
+															{messages.map((message, index) => {
+																return (
+																	<div
+																		key={message.id}
+																		data-message-id={message.id}
+																		// This wrapper is the row the view can be held still over
+																		// (see `scrollAnchor`).
+																		{...anchorCandidateProps}
+																		className="py-1.5 sm:py-2"
+																	>
+																		<MessageItem
+																			message={message}
+																			sessionId={sessionId}
+																			// Top of the loaded transcript is the session's own start
+																			// only once there are no older pages left above it.
+																			isFirst={index === 0 && !hasMoreHistory}
+																			olderPagesAbove={
+																				index === 0 && hasMoreHistory
+																			}
+																			isOpenTurn={index === openIndex}
+																			isCodex={isCodex}
+																			onPermissionRespond={onPermissionRespond}
+																			onAnswerQuestion={onAnswerQuestion}
+																			promptError={promptError}
+																			onOpenWorkDetail={onOpenWorkDetail}
+																			onOpenFile={onOpenFile}
+																			onForkMessage={onForkMessage}
+																			onSignIn={onSignIn}
+																			onSwitchAccount={onSwitchAccount}
+																			isDiscarded={
+																				message.role === "user" &&
+																				message.messageId !== undefined &&
+																				discardedContext.discarded.has(
+																					message.messageId,
+																				)
+																			}
+																			onRestoreMessages={onRestoreMessages}
+																		/>
+																	</div>
+																);
+															})}
+														</OpenWorkDetailContext>
+													</ToolJumpContext>
+												</TranscriptViewContext>
+											</DiscardedMessagesContext>
+										</StopTargetsContext>
 									</SubagentResumesContext>
 								</UnfiledChildrenContext>
 							</OpenedThoughtsContext>

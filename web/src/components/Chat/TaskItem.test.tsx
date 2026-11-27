@@ -343,7 +343,14 @@ describe("TaskItem", () => {
 				<TaskItemWithChildren
 					run={task("background", {
 						...background,
-						fetches: [{ id: "f1", result: "explored 12 files" }],
+						fetches: [
+							{
+								id: "f1",
+								state: "returned",
+								waits: true,
+								result: "explored 12 files",
+							},
+						],
 					})}
 				/>,
 			);
@@ -359,7 +366,14 @@ describe("TaskItem", () => {
 				<TaskItemWithChildren
 					run={task("background", {
 						...background,
-						fetches: [{ id: "f1", result: "explored 12 files" }],
+						fetches: [
+							{
+								id: "f1",
+								state: "returned",
+								waits: true,
+								result: "explored 12 files",
+							},
+						],
 					})}
 				/>,
 			);

@@ -3397,6 +3397,33 @@ describe("messageReducer", () => {
 			expect(runsOf(messages[0])).toMatchObject([{ htmlPage: "p3" }]);
 		});
 
+		// The work a work tool acted on, as of the call; a malformed stamp is
+		// no stamp, and the row falls back to the input's id.
+		it("carries the work a work tool acted on onto its run", () => {
+			const stamped = (work_ref: Record<string, unknown>) =>
+				normalizeEvent({
+					type: "tool_result",
+					tool_use_id: "t1",
+					tool_result: "Started",
+					work_ref,
+				});
+			let messages: Message[] = [streamingRun()];
+			messages = applyServerEvent(messages, call("t1", "pockode:task_start"));
+			messages = applyServerEvent(
+				messages,
+				stamped({ id: "w1", type: "task", title: "Design the row" }),
+			);
+			expect(runsOf(messages[0])).toMatchObject([
+				{ workRef: { id: "w1", type: "task", title: "Design the row" } },
+			]);
+			expect(stamped({ id: "w1", type: "epic", title: "x" })).toMatchObject({
+				workRef: undefined,
+			});
+			expect(stamped({ type: "task", title: "x" })).toMatchObject({
+				workRef: undefined,
+			});
+		});
+
 		// Claude reports no duration at all, and zero is how that arrives.
 		it("treats a reported duration of zero as no duration", () => {
 			expect(
@@ -3539,6 +3566,44 @@ describe("messageReducer", () => {
 			]);
 		});
 
+		// TaskStop names its task the way a fetch does, and the server resolves
+		// it the same way; but stopping work is an act with consequences, and it
+		// keeps a row of its own that points at the work.
+		describe("a call that stops an earlier call's task", () => {
+			it.each([
+				"TaskStop",
+				"KillShell",
+			])("keeps a row of its own for %s, naming the call it stopped", (toolName) => {
+				let messages: Message[] = [streamingRun()];
+				messages = applyServerEvent(messages, call("t1"));
+				messages = applyServerEvent(messages, {
+					type: "tool_result",
+					toolUseId: "t1",
+					toolResult: "Running in background with ID: bg_1",
+					isError: false,
+					subtype: "background_started",
+				});
+				messages = applyServerEvent(messages, {
+					type: "tool_call",
+					toolUseId: "s1",
+					toolName,
+					toolInput: { task_id: "bg_1" },
+					originToolUseId: "t1",
+				});
+
+				const runs = runsOf(messages[0]);
+				expect(runs).toMatchObject([
+					{ id: "t1", status: "background" },
+					{ id: "s1", name: toolName, originToolUseId: "t1" },
+				]);
+				// The stopped row learns of it from its own outcome, never
+				// from the stop.
+				expect(runs[0].fetches).toBeUndefined();
+				const turn = messages[0];
+				expect(turn.role === "assistant" && turn.awaitedFetch).toBeFalsy();
+			});
+		});
+
 		// TaskOutput: a call whose whole job is to read an earlier call's task.
 		// The server resolves which call that is (`origin_tool_use_id`) because
 		// only the adapter can turn a task id into a tool_use_id.
@@ -3622,7 +3687,10 @@ describe("messageReducer", () => {
 				let messages: Message[] = [streamingRun()];
 				messages = applyServerEvent(messages, fetchCall("f1", "t1"));
 
-				expect(runsOf(messages[0])).toMatchObject([{ id: "f1" }]);
+				const runs = runsOf(messages[0]);
+				expect(runs).toMatchObject([{ id: "f1" }]);
+				// A row that stands alone: only a stop keeps pointing elsewhere.
+				expect(runs[0].originToolUseId).toBeUndefined();
 			});
 
 			// TaskOutput's semantics do not say whether it returns the whole
@@ -3646,9 +3714,9 @@ describe("messageReducer", () => {
 				}
 
 				expect(runsOf(messages[0])[0].fetches).toEqual([
-					{ id: "f1", result: "tick 1" },
-					{ id: "f2", result: "tick 207" },
-					{ id: "f3", result: "tick 418" },
+					{ id: "f1", state: "returned", waits: true, result: "tick 1" },
+					{ id: "f2", state: "returned", waits: true, result: "tick 207" },
+					{ id: "f3", state: "returned", waits: true, result: "tick 418" },
 				]);
 			});
 
@@ -3668,7 +3736,7 @@ describe("messageReducer", () => {
 
 				expect(runsOf(messages[0])).toMatchObject([{ id: "t1" }]);
 				expect(runsOf(messages[0])[0].fetches).toEqual([
-					{ id: "f1", result: "tick 418" },
+					{ id: "f1", state: "returned", waits: true, result: "tick 418" },
 				]);
 			});
 
@@ -3689,19 +3757,191 @@ describe("messageReducer", () => {
 				messages = applyServerEvent(messages, result);
 
 				expect(runsOf(messages[0])[0].fetches).toEqual([
-					{ id: "f1", result: "tick 418" },
+					{ id: "f1", state: "returned", waits: true, result: "tick 418" },
 				]);
 			});
 
 			// An interrupted turn takes its pending calls down with it, and this
 			// one brought nothing back. The entry stays outputless so that a
-			// renderer has nothing to draw for it.
-			it("leaves a fetch that never returned carrying nothing", () => {
+			// renderer has nothing to draw for it — and says it is over, though
+			// the task it was reading carries on in the background.
+			it("interrupts a fetch the turn's interrupt cut off", () => {
 				let messages = backgrounded();
 				messages = applyServerEvent(messages, fetchCall("f1", "t1"));
 				messages = applyServerEvent(messages, { type: "interrupted" });
 
-				expect(runsOf(messages[0])[0].fetches).toEqual([{ id: "f1" }]);
+				const run = runsOf(messages[0])[0];
+				expect(run.status).toBe("background");
+				expect(run.fetches).toEqual([
+					{ id: "f1", state: "interrupted", waits: true },
+				]);
+			});
+
+			it("files a fetch running until its result arrives", () => {
+				let messages = backgrounded();
+				messages = applyServerEvent(messages, fetchCall("f1", "t1"));
+				expect(runsOf(messages[0])[0].fetches).toEqual([
+					{ id: "f1", state: "running", waits: true },
+				]);
+
+				messages = applyServerEvent(messages, {
+					type: "tool_result",
+					toolUseId: "f1",
+					toolResult: "",
+					isError: false,
+				});
+				// Empty is an answer: returned, carrying nothing.
+				expect(runsOf(messages[0])[0].fetches).toEqual([
+					{ id: "f1", state: "returned", waits: true, result: "" },
+				]);
+			});
+
+			it("reads whether the fetch waits off its input", () => {
+				let messages = backgrounded();
+				messages = applyServerEvent(messages, {
+					...fetchCall("f1", "t1"),
+					toolInput: { task_id: "bg_1", block: false },
+				});
+				expect(runsOf(messages[0])[0].fetches).toMatchObject([
+					{ waits: false },
+				]);
+			});
+
+			// The fetch's own counter needs its start on this client's clock,
+			// exactly as a run's does.
+			it("gives a fetch seen arriving live a start to count from", () => {
+				let messages = backgrounded();
+				messages = applyServerEvent(
+					messages,
+					{ ...fetchCall("f1", "t1"), observedAt: 1000 },
+					undefined,
+					{ live: true },
+				);
+				expect(runsOf(messages[0])[0].fetches?.[0].seenAt).toBeInstanceOf(Date);
+			});
+
+			// As a run's does: what came back late is kept, but the fetch did not
+			// return while anything was waiting on it.
+			it("keeps a late result on an interrupted fetch without returning it", () => {
+				let messages = backgrounded();
+				messages = applyServerEvent(messages, fetchCall("f1", "t1"));
+				messages = applyServerEvent(messages, { type: "interrupted" });
+				messages = applyServerEvent(messages, {
+					type: "tool_result",
+					toolUseId: "f1",
+					toolResult: "tick 418",
+					isError: false,
+				});
+				expect(runsOf(messages[0])[0].fetches).toMatchObject([
+					{ state: "interrupted", result: "tick 418" },
+				]);
+			});
+
+			it("interrupts a running fetch when the process ends", () => {
+				let messages = backgrounded();
+				messages = applyServerEvent(messages, fetchCall("f1", "t1"));
+				messages = applyServerEvent(messages, { type: "process_ended" });
+				expect(runsOf(messages[0])[0].fetches).toMatchObject([
+					{ state: "interrupted" },
+				]);
+			});
+
+			// Replay settles it by the same rule as a run: derived from the
+			// turn, not from whether a result happens to be loaded.
+			it("settles a replayed fetch against the session's turn", () => {
+				const records = [
+					{ type: "message", content: "go" },
+					{
+						type: "tool_call",
+						tool_use_id: "t1",
+						tool_name: "Bash",
+						tool_input: {},
+					},
+					{
+						type: "tool_result",
+						tool_use_id: "t1",
+						tool_result: "Running in background with ID: bg_1",
+						subtype: "background_started",
+					},
+					{
+						type: "tool_call",
+						tool_use_id: "f1",
+						tool_name: "TaskOutput",
+						tool_input: { task_id: "bg_1" },
+						origin_tool_use_id: "t1",
+					},
+				];
+				const fetchState = (messages: Message[]) =>
+					runsOf(messages[1])[0].fetches?.[0].state;
+
+				expect(
+					fetchState(
+						settleAgainstTurn(replayHistory(records), turnState("running")),
+					),
+				).toBe("running");
+				expect(
+					fetchState(
+						settleAgainstTurn(replayHistory(records), turnState("idle")),
+					),
+				).toBe("interrupted");
+			});
+
+			describe("the turn waiting on it", () => {
+				const awaited = (messages: Message[]) =>
+					(messages[0] as AssistantMessage).awaitedFetch;
+
+				it("marks the turn while its newest call is a filed fetch", () => {
+					let messages = backgrounded();
+					messages = applyServerEvent(messages, fetchCall("f1", "t1"));
+					expect(awaited(messages)).toEqual({
+						id: "f1",
+						originToolUseId: "t1",
+						waits: true,
+					});
+
+					messages = applyServerEvent(messages, {
+						type: "tool_result",
+						toolUseId: "f1",
+						toolResult: "tick 418",
+						isError: false,
+					});
+					expect(awaited(messages)).toBeUndefined();
+				});
+
+				it("lets the main agent's next call end it", () => {
+					let messages = backgrounded();
+					messages = applyServerEvent(messages, fetchCall("f1", "t1"));
+					messages = applyServerEvent(messages, call("t2"));
+					expect(awaited(messages)).toBeUndefined();
+				});
+
+				// A subagent's step says nothing about what the main agent does.
+				it("leaves it standing through a subagent's text", () => {
+					let messages = backgrounded();
+					messages = applyServerEvent(messages, fetchCall("f1", "t1"));
+					messages = applyServerEvent(messages, {
+						type: "text",
+						content: "looking",
+						parentToolUseId: "agent-x",
+					});
+					expect(awaited(messages)).toMatchObject({ id: "f1" });
+				});
+
+				it("is not set by a subagent's fetch", () => {
+					let messages = backgrounded();
+					messages = applyServerEvent(messages, {
+						...fetchCall("f1", "t1"),
+						parentToolUseId: "agent-x",
+					});
+					expect(awaited(messages)).toBeUndefined();
+				});
+
+				it("ends with the turn's interrupt", () => {
+					let messages = backgrounded();
+					messages = applyServerEvent(messages, fetchCall("f1", "t1"));
+					messages = applyServerEvent(messages, { type: "interrupted" });
+					expect(awaited(messages)).toBeUndefined();
+				});
 			});
 
 			// The fetch failed, not the task: the row keeps saying what the task

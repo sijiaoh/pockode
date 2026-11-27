@@ -4,7 +4,7 @@ How a tool call is drawn, on a phone first.
 [tool-call-model.md](tool-call-model.md) decides what a tool run **is**; this one
 decides how one looks and behaves. Read it first — every field named here
 (`status`, `activity`, `output`, `placeholderResult`, `fromBackground`,
-`lostWithProcess`, `fetches`, `durationMs`, `exitCode`, `startedAt`, `endedAt`, `seenAt`, and a subagent
+`lostWithProcess`, `fetches`, `durationMs`, `exitCode`, `startedAt`, `endedAt`, `seenAt`, `workRef`, and a subagent
 run's children) is its `ToolRun`, and nothing below asks for data it does not
 define.
 
@@ -241,8 +241,8 @@ not worded.
 +K`.
 
 - One segment per verb and tense: the present ones first, then the past ones,
-  each in a fixed order by consequence — edit, run, read, search, fetch, todo,
-  other (`TOOL_VERBS`) — then the thinking, then `N interrupted`, so the end a
+  each in a fixed order by consequence — edit, create, start, run, stop, read,
+  search, fetch, todo, other (`TOOL_VERBS`) — then the thinking, then `N interrupted`, so the end a
   narrow screen gives up is the least important.
 - Names are in the order they first appeared. A live group only ever appends
   at the end, so the line never reshuffles under the reader, and the names come
@@ -253,8 +253,9 @@ not worded.
 - A segment with no name to show — every call unnameable, or its names given
   up [to fit](#when-the-line-runs-out) — is worded by its count, as the line
   always was: `Edited 2 files`, `Ran 1 command`, `Read 3 files`, `Searched
-  once` / `Searched N times`, `Fetched N pages`, `Used N tools`. `Updated
-  todos` never names anything.
+  once` / `Searched N times`, `Fetched N pages`, `Used N tools`, and `Created
+  N tasks` / `Started N stories` (`work items` when the kinds are mixed),
+  `Stopped N tasks`. `Updated todos` never names anything.
 
 What a call is named by is read by `toolVerb` in `lib/toolSummary.ts`, beside
 its verb — the same table of knowledge as the row's title, and a Codex `Bash`
@@ -263,12 +264,15 @@ it say:
 
 | Verb | Counted by | Named by | Example |
 |---|---|---|---|
-| edit | distinct file — a Codex file change counts each of its files | base name | `Edited ToolRow.tsx, toolGroups.ts` |
+| edit | distinct file — a Codex file change counts each of its files; a `NotebookEdit` counts its notebook | base name | `Edited ToolRow.tsx, toolGroups.ts` |
+| create | call: `story_create`, `task_create` | its kind and the title it was given, quoted | `Created task "Design the row", story "Ship it"` |
+| start | call: `story_start`, `task_start` | its kind and the title its [`workRef`](#pockodes-own-work-calls) carries, quoted — nothing while it runs | `Started task "Design the row"` |
+| stop | call: `TaskStop`, `KillShell` | nothing — a task id names nothing a reader knows | `Stopped 1 task` |
 | read | distinct file | base name | `Read toolSummary.ts, ToolRow.tsx +1` |
 | search | call | `Grep`, `WebSearch`, a Codex search: what it looked for, quoted; `Glob`: its pattern; a Codex file listing: the directory's base name and `/`. Never where it looked — the row has the scope | `Searched "Retry-After", **/*.test.ts` |
 | run | call | the command's [head](#a-commands-head) | `Ran pnpm test, go test ./relay/...` |
-| fetch | call | the URL's host | `Fetched github.com` |
-| other | call | the row's own title: an MCP tool without its server, otherwise the tool's name | `Used work_get, story_list` |
+| fetch | call | the URL's host — a Codex page open included | `Fetched github.com` |
+| other | call | the row's own title: an MCP tool without its server (a Pockode work tool's readable title), otherwise the tool's name | `Used Get work, List stories`, `Used TaskOutput` |
 | todo | — | nothing | `Updated todos` |
 
 - **A repeated call is a repeated event; a re-read file is not.** Files are
@@ -279,9 +283,18 @@ it say:
   — are named by the shortest ending of their paths that tells them apart:
   `web/index.ts`, `server/index.ts`. The ending is joined in the separator the
   path itself uses.
-- **A call with nothing to name it by** — `BashOutput`, `KillShell`, a call
+- **A call with nothing to name it by** — a stop, a start still running, a call
   missing its command, pattern or URL — is counted and named by nobody, so it
   is only ever in `+K` or the count.
+- **Reading a task's output is not running a command.** `BashOutput` used to be
+  counted under `run` with `KillShell`, so a log read twice and a shell killed
+  read `Ran 3 commands` beside the one command that ran. A fetch is now
+  `other`, named by its tool like `TaskOutput`; a kill is `stop`.
+- **Creating and starting work rank above running a command.** They are what a
+  story's reader scrolls back for — which tasks the agent spun off — and like
+  an edit they leave something behind that outlives the turn. Every other work
+  tool is `other`, under the title its row has; a read of the work (`Get work`,
+  `List tasks`) is not a file read and is not counted under `read`.
 
 #### A command's head
 
@@ -648,6 +661,9 @@ card, the file's *Change* header and the row's
 | `Write` creating the file | the content's lines, a trailing newline opening none | `0` |
 | `Write` over a file | the content's lines | unknown — the old content is not in the call |
 | Codex | each file's hunks, so the count is the diff the row opens on; no hunks (an empty file, a pure rename) is `0`, an unknown change type is unknown | same |
+| `NotebookEdit`, `replace` | the new source's lines | unknown — the cell it replaced is not in the call |
+| `NotebookEdit`, `insert` | the new source's lines | `0` |
+| `NotebookEdit`, `delete` | `0` | unknown, as above |
 
 Whether a `Write` created or rewrote is only in its result's wording, measured
 on Claude Code 2.1.286: `File created successfully at: …` and `The file … has
@@ -663,9 +679,16 @@ What the counts do not promise, and the card does not pretend to:
   how many places matched is not in the transcript; a mixed `−` is only the
   known part.
 - **Only tool calls are seen.** `rm`, `sed -i` or `git checkout` run through
-  `Bash` change files the card cannot list; neither can `NotebookEdit`, which
-  `proposedChange` does not read yet. Hence `files changed` counts changes it
-  saw, not the state of the tree.
+  `Bash` change files the card cannot list. Hence `files changed` counts
+  changes it saw, not the state of the tree.
+- **A notebook is counted in cell lines.** A `NotebookEdit`'s counts are lines
+  of the cell's source, not of the `.ipynb` JSON a `git diff` would count, and a
+  cell's old source is never known: the CLI reports it in `tool_use_result`
+  (`old_source`, claude 2.1.330), but `proposedChange` reads the input alone so
+  that the permission card, the row and this card say one thing — the rule a
+  `Write` over a file already lives by. A notebook is never `new` or `deleted`:
+  the tool edits a notebook that exists, and deleting a cell is not deleting the
+  file.
 
 What they do promise is to stay put: everything comes from the persisted tool
 calls and results, so a reloaded turn draws the card it ended with.
@@ -1218,13 +1241,20 @@ afterwards cannot word the same call differently.
 | `TodoWrite` | `TodoWrite` | `n done / m` | — |
 | `Task` / `Agent` (the CLI renamed it; history holds both) | the agent: `subagent_type`, a Codex spawn's agent name, else `Subagent` — led by an agent mark, capped at 45% | `description`, else the prompt's first line ([below](#line-1-the-agent-then-what-it-was-asked)) | right |
 | `TaskOutput` | `TaskOutput` | the `task_id`, in mono | right |
+| `BashOutput` (history only) | `BashOutput` | the `bash_id`, in mono | right |
+| `TaskStop` / `KillShell` | the name | the `task_id` (`shell_id` on the old name), in mono | right |
+| `NotebookEdit` | `NotebookEdit`, then an `insert` or `delete` chip when `edit_mode` is one | the `notebook_path`, split as a file tool's is | **left** |
+| `GenerateImage` (Codex) | `GenerateImage` | the input's prompt, first line — none on codex-cli 0.171.0, whose start names no prompt; the row is named by the image under it instead, and the prompt is in the body ([tool-call-model.md](tool-call-model.md#codex-items-beyond-commands-patches-and-mcp)) | right |
+| `Sleep` (Codex) | `Sleep` | — (the duration is the meta) | — |
+| `AgentControl` (Codex) | the action: `Wait`, `Send input`, `Message`, `Follow up`, `Resume`, `Interrupt`, `Close`, `List agents` — led by the agent mark | the agents, each by its path's last segment, `, `-joined; one whose spawn named no path is only counted (`file_reader +1`, or `2 agents`) | right |
+| a Pockode work tool | [its own table](#pockodes-own-work-calls) | | |
 | `server:tool` (Codex MCP) or `mcp__server__tool` (Claude MCP) | the tool half | the server half as a chip, then the first scalar argument, else compact JSON | right |
 | `html_render` (Pockode's own MCP tool), while it is a row | `html_render` | `pockode` as a chip, then the `title` — never the first argument, which is as often the whole page | right |
 | `html_edit`, while it is a row | `html_edit` | `pockode` as a chip, then `<title> · from <base>`, or `from <base>` without a title | right |
 | `html_get` | `html_get` | `pockode` as a chip, then the `id` | right |
 | anything else | the name | first non-empty scalar in `input` | right |
 
-Seven decisions inside that table:
+Eight decisions inside that table:
 
 - **`TaskOutput` is in the table although many of them never draw a row.** A
   fetch of a task's output is filed under the call it reads and takes no row at
@@ -1235,6 +1265,12 @@ Seven decisions inside that table:
   `Object.values` returns rather than by any rule, so one more string in the
   input would silently rename the row. Mono because a task id is a machine key,
   not prose.
+- **The remaining kinds get a row each, and only the ones that need it get a
+  row of their own design** ([below](#the-remaining-tool-kinds)). `TaskStop`
+  and `BashOutput` are named by their key for the reason `TaskOutput` is; a
+  `NotebookEdit` reads like the file tool it is, while its body is its own.
+  The mode is a chip because `insert` and `delete` change what the row means
+  and `replace`, the default, does not.
 - **`Bash`'s detail is the command, not `description`.** The description used to
   win whenever Claude supplied one, and a paraphrase — *"Build the web package"* —
   is not what ran. On a phone this row is frequently the only audit a user
@@ -1314,6 +1350,13 @@ has a second line only when it failed.
 
 1. `run.activity` — Claude's `task_progress` line, Codex's
    `mcpToolCall/progress.message`. Prose, so no mono.
+
+   **Rung 1b**: a **fetch of this run in flight** —
+   `Waiting for output… 12s`, and what it settles into
+   ([a fetch in flight](#a-fetch-in-flight)). Prose. Above the fetched line
+   because it is the newer word: a reading is being taken now. Below the
+   activity because the activity is the task's own account of the present,
+   and on a row that has one the reader already sees something move.
 2. the **last non-empty line** of this call's machine output, from either of two
    sources: the newest **fetch** of it that came back with something
    ([below](#a-fetch-reads-on-the-row-it-came-from)) — read out of the envelope
@@ -1666,15 +1709,72 @@ Three things a fetch must not do to the row it lands on:
   reader. Neither renderer opens itself for one today; this is written down so
   that nobody adds it.
 
-Nothing on the row says a fetch is *in flight*, either. `TaskOutput` blocks for
-30 seconds by default, and for those seconds the row is unchanged — the row's
-status is the task's, and painting another call's progress onto it is the
-inference this page forbids. Nothing else in the transcript moves either: a
-message whose only part was the absorbed fetch has nothing left to draw, and it
-is dropped outright once the turn closes, the same as any turn that never got a
-first token. The cost is a transcript that looks idle for those seconds, and it
-is accepted for the reason above — the agent fetched the output in order to do
-something with it, and its next message is where that shows up.
+#### A fetch in flight
+
+`TaskOutput` blocks for 30 seconds by default, and a
+fetch filed under its origin draws no row, so for those seconds nothing in the
+transcript said what the agent was doing: the tail line read `Working`, the
+origin row — often screens above — was unchanged, and the message the fetch
+came in had nothing to draw. This used to be accepted, on the grounds that the
+row's status is the task's and painting another call's progress on it is an
+inference. The inference was never the problem; the missing statement was. The
+fetch is a call of its own with a state of its own (`ToolFetch.state`,
+[tool-call-model.md](tool-call-model.md#a-call-about-an-earlier-call)), and it
+can be shown **as the fetch** without touching what the row says about the
+task:
+
+```
+│ ⟳  Bash  pnpm dev                     [background]   4m 12s │
+│        Waiting for output… 12s                               │  ← the fetch's own line
+…
+⟳ Waiting for output… 1m 4s · Go to call                         ← the tail line
+```
+
+**On the row it reads, a line of its own.** While a fetch of the run is
+`running`, the second line reads `Waiting for output…` — `Reading output…` for a
+fetch whose input does not wait (`block: false`) — then `·` and the fetch's
+own counter, from its `seenAt`, at the tool counter's format and only from 3s.
+Prose, muted, `aria-hidden` as every moving line is. It is a rung of [the second
+line](#the-second-line-problem-1), between the activity and the fetched line.
+What it does not do is the rule above, unchanged: the glyph, the chip, the tint
+and the meta's time stay the task's — no second spinner, nothing red, nothing
+settled.
+
+**When it returns, the rung hands over in place**, so the row keeps its height:
+to the fetched line (rung 2) when the fetch brought output; to the line that was
+there before when it brought nothing or failed and an earlier fetch had shown a
+line; and, on a row that had no line before, to a settled `No output yet` (came
+back empty), `Couldn't read output` (the fetch failed — muted, not red, for the
+reason a failed fetch is not red anywhere) or `Output not read` (interrupted).
+Those three are prose and stay in the row's name, like the background outcome.
+The last of them is what makes the rule hold that a second line [appears at most
+once](#the-second-line-problem-1): a line a fetch opened is not taken away by
+the fetch ending. The word is read off the newest fetch, the one whose line the
+row was showing, and an answer whose envelope carries no output counts as empty
+— on the row, where the task's latest word is meant; the body still draws the
+envelope as it came. All of this is `toolSecondLine` (`lib/toolRun.ts`); the
+counter is the row's own `ElapsedCounter`, from `ToolSecondLine.since`.
+
+**In the body, the fetch's block is drawn while it runs**: its heading
+`Fetched output · waiting…` (or `Fetch 3 · waiting…` from two), its content the
+muted line *Waiting for the task's output.* Once it returns it is drawn as the
+table above says. An `interrupted` fetch has no block, as before — "never came
+back" is still nothing to draw — unless its result arrived after all, which is
+drawn like any returned one.
+
+**At the tail, the tail line says it**, because the reader is there and the row
+usually is not. While the main agent's newest call is a filed fetch still
+`running`, [the tail line](turn-progress-ui.md#23-what-it-says) reads `Waiting
+for output…` with the turn clock, and after it a `Go to call` that is the
+transcript's [jump](#from-a-file-to-the-calls-that-changed-it) to the row the
+fetch is filed under. It names no call and no command — the line's rule — and
+says only what the turn is doing, which is waiting. A fetch with a row of its
+own needs none of this: it is a running row at the tail, with its spinner and
+its counter, like any other call.
+
+A message whose only part was the filed fetch still has nothing to draw once the
+turn closes, and is still dropped then, the same as any turn that never got a
+first token.
 
 The fetch's own invocation — `block`, `timeout` — is drawn nowhere. It is how the
 reading was taken, not part of what the task produced, and the `task_id` is
@@ -3770,6 +3870,212 @@ renderer infers nothing.
   flat after them rather than being filed above words that came first — so the
   flat ones are the newest, and the row's latest child is read from them.
 
+## The remaining tool kinds
+
+Every tool call says what it did without being opened,
+or the reader misjudges what the agent is doing. Three Claude tools used to fall
+to the generic row, and Codex used to drop five kinds of item without a row at all
+([tool-call-model.md](tool-call-model.md#codex-items-beyond-commands-patches-and-mcp)).
+Each now gets at least a row that says honestly what happened; the ones that
+change files or fetch content get what their siblings get. Their titles and
+details are in [the table](#title-and-detail), their summary verbs in
+[the summary row](#the-summary-row); this is the rest.
+
+| Tool | Second line | Body | Turn's changes |
+|---|---|---|---|
+| `NotebookEdit` | the usual rungs | `PathLine`, then the cell, then the result | yes |
+| `TaskStop` / `KillShell` | the usual rungs | what was stopped, with `Go to call` | no |
+| `BashOutput` | the usual rungs | the invocation, then the result as it came | no |
+| Codex `WebSearch` / `WebFetch` | the usual rungs | the invocation, then the links a search reported, or a line saying nothing came back to show | no |
+| `GenerateImage` | the usual rungs; a limit reached is rung 4 | the prompt, with the image as the row's attachment | no |
+| `Sleep` | none | one line, *Asked to wait 30s* | no |
+| `AgentControl` | the usual rungs | the prompt when there is one, then each agent's state | no |
+| a dynamic tool | as an MCP call | as an MCP call | no |
+
+**`NotebookEdit` is a file change, drawn the way an `Edit` is.**
+`proposedChange` learns a `notebook` kind, read from the input alone like every
+other kind, so the permission card that asks, the row that ran and the turn's
+card that lists it say one thing. The body is `PathLine` (with *Open* into the
+Files tab), then one `Section` for the cell, then the result:
+
+| `edit_mode` | Section header | Content |
+|---|---|---|
+| `replace` (or absent) | `Cell <cell_id>`, and the `cell_type` when given | the new source, mono, clamped, with copy and ⤢ |
+| `insert` | `New <cell_type> cell after <cell_id>`, or `at the top` with no `cell_id` | the new source, as above |
+| `delete` | `Deleted cell <cell_id>` | the muted line *The deleted cell's content is not in this call.* |
+
+It is the new source and not a diff, for the reason a `Write` over a file is not
+one: the cell it replaced is not in the call. The header's `+N −M` and the
+meta's are the counts [the turn's card](#the-turns-changes) reads. An input in
+a shape this does not know — an older CLI's `cell_number`, any field beyond the
+five, a mode beyond the three, or a source missing outside a delete — gets the
+generic argument list, never a half-read cell. Drawn from the input, the cell
+is there while the call runs, its counts uncoloured until the call succeeds
+(and `not applied` once it fails); an empty source reads *Empty cell*. Among the
+turn's changes the notebook's block is headed `Cell`, where an edit's is
+`Change` and a `Write`'s `Content`.
+
+**A stop points at what it stopped.** `TaskStop` keeps a row of its own — it is
+something the agent did — and its body says what stopped. Claude answers in an
+envelope as a fetch does (`message`, `task_id`, `task_type`, `command`,
+claude 2.1.330), and the body reads it: the `message` as prose, then the
+`command` in mono; any other shape as it came. When the record names an
+`origin_tool_use_id` and that row is loaded, the result section's header carries
+`Go to call` — the transcript's [jump](#from-a-file-to-the-calls-that-changed-it),
+named *"Go to the call that started this task"* — and the jump leaves the row
+it lands on as it is. The origin row says it was stopped through its own
+outcome, as it always did; the stop does not reach into it. A failed stop (*No
+background command with ID … is running*) is an ordinary failed row, rung 4.
+"Loaded" is read over the whole transcript as it is now, so a stop whose origin
+arrives on an older page gains the jump then
+([code/frontend-state.md](code/frontend-state.md#a-fetch-filed-under-the-call-it-reads)).
+
+**`BashOutput` is history and is drawn as history.** No current CLI offers it,
+and its records never carried an origin, so it is the row a `TaskOutput` gets
+when nothing could file it: named by its key, its result drawn as it came. It
+is not filed under the shell it read by matching its `bash_id` against the
+placeholder's sentence: that would be inferring a join from prose.
+
+**A Codex web call shows what Codex reported, and says plainly when that is
+nothing.** The row is Claude's — query or page, host and path. A search's
+result arrives in Claude's shape, so the links it reported are drawn as a
+Claude search's are, under *Results*. Codex reports no page text, and a search
+may report no links; where a Claude call would have its result, the body then
+has the muted line *Codex does not report what the search found.* (*…what the
+page said.* for a page), in a section under the same label. An empty section
+would read as a search that found nothing. Several queries are all listed in
+the invocation, the first being the detail; a find-in-page names its pattern
+there too.
+
+**A generated image is shown as what it is: an image the agent made.** The
+image is the row's attachment — the strip `imageView`'s result already draws,
+with the same open-in-viewer — and the body is the prompt Codex used
+(`revisedPrompt`), whole, in a clamped section headed *Prompt*. The prompt
+arrives with the result (codex-cli 0.171.0's start names none), so while the
+call runs the body says *Codex names the prompt it used once the image is
+made.*, and once it has returned, the prompt is drawn once, as the result,
+with no invocation above it — or, where the result named none, the body says
+*Codex did not name the prompt it used.* rather than drawing an empty section. A failure reads its reason on the second line and
+under *Result*: *Image generation limit reached*, then *· resets 14:05* when
+the time is known — written by the server in its own time zone, the user's on
+the machine Pockode runs on, and as *Nov 28 12:00* on another day. It is not
+among the turn's changes: the file is under Codex's own directory, not the
+work directory.
+
+**`Sleep` is one line.** The row is enough — `Sleep`, then its time in the
+meta, counting while it waits like any call, observed rather than reported. The
+body says *Asked to wait 30s* from the input's figure (*250ms* below a second,
+`formatDuration`'s words above) — not *Waited*, which a sleep cut short by Stop
+did not — because a row that opens on nothing is a row that looks broken.
+
+**`AgentControl` is a call about subagents, not a subagent.** It wears the agent
+mark, since it is about agents, but it has no Process and no steps: it is one
+call, settling once. A `wait` can run for minutes, so its spinner and counter
+are the pulse a reader needs. The body has the prompt, when it sent one, in a
+clamped Markdown section headed *Prompt*, then each receiver's last known
+state under *Agents*, one line each as the server wrote it
+(`/root/file_reader: completed`). Without a prompt the invocation lists the
+call's arguments. In a group summary it is named by its title, `Used Wait`.
+
+## Pockode's own work calls
+
+An agent driving a story calls Pockode's work tools —
+creates a task, starts it, marks a step done — and those calls were generic MCP
+rows: `task_create`, a `pockode` chip, and whatever argument happened to come
+first, often a story id. Nothing said which task was created, and nothing led to
+it. Now each reads as what it did and leads to the work it did it to.
+
+```
+│ ✓  Create task  [pockode]  Design the row                    │
+│ ✓  Start task   [pockode]  Design the row                    │
+⌄ opened:
+│ ┌──────────────────────────────────────────────────────────┐ │
+│ │ Task  Design the row                                Open │ │
+│ │ Result                                                   │ │
+│ │   Started work 01a2… (session: 01a2…)                    │ │
+│ └──────────────────────────────────────────────────────────┘ │
+```
+
+| Tool | Title | Detail |
+|---|---|---|
+| `story_create` / `task_create` | `Create story` / `Create task` | the `title` it was given |
+| `story_start` / `task_start` | `Start story` / `Start task` | the work's title |
+| `work_reopen` | `Reopen` | the work's title |
+| `work_update` | `Update` | the work's title |
+| `work_delete` | `Delete` | the work's title |
+| `story_wait` | `Wait for tasks` | the story's title |
+| `story_unwatch` | `Unwatch` | the story's title |
+| `step_done` | `Step done` | the work's title |
+| `work_comment_add` | `Comment` | the work's title |
+| `work_comment_update` | `Edit comment` | the new text's first line |
+| `work_get` / `work_comment_list` | `Get work` / `List comments` | the work's title |
+| `task_list` | `List tasks` | the story's title |
+| `story_list` | `List stories` | — |
+| `agent_role_list` / `agent_role_get` / `agent_role_reset_defaults` | `List roles` / `Get role` / `Reset roles` | the `work_type` / the role id, mono / — |
+
+`html_*` and `permission_verdict` keep [their own rows](#title-and-detail), and
+the question tools their cards ([answering-ui.md](answering-ui.md)). The table
+lives in one place (`lib/pockodeWorkTools.ts`), which `toolSummary`, `toolVerb`
+and the body all read, so the row, the summary and the body cannot name a call
+differently. The `pockode` chip stays, as on every Pockode MCP row: it is what
+tells the user these are calls into Pockode, not into the project.
+
+**"The work's title" is the one the call's [`workRef`](tool-call-model.md#a-call-on-pockodes-own-work)
+carries** — what the work was called when the call was made — and, before the
+result has brought one or on a record without one, the id from the input, in
+mono. A creation needs neither: its title is its input. The title is never read
+from the work store for the row. A row is a record of a call, and a record that
+retitles itself when the work is renamed is the record lying about what it was;
+the current title is one tap away.
+
+The body's line says the kind its `workRef` carries, else the one the tool's
+name fixes (`story_start`, `task_list`, …), else *Work* — a `step_done` from
+before `work_ref` cannot say which. A creation from then has no id but in its
+result prose, which the client does not parse, so its line has no *Open*; any
+other old record opens by its input's id. Of the input, a call whose line
+already says everything it asked (`step_done`, `work_get`, …) shows nothing
+more, and a creation without a `body` likewise; the listings of every story or
+role keep their arguments as any MCP call does. A work event line's `Subtask`
+row is the same `WorkRefLine` (`components/Chat/WorkRefLine.tsx`); the body
+reaches the overlay through `OpenWorkDetailContext`, provided beside the other
+transcript contexts in `MessageList`.
+
+**The body opens on the work, and the work is one tap further.** Its first line
+is `WorkRefLine`: the kind (`Task`, `Story`, `Job`) muted, the title, and *Open*
+— a text button in `text-th-accent` with a `touch-target` hit area, the word
+`PathLine` uses for the same act — which opens the work's detail overlay by id
+(`onOpenWorkDetail`, the overlay a work event's *Details* opens). That overlay
+subscribes to the work by id, so it opens whether or not any page of the work
+list holds it, in any worktree. Then the arguments worth reading — a creation's
+`body` and a comment's text as clamped Markdown, an update's changed fields, a
+start's `worktree` and `watch` — and then the result as it came.
+
+*Open* is offered when the call succeeded and did not delete the work. A
+`work_delete` has the line without it, and so does a failed call: its id may
+name nothing, and an overlay that opens on *not found* is a dead end the row
+put there. Its accessible name starts with its visible word: *"Open task Design
+the row"*.
+
+**No live status, on the row or in its body.** Not a status chip, not
+`Step n/m`, not a spinner for a story that is running: the glyph is the call's,
+and the call is over long before anyone reads it. Whether the work is still going is a
+question chat stopped answering on purpose
+([code/work-system.md](code/work-system.md#rendering-in-the-transcript)), and
+the overlay one tap away answers it from the work store, live. A status drawn
+here would have to be read from the store by id on every render to stay true,
+which is the aggregate card the work event line replaced — and a row in a
+transcript is the worst place to keep it current: a hundred `Start task` rows
+would each be subscribing to a work.
+
+**The later work event line leads to the same work.** When a task this session
+started finishes, its parent hears it as a work event line, `Pockode · Subtask
+done · Design the row`. That line now opens the subtask too
+([code/work-system.md](code/work-system.md#rendering-in-the-transcript)), so the
+row that started the work and the line that reported its end meet at one page.
+Neither jumps to the other inside the transcript: what the reader wants from
+either is the work, not the moment, and the call is usually pages above or not
+loaded at all.
+
 ## A page the agent drew (`html_render`)
 
 `html_render` is Pockode's own MCP tool: the agent passes a `title` and an
@@ -5041,6 +5347,38 @@ the virtualizer measures it.
     same grey as a settled row's tick. No green and no red, apart from a
     failed answer send's error line.
 
+For [a fetch in flight](#a-fetch-in-flight), [the remaining tool
+kinds](#the-remaining-tool-kinds) and [Pockode's own work
+calls](#pockodes-own-work-calls):
+
+66. On a CLI that still has `TaskOutput`, background a `sleep 40; echo done`
+    and have the agent fetch it while blocking: the `Bash` row keeps its
+    spinner and chip and gains `Waiting for output… 12s` under the command,
+    counting; the tail line reads `Waiting for output… · Go to call`, and the
+    button lands on that row. When the fetch returns the line becomes `done`
+    with no change of height. Stop the turn during a second fetch: the line
+    goes back to `done`, and after a reload no line anywhere says waiting.
+67. A `NotebookEdit` replacing a cell: `NotebookEdit` and the notebook's name
+    on the row, `+N` in the meta, *Cell <id>* and the new source in the body,
+    and the notebook among the turn's changes with the same `+N`. An insert
+    wears an `insert` chip; a delete says its content is not in the call.
+68. A `TaskStop` of a backgrounded command: a row of its own, the command it
+    stopped in its body, `Go to call` landing on the command's row — whose own
+    outcome says it was stopped. In a group the summary reads `Stopped 1 task`,
+    never `Ran`.
+69. A Codex web search and a Codex page open: rows titled `WebSearch` and
+    `WebFetch`, counted under `Searched` / `Fetched`, the search's body
+    listing the links Codex reported and the page's saying Codex does not
+    report what came back. A Codex image generation: its image in the
+    row's attachment strip, not among the turn's changes. A Codex `wait` on a
+    subagent: an `AgentControl` row titled `Wait`, spinning while it waits.
+70. A story agent that creates and starts a task: `Create task · <title>` and
+    `Start task · <title>`, the summary `Created task "<title>" · Started task
+    "<title>"`; *Open* in either body opens the task's page, in any worktree.
+    Rename the task: both rows still say the old title. Let the task finish:
+    the parent's `Subtask done` line opens the same task. No row ever shows the
+    task's status.
+
 ## Out of scope
 
 - **The turn's changes, live or reconciled.** No card or work line while the
@@ -5066,9 +5404,23 @@ the virtualizer measures it.
   limit, no anti-forgery token: each is a second way to say what the send's
   own answer already says, or a defence against an agent's page, which is not
   an adversary ([sending](#sending-to-the-agent)).
-- **`BashOutput` and `KillShell`.** They are the same shape as `TaskOutput` and
-  the rules above would apply to them unchanged, but whether they should be
-  absorbed is a decision about each of them, not a consequence of this one.
+- **Filing `BashOutput` or a stop under its origin.** `BashOutput` is history
+  with no origin to file by, and a stop is an act that keeps its row
+  ([the remaining tool kinds](#the-remaining-tool-kinds)).
+- **Filing claude 2.1.330's reads of a background task.** That CLI no longer
+  offers `TaskOutput`; how it reads a task's output instead is unmeasured
+  ([tool-call-model.md](tool-call-model.md#a-call-about-an-earlier-call)), and
+  whether such a read leaves its own row is a decision of its own.
+- **A notebook cell's old source.** The CLI reports it after the call
+  (`old_source`), and a diff could be drawn from it on the row; the permission
+  card could not have it, and the three readers of a change saying one thing
+  was chosen over it, as for `Write`.
+- **A work's live status on its call's row**, and a jump between a work call's
+  row and the work event line that later reports on the same work — both lead
+  to the work instead ([Pockode's own work calls](#pockodes-own-work-calls)).
+- **From an `AgentControl` call to its agents' rows.** The agents are named;
+  going to each spawn row would need the adapter to carry the spawn call ids,
+  for a call that is rarely more than a wait.
 - **A fetch's content blocks reaching the attachment strip.** The strip is
   partitioned from `run.contents`, so a file block that arrived inside a fetch
   stays in the body. `TaskOutput` answering with an image does not happen in

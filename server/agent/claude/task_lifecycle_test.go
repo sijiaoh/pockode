@@ -282,6 +282,34 @@ func TestParseAssistantEvent_UnresolvableFetchCarriesNothing(t *testing.T) {
 	}
 }
 
+// A stop names its task the way a fetch does — by task_id, or by shell_id on
+// the name it had before claude renamed it — and resolves through the same map,
+// so its row can point at the work it stopped.
+func TestParseAssistantEvent_StopCarriesTheCallItStops(t *testing.T) {
+	for _, tt := range []struct {
+		name  string
+		input string
+	}{
+		{"TaskStop", `{"task_id":"b6h7boemy"}`},
+		{"KillShell", `{"shell_id":"b6h7boemy"}`},
+		{"KillBash", `{"shell_id":"b6h7boemy"}`},
+		// The deprecated field still names the task when the new one is absent.
+		{"TaskStop", `{"shell_id":"b6h7boemy"}`},
+	} {
+		t.Run(tt.name+" "+tt.input, func(t *testing.T) {
+			tracker := &backgroundTaskTracker{}
+			parseTestLineWithTracker(testLogger(), []byte(bgTaskStarted), tracker)
+
+			line := `{"type":"assistant","uuid":"u-stop","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_stop","name":"` +
+				tt.name + `","input":` + tt.input + `}]}}`
+			call := toolCallOnly(t, parseTestLineWithTracker(testLogger(), []byte(line), tracker))
+			if call.OriginToolUseID != "toolu_bg" {
+				t.Errorf("stop resolved to %q, want the call that started the task", call.OriginToolUseID)
+			}
+		})
+	}
+}
+
 // The join belongs to the one tool whose input cannot express it. A task_id
 // somewhere in another tool's input means nothing.
 func TestParseAssistantEvent_OtherToolsAreNotJoined(t *testing.T) {

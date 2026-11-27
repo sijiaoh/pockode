@@ -671,8 +671,8 @@ func (s *appSession) parseItemNotification(params json.RawMessage) (threadItem, 
 //
 // A reasoning item's start is remembered for its duration and, on the main
 // thread, signals that the agent is thinking. The remaining items with no
-// counterpart in Pockode's transcript (the agent's own messages, plans, web
-// searches) are left to item/completed or dropped there.
+// counterpart in Pockode's transcript (the agent's own messages, plans) and a
+// web search whose start names nothing yet are left to item/completed.
 func (s *appSession) handleItemStarted(params json.RawMessage) {
 	item, ok := s.parseItemNotification(params)
 	if !ok {
@@ -822,6 +822,27 @@ func (s *appSession) toolCallOf(item threadItem) (toolName string, toolInput jso
 		// the call and the file below it name one file. See view_image.go.
 		input, _ := json.Marshal(map[string]string{"file_path": firstNonEmpty(s.imageViewLocalPath(raw), raw)})
 		return "Read", input, true
+
+	// The kinds below are in tool_items.go.
+	case "webSearch":
+		// Announced here only once a start names what it searches for, which
+		// codex-cli 0.171.0's does not; handleItemCompleted announces it then.
+		return webSearchCall(item)
+
+	case "imageGeneration":
+		input, ok := imageGenerationCall(item)
+		return generateImageToolName, input, ok
+
+	case "sleep":
+		input, ok := sleepCall(item)
+		return sleepToolName, input, ok
+
+	case "collabAgentToolCall":
+		input, ok := s.agentControlCall(item)
+		return agentControlToolName, input, ok
+
+	case "dynamicToolCall":
+		return dynamicToolCall(item)
 	}
 
 	return "", nil, false
@@ -836,12 +857,23 @@ func (s *appSession) handleItemCompleted(params json.RawMessage) {
 		return
 	}
 
+	// Whether item/started announced the call, read before it is forgotten:
+	// a web search whose start named nothing is announced on completion
+	// instead. Only that case reads it — the map is cleared when the main
+	// thread's turn ends, which a subagent's call can outlive.
+	_, announced := s.toolInput(item.ID)
 	s.forgetToolInput(item.ID)
 	s.modelReached(item)
 
 	switch item.Type {
-	case "subAgentActivity", "collabAgentToolCall":
+	case "subAgentActivity":
 		s.rememberSubagent(item)
+
+	case "collabAgentToolCall":
+		s.rememberSubagent(item)
+		if _, ok := s.agentControlCall(item); ok {
+			s.emitEvent(s.agentControlResult(item))
+		}
 
 	case "agentMessage":
 		var ev struct {
@@ -932,6 +964,35 @@ func (s *appSession) handleItemCompleted(params json.RawMessage) {
 
 	case "reasoning":
 		s.handleReasoningCompleted(item)
+
+	case "webSearch":
+		s.emitWebSearchCompleted(item, announced)
+
+	case "imageGeneration":
+		s.handleImageGenerationCompleted(item)
+
+	// A sleep or dynamic tool whose item named no call (toolCallOf) has no
+	// row for a result to settle, as an agent call does not.
+	case "sleep":
+		if _, ok := sleepCall(item); ok {
+			// Nothing to report but that it is over.
+			s.emitEvent(agent.ToolResultEvent{
+				ToolUseID:         item.ID,
+				ParentToolUseID:   item.ParentToolUseID,
+				ProviderMessageID: item.TurnID,
+			})
+		}
+
+	case "dynamicToolCall":
+		if _, _, ok := dynamicToolCall(item); ok {
+			s.emitEvent(dynamicToolResult(item))
+		}
+
+	case "functionCallOutput":
+		// The output of a call announced as some other item, with nothing in
+		// it to join it to that call by. What it carries in practice is
+		// unmeasured, so it is noted and dropped until it is.
+		s.log.Debug("dropped a functionCallOutput item", "itemId", item.ID)
 	}
 }
 

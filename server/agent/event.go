@@ -429,6 +429,8 @@ type ToolResultEvent struct {
 	ProviderMessageID string
 	// HTMLPage is the page the call stored; see EventRecord.HTMLPage.
 	HTMLPage string
+	// WorkRef is the work item the call acted on; see EventRecord.WorkRef.
+	WorkRef *WorkRef
 	// ObservedAt is when Pockode saw the result; see EventRecord.ObservedAt.
 	// Never set on a ToolResultBackgroundLost result (see ObserveAt).
 	ObservedAt time.Time
@@ -462,6 +464,7 @@ func (e ToolResultEvent) ToRecord() EventRecord {
 		ParentToolUseID:   e.ParentToolUseID,
 		ProviderMessageID: e.ProviderMessageID,
 		HTMLPage:          e.HTMLPage,
+		WorkRef:           e.WorkRef,
 		ObservedAt:        optionalTime(e.ObservedAt),
 	}
 }

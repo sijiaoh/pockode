@@ -180,7 +180,17 @@ export function Detail({
  * Its own component with its own interval, so the tick re-renders the counter
  * and not the row.
  */
-function ElapsedCounter({ seenAt }: { seenAt: Date }) {
+function ElapsedCounter({
+	seenAt,
+	separated,
+}: {
+	seenAt: Date;
+	/**
+	 * It follows text on the same line, so it brings its own `·`: drawn only
+	 * with the number, never left dangling before the three seconds are up.
+	 */
+	separated?: boolean;
+}) {
 	const [now, setNow] = useState(() => Date.now());
 	const elapsed = now - seenAt.getTime();
 	// Every second while the number is seconds, every minute once it is not: a
@@ -198,6 +208,7 @@ function ElapsedCounter({ seenAt }: { seenAt: Date }) {
 	if (elapsed < 3000) return null;
 	return (
 		<span className="shrink-0 text-th-text-muted">
+			{separated && "· "}
 			{formatElapsed(elapsed)}
 		</span>
 	);
@@ -519,6 +530,12 @@ export function ToolRow({
 				className={`block truncate text-th-text-muted ${secondLine.mono ? "font-mono" : ""}`}
 			>
 				{secondLine.text}
+				{secondLine.since && (
+					<>
+						{" "}
+						<ElapsedCounter seenAt={secondLine.since} separated />
+					</>
+				)}
 			</span>
 		)
 	);

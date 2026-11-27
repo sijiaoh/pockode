@@ -12,6 +12,12 @@ import {
 	proposedChangeText,
 } from "../../lib/proposedChange";
 import { CodeHighlighter } from "../../lib/shikiUtils";
+import {
+	isStopTool,
+	parseStopResult,
+	type StopResult,
+	stopResultText,
+} from "../../lib/taskStop";
 import { outputLineCount, outputLines } from "../../lib/textLines";
 import { parseReadResult } from "../../lib/toolResultParser";
 import {
@@ -359,6 +365,14 @@ const ANSI_ESCAPE = new RegExp(
 );
 
 /**
+ * A stop's answer, when it is in the envelope its body reads. A failure is the
+ * CLI's error sentence, never the envelope, so it falls through as it came.
+ */
+function stopAnswer(toolName: string, result: string): StopResult | null {
+	return isStopTool(toolName) ? parseStopResult(result) : null;
+}
+
+/**
  * What the result block's copy button copies: the text a reader would select
  * out of it, which is not always the result as it arrived — a `Read` comes back
  * line-numbered and a command's output carries colour codes. Nothing for a
@@ -384,8 +398,11 @@ export function resultCopyText(
 			if (change) return proposedChangeText(change);
 			return result || undefined;
 		}
-		default:
+		default: {
+			const stopped = stopAnswer(toolName, result);
+			if (stopped) return stopResultText(stopped);
 			return result || undefined;
+		}
 	}
 }
 
@@ -436,11 +453,15 @@ export function resultCount(
 					: outputLineCount(prettyJson(result) ?? result),
 			};
 		}
-		default:
+		default: {
+			const stopped = stopAnswer(toolName, result);
 			return {
 				noun: "line",
-				total: outputLineCount(prettyJson(result) ?? result),
+				total: outputLineCount(
+					stopped ? stopResultText(stopped) : (prettyJson(result) ?? result),
+				),
 			};
+		}
 	}
 }
 
@@ -515,8 +536,12 @@ export function resultFullScreenContent(
 		}
 		case "Bash":
 			return { kind: "output", text: result, failedTail: failed };
-		default:
-			return unknown();
+		default: {
+			const stopped = stopAnswer(toolName, result);
+			return stopped
+				? { kind: "output", text: stopResultText(stopped) }
+				: unknown();
+		}
 	}
 }
 
@@ -622,9 +647,28 @@ function ToolResultDisplay({
 		case "Bash":
 			return <BashResultDisplay result={result} failed={failed} />;
 
-		default:
+		default: {
+			const stopped = stopAnswer(toolName, result);
+			if (stopped) return <StopResultDisplay stopped={stopped} />;
 			return <UnknownResultDisplay result={result} />;
+		}
 	}
+}
+
+/** What a stop said it stopped: its sentence, then the command it ran. */
+function StopResultDisplay({ stopped }: { stopped: StopResult }) {
+	return (
+		<div className="space-y-1">
+			<p className="whitespace-pre-wrap break-words text-th-text-primary">
+				{stopped.message}
+			</p>
+			{stopped.command && (
+				<pre className="whitespace-pre-wrap break-words font-mono text-th-text-muted">
+					{stopped.command}
+				</pre>
+			)}
+		</div>
+	);
 }
 
 export default ToolResultDisplay;

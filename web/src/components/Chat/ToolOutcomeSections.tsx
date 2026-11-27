@@ -17,12 +17,16 @@ import { Section, type SectionFullScreen } from "./ToolSection";
 function fetchedLabel(fetched: FetchedOutput[]): string {
 	if (fetched.length > 1) return `Fetched output · ${fetched.length} fetches`;
 	const only = fetched[0];
+	if (only.waiting) return "Fetched output · waiting…";
 	if (only.isError) return "Fetched output · fetch failed";
 	if (only.isEmpty) return "Fetched output · nothing yet";
 	return "Fetched output";
 }
 
 function FetchedBody({ fetched }: { fetched: FetchedOutput }) {
+	if (fetched.waiting) {
+		return <p className="text-th-text-muted">Waiting for the task's output.</p>;
+	}
 	if (fetched.isError) {
 		// The red is here and not on the row: what failed is the call that did
 		// the fetching, and the task it was reading may be running perfectly.
@@ -78,7 +82,10 @@ function FetchedOutputSection({ fetched }: { fetched: FetchedOutput[] }) {
 						<div key={one.id} className="space-y-1">
 							{/* Numbered by position, keyed by the fetching call: two
 							    fetches of one task may well carry the same text. */}
-							<p className="text-th-text-muted">Fetch {index + 1}</p>
+							<p className="text-th-text-muted">
+								Fetch {index + 1}
+								{one.waiting && " · waiting…"}
+							</p>
 							<FetchedBody fetched={one} />
 						</div>
 					))}
