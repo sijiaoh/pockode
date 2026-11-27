@@ -25,3 +25,6 @@ dist-ssr
 
 # Vitest browser mode drops a screenshot beside every failing *.browser.test
 __screenshots__
+
+# Output of the streaming-cost benchmark (vitest.bench.config.ts)
+bench-results

@@ -408,6 +408,41 @@ module", or, when the new import is in `browserSetup.ts`, "No test suite found".
 It is loud, exit 1, never a silent pass. Rerun, or `rm -rf
 web/node_modules/.vite`. CI starts cold and does not hit it.
 
+### The streaming-cost benchmark
+
+`web/src/bench/` measures what one streamed record costs the chat with a long
+session loaded — 300 turns, about 24k tool calls, through the real
+`useChatMessages` and `MessageList`. It is a third entry of its own,
+`web/vitest.bench.config.ts`, which neither script above runs: it takes minutes,
+and what it produces is numbers for a person, with nothing asserted. The command
+and its knobs are on that config; the results land in `web/bench-results/`.
+
+Every case runs over the same open turn twice, once with no history before it
+and once with the long session — the difference is what loaded history costs.
+What to know before comparing two runs:
+
+- **Compare medians of more than one run.** Two runs of unchanged code on an
+  idle machine have differed by about 30%.
+- **Measure the before side in the same sitting.** Between sittings the whole
+  scale moves: the same commit's no-history cases came out 2–3× apart on one
+  machine an hour and a half apart. A baseline from an earlier sitting is no
+  reference; run the old commit again in a worktree of its own (with the bench
+  files copied in) next to the new one.
+- **Say which React build.** The tests' development build inflates render and
+  context propagation several times over; `BENCH_REACT=production` uses the
+  production profiling build, and every result file names the one it ran on.
+- **The CPU throttle is not a multiplier.** Chrome's throttling barely touches
+  short tasks, so `BENCH_CPU_THROTTLE=4` slowed the long-session records 1.5 to
+  3 times and the short ones hardly at all. Read it as a direction, not as a
+  phone.
+- **Read the CPU profile, not only React's timers.** Most of the per-record cost
+  measured so far was outside render — context propagation, DOM queries, forced
+  layout — which the profile table names and the component table cannot see.
+- **`(program)` is the browser's own work.** Style, layout, pre-paint and
+  paint have no JS frame; `BENCH_TRACE=1` adds a traced pass that totals them per
+  record, with how many layout objects each pass touched. That is how the
+  per-row layout containment in `MessageList` was found.
+
 ## Go: there is no equivalent knob
 
 There is no repository-level concurrency setting to correct on the Go side. Test
