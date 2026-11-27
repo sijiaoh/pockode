@@ -1991,6 +1991,7 @@ func parseUserEvent(log *slog.Logger, event cliEvent, backgroundTasks *backgroun
 				Subtype:           subtype,
 				DurationMs:        durationMs,
 				Subagent:          subagent,
+				ExitCode:          reportedExitCode(toolName, block.IsError, result.text),
 				Contents:          result.blocks,
 				IsError:           block.IsError,
 				ParentToolUseID:   event.ParentToolUseID,

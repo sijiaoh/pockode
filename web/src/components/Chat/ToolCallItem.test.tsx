@@ -1105,13 +1105,99 @@ describe("ToolCallItem", () => {
 			expect(screen.queryByText(/\ds/)).not.toBeInTheDocument();
 		});
 
-		// It is only interesting when it is non-zero, and then the glyph has
-		// already said so — which is why it is in the body and not on the row.
-		it("puts a non-zero exit code in the body", async () => {
+		// The glyph says the call failed; the code says how — `exit 137` is a
+		// kill, `exit 1` an ordinary failure — and a folded row should say it.
+		it("puts a non-zero exit code on the row, before the time, and not in the body", async () => {
 			const user = userEvent.setup();
-			draw({ status: "error", result: "boom", exitCode: 2 });
-			await user.click(screen.getByRole("button", { expanded: false }));
-			expect(screen.getByText("Exit code 2")).toBeVisible();
+			draw({
+				status: "error",
+				result: "boom",
+				exitCode: 137,
+				durationMs: 14_000,
+			});
+			const row = screen.getByRole("button", { expanded: false });
+			expect(within(row).getByText("exit 137")).toBeVisible();
+			expect(row.textContent).toMatch(/exit 137\s*14s/);
+			await user.click(row);
+			expect(screen.queryByText(/Exit code/)).toBeNull();
+		});
+
+		it("shows no exit code of zero", () => {
+			draw({ status: "success", result: "ok", exitCode: 0 });
+			expect(screen.queryByText(/exit/)).toBeNull();
+		});
+	});
+
+	describe("the lines an edit changed", () => {
+		const edit = {
+			file_path: "/Users/test/project/src/a.ts",
+			old_string: "one\ntwo",
+			new_string: "one\nTWO\nthree",
+		};
+		const row = () => screen.getByRole("button", { expanded: false });
+
+		// The same figure the body's Change header draws right under it: the
+		// patch's own, which once disagreed with the turn's tally.
+		it("puts the edit's counts on a row that succeeded, before the time", () => {
+			draw({ name: "Edit", input: edit, status: "success", durationMs: 1200 });
+			expect(row().textContent).toMatch(/lines \+2 −1\s*1\.2s$/);
+		});
+
+		it("counts a MultiEdit's edits together", () => {
+			draw({
+				name: "MultiEdit",
+				input: {
+					file_path: edit.file_path,
+					edits: [
+						{ old_string: "a", new_string: "a\nb" },
+						{ old_string: "c\nd\n", new_string: "" },
+					],
+				},
+				status: "success",
+			});
+			expect(row().textContent).toMatch(/\+1 −2$/);
+		});
+
+		// What it replaced is not in the transcript, so no `−` is guessed.
+		it("counts a Write's content as added and nothing as removed", () => {
+			draw({
+				name: "Write",
+				input: { file_path: edit.file_path, content: "a\nb\nc\n" },
+				status: "success",
+				result: `The file ${edit.file_path} has been updated successfully.`,
+			});
+			expect(row().textContent).toMatch(/\+3$/);
+		});
+
+		// A failed edit changed nothing, and one interrupted may or may not have.
+		it.each([
+			"error",
+			"interrupted",
+			"running",
+		] as const)("shows none on a row that is %s", (status) => {
+			draw({ name: "Edit", input: edit, status });
+			expect(within(row()).queryByText(/\+2/)).toBeNull();
+		});
+
+		it("shows nothing for an edit that changes no line", () => {
+			draw({
+				name: "Edit",
+				input: { ...edit, new_string: edit.old_string },
+				status: "success",
+			});
+			expect(within(row()).queryByText(/^lines/)).toBeNull();
+			expect(row().textContent).not.toMatch(/[+−]\d/);
+		});
+
+		// Red in a stack of rows means a failed call; the coloured counts are
+		// the body's.
+		it("draws the counts muted, not green and red", () => {
+			draw({ name: "Edit", input: edit, status: "success" });
+			const added = within(row()).getByText("+2");
+			expect(added.closest(".text-th-text-muted")).not.toBeNull();
+			expect(
+				row().querySelector(".text-th-success, .text-th-error"),
+			).toBeNull();
 		});
 	});
 

@@ -154,6 +154,27 @@ describe("toolSummary", () => {
 		).toMatchObject({ title: "work_get", chip: "pockode", detail: "01a0" });
 	});
 
+	// A `path` argument does not make a tool a file tool: drawn as one, the
+	// whole machine name would sit in the title slot, which never truncates.
+	it.each([
+		["mcp__fs__read_file", "read_file", "fs"],
+		["fs:read_file", "read_file", "fs"],
+	])("titles MCP tool %s by its split name even with a path", (name, title, chip) => {
+		expect(
+			toolSummary(name, { path: `${WORK_DIR}/README.md` }, WORK_DIR),
+		).toMatchObject({ title, chip, detail: `${WORK_DIR}/README.md` });
+	});
+
+	it("does not draw an unknown tool with a file_path as a file tool", () => {
+		expect(
+			toolSummary("Frobnicate", { file_path: "/etc/hosts" }, WORK_DIR),
+		).toMatchObject({
+			title: "Frobnicate",
+			detail: "/etc/hosts",
+			detailTail: "",
+		});
+	});
+
 	it("splits codex's MCP naming into its server and its tool", () => {
 		expect(
 			toolSummary("github:create_issue", { title: "Broken" }, WORK_DIR),

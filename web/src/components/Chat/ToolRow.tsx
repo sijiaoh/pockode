@@ -1,5 +1,5 @@
 import { Ban, Bot, Check, ChevronRight, CircleDot, X } from "lucide-react";
-import { type ReactNode, useEffect, useRef, useState } from "react";
+import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import {
 	formatDuration,
 	formatElapsed,
@@ -7,8 +7,10 @@ import {
 	toolRunDurationMs,
 } from "../../lib/toolRun";
 import { SUBAGENT_TITLE } from "../../lib/toolSummary";
+import { callLines } from "../../lib/turnChanges";
 import type { ToolRun, ToolRunStatus } from "../../types/message";
 import { Spinner } from "../ui";
+import { LineCountsLabel } from "./ProposedChange";
 import { useFoldLanding } from "./useFoldLanding";
 import { useStuckBar } from "./useStuckBar";
 
@@ -174,8 +176,43 @@ function ElapsedCounter({ seenAt }: { seenAt: Date }) {
 }
 
 /**
- * The right-hand figure: how long a finished call took, or how long a live one
- * has been going.
+ * What a finished call measured besides its time: the lines an edit changed,
+ * or the code a command exited with. Muted both, whatever happened: red is the
+ * failed row's already, three times over, and green and red counts in a stack
+ * of rows would read as calls that passed and failed. The coloured counts are
+ * the body's (docs/tool-call-ui.md).
+ *
+ * Counts only for a call that succeeded, since only that one changed anything
+ * — the turn's tally's rule, and its figure. An exit code whenever one other
+ * than zero was measured: an engine that reports one has already failed the
+ * call for it, so this is never drawn on a row that succeeded.
+ */
+function ToolOutcomeFigure({ run }: { run: ToolRun }) {
+	// Memoized: a Codex add's patch is a whole file and a Write's content is
+	// one, and a settled row re-renders with its list. A run is replaced, not
+	// mutated, when it changes.
+	const lines = useMemo(
+		() => (run.status === "success" ? callLines(run) : null),
+		[run],
+	);
+	if (run.exitCode !== undefined && run.exitCode !== 0) {
+		return (
+			<span className="shrink-0 font-mono tabular-nums text-th-text-muted">
+				exit {run.exitCode}
+			</span>
+		);
+	}
+	if (!lines || (lines.added === 0 && !lines.removed)) return null;
+	return (
+		<span className="flex shrink-0 items-baseline">
+			<span className="sr-only">lines </span>
+			<LineCountsLabel lines={lines} colored={false} />
+		</span>
+	);
+}
+
+/**
+ * How long a finished call took, or how long a live one has been going.
  *
  * A finished call shows only a measured duration — the engine's, or the one
  * the server observed (`toolRunDurationMs` decides) — and only from 1s up. A
@@ -183,7 +220,7 @@ function ElapsedCounter({ seenAt }: { seenAt: Date }) {
  * whose start cannot be placed there, and a year-old transcript, draw no
  * stopwatches.
  */
-export function ToolMeta({ run }: { run: ToolRun }) {
+function ToolTime({ run }: { run: ToolRun }) {
 	const live = run.status === "running" || run.status === "background";
 	if (!live) {
 		const durationMs = toolRunDurationMs(run);
@@ -196,6 +233,20 @@ export function ToolMeta({ run }: { run: ToolRun }) {
 	}
 	if (!run.seenAt) return null;
 	return <ElapsedCounter seenAt={run.seenAt} />;
+}
+
+/**
+ * The right-hand figures: what the call measured, then its time — last, so
+ * the times of a stack of rows stay in one column. Neither is ever truncated;
+ * the detail gives way.
+ */
+export function ToolMeta({ run }: { run: ToolRun }) {
+	return (
+		<span className="flex shrink-0 items-baseline gap-2 empty:hidden">
+			<ToolOutcomeFigure run={run} />
+			<ToolTime run={run} />
+		</span>
+	);
 }
 
 interface Props {

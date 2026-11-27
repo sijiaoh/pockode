@@ -1,8 +1,8 @@
-import { diffLines } from "diff";
 import type { GitFileStatus } from "../types/git";
 import type { ContentPart, ToolRun } from "../types/message";
 import { relativeToWorkDir, splitNativePath } from "../utils/path";
 import type { CodexChangeView } from "./codexChanges";
+import { diffStat } from "./diffStat";
 import { type ProposedChangeData, proposedChange } from "./proposedChange";
 import { pathParts } from "./toolSummary";
 
@@ -93,28 +93,6 @@ function lineCount(text: string): number {
 	return text.endsWith("\n") ? lines - 1 : lines;
 }
 
-/**
- * The lines replacing `oldText` with `newText` touches. An Edit's strings are
- * fragments, usually cut mid-file without a final newline; both are closed with
- * one so that a fragment's last line compares as a line — otherwise appending
- * a line to `a` would count as rewriting `a` too. Carriage returns are set
- * aside for the same reason: in a CRLF file the closing `\n` would differ from
- * the `\r\n` the other side's copy of that line ends with.
- */
-function replacementLines(oldText: string, newText: string): LineCounts {
-	// An empty `old_string` is an Edit creating the file: closing it with a
-	// newline would count a removed line that was never there.
-	if (oldText === "") return { added: lineCount(newText), removed: 0 };
-	const counts = { added: 0, removed: 0 };
-	for (const part of diffLines(`${oldText}\n`, `${newText}\n`, {
-		stripTrailingCr: true,
-	})) {
-		if (part.added) counts.added += part.count;
-		else if (part.removed) counts.removed += part.count;
-	}
-	return counts;
-}
-
 function sumLines(counts: (LineCounts | null)[]): LineCounts | null {
 	const known = counts.filter((count) => count !== null);
 	if (known.length === 0) return null;
@@ -124,22 +102,6 @@ function sumLines(counts: (LineCounts | null)[]): LineCounts | null {
 		if (removed !== undefined) total.removed = (total.removed ?? 0) + removed;
 	}
 	return total;
-}
-
-/**
- * The lines a unified diff adds and removes, read off its hunks: everything
- * before the first `@@` is file header, and a header's `+++` must not count.
- */
-function patchLines(patch: string): LineCounts {
-	const counts = { added: 0, removed: 0 };
-	let inHunks = false;
-	for (const line of patch.split("\n")) {
-		if (line.startsWith("@@")) inHunks = true;
-		else if (!inHunks) continue;
-		else if (line.startsWith("+")) counts.added++;
-		else if (line.startsWith("-")) counts.removed++;
-	}
-	return counts;
 }
 
 function codexEdit(run: ToolRun, view: CodexChangeView): FileEdit {
@@ -155,7 +117,7 @@ function codexEdit(run: ToolRun, view: CodexChangeView): FileEdit {
 			view.status === "?"
 				? null
 				: view.patch
-					? patchLines(view.patch)
+					? diffStat([view.patch])
 					: { added: 0, removed: 0 },
 	};
 }
@@ -188,21 +150,9 @@ function editsOf(run: ToolRun): FileEdit[] {
 	const change = proposedChange(run.name, run.input);
 	if (!change) return [];
 	switch (change.kind) {
-		case "edit": {
-			const { file_path, old_string, new_string } = change.input;
-			return [
-				{
-					run,
-					change,
-					path: file_path,
-					newPath: file_path,
-					status: created(run) ? "A" : "M",
-					lines: replacementLines(old_string, new_string),
-				},
-			];
-		}
+		case "edit":
 		case "multiEdit": {
-			const { file_path, edits } = change.input;
+			const { file_path } = change.input;
 			return [
 				{
 					run,
@@ -210,11 +160,8 @@ function editsOf(run: ToolRun): FileEdit[] {
 					path: file_path,
 					newPath: file_path,
 					status: created(run) ? "A" : "M",
-					lines: sumLines(
-						edits.map((edit) =>
-							replacementLines(edit.old_string, edit.new_string),
-						),
-					),
+					// The patches the body draws and its header counts.
+					lines: diffStat(change.patches),
 				},
 			];
 		}
@@ -237,6 +184,14 @@ function editsOf(run: ToolRun): FileEdit[] {
 		case "codex":
 			return change.changes.map((view) => codexEdit(run, view));
 	}
+}
+
+/**
+ * The lines one call changed, as the turn's tally counts them — what its row
+ * shows. Null for a call that changes no file or whose lines are unknown.
+ */
+export function callLines(run: ToolRun): LineCounts | null {
+	return sumLines(editsOf(run).map((edit) => edit.lines));
 }
 
 /**

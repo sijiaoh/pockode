@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { ContentPart, ToolRun, ToolRunStatus } from "../types/message";
+import { diffStat } from "./diffStat";
+import { changePatches, proposedChange } from "./proposedChange";
 import { turnChanges } from "./turnChanges";
 
 const WORK_DIR = "/repo";
@@ -116,6 +118,38 @@ describe("turnChanges", () => {
 		expect(lines).toEqual({ added: 4, removed: 1 });
 	});
 
+	// The tally, the row and the body's header used to count an edit two ways
+	// and disagree on a fragment without a final newline: appending a line to
+	// `a` read as +1 here and +2 −1 over the diff.
+	it.each([
+		["a line appended to a fragment", "a", "a\nb"],
+		["a CRLF line changed", "x\r\ny", "x\r\nz"],
+		["text deleted", "a\nb", ""],
+		["whole lines deleted", "a\n", ""],
+		["a file created", "", "a\nb\n"],
+	])("counts %s as the body's patch does", (_, oldString, newString) => {
+		const input = {
+			file_path: "/repo/a.ts",
+			old_string: oldString,
+			new_string: newString,
+		};
+		const change = proposedChange("Edit", input);
+		if (!change) throw new Error("not a change");
+		const { files } = turnChanges([call("1", "Edit", input)], WORK_DIR);
+		expect(files[0].lines).toEqual(diffStat(changePatches(change) ?? []));
+		expect(changePatches(change)?.join("")).not.toMatch(/No newline/);
+	});
+
+	it.each([
+		["a fragment's appended line", "a", "a\nb", "+1 -0"],
+		["a deleted line with its newline", "a\n", "", "+0 -1"],
+		["a file an Edit created", "", "a\nb\n", "+2 -0"],
+	])("counts %s", (_, oldString, newString, counts) => {
+		expect(shape([edit("1", "/repo/a.ts", oldString, newString)])).toEqual([
+			`- a.ts - ${counts} (1)`,
+		]);
+	});
+
 	it("keeps a file the turn made new however it was edited after", () => {
 		expect(
 			shape([
@@ -169,7 +203,7 @@ describe("turnChanges", () => {
 					{
 						path: "/repo/src/b.ts",
 						kind: { type: "update" },
-						diff: "@@ -1,2 +1,2 @@\n ctx\n-old\n+new\n+++plus\n",
+						diff: "@@ -1,2 +1,3 @@\n ctx\n-old\n+new\n+++plus\n",
 					},
 					{ path: "/repo/a.ts", kind: { type: "add" }, diff: "a\nb\n" },
 					{ path: "/repo/gone.ts", kind: { type: "delete" }, diff: "z\n" },

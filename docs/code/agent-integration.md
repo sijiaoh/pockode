@@ -827,9 +827,21 @@ still running. An ordinary result carries none
 ([tool-call-model.md](../tool-call-model.md#background-lives-on-tool_result-twice)).
 
 `DurationMs` and `ExitCode` are what a CLI reported about a finished call as
-figures instead of as prose, and are never inferred from arrival times, which
-would be wrong on replay. Codex reports both on commands and MCP calls. Claude
-reports no exit code and a duration only for a few tools, in the frame's
+figures, and are never inferred from arrival times, which would be wrong on
+replay. Codex reports both on commands and MCP calls.
+
+Claude reports no exit code as a figure: on a failure its `tool_use_result` is
+only the string `"Error: "` plus the result text. That text is the one place the
+code is. A failed `Bash` result's first line is `Exit code N` (measured on
+2.1.330), and the adapter reads it there (`reportedExitCode`,
+`tool_exit_code.go`). It does so only for `Bash`, only when `is_error` is set,
+and only when the first line matches `^Exit code (-?\d+)$` exactly. Anything
+else gets no `ExitCode`: a refused call (`<tool_use_error>`), a denial, or a
+line in other words. A row without a code is better than a row with a wrong
+one. The result text stays verbatim, that line included. A Claude command that
+succeeded has no `ExitCode`, because the CLI does not say how it exited.
+
+Claude reports a duration only for a few tools, in the frame's
 `tool_use_result`: a subagent's `totalDurationMs` (`Agent`, formerly `Task`),
 `WebFetch`'s `durationMs` and `WebSearch`'s `durationSeconds` (measured on
 2.1.330). Each key is read only for the tool it belongs to, which is why the

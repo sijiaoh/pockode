@@ -4,7 +4,7 @@ import { codexChangePaths } from "../../lib/codexChanges";
 import type { FullScreenSource } from "../../lib/fullScreen";
 import { CodeHighlighter } from "../../lib/shikiUtils";
 import { outputLineCount } from "../../lib/textLines";
-import { pathParts } from "../../lib/toolSummary";
+import { fileToolPath, pathParts } from "../../lib/toolSummary";
 import { useWSStore } from "../../lib/wsStore";
 import { HIGHLIGHT_LIMIT } from "../../utils/fileView";
 import { isSameNativePath, relativeToWorkDir } from "../../utils/path";
@@ -162,12 +162,7 @@ export function invocationView(
 		if (paths) return { kind: "paths", paths };
 	}
 
-	const filePath =
-		typeof input.file_path === "string"
-			? input.file_path
-			: typeof input.path === "string"
-				? input.path
-				: null;
+	const filePath = fileToolPath(toolName, input);
 	if (filePath) return { kind: "paths", paths: [filePath] };
 
 	// A Codex approval that described nothing else (server/agent/codex

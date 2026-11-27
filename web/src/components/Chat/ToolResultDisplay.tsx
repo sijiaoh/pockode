@@ -1,4 +1,5 @@
 import { AnsiUp } from "ansi_up";
+import { ExternalLink } from "lucide-react";
 import { useMemo } from "react";
 import { groupContentBlocks } from "../../lib/contentBlocks";
 import {
@@ -13,6 +14,11 @@ import {
 import { CodeHighlighter } from "../../lib/shikiUtils";
 import { outputLineCount, outputLines } from "../../lib/textLines";
 import { parseReadResult } from "../../lib/toolResultParser";
+import {
+	parseWebSearchResult,
+	type WebSearchLink,
+	webSearchMarkdown,
+} from "../../lib/webSearchResult";
 import { useWSStore } from "../../lib/wsStore";
 import type { ContentBlock } from "../../types/content";
 import { HIGHLIGHT_LIMIT } from "../../utils/fileView";
@@ -219,6 +225,61 @@ function UnknownResultDisplay({ result }: { result: string }) {
 	return <pre className="whitespace-pre-wrap text-th-text-muted">{result}</pre>;
 }
 
+function WebSearchLinkRow({ link }: { link: WebSearchLink }) {
+	const text = (
+		<span className="min-w-0 flex-1">
+			<span className="block break-words text-th-text-primary">
+				{link.title}
+			</span>
+			<span className="block truncate text-th-text-muted">{link.host}</span>
+		</span>
+	);
+	if (!link.href)
+		return <div className="flex items-start gap-2 px-1 py-1">{text}</div>;
+	return (
+		<a
+			href={link.href}
+			target="_blank"
+			rel="noopener noreferrer"
+			className="flex min-h-9 items-start gap-2 rounded px-1 py-1 pointer-coarse:min-h-11 hover:bg-th-overlay-hover"
+		>
+			{text}
+			<ExternalLink
+				aria-hidden="true"
+				className="mt-0.5 size-3 shrink-0 text-th-text-muted"
+			/>
+		</a>
+	);
+}
+
+/**
+ * A search's sources as links, then the search tool's own answer. Anything
+ * not in the shape `parseWebSearchResult` knows is drawn as it came.
+ */
+function WebSearchResultDisplay({ result }: { result: string }) {
+	const parsed = useMemo(() => parseWebSearchResult(result), [result]);
+	if (!parsed) return <UnknownResultDisplay result={result} />;
+	const { links, summary } = parsed;
+	if (links.length === 0 && !summary)
+		return <p className="text-th-text-muted">No results.</p>;
+	return (
+		<div>
+			{links.length > 0 && (
+				<div className="space-y-0.5">
+					{links.map((link) => (
+						<WebSearchLinkRow key={link.url} link={link} />
+					))}
+				</div>
+			)}
+			{summary && (
+				<div className={links.length > 0 ? "mt-3" : undefined}>
+					<MarkdownContent content={summary} />
+				</div>
+			)}
+		</div>
+	);
+}
+
 /**
  * How many of a failed command's last lines are marked as its error. The
  * failure is nearly always said at the end — a compiler's last errors, a test
@@ -354,7 +415,9 @@ export function resultCount(
 				};
 			return { noun: "line", total: outputLineCount(result) };
 		}
+		// Mixed links and prose, which "N more lines" would not describe.
 		case "WebFetch":
+		case "WebSearch":
 			return undefined;
 		// Drawn as it came, never pretty-printed: a command that printed JSON
 		// printed one line.
@@ -432,6 +495,12 @@ export function resultFullScreenContent(
 		}
 		case "WebFetch":
 			return { kind: "markdown", markdown: result };
+		case "WebSearch": {
+			const parsed = failed ? null : parseWebSearchResult(result);
+			return parsed
+				? { kind: "markdown", markdown: webSearchMarkdown(parsed) }
+				: unknown();
+		}
 		case "Read":
 			return fileFullScreenContent(
 				readResultCode(result),
@@ -525,6 +594,10 @@ function ToolResultDisplay({
 		// The result is Markdown, and there is a renderer for that.
 		case "WebFetch":
 			return <MarkdownContent content={result} />;
+
+		case "WebSearch":
+			if (failed) return <UnknownResultDisplay result={result} />;
+			return <WebSearchResultDisplay result={result} />;
 
 		case "Read":
 			return (

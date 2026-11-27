@@ -184,19 +184,17 @@ not redraw the transcript.
 
 ### 3.2 Answered
 
-Status glyph and colours are a person's card's (`Check` success / `X` error),
-except a `by: "pockode"` deny, which is muted (below). The line adds who and
-why:
+The status glyph is a person's card's: `Check` for an allow, `X` for a deny,
+muted whoever answered, like a settled tool row
+([tool-call-ui.md](tool-call-ui.md#the-permission-card-takes-the-rows-place)).
+Shape tells the two apart, and colour is not used. The line adds who and why:
 
-| `by` | Line | Glyph colour |
-|---|---|---|
-| absent (a person) | none | a person's card's |
-| `permission_reviewer`, allow | `⟨Bot⟩ Allowed by the permission reviewer · View review` | success |
-| `permission_reviewer`, deny | `⟨Bot⟩ Denied by the permission reviewer — <category>` then `<reason>` · `View review` | error |
-| `pockode` | `Denied by Pockode — <automatic>` then `<reason>` · `View review` (when `session_id`) | muted, as expired |
-
-A Pockode deny is muted like an expired card because it is the same kind of
-outcome — nobody judged the call — not a judgement against it.
+| `by` | Line |
+|---|---|
+| absent (a person) | none |
+| `permission_reviewer`, allow | `⟨Bot⟩ Allowed by the permission reviewer · View review` |
+| `permission_reviewer`, deny | `⟨Bot⟩ Denied by the permission reviewer — <category>` then `<reason>` · `View review` |
+| `pockode` | `Denied by Pockode — <automatic>` then `<reason>` · `View review` (when `session_id`) |
 
 **Category labels** (`review.category`; an unknown id is shown as sent):
 
@@ -235,8 +233,8 @@ outcome — nobody judged the call — not a judgement against it.
   Labels for both tables live in `lib/permissionReview.ts`.
 - **The reducer keeps who answered.** `permission_response`'s `by` and
   `review` are kept on the card beside its status — history, from the record —
-  and the card draws from them; a `by: "pockode"` deny is still
-  status `denied`, the muted glyph is the card's reading of `by`.
+  and the card draws its line from them; a `by: "pockode"` deny is still
+  status `denied`, and its glyph is every deny's.
 - A deny never interrupts the turn, so the agent's next row usually rewrites
   the call; the card says nothing about that.
 

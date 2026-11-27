@@ -385,9 +385,11 @@ type ToolResultEvent struct {
 	// of this result: who it was and what it did. Nil for every call that is not
 	// a subagent's, and for one whose CLI reported nothing about it.
 	Subagent *SubagentReport
-	// ExitCode is the process exit status of a command the agent ran, when the
-	// CLI reports it separately from the result text. Nil for every tool that is
-	// not a command, and for a command that never ran.
+	// ExitCode is the process exit status of a command the agent ran: as a
+	// figure from Codex, and from Claude parsed off a failed Bash result's
+	// first line (see reportedExitCode in the claude package). Nil for every
+	// tool that is not a command, for a command that never ran, and for a
+	// Claude command that succeeded, whose status the CLI does not report.
 	ExitCode *int
 	// Contents is the result cut into blocks, set only when the agent returned
 	// something that is not prose — an image, a file. A result that is all text

@@ -81,7 +81,7 @@ of it that already shipped.
 | Result | `tool_result` block on a `user` message | `item/completed` |
 | Failure | `tool_result.is_error` | item `status` ∈ `inProgress`/`completed`/`failed`/`declined` |
 | Duration | for a subagent, `WebFetch` and `WebSearch` only, in the frame's `tool_use_result` | `durationMs` on `commandExecution`, `mcpToolCall`, `dynamicToolCall` |
-| Exit code | in the result text | `exitCode` on `commandExecution` |
+| Exit code | in the result text: a failed `Bash`'s first line, `Exit code N`, which the adapter parses into `exit_code` ([how](code/agent-integration.md#eventrecord-unified-event-format)) | `exitCode` on `commandExecution` |
 | Parsed intent | — | `commandActions[]`: `read` / `listFiles` / `search` / `unknown`, each with the sub-command and its path or query |
 
 Both engines announce a call and then report on it, so "a call with no result is

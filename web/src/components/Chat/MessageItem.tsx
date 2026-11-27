@@ -841,15 +841,14 @@ function PermissionRequestItem({
 
 	const statusConfig = {
 		pending: { Icon: CircleHelp, color: "text-th-warning" },
-		allowed: { Icon: Check, color: "text-th-success" },
-		denied: { Icon: X, color: "text-th-error" },
+		// An answer is not a failure: shape tells allow from deny, and a settled
+		// card stays muted like a settled row so red still means a failed call.
+		allowed: { Icon: Check, color: "text-th-text-muted" },
+		denied: { Icon: X, color: "text-th-text-muted" },
 		expired: { Icon: X, color: "text-th-text-muted" },
 	};
 
-	// Pockode's deny is muted like an expired card: nobody judged the call, so it
-	// is no judgement against it.
-	const { Icon, color } =
-		verdict?.by === "pockode" ? statusConfig.expired : statusConfig[status];
+	const { Icon, color } = statusConfig[status];
 
 	return (
 		// The data attribute is how MessageList finds this card when the attention

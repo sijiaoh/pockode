@@ -571,16 +571,19 @@ to the first row it revealed rather than letting it fall to the page. Seven, not
 five, so that `Show 1 more` and `Show 2 more` never appear. The header always
 counts every file.
 
-**Line counts are read off the inputs**, with no protocol of their own:
+**Line counts are read off the inputs**, with no protocol of their own. A diff is
+counted off the patch the body draws (`diffStat`, by its hunk headers), so the
+card, the file's *Change* header and the row's
+[`+N −M`](#what-the-call-measured) are one number:
 
 | Change | `+` | `−` |
 |---|---|---|
-| `Edit` | `diffLines` over `old_string` / `new_string`, each closed with a newline so a fragment's last line compares as a line — appending to `a` is `+1`, not a rewrite of `a` — and carriage returns set aside, so a CRLF file reads the same | same |
-| `Edit` with an empty `old_string` | the new text's lines | `0` |
+| `Edit` | its patch, built from `old_string` / `new_string` each closed with a newline so a fragment's last line compares as a line — appending to `a` is `+1`, not a rewrite of `a` — and carriage returns set aside, so a CRLF file reads the same (`fragmentPatch`, `lib/proposedChange.ts`) | same |
+| `Edit` with an empty `old_string` | the new text's lines: it creates the file, so its text is diffed as it is, unclosed | `0` |
 | `MultiEdit` | each edit as an `Edit`, summed | same |
 | `Write` creating the file | the content's lines, a trailing newline opening none | `0` |
 | `Write` over a file | the content's lines | unknown — the old content is not in the call |
-| Codex | the `+` / `-` lines of each file's hunks, so the count is the diff the row opens on; no hunks (an empty file, a pure rename) is `0`, an unknown change type is unknown | same |
+| Codex | each file's hunks, so the count is the diff the row opens on; no hunks (an empty file, a pure rename) is `0`, an unknown change type is unknown | same |
 
 Whether a `Write` created or rewrote is only in its result's wording, measured
 on Claude Code 2.1.286: `File created successfully at: …` and `The file … has
@@ -617,11 +620,15 @@ the chip is a word.
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│ ›  ⟳  Bash   npm run build --workspace=@pockode/sh…   1m 04s │
+│ ›  ⟳  Bash   npm run build --workspace=@pockode/sh…  1m 04s │
 │       vite v7.1.14 building for production…                 │
+│ ›  ✓  Edit   …/Chat/ToolCallItem.tsx          +12 −3   1.2s │
+│ ›  ✕  Bash   pnpm test --filter web           exit 1    14s │
 └─────────────────────────────────────────────────────────────┘
-  ^  ^  ^      ^                                          ^
-  │  │  │      └ detail (truncates)                       └ meta
+  ^  ^  ^      ^                                ^           ^
+  │  │  │      └ detail (truncates)             │           │
+  │  │  │                                       └ figure: counts or exit
+  │  │  │                                                   └ time   (figure + time: meta)
   │  │  └ name
   │  └ status glyph
   └ chevron
@@ -825,8 +832,16 @@ painted over the card's children and the row's hover cannot cover it — except
 by a child with a z-index, which an open card's sticky bar is, so the card
 restates its tint and frame for the bar
 ([the sticky title line](#the-sticky-title-line)). Its body
-keeps the tint. Once answered it is an ordinary row: no tint, and a body on
-`bg-th-bg-secondary` like a tool row's. A request the permission reviewer is
+keeps the tint. Once answered it is an ordinary row: no tint, a body on
+`bg-th-bg-secondary` like a tool row's, and a glyph as muted as a settled
+row's — `Check` for an allow, `X` for a deny, whoever answered. An answer is
+not an event. A session can hold dozens of approved cards, and a green tick on
+each would do what it did on the success rows: draw the eye away from the
+calls that failed. A deny is a decision, not a failure, and what the engine
+reports about the refused call afterwards is a settled run of its own (below).
+A red `X` on the card would say "refused" a second time, in the colour that
+means "failed". Shape tells allow from deny, and the verdict line says who and
+why. A request the permission reviewer is
 answering is the exception while pending: it waits on nobody, so it keeps the
 frame (neutral, `outline-th-border`) without the tint, folds, and no button is
 the accent. A verdict line under the row says who answered in the user's place.
@@ -889,7 +904,7 @@ afterwards cannot word the same call differently.
 | Tool (Pockode-normalized name) | Title | Detail | Truncates from |
 |---|---|---|---|
 | `Bash` | `Bash` | the **command**, newlines collapsed to ` ⏎ ` — or, when Codex parsed the command into exactly one action, that action's path or query | right |
-| `Read` / `Write` / `Edit` / `MultiEdit` | the name | the path relative to the work directory, split so the file name survives | **left** |
+| `Read` / `Write` / `Edit` / `MultiEdit` / `LS` | the name | the path relative to the work directory, split so the file name survives | **left** |
 | `Grep` | `Grep` | `"pattern"` + ` in <path>` when scoped — the path relative to the work directory when inside it, and no ` in …` at all when it *is* the work directory | right |
 | `Glob` | `Glob` | the pattern | right |
 | `WebFetch` / `WebSearch` | the name | host + path / the query | right |
@@ -902,7 +917,7 @@ afterwards cannot word the same call differently.
 | `html_get` | `html_get` | `pockode` as a chip, then the `id` | right |
 | anything else | the name | first non-empty scalar in `input` | right |
 
-Six decisions inside that table:
+Seven decisions inside that table:
 
 - **`TaskOutput` is in the table although many of them never draw a row.** A
   fetch of a task's output is filed under the call it reads and takes no row at
@@ -925,6 +940,19 @@ Six decisions inside that table:
   Claude passes its own `mcp__server__tool` straight through, and an unsplit
   40-character machine name would sit in the title slot, which never truncates,
   and evict the detail that actually identifies the call.
+- **A file tool is known by its name, not by a `path` field.** Only the tools in
+  the path row above are read by `file_path`, then `path` (`fileToolPath`,
+  `lib/toolSummary.ts`). `toolSummary` and the body's `invocationView` both go
+  through it, so the title and the body cannot disagree about which calls are
+  file calls. The field used to decide it. Then an MCP tool that takes a
+  `path`, such as `mcp__fs__read_file`, was drawn as a file. Its whole machine
+  name sat in the never-truncating title, and its body was a path line that
+  left out every other argument, which broke
+  [everything the row truncates is in the body](#the-rules). Such a call is now
+  an MCP row, and an unknown tool with a `file_path` is an "anything else" row.
+  The body of either lists every argument, the path among them. `NotebookEdit`
+  is not in the set: its input is the cell it writes, and a path line would
+  hide it.
 - **A `Grep` scope is named from the work directory.** Claude nearly always
   passes `path` absolute, and on a 375px row the detail then had room for the
   home directory and nothing after it — the pattern, then `in /Users/me/…`,
@@ -1351,8 +1379,16 @@ a fetch is one record that the CLI has already cut to its own limit.
 
 Right-aligned, `shrink-0`, `text-th-text-muted`, after the detail — on a tool
 row, a subagent row (the `1m 12s` in [the subagent body](#the-subagent-body))
-and a running group's summary alike, because all three draw `ToolMeta`. One
-slot, one figure: a finished run's duration, or a live run's elapsed counter.
+and a running group's summary alike, because all three draw `ToolMeta`. It
+holds two things, in this order: **what the call measured** — an edit's line
+counts or a command's exit code, [below](#what-the-call-measured) — and then
+**its time**, a finished run's duration or a live run's elapsed counter. They
+are `gap-2` apart, with no `·` between them, as in `proposedChangeHeader`. The
+time comes last so that the times of a stack of rows stay in one column.
+Neither one is ever truncated; the detail gives way. On a 375px row that still
+leaves the file name: the widest figure, `+1234 −567`, is about ten
+characters, and the detail's own rules (left truncation, the 70% cap on the
+name) handle the rest. No breakpoint is added for it.
 
 ### Where a figure comes from
 
@@ -1494,8 +1530,75 @@ turn-level summary's concern, not this one.
 | backgrounded, outcome not in yet | counter, still going |
 | backgrounded, outcome in | duration from the call to the outcome |
 
-Codex's `exitCode` belongs in the **body**, not here: it is only interesting when
-it is non-zero, and then the glyph has already said so.
+### What the call measured
+
+At most one figure, before the time, in `font-mono tabular-nums` and muted. A
+`Bash` call has no counts and an edit has no exit code, so the two never meet
+(`ToolOutcomeFigure`, `ToolRow.tsx`).
+
+```
+›  ✓  Edit   …/Chat/ToolCallItem.tsx        +12 −3   1.2s
+›  ✓  Write  …/lib/newThing.ts              +48
+›  ✕  Bash   pnpm test --filter web          exit 1   14s
+```
+
+**An edit's line counts**, `+N −M`, on `Edit`, `MultiEdit`, `Write` and a
+Codex file change:
+
+- **The same number as the body's *Change* header.** It is `callLines`
+  (`lib/turnChanges.ts`), the turn's changes card's own count of one call
+  ([how it is read](#the-turns-changes)), and for a diff that is the patch the
+  body draws. The row sits directly above that header and is read against it.
+  There used to be two counts. The tally diffed the fragments closed with a
+  newline. The body diffed them unclosed, so appending a line to `a` was drawn
+  as `-a +a +b` (+2 −1) with a false `\ No newline at end of file`, while the
+  tally counted +1. Now the patch itself is built from the closed fragments,
+  and both counts read that patch.
+- **A `Write` is `+N` and nothing else.** That is the turn's changes card's
+  rule. A new file is content, not a diff. When it overwrote a file, nothing
+  says what was removed, so no `−` is drawn. The row carries no `new` or
+  `rewritten` chip. The chip slot is for facts about the call itself, like an
+  MCP server or `background`. Whether the file was new is already said by the
+  body's *Content* and by the turn's changes card.
+- **Only on `success`.** A failed change changed nothing, which is the turn's
+  tally's rule too. Its body still has the muted counts beside `not applied`.
+  An `interrupted` one may or may not have changed anything, and a running one
+  has not yet. A pending permission card's row has no counts either: the
+  change has not run, and the card's *Proposed change* header has them.
+- A zero side is left out (`+3`, `−7`), and when both sides are zero nothing is
+  drawn: `LineCountsLabel` again, with `colored={false}`. An `sr-only` "lines"
+  goes in front of the counts, so a screen reader reads "lines +12 −3".
+- **Muted, never green and red.** The turn's changes card colours its counts
+  only because it is "not in a stack of tool rows where red could read as a
+  failed call". A row is in exactly that stack. A red `−3` on every `Edit` row
+  would cost the failed rows their red. The coloured counts stay in the body's
+  header, one tap away.
+
+**A command's exit code**, `exit N`, whenever one other than `0` was measured,
+whatever the status. Negative codes and signal codes are drawn as they came
+(`exit -1`, `exit 137`). `0` and "unknown" draw nothing. Codex reports the code
+as a figure. Claude writes it as the failed `Bash` result's first line, and the
+adapter parses that
+([agent-integration.md](code/agent-integration.md#eventrecord-unified-event-format)).
+An engine that reports a code also fails the call for it, so in practice the
+code appears only on red rows. Rows that succeeded never show one, even though
+no rule here checks the status.
+
+- **On the row, not in the body.** This used to be the other way round, and the
+  argument was that the glyph had already said the call failed. But the glyph
+  says only *that* it failed. The code says *how*: `exit 137` (killed) and
+  `exit 1` are different failures. A reader should not have to open the row to
+  tell them apart. The body no longer ends with an `Exit code N` paragraph. Once
+  the row is open, it is the sticky bar and its meta stays in view, so the
+  paragraph only repeated it. Claude's own `Exit code N` line stays verbatim at
+  the top of the *Output*.
+- **`exit 1`, not `Exit code 1`.** The row is short of room, and the longer form
+  would repeat word for word the first line of a Claude output.
+- **Muted, not red.** A failed row is already red in three places: the tint, the
+  `X` and the detail. The [second line](#the-second-line-problem-1) already
+  turned down a fourth, and the same reason holds here. The second line says
+  why the call failed, and the code says how, so the two do not repeat each
+  other.
 
 ## The body (problems 2 and 3)
 
@@ -1950,7 +2053,7 @@ In the default order, each section omitted when empty:
    ([above](#when-a-background-run-finishes)). The first two are drawn whole by
    `ToolOutcomeSections`; the last is a slot, because what a result looks like is
    this renderer's knowledge. Here it is `ToolResultDisplay` — whose file
-   changes are `ProposedChange`, shared with the permission card — with three
+   changes are `ProposedChange`, shared with the permission card — with
    cheap additions that close problem 3 and need nothing from the new model:
    - `Grep` / `Glob`: the result is a file list — rendered as one, paths through
      `formatFilePath`, each with an *Open* into the Files tab, capped at 100 with
@@ -1963,6 +2066,46 @@ In the default order, each section omitted when empty:
    - MCP and unknown tools whose result parses as JSON: pretty-print and
      highlight instead of printing it flat.
    - `WebFetch`: the result is Markdown, and `MarkdownContent` exists.
+   - `WebSearch`: a list of the results the search found, then the search
+     tool's own summary. Claude sends one string (measured on 376 local
+     results): `Web search results for query: "…"`, then a
+     `Links: [{"title","url"}, …]` line, then a Markdown summary, then a
+     `REMINDER: You MUST include the sources…` line. Some results have a second
+     `Links:` line that repeats part of the first. A link has a title and a URL
+     and no snippet. The summary is what tells the reader about the results.
+     `parseWebSearchResult` (`lib/webSearchResult.ts`) reads it, so the
+     component does not parse anything. The header line has to match or
+     nothing is parsed. It is not drawn, since the row's detail is the query
+     already. Each `Links:` line is read as JSON, and the links are
+     deduplicated by URL in the order they first appeared. A `Links:` line that
+     does not parse is not dropped: it stays in the summary as text. The
+     reminder is the CLI's instruction to the model, a wrapper like
+     `<tool_use_error>`, and only the drawing leaves it out. What remains,
+     trimmed, is the summary.
+     - Each result is one full-width `<a>` (`target="_blank"`,
+       `rel="noopener noreferrer"`, at the `min-h-9` /
+       `pointer-coarse:min-h-11` of a file row's *Open*). It shows the title in
+       primary text, wrapping and never cut, then the host in muted text on
+       one truncated line, then an ↗. The host is the hostname without a
+       leading `www.`, enough to say where a result is from. The full URL is
+       the link itself, and it is written out in full screen. There is no
+       `openDeferredTab`, since the address is known at the click.
+     - Only `http:` and `https:` become links. Any other URL, or one that does
+       not parse, is drawn the same way but not as a link: no ↗, and the raw
+       string in place of the host. A result with no title uses its URL.
+     - The summary goes `mt-3` under the list, through `MarkdownContent`,
+       with no heading of its own. A list and prose already look different.
+       With no links only the summary is drawn, and with neither a muted
+       `No results.` is drawn.
+     - The section clamps at the `main` budget, list first, so the list is
+       what shows. `resultCount` is undefined, as for `WebFetch`, because
+       "N more lines" cannot describe the mix. Copy copies the raw result.
+       Full screen is Markdown: one ``- [title](<url>) `host` `` per link
+       (plain text for one that is not a link), then the summary.
+     - A result that does not match, one that came as content blocks, and a
+       failed call all fall back to `UnknownResultDisplay`, which is how they
+       were drawn before. Codex's web search does not reach a `WebSearch` row
+       yet ([tool-call-model.md](tool-call-model.md#out-of-scope)).
    - `Bash`: the output **wraps** — a log line is read whole, and a sideways
      scroll hid the end of nearly every one on a phone. Its clamp keeps the
      *end* in view (`resultFromEnd`), because a test run's or a build's verdict
@@ -1995,8 +2138,9 @@ In the default order, each section omitted when empty:
      the only place the reason is — was shown nowhere: on device an `Edit` whose
      `old_string` was not in the file opened on a `+1 −2` diff that read as
      applied, with the error never on screen.
-4. **Exit code**, when Codex reported a non-zero one, and — for a call whose
-   result outlived the turn it was cut off in — one line saying so.
+4. For a call whose result outlived the turn it was cut off in, one line saying
+   so. A non-zero exit code is on the row
+   ([what the call measured](#what-the-call-measured)), not here.
 
 The attachment strip stays between the row and the body, and what goes in it is
 what the result **is**: when a tool answers with a screenshot, the screenshot is
@@ -2225,7 +2369,7 @@ props for it: `subtitle`, drawn under the title, and `initialFocusRef`.
 | code (`Read`, a `Write`'s content, JSON) | by the line, virtualized; shiki colours | the viewer's own, **off** | the top |
 | a diff (`Edit`, `MultiEdit`, a Codex change) | `ProposedChange`, whole | the transcript's remembered one (`diffSettingsStore`) | the top |
 | files (`Glob`, `Grep`'s file lists) | by the row, virtualized; **every** path, each with *Open* | none | the top |
-| Markdown (`WebFetch`, the plan, a report, reasoning, a `.md` file) | `MarkdownContent`, whole — a `.md` file through `FileContentDisplay`, so its relative images resolve against its own directory; plain wrapped text past `HIGHLIGHT_LIMIT` | none: it reflows | the top |
+| Markdown (`WebFetch`, a `WebSearch`'s links then its summary, the plan, a report, reasoning, a `.md` file) | `MarkdownContent`, whole — a `.md` file through `FileContentDisplay`, so its relative images resolve against its own directory; plain wrapped text past `HIGHLIGHT_LIMIT` | none: it reflows | the top |
 | a page (`html_render`) | `HtmlFrame`, edge to edge with no padding, scrolling itself; its source, under the toolbar's `</>`, as code | the code's, while its source is shown | the top, in the mode the card was in |
 
 - **Wrap.** Only the diff's choice is remembered, and it is the same switch every
@@ -4112,10 +4256,11 @@ the virtualizer measures it.
    rest. A backgrounded `Bash` that finished reads `Completed (exit code 0)`
    (or its failure) under the command, not `Background command "…"`.
 6. A codex `commandExecution`: detail derived from `commandActions` when there is
-   one, `durationMs` on the right, `exitCode` in the body. A claude `Bash`
-   running `sleep 3` shows about `3.0s` on the right once settled, and the same
-   after a reload; a subagent row shows how long it ran; a transcript written
-   before `observed_at` existed shows no figure on any claude row.
+   one, `durationMs` on the right, a non-zero `exitCode` as `exit N` before it.
+   A claude `Bash` running `sleep 3` shows about `3.0s` on the right once
+   settled, and the same after a reload; a subagent row shows how long it ran;
+   a transcript written before `observed_at` existed shows no figure on any
+   claude row.
 7. An approved `Bash`: **one** row, not two — the card takes the pending row's
    place and the engine's next report gives it back, and while the card is
    pending nothing around it is spinning. Check both orders: Claude announces the
@@ -4388,6 +4533,31 @@ the virtualizer measures it.
     in the card and full screen, the transcript never does, and a vertical
     swipe over it scrolls the transcript. Under an extension with an avatar,
     and inside a subagent's Process, the card stays in its column.
+61. A successful `Edit` that appends one line: `+1` before its time on the row,
+    muted, and the same `+1` in its *Change* header, with no `-a +a` pair
+    and no "No newline at end of file" in the diff. A `MultiEdit` shows its
+    edits summed. A `Write` shows `+N` with no `−`. A failed `Edit` and an
+    interrupted one have no counts on the row, and an edit that changed
+    nothing shows no `+0`. On a 375px row with a long path, the counts and
+    the time are whole and the file name still shows.
+62. A failed claude `Bash` (`exit 1`) and one killed (`exit 137`), closed: a
+    muted `exit 1` / `exit 137` before the time, the times of the stack
+    still in one column. Open one: the bar still shows the code, the output
+    still starts with Claude's `Exit code N`, and no paragraph at the end of
+    the body repeats it. A refused `Bash` (`<tool_use_error>`) and a denied
+    one show no code. Neither does a successful one.
+63. An MCP tool that takes a `path` (e.g. `mcp__fs__read_file`): titled
+    `read_file` with an `fs` chip, not by its machine name. Its body lists
+    every argument, the path among them, rather than a lone path line.
+64. A `WebSearch`: *Results* is a list of titles with their hosts, each
+    opening its page in a new tab, then the summary as Markdown, with no
+    `REMINDER: …` line anywhere. A result found twice is listed once.
+    Copy gives the raw result; full screen gives the links, then the summary.
+    A failed one reads as it did before.
+65. Approve one call, deny another, and let the permission reviewer allow
+    and deny one each: all four settled cards have a muted `✓` or `✕`, the
+    same grey as a settled row's tick. No green and no red, apart from a
+    failed answer send's error line.
 
 ## Out of scope
 
