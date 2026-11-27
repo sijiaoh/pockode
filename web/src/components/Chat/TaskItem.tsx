@@ -232,7 +232,7 @@ function TaskItem({ run, depth = 0, renderChild }: Props) {
 	// The row says what the subagent is doing now, which a resumed one is
 	// doing under the call that resumed it; the body keeps what it reported.
 	const resume = useSubagentResume(run.id);
-	const rowRun = resume ? resumedRun(run, resume) : run;
+	const rowRun = resumedRun(run, resume);
 	// The step window: sized by the list, drawn while the run is live and kept
 	// frozen after it settles until nobody sees it fold, and not while the
 	// Process is open inline, which shows the same steps whole

@@ -45,7 +45,7 @@ export function useAgentsOverview(
 		}
 		sourceRef.current = next;
 		agentRunsRef.current = next.map(({ run, resume }) =>
-			resume ? resumedRun(run, resume) : run,
+			resumedRun(run, resume),
 		);
 		return agentRunsRef.current;
 	}, [messages]);

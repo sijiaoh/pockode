@@ -119,6 +119,14 @@ function rendered(list: Message[], tail: TurnTail = RUNNING) {
 		scroller,
 		row,
 		hasWindow: () => row().querySelector("[data-step-window]") !== null,
+		/**
+		 * The row's place in what scrolls. Not `offsetTop`: each message row is
+		 * layout-contained, which makes it the `offsetParent` of what it holds.
+		 */
+		contentTop: () =>
+			row().getBoundingClientRect().top -
+			scroller.getBoundingClientRect().top +
+			scroller.scrollTop,
 		/** Where the row sits on screen, and how tall it is. */
 		box: () => {
 			const rect = row().getBoundingClientRect();
@@ -172,7 +180,7 @@ describe("the step window on a phone", () => {
 		const after = text("after", 12);
 		const t = rendered(messages([subagent(3, "running"), after]));
 		await settle();
-		await t.scrollTo(t.row().offsetTop - 40);
+		await t.scrollTo(t.contentTop() - 40);
 		const inView = t.scroller.scrollTop;
 		expect(t.hasWindow()).toBe(true);
 
@@ -204,7 +212,7 @@ describe("the step window on a phone", () => {
 		const reply = [text("now", 1)];
 		const t = rendered(messages(reply, true, [subagent(3, "running")]));
 		await settle();
-		await t.scrollTo(t.row().offsetTop - 40);
+		await t.scrollTo(t.contentTop() - 40);
 		expect(t.hasWindow()).toBe(true);
 		await t.update(messages(reply, true, [subagent(3, "success")]));
 		expect(t.hasWindow()).toBe(true);

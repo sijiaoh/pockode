@@ -16,7 +16,6 @@ import {
 	useRef,
 	useState,
 } from "react";
-import { findToolRun } from "../../lib/partTree";
 import {
 	isLiveRun,
 	resumedRun,
@@ -33,6 +32,7 @@ import {
 	taskPrompt,
 	toolSummary,
 } from "../../lib/toolSummary";
+import { findLoadedRun } from "../../lib/transcriptMemo";
 import type { ContentPart, Message, ToolRun } from "../../types/message";
 import {
 	ClampedContent,
@@ -101,19 +101,6 @@ interface Props {
 	partProps: LevelPartProps;
 }
 
-/** The subagent's run, wherever in the loaded transcript its call is. */
-export function findSubagentRun(
-	messages: Message[],
-	toolUseId: string,
-): ToolRun | undefined {
-	for (const message of messages) {
-		if (message.role !== "assistant") continue;
-		const run = findToolRun(message.parts, toolUseId);
-		if (run) return run;
-	}
-	return undefined;
-}
-
 /**
  * The runs of the levels, down to the first whose run is gone: that level
  * closes, and every level above it.
@@ -121,7 +108,7 @@ export function findSubagentRun(
 function levelRuns(messages: Message[], path: string[]): ToolRun[] {
 	const runs: ToolRun[] = [];
 	for (const id of path) {
-		const run = findSubagentRun(messages, id);
+		const run = findLoadedRun(messages, id);
 		if (!run) break;
 		runs.push(run);
 	}
@@ -310,7 +297,7 @@ function SubagentLevel({
 	const arrived = [...(run.children ?? []), ...(flatChildren ?? [])];
 	// Resumed, it is running again, as its row is.
 	const resume = useSubagentResume(run.id);
-	const live = isLiveRun(resume ? resumedRun(run, resume) : run);
+	const live = isLiveRun(resumedRun(run, resume));
 
 	const scrollRef = useRef<HTMLElement>(null);
 	const trackRef = useRef<HTMLDivElement>(null);
@@ -517,7 +504,7 @@ function LevelHeader({
 }) {
 	const summary = toolSummary(run.name, run.input, "");
 	const resume = useSubagentResume(run.id);
-	const rowRun = resume ? resumedRun(run, resume) : run;
+	const rowRun = resumedRun(run, resume);
 	const unfiled = useUnfiledChildren(run.id);
 	const line = subagentLine(rowRun, unfiled);
 	const plainLine = line ? null : toolSecondLine(rowRun);

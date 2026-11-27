@@ -9,6 +9,7 @@ import type {
 import { openAssistantIndex } from "./messageReducer";
 import { isLiveRun } from "./subagentRun";
 import { isTaskTool } from "./toolSummary";
+import { perMessage, perTranscript } from "./transcriptMemo";
 
 /**
  * What the status line's plan and agents read off the transcript
@@ -23,17 +24,37 @@ import { isTaskTool } from "./toolSummary";
  * another subagent, or left flat naming its parent, is a step of that parent's
  * (docs/turn-progress-ui.md#43-the-agents).
  */
-export function topLevelAgentRuns(messages: Message[]): ToolRun[] {
-	const runs: ToolRun[] = [];
-	for (const message of messages) {
-		if (message.role !== "assistant") continue;
-		for (const part of message.parts) {
-			if (part.type !== "tool_call" || part.parentToolUseId) continue;
-			if (isTaskTool(part.tool.name)) runs.push(part.tool);
+export const topLevelAgentRuns = perTranscript(
+	(messages: Message[]): readonly ToolRun[] =>
+		messages.flatMap((message) => messageTopLevel(message).agentRuns),
+);
+
+interface MessageTopLevel {
+	/** The reply's own subagent runs, in order. */
+	agentRuns: readonly ToolRun[];
+	/** The newest plan among the reply's own runs, by record order. */
+	newestPlan?: ToolRunPlan;
+}
+
+const NO_TOP_LEVEL: MessageTopLevel = { agentRuns: [] };
+
+/** What a reply's own top-level runs say: the parts `parentToolUseId` leaves. */
+const messageTopLevel = perMessage((message): MessageTopLevel => {
+	if (message.role !== "assistant") return NO_TOP_LEVEL;
+	const agentRuns: ToolRun[] = [];
+	let newestPlan: ToolRunPlan | undefined;
+	for (const part of message.parts) {
+		if (part.type !== "tool_call" || part.parentToolUseId) continue;
+		if (isTaskTool(part.tool.name)) agentRuns.push(part.tool);
+		const plan = part.tool.plan;
+		if (plan && (!newestPlan || plan.order > newestPlan.order)) {
+			newestPlan = plan;
 		}
 	}
-	return runs;
-}
+	return agentRuns.length > 0 || newestPlan
+		? { agentRuns, newestPlan }
+		: NO_TOP_LEVEL;
+});
 
 /**
  * The runs a background wait is waiting on, in transcript order, of any tool:
@@ -199,12 +220,11 @@ export function currentPlan(
 		if (message.role !== "assistant") continue;
 		const floor = inTurn.has(message) ? Number.NEGATIVE_INFINITY : since;
 		if (floor === undefined) continue;
-		for (const part of message.parts) {
-			if (part.type !== "tool_call" || part.parentToolUseId) continue;
-			const plan = part.tool.plan;
-			if (!plan || plan.order <= floor) continue;
-			if (!newest || plan.order > newest.order) newest = plan;
-		}
+		// The reply's newest plan stands for all of its own: if it is not past
+		// the floor, none of them is.
+		const plan = messageTopLevel(message).newestPlan;
+		if (!plan || plan.order <= floor) continue;
+		if (!newest || plan.order > newest.order) newest = plan;
 	}
 	return newest && newest.steps.length > 0 ? newest : undefined;
 }

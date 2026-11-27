@@ -1,4 +1,5 @@
-import type { ContentPart, Message } from "../types/message";
+import type { Message } from "../types/message";
+import { messageRunsById, perMessage, perTranscript } from "./transcriptMemo";
 
 /**
  * The calls that stop a background task: Claude's `TaskStop`, and the names it
@@ -59,30 +60,34 @@ export function stopResultText(stopped: StopResult): string {
 }
 
 const NO_TARGETS: ReadonlySet<string> = new Set();
+const NO_NAMED: readonly string[] = [];
+
+/** The calls this message's stops name, by their `originToolUseId`. */
+const namedByStops = perMessage((message): readonly string[] => {
+	const named: string[] = [];
+	for (const run of messageRunsById(message).values()) {
+		if (run.originToolUseId && isStopTool(run.name)) {
+			named.push(run.originToolUseId);
+		}
+	}
+	return named.length > 0 ? named : NO_NAMED;
+});
 
 /**
  * The calls named by a stop's `originToolUseId` whose rows are loaded — the
  * ones its `Go to call` can land on. The answer is the whole transcript's (the
  * origin is usually in an earlier bubble than the stop), so it is read here,
- * over every message, rather than by the stop's row.
+ * over every message, rather than by the stop's row. Put together from each
+ * message's own (`perMessage`): a streamed record re-reads only the message it
+ * changed.
  */
-export function loadedStopTargets(messages: Message[]): ReadonlySet<string> {
-	const ids = new Set<string>();
-	const named: string[] = [];
-	const visit = (parts: ContentPart[]) => {
-		for (const part of parts) {
-			if (part.type !== "tool_call") continue;
-			const run = part.tool;
-			ids.add(run.id);
-			if (run.originToolUseId && isStopTool(run.name)) {
-				named.push(run.originToolUseId);
-			}
-			if (run.children) visit(run.children);
-		}
-	};
-	for (const message of messages) {
-		if (message.role === "assistant") visit(message.parts);
-	}
-	const loaded = named.filter((id) => ids.has(id));
-	return loaded.length > 0 ? new Set(loaded) : NO_TARGETS;
-}
+export const loadedStopTargets = perTranscript(
+	(messages: Message[]): ReadonlySet<string> => {
+		const named = messages.flatMap((message) => namedByStops(message));
+		if (named.length === 0) return NO_TARGETS;
+		const loaded = named.filter((id) =>
+			messages.some((message) => messageRunsById(message).has(id)),
+		);
+		return loaded.length > 0 ? new Set(loaded) : NO_TARGETS;
+	},
+);

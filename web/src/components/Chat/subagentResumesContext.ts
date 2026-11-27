@@ -1,6 +1,7 @@
-import { createContext, useContext, useRef } from "react";
+import { useRef } from "react";
 import { liveResumes } from "../../lib/subagentRun";
 import type { Message, ToolRun } from "../../types/message";
+import { createSelectableContext } from "./selectableContext";
 
 const EMPTY: ReadonlyMap<string, ToolRun> = new Map();
 
@@ -9,12 +10,31 @@ const EMPTY: ReadonlyMap<string, ToolRun> = new Map();
  * resumed it (`liveResumes`). A context for the reason `UnfiledChildrenContext`
  * is one: the answer is the whole transcript's — the resuming call is usually
  * in a later bubble than the row — and the reader is a row inside one.
+ * Selectable, because the resuming call changes on every record the resumed
+ * subagent writes, and a plain context changing walks every bubble of the
+ * transcript for its readers.
  */
-export const SubagentResumesContext = createContext(EMPTY);
+const [SubagentResumesContext, useSelectResumes] =
+	createSelectableContext(EMPTY);
+
+export { SubagentResumesContext };
 
 /** The call resuming this subagent, while one is. */
 export function useSubagentResume(toolUseId: string): ToolRun | undefined {
-	return useContext(SubagentResumesContext).get(toolUseId);
+	return useSelectResumes((resumes) => resumes.get(toolUseId));
+}
+
+/**
+ * The resumes, for a list of rows sizing their step windows together: the
+ * whole map while any of these calls is resumed, else an empty one, so a list
+ * none of whose rows is resumed is not redrawn for one elsewhere.
+ */
+export function useSubagentResumesAmong(
+	toolUseIds: readonly string[],
+): ReadonlyMap<string, ToolRun> {
+	return useSelectResumes((resumes) =>
+		toolUseIds.some((id) => resumes.has(id)) ? resumes : EMPTY,
+	);
 }
 
 function sameResumes(

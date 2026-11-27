@@ -35,13 +35,29 @@ const AT_BOTTOM_THRESHOLD = 50;
  */
 const BUTTON_BAND = 60;
 
-const KEEP_CLEAR_ATTR = "data-keep-clear";
+/**
+ * Every element currently marked keep-clear, in any transcript. Registered by
+ * the mark itself rather than looked up: the band is asked after every commit
+ * while the view follows a streaming tail, and a selector over the transcript
+ * cost that look 10–30 ms a record in a long session — growing with the
+ * history, when what it finds is at most a card or two.
+ */
+const keepClearNodes = new Set<HTMLElement>();
+
+function registerKeepClear(node: HTMLElement | null) {
+	if (!node) return;
+	keepClearNodes.add(node);
+	return () => {
+		keepClearNodes.delete(node);
+	};
+}
 
 /**
  * Marks controls the scroll button must never be drawn over — a pending
- * permission card's answers. Spread onto them: `<div {...keepClearProps}>`.
+ * permission card's answers. Spread onto them: `<div {...keepClearProps}>`,
+ * on an element that takes no ref of its own.
  */
-export const keepClearProps = { [KEEP_CLEAR_ATTR]: "" };
+export const keepClearProps = { ref: registerKeepClear };
 
 /**
  * Whether anything marked keep-clear is in the band the button sits in. Asked
@@ -50,8 +66,10 @@ export const keepClearProps = { [KEEP_CLEAR_ATTR]: "" };
  * which is how a fixed "near the end" distance once let the button cover Allow.
  */
 function keepClearInBand(el: HTMLElement): boolean {
+	if (keepClearNodes.size === 0) return false;
 	const bottom = el.getBoundingClientRect().bottom;
-	for (const node of el.querySelectorAll(`[${KEEP_CLEAR_ATTR}]`)) {
+	for (const node of keepClearNodes) {
+		if (!el.contains(node)) continue;
 		const rect = node.getBoundingClientRect();
 		if (rect.bottom > bottom - BUTTON_BAND && rect.top < bottom) return true;
 	}
