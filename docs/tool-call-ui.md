@@ -136,14 +136,14 @@ of `Read`s between the question and the answer. So consecutive calls in a list
 fold into one row that says what they did:
 
 ```
-┌───────────────────────────────────────────────┐
-│ ›  ✓  Edited 2 files · Ran 1 command · Read 2…│  ← the summary
-├───────────────────────────────────────────────┤
-│ ›  ✗  Bash   go test ./relay/…                │  ← pinned: failed
-│          --- FAIL: TestRetry (0.01s)          │
-├───────────────────────────────────────────────┤
-│ ›  ⟳  Bash  background  npm run dev     4m 12s│  ← pinned: background
-└───────────────────────────────────────────────┘
+┌───────────────────────────────────────────────────────┐
+│ ›  ✓  Edited sender.go · Ran go vet +1 · Read 3 files │  ← the summary
+├───────────────────────────────────────────────────────┤
+│ ›  ✗  Bash   go test ./relay/…                        │  ← pinned: failed
+│          --- FAIL: TestRetry (0.01s)                  │
+├───────────────────────────────────────────────────────┤
+│ ›  ⟳  Bash  background  npm run dev            4m 12s │  ← pinned: background
+└───────────────────────────────────────────────────────┘
 ```
 
 `rowEntries` (`lib/toolGroups.ts`) decides it, a pure function of the parts as
@@ -155,7 +155,7 @@ message does. Every part of a list falls into one of these kinds:
 | **Breaker** | a subagent call, `ExitPlanMode`, and their cards — and, since they already end the list, text, a question card and every other part | ends the group and stands as itself |
 | **Pinned** | a call that is `error`; one that is `background` or `fromBackground`, running or settled, unless it was interrupted; one `lostWithProcess`, interrupted or not; a card that is not `allowed`; an `allowed` card whose row has not come back, or whose call is still running | belongs to the group, never folds |
 | **Settled** | a call that is `success` or `interrupted` (but not `lostWithProcess`), with its `allowed` card if it had one — an `interrupted` one even once a background result reaches it, since the interrupt came first | folds into the summary, and is the only kind that decides whether there is a group |
-| **Running** | a `running` call that never had a card | folds into a group its settled neighbours form — the newest is the step the summary is on; otherwise lies flat |
+| **Running** | a `running` call that never had a card | folds into a group its settled neighbours form — named in the summary in the present tense, the newest giving it its elapsed time; otherwise lies flat |
 | **Thinking** | a thinking row — not a call, and counts toward nothing ([turn-progress-ui.md](turn-progress-ui.md#12-where-it-goes-and-groups)) | folds into a group the calls form |
 
 - **A call is one member, by id.** A card and the row it stands for share a
@@ -216,34 +216,155 @@ folds into one that already does. What is left is accepted, not patched over:
    counts as settled until it is marked, then turns pinned; a group that had
    exactly two settled calls dissolves. It is rare and accepted.
 
-**The summary row** is the tool row's box (`RowButton` in `ToolRow.tsx`) with a
-different text column, so the two cannot differ in height. Settled, it is the
-verbs of its **successful** calls — a failed `Edit` changed nothing,
-and it is pinned below anyway — in a fixed order by consequence, so the end a
-narrow screen cuts is the least important: `Edited N files · Ran N commands ·
-Read N files · Searched N times · Fetched N pages · Updated todos · Used N
-tools · Thought for 1m 20s · N interrupted`. Files are counted once however
-often they were touched (a Codex file change counts each of its files);
-everything else counts calls, and a Codex `Bash` is read through the same
-`singleCommandAction` as its row's title (`toolVerb` in `lib/toolSummary.ts`).
-The glyph is a muted `Check`, or `Ban` when something was interrupted — never
-green, never red; red is the pinned rows'. No accent title: that is what tells
-it from a tool row.
+### The summary row
 
-While a running call is folded, the summary is on that step, in the grammar a
-subagent's second line already speaks: `6 steps · Bash  npm run build…  12s` —
-every call in the group counted, then the newest running one worded as its own
-row, with its elapsed time. One line either way, so it does not change height
-when it settles. It does not spin while a card in the group waits on the user:
-then the machine is waiting for them. The tick says only that every folded call
-is over — the card is pinned below, in sight — so a waiting card neither takes
-it away once that is true nor brings it early: while folded calls still run
-behind the card, the glyph is empty, neither busy nor done, and `K running`
-leads what has settled — `1 running · Edited 2 files · Read 3 files` — first
-because it is the one entry a narrow screen must not cut. A group always has
-settled calls, so the settled form is never empty. The spinning form's text is
-`aria-hidden` while it moves, and the running glyph says `Tool calls running`;
-`K running` changes only with the count, so it is read out as it is.
+The summary is the tool row's box (`RowButton` in `ToolRow.tsx`) with a
+different text column, so the two cannot differ in height. Settled, its glyph
+is a muted `Check`, or `Ban` when something was interrupted — never green,
+never red; red is the pinned rows'. No accent title: that is what tells it
+from a tool row.
+
+**It speaks for exactly the folded members — never for a pinned one.** A pinned
+row is in sight and speaks for itself, so counting it again would say one thing
+twice; and the rows the summary stands for are then exactly the ones [the
+rail](#an-opened-group) marks once it is opened. Of the folded members, a
+`success` call is named in a past-tense segment, a `running` one in a
+present-tense segment, an `interrupted` one is only counted, in a trailing `N
+interrupted`, and folded thinking is `Thought for 1m 20s`. A failed call is
+pinned, so is in none of them — a failed `Edit` changed nothing. `summarize` in
+`lib/toolGroups.ts` builds it; `GroupSummary` holds the segments structured,
+not worded.
+
+**A segment is a verb and what it touched:** `<Verb> <name>, <name>, <name>
++K`.
+
+- One segment per verb and tense: the present ones first, then the past ones,
+  each in a fixed order by consequence — edit, run, read, search, fetch, todo,
+  other (`TOOL_VERBS`) — then the thinking, then `N interrupted`, so the end a
+  narrow screen gives up is the least important.
+- Names are in the order they first appeared. A live group only ever appends
+  at the end, so the line never reshuffles under the reader, and the names come
+  in the order of the rows under it.
+- At most three names; `+K` is what the segment covers beyond them, and appears
+  only when K is not 0. Names shown and K always add up to the count, so the
+  count is true in every form.
+- A segment with no name to show — every call unnameable, or its names given
+  up [to fit](#when-the-line-runs-out) — is worded by its count, as the line
+  always was: `Edited 2 files`, `Ran 1 command`, `Read 3 files`, `Searched
+  once` / `Searched N times`, `Fetched N pages`, `Used N tools`. `Updated
+  todos` never names anything.
+
+What a call is named by is read by `toolVerb` in `lib/toolSummary.ts`, beside
+its verb — the same table of knowledge as the row's title, and a Codex `Bash`
+through the same `singleCommandAction`, so the summary says what the rows under
+it say:
+
+| Verb | Counted by | Named by | Example |
+|---|---|---|---|
+| edit | distinct file — a Codex file change counts each of its files | base name | `Edited ToolRow.tsx, toolGroups.ts` |
+| read | distinct file | base name | `Read toolSummary.ts, ToolRow.tsx +1` |
+| search | call | `Grep`, `WebSearch`, a Codex search: what it looked for, quoted; `Glob`: its pattern; a Codex file listing: the directory's base name and `/`. Never where it looked — the row has the scope | `Searched "Retry-After", **/*.test.ts` |
+| run | call | the command's [head](#a-commands-head) | `Ran pnpm test, go test ./relay/...` |
+| fetch | call | the URL's host | `Fetched github.com` |
+| other | call | the row's own title: an MCP tool without its server, otherwise the tool's name | `Used work_get, story_list` |
+| todo | — | nothing | `Updated todos` |
+
+- **A repeated call is a repeated event; a re-read file is not.** Files are
+  counted once however often they were touched, so a file name never repeats.
+  A call-counted name that does is drawn once, with a muted `×N`: `Ran pnpm
+  test ×2`.
+- **Two files with one base name in one segment** — those two, and only those
+  — are named by the shortest ending of their paths that tells them apart:
+  `web/index.ts`, `server/index.ts`. The ending is joined in the separator the
+  path itself uses.
+- **A call with nothing to name it by** — `BashOutput`, `KillShell`, a call
+  missing its command, pattern or URL — is counted and named by nobody, so it
+  is only ever in `+K` or the count.
+
+#### A command's head
+
+What a reader recognises a command by, from the flattened text the row shows
+(`commandHead`): the `cd <dir> &&` (or `;`), the `VAR=value` words and a
+leading `# comment` line in front are dropped — they say where and how it ran,
+not what ran; the command ends at the first `&&`, `||`, `|`, `;`, `&` or line
+break; and it keeps at most three words, stopping before the first that is a
+flag, a quoted argument or a redirection. So `cd web && pnpm run test --
+--watch` is `pnpm run test`, `git commit -m "…"` is `git commit` and `python3
+-I x.py` is `python3`. Nothing marks the cut: the row is one tap away and has
+the whole command.
+
+#### When the line runs out
+
+`truncate` cannot give names up before counts, and a name cut in the middle of
+a list makes `+K` lie. So the row draws the **richest form that fits**, from a
+ladder `summaryForms` builds, richest first: every segment with its names;
+then the names given up one at a time from the end of the line toward the
+start — a name dropped takes all its `×N` into its segment's `+K`, and a
+segment that loses its last name is worded by its count — down to the line of
+counts alone. If even that does not fit, `truncate` cuts its end with an
+ellipsis. The most consequential segments keep their names longest, and the
+present ones, leading, longest of all. The forms do not get strictly narrower
+(`Ran ls +1` is shorter than `Ran 2 commands`), so the row takes the first that
+fits rather than searching by width.
+
+`FittedLine` in `ToolGroupSummary.tsx` fits it to the width the text column
+actually has — never to a character count, which could only disagree with the
+screen. Every form is measured once per change of words, from copies drawn for
+that one layout pass and removed before paint, since copies left in would be
+found, selected and copied as the row's own text; a `ResizeObserver` then only
+compares numbers. Both sides are read with `getBoundingClientRect` — a
+rounded `clientWidth` picks a form a fraction too wide, and `+K` is cut to
+`+…` — and a web font arriving (`document.fonts` `loadingdone`) measures again,
+since Geist swaps in after the fallback was measured. Until a width is known —
+the first paint, jsdom — the richest form is drawn and `truncate` covers it; a
+width of 0, a list inside a collapsed Process, measures nothing and keeps the
+last pick, and a reveal fits it afresh. A phone and a desktop climb the same
+ladder, the phone just stops lower: on a 360px phone even `Edited 2 files ·
+Ran 1 command · Read 3 files · Searched once` is wider than the column, and the
+counts are cut. `ToolGroupSummary.browser.test.tsx` holds the fit at a phone's
+width and a desktop's.
+
+Verb words and count wording are proportional, in `text-th-text-secondary`;
+names are `font-mono`, the same colour — machine text, like a row's detail;
+`, `, `+K`, `×N` and ` · ` are `text-th-text-muted`. No accent, no red, no
+green.
+
+#### While it runs
+
+The same vocabulary and the same ladder, in the present tense for what is
+live:
+
+```
+⟳  Running pnpm build · Edited ToolRow.tsx · Read toolSummary.ts, ToolRow.tsx   12s
+```
+
+Present segments lead — `Editing a.ts` / `Editing 2 files`, `Running pnpm
+test` / `Running 2 commands`, `Reading a.ts`, `Searching "foo"` /
+`Searching` / `Searching N times`, `Fetching github.com` / `Fetching N
+pages`, `Updating todos`, `Using work_get` / `Using N tools` — because live
+work is what the reader is watching, and the front is the end the ladder gives
+up last. When a call settles its name moves from its present segment to the
+end of its verb's past one. The newest running folded call's elapsed time
+(`ToolMeta`) stays at the right end, `shrink-0`, and the text fits in what is
+left. One line in every form, so the row does not change height when it
+settles. The spinning form's text is `aria-hidden` while it moves, and the
+running glyph says `Tool calls running`.
+
+It does not spin while a card in the group waits on the user: then the machine
+is waiting for them. The tick says only that every folded call is over — the
+card is pinned below, in sight — so a waiting card neither takes it away once
+that is true nor brings it early: while folded calls still run behind the card,
+the glyph is empty, neither busy nor done, and the present segments, still
+leading, are what say it is still at work. That line changes only when a call
+settles, so it is read out as it is. A group always has a settled call, so
+some segment is always there — `N interrupted`, if nothing else.
+
+A group no longer speaks a subagent's `N steps · <latest child>`
+([its second line](#the-second-line-steps-and-what-it-is-doing)), and the
+difference is on purpose: a subagent's row is one call whose steps are its
+body, while a group is several calls, each of which the reader needs named.
+
+### An opened group
 
 **Rendering.** Every part is rendered once, in transcript order; the group adds
 a summary entry before its first part and hides its folded parts with the
@@ -263,6 +384,44 @@ row the user opened in sight when its group forms or closes, until they close
 it themselves — the run they were watching does not vanish because the next
 call arrived. Only the user's own choice counts: a pending card opens itself,
 and folding it once it is answered and its call has settled is the point.
+
+**A rail tells the rows the summary stood for from the pinned ones.** Opened,
+a group is its rows in transcript order, the pinned among the folded — and
+nothing else said which of them the summary's line had counted. So every
+folded member's slot carries a 2px rail down its left edge (`RowSlot` in
+`ToolList.tsx`), and a pinned row carries none:
+
+```
+┌───────────────────────────────────────────────┐
+│ ⌄  ✓  Edited ToolRow.tsx · Read a.ts, b.ts    │  ← the summary, open
+├───────────────────────────────────────────────┤
+│▌›  ✓  Read   web/src/a.ts                     │  ← folded: on the rail
+│▌›  ✓  Edit   web/src/ToolRow.tsx              │
+├───────────────────────────────────────────────┤
+│ ›  ✗  Bash   go test ./relay/…                │  ← pinned: no rail
+├───────────────────────────────────────────────┤
+│▌›  ✓  Read   web/src/b.ts                     │  ← folded again
+└───────────────────────────────────────────────┘
+```
+
+- **Membership decides it, nothing else**: `entry.group` in `rowEntries`. A
+  row the user opened while its group is closed still belongs to the summary
+  above it and keeps its rail, and so does a thinking that folds; a part in no
+  group never has one. The rows on the rail are the set the summary counted —
+  the rail is its footnote.
+- **It runs through the hairlines** (`-top-px`), so consecutive members read as
+  one bracket and a pinned row visibly breaks it. Nothing is regrouped or
+  moved, and the row's layout does not change: the rail is absolute, inside
+  the row's own left padding.
+- **It is neutral**: `bg-th-text-muted/40`, the summary glyph's colour at
+  reduced strength. Not `th-border`, which is the hairline's and would read as
+  one more; and not a colour, since failure stays the only saturated one.
+  Pinned rows look exactly as they always have.
+- **It is drawn over the row**: after it in the DOM, `z-3`, because an open
+  row's [sticky bar](#the-sticky-title-line) is `z-index: 2` with a background
+  and would cover it while pinned at the top. It is `aria-hidden` and
+  `pointer-events-none`; the summary's `aria-expanded` already says the group
+  is open.
 
 ### What a list and a group are keyed by
 
@@ -325,7 +484,7 @@ summary is told from a tool row: by what it lacks, not by a new colour or fill.
 ended, and nowhere when nothing counted: no empty frame, no gap. It is shown
 exactly when the actions are (`!pending`), so the two replace the tail line in
 one render, at the tail where a height change pushes nothing. Not while the
-turn runs: the group summary already says `Edited N files` then, and a frame
+turn runs: the group summary already says `Edited …` then, and a frame
 growing at the tail would push at the content streaming in above it. A
 cut-short turn shows it like any other — that is the turn whose leftovers most
 need reading. The one way it grows after settling is a subagent the turn left
@@ -3631,10 +3790,18 @@ the virtualizer measures it.
 22. On a 375px phone, a turn of fourteen calls with two failures between two
     texts: one summary row with the two red rows directly under it, both on the
     first screen. Open the summary: every call in order, the failures in their
-    place and not repeated, each row opening on its own.
-23. While the group runs: `N steps · <current call>  <elapsed>` on one line,
-    and the verb summary when it settles, **without the row changing height**.
-    A failed `Edit` is not in `Edited N files`.
+    place and not repeated, each row opening on its own; the folded rows on the
+    rail, unbroken across their hairlines, and the two red rows breaking it.
+    Neither failure is named or counted in the summary.
+23. While the group runs: `Running <command> · <past segments>  <elapsed>` on
+    one line, and the same line in the past tense when it settles, the
+    command's name moving to the end of `Ran`, **without the row changing
+    height**. A failed `Edit` is not in `Edited …`. On the summary, a file
+    touched twice is named once; a command run twice is `<command> ×2`; two
+    `index.ts` in different directories are told apart by their directories;
+    a fourth name is `+1`. Narrow the window: names go one at a time from the
+    end of the line, never cut mid-name and never `+…`, the first segment's
+    last; widen it and they come back.
 24. One settled call, with any number of failures or running calls beside
     it: no summary. A `Read` that succeeded, then a `Bash` that asks for
     permission: the two rows stay flat while the `Bash` runs and when its card
@@ -3647,8 +3814,8 @@ the virtualizer measures it.
     sight; when the call settles both fold. Deny it: the card and the failed
     row both stay. With a folded call still running beside the settled ones
     when the card arrives: no tick and no spinner, the row reads
-    `1 running · <verbs>`, and the spinner returns if it is still running once
-    the card is answered.
+    `Running <command> · <past segments>`, and the spinner returns if it is
+    still running once the card is answered.
 26. A backgrounded `Bash` in a group: folded while it is an ordinary running
     call, pinned from the moment it goes to the background, still pinned when
     it settles — second line becomes the outcome, height unchanged.

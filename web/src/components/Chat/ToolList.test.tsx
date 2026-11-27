@@ -9,7 +9,7 @@ import { OpenedThoughtsContext } from "./turnTailContext";
 const bash = (id: string, status: ToolRunStatus = "success"): ContentPart => ({
 	type: "tool_call",
 	id: `call-${id}`,
-	tool: { id, name: "Bash", input: { command: id }, status },
+	tool: { id, name: "Bash", input: { command: `make ${id}` }, status },
 });
 
 const parts: ContentPart[] = [
@@ -52,7 +52,8 @@ describe("PartBlocks with thinking", () => {
 		const user = userEvent.setup();
 		render(<List />);
 		const summary = screen.getByRole("button", {
-			name: /^doneRan 2 commands·Thought for 2s$/,
+			// jsdom trims each span when it names the button.
+			name: "doneRan make a,make b·Thought for 2s",
 		});
 		expect(
 			screen.queryByRole("button", { name: "Thought for 2 seconds" }),
@@ -141,12 +142,41 @@ describe("PartBlocks group summary", () => {
 			/>,
 		);
 		expect(
-			screen.getByRole("button", { name: /^1 running·Read 2 files$/ }),
+			screen.getByRole("button", { name: "Running make c·Read x,y" }),
 		).toBeInTheDocument();
 		expect(screen.queryByLabelText("done")).not.toBeInTheDocument();
 		expect(
 			screen.queryByLabelText("Tool calls running"),
 		).not.toBeInTheDocument();
+	});
+});
+
+// The rail marks exactly the rows the summary speaks for: a pinned row between
+// them, and a part outside any group, carry none.
+describe("PartBlocks rail", () => {
+	const grouped = (id: string) =>
+		screen.getByText(id).closest("[data-grouped]") !== null;
+
+	it("marks the folded rows of a group and not the pinned one", async () => {
+		const user = userEvent.setup();
+		render(
+			<List shown={[bash("a"), bash("b", "error"), bash("c"), bash("d")]} />,
+		);
+		await user.click(
+			screen.getByRole("button", { name: "doneRan make a,make c,make d" }),
+		);
+
+		expect(["a", "b", "c", "d"].map(grouped)).toEqual([
+			true,
+			false,
+			true,
+			true,
+		]);
+	});
+
+	it("leaves rows that form no group unmarked", () => {
+		render(<List shown={[bash("a")]} />);
+		expect(grouped("a")).toBe(false);
 	});
 });
 
@@ -168,14 +198,14 @@ describe("PartBlocks with rows joined in front", () => {
 		const user = userEvent.setup();
 		const { rerender } = render(<List shown={[bash("a"), bash("b")]} />);
 		await user.click(
-			screen.getByRole("button", { name: /^doneRan 2 commands$/ }),
+			screen.getByRole("button", { name: "doneRan make a,make b" }),
 		);
 		expect(screen.getByText("a")).toBeVisible();
 
 		rerender(<List shown={[bash("z"), bash("a"), bash("b")]} />);
 
 		expect(
-			screen.getByRole("button", { name: /^doneRan 3 commands$/ }),
+			screen.getByRole("button", { name: "doneRan make z,make a,make b" }),
 		).toHaveAttribute("aria-expanded", "true");
 		expect(screen.getByText("a")).toBeVisible();
 	});

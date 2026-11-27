@@ -344,7 +344,7 @@ describe("TaskItem", () => {
 			);
 			await openProcess(user);
 
-			const summary = screen.getByRole("button", { name: /Read 1 file/ });
+			const summary = screen.getByRole("button", { name: /Read sender\.go/ });
 			expect(screen.getByText("row for c1")).not.toBeVisible();
 			expect(screen.getByText("row for c2")).toBeVisible();
 			await user.click(summary);

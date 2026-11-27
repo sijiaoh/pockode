@@ -35,6 +35,8 @@ interface SlotProps {
 	choice?: boolean;
 	onChoice: (rowKey: string, expanded: boolean) => void;
 	hidden: boolean;
+	/** Folds into a group's summary — what the rail marks once it is open. */
+	grouped: boolean;
 	wrapperProps?: Record<string, string>;
 	children: ReactNode;
 }
@@ -44,6 +46,13 @@ interface SlotProps {
  * so a row folded into its group keeps its state and comes back as it was; and
  * not a scroll anchor candidate while hidden, since an element that is not
  * displayed measures as sitting at the very top.
+ *
+ * A row its group's summary speaks for carries a rail down its left edge, so
+ * an opened group tells the rows it summarised from the ones pinned between
+ * them (docs/tool-call-ui.md#groups). It spans the slot's hairline too, so
+ * consecutive members read as one bracket that a pinned row breaks; it comes
+ * after the row and over its bar, which is raised and would otherwise cover it
+ * while it is pinned at the top.
  */
 function RowSlot({
 	rowKey,
@@ -51,6 +60,7 @@ function RowSlot({
 	choice,
 	onChoice,
 	hidden,
+	grouped,
 	wrapperProps,
 	children,
 }: SlotProps) {
@@ -63,13 +73,24 @@ function RowSlot({
 	);
 	return (
 		<div
-			className={framed ? "border-t border-th-border" : undefined}
+			className={
+				[framed && "border-t border-th-border", grouped && "relative"]
+					.filter(Boolean)
+					.join(" ") || undefined
+			}
 			hidden={hidden}
+			data-grouped={grouped || undefined}
 			{...(hidden ? undefined : wrapperProps)}
 		>
 			<RowExpansionContext.Provider value={expansion}>
 				{children}
 			</RowExpansionContext.Provider>
+			{grouped && (
+				<span
+					aria-hidden
+					className="pointer-events-none absolute -top-px bottom-0 left-0 z-3 w-0.5 bg-th-text-muted/40"
+				/>
+			)}
 		</div>
 	);
 }
@@ -172,6 +193,7 @@ function RowList<T extends Item>({
 								choice={choiceFor(part)}
 								onChoice={onChoice}
 								hidden={hidden}
+								grouped={entry.group !== undefined}
 								wrapperProps={wrapperProps}
 							>
 								{renderPart(entry.item)}

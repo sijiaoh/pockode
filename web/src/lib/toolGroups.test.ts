@@ -7,7 +7,13 @@ import type {
 	ToolRunStatus,
 } from "../types/message";
 import { replayHistory } from "./messageReducer";
-import { type RowEntry, rowEntries } from "./toolGroups";
+import {
+	type FormSegment,
+	type GroupSummary,
+	type RowEntry,
+	rowEntries,
+	summaryForms,
+} from "./toolGroups";
 
 type Item = { part: ContentPart };
 
@@ -71,11 +77,38 @@ function id(item: Item): string {
 	return part.type;
 }
 
-/** The entries as `[summary text]` and `id` / `id↓` (folds into the group). */
+/** A form of the summary line as the row draws its text. */
+function text(form: FormSegment[]): string {
+	return form
+		.map(({ lead, names, more }) =>
+			[
+				lead,
+				names
+					.map(
+						(name) => `${name.text}${name.times > 1 ? ` ×${name.times}` : ""}`,
+					)
+					.join(", "),
+				more > 0 ? `+${more}` : "",
+			]
+				.filter(Boolean)
+				.join(" "),
+		)
+		.join(" · ");
+}
+
+const forms = (summary: GroupSummary | undefined) =>
+	summary ? summaryForms(summary).map(text) : [];
+const richest = (summary: GroupSummary | undefined) => forms(summary)[0];
+const sparest = (summary: GroupSummary | undefined) => forms(summary).at(-1);
+
+/**
+ * The entries as `[summary]` — its count-only form, `⟳` while it spins — and
+ * `id` / `id↓` (folds into the group).
+ */
 function shape(entries: RowEntry<Item>[]): string[] {
 	return entries.map((entry) =>
 		entry.kind === "summary"
-			? `[${entry.summary.current ? `running ${entry.summary.current.id}` : entry.summary.segments.join(" · ")}]`
+			? `[${entry.summary.current ? "⟳ " : ""}${sparest(entry.summary)}]`
 			: `${id(entry.item)}${entry.group ? "↓" : ""}`,
 	);
 }
@@ -241,12 +274,6 @@ describe("rowEntries", () => {
 		).toEqual(["[Ran 2 commands]", "a↓", "card:b", "b", "c↓"]);
 	});
 
-	it("counts a card and its row as one step", () => {
-		expect(summaryOf([bash("a"), card("b", "allowed"), bash("b")])?.steps).toBe(
-			2,
-		);
-	});
-
 	// A running call may yet turn into a card, a failure or background work;
 	// a group it formed would dissolve again under the reader's eyes.
 	it("does not group calls that have not settled", () => {
@@ -264,7 +291,12 @@ describe("rowEntries", () => {
 			bash("b"),
 			read("c", "/x", "running"),
 		]);
-		expect(shape(second)).toEqual(["[running c]", "a↓", "b↓", "c↓"]);
+		expect(shape(second)).toEqual([
+			"[⟳ Reading 1 file · Ran 2 commands]",
+			"a↓",
+			"b↓",
+			"c↓",
+		]);
 		const third = rowEntries([bash("a"), bash("b"), read("c", "/x")]);
 		expect(shape(third)).toEqual([
 			"[Ran 2 commands · Read 1 file]",
@@ -290,7 +322,9 @@ describe("rowEntries", () => {
 		expect(keyOf(rowEntries([bash("z"), bash("a"), bash("b")]))).toBe(shown);
 	});
 
-	it("is on the newest running call, and counts every call as a step", () => {
+	// The pinned failure is in sight and speaks for itself; the summary counts
+	// the folded calls only, live and settled alike.
+	it("is on the newest running call, and counts only the folded calls", () => {
 		const summary = summaryOf([
 			bash("a", "running"),
 			bash("b", "error"),
@@ -299,7 +333,7 @@ describe("rowEntries", () => {
 			bash("e"),
 		]);
 		expect(summary?.current?.id).toBe("c");
-		expect(summary?.steps).toBe(5);
+		expect(sparest(summary)).toBe("Running 2 commands · Ran 2 commands");
 	});
 
 	it("does not spin while a card in the group waits on the user", () => {
@@ -310,12 +344,12 @@ describe("rowEntries", () => {
 			card("d", "pending"),
 		]);
 		expect(summary?.current).toBeUndefined();
-		expect(summary?.segments).toEqual(["Ran 2 commands"]);
+		expect(sparest(summary)).toBe("Running 1 command · Ran 2 commands");
 	});
 
 	// The tick says every folded call is over; one still running behind a
-	// waiting card is counted instead.
-	it("counts folded calls still running while a card waits", () => {
+	// waiting card is named in the present tense instead.
+	it("names folded calls still running while a card waits", () => {
 		const summary = summaryOf([
 			read("a", "/x"),
 			bash("b", "background"),
@@ -324,8 +358,7 @@ describe("rowEntries", () => {
 			card("d", "pending"),
 		]);
 		expect(summary?.current).toBeUndefined();
-		expect(summary?.running).toBe(1);
-		expect(summary?.segments).toEqual(["Read 2 files"]);
+		expect(richest(summary)).toBe("Running cmd c · Read x, y");
 	});
 
 	it("stops spinning once its running call goes to the background", () => {
@@ -335,14 +368,11 @@ describe("rowEntries", () => {
 
 	// Codex reasons before nearly every call: a thinking that counted would
 	// fold a lone call into a summary hiding its own title.
-	it("does not count a thinking toward the minimum or the steps", () => {
+	it("does not count a thinking toward the minimum", () => {
 		expect(shape(rowEntries([thinking(1000), bash("a")]))).toEqual([
 			"thinking",
 			"a",
 		]);
-		expect(
-			summaryOf([thinking(1000), bash("a"), thinking(1000), bash("b")])?.steps,
-		).toBe(2);
 	});
 
 	it("folds a thinking among the calls without ending the run", () => {
@@ -376,19 +406,27 @@ describe("rowEntries", () => {
 	describe("the summary line", () => {
 		it("puts the folded thinking after the verbs and before interruptions", () => {
 			expect(
-				summaryOf([
-					thinking(61_000, 19_000),
-					bash("a", "interrupted"),
-					call("b", "mcp__srv__do"),
-				])?.segments,
-			).toEqual(["Used 1 tool", "Thought for 1m 20s", "1 interrupted"]);
+				sparest(
+					summaryOf([
+						thinking(61_000, 19_000),
+						bash("a", "interrupted"),
+						call("b", "mcp__srv__do"),
+					]),
+				),
+			).toBe("Used 1 tool · Thought for 1m 20s · 1 interrupted");
 		});
 
 		it("says only Thought when a folded thinking was not measured", () => {
 			expect(
-				summaryOf([thinking(1000), bash("a"), thinking(undefined), bash("b")])
-					?.segments,
-			).toEqual(["Ran 2 commands", "Thought"]);
+				sparest(
+					summaryOf([
+						thinking(1000),
+						bash("a"),
+						thinking(undefined),
+						bash("b"),
+					]),
+				),
+			).toBe("Ran 2 commands · Thought");
 		});
 
 		it("leaves failed and interrupted calls out of the verbs", () => {
@@ -398,82 +436,267 @@ describe("rowEntries", () => {
 				bash("c", "interrupted"),
 				bash("d"),
 			]);
-			expect(summary?.segments).toEqual([
-				"Edited 1 file",
-				"Ran 1 command",
-				"1 interrupted",
-			]);
+			expect(sparest(summary)).toBe(
+				"Edited 1 file · Ran 1 command · 1 interrupted",
+			);
 		});
 
 		it("orders verbs by consequence, not by arrival", () => {
 			expect(
-				summaryOf([
-					call("a", "mcp__srv__do"),
-					call("b", "TodoWrite"),
-					call("c", "WebFetch"),
-					call("d", "Grep"),
-					read("e", "/x"),
-					bash("f"),
-					call("g", "Write", { file_path: "/z" }),
-				])?.segments,
-			).toEqual([
-				"Edited 1 file",
-				"Ran 1 command",
-				"Read 1 file",
-				"Searched once",
-				"Fetched 1 page",
-				"Updated todos",
-				"Used 1 tool",
-			]);
+				sparest(
+					summaryOf([
+						call("a", "mcp__srv__do"),
+						call("b", "TodoWrite"),
+						call("c", "WebFetch"),
+						call("d", "Grep"),
+						read("e", "/x"),
+						bash("f"),
+						call("g", "Write", { file_path: "/z" }),
+					]),
+				),
+			).toBe(
+				"Edited 1 file · Ran 1 command · Read 1 file · Searched once · Fetched 1 page · Updated todos · Used 1 tool",
+			);
 		});
 
 		it("counts files once however often they were touched", () => {
 			expect(
-				summaryOf([
-					read("a", "/x"),
-					read("b", "/x"),
-					call("c", "Edit", { file_path: "/x" }),
-					call("d", "MultiEdit", { file_path: "/x" }),
-					call("e", "Grep"),
-					call("f", "Glob"),
-				])?.segments,
-			).toEqual(["Edited 1 file", "Read 1 file", "Searched 2 times"]);
+				sparest(
+					summaryOf([
+						read("a", "/x"),
+						read("b", "/x"),
+						call("c", "Edit", { file_path: "/x" }),
+						call("d", "MultiEdit", { file_path: "/x" }),
+						call("e", "Grep"),
+						call("f", "Glob"),
+					]),
+				),
+			).toBe("Edited 1 file · Read 1 file · Searched 2 times");
 		});
 
 		it("counts each file of a Codex file change", () => {
 			expect(
-				summaryOf([
-					call("a", "Edit", {
-						changes: [
-							{ path: "/a", kind: { type: "update" }, diff: "" },
-							{ path: "/b", kind: { type: "update" }, diff: "" },
-						],
-					}),
-					bash("b"),
-				])?.segments,
-			).toEqual(["Edited 2 files", "Ran 1 command"]);
+				sparest(
+					summaryOf([
+						call("a", "Edit", {
+							changes: [
+								{ path: "/a", kind: { type: "update" }, diff: "" },
+								{ path: "/b", kind: { type: "update" }, diff: "" },
+							],
+						}),
+						bash("b"),
+					]),
+				),
+			).toBe("Edited 2 files · Ran 1 command");
 		});
 
 		it("reads a Codex command the way its row does", () => {
 			expect(
-				summaryOf([
-					call("a", "Bash", {
-						command: "cat x",
-						command_actions: [{ type: "read", path: "/x" }],
-					}),
-					call("b", "Bash", {
-						command: "rg foo",
-						command_actions: [{ type: "search", query: "foo" }],
-					}),
-					call("c", "Bash", {
-						command: "cat x | rg foo",
-						command_actions: [
-							{ type: "read", path: "/x" },
-							{ type: "search", query: "foo" },
-						],
-					}),
-				])?.segments,
-			).toEqual(["Ran 1 command", "Read 1 file", "Searched once"]);
+				sparest(
+					summaryOf([
+						call("a", "Bash", {
+							command: "cat x",
+							command_actions: [{ type: "read", path: "/x" }],
+						}),
+						call("b", "Bash", {
+							command: "rg foo",
+							command_actions: [{ type: "search", query: "foo" }],
+						}),
+						call("c", "Bash", {
+							command: "cat x | rg foo",
+							command_actions: [
+								{ type: "read", path: "/x" },
+								{ type: "search", query: "foo" },
+							],
+						}),
+					]),
+				),
+			).toBe("Ran 1 command · Read 1 file · Searched once");
+		});
+	});
+
+	describe("the names on the line", () => {
+		const edit = (id: string, path: string) =>
+			call(id, "Edit", { file_path: path });
+		const run = (id: string, command: string, status?: ToolRunStatus) =>
+			call(id, "Bash", { command }, status);
+
+		it("names what each verb touched, in the order it first appeared", () => {
+			expect(
+				richest(
+					summaryOf([
+						read("a", "/w/src/b.ts"),
+						edit("b", "/w/src/ToolRow.tsx"),
+						read("c", "/w/src/a.ts"),
+						run("d", "pnpm test"),
+						call("e", "Grep", { pattern: "foo", path: "/w/src" }),
+						call("f", "Glob", { pattern: "**/*.test.ts" }),
+						call("g", "WebFetch", { url: "https://github.com/a/b" }),
+						call("h", "mcp__pockode__work_get"),
+						call("i", "TodoWrite"),
+					]),
+				),
+			).toBe(
+				'Edited ToolRow.tsx · Ran pnpm test · Read b.ts, a.ts · Searched "foo", **/*.test.ts · Fetched github.com · Updated todos · Used work_get',
+			);
+		});
+
+		// The count is authoritative in every form: names shown and `+K` add
+		// up to it.
+		it("names at most three per verb and counts the rest", () => {
+			expect(
+				richest(
+					summaryOf(["a", "b", "c", "d", "e"].map((n) => read(n, `/${n}.ts`))),
+				),
+			).toBe("Read a.ts, b.ts, c.ts +2");
+		});
+
+		it("counts a repeated call once per run, and a re-read file once", () => {
+			expect(
+				richest(
+					summaryOf([
+						run("a", "pnpm test"),
+						read("b", "/x.ts"),
+						run("c", "pnpm test"),
+						read("d", "/x.ts"),
+					]),
+				),
+			).toBe("Ran pnpm test ×2 · Read x.ts");
+		});
+
+		it("counts a call with nothing to name it by, and names the rest", () => {
+			expect(
+				richest(
+					summaryOf([
+						run("a", "pnpm test"),
+						call("b", "BashOutput", { bash_id: "1" }),
+					]),
+				),
+			).toBe("Ran pnpm test +1");
+			expect(
+				richest(
+					summaryOf([
+						call("a", "BashOutput", { bash_id: "1" }),
+						call("b", "KillShell", { shell_id: "1" }),
+					]),
+				),
+			).toBe("Ran 2 commands");
+		});
+
+		it("tells files with one base name apart by their paths, and only those", () => {
+			expect(
+				richest(
+					summaryOf([
+						read("a", "/w/web/index.ts"),
+						read("b", "/w/server/index.ts"),
+						read("c", "/w/web/main.ts"),
+					]),
+				),
+			).toBe("Read web/index.ts, server/index.ts, main.ts");
+			expect(
+				richest(
+					summaryOf([read("a", "/a/x/index.ts"), read("b", "/b/x/index.ts")]),
+				),
+			).toBe("Read a/x/index.ts, b/x/index.ts");
+			expect(
+				richest(
+					summaryOf([
+						read("a", "C:\\w\\web\\index.ts"),
+						read("b", "C:\\w\\server\\index.ts"),
+					]),
+				),
+			).toBe("Read web\\index.ts, server\\index.ts");
+		});
+
+		it("counts one file spelled with either separator once", () => {
+			expect(
+				richest(summaryOf([read("a", "C:\\w\\x.ts"), read("b", "C:/w/x.ts")])),
+			).toBe("Read x.ts");
+		});
+
+		it("names what is under way in the present tense, ahead of what is done", () => {
+			const summary = summaryOf([
+				read("a", "/a.ts"),
+				read("b", "/b.ts"),
+				run("c", "pnpm build", "running"),
+			]);
+			expect(summary?.current?.id).toBe("c");
+			expect(richest(summary)).toBe("Running pnpm build · Read a.ts, b.ts");
+			expect(sparest(summary)).toBe("Running 1 command · Read 2 files");
+		});
+
+		it("words each verb under way the way it words it done", () => {
+			const running = (item: Item) => {
+				if (item.part.type === "tool_call") item.part.tool.status = "running";
+				return item;
+			};
+			expect(
+				forms(
+					summaryOf([
+						read("a", "/a.ts"),
+						read("b", "/b.ts"),
+						running(edit("c", "/c.ts")),
+						running(call("d", "Grep", { pattern: "x" })),
+						running(call("e", "Grep", { pattern: "y" })),
+						running(call("f", "WebFetch", { url: "https://a.dev/x" })),
+						running(call("g", "TodoWrite")),
+						running(call("h", "mcp__srv__do")),
+					]),
+				).at(-1),
+			).toBe(
+				"Editing 1 file · Searching 2 times · Fetching 1 page · Updating todos · Using 1 tool · Read 2 files",
+			);
+			expect(
+				sparest(
+					summaryOf([
+						read("a", "/a.ts"),
+						read("b", "/b.ts"),
+						running(call("c", "Grep", { pattern: "x" })),
+					]),
+				),
+			).toBe("Searching · Read 2 files");
+		});
+
+		it("moves a call's name into the past once it settles", () => {
+			const items = (status: ToolRunStatus) => [
+				run("a", "pnpm lint"),
+				run("b", "pnpm build"),
+				run("c", "pnpm test", status),
+			];
+			expect(richest(summaryOf(items("running")))).toBe(
+				"Running pnpm test · Ran pnpm lint, pnpm build",
+			);
+			expect(richest(summaryOf(items("success")))).toBe(
+				"Ran pnpm lint, pnpm build, pnpm test",
+			);
+		});
+
+		// Edits come first on the line, so they keep their names longest.
+		it("gives names up one at a time from the end of the line", () => {
+			expect(
+				forms(
+					summaryOf([
+						edit("a", "/e.ts"),
+						run("b", "pnpm test"),
+						run("c", "pnpm test"),
+						read("d", "/a.ts"),
+						read("e", "/b.ts"),
+						thinking(2000),
+					]),
+				),
+			).toEqual([
+				"Edited e.ts · Ran pnpm test ×2 · Read a.ts, b.ts · Thought for 2s",
+				"Edited e.ts · Ran pnpm test ×2 · Read a.ts +1 · Thought for 2s",
+				"Edited e.ts · Ran pnpm test ×2 · Read 2 files · Thought for 2s",
+				"Edited e.ts · Ran 2 commands · Read 2 files · Thought for 2s",
+				"Edited 1 file · Ran 2 commands · Read 2 files · Thought for 2s",
+			]);
+		});
+
+		it("has one form when there is nothing to name", () => {
+			expect(
+				forms(summaryOf([call("a", "TodoWrite"), call("b", "TodoWrite")])),
+			).toEqual(["Updated todos"]);
 		});
 	});
 
@@ -543,7 +766,7 @@ describe("rowEntries", () => {
 					result("b", true),
 				).slice(4),
 			).toEqual([
-				["[running b]", "r1↓", "r2↓", "b↓"],
+				["[⟳ Running 1 command · Read 2 files]", "r1↓", "r2↓", "b↓"],
 				["[Read 2 files]", "r1↓", "r2↓", "b"],
 			]);
 		});

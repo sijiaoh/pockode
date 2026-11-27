@@ -677,10 +677,12 @@ describe("ToolCallItem", () => {
 						</TranscriptViewContext>,
 					);
 					const summary = screen.getByRole("button", {
-						name: /Ran 2 commands/,
+						name: /Ran first-cmd,second-cmd/,
 					});
 					await userEvent.click(summary);
-					const button = screen.getByRole("button", { name: /first-cmd/ });
+					const button = screen.getByRole("button", {
+						name: /Bash.*first-cmd/,
+					});
 					await userEvent.click(button);
 					await userEvent.click(summary);
 					expect(button).toBeVisible();

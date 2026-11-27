@@ -153,17 +153,18 @@ call**:
   (think → `Read` → think → `Edit` …), and codex sends a reasoning item before
   most calls; if thinking ended a group, a fourteen-call turn would never fold.
 - **It does not count toward the
-  [two-settled-call minimum](tool-call-ui.md#groups)**, and is not a step in
-  the running form's `N steps` nor in a subagent's second line. With codex, a
-  thinking before nearly every call would otherwise fold every single call into
-  a summary that hides its own title — the very case the minimum exists for. So
-  a thinking and one call lie flat as two rows; a group that forms takes the
-  thinking among its calls with it.
-- **The summary's settled verbs gain one last entry**, after `Used N tools` and
-  before `N interrupted` — least consequential, so it is the end a narrow screen
-  cuts: `Thought for 1m 20s`, the sum over the folded thinking, under the
-  merged row's rule (every part measured, or the entry says `Thought`). It is
-  never the summary's only entry, since a group forms only on settled calls.
+  [two-settled-call minimum](tool-call-ui.md#groups)**, is in none of the
+  summary's verb segments, and is not a step in a subagent's `N steps`. With
+  codex, a thinking before nearly every call would otherwise fold every single
+  call into a summary that hides its own title — the very case the minimum
+  exists for. So a thinking and one call lie flat as two rows; a group that
+  forms takes the thinking among its calls with it.
+- **The summary gains one last segment**, after the
+  [verbs](tool-call-ui.md#the-summary-row) and before `N interrupted` — least
+  consequential, so it is the end a narrow screen cuts: `Thought for 1m 20s`,
+  the sum over the folded thinking, under the merged row's rule (every part
+  measured, or the entry says `Thought`). It is never the summary's only
+  entry, since a group forms only on settled calls.
 
 [The turn's changes](tool-call-ui.md#the-turns-changes) does not change:
 thinking edits nothing, and the card lists files.

@@ -1967,8 +1967,12 @@ describe("MessageItem", () => {
 			status,
 			createdAt: new Date(),
 		});
+		// The summary names the command too, and is drawn ahead of the rows.
 		const row = (id: string) =>
-			screen.getByText(`make ${id}`).closest("button") as HTMLElement;
+			screen
+				.getAllByText(`make ${id}`)
+				.at(-1)
+				?.closest("button") as HTMLElement;
 
 		it("shows the summary and the failures, and the rest once opened", async () => {
 			const user = userEvent.setup();
@@ -1982,7 +1986,9 @@ describe("MessageItem", () => {
 			expect(row("a")).not.toBeVisible();
 			expect(row("b")).toBeVisible();
 			expect(row("c")).not.toBeVisible();
-			await user.click(screen.getByRole("button", { name: /Ran 2 commands/ }));
+			await user.click(
+				screen.getByRole("button", { name: /Ran make a,make c/ }),
+			);
 			expect(row("a")).toBeVisible();
 			expect(row("c")).toBeVisible();
 		});
