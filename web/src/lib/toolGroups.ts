@@ -369,53 +369,81 @@ function summarize<T>(
 
 /**
  * One segment of a summary line as it is drawn: `lead` alone (`Read 3
- * files`), or the verb word, its names and how many calls went unnamed
- * (`Read a.ts, b.ts +1`).
+ * files`), the verb word and names that account for every call (`Read a.ts,
+ * b.ts`), or the count and the names that account for most of it (`Ran 15
+ * commands: pnpm test ×9, git diff`).
  */
 export interface FormSegment {
 	lead: string;
 	names: SummaryName[];
-	/** What the segment covers beyond its names; names shown + this = count. */
-	more: number;
+	/**
+	 * The lead is the count and the names only part of it, so they follow a
+	 * `: ` rather than read as the whole of what was done.
+	 */
+	counted: boolean;
 }
 
 /** How many names a segment carries at most, in the richest form. */
 const MAX_NAMES = 3;
 
+/**
+ * The `shown` names with the most calls (ties to the first seen), in the order
+ * they first appeared — so a live group never reorders names already drawn.
+ */
+function busiest(names: SummaryName[], shown: number): SummaryName[] {
+	const kept = new Set(
+		names
+			.map((name, index) => ({ name, index }))
+			.sort((a, b) => b.name.times - a.name.times || a.index - b.index)
+			.slice(0, shown)
+			.map(({ index }) => index),
+	);
+	return names.filter((_, index) => kept.has(index));
+}
+
+/**
+ * Names are only worth drawing when they say what most of the calls did: one
+ * sample name standing in for fifteen calls says less than `Ran 15 commands`
+ * (docs/tool-call-ui.md#the-summary-row). Whenever they leave calls out, the
+ * count is written, so the reader never adds anything up.
+ */
 function formSegment(
 	{ verb, tense, names, count, kind }: SummarySegment,
 	shown: number,
 ): FormSegment {
 	const wording = WORDING[tense][verb];
-	const kept = wording.names ? names.slice(0, shown) : [];
-	if (kept.length === 0)
-		return { lead: wording.count(count, kind), names: [], more: 0 };
+	const counted = wording.count(count, kind);
+	const kept = wording.names ? busiest(names, shown) : [];
 	const named = kept.reduce((sum, name) => sum + name.times, 0);
-	return { lead: wording.names ?? "", names: kept, more: count - named };
+	if (named === count && wording.names)
+		return { lead: wording.names, names: kept, counted: false };
+	if (named * 2 >= count && kept.length > 0)
+		return { lead: counted, names: kept, counted: true };
+	return { lead: counted, names: [], counted: false };
 }
 
 /**
  * Every way the summary line can be drawn, richest first: names are given up
  * one at a time from the end of the line toward the start, so the most
  * consequential segments keep theirs longest, until only counts are left. The
- * row draws the first that fits — a cut name mid-list would make the count
- * lie, and CSS can only cut. Not strictly narrower each step (`Ran ls +1` is
- * shorter than `Ran 2 commands`), which is why the row takes the first fit
- * rather than searching by width.
+ * row draws the first that fits — a cut name mid-list would leave the line
+ * claiming less than was done, and CSS can only cut. Not strictly narrower
+ * each step (`Ran ls, pwd` is shorter than `Ran 2 commands: ls`), which is why
+ * the row takes the first fit rather than searching by width.
  */
 export function summaryForms(summary: GroupSummary): FormSegment[][] {
 	const shown = summary.segments.map((segment) =>
 		Math.min(MAX_NAMES, segment.names.length),
 	);
+	const plain = (lead: string): FormSegment => ({
+		lead,
+		names: [],
+		counted: false,
+	});
 	const tail: FormSegment[] = [];
-	if (summary.thought) tail.push({ lead: summary.thought, names: [], more: 0 });
-	if (summary.interrupted > 0) {
-		tail.push({
-			lead: `${summary.interrupted} interrupted`,
-			names: [],
-			more: 0,
-		});
-	}
+	if (summary.thought) tail.push(plain(summary.thought));
+	if (summary.interrupted > 0)
+		tail.push(plain(`${summary.interrupted} interrupted`));
 	const form = () => [
 		...summary.segments.map((segment, index) =>
 			formSegment(segment, shown[index]),
@@ -423,10 +451,16 @@ export function summaryForms(summary: GroupSummary): FormSegment[][] {
 		...tail,
 	];
 	const forms = [form()];
+	// A segment whose names fall below half goes straight to its count, so
+	// dropping one more name can leave the line as it was.
+	let last = JSON.stringify(forms[0]);
 	for (let index = shown.length - 1; index >= 0; index--) {
 		while (shown[index] > 0) {
 			shown[index]--;
-			forms.push(form());
+			const next = form();
+			const key = JSON.stringify(next);
+			if (key !== last) forms.push(next);
+			last = key;
 		}
 	}
 	return forms;

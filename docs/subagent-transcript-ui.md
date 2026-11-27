@@ -208,9 +208,9 @@ last crumb, so it is not said twice. Red as the row's line 1 is red when the
 run failed; the muted `Ban` when interrupted.
 
 **Line 3: the row's second line**, as the row draws it (`subagentLine`,
-`SubagentLineContent`): `6 tool uses · <latest child>` while live, the figures
-once settled, the first line of what it returned on a failure. The row's
-[step window](tool-call-ui.md#the-step-window) is not drawn here — the level
+`SubagentLineContent`): `6 tool uses · <latest child>` while live, the
+count, report and tokens once settled, the first line of what it returned on
+a failure. The row's [step window](tool-call-ui.md#the-step-window) is not drawn here — the level
 under the header is those steps whole, as an open Process is — so, as on a row
 whose Process is open, the line names its latest child. It is the glance
 that answers *is it moving* for a reader who has scrolled up into the middle of
@@ -396,8 +396,8 @@ level's parts — [keeping the reader's place](tool-call-ui.md#keeping-the-reade
   following: there is nothing more to follow, and a report is read from its
   start. If the report fits below what is in view, nothing moves. A reader who
   had scrolled away is not moved; the dot says something arrived. The header's
-  spinner becomes the settled glyph and its line 3 becomes the figures, in
-  place.
+  spinner becomes the settled glyph and its line 3 becomes the count, report
+  and tokens, in place.
 - **When it resumes** — a `SendMessage` to it, a Codex follow-up — the level is
   live again, as the row is: the header spins, new children arrive at the end
   under the old conclusion block's place, and following resumes by the same

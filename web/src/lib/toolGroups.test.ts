@@ -80,15 +80,14 @@ function id(item: Item): string {
 /** A form of the summary line as the row draws its text. */
 function text(form: FormSegment[]): string {
 	return form
-		.map(({ lead, names, more }) =>
+		.map(({ lead, names, counted }) =>
 			[
-				lead,
+				counted ? `${lead}:` : lead,
 				names
 					.map(
 						(name) => `${name.text}${name.times > 1 ? ` ×${name.times}` : ""}`,
 					)
 					.join(", "),
-				more > 0 ? `+${more}` : "",
 			]
 				.filter(Boolean)
 				.join(" "),
@@ -575,14 +574,57 @@ describe("rowEntries", () => {
 			).toBe("Started 2 stories");
 		});
 
-		// The count is authoritative in every form: names shown and `+K` add
-		// up to it.
-		it("names at most three per verb and counts the rest", () => {
+		// docs/tool-call-ui.md#the-summary-row: names alone when they account
+		// for every call, the count and the names when they account for at
+		// least half, the count alone below that.
+		it("names a segment only when its names account for most of its calls", () => {
+			expect(
+				richest(
+					summaryOf([
+						run("a", "head -n 1 x"),
+						run("b", "head -n 1 y"),
+						run("c", "sed -n 1p z"),
+					]),
+				),
+			).toBe("Ran head ×2, sed");
 			expect(
 				richest(
 					summaryOf(["a", "b", "c", "d", "e"].map((n) => read(n, `/${n}.ts`))),
 				),
-			).toBe("Read a.ts, b.ts, c.ts +2");
+			).toBe("Read 5 files: a.ts, b.ts, c.ts");
+			expect(
+				richest(
+					summaryOf(
+						["a", "b", "c", "d", "e", "f", "g"].map((n) => read(n, `/${n}.ts`)),
+					),
+				),
+			).toBe("Read 7 files");
+		});
+
+		it("names the busiest calls, in the order they first ran", () => {
+			const commands = [
+				"cat AGENTS.md",
+				"pnpm test",
+				"ls",
+				"git diff",
+				"pnpm test",
+				"pwd",
+				"git diff",
+				"pnpm test",
+			];
+			expect(richest(summaryOf(commands.map((c, i) => run(`c${i}`, c))))).toBe(
+				"Ran 8 commands: cat AGENTS.md, pnpm test ×3, git diff ×2",
+			);
+		});
+
+		it("counts fifteen calls rather than naming one of them", () => {
+			expect(
+				richest(
+					summaryOf(
+						Array.from({ length: 15 }, (_, i) => run(`c${i}`, `cmd${i}`)),
+					),
+				),
+			).toBe("Ran 15 commands");
 		});
 
 		it("counts a repeated call once per run, and a re-read file once", () => {
@@ -601,7 +643,7 @@ describe("rowEntries", () => {
 		it("counts a call with nothing to name it by, and names the rest", () => {
 			expect(
 				richest(summaryOf([run("a", "pnpm test"), call("b", "Bash", {})])),
-			).toBe("Ran pnpm test +1");
+			).toBe("Ran 2 commands: pnpm test");
 		});
 
 		// A log read and a shell killed used to read `Ran 3 commands` beside the
@@ -722,11 +764,21 @@ describe("rowEntries", () => {
 				),
 			).toEqual([
 				"Edited e.ts · Ran pnpm test ×2 · Read a.ts, b.ts · Thought for 2s",
-				"Edited e.ts · Ran pnpm test ×2 · Read a.ts +1 · Thought for 2s",
+				"Edited e.ts · Ran pnpm test ×2 · Read 2 files: a.ts · Thought for 2s",
 				"Edited e.ts · Ran pnpm test ×2 · Read 2 files · Thought for 2s",
 				"Edited e.ts · Ran 2 commands · Read 2 files · Thought for 2s",
 				"Edited 1 file · Ran 2 commands · Read 2 files · Thought for 2s",
 			]);
+		});
+
+		// Two of five names fall below half: the segment goes straight to its
+		// count, and naming one fewer would only draw that line again.
+		it("goes straight to the count once the names left cover under half", () => {
+			expect(
+				forms(
+					summaryOf(["a", "b", "c", "d", "e"].map((n) => read(n, `/${n}.ts`))),
+				),
+			).toEqual(["Read 5 files: a.ts, b.ts, c.ts", "Read 5 files"]);
 		});
 
 		it("has one form when there is nothing to name", () => {

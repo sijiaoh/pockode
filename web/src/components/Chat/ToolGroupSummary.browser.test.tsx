@@ -57,10 +57,12 @@ describe("ToolGroupSummary", () => {
 		rerender(<List width={420} />);
 		await settle();
 		const line = summaryLine();
-		// Fits whole: what it gave up it gave up a name at a time, so no `+K`
+		// Fits whole: what it gave up it gave up a name at a time, so no name
 		// was cut off the end.
 		expect(line.scrollWidth).toBeLessThanOrEqual(line.clientWidth);
-		expect(line).toHaveTextContent(/^Edited ToolRow\.tsx/);
+		// The front segment keeps a name longest, with its count once it has
+		// given one up.
+		expect(line).toHaveTextContent(/^Edited (2 files: )?ToolRow\.tsx/);
 		expect(line).toHaveTextContent(/Read 3 files$/);
 
 		rerender(<List width={1200} />);

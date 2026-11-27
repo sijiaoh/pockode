@@ -91,11 +91,17 @@ describe("TaskItem", () => {
 
 	it("keeps the report out of the way until asked for it", async () => {
 		const user = userEvent.setup();
-		render(<TaskItemWithChildren run={task("success")} />);
-		expect(screen.queryByText("Report")).not.toBeInTheDocument();
+		render(
+			<TaskItemWithChildren
+				run={task("success", { result: "# Report\n\nThe details." })}
+			/>,
+		);
+		// The row previews its first line, and no more.
+		expect(screen.getByText("Report")).toBeVisible();
+		expect(screen.queryByText("The details.")).not.toBeInTheDocument();
 
 		await user.click(screen.getByRole("button", { expanded: false }));
-		expect(screen.getByText("Report")).toBeVisible();
+		expect(screen.getByText("The details.")).toBeVisible();
 	});
 
 	// The brief is only visible here, but it is the longest thing in the row and
@@ -522,18 +528,54 @@ describe("TaskItem", () => {
 			expect(screen.getByText("sender.go")).toBeVisible();
 		});
 
-		// The report is the account once it has finished; the count is the fact
-		// worth keeping, and keeping a line holds the row's height.
-		it("keeps only the count once it has finished", () => {
+		// Settled, the conclusion is the news: the report's first line replaces
+		// whatever it was last doing, and the count stays.
+		it("previews the report after the count once it has finished", () => {
 			render(
 				<TaskItemWithChildren
 					run={task("success", {
+						result: "## Findings\n\nTwo callers.",
 						children: [read("c1"), read("c2"), text("Checking.")],
+						subagent: { toolUses: 2, totalTokens: 45_600 },
 					})}
 				/>,
 			);
 			expect(screen.getByText("2 tool uses")).toBeVisible();
+			expect(screen.getByText("Findings")).toBeVisible();
+			expect(screen.getByText("45.6K tokens")).toBeVisible();
 			expect(screen.queryByText("Checking.")).toBeNull();
+		});
+
+		it("previews the report of a run that measured nothing", () => {
+			render(<TaskItemWithChildren run={task("success")} />);
+			expect(screen.getByText("Report")).toBeVisible();
+		});
+
+		it("keeps the count and the tokens when it reported nothing", () => {
+			render(
+				<TaskItemWithChildren
+					run={task("success", {
+						result: "",
+						children: [read("c1"), read("c2")],
+						subagent: { toolUses: 2, totalTokens: 45_600 },
+					})}
+				/>,
+			);
+			expect(screen.getByText("2 tool uses")).toBeVisible();
+			expect(screen.getByText("45.6K tokens")).toBeVisible();
+			expect(screen.queryByText("·")).toBeNull();
+		});
+
+		it("previews the report of a subagent that called nothing", () => {
+			render(
+				<TaskItemWithChildren
+					run={task("success", {
+						subagent: { toolUses: 0, totalTokens: 4200 },
+					})}
+				/>,
+			);
+			expect(screen.getByText("Report")).toBeVisible();
+			expect(screen.getByText("4.2K tokens")).toBeVisible();
 			expect(screen.queryByText("·")).toBeNull();
 		});
 
@@ -570,7 +612,7 @@ describe("TaskItem", () => {
 
 		// The CLI backgrounds most subagents of its own accord; a completed one
 		// reads as a foreground success, its outcome being its report.
-		it("ends a completed background row on its figures, not its outcome", () => {
+		it("previews a completed background row's outcome as its report", () => {
 			render(
 				<TaskItemWithChildren
 					run={task("success", {
@@ -582,8 +624,8 @@ describe("TaskItem", () => {
 				/>,
 			);
 			expect(screen.getByText("1 tool use")).toBeVisible();
+			expect(screen.getByText("Background agent completed")).toBeVisible();
 			expect(screen.getByText("45.6K tokens")).toBeVisible();
-			expect(screen.queryByText("Background agent completed")).toBeNull();
 		});
 
 		// Its body does not open, so the verdict is the row's.
@@ -664,7 +706,8 @@ describe("TaskItem", () => {
 				/>,
 			);
 			await openProcess(user);
-			expect(screen.getAllByText("Here is what I found.")).toHaveLength(1);
+			// The row's preview of it, and the outcome in the body.
+			expect(screen.getAllByText("Here is what I found.")).toHaveLength(2);
 			expect(
 				within(screen.getByRole("group")).queryByText("Here is what I found."),
 			).toBeNull();
@@ -1039,10 +1082,11 @@ describe("TaskItem", () => {
 			expect(screen.getByText("842 tokens")).toBeVisible();
 		});
 
-		it("draws tokens alone for a subagent that called nothing", () => {
+		it("draws tokens alone for a subagent that called nothing and said nothing", () => {
 			render(
 				<TaskItemWithChildren
 					run={task("success", {
+						result: "",
 						subagent: { toolUses: 0, totalTokens: 4200 },
 					})}
 				/>,
@@ -1097,6 +1141,20 @@ describe("TaskItem", () => {
 				screen.getByText(/^pr-review-toolkit:code-reviewer · agent/),
 			).toBeVisible();
 			expect(screen.getByText("a555947eded58a158")).toBeVisible();
+		});
+
+		// A phone drops the tokens off the row first; the body keeps them.
+		it("keeps its tokens in the body's facts", async () => {
+			const user = userEvent.setup();
+			render(
+				<TaskItemWithChildren
+					run={task("success", {
+						subagent: { agentId: "a555", totalTokens: 45_600 },
+					})}
+				/>,
+			);
+			await user.click(screen.getByRole("button", { name: /find usages/ }));
+			expect(screen.getByText(/· 45\.6K tokens$/)).toBeVisible();
 		});
 
 		it("leaves out a type the title already says", async () => {

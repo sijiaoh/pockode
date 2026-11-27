@@ -302,6 +302,12 @@ export interface SubagentLine {
 	 * absent there when the engine reported none.
 	 */
 	tokens?: number;
+	/**
+	 * A success's conclusion on its figures line: the first line of what its
+	 * body draws as the report (`subagentLastWords`). Absent when it said
+	 * nothing.
+	 */
+	report?: string;
 	/** What follows the count: the latest child, or a background outcome. */
 	tail?: LatestChild;
 	/** Whether it is still moving; see `ToolSecondLine.live`. */
@@ -405,20 +411,33 @@ export function subagentLine(
 			return { toolUses, tail: { kind: "text", text: why }, live: false };
 		}
 	}
-	const tokens = figuresTokens(run);
-	// Only a run that settled with figures has a line without a count.
-	if (toolUses === 0 && !tokens) return null;
+	const tokens = settledTokens(run);
+	// Settling is when the conclusion becomes news, so a success leads with it.
+	const report =
+		run.status === "success" ? reportPreview(run) || undefined : undefined;
+	// Only a run that settled with figures or a report has a line without a
+	// count.
+	if (toolUses === 0 && !tokens && !report) return null;
 	// Frozen where it was cut: where it was is the news, and a late result's
 	// tokens are not.
 	if (run.status === "interrupted") {
 		return { toolUses, tail: latest, live: false };
 	}
-	return { toolUses, tokens, live: false };
+	return { toolUses, tokens, report, live: false };
 }
 
-/** Tokens for a figures line: settled, not cut short, and not zero. */
-function figuresTokens(run: ToolRun): number | undefined {
-	if (run.status === "interrupted") return undefined;
+/** The first line of what the body draws as the report. */
+function reportPreview(run: ToolRun): string {
+	const { report, outcome } = subagentLastWords(run);
+	return firstLine(report || outcome);
+}
+
+/**
+ * The subagent's context when it finished: settled, not cut short, and not
+ * zero — on the figures line and in the body's facts alike.
+ */
+export function settledTokens(run: ToolRun): number | undefined {
+	if (isLiveRun(run) || run.status === "interrupted") return undefined;
 	const tokens = run.subagent?.totalTokens;
 	return tokens ? tokens : undefined;
 }

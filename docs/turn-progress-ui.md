@@ -716,7 +716,7 @@ named as live:
 │ ⟳ ⧉ code-reviewer  Review the diff  background   12m 4s  │
 │     14 tool uses · Checking the 503 path next.           │
 │ ✓ ⧉ Plan   Draft the migration                    2m 2s  │  ← settled while open
-│     9 tool uses · 31.2K tokens                           │
+│     9 tool uses · Three steps: add the co…  31.2K tokens │
 └──────────────────────────────────────────────────────────┘
 ```
 

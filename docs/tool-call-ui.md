@@ -239,8 +239,8 @@ pinned, so is in none of them — a failed `Edit` changed nothing. `summarize` i
 `lib/toolGroups.ts` builds it; `GroupSummary` holds the segments structured,
 not worded.
 
-**A segment is a verb and what it touched:** `<Verb> <name>, <name>, <name>
-+K`.
+**A segment is a verb and what it touched:** `<Verb> <name>, <name>`, or
+its count when the names would not say what most of it did.
 
 - One segment per verb and tense: the present ones first, then the past ones,
   each in a fixed order by consequence — edit, create, start, run, stop, read,
@@ -249,15 +249,27 @@ not worded.
 - Names are in the order they first appeared. A live group only ever appends
   at the end, so the line never reshuffles under the reader, and the names come
   in the order of the rows under it.
-- At most three names; `+K` is what the segment covers beyond them, and appears
-  only when K is not 0. Names shown and K always add up to the count, so the
-  count is true in every form.
-- A segment with no name to show — every call unnameable, or its names given
-  up [to fit](#when-the-line-runs-out) — is worded by its count, as the line
-  always was: `Edited 2 files`, `Ran 1 command`, `Read 3 files`, `Searched
-  once` / `Searched N times`, `Fetched N pages`, `Used N tools`, and `Created
-  N tasks` / `Started N stories` (`work items` when the kinds are mixed),
-  `Stopped N tasks`. `Updated todos` never names anything.
+- At most three names, and they are only drawn when they account for at
+  least half of the segment's count (its calls, or its files for the file
+  verbs; a name's `×N` counts N). Whenever they do not account for all of it,
+  the count is written out, so the reader never adds anything up and one
+  sample name never stands in for fifteen calls:
+
+  | The names shown cover | Drawn as | Example |
+  |---|---|---|
+  | every call | the names alone | `Ran head ×3, sed` · `Read a.ts, b.ts` |
+  | at least half | the count, a muted `: `, the names | `Ran 15 commands: pnpm test ×9, git diff` |
+  | less than half | the count alone | `Ran 15 commands` |
+
+- When not all names fit, the ones kept are those with the most calls (ties to
+  the first seen), still drawn in first-appearance order — so a live group
+  never reorders what it has drawn, though a name may swap in or out as the
+  counts change.
+- The count is worded as the line always was: `Edited 2 files`, `Ran 1
+  command`, `Read 3 files`, `Searched once` / `Searched N times`, `Fetched N
+  pages`, `Used N tools`, and `Created N tasks` / `Started N stories` (`work
+  items` when the kinds are mixed), `Stopped N tasks`. `Stopped` and `Updated
+  todos` never name anything.
 
 What a call is named by is read by `toolVerb` in `lib/toolSummary.ts`, beside
 its verb — the same table of knowledge as the row's title, and a Codex `Bash`
@@ -270,7 +282,7 @@ it say:
 | create | call: `story_create`, `task_create` | its kind and the title it was given, quoted | `Created task "Design the row", story "Ship it"` |
 | start | call: `story_start`, `task_start` | its kind and the title its [`workRef`](#pockodes-own-work-calls) carries, quoted — nothing while it runs | `Started task "Design the row"` |
 | stop | call: `TaskStop`, `KillShell` | nothing — a task id names nothing a reader knows | `Stopped 1 task` |
-| read | distinct file | base name | `Read toolSummary.ts, ToolRow.tsx +1` |
+| read | distinct file | base name | `Read 3 files: toolSummary.ts, ToolRow.tsx` |
 | search | call | `Grep`, `WebSearch`, a Codex search: what it looked for, quoted; `Glob`: its pattern; a Codex file listing: the directory's base name and `/`. Never where it looked — the row has the scope | `Searched "Retry-After", **/*.test.ts` |
 | run | call | the command's [head](#a-commands-head) | `Ran pnpm test, go test ./relay/...` |
 | fetch | call | the URL's host — a Codex page open included | `Fetched github.com` |
@@ -287,7 +299,7 @@ it say:
   path itself uses.
 - **A call with nothing to name it by** — a stop, a start still running, a call
   missing its command, pattern or URL — is counted and named by nobody, so it
-  is only ever in `+K` or the count.
+  is only ever in the count.
 - **Reading a task's output is not running a command.** `BashOutput` used to be
   counted under `run` with `KillShell`, so a log read twice and a shell killed
   read `Ran 3 commands` beside the one command that ran. A fetch is now
@@ -300,29 +312,37 @@ it say:
 
 #### A command's head
 
-What a reader recognises a command by, from the flattened text the row shows
-(`commandHead`): the `cd <dir> &&` (or `;`), the `VAR=value` words and a
-leading `# comment` line in front are dropped — they say where and how it ran,
-not what ran; the command ends at the first `&&`, `||`, `|`, `;`, `&` or line
-break; and it keeps at most three words, stopping before the first that is a
-flag, a quoted argument or a redirection. So `cd web && pnpm run test --
---watch` is `pnpm run test`, `git commit -m "…"` is `git commit` and `python3
--I x.py` is `python3`. Nothing marks the cut: the row is one tap away and has
-the whole command.
+What a reader recognises a command by (`commandHead`): the first command in
+the text that does the work. The shell is read as a shell — quotes, `$(…)`,
+comments and here-doc bodies stay where they belong — and what an agent wraps
+around the work is passed over: `cd`, `export`, `VAR=value` words, `echo`
+banners and `sleep`s; `for … do`, `if … then`, `while`, subshells and `{ }`
+groups; `sudo`, `env`, `timeout` and the `bash -lc '…'` Codex runs everything
+in. Of that command it keeps at most three words — the first by its base
+name, so `./scripts/run.sh` is `run.sh` — stopping before the first that is a
+flag, a quoted or expanded argument, a redirection or a bare `.`. So `cd web
+&& pnpm run test -- --watch` is `pnpm run test`, `for q in …; do echo "$q"; gh
+search issues "$q"; done` is `gh search issues` and `find . -name …` is
+`find`. Where it cannot tell — the command is a variable (`$FF -i …`), the
+work is only inside a `$(…)`, a `case` — it names nothing rather than a keyword,
+and the call is counted unnamed; setup alone (`cd web`, `sleep 30`) is named by
+itself. Nothing marks the cut: the row is one tap away and has the whole
+command.
 
 #### When the line runs out
 
 `truncate` cannot give names up before counts, and a name cut in the middle of
-a list makes `+K` lie. So the row draws the **richest form that fits**, from a
-ladder `summaryForms` builds, richest first: every segment with its names;
-then the names given up one at a time from the end of the line toward the
-start — a name dropped takes all its `×N` into its segment's `+K`, and a
-segment that loses its last name is worded by its count — down to the line of
-counts alone. If even that does not fit, `truncate` cuts its end with an
-ellipsis. The most consequential segments keep their names longest, and the
-present ones, leading, longest of all. The forms do not get strictly narrower
-(`Ran ls +1` is shorter than `Ran 2 commands`), so the row takes the first that
-fits rather than searching by width.
+a list leaves the line claiming less than was done. So the row draws the
+**richest form that fits**, from a ladder `summaryForms` builds, richest first:
+every segment with its names; then the names given up one at a time from the
+end of the line toward the start, each form worded by [the rule
+above](#the-summary-row) — a segment that loses a name gains its count
+(`Ran 3 commands: a, b`), and one whose names fall below half goes straight to
+its count — down to the line of counts alone. If even that does not fit,
+`truncate` cuts its end with an ellipsis. The most consequential segments keep
+their names longest, and the present ones, leading, longest of all. The forms
+do not get strictly narrower (`Ran ls, pwd` is shorter than `Ran 2 commands:
+ls`), so the row takes the first that fits rather than searching by width.
 
 `FittedLine` in `ToolGroupSummary.tsx` fits it to the width the text column
 actually has — never to a character count, which could only disagree with the
@@ -330,9 +350,9 @@ screen. Every form is measured once per change of words, from copies drawn for
 that one layout pass and removed before paint, since copies left in would be
 found, selected and copied as the row's own text; a `ResizeObserver` then only
 compares numbers. Both sides are read with `getBoundingClientRect` — a
-rounded `clientWidth` picks a form a fraction too wide, and `+K` is cut to
-`+…` — and a web font arriving (`document.fonts` `loadingdone`) measures again,
-since Geist swaps in after the fallback was measured. Until a width is known —
+rounded `clientWidth` picks a form a fraction too wide, and its last name is
+cut to `…` — and a web font arriving (`document.fonts` `loadingdone`) measures
+again, since Geist swaps in after the fallback was measured. Until a width is known —
 the first paint, jsdom — the richest form is drawn and `truncate` covers it; a
 width of 0, a list inside a collapsed Process, measures nothing and keeps the
 last pick, and a reveal fits it afresh. A phone and a desktop climb the same
@@ -343,7 +363,7 @@ width and a desktop's.
 
 Verb words and count wording are proportional, in `text-th-text-secondary`;
 names are `font-mono`, the same colour — machine text, like a row's detail;
-`, `, `+K`, `×N` and ` · ` are `text-th-text-muted`. No accent, no red, no
+`, `, `: `, `×N` and ` · ` are `text-th-text-muted`. No accent, no red, no
 green.
 
 #### While it runs
@@ -1909,9 +1929,9 @@ A subagent row's figure is its call's, by the rules above: from the `Task` /
 `Agent` call to its result, or to its outcome when it ran in the background — how
 long the subagent worked, not how long the main agent waited for a placeholder.
 A duration the CLI reports for the subagent wins, as everywhere. Its second line
-(the figures, or the latest child) never carries it: the figure stays on line 1
-([why](#line-2-once-settled-the-figures)). A running step in its
-[step window](#the-step-window) carries its own counter, derived as that
+(the report and tokens, or the latest child) never carries it: the figure
+stays on line 1 ([why](#line-2-once-settled-the-count-the-report-the-tokens)).
+A running step in its [step window](#the-step-window) carries its own counter, derived as that
 child's row derives it; a settled step there carries none.
 
 The rows in its Process follow the same rules with no exception: their records
@@ -2939,7 +2959,7 @@ same closed disclosure, same clamp; only the rendering changes.
 ```
 ┌────────────────────────────────────────────────────────────┐
 │ ›  ✓  ⧉ Explore  Find retry handling                1m 12s │
-│       12 tool uses · 45.6K tokens                          │
+│       12 tool uses · The sender retries on…   45.6K tokens │
 ├────────────────────────────────────────────────────────────┤
 │  The sender retries on 429 and 503, honouring …            │  report
 │  …                                                         │
@@ -3181,11 +3201,12 @@ A subagent can be most of a turn's work and most of its cost, and the CLIs say
 which agent it was, how much it did and what it spent. The row used to say none
 of it: its title was the literal `Task` on every subagent, the agent sat in a
 chip, and a settled row ended in a bare count. The row now names the agent and,
-once it settles, carries the measured figures.
+once it settles, carries the first line of its report and the measured
+figures.
 
 ```
  ›  ✓  ⧉ Explore   Find retry handling                     2m 2s
-       12 tool uses · 45.6K tokens
+       12 tool uses · The sender retries on 429 and…   45.6K tokens
 ```
 
 #### Line 1: the agent, then what it was asked
@@ -3345,57 +3366,66 @@ a phone row is noise, and the live line has no width for it.
 - duration: `formatDuration`, in the meta slot, unchanged.
 - Zero tokens are not drawn (an engine that reports `0` has measured nothing
   useful); zero tool uses are not drawn either — a subagent that answered
-  without calling anything has `45.6K tokens` alone.
+  without calling anything leads with its report.
 
-#### Line 2 once settled: the figures
+#### Line 2 once settled: the count, the report, the tokens
 
-The settled second line is the figures, joined by ` · `, in the order **tool
-uses, tokens** — the duration stays on line 1:
+A settled success's second line is `count · report`, and its tokens at the
+right end — the duration stays on line 1:
 
 ```
- ›  ✓  ⧉ Explore   Find retry handling                     2m 2s
-       12 tool uses · 45.6K tokens
+ ›  ✓  ⧉ general-purpose  background  Review: the team's de…      2m 2s
+       15 tool uses · Review: the team's decis…   45.6K tokens   ← desktop
+       15 tool uses · Review: the team's decisions and…          ← phone
 ```
 
+- **The report is the first line of what the body draws as the report**
+  (`subagentLastWords`): `report` for a foreground run, `outcome` for a
+  backgrounded one, through the same `firstLine` as a failure's tail
+  ([below](#status-by-status)), muted like every settled tail — line 1 carries
+  the status. Settling is the moment the conclusion becomes news, so it is
+  there in the frame the run settles, even while siblings still run.
 - **The duration stays in the meta slot.** Every row's time is right-aligned
   on line 1, live as a counter and settled as a duration; a subagent's
   `2m 2s` moving to the second line on settling would be a figure jumping
-  across the row at the moment it stops, and two time positions in one list. On
-  line 2 it would also be the first thing cut on a phone. Claude Code's
-  `Done (12 tool uses · 45.6k tokens · 2m 2s)` puts the same three facts on one
-  row; this row has them on its two lines.
-- **Each figure is drawn whole or not at all.** The line is one `flex-wrap`
-  row exactly one line high (`h-[1lh] overflow-hidden`), the count and the
-  `· tokens` its two `shrink-0` spans: on a 320px phone with
-  three levels of rail the figures are about 170px of the ~210px left, and if a
-  pathological width cannot fit both, the tokens span drops out whole rather
-  than reading `45.` — it wraps onto the hidden second line. Never truncated
-  mid-number.
+  across the row at the moment it stops, and two time positions in one list.
+  The tokens sit under it, so the figures read as one column.
+- **What gives way, in order:** the tokens drop out whole, then the report is
+  cut with `…`; the count never yields. The line is one `flex-wrap` row exactly
+  one line high (`h-[1lh] overflow-hidden`): `count · report` is its first item,
+  with a `16rem` basis, and the tokens a `shrink-0` second that wraps onto the
+  hidden line whenever both do not fit — on a 360–390px phone, which leaves the
+  report the width after the count. Never `45.`. With no report the first item
+  takes no basis, so `12 tool uses   45.6K tokens` still fits a phone. The
+  basis is on the item and not on the report: a minimum on the report would
+  make the report what wraps away on a deeply nested narrow row.
+  `TaskItem.browser.test.tsx` holds this at 360, 390 and 900px.
 - **What shows with what is known:**
 
 | Known | Line 2 |
 |---|---|
-| tool uses and tokens | `12 tool uses · 45.6K tokens` |
-| tool uses only (every record before the server kept tokens; a Codex child that never reported usage) | `12 tool uses` — exactly today's line, renamed |
-| tokens only (answered without a call) | `45.6K tokens` |
-| neither | the shared rungs, as a row with no steps draws today |
+| tool uses, a report, tokens | `12 tool uses · <report>`, `45.6K tokens` at the right end when it fits |
+| tool uses, an empty report | `12 tool uses`, `45.6K tokens` at the right end |
+| no tool uses (answered without a call) | `<report>`, tokens at the right; an empty report is `45.6K tokens` alone |
+| no tokens (every record before the server kept them; a Codex child that never reported usage) | the same, without them |
+| nothing at all | the shared rungs, as a row with no steps draws today |
 
 #### Status by status
 
 | Run | Line 2 |
 |---|---|
 | live (`running` / `background`) | `N tool uses`, over its [step window](#the-step-window) from the first step — the count, and the steps under it say what it is doing; no tokens |
-| `success` | the figures |
+| `success` | `N tool uses · <report>` and the tokens ([above](#line-2-once-settled-the-count-the-report-the-tokens)) |
 | `error` | `N tool uses · <first line of what it returned>`, in the muted second-line colour — the row's red is line 1's; why it failed is the news, and the body does not open to say it ([the body](#the-body-problems-2-and-3)). No tokens: on a failed row why outranks what it spent |
 | `interrupted` | `N tool uses` while its frozen [window](#the-step-window) is drawn, then `N tool uses · <latest child>`, frozen where it was cut — no tokens even when a late result brought some: where it was is the news. Codex and Claude alike: a Codex subagent the user's Stop cut short is `interrupted`, not `error` (below) |
-| settled from the background, `completed` | the figures — the outcome is its report ([the subagent body](#the-subagent-body)), so it reads as a foreground success does |
+| settled from the background, `completed` | as `success` — the outcome is its report ([the subagent body](#the-subagent-body)), so it reads as a foreground success does |
 | settled from the background, `failed` / `stopped` | `N tool uses · <first line of the outcome>` — the verdict is the news, as on a foreground failure |
 
 The background split is a change, and the reason for it: on claude 2.1.286 the
 CLI backgrounds a main-agent subagent of its own accord, so if a backgrounded
-success kept its outcome line the most common subagent would never show what it
-cost. Its outcome *is* its report, which is exactly what a foreground success
-already leaves to the body.
+success read as a failure does, the most common subagent would never show what
+it cost. Its outcome *is* its report, so it previews and costs as a foreground
+success does.
 
 **A failed run's first line is the first non-empty line of its result**, read
 as a text child is ([below](#the-second-line-steps-and-what-it-is-doing)): block
@@ -3403,8 +3433,8 @@ and inline Markdown markers dropped, one `truncate` span, not mono — a
 subagent's result is its report or the CLI's verdict, prose either way. For a
 foreground failure the result is the call's own (a report that came back framed
 is read out of its frame first, as the body does); for a backgrounded one, the
-outcome. A failure that returned nothing keeps the figures, as before: there is
-no verdict to show, and the red line 1 still says it failed.
+outcome. A failure that returned nothing keeps its count and tokens, as
+before: there is no verdict to show, and the red line 1 still says it failed.
 
 **Interrupted reads the same on both CLIs.** Claude settles a subagent the turn
 cut short as `interrupted` — the muted `Ban`, never red, because the user
@@ -3430,11 +3460,11 @@ is until the resumed run ends. When it ends the row settles again, as the run
 that ended:
 
 - **Codex** reports the resumed run on the spawn's own call, so the row takes
-  its outcome — the new report, its duration and its figures — and reads by
+  its outcome — the new report, its duration and its tokens — and reads by
   the table above.
 - **Claude** reports it on the `SendMessage` call, which has a row of its own
   and gets the outcome there. The subagent's row goes back to what it said
-  before it resumed, figures and report alike; its new work stays in its
+  before it resumed, report and tokens alike; its new work stays in its
   Process.
 
 A message to a subagent that is still running changes nothing: it never
@@ -3455,13 +3485,14 @@ only when there is neither.
 |---|---|---|
 | `subagent.agent_id` — Claude's `agentId` | the body's **facts** line | a machine key for resuming the subagent, which the reader only needs to quote back to the agent; mono, selectable |
 | full agent type | the facts line, only when it differs from the title: a `plugin:` prefix the row dropped, or a type only the result named (`subagent.agent_type` on a call whose input had none, titled `Subagent`) | otherwise it is the row's title again; a Codex `agent_path` is already the title |
+| tokens | the facts line as well as the row, once settled and not cut short — `settledTokens`, the row's own figure | the first thing a narrow row drops ([above](#line-2-once-settled-the-count-the-report-the-tokens)), so a phone still has it one tap away |
 | model | the facts line, if a record ever carries the subagent's — none does today | rarely differs from the session's; worth a glance, not a line |
 | `spawn_depth` | nowhere | the rail already draws it, and a number would say it twice |
 | per-kind token breakdown, cost | nowhere | the session panel's concern; a subagent's share of it is the turn-level summary's |
 
 The **facts line** is the body's last block, after Prompt: one muted `p-2`
 line, `border-t`, facts joined by ` · `, wrapping (`break-all` on the id) —
-`pr-review-toolkit:code-reviewer · agent a555947eded58a158`.
+`pr-review-toolkit:code-reviewer · agent a555947eded58a158 · 45.6K tokens`.
 It is drawn only with at least one fact. Not a disclosure: it is one line, and a
 disclosure for one line is a tap to reveal less than its own label.
 
@@ -3475,9 +3506,9 @@ disclosure for one line is a tap to reveal less than its own label.
     ⟳ Grep   "Retry-After" in server/                       12s
 ```
 
-[Above](#line-2-once-settled-the-figures) replaces the settled rows of the
-table below, and `N steps` is drawn as `N tool uses` throughout; what follows is
-the live line. While a row draws its [step window](#the-step-window) — every
+[Above](#line-2-once-settled-the-count-the-report-the-tokens) replaces the
+settled rows of the table below, and `N steps` is drawn as `N tool uses`
+throughout; what follows is the live line. While a row draws its [step window](#the-step-window) — every
 live row that has a step — the calls are the window's, and the line's tail
 names none (below).
 
@@ -3490,12 +3521,12 @@ first row that matches wins:
 | Run | Second line |
 |---|---|
 | `error`, or settled from the background `failed` / `stopped`, that returned something | `N tool uses · <first line of what it returned>` — of the outcome, for a backgrounded run; with no tool uses, the first line alone |
-| no tool uses and no figures | the shared rungs, unchanged — `run.activity` while live (after `last_tool_name`, [above](#status-by-status)), the background rungs, else no line |
+| no tool uses, no tokens and no report | the shared rungs, unchanged — `run.activity` while live (after `last_tool_name`, [above](#status-by-status)), the background rungs, else no line |
 | live (`running` / `background`), with a step window | `N tool uses`, then `· <text>` only when the newest child is a text newer than the newest step |
 | `interrupted`, with a frozen step window | the same |
 | live, without a window (no step yet but a text or the CLI's count, or the Process open inline) | `N tool uses · <latest child>` |
 | `interrupted`, without a window (folded, or the Process open inline) | `N tool uses · <latest child>` — frozen where it was cut |
-| `success` / background `completed` | the figures ([above](#line-2-once-settled-the-figures)) |
+| `success` / background `completed` | `N tool uses · <report>` and the tokens ([above](#line-2-once-settled-the-count-the-report-the-tokens)) |
 
 `1 tool use`, singular. The rules inside that table:
 
@@ -3541,10 +3572,10 @@ first row that matches wins:
   exactly as one in the main transcript is
   ([the body](#the-body-problems-2-and-3)); the row's colour is the subagent's own
   outcome, and the failed call is red on its own row in the Process.
-- **A settled run drops the latest child for its figures, or for its
+- **A settled run drops the latest child for its report, or for its
   verdict.** On `success` the report is the account of what happened, and the
-  last thing the subagent touched is noise next to it; `12 tool uses · 45.6K
-  tokens` is the fact worth keeping on a collapsed row. A failed run — in its
+  last thing the subagent touched is noise next to it; its first line, beside
+  the count, is what a collapsed row keeps. A failed run — in its
   call or in the background — puts the first line of what it returned there
   instead: no subagent body opens itself
   ([the body](#the-body-problems-2-and-3)), so the row is where *why* has to be.
@@ -3566,9 +3597,10 @@ first row that matches wins:
   and the tail. The step window is `aria-hidden` throughout
   ([below](#the-step-window)).
 
-A row with **no tool uses and no figures** draws what it drew before this
-section existed. That covers two real cases with one rule: a subagent that
-answered without calling anything on a record with no tokens, and every
+A row with **no tool uses, no tokens and no report** draws what it drew
+before this section existed. That covers two real cases with one rule: a subagent that
+answered without calling anything, and with nothing to say, on a record with no
+tokens, and every
 transcript recorded before children were attributed — their subagent records
 sit flat beside the call ([below](#what-is-not-filed)). Writing `0 tool uses` on
 those would be false for the second kind. The price is that a step-less subagent which showed its activity
@@ -3676,7 +3708,7 @@ this with one, but line 2's `N tool uses` sits directly above the window and is
 the total; over oldest-first lines it reads plainly as *the last k of N*. A
 `+N−k more` would cost a line on every row for a second number counting one
 fact, and it would be the line that changes meaning on settle — where `N tool
-uses` becomes `N tool uses · 45.6K tokens` in place, the same count in the same
+uses` becomes `N tool uses · <report>` in place, the same count in the same
 spot.
 
 **What yields on a narrow line.** The glyph, the title (chip included) and the
@@ -4083,7 +4115,7 @@ the limit it always had, now visible as which Process the card lands in.
 |---|---|---|
 | `running` | spinner, `N tool uses` over its [step window](#the-step-window) | grows; its live children spin |
 | `background` | spinner + chip, same line while children arrive | as running, for as long as children arrive |
-| `success` | muted check, the figures | settled |
+| `success` | muted check, `N tool uses · <report>` and the tokens | settled |
 | `error` | red, `N tool uses · <first line of what it returned>`; the body stays closed | closed; a failed call, if any, is red on its own row |
 | `interrupted` | `Ban`, `N tool uses · <latest child>` once its window folds — on Codex as on Claude ([status by status](#status-by-status)) | settled |
 | resumed after any of the three above | as `running`, until the resumed run ends ([status by status](#status-by-status)) | grows again; the new children spin |
@@ -5321,7 +5353,8 @@ the virtualizer measures it.
     loaded ([what is not filed](#what-is-not-filed)).
 16. Two subagents spawned together: each row counts only its own tool uses,
     and each window has two lines; three or more siblings have one each.
-    Let the upper one finish first: its line becomes `N tool uses · <tokens>`
+    Let the upper one finish first: its line becomes `N tool uses · <report>`
+    and its tokens
     **without the row changing height** — its window stays, frozen, with no
     counter — with the same `N` it showed live the moment before, while the
     lower one keeps moving. When the lower one settles, both windows fold in
@@ -5374,9 +5407,10 @@ the virtualizer measures it.
     height**. A failed `Edit` is not in `Edited …`. On the summary, a file
     touched twice is named once; a command run twice is `<command> ×2`; two
     `index.ts` in different directories are told apart by their directories;
-    a fourth name is `+1`. Narrow the window: names go one at a time from the
-    end of the line, never cut mid-name and never `+…`, the first segment's
-    last; widen it and they come back.
+    four commands run once each read `Ran 4 commands: <a>, <b>, <c>`, never
+    `+1`. Narrow the window: names go one at a time from the end of the line,
+    never cut mid-name, the first segment's last, and a segment left naming
+    less than half its calls is its count alone; widen it and they come back.
 24. One settled call, with any number of failures or running calls beside
     it: no summary. A `Read` that succeeded, then a `Bash` that asks for
     permission: the two rows stay flat while the `Bash` runs and when its card
