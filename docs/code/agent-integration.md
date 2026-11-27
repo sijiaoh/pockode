@@ -4252,7 +4252,8 @@ the translation, and it exists because the mapping is not one-to-one in either
 direction: five event types all mean "the agent produced content", while a
 `system` frame means "the turn is alive" and must specifically *not* mean "the
 CLI resumed". Nor is it keyed on the type alone: a `tool_result` settling
-background work is noise, every other one is output. Nothing else in the server
+background work is noise, and so is content an adapter flagged as arriving
+after its turn ended (`agent.MarkAfterTurn`); every other one is output. Nothing else in the server
 reads event types to decide what a session is doing.
 
 The send path supplies the two signals no event carries: `SignalPrompt` when a
@@ -5156,6 +5157,22 @@ it is there. That reply is handled on a goroutine of its own, while every
 `turn/started` and `turn/completed` arrives on the single reader — so adopting the
 reply's id could put a finished turn back after `turn/completed` had cleared it,
 and leave the session holding a turn that no longer exists.
+
+**What a stop did not stop goes on reporting after the ending.** Measured on
+codex-cli 0.171.0: `turn/interrupt` is answered with an interrupted
+`turn/completed` within milliseconds, while a running command — the main
+thread's or a subagent's — is left to finish, and its `item/completed` (and the
+subagent's own text and ending) arrive tens of seconds later. A subagent still
+running when its parent's turn completes reports the same way. None of it is
+inside a turn, and no `turn/completed` is coming for it, so read as output it
+used to open a turn nothing ended: the session sat `running`, Stop showing, and a
+second Stop found no turn to name. Since every turn of this thread names itself
+with `turn/started` before its content, on the same reader goroutine that clears
+it, `emitEvent` flags any content emitted with no turn recorded
+(`agent.MarkAfterTurn`), and `process.turnInputFor` reads a flagged event as
+noise. It is still recorded and drawn under the call it settles. The results a
+turn's own ending releases (held subagent results) go out before the turn is
+cleared, so they are not flagged.
 
 ### Resource Cleanup Order
 

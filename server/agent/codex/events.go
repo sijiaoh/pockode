@@ -201,6 +201,9 @@ func (s *appSession) handleTurnCompleted(params json.RawMessage) {
 		s.log.Warn("failed to parse turn/completed", "error", err)
 	}
 
+	// Before the turn is cleared: these results are the turn's own, settled by
+	// its ending, not stragglers after it (see emitEvent).
+	s.releaseHeldSubagents(notif.Turn.Status == "interrupted")
 	s.clearTurn()
 	s.forgetToolInputs()
 	s.forgetReasoning(s.isOwnThread)
@@ -215,8 +218,6 @@ func (s *appSession) handleTurnCompleted(params json.RawMessage) {
 			authFailed = false
 		}
 	}
-
-	s.releaseHeldSubagents(notif.Turn.Status == "interrupted")
 
 	switch notif.Turn.Status {
 	case "interrupted":

@@ -943,6 +943,12 @@ func (s *appSession) handleResponse(msg rpcMessage) {
 // approval and per async request, so there is nothing to hold a WaitGroup that
 // the close could not race with.
 func (s *appSession) emitEvent(event agent.AgentEvent) {
+	// Every turn of this thread names itself with turn/started before its
+	// content, on the same reader goroutine that clears it at turn/completed,
+	// so content with no turn recorded belongs to one that has ended.
+	if _, turnID := s.currentTurn(); turnID == "" {
+		event = agent.MarkAfterTurn(event)
+	}
 	s.eventsMu.RLock()
 	defer s.eventsMu.RUnlock()
 	if s.eventsClosed {
