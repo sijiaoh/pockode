@@ -31,7 +31,8 @@ React SPA ──WebSocket──▶ Go Server ──spawn──▶ AI CLI (subpro
 | Claude impl | `server/agent/claude/claude.go` | Claude CLI subprocess, stream-json parsing, MCP server config |
 | Process manager | `server/process/manager.go` | Process lifecycle, event stream, lease reaper |
 | Frontend panel | `web/src/components/Chat/ChatPanel.tsx` | The session screen: the header (`SessionHeader.tsx` — the session's title, and the panel behind it holding engine, permission mode, work and usage; over a page, the page's own heading, `Layout/PageHeader.tsx` — [why](#the-session-screen)), the transcript and the composer (`InputBar.tsx`) ([layout](#the-session-screen)) |
-| Transcript | `web/src/components/Chat/MessageList.tsx` | Rendering the loaded messages, and every scroll decision made over them: [where the view sits](#where-the-view-sits) (with `useTranscriptScroll.ts` and `scrollAnchor.ts` beside it), the reserve (`HistoryReserve.tsx`) and trigger behind [history paging](#history-paging), and the jump to a pending permission request ([lifecycle-ui.md §2.2](lifecycle-ui.md#22-chat-the-attention-strip)) |
+| Transcript | `web/src/components/Chat/MessageList.tsx` | Rendering the loaded messages, and every scroll decision made over them: [where the view sits](#where-the-view-sits) (with `useTranscriptScroll.ts` and `scrollAnchor.ts` beside it), the reserve (`HistoryReserve.tsx`) and trigger behind [history paging](#history-paging), and the jump to a pending permission request ([lifecycle-ui.md §2.2](lifecycle-ui.md#22-chat-the-attention-strip); its landing in `transcriptJump.ts`, shared with a subagent's transcript) |
+| Subagent transcript | `web/src/components/Chat/SubagentTranscript.tsx` | A subagent's work as a transcript of its own, over the chat's: a stack of levels, each a layer with its own scroller on `useTranscriptScroll` ([subagent-transcript-ui.md](subagent-transcript-ui.md)) |
 | Chat hook | `web/src/hooks/useChatMessages.ts` | Message state, streaming, permission handling, and the session's unanswered questions |
 | RPC actions | `web/src/lib/rpc/chat.ts` | `sendMessage` (which carries `answering` when it is an answer, [answering-ui.md §3](answering-ui.md#3-the-answer-panel)), `interrupt`, `permissionResponse` |
 
@@ -684,6 +685,13 @@ named is the commit a page lands in, which an anchored reader is held through by
 [the seam](#reading-a-page-on-the-client) instead. The putting right of the
 track ([below](#the-track-and-three-kinds-of-write)) has a third moment of its
 own: the view coming to rest.
+
+The hook knows nothing of messages: it is handed what the end shows (a
+signature compared by identity, which the dot below is read from) and, once per
+commit, whether that commit reads the tail. The chat's answers to both —
+`useMessagesTail` beside it — are what this section describes. A subagent's
+transcript level is its other caller, on the level's parts, with rules of its
+own on top ([subagent-transcript-ui.md](subagent-transcript-ui.md#following-the-live-tail)).
 
 Neither moment covers the other. A commit is where the transcript's own changes
 land, and the invariant is applied before the frame that would show them in the

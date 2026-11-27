@@ -2612,7 +2612,9 @@ cut side.
 A sheet inside the block would die with it, and blocks are replaced while they
 are read: *Output so far* unmounts the moment the result arrives, a permission
 card the moment it is answered. So there is one viewer per transcript,
-`FullScreenHost` (`Chat/FullScreenHost.tsx`), rendered inside the transcript's
+`FullScreenHost` (`Chat/FullScreenHost.tsx`) — and each level of [a subagent's
+transcript](subagent-transcript-ui.md#relation-to-fullscreenhost) is a
+transcript, with a host of its own — rendered inside the transcript's
 `CoveredSurface` in `ChatPanel` so an overlay taking the chat closes it
 ([answering-ui.md](answering-ui.md#who-owns-the-dismissing-click) has why). A
 block publishes a `FullScreenSource` (`lib/fullScreen.ts`) under a **key** for
@@ -3451,7 +3453,7 @@ for a framed report that tail is the frame's usage line, not why.
 
 ```
 ├────────────────────────────────────────────────────────────┤
-│ ⌄  Process · 6 tool uses                                   │
+│ ⌄  Process · 6 tool uses                               ⤢   │
 │ ┃ Looking at the sender for edge cases.                    │  subagent text
 │ ┃ ›  ✓  Read   server/relay/sender.go                      │
 │ ┃ ›  ✓  Grep   "Retry-After" in server/                    │
@@ -3533,6 +3535,14 @@ is accepted because it is only paid by someone who asked for it, and
 scroll itself to follow. The row's second line is the live glance; an open
 Process is for reading at the reader's pace, which is the same split the live
 output block makes.
+
+**A long or deep Process can be read as a transcript of its own.** The ⤢ at the
+right end of the Process heading opens the subagent's work in a layer over the
+chat's transcript, with a breadcrumb back (`Chat › Explore › code-reviewer`),
+the subagent's live tail followed, and a ⤢ on every nested subagent's Process
+there to descend into it. It is offered on every Process and replaces nothing:
+tapping the heading still opens the Process inline. Everything about it is
+[subagent-transcript-ui.md](subagent-transcript-ui.md).
 
 #### Telling the subagent's words from the main agent's
 

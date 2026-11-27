@@ -51,6 +51,7 @@ import {
 } from "../../lib/sessionDetailStore";
 import { NEW_SESSION_TITLE, useSessionStore } from "../../lib/sessionStore";
 import { type SessionView, SessionViewProvider } from "../../lib/sessionView";
+import { subagentPath } from "../../lib/subagentRun";
 import { useWorkStore } from "../../lib/workStore";
 import { useIsGitRepo, useWorktreeStore } from "../../lib/worktreeStore";
 import { isPermissionReviewerRejection, useWSStore } from "../../lib/wsStore";
@@ -120,6 +121,14 @@ import ReadOnlyBar from "./ReadOnlyBar";
 import ReviewerOriginBar from "./ReviewerOriginBar";
 import SessionHeader from "./SessionHeader";
 import SessionOriginBar from "./SessionOriginBar";
+import {
+	SubagentTranscript,
+	type SubagentTranscriptHandle,
+} from "./SubagentTranscript";
+import {
+	openerOrSuccessor,
+	SubagentTranscriptContext,
+} from "./subagentTranscriptContext";
 
 const noop = () => {};
 
@@ -900,6 +909,12 @@ function ChatPanel({
 		setAnswerPanelOpen(false);
 		setAnswerAnchor(null);
 	}, []);
+	// The subagents whose transcripts are open over the list, by their calls,
+	// outermost first; empty while the layer is closed
+	// (docs/subagent-transcript-ui.md). Here, beside the panel, because the
+	// strip's jump and the panel's Escape both have to know about it.
+	const [subagentLevels, setSubagentLevels] = useState<string[]>([]);
+	const subagentLayerUp = subagentLevels.length > 0;
 	// The panel belongs to one session's questions, so a switch closes it — and
 	// the destination opens its own below, for its own questions. During
 	// render rather than in an effect, for the reason `useChatMessages` resets
@@ -914,6 +929,10 @@ function ChatPanel({
 	let panelReset = false;
 	if (panelSessionId !== sessionId) {
 		setPanelSessionId(sessionId);
+		// Another session's run is not in this transcript. A switch is a
+		// navigation and closes the layer by its Back anyway; this is the
+		// same close made where it cannot be missed.
+		setSubagentLevels([]);
 		setAnswerPanelOpen(false);
 		setAnswerAnchor(null);
 		seenQuestionIdsRef.current = new Set();
@@ -1276,6 +1295,30 @@ function ChatPanel({
 	// The jump lives with the scroll container; the strip below the list asks for
 	// it rather than reimplementing it.
 	const messageListRef = useRef<MessageListHandle>(null);
+	const subagentTranscriptRef = useRef<SubagentTranscriptHandle>(null);
+
+	// The ⤢ in the chat that opened the subagent's transcript, for focus to go
+	// back to when it closes. The list was inert meanwhile, so it is still
+	// there — or, if its bubble was redrawn, its successor is.
+	const transcriptOpenerRef = useRef<HTMLElement | null>(null);
+	const openSubagentTranscript = useCallback(
+		(toolUseId: string, opener: HTMLElement) => {
+			transcriptOpenerRef.current = opener;
+			// The whole path down to it, so that ← always goes up
+			// (docs/subagent-transcript-ui.md#back-at-each-depth).
+			setSubagentLevels(subagentPath(messagesRef.current, toolUseId));
+		},
+		[],
+	);
+	useEffect(() => {
+		if (subagentLayerUp) return;
+		const opener = transcriptOpenerRef.current;
+		transcriptOpenerRef.current = null;
+		if (!opener) return;
+		openerOrSuccessor(opener, transcriptRef.current)?.focus({
+			preventScroll: true,
+		});
+	}, [subagentLayerUp]);
 	// Closing the panel is part of the jump, not a side effect of it. The only
 	// caller is the strip's permission row, and a permission request can arrive
 	// while the panel is up — which is exactly when the card being jumped to is
@@ -1303,6 +1346,14 @@ function ChatPanel({
 	const handleJumpToRequest = useCallback((requestId: string) => {
 		setAnswerPanelOpen(false);
 		setAnswerAnchor(null);
+		// A card the subagent's transcript draws is jumped to there; any other
+		// is in the chat under it, which the layer has to make way for
+		// (docs/subagent-transcript-ui.md#a-step-that-asks-the-user).
+		// Focus goes where the jump lands, not back to the ⤢.
+		if (!subagentTranscriptRef.current?.hasRequest(requestId)) {
+			transcriptOpenerRef.current = null;
+			setSubagentLevels([]);
+		}
 		setPendingJumpRequestId(requestId);
 	}, []);
 	// The request is read in the commit the press produced, which is the one the
@@ -1322,7 +1373,9 @@ function ChatPanel({
 		if (pendingJumpRequestId === null) return;
 		setPendingJumpRequestId(null);
 		if (transcriptInert) return;
-		messageListRef.current?.jumpToRequest(pendingJumpRequestId);
+		(subagentTranscriptRef.current ?? messageListRef.current)?.jumpToRequest(
+			pendingJumpRequestId,
+		);
 	}, [pendingJumpRequestId, transcriptInert]);
 
 	const forkAnchor = forkTarget
@@ -1398,64 +1451,89 @@ function ChatPanel({
 		if (isChatPending) {
 			return <ChatSkeleton showRows={showSkeleton} />;
 		}
+		const onPermissionRespond = noInput ? undefined : handlePermissionRespond;
+		const onAnswerQuestion = noInput ? undefined : handleAnswerQuestion;
 		return (
 			<PermissionReviewContext.Provider value={permissionReview}>
-				<MessageList
-					key={sessionId}
-					ref={messageListRef}
-					sessionId={sessionId}
-					messages={messages}
-					tail={tail}
-					openedThoughtIds={openedThoughtIds}
-					hasMoreHistory={hasMoreHistory}
-					isLoadingMoreHistory={isLoadingMoreHistory}
-					historyError={historyError}
-					loadedHistoryPages={loadedHistoryPages}
-					onLoadMoreHistory={loadMoreHistory}
-					isCodex={agentType === "codex"}
-					// The openers a transcript carries for answering back, all
-					// withheld on a viewed session for the one reason: there is no
-					// process there to hear any of them. Each card already draws
-					// itself without a control when it is given none — a pending
-					// card that offers nothing is the truth here, not the dead end
-					// it would be in a live session. The question card is the one
-					// that needs this: its status comes from the records, not from
-					// the turn, so "Answer this" otherwise survives into a screen
-					// whose answer panel is not rendered at all. The other two are
-					// the same statement made where it cannot drift.
-					onPermissionRespond={noInput ? undefined : handlePermissionRespond}
-					onAnswerQuestion={noInput ? undefined : handleAnswerQuestion}
-					onHintClick={noInput ? undefined : handleHintSend}
-					isReadOnly={noInput}
-					readOnlyEmptyText={
-						isReviewer && !isReadOnly
-							? "No requests have been reviewed yet."
-							: undefined
-					}
-					emptyStateSwitch={
-						htmlFirstOffered ? (
-							<HtmlFirstSwitch control={htmlFirstSwitch} />
-						) : undefined
-					}
-					promptError={promptError ?? undefined}
-					onOpenWorkDetail={onOpenWorkDetail}
-					onOpenFile={onOpenFile}
-					forkedFromSessionId={forkedFromSessionId}
-					onOpenSession={onSelectSession}
-					// Forking without a way to open the result would leave the user in
-					// the parent with no sign anything happened, so the fork row waits
-					// for a host that can navigate. Restoring a discarded message needs
-					// none and brings its own slot (docs/session-fork-ui.md, "Which rows
-					// reserve a slot").
-					onForkMessage={
-						!isReadOnly && onSelectSession && forkSupport !== "none"
-							? handleStartFork
-							: undefined
-					}
-					onSignIn={isReadOnly ? undefined : handleSignIn}
-					onSwitchAccount={handleSwitchAccount}
-					onRestoreMessages={noInput ? undefined : handleRestoreMessages}
-				/>
+				{/* Inert under the subagent's transcript, and never unmounted for
+				    it: closing the layer gives back the list as it was left. */}
+				<div inert={subagentLayerUp} className="flex min-h-0 flex-1 flex-col">
+					<SubagentTranscriptContext value={openSubagentTranscript}>
+						<MessageList
+							key={sessionId}
+							ref={messageListRef}
+							sessionId={sessionId}
+							messages={messages}
+							tail={tail}
+							openedThoughtIds={openedThoughtIds}
+							hasMoreHistory={hasMoreHistory}
+							isLoadingMoreHistory={isLoadingMoreHistory}
+							historyError={historyError}
+							loadedHistoryPages={loadedHistoryPages}
+							onLoadMoreHistory={loadMoreHistory}
+							isCodex={agentType === "codex"}
+							// The openers a transcript carries for answering back, all
+							// withheld on a viewed session for the one reason: there is no
+							// process there to hear any of them. Each card already draws
+							// itself without a control when it is given none — a pending
+							// card that offers nothing is the truth here, not the dead end
+							// it would be in a live session. The question card is the one
+							// that needs this: its status comes from the records, not from
+							// the turn, so "Answer this" otherwise survives into a screen
+							// whose answer panel is not rendered at all. The other two are
+							// the same statement made where it cannot drift.
+							onPermissionRespond={onPermissionRespond}
+							onAnswerQuestion={onAnswerQuestion}
+							onHintClick={noInput ? undefined : handleHintSend}
+							isReadOnly={noInput}
+							readOnlyEmptyText={
+								isReviewer && !isReadOnly
+									? "No requests have been reviewed yet."
+									: undefined
+							}
+							emptyStateSwitch={
+								htmlFirstOffered ? (
+									<HtmlFirstSwitch control={htmlFirstSwitch} />
+								) : undefined
+							}
+							promptError={promptError ?? undefined}
+							onOpenWorkDetail={onOpenWorkDetail}
+							onOpenFile={onOpenFile}
+							forkedFromSessionId={forkedFromSessionId}
+							onOpenSession={onSelectSession}
+							// Forking without a way to open the result would leave the user in
+							// the parent with no sign anything happened, so the fork row waits
+							// for a host that can navigate. Restoring a discarded message needs
+							// none and brings its own slot (docs/session-fork-ui.md, "Which rows
+							// reserve a slot").
+							onForkMessage={
+								!isReadOnly && onSelectSession && forkSupport !== "none"
+									? handleStartFork
+									: undefined
+							}
+							onSignIn={isReadOnly ? undefined : handleSignIn}
+							onSwitchAccount={handleSwitchAccount}
+							onRestoreMessages={noInput ? undefined : handleRestoreMessages}
+						/>
+					</SubagentTranscriptContext>
+				</div>
+				{subagentLayerUp && (
+					<SubagentTranscript
+						ref={subagentTranscriptRef}
+						messages={messages}
+						path={subagentLevels}
+						onPathChange={setSubagentLevels}
+						escapeHeld={answerPanelShown}
+						partProps={{
+							sessionId,
+							isCodex: agentType === "codex",
+							onPermissionRespond,
+							onAnswerQuestion,
+							promptError: promptError ?? undefined,
+							onOpenFile,
+						}}
+					/>
+				)}
 			</PermissionReviewContext.Provider>
 		);
 	};

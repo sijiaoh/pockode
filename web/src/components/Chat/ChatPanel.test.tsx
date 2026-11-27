@@ -3428,6 +3428,191 @@ describe("ChatPanel", () => {
 			).toBeInTheDocument();
 		});
 
+		// docs/subagent-transcript-ui.md
+		describe("a subagent's transcript", () => {
+			const streamSubagent = () =>
+				act(() => {
+					mockState.onNotification?.({
+						type: "tool_call",
+						tool_use_id: "task-1",
+						tool_name: "Agent",
+						tool_input: { description: "explore", subagent_type: "Explore" },
+					});
+					mockState.onNotification?.({
+						type: "tool_call",
+						tool_use_id: "tool-3",
+						tool_name: "Read",
+						tool_input: { file_path: "/repo/a.go" },
+						parent_tool_use_id: "task-1",
+					});
+					mockState.onNotification?.({
+						type: "tool_call",
+						tool_use_id: "tool-4",
+						tool_name: "Bash",
+						tool_input: { command: "ls" },
+						parent_tool_use_id: "task-1",
+					});
+				});
+			const openTranscript = async (
+				user: ReturnType<typeof userEvent.setup>,
+			) => {
+				await user.click(screen.getByRole("button", { name: /explore/ }));
+				const opener = screen.getByRole("button", {
+					name: "Open Explore subagent's transcript",
+				});
+				await user.click(opener);
+				return opener;
+			};
+			const layer = () =>
+				screen.queryByRole("region", { name: "Explore subagent's transcript" });
+
+			it("opens over the list, which it leaves as it was", async () => {
+				const user = userEvent.setup();
+				render(<ChatPanel {...defaultProps} />);
+				await waitForHistoryLoad();
+				streamSubagent();
+
+				const opener = await openTranscript(user);
+				expect(layer()).toBeInTheDocument();
+				expect(opener.closest("[inert]")).not.toBeNull();
+				// The composer is not under it.
+				expect(screen.getByRole("textbox").closest("[inert]")).toBeNull();
+
+				await user.click(screen.getByRole("button", { name: "Back to chat" }));
+				expect(layer()).toBeNull();
+				expect(opener.closest("[inert]")).toBeNull();
+				expect(opener).toHaveFocus();
+			});
+
+			it("jumps to a request it shows without closing", async () => {
+				const user = userEvent.setup();
+				render(<ChatPanel {...defaultProps} />);
+				await waitForHistoryLoad();
+				streamSubagent();
+				act(() => {
+					mockState.onNotification?.({
+						type: "permission_request",
+						request_id: "req-4",
+						tool_name: "Bash",
+						tool_input: { command: "ls" },
+						tool_use_id: "tool-4",
+					});
+				});
+				act(() =>
+					acceptSetting({
+						turn: {
+							phase: "blocked",
+							open: true,
+							since: "2024-01-01T00:00:00Z",
+							blockers: [
+								{
+									kind: "permission",
+									request_id: "req-4",
+									raised_at: "2024-01-01T00:00:00Z",
+								},
+							],
+						},
+					}),
+				);
+				await openTranscript(user);
+				await user.click(
+					screen.getByRole("button", { name: /^Show permission request/ }),
+				);
+
+				const shown = layer();
+				expect(shown).not.toBeNull();
+				const card = shown?.querySelector<HTMLElement>(
+					"[data-permission-request-id='req-4']",
+				);
+				expect(card?.querySelector("button")).toHaveFocus();
+			});
+
+			it("makes way for a jump to a request it does not show", async () => {
+				const user = userEvent.setup();
+				render(<ChatPanel {...defaultProps} />);
+				await waitForHistoryLoad();
+				streamSubagent();
+				await openTranscript(user);
+				act(() => {
+					mockState.onNotification?.({
+						type: "permission_request",
+						request_id: "req-5",
+						tool_name: "Edit",
+						tool_input: { file_path: "/etc/hosts" },
+						tool_use_id: "tool-5",
+					});
+				});
+				act(() =>
+					acceptSetting({
+						turn: {
+							phase: "blocked",
+							open: true,
+							since: "2024-01-01T00:00:00Z",
+							blockers: [
+								{
+									kind: "permission",
+									request_id: "req-5",
+									raised_at: "2024-01-01T00:00:00Z",
+								},
+							],
+						},
+					}),
+				);
+				await user.click(
+					screen.getByRole("button", { name: /^Show permission request/ }),
+				);
+
+				expect(layer()).toBeNull();
+				const card = document.querySelector<HTMLElement>(
+					"[data-permission-request-id='req-5']",
+				);
+				expect(card?.closest("[inert]")).toBeNull();
+				expect(card?.querySelector("button")).toHaveFocus();
+			});
+
+			it("opens a nested subagent with the path down to it", async () => {
+				const user = userEvent.setup();
+				render(<ChatPanel {...defaultProps} />);
+				await waitForHistoryLoad();
+				streamSubagent();
+				act(() => {
+					mockState.onNotification?.({
+						type: "tool_call",
+						tool_use_id: "task-2",
+						tool_name: "Agent",
+						tool_input: { description: "plan", subagent_type: "Plan" },
+						parent_tool_use_id: "task-1",
+					});
+					mockState.onNotification?.({
+						type: "tool_call",
+						tool_use_id: "tool-6",
+						tool_name: "Read",
+						tool_input: { file_path: "/repo/b.go" },
+						parent_tool_use_id: "task-2",
+					});
+				});
+				await user.click(screen.getByRole("button", { name: /explore/ }));
+				await user.click(screen.getByRole("button", { name: /^Process/ }));
+				await user.click(screen.getByRole("button", { name: /plan/ }));
+				const opener = screen.getByRole("button", {
+					name: "Open Plan subagent's transcript",
+				});
+				await user.click(opener);
+
+				expect(
+					screen.getByRole("region", { name: "Plan subagent's transcript" }),
+				).toBeInTheDocument();
+				// ← goes up to the subagent it ran under, not back to the chat.
+				await user.click(
+					screen.getByRole("button", { name: "Back to Explore" }),
+				);
+				expect(layer()).toBeInTheDocument();
+				await user.click(screen.getByRole("button", { name: "Back to chat" }));
+				expect(layer()).toBeNull();
+				expect(opener).toHaveFocus();
+			});
+		});
+
 		it("shows inline permission request and sends deny response", async () => {
 			const user = userEvent.setup();
 			render(<ChatPanel {...defaultProps} />);

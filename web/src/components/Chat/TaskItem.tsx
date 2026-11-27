@@ -1,32 +1,38 @@
-import { ChevronRight } from "lucide-react";
-import { type ReactNode, useMemo, useState } from "react";
-import type { FullScreenSource } from "../../lib/fullScreen";
+import { ChevronRight, Maximize2 } from "lucide-react";
+import { type ReactNode, useState } from "react";
 import { collectPartsWithin, findToolRunPath } from "../../lib/partTree";
 import {
 	countSteps,
 	type LatestChild,
 	resumedRun,
 	type SubagentLine,
+	subagentLastWords,
 	subagentLine,
-	subagentReport,
 	withoutEchoedReport,
 } from "../../lib/subagentRun";
-import { toolRunText, toolSecondLine, toolUsesLabel } from "../../lib/toolRun";
+import { toolSecondLine, toolUsesLabel } from "../../lib/toolRun";
 import {
 	SUBAGENT_TITLE,
-	subagentType,
+	subagentPossessive,
 	taskPrompt,
 	toolSummary,
-	toolSummaryLine,
 } from "../../lib/toolSummary";
 import { useWSStore } from "../../lib/wsStore";
 import type { ContentPart, ToolRun } from "../../types/message";
 import { formatTokens } from "../../utils/tokens";
-import { ClampedContent, CollapsibleBody, MarkdownContent } from "../ui";
-import { HeaderlessMainBlock } from "./HeaderlessMainBlock";
+import {
+	ClampedContent,
+	CollapsibleBody,
+	headerButtonClass,
+	MarkdownContent,
+} from "../ui";
+import { FactsLine, SubagentConclusion } from "./SubagentConclusion";
 import { useSubagentResume } from "./subagentResumesContext";
+import {
+	SUBAGENT_OPENER_ATTR,
+	useOpenSubagentTranscript,
+} from "./subagentTranscriptContext";
 import { PartBlocks } from "./ToolList";
-import { ToolOutcomeSections } from "./ToolOutcomeSections";
 import {
 	AgentTitle,
 	Detail,
@@ -125,7 +131,7 @@ function LatestChildLabel({ child }: { child: LatestChild }) {
  * yields width: on a narrow phone the latest child is cut to a few characters
  * and the count — the half that answers "is it moving" — is still there.
  */
-function SubagentLineContent({ line }: { line: SubagentLine }) {
+export function SubagentLineContent({ line }: { line: SubagentLine }) {
 	const count = line.toolUses > 0 && (
 		<span className="shrink-0">{toolUsesLabel(line.toolUses)}</span>
 	);
@@ -153,60 +159,6 @@ function SubagentLineContent({ line }: { line: SubagentLine }) {
 			)}
 		</>
 	);
-}
-
-/**
- * What the row leaves out, for the reader who needs to quote it back: the
- * subagent's id, which resuming it takes, and its full type where the title
- * shortened it — or where only the result named it.
- */
-function FactsLine({ run, title }: { run: ToolRun; title: string }) {
-	const type = subagentType(run.input) ?? run.subagent?.agentType;
-	const agentId = run.subagent?.agentId;
-	const showType = type !== undefined && type !== title;
-	if (!showType && !agentId) return null;
-	return (
-		<p className="border-t border-th-border p-2 text-th-text-muted">
-			{showType && type}
-			{showType && agentId && " · "}
-			{agentId && (
-				<>
-					agent <span className="break-all font-mono">{agentId}</span>
-				</>
-			)}
-		</p>
-	);
-}
-
-/**
- * What an empty body says, which depends on why it is empty. A subagent that
- * failed or was cut short reported nothing either, and telling the reader it
- * "is still working" is the same lie the spinner used to tell — the row above
- * has already settled.
- *
- * A settled backgrounded subagent gets its own sentence, because the others
- * would all put the silence down to the subagent: its call returned a
- * placeholder, and how it ended is the outcome under its own label below.
- */
-function emptyReport(run: ToolRun, hasOutcome: boolean): string {
-	// Only with an outcome to point at: one backgrounded and then cut short
-	// before it reported has none, and the status sentences below say why.
-	if (run.fromBackground && run.status !== "background" && hasOutcome) {
-		return "The subagent ran in the background; how it ended is under Outcome below.";
-	}
-	switch (run.status) {
-		case "running":
-		case "background":
-			return "No report yet — the subagent is still working.";
-		case "interrupted":
-			return run.lostWithProcess
-				? "The CLI process ended before the subagent reported anything."
-				: "The turn was interrupted before the subagent reported anything.";
-		case "error":
-			return "The subagent failed without reporting anything.";
-		default:
-			return "The subagent finished without reporting anything.";
-	}
 }
 
 /**
@@ -238,43 +190,9 @@ function TaskItem({ run, depth = 0, renderChild }: Props) {
 	// there is no path in it for one to shorten.
 	const summary = toolSummary(run.name, run.input, "");
 	const prompt = taskPrompt(run.input);
-	// A backgrounded Task's text is not its report: the subagent's own account
-	// never reached this client, and what did arrive is the notification that
-	// said how it ended. Drawing that as the report — which is what this body
-	// used to do — asserts the agent read something it never did, so it goes
-	// under its own label below instead.
-	const text = toolRunText(run);
-	const outcome = run.fromBackground ? text : "";
-	const report = run.fromBackground ? "" : subagentReport(text);
-	const failed = run.status === "error";
+	const { report, outcome } = subagentLastWords(run);
 	const nested = depth > 0;
-	const fullScreenTitle = toolSummaryLine(summary);
-	const reportSource = useMemo<FullScreenSource | undefined>(
-		() =>
-			report
-				? {
-						title: fullScreenTitle,
-						label: "Report",
-						noun: "report",
-						from: "start",
-						copyText: report,
-						content: { kind: "markdown", markdown: report },
-					}
-				: undefined,
-		[report, fullScreenTitle],
-	);
-	const reportKey = `report:${run.id}`;
-	const outcomeFullScreen = useMemo(
-		() =>
-			outcome
-				? {
-						key: `${run.id}:result`,
-						title: fullScreenTitle,
-						content: { kind: "markdown" as const, markdown: outcome },
-					}
-				: undefined,
-		[outcome, run.id, fullScreenTitle],
-	);
+	const openTranscript = useOpenSubagentTranscript();
 
 	const children = run.children ?? [];
 	const unfiled = useUnfiledChildren(run.id);
@@ -302,10 +220,8 @@ function TaskItem({ run, depth = 0, renderChild }: Props) {
 				part,
 				asker: within.at(-1),
 			}));
-	const processLabel =
-		summary.title === SUBAGENT_TITLE
-			? "Subagent's process"
-			: `${summary.title} subagent's process`;
+	const processLabel = `${subagentPossessive(summary.title)} process`;
+	const transcriptLabel = `Open ${subagentPossessive(summary.title)} transcript`;
 	const level = depth + 1;
 
 	return (
@@ -345,59 +261,44 @@ function TaskItem({ run, depth = 0, renderChild }: Props) {
 
 			<CollapsibleBody expanded={expanded}>
 				<div className="row-ground-secondary border-t border-th-border bg-th-bg-secondary">
-					{/* The note belongs to the report it qualifies, not to the row:
-					    on a phone a fixed-width label there truncates the
-					    description away to nothing. */}
-					{run.status === "interrupted" && report && (
-						<p className="px-2 pt-2 text-th-text-muted">
-							Returned after the turn was interrupted.
-						</p>
-					)}
-					{report ? (
-						<div className="p-2">
-							<HeaderlessMainBlock
-								name="report"
-								fullScreenKey={reportKey}
-								source={reportSource}
-								view={view}
-							>
-								<MarkdownContent content={report} />
-							</HeaderlessMainBlock>
-						</div>
-					) : (
-						// A backgrounded subagent's outcome below is its report, and
-						// says so in its own label; a sentence about it would only
-						// stand between the reader and it.
-						!(outcome && !failed) && (
-							<p className="p-2 text-th-text-muted">
-								{emptyReport(run, outcome !== "")}
-							</p>
-						)
-					)}
-					{/* After the report, before the prompt: the report is the
-					    subagent's conclusion, and what a later call fetched of its raw
-					    output is evidence for it. */}
-					<ToolOutcomeSections
-						run={run}
-						outcome={outcome && <MarkdownContent content={outcome} />}
-						outcomeFullScreen={outcomeFullScreen}
-						block
-					/>
+					<SubagentConclusion run={run} />
 					{hasProcess && (
 						<div className="border-t border-th-border">
-							<button
-								type="button"
-								onClick={() => setProcessExpanded(!processExpanded)}
-								aria-expanded={processExpanded}
-								className="flex w-full items-center gap-1.5 p-2 text-left hover:bg-th-overlay-hover"
-							>
-								<ChevronRight
-									className={`size-3 shrink-0 text-th-text-muted transition-transform ${processExpanded ? "rotate-90" : ""}`}
-								/>
-								<span className="text-th-text-muted">
-									{steps > 0 ? `Process · ${toolUsesLabel(steps)}` : "Process"}
-								</span>
-							</button>
+							{/* Two buttons on one line, side by side rather than one
+							    inside the other: the heading opens the Process inline,
+							    the ⤢ opens it as a transcript of its own
+							    (docs/subagent-transcript-ui.md#the-way-in). */}
+							<div className="flex items-center">
+								<button
+									type="button"
+									onClick={() => setProcessExpanded(!processExpanded)}
+									aria-expanded={processExpanded}
+									className="flex min-w-0 flex-1 items-center gap-1.5 p-2 text-left hover:bg-th-overlay-hover"
+								>
+									<ChevronRight
+										className={`size-3 shrink-0 text-th-text-muted transition-transform ${processExpanded ? "rotate-90" : ""}`}
+									/>
+									<span className="text-th-text-muted">
+										{steps > 0
+											? `Process · ${toolUsesLabel(steps)}`
+											: "Process"}
+									</span>
+								</button>
+								{openTranscript && (
+									<button
+										type="button"
+										onClick={(event) =>
+											openTranscript(run.id, event.currentTarget)
+										}
+										aria-label={transcriptLabel}
+										title={transcriptLabel}
+										{...{ [SUBAGENT_OPENER_ATTR]: run.id }}
+										className={`${headerButtonClass()} mr-1 shrink-0 hover:text-th-text-primary`}
+									>
+										<Maximize2 size={14} aria-hidden="true" />
+									</button>
+								)}
+							</div>
 							<CollapsibleBody expanded={processExpanded}>
 								{/* Neither clamped nor scrolling: the rows inside open into
 								    bodies of their own, which a clamp would hide behind a
@@ -451,7 +352,7 @@ function TaskItem({ run, depth = 0, renderChild }: Props) {
 							</CollapsibleBody>
 						</div>
 					)}
-					<FactsLine run={run} title={summary.title} />
+					<FactsLine run={run} />
 				</div>
 			</CollapsibleBody>
 		</div>

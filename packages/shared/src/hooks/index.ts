@@ -1,6 +1,7 @@
 export { useMediaQuery } from "./useMediaQuery.ts";
 export { useOutsideClick } from "./useOutsideClick.ts";
 export {
+	CoverLayerContext,
 	type CoverPageBack,
 	LayerHistoryContext,
 	useCoverPage,

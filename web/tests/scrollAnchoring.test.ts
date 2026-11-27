@@ -5,9 +5,10 @@ import { ROOTS, repoPath, sourceFiles } from "./sourceScan";
 // `overflow-anchor: none` switches off the browser's own scroll anchoring —
 // the thing that keeps a reader's place when content is inserted above them.
 //
-// One list in the app is entitled to that: the transcript pins its own anchor
-// by hand around every history page it prepends, and the browser's would fight
-// it. Every other list does no measuring of its own, so switching it off is
+// The transcripts are entitled to that — the chat's and a subagent's level,
+// both kept by `useTranscriptScroll`: they pin their own anchor by hand, around
+// every history page the chat prepends and every row that grows above the
+// reader, and the browser's would fight it. Every other list does no measuring of its own, so switching it off is
 // switching off the only thing measuring for them. The session sidebar is the
 // case this scan was written for: a session created while the reader is far
 // down the list is the one event that moves everything below it, and scroll
@@ -18,7 +19,10 @@ import { ROOTS, repoPath, sourceFiles } from "./sourceScan";
 // two files that explain why this is left on say the property's name to do it.
 const DISABLES = [/\[overflow-anchor:/i, /overflowAnchor\s*:/];
 
-const ENTITLED = ["web/src/components/Chat/MessageList.tsx"];
+const ENTITLED = [
+	"web/src/components/Chat/MessageList.tsx",
+	"web/src/components/Chat/SubagentTranscript.tsx",
+];
 
 function inspect(file: string): string[] {
 	const source = readFileSync(file, "utf8");
@@ -31,11 +35,11 @@ function inspect(file: string): string[] {
 }
 
 describe("scroll anchoring", () => {
-	it("is left on everywhere but the transcript", () => {
+	it("is left on everywhere but the transcripts", () => {
 		expect(ROOTS.flatMap(sourceFiles).flatMap(inspect)).toEqual([]);
 	});
 
-	// The exception has to keep being an exception: if the transcript stops
+	// The exception has to keep being an exception: if a transcript stops
 	// disabling anchoring, this entry is dead weight pre-approving the next one.
 	it.each(ENTITLED)("%s still needs its exception", (path) => {
 		const source = readFileSync(`../${path}`, "utf8");

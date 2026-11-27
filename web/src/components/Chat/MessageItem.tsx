@@ -1103,7 +1103,7 @@ function PermissionRequestBody({
 	);
 }
 
-interface ContentPartItemProps {
+export interface ContentPartItemProps {
 	part: ContentPart;
 	sessionId: string;
 	onOpenFile?: (path: string) => void;
@@ -1149,7 +1149,7 @@ export interface PromptError {
  * One part of a message, kept to itself: a renderer that throws on what an
  * agent wrote costs that part, not the conversation.
  */
-function ContentPartItem(props: ContentPartItemProps) {
+export function ContentPartItem(props: ContentPartItemProps) {
 	return (
 		<ContentErrorBoundary name="this part of the message" resetKey={props.part}>
 			<ContentPartBody {...props} />
