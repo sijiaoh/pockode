@@ -17,11 +17,9 @@ import { formatFilePath } from "../../utils/path";
 import { usePermissionReview } from "./permissionReviewContext";
 import { RowSubline } from "./ToolRow";
 
-/**
- * How a permission's answer is worded: on the card that asked, and on the row
- * an answered card hands its place back to
- * (docs/tool-call-ui.md#the-permission-card-takes-the-rows-place).
- */
+// How a permission's answer is worded: on the card that asked, and on the row
+// an answered card hands its place back to
+// (docs/tool-call-ui.md#the-permission-card-takes-the-rows-place).
 
 /** Format permission rule for display */
 function formatPermissionRule(rule: PermissionRuleValue): string {

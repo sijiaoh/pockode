@@ -80,9 +80,16 @@ function tokenize(text: string): Token[] {
 
 	const endWord = () => {
 		if (!started) return;
-		// A glob or a brace expansion stands for words not written here.
-		if (plain && /[*?[\]{}]/.test(value) && !/^(\[\[?|\]\]?|[{}])$/.test(value))
+		// A glob or a brace expansion stands for words not written here, and an
+		// unquoted leading `~` for a home directory.
+		if (
+			plain &&
+			/[*?[\]{}]/.test(value) &&
+			!/^(\[\[?|\]\]?|[{}])$/.test(value)
+		) {
 			plain = false;
+			literal = false;
+		} else if (plain && value.startsWith("~")) literal = false;
 		if (dropNextWord) dropNextWord = false;
 		else tokens.push({ kind: "word", value, plain, literal, end: i });
 		value = "";

@@ -942,6 +942,12 @@ binary, not from docs):
 - Either set is offered only to models up to the 4.x line, or when the host's
   tool list names one of them, or with `CLAUDE_CODE_ENABLE_TODO_TOOLS`. A
   Claude 5 model under Pockode's flags gets neither, so it has no plan chip.
+  Asked for a plan in a real session, it searched for a todo tool, found none,
+  and kept the plan in its text.
+
+Codex is not certain to have one either: on codex-cli 0.171.0 with GPT-5.6
+(Auto) the model said the plan tool was unavailable, and no `update_plan` call
+or `turn/plan/updated` came.
 
 **Per producer:**
 

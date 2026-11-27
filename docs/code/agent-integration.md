@@ -788,7 +788,11 @@ conversation can be reopened at.
 was produced inside. It has to be a field because position cannot say it: a
 backgrounded Claude subagent writes between the main agent's own lines, and a
 Codex subagent's items arrive interleaved with the parent thread's. A subagent's
-subagent names the call that spawned *it*, so the field nests. What it names may
+subagent names the call that spawned *it*, so the field nests — when the CLI
+streams that depth at all: on claude 2.1.330 a nested subagent's own steps
+never reached the stream live (the outer subagent's row counted the nested call
+and its own Read; the nested row had no steps), so a nested row without children
+is what the CLI sent, not a filing fault. What it names may
 not be loaded — an earlier history page, or a call a fork cut dropped because
 its result fell after the cut — and a client that cannot find it shows the
 record where it sits. Claude
@@ -2375,6 +2379,14 @@ The `result` message is classified in this order:
 3. background tasks still running → nothing at all (see
    [Background Waits](#background-waits)).
 4. otherwise → `DoneEvent`.
+
+A Stop during a running turn therefore ends it twice: the `interrupt`'s
+`control_response` and the aborted `result` each map to `InterruptedEvent`,
+and both are recorded (measured on claude 2.1.330: two `interrupted` records
+17ms apart), and the client draws one ending line for the two. The CLI's own
+report of the cut call — an `is_error` `tool_result` saying it was stopped —
+comes 9ms after the first, which is why a late *error* result does not make a row
+[finished after the Stop](../tool-call-ui.md#status).
 
 ### Background Waits
 
@@ -4271,8 +4283,8 @@ direction: five event types all mean "the agent produced content", while a
 `system` frame means "the turn is alive" and must specifically *not* mean "the
 CLI resumed". Nor is it keyed on the type alone: a `tool_result` settling
 background work is noise, and so is content an adapter flagged as arriving
-after its turn ended (`agent.MarkAfterTurn`); every other one is output. Nothing else in the server
-reads event types to decide what a session is doing.
+after its turn ended (`agent.MarkAfterTurn`); every other one is output.
+Nothing else in the server reads event types to decide what a session is doing.
 
 The send path supplies the two signals no event carries: `SignalPrompt` when a
 prompt goes out, `SignalAnswered` with the request id when an answer goes back.

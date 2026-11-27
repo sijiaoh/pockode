@@ -376,13 +376,14 @@ const ToolCallItem = memo(function ToolCallItem({
 	// succeeds with nothing: Claude's result always carries a header.
 	const unreported =
 		(run.name === "WebSearch" || run.name === "WebFetch") &&
-		run.status === "success" &&
+		toolRunLook(run) === "success" &&
 		!run.result &&
 		!run.contents;
 	// What an image generation asked is the prompt its result names, once there
 	// is one: shown once, as the result. One that returned without naming it
 	// says so, rather than still promising it.
-	const promptUnnamed = generation && run.status === "success" && !imagePrompt;
+	const promptUnnamed =
+		generation && toolRunLook(run) === "success" && !imagePrompt;
 	const invocation = imagePrompt ? null : promptUnnamed ? (
 		<p className="text-th-text-muted">Codex did not name the prompt it used.</p>
 	) : (

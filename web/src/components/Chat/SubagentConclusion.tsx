@@ -68,6 +68,9 @@ function emptyReport(run: ToolRun, hasOutcome: boolean): string {
 	if (run.fromBackground && run.status !== "background" && hasOutcome) {
 		return "The subagent ran in the background; how it ended is under Outcome below.";
 	}
+	if (toolRunLook(run) === "denied") {
+		return "The call was denied, so the subagent never started.";
+	}
 	switch (run.status) {
 		case "running":
 		case "background":

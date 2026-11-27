@@ -200,10 +200,11 @@ lines up with the rows at every width while its hairline runs edge to edge.
 - It is a `<nav aria-label="Subagent path">` holding an `<ol>`.
 
 **Line 2: the row, without its title.** The shown subagent's status glyph, its
-detail (the description; nothing for a Codex `subAgentActivity` spawn) and its
-meta — the elapsed counter while live, the duration once settled — drawn by the
-row's own pieces (`ToolStatusGlyph`, `Detail`, `ToolMeta`) from the same
-`rowRun` the row uses (a resumed subagent is running here too). The title is the
+chips (`background`, `after Stop`), its detail (the description; nothing for a
+Codex `subAgentActivity` spawn) and its meta — the elapsed counter while live,
+the duration once settled — taken from the row's own header (`subagentHeader`,
+which the row and the agents list draw from too) for the same `rowRun` the row
+uses (a resumed subagent is running here too). The title is the
 last crumb, so it is not said twice. Red as the row's line 1 is red when the
 run failed; the muted `Ban` when interrupted.
 
@@ -331,7 +332,9 @@ already hold at every depth:
   end arrives.
 - **An interrupted subagent** has the `Ban` and its line 3 frozen where it was
   cut; its level ends at its last child, then *Returned after the turn was
-  interrupted.* if a late report came.
+  interrupted.* if a late report came — or, when that report is not an error,
+  *Finished after the turn was stopped.*, under a header whose glyph is the
+  `Check` its row draws ([tool-call-ui.md](tool-call-ui.md#status)).
 - **A nested subagent that failed** is a red row in the level, and reads its
   failure on its own second line, as it does inline.
 

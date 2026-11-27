@@ -183,6 +183,8 @@ describe("unwrapShellCommand", () => {
 		["an expansion inside double quotes", `bash -lc "echo $HOME"`],
 		["an escape inside double quotes", `bash -lc "echo \\"x\\""`],
 		["an empty script", "bash -lc ''"],
+		["an unquoted glob as the script", "zsh -lc *.sh"],
+		["an unquoted home as the script", "zsh -lc ~/x.sh"],
 		["a shell that is not one", "fish -c 'ls'"],
 		["no envelope", "sleep 45; echo main-done"],
 	])("keeps the command as it is with %s", (_, command) => {

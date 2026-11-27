@@ -4228,6 +4228,41 @@ describe("messageReducer", () => {
 				expect(row.type === "tool_call" && row.tool.startedAt).toBeUndefined();
 			});
 
+			// The server records an answer after handing it to the CLI, so the
+			// engine's result can be recorded first; replay keeps that order.
+			it.each([
+				["deny", "denied", true],
+				["allow", "allowed", false],
+			] as const)("folds a %s whose result came first into one row", (choice, answer, isError) => {
+				let messages: Message[] = [streamingRun()];
+				messages = applyServerEvent(messages, call("t1"));
+				const rowId = (messages[0] as AssistantMessage).parts[0].id;
+				messages = applyServerEvent(messages, permission);
+				messages = applyServerEvent(messages, {
+					type: "tool_result",
+					toolUseId: "t1",
+					toolResult: "result",
+					isError,
+				});
+				messages = applyServerEvent(messages, {
+					type: "permission_response",
+					requestId: "r1",
+					choice,
+				});
+
+				expect((messages[0] as AssistantMessage).parts).toMatchObject([
+					{
+						id: rowId,
+						type: "tool_call",
+						tool: {
+							status: isError ? "error" : "success",
+							permission: { answer },
+						},
+					},
+				]);
+				expect((messages[0] as AssistantMessage).parts).toHaveLength(1);
+			});
+
 			it("keeps who answered and what Always Allow wrote on the row", () => {
 				const rule = {
 					type: "addRules" as const,

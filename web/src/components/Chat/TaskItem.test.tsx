@@ -268,6 +268,34 @@ describe("TaskItem", () => {
 		).toBeVisible();
 	});
 
+	// A card hands its place back to the subagent row as to any other, and the
+	// row then says what the card said about the answer.
+	it("says who denied a subagent call, not the engine's refusal", () => {
+		render(
+			<TaskItemWithChildren
+				run={task("error", {
+					result: "The user doesn't want to proceed with this tool use.",
+					permission: { answer: "denied" },
+				})}
+			/>,
+		);
+		expect(screen.getByLabelText("denied")).toBeVisible();
+		expect(screen.getByText("Denied by you")).toBeVisible();
+	});
+
+	it("keeps a reviewer's verdict under a subagent row it answered", () => {
+		render(
+			<TaskItemWithChildren
+				run={task("success", {
+					permission: { answer: "allowed", by: "permission_reviewer" },
+				})}
+			/>,
+		);
+		expect(
+			screen.getByText("Allowed by the permission reviewer"),
+		).toBeVisible();
+	});
+
 	describe("a subagent that went to the background", () => {
 		// No `result` while it is still running: the outcome only arrives with
 		// the notification, and the helper's default report is not one.

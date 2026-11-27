@@ -1429,7 +1429,10 @@ function applyEvent(
 			options,
 			event.choice === "always_allow" && !event.by,
 		);
-		return handBackAllowedCard(answered, event.requestId);
+		return handBackAllowedCard(
+			takeRowUnderCard(answered, event.requestId),
+			event.requestId,
+		);
 	}
 
 	// Request cancelled (the CLI withdrew it, or Pockode recorded what became of
@@ -2229,6 +2232,62 @@ function stampPermissionAnswer(
 			? part
 			: stamped;
 	});
+}
+
+/**
+ * Folds into an answered card the row its call's result put directly under it
+ * while the card was still pending, so the call is one row in the card's place
+ * like any other answered call.
+ *
+ * The server records an answer only after handing it to the CLI, so a result
+ * the engine sends back at once — a deny's refusal above all — can be recorded
+ * first. `updateRunById` then has only a pending card to go by and puts the row
+ * under it; without this the card and that row both stood, for good, since
+ * replay follows the same order. Only the row directly under the card: one
+ * further away (a card that landed in a later bubble than its row) is the
+ * row's own place, and the card stays an answered card there.
+ */
+function takeRowUnderCard(messages: Message[], requestId: string): Message[] {
+	for (let i = messages.length - 1; i >= 0; i--) {
+		const msg = messages[i];
+		if (msg.role !== "assistant") continue;
+		const path = findPartPath(
+			msg.parts,
+			(part) =>
+				part.type === "permission_request" &&
+				part.request.requestId === requestId &&
+				isAnsweredCard(part),
+		);
+		if (!path) continue;
+
+		let taken = false;
+		const parts = editAtPath(msg.parts, path, (list, cardIndex) => {
+			const card = list[cardIndex];
+			const row = list[cardIndex + 1];
+			if (
+				card.type !== "permission_request" ||
+				row?.type !== "tool_call" ||
+				!card.request.toolUseId ||
+				row.tool.id !== card.request.toolUseId
+			) {
+				return list;
+			}
+			const { permission } = rowFromCard(card).tool;
+			taken = true;
+			const updatedList = [...list];
+			updatedList.splice(cardIndex, 2, {
+				...row,
+				id: card.id,
+				tool: { ...row.tool, ...(permission ? { permission } : {}) },
+			});
+			return updatedList;
+		});
+		if (!taken) return messages;
+		const updated = [...messages];
+		updated[i] = { ...msg, parts };
+		return updated;
+	}
+	return messages;
 }
 
 /**

@@ -318,10 +318,10 @@ the text that does the work. The shell is read as a shell — quotes, `$(…)`,
 comments and here-doc bodies stay where they belong — and what an agent wraps
 around the work is passed over: `cd`, `export`, `VAR=value` words, `echo`
 banners and `sleep`s; `for … do`, `if … then`, `while`, subshells and `{ }`
-groups; `sudo`, `env`, `timeout` and the `bash -lc '…'` Codex runs everything
-in. Of that command it keeps at most three words — the first by its base
-name, so `./scripts/run.sh` is `run.sh` — stopping before the first that is a
-flag, a quoted or expanded argument, a redirection or a bare `.`. So `cd web
+groups; `sudo`, `env`, `timeout` and the `<shell> -lc '…'` Codex runs everything
+in (`/bin/zsh -lc` on a Mac, codex-cli 0.171). Of that command it keeps at
+most three words — the first by its base name, so `./scripts/run.sh` is
+`run.sh` — stopping before the first that is a flag, a quoted or expanded argument, a redirection or a bare `.`. So `cd web
 && pnpm run test -- --watch` is `pnpm run test`, `for q in …; do echo "$q"; gh
 search issues "$q"; done` is `gh search issues` and `find . -name …` is
 `find`. Where it cannot tell — the command is a variable (`$FF -i …`), the
@@ -1090,6 +1090,15 @@ The glyph column is the single place status is stated:
 | `error` | `X` | `text-th-error` | the row button tinted `bg-th-error/10` (`hover:bg-th-error/15`), detail text `text-th-error`, second line = the line of the output that says why it failed, or the tool's reason for refusing the call — or the outcome, when the run came from the background ([rungs 3 and 4](#the-second-line-problem-1)) | closed, like every other row |
 | `interrupted` | `Ban` | `text-th-text-muted` | second line only if it came from the background (below) | invocation + whatever came back |
 
+A row draws its run's **look** (`toolRunLook`), which is the status except in
+two cases where the run knows more. The model keeps five statuses; these are
+drawings of two of them, not more states:
+
+| Look | Run | Glyph | Colour | Row | Body |
+|---|---|---|---|---|---|
+| denied | settled with `permission.answer` denied — `error`, the engine's refusal, or `interrupted` when a turn ended before Codex reported its `declined` item | `X` | `text-th-text-muted` — no tint, no red detail | *Denied by you*, or the reviewer's [verdict line](unattended-mode-ui.md#32-answered) | invocation + the engine's refusal under *Result* ([the card hands the row back](#the-permission-card-takes-the-rows-place)) |
+| success | `interrupted`, with `finishedAfterStop` | `Check`, plus an `after Stop` chip | `text-th-text-muted`; the chip `bg-th-warning/20` | as `interrupted` | *Finished after the turn was stopped.* + the result (below) |
+
 Two of those are deliberate departures:
 
 - **Success is muted, not green.** A subagent row used to use `text-th-success`
@@ -1344,7 +1353,7 @@ afterwards cannot word the same call differently.
 | `html_get` | `html_get` | `pockode` as a chip, then the `id` | right |
 | anything else | the name | first non-empty scalar in `input` | right |
 
-Eight decisions inside that table:
+Nine decisions inside that table:
 
 - **`TaskOutput` is in the table although many of them never draw a row.** A
   fetch of a task's output is filed under the call it reads and takes no row at
@@ -1365,6 +1374,20 @@ Eight decisions inside that table:
   win whenever Claude supplied one, and a paraphrase — *"Build the web package"* —
   is not what ran. On a phone this row is frequently the only audit a user
   performs. The description is not lost: it is the first line of the body.
+- **…with the CLI's shell envelope taken off.** Codex runs every command as
+  `<shell> -lc '<script>'`, and on a phone `Bash /bin/zsh -lc 'sleep 45; echo
+  main…` spent half the detail on the wrapper. `unwrapShellCommand`
+  (`lib/commandHead.ts`, on `commandHead`'s tokenizer) shows the script, but
+  only when the whole command is exactly three words — a shell (`sh`, `bash`,
+  `zsh`, any path), a `-c`-style flag, one script word whose value is literal
+  — so what is shown runs the same as what ran. A redirection, a comment, an
+  unclosed quote, an expansion, an escape inside double quotes, or an unquoted
+  glob or leading `~` in the script keeps the command as written. It is the row, the step window, the tail line, both
+  titles and the body's *Command*; the raw input keeps the envelope. Not from
+  Codex's `command_actions[].command`, which exists only when it parsed the
+  command into exactly one action. A `bash -c '…'` an agent wrote itself is
+  unwrapped too: the shape cannot tell it from an envelope, and what runs is
+  the same.
 - **No character slicing.** The code used to cut at 50 characters *before* CSS
   truncated again — a truncation policy that ignores how wide the screen is, and
   two truncations that disagree. The detail is passed whole and CSS cuts it at
@@ -1885,6 +1908,10 @@ counts or a command's exit code, [below](#what-the-call-measured) — and then
 **its time**, a finished run's duration or a live run's elapsed counter. They
 are `gap-2` apart, with no `·` between them, as in `proposedChangeHeader`. The
 time comes last so that the times of a stack of rows stay in one column.
+`ToolMeta` carries its own `ml-auto` rather than relying on the detail to
+fill the line: `Detail` draws nothing without text, so a row with no detail —
+a Codex `subAgentActivity` subagent, a `Wait` — put its time against its name
+(`read_calc 4.6s`) until it did.
 Neither one is ever truncated; the detail gives way. On a 375px row that still
 leaves the file name: the widest figure, `+1234 −567`, is about ten
 characters, and the detail's own rules (left truncation, the 70% cap on the
@@ -3495,6 +3522,8 @@ right end — the duration stays on line 1:
 | `success` | `N tool uses · <report>` and the tokens ([above](#line-2-once-settled-the-count-the-report-the-tokens)) |
 | `error` | `N tool uses · <first line of what it returned>`, in the muted second-line colour — the row's red is line 1's; why it failed is the news, and the body does not open to say it ([the body](#the-body-problems-2-and-3)). No tokens: on a failed row why outranks what it spent |
 | `interrupted` | `N tool uses` while its frozen [window](#the-step-window) is drawn, then `N tool uses · <latest child>`, frozen where it was cut — no tokens even when a late result brought some: where it was is the news. Codex and Claude alike: a Codex subagent the user's Stop cut short is `interrupted`, not `error` (below) |
+| `interrupted`, [finished after the Stop](#status) | line 1 has the `Check` and the `after Stop` chip; line 2 reads as `interrupted`, without tokens — where the Stop found it is still the news |
+| [denied](#status) | the shared row's line: *Denied by you*, or nothing under a reviewer's or Pockode's [verdict line](unattended-mode-ui.md#32-answered), which the row keeps as any row does — the call never started a subagent, so there is nothing to count. An allowed one draws its answer as any row does too: the verdict line, and the answer note at the top of the body |
 | settled from the background, `completed` | as `success` — the outcome is its report ([the subagent body](#the-subagent-body)), so it reads as a foreground success does |
 | settled from the background, `failed` / `stopped` | `N tool uses · <first line of the outcome>` — the verdict is the news, as on a foreground failure |
 

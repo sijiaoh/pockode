@@ -903,13 +903,21 @@ When that happens depends on the answer:
   asked in a later bubble than its row — and draws as answered.
 - **A deny waits for the engine's report**: nothing runs, and the refusal it
   reports (Claude's error result, Codex's `declined` item) is what the row is
-  rebuilt from. Its status is that result's `error`; the drawing reads the
-  answer instead (`toolRunLook`).
+  rebuilt from. Its status is that result's `error` — or `interrupted`, when a
+  turn ends before Codex reports — and the drawing reads the answer instead
+  (`toolRunLook`).
 - **A call announced after its answered card** — Codex asks before it announces
   the item — takes the card's place in `applyToolCall`, as a rebuilt row would.
 - **A card nobody answered** — still pending when a result arrives, or expired —
   keeps saying what it says, and the row goes directly under it, which is where
   it was.
+- **A result recorded before its answer** is folded in when the answer comes
+  (`takeRowUnderCard`). The server records an answer only after handing it to
+  the CLI, so a result the engine sends back at once — a deny's refusal above
+  all — can be recorded first, and finds a card still pending; the row it puts
+  directly under that card takes the card's place and id once the answer's
+  record arrives. Replay keeps the order, so without this the card and its row
+  would both stand for good.
 
 Two rules keep that honest:
 
@@ -1179,7 +1187,13 @@ The rules particular to children:
   filed either, the card stays flat and takes the parent the call names; a flat
   card that already names one was left by a page boundary and is not moved.
 - **A parent that is not loaded leaves the child flat**, where it arrived — an
-  earlier page, or a call a fork cut dropped. The part then keeps
+  earlier page, or a call a fork cut dropped. The earlier page is rare: the
+  server starts a page early enough to hold the calls of the subagents whose
+  work it holds, up to a maximum page
+  ([agent-chat.md](../agent-chat.md#history-paging)), because on a 61-record
+  session the default page boundary fell between a subagent's call and a
+  child that arrived after a sibling's result, and the child stayed drawn as a
+  stray top-level row for good. A child left flat keeps
   `parentToolUseId`, which stops it running together with the main agent's
   text and lets the parent's row count it once its page loads; a card that
   takes such a row's place keeps it, and so does the row it hands its place
@@ -1317,8 +1331,8 @@ A call that waited on a permission card starts at the answer, and the answer's
 record may be applied after the card already shows it — a press sets the status
 optimistically. So the time is stamped onto the card by its own step
 (`stampPermissionAnswer`, `answeredAt` / `answerSeenAt`), independent of the
-status, and the row that takes the card's place takes its start from there; the first
-answer's time stands, as its status does. An answer whose card is on an older
+status, and the row that takes the card's place takes its start from there;
+the first answer's time stands, as its status does. An answer whose card is on an older
 page comes back as a back-reference when that page is loaded, and is placed
 through *that* page's reading (`HistoryPageCatchUp.clock`): any reading from the
 server carries any of its times over, so the page the record came from does not
