@@ -24,6 +24,23 @@ export interface MultiEditInput {
 	}>;
 }
 
+export type NotebookEditMode = "replace" | "insert" | "delete";
+
+/**
+ * Claude's `NotebookEdit`, in the shape claude 2.1.330 takes. An older CLI's
+ * `cell_number` is not this shape: its call is drawn as its arguments, never as
+ * a half-read cell.
+ */
+export interface NotebookEditInput {
+	notebook_path: string;
+	/** Absent on an insert at the top of the notebook. */
+	cell_id?: string;
+	/** Required by the CLI, but a delete has nothing to say in it. */
+	new_source?: string;
+	cell_type?: "code" | "markdown";
+	edit_mode?: NotebookEditMode;
+}
+
 /**
  * What a file tool will do to the file, read from its input alone.
  *
@@ -39,6 +56,7 @@ export type ProposedChangeData =
 	| { kind: "edit"; input: EditInput; patches: string[] }
 	| { kind: "multiEdit"; input: MultiEditInput; patches: string[] }
 	| { kind: "write"; input: WriteInput }
+	| { kind: "notebook"; input: NotebookEditInput; mode: NotebookEditMode }
 	| { kind: "codex"; changes: CodexChangeView[] };
 
 function isEditInput(input: unknown): input is EditInput {
@@ -67,6 +85,66 @@ function isMultiEditInput(input: unknown): input is MultiEditInput {
 			);
 		})
 	);
+}
+
+const NOTEBOOK_KEYS = new Set([
+	"notebook_path",
+	"cell_id",
+	"new_source",
+	"cell_type",
+	"edit_mode",
+]);
+
+function isNotebookEditInput(input: unknown): input is NotebookEditInput {
+	const i = input as Record<string, unknown>;
+	const optionalString = (value: unknown) =>
+		value === undefined || typeof value === "string";
+	return (
+		typeof i?.notebook_path === "string" &&
+		// A field this does not know may change what the call means: an older
+		// CLI's `cell_number` picks the cell by position instead.
+		Object.keys(i).every((key) => NOTEBOOK_KEYS.has(key)) &&
+		optionalString(i.cell_id) &&
+		optionalString(i.new_source) &&
+		(i.cell_type === undefined ||
+			i.cell_type === "code" ||
+			i.cell_type === "markdown") &&
+		(i.edit_mode === undefined ||
+			i.edit_mode === "replace" ||
+			i.edit_mode === "insert" ||
+			i.edit_mode === "delete") &&
+		// Only a delete has no source to write.
+		(i.edit_mode === "delete" || typeof i.new_source === "string")
+	);
+}
+
+/**
+ * What a cell's section is headed by: which cell, and what the call did to it.
+ * The `cell_id` is the notebook's own key — the CLI names no position.
+ */
+export function notebookCellLabel(
+	change: Extract<ProposedChangeData, { kind: "notebook" }>,
+): string {
+	const { cell_id: id, cell_type: type } = change.input;
+	switch (change.mode) {
+		case "insert": {
+			const cell = type ? `New ${type} cell` : "New cell";
+			return id ? `${cell} after ${id}` : `${cell} at the top`;
+		}
+		case "delete":
+			return id ? `Deleted cell ${id}` : "Deleted cell";
+		case "replace": {
+			const cell = id ? `Cell ${id}` : "Cell";
+			return type ? `${cell} · ${type}` : cell;
+		}
+	}
+}
+
+/** A cell's new source, which a delete has none of. */
+export function notebookSource(
+	change: Extract<ProposedChangeData, { kind: "notebook" }>,
+): string | undefined {
+	return change.mode === "delete" ? undefined : change.input.new_source;
 }
 
 /**
@@ -162,6 +240,10 @@ function buildProposedChange(
 				: null;
 		case "Write":
 			return isWriteInput(input) ? { kind: "write", input } : null;
+		case "NotebookEdit":
+			return isNotebookEditInput(input)
+				? { kind: "notebook", input, mode: input.edit_mode ?? "replace" }
+				: null;
 		default:
 			return null;
 	}
@@ -171,7 +253,9 @@ function buildProposedChange(
 export function proposedChangeText(
 	change: ProposedChangeData,
 ): string | undefined {
-	return change.kind === "write" ? change.input.content : undefined;
+	if (change.kind === "write") return change.input.content;
+	if (change.kind === "notebook") return notebookSource(change);
+	return undefined;
 }
 
 export function changePatches(
@@ -184,6 +268,7 @@ export function changePatches(
 		case "codex":
 			return change.changes.flatMap((c) => (c.patch ? [c.patch] : []));
 		case "write":
+		case "notebook":
 			return undefined;
 	}
 }
@@ -211,7 +296,8 @@ export function patchRows(patch: string): number {
 export function changeRowCount(change: ProposedChangeData): number {
 	const patches = changePatches(change);
 	if (!patches) {
-		return change.kind === "write" ? outputLineCount(change.input.content) : 0;
+		const text = proposedChangeText(change);
+		return text === undefined ? 0 : outputLineCount(text);
 	}
 	return patches.reduce((rows, patch) => rows + patchRows(patch), 0);
 }

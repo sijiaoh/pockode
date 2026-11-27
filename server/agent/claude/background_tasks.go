@@ -388,34 +388,56 @@ func (t *backgroundTaskTracker) callIsBackgrounded(toolUseID string) bool {
 	return t.backgroundedCalls[toolUseID]
 }
 
-// The tool the CLI offers for reading a task's output after the fact. Its input
-// names a task_id and nothing else, so on its own it cannot be joined to the
-// call whose task it reads — the transcript's join key is the tool_use_id.
-const taskOutputTool = "TaskOutput"
+// The tools whose input names a background task by the CLI's own task_id and
+// nothing else, so on their own they cannot be joined to the call whose task
+// they are about — the transcript's join key is the tool_use_id. TaskOutput
+// reads a task's output; TaskStop stops one. KillShell and KillBash are
+// TaskStop's earlier names, which history still holds and claude 2.1.330
+// still accepts as aliases; they name the task by shell_id.
+var taskReferringTools = map[string]bool{
+	"TaskOutput": true,
+	"TaskStop":   true,
+	"KillShell":  true,
+	"KillBash":   true,
+}
 
 // originOfCall answers which earlier call a tool call is about, for the calls
-// whose input identifies their target by something other than a tool_use_id.
+// whose input identifies their target by something other than a tool_use_id
+// (taskReferringTools).
 //
-// Today that is only TaskOutput. Answering it here is the point: task_started
-// carried both ids, this process kept them together, and nothing downstream
-// ever sees the pair. A client would have to read the id back out of the CLI's
-// English placeholder sentence or out of an output file's path — both are
-// string-mining, and both break when the CLI rewords or relocates.
+// Answering it here is the point: task_started carried both ids, this process
+// kept them together, and nothing downstream ever sees the pair. A client would
+// have to read the id back out of the CLI's English placeholder sentence or out
+// of an output file's path — both are string-mining, and both break when the
+// CLI rewords or relocates.
+//
+// What the client does with the answer differs by tool — a fetch is drawn on
+// its origin's row, a stop keeps a row of its own that points there — and is
+// the client's decision; this only says which call it is.
 //
 // "" means the question has no answer, which is ordinary rather than
 // exceptional: an entry lives only as long as its task (finishTask drops it on
 // the outcome) and never outlives the process, so a fetch against a task that
 // already settled — or that a previous process started — resolves to nothing.
 func (t *backgroundTaskTracker) originOfCall(name string, input json.RawMessage) string {
-	if name != taskOutputTool {
+	if !taskReferringTools[name] {
 		return ""
 	}
 	var call struct {
-		TaskID string `json:"task_id"`
+		TaskID  string `json:"task_id"`
+		ShellID string `json:"shell_id"`
 	}
-	// A malformed or absent task_id is the same answer as an unknown one: no
-	// join. Nothing here is worth failing the tool call over.
-	if err := json.Unmarshal(input, &call); err != nil || call.TaskID == "" {
+	// A malformed or absent id is the same answer as an unknown one: no join.
+	// Nothing here is worth failing the tool call over.
+	if err := json.Unmarshal(input, &call); err != nil {
+		return ""
+	}
+	// task_id first, as the CLI reads them: shell_id is the deprecated field.
+	taskID := call.TaskID
+	if taskID == "" {
+		taskID = call.ShellID
+	}
+	if taskID == "" {
 		return ""
 	}
 
@@ -424,7 +446,7 @@ func (t *backgroundTaskTracker) originOfCall(name string, input json.RawMessage)
 	// Excluded tasks are read for consistency with resolveTask and answered the
 	// same way: the CLI asked hosts to keep that work out of the transcript, so
 	// there is no row to point at.
-	known, ok := t.tasks[call.TaskID]
+	known, ok := t.tasks[taskID]
 	if !ok || known.excluded {
 		return ""
 	}

@@ -3,9 +3,12 @@ import { useEffect, useState } from "react";
 import { ACTIVITY_VIEW } from "../../lib/activity";
 import { hasText, type LiveThinking, latestLine } from "../../lib/thinking";
 import { formatElapsed } from "../../lib/toolRun";
+import type { AwaitedFetch } from "../../types/message";
 import { CollapsibleBody, Spinner } from "../ui";
 import { BareBody, BareRow } from "./BareRow";
+import { GoToCallButton } from "./GoToCallButton";
 import { THOUGHT_BODY, ThoughtBody } from "./ThinkingItem";
+import { useGoToCall } from "./toolJumpContext";
 import { useTurnTail } from "./turnTailContext";
 
 interface Props {
@@ -20,6 +23,11 @@ interface Props {
 	 * about to open.
 	 */
 	placeholder: boolean;
+	/**
+	 * The main agent's newest call is a fetch filed under another row, still
+	 * running: the line says the turn is waiting, and offers that row.
+	 */
+	awaitedFetch?: AwaitedFetch;
 }
 
 const ANNOUNCE_DELAY_MS = 100;
@@ -83,16 +91,18 @@ function ThinkingSoFar({ thinking }: { thinking: LiveThinking }) {
 
 /**
  * The turn-end slot of the reply being written, while it is still being
- * written (docs/turn-progress-ui.md#2-the-tail-line): `Working 1m 4s`, or
- * `Thinking… 1m 4s · <latest line>`. It says that the turn is producing and
- * for how long, and nothing else — every other fact about the turn has an
- * owner of its own (§4 there).
+ * written (docs/turn-progress-ui.md#2-the-tail-line): `Working 1m 4s`,
+ * `Thinking… 1m 4s · <latest line>`, or `Waiting for output… 1m 4s · Go to
+ * call` while the agent waits on a fetch that has no row. It says that the
+ * turn is producing and for how long, and nothing else — every other fact
+ * about the turn has an owner of its own (§4 there). It points at a row only
+ * while the turn waits on a fetch that has no row to say so.
  *
  * The slot keeps the turn-end row's height whether or not the line is drawn,
  * so a turn blocking and resuming moves nothing, and settling swaps the line
  * for the row in place.
  */
-function TurnTail({ writing, placeholder }: Props) {
+function TurnTail({ writing, placeholder, awaitedFetch }: Props) {
 	const { phase, openedAt, thinking, onToggleThinking } = useTurnTail();
 	// A live region inserted with its text already in it is often not read out,
 	// and the commonest way the line appears is with a new bubble — a send to an
@@ -112,23 +122,41 @@ function TurnTail({ writing, placeholder }: Props) {
 	const text = live && hasText(live);
 
 	const latest = live ? latestLine(live.content || live.fullReasoning) : "";
+	const goToCall = useGoToCall();
+	// Thinking that has started is newer than the fetch it followed.
+	const waiting =
+		shown && phase === "running" && !live ? awaitedFetch : undefined;
+	const label = live
+		? "Thinking…"
+		: waiting
+			? waiting.waits
+				? "Waiting for output…"
+				: "Reading output…"
+			: "Working";
 	// The clock follows the word rather than the latest line: the line changes
 	// length several times a second and would drag the clock with it, and
 	// `Thinking… 12s` reads as the `Thought for 12s` it settles into. Only the
 	// latest line gives way on a narrow screen.
 	const words = (
 		<span aria-hidden className="flex items-baseline gap-1.5">
-			<span className="shrink-0 text-th-text-secondary">
-				{live ? "Thinking…" : "Working"}
-			</span>
+			<span className="shrink-0 text-th-text-secondary">{label}</span>
 			{openedAt !== undefined && <TurnClock openedAt={openedAt} />}
+			{(latest || (waiting && goToCall)) && (
+				<span className="shrink-0 text-th-text-muted">·</span>
+			)}
 			{latest && (
-				<>
-					<span className="shrink-0 text-th-text-muted">·</span>
-					<span className="min-w-0 truncate text-th-text-muted">{latest}</span>
-				</>
+				<span className="min-w-0 truncate text-th-text-muted">{latest}</span>
 			)}
 		</span>
+	);
+	// Beside the words rather than in them: they are hidden from the
+	// accessibility tree, and the button is the one part of the line to reach.
+	const jump = waiting && goToCall && (
+		<GoToCallButton
+			label="Go to call being read"
+			height="h-4"
+			onClick={() => goToCall(waiting.originToolUseId)}
+		/>
 	);
 
 	return (
@@ -162,7 +190,16 @@ function TurnTail({ writing, placeholder }: Props) {
 						</CollapsibleBody>
 					</>
 				) : (
-					<BareRow glyph={GLYPH}>{words}</BareRow>
+					<BareRow glyph={GLYPH}>
+						{jump ? (
+							<span className="flex items-baseline gap-1.5">
+								{words}
+								{jump}
+							</span>
+						) : (
+							words
+						)}
+					</BareRow>
 				))}
 		</div>
 	);

@@ -1,9 +1,19 @@
+import type { WorkRef } from "../types/message";
+import type { WorkType } from "../types/work";
 import {
 	isSameNativePath,
 	relativeToWorkDir,
 	splitNativePath,
 } from "../utils/path";
 import { codexChangePaths } from "./codexChanges";
+import {
+	AGENT_CONTROL_TOOL,
+	agentControlDetail,
+	agentControlInput,
+	GENERATE_IMAGE_TOOL,
+	generateImagePrompt,
+	SLEEP_TOOL,
+} from "./codexTools";
 import {
 	htmlEditInput,
 	htmlGetInput,
@@ -13,7 +23,13 @@ import {
 	isHtmlRenderTool,
 } from "./htmlRender";
 import { reviewCategoryLabel } from "./permissionReview";
+import {
+	pockodeWorkTool,
+	workToolDetail,
+	workToolVerb,
+} from "./pockodeWorkTools";
 import { firstLine } from "./subagentRun";
+import { isStopTool, stoppedTaskId } from "./taskStop";
 
 /**
  * What a tool call's row says about itself: a title naming the kind of call,
@@ -313,6 +329,8 @@ export function toolSummary(
 	toolName: string,
 	input: unknown,
 	workDir: string,
+	/** The work a Pockode work tool acted on, as the call's result names it. */
+	workRef?: WorkRef,
 ): ToolSummary {
 	const obj = asObject(input);
 
@@ -339,6 +357,58 @@ export function toolSummary(
 			detail: str(obj.task_id) ?? "",
 			detailTail: "",
 			mono: true,
+		};
+	}
+	// Named by their key for the reason `TaskOutput` is. `BashOutput` is
+	// history only: no current CLI offers it.
+	if (toolName === "BashOutput") {
+		return {
+			title: "BashOutput",
+			detail: str(obj.bash_id) ?? "",
+			detailTail: "",
+			mono: true,
+		};
+	}
+	if (isStopTool(toolName)) {
+		return {
+			title: toolName,
+			detail: stoppedTaskId(input) ?? "",
+			detailTail: "",
+			mono: true,
+		};
+	}
+	if (toolName === GENERATE_IMAGE_TOOL) {
+		return {
+			title: GENERATE_IMAGE_TOOL,
+			detail: firstLine(generateImagePrompt(input) ?? ""),
+			detailTail: "",
+			mono: false,
+		};
+	}
+	// The duration is the meta; the wait asked for is in the body.
+	if (toolName === SLEEP_TOOL) {
+		return { title: SLEEP_TOOL, detail: "", detailTail: "", mono: false };
+	}
+	if (toolName === AGENT_CONTROL_TOOL) {
+		const { title, agents } = agentControlInput(input);
+		return {
+			title,
+			detail: agentControlDetail(agents),
+			detailTail: "",
+			mono: false,
+		};
+	}
+	// Read like the file tool it is. The mode is a chip because `insert` and
+	// `delete` change what the row means, and `replace`, the default, does not.
+	if (toolName === "NotebookEdit") {
+		const path = str(obj.notebook_path);
+		const mode = obj.edit_mode;
+		const chip = mode === "insert" || mode === "delete" ? mode : undefined;
+		return {
+			...(path
+				? pathSummary("NotebookEdit", path, workDir)
+				: fallbackSummary(toolName, input)),
+			...(chip ? { chip } : {}),
 		};
 	}
 
@@ -398,6 +468,14 @@ export function toolSummary(
 	if (mcp?.server === "pockode" && mcp.tool === "permission_verdict") {
 		return verdictSummary(input);
 	}
+	const workTool = pockodeWorkTool(toolName);
+	if (mcp && workTool) {
+		return {
+			...mcpSummary(mcp, {}),
+			title: workTool.title,
+			...workToolDetail(workTool, input, workRef),
+		};
+	}
 	if (mcp) return mcpSummary(mcp, input);
 
 	return fallbackSummary(toolName, input);
@@ -437,7 +515,10 @@ function verdictSummary(input: unknown): ToolSummary {
  */
 export const TOOL_VERBS = [
 	"edit",
+	"create",
+	"start",
 	"run",
+	"stop",
 	"read",
 	"search",
 	"fetch",
@@ -461,6 +542,11 @@ export interface ToolVerbReading {
 	 * it by, which is still counted.
 	 */
 	name?: string;
+	/**
+	 * The kind of work a `create` or `start` acted on, which its count is
+	 * worded by: `Created 2 tasks`, `Started 3 work items` when they differ.
+	 */
+	kind?: WorkType;
 }
 
 function filePaths(obj: Record<string, unknown>): string[] | undefined {
@@ -525,8 +611,14 @@ const quoted = (text: string | undefined) =>
  * it say. A search is named by what it looked for, never by where — the row
  * has the scope.
  */
-export function toolVerb(toolName: string, input: unknown): ToolVerbReading {
+export function toolVerb(
+	toolName: string,
+	input: unknown,
+	workRef?: WorkRef,
+): ToolVerbReading {
 	const obj = asObject(input);
+	const workTool = pockodeWorkTool(toolName);
+	if (workTool) return workToolVerb(workTool, input, workRef);
 	switch (toolName) {
 		case "Write":
 		case "Edit":
@@ -555,9 +647,10 @@ export function toolVerb(toolName: string, input: unknown): ToolVerbReading {
 			const command = str(obj.command);
 			return { verb: "run", name: command && commandHead(command) };
 		}
-		case "BashOutput":
+		case "TaskStop":
 		case "KillShell":
-			return { verb: "run" };
+		case "KillBash":
+			return { verb: "stop" };
 		case "Read":
 			return { verb: "read", paths: filePaths(obj) };
 		case "Grep":
@@ -574,6 +667,9 @@ export function toolVerb(toolName: string, input: unknown): ToolVerbReading {
 		}
 		case "TodoWrite":
 			return { verb: "todo" };
+		// By what it did — `Used Wait` — rather than by Pockode's umbrella name.
+		case AGENT_CONTROL_TOOL:
+			return { verb: "other", name: agentControlInput(input).title };
 		default:
 			return {
 				verb: "other",

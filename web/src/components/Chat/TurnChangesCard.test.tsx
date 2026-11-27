@@ -24,7 +24,9 @@ vi.mock("./ProposedChange", async (importOriginal) => ({
 			{change.kind} diff of{" "}
 			{change.kind === "codex"
 				? change.changes.map((c) => c.newPath).join(", ")
-				: change.input.file_path}
+				: change.kind === "notebook"
+					? change.input.notebook_path
+					: change.input.file_path}
 		</p>
 	),
 }));

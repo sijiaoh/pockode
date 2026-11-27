@@ -329,14 +329,32 @@ says why).
 
 ### 2.3 What it says
 
-Two states, one line. The glyph stays put across the switch, and only the
-words change — it is one line saying what the turn is doing now, not two
-elements taking turns.
+Three states, one line. The glyph stays put across the switch, and only the
+words change — it is one line saying what the turn is doing now, not elements
+taking turns.
 
 | State | Glyph | Label | Clock | After the clock |
 |---|---|---|---|---|
 | working | `Spinner`, `text-th-accent` | `Working` | turn clock | — |
 | thinking | `Spinner`, `text-th-accent` | `Thinking…` | turn clock | `·` and the latest line, when there is text; then the chevron |
+| waiting for output | `Spinner`, `text-th-accent` | `Waiting for output…` (`Reading output…` for a fetch that does not wait) | turn clock | `·` and `Go to call` |
+
+**When it says `Waiting for output…`** — while the
+main agent's newest call is a `TaskOutput` filed under the call it reads and
+still `running` ([tool-call-ui.md](tool-call-ui.md#a-fetch-in-flight)). Such a
+fetch draws no row, so nothing at the tail moved for up to 30 seconds and the
+row it reads was often screens up. The state ends with the fetch, and with the
+main agent's next text, thinking or call; thinking still being streamed outranks
+it, since it began after the fetch. The reducer holds it as the bubble's
+`awaitedFetch` ([code/frontend-state.md](code/frontend-state.md#a-fetch-filed-under-the-call-it-reads)).
+It names no call, no command and no
+task — the line's rule holds: it says what the turn is doing, which is waiting.
+`Go to call` is the transcript's jump to the row the fetch is filed under
+([tool-call-ui.md](tool-call-ui.md#from-a-file-to-the-calls-that-changed-it)),
+a text button in `text-th-accent` with a `touch-target` hit area; the rest of
+the line is not a button. A fetch that kept a row of its own is a running row
+at the tail and leaves the line at `Working`. A subagent's fetch is not the main
+agent's and does not move it (§3).
 
 **The clock follows the label**, not the latest line: the latest line changes
 length several times a second and would drag a clock after it across the row,
@@ -444,7 +462,7 @@ that had none — *running, with nothing to show yet* — and nothing else:
 | Fact | Owner | Tail line |
 |---|---|---|
 | the turn is producing | **the tail line** (and the sidebar row's spinner, the same fact in a list) | the one thing it says |
-| which call is running and for how long | the tool row / group summary | never names a call |
+| which call is running and for how long | the tool row / group summary | never names a call; points at one only while the main agent waits on a fetch that has no row (§2.3) |
 | a permission request blocks the turn | strip permission row, card | hidden |
 | a background task holds the turn | strip background row | hidden |
 | questions are waiting | strip question row | unaffected; both are drawn, they answer different questions |

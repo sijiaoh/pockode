@@ -1,18 +1,12 @@
 import type { ContentPart } from "../types/message";
 import { splitNativePath } from "../utils/path";
+import { pockodeTool } from "./pockodeTool";
 
-/**
- * Pockode's own page tools, by both names each arrives under: Claude passes
- * `mcp__server__tool` through, Codex's adapter joins `server:tool`.
- */
+/** Pockode's own page tools, by both names each arrives under (`pockodeTool`). */
 type PageTool = "html_render" | "html_edit" | "html_get";
 
 function pageTool(toolName: string): PageTool | null {
-	const tool = toolName.startsWith("mcp__pockode__")
-		? toolName.slice("mcp__pockode__".length)
-		: toolName.startsWith("pockode:")
-			? toolName.slice("pockode:".length)
-			: null;
+	const tool = pockodeTool(toolName);
 	return tool === "html_render" || tool === "html_edit" || tool === "html_get"
 		? tool
 		: null;

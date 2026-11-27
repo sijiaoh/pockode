@@ -1278,7 +1278,7 @@ func TestBookkeepingNotificationsAreDropped(t *testing.T) {
 		{"item/started", `{"threadId":"t","turnId":"u","startedAtMs":1,"item":{"type":"userMessage","id":"m","content":[{"type":"text","text":"hi"}]}}`},
 		{"item/completed", `{"threadId":"t","turnId":"u","completedAtMs":1,"item":{"type":"userMessage","id":"m","content":[{"type":"text","text":"hi"}]}}`},
 		// Real information with no surface in Pockode yet.
-		{"item/completed", `{"threadId":"t","turnId":"u","completedAtMs":1,"item":{"type":"webSearch","id":"w","query":"go"}}`},
+		{"item/completed", `{"threadId":"t","turnId":"u","completedAtMs":1,"item":{"type":"plan","id":"p","text":"1. go"}}`},
 	}
 	for _, d := range drops {
 		sess.notify(d.method, d.params)

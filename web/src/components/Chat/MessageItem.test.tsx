@@ -516,6 +516,36 @@ describe("MessageItem", () => {
 			expect(onOpenWorkDetail).toHaveBeenCalledWith("story-1");
 		});
 
+		// Its Details opens the work it was delivered to; the subtask it is
+		// about is a second row, so the call that started it and this line
+		// lead to the same page.
+		it("offers Open into the subtask a child event names", async () => {
+			const user = userEvent.setup();
+			const onOpenWorkDetail = vi.fn();
+			render(
+				<MessageItem
+					sessionId="session-1"
+					message={systemMessage({
+						subtype: "child_done",
+						meta: {
+							title: "The story",
+							work_id: "story-1",
+							child: { id: "task-1", title: "Design the row" },
+						},
+					})}
+					onOpenWorkDetail={onOpenWorkDetail}
+				/>,
+			);
+
+			await user.click(screen.getByRole("button", { expanded: false }));
+			await user.click(
+				screen.getByRole("button", { name: "Open subtask Design the row" }),
+			);
+			expect(onOpenWorkDetail).toHaveBeenCalledWith("task-1");
+			await user.click(screen.getByRole("button", { name: "Details" }));
+			expect(onOpenWorkDetail).toHaveBeenLastCalledWith("story-1");
+		});
+
 		// History recorded before work_id was sent: it still renders, it just has
 		// nowhere to link to.
 		it("omits Details when the message names no work", async () => {

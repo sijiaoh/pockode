@@ -255,6 +255,28 @@ func TestStoryCreate(t *testing.T) {
 	}
 }
 
+// The server reads the new work's id back out of a creation's result to name
+// the work on the call's record (process.workCalls), so the parser is held to
+// what the executor actually answers — with a title that tries to look like
+// the id's own wording.
+func TestCreateResult_NamesTheCreatedWorkForTheServerToReadBack(t *testing.T) {
+	ts := newTestExec(t)
+	result := callTool(t, ts.exec, "story_create", map[string]string{
+		"title":         `Fix "(ID: x)" parsing)`,
+		"agent_role_id": ts.roleID,
+	})
+	if result.IsError {
+		t.Fatalf("unexpected error: %s", toolText(result))
+	}
+	id, ok := work.IDFromCreateResult(toolText(result))
+	if !ok {
+		t.Fatalf("IDFromCreateResult(%q) found no id", toolText(result))
+	}
+	if _, found, _ := ts.store.Get(id); !found {
+		t.Errorf("IDFromCreateResult(%q) = %q, which names no work", toolText(result), id)
+	}
+}
+
 // task_create makes a task of the story it names — that, and only that, is what
 // separates it from story_create, so the created item is read back rather than
 // the call merely being checked for an error.

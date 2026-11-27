@@ -181,8 +181,42 @@ function editsOf(run: ToolRun): FileEdit[] {
 				},
 			];
 		}
+		case "notebook": {
+			const path = change.input.notebook_path;
+			// Never new or deleted: the tool edits a notebook that exists, and
+			// deleting a cell is not deleting the file.
+			return [
+				{
+					run,
+					change,
+					path,
+					newPath: path,
+					status: "M",
+					lines: notebookLines(change),
+				},
+			];
+		}
 		case "codex":
 			return change.changes.map((view) => codexEdit(run, view));
+	}
+}
+
+/**
+ * A `NotebookEdit`'s lines, in lines of the cell's source rather than of the
+ * `.ipynb` JSON. The cell it replaced or deleted is not in the call — the CLI
+ * reports its old source only in its result, which a change is never read
+ * from — so `−` is known only for an insert, where it is none.
+ */
+export function notebookLines(
+	change: Extract<ProposedChangeData, { kind: "notebook" }>,
+): LineCounts {
+	switch (change.mode) {
+		case "insert":
+			return { added: lineCount(change.input.new_source ?? ""), removed: 0 };
+		case "replace":
+			return { added: lineCount(change.input.new_source ?? "") };
+		case "delete":
+			return { added: 0 };
 	}
 }
 

@@ -467,7 +467,10 @@ line, the one case where it is written only as text), and a subagent's call
 carries `Subagent` — which agent ran and what it measured. A page tool's
 successful result carries `HTMLPage` (`html_page`), the id of the page it
 stored, which the server stamps since no CLI knows it
-([code/work-system.md](code/work-system.md#rendering-tool)).
+([code/work-system.md](code/work-system.md#rendering-tool)). A Pockode work
+tool's successful result carries `WorkRef` (`work_ref: {id, type, title}`), the
+work it acted on as it was at the call — never its status
+([tool-call-model.md](tool-call-model.md#a-call-on-pockodes-own-work)).
 A `tool_activity` record — which exists on the wire only — carries `Activity`,
 `OutputDelta` and, for a subagent, `SubagentProgress`. What each means is
 [tool-call-model.md](tool-call-model.md); the field-by-field notes are

@@ -31,7 +31,8 @@ type pageCalls struct {
 func (c *pageCalls) stamp(event agent.AgentEvent) agent.AgentEvent {
 	switch e := event.(type) {
 	case agent.ToolCallEvent:
-		if e.ToolUseID == "" || !htmlpage.IsPageTool(e.ToolName) {
+		tool, ok := agent.PockodeTool(e.ToolName)
+		if e.ToolUseID == "" || !ok || !htmlpage.IsPageTool(tool) {
 			return event
 		}
 		c.callsMu.Lock()

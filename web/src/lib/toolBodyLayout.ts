@@ -13,6 +13,12 @@ export interface ToolBodyLayout {
 	resultFirst: boolean;
 	resultLabel: string;
 	/**
+	 * What the result block is called when the call failed, for a tool whose
+	 * result label names something only a success has: a failed generation's
+	 * result is its reason, not a prompt.
+	 */
+	failedLabel?: string;
+	/**
 	 * Whether the result is read from its end, and so clamped keeping the end in
 	 * view: a test run's or a build's verdict is its last lines, not its first.
 	 */
@@ -45,6 +51,10 @@ const LAYOUTS = new Map<string, ToolBodyLayout>(
 		Edit: { resultLabel: "Change" },
 		MultiEdit: { resultLabel: "Change" },
 		Write: { resultLabel: "Content" },
+		// Codex's (server/agent/codex/tool_items.go). The image itself is the
+		// row's attachment; what the block holds is the prompt Codex used.
+		GenerateImage: { resultLabel: "Prompt", failedLabel: "Result" },
+		AgentControl: { resultLabel: "Agents" },
 	} satisfies Record<string, Partial<ToolBodyLayout>>).map(([name, layout]) => [
 		name,
 		{ ...DEFAULT_LAYOUT, ...layout },

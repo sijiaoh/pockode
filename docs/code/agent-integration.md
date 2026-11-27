@@ -729,6 +729,7 @@ type EventRecord struct {
     ExitCode              *int                `json:"exit_code,omitempty"`
     Subagent              *SubagentReport     `json:"subagent,omitempty"`
     HTMLPage              string              `json:"html_page,omitempty"`
+    WorkRef               *WorkRef            `json:"work_ref,omitempty"`
     Activity              string              `json:"activity,omitempty"`
     OutputDelta           string              `json:"output_delta,omitempty"`
     SubagentProgress      *SubagentProgress   `json:"subagent_progress,omitempty"`
@@ -906,7 +907,10 @@ id (`p3`) of the page a successful `html_render` or `html_edit` stored, on that
 call's `tool_result` and nowhere else; no CLI reports it — the server stamps it
 on the way in, because the MCP call that stores the page never learns the CLI's
 tool call id, so the id is matched up from the result's text
-([work-system.md](work-system.md#rendering-tool)). `Activity` and
+([work-system.md](work-system.md#rendering-tool)). `WorkRef` is the work a
+successful Pockode work tool call acted on — `{id, type, title}` as of the call,
+and no status — stamped the same way, by `process.workCalls`
+([tool-call-model.md](../tool-call-model.md#a-call-on-pockodes-own-work)). `Activity` and
 `OutputDelta` belong to `tool_activity` records, which are broadcast and never
 stored; they are fields here anyway because `EventRecord` is the whole of how an
 event is serialized, for the wire as much as for history.
@@ -2662,7 +2666,10 @@ The join is also read in the other direction, at one tool call: `TaskOutput`
 fetches a task's output and names the task by `task_id`, which nothing outside
 this process can turn into the `tool_use_id` the transcript joins on. So the
 adapter resolves it while parsing the call and sends the answer along as
-`origin_tool_use_id` (`originOfCall`). A fetch made after its task settled — or
+`origin_tool_use_id` (`originOfCall`). `TaskStop` — and its older names
+`KillShell` and `KillBash`, which name the task by `shell_id` — is resolved the
+same way, since it too names its task and nothing else. A fetch made after its
+task settled — or
 by a process that did not start it — resolves to nothing and the field is simply
 absent, which the client is required to treat as ordinary; the reasoning, and why
 the output is not recorded as a second `tool_result` on the original call, is in
@@ -3165,8 +3172,10 @@ when one begins, `item/completed` when it ends — wrapped in a turn.
 | `item/started`, `fileChange` | `ToolCallEvent {ToolName: "Edit"}` |
 | `item/started`, `mcpToolCall` | `ToolCallEvent {ToolName: "server:tool"}` |
 | `item/started`, `imageView` | `ToolCallEvent {ToolName: "Read"}` |
+| `item/started`, `imageGeneration` / `sleep` / `dynamicToolCall`, and `collabAgentToolCall` with any `tool` but `spawnAgent` | `ToolCallEvent` named `GenerateImage` / `Sleep` / `namespace:tool` / `AgentControl` (`tool_items.go`) |
+| `item/completed`, `webSearch` | `ToolCallEvent {ToolName: "WebSearch" or "WebFetch"}` — its start names nothing on codex-cli 0.171.0 — then its `ToolResultEvent` |
 | `item/completed`, `agentMessage` | `TextEvent` |
-| `item/completed`, the four item types above | `ToolResultEvent` (`imageView`'s carries a file block, the rest text) |
+| `item/completed`, the item types above | `ToolResultEvent` (`imageView`'s carries a file block, `imageGeneration`'s the prompt and a file block, the rest text) |
 | `item/started` or `item/completed`: `subAgentActivity` `kind: "started"`, or `collabAgentToolCall` `tool: "spawnAgent"` once it names its thread | `ToolCallEvent {ToolName: "Task"}`, once per spawn; its result comes from the child thread's `turn/completed` — see [Subagent threads](#subagent-threads) |
 | `item/commandExecution/outputDelta` | `ToolActivityEvent {OutputDelta}` — real stdout/stderr as it is produced |
 | `item/mcpToolCall/progress` | `ToolActivityEvent {Activity}` — the tool's own one-line status |
@@ -3209,10 +3218,12 @@ joined into nonsense.
 
 **Item types not in the table produce nothing**, which is a second and separate
 place work is dropped from the ignore list below: the echo of the prompt just
-sent, plans and web searches all arrive as ordinary `item/*`
+sent, plans and context compactions all arrive as ordinary `item/*`
 notifications and fall through the type switch. They are dropped for the same
 reason — no surface to render them on — and would be picked up by adding a case
-rather than by removing a list entry.
+rather than by removing a list entry. `functionCallOutput` is the one with a case
+of its own that still produces nothing: it is logged at debug, because what it
+carries is unmeasured rather than known to be bookkeeping.
 
 **A command item carries Codex's own parse of what it is doing.**
 `commandActions[]` — `read` / `listFiles` / `search` / `unknown`, each with its
@@ -3406,10 +3417,13 @@ cannot carry, measured on 0.159.3:
   `thread/started` reaches this connection for it — and the role was null even
   when the model was asked for one, so neither is fetched.
 
-Every other `collabAgentToolCall` stays on the "produce nothing" path. Its
-`wait` names no receiver and no state alongside a `subAgentActivity` spawn; with
-`spawnAgent` it names the children and their last words, which the child's own
-`turn/completed` already settles the rows with.
+Every other `collabAgentToolCall` — `wait`, `sendMessage` and the rest — is not
+a spawn and opens no subagent row: it becomes an `AgentControl` call of its own
+(`agentControlCall`, `tool_items.go`), its agents named by the path their spawn
+named, and its result the states it reported (`agentsStates`), one line each. It
+never settles a spawn's row — the child's own `turn/completed` does that — so a
+`wait` that names no receiver and no state, as one beside a `subAgentActivity`
+spawn does, is a row with no agents and nothing lost.
 
 Nothing makes the parent wait for its child. A parent whose turn ends while a
 child still runs ends the session's turn as usual, and the child's items that
@@ -3442,16 +3456,13 @@ These are choices, recorded so they do not become blanks nobody knows about.
 - **The app-server's session-management surface** — listing, naming and searching
   threads — is not used at all. Pockode *is* the session manager; a second index
   of the same conversations could only disagree with the one the user sees.
-- **The `imageGeneration` item** is the model *making* an image rather than
-  looking at one, and it reports a `savedPath` the same machinery behind
-  `imageView` could read. Not wired up: it is a feature of its own, not part of
-  showing the user what the agent looked at, and unlike `imageView` it has not
-  been observed end to end — it carries a `status`, a `failure` and a `result`
-  whose meanings would be guesses. (The MCP channel's `image_generation_begin` /
-  `image_generation_end` were its predecessors, and were ignored for the same
-  reason; app-server has no notification by either name, so there is nothing to
-  add to `ignoredNotifications` — the item simply falls through the type switch
-  like plans.)
+- **The items beyond commands, patches, MCP calls and image views** — web
+  searches, image generations, sleeps, calls about subagents and dynamic tools
+  — became tool calls in `tool_items.go`, measured end to end on codex-cli
+  0.171.0 where the CLI could be made to produce them; the mapping and what
+  stays dropped (`plan`, `contextCompaction`, review mode, `hookPrompt`,
+  `functionCallOutput`) are in
+  [tool-call-model.md](../tool-call-model.md#codex-items-beyond-commands-patches-and-mcp).
 - **`BackgroundWaitEvent`** has no Codex counterpart to emit. Codex has no
   backgrounded task, so a Codex session never parks one — a subagent still
   running when its parent's turn ends does not hold the session open
@@ -5230,7 +5241,7 @@ The following conditions send an `ErrorEvent` and end the session:
 | Subprocess lifecycle | `server/agent/process.go`, `server/internal/proctree/` |
 | Claude implementation | `server/agent/claude/claude.go` |
 | Claude background waits | `server/agent/claude/background_tasks.go`, `background_loss.go` |
-| Codex implementation | `server/agent/codex/codex.go` (process, JSON-RPC, thread lifecycle), `events.go` (notification mapping), `approval.go` (server requests), `resume.go` (`codex_resume.json`), `view_image.go` (the image an `imageView` item names) |
+| Codex implementation | `server/agent/codex/codex.go` (process, JSON-RPC, thread lifecycle), `events.go` (notification mapping), `approval.go` (server requests), `resume.go` (`codex_resume.json`), `view_image.go` (the image an `imageView` item names), `tool_items.go` (web searches, image generations, sleeps, agent calls, dynamic tools) |
 | Thinking | `server/agent/claude/thinking.go` (the `--thinking-display` gate, `thinkingClock`), `server/agent/codex/reasoning.go` |
 | Content blocks and attachments | `server/agent/content.go` (block shapes), `server/agent/claude/tool_result.go` (Claude's blocks), `server/attachments/attachments.go` (per-session store), `server/ws/rpc_attachment.go` (`attachment.get`), `server/filetransfer/attachment.go` (an image's bytes), `web/src/lib/contentBlocks.ts`, `web/src/components/Chat/AttachmentStrip.tsx` |
 | One-shot requests | `server/agent/oneshot.go` (`OneShotRunner`, `RunStream`), `claude/oneshot.go`, `codex/oneshot.go`, `server/agent/registry.go` (`OneShot`) |

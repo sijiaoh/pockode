@@ -13,17 +13,10 @@ var pageTools = map[string]bool{
 	"html_edit":   true,
 }
 
-// IsPageTool reports whether a tool call is one of pageTools, by either of
-// the names it arrives under: Claude passes `mcp__<server>__<tool>` through,
-// Codex's adapter joins `<server>:<tool>` (agent/codex mcpToolCall).
-func IsPageTool(toolName string) bool {
-	if tool, ok := strings.CutPrefix(toolName, "mcp__pockode__"); ok {
-		return pageTools[tool]
-	}
-	if tool, ok := strings.CutPrefix(toolName, "pockode:"); ok {
-		return pageTools[tool]
-	}
-	return false
+// IsPageTool reports whether a Pockode tool is one of pageTools. It takes the
+// bare tool name, as agent.PockodeTool reads it off either engine's call.
+func IsPageTool(tool string) bool {
+	return pageTools[tool]
 }
 
 // ResultLead is how a page tool's result begins: the agent reads the id

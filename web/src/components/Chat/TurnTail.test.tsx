@@ -5,7 +5,9 @@ import type {
 	LiveThinking,
 	TurnTail as TurnTailValue,
 } from "../../lib/thinking";
+import type { AwaitedFetch } from "../../types/message";
 import TurnTail from "./TurnTail";
+import { ToolJumpContext } from "./toolJumpContext";
 import { IDLE_TAIL, TurnTailContext } from "./turnTailContext";
 
 const thinking = (overrides: Partial<LiveThinking> = {}): LiveThinking => ({
@@ -18,12 +20,28 @@ const thinking = (overrides: Partial<LiveThinking> = {}): LiveThinking => ({
 
 function renderTail(
 	tail: Partial<TurnTailValue>,
-	{ placeholder = false, writing = true } = {},
+	{
+		placeholder = false,
+		writing = true,
+		awaitedFetch,
+		goToCall = () => {},
+	}: {
+		placeholder?: boolean;
+		writing?: boolean;
+		awaitedFetch?: AwaitedFetch;
+		goToCall?: (toolUseId: string) => void;
+	} = {},
 ) {
 	return render(
-		<TurnTailContext value={{ ...IDLE_TAIL, phase: "running", ...tail }}>
-			<TurnTail writing={writing} placeholder={placeholder} />
-		</TurnTailContext>,
+		<ToolJumpContext value={{ reveal: null, goToCall }}>
+			<TurnTailContext value={{ ...IDLE_TAIL, phase: "running", ...tail }}>
+				<TurnTail
+					writing={writing}
+					placeholder={placeholder}
+					awaitedFetch={awaitedFetch}
+				/>
+			</TurnTailContext>
+		</ToolJumpContext>,
 	);
 }
 
@@ -80,6 +98,38 @@ describe("TurnTail", () => {
 		expect(screen.getByText("3s")).toBeInTheDocument();
 	});
 
+	describe("while the agent waits on a fetch with no row", () => {
+		const awaitedFetch: AwaitedFetch = {
+			id: "f1",
+			originToolUseId: "t1",
+			waits: true,
+		};
+
+		it("says it is waiting, and goes to the row the fetch reads", async () => {
+			const user = userEvent.setup();
+			const goToCall = vi.fn();
+			renderTail({}, { awaitedFetch, goToCall });
+			expect(screen.getByText("Waiting for output…")).toBeInTheDocument();
+
+			await user.click(
+				screen.getByRole("button", { name: "Go to call being read" }),
+			);
+			expect(goToCall).toHaveBeenCalledWith("t1");
+		});
+
+		it("says reading for a fetch that does not wait", () => {
+			renderTail({}, { awaitedFetch: { ...awaitedFetch, waits: false } });
+			expect(screen.getByText("Reading output…")).toBeInTheDocument();
+		});
+
+		// Thinking that started after the fetch is the newer word.
+		it("gives way to thinking", () => {
+			renderTail({ thinking: thinking() }, { awaitedFetch });
+			expect(screen.getByText("Thinking…")).toBeInTheDocument();
+			expect(screen.queryByRole("button")).not.toBeInTheDocument();
+		});
+	});
+
 	// Claude's signal carries no text, so there is nothing to open.
 	it("says Thinking… with nothing to open before there is text", () => {
 		renderTail({ thinking: thinking() });
@@ -104,19 +154,21 @@ describe("TurnTail", () => {
 		expect(onToggleThinking).toHaveBeenCalledOnce();
 
 		rerender(
-			<TurnTailContext
-				value={{
-					...IDLE_TAIL,
-					phase: "running",
-					thinking: thinking({
-						content: "**Plan**\n\nChecking how it retries",
-						joinedLate: true,
-						expanded: true,
-					}),
-				}}
-			>
-				<TurnTail writing placeholder={false} />
-			</TurnTailContext>,
+			<ToolJumpContext value={{ reveal: null, goToCall: () => {} }}>
+				<TurnTailContext
+					value={{
+						...IDLE_TAIL,
+						phase: "running",
+						thinking: thinking({
+							content: "**Plan**\n\nChecking how it retries",
+							joinedLate: true,
+							expanded: true,
+						}),
+					}}
+				>
+					<TurnTail writing placeholder={false} />
+				</TurnTailContext>
+			</ToolJumpContext>,
 		);
 		expect(line).toHaveAttribute("aria-expanded", "true");
 		expect(screen.getByText("Plan")).toBeInTheDocument();

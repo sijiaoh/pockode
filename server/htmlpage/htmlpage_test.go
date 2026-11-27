@@ -252,16 +252,11 @@ func TestIDFromResult(t *testing.T) {
 
 func TestIsPageTool(t *testing.T) {
 	for name, want := range map[string]bool{
-		"mcp__pockode__html_render": true,
-		"pockode:html_render":       true,
-		"html_render":               false,
-		"mcp__other__html_render":   false,
-		"other:html_render":         false,
-		"mcp__pockode__work_get":    false,
-		"mcp__pockode__html_edit":   true,
-		"pockode:html_edit":         true,
+		"html_render": true,
+		"html_edit":   true,
+		"work_get":    false,
 		// Reads a page rather than storing one: its result names no new page.
-		"mcp__pockode__html_get": false,
+		"html_get": false,
 	} {
 		if got := IsPageTool(name); got != want {
 			t.Errorf("IsPageTool(%q) = %v, want %v", name, got, want)

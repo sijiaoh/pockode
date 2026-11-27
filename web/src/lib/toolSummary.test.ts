@@ -150,8 +150,8 @@ describe("toolSummary", () => {
 	// argument that identifies the call off the row.
 	it("splits claude's MCP naming into its server and its tool", () => {
 		expect(
-			toolSummary("mcp__pockode__work_get", { id: "01a0" }, WORK_DIR),
-		).toMatchObject({ title: "work_get", chip: "pockode", detail: "01a0" });
+			toolSummary("mcp__github__get_issue", { id: "01a0" }, WORK_DIR),
+		).toMatchObject({ title: "get_issue", chip: "github", detail: "01a0" });
 	});
 
 	// A `path` argument does not make a tool a file tool: drawn as one, the
@@ -298,6 +298,42 @@ describe("toolSummary", () => {
 	});
 });
 
+describe("the remaining tool kinds", () => {
+	it.each<[string, Record<string, unknown>, string]>([
+		["TaskStop", { task_id: "b1" }, "b1"],
+		// The name it had before claude renamed it, which history holds.
+		["KillShell", { shell_id: "b2" }, "b2"],
+		["BashOutput", { bash_id: "b3" }, "b3"],
+	])("names %s by its key, in mono", (name, input, detail) => {
+		expect(toolSummary(name, input, WORK_DIR)).toMatchObject({
+			title: name,
+			detail,
+			mono: true,
+		});
+	});
+
+	it("reads a NotebookEdit like a file tool, with its mode as a chip", () => {
+		const path = `${WORK_DIR}/nb/a.ipynb`;
+		expect(
+			toolSummary("NotebookEdit", { notebook_path: path }, WORK_DIR),
+		).toMatchObject({
+			title: "NotebookEdit",
+			detail: "nb/",
+			detailTail: "a.ipynb",
+		});
+		expect(
+			toolSummary("NotebookEdit", { notebook_path: path }, WORK_DIR).chip,
+		).toBeUndefined();
+		expect(
+			toolSummary(
+				"NotebookEdit",
+				{ notebook_path: path, edit_mode: "delete" },
+				WORK_DIR,
+			).chip,
+		).toBe("delete");
+	});
+});
+
 describe("commandHead", () => {
 	it.each([
 		["pnpm run test", "pnpm run test"],
@@ -323,6 +359,47 @@ describe("commandHead", () => {
 
 	it("has nothing to say for a command that is all flags", () => {
 		expect(commandHead("-x")).toBeUndefined();
+	});
+});
+
+describe("Codex's own calls", () => {
+	it("names an image generation by its prompt's first line, once it has one", () => {
+		expect(toolSummary("GenerateImage", {}, WORK_DIR)).toMatchObject({
+			title: "GenerateImage",
+			detail: "",
+		});
+		expect(
+			toolSummary("GenerateImage", { prompt: "A cat.\nOn a mat." }, WORK_DIR)
+				.detail,
+		).toBe("A cat.");
+	});
+
+	it("leaves a sleep's duration to the meta", () => {
+		expect(
+			toolSummary("Sleep", { duration_ms: 30000 }, WORK_DIR),
+		).toMatchObject({ title: "Sleep", detail: "" });
+	});
+
+	it("titles an agent call by what it did, and names its agents", () => {
+		expect(
+			toolSummary(
+				"AgentControl",
+				{ action: "wait", agents: ["/root/file_reader", null] },
+				WORK_DIR,
+			),
+		).toMatchObject({ title: "Wait", detail: "file_reader +1" });
+		expect(toolVerb("AgentControl", { action: "wait", agents: [] })).toEqual({
+			verb: "other",
+			name: "Wait",
+		});
+	});
+
+	it("reads a dynamic tool as an MCP call", () => {
+		expect(toolSummary("dynamic:lookup", { q: "x" }, WORK_DIR)).toMatchObject({
+			title: "lookup",
+			chip: "dynamic",
+			detail: "x",
+		});
 	});
 });
 
@@ -354,8 +431,71 @@ describe("toolVerb names", () => {
 	});
 
 	it("names any other tool by its row's title, without the MCP server", () => {
-		expect(toolVerb("mcp__pockode__work_get", {}).name).toBe("work_get");
-		expect(toolVerb("pockode:work_get", {}).name).toBe("work_get");
+		expect(toolVerb("mcp__github__get_issue", {}).name).toBe("get_issue");
+		expect(toolVerb("github:get_issue", {}).name).toBe("get_issue");
 		expect(toolVerb("TaskOutput", {}).name).toBe("TaskOutput");
+	});
+});
+
+describe("Pockode's own work tools", () => {
+	const ref = { id: "t1", type: "task" as const, title: "Design the row" };
+
+	it("titles a creation by the title it was given", () => {
+		expect(
+			toolSummary(
+				"mcp__pockode__task_create",
+				{ story_id: "s1", title: "Design the row" },
+				WORK_DIR,
+			),
+		).toMatchObject({
+			title: "Create task",
+			chip: "pockode",
+			detail: "Design the row",
+			mono: false,
+		});
+	});
+
+	// The title as of the call, never the store's; the id until there is one.
+	it("names the work by its work_ref, else by the input's id in mono", () => {
+		expect(
+			toolSummary("pockode:task_start", { id: "t1" }, WORK_DIR, ref),
+		).toMatchObject({
+			title: "Start task",
+			chip: "pockode",
+			detail: "Design the row",
+			mono: false,
+		});
+		expect(
+			toolSummary("mcp__pockode__step_done", { id: "t1" }, WORK_DIR),
+		).toMatchObject({ title: "Step done", detail: "t1", mono: true });
+	});
+
+	it.each([
+		["work_comment_add", { work_id: "t1", body: "x" }, "Comment", "t1"],
+		[
+			"work_comment_update",
+			{ id: "c1", body: "Fixed\nmore" },
+			"Edit comment",
+			"Fixed",
+		],
+		["story_list", {}, "List stories", ""],
+		["agent_role_list", { work_type: "task" }, "List roles", "task"],
+		["agent_role_get", { id: "r1" }, "Get role", "r1"],
+		["agent_role_reset_defaults", {}, "Reset roles", ""],
+		["story_wait", { id: "s1" }, "Wait for tasks", "s1"],
+		["task_list", { story_id: "s1" }, "List tasks", "s1"],
+	])("titles %s", (tool, input, title, detail) => {
+		expect(toolSummary(`mcp__pockode__${tool}`, input, WORK_DIR)).toMatchObject(
+			{
+				title,
+				detail,
+			},
+		);
+	});
+
+	it("leaves the page tools and the verdict to their own rows", () => {
+		expect(
+			toolSummary("mcp__pockode__html_get", { id: "p1" }, WORK_DIR).title,
+		).toBe("html_get");
 	});
 });

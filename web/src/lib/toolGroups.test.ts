@@ -537,8 +537,42 @@ describe("rowEntries", () => {
 					]),
 				),
 			).toBe(
-				'Edited ToolRow.tsx · Ran pnpm test · Read b.ts, a.ts · Searched "foo", **/*.test.ts · Fetched github.com · Updated todos · Used work_get',
+				'Edited ToolRow.tsx · Ran pnpm test · Read b.ts, a.ts · Searched "foo", **/*.test.ts · Fetched github.com · Updated todos · Used Get work',
 			);
+		});
+
+		// Creating and starting work rank above running a command, and a
+		// start is named by the title its work_ref carries — by nothing while
+		// it runs.
+		it("names the work a story agent created and started", () => {
+			const ref = { id: "t1", type: "task" as const, title: "Design the row" };
+			const summary = summaryOf([
+				run("a", "pnpm test"),
+				call("b", "mcp__pockode__task_create", { title: "Design the row" }),
+				call("c", "pockode:story_create", { title: "Ship it" }),
+				call("d", "mcp__pockode__task_start", { id: "t1" }, "success", {
+					workRef: ref,
+				}),
+				call("e", "mcp__pockode__step_done", { id: "s1" }),
+			]);
+			expect(richest(summary)).toBe(
+				'Created task "Design the row", story "Ship it" · Started task "Design the row" · Ran pnpm test · Used Step done',
+			);
+			expect(sparest(summary)).toBe(
+				"Created 2 work items · Started 1 task · Ran 1 command · Used 1 tool",
+			);
+		});
+
+		// A record from before work_ref names no title to quote.
+		it("counts a start with no work_ref by its kind alone", () => {
+			expect(
+				richest(
+					summaryOf([
+						call("a", "mcp__pockode__story_start", { id: "s1" }),
+						call("b", "mcp__pockode__story_start", { id: "s2" }),
+					]),
+				),
+			).toBe("Started 2 stories");
 		});
 
 		// The count is authoritative in every form: names shown and `+K` add
@@ -566,21 +600,23 @@ describe("rowEntries", () => {
 
 		it("counts a call with nothing to name it by, and names the rest", () => {
 			expect(
-				richest(
-					summaryOf([
-						run("a", "pnpm test"),
-						call("b", "BashOutput", { bash_id: "1" }),
-					]),
-				),
+				richest(summaryOf([run("a", "pnpm test"), call("b", "Bash", {})])),
 			).toBe("Ran pnpm test +1");
+		});
+
+		// A log read and a shell killed used to read `Ran 3 commands` beside the
+		// one command that ran.
+		it("counts a stop as a stop and a read of a task's output as neither", () => {
 			expect(
 				richest(
 					summaryOf([
-						call("a", "BashOutput", { bash_id: "1" }),
-						call("b", "KillShell", { shell_id: "1" }),
+						run("a", "pnpm dev"),
+						call("b", "BashOutput", { bash_id: "1" }),
+						call("c", "TaskStop", { task_id: "1" }),
+						call("d", "KillShell", { shell_id: "2" }),
 					]),
 				),
-			).toBe("Ran 2 commands");
+			).toBe("Ran pnpm dev · Stopped 2 tasks · Used BashOutput");
 		});
 
 		it("tells files with one base name apart by their paths, and only those", () => {
