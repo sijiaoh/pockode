@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/pockode/server/rpc"
 	"github.com/pockode/server/session"
@@ -248,5 +249,24 @@ func TestChatMessage_ReplyNamesTheRecord(t *testing.T) {
 	if reply.Seq != rec.Seq || reply.MessageID != rec.MessageID {
 		t.Errorf("reply named seq %d id %q, want the record's seq %d id %q",
 			reply.Seq, reply.MessageID, rec.Seq, rec.MessageID)
+	}
+}
+
+// A call still running in the replayed history is counted from its observed_at
+// against the server's clock, never the phone's, so both replies carry a
+// reading of it.
+func TestChatMessages_RepliesCarryTheServerClock(t *testing.T) {
+	env := newTestEnv(t, &mockAgent{})
+	seedHistory(t, env, "sess", 4)
+
+	before := time.Now()
+	subscribed := env.subscribeChatMessagesWithLimit("sess", 2)
+	page := env.chatHistoryPage("sess", subscribed.NextBeforeSeq, 2)
+	after := time.Now()
+
+	for name, at := range map[string]time.Time{"subscribe": subscribed.ServerTime, "history": page.ServerTime} {
+		if at.Before(before) || at.After(after) {
+			t.Errorf("%s server_time = %v, want between %v and %v", name, at, before, after)
+		}
 	}
 }

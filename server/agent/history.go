@@ -79,6 +79,26 @@ type EventRecord struct {
 	// fields per event, for two fields that mean something on two event types.
 	AskedAt    *time.Time `json:"asked_at,omitempty"`
 	ResolvedAt *time.Time `json:"resolved_at,omitempty"`
+	// ObservedAt is when the Pockode server saw this record's event arrive —
+	// from the agent CLI, or for a permission_response from whoever answered —
+	// or, for one Pockode synthesized (an interrupt, a turn its lease ended),
+	// when it wrote it. It is Pockode's clock, not the CLI's: the CLI reports no
+	// start or end times, and a duration it does report stays in DurationMs. It
+	// exists so a client can measure a tool call from when it could start (its
+	// tool_call, or the permission_response that let it run) to the tool_result
+	// that settled it, and give a call replayed while still running a clock
+	// (see rpc.ChatMessagesSubscribeResult.ServerTime). On done, interrupted and
+	// process_ended it says when the turn or process ended, which is not when
+	// any call still open in it finished.
+	//
+	// Set on tool_call, tool_result, permission_response, done, interrupted and
+	// process_ended (see ObserveAt), and on none written before the field
+	// existed. Also absent where no honest moment exists: a background_lost
+	// result, and the process_ended a restarted server writes for a run nobody
+	// saw end. A record copied into a fork keeps its moment — it is when that
+	// event happened, which copying does not change. A pointer for the reason
+	// AskedAt is.
+	ObservedAt *time.Time `json:"observed_at,omitempty"`
 	// Answering are the posted questions a message record answers; see
 	// QuestionAnswer.
 	Answering []QuestionAnswer `json:"answering,omitempty"`

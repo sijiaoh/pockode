@@ -1171,6 +1171,12 @@ type ChatMessagesSubscribeResult struct {
 	// mid-run would otherwise have missed every one of them, which on a phone is
 	// the normal case. Absent when nothing is in flight.
 	ToolActivity map[string]string `json:"tool_activity,omitempty"`
+	// ServerTime is the server's clock as the reply was built, so a client can
+	// count a call still running in History from its observed_at (see
+	// agent.EventRecord.ObservedAt) without trusting its own clock to agree
+	// with the server's: elapsed is ServerTime minus observed_at, plus however
+	// long ago the client received this reply. The same rule as Turn's reading.
+	ServerTime time.Time `json:"server_time"`
 }
 
 // ChatMessagesHistoryParams asks for the page of history older than one the
@@ -1194,6 +1200,10 @@ type ChatMessagesHistoryResult struct {
 	History       []json.RawMessage  `json:"history"`
 	HasMore       bool               `json:"has_more"`
 	NextBeforeSeq session.HistorySeq `json:"next_before_seq,omitempty"`
+	// ServerTime follows ChatMessagesSubscribeResult.ServerTime: a call can
+	// still be running when its tool_call has fallen onto an older page — a
+	// long subagent run pushes it there.
+	ServerTime time.Time `json:"server_time"`
 }
 
 // Worktree namespace
@@ -2157,6 +2167,9 @@ type SessionViewHistoryResult struct {
 	History       []json.RawMessage  `json:"history"`
 	HasMore       bool               `json:"has_more"`
 	NextBeforeSeq session.HistorySeq `json:"next_before_seq,omitempty"`
+	// ServerTime follows ChatMessagesSubscribeResult.ServerTime: the viewed
+	// session may be running in its own worktree.
+	ServerTime time.Time `json:"server_time"`
 }
 
 // SessionViewAttachmentParams reads content a chat event references by id, out

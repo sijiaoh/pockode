@@ -325,6 +325,8 @@ type ToolCallEvent struct {
 	// came out of, when the agent puts ids on them. See
 	// EventRecord.ProviderMessageID.
 	ProviderMessageID string
+	// ObservedAt is when Pockode saw the call; see EventRecord.ObservedAt.
+	ObservedAt time.Time
 }
 
 func (ToolCallEvent) EventType() EventType { return EventTypeToolCall }
@@ -339,6 +341,7 @@ func (e ToolCallEvent) ToRecord() EventRecord {
 		OriginToolUseID:   e.OriginToolUseID,
 		ParentToolUseID:   e.ParentToolUseID,
 		ProviderMessageID: e.ProviderMessageID,
+		ObservedAt:        optionalTime(e.ObservedAt),
 	}
 }
 
@@ -374,8 +377,9 @@ type ToolResultEvent struct {
 	// the ToolResultBackground* constants. Empty for every ordinary result.
 	Subtype string
 	// DurationMs is how long the call took, when the agent CLI reports it as a
-	// figure. Zero when it does not (Claude reports none), which is why it is
-	// not inferred from arrival times: a replayed record has no honest one.
+	// figure. Zero when it does not — Claude reports one only for a few tools;
+	// see reportedDurationMs in the claude package — and never inferred from
+	// arrival times, which ObservedAt records as what they are.
 	DurationMs int64
 	// ExitCode is the process exit status of a command the agent ran, when the
 	// CLI reports it separately from the result text. Nil for every tool that is
@@ -402,6 +406,9 @@ type ToolResultEvent struct {
 	ProviderMessageID string
 	// HTMLPage is the page the call stored; see EventRecord.HTMLPage.
 	HTMLPage string
+	// ObservedAt is when Pockode saw the result; see EventRecord.ObservedAt.
+	// Never set on a ToolResultBackgroundLost result (see ObserveAt).
+	ObservedAt time.Time
 }
 
 func (ToolResultEvent) EventType() EventType { return EventTypeToolResult }
@@ -431,6 +438,7 @@ func (e ToolResultEvent) ToRecord() EventRecord {
 		ParentToolUseID:   e.ParentToolUseID,
 		ProviderMessageID: e.ProviderMessageID,
 		HTMLPage:          e.HTMLPage,
+		ObservedAt:        optionalTime(e.ObservedAt),
 	}
 }
 
@@ -637,22 +645,28 @@ func (e ErrorEvent) ToRecord() EventRecord {
 	return EventRecord{Type: e.EventType(), Error: e.Error, AuthFailure: e.AuthFailure, UsageLimit: e.UsageLimit}
 }
 
-type DoneEvent struct{}
+type DoneEvent struct {
+	// ObservedAt is when Pockode saw the turn end; see EventRecord.ObservedAt.
+	ObservedAt time.Time
+}
 
 func (DoneEvent) EventType() EventType { return EventTypeDone }
 func (DoneEvent) isAgentEvent()        {}
 
 func (e DoneEvent) ToRecord() EventRecord {
-	return EventRecord{Type: e.EventType()}
+	return EventRecord{Type: e.EventType(), ObservedAt: optionalTime(e.ObservedAt)}
 }
 
-type InterruptedEvent struct{}
+type InterruptedEvent struct {
+	// ObservedAt is when Pockode saw the turn stop; see EventRecord.ObservedAt.
+	ObservedAt time.Time
+}
 
 func (InterruptedEvent) EventType() EventType { return EventTypeInterrupted }
 func (InterruptedEvent) isAgentEvent()        {}
 
 func (e InterruptedEvent) ToRecord() EventRecord {
-	return EventRecord{Type: e.EventType()}
+	return EventRecord{Type: e.EventType(), ObservedAt: optionalTime(e.ObservedAt)}
 }
 
 type PermissionRequestEvent struct {
@@ -875,6 +889,43 @@ type QuestionResolver struct {
 // UserResolver is who a question answered in the chat was answered by.
 func UserResolver() QuestionResolver { return QuestionResolver{Kind: ResolverUser} }
 
+// ObserveAt stamps the events that carry EventRecord.ObservedAt with the moment
+// Pockode saw them, and returns every other event unchanged. It is called once
+// per event, where it enters a session — process.Process for everything an
+// agent sends, chat.Client for a permission answer — so the record that is
+// stored and the one that is broadcast carry the same moment, and no adapter
+// has to remember to do it.
+//
+// A ToolResultBackgroundLost result is left unstamped: it is written when the
+// next process starts, which can be any time after the work actually died, so
+// the moment Pockode wrote it says nothing about when the call ended.
+func ObserveAt(event AgentEvent, at time.Time) AgentEvent {
+	switch e := event.(type) {
+	case ToolCallEvent:
+		e.ObservedAt = at
+		return e
+	case ToolResultEvent:
+		if e.Subtype == ToolResultBackgroundLost {
+			return e
+		}
+		e.ObservedAt = at
+		return e
+	case DoneEvent:
+		e.ObservedAt = at
+		return e
+	case InterruptedEvent:
+		e.ObservedAt = at
+		return e
+	case ProcessEndedEvent:
+		e.ObservedAt = at
+		return e
+	case PermissionResponseEvent:
+		e.ObservedAt = at
+		return e
+	}
+	return event
+}
+
 // optionalTime is how a moment reaches an EventRecord: the zero time means the
 // event carried none, and an absent field is the honest way to record that.
 func optionalTime(at time.Time) *time.Time {
@@ -919,13 +970,18 @@ func (e BackgroundWaitEvent) ToRecord() EventRecord {
 	return EventRecord{Type: e.EventType()}
 }
 
-type ProcessEndedEvent struct{}
+type ProcessEndedEvent struct {
+	// ObservedAt is when Pockode saw the process end; see EventRecord.ObservedAt.
+	// The process_ended a restarted server writes for a run that died with the
+	// last one (session.FileStore) carries none: nobody saw that run end.
+	ObservedAt time.Time
+}
 
 func (ProcessEndedEvent) EventType() EventType { return EventTypeProcessEnded }
 func (ProcessEndedEvent) isAgentEvent()        {}
 
 func (e ProcessEndedEvent) ToRecord() EventRecord {
-	return EventRecord{Type: e.EventType()}
+	return EventRecord{Type: e.EventType(), ObservedAt: optionalTime(e.ObservedAt)}
 }
 
 // MessageOrigin distinguishes who produced a message event.
@@ -1135,6 +1191,9 @@ type PermissionResponseEvent struct {
 	By PermissionResponder
 	// Review is set whenever By is.
 	Review *PermissionReview
+	// ObservedAt is when the answer reached Pockode — the moment the call it
+	// lets run could start; see EventRecord.ObservedAt.
+	ObservedAt time.Time
 }
 
 func (PermissionResponseEvent) EventType() EventType { return EventTypePermissionResponse }
@@ -1142,11 +1201,12 @@ func (PermissionResponseEvent) isAgentEvent()        {}
 
 func (e PermissionResponseEvent) ToRecord() EventRecord {
 	return EventRecord{
-		Type:      e.EventType(),
-		RequestID: e.RequestID,
-		Choice:    e.Choice,
-		By:        e.By,
-		Review:    e.Review,
+		Type:       e.EventType(),
+		RequestID:  e.RequestID,
+		Choice:     e.Choice,
+		By:         e.By,
+		Review:     e.Review,
+		ObservedAt: optionalTime(e.ObservedAt),
 	}
 }
 

@@ -2,6 +2,7 @@ package ws
 
 import (
 	"context"
+	"time"
 
 	"github.com/pockode/server/rpc"
 	"github.com/pockode/server/session"
@@ -212,6 +213,7 @@ func (h *rpcMethodHandler) handleSessionViewHistory(ctx context.Context, conn *j
 		History:       page.Records,
 		HasMore:       page.HasMore,
 		NextBeforeSeq: page.NextBeforeSeq,
+		ServerTime:    time.Now(),
 	}
 	if err := conn.Reply(ctx, req.ID, result); err != nil {
 		h.log.Error("failed to send session view history response", "error", err)
