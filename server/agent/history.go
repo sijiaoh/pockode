@@ -134,6 +134,10 @@ type EventRecord struct {
 	// record carries DurationMs too, measured by the server; see ThinkingEvent.
 	DurationMs int64 `json:"duration_ms,omitempty"`
 	ExitCode   *int  `json:"exit_code,omitempty"`
+	// Subagent belongs to tool_result records of a subagent's call; see
+	// ToolResultEvent.Subagent. Absent on every record written before it
+	// existed.
+	Subagent *SubagentReport `json:"subagent,omitempty"`
 	// HTMLPage is the page a successful page tool call stored (package
 	// htmlpage), on that call's tool_result record and on no other. It is how
 	// a client knows which stored page a card is, and how a fork knows which
@@ -146,6 +150,9 @@ type EventRecord struct {
 	// serialized, for the wire as much as for history.
 	Activity    string `json:"activity,omitempty"`
 	OutputDelta string `json:"output_delta,omitempty"`
+	// SubagentProgress belongs to tool_activity records too; see
+	// ToolActivityEvent.Subagent.
+	SubagentProgress *SubagentProgress `json:"subagent_progress,omitempty"`
 	// FullReasoning and Redacted belong to thinking records; see ThinkingEvent.
 	// The thinking text itself is Content.
 	FullReasoning string `json:"full_reasoning,omitempty"`

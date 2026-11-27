@@ -23,6 +23,9 @@ type toolActivity struct {
 	activityMu sync.Mutex
 	// latest is the newest activity line, by tool_use_id.
 	latest map[string]string
+	// progress is the newest subagent progress, by tool_use_id; see
+	// agent.ToolActivityEvent.Subagent.
+	progress map[string]agent.SubagentProgress
 	// background are the calls whose own result was only a placeholder, which is
 	// what lets their entry survive that result.
 	background map[string]bool
@@ -35,15 +38,23 @@ func (t *toolActivity) observe(event agent.AgentEvent) {
 		// OutputDelta is deliberately not kept: it is an increment, and one
 		// chunk on its own is not the tail of anything. The whole output arrives
 		// with the result.
-		if e.ToolUseID == "" || e.Activity == "" {
+		if e.ToolUseID == "" || (e.Activity == "" && e.Subagent == nil) {
 			return
 		}
 		t.activityMu.Lock()
 		defer t.activityMu.Unlock()
-		if t.latest == nil {
-			t.latest = make(map[string]string)
+		if e.Activity != "" {
+			if t.latest == nil {
+				t.latest = make(map[string]string)
+			}
+			t.latest[e.ToolUseID] = e.Activity
 		}
-		t.latest[e.ToolUseID] = e.Activity
+		if e.Subagent != nil {
+			if t.progress == nil {
+				t.progress = make(map[string]agent.SubagentProgress)
+			}
+			t.progress[e.ToolUseID] = *e.Subagent
+		}
 
 	case agent.ToolResultEvent:
 		if e.ToolUseID == "" {
@@ -61,6 +72,7 @@ func (t *toolActivity) observe(event agent.AgentEvent) {
 			return
 		}
 		delete(t.latest, e.ToolUseID)
+		delete(t.progress, e.ToolUseID)
 		delete(t.background, e.ToolUseID)
 
 	case agent.DoneEvent, agent.InterruptedEvent, agent.ErrorEvent:
@@ -80,6 +92,11 @@ func (t *toolActivity) observe(event agent.AgentEvent) {
 				delete(t.latest, id)
 			}
 		}
+		for id := range t.progress {
+			if !t.background[id] {
+				delete(t.progress, id)
+			}
+		}
 	}
 }
 
@@ -95,6 +112,22 @@ func (t *toolActivity) snapshot() map[string]string {
 	out := make(map[string]string, len(t.latest))
 	for id, activity := range t.latest {
 		out[id] = activity
+	}
+	return out
+}
+
+// progressSnapshot returns the subagent progress of every call still in flight
+// that reported one, or nil when none did.
+func (t *toolActivity) progressSnapshot() map[string]agent.SubagentProgress {
+	t.activityMu.Lock()
+	defer t.activityMu.Unlock()
+
+	if len(t.progress) == 0 {
+		return nil
+	}
+	out := make(map[string]agent.SubagentProgress, len(t.progress))
+	for id, progress := range t.progress {
+		out[id] = progress
 	}
 	return out
 }

@@ -761,6 +761,17 @@ func (m *Manager) GetToolActivity(sessionID string) map[string]string {
 	return proc.toolActivity.snapshot()
 }
 
+// GetToolProgress returns how far each subagent still in flight last reported
+// having come, by its call's tool_use_id. Nil when no process exists or none
+// reported any.
+func (m *Manager) GetToolProgress(sessionID string) map[string]agent.SubagentProgress {
+	proc := m.GetProcess(sessionID)
+	if proc == nil {
+		return nil
+	}
+	return proc.toolActivity.progressSnapshot()
+}
+
 // ProcessCount returns the number of running processes.
 func (m *Manager) ProcessCount() int {
 	m.processesMu.Lock()
