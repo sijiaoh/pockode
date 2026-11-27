@@ -374,7 +374,10 @@ and, for a message carrying files, `attachments` — each file as its record
 describes it ([agent-integration.md](agent-integration.md#files-the-user-sends)).
 `chat.html_action`, a page's send ([tool-call-ui.md](../tool-call-ui.md#the-action-message)),
 answers the same result with `content` and `html_action` — the text the server
-wrote for the agent and the action as its record holds it.
+wrote for the agent and the action as its record holds it. Both carry
+`observed_at`, the record's moment, omitted exactly when `seq` is: the instant
+the reply this message opens began, which the sender needs to measure that
+reply ([tool-call-ui.md](../tool-call-ui.md#where-the-duration-comes-from)).
 It needs one because the sender is deliberately left out of the
 broadcast that carries every other record's `seq` (it has already echoed the
 message into its own transcript), so the reply is the only place that address —
