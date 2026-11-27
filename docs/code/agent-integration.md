@@ -2633,7 +2633,7 @@ doing, and how backgrounded work ended. Measured on claude 2.1.263:
 | `task_notification` | `task_id`, `tool_use_id`, `status` ∈ `completed`/`failed`/`stopped`, `output_file`, `summary`, `usage`, `resource_links` | the outcome, recorded only for a backgrounded call; a subagent's carries its final `usage` into the record's `subagent` |
 | `background_tasks_changed` | `tasks[]` of `{task_id, task_type, description, ambient}` | the live set, above |
 
-Five things about that table are not guessable from it, and the first two were
+Six things about that table are not guessable from it, and the first two were
 measured only after the design had assumed the opposite:
 
 - **`task_progress` carries no `summary` on 2.1.263**, though the schema
@@ -2652,6 +2652,24 @@ measured only after the design had assumed the opposite:
   it held.
 - **`task_updated` carries no `tool_use_id`**, only `task_id` — the whole reason
   the join map exists.
+- **A backgrounded subagent can complete more than once.** Measured on claude
+  2.1.330: a background subagent that backgrounded a command of its own and
+  ended its turn got a `completed` `task_notification` 5.9s in ("the command is
+  running in the background…"), and when the command finished the CLI woke it
+  under a *new* `task_started` for the same `tool_use_id`, whose notification 43s
+  in was the real report. Recorded as the outcome, the first settled the row
+  while the subagent was still at work, and the turn's end showed no agent
+  alive. So a subagent's `completed` notification is held while a backgrounded
+  task started from inside it is still live: the adapter keeps each call's
+  `parent_tool_use_id` until its result (`noteCall`), so a task knows whose work
+  it is. The call stays owed an outcome — a process dying in between reports it
+  lost, like any other backgrounded call — and the resumed task inherits the
+  agent id the placeholder named. Nothing is dropped by holding it: what the
+  notification says is the subagent's last text, already in the transcript.
+  A Stop is the one way out that wakes nothing: it stops live background tasks,
+  and a held subagent's own task has already ended, so when its last
+  background child ends `stopped` the subagent is recorded as stopped with it
+  (`releaseStopped`) rather than drawn running until the process goes away.
 - **`tool_use_id` is optional on the edges too.** A task with none is a task no
   tool call asked for (scheduled and housekeeping work) and has no row to belong
   to, so the frame is dropped rather than rendered loose: a progress line that

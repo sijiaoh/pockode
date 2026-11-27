@@ -15,7 +15,13 @@ import (
 // streamOutput does for one CLI process.
 func parseTestTurns(t *testing.T, lines ...string) []agent.AgentEvent {
 	t.Helper()
-	backgroundTasks := &backgroundTaskTracker{}
+	return parseTestTurnsWithTracker(t, &backgroundTaskTracker{}, lines...)
+}
+
+// parseTestTurnsWithTracker is parseTestTurns over a tracker the test reads
+// afterwards.
+func parseTestTurnsWithTracker(t *testing.T, backgroundTasks *backgroundTaskTracker, lines ...string) []agent.AgentEvent {
+	t.Helper()
 	authFailures := &authFailureTracker{}
 	callNames := &toolCallNames{}
 	var events []agent.AgentEvent
