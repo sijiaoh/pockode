@@ -1035,14 +1035,69 @@ describe("ToolCallItem", () => {
 		});
 	});
 
+	// docs/tool-call-ui.md#elapsed-and-duration-meta
+	describe("figures Pockode observed", () => {
+		const T0 = Date.parse("2026-11-27T09:00:00Z");
+
+		it("shows how long a settled call took between its observed times", () => {
+			draw({
+				status: "success",
+				result: "",
+				startedAt: T0,
+				endedAt: T0 + 3000,
+			});
+			expect(screen.getByText("3.0s")).toBeVisible();
+		});
+
+		it("prefers the engine's figure to the observed one", () => {
+			draw({
+				status: "success",
+				result: "",
+				durationMs: 1200,
+				startedAt: T0,
+				endedAt: T0 + 3000,
+			});
+			expect(screen.getByText("1.2s")).toBeVisible();
+			expect(screen.queryByText("3.0s")).toBeNull();
+		});
+
+		it("shows none under a second", () => {
+			draw({
+				status: "success",
+				result: "ok",
+				startedAt: T0,
+				endedAt: T0 + 400,
+			});
+			expect(screen.queryByText(/\ds/)).not.toBeInTheDocument();
+		});
+
+		// The interrupt is when Pockode gave up, not when the call ended.
+		it("shows none on an interrupted call that never returned", () => {
+			draw({ status: "interrupted", startedAt: T0 });
+			expect(screen.queryByText(/\ds/)).not.toBeInTheDocument();
+		});
+
+		// Counted by its start, so a row replayed four minutes into a run does
+		// not sit blank for three seconds and then start again from 3s.
+		it("counts a live call from its start, not from when it was drawn", () => {
+			draw({ status: "running", seenAt: new Date(Date.now() - 240_000) });
+			expect(screen.getByText("4m 0s")).toBeVisible();
+		});
+
+		it("draws no counter for a live call it cannot place on this clock", () => {
+			draw({ status: "running", startedAt: T0 });
+			expect(screen.queryByText(/\ds/)).not.toBeInTheDocument();
+		});
+	});
+
 	describe("figures an engine reported", () => {
 		it("shows a duration the engine measured", () => {
 			draw({ status: "success", result: "", durationMs: 252_000 });
 			expect(screen.getByText("4m 12s")).toBeVisible();
 		});
 
-		// Claude reports none, and inventing one from arrival times would be
-		// wrong on every replay.
+		// Most Claude calls report none and old records carry no observed
+		// times; inventing one from arrival times would be wrong on every replay.
 		it("shows none when the engine reported none", () => {
 			draw({ status: "success", result: "ok" });
 			expect(screen.queryByText(/\ds/)).not.toBeInTheDocument();

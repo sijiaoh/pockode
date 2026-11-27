@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/pockode/server/agent"
@@ -354,10 +355,10 @@ func (c *Client) SendPermissionResponse(ctx context.Context, sessionID string, d
 	}
 
 	// Persist response to history
-	event := agent.PermissionResponseEvent{
+	event := agent.ObserveAt(agent.PermissionResponseEvent{
 		RequestID: data.RequestID,
 		Choice:    choiceToString(choice),
-	}
+	}, time.Now())
 	if _, err := c.store.AppendToHistory(ctx, sessionID, agent.NewEventRecord(event)); err != nil {
 		slog.Error("failed to persist permission response", "sessionId", sessionID, "error", err)
 	}
@@ -426,12 +427,12 @@ func (c *Client) answerForReview(ctx context.Context, proc *process.Process, dat
 		return err
 	}
 
-	record := agent.NewEventRecord(agent.PermissionResponseEvent{
+	record := agent.NewEventRecord(agent.ObserveAt(agent.PermissionResponseEvent{
 		RequestID: data.RequestID,
 		Choice:    choiceToString(choice),
 		By:        by,
 		Review:    &review,
-	})
+	}, time.Now()))
 	seq, err := c.store.AppendToHistory(ctx, sessionID, record)
 	if err != nil {
 		slog.Error("failed to persist permission response", "sessionId", sessionID, "by", by, "error", err)

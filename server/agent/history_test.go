@@ -1,7 +1,10 @@
 package agent
 
 import (
+	"encoding/json"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/pockode/server/session"
 )
@@ -15,5 +18,62 @@ func TestProcessEndedRecordTypeMatchesTheSessionStores(t *testing.T) {
 	if string(EventTypeProcessEnded) != session.HistoryTypeProcessEnded {
 		t.Fatalf("agent writes %q, the session store writes %q",
 			EventTypeProcessEnded, session.HistoryTypeProcessEnded)
+	}
+}
+
+// The stamp is what lets a client measure a call: the records that start
+// or end one carry the moment, and nothing else pays for a field it has no use
+// for. A background_lost result is written whenever the next process starts,
+// so a moment on it would measure the restart, not the call.
+func TestObserveAt(t *testing.T) {
+	at := time.Date(2026, 11, 27, 10, 0, 0, 0, time.UTC)
+
+	stamped := []AgentEvent{
+		ToolCallEvent{ToolUseID: "call-1"},
+		ToolResultEvent{ToolUseID: "call-1"},
+		ToolResultEvent{ToolUseID: "call-1", Subtype: ToolResultBackgroundResult},
+		DoneEvent{},
+		InterruptedEvent{},
+		ProcessEndedEvent{},
+		PermissionResponseEvent{RequestID: "req-1", Choice: "allow"},
+	}
+	for _, event := range stamped {
+		rec := NewEventRecord(ObserveAt(event, at))
+		if rec.ObservedAt == nil || !rec.ObservedAt.Equal(at) {
+			t.Errorf("%s %q: observed_at = %v, want %v", rec.Type, rec.Subtype, rec.ObservedAt, at)
+		}
+	}
+
+	unstamped := []AgentEvent{
+		TextEvent{Content: "hi"},
+		ToolResultEvent{ToolUseID: "call-1", Subtype: ToolResultBackgroundLost},
+		WarningEvent{Message: "careful"},
+	}
+	for _, event := range unstamped {
+		raw := string(recordJSON(t, ObserveAt(event, at)))
+		if strings.Contains(raw, "observed_at") {
+			t.Errorf("record carries observed_at: %s", raw)
+		}
+	}
+}
+
+// Every record written before the field existed has none, and has to read back
+// and go out again exactly as it was stored.
+func TestEventRecord_WithoutObservedAtRoundTrips(t *testing.T) {
+	old := `{"type":"tool_call","tool_name":"Bash","tool_input":{"command":"ls"},"tool_use_id":"call-1"}`
+
+	var rec EventRecord
+	if err := json.Unmarshal([]byte(old), &rec); err != nil {
+		t.Fatal(err)
+	}
+	if rec.ObservedAt != nil {
+		t.Fatalf("observed_at = %v, want none", rec.ObservedAt)
+	}
+	again, err := json.Marshal(rec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(again) != old {
+		t.Fatalf("re-encoded as %s, want %s", again, old)
 	}
 }

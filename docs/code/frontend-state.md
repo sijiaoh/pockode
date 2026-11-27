@@ -1127,13 +1127,50 @@ and on a phone that is the normal case. `chat.messages.subscribe` therefore
 returns the newest activity per call still in flight, which is applied over the
 replayed transcript ([agent-chat.md](../agent-chat.md)).
 
-`seenAt` is live-only too, and exists for the same reason in reverse:
-a history record carries no timestamp, so the only clock a client has is when it
-received something. That is right for a call it watched start and meaningless
-for one it replayed, so the reducer stamps it only for events that arrived live,
-and an elapsed counter is drawn only where it is set. A duration that *replays*
-is a different thing entirely: it is `durationMs`, reported as data by Codex and
-not at all by Claude, and it is never inferred from arrival times.
+#### Times on a run
+
+A run's times are not live state: `startedAt` and `endedAt` are copied from the
+records' `observed_at`, so a replayed run has them exactly as a live one does
+([tool-call-model.md](../tool-call-model.md#observed-times-and-reported-durations)
+defines which records they come from, and why the turn's ending never counts).
+The one time that *is* about this client is `seenAt`, the start on its own
+clock, which is all a ticking counter can subtract from `Date.now()`. How an
+event reached the client decides it, so it travels beside the event rather than
+in it (`ApplyOptions`):
+
+- **`live`** — the start is the moment it arrived, `new Date()`.
+- **`clock`** — a replayed event, with the `server_time` its page came with and
+  when that page arrived (`ServerClockReading`, built by `readServerClock`).
+  The start is carried over as `receivedAt − (serverTime − startedAt)`: an
+  interval on the server's clock added to a moment on this one, so the two
+  clocks never have to agree — the turn clock's rule
+  ([turn-progress-ui.md §2.3](../turn-progress-ui.md#23-what-it-says)).
+- **neither** — no `seenAt`, and no counter: a page from a server that
+  predates `server_time`, say. A missing counter is the honest failure;
+  subtracting a server time from the phone's clock would show drift as work.
+
+`receivedAt` is when the page *arrived*, not when it was put on screen, and the
+difference is real for a viewed session: its `session_view.history` page sits in
+react-query's cache, so `useViewedSession` hands over the query's
+`dataUpdatedAt` as `pageReceivedAt` and `useChatMessages` installs the page
+against that, not against `Date.now()`; otherwise a cached page's counters would
+come up short by the cache's age.
+
+A call that waited on a permission card starts at the answer, and the answer's
+record may be applied after the card already shows it — a press sets the status
+optimistically. So the time is stamped onto the card by its own step
+(`stampPermissionAnswer`, `answeredAt` / `answerSeenAt`), independent of the
+status, and a row rebuilt under that card takes its start from there; the first
+answer's time stands, as its status does. An answer whose card is on an older
+page comes back as a back-reference when that page is loaded, and is placed
+through *that* page's reading (`HistoryPageCatchUp.clock`): any reading from the
+server carries any of its times over, so the page the record came from does not
+matter.
+
+The duration a row shows is `toolRunDurationMs` (`web/src/lib/toolRun.ts`), not
+a field: the engine's `durationMs` and the observed `endedAt − startedAt` are
+kept apart in the run, and the precedence lives in one function so the row, the
+subagent row and any later summary read it the same way.
 
 ### Why Pure Function Instead of Store
 

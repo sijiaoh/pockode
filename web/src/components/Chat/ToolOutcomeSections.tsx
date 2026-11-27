@@ -10,9 +10,9 @@ import { Section, type SectionFullScreen } from "./ToolSection";
  *
  * A count once there is more than one, and otherwise the one fetch's own
  * degenerate state — a fetch that failed or came back empty has no body worth
- * reading, so the heading is where that is said. No time in it: a history
- * record carries no timestamp, so "latest" is the only ordering anything here
- * can honestly claim.
+ * reading, so the heading is where that is said. No time in it: a fetch keeps
+ * no observed time, and older records have none, so "latest" is the only
+ * ordering anything here can honestly claim.
  */
 function fetchedLabel(fetched: FetchedOutput[]): string {
 	if (fetched.length > 1) return `Fetched output · ${fetched.length} fetches`;

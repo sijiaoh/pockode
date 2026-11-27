@@ -24,6 +24,7 @@ import {
 	openAssistantIndex,
 	prependHistoryPage,
 	readHistorySeq,
+	readServerClock,
 	replayHistory,
 	resetPromptRequest,
 	settleAgainstTurn,
@@ -570,8 +571,8 @@ export function useChatMessages({
 				}
 				return;
 			}
-			// Live, so a call this client watched start may draw a stopwatch — a
-			// replayed one has no honest clock to draw from.
+			// Live, so a call this client watched start counts from when it did;
+			// a replayed one counts against its page's server clock reading.
 			setMessages((prev) => applyServerEvent(prev, event, seq, { live: true }));
 		},
 		[flushActivity, flushThinking, endThinking],
@@ -625,8 +626,10 @@ export function useChatMessages({
 		[sessionId],
 	);
 
-	const handleSubscribed = useCallback(
-		(initial: ChatMessagesSubscribeResult) => {
+	// `receivedAt` is when the page reached this client, which its clock reading
+	// is taken against: a page installed from a cache arrived before now.
+	const installNewestPage = useCallback(
+		(initial: ChatMessagesSubscribeResult, receivedAt: number) => {
 			// Subscribing hands back the newest page only, and a re-subscribe
 			// hands it back again: pages paged in before a reconnect are gone, so
 			// the paging state starts over with them.
@@ -653,7 +656,10 @@ export function useChatMessages({
 			// starts it over as joined late.
 			pendingActivityRef.current.clear();
 			endThinking();
-			const replayed = replayHistory(initial.history);
+			const replayed = replayHistory(
+				initial.history,
+				readServerClock(initial, receivedAt),
+			);
 			// The turn is the authority the records are missing: a transcript the
 			// server died in the middle of ends with a bubble still streaming and
 			// nothing in history that says otherwise. Older pages get the part of
@@ -671,6 +677,12 @@ export function useChatMessages({
 			setIsLoadingHistory(false);
 		},
 		[endThinking],
+	);
+
+	const handleSubscribed = useCallback(
+		(initial: ChatMessagesSubscribeResult) =>
+			installNewestPage(initial, Date.now()),
+		[installNewestPage],
 	);
 
 	const handleSubscribeError = useCallback((err: unknown) => {
@@ -710,14 +722,17 @@ export function useChatMessages({
 		// loading its history.
 		if (!viewedSession.isSettled) return;
 		if (viewedSession.page) {
-			handleSubscribed({ ...viewedSession.page, turn: IDLE_TURN });
+			installNewestPage(
+				{ ...viewedSession.page, turn: IDLE_TURN },
+				viewedSession.pageReceivedAt,
+			);
 			return;
 		}
 		// The read answered without a page. The wait is over either way — leaving
 		// the spinner up would promise a transcript that is not coming; the reason
 		// reaches the screen through `viewedSession` itself.
 		setIsLoadingHistory(false);
-	}, [viewedSession, handleSubscribed]);
+	}, [viewedSession, installNewestPage]);
 
 	const loadMoreHistory = useCallback(async () => {
 		const beforeSeq = nextBeforeSeqRef.current;
@@ -733,7 +748,8 @@ export function useChatMessages({
 				: await chatMessagesHistory(sessionId, beforeSeq);
 			if (historyGenerationRef.current !== generation) return;
 
-			const older = replayHistory(page.history);
+			const clock = readServerClock(page);
+			const older = replayHistory(page.history, clock);
 			// Read now, not inside the updater: React calls that during a later
 			// render, by which point these refs have moved on to describe this page
 			// instead of the one above it.
@@ -741,6 +757,7 @@ export function useChatMessages({
 				boundaryTerminal: boundaryTerminalRef.current,
 				backReferences: backReferencesRef.current,
 				turn: subscribedTurnRef.current,
+				clock,
 			};
 			setMessages((prev) => prependHistoryPage(older, prev, catchUp));
 			boundaryTerminalRef.current = leadingTurnTerminal(page.history);

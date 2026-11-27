@@ -55,7 +55,7 @@ func parseTestLineFull(log *slog.Logger, line []byte, pendingRequests *sync.Map,
 	if err := json.Unmarshal(line, &event); err != nil {
 		return []agent.AgentEvent{agent.TextEvent{Content: string(line)}}
 	}
-	return parseLine(log, line, event, pendingRequests, backgroundTasks, &authFailureTracker{}, refusals, attachments.Store{})
+	return parseLine(log, line, event, pendingRequests, backgroundTasks, &toolCallNames{}, &authFailureTracker{}, refusals, attachments.Store{})
 }
 
 // observeLine decodes a raw line and forwards it to observe (test helper).

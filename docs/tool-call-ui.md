@@ -4,7 +4,7 @@ How a tool call is drawn, on a phone first.
 [tool-call-model.md](tool-call-model.md) decides what a tool run **is**; this one
 decides how one looks and behaves. Read it first — every field named here
 (`status`, `activity`, `output`, `placeholderResult`, `fromBackground`,
-`lostWithProcess`, `fetches`, `durationMs`, `exitCode`, `seenAt`, and a subagent
+`lostWithProcess`, `fetches`, `durationMs`, `exitCode`, `startedAt`, `endedAt`, `seenAt`, and a subagent
 run's children) is its `ToolRun`, and nothing below asks for data it does not
 define.
 
@@ -1013,11 +1013,12 @@ Outcome  ·  after the turn
 
 The middle block is the next section; the order of the three is **a reading
 order, not a clock**, and it is fixed — what the agent was handed, then what was
-fetched of the work, then how it ended. Nothing could make it a clock even if
-that were wanted: a history record carries no timestamp at all
-([tool-call-model.md](tool-call-model.md#toolrun)), so any heading claiming a
-time would be inventing one. It is also the true order in all but the contrived
-case of a fetch made after the notification arrived.
+fetched of the work, then how it ended. It is not made a clock: only the
+records that bound a call carry an observed time
+([tool-call-model.md](tool-call-model.md#observed-times-and-reported-durations)),
+a `ToolFetch` keeps none, and every record from before the stamps has none, so a
+heading claiming a time would be inventing one. It is also the true order in
+all but the contrived case of a fetch made after the notification arrived.
 
 **The three blocks are one component**, `ToolOutcomeSections.tsx`, used by both
 `ToolCallItem` and `TaskItem` — the same reason `ToolRow` and `toolSummary` are
@@ -1189,21 +1190,149 @@ a fetch is one record that the CLI has already cut to its own limit.
 
 ## Elapsed and duration (meta)
 
-Right-aligned, `shrink-0`, `text-th-text-muted`, after the detail.
+Right-aligned, `shrink-0`, `text-th-text-muted`, after the detail — on a tool
+row, a subagent row (the `1m 12s` in [the subagent body](#the-subagent-body))
+and a running group's summary alike, because all three draw `ToolMeta`. One
+slot, one figure: a finished run's duration, or a live run's elapsed counter.
 
-- **Finished run:** `run.durationMs`, when the engine reported one. Codex does,
-  Claude does not — so this appears on codex rows and not on claude ones, and
-  that asymmetry is honest: the number is data, and inventing it from arrival
-  times would be wrong on replay. Hidden under 1s; a `Read` that took 40ms does
-  not need a number.
-- **Live run:** a counter from `run.seenAt`, and **only when `seenAt` is set** —
-  it is live-only by construction, so a year-old transcript draws no stopwatches
-  ([tool-call-model.md](tool-call-model.md#toolrun)). It appears once the run has
-  been live 3s, so ordinary fast calls never flash a number, and ticks at 1s
-  under a minute, then at 1 minute.
-- Format: `1.2s`, `47s`, `4m 12s`, `1h 12m`. One unit below a minute, two above.
-- It is its own component with its own interval, so a ticking counter re-renders
-  the counter and not the row. At most a handful of runs are live at once.
+### Where a figure comes from
+
+**A number is shown only when it was measured**, and there are two
+measurements, tried in this order:
+
+1. **What the engine reported.** Codex's `durationMs` on a command or an MCP
+   call, and Claude's for a subagent, `WebFetch` and `WebSearch`, and for
+   backgrounded work's outcome
+   ([agent-integration.md](code/agent-integration.md#eventrecord-unified-event-format)). It wins
+   whenever it exists: it is the engine timing its own work, and it leaves out
+   whatever happened around the call.
+2. **What Pockode observed.** The server stamps the moment it saw each record
+   come off the CLI (`observed_at`); the run's duration is `endedAt −
+   startedAt`
+   ([tool-call-model.md](tool-call-model.md#observed-times-and-reported-durations)
+   defines both). Both ends
+   are the server's clock, so the figure is the same live, on reload and a
+   year later, and the phone's clock never enters it.
+
+There is no third. A run with neither gets no figure — every record written
+before the timestamps existed, and every codex call that reported none and
+predates them. Nothing is ever estimated from when the *client* received a
+record.
+
+**Which moments count** is the model's definition of `startedAt` and `endedAt`
+([tool-call-model.md](tool-call-model.md#observed-times-and-reported-durations)):
+from the call, or from the permission answer that let it run, to the result that
+settles it — for a [backgrounded](#when-a-background-run-finishes) call the
+outcome, never the placeholder, which only says the call went to the background.
+
+The permission rule is what keeps the number about the tool: Claude sends the
+call before it asks, so a `ls` the user took two minutes to approve would
+otherwise read `2m 3s`. The wait is the user's time, already on the card. An
+answer from the permission reviewer counts the same as the user's. A call that
+waited on a card whose answer carries no observed time has no observed start,
+and so no observed figure: one that counts the wait would be wrong by exactly
+the part the reader cannot see.
+
+**The two are not told apart on screen.** Both measure the same span, from
+the call to its result; the observed one also takes in the CLI's own handling on
+either side of it — reading the call, writing the result line — which is not a
+difference a reader would act on. A mark beside one source would ask them to
+weigh it anyway, and on a phone a tooltip explaining it could not be opened. The distinction is kept in
+the model — the engine's figure and the observed times are separate fields,
+and the precedence above is the reducer's, not the row's — so a later feature
+that needs to know can, and nobody reading the record mistakes Pockode's
+reading for the CLI's report.
+
+### Finished run
+
+- Shown on any settled run that has an end to measure to — `success` and
+  `error` alike: a call that failed still took that long.
+- **An `interrupted` run normally has none.** Its end is not a result but the
+  turn's or the process's: the `interrupted`, `done` and `process_ended`
+  records, and a `background_lost`, say when Pockode *gave up* on the call, not
+  when it ended, so they are never a run's end. A number there would read as how
+  long it took to do something it never did. The exception is a result that
+  outlived the interrupt: the run stays `interrupted`, but the call did finish,
+  and its duration — reported or observed — is shown as on any other row. That
+  is what a codex row already does with its `durationMs`.
+- Hidden under 1s; a `Read` that took 40ms does not need a number. Most Claude
+  rows will therefore still have none — the change shows on the calls that took
+  long enough to wonder about.
+- Format: `formatDuration` — `1.2s`, `47s`, `4m 12s`, `1h 12m`.
+
+### Live run
+
+A counter of how long the run has been going, on `running` and `background`
+alike (a backgrounded call has not finished; its counter keeps going until its
+outcome arrives and the duration takes its place).
+
+- **It counts from the same start as the finished figure**, so the counter and
+  the duration that replaces it agree — and a call rebuilt under its answered
+  permission card now gets a clock from the answer, where it had none.
+- **It does not depend on the phone's clock agreeing with the server's**, the
+  same rule as the turn clock
+  ([turn-progress-ui.md §2.3](turn-progress-ui.md#23-what-it-says)). A start the client saw
+  arrive live is counted from when it arrived (`seenAt`), which is that moment
+  on the client's own clock. A start known only from history is a server time;
+  it is counted from the server's clock reading sent with that history, and the
+  client counts on from when it received the reading. Without a reading, a
+  replayed running row has no counter, as today — subtracting a server time from
+  the phone's clock would show minutes of drift as minutes of work.
+- So a reload, a reconnect and a second device all show the clock the first
+  screen would have shown. A running subagent row replayed after a reload is
+  the case this was missing most: it is the row most likely to be running long
+  enough to reload over.
+- It appears once the run has been going 3s — by its start, not by when this
+  screen drew it, so a row replayed four minutes into a run shows `4m 0s` at
+  once rather than nothing for three seconds.
+- It ticks at 1s under a minute, then at 1 minute; format `formatElapsed` —
+  whole seconds below a minute (`12s`), then `formatDuration`'s two units.
+- It is its own component with its own interval, so a ticking counter
+  re-renders the counter and not the row. At most a handful of runs are live at
+  once.
+- Whether a run is live is still its status, never its clock. A run left
+  `running` by a turn that ended is settled to `interrupted` by the reducer
+  (and a dangling turn by [lifecycle-ui.md
+  §2.4](lifecycle-ui.md#24-recovering-a-dangling-turn-after-a-restart)), so a
+  year-old transcript still draws no stopwatches. A background task that
+  really is still going after a day reads `26h 4m`: that is true, and the row
+  is the place it should be noticed.
+
+### Subagent rows and the rows inside them
+
+A subagent row's figure is its call's, by the rules above: from the `Task` /
+`Agent` call to its result, or to its outcome when it ran in the background — how
+long the subagent worked, not how long the main agent waited for a placeholder.
+A duration the CLI reports for the subagent wins, as everywhere. Its second line
+(`12 steps`, or the latest child) is unchanged; the figure stays on line 1.
+
+The rows in its Process follow the same rules with no exception: their records
+are observed as the subagent's lines arrive. Where a subagent's frames reach the
+stream only in one burst at the end, a child's call and result are observed
+together, and its duration falls under the 1s floor and is not drawn — which is
+the right outcome for a figure that would otherwise be a fraction of the truth.
+
+A settled group's summary shows no total. Only a running group draws a figure,
+its current call's counter, as before; a sum of its calls' durations is the
+turn-level summary's concern, not this one.
+
+### Edge cases
+
+| Case | Figure |
+|---|---|
+| engine reported a duration | that, on a finished run |
+| finished, both ends observed, ≥ 1s | the observed duration |
+| finished in under 1s, either source | none |
+| either end not observed (records from before the timestamps) | none — drawn exactly as today |
+| waited on a permission card | from the answer, not from the call |
+| waited on a permission card whose answer has no observed time | none, unless the engine reported one |
+| interrupted, or its background work was lost with the process | none |
+| interrupted, but its result arrived afterwards | that result's duration |
+| live, start seen arriving on this screen | counter from `seenAt` |
+| live, start known only from history, server clock reading present | counter from the observed start, on the server's clock |
+| live, start known only from history, no reading | none |
+| backgrounded, outcome not in yet | counter, still going |
+| backgrounded, outcome in | duration from the call to the outcome |
 
 Codex's `exitCode` belongs in the **body**, not here: it is only interesting when
 it is non-zero, and then the glyph has already said so.
@@ -3551,11 +3680,14 @@ the virtualizer measures it.
 2. A `Read` of a deeply nested file: the file name is still visible; the
    directories are what disappeared.
 3. A backgrounded call, live: spinner + chip + activity line, elapsed counter
-   after 3s. Reload the page mid-run: spinner + chip, no activity line, no
-   stopwatch, and nothing claiming it succeeded.
+   after 3s. Reload the page mid-run: spinner + chip, no activity line, the
+   counter at the reading it had before the reload (not restarted from 0s, and
+   not off by the phone's clock), and nothing claiming it succeeded.
 4. The same call after `task_notification`: glyph settles, chip stays, the
    second line becomes the outcome **without the row changing height**, and the
-   body shows both the placeholder and the outcome under their own labels.
+   body shows both the placeholder and the outcome under their own labels. The
+   counter becomes the call's duration, from the call to the outcome — not the
+   second or so the placeholder took. The same on reload.
    Scroll far away from it first — that is the case this rule exists for. The
    log it wrote is a reference line inside that body — full path, `Not fetched`,
    no card above the body — with an Open only when the path is under the work
@@ -3568,11 +3700,15 @@ the virtualizer measures it.
    rest. A backgrounded `Bash` that finished reads `Completed (exit code 0)`
    (or its failure) under the command, not `Background command "…"`.
 6. A codex `commandExecution`: detail derived from `commandActions` when there is
-   one, `durationMs` on the right, `exitCode` in the body.
+   one, `durationMs` on the right, `exitCode` in the body. A claude `Bash`
+   running `sleep 3` shows about `3.0s` on the right once settled, and the same
+   after a reload; a subagent row shows how long it ran; a transcript written
+   before `observed_at` existed shows no figure on any claude row.
 7. An approved `Bash`: **one** row, not two — the card takes the pending row's
    place and the engine's next report gives it back, and while the card is
    pending nothing around it is spinning. Check both orders: Claude announces the
-   call first, Codex may ask first.
+   call first, Codex may ask first. Wait a minute before approving a
+   `sleep 5`: its counter and its settled duration read about `5s`, not `1m 5s`.
 8. An MCP tool returning one long line of JSON, on a phone: readable without
    dragging sideways. That is what the bare `<pre>` fallback used to do.
 9. A `TaskOutput` against a live backgrounded `Bash`: **no new row anywhere** in

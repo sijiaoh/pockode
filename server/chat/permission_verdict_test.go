@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/pockode/server/agent"
 	"github.com/pockode/server/process"
@@ -247,5 +248,44 @@ func TestClient_ReviewAnswerRefusedForAReplacedProcess(t *testing.T) {
 	}
 	if got := sess.sentAnswers(); len(got) != 0 {
 		t.Errorf("answers handed to the agent = %+v, want none", got)
+	}
+}
+
+// A call that waited on a card could only start once it was answered, so the
+// answer is where its measured duration begins (agent.EventRecord.ObservedAt):
+// whoever answered, the record says when.
+func TestClient_PermissionResponseRecordsWhenItWasAnswered(t *testing.T) {
+	data := agent.PermissionRequestData{RequestID: "req-1"}
+	review := agent.PermissionReview{SessionID: "reviewer-1"}
+	answers := map[string]func(*midTurnFixture) error{
+		"person": func(f *midTurnFixture) error {
+			return f.client.SendPermissionResponse(context.Background(), "sess", data, agent.PermissionAllow)
+		},
+		"reviewer": func(f *midTurnFixture) error {
+			return f.client.SendPermissionVerdict(context.Background(), f.pm.GetProcess("sess"), data, true, review)
+		},
+	}
+
+	for name, answer := range answers {
+		t.Run(name, func(t *testing.T) {
+			f := newMidTurnFixture(t)
+			sess := f.startTurn(t)
+			f.raisePermission(t, sess, "req-1")
+
+			before := time.Now()
+			if err := answer(f); err != nil {
+				t.Fatalf("answer: %v", err)
+			}
+			after := time.Now()
+
+			responses := f.permissionResponses(t)
+			if len(responses) != 1 {
+				t.Fatalf("permission_response records = %d, want 1", len(responses))
+			}
+			at := responses[0].ObservedAt
+			if at == nil || at.Before(before) || at.After(after) {
+				t.Errorf("observed_at = %v, want between %v and %v", at, before, after)
+			}
+		})
 	}
 }

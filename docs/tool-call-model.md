@@ -44,8 +44,9 @@ art. Four of its decisions are taken here:
 - **State is a field on the call, not something the renderer infers.** The
   reducer is the only author; the view switches on it and guesses nothing.
 - **Timestamps are on the call**, which is what lets a running row show elapsed
-  seconds — the cheapest possible "this is still going" signal. Pockode can only
-  take half of this; see `seenAt` below.
+  seconds — the cheapest possible "this is still going" signal — and a finished
+  one how long it took. Pockode's are the server's, not the client's; see
+  [observed times](#observed-times-and-reported-durations) below.
 - **A title and a detail are two different fields.** One names the kind of call,
   the other identifies this particular one, and only the second truncates.
 - **Long content is solved by navigation, not by layout.** Pockode's answer is a
@@ -79,7 +80,7 @@ of it that already shipped.
 | Input | `tool_use.input`, verbatim | rebuilt per item type (`toolCallOf`) |
 | Result | `tool_result` block on a `user` message | `item/completed` |
 | Failure | `tool_result.is_error` | item `status` ∈ `inProgress`/`completed`/`failed`/`declined` |
-| Duration | — | `durationMs` on `commandExecution`, `mcpToolCall`, `dynamicToolCall` |
+| Duration | for a subagent, `WebFetch` and `WebSearch` only, in the frame's `tool_use_result` | `durationMs` on `commandExecution`, `mcpToolCall`, `dynamicToolCall` |
 | Exit code | in the result text | `exitCode` on `commandExecution` |
 | Parsed intent | — | `commandActions[]`: `read` / `listFiles` / `search` / `unknown`, each with the sub-command and its path or query |
 
@@ -93,8 +94,9 @@ running" holds on either. What is asymmetric is everything around that:
   getting one back.
 - **Codex reports the outcome as data, Claude as prose.** A codex
   `commandExecution` carries a status, an exit code and a duration; Claude has
-  only the flag and the text, so the flag is the one thing both engines can
-  always fill.
+  only the flag and the text (and a duration for a handful of tools, a
+  subagent among them), so the flag is the one thing both engines can always
+  fill.
 - **Codex has `declined`**, a first-class "the user refused" status; Claude
   expresses the same thing as ordinary result text.
 
@@ -212,10 +214,14 @@ interface ToolRun {
     lostWithProcess?: boolean
     /** What later calls fetched of this call's task, oldest first. Replay-safe. */
     fetches?: ToolFetch[]
-    /** How long the call took, when the engine says so. Replay-safe; Claude sends none. */
+    /** How long the call took, when the engine says so. Replay-safe; only ever the engine's. */
     durationMs?: number
     exitCode?: number
-    /** When this client first saw the call. Live only — see below. */
+    /** When the call started running, on the server's clock. Replay-safe — see below. */
+    startedAt?: number
+    /** When the result that settled it was observed, on the server's clock. Replay-safe. */
+    endedAt?: number
+    /** The same start on this client's clock, for a live counter — see below. */
     seenAt?: Date
     /** A subagent call's own text and calls, in arrival order. Replay-safe. */
     children?: ContentPart[]
@@ -255,20 +261,49 @@ each with a reason:
   result text saying the user refused, and Pockode renders the refusal on the
   permission card that caused it. A rung nothing renders differently is a rung
   that only has to be kept in sync.
-- **No `startedAt` / `endedAt`.** happy has them, and Pockode cannot copy that: a
-  history record carries no timestamp at all (`AppendToHistory` writes the record
-  and nothing else), so the only clock a client has is when it received
-  something. That is right for a call it is watching and meaningless for one it
-  replayed — every run in a year-old transcript would start its stopwatch at page
-  load. `seenAt` is therefore explicitly live-only, and the real duration of a
-  *finished* call is a different thing: `durationMs`, which codex reports as data
-  and claude does not report at all. Putting a timestamp on every record would
-  fix both, and it is a change to the history format that this story did not
-  justify.
 - **No permission field.** It stays its own part, with its own lifetime and its
   own buttons.
 - **No status field on `EventRecord`.** Every input to the derivation above is a
   record the client already has.
+
+### Observed times and reported durations
+
+A run's timing has two authors, and the model keeps them in separate fields so
+neither can be mistaken for the other:
+
+- **`durationMs` is what the engine reported** — codex on commands and MCP
+  calls, Claude for a subagent, `WebFetch`, `WebSearch` and a backgrounded
+  task's outcome ([agent-integration.md](code/agent-integration.md#eventrecord-unified-event-format)
+  has which keys, and why each is read only for its own tool). It is the
+  engine timing its own work.
+- **`startedAt` / `endedAt` are what Pockode observed** — the `observed_at` the
+  server stamps on a record as it comes off the CLI, on the server's clock
+  (same section). They are the same live, on reload and a year later, because
+  they are history, not something a client measured.
+
+| | Observed as |
+|---|---|
+| `startedAt` | the `tool_call`'s `observed_at` — or, for a call that waited on a permission card, the `observed_at` of the `permission_response` that let it run, which is later. Absent when that answer carries none: counting from the call would count the user's wait |
+| `endedAt` | the `observed_at` of the `tool_result` that settles the run — for a backgrounded call the outcome, never the `background_started` placeholder |
+
+Neither is ever taken from the turn's or the process's ending: `done`,
+`interrupted` and `process_ended` say when Pockode gave up on a call, not when it
+finished, and a `background_lost` carries no `observed_at` at all. So an
+interrupted call whose result never came has no `endedAt`. A record written
+before the stamps existed has no `observed_at`, and its run no observed duration
+— nothing is reconstructed from when a client received it.
+
+**`seenAt` is the same start on this client's clock**, which is the only thing a
+live counter can subtract from `Date.now()`. A start this client watched arrive
+is the moment it arrived; a start known only from history is `startedAt` carried
+over through the `server_time` reading its history page came with
+([agent-chat.md](agent-chat.md)). Without either it is absent and no counter is
+drawn: a server time subtracted from the phone's clock would show drift as work.
+
+Which figure a row shows, and when, is the UI's decision
+([tool-call-ui.md](tool-call-ui.md#elapsed-and-duration-meta));
+`toolRunDurationMs` (`web/src/lib/toolRun.ts`) applies the precedence — the
+engine's figure when there is one, otherwise `endedAt − startedAt`.
 
 ### A call about an earlier call
 
@@ -517,6 +552,6 @@ subagent nests exactly as a Claude one does
   `task_notification.usage` report it. Usage is session state with an owner
   ([usage-display-ui.md](usage-display-ui.md)), and attributing it per call is a
   separate feature, not a field on a row.
-- **A timestamp on every history record.** It would give every replayed run an
-  honest duration and retire the `seenAt` / `durationMs` split above. It is a
-  history format change and wants its own decision.
+- **A total of a turn's or a group's calls.** Each run now has a duration, and
+  a sum of them is a turn-level summary — its own feature, not a field on a
+  row.

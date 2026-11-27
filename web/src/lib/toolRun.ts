@@ -256,6 +256,26 @@ export function toolSecondLine(run: ToolRun): ToolSecondLine | null {
 }
 
 /**
+ * How long a settled run took, or undefined when nothing measured it — never
+ * zero. The engine's own figure wins whenever it reported one: it is the engine
+ * timing its own work. Otherwise what Pockode observed, from the run's start to
+ * the result that settled it, both on the server's clock. A run with neither —
+ * every record from before the stamps — has none, and is never given one made
+ * up from when this client received its records.
+ *
+ * Only a run that has an end has a duration: an interrupted call whose result
+ * never came has none, and one whose result outlived the interrupt has its
+ * result's (docs/tool-call-ui.md#elapsed-and-duration-meta).
+ */
+export function toolRunDurationMs(run: ToolRun): number | undefined {
+	if (run.durationMs !== undefined) return run.durationMs;
+	if (run.startedAt === undefined || run.endedAt === undefined)
+		return undefined;
+	const observed = run.endedAt - run.startedAt;
+	return observed > 0 ? observed : undefined;
+}
+
+/**
  * How long a call has been going, for a counter that is watched rather than
  * read once: whole seconds below a minute, because a tenth that changes every
  * tick is motion nobody asked for. A measured duration keeps its precision —

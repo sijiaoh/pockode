@@ -720,6 +720,7 @@ type EventRecord struct {
     Reason                CancelReason        `json:"reason,omitempty"`
     AskedAt               *time.Time          `json:"asked_at,omitempty"`
     ResolvedAt            *time.Time          `json:"resolved_at,omitempty"`
+    ObservedAt            *time.Time          `json:"observed_at,omitempty"`
     Answering             []QuestionAnswer    `json:"answering,omitempty"`
     Origin                MessageOrigin       `json:"origin,omitempty"`
     Subtype               string              `json:"subtype,omitempty"`
@@ -824,8 +825,35 @@ still running. An ordinary result carries none
 ([tool-call-model.md](../tool-call-model.md#background-lives-on-tool_result-twice)).
 
 `DurationMs` and `ExitCode` are what a CLI reported about a finished call as
-figures instead of as prose — Codex does, Claude does not — and are never
-inferred from arrival times, which would be wrong on replay. `HTMLPage` is the
+figures instead of as prose, and are never inferred from arrival times, which
+would be wrong on replay. Codex reports both on commands and MCP calls. Claude
+reports no exit code and a duration only for a few tools, in the frame's
+`tool_use_result`: a subagent's `totalDurationMs` (`Agent`, formerly `Task`),
+`WebFetch`'s `durationMs` and `WebSearch`'s `durationSeconds` (measured on
+2.1.330). Each key is read only for the tool it belongs to, which is why the
+adapter keeps each open call's tool name (`toolCallNames`): an MCP tool's
+structured output can hold a `durationMs` that is that server's data, not a
+measurement of the call. It is read only from a frame holding one
+`tool_result`, since `tool_use_result` is one per frame, and never onto a
+`background_started` placeholder. A backgrounded task's duration comes with its
+outcome instead: `task_notification`'s `usage.duration_ms`, an optional field,
+is the `background_result`'s `DurationMs`. Arrival times are
+recorded separately, as what they are: `ObservedAt` is when the server saw a
+`tool_call`, `tool_result`, `permission_response`, `done`, `interrupted` or
+`process_ended` arrive (or wrote one it synthesized), stamped once where the
+event enters a session (`agent.ObserveAt`, called by `process.Process` for the
+agent's events and by `chat.Client` for a permission answer) so the stored and
+the broadcast record carry the same moment. It is Pockode's clock, never the
+CLI's: a call is measured from when it could start (its `tool_call`, or the
+answer that let it run) to the `tool_result` that settled it, and one replayed
+while still running is counted against the `server_time` reading
+`chat.messages.subscribe`, `chat.messages.history` and `session_view.history`
+reply with, so the phone's clock never has to agree with the server's. The
+turn-ending records say when a turn or process ended, not when a call still open
+in it finished. It is absent wherever no honest moment exists — a `background_lost`
+result and the `process_ended` a restarted server writes for a run nobody saw
+end are both written long after the fact — and a fork's copied records keep
+theirs. `HTMLPage` is the
 id (`p3`) of the page a successful `html_render` or `html_edit` stored, on that
 call's `tool_result` and nowhere else; no CLI reports it — the server stamps it
 on the way in, because the MCP call that stores the page never learns the CLI's

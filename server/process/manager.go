@@ -1865,6 +1865,7 @@ func (p *Process) inject(events ...agent.AgentEvent) {
 // handleEvent is what one event does to a session: it may start the session, it
 // may move the turn, it is usually recorded, and it is always broadcast.
 func (p *Process) handleEvent(ctx context.Context, log *slog.Logger, event agent.AgentEvent) {
+	event = agent.ObserveAt(event, time.Now())
 	event = p.pageCalls.stamp(event)
 	event = stampProfile(event, p.profileID)
 	eventType := event.EventType()

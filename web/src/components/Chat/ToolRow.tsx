@@ -4,6 +4,7 @@ import {
 	formatDuration,
 	formatElapsed,
 	type ToolSecondLine,
+	toolRunDurationMs,
 } from "../../lib/toolRun";
 import type { ToolRun, ToolRunStatus } from "../../types/message";
 import { Spinner } from "../ui";
@@ -143,7 +144,7 @@ export function Detail({
 }
 
 /**
- * How long a run this client watched start has been going.
+ * How long a run has been going, from its start on this client's clock.
  *
  * Its own component with its own interval, so the tick re-renders the counter
  * and not the row.
@@ -175,18 +176,20 @@ function ElapsedCounter({ seenAt }: { seenAt: Date }) {
  * The right-hand figure: how long a finished call took, or how long a live one
  * has been going.
  *
- * A finished call shows only what the engine measured — Codex reports a
- * duration, Claude reports none — because a duration made up from arrival times
- * would be wrong on every replay. A live counter needs `seenAt`, which only a
- * run this client saw start has, so a year-old transcript draws no stopwatches.
+ * A finished call shows only a measured duration — the engine's, or the one
+ * the server observed (`toolRunDurationMs` decides) — and only from 1s up. A
+ * live counter needs the start on this client's clock (`seenAt`), so a run
+ * whose start cannot be placed there, and a year-old transcript, draw no
+ * stopwatches.
  */
 export function ToolMeta({ run }: { run: ToolRun }) {
 	const live = run.status === "running" || run.status === "background";
 	if (!live) {
-		if (run.durationMs === undefined || run.durationMs < 1000) return null;
+		const durationMs = toolRunDurationMs(run);
+		if (durationMs === undefined || durationMs < 1000) return null;
 		return (
 			<span className="shrink-0 text-th-text-muted">
-				{formatDuration(run.durationMs)}
+				{formatDuration(durationMs)}
 			</span>
 		);
 	}
