@@ -4205,7 +4205,9 @@ renderer infers nothing.
 - **Records of transcripts recorded before children were attributed** carry
   nothing to file them by, and stay where they are. They read exactly as before.
 - **A child whose call is not in the loaded transcript** — the page boundary fell
-  between a subagent call and its work — has no row to go under, and is drawn
+  between a subagent call and its work, which the server only lets happen when
+  the call is more than a maximum page (500 records) back
+  ([agent-chat.md](agent-chat.md#history-paging)) — has no row to go under, and is drawn
   flat where it arrived, as old transcripts are, rather than under a stand-in
   row naming a call the client cannot show. When the page holding the call
   loads, the flat children stay where they are, by the rule a fetch already
