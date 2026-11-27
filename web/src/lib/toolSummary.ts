@@ -134,6 +134,26 @@ export function pathParts(
 	return { head, tail };
 }
 
+/**
+ * The tools whose call is about one file, named by its `file_path` or `path`.
+ * A name, not the field, decides it: an MCP tool or one we do not know may take
+ * a `path` too, and drawing it as a file would put its whole machine name in
+ * the title and leave every other argument out of the body
+ * (docs/tool-call-ui.md). `NotebookEdit` is not here: its input is the cell it
+ * writes, which the body would then hide.
+ */
+const FILE_TOOLS = new Set(["Read", "Write", "Edit", "MultiEdit", "LS"]);
+
+/** The file a known file tool's call is about, if it is one. */
+export function fileToolPath(
+	toolName: string,
+	input: unknown,
+): string | undefined {
+	if (!FILE_TOOLS.has(toolName)) return undefined;
+	const obj = asObject(input);
+	return str(obj.file_path) ?? str(obj.path);
+}
+
 function pathSummary(
 	title: string,
 	filePath: string,
@@ -344,7 +364,7 @@ export function toolSummary(
 		};
 	}
 
-	const filePath = str(obj.file_path) ?? str(obj.path);
+	const filePath = fileToolPath(toolName, input);
 	if (filePath) return pathSummary(toolName, filePath, workDir);
 
 	if (toolName === "WebFetch" || toolName === "WebSearch") {
