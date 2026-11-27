@@ -418,6 +418,12 @@ the rest costs transport, parsing and memory for records nobody looks at.
   `before_seq` naming no record are both refused with an invalid-params error —
   answering an unusable cursor with the newest page would silently restart the
   client's scrollback from the bottom.
+- A page can hold more than `limit` records: it starts early enough to hold the
+  call of every subagent whose work it holds (nested ones included), as far back
+  as `session.MaxHistoryPageSize` records from its end. A boundary between a
+  subagent call and its work would leave that work drawn flat for good — the
+  client never refiles a row it has drawn
+  ([tool-call-ui.md](tool-call-ui.md#what-is-not-filed)).
 
 - `tool_activity` is what each tool call still in flight last reported doing,
   keyed by `tool_use_id`. It is not part of the page, because that kind of event

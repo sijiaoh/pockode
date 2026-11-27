@@ -1875,6 +1875,12 @@ func turnInputFor(event agent.AgentEvent) (session.TurnInput, bool) {
 		// interrupt's acknowledgement, an order the CLI never promised.
 		case isBackgroundSettlement(event):
 			in.Signal = session.SignalNoise
+		// A straggler of a turn that is over (agent.MarkAfterTurn) is not the CLI
+		// resuming either. Read as output it would open a turn its CLI will
+		// never end, leaving the session running — Stop showing, and a Stop
+		// with no turn to name — until the next prompt.
+		case agent.ArrivedAfterTurn(event):
+			in.Signal = session.SignalNoise
 		// Content is the one thing that ends a background wait: it is the proof
 		// that the CLI resumed by itself. ActivatesSession, less the case above, is
 		// exactly that set — what the agent put into the conversation, as opposed

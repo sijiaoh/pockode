@@ -453,6 +453,20 @@ func TestProcess_TurnStateTransitions(t *testing.T) {
 			wantTurn: turnShape{phase: session.PhaseIdle, outcome: session.OutcomeCompleted},
 		},
 		{
+			// What a Codex Stop did not kill finishes after the interrupted
+			// ending (agent.MarkAfterTurn). Read as output it would reopen a
+			// turn no ending is coming for, leaving the session running.
+			name: "content after its turn ended does not reopen it",
+			events: []agent.AgentEvent{
+				agent.InterruptedEvent{},
+				agent.ToolResultEvent{ToolUseID: "exec-1", ToolResult: "main-done", AfterTurn: true},
+				agent.TextEvent{Content: "sub-done", ParentToolUseID: "call-1", AfterTurn: true},
+				agent.ToolResultEvent{ToolUseID: "call-1", ToolResult: "sub-done", AfterTurn: true},
+			},
+			want:     []ProcessState{ProcessStateIdle},
+			wantTurn: turnShape{phase: session.PhaseIdle, outcome: session.OutcomeAborted},
+		},
+		{
 			// The task finishing is not the CLI resuming; the model's reply is.
 			// The wait itself is checked in TestProcess_OnlyContentEndsABackgroundWait.
 			name: "a parked turn resumes on the reply, not on the task's result",
@@ -592,7 +606,8 @@ func TestProcess_OnlyContentEndsABackgroundWait(t *testing.T) {
 
 // The translation is keyed on the subtype, not on the event type: a tool result
 // is the agent's output unless it settles background work. Codex never sets one
-// of those subtypes, so every Codex result stays output.
+// of those subtypes; what keeps a Codex straggler from opening a turn is
+// agent.MarkAfterTurn.
 func TestTurnInputFor_BackgroundSettlementIsNotOutput(t *testing.T) {
 	tests := []struct {
 		subtype string

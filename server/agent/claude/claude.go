@@ -1905,6 +1905,7 @@ func parseAssistantEvent(log *slog.Logger, line []byte, event cliEvent, backgrou
 		case "tool_use", "server_tool_use":
 			flushText()
 			callNames.record(block.ID, block.Name)
+			backgroundTasks.noteCall(block.ID, event.ParentToolUseID)
 			events = append(events, agent.ToolCallEvent{
 				ToolUseID: block.ID,
 				ToolName:  block.Name,
@@ -1965,6 +1966,7 @@ func parseUserEvent(log *slog.Logger, event cliEvent, backgroundTasks *backgroun
 		case "tool_result":
 			result := parseToolResult(log, store, block.Content)
 			toolName := callNames.take(block.ToolUseID)
+			backgroundTasks.forgetCall(block.ToolUseID)
 			// A call that started work outliving it hands back a placeholder,
 			// and that it did stays true forever — so it is recorded, not
 			// tracked live. Without it a replayed transcript shows a background

@@ -187,7 +187,13 @@ not redraw the transcript.
 The status glyph is a person's card's: `Check` for an allow, `X` for a deny,
 muted whoever answered, like a settled tool row
 ([tool-call-ui.md](tool-call-ui.md#the-permission-card-takes-the-rows-place)).
-Shape tells the two apart, and colour is not used. The line adds who and why:
+Shape tells the two apart, and colour is not used. Once the card hands its
+place back to the call's row, the verdict line goes with the answer: it sits
+under that row, where it sat under the card; folded, the reason is cut to two
+lines as it was there, and open, it is whole at the top of the row's body
+(`PermissionAnswerNote`).
+
+The line adds who and why:
 
 | `by` | Line |
 |---|---|
@@ -233,7 +239,9 @@ Shape tells the two apart, and colour is not used. The line adds who and why:
   Labels for both tables live in `lib/permissionReview.ts`.
 - **The reducer keeps who answered.** `permission_response`'s `by` and
   `review` are kept on the card beside its status — history, from the record —
-  and the card draws its line from them; a `by: "pockode"` deny is still
+  and carried onto the run the card hands back to (`ToolRun.permission`); both
+  draw the line from them, through the one `VerdictLine` in
+  `Chat/PermissionAnswer.tsx`; a `by: "pockode"` deny is still
   status `denied`, and its glyph is every deny's.
 - A deny never interrupts the turn, so the agent's next row usually rewrites
   the call; the card says nothing about that.

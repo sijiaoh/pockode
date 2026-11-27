@@ -246,6 +246,24 @@ describe("SubagentTranscript", () => {
 		expect(within(top).getByText("Could not reach the relay.")).toBeVisible();
 	});
 
+	// The header is the row without its title: it keeps the row's chips.
+	it("says on the header that the subagent finished after the Stop", () => {
+		renderLayer([
+			reply(
+				agent({
+					id: "t1",
+					status: "interrupted",
+					result: "sub-done",
+					finishedAfterStop: true,
+					children: [read("c1")],
+				}),
+			),
+		]);
+		const top = header();
+		expect(within(top).getByLabelText("succeeded")).toBeVisible();
+		expect(within(top).getByText("after Stop")).toBeVisible();
+	});
+
 	describe("a step that asks the user", () => {
 		it("draws the shown subagent's own card in place, with no asker", () => {
 			renderLayer([

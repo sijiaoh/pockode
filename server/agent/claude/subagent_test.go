@@ -124,6 +124,101 @@ func TestSubagent_BackgroundRunReportsOnItsOutcome(t *testing.T) {
 	}
 }
 
+// A backgrounded subagent that backgrounds work of its own and ends its turn is
+// woken by the CLI when that work finishes, under a new task for the same call
+// (measured on claude 2.1.330). The first task's completion is not its outcome:
+// recorded as one, it settled the row 5.9s in while the subagent still had 37s
+// of work ahead. Only the resumed task's outcome is recorded, with the agent id
+// the placeholder named.
+func TestSubagent_BackgroundRunResumedByItsOwnBackgroundWork(t *testing.T) {
+	const (
+		childCall    = `{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_sh","name":"Bash","input":{}}]},"parent_tool_use_id":"toolu_bga"}`
+		childStarted = `{"type":"system","subtype":"task_started","task_id":"b1","tool_use_id":"toolu_sh","description":"sleep","is_backgrounded":true,"task_type":"local_bash"}`
+		childHanded  = `{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_sh","content":"Command running in background."}]},"parent_tool_use_id":"toolu_bga"}`
+		firstEnd     = `{"type":"system","subtype":"task_notification","task_id":"abab96af65c2bfeb9","tool_use_id":"toolu_bga","status":"completed","summary":"Still running in the background.","usage":{"total_tokens":18801,"tool_uses":2,"duration_ms":5906}}`
+		childEnd     = `{"type":"system","subtype":"task_notification","task_id":"b1","tool_use_id":"toolu_sh","status":"completed","summary":"done"}`
+		resumed      = `{"type":"system","subtype":"task_started","task_id":"a2","tool_use_id":"toolu_bga","description":"Run two ls commands","is_backgrounded":true,"task_type":"local_agent"}`
+		finalEnd     = `{"type":"system","subtype":"task_notification","task_id":"a2","tool_use_id":"toolu_bga","status":"completed","summary":"bg-done","usage":{"total_tokens":19395,"tool_uses":3,"duration_ms":43203}}`
+	)
+	events := parseTestTurns(t,
+		toolUseLine("toolu_bga", "Agent"), bgAgentStarted, bgAgentPlaceholder,
+		childCall, childStarted, childHanded, firstEnd, childEnd, resumed, finalEnd,
+	)
+
+	var outcomes []agent.ToolResultEvent
+	for _, r := range toolResults(events) {
+		if r.ToolUseID == "toolu_bga" && r.Subtype == agent.ToolResultBackgroundResult {
+			outcomes = append(outcomes, r)
+		}
+	}
+	if len(outcomes) != 1 {
+		t.Fatalf("subagent outcomes = %#v, want only the resumed task's", outcomes)
+	}
+	want := `{"agent_id":"abab96af65c2bfeb9","agent_type":"Explore","tool_uses":3,"total_tokens":19395}`
+	if outcomes[0].Subagent == nil || mustJSON(t, *outcomes[0].Subagent) != want || outcomes[0].DurationMs != 43203 {
+		t.Errorf("outcome = %#v (%dms), want %s after 43203ms", outcomes[0].Subagent, outcomes[0].DurationMs, want)
+	}
+}
+
+// A Stop stops the held subagent's background work, and nothing is left to wake
+// the subagent: its own task had already ended, so Stop had no task of its to
+// stop. It is recorded as stopped with its work, rather than drawn running
+// until the process goes away.
+func TestSubagent_HeldBackgroundRunStoppedWithItsWork(t *testing.T) {
+	const (
+		childCall    = `{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_sh","name":"Bash","input":{}}]},"parent_tool_use_id":"toolu_bga"}`
+		childStarted = `{"type":"system","subtype":"task_started","task_id":"b1","tool_use_id":"toolu_sh","description":"sleep","is_backgrounded":true,"task_type":"local_bash"}`
+		childHanded  = `{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_sh","content":"Command running in background."}]},"parent_tool_use_id":"toolu_bga"}`
+		firstEnd     = `{"type":"system","subtype":"task_notification","task_id":"abab96af65c2bfeb9","tool_use_id":"toolu_bga","status":"completed","summary":"Still running in the background."}`
+		childStopped = `{"type":"system","subtype":"task_notification","task_id":"b1","tool_use_id":"toolu_sh","status":"stopped","summary":""}`
+	)
+	tracker := &backgroundTaskTracker{}
+	events := parseTestTurnsWithTracker(t, tracker,
+		toolUseLine("toolu_bga", "Agent"), bgAgentStarted, bgAgentPlaceholder,
+		childCall, childStarted, childHanded, firstEnd, childStopped,
+	)
+
+	var outcomes []agent.ToolResultEvent
+	for _, r := range toolResults(events) {
+		if r.Subtype == agent.ToolResultBackgroundResult {
+			outcomes = append(outcomes, r)
+		}
+	}
+	if len(outcomes) != 2 || outcomes[0].ToolUseID != "toolu_sh" || outcomes[1].ToolUseID != "toolu_bga" {
+		t.Fatalf("outcomes = %#v, want the command's and then the subagent's", outcomes)
+	}
+	if held := outcomes[1]; !held.IsError || held.Subagent == nil || held.Subagent.AgentID != "abab96af65c2bfeb9" {
+		t.Errorf("subagent outcome = %#v, want it stopped, naming the agent", held)
+	}
+	if lost := tracker.loss().LostCalls; len(lost) != 0 {
+		t.Errorf("calls still owed an outcome = %v, want none", lost)
+	}
+}
+
+// Held only while the subagent's own background work is alive: one whose work
+// finished before it ended is done, and its completion is the outcome.
+func TestSubagent_BackgroundRunWithItsWorkFinishedEndsOnItsCompletion(t *testing.T) {
+	const (
+		childCall    = `{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_sh","name":"Bash","input":{}}]},"parent_tool_use_id":"toolu_bga"}`
+		childStarted = `{"type":"system","subtype":"task_started","task_id":"b1","tool_use_id":"toolu_sh","description":"sleep","is_backgrounded":true,"task_type":"local_bash"}`
+		childHanded  = `{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_sh","content":"Command running in background."}]},"parent_tool_use_id":"toolu_bga"}`
+		childEnd     = `{"type":"system","subtype":"task_notification","task_id":"b1","tool_use_id":"toolu_sh","status":"completed","summary":"done"}`
+	)
+	events := parseTestTurns(t,
+		toolUseLine("toolu_bga", "Agent"), bgAgentStarted, bgAgentPlaceholder,
+		childCall, childStarted, childHanded, childEnd, bgAgentNotified,
+	)
+	var outcomes int
+	for _, r := range toolResults(events) {
+		if r.ToolUseID == "toolu_bga" && r.Subtype == agent.ToolResultBackgroundResult {
+			outcomes++
+		}
+	}
+	if outcomes != 1 {
+		t.Errorf("subagent outcomes = %d, want its completion", outcomes)
+	}
+}
+
 // Usage on any other task is not a subagent's work, and drawn on its row it
 // would read as one.
 func TestSubagent_OtherTasksCarryNoSubagentFigures(t *testing.T) {

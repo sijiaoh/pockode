@@ -41,6 +41,16 @@ type backgroundTaskTracker struct {
 	// backgroundedCalls are the tool_use_ids whose result is only a placeholder,
 	// looked up while that result is being parsed so it can be recorded as one.
 	backgroundedCalls map[string]bool
+	// callParents names the subagent call each call still without a result was
+	// made inside, so a task started for it knows whose work it is (see
+	// taskCall.parent). Forgotten at the call's own result, which task_started
+	// precedes.
+	callParents map[string]string
+	// resuming are the backgrounded subagents whose task ended while work they
+	// had backgrounded themselves was still running, by tool_use_id; see
+	// taskOutcome. What is kept is what the resumed task's outcome is recorded
+	// with and task_started does not say again.
+	resuming map[string]taskCall
 }
 
 type backgroundTask struct {
@@ -263,6 +273,9 @@ type taskCall struct {
 	// neither.
 	agentType string
 	agentID   string
+	// parent is the subagent call this task's call was made inside, empty for
+	// the main agent's.
+	parent string
 }
 
 // startTask records what task_started said, so the frames that follow can be
@@ -282,6 +295,14 @@ func (t *backgroundTaskTracker) startTask(frame taskFrame) {
 
 	t.tasksMu.Lock()
 	defer t.tasksMu.Unlock()
+	call.parent = t.callParents[call.toolUseID]
+	if earlier, ok := t.resuming[call.toolUseID]; ok {
+		delete(t.resuming, call.toolUseID)
+		call.agentID = earlier.agentID
+		if call.agentType == "" {
+			call.agentType = earlier.agentType
+		}
+	}
 	if t.tasks == nil {
 		t.tasks = make(map[string]taskCall)
 	}
@@ -293,6 +314,78 @@ func (t *backgroundTaskTracker) startTask(frame taskFrame) {
 		}
 		t.backgroundedCalls[call.toolUseID] = true
 	}
+}
+
+// noteCall records the subagent call a call was made inside, for a task that
+// may yet be started for it.
+func (t *backgroundTaskTracker) noteCall(toolUseID, parent string) {
+	if toolUseID == "" || parent == "" {
+		return
+	}
+	t.tasksMu.Lock()
+	defer t.tasksMu.Unlock()
+	if t.callParents == nil {
+		t.callParents = make(map[string]string)
+	}
+	t.callParents[toolUseID] = parent
+}
+
+// forgetCall drops what noteCall kept, once the call has its result.
+func (t *backgroundTaskTracker) forgetCall(toolUseID string) {
+	t.tasksMu.Lock()
+	defer t.tasksMu.Unlock()
+	delete(t.callParents, toolUseID)
+}
+
+// holdsBackgroundWork reports whether a live task other than taskID was
+// backgrounded from inside the subagent call toolUseID.
+func (t *backgroundTaskTracker) holdsBackgroundWork(toolUseID, taskID string) bool {
+	t.tasksMu.Lock()
+	defer t.tasksMu.Unlock()
+	for id, task := range t.tasks {
+		if id != taskID && task.parent == toolUseID && task.backgrounded && !task.excluded {
+			return true
+		}
+	}
+	return false
+}
+
+// resumeLater keeps a backgrounded subagent's call waiting for its outcome
+// after its task has ended: it is still owed one (backgroundedCalls, which a
+// process dying reports as lost), and what its next task's outcome is
+// recorded with is kept for it.
+func (t *backgroundTaskTracker) resumeLater(call taskCall) {
+	t.tasksMu.Lock()
+	defer t.tasksMu.Unlock()
+	if t.backgroundedCalls == nil {
+		t.backgroundedCalls = make(map[string]bool)
+	}
+	t.backgroundedCalls[call.toolUseID] = true
+	if t.resuming == nil {
+		t.resuming = make(map[string]taskCall)
+	}
+	t.resuming[call.toolUseID] = call
+}
+
+// releaseStopped gives up waiting on a held subagent (resumeLater) whose last
+// live background child — childTaskID — was stopped: a Stop stops background
+// tasks, not a subagent whose own task has already ended, so nothing is left to
+// wake it. Reports the subagent's call, and whether there was one to release.
+func (t *backgroundTaskTracker) releaseStopped(parent, childTaskID string) (taskCall, bool) {
+	t.tasksMu.Lock()
+	defer t.tasksMu.Unlock()
+	held, ok := t.resuming[parent]
+	if !ok {
+		return taskCall{}, false
+	}
+	for id, task := range t.tasks {
+		if id != childTaskID && task.parent == parent && task.backgrounded && !task.excluded {
+			return taskCall{}, false
+		}
+	}
+	delete(t.resuming, parent)
+	delete(t.backgroundedCalls, parent)
+	return held, true
 }
 
 // markBackgrounded records a call that became background work after it started,
@@ -529,6 +622,38 @@ func taskOutcome(log *slog.Logger, frame taskFrame, tasks *backgroundTaskTracker
 		return nil
 	}
 
+	// A backgrounded subagent that backgrounded work of its own and ended its
+	// turn is not done: the CLI reports its task completed, and then wakes it
+	// when that work finishes, under a new task for the same call (measured on
+	// claude 2.1.330 — the first notification came 5.9s in, saying the command
+	// was still running; the real report 43s in). Recorded as the outcome, the
+	// first notification settled the row while the subagent was still at work,
+	// and the turn's end showed no agent alive. Nothing is lost by holding it:
+	// what it says is the subagent's last text, already in the transcript.
+	if call.subagent && frame.Status == taskStatusCompleted && tasks.holdsBackgroundWork(call.toolUseID, frame.TaskID) {
+		log.Debug("subagent ended its turn with background work of its own, waiting for it to resume",
+			"taskId", frame.TaskID, "toolUseId", call.toolUseID)
+		// After finishTask, which forgets the call along with the task; the
+		// deferred one then finds nothing left to forget.
+		tasks.finishTask(frame.TaskID)
+		tasks.resumeLater(call)
+		return nil
+	}
+
+	events := []agent.AgentEvent{backgroundOutcome(frame, call)}
+	// The held subagent's outcome follows its child's, which is the order the
+	// two ended in.
+	if frame.Status == taskStatusStopped && call.parent != "" {
+		if held, ok := tasks.releaseStopped(call.parent, frame.TaskID); ok {
+			events = append(events, backgroundOutcome(taskFrame{Status: taskStatusStopped}, held))
+		}
+	}
+	return events
+}
+
+// backgroundOutcome is the record of how backgrounded work ended, as frame
+// reports it.
+func backgroundOutcome(frame taskFrame, call taskCall) agent.ToolResultEvent {
 	text := frame.Summary
 	if text == "" {
 		text = describeTaskOutcome(frame.Status)
@@ -554,7 +679,7 @@ func taskOutcome(log *slog.Logger, frame taskFrame, tasks *backgroundTaskTracker
 
 	if frame.OutputFile == "" {
 		result.ToolResult = text
-		return []agent.AgentEvent{result}
+		return result
 	}
 
 	// The log is named, not delivered: it can be arbitrarily large, and the user
@@ -576,7 +701,7 @@ func taskOutcome(log *slog.Logger, frame taskFrame, tasks *backgroundTaskTracker
 		},
 	})
 	result.Contents = blocks
-	return []agent.AgentEvent{result}
+	return result
 }
 
 // The verdicts task_notification reports.

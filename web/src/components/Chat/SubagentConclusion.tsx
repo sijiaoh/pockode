@@ -5,6 +5,7 @@ import {
 	settledTokens,
 	subagentLastWords,
 } from "../../lib/subagentRun";
+import { toolRunLook } from "../../lib/toolRun";
 import {
 	subagentType,
 	toolSummary,
@@ -67,11 +68,17 @@ function emptyReport(run: ToolRun, hasOutcome: boolean): string {
 	if (run.fromBackground && run.status !== "background" && hasOutcome) {
 		return "The subagent ran in the background; how it ended is under Outcome below.";
 	}
+	if (toolRunLook(run) === "denied") {
+		return "The call was denied, so the subagent never started.";
+	}
 	switch (run.status) {
 		case "running":
 		case "background":
 			return "No report yet — the subagent is still working.";
 		case "interrupted":
+			if (run.finishedAfterStop) {
+				return "The subagent finished after the turn was stopped, without reporting anything.";
+			}
 			return run.lostWithProcess
 				? "The CLI process ended before the subagent reported anything."
 				: "The turn was interrupted before the subagent reported anything.";
@@ -101,7 +108,7 @@ interface Props {
 export function SubagentConclusion({ run, inTranscript = false }: Props) {
 	const view = useTranscriptView();
 	const { report, outcome } = subagentLastWords(run);
-	const failed = run.status === "error";
+	const failed = toolRunLook(run) === "error";
 	const fullScreenTitle = toolSummaryLine(toolSummary(run.name, run.input, ""));
 	const reportSource = useMemo<FullScreenSource | undefined>(
 		() =>
@@ -141,7 +148,9 @@ export function SubagentConclusion({ run, inTranscript = false }: Props) {
 			    to nothing. */}
 			{run.status === "interrupted" && report && (
 				<p className="px-2 pt-2 text-th-text-muted">
-					Returned after the turn was interrupted.
+					{run.finishedAfterStop
+						? "Finished after the turn was stopped."
+						: "Returned after the turn was interrupted."}
 				</p>
 			)}
 			{report && (

@@ -25,6 +25,7 @@ import type {
 	Thought,
 	ToolFetch,
 	ToolRun,
+	ToolRunPermission,
 	ToolRunPlan,
 	UserMessage,
 	WorkRef,
@@ -34,6 +35,7 @@ import { generateUUID } from "../utils/uuid";
 import { AGENT_TYPES } from "./agentType";
 import { parseContentBlocks, parseFileBlocks } from "./contentBlocks";
 import {
+	collectPartsDeep,
 	editAtPath,
 	editChildrenAtPath,
 	findPartPath,
@@ -885,8 +887,38 @@ function applyToolCall(
 		return updated;
 	}
 
-	// No row for this call yet — either it is new, or a card that has since been
-	// answered took the pending row's place and this resend is the call starting.
+	// A card answered before its call was announced — Codex asks first — or
+	// before anything rebuilt its row: the call starting takes the card's place,
+	// as a row rebuilt from it would (`updateRunById`).
+	const answeredIndex = parts.findIndex(
+		(part) =>
+			part.type === "permission_request" &&
+			part.request.toolUseId === toolUseId &&
+			isAnsweredCard(part),
+	);
+	if (answeredIndex !== -1) {
+		const card = parts[answeredIndex];
+		if (card.type !== "permission_request") return parts; // Type guard - never happens
+		const row = rowFromCard(card);
+		const updated = [...parts];
+		updated[answeredIndex] = {
+			...row,
+			tool: {
+				...row.tool,
+				name: toolName,
+				input: toolInput,
+				// Nothing runs on a deny, so only an allow's call has a start.
+				...(card.status === "allowed" && row.tool.startedAt === undefined
+					? startOf(observedAt, options)
+					: {}),
+				...(originToolUseId ? { originToolUseId } : {}),
+			},
+			...(parentToolUseId && !row.parentToolUseId ? { parentToolUseId } : {}),
+		};
+		return updated;
+	}
+
+	// No row for this call yet: it is new.
 	return [
 		...parts,
 		{
@@ -1385,7 +1417,7 @@ function applyEvent(
 	// Permission response updates existing permission_request across all messages
 	if (event.type === "permission_response") {
 		const newStatus = event.choice === "deny" ? "denied" : "allowed";
-		return stampPermissionAnswer(
+		const answered = stampPermissionAnswer(
 			updatePermissionRequestStatus(
 				messages,
 				event.requestId,
@@ -1395,6 +1427,11 @@ function applyEvent(
 			event.requestId,
 			event.observedAt,
 			options,
+			event.choice === "always_allow" && !event.by,
+		);
+		return handBackAllowedCard(
+			takeRowUnderCard(answered, event.requestId),
+			event.requestId,
 		);
 	}
 
@@ -1858,10 +1895,11 @@ function fileUnderParent(
 			// matter: Claude resumes a finished subagent when the agent writes to
 			// it (SendMessage), and the resumed work is filed under the call that
 			// first spawned it, with its own results still to come — and so does one
-			// that was cut short, once the user has sent a turn since.
+			// that was cut short, once the user has sent a turn since. Unless that
+			// turn has been cut short too, and this call trails in after it.
 			const cut =
 				(run.status === "interrupted" || run.status === "error") &&
-				!resumedLater;
+				(!resumedLater || turnCut);
 			const filed: ContentPart = {
 				...part,
 				tool: {
@@ -1902,9 +1940,9 @@ function fileUnderParent(
  * completed, which the ending would have dropped had it been empty then. Never
  * one whose turn was cut short: its ending is a line of its own.
  *
- * The row approval rebuilt beside the card goes along too, when the engine
- * reported on the call before announcing it: left behind, it would be the
- * call's second row.
+ * The row a result rebuilt beside a card nobody answered goes along too, when
+ * the engine reported on the call before announcing it: left behind, it would
+ * be the call's second row.
  */
 function takeStrayCard(
 	messages: Message[],
@@ -1913,11 +1951,17 @@ function takeStrayCard(
 	for (let i = messages.length - 1; i >= 0; i--) {
 		const msg = messages[i];
 		if (msg.role !== "assistant") continue;
+		// Or the row an answered card handed its place to, which is that card
+		// and stands where it did.
 		const index = msg.parts.findIndex(
 			(part) =>
-				part.type === "permission_request" &&
-				part.request.toolUseId === toolUseId &&
-				!part.parentToolUseId,
+				(part.type === "permission_request" &&
+					part.request.toolUseId === toolUseId &&
+					!part.parentToolUseId) ||
+				(part.type === "tool_call" &&
+					part.tool.id === toolUseId &&
+					part.tool.permission !== undefined &&
+					!part.parentToolUseId),
 		);
 		if (index === -1) continue;
 		const next = msg.parts[index + 1];
@@ -2142,35 +2186,142 @@ export function updatePermissionRequestStatus(
 }
 
 /**
- * Records on a permission card when it was answered, which is when the call it
- * held back starts (`ToolRun.startedAt`). Separate from the status because the
- * status may already be set — a press updates it before the answer's record
- * comes back — and the record is the only thing that knows the time. The first
- * answer's time stands, as its status does.
+ * Records on a permission card that its answer's record is in, and what only
+ * the record knows: when the answer was given, which is when the call it held
+ * back starts (`ToolRun.startedAt`), and whether it was Always Allow. Separate
+ * from the status because the status may already be set — a press updates it
+ * before the answer's record comes back. The first answer's time stands, as
+ * its status does.
  */
 function stampPermissionAnswer(
 	messages: Message[],
 	requestId: string,
 	observedAt: number | undefined,
 	options: ApplyOptions,
+	always: boolean,
 ): Message[] {
 	const seenAt = clientClockAt(observedAt, options);
-	if (observedAt === undefined && !seenAt) return messages;
 	return mapAllParts(messages, (part) => {
+		// An expired card ignored the answer, and so does this.
 		if (
 			part.type !== "permission_request" ||
 			part.request.requestId !== requestId ||
-			part.answeredAt !== undefined ||
-			part.answerSeenAt !== undefined
+			(part.status !== "allowed" && part.status !== "denied")
 		) {
 			return part;
 		}
-		return {
+		const stampTime =
+			part.answeredAt === undefined && part.answerSeenAt === undefined;
+		// Only onto a person's allow: a reviewer's answer that beat the press
+		// is the one that stands, and it is never Always Allow.
+		const stampAlways =
+			always && !part.always && !part.by && part.status === "allowed";
+		const stamped = {
 			...part,
-			...(observedAt !== undefined ? { answeredAt: observedAt } : {}),
-			...(seenAt ? { answerSeenAt: seenAt } : {}),
+			answerRecorded: true,
+			...(stampTime && observedAt !== undefined
+				? { answeredAt: observedAt }
+				: {}),
+			...(stampTime && seenAt ? { answerSeenAt: seenAt } : {}),
+			...(stampAlways ? { always: true } : {}),
 		};
+		return part.answerRecorded &&
+			stamped.answeredAt === part.answeredAt &&
+			stamped.answerSeenAt === part.answerSeenAt &&
+			stamped.always === part.always
+			? part
+			: stamped;
 	});
+}
+
+/**
+ * Folds into an answered card the row its call's result put directly under it
+ * while the card was still pending, so the call is one row in the card's place
+ * like any other answered call.
+ *
+ * The server records an answer only after handing it to the CLI, so a result
+ * the engine sends back at once — a deny's refusal above all — can be recorded
+ * first. `updateRunById` then has only a pending card to go by and puts the row
+ * under it; without this the card and that row both stood, for good, since
+ * replay follows the same order. Only the row directly under the card: one
+ * further away (a card that landed in a later bubble than its row) is the
+ * row's own place, and the card stays an answered card there.
+ */
+function takeRowUnderCard(messages: Message[], requestId: string): Message[] {
+	for (let i = messages.length - 1; i >= 0; i--) {
+		const msg = messages[i];
+		if (msg.role !== "assistant") continue;
+		const path = findPartPath(
+			msg.parts,
+			(part) =>
+				part.type === "permission_request" &&
+				part.request.requestId === requestId &&
+				isAnsweredCard(part),
+		);
+		if (!path) continue;
+
+		let taken = false;
+		const parts = editAtPath(msg.parts, path, (list, cardIndex) => {
+			const card = list[cardIndex];
+			const row = list[cardIndex + 1];
+			if (
+				card.type !== "permission_request" ||
+				row?.type !== "tool_call" ||
+				!card.request.toolUseId ||
+				row.tool.id !== card.request.toolUseId
+			) {
+				return list;
+			}
+			const { permission } = rowFromCard(card).tool;
+			taken = true;
+			const updatedList = [...list];
+			updatedList.splice(cardIndex, 2, {
+				...row,
+				id: card.id,
+				tool: { ...row.tool, ...(permission ? { permission } : {}) },
+			});
+			return updatedList;
+		});
+		if (!taken) return messages;
+		const updated = [...messages];
+		updated[i] = { ...msg, parts };
+		return updated;
+	}
+	return messages;
+}
+
+/**
+ * Gives an allowed card's place back to its call's row the moment the answer
+ * is recorded: the call is running from then on, and the line the user just
+ * answered on turns into it (docs/tool-call-ui.md#the-permission-card-takes-the-rows-place).
+ * On the record and not on the press, because a press the server refuses is
+ * undone on the card (`resetPromptRequest`), which a row could not be.
+ *
+ * A denied card waits for the engine's report instead: nothing runs, and the
+ * refusal it reports is what the row is rebuilt from (`updateRunById`). A card
+ * without a `tool_use_id` names no call to give a row to, and stays a card.
+ */
+function handBackAllowedCard(
+	messages: Message[],
+	requestId: string,
+): Message[] {
+	let toolUseId: string | undefined;
+	for (const msg of messages) {
+		if (msg.role !== "assistant") continue;
+		const [card] = collectPartsDeep(
+			msg.parts,
+			(part) =>
+				part.type === "permission_request" &&
+				part.request.requestId === requestId &&
+				part.status === "allowed",
+		);
+		if (card?.type === "permission_request") {
+			toolUseId = card.request.toolUseId;
+			break;
+		}
+	}
+	if (!toolUseId) return messages;
+	return updateRunById(messages, toolUseId, (run) => run, false);
 }
 
 /**
@@ -2386,6 +2537,18 @@ function settleToolRun(
 				: event.isError
 					? "error"
 					: "success",
+		// The engine let the call run on past the Stop, and it finished: what
+		// the turn did to it stays the status, and this is what the call did.
+		// Said by the newest result, and never by Pockode's account of a loss,
+		// which is not the work's own.
+		...(run.status === "interrupted"
+			? {
+					finishedAfterStop:
+						!event.isError && event.subtype !== "background_lost"
+							? true
+							: undefined,
+				}
+			: {}),
 		// A settled subagent leaves nothing spinning under it: a child still
 		// running has lost the only process that could report on it. A
 		// backgrounded child is left to its own notification — unless this is
@@ -2423,6 +2586,56 @@ function settleToolRun(
 	return outcome;
 }
 
+type PermissionCard = Extract<ContentPart, { type: "permission_request" }>;
+type ToolCallPart = Extract<ContentPart, { type: "tool_call" }>;
+
+/** A card a person or a reviewer has answered, which hands its row back. */
+function isAnsweredCard(card: PermissionCard): boolean {
+	return card.status === "allowed" || card.status === "denied";
+}
+
+/**
+ * The row of the call a card asked about, rebuilt from what the card carries —
+ * the same input the call announced, since that is where the server got it —
+ * and keeping what the card said about its answer. It starts when an allowed
+ * card was answered: before that the call was waiting on the user, whose time
+ * the card already showed, so a card answered without a recorded time gives a
+ * row with no start rather than one counting from here.
+ */
+function rowFromCard(card: PermissionCard): ToolCallPart {
+	const permission: ToolRunPermission | undefined = isAnsweredCard(card)
+		? {
+				answer: card.status === "denied" ? "denied" : "allowed",
+				...(card.by ? { by: card.by } : {}),
+				...(card.review ? { review: card.review } : {}),
+				...(card.always ? { always: true } : {}),
+				...(card.always && card.request.permissionSuggestions?.length
+					? { suggestions: card.request.permissionSuggestions }
+					: {}),
+			}
+		: undefined;
+	return {
+		id: card.id,
+		type: "tool_call",
+		tool: {
+			id: card.request.toolUseId,
+			name: card.request.toolName,
+			input: card.request.toolInput,
+			status: "running",
+			...(card.status === "allowed"
+				? {
+						...(card.answeredAt !== undefined
+							? { startedAt: card.answeredAt }
+							: {}),
+						...(card.answerSeenAt ? { seenAt: card.answerSeenAt } : {}),
+					}
+				: {}),
+			...(permission ? { permission } : {}),
+		},
+		...(card.parentToolUseId ? { parentToolUseId: card.parentToolUseId } : {}),
+	};
+}
+
 /**
  * Applies `update` to the run this record names, wherever in the transcript it
  * is — a background outcome arrives turns later, and a result that outlived an
@@ -2437,10 +2650,8 @@ function settleToolRun(
  * *not* re-sent afterwards, so once the card has taken the pending row's place
  * — which it does because the machine is then waiting for the user, not working
  * — the card is all that is left of the call. The row is rebuilt from what the
- * card itself carries, directly under it, which is where it was. It starts
- * when the card was answered — the call before that was waiting on the user,
- * whose time the card already shows — so a card answered without a recorded
- * time gives a row with no start, rather than one counting from here.
+ * card itself carries (`rowFromCard`): in the card's place once the card is
+ * answered, and directly under a card that is not, which is where it was.
  *
  * Returns the list unchanged when the record names no call on screen — an
  * orphan result, or progress for a call whose page is not loaded.
@@ -2454,8 +2665,8 @@ function updateRunById(
 	 * the user is deciding, nothing about this call is running, and a spinner
 	 * above the card would say the machine is busy when it is waiting for them.
 	 * A result is the engine acting, so it gets its row either way — including
-	 * the refusal text a denial produces, which lands as an ordinary settled run
-	 * under the card that already said why.
+	 * the refusal text a denial produces, which the denied card's row then
+	 * shows as what the engine said about the refused call.
 	 */
 	fromPendingCard = true,
 ): Message[] {
@@ -2509,29 +2720,21 @@ function updateRunById(
 		const parts = editAtPath(msg.parts, path, (list, cardIndex) => {
 			const card = list[cardIndex];
 			if (card.type !== "permission_request") return list; // Type guard - never happens
-			const restored: ContentPart = {
-				id: newPartId(),
-				type: "tool_call",
-				tool: update({
-					id: toolUseId,
-					name: card.request.toolName,
-					input: card.request.toolInput,
-					status: "running",
-					...(card.status === "allowed"
-						? {
-								...(card.answeredAt !== undefined
-									? { startedAt: card.answeredAt }
-									: {}),
-								...(card.answerSeenAt ? { seenAt: card.answerSeenAt } : {}),
-							}
-						: {}),
-				}),
-				...(card.parentToolUseId
-					? { parentToolUseId: card.parentToolUseId }
-					: {}),
+			const answered = isAnsweredCard(card);
+			const restored = rowFromCard(card);
+			const ran: ContentPart = {
+				...restored,
+				// An answered card hands its place back: the row takes its slot
+				// and its id, so the line the user answered on is the line that
+				// runs. Any other card — still pending, or one nobody answered
+				// before its asker went away — keeps saying what it says, and the
+				// row goes directly under it, which is where it was.
+				id: answered ? card.id : newPartId(),
+				tool: update(restored.tool),
 			};
 			const updatedList = [...list];
-			updatedList.splice(cardIndex + 1, 0, restored);
+			if (answered) updatedList[cardIndex] = ran;
+			else updatedList.splice(cardIndex + 1, 0, ran);
 			return updatedList;
 		});
 		const updated = [...messages];

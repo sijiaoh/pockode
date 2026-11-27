@@ -20,14 +20,11 @@ import {
 	isLiveRun,
 	resumedRun,
 	subagentLastWords,
-	subagentLine,
 	subagentPath,
 	unfiledParts,
 	withoutEchoedReport,
 } from "../../lib/subagentRun";
-import { toolSecondLine } from "../../lib/toolRun";
 import {
-	SUBAGENT_TITLE,
 	subagentPossessive,
 	taskPrompt,
 	toolSummary,
@@ -54,9 +51,9 @@ import {
 	openerOrSuccessor,
 	SubagentTranscriptContext,
 } from "./subagentTranscriptContext";
-import { SubagentLineContent } from "./TaskItem";
+import { subagentHeader } from "./TaskItem";
 import { PartBlocks } from "./ToolList";
-import { Detail, ToolMeta, ToolStatusGlyph } from "./ToolRow";
+import { Chip, Detail } from "./ToolRow";
 import { findShown, useLanding } from "./transcriptJump";
 import { TranscriptViewContext } from "./transcriptViewContext";
 import {
@@ -502,13 +499,17 @@ function LevelHeader({
 	titles: string[];
 	onGoUp: (depth: number) => void;
 }) {
-	const summary = toolSummary(run.name, run.input, "");
 	const resume = useSubagentResume(run.id);
 	const rowRun = resumedRun(run, resume);
 	const unfiled = useUnfiledChildren(run.id);
-	const line = subagentLine(rowRun, unfiled);
-	const plainLine = line ? null : toolSecondLine(rowRun);
-	const failed = rowRun.status === "error";
+	// The row's own header, so the two cannot say different things about one
+	// run: its glyph, chips and lines. No step window here (see Line 3).
+	const { summary, glyph, firstLine, secondLine } = subagentHeader(
+		rowRun,
+		unfiled,
+	);
+	const line = secondLine.richSecondLine;
+	const plainLine = secondLine.secondLine;
 
 	return (
 		<header className="shrink-0 border-b border-th-border bg-th-bg-primary text-xs">
@@ -528,25 +529,25 @@ function LevelHeader({
 				    line 2 and line 3, so line 3 sits under the detail as it does
 				    on the row. */}
 				<div className="flex items-start gap-1.5">
-					<ToolStatusGlyph status={rowRun.status} name={SUBAGENT_TITLE} />
+					{glyph}
 					<div className="min-w-0 flex-1">
 						<div className="flex items-baseline gap-1.5">
+							{firstLine.background && <Chip>background</Chip>}
+							{firstLine.afterStop && <Chip tone="warning">after Stop</Chip>}
 							<Detail
 								detail={summary.detail}
 								detailTail={summary.detailTail}
 								mono={summary.mono}
-								error={failed}
+								error={firstLine.error}
 							/>
-							<span className="ml-auto">
-								<ToolMeta run={rowRun} />
-							</span>
+							{firstLine.meta}
 						</div>
 						{line ? (
 							<span
 								aria-hidden={line.live}
 								className="flex min-w-0 items-baseline gap-1.5 text-th-text-muted"
 							>
-								<SubagentLineContent line={line} />
+								{line.content}
 							</span>
 						) : (
 							plainLine && (

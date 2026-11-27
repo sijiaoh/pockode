@@ -4,6 +4,7 @@ import { relativeToWorkDir, splitNativePath } from "../utils/path";
 import type { CodexChangeView } from "./codexChanges";
 import { diffStat } from "./diffStat";
 import { type ProposedChangeData, proposedChange } from "./proposedChange";
+import { toolRunLook } from "./toolRun";
 import { pathParts } from "./toolSummary";
 
 /**
@@ -234,7 +235,8 @@ export function callLines(run: ToolRun): LineCounts | null {
  *
  * Only a call that succeeded changed anything: a failed or denied one did not,
  * and one interrupted or still running may or may not have — claiming it did
- * would send the reader to review a change that is not there. A subagent's
+ * would send the reader to review a change that is not there. One the engine
+ * let run on past the Stop, and that finished, did. A subagent's
  * calls are read whatever became of the subagent: what it finished stays done
  * even when it was cut short afterwards.
  */
@@ -243,7 +245,7 @@ function settledEdits(parts: ContentPart[]): FileEdit[] {
 	for (const part of parts) {
 		if (part.type !== "tool_call") continue;
 		const { tool } = part;
-		if (tool.status === "success") edits.push(...editsOf(tool));
+		if (toolRunLook(tool) === "success") edits.push(...editsOf(tool));
 		if (tool.children) edits.push(...settledEdits(tool.children));
 	}
 	return edits;

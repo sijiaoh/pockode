@@ -14,7 +14,7 @@ import {
 	subagentLine,
 	type UnfiledChildren,
 } from "../../lib/subagentRun";
-import { toolSecondLine, toolUsesLabel } from "../../lib/toolRun";
+import { toolRunLook, toolSecondLine, toolUsesLabel } from "../../lib/toolRun";
 import {
 	SUBAGENT_TITLE,
 	subagentPossessive,
@@ -29,6 +29,11 @@ import {
 	headerButtonClass,
 	MarkdownContent,
 } from "../ui";
+import {
+	PermissionAnswerNote,
+	readVerdict,
+	VerdictLine,
+} from "./PermissionAnswer";
 import { FactsLine, SubagentConclusion } from "./SubagentConclusion";
 import { StepCallLabel, SubagentStepWindow } from "./SubagentStepWindow";
 import { useStepWindowFold, useStepWindowLines } from "./stepWindowContext";
@@ -113,7 +118,7 @@ export function LatestChildLabel({ child }: { child: LatestChild }) {
  * is cut to a few characters and the count — the half that answers "is it
  * moving" — is still there.
  */
-export function SubagentLineContent({ line }: { line: SubagentLine }) {
+function SubagentLineContent({ line }: { line: SubagentLine }) {
 	const count = line.toolUses > 0 && (
 		<span className="shrink-0">{toolUsesLabel(line.toolUses)}</span>
 	);
@@ -171,16 +176,23 @@ export function subagentHeader(
 	// No work directory: a subagent call is summarised from its description, and
 	// there is no path in it for one to shorten.
 	const summary = toolSummary(rowRun.name, rowRun.input, "");
-	const line = subagentLine(rowRun, unfiled, stepWindow !== undefined);
-	const failed = rowRun.status === "error";
+	const look = toolRunLook(rowRun);
+	// A denied call never started a subagent, so its own line has nothing to
+	// count; the shared one says who denied it.
+	const line =
+		look === "denied"
+			? null
+			: subagentLine(rowRun, unfiled, stepWindow !== undefined);
+	const failed = look === "error";
 	return {
 		summary,
 		failed,
-		glyph: <ToolStatusGlyph status={rowRun.status} name={SUBAGENT_TITLE} />,
+		glyph: <ToolStatusGlyph status={look} name={SUBAGENT_TITLE} />,
 		firstLine: {
 			title: summary.title,
 			agent: true,
 			background: rowRun.fromBackground,
+			afterStop: rowRun.finishedAfterStop,
 			detail: summary.detail,
 			meta: <ToolMeta run={rowRun} />,
 			error: failed,
@@ -249,14 +261,19 @@ function TaskItem({ run, depth = 0, renderChild }: Props) {
 		rowRun,
 		unfiled,
 		windowSteps.length > 0 ? (
-			<SubagentStepWindow
-				steps={windowSteps}
-				lines={fold.lines}
-				frozen={!live}
-			/>
+			<SubagentStepWindow steps={windowSteps} frozen={!live} />
 		) : undefined,
 	);
 	const { summary } = header;
+	// A reviewer's or Pockode's answer keeps the line it had on the card, as on
+	// any row (ToolCallItem).
+	const verdict = run.permission
+		? readVerdict(
+				run.permission.answer,
+				run.permission.by,
+				run.permission.review,
+			)
+		: undefined;
 	// The report — or a backgrounded subagent's outcome, which is its last
 	// words delivered after the call returned (Claude's notification summary,
 	// measured on claude 2.1.286) — is drawn in full above the Process, and
@@ -286,6 +303,9 @@ function TaskItem({ run, depth = 0, renderChild }: Props) {
 				{...header.firstLine}
 				{...header.secondLine}
 			/>
+			{verdict && (
+				<VerdictLine verdict={verdict} reviewing={false} expanded={expanded} />
+			)}
 
 			{pendingCards.length > 0 && (
 				// Between the row and its body, outside the collapsible: visible
@@ -302,6 +322,11 @@ function TaskItem({ run, depth = 0, renderChild }: Props) {
 
 			<CollapsibleBody expanded={expanded}>
 				<div className="row-ground-secondary border-t border-th-border bg-th-bg-secondary">
+					{run.permission && (
+						<div className="px-2 pt-2">
+							<PermissionAnswerNote permission={run.permission} />
+						</div>
+					)}
 					<SubagentConclusion run={run} />
 					{showProcess && (
 						<div className="border-t border-th-border">

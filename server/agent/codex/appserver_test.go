@@ -345,6 +345,7 @@ func TestBuildThreadParams_ReasoningSummary(t *testing.T) {
 func TestReasoning_RecordedWithTheEnginesDuration(t *testing.T) {
 	sess := newTestSession()
 	defer sess.cancel()
+	sess.notify("turn/started", `{"threadId":"t","turn":{"id":"u","items":[],"status":"inProgress"}}`)
 
 	sess.notify("item/started", `{"threadId":"t","turnId":"u","startedAtMs":1000,"item":{"type":"reasoning","id":"rs","summary":[],"content":[]}}`)
 	sess.notify("item/completed", `{"threadId":"t","turnId":"u","completedAtMs":3500,"item":{"type":"reasoning","id":"rs",
@@ -368,6 +369,7 @@ func TestReasoning_RecordedWithTheEnginesDuration(t *testing.T) {
 func TestReasoning_EmptyAndUnmeasured(t *testing.T) {
 	sess := newTestSession()
 	defer sess.cancel()
+	sess.notify("turn/started", `{"threadId":"t","turn":{"id":"u","items":[],"status":"inProgress"}}`)
 
 	sess.notify("item/completed", `{"threadId":"t","turnId":"u","completedAtMs":3500,"item":{"type":"reasoning","id":"rs","summary":[],"content":[]}}`)
 
@@ -1105,6 +1107,43 @@ func TestSubagentInterruptedWithTheTurnIsLeftToItsEnding(t *testing.T) {
 	}
 	if _, ok := events[0].(agent.InterruptedEvent); !ok {
 		t.Errorf("event = %#v, want the turn's interrupted ending", events[0])
+	}
+}
+
+// What a Stop did not stop goes on reporting after the interrupted ending:
+// Codex answers turn/interrupt at once and leaves a running command, and a
+// subagent's own, to finish (measured on codex-cli 0.171.0). Those are the
+// ended turn's stragglers, flagged so they do not open a turn no
+// turn/completed will ever end; content inside a turn is not flagged.
+func TestContentAfterTheTurnEndedIsMarkedAfterTurn(t *testing.T) {
+	sess := newSubagentTestSession()
+	defer sess.cancel()
+
+	sess.notify("item/started", `{"threadId":"main","turnId":"turn-main","startedAtMs":2,"item":{
+		"type":"commandExecution","id":"exec-main","command":"sleep 45","cwd":"/tmp","status":"inProgress"}}`)
+	for _, ev := range drainEvents(sess.events) {
+		if agent.ArrivedAfterTurn(ev) {
+			t.Errorf("event inside the turn %#v is marked after turn", ev)
+		}
+	}
+
+	sess.notify("turn/completed", `{"threadId":"main","turn":{"id":"turn-main","items":[],"status":"interrupted"}}`)
+	drainEvents(sess.events)
+
+	sess.notify("item/completed", `{"threadId":"main","turnId":"turn-main","completedAtMs":3,"item":{
+		"type":"commandExecution","id":"exec-main","status":"completed","exitCode":0,"aggregatedOutput":"main-done\n"}}`)
+	sess.notify("item/completed", `{"threadId":"child","turnId":"turn-child","completedAtMs":4,"item":{
+		"type":"agentMessage","id":"msg-child","text":"sub-done"}}`)
+	sess.notify("turn/completed", `{"threadId":"child","turn":{"id":"turn-child","items":[],"status":"completed","durationMs":50}}`)
+
+	events := drainEvents(sess.events)
+	if len(events) != 3 {
+		t.Fatalf("expected the command's result, the child's text and the spawn's result, got %v", events)
+	}
+	for _, ev := range events {
+		if !agent.ArrivedAfterTurn(ev) {
+			t.Errorf("straggler %#v is not marked after turn", ev)
+		}
 	}
 }
 

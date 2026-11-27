@@ -151,19 +151,26 @@ describe("the step window on a phone", () => {
 		await page.viewport(360, 640);
 	});
 
-	it("moves nothing from the row's first step until it has settled", async () => {
+	// A lone row on a phone gets two lines: it grows once, at its second
+	// step, and moves nothing after that until it has settled.
+	it("grows to its size, then moves nothing until it has settled", async () => {
 		const t = rendered(messages([subagent(0, "running")]));
 		await settle();
 		expect(t.hasWindow()).toBe(false);
 
-		await t.update(messages([subagent(1, "running")]));
-		expect(t.hasWindow()).toBe(true);
-		const first = t.box();
 		const atBottom = () =>
 			t.scroller.scrollHeight - t.scroller.clientHeight - t.scroller.scrollTop;
+		await t.update(messages([subagent(1, "running")]));
+		expect(t.hasWindow()).toBe(true);
+		const one = t.box();
 		expect(atBottom()).toBeLessThanOrEqual(1);
 
-		for (const taken of [2, 3, 5]) {
+		await t.update(messages([subagent(2, "running")]));
+		const first = t.box();
+		expect(first.height).toBeGreaterThan(one.height);
+		expect(atBottom()).toBeLessThanOrEqual(1);
+
+		for (const taken of [3, 5]) {
 			await t.update(messages([subagent(taken, "running")]));
 			expect(t.box()).toEqual(first);
 		}

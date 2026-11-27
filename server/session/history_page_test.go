@@ -135,6 +135,94 @@ func TestPageHistoryWalksTheWholeHistoryExactlyOnce(t *testing.T) {
 	}
 }
 
+// TestPageHistoryHoldsTheSubagentCallsOfItsChildren: a page never begins
+// between a subagent call and its work. The client files a child only under a
+// loaded row and leaves one that loaded first flat for good, so a boundary
+// there drew the work twice — under the subagent's row and as stray top-level
+// rows (measured: a 61-record Claude session whose newest page began after
+// subagent B's call and before its second child).
+func TestPageHistoryHoldsTheSubagentCallsOfItsChildren(t *testing.T) {
+	call := func(id, parent string) json.RawMessage {
+		return json.RawMessage(fmt.Sprintf(`{"type":"tool_call","tool_use_id":%q,"parent_tool_use_id":%q}`, id, parent))
+	}
+	text := func(n int) json.RawMessage {
+		return json.RawMessage(fmt.Sprintf(`{"type":"text","content":"m%d"}`, n))
+	}
+	records := []json.RawMessage{
+		text(1),
+		call("outer", ""), // seq 2
+		text(3),
+		call("nested", "outer"),   // seq 4
+		call("leaf", "nested"),    // seq 5
+		call("resumed-later", ""), // seq 6
+		text(7),
+		text(8),
+		call("child", "resumed-later"), // seq 9
+		text(10),
+	}
+
+	tests := []struct {
+		name      string
+		beforeSeq HistorySeq
+		limit     int
+		wantFirst HistorySeq
+	}{
+		{name: "no child in the page", beforeSeq: NoHistorySeq, limit: 1, wantFirst: 10},
+		{name: "a child's call is taken in", beforeSeq: NoHistorySeq, limit: 2, wantFirst: 6},
+		{name: "a nested call's own parent too", beforeSeq: 6, limit: 1, wantFirst: 2},
+		{name: "a call already in the page", beforeSeq: NoHistorySeq, limit: 5, wantFirst: 6},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			page, err := PageHistory(records, tt.beforeSeq, tt.limit)
+			if err != nil {
+				t.Fatalf("PageHistory failed: %v", err)
+			}
+			if got := seqsOf(t, page.Records); len(got) == 0 || got[0] != tt.wantFirst {
+				t.Fatalf("page holds %v, want it to start at %d", got, tt.wantFirst)
+			}
+			if page.NextBeforeSeq != tt.wantFirst && page.HasMore {
+				t.Errorf("NextBeforeSeq = %d, want the page's own start %d", page.NextBeforeSeq, tt.wantFirst)
+			}
+		})
+	}
+}
+
+// A resumed subagent is announced again (agent.ToolCallResumed), and the
+// client draws nothing from that announcement when the spawn is not loaded: the
+// page reaches back to the spawn.
+func TestPageHistoryReachesPastAResumedAnnouncement(t *testing.T) {
+	records := []json.RawMessage{
+		json.RawMessage(`{"type":"tool_call","tool_use_id":"spawn"}`),
+		json.RawMessage(`{"type":"text","content":"between"}`),
+		json.RawMessage(`{"type":"tool_call","tool_use_id":"spawn","subtype":"resumed"}`),
+		json.RawMessage(`{"type":"text","content":"more work","parent_tool_use_id":"spawn"}`),
+	}
+	page, err := PageHistory(records, NoHistorySeq, 2)
+	if err != nil {
+		t.Fatalf("PageHistory failed: %v", err)
+	}
+	if got := seqsOf(t, page.Records); len(got) == 0 || got[0] != 1 {
+		t.Errorf("page holds %v, want it to start at the spawn", got)
+	}
+}
+
+// A subagent call further back than one page can hold is left out: its work
+// goes flat, as before, rather than the page growing without bound.
+func TestPageHistorySubagentCallBeyondTheCap(t *testing.T) {
+	records := []json.RawMessage{json.RawMessage(`{"type":"tool_call","tool_use_id":"far"}`)}
+	records = append(records, historyOf(MaxHistoryPageSize)...)
+	records = append(records, json.RawMessage(`{"type":"text","parent_tool_use_id":"far"}`))
+
+	page, err := PageHistory(records, NoHistorySeq, 1)
+	if err != nil {
+		t.Fatalf("PageHistory failed: %v", err)
+	}
+	if got := seqsOf(t, page.Records); len(got) != 1 {
+		t.Errorf("page holds %d records, want only the one asked for", len(got))
+	}
+}
+
 // TestPageHistoryRejectsInvalidCursor: a cursor naming no record must fail
 // loudly. Answering with the newest page instead would silently restart the
 // client's scrollback from the bottom.

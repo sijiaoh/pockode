@@ -342,10 +342,11 @@ agent's own account of why the call needs a decision, when the agent gives one:
 | `blocked_path` | The path the request is about, when the agent names one. Claude's `blocked_path`; never set for Codex. |
 
 A `permission_response` record is the answer the request got: `request_id` and
-`choice` (`allow`, `always_allow`, `deny`). A person's answer has nothing more,
-and is recorded for replay only — the client that sent it already shows it. An
-answer a permission reviewer session gave says so, and is broadcast as well,
-since no client drew it:
+`choice` (`allow`, `always_allow`, `deny`), recorded and broadcast whoever gave
+it. A person's answer has nothing more. It is broadcast although the client that
+sent it already shows it: every other client watching the session does not, and
+before it was broadcast they kept a live card for an answered request until
+they reloaded. An answer a permission reviewer session gave says so:
 
 ```json
 {

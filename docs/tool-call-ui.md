@@ -159,7 +159,7 @@ message does. Every part of a list falls into one of these kinds:
 |---|---|---|
 | **Breaker** | a subagent call, `ExitPlanMode`, and their cards — and, since they already end the list, text, a question card and every other part | ends the group and stands as itself |
 | **Pinned** | a call that is `error`; one that is `background` or `fromBackground`, running or settled, unless it was interrupted; one `lostWithProcess`, interrupted or not; a card that is not `allowed`; an `allowed` card whose row has not come back, or whose call is still running | belongs to the group, never folds |
-| **Settled** | a call that is `success` or `interrupted` (but not `lostWithProcess`), with its `allowed` card if it had one — an `interrupted` one even once a background result reaches it, since the interrupt came first | folds into the summary, and is the only kind that decides whether there is a group |
+| **Settled** | a call that is `success` or `interrupted` (but not `lostWithProcess`), allowed if it asked — an `interrupted` one even once a background result reaches it, since the interrupt came first, unless that result is a success: a call that [finished after the Stop](#status) is pinned, like a failure, or its `after Stop` chip would vanish into the summary | folds into the summary, and is the only kind that decides whether there is a group |
 | **Running** | a `running` call that never had a card | folds into a group its settled neighbours form — named in the summary in the present tense, the newest giving it its elapsed time; otherwise lies flat |
 | **Thinking** | a thinking row — not a call, and counts toward nothing ([turn-progress-ui.md](turn-progress-ui.md#12-where-it-goes-and-groups)) | folds into a group the calls form |
 
@@ -318,10 +318,10 @@ the text that does the work. The shell is read as a shell — quotes, `$(…)`,
 comments and here-doc bodies stay where they belong — and what an agent wraps
 around the work is passed over: `cd`, `export`, `VAR=value` words, `echo`
 banners and `sleep`s; `for … do`, `if … then`, `while`, subshells and `{ }`
-groups; `sudo`, `env`, `timeout` and the `bash -lc '…'` Codex runs everything
-in. Of that command it keeps at most three words — the first by its base
-name, so `./scripts/run.sh` is `run.sh` — stopping before the first that is a
-flag, a quoted or expanded argument, a redirection or a bare `.`. So `cd web
+groups; `sudo`, `env`, `timeout` and the `<shell> -lc '…'` Codex runs everything
+in (`/bin/zsh -lc` on a Mac, codex-cli 0.171). Of that command it keeps at
+most three words — the first by its base name, so `./scripts/run.sh` is
+`run.sh` — stopping before the first that is a flag, a quoted or expanded argument, a redirection or a bare `.`. So `cd web
 && pnpm run test -- --watch` is `pnpm run test`, `for q in …; do echo "$q"; gh
 search issues "$q"; done` is `gh search issues` and `find . -name …` is
 `find`. Where it cannot tell — the command is a variable (`$FF -i …`), the
@@ -475,8 +475,8 @@ need a name too — it is what keeps a list's rows mounted, and what the open
 groups are remembered by — and they take it from their **oldest** member
 (`oldestPart`), not their first: rows arrive at both ends, a live call after
 the last and an older page in front of the first, and the oldest is the one
-neither displaces. A card that takes a row's place takes its id too, so the
-card does not rename the list either. Only a member *leaving* renames it — a
+neither displaces. A card that takes a row's place takes its id too, and hands
+it back with the place once answered, so neither renames the list. Only a member *leaving* renames it — a
 `question_post` row replaced by its card when it was the oldest, an
 `html_render` or `html_edit` call drawn on its own once it succeeds — and that
 remounts the list.
@@ -597,7 +597,8 @@ changed, not who changed it.
 **What counts** is a call that `succeeded`. A failed or denied call changed
 nothing; one interrupted or still running may or may not have, and listing it
 would send the reader to review a change that may not exist — the summary
-row's rule. A subagent cut short keeps the edits it finished.
+row's rule. One that [finished after the Stop](#status) did, and counts. A
+subagent cut short keeps the edits it finished.
 
 **A row** is, left to right: the chevron, the file name — with the chip, the
 one primary-colour text on the row — the directory (`Detail`, fading out from
@@ -1089,6 +1090,15 @@ The glyph column is the single place status is stated:
 | `error` | `X` | `text-th-error` | the row button tinted `bg-th-error/10` (`hover:bg-th-error/15`), detail text `text-th-error`, second line = the line of the output that says why it failed, or the tool's reason for refusing the call — or the outcome, when the run came from the background ([rungs 3 and 4](#the-second-line-problem-1)) | closed, like every other row |
 | `interrupted` | `Ban` | `text-th-text-muted` | second line only if it came from the background (below) | invocation + whatever came back |
 
+A row draws its run's **look** (`toolRunLook`), which is the status except in
+two cases where the run knows more. The model keeps five statuses; these are
+drawings of two of them, not more states:
+
+| Look | Run | Glyph | Colour | Row | Body |
+|---|---|---|---|---|---|
+| denied | settled with `permission.answer` denied — `error`, the engine's refusal, or `interrupted` when a turn ended before Codex reported its `declined` item | `X` | `text-th-text-muted` — no tint, no red detail | *Denied by you*, or the reviewer's [verdict line](unattended-mode-ui.md#32-answered) | invocation + the engine's refusal under *Result* ([the card hands the row back](#the-permission-card-takes-the-rows-place)) |
+| success | `interrupted`, with `finishedAfterStop` | `Check`, plus an `after Stop` chip | `text-th-text-muted`; the chip `bg-th-warning/20` | as `interrupted` | *Finished after the turn was stopped.* + the result (below) |
+
 Two of those are deliberate departures:
 
 - **Success is muted, not green.** A subagent row used to use `text-th-success`
@@ -1123,6 +1133,26 @@ The chip is the same shape an MCP server or `background` wears, and lives in
 It **stays after the run settles**. "This ran in the background" is a permanent
 fact about the call, and it is what tells a reader that the result under the row
 arrived after the agent had already moved on.
+
+**A call that finished after the Stop says so.** An engine may answer a Stop at
+once and let the commands it was running carry on: Codex 0.171 does, for the
+main thread's and a subagent's alike. Their results still arrive, and their
+side effects happened. The model keeps `interrupted` — that is what the turn
+did to the call ([code/frontend-state.md](code/frontend-state.md#tool-runs)) —
+and the drawing is derived (`toolRunLook`): an `interrupted` run whose late
+result is **not an error** (`finishedAfterStop`) is drawn with the muted
+`Check` of any success, and an `after Stop` chip in the `background` chip's slot
+and shape, tinted `bg-th-warning/20` and as permanent. A user who pressed Stop
+on `rm …` has to learn that it ran anyway; that is the one fact the chip is for,
+quieter than red because nothing failed. Its body says *Finished after the turn
+was stopped.* where an interrupted run with a result otherwise says *Returned
+after the turn was interrupted.*, and it [stands alone](#groups) rather than
+folding. A late **error** result does not count: Claude's Stop writes one itself
+for the call it cut (measured: 9ms after the `interrupted` record), and so does
+an engine that actually killed the command. The cost is a command that ran to
+completion after the Stop and then failed: it keeps the `Ban`, with its output
+in the body. Telling it apart from the CLI's own report of the cut would take a
+marker the server does not write.
 
 ### The permission card takes the row's place
 
@@ -1203,16 +1233,43 @@ painted over the card's children and the row's hover cannot cover it — except
 by a child with a z-index, which an open card's sticky bar is, so the card
 restates its tint and frame for the bar
 ([the sticky title line](#the-sticky-title-line)). Its body
-keeps the tint. Once answered it is an ordinary row: no tint, a body on
-`bg-th-bg-secondary` like a tool row's, and a glyph as muted as a settled
-row's — `Check` for an allow, `X` for a deny, whoever answered. An answer is
-not an event. A session can hold dozens of approved cards, and a green tick on
-each would do what it did on the success rows: draw the eye away from the
-calls that failed. A deny is a decision, not a failure, and what the engine
-reports about the refused call afterwards is a settled run of its own (below).
-A red `X` on the card would say "refused" a second time, in the colour that
-means "failed". Shape tells allow from deny, and the verdict line says who and
-why. A request the permission reviewer is
+keeps the tint.
+
+**An answered card hands the row back.** Once answered, the card stops being a
+row of its own: the call's row takes the same slot under the same key — the
+card's id, which was the row's before the card took it — so one call is one
+row, on every client that watches it. Kept as a muted row of its own, the
+answered card read `✓ Bash python3 …` directly above the `✕ Bash python3 …
+exit 3` of the run it allowed: the same command twice, the first copy saying it
+succeeded.
+
+- **Allow** (yours, or Always Allow, or the reviewer's): tap Allow and the same
+  line becomes a spinner, then `✓` or `✕`. The row line says nothing of the
+  answer — an approval is routine, and an answer is not an event; a session
+  can hold dozens. The body opens with one muted line above the Invocation:
+  *Allowed by you*, or *Always allowed ·* and what it wrote, in the words the
+  card used before it was pressed. A reviewer's answer keeps its verdict line
+  under the row, exactly where
+  [unattended-mode-ui.md §3](unattended-mode-ui.md#3-the-permission-card) puts
+  it on the card, and its reason in the body instead.
+- **Deny**: one row, glyph `X` in `text-th-text-muted` — no red tint and no red
+  detail, though the refusal the engine reports is an error result. The row's
+  look comes from the answer, not the result: a deny is a decision, not a
+  failure, and a red `X` would say "refused" a second time in the colour that
+  means "failed". Line 2 is a muted *Denied by you* (or the reviewer's verdict
+  line), and the engine's refusal text is in the body, under Result.
+- The same on phone and desktop; on a phone the body line truncates.
+
+Until the engine reports, the card stands in its own place and already reads as
+the row it will become: an allowed card with a call to run shows the spinner
+until its answer is recorded, and a person's deny says *Denied by you*. A card
+asked in a later bubble than its call's row — a message read mid-turn opened
+one in between — has that row to hand nothing back to: it stays an answered
+card with the muted `Check`, and the row above says how the call went. A card nobody answered — one that
+expired because its asker went away — keeps saying so, and a result that still
+arrives for it, or for a card still pending, gets a row directly under it as
+before. Posted-question cards are not affected: they have no run row to hand
+back to. A request the permission reviewer is
 answering is the exception while pending: it waits on nobody, so it keeps the
 frame (neutral, `outline-th-border`) without the tint, folds, and no button is
 the accent. A verdict line under the row says who answered in the user's place.
@@ -1256,9 +1313,9 @@ prompt that runs arbitrary commands costs too much.
 A denial settles the card from the user's own response
 (`choice === "deny"` in the reducer), not from anything an engine says — and that
 same tap is what produces codex's `declined` item status and Claude's refusal
-result text afterwards. So whatever the engine then reports lands as an ordinary
-settled run and needs no rung of its own: the card directly above it has already
-said why. "The user refused" is told once, where the refusing happened.
+result text afterwards. So whatever the engine then reports needs no rung of its
+own: it becomes the denied row's body, and "the user refused" is told once, on
+the row, where the refusing happened.
 
 ## Title and detail
 
@@ -1274,7 +1331,7 @@ afterwards cannot word the same call differently.
 
 | Tool (Pockode-normalized name) | Title | Detail | Truncates from |
 |---|---|---|---|
-| `Bash` | `Bash` | the **command**, newlines collapsed to ` ⏎ ` — or, when Codex parsed the command into exactly one action, that action's path or query | right |
+| `Bash` | `Bash` | the **command**, with a CLI's own `<shell> -lc '…'` envelope removed and newlines collapsed to ` ⏎ ` — or, when Codex parsed the command into exactly one action, that action's path or query | right |
 | `Read` / `Write` / `Edit` / `MultiEdit` / `LS` | the name | the path relative to the work directory, split so the file name survives | **left** |
 | `Grep` | `Grep` | `"pattern"` + ` in <path>` when scoped — the path relative to the work directory when inside it, and no ` in …` at all when it *is* the work directory | right |
 | `Glob` | `Glob` | the pattern | right |
@@ -1296,7 +1353,7 @@ afterwards cannot word the same call differently.
 | `html_get` | `html_get` | `pockode` as a chip, then the `id` | right |
 | anything else | the name | first non-empty scalar in `input` | right |
 
-Eight decisions inside that table:
+Nine decisions inside that table:
 
 - **`TaskOutput` is in the table although many of them never draw a row.** A
   fetch of a task's output is filed under the call it reads and takes no row at
@@ -1317,6 +1374,20 @@ Eight decisions inside that table:
   win whenever Claude supplied one, and a paraphrase — *"Build the web package"* —
   is not what ran. On a phone this row is frequently the only audit a user
   performs. The description is not lost: it is the first line of the body.
+- **…with the CLI's shell envelope taken off.** Codex runs every command as
+  `<shell> -lc '<script>'`, and on a phone `Bash /bin/zsh -lc 'sleep 45; echo
+  main…` spent half the detail on the wrapper. `unwrapShellCommand`
+  (`lib/commandHead.ts`, on `commandHead`'s tokenizer) shows the script, but
+  only when the whole command is exactly three words — a shell (`sh`, `bash`,
+  `zsh`, any path), a `-c`-style flag, one script word whose value is literal
+  — so what is shown runs the same as what ran. A redirection, a comment, an
+  unclosed quote, an expansion, an escape inside double quotes, or an unquoted
+  glob or leading `~` in the script keeps the command as written. It is the row, the step window, the tail line, both
+  titles and the body's *Command*; the raw input keeps the envelope. Not from
+  Codex's `command_actions[].command`, which exists only when it parsed the
+  command into exactly one action. A `bash -c '…'` an agent wrote itself is
+  unwrapped too: the shape cannot tell it from an envelope, and what runs is
+  the same.
 - **No character slicing.** The code used to cut at 50 characters *before* CSS
   truncated again — a truncation policy that ignores how wide the screen is, and
   two truncations that disagree. The detail is passed whole and CSS cuts it at
@@ -1360,14 +1431,17 @@ Eight decisions inside that table:
 // head = everything up to the last "/", tail = the file name (+ any :line suffix)
 <span className="flex min-w-0 flex-1 items-baseline">
   <span className="truncate text-th-text-muted">{head}</span>
-  <span className="max-w-[70%] shrink-0 truncate text-th-text-secondary">{tail}</span>
+  <span className={`shrink-0 truncate text-th-text-secondary ${head ? "max-w-[70%]" : "max-w-full"}`}>{tail}</span>
 </span>
 ```
 
 The directories fade out from the left, the file name stays, and it is a rung
 brighter because it is the identifying part. The 70% cap keeps a pathological
-file name from evicting the directories entirely. Non-path details pass `tail`
-as empty and get a plain `truncate`.
+file name from evicting the directories entirely — so it applies only when
+there are directories: a file at the work directory's root has an empty head,
+and the cap would leave 30% of the detail blank while the name was cut, so its
+name may take the whole width. Non-path details pass `tail` as empty and get a
+plain `truncate`.
 
 **Status outranks the two rungs.** On an `error` row both spans take
 `text-th-error`; the head/tail contrast exists to point at the identifying part
@@ -1834,6 +1908,10 @@ counts or a command's exit code, [below](#what-the-call-measured) — and then
 **its time**, a finished run's duration or a live run's elapsed counter. They
 are `gap-2` apart, with no `·` between them, as in `proposedChangeHeader`. The
 time comes last so that the times of a stack of rows stay in one column.
+`ToolMeta` carries its own `ml-auto` rather than relying on the detail to
+fill the line: `Detail` draws nothing without text, so a row with no detail —
+a Codex `subAgentActivity` subagent, a `Wait` — put its time against its name
+(`read_calc 4.6s`) until it did.
 Neither one is ever truncated; the detail gives way. On a 375px row that still
 leaves the file name: the widest figure, `+1234 −567`, is about ten
 characters, and the detail's own rules (left truncation, the 70% cap on the
@@ -1911,8 +1989,8 @@ alike (a backgrounded call has not finished; its counter keeps going until its
 outcome arrives and the duration takes its place).
 
 - **It counts from the same start as the finished figure**, so the counter and
-  the duration that replaces it agree — and a call rebuilt under its answered
-  permission card now gets a clock from the answer, where it had none.
+  the duration that replaces it agree — and a call whose row an answered
+  permission card handed back gets a clock from the answer, where it had none.
 - **It does not depend on the phone's clock agreeing with the server's**, the
   same rule as the turn clock
   ([turn-progress-ui.md §2.3](turn-progress-ui.md#23-what-it-says)). A start the client saw
@@ -2016,8 +2094,9 @@ Codex file change:
   `rewritten` chip. The chip slot is for facts about the call itself, like an
   MCP server or `background`. Whether the file was new is already said by the
   body's *Content* and by the turn's changes card.
-- **Only on `success`.** A failed change changed nothing, which is the turn's
-  tally's rule too. Its body still has the muted counts beside `not applied`.
+- **Only on `success`**, a call that finished after the Stop included. A
+  failed or denied change changed nothing, which is the turn's tally's rule
+  too. Its body still has the muted counts beside `not applied`.
   An `interrupted` one may or may not have changed anything, and a running one
   has not yet. A pending permission card's row has no counts either: the
   change has not run, and the card's *Proposed change* header has them.
@@ -2596,7 +2675,9 @@ In the default order, each section omitted when empty:
      so a refused change looks exactly like one that landed, and the result —
      the only place the reason is — was shown nowhere: on device an `Edit` whose
      `old_string` was not in the file opened on a `+1 −2` diff that read as
-     applied, with the error never on screen.
+     applied, with the error never on screen. A **denied** change reads `not
+     applied` the same way, but its refusal is a decision rather than a
+     failure: the section is *Result*, in plain text.
 4. For a call whose result outlived the turn it was cut off in, one line saying
    so. A non-zero exit code is on the row
    ([what the call measured](#what-the-call-measured)), not here.
@@ -3441,6 +3522,8 @@ right end — the duration stays on line 1:
 | `success` | `N tool uses · <report>` and the tokens ([above](#line-2-once-settled-the-count-the-report-the-tokens)) |
 | `error` | `N tool uses · <first line of what it returned>`, in the muted second-line colour — the row's red is line 1's; why it failed is the news, and the body does not open to say it ([the body](#the-body-problems-2-and-3)). No tokens: on a failed row why outranks what it spent |
 | `interrupted` | `N tool uses` while its frozen [window](#the-step-window) is drawn, then `N tool uses · <latest child>`, frozen where it was cut — no tokens even when a late result brought some: where it was is the news. Codex and Claude alike: a Codex subagent the user's Stop cut short is `interrupted`, not `error` (below) |
+| `interrupted`, [finished after the Stop](#status) | line 1 has the `Check` and the `after Stop` chip; line 2 reads as `interrupted`, without tokens — where the Stop found it is still the news |
+| [denied](#status) | the shared row's line: *Denied by you*, or nothing under a reviewer's or Pockode's [verdict line](unattended-mode-ui.md#32-answered), which the row keeps as any row does — the call never started a subagent, so there is nothing to count. An allowed one draws its answer as any row does too: the verdict line, and the answer note at the top of the body |
 | settled from the background, `completed` | as `success` — the outcome is its report ([the subagent body](#the-subagent-body)), so it reads as a foreground success does |
 | settled from the background, `failed` / `stopped` | `N tool uses · <first line of the outcome>` — the verdict is the news, as on a foreground failure |
 
@@ -3690,14 +3773,18 @@ sets `interactive-widget=resizes-content`, so the keyboard opening changes the
 height, and sizing by it would resize every window with every focus. Width
 changes only on rotation, which reflows everything anyway.
 
-**Reserved at the first step, bottom-aligned.** The window is not drawn before
-the first step, so a row with none reads exactly as it did ([the second
-line](#the-second-line-steps-and-what-it-is-doing)). At its first step it draws
-**all k line boxes**: the newest step on the bottom line, the unfilled lines
-above it blank, each new step entering at the bottom and rolling upward.
-Rolling changes text, not layout, so a live row moves the rows under it once
-(0 → k), not k times. A resume regrows a folded window the same way: once, at
-the resume, on a row that has just said it is running again.
+**Grown to k, then rolled.** The window is not drawn before the first step,
+so a row with none reads exactly as it did ([the second
+line](#the-second-line-steps-and-what-it-is-doing)). It then draws **only the
+lines it has steps for**: one at the first step, two at the second, up to k.
+After that each new step enters at the bottom and the oldest drops off the
+top; rolling changes text, not layout. So a live row moves the rows under it
+once per line it gains, k times at most, all in its first seconds. That is k−1
+moves more than reserving all k boxes at the first step: two on a desktop, one
+on a phone. The reservation's unfilled boxes read as a hole in the layout, on
+every subagent with fewer steps than k, which is most short ones. A frozen window keeps the lines it
+had, not k. A resume regrows a folded window the same way, on a row that has
+just said it is running again.
 
 #### What each line shows
 
@@ -3790,7 +3877,7 @@ starts at or above the view's top
 fold wholly above the view is under its correction, and one wholly below it
 moves nothing visible. A lone subagent that finishes at the tail therefore
 stays frozen in front of the reader until the turn ends.
-`StepWindowFold.browser.test.tsx` holds this, and the reserved growth above,
+`StepWindowFold.browser.test.tsx` holds this, and the growth above,
 on a 360×640 phone.
 
 **Once folded, it stays folded.** The fold is latched by run id in a set
@@ -4153,8 +4240,8 @@ frame:
   diff"* — then the card as it always reads. Being inside the outer item's DOM
   says which subagent row a card is under; it never said which subagent asked.
 - **It goes when the card leaves the slot.** Answered, the card is drawn in the
-  asker's own Process, where the rail already says whose it is, and it reads as
-  any answered card does. A card still flat because its call has not been
+  asker's own Process, where the rail already says whose it is, and hands its
+  place to the call's row as any answered card does. A card still flat because its call has not been
   written yet (claude 2.1.286 asks first —
   [code/frontend-state.md](code/frontend-state.md#a-subagents-children)) is
   outside every subagent and has no asker line — for that moment it reads as
@@ -4205,7 +4292,9 @@ renderer infers nothing.
 - **Records of transcripts recorded before children were attributed** carry
   nothing to file them by, and stay where they are. They read exactly as before.
 - **A child whose call is not in the loaded transcript** — the page boundary fell
-  between a subagent call and its work — has no row to go under, and is drawn
+  between a subagent call and its work, which the server only lets happen when
+  the call is more than a maximum page (500 records) back
+  ([agent-chat.md](agent-chat.md#history-paging)) — has no row to go under, and is drawn
   flat where it arrived, as old transcripts are, rather than under a stand-in
   row naming a call the client cannot show. When the page holding the call
   loads, the flat children stay where they are, by the rule a fetch already
@@ -4237,7 +4326,7 @@ details are in [the table](#title-and-detail), their summary verbs in
 | Codex `WebSearch` / `WebFetch` | the usual rungs | the invocation, then the links a search reported, or a line saying nothing came back to show | no |
 | `GenerateImage` | the usual rungs; a limit reached is rung 4 | the prompt, with the image as the row's attachment | no |
 | `Sleep` | none | one line, *Asked to wait 30s* | no |
-| `AgentControl` | the usual rungs | the prompt when there is one, then each agent's state | no |
+| `AgentControl` | the usual rungs | the prompt when there is one, then each agent's state; a `wait` that named no agent says so in one line | no |
 | a dynamic tool | as an MCP call | as an MCP call | no |
 
 **`NotebookEdit` is a file change, drawn the way an `Edit` is.**
@@ -4323,7 +4412,12 @@ are the pulse a reader needs. The body has the prompt, when it sent one, in a
 clamped Markdown section headed *Prompt*, then each receiver's last known
 state under *Agents*, one line each as the server wrote it
 (`/root/file_reader: completed`). Without a prompt the invocation lists the
-call's arguments. In a group summary it is named by its title, `Used Wait`.
+call's arguments — except a `wait` that named no agent: a `wait_agent` with no
+target waits on whichever answers first, and Codex then reports no receiver
+and no state (`receiver_thread_ids: []`, measured on codex-cli 0.171), so the
+row is a bare `⧉ Wait` and the body is one muted line, *Codex did not say which
+agents it waited for.*, in place of an `agents []` parameter. In a group
+summary it is named by its title, `Used Wait`.
 
 ## Pockode's own work calls
 

@@ -79,6 +79,7 @@ func PageHistory(records []json.RawMessage, beforeSeq HistorySeq, limit int) (Hi
 	if start < 0 {
 		start = 0
 	}
+	start = backToSubagentCalls(records, start, end)
 
 	page := HistoryPage{Records: stampHistorySeq(records[start:end], HistorySeq(start+1))}
 	if start > 0 {
@@ -87,4 +88,80 @@ func PageHistory(records []json.RawMessage, beforeSeq HistorySeq, limit int) (Hi
 		page.NextBeforeSeq = HistorySeq(start + 1)
 	}
 	return page, nil
+}
+
+// backToSubagentCalls moves a page's start back far enough to hold the call of
+// every subagent whose work the page holds, so a page boundary never falls
+// between a subagent call and its work.
+//
+// The client files a child record under its parent's row only when that row is
+// loaded, and a child that loaded first stays flat where it arrived even once
+// the parent's page comes — a row is never taken out from under the reader
+// (docs/tool-call-ui.md#what-is-not-filed). So a boundary there drew the work
+// twice for good: counted under the subagent's row, and again as stray
+// top-level rows. Moving the boundary is what keeps the client's rule intact.
+//
+// Bounded by MaxHistoryPageSize: a subagent call further back than that is left
+// out, and its work is drawn flat as before. Repeated to a fixed point, because
+// a subagent call taken in can itself be a nested subagent's, with its parent
+// further back still.
+func backToSubagentCalls(records []json.RawMessage, start, end int) int {
+	floor := max(end-MaxHistoryPageSize, 0)
+	for start > floor {
+		missing := missingParents(records[start:end])
+		if len(missing) == 0 {
+			return start
+		}
+		earliest := start
+		for i := start - 1; i >= floor; i-- {
+			if rec := readFiling(records[i]); rec.spawns() && missing[rec.ToolUseID] {
+				earliest = i
+			}
+		}
+		if earliest == start {
+			return start
+		}
+		start = earliest
+	}
+	return start
+}
+
+// filing is the part of a record that says where the client files it.
+type filing struct {
+	Type            string `json:"type"`
+	Subtype         string `json:"subtype"`
+	ToolUseID       string `json:"tool_use_id"`
+	ParentToolUseID string `json:"parent_tool_use_id"`
+}
+
+// spawns reports the record a call's row is drawn from: its tool_call, but not
+// a later announcement that its work runs again (agent.ToolCallResumed), which
+// the client applies to a row already loaded and otherwise drops.
+func (f filing) spawns() bool {
+	return f.Type == "tool_call" && f.ToolUseID != "" && f.Subtype != "resumed"
+}
+
+func readFiling(raw json.RawMessage) filing {
+	var rec filing
+	if err := json.Unmarshal(raw, &rec); err != nil {
+		return filing{}
+	}
+	return rec
+}
+
+// missingParents names the subagent calls the records' children are filed
+// under that the records do not announce themselves.
+func missingParents(records []json.RawMessage) map[string]bool {
+	announced := map[string]bool{}
+	missing := map[string]bool{}
+	for _, raw := range records {
+		rec := readFiling(raw)
+		if rec.spawns() {
+			announced[rec.ToolUseID] = true
+		}
+		if rec.ParentToolUseID != "" && !announced[rec.ParentToolUseID] {
+			missing[rec.ParentToolUseID] = true
+		}
+	}
+	return missing
 }

@@ -1,6 +1,7 @@
 import type { ContentPart } from "../types/message";
 import { splitNativePath } from "../utils/path";
 import { pockodeTool } from "./pockodeTool";
+import { toolRunLook } from "./toolRun";
 
 /** Pockode's own page tools, by both names each arrives under (`pockodeTool`). */
 type PageTool = "html_render" | "html_edit" | "html_get";
@@ -28,14 +29,16 @@ export function isHtmlGetTool(toolName: string): boolean {
 
 /**
  * Whether the part is drawn as an HTML card rather than a row. Only once it
- * has succeeded: running, failed or cut short it is a call like any other, and
- * a page that never arrived is no part of the reply. An `html_edit` needs the
- * id of the page it stored as well, since that id is the only way to its page;
- * an `html_render` carries its page in its input, so one from before pages had
- * ids is still a card.
+ * has succeeded, which includes finishing after the Stop: running, failed or
+ * cut short it is a call like any other, and a page that never arrived is no
+ * part of the reply. An `html_edit` needs the id of the page it stored as well,
+ * since that id is the only way to its page; an `html_render` carries its page
+ * in its input, so one from before pages had ids is still a card.
  */
 export function isHtmlRenderCard(part: ContentPart): boolean {
-	if (part.type !== "tool_call" || part.tool.status !== "success") return false;
+	if (part.type !== "tool_call" || toolRunLook(part.tool) !== "success") {
+		return false;
+	}
 	const tool = pageTool(part.tool.name);
 	return (
 		tool === "html_render" || (tool === "html_edit" && !!part.tool.htmlPage)

@@ -26,6 +26,7 @@ import {
 	type UnfiledChildren,
 	unfiledChildren,
 } from "../../lib/subagentRun";
+import { toolRunLook } from "../../lib/toolRun";
 import { isTaskTool, SUBAGENT_TITLE, toolSummary } from "../../lib/toolSummary";
 import { backgroundTaskRuns } from "../../lib/turnOverview";
 import { useWorkStore } from "../../lib/workStore";
@@ -811,7 +812,7 @@ function BackgroundTaskItem({
 	const label = [
 		summary.title,
 		summary.detail + summary.detailTail,
-		toolStatusWord(run.status),
+		toolStatusWord(toolRunLook(run)),
 		toTranscript ? "open its transcript" : "go to its row",
 	]
 		.filter(Boolean)
@@ -834,7 +835,7 @@ function BackgroundTaskItem({
 			>
 				{/* Named as its row's glyph is, not by the raw tool name. */}
 				<ToolStatusGlyph
-					status={run.status}
+					status={toolRunLook(run)}
 					name={
 						isTaskTool(run.name)
 							? SUBAGENT_TITLE

@@ -170,6 +170,21 @@ describe("turnChanges", () => {
 		).toEqual([]);
 	});
 
+	// The engine let it run on past the Stop, and it landed.
+	it("counts a call that finished after the Stop", () => {
+		expect(
+			shape([
+				call(
+					"1",
+					"Edit",
+					{ file_path: "/repo/a.ts", old_string: "x", new_string: "y" },
+					"interrupted",
+					{ finishedAfterStop: true },
+				),
+			]),
+		).toHaveLength(1);
+	});
+
 	it("includes what a subagent changed, wherever the subagent ended", () => {
 		expect(
 			shape([

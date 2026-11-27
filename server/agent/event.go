@@ -300,6 +300,9 @@ type TextEvent struct {
 	// came out of, when the agent puts ids on them. See
 	// EventRecord.ProviderMessageID.
 	ProviderMessageID string
+	// AfterTurn says this arrived after the turn it belongs to had ended; see
+	// MarkAfterTurn. Not recorded: the record is drawn the same either way.
+	AfterTurn bool
 }
 
 func (TextEvent) EventType() EventType { return EventTypeText }
@@ -334,6 +337,9 @@ type ToolCallEvent struct {
 	Subtype string
 	// ObservedAt is when Pockode saw the call; see EventRecord.ObservedAt.
 	ObservedAt time.Time
+	// AfterTurn says this arrived after the turn it belongs to had ended; see
+	// MarkAfterTurn. Not recorded: the record is drawn the same either way.
+	AfterTurn bool
 }
 
 // ToolCallResumed marks a tool_call record that announces an earlier call
@@ -438,6 +444,9 @@ type ToolResultEvent struct {
 	// ObservedAt is when Pockode saw the result; see EventRecord.ObservedAt.
 	// Never set on a ToolResultBackgroundLost result (see ObserveAt).
 	ObservedAt time.Time
+	// AfterTurn says this arrived after the turn it belongs to had ended; see
+	// MarkAfterTurn. Not recorded: the record is drawn the same either way.
+	AfterTurn bool
 }
 
 func (ToolResultEvent) EventType() EventType { return EventTypeToolResult }
@@ -589,6 +598,9 @@ type ThinkingEvent struct {
 	// ProviderMessageID names the part of the agent's own conversation this
 	// thinking came out of; see EventRecord.ProviderMessageID.
 	ProviderMessageID string
+	// AfterTurn says this arrived after the turn it belongs to had ended; see
+	// MarkAfterTurn. Not recorded: the record is drawn the same either way.
+	AfterTurn bool
 }
 
 func (ThinkingEvent) EventType() EventType { return EventTypeThinking }
@@ -1014,6 +1026,51 @@ func ObserveAt(event AgentEvent, at time.Time) AgentEvent {
 		return e
 	}
 	return event
+}
+
+// MarkAfterTurn flags content that arrived after the turn it belongs to had
+// already ended, and returns every other event unchanged.
+//
+// For an agent whose turns are only ever opened by the CLI announcing them
+// (Codex's turn/started), content with no turn running cannot be the CLI
+// resuming: it is a straggler of a turn that is over — a command the interrupt
+// did not kill finishing, a subagent still running when its parent's turn
+// ended. It is stored and shown like any other content, but it must not open a
+// turn, because no ending is coming for one (process.turnInputFor).
+//
+// Claude does not use it: Claude announces no turn start, and content after an
+// ending — a background subagent waking the session — is how its turns open.
+func MarkAfterTurn(event AgentEvent) AgentEvent {
+	switch e := event.(type) {
+	case TextEvent:
+		e.AfterTurn = true
+		return e
+	case ToolCallEvent:
+		e.AfterTurn = true
+		return e
+	case ToolResultEvent:
+		e.AfterTurn = true
+		return e
+	case ThinkingEvent:
+		e.AfterTurn = true
+		return e
+	}
+	return event
+}
+
+// ArrivedAfterTurn reports content MarkAfterTurn flagged.
+func ArrivedAfterTurn(event AgentEvent) bool {
+	switch e := event.(type) {
+	case TextEvent:
+		return e.AfterTurn
+	case ToolCallEvent:
+		return e.AfterTurn
+	case ToolResultEvent:
+		return e.AfterTurn
+	case ThinkingEvent:
+		return e.AfterTurn
+	}
+	return false
 }
 
 // optionalTime is how a moment reaches an EventRecord: the zero time means the

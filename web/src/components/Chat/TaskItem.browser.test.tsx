@@ -74,3 +74,32 @@ describe("a settled subagent row's figures", () => {
 		expect(onTheLine(screen.getByText("45.6K tokens"))).toBe(true);
 	});
 });
+
+// docs/tool-call-ui.md#elapsed-and-duration-meta: the time is right-aligned on
+// every row, a Codex subagent named by its agent alone included.
+describe("a subagent row with no detail", () => {
+	it("keeps its time at the right edge, not against its name", async () => {
+		render(
+			<div style={{ width: 600 }}>
+				<TaskItem
+					run={{
+						id: "t1",
+						name: "Agent",
+						input: { agent_path: "/root/read_calc" },
+						status: "success",
+						result: "",
+						durationMs: 4_600,
+					}}
+					renderChild={() => null}
+				/>
+			</div>,
+		);
+		await act(nextFrame);
+		const time = screen.getByText("4.6s");
+		const row = screen.getByRole("button", { name: /read_calc/ });
+		const rowRight =
+			row.getBoundingClientRect().right -
+			Number.parseFloat(getComputedStyle(row).paddingRight);
+		expect(rowRight - time.getBoundingClientRect().right).toBeLessThan(1);
+	});
+});

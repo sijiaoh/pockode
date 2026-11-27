@@ -788,7 +788,11 @@ conversation can be reopened at.
 was produced inside. It has to be a field because position cannot say it: a
 backgrounded Claude subagent writes between the main agent's own lines, and a
 Codex subagent's items arrive interleaved with the parent thread's. A subagent's
-subagent names the call that spawned *it*, so the field nests. What it names may
+subagent names the call that spawned *it*, so the field nests — when the CLI
+streams that depth at all: on claude 2.1.330 a nested subagent's own steps
+never reached the stream live (the outer subagent's row counted the nested call
+and its own Read; the nested row had no steps), so a nested row without children
+is what the CLI sent, not a filing fault. What it names may
 not be loaded — an earlier history page, or a call a fork cut dropped because
 its result fell after the cut — and a client that cannot find it shows the
 record where it sits. Claude
@@ -2376,6 +2380,14 @@ The `result` message is classified in this order:
    [Background Waits](#background-waits)).
 4. otherwise → `DoneEvent`.
 
+A Stop during a running turn therefore ends it twice: the `interrupt`'s
+`control_response` and the aborted `result` each map to `InterruptedEvent`,
+and both are recorded (measured on claude 2.1.330: two `interrupted` records
+17ms apart), and the client draws one ending line for the two. The CLI's own
+report of the cut call — an `is_error` `tool_result` saying it was stopped —
+comes 9ms after the first, which is why a late *error* result does not make a row
+[finished after the Stop](../tool-call-ui.md#status).
+
 ### Background Waits
 
 A turn that started a background task (`run_in_background`) ends with an ordinary
@@ -2633,7 +2645,7 @@ doing, and how backgrounded work ended. Measured on claude 2.1.263:
 | `task_notification` | `task_id`, `tool_use_id`, `status` ∈ `completed`/`failed`/`stopped`, `output_file`, `summary`, `usage`, `resource_links` | the outcome, recorded only for a backgrounded call; a subagent's carries its final `usage` into the record's `subagent` |
 | `background_tasks_changed` | `tasks[]` of `{task_id, task_type, description, ambient}` | the live set, above |
 
-Five things about that table are not guessable from it, and the first two were
+Six things about that table are not guessable from it, and the first two were
 measured only after the design had assumed the opposite:
 
 - **`task_progress` carries no `summary` on 2.1.263**, though the schema
@@ -2652,6 +2664,24 @@ measured only after the design had assumed the opposite:
   it held.
 - **`task_updated` carries no `tool_use_id`**, only `task_id` — the whole reason
   the join map exists.
+- **A backgrounded subagent can complete more than once.** Measured on claude
+  2.1.330: a background subagent that backgrounded a command of its own and
+  ended its turn got a `completed` `task_notification` 5.9s in ("the command is
+  running in the background…"), and when the command finished the CLI woke it
+  under a *new* `task_started` for the same `tool_use_id`, whose notification 43s
+  in was the real report. Recorded as the outcome, the first settled the row
+  while the subagent was still at work, and the turn's end showed no agent
+  alive. So a subagent's `completed` notification is held while a backgrounded
+  task started from inside it is still live: the adapter keeps each call's
+  `parent_tool_use_id` until its result (`noteCall`), so a task knows whose work
+  it is. The call stays owed an outcome — a process dying in between reports it
+  lost, like any other backgrounded call — and the resumed task inherits the
+  agent id the placeholder named. Nothing is dropped by holding it: what the
+  notification says is the subagent's last text, already in the transcript.
+  A Stop is the one way out that wakes nothing: it stops live background tasks,
+  and a held subagent's own task has already ended, so when its last
+  background child ends `stopped` the subagent is recorded as stopped with it
+  (`releaseStopped`) rather than drawn running until the process goes away.
 - **`tool_use_id` is optional on the edges too.** A task with none is a task no
   tool call asked for (scheduled and housekeeping work) and has no row to belong
   to, so the frame is dropped rather than rendered loose: a progress line that
@@ -4252,8 +4282,9 @@ the translation, and it exists because the mapping is not one-to-one in either
 direction: five event types all mean "the agent produced content", while a
 `system` frame means "the turn is alive" and must specifically *not* mean "the
 CLI resumed". Nor is it keyed on the type alone: a `tool_result` settling
-background work is noise, every other one is output. Nothing else in the server
-reads event types to decide what a session is doing.
+background work is noise, and so is content an adapter flagged as arriving
+after its turn ended (`agent.MarkAfterTurn`); every other one is output.
+Nothing else in the server reads event types to decide what a session is doing.
 
 The send path supplies the two signals no event carries: `SignalPrompt` when a
 prompt goes out, `SignalAnswered` with the request id when an answer goes back.
@@ -5156,6 +5187,22 @@ it is there. That reply is handled on a goroutine of its own, while every
 `turn/started` and `turn/completed` arrives on the single reader — so adopting the
 reply's id could put a finished turn back after `turn/completed` had cleared it,
 and leave the session holding a turn that no longer exists.
+
+**What a stop did not stop goes on reporting after the ending.** Measured on
+codex-cli 0.171.0: `turn/interrupt` is answered with an interrupted
+`turn/completed` within milliseconds, while a running command — the main
+thread's or a subagent's — is left to finish, and its `item/completed` (and the
+subagent's own text and ending) arrive tens of seconds later. A subagent still
+running when its parent's turn completes reports the same way. None of it is
+inside a turn, and no `turn/completed` is coming for it, so read as output it
+used to open a turn nothing ended: the session sat `running`, Stop showing, and a
+second Stop found no turn to name. Since every turn of this thread names itself
+with `turn/started` before its content, on the same reader goroutine that clears
+it, `emitEvent` flags any content emitted with no turn recorded
+(`agent.MarkAfterTurn`), and `process.turnInputFor` reads a flagged event as
+noise. It is still recorded and drawn under the call it settles. The results a
+turn's own ending releases (held subagent results) go out before the turn is
+cleared, so they are not flagged.
 
 ### Resource Cleanup Order
 

@@ -245,6 +245,36 @@ describe("TurnTail", () => {
 			expect(statusLine()).toHaveTextContent(/^Working·1·Explore$/);
 		});
 
+		// The agent named first is the one running the nested one; naming the
+		// nested one's agent too left a phone room for neither.
+		it("names a nested subagent step by its task alone", () => {
+			const outer: ToolRun = {
+				id: "o",
+				name: "Agent",
+				input: { description: "Outer", subagent_type: "general-purpose" },
+				status: "running",
+				children: [
+					{
+						type: "tool_call",
+						id: "call-n",
+						tool: {
+							id: "n",
+							name: "Agent",
+							input: {
+								description: "Read README first line",
+								subagent_type: "general-purpose",
+							},
+							status: "running",
+						},
+					},
+				],
+			};
+			renderTail({ agents: { liveCount: 1, named: outer, entries: [] } });
+			expect(statusLine()).toHaveTextContent(
+				/^Working·1·general-purposeRead README first line$/,
+			);
+		});
+
 		// Only the bubble the overview is drawn in counts the turn.
 		it("draws no plan or agents in another bubble", () => {
 			renderTail({ plan: PLAN, agents, overviewMessageId: "other" });

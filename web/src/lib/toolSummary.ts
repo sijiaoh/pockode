@@ -14,7 +14,7 @@ import {
 	generateImagePrompt,
 	SLEEP_TOOL,
 } from "./codexTools";
-import { commandHead } from "./commandHead";
+import { commandHead, unwrapShellCommand } from "./commandHead";
 import {
 	htmlEditInput,
 	htmlGetInput,
@@ -256,8 +256,9 @@ function bashSummary(input: unknown, workDir: string): ToolSummary {
 		title: "Bash",
 		// The command, not `description`: a paraphrase is not what ran, and on a
 		// phone this row is frequently the only audit anyone performs. The
-		// description is not lost — it is the first line of the body.
-		detail: command ? flattenCommand(command) : "",
+		// description is not lost — it is the first line of the body. A CLI's own
+		// `zsh -lc '…'` envelope is not part of what the agent asked to run.
+		detail: command ? flattenCommand(unwrapShellCommand(command)) : "",
 		detailTail: "",
 		mono: true,
 	};
