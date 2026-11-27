@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { commandHead, toolSummary, toolVerb } from "./toolSummary";
+import { toolSummary, toolVerb } from "./toolSummary";
 
 const WORK_DIR = "/Users/test/project";
 
@@ -331,34 +331,6 @@ describe("the remaining tool kinds", () => {
 				WORK_DIR,
 			).chip,
 		).toBe("delete");
-	});
-});
-
-describe("commandHead", () => {
-	it.each([
-		["pnpm run test", "pnpm run test"],
-		["go test ./relay/... -run TestX", "go test ./relay/..."],
-		['git commit -m "Fix it"', "git commit"],
-		["python3 -I x.py", "python3"],
-		["cd web && CI=1 pnpm test -- --run", "pnpm test"],
-		["cd a && cd b && make", "make"],
-		["cat x | rg foo", "cat x"],
-		["ls; pwd", "ls"],
-		["cat <<EOF\nhi\nEOF", "cat"],
-		["pnpm test 2>&1", "pnpm test"],
-		["cd web; pnpm test", "pnpm test"],
-		["cd web\npnpm test", "pnpm test"],
-		["pnpm dev & sleep 2", "pnpm dev"],
-		["# build it\npnpm build", "pnpm build"],
-		['cd "my dir" && make build', "make build"],
-		['FOO="a b" BAR= node x.js', "node x.js"],
-		["docker compose up web db", "docker compose up"],
-	])("reads %j as %j", (command, head) => {
-		expect(commandHead(command)).toBe(head);
-	});
-
-	it("has nothing to say for a command that is all flags", () => {
-		expect(commandHead("-x")).toBeUndefined();
 	});
 });
 

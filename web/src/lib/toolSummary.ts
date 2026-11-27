@@ -14,6 +14,7 @@ import {
 	generateImagePrompt,
 	SLEEP_TOOL,
 } from "./codexTools";
+import { commandHead } from "./commandHead";
 import {
 	htmlEditInput,
 	htmlGetInput,
@@ -573,45 +574,6 @@ export interface ToolVerbReading {
 function filePaths(obj: Record<string, unknown>): string[] | undefined {
 	const path = str(obj.file_path) ?? str(obj.notebook_path) ?? str(obj.path);
 	return path ? [path] : undefined;
-}
-
-// A lone `&` too: what follows a backgrounded command is another command.
-const SHELL_OPERATOR = /&&|\|\||\||;|⏎|&/;
-
-/** One shell word, quoted or not: what a `cd` or an assignment takes. */
-const SHELL_WORD = String.raw`(?:"[^"]*"|'[^']*'|\S+)`;
-const LEADING_CD = new RegExp(String.raw`^cd\s+${SHELL_WORD}\s*(?:&&|;|⏎)\s*`);
-/** A comment line ahead of the command, as a here-doc'd script opens. */
-const LEADING_COMMENT = /^#[^⏎]*⏎\s*/;
-const LEADING_ASSIGNMENT = new RegExp(
-	String.raw`^[A-Za-z_][A-Za-z0-9_]*=${SHELL_WORD}?\s+`,
-);
-
-/**
- * What a reader recognises a command by: its first few words, before the
- * flags, the quoted arguments and whatever it was piped or chained into. The
- * `cd`, the variables and the comments in front are where and how it ran, or
- * notes on it, not what ran. Nothing marks the cut — the row is one tap away
- * and has the whole command.
- */
-export function commandHead(command: string): string | undefined {
-	let rest = flattenCommand(command);
-	for (;;) {
-		const stripped = rest
-			.replace(LEADING_CD, "")
-			.replace(LEADING_COMMENT, "")
-			.replace(LEADING_ASSIGNMENT, "");
-		if (stripped === rest) break;
-		rest = stripped;
-	}
-	const words: string[] = [];
-	for (const word of rest.split(SHELL_OPERATOR)[0].split(/\s+/)) {
-		if (!word) continue;
-		// A flag, a quoted argument or a redirection (`2>&1`, `<<EOF`).
-		if (/^([-"'`]|\d*[<>])/.test(word) || words.length === 3) break;
-		words.push(word);
-	}
-	return words.length > 0 ? words.join(" ") : undefined;
 }
 
 function hostOf(url: string): string | undefined {
