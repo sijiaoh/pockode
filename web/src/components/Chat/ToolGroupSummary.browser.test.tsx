@@ -1,5 +1,5 @@
 import { act, render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { ContentPart } from "../../types/message";
 import { PartBlocks } from "./ToolList";
 
@@ -26,11 +26,19 @@ const parts: ContentPart[] = [
 	call("f", "Read", { file_path: "/w/web/src/lib/partTree.ts" }),
 ];
 
-function List({ width }: { width: number }) {
+function List({
+	width,
+	shown = parts,
+	hidden = false,
+}: {
+	width: number;
+	shown?: ContentPart[];
+	hidden?: boolean;
+}) {
 	return (
-		<div style={{ width }}>
+		<div style={{ width, display: hidden ? "none" : undefined }}>
 			<PartBlocks
-				items={parts.map((part) => ({ part }))}
+				items={shown.map((part) => ({ part }))}
 				renderPart={({ part }) => (
 					<span>{part.type === "tool_call" ? part.tool.id : ""}</span>
 				)}
@@ -45,6 +53,22 @@ function summaryLine(): HTMLElement {
 	if (!(line instanceof HTMLElement)) throw new Error("no summary line");
 	return line;
 }
+
+/** The invisible copies a line measures its forms from, while it measures. */
+const copies = () => document.querySelectorAll("[aria-hidden] > .w-max");
+
+/** Counts layout reads made while `run` commits, before any frame. */
+function readsDuring(run: () => void) {
+	const read = vi.spyOn(Element.prototype, "getBoundingClientRect");
+	try {
+		act(run);
+		return read.mock.calls.length;
+	} finally {
+		read.mockRestore();
+	}
+}
+
+const another = call("g", "Read", { file_path: "/w/web/src/lib/retry.ts" });
 
 describe("ToolGroupSummary", () => {
 	it("gives names up before counts to fit a phone's width, and takes them back when there is room", async () => {
@@ -68,5 +92,52 @@ describe("ToolGroupSummary", () => {
 		rerender(<List width={1200} />);
 		await settle();
 		expect(summaryLine()).toHaveTextContent(/partTree\.ts$/);
+	});
+
+	it("does nothing when a render brings the same words at the same width", async () => {
+		const { rerender } = render(<List width={420} />);
+		await settle();
+		const before = summaryLine().textContent;
+
+		const reads = readsDuring(() =>
+			rerender(<List width={420} shown={parts.map((part) => ({ ...part }))} />),
+		);
+		expect(reads).toBe(0);
+		expect(copies()).toHaveLength(0);
+		await settle();
+		expect(copies()).toHaveLength(0);
+		expect(summaryLine().textContent).toBe(before);
+	});
+
+	it("measures new words in the frame's layout, not in the commit that brought them", async () => {
+		const { rerender } = render(<List width={420} />);
+		await settle();
+
+		const reads = readsDuring(() =>
+			rerender(<List width={420} shown={[...parts, another]} />),
+		);
+		expect(reads).toBe(0);
+		await settle();
+		expect(copies()).toHaveLength(0);
+		const line = summaryLine();
+		expect(line.scrollWidth).toBeLessThanOrEqual(line.clientWidth);
+		expect(line).toHaveTextContent(/Read 4 files$/);
+	});
+
+	it("measures nothing out of sight, and fits words that changed there once shown", async () => {
+		const { rerender } = render(<List width={1200} />);
+		await settle();
+		rerender(<List width={420} hidden />);
+		await settle();
+		rerender(<List width={420} hidden shown={[...parts, another]} />);
+		await settle();
+		expect(copies()).toHaveLength(0);
+
+		rerender(<List width={420} shown={[...parts, another]} />);
+		await settle();
+		expect(copies()).toHaveLength(0);
+		const line = summaryLine();
+		expect(line.scrollWidth).toBeLessThanOrEqual(line.clientWidth);
+		expect(line).toHaveTextContent(/Read 4 files$/);
 	});
 });

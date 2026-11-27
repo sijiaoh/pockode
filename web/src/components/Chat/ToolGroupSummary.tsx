@@ -1,5 +1,6 @@
 import { Ban, Check } from "lucide-react";
-import { Fragment, useLayoutEffect, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useState } from "react";
+import { flushSync } from "react-dom";
 import {
 	type FormSegment,
 	type GroupSummary,
@@ -39,85 +40,115 @@ function FormLine({ form }: { form: FormSegment[] }) {
 	));
 }
 
+type Watcher = (entry: ResizeObserverEntry) => void;
+const watchers = new Map<Element, Watcher>();
+let sizes: ResizeObserver | undefined;
+
+/**
+ * One observer for every summary line. It reports inside the frame's own
+ * layout, so fitting never forces one; and what it reports is applied in a
+ * single synchronous commit before that frame paints — the lines a page
+ * landing or a resize refits all at once, and none is seen unfitted.
+ * Every watcher reads before any of them renders, so each read lands on the
+ * layout just done.
+ */
+function watchSize(element: Element, watcher: Watcher) {
+	sizes ??= new ResizeObserver((entries) => {
+		flushSync(() => {
+			for (const entry of entries) watchers.get(entry.target)?.(entry);
+		});
+	});
+	watchers.set(element, watcher);
+	sizes.observe(element);
+	return () => {
+		watchers.delete(element);
+		sizes?.unobserve(element);
+	};
+}
+
 /**
  * The richest form of the line that fits the width the text column actually
  * has — not a character budget, which could only disagree with the screen.
  *
  * Every form's natural width is measured once per content, from copies drawn
  * for that one layout pass and gone before paint — left in, their words would
- * be found, selected and copied as the row's own. A resize then only compares
- * numbers, and a web font arriving measures again. Until a width is known
- * (first paint, jsdom) the richest is drawn and `truncate` covers it; a width
- * of 0 — the list is in a collapsed Process — measures nothing, and a reveal
- * re-fits from there.
+ * be found, selected and copied as the row's own. They are read when the
+ * observer reports them, not in an effect: an effect's read would force the
+ * whole transcript's layout in the middle of every record that changes a
+ * group, where the observer reads the layout the frame does anyway — once a
+ * frame, however many records arrived in it. So a line whose words and width
+ * are as they were does nothing at all, and a resize only compares numbers. A
+ * web font arriving measures again. Until the column has a width (first paint,
+ * jsdom) the richest is drawn and `truncate` covers it; while it has none —
+ * the list is in a collapsed Process — nothing is measured, and a reveal fits
+ * from there.
  *
  * Both sides are read with `getBoundingClientRect`: `clientWidth` rounds, and
  * a form a fraction too wide is its last name cut to `…`.
  */
 function FittedLine({ forms }: { forms: FormSegment[][] }) {
-	const columnRef = useRef<HTMLSpanElement>(null);
-	const copiesRef = useRef<HTMLSpanElement>(null);
 	// A group re-derives on every render; only new words are worth measuring.
 	const content = JSON.stringify(forms);
-	const [widths, setWidths] = useState<{
-		content: string;
-		/** Null when measured out of sight, where every width reads 0. */
-		values: number[] | null;
-	}>();
-	const [available, setAvailable] = useState(0);
-	const measuring = widths?.content !== content;
+	const [widths, setWidths] = useState<{ content: string; values: number[] }>();
+	const [column, setColumn] = useState({ shown: false, available: 0 });
+	const measuring = column.shown && widths?.content !== content;
 
-	useLayoutEffect(() => {
-		const column = columnRef.current;
-		const copies = copiesRef.current;
-		if (!measuring || !column || !copies) return;
-		const width = column.getBoundingClientRect().width;
-		const shown = width > 0;
-		setWidths({
-			content,
-			values: shown
-				? [...copies.children].map((copy) => copy.getBoundingClientRect().width)
-				: null,
-		});
-		if (shown) setAvailable(width);
-	}, [measuring, content]);
+	const observeColumn = useCallback(
+		(element: HTMLSpanElement) =>
+			watchSize(element, () => {
+				const width = element.getBoundingClientRect().width;
+				// Out of sight keeps the last width, so the pick holds.
+				setColumn((last) => {
+					if (width === 0) return last.shown ? { ...last, shown: false } : last;
+					if (last.shown && last.available === width) return last;
+					return { shown: true, available: width };
+				});
+			}),
+		[],
+	);
 
-	useLayoutEffect(() => {
-		const column = columnRef.current;
-		if (!column) return;
-		const observer = new ResizeObserver(() => {
-			const width = column.getBoundingClientRect().width;
-			if (width === 0) return;
-			setAvailable(width);
-			// Measured while out of sight: measure again now that it shows.
-			setWidths((last) => (last?.values ? last : undefined));
-		});
-		observer.observe(column);
+	// Keyed on the words, so new words observe the copies afresh: an
+	// observation reports once on starting, even when the copies' box came
+	// out the size it was.
+	const observeCopies = useCallback(
+		(element: HTMLSpanElement) =>
+			watchSize(element, (entry) => {
+				// Not rendered after all (hidden since): every width would read
+				// 0. Its showing again is a resize, and reports then.
+				if (entry.contentRect.width === 0) return;
+				setWidths({
+					content,
+					values: [...element.children].map(
+						(copy) => copy.getBoundingClientRect().width,
+					),
+				});
+			}),
+		[content],
+	);
+
+	useEffect(() => {
 		// The column's width does not follow its text, so a font swap
 		// (`display=swap`) changes every form's width without resizing it.
 		const remeasure = () => setWidths(undefined);
 		document.fonts?.addEventListener("loadingdone", remeasure);
-		return () => {
-			observer.disconnect();
-			document.fonts?.removeEventListener("loadingdone", remeasure);
-		};
+		return () => document.fonts?.removeEventListener("loadingdone", remeasure);
 	}, []);
 
 	const values = widths?.content === content ? widths.values : null;
 	let pick = 0;
-	if (values && available > 0) {
-		const fits = values.findIndex((width) => width <= available);
+	if (values && column.available > 0) {
+		const fits = values.findIndex((width) => width <= column.available);
 		pick = fits === -1 ? values.length - 1 : fits;
 	}
 	return (
 		<span
-			ref={columnRef}
+			ref={observeColumn}
 			className="relative block min-w-0 flex-1 truncate text-th-text-secondary"
 		>
 			<FormLine form={forms[pick]} />
 			{measuring && (
 				<span
-					ref={copiesRef}
+					ref={observeCopies}
 					aria-hidden
 					className="pointer-events-none invisible absolute top-0 left-0 flex flex-col items-start"
 				>
