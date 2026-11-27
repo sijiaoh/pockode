@@ -24,12 +24,17 @@ function FormLine({ form }: { form: FormSegment[] }) {
 			{segment.names.map((name, at) => (
 				// biome-ignore lint/suspicious/noArrayIndexKey: two spellings of one path can share a name
 				<Fragment key={at}>
-					{at === 0 ? " " : <span className={MUTED}>, </span>}
+					{at > 0 ? (
+						<span className={MUTED}>, </span>
+					) : segment.counted ? (
+						<span className={MUTED}>: </span>
+					) : (
+						" "
+					)}
 					<span className="font-mono">{name.text}</span>
 					{name.times > 1 && <span className={MUTED}> ×{name.times}</span>}
 				</Fragment>
 			))}
-			{segment.more > 0 && <span className={MUTED}> +{segment.more}</span>}
 		</Fragment>
 	));
 }
@@ -47,7 +52,7 @@ function FormLine({ form }: { form: FormSegment[] }) {
  * re-fits from there.
  *
  * Both sides are read with `getBoundingClientRect`: `clientWidth` rounds, and
- * a form a fraction too wide is a `+K` cut to `+…`.
+ * a form a fraction too wide is its last name cut to `…`.
  */
 function FittedLine({ forms }: { forms: FormSegment[][] }) {
 	const columnRef = useRef<HTMLSpanElement>(null);
