@@ -194,3 +194,74 @@ describe("resultCount", () => {
 		).toBeUndefined();
 	});
 });
+
+describe("WebSearch results", () => {
+	const searchResult = [
+		'Web search results for query: "q"',
+		"",
+		'Links: [{"title":"First source","url":"https://www.example.com/a"},{"title":"Odd","url":"ftp://files.example.com/x"}]',
+		"",
+		"The answer is **42**.",
+		"",
+		"REMINDER: You MUST include the sources above in your response to the user using markdown hyperlinks.",
+	].join("\n");
+
+	it("draws each source as a link to a new tab, then the summary", () => {
+		render(
+			<ToolResultDisplay
+				toolName="WebSearch"
+				toolInput={{}}
+				result={searchResult}
+			/>,
+		);
+		const link = screen.getByRole("link", { name: /First source/ });
+		expect(link).toHaveAttribute("href", "https://www.example.com/a");
+		expect(link).toHaveAttribute("target", "_blank");
+		expect(link).toHaveAttribute("rel", "noopener noreferrer");
+		expect(within(link).getByText("example.com")).toBeInTheDocument();
+		// Not http(s): shown, but not a link.
+		expect(screen.getByText("Odd")).toBeInTheDocument();
+		expect(screen.getAllByRole("link")).toHaveLength(1);
+		expect(screen.getByText("42").tagName).toBe("STRONG");
+		expect(screen.queryByText(/REMINDER/)).not.toBeInTheDocument();
+	});
+
+	it("draws a result it cannot read as it came", () => {
+		render(
+			<ToolResultDisplay
+				toolName="WebSearch"
+				toolInput={{}}
+				result="Search failed: rate limited"
+			/>,
+		);
+		expect(screen.getByText("Search failed: rate limited")).toBeInTheDocument();
+		expect(screen.queryByRole("link")).not.toBeInTheDocument();
+	});
+
+	it("draws a failed call's result as it came", () => {
+		render(
+			<ToolResultDisplay
+				toolName="WebSearch"
+				toolInput={{}}
+				result={searchResult}
+				failed
+			/>,
+		);
+		expect(screen.queryByRole("link")).not.toBeInTheDocument();
+	});
+
+	it("says so when there is nothing", () => {
+		render(
+			<ToolResultDisplay
+				toolName="WebSearch"
+				toolInput={{}}
+				result={'Web search results for query: "q"\n\n'}
+			/>,
+		);
+		expect(screen.getByText("No results.")).toBeInTheDocument();
+	});
+
+	it("is left uncounted", () => {
+		expect(resultCount("WebSearch", {}, searchResult)).toBeUndefined();
+	});
+});
