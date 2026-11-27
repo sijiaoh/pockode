@@ -60,11 +60,12 @@
 	--container-git-commit-row: 768px;
 }
 
-/* Below this the turn's work line, `Worked 2m 13s · 14 tool calls · 3 files
- * changed  +11 −2`, no longer fits at `text-xs` (a 375px phone's column is
- * narrower), so its nouns shorten. Its own box is the container: beside a
- * sidebar or under an avatar the column is narrower than the window. See
- * docs/tool-call-ui.md#the-work-line. */
+/* Below this the turn's work figures, `Worked 2m 13s · 14 tool calls · 3 files
+ * changed  +11 −2`, no longer fit at `text-xs` (a 375px phone's column is
+ * narrower), so their nouns shorten. The container is the box they sit in —
+ * the changes card's header, or the turn-end row — not the window: beside a
+ * sidebar or under an avatar the column is narrower than it. See
+ * docs/tool-call-ui.md#the-work-figures. */
 @theme {
 	--container-work-line: 30rem;
 }

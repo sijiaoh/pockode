@@ -1,7 +1,10 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
+import { turnChanges } from "../../lib/turnChanges";
+import type { TurnWork } from "../../lib/turnWork";
 import type { ContentPart } from "../../types/message";
+import MessageActions from "./MessageActions";
 import MessageList from "./MessageList";
 import { TurnChangesCard } from "./TurnChangesCard";
 
@@ -15,27 +18,27 @@ const edit = (id: string, path: string): ContentPart => ({
 		status: "success",
 	},
 });
-const work = { lastCallPartId: "call-3", calls: 7, durationMs: 64_000 };
+const work: TurnWork = { calls: 7, durationMs: 64_000 };
 
 /**
- * The line's visible words: the duration's own span is the first entry. Read
+ * The figures' visible words: the duration's own span is the first entry. Read
  * through `innerText`, which leaves out what the container query hides.
  */
 const words = () =>
 	screen.getByText(/^Worked \d/, { ignore: ".sr-only" })
 		.parentElement as HTMLElement;
 
-function inColumn(width: number, parts: ContentPart[]) {
+function inColumn(width: number, parts: ContentPart[], at = work) {
 	render(
 		<div style={{ width }}>
-			<TurnChangesCard parts={parts} work={work} />
+			<TurnChangesCard changes={turnChanges(parts, "/repo")} work={at} />
 		</div>,
 	);
 }
 
-// The nouns shorten on the line's own width, which only real layout has
-// (docs/tool-call-ui.md#the-work-line).
-describe("the work line's width", () => {
+// The nouns shorten on the container's width, which only real layout has
+// (docs/tool-call-ui.md#the-work-figures).
+describe("the work figures' width", () => {
 	const files = [
 		edit("1", "/repo/a.ts"),
 		edit("2", "/repo/b.ts"),
@@ -60,19 +63,41 @@ describe("the work line's width", () => {
 		);
 	});
 
-	it("draws the bare line with a hairline through the rest of it", () => {
-		inColumn(720, [
-			{
-				type: "tool_call",
-				id: "call-3",
-				tool: { id: "3", name: "Read", input: {}, status: "success" },
-			},
-		]);
-		expect(words().innerText).toBe("Worked 1m 4s · 7 tool calls");
-		const line = words().parentElement as HTMLElement;
-		const rule = line.lastElementChild as HTMLElement;
-		expect(rule.getBoundingClientRect().width).toBeGreaterThan(400);
-		expect(line.getBoundingClientRect().height).toBeGreaterThanOrEqual(36);
+	it("says a lone files entry in full even in a phone's column", () => {
+		inColumn(343, files, {});
+		// The visible words, not the card's spoken name beside them.
+		const visible = screen.getByText(/^3 files/, { ignore: ".sr-only" });
+		expect(visible.innerText).toBe("3 files changed");
+	});
+
+	describe("on the turn-end row", () => {
+		function row(width: number) {
+			render(
+				<div style={{ width }}>
+					<MessageActions copyText="Done." onFork={() => {}} work={work} />
+				</div>,
+			);
+		}
+
+		it("stands at the right end of a phone's row, nouns short, adding no height", () => {
+			row(343);
+			expect(words().innerText).toBe("Worked 1m 4s · 7 calls");
+			const actions = screen.getByRole("group", { name: "Message actions" });
+			const line = actions.parentElement as HTMLElement;
+			const figures = words().getBoundingClientRect();
+			expect(figures.right).toBeCloseTo(line.getBoundingClientRect().right, 0);
+			expect(figures.left).toBeGreaterThan(
+				actions.getBoundingClientRect().right,
+			);
+			expect(line.getBoundingClientRect().height).toBe(
+				actions.getBoundingClientRect().height,
+			);
+		});
+
+		it("says it in full where there is room", () => {
+			row(720);
+			expect(words().innerText).toBe("Worked 1m 4s · 7 tool calls");
+		});
 	});
 });
 

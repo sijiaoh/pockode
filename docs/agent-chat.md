@@ -256,9 +256,11 @@ and below them a turn-end row (`Chat/MessageActions.tsx`) holds Copy and
 Fork — while the turn is running, the tail line (`Working 1m 4s`)
 stands in that row's place instead
 ([turn-progress-ui.md](turn-progress-ui.md#2-the-tail-line)). A settled turn
-that made tool calls has a work line where its work ends and its answer
-begins — `Worked 2m 13s · 14 tool calls · 3 files changed` — heading the files
-it changed, each opening on its diffs and on the calls that made them
+that changed files closes with a card of them, above that row, headed
+by the turn's work figures — `Worked 2m 13s · 14 tool calls · 3 files
+changed` — each file opening on its diffs and on the calls that made them; a
+turn that made calls and changed no file has its figures at the right end of
+the turn-end row instead
 ([tool-call-ui.md](tool-call-ui.md#the-turns-changes)). The user's
 bubble keeps the `…` slot beside it. Why the two sides differ is in
 [session-fork-ui.md](session-fork-ui.md#entry-point). What the agent thought on

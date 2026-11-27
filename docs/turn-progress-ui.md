@@ -18,11 +18,12 @@ has come (§4):
   `3 agents running · Explore  Read sender.go`, opening on a list that goes
   to each one.
 
-When the turn settles, one more line says what the work came to — `Worked 2m 13s
-· 14 tool calls · 3 files changed`, between the work and the answer: the
-header of the turn's changes card, or a line alone when the turn changed no
-file ([tool-call-ui.md](tool-call-ui.md#the-work-line)); the rules below hold
-for it.
+When the turn settles, its work figures say what the work came to — `Worked
+2m 13s · 14 tool calls · 3 files changed`, at the turn's end: the header of
+the turn's changes card, above the turn-end row, or the right end of
+that row when the turn changed no file
+([tool-call-ui.md](tool-call-ui.md#the-work-figures)); the rules below hold
+for them.
 
 The surfaces around them are [tool-call-ui.md](tool-call-ui.md) (the list,
 groups, the turn's changes) and [lifecycle-ui.md](lifecycle-ui.md) (`Activity`,
@@ -63,7 +64,7 @@ recorded is left out, never estimated by the client from when records reached
 it — the rule the tool row's meta already follows
 ([tool-call-ui.md](tool-call-ui.md#elapsed-and-duration-meta)).
 
-**Times have one format.** Both elements, and the work line they settle
+**Times have one format.** Both elements, and the work figures they settle
 into, use the live tool counter's: whole
 seconds below a minute (`12s`), then two units (`4m 12s`, `1h 12m`). Not the
 finished tool row's tenths (`1.2s`): a thinking time and a turn clock are read
@@ -316,7 +317,7 @@ turn settles, the tail line's height passes to the turn-end row as above, and
 the plan line goes. The agents line stays only while a backgrounded subagent
 outlives the turn (§4.3), and then it stands *above* the turn-end row of the
 last assistant message. Settling therefore moves the turn-end row down by the
-agents line, at the tail, where only an unread message can be below it.
+turn's changes card and the agents line, at the tail, where only an unread message can be below it.
 
 ### 2.2 When it shows
 
@@ -573,7 +574,7 @@ line:
   tests" at the top of a new turn the agent has not planned yet would claim
   something nobody said this turn. The line comes back with the turn's first
   update. Between turns there is nothing "now" about a plan: the rows hold it,
-  and the work line says what the turn did.
+  and the work figures say what the turn did.
 - **A subagent's plan is its own.** A Codex plan update from a child thread is
   a `Plan` row in that subagent's Process. A Claude subagent's `TodoWrite`
   produces no record (§4.6): its rows in its Process are its plan's history.
@@ -1026,8 +1027,8 @@ and each `TaskList` replaces the seed with it.
     explanation first;
   - `toolGroups` counts it in the `todo` category, so it folds into the same
     `Updated todos` segment;
-  - the work line counts it as a tool call, and a reply holding only plan
-    updates gets a work line. This is deliberate: it is Codex's `update_plan`,
+  - the work figures count it as a tool call, and a reply holding only plan
+    updates gets work figures. This is deliberate: it is Codex's `update_plan`,
     a call the model made, and a Claude `TodoWrite` is counted the same way.
     Leaving it out would make the same act count on one CLI and not on the
     other.
@@ -1111,7 +1112,7 @@ a copy of a row:
 | a message sent mid-turn is unread | strip receipt row | unaffected; the receipt is about the message, the line about the turn |
 | the turn can be stopped | Stop in the composer | no Stop of its own |
 | how the turn ended | the turn-end row, error / `Interrupted` lines | gone |
-| how long the turn worked, how many calls, what it changed | [the work line](tool-call-ui.md#the-work-line), once settled | gone — `Working 2m 12s` is the turn so far, `Worked` the reply's measured span |
+| how long the turn worked, how many calls, what it changed | [the work figures](tool-call-ui.md#the-work-figures), once settled — the changes card's header, or the turn-end row | gone — `Working 2m 12s` is the turn so far, `Worked` the reply's measured span |
 
 The tail line and a running tool row can be on screen together, both moving.
 That is not duplication — one is a call, one is the turn — and it is what was

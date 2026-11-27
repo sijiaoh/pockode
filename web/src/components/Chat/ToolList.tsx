@@ -1,5 +1,4 @@
 import {
-	Fragment,
 	type ReactNode,
 	useCallback,
 	useContext,
@@ -33,16 +32,6 @@ interface Props<T extends Item> {
 	 * about where inside it the reader is.
 	 */
 	wrapperProps?: Record<string, string>;
-}
-
-interface BlocksProps<T extends Item> extends Props<T> {
-	/**
-	 * An element drawn after the block holding the part with this id, as a
-	 * sibling in the same keyed array: a list is never split and no block
-	 * changes parent, so nothing remounts — and no row or group the user opened
-	 * closes — when it goes in. It brings its own wrapper.
-	 */
-	after?: { partId: string; node: ReactNode };
 }
 
 interface SlotProps {
@@ -261,28 +250,19 @@ export function PartBlocks<T extends Item>({
 	items,
 	renderPart,
 	wrapperProps,
-	after,
-}: BlocksProps<T>) {
-	return partBlocks(items).flatMap((block) => {
-		const drawn =
-			block.kind === "single" ? (
-				<div key={block.item.part.id} {...wrapperProps}>
-					{renderPart(block.item)}
-				</div>
-			) : (
-				<RowList
-					key={`rows:${oldestPart(block.items).part.id}`}
-					items={block.items}
-					renderPart={renderPart}
-					wrapperProps={wrapperProps}
-				/>
-			);
-		const holds =
-			block.kind === "single"
-				? block.item.part.id === after?.partId
-				: block.items.some((item) => item.part.id === after?.partId);
-		return holds && after
-			? [drawn, <Fragment key="slot:after">{after.node}</Fragment>]
-			: [drawn];
-	});
+}: Props<T>) {
+	return partBlocks(items).map((block) =>
+		block.kind === "single" ? (
+			<div key={block.item.part.id} {...wrapperProps}>
+				{renderPart(block.item)}
+			</div>
+		) : (
+			<RowList
+				key={`rows:${oldestPart(block.items).part.id}`}
+				items={block.items}
+				renderPart={renderPart}
+				wrapperProps={wrapperProps}
+			/>
+		),
+	);
 }

@@ -61,17 +61,14 @@ describe("turnWork", () => {
 			false,
 		);
 		expect(work?.calls).toBe(3);
-		expect(work?.lastCallPartId).toBe("card-1");
 	});
 
-	// Flat steps stay where they arrived even once their call's page joins, so
-	// they can follow every top-level call.
-	it("counts a subagent's flat steps as its call's, but goes below them", () => {
+	it("counts a subagent's flat steps as its call's", () => {
 		const work = turnWork(
 			message([call("1"), call("2", "success", "task-9")]),
 			false,
 		);
-		expect(work).toEqual({ lastCallPartId: "call-2", calls: 1 });
+		expect(work).toEqual({ calls: 1 });
 	});
 
 	it("counts nothing on a reply whose only calls are flat steps", () => {
@@ -82,7 +79,7 @@ describe("turnWork", () => {
 			}),
 			false,
 		);
-		expect(work).toEqual({ lastCallPartId: "call-2" });
+		expect(work).toEqual({});
 	});
 
 	it("takes the span from the two stamped ends, from a second up", () => {
@@ -96,13 +93,11 @@ describe("turnWork", () => {
 
 	it("counts nothing a page above may hold the start of", () => {
 		const parts = [call("1"), call("2")];
-		expect(turnWork(message(parts, { endedAt: 9_000 }), true)).toEqual({
-			lastCallPartId: "call-2",
-		});
+		expect(turnWork(message(parts, { endedAt: 9_000 }), true)).toEqual({});
 		// Opened here, by its message or by a read point: whole.
 		expect(
 			turnWork(message(parts, { openedAt: 1_000, endedAt: 9_000 }), true),
-		).toEqual({ lastCallPartId: "call-2", calls: 2, durationMs: 8_000 });
+		).toEqual({ calls: 2, durationMs: 8_000 });
 		expect(
 			turnWork(message(parts, { openedAtReadPoint: true }), true)?.calls,
 		).toBe(2);

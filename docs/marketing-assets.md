@@ -345,7 +345,7 @@ tap with it.
 | 2 | 5.6–9.6 | 4.0 | P | **Describe the feature** as a story. | a) New Story sheet, title empty — tap the title field; b) title `Add due dates to todos`, role preselected — tap *Create*; c) the new story's detail page |
 | 3 | 9.6–14.4 | 4.8 | D | Agents split it up and **work in parallel.** | a) story detail with its three tasks (§8.2), all *Running*, the sidebar listing their three running sessions — tap task 3's session; b) task 3's chat, a tool-call group running |
 | 4 | 14.4–18.6 | 4.2 | P | An agent asks — **answer from your phone.** | a) task 3's chat with the question panel up (§8.3); tap the recommended option; b) the option picked — tap *Send*; c) the answered question, the turn continuing |
-| 5 | 18.6–22.4 | 3.8 | P | **Review every change.** | a) task 3's turn, its changes card (3 files) headed by its work line, between the tool calls and the answer — tap `TodoItem.tsx`; b) its diff view |
+| 5 | 18.6–22.4 | 3.8 | P | **Review every change.** | a) task 3's turn, its answer and under it the changes card (3 files) headed by the turn's work figures, above Copy and Fork — tap `TodoItem.tsx`; b) its diff view |
 | 6 | 22.4–25.6 | 3.2 | P | **Preview** your dev server, live. | a) Port Preview sheet, `5173` entered — tap *Open*; b) the Tidy page (§8.4) in the phone with the address bar (§3.2) |
 | 7 | 25.6–28.6 | 3.0 | P | **Commit** when it's right. | a) the Git commit sheet with message `Add due dates to todos` — tap *Commit*; b) the Git screen after it: the new commit at the top of the log, nothing left to commit |
 | 8 | 28.6–31.0 | 2.4 | — | *(end card, §4.5)* | — |
