@@ -1,4 +1,3 @@
-import { ArrowDown } from "lucide-react";
 import {
 	type ReactNode,
 	type Ref,
@@ -30,12 +29,16 @@ import MessageItem, {
 	type PermissionChoice,
 	type PromptError,
 } from "./MessageItem";
+import { OpenWorkDetailContext } from "./openWorkDetailContext";
+import ScrollToBottomButton from "./ScrollToBottomButton";
 import { anchorCandidateProps } from "./scrollAnchor";
+import { StopTargetsContext, useStopTargetsValue } from "./stopTargetsContext";
 import {
-	type GoToCall,
-	ToolJumpContext,
-	type ToolReveal,
-} from "./toolJumpContext";
+	SubagentResumesContext,
+	useSubagentResumesValue,
+} from "./subagentResumesContext";
+import { ToolJumpContext, type ToolReveal } from "./toolJumpContext";
+import { findShown, useLanding } from "./transcriptJump";
 import { TranscriptViewContext } from "./transcriptViewContext";
 import { TRANSCRIPT_SPAN_VAR } from "./transcriptWidth";
 import {
@@ -47,10 +50,7 @@ import {
 	UnfiledChildrenContext,
 	useUnfiledChildrenValue,
 } from "./unfiledChildrenContext";
-import { useTranscriptScroll } from "./useTranscriptScroll";
-
-const HIGHLIGHT_DURATION_MS = 1500;
-const HIGHLIGHT_CLASS = "jump-highlight";
+import { useMessagesTail, useTranscriptScroll } from "./useTranscriptScroll";
 
 /**
  * How far above the view, in views, the top of the loaded history may be before
@@ -58,24 +58,6 @@ const HIGHLIGHT_CLASS = "jump-highlight";
  * to arrive in before the reader is shown the skeleton in its place.
  */
 const PAGE_AHEAD_VIEWS = 1;
-
-// Attribute lookup rather than a `[data-...="id"]` selector so ids never need
-// CSS escaping. One laid out, not merely mounted: a row folded into a group is
-// only `hidden`, and measures as sitting at the very top.
-function findShown(
-	root: HTMLElement,
-	attribute: "permissionRequestId" | "toolUseId",
-	id: string,
-): HTMLElement | null {
-	const selector =
-		attribute === "toolUseId"
-			? "[data-tool-use-id]"
-			: "[data-permission-request-id]";
-	for (const el of root.querySelectorAll<HTMLElement>(selector)) {
-		if (el.dataset[attribute] === id && !el.closest("[hidden]")) return el;
-	}
-	return null;
-}
 
 /**
  * What the transcript can be asked to do from outside it.
@@ -91,7 +73,7 @@ function findShown(
  */
 export interface MessageListHandle {
 	jumpToRequest: (requestId: string) => void;
-	jumpToCall: GoToCall;
+	jumpToCall: (toolUseId: string) => void;
 }
 
 interface Props {
@@ -185,6 +167,7 @@ function MessageList({
 	const trackRef = useRef<HTMLDivElement>(null);
 	const contentRef = useRef<HTMLDivElement>(null);
 	const reserveRef = useRef<HTMLDivElement>(null);
+	const messagesTail = useMessagesTail(messages, loadedHistoryPages);
 	// Everything about where the view sits lives in there: two states, one
 	// action. Called first so that the invariant for this commit is applied before
 	// anything below reads a position back out of the container.
@@ -193,7 +176,8 @@ function MessageList({
 			scrollRef,
 			trackRef,
 			contentRef,
-			messages,
+			...messagesTail,
+			hasContainer: messages.length > 0,
 			loadedHistoryPages,
 			hasMoreHistory,
 		});
@@ -337,57 +321,14 @@ function MessageList({
 	// (docs/lifecycle-ui.md §2.3): the last row is then the message, not the turn.
 	const openIndex = openAssistantIndex(messages);
 	const unfiled = useUnfiledChildrenValue(messages);
+	const resumes = useSubagentResumesValue(messages);
+	const stopTargets = useStopTargetsValue(messages);
 	const discardedContext = useDiscardedMessagesValue(messages, hasMoreHistory);
-
-	const highlightRef = useRef<{
-		card: HTMLElement;
-		timer: ReturnType<typeof setTimeout>;
-	} | null>(null);
-
-	// Both the class and its removal timer have to go together: dropping only the
-	// timer would strand the ring on that card for good.
-	const clearHighlight = useCallback(() => {
-		const current = highlightRef.current;
-		if (!current) return;
-		clearTimeout(current.timer);
-		current.card.classList.remove(HIGHLIGHT_CLASS);
-		highlightRef.current = null;
-	}, []);
-
-	useEffect(() => clearHighlight, [clearHighlight]);
 
 	// Where the view is meant to be now, so the target becomes the anchor: the
 	// output that goes on landing below it must not push it away again, which is
 	// the same promise reading anywhere else gets.
-	const land = useCallback(
-		(target: HTMLElement) => {
-			jumpTo(target);
-
-			clearHighlight();
-			target.classList.add(HIGHLIGHT_CLASS);
-			highlightRef.current = {
-				card: target,
-				timer: setTimeout(() => {
-					target.classList.remove(HIGHLIGHT_CLASS);
-					highlightRef.current = null;
-				}, HIGHLIGHT_DURATION_MS),
-			};
-
-			// preventScroll: the browser's own focus scroll would move the view off
-			// the position the jump just took the anchor at.
-			//
-			// The first button is the row that opens the target — a permission
-			// card's is as close as it has to a header. Without moving the focus,
-			// the jump is one a keyboard user cannot perceive — and a focus into an
-			// `inert` subtree is dropped without a word, so a caller jumping out
-			// from under something that covers the transcript has to let the cover
-			// go first (`ChatPanel.handleJumpToRequest`).
-			target
-				.querySelector<HTMLElement>("button")
-				?.focus({ preventScroll: true });
-		},
-		[clearHighlight, jumpTo],
-	);
+	const land = useLanding(jumpTo);
 
 	const scrollToRequest = useCallback(
 		(requestId: string) => {
@@ -403,9 +344,8 @@ function MessageList({
 	// path hides the row (`useRevealRequest`), and once that commit has landed —
 	// child layout effects run before this one — the row is there to move to.
 	const [reveal, setReveal] = useState<ToolReveal | null>(null);
-	const goToCall = useCallback<GoToCall>(
-		(toolUseId, options) =>
-			setReveal({ toolUseId, openTarget: options?.openTarget }),
+	const goToCall = useCallback(
+		(toolUseId: string) => setReveal({ toolUseId }),
 		[],
 	);
 	useLayoutEffect(() => {
@@ -515,92 +455,69 @@ function MessageList({
 						<TurnTailContext value={tail ?? IDLE_TAIL}>
 							<OpenedThoughtsContext value={openedThoughtIds}>
 								<UnfiledChildrenContext value={unfiled}>
-									<DiscardedMessagesContext value={discardedContext}>
-										<TranscriptViewContext value={view}>
-											<ToolJumpContext value={toolJump}>
-												{messages.map((message, index) => {
-													return (
-														<div
-															key={message.id}
-															data-message-id={message.id}
-															// This wrapper is the row the view can be held still over
-															// (see `scrollAnchor`).
-															{...anchorCandidateProps}
-															className="py-1.5 sm:py-2"
-														>
-															<MessageItem
-																message={message}
-																sessionId={sessionId}
-																// Top of the loaded transcript is the session's own start
-																// only once there are no older pages left above it.
-																isFirst={index === 0 && !hasMoreHistory}
-																olderPagesAbove={index === 0 && hasMoreHistory}
-																isOpenTurn={index === openIndex}
-																isCodex={isCodex}
-																onPermissionRespond={onPermissionRespond}
-																onAnswerQuestion={onAnswerQuestion}
-																promptError={promptError}
-																onOpenWorkDetail={onOpenWorkDetail}
-																onOpenFile={onOpenFile}
-																onForkMessage={onForkMessage}
-																onSignIn={onSignIn}
-																onSwitchAccount={onSwitchAccount}
-																isDiscarded={
-																	message.role === "user" &&
-																	message.messageId !== undefined &&
-																	discardedContext.discarded.has(
-																		message.messageId,
-																	)
-																}
-																onRestoreMessages={onRestoreMessages}
-															/>
-														</div>
-													);
-												})}
-											</ToolJumpContext>
-										</TranscriptViewContext>
-									</DiscardedMessagesContext>
+									<SubagentResumesContext value={resumes}>
+										<StopTargetsContext value={stopTargets}>
+											<DiscardedMessagesContext value={discardedContext}>
+												<TranscriptViewContext value={view}>
+													<ToolJumpContext value={toolJump}>
+														<OpenWorkDetailContext value={onOpenWorkDetail}>
+															{messages.map((message, index) => {
+																return (
+																	<div
+																		key={message.id}
+																		data-message-id={message.id}
+																		// This wrapper is the row the view can be held still over
+																		// (see `scrollAnchor`).
+																		{...anchorCandidateProps}
+																		className="py-1.5 sm:py-2"
+																	>
+																		<MessageItem
+																			message={message}
+																			sessionId={sessionId}
+																			// Top of the loaded transcript is the session's own start
+																			// only once there are no older pages left above it.
+																			isFirst={index === 0 && !hasMoreHistory}
+																			olderPagesAbove={
+																				index === 0 && hasMoreHistory
+																			}
+																			isOpenTurn={index === openIndex}
+																			isCodex={isCodex}
+																			onPermissionRespond={onPermissionRespond}
+																			onAnswerQuestion={onAnswerQuestion}
+																			promptError={promptError}
+																			onOpenWorkDetail={onOpenWorkDetail}
+																			onOpenFile={onOpenFile}
+																			onForkMessage={onForkMessage}
+																			onSignIn={onSignIn}
+																			onSwitchAccount={onSwitchAccount}
+																			isDiscarded={
+																				message.role === "user" &&
+																				message.messageId !== undefined &&
+																				discardedContext.discarded.has(
+																					message.messageId,
+																				)
+																			}
+																			onRestoreMessages={onRestoreMessages}
+																		/>
+																	</div>
+																);
+															})}
+														</OpenWorkDetailContext>
+													</ToolJumpContext>
+												</TranscriptViewContext>
+											</DiscardedMessagesContext>
+										</StopTargetsContext>
+									</SubagentResumesContext>
 								</UnfiledChildrenContext>
 							</OpenedThoughtsContext>
 						</TurnTailContext>
 					</div>
-					{/* Sticky inside the column rather than absolute over the pane, so
-					    it centres on the column by construction — the pane also holds
-					    the scrollbar, which the column is centred without. Zero height,
-					    so it adds nothing to the content the resize observer measures.
-
-					    Centred rather than in the corner: the right-hand column is where
-					    a row keeps the facts it is read for — counts, elapsed, copy,
-					    Open — and there the button covered the only number on the line,
-					    while in the middle it covers prose that reads around it. */}
 					{showScrollButton && (
-						// `z-3`: over an open row's bar (`row-bar`, z-index 2, or 3
-						// while focused — this comes later, so it still wins), which
-						// passes under the button whenever an open row's first line is
-						// at the bottom of the view.
-						<div className="pointer-events-none sticky bottom-3 z-3 h-0">
-							<div className="absolute inset-x-0 bottom-0 flex justify-center">
-								<button
-									type="button"
-									onClick={scrollToBottom}
-									className="touch-target pointer-events-auto flex h-8 w-11 items-center justify-center rounded-full border border-th-border bg-th-bg-primary text-th-text-secondary shadow-lg transition-colors hover:bg-th-bg-secondary hover:text-th-text-primary"
-									aria-label={
-										hasUnseen
-											? "Scroll to bottom, new messages"
-											: "Scroll to bottom"
-									}
-								>
-									<ArrowDown className="size-4" aria-hidden="true" />
-									{hasUnseen && (
-										<span
-											data-testid="unseen-dot"
-											className="absolute -top-0.5 -right-0.5 size-2.5 rounded-full bg-th-accent ring-2 ring-th-bg-primary"
-											aria-hidden="true"
-										/>
-									)}
-								</button>
-							</div>
-						</div>
+						<ScrollToBottomButton
+							onClick={scrollToBottom}
+							hasUnseen={hasUnseen}
+							unseen="new messages"
+						/>
 					)}
 				</div>
 			</div>

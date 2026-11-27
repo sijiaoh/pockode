@@ -9,7 +9,15 @@ import {
 	SquareSlash,
 	X,
 } from "lucide-react";
-import { memo, useEffect, useId, useMemo, useRef, useState } from "react";
+import {
+	memo,
+	type ReactNode,
+	useEffect,
+	useId,
+	useMemo,
+	useRef,
+	useState,
+} from "react";
 import { type FullScreenSource, fullScreenSubject } from "../../lib/fullScreen";
 import { isHtmlRenderCard } from "../../lib/htmlRender";
 import {
@@ -97,6 +105,7 @@ import TurnOverview from "./TurnOverview";
 import TurnTail from "./TurnTail";
 import { useTranscriptView } from "./transcriptViewContext";
 import { keepClearProps } from "./useTranscriptScroll";
+import { WorkRefLine } from "./WorkRefLine";
 
 interface SystemItemProps {
 	/** The part's, naming its body in full screen. */
@@ -188,6 +197,7 @@ function WorkEventItem({
 	// The subject's own title, even where the collapsed line names something
 	// else (a finished child): expanded, it sits next to the link into that work.
 	const { workId, title } = workEventSubject(subtype, meta);
+	const child = meta?.child;
 	const view = useTranscriptView();
 	const source = useMemo<FullScreenSource>(
 		() => ({
@@ -239,6 +249,16 @@ function WorkEventItem({
 								</button>
 							)}
 						</div>
+					)}
+					{/* A line about a subtask (`child_*`, `wait_stranded`) opens it
+					    too: its Details opens the work it was delivered to. */}
+					{child && (
+						<WorkRefLine
+							label="Subtask"
+							title={child.title}
+							openId={child.id}
+							onOpen={onOpenWorkDetail}
+						/>
 					)}
 					<HeaderlessMainBlock
 						name="message"
@@ -405,6 +425,12 @@ interface PermissionRequestItemProps {
 	onOpenFile?: (path: string) => void;
 	/** Why the last attempt to answer failed. */
 	error?: string;
+	/**
+	 * Who asked, for a card drawn under a row that did not: a nested
+	 * subagent's, gathered into the outermost subagent's slot
+	 * (docs/tool-call-ui.md#when-a-step-asks-the-user).
+	 */
+	asker?: ReactNode;
 }
 
 /**
@@ -802,6 +828,7 @@ function PermissionRequestItem({
 	onRespond,
 	onOpenFile,
 	error,
+	asker,
 }: PermissionRequestItemProps) {
 	const isPending = status === "pending";
 	// Live state, read from the session's turn: the card's record cannot say
@@ -873,6 +900,8 @@ function PermissionRequestItem({
 			// `--row-frame` (`row-bar`).
 			className={`scroll-mt-14 text-xs ${asksUser ? "bg-th-warning/10 [--row-tint:color-mix(in_oklab,var(--th-warning)_10%,transparent)] outline-1 -outline-offset-1 outline-th-warning [--row-frame:var(--th-warning)]" : reviewing ? "outline-1 -outline-offset-1 outline-th-border [--row-frame:var(--th-border)]" : ""}`}
 		>
+			{/* First in DOM order, so a screen reader hears who asked before what. */}
+			{asker}
 			<ToolRow
 				expanded={expanded}
 				toggleable={hasExpandableContent}
@@ -1087,7 +1116,7 @@ function PermissionRequestBody({
 	);
 }
 
-interface ContentPartItemProps {
+export interface ContentPartItemProps {
 	part: ContentPart;
 	sessionId: string;
 	onOpenFile?: (path: string) => void;
@@ -1116,6 +1145,8 @@ interface ContentPartItemProps {
 	 * beside it or a bubble around it would be drawn over or broken out of.
 	 */
 	wideCards?: boolean;
+	/** A permission card's asker line; see PermissionRequestItemProps. */
+	asker?: ReactNode;
 }
 
 /**
@@ -1131,7 +1162,7 @@ export interface PromptError {
  * One part of a message, kept to itself: a renderer that throws on what an
  * agent wrote costs that part, not the conversation.
  */
-function ContentPartItem(props: ContentPartItemProps) {
+export function ContentPartItem(props: ContentPartItemProps) {
 	return (
 		<ContentErrorBoundary name="this part of the message" resetKey={props.part}>
 			<ContentPartBody {...props} />
@@ -1150,6 +1181,7 @@ function ContentPartBody(props: ContentPartItemProps) {
 		promptError,
 		depth = 0,
 		wideCards = false,
+		asker,
 	} = props;
 	if (part.type === "text") {
 		return (
@@ -1182,6 +1214,7 @@ function ContentPartBody(props: ContentPartItemProps) {
 						? promptError.message
 						: undefined
 				}
+				asker={asker}
 			/>
 		);
 	}
@@ -1217,8 +1250,13 @@ function ContentPartBody(props: ContentPartItemProps) {
 			<TaskItem
 				run={part.tool}
 				depth={depth}
-				renderChild={(child) => (
-					<ContentPartItem {...props} part={child} depth={depth + 1} />
+				renderChild={(child, childAsker) => (
+					<ContentPartItem
+						{...props}
+						part={child}
+						depth={depth + 1}
+						asker={childAsker}
+					/>
 				)}
 			/>
 		);
@@ -1857,6 +1895,7 @@ const MessageItem = memo(function MessageItem({
 							// stopped a superseded reply from claiming to still be running.
 							writing={message.status === "sending" || !!isOpenTurn}
 							placeholder={message.status === "sending"}
+							awaitedFetch={message.awaitedFetch}
 						/>
 						{/* Under the tail line, or the height it keeps while hidden. */}
 						<TurnOverview messageId={message.id} />

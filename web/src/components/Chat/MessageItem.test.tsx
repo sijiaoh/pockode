@@ -516,6 +516,36 @@ describe("MessageItem", () => {
 			expect(onOpenWorkDetail).toHaveBeenCalledWith("story-1");
 		});
 
+		// Its Details opens the work it was delivered to; the subtask it is
+		// about is a second row, so the call that started it and this line
+		// lead to the same page.
+		it("offers Open into the subtask a child event names", async () => {
+			const user = userEvent.setup();
+			const onOpenWorkDetail = vi.fn();
+			render(
+				<MessageItem
+					sessionId="session-1"
+					message={systemMessage({
+						subtype: "child_done",
+						meta: {
+							title: "The story",
+							work_id: "story-1",
+							child: { id: "task-1", title: "Design the row" },
+						},
+					})}
+					onOpenWorkDetail={onOpenWorkDetail}
+				/>,
+			);
+
+			await user.click(screen.getByRole("button", { expanded: false }));
+			await user.click(
+				screen.getByRole("button", { name: "Open subtask Design the row" }),
+			);
+			expect(onOpenWorkDetail).toHaveBeenCalledWith("task-1");
+			await user.click(screen.getByRole("button", { name: "Details" }));
+			expect(onOpenWorkDetail).toHaveBeenLastCalledWith("story-1");
+		});
+
 		// History recorded before work_id was sent: it still renders, it just has
 		// nowhere to link to.
 		it("omits Details when the message names no work", async () => {
@@ -1909,6 +1939,66 @@ describe("MessageItem", () => {
 			expect(
 				within(group).getByRole("button", { name: /read backoff/ }),
 			).toBeVisible();
+		});
+		// The slot under the outer row gathers cards from every depth; a card a
+		// nested subagent asked carries its asker inside its own frame.
+		it("says who asked on a pending card from a nested subagent", () => {
+			const card = (toolUseId: string, command: string) => ({
+				type: "permission_request" as const,
+				id: `card-${toolUseId}`,
+				request: {
+					requestId: `r-${toolUseId}`,
+					toolName: "Bash",
+					toolInput: { command },
+					toolUseId,
+				},
+				status: "pending" as const,
+			});
+			const message: AssistantMessage = {
+				id: "m1",
+				role: "assistant",
+				status: "streaming",
+				createdAt: new Date(),
+				parts: [
+					{
+						type: "tool_call",
+						id: "call-t1",
+						tool: {
+							id: "t1",
+							name: "Agent",
+							input: { description: "find retries", subagent_type: "Explore" },
+							status: "running",
+							children: [
+								card("c1", "go test ./relay"),
+								{
+									type: "tool_call",
+									id: "call-t2",
+									tool: {
+										id: "t2",
+										name: "Agent",
+										input: {
+											description: "Review the diff",
+											subagent_type: "code-reviewer",
+										},
+										status: "running",
+										children: [card("c2", "rm -rf build")],
+									},
+								},
+							],
+						},
+					},
+				],
+			};
+			const { container } = render(
+				<MessageItem sessionId="session-1" message={message} />,
+			);
+			const frame = (requestId: string) =>
+				container.querySelector(`[data-permission-request-id="${requestId}"]`);
+			expect(frame("r-c1")).not.toHaveTextContent(/Asked by/);
+			// First in the card, so it is read before the call.
+			expect(frame("r-c2")?.textContent).toMatch(
+				/^Asked by code-reviewerReview the diff.*Bashrm -rf build/,
+			);
 		});
 	});
 

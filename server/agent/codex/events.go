@@ -3,6 +3,7 @@ package codex
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/pockode/server/agent"
@@ -86,6 +87,8 @@ func (s *appSession) handleNotification(msg rpcMessage) {
 		// rememberSubagentUsage); the session's totals do not count it.
 		if thread := notificationThread(msg.Params); !s.isOwnThread(thread) {
 			switch msg.Method {
+			case "turn/started":
+				s.resumeSubagent(thread)
 			case "turn/completed":
 				s.settleSubagent(thread, msg.Params)
 				s.forgetReasoning(func(t string) bool { return t == thread })
@@ -213,6 +216,8 @@ func (s *appSession) handleTurnCompleted(params json.RawMessage) {
 		}
 	}
 
+	s.releaseHeldSubagents(notif.Turn.Status == "interrupted")
+
 	switch notif.Turn.Status {
 	case "interrupted":
 		// A stop somebody asked for, which is what InterruptedEvent means:
@@ -271,8 +276,9 @@ func (s *appSession) isOwnThread(threadID string) bool {
 // Taken from the child's turn/completed rather than the subAgentActivity
 // "completed" item the parent's thread gets: only the former says how the turn
 // ended. A child given more work later (sendInput, followupTask) runs another
-// turn under the same spawn and settles it again; the report is still its
-// latest words, so a turn that said nothing does not wipe out the last one.
+// turn under the same spawn, which announces the call again as running
+// (resumeSubagent), and settles it again; the report is still its latest
+// words, so a turn that said nothing does not wipe out the last one.
 //
 // The result carries what Codex says of the child: its thread id, which is how
 // Codex's own tools address it, the agent path it was spawned under, how long
@@ -280,6 +286,16 @@ func (s *appSession) isOwnThread(threadID string) bool {
 // no tool uses, so none is reported; the row counts the child's own calls. A
 // later turn under the same spawn reports that turn's duration, as a resumed
 // Claude subagent's call reports its own.
+//
+// An interrupted child is not settled at once while this session's turn runs,
+// because what the interrupt was is only known when that turn ends. Settled
+// with a result, a row reads as finished or failed; the frontend draws a call
+// as interrupted only when its turn ends interrupted with the call still
+// running, which is how a Claude Task cut short by Stop reads. So the result is
+// held, and the turn's end decides (releaseHeldSubagents); a child that starts
+// another turn under the same spawn first — sendInput with interrupt — was not
+// stopped at all, and its held result is dropped (resumeSubagent). With no turn
+// running there is nothing to wait for, and the result goes out at once.
 //
 // A child whose spawn was never seen — one a previous process started — has no
 // row to settle, and only a failure is said for it, as a warning: without one
@@ -335,12 +351,105 @@ func (s *appSession) settleSubagent(threadID string, params json.RawMessage) {
 	case "completed":
 	case "interrupted":
 		result.IsError = true
-		result.ToolResult = "The subagent was interrupted before it finished."
+		result.ToolResult = subagentInterruptedReport
+		if _, turnID := s.currentTurn(); turnID != "" {
+			s.holdSubagentResult(threadID, result)
+			return
+		}
 	default:
 		result.IsError = true
 		result.ToolResult = "The subagent failed: " + failure
 	}
+	s.emitSubagentResult(threadID, result)
+}
+
+// emitSubagentResult sends a spawn's result and notes that its row has
+// settled, so that the child's next turn announces it as running again.
+func (s *appSession) emitSubagentResult(threadID string, result agent.ToolResultEvent) {
+	s.markSubagentSettled(threadID)
 	s.emitEvent(result)
+}
+
+// markSubagentSettled notes that a spawn's row reads as settled: by its result,
+// or by the turn's InterruptedEvent sweeping it.
+func (s *appSession) markSubagentSettled(threadID string) {
+	if spawn, seen := s.subagentCalls[threadID]; seen {
+		spawn.Settled = true
+		s.subagentCalls[threadID] = spawn
+	}
+}
+
+// subagentInterruptedReport is what an interrupted child's row says in place
+// of a report: the interrupt reads as its failure wherever it is sent.
+const subagentInterruptedReport = "The subagent was interrupted before it finished."
+
+// heldSubagentResult is an interrupted child's result waiting for the turn to
+// end; see settleSubagent.
+type heldSubagentResult struct {
+	ThreadID string
+	Result   agent.ToolResultEvent
+}
+
+// holdSubagentResult keeps a child's result for the end of the turn, replacing
+// one it already had held.
+func (s *appSession) holdSubagentResult(threadID string, result agent.ToolResultEvent) {
+	s.dropHeldSubagentResult(threadID)
+	s.heldSubagentResults = append(s.heldSubagentResults, heldSubagentResult{ThreadID: threadID, Result: result})
+}
+
+// releaseHeldSubagents settles the children interrupted during the turn now
+// ending, before its ending goes out.
+//
+// A turn the user interrupted took them with it: their rows are left running
+// for the InterruptedEvent to settle as interrupted, and nothing is sent for
+// them. Not even after the ending: a result is output, and output after an
+// ending opens a turn (session.SignalOutput) that nothing would ever end. Their
+// last words are already filed under their rows. A turn ending any other way
+// was not stopped by the user, so its children were stopped from inside it, by
+// the model, which reads as their failure — as a Claude background task the
+// model stops does.
+func (s *appSession) releaseHeldSubagents(userInterrupted bool) {
+	held := s.heldSubagentResults
+	s.heldSubagentResults = nil
+	for _, h := range held {
+		if userInterrupted {
+			// The ending settles the row, so the child's next turn resumes it.
+			s.markSubagentSettled(h.ThreadID)
+			continue
+		}
+		s.emitSubagentResult(h.ThreadID, h.Result)
+	}
+}
+
+// resumeSubagent handles a child's turn starting. A child whose row has
+// settled was given more work (sendInput, followupTask), and its spawn is
+// announced again, as resumed, so the row reads as running until this turn
+// settles it — said by a record, so a replay draws the row running too. A
+// child whose row has not settled is the first turn, or one after an
+// interrupt whose result was held: that result is dropped, since the child was
+// interrupted only to be given more work, and its row has been running all
+// along.
+func (s *appSession) resumeSubagent(threadID string) {
+	s.dropHeldSubagentResult(threadID)
+	spawn, seen := s.subagentCalls[threadID]
+	if !seen || !spawn.Settled {
+		return
+	}
+	spawn.Settled = false
+	s.subagentCalls[threadID] = spawn
+	s.emitEvent(agent.ToolCallEvent{
+		ToolUseID:       spawn.CallID,
+		ToolName:        subagentToolName,
+		ToolInput:       spawn.Input,
+		ParentToolUseID: spawn.ParentToolUseID,
+		Subtype:         agent.ToolCallResumed,
+	})
+}
+
+func (s *appSession) dropHeldSubagentResult(threadID string) {
+	s.heldSubagentResults = slices.DeleteFunc(s.heldSubagentResults, func(h heldSubagentResult) bool {
+		return h.ThreadID == threadID
+	})
 }
 
 // rememberSubagent records which call spawned a subagent's thread, read off
@@ -380,7 +489,7 @@ func (s *appSession) rememberSubagent(item threadItem) {
 	if s.subagentCalls == nil {
 		s.subagentCalls = map[string]subagentSpawn{}
 	}
-	s.subagentCalls[threadID] = subagentSpawn{CallID: item.ID, ParentToolUseID: item.ParentToolUseID, AgentPath: agentPath}
+	s.subagentCalls[threadID] = subagentSpawn{CallID: item.ID, ParentToolUseID: item.ParentToolUseID, AgentPath: agentPath, Input: input}
 
 	s.emitEvent(agent.ToolCallEvent{
 		ToolUseID:         item.ID,
@@ -439,6 +548,12 @@ type subagentSpawn struct {
 	// AgentPath is the path Codex spawned the agent under; empty for a spawn
 	// whose item named none.
 	AgentPath string
+	// Input is what the spawn's call was announced with, announced again when
+	// the child resumes.
+	Input json.RawMessage
+	// Settled is whether the spawn's row reads as settled now; see
+	// resumeSubagent.
+	Settled bool
 }
 
 // subagentOutcome is what settleSubagent reports of a child, gathered as its
@@ -561,8 +676,8 @@ func (s *appSession) parseItemNotification(params json.RawMessage) (threadItem, 
 //
 // A reasoning item's start is remembered for its duration and, on the main
 // thread, signals that the agent is thinking. The remaining items with no
-// counterpart in Pockode's transcript (the agent's own messages, plans, web
-// searches) are left to item/completed or dropped there.
+// counterpart in Pockode's transcript (the agent's own messages, plans) and a
+// web search whose start names nothing yet are left to item/completed.
 func (s *appSession) handleItemStarted(params json.RawMessage) {
 	item, ok := s.parseItemNotification(params)
 	if !ok {
@@ -712,6 +827,27 @@ func (s *appSession) toolCallOf(item threadItem) (toolName string, toolInput jso
 		// the call and the file below it name one file. See view_image.go.
 		input, _ := json.Marshal(map[string]string{"file_path": firstNonEmpty(s.imageViewLocalPath(raw), raw)})
 		return "Read", input, true
+
+	// The kinds below are in tool_items.go.
+	case "webSearch":
+		// Announced here only once a start names what it searches for, which
+		// codex-cli 0.171.0's does not; handleItemCompleted announces it then.
+		return webSearchCall(item)
+
+	case "imageGeneration":
+		input, ok := imageGenerationCall(item)
+		return generateImageToolName, input, ok
+
+	case "sleep":
+		input, ok := sleepCall(item)
+		return sleepToolName, input, ok
+
+	case "collabAgentToolCall":
+		input, ok := s.agentControlCall(item)
+		return agentControlToolName, input, ok
+
+	case "dynamicToolCall":
+		return dynamicToolCall(item)
 	}
 
 	return "", nil, false
@@ -726,12 +862,23 @@ func (s *appSession) handleItemCompleted(params json.RawMessage) {
 		return
 	}
 
+	// Whether item/started announced the call, read before it is forgotten:
+	// a web search whose start named nothing is announced on completion
+	// instead. Only that case reads it — the map is cleared when the main
+	// thread's turn ends, which a subagent's call can outlive.
+	_, announced := s.toolInput(item.ID)
 	s.forgetToolInput(item.ID)
 	s.modelReached(item)
 
 	switch item.Type {
-	case "subAgentActivity", "collabAgentToolCall":
+	case "subAgentActivity":
 		s.rememberSubagent(item)
+
+	case "collabAgentToolCall":
+		s.rememberSubagent(item)
+		if _, ok := s.agentControlCall(item); ok {
+			s.emitEvent(s.agentControlResult(item))
+		}
 
 	case "agentMessage":
 		var ev struct {
@@ -822,6 +969,35 @@ func (s *appSession) handleItemCompleted(params json.RawMessage) {
 
 	case "reasoning":
 		s.handleReasoningCompleted(item)
+
+	case "webSearch":
+		s.emitWebSearchCompleted(item, announced)
+
+	case "imageGeneration":
+		s.handleImageGenerationCompleted(item)
+
+	// A sleep or dynamic tool whose item named no call (toolCallOf) has no
+	// row for a result to settle, as an agent call does not.
+	case "sleep":
+		if _, ok := sleepCall(item); ok {
+			// Nothing to report but that it is over.
+			s.emitEvent(agent.ToolResultEvent{
+				ToolUseID:         item.ID,
+				ParentToolUseID:   item.ParentToolUseID,
+				ProviderMessageID: item.TurnID,
+			})
+		}
+
+	case "dynamicToolCall":
+		if _, _, ok := dynamicToolCall(item); ok {
+			s.emitEvent(dynamicToolResult(item))
+		}
+
+	case "functionCallOutput":
+		// The output of a call announced as some other item, with nothing in
+		// it to join it to that call by. What it carries in practice is
+		// unmeasured, so it is noted and dropped until it is.
+		s.log.Debug("dropped a functionCallOutput item", "itemId", item.ID)
 	}
 }
 

@@ -1,4 +1,4 @@
-import type { ContentPart } from "../types/message";
+import type { ContentPart, ToolRun } from "../types/message";
 import { isHtmlRenderCard } from "./htmlRender";
 
 /**
@@ -46,6 +46,35 @@ export function findToolRunPath(
 		parts,
 		(part) => part.type === "tool_call" && part.tool.id === toolUseId,
 	);
+}
+
+/**
+ * The runs from the outermost down to the one with this `tool_use_id`: each
+ * holds the next among its children. Null when it is not there.
+ */
+export function findToolRunChain(
+	parts: ContentPart[],
+	toolUseId: string,
+): ToolRun[] | null {
+	const path = findToolRunPath(parts, toolUseId);
+	if (!path) return null;
+	const chain: ToolRun[] = [];
+	let list = parts;
+	for (const index of path) {
+		const part = list[index];
+		if (part?.type !== "tool_call") return null;
+		chain.push(part.tool);
+		list = part.tool.children ?? [];
+	}
+	return chain;
+}
+
+/** The run with this `tool_use_id`, at any depth, or undefined. */
+export function findToolRun(
+	parts: ContentPart[],
+	toolUseId: string,
+): ToolRun | undefined {
+	return findToolRunChain(parts, toolUseId)?.at(-1);
 }
 
 /**
@@ -129,11 +158,31 @@ export function collectPartsDeep(
 	parts: ContentPart[],
 	match: (part: ContentPart) => boolean,
 ): ContentPart[] {
-	const found: ContentPart[] = [];
+	return collectPartsWithin(parts, match).map(({ part }) => part);
+}
+
+/**
+ * {@link collectPartsDeep}, with each part handed back beside the subagent
+ * calls the walk passed through to reach it, outermost first: empty for a
+ * part in `parts` itself. The last of them is the subagent whose own
+ * conversation the part is in — for a card, the agent that asked
+ * (docs/tool-call-ui.md#when-a-step-asks-the-user).
+ */
+export function collectPartsWithin(
+	parts: ContentPart[],
+	match: (part: ContentPart) => boolean,
+	within: ToolRun[] = [],
+): { part: ContentPart; within: ToolRun[] }[] {
+	const found: { part: ContentPart; within: ToolRun[] }[] = [];
 	for (const part of parts) {
-		if (match(part)) found.push(part);
+		if (match(part)) found.push({ part, within });
 		if (part.type === "tool_call" && part.tool.children) {
-			found.push(...collectPartsDeep(part.tool.children, match));
+			found.push(
+				...collectPartsWithin(part.tool.children, match, [
+					...within,
+					part.tool,
+				]),
+			);
 		}
 	}
 	return found;

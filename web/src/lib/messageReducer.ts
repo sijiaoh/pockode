@@ -27,6 +27,7 @@ import type {
 	ToolRun,
 	ToolRunPlan,
 	UserMessage,
+	WorkRef,
 } from "../types/message";
 import { lookupAnswer, parseAnswer } from "../utils/questionAnswer";
 import { generateUUID } from "../utils/uuid";
@@ -41,6 +42,7 @@ import {
 	newPartId,
 	type PartPath,
 } from "./partTree";
+import { isStopTool } from "./taskStop";
 import { isDrawnThought } from "./thinking";
 import { PLAN_TOOL_NAME } from "./toolSummary";
 
@@ -113,6 +115,19 @@ function parseSubagentReport(raw: unknown): SubagentReport | undefined {
 		...subagentCounts(raw),
 	};
 	return Object.keys(report).length > 0 ? report : undefined;
+}
+
+/**
+ * A `tool_result`'s `work_ref`; undefined unless it names a work by id and a
+ * known type. A missing title reads as empty rather than dropping the work:
+ * the id is still where *Open* leads.
+ */
+function parseWorkRef(raw: unknown): WorkRef | undefined {
+	if (!isRecord(raw)) return undefined;
+	const { id, type, title } = raw;
+	if (typeof id !== "string" || id === "") return undefined;
+	if (type !== "story" && type !== "task" && type !== "job") return undefined;
+	return { id, type, title: typeof title === "string" ? title : "" };
 }
 
 /**
@@ -268,6 +283,12 @@ export type NormalizedEvent =
 			originToolUseId?: string;
 			/** See the `text` event. */
 			parentToolUseId?: string;
+			/**
+			 * The call announced again because its work started running again
+			 * after it had settled: a Codex subagent given more work under the
+			 * spawn that started it (`subtype: "resumed"`).
+			 */
+			resumed?: boolean;
 			/** The record's `observed_at`, epoch ms on the server's clock. */
 			observedAt?: number;
 	  }
@@ -310,6 +331,7 @@ export type NormalizedEvent =
 			subagent?: SubagentReport;
 			exitCode?: number;
 			htmlPage?: string;
+			workRef?: WorkRef;
 			/** See `tool_call`. */
 			observedAt?: number;
 	  }
@@ -493,6 +515,7 @@ export function normalizeEvent(
 				toolInput: record.tool_input,
 				originToolUseId: record.origin_tool_use_id as string | undefined,
 				parentToolUseId: record.parent_tool_use_id as string | undefined,
+				...(record.subtype === "resumed" ? { resumed: true } : {}),
 				observedAt: serverTime(record.observed_at),
 			};
 		case "tool_result":
@@ -516,6 +539,7 @@ export function normalizeEvent(
 					typeof record.html_page === "string" && record.html_page !== ""
 						? record.html_page
 						: undefined,
+				workRef: parseWorkRef(record.work_ref),
 				observedAt: serverTime(record.observed_at),
 				// No `parent_tool_use_id`: a result joins its call by id at any
 				// depth, so whose call it was is already known where it lands.
@@ -816,6 +840,7 @@ function applyToolCall(
 	options: ApplyOptions,
 	parentToolUseId?: string,
 	observedAt?: number,
+	originToolUseId?: string,
 ): ContentPart[] {
 	const index = findToolRunIndex(parts, toolUseId);
 	if (index !== -1) {
@@ -826,7 +851,12 @@ function applyToolCall(
 		const updated = [...parts];
 		updated[index] = {
 			...part,
-			tool: { ...part.tool, name: toolName, input: toolInput },
+			tool: {
+				...part.tool,
+				name: toolName,
+				input: toolInput,
+				...(originToolUseId ? { originToolUseId } : {}),
+			},
 		};
 		return updated;
 	}
@@ -868,6 +898,7 @@ function applyToolCall(
 				input: toolInput,
 				status: "running",
 				...startOf(observedAt, options),
+				...(originToolUseId ? { originToolUseId } : {}),
 			},
 			...(parentToolUseId ? { parentToolUseId } : {}),
 		},
@@ -882,11 +913,19 @@ function startOf(
 	observedAt: number | undefined,
 	options: ApplyOptions,
 ): Pick<ToolRun, "startedAt" | "seenAt"> {
-	const seenAt = clientClockAt(observedAt, options);
 	return {
 		...(observedAt !== undefined ? { startedAt: observedAt } : {}),
-		...(seenAt ? { seenAt } : {}),
+		...seenAtOf(observedAt, options),
 	};
+}
+
+/** A start on this client's clock, when it can be placed there. */
+function seenAtOf(
+	observedAt: number | undefined,
+	options: ApplyOptions,
+): { seenAt?: Date } {
+	const seenAt = clientClockAt(observedAt, options);
+	return seenAt ? { seenAt } : {};
 }
 
 /**
@@ -955,6 +994,9 @@ export function applyEventToParts(
 				options,
 				event.parentToolUseId,
 				event.observedAt,
+				// Only a stop keeps it: a fetch that could not be filed is a call
+				// that stands alone (`ToolRun.originToolUseId`).
+				isStopTool(event.toolName) ? event.originToolUseId : undefined,
 			);
 		case "permission_request": {
 			const permissionPart: ContentPart = {
@@ -1419,12 +1461,27 @@ function applyEvent(
 	// the transcript at all — unless the row it names is not loaded, and then it
 	// falls through to become an ordinary row, which is a common case rather
 	// than a fallback (docs/code/frontend-state.md).
-	if (event.type === "tool_call" && event.originToolUseId) {
-		const absorbed = absorbFetchCall(
+	// A call running again is the run it already has, wherever that sits — and
+	// nothing at all when that run is not loaded: a second row for it would be
+	// a call that was never made.
+	if (event.type === "tool_call" && event.resumed) {
+		return updateRunById(
 			messages,
-			event.originToolUseId,
 			event.toolUseId,
+			(run) => resumeToolRun(run, event.observedAt, options),
+			false,
 		);
+	}
+
+	// A stop names the task it stopped the way a fetch does, but it is an act
+	// of the agent's with consequences, and keeps a row of its own that points
+	// there (docs/tool-call-ui.md#the-remaining-tool-kinds).
+	if (
+		event.type === "tool_call" &&
+		event.originToolUseId &&
+		!isStopTool(event.toolName)
+	) {
+		const absorbed = absorbFetchCall(messages, event, options);
 		if (absorbed) return absorbed;
 	}
 
@@ -1630,6 +1687,17 @@ function applyEvent(
 					parts: applyEventToParts(current.parts, event, options),
 				};
 
+	// The main agent has moved on from the fetch it was waiting on.
+	if (
+		message.awaitedFetch &&
+		(event.type === "text" ||
+			event.type === "thinking" ||
+			event.type === "tool_call") &&
+		!event.parentToolUseId
+	) {
+		delete message.awaitedFetch;
+	}
+
 	// An ended turn keeps the status it ended with: output trailing it cannot
 	// reopen it.
 	if (!isLateContent) {
@@ -1752,10 +1820,13 @@ function fileUnderParent(
 		const path = findToolRunPath(msg.parts, parentToolUseId);
 		if (!path) continue;
 		if (hasUnfiledChildren(withRow, parentToolUseId)) return null;
-		const aborted = turnCut || isAbortedStatus(msg);
 		const resumedLater = withRow
 			.slice(i + 1)
 			.some((later) => later.role === "user");
+		// The bubble's own cut says nothing once the user has sent a turn since:
+		// a subagent running then was resumed (a Codex spawn announced again),
+		// not left over from the cut. A cut of the turn now ending still counts.
+		const aborted = turnCut || (isAbortedStatus(msg) && !resumedLater);
 		// A subagent under a backgrounded one outlives its turn with it.
 		const underBackground = path
 			.slice(0, -1)
@@ -2286,6 +2357,7 @@ function settleToolRun(
 		...(event.subagent !== undefined ? { subagent: event.subagent } : {}),
 		...(event.exitCode !== undefined ? { exitCode: event.exitCode } : {}),
 		...(event.htmlPage !== undefined ? { htmlPage: event.htmlPage } : {}),
+		...(event.workRef !== undefined ? { workRef: event.workRef } : {}),
 	};
 
 	if (event.subtype === "background_started") {
@@ -2484,9 +2556,13 @@ function updateRunById(
  */
 function absorbFetchCall(
 	messages: Message[],
-	originToolUseId: string,
-	fetchToolUseId: string,
+	event: Extract<NormalizedEvent, { type: "tool_call" }>,
+	options: ApplyOptions,
 ): Message[] | null {
+	const fetchToolUseId = event.toolUseId;
+	const originToolUseId = event.originToolUseId;
+	if (!originToolUseId) return null;
+	const waits = fetchWaits(event.toolInput);
 	for (let i = messages.length - 1; i >= 0; i--) {
 		const msg = messages[i];
 		if (msg.role !== "assistant") continue;
@@ -2509,7 +2585,15 @@ function absorbFetchCall(
 				...part,
 				tool: {
 					...run,
-					fetches: [...(run.fetches ?? []), { id: fetchToolUseId }],
+					fetches: [
+						...(run.fetches ?? []),
+						{
+							id: fetchToolUseId,
+							state: "running",
+							waits,
+							...seenAtOf(event.observedAt, options),
+						},
+					],
 				},
 			};
 			return updatedList;
@@ -2517,9 +2601,48 @@ function absorbFetchCall(
 		if (alreadyFiled) return messages;
 		const updated = [...messages];
 		updated[i] = { ...msg, parts };
+		// The main agent's own fetch is what its turn is doing now; a
+		// subagent's is not the main agent's and leaves the tail line alone.
+		const open = event.parentToolUseId ? -1 : openAssistantIndex(updated);
+		const turn = open >= 0 ? updated[open] : undefined;
+		if (turn?.role === "assistant") {
+			updated[open] = {
+				...turn,
+				awaitedFetch: { id: fetchToolUseId, originToolUseId, waits },
+			};
+		}
 		return updated;
 	}
 	return null;
+}
+
+/**
+ * Whether a fetch's input asks it to wait for the task: `TaskOutput`'s
+ * `block`, true when absent.
+ */
+function fetchWaits(input: unknown): boolean {
+	return !(
+		typeof input === "object" &&
+		input !== null &&
+		(input as { block?: unknown }).block === false
+	);
+}
+
+/**
+ * Drops `awaitedFetch` wherever it names this fetch: its result, or whatever
+ * settled it, ends what the tail line was saying.
+ */
+function clearAwaitedFetch(messages: Message[], fetchId: string): Message[] {
+	let changed = false;
+	const updated = messages.map((msg) => {
+		if (msg.role !== "assistant" || msg.awaitedFetch?.id !== fetchId) {
+			return msg;
+		}
+		changed = true;
+		const { awaitedFetch: _awaited, ...rest } = msg;
+		return rest;
+	});
+	return changed ? updated : messages;
 }
 
 /**
@@ -2550,14 +2673,21 @@ function applyFetchResult(
 		);
 		if (!path) continue;
 
-		const fetched: ToolFetch = {
-			id: event.toolUseId,
+		// Only the call's own facts carry over: the outcome is this result's
+		// alone, so a replayed one cannot inherit another's blocks or failure.
+		const fetched = ({ id, waits, seenAt, state }: ToolFetch): ToolFetch => ({
+			id,
+			waits,
+			...(seenAt ? { seenAt } : {}),
+			// A result outliving the interrupt is kept, as a run's is, without
+			// undoing it: the fetch did not come back while anything waited.
+			state: state === "interrupted" ? "interrupted" : "returned",
 			result: event.toolResult,
 			...(event.contents ? { contents: event.contents } : {}),
 			// The fetch failed, not the task it was reading: the run keeps its own
 			// status, and only this entry says anything went wrong.
 			...(event.isError ? { isError: true } : {}),
-		};
+		});
 		const parts = editAtPath(msg.parts, path, (list, index) => {
 			const part = list[index];
 			if (part.type !== "tool_call") return list; // Type guard - never happens
@@ -2567,7 +2697,7 @@ function applyFetchResult(
 				tool: {
 					...part.tool,
 					fetches: part.tool.fetches?.map((fetch) =>
-						fetch.id === event.toolUseId ? fetched : fetch,
+						fetch.id === event.toolUseId ? fetched(fetch) : fetch,
 					),
 				},
 			};
@@ -2575,9 +2705,32 @@ function applyFetchResult(
 		});
 		const updated = [...messages];
 		updated[i] = { ...msg, parts };
-		return updated;
+		return clearAwaitedFetch(updated, event.toolUseId);
 	}
 	return null;
+}
+
+/**
+ * A settled run whose work has started again: running, from now, until its
+ * next result settles it. What it reported last stays — its result and its
+ * figures are what is true of it until that result replaces them — except
+ * its clocks: it starts now, and a running call has no end or duration. One
+ * still running is left alone: a resend says nothing new about it.
+ */
+function resumeToolRun(
+	run: ToolRun,
+	observedAt: number | undefined,
+	options: ApplyOptions,
+): ToolRun {
+	if (run.status === "running" || run.status === "background") return run;
+	const {
+		endedAt: _endedAt,
+		durationMs: _durationMs,
+		startedAt: _startedAt,
+		seenAt: _seenAt,
+		...rest
+	} = run;
+	return { ...rest, status: "running", ...startOf(observedAt, options) };
 }
 
 function updateToolResult(
@@ -2687,6 +2840,11 @@ export function applyToolActivitySnapshot(
  * is settled too, and marked `lostWithProcess`. A result that still turns up
  * for it (`background_lost`) keeps the `interrupted` this leaves, as any result
  * reaching an interrupted run does.
+ *
+ * A fetch still running is settled on every run, a `background` one included:
+ * the task it reads outlives the turn, but the call that was reading it was
+ * the turn's, and nothing will answer it now. Its row's status is the task's
+ * and is not touched by that.
  */
 function settleRunningToolParts(
 	parts: ContentPart[],
@@ -2694,18 +2852,25 @@ function settleRunningToolParts(
 ): ContentPart[] {
 	let changed = false;
 	const updated = parts.map((part) => {
-		if (
-			part.type !== "tool_call" ||
-			(part.tool.status === "background" && !processGone)
-		) {
-			return part;
+		if (part.type !== "tool_call") return part;
+		const fetches = settleRunningFetches(part.tool.fetches);
+		if (part.tool.status === "background" && !processGone) {
+			if (fetches === part.tool.fetches) return part;
+			changed = true;
+			return { ...part, tool: { ...part.tool, fetches } };
 		}
 		const children = part.tool.children
 			? settleRunningToolParts(part.tool.children, processGone)
 			: undefined;
 		const lost = part.tool.status === "background";
 		const settle = part.tool.status === "running" || lost;
-		if (!settle && children === part.tool.children) return part;
+		if (
+			!settle &&
+			children === part.tool.children &&
+			fetches === part.tool.fetches
+		) {
+			return part;
+		}
 		changed = true;
 		return {
 			...part,
@@ -2714,10 +2879,20 @@ function settleRunningToolParts(
 				...(settle ? { status: "interrupted" as const } : {}),
 				...(lost ? { lostWithProcess: true } : {}),
 				...(children ? { children } : {}),
+				...(fetches ? { fetches } : {}),
 			},
 		};
 	});
 	return changed ? updated : parts;
+}
+
+function settleRunningFetches(
+	fetches: ToolFetch[] | undefined,
+): ToolFetch[] | undefined {
+	if (!fetches?.some((fetch) => fetch.state === "running")) return fetches;
+	return fetches.map((fetch) =>
+		fetch.state === "running" ? { ...fetch, state: "interrupted" } : fetch,
+	);
 }
 
 export function settleRunningToolRuns(
@@ -2728,9 +2903,11 @@ export function settleRunningToolRuns(
 	const updated = messages.map((msg) => {
 		if (msg.role !== "assistant") return msg;
 		const parts = settleRunningToolParts(msg.parts, processGone);
-		if (parts === msg.parts) return msg;
+		// Every running fetch was settled just now, so no turn waits on one.
+		if (parts === msg.parts && !msg.awaitedFetch) return msg;
 		anyChanged = true;
-		return { ...msg, parts };
+		const { awaitedFetch: _awaited, ...rest } = msg;
+		return { ...rest, parts };
 	});
 	return anyChanged ? updated : messages;
 }

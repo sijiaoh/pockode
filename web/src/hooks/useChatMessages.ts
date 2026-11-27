@@ -564,10 +564,12 @@ export function useChatMessages({
 			// record never comes. Read before the skip below, because a record the
 			// page already has still proves it — and the deltas held across a
 			// subscribe are replayed with no seq to skip them by.
+			// A call announced again because a subagent resumed is the subagent's
+			// doing, not the main agent's output.
 			const endsThinking =
 				((event.type === "thinking" ||
 					event.type === "text" ||
-					event.type === "tool_call" ||
+					(event.type === "tool_call" && !event.resumed) ||
 					// Codex's only: a Claude plan follows a result the thinking
 					// already ended on, and one from a subagent's Task calls names
 					// no parent, so it would end the main agent's thinking.

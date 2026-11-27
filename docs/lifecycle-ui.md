@@ -611,16 +611,20 @@ focus the header row — via the permission blocker's `request_id`. The strip do
 re-implement it: the scroll container is there, and a second implementation of a
 scroll-and-highlight is a second set of edge cases.
 
-It is the **only** jump left on this strip: the
+It is the only jump to a **card** on this strip; the other way the strip
+reaches into the transcript is the background row's task list, which goes to a
+task's row by its `tool_use_id`, or opens a subagent's transcript (below). The
 question row's action opens the answer panel instead, and the pending-question
 pill is deleted, because both existed to reach the place answering happened and
 answering does not happen in the transcript any more
 ([answering-ui.md](answering-ui.md)). A question record card therefore carries no
 jump handle either — the strip's jump looks for `data-permission-request-id`,
-which only a permission card carries. Outside the strip the same jump has one
-other caller, a change in the turn's changes card going to the call that made it
+which only a permission card carries. The jump to a tool row by its
+`tool_use_id` is the transcript's own, and has callers inside it too — a change
+in the turn's changes card going to the call that made it
 ([tool-call-ui.md](tool-call-ui.md#from-a-file-to-the-calls-that-changed-it)),
-which finds a tool row by its `tool_use_id`.
+the tail line's *Go to call*, an agents-list entry
+([turn-progress-ui.md §4.3](turn-progress-ui.md#43-the-agents-line)).
 
 **The row names what the turn waits on**
 ([turn-progress-ui.md §4.5](turn-progress-ui.md#45-naming-what-a-background-wait-waits-on)).
@@ -663,9 +667,10 @@ would be the only false thing on the line.
 Under the copy, with one task or several, comes `<ul aria-label="Background
 tasks">`, scrolled inside `max-h-32` as the watching row's list is. Each task
 is one button: its status glyph, then its title and detail as on its row, then
-the row's elapsed counter. A press goes to the row, as the agents line's
-entries do, and opens the subagent's row and its Process when the task is a
-subagent; it is disabled under `jumpDisabled` like the permission row's jump
+the row's elapsed counter. A press goes where the agents line's entries go:
+a subagent with work to show opens its transcript
+([subagent-transcript-ui.md](subagent-transcript-ui.md)), and any other task
+goes to its row; it is disabled under `jumpDisabled` like the permission row's jump
 (how the strip reaches the transcript's jump is
 [turn-progress-ui.md §4.5](turn-progress-ui.md#45-naming-what-a-background-wait-waits-on)).
 A task that

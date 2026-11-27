@@ -383,4 +383,21 @@ describe("turnChanges", () => {
 			]),
 		).toEqual([]);
 	});
+
+	// Lines of the cell's source, not of the `.ipynb` JSON; the cell replaced
+	// or deleted is not in the call, so its lines are not known.
+	it("lists a notebook in cell lines, never as new or deleted", () => {
+		const nb = (id: string, input: Record<string, unknown>) =>
+			call(id, "NotebookEdit", { notebook_path: "/repo/a.ipynb", ...input });
+		expect(
+			shape([
+				nb("n1", { cell_id: "c1", new_source: "a\nb\n" }),
+				nb("n2", { edit_mode: "insert", new_source: "c\n" }),
+				nb("n3", { edit_mode: "delete", cell_id: "c2", new_source: "" }),
+			]),
+		).toEqual(["- a.ipynb - +3 -0 (n1,n2,n3)"]);
+		expect(shape([nb("n1", { cell_id: "c1", new_source: "a\n" })])).toEqual([
+			"- a.ipynb - +1 -? (n1)",
+		]);
+	});
 });

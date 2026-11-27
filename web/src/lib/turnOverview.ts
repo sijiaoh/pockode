@@ -6,7 +6,7 @@ import type {
 	ToolRunPlan,
 } from "../types/message";
 import { openAssistantIndex } from "./messageReducer";
-import { isLive } from "./subagentRun";
+import { isLiveRun } from "./subagentRun";
 import { isTaskTool } from "./toolSummary";
 
 /**
@@ -84,7 +84,7 @@ export interface AgentsOverview {
 
 /** The ids of the live ones among `runs`. */
 export function liveIds(runs: ToolRun[]): string[] {
-	return runs.filter(isLive).map((run) => run.id);
+	return runs.filter(isLiveRun).map((run) => run.id);
 }
 
 /**
@@ -137,24 +137,37 @@ function openTurnReplies(messages: Message[]): Message[] {
  * among its replies' top-level runs, whichever CLI wrote it. A Claude
  * subagent's Task-tool calls write the session's one task list, and the
  * server files their record on the top-level subagent call, so they count
- * here as the main plan they are. None while no
- * turn is open, before the turn's first plan, or when the newest one is empty
- * — the agent cleared its list (docs/turn-progress-ui.md#42-the-plan-line).
+ * here as the main plan they are. A subagent resumed this turn is still filed
+ * under the call that first spawned it, in an earlier turn's reply, so a
+ * top-level run outside the open turn counts too, for a record newer than the
+ * message that opened the turn. None while no turn is open, before the turn's
+ * first plan, or when the newest one is empty — the agent cleared its list
+ * (docs/turn-progress-ui.md#42-the-plan-line).
  */
 export function currentPlan(
 	messages: Message[],
 	turnOpen: boolean,
 ): ToolRunPlan | undefined {
 	if (!turnOpen) return undefined;
+	const replies = openTurnReplies(messages);
+	const oldest = replies.at(-1);
+	const firstIndex = oldest ? messages.indexOf(oldest) : messages.length;
+	// Without a seq on the turn's opening message there is no telling an
+	// earlier reply's record from this turn's, and only the turn's own count.
+	const since = messages
+		.slice(0, firstIndex)
+		.findLast((m) => m.role === "user")?.anchorSeq;
+	const inTurn = new Set(replies);
 	let newest: ToolRunPlan | undefined;
-	for (const reply of openTurnReplies(messages)) {
-		if (reply.role !== "assistant") continue;
-		for (const part of reply.parts) {
+	for (const message of messages) {
+		if (message.role !== "assistant") continue;
+		const floor = inTurn.has(message) ? Number.NEGATIVE_INFINITY : since;
+		if (floor === undefined) continue;
+		for (const part of message.parts) {
 			if (part.type !== "tool_call" || part.parentToolUseId) continue;
 			const plan = part.tool.plan;
-			if (plan && (!newest || plan.order > newest.order)) {
-				newest = plan;
-			}
+			if (!plan || plan.order <= floor) continue;
+			if (!newest || plan.order > newest.order) newest = plan;
 		}
 	}
 	return newest && newest.steps.length > 0 ? newest : undefined;

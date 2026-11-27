@@ -351,14 +351,32 @@ says why).
 
 ### 2.3 What it says
 
-Two states, one line. The glyph stays put across the switch, and only the
-words change — it is one line saying what the turn is doing now, not two
-elements taking turns.
+Three states, one line. The glyph stays put across the switch, and only the
+words change — it is one line saying what the turn is doing now, not elements
+taking turns.
 
 | State | Glyph | Label | Clock | After the clock |
 |---|---|---|---|---|
 | working | `Spinner`, `text-th-accent` | `Working` | turn clock | — |
 | thinking | `Spinner`, `text-th-accent` | `Thinking…` | turn clock | `·` and the latest line, when there is text; then the chevron |
+| waiting for output | `Spinner`, `text-th-accent` | `Waiting for output…` (`Reading output…` for a fetch that does not wait) | turn clock | `·` and `Go to call` |
+
+**When it says `Waiting for output…`** — while the
+main agent's newest call is a `TaskOutput` filed under the call it reads and
+still `running` ([tool-call-ui.md](tool-call-ui.md#a-fetch-in-flight)). Such a
+fetch draws no row, so nothing at the tail moved for up to 30 seconds and the
+row it reads was often screens up. The state ends with the fetch, and with the
+main agent's next text, thinking or call; thinking still being streamed outranks
+it, since it began after the fetch. The reducer holds it as the bubble's
+`awaitedFetch` ([code/frontend-state.md](code/frontend-state.md#a-fetch-filed-under-the-call-it-reads)).
+It names no call, no command and no
+task — the line's rule holds: it says what the turn is doing, which is waiting.
+`Go to call` is the transcript's jump to the row the fetch is filed under
+([tool-call-ui.md](tool-call-ui.md#from-a-file-to-the-calls-that-changed-it)),
+a text button in `text-th-accent` with a `touch-target` hit area; the rest of
+the line is not a button. A fetch that kept a row of its own is a running row
+at the tail and leaves the line at `Working`. A subagent's fetch is not the main
+agent's and does not move it (§3).
 
 **The clock follows the label**, not the latest line: the latest line changes
 length several times a second and would drag a clock after it across the row,
@@ -564,7 +582,11 @@ line:
   every agent in a session writes the same task list, so a subagent's
   `TaskCreate` / `TaskUpdate` / `TaskList` change the main plan. Their record
   names the top-level subagent call they ran inside (§4.6), which is a
-  top-level run, so it counts here like any other.
+  top-level run, so it counts here like any other. A subagent resumed this
+  turn (a `SendMessage` to it) is still filed under the call that first
+  spawned it, in an earlier turn's reply, so a top-level run outside the open
+  turn counts too, for a record newer than the user message that opened the
+  turn (its `anchorSeq`). Without that seq, only the turn's own replies count.
 - **No plan, no line.** That includes every Claude 5 session on claude 2.1.330,
   which offers no plan tool to those models (§4.6). The line is not reserved
   while it is empty.
@@ -617,7 +639,11 @@ or the agent clearing its list, so a later plan does not open by itself.
 ### 4.3 The agents line
 
 **Which agents.** Every **top-level subagent run** in the loaded transcript
-whose `status` is `running` or `background`:
+whose `status` is `running` or `background`, each taken as its row draws it —
+a settled Claude subagent that a `SendMessage` resumed is running again, on the
+resuming call (`liveResumes` / `resumedRun`,
+[tool-call-ui.md](tool-call-ui.md#a-subagents-own-work)), so it counts and is
+named as live:
 
 - **A subagent run** is a call the `TaskItem` renderer draws: Claude's `Task` /
   `Agent`, or a Codex spawn (`spawnAgent`, `subAgentActivity`). Both CLIs reach
@@ -699,7 +725,10 @@ whose `status` is `running` or `background`:
   chip, the meta counter and the second line, all from the components the row
   uses (`ToolRowFirstLine` / `ToolRowSecondLine`, the header `TaskItem` builds
   with `subagentHeader`, `toolSummary`). It has no chevron column
-  (`RowButton`'s `noLead`) and no body. Because it is the same code over the same
+  (`RowButton`'s `noLead`), no body, and no
+  [step window](tool-call-ui.md#the-step-window): its second line is the one a
+  row without a window draws, naming what the agent is doing now, and the
+  steps are what a press opens. Because it is the same code over the same
   `ToolRun`, the entry and the row cannot say different things.
 - **Order is transcript order**, the order of the rows. It is stable, so an
   entry never changes place under a finger.
@@ -719,25 +748,26 @@ whose `status` is `running` or `background`:
   (§4.2): the line moves between bubbles and slots, which remounts it. Both
   reset when the line goes.
 
-- **A press on an entry goes to its row.** This is the transcript's jump by
-  `tool_use_id` (`ToolJumpContext`, the reveal path *Go to call* uses,
-  [tool-call-ui.md](tool-call-ui.md#from-a-file-to-the-calls-that-changed-it)).
-  It opens the group and any outer subagent's Process that hide the row,
-  scrolls the row to just under the pinned bars, rings it in `th-accent` and
-  focuses it. Unlike *Go to call*, it **also opens the subagent's row and its
-  Process**, because what the reader came for is the agent's work. A plain
-  reveal opens only what *holds* the target; `ToolReveal.openTarget`
-  (`goToCall(toolUseId, { openTarget: true })`) asks for the target too. A
-  `TaskItem` whose own id is the target opens its row and its Process when the
-  field is set, through the same `useRevealRequest` step (which hands over the
-  whole reveal), setting the state the user's taps set. The press was the user's, so both stay open until they close
-  them. Every
-  entry is loaded by construction: it is a run in the reducer, and the reducer
-  holds only loaded pages.
-- **Room for the subagent's own transcript.** The press goes through one
-  callback, `openAgent(toolUseId)`, which is the jump. A later view of a
-  subagent's work as its own transcript changes what a press opens there, and
-  nothing else here.
+- **A press on an entry opens the subagent's transcript**
+  ([subagent-transcript-ui.md](subagent-transcript-ui.md)), the layer its row's
+  ⤢ opens: what the reader came for is the agent's work, and that is where it
+  is read whole and followed live. It goes through the same opener
+  (`SubagentTranscriptContext`), so the layer opens with the whole path down to
+  the agent and focus comes back to the entry when it closes — or, if the entry
+  has gone meanwhile (the list closed, the line moved slots), to what stands for
+  the same run in the chat, its ⤢ or else its row
+  ([subagent-transcript-ui.md](subagent-transcript-ui.md#back-at-each-depth)).
+  An entry whose subagent has no work to show yet — the condition under which its row has no
+  ⤢ (`hasProcess` in `subagentRun.ts`, shared by both) — **goes to its row**
+  instead: the transcript's jump by `tool_use_id` (`ToolJumpContext`, the
+  reveal path *Go to call* uses,
+  [tool-call-ui.md](tool-call-ui.md#from-a-file-to-the-calls-that-changed-it)),
+  which opens whatever hides the row, scrolls it to just under the pinned bars,
+  rings it in `th-accent` and focuses it. Where nothing provides the opener
+  (a `MessageList` outside `ChatPanel`), every entry goes to its row. Every
+  entry is loaded by
+  construction: it is a run in the reducer, and the reducer holds only loaded
+  pages.
 
 **Where the two lines are derived and drawn.** `useChatMessages` builds the
 `TurnTail` value. It calls `usePlanOverview` and `useAgentsOverview` over the
@@ -762,7 +792,8 @@ still `streaming`, so the id check is what keeps the lines in one bubble. In the
 settled branch it goes above `MessageActions`. Because it comes
 through the context, the plan or an agent changing re-renders the one slot
 that shows them and no other bubble (the reason `TurnTailContext` exists). An
-entry is drawn from the run itself, looked up by id in the same messages.
+entry is drawn from the run itself, the object the reducer holds — taken as its
+row draws it, a resumed one on its resume.
 
 ### 4.4 Phone and desktop
 
@@ -799,11 +830,14 @@ covers the one case in which the reader is reliably away from the tail.
 The strip is drawn by `ChatPanel`, outside the transcript, so it cannot read
 `ToolJumpContext`, which `MessageList` provides only inside its own list. It
 reaches the jump the way the permission row does, through `MessageListHandle`:
-`jumpToCall(toolUseId, { openTarget: true })` beside `jumpToRequest`. The jump
+`jumpToCall(toolUseId)` beside `jumpToRequest`; a subagent's transcript is
+opened through the same opener the chat provides, which `ChatPanel` owns. The jump
 honours the strip's `jumpDisabled` like the permission row's jump, for the same
 reason: the jump closes the answer panel on its way. That close-then-jump step
 lives in `ChatPanel`, as one pending jump of either kind,
-`{ kind: "request", requestId }` or `{ kind: "call", toolUseId, openTarget }`.
+`{ kind: "request", requestId }` or `{ kind: "call", toolUseId }`. A jump to a
+row closes the subagent's transcript first if one is up, since the row is in
+the chat under it.
 The press closes the panel and sets it, and a layout effect in the same commit
 jumps, once, unless the transcript is still `inert`. In that case the jump is
 dropped, not held: whatever still covers the transcript is not the panel this
@@ -1001,8 +1035,8 @@ and each `TaskList` replaces the seed with it.
   It is drawn because nothing else in the transcript says that Codex planned.
 
 **What the plan line reads** is the `ToolRun.plan` latest in record order
-among the top-level runs of the open turn's replies (§4.2), whichever CLI wrote
-it. This is record order, not call order. With the fold every record is a
+among the top-level runs §4.2 reads (the open turn's replies, and a resumed
+subagent's earlier spawn), whichever CLI wrote it. This is record order, not call order. With the fold every record is a
 cumulative snapshot, and when two calls' results come back in the other order,
 the later call holds the older snapshot. A live record's `seq` arrives with it,
 as every persisted record's does, and is the record's place (`order`). A
@@ -1049,11 +1083,13 @@ is exactly what §4.1 rules out.
   live, so that half is `aria-hidden`, by the second line's rule
   ([tool-call-ui.md](tool-call-ui.md#the-second-line-problem-1)).
 - **An entry** is a `<button>` whose name starts with its visible words,
-  *"Explore, Find retry handling, running, go to its row"* (WCAG 2.5.3, as
+  *"Explore, Find retry handling, running, open its transcript"* — or *"…, go
+  to its row"* where it goes to the row (WCAG 2.5.3, as
   *Go to call* does). The status word (`toolStatusWord`: *running*, *running in
   the background*, or the settled glyph's word) stands in for the glyph the
   label hides, so an entry held after it settled does not sound live. Its
-  moving second line is `aria-hidden` as on the row. The jump moves focus to the row, whose own name is read.
+  moving second line is `aria-hidden` as on the row. Either way focus moves to
+what it opened — the transcript, or the row, whose own name is read.
 
 ## 5. What it does not say
 
@@ -1066,7 +1102,7 @@ a copy of a row:
 | Fact | Owner | Tail line |
 |---|---|---|
 | the turn is producing | **the tail line** (and the sidebar row's spinner, the same fact in a list) | the one thing it says |
-| which call is running and for how long | the tool row / group summary | never names a call |
+| which call is running and for how long | the tool row / group summary | never names a call; points at one only while the main agent waits on a fetch that has no row (§2.3) |
 | which subagents are still running, and what each is doing | each subagent's row; **the agents line** gathers them, read from the same `ToolRun`s | never names one |
 | the plan, and how far it has come | the plan's rows (history); **the plan line**, the newest record | never |
 | a permission request blocks the turn | strip permission row, card | hidden |

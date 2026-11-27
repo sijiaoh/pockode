@@ -209,6 +209,23 @@ describe("currentPlan", () => {
 		).toBeUndefined();
 	});
 
+	// A resumed Claude subagent's work, its Task-tool plans with it, is filed
+	// under the call that first spawned it, in an earlier turn's reply.
+	it("counts a record written this turn on an earlier turn's run", () => {
+		const opener = (anchorSeq?: number): Message => ({
+			...user("u"),
+			...(anchorSeq !== undefined ? { anchorSeq } : {}),
+		});
+		const resumed = (order: number) =>
+			reply("earlier", [planned("old", 2), planned("spawn", order)]);
+		const open = reply("now", [], "streaming");
+		expect(firstStep([resumed(12), opener(10), open])).toBe("spawn");
+		// Written before the turn opened: an earlier turn's plan.
+		expect(firstStep([resumed(4), opener(10), open])).toBeUndefined();
+		// No seq to tell the two apart by: only the turn's own replies.
+		expect(firstStep([resumed(12), opener(), open])).toBeUndefined();
+	});
+
 	it("is the main agent's only", () => {
 		const messages = [
 			reply(

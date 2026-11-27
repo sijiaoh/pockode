@@ -20,7 +20,12 @@ import {
 } from "react";
 import { describeChangeCount } from "../../hooks/useGitChangeCount";
 import { ACTIVITY_VIEW, watchingLabel } from "../../lib/activity";
-import { isLive } from "../../lib/subagentRun";
+import {
+	hasProcess,
+	isLiveRun,
+	type UnfiledChildren,
+	unfiledChildren,
+} from "../../lib/subagentRun";
 import { isTaskTool, SUBAGENT_TITLE, toolSummary } from "../../lib/toolSummary";
 import { backgroundTaskRuns } from "../../lib/turnOverview";
 import { useWorkStore } from "../../lib/workStore";
@@ -38,6 +43,10 @@ import { formatTime, isInstant } from "../../utils/dateTime";
 import { ActivityIcon } from "../ui";
 import type { PromptError } from "./MessageItem";
 import { Armed } from "./SendStopSlot";
+import {
+	type OpenSubagentTranscript,
+	SUBAGENT_OPENER_ATTR,
+} from "./subagentTranscriptContext";
 import {
 	Chip,
 	Detail,
@@ -60,11 +69,15 @@ interface Props {
 	/** Scrolls the transcript to the card that is holding the turn up. */
 	onJumpToRequest: (requestId: string) => void;
 	/**
-	 * Goes to a background task's row, opening a subagent's row and its
-	 * Process. Absent, the background row's tasks are listed without a way to
-	 * them.
+	 * Goes to a background task's row. Absent, the background row's tasks are
+	 * listed without a way to them.
 	 */
 	onJumpToCall?: (toolUseId: string) => void;
+	/**
+	 * Opens a background subagent's transcript, which is where a subagent with
+	 * work to show is taken instead of its row. Absent, it goes to its row too.
+	 */
+	onOpenTranscript?: OpenSubagentTranscript;
 	/**
 	 * The loaded transcript, which the background row reads its tasks from —
 	 * the reducer's own runs, since the blocker names none
@@ -562,6 +575,7 @@ function AttentionStrip({
 	turn,
 	onJumpToRequest,
 	onJumpToCall,
+	onOpenTranscript,
 	messages,
 	jumpDisabled,
 	onAnswer,
@@ -745,6 +759,7 @@ function AttentionStrip({
 			turn={turn}
 			messages={messages}
 			onJumpToCall={onJumpToCall}
+			onOpenTranscript={onOpenTranscript}
 			jumpDisabled={jumpDisabled}
 		/>
 	);
@@ -770,16 +785,25 @@ function TaskName({ run }: { run: ToolRun }) {
 	);
 }
 
-/** One task in the background row's Details, and the way to its row. */
+/**
+ * One task in the background row's Details, and the way to it: its row, or a
+ * subagent's transcript when it has work to show there.
+ */
 function BackgroundTaskItem({
 	run,
+	unfiled,
 	onJump,
+	onOpenTranscript,
 	jumpDisabled,
 }: {
 	run: ToolRun;
+	unfiled?: UnfiledChildren;
 	onJump?: (toolUseId: string) => void;
+	onOpenTranscript?: OpenSubagentTranscript;
 	jumpDisabled?: boolean;
 }) {
+	const toTranscript =
+		onOpenTranscript && isTaskTool(run.name) && hasProcess(run, unfiled);
 	const workDir = useWSStore((state) => state.workDir);
 	const summary = toolSummary(run.name, run.input, workDir);
 	// Starting with the visible words (WCAG 2.5.3), as an agents-list entry is
@@ -788,7 +812,7 @@ function BackgroundTaskItem({
 		summary.title,
 		summary.detail + summary.detailTail,
 		toolStatusWord(run.status),
-		"go to its row",
+		toTranscript ? "open its transcript" : "go to its row",
 	]
 		.filter(Boolean)
 		.join(", ");
@@ -796,8 +820,15 @@ function BackgroundTaskItem({
 		<li>
 			<button
 				type="button"
-				onClick={() => onJump?.(run.id)}
-				disabled={!onJump || jumpDisabled}
+				onClick={(event) =>
+					toTranscript
+						? onOpenTranscript(run.id, event.currentTarget)
+						: onJump?.(run.id)
+				}
+				disabled={!(toTranscript || onJump) || jumpDisabled}
+				// Focus comes back here when the transcript closes, or to the ⤢ in
+				// the chat standing for the same run if the strip has changed.
+				{...(toTranscript && { [SUBAGENT_OPENER_ATTR]: run.id })}
 				aria-label={label}
 				className={`${WATCHED_STORY_ROW} disabled:opacity-50`}
 			>
@@ -829,20 +860,23 @@ function BackgroundRow({
 	turn,
 	messages,
 	onJumpToCall,
+	onOpenTranscript,
 	jumpDisabled,
 }: {
 	turn: SessionTurn;
 	messages?: Message[];
 	onJumpToCall?: (toolUseId: string) => void;
+	onOpenTranscript?: OpenSubagentTranscript;
 	jumpDisabled?: boolean;
 }) {
+	const unfiled = useMemo(() => unfiledChildren(messages ?? []), [messages]);
 	const [held, setHeld] = useState<ReadonlySet<string> | null>(null);
 	const expanded = held !== null;
 	const tasks = useMemo(
 		() => backgroundTaskRuns(messages ?? [], held ?? undefined),
 		[messages, held],
 	);
-	const live = tasks.filter(isLive);
+	const live = tasks.filter(isLiveRun);
 	// A task that goes to the background while Details is open joins the list
 	// and then stays in it, as the ones it opened with do.
 	useLayoutEffect(() => {
@@ -905,7 +939,9 @@ function BackgroundRow({
 								<BackgroundTaskItem
 									key={run.id}
 									run={run}
+									unfiled={unfiled.get(run.id)}
 									onJump={onJumpToCall}
+									onOpenTranscript={onOpenTranscript}
 									jumpDisabled={jumpDisabled}
 								/>
 							))}

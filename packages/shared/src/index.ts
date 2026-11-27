@@ -20,6 +20,7 @@ export {
 	useIsInSheet,
 } from "./components/index.ts";
 export {
+	CoverLayerContext,
 	type CoverPageBack,
 	LayerHistoryContext,
 	useCoverPage,

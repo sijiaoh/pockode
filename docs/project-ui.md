@@ -910,6 +910,7 @@ menu, or Back leaving the page under a sheet.
 | The session sidebar *drawer* (below the expanded tier) | yes | Material's navigation drawer |
 | `ResponsivePanel`, both as the drawer and as the expanded tier's dropdown | yes | one component, one rule; see *Desktop* |
 | `InputBar`'s menu | yes | an open popup menu is a layer on every platform |
+| A subagent's transcript, each level of it | yes, one level per Back | each level is one layer of the stack; it covers the chat's transcript only, so the input bar stays live ([subagent-transcript-ui.md](subagent-transcript-ui.md#back-at-each-depth)) |
 | The expanded tier's sidebar *column* | no | part of the page, not drawn over it; it counts as no layer |
 | The chat's answer panel | no | raised by the agent and part of the chat surface, not something the user opened ([answering-ui.md](answering-ui.md#3-the-answer-panel)); it counts as no layer. Closing it by Back would hide a question that is still waiting |
 | Pages over the chat — Stories, work detail, Settings, the Git workspace, every route overlay | no — they are pages | §5.1 governs them: they have URLs, Back retraces them |
@@ -1006,7 +1007,9 @@ layer's entry is pushed only once the first one's is gone, so history holds one
 layer entry, not two, and one Back closes what is on screen.
 
 Sheets still do not nest (`useIsInSheet`); the stack is for a dialog over a
-sheet, or a sheet over a drawer, which do.
+sheet, a sheet over a drawer, or one level of a subagent's transcript over
+another ([subagent-transcript-ui.md](subagent-transcript-ui.md#back-at-each-depth)),
+which do.
 
 #### Reload, deep links, Forward
 

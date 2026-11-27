@@ -38,7 +38,14 @@ describe("toolSecondLine", () => {
 				run({
 					status: "background",
 					output: "tick 1\ntick 2\n",
-					fetches: [{ id: "f1", result: "tick 417\ntick 418\n" }],
+					fetches: [
+						{
+							id: "f1",
+							state: "returned",
+							waits: true,
+							result: "tick 417\ntick 418\n",
+						},
+					],
 				}),
 			),
 		).toEqual({ text: "tick 418", mono: true, live: false });
@@ -50,8 +57,8 @@ describe("toolSecondLine", () => {
 				run({
 					status: "background",
 					fetches: [
-						{ id: "f1", result: "tick 1" },
-						{ id: "f2", result: "tick 418" },
+						{ id: "f1", state: "returned", waits: true, result: "tick 1" },
+						{ id: "f2", state: "returned", waits: true, result: "tick 418" },
 					],
 				}),
 			)?.text,
@@ -65,7 +72,7 @@ describe("toolSecondLine", () => {
 			toolSecondLine(
 				run({
 					activity: "Running tests",
-					fetches: [{ id: "f1", result: "ok" }],
+					fetches: [{ id: "f1", state: "returned", waits: true, result: "ok" }],
 				}),
 			),
 		).toEqual({ text: "Running tests", mono: false, live: true });
@@ -80,20 +87,83 @@ describe("toolSecondLine", () => {
 					status: "background",
 					output: "tick 2\n",
 					fetches: [
-						{ id: "f1", result: "boom", isError: true },
-						{ id: "f2", result: "" },
+						{
+							id: "f1",
+							state: "returned",
+							waits: true,
+							result: "boom",
+							isError: true,
+						},
+						{ id: "f2", state: "returned", waits: true, result: "" },
 					],
 				}),
 			),
 		).toEqual({ text: "tick 2", mono: true, live: true });
 	});
 
-	// Both fields absent: the fetch never returned, so there is no line to take
-	// and the row falls back to what it had.
-	it("ignores a fetch that never returned", () => {
+	// A fetch in flight is the newest word: a reading is being taken now. It
+	// says so as the fetch, in prose, and counts from the fetch's own start.
+	it("says a fetch is waiting while it runs", () => {
+		const seenAt = new Date();
 		expect(
-			toolSecondLine(run({ status: "background", fetches: [{ id: "f1" }] })),
-		).toBeNull();
+			toolSecondLine(
+				run({
+					status: "background",
+					output: "tick 2\n",
+					fetches: [
+						{ id: "f1", state: "returned", waits: true, result: "tick 1" },
+						{ id: "f2", state: "running", waits: true, seenAt },
+					],
+				}),
+			),
+		).toEqual({
+			text: "Waiting for output…",
+			mono: false,
+			live: true,
+			since: seenAt,
+		});
+	});
+
+	it("says a fetch that does not wait is reading", () => {
+		expect(
+			toolSecondLine(
+				run({
+					status: "background",
+					fetches: [{ id: "f1", state: "running", waits: false }],
+				}),
+			),
+		).toEqual({ text: "Reading output…", mono: false, live: true });
+	});
+
+	it("still lets the engine's progress line outrank a fetch in flight", () => {
+		expect(
+			toolSecondLine(
+				run({
+					activity: "Running tests",
+					fetches: [{ id: "f1", state: "running", waits: true }],
+				}),
+			)?.text,
+		).toBe("Running tests");
+	});
+
+	// A line a fetch opened is not taken away by the fetch ending: on a row
+	// with nothing else to show it settles into what became of the fetch.
+	it.each([
+		[{ state: "interrupted" as const }, "Output not read"],
+		[
+			{ state: "returned" as const, result: "boom", isError: true },
+			"Couldn't read output",
+		],
+		[{ state: "returned" as const, result: "" }, "No output yet"],
+	])("keeps a line once a fetch ends without output (%o)", (fetch, text) => {
+		expect(
+			toolSecondLine(
+				run({
+					status: "background",
+					fetches: [{ id: "f1", waits: true, ...fetch }],
+				}),
+			),
+		).toEqual({ text, mono: false, live: false });
 	});
 
 	// What a fetch answers with, verbatim from claude 2.1.263: a small document
@@ -107,7 +177,14 @@ describe("toolSecondLine", () => {
 			toolSecondLine(
 				run({
 					status: "background",
-					fetches: [{ id: "f1", result: envelope("tick 11\ntick 12") }],
+					fetches: [
+						{
+							id: "f1",
+							state: "returned",
+							waits: true,
+							result: envelope("tick 11\ntick 12"),
+						},
+					],
 				}),
 			),
 		).toEqual({ text: "tick 12", mono: true, live: false });
@@ -115,15 +192,17 @@ describe("toolSecondLine", () => {
 
 	// The task has started but printed nothing yet. The envelope is not empty —
 	// it still states a status — but the run has no latest word to show.
-	it("ignores a fetch whose envelope carries no output", () => {
+	it("reads a fetch whose envelope carries no output as no output", () => {
 		expect(
 			toolSecondLine(
 				run({
 					status: "background",
-					fetches: [{ id: "f1", result: envelope("") }],
+					fetches: [
+						{ id: "f1", state: "returned", waits: true, result: envelope("") },
+					],
 				}),
-			),
-		).toBeNull();
+			)?.text,
+		).toBe("No output yet");
 	});
 
 	// The row must not change height when a background call settles: it is by

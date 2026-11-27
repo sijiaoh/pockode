@@ -945,10 +945,10 @@ func TestSubagentTurnSettlesTheSpawnWithItsLastWords(t *testing.T) {
 	sess.notify("turn/started", `{"threadId":"child","turn":{"id":"turn-child-2","items":[],"status":"inProgress"}}`)
 	sess.notify("turn/completed", `{"threadId":"child","turn":{"id":"turn-child-2","items":[],"status":"completed"}}`)
 	events = drainEvents(sess.events)
-	if len(events) != 1 {
-		t.Fatalf("expected the second turn's result, got %v", events)
+	if len(events) != 2 {
+		t.Fatalf("expected the resume and the second turn's result, got %v", events)
 	}
-	if result := events[0].(agent.ToolResultEvent); result.ToolResult != "It says hi." {
+	if result := events[1].(agent.ToolResultEvent); result.ToolResult != "It says hi." {
 		t.Errorf("second turn reported %q, want the subagent's last words still", result.ToolResult)
 	}
 }
@@ -1088,21 +1088,119 @@ func TestSubagentFailureFailsTheSpawn(t *testing.T) {
 	}
 }
 
-// A stopped subagent did not finish its task, and its row must not read as
-// though it had.
-func TestInterruptedSubagentFailsTheSpawn(t *testing.T) {
+// A subagent caught by the user's Stop is left for the turn's interrupted
+// ending to settle, which reads as interrupted like any call still running
+// then, rather than failed. Nothing follows the ending: output after it would
+// open a turn nothing ends.
+func TestSubagentInterruptedWithTheTurnIsLeftToItsEnding(t *testing.T) {
+	sess := newSubagentTestSession()
+	defer sess.cancel()
+
+	sess.notify("turn/completed", `{"threadId":"child","turn":{"id":"turn-child","items":[],"status":"interrupted","durationMs":40}}`)
+	sess.notify("turn/completed", `{"threadId":"main","turn":{"id":"turn-main","items":[],"status":"interrupted"}}`)
+
+	events := drainEvents(sess.events)
+	if len(events) != 1 {
+		t.Fatalf("expected only the turn's ending, got %v", events)
+	}
+	if _, ok := events[0].(agent.InterruptedEvent); !ok {
+		t.Errorf("event = %#v, want the turn's interrupted ending", events[0])
+	}
+}
+
+// A subagent interrupted while the turn goes on and then ends was stopped by
+// the model, which reads as its failure, settled inside the turn.
+func TestSubagentInterruptedByTheModelFailsTheSpawn(t *testing.T) {
 	sess := newSubagentTestSession()
 	defer sess.cancel()
 
 	sess.notify("turn/completed", `{"threadId":"child","turn":{"id":"turn-child","items":[],"status":"interrupted"}}`)
+	sess.notify("turn/completed", `{"threadId":"main","turn":{"id":"turn-main","items":[],"status":"completed"}}`)
 
 	events := drainEvents(sess.events)
-	if len(events) != 1 {
-		t.Fatalf("expected the spawn's result, got %v", events)
+	if len(events) != 2 {
+		t.Fatalf("expected the spawn's result and then the ending, got %v", events)
 	}
 	if result, ok := events[0].(agent.ToolResultEvent); !ok || result.ToolUseID != "call_spawn" || !result.IsError ||
 		!strings.Contains(result.ToolResult, "interrupted") {
-		t.Errorf("event = %#v, want call_spawn failed, saying it was interrupted", events[0])
+		t.Errorf("first event = %#v, want call_spawn failed, saying it was interrupted", events[0])
+	}
+	if _, ok := events[1].(agent.DoneEvent); !ok {
+		t.Errorf("second event = %#v, want the turn's ending", events[1])
+	}
+}
+
+// A subagent interrupted to be given more work starts another turn under the
+// same spawn: its row is running again, and only that turn settles it.
+func TestSubagentInterruptedAndResumedSettlesOnce(t *testing.T) {
+	sess := newSubagentTestSession()
+	defer sess.cancel()
+
+	sess.notify("turn/completed", `{"threadId":"child","turn":{"id":"turn-child","items":[],"status":"interrupted"}}`)
+	sess.notify("turn/started", `{"threadId":"child","turn":{"id":"turn-child-2","items":[],"status":"inProgress"}}`)
+	sess.notify("turn/completed", `{"threadId":"child","turn":{"id":"turn-child-2","items":[],"status":"completed"}}`)
+	sess.notify("turn/completed", `{"threadId":"main","turn":{"id":"turn-main","items":[],"status":"interrupted"}}`)
+
+	events := drainEvents(sess.events)
+	if len(events) != 2 {
+		t.Fatalf("expected the spawn's one result and then the ending, got %v", events)
+	}
+	if result, ok := events[0].(agent.ToolResultEvent); !ok || result.ToolUseID != "call_spawn" || result.IsError {
+		t.Errorf("first event = %#v, want call_spawn completed", events[0])
+	}
+	if _, ok := events[1].(agent.InterruptedEvent); !ok {
+		t.Errorf("second event = %#v, want the turn's ending", events[1])
+	}
+}
+
+// A child given more work after its spawn settled runs again under that spawn:
+// its new turn announces the call again, as resumed, and its ending settles it
+// again. Only a turn after a settle does: the first turn's start announces
+// nothing, the call having been announced by the spawn itself.
+func TestSubagentGivenMoreWorkResumesTheSpawn(t *testing.T) {
+	sess := newSubagentTestSession()
+	defer sess.cancel()
+
+	sess.notify("turn/completed", `{"threadId":"child","turn":{"id":"turn-child","items":[],"status":"completed"}}`)
+	sess.notify("turn/started", `{"threadId":"child","turn":{"id":"turn-child-2","items":[],"status":"inProgress"}}`)
+	sess.notify("turn/completed", `{"threadId":"child","turn":{"id":"turn-child-2","items":[],"status":"completed"}}`)
+
+	events := drainEvents(sess.events)
+	if len(events) != 3 {
+		t.Fatalf("expected a result, the resume and a second result, got %v", events)
+	}
+	if result, ok := events[0].(agent.ToolResultEvent); !ok || result.ToolUseID != "call_spawn" {
+		t.Errorf("first event = %#v, want call_spawn's result", events[0])
+	}
+	call, ok := events[1].(agent.ToolCallEvent)
+	if !ok || call.ToolUseID != "call_spawn" || call.Subtype != agent.ToolCallResumed || call.ToolName != subagentToolName {
+		t.Fatalf("second event = %#v, want call_spawn announced again as resumed", events[1])
+	}
+	if string(call.ToolInput) != `{"agent_path":"/root/reader"}` {
+		t.Errorf("resumed input = %s, want the spawn's own", call.ToolInput)
+	}
+	if result, ok := events[2].(agent.ToolResultEvent); !ok || result.ToolUseID != "call_spawn" {
+		t.Errorf("third event = %#v, want call_spawn's second result", events[2])
+	}
+}
+
+// A row the user's Stop settled is settled too: the child given more work in a
+// later turn resumes it, though no result was ever sent for it.
+func TestSubagentInterruptedWithTheTurnResumesLater(t *testing.T) {
+	sess := newSubagentTestSession()
+	defer sess.cancel()
+
+	sess.notify("turn/completed", `{"threadId":"child","turn":{"id":"turn-child","items":[],"status":"interrupted"}}`)
+	sess.notify("turn/completed", `{"threadId":"main","turn":{"id":"turn-main","items":[],"status":"interrupted"}}`)
+	sess.notify("turn/started", `{"threadId":"main","turn":{"id":"turn-main-2","items":[],"status":"inProgress"}}`)
+	sess.notify("turn/started", `{"threadId":"child","turn":{"id":"turn-child-2","items":[],"status":"inProgress"}}`)
+
+	events := drainEvents(sess.events)
+	if len(events) != 2 {
+		t.Fatalf("expected the ending and then the resume, got %v", events)
+	}
+	if call, ok := events[1].(agent.ToolCallEvent); !ok || call.ToolUseID != "call_spawn" || call.Subtype != agent.ToolCallResumed {
+		t.Errorf("second event = %#v, want call_spawn announced again as resumed", events[1])
 	}
 }
 
@@ -1180,7 +1278,7 @@ func TestBookkeepingNotificationsAreDropped(t *testing.T) {
 		{"item/started", `{"threadId":"t","turnId":"u","startedAtMs":1,"item":{"type":"userMessage","id":"m","content":[{"type":"text","text":"hi"}]}}`},
 		{"item/completed", `{"threadId":"t","turnId":"u","completedAtMs":1,"item":{"type":"userMessage","id":"m","content":[{"type":"text","text":"hi"}]}}`},
 		// Real information with no surface in Pockode yet.
-		{"item/completed", `{"threadId":"t","turnId":"u","completedAtMs":1,"item":{"type":"webSearch","id":"w","query":"go"}}`},
+		{"item/completed", `{"threadId":"t","turnId":"u","completedAtMs":1,"item":{"type":"plan","id":"p","text":"1. go"}}`},
 	}
 	for _, d := range drops {
 		sess.notify(d.method, d.params)

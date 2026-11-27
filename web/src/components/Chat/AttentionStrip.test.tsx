@@ -237,6 +237,45 @@ describe("AttentionStrip", () => {
 			expect(onJumpToCall).toHaveBeenCalledWith("b");
 		});
 
+		// As the agents line's entries do (docs/turn-progress-ui.md#43-the-agents-line).
+		it("opens a subagent with work to show as its transcript", async () => {
+			const user = userEvent.setup();
+			const onJumpToCall = vi.fn();
+			const onOpenTranscript = vi.fn();
+			const subagent = task(
+				"a",
+				"background",
+				{ description: "Find retry handling", subagent_type: "Explore" },
+				"Agent",
+			);
+			render(
+				strip(
+					transcript([
+						{
+							...subagent,
+							...(subagent.type === "tool_call" && {
+								tool: {
+									...subagent.tool,
+									children: [{ type: "text", id: "c", content: "Reading." }],
+								},
+							}),
+						},
+					]),
+					{ onJumpToCall, onOpenTranscript },
+				),
+			);
+			await user.click(screen.getByRole("button", { name: "Details" }));
+			const item = within(
+				screen.getByRole("list", { name: "Background tasks" }),
+			).getByRole("button");
+			expect(item).toHaveAccessibleName(
+				"Explore, Find retry handling, running in the background, open its transcript",
+			);
+			await user.click(item);
+			expect(onOpenTranscript).toHaveBeenCalledWith("a", item);
+			expect(onJumpToCall).not.toHaveBeenCalled();
+		});
+
 		it("stands the jump down while the answer panel is sending", async () => {
 			const user = userEvent.setup();
 			render(

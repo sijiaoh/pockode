@@ -1,4 +1,5 @@
 import { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { liveResumes, resumedRun } from "../lib/subagentRun";
 import type { AgentsOverview } from "../lib/turnOverview";
 import { liveIds, topLevelAgentRuns } from "../lib/turnOverview";
 import type { Message, ToolRun } from "../types/message";
@@ -19,22 +20,36 @@ export function useAgentsOverview(
 	turnOpen: boolean,
 	sessionId: string,
 ): AgentsOverview {
-	// Kept while every run is the same object: the reducer leaves a run it did
-	// not touch as it was, so a record that changes no agent hands back the same
-	// overview, and the tail context it goes into stays put on every streamed
-	// record.
+	// Each run as its row draws it: a resumed subagent is running again, on the
+	// call that resumed it (`resumedRun`), so it counts and is named as live.
+	//
+	// Kept while every run and every resume is the same object: the reducer
+	// leaves a run it did not touch as it was, so a record that changes no agent
+	// hands back the same overview, and the tail context it goes into stays put
+	// on every streamed record.
+	const sourceRef = useRef<{ run: ToolRun; resume?: ToolRun }[]>([]);
 	const agentRunsRef = useRef<ToolRun[]>([]);
 	const agentRuns = useMemo(() => {
-		const next = topLevelAgentRuns(messages);
-		const prev = agentRunsRef.current;
+		const resumes = liveResumes(messages);
+		const next = topLevelAgentRuns(messages).map((run) => ({
+			run,
+			resume: resumes.get(run.id),
+		}));
+		const prev = sourceRef.current;
 		if (
 			next.length === prev.length &&
-			next.every((run, index) => run === prev[index])
+			next.every(
+				(entry, index) =>
+					entry.run === prev[index].run && entry.resume === prev[index].resume,
+			)
 		) {
-			return prev;
+			return agentRunsRef.current;
 		}
-		agentRunsRef.current = next;
-		return next;
+		sourceRef.current = next;
+		agentRunsRef.current = next.map(({ run, resume }) =>
+			resume ? resumedRun(run, resume) : run,
+		);
+		return agentRunsRef.current;
 	}, [messages]);
 	const live = useMemo(() => liveIds(agentRuns), [agentRuns]);
 	const liveRef = useRef(live);

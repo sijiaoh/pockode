@@ -4,7 +4,7 @@ How a tool call is drawn, on a phone first.
 [tool-call-model.md](tool-call-model.md) decides what a tool run **is**; this one
 decides how one looks and behaves. Read it first — every field named here
 (`status`, `activity`, `output`, `placeholderResult`, `fromBackground`,
-`lostWithProcess`, `fetches`, `durationMs`, `exitCode`, `startedAt`, `endedAt`, `seenAt`, and a subagent
+`lostWithProcess`, `fetches`, `durationMs`, `exitCode`, `startedAt`, `endedAt`, `seenAt`, `workRef`, and a subagent
 run's children) is its `ToolRun`, and nothing below asks for data it does not
 define.
 
@@ -48,8 +48,10 @@ is [agent-chat.md](agent-chat.md); the width ladder and the pointer gates are
 is a line in a transcript, not a card. It does not wrap, it does not grow a second title line at `sm:`, and it
 never re-flows when the window is resized. Twenty rows that are each one line
 can be skimmed; twenty rows that are each one-or-three lines cannot. The only
-thing that ever adds a line is the **second line**, and only for a run that has
-something to say on it — see below. Consecutive calls between two pieces of
+things that ever add a line are the **second line**, and only for a run that has
+something to say on it — see below — and a live subagent's
+[step window](#the-step-window), a few lines sized by its list that fold with
+it. Consecutive calls between two pieces of
 text then fold into **one summary row** ([groups](#groups)), with the rows the
 reader must not miss pinned under it.
 
@@ -241,8 +243,8 @@ not worded.
 +K`.
 
 - One segment per verb and tense: the present ones first, then the past ones,
-  each in a fixed order by consequence — edit, run, read, search, fetch, todo,
-  other (`TOOL_VERBS`) — then the thinking, then `N interrupted`, so the end a
+  each in a fixed order by consequence — edit, create, start, run, stop, read,
+  search, fetch, todo, other (`TOOL_VERBS`) — then the thinking, then `N interrupted`, so the end a
   narrow screen gives up is the least important.
 - Names are in the order they first appeared. A live group only ever appends
   at the end, so the line never reshuffles under the reader, and the names come
@@ -253,8 +255,9 @@ not worded.
 - A segment with no name to show — every call unnameable, or its names given
   up [to fit](#when-the-line-runs-out) — is worded by its count, as the line
   always was: `Edited 2 files`, `Ran 1 command`, `Read 3 files`, `Searched
-  once` / `Searched N times`, `Fetched N pages`, `Used N tools`. `Updated
-  todos` never names anything.
+  once` / `Searched N times`, `Fetched N pages`, `Used N tools`, and `Created
+  N tasks` / `Started N stories` (`work items` when the kinds are mixed),
+  `Stopped N tasks`. `Updated todos` never names anything.
 
 What a call is named by is read by `toolVerb` in `lib/toolSummary.ts`, beside
 its verb — the same table of knowledge as the row's title, and a Codex `Bash`
@@ -263,12 +266,15 @@ it say:
 
 | Verb | Counted by | Named by | Example |
 |---|---|---|---|
-| edit | distinct file — a Codex file change counts each of its files | base name | `Edited ToolRow.tsx, toolGroups.ts` |
+| edit | distinct file — a Codex file change counts each of its files; a `NotebookEdit` counts its notebook | base name | `Edited ToolRow.tsx, toolGroups.ts` |
+| create | call: `story_create`, `task_create` | its kind and the title it was given, quoted | `Created task "Design the row", story "Ship it"` |
+| start | call: `story_start`, `task_start` | its kind and the title its [`workRef`](#pockodes-own-work-calls) carries, quoted — nothing while it runs | `Started task "Design the row"` |
+| stop | call: `TaskStop`, `KillShell` | nothing — a task id names nothing a reader knows | `Stopped 1 task` |
 | read | distinct file | base name | `Read toolSummary.ts, ToolRow.tsx +1` |
 | search | call | `Grep`, `WebSearch`, a Codex search: what it looked for, quoted; `Glob`: its pattern; a Codex file listing: the directory's base name and `/`. Never where it looked — the row has the scope | `Searched "Retry-After", **/*.test.ts` |
 | run | call | the command's [head](#a-commands-head) | `Ran pnpm test, go test ./relay/...` |
-| fetch | call | the URL's host | `Fetched github.com` |
-| other | call | the row's own title: an MCP tool without its server, otherwise the tool's name | `Used work_get, story_list` |
+| fetch | call | the URL's host — a Codex page open included | `Fetched github.com` |
+| other | call | the row's own title: an MCP tool without its server (a Pockode work tool's readable title), otherwise the tool's name | `Used Get work, List stories`, `Used TaskOutput` |
 | todo | — | nothing | `Updated todos` |
 
 - **A repeated call is a repeated event; a re-read file is not.** Files are
@@ -279,9 +285,18 @@ it say:
   — are named by the shortest ending of their paths that tells them apart:
   `web/index.ts`, `server/index.ts`. The ending is joined in the separator the
   path itself uses.
-- **A call with nothing to name it by** — `BashOutput`, `KillShell`, a call
+- **A call with nothing to name it by** — a stop, a start still running, a call
   missing its command, pattern or URL — is counted and named by nobody, so it
   is only ever in `+K` or the count.
+- **Reading a task's output is not running a command.** `BashOutput` used to be
+  counted under `run` with `KillShell`, so a log read twice and a shell killed
+  read `Ran 3 commands` beside the one command that ran. A fetch is now
+  `other`, named by its tool like `TaskOutput`; a kill is `stop`.
+- **Creating and starting work rank above running a command.** They are what a
+  story's reader scrolls back for — which tasks the agent spun off — and like
+  an edit they leave something behind that outlives the turn. Every other work
+  tool is `other`, under the title its row has; a read of the work (`Get work`,
+  `List tasks`) is not a file read and is not counted under `read`.
 
 #### A command's head
 
@@ -361,9 +376,9 @@ leading, are what say it is still at work. That line changes only when a call
 settles, so it is read out as it is. A group always has a settled call, so
 some segment is always there — `N interrupted`, if nothing else.
 
-A group no longer speaks a subagent's `N steps · <latest child>`
-([its second line](#the-second-line-steps-and-what-it-is-doing)), and the
-difference is on purpose: a subagent's row is one call whose steps are its
+A group no longer speaks a subagent's live form — its count over its
+newest steps ([its second line](#the-second-line-steps-and-what-it-is-doing),
+[the step window](#the-step-window)) — and the difference is on purpose: a subagent's row is one call whose steps are its
 body, while a group is several calls, each of which the reader needs named.
 
 ### An opened group
@@ -648,6 +663,9 @@ card, the file's *Change* header and the row's
 | `Write` creating the file | the content's lines, a trailing newline opening none | `0` |
 | `Write` over a file | the content's lines | unknown — the old content is not in the call |
 | Codex | each file's hunks, so the count is the diff the row opens on; no hunks (an empty file, a pure rename) is `0`, an unknown change type is unknown | same |
+| `NotebookEdit`, `replace` | the new source's lines | unknown — the cell it replaced is not in the call |
+| `NotebookEdit`, `insert` | the new source's lines | `0` |
+| `NotebookEdit`, `delete` | `0` | unknown, as above |
 
 Whether a `Write` created or rewrote is only in its result's wording, measured
 on Claude Code 2.1.286: `File created successfully at: …` and `The file … has
@@ -663,9 +681,16 @@ What the counts do not promise, and the card does not pretend to:
   how many places matched is not in the transcript; a mixed `−` is only the
   known part.
 - **Only tool calls are seen.** `rm`, `sed -i` or `git checkout` run through
-  `Bash` change files the card cannot list; neither can `NotebookEdit`, which
-  `proposedChange` does not read yet. Hence `files changed` counts changes it
-  saw, not the state of the tree.
+  `Bash` change files the card cannot list. Hence `files changed` counts
+  changes it saw, not the state of the tree.
+- **A notebook is counted in cell lines.** A `NotebookEdit`'s counts are lines
+  of the cell's source, not of the `.ipynb` JSON a `git diff` would count, and a
+  cell's old source is never known: the CLI reports it in `tool_use_result`
+  (`old_source`, claude 2.1.330), but `proposedChange` reads the input alone so
+  that the permission card, the row and this card say one thing — the rule a
+  `Write` over a file already lives by. A notebook is never `new` or `deleted`:
+  the tool edits a notebook that exists, and deleting a cell is not deleting the
+  file.
 
 What they do promise is to stay put: everything comes from the persisted tool
 calls and results, so a reloaded turn draws the card it ended with.
@@ -1219,13 +1244,20 @@ afterwards cannot word the same call differently.
 | `Plan` (a Codex `plan` record, [turn-progress-ui.md §4.6](turn-progress-ui.md#46-the-plan-record)) | `Plan` | `n done / m` | — |
 | `Task` / `Agent` (the CLI renamed it; history holds both) | the agent: `subagent_type`, a Codex spawn's agent name, else `Subagent` — led by an agent mark, capped at 45% | `description`, else the prompt's first line ([below](#line-1-the-agent-then-what-it-was-asked)) | right |
 | `TaskOutput` | `TaskOutput` | the `task_id`, in mono | right |
+| `BashOutput` (history only) | `BashOutput` | the `bash_id`, in mono | right |
+| `TaskStop` / `KillShell` | the name | the `task_id` (`shell_id` on the old name), in mono | right |
+| `NotebookEdit` | `NotebookEdit`, then an `insert` or `delete` chip when `edit_mode` is one | the `notebook_path`, split as a file tool's is | **left** |
+| `GenerateImage` (Codex) | `GenerateImage` | the input's prompt, first line — none on codex-cli 0.171.0, whose start names no prompt; the row is named by the image under it instead, and the prompt is in the body ([tool-call-model.md](tool-call-model.md#codex-items-beyond-commands-patches-and-mcp)) | right |
+| `Sleep` (Codex) | `Sleep` | — (the duration is the meta) | — |
+| `AgentControl` (Codex) | the action: `Wait`, `Send input`, `Message`, `Follow up`, `Resume`, `Interrupt`, `Close`, `List agents` — led by the agent mark | the agents, each by its path's last segment, `, `-joined; one whose spawn named no path is only counted (`file_reader +1`, or `2 agents`) | right |
+| a Pockode work tool | [its own table](#pockodes-own-work-calls) | | |
 | `server:tool` (Codex MCP) or `mcp__server__tool` (Claude MCP) | the tool half | the server half as a chip, then the first scalar argument, else compact JSON | right |
 | `html_render` (Pockode's own MCP tool), while it is a row | `html_render` | `pockode` as a chip, then the `title` — never the first argument, which is as often the whole page | right |
 | `html_edit`, while it is a row | `html_edit` | `pockode` as a chip, then `<title> · from <base>`, or `from <base>` without a title | right |
 | `html_get` | `html_get` | `pockode` as a chip, then the `id` | right |
 | anything else | the name | first non-empty scalar in `input` | right |
 
-Seven decisions inside that table:
+Eight decisions inside that table:
 
 - **`TaskOutput` is in the table although many of them never draw a row.** A
   fetch of a task's output is filed under the call it reads and takes no row at
@@ -1236,6 +1268,12 @@ Seven decisions inside that table:
   `Object.values` returns rather than by any rule, so one more string in the
   input would silently rename the row. Mono because a task id is a machine key,
   not prose.
+- **The remaining kinds get a row each, and only the ones that need it get a
+  row of their own design** ([below](#the-remaining-tool-kinds)). `TaskStop`
+  and `BashOutput` are named by their key for the reason `TaskOutput` is; a
+  `NotebookEdit` reads like the file tool it is, while its body is its own.
+  The mode is a chip because `insert` and `delete` change what the row means
+  and `replace`, the default, does not.
 - **`Bash`'s detail is the command, not `description`.** The description used to
   win whenever Claude supplied one, and a paraphrase — *"Build the web package"* —
   is not what ran. On a phone this row is frequently the only audit a user
@@ -1315,6 +1353,13 @@ has a second line only when it failed.
 
 1. `run.activity` — Claude's `task_progress` line, Codex's
    `mcpToolCall/progress.message`. Prose, so no mono.
+
+   **Rung 1b**: a **fetch of this run in flight** —
+   `Waiting for output… 12s`, and what it settles into
+   ([a fetch in flight](#a-fetch-in-flight)). Prose. Above the fetched line
+   because it is the newer word: a reading is being taken now. Below the
+   activity because the activity is the task's own account of the present,
+   and on a row that has one the reader already sees something move.
 2. the **last non-empty line** of this call's machine output, from either of two
    sources: the newest **fetch** of it that came back with something
    ([below](#a-fetch-reads-on-the-row-it-came-from)) — read out of the envelope
@@ -1667,15 +1712,72 @@ Three things a fetch must not do to the row it lands on:
   reader. Neither renderer opens itself for one today; this is written down so
   that nobody adds it.
 
-Nothing on the row says a fetch is *in flight*, either. `TaskOutput` blocks for
-30 seconds by default, and for those seconds the row is unchanged — the row's
-status is the task's, and painting another call's progress onto it is the
-inference this page forbids. Nothing else in the transcript moves either: a
-message whose only part was the absorbed fetch has nothing left to draw, and it
-is dropped outright once the turn closes, the same as any turn that never got a
-first token. The cost is a transcript that looks idle for those seconds, and it
-is accepted for the reason above — the agent fetched the output in order to do
-something with it, and its next message is where that shows up.
+#### A fetch in flight
+
+`TaskOutput` blocks for 30 seconds by default, and a
+fetch filed under its origin draws no row, so for those seconds nothing in the
+transcript said what the agent was doing: the tail line read `Working`, the
+origin row — often screens above — was unchanged, and the message the fetch
+came in had nothing to draw. This used to be accepted, on the grounds that the
+row's status is the task's and painting another call's progress on it is an
+inference. The inference was never the problem; the missing statement was. The
+fetch is a call of its own with a state of its own (`ToolFetch.state`,
+[tool-call-model.md](tool-call-model.md#a-call-about-an-earlier-call)), and it
+can be shown **as the fetch** without touching what the row says about the
+task:
+
+```
+│ ⟳  Bash  pnpm dev                     [background]   4m 12s │
+│        Waiting for output… 12s                               │  ← the fetch's own line
+…
+⟳ Waiting for output… 1m 4s · Go to call                         ← the tail line
+```
+
+**On the row it reads, a line of its own.** While a fetch of the run is
+`running`, the second line reads `Waiting for output…` — `Reading output…` for a
+fetch whose input does not wait (`block: false`) — then `·` and the fetch's
+own counter, from its `seenAt`, at the tool counter's format and only from 3s.
+Prose, muted, `aria-hidden` as every moving line is. It is a rung of [the second
+line](#the-second-line-problem-1), between the activity and the fetched line.
+What it does not do is the rule above, unchanged: the glyph, the chip, the tint
+and the meta's time stay the task's — no second spinner, nothing red, nothing
+settled.
+
+**When it returns, the rung hands over in place**, so the row keeps its height:
+to the fetched line (rung 2) when the fetch brought output; to the line that was
+there before when it brought nothing or failed and an earlier fetch had shown a
+line; and, on a row that had no line before, to a settled `No output yet` (came
+back empty), `Couldn't read output` (the fetch failed — muted, not red, for the
+reason a failed fetch is not red anywhere) or `Output not read` (interrupted).
+Those three are prose and stay in the row's name, like the background outcome.
+The last of them is what makes the rule hold that a second line [appears at most
+once](#the-second-line-problem-1): a line a fetch opened is not taken away by
+the fetch ending. The word is read off the newest fetch, the one whose line the
+row was showing, and an answer whose envelope carries no output counts as empty
+— on the row, where the task's latest word is meant; the body still draws the
+envelope as it came. All of this is `toolSecondLine` (`lib/toolRun.ts`); the
+counter is the row's own `ElapsedCounter`, from `ToolSecondLine.since`.
+
+**In the body, the fetch's block is drawn while it runs**: its heading
+`Fetched output · waiting…` (or `Fetch 3 · waiting…` from two), its content the
+muted line *Waiting for the task's output.* Once it returns it is drawn as the
+table above says. An `interrupted` fetch has no block, as before — "never came
+back" is still nothing to draw — unless its result arrived after all, which is
+drawn like any returned one.
+
+**At the tail, the tail line says it**, because the reader is there and the row
+usually is not. While the main agent's newest call is a filed fetch still
+`running`, [the tail line](turn-progress-ui.md#23-what-it-says) reads `Waiting
+for output…` with the turn clock, and after it a `Go to call` that is the
+transcript's [jump](#from-a-file-to-the-calls-that-changed-it) to the row the
+fetch is filed under. It names no call and no command — the line's rule — and
+says only what the turn is doing, which is waiting. A fetch with a row of its
+own needs none of this: it is a running row at the tail, with its spinner and
+its counter, like any other call.
+
+A message whose only part was the filed fetch still has nothing to draw once the
+turn closes, and is still dropped then, the same as any turn that never got a
+first token.
 
 The fetch's own invocation — `block`, `timeout` — is drawn nowhere. It is how the
 reading was taken, not part of what the task produced, and the `task_id` is
@@ -1808,7 +1910,9 @@ A subagent row's figure is its call's, by the rules above: from the `Task` /
 long the subagent worked, not how long the main agent waited for a placeholder.
 A duration the CLI reports for the subagent wins, as everywhere. Its second line
 (the figures, or the latest child) never carries it: the figure stays on line 1
-([why](#line-2-once-settled-the-figures)).
+([why](#line-2-once-settled-the-figures)). A running step in its
+[step window](#the-step-window) carries its own counter, derived as that
+child's row derives it; a settled step there carries none.
 
 The rows in its Process follow the same rules with no exception: their records
 are observed as the subagent's lines arrive. Where a subagent's frames reach the
@@ -1953,7 +2057,7 @@ which are `1rem`:
 |---|---|---|
 | main | `clamp(8 lines, 45% of the transcript, cap)` — cap 20 lines on a coarse primary pointer, 30 otherwise | Output, Content, Change, Matches, Results, Page, Result, *Outcome · after the turn*, *Output so far*, the `ExitPlanMode` plan, a permission card's *Proposed change*, a file's diff in [the turn's changes](#the-turns-changes), a subagent's report, a thought's text and its *Full reasoning*, a command's *Sent to the agent*, the body of a system, raw, command-output or work-event message, a question record's body |
 | supporting | 8 lines | Command, File / Files (several paths, or one folded under a result), Parameters, Request, a search's arguments, *Returned to the agent*, *Fetched output*, Error, a permission card's *Raw input*, a subagent's prompt |
-| none | never cut | the `TodoWrite` checklist (a single file's path line on its own is not a section at all) |
+| none | never cut | the `TodoWrite` checklist, and a Codex `Plan` row's (a single file's path line on its own is not a section at all) |
 
 The 45% is of the **transcript**, not the window: `MessageList` keeps its
 scroller's height in `--transcript-height`, and outside a transcript the
@@ -2549,29 +2653,46 @@ unfolding themselves bury the answer the user is reading. What replaced the
 auto-expand is rung 4 of the second line — a failed row now says how it failed
 without being opened.
 
-`TaskItem` keeps its auto-expand (`autoExpandedRef`, once, so the user's own
-decision to collapse it stands), because the two cases are not the same one: a
-subagent failing is rare rather than routine, and its report is the only account
-of what went wrong anywhere in the UI. For the same reason `TaskItem` passes
-no shared second line on a failed run (`failed && !run.fromBackground`) —
-with the body already open, rung 4 would only be a second and worse copy of what
-is under it, the tail of a markdown report drawn in mono. What a failed subagent row says instead is
-[its step count](#the-second-line-steps-and-what-it-is-doing), which copies
-nothing in the body. A backgrounded failure keeps its outcome line (rung 3),
-steps or not: it is the one failed row whose body is not supposed to open (next
-paragraph), so the line is not a copy of anything on screen.
+That includes a subagent's. `TaskItem` used to be the one exception — it
+opened a failed subagent's body once (`autoExpandedRef`), on the grounds that a
+subagent failing is rare rather than routine and that its report is the only
+account of what went wrong. Neither ground holds up as a reason for the body to
+move itself, and the exception is withdrawn for every failed subagent, foreground
+and backgrounded alike:
 
-**A `background` run must not open itself** — a 30-minute task that unfolds
-itself shoves the transcript around long after the user stopped caring: the
-reader's place is held through it, but what is around it moves each time
-([above](#the-second-line-problem-1)). It is also the one rule on this page
-the code does not keep: `TaskItem`'s `autoExpandedRef` keys on
-`run.status === "error"` alone and never reads `fromBackground`, so a
-backgrounded subagent that fails opens its report anyway, wherever in the
-transcript it sits. The gap predates rung 4 and is recorded rather than closed
-in passing, because closing it is a behavioural decision and not a typo: that
-report is still the only account of what went wrong, so the alternative to
-opening it has to be a way of reaching it, not silence.
+- **Where it fails, the user is either there or not.** A backgrounded run fails
+  wherever in the transcript it was launched, long after the user stopped
+  watching it — a 30-minute task unfolding itself shoves the transcript around
+  under someone reading something else: the reader's place is held through it,
+  but what is around it moves ([above](#the-second-line-problem-1)). A
+  foreground run fails at the tail, where the user may be reading — and there
+  the next thing in the transcript is the main agent's own reaction: it read the
+  report and says what failed, or retries. The report is not the only account
+  in either case; it is the most detailed one, and detail is what a tap is for.
+- **The exception fired where nobody was watching.** It keyed on the status,
+  not on the moment of failing, so it fired on mount: a reloaded session, or a
+  page of history scrolled into, opened every failed subagent in it at once —
+  exactly the "four bodies unfolding themselves" this rule exists to prevent,
+  on a screen the user had not yet read. Keying it on "failed while watched"
+  instead would make the same row draw differently live and on reload, which is
+  the inconsistency [the second line](#the-second-line-problem-1) refuses
+  everywhere else.
+- **The row can carry what opening was for.** What a failed tool row got in
+  place of opening — a line saying how it failed — a failed subagent gets too:
+  `N tool uses · <first line of what it returned>`, the shape a backgrounded
+  failure already had ([status by status](#status-by-status)). Line 1 is red,
+  line 2 says why, the body is a tap away. The red row is how a failure is
+  noticed, and the agents overview (designed separately) lists every subagent's
+  outcome for a reader who was elsewhere.
+
+So `TaskItem` has no auto-expand, and with it goes the only reason it withheld
+the shared second line on a failed run (`failed && !run.fromBackground`): a body
+that does not open is not something the line would copy. A failed subagent
+reads through its own line rather than the shared rung 4, because its result is
+a report or the CLI's verdict — prose, not machine output — and the shared rung
+would cut its tail in mono; the first line is where a verdict states itself. This
+closes the open decision recorded here before: **a `background` run must not
+open itself** is now kept by the code, because no subagent run opens itself.
 
 ### Full screen
 
@@ -2599,7 +2720,9 @@ cut side.
 A sheet inside the block would die with it, and blocks are replaced while they
 are read: *Output so far* unmounts the moment the result arrives, a permission
 card the moment it is answered. So there is one viewer per transcript,
-`FullScreenHost` (`Chat/FullScreenHost.tsx`), rendered inside the transcript's
+`FullScreenHost` (`Chat/FullScreenHost.tsx`) — and each level of [a subagent's
+transcript](subagent-transcript-ui.md#relation-to-fullscreenhost) is a
+transcript, with a host of its own — rendered inside the transcript's
 `CoveredSurface` in `ChatPanel` so an overlay taking the chat closes it
 ([answering-ui.md](answering-ui.md#who-owns-the-dismissing-click) has why). A
 block publishes a `FullScreenSource` (`lib/fullScreen.ts`) under a **key** for
@@ -2803,6 +2926,15 @@ both because it is how the subagent got there, which a reader wants less often
 than what it found; the prompt comes last because it is the question, and the
 reader opening this row already knows roughly what was asked from the row's own
 detail.
+
+**The prompt is drawn as Markdown, muted.** It is the main agent's prose to the
+subagent — headings, lists, code spans and fences as often as not — and it used
+to be a muted `<pre>`, so a structured brief read as one wall of mono text with
+its markers showing. It is `MarkdownContent` in the **note** variant the
+Process's text uses ([below](#telling-the-subagents-words-from-the-main-agents)):
+`text-xs`, `text-th-text-secondary`, tight margins — rendered, but still read
+as a quotation of what was asked rather than as anyone's answer. Same place,
+same closed disclosure, same clamp; only the rendering changes.
 
 ```
 ┌────────────────────────────────────────────────────────────┐
@@ -3252,12 +3384,12 @@ uses, tokens** — the duration stays on line 1:
 
 | Run | Line 2 |
 |---|---|
-| live (`running` / `background`) | `N tool uses · <latest child>` — count and what it is doing; no tokens |
+| live (`running` / `background`) | `N tool uses`, over its [step window](#the-step-window) from the first step — the count, and the steps under it say what it is doing; no tokens |
 | `success` | the figures |
-| `error` | the figures, in the muted second-line colour — the row's red is line 1's; a failed subagent still spent what it spent |
-| `interrupted` | `N tool uses · <latest child>`, frozen where it was cut — no tokens even when a late result brought some: where it was is the news |
+| `error` | `N tool uses · <first line of what it returned>`, in the muted second-line colour — the row's red is line 1's; why it failed is the news, and the body does not open to say it ([the body](#the-body-problems-2-and-3)). No tokens: on a failed row why outranks what it spent |
+| `interrupted` | `N tool uses` while its frozen [window](#the-step-window) is drawn, then `N tool uses · <latest child>`, frozen where it was cut — no tokens even when a late result brought some: where it was is the news. Codex and Claude alike: a Codex subagent the user's Stop cut short is `interrupted`, not `error` (below) |
 | settled from the background, `completed` | the figures — the outcome is its report ([the subagent body](#the-subagent-body)), so it reads as a foreground success does |
-| settled from the background, `failed` / `stopped` | `N tool uses · <first line of the outcome>` — the verdict is the news, and this is the one failed row whose body does not open |
+| settled from the background, `failed` / `stopped` | `N tool uses · <first line of the outcome>` — the verdict is the news, as on a foreground failure |
 
 The background split is a change, and the reason for it: on claude 2.1.286 the
 CLI backgrounds a main-agent subagent of its own accord, so if a backgrounded
@@ -3265,8 +3397,53 @@ success kept its outcome line the most common subagent would never show what it
 cost. Its outcome *is* its report, which is exactly what a foreground success
 already leaves to the body.
 
-**Running** keeps the live line as it is, with its count now counted as above
-and labelled `tool uses`, and the elapsed counter on line 1. When the run has
+**A failed run's first line is the first non-empty line of its result**, read
+as a text child is ([below](#the-second-line-steps-and-what-it-is-doing)): block
+and inline Markdown markers dropped, one `truncate` span, not mono — a
+subagent's result is its report or the CLI's verdict, prose either way. For a
+foreground failure the result is the call's own (a report that came back framed
+is read out of its frame first, as the body does); for a backgrounded one, the
+outcome. A failure that returned nothing keeps the figures, as before: there is
+no verdict to show, and the red line 1 still says it failed.
+
+**Interrupted reads the same on both CLIs.** Claude settles a subagent the turn
+cut short as `interrupted` — the muted `Ban`, never red, because the user
+stopping it is not the subagent failing. Codex used to report the same case as
+`error` (`settleSubagent` folded an interrupted subagent thread into
+`IsError`), so the same act read as a failure on one CLI and as an interruption
+on the other. A Codex subagent the user's Stop cut short now settles
+`interrupted` too, and reads as the row above. What `interrupted` means is
+*the user stopped it*, on both CLIs: a Codex subagent the model stopped itself,
+inside a turn that went on, reads as failed, as a Claude background task the
+model stops does — and one whose thread failed stays `error`. How the server
+tells the two apart is
+[code/agent-integration.md](code/agent-integration.md#subagent-threads)'s.
+
+**A resumed subagent is running again.** A subagent the agent gives more work
+after it finished — Claude's `SendMessage` to it, Codex's `sendInput` or
+`followupTask` — works on under the row it was spawned with. While it does,
+the row is a running row: the spinner, the live line (its count is every tool
+use under it, the first run's and this one's), and an elapsed counter from the
+moment it resumed — never the red of an earlier failure, nor the `Ban` of an
+earlier Stop. Its body keeps the report it last returned, the only report there
+is until the resumed run ends. When it ends the row settles again, as the run
+that ended:
+
+- **Codex** reports the resumed run on the spawn's own call, so the row takes
+  its outcome — the new report, its duration and its figures — and reads by
+  the table above.
+- **Claude** reports it on the `SendMessage` call, which has a row of its own
+  and gets the outcome there. The subagent's row goes back to what it said
+  before it resumed, figures and report alike; its new work stays in its
+  Process.
+
+A message to a subagent that is still running changes nothing: it never
+stopped. How the client learns either kind of resume is
+[code/frontend-state.md](code/frontend-state.md#a-subagents-children)'s.
+
+**Running** keeps the live line, with its count now counted as above
+and labelled `tool uses`, and the elapsed counter on line 1; its calls are the
+[step window](#the-step-window)'s. When the run has
 no child yet but the CLI reported progress, the latest-child half reads
 `subagent_progress.last_tool_name` (Claude's `task_progress`) as a bare title (`Grep`) — better than
 `Running <description>`, which is the row's detail said again — and `run.activity`
@@ -3292,12 +3469,17 @@ disclosure for one line is a tap to reveal less than its own label.
 
 ```
  ⟳  ⧉ Explore  Find retry handling                         47s
-    6 tool uses · Grep "Retry-After" in server/
+    6 tool uses · Checking the 503 path next.
+    ✓ Glob   server/relay/**/*.go
+    ✓ Read   sender.go
+    ⟳ Grep   "Retry-After" in server/                       12s
 ```
 
 [Above](#line-2-once-settled-the-figures) replaces the settled rows of the
 table below, and `N steps` is drawn as `N tool uses` throughout; what follows is
-the live line, which is unchanged in what it reads.
+the live line. While a row draws its [step window](#the-step-window) — every
+live row that has a step — the calls are the window's, and the line's tail
+names none (below).
 
 The collapsed row is how a user tells a subagent that is getting somewhere from
 one that is stuck, without opening anything. Two facts do that: *how far* it has
@@ -3307,11 +3489,13 @@ first row that matches wins:
 
 | Run | Second line |
 |---|---|
+| `error`, or settled from the background `failed` / `stopped`, that returned something | `N tool uses · <first line of what it returned>` — of the outcome, for a backgrounded run; with no tool uses, the first line alone |
 | no tool uses and no figures | the shared rungs, unchanged — `run.activity` while live (after `last_tool_name`, [above](#status-by-status)), the background rungs, else no line |
-| live (`running` / `background`) | `N tool uses · <latest child>` |
-| `interrupted` | `N tool uses · <latest child>` — frozen where it was cut |
-| settled from the background, `failed` / `stopped` | `N tool uses · <first line of the outcome>` |
-| `success` / `error` / background `completed` | the figures ([above](#line-2-once-settled-the-figures)) |
+| live (`running` / `background`), with a step window | `N tool uses`, then `· <text>` only when the newest child is a text newer than the newest step |
+| `interrupted`, with a frozen step window | the same |
+| live, without a window (no step yet but a text or the CLI's count, or the Process open inline) | `N tool uses · <latest child>` |
+| `interrupted`, without a window (folded, or the Process open inline) | `N tool uses · <latest child>` — frozen where it was cut |
+| `success` / background `completed` | the figures ([above](#line-2-once-settled-the-figures)) |
 
 `1 tool use`, singular. The rules inside that table:
 
@@ -3327,6 +3511,16 @@ first row that matches wins:
   calls is usually writing, and *"Checking the 503 path next."* is exactly what it
   is doing at that moment — which is why the second half reads children although
   the count only counts steps.
+- **While a window is drawn, the tail never names a call.** The window's
+  bottom line is the newest step; naming it again on line 2, one line above,
+  would be one fact twice. What is left for line 2 is words: the newest text,
+  and only when it arrived after the newest step — a text older than that is
+  about a step that has since moved on. A row whose window is not drawn reads
+  the latest child as before, call or text: one before its first step, one with
+  its Process open inline (the user's own tap took the window away, and the
+  line names its latest child again), and an `interrupted` row once its frozen window
+  folds — the tail takes `· <latest child>` in the same frame as the fold, so
+  *where it was cut* appears at the one moment the row re-flows anyway.
 - **Steps outrank `run.activity`**, which is why only the no-steps row reads it.
   For a subagent Claude's `task_progress` line is `Running <description>`
   (measured, claude 2.1.263 —
@@ -3347,27 +3541,30 @@ first row that matches wins:
   exactly as one in the main transcript is
   ([the body](#the-body-problems-2-and-3)); the row's colour is the subagent's own
   outcome, and the failed call is red on its own row in the Process.
-- **A settled run drops the latest child for its figures.** On `success` and
-  `error` the report is the account of what happened, and the last thing the
-  subagent touched is noise next to it; `12 tool uses · 45.6K tokens` is the
-  fact worth keeping on a collapsed row. `interrupted` keeps the child because
-  there it *is* the news: where it was when it was cut. A run that settled from
-  the background and failed or was stopped keeps its outcome line as every
-  background row does ([above](#the-second-line-problem-1)) — a backgrounded
-  failure does not rely on its body opening, because it must not
-  ([the body](#the-body-problems-2-and-3)); one that completed reads as a
-  foreground success ([why](#status-by-status)). Keeping a line in every case is also
-  what holds the row's height when it settles, and that matters more for a
+- **A settled run drops the latest child for its figures, or for its
+  verdict.** On `success` the report is the account of what happened, and the
+  last thing the subagent touched is noise next to it; `12 tool uses · 45.6K
+  tokens` is the fact worth keeping on a collapsed row. A failed run — in its
+  call or in the background — puts the first line of what it returned there
+  instead: no subagent body opens itself
+  ([the body](#the-body-problems-2-and-3)), so the row is where *why* has to be.
+  `interrupted` keeps the child because there it *is* the news: where it was
+  when it was cut. One that settled from the background and completed reads as
+  a foreground success ([why](#status-by-status)). Keeping a line in every case is also
+  part of what holds the row's height when it settles, and that matters more for a
   subagent than for any other foreground call: the main agent routinely spawns
   several at once, so a subagent row that finishes first is **not** at the
-  tail — its siblings are still running under it.
-- **`error` gets a line now.** The shared rung 4 (the tail of the output) is
-  still withheld, for the reason [above](#the-body-problems-2-and-3) — the body
-  opens itself and the report is right there — but the figures are not a copy
-  of anything in the body's first screen, so they stay.
+  tail — its siblings are still running under it. The rest of the height is
+  its step window's, which stays, frozen, until the list's last sibling that
+  ran beside it settles ([the step window](#settling-and-folding)).
+- **`error` reads its own line, not the shared rung 4.** Rung 4 is the tail of
+  machine output in mono; a subagent's result is prose that states its verdict
+  first, so the first line is the one that says why
+  ([status by status](#status-by-status)).
 - **`aria-hidden` while live, exposed once settled**, as every second line
   ([above](#the-second-line-problem-1)). Both halves move while live: the count
-  and the latest child.
+  and the tail. The step window is `aria-hidden` throughout
+  ([below](#the-step-window)).
 
 A row with **no tool uses and no figures** draws what it drew before this
 section existed. That covers two real cases with one rule: a subagent that
@@ -3377,12 +3574,222 @@ sit flat beside the call ([below](#what-is-not-filed)). Writing `0 tool uses` on
 those would be false for the second kind. The price is that a step-less subagent which showed its activity
 line while live loses it when it settles — the one re-flow left, on a subagent
 that never called a tool, which is rare.
+A failure that returned something is the exception, and reads its own line
+even here: the shared failure rung is the tail of the raw result in mono, and
+for a framed report that tail is the frame's usage line, not why.
+
+### The step window
+
+```
+ ⟳  ⧉ Explore   Find retry handling                        47s
+    6 tool uses
+    ✓ Read   sender.go
+    ✗ Bash   go test ./relay/…                                    ✗ muted, not red
+    ⟳ Grep   "Retry-After" in server/                       12s
+```
+
+One line says *what* a subagent is doing, not *for how long*, and not what it
+did just before — and those are what tell a subagent that is stuck from one
+that is working. A step that has been running for a minute is the sign of a
+hang; the same command failing three times in a row (`✗ ✗ ✗`) is the sign of a
+loop; how fast the lines turn over is the pace. So while a subagent row is live
+it draws its **newest steps** under its second line, one per line, each with its
+own status: the **step window**. It is the one thing besides the second line
+that adds lines to a row ([the rules](#the-rules)), and everything below is
+about keeping that from costing what the rule protects — a list that can be
+skimmed, and rows that do not move under the reader.
+
+#### How many lines
+
+| Subagent rows in the list (any status) | Window lines per row |
+|---|---|
+| 1 | 3 |
+| 2 | 2 |
+| 3 or more | 1 |
+
+**The list sizes the window, not the row.** The main agent routinely spawns
+several subagents at once, and three lines on each would put four parallel
+siblings at about 370px — the whole transcript area of a 360×640 phone with
+the composer up. Three siblings at one line each are three lines a row, about
+60px instead of the 44px a two-line row takes. The count is of subagent rows in
+the same list ([the list](#the-list)), whatever their status, and it is a
+one-way fact: a row added to a list never leaves it, so a window only ever
+shrinks because a sibling arrived — and parallel spawns arrive together, before
+any of their steps do, while the windows are still empty. A row drawn outside a
+list counts as a list of one. Inside a [Process](#process) or a
+[transcript layer](subagent-transcript-ui.md), a nested subagent row follows
+the same rules, its list being the list it is in at that level.
+
+**It grows only while it fills.** The window is not drawn before the first
+step, so a row with none reads exactly as it did ([the second
+line](#the-second-line-steps-and-what-it-is-doing)). It then fills from one line
+to its k over the first k steps and rolls in place from there: rolling changes
+text, not layout. A live row moves the rows under it at most k times, one line
+each, and the reader can see each one coming.
+
+#### What each line shows
+
+One flex line, `items-baseline gap-1.5`, `text-xs`, starting under the row's
+name — the second line's left edge:
+
+1. **Status glyph**, `size-3`, in the shapes `ToolStatusGlyph` uses, **all in
+   `text-th-text-muted`** — never red, by the rule the second line already
+   follows ([never red](#the-second-line-steps-and-what-it-is-doing)): red on a
+   subagent row is the subagent's own outcome, and the shape alone says a step
+   failed. The glyph is the status the step's own row or card shows in the
+   Process:
+
+   | The step in the Process | Glyph |
+   |---|---|
+   | a running / background row; an allowed card whose row has not come back | spinner — a still dot under reduced motion, as `RunningGlyph` |
+   | a pending permission card; an unanswered question | `CircleHelp` |
+   | a settled row | its own shape: `Check`, `X` or `Ban` |
+   | a denied card | `X` |
+   | an answered question | `Check` |
+   | an expired card; a declined or cancelled question | `Ban` — the step got no answer and was cut short, which is not a failure |
+
+2. **Title**, `shrink-0 text-th-text-secondary`, with its chip if any, then its
+   detail through `Detail` — the call worded as its own row words it, and as
+   the second line words a latest child (`StepCallLabel` is both). A nested
+   subagent step reads as its own row's title, agent mark and name, and its
+   description; its own steps are not shown. A question reads `Question`, then
+   its header, or the question itself when it has none — the card's own
+   `Question · <header>`.
+3. **Elapsed**, right-aligned, `tabular-nums`, muted, as `ToolMeta` derives it
+   for the step's own row — **only next to a spinner on a step drawn as a
+   row**. A settled step carries none: three durations on three lines are
+   noise, and they would cost the detail its width on a phone. A waiting step
+   carries none either: it is waiting on the user, not working.
+
+**Which steps, in what order.** The last k steps by arrival, counted by
+`stepId` across the run's children and then its
+[unfiled](#what-is-not-filed) children (the unfiled ones are the newer). A card
+and the row that comes back for it are one step, drawn by its newest form. A
+text is never a step, so it never takes a window line; the newest text, when it
+is newer than every step, is line 2's tail instead
+([above](#the-second-line-steps-and-what-it-is-doing)). Oldest at the top,
+newest at the bottom: a new step enters where the eye already is, as a
+terminal's tail does, and the oldest drops off the top. No animation.
+
+**There is no `+N more` line.** Claude Code and Copilot end a preview like
+this with one, but line 2's `N tool uses` sits directly above the window and is
+the total; over oldest-first lines it reads plainly as *the last k of N*. A
+`+N−k more` would cost a line on every row for a second number counting one
+fact, and it would be the line that changes meaning on settle — where `N tool
+uses` becomes `N tool uses · 45.6K tokens` in place, the same count in the same
+spot.
+
+**What yields on a narrow line.** The glyph, the title (chip included) and the
+elapsed figure are `shrink-0` and are never cut; the detail truncates, through
+`Detail`, which drops a path's directories before its file name — the rule
+`6 tool uses ·` already follows on line 2. Measured at depth 0 with a running
+step showing `1m 4s`, a 320px transcript column leaves about 174px for the
+detail, a 360px one about 214px; a level of rail comes off that, and the
+browser test (`SubagentStepWindow.browser.test.tsx`) holds the rule at both
+widths in Chromium and WebKit.
+
+#### Settling and folding
+
+Line 2 settles by [status by status](#status-by-status), unchanged. The window:
+
+- **Settled while a sibling that ran beside it is live**: it stays, frozen at
+  its last k steps — drawn with the statuses the reducer left them, nothing
+  inferred, and no elapsed figure even beside a step the reducer still calls
+  running, since a counter ticking on a settled row would be a lie about the
+  row. It is still true as history, and it holds the row's height.
+- **Otherwise it folds.** So a list folds once, in the same frame as the last
+  of the siblings that were running beside each other, losing k lines a row at
+  the moment the main agent picks up again — when attention moves to the tail
+  anyway, and a transcript following its tail absorbs it. A lone subagent folds
+  as it settles.
+
+"Beside" is read off the runs alone: a settled row keeps its window while some
+other subagent row in its list is live **and that sibling's current run started
+before this row ended** — its `startedAt`, or its resume's start for a resumed
+run, earlier than this row's `endedAt` (`stepWindowLines` in
+`lib/subagentRun.ts`). Every input is persisted, so a reload draws exactly the
+windows the live view did. A missing time — an old record with no `startedAt`
+or `endedAt`, or a subagent a Stop settled, which gets no `endedAt` — means no
+frozen window: folding is the safe default, costing at most k lines once.
+
+- **Stop** interrupts every sibling together, so the list folds at once, and
+  each row's line 2 takes its frozen latest child in that frame
+  ([above](#the-second-line-steps-and-what-it-is-doing)).
+- **Failure** keeps its red line 1 and its why-line; its window folds by the
+  list's rule, never earlier.
+- **Resume** — `SendMessage`, `sendInput` or `followupTask`
+  ([status by status](#status-by-status)) — makes the row live again, and it
+  grows its own window back: growth on a row that now says it is running, which
+  the reader should see. Its settled siblings do not regrow: the resumed run
+  started after they ended. A running subagent appended to the list later
+  regrows nobody's either. The resumed row's own window folds when that run
+  settles, unless a sibling that started before then is still live.
+- **A known gap:** after a Claude `SendMessage` resume settles, the row goes
+  back to what it said before ([status by status](#status-by-status)), its
+  `endedAt` included — the original spawn's. So if a sibling resumed alongside
+  it is still running, its frozen window folds early. That is the safe
+  direction; closing the gap would need settled resumes tracked as live ones
+  are.
+
+#### Where it is drawn
+
+**Wherever the second line goes.** On a closed row, inside the row's button
+under line 2: the whole button stays one tap target, and the window is not a
+control — nor a way into the subagent's transcript, which stays the ⤢ in the
+Process heading ([subagent-transcript-ui.md](subagent-transcript-ui.md#the-way-in)).
+On an open row, under the bar directly beneath the second line, outside the
+bar's sticky area and the button, as the second line is
+([the sticky title line](#the-sticky-title-line)). **While the Process is open
+inline it is not drawn**: the Process shows the same steps whole, and that fold
+is the user's own tap.
+
+A pending card is still drawn between the row and its body
+([when a step asks the user](#when-a-step-asks-the-user)); the step behind it is
+in the window with `CircleHelp`, the card right under it.
+
+While a transcript layer covers the chat, the windows behind it change as they
+would, and the chat's anchor holds them on return, as for any growth.
+
+**Scroll anchoring needs nothing new.** The anchor is the last candidate that
+starts at or above the view's top
+([agent-chat.md](agent-chat.md#where-the-view-sits), `scrollAnchor.ts`), so a window growing or
+folding below that point moves nothing above it. Rows the reader watches below
+a growing window shift at most k lines over its life, plus one fold when the
+list settles.
+
+**`aria-hidden`, live and frozen alike.** It is a moving or duplicate view of
+steps the Process lists accessibly; the row's accessible name and its second
+line are unchanged by it, and its glyphs' labels are not read.
+
+#### Rejected alternatives
+
+- **Three lines on every live row, whatever its siblings.** Four parallel
+  siblings are about 370px: a phone's whole transcript, unskimmable, the rows
+  under them pushed off screen.
+- **Fold each row as it settles.** The drop the second line's *keep a line in
+  every case* exists to prevent: the first sibling to finish is usually not at
+  the tail, so 48px vanish above rows still running, and the reader's rows
+  jump.
+- **A window only while the row is in view.** The row would grow the moment it
+  scrolled into sight, re-flowing the list on every scroll near it, for an
+  IntersectionObserver per row.
+- **A window only on the newest, or most recently active, subagent.** The
+  extra height would move between siblings as their steps interleave: a
+  re-flow on every step, worse than any fixed size.
+- **One line, with the current step's glyph and elapsed time**
+  (`6 tool uses · ⟳ Grep … 12s`). Height never changes, and it answers *stuck
+  on a long step*; it cannot show a loop or a pace. The honest runner-up:
+  cheapest, and worse at the question.
+- **A trailing `+N more tool uses` line.** A second count of one fact, a line
+  from the first ([above](#what-each-line-shows)).
+- **A preview on tap.** A tap to answer a question that has to be answerable at
+  a glance — and that tap exists already: the body, the Process, then ⤢.
 
 ### Process
 
 ```
 ├────────────────────────────────────────────────────────────┤
-│ ⌄  Process · 6 tool uses                                   │
+│ ⌄  Process · 6 tool uses                               ⤢   │
 │ ┃ Looking at the sender for edge cases.                    │  subagent text
 │ ┃ ›  ✓  Read   server/relay/sender.go                      │
 │ ┃ ›  ✓  Grep   "Retry-After" in server/                    │
@@ -3430,10 +3837,11 @@ its frames reached only its sidechain transcript — so its row has a report and
 no Process.
 
 **It is closed until the user opens it, and nothing opens it.** Not a failure,
-not an interruption, not the subagent finishing. `TaskItem` opens its body when
-the subagent fails, because the report is the only account of what went wrong;
-the Process is a tap further down, and opening it too would put a subagent's
-forty rows into the transcript at the moment the user is reading the report. If
+not an interruption, not the subagent finishing — and no more than the
+`TaskItem` body around it, which does not open itself either
+([the body](#the-body-problems-2-and-3)). A reader who opened a failed
+subagent's body came for the report; opening the Process too would put a
+subagent's forty rows into the transcript at the moment they are reading it. If
 the report is empty, its sentence sits above the closed Process — with only the
 outcome blocks, when there are any, between them — which is where the reader
 goes next. Its open state is local and survives the run settling, like the
@@ -3442,11 +3850,9 @@ Prompt's.
 **Children in arrival order, each drawn by the renderer it would have in the
 main transcript.** A call is a `ToolCallItem`, a subagent call a `TaskItem`, a
 permission or question record its own card — the same components and rules as
-at the top level, because a `Grep` is a `Grep` whoever ran it, with one
-exception: **a nested `TaskItem` does not open itself on failure.** Inside an
-open Process it is mid-transcript by definition, so opening it is a height
-change under the reader for a failure the outer subagent has already dealt
-with — its red row says it failed, and the outer report is the account. The
+at the top level, because a `Grep` is a `Grep` whoever ran it — a nested
+`TaskItem` included, which reads its failure on its own line and opens only
+when tapped, like the outer one. The
 Process is a **list of parts**, the same shape a message's content is, so it is
 drawn by the same `PartBlocks` and its consecutive calls fold into a summary
 exactly as a message's do ([groups](#groups)).
@@ -3465,6 +3871,14 @@ is accepted because it is only paid by someone who asked for it, and
 scroll itself to follow. The row's second line is the live glance; an open
 Process is for reading at the reader's pace, which is the same split the live
 output block makes.
+
+**A long or deep Process can be read as a transcript of its own.** The ⤢ at the
+right end of the Process heading opens the subagent's work in a layer over the
+chat's transcript, with a breadcrumb back (`Chat › Explore › code-reviewer`),
+the subagent's live tail followed, and a ⤢ on every nested subagent's Process
+there to descend into it. It is offered on every Process and replaces nothing:
+tapping the heading still opens the Process inline. Everything about it is
+[subagent-transcript-ui.md](subagent-transcript-ui.md).
 
 #### Telling the subagent's words from the main agent's
 
@@ -3540,12 +3954,14 @@ Process**: it is drawn **in the outermost Task item, between the row and the
 body**, outside the collapsible, visible whether the row is open or not. The
 outermost, because a card from a subagent's subagent would otherwise be under a
 row that is itself inside a closed Process; the top-level Task row is the one
-row in the transcript the user can always see. Being inside that item's DOM is
-also what tells a screen reader whose request it is.
+row in the transcript the user can always see.
 
 ```
 │ ⟳  ⧉ Explore  Find retry handling                         47s │
-│    6 tool uses · Bash  rm -rf build/                          │
+│    6 tool uses                                                │
+│    ✓ Grep   "Retry-After" in server/                          │
+│    ✓ Read   sender.go                                         │
+│    ? Bash   rm -rf build/                                     │  the step behind the card
 │ ┌ ?  Bash   rm -rf build/                                   ┐ │  the card, as everywhere
 │ │    [Allow]  [Deny]  …                                     │ │
 │ └───────────────────────────────────────────────────────────┘ │
@@ -3559,12 +3975,88 @@ what the card is about and parallel subagents could each be asking. More than
 one can be waiting in the same slot — parallel calls in one subagent, or a
 nested subagent's beside its parent's — and they stack in transcript order, a nested subagent's cards where that
 subagent sits. Each
-card names its own call; the Task row's second line may or may not name the
-same one (a later sibling call, or a nested subagent, can be the latest child),
-and nothing here needs it to. Once answered, a card leaves the slot: whatever it
+card names its own call, and the step behind it is in the row's
+[step window](#the-step-window) with `CircleHelp`, directly above the card —
+unless newer steps — a later sibling call, a nested subagent — have pushed it
+out; the card names its call either way. The second line names no call while
+the window is drawn. Once answered, a card leaves the slot: whatever it
 and its call become afterwards are drawn in the Process, in arrival order, as
 they would be in a message — the one height change here, and it happens under
 the user's own tap.
+
+**A card from deeper down says who asked.** The slot gathers cards from every
+depth, so the row above it names only the outermost subagent, and each card
+names only its call: `Bash  rm -rf build/` under `Explore` reads as Explore
+asking even when it was the `code-reviewer` Explore spawned. Approving a command
+is a judgement about who wants to run it, so a card asked by anyone other than
+the row it sits under carries an **asker line** above its row line, inside its
+frame:
+
+```
+│ ⟳  ⧉ Explore  Find retry handling                         47s │
+│    6 tool uses                                                │
+│    ✓ Read   sender.go                                         │
+│    ⟳ ⧉ code-reviewer  Review the diff                     12s │
+│    ? Bash   go test ./relay/…                                 │
+│ ┌ ?  Bash   go test ./relay/…                               ┐ │  Explore's own: no asker line
+│ │    [Deny]  [Always Allow]  [Allow]                        │ │
+│ ├───────────────────────────────────────────────────────────┤ │
+│ │ ⧉ code-reviewer  Review the diff                          │ │  asker line
+│ │ ?  Bash   rm -rf build/                                   │ │
+│ │    [Deny]  [Always Allow]  [Allow]                        │ │
+│ └───────────────────────────────────────────────────────────┘ │
+```
+
+- **Who asked is the subagent whose children the card is filed in.** No record
+  has to name it, and none does: neither CLI's permission request names a parent
+  (Claude's `can_use_tool`, Codex's approval request with its `itemId`), but the
+  card takes the place of its call, and the call names its parent
+  (`parent_tool_use_id` on Claude's frames, the spawn's call id on a Codex
+  subagent thread's items — [code/frontend-state.md](code/frontend-state.md#a-subagents-children)).
+  So the card already sits in the asker's `children`, and the walk that gathers
+  cards for the slot (`collectPartsWithin`) has only to hand back, with each card,
+  the subagent calls it passed through on the way down. Both CLIs, any depth,
+  one rule; nothing new on the wire or in the record.
+- **The asker is named as its own row names it.** Title and detail come from
+  that call's `toolSummary` and are drawn through the same `Bot` mark, title
+  span and `Detail` the subagent row uses — so the line matches, letter for
+  letter, the row it points at once the user opens the Process. The title is
+  what tells agents of different kinds apart, and the detail is what tells two
+  of the same kind apart: two parallel `Explore`s are two descriptions. A Codex
+  `subAgentActivity` spawn has no detail and needs little — its title is the
+  agent's own path segment, which the model names per agent.
+- **Only the asker, not the path to it.** A subagent's subagent's card names
+  the innermost agent alone, not `code-reviewer › Explore`: the decision is
+  about who runs the command, and the chain between it and the row above is one
+  tap away in the Process, where the asker's row sits under its own parent. A
+  breadcrumb would spend a 320px line on names the user is not deciding about,
+  and at depth it would have to be cut anyway.
+- **None on the outermost subagent's own cards, nor on the main agent's.** A
+  card with no asker line was asked by the row it is under — a subagent's slot
+  or, outside every slot, the main agent — which is how every card has always
+  read. Labelling those too would put the row's own name directly under the
+  row, on the commonest card there is, to cover a case it is not.
+- **Its shape.** One line, `text-xs`, the card's own padding, above the row
+  line and inside the warning frame — part of the card, since it is a fact
+  about the request — with the title in `text-th-text-secondary`, not the
+  accent: an accent title above the card's own `Bash` would make two rows of
+  one card. Title capped as on the row (`max-w-[45%]`, `truncate`), detail
+  truncating after it; the line never wraps, so a card is exactly one line
+  taller for it, and only while it waits.
+- **A screen reader hears it first.** The line is the card's first content in
+  DOM order, so it is read before the call: the mark `aria-hidden`, a visually
+  hidden `Asked by ` before the name — *"Asked by code-reviewer, Review the
+  diff"* — then the card as it always reads. Being inside the outer item's DOM
+  says which subagent row a card is under; it never said which subagent asked.
+- **It goes when the card leaves the slot.** Answered, the card is drawn in the
+  asker's own Process, where the rail already says whose it is, and it reads as
+  any answered card does. A card still flat because its call has not been
+  written yet (claude 2.1.286 asks first —
+  [code/frontend-state.md](code/frontend-state.md#a-subagents-children)) is
+  outside every subagent and has no asker line — for that moment it reads as
+  the main agent's, the one case where the line cannot say who asked, because
+  nothing on screen knows yet. When its call arrives and takes the card into the
+  slot, the card arrives there with its line.
 
 The Task row keeps its spinner while a card waits, and this is the one place a
 spinner sits beside a pending card, which
@@ -3589,11 +4081,12 @@ the limit it always had, now visible as which Process the card lands in.
 
 | Task status | Row | Process |
 |---|---|---|
-| `running` | spinner, `N tool uses · <latest child>` | grows; its live children spin |
+| `running` | spinner, `N tool uses` over its [step window](#the-step-window) | grows; its live children spin |
 | `background` | spinner + chip, same line while children arrive | as running, for as long as children arrive |
 | `success` | muted check, the figures | settled |
-| `error` | red, opens its body (not when nested), the figures | closed; a failed call, if any, is red on its own row |
-| `interrupted` | `Ban`, `N tool uses · <latest child>` | settled |
+| `error` | red, `N tool uses · <first line of what it returned>`; the body stays closed | closed; a failed call, if any, is red on its own row |
+| `interrupted` | `Ban`, `N tool uses · <latest child>` once its window folds — on Codex as on Claude ([status by status](#status-by-status)) | settled |
+| resumed after any of the three above | as `running`, until the resumed run ends ([status by status](#status-by-status)) | grows again; the new children spin |
 
 **A settled subagent leaves nothing spinning under it**, save a child in
 `background`, which settles by its own notification as any backgrounded call
@@ -3620,6 +4113,212 @@ renderer infers nothing.
   where they loaded first. While any are flat, the subagent's later work goes
   flat after them rather than being filed above words that came first — so the
   flat ones are the newest, and the row's latest child is read from them.
+
+## The remaining tool kinds
+
+Every tool call says what it did without being opened,
+or the reader misjudges what the agent is doing. Three Claude tools used to fall
+to the generic row, and Codex used to drop five kinds of item without a row at all
+([tool-call-model.md](tool-call-model.md#codex-items-beyond-commands-patches-and-mcp)).
+Each now gets at least a row that says honestly what happened; the ones that
+change files or fetch content get what their siblings get. Their titles and
+details are in [the table](#title-and-detail), their summary verbs in
+[the summary row](#the-summary-row); this is the rest.
+
+| Tool | Second line | Body | Turn's changes |
+|---|---|---|---|
+| `NotebookEdit` | the usual rungs | `PathLine`, then the cell, then the result | yes |
+| `TaskStop` / `KillShell` | the usual rungs | what was stopped, with `Go to call` | no |
+| `BashOutput` | the usual rungs | the invocation, then the result as it came | no |
+| Codex `WebSearch` / `WebFetch` | the usual rungs | the invocation, then the links a search reported, or a line saying nothing came back to show | no |
+| `GenerateImage` | the usual rungs; a limit reached is rung 4 | the prompt, with the image as the row's attachment | no |
+| `Sleep` | none | one line, *Asked to wait 30s* | no |
+| `AgentControl` | the usual rungs | the prompt when there is one, then each agent's state | no |
+| a dynamic tool | as an MCP call | as an MCP call | no |
+
+**`NotebookEdit` is a file change, drawn the way an `Edit` is.**
+`proposedChange` learns a `notebook` kind, read from the input alone like every
+other kind, so the permission card that asks, the row that ran and the turn's
+card that lists it say one thing. The body is `PathLine` (with *Open* into the
+Files tab), then one `Section` for the cell, then the result:
+
+| `edit_mode` | Section header | Content |
+|---|---|---|
+| `replace` (or absent) | `Cell <cell_id>`, and the `cell_type` when given | the new source, mono, clamped, with copy and ⤢ |
+| `insert` | `New <cell_type> cell after <cell_id>`, or `at the top` with no `cell_id` | the new source, as above |
+| `delete` | `Deleted cell <cell_id>` | the muted line *The deleted cell's content is not in this call.* |
+
+It is the new source and not a diff, for the reason a `Write` over a file is not
+one: the cell it replaced is not in the call. The header's `+N −M` and the
+meta's are the counts [the turn's card](#the-turns-changes) reads. An input in
+a shape this does not know — an older CLI's `cell_number`, any field beyond the
+five, a mode beyond the three, or a source missing outside a delete — gets the
+generic argument list, never a half-read cell. Drawn from the input, the cell
+is there while the call runs, its counts uncoloured until the call succeeds
+(and `not applied` once it fails); an empty source reads *Empty cell*. Among the
+turn's changes the notebook's block is headed `Cell`, where an edit's is
+`Change` and a `Write`'s `Content`.
+
+**A stop points at what it stopped.** `TaskStop` keeps a row of its own — it is
+something the agent did — and its body says what stopped. Claude answers in an
+envelope as a fetch does (`message`, `task_id`, `task_type`, `command`,
+claude 2.1.330), and the body reads it: the `message` as prose, then the
+`command` in mono; any other shape as it came. When the record names an
+`origin_tool_use_id` and that row is loaded, the result section's header carries
+`Go to call` — the transcript's [jump](#from-a-file-to-the-calls-that-changed-it),
+named *"Go to the call that started this task"* — and the jump leaves the row
+it lands on as it is. The origin row says it was stopped through its own
+outcome, as it always did; the stop does not reach into it. A failed stop (*No
+background command with ID … is running*) is an ordinary failed row, rung 4.
+"Loaded" is read over the whole transcript as it is now, so a stop whose origin
+arrives on an older page gains the jump then
+([code/frontend-state.md](code/frontend-state.md#a-fetch-filed-under-the-call-it-reads)).
+
+**`BashOutput` is history and is drawn as history.** No current CLI offers it,
+and its records never carried an origin, so it is the row a `TaskOutput` gets
+when nothing could file it: named by its key, its result drawn as it came. It
+is not filed under the shell it read by matching its `bash_id` against the
+placeholder's sentence: that would be inferring a join from prose.
+
+**A Codex web call shows what Codex reported, and says plainly when that is
+nothing.** The row is Claude's — query or page, host and path. A search's
+result arrives in Claude's shape, so the links it reported are drawn as a
+Claude search's are, under *Results*. Codex reports no page text, and a search
+may report no links; where a Claude call would have its result, the body then
+has the muted line *Codex does not report what the search found.* (*…what the
+page said.* for a page), in a section under the same label. An empty section
+would read as a search that found nothing. Several queries are all listed in
+the invocation, the first being the detail; a find-in-page names its pattern
+there too.
+
+**A generated image is shown as what it is: an image the agent made.** The
+image is the row's attachment — the strip `imageView`'s result already draws,
+with the same open-in-viewer — and the body is the prompt Codex used
+(`revisedPrompt`), whole, in a clamped section headed *Prompt*. The prompt
+arrives with the result (codex-cli 0.171.0's start names none), so while the
+call runs the body says *Codex names the prompt it used once the image is
+made.*, and once it has returned, the prompt is drawn once, as the result,
+with no invocation above it — or, where the result named none, the body says
+*Codex did not name the prompt it used.* rather than drawing an empty section. A failure reads its reason on the second line and
+under *Result*: *Image generation limit reached*, then *· resets 14:05* when
+the time is known — written by the server in its own time zone, the user's on
+the machine Pockode runs on, and as *Nov 28 12:00* on another day. It is not
+among the turn's changes: the file is under Codex's own directory, not the
+work directory.
+
+**`Sleep` is one line.** The row is enough — `Sleep`, then its time in the
+meta, counting while it waits like any call, observed rather than reported. The
+body says *Asked to wait 30s* from the input's figure (*250ms* below a second,
+`formatDuration`'s words above) — not *Waited*, which a sleep cut short by Stop
+did not — because a row that opens on nothing is a row that looks broken.
+
+**`AgentControl` is a call about subagents, not a subagent.** It wears the agent
+mark, since it is about agents, but it has no Process and no steps: it is one
+call, settling once. A `wait` can run for minutes, so its spinner and counter
+are the pulse a reader needs. The body has the prompt, when it sent one, in a
+clamped Markdown section headed *Prompt*, then each receiver's last known
+state under *Agents*, one line each as the server wrote it
+(`/root/file_reader: completed`). Without a prompt the invocation lists the
+call's arguments. In a group summary it is named by its title, `Used Wait`.
+
+## Pockode's own work calls
+
+An agent driving a story calls Pockode's work tools —
+creates a task, starts it, marks a step done — and those calls were generic MCP
+rows: `task_create`, a `pockode` chip, and whatever argument happened to come
+first, often a story id. Nothing said which task was created, and nothing led to
+it. Now each reads as what it did and leads to the work it did it to.
+
+```
+│ ✓  Create task  [pockode]  Design the row                    │
+│ ✓  Start task   [pockode]  Design the row                    │
+⌄ opened:
+│ ┌──────────────────────────────────────────────────────────┐ │
+│ │ Task  Design the row                                Open │ │
+│ │ Result                                                   │ │
+│ │   Started work 01a2… (session: 01a2…)                    │ │
+│ └──────────────────────────────────────────────────────────┘ │
+```
+
+| Tool | Title | Detail |
+|---|---|---|
+| `story_create` / `task_create` | `Create story` / `Create task` | the `title` it was given |
+| `story_start` / `task_start` | `Start story` / `Start task` | the work's title |
+| `work_reopen` | `Reopen` | the work's title |
+| `work_update` | `Update` | the work's title |
+| `work_delete` | `Delete` | the work's title |
+| `story_wait` | `Wait for tasks` | the story's title |
+| `story_unwatch` | `Unwatch` | the story's title |
+| `step_done` | `Step done` | the work's title |
+| `work_comment_add` | `Comment` | the work's title |
+| `work_comment_update` | `Edit comment` | the new text's first line |
+| `work_get` / `work_comment_list` | `Get work` / `List comments` | the work's title |
+| `task_list` | `List tasks` | the story's title |
+| `story_list` | `List stories` | — |
+| `agent_role_list` / `agent_role_get` / `agent_role_reset_defaults` | `List roles` / `Get role` / `Reset roles` | the `work_type` / the role id, mono / — |
+
+`html_*` and `permission_verdict` keep [their own rows](#title-and-detail), and
+the question tools their cards ([answering-ui.md](answering-ui.md)). The table
+lives in one place (`lib/pockodeWorkTools.ts`), which `toolSummary`, `toolVerb`
+and the body all read, so the row, the summary and the body cannot name a call
+differently. The `pockode` chip stays, as on every Pockode MCP row: it is what
+tells the user these are calls into Pockode, not into the project.
+
+**"The work's title" is the one the call's [`workRef`](tool-call-model.md#a-call-on-pockodes-own-work)
+carries** — what the work was called when the call was made — and, before the
+result has brought one or on a record without one, the id from the input, in
+mono. A creation needs neither: its title is its input. The title is never read
+from the work store for the row. A row is a record of a call, and a record that
+retitles itself when the work is renamed is the record lying about what it was;
+the current title is one tap away.
+
+The body's line says the kind its `workRef` carries, else the one the tool's
+name fixes (`story_start`, `task_list`, …), else *Work* — a `step_done` from
+before `work_ref` cannot say which. A creation from then has no id but in its
+result prose, which the client does not parse, so its line has no *Open*; any
+other old record opens by its input's id. Of the input, a call whose line
+already says everything it asked (`step_done`, `work_get`, …) shows nothing
+more, and a creation without a `body` likewise; the listings of every story or
+role keep their arguments as any MCP call does. A work event line's `Subtask`
+row is the same `WorkRefLine` (`components/Chat/WorkRefLine.tsx`); the body
+reaches the overlay through `OpenWorkDetailContext`, provided beside the other
+transcript contexts in `MessageList`.
+
+**The body opens on the work, and the work is one tap further.** Its first line
+is `WorkRefLine`: the kind (`Task`, `Story`, `Job`) muted, the title, and *Open*
+— a text button in `text-th-accent` with a `touch-target` hit area, the word
+`PathLine` uses for the same act — which opens the work's detail overlay by id
+(`onOpenWorkDetail`, the overlay a work event's *Details* opens). That overlay
+subscribes to the work by id, so it opens whether or not any page of the work
+list holds it, in any worktree. Then the arguments worth reading — a creation's
+`body` and a comment's text as clamped Markdown, an update's changed fields, a
+start's `worktree` and `watch` — and then the result as it came.
+
+*Open* is offered when the call succeeded and did not delete the work. A
+`work_delete` has the line without it, and so does a failed call: its id may
+name nothing, and an overlay that opens on *not found* is a dead end the row
+put there. Its accessible name starts with its visible word: *"Open task Design
+the row"*.
+
+**No live status, on the row or in its body.** Not a status chip, not
+`Step n/m`, not a spinner for a story that is running: the glyph is the call's,
+and the call is over long before anyone reads it. Whether the work is still going is a
+question chat stopped answering on purpose
+([code/work-system.md](code/work-system.md#rendering-in-the-transcript)), and
+the overlay one tap away answers it from the work store, live. A status drawn
+here would have to be read from the store by id on every render to stay true,
+which is the aggregate card the work event line replaced — and a row in a
+transcript is the worst place to keep it current: a hundred `Start task` rows
+would each be subscribing to a work.
+
+**The later work event line leads to the same work.** When a task this session
+started finishes, its parent hears it as a work event line, `Pockode · Subtask
+done · Design the row`. That line now opens the subtask too
+([code/work-system.md](code/work-system.md#rendering-in-the-transcript)), so the
+row that started the work and the line that reported its end meet at one page.
+Neither jumps to the other inside the transcript: what the reader wants from
+either is the work, not the moment, and the call is usually pages above or not
+loaded at all.
 
 ## A page the agent drew (`html_render`)
 
@@ -4439,6 +5138,10 @@ omission.
 A page's card is the one thing wider than the column, and it follows the pane's
 own width rather than a tier ([width](#a-page-the-agent-drew-html_render)).
 
+A subagent's [step window](#the-step-window) adds no tier either: at every
+width its glyph, title and elapsed figure keep their width and its detail
+truncates ([what yields](#what-each-line-shows)).
+
 **No width tier gets a second title line, a tooltip, or a wider truncation
 budget.** A rule like "wrap the command at `sm:`" makes the same call look like
 a different thing on a tablet and a phone, and it would mean the phone — the
@@ -4533,6 +5236,8 @@ the virtualizer measures it.
   repeated in a polite live region, and Escape, Ctrl/Cmd+F and the back gesture
   all close or open what they say ([full screen](#full-screen)). Focus goes back
   to the opener on close, or to whatever opens the same key now.
+- A subagent's [step window](#the-step-window) is `aria-hidden`, live and
+  frozen: the Process lists the same steps accessibly.
 - A subagent's Process is a `role="group"` named for the subagent, and a pending
   permission card it raised sits inside the Task item's own DOM, so both say
   whose they are without the visual cues
@@ -4606,15 +5311,25 @@ the virtualizer measures it.
 15. A subagent at work, collapsed: titled by its agent behind the `Bot` mark
     (`Explore`, a Codex `read_a`, or `Subagent` when none is known), no type
     chip, the description as the detail and still there beside a 40-character
-    agent name. Line 2: `N tool uses · <latest child>`, the count going
-    up with each tool call and the second half changing as it works — its text
-    as prose, its tool calls as their own row would word them. None of its text
+    agent name. Line 2: `N tool uses`, the count going up with each tool
+    call, and `· <text>` only while its newest words are newer than its newest
+    step, as prose. Under it, nothing before the first step; then its newest
+    three steps, oldest on top, each worded as its own row would word it, with
+    a muted glyph — nothing in the window red, even a failed step — and a
+    counter only on the running one. None of its text
     or rows anywhere in the main transcript, as long as the spawning call is
     loaded ([what is not filed](#what-is-not-filed)).
-16. Two subagents spawned together: each row counts only its own tool uses.
+16. Two subagents spawned together: each row counts only its own tool uses,
+    and each window has two lines; three or more siblings have one each.
     Let the upper one finish first: its line becomes `N tool uses · <tokens>`
-    **without the row changing height**, with the same `N` it showed live the
-    moment before, while the lower one keeps moving.
+    **without the row changing height** — its window stays, frozen, with no
+    counter — with the same `N` it showed live the moment before, while the
+    lower one keeps moving. When the lower one settles, both windows fold in
+    one frame. Resume one of them: only its own window comes back, and a
+    subagent appended to the list later regrows nobody's. Reload at each
+    point: the same windows as the live view. Open a running row: the window
+    goes under the bar with the second line; open its Process too: the window
+    is gone, and line 2 names its latest child again.
 17. Open the finished one: report, then `Process · N tool uses` **closed** —
     the same `N`, and that many calls inside when opened — then `Prompt`
     closed, then the facts line (`agentId` and whatever else is known). Open Process: the subagent's text in small secondary type on
@@ -4623,10 +5338,18 @@ the virtualizer measures it.
     Reload: the same row, the same count.
 18. A subagent step that needs permission, with the Task row collapsed: the card
     is visible directly under the Task row, not hidden in the closed Process —
-    and for a subagent's subagent, under the top-level Task row. Approve it: the
-    card leaves that slot and the step runs inside the Process.
-19. Interrupt a subagent mid-run: `Ban`, the line frozen on its latest child,
-    and no spinner left anywhere inside its Process.
+    and for a subagent's subagent, under the top-level Task row — with its step
+    in the window above it, behind a muted `CircleHelp`. Approve it: the
+    card leaves that slot and the step runs inside the Process. A card asked by
+    the subagent's subagent carries one line above its row naming that inner
+    agent as its row does (`⧉ code-reviewer  Review the diff`); the outer
+    subagent's own card beside it has none.
+19. Interrupt a subagent mid-run, on Claude and on Codex: `Ban`, muted, never
+    red, the window folded and the line frozen on its latest child in the same
+    frame, and no spinner left anywhere inside its Process.
+    A subagent that fails, foreground or backgrounded, live or on reload: red
+    line 1, `N tool uses · <first line of what it returned>`, and the body
+    **closed** until tapped.
 20. A transcript recorded before this change: subagent rows and their work read
     exactly as they did, with no `0 tool uses` anywhere — titled by their
     `subagent_type` now, which their input always carried, and with no tokens
@@ -4885,6 +5608,38 @@ the virtualizer measures it.
     same grey as a settled row's tick. No green and no red, apart from a
     failed answer send's error line.
 
+For [a fetch in flight](#a-fetch-in-flight), [the remaining tool
+kinds](#the-remaining-tool-kinds) and [Pockode's own work
+calls](#pockodes-own-work-calls):
+
+66. On a CLI that still has `TaskOutput`, background a `sleep 40; echo done`
+    and have the agent fetch it while blocking: the `Bash` row keeps its
+    spinner and chip and gains `Waiting for output… 12s` under the command,
+    counting; the tail line reads `Waiting for output… · Go to call`, and the
+    button lands on that row. When the fetch returns the line becomes `done`
+    with no change of height. Stop the turn during a second fetch: the line
+    goes back to `done`, and after a reload no line anywhere says waiting.
+67. A `NotebookEdit` replacing a cell: `NotebookEdit` and the notebook's name
+    on the row, `+N` in the meta, *Cell <id>* and the new source in the body,
+    and the notebook among the turn's changes with the same `+N`. An insert
+    wears an `insert` chip; a delete says its content is not in the call.
+68. A `TaskStop` of a backgrounded command: a row of its own, the command it
+    stopped in its body, `Go to call` landing on the command's row — whose own
+    outcome says it was stopped. In a group the summary reads `Stopped 1 task`,
+    never `Ran`.
+69. A Codex web search and a Codex page open: rows titled `WebSearch` and
+    `WebFetch`, counted under `Searched` / `Fetched`, the search's body
+    listing the links Codex reported and the page's saying Codex does not
+    report what came back. A Codex image generation: its image in the
+    row's attachment strip, not among the turn's changes. A Codex `wait` on a
+    subagent: an `AgentControl` row titled `Wait`, spinning while it waits.
+70. A story agent that creates and starts a task: `Create task · <title>` and
+    `Start task · <title>`, the summary `Created task "<title>" · Started task
+    "<title>"`; *Open* in either body opens the task's page, in any worktree.
+    Rename the task: both rows still say the old title. Let the task finish:
+    the parent's `Subtask done` line opens the same task. No row ever shows the
+    task's status.
+
 ## Out of scope
 
 - **The turn's changes, live or reconciled.** No card or work line while the
@@ -4910,9 +5665,23 @@ the virtualizer measures it.
   limit, no anti-forgery token: each is a second way to say what the send's
   own answer already says, or a defence against an agent's page, which is not
   an adversary ([sending](#sending-to-the-agent)).
-- **`BashOutput` and `KillShell`.** They are the same shape as `TaskOutput` and
-  the rules above would apply to them unchanged, but whether they should be
-  absorbed is a decision about each of them, not a consequence of this one.
+- **Filing `BashOutput` or a stop under its origin.** `BashOutput` is history
+  with no origin to file by, and a stop is an act that keeps its row
+  ([the remaining tool kinds](#the-remaining-tool-kinds)).
+- **Filing claude 2.1.330's reads of a background task.** That CLI no longer
+  offers `TaskOutput`; how it reads a task's output instead is unmeasured
+  ([tool-call-model.md](tool-call-model.md#a-call-about-an-earlier-call)), and
+  whether such a read leaves its own row is a decision of its own.
+- **A notebook cell's old source.** The CLI reports it after the call
+  (`old_source`), and a diff could be drawn from it on the row; the permission
+  card could not have it, and the three readers of a change saying one thing
+  was chosen over it, as for `Write`.
+- **A work's live status on its call's row**, and a jump between a work call's
+  row and the work event line that later reports on the same work — both lead
+  to the work instead ([Pockode's own work calls](#pockodes-own-work-calls)).
+- **From an `AgentControl` call to its agents' rows.** The agents are named;
+  going to each spawn row would need the adapter to carry the spawn call ids,
+  for a call that is rarely more than a wait.
 - **A fetch's content blocks reaching the attachment strip.** The strip is
   partitioned from `run.contents`, so a file block that arrived inside a fetch
   stays in the body. `TaskOutput` answering with an image does not happen in

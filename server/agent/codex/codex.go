@@ -265,6 +265,10 @@ type appSession struct {
 	// its latest words and the size of its context; see settleSubagent. Same
 	// goroutine as subagentCalls.
 	subagentOutcomes map[string]subagentOutcome
+	// heldSubagentResults are the results of subagents interrupted while this
+	// session's turn runs, kept until that turn says whether the interrupt was
+	// the user's; see settleSubagent. Same goroutine as subagentCalls.
+	heldSubagentResults []heldSubagentResult
 	// reasoningItems are the reasoning items still in flight, by item id; see
 	// reasoningProgress. Same goroutine as subagentCalls, and forgotten when
 	// their thread's turn ends.

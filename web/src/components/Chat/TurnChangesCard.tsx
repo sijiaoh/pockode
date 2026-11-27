@@ -21,6 +21,7 @@ import type { TurnWork } from "../../lib/turnWork";
 import { useWSStore } from "../../lib/wsStore";
 import type { ContentPart } from "../../types/message";
 import { CollapsibleBody } from "../ui";
+import { GoToCallButton } from "./GoToCallButton";
 import {
 	changeFullScreenContent,
 	LineCountsLabel,
@@ -79,30 +80,6 @@ function dirParts(dir: string): { head: string; tail: string } {
 }
 
 /**
- * A word, not an arrow: beside a diff an arrow reads as scroll or fold, and
- * there is no hover to explain it. `touch-target` because the header's line
- * cannot grow.
- */
-function GoToCallButton({
-	label,
-	onClick,
-}: {
-	label: string;
-	onClick: () => void;
-}) {
-	return (
-		<button
-			type="button"
-			onClick={onClick}
-			aria-label={label}
-			className="touch-target flex h-6 shrink-0 items-center whitespace-nowrap rounded px-1 text-th-accent hover:bg-th-overlay-hover"
-		>
-			Go to call
-		</button>
-	);
-}
-
-/**
  * One change as the tool body shows it — the same `Section`, header counts,
  * wrap switch and copy, clamped in place with *Full screen* — so a reviewer
  * reads it the same in the card as on its tool row.
@@ -129,7 +106,12 @@ function EditSection({
 		() => ({ noun: "line" as const, total: changeRowCount(change) }),
 		[change],
 	);
-	const noun = change.kind === "write" ? "Content" : "Change";
+	const noun =
+		change.kind === "write"
+			? "Content"
+			: change.kind === "notebook"
+				? "Cell"
+				: "Change";
 	const goToCall = useGoToCall();
 	const fullScreen = useMemo<SectionFullScreen>(
 		() => ({

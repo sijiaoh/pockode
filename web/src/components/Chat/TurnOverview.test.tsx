@@ -12,6 +12,10 @@ import type {
 	TurnPhase,
 } from "../../types/message";
 import MessageList from "./MessageList";
+import {
+	type OpenSubagentTranscript,
+	SubagentTranscriptContext,
+} from "./subagentTranscriptContext";
 import { IDLE_TAIL } from "./turnTailContext";
 
 vi.mock("../../lib/wsStore", () => ({
@@ -70,10 +74,13 @@ function Transcript({
 	messages,
 	phase,
 	sessionId = "s",
+	openTranscript = null,
 }: {
 	messages: Message[];
 	phase: TurnPhase;
 	sessionId?: string;
+	/** What the chat provides; none, as outside a chat, by default. */
+	openTranscript?: OpenSubagentTranscript | null;
 }) {
 	const open = phase !== "idle" || messages.some((m) => m.status === "sending");
 	const agents = useAgentsOverview(messages, open, sessionId);
@@ -89,7 +96,11 @@ function Transcript({
 			agents.liveCount > 0 || agents.expanded,
 		),
 	};
-	return <MessageList sessionId="s" messages={messages} tail={tail} />;
+	return (
+		<SubagentTranscriptContext value={openTranscript}>
+			<MessageList sessionId="s" messages={messages} tail={tail} />
+		</SubagentTranscriptContext>
+	);
 }
 
 const three = (third: ToolRunStatus = "running") => [
@@ -162,25 +173,47 @@ describe("the agents line", () => {
 		expect(items[0]).toHaveTextContent("1 tool use·Looking at sender.go");
 	});
 
-	it("goes to the agent's row and opens it and its Process", async () => {
+	// Where its row's ⤢ would take the reader (docs/subagent-transcript-ui.md).
+	it("opens the transcript of an agent with work to show", async () => {
 		const user = userEvent.setup();
-		render(<Transcript messages={three()} phase="running" />);
-		await user.click(agentsLine("3 agents running"));
-		await user.click(entry(/^Explore,/));
-
-		const row = toolRow("a");
-		expect(row).toHaveClass("jump-highlight");
-		const rowButton = row?.querySelector("button");
-		expect(rowButton).toHaveFocus();
-		expect(rowButton).toHaveAttribute("aria-expanded", "true");
-		expect(
-			within(row as HTMLElement).getByRole("button", { name: /^Process/ }),
-		).toHaveAttribute("aria-expanded", "true");
-		// Only the agent pressed.
-		expect(toolRow("b")?.querySelector("button")).toHaveAttribute(
-			"aria-expanded",
-			"false",
+		const openTranscript = vi.fn();
+		render(
+			<Transcript
+				messages={three()}
+				phase="running"
+				openTranscript={openTranscript}
+			/>,
 		);
+		await user.click(agentsLine("3 agents running"));
+		const explore = entry(/^Explore,/);
+		expect(explore).toHaveAccessibleName(
+			"Explore, Find retry handling, running, open its transcript",
+		);
+		await user.click(explore);
+
+		expect(openTranscript).toHaveBeenCalledWith("a", explore);
+	});
+
+	// No ⤢ on its row either: it has nothing to show as a transcript yet.
+	it("goes to the row of an agent with no work to show", async () => {
+		const user = userEvent.setup();
+		const openTranscript = vi.fn();
+		render(
+			<Transcript
+				messages={three()}
+				phase="running"
+				openTranscript={openTranscript}
+			/>,
+		);
+		await user.click(agentsLine("3 agents running"));
+		await user.click(
+			entry(/^Plan, Draft the migration, running, go to its row$/),
+		);
+
+		expect(openTranscript).not.toHaveBeenCalled();
+		const row = toolRow("c");
+		expect(row).toHaveClass("jump-highlight");
+		expect(row?.querySelector("button")).toHaveFocus();
 	});
 
 	// Nothing moves under a press.

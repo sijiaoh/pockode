@@ -1,5 +1,12 @@
 import { Ban, Bot, Check, ChevronRight, CircleDot, X } from "lucide-react";
-import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import {
+	type MouseEvent,
+	type ReactNode,
+	useEffect,
+	useMemo,
+	useRef,
+	useState,
+} from "react";
 import {
 	formatDuration,
 	formatElapsed,
@@ -117,6 +124,34 @@ export function Chip({ children }: { children: string }) {
 }
 
 /**
+ * A subagent's title as its row draws it: the agent mark, then the title,
+ * capped so the detail after it keeps room. Shared with whatever names that
+ * subagent elsewhere — a nested card's asker line — so the two read letter for
+ * letter alike. `spoken` is what a screen reader hears in place of the mark.
+ */
+export function AgentTitle({
+	title,
+	spoken,
+	className,
+}: {
+	title: string;
+	spoken?: string;
+	className: string;
+}) {
+	return (
+		<span
+			className={`flex min-w-0 max-w-[45%] shrink-0 items-baseline gap-1 ${className}`}
+		>
+			<Bot aria-hidden className="size-3 shrink-0 self-center" />
+			<span className="truncate">
+				{spoken && <span className="sr-only">{spoken}</span>}
+				{title}
+			</span>
+		</span>
+	);
+}
+
+/**
  * The part of the row that identifies this particular call, cut to whatever
  * width is left.
  *
@@ -162,7 +197,17 @@ export function Detail({
  * Its own component with its own interval, so the tick re-renders the counter
  * and not the row.
  */
-function ElapsedCounter({ seenAt }: { seenAt: Date }) {
+function ElapsedCounter({
+	seenAt,
+	separated,
+}: {
+	seenAt: Date;
+	/**
+	 * It follows text on the same line, so it brings its own `·`: drawn only
+	 * with the number, never left dangling before the three seconds are up.
+	 */
+	separated?: boolean;
+}) {
 	const [now, setNow] = useState(() => Date.now());
 	const elapsed = now - seenAt.getTime();
 	// Every second while the number is seconds, every minute once it is not: a
@@ -180,6 +225,7 @@ function ElapsedCounter({ seenAt }: { seenAt: Date }) {
 	if (elapsed < 3000) return null;
 	return (
 		<span className="shrink-0 text-th-text-muted">
+			{separated && "· "}
 			{formatElapsed(elapsed)}
 		</span>
 	);
@@ -290,7 +336,16 @@ interface Props {
 	 * A second line with structure of its own rather than one string — a
 	 * subagent's step count beside what it is doing. Wins over `secondLine`.
 	 */
-	richSecondLine?: { content: ReactNode; live: boolean } | null;
+	richSecondLine?: {
+		content: ReactNode;
+		live: boolean;
+		/**
+		 * Drawn under the line, wherever the line goes — in the button while
+		 * the row is closed, under the bar while it is open: a subagent's step
+		 * window. Spans, for the button's sake.
+		 */
+		below?: ReactNode;
+	} | null;
 	/** Failure is the only saturated colour in a stack of rows. */
 	error?: boolean;
 	/**
@@ -304,7 +359,8 @@ interface Props {
 
 interface RowButtonProps {
 	expanded: boolean;
-	onToggle: () => void;
+	/** Handed the press, for a caller that needs the button it came from. */
+	onToggle: (event: MouseEvent<HTMLButtonElement>) => void;
 	glyph: ReactNode;
 	error?: boolean;
 	toggleable?: boolean;
@@ -317,6 +373,11 @@ interface RowButtonProps {
 	 * it goes to rather than opens, with no column of rows to line up with.
 	 */
 	noLead?: boolean;
+	/**
+	 * `data-*` attributes for the button, for a caller that finds it again by
+	 * one: an opener of a subagent's transcript (`SUBAGENT_OPENER_ATTR`).
+	 */
+	data?: Record<`data-${string}`, string>;
 	/** The text column: line 1 and, when there is one, the second line. */
 	children: ReactNode;
 }
@@ -364,11 +425,13 @@ export function RowButton({
 	controls,
 	label,
 	noLead,
+	data,
 	children,
 }: RowButtonProps) {
 	return (
 		<button
 			type="button"
+			{...data}
 			onClick={onToggle}
 			aria-expanded={toggleable ? expanded : undefined}
 			aria-controls={toggleable ? controls : undefined}
@@ -427,20 +490,23 @@ export function StaticRow({
 }
 
 /**
- * A line under a row, outside its button, on the row's columns: the text sits
- * under the title, and `glyph` (blank by default) under the row's glyph. For
- * what a row says beneath itself that holds a control of its own, which the
- * row's button cannot contain.
+ * A line under a row — or over it — outside its button, on the row's columns:
+ * the text sits in the title's column, and `glyph` (blank by default) in the
+ * glyph's. For what a row says beside itself that the row's button cannot
+ * contain: a control of its own, or a fact about the request it stands for.
  */
 export function RowSubline({
 	glyph = NO_CHEVRON,
+	above = false,
 	children,
 }: {
 	glyph?: ReactNode;
+	/** Drawn over the row rather than under it, so padded at its top. */
+	above?: boolean;
 	children: ReactNode;
 }) {
 	return (
-		<div className="px-2 pb-1.5 sm:px-2.5">
+		<div className={`px-2 sm:px-2.5 ${above ? "pt-1.5" : "pb-1.5"}`}>
 			<RowColumns lead={NO_CHEVRON} glyph={glyph}>
 				{children}
 			</RowColumns>
@@ -480,17 +546,13 @@ export function ToolRowFirstLine({
 	return (
 		<>
 			{agent ? (
-				<span className="flex min-w-0 max-w-[45%] shrink-0 items-baseline gap-1 text-th-accent">
-					<Bot aria-hidden className="size-3 shrink-0 self-center" />
-					<span className="truncate">
-						{/* What the mark says to the eye; a row already titled
-						    `Subagent` would say it twice. */}
-						{title !== SUBAGENT_TITLE && (
-							<span className="sr-only">Subagent </span>
-						)}
-						{title}
-					</span>
-				</span>
+				<AgentTitle
+					title={title}
+					// What the mark says to the eye; a row already titled
+					// `Subagent` would say it twice.
+					spoken={title !== SUBAGENT_TITLE ? "Subagent " : undefined}
+					className="text-th-accent"
+				/>
 			) : (
 				<span className="shrink-0 text-th-accent">{title}</span>
 			)}
@@ -514,12 +576,15 @@ export function ToolRowSecondLine({
 }: Pick<Props, "secondLine" | "richSecondLine">) {
 	if (richSecondLine) {
 		return (
-			<span
-				aria-hidden={richSecondLine.live}
-				className="flex min-w-0 items-baseline gap-1.5 text-th-text-muted"
-			>
-				{richSecondLine.content}
-			</span>
+			<>
+				<span
+					aria-hidden={richSecondLine.live}
+					className="flex min-w-0 items-baseline gap-1.5 text-th-text-muted"
+				>
+					{richSecondLine.content}
+				</span>
+				{richSecondLine.below}
+			</>
 		);
 	}
 	if (!secondLine) return null;
@@ -532,6 +597,12 @@ export function ToolRowSecondLine({
 			className={`block truncate text-th-text-muted ${secondLine.mono ? "font-mono" : ""}`}
 		>
 			{secondLine.text}
+			{secondLine.since && (
+				<>
+					{" "}
+					<ElapsedCounter seenAt={secondLine.since} separated />
+				</>
+			)}
 		</span>
 	);
 }

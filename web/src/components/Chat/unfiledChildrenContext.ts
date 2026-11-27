@@ -4,7 +4,7 @@ import {
 	type UnfiledChildren,
 	unfiledChildren,
 } from "../../lib/subagentRun";
-import type { Message } from "../../types/message";
+import type { ContentPart, Message } from "../../types/message";
 
 const EMPTY: ReadonlyMap<string, UnfiledChildren> = new Map();
 
@@ -30,20 +30,44 @@ function sameLatest(a?: LatestChild, b?: LatestChild): boolean {
 	return a === b;
 }
 
-function sameCounts(
+// What a row reads off one unfiled part: a call by what its window line
+// draws, anything else by being the same part. Not by identity: a streaming
+// text or thinking is a new object on every delta, and a running call on every
+// line of output, and re-rendering every subagent row in the transcript for
+// what none of them shows would be the cost. What a text says is compared
+// through `latest`.
+function sameShown(a: ContentPart, b: ContentPart): boolean {
+	if (a.type === "tool_call" && b.type === "tool_call") {
+		return (
+			a.tool.id === b.tool.id &&
+			a.tool.status === b.tool.status &&
+			a.tool.name === b.tool.name &&
+			a.tool.input === b.tool.input &&
+			a.tool.seenAt === b.tool.seenAt
+		);
+	}
+	if (a.type === "permission_request" || a.type === "question_record") {
+		return a === b;
+	}
+	return a.type === b.type && a.id === b.id;
+}
+
+function sameChildren(a: UnfiledChildren, b?: UnfiledChildren): boolean {
+	return (
+		b !== undefined &&
+		a.parts.length === b.parts.length &&
+		a.parts.every((part, i) => sameShown(part, b.parts[i])) &&
+		sameLatest(a.latest, b.latest)
+	);
+}
+
+function sameParts(
 	a: ReadonlyMap<string, UnfiledChildren>,
 	b: ReadonlyMap<string, UnfiledChildren>,
 ): boolean {
 	if (a.size !== b.size) return false;
-	for (const [id, counts] of a) {
-		const other = b.get(id);
-		if (
-			other?.count !== counts.count ||
-			other.steps !== counts.steps ||
-			!sameLatest(other.latest, counts.latest)
-		) {
-			return false;
-		}
+	for (const [id, unfiled] of a) {
+		if (!sameChildren(unfiled, b.get(id))) return false;
 	}
 	return true;
 }
@@ -58,6 +82,6 @@ export function useUnfiledChildrenValue(
 ): ReadonlyMap<string, UnfiledChildren> {
 	const previous = useRef<ReadonlyMap<string, UnfiledChildren>>(EMPTY);
 	const next = unfiledChildren(messages);
-	if (!sameCounts(previous.current, next)) previous.current = next;
+	if (!sameParts(previous.current, next)) previous.current = next;
 	return previous.current;
 }

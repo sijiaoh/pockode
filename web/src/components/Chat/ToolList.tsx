@@ -7,9 +7,13 @@ import {
 	useState,
 } from "react";
 import { findToolRunPath, oldestPart, partBlocks } from "../../lib/partTree";
+import { resumedRun, stepWindowLines } from "../../lib/subagentRun";
 import { rowEntries } from "../../lib/toolGroups";
-import type { ContentPart } from "../../types/message";
+import { isTaskTool } from "../../lib/toolSummary";
+import type { ContentPart, ToolRun } from "../../types/message";
 import { RowExpansionContext, RowFrameContext } from "./rowExpansionContext";
+import { StepWindowContext } from "./stepWindowContext";
+import { SubagentResumesContext } from "./subagentResumesContext";
 import { ToolGroupSummary } from "./ToolGroupSummary";
 import { useRevealRequest } from "./toolJumpContext";
 import { OpenedThoughtsContext } from "./turnTailContext";
@@ -136,7 +140,7 @@ function RowList<T extends Item>({
 
 	// A jump to a row folded into a group opens the group, as the user's tap
 	// on its summary would; a subagent row in it opens its own Process.
-	useRevealRequest(({ toolUseId }) => {
+	useRevealRequest((toolUseId) => {
 		for (const entry of rowEntries(items)) {
 			if (entry.kind !== "item" || entry.group === undefined) continue;
 			if (!findToolRunPath([entry.item.part], toolUseId)) continue;
@@ -160,6 +164,16 @@ function RowList<T extends Item>({
 	const choiceFor = (part: ContentPart) =>
 		choices.get(choiceKey(part)) ?? (openedThoughts.has(part.id) || undefined);
 
+	// The subagent rows as they are drawn, a resumed one on its resume: their
+	// step windows are sized and folded by the list, not by each row.
+	const resumes = useContext(SubagentResumesContext);
+	const subagentRuns: ToolRun[] = items.flatMap(({ part }) => {
+		if (part.type !== "tool_call" || !isTaskTool(part.tool.name)) return [];
+		const resume = resumes.get(part.tool.id);
+		return [resume ? resumedRun(part.tool, resume) : part.tool];
+	});
+	const windowLines = stepWindowLines(subagentRuns);
+
 	const entries = rowEntries(items);
 	// A card and its row are one call, shown and hidden together.
 	const openedCalls = new Set(
@@ -175,57 +189,59 @@ function RowList<T extends Item>({
 
 	return (
 		<RowFrameContext value={framed}>
-			<div
-				// `overflow-clip`, not `overflow-hidden`: both cut the rows to the
-				// rounded frame, but `hidden` also makes the list a scroll container,
-				// and an open row's bar would then stick to the list — which never
-				// scrolls — instead of to the transcript.
-				className={
-					framed
-						? "overflow-clip rounded-lg border border-th-border text-xs"
-						: "text-xs"
-				}
-			>
-				<div className={framed ? "-mt-px" : undefined}>
-					{entries.map((entry) => {
-						if (entry.kind === "summary") {
+			<StepWindowContext value={windowLines}>
+				<div
+					// `overflow-clip`, not `overflow-hidden`: both cut the rows to the
+					// rounded frame, but `hidden` also makes the list a scroll container,
+					// and an open row's bar would then stick to the list — which never
+					// scrolls — instead of to the transcript.
+					className={
+						framed
+							? "overflow-clip rounded-lg border border-th-border text-xs"
+							: "text-xs"
+					}
+				>
+					<div className={framed ? "-mt-px" : undefined}>
+						{entries.map((entry) => {
+							if (entry.kind === "summary") {
+								return (
+									<div
+										key={entry.key}
+										className="border-t border-th-border"
+										{...wrapperProps}
+										{...foldPlaceProps}
+									>
+										<ToolGroupSummary
+											summary={entry.summary}
+											expanded={openGroups.has(entry.key)}
+											onToggle={() => toggleGroup(entry.key)}
+										/>
+									</div>
+								);
+							}
+							const { part } = entry.item;
+							const hidden =
+								entry.group !== undefined &&
+								!openGroups.has(entry.group) &&
+								!openedCalls.has(entry.call);
 							return (
-								<div
-									key={entry.key}
-									className="border-t border-th-border"
-									{...wrapperProps}
-									{...foldPlaceProps}
+								<RowSlot
+									key={part.id}
+									rowKey={choiceKey(part)}
+									framed={framed}
+									choice={choiceFor(part)}
+									onChoice={onChoice}
+									hidden={hidden}
+									grouped={entry.group !== undefined}
+									wrapperProps={wrapperProps}
 								>
-									<ToolGroupSummary
-										summary={entry.summary}
-										expanded={openGroups.has(entry.key)}
-										onToggle={() => toggleGroup(entry.key)}
-									/>
-								</div>
+									{renderPart(entry.item)}
+								</RowSlot>
 							);
-						}
-						const { part } = entry.item;
-						const hidden =
-							entry.group !== undefined &&
-							!openGroups.has(entry.group) &&
-							!openedCalls.has(entry.call);
-						return (
-							<RowSlot
-								key={part.id}
-								rowKey={choiceKey(part)}
-								framed={framed}
-								choice={choiceFor(part)}
-								onChoice={onChoice}
-								hidden={hidden}
-								grouped={entry.group !== undefined}
-								wrapperProps={wrapperProps}
-							>
-								{renderPart(entry.item)}
-							</RowSlot>
-						);
-					})}
+						})}
+					</div>
 				</div>
-			</div>
+			</StepWindowContext>
 		</RowFrameContext>
 	);
 }

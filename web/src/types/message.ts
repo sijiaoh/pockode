@@ -193,13 +193,27 @@ export interface ToolFetch {
 	/** The `tool_use_id` of the call that fetched this. */
 	id: string;
 	/**
+	 * `running` from the moment the call is filed until its result arrives;
+	 * `interrupted` when what ends a running run ended it first. Settled by the
+	 * same sweeps as a run, replay included, and kept like a run's: a result
+	 * reaching an interrupted fetch is kept but does not make it `returned`.
+	 */
+	state: "running" | "returned" | "interrupted";
+	/**
+	 * The fetch waits for the task to finish (`block` not false) rather than
+	 * reading at once. Only chooses a word.
+	 */
+	waits: boolean;
+	/** The fetch's start on this client's clock, read as `ToolRun.seenAt` is. */
+	seenAt?: Date;
+	/**
 	 * What came back, under the same two names a run's own outcome uses and read
 	 * the same way — `contents` when it is there, `result` otherwise
 	 * (`toolRunText`). Naming them anything else here would be a second spelling
 	 * of one rule, and a reader who checked `result` alone would report an image
 	 * as an empty fetch.
 	 *
-	 * Both absent is the third case and a real one: the fetch never returned,
+	 * Both absent while the fetch is running, and on one that never returned
 	 * because the turn was cut short. An empty `result` means it returned and
 	 * had nothing to say, which is a different sentence.
 	 */
@@ -241,6 +255,17 @@ export interface SubagentReport extends SubagentCounts {
 export interface SubagentProgress extends SubagentCounts {
 	/** The tool it called most recently. */
 	lastToolName?: string;
+}
+
+/**
+ * A work item as it was when a Pockode work tool acted on it: the server's
+ * `work_ref` stamp (docs/tool-call-model.md#a-call-on-pockodes-own-work). The
+ * title is the one it had then, and there is deliberately no status.
+ */
+export interface WorkRef {
+	id: string;
+	type: WorkType;
+	title: string;
 }
 
 /**
@@ -324,6 +349,14 @@ export interface ToolRun {
 	 */
 	plan?: ToolRunPlan;
 	/**
+	 * The earlier call this one is about, from its record's
+	 * `origin_tool_use_id` — kept only on a call that keeps its own row while
+	 * naming another: a stop of a background task (`TaskStop`), whose body
+	 * points at the work it stopped. A fetch with an origin is filed under that
+	 * call instead, and has no row to carry it.
+	 */
+	originToolUseId?: string;
+	/**
 	 * How long the call took, when the engine reported it as a figure (Codex
 	 * for commands and MCP calls, Claude for only a few tools). Only ever the
 	 * engine's: what Pockode observed is
@@ -354,6 +387,13 @@ export interface ToolRun {
 	 * pages were stored.
 	 */
 	htmlPage?: string;
+	/**
+	 * The work item a successful Pockode work tool acted on, as it was when the
+	 * call was made — from its result's `work_ref`. An event's: it never
+	 * carries a status, which is the work store's, read by `id`. Absent on any
+	 * other call, on a failed one, and on records from before it existed.
+	 */
+	workRef?: WorkRef;
 	/**
 	 * When the call started, on this client's clock — what a live counter counts
 	 * from. The moment the start arrived, when this client watched it arrive;
@@ -786,6 +826,24 @@ export interface AssistantMessage {
 	 * (docs/discarded-messages-ui.md).
 	 */
 	discardedMessageIds?: string[];
+	/**
+	 * The main agent's newest call in this turn is a fetch filed under the run
+	 * it reads, still running: the fetch draws no row, so this is what the tail
+	 * line reads to say the turn is waiting, and where its `Go to call` goes
+	 * (docs/turn-progress-ui.md#23-what-it-says). Live state the reducer derives:
+	 * cleared by the fetch's result, by whatever settles it, and by the main
+	 * agent's next text, thinking or call.
+	 */
+	awaitedFetch?: AwaitedFetch;
+}
+
+export interface AwaitedFetch {
+	/** The fetching call's `tool_use_id`. */
+	id: string;
+	/** The run it is filed under, which is where `Go to call` goes. */
+	originToolUseId: string;
+	/** See `ToolFetch.waits`. */
+	waits: boolean;
 }
 
 export type Message = UserMessage | AssistantMessage;
@@ -1641,6 +1699,11 @@ export type ServerNotification =
 			 * `html_edit`) stored; absent on every other result.
 			 */
 			html_page?: string;
+			/**
+			 * The work a successful Pockode work tool acted on, as of the call;
+			 * absent on every other result.
+			 */
+			work_ref?: { id?: unknown; type?: unknown; title?: unknown };
 			/** See the `text` record. */
 			parent_tool_use_id?: string;
 			/**

@@ -936,6 +936,7 @@ func (m *Manager) create(name, workDir string) (*Worktree, error) {
 	// the main data dir (m.dataDir), the only place server.json is written.
 	processManager := process.NewManager(m.agents, name, workDir, wtDataDir, m.dataDir, sessionStore, m.leaseBudgets)
 	processManager.SetMessageListener(chatMessagesWatcher)
+	processManager.SetWorkLookup(m.workStore)
 	sessionListWatcher.SetViewingChecker(chatMessagesWatcher)
 	processManager.SetOnStateChange(sessionListWatcher.HandleProcessStateChange)
 	if m.workEngine != nil {

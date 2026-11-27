@@ -48,4 +48,31 @@ describe("useAgentsOverview", () => {
 		expect(result.current).not.toBe(before);
 		expect(result.current.liveCount).toBe(0);
 	});
+
+	// Running again under the call that resumed it, as its row draws it.
+	it("counts a resumed subagent as live", () => {
+		const settled: ContentPart = {
+			...agentPart,
+			tool: {
+				...agentPart.tool,
+				status: "success",
+				subagent: { agentId: "agent-1" },
+			},
+		};
+		const resume: ContentPart = {
+			type: "tool_call",
+			id: "part-r",
+			tool: {
+				id: "r",
+				name: "SendMessage",
+				input: { to: "agent-1", message: "Go on" },
+				status: "running",
+			},
+		};
+		const { result } = renderHook(() =>
+			useAgentsOverview([reply([settled, resume])], true, "s"),
+		);
+		expect(result.current.liveCount).toBe(1);
+		expect(result.current.named?.status).toBe("running");
+	});
 });

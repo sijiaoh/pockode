@@ -578,6 +578,17 @@ AI agents interact with the Work system through MCP (Model Context Protocol) too
 | `work_comment_list` | List comments | `work_id` |
 | `work_comment_update` | Update comment text | `id`, `body` |
 
+**A call to one of them is drawn as what it did**:
+`Create task · <title>`, `Start story · <title>`, with the work one tap away —
+[tool-call-ui.md § Pockode's own work calls](../tool-call-ui.md#pockodes-own-work-calls).
+Which work a call acted on, and its title at that moment, is stamped on the
+call's result record by the server (`process.workCalls`, reading the tool table
+`work.ToolTarget` and a creation's id through `work.IDFromCreateResult`, beside
+`work.CreateResult`, the wording the executor answers with), never its status
+([tool-call-model.md](../tool-call-model.md#a-call-on-pockodes-own-work)); the
+rule below, that a record says what happened and the store says what is true,
+is the reason the row shows no status at all.
+
 **The names are the fork.** A tool is split by story and task exactly where the
 behaviour forks, and keeps the `work_` prefix where it does not: `story_start`
 takes a worktree and `task_start` refuses one; only a story has tasks
@@ -751,8 +762,8 @@ page's content — the one rule worth restating at the moment it applies. The
 executor cannot put the id on the record itself, because an MCP call does not
 carry the CLI's tool call id; so the process does it from the other side
 (`process.pageCalls`): it notes every tool call whose name is a page tool
-(`htmlpage.IsPageTool`, both engines' names — `mcp__pockode__<tool>` from
-Claude, `pockode:<tool>` from Codex), and stamps that call's successful result
+(`agent.PockodeTool` reads both engines' names — `mcp__pockode__<tool>` from
+Claude, `pockode:<tool>` from Codex — and `htmlpage.IsPageTool` the bare one), and stamps that call's successful result
 with the id read back from its first words, as `html_page` on the
 `tool_result` record, before it is recorded or broadcast. The name is checked,
 not just the text, since any other tool's output may begin with the same words.
@@ -1707,7 +1718,8 @@ and rejected:
 - **The interleave is visible to the agent, not silent.** The CLI reports the
   agent's own live background tasks and delivers the completion notification into
   whatever turn is running, so the model can see it still has work pending and
-  check it with `BashOutput`.
+  check on it — with `TaskOutput` on a CLI that still offers one; claude
+  2.1.330 offers neither it nor `BashOutput`.
 - **Nothing downstream breaks.** The injected turn's content clears the
   `background` blocker — content is what proves the CLI resumed — and its own
   ending parks the turn again while the task set is still non-empty. The wait
@@ -2517,6 +2529,22 @@ That form falls out of the rule this section opens with, and is the reason the r
 - **The right-hand status area is empty, permanently.** A work event shows no status and never a spinner. A Claude Task strip does show one, and the asymmetry is deliberate: a Task call has a start and an end worth reporting on, a work event is instantaneous — it is over the moment it is recorded.
 - **Pagination stops being a special case.** A work whose messages straddle a page boundary needs no folding back together, and no message needs an id that survives re-anchoring: a work event is an ordinary message, so `prependHistoryPage` treats it like every other one ([agent-chat.md](../agent-chat.md#reading-a-page-on-the-client)).
 - **No step divider.** A `step_advance` line already lands where the work moved on and already reads `Step n/m`; a hairline saying the same thing in the same place was duplication left over from when the card was pinned upstream and the stream needed something else to mark the change of step.
+
+**A line about a child also opens the child**. The
+`child_*` subtypes and `wait_stranded` name a subtask, but their *Details* opens
+the receiving work — rightly, since that is the work the message was delivered
+to — so the subtask the line is about led nowhere, while the row of the call
+that created or started it now opens it
+([tool-call-ui.md](../tool-call-ui.md#pockodes-own-work-calls)). Expanded, such
+a line therefore has a second row under the receiving work's: `Subtask`, the
+child's title from `meta.child`, and *Open* into `meta.child.id`'s detail
+overlay — the same `WorkRefLine` a work tool's body opens on, read off
+`meta.child` alone, so it is on exactly the subtypes that record one. The collapsed line is unchanged, and the line still subscribes to
+nothing: the title is the one recorded with the event, and what the child is
+doing now is on the page *Open* leads to. The `watched_story_*` lines need no
+second row, since their *Details* already opens the story. A line never jumps to
+the call in the transcript that started the work: what a reader wants from
+either is the work, and the call is usually pages above or not loaded.
 
 Three consequences worth stating outright, so none of them is later "fixed" back:
 

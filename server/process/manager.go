@@ -87,6 +87,9 @@ type Manager struct {
 	// Message listener (ChatMessagesWatcher)
 	messageListener ChatMessageListener
 
+	// workLookup is what workCalls reads a work tool call's work from.
+	workLookup WorkLookup
+
 	// Called when a process ends (for cleanup coordination)
 	onProcessEnd func()
 
@@ -219,6 +222,8 @@ type Process struct {
 	toolActivity toolActivity
 	// pageCalls stamps a page tool's result with the page it stored.
 	pageCalls pageCalls
+	// workCalls stamps a work tool's result with the work it acted on.
+	workCalls workCalls
 	// timedOut names the prompts this process's answer lease gave up on, which
 	// is what tells their expiry apart from every other kind: the wait was not
 	// abandoned by the agent or overtaken by the user, it ran out of time.
@@ -274,6 +279,12 @@ func NewManager(agents *agent.Registry, worktree, workDir, dataDir, mcpServerDir
 // SetMessageListener sets the listener for chat messages.
 func (m *Manager) SetMessageListener(l ChatMessageListener) {
 	m.messageListener = l
+}
+
+// SetWorkLookup names the work store a Pockode work tool's result is stamped
+// from (workCalls). Left unset, no result is. Set before any process starts.
+func (m *Manager) SetWorkLookup(lookup WorkLookup) {
+	m.workLookup = lookup
 }
 
 func (m *Manager) SetOnStateChange(fn func(StateChangeEvent)) {
@@ -1945,6 +1956,7 @@ func (p *Process) inject(events ...agent.AgentEvent) {
 func (p *Process) handleEvent(ctx context.Context, log *slog.Logger, event agent.AgentEvent) {
 	event = agent.ObserveAt(event, time.Now())
 	event = p.pageCalls.stamp(event)
+	event = p.workCalls.stamp(event, p.manager.workLookup)
 	event = stampProfile(event, p.profileID)
 	eventType := event.EventType()
 	log.Debug("streaming event", "type", eventType)

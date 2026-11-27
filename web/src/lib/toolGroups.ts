@@ -1,4 +1,5 @@
 import type { ContentPart, Thought, ToolRun } from "../types/message";
+import type { WorkType } from "../types/work";
 import { splitNativePath } from "../utils/path";
 import { oldestPart } from "./partTree";
 import { stepId } from "./subagentRun";
@@ -43,6 +44,11 @@ export interface SummarySegment {
 	names: SummaryName[];
 	/** Files for the file verbs, calls for the rest, as the line counts them. */
 	count: number;
+	/**
+	 * What a `create` or `start` acted on, for its count's noun: one kind, or
+	 * `mixed` when its calls differ. Absent for every other verb.
+	 */
+	kind?: WorkType | "mixed";
 }
 
 /**
@@ -164,7 +170,20 @@ interface Wording {
 	/** The words before the names: `Edited`. Absent for a verb never named. */
 	names?: string;
 	/** The whole segment when it names nothing: `Edited 2 files`. */
-	count: (count: number) => string;
+	count: (count: number, kind?: WorkType | "mixed") => string;
+}
+
+const WORK_NOUNS: Record<WorkType | "mixed", [string, string]> = {
+	story: ["story", "stories"],
+	task: ["task", "tasks"],
+	job: ["job", "jobs"],
+	mixed: ["work item", "work items"],
+};
+
+/** `2 tasks`, `1 story`, `3 work items`. */
+function workCount(count: number, kind: WorkType | "mixed" = "mixed"): string {
+	const [one, many] = WORK_NOUNS[kind];
+	return `${count} ${count === 1 ? one : many}`;
 }
 
 const WORDING: Record<SummaryTense, Record<ToolVerb, Wording>> = {
@@ -173,9 +192,21 @@ const WORDING: Record<SummaryTense, Record<ToolVerb, Wording>> = {
 			names: "Edited",
 			count: (n) => plural(n, "Edited 1 file", "Edited N files"),
 		},
+		create: {
+			names: "Created",
+			count: (n, kind) => `Created ${workCount(n, kind)}`,
+		},
+		start: {
+			names: "Started",
+			count: (n, kind) => `Started ${workCount(n, kind)}`,
+		},
 		run: {
 			names: "Ran",
 			count: (n) => plural(n, "Ran 1 command", "Ran N commands"),
+		},
+		// Never named: a task id names nothing a reader knows.
+		stop: {
+			count: (n) => plural(n, "Stopped 1 task", "Stopped N tasks"),
 		},
 		read: {
 			names: "Read",
@@ -200,9 +231,20 @@ const WORDING: Record<SummaryTense, Record<ToolVerb, Wording>> = {
 			names: "Editing",
 			count: (n) => plural(n, "Editing 1 file", "Editing N files"),
 		},
+		create: {
+			names: "Creating",
+			count: (n, kind) => `Creating ${workCount(n, kind)}`,
+		},
+		start: {
+			names: "Starting",
+			count: (n, kind) => `Starting ${workCount(n, kind)}`,
+		},
 		run: {
 			names: "Running",
 			count: (n) => plural(n, "Running 1 command", "Running N commands"),
+		},
+		stop: {
+			count: (n) => plural(n, "Stopping 1 task", "Stopping N tasks"),
 		},
 		read: {
 			names: "Reading",
@@ -279,7 +321,10 @@ function segmentOf(
 		...[...calls].map(([text, times]) => ({ text, times })),
 	];
 	const count = names.reduce((sum, name) => sum + name.times, unnamed);
-	return { verb, tense, names, count };
+	const kinds = new Set(readings.flatMap(({ kind }) => (kind ? [kind] : [])));
+	const kind =
+		kinds.size === 0 ? undefined : kinds.size === 1 ? [...kinds][0] : "mixed";
+	return { verb, tense, names, count, ...(kind ? { kind } : {}) };
 }
 
 function summarize<T>(
@@ -303,7 +348,7 @@ function summarize<T>(
 					: undefined;
 		if (!tense) continue;
 		if (tense === "present") current = row;
-		const reading = toolVerb(row.name, row.input);
+		const reading = toolVerb(row.name, row.input, row.workRef);
 		const key = `${tense}:${reading.verb}`;
 		readings.set(key, [...(readings.get(key) ?? []), reading]);
 	}
@@ -338,13 +383,13 @@ export interface FormSegment {
 const MAX_NAMES = 3;
 
 function formSegment(
-	{ verb, tense, names, count }: SummarySegment,
+	{ verb, tense, names, count, kind }: SummarySegment,
 	shown: number,
 ): FormSegment {
 	const wording = WORDING[tense][verb];
 	const kept = wording.names ? names.slice(0, shown) : [];
 	if (kept.length === 0)
-		return { lead: wording.count(count), names: [], more: 0 };
+		return { lead: wording.count(count, kind), names: [], more: 0 };
 	const named = kept.reduce((sum, name) => sum + name.times, 0);
 	return { lead: wording.names ?? "", names: kept, more: count - named };
 }

@@ -16,12 +16,13 @@ type EventRecord struct {
 	ToolInput json.RawMessage `json:"tool_input,omitempty"`
 	ToolUseID string          `json:"tool_use_id,omitempty"`
 	// OriginToolUseID is the call an ordinary tool_call record is *about*: a
-	// fetch like Claude's TaskOutput names its target by task_id, and the map
-	// from that to a tool_use_id lives only in the adapter, for as long as the
-	// task does. Resolved where the answer is known and recorded here so a
-	// replay still has it; absent whenever it could not be resolved, which is
-	// ordinary (see ToolCallEvent.OriginToolUseID). What a client does with the
-	// join — or nothing at all — is the client's decision.
+	// fetch like Claude's TaskOutput, or a stop like its TaskStop, names its
+	// target by task_id, and the map from that to a tool_use_id lives only in
+	// the adapter, for as long as the task does. Resolved where the answer is
+	// known and recorded here so a replay still has it; absent whenever it
+	// could not be resolved, which is ordinary (see
+	// ToolCallEvent.OriginToolUseID). What a client does with the join — or
+	// nothing at all — is the client's decision.
 	OriginToolUseID string `json:"origin_tool_use_id,omitempty"`
 	// ParentToolUseID is the subagent call a text, tool_call or tool_result
 	// record was produced inside: the subagent's own words and tool use, which
@@ -129,9 +130,11 @@ type EventRecord struct {
 	// has no id of its own to use. Empty on every record written before this
 	// field existed, and on a message whose id was never established.
 	MessageID string `json:"message_id,omitempty"`
-	// Subtype says what kind of record this is within its type, for the two
-	// types that have kinds: a system-origin message (see MessageEvent), and a
-	// tool result that is not the whole story (see ToolResultBackgroundStarted).
+	// Subtype says what kind of record this is within its type, for the three
+	// types that have kinds: a system-origin message (see MessageEvent), a tool
+	// result that is not the whole story (see ToolResultBackgroundStarted), and
+	// a tool call announced again because it is running again (see
+	// ToolCallResumed).
 	Subtype string       `json:"subtype,omitempty"`
 	Meta    *MessageMeta `json:"meta,omitempty"`
 	// DurationMs and ExitCode are what an agent CLI reported about a finished
@@ -153,6 +156,11 @@ type EventRecord struct {
 	// pages its copied history drew. The CLI does not report it: the server
 	// stamps it when it records the result (process.pageCalls).
 	HTMLPage string `json:"html_page,omitempty"`
+	// WorkRef is the work item a successful call to one of Pockode's work
+	// tools acted on, on that call's tool_result record and on no other. Like
+	// HTMLPage the CLI does not report it: the server stamps it
+	// (process.workCalls).
+	WorkRef *WorkRef `json:"work_ref,omitempty"`
 	// Activity and OutputDelta belong to tool_activity records, which are
 	// broadcast and never stored — see EventType.Persisted. They are fields of
 	// EventRecord anyway because EventRecord is the whole of how an event is
@@ -209,4 +217,14 @@ type EventRecord struct {
 // NewEventRecord creates an EventRecord from an AgentEvent.
 func NewEventRecord(event AgentEvent) EventRecord {
 	return event.ToRecord()
+}
+
+// WorkRef names a work item as it was when a call acted on it: its id, its
+// type (story, task, job) and its title at that moment. It is an event's, so
+// it carries no status — whatever is true of the work now is the work store's,
+// read by id (docs/tool-call-model.md, "A call on Pockode's own work").
+type WorkRef struct {
+	ID    string `json:"id"`
+	Type  string `json:"type"`
+	Title string `json:"title"`
 }

@@ -1,12 +1,15 @@
 import { Bot, ListChecks } from "lucide-react";
-import { useCallback } from "react";
-import { subagentNow } from "../../lib/subagentRun";
+import { hasProcess, subagentNow } from "../../lib/subagentRun";
 import { toolSummary } from "../../lib/toolSummary";
 import type { AgentsOverview, PlanOverview } from "../../lib/turnOverview";
 import { planLineLabel, planLineWords } from "../../lib/turnOverview";
 import type { ToolRun } from "../../types/message";
 import { CollapsibleBody } from "../ui";
 import { BareBody, BareRow } from "./BareRow";
+import {
+	SUBAGENT_OPENER_ATTR,
+	useOpenSubagentTranscript,
+} from "./subagentTranscriptContext";
 import { LatestChildLabel, subagentHeader } from "./TaskItem";
 import { planTodos, TodoChecklist } from "./ToolInvocation";
 import {
@@ -96,20 +99,6 @@ function agentsLabel(count: number): string {
 }
 
 /**
- * Goes to an agent from the agents line. Today that is its row, opened with
- * its Process; one callback, so the subagent's own transcript can take the
- * press over later without anything else here changing.
- */
-function useOpenAgent(): ((toolUseId: string) => void) | null {
-	const goToCall = useGoToCall();
-	const openAgent = useCallback(
-		(toolUseId: string) => goToCall?.(toolUseId, { openTarget: true }),
-		[goToCall],
-	);
-	return goToCall ? openAgent : null;
-}
-
-/**
  * The named agent and what it is doing now. Its own component because the
  * unfiled children are read by hook, per run.
  */
@@ -134,22 +123,23 @@ function NamedAgent({ run }: { run: ToolRun }) {
 	);
 }
 
-/** One subagent in the open list: its row's header, drawn again from the run. */
-function AgentEntry({
-	run,
-	onOpen,
-}: {
-	run: ToolRun;
-	onOpen: (toolUseId: string) => void;
-}) {
+/**
+ * One subagent in the open list: its row's header, drawn again from the run.
+ * A press opens the subagent's transcript, where its work is read whole — or,
+ * for one with no work to show there (no ⤢ on its row either), goes to its row.
+ */
+function AgentEntry({ run }: { run: ToolRun }) {
 	const unfiled = useUnfiledChildren(run.id);
+	const openTranscript = useOpenSubagentTranscript();
+	const goToCall = useGoToCall();
 	const header = subagentHeader(run, unfiled);
+	const toTranscript = openTranscript && hasProcess(run, unfiled);
 	// Starting with the visible words (WCAG 2.5.3): the title, then the detail.
 	const label = [
 		header.summary.title,
 		header.summary.detail + header.summary.detailTail,
 		toolStatusWord(run.status),
-		"go to its row",
+		toTranscript ? "open its transcript" : "go to its row",
 	]
 		.filter(Boolean)
 		.join(", ");
@@ -159,10 +149,17 @@ function AgentEntry({
 				expanded={false}
 				toggleable={false}
 				noLead
-				onToggle={() => onOpen(run.id)}
+				onToggle={(event) =>
+					toTranscript
+						? openTranscript(run.id, event.currentTarget)
+						: goToCall?.(run.id)
+				}
 				glyph={header.glyph}
 				error={header.failed}
 				label={label}
+				// Focus comes back here when the transcript closes, or to the ⤢
+				// standing for the same run if this entry has gone meanwhile.
+				data={toTranscript ? { [SUBAGENT_OPENER_ATTR]: run.id } : undefined}
 			>
 				<span className="flex items-baseline gap-1.5">
 					<ToolRowFirstLine {...header.firstLine} />
@@ -174,7 +171,8 @@ function AgentEntry({
 }
 
 function AgentsLine({ agents }: { agents: AgentsOverview }) {
-	const openAgent = useOpenAgent();
+	// Outside a transcript there is nowhere to go, and the list is not drawn.
+	const inTranscript = useGoToCall() !== null;
 	return (
 		<>
 			<BareRow
@@ -195,11 +193,11 @@ function AgentsLine({ agents }: { agents: AgentsOverview }) {
 				</span>
 			</BareRow>
 			<CollapsibleBody expanded={agents.expanded}>
-				{agents.entries.length > 0 && openAgent && (
+				{agents.entries.length > 0 && inTranscript && (
 					<BareBody>
 						<ul aria-label="Agents" className="divide-y divide-th-border">
 							{agents.entries.map((run) => (
-								<AgentEntry key={run.id} run={run} onOpen={openAgent} />
+								<AgentEntry key={run.id} run={run} />
 							))}
 						</ul>
 					</BareBody>

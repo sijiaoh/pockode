@@ -1,32 +1,51 @@
-import { ChevronRight } from "lucide-react";
-import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
-import type { FullScreenSource } from "../../lib/fullScreen";
-import { collectPartsDeep, findToolRunPath } from "../../lib/partTree";
+import { ChevronRight, Maximize2 } from "lucide-react";
+import { type ReactNode, useState } from "react";
+import { collectPartsWithin, findToolRunPath } from "../../lib/partTree";
 import {
 	countSteps,
+	hasProcess,
+	isLiveRun,
+	isPendingCard,
 	type LatestChild,
+	processChildren,
+	recentSteps,
+	resumedRun,
 	type SubagentLine,
 	subagentLine,
-	subagentReport,
 	type UnfiledChildren,
-	withoutEchoedReport,
 } from "../../lib/subagentRun";
-import { toolRunText, toolSecondLine, toolUsesLabel } from "../../lib/toolRun";
+import { toolSecondLine, toolUsesLabel } from "../../lib/toolRun";
 import {
 	SUBAGENT_TITLE,
-	subagentType,
+	subagentPossessive,
 	taskPrompt,
 	toolSummary,
-	toolSummaryLine,
 } from "../../lib/toolSummary";
-import { useWSStore } from "../../lib/wsStore";
 import type { ContentPart, ToolRun } from "../../types/message";
 import { formatTokens } from "../../utils/tokens";
-import { ClampedContent, CollapsibleBody, MarkdownContent } from "../ui";
-import { HeaderlessMainBlock } from "./HeaderlessMainBlock";
+import {
+	ClampedContent,
+	CollapsibleBody,
+	headerButtonClass,
+	MarkdownContent,
+} from "../ui";
+import { FactsLine, SubagentConclusion } from "./SubagentConclusion";
+import { StepCallLabel, SubagentStepWindow } from "./SubagentStepWindow";
+import { useStepWindowLines } from "./stepWindowContext";
+import { useSubagentResume } from "./subagentResumesContext";
+import {
+	SUBAGENT_OPENER_ATTR,
+	useOpenSubagentTranscript,
+} from "./subagentTranscriptContext";
 import { PartBlocks } from "./ToolList";
-import { ToolOutcomeSections } from "./ToolOutcomeSections";
-import { Detail, ToolMeta, ToolRow, ToolStatusGlyph } from "./ToolRow";
+import {
+	AgentTitle,
+	Detail,
+	RowSubline,
+	ToolMeta,
+	ToolRow,
+	ToolStatusGlyph,
+} from "./ToolRow";
 import { useRevealRequest } from "./toolJumpContext";
 import { useTranscriptView } from "./transcriptViewContext";
 import { useUnfiledChildren } from "./unfiledChildrenContext";
@@ -41,9 +60,10 @@ interface Props {
 	/**
 	 * Draws one child exactly as the main transcript draws a part, so a `Grep`
 	 * reads the same whoever ran it. The renderer lives with the transcript's,
-	 * which is why it is handed in rather than imported.
+	 * which is why it is handed in rather than imported. `asker` is a pending
+	 * card's asker line, for one a nested subagent asked.
 	 */
-	renderChild: (part: ContentPart) => ReactNode;
+	renderChild: (part: ContentPart, asker?: ReactNode) => ReactNode;
 }
 
 /**
@@ -54,35 +74,37 @@ interface Props {
 const MAX_INDENTED_LEVELS = 3;
 
 /**
- * A pending permission card is never drawn inside a Process: the Process is
- * closed by default, and a card in it would leave a session waiting on someone
- * who cannot see why. The outermost subagent row draws it instead.
+ * Which subagent asked, on a card from deeper down than the row it is drawn
+ * under: named as that subagent's own row names it, but in the secondary
+ * colour — an accent title over the card's own would make two rows of one card
+ * (docs/tool-call-ui.md#when-a-step-asks-the-user).
  */
-function isPendingCard(part: ContentPart): boolean {
-	return part.type === "permission_request" && part.status === "pending";
+function AskerLine({ asker }: { asker: ToolRun }) {
+	const summary = toolSummary(asker.name, asker.input, "");
+	return (
+		<RowSubline above>
+			<span className="flex min-w-0 items-baseline gap-1.5">
+				<AgentTitle
+					title={summary.title}
+					spoken="Asked by "
+					className="text-th-text-secondary"
+				/>
+				<Detail
+					detail={summary.detail}
+					detailTail={summary.detailTail}
+					mono={summary.mono}
+				/>
+			</span>
+		</RowSubline>
+	);
 }
 
 /** The latest child, worded as its own row would word it — never red. */
 export function LatestChildLabel({ child }: { child: LatestChild }) {
-	const workDir = useWSStore((state) => state.workDir);
 	if (child.kind === "text") {
 		return <span className="min-w-0 truncate">{child.text}</span>;
 	}
-	const summary = toolSummary(child.name, child.input, workDir);
-	return (
-		<>
-			{/* Secondary rather than the accent the row's own title wears: two
-			    accent titles on one row would make the child read as the row. */}
-			<span className="shrink-0 text-th-text-secondary">
-				{summary.chip ? `${summary.title} ${summary.chip}` : summary.title}
-			</span>
-			<Detail
-				detail={summary.detail}
-				detailTail={summary.detailTail}
-				mono={summary.mono}
-			/>
-		</>
-	);
+	return <StepCallLabel name={child.name} input={child.input} />;
 }
 
 /**
@@ -90,7 +112,7 @@ export function LatestChildLabel({ child }: { child: LatestChild }) {
  * yields width: on a narrow phone the latest child is cut to a few characters
  * and the count — the half that answers "is it moving" — is still there.
  */
-function SubagentLineContent({ line }: { line: SubagentLine }) {
+export function SubagentLineContent({ line }: { line: SubagentLine }) {
 	const count = line.toolUses > 0 && (
 		<span className="shrink-0">{toolUsesLabel(line.toolUses)}</span>
 	);
@@ -124,95 +146,42 @@ function SubagentLineContent({ line }: { line: SubagentLine }) {
  * A subagent row's first and second line, as `ToolRow` takes them. The row and
  * an entry in the agents list both draw from this
  * (docs/turn-progress-ui.md#43-the-agents-line), so they cannot say different
- * things about one run.
+ * things about one run. `rowRun` is the run as its row draws it — a resumed
+ * subagent's on its resume (`resumedRun`); `stepWindow` is the row's step
+ * window, when it draws one.
  */
-export function subagentHeader(run: ToolRun, unfiled?: UnfiledChildren) {
+export function subagentHeader(
+	rowRun: ToolRun,
+	unfiled?: UnfiledChildren,
+	stepWindow?: ReactNode,
+) {
 	// No work directory: a subagent call is summarised from its description, and
 	// there is no path in it for one to shorten.
-	const summary = toolSummary(run.name, run.input, "");
-	const line = subagentLine(run, unfiled);
-	const failed = run.status === "error";
+	const summary = toolSummary(rowRun.name, rowRun.input, "");
+	const line = subagentLine(rowRun, unfiled, stepWindow !== undefined);
+	const failed = rowRun.status === "error";
 	return {
 		summary,
 		failed,
-		glyph: <ToolStatusGlyph status={run.status} name={SUBAGENT_TITLE} />,
+		glyph: <ToolStatusGlyph status={rowRun.status} name={SUBAGENT_TITLE} />,
 		firstLine: {
 			title: summary.title,
 			agent: true,
-			background: run.fromBackground,
+			background: rowRun.fromBackground,
 			detail: summary.detail,
-			meta: <ToolMeta run={run} />,
+			meta: <ToolMeta run={rowRun} />,
 			error: failed,
 		},
+		// Its own line where it has one; the shared one stands otherwise.
 		secondLine: {
 			richSecondLine: line && {
 				content: <SubagentLineContent line={line} />,
 				live: line.live,
+				below: stepWindow,
 			},
-			// With a line of its own the row copies nothing in the body. Without,
-			// the shared one stands — except that it ends a failed run with the
-			// last line of its text, and here that text is the report, which the
-			// row opens in full below: a worse second copy, in mono because the
-			// shared rule expects machine output. A backgrounded failure keeps it,
-			// being the one failed row whose body does not open.
-			secondLine:
-				line || (failed && !run.fromBackground) ? null : toolSecondLine(run),
+			secondLine: line ? null : toolSecondLine(rowRun),
 		},
 	};
-}
-
-/**
- * What the row leaves out, for the reader who needs to quote it back: the
- * subagent's id, which resuming it takes, and its full type where the title
- * shortened it — or where only the result named it.
- */
-function FactsLine({ run, title }: { run: ToolRun; title: string }) {
-	const type = subagentType(run.input) ?? run.subagent?.agentType;
-	const agentId = run.subagent?.agentId;
-	const showType = type !== undefined && type !== title;
-	if (!showType && !agentId) return null;
-	return (
-		<p className="border-t border-th-border p-2 text-th-text-muted">
-			{showType && type}
-			{showType && agentId && " · "}
-			{agentId && (
-				<>
-					agent <span className="break-all font-mono">{agentId}</span>
-				</>
-			)}
-		</p>
-	);
-}
-
-/**
- * What an empty body says, which depends on why it is empty. A subagent that
- * failed or was cut short reported nothing either, and telling the reader it
- * "is still working" is the same lie the spinner used to tell — the row above
- * has already settled.
- *
- * A settled backgrounded subagent gets its own sentence, because the others
- * would all put the silence down to the subagent: its call returned a
- * placeholder, and how it ended is the outcome under its own label below.
- */
-function emptyReport(run: ToolRun, hasOutcome: boolean): string {
-	// Only with an outcome to point at: one backgrounded and then cut short
-	// before it reported has none, and the status sentences below say why.
-	if (run.fromBackground && run.status !== "background" && hasOutcome) {
-		return "The subagent ran in the background; how it ended is under Outcome below.";
-	}
-	switch (run.status) {
-		case "running":
-		case "background":
-			return "No report yet — the subagent is still working.";
-		case "interrupted":
-			return run.lostWithProcess
-				? "The CLI process ended before the subagent reported anything."
-				: "The turn was interrupted before the subagent reported anything.";
-		case "error":
-			return "The subagent failed without reporting anything.";
-		default:
-			return "The subagent finished without reporting anything.";
-	}
 }
 
 /**
@@ -225,7 +194,8 @@ function emptyReport(run: ToolRun, hasOutcome: boolean): string {
  *
  * What the subagent itself said and did is filed under the row as its
  * children, and drawn behind a Process disclosure that nothing but the user
- * opens (docs/tool-call-ui.md#a-subagents-own-work).
+ * opens — as is the body itself, failed or not: a failure says why on the row
+ * (docs/tool-call-ui.md#a-subagents-own-work).
  */
 function TaskItem({ run, depth = 0, renderChild }: Props) {
 	const [expanded, setExpanded] = useState(false);
@@ -234,94 +204,57 @@ function TaskItem({ run, depth = 0, renderChild }: Props) {
 	const view = useTranscriptView();
 	// A jump to one of the subagent's steps opens the row and its Process; the
 	// lists inside open their groups themselves, at whatever depth.
-	// A jump that asks for the row itself to open — going to an agent from the
-	// agents line — opens it and its Process the same way.
-	useRevealRequest(({ toolUseId, openTarget }) => {
-		const isTarget = openTarget && toolUseId === run.id;
-		if (!isTarget && !findToolRunPath(run.children ?? [], toolUseId)) return;
+	useRevealRequest((toolUseId) => {
+		if (!findToolRunPath(run.children ?? [], toolUseId)) return;
 		setExpanded(true);
 		setProcessExpanded(true);
 	});
-	const unfiled = useUnfiledChildren(run.id);
-	const header = subagentHeader(run, unfiled);
-	const { summary, failed } = header;
 	const prompt = taskPrompt(run.input);
-	// A backgrounded Task's text is not its report: the subagent's own account
-	// never reached this client, and what did arrive is the notification that
-	// said how it ended. Drawing that as the report — which is what this body
-	// used to do — asserts the agent read something it never did, so it goes
-	// under its own label below instead.
-	const text = toolRunText(run);
-	const outcome = run.fromBackground ? text : "";
-	const report = run.fromBackground ? "" : subagentReport(text);
 	const nested = depth > 0;
-	const fullScreenTitle = toolSummaryLine(summary);
-	const reportSource = useMemo<FullScreenSource | undefined>(
-		() =>
-			report
-				? {
-						title: fullScreenTitle,
-						label: "Report",
-						noun: "report",
-						from: "start",
-						copyText: report,
-						content: { kind: "markdown", markdown: report },
-					}
-				: undefined,
-		[report, fullScreenTitle],
-	);
-	const reportKey = `report:${run.id}`;
-	const outcomeFullScreen = useMemo(
-		() =>
-			outcome
-				? {
-						key: `${run.id}:result`,
-						title: fullScreenTitle,
-						content: { kind: "markdown" as const, markdown: outcome },
-					}
-				: undefined,
-		[outcome, run.id, fullScreenTitle],
-	);
+	const openTranscript = useOpenSubagentTranscript();
 
 	const children = run.children ?? [];
+	const unfiled = useUnfiledChildren(run.id);
 	const steps = countSteps(children) + (unfiled?.steps ?? 0);
+	// The row says what the subagent is doing now, which a resumed one is
+	// doing under the call that resumed it; the body keeps what it reported.
+	const resume = useSubagentResume(run.id);
+	const rowRun = resume ? resumedRun(run, resume) : run;
+	// The step window, by the list's rules, and not while the Process is open
+	// inline: that shows the same steps whole
+	// (docs/tool-call-ui.md#the-step-window).
+	const windowLines = useStepWindowLines(rowRun);
+	const windowSteps =
+		expanded && processExpanded
+			? []
+			: recentSteps([...children, ...(unfiled?.parts ?? [])], windowLines);
+	const header = subagentHeader(
+		rowRun,
+		unfiled,
+		windowSteps.length > 0 ? (
+			<SubagentStepWindow steps={windowSteps} frozen={!isLiveRun(rowRun)} />
+		) : undefined,
+	);
+	const { summary } = header;
 	// The report — or a backgrounded subagent's outcome, which is its last
 	// words delivered after the call returned (Claude's notification summary,
 	// measured on claude 2.1.286) — is drawn in full above the Process, and
 	// not again at its end.
-	const shownChildren = withoutEchoedReport(children, report || outcome)
-		.filter((part) => !isPendingCard(part))
-		.map((part) => ({ part }));
-	const hasProcess = shownChildren.length > 0 || (unfiled?.count ?? 0) > 0;
+	const shownChildren = processChildren(run).map((part) => ({ part }));
+	const showProcess = hasProcess(run, unfiled);
 	// Cards from every depth, so a subagent's subagent asking is not hidden
 	// under a row that is itself inside a closed Process. Only the outermost
-	// row collects them: it is the one the user can always see.
-	const pendingCards = nested ? [] : collectPartsDeep(children, isPendingCard);
-	const processLabel =
-		summary.title === SUBAGENT_TITLE
-			? "Subagent's process"
-			: `${summary.title} subagent's process`;
+	// row collects them: it is the one the user can always see. The innermost
+	// subagent a card was found in is the one that asked.
+	const pendingCards = nested
+		? []
+		: collectPartsWithin(children, isPendingCard).map(({ part, within }) => ({
+				part,
+				asker: within.at(-1),
+			}));
+	const processLabel = `${subagentPossessive(summary.title)} process`;
+	const transcriptLabel = `Open ${subagentPossessive(summary.title)} transcript`;
 	const level = depth + 1;
-
-	// A failure has to be read, but only pries the body open once — after that
-	// the user's own choice to collapse it stands.
-	//
-	// Kept here after the tool row dropped it, because the two are not the same
-	// case: a tool call failing is ordinary trial and error and its output is one
-	// line away on the row, while a subagent failing is rare and its report — the
-	// only account of what went wrong — exists nowhere but this body.
-	//
-	// Not inside a Process: there the row is mid-transcript by definition, and
-	// the outer subagent has already dealt with the failure — its red row says
-	// so, and the outer report is the account.
-	const autoExpandedRef = useRef(false);
-
-	useEffect(() => {
-		if (failed && !nested && !autoExpandedRef.current) {
-			autoExpandedRef.current = true;
-			setExpanded(true);
-		}
-	}, [failed, nested]);
 
 	return (
 		<div className="text-xs" data-tool-use-id={run.id}>
@@ -335,71 +268,57 @@ function TaskItem({ run, depth = 0, renderChild }: Props) {
 
 			{pendingCards.length > 0 && (
 				// Between the row and its body, outside the collapsible: visible
-				// whether the row is open or not, and inside this item's DOM, which
-				// is what tells a screen reader whose request it is.
+				// whether the row is open or not.
 				<div className="px-2 pb-2">
 					<PartBlocks
-						items={pendingCards.map((part) => ({ part }))}
-						renderPart={({ part }) => renderChild(part)}
+						items={pendingCards}
+						renderPart={({ part, asker }) =>
+							renderChild(part, asker && <AskerLine asker={asker} />)
+						}
 					/>
 				</div>
 			)}
 
 			<CollapsibleBody expanded={expanded}>
 				<div className="row-ground-secondary border-t border-th-border bg-th-bg-secondary">
-					{/* The note belongs to the report it qualifies, not to the row:
-					    on a phone a fixed-width label there truncates the
-					    description away to nothing. */}
-					{run.status === "interrupted" && report && (
-						<p className="px-2 pt-2 text-th-text-muted">
-							Returned after the turn was interrupted.
-						</p>
-					)}
-					{report ? (
-						<div className="p-2">
-							<HeaderlessMainBlock
-								name="report"
-								fullScreenKey={reportKey}
-								source={reportSource}
-								view={view}
-							>
-								<MarkdownContent content={report} />
-							</HeaderlessMainBlock>
-						</div>
-					) : (
-						// A backgrounded subagent's outcome below is its report, and
-						// says so in its own label; a sentence about it would only
-						// stand between the reader and it.
-						!(outcome && !failed) && (
-							<p className="p-2 text-th-text-muted">
-								{emptyReport(run, outcome !== "")}
-							</p>
-						)
-					)}
-					{/* After the report, before the prompt: the report is the
-					    subagent's conclusion, and what a later call fetched of its raw
-					    output is evidence for it. */}
-					<ToolOutcomeSections
-						run={run}
-						outcome={outcome && <MarkdownContent content={outcome} />}
-						outcomeFullScreen={outcomeFullScreen}
-						block
-					/>
-					{hasProcess && (
+					<SubagentConclusion run={run} />
+					{showProcess && (
 						<div className="border-t border-th-border">
-							<button
-								type="button"
-								onClick={() => setProcessExpanded(!processExpanded)}
-								aria-expanded={processExpanded}
-								className="flex w-full items-center gap-1.5 p-2 text-left hover:bg-th-overlay-hover"
-							>
-								<ChevronRight
-									className={`size-3 shrink-0 text-th-text-muted transition-transform ${processExpanded ? "rotate-90" : ""}`}
-								/>
-								<span className="text-th-text-muted">
-									{steps > 0 ? `Process · ${toolUsesLabel(steps)}` : "Process"}
-								</span>
-							</button>
+							{/* Two buttons on one line, side by side rather than one
+							    inside the other: the heading opens the Process inline,
+							    the ⤢ opens it as a transcript of its own
+							    (docs/subagent-transcript-ui.md#the-way-in). */}
+							<div className="flex items-center">
+								<button
+									type="button"
+									onClick={() => setProcessExpanded(!processExpanded)}
+									aria-expanded={processExpanded}
+									className="flex min-w-0 flex-1 items-center gap-1.5 p-2 text-left hover:bg-th-overlay-hover"
+								>
+									<ChevronRight
+										className={`size-3 shrink-0 text-th-text-muted transition-transform ${processExpanded ? "rotate-90" : ""}`}
+									/>
+									<span className="text-th-text-muted">
+										{steps > 0
+											? `Process · ${toolUsesLabel(steps)}`
+											: "Process"}
+									</span>
+								</button>
+								{openTranscript && (
+									<button
+										type="button"
+										onClick={(event) =>
+											openTranscript(run.id, event.currentTarget)
+										}
+										aria-label={transcriptLabel}
+										title={transcriptLabel}
+										{...{ [SUBAGENT_OPENER_ATTR]: run.id }}
+										className={`${headerButtonClass()} mr-1 shrink-0 hover:text-th-text-primary`}
+									>
+										<Maximize2 size={14} aria-hidden="true" />
+									</button>
+								)}
+							</div>
 							<CollapsibleBody expanded={processExpanded}>
 								{/* Neither clamped nor scrolling: the rows inside open into
 								    bodies of their own, which a clamp would hide behind a
@@ -447,15 +366,13 @@ function TaskItem({ run, depth = 0, renderChild }: Props) {
 							<CollapsibleBody expanded={promptExpanded}>
 								<div className="p-2">
 									<ClampedContent name="prompt" view={view}>
-										<pre className="whitespace-pre-wrap text-th-text-muted">
-											{prompt}
-										</pre>
+										<MarkdownContent content={prompt} variant="note" />
 									</ClampedContent>
 								</div>
 							</CollapsibleBody>
 						</div>
 					)}
-					<FactsLine run={run} title={summary.title} />
+					<FactsLine run={run} />
 				</div>
 			</CollapsibleBody>
 		</div>

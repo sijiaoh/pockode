@@ -114,7 +114,7 @@ statement; its layout, arming, receipt and fallback are in
 | 1 | `permission` blocker | `Lock` | {tool} [+N] {detail} — the request on one line, the summary a jump to its card ([lifecycle-ui.md §2.2](lifecycle-ui.md#the-permission-row)) | **Deny** **Allow** (plan: **Review**) |
 | 2 | `unanswered.length > 0` | `CircleHelp` | "1 question is waiting for your answer." / "{n} questions are waiting for your answer." | **Answer** |
 | 3 | a message went into a turn already open, unread so far | `CornerDownRight` | "Sent — the agent has not read it yet." | — |
-| 4 | `background` blocker | `Hourglass` | "Waiting on a background task — nothing to answer." | "Details" (expands) |
+| 4 | `background` blocker | `Hourglass` | "Waiting on {task} · nothing to answer." — the task named when one is loaded ([lifecycle-ui.md §2.2](lifecycle-ui.md#22-chat-the-attention-strip)) | "Details" (expands) |
 
 **Permission stays first**, and now for a sharper reason than precedence: it is
 the only row left that the composer is disabled under, and it is the only state
@@ -1339,8 +1339,9 @@ registry as `useIsPageCovered` but not the same question:
   its sheet. Never by its own sheet — the sheet is a layer, and a shield would
   cover the very page it shows, which could then never be pressed: the page in
   the full-screen viewer. Nor by a layer it was opened over. A sheet gives its
-  layer to its content for this (`CoverLayerContext`, internal to the shared
-  package), which is why the registry is ordered rather than a count.
+  layer to its content for this (`CoverLayerContext`, exported so a layer of a
+  project's own — a level of a subagent's transcript — gives its layer the same
+  way), which is why the registry is ordered rather than a count.
 
 The rule is unit-tested in `web/src/components/ui/pageCover.test.tsx`.
 

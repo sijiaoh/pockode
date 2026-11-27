@@ -272,6 +272,7 @@ function sliceChange(change: ProposedChangeData): ProposedChangeData {
 			return { ...change, changes };
 		}
 		case "write":
+		case "notebook":
 			return change;
 	}
 }

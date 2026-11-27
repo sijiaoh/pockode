@@ -3,8 +3,11 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useDiffSettingsStore } from "../../lib/diffSettingsStore";
 import type { ContentPart, ToolRun } from "../../types/message";
+import { OpenWorkDetailContext } from "./openWorkDetailContext";
+import { StopTargetsContext } from "./stopTargetsContext";
 import ToolCallItem from "./ToolCallItem";
 import { PartBlocks } from "./ToolList";
+import { ToolJumpContext } from "./toolJumpContext";
 import { TranscriptViewContext } from "./transcriptViewContext";
 
 const mockWorkDir = vi.hoisted(() => ({ value: "/Users/test/project" }));
@@ -913,7 +916,14 @@ describe("ToolCallItem", () => {
 				const user = userEvent.setup();
 				draw({
 					...background,
-					fetches: [{ id: "f1", result: "tick 417\ntick 418\n" }],
+					fetches: [
+						{
+							id: "f1",
+							state: "returned",
+							waits: true,
+							result: "tick 417\ntick 418\n",
+						},
+					],
 				});
 
 				// On the row, and in its accessible name: a fetch does not move
@@ -936,7 +946,9 @@ describe("ToolCallItem", () => {
 					...background,
 					status: "success",
 					result: "Build succeeded",
-					fetches: [{ id: "f1", result: "tick 418" }],
+					fetches: [
+						{ id: "f1", state: "returned", waits: true, result: "tick 418" },
+					],
 				});
 
 				await user.click(screen.getByRole("button", { expanded: false }));
@@ -960,9 +972,9 @@ describe("ToolCallItem", () => {
 				draw({
 					...background,
 					fetches: [
-						{ id: "f1", result: "tick 1" },
-						{ id: "f2", result: "tick 207" },
-						{ id: "f3", result: "tick 418" },
+						{ id: "f1", state: "returned", waits: true, result: "tick 1" },
+						{ id: "f2", state: "returned", waits: true, result: "tick 207" },
+						{ id: "f3", state: "returned", waits: true, result: "tick 418" },
 					],
 				});
 
@@ -985,7 +997,13 @@ describe("ToolCallItem", () => {
 					...background,
 					output: "tick 2\n",
 					fetches: [
-						{ id: "f1", result: "Task bsbvhgo40 not found", isError: true },
+						{
+							id: "f1",
+							state: "returned",
+							waits: true,
+							result: "Task bsbvhgo40 not found",
+							isError: true,
+						},
 					],
 				});
 
@@ -1004,7 +1022,10 @@ describe("ToolCallItem", () => {
 
 			it("says so when the fetch came back with nothing", async () => {
 				const user = userEvent.setup();
-				draw({ ...background, fetches: [{ id: "f1", result: "" }] });
+				draw({
+					...background,
+					fetches: [{ id: "f1", state: "returned", waits: true, result: "" }],
+				});
 
 				await user.click(screen.getByRole("button", { expanded: false }));
 				expect(screen.getByText("Fetched output · nothing yet")).toBeVisible();
@@ -1020,6 +1041,8 @@ describe("ToolCallItem", () => {
 					fetches: [
 						{
 							id: "f1",
+							state: "returned",
+							waits: true,
 							result: "",
 							contents: [{ type: "file", file: { mime: "image/png" } }],
 						},
@@ -1035,10 +1058,63 @@ describe("ToolCallItem", () => {
 			// short. An empty heading would be noise about nothing.
 			it("draws nothing for a fetch that never returned", async () => {
 				const user = userEvent.setup();
-				draw({ ...background, fetches: [{ id: "f1" }] });
+				draw({
+					...background,
+					fetches: [{ id: "f1", state: "interrupted", waits: true }],
+				});
 
 				await user.click(screen.getByRole("button", { expanded: false }));
 				expect(screen.queryByText(/Fetched output/)).toBeNull();
+			});
+
+			// A fetch in flight is said as the fetch: its own line and its own
+			// counter, while the row's glyph and chip stay the task's.
+			it("says a fetch in flight on the row and in the body", async () => {
+				const user = userEvent.setup();
+				draw({
+					...background,
+					fetches: [
+						{
+							id: "f1",
+							state: "running",
+							waits: true,
+							seenAt: new Date(Date.now() - 12_000),
+						},
+					],
+				});
+
+				expect(screen.getByText("Waiting for output…")).toBeVisible();
+				expect(screen.getByText("· 12s")).toBeVisible();
+				expect(screen.getByText("background")).toBeVisible();
+
+				await user.click(screen.getByRole("button", { expanded: false }));
+				expect(screen.getByText("Fetched output · waiting…")).toBeVisible();
+				expect(
+					screen.getByText("Waiting for the task's output."),
+				).toBeVisible();
+			});
+
+			it("numbers a fetch still waiting among several", async () => {
+				const user = userEvent.setup();
+				draw({
+					...background,
+					fetches: [
+						{ id: "f1", state: "returned", waits: true, result: "tick 1" },
+						{ id: "f2", state: "running", waits: true },
+					],
+				});
+
+				await user.click(screen.getByRole("button", { expanded: false }));
+				expect(screen.getByText("Fetch 2 · waiting…")).toBeVisible();
+			});
+
+			// A line the fetch opened is not taken away by the fetch ending.
+			it("keeps the row's line when a fetch ends with nothing to show", () => {
+				draw({
+					...background,
+					fetches: [{ id: "f1", state: "interrupted", waits: true }],
+				});
+				expect(screen.getByText("Output not read")).toBeVisible();
 			});
 
 			// A background row is by definition not at the tail of the transcript,
@@ -1051,7 +1127,9 @@ describe("ToolCallItem", () => {
 					<ToolCallItem
 						run={run({
 							...background,
-							fetches: [{ id: "f1", result: "tick" }],
+							fetches: [
+								{ id: "f1", state: "returned", waits: true, result: "tick" },
+							],
 						})}
 						sessionId="session-1"
 					/>,
@@ -1260,5 +1338,375 @@ describe("ToolCallItem", () => {
 			screen.getByRole("heading", { name: "Ship it" }),
 		).toBeInTheDocument();
 		expect(screen.queryByText(/"plan"/)).not.toBeInTheDocument();
+	});
+});
+
+describe("ToolCallItem for the remaining tool kinds", () => {
+	const open = async () => {
+		await userEvent
+			.setup()
+			.click(screen.getByRole("button", { expanded: false }));
+	};
+
+	it("draws a NotebookEdit as its notebook, then the cell, then the result", async () => {
+		draw({
+			name: "NotebookEdit",
+			input: {
+				notebook_path: "/Users/test/project/a.ipynb",
+				cell_id: "c1",
+				new_source: "x = 1\nprint(x)\n",
+			},
+			status: "success",
+			result: "Updated cell c1 with x = 1",
+		});
+		await open();
+
+		expect(screen.getByRole("group", { name: "File" })).toHaveTextContent(
+			"a.ipynb",
+		);
+		const label = screen.getByText("Cell c1");
+		const result = screen.getByText("Updated cell c1 with x = 1");
+		// The row's meta and the cell's header: one count, the turn card's.
+		expect(screen.getAllByText("+2")).toHaveLength(2);
+		expect(screen.getByText(/print\(x\)/)).toBeVisible();
+		// The cell above the result: what the call wrote, then what it said.
+		expect(
+			label.compareDocumentPosition(result) & Node.DOCUMENT_POSITION_FOLLOWING,
+		).toBeTruthy();
+		expect(screen.getByText("Updated cell c1 with x = 1")).toBeVisible();
+	});
+
+	// Drawn from the input, so the cell is there before the call returns — but
+	// not yet written, so its count is not the green of a change that landed.
+	it("draws a running NotebookEdit's cell, its count plain", async () => {
+		draw({
+			name: "NotebookEdit",
+			input: {
+				notebook_path: "/Users/test/project/a.ipynb",
+				cell_id: "c1",
+				new_source: "x = 1\n",
+			},
+			status: "running",
+		});
+		await open();
+		expect(screen.getByText("Cell c1")).toBeVisible();
+		expect(screen.getByText("x = 1")).toBeVisible();
+		for (const count of screen.getAllByText("+1")) {
+			expect(count).not.toHaveClass("text-th-success");
+		}
+		expect(screen.queryByText("not applied")).toBeNull();
+	});
+
+	it("says a deleted cell's content is not in the call, and wears the mode", async () => {
+		draw({
+			name: "NotebookEdit",
+			input: {
+				notebook_path: "/Users/test/project/a.ipynb",
+				cell_id: "c1",
+				new_source: "",
+				edit_mode: "delete",
+			},
+			status: "success",
+			result: "Deleted cell c1",
+		});
+		expect(screen.getByText("delete")).toBeVisible();
+		await open();
+		expect(
+			screen.getByText("The deleted cell's content is not in this call."),
+		).toBeVisible();
+	});
+
+	// An older CLI picked the cell by position; reading that as a cell would
+	// claim to know which one.
+	it("lists a notebook call of an unknown shape as its arguments", async () => {
+		draw({
+			name: "NotebookEdit",
+			input: {
+				notebook_path: "/Users/test/project/a.ipynb",
+				cell_number: 2,
+				new_source: "x",
+			},
+			status: "success",
+			result: "ok",
+		});
+		await open();
+		expect(screen.getByText("cell_number")).toBeVisible();
+		expect(screen.queryByText(/^Cell/)).toBeNull();
+	});
+
+	const stop = (targets: string[], goToCall = vi.fn()) => {
+		render(
+			<ToolJumpContext value={{ reveal: null, goToCall }}>
+				<StopTargetsContext value={new Set(targets)}>
+					<ToolCallItem
+						run={run({
+							id: "s1",
+							name: "TaskStop",
+							input: { task_id: "b1" },
+							originToolUseId: "bash1",
+							status: "success",
+							result: JSON.stringify({
+								message: "Successfully stopped task: b1 (sleep 40)",
+								task_id: "b1",
+								task_type: "local_bash",
+								command: "sleep 40",
+							}),
+						})}
+						sessionId="session-1"
+					/>
+				</StopTargetsContext>
+			</ToolJumpContext>,
+		);
+		return goToCall;
+	};
+
+	it("says what a stop stopped, and goes to the call that started it", async () => {
+		const goToCall = stop(["bash1"]);
+		await open();
+		expect(
+			screen.getByText("Successfully stopped task: b1 (sleep 40)"),
+		).toBeVisible();
+		expect(screen.getByText("sleep 40")).toBeVisible();
+		await userEvent.setup().click(
+			screen.getByRole("button", {
+				name: "Go to the call that started this task",
+			}),
+		);
+		expect(goToCall).toHaveBeenCalledWith("bash1");
+	});
+
+	it("offers no jump to a call whose row is not loaded", async () => {
+		stop([]);
+		await open();
+		expect(screen.queryByRole("button", { name: /Go to/ })).toBeNull();
+	});
+
+	describe("Codex's own calls", () => {
+		const openBody = async () => {
+			const user = userEvent.setup();
+			await user.click(screen.getByRole("button", { expanded: false }));
+		};
+
+		it("says a Codex search reported nothing of what it found", async () => {
+			draw({
+				name: "WebSearch",
+				input: { query: "vitest" },
+				status: "success",
+				result: "",
+			});
+			await openBody();
+			expect(screen.getByText("Results")).toBeVisible();
+			expect(
+				screen.getByText("Codex does not report what the search found."),
+			).toBeVisible();
+		});
+
+		it("says a Codex page open reported nothing of the page", async () => {
+			draw({
+				name: "WebFetch",
+				input: { url: "https://go.dev/doc/go1.25" },
+				status: "success",
+				result: "",
+			});
+			await openBody();
+			expect(
+				screen.getByText("Codex does not report what the page said."),
+			).toBeVisible();
+		});
+
+		it("draws the links a Codex search did report", async () => {
+			draw({
+				name: "WebSearch",
+				input: { query: "go 1.25" },
+				status: "success",
+				result:
+					'Web search results for query: "go 1.25"\n\nLinks: [{"title":"Go 1.25 Release Notes","url":"https://go.dev/doc/go1.25"}]',
+			});
+			await openBody();
+			expect(screen.getByText("Go 1.25 Release Notes")).toBeVisible();
+			expect(screen.queryByText(/does not report/)).toBeNull();
+		});
+
+		it("shows a generation's prompt once, as its result", async () => {
+			draw({
+				name: "GenerateImage",
+				input: {},
+				status: "success",
+				result: "",
+				contents: [{ type: "text", text: "A blue square on white." }],
+			});
+			await openBody();
+			expect(screen.getByText("Prompt")).toBeVisible();
+			expect(screen.getAllByText("A blue square on white.")).toHaveLength(1);
+			expect(screen.queryByText(/names the prompt/)).toBeNull();
+		});
+
+		it("says a generation that named no prompt did not, with no empty section", async () => {
+			draw({
+				name: "GenerateImage",
+				input: {},
+				status: "success",
+				result: "",
+				contents: [{ type: "file", file: { mime: "image/png" } }],
+			});
+			await openBody();
+			expect(
+				screen.getByText("Codex did not name the prompt it used."),
+			).toBeVisible();
+			expect(screen.queryByText("Prompt")).toBeNull();
+		});
+
+		it("says a running generation's prompt is still to come", async () => {
+			draw({ name: "GenerateImage", input: {} });
+			await openBody();
+			expect(
+				screen.getByText(
+					"Codex names the prompt it used once the image is made.",
+				),
+			).toBeVisible();
+		});
+
+		it("gives a failed generation's reason, not a prompt", async () => {
+			draw({
+				name: "GenerateImage",
+				input: {},
+				status: "error",
+				result: "Image generation limit reached · resets 14:05",
+			});
+			expect(
+				screen.getByText("Image generation limit reached · resets 14:05"),
+			).toBeVisible();
+			await openBody();
+			expect(screen.queryByText("Prompt")).toBeNull();
+		});
+
+		it("says what a sleep asked for", async () => {
+			draw({
+				name: "Sleep",
+				input: { duration_ms: 30000 },
+				status: "success",
+				result: "",
+			});
+			await openBody();
+			expect(screen.getByText("Asked to wait 30s")).toBeVisible();
+		});
+
+		it("draws an agent call by what it did, its prompt, then its agents", async () => {
+			draw({
+				name: "AgentControl",
+				input: {
+					action: "sendMessage",
+					agents: ["/root/file_reader"],
+					prompt: "keep going",
+				},
+				status: "success",
+				result: "/root/file_reader: running",
+			});
+			expect(screen.getByText("Message")).toBeVisible();
+			expect(screen.getByText("file_reader")).toBeVisible();
+			await openBody();
+			expect(screen.getByText("keep going")).toBeVisible();
+			expect(screen.getByText("Agents")).toBeVisible();
+			expect(screen.getByText("/root/file_reader: running")).toBeVisible();
+		});
+	});
+});
+
+describe("Pockode's own work calls", () => {
+	const ref = { id: "w1", type: "task" as const, title: "Design the row" };
+	const drawWork = (overrides: Partial<ToolRun>) => {
+		const onOpen = vi.fn();
+		render(
+			<OpenWorkDetailContext value={onOpen}>
+				<ToolCallItem
+					run={run({ status: "success", result: "ok", ...overrides })}
+					sessionId="session-1"
+				/>
+			</OpenWorkDetailContext>,
+		);
+		return onOpen;
+	};
+
+	it("opens on the work, and Open leads to its page", async () => {
+		const user = userEvent.setup();
+		const onOpen = drawWork({
+			name: "mcp__pockode__task_start",
+			input: { id: "w1" },
+			result: "Started work w1",
+			workRef: ref,
+		});
+		expect(screen.getByText("Start task")).toBeInTheDocument();
+		await user.click(screen.getByRole("button", { expanded: false }));
+		await user.click(
+			screen.getByRole("button", { name: "Open task Design the row" }),
+		);
+		expect(onOpen).toHaveBeenCalledWith("w1");
+		expect(screen.getByText("Started work w1")).toBeInTheDocument();
+		// Every argument is in the line already.
+		expect(screen.queryByText("Parameters")).not.toBeInTheDocument();
+	});
+
+	it("shows a creation's body, and opens the work its result named", async () => {
+		const user = userEvent.setup();
+		const onOpen = drawWork({
+			name: "pockode:task_create",
+			input: { story_id: "s1", title: "Design the row", body: "Draw **it**" },
+			result: 'Created task "Design the row" (ID: w1)',
+			workRef: ref,
+		});
+		await user.click(screen.getByRole("button", { expanded: false }));
+		expect(screen.getByText("Body")).toBeInTheDocument();
+		await user.click(screen.getByRole("button", { name: /^Open task/ }));
+		expect(onOpen).toHaveBeenCalledWith("w1");
+	});
+
+	it("offers no Open on a delete or a failed call", async () => {
+		const user = userEvent.setup();
+		drawWork({
+			name: "mcp__pockode__work_delete",
+			input: { id: "w1" },
+			workRef: ref,
+		});
+		drawWork({
+			name: "mcp__pockode__step_done",
+			input: { id: "w2" },
+			status: "error",
+			result: "work not found",
+		});
+		for (const row of screen.getAllByRole("button", { expanded: false })) {
+			await user.click(row);
+		}
+		expect(
+			screen.getByText("Design the row", { selector: "span.flex-1" }),
+		).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: /^Open/ })).toBeNull();
+	});
+
+	// The client keeps a stamp with no title, for its id; the line falls back
+	// to that id rather than drawing nothing.
+	it("names a stamped work with no title by its id", async () => {
+		const user = userEvent.setup();
+		drawWork({
+			name: "mcp__pockode__step_done",
+			input: { id: "w1" },
+			workRef: { ...ref, title: "" },
+		});
+		await user.click(screen.getByRole("button", { expanded: false }));
+		expect(
+			screen.getByRole("button", { name: "Open task w1" }),
+		).toBeInTheDocument();
+	});
+
+	// A record from before work_ref: the input's id, in mono, still opens.
+	it("names an unstamped call by its input's id", async () => {
+		const user = userEvent.setup();
+		const onOpen = drawWork({
+			name: "mcp__pockode__work_update",
+			input: { id: "w9", title: "New name" },
+		});
+		await user.click(screen.getByRole("button", { expanded: false }));
+		expect(screen.getByText("Parameters")).toBeInTheDocument();
+		await user.click(screen.getByRole("button", { name: "Open work w9" }));
+		expect(onOpen).toHaveBeenCalledWith("w9");
 	});
 });

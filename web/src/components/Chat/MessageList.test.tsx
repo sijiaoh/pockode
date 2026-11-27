@@ -478,7 +478,7 @@ describe("the jump the attention strip borrows", () => {
 
 	// The strip's background row goes to a task's row the same way, from
 	// outside the transcript (docs/lifecycle-ui.md §2.2).
-	it("jumps to a call's row and opens a subagent's row and Process when asked", () => {
+	it("jumps to a call's row from outside the transcript", () => {
 		const ref = createRef<MessageListHandle>();
 		render(
 			<MessageList
@@ -496,10 +496,9 @@ describe("the jump the attention strip borrows", () => {
 								id: "part-a",
 								tool: {
 									id: "a",
-									name: "Agent",
-									input: { description: "Review", subagent_type: "Explore" },
+									name: "Bash",
+									input: { command: "pnpm run dev" },
 									status: "background",
-									children: [{ type: "text", id: "c", content: "Reading." }],
 								},
 							},
 						],
@@ -508,17 +507,11 @@ describe("the jump the attention strip borrows", () => {
 			/>,
 		);
 
-		act(() => ref.current?.jumpToCall("a", { openTarget: true }));
+		act(() => ref.current?.jumpToCall("a"));
 
 		const row = document.querySelector('[data-tool-use-id="a"]');
 		expect(row).toHaveClass("jump-highlight");
-		const rowButton = row?.querySelector("button");
-		expect(rowButton).toHaveFocus();
-		expect(rowButton).toHaveAttribute("aria-expanded", "true");
-		expect(screen.getByRole("button", { name: /^Process/ })).toHaveAttribute(
-			"aria-expanded",
-			"true",
-		);
+		expect(row?.querySelector("button")).toHaveFocus();
 	});
 
 	it("moves the highlight rather than leaving it on the previous target", () => {

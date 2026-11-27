@@ -1,7 +1,17 @@
 import { Check, Circle, Loader2 } from "lucide-react";
 import { useMemo, useState } from "react";
 import { codexChangePaths } from "../../lib/codexChanges";
+import {
+	AGENT_CONTROL_TOOL,
+	agentControlInput,
+	GENERATE_IMAGE_TOOL,
+	generateImagePrompt,
+	SLEEP_TOOL,
+	sleepRequestLine,
+} from "../../lib/codexTools";
 import type { FullScreenSource } from "../../lib/fullScreen";
+import { pockodeWorkTool } from "../../lib/pockodeWorkTools";
+import { proposedChange } from "../../lib/proposedChange";
 import { CodeHighlighter } from "../../lib/shikiUtils";
 import { outputLineCount } from "../../lib/textLines";
 import { fileToolPath, PLAN_TOOL_NAME, pathParts } from "../../lib/toolSummary";
@@ -120,6 +130,11 @@ export type InvocationView =
 	| { kind: "todos"; todos: Todo[]; explanation?: string }
 	| { kind: "params"; entries: Array<[string, unknown]> }
 	| { kind: "text"; text: string }
+	| { kind: "markdown"; label: string; markdown: string }
+	/** A line about the call standing in for its input, with no header. */
+	| { kind: "note"; text: string }
+	/** Nothing beyond what the body's other lines already say. */
+	| { kind: "none" }
 	| { kind: "json" };
 
 export function invocationView(
@@ -164,6 +179,34 @@ export function invocationView(
 		};
 	}
 
+	// Codex's own calls (lib/codexTools.ts). Each is read as the one thing it
+	// asked; an input in another shape keeps every argument, below.
+	if (toolName === SLEEP_TOOL) {
+		const line = sleepRequestLine(input);
+		if (line) return { kind: "note", text: line };
+	}
+	if (toolName === GENERATE_IMAGE_TOOL) {
+		const prompt = generateImagePrompt(input);
+		return prompt
+			? { kind: "text", text: prompt }
+			: {
+					kind: "note",
+					text: "Codex names the prompt it used once the image is made.",
+				};
+	}
+	if (toolName === AGENT_CONTROL_TOOL) {
+		const { prompt } = agentControlInput(input);
+		if (prompt) return { kind: "markdown", label: "Prompt", markdown: prompt };
+	}
+
+	// A Pockode work tool's body opens on the work (`WorkRefLine`), so of its
+	// input only what that line does not say is worth reading.
+	const workTool = pockodeWorkTool(toolName);
+	if (workTool) {
+		const view = workToolInvocation(workTool.tool, input);
+		if (view) return view;
+	}
+
 	// Before the path branch, exactly as `toolSummary` orders them: a search's
 	// `path` is the scope it ran in, not what it was looking for. Taking that
 	// branch first would leave the pattern — the whole of what the row
@@ -180,6 +223,16 @@ export function invocationView(
 
 	const filePath = fileToolPath(toolName, input);
 	if (filePath) return { kind: "paths", paths: [filePath] };
+
+	// Only the path: the cell it writes is a section of its own, read off the
+	// same change. An input in a shape that is not read as a cell keeps every
+	// argument, below.
+	if (toolName === "NotebookEdit") {
+		const change = proposedChange(toolName, toolInput);
+		if (change?.kind === "notebook") {
+			return { kind: "paths", paths: [change.input.notebook_path] };
+		}
+	}
 
 	// A Codex approval that described nothing else (server/agent/codex
 	// `describeApproval`): its `reason` is a sentence, and a sentence in a JSON
@@ -207,6 +260,50 @@ export function invocationView(
 }
 
 /**
+ * What of a work tool's input its body shows: a creation's body and a
+ * comment's text as Markdown, an update's changed fields, a start's
+ * `worktree` and `watch`. Every other call acting on a work says all it asked
+ * in its work line. Null for the calls that act on no work, which keep every
+ * argument.
+ */
+function workToolInvocation(
+	tool: string,
+	input: Record<string, unknown>,
+): InvocationView | null {
+	switch (tool) {
+		case "story_create":
+		case "task_create":
+			return typeof input.body === "string" && input.body
+				? { kind: "markdown", label: "Body", markdown: input.body }
+				: { kind: "none" };
+		case "work_comment_add":
+		case "work_comment_update":
+			return typeof input.body === "string"
+				? { kind: "markdown", label: "Comment", markdown: input.body }
+				: null;
+		case "work_update":
+		case "story_start":
+		case "task_start": {
+			const entries = Object.entries(input).filter(([key]) => key !== "id");
+			return entries.length > 0
+				? { kind: "params", entries }
+				: { kind: "none" };
+		}
+		case "work_reopen":
+		case "work_delete":
+		case "story_wait":
+		case "story_unwatch":
+		case "step_done":
+		case "work_get":
+		case "work_comment_list":
+		case "task_list":
+			return { kind: "none" };
+		default:
+			return null;
+	}
+}
+
+/**
  * What an invocation block is called, by what it shows rather than by the tool:
  * a `Read` and an `Edit` both show a file. A plan stands without a label — it
  * is the whole of what is being asked.
@@ -221,6 +318,8 @@ function invocationLabel(view: InvocationView): string {
 			return "Request";
 		case "todos":
 			return "Todos";
+		case "markdown":
+			return view.label;
 		default:
 			return "Parameters";
 	}
@@ -481,6 +580,23 @@ export function ToolInvocation({
 					))}
 				</Section>
 			);
+
+		case "markdown":
+			return (
+				<Section
+					label={label}
+					copyText={view.markdown}
+					collapsible={collapsible}
+				>
+					<MarkdownContent content={view.markdown} />
+				</Section>
+			);
+
+		case "note":
+			return <p className="text-th-text-muted">{view.text}</p>;
+
+		case "none":
+			return null;
 
 		case "text":
 			return (

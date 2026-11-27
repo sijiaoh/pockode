@@ -11,9 +11,10 @@ import {
 } from "../../lib/fullScreen";
 import {
 	changePatches,
+	notebookSource,
 	type ProposedChangeData,
 } from "../../lib/proposedChange";
-import type { LineCounts } from "../../lib/turnChanges";
+import { type LineCounts, notebookLines } from "../../lib/turnChanges";
 import { useWSStore } from "../../lib/wsStore";
 import { GIT_STATUS_INFO } from "../../types/git";
 import { formatFilePath } from "../../utils/path";
@@ -83,6 +84,19 @@ export function proposedChangeHeader(
 	const notApplied = !applied && (
 		<span className="min-w-0 truncate">not applied</span>
 	);
+	// A cell's source is not a diff, but its lines are counted as the turn's
+	// card counts them; it wraps as the transcript's output does, with no switch.
+	if (change.kind === "notebook") {
+		return {
+			meta: (
+				<span className="flex min-w-0 items-baseline gap-1.5">
+					{notApplied}
+					{notApplied && " "}
+					<LineCountsLabel lines={notebookLines(change)} colored={applied} />
+				</span>
+			),
+		};
+	}
 	const patches = changePatches(change);
 	// A Codex change of hunkless files only (an empty add, a pure rename) has
 	// nothing to count and nothing to wrap.
@@ -125,13 +139,19 @@ export function changeFullScreenContent(
 	change: ProposedChangeData,
 	onOpenFile?: (path: string) => void,
 ): FullScreenContent {
-	return change.kind === "write"
-		? fileFullScreenContent(
+	switch (change.kind) {
+		case "write":
+			return fileFullScreenContent(
 				change.input.content,
 				change.input.file_path,
 				onOpenFile,
-			)
-		: { kind: "change", change };
+			);
+		// The source as the transcript draws it: text, read and searched by line.
+		case "notebook":
+			return { kind: "output", text: notebookSource(change) ?? "" };
+		default:
+			return { kind: "change", change };
+	}
 }
 
 function PatchList({
@@ -228,7 +248,34 @@ export function ProposedChange({
 					onOpenFile={onOpenFile}
 				/>
 			);
+		case "notebook":
+			return <NotebookCell change={change} />;
 		case "codex":
 			return <CodexDiff changes={change.changes} />;
 	}
+}
+
+/**
+ * The cell as the call writes it: its new source, not a diff, for the reason a
+ * `Write` over a file is not one — the source it replaced is not in the call.
+ */
+function NotebookCell({
+	change,
+}: {
+	change: Extract<ProposedChangeData, { kind: "notebook" }>;
+}) {
+	const source = notebookSource(change);
+	if (source === undefined) {
+		return (
+			<p className="text-th-text-muted">
+				The deleted cell's content is not in this call.
+			</p>
+		);
+	}
+	if (source === "") return <p className="text-th-text-muted">Empty cell</p>;
+	return (
+		<pre className="whitespace-pre-wrap break-words font-mono text-th-text-primary">
+			{source}
+		</pre>
+	);
 }

@@ -1,11 +1,26 @@
 import { memo, useMemo } from "react";
+import { AGENT_CONTROL_TOOL, GENERATE_IMAGE_TOOL } from "../../lib/codexTools";
 import {
 	contentBlockFiles,
+	contentBlocksText,
 	type FileReference,
 	partitionFileBlocks,
 } from "../../lib/contentBlocks";
-import { fullScreenSubject } from "../../lib/fullScreen";
-import { proposedChange } from "../../lib/proposedChange";
+import {
+	type FullScreenSubject,
+	fullScreenSubject,
+} from "../../lib/fullScreen";
+import {
+	pockodeWorkTool,
+	workKindWord,
+	workToolTarget,
+} from "../../lib/pockodeWorkTools";
+import {
+	notebookCellLabel,
+	notebookSource,
+	proposedChange,
+} from "../../lib/proposedChange";
+import { isStopTool } from "../../lib/taskStop";
 import { outputLineCount } from "../../lib/textLines";
 import { toolBodyLayout } from "../../lib/toolBodyLayout";
 import {
@@ -14,13 +29,22 @@ import {
 	toolSecondLine,
 } from "../../lib/toolRun";
 import { toolSummary, toolSummaryLine } from "../../lib/toolSummary";
+import { notebookLines } from "../../lib/turnChanges";
 import { useWSStore } from "../../lib/wsStore";
 import type { ToolRun } from "../../types/message";
 import { omittedLabel } from "../../utils/attachment";
 import { CollapsibleBody, useEverExpanded } from "../ui";
 import AttachmentStrip from "./AttachmentStrip";
-import { proposedChangeHeader } from "./ProposedChange";
+import { GoToCallButton } from "./GoToCallButton";
+import { useOpenWorkDetail } from "./openWorkDetailContext";
+import {
+	changeFullScreenContent,
+	LineCountsLabel,
+	ProposedChange,
+	proposedChangeHeader,
+} from "./ProposedChange";
 import { useRowExpanded } from "./rowExpansionContext";
+import { useIsStopTargetLoaded } from "./stopTargetsContext";
 import { PathLine, ToolInvocation } from "./ToolInvocation";
 import { ToolOutcomeSections } from "./ToolOutcomeSections";
 import ToolResultDisplay, {
@@ -31,6 +55,8 @@ import ToolResultDisplay, {
 } from "./ToolResultDisplay";
 import { ToolMeta, ToolRow, ToolStatusGlyph } from "./ToolRow";
 import { Section, type SectionFullScreen } from "./ToolSection";
+import { useGoToCall } from "./toolJumpContext";
+import { WorkRefLine } from "./WorkRefLine";
 
 /** How much of a running call's output the body shows. */
 const LIVE_OUTPUT_LINES = 50;
@@ -75,6 +101,73 @@ function ReferenceLine({
 }
 
 /**
+ * The cell a `NotebookEdit` writes, read off its input as the permission card
+ * and the turn's card read it, so it is there while the call runs too. Nothing
+ * for an input not read as a cell: the invocation lists its arguments.
+ */
+function NotebookCellSection({
+	run,
+	title,
+	subject,
+	failed,
+}: {
+	run: ToolRun;
+	title: string;
+	subject: FullScreenSubject | undefined;
+	failed: boolean;
+}) {
+	const change = proposedChange(run.name, run.input);
+	const notebook = change?.kind === "notebook" ? change : null;
+	// Green and red only once the call succeeded, and "not applied" only once
+	// it failed: a call still running, or cut off, may or may not have written
+	// the cell, so its counts are drawn plain.
+	const settled = run.status === "success" || failed;
+	const header = useMemo(
+		() =>
+			notebook && !settled
+				? {
+						meta: (
+							<LineCountsLabel
+								lines={notebookLines(notebook)}
+								colored={false}
+							/>
+						),
+					}
+				: proposedChangeHeader(notebook, { applied: !failed }),
+		[notebook, settled, failed],
+	);
+	const source = notebook ? notebookSource(notebook) : undefined;
+	const fullScreen = useMemo<SectionFullScreen | undefined>(
+		() =>
+			notebook && source
+				? {
+						key: `${run.id}:cell`,
+						title,
+						subject,
+						content: changeFullScreenContent(notebook),
+					}
+				: undefined,
+		[notebook, source, run.id, title, subject],
+	);
+	if (!notebook) return null;
+	return (
+		<Section
+			label={notebookCellLabel(notebook)}
+			noun="cell"
+			meta={header.meta}
+			copyText={source || undefined}
+			fullScreen={fullScreen}
+			budget="main"
+			count={
+				source ? { noun: "line", total: outputLineCount(source) } : undefined
+			}
+		>
+			<ProposedChange change={notebook} />
+		</Section>
+	);
+}
+
+/**
  * One tool call, as a row that opens into everything the row could not say.
  *
  * It renders the status the reducer maintains and infers nothing of its own
@@ -88,9 +181,16 @@ const ToolCallItem = memo(function ToolCallItem({
 	const [expanded, setExpanded] = useRowExpanded();
 	const workDir = useWSStore((state) => state.workDir);
 	const summary = useMemo(
-		() => toolSummary(run.name, run.input, workDir),
-		[run.name, run.input, workDir],
+		() => toolSummary(run.name, run.input, workDir, run.workRef),
+		[run.name, run.input, workDir, run.workRef],
 	);
+	const openWorkDetail = useOpenWorkDetail();
+	const workTarget = useMemo(() => {
+		const tool = pockodeWorkTool(run.name);
+		return tool
+			? workToolTarget(tool, run.input, run.workRef, run.status === "success")
+			: null;
+	}, [run.name, run.input, run.workRef, run.status]);
 	// Nothing opens this body but the user. A failure used to pry it open once,
 	// back when a failed row said only *that* it failed; now it says how, on its
 	// second line. Trial and error is how an agent works, so a turn with four
@@ -118,10 +218,17 @@ const ToolCallItem = memo(function ToolCallItem({
 	const liveOutput =
 		live && run.output ? lastOutputLines(run.output, LIVE_OUTPUT_LINES) : "";
 	const layout = toolBodyLayout(run.name);
+	// What an image generation's result says besides its image: the prompt
+	// Codex used. Without one there is no result to show in the body — the
+	// image is the strip's.
+	const generation = run.name === GENERATE_IMAGE_TOOL;
+	const imagePrompt =
+		generation && run.contents ? contentBlocksText(run.contents) : "";
 	// A result that only acknowledges the call is no answer to show.
 	const showsResult =
 		Boolean(run.result || run.contents) &&
-		!(layout.resultIsAcknowledgement && !failed);
+		!(layout.resultIsAcknowledgement && !failed) &&
+		!(generation && !failed && !imagePrompt);
 	// Eager rather than a function handed to the button, because whether there
 	// is anything to copy decides whether there is a button. Gated on the body
 	// having been opened: a collapsed `Read` should not pay to strip its line
@@ -136,18 +243,36 @@ const ToolCallItem = memo(function ToolCallItem({
 		[everExpanded, showsResult, run.name, run.input, result, run.contents],
 	);
 	// Gated the same way: diffing means reading the whole input. Mirrors when
-	// `ToolResultDisplay` draws the change rather than content blocks.
-	const change = useMemo(
-		() =>
-			everExpanded && showsResult && !run.contents
-				? proposedChange(run.name, run.input)
-				: null,
-		[everExpanded, showsResult, run.name, run.input, run.contents],
-	);
+	// `ToolResultDisplay` draws the change rather than content blocks. A
+	// notebook's cell is a section of its own, beside the result rather than
+	// in its place.
+	const change = useMemo(() => {
+		if (!everExpanded || !showsResult || run.contents) return null;
+		const found = proposedChange(run.name, run.input);
+		return found?.kind === "notebook" ? null : found;
+	}, [everExpanded, showsResult, run.name, run.input, run.contents]);
 	const changeHeader = useMemo(
 		() => proposedChangeHeader(change, { applied: !failed }),
 		[change, failed],
 	);
+	// A stop's way to the work it stopped, when that row is here to land on.
+	// The jump leaves it as it is: that row says it was stopped through its own
+	// outcome.
+	const goToCall = useGoToCall();
+	const stopTarget =
+		isStopTool(run.name) && run.originToolUseId
+			? run.originToolUseId
+			: undefined;
+	const stopTargetLoaded = useIsStopTargetLoaded(stopTarget);
+	const outcomeActions =
+		stopTarget && stopTargetLoaded && goToCall ? (
+			<GoToCallButton
+				label="Go to the call that started this task"
+				onClick={() => goToCall(stopTarget)}
+			/>
+		) : (
+			changeHeader.actions
+		);
 	// A change is drawn from the input, so its result is shown nowhere else —
 	// and when the tool refused it, the result is the reason.
 	const changeError = change && failed ? result : "";
@@ -224,7 +349,22 @@ const ToolCallItem = memo(function ToolCallItem({
 		],
 	);
 
-	const invocation = (
+	// A Codex web call answers the model and reports nothing of what it read,
+	// so where a search's results or a page would be, the body says that —
+	// an empty section would read as a search that found nothing. Only Codex
+	// succeeds with nothing: Claude's result always carries a header.
+	const unreported =
+		(run.name === "WebSearch" || run.name === "WebFetch") &&
+		run.status === "success" &&
+		!run.result &&
+		!run.contents;
+	// What an image generation asked is the prompt its result names, once there
+	// is one: shown once, as the result. One that returned without naming it
+	// says so, rather than still promising it.
+	const promptUnnamed = generation && run.status === "success" && !imagePrompt;
+	const invocation = imagePrompt ? null : promptUnnamed ? (
+		<p className="text-th-text-muted">Codex did not name the prompt it used.</p>
+	) : (
 		<ToolInvocation
 			toolName={run.name}
 			input={run.input}
@@ -241,6 +381,14 @@ const ToolCallItem = memo(function ToolCallItem({
 
 	const outcome = (
 		<>
+			{run.name === "NotebookEdit" && (
+				<NotebookCellSection
+					run={run}
+					title={fullScreenTitle}
+					subject={subject}
+					failed={failed}
+				/>
+			)}
 			{liveOutput && (
 				<Section
 					label="Output so far"
@@ -256,6 +404,15 @@ const ToolCallItem = memo(function ToolCallItem({
 					</pre>
 				</Section>
 			)}
+			{unreported && (
+				<Section label={layout.resultLabel}>
+					<p className="text-th-text-muted">
+						{run.name === "WebSearch"
+							? "Codex does not report what the search found."
+							: "Codex does not report what the page said."}
+					</p>
+				</Section>
+			)}
 			{changeError && (
 				<Section label="Error">
 					<pre
@@ -267,11 +424,15 @@ const ToolCallItem = memo(function ToolCallItem({
 			)}
 			<ToolOutcomeSections
 				run={run}
-				outcomeLabel={layout.resultLabel}
+				outcomeLabel={
+					failed
+						? (layout.failedLabel ?? layout.resultLabel)
+						: layout.resultLabel
+				}
 				outcomeClampFrom={layout.resultFromEnd ? "end" : undefined}
 				outcomeCount={count}
 				outcomeMeta={changeHeader.meta}
-				outcomeActions={changeHeader.actions}
+				outcomeActions={outcomeActions}
 				outcomeCopyText={copyText}
 				outcomeFullScreen={outcomeFullScreen}
 				outcome={
@@ -308,6 +469,8 @@ const ToolCallItem = memo(function ToolCallItem({
 				onToggle={() => setExpanded(!expanded)}
 				glyph={<ToolStatusGlyph status={run.status} name={run.name} />}
 				title={summary.title}
+				// About agents, though not one: no Process and no steps.
+				agent={run.name === AGENT_CONTROL_TOOL}
 				chip={summary.chip}
 				background={run.fromBackground}
 				detail={summary.detail}
@@ -332,6 +495,15 @@ const ToolCallItem = memo(function ToolCallItem({
 				    opened, so the pretty-printing and the highlighting below are
 				    already paid for only once somebody asks. */}
 				<div className="space-y-3 border-t border-th-border bg-th-bg-secondary p-2">
+					{workTarget && (
+						<WorkRefLine
+							label={workKindWord(workTarget.kind)}
+							title={workTarget.title}
+							mono={workTarget.mono}
+							openId={workTarget.openId}
+							onOpen={openWorkDetail}
+						/>
+					)}
 					{layout.resultFirst ? (
 						<>
 							{outcome}

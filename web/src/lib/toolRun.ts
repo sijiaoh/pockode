@@ -32,14 +32,16 @@ export function lastOutputLines(output: string, count: number): string {
 /**
  * What a fetch brought back, for the renderers that draw it.
  *
- * `fetchedOutputs` keeps only the fetches that came back at all: an entry with
- * neither field never returned, because the turn was cut short, and there is
- * nothing to draw for it — which is a different sentence from a fetch that
- * returned and had nothing to say.
+ * `fetchedOutputs` keeps the fetches still running and those that came back:
+ * an interrupted one with neither field never returned, and there is nothing
+ * to draw for it — which is a different sentence from a fetch that returned
+ * and had nothing to say.
  */
 export interface FetchedOutput {
 	/** The `tool_use_id` of the call that fetched it, for a stable key. */
 	id: string;
+	/** Still running: nothing has come back yet, and `text` is empty. */
+	waiting: boolean;
 	text: string;
 	/** The fetch failed. Says nothing about the task it was reading. */
 	isError: boolean;
@@ -54,14 +56,19 @@ export interface FetchedOutput {
 
 export function fetchedOutputs(run: ToolRun): FetchedOutput[] {
 	if (!run.fetches) return [];
-	const arrived = run.fetches.filter(
-		(fetch) => fetch.result !== undefined || fetch.contents !== undefined,
+	const drawn = run.fetches.filter(
+		(fetch) =>
+			fetch.state === "running" ||
+			fetch.result !== undefined ||
+			fetch.contents !== undefined,
 	);
-	return arrived.map((fetch) => ({
+	return drawn.map((fetch) => ({
 		id: fetch.id,
+		waiting: fetch.state === "running",
 		text: toolRunText(fetch),
 		isError: fetch.isError === true,
-		isEmpty: !fetch.contents && !fetch.result?.trim(),
+		isEmpty:
+			fetch.state !== "running" && !fetch.contents && !fetch.result?.trim(),
 	}));
 }
 
@@ -103,6 +110,26 @@ function latestFetchedText(run: ToolRun): string {
 		.map((fetched) => fetchedPayload(fetched.text))
 		.filter((text) => text.trim());
 	return usable.length > 0 ? usable[usable.length - 1] : "";
+}
+
+/**
+ * What a row that a fetch gave a line, and that has nothing better to show,
+ * keeps once the fetch is over: a line a fetch opened is not taken away by the
+ * fetch ending (docs/tool-call-ui.md#a-fetch-in-flight). Read off the newest
+ * fetch, since that is the one whose line the row was showing.
+ */
+function settledFetchLine(run: ToolRun): ToolSecondLine | null {
+	const newest = run.fetches?.at(-1);
+	if (!newest) return null;
+	const text =
+		newest.state === "interrupted" &&
+		newest.result === undefined &&
+		!newest.contents
+			? "Output not read"
+			: newest.isError
+				? "Couldn't read output"
+				: "No output yet";
+	return { text, mono: false, live: false };
 }
 
 /**
@@ -200,6 +227,11 @@ export interface ToolSecondLine {
 	 * several times a second is re-announced at every focus.
 	 */
 	live: boolean;
+	/**
+	 * A start on this client's clock to count from after the text — a fetch in
+	 * flight's own counter, drawn as a run's is.
+	 */
+	since?: Date;
 }
 
 const LOST_WITH_PROCESS_LINE: ToolSecondLine = {
@@ -211,6 +243,19 @@ const LOST_WITH_PROCESS_LINE: ToolSecondLine = {
 export function toolSecondLine(run: ToolRun): ToolSecondLine | null {
 	if (run.status === "running" || run.status === "background") {
 		if (run.activity) return { text: run.activity, mono: false, live: true };
+		// A reading being taken now is newer than any reading already taken,
+		// and below the activity, which is the task's own account of the present.
+		const inFlight = run.fetches?.findLast(
+			(fetch) => fetch.state === "running",
+		);
+		if (inFlight) {
+			return {
+				text: inFlight.waits ? "Waiting for output…" : "Reading output…",
+				mono: false,
+				live: true,
+				...(inFlight.seenAt ? { since: inFlight.seenAt } : {}),
+			};
+		}
 		// A fetch comes before the output it was fetched from: both are this
 		// call's machine output, and the fetch is the later word on it. `live:
 		// false` though this rung sits in the running branch — the flag is about
@@ -218,7 +263,8 @@ export function toolSecondLine(run: ToolRun): ToolSecondLine | null {
 		const fetched = lastNonEmptyLine(latestFetchedText(run));
 		if (fetched) return { text: fetched, mono: true, live: false };
 		const line = run.output ? lastNonEmptyLine(run.output) : "";
-		return line ? { text: line, mono: true, live: true } : null;
+		if (line) return { text: line, mono: true, live: true };
+		return settledFetchLine(run);
 	}
 	// Before the failure rung, not after: a backgrounded failure's outcome is the
 	// notification's own summary sentence, which says more than the tail of a log
