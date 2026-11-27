@@ -254,9 +254,11 @@ tool calls and cards run the full width of the column in `text-th-text-primary`,
 and below them a turn-end row (`Chat/MessageActions.tsx`) holds Copy and
 Fork — while the turn is running, the tail line (`Working 1m 4s`)
 stands in that row's place instead
-([turn-progress-ui.md](turn-progress-ui.md#2-the-tail-line)). A turn that
-changed files lists them just above the turn-end row, each opening on its
-diffs ([tool-call-ui.md](tool-call-ui.md#the-turns-changes)). The user's
+([turn-progress-ui.md](turn-progress-ui.md#2-the-tail-line)). A settled turn
+that made tool calls has a work line where its work ends and its answer
+begins — `Worked 2m 13s · 14 tool calls · 3 files changed` — heading the files
+it changed, each opening on its diffs and on the calls that made them
+([tool-call-ui.md](tool-call-ui.md#the-turns-changes)). The user's
 bubble keeps the `…` slot beside it. Why the two sides differ is in
 [session-fork-ui.md](session-fork-ui.md#entry-point). What the agent thought on
 the way is a muted `Thought for 12s` row in the reply, among the tool rows or on
@@ -778,9 +780,10 @@ whose newest row is one the reader typed. "Replaced" is the page count dropping,
 or — when the page count has not changed — none of the previous rows
 surviving, since replaying history mints every row a new id. The
 scroll-to-bottom button — shown only while reading somewhere — reads the tail, and
-a jump to a pending permission request anchors on the card — on the card itself,
-with the candidates around it as the path above it, since the card need not be a
-candidate.
+a jump — to a pending permission request, or from the turn's changes to a tool
+row ([tool-call-ui.md](tool-call-ui.md#from-a-file-to-the-calls-that-changed-it))
+— anchors on what it went to — on the card or row itself, with the candidates
+around it as the path above it, since it need not be a candidate.
 
 A third, beside the button and the jump, is a row asking for a place:
 `holdAt(el, offset)` puts `el`'s top `offset` pixels below the top edge. Rows

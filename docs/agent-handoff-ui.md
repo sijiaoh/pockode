@@ -163,8 +163,8 @@ and each one has a reason:
 | Ring | The composer's box (the reading column it is held to) wears a 2px inset `th-accent` ring for about half a second, which then fades out over about a second, once | same. The ring is the only visible sign on a touch screen, because nothing takes focus there |
 
 - **The ring borrows the jump's grammar.** `MessageList`'s jump rings the card
-  it lands on (`.jump-highlight`, which is `th-warning` because that card is a
-  permission). The handoff lands on the composer, so the composer is what rings.
+  it lands on (`.jump-highlight`, which is `th-warning` on a permission card
+  and `th-accent` on a tool row the turn's changes go to). The handoff lands on the composer, so the composer is what rings.
   The colour is `th-accent`: this is an arrival, not a warning. Under
   `prefers-reduced-motion` the ring shows and goes with no fade, like the jump's.
 - **Nothing says "not sent".** The Send button in its slot already says it. A

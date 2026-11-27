@@ -1701,7 +1701,9 @@ to carry.
   `web/src/utils/pendingQuestions.ts`, `PendingQuestionPill.tsx` and
   `MessageList`'s visibility observer, debounce and live region go with them.
   `MessageList` keeps the jump itself — the strip's permission row still uses it —
-  and it now reaches **only** a permission card. The record card carries no jump
+  and it reaches a permission card and, from the turn's changes, a tool row
+  ([tool-call-ui.md](tool-call-ui.md#from-a-file-to-the-calls-that-changed-it)),
+  never a question card. The record card carries no jump
   handle: a question is reached through the panel, which works whether or not that
   card is loaded, so a jump to it would be the one route that stops working
   exactly when the transcript is long.
@@ -1729,7 +1731,7 @@ silent, and this design simply never enters it.
 | `web/src/components/Chat/QuestionRecordItem.tsx` | replaces `AskUserQuestionItem.tsx` — the record card: four states, no form, collapsed by default, `Answer this` in the body (§6), and the one card a legacy `ask_user_question` record draws through |
 | `web/src/components/Chat/ChatPanel.tsx` | holds whether the panel is up, what it is anchored to and the ids this visit has shown; wraps the message list so the panel has a rectangle, and derives the panel's rendering, the transcript's `inert` and the Escape guard from one expression (§3); remembers the last focused element for the rescue and stands its interrupt down while the panel or anything covering the page is up (§4); consumes the navigation intent of §4; and owns `chromeCollapsed`, the one place all three short-viewport conditions are known, and its converse `answerPanelYielded`, read off a focus wrapper around the composer (§3) |
 | `web/src/hooks/useShortViewport.ts` | new — the height threshold and the media query that reads it, the app's one height gate, deliberately not in the shared responsive module ([responsive-ui.md](responsive-ui.md#the-two-axes)) |
-| `web/src/components/Chat/MessageList.tsx` | loses the pill, its observer, its debounce and its live region; keeps the jump, narrowed to permission cards (`.jump-highlight`, renamed from `.question-highlight` now that no question card is a target). It is told nothing about the panel: the panel covers it rather than sitting on its edge (§3) |
+| `web/src/components/Chat/MessageList.tsx` | loses the pill, its observer, its debounce and its live region; keeps the jump, narrowed to permission cards (later widened to the tool rows the turn's changes go to, [tool-call-ui.md](tool-call-ui.md#from-a-file-to-the-calls-that-changed-it)) (`.jump-highlight`, renamed from `.question-highlight` now that no question card is a target). It is told nothing about the panel: the panel covers it rather than sitting on its edge (§3) |
 | `web/src/components/Chat/MessageItem.tsx` | the answering message's bubble — one entry per `answering` element, its note after a dash — and, for an `agent` origin, the named block that replaces it (§6) |
 | `web/src/utils/messageSource.ts` | new — `isTypedByUser`, the one place "a person typed this" is decided: a `role: "user"` message may be Pockode's own or another agent's answer, and neither should follow the transcript to the tail or claim the delivery receipt |
 | `web/src/lib/answerIntent.ts` | the one-shot navigation intent of §4 — *take me to this question*, not *open the panel* — deliberately not a route |

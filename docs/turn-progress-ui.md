@@ -9,6 +9,11 @@ way. Two elements, one grammar:
   the turn runs: `Working 1m 4s`, or `Thinking… 1m 4s · <latest line>` while
   the agent is thinking. It is gone when the turn settles.
 
+When the turn settles, a third line says what the work came to — `Worked 2m 13s
+· 14 tool calls · 3 files changed`, between the work and the answer. It is the
+header of the turn's changes card and is drawn there
+([tool-call-ui.md](tool-call-ui.md#the-work-line)); the rules below hold for it.
+
 The surfaces around them are [tool-call-ui.md](tool-call-ui.md) (the list,
 groups, the turn's changes) and [lifecycle-ui.md](lifecycle-ui.md) (`Activity`,
 the attention strip, Stop). This document only adds to them, and every rule
@@ -46,7 +51,8 @@ recorded is left out, never estimated by the client from when records reached
 it — the rule the tool row's meta already follows
 ([tool-call-ui.md](tool-call-ui.md#elapsed-and-duration-meta)).
 
-**Times have one format.** Both elements use the live tool counter's: whole
+**Times have one format.** Both elements, and the work line they settle
+into, use the live tool counter's: whole
 seconds below a minute (`12s`), then two units (`4m 12s`, `1h 12m`). Not the
 finished tool row's tenths (`1.2s`): a thinking time and a turn clock are read
 as a pulse, not compared to the decimal.
@@ -443,6 +449,7 @@ that had none — *running, with nothing to show yet* — and nothing else:
 | a message sent mid-turn is unread | strip receipt row | unaffected; the receipt is about the message, the line about the turn |
 | the turn can be stopped | Stop in the composer | no Stop of its own |
 | how the turn ended | the turn-end row, error / `Interrupted` lines | gone |
+| how long the turn worked, how many calls, what it changed | [the work line](tool-call-ui.md#the-work-line), once settled | gone — `Working 2m 12s` is the turn so far, `Worked` the reply's measured span |
 
 The tail line and a running tool row can be on screen together, both moving.
 That is not duplication — one is a call, one is the turn — and it is what was

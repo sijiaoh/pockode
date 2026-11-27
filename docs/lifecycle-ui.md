@@ -611,12 +611,16 @@ focus the header row — via the permission blocker's `request_id`. The strip do
 re-implement it: the scroll container is there, and a second implementation of a
 scroll-and-highlight is a second set of edge cases.
 
-It is the **only** jump left on this strip, and the only one in the app: the
+It is the **only** jump left on this strip: the
 question row's action opens the answer panel instead, and the pending-question
 pill is deleted, because both existed to reach the place answering happened and
 answering does not happen in the transcript any more
 ([answering-ui.md](answering-ui.md)). A question record card therefore carries no
-jump handle either — `findRequestCard` matches permission cards alone.
+jump handle either — `findRequestCard` matches permission cards alone. Outside
+the strip the same jump has one other caller, a change in the turn's changes
+card going to the call that made it
+([tool-call-ui.md](tool-call-ui.md#from-a-file-to-the-calls-that-changed-it)),
+which finds a tool row by its `tool_use_id`.
 
 "Details" expands to "Waiting since {HH:MM}", from `turn.since`. Two things are
 stated in the copy because a user who has waited an hour will otherwise assume a
