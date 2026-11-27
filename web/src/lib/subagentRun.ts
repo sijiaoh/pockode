@@ -2,6 +2,7 @@ import type { ContentPart, Message, ToolRun } from "../types/message";
 import { findToolRunChain } from "./partTree";
 import { toolRunText } from "./toolRun";
 import { isTaskTool } from "./toolSummary";
+import { messageRunsById, perMessage, perTranscript } from "./transcriptMemo";
 
 /**
  * What a subagent row derives from its children: how far it has come and what
@@ -540,23 +541,23 @@ const NO_UNFILED: ReadonlyMap<string, UnfiledChildren> = new Map();
  * subagent's transcript, which shows its work whole
  * (docs/subagent-transcript-ui.md#unfiled-children).
  */
-export function unfiledParts(
-	messages: Message[],
-): ReadonlyMap<string, ContentPart[]> {
-	const byParent = new Map<string, ContentPart[]>();
-	for (const message of messages) {
-		if (message.role !== "assistant") continue;
-		for (const part of message.parts) {
-			const parent =
-				"parentToolUseId" in part ? part.parentToolUseId : undefined;
-			if (!parent) continue;
-			const parts = byParent.get(parent) ?? [];
-			parts.push(part);
-			byParent.set(parent, parts);
+export const unfiledParts = perTranscript(
+	(messages: Message[]): ReadonlyMap<string, ContentPart[]> => {
+		const byParent = new Map<string, ContentPart[]>();
+		for (const message of messages) {
+			if (message.role !== "assistant") continue;
+			for (const part of message.parts) {
+				const parent =
+					"parentToolUseId" in part ? part.parentToolUseId : undefined;
+				if (!parent) continue;
+				const parts = byParent.get(parent) ?? [];
+				parts.push(part);
+				byParent.set(parent, parts);
+			}
 		}
-	}
-	return byParent;
-}
+		return byParent;
+	},
+);
 
 /**
  * The subagents from the chat down to this one, by `tool_use_id`, outermost
@@ -605,22 +606,22 @@ function locateRun(
  * reader, so they stay where they first loaded, and this is how the call's
  * row still knows about them.
  */
-export function unfiledChildren(
-	messages: Message[],
-): ReadonlyMap<string, UnfiledChildren> {
-	const byParent = unfiledParts(messages);
-	if (byParent.size === 0) return NO_UNFILED;
-	const result = new Map<string, UnfiledChildren>();
-	for (const [parent, parts] of byParent) {
-		result.set(parent, {
-			parts,
-			count: parts.length,
-			steps: countSteps(parts),
-			latest: latestChild(parts),
-		});
-	}
-	return result;
-}
+export const unfiledChildren = perTranscript(
+	(messages: Message[]): ReadonlyMap<string, UnfiledChildren> => {
+		const byParent = unfiledParts(messages);
+		if (byParent.size === 0) return NO_UNFILED;
+		const result = new Map<string, UnfiledChildren>();
+		for (const [parent, parts] of byParent) {
+			result.set(parent, {
+				parts,
+				count: parts.length,
+				steps: countSteps(parts),
+				latest: latestChild(parts),
+			});
+		}
+		return result;
+	},
+);
 
 // Where: the tool a Claude agent resumes a subagent with, naming it by the id
 // the subagent's call reported (measured on claude 2.1.286 and 2.1.330: its
@@ -661,42 +662,69 @@ const NO_RESUMES: ReadonlyMap<string, ToolRun> = new Map();
  * A run still live is not resumed by a message written to it: it never
  * stopped.
  */
-export function liveResumes(messages: Message[]): ReadonlyMap<string, ToolRun> {
-	const runsByAgent = new Map<string, ToolRun>();
-	const resumes: ToolRun[] = [];
-	const visit = (parts: ContentPart[]) => {
-		for (const part of parts) {
-			if (part.type !== "tool_call") continue;
-			const run = part.tool;
-			if (run.name === RESUME_TOOL) {
-				if (isLiveRun(run)) resumes.push(run);
-			} else if (isTaskTool(run.name)) {
-				const agentId = subagentAgentId(run);
-				if (agentId) runsByAgent.set(agentId, run);
-			}
-			if (run.children) visit(run.children);
-		}
-	};
-	for (const message of messages) {
-		if (message.role === "assistant") visit(message.parts);
-	}
-	if (resumes.length === 0) return NO_RESUMES;
+export const liveResumes = perTranscript(
+	(messages: Message[]): ReadonlyMap<string, ToolRun> => {
+		const resumes = messages.flatMap(
+			(message) => messageSubagents(message).resumes,
+		);
+		if (resumes.length === 0) return NO_RESUMES;
 
-	const result = new Map<string, ToolRun>();
-	for (const resume of resumes) {
-		const to = (resume.input as { to?: unknown } | null)?.to;
-		const target = typeof to === "string" ? runsByAgent.get(to) : undefined;
-		if (target && !isLiveRun(target)) result.set(target.id, resume);
+		const result = new Map<string, ToolRun>();
+		for (const resume of resumes) {
+			const to = (resume.input as { to?: unknown } | null)?.to;
+			const target =
+				typeof to === "string" ? subagentByAgentId(messages, to) : undefined;
+			if (target && !isLiveRun(target)) result.set(target.id, resume);
+		}
+		return result.size > 0 ? result : NO_RESUMES;
+	},
+);
+
+interface MessageSubagents {
+	/** Subagent runs by the id the CLI named their subagent by; newest wins. */
+	byAgentId: ReadonlyMap<string, ToolRun>;
+	/** The live resuming calls, in depth-first order. */
+	resumes: readonly ToolRun[];
+}
+
+const NO_SUBAGENTS: MessageSubagents = { byAgentId: new Map(), resumes: [] };
+
+const messageSubagents = perMessage((message): MessageSubagents => {
+	const byAgentId = new Map<string, ToolRun>();
+	const resumes: ToolRun[] = [];
+	for (const run of messageRunsById(message).values()) {
+		if (run.name === RESUME_TOOL) {
+			if (isLiveRun(run)) resumes.push(run);
+		} else if (isTaskTool(run.name)) {
+			const agentId = subagentAgentId(run);
+			if (agentId) byAgentId.set(agentId, run);
+		}
 	}
-	return result.size > 0 ? result : NO_RESUMES;
+	return byAgentId.size > 0 || resumes.length > 0
+		? { byAgentId, resumes }
+		: NO_SUBAGENTS;
+});
+
+/** The newest loaded subagent run its CLI named by `agentId`. */
+function subagentByAgentId(
+	messages: Message[],
+	agentId: string,
+): ToolRun | undefined {
+	for (let i = messages.length - 1; i >= 0; i--) {
+		const run = messageSubagents(messages[i]).byAgentId.get(agentId);
+		if (run) return run;
+	}
+	return undefined;
 }
 
 /**
  * A resumed subagent's run as its row draws it: running, on the resuming
  * call's clock and live progress, since that is the run going on now. What it
  * reported last is kept for its body, as it is for a Codex subagent resumed.
+ * The run as it is while nothing resumes it (`liveResumes` has no entry).
  */
-export function resumedRun(run: ToolRun, resume: ToolRun): ToolRun {
+export function resumedRun(run: ToolRun, resume: ToolRun | undefined): ToolRun {
+	if (!resume) return run;
 	const {
 		endedAt: _endedAt,
 		durationMs: _durationMs,

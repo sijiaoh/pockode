@@ -844,7 +844,11 @@ must stay pressable**: anything spread with `keepClearProps` (exported from
 `useTranscriptScroll.ts`) that is inside the button's band — the bottom 60px of
 the view, the button's offset plus its coarse hit area plus a little air — hides
 it, checked against the layout on every scroll and every time the invariant is
-applied. Today that is the pending permission card's answer row. Distance from
+applied. Today that is the pending permission card's answer row. The marks
+register themselves (`keepClearProps` is a ref, so it goes on an element with no
+ref of its own) rather than being looked up: the check runs after every streamed
+record while the view follows the tail, and a selector over the whole transcript
+cost 10–30 ms there in a 300-turn session. Distance from
 the end could not do this job: the turn-end slot under a waiting card keeps its
 height ([turn-progress-ui.md §2.1](turn-progress-ui.md#21-where-it-is)), about
 56px, so a card's answers could sit inside the button's band while the view was

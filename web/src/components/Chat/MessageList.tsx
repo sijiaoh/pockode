@@ -478,7 +478,13 @@ function MessageList({
 																			// This wrapper is the row the view can be held still over
 																			// (see `scrollAnchor`).
 																			{...anchorCandidateProps}
-																			className="py-1.5 sm:py-2"
+																			// Layout containment: without a boundary per row, output growing
+																			// the newest row sends Chromium's pre-paint through every box in
+																			// the transcript — ~30 ms a record at 300 turns, measured by the
+																			// streaming bench's trace. Not paint containment, which would
+																			// clip the outward focus rings of controls flush with a row's
+																			// sides.
+																			className="py-1.5 [contain:layout_style] sm:py-2"
 																		>
 																			<MessageItem
 																				message={message}

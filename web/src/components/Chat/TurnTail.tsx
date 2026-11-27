@@ -33,7 +33,7 @@ import {
 	toolStatusWord,
 } from "./ToolRow";
 import { useGoToCall } from "./toolJumpContext";
-import { useTurnTail } from "./turnTailContext";
+import { useOverviewTail, useTurnTail } from "./turnTailContext";
 import { useUnfiledChildren } from "./unfiledChildrenContext";
 
 interface Props {
@@ -553,7 +553,7 @@ export function TurnEnd({
 	messageId,
 	...actions
 }: { messageId: string } & Omit<MessageActionsProps, "aside">) {
-	const { overviewMessageId, agents, panel } = useTurnTail();
+	const { overviewMessageId, agents, panel } = useOverviewTail(messageId);
 	const lingering = overviewMessageId === messageId;
 	return (
 		<>

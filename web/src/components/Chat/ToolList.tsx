@@ -12,7 +12,7 @@ import { isTaskTool } from "../../lib/toolSummary";
 import type { ContentPart, ToolRun } from "../../types/message";
 import { RowExpansionContext, RowFrameContext } from "./rowExpansionContext";
 import { StepWindowContext, useIsCompact } from "./stepWindowContext";
-import { SubagentResumesContext } from "./subagentResumesContext";
+import { useSubagentResumesAmong } from "./subagentResumesContext";
 import { ToolGroupSummary } from "./ToolGroupSummary";
 import { useRevealRequest } from "./toolJumpContext";
 import { OpenedThoughtsContext } from "./turnTailContext";
@@ -155,12 +155,13 @@ function RowList<T extends Item>({
 
 	// The subagent rows as they are drawn, a resumed one on its resume: their
 	// step windows are sized by the list, not by each row.
-	const resumes = useContext(SubagentResumesContext);
-	const subagentRuns: ToolRun[] = items.flatMap(({ part }) => {
-		if (part.type !== "tool_call" || !isTaskTool(part.tool.name)) return [];
-		const resume = resumes.get(part.tool.id);
-		return [resume ? resumedRun(part.tool, resume) : part.tool];
-	});
+	const taskRuns: ToolRun[] = items.flatMap(({ part }) =>
+		part.type === "tool_call" && isTaskTool(part.tool.name) ? [part.tool] : [],
+	);
+	const resumes = useSubagentResumesAmong(taskRuns.map((run) => run.id));
+	const subagentRuns = taskRuns.map((run) =>
+		resumedRun(run, resumes.get(run.id)),
+	);
 	const windowLines = stepWindowLines(subagentRuns, useIsCompact());
 
 	const entries = rowEntries(items);

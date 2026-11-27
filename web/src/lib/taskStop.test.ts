@@ -77,4 +77,12 @@ describe("loadedStopTargets", () => {
 		]);
 		expect([...targets]).toEqual(["bash1"]);
 	});
+
+	// An older page lands above the stop's bubble, which stays the same object.
+	it("finds a call once the page holding it is loaded", () => {
+		const stop = turn([run("s1", "TaskStop", { originToolUseId: "bash1" })]);
+		expect(loadedStopTargets([stop]).size).toBe(0);
+		const older = turn([run("bash1", "Bash"), run("read1", "Read")]);
+		expect([...loadedStopTargets([older, stop])]).toEqual(["bash1"]);
+	});
 });

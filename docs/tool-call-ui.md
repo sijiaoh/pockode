@@ -349,18 +349,24 @@ ls`), so the row takes the first that fits rather than searching by width.
 actually has — never to a character count, which could only disagree with the
 screen. Every form is measured once per change of words, from copies drawn for
 that one layout pass and removed before paint, since copies left in would be
-found, selected and copied as the row's own text; a `ResizeObserver` then only
-compares numbers. Both sides are read with `getBoundingClientRect` — a
+found, selected and copied as the row's own text. They are read when one
+`ResizeObserver` shared by every line reports them, inside the frame's own
+layout, and every line it reports is fitted in one synchronous commit before
+that frame paints — never in an effect, whose read would force the whole
+transcript's layout in the middle of each streamed record that changes a group.
+A line whose words and width are as they were does no work at all, and a
+resize only compares numbers. Both sides are read with `getBoundingClientRect` — a
 rounded `clientWidth` picks a form a fraction too wide, and its last name is
 cut to `…` — and a web font arriving (`document.fonts` `loadingdone`) measures
 again, since Geist swaps in after the fallback was measured. Until a width is known —
 the first paint, jsdom — the richest form is drawn and `truncate` covers it; a
-width of 0, a list inside a collapsed Process, measures nothing and keeps the
-last pick, and a reveal fits it afresh. A phone and a desktop climb the same
+column out of sight, a list inside a collapsed Process, measures nothing and
+keeps the last pick, and a reveal fits it afresh. A phone and a desktop climb the same
 ladder, the phone just stops lower: on a 360px phone even `Edited 2 files ·
 Ran 1 command · Read 3 files · Searched once` is wider than the column, and the
 counts are cut. `ToolGroupSummary.browser.test.tsx` holds the fit at a phone's
-width and a desktop's.
+width and a desktop's, and that neither an unchanged line nor the commit
+bringing new words reads the layout.
 
 Verb words and count wording are proportional, in `text-th-text-secondary`;
 names are `font-mono`, the same colour — machine text, like a row's detail;

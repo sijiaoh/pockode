@@ -90,6 +90,18 @@ describe("liveResumes", () => {
 		const resume = sendMessage("s1", "a2", "background");
 		expect(liveResumes([bubble(outer), bubble(resume)]).get("t2")).toBe(resume);
 	});
+
+	// As the reducer hands transcripts over: a record replaces the bubble it
+	// touched and keeps every other one the same object.
+	it("follows a record that changes one bubble of a transcript", () => {
+		const spawn = bubble(run({ id: "t1", subagent: { agentId: "a1" } }));
+		const running = sendMessage("s1", "a1", "background");
+		expect(liveResumes([spawn, bubble(running)]).get("t1")).toBe(running);
+		const settled = sendMessage("s1", "a1", "success");
+		expect(liveResumes([spawn, bubble(settled)]).size).toBe(0);
+		const again = sendMessage("s1", "a1", "running");
+		expect(liveResumes([spawn, bubble(again)]).get("t1")).toBe(again);
+	});
 });
 
 describe("resumedRun", () => {

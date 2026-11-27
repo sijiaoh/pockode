@@ -55,7 +55,7 @@ const user = (id: string): Message => ({
 	createdAt: new Date(),
 });
 
-const ids = (runs: ToolRun[]) => runs.map((run) => run.id);
+const ids = (runs: readonly ToolRun[]) => runs.map((run) => run.id);
 
 describe("topLevelAgentRuns", () => {
 	it("takes a reply's own subagent calls, in transcript order, of any status", () => {

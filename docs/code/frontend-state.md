@@ -673,6 +673,37 @@ adds its id to `openedThoughtIds`, which `RowList` reads through
 `OpenedThoughtsContext` as that row's first choice. It is done in a layout
 effect, so the row is never painted closed first.
 
+Being a context is not enough on its own once the transcript is long. When a
+plain context's value changes, React walks the whole tree under its provider
+looking for readers, through every memoized bubble that bails out. On a
+300-turn session that walk cost 20–40 ms for each record a subagent wrote,
+because the agents in the tail change with every one of them. So the contexts
+whose value changes while a turn streams — `TurnTailContext`,
+`UnfiledChildrenContext` and `SubagentResumesContext` — are built with
+`createSelectableContext` (`web/src/components/Chat/selectableContext.tsx`).
+The context itself carries one object that never changes. The value reaches
+readers through a subscription, and each reader selects its own slice:
+`TurnEnd` takes the tail only on the bubble `overviewMessageId` names, and a
+subagent row takes only its own call's entry. A change redraws the readers
+whose slice changed and walks nothing. The providers still take a plain
+`value`, so they are written and tested like any other context. A context whose
+value changes only on a page load or a user's action (stop targets, discarded
+messages, the step-window fold, the jump request) stays a plain one: it is
+read in fewer places, and when it changes the page usually redraws anyway.
+
+The browser has the same problem one layer down. Each message row in
+`MessageList` is `contain: layout style`. Without a boundary per row, output
+growing the newest row made Chromium's pre-paint visit every box in the
+transcript after every streamed record: about 30 ms a record at 300 turns,
+according to the streaming bench's trace, and none of it visible in the JS
+profile. Paint containment would also cut paint, which costs about 5 ms a record
+there, to under 1 ms. The rows do not have it, because it clips at the row's
+edges and would cut off the outward focus rings of controls flush with a row's
+sides. The cost of the layout containment is that a row
+becomes the `offsetParent` of everything inside it, so a row's place in what
+scrolls has to be measured with `getBoundingClientRect` against the scroller
+(`VirtualLines` already does).
+
 That search is also what leaves only two things able to close a bubble: the turn's own
 ending, and the read point. A user message arriving underneath used to close it as a
 side effect, and that side effect was quietly doing double duty as a backstop for a
@@ -1314,6 +1345,32 @@ function updatePermissionRequestStatus(messages, requestId, newStatus) {
 ```
 
 React.memo benefits from reference stability — unchanged messages don't trigger re-renders.
+
+### Transcript-Wide Facts
+
+Some facts are the whole transcript's and are read by several components:
+the resumed subagents (`liveResumes`), the stop targets that are loaded
+(`loadedStopTargets`), the unfiled children (`unfiledChildren` /
+`unfiledParts`), the top-level agents and the current plan
+(`topLevelAgentRuns`, `currentPlan`), and a run found by its id
+(`findLoadedRun`). Each streamed record hands over a new transcript array, and
+the list, the status line, the attention strip and an open subagent transcript
+all ask for these facts again in the same commit. On a 300-turn session that
+meant several walks over about 24,000 calls for every record.
+
+The same reference stability makes this cheap (`web/src/lib/transcriptMemo.ts`).
+`perTranscript` keys a fact on the transcript array, so it is derived once per
+record however many readers ask. `perMessage` keys what one message contributes
+on that message, so a walk over the calls re-reads only the message the record
+changed, and the transcript-wide answer is put together from the other
+messages' cached parts. Both depend on the reducer never changing a message or
+the array in place. Code that edited one in place would get stale answers back
+and no error.
+
+The unfiled children are only memoized per transcript. Their walk reads only a
+bubble's top-level parts, which is already cheap. What costs is building each
+parent's entry, which happens only after a page cut in mid-turn, and that part
+is shared rather than made incremental.
 
 ## Extension System
 

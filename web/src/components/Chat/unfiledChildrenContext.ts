@@ -1,10 +1,11 @@
-import { createContext, useContext, useRef } from "react";
+import { useRef } from "react";
 import {
 	type LatestChild,
 	type UnfiledChildren,
 	unfiledChildren,
 } from "../../lib/subagentRun";
 import type { ContentPart, Message } from "../../types/message";
+import { createSelectableContext } from "./selectableContext";
 
 const EMPTY: ReadonlyMap<string, UnfiledChildren> = new Map();
 
@@ -12,14 +13,19 @@ const EMPTY: ReadonlyMap<string, UnfiledChildren> = new Map();
  * The transcript's unfiled subagent children, by parent call. A context rather
  * than a prop because the answer is the whole transcript's and the reader is a
  * row inside one memoized bubble: threading it through would re-render every
- * bubble whenever any page loads.
+ * bubble whenever any page loads. Selectable, because while a subagent's
+ * children are unfiled every record it writes changes the map, and a plain
+ * context changing walks every bubble of the transcript for its readers.
  */
-export const UnfiledChildrenContext = createContext(EMPTY);
+const [UnfiledChildrenContext, useSelectUnfiled] =
+	createSelectableContext(EMPTY);
+
+export { UnfiledChildrenContext };
 
 export function useUnfiledChildren(
 	toolUseId: string,
 ): UnfiledChildren | undefined {
-	return useContext(UnfiledChildrenContext).get(toolUseId);
+	return useSelectUnfiled((unfiled) => unfiled.get(toolUseId));
 }
 
 function sameLatest(a?: LatestChild, b?: LatestChild): boolean {
