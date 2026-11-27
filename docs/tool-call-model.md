@@ -119,7 +119,7 @@ here may assume a second announcement arrives.
 |---|---|---|
 | Incremental output | **none** | `item/commandExecution/outputDelta` → `{itemId, delta, threadId, turnId}` — true stdout/stderr deltas |
 | One-line status | `system` / `task_progress` | `item/mcpToolCall/progress`.`message` |
-| Other progress fields | `task_progress` also carries `tool_use_id`, `last_tool_name`, `usage{total_tokens, tool_uses, duration_ms}` | — |
+| Other progress fields | `task_progress` also carries `tool_use_id`, `last_tool_name`, `usage{total_tokens, tool_uses, duration_ms}`; a subagent's become `subagent_progress` on `tool_activity` | — |
 
 Which field of `task_progress` actually carries that line changed between the
 schema and the shipped CLI, and the adapter reads whichever is there

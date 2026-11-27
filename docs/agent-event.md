@@ -462,12 +462,13 @@ A `thinking` record keeps its text in `Content` and adds `FullReasoning`,
 
 A `tool_result` also uses `Subtype`, for the three kinds of result that are not
 simply "what the call produced", and carries `DurationMs` / `ExitCode` when the
-CLI reported them as figures. A page tool's successful result carries
+CLI reported them as figures, and a subagent's call carries `Subagent` — which
+agent ran and what it measured. A page tool's successful result carries
 `HTMLPage` (`html_page`), the id of the page it stored, which the server stamps
 since no CLI knows it ([code/work-system.md](code/work-system.md#rendering-tool)).
-A `tool_activity` record — which exists on the wire only — carries `Activity`
-and `OutputDelta`. What each means is [tool-call-model.md](tool-call-model.md);
-the field-by-field notes are
+A `tool_activity` record — which exists on the wire only — carries `Activity`,
+`OutputDelta` and, for a subagent, `SubagentProgress`. What each means is
+[tool-call-model.md](tool-call-model.md); the field-by-field notes are
 [code/agent-integration.md](code/agent-integration.md#eventrecord-unified-event-format).
 
 `Contents` and `ToolResult` are one field in two shapes, and a `tool_result`

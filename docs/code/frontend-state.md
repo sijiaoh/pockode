@@ -1096,12 +1096,14 @@ The rules particular to children:
 
 #### Live state on a run
 
-Three of a run's fields do not come from history and cannot: `activity` (the
+Four of a run's fields do not come from history and cannot: `activity` (the
 latest one-line status), `output` (the deltas a streaming engine sends,
-accumulated client-side) and `outputDroppedLines` (what the cap on `output` has
-dropped, below). They arrive as `tool_activity`, which is broadcast and
-never persisted — a progress line is a *latest value*, and a snapshot of one in
-the transcript becomes a lie the moment the next one arrives
+accumulated client-side), `outputDroppedLines` (what the cap on `output` has
+dropped, below) and `subagentProgress` (a subagent's live counters, replaced
+whole by each frame and **cleared when the run settles**, so a stale live count
+never stands in for the result's `subagent` report). They arrive as
+`tool_activity`, which is broadcast and never persisted — a progress line is a
+*latest value*, and a snapshot of one in the transcript becomes a lie the moment the next one arrives
 ([agent-event.md](../agent-event.md#what-is-not-an-event)).
 
 Three consequences the reducer encodes:
@@ -1124,8 +1126,8 @@ Three consequences the reducer encodes:
 
 A client that subscribes mid-run has missed everything it was not listening for,
 and on a phone that is the normal case. `chat.messages.subscribe` therefore
-returns the newest activity per call still in flight, which is applied over the
-replayed transcript ([agent-chat.md](../agent-chat.md)).
+returns the newest activity — and a subagent's newest progress — per call still
+in flight, which is applied over the replayed transcript ([agent-chat.md](../agent-chat.md)).
 
 #### Times on a run
 
