@@ -616,9 +616,9 @@ question row's action opens the answer panel instead, and the pending-question
 pill is deleted, because both existed to reach the place answering happened and
 answering does not happen in the transcript any more
 ([answering-ui.md](answering-ui.md)). A question record card therefore carries no
-jump handle either — the strip's jump looks for `data-permission-request-id`, which only a permission card carries. Outside
-the strip the same jump has one other caller, a change in the turn's changes
-card going to the call that made it
+jump handle either — the strip's jump looks for `data-permission-request-id`,
+which only a permission card carries. Outside the strip the same jump has one
+other caller, a change in the turn's changes card going to the call that made it
 ([tool-call-ui.md](tool-call-ui.md#from-a-file-to-the-calls-that-changed-it)),
 which finds a tool row by its `tool_use_id`.
 

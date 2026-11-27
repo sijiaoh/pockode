@@ -18,7 +18,9 @@ change a result, the permission card and the turn's changes card all draw
 (read by `lib/proposedChange.ts`), `ToolOutcomeSections.tsx` for the blocks
 the two tool renderers share, `ToolSection.tsx` for the labelled,
 clamped section every one of those blocks is drawn as, and
-`TurnChangesCard.tsx` for [the files a turn changed](#the-turns-changes), and
+`TurnChangesCard.tsx` for [the work line and the files a turn
+changed](#the-turns-changes), `toolJumpContext.ts` for [going from a change to
+its call](#from-a-file-to-the-calls-that-changed-it), and
 `HtmlRenderCard.tsx` over `HtmlFrame.tsx` for [a page the agent
 drew](#a-page-the-agent-drew-html_render), all
 under
@@ -363,7 +365,7 @@ split and no block changes parent. Two `PartBlocks` with the element between
 them would not do: everything after the cut would remount at settle, and a row
 or group the user had opened there — local state of its `RowList` — would close
 on them. The element has a wrapper of its own that is a scroll anchor candidate
-like a part's.
+like a part's: with rows open it can be screens tall.
 
 It used to stand last, directly above the turn-end row. That place said where
 the turn *ended*, which the turn-end row already says, and it left the answer
@@ -393,8 +395,7 @@ are this turn's, so rows join the card and its figures grow in place, under
 the same anchoring. A first such edit turns a bare line into the framed card:
 the words move in by the frame's padding and the glyph's column, and the rows
 open under them — a change at a boundary the reader has already passed, not a
-second element appearing. The wrapper is a scroll anchor candidate like a part: with
-rows open it can be screens tall.
+second element appearing.
 
 **The unit is one assistant message** — what the transcript draws as a turn. A
 read point that splits a reply into two messages gives each its own card;
@@ -595,31 +596,30 @@ it.
 
 | Moment | Record | Its `observed_at` |
 |---|---|---|
-| a reply that opened its turn begins | the `message` record that opened the turn — a send, a scheduled prompt, a page's action, a command | the moment the send reached Pockode, minted once and used twice: stamped on the record, and handed to the process as the prompt's moment, so `TurnState.OpenedAt` is set from that same instant whenever the message opens the turn — the tail line's `Working 2m 12s` and this `Worked 2m 13s` count from one start. Today the record is written first and the prompt signal takes a clock of its own later (again on each retry after the process is replaced); that is the change. Every `message` record carries it; the client reads it as a start only for a message that opened a reply — the reducer's existing *nothing running, so the message opens a turn* branch |
+| a reply that opened its turn begins | the `message` record that opened the turn — a send, a scheduled prompt, a page's action, a command | the moment the send reached Pockode, minted once and used twice: stamped on the record, and handed to the process as the prompt's moment, so `TurnState.OpenedAt` is that same instant whenever the message opens the turn — the tail line's `Working 2m 12s` and this `Worked 2m 13s` count from one start, retries after a replaced process included. Every `message` record carries it; the client reads it as a start only for a message that opened a reply — the reducer's *nothing running, so the message opens a turn* branch |
 | a reply opened by [a read point](code/agent-integration.md#the-read-point) begins | its `message_ingested` | when Pockode wrote it: codex's echo, or Claude's delivery — as exact as the read point itself |
 | a reply split off by a read point ends | the next `message_ingested` | the same moment, so the two replies' spans meet and add up to the turn's |
-| the reply that ended the turn ends | the turn's `done`, `interrupted`, `process_ended` or `error` | as stamped today — except `error`, which is new |
+| the reply that ended the turn ends | the turn's `done`, `interrupted`, `process_ended` or `error` | when Pockode saw it |
 
-**New on the wire:** `observed_at` on `message`, `message_ingested` and `error`
-records, which carry none today (`ObserveAt` stamps `done`, `interrupted` and
-`process_ended` already); and the same moment on the send's own answer,
-`rpc.MessageResult`. The tab that sent the message never receives its record —
-the server leaves the sender out of the broadcast — and builds the reply's
-placeholder itself (`deliverEcho`), so without the moment in the answer the
-device the user typed on would draw no `Worked` until a reload. `deliverEcho`'s
-fill-in puts it on the reply it opens, for a send, a page's action and a
-command alike. The reducer carries the two
-moments onto the assistant message as history, the way it carries a run's
-`startedAt` and `endedAt` — the moment a reply opened is a fact about the past,
-not live state — and the figure is derived beside `turnChanges`, a pure
-function of the message: `turnWork` (`lib/turnWork.ts`), which also counts the
-calls and names the last one's part, where the line goes.
+Which records are stamped where is in
+[agent-integration.md](code/agent-integration.md#eventrecord-unified-event-format) (the server
+side) and [frontend-state.md](code/frontend-state.md#times-on-a-reply) (how the
+reducer carries the two moments onto the assistant message — history, the way
+a run's `startedAt` and `endedAt` are, not live state). One piece of it is
+the design's own: the tab that sent the message never receives its record —
+the server leaves the sender out of the broadcast — so the same moment comes
+back on the send's answer (`rpc.MessageResult`'s `observed_at`), or the device
+the user typed on would draw no `Worked` until a reload. The figure is derived
+beside `turnChanges`, a pure function of the message: `turnWork`
+(`lib/turnWork.ts`), which also counts the calls and names the last one's
+part, where the line goes.
 
 **Not measured, so not shown** — the line is drawn without its duration:
 
-- **Every reply recorded before these stamps.** No `message` record has ever
-  carried one, so every turn in history today draws `14 tool calls · …`. A
-  reload does not lose the figure on a new turn: both moments are stored.
+- **Every reply recorded before these stamps.** Older `message`,
+  `message_ingested` and `error` records carry no moment, so those turns draw
+  `14 tool calls · …`. A reload does not lose the figure on a newer turn: both
+  moments are stored.
 - **A reply that opened without a message** — output the CLI resumed by
   itself, or an answer to a permission card that outlived its turn
   (`openedByCard`) — has no start. The reducer knows it: no `message` record

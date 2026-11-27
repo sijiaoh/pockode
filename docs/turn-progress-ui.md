@@ -10,9 +10,10 @@ way. Two elements, one grammar:
   the agent is thinking. It is gone when the turn settles.
 
 When the turn settles, a third line says what the work came to — `Worked 2m 13s
-· 14 tool calls · 3 files changed`, between the work and the answer. It is the
-header of the turn's changes card and is drawn there
-([tool-call-ui.md](tool-call-ui.md#the-work-line)); the rules below hold for it.
+· 14 tool calls · 3 files changed`, between the work and the answer: the
+header of the turn's changes card, or a line alone when the turn changed no
+file ([tool-call-ui.md](tool-call-ui.md#the-work-line)); the rules below hold
+for it.
 
 The surfaces around them are [tool-call-ui.md](tool-call-ui.md) (the list,
 groups, the turn's changes) and [lifecycle-ui.md](lifecycle-ui.md) (`Activity`,
