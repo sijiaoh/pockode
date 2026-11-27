@@ -118,7 +118,9 @@ func TestClient_SendPermissionVerdict(t *testing.T) {
 }
 
 // A person's answer is unchanged by all this: a deny still stops the turn,
-// and the record still says nothing about who gave it.
+// and the record still says nothing about who gave it. It is broadcast: the
+// client that pressed drew its own press, and any other client watching the
+// session otherwise keeps the card live until it reloads.
 func TestClient_PersonsPermissionResponseUnattributed(t *testing.T) {
 	f := newMidTurnFixture(t)
 	sess := f.startTurn(t)
@@ -136,6 +138,15 @@ func TestClient_PersonsPermissionResponseUnattributed(t *testing.T) {
 	responses := f.permissionResponses(t)
 	if len(responses) != 1 || responses[0].By != "" || responses[0].Review != nil {
 		t.Errorf("records = %+v, want one with no attribution", responses)
+	}
+	var broadcast bool
+	for _, b := range f.broadcasts {
+		if b.Type == agent.EventTypePermissionResponse && b.RequestID == "req-1" {
+			broadcast = true
+		}
+	}
+	if !broadcast {
+		t.Error("the person's response was not broadcast")
 	}
 }
 

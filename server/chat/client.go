@@ -369,15 +369,19 @@ func (c *Client) SendPermissionResponse(ctx context.Context, sessionID string, d
 		return err
 	}
 
-	// Persist response to history
-	event := agent.ObserveAt(agent.PermissionResponseEvent{
+	// Broadcast as well as stored: the client that answered has drawn its own
+	// press, but every other client watching the session has not, and kept a
+	// live card for an answered request until it reloaded.
+	record := agent.NewEventRecord(agent.ObserveAt(agent.PermissionResponseEvent{
 		RequestID: data.RequestID,
 		Choice:    choiceToString(choice),
-	}, time.Now())
-	if _, err := c.store.AppendToHistory(ctx, sessionID, agent.NewEventRecord(event)); err != nil {
+	}, time.Now()))
+	seq, err := c.store.AppendToHistory(ctx, sessionID, record)
+	if err != nil {
 		slog.Error("failed to persist permission response", "sessionId", sessionID, "error", err)
+		return nil
 	}
-
+	c.broadcastRecord(sessionID, record, seq)
 	return nil
 }
 
@@ -385,8 +389,7 @@ func (c *Client) SendPermissionResponse(ctx context.Context, sessionID string, d
 // reviewer's behalf: allow approves that one request and nothing more, and deny
 // leaves the turn running and tells the agent review's reason, so it can
 // rewrite the call and carry on. The response is recorded as the reviewer's,
-// with review on it, and broadcast — unlike a person's answer, no client has
-// already drawn it.
+// with review on it, and broadcast like a person's answer.
 //
 // proc is the process that raised the request, not whichever one the session
 // has now: a request id is only unique within the process that minted it
