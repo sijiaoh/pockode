@@ -58,12 +58,12 @@ var ignoredNotifications = map[string]bool{
 	// they do not.
 	"item/reasoning/summaryPartAdded": true,
 
-	// Real information with no surface in Pockode yet — plans and the turn's
-	// accumulated diff. The whole form of each is dropped as well, in
-	// handleItemCompleted's switch, so these are not increments of anything
-	// rendered.
+	// Real information with no surface in Pockode yet — plan mode's proposed
+	// plan and the turn's accumulated diff. The whole form of each is dropped
+	// as well, in handleItemCompleted's switch, so these are not increments of
+	// anything rendered. Plan mode's plan is not the checklist
+	// turn/plan/updated reports (handlePlanUpdated).
 	"item/plan/delta":               true,
-	"turn/plan/updated":             true,
 	"turn/diff/updated":             true,
 	"turn/moderationMetadata":       true,
 	"model/rerouted":                true,
@@ -89,6 +89,7 @@ func (s *appSession) handleNotification(msg rpcMessage) {
 			case "turn/completed":
 				s.settleSubagent(thread, msg.Params)
 				s.forgetReasoning(func(t string) bool { return t == thread })
+				s.forgetPlanUpdates(msg.Params)
 			case "thread/tokenUsage/updated":
 				s.rememberSubagentUsage(thread, msg.Params)
 			}
@@ -120,6 +121,9 @@ func (s *appSession) handleNotification(msg rpcMessage) {
 
 	case "item/reasoning/textDelta":
 		s.handleReasoningDelta(msg.Params, true)
+
+	case "turn/plan/updated":
+		s.handlePlanUpdated(msg.Params)
 
 	case "thread/tokenUsage/updated":
 		// Usage accounting, not a transcript entry: it updates the session's
@@ -197,6 +201,7 @@ func (s *appSession) handleTurnCompleted(params json.RawMessage) {
 	s.clearTurn()
 	s.forgetToolInputs()
 	s.forgetReasoning(s.isOwnThread)
+	delete(s.planUpdates, notif.Turn.ID)
 	authFailed := s.turnAuthFailed
 	s.turnAuthFailed = false
 	if notif.Turn.Error != nil {

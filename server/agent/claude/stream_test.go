@@ -28,6 +28,13 @@ func runStreamOutput(t *testing.T, stdout string) []agent.AgentEvent {
 
 func runStreamOutputWithDeclines(t *testing.T, stdout string) ([]agent.AgentEvent, []declined) {
 	t.Helper()
+	return runStreamOutputWithPlans(t, stdout, newPlanTracker(slog.Default(), nil))
+}
+
+// runStreamOutputWithPlans is runStreamOutputWithDeclines with the plan
+// tracker a process would have been started with.
+func runStreamOutputWithPlans(t *testing.T, stdout string, plans *planTracker) ([]agent.AgentEvent, []declined) {
+	t.Helper()
 
 	events := make(chan agent.AgentEvent, 32)
 	var got []agent.AgentEvent
@@ -41,7 +48,7 @@ func runStreamOutputWithDeclines(t *testing.T, stdout string) ([]agent.AgentEven
 
 	var declines []declined
 	streamOutput(context.Background(), slog.Default(), strings.NewReader(stdout), events,
-		&sync.Map{}, nil, &backgroundTaskTracker{}, &thinkingClock{},
+		&sync.Map{}, nil, &backgroundTaskTracker{}, plans, &thinkingClock{},
 		newUsageObserver(slog.Default(), agent.StartOptions{}),
 		testRefusals(func(requestID, reason string) {
 			declines = append(declines, declined{requestID, reason})

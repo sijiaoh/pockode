@@ -63,7 +63,7 @@ type AgentEvent interface {
 
 | Category | Types | Terminal? |
 |----------|-------|-----------|
-| Content | `text`, `tool_call`, `tool_result`, `thinking`, `system`, `warning`, `raw`, `command_output` | No |
+| Content | `text`, `tool_call`, `tool_result`, `thinking`, `plan`, `system`, `warning`, `raw`, `command_output` | No |
 | Progress | `tool_activity`, `thinking_delta` (broadcast only, never recorded) | No |
 | Wait | `background_wait` (the turn parked on work outliving its tool call) | No |
 | Terminal | `done`, `interrupted`, `error`, `process_ended` | Yes |
@@ -168,6 +168,31 @@ Claude CLI's version — is in
 reached it. `thinking_delta` is not. Claude's is a CLI estimate, and it sits
 with `system` and `tool_activity` in the gap between the two predicates, the
 gap that must not end a background wait.
+
+#### Plan
+
+The agent's plan is a **recorded** `plan` event: the checklist as the agent
+stated it at one moment. It is never updated afterwards, and the newest one is
+the current plan, which is why the turn tail's plan line can read it without a
+store ([turn-progress-ui.md §4.6](turn-progress-ui.md#46-the-plan-record)
+defines the fields and the three producers: Codex's `turn/plan/updated`,
+Claude's `TodoWrite`, and the server's fold of Claude's `TaskCreate` /
+`TaskUpdate` / `TaskList`). The one part of it that is state, the Claude
+adapter's fold of incremental task calls, lives in the adapter. Each record is
+a snapshot of the fold, never the fold itself, and a process that resumes the
+CLI's session seeds its fold from the newest snapshot record (§4.6 there says
+when, and why that read-back is acceptable).
+
+The four predicates, answered explicitly:
+
+- **`Persisted`: yes.** It is history, and replay draws the plan from it.
+- **`AwaitsUserInput`: no.** Nobody answers a plan.
+- **`IndicatesAgentActivity`: yes.** It only arrives while the agent is working,
+  so `plan` is in that allowlist's switch in `server/agent/event.go`.
+- **`ActivatesSession`: no.** A Claude `plan` follows a tool result that
+  already proves the turn reached the model, and a Codex one arrives inside a
+  turn that has started. It must not end a background wait either, the same gap
+  `tool_activity` sits in. So `turnInputFor` maps it to `SignalNoise`.
 
 #### Message Origin (user vs. system)
 
@@ -558,6 +583,10 @@ event folds into a part its own id does not name:
   thing, which is a degradation rather than an error. Of the records one call
   writes, only the first takes the row; the rest follow the last card sharing
   their `asked_at`, so the batch stays together.
+- `plan` with a `tool_use_id` (Claude) folds into that call's run as
+  `ToolRun.plan` and draws nothing of its own. A Codex `plan`, which has
+  `plan_id` instead, becomes a settled `Plan` run of its own, keyed by that id
+  ([turn-progress-ui.md §4.6](turn-progress-ui.md#46-the-plan-record)).
 - `ask_user_question` (legacy) takes the place of its `tool_call` part by id.
   Claude asked through a regular tool call, so one question arrived as
   `tool_call` → `ask_user_question` → `question_response` → `tool_result`; the

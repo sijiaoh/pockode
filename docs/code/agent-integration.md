@@ -269,7 +269,7 @@ Events are divided into these categories:
 
 | Category | Event Types | Description |
 |----------|-------------|-------------|
-| **Content** | `text`, `tool_call`, `tool_result`, `thinking`, `system`, `warning`, `raw`, `command_output` | AI-generated content |
+| **Content** | `text`, `tool_call`, `tool_result`, `thinking`, `plan`, `system`, `warning`, `raw`, `command_output` | AI-generated content |
 | **Live** | `tool_activity`, `thinking_delta` | what a call or the agent is doing right now; broadcast, never recorded |
 | **Terminal** | `done`, `error`, `interrupted`, `process_ended` | Marks end of AI turn |
 | **Permission** | `permission_request`, `permission_response`, `request_cancelled` | Tool execution authorization |
@@ -347,8 +347,8 @@ boundary with `ActivatesSession`, which is where the expense moved.
 
 #### Why `ActivatesSession` Is Not `IndicatesAgentActivity`
 
-The two differ by three event types — `system`, `tool_activity` and
-`thinking_delta` — and that
+The two differ by four event types — `system`, `tool_activity`,
+`thinking_delta` and `plan` — and that
 difference is the whole reason the second predicate exists. A turn can be under way from
 start to finish without the agent ever contributing to it: a first message sent
 through an expired login or a dead endpoint gets an `init`, a run of
@@ -368,11 +368,14 @@ is not over, while over-including in `IndicatesAgentActivity` costs nothing.
 So `command_output` and `raw` are in `ActivatesSession` despite being
 borderline — neither can come from a turn that never started — while `system`,
 borderline in the other direction, is not. `IndicatesAgentActivity` is written as
-the union (`system || tool_activity || thinking_delta || ActivatesSession()`)
+the union (`system || tool_activity || thinking_delta || plan || ActivatesSession()`)
 rather than as a second literal list, so a future output event type added to one
 cannot silently go missing from the other. The named types are named rather than
 derived:
 each says a turn is under way without putting anything of the agent's into it.
+`plan` is the agent's own, but it only ever follows content that already proved
+the turn reached the model, so it is not the CLI coming back either
+([agent-event.md](../agent-event.md#plan)).
 (`tool_activity` no longer buys a parked turn extra time: the background lease is
 a flat cap on how long a turn may stay parked, not a silence budget — see
 [The Lease Table](#the-lease-table).)
@@ -2762,6 +2765,7 @@ func streamOutput(ctx context.Context, stdout io.Reader, events chan<- agent.Age
 - **Single decode**: The envelope is unmarshaled once per line and reused by both the resume observer and `parseLine` (which retains the raw `line` only for events needing a superset struct), avoiding a redundant parse on every high-frequency line
 - **Non-blocking send**: Checks `ctx.Done()` to avoid deadlocks
 - **Graceful degradation**: Returns raw text when JSON parsing fails, no data is discarded
+- **Plan records come out of a layer after `parseLine`**: `planTracker` (`agent/claude/plan.go`) reads each frame's parsed events and appends a `PlanEvent` after any plan call's result that changed the plan. It is state the adapter keeps across frames — the Task tools are incremental, and only the adapter sees every call live — so it sits beside `parseLine` rather than in it; an oversized line goes through it too, so a lost result lets go of its held input ([turn-progress-ui.md §4.6](../turn-progress-ui.md#46-the-plan-record))
 
 ### Bidirectional Communication
 
@@ -3278,6 +3282,11 @@ one costs a moment of liveness and nothing else
 ([tool-call-model.md](../tool-call-model.md#tool_activity-is-not-persisted)).
 A schema integration test asserts both still carry the fields read here, so the
 day upstream renames one it fails loudly rather than going quiet.
+
+`turn/plan/updated` is not on the list: each one becomes a `PlanEvent`
+(`codex/plan.go`, [turn-progress-ui.md §4.6](../turn-progress-ui.md#46-the-plan-record)).
+`item/plan/delta` is, despite the name: it streams plan mode's proposed plan,
+which is not that checklist.
 
 A delta is only sent for output a command produces while it is still holding the
 call open. One that finishes at once carries its whole output on `item/completed`

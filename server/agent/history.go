@@ -171,6 +171,11 @@ type EventRecord struct {
 	// ThinkingDeltaEvent.
 	ContentDelta       string `json:"content_delta,omitempty"`
 	FullReasoningDelta string `json:"full_reasoning_delta,omitempty"`
+	// Steps, Explanation and PlanID belong to plan records; see PlanEvent. A
+	// plan record with no steps field is a plan with nothing in it.
+	Steps       []PlanStep `json:"steps,omitempty"`
+	Explanation string     `json:"explanation,omitempty"`
+	PlanID      string     `json:"plan_id,omitempty"`
 	// ProviderMessageID is the agent's own id for the piece of its conversation
 	// this event was parsed out of, when the agent hands one out. It is a fact
 	// the event arrived with, not Pockode state, which is why it is recorded
