@@ -5,7 +5,7 @@ import { ACTIVITY_VIEW } from "../../lib/activity";
 import { hasProcess, subagentNow } from "../../lib/subagentRun";
 import { hasText, type LiveThinking, latestLine } from "../../lib/thinking";
 import { formatElapsed, toolRunLook } from "../../lib/toolRun";
-import { toolSummary } from "../../lib/toolSummary";
+import { isTaskTool, toolSummary } from "../../lib/toolSummary";
 import {
 	type AgentsOverview,
 	agentsLabel,
@@ -126,6 +126,13 @@ function NamedAgent({ run }: { run: ToolRun }) {
 	const unfiled = useUnfiledChildren(run.id);
 	const now = subagentNow(run, unfiled);
 	const title = toolSummary(run.name, run.input, "").title;
+	// A nested subagent is named by the mark and its task alone: the agent
+	// named just before it is the one running it, and a second agent name on
+	// a phone's line left room for neither (docs/turn-progress-ui.md#43-the-agents).
+	const nested =
+		now?.kind === "call" && isTaskTool(now.name)
+			? toolSummary(now.name, now.input, "").detail
+			: "";
 	return (
 		<>
 			{/* The title gives way only once the child has: the child takes only
@@ -133,7 +140,17 @@ function NamedAgent({ run }: { run: ToolRun }) {
 			<span className="min-w-0 truncate">{title}</span>
 			{now && (
 				<span className="flex min-w-0 grow basis-0 items-baseline gap-1.5 overflow-hidden">
-					<LatestChildLabel child={now} />
+					{nested ? (
+						<>
+							<Bot
+								aria-hidden
+								className="size-3 shrink-0 self-center text-th-text-secondary"
+							/>
+							<span className="min-w-0 truncate">{nested}</span>
+						</>
+					) : (
+						<LatestChildLabel child={now} />
+					)}
 				</span>
 			)}
 		</>

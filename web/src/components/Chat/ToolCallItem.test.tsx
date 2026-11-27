@@ -1669,6 +1669,22 @@ describe("ToolCallItem for the remaining tool kinds", () => {
 			expect(screen.getByText("Agents")).toBeVisible();
 			expect(screen.getByText("/root/file_reader: running")).toBeVisible();
 		});
+
+		it("says a wait that named no agent named none, rather than list its arguments", async () => {
+			draw({
+				name: "AgentControl",
+				input: { action: "wait", agents: [] },
+				status: "success",
+				result: "",
+			});
+			expect(screen.getByText("Wait")).toBeVisible();
+			await openBody();
+			expect(
+				screen.getByText("Codex did not say which agents it waited for."),
+			).toBeVisible();
+			expect(screen.queryByText("Parameters")).toBeNull();
+			expect(screen.queryByText("Agents")).toBeNull();
+		});
 	});
 });
 

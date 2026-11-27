@@ -538,9 +538,7 @@ function LevelHeader({
 								mono={summary.mono}
 								error={failed}
 							/>
-							<span className="ml-auto">
-								<ToolMeta run={rowRun} />
-							</span>
+							<ToolMeta run={rowRun} />
 						</div>
 						{line ? (
 							<span

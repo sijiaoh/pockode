@@ -1,5 +1,6 @@
 import { act, render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, onTestFinished } from "vitest";
+import { useWSStore } from "../../lib/wsStore";
 import type { PlanStep, ToolRun } from "../../types/message";
 import TurnTail from "./TurnTail";
 import { ToolJumpContext } from "./toolJumpContext";
@@ -152,6 +153,57 @@ describe("the status line", () => {
 		expect(title.getBoundingClientRect().right).toBeLessThanOrEqual(
 			free.getBoundingClientRect().right + 0.5,
 		);
+	});
+
+	// A file at the work directory's root has no directories to keep beside
+	// its name, so the name may take the whole detail: cut at the chevron, not
+	// short of it.
+	it("cuts what the agent is doing at the chevron, not short of it", async () => {
+		useWSStore.setState({ workDir: "/w" });
+		onTestFinished(() => useWSStore.setState({ workDir: "" }));
+		const run: ToolRun = {
+			id: "a",
+			name: "Agent",
+			input: { agent_path: "/root/read_calc" },
+			status: "running",
+			children: [
+				{
+					type: "tool_call",
+					id: "call-r",
+					tool: {
+						id: "r",
+						name: "Read",
+						input: { file_path: "/w/a_rather_long_file_name_at_the_root.py" },
+						status: "running",
+					},
+				},
+			],
+		};
+		render(
+			<div style={{ width: 300 }}>
+				<TurnTailContext
+					value={{
+						...IDLE_TAIL,
+						phase: "running",
+						overviewMessageId: "m",
+						agents: { liveCount: 1, named: run, entries: [] },
+					}}
+				>
+					<TurnTail messageId="m" writing placeholder={false} />
+				</TurnTailContext>
+			</div>,
+		);
+		await act(nextFrame);
+		const name = screen.getByText("a_rather_long_file_name_at_the_root.py");
+		expect(name.scrollWidth).toBeGreaterThan(name.clientWidth);
+		const chevron = screen
+			.getByRole("button", { name: /details$/ })
+			.querySelector("svg.lucide-chevron-right");
+		if (!chevron) throw new Error("no chevron");
+		// The line's 6px gap, and nothing more.
+		expect(
+			chevron.getBoundingClientRect().left - name.getBoundingClientRect().right,
+		).toBeLessThanOrEqual(6.5);
 	});
 
 	// The free text gives way first, but only to what it has to: with room,

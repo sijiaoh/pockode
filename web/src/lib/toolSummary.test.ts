@@ -90,6 +90,17 @@ describe("toolSummary", () => {
 
 	// The agent is the title and the task its detail: the type is no longer a
 	// chip beside a literal `Task`.
+	// Codex runs every command inside `zsh -lc '…'`; the row shows what ran in it.
+	it("details a command by the script inside a CLI's shell envelope", () => {
+		expect(
+			toolSummary(
+				"Bash",
+				{ command: "/bin/zsh -lc 'sleep 45; echo main-done'" },
+				WORK_DIR,
+			).detail,
+		).toBe("sleep 45; echo main-done");
+	});
+
 	it("names a subagent call by its agent, and details it by its description", () => {
 		expect(
 			toolSummary(

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { commandHead } from "./commandHead";
+import { commandHead, unwrapShellCommand } from "./commandHead";
 
 // Commands below are taken (shortened) from real agent sessions.
 describe("commandHead", () => {
@@ -159,5 +159,33 @@ describe("commandHead", () => {
 		"if [ -f x ]; then echo yes; fi",
 	])("says nothing rather than guess at %j", (command) => {
 		expect(commandHead(command)).toBeUndefined();
+	});
+});
+
+describe("unwrapShellCommand", () => {
+	it.each([
+		["/bin/zsh -lc 'sleep 45; echo main-done'", "sleep 45; echo main-done"],
+		["bash -c 'ls -la'", "ls -la"],
+		["/usr/bin/sh -lc 'cat a\nb'", "cat a\nb"],
+		[`/bin/zsh -lc 'echo '"'"'hi'"'"''`, "echo 'hi'"],
+		[`bash -lc "pnpm test"`, "pnpm test"],
+	])("takes the script out of %j", (command, script) => {
+		expect(unwrapShellCommand(command)).toBe(script);
+	});
+
+	it.each([
+		["anything after the script", "bash -lc 'make' && echo done"],
+		["a redirection after it", "bash -lc 'make' > out.log"],
+		["a redirection before it", "2>/dev/null bash -lc 'make'"],
+		["a comment after it", "bash -lc 'make' # build"],
+		["a second argument", "bash -c 'echo $0' arg"],
+		["an unclosed quote", "bash -lc 'make"],
+		["an expansion inside double quotes", `bash -lc "echo $HOME"`],
+		["an escape inside double quotes", `bash -lc "echo \\"x\\""`],
+		["an empty script", "bash -lc ''"],
+		["a shell that is not one", "fish -c 'ls'"],
+		["no envelope", "sleep 45; echo main-done"],
+	])("keeps the command as it is with %s", (_, command) => {
+		expect(unwrapShellCommand(command)).toBe(command);
 	});
 });

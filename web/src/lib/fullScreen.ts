@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { unwrapShellCommand } from "./commandHead";
 import type { ProposedChangeData } from "./proposedChange";
 import { getLanguageFromPath, isMarkdownFile } from "./shikiUtils";
 
@@ -112,7 +113,11 @@ export function fullScreenSubject(
 	};
 	switch (toolName) {
 		case "Bash":
-			return text(obj.command);
+			return text(
+				typeof obj.command === "string"
+					? unwrapShellCommand(obj.command)
+					: undefined,
+			);
 		case "Read":
 		case "Write":
 		case "Edit":

@@ -9,6 +9,7 @@ import {
 	SLEEP_TOOL,
 	sleepRequestLine,
 } from "../../lib/codexTools";
+import { unwrapShellCommand } from "../../lib/commandHead";
 import type { FullScreenSource } from "../../lib/fullScreen";
 import { pockodeWorkTool } from "../../lib/pockodeWorkTools";
 import { proposedChange } from "../../lib/proposedChange";
@@ -153,7 +154,8 @@ export function invocationView(
 	if (toolName === "Bash" && typeof input.command === "string") {
 		return {
 			kind: "command",
-			command: input.command,
+			// Raw input keeps the envelope; this is the script it ran.
+			command: unwrapShellCommand(input.command),
 			description:
 				typeof input.description === "string" ? input.description : null,
 			// Codex's, and only Codex's: which directory a command runs in is half of
@@ -195,8 +197,17 @@ export function invocationView(
 				};
 	}
 	if (toolName === AGENT_CONTROL_TOOL) {
-		const { prompt } = agentControlInput(input);
+		const { prompt, agents } = agentControlInput(input);
 		if (prompt) return { kind: "markdown", label: "Prompt", markdown: prompt };
+		// A `wait_agent` with no target waits on whichever agent answers first,
+		// and Codex then names no receiver at all (`receiver_thread_ids: []`,
+		// measured on codex-cli 0.171): `agents []` as a parameter says nothing.
+		if (agents.length === 0 && input.action === "wait") {
+			return {
+				kind: "note",
+				text: "Codex did not say which agents it waited for.",
+			};
+		}
 	}
 
 	// A Pockode work tool's body opens on the work (`WorkRefLine`), so of its

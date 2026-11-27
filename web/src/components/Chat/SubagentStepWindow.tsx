@@ -69,31 +69,22 @@ const LINE = "flex min-w-0 items-baseline gap-1.5 text-xs";
  * row's button while the row is closed; hidden from assistive tech, being a
  * moving view of steps the Process lists accessibly.
  *
- * All `lines` boxes are drawn from the first step, the newest on the bottom
- * one and the unfilled ones blank above it, so the window takes its height
- * once rather than growing a line per step.
+ * It draws only the lines it has steps for, growing a line per step up to
+ * its size and rolling after that: a box reserved for a step that has not
+ * come reads as a gap in the layout, and most subagents never fill theirs.
  *
  * `frozen` is a settled row's: its steps stay as the reducer left them, and
  * carry no time — a counter ticking on a settled row would be a lie about it.
  */
 export function SubagentStepWindow({
 	steps,
-	lines,
 	frozen,
 }: {
 	steps: RecentStep[];
-	lines: number;
 	frozen: boolean;
 }) {
-	const blanks = Math.max(0, lines - steps.length);
 	return (
 		<span aria-hidden className="block" data-step-window>
-			{Array.from({ length: blanks }, (_, i) => (
-				// biome-ignore lint/suspicious/noArrayIndexKey: blank boxes have no identity
-				<span key={`blank-${i}`} className={LINE}>
-					{"\u00a0"}
-				</span>
-			))}
 			{steps.map((step) => (
 				<span key={step.id} className={LINE}>
 					<StepGlyph mark={step.mark} />
@@ -106,9 +97,7 @@ export function SubagentStepWindow({
 						</>
 					)}
 					{!frozen && step.mark === "running" && step.run && (
-						<span className="ml-auto">
-							<ToolMeta run={step.run} />
-						</span>
+						<ToolMeta run={step.run} />
 					)}
 				</span>
 			))}

@@ -190,7 +190,11 @@ export function Detail({
 		<span className={`flex min-w-0 flex-1 items-baseline ${monoClass}`}>
 			<span className={`truncate ${headClass}`}>{detail}</span>
 			{detailTail && (
-				<span className={`max-w-[70%] shrink-0 truncate ${tailClass}`}>
+				// The cap keeps a few directories in sight beside the file name; with
+				// none to keep, it would leave its 30% blank while the name is cut.
+				<span
+					className={`shrink-0 truncate ${detail ? "max-w-[70%]" : "max-w-full"} ${tailClass}`}
+				>
 					{detailTail}
 				</span>
 			)}
@@ -290,11 +294,13 @@ function ToolTime({ run }: { run: ToolRun }) {
 /**
  * The right-hand figures: what the call measured, then its time — last, so
  * the times of a stack of rows stay in one column. Neither is ever truncated;
- * the detail gives way.
+ * the detail gives way. Pushed to the line's end by itself rather than by the
+ * detail filling the line: a row with no detail (a subagent named by its
+ * agent alone, Codex's Wait) would otherwise put its time against its name.
  */
 export function ToolMeta({ run }: { run: ToolRun }) {
 	return (
-		<span className="flex shrink-0 items-baseline gap-2 empty:hidden">
+		<span className="ml-auto flex shrink-0 items-baseline gap-2 empty:hidden">
 			<ToolOutcomeFigure run={run} />
 			<ToolTime run={run} />
 		</span>

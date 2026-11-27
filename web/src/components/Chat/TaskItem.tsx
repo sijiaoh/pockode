@@ -251,11 +251,7 @@ function TaskItem({ run, depth = 0, renderChild }: Props) {
 		rowRun,
 		unfiled,
 		windowSteps.length > 0 ? (
-			<SubagentStepWindow
-				steps={windowSteps}
-				lines={fold.lines}
-				frozen={!live}
-			/>
+			<SubagentStepWindow steps={windowSteps} frozen={!live} />
 		) : undefined,
 	);
 	const { summary } = header;

@@ -1322,7 +1322,7 @@ afterwards cannot word the same call differently.
 
 | Tool (Pockode-normalized name) | Title | Detail | Truncates from |
 |---|---|---|---|
-| `Bash` | `Bash` | the **command**, newlines collapsed to ` ⏎ ` — or, when Codex parsed the command into exactly one action, that action's path or query | right |
+| `Bash` | `Bash` | the **command**, with a CLI's own `<shell> -lc '…'` envelope removed and newlines collapsed to ` ⏎ ` — or, when Codex parsed the command into exactly one action, that action's path or query | right |
 | `Read` / `Write` / `Edit` / `MultiEdit` / `LS` | the name | the path relative to the work directory, split so the file name survives | **left** |
 | `Grep` | `Grep` | `"pattern"` + ` in <path>` when scoped — the path relative to the work directory when inside it, and no ` in …` at all when it *is* the work directory | right |
 | `Glob` | `Glob` | the pattern | right |
@@ -1408,14 +1408,17 @@ Eight decisions inside that table:
 // head = everything up to the last "/", tail = the file name (+ any :line suffix)
 <span className="flex min-w-0 flex-1 items-baseline">
   <span className="truncate text-th-text-muted">{head}</span>
-  <span className="max-w-[70%] shrink-0 truncate text-th-text-secondary">{tail}</span>
+  <span className={`shrink-0 truncate text-th-text-secondary ${head ? "max-w-[70%]" : "max-w-full"}`}>{tail}</span>
 </span>
 ```
 
 The directories fade out from the left, the file name stays, and it is a rung
 brighter because it is the identifying part. The 70% cap keeps a pathological
-file name from evicting the directories entirely. Non-path details pass `tail`
-as empty and get a plain `truncate`.
+file name from evicting the directories entirely — so it applies only when
+there are directories: a file at the work directory's root has an empty head,
+and the cap would leave 30% of the detail blank while the name was cut, so its
+name may take the whole width. Non-path details pass `tail` as empty and get a
+plain `truncate`.
 
 **Status outranks the two rungs.** On an `error` row both spans take
 `text-th-error`; the head/tail contrast exists to point at the identifying part
@@ -3741,14 +3744,18 @@ sets `interactive-widget=resizes-content`, so the keyboard opening changes the
 height, and sizing by it would resize every window with every focus. Width
 changes only on rotation, which reflows everything anyway.
 
-**Reserved at the first step, bottom-aligned.** The window is not drawn before
-the first step, so a row with none reads exactly as it did ([the second
-line](#the-second-line-steps-and-what-it-is-doing)). At its first step it draws
-**all k line boxes**: the newest step on the bottom line, the unfilled lines
-above it blank, each new step entering at the bottom and rolling upward.
-Rolling changes text, not layout, so a live row moves the rows under it once
-(0 → k), not k times. A resume regrows a folded window the same way: once, at
-the resume, on a row that has just said it is running again.
+**Grown to k, then rolled.** The window is not drawn before the first step,
+so a row with none reads exactly as it did ([the second
+line](#the-second-line-steps-and-what-it-is-doing)). It then draws **only the
+lines it has steps for**: one at the first step, two at the second, up to k.
+After that each new step enters at the bottom and the oldest drops off the
+top; rolling changes text, not layout. So a live row moves the rows under it
+once per line it gains, k times at most, all in its first seconds. That is k−1
+moves more than reserving all k boxes at the first step: two on a desktop, one
+on a phone. The reservation's unfilled boxes read as a hole in the layout, on
+every subagent with fewer steps than k, which is most short ones. A frozen window keeps the lines it
+had, not k. A resume regrows a folded window the same way, on a row that has
+just said it is running again.
 
 #### What each line shows
 
@@ -3841,7 +3848,7 @@ starts at or above the view's top
 fold wholly above the view is under its correction, and one wholly below it
 moves nothing visible. A lone subagent that finishes at the tail therefore
 stays frozen in front of the reader until the turn ends.
-`StepWindowFold.browser.test.tsx` holds this, and the reserved growth above,
+`StepWindowFold.browser.test.tsx` holds this, and the growth above,
 on a 360×640 phone.
 
 **Once folded, it stays folded.** The fold is latched by run id in a set
@@ -4290,7 +4297,7 @@ details are in [the table](#title-and-detail), their summary verbs in
 | Codex `WebSearch` / `WebFetch` | the usual rungs | the invocation, then the links a search reported, or a line saying nothing came back to show | no |
 | `GenerateImage` | the usual rungs; a limit reached is rung 4 | the prompt, with the image as the row's attachment | no |
 | `Sleep` | none | one line, *Asked to wait 30s* | no |
-| `AgentControl` | the usual rungs | the prompt when there is one, then each agent's state | no |
+| `AgentControl` | the usual rungs | the prompt when there is one, then each agent's state; a `wait` that named no agent says so in one line | no |
 | a dynamic tool | as an MCP call | as an MCP call | no |
 
 **`NotebookEdit` is a file change, drawn the way an `Edit` is.**
@@ -4376,7 +4383,12 @@ are the pulse a reader needs. The body has the prompt, when it sent one, in a
 clamped Markdown section headed *Prompt*, then each receiver's last known
 state under *Agents*, one line each as the server wrote it
 (`/root/file_reader: completed`). Without a prompt the invocation lists the
-call's arguments. In a group summary it is named by its title, `Used Wait`.
+call's arguments — except a `wait` that named no agent: a `wait_agent` with no
+target waits on whichever answers first, and Codex then reports no receiver
+and no state (`receiver_thread_ids: []`, measured on codex-cli 0.171), so the
+row is a bare `⧉ Wait` and the body is one muted line, *Codex did not say which
+agents it waited for.*, in place of an `agents []` parameter. In a group
+summary it is named by its title, `Used Wait`.
 
 ## Pockode's own work calls
 

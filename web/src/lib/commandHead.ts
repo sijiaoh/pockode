@@ -12,6 +12,13 @@ interface Word {
 	value: string;
 	/** No quoting, escaping or expansion anywhere in it: it says what it is. */
 	plain: boolean;
+	/**
+	 * `value` is the word the shell would pass on: nothing in it is expanded,
+	 * and no double-quoted part holds an escape left in place.
+	 */
+	literal: boolean;
+	/** Where in the text the word stops. */
+	end: number;
 }
 
 interface Operator {
@@ -67,6 +74,7 @@ function tokenize(text: string): Token[] {
 	const heredocs: string[] = [];
 	let value = "";
 	let plain = true;
+	let literal = true;
 	let started = false;
 	let dropNextWord = false;
 
@@ -76,9 +84,10 @@ function tokenize(text: string): Token[] {
 		if (plain && /[*?[\]{}]/.test(value) && !/^(\[\[?|\]\]?|[{}])$/.test(value))
 			plain = false;
 		if (dropNextWord) dropNextWord = false;
-		else tokens.push({ kind: "word", value, plain });
+		else tokens.push({ kind: "word", value, plain, literal, end: i });
 		value = "";
 		plain = true;
+		literal = true;
 		started = false;
 	};
 
@@ -123,7 +132,9 @@ function tokenize(text: string): Token[] {
 				} else if (text[j] === "`") j = expansionEnd(text, j) - 1;
 				j++;
 			}
-			value += text.slice(i + 1, j);
+			const quoted = text.slice(i + 1, j);
+			if (/[\\$`]/.test(quoted)) literal = false;
+			value += quoted;
 			plain = false;
 			started = true;
 			i = j + 1;
@@ -141,6 +152,7 @@ function tokenize(text: string): Token[] {
 						: i + 1 + matchAt(PARAMETER, text, i + 1).length;
 			value += text.slice(i, end);
 			plain = false;
+			literal = false;
 			started = true;
 			i = end;
 		} else if (c === "<" || c === ">" || (c === "&" && text[i + 1] === ">")) {
@@ -180,6 +192,7 @@ function tokenize(text: string): Token[] {
 				const end = expansionEnd(text, i);
 				value += text.slice(i, end);
 				plain = false;
+				literal = false;
 				i = end;
 				continue;
 			}
@@ -275,6 +288,41 @@ const SETUP = new Set([
 ]);
 
 const SHELLS = new Set(["bash", "sh", "zsh"]);
+
+const SHELL_FIRST = new RegExp(`^\\s*(\\S*/)?(${[...SHELLS].join("|")})\\s`);
+
+/** `-c`, `-lc`, `-cl`…: the shell flags that run the next word as a script. */
+const RUNS_SCRIPT = /^-\w*c\w*$/;
+
+/**
+ * The script inside a CLI's own shell envelope — Codex runs every command as
+ * `/bin/zsh -lc '…'` — or the command as it is when it is anything more than
+ * exactly that envelope: a script that is read off it word for word or not at
+ * all.
+ */
+export function unwrapShellCommand(command: string): string {
+	// Every Bash summary comes through here, a long here-doc included: only a
+	// command that opens on a shell is worth tokenizing.
+	if (!SHELL_FIRST.test(command)) return command;
+	const tokens = tokenize(command);
+	if (tokens.length !== 3 || tokens.some((token) => token.kind === "op"))
+		return command;
+	const [shell, flag, script] = tokens as Word[];
+	if (
+		shell.plain &&
+		SHELLS.has(basename(shell.value)) &&
+		// Nothing the tokenizer passes over — a redirection, a comment, an
+		// unclosed quote — sits before the shell or after the script.
+		command.trimStart().startsWith(shell.value) &&
+		script.end === command.trimEnd().length &&
+		flag.plain &&
+		RUNS_SCRIPT.test(flag.value) &&
+		script.literal &&
+		script.value.trim()
+	)
+		return script.value;
+	return command;
+}
 
 const isAssignment = (word: Word) =>
 	/^[A-Za-z_][A-Za-z0-9_]*(\[[^\]]*\])?\+?=/.test(word.value);
@@ -377,10 +425,10 @@ export function commandHead(command: string): string | undefined {
 			let j = 1;
 			while (
 				words[j]?.value.startsWith("-") &&
-				!/^-\w*c\w*$/.test(words[j].value)
+				!RUNS_SCRIPT.test(words[j].value)
 			)
 				j++;
-			if (/^-\w*c\w*$/.test(words[j]?.value ?? "")) {
+			if (RUNS_SCRIPT.test(words[j]?.value ?? "")) {
 				const script = words[j + 1]?.value;
 				return script === undefined ? undefined : commandHead(script);
 			}

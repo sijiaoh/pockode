@@ -1247,8 +1247,7 @@ describe("TaskItem step window", () => {
 		row
 			.closest("[data-tool-use-id]")
 			?.querySelector<HTMLElement>("[data-step-window]") ?? null;
-	// One line per box, read by the file each step read; a blank box reads
-	// as null.
+	// One line per step, read by the file it read.
 	const windowFiles = (row: HTMLElement) =>
 		Array.from(
 			stepWindow(row)?.children ?? [],
@@ -1296,9 +1295,8 @@ describe("TaskItem step window", () => {
 		expect(windowFiles(rowOf("find usages"))).toEqual(["b.go", "c.go", "d.go"]);
 	});
 
-	// The window takes its height once, at the first step, rather than a line
-	// per step.
-	it("reserves every line at the first step, the newest on the bottom one", () => {
+	// A box reserved for a step that has not come would read as a layout gap.
+	it("draws only the lines it has steps for, growing to its size", () => {
 		wide();
 		render(
 			<TaskItemWithChildren
@@ -1308,7 +1306,7 @@ describe("TaskItem step window", () => {
 				})}
 			/>,
 		);
-		expect(windowFiles(rowOf("find usages"))).toEqual([null, null, "a.go"]);
+		expect(windowFiles(rowOf("find usages"))).toEqual(["a.go"]);
 	});
 
 	it("keeps the subagent's words on line 2 only when they are newer than its last step", () => {
@@ -1391,7 +1389,7 @@ describe("TaskItem step window", () => {
 			rowOf("find usages").querySelector("[data-step-window]"),
 		).not.toBeNull();
 		await user.click(rowOf("find usages"));
-		expect(windowFiles(rowOf("find usages"))).toEqual([null, "a.go"]);
+		expect(windowFiles(rowOf("find usages"))).toEqual(["a.go"]);
 		expect(rowOf("find usages").querySelector("[data-step-window]")).toBeNull();
 		await user.click(screen.getByRole("button", { name: /^Process/ }));
 		expect(stepWindow(rowOf("find usages"))).toBeNull();
@@ -1437,7 +1435,7 @@ describe("TaskItem step window", () => {
 					/>
 				</InTurn>,
 			);
-			expect(windowFiles(rowOf("find usages"))).toEqual([null, "a.go"]);
+			expect(windowFiles(rowOf("find usages"))).toEqual(["a.go"]);
 		});
 
 		it("folds it once it is latched, or once its reply is not the turn's", () => {
@@ -1500,7 +1498,7 @@ describe("TaskItem step window", () => {
 					/>
 				</InTurn>,
 			);
-			expect(windowFiles(rowOf("find usages"))).toEqual([null, "a.go"]);
+			expect(windowFiles(rowOf("find usages"))).toEqual(["a.go"]);
 			expect(fold.markLive).toHaveBeenCalledWith("t1");
 		});
 
@@ -1514,7 +1512,7 @@ describe("TaskItem step window", () => {
 					/>
 				</InTurn>,
 			);
-			expect(windowFiles(rowOf("find usages"))).toEqual([null, "a.go"]);
+			expect(windowFiles(rowOf("find usages"))).toEqual(["a.go"]);
 		});
 
 		// While its window shows where it was cut, line 2 does not say it

@@ -728,8 +728,18 @@ named as live:
   ([tool-call-ui.md](tool-call-ui.md#the-second-line-steps-and-what-it-is-doing)).
   The line does not take that fallback. It passes the `unfiled` children
   the row passes (`useUnfiledChildren`). A call is worded by its title and
-  `Detail`, a text by its first line. When `subagentNow` returns nothing, the
+  `Detail`, a text by its first line. A **nested subagent** is worded by the
+  agent mark and its task alone — `⧉ 1 · general-purpose ⧉ Read README first
+  line ›` — without its own agent's title: the agent named just before it is
+  the one running it, and on a phone the two names left room for neither. The
+  step window and the Process keep the full `⧉ general-purpose Read README
+  first line`, having the room. When `subagentNow` returns nothing, the
   words stop at the named agent's title (`⧉ 3 · Explore`).
+- **The words fill the line up to the chevron**, with one ellipsis at their
+  end, before the order of giving way (§2.3) cuts anything. A path's file name
+  is capped at 70% of its detail only while there are directories to keep in
+  sight beside it; a file at the work directory's root has none, and the cap
+  would leave its 30% blank while the name was cut (`Detail`, `ToolRow.tsx`).
 - **The named agent is the last live one in transcript order**, which is the
   one spawned most recently. It is not ordered by `startedAt`, which a
   permission answer can move and old records lack. It changes only
