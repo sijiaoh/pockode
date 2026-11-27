@@ -152,6 +152,36 @@ export type ToolRunStatus =
 	| "error"
 	| "interrupted";
 
+export type PlanStepStatus = "pending" | "in_progress" | "completed";
+
+/** One item of a plan the agent wrote (docs/turn-progress-ui.md#46-the-plan-record). */
+export interface PlanStep {
+	/** The CLI's task id; only a step from Claude's Task-tool fold has one. */
+	id?: string;
+	text: string;
+	/** Claude's `activeForm`: the words for the item while it is in progress. */
+	activeText?: string;
+	status: PlanStepStatus;
+}
+
+/**
+ * The plan as one `plan` record said it was at that moment. A record, never
+ * updated: the newest one by `order` is the current plan.
+ */
+export interface ToolRunPlan {
+	steps: PlanStep[];
+	/** Codex's note on the plan, when it gave one. */
+	explanation?: string;
+	/**
+	 * Where the record stands in record order, which is what "newest" means
+	 * (docs/turn-progress-ui.md#46-the-plan-record): its history seq, or — for
+	 * a record the server could not persist — a fraction past the newest seq
+	 * loaded when it arrived, so the next persisted record is newer
+	 * (docs/code/frontend-state.md#a-plan-filed-on-the-call-that-wrote-it).
+	 */
+	order: number;
+}
+
 /**
  * One fetch of an earlier call's output, recorded on the call it read.
  *
@@ -312,6 +342,12 @@ export interface ToolRun {
 	 * something it never did.
 	 */
 	fetches?: ToolFetch[];
+	/**
+	 * The plan this call left, from the `plan` record its result produced
+	 * (Claude's `TodoWrite` and Task tools, Codex's `Plan` row). Derived from a
+	 * persisted record, so a replayed run has it.
+	 */
+	plan?: ToolRunPlan;
 	/**
 	 * The earlier call this one is about, from its record's
 	 * `origin_tool_use_id` — kept only on a call that keeps its own row while
@@ -1562,6 +1598,7 @@ export type ServerMethod =
 	| "tool_call"
 	| "tool_result"
 	| "tool_activity"
+	| "plan"
 	| "thinking"
 	| "thinking_delta"
 	| "warning"
@@ -1687,6 +1724,27 @@ export type ServerNotification =
 			output_delta?: string;
 			/** A latest value too; see `SubagentProgress`. */
 			subagent_progress?: SubagentProgressRecord;
+	  }
+	| {
+			/**
+			 * The agent's plan as it stood at one moment
+			 * (docs/turn-progress-ui.md#46-the-plan-record). Exactly one of
+			 * `tool_use_id` (Claude: the call that produced it) and `plan_id`
+			 * (Codex: the record's own id) is set. A plan with no steps carries
+			 * no `steps` field at all.
+			 */
+			type: "plan";
+			steps?: Array<{
+				id?: string;
+				text: string;
+				active_text?: string;
+				status: PlanStepStatus;
+			}>;
+			explanation?: string;
+			tool_use_id?: string;
+			plan_id?: string;
+			/** A Codex child thread's plan; see the `text` record. */
+			parent_tool_use_id?: string;
 	  }
 	| {
 			/**

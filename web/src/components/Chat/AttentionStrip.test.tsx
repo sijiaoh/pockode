@@ -1,10 +1,14 @@
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import type { ComponentProps } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useWorkStore } from "../../lib/workStore";
 import type {
+	ContentPart,
+	Message,
 	PermissionStatus,
 	SessionTurn,
+	ToolRunStatus,
 	TurnBlocker,
 	WatchedStory,
 } from "../../types/message";
@@ -128,6 +132,211 @@ describe("AttentionStrip", () => {
 
 		const detail = screen.getByText(/resumes on its own/, { exact: false });
 		expect(detail.textContent).toMatch(/^Waiting on background tasks\. /);
+	});
+
+	// docs/turn-progress-ui.md#45-naming-what-a-background-wait-waits-on
+	describe("naming what a background wait waits on", () => {
+		const task = (
+			id: string,
+			status: ToolRunStatus,
+			input: unknown = { command: "npm run build" },
+			name = "Bash",
+		): ContentPart => ({
+			type: "tool_call",
+			id: `part-${id}`,
+			tool: { id, name, input, status },
+		});
+		const transcript = (parts: ContentPart[]): Message[] => [
+			{
+				id: "m",
+				role: "assistant",
+				parts,
+				status: "streaming",
+				createdAt: new Date(),
+			},
+		];
+		const strip = (
+			messages: Message[],
+			props: Partial<ComponentProps<typeof AttentionStrip>> = {},
+		) => (
+			<AttentionStrip
+				turn={turn("blocked", [background])}
+				onJumpToRequest={vi.fn()}
+				messages={messages}
+				{...props}
+			/>
+		);
+
+		it("names the one task, worded as its row", () => {
+			render(
+				strip(
+					transcript([
+						task(
+							"a",
+							"background",
+							{
+								description: "Find retry handling",
+								subagent_type: "Explore",
+							},
+							"Agent",
+						),
+					]),
+				),
+			);
+			expect(screen.getByText("Waiting on").parentElement).toHaveTextContent(
+				"Waiting onExploreFind retry handling· nothing to answer.",
+			);
+		});
+
+		it("counts several", () => {
+			render(
+				strip(transcript([task("a", "background"), task("b", "background")])),
+			);
+			expect(
+				screen.getByText("Waiting on 2 background tasks · nothing to answer."),
+			).toBeInTheDocument();
+		});
+
+		// On a page not loaded, or nothing in background at all.
+		it("keeps the unnamed copy when no task is loaded", () => {
+			render(strip(transcript([task("a", "success")])));
+			expect(
+				screen.getByText("Waiting on a background task — nothing to answer."),
+			).toBeInTheDocument();
+		});
+
+		it("lists the tasks in Details, each a way to its row", async () => {
+			const user = userEvent.setup();
+			const onJumpToCall = vi.fn();
+			render(
+				strip(
+					transcript([
+						task(
+							"a",
+							"background",
+							{
+								description: "Find retry handling",
+								subagent_type: "Explore",
+							},
+							"Agent",
+						),
+						task("b", "background"),
+					]),
+					{ onJumpToCall },
+				),
+			);
+			await user.click(screen.getByRole("button", { name: "Details" }));
+			const list = screen.getByRole("list", { name: "Background tasks" });
+			const items = within(list).getAllByRole("button");
+			expect(items).toHaveLength(2);
+			// Named from its visible words first, not from its status glyph.
+			expect(items[0]).toHaveAccessibleName(
+				"Explore, Find retry handling, running in the background, go to its row",
+			);
+			await user.click(items[1]);
+			expect(onJumpToCall).toHaveBeenCalledWith("b");
+		});
+
+		// As the agents line's entries do (docs/turn-progress-ui.md#43-the-agents-line).
+		it("opens a subagent with work to show as its transcript", async () => {
+			const user = userEvent.setup();
+			const onJumpToCall = vi.fn();
+			const onOpenTranscript = vi.fn();
+			const subagent = task(
+				"a",
+				"background",
+				{ description: "Find retry handling", subagent_type: "Explore" },
+				"Agent",
+			);
+			render(
+				strip(
+					transcript([
+						{
+							...subagent,
+							...(subagent.type === "tool_call" && {
+								tool: {
+									...subagent.tool,
+									children: [{ type: "text", id: "c", content: "Reading." }],
+								},
+							}),
+						},
+					]),
+					{ onJumpToCall, onOpenTranscript },
+				),
+			);
+			await user.click(screen.getByRole("button", { name: "Details" }));
+			const item = within(
+				screen.getByRole("list", { name: "Background tasks" }),
+			).getByRole("button");
+			expect(item).toHaveAccessibleName(
+				"Explore, Find retry handling, running in the background, open its transcript",
+			);
+			await user.click(item);
+			expect(onOpenTranscript).toHaveBeenCalledWith("a", item);
+			expect(onJumpToCall).not.toHaveBeenCalled();
+		});
+
+		it("stands the jump down while the answer panel is sending", async () => {
+			const user = userEvent.setup();
+			render(
+				strip(transcript([task("a", "background")]), {
+					onJumpToCall: vi.fn(),
+					jumpDisabled: true,
+				}),
+			);
+			await user.click(screen.getByRole("button", { name: "Details" }));
+			expect(
+				within(
+					screen.getByRole("list", { name: "Background tasks" }),
+				).getByRole("button"),
+			).toBeDisabled();
+		});
+
+		it("adds a task that goes to the background while Details is open", async () => {
+			const user = userEvent.setup();
+			const { rerender } = render(strip(transcript([task("a", "background")])));
+			await user.click(screen.getByRole("button", { name: "Details" }));
+			rerender(
+				strip(transcript([task("a", "background"), task("b", "background")])),
+			);
+			rerender(
+				strip(transcript([task("a", "background"), task("b", "success")])),
+			);
+			expect(
+				within(
+					screen.getByRole("list", { name: "Background tasks" }),
+				).getAllByRole("button"),
+			).toHaveLength(2);
+		});
+
+		// Nothing moves under a press; the line counts live tasks only.
+		it("keeps a task that settles while Details is open", async () => {
+			const user = userEvent.setup();
+			const { rerender } = render(
+				strip(transcript([task("a", "background"), task("b", "background")])),
+			);
+			await user.click(screen.getByRole("button", { name: "Details" }));
+
+			rerender(
+				strip(transcript([task("a", "success"), task("b", "background")])),
+			);
+			expect(
+				within(
+					screen.getByRole("list", { name: "Background tasks" }),
+				).getAllByRole("button"),
+			).toHaveLength(2);
+			expect(screen.getByText("Waiting on").parentElement).toHaveTextContent(
+				"Waiting onBashnpm run build· nothing to answer.",
+			);
+
+			await user.click(screen.getByRole("button", { name: "Details" }));
+			await user.click(screen.getByRole("button", { name: "Details" }));
+			expect(
+				within(
+					screen.getByRole("list", { name: "Background tasks" }),
+				).getAllByRole("button"),
+			).toHaveLength(1);
+		});
 	});
 
 	describe("the unanswered questions row", () => {

@@ -135,7 +135,7 @@ func (e EventType) AwaitsUserInput() bool {
 // the first message ever goes out. The remaining types are only ever replayed
 // from history, never streamed.
 //
-// System, tool_activity and thinking_delta events belong here but not in
+// System, tool_activity, thinking_delta and plan events belong here but not in
 // ActivatesSession, and the gap between the two predicates is the set that
 // must *not* end a background wait: the background task list changing is a
 // `system` frame, so counting it would make a task finishing look like the turn
@@ -144,9 +144,13 @@ func (e EventType) AwaitsUserInput() bool {
 // that settles background work is inside ActivatesSession and still is not the
 // CLI resuming (ToolResultEvent.SettlesBackgroundWork), which the translation
 // handles on its own because no predicate on the type can see a subtype.
+//
+// A plan is in that gap for the same reason: a Claude plan follows the tool
+// result that already said the turn reached the model, and a Codex one arrives
+// inside a turn that has started, so neither is the CLI coming back.
 func (e EventType) IndicatesAgentActivity() bool {
 	switch e {
-	case EventTypeSystem, EventTypeToolActivity, EventTypeThinkingDelta:
+	case EventTypeSystem, EventTypeToolActivity, EventTypeThinkingDelta, EventTypePlan:
 		return true
 	}
 	return e.ActivatesSession()

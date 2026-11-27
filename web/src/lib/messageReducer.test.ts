@@ -3,6 +3,7 @@ import type {
 	AssistantMessage,
 	ContentPart,
 	Message,
+	PlanStepStatus,
 	SessionTurn,
 	ToolRun,
 	UserMessage,
@@ -6698,5 +6699,199 @@ describe("subagent figures", () => {
 			]),
 		);
 		expect(old.subagent).toBeUndefined();
+	});
+});
+
+describe("plan records", () => {
+	const steps = [
+		{
+			id: "1",
+			text: "Write tests",
+			active_text: "Writing tests",
+			status: "in_progress",
+		},
+		{ id: "2", text: "Update docs", status: "pending" },
+	] satisfies Array<Record<string, string> & { status: PlanStepStatus }>;
+	const toolRuns = (messages: Message[]): ToolRun[] =>
+		messages.flatMap((m) =>
+			m.role === "assistant"
+				? m.parts.flatMap((p) => (p.type === "tool_call" ? [p.tool] : []))
+				: [],
+		);
+
+	it("files a Claude plan on its call's run, with the record's seq, and draws nothing", () => {
+		const messages = replayHistory([
+			{ type: "message", content: "go", seq: 1 },
+			{
+				type: "tool_call",
+				tool_use_id: "agent",
+				tool_name: "Agent",
+				tool_input: {},
+				seq: 2,
+			},
+			{
+				type: "tool_call",
+				tool_use_id: "todo",
+				tool_name: "TodoWrite",
+				tool_input: {},
+				parent_tool_use_id: "agent",
+				seq: 3,
+			},
+			{ type: "tool_result", tool_use_id: "todo", tool_result: "ok", seq: 4 },
+			{ type: "plan", tool_use_id: "todo", steps, seq: 5 },
+		]);
+		const [agentRun] = toolRuns(messages);
+		expect(toolRuns(messages)).toHaveLength(1);
+		const child = agentRun.children?.[0];
+		expect(child?.type === "tool_call" && child.tool.plan).toEqual({
+			steps: [
+				{
+					id: "1",
+					text: "Write tests",
+					activeText: "Writing tests",
+					status: "in_progress",
+				},
+				{ id: "2", text: "Update docs", status: "pending" },
+			],
+			order: 5,
+		});
+	});
+
+	it("drops a Claude plan whose call is not loaded", () => {
+		const before = replayHistory([{ type: "message", content: "go", seq: 1 }]);
+		expect(
+			applyServerEvent(
+				before,
+				normalizeEvent({ type: "plan", tool_use_id: "gone", steps }),
+				2,
+			),
+		).toBe(before);
+	});
+
+	it("reads a record with no steps as an empty plan", () => {
+		const messages = replayHistory([
+			{ type: "message", content: "go", seq: 1 },
+			{
+				type: "tool_call",
+				tool_use_id: "t",
+				tool_name: "TaskUpdate",
+				tool_input: {},
+				seq: 2,
+			},
+			{ type: "plan", tool_use_id: "t", seq: 3 },
+		]);
+		expect(toolRuns(messages)[0].plan).toEqual({ steps: [], order: 3 });
+	});
+
+	it("draws a Codex plan as a settled Plan row, filed under its subagent", () => {
+		const messages = replayHistory([
+			{ type: "message", content: "go", seq: 1 },
+			{
+				type: "plan",
+				plan_id: "turn:plan:1",
+				steps,
+				explanation: "Tests first.",
+				seq: 2,
+			},
+			{
+				type: "tool_call",
+				tool_use_id: "spawn",
+				tool_name: "Task",
+				tool_input: {},
+				seq: 3,
+			},
+			{
+				type: "plan",
+				plan_id: "turn:plan:2",
+				steps,
+				parent_tool_use_id: "spawn",
+				seq: 4,
+			},
+		]);
+		const [plan, spawn] = toolRuns(messages);
+		expect(plan).toMatchObject({
+			id: "turn:plan:1",
+			name: "Plan",
+			status: "success",
+			input: { explanation: "Tests first." },
+			plan: { explanation: "Tests first.", order: 2 },
+		});
+		expect(plan.startedAt).toBeUndefined();
+		const child = spawn.children?.[0];
+		expect(child?.type === "tool_call" && child.tool.id).toBe("turn:plan:2");
+	});
+
+	// A back-reference is applied with no seq; the plan still compares by its own.
+	it("is a back-reference only when it is filed on a call, and keeps its seq as one", () => {
+		const claude = { type: "plan", tool_use_id: "t", steps, seq: 9 };
+		expect(isBackReference(claude)).toBe(true);
+		expect(isBackReference({ type: "plan", plan_id: "p", steps })).toBe(false);
+		const older = replayHistory([
+			{ type: "message", content: "go", seq: 1 },
+			{
+				type: "tool_call",
+				tool_use_id: "t",
+				tool_name: "TodoWrite",
+				tool_input: {},
+				seq: 2,
+			},
+		]);
+		expect(toolRuns(applyBackReference(older, claude))[0].plan?.order).toBe(9);
+	});
+
+	// A record the server could not persist arrived after every record loaded,
+	// and before every one persisted after it, which takes the next whole seq.
+	it("orders plans with no seq after everything loaded and before the next seq", () => {
+		const history = replayHistory([
+			{ type: "message", content: "go", seq: 1 },
+			{
+				type: "tool_call",
+				tool_use_id: "a",
+				tool_name: "TodoWrite",
+				tool_input: {},
+				seq: 2,
+			},
+			{ type: "plan", tool_use_id: "a", steps, seq: 3 },
+			{
+				type: "tool_call",
+				tool_use_id: "b",
+				tool_name: "TodoWrite",
+				tool_input: {},
+				seq: 4,
+			},
+			{
+				type: "tool_call",
+				tool_use_id: "c",
+				tool_name: "TodoWrite",
+				tool_input: {},
+				seq: 5,
+			},
+		]);
+		const unsaved = (messages: Message[], id: string) =>
+			applyServerEvent(
+				messages,
+				normalizeEvent({ type: "plan", tool_use_id: id, steps }),
+			);
+		const live = unsaved(unsaved(history, "b"), "c");
+		const [a, b, c] = toolRuns(live).map((run) => run.plan?.order ?? 0);
+		expect(a).toBe(3);
+		expect(b).toBeGreaterThan(5);
+		expect(c).toBeGreaterThan(b);
+		expect(c).toBeLessThan(6);
+		// The first record persisted afterwards is newer than both.
+		const record: Record<string, unknown> = {
+			type: "plan",
+			tool_use_id: "a",
+			steps,
+			seq: 6,
+		};
+		const saved = applyServerEvent(live, normalizeEvent(record), 6);
+		expect(toolRuns(saved)[0].plan?.order).toBeGreaterThan(c);
+	});
+
+	it("is not a back-reference without a seq: it could not be placed over an older page", () => {
+		expect(isBackReference({ type: "plan", tool_use_id: "t", steps })).toBe(
+			false,
+		);
 	});
 });

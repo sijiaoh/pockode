@@ -11,6 +11,7 @@ import type {
 	PermissionAnswerer,
 	PermissionReview,
 	PermissionUpdate,
+	PlanStep,
 	PockodeCommandInvocation,
 	QuestionAnswerRecord,
 	QuestionRecordStatus,
@@ -24,6 +25,7 @@ import type {
 	Thought,
 	ToolFetch,
 	ToolRun,
+	ToolRunPlan,
 	UserMessage,
 	WorkRef,
 } from "../types/message";
@@ -42,6 +44,7 @@ import {
 } from "./partTree";
 import { isStopTool } from "./taskStop";
 import { isDrawnThought } from "./thinking";
+import { PLAN_TOOL_NAME } from "./toolSummary";
 
 // Legacy history recorded system messages with origin "work" before the
 // concept was renamed to "system". Map the old value so old sessions still
@@ -139,6 +142,31 @@ function parseSubagentProgress(raw: unknown): SubagentProgress | undefined {
 		...(lastToolName ? { lastToolName } : {}),
 	};
 	return Object.keys(progress).length > 0 ? progress : undefined;
+}
+
+const PLAN_STEP_STATUSES = new Set(["pending", "in_progress", "completed"]);
+
+/**
+ * A `plan` record's steps. Absent is an empty plan — the server leaves the
+ * field out rather than send an empty list — and a step it cannot read is
+ * left out rather than drawn as something it did not say.
+ */
+function parsePlanSteps(raw: unknown): PlanStep[] {
+	if (!Array.isArray(raw)) return [];
+	return raw.flatMap((step): PlanStep[] => {
+		if (!isRecord(step) || typeof step.text !== "string") return [];
+		if (!PLAN_STEP_STATUSES.has(step.status as string)) return [];
+		const id = optionalString(step.id);
+		const activeText = optionalString(step.active_text);
+		return [
+			{
+				...(id ? { id } : {}),
+				text: step.text,
+				...(activeText ? { activeText } : {}),
+				status: step.status as PlanStep["status"],
+			},
+		];
+	});
 }
 
 // Who answered a permission request and why, when it was not a person
@@ -263,6 +291,22 @@ export type NormalizedEvent =
 			resumed?: boolean;
 			/** The record's `observed_at`, epoch ms on the server's clock. */
 			observedAt?: number;
+	  }
+	| {
+			type: "plan";
+			plan: Omit<ToolRunPlan, "order">;
+			/**
+			 * The record's own seq, read off the record rather than taken from
+			 * the caller: a plan replayed as a back-reference over an older page
+			 * is applied with no seq, and must still be ordered by its own.
+			 */
+			seq?: HistorySeq;
+			/** Claude: the call whose result produced it. */
+			toolUseId?: string;
+			/** Codex: the record's own id, which keys its `Plan` row. */
+			planId?: string;
+			/** See the `text` event. */
+			parentToolUseId?: string;
 	  }
 	| {
 			type: "tool_result";
@@ -500,6 +544,22 @@ export function normalizeEvent(
 				// No `parent_tool_use_id`: a result joins its call by id at any
 				// depth, so whose call it was is already known where it lands.
 			};
+		case "plan": {
+			const seq = readHistorySeq(record);
+			return {
+				type: "plan",
+				plan: {
+					steps: parsePlanSteps(record.steps),
+					...(typeof record.explanation === "string" && record.explanation
+						? { explanation: record.explanation }
+						: {}),
+				},
+				...(seq !== undefined ? { seq } : {}),
+				toolUseId: optionalString(record.tool_use_id),
+				planId: optionalString(record.plan_id),
+				parentToolUseId: optionalString(record.parent_tool_use_id),
+			};
+		}
 		case "tool_activity":
 			return {
 				type: "tool_activity",
@@ -1268,6 +1328,55 @@ export function applyServerEvent(
 	return stampAnchorSeq(messages, applyEvent(messages, event, options), seq);
 }
 
+/**
+ * A plan with its place in record order (`ToolRunPlan.order`). A record the
+ * server could not persist has no seq. It arrived after every record loaded
+ * and before any persisted later, which takes the next whole seq, so it is
+ * placed between the newest seq loaded and the next one: halfway past the
+ * newest plan already there, so several in a row keep their order and never
+ * reach the next record's seq.
+ */
+function orderedPlan(
+	messages: Message[],
+	event: Extract<NormalizedEvent, { type: "plan" }>,
+): ToolRunPlan {
+	if (event.seq !== undefined) return { ...event.plan, order: event.seq };
+	const { newestSeq, newestPlan } = loadedOrder(messages);
+	const order =
+		newestPlan > newestSeq ? (newestPlan + newestSeq + 1) / 2 : newestSeq + 0.5;
+	return { ...event.plan, order };
+}
+
+/**
+ * The newest seq loaded anywhere (a message's anchor, or a plan's whole seq),
+ * and the greatest plan order, which may be a half step past it.
+ */
+function loadedOrder(messages: Message[]): {
+	newestSeq: number;
+	newestPlan: number;
+} {
+	let newestSeq = 0;
+	let newestPlan = 0;
+	const walk = (parts: ContentPart[]) => {
+		for (const part of parts) {
+			if (part.type !== "tool_call") continue;
+			const plan = part.tool.plan;
+			if (plan) {
+				newestPlan = Math.max(newestPlan, plan.order);
+				newestSeq = Math.max(newestSeq, Math.floor(plan.order));
+			}
+			if (part.tool.children) walk(part.tool.children);
+		}
+	};
+	for (const message of messages) {
+		if (message.anchorSeq !== undefined) {
+			newestSeq = Math.max(newestSeq, message.anchorSeq);
+		}
+		if (message.role === "assistant") walk(message.parts);
+	}
+	return { newestSeq, newestPlan };
+}
+
 function applyEvent(
 	messages: Message[],
 	event: NormalizedEvent,
@@ -1424,6 +1533,44 @@ function applyEvent(
 		);
 		if (filed) return filed;
 	}
+
+	// A plan says where the plan stood, and is filed rather than drawn when a
+	// call carries it: that call's row is its history
+	// (docs/turn-progress-ui.md#46-the-plan-record). Its call not loaded, it
+	// is dropped — the line reads only loaded replies anyway.
+	if (event.type === "plan" && event.toolUseId) {
+		const plan = orderedPlan(messages, event);
+		return updateRunById(messages, event.toolUseId, (run) => ({
+			...run,
+			plan,
+		}));
+	}
+
+	// A Codex plan has no call: it is a settled `Plan` row of its own, placed
+	// and filed by the ordinary call path, so lists, groups and the work line
+	// draw it with no special case.
+	if (event.type === "plan" && event.planId) {
+		const planId = event.planId;
+		const plan = orderedPlan(messages, event);
+		const placed = applyEvent(
+			messages,
+			{
+				type: "tool_call",
+				toolUseId: planId,
+				toolName: PLAN_TOOL_NAME,
+				toolInput: { steps: plan.steps, explanation: plan.explanation },
+				parentToolUseId: event.parentToolUseId,
+			},
+			options,
+		);
+		// No moment on it: it ran no time, and a counter would count nothing.
+		return updateRunById(placed, planId, ({ startedAt, seenAt, ...run }) => ({
+			...run,
+			status: "success",
+			plan,
+		}));
+	}
+	if (event.type === "plan") return messages;
 
 	// Tool result updates existing tool_call across all messages (may arrive after interrupt)
 	if (event.type === "tool_result") {
@@ -3023,6 +3170,16 @@ export function isBackReference(record: unknown): boolean {
 	// see applyBackReference for how the two halves are told apart.
 	if (type === "message") {
 		return Array.isArray(fields?.answering) && fields.answering.length > 0;
+	}
+	// A Claude plan is filed on its call, which may be pages above. A Codex one
+	// is a row of its own, and replaying it would draw it a second time.
+	// One with no seq arrived live, and replayed over an older page alone it
+	// could not be placed in record order; its call not loaded, it is dropped.
+	if (type === "plan") {
+		return (
+			typeof fields?.tool_use_id === "string" &&
+			readHistorySeq(record) !== undefined
+		);
 	}
 	return typeof type === "string" && BACK_REFERENCE_TYPES.has(type);
 }

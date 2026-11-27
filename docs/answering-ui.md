@@ -114,7 +114,7 @@ statement; its layout, arming, receipt and fallback are in
 | 1 | `permission` blocker | `Lock` | {tool} [+N] {detail} — the request on one line, the summary a jump to its card ([lifecycle-ui.md §2.2](lifecycle-ui.md#the-permission-row)) | **Deny** **Allow** (plan: **Review**) |
 | 2 | `unanswered.length > 0` | `CircleHelp` | "1 question is waiting for your answer." / "{n} questions are waiting for your answer." | **Answer** |
 | 3 | a message went into a turn already open, unread so far | `CornerDownRight` | "Sent — the agent has not read it yet." | — |
-| 4 | `background` blocker | `Hourglass` | "Waiting on a background task — nothing to answer." | "Details" (expands) |
+| 4 | `background` blocker | `Hourglass` | "Waiting on {task} · nothing to answer." — the task named when one is loaded ([lifecycle-ui.md §2.2](lifecycle-ui.md#22-chat-the-attention-strip)) | "Details" (expands) |
 
 **Permission stays first**, and now for a sharper reason than precedence: it is
 the only row left that the composer is disabled under, and it is the only state

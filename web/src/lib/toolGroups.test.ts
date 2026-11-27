@@ -734,6 +734,13 @@ describe("rowEntries", () => {
 				forms(summaryOf([call("a", "TodoWrite"), call("b", "TodoWrite")])),
 			).toEqual(["Updated todos"]);
 		});
+
+		// The same act on either CLI: Codex's plan updates are `Plan` rows.
+		it("folds a Codex Plan row in with the todos", () => {
+			expect(
+				forms(summaryOf([call("a", "Plan"), call("b", "TodoWrite")])),
+			).toEqual(["Updated todos"]);
+		});
 	});
 
 	// Driven through the reducer, since what dissolved a group was a call

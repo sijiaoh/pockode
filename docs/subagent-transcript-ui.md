@@ -74,6 +74,14 @@ becomes a flex row: the disclosure button keeps the rest of the width, and the
   provides the opener (`SubagentTranscriptContext`) — the chat's list and each
   level. A `TaskItem` drawn anywhere else has the Process heading alone.
 
+**Two ways in from outside the row**, which open the same layer through the
+same opener (`SubagentTranscriptContext`): an entry in the turn's agents list
+([turn-progress-ui.md §4.3](turn-progress-ui.md#43-the-agents-line)), and a
+subagent task in the attention strip's background list
+([turn-progress-ui.md §4.5](turn-progress-ui.md#45-naming-what-a-background-wait-waits-on)).
+Each opens it only where the ⤢ is offered — a subagent with a Process
+(`hasProcess`) — and goes to the row otherwise.
+
 **Not on the row itself.** A subagent row's first line is full at 320px: the
 status, the agent's name capped at 45%, the description and the elapsed time.
 A 24px icon there would come out of the description, on every subagent row, to
@@ -463,10 +471,14 @@ layer. So each step down is one step of Back, as a dialog over a sheet is
   Going up returns focus to the ⤢ that went down, without scrolling — or to the
   level's scroller, for a level opened as part of a path, which no ⤢ of its
   own went down from; closing the
-  layer returns it to the ⤢ in the chat that opened it — the list was inert
-  meanwhile, so it is still there — or, if its message was redrawn under it, to
-  the ⤢ now standing for the same run, as the viewer finds its opener's
-  successor (`openerOrSuccessor`, by the `data-subagent-opener` the ⤢ carries).
+  layer returns it to whatever opened it: the ⤢ in the chat — the list was inert
+  meanwhile, so it is still there — an agents-list entry, or a strip task. An
+  opener that has gone meanwhile (its message redrawn, the agents list closed
+  as the turn settled, the strip's row replaced) hands focus to the ⤢ now
+  standing for the same run, as the viewer finds its opener's successor
+  (`openerOrSuccessor`, by the `data-subagent-opener` every opener carries), or
+  — where that ⤢ is in a row body that is closed or was never opened — to the
+  run's row.
   A jump to a request that closes the layer takes focus where it lands instead.
 
 ## Relation to `FullScreenHost`

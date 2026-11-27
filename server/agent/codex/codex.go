@@ -273,6 +273,10 @@ type appSession struct {
 	// reasoningProgress. Same goroutine as subagentCalls, and forgotten when
 	// their thread's turn ends.
 	reasoningItems map[string]*reasoningProgress
+	// planUpdates counts each turn's plan updates so far, by turn id, which
+	// numbers its plan records; see handlePlanUpdated. Same goroutine as
+	// subagentCalls.
+	planUpdates map[string]int
 
 	usage  *usageObserver
 	resume *resumeStateStore

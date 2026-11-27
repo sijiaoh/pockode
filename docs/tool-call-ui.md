@@ -936,7 +936,7 @@ On purpose:
   ([above](#the-work-line)).
 - **A line on a reply with no tool call**, or on the reply the turn is still
   writing — the tail line owns the running turn ([turn-progress-ui.md
-  §4](turn-progress-ui.md#4-what-it-does-not-say)).
+  §5](turn-progress-ui.md#5-what-it-does-not-say)).
 - **Taking waits out of `Worked`.** It would need a moment on
   `permission_request`, and a figure that is the turn's span is the one that
   agrees with the clock the reader watched.
@@ -1241,6 +1241,7 @@ afterwards cannot word the same call differently.
 | `Glob` | `Glob` | the pattern | right |
 | `WebFetch` / `WebSearch` | the name | host + path / the query | right |
 | `TodoWrite` | `TodoWrite` | `n done / m` | — |
+| `Plan` (a Codex `plan` record, [turn-progress-ui.md §4.6](turn-progress-ui.md#46-the-plan-record)) | `Plan` | `n done / m` | — |
 | `Task` / `Agent` (the CLI renamed it; history holds both) | the agent: `subagent_type`, a Codex spawn's agent name, else `Subagent` — led by an agent mark, capped at 45% | `description`, else the prompt's first line ([below](#line-1-the-agent-then-what-it-was-asked)) | right |
 | `TaskOutput` | `TaskOutput` | the `task_id`, in mono | right |
 | `BashOutput` (history only) | `BashOutput` | the `bash_id`, in mono | right |
@@ -2056,7 +2057,7 @@ which are `1rem`:
 |---|---|---|
 | main | `clamp(8 lines, 45% of the transcript, cap)` — cap 20 lines on a coarse primary pointer, 30 otherwise | Output, Content, Change, Matches, Results, Page, Result, *Outcome · after the turn*, *Output so far*, the `ExitPlanMode` plan, a permission card's *Proposed change*, a file's diff in [the turn's changes](#the-turns-changes), a subagent's report, a thought's text and its *Full reasoning*, a command's *Sent to the agent*, the body of a system, raw, command-output or work-event message, a question record's body |
 | supporting | 8 lines | Command, File / Files (several paths, or one folded under a result), Parameters, Request, a search's arguments, *Returned to the agent*, *Fetched output*, Error, a permission card's *Raw input*, a subagent's prompt |
-| none | never cut | the `TodoWrite` checklist (a single file's path line on its own is not a section at all) |
+| none | never cut | the `TodoWrite` checklist, and a Codex `Plan` row's (a single file's path line on its own is not a section at all) |
 
 The 45% is of the **transcript**, not the window: `MessageList` keeps its
 scroller's height in `--transcript-height`, and outside a transcript the
@@ -2432,9 +2433,12 @@ In the default order, each section omitted when empty:
      and the *Change* header is what tells the diff from the path above it, so
      the only way to 60px is to merge rows again — not worth another round.
    - `Grep` / `Glob`: pattern, path and flags as labelled lines.
-   - `TodoWrite`: the checklist — a status icon per item, the done ones struck
-     through. An input that is not a list of todos falls through to the
-     fields below.
+   - `TodoWrite`, and a Codex `Plan` row: the checklist (`TodoChecklist`,
+     labelled `Todos` on both) — a status icon per item, the done ones struck
+     through, and a `Plan` row's explanation first, as a muted paragraph. The
+     plan line opens on the same checklist
+     ([turn-progress-ui.md §4.2](turn-progress-ui.md#42-the-plan-line)). An
+     input that is not a list of todos falls through to the fields below.
    - `ExitPlanMode`: the plan, through `MarkdownContent`, with no label —
      clamped all the same.
    - A Codex approval that described nothing but its `reason`, or an input

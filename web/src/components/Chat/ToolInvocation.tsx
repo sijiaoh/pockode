@@ -14,8 +14,9 @@ import { pockodeWorkTool } from "../../lib/pockodeWorkTools";
 import { proposedChange } from "../../lib/proposedChange";
 import { CodeHighlighter } from "../../lib/shikiUtils";
 import { outputLineCount } from "../../lib/textLines";
-import { fileToolPath, pathParts } from "../../lib/toolSummary";
+import { fileToolPath, PLAN_TOOL_NAME, pathParts } from "../../lib/toolSummary";
 import { useWSStore } from "../../lib/wsStore";
+import type { PlanStep, PlanStepStatus } from "../../types/message";
 import { HIGHLIGHT_LIMIT } from "../../utils/fileView";
 import { isSameNativePath, relativeToWorkDir } from "../../utils/path";
 import { HeaderCopyButton, MarkdownContent } from "../ui";
@@ -88,11 +89,14 @@ function asObject(input: unknown): Record<string, unknown> {
 		: {};
 }
 
-type TodoStatus = "pending" | "in_progress" | "completed";
-
-interface Todo {
+export interface Todo {
 	content: string;
-	status: TodoStatus;
+	status: PlanStepStatus;
+}
+
+/** A plan's steps as checklist items: the item's own words, never its `activeText`. */
+export function planTodos(steps: PlanStep[]): Todo[] {
+	return steps.map((step) => ({ content: step.text, status: step.status }));
 }
 
 function todoList(input: Record<string, unknown>): Todo[] | null {
@@ -123,7 +127,7 @@ export type InvocationView =
 	  }
 	| { kind: "search"; entries: Array<[string, unknown]> }
 	| { kind: "paths"; paths: string[] }
-	| { kind: "todos"; todos: Todo[] }
+	| { kind: "todos"; todos: Todo[]; explanation?: string }
 	| { kind: "params"; entries: Array<[string, unknown]> }
 	| { kind: "text"; text: string }
 	| { kind: "markdown"; label: string; markdown: string }
@@ -161,6 +165,18 @@ export function invocationView(
 	if (toolName === "TodoWrite") {
 		const todos = todoList(input);
 		if (todos) return { kind: "todos", todos };
+	}
+
+	// A Codex plan's row: the reducer built its input from the record, so it is
+	// read as it was written (docs/turn-progress-ui.md#46-the-plan-record).
+	if (toolName === PLAN_TOOL_NAME && Array.isArray(input.steps)) {
+		return {
+			kind: "todos",
+			todos: planTodos(input.steps as PlanStep[]),
+			...(typeof input.explanation === "string" && input.explanation
+				? { explanation: input.explanation }
+				: {}),
+		};
 	}
 
 	// Codex's own calls (lib/codexTools.ts). Each is read as the one thing it
@@ -309,7 +325,7 @@ function invocationLabel(view: InvocationView): string {
 	}
 }
 
-function TodoIcon({ status }: { status: TodoStatus }) {
+function TodoIcon({ status }: { status: PlanStepStatus }) {
 	switch (status) {
 		case "completed":
 			return <Check className="size-4 shrink-0 text-th-success" />;
@@ -320,7 +336,30 @@ function TodoIcon({ status }: { status: TodoStatus }) {
 	}
 }
 
-function TodoChecklist({ todos }: { todos: Todo[] }) {
+/**
+ * A plan's checklist, wherever it is read: a `TodoWrite` or `Plan` row's
+ * body, and the plan line's (docs/turn-progress-ui.md#42-the-plan-line). A
+ * Codex explanation comes first.
+ */
+export function TodoChecklist({
+	todos,
+	explanation,
+}: {
+	todos: Todo[];
+	explanation?: string;
+}) {
+	if (!explanation) return <TodoItems todos={todos} />;
+	return (
+		<div className="space-y-2">
+			<p className="whitespace-pre-wrap break-words text-sm text-th-text-muted">
+				{explanation}
+			</p>
+			<TodoItems todos={todos} />
+		</div>
+	);
+}
+
+function TodoItems({ todos }: { todos: Todo[] }) {
 	return (
 		<ul className="space-y-1 text-sm">
 			{todos.map((todo, index) => (
@@ -511,7 +550,7 @@ export function ToolInvocation({
 			return (
 				// Never cut: the list is short, and every item on it is the point.
 				<Section label={label} collapsible={collapsible} budget="none">
-					<TodoChecklist todos={view.todos} />
+					<TodoChecklist todos={view.todos} explanation={view.explanation} />
 				</Section>
 			);
 

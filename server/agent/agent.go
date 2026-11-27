@@ -184,6 +184,22 @@ type StartOptions struct {
 	// the one the CLI was started as, even if the current one changes between
 	// the two.
 	Profile cliprofile.Selector
+	// PlanSeed reads the steps of the session's newest main-thread plan record
+	// that the Claude adapter's fold of its Task tools wrote (LatestPlanSeed),
+	// nil when there is none. The CLI keeps its task list across a restart and
+	// the fold is memory, so a process that resumes the CLI's session starts
+	// its fold from here; otherwise the first TaskUpdate after a restart would
+	// name a task the fold has never heard of. It is only that: a starting
+	// point the next TaskList replaces, not the current plan
+	// (docs/turn-progress-ui.md §4.6).
+	//
+	// A function, because the answer costs a read of the session's history and
+	// only some launches of one agent want it: called at most once, by the
+	// agent's own goroutine before it reads any output, with the process's own
+	// context. It may wait for the session's previous process to finish
+	// writing its history, and gives up with nil when ctx ends. nil means no
+	// seed.
+	PlanSeed func(ctx context.Context) []PlanStep
 
 	// OnUsage receives what the CLI reports about the session's consumption, as
 	// increments ready to be added to the session's totals. Agents feed it through

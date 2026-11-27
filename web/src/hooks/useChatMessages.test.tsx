@@ -890,6 +890,20 @@ describe("useChatMessages", () => {
 			]);
 		});
 
+		// A Codex plan update is the main agent acting; a Claude plan record
+		// names no parent even when a subagent's Task call wrote it.
+		it("ends with a Codex plan update, not a Claude plan record", async () => {
+			const { latest, emit } = renderTail();
+			await waitFor(() => expect(latest.isLoadingHistory).toBe(false));
+
+			emit(delta("half"));
+			await waitFor(() => expect(latest.tail.thinking).not.toBeNull());
+			emit({ type: "plan", tool_use_id: "task-1", steps: [] });
+			expect(latest.tail.thinking).not.toBeNull();
+			emit({ type: "plan", plan_id: "turn:plan:1", steps: [] });
+			expect(latest.tail.thinking).toBeNull();
+		});
+
 		it("ends with the turn, record or not", async () => {
 			const { latest, emit } = renderTail();
 			await waitFor(() => expect(latest.isLoadingHistory).toBe(false));

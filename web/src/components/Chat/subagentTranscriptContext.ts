@@ -23,15 +23,22 @@ export function useOpenSubagentTranscript(): OpenSubagentTranscript | null {
 }
 
 /**
- * Marks a ⤢ with the run it opens, so focus coming back can find the one now
- * standing for that run when the bubble was redrawn under the layer.
+ * Marks an opener with the run it opens — a ⤢, an agents-list entry, a strip
+ * task — so focus coming back can find what now stands for that run when the
+ * opener itself is gone: its bubble was redrawn under the layer, or its list
+ * closed meanwhile.
  */
 export const SUBAGENT_OPENER_ATTR = "data-subagent-opener";
 
+function shown(el: HTMLElement): boolean {
+	return el.closest("[hidden]") === null;
+}
+
 /**
- * The ⤢ for focus to go back to: `opener` itself, or — when its bubble was
- * redrawn while it was out of reach — the one in `within` now standing for
- * the same run.
+ * Where focus goes back to: `opener` itself; or, when it has gone, the ⤢ in
+ * `within` now standing for the same run; or, when that ⤢ is in a body that is
+ * closed — and an opener from outside the row, such as an agents-list entry,
+ * never needed it open — the run's row.
  */
 export function openerOrSuccessor(
 	opener: HTMLElement,
@@ -39,7 +46,13 @@ export function openerOrSuccessor(
 ): HTMLElement | undefined {
 	if (opener.isConnected) return opener;
 	const runId = opener.getAttribute(SUBAGENT_OPENER_ATTR);
-	return Array.from(
-		within?.querySelectorAll<HTMLElement>(`[${SUBAGENT_OPENER_ATTR}]`) ?? [],
-	).find((el) => el.getAttribute(SUBAGENT_OPENER_ATTR) === runId);
+	if (runId === null || !within) return undefined;
+	const successor = Array.from(
+		within.querySelectorAll<HTMLElement>(`[${SUBAGENT_OPENER_ATTR}]`),
+	).find((el) => el.getAttribute(SUBAGENT_OPENER_ATTR) === runId && shown(el));
+	if (successor) return successor;
+	const row = Array.from(
+		within.querySelectorAll<HTMLElement>("[data-tool-use-id]"),
+	).find((el) => el.dataset.toolUseId === runId && shown(el));
+	return row?.querySelector<HTMLElement>("button") ?? undefined;
 }

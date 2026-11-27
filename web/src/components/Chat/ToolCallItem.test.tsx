@@ -259,6 +259,31 @@ describe("ToolCallItem", () => {
 			expect(screen.queryByText("Parameters")).toBeNull();
 		});
 
+		// A Codex plan is a row of its own, built by the reducer from the record.
+		it("shows a Codex Plan row as its checklist, the explanation first", async () => {
+			draw({
+				name: "Plan",
+				input: {
+					steps: [
+						{ text: "Write tests", status: "completed" },
+						{ text: "Ship it", status: "in_progress" },
+					],
+					explanation: "Tests before the fix.",
+				},
+				status: "success",
+			});
+			expect(screen.getByText("1 done / 2")).toBeInTheDocument();
+			await open();
+
+			const explanation = screen.getByText("Tests before the fix.");
+			expect(screen.getByText("Write tests")).toHaveClass("line-through");
+			expect(
+				explanation.compareDocumentPosition(screen.getByText("Ship it")) &
+					Node.DOCUMENT_POSITION_FOLLOWING,
+			).toBeTruthy();
+			expect(screen.queryByText("Parameters")).toBeNull();
+		});
+
 		it("still says why a TodoWrite failed", async () => {
 			draw({
 				name: "TodoWrite",

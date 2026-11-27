@@ -1321,6 +1321,62 @@ describe("ChatPanel", () => {
 			expect(card?.querySelector("button")).toHaveFocus();
 		});
 
+		// The background row's tasks take the same way to their rows
+		// (docs/lifecycle-ui.md §2.2): the panel covering the transcript closes
+		// first, so the focus the jump ends on is not dropped into `inert`.
+		it("gets out of the way of a jump to a background task's row", async () => {
+			const user = userEvent.setup();
+			seedUnansweredQuestion();
+			render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+
+			act(() => {
+				mockState.onNotification?.({
+					type: "tool_call",
+					tool_name: "Bash",
+					tool_input: { command: "npm run build", run_in_background: true },
+					tool_use_id: "tool-bg",
+				});
+				mockState.onNotification?.({
+					type: "tool_result",
+					tool_use_id: "tool-bg",
+					tool_result: "Command running in background with ID: bash_1",
+					subtype: "background_started",
+				});
+			});
+			act(() =>
+				acceptSetting({
+					turn: {
+						phase: "blocked",
+						open: true,
+						since: "2024-01-01T00:00:00Z",
+						blockers: [
+							{ kind: "background", raised_at: "2024-01-01T00:00:00Z" },
+						],
+						unanswered: [question],
+					},
+				}),
+			);
+			// With the panel up, its question row gives way to the wait's.
+			expect(answerPanel()).toBeInTheDocument();
+			await user.click(screen.getByRole("button", { name: "Details" }));
+			await user.click(
+				within(
+					screen.getByRole("list", { name: "Background tasks" }),
+				).getByRole("button"),
+			);
+
+			expect(
+				screen.queryByRole("dialog", { name: /question/ }),
+			).not.toBeInTheDocument();
+			const row = document.querySelector<HTMLElement>(
+				"[data-tool-use-id='tool-bg']",
+			);
+			expect(row?.closest("[inert]")).toBeNull();
+			expect(row).toHaveClass("jump-highlight");
+			expect(row?.querySelector("button")).toHaveFocus();
+		});
+
 		// Unlike the jump, answering needs nothing from the transcript, and it is
 		// what lets the panel's own send through afterwards.
 		it("leaves the panel up when the strip answers a permission request", async () => {

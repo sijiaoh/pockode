@@ -74,6 +74,9 @@ type Manager struct {
 	// any more. ReleaseProfile waits these out too. Guarded by processesMu;
 	// added by deleteProcess, removed once the process's done is closed.
 	exiting map[*Process]struct{}
+	// planSeedWait caps how long a new process's plan seed waits for the
+	// session's earlier processes to drain (see planSeed).
+	planSeedWait time.Duration
 	// agentCounts is how many of processes run each agent type, kept beside
 	// the map so it can be read without processesMu, which a process start
 	// holds for as long as the CLI takes to come up (a Codex handshake takes
@@ -256,6 +259,7 @@ func NewManager(agents *agent.Registry, worktree, workDir, dataDir, mcpServerDir
 		budgets:      budgets,
 		processes:    make(map[string]*Process),
 		exiting:      make(map[*Process]struct{}),
+		planSeedWait: defaultPlanSeedWait,
 		agentCounts:  make(map[session.AgentType]int),
 		settler:      session.NewTurnSettler(session.DefaultSettleDelay),
 		ctx:          ctx,
@@ -474,6 +478,7 @@ func (m *Manager) GetOrCreateProcess(ctx context.Context, meta session.SessionMe
 		// reviewer one: the kind is fixed when the session is created.
 		PermissionReviewer: meta.IsPermissionReviewer(),
 		Profile:            cliprofile.Select(profileID),
+		PlanSeed:           m.planSeed(meta),
 		OnUsage:            m.usageRecorder(sessionID),
 	}
 	sess, err := ag.Start(m.ctx, opts)
@@ -685,6 +690,64 @@ func (m *Manager) ReleaseProfile(ctx context.Context, agentType session.AgentTyp
 	}
 	slices.Sort(busy)
 	return busy, nil
+}
+
+// defaultPlanSeedWait is long enough for a CLI that exits on its own after its
+// stream is closed, and short enough that a resumed turn is not visibly held.
+const defaultPlanSeedWait = 2 * time.Second
+
+// planSeed builds the reader a new process's agent calls for the plan its
+// Task-tool fold starts from (agent.StartOptions.PlanSeed). It reads a record
+// back into live state, which "events are events, state is state" warns
+// against, and that is sound here only because the seed is not taken as the
+// current plan: it is what the agent last said, kept so the next update can
+// name tasks the fold would otherwise not know, and the CLI's own TaskList
+// replaces it.
+//
+// Built under processesMu, before the new process is in the map, so that the
+// processes it waits for are the session's earlier ones still writing their
+// history — one a lease or a retirement took out of the map has not
+// necessarily drained — and never the new process itself, whose own stream
+// cannot end before the seed returns. The history is read later, by the
+// agent's goroutine, without the lock. A session that never started has no
+// plan to read. A history that cannot be read costs only the seed: the next
+// TaskList repairs the fold.
+//
+// The wait is capped at planSeedWait: the new process reads none of its
+// output until the seed returns, so an old CLI slow to exit would otherwise
+// hold back the new turn's text and permission requests with it. Giving up
+// costs only the seed, as a failed read does.
+func (m *Manager) planSeed(meta session.SessionMeta) func(context.Context) []agent.PlanStep {
+	if !meta.Activated {
+		return nil
+	}
+	var previous []*Process
+	for p := range m.exiting {
+		if p.sessionID == meta.ID {
+			previous = append(previous, p)
+		}
+	}
+	wait := m.planSeedWait
+	return func(ctx context.Context) []agent.PlanStep {
+		deadline := time.NewTimer(wait)
+		defer deadline.Stop()
+		for _, p := range previous {
+			select {
+			case <-p.done:
+			case <-ctx.Done():
+				return nil
+			case <-deadline.C:
+				slog.Warn("the session's previous process is still exiting; starting without a plan seed, the next task list repairs it", "sessionId", meta.ID)
+				return nil
+			}
+		}
+		records, err := m.sessionStore.GetHistory(ctx, meta.ID)
+		if err != nil {
+			slog.Warn("could not read the history to seed the plan; the next task list repairs it", "sessionId", meta.ID, "error", err)
+			return nil
+		}
+		return agent.LatestPlanSeed(records)
+	}
 }
 
 // usageRecorder builds the callback the agent reports consumption through.

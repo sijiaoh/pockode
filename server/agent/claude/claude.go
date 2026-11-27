@@ -318,7 +318,8 @@ func (a *Agent) Start(ctx context.Context, opts agent.StartOptions) (agent.Sessi
 	}
 
 	resumeState := newClaudeResumeStateManager(opts, log)
-	claudeArgs := buildArgs(opts, resumeState.resolve())
+	launch := resumeState.resolve()
+	claudeArgs := buildArgs(opts, launch)
 
 	promptArgs, err := systemPromptArgs(opts)
 	if err != nil {
@@ -456,7 +457,7 @@ func (a *Agent) Start(ctx context.Context, opts agent.StartOptions) (agent.Sessi
 			lossStore.clear(log)
 		}
 
-		streamOutput(procCtx, log, proc.Stdout, events, pendingRequests, resumeState, backgroundTasks, &sess.thinking, usage, sess.refusals(), attachmentStore)
+		streamOutput(procCtx, log, proc.Stdout, events, pendingRequests, resumeState, backgroundTasks, newPlanTracker(log, planSeed(procCtx, opts, launch)), &sess.thinking, usage, sess.refusals(), attachmentStore)
 		agent.WaitForProcess(procCtx, log, proc, stderrCh, events)
 		resumeState.processExited(procCtx.Err() != nil)
 
@@ -857,7 +858,7 @@ func (s *cliSession) writeStdin(data []byte) error {
 	return err
 }
 
-func streamOutput(ctx context.Context, log *slog.Logger, stdout io.Reader, events chan<- agent.AgentEvent, pendingRequests *sync.Map, resumeState *claudeResumeStateManager, backgroundTasks *backgroundTaskTracker, thinking *thinkingClock, usage *usageObserver, refusals controlRefusals, store attachments.Store) {
+func streamOutput(ctx context.Context, log *slog.Logger, stdout io.Reader, events chan<- agent.AgentEvent, pendingRequests *sync.Map, resumeState *claudeResumeStateManager, backgroundTasks *backgroundTaskTracker, plans *planTracker, thinking *thinkingClock, usage *usageObserver, refusals controlRefusals, store attachments.Store) {
 	scanner := agent.NewLineScanner(stdout, agent.MaxLineBytes)
 	authFailures := &authFailureTracker{}
 	callNames := &toolCallNames{}
@@ -888,7 +889,9 @@ func streamOutput(ctx context.Context, log *slog.Logger, stdout io.Reader, event
 		arrived := time.Now()
 
 		if scanner.Truncated() {
-			for _, ev := range oversizedLineEvents(log, line, scanner.Len(), refusals.decline) {
+			// Through the plan tracker too, so that a plan call whose result
+			// was lost lets go of its held input.
+			for _, ev := range plans.observe(cliEvent{}, oversizedLineEvents(log, line, scanner.Len(), refusals.decline)) {
 				if !send(ev, arrived) {
 					return
 				}
@@ -912,7 +915,8 @@ func streamOutput(ctx context.Context, log *slog.Logger, stdout io.Reader, event
 		}
 		usage.observe(line, event)
 
-		for _, ev := range parseLine(log, line, event, pendingRequests, backgroundTasks, callNames, authFailures, refusals, store) {
+		parsed := parseLine(log, line, event, pendingRequests, backgroundTasks, callNames, authFailures, refusals, store)
+		for _, ev := range plans.observe(event, parsed) {
 			if !send(ev, arrived) {
 				return
 			}

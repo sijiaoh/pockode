@@ -3,14 +3,16 @@ import { type ReactNode, useState } from "react";
 import { collectPartsWithin, findToolRunPath } from "../../lib/partTree";
 import {
 	countSteps,
+	hasProcess,
 	isLiveRun,
+	isPendingCard,
 	type LatestChild,
+	processChildren,
 	recentSteps,
 	resumedRun,
 	type SubagentLine,
-	subagentLastWords,
 	subagentLine,
-	withoutEchoedReport,
+	type UnfiledChildren,
 } from "../../lib/subagentRun";
 import { toolSecondLine, toolUsesLabel } from "../../lib/toolRun";
 import {
@@ -72,15 +74,6 @@ interface Props {
 const MAX_INDENTED_LEVELS = 3;
 
 /**
- * A pending permission card is never drawn inside a Process: the Process is
- * closed by default, and a card in it would leave a session waiting on someone
- * who cannot see why. The outermost subagent row draws it instead.
- */
-function isPendingCard(part: ContentPart): boolean {
-	return part.type === "permission_request" && part.status === "pending";
-}
-
-/**
  * Which subagent asked, on a card from deeper down than the row it is drawn
  * under: named as that subagent's own row names it, but in the secondary
  * colour — an accent title over the card's own would make two rows of one card
@@ -107,7 +100,7 @@ function AskerLine({ asker }: { asker: ToolRun }) {
 }
 
 /** The latest child, worded as its own row would word it — never red. */
-function LatestChildLabel({ child }: { child: LatestChild }) {
+export function LatestChildLabel({ child }: { child: LatestChild }) {
 	if (child.kind === "text") {
 		return <span className="min-w-0 truncate">{child.text}</span>;
 	}
@@ -150,6 +143,48 @@ export function SubagentLineContent({ line }: { line: SubagentLine }) {
 }
 
 /**
+ * A subagent row's first and second line, as `ToolRow` takes them. The row and
+ * an entry in the agents list both draw from this
+ * (docs/turn-progress-ui.md#43-the-agents-line), so they cannot say different
+ * things about one run. `rowRun` is the run as its row draws it — a resumed
+ * subagent's on its resume (`resumedRun`); `stepWindow` is the row's step
+ * window, when it draws one.
+ */
+export function subagentHeader(
+	rowRun: ToolRun,
+	unfiled?: UnfiledChildren,
+	stepWindow?: ReactNode,
+) {
+	// No work directory: a subagent call is summarised from its description, and
+	// there is no path in it for one to shorten.
+	const summary = toolSummary(rowRun.name, rowRun.input, "");
+	const line = subagentLine(rowRun, unfiled, stepWindow !== undefined);
+	const failed = rowRun.status === "error";
+	return {
+		summary,
+		failed,
+		glyph: <ToolStatusGlyph status={rowRun.status} name={SUBAGENT_TITLE} />,
+		firstLine: {
+			title: summary.title,
+			agent: true,
+			background: rowRun.fromBackground,
+			detail: summary.detail,
+			meta: <ToolMeta run={rowRun} />,
+			error: failed,
+		},
+		// Its own line where it has one; the shared one stands otherwise.
+		secondLine: {
+			richSecondLine: line && {
+				content: <SubagentLineContent line={line} />,
+				live: line.live,
+				below: stepWindow,
+			},
+			secondLine: line ? null : toolSecondLine(rowRun),
+		},
+	};
+}
+
+/**
  * One subagent call, rendered where the turn spawned it.
  *
  * A subagent call *is* a tool call — it is a `ToolRun` like every other row,
@@ -174,11 +209,7 @@ function TaskItem({ run, depth = 0, renderChild }: Props) {
 		setExpanded(true);
 		setProcessExpanded(true);
 	});
-	// No work directory: a subagent call is summarised from its description, and
-	// there is no path in it for one to shorten.
-	const summary = toolSummary(run.name, run.input, "");
 	const prompt = taskPrompt(run.input);
-	const { report, outcome } = subagentLastWords(run);
 	const nested = depth > 0;
 	const openTranscript = useOpenSubagentTranscript();
 
@@ -197,18 +228,20 @@ function TaskItem({ run, depth = 0, renderChild }: Props) {
 		expanded && processExpanded
 			? []
 			: recentSteps([...children, ...(unfiled?.parts ?? [])], windowLines);
-	const stepWindow = windowSteps.length > 0 && (
-		<SubagentStepWindow steps={windowSteps} frozen={!isLiveRun(rowRun)} />
+	const header = subagentHeader(
+		rowRun,
+		unfiled,
+		windowSteps.length > 0 ? (
+			<SubagentStepWindow steps={windowSteps} frozen={!isLiveRun(rowRun)} />
+		) : undefined,
 	);
-	const line = subagentLine(rowRun, unfiled, windowSteps.length > 0);
+	const { summary } = header;
 	// The report — or a backgrounded subagent's outcome, which is its last
 	// words delivered after the call returned (Claude's notification summary,
 	// measured on claude 2.1.286) — is drawn in full above the Process, and
 	// not again at its end.
-	const shownChildren = withoutEchoedReport(children, report || outcome)
-		.filter((part) => !isPendingCard(part))
-		.map((part) => ({ part }));
-	const hasProcess = shownChildren.length > 0 || (unfiled?.count ?? 0) > 0;
+	const shownChildren = processChildren(run).map((part) => ({ part }));
+	const showProcess = hasProcess(run, unfiled);
 	// Cards from every depth, so a subagent's subagent asking is not hidden
 	// under a row that is itself inside a closed Process. Only the outermost
 	// row collects them: it is the one the user can always see. The innermost
@@ -228,22 +261,9 @@ function TaskItem({ run, depth = 0, renderChild }: Props) {
 			<ToolRow
 				expanded={expanded}
 				onToggle={() => setExpanded(!expanded)}
-				glyph={<ToolStatusGlyph status={rowRun.status} name={SUBAGENT_TITLE} />}
-				title={summary.title}
-				agent
-				background={run.fromBackground}
-				detail={summary.detail}
-				meta={<ToolMeta run={rowRun} />}
-				// Its own line where it has one; the shared one stands otherwise.
-				richSecondLine={
-					line && {
-						content: <SubagentLineContent line={line} />,
-						live: line.live,
-						below: stepWindow,
-					}
-				}
-				secondLine={line ? null : toolSecondLine(rowRun)}
-				error={rowRun.status === "error"}
+				glyph={header.glyph}
+				{...header.firstLine}
+				{...header.secondLine}
 			/>
 
 			{pendingCards.length > 0 && (
@@ -262,7 +282,7 @@ function TaskItem({ run, depth = 0, renderChild }: Props) {
 			<CollapsibleBody expanded={expanded}>
 				<div className="row-ground-secondary border-t border-th-border bg-th-bg-secondary">
 					<SubagentConclusion run={run} />
-					{hasProcess && (
+					{showProcess && (
 						<div className="border-t border-th-border">
 							{/* Two buttons on one line, side by side rather than one
 							    inside the other: the heading opens the Process inline,

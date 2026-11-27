@@ -95,7 +95,7 @@ function ThinkingSoFar({ thinking }: { thinking: LiveThinking }) {
  * `Thinking… 1m 4s · <latest line>`, or `Waiting for output… 1m 4s · Go to
  * call` while the agent waits on a fetch that has no row. It says that the
  * turn is producing and for how long, and nothing else — every other fact
- * about the turn has an owner of its own (§4 there). It points at a row only
+ * about the turn has an owner of its own (§5 there). It points at a row only
  * while the turn waits on a fetch that has no row to say so.
  *
  * The slot keeps the turn-end row's height whether or not the line is drawn,

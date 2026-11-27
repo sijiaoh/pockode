@@ -10,16 +10,32 @@ import {
 	Lock,
 	X,
 } from "lucide-react";
-import { type MouseEvent, useId, useRef, useState } from "react";
+import {
+	type MouseEvent,
+	useId,
+	useLayoutEffect,
+	useMemo,
+	useRef,
+	useState,
+} from "react";
 import { describeChangeCount } from "../../hooks/useGitChangeCount";
 import { ACTIVITY_VIEW, watchingLabel } from "../../lib/activity";
-import { toolSummary } from "../../lib/toolSummary";
+import {
+	hasProcess,
+	isLiveRun,
+	type UnfiledChildren,
+	unfiledChildren,
+} from "../../lib/subagentRun";
+import { isTaskTool, SUBAGENT_TITLE, toolSummary } from "../../lib/toolSummary";
+import { backgroundTaskRuns } from "../../lib/turnOverview";
 import { useWorkStore } from "../../lib/workStore";
 import { useWSStore } from "../../lib/wsStore";
 import type {
+	Message,
 	PermissionRequest,
 	PermissionStatus,
 	SessionTurn,
+	ToolRun,
 	TurnBlocker,
 	WatchedStory,
 } from "../../types/message";
@@ -27,7 +43,17 @@ import { formatTime, isInstant } from "../../utils/dateTime";
 import { ActivityIcon } from "../ui";
 import type { PromptError } from "./MessageItem";
 import { Armed } from "./SendStopSlot";
-import { Chip, Detail } from "./ToolRow";
+import {
+	type OpenSubagentTranscript,
+	SUBAGENT_OPENER_ATTR,
+} from "./subagentTranscriptContext";
+import {
+	Chip,
+	Detail,
+	ToolMeta,
+	ToolStatusGlyph,
+	toolStatusWord,
+} from "./ToolRow";
 
 /** A permission card the turn is blocked on, as the transcript has it now. */
 export interface PermissionEntry {
@@ -42,6 +68,22 @@ interface Props {
 	turn: SessionTurn;
 	/** Scrolls the transcript to the card that is holding the turn up. */
 	onJumpToRequest: (requestId: string) => void;
+	/**
+	 * Goes to a background task's row. Absent, the background row's tasks are
+	 * listed without a way to them.
+	 */
+	onJumpToCall?: (toolUseId: string) => void;
+	/**
+	 * Opens a background subagent's transcript, which is where a subagent with
+	 * work to show is taken instead of its row. Absent, it goes to its row too.
+	 */
+	onOpenTranscript?: OpenSubagentTranscript;
+	/**
+	 * The loaded transcript, which the background row reads its tasks from —
+	 * the reducer's own runs, since the blocker names none
+	 * (docs/turn-progress-ui.md#45-naming-what-a-background-wait-waits-on).
+	 */
+	messages?: Message[];
 	/**
 	 * The jump closes the answer panel on its way, so it stands down while the
 	 * panel is sending, like the panel's own ways out (docs/answering-ui.md §2).
@@ -463,9 +505,11 @@ function WatchingRow({
 	);
 }
 
-// The review row's line: one line that truncates its statement, where the
-// other rows wrap — the action has to stay beside the count it acts on.
-const REVIEW_LINE =
+// One line that truncates part of its statement, where the other rows wrap:
+// the review row, whose action has to stay beside the count it acts on, and the
+// background row naming its task, whose name is cut so that "nothing to
+// answer" never is.
+const ONE_LINE =
 	"mx-auto flex max-w-3xl items-center justify-center gap-1.5 px-3 py-2 text-th-text-muted text-xs";
 
 /**
@@ -487,7 +531,7 @@ function ReviewRow({
 	const countId = useId();
 	return (
 		<div className={STRIP_FRAME}>
-			<div className={REVIEW_LINE}>
+			<div className={ONE_LINE}>
 				<FileDiff className="size-3 shrink-0" aria-hidden="true" />
 				<span id={countId} className="min-w-0 truncate">
 					{describeChangeCount(count)}
@@ -530,6 +574,9 @@ function ReviewRow({
 function AttentionStrip({
 	turn,
 	onJumpToRequest,
+	onJumpToCall,
+	onOpenTranscript,
+	messages,
 	jumpDisabled,
 	onAnswer,
 	answerPanelOpen,
@@ -542,8 +589,6 @@ function AttentionStrip({
 	changeCount,
 	onReview,
 }: Props) {
-	const [expanded, setExpanded] = useState(false);
-
 	const blocker =
 		turn.phase === "blocked" ? leadingBlocker(turn.blockers ?? []) : undefined;
 	const unanswered = turn.unanswered?.length ?? 0;
@@ -709,17 +754,165 @@ function AttentionStrip({
 		return null;
 	}
 
+	return (
+		<BackgroundRow
+			turn={turn}
+			messages={messages}
+			onJumpToCall={onJumpToCall}
+			onOpenTranscript={onOpenTranscript}
+			jumpDisabled={jumpDisabled}
+		/>
+	);
+}
+
+/** A task's line 1, worded as its row's: its title, then its detail. */
+function TaskName({ run }: { run: ToolRun }) {
+	const workDir = useWSStore((state) => state.workDir);
+	const summary = toolSummary(run.name, run.input, workDir);
+	return (
+		<>
+			{/* Capped as a row caps an agent's title: it may be whatever an agent's
+			    author or an MCP server named it. */}
+			<span className="min-w-0 max-w-[45%] shrink-0 truncate text-th-text-secondary">
+				{summary.title}
+			</span>
+			<Detail
+				detail={summary.detail}
+				detailTail={summary.detailTail}
+				mono={summary.mono}
+			/>
+		</>
+	);
+}
+
+/**
+ * One task in the background row's Details, and the way to it: its row, or a
+ * subagent's transcript when it has work to show there.
+ */
+function BackgroundTaskItem({
+	run,
+	unfiled,
+	onJump,
+	onOpenTranscript,
+	jumpDisabled,
+}: {
+	run: ToolRun;
+	unfiled?: UnfiledChildren;
+	onJump?: (toolUseId: string) => void;
+	onOpenTranscript?: OpenSubagentTranscript;
+	jumpDisabled?: boolean;
+}) {
+	const toTranscript =
+		onOpenTranscript && isTaskTool(run.name) && hasProcess(run, unfiled);
+	const workDir = useWSStore((state) => state.workDir);
+	const summary = toolSummary(run.name, run.input, workDir);
+	// Starting with the visible words (WCAG 2.5.3), as an agents-list entry is
+	// named: the glyph's label would otherwise lead.
+	const label = [
+		summary.title,
+		summary.detail + summary.detailTail,
+		toolStatusWord(run.status),
+		toTranscript ? "open its transcript" : "go to its row",
+	]
+		.filter(Boolean)
+		.join(", ");
+	return (
+		<li>
+			<button
+				type="button"
+				onClick={(event) =>
+					toTranscript
+						? onOpenTranscript(run.id, event.currentTarget)
+						: onJump?.(run.id)
+				}
+				disabled={!(toTranscript || onJump) || jumpDisabled}
+				// Focus comes back here when the transcript closes, or to the ⤢ in
+				// the chat standing for the same run if the strip has changed.
+				{...(toTranscript && { [SUBAGENT_OPENER_ATTR]: run.id })}
+				aria-label={label}
+				className={`${WATCHED_STORY_ROW} disabled:opacity-50`}
+			>
+				{/* Named as its row's glyph is, not by the raw tool name. */}
+				<ToolStatusGlyph
+					status={run.status}
+					name={
+						isTaskTool(run.name)
+							? SUBAGENT_TITLE
+							: toolSummary(run.name, run.input, "").title
+					}
+				/>
+				<span className="flex min-w-0 flex-1 items-baseline gap-1.5">
+					<TaskName run={run} />
+				</span>
+				<ToolMeta run={run} />
+			</button>
+		</li>
+	);
+}
+
+/**
+ * A background wait, and what it waits on: the runs the reducer holds in
+ * `background` status (docs/lifecycle-ui.md §2.2). Details keeps the tasks it
+ * listed while it is open, settled or not, so nothing moves under a press;
+ * the line counts the live ones.
+ */
+function BackgroundRow({
+	turn,
+	messages,
+	onJumpToCall,
+	onOpenTranscript,
+	jumpDisabled,
+}: {
+	turn: SessionTurn;
+	messages?: Message[];
+	onJumpToCall?: (toolUseId: string) => void;
+	onOpenTranscript?: OpenSubagentTranscript;
+	jumpDisabled?: boolean;
+}) {
+	const unfiled = useMemo(() => unfiledChildren(messages ?? []), [messages]);
+	const [held, setHeld] = useState<ReadonlySet<string> | null>(null);
+	const expanded = held !== null;
+	const tasks = useMemo(
+		() => backgroundTaskRuns(messages ?? [], held ?? undefined),
+		[messages, held],
+	);
+	const live = tasks.filter(isLiveRun);
+	// A task that goes to the background while Details is open joins the list
+	// and then stays in it, as the ones it opened with do.
+	useLayoutEffect(() => {
+		if (!held || live.every((run) => held.has(run.id))) return;
+		setHeld((prev) => prev && new Set([...prev, ...live.map((run) => run.id)]));
+	});
+	const toggle = () =>
+		setHeld((prev) => (prev ? null : new Set(live.map((run) => run.id))));
+
 	const since = isInstant(turn.since) && formatTime(turn.since);
+	const only = live.length === 1 ? live[0] : undefined;
 	return (
 		<div className={STRIP_FRAME}>
-			<div className={STRIP_LINE}>
+			{/* One line that cuts the task's name, where the other rows wrap:
+			    "nothing to answer" is the half that tells a waiting user there is
+			    nothing to do, so it never gives way. */}
+			<div className={only ? ONE_LINE : STRIP_LINE}>
 				<Hourglass className="size-3 shrink-0" aria-hidden="true" />
-				<span>Waiting on a background task — nothing to answer.</span>
+				{only ? (
+					<span className="flex min-w-0 items-baseline gap-1.5">
+						<span className="shrink-0">Waiting on</span>
+						<TaskName run={only} />
+						<span className="shrink-0">· nothing to answer.</span>
+					</span>
+				) : live.length > 1 ? (
+					<span>
+						{`Waiting on ${live.length} background tasks · nothing to answer.`}
+					</span>
+				) : (
+					<span>Waiting on a background task — nothing to answer.</span>
+				)}
 				<button
 					type="button"
-					onClick={() => setExpanded(!expanded)}
+					onClick={toggle}
 					aria-expanded={expanded}
-					className={STRIP_ACTION}
+					className={`${STRIP_ACTION} shrink-0`}
 				>
 					Details
 				</button>
@@ -729,13 +922,32 @@ function AttentionStrip({
 			    per-task kill, because the model gives the host no way to end one task
 			    without ending the turn. */}
 			{expanded && (
-				<p className="mx-auto max-w-3xl px-3 pb-2 text-center text-th-text-muted text-xs">
-					{since
-						? `Waiting on background tasks since ${since}. `
-						: "Waiting on background tasks. "}
-					The agent resumes on its own when they finish. Stopping ends the turn
-					and loses the tasks.
-				</p>
+				<div className="mx-auto max-w-3xl px-3 pb-2 text-xs">
+					<p className="pb-1 text-center text-th-text-muted">
+						{since
+							? `Waiting on background tasks since ${since}. `
+							: "Waiting on background tasks. "}
+						The agent resumes on its own when they finish. Stopping ends the
+						turn and loses the tasks.
+					</p>
+					{tasks.length > 0 && (
+						<ul
+							aria-label="Background tasks"
+							className="max-h-32 overflow-y-auto"
+						>
+							{tasks.map((run) => (
+								<BackgroundTaskItem
+									key={run.id}
+									run={run}
+									unfiled={unfiled.get(run.id)}
+									onJump={onJumpToCall}
+									onOpenTranscript={onOpenTranscript}
+									jumpDisabled={jumpDisabled}
+								/>
+							))}
+						</ul>
+					)}
+				</div>
 			)}
 		</div>
 	);

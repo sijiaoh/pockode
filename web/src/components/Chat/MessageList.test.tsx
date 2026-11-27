@@ -476,6 +476,44 @@ describe("the jump the attention strip borrows", () => {
 		expect(card?.querySelector("button")).toHaveFocus();
 	});
 
+	// The strip's background row goes to a task's row the same way, from
+	// outside the transcript (docs/lifecycle-ui.md §2.2).
+	it("jumps to a call's row from outside the transcript", () => {
+		const ref = createRef<MessageListHandle>();
+		render(
+			<MessageList
+				ref={ref}
+				sessionId="session-1"
+				messages={[
+					{
+						id: "m1",
+						role: "assistant",
+						status: "streaming",
+						createdAt: new Date(),
+						parts: [
+							{
+								type: "tool_call",
+								id: "part-a",
+								tool: {
+									id: "a",
+									name: "Bash",
+									input: { command: "pnpm run dev" },
+									status: "background",
+								},
+							},
+						],
+					},
+				]}
+			/>,
+		);
+
+		act(() => ref.current?.jumpToCall("a"));
+
+		const row = document.querySelector('[data-tool-use-id="a"]');
+		expect(row).toHaveClass("jump-highlight");
+		expect(row?.querySelector("button")).toHaveFocus();
+	});
+
 	it("moves the highlight rather than leaving it on the previous target", () => {
 		const ref = createRef<MessageListHandle>();
 		render(

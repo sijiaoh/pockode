@@ -41,6 +41,7 @@ import {
 	type LiveThinking,
 	type TurnTail,
 } from "../lib/thinking";
+import { overviewMessageId } from "../lib/turnOverview";
 import {
 	type ConnectionStatus,
 	isInvalidParamsRejection,
@@ -67,6 +68,8 @@ import { toAnswerParams } from "../utils/answerRecords";
 import { isTypedByUser } from "../utils/messageSource";
 import { parsePockodeCommand } from "../utils/pockodeCommand";
 import { generateUUID } from "../utils/uuid";
+import { useAgentsOverview } from "./useAgentsOverview";
+import { usePlanOverview } from "./usePlanOverview";
 import { useSubscription } from "./useSubscription";
 import type { ViewedSession } from "./useViewedSession";
 
@@ -492,14 +495,53 @@ export function useChatMessages({
 		setLiveThinking((prev) => prev && { ...prev, expanded: !prev.expanded });
 	}, []);
 
+	// Whether a turn is open, and the optimistic half is load-bearing: between the
+	// user pressing send and the server reporting `running` there is a round trip,
+	// and a surface watching only the turn would leave them without Stop for the
+	// length of it. What the turn removes is the half that was never reliable —
+	// inferring liveness from the last bubble's status and a `process_ended` that
+	// a restart never wrote (docs/lifecycle-ui.md §2.3).
+	//
+	// `sending` is the status of a placeholder this client made and the server has
+	// yet to say anything about; located by the open bubble rather than by the end
+	// of the list, because a second message typed inside that same round trip is
+	// appended below it and would otherwise cancel the optimism that message needs
+	// most.
+	const openIndex = openAssistantIndex(messages);
+	const open = openIndex >= 0 ? messages[openIndex] : undefined;
+	const hasUnansweredEcho =
+		open?.role === "assistant" && open.status === "sending";
+	const turnOpen = hasUnansweredEcho || turn.phase !== "idle";
+	const agents = useAgentsOverview(messages, turnOpen, sessionId);
+	const plan = usePlanOverview(messages, turnOpen, sessionId);
+
+	// Outside the memo, which then depends on the id rather than on `messages`:
+	// the tail is a context every bubble's slot reads, and a new value per
+	// streamed record would re-render every one of them.
+	const overviewId = overviewMessageId(
+		messages,
+		turnOpen,
+		agents.liveCount > 0 || agents.expanded,
+	);
 	const tail = useMemo<TurnTail>(
 		() => ({
 			phase: turn.phase,
 			openedAt: turnOpenedAt,
 			thinking: liveThinking,
 			onToggleThinking: toggleThinking,
+			overviewMessageId: overviewId,
+			plan,
+			agents,
 		}),
-		[turn.phase, turnOpenedAt, liveThinking, toggleThinking],
+		[
+			turn.phase,
+			turnOpenedAt,
+			liveThinking,
+			toggleThinking,
+			overviewId,
+			plan,
+			agents,
+		],
 	);
 
 	// Before paint, so the row a thinking settles into is never drawn closed.
@@ -527,7 +569,11 @@ export function useChatMessages({
 			const endsThinking =
 				((event.type === "thinking" ||
 					event.type === "text" ||
-					(event.type === "tool_call" && !event.resumed)) &&
+					(event.type === "tool_call" && !event.resumed) ||
+					// Codex's only: a Claude plan follows a result the thinking
+					// already ended on, and one from a subagent's Task calls names
+					// no parent, so it would end the main agent's thinking.
+					(event.type === "plan" && event.planId !== undefined)) &&
 					!event.parentToolUseId) ||
 				isTurnTerminal(notification);
 			// Already on screen: this record came back in the history page too, and
@@ -1100,24 +1146,6 @@ export function useChatMessages({
 		},
 		[],
 	);
-
-	// Whether a turn is open, and the optimistic half is load-bearing: between the
-	// user pressing send and the server reporting `running` there is a round trip,
-	// and a surface watching only the turn would leave them without Stop for the
-	// length of it. What the turn removes is the half that was never reliable —
-	// inferring liveness from the last bubble's status and a `process_ended` that
-	// a restart never wrote (docs/lifecycle-ui.md §2.3).
-	//
-	// `sending` is the status of a placeholder this client made and the server has
-	// yet to say anything about; located by the open bubble rather than by the end
-	// of the list, because a second message typed inside that same round trip is
-	// appended below it and would otherwise cancel the optimism that message needs
-	// most.
-	const openIndex = openAssistantIndex(messages);
-	const open = openIndex >= 0 ? messages[openIndex] : undefined;
-	const hasUnansweredEcho =
-		open?.role === "assistant" && open.status === "sending";
-	const turnOpen = hasUnansweredEcho || turn.phase !== "idle";
 
 	// Whether the message the transcript ends on went into a turn that was already
 	// running and is still unread. Derived, never recorded: the record says what

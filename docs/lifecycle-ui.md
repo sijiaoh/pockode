@@ -454,7 +454,7 @@ Six things it can say, in the order it prefers them:
 | `permission` | `Lock` {tool} [+N] {detail, cut like the card's title} — see below | **Deny** **Allow** (plan: **Review**) |
 | unanswered questions | "1 question is waiting for your answer." / "{n} questions are waiting for your answer." | **Answer** |
 | a message went into a turn already open, unread so far | "Sent — the agent has not read it yet." | — |
-| `background` | "Waiting on a background task — nothing to answer." | "Details" (expands) |
+| `background` | "Waiting on {task} · nothing to answer." / "Waiting on {n} background tasks · nothing to answer." — see below | "Details" (expands) |
 | `watching` | "Watching 1 story." / "Watching {n} stories." | "Details" (expands) |
 | idle, files changed in the worktree | `FileDiff` `describeChangeCount(n)`: "1 changed file" / "{n} changed files" / "99+ changed files" | "Review" |
 
@@ -599,7 +599,7 @@ yet to report the first — and "not read yet" is true of that moment too.
 transcript's tail line, and the two never speak at once about the turn: the
 tail line shows only while `running`, which is the one phase whose strip rows
 are about something else (questions, the receipt). The full boundary is
-[turn-progress-ui.md §4](turn-progress-ui.md#4-what-it-does-not-say).
+[turn-progress-ui.md §5](turn-progress-ui.md#5-what-it-does-not-say).
 
 Whichever it says, it is one bordered row, so the composer moves by at most one
 row's height however many of the five states hold — 33px for a statement, 45px
@@ -611,18 +611,40 @@ focus the header row — via the permission blocker's `request_id`. The strip do
 re-implement it: the scroll container is there, and a second implementation of a
 scroll-and-highlight is a second set of edge cases.
 
-It is the **only** jump left on this strip: the
+It is the only jump to a **card** on this strip; the other way the strip
+reaches into the transcript is the background row's task list, which goes to a
+task's row by its `tool_use_id`, or opens a subagent's transcript (below). The
 question row's action opens the answer panel instead, and the pending-question
 pill is deleted, because both existed to reach the place answering happened and
 answering does not happen in the transcript any more
 ([answering-ui.md](answering-ui.md)). A question record card therefore carries no
 jump handle either — the strip's jump looks for `data-permission-request-id`,
-which only a permission card carries. Outside the strip the same jump has one
-other caller, a change in the turn's changes card going to the call that made it
+which only a permission card carries. The jump to a tool row by its
+`tool_use_id` is the transcript's own, and has callers inside it too — a change
+in the turn's changes card going to the call that made it
 ([tool-call-ui.md](tool-call-ui.md#from-a-file-to-the-calls-that-changed-it)),
-which finds a tool row by its `tool_use_id`.
+the tail line's *Go to call*, an agents-list entry
+([turn-progress-ui.md §4.3](turn-progress-ui.md#43-the-agents-line)).
 
-"Details" expands to "Waiting since {HH:MM}", from `turn.since`. Two things are
+**The row names what the turn waits on**
+([turn-progress-ui.md §4.5](turn-progress-ui.md#45-naming-what-a-background-wait-waits-on)).
+The tasks are the background runs that section defines, from the same
+`ToolRun`s the rows are drawn from; the blocker itself names no task
+(`session.Blocker` carries none for `background`):
+
+| Live background runs loaded | Line |
+|---|---|
+| one | `Hourglass` "Waiting on" + the run's title and detail, worded as its row's line 1 (`toolSummary` + `Detail`: `Explore Find retry handling`, `Bash npm run build`), truncating, then `· nothing to answer.` `shrink-0` |
+| several | "Waiting on {n} background tasks · nothing to answer." |
+| none (on pages not loaded, or none at all) | the unnamed "Waiting on a background task — nothing to answer." |
+
+`nothing to answer` never gives way. It is the half that tells a waiting user
+there is nothing to do, and the name truncates first. The name is not a button,
+because the line is a statement like every row but permission. Going to the
+task is in Details.
+
+"Details" expands to "Waiting on background tasks since {HH:MM}", from `turn.since`, and then the
+tasks. Two things are
 stated in the copy because a user who has waited an hour will otherwise assume a
 hang:
 
@@ -641,6 +663,21 @@ The clock is dropped rather than faked when `turn.since` is missing or
 unreadable — "Waiting on background tasks." and then the same two sentences. The
 two things the copy exists to say do not depend on the time, and a made-up one
 would be the only false thing on the line.
+
+Under the copy, with one task or several, comes `<ul aria-label="Background
+tasks">`, scrolled inside `max-h-32` as the watching row's list is. Each task
+is one button: its status glyph, then its title and detail as on its row, then
+the row's elapsed counter. A press goes where the agents line's entries go:
+a subagent with work to show opens its transcript
+([subagent-transcript-ui.md](subagent-transcript-ui.md)), and any other task
+goes to its row; it is disabled under `jumpDisabled` like the permission row's jump
+(how the strip reaches the transcript's jump is
+[turn-progress-ui.md §4.5](turn-progress-ui.md#45-naming-what-a-background-wait-waits-on)).
+A task that
+settles while Details is open stays in the list, settled, by the agents list's
+rule: nothing moves under a press. It leaves when Details closes, or when the
+row itself goes because the turn resumed. The line above the list counts live
+tasks only.
 
 No countdown to the 24h lease. A number the user cannot change, counting down to
 an outcome they would not recognise, is worse than the sentence above; the lease

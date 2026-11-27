@@ -182,6 +182,14 @@ function ComposerErrorBar({
 	);
 }
 
+/**
+ * A jump the strip asked for, held for the commit that closes the answer
+ * panel over the transcript; see `handleJumpToRequest`.
+ */
+type PendingJump =
+	| { kind: "request"; requestId: string }
+	| { kind: "call"; toolUseId: string };
+
 interface Props {
 	/**
 	 * Destination session id, taken from the URL. It is known before the session
@@ -1319,14 +1327,14 @@ function ChatPanel({
 			preventScroll: true,
 		});
 	}, [subagentLayerUp]);
-	// Closing the panel is part of the jump, not a side effect of it. The only
-	// caller is the strip's permission row, and a permission request can arrive
-	// while the panel is up — which is exactly when the card being jumped to is
-	// behind the backdrop and `inert`. Scrolling something the user cannot see
-	// or press is the dead end this whole surface exists to remove, and with the
-	// transcript covered this row is the only way left to reach a permission
-	// card at all; the drafts survive the close, so the cost is one tap on
-	// `Answer` afterwards.
+	// Closing the panel is part of the jump, not a side effect of it. The callers
+	// are the strip's permission row and its background tasks (below), and a
+	// permission request can arrive while the panel is up — which is exactly
+	// when the card being jumped to is behind the backdrop and `inert`.
+	// Scrolling something the user cannot see or press is the dead end this
+	// whole surface exists to remove, and with the transcript covered this row
+	// is the only way left to reach a permission card at all; the drafts survive
+	// the close, so the cost is one tap on `Answer` afterwards.
 	//
 	// So the press only asks for the jump; the jump itself waits for the close
 	// to be on the screen. It has to: the last thing it does is move focus into
@@ -1340,9 +1348,9 @@ function ChatPanel({
 	// permission request can come up mid-send, and closing then would take
 	// away the only place the send's outcome — a refusal included — is told.
 	const [answerPanelSending, setAnswerPanelSending] = useState(false);
-	const [pendingJumpRequestId, setPendingJumpRequestId] = useState<
-		string | null
-	>(null);
+	// The background row's tasks take the same way to their rows, by
+	// `tool_use_id`, for the same reason.
+	const [pendingJump, setPendingJump] = useState<PendingJump | null>(null);
 	const handleJumpToRequest = useCallback((requestId: string) => {
 		setAnswerPanelOpen(false);
 		setAnswerAnchor(null);
@@ -1354,8 +1362,29 @@ function ChatPanel({
 			transcriptOpenerRef.current = null;
 			setSubagentLevels([]);
 		}
-		setPendingJumpRequestId(requestId);
+		setPendingJump({ kind: "request", requestId });
 	}, []);
+	// A background task's row is in the chat, under the subagent's transcript
+	// if one is up, which makes way for it as for a card it does not draw.
+	const handleJumpToCall = useCallback((toolUseId: string) => {
+		setAnswerPanelOpen(false);
+		setAnswerAnchor(null);
+		transcriptOpenerRef.current = null;
+		setSubagentLevels([]);
+		setPendingJump({ kind: "call", toolUseId });
+	}, []);
+	// A background subagent with work to show is opened as its transcript, as
+	// the agents line's entries are (docs/turn-progress-ui.md#43-the-agents-line).
+	// No pending jump: nothing lands in the chat, so there is no inert
+	// transcript to wait out.
+	const handleOpenTranscriptFromStrip = useCallback(
+		(toolUseId: string, opener: HTMLElement) => {
+			setAnswerPanelOpen(false);
+			setAnswerAnchor(null);
+			openSubagentTranscript(toolUseId, opener);
+		},
+		[openSubagentTranscript],
+	);
 	// The request is read in the commit the press produced, which is the one the
 	// close is in: `transcriptInert` is the same value the DOM attribute is
 	// written from, so this is the cover being gone rather than a delay guessed
@@ -1370,13 +1399,17 @@ function ChatPanel({
 	// the caret away whenever the user was finally done with it. The strip's row
 	// is still there to press again.
 	useLayoutEffect(() => {
-		if (pendingJumpRequestId === null) return;
-		setPendingJumpRequestId(null);
+		if (pendingJump === null) return;
+		setPendingJump(null);
 		if (transcriptInert) return;
-		(subagentTranscriptRef.current ?? messageListRef.current)?.jumpToRequest(
-			pendingJumpRequestId,
-		);
-	}, [pendingJumpRequestId, transcriptInert]);
+		if (pendingJump.kind === "request") {
+			(subagentTranscriptRef.current ?? messageListRef.current)?.jumpToRequest(
+				pendingJump.requestId,
+			);
+		} else {
+			messageListRef.current?.jumpToCall(pendingJump.toolUseId);
+		}
+	}, [pendingJump, transcriptInert]);
 
 	const forkAnchor = forkTarget
 		? resolveForkAnchor(messages, forkTarget.messageId, hasMoreHistory)
@@ -1819,6 +1852,9 @@ function ChatPanel({
 						<AttentionStrip
 							turn={turn}
 							onJumpToRequest={handleJumpToRequest}
+							onJumpToCall={handleJumpToCall}
+							onOpenTranscript={handleOpenTranscriptFromStrip}
+							messages={messages}
 							onAnswer={handleOpenAnswerPanel}
 							// Driven by the same flags that draw the panel, so the row goes
 							// and the panel appears in one frame. Told rather than derived

@@ -655,12 +655,16 @@ has moved on from claiming to be running.
 What the line *says* does not come through the bubble's props: the turn's phase,
 its clock and what the main agent is thinking right now reach it through
 `TurnTailContext`, so that a thinking delta several times a second re-renders the
-one line rather than every memoized bubble. "Thinking now" is `useChatMessages`
+one line rather than every memoized bubble. The plan line and the agents line
+under it come the same way, with the id of the one bubble that draws them
+([turn-progress-ui.md §4.3](../turn-progress-ui.md#43-the-agents-line), *where
+the two lines are derived and drawn*). "Thinking now" is `useChatMessages`
 state beside the transcript, never a part of it — `thinking_delta` is not
 recorded, so it is dropped by the reducer and folded per frame into that state
 instead. What ends it is
 [turn-progress-ui.md §2.3](../turn-progress-ui.md#23-what-it-says)'s rule: the
-thinking's record, the main agent's next text or tool call, or the turn ending
+thinking's record, the main agent's next text or tool call (a Codex `plan`
+included), or the turn ending
 however it ends. If the user had opened the line, the row its
 record settles into opens too: the hook finds that part by the record's
 `Thought` object — which the reducer stores as it is, so neither position nor
@@ -1049,6 +1053,30 @@ reloaded in the middle of the fetch still has it.
 What the renderers make of the list — where it lands on the row and in the body,
 why each fetch keeps its own block, and what a failed or empty one says — is
 [tool-call-ui.md](../tool-call-ui.md#a-fetch-reads-on-the-row-it-came-from).
+
+#### A plan filed on the call that wrote it
+
+A `plan` record ([turn-progress-ui.md §4.6](../turn-progress-ui.md#46-the-plan-record))
+says where the agent's plan stood at one moment. One that names a call (Claude's
+`tool_use_id`) is set on that call's run as `plan`, found at any depth, and adds
+no part: the call's row is the plan's history. One with a `plan_id` (Codex) has
+no call, so it becomes a settled `Plan` run of its own, placed and filed by the
+ordinary `tool_call` path. Either way `plan` carries its place in record order
+(`order`), because the plan line picks the newest plan by record order, not by
+call order. A persisted record's `order` is its `seq`. One never persisted
+(`orderedPlan`) goes between the newest seq loaded anywhere (a message's
+anchor, or a plan's whole seq) and the next whole number: at that seq + 0.5,
+or, when an unpersisted plan already stands past it, halfway between that plan
+and the next whole number. So several in a row keep their order, and the next
+persisted record is always newer.
+
+The `seq` is read off the record in `normalizeEvent`, not taken from the
+caller. A persisted Claude plan is a back-reference (`isBackReference`): its
+call may be on a page above, and paging replays back-references with no seq.
+Read from the caller, an old plan replayed that way would count as the newest.
+An unpersisted one is not a back-reference, because replayed over an older page
+it could not be placed in order. A Codex plan is not one either, because
+replaying it would draw its row a second time.
 
 #### A subagent's children
 

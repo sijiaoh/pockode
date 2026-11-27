@@ -71,6 +71,14 @@ export function isTaskTool(toolName: string): boolean {
 	return toolName === "Task" || toolName === "Agent";
 }
 
+/**
+ * The name the reducer gives a Codex `plan` record's row: a plan with no call
+ * behind it, drawn as a call so lists and groups need no special case
+ * (docs/turn-progress-ui.md#46-the-plan-record). Its input is
+ * `{ steps: PlanStep[], explanation? }`.
+ */
+export const PLAN_TOOL_NAME = "Plan";
+
 function asObject(input: unknown): Record<string, unknown> {
 	return input && typeof input === "object"
 		? (input as Record<string, unknown>)
@@ -254,17 +262,17 @@ function bashSummary(input: unknown, workDir: string): ToolSummary {
 	};
 }
 
-function todoSummary(input: unknown): ToolSummary {
-	const todos = asObject(input).todos;
-	if (!Array.isArray(todos)) {
-		return { title: "TodoWrite", detail: "", detailTail: "", mono: false };
+/** A `TodoWrite`'s `todos`, or a `Plan` row's `steps`: the same wording. */
+function todoSummary(title: string, items: unknown): ToolSummary {
+	if (!Array.isArray(items)) {
+		return { title, detail: "", detailTail: "", mono: false };
 	}
-	const done = todos.filter(
-		(todo) => asObject(todo).status === "completed",
+	const done = items.filter(
+		(item) => asObject(item).status === "completed",
 	).length;
 	return {
-		title: "TodoWrite",
-		detail: `${done} done / ${todos.length}`,
+		title,
+		detail: `${done} done / ${items.length}`,
 		detailTail: "",
 		mono: false,
 	};
@@ -352,7 +360,12 @@ export function toolSummary(
 	}
 
 	if (toolName === "Bash") return bashSummary(input, workDir);
-	if (toolName === "TodoWrite") return todoSummary(input);
+	if (toolName === "TodoWrite") {
+		return todoSummary(toolName, asObject(input).todos);
+	}
+	if (toolName === PLAN_TOOL_NAME) {
+		return todoSummary(toolName, asObject(input).steps);
+	}
 
 	// The call that reads a task's output, on the rows where it could not be
 	// filed under the call it reads. The fallback lands on the same field today,
@@ -674,6 +687,7 @@ export function toolVerb(
 			return { verb: "fetch", name: url && hostOf(url) };
 		}
 		case "TodoWrite":
+		case PLAN_TOOL_NAME:
 			return { verb: "todo" };
 		// By what it did — `Used Wait` — rather than by Pockode's umbrella name.
 		case AGENT_CONTROL_TOOL:

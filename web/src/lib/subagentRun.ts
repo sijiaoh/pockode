@@ -338,6 +338,24 @@ export function subagentToolUses(
 }
 
 /**
+ * What a live subagent is doing now: its newest child, or before the first
+ * one what the CLI said it last called. Shared by the row's second line and
+ * the agents line (docs/turn-progress-ui.md#43-the-agents-line), so the two
+ * cannot word it differently. Nothing when neither has anything to say.
+ */
+export function subagentNow(
+	run: ToolRun,
+	unfiled?: UnfiledChildren,
+): LatestChild | undefined {
+	const latest = unfiled?.latest ?? latestChild(run.children ?? []);
+	if (latest) return latest;
+	const lastTool = run.subagentProgress?.lastToolName;
+	return lastTool
+		? { kind: "call", name: lastTool, input: undefined }
+		: undefined;
+}
+
+/**
  * The run's line, by its status (docs/tool-call-ui.md#status-by-status). The
  * newest unfiled child is the newest child of all, so it is what the subagent
  * is doing now.
@@ -367,18 +385,12 @@ export function subagentLine(
 		return { toolUses, tail: words(), live: isLiveRun(run) };
 	}
 	if (isLiveRun(run)) {
-		// Before the first child, what the CLI said it last called; its
-		// activity only after that, being `Running <description>` — the row's
-		// detail said again.
-		const lastTool = run.subagentProgress?.lastToolName;
+		// Its activity only after what it is doing now, being
+		// `Running <description>` — the row's detail said again.
 		const tail: LatestChild | undefined =
-			latest ??
-			(lastTool
-				? { kind: "call", name: lastTool, input: undefined }
-				: run.activity
-					? { kind: "text", text: run.activity }
-					: undefined);
-		if (toolUses === 0 && !lastTool) return null;
+			subagentNow(run, unfiled) ??
+			(run.activity ? { kind: "text", text: run.activity } : undefined);
+		if (toolUses === 0 && !run.subagentProgress?.lastToolName) return null;
 		return { toolUses, tail, live: true };
 	}
 	// No subagent body opens itself, so a failure's why goes here: the first
@@ -472,6 +484,37 @@ export function withoutEchoedReport(
 		];
 	}
 	return parts;
+}
+
+/**
+ * A pending permission card is never drawn inside a Process: the Process is
+ * closed by default, and a card in it would leave a session waiting on someone
+ * who cannot see why. The outermost subagent row draws it instead.
+ */
+export function isPendingCard(part: ContentPart): boolean {
+	return part.type === "permission_request" && part.status === "pending";
+}
+
+/**
+ * The children a subagent's Process draws: without the echo of what the body
+ * already shows above it (`withoutEchoedReport`), and without a pending card,
+ * which the row draws instead.
+ */
+export function processChildren(run: ToolRun): ContentPart[] {
+	const { report, outcome } = subagentLastWords(run);
+	return withoutEchoedReport(run.children ?? [], report || outcome).filter(
+		(part) => !isPendingCard(part),
+	);
+}
+
+/**
+ * Whether the subagent has work to show as a transcript of its own: what
+ * decides its ⤢, and so every other way into that transcript
+ * (docs/subagent-transcript-ui.md#the-way-in). One with none is gone to by its
+ * row instead.
+ */
+export function hasProcess(run: ToolRun, unfiled?: UnfiledChildren): boolean {
+	return processChildren(run).length > 0 || (unfiled?.count ?? 0) > 0;
 }
 
 /** A run's children that sit flat rather than under the call they belong to. */
