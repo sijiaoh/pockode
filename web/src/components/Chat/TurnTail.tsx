@@ -86,7 +86,7 @@ function ThinkingSoFar({ thinking }: { thinking: LiveThinking }) {
  * written (docs/turn-progress-ui.md#2-the-tail-line): `Working 1m 4s`, or
  * `Thinking… 1m 4s · <latest line>`. It says that the turn is producing and
  * for how long, and nothing else — every other fact about the turn has an
- * owner of its own (§4 there).
+ * owner of its own (§5 there).
  *
  * The slot keeps the turn-end row's height whether or not the line is drawn,
  * so a turn blocking and resuming moves nothing, and settling swaps the line

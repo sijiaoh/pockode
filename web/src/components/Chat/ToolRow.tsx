@@ -38,6 +38,16 @@ const settledGlyphs: Record<
 };
 
 /**
+ * A run's status in words, for a control that names the run in a label of its
+ * own and so hides the glyph that would otherwise say it.
+ */
+export function toolStatusWord(status: ToolRunStatus): string {
+	if (status === "running") return "running";
+	if (status === "background") return "running in the background";
+	return settledGlyphs[status].label;
+}
+
+/**
  * What a row shows while its work is going: a spinner, or under reduced motion
  * a still dot — the motion is decoration, and `Spinner` does not stop itself.
  * Accent then, as the turn's tail line is, so the dot still reads as "live"
@@ -302,6 +312,11 @@ interface RowButtonProps {
 	controls?: string;
 	/** The accessible name, for a row whose visible words do not read as one. */
 	label?: string;
+	/**
+	 * Drawn without the chevron column: a row standing for another one, which
+	 * it goes to rather than opens, with no column of rows to line up with.
+	 */
+	noLead?: boolean;
 	/** The text column: line 1 and, when there is one, the second line. */
 	children: ReactNode;
 }
@@ -348,6 +363,7 @@ export function RowButton({
 	toggleable = true,
 	controls,
 	label,
+	noLead,
 	children,
 }: RowButtonProps) {
 	return (
@@ -373,7 +389,7 @@ export function RowButton({
 		>
 			<RowColumns
 				lead={
-					toggleable ? (
+					noLead ? null : toggleable ? (
 						<ChevronRight
 							className={`mt-0.5 size-3 shrink-0 text-th-text-muted transition-transform ${expanded ? "rotate-90" : ""}`}
 						/>
@@ -432,6 +448,94 @@ export function RowSubline({
 	);
 }
 
+type FirstLineProps = Pick<
+	Props,
+	| "title"
+	| "agent"
+	| "chip"
+	| "background"
+	| "detail"
+	| "detailTail"
+	| "detailMono"
+	| "meta"
+	| "error"
+>;
+
+/**
+ * What a row's first line holds, inside a `flex items-baseline` span of the
+ * caller's. Its own component so that a run drawn again elsewhere — an entry in
+ * the agents list — is worded and cut by the code that draws its row.
+ */
+export function ToolRowFirstLine({
+	title,
+	agent,
+	chip,
+	background,
+	detail,
+	detailTail,
+	detailMono,
+	meta,
+	error,
+}: FirstLineProps) {
+	return (
+		<>
+			{agent ? (
+				<span className="flex min-w-0 max-w-[45%] shrink-0 items-baseline gap-1 text-th-accent">
+					<Bot aria-hidden className="size-3 shrink-0 self-center" />
+					<span className="truncate">
+						{/* What the mark says to the eye; a row already titled
+						    `Subagent` would say it twice. */}
+						{title !== SUBAGENT_TITLE && (
+							<span className="sr-only">Subagent </span>
+						)}
+						{title}
+					</span>
+				</span>
+			) : (
+				<span className="shrink-0 text-th-accent">{title}</span>
+			)}
+			{chip && <Chip>{chip}</Chip>}
+			{background && <Chip>background</Chip>}
+			<Detail
+				detail={detail}
+				detailTail={detailTail}
+				mono={detailMono}
+				error={error}
+			/>
+			{meta}
+		</>
+	);
+}
+
+/** A row's second line, when it has one; see `ToolRow`. */
+export function ToolRowSecondLine({
+	secondLine,
+	richSecondLine,
+}: Pick<Props, "secondLine" | "richSecondLine">) {
+	if (richSecondLine) {
+		return (
+			<span
+				aria-hidden={richSecondLine.live}
+				className="flex min-w-0 items-baseline gap-1.5 text-th-text-muted"
+			>
+				{richSecondLine.content}
+			</span>
+		);
+	}
+	if (!secondLine) return null;
+	return (
+		<span
+			// Hidden from the accessible name while it moves, exposed once it has
+			// settled: the spinner already says the call is running, and a settled
+			// background outcome is the answer the user was waiting for.
+			aria-hidden={secondLine.live}
+			className={`block truncate text-th-text-muted ${secondLine.mono ? "font-mono" : ""}`}
+		>
+			{secondLine.text}
+		</span>
+	);
+}
+
 /**
  * An open row's first line sticks to the top of the transcript until its body
  * ends, so a reader several screens into a result still sees which call it is
@@ -470,27 +574,13 @@ export function ToolRow({
 	useStuckBar(barRef, sticky);
 	const beforeFold = useFoldLanding(barRef, titleRef, expanded);
 
-	const second = richSecondLine ? (
-		<span
-			aria-hidden={richSecondLine.live}
-			className="flex min-w-0 items-baseline gap-1.5 text-th-text-muted"
-		>
-			{richSecondLine.content}
-		</span>
-	) : (
-		secondLine && (
-			<span
-				// Hidden from the accessible name while it moves, exposed once
-				// it has settled: the spinner already says the call is running,
-				// and a settled background outcome is the answer the user was
-				// waiting for.
-				aria-hidden={secondLine.live}
-				className={`block truncate text-th-text-muted ${secondLine.mono ? "font-mono" : ""}`}
-			>
-				{secondLine.text}
-			</span>
-		)
+	const second = (
+		<ToolRowSecondLine
+			secondLine={secondLine}
+			richSecondLine={richSecondLine}
+		/>
 	);
+	const hasSecond = !!(richSecondLine || secondLine);
 
 	return (
 		<>
@@ -506,35 +596,22 @@ export function ToolRow({
 					toggleable={toggleable}
 				>
 					<span ref={titleRef} className="flex items-baseline gap-1.5">
-						{agent ? (
-							<span className="flex min-w-0 max-w-[45%] shrink-0 items-baseline gap-1 text-th-accent">
-								<Bot aria-hidden className="size-3 shrink-0 self-center" />
-								<span className="truncate">
-									{/* What the mark says to the eye; a row already titled
-									    `Subagent` would say it twice. */}
-									{title !== SUBAGENT_TITLE && (
-										<span className="sr-only">Subagent </span>
-									)}
-									{title}
-								</span>
-							</span>
-						) : (
-							<span className="shrink-0 text-th-accent">{title}</span>
-						)}
-						{chip && <Chip>{chip}</Chip>}
-						{background && <Chip>background</Chip>}
-						<Detail
+						<ToolRowFirstLine
+							title={title}
+							agent={agent}
+							chip={chip}
+							background={background}
 							detail={detail}
 							detailTail={detailTail}
-							mono={detailMono}
+							detailMono={detailMono}
+							meta={meta}
 							error={error}
 						/>
-						{meta}
 					</span>
 					{!sticky && second}
 				</RowButton>
 			</div>
-			{sticky && second && (
+			{sticky && hasSecond && (
 				// The row's box and columns without its floor, so the line sits
 				// where it did under the title; and its tint, being the row's.
 				<div

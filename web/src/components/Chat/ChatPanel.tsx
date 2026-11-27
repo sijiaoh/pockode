@@ -173,6 +173,14 @@ function ComposerErrorBar({
 	);
 }
 
+/**
+ * A jump the strip asked for, held for the commit that closes the answer
+ * panel over the transcript; see `handleJumpToRequest`.
+ */
+type PendingJump =
+	| { kind: "request"; requestId: string }
+	| { kind: "call"; toolUseId: string; openTarget: boolean };
+
 interface Props {
 	/**
 	 * Destination session id, taken from the URL. It is known before the session
@@ -1297,13 +1305,19 @@ function ChatPanel({
 	// permission request can come up mid-send, and closing then would take
 	// away the only place the send's outcome — a refusal included — is told.
 	const [answerPanelSending, setAnswerPanelSending] = useState(false);
-	const [pendingJumpRequestId, setPendingJumpRequestId] = useState<
-		string | null
-	>(null);
+	//
+	// The background row's tasks take the same way to their rows, by
+	// `tool_use_id`, for the same reason.
+	const [pendingJump, setPendingJump] = useState<PendingJump | null>(null);
 	const handleJumpToRequest = useCallback((requestId: string) => {
 		setAnswerPanelOpen(false);
 		setAnswerAnchor(null);
-		setPendingJumpRequestId(requestId);
+		setPendingJump({ kind: "request", requestId });
+	}, []);
+	const handleJumpToCall = useCallback((toolUseId: string) => {
+		setAnswerPanelOpen(false);
+		setAnswerAnchor(null);
+		setPendingJump({ kind: "call", toolUseId, openTarget: true });
 	}, []);
 	// The request is read in the commit the press produced, which is the one the
 	// close is in: `transcriptInert` is the same value the DOM attribute is
@@ -1319,11 +1333,18 @@ function ChatPanel({
 	// the caret away whenever the user was finally done with it. The strip's row
 	// is still there to press again.
 	useLayoutEffect(() => {
-		if (pendingJumpRequestId === null) return;
-		setPendingJumpRequestId(null);
+		if (pendingJump === null) return;
+		setPendingJump(null);
 		if (transcriptInert) return;
-		messageListRef.current?.jumpToRequest(pendingJumpRequestId);
-	}, [pendingJumpRequestId, transcriptInert]);
+		const list = messageListRef.current;
+		if (pendingJump.kind === "request") {
+			list?.jumpToRequest(pendingJump.requestId);
+		} else {
+			list?.jumpToCall(pendingJump.toolUseId, {
+				openTarget: pendingJump.openTarget,
+			});
+		}
+	}, [pendingJump, transcriptInert]);
 
 	const forkAnchor = forkTarget
 		? resolveForkAnchor(messages, forkTarget.messageId, hasMoreHistory)
@@ -1741,6 +1762,8 @@ function ChatPanel({
 						<AttentionStrip
 							turn={turn}
 							onJumpToRequest={handleJumpToRequest}
+							onJumpToCall={handleJumpToCall}
+							messages={messages}
 							onAnswer={handleOpenAnswerPanel}
 							// Driven by the same flags that draw the panel, so the row goes
 							// and the panel appears in one frame. Told rather than derived

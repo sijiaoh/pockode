@@ -8,6 +8,7 @@ import {
 	type SubagentLine,
 	subagentLine,
 	subagentReport,
+	type UnfiledChildren,
 	withoutEchoedReport,
 } from "../../lib/subagentRun";
 import { toolRunText, toolSecondLine, toolUsesLabel } from "../../lib/toolRun";
@@ -62,7 +63,7 @@ function isPendingCard(part: ContentPart): boolean {
 }
 
 /** The latest child, worded as its own row would word it — never red. */
-function LatestChildLabel({ child }: { child: LatestChild }) {
+export function LatestChildLabel({ child }: { child: LatestChild }) {
 	const workDir = useWSStore((state) => state.workDir);
 	if (child.kind === "text") {
 		return <span className="min-w-0 truncate">{child.text}</span>;
@@ -117,6 +118,47 @@ function SubagentLineContent({ line }: { line: SubagentLine }) {
 			)}
 		</>
 	);
+}
+
+/**
+ * A subagent row's first and second line, as `ToolRow` takes them. The row and
+ * an entry in the agents list both draw from this
+ * (docs/turn-progress-ui.md#43-the-agents-line), so they cannot say different
+ * things about one run.
+ */
+export function subagentHeader(run: ToolRun, unfiled?: UnfiledChildren) {
+	// No work directory: a subagent call is summarised from its description, and
+	// there is no path in it for one to shorten.
+	const summary = toolSummary(run.name, run.input, "");
+	const line = subagentLine(run, unfiled);
+	const failed = run.status === "error";
+	return {
+		summary,
+		failed,
+		glyph: <ToolStatusGlyph status={run.status} name={SUBAGENT_TITLE} />,
+		firstLine: {
+			title: summary.title,
+			agent: true,
+			background: run.fromBackground,
+			detail: summary.detail,
+			meta: <ToolMeta run={run} />,
+			error: failed,
+		},
+		secondLine: {
+			richSecondLine: line && {
+				content: <SubagentLineContent line={line} />,
+				live: line.live,
+			},
+			// With a line of its own the row copies nothing in the body. Without,
+			// the shared one stands — except that it ends a failed run with the
+			// last line of its text, and here that text is the report, which the
+			// row opens in full below: a worse second copy, in mono because the
+			// shared rule expects machine output. A backgrounded failure keeps it,
+			// being the one failed row whose body does not open.
+			secondLine:
+				line || (failed && !run.fromBackground) ? null : toolSecondLine(run),
+		},
+	};
 }
 
 /**
@@ -192,14 +234,17 @@ function TaskItem({ run, depth = 0, renderChild }: Props) {
 	const view = useTranscriptView();
 	// A jump to one of the subagent's steps opens the row and its Process; the
 	// lists inside open their groups themselves, at whatever depth.
-	useRevealRequest((toolUseId) => {
-		if (!findToolRunPath(run.children ?? [], toolUseId)) return;
+	// A jump that asks for the row itself to open — going to an agent from the
+	// agents line — opens it and its Process the same way.
+	useRevealRequest(({ toolUseId, openTarget }) => {
+		const isTarget = openTarget && toolUseId === run.id;
+		if (!isTarget && !findToolRunPath(run.children ?? [], toolUseId)) return;
 		setExpanded(true);
 		setProcessExpanded(true);
 	});
-	// No work directory: a subagent call is summarised from its description, and
-	// there is no path in it for one to shorten.
-	const summary = toolSummary(run.name, run.input, "");
+	const unfiled = useUnfiledChildren(run.id);
+	const header = subagentHeader(run, unfiled);
+	const { summary, failed } = header;
 	const prompt = taskPrompt(run.input);
 	// A backgrounded Task's text is not its report: the subagent's own account
 	// never reached this client, and what did arrive is the notification that
@@ -209,7 +254,6 @@ function TaskItem({ run, depth = 0, renderChild }: Props) {
 	const text = toolRunText(run);
 	const outcome = run.fromBackground ? text : "";
 	const report = run.fromBackground ? "" : subagentReport(text);
-	const failed = run.status === "error";
 	const nested = depth > 0;
 	const fullScreenTitle = toolSummaryLine(summary);
 	const reportSource = useMemo<FullScreenSource | undefined>(
@@ -240,9 +284,7 @@ function TaskItem({ run, depth = 0, renderChild }: Props) {
 	);
 
 	const children = run.children ?? [];
-	const unfiled = useUnfiledChildren(run.id);
 	const steps = countSteps(children) + (unfiled?.steps ?? 0);
-	const line = subagentLine(run, unfiled);
 	// The report — or a backgrounded subagent's outcome, which is its last
 	// words delivered after the call returned (Claude's notification summary,
 	// measured on claude 2.1.286) — is drawn in full above the Process, and
@@ -286,29 +328,9 @@ function TaskItem({ run, depth = 0, renderChild }: Props) {
 			<ToolRow
 				expanded={expanded}
 				onToggle={() => setExpanded(!expanded)}
-				glyph={<ToolStatusGlyph status={run.status} name={SUBAGENT_TITLE} />}
-				title={summary.title}
-				agent
-				background={run.fromBackground}
-				detail={summary.detail}
-				meta={<ToolMeta run={run} />}
-				// With a line of its own the row copies nothing in the body.
-				// Without, the shared one stands — except that it ends a failed run
-				// with the last line of its text, and here that text is the report,
-				// which this row has already opened in full below: a worse second
-				// copy, in mono because the shared rule expects machine output. A
-				// backgrounded failure keeps it, being the one failed row whose
-				// body does not open.
-				richSecondLine={
-					line && {
-						content: <SubagentLineContent line={line} />,
-						live: line.live,
-					}
-				}
-				secondLine={
-					line || (failed && !run.fromBackground) ? null : toolSecondLine(run)
-				}
-				error={failed}
+				glyph={header.glyph}
+				{...header.firstLine}
+				{...header.secondLine}
 			/>
 
 			{pendingCards.length > 0 && (

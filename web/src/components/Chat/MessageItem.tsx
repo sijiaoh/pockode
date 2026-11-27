@@ -93,6 +93,7 @@ import { PartBlocks } from "./ToolList";
 import { RowSubline, RunningGlyph, ToolRow } from "./ToolRow";
 import { Section, type SectionFullScreen } from "./ToolSection";
 import { TurnChangesCard } from "./TurnChangesCard";
+import TurnOverview from "./TurnOverview";
 import TurnTail from "./TurnTail";
 import { useTranscriptView } from "./transcriptViewContext";
 import { keepClearProps } from "./useTranscriptScroll";
@@ -1845,23 +1846,31 @@ const MessageItem = memo(function MessageItem({
 					<p className="mt-2 text-sm text-th-warning">Process ended</p>
 				)}
 				{pending ? (
-					<TurnTail
-						// Keyed on being the open turn rather than on being last. The two
-						// agreed until a message could be sent mid-reply; now the reply
-						// that is still growing routinely has that message under it, and
-						// reading position would take its line away at the one moment the
-						// user has just asked it something. A message left `streaming`
-						// that is *not* the open turn keeps the slot empty, which is what
-						// stopped a superseded reply from claiming to still be running.
-						writing={message.status === "sending" || !!isOpenTurn}
-						placeholder={message.status === "sending"}
-					/>
+					<>
+						<TurnTail
+							// Keyed on being the open turn rather than on being last. The two
+							// agreed until a message could be sent mid-reply; now the reply
+							// that is still growing routinely has that message under it, and
+							// reading position would take its line away at the one moment the
+							// user has just asked it something. A message left `streaming`
+							// that is *not* the open turn keeps the slot empty, which is what
+							// stopped a superseded reply from claiming to still be running.
+							writing={message.status === "sending" || !!isOpenTurn}
+							placeholder={message.status === "sending"}
+						/>
+						{/* Under the tail line, or the height it keeps while hidden. */}
+						<TurnOverview messageId={message.id} />
+					</>
 				) : (
-					<MessageActions
-						copyText={copyText || undefined}
-						onFork={onFork}
-						forkBlocked={forkBlocked}
-					/>
+					<>
+						{/* Above the turn-end row, while an agent outlives the turn. */}
+						<TurnOverview messageId={message.id} className="mt-2" />
+						<MessageActions
+							copyText={copyText || undefined}
+							onFork={onFork}
+							forkBlocked={forkBlocked}
+						/>
+					</>
 				)}
 			</div>
 		</div>

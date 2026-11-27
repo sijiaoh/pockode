@@ -136,7 +136,7 @@ function RowList<T extends Item>({
 
 	// A jump to a row folded into a group opens the group, as the user's tap
 	// on its summary would; a subagent row in it opens its own Process.
-	useRevealRequest((toolUseId) => {
+	useRevealRequest(({ toolUseId }) => {
 		for (const entry of rowEntries(items)) {
 			if (entry.kind !== "item" || entry.group === undefined) continue;
 			if (!findToolRunPath([entry.item.part], toolUseId)) continue;

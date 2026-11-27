@@ -6,13 +6,24 @@ import { createContext, useContext, useState } from "react";
  */
 export interface ToolReveal {
 	toolUseId: string;
+	/**
+	 * Open the target's own row too, not only what hides it: a subagent row and
+	 * its Process, when what the reader came for is the agent's work
+	 * (docs/turn-progress-ui.md#43-the-agents-line).
+	 */
+	openTarget?: boolean;
 }
+
+export type GoToCall = (
+	toolUseId: string,
+	options?: { openTarget?: boolean },
+) => void;
 
 interface ToolJump {
 	/** The request the transcript is carrying out, until it has landed. */
 	reveal: ToolReveal | null;
 	/** Opens what hides the row, then moves the view onto it. Stable. */
-	goToCall: (toolUseId: string) => void;
+	goToCall: GoToCall;
 }
 
 /**
@@ -29,7 +40,7 @@ interface ToolJump {
 export const ToolJumpContext = createContext<ToolJump | null>(null);
 
 /** Null outside a transcript, where there is nothing to go to. */
-export function useGoToCall(): ((toolUseId: string) => void) | null {
+export function useGoToCall(): GoToCall | null {
 	return useContext(ToolJumpContext)?.goToCall ?? null;
 }
 
@@ -40,11 +51,11 @@ export function useGoToCall(): ((toolUseId: string) => void) | null {
  * what the caller holds; what it opens stays open, as a tap of the user's
  * would.
  */
-export function useRevealRequest(onReveal: (toolUseId: string) => void) {
+export function useRevealRequest(onReveal: (reveal: ToolReveal) => void) {
 	const reveal = useContext(ToolJumpContext)?.reveal ?? null;
 	const [seen, setSeen] = useState<ToolReveal | null>(null);
 	if (reveal && reveal !== seen) {
 		setSeen(reveal);
-		onReveal(reveal.toolUseId);
+		onReveal(reveal);
 	}
 }

@@ -5,6 +5,13 @@ export const IDLE_TAIL: TurnTail = {
 	phase: "idle",
 	thinking: null,
 	onToggleThinking: () => {},
+	plan: { expanded: false, onToggle: () => {} },
+	agents: {
+		liveCount: 0,
+		entries: [],
+		expanded: false,
+		onToggle: () => {},
+	},
 };
 
 /**

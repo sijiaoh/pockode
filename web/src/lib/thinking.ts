@@ -1,5 +1,6 @@
 import type { Thought, TurnPhase } from "../types/message";
 import { formatElapsed, spokenElapsed } from "./toolRun";
+import type { AgentsOverview, PlanOverview } from "./turnOverview";
 
 /**
  * How a thinking row words what it holds (docs/turn-progress-ui.md#1-the-thinking-row).
@@ -94,6 +95,13 @@ export interface TurnTail {
 	/** The main agent is thinking now; null when it is not, or not known to be. */
 	thinking: LiveThinking | null;
 	onToggleThinking: () => void;
+	/**
+	 * The assistant message whose turn-end slot draws the lines under the tail
+	 * line (`overviewMessageId` in lib/turnOverview.ts); absent when none does.
+	 */
+	overviewMessageId?: string;
+	plan: PlanOverview;
+	agents: AgentsOverview;
 }
 
 /**

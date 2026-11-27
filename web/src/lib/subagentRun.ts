@@ -158,7 +158,8 @@ export interface SubagentLine {
 	live: boolean;
 }
 
-function isLive(run: ToolRun): boolean {
+/** Whether the run's work is still going, in the foreground or not. */
+export function isLive(run: ToolRun): boolean {
 	return run.status === "running" || run.status === "background";
 }
 
@@ -187,6 +188,24 @@ export function subagentToolUses(
 }
 
 /**
+ * What a live subagent is doing now: its newest child, or before the first
+ * one what the CLI said it last called. Shared by the row's second line and
+ * the agents line (docs/turn-progress-ui.md#43-the-agents-line), so the two
+ * cannot word it differently. Nothing when neither has anything to say.
+ */
+export function subagentNow(
+	run: ToolRun,
+	unfiled?: UnfiledChildren,
+): LatestChild | undefined {
+	const latest = unfiled?.latest ?? latestChild(run.children ?? []);
+	if (latest) return latest;
+	const lastTool = run.subagentProgress?.lastToolName;
+	return lastTool
+		? { kind: "call", name: lastTool, input: undefined }
+		: undefined;
+}
+
+/**
  * The run's line, by its status (docs/tool-call-ui.md#status-by-status). The
  * newest unfiled child is the newest child of all, so it is what the subagent
  * is doing now.
@@ -199,18 +218,12 @@ export function subagentLine(
 	const latest = unfiled?.latest ?? latestChild(run.children ?? []);
 
 	if (isLive(run)) {
-		// Before the first child, what the CLI said it last called; its
-		// activity only after that, being `Running <description>` — the row's
-		// detail said again.
-		const lastTool = run.subagentProgress?.lastToolName;
+		// Its activity only after what it is doing now, being
+		// `Running <description>` — the row's detail said again.
 		const tail: LatestChild | undefined =
-			latest ??
-			(lastTool
-				? { kind: "call", name: lastTool, input: undefined }
-				: run.activity
-					? { kind: "text", text: run.activity }
-					: undefined);
-		if (toolUses === 0 && !lastTool) return null;
+			subagentNow(run, unfiled) ??
+			(run.activity ? { kind: "text", text: run.activity } : undefined);
+		if (toolUses === 0 && !run.subagentProgress?.lastToolName) return null;
 		return { toolUses, tail, live: true };
 	}
 	if (toolUses === 0) {

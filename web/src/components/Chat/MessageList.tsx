@@ -31,7 +31,11 @@ import MessageItem, {
 	type PromptError,
 } from "./MessageItem";
 import { anchorCandidateProps } from "./scrollAnchor";
-import { ToolJumpContext, type ToolReveal } from "./toolJumpContext";
+import {
+	type GoToCall,
+	ToolJumpContext,
+	type ToolReveal,
+} from "./toolJumpContext";
 import { TranscriptViewContext } from "./transcriptViewContext";
 import { TRANSCRIPT_SPAN_VAR } from "./transcriptWidth";
 import {
@@ -76,17 +80,18 @@ function findShown(
 /**
  * What the transcript can be asked to do from outside it.
  *
- * Jumping to a card is scroll work, and the scroll container lives here — so the
- * attention strip, which sits below the list, asks rather than reimplements. It
- * is the only caller, and a permission card is the only thing it can reach: the
- * one thing left that holds a turn up, and so the only thing the strip names by
- * request id. A posted question is reached by the answer panel instead, which is
- * where answering happens — there is deliberately no jump to a question card
- * (docs/answering-ui.md §8). The jump to a tool row is asked from inside the
- * transcript (`ToolJumpContext`).
+ * Jumping to a card or a row is scroll work, and the scroll container lives
+ * here — so the attention strip, which sits below the list, asks rather than
+ * reimplements. It is the only caller, and it reaches the two things that hold a
+ * turn up: a permission card, by request id, and a background task's row, by
+ * `tool_use_id` — the same jump the transcript's own callers make through
+ * `ToolJumpContext`, which the strip is outside of. A posted question is reached
+ * by the answer panel instead, which is where answering happens — there is
+ * deliberately no jump to a question card (docs/answering-ui.md §8).
  */
 export interface MessageListHandle {
 	jumpToRequest: (requestId: string) => void;
+	jumpToCall: GoToCall;
 }
 
 interface Props {
@@ -398,8 +403,9 @@ function MessageList({
 	// path hides the row (`useRevealRequest`), and once that commit has landed —
 	// child layout effects run before this one — the row is there to move to.
 	const [reveal, setReveal] = useState<ToolReveal | null>(null);
-	const goToCall = useCallback(
-		(toolUseId: string) => setReveal({ toolUseId }),
+	const goToCall = useCallback<GoToCall>(
+		(toolUseId, options) =>
+			setReveal({ toolUseId, openTarget: options?.openTarget }),
 		[],
 	);
 	useLayoutEffect(() => {
@@ -411,9 +417,11 @@ function MessageList({
 	}, [reveal, land]);
 	const toolJump = useMemo(() => ({ reveal, goToCall }), [reveal, goToCall]);
 
-	useImperativeHandle(ref, () => ({ jumpToRequest: scrollToRequest }), [
-		scrollToRequest,
-	]);
+	useImperativeHandle(
+		ref,
+		() => ({ jumpToRequest: scrollToRequest, jumpToCall: goToCall }),
+		[scrollToRequest, goToCall],
+	);
 
 	// Only once the whole transcript is loaded: pinned above a page that is still
 	// the middle of a conversation, the banner would claim a position it does not
