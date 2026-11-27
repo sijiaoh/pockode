@@ -11,8 +11,8 @@ import {
 	backgroundTaskRuns,
 	currentPlan,
 	overviewMessageId,
-	planLineLabel,
 	planLineWords,
+	statusLineLabel,
 	topLevelAgentRuns,
 } from "./turnOverview";
 
@@ -268,9 +268,6 @@ describe("planLineWords", () => {
 			item: "Fixing retry",
 			more: 1,
 		});
-		expect(planLineLabel(words)).toBe(
-			"Plan, 1 of 4 done, now Fixing retry and 1 more",
-		);
 	});
 
 	it("says what is next by the item's own words when nothing is in progress", () => {
@@ -279,7 +276,6 @@ describe("planLineWords", () => {
 			step("Update docs", "pending", "Updating docs"),
 		]);
 		expect(words).toMatchObject({ label: "Next", item: "Update docs" });
-		expect(planLineLabel(words)).toBe("Plan, 1 of 2 done, next Update docs");
 	});
 
 	it("says all done when every item is", () => {
@@ -288,6 +284,22 @@ describe("planLineWords", () => {
 			step("b", "completed"),
 		]);
 		expect(words).toMatchObject({ done: 2, total: 2, label: "All done" });
-		expect(planLineLabel(words)).toBe("Plan, 2 of 2 done, all done");
+	});
+});
+
+describe("statusLineLabel", () => {
+	// Never the free text, which moves while it is live.
+	it("names the stable facts only, leaving out what is absent", () => {
+		expect(
+			statusLineLabel({
+				phase: "Working",
+				plan: { done: 3, total: 7 },
+				agents: 2,
+			}),
+		).toBe("Working, plan 3 of 7, 2 agents running, details");
+		expect(statusLineLabel({ plan: { done: 1, total: 2 } })).toBe(
+			"Plan 1 of 2, details",
+		);
+		expect(statusLineLabel({ agents: 0 })).toBe("No agents running, details");
 	});
 });

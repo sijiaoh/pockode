@@ -135,12 +135,14 @@ describe("a thought in a real layout", () => {
 			content: reasoning(paragraphs, newest),
 			fullReasoning: "",
 			joinedLate: false,
-			expanded: true,
 		});
+		const panel = { expanded: true, onToggle: () => {} };
 		const tail = (thinking: LiveThinking) => (
 			<Transcript>
-				<TurnTailContext value={{ ...IDLE_TAIL, phase: "running", thinking }}>
-					<TurnTail writing placeholder={false} />
+				<TurnTailContext
+					value={{ ...IDLE_TAIL, phase: "running", thinking, panel }}
+				>
+					<TurnTail messageId="m" writing placeholder={false} />
 				</TurnTailContext>
 			</Transcript>
 		);

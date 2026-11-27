@@ -914,16 +914,16 @@ describe("useChatMessages", () => {
 			expect(latest.tail.thinking).toBeNull();
 		});
 
-		// Nothing closes what the user opened, and a line they opened becomes the
-		// row it settles into.
-		it("opens the row a thinking the user had open settles into", async () => {
+		// Nothing closes what the user opened, and a thinking they were reading in
+		// the panel becomes a row that is open.
+		it("opens the row a thinking settles into under the open panel", async () => {
 			const { latest, emit } = renderTail();
 			await waitFor(() => expect(latest.isLoadingHistory).toBe(false));
 
 			emit(delta(""), delta("Checking"));
 			await waitFor(() => expect(latest.tail.thinking).not.toBeNull());
-			act(() => latest.tail.onToggleThinking());
-			expect(latest.tail.thinking?.expanded).toBe(true);
+			act(() => latest.tail.panel.onToggle());
+			expect(latest.tail.panel.expanded).toBe(true);
 
 			// The record and the text after it reaching one render, as two socket
 			// messages close together do.
@@ -935,6 +935,19 @@ describe("useChatMessages", () => {
 			const row = reply.parts[0];
 			if (row.type !== "thinking") throw new Error("no thinking row");
 			expect(latest.openedThoughtIds.has(row.id)).toBe(true);
+		});
+
+		// The panel open on something else — the plan — never showed a thinking
+		// with no text, so its row has nothing the reader was following.
+		it("leaves closed the row of a thinking the open panel had no text for", async () => {
+			const { latest, emit } = renderTail();
+			await waitFor(() => expect(latest.isLoadingHistory).toBe(false));
+
+			emit(delta(""));
+			await waitFor(() => expect(latest.tail.thinking).not.toBeNull());
+			act(() => latest.tail.panel.onToggle());
+			emit({ type: "thinking", content: "Checking", duration_ms: 2000 });
+			expect(latest.openedThoughtIds.size).toBe(0);
 		});
 
 		// Notifications held across a subscribe are replayed after the page: the

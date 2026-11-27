@@ -338,7 +338,7 @@ function TodoIcon({ status }: { status: PlanStepStatus }) {
 
 /**
  * A plan's checklist, wherever it is read: a `TodoWrite` or `Plan` row's
- * body, and the plan line's (docs/turn-progress-ui.md#42-the-plan-line). A
+ * body, and the turn panel's (docs/turn-progress-ui.md#42-the-plan). A
  * Codex explanation comes first.
  */
 export function TodoChecklist({

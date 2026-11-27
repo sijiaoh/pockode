@@ -1,16 +1,21 @@
 import { Check, Copy, GitBranch, X } from "lucide-react";
-import { useState } from "react";
+import { memo, type ReactNode, useState } from "react";
 import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
 import { iconButtonClass } from "../ui/iconButtonClass";
 import MessageMenu from "./MessageMenu";
 import type { ForkBlocked } from "./MessageMenuTrigger";
 
-interface Props {
+export interface MessageActionsProps {
 	/** The message's own Markdown, absent when it has none to copy. */
 	copyText?: string;
 	/** Absent when the session cannot fork at all. */
 	onFork?: () => void;
 	forkBlocked?: ForkBlocked;
+	/**
+	 * Drawn on the row's right, outside the actions' group: the agents chip
+	 * while a subagent outlives the turn (docs/turn-progress-ui.md#21-where-it-is).
+	 */
+	aside?: ReactNode;
 }
 
 const quiet = "opacity-60 hover:opacity-100 focus-visible:opacity-100";
@@ -32,70 +37,83 @@ const quiet = "opacity-60 hover:opacity-100 focus-visible:opacity-100";
  * stays clickable and opens the menu, which says why: an icon cannot, and a
  * touch device shows no tooltip.
  */
-function MessageActions({ copyText, onFork, forkBlocked }: Props) {
+function MessageActions({
+	copyText,
+	onFork,
+	forkBlocked,
+	aside,
+}: MessageActionsProps) {
 	const [menuOpen, setMenuOpen] = useState(false);
 	const { state: copyState, copy } = useCopyToClipboard({
 		resetAfterMs: 2000,
 	});
 
-	if (!copyText && !onFork) return null;
+	if (!copyText && !onFork && !aside) return null;
 
 	return (
-		// biome-ignore lint/a11y/useSemanticElements: a row of actions on a message, not form controls a fieldset would group
-		<div
-			role="group"
-			aria-label="Message actions"
-			className="mt-2 -ml-2.5 flex min-h-9 items-center gap-1 pointer-coarse:-ml-3.5 pointer-coarse:min-h-11 pointer-coarse:gap-2"
-		>
-			{copyText && (
-				<button
-					type="button"
-					onClick={() => copy(copyText)}
-					aria-label={
-						copyState === "copied"
-							? "Copied"
-							: copyState === "failed"
-								? "Copy failed"
-								: "Copy message"
-					}
-					className={`${iconButtonClass()} animate-message-menu-in ${quiet}`}
+		<div className="mt-2 flex min-h-9 items-center gap-2 pointer-coarse:min-h-11">
+			{(copyText || onFork) && (
+				// biome-ignore lint/a11y/useSemanticElements: a row of actions on a message, not form controls a fieldset would group
+				<div
+					role="group"
+					aria-label="Message actions"
+					className="-ml-2.5 flex items-center gap-1 pointer-coarse:-ml-3.5 pointer-coarse:gap-2"
 				>
-					{copyState === "copied" ? (
-						<Check className="size-4" aria-hidden="true" />
-					) : copyState === "failed" ? (
-						// A failed copy needs nothing more: the text is on screen.
-						<X className="size-4 text-th-error" aria-hidden="true" />
-					) : (
-						<Copy className="size-4" aria-hidden="true" />
+					{copyText && (
+						<button
+							type="button"
+							onClick={() => copy(copyText)}
+							aria-label={
+								copyState === "copied"
+									? "Copied"
+									: copyState === "failed"
+										? "Copy failed"
+										: "Copy message"
+							}
+							className={`${iconButtonClass()} animate-message-menu-in ${quiet}`}
+						>
+							{copyState === "copied" ? (
+								<Check className="size-4" aria-hidden="true" />
+							) : copyState === "failed" ? (
+								// A failed copy needs nothing more: the text is on screen.
+								<X className="size-4 text-th-error" aria-hidden="true" />
+							) : (
+								<Copy className="size-4" aria-hidden="true" />
+							)}
+						</button>
 					)}
-				</button>
+					{onFork && (
+						<button
+							type="button"
+							onClick={forkBlocked ? () => setMenuOpen(true) : onFork}
+							aria-disabled={forkBlocked ? true : undefined}
+							// Blocked, it opens the menu that says why instead of forking.
+							aria-haspopup={forkBlocked ? "dialog" : undefined}
+							aria-expanded={forkBlocked ? menuOpen : undefined}
+							aria-label="Fork from here"
+							className={`${iconButtonClass()} animate-message-menu-in ${
+								forkBlocked ? "opacity-40" : quiet
+							}`}
+						>
+							<GitBranch className="size-4" aria-hidden="true" />
+						</button>
+					)}
+					{menuOpen && onFork && (
+						<MessageMenu
+							side="assistant"
+							onFork={onFork}
+							forkBlocked={forkBlocked}
+							onClose={() => setMenuOpen(false)}
+						/>
+					)}
+				</div>
 			)}
-			{onFork && (
-				<button
-					type="button"
-					onClick={forkBlocked ? () => setMenuOpen(true) : onFork}
-					aria-disabled={forkBlocked ? true : undefined}
-					// Blocked, it opens the menu that says why instead of forking.
-					aria-haspopup={forkBlocked ? "dialog" : undefined}
-					aria-expanded={forkBlocked ? menuOpen : undefined}
-					aria-label="Fork from here"
-					className={`${iconButtonClass()} animate-message-menu-in ${
-						forkBlocked ? "opacity-40" : quiet
-					}`}
-				>
-					<GitBranch className="size-4" aria-hidden="true" />
-				</button>
-			)}
-			{menuOpen && onFork && (
-				<MessageMenu
-					side="assistant"
-					onFork={onFork}
-					forkBlocked={forkBlocked}
-					onClose={() => setMenuOpen(false)}
-				/>
-			)}
+			{aside && <div className="ml-auto min-w-0">{aside}</div>}
 		</div>
 	);
 }
 
-export default MessageActions;
+// Memoized because its caller reads the tail's context, which changes on every
+// thinking delta, in every settled reply: only the one reply with the agents
+// chip gets new props.
+export default memo(MessageActions);

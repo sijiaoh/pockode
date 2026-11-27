@@ -5,7 +5,7 @@ import type {
 	LiveThinking,
 	TurnTail as TurnTailValue,
 } from "../../lib/thinking";
-import type { AwaitedFetch } from "../../types/message";
+import type { AwaitedFetch, ToolRun, ToolRunPlan } from "../../types/message";
 import TurnTail from "./TurnTail";
 import { ToolJumpContext } from "./toolJumpContext";
 import { IDLE_TAIL, TurnTailContext } from "./turnTailContext";
@@ -14,7 +14,6 @@ const thinking = (overrides: Partial<LiveThinking> = {}): LiveThinking => ({
 	content: "",
 	fullReasoning: "",
 	joinedLate: false,
-	expanded: false,
 	...overrides,
 });
 
@@ -34,8 +33,16 @@ function renderTail(
 ) {
 	return render(
 		<ToolJumpContext value={{ reveal: null, goToCall }}>
-			<TurnTailContext value={{ ...IDLE_TAIL, phase: "running", ...tail }}>
+			<TurnTailContext
+				value={{
+					...IDLE_TAIL,
+					phase: "running",
+					overviewMessageId: "m",
+					...tail,
+				}}
+			>
 				<TurnTail
+					messageId="m"
 					writing={writing}
 					placeholder={placeholder}
 					awaitedFetch={awaitedFetch}
@@ -44,6 +51,8 @@ function renderTail(
 		</ToolJumpContext>,
 	);
 }
+
+const statusLine = () => screen.getByRole("button", { name: /details$/ });
 
 describe("TurnTail", () => {
 	afterEach(() => {
@@ -139,38 +148,33 @@ describe("TurnTail", () => {
 
 	it("shows the latest line and opens on the text so far", async () => {
 		const user = userEvent.setup();
-		const onToggleThinking = vi.fn();
-		const { rerender } = renderTail({
-			thinking: thinking({ content: "**Plan**\n\nChecking how it retries" }),
-			onToggleThinking,
+		const onToggle = vi.fn();
+		const value = (expanded: boolean) => ({
+			thinking: thinking({
+				content: "**Plan**\n\nChecking how it retries",
+				joinedLate: true,
+			}),
+			panel: { expanded, onToggle },
 		});
+		const { rerender } = renderTail(value(false));
 		expect(screen.getByText("Checking how it retries")).toBeInTheDocument();
 
-		const line = screen.getByRole("button", {
-			name: "Agent's thinking so far",
-		});
+		const line = screen.getByRole("button", { name: "Thinking, details" });
 		expect(line).toHaveAttribute("aria-expanded", "false");
 		await user.click(line);
-		expect(onToggleThinking).toHaveBeenCalledOnce();
+		expect(onToggle).toHaveBeenCalledOnce();
 
 		rerender(
 			<ToolJumpContext value={{ reveal: null, goToCall: () => {} }}>
 				<TurnTailContext
-					value={{
-						...IDLE_TAIL,
-						phase: "running",
-						thinking: thinking({
-							content: "**Plan**\n\nChecking how it retries",
-							joinedLate: true,
-							expanded: true,
-						}),
-					}}
+					value={{ ...IDLE_TAIL, phase: "running", ...value(true) }}
 				>
-					<TurnTail writing placeholder={false} />
+					<TurnTail messageId="m" writing placeholder={false} />
 				</TurnTailContext>
 			</ToolJumpContext>,
 		);
 		expect(line).toHaveAttribute("aria-expanded", "true");
+		expect(screen.getByText("Thinking so far")).toBeInTheDocument();
 		expect(screen.getByText("Plan")).toBeInTheDocument();
 		// The deltas before this client subscribed are gone, and it says so.
 		expect(
@@ -187,12 +191,81 @@ describe("TurnTail", () => {
 			thinking: thinking({ content: "Checking how it retries" }),
 		});
 		expect(
-			screen.getByRole("button", { name: "Agent's thinking so far" }),
-		).toHaveTextContent(/^Thinking…\s*1m 4s\s*·\s*Checking how it retries$/);
+			screen.getByRole("button", { name: "Thinking, details" }),
+		).toHaveTextContent(/^Thinking…1m 4s·Checking how it retries$/);
 	});
 
 	it("hides a thought under way while the turn is blocked", () => {
 		renderTail({ phase: "blocked", thinking: thinking({ content: "x" }) });
 		expect(screen.queryByText("Thinking…")).not.toBeInTheDocument();
+	});
+
+	describe("with a plan and agents", () => {
+		const PLAN = {
+			order: 1,
+			steps: [
+				{
+					text: "Write tests",
+					activeText: "Writing tests",
+					status: "in_progress",
+				},
+				{ text: "Fix it", status: "pending" },
+			],
+		} satisfies ToolRunPlan;
+		const named: ToolRun = {
+			id: "a",
+			name: "Agent",
+			input: { description: "Find it", subagent_type: "Explore" },
+			status: "running",
+		};
+		const agents = { liveCount: 1, named, entries: [] };
+
+		// The plan moves least: codex switches between working and thinking
+		// around nearly every call.
+		it("says the plan's words over the thinking, and the thinking over the agent", () => {
+			const { unmount } = renderTail({
+				plan: PLAN,
+				agents,
+				thinking: thinking({ content: "Checking" }),
+			});
+			expect(statusLine()).toHaveTextContent(
+				/^Thinking…·0\/2·1·Now:Writing tests$/,
+			);
+			unmount();
+
+			renderTail({ agents, thinking: thinking({ content: "Checking" }) });
+			expect(statusLine()).toHaveTextContent(/^Thinking…·1·Checking$/);
+		});
+
+		it("names the agent when nothing else has words", () => {
+			renderTail({ agents });
+			expect(statusLine()).toHaveAccessibleName(
+				"Working, 1 agent running, details",
+			);
+			expect(statusLine()).toHaveTextContent(/^Working·1·Explore$/);
+		});
+
+		// Only the bubble the overview is drawn in counts the turn.
+		it("draws no plan or agents in another bubble", () => {
+			renderTail({ plan: PLAN, agents, overviewMessageId: "other" });
+			expect(screen.queryByRole("button")).not.toBeInTheDocument();
+			expect(screen.getByText("Working")).toBeInTheDocument();
+		});
+
+		// A button cannot hold a button: the jump stands beside the toggle.
+		it("keeps Go to call beside the toggle while it waits", () => {
+			renderTail(
+				{ plan: PLAN },
+				{ awaitedFetch: { id: "f1", originToolUseId: "t1", waits: true } },
+			);
+			const toggle = statusLine();
+			expect(toggle).toHaveAccessibleName(
+				"Waiting for output, plan 0 of 2, details",
+			);
+			const jump = screen.getByRole("button", {
+				name: "Go to call being read",
+			});
+			expect(toggle).not.toContainElement(jump);
+		});
 	});
 });

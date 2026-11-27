@@ -1374,7 +1374,7 @@ function ChatPanel({
 		setPendingJump({ kind: "call", toolUseId });
 	}, []);
 	// A background subagent with work to show is opened as its transcript, as
-	// the agents line's entries are (docs/turn-progress-ui.md#43-the-agents-line).
+	// the agents panel's entries are (docs/turn-progress-ui.md#43-the-agents).
 	// No pending jump: nothing lands in the chat, so there is no inert
 	// transcript to wait out.
 	const handleOpenTranscriptFromStrip = useCallback(

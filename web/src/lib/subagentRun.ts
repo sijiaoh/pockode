@@ -258,35 +258,19 @@ export function recentSteps(parts: ContentPart[], limit: number): RecentStep[] {
 }
 
 /**
- * How many window lines each subagent row of one list gets, by its id: none
- * for a row that draws no window (docs/tool-call-ui.md#the-step-window).
+ * How many step-window lines each subagent row of one list gets
+ * (docs/tool-call-ui.md#how-many-lines): set by how many subagent rows the
+ * list holds, whatever their status, so that parallel siblings stay skimmable;
+ * fewer on a compact (phone-width) screen, where three or more get none and
+ * are plain two-line rows. Width rather than height, because a soft keyboard
+ * changes the height and would resize every window with it.
  *
- * The size is set by how many subagent rows the list holds, whatever their
- * status, so that parallel siblings stay skimmable on a phone. A live row
- * draws its window; a settled one keeps its frozen window only while a
- * sibling that was already running when it settled still runs, so the list
- * folds once, with the last of them — and a sibling resumed or added later
- * regrows nobody's. Read off the runs alone, so a reload draws what the live
- * view did; a missing time means no frozen window.
- *
- * `runs` are the rows as drawn: a resumed subagent's on its resume.
+ * Whether a row draws its window at all is the row's: live, or settled and
+ * not yet folded (`useStepWindowFold`).
  */
-export function stepWindowLines(runs: ToolRun[]): ReadonlyMap<string, number> {
-	const size = runs.length === 1 ? 3 : runs.length === 2 ? 2 : 1;
-	const live = runs.filter(isLiveRun);
-	const lines = new Map<string, number>();
-	for (const run of runs) {
-		const { endedAt } = run;
-		const drawn =
-			isLiveRun(run) ||
-			(endedAt !== undefined &&
-				live.some(
-					(sibling) =>
-						sibling.startedAt !== undefined && sibling.startedAt < endedAt,
-				));
-		lines.set(run.id, drawn ? size : 0);
-	}
-	return lines;
+export function stepWindowLines(runs: ToolRun[], compact: boolean): number {
+	const sizes = compact ? [2, 1, 0] : [3, 2, 1];
+	return sizes[Math.min(runs.length, 3) - 1] ?? 0;
 }
 
 /**
@@ -346,7 +330,7 @@ export function subagentToolUses(
 /**
  * What a live subagent is doing now: its newest child, or before the first
  * one what the CLI said it last called. Shared by the row's second line and
- * the agents line (docs/turn-progress-ui.md#43-the-agents-line), so the two
+ * the agents chip (docs/turn-progress-ui.md#43-the-agents), so the two
  * cannot word it differently. Nothing when neither has anything to say.
  */
 export function subagentNow(

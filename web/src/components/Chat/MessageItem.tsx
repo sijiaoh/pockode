@@ -81,7 +81,6 @@ import { DiscardedNote, DiscardedSummary } from "./DiscardedMessage";
 import { HeaderlessMainBlock } from "./HeaderlessMainBlock";
 import { HtmlActionBubble } from "./HtmlActionBubble";
 import { HtmlRenderCard } from "./HtmlRenderCard";
-import MessageActions from "./MessageActions";
 import MessageMenuTrigger, { type ForkBlocked } from "./MessageMenuTrigger";
 import {
 	changeFullScreenContent,
@@ -93,6 +92,7 @@ import QuestionRecordItem from "./QuestionRecordItem";
 import ReviewerEventItem from "./ReviewerEventItem";
 import { useRowExpanded } from "./rowExpansionContext";
 import { anchorBlocksProps, anchorCandidateProps } from "./scrollAnchor";
+import { InOpenTurnContext } from "./stepWindowContext";
 import TaskItem from "./TaskItem";
 import ThinkingItem from "./ThinkingItem";
 import ToolCallItem from "./ToolCallItem";
@@ -101,8 +101,7 @@ import { PartBlocks } from "./ToolList";
 import { RowSubline, RunningGlyph, ToolRow } from "./ToolRow";
 import { Section, type SectionFullScreen } from "./ToolSection";
 import { TurnChangesCard } from "./TurnChangesCard";
-import TurnOverview from "./TurnOverview";
-import TurnTail from "./TurnTail";
+import TurnTail, { TurnEnd } from "./TurnTail";
 import { useTranscriptView } from "./transcriptViewContext";
 import { keepClearProps } from "./useTranscriptScroll";
 import { WorkRefLine } from "./WorkRefLine";
@@ -1309,6 +1308,12 @@ export interface MessageItemProps {
 	 * and has to keep saying so (docs/lifecycle-ui.md §2.3).
 	 */
 	isOpenTurn?: boolean;
+	/**
+	 * This bubble is one of the open turn's replies — the open one, or one a
+	 * read point closed this turn — where a settled subagent's step window is
+	 * kept until it is out of view (docs/tool-call-ui.md#settling-and-folding).
+	 */
+	inOpenTurn?: boolean;
 	isCodex?: boolean;
 	onPermissionRespond?: (
 		request: PermissionRequest,
@@ -1603,6 +1608,7 @@ const MessageItem = memo(function MessageItem({
 	isFirst,
 	olderPagesAbove,
 	isOpenTurn,
+	inOpenTurn,
 	isCodex,
 	onPermissionRespond,
 	onAnswerQuestion,
@@ -1797,14 +1803,15 @@ const MessageItem = memo(function MessageItem({
 	// like the bubble was: the action row reaches left of the column so its first
 	// icon lines up with the text, and clipping would cut its box and focus ring.
 	return (
-		<div className="flex items-start justify-start gap-2">
-			{AssistantAvatar && <AssistantAvatar className="size-10 shrink-0" />}
-			<div
-				className={`min-w-0 flex-1 text-th-text-primary ${assistantBubbleClass}`}
-			>
-				{shownParts.length > 0 && (
-					<div className="space-y-2">
-						{/* Every part has a wrapper of its own, so this part can be what
+		<InOpenTurnContext value={!!inOpenTurn}>
+			<div className="flex items-start justify-start gap-2">
+				{AssistantAvatar && <AssistantAvatar className="size-10 shrink-0" />}
+				<div
+					className={`min-w-0 flex-1 text-th-text-primary ${assistantBubbleClass}`}
+				>
+					{shownParts.length > 0 && (
+						<div className="space-y-2">
+							{/* Every part has a wrapper of its own, so this part can be what
 						    the view is held still over: one turn is one row and can be
 						    several screens tall, so holding the row still says nothing
 						    about where inside it the reader is (see `scrollAnchor`).
@@ -1813,79 +1820,81 @@ const MessageItem = memo(function MessageItem({
 						    anything is drawn in it, so a part renderer must render
 						    something — every branch of `ContentPartItem` does today, and
 						    one returning null would show as a gap with nothing in it. */}
-						<PartBlocks
-							items={shownParts}
-							wrapperProps={anchorCandidateProps}
-							// Where the work ends and the answer starts: under the block of
-							// the last call, above everything said after it.
-							after={
-								work && {
-									partId: work.lastCallPartId,
-									node: (
-										<TurnChangesCard
-											parts={message.parts}
-											work={work}
-											onOpenFile={onOpenFile}
-										/>
-									),
+							<PartBlocks
+								items={shownParts}
+								wrapperProps={anchorCandidateProps}
+								// Where the work ends and the answer starts: under the block of
+								// the last call, above everything said after it.
+								after={
+									work && {
+										partId: work.lastCallPartId,
+										node: (
+											<TurnChangesCard
+												parts={message.parts}
+												work={work}
+												onOpenFile={onOpenFile}
+											/>
+										),
+									}
 								}
-							}
-							renderPart={({ part, index }) => {
-								const plain = (
-									<ContentPartItem
-										part={part}
-										sessionId={sessionId}
-										onOpenFile={onOpenFile}
-										isCodex={isCodex}
-										onPermissionRespond={onPermissionRespond}
-										onAnswerQuestion={onAnswerQuestion}
-										promptError={promptError}
-										wideCards={!AssistantAvatar && !assistantBubbleClass}
-									/>
-								);
-								return notice?.partIndex === index &&
-									part.type === "warning" ? (
-									<CliRefusalNotice
-										message={part.message}
-										{...refusalProps(notice.refusal)}
-										plain={plain}
-									/>
-								) : (
-									plain
-								);
-							}}
-						/>
-					</div>
-				)}
-
-				{message.status === "error" &&
-					(notice && notice.partIndex === undefined ? (
-						<div className="mt-2">
-							<CliRefusalNotice
-								message={message.error ?? ""}
-								{...refusalProps(notice.refusal)}
-								plain={<p className="text-sm text-th-error">{message.error}</p>}
+								renderPart={({ part, index }) => {
+									const plain = (
+										<ContentPartItem
+											part={part}
+											sessionId={sessionId}
+											onOpenFile={onOpenFile}
+											isCodex={isCodex}
+											onPermissionRespond={onPermissionRespond}
+											onAnswerQuestion={onAnswerQuestion}
+											promptError={promptError}
+											wideCards={!AssistantAvatar && !assistantBubbleClass}
+										/>
+									);
+									return notice?.partIndex === index &&
+										part.type === "warning" ? (
+										<CliRefusalNotice
+											message={part.message}
+											{...refusalProps(notice.refusal)}
+											plain={plain}
+										/>
+									) : (
+										plain
+									);
+								}}
 							/>
 						</div>
-					) : (
-						<p className="mt-2 text-sm text-th-error">{message.error}</p>
-					))}
-				{message.status === "interrupted" && (
-					<p className="mt-2 text-sm text-th-text-muted">Interrupted</p>
-				)}
-				{message.discardedMessageIds && (
-					<DiscardedSummary
-						ids={message.discardedMessageIds}
-						sessionId={sessionId}
-						onRestore={onRestoreMessages}
-					/>
-				)}
-				{message.status === "process_ended" && (
-					<p className="mt-2 text-sm text-th-warning">Process ended</p>
-				)}
-				{pending ? (
-					<>
+					)}
+
+					{message.status === "error" &&
+						(notice && notice.partIndex === undefined ? (
+							<div className="mt-2">
+								<CliRefusalNotice
+									message={message.error ?? ""}
+									{...refusalProps(notice.refusal)}
+									plain={
+										<p className="text-sm text-th-error">{message.error}</p>
+									}
+								/>
+							</div>
+						) : (
+							<p className="mt-2 text-sm text-th-error">{message.error}</p>
+						))}
+					{message.status === "interrupted" && (
+						<p className="mt-2 text-sm text-th-text-muted">Interrupted</p>
+					)}
+					{message.discardedMessageIds && (
+						<DiscardedSummary
+							ids={message.discardedMessageIds}
+							sessionId={sessionId}
+							onRestore={onRestoreMessages}
+						/>
+					)}
+					{message.status === "process_ended" && (
+						<p className="mt-2 text-sm text-th-warning">Process ended</p>
+					)}
+					{pending ? (
 						<TurnTail
+							messageId={message.id}
 							// Keyed on being the open turn rather than on being last. The two
 							// agreed until a message could be sent mid-reply; now the reply
 							// that is still growing routinely has that message under it, and
@@ -1897,22 +1906,17 @@ const MessageItem = memo(function MessageItem({
 							placeholder={message.status === "sending"}
 							awaitedFetch={message.awaitedFetch}
 						/>
-						{/* Under the tail line, or the height it keeps while hidden. */}
-						<TurnOverview messageId={message.id} />
-					</>
-				) : (
-					<>
-						{/* Above the turn-end row, while an agent outlives the turn. */}
-						<TurnOverview messageId={message.id} className="mt-2" />
-						<MessageActions
+					) : (
+						<TurnEnd
+							messageId={message.id}
 							copyText={copyText || undefined}
 							onFork={onFork}
 							forkBlocked={forkBlocked}
 						/>
-					</>
-				)}
+					)}
+				</div>
 			</div>
-		</div>
+		</InOpenTurnContext>
 	);
 });
 

@@ -27,7 +27,7 @@ describe("useAgentsOverview", () => {
 	// per streamed record would re-render all of them.
 	it("hands back the same overview for a record that changes no agent", () => {
 		const { result, rerender } = renderHook(
-			({ messages }) => useAgentsOverview(messages, true, "s"),
+			({ messages }) => useAgentsOverview(messages, false),
 			{ initialProps: { messages: [reply([agentPart])] } },
 		);
 		const before = result.current;
@@ -70,7 +70,7 @@ describe("useAgentsOverview", () => {
 			},
 		};
 		const { result } = renderHook(() =>
-			useAgentsOverview([reply([settled, resume])], true, "s"),
+			useAgentsOverview([reply([settled, resume])], false),
 		);
 		expect(result.current.liveCount).toBe(1);
 		expect(result.current.named?.status).toBe("running");

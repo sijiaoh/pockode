@@ -12,7 +12,7 @@ import { rowEntries } from "../../lib/toolGroups";
 import { isTaskTool } from "../../lib/toolSummary";
 import type { ContentPart, ToolRun } from "../../types/message";
 import { RowExpansionContext, RowFrameContext } from "./rowExpansionContext";
-import { StepWindowContext } from "./stepWindowContext";
+import { StepWindowContext, useIsCompact } from "./stepWindowContext";
 import { SubagentResumesContext } from "./subagentResumesContext";
 import { ToolGroupSummary } from "./ToolGroupSummary";
 import { useRevealRequest } from "./toolJumpContext";
@@ -165,14 +165,14 @@ function RowList<T extends Item>({
 		choices.get(choiceKey(part)) ?? (openedThoughts.has(part.id) || undefined);
 
 	// The subagent rows as they are drawn, a resumed one on its resume: their
-	// step windows are sized and folded by the list, not by each row.
+	// step windows are sized by the list, not by each row.
 	const resumes = useContext(SubagentResumesContext);
 	const subagentRuns: ToolRun[] = items.flatMap(({ part }) => {
 		if (part.type !== "tool_call" || !isTaskTool(part.tool.name)) return [];
 		const resume = resumes.get(part.tool.id);
 		return [resume ? resumedRun(part.tool, resume) : part.tool];
 	});
-	const windowLines = stepWindowLines(subagentRuns);
+	const windowLines = stepWindowLines(subagentRuns, useIsCompact());
 
 	const entries = rowEntries(items);
 	// A card and its row are one call, shown and hidden together.

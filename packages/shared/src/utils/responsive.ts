@@ -31,6 +31,8 @@ export const BREAKPOINTS = {
 } as const;
 
 export const MEDIA_QUERIES = {
+	/** >= sm: past the phone tier. */
+	atLeastRegular: `(min-width: ${BREAKPOINTS.sm}px)`,
 	/** >= lg: two columns fit side by side. */
 	atLeastExpanded: `(min-width: ${BREAKPOINTS.lg}px)`,
 

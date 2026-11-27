@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useDiffSettingsStore } from "../../lib/diffSettingsStore";
@@ -1187,6 +1187,22 @@ describe("ToolCallItem", () => {
 		it("counts a live call from its start, not from when it was drawn", () => {
 			draw({ status: "running", seenAt: new Date(Date.now() - 240_000) });
 			expect(screen.getByText("4m 0s")).toBeVisible();
+		});
+
+		// It prints seconds, so it ticks them: `3m 0s` must not sit for a minute
+		// under a tail line counting on.
+		it("keeps counting seconds past a minute", () => {
+			vi.useFakeTimers();
+			try {
+				draw({ status: "running", seenAt: new Date(Date.now() - 180_000) });
+				expect(screen.getByText("3m 0s")).toBeVisible();
+				act(() => {
+					vi.advanceTimersByTime(17_000);
+				});
+				expect(screen.getByText("3m 17s")).toBeVisible();
+			} finally {
+				vi.useRealTimers();
+			}
 		});
 
 		it("draws no counter for a live call it cannot place on this clock", () => {

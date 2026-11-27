@@ -38,10 +38,11 @@ import {
 } from "../lib/sessionDetailStore";
 import {
 	applyThinkingDelta,
+	hasText,
 	type LiveThinking,
 	type TurnTail,
 } from "../lib/thinking";
-import { overviewMessageId } from "../lib/turnOverview";
+import { isTurnOpen } from "../lib/turnOverview";
 import {
 	type ConnectionStatus,
 	isInvalidParamsRejection,
@@ -68,9 +69,8 @@ import { toAnswerParams } from "../utils/answerRecords";
 import { isTypedByUser } from "../utils/messageSource";
 import { parsePockodeCommand } from "../utils/pockodeCommand";
 import { generateUUID } from "../utils/uuid";
-import { useAgentsOverview } from "./useAgentsOverview";
-import { usePlanOverview } from "./usePlanOverview";
 import { useSubscription } from "./useSubscription";
+import { useTurnOverview } from "./useTurnOverview";
 import type { ViewedSession } from "./useViewedSession";
 
 export type { ConnectionStatus } from "../lib/wsStore";
@@ -132,11 +132,11 @@ interface UseChatMessagesReturn {
 	isSendPending: boolean;
 	/** What the session is doing, for the surfaces that need more than a boolean. */
 	turn: SessionTurn;
-	/** What the tail line draws; see `TurnTail`. */
+	/** What the status line draws; see `TurnTail`. */
 	tail: TurnTail;
 	/**
-	 * Thinking parts that settled while the user had their tail line open, so
-	 * their rows open as they appear.
+	 * Thinking parts that settled while the user had the status line's panel
+	 * open on them, so their rows open as they appear.
 	 */
 	openedThoughtIds: ReadonlySet<string>;
 	/**
@@ -449,7 +449,7 @@ export function useChatMessages({
 	liveThinkingRef.current = liveThinking;
 	const pendingThinkingRef = useRef<LiveThinking | null>(null);
 	const thinkingFrameRef = useRef<number | undefined>(undefined);
-	// Set when a thinking the user had open settles: its row opens with it.
+	// Set when a thinking settles under the open panel: its row opens with it.
 	const [openedThoughtIds, setOpenedThoughtIds] = useState<ReadonlySet<string>>(
 		new Set(),
 	);
@@ -491,57 +491,47 @@ export function useChatMessages({
 		if (!turn.open) endThinking();
 	}, [turn.open, endThinking]);
 
-	const toggleThinking = useCallback(() => {
-		setLiveThinking((prev) => prev && { ...prev, expanded: !prev.expanded });
-	}, []);
-
 	// Whether a turn is open, and the optimistic half is load-bearing: between the
 	// user pressing send and the server reporting `running` there is a round trip,
 	// and a surface watching only the turn would leave them without Stop for the
 	// length of it. What the turn removes is the half that was never reliable —
 	// inferring liveness from the last bubble's status and a `process_ended` that
-	// a restart never wrote (docs/lifecycle-ui.md §2.3).
-	//
-	// `sending` is the status of a placeholder this client made and the server has
-	// yet to say anything about; located by the open bubble rather than by the end
-	// of the list, because a second message typed inside that same round trip is
-	// appended below it and would otherwise cancel the optimism that message needs
-	// most.
+	// a restart never wrote (docs/lifecycle-ui.md §2.3). `MessageList` asks the
+	// same question for the step windows, so the rule is `isTurnOpen`'s alone.
 	const openIndex = openAssistantIndex(messages);
 	const open = openIndex >= 0 ? messages[openIndex] : undefined;
-	const hasUnansweredEcho =
-		open?.role === "assistant" && open.status === "sending";
-	const turnOpen = hasUnansweredEcho || turn.phase !== "idle";
-	const agents = useAgentsOverview(messages, turnOpen, sessionId);
-	const plan = usePlanOverview(messages, turnOpen, sessionId);
-
-	// Outside the memo, which then depends on the id rather than on `messages`:
-	// the tail is a context every bubble's slot reads, and a new value per
-	// streamed record would re-render every one of them.
-	const overviewId = overviewMessageId(
+	const turnOpen = isTurnOpen(messages, turn.phase);
+	// Its fields go into the memo one by one, so it depends on the id rather
+	// than on `messages`: the tail is a context every bubble's slot reads, and a
+	// new value per streamed record would re-render every one of them.
+	const {
+		plan,
+		agents,
+		panel,
+		overviewMessageId: overviewId,
+	} = useTurnOverview(
 		messages,
 		turnOpen,
-		agents.liveCount > 0 || agents.expanded,
+		sessionId,
+		// As `TurnTail` draws it: in the open bubble, while running.
+		open !== undefined &&
+			turn.phase === "running" &&
+			liveThinking !== null &&
+			hasText(liveThinking),
 	);
+	const panelOpenRef = useRef(panel.expanded);
+	panelOpenRef.current = panel.expanded;
 	const tail = useMemo<TurnTail>(
 		() => ({
 			phase: turn.phase,
 			openedAt: turnOpenedAt,
 			thinking: liveThinking,
-			onToggleThinking: toggleThinking,
 			overviewMessageId: overviewId,
 			plan,
 			agents,
+			panel,
 		}),
-		[
-			turn.phase,
-			turnOpenedAt,
-			liveThinking,
-			toggleThinking,
-			overviewId,
-			plan,
-			agents,
-		],
+		[turn.phase, turnOpenedAt, liveThinking, overviewId, plan, agents, panel],
 	);
 
 	// Before paint, so the row a thinking settles into is never drawn closed.
@@ -611,7 +601,14 @@ export function useChatMessages({
 			if (endsThinking) {
 				// Only here: a skipped record is never applied, so there would be no
 				// part for it to settle into.
-				if (event.type === "thinking" && liveThinkingRef.current?.expanded) {
+				// Its section was showing only if it had text.
+				const thinking = liveThinkingRef.current;
+				if (
+					event.type === "thinking" &&
+					panelOpenRef.current &&
+					thinking &&
+					hasText(thinking)
+				) {
 					settlingOpenThoughtRef.current = event.thought;
 				}
 				endThinking();

@@ -624,7 +624,7 @@ which only a permission card carries. The jump to a tool row by its
 in the turn's changes card going to the call that made it
 ([tool-call-ui.md](tool-call-ui.md#from-a-file-to-the-calls-that-changed-it)),
 the tail line's *Go to call*, an agents-list entry
-([turn-progress-ui.md §4.3](turn-progress-ui.md#43-the-agents-line)).
+([turn-progress-ui.md §4.3](turn-progress-ui.md#43-the-agents)).
 
 **The row names what the turn waits on**
 ([turn-progress-ui.md §4.5](turn-progress-ui.md#45-naming-what-a-background-wait-waits-on)).
@@ -667,7 +667,7 @@ would be the only false thing on the line.
 Under the copy, with one task or several, comes `<ul aria-label="Background
 tasks">`, scrolled inside `max-h-32` as the watching row's list is. Each task
 is one button: its status glyph, then its title and detail as on its row, then
-the row's elapsed counter. A press goes where the agents line's entries go:
+the row's elapsed counter. A press goes where the agents panel's entries go:
 a subagent with work to show opens its transcript
 ([subagent-transcript-ui.md](subagent-transcript-ui.md)), and any other task
 goes to its row; it is disabled under `jumpDisabled` like the permission row's jump

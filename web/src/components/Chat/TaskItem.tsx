@@ -31,7 +31,7 @@ import {
 } from "../ui";
 import { FactsLine, SubagentConclusion } from "./SubagentConclusion";
 import { StepCallLabel, SubagentStepWindow } from "./SubagentStepWindow";
-import { useStepWindowLines } from "./stepWindowContext";
+import { useStepWindowFold, useStepWindowLines } from "./stepWindowContext";
 import { useSubagentResume } from "./subagentResumesContext";
 import {
 	SUBAGENT_OPENER_ATTR,
@@ -158,7 +158,7 @@ export function SubagentLineContent({ line }: { line: SubagentLine }) {
 /**
  * A subagent row's first and second line, as `ToolRow` takes them. The row and
  * an entry in the agents list both draw from this
- * (docs/turn-progress-ui.md#43-the-agents-line), so they cannot say different
+ * (docs/turn-progress-ui.md#43-the-agents), so they cannot say different
  * things about one run. `rowRun` is the run as its row draws it — a resumed
  * subagent's on its resume (`resumedRun`); `stepWindow` is the row's step
  * window, when it draws one.
@@ -233,19 +233,27 @@ function TaskItem({ run, depth = 0, renderChild }: Props) {
 	// doing under the call that resumed it; the body keeps what it reported.
 	const resume = useSubagentResume(run.id);
 	const rowRun = resume ? resumedRun(run, resume) : run;
-	// The step window, by the list's rules, and not while the Process is open
-	// inline: that shows the same steps whole
+	// The step window: sized by the list, drawn while the run is live and kept
+	// frozen after it settles until nobody sees it fold, and not while the
+	// Process is open inline, which shows the same steps whole
 	// (docs/tool-call-ui.md#the-step-window).
 	const windowLines = useStepWindowLines(rowRun);
+	const live = isLiveRun(rowRun);
+	const processOpen = expanded && processExpanded;
+	const fold = useStepWindowFold(rowRun.id, !live, processOpen, windowLines);
 	const windowSteps =
-		expanded && processExpanded
+		processOpen || !(live || fold.kept)
 			? []
-			: recentSteps([...children, ...(unfiled?.parts ?? [])], windowLines);
+			: recentSteps([...children, ...(unfiled?.parts ?? [])], fold.lines);
 	const header = subagentHeader(
 		rowRun,
 		unfiled,
 		windowSteps.length > 0 ? (
-			<SubagentStepWindow steps={windowSteps} frozen={!isLiveRun(rowRun)} />
+			<SubagentStepWindow
+				steps={windowSteps}
+				lines={fold.lines}
+				frozen={!live}
+			/>
 		) : undefined,
 	);
 	const { summary } = header;
@@ -270,7 +278,7 @@ function TaskItem({ run, depth = 0, renderChild }: Props) {
 	const level = depth + 1;
 
 	return (
-		<div className="text-xs" data-tool-use-id={run.id}>
+		<div ref={fold.ref} className="text-xs" data-tool-use-id={run.id}>
 			<ToolRow
 				expanded={expanded}
 				onToggle={() => setExpanded(!expanded)}
