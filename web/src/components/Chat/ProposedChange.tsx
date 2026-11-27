@@ -26,16 +26,19 @@ import {
 
 /**
  * `+N −M`, with a side that is zero or unknown left out rather than `−0`.
- * Muted for a change that was never applied: the counts still say what was
- * asked, but green and red would read as lines that changed.
+ *
+ * Uncoloured where green and red would say the wrong thing: for a change that
+ * was never applied, where they would read as lines that changed, and on a
+ * tool row, where red in a stack of rows reads as a failed call.
  */
 export function LineCountsLabel({
 	lines,
-	muted = false,
+	colored = true,
 }: {
 	lines: LineCounts | null;
-	muted?: boolean;
+	colored?: boolean;
 }) {
+	const muted = !colored;
 	if (!lines) return null;
 	const { added, removed = 0 } = lines;
 	if (added === 0 && removed === 0) return null;
@@ -89,7 +92,7 @@ export function proposedChangeHeader(
 			<span className="flex min-w-0 items-baseline gap-1.5">
 				{notApplied}
 				{notApplied && " "}
-				<LineCountsLabel lines={diffStat(patches)} muted={!applied} />
+				<LineCountsLabel lines={diffStat(patches)} colored={applied} />
 			</span>
 		),
 		actions: <DiffWrapToggle />,

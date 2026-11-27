@@ -130,8 +130,12 @@ type EventRecord struct {
 	Subtype string       `json:"subtype,omitempty"`
 	Meta    *MessageMeta `json:"meta,omitempty"`
 	// DurationMs and ExitCode are what an agent CLI reported about a finished
-	// tool call as figures rather than as prose; see ToolResultEvent. A thinking
-	// record carries DurationMs too, measured by the server; see ThinkingEvent.
+	// tool call, as figures; see ToolResultEvent. Codex reports both as such.
+	// Claude reports no exit status as a figure, so its ExitCode is parsed from
+	// the one place it is: a failed Bash result's first line, `Exit code N`
+	// (measured on claude 2.1.330), matched strictly and left empty otherwise —
+	// see reportedExitCode in the claude package. A thinking record carries
+	// DurationMs too, measured by the server; see ThinkingEvent.
 	DurationMs int64 `json:"duration_ms,omitempty"`
 	ExitCode   *int  `json:"exit_code,omitempty"`
 	// Subagent belongs to tool_result records of a subagent's call; see

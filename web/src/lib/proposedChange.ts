@@ -103,6 +103,29 @@ function drawablePatches(patches: string[]): string[] {
 	return patches.flatMap((patch) => drawablePatch(patch) ?? []);
 }
 
+/**
+ * An Edit's patch. Its strings are fragments, usually cut mid-file without a
+ * final newline, so both are closed with one: otherwise appending a line to
+ * `a` diffs `a` against `a\n` and draws (and counts) `a` as rewritten, with a
+ * "No newline at end of file" the file never lacked. Carriage returns are set
+ * aside for the same reason: in a CRLF file the closing `\n` would differ from
+ * the `\r\n` the other side's copy of that line ends with.
+ *
+ * An empty `old_string` is the one that is not a fragment: the Edit creates
+ * its file, and `new_string` is the whole of it — closed, it would gain a line,
+ * and the empty side a removed one that was never there.
+ *
+ * Every count of an edit's lines — its header, its row, the turn's tally —
+ * reads this patch (`diffStat`), so they cannot disagree.
+ */
+function fragmentPatch(path: string, oldText: string, newText: string): string {
+	const [before, after] =
+		oldText === "" ? ["", newText] : [`${oldText}\n`, `${newText}\n`];
+	return createPatch(path, before, after, undefined, undefined, {
+		stripTrailingCr: true,
+	});
+}
+
 function buildProposedChange(
 	toolName: string,
 	input: unknown,
@@ -114,7 +137,7 @@ function buildProposedChange(
 					kind: "edit",
 					input,
 					patches: drawablePatches([
-						createPatch(input.file_path, input.old_string, input.new_string),
+						fragmentPatch(input.file_path, input.old_string, input.new_string),
 					]),
 				};
 			}
@@ -128,7 +151,11 @@ function buildProposedChange(
 						input,
 						patches: drawablePatches(
 							input.edits.map((edit) =>
-								createPatch(input.file_path, edit.old_string, edit.new_string),
+								fragmentPatch(
+									input.file_path,
+									edit.old_string,
+									edit.new_string,
+								),
 							),
 						),
 					}
