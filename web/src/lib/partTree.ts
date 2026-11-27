@@ -49,6 +49,35 @@ export function findToolRunPath(
 }
 
 /**
+ * The runs from the outermost down to the one with this `tool_use_id`: each
+ * holds the next among its children. Null when it is not there.
+ */
+export function findToolRunChain(
+	parts: ContentPart[],
+	toolUseId: string,
+): ToolRun[] | null {
+	const path = findToolRunPath(parts, toolUseId);
+	if (!path) return null;
+	const chain: ToolRun[] = [];
+	let list = parts;
+	for (const index of path) {
+		const part = list[index];
+		if (part?.type !== "tool_call") return null;
+		chain.push(part.tool);
+		list = part.tool.children ?? [];
+	}
+	return chain;
+}
+
+/** The run with this `tool_use_id`, at any depth, or undefined. */
+export function findToolRun(
+	parts: ContentPart[],
+	toolUseId: string,
+): ToolRun | undefined {
+	return findToolRunChain(parts, toolUseId)?.at(-1);
+}
+
+/**
  * Rewrites the list the part at `path` sits in. `edit` is handed that list and
  * the part's index in it, and returns the list to put back; every list above
  * it is copied on the way out, and nothing beside it is touched.

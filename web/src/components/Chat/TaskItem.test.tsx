@@ -1,9 +1,10 @@
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ComponentProps, ReactNode } from "react";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { ContentPart, ToolRun, ToolRunStatus } from "../../types/message";
 import { SubagentResumesContext } from "./subagentResumesContext";
+import { SubagentTranscriptContext } from "./subagentTranscriptContext";
 import TaskItem from "./TaskItem";
 import { UnfiledChildrenContext } from "./unfiledChildrenContext";
 
@@ -400,6 +401,43 @@ describe("TaskItem", () => {
 			await user.click(screen.getByRole("button", { name: /find usages/ }));
 			await user.click(screen.getByRole("button", { name: /^Process/ }));
 		};
+
+		// docs/subagent-transcript-ui.md#the-way-in
+		it("offers its work as a transcript beside the Process heading", async () => {
+			const user = userEvent.setup();
+			const open = vi.fn();
+			render(
+				<SubagentTranscriptContext value={open}>
+					<TaskItemWithChildren
+						run={task("running", { result: undefined, children: [read("c1")] })}
+					/>
+				</SubagentTranscriptContext>,
+			);
+			await user.click(screen.getByRole("button", { name: /find usages/ }));
+			const opener = screen.getByRole("button", {
+				name: "Open Explore subagent's transcript",
+			});
+			await user.click(opener);
+			expect(open).toHaveBeenCalledWith("t1", opener);
+			// Beside the heading, not instead of it: the Process stays closed.
+			expect(screen.getByRole("button", { name: /^Process/ })).toHaveAttribute(
+				"aria-expanded",
+				"false",
+			);
+		});
+
+		it("offers no transcript for a subagent with no work to show", async () => {
+			const user = userEvent.setup();
+			render(
+				<SubagentTranscriptContext value={vi.fn()}>
+					<TaskItemWithChildren run={task("success")} />
+				</SubagentTranscriptContext>,
+			);
+			await user.click(screen.getByRole("button", { name: /find usages/ }));
+			expect(
+				screen.queryByRole("button", { name: /transcript/ }),
+			).not.toBeInTheDocument();
+		});
 
 		// The Process is a list of parts like a message's, and folds the same way.
 		it("folds a run of its calls into one summary, keeping a failure in sight", async () => {

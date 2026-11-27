@@ -1339,8 +1339,9 @@ registry as `useIsPageCovered` but not the same question:
   its sheet. Never by its own sheet — the sheet is a layer, and a shield would
   cover the very page it shows, which could then never be pressed: the page in
   the full-screen viewer. Nor by a layer it was opened over. A sheet gives its
-  layer to its content for this (`CoverLayerContext`, internal to the shared
-  package), which is why the registry is ordered rather than a count.
+  layer to its content for this (`CoverLayerContext`, exported so a layer of a
+  project's own — a level of a subagent's transcript — gives its layer the same
+  way), which is why the registry is ordered rather than a count.
 
 The rule is unit-tested in `web/src/components/ui/pageCover.test.tsx`.
 

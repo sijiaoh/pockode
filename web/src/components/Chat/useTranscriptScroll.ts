@@ -22,10 +22,10 @@ import type { TranscriptView } from "./transcriptViewContext";
 import { coveredAbove } from "./useFoldLanding";
 
 /**
- * How close to the end counts as the end. Never asked on its own: reaching it is
- * only a return to the tail when the view got there moving *down*, or a card
- * collapsing below the reader would clamp the view to the end and be taken for
- * one.
+ * How close to the end counts as the end. Never asked on its own for the
+ * reader's scrolling: reaching it is only a return to the tail when the view
+ * got there moving *down*, or a card collapsing below the reader would clamp
+ * the view to the end and be taken for one.
  */
 const AT_BOTTOM_THRESHOLD = 50;
 /**
@@ -91,14 +91,19 @@ const MIN_RESERVE = 96;
 type ReadingState = "tail" | "anchored";
 
 /**
- * What the end of the conversation shows, compared by identity. The reducer
- * updates immutably, so every streamed chunk is a new `parts` array and a turn
- * failing sets `error` — but not the message object itself: an `anchorSeq`
- * backfill replaces that too, and it changes nothing anyone can see. Nor is it
- * the content's height, which also grows when an older page lands above.
+ * What the end of the transcript shows, compared value by value by identity:
+ * when it changes while the reader is away, something has arrived below them.
+ * Not the content's height, which also grows when an older page lands above,
+ * or a row in the middle opens.
  */
-type TailSignature = readonly unknown[];
+export type TailSignature = readonly unknown[];
 
+/**
+ * The chat's: the reducer updates immutably, so every streamed chunk is a new
+ * `parts` array and a turn failing sets `error` — but not the message object
+ * itself: an `anchorSeq` backfill replaces that too, and it changes nothing
+ * anyone can see.
+ */
 function tailSignature(messages: Message[]): TailSignature {
 	const last = messages[messages.length - 1];
 	if (!last) return [];
@@ -132,8 +137,63 @@ function maxScrollTop(el: HTMLElement): number {
 	return Math.max(0, el.scrollHeight - el.clientHeight);
 }
 
+/**
+ * The offset that puts `target` at the top of the view, under whatever its
+ * `scroll-margin-top` says is pinned there: inside an open row that is the
+ * bar pinned over it (`index.css`), which a target landed at the very top
+ * would be under.
+ */
+function scrollTopFor(el: HTMLElement, target: HTMLElement): number {
+	return (
+		el.scrollTop +
+		target.getBoundingClientRect().top -
+		el.getBoundingClientRect().top -
+		(Number.parseFloat(getComputedStyle(target).scrollMarginTop) || 0)
+	);
+}
+
+/**
+ * The chat's messages as `useTranscriptScroll` reads them: the end they show,
+ * and the commits that put the reader back on the tail.
+ */
+export function useMessagesTail(
+	messages: Message[],
+	loadedHistoryPages: number,
+): Pick<Options, "tail" | "returnsToTail"> {
+	// The rows of the previous commit, read by id: what makes a message "just
+	// sent" is that it was not there a commit ago, and a count cannot say that —
+	// an older page landing above grows the list without adding anything at the
+	// end, and it routinely lands under a transcript whose newest row is one the
+	// reader typed.
+	const prevRef = useRef({ messages, pages: loadedHistoryPages });
+	const returnsToTail = () => {
+		const prev = prevRef.current;
+		prevRef.current = { messages, pages: loadedHistoryPages };
+		const added = rowsAdded(prev.messages, messages);
+		if (
+			loadedHistoryPages < prev.pages ||
+			(added === "replaced" && loadedHistoryPages === prev.pages)
+		) {
+			// The transcript was replaced, which only a reconnect does:
+			// re-subscribing lands back on the newest page. Paging starting over
+			// says so when pages had been loaded; with none, the count cannot drop,
+			// but replaying history mints every row a new id. The rows an anchor
+			// names are gone or at offsets it was never measured against, and the
+			// newest page is what was asked for.
+			return true;
+		}
+		// Sending is the reader saying where they are reading next; they have just
+		// written at the end of the conversation. Any new row, not only the last: a
+		// message sent to an idle agent lands with its reply's placeholder below
+		// it. Rows nobody typed — Pockode's own, another agent's answer to a posted
+		// question — are nobody's gesture and say nothing about that.
+		return added !== "replaced" && added.some(isTypedByUser);
+	};
+	return { tail: tailSignature(messages), returnsToTail };
+}
+
 interface Options {
-	scrollRef: RefObject<HTMLDivElement | null>;
+	scrollRef: RefObject<HTMLElement | null>;
 	/**
 	 * The scroller's only child, whose height is written here and nowhere else:
 	 * a column that lays its last child, the rows, on its bottom edge.
@@ -141,11 +201,27 @@ interface Options {
 	trackRef: RefObject<HTMLDivElement | null>;
 	/** The box holding the rows, watched for the growth output causes. */
 	contentRef: RefObject<HTMLDivElement | null>;
-	messages: Message[];
-	/** Bumped once per older page; a *drop* means the transcript was replaced. */
-	loadedHistoryPages: number;
+	/** What the end shows now; see `TailSignature`. */
+	tail: TailSignature;
+	/**
+	 * Asked once in every commit, before the view is placed: whether this commit
+	 * is one that puts the reader back on the tail whatever they were reading.
+	 */
+	returnsToTail?: () => boolean;
+	/**
+	 * Whether the scroller is in the document. The listener and the observers are
+	 * attached again when it appears.
+	 */
+	hasContainer?: boolean;
+	/** Bumped once per older page landing above the rows. */
+	loadedHistoryPages?: number;
 	/** Whether the track keeps a reserve above the rows for pages to land in. */
-	hasMoreHistory: boolean;
+	hasMoreHistory?: boolean;
+	/**
+	 * Where the view is first placed: on the tail, following it, or at the top
+	 * of the rows, read from there. Read once.
+	 */
+	startAt?: "end" | "top";
 }
 
 export interface TranscriptScroll {
@@ -164,8 +240,25 @@ export interface TranscriptScroll {
 	 * `scroll-margin-top` says is pinned there — and reads from there.
 	 */
 	jumpTo: (target: HTMLElement) => void;
+	/**
+	 * `jumpTo`, kept aimed at `target` while what is below it is still being
+	 * drawn — a block that measures itself before it draws its content — so a
+	 * target the end held short of the top is taken the rest of the way as the
+	 * end moves down. Given up once there, and on any move of the reader's or
+	 * of the rows' own (`holdAt`).
+	 */
+	readFrom: (target: HTMLElement) => void;
 	/** What the rows inside the transcript move the reader with. */
 	view: TranscriptView;
+	/** Whether the reader is following the tail. */
+	isFollowing: () => boolean;
+	/** Whether the view is within reach of the end now. */
+	isAtEnd: () => boolean;
+	/**
+	 * Stops following where the view is, as the reader scrolling away would,
+	 * for a transcript taken off the screen: what arrives meanwhile is the dot.
+	 */
+	stopFollowing: () => void;
 }
 
 /**
@@ -201,11 +294,15 @@ export function useTranscriptScroll({
 	scrollRef,
 	trackRef,
 	contentRef,
-	messages,
-	loadedHistoryPages,
-	hasMoreHistory,
+	tail,
+	returnsToTail,
+	hasContainer = true,
+	loadedHistoryPages = 0,
+	hasMoreHistory = false,
+	startAt = "end",
 }: Options): TranscriptScroll {
-	const stateRef = useRef<ReadingState>("tail");
+	const startsAtTop = useRef(startAt === "top").current;
+	const stateRef = useRef<ReadingState>(startsAtTop ? "anchored" : "tail");
 	const anchorRef = useRef<ScrollAnchor | null>(null);
 	/**
 	 * The seam as it sat the last time the view was placed or read. Kept current
@@ -220,17 +317,20 @@ export function useTranscriptScroll({
 	 * to be measured against that, not against wherever they last stopped.
 	 */
 	const lastTopRef = useRef(0);
-	const [isAnchored, setIsAnchored] = useState(false);
+	/** What `readFrom` is still taking the view to; null when nothing is. */
+	const aimRef = useRef<HTMLElement | null>(null);
+	const [isAnchored, setIsAnchored] = useState(startsAtTop);
 	const [isNearEnd, setIsNearEnd] = useState(true);
 	const [isOverKeepClear, setIsOverKeepClear] = useState(false);
 	const [hasUnseen, setHasUnseen] = useState(false);
 	// Read from the scroll handler, which is attached once and so cannot close
-	// over `messages`; kept current by the per-commit effect below.
-	const messagesRef = useRef(messages);
+	// over `tail`; kept current by the per-commit effect below.
+	const tailRef = useRef(tail);
 	/** The tail as it was when the reader left it; null while reading the tail. */
-	const leftTailRef = useRef<TailSignature | null>(null);
+	const leftTailRef = useRef<TailSignature | null>(startsAtTop ? tail : null);
 
 	const readTail = useCallback(() => {
+		aimRef.current = null;
 		stateRef.current = "tail";
 		anchorRef.current = null;
 		leftTailRef.current = null;
@@ -242,7 +342,7 @@ export function useTranscriptScroll({
 		// Only on leaving the tail: a jump made while already reading elsewhere
 		// has not shown the reader the end either.
 		if (stateRef.current === "tail") {
-			leftTailRef.current = tailSignature(messagesRef.current);
+			leftTailRef.current = tailRef.current;
 		}
 		stateRef.current = "anchored";
 		anchorRef.current = anchor;
@@ -256,7 +356,7 @@ export function useTranscriptScroll({
 		setIsNearEnd(nearEnd);
 		setIsOverKeepClear(keepClearInBand(el));
 		if (nearEnd && stateRef.current === "anchored") {
-			leftTailRef.current = tailSignature(messagesRef.current);
+			leftTailRef.current = tailRef.current;
 			setHasUnseen(false);
 		}
 	}, []);
@@ -374,6 +474,29 @@ export function useTranscriptScroll({
 	}, [leaveRest, scrollRef, settle]);
 
 	/**
+	 * Takes the view on towards `readFrom`'s target, as far as the end now
+	 * lets it, anchored on the target where it ends up; the aim is given up
+	 * once the target is where it was asked for.
+	 */
+	const pursueAim = useCallback(
+		(el: HTMLElement) => {
+			const target = aimRef.current;
+			if (!target) return;
+			if (!el.contains(target)) {
+				aimRef.current = null;
+				return;
+			}
+			const wanted = scrollTopFor(el, target);
+			moveTo(el, wanted);
+			anchorRef.current = anchorOn(el, target);
+			if (Math.abs(wanted - el.scrollTop) < DRIFT_TOLERANCE) {
+				aimRef.current = null;
+			}
+		},
+		[moveTo],
+	);
+
+	/**
 	 * Kinds A and B, then C if the view is at rest. Reading the tail there is no
 	 * place to hold — everything is above the reader — only the end to pin.
 	 *
@@ -421,6 +544,7 @@ export function useTranscriptScroll({
 					);
 				}
 				if (pageLanded) anchorRef.current = null;
+				pursueAim(el);
 				// A fresh one from where the view now sits, for the next look: the
 				// one held was lost, or not carried across a page. Not to put this
 				// look right — that is already done or cannot be — but because the
@@ -431,16 +555,20 @@ export function useTranscriptScroll({
 			}
 			if (restingRef.current) settle(el);
 		},
-		[scrollRef, moveTo, record, settle, trackHeight, writeTrackHeight],
+		[
+			scrollRef,
+			moveTo,
+			record,
+			settle,
+			trackHeight,
+			writeTrackHeight,
+			pursueAim,
+		],
 	);
 
-	// The rows of the previous commit, read by id: what makes a message "just
-	// sent" is that it was not there a commit ago, and a count cannot say that — an
-	// older page landing above grows the list without adding anything at the end,
-	// and it routinely lands under a transcript whose newest row is one the reader
-	// typed.
-	const prevMessagesRef = useRef(messages);
 	const prevPagesRef = useRef(loadedHistoryPages);
+	/** Whether the view has been put where `startAt` says. */
+	const placedRef = useRef(false);
 
 	// No dependency list: every commit is a commit that can have invalidated the
 	// invariant, and there is nothing to name — a child settling on a new size does
@@ -448,37 +576,28 @@ export function useTranscriptScroll({
 	// explicit inputs are read in the commit they belong to and always before the
 	// invariant they change.
 	useLayoutEffect(() => {
-		messagesRef.current = messages;
+		tailRef.current = tail;
 		hasMoreHistoryRef.current = hasMoreHistory;
 		const prevPages = prevPagesRef.current;
 		prevPagesRef.current = loadedHistoryPages;
-		const prevMessages = prevMessagesRef.current;
-		prevMessagesRef.current = messages;
-		const added = rowsAdded(prevMessages, messages);
 
-		if (
-			loadedHistoryPages < prevPages ||
-			(added === "replaced" && loadedHistoryPages === prevPages)
-		) {
-			// The transcript was replaced, which only a reconnect does: re-subscribing
-			// lands back on the newest page. Paging starting over says so when pages
-			// had been loaded; with none, the count cannot drop, but replaying history
-			// mints every row a new id. The rows an anchor names are gone or at
-			// offsets it was never measured against, and the newest page is what was
-			// asked for.
-			readTail();
-		} else if (added !== "replaced" && added.some(isTypedByUser)) {
-			// Sending is the reader saying where they are reading next; they have just
-			// written at the end of the conversation. Any new row, not only the last:
-			// a message sent to an idle agent lands with its reply's placeholder
-			// below it. Rows nobody typed — Pockode's own, another agent's answer to a
-			// posted question — are nobody's gesture and say nothing about that.
-			readTail();
+		if (returnsToTail?.()) readTail();
+
+		const el = scrollRef.current;
+		if (!placedRef.current && el) {
+			placedRef.current = true;
+			if (startsAtTop) {
+				// Put right first, or the top of rows taller than the view would be
+				// past the top of the track, out of reach; the move is a write anyway.
+				settle(el);
+				moveTo(el, 0);
+				anchorRef.current = pickAnchor(el);
+			}
 		}
 
 		const left = leftTailRef.current;
 		if (left) {
-			const now = tailSignature(messages);
+			const now = tail;
 			if (loadedHistoryPages > prevPages) {
 				// A page joining onto the newest row rewrites its parts with history the
 				// reader is paging *towards*; nothing arrived at the end.
@@ -491,12 +610,9 @@ export function useTranscriptScroll({
 		hold(stateRef.current === "anchored" && loadedHistoryPages > prevPages);
 	});
 
-	// The scroll container only exists while there are rows to put in it (see
-	// `MessageList`'s early return), so this is what re-attaches the listener and
-	// the observers when it appears — a transcript that starts empty and receives
-	// its first message.
-	const hasContainer = messages.length > 0;
-
+	// `hasContainer` re-attaches the listener and the observers when the scroller
+	// appears — the chat's, which only exists while there are rows to put in it
+	// (see `MessageList`'s early return), receiving its first message.
 	// biome-ignore lint/correctness/useExhaustiveDependencies: hasContainer triggers re-attach when the scroll container mounts
 	useLayoutEffect(() => {
 		const el = scrollRef.current;
@@ -509,6 +625,8 @@ export function useTranscriptScroll({
 			// A write of our own was recorded as it was made and arrives here as no
 			// movement at all; anything else is the view moving, so not at rest.
 			if (moved !== 0) {
+				// The reader moving the view: they are reading from wherever that is.
+				aimRef.current = null;
 				if (pressedRef.current) leaveRest();
 				else awaitRest();
 			}
@@ -550,6 +668,9 @@ export function useTranscriptScroll({
 		// down.
 		const press = () => {
 			pressedRef.current = true;
+			// The reader's hand on the view: whatever they open or move from here
+			// is theirs, and an aim of `readFrom`'s must not take the view after it.
+			aimRef.current = null;
 			leaveRest();
 		};
 		const release = () => {
@@ -684,16 +805,8 @@ export function useTranscriptScroll({
 			// that lands during it, and `scrollIntoView` also scrolls whatever
 			// contains the container, which is the app shell.
 			//
-			// Short of the top by the target's `scroll-margin-top`: inside an open
-			// row that is the bar pinned over it (`index.css`), which a target
-			// landed at the very top would be under.
-			moveTo(
-				el,
-				el.scrollTop +
-					target.getBoundingClientRect().top -
-					el.getBoundingClientRect().top -
-					(Number.parseFloat(getComputedStyle(target).scrollMarginTop) || 0),
-			);
+			aimRef.current = null;
+			moveTo(el, scrollTopFor(el, target));
 			// Where it ended up, not where it was aimed: the end of the transcript
 			// cannot be scrolled past, so a card near it stops short of the top edge
 			// and the anchor has to say so — otherwise the next commit would keep
@@ -703,10 +816,22 @@ export function useTranscriptScroll({
 		[scrollRef, settle, moveTo, readAnchored],
 	);
 
+	const readFrom = useCallback(
+		(target: HTMLElement) => {
+			const el = scrollRef.current;
+			if (!el) return;
+			jumpTo(target);
+			aimRef.current = target;
+			pursueAim(el);
+		},
+		[scrollRef, jumpTo, pursueAim],
+	);
+
 	const holdAt = useCallback(
 		(target: HTMLElement, offset: number) => {
 			const el = scrollRef.current;
 			if (!el) return;
+			aimRef.current = null;
 			// As for a jump: the move is a write, so the track is put right first.
 			settle(el);
 			const wanted =
@@ -760,11 +885,25 @@ export function useTranscriptScroll({
 		[scrollRef, contentRef, holdAt],
 	);
 
+	const isFollowing = useCallback(() => stateRef.current === "tail", []);
+	const isAtEnd = useCallback(() => {
+		const el = scrollRef.current;
+		return !el || maxScrollTop(el) - el.scrollTop <= AT_BOTTOM_THRESHOLD;
+	}, [scrollRef]);
+	const stopFollowing = useCallback(() => {
+		const el = scrollRef.current;
+		if (el && stateRef.current === "tail") readAnchored(pickAnchor(el));
+	}, [scrollRef, readAnchored]);
+
 	return {
 		showScrollButton: isAnchored && !isNearEnd && !isOverKeepClear,
 		hasUnseen,
 		scrollToBottom,
 		jumpTo,
+		readFrom,
 		view,
+		isFollowing,
+		isAtEnd,
+		stopFollowing,
 	};
 }

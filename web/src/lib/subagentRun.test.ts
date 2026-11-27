@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Message, ToolRun } from "../types/message";
-import { liveResumes, resumedRun } from "./subagentRun";
+import { liveResumes, resumedRun, subagentPath } from "./subagentRun";
 
 const run = (overrides: Partial<ToolRun> & Pick<ToolRun, "id">): ToolRun => ({
 	name: "Agent",
@@ -114,5 +114,49 @@ describe("resumedRun", () => {
 		});
 		expect(shown.endedAt).toBeUndefined();
 		expect(shown.durationMs).toBeUndefined();
+	});
+});
+
+// docs/subagent-transcript-ui.md#back-at-each-depth
+describe("subagentPath", () => {
+	const nested = (id: string, ...children: ToolRun[]): ToolRun =>
+		run({
+			id,
+			children: children.map((tool) => ({
+				id: `p-${tool.id}`,
+				type: "tool_call",
+				tool,
+			})),
+		});
+
+	it("runs from the outermost subagent down to the one asked for", () => {
+		const messages = [bubble(nested("t1", nested("t2", run({ id: "t3" }))))];
+		expect(subagentPath(messages, "t3")).toEqual(["t1", "t2", "t3"]);
+		expect(subagentPath(messages, "t1")).toEqual(["t1"]);
+	});
+
+	it("goes on up from a flat call through the run it belongs to", () => {
+		const messages: Message[] = [
+			bubble(nested("t1", run({ id: "t2" }))),
+			{
+				id: "m-flat",
+				role: "assistant",
+				status: "complete",
+				createdAt: new Date(0),
+				parts: [
+					{
+						id: "p-t5",
+						type: "tool_call",
+						tool: nested("t5", run({ id: "t6" })),
+						parentToolUseId: "t2",
+					},
+				],
+			},
+		];
+		expect(subagentPath(messages, "t6")).toEqual(["t1", "t2", "t5", "t6"]);
+	});
+
+	it("is the one subagent when its call is not loaded", () => {
+		expect(subagentPath([], "t9")).toEqual(["t9"]);
 	});
 });

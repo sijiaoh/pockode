@@ -113,6 +113,14 @@ export function subagentName(input: unknown): string {
 export const SUBAGENT_TITLE = "Subagent";
 
 /**
+ * What names a subagent's things after its row's title — `Explore subagent's
+ * process` — without saying it twice on a row already titled `Subagent`.
+ */
+export function subagentPossessive(title: string): string {
+	return title === SUBAGENT_TITLE ? "Subagent's" : `${title} subagent's`;
+}
+
+/**
  * A path split for one line — the row's, and a tool body's `PathLine`: the
  * directories, which may fade out, and the file name, which may not.
  *

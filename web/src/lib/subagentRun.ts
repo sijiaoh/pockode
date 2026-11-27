@@ -1,4 +1,5 @@
 import type { ContentPart, Message, ToolRun } from "../types/message";
+import { findToolRunChain } from "./partTree";
 import { toolRunText } from "./toolRun";
 import { isTaskTool } from "./toolSummary";
 
@@ -159,7 +160,8 @@ export interface SubagentLine {
 	live: boolean;
 }
 
-function isLive(run: ToolRun): boolean {
+/** Whether the subagent is still at work: in its call, or in the background. */
+export function isLiveRun(run: ToolRun): boolean {
 	return run.status === "running" || run.status === "background";
 }
 
@@ -181,7 +183,7 @@ export function subagentToolUses(
 ): number {
 	const children = countSteps(run.children ?? []) + (unfiled?.steps ?? 0);
 	if (children > 0) return children;
-	const reported = isLive(run)
+	const reported = isLiveRun(run)
 		? run.subagentProgress?.toolUses
 		: run.subagent?.toolUses;
 	return reported ?? 0;
@@ -199,7 +201,7 @@ export function subagentLine(
 	const toolUses = subagentToolUses(run, unfiled);
 	const latest = unfiled?.latest ?? latestChild(run.children ?? []);
 
-	if (isLive(run)) {
+	if (isLiveRun(run)) {
 		// Before the first child, what the CLI said it last called; its
 		// activity only after that, being `Running <description>` — the row's
 		// detail said again.
@@ -242,6 +244,23 @@ function figuresTokens(run: ToolRun): number | undefined {
 	if (run.status === "interrupted") return undefined;
 	const tokens = run.subagent?.totalTokens;
 	return tokens ? tokens : undefined;
+}
+
+/**
+ * What a subagent's call returned, split by what it is. A backgrounded call's
+ * text is not its report: the subagent's own account never reached this
+ * client, and what did arrive is the notification that said how it ended — its
+ * outcome, drawn under a label of its own. Drawing that as the report would
+ * assert the agent read something it never did.
+ */
+export function subagentLastWords(run: ToolRun): {
+	report: string;
+	outcome: string;
+} {
+	const text = toolRunText(run);
+	return run.fromBackground
+		? { report: "", outcome: text }
+		: { report: subagentReport(text), outcome: "" };
 }
 
 /**
@@ -303,17 +322,14 @@ export interface UnfiledChildren {
 const NO_UNFILED: ReadonlyMap<string, UnfiledChildren> = new Map();
 
 /**
- * Every run's unfiled children, by the run's `tool_use_id`.
- *
- * They are only ever at the top of a bubble: a child goes flat when its call
- * is not loaded, or when earlier siblings already went flat, and either way
- * it lands where the stream is. A fetch never takes a row back from under the
- * reader, so they stay where they first loaded, and this is how the call's
- * row still knows about them.
+ * The unfiled children themselves, by the run's `tool_use_id`, in arrival
+ * order — for a reader that draws them rather than counting them: a
+ * subagent's transcript, which shows its work whole
+ * (docs/subagent-transcript-ui.md#unfiled-children).
  */
-export function unfiledChildren(
+export function unfiledParts(
 	messages: Message[],
-): ReadonlyMap<string, UnfiledChildren> {
+): ReadonlyMap<string, ContentPart[]> {
 	const byParent = new Map<string, ContentPart[]>();
 	for (const message of messages) {
 		if (message.role !== "assistant") continue;
@@ -326,6 +342,60 @@ export function unfiledChildren(
 			byParent.set(parent, parts);
 		}
 	}
+	return byParent;
+}
+
+/**
+ * The subagents from the chat down to this one, by `tool_use_id`, outermost
+ * first — the levels its transcript opens with, so that going up always goes
+ * to the subagent it ran under
+ * (docs/subagent-transcript-ui.md#back-at-each-depth). A chain whose outermost
+ * call sits flat goes on up through the run that call belongs to; it stops at
+ * a run whose call is not loaded.
+ */
+export function subagentPath(messages: Message[], toolUseId: string): string[] {
+	let path: string[] = [];
+	let target: string | undefined = toolUseId;
+	while (target !== undefined && !path.includes(target)) {
+		const found = locateRun(messages, target);
+		if (!found) break;
+		path = [...found.chain.map((run) => run.id), ...path];
+		target = found.parent;
+	}
+	return path.length > 0 ? path : [toolUseId];
+}
+
+function locateRun(
+	messages: Message[],
+	toolUseId: string,
+): { chain: ToolRun[]; parent?: string } | undefined {
+	for (const message of messages) {
+		if (message.role !== "assistant") continue;
+		const chain = findToolRunChain(message.parts, toolUseId);
+		if (!chain) continue;
+		const outermost = message.parts.find(
+			(part) => part.type === "tool_call" && part.tool === chain[0],
+		);
+		const parent =
+			outermost?.type === "tool_call" ? outermost.parentToolUseId : undefined;
+		return { chain, parent };
+	}
+	return undefined;
+}
+
+/**
+ * Every run's unfiled children, by the run's `tool_use_id`.
+ *
+ * They are only ever at the top of a bubble: a child goes flat when its call
+ * is not loaded, or when earlier siblings already went flat, and either way
+ * it lands where the stream is. A fetch never takes a row back from under the
+ * reader, so they stay where they first loaded, and this is how the call's
+ * row still knows about them.
+ */
+export function unfiledChildren(
+	messages: Message[],
+): ReadonlyMap<string, UnfiledChildren> {
+	const byParent = unfiledParts(messages);
 	if (byParent.size === 0) return NO_UNFILED;
 	const result = new Map<string, UnfiledChildren>();
 	for (const [parent, parts] of byParent) {
@@ -385,7 +455,7 @@ export function liveResumes(messages: Message[]): ReadonlyMap<string, ToolRun> {
 			if (part.type !== "tool_call") continue;
 			const run = part.tool;
 			if (run.name === RESUME_TOOL) {
-				if (isLive(run)) resumes.push(run);
+				if (isLiveRun(run)) resumes.push(run);
 			} else if (isTaskTool(run.name)) {
 				const agentId = subagentAgentId(run);
 				if (agentId) runsByAgent.set(agentId, run);
@@ -402,7 +472,7 @@ export function liveResumes(messages: Message[]): ReadonlyMap<string, ToolRun> {
 	for (const resume of resumes) {
 		const to = (resume.input as { to?: unknown } | null)?.to;
 		const target = typeof to === "string" ? runsByAgent.get(to) : undefined;
-		if (target && !isLive(target)) result.set(target.id, resume);
+		if (target && !isLiveRun(target)) result.set(target.id, resume);
 	}
 	return result.size > 0 ? result : NO_RESUMES;
 }
