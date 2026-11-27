@@ -21,8 +21,8 @@ func TestProcessEndedRecordTypeMatchesTheSessionStores(t *testing.T) {
 	}
 }
 
-// The stamp is what lets a client measure a call: the records that start
-// or end one carry the moment, and nothing else pays for a field it has no use
+// The stamp is what lets a client measure a call or a reply: the records that
+// start or end one carry the moment, and nothing else pays for a field it has no use
 // for. A background_lost result is written whenever the next process starts,
 // so a moment on it would measure the restart, not the call.
 func TestObserveAt(t *testing.T) {
@@ -36,6 +36,8 @@ func TestObserveAt(t *testing.T) {
 		InterruptedEvent{},
 		ProcessEndedEvent{},
 		PermissionResponseEvent{RequestID: "req-1", Choice: "allow"},
+		ErrorEvent{Error: "boom"},
+		MessageIngestedEvent{MessageID: "msg-1"},
 	}
 	for _, event := range stamped {
 		rec := NewEventRecord(ObserveAt(event, at))

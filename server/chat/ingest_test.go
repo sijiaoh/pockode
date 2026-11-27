@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/pockode/server/agent"
 	"github.com/pockode/server/session"
@@ -202,5 +203,53 @@ func TestClient_ReadPointLeftToAnAgentThatReportsItsOwn(t *testing.T) {
 	records := f.records(t)
 	if len(records) != 2 {
 		t.Fatalf("history = %+v, want the two messages and no read point of Pockode's", records)
+	}
+}
+
+// A reply's span is measured between moments its records carry, so the record
+// of a message that opens a turn has to carry the very instant the turn opened
+// at: the tail line's clock counts from TurnState.OpenedAt, and the settled
+// figure from the record, and the two must start together. The sender, left
+// out of the record's broadcast, is told the same instant in its answer.
+func TestClient_MessageThatOpensATurnCarriesTheTurnsOpeningMoment(t *testing.T) {
+	f := newMidTurnFixture(t)
+
+	sent, err := f.client.SendMessageExcluding(context.Background(), "sess", "first", nil, nil)
+	if err != nil {
+		t.Fatalf("SendMessageExcluding: %v", err)
+	}
+
+	records := f.records(t)
+	if len(records) != 1 || records[0].ObservedAt == nil {
+		t.Fatalf("history = %+v, want one message carrying observed_at", records)
+	}
+	at := *records[0].ObservedAt
+	if opened := f.pm.GetProcess("sess").TurnState().OpenedAt; !opened.Equal(at) {
+		t.Errorf("turn opened at %v, record says %v", opened, at)
+	}
+	if !sent.ObservedAt.Equal(at) {
+		t.Errorf("sender told %v, record says %v", sent.ObservedAt, at)
+	}
+}
+
+// A read point the send path writes ends the reply above it and opens the one
+// below, so it carries the moment it was written.
+func TestClient_ReadPointCarriesItsMoment(t *testing.T) {
+	f := newMidTurnFixture(t)
+	f.startTurn(t)
+
+	before := time.Now()
+	if _, err := f.client.SendMessageExcluding(context.Background(), "sess", "second", nil, nil); err != nil {
+		t.Fatalf("SendMessageExcluding: %v", err)
+	}
+	after := time.Now()
+
+	records := f.records(t)
+	readPoint := records[len(records)-1]
+	if readPoint.Type != agent.EventTypeMessageIngested || readPoint.ObservedAt == nil {
+		t.Fatalf("last record = %+v, want a read point carrying observed_at", readPoint)
+	}
+	if at := *readPoint.ObservedAt; at.Before(before) || at.After(after) {
+		t.Errorf("read point observed_at = %v, want between %v and %v", at, before, after)
 	}
 }

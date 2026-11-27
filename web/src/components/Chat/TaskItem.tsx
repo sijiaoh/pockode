@@ -1,7 +1,7 @@
 import { ChevronRight } from "lucide-react";
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import type { FullScreenSource } from "../../lib/fullScreen";
-import { collectPartsDeep } from "../../lib/partTree";
+import { collectPartsDeep, findToolRunPath } from "../../lib/partTree";
 import {
 	countSteps,
 	type LatestChild,
@@ -26,6 +26,7 @@ import { HeaderlessMainBlock } from "./HeaderlessMainBlock";
 import { PartBlocks } from "./ToolList";
 import { ToolOutcomeSections } from "./ToolOutcomeSections";
 import { Detail, ToolMeta, ToolRow, ToolStatusGlyph } from "./ToolRow";
+import { useRevealRequest } from "./toolJumpContext";
 import { useTranscriptView } from "./transcriptViewContext";
 import { useUnfiledChildren } from "./unfiledChildrenContext";
 
@@ -189,6 +190,13 @@ function TaskItem({ run, depth = 0, renderChild }: Props) {
 	const [processExpanded, setProcessExpanded] = useState(false);
 	const [promptExpanded, setPromptExpanded] = useState(false);
 	const view = useTranscriptView();
+	// A jump to one of the subagent's steps opens the row and its Process; the
+	// lists inside open their groups themselves, at whatever depth.
+	useRevealRequest((toolUseId) => {
+		if (!findToolRunPath(run.children ?? [], toolUseId)) return;
+		setExpanded(true);
+		setProcessExpanded(true);
+	});
 	// No work directory: a subagent call is summarised from its description, and
 	// there is no path in it for one to shorten.
 	const summary = toolSummary(run.name, run.input, "");
@@ -274,7 +282,7 @@ function TaskItem({ run, depth = 0, renderChild }: Props) {
 	}, [failed, nested]);
 
 	return (
-		<div className="text-xs">
+		<div className="text-xs" data-tool-use-id={run.id}>
 			<ToolRow
 				expanded={expanded}
 				onToggle={() => setExpanded(!expanded)}

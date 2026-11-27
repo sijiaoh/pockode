@@ -30,6 +30,7 @@ import {
 	toolSummary,
 	toolSummaryLine,
 } from "../../lib/toolSummary";
+import { turnWork } from "../../lib/turnWork";
 import { useWSStore } from "../../lib/wsStore";
 import type { FileBlock } from "../../types/content";
 import type {
@@ -1257,6 +1258,12 @@ export interface MessageItemProps {
 	 */
 	isFirst?: boolean;
 	/**
+	 * First loaded, with older pages still above: a reply here may be the back
+	 * half of one the page boundary cut, so its work line counts nothing it
+	 * cannot see the start of.
+	 */
+	olderPagesAbove?: boolean;
+	/**
 	 * This bubble is the one the open turn is writing into, which is what makes a
 	 * tail line on it true. Not the same as `isLast` since a message sent mid-reply
 	 * is appended below the reply it went into — that reply is still being written
@@ -1555,6 +1562,7 @@ const MessageItem = memo(function MessageItem({
 	sessionId,
 	onOpenFile,
 	isFirst,
+	olderPagesAbove,
 	isOpenTurn,
 	isCodex,
 	onPermissionRespond,
@@ -1742,6 +1750,9 @@ const MessageItem = memo(function MessageItem({
 		.join("\n\n");
 	const pending =
 		message.status === "sending" || message.status === "streaming";
+	// Never on the reply being written: until it is over any text could still
+	// be followed by another call, so which of it is the answer is not known.
+	const work = pending ? undefined : turnWork(message, !!olderPagesAbove);
 
 	// Assistant message: no bubble, the full reading width. Not `overflow-hidden`
 	// like the bubble was: the action row reaches left of the column so its first
@@ -1766,6 +1777,20 @@ const MessageItem = memo(function MessageItem({
 						<PartBlocks
 							items={shownParts}
 							wrapperProps={anchorCandidateProps}
+							// Where the work ends and the answer starts: under the block of
+							// the last call, above everything said after it.
+							after={
+								work && {
+									partId: work.lastCallPartId,
+									node: (
+										<TurnChangesCard
+											parts={message.parts}
+											work={work}
+											onOpenFile={onOpenFile}
+										/>
+									),
+								}
+							}
 							renderPart={({ part, index }) => {
 								const plain = (
 									<ContentPartItem
@@ -1818,12 +1843,6 @@ const MessageItem = memo(function MessageItem({
 				)}
 				{message.status === "process_ended" && (
 					<p className="mt-2 text-sm text-th-warning">Process ended</p>
-				)}
-				{/* Last before the actions however the turn ended, so it is always
-				    in one place; shown when they are, so the two replace the tail line
-				    together. */}
-				{!pending && (
-					<TurnChangesCard parts={message.parts} onOpenFile={onOpenFile} />
 				)}
 				{pending ? (
 					<TurnTail

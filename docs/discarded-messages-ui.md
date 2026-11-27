@@ -41,7 +41,9 @@ answer. A system message's collapsed line ends in `· not read`.
 
 ## 3. At the end of the stopped turn
 
-Under `Interrupted`, before the turn's changes card and actions:
+Under `Interrupted`, before the actions (the turn's changes card sits higher,
+under the turn's last tool list —
+[tool-call-ui.md](tool-call-ui.md#the-turns-changes)):
 
 ```
 Interrupted

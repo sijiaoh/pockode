@@ -1,15 +1,17 @@
 import {
+	Fragment,
 	type ReactNode,
 	useCallback,
 	useContext,
 	useMemo,
 	useState,
 } from "react";
-import { oldestPart, partBlocks } from "../../lib/partTree";
+import { findToolRunPath, oldestPart, partBlocks } from "../../lib/partTree";
 import { rowEntries } from "../../lib/toolGroups";
 import type { ContentPart } from "../../types/message";
 import { RowExpansionContext, RowFrameContext } from "./rowExpansionContext";
 import { ToolGroupSummary } from "./ToolGroupSummary";
+import { useRevealRequest } from "./toolJumpContext";
 import { OpenedThoughtsContext } from "./turnTailContext";
 import { foldPlaceProps } from "./useFoldLanding";
 
@@ -27,6 +29,16 @@ interface Props<T extends Item> {
 	 * about where inside it the reader is.
 	 */
 	wrapperProps?: Record<string, string>;
+}
+
+interface BlocksProps<T extends Item> extends Props<T> {
+	/**
+	 * An element drawn after the block holding the part with this id, as a
+	 * sibling in the same keyed array: a list is never split and no block
+	 * changes parent, so nothing remounts — and no row or group the user opened
+	 * closes — when it goes in. It brings its own wrapper.
+	 */
+	after?: { partId: string; node: ReactNode };
 }
 
 interface SlotProps {
@@ -121,6 +133,18 @@ function RowList<T extends Item>({
 			if (!next.delete(key)) next.add(key);
 			return next;
 		});
+
+	// A jump to a row folded into a group opens the group, as the user's tap
+	// on its summary would; a subagent row in it opens its own Process.
+	useRevealRequest((toolUseId) => {
+		for (const entry of rowEntries(items)) {
+			if (entry.kind !== "item" || entry.group === undefined) continue;
+			if (!findToolRunPath([entry.item.part], toolUseId)) continue;
+			const key = entry.group;
+			setOpenGroups((current) => new Set(current).add(key));
+			return;
+		}
+	});
 
 	// What the user chose for a row belongs to its call: the row rebuilt once a
 	// card is answered is a new part, and opens as the one the card replaced
@@ -221,22 +245,28 @@ export function PartBlocks<T extends Item>({
 	items,
 	renderPart,
 	wrapperProps,
-}: Props<T>) {
-	return partBlocks(items).map((block) => {
-		if (block.kind === "single") {
-			return (
+	after,
+}: BlocksProps<T>) {
+	return partBlocks(items).flatMap((block) => {
+		const drawn =
+			block.kind === "single" ? (
 				<div key={block.item.part.id} {...wrapperProps}>
 					{renderPart(block.item)}
 				</div>
+			) : (
+				<RowList
+					key={`rows:${oldestPart(block.items).part.id}`}
+					items={block.items}
+					renderPart={renderPart}
+					wrapperProps={wrapperProps}
+				/>
 			);
-		}
-		return (
-			<RowList
-				key={`rows:${oldestPart(block.items).part.id}`}
-				items={block.items}
-				renderPart={renderPart}
-				wrapperProps={wrapperProps}
-			/>
-		);
+		const holds =
+			block.kind === "single"
+				? block.item.part.id === after?.partId
+				: block.items.some((item) => item.part.id === after?.partId);
+		return holds && after
+			? [drawn, <Fragment key="slot:after">{after.node}</Fragment>]
+			: [drawn];
 	});
 }

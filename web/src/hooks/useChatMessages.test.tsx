@@ -231,6 +231,24 @@ describe("useChatMessages", () => {
 		expect(isForkableMessage(sent)).toBe(true);
 	});
 
+	// The reply this message opens is drawn here from the echo's placeholder, and
+	// no record ever reaches this tab to say when it began; the send's answer
+	// does (docs/tool-call-ui.md#where-the-duration-comes-from).
+	it("starts the reply it opened at the moment the server answered with", async () => {
+		mockState.sendMessage.mockResolvedValue({ seq: 4, observedAt: 1234 });
+
+		const { latest, send } = renderSendProbe();
+		await waitFor(() => expect(latest.messages.length).toBeGreaterThan(0));
+
+		await act(async () => {
+			await send.current("Try again");
+		});
+
+		const reply = latest.messages.at(-1) as AssistantMessage;
+		expect(reply.role).toBe("assistant");
+		expect(reply.openedAt).toBe(1234);
+	});
+
 	// Purely additive on the wire: a server that predates the seq answers with an
 	// empty result. The message simply stays unaddressable, as every locally sent
 	// one used to be — it must not fail the send or blank the fork icon's row.

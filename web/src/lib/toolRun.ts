@@ -287,6 +287,22 @@ export function formatElapsed(ms: number): string {
 }
 
 /**
+ * `formatElapsed` read aloud, in the same whole units: `2 minutes 13 seconds`,
+ * `1 hour 12 minutes`.
+ */
+export function spokenElapsed(ms: number): string {
+	const unit = (count: number, name: string) =>
+		`${count} ${name}${count === 1 ? "" : "s"}`;
+	const seconds = Math.floor(ms / 1000);
+	if (seconds < 60) return unit(seconds, "second");
+	const minutes = Math.floor(seconds / 60);
+	if (minutes < 60) {
+		return `${unit(minutes, "minute")} ${unit(seconds % 60, "second")}`;
+	}
+	return `${unit(Math.floor(minutes / 60), "hour")} ${unit(minutes % 60, "minute")}`;
+}
+
+/**
  * A duration in the fewest units that still say it: one below a minute, two
  * above. Sub-second calls are the caller's to drop — a `Read` that took 40ms
  * does not need a number.

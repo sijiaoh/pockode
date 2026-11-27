@@ -17,6 +17,7 @@ import {
 	normalizeCommand,
 	normalizeHtmlAction,
 	readHistorySeq,
+	serverTime,
 } from "../messageReducer";
 
 /** What the server said about a message it accepted; see `MessageResult`. */
@@ -33,6 +34,8 @@ export interface SentMessage {
 	expanded?: { content: string; command?: PockodeCommandInvocation };
 	/** The files the message carried, as the server described them. */
 	attachments?: FileBlock[];
+	/** See `MessageResult.observed_at`; epoch ms on the server's clock. */
+	observedAt?: number;
 }
 
 /** What a page sent, as the app sends it on (`chat.html_action`). */
@@ -52,6 +55,8 @@ export interface SentHtmlAction {
 	content?: string;
 	/** The action as its record carries it, `data` normalized. */
 	htmlAction?: HtmlAction;
+	/** See `SentMessage.observedAt`. */
+	observedAt?: number;
 }
 
 export interface ChatActions {
@@ -132,10 +137,12 @@ export function createChatActions(
 			const seq = readHistorySeq(result);
 			const command = normalizeCommand(result?.command);
 			const files = parseFileBlocks(result?.attachments);
+			const observedAt = serverTime(result?.observed_at);
 			return {
 				...(seq !== undefined ? { seq } : {}),
 				...(result?.message_id ? { messageId: result.message_id } : {}),
 				...(files ? { attachments: files } : {}),
+				...(observedAt !== undefined ? { observedAt } : {}),
 				...(typeof result?.content === "string"
 					? {
 							expanded: {
@@ -164,6 +171,7 @@ export function createChatActions(
 			)) as MessageResult | undefined;
 			const seq = readHistorySeq(result);
 			const htmlAction = normalizeHtmlAction(result?.html_action);
+			const observedAt = serverTime(result?.observed_at);
 			return {
 				...(seq !== undefined ? { seq } : {}),
 				...(result?.message_id ? { messageId: result.message_id } : {}),
@@ -171,6 +179,7 @@ export function createChatActions(
 					? { content: result.content }
 					: {}),
 				...(htmlAction ? { htmlAction } : {}),
+				...(observedAt !== undefined ? { observedAt } : {}),
 			};
 		},
 

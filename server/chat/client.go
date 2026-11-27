@@ -202,6 +202,10 @@ func (c *Client) SendSystemMessage(ctx context.Context, sessionID, content, subt
 type Sent struct {
 	Seq       session.HistorySeq
 	MessageID string
+	// ObservedAt is the moment the record carries (agent.MessageEvent.ObservedAt),
+	// zero exactly when Seq is: a sender told a moment no record holds would
+	// draw a figure its next reload cannot.
+	ObservedAt time.Time
 }
 
 // sendEvent delivers one message to the agent, records it, and tells subscribers.
@@ -218,6 +222,13 @@ func (c *Client) sendEvent(ctx context.Context, sessionID string, event agent.Me
 	// Minted here, once, for every sender: it goes into the record, to the agent
 	// that can carry it, and into the read point that names this message later.
 	event.MessageID = uuid.NewString()
+	// Minted once too, and for the same reason: the record and the turn this
+	// message may open (session.TurnState.OpenedAt) must carry one instant, or
+	// the reply's span a client reads from the record and the clock it counted
+	// from the turn would disagree. A retry on a successor process reuses it —
+	// the message reached Pockode only once.
+	receivedAt := time.Now()
+	event.ObservedAt = receivedAt
 
 	// Persist message to history
 	seq, err := c.store.AppendToHistory(ctx, sessionID, agent.NewEventRecord(event))
@@ -232,10 +243,14 @@ func (c *Client) sendEvent(ctx context.Context, sessionID string, event agent.Me
 		// The id goes with it. There is no record carrying this id, so a read
 		// point naming it would name nothing.
 		event.MessageID = ""
+		// And the moment, on the broadcast as in the sender's answer: a figure
+		// drawn from it would be gone on the next reload. The turn still opens
+		// at it — that is when the message arrived either way.
+		event.ObservedAt = time.Time{}
 	}
 
 	prompt := agent.Prompt{Text: event.Content, ID: event.MessageID, Attachments: attachments}
-	openedTurn, err := proc.SendMessage(prompt)
+	openedTurn, err := proc.SendMessage(prompt, receivedAt)
 	for errors.Is(err, process.ErrProcessReplaced) {
 		// Stopped between the fetch and here for a successor — to run as the
 		// account chosen since, by another message's fetch. Nothing reached it,
@@ -246,7 +261,7 @@ func (c *Client) sendEvent(ctx context.Context, sessionID string, event agent.Me
 		if proc, err = c.processToDeliverTo(ctx, sessionID, len(attachments) > 0); err != nil {
 			return Sent{}, err
 		}
-		openedTurn, err = proc.SendMessage(prompt)
+		openedTurn, err = proc.SendMessage(prompt, receivedAt)
 	}
 	if err != nil {
 		return Sent{}, err
@@ -268,7 +283,7 @@ func (c *Client) sendEvent(ctx context.Context, sessionID string, event agent.Me
 		c.noteIngested(ctx, sessionID, event.MessageID)
 	}
 
-	return Sent{Seq: seq, MessageID: event.MessageID}, nil
+	return Sent{Seq: seq, MessageID: event.MessageID, ObservedAt: event.ObservedAt}, nil
 }
 
 // processToDeliverTo returns the process a message is about to be handed to,
@@ -335,7 +350,7 @@ func (c *Client) processToDeliverTo(ctx context.Context, sessionID string, hasAt
 // turn is under way; losing the boundary costs the reader a bubble break on the
 // next reload, which is not worth failing a send that succeeded.
 func (c *Client) noteIngested(ctx context.Context, sessionID, messageID string) {
-	record := agent.NewEventRecord(agent.MessageIngestedEvent{MessageID: messageID})
+	record := agent.NewEventRecord(agent.ObserveAt(agent.MessageIngestedEvent{MessageID: messageID}, time.Now()))
 	seq, err := c.store.AppendToHistory(ctx, sessionID, record)
 	if err != nil {
 		slog.Error("failed to persist the message read point", "sessionId", sessionID, "error", err)

@@ -166,7 +166,7 @@ func TestRetire_APromptCancelsTheRetirement(t *testing.T) {
 	sess := mock.session(t, "sess-1")
 
 	m.RetireSession("sess-1")
-	if _, err := proc.SendMessage(agent.Prompt{Text: "carry on"}); err != nil {
+	if _, err := proc.SendMessage(agent.Prompt{Text: "carry on"}, time.Now()); err != nil {
 		t.Fatalf("SendMessage: %v", err)
 	}
 
@@ -208,7 +208,7 @@ func TestProcess_AReplacedProcessDoesNotSpeakForItsSession(t *testing.T) {
 	if err != nil || !created {
 		t.Fatalf("failed to build the replacement process: created=%v err=%v", created, err)
 	}
-	if _, err := second.SendMessage(agent.Prompt{Text: "go on"}); err != nil {
+	if _, err := second.SendMessage(agent.Prompt{Text: "go on"}, time.Now()); err != nil {
 		t.Fatalf("SendMessage: %v", err)
 	}
 

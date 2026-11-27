@@ -270,6 +270,11 @@ type MessageResult struct {
 	// type, size and dimensions read from the stored bytes — for the same
 	// reason as Content: the sender is left out of the broadcast.
 	Attachments []agent.FileBlock `json:"attachments,omitempty"`
+	// ObservedAt is the moment the message's record carries
+	// (agent.EventRecord.ObservedAt), omitted exactly when Seq is. The sender
+	// draws the reply this message opens without ever receiving that record, so
+	// this is where it learns when the reply began.
+	ObservedAt *time.Time `json:"observed_at,omitempty"`
 }
 
 // HTMLActionParams is what a page in the chat sent on the reader's press

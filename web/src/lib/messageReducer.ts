@@ -76,7 +76,7 @@ function optionalString(raw: unknown): string | undefined {
  * A server timestamp (`observed_at`, `server_time`) as epoch ms, or undefined
  * when there is none — never zero, which would read as a moment in 1970.
  */
-function serverTime(raw: unknown): number | undefined {
+export function serverTime(raw: unknown): number | undefined {
 	if (typeof raw !== "string") return undefined;
 	const ms = Date.parse(raw);
 	return Number.isNaN(ms) ? undefined : ms;
@@ -310,10 +310,13 @@ export type NormalizedEvent =
 			error: string;
 			authFailure?: RecordedAccount;
 			usageLimit?: RecordedAccount;
+			/** See `tool_call`. */
+			observedAt?: number;
 	  }
-	| { type: "done" }
-	| { type: "interrupted" }
-	| { type: "process_ended" }
+	/** `observedAt`: see `tool_call`. */
+	| { type: "done"; observedAt?: number }
+	| { type: "interrupted"; observedAt?: number }
+	| { type: "process_ended"; observedAt?: number }
 	/** The turn parked on background work; neither an ending nor output. */
 	| { type: "background_wait" }
 	| { type: "system"; content: string }
@@ -333,6 +336,8 @@ export type NormalizedEvent =
 			/** The files the user sent with the message. */
 			attachments?: FileBlock[];
 			htmlAction?: HtmlAction;
+			/** See `tool_call`. */
+			observedAt?: number;
 	  }
 	| {
 			type: "permission_request";
@@ -388,6 +393,8 @@ export type NormalizedEvent =
 			 * draws nothing.
 			 */
 			type: "message_ingested";
+			/** See `tool_call`. */
+			observedAt?: number;
 	  }
 	| {
 			/**
@@ -511,13 +518,20 @@ export function normalizeEvent(
 				error: (record.error as string) ?? "",
 				authFailure: normalizeRecordedAccount(record.auth_failure),
 				usageLimit: normalizeRecordedAccount(record.usage_limit),
+				observedAt: serverTime(record.observed_at),
 			};
 		case "done":
-			return { type: "done" };
+			return { type: "done", observedAt: serverTime(record.observed_at) };
 		case "interrupted":
-			return { type: "interrupted" };
+			return {
+				type: "interrupted",
+				observedAt: serverTime(record.observed_at),
+			};
 		case "process_ended":
-			return { type: "process_ended" };
+			return {
+				type: "process_ended",
+				observedAt: serverTime(record.observed_at),
+			};
 		case "background_wait":
 			return { type: "background_wait" };
 		case "system":
@@ -536,6 +550,7 @@ export function normalizeEvent(
 				command: normalizeCommand(record.command),
 				attachments: parseFileBlocks(record.attachments),
 				htmlAction: normalizeHtmlAction(record.html_action),
+				observedAt: serverTime(record.observed_at),
 			};
 		case "permission_request":
 			return {
@@ -600,7 +615,10 @@ export function normalizeEvent(
 			// downstream: nothing in the transcript is joined on it (see
 			// `applyEvent`), and a field nobody reads is a field the next reader
 			// has to prove nobody reads.
-			return { type: "message_ingested" };
+			return {
+				type: "message_ingested",
+				observedAt: serverTime(record.observed_at),
+			};
 		case "message_discarded":
 			return {
 				type: "message_discarded",
@@ -1188,6 +1206,7 @@ export function applyServerEvent(
 			command: event.command,
 			attachments: event.attachments,
 			htmlAction: event.htmlAction,
+			observedAt: event.observedAt,
 		});
 	}
 
@@ -1274,8 +1293,14 @@ function applyEvent(
 	// then knows not to join the two pages back together.
 	if (event.type === "message_ingested") {
 		return [
-			...closePreviousTurn(messages),
-			{ ...createAssistantMessage(), openedAtReadPoint: true },
+			...closePreviousTurn(messages, event.observedAt),
+			{
+				...createAssistantMessage(),
+				openedAtReadPoint: true,
+				...(event.observedAt !== undefined
+					? { openedAt: event.observedAt }
+					: {}),
+			},
 		];
 	}
 
@@ -1474,6 +1499,11 @@ function applyEvent(
 			message.usageLimit = event.usageLimit;
 		} else if (event.type === "process_ended") {
 			message.status = "process_ended";
+		}
+		// The reply's span ends where its turn did, and only its own ending may
+		// say so: late content below an ended turn never reaches here.
+		if (isTerminalEvent && event.observedAt !== undefined) {
+			message.endedAt = event.observedAt;
 		}
 	}
 
@@ -2569,6 +2599,8 @@ interface UserMessageOptions {
 	command?: PockodeCommandInvocation;
 	attachments?: FileBlock[];
 	htmlAction?: HtmlAction;
+	/** The record's `observed_at`; see `AssistantMessage.openedAt`. */
+	observedAt?: number;
 }
 
 /**
@@ -2600,14 +2632,18 @@ function isEmptyPlaceholder(message: Message): boolean {
 // the read point, which closes the bubble without the turn itself being over —
 // the turn carries on writing, into the bubble opened underneath the message it
 // has just read.
-function closePreviousTurn(messages: Message[]): Message[] {
+function closePreviousTurn(messages: Message[], endedAt?: number): Message[] {
 	return messages
 		.map((m): Message => {
 			if (
 				m.role === "assistant" &&
 				(m.status === "sending" || m.status === "streaming")
 			) {
-				return { ...m, status: "complete" };
+				return {
+					...m,
+					status: "complete",
+					...(endedAt !== undefined ? { endedAt } : {}),
+				};
 			}
 			return m;
 		})
@@ -2675,9 +2711,14 @@ export function applyUserMessage(
 		...(options?.htmlAction ? { htmlAction: options.htmlAction } : {}),
 	};
 
-	return appendUserMessage(messages, userMessage, () =>
-		createAssistantMessage(),
-	);
+	// The moment goes on the reply, not the message: it is when the reply this
+	// message opens began, and only a message that opens one is asked for a
+	// placeholder.
+	const observedAt = options?.observedAt;
+	return appendUserMessage(messages, userMessage, () => ({
+		...createAssistantMessage(),
+		...(observedAt !== undefined ? { openedAt: observedAt } : {}),
+	}));
 }
 
 /**
@@ -2998,6 +3039,11 @@ export function prependHistoryPage(
 			? settleRunningToolParts(joined, tail.status === "process_ended")
 			: joined,
 		createdAt: tail.createdAt,
+		// One reply, so one span: it began where the older half opened, and
+		// ended where the head did — unless the tail had already ended, which
+		// the head's late content cannot undo.
+		openedAt: tail.openedAt,
+		endedAt: endedAtBoundary ? tail.endedAt : head.endedAt,
 		// The head's anchor wins when it has one: it names the later record, which
 		// is where a fork of this message has to cut.
 		...(head.anchorSeq === undefined && tail.anchorSeq !== undefined

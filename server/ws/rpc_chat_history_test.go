@@ -222,7 +222,8 @@ func TestChatMessagesHistory_RejectsBadRequests(t *testing.T) {
 // The sender is left out of the broadcast of its own message, so the reply is
 // the one place it learns how that record is named — by seq to fork from it,
 // by message_id to find it again when a later record (a Stop discarding it) is
-// about it. Both have to be the record's own, as a reload would show it.
+// about it — and by observed_at for when the reply it opens began. All have to
+// be the record's own, as a reload would show them.
 func TestChatMessage_ReplyNamesTheRecord(t *testing.T) {
 	env := newTestEnv(t, &mockAgent{})
 	if _, err := env.getMainWorktree().SessionStore.Create(bgCtx, "sess", session.CreateSpec{}); err != nil {
@@ -236,19 +237,25 @@ func TestChatMessage_ReplyNamesTheRecord(t *testing.T) {
 		t.Fatal("history is empty, want the message record")
 	}
 	var rec struct {
-		Type      string             `json:"type"`
-		MessageID string             `json:"message_id"`
-		Seq       session.HistorySeq `json:"seq"`
+		Type       string             `json:"type"`
+		MessageID  string             `json:"message_id"`
+		Seq        session.HistorySeq `json:"seq"`
+		ObservedAt *time.Time         `json:"observed_at"`
 	}
 	if err := json.Unmarshal(page.History[0], &rec); err != nil {
 		t.Fatalf("unparseable record: %v", err)
 	}
-	if rec.Type != "message" || rec.MessageID == "" {
-		t.Fatalf("first record = %+v, want the message carrying its id", rec)
+	if rec.Type != "message" || rec.MessageID == "" || rec.ObservedAt == nil {
+		t.Fatalf("first record = %+v, want the message carrying its id and moment", rec)
 	}
 	if reply.Seq != rec.Seq || reply.MessageID != rec.MessageID {
 		t.Errorf("reply named seq %d id %q, want the record's seq %d id %q",
 			reply.Seq, reply.MessageID, rec.Seq, rec.MessageID)
+	}
+	// The sender draws the reply this message opens from the reply alone, so it
+	// is told when that reply began — the record's moment, not one of its own.
+	if reply.ObservedAt == nil || !reply.ObservedAt.Equal(*rec.ObservedAt) {
+		t.Errorf("reply observed_at = %v, want the record's %v", reply.ObservedAt, *rec.ObservedAt)
 	}
 }
 

@@ -18,7 +18,9 @@ change a result, the permission card and the turn's changes card all draw
 (read by `lib/proposedChange.ts`), `ToolOutcomeSections.tsx` for the blocks
 the two tool renderers share, `ToolSection.tsx` for the labelled,
 clamped section every one of those blocks is drawn as, and
-`TurnChangesCard.tsx` for [the files a turn changed](#the-turns-changes), and
+`TurnChangesCard.tsx` for [the work line and the files a turn
+changed](#the-turns-changes), `toolJumpContext.ts` for [going from a change to
+its call](#from-a-file-to-the-calls-that-changed-it), and
 `HtmlRenderCard.tsx` over `HtmlFrame.tsx` for [a page the agent
 drew](#a-page-the-agent-drew-html_render), all
 under
@@ -446,51 +448,113 @@ row the card replaced.
 
 ## The turn's changes
 
-The tool rows say what a turn *did*; nothing said what it *left behind*. To
-review a turn's edits the reader had to open every `Edit` row, folded into a
-summary or not, and keep count of which file they were on. So a settled turn
-that changed files ends with one more framed list, standing directly above the
-turn-end row ([agent-chat.md](agent-chat.md#the-session-screen)):
+The tool rows say what a turn *did*; nothing said what it *left behind*, nor
+where the work stopped and the answer began. To review a turn's edits the
+reader had to open every `Edit` row, folded into a summary or not, and keep
+count of which file they were on; to find the answer in a long turn they had to
+tell narration between calls from the text that answered. So a settled turn
+that made tool calls draws one element where its work ends and its answer
+starts: **the work line**, `Worked 2m 13s · 14 tool calls · 3 files changed`,
+and, when the turn changed files, those files under it — the line is the
+header of their framed list, not a second element beside it:
 
 ```
-The sender now backs off on 503 too.
-┌──────────────────────────────────────────────┐
-│ ▤  2 files changed                  +11  −2  │  ← the header: not a button
-├──────────────────────────────────────────────┤
-│ ›  deliver.ts  src/webhooks/sender  +7  −2   │
-├──────────────────────────────────────────────┤
-│ ›  backoff.ts  src/webhooks/sender  new  +4  │
-└──────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────────┐
+│ ›  ✓  Edited 2 files · Read 3 files                        │  ← the last list
+└────────────────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────────┐
+│ ▤  Worked 2m 13s · 6 tool calls · 2 files changed  +11  −2 │  ← the work line:
+├────────────────────────────────────────────────────────────┤    the header,
+│ ›  deliver.ts  src/webhooks/sender                 +7  −2  │    not a button
+├────────────────────────────────────────────────────────────┤
+│ ›  backoff.ts  src/webhooks/sender            new  +4      │
+└────────────────────────────────────────────────────────────┘
+The sender now backs off on 503 too.                              ← the answer
 [⧉] [⑂] […]
 ```
 
-`turnChanges` (`lib/turnChanges.ts`) derives it, a pure function of one
+A turn that made calls and changed no file has the line alone, bare
+([the work line](#the-work-line)):
+
+```
+┌────────────────────────────────────────────────────────────┐
+│ ›  ✓  Read 4 files · Searched 2 patterns                   │
+└────────────────────────────────────────────────────────────┘
+Worked 48s · 6 tool calls ───────────────────────────────────
+The retry lives in sender.go, line 88.
+```
+
+`turnChanges` (`lib/turnChanges.ts`) derives the files, a pure function of one
 assistant message's parts as they are now, like `rowEntries`;
-`Chat/TurnChangesCard.tsx` draws it, and `MessageItem` places it. What counts
-as a file change is asked of `proposedChange` (`lib/proposedChange.ts`) — the
-one reader the tool body and the permission card already use — so a tool it
-learns to read reaches the card with no list of names here.
+`Chat/TurnChangesCard.tsx` draws the element, and `MessageItem` places it.
+What counts as a file change is asked of `proposedChange`
+(`lib/proposedChange.ts`) — the one reader the tool body and the permission
+card already use — so a tool it learns to read reaches the card with no list
+of names here.
 
 **It is the list's grammar, told apart by its header alone.** The frame,
 hairlines, `-mt-px` and `ring-inset` are [the list's](#the-list); every file
 row is the tool row's box (`RowButton`, no glyph — everything listed
-succeeded), so height, hover and the touch floor cannot differ. The header is
-the one row that is not a button, with `FileDiff` in the chevron's column so
-its text lines up with the file names — the same trick by which a group's
-summary is told from a tool row: by what it lacks, not by a new colour or fill.
+succeeded), so height, hover and the touch floor cannot differ. The header —
+the work line — is the one row that is not a button, with `FileDiff` in the
+chevron's column so its text lines up with the file names — the same trick by
+which a group's summary is told from a tool row: by what it lacks, not by a new
+colour or fill.
 
-**Where and when.** Always last before the turn-end row — under the error,
-`Interrupted` or `Process ended` line — so it is in one place however the turn
-ended, and nowhere when nothing counted: no empty frame, no gap. It is shown
-exactly when the actions are (`!pending`), so the two replace the tail line in
-one render, at the tail where a height change pushes nothing. Not while the
-turn runs: the group summary already says `Edited …` then, and a frame
-growing at the tail would push at the content streaming in above it. A
-cut-short turn shows it like any other — that is the turn whose leftovers most
-need reading. The one way it grows after settling is a subagent the turn left
-in the background finishing edits: they are this turn's, and they land at the
-tail, under nothing but the actions. The wrapper is a scroll anchor candidate
-like a part: with rows open it can be screens tall.
+**Where.** Directly under the block that holds the reply's last call — the
+[list](#the-list) its row is in, to that list's end, whatever else the list
+holds (thinking, permission cards); or, for a call drawn as a card of its own
+([a page the agent drew](#a-page-the-agent-drew-html_render)), that card — and
+above everything after it:
+the answer's text, a warning or question record, and the ending lines in the
+order they already have — the error or `Interrupted` line, the [discarded
+messages](discarded-messages-ui.md#3-at-the-end-of-the-stopped-turn),
+`Process ended` — and the turn-end row. That is the one place true of every turn: the work is above it
+and whatever was said after the work is below. Text between two lists is
+narration and stays above, among the work; only what comes after the last
+call's block is the answer. A thinking drawn bare after that block — the agent
+thinking about its answer — falls under the line, with the answer it led to.
+A turn that ended on a call — cut short, or with nothing to say — has nothing
+under it but its ending.
+
+`MessageItem` draws it through the one `PartBlocks` it already renders, which
+gains a slot for an element after a given block: the element goes in as a
+sibling in the same keyed block array, at a block boundary, so a list is never
+split and no block changes parent. Two `PartBlocks` with the element between
+them would not do: everything after the cut would remount at settle, and a row
+or group the user had opened there — local state of its `RowList` — would close
+on them. The element has a wrapper of its own that is a scroll anchor candidate
+like a part's: with rows open it can be screens tall.
+
+It used to stand last, directly above the turn-end row. That place said where
+the turn *ended*, which the turn-end row already says, and it left the answer
+between the work and the card, so the boundary a reader of a long turn wants
+most was marked nowhere. Comparable products mark it with a *Worked for …*
+divider over the answer.
+
+**When.** Exactly when the actions are (`!pending`), so it comes in the render
+the tail line goes in. It is never drawn on the reply the turn is writing: the
+group summaries already say `Edited …` there, and which text is the
+answer is not known until that reply is over — any text could still be
+followed by another call. A reply [a read point](code/agent-integration.md#the-read-point)
+closes is over at that moment (the reducer settles it to `complete`), so its
+line and card are drawn then, while the turn goes on in the reply under it; a
+call of its that is still running is counted among its calls and, until it
+succeeds, not among its files. So settling *inserts* it above text already on screen, and the
+view's two states hold the reader through that
+([agent-chat.md](agent-chat.md#where-the-view-sits)): a reader on the tail stays
+on it, so the answer's end stays put and what is above moves up; a reader
+anchored anywhere keeps their anchor where it was. A turn that made **no tool
+call** draws nothing — no line, no card, no gap: a question answered in words
+has no work to separate from its answer, and a thinking before the answer
+already says `Thought for 12s`. A cut-short turn draws it like any other —
+that is the turn whose leftovers most need reading. The one way it grows after
+settling is a subagent the turn left in the background finishing edits: they
+are this turn's, so rows join the card and its figures grow in place, under
+the same anchoring. A first such edit turns a bare line into the framed card:
+the words move in by the frame's padding and the glyph's column, and the rows
+open under them — a change at a boundary the reader has already passed, not a
+second element appearing.
 
 **The unit is one assistant message** — what the transcript draws as a turn. A
 read point that splits a reply into two messages gives each its own card;
@@ -606,15 +670,258 @@ What the counts do not promise, and the card does not pretend to:
 What they do promise is to stay put: everything comes from the persisted tool
 calls and results, so a reloaded turn draws the card it ended with.
 
-**Accessibility.** The card is a `role="group"` named by its header (`2 files
-changed`) — not a region: one landmark per turn would drown the page's own. The
-visible counts are `aria-hidden` beside an `sr-only` *"11 lines added, 2
+**Accessibility.** The card is a `role="group"` named by its header — the work
+line's sentence, *"Worked 2 minutes 13 seconds, 6 tool calls, 2 files
+changed"* ([below](#the-work-line)) — not a region: one landmark per turn would
+drown the page's own. The visible counts are `aria-hidden` beside an `sr-only` *"11 lines added, 2
 removed"*. A file row hides its whole visible line and carries one `sr-only`
 sentence, so its name reads as one: *"backoff.ts in src/webhooks/sender, new
 file, 4 lines added"*, or *"config.ts in src, rewritten, 30 lines written"*
 when nothing removed is known. It has `aria-expanded` and `aria-controls`
 naming its body. Colour never carries anything alone: the counts are signed,
 the chip is a word.
+
+### The work line
+
+One line that says how big the turn's work was, standing where the work ends.
+It is the card's header when the turn changed files, and the line alone when
+it did not; it is never a second element beside the card.
+
+**What it says.** Up to three entries, in this order — from how long, to how
+much, to what was left behind — separated by `·` as a group summary's are:
+
+| Entry | Shown | What it counts |
+|---|---|---|
+| `Worked 2m 13s` | when the reply's span was measured and is at least 1s | the reply's span, from the moment it opened to the moment it ended ([below](#where-the-duration-comes-from)) |
+| `14 tool calls` | always — the line exists only for a reply with a call | the distinct `tool_use_id`s of the message's top-level `tool_call` and `permission_request` parts, whatever their status and however they are drawn. A failed, denied or interrupted call was still made — including one cut short while its card still stood in its row's place, which leaves only the card. A subagent is one call: its own steps are counted on its row's [second line](#the-second-line-steps-and-what-it-is-doing), so a step left flat because its parent is not loaded (it carries `parentToolUseId`) is not counted either — though it is work drawn where it arrived, so the line still goes below it, and a reply whose loaded half has only such steps is [cut](#where-the-duration-comes-from) like the top of the loaded history. A [fetch](#a-fetch-reads-on-the-row-it-came-from) filed on the row it reads is not a part of this message and is not counted; one whose row is not loaded falls through to a row of its own and counts like any row — so an older page joining can lower the count by the fetches it gives a home. The same calls, with those flat steps, decide whether the line exists and where it goes ([above](#the-turns-changes): after the last call's block) |
+| `3 files changed` | when the turn changed a file | `turnChanges`' files — every file the card lists, folded behind `Show N more files` or not |
+
+The `+N −M` totals stay where the header always had them, at the right end, so
+only the framed form has them. An entry with nothing to say is left out — never
+`0 files changed`, never a `—` for a time. Without a duration the line starts
+at its count, `14 tool calls · 3 files changed`: `Worked` exists to carry the
+number, and the counts read alone the way a group summary's entries do. The
+nouns follow the count (`1 tool call`, `1 file changed`).
+
+**Its words.** `text-xs`, the entries in `text-th-text-secondary` — the old
+header title's — and the `·` in `text-th-text-muted`; the duration is
+`tabular-nums`. The time is `formatElapsed`, the turn clock's format: `48s`,
+`2m 13s`, `1h 12m`, so the clock it settles from and the figure it settles into
+read alike ([turn-progress-ui.md](turn-progress-ui.md#the-rules), *times have
+one format*).
+
+**Two forms.**
+
+- **Framed, as the card's header**, when the turn changed files: the header row
+  as it was — `min-h-9`, `FileDiff` in the chevron's column, not a button —
+  with the work line as its title.
+- **Bare**, when it did not: the words on the reply text's left edge, with no
+  glyph and no frame, followed by a 1px `border-th-border` hairline that fills
+  the rest of the line, centred on the words. The hairline is what makes it a
+  boundary and not a row: a glyph would put it among the bare rows — a
+  thinking's `Brain`, the tail line's spinner — and it is not one, since
+  nothing opens. Its box is `min-h-9`, a bare row's height, so the space it
+  takes matches the rows around it; it holds no `pointer-coarse:` floor
+  because there is nothing to press. To assistive technology it is a line of
+  text, its visible words `aria-hidden` beside an `sr-only` sentence — the
+  framed header's, *"Worked 48 seconds, 6 tool calls"* — and the hairline
+  `aria-hidden`. Not a `separator`: screen readers announce one as
+  "separator" or skip it, and the sentence is what says where the work ended.
+
+**In a narrow column.** Where the line's own box is narrower than `30rem` the
+nouns shorten — `14 calls`, `3 files` — because there the full line and its
+totals do not fit (`Worked 2m 13s · 14 tool calls · 3 files changed  +11 −2` is
+wider than a 375px phone's column at `text-xs`). It is a container query on
+the element, not a viewport tier: the reading column is narrower than the
+window beside a sidebar, and narrower still under an extension's avatar. Shortening keeps all three entries; cutting the
+line's end, as a group summary does, would cut the file count of a card about
+files. The accessible sentence is the full one at every width. Past that the
+words truncate at their end, and the totals never move.
+
+**It is not a button and folds nothing.** The rows above it stay exactly as
+they are: groups fold by [their own rules](#groups) and nothing else, and no
+part of the turn is put away behind the line. Folding a whole turn behind its
+summary is what makes long chats in comparable products a turn-by-turn
+re-opening, with the diffs and pages the reader came for hidden in each — the
+line exists to make a long turn easier to read, not shorter to look at.
+
+#### Where the duration comes from
+
+**A number is shown only when it was measured**
+([turn-progress-ui.md](turn-progress-ui.md#the-rules)), so the span is the
+difference of two moments the server stamped as they happened, stored on the
+records that open and end a reply — the same `observed_at` a tool row's
+duration is read from
+([tool-call-model.md](tool-call-model.md#observed-times-and-reported-durations)).
+The client never measures it and never estimates it from when records reached
+it.
+
+| Moment | Record | Its `observed_at` |
+|---|---|---|
+| a reply that opened its turn begins | the `message` record that opened the turn — a send, a scheduled prompt, a page's action, a command | the moment the send reached Pockode, minted once and used twice: stamped on the record, and handed to the process as the prompt's moment, so `TurnState.OpenedAt` is that same instant whenever the message opens the turn — the tail line's `Working 2m 12s` and this `Worked 2m 13s` count from one start, retries after a replaced process included. Every `message` record carries it; the client reads it as a start only for a message that opened a reply — the reducer's *nothing running, so the message opens a turn* branch |
+| a reply opened by [a read point](code/agent-integration.md#the-read-point) begins | its `message_ingested` | when Pockode wrote it: codex's echo, or Claude's delivery — as exact as the read point itself |
+| a reply split off by a read point ends | the next `message_ingested` | the same moment, so the two replies' spans meet and add up to the turn's |
+| the reply that ended the turn ends | the turn's `done`, `interrupted`, `process_ended` or `error` | when Pockode saw it |
+
+Which records are stamped where is in
+[agent-integration.md](code/agent-integration.md#eventrecord-unified-event-format) (the server
+side) and [frontend-state.md](code/frontend-state.md#times-on-a-reply) (how the
+reducer carries the two moments onto the assistant message — history, the way
+a run's `startedAt` and `endedAt` are, not live state). One piece of it is
+the design's own: the tab that sent the message never receives its record —
+the server leaves the sender out of the broadcast — so the same moment comes
+back on the send's answer (`rpc.MessageResult`'s `observed_at`), or the device
+the user typed on would draw no `Worked` until a reload. The figure is derived
+beside `turnChanges`, a pure function of the message: `turnWork`
+(`lib/turnWork.ts`), which also counts the calls and names the last one's
+part, where the line goes.
+
+**Not measured, so not shown** — the line is drawn without its duration:
+
+- **Every reply recorded before these stamps.** Older `message`,
+  `message_ingested` and `error` records carry no moment, so those turns draw
+  `14 tool calls · …`. A reload does not lose the figure on a newer turn: both
+  moments are stored.
+- **A reply that opened without a message** — output the CLI resumed by
+  itself, or an answer to a permission card that outlived its turn
+  (`openedByCard`) — has no start. The reducer knows it: no `message` record
+  and no read point came between the previous ending and the reply.
+- **The top of the loaded history.** A page boundary can cut a reply, so the
+  oldest loaded bubble may be the back half of one, with no opening record
+  ([`prependHistoryPage`](agent-chat.md#history-paging)). Its count would be of
+  half the calls, so the line shows only what the card already does — `N files
+  changed`, of the loaded half, or nothing when that is none — and gains its
+  other entries when the older page joins it.
+- **A `process_ended` a restarted server wrote** for a run nobody saw end, which
+  carries no moment.
+- **Under 1s.** A turn with a call in it rarely is; `Worked 0s` would be noise.
+
+**What it includes** is everything between the two moments — thinking, calls,
+writing the answer, and any wait inside the turn: a permission card the user
+took ten minutes over, a background task the turn waited on. That is the span
+the tail line's clock counts across a block
+([turn-progress-ui.md §2.2](turn-progress-ui.md#22-when-it-shows)), so the two
+agree. Taking the waits out would need when each wait began, and a
+`permission_request` carries no moment ([not
+done](#what-the-work-line-leaves-out)).
+
+**At a read point the two clocks measure different things.** The tail line
+counts the *turn* and goes on unchanged into the reply a read point opens
+([turn-progress-ui.md §2.1](turn-progress-ui.md#21-where-it-is)); each reply's
+work line counts *that reply's* span. So the second reply of a five-minute turn
+split at the third minute settles into `Worked 2m 0s`, under a tail line that
+said `Working 5m 0s`. That is deliberate: the tail is the pulse of what Stop would stop,
+and the work line is the size of the work above it, which for the second reply
+is only what came after the read point. The replies' figures add up to the
+turn's.
+
+### From a file to the calls that changed it
+
+```
+│ ⌄  deliver.ts  src/webhooks/sender                   +7  −2  │
+│ ┌──────────────────────────────────────────────────────────┐ │
+│ │ src/webhooks/sender/deliver.ts                     Open  │ │
+│ │ 1 · Edit        +5 −2      Go to call  [wrap] ⧉ ⤢        │ │
+│ │ …diff…                                                   │ │
+│ │ 2 · Edit        +2         Go to call  [wrap] ⧉          │ │
+│ │ …diff…                                                   │ │
+│ └──────────────────────────────────────────────────────────┘ │
+```
+
+**Each change in an open file row carries `Go to call`** in its section's
+header — first in `Section`'s `actions`, ahead of the wrap switch
+`proposedChangeHeader` puts there, so before the wrap switch, copy and the ⤢
+a cut block adds:
+a text button in `text-th-accent` with a `touch-target` hit area, like
+`PathLine`'s *Open*. One per change, because each change is one call: a file
+edited three times has three, each to its own call; changes one call made —
+a Codex call that changed several files, in each of their rows, or one listing
+a path twice — all go to the same row. It is not on
+the file row: a row stands for every change to its file, so it has no one call
+to go to, and its tap already opens it. A word, not an arrow: beside a diff an
+arrow reads as scroll or fold, and with [nothing behind
+hover](#the-rules) there is no tooltip to say otherwise.
+
+**It is the transcript's jump** — the one `MessageList` owns for a permission
+card ([lifecycle-ui.md §2.2](lifecycle-ui.md#22-chat-the-attention-strip)),
+taught to take a tool row by its `tool_use_id` rather than re-implemented: the
+transcript's own container scrolls so the row's top lands just under every
+bar pinned above it — the open subagent row the reveal just opened pins its own
+bar at the top, and a row landed at the container's top would be under it. The
+offset is the row's computed `scroll-margin-top`, which `index.css` already
+sets under a `.row-bar` for exactly this, and which the jump reads for every
+target (`useTranscriptScroll`'s `jumpTo`). The row takes the jump highlight, and
+focus moves to the row's button. Tool rows gain a `data-tool-use-id` to be
+found by, as a card is by `data-permission-request-id`. The highlight is the
+same inset ring in `th-accent`, not the card's `th-warning`: a permission card
+is waiting on the reader, a row they went to is not, and warning on a
+successful call would read as a problem. The fading transition the stylesheet
+declares on permission cards alone is declared on tool rows too, or the ring
+would snap out. It
+moves the view instantly, as every move the list makes does
+([agent-chat.md](agent-chat.md#where-the-view-sits)), and leaves the reader
+anchored on the row.
+
+**What hides the row is opened first**, outermost first: the group it is folded
+into, and for a subagent's step the subagent's row, its Process, and the group
+inside that — at every depth, a subagent inside a subagent included. Each of
+those is local state today (`RowList`'s open groups, `TaskItem`'s row and
+Process), and a body never opened is not mounted at all (`CollapsibleBody`), so
+there is no row to find until they open. So the jump is two-phase: the press
+raises a *reveal* request for the `tool_use_id` through `ToolJumpContext`, which
+`MessageList` provides beside the view context (not in it: `TranscriptView` is
+the shape `ui`'s clamp takes, and a request would redraw every block that reads
+it); every `RowList` and `TaskItem` on the path to it — each asks
+`findToolRunPath` whether the call is under what it holds — opens what it
+holds during that render (`useRevealRequest`), setting the same state the
+user's tap sets, so a body this mounts takes the same request in the same
+commit; and once that commit has landed the jump finds the row and moves. Opened this way they stay open until the user closes them, under the
+list's rule that nothing folds what the user opened — the press was the
+user's. **The row itself is not
+opened.** Its body is the diff the reader just came from; what they went for is
+what is around it — the read before it, the test after it.
+
+**It never leaves the turn.** Only the turn's own calls are listed, and its
+calls are in the same message as its card, so the row is loaded whenever the
+card is ([history paging](agent-chat.md#history-paging) cannot have dropped
+it), and it is always above.
+
+**Coming back is scrolling down.** The file row stays open — only the user
+closes it — and the card is under the work the reader jumped into, usually a
+screen or two below; the scroll-to-bottom button is there when the turn is the
+last. There is no *Back to changes*: a return point is a second scroll position
+to keep true while the transcript grows and pages land above it, for a distance
+that is rarely long.
+
+**Every pointer alike.** The button is the same on touch and mouse, and nothing
+about it is behind hover. On a phone the header has room for it: the section's
+label gives way first, and the actions never move.
+
+**Accessibility.** The button's name says which call, and starts with its
+visible words so a voice command by them finds it (WCAG 2.5.3): *"Go to call
+that made this change"* for a file changed once, *"Go to call 2 · Edit"* when
+its changes are numbered. The jump moves focus to the row, whose own name is read; there is
+no live announcement on top of it.
+
+### What the work line leaves out
+
+On purpose:
+
+- **Folding the turn behind its line**, or making the line a button at all
+  ([above](#the-work-line)).
+- **A line on a reply with no tool call**, or on the reply the turn is still
+  writing — the tail line owns the running turn ([turn-progress-ui.md
+  §4](turn-progress-ui.md#4-what-it-does-not-say)).
+- **Taking waits out of `Worked`.** It would need a moment on
+  `permission_request`, and a figure that is the turn's span is the one that
+  agrees with the clock the reader watched.
+- **A sum of the calls' durations.** Calls run in parallel and subagents
+  overlap their parent; a sum would be a number of no span anyone lived through.
+- **Counting a subagent's steps, or failed calls apart.** The rows say which
+  failed, in red; the line is the turn's size, not its health.
+- **A way back from the row to the card**, a *Go to call* in the full-screen
+  viewer, and a link from a tool row to its file in the card. Each is a second
+  route to a place a scroll reaches.
 
 ## The row
 
@@ -1509,8 +1816,9 @@ together, and its duration falls under the 1s floor and is not drawn — which i
 the right outcome for a figure that would otherwise be a fraction of the truth.
 
 A settled group's summary shows no total. Only a running group draws a figure,
-its current call's counter, as before; a sum of its calls' durations is the
-turn-level summary's concern, not this one.
+its current call's counter, as before. How long the turn worked is [the work
+line](#the-work-line)'s, which measures the reply's span rather than summing
+calls.
 
 ### Edge cases
 
@@ -3970,8 +4278,7 @@ sender's echo does not have until the reply, so the echo reads right at once:
   20 lines (at most 2,000 characters) in the bubble, all of it in the full
   screen viewer.
 - Not linked to its card. The card may be far above and not mounted, and the
-  id is enough to find it; a jump would be the only one of its kind in the
-  transcript.
+  id is enough to find it.
 - Where a message is quoted on one line (the fork sheet), it is quoted as
   `approve · p3`.
 
@@ -4392,34 +4699,49 @@ the virtualizer measures it.
     the text and the table is never split mid-name: a path that fits moves to
     the next line whole, a longer one breaks after a `/`, and it is no bolder
     than the text around it.
-33. A turn that edits two files and creates one: when it settles, the card
-    and the actions replace the tail line together — `3 files changed`, the
-    created file `new` with no `−`. While it ran there was no card. Interrupt
-    or fail one like it: the card is in the same place, under the status line,
-    listing only what succeeded; a turn with no successful change has no card
-    and no gap.
-34. On a 375px phone, two `index.ts` in deep directories: one line each, told
+33. A turn that reads, edits two files, creates one and then answers: when it
+    settles the tail line goes and the card appears between the last tool list
+    and the answer, headed `Worked 1m 4s · 7 tool calls · 3 files changed`, the
+    created file `new` with no `−`; following the tail, the answer's end does
+    not move. While it ran there was no card. Interrupt or fail one like it:
+    the card is in the same place, under the last list and above the status
+    line, listing only what succeeded; a turn whose calls changed nothing has
+    the bare `Worked … · N tool calls` line with its hairline, and a turn with
+    no call has neither and no gap. Every row above stays as it was: no group
+    folds or opens.
+    Reload: the same line, with the same duration; a turn from before the
+    stamps reads `7 tool calls · 3 files changed`. On a 375px phone the header
+    reads `Worked 1m 4s · 7 calls · 3 files` and keeps its totals.
+34. Open a card row of a file edited twice, once by a subagent: each change has
+    `Go to call`. The main agent's lands on its row, folded in a group until
+    then — the group opens, the row is highlighted and focused, its body still
+    closed. The subagent's opens the subagent row, its Process and the group
+    in it, and the row lands just under the subagent's pinned bar, not
+    behind it; all stay open afterwards. Scrolling down finds the file row
+    still open. On the device that sent the turn's message, the line has its
+    `Worked` at once, not only after a reload.
+35. On a 375px phone, two `index.ts` in deep directories: one line each, told
     apart by their last directory, chip and counts whole; in the body,
     `PathLine` relative, and the full path once it is tapped. The same file
     edited three times is one row with the summed counts, opening on
     `1 · Edit` to `3 · Edit`; edited once, `Change`. A `Write` over a file: `rewritten`, `+N` only, and the line saying so above its diff.
-35. Nine changed files: five rows and `Show 4 more files`; press it and focus
+36. Nine changed files: five rows and `Show 4 more files`; press it and focus
     lands on the sixth row. Seven: all listed. Reload: the same card.
-36. On a 375px phone, open a card row onto a diff of about 60 lines and drag
+37. On a 375px phone, open a card row onto a diff of about 60 lines and drag
     up and down over it: the transcript moves, never the diff alone. The diff
     is cut and faded with *Show N more lines* under it, `+N −M`, the wrap
     switch and ⤢ in its header; a `Write`'s block copies its content.
-37. An `Edit` the tool refused (an `old_string` not in the file): the row's
+38. An `Edit` the tool refused (an `old_string` not in the file): the row's
     second line is the reason in prose, with no `</tool_use_error>` on it.
     Open it: an *Error* section in red above *Change*, the *Change* header
     reading `not applied` with muted counts, and nothing in the body or the
     copy carrying the tag.
-38. A `Grep` with an absolute `path` inside the work directory: the row reads
+39. A `Grep` with an absolute `path` inside the work directory: the row reads
     `"pattern" in src/lib`; with `path` the work directory itself, just
     `"pattern"`.
-39. With reduced motion on: every running row, and a running group summary,
+40. With reduced motion on: every running row, and a running group summary,
     shows a still accent dot where the spinner was.
-40. On a 375px phone, open a failed `Bash` with a long output and scroll into
+41. On a 375px phone, open a failed `Bash` with a long output and scroll into
     it: its title stays pinned at the top in its red, with a hairline under it,
     and its second line scrolls away under it; at the end of the body the bar
     is carried off. Open a subagent's Process and a row inside it: one bar at
@@ -4432,7 +4754,7 @@ the virtualizer measures it.
     row while following a running turn: the view stays at the end and goes on
     following it. The walkthrough's `sticky`, `sticky-fold` and `sticky-tail`
     scenes shoot all of these.
-41. On a 375×667 phone, open a `Bash` with a 20-line command and a 60-line
+42. On a 375×667 phone, open a `Bash` with a 20-line command and a 60-line
     output (the walkthrough's `fullRun`; thousands would be
     [huge](#huge-content)): the command is cut at 8 lines with *Show all* under it,
     the output at about 45% of the transcript with *Show N earlier lines* above
@@ -4440,94 +4762,94 @@ the virtualizer measures it.
     with no button. Turn the phone landscape: a cut output is at most about
     half the transcript (rotated after opening: opened in landscape, 60 lines
     are already [huge](#huge-content)). A `TodoWrite`'s checklist is never cut.
-42. In that `Bash`, with the output's last line mid-screen, press *Show N
+43. In that `Bash`, with the output's last line mid-screen, press *Show N
     earlier lines*: the last line stays exactly where it was and the log grows
     upward. *Show less* leaves its button where it was pressed; closed with its
     button out of sight, the section's header lands just under the pinned title.
     *Show all* on the command keeps the command's top. The walkthrough's
     `keep-place` scene logs each edge before and after.
-43. Open that output with *Show N earlier lines* and scroll into it: the
+44. Open that output with *Show N earlier lines* and scroll into it: the
     *Output* header pins directly under the row's title with a hairline, the
     copy button, ⤢ and a collapse control; there are never more than those two
     bars. Scroll to the output's end: the header is carried off under the row's
     title, not over it. Press the collapse control mid-output: the output is cut
     again and its header lands just under the row's title, focus on *Show N
     earlier lines*. A section that fits, or one cut and not opened, never pins.
-44. On a 375×667 phone, a 30-line *Output* has ⤢ in its header and no *Open full* button; a 5-line
+45. On a 375×667 phone, a 30-line *Output* has ⤢ in its header and no *Open full* button; a 5-line
     one has no ⤢; a 30-line *Command* never has one. The plan and a subagent's
     report, cut, have *⤢ Full screen* beside *Show all*.
-45. On a 375×667 phone and on a desktop, a `Bash` that printed 10,000 lines:
+46. On a 375×667 phone and on a desktop, a `Bash` that printed 10,000 lines:
     never opens in place — its last lines faded under *⤢ Open full output ·
     10,000 lines*, no *Show* button, never pinned. The viewer opens at its last
     line with its command under the title; tap the command for all of it. Scroll
     to the top: line 1. Turn wrap off: the block scrolls sideways as one.
-46. In that viewer, find `FAIL`: the count, a highlight on each match and a
+47. In that viewer, find `FAIL`: the count, a highlight on each match and a
     stronger one on the current, Enter / Shift+Enter and the ↓ / ↑ buttons wrapping at the
     ends and jumping to lines that were not drawn, the match a third of the way
     down. With a Chinese or Japanese IME, committing a word with Enter jumps
     nowhere and Escape mid-composition closes nothing. Escape closes find, focus
     on 🔍; Ctrl/Cmd+F reopens it with the query back, selected; then Escape
     closes find again, and the next one the viewer.
-47. A `Glob` of 3,000 files: 100 rows in place with *Show N more files*, and
+48. A `Glob` of 3,000 files: 100 rows in place with *Show N more files*, and
     ⤢ opens all 3,000; *Open* on one closes the viewer and opens the file.
-48. Open a running command's *Output so far* full screen and let it finish: the
+49. Open a running command's *Output so far* full screen and let it finish: the
     viewer stays, now holding the whole output, and the reader's line stays put;
     past 200 lines it first says *Earlier output arrives with the result*.
-49. Close the viewer with Back (Android back, iOS edge swipe, browser Back): it
+50. Close the viewer with Back (Android back, iOS edge swipe, browser Back): it
     closes, the page stays, and the transcript is where it was — also after
     toggling diff wrap in a viewer, which every transcript diff follows. ✕ and
     Escape leave no extra history entry behind: Back afterwards does what it did
     before the viewer opened.
-50. An `html_render` call, from Claude and from Codex: a `pockode` row titled by
+51. An `html_render` call, from Claude and from Codex: a `pockode` row titled by
     the page while it runs (or if it fails), then on success a card that splits
     the list around it — never inside a group. In the dark theme a page that
     uses no `--pk-*` variable is white, with browser-default buttons, exactly
     as before; its placeholder is not white.
-51. A page taller than the screen: the card stops at 70% of the transcript with
+52. A page taller than the screen: the card stops at 70% of the transcript with
     *⤢ Full screen* under it; a short page has no footer and no inner scroll.
     Toggle `</>` and back: the page has kept its state. A page that tries
     `alert()` shows nothing; one that reads `localStorage` or `parent.document`
     throws. A `target="_blank"` link opens a new tab.
-52. A session with many pages, reopened: only the frames near the screen
+53. A session with many pages, reopened: only the frames near the screen
     mount, and scrolling to the others does not make the transcript jump.
-53. A page full screen: edge to edge, no 🔍, Ctrl/Cmd+F the browser's own;
+54. A page full screen: edge to edge, no 🔍, Ctrl/Cmd+F the browser's own;
     `</>` turns it into code with wrap and find.
-54. A page that loads a chart library from a CDN: the chart is missing and the
+55. A page that loads a chart library from a CDN: the chart is missing and the
     strip names the CDN; Load redraws it with the chart, and the full-screen
     view opened afterwards needs no Load. Allowed full screen first, the card
     underneath offers *Reload* rather than reloading itself
     ([page-external-hosts-ui.md](page-external-hosts-ui.md)).
-55. A page that shows a screenshot, a recording and a sound from the project,
+56. A page that shows a screenshot, a recording and a sound from the project,
     named once by a relative path and once by its absolute path: all load with
     no strip, as does an image under a dot directory
     (`docs/.vitepress/dist/logo.png`); a `.env`, `.env.local`, `.envrc` or
     `.git/config` it fetches does not. A `#section` link scrolls the page.
     Offline, the page draws without them and the strip names the app's host.
-56. Ask for a page, then for a change to it, from Claude and from Codex: the
+57. Ask for a page, then for a change to it, from Claude and from Codex: the
     first card says `p1`, the second `p2 · from p1`, and both stand, the first
     unchanged. Reopen the session: both draw, the second loaded from the
     server. Fork the chat between them and ask again: the fork's next page is
     not `p2`. Ask the agent to change `p9`: it is told which pages exist, and
     nothing new is drawn.
-57. A page with a `data-pk-send` button, a sending form and a sending input, in
+58. A page with a `data-pk-send` button, a sending form and a sending input, in
     Chromium and WebKit: each sends once — by click, by Enter, and not by an
     Enter that confirms an IME word — and the bubble reads the action, `from
     p3` and the data. A plain form does not reload the page. Press a button on
     an older card while a newer one is the latest: the bubble names the older
     id, the transcript does not jump, and the old card's line reads `Sent`.
-58. A page that calls `pockode.send` on load: nothing is sent, on reopening the
+59. A page that calls `pockode.send` on load: nothing is sent, on reopening the
     session or on a second device; its card says *Not sent … before you used
     it*, its console says why, and its promise rejects with `inactive`. A send
     a second after a press goes. With a permission request open, a press is
     refused with *Answer the permission request first.*; with only a question
     open, or while the agent is merely running, it joins the turn.
-59. Switch light ↔ dark with a page that uses `--pk-*` on screen: it follows
+60. Switch light ↔ dark with a page that uses `--pk-*` on screen: it follows
     without reloading — text typed in it stays — and never flashes white, not
     on the switch and not when a card scrolls into view in the dark theme. A
     page with no `--pk-*` beside it stays white, and so does one that only
     defines a name of its own (`--pk-gap`). An old page with a plain form and
     no `data-pk-send` behaves as before: its form goes nowhere.
-60. A page in a wide desktop pane: its card is 1280px, centred, wider than the
+61. A page in a wide desktop pane: its card is 1280px, centred, wider than the
     text above it; in a 900px pane it fills the pane inside the gutters; on a
     phone it is the column's width. A 3000px-wide table in it scrolls sideways
     in the card and full screen, the transcript never does, and a vertical
@@ -4561,10 +4883,11 @@ the virtualizer measures it.
 
 ## Out of scope
 
-- **The turn's changes, live or reconciled.** No card while the turn runs, no
-  net diff, no counts checked against git, no `Bash` side effects, no jump from
-  a card row back to its tool call, and nothing in `web-cluster`
-  ([the turn's changes](#the-turns-changes)).
+- **The turn's changes, live or reconciled.** No card or work line while the
+  turn runs, no net diff, no counts checked against git, no `Bash` side
+  effects, no folding of the turn behind its line, and nothing in
+  `web-cluster` ([the turn's changes](#the-turns-changes), [what the work line
+  leaves out](#what-the-work-line-leaves-out)).
 - **A full-screen tool detail route.** happy's answer to long content is
   navigation, and it is a good one, but Pockode's row already owns a body that
   opens long content in place; adding a route for the same content would mean

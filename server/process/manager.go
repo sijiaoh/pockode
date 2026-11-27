@@ -1334,9 +1334,13 @@ func (p *Process) noteAgent(note string) {
 // False when the send failed, which is the safe way round: nothing was
 // delivered, so nothing may claim it was read.
 //
+// at is when the message reached Pockode, which its record carries too
+// (agent.MessageEvent.ObservedAt): a turn this prompt opens is opened at that
+// instant, so the turn's clock and the record agree on when it began.
+//
 // A process stopped since it was fetched refuses with ErrProcessReplaced or
 // ErrProcessClosed, before anything is recorded; see sendMu.
-func (p *Process) SendMessage(prompt agent.Prompt) (openedTurn bool, err error) {
+func (p *Process) SendMessage(prompt agent.Prompt, at time.Time) (openedTurn bool, err error) {
 	p.sendMu.Lock()
 	if p.closed.Load() {
 		p.sendMu.Unlock()
@@ -1348,7 +1352,7 @@ func (p *Process) SendMessage(prompt agent.Prompt) (openedTurn bool, err error) 
 	// Before the turn opens: a retirement that sees the open turn while the
 	// flag is still up would end the turn this prompt is starting.
 	p.retiring.Store(false)
-	in := session.TurnInput{Signal: session.SignalPrompt, At: time.Now()}
+	in := session.TurnInput{Signal: session.SignalPrompt, At: at}
 	transition := p.applyTurn(context.Background(), in)
 	p.sendMu.Unlock()
 	p.announceTurn(in, transition)

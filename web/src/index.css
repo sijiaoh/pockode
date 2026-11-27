@@ -60,6 +60,15 @@
 	--container-git-commit-row: 768px;
 }
 
+/* Below this the turn's work line, `Worked 2m 13s · 14 tool calls · 3 files
+ * changed  +11 −2`, no longer fits at `text-xs` (a 375px phone's column is
+ * narrower), so its nouns shorten. Its own box is the container: beside a
+ * sidebar or under an avatar the column is narrower than the window. See
+ * docs/tool-call-ui.md#the-work-line. */
+@theme {
+	--container-work-line: 30rem;
+}
+
 /* The two pointer gates. Deliberately NOT complements: a touchscreen laptop
  * matches both, and wants hover reveal (it has a trackpad) as well as
  * thumb-sized hit areas (it has a touchscreen). Never write one as the negation
@@ -1748,27 +1757,36 @@ samp {
 /* =============================================================================
  * JUMP HIGHLIGHT
  *
- * The transient ring on the card the attention strip jumped to. One card can be
- * jumped to — a permission request, the one thing left that holds a turn up
- * (docs/lifecycle-ui.md §2.2).
+ * The transient ring on what the transcript jumped to: a permission card the
+ * attention strip named — the one thing left that holds a turn up
+ * (docs/lifecycle-ui.md §2.2) — or a tool row a change in the turn's card
+ * named (docs/tool-call-ui.md#from-a-file-to-the-calls-that-changed-it).
  * ============================================================================= */
 
-/* The transition belongs on the card, not on .jump-highlight: a transition
+/* The transition belongs on the target, not on .jump-highlight: a transition
  * declared by the class itself is already gone at the moment the class is
  * removed (transitions read the after-change style), so the ring would snap out
  * instead of fading. */
-[data-permission-request-id] {
+[data-permission-request-id],
+[data-tool-use-id] {
 	transition: box-shadow 300ms ease-out;
 }
 
-/* Inset: the card is a row in a list that clips whatever is drawn outside its
- * rows. A pending card's body has no fill of its own, so nothing covers it. */
-.jump-highlight {
+/* Inset: the target is a row in a list that clips whatever is drawn outside its
+ * rows. A pending card's body has no fill of its own, so nothing covers it; a
+ * row jumped to is not opened, so it has none either. Warning on a card, which
+ * waits on the reader; accent on a row they went to, which does not. */
+[data-permission-request-id].jump-highlight {
 	box-shadow: inset 0 0 0 2px var(--th-warning);
 }
 
+[data-tool-use-id].jump-highlight {
+	box-shadow: inset 0 0 0 2px var(--th-accent);
+}
+
 @media (prefers-reduced-motion: reduce) {
-	[data-permission-request-id] {
+	[data-permission-request-id],
+	[data-tool-use-id] {
 		transition: none;
 	}
 }

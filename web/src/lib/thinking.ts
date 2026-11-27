@@ -1,5 +1,5 @@
 import type { Thought, TurnPhase } from "../types/message";
-import { formatElapsed } from "./toolRun";
+import { formatElapsed, spokenElapsed } from "./toolRun";
 
 /**
  * How a thinking row words what it holds (docs/turn-progress-ui.md#1-the-thinking-row).
@@ -53,21 +53,12 @@ export function thoughtLabel(thoughts: Thought[]): string {
 		: `Thought for ${formatElapsed(wholeSecondsMs(ms))}`;
 }
 
-function unit(count: number, name: string): string {
-	return `${count} ${name}${count === 1 ? "" : "s"}`;
-}
-
 /** The label as a sentence to be read aloud: `Thought for 1 minute 20 seconds`. */
 export function spokenThoughtLabel(thoughts: Thought[]): string {
 	const ms = thoughtsDurationMs(thoughts);
-	if (ms === undefined) return "Thought";
-	const seconds = wholeSecondsMs(ms) / 1000;
-	if (seconds < 60) return `Thought for ${unit(seconds, "second")}`;
-	const minutes = Math.floor(seconds / 60);
-	if (minutes < 60) {
-		return `Thought for ${unit(minutes, "minute")} ${unit(seconds % 60, "second")}`;
-	}
-	return `Thought for ${unit(Math.floor(minutes / 60), "hour")} ${unit(minutes % 60, "minute")}`;
+	return ms === undefined
+		? "Thought"
+		: `Thought for ${spokenElapsed(wholeSecondsMs(ms))}`;
 }
 
 /**

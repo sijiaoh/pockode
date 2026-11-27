@@ -48,7 +48,7 @@ func createActivatedSession(t *testing.T, store session.Store, id string) sessio
 // startTurn hands proc a prompt, which opens a turn on an idle session.
 func startTurn(t *testing.T, proc *Process) {
 	t.Helper()
-	if _, err := proc.SendMessage(agent.Prompt{Text: "go"}); err != nil {
+	if _, err := proc.SendMessage(agent.Prompt{Text: "go"}, time.Now()); err != nil {
 		t.Fatalf("SendMessage: %v", err)
 	}
 }
@@ -513,7 +513,7 @@ func TestProcess_TurnStateTransitions(t *testing.T) {
 
 			proc, _, _ := m.GetOrCreateProcess(context.Background(), createSession(t, store, "sess-1"))
 			rec.waitForCount(t, 1) // initial idle
-			if _, err := proc.SendMessage(agent.Prompt{Text: "go"}); err != nil {
+			if _, err := proc.SendMessage(agent.Prompt{Text: "go"}, time.Now()); err != nil {
 				t.Fatalf("SendMessage: %v", err)
 			}
 			rec.waitForCount(t, 2) // running
@@ -567,7 +567,7 @@ func TestProcess_OnlyContentEndsABackgroundWait(t *testing.T) {
 	proc, _, _ := m.GetOrCreateProcess(context.Background(), createSession(t, store, "sess-1"))
 	sess := mock.session(t, "sess-1")
 
-	if _, err := proc.SendMessage(agent.Prompt{Text: "go"}); err != nil {
+	if _, err := proc.SendMessage(agent.Prompt{Text: "go"}, time.Now()); err != nil {
 		t.Fatalf("SendMessage: %v", err)
 	}
 	sess.emit(t, agent.BackgroundWaitEvent{})
@@ -628,7 +628,7 @@ func TestProcess_ConsecutiveTurns(t *testing.T) {
 	rec.reset()
 
 	// Turn 1: interrupted, then a duplicate end that must be dropped.
-	if _, err := proc.SendMessage(agent.Prompt{Text: "first"}); err != nil {
+	if _, err := proc.SendMessage(agent.Prompt{Text: "first"}, time.Now()); err != nil {
 		t.Fatalf("SendMessage: %v", err)
 	}
 	mock.session(t, "sess-1").emit(t, agent.InterruptedEvent{})
@@ -639,7 +639,7 @@ func TestProcess_ConsecutiveTurns(t *testing.T) {
 	rec.waitForCount(t, 2)
 
 	// Turn 2: a full cycle of its own.
-	if _, err := proc.SendMessage(agent.Prompt{Text: "second"}); err != nil {
+	if _, err := proc.SendMessage(agent.Prompt{Text: "second"}, time.Now()); err != nil {
 		t.Fatalf("SendMessage: %v", err)
 	}
 	mock.session(t, "sess-1").emit(t, agent.TextEvent{Content: "working"})
@@ -871,7 +871,7 @@ func TestManager_LeaseReaper_SparesABackgroundWait(t *testing.T) {
 	proc, _, _ := m.GetOrCreateProcess(context.Background(), createSession(t, store, "sess-1"))
 	sess := mock.session(t, "sess-1")
 
-	_, _ = proc.SendMessage(agent.Prompt{Text: "go"})
+	_, _ = proc.SendMessage(agent.Prompt{Text: "go"}, time.Now())
 	sess.emit(t, agent.BackgroundWaitEvent{})
 	waitUntil(t, "the turn to park on background work", func() bool {
 		return holdOf(proc) == session.LeaseBackground
@@ -1038,7 +1038,7 @@ func TestManager_Shutdown_PersistsWhatTheStreamDrains(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create process: %v", err)
 	}
-	if _, err := proc.SendMessage(agent.Prompt{Text: "go"}); err != nil {
+	if _, err := proc.SendMessage(agent.Prompt{Text: "go"}, time.Now()); err != nil {
 		t.Fatalf("failed to send: %v", err)
 	}
 
@@ -1207,7 +1207,7 @@ func TestProcess_ClosedFlagSuppressesStateChanges(t *testing.T) {
 	// After Close, nothing the send path reports may move the session, and a
 	// message is refused as reaching nothing — not as replaced, which would
 	// have its sender start the session up again.
-	if _, err := proc.SendMessage(agent.Prompt{Text: "late"}); !errors.Is(err, ErrProcessClosed) {
+	if _, err := proc.SendMessage(agent.Prompt{Text: "late"}, time.Now()); !errors.Is(err, ErrProcessClosed) {
 		t.Errorf("SendMessage after Close = %v, want ErrProcessClosed", err)
 	}
 	proc.answerPrompt("req-1")
@@ -1318,7 +1318,7 @@ func TestProcess_SendMessage_StartsTheTurn(t *testing.T) {
 		t.Fatalf("expected initial state to be idle")
 	}
 
-	_, _ = proc.SendMessage(agent.Prompt{Text: "hello"})
+	_, _ = proc.SendMessage(agent.Prompt{Text: "hello"}, time.Now())
 
 	if proc.State() != ProcessStateRunning {
 		t.Errorf("expected state to be running after SendMessage")
@@ -1428,7 +1428,7 @@ func TestManager_LeaseReaper_SparesATurnInProgress(t *testing.T) {
 	proc, _, _ := m.GetOrCreateProcess(context.Background(), createSession(t, store, "sess-1"))
 	sess := mock.session(t, "sess-1")
 
-	if _, err := proc.SendMessage(agent.Prompt{Text: "run the build"}); err != nil {
+	if _, err := proc.SendMessage(agent.Prompt{Text: "run the build"}, time.Now()); err != nil {
 		t.Fatalf("failed to send the message that starts the turn: %v", err)
 	}
 
@@ -1473,7 +1473,7 @@ func TestManager_LeaseReaper_SparesAnUnansweredPrompt(t *testing.T) {
 
 			// A prompt is something an agent raises mid-turn, so the turn has to
 			// be under way for the pause to mean anything.
-			if _, err := proc.SendMessage(agent.Prompt{Text: "do something"}); err != nil {
+			if _, err := proc.SendMessage(agent.Prompt{Text: "do something"}, time.Now()); err != nil {
 				t.Fatalf("failed to send the message that starts the turn: %v", err)
 			}
 			sess.emit(t, prompt)
@@ -1562,7 +1562,7 @@ func TestManager_LeaseReaper_DropsThePromptHoldWhenNobodyCanAnswer(t *testing.T)
 			proc, _, _ := m.GetOrCreateProcess(context.Background(), createSession(t, store, "sess-1"))
 			sess := mock.session(t, "sess-1")
 
-			if _, err := proc.SendMessage(agent.Prompt{Text: "do something"}); err != nil {
+			if _, err := proc.SendMessage(agent.Prompt{Text: "do something"}, time.Now()); err != nil {
 				t.Fatalf("failed to send the message that starts the turn: %v", err)
 			}
 			sess.emit(t, agent.PermissionRequestEvent{RequestID: "req-1", ToolName: "Bash", ToolUseID: "tool-1"})
@@ -1591,7 +1591,7 @@ func TestManager_LeaseReaper_SparesAPromptRaisedWhileAlreadyPaused(t *testing.T)
 	proc, _, _ := m.GetOrCreateProcess(context.Background(), createSession(t, store, "sess-1"))
 	sess := mock.session(t, "sess-1")
 
-	if _, err := proc.SendMessage(agent.Prompt{Text: "do something"}); err != nil {
+	if _, err := proc.SendMessage(agent.Prompt{Text: "do something"}, time.Now()); err != nil {
 		t.Fatalf("failed to send the message that starts the turn: %v", err)
 	}
 	sess.emit(t, agent.PermissionRequestEvent{RequestID: "req-1", ToolName: "Bash", ToolUseID: "tool-1"})
@@ -1629,7 +1629,7 @@ func TestManager_LeaseReaper_SparesAPromptRaisedAfterTheTurnEnded(t *testing.T) 
 	proc, _, _ := m.GetOrCreateProcess(context.Background(), createSession(t, store, "sess-1"))
 	sess := mock.session(t, "sess-1")
 
-	if _, err := proc.SendMessage(agent.Prompt{Text: "do something"}); err != nil {
+	if _, err := proc.SendMessage(agent.Prompt{Text: "do something"}, time.Now()); err != nil {
 		t.Fatalf("failed to send the message that starts the turn: %v", err)
 	}
 	// The turn ends first, which is what makes this case different: from here on
