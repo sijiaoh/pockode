@@ -9,7 +9,15 @@ import {
 	SquareSlash,
 	X,
 } from "lucide-react";
-import { memo, useEffect, useId, useMemo, useRef, useState } from "react";
+import {
+	memo,
+	type ReactNode,
+	useEffect,
+	useId,
+	useMemo,
+	useRef,
+	useState,
+} from "react";
 import { type FullScreenSource, fullScreenSubject } from "../../lib/fullScreen";
 import { isHtmlRenderCard } from "../../lib/htmlRender";
 import {
@@ -403,6 +411,12 @@ interface PermissionRequestItemProps {
 	onOpenFile?: (path: string) => void;
 	/** Why the last attempt to answer failed. */
 	error?: string;
+	/**
+	 * Who asked, for a card drawn under a row that did not: a nested
+	 * subagent's, gathered into the outermost subagent's slot
+	 * (docs/tool-call-ui.md#when-a-step-asks-the-user).
+	 */
+	asker?: ReactNode;
 }
 
 /**
@@ -800,6 +814,7 @@ function PermissionRequestItem({
 	onRespond,
 	onOpenFile,
 	error,
+	asker,
 }: PermissionRequestItemProps) {
 	const isPending = status === "pending";
 	// Live state, read from the session's turn: the card's record cannot say
@@ -871,6 +886,8 @@ function PermissionRequestItem({
 			// `--row-frame` (`row-bar`).
 			className={`scroll-mt-14 text-xs ${asksUser ? "bg-th-warning/10 [--row-tint:color-mix(in_oklab,var(--th-warning)_10%,transparent)] outline-1 -outline-offset-1 outline-th-warning [--row-frame:var(--th-warning)]" : reviewing ? "outline-1 -outline-offset-1 outline-th-border [--row-frame:var(--th-border)]" : ""}`}
 		>
+			{/* First in DOM order, so a screen reader hears who asked before what. */}
+			{asker}
 			<ToolRow
 				expanded={expanded}
 				toggleable={hasExpandableContent}
@@ -1114,6 +1131,8 @@ interface ContentPartItemProps {
 	 * beside it or a bubble around it would be drawn over or broken out of.
 	 */
 	wideCards?: boolean;
+	/** A permission card's asker line; see PermissionRequestItemProps. */
+	asker?: ReactNode;
 }
 
 /**
@@ -1148,6 +1167,7 @@ function ContentPartBody(props: ContentPartItemProps) {
 		promptError,
 		depth = 0,
 		wideCards = false,
+		asker,
 	} = props;
 	if (part.type === "text") {
 		return (
@@ -1180,6 +1200,7 @@ function ContentPartBody(props: ContentPartItemProps) {
 						? promptError.message
 						: undefined
 				}
+				asker={asker}
 			/>
 		);
 	}
@@ -1215,8 +1236,13 @@ function ContentPartBody(props: ContentPartItemProps) {
 			<TaskItem
 				run={part.tool}
 				depth={depth}
-				renderChild={(child) => (
-					<ContentPartItem {...props} part={child} depth={depth + 1} />
+				renderChild={(child, childAsker) => (
+					<ContentPartItem
+						{...props}
+						part={child}
+						depth={depth + 1}
+						asker={childAsker}
+					/>
 				)}
 			/>
 		);

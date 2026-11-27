@@ -1074,14 +1074,49 @@ The rules particular to children:
   `background_lost` reaching the subagent. An aborted turn's sweep follows the
   same two rules, and so does a call filed under a subagent that was interrupted
   or failed, or under one still running once its turn was cut short — unless a
-  backgrounded subagent is above it. One filed under a subagent that *finished*
+  backgrounded subagent is above it, or the user has sent a turn since, which
+  makes a subagent running then one resumed (below). One filed under a subagent that *finished*
   is left running, whatever became of its turn: Claude resumes a finished
   subagent when the agent writes to it (`SendMessage`, measured on claude
   2.1.286), the resumed work names the call that first spawned it, and its
   results are still to come — as they are for a Codex child given more work.
   So is one filed under a subagent that was interrupted or failed once the user
   has sent a turn since: that is the subagent resumed, not output trailing its
-  end. The parent row keeps the status it ended with; only its new children run.
+  end.
+- **A resumed subagent runs again, and settles again.** The two CLIs say it
+  differently, so the reducer learns it two ways, and in neither does an event
+  record carry the row's state:
+  - **Codex** settles the spawn's own call again when the child's next turn
+    ends, so the call itself runs again: the adapter announces it once more as
+    the turn starts — a `tool_call` with `subtype: "resumed"`
+    ([agent-integration](agent-integration.md#subagent-threads)) — and the
+    reducer puts that run back to `running` (`resumeToolRun`), on that
+    record's clock, keeping its last report and figures for its next result to
+    replace. Wherever the run sits; and with the run not loaded, nothing — a
+    resume is no call of its own. From then on it is an ordinary running run,
+    so everything above that settles one settles it: its result, a Stop's
+    sweep, the process ending.
+  - **Claude** resumes a subagent under a call of its own: `SendMessage`, whose
+    `to` is the id the subagent's call reported (`subagent.agent_id`, or the
+    `agentId:` line of an older hand-back or placeholder), handing back a
+    placeholder at once and the resumed subagent's outcome as its background
+    result. Nothing is written onto the subagent's run. Whether it is running
+    again is read off that call each time (`liveResumes`, provided through a
+    context the way the unfiled children are): while a `SendMessage` to it is
+    `running` or `background`, the row draws itself running, on that call's
+    clock and live progress (`resumedRun`), and its body keeps the report it
+    has. A copy of the call's status on the subagent's run would have to follow
+    the call through every way a call settles, and one it missed would leave
+    the row spinning for good; read off the call, the row settles whenever the
+    call does. A subagent still live is not resumed by a message: it never
+    stopped. A known limit of keeping the resume off the run: a Stop's sweep
+    (`settleRunningToolRuns`) cannot see it either, so while a backgrounded
+    `SendMessage` keeps such a subagent working past a Stop, the children it
+    had running are marked interrupted — its run reads `success`, not
+    `background`, so the exemption for work under a backgrounded subagent does
+    not reach them. The row itself still reads as running, and children that
+    arrive after the Stop run as usual; making the sweep skip them would need
+    the reducer to know about the resume.
 - **Each text record is its own paragraph.** Consecutive `text` from the same
   speaker join with a blank line, not end to end: both adapters send whole
   messages, never deltas. Filing made this matter — the main agent's "A and B

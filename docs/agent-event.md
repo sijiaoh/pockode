@@ -575,6 +575,16 @@ event folds into a part its own id does not name:
   loaded the call falls through and draws an ordinary row, which is the common
   case rather than a fallback
   ([code/frontend-state.md](code/frontend-state.md#a-fetch-filed-under-the-call-it-reads)).
+- `tool_call` **with `subtype: "resumed"`** draws nothing of its own: it
+  announces again a call that has settled, because its work is running again
+  — today a Codex subagent given more work under the spawn that started it
+  ([code/agent-integration.md](code/agent-integration.md#subagent-threads)).
+  The record says only that; the run it names goes back to `running`, wherever it
+  sits, until something settles it as it settles any running call — its next
+  `tool_result`, a Stop, the process ending — and nothing happens when that run is
+  not loaded ([code/frontend-state.md](code/frontend-state.md#a-subagents-children)).
+  A subtype rather than a type of its own, so that a client that predates it
+  reads a resend of the call, which changes nothing.
 
 Blocks are read into a narrowed union at the wire boundary
 (`web/src/lib/contentBlocks.ts`), where one the client cannot read is dropped

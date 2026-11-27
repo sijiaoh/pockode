@@ -1,10 +1,11 @@
 import { ChevronRight } from "lucide-react";
-import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import { type ReactNode, useMemo, useState } from "react";
 import type { FullScreenSource } from "../../lib/fullScreen";
-import { collectPartsDeep } from "../../lib/partTree";
+import { collectPartsWithin } from "../../lib/partTree";
 import {
 	countSteps,
 	type LatestChild,
+	resumedRun,
 	type SubagentLine,
 	subagentLine,
 	subagentReport,
@@ -23,9 +24,17 @@ import type { ContentPart, ToolRun } from "../../types/message";
 import { formatTokens } from "../../utils/tokens";
 import { ClampedContent, CollapsibleBody, MarkdownContent } from "../ui";
 import { HeaderlessMainBlock } from "./HeaderlessMainBlock";
+import { useSubagentResume } from "./subagentResumesContext";
 import { PartBlocks } from "./ToolList";
 import { ToolOutcomeSections } from "./ToolOutcomeSections";
-import { Detail, ToolMeta, ToolRow, ToolStatusGlyph } from "./ToolRow";
+import {
+	AgentTitle,
+	Detail,
+	RowSubline,
+	ToolMeta,
+	ToolRow,
+	ToolStatusGlyph,
+} from "./ToolRow";
 import { useTranscriptView } from "./transcriptViewContext";
 import { useUnfiledChildren } from "./unfiledChildrenContext";
 
@@ -39,9 +48,10 @@ interface Props {
 	/**
 	 * Draws one child exactly as the main transcript draws a part, so a `Grep`
 	 * reads the same whoever ran it. The renderer lives with the transcript's,
-	 * which is why it is handed in rather than imported.
+	 * which is why it is handed in rather than imported. `asker` is a pending
+	 * card's asker line, for one a nested subagent asked.
 	 */
-	renderChild: (part: ContentPart) => ReactNode;
+	renderChild: (part: ContentPart, asker?: ReactNode) => ReactNode;
 }
 
 /**
@@ -58,6 +68,32 @@ const MAX_INDENTED_LEVELS = 3;
  */
 function isPendingCard(part: ContentPart): boolean {
 	return part.type === "permission_request" && part.status === "pending";
+}
+
+/**
+ * Which subagent asked, on a card from deeper down than the row it is drawn
+ * under: named as that subagent's own row names it, but in the secondary
+ * colour — an accent title over the card's own would make two rows of one card
+ * (docs/tool-call-ui.md#when-a-step-asks-the-user).
+ */
+function AskerLine({ asker }: { asker: ToolRun }) {
+	const summary = toolSummary(asker.name, asker.input, "");
+	return (
+		<RowSubline above>
+			<span className="flex min-w-0 items-baseline gap-1.5">
+				<AgentTitle
+					title={summary.title}
+					spoken="Asked by "
+					className="text-th-text-secondary"
+				/>
+				<Detail
+					detail={summary.detail}
+					detailTail={summary.detailTail}
+					mono={summary.mono}
+				/>
+			</span>
+		</RowSubline>
+	);
 }
 
 /** The latest child, worded as its own row would word it — never red. */
@@ -182,7 +218,8 @@ function emptyReport(run: ToolRun, hasOutcome: boolean): string {
  *
  * What the subagent itself said and did is filed under the row as its
  * children, and drawn behind a Process disclosure that nothing but the user
- * opens (docs/tool-call-ui.md#a-subagents-own-work).
+ * opens — as is the body itself, failed or not: a failure says why on the row
+ * (docs/tool-call-ui.md#a-subagents-own-work).
  */
 function TaskItem({ run, depth = 0, renderChild }: Props) {
 	const [expanded, setExpanded] = useState(false);
@@ -234,7 +271,11 @@ function TaskItem({ run, depth = 0, renderChild }: Props) {
 	const children = run.children ?? [];
 	const unfiled = useUnfiledChildren(run.id);
 	const steps = countSteps(children) + (unfiled?.steps ?? 0);
-	const line = subagentLine(run, unfiled);
+	// The row says what the subagent is doing now, which a resumed one is
+	// doing under the call that resumed it; the body keeps what it reported.
+	const resume = useSubagentResume(run.id);
+	const rowRun = resume ? resumedRun(run, resume) : run;
+	const line = subagentLine(rowRun, unfiled);
 	// The report — or a backgrounded subagent's outcome, which is its last
 	// words delivered after the call returned (Claude's notification summary,
 	// measured on claude 2.1.286) — is drawn in full above the Process, and
@@ -245,72 +286,51 @@ function TaskItem({ run, depth = 0, renderChild }: Props) {
 	const hasProcess = shownChildren.length > 0 || (unfiled?.count ?? 0) > 0;
 	// Cards from every depth, so a subagent's subagent asking is not hidden
 	// under a row that is itself inside a closed Process. Only the outermost
-	// row collects them: it is the one the user can always see.
-	const pendingCards = nested ? [] : collectPartsDeep(children, isPendingCard);
+	// row collects them: it is the one the user can always see. The innermost
+	// subagent a card was found in is the one that asked.
+	const pendingCards = nested
+		? []
+		: collectPartsWithin(children, isPendingCard).map(({ part, within }) => ({
+				part,
+				asker: within.at(-1),
+			}));
 	const processLabel =
 		summary.title === SUBAGENT_TITLE
 			? "Subagent's process"
 			: `${summary.title} subagent's process`;
 	const level = depth + 1;
 
-	// A failure has to be read, but only pries the body open once — after that
-	// the user's own choice to collapse it stands.
-	//
-	// Kept here after the tool row dropped it, because the two are not the same
-	// case: a tool call failing is ordinary trial and error and its output is one
-	// line away on the row, while a subagent failing is rare and its report — the
-	// only account of what went wrong — exists nowhere but this body.
-	//
-	// Not inside a Process: there the row is mid-transcript by definition, and
-	// the outer subagent has already dealt with the failure — its red row says
-	// so, and the outer report is the account.
-	const autoExpandedRef = useRef(false);
-
-	useEffect(() => {
-		if (failed && !nested && !autoExpandedRef.current) {
-			autoExpandedRef.current = true;
-			setExpanded(true);
-		}
-	}, [failed, nested]);
-
 	return (
 		<div className="text-xs">
 			<ToolRow
 				expanded={expanded}
 				onToggle={() => setExpanded(!expanded)}
-				glyph={<ToolStatusGlyph status={run.status} name={SUBAGENT_TITLE} />}
+				glyph={<ToolStatusGlyph status={rowRun.status} name={SUBAGENT_TITLE} />}
 				title={summary.title}
 				agent
 				background={run.fromBackground}
 				detail={summary.detail}
-				meta={<ToolMeta run={run} />}
-				// With a line of its own the row copies nothing in the body.
-				// Without, the shared one stands — except that it ends a failed run
-				// with the last line of its text, and here that text is the report,
-				// which this row has already opened in full below: a worse second
-				// copy, in mono because the shared rule expects machine output. A
-				// backgrounded failure keeps it, being the one failed row whose
-				// body does not open.
+				meta={<ToolMeta run={rowRun} />}
+				// Its own line where it has one; the shared one stands otherwise.
 				richSecondLine={
 					line && {
 						content: <SubagentLineContent line={line} />,
 						live: line.live,
 					}
 				}
-				secondLine={
-					line || (failed && !run.fromBackground) ? null : toolSecondLine(run)
-				}
-				error={failed}
+				secondLine={line ? null : toolSecondLine(rowRun)}
+				error={rowRun.status === "error"}
 			/>
 
 			{pendingCards.length > 0 && (
 				// Between the row and its body, outside the collapsible: visible
-				// whether the row is open or not, and inside this item's DOM, which
-				// is what tells a screen reader whose request it is.
+				// whether the row is open or not.
 				<div className="px-2 pb-2">
 					<PartBlocks
-						items={pendingCards.map((part) => ({ part }))}
-						renderPart={({ part }) => renderChild(part)}
+						items={pendingCards}
+						renderPart={({ part, asker }) =>
+							renderChild(part, asker && <AskerLine asker={asker} />)
+						}
 					/>
 				</div>
 			)}
@@ -417,9 +437,7 @@ function TaskItem({ run, depth = 0, renderChild }: Props) {
 							<CollapsibleBody expanded={promptExpanded}>
 								<div className="p-2">
 									<ClampedContent name="prompt" view={view}>
-										<pre className="whitespace-pre-wrap text-th-text-muted">
-											{prompt}
-										</pre>
+										<MarkdownContent content={prompt} variant="note" />
 									</ClampedContent>
 								</div>
 							</CollapsibleBody>

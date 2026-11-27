@@ -240,6 +240,12 @@ export type NormalizedEvent =
 			originToolUseId?: string;
 			/** See the `text` event. */
 			parentToolUseId?: string;
+			/**
+			 * The call announced again because its work started running again
+			 * after it had settled: a Codex subagent given more work under the
+			 * spawn that started it (`subtype: "resumed"`).
+			 */
+			resumed?: boolean;
 			/** The record's `observed_at`, epoch ms on the server's clock. */
 			observedAt?: number;
 	  }
@@ -442,6 +448,7 @@ export function normalizeEvent(
 				toolInput: record.tool_input,
 				originToolUseId: record.origin_tool_use_id as string | undefined,
 				parentToolUseId: record.parent_tool_use_id as string | undefined,
+				...(record.subtype === "resumed" ? { resumed: true } : {}),
 				observedAt: serverTime(record.observed_at),
 			};
 		case "tool_result":
@@ -1285,6 +1292,18 @@ function applyEvent(
 	// the transcript at all — unless the row it names is not loaded, and then it
 	// falls through to become an ordinary row, which is a common case rather
 	// than a fallback (docs/code/frontend-state.md).
+	// A call running again is the run it already has, wherever that sits — and
+	// nothing at all when that run is not loaded: a second row for it would be
+	// a call that was never made.
+	if (event.type === "tool_call" && event.resumed) {
+		return updateRunById(
+			messages,
+			event.toolUseId,
+			(run) => resumeToolRun(run, event.observedAt, options),
+			false,
+		);
+	}
+
 	if (event.type === "tool_call" && event.originToolUseId) {
 		const absorbed = absorbFetchCall(
 			messages,
@@ -1575,10 +1594,13 @@ function fileUnderParent(
 		const path = findToolRunPath(msg.parts, parentToolUseId);
 		if (!path) continue;
 		if (hasUnfiledChildren(withRow, parentToolUseId)) return null;
-		const aborted = turnCut || isAbortedStatus(msg);
 		const resumedLater = withRow
 			.slice(i + 1)
 			.some((later) => later.role === "user");
+		// The bubble's own cut says nothing once the user has sent a turn since:
+		// a subagent running then was resumed (a Codex spawn announced again),
+		// not left over from the cut. A cut of the turn now ending still counts.
+		const aborted = turnCut || (isAbortedStatus(msg) && !resumedLater);
 		// A subagent under a backgrounded one outlives its turn with it.
 		const underBackground = path
 			.slice(0, -1)
@@ -2401,6 +2423,29 @@ function applyFetchResult(
 		return updated;
 	}
 	return null;
+}
+
+/**
+ * A settled run whose work has started again: running, from now, until its
+ * next result settles it. What it reported last stays — its result and its
+ * figures are what is true of it until that result replaces them — except
+ * its clocks: it starts now, and a running call has no end or duration. One
+ * still running is left alone: a resend says nothing new about it.
+ */
+function resumeToolRun(
+	run: ToolRun,
+	observedAt: number | undefined,
+	options: ApplyOptions,
+): ToolRun {
+	if (run.status === "running" || run.status === "background") return run;
+	const {
+		endedAt: _endedAt,
+		durationMs: _durationMs,
+		startedAt: _startedAt,
+		seenAt: _seenAt,
+		...rest
+	} = run;
+	return { ...rest, status: "running", ...startOf(observedAt, options) };
 }
 
 function updateToolResult(

@@ -141,6 +141,30 @@ func TestTruncateHistory(t *testing.T) {
 			want:        []EventType{EventTypeAskUserQuestion, EventTypeRequestCancelled},
 		},
 		{
+			// Its first run settled before the cut and the second after: kept,
+			// the call would read as running in a fork where nothing can end it.
+			name: "drops a resumed call whose second result is past the cut",
+			records: []EventRecord{
+				{Type: EventTypeToolCall, ToolUseID: "t1"},
+				{Type: EventTypeToolResult, ToolUseID: "t1"},
+				{Type: EventTypeToolCall, ToolUseID: "t1", Subtype: ToolCallResumed},
+				{Type: EventTypeToolResult, ToolUseID: "t1"},
+			},
+			keepThrough: 2,
+			want:        []EventType{EventTypeToolCall, EventTypeToolResult},
+		},
+		{
+			name: "keeps a resumed call that settled again before the cut",
+			records: []EventRecord{
+				{Type: EventTypeToolCall, ToolUseID: "t1"},
+				{Type: EventTypeToolResult, ToolUseID: "t1"},
+				{Type: EventTypeToolCall, ToolUseID: "t1", Subtype: ToolCallResumed},
+				{Type: EventTypeToolResult, ToolUseID: "t1"},
+			},
+			keepThrough: 3,
+			want:        []EventType{EventTypeToolCall, EventTypeToolResult, EventTypeToolCall, EventTypeToolResult},
+		},
+		{
 			// Nothing could have paired it before the fork either, so dropping it
 			// would remove history the source still shows.
 			name: "keeps an opener that has no ID to pair on",

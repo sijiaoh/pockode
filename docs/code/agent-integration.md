@@ -3324,7 +3324,7 @@ the session's):
 
 | From a subagent's thread | Handling |
 |---|---|
-| `turn/started`, `turn/completed` | not the session's — read as the session's, the child's ending ended the parent's turn while it was still waiting, and the child's start re-aimed `turn/interrupt` at the child. The child's `turn/completed` settles the spawn's row instead (below). For a child whose spawn was never seen there is no row: a `failed` ending is said as a `subagent_failed` `WarningEvent`, so the child's work does not just stop unexplained, and any other ending is dropped |
+| `turn/started`, `turn/completed` | not the session's — read as the session's, the child's ending ended the parent's turn while it was still waiting, and the child's start re-aimed `turn/interrupt` at the child. The child's `turn/completed` settles the spawn's row instead, and its `turn/started` drops a result held from its interrupted previous turn, or announces a settled spawn again as resumed (below). For a child whose spawn was never seen there is no row: a `failed` ending is said as a `subagent_failed` `WarningEvent`, so the child's work does not just stop unexplained, and any other ending is dropped |
 | `thread/tokenUsage/updated` | kept apart from the session's usage — a running total of another thread wrecks the accumulator's deltas and reports the child's prompt as this session's context. Its `last.totalTokens` (the latest request's whole prompt plus output) is kept per thread for the spawn's result instead (below); the session's totals do not count the child |
 | `userMessage` items | dropped — the child's prompt is not a message anyone sent this session, so it is no read point |
 | every other item | mapped as above, with `ParentToolUseID` = the spawn call (from either spawn shape, empty if the spawn was not seen) and no `ProviderMessageID` |
@@ -3345,14 +3345,40 @@ cannot carry, measured on 0.159.3:
 - **No outcome of its own.** The child's `turn/completed` is what settles it, as
   a `ToolResultEvent` on the spawn: `completed` carries the child's latest
   `agentMessage` — the report, which is what the parent's `wait` reads back, as
-  a Claude Task's result is — `failed` carries the redacted error,
-  `interrupted` a sentence saying so; both of those are `IsError`, since neither
-  finished the task. A child given more work later (`sendInput`, `followupTask`)
-  runs another turn under the same spawn and settles it again; the report stays
-  the child's latest words, so a turn that said nothing does not erase it. While
-  such a turn runs, the row still reads as settled, and its new children are
-  filed under it by the reducer's rule for a resumed subagent
-  ([frontend-state](frontend-state.md#a-subagents-children)). The `subAgentActivity` `kind: "completed"` the
+  a Claude Task's result is — and `failed` the redacted error, `IsError`.
+  `interrupted` is `IsError` too, since the child did not finish, but no result
+  can say "interrupted": a client draws a call as interrupted only when its
+  turn ends interrupted while the call is still running
+  ([frontend-state](frontend-state.md#tool-runs)), which is how a Claude Task
+  cut short by Stop reads. A child the user's Stop interrupts can end before
+  the parent's turn does, and settled at once its row would read as failed. So
+  while the session's turn runs, an interrupted child's result is held
+  (`heldSubagentResults`) until that turn ends. If it ends `interrupted`, the
+  result is dropped and the `InterruptedEvent` settles the row as interrupted;
+  it is not sent after the ending either, because a result is output and output
+  after an ending opens a turn nothing would end
+  ([turn state](#turn-state)). The child's last words are already filed under
+  the row. If the turn ends any other way, the model stopped the child from
+  inside the turn, and the result goes out before the ending with a sentence
+  saying it was interrupted, red — as a Claude background task the model stops
+  is. A child that starts another turn under the same spawn first was
+  interrupted only to be given more work (`sendInput` with `interrupt`), and its
+  held result is dropped. With no turn running nothing is held. A child given
+  more work later (`sendInput`, `followupTask`) runs another turn under the same
+  spawn and settles it again; the report stays the child's latest words, so a
+  turn that said nothing does not erase it. That
+  turn's `turn/started` announces the spawn again, as a `ToolCallEvent` with
+  the spawn's own id and input and `Subtype: ToolCallResumed`, so the row reads
+  as running until the turn settles it — said by a record, so a replay draws
+  it running too ([frontend-state](frontend-state.md#a-subagents-children)).
+  Only a child whose row has settled is announced (`subagentSpawn.Settled`): by
+  its result, or by the user's Stop, whose ending settled it with no result.
+  The first turn's start announces nothing, the spawn having announced the
+  call, and nor does a turn after a held interrupt, whose row never stopped
+  running. A client that predates the subtype reads the record as a resend of
+  the call and changes nothing; a fork cut between a resume and its result
+  drops the resume, which no result in the fork would end
+  (`TruncateHistory`). The `subAgentActivity` `kind: "completed"` the
   parent's thread also gets is ignored: it says nothing about how the turn
   ended.
 - **The figures it does have** go on that result, as `DurationMs` and

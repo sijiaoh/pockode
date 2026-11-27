@@ -1,26 +1,34 @@
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import type { ComponentProps } from "react";
+import type { ComponentProps, ReactNode } from "react";
 import { describe, expect, it } from "vitest";
 import type { ContentPart, ToolRun, ToolRunStatus } from "../../types/message";
+import { SubagentResumesContext } from "./subagentResumesContext";
 import TaskItem from "./TaskItem";
 import { UnfiledChildrenContext } from "./unfiledChildrenContext";
 
 // A stand-in for the transcript's own part renderer, which TaskItem is handed
 // rather than imports: enough to tell which child went where. A nested Task is
 // drawn by the real component, so recursion is the real thing.
-function renderChild(part: ContentPart, depth = 1) {
+function renderChild(part: ContentPart, asker?: ReactNode, depth = 1) {
 	switch (part.type) {
 		case "text":
 			return <p>{part.content}</p>;
 		case "permission_request":
-			return <div>card for {part.request.toolUseId}</div>;
+			return (
+				<section aria-label={`card ${part.request.toolUseId}`}>
+					{asker}
+					card for {part.request.toolUseId}
+				</section>
+			);
 		case "tool_call":
 			return part.tool.name === "Agent" ? (
 				<TaskItem
 					run={part.tool}
 					depth={depth}
-					renderChild={(child) => renderChild(child, depth + 1)}
+					renderChild={(child, childAsker) =>
+						renderChild(child, childAsker, depth + 1)
+					}
 				/>
 			) : (
 				<span>row for {part.tool.id}</span>
@@ -105,31 +113,86 @@ describe("TaskItem", () => {
 		expect(screen.getByText("explore the repo")).toBeVisible();
 	});
 
-	// Unlike a tool call, which fails as ordinary trial and error and prints its
-	// last line on the row: a subagent failing is rare, and this body is the only
-	// account of what went wrong.
-	it("opens itself when the Task fails, so the failure is not missed", () => {
+	// A brief is prose with headings and lists as often as not, and a wall of
+	// its raw markers is what it used to read as.
+	it("renders the prompt as Markdown", async () => {
+		const user = userEvent.setup();
 		render(
 			<TaskItemWithChildren
-				run={task("error", { result: "Agent type not found" })}
+				run={task("success", {
+					input: {
+						description: "find usages",
+						prompt: "## Goal\n\n- explore the repo",
+					},
+				})}
 			/>,
 		);
-		expect(screen.getByText("Agent type not found")).toBeVisible();
+		await user.click(screen.getByRole("button", { expanded: false }));
+		await user.click(screen.getByText("Prompt"));
+		expect(screen.getByRole("heading", { name: "Goal" })).toBeVisible();
+		expect(screen.getByRole("listitem")).toHaveTextContent("explore the repo");
 	});
 
-	// Because the body is already open, the shared row's failure line would only
-	// be a second and worse copy of what is under it — the tail of a markdown
-	// report, drawn in mono.
-	it("does not repeat the report on the row of a failed Task", () => {
+	// A reload or a page of history would otherwise open every failed subagent
+	// in it at once; the row says why instead, read the way a text child is —
+	// the hand-back frame unwrapped, the Markdown markers dropped.
+	it("keeps a failed Task closed and says why on its row", () => {
 		render(
 			<TaskItemWithChildren
-				run={task("error", { result: "# Report\n\n- could not find it" })}
+				run={task("error", {
+					result:
+						"[Subagent hand-back] The report follows:\n  **Could not** find it.\n  More detail.",
+					children: [
+						{
+							type: "tool_call",
+							id: "call-c1",
+							tool: { id: "c1", name: "Read", input: {}, status: "success" },
+						},
+					],
+				})}
 			/>,
 		);
-		// The list item is in the body, rendered as markdown. The verbatim source
-		// line is what the row would have shown.
-		expect(screen.queryByText("- could not find it")).toBeNull();
-		expect(screen.getByText("could not find it")).toBeVisible();
+		expect(screen.getByRole("button", { name: /find usages/ })).toHaveAttribute(
+			"aria-expanded",
+			"false",
+		);
+		expect(screen.getByText("Could not find it.")).toBeVisible();
+		expect(screen.queryByText("More detail.")).toBeNull();
+	});
+
+	// The shared failure rung would print the raw result's last line — for a
+	// framed report, the frame's usage line.
+	it("says why on a failed Task that made no calls", () => {
+		render(
+			<TaskItemWithChildren
+				run={task("error", {
+					result:
+						"[Subagent hand-back] The report follows:\n  Agent type not found.\n<usage>subagent_tokens: 12</usage>",
+				})}
+			/>,
+		);
+		expect(screen.getByText("Agent type not found.")).toBeVisible();
+		expect(screen.queryByText(/subagent_tokens/)).toBeNull();
+	});
+
+	// Nothing to say why with: the figures stand, as on a success.
+	it("keeps the figures on a failed Task that returned nothing", () => {
+		render(
+			<TaskItemWithChildren
+				run={task("error", {
+					result: "",
+					children: [
+						{
+							type: "tool_call",
+							id: "call-c1",
+							tool: { id: "c1", name: "Read", input: {}, status: "success" },
+						},
+					],
+					subagent: { toolUses: 1, totalTokens: 45_600 },
+				})}
+			/>,
+		);
+		expect(screen.getByText("45.6K tokens")).toBeVisible();
 	});
 
 	// A Task that was just spawned can still be opened — the brief it was given
@@ -145,10 +208,11 @@ describe("TaskItem", () => {
 	});
 
 	// The row above has settled: saying the subagent "is still working" there
-	// would contradict the glyph beside it, and a failure that came back empty
-	// opens itself, so this is the sentence the reader is shown.
-	it("does not claim a settled Task is still working", () => {
+	// would contradict the glyph beside it.
+	it("does not claim a settled Task is still working", async () => {
+		const user = userEvent.setup();
 		render(<TaskItemWithChildren run={task("error", { result: undefined })} />);
+		await user.click(screen.getByRole("button", { expanded: false }));
 		expect(screen.queryByText(/still working/)).toBeNull();
 		expect(
 			screen.getByText("The subagent failed without reporting anything."),
@@ -239,7 +303,8 @@ describe("TaskItem", () => {
 		});
 
 		// A failure's outcome is the CLI's verdict, not the subagent's words.
-		it("points a failed one at its outcome", () => {
+		it("points a failed one at its outcome", async () => {
+			const user = userEvent.setup();
 			render(
 				<TaskItemWithChildren
 					run={task("error", {
@@ -248,7 +313,7 @@ describe("TaskItem", () => {
 					})}
 				/>,
 			);
-			// Open already: a failure pries its body open.
+			await user.click(screen.getByRole("button", { expanded: false }));
 			expect(
 				screen.getByText(
 					"The subagent ran in the background; how it ended is under Outcome below.",
@@ -268,8 +333,7 @@ describe("TaskItem", () => {
 		});
 
 		// A background row is by definition not at the tail of the transcript,
-		// and this body has a `useEffect` that opens itself on failure — the one
-		// place somebody could plausibly hang "and when a fetch arrives" too.
+		// so a fetch arriving must not move it.
 		it("does not open itself when a fetch arrives", () => {
 			const { rerender } = render(
 				<TaskItemWithChildren run={task("background", background)} />,
@@ -406,7 +470,6 @@ describe("TaskItem", () => {
 			expect(screen.queryByText("·")).toBeNull();
 		});
 
-		// Its body opens on the failure, and the count copies nothing in it.
 		it("keeps the count on a failed row", () => {
 			render(
 				<TaskItemWithChildren
@@ -432,7 +495,7 @@ describe("TaskItem", () => {
 					})}
 				/>,
 			);
-			await user.click(screen.getByRole("button", { name: /^Process/ }));
+			await openProcess(user);
 			expect(
 				within(screen.getByRole("group")).getByText("Trying again."),
 			).toBeVisible();
@@ -685,6 +748,51 @@ describe("TaskItem", () => {
 			expect(screen.getAllByText("2 tool uses")[0]).toBeVisible();
 		});
 
+		// Every card in the slot is under the outer row, so one from deeper down
+		// has to say who asked; the outer subagent's own does not.
+		it("names the innermost asker on a card from a nested subagent", () => {
+			const innermost: ToolRun = {
+				id: "t3",
+				name: "Agent",
+				input: {
+					description: "review the diff",
+					subagent_type: "code-reviewer",
+				},
+				status: "running",
+				children: [pendingCard("c7")],
+			};
+			const inner: ToolRun = {
+				id: "t2",
+				name: "Agent",
+				input: { description: "inner", subagent_type: "Plan" },
+				status: "running",
+				children: [
+					pendingCard("c9"),
+					{ type: "tool_call", id: "call-t3", tool: innermost },
+				],
+			};
+			render(
+				<TaskItemWithChildren
+					run={task("running", {
+						result: undefined,
+						children: [
+							pendingCard("c1"),
+							{ type: "tool_call", id: "call-t2", tool: inner },
+						],
+					})}
+				/>,
+			);
+			const card = (id: string) =>
+				screen.getByRole("region", { name: `card ${id}` });
+			expect(card("c1")).not.toHaveTextContent(/Asked by/);
+			expect(card("c9")).toHaveTextContent("Asked by Planinnercard for c9");
+			// Only the asker, not the path to it.
+			expect(card("c7")).toHaveTextContent(
+				"Asked by code-reviewerreview the diffcard for c7",
+			);
+			expect(within(card("c7")).getByText("code-reviewer")).toBeVisible();
+		});
+
 		// A subagent's subagent is one step of the outer one, worded as its own
 		// row is — what it is doing in turn is its own row's to say.
 		it("reads a nested subagent as its row, not as its latest child", () => {
@@ -728,28 +836,6 @@ describe("TaskItem", () => {
 			expect(
 				screen.getByRole("button", { name: /find usages/ }),
 			).toHaveAccessibleName(/2 tool uses/);
-		});
-
-		// Mid-transcript by definition: the outer subagent dealt with the
-		// failure, and its row being red says so.
-		it("does not open a failed subagent inside a process", async () => {
-			const user = userEvent.setup();
-			const inner: ToolRun = {
-				id: "t2",
-				name: "Agent",
-				input: { description: "inner", subagent_type: "Plan" },
-				status: "error",
-				result: "inner failure",
-			};
-			render(
-				<TaskItemWithChildren
-					run={task("success", {
-						children: [{ type: "tool_call", id: "call-t2", tool: inner }],
-					})}
-				/>,
-			);
-			await openProcess(user);
-			expect(screen.queryByText("inner failure")).toBeNull();
 		});
 
 		// Children that loaded flat before their call did stay where they
@@ -966,5 +1052,34 @@ describe("TaskItem", () => {
 			// The title's own, and no second one in the body.
 			expect(screen.getAllByText(/Explore/)).toHaveLength(1);
 		});
+	});
+});
+
+// Resumed by a call of its own (Claude's SendMessage), a subagent's row runs
+// while that call does, and keeps what it reported for its body.
+describe("TaskItem resumed", () => {
+	const resume: ToolRun = {
+		id: "s1",
+		name: "SendMessage",
+		input: { to: "a1" },
+		status: "background",
+	};
+
+	it("reads as running while the call that resumed it runs", async () => {
+		const user = userEvent.setup();
+		render(
+			<SubagentResumesContext value={new Map([["t1", resume]])}>
+				<TaskItemWithChildren
+					run={task("success", { result: "First report" })}
+				/>
+			</SubagentResumesContext>,
+		);
+		expect(
+			screen.getByRole("status", { name: "Subagent running" }),
+		).toBeVisible();
+		expect(screen.queryByLabelText("succeeded")).not.toBeInTheDocument();
+
+		await user.click(screen.getByRole("button", { name: /find usages/ }));
+		expect(await screen.findByText("First report")).toBeVisible();
 	});
 });

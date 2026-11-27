@@ -29,6 +29,10 @@ import MessageItem, {
 	type PromptError,
 } from "./MessageItem";
 import { anchorCandidateProps } from "./scrollAnchor";
+import {
+	SubagentResumesContext,
+	useSubagentResumesValue,
+} from "./subagentResumesContext";
 import { TranscriptViewContext } from "./transcriptViewContext";
 import { TRANSCRIPT_SPAN_VAR } from "./transcriptWidth";
 import {
@@ -327,6 +331,7 @@ function MessageList({
 	// (docs/lifecycle-ui.md §2.3): the last row is then the message, not the turn.
 	const openIndex = openAssistantIndex(messages);
 	const unfiled = useUnfiledChildrenValue(messages);
+	const resumes = useSubagentResumesValue(messages);
 	const discardedContext = useDiscardedMessagesValue(messages, hasMoreHistory);
 
 	const highlightRef = useRef<{
@@ -478,48 +483,50 @@ function MessageList({
 						<TurnTailContext value={tail ?? IDLE_TAIL}>
 							<OpenedThoughtsContext value={openedThoughtIds}>
 								<UnfiledChildrenContext value={unfiled}>
-									<DiscardedMessagesContext value={discardedContext}>
-										<TranscriptViewContext value={view}>
-											{messages.map((message, index) => {
-												return (
-													<div
-														key={message.id}
-														data-message-id={message.id}
-														// This wrapper is the row the view can be held still over
-														// (see `scrollAnchor`).
-														{...anchorCandidateProps}
-														className="py-1.5 sm:py-2"
-													>
-														<MessageItem
-															message={message}
-															sessionId={sessionId}
-															// Top of the loaded transcript is the session's own start
-															// only once there are no older pages left above it.
-															isFirst={index === 0 && !hasMoreHistory}
-															isOpenTurn={index === openIndex}
-															isCodex={isCodex}
-															onPermissionRespond={onPermissionRespond}
-															onAnswerQuestion={onAnswerQuestion}
-															promptError={promptError}
-															onOpenWorkDetail={onOpenWorkDetail}
-															onOpenFile={onOpenFile}
-															onForkMessage={onForkMessage}
-															onSignIn={onSignIn}
-															onSwitchAccount={onSwitchAccount}
-															isDiscarded={
-																message.role === "user" &&
-																message.messageId !== undefined &&
-																discardedContext.discarded.has(
-																	message.messageId,
-																)
-															}
-															onRestoreMessages={onRestoreMessages}
-														/>
-													</div>
-												);
-											})}
-										</TranscriptViewContext>
-									</DiscardedMessagesContext>
+									<SubagentResumesContext value={resumes}>
+										<DiscardedMessagesContext value={discardedContext}>
+											<TranscriptViewContext value={view}>
+												{messages.map((message, index) => {
+													return (
+														<div
+															key={message.id}
+															data-message-id={message.id}
+															// This wrapper is the row the view can be held still over
+															// (see `scrollAnchor`).
+															{...anchorCandidateProps}
+															className="py-1.5 sm:py-2"
+														>
+															<MessageItem
+																message={message}
+																sessionId={sessionId}
+																// Top of the loaded transcript is the session's own start
+																// only once there are no older pages left above it.
+																isFirst={index === 0 && !hasMoreHistory}
+																isOpenTurn={index === openIndex}
+																isCodex={isCodex}
+																onPermissionRespond={onPermissionRespond}
+																onAnswerQuestion={onAnswerQuestion}
+																promptError={promptError}
+																onOpenWorkDetail={onOpenWorkDetail}
+																onOpenFile={onOpenFile}
+																onForkMessage={onForkMessage}
+																onSignIn={onSignIn}
+																onSwitchAccount={onSwitchAccount}
+																isDiscarded={
+																	message.role === "user" &&
+																	message.messageId !== undefined &&
+																	discardedContext.discarded.has(
+																		message.messageId,
+																	)
+																}
+																onRestoreMessages={onRestoreMessages}
+															/>
+														</div>
+													);
+												})}
+											</TranscriptViewContext>
+										</DiscardedMessagesContext>
+									</SubagentResumesContext>
 								</UnfiledChildrenContext>
 							</OpenedThoughtsContext>
 						</TurnTailContext>
