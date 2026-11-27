@@ -1547,7 +1547,7 @@ function applyEvent(
 	}
 
 	// A Codex plan has no call: it is a settled `Plan` row of its own, placed
-	// and filed by the ordinary call path, so lists, groups and the work line
+	// and filed by the ordinary call path, so lists, groups and the work figures
 	// draw it with no special case.
 	if (event.type === "plan" && event.planId) {
 		const planId = event.planId;
