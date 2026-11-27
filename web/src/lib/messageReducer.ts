@@ -69,6 +69,16 @@ function optionalString(raw: unknown): string | undefined {
 	return typeof raw === "string" && raw !== "" ? raw : undefined;
 }
 
+/**
+ * A server timestamp (`observed_at`, `server_time`) as epoch ms, or undefined
+ * when there is none — never zero, which would read as a moment in 1970.
+ */
+function serverTime(raw: unknown): number | undefined {
+	if (typeof raw !== "string") return undefined;
+	const ms = Date.parse(raw);
+	return Number.isNaN(ms) ? undefined : ms;
+}
+
 // Who answered a permission request and why, when it was not a person
 // (docs/agent-event.md#permission-requests-and-their-answers). A record with
 // no `by` is a person's and carries nothing more.
@@ -183,6 +193,8 @@ export type NormalizedEvent =
 			originToolUseId?: string;
 			/** See the `text` event. */
 			parentToolUseId?: string;
+			/** The record's `observed_at`, epoch ms on the server's clock. */
+			observedAt?: number;
 	  }
 	| {
 			type: "tool_result";
@@ -206,6 +218,8 @@ export type NormalizedEvent =
 			durationMs?: number;
 			exitCode?: number;
 			htmlPage?: string;
+			/** See `tool_call`. */
+			observedAt?: number;
 	  }
 	| {
 			/**
@@ -284,6 +298,8 @@ export type NormalizedEvent =
 			choice: "deny" | "allow" | "always_allow";
 			by?: PermissionAnswerer;
 			review?: PermissionReview;
+			/** See `tool_call`. */
+			observedAt?: number;
 	  }
 	| {
 			type: "request_cancelled";
@@ -376,6 +392,7 @@ export function normalizeEvent(
 				toolInput: record.tool_input,
 				originToolUseId: record.origin_tool_use_id as string | undefined,
 				parentToolUseId: record.parent_tool_use_id as string | undefined,
+				observedAt: serverTime(record.observed_at),
 			};
 		case "tool_result":
 			return {
@@ -397,6 +414,7 @@ export function normalizeEvent(
 					typeof record.html_page === "string" && record.html_page !== ""
 						? record.html_page
 						: undefined,
+				observedAt: serverTime(record.observed_at),
 				// No `parent_tool_use_id`: a result joins its call by id at any
 				// depth, so whose call it was is already known where it lands.
 			};
@@ -484,6 +502,7 @@ export function normalizeEvent(
 				requestId: record.request_id as string,
 				choice: record.choice as "deny" | "allow" | "always_allow",
 				...normalizePermissionAnswer(record),
+				observedAt: serverTime(record.observed_at),
 			};
 		case "request_cancelled":
 			return {
@@ -549,14 +568,53 @@ export function normalizeEvent(
 }
 
 /**
+ * The server's clock read against this client's: the reply's `server_time`,
+ * and when the reply arrived here. It is what carries a server timestamp over
+ * to this clock — `receivedAt - (serverTime - t)` — without ever asking the two
+ * clocks to agree (the turn clock's rule, docs/turn-progress-ui.md §2.3).
+ */
+export interface ServerClockReading {
+	serverTime: number;
+	receivedAt: number;
+}
+
+/**
+ * The reading a history reply carries; none without one. `receivedAt` defaults
+ * to now, which is right for a reply being handled as it arrives.
+ */
+export function readServerClock(
+	page: { server_time?: string },
+	receivedAt = Date.now(),
+): ServerClockReading | undefined {
+	const at = serverTime(page.server_time);
+	return at === undefined ? undefined : { serverTime: at, receivedAt };
+}
+
+/**
  * Options that describe how an event reached this client, rather than what it
- * says. Only liveness so far: a record replayed from history is
- * indistinguishable from a live one in its own right, and a run may only draw a
- * stopwatch if this client watched it start.
+ * says: a record replayed from history is indistinguishable from a live one in
+ * its own right, and a run may only draw a stopwatch if this client can place
+ * its start on its own clock.
  */
 export interface ApplyOptions {
 	/** True for an event that arrived on the wire while the client was watching. */
 	live?: boolean;
+	/** The history's clock reading, for a replayed event; see `clientClockAt`. */
+	clock?: ServerClockReading;
+}
+
+/**
+ * A moment the server observed (`at`), on this client's clock: now, for an
+ * event that arrived live; through the history's clock reading for a replayed
+ * one; otherwise unknown.
+ */
+function clientClockAt(
+	at: number | undefined,
+	options: ApplyOptions,
+): Date | undefined {
+	if (options.live) return new Date();
+	if (at === undefined || !options.clock) return undefined;
+	return new Date(options.clock.receivedAt - (options.clock.serverTime - at));
 }
 
 /**
@@ -627,6 +685,7 @@ function applyToolCall(
 	toolInput: unknown,
 	options: ApplyOptions,
 	parentToolUseId?: string,
+	observedAt?: number,
 ): ContentPart[] {
 	const index = findToolRunIndex(parts, toolUseId);
 	if (index !== -1) {
@@ -678,11 +737,26 @@ function applyToolCall(
 				name: toolName,
 				input: toolInput,
 				status: "running",
-				...(options.live ? { seenAt: new Date() } : {}),
+				...startOf(observedAt, options),
 			},
 			...(parentToolUseId ? { parentToolUseId } : {}),
 		},
 	];
+}
+
+/**
+ * A run's start, as both clocks have it: `startedAt` on the server's, `seenAt`
+ * on this client's. Either may be missing; see `ToolRun`.
+ */
+function startOf(
+	observedAt: number | undefined,
+	options: ApplyOptions,
+): Pick<ToolRun, "startedAt" | "seenAt"> {
+	const seenAt = clientClockAt(observedAt, options);
+	return {
+		...(observedAt !== undefined ? { startedAt: observedAt } : {}),
+		...(seenAt ? { seenAt } : {}),
+	};
 }
 
 /**
@@ -750,6 +824,7 @@ export function applyEventToParts(
 				event.toolInput,
 				options,
 				event.parentToolUseId,
+				event.observedAt,
 			);
 		case "permission_request": {
 			const permissionPart: ContentPart = {
@@ -1088,11 +1163,16 @@ function applyEvent(
 	// Permission response updates existing permission_request across all messages
 	if (event.type === "permission_response") {
 		const newStatus = event.choice === "deny" ? "denied" : "allowed";
-		return updatePermissionRequestStatus(
-			messages,
+		return stampPermissionAnswer(
+			updatePermissionRequestStatus(
+				messages,
+				event.requestId,
+				newStatus,
+				event.by ? { by: event.by, review: event.review } : undefined,
+			),
 			event.requestId,
-			newStatus,
-			event.by ? { by: event.by, review: event.review } : undefined,
+			event.observedAt,
+			options,
 		);
 	}
 
@@ -1762,6 +1842,38 @@ export function updatePermissionRequestStatus(
 }
 
 /**
+ * Records on a permission card when it was answered, which is when the call it
+ * held back starts (`ToolRun.startedAt`). Separate from the status because the
+ * status may already be set — a press updates it before the answer's record
+ * comes back — and the record is the only thing that knows the time. The first
+ * answer's time stands, as its status does.
+ */
+function stampPermissionAnswer(
+	messages: Message[],
+	requestId: string,
+	observedAt: number | undefined,
+	options: ApplyOptions,
+): Message[] {
+	const seenAt = clientClockAt(observedAt, options);
+	if (observedAt === undefined && !seenAt) return messages;
+	return mapAllParts(messages, (part) => {
+		if (
+			part.type !== "permission_request" ||
+			part.request.requestId !== requestId ||
+			part.answeredAt !== undefined ||
+			part.answerSeenAt !== undefined
+		) {
+			return part;
+		}
+		return {
+			...part,
+			...(observedAt !== undefined ? { answeredAt: observedAt } : {}),
+			...(seenAt ? { answerSeenAt: seenAt } : {}),
+		};
+	});
+}
+
+/**
  * Settles the posted-question cards a message answered.
  *
  * The message record is the answer record — there is no second one per question
@@ -1839,6 +1951,7 @@ function isSupersededAnswer(
 export function applyBackReference(
 	messages: Message[],
 	record: unknown,
+	options: ApplyOptions = {},
 ): Message[] {
 	const event = normalizeEvent(record as Record<string, unknown>);
 	if (event.type === "message") {
@@ -1846,7 +1959,7 @@ export function applyBackReference(
 			? applyAnswering(messages, event.answering, event.messageId)
 			: messages;
 	}
-	return applyServerEvent(messages, event);
+	return applyServerEvent(messages, event, undefined, options);
 }
 
 /**
@@ -1956,6 +2069,7 @@ function settleToolRun(
 
 	const outcome: ToolRun = {
 		...settled,
+		...(event.observedAt !== undefined ? { endedAt: event.observedAt } : {}),
 		result: event.toolResult,
 		contents: event.contents,
 		status:
@@ -2015,9 +2129,10 @@ function settleToolRun(
  * *not* re-sent afterwards, so once the card has taken the pending row's place
  * — which it does because the machine is then waiting for the user, not working
  * — the card is all that is left of the call. The row is rebuilt from what the
- * card itself carries, directly under it, which is where it was. It gets no
- * `seenAt`: the call started before this client could see it start, and a
- * stopwatch begun here would be counting the wrong thing.
+ * card itself carries, directly under it, which is where it was. It starts
+ * when the card was answered — the call before that was waiting on the user,
+ * whose time the card already shows — so a card answered without a recorded
+ * time gives a row with no start, rather than one counting from here.
  *
  * Returns the list unchanged when the record names no call on screen — an
  * orphan result, or progress for a call whose page is not loaded.
@@ -2094,6 +2209,14 @@ function updateRunById(
 					name: card.request.toolName,
 					input: card.request.toolInput,
 					status: "running",
+					...(card.status === "allowed"
+						? {
+								...(card.answeredAt !== undefined
+									? { startedAt: card.answeredAt }
+									: {}),
+								...(card.answerSeenAt ? { seenAt: card.answerSeenAt } : {}),
+							}
+						: {}),
 				}),
 				...(card.parentToolUseId
 					? { parentToolUseId: card.parentToolUseId }
@@ -2702,6 +2825,12 @@ interface HistoryPageCatchUp {
 	 * back on — see {@link retireAgainstTurn}.
 	 */
 	turn?: SessionTurn;
+	/**
+	 * The reading the older page came with. The back-references were read on
+	 * earlier pages, but any one reading carries any server time over to this
+	 * clock, so a row rebuilt under a card answered by one still gets a counter.
+	 */
+	clock?: ServerClockReading;
 }
 
 /**
@@ -2749,7 +2878,7 @@ export function prependHistoryPage(
 	// part of it that is true here.
 	closed = closePreviousTurn(closed);
 	for (const record of catchUp.backReferences ?? []) {
-		closed = applyBackReference(closed, record);
+		closed = applyBackReference(closed, record, { clock: catchUp.clock });
 	}
 	if (catchUp.turn) {
 		closed = retireAgainstTurn(closed, catchUp.turn);
@@ -2819,7 +2948,15 @@ export function prependHistoryPage(
 	return [...closed.slice(0, -1), merged, ...current.slice(1)];
 }
 
-export function replayHistory(records: unknown[]): Message[] {
+/**
+ * `clock` is the reading the page came with ({@link readServerClock}): without
+ * it a call still running has no start on this client's clock, and draws no
+ * counter.
+ */
+export function replayHistory(
+	records: unknown[],
+	clock?: ServerClockReading,
+): Message[] {
 	let messages: Message[] = [];
 
 	for (const record of records) {
@@ -2828,6 +2965,7 @@ export function replayHistory(records: unknown[]): Message[] {
 			messages,
 			normalizeEvent(raw),
 			readHistorySeq(raw),
+			{ clock },
 		);
 	}
 

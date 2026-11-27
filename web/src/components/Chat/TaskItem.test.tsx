@@ -56,6 +56,17 @@ describe("TaskItem", () => {
 		expect(screen.getByRole("status", { name: "Task running" })).toBeVisible();
 	});
 
+	// How long the subagent worked, from its call to its result.
+	it("shows how long a settled subagent ran", () => {
+		const T0 = Date.parse("2026-11-27T09:00:00Z");
+		render(
+			<TaskItemWithChildren
+				run={task("success", { startedAt: T0, endedAt: T0 + 72_000 })}
+			/>,
+		);
+		expect(screen.getByText("1m 12s")).toBeVisible();
+	});
+
 	it("gives each finished state its own icon", () => {
 		const { rerender } = render(<TaskItemWithChildren run={task("success")} />);
 		expect(screen.getByLabelText("succeeded")).toBeVisible();

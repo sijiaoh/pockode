@@ -244,10 +244,27 @@ export interface ToolRun {
 	fetches?: ToolFetch[];
 	/**
 	 * How long the call took, when the engine reported it as a figure (Codex
-	 * does, Claude does not). Never inferred from arrival times: a replayed
-	 * record has no honest one.
+	 * for commands and MCP calls, Claude for only a few tools). Only ever the
+	 * engine's: what Pockode observed is
+	 * `startedAt` / `endedAt`, and `toolRunDurationMs` decides between them.
 	 */
 	durationMs?: number;
+	/**
+	 * When the call started running, on the server's clock (epoch ms): its
+	 * `tool_call`'s `observed_at`, or — for a call that waited on a permission
+	 * card — that of the answer that let it run, which is later. Absent when
+	 * that moment was not observed: a record from before the stamps, or an
+	 * answer that carries none (counting from the call would count the user's
+	 * wait).
+	 */
+	startedAt?: number;
+	/**
+	 * When the call settled, on the server's clock (epoch ms): the `observed_at`
+	 * of the `tool_result` that settled it — for a backgrounded call the
+	 * outcome, never the placeholder. Never the turn's or the process's ending:
+	 * those say when Pockode gave up on the call, not when it finished.
+	 */
+	endedAt?: number;
 	/** The command's exit status, when the engine reports one separately. */
 	exitCode?: number;
 	/**
@@ -257,8 +274,11 @@ export interface ToolRun {
 	 */
 	htmlPage?: string;
 	/**
-	 * When this client first saw the call. Live only — a history record carries
-	 * no timestamp, so a replayed run gets none and draws no stopwatch.
+	 * When the call started, on this client's clock — what a live counter counts
+	 * from. The moment the start arrived, when this client watched it arrive;
+	 * otherwise `startedAt` carried over from the server clock reading its
+	 * history came with. Absent when neither is known, and then no counter is
+	 * drawn: a server time subtracted from this clock would show drift as work.
 	 */
 	seenAt?: Date;
 	/**
@@ -426,6 +446,13 @@ export type ContentPart = { id: string } & (
 			by?: PermissionAnswerer;
 			/** Set with `by`. */
 			review?: PermissionReview;
+			/**
+			 * When the answer was given, on the server's clock (epoch ms), and on
+			 * this client's; the start of the call a row rebuilt under this card
+			 * is (`ToolRun.startedAt` / `seenAt`). Absent when not known.
+			 */
+			answeredAt?: number;
+			answerSeenAt?: Date;
 			/** Carried over from the unfiled row it took the place of; see `text`. */
 			parentToolUseId?: string;
 	  }
@@ -1285,6 +1312,13 @@ export interface ChatMessagesHistoryPage {
 	history: unknown[];
 	has_more: boolean;
 	next_before_seq?: HistorySeq;
+	/**
+	 * The server's clock when it built this reply (RFC 3339). What a replayed
+	 * record's `observed_at` is measured against, so a live counter never
+	 * subtracts a server time from this device's clock. Absent from a server
+	 * that predates it.
+	 */
+	server_time?: string;
 }
 
 export interface ChatMessagesSubscribeResult extends ChatMessagesHistoryPage {
@@ -1439,6 +1473,11 @@ export type ServerNotification =
 			 * See the `text` record.
 			 */
 			parent_tool_use_id?: string;
+			/**
+			 * When the server saw this record come off the CLI (RFC 3339, the
+			 * server's clock). Absent on a record written before it was stamped.
+			 */
+			observed_at?: string;
 	  }
 	| {
 			type: "tool_result";
@@ -1468,6 +1507,11 @@ export type ServerNotification =
 			html_page?: string;
 			/** See the `text` record. */
 			parent_tool_use_id?: string;
+			/**
+			 * See `tool_call`. Also absent on `background_lost`, which Pockode
+			 * writes when the next process starts, not when the work died.
+			 */
+			observed_at?: string;
 	  }
 	| {
 			/**

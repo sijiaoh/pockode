@@ -24,6 +24,7 @@ import {
 	stampMessageAnchorSeq,
 	updatePermissionRequestStatus,
 } from "./messageReducer";
+import { toolRunDurationMs } from "./toolRun";
 
 // Deterministic but distinct ids: whether a message keeps its id or gets a
 // fresh one is itself under test (a new id would remount its bubble).
@@ -3836,8 +3837,8 @@ describe("messageReducer", () => {
 			});
 		});
 
-		// Only a call this client watched start has an honest clock; a replayed
-		// one would otherwise start its stopwatch at page load.
+		// Without a server clock reading a replayed call has no start on this
+		// client's clock; one begun here would start its stopwatch at page load.
 		it("times only the calls this client saw start", () => {
 			const live = applyServerEvent([streamingRun()], call("t1"), undefined, {
 				live: true,
@@ -5565,6 +5566,258 @@ describe("messageReducer", () => {
 					{ type: "text", content: "half\n\nan answer" },
 				]);
 			});
+		});
+	});
+});
+
+// docs/tool-call-ui.md#elapsed-and-duration-meta: where a run's start and end
+// come from, and so what `toolRunDurationMs` and the live counter read.
+describe("observed run times", () => {
+	const T0 = Date.parse("2026-11-27T09:00:00Z");
+	const at = (ms: number) => new Date(T0 + ms).toISOString();
+	const bash = (extra: Record<string, unknown> = {}) => ({
+		type: "tool_call",
+		tool_name: "Bash",
+		tool_input: { command: "sleep 3" },
+		tool_use_id: "t1",
+		...extra,
+	});
+	const result = (extra: Record<string, unknown> = {}) => ({
+		type: "tool_result",
+		tool_use_id: "t1",
+		tool_result: "ok",
+		...extra,
+	});
+	const ask = {
+		type: "permission_request",
+		request_id: "r1",
+		tool_name: "Bash",
+		tool_input: { command: "sleep 3" },
+		tool_use_id: "t1",
+	};
+	const allow = (extra: Record<string, unknown> = {}) => ({
+		type: "permission_response",
+		request_id: "r1",
+		choice: "allow",
+		...extra,
+	});
+	const go = { type: "message", content: "go" };
+	const runOf = (messages: Message[]): ToolRun => {
+		const parts = (messages[messages.length - 1] as AssistantMessage).parts;
+		const part = parts.find((p) => p.type === "tool_call");
+		if (part?.type !== "tool_call") throw new Error("no run");
+		return part.tool;
+	};
+
+	it("measures a run from its call to its result on the server's clock", () => {
+		const run = runOf(
+			replayHistory([
+				go,
+				bash({ observed_at: at(0) }),
+				result({ observed_at: at(3000) }),
+			]),
+		);
+		expect(run).toMatchObject({ startedAt: T0, endedAt: T0 + 3000 });
+		expect(toolRunDurationMs(run)).toBe(3000);
+	});
+
+	it("prefers the duration the engine reported", () => {
+		const run = runOf(
+			replayHistory([
+				go,
+				bash({ observed_at: at(0) }),
+				result({ observed_at: at(3000), duration_ms: 1200 }),
+			]),
+		);
+		expect(toolRunDurationMs(run)).toBe(1200);
+	});
+
+	// Records from before the stamps: nothing measured, so nothing — not zero.
+	it("has no duration when the records carry no times", () => {
+		const run = runOf(replayHistory([go, bash(), result()]));
+		expect(run.startedAt).toBeUndefined();
+		expect(run.endedAt).toBeUndefined();
+		expect(toolRunDurationMs(run)).toBeUndefined();
+	});
+
+	// Otherwise a call the user took a minute to approve reads `1m 5s`.
+	it("starts a call that waited on a card from its answer", () => {
+		const run = runOf(
+			replayHistory([
+				go,
+				bash({ observed_at: at(0) }),
+				ask,
+				allow({ observed_at: at(60_000) }),
+				result({ observed_at: at(65_000) }),
+			]),
+		);
+		expect(toolRunDurationMs(run)).toBe(5000);
+	});
+
+	it("measures nothing when the answer that let the call run has no time", () => {
+		const run = runOf(
+			replayHistory([
+				go,
+				bash({ observed_at: at(0) }),
+				ask,
+				allow(),
+				result({ observed_at: at(65_000) }),
+			]),
+		);
+		expect(toolRunDurationMs(run)).toBeUndefined();
+	});
+
+	// A press updates the card's status before the answer's record comes back;
+	// the record still has to leave its time.
+	it("takes the answer's time even when a press already settled the card", () => {
+		let messages = replayHistory([go, bash({ observed_at: at(0) }), ask]);
+		messages = updatePermissionRequestStatus(messages, "r1", "allowed");
+		for (const record of [
+			allow({ observed_at: at(60_000) }),
+			result({ observed_at: at(65_000) }),
+		]) {
+			messages = applyServerEvent(messages, normalizeEvent(record));
+		}
+		expect(toolRunDurationMs(runOf(messages))).toBe(5000);
+	});
+
+	it("ends a backgrounded call at its outcome, not its placeholder", () => {
+		const records = [
+			go,
+			bash({ observed_at: at(0) }),
+			result({ subtype: "background_started", observed_at: at(1000) }),
+		];
+		const placed = runOf(replayHistory(records));
+		expect(placed.status).toBe("background");
+		expect(placed.endedAt).toBeUndefined();
+
+		const settled = runOf(
+			replayHistory([
+				...records,
+				{ type: "done" },
+				result({ subtype: "background_result", observed_at: at(90_000) }),
+			]),
+		);
+		expect(toolRunDurationMs(settled)).toBe(90_000);
+	});
+
+	// The interrupt says when Pockode gave up, not when the call ended.
+	it("gives an interrupted call no end unless its result came afterwards", () => {
+		const records = [
+			go,
+			bash({ observed_at: at(0) }),
+			{ type: "interrupted", observed_at: at(2000) },
+		];
+		const cut = runOf(replayHistory(records));
+		expect(cut.status).toBe("interrupted");
+		expect(toolRunDurationMs(cut)).toBeUndefined();
+
+		const late = runOf(
+			replayHistory([...records, result({ observed_at: at(4000) })]),
+		);
+		expect(late.status).toBe("interrupted");
+		expect(toolRunDurationMs(late)).toBe(4000);
+	});
+
+	describe("the live counter's start", () => {
+		const clock = { serverTime: T0 + 240_000, receivedAt: 5_000_000 };
+
+		// Four minutes in by the server's clock is four minutes before the reply
+		// arrived here, whatever this clock says the server's time is.
+		it("carries a replayed start over through the page's clock reading", () => {
+			const run = runOf(
+				replayHistory([go, bash({ observed_at: at(0) })], clock),
+			);
+			expect(run.seenAt?.getTime()).toBe(clock.receivedAt - 240_000);
+		});
+
+		it("has none for a replayed start without a reading", () => {
+			const run = runOf(replayHistory([go, bash({ observed_at: at(0) })]));
+			expect(run.seenAt).toBeUndefined();
+		});
+
+		// The card is on an older page and its answer on one already loaded: the
+		// answer comes back as a back-reference, and the older page's reading is
+		// enough to place it on this clock.
+		it("places an answer replayed as a back-reference through the page's reading", () => {
+			const older = replayHistory(
+				[go, bash({ observed_at: at(0) }), ask],
+				clock,
+			);
+			const joined = prependHistoryPage(older, [], {
+				backReferences: [allow({ observed_at: at(60_000) })],
+				clock,
+			});
+			const run = runOf(applyToolActivitySnapshot(joined, { t1: "Sleeping" }));
+			expect(run.startedAt).toBe(T0 + 60_000);
+			expect(run.seenAt?.getTime()).toBe(clock.receivedAt - 180_000);
+		});
+
+		// A reload in the middle of a subagent: the subagent row and the call
+		// running inside it both count on from where they were.
+		it("carries a running subagent and its running child over the same way", () => {
+			const subagent = runOf(
+				replayHistory(
+					[
+						go,
+						{
+							type: "tool_call",
+							tool_name: "Agent",
+							tool_input: { description: "explore" },
+							tool_use_id: "t1",
+							observed_at: at(0),
+						},
+						bash({
+							tool_use_id: "c1",
+							parent_tool_use_id: "t1",
+							observed_at: at(200_000),
+						}),
+					],
+					clock,
+				),
+			);
+			expect(subagent.seenAt?.getTime()).toBe(clock.receivedAt - 240_000);
+			const child = subagent.children?.find((p) => p.type === "tool_call");
+			if (child?.type !== "tool_call") throw new Error("no child run");
+			expect(child.tool.status).toBe("running");
+			expect(child.tool.seenAt?.getTime()).toBe(clock.receivedAt - 40_000);
+		});
+
+		it("gives a row rebuilt under an answered card the answer's start", () => {
+			const replayed = runOf(
+				applyToolActivitySnapshot(
+					replayHistory(
+						[
+							go,
+							bash({ observed_at: at(0) }),
+							ask,
+							allow({ observed_at: at(60_000) }),
+						],
+						clock,
+					),
+					{ t1: "Sleeping" },
+				),
+			);
+			expect(replayed).toMatchObject({
+				status: "running",
+				startedAt: T0 + 60_000,
+			});
+			expect(replayed.seenAt?.getTime()).toBe(clock.receivedAt - 180_000);
+
+			let live = replayHistory([go, bash({ observed_at: at(0) }), ask]);
+			const before = Date.now();
+			live = applyServerEvent(
+				live,
+				normalizeEvent(allow({ observed_at: at(60_000) })),
+				undefined,
+				{ live: true },
+			);
+			live = applyServerEvent(live, {
+				type: "tool_activity",
+				toolUseId: "t1",
+				activity: "Sleeping",
+			});
+			expect(runOf(live).seenAt?.getTime()).toBeGreaterThanOrEqual(before);
 		});
 	});
 });

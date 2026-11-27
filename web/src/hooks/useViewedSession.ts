@@ -19,6 +19,11 @@ export interface ViewedSession {
 	 * handed over — and null until it arrives.
 	 */
 	page: ChatMessagesHistoryPage | null;
+	/**
+	 * When `page` reached this client (epoch ms), which its `server_time` is
+	 * read against. Not when it is installed: a cached page arrived earlier.
+	 */
+	pageReceivedAt: number;
 	/** Whether both reads have answered, whether or not they answered well. */
 	isSettled: boolean;
 	/** The server said there is no such session in that worktree. */
@@ -92,6 +97,7 @@ export function useViewedSession(
 	const detailError = detail.error;
 	const pageData = page.data;
 	const pageError = page.error;
+	const pageReceivedAt = page.dataUpdatedAt;
 
 	// A disabled query still hands back whatever is cached under its key, and the
 	// same session is reachable both ways — read out of main from another
@@ -106,6 +112,7 @@ export function useViewedSession(
 			worktree,
 			detail: detailData ?? null,
 			page: pageData ?? null,
+			pageReceivedAt,
 			isSettled:
 				(detailData !== undefined || detailError !== null) &&
 				(pageData !== undefined || pageError !== null),
@@ -117,5 +124,13 @@ export function useViewedSession(
 			// ways: "it is not there" is final, anything else is worth reloading.
 			error: isMissing ? null : readError(detailError, pageError),
 		};
-	}, [isEnabled, worktree, detailData, detailError, pageData, pageError]);
+	}, [
+		isEnabled,
+		worktree,
+		detailData,
+		detailError,
+		pageData,
+		pageError,
+		pageReceivedAt,
+	]);
 }
