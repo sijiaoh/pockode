@@ -22,11 +22,12 @@ the details:
 - **The agents** — the subagents still working, wherever their rows are: the
   `⧉ 2` chip, and the panel's list that goes to each one.
 
-When the turn settles, one more line says what the work came to — `Worked 2m 13s
-· 14 tool calls · 3 files changed`, between the work and the answer: the
-header of the turn's changes card, or a line alone when the turn changed no
-file ([tool-call-ui.md](tool-call-ui.md#the-work-line)); the rules below hold
-for it.
+When the turn settles, its work figures say what the work came to — `Worked
+2m 13s · 14 tool calls · 3 files changed`, at the turn's end: the header of
+the turn's changes card, above the turn-end row, or the right end of
+that row when the turn changed no file
+([tool-call-ui.md](tool-call-ui.md#the-work-figures)); the rules below hold
+for them.
 
 The surfaces around them are [tool-call-ui.md](tool-call-ui.md) (the list,
 groups, the turn's changes) and [lifecycle-ui.md](lifecycle-ui.md) (`Activity`,
@@ -67,7 +68,7 @@ recorded is left out, never estimated by the client from when records reached
 it — the rule the tool row's meta already follows
 ([tool-call-ui.md](tool-call-ui.md#elapsed-and-duration-meta)).
 
-**Times have one format.** Both elements, and the work line they settle
+**Times have one format.** Both elements, and the work figures they settle
 into, use the live tool counter's: whole
 seconds below a minute (`12s`), then two units (`4m 12s`, `1h 12m`). Not the
 finished tool row's tenths (`1.2s`): a thinking time and a turn clock are read
@@ -316,8 +317,16 @@ shows at all. The plan and the agents (§4) are chips inside that line, not
 lines of their own, so they come and go on their own conditions and move
 nothing; a turn that blocks and resumes moves nothing; and when the turn
 settles the turn-end row takes the same height. An agents chip that outlives
-the turn moves to the right of that row (§4.3), so settling moves nothing
-either.
+the turn moves to the right end of that row (§4.3), in the slot the work
+figures otherwise hold, and the figures take it when the chip goes. One slot,
+not two side by side: beside Copy and Fork a phone's row has room for one of
+them ([tool-call-ui.md](tool-call-ui.md#the-work-figures) measures it), so
+both would truncate, and the figures would slide sideways when the chip left;
+and the chip is live where the figures are history. The swap moves nothing,
+since the row's height is fixed. What settling does add is the turn's changes
+card, above that row, when the turn changed files
+([tool-call-ui.md](tool-call-ui.md#the-turns-changes)) — at the tail, where
+only an unread message can be below it.
 
 ### 2.2 When it shows
 
@@ -612,7 +621,7 @@ chip shows what is loaded. It goes when the turn settles, with the tail line:
   tests" at the top of a new turn the agent has not planned yet would claim
   something nobody said this turn. The chip comes back with the turn's first
   update. Between turns there is nothing "now" about a plan: the rows hold it,
-  and the work line says what the turn did.
+  and the work figures say what the turn did.
 - **A subagent's plan is its own.** A Codex plan update from a child thread is
   a `Plan` row in that subagent's Process. A Claude subagent's `TodoWrite`
   produces no record (§4.6): its rows in its Process are its plan's history.
@@ -688,10 +697,12 @@ named as live:
   [code/frontend-state.md](code/frontend-state.md#tool-runs)). In that last
   case there is no reply being written, so the chip, with the named agent as
   its words — `⧉ 1 · code-reviewer  Checking the 503 path… ›` — goes on the
-  **right of the turn-end row** of the **last assistant message in the
+  **right end of the turn-end row** of the **last assistant message in the
   transcript** (the run may be in an older reply, and the chip is about now,
-  not about that reply), and opens a panel of the agents alone. With no Copy
-  or Fork on that row it stands alone in the same box. It leaves when the run
+  not about that reply), and opens a panel of the agents alone. That end is
+  the work figures' slot when the turn changed no file, and the chip holds it
+  in their place (§2.1). With no Copy or Fork on that row it stands alone in
+  the same box. It leaves when the run
   settles: by its notification, or at the latest by `process_ended`, which the
   restart repair writes at the next server start if the server died without
   writing one
@@ -814,8 +825,10 @@ bubble's slot reads. It is:
 slot of the message whose id is `overviewMessageId`. `MessageItem` draws a
 `TurnTail` for every pending bubble, including a superseded one still
 `streaming`, so the id check is what keeps them in one bubble. In the settled
-branch `TurnEnd` draws `MessageActions` with the agents chip on its right on
-that one message. Because it comes
+branch `SettledTurnEnd` draws the changes card when the turn changed files,
+then `TurnEnd`, which draws `MessageActions` and, on that one message only,
+hands it the agents chip as `aside` — the row's right end, which
+`MessageActions` fills with `aside ?? figures`. Because it comes
 through the context, the plan or an agent changing re-renders the one slot
 that shows them and no other bubble (the reason `TurnTailContext` exists). An
 entry is drawn from the run itself, the object the reducer holds — taken as its
@@ -1050,8 +1063,8 @@ and each `TaskList` replaces the seed with it.
     explanation first;
   - `toolGroups` counts it in the `todo` category, so it folds into the same
     `Updated todos` segment;
-  - the work line counts it as a tool call, and a reply holding only plan
-    updates gets a work line. This is deliberate: it is Codex's `update_plan`,
+  - the work figures count it as a tool call, and a reply holding only plan
+    updates gets work figures. This is deliberate: it is Codex's `update_plan`,
     a call the model made, and a Claude `TodoWrite` is counted the same way.
     Leaving it out would make the same act count on one CLI and not on the
     other.
@@ -1133,7 +1146,7 @@ a row:
 | a message sent mid-turn is unread | strip receipt row | unaffected; the receipt is about the message, the line about the turn |
 | the turn can be stopped | Stop in the composer | no Stop of its own |
 | how the turn ended | the turn-end row, error / `Interrupted` lines | gone |
-| how long the turn worked, how many calls, what it changed | [the work line](tool-call-ui.md#the-work-line), once settled | gone — `Working 2m 12s` is the turn so far, `Worked` the reply's measured span |
+| how long the turn worked, how many calls, what it changed | [the work figures](tool-call-ui.md#the-work-figures), once settled — the changes card's header, or the turn-end row | gone — `Working 2m 12s` is the turn so far, `Worked` the reply's measured span |
 
 The tail line and a running tool row can be on screen together, both moving.
 That is not duplication — one is a call, one is the turn — and it is what was

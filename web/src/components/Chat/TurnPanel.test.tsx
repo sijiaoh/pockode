@@ -356,6 +356,35 @@ describe("the status line's agents", () => {
 		).not.toBeInTheDocument();
 	});
 
+	// One right-end slot on the turn-end row: live state over history.
+	it("holds the turn-end row's right end in place of the work figures, which take it when the chip goes", () => {
+		const settled = (status: ToolRunStatus) => [
+			reply(
+				"m",
+				[
+					read("r", "/repo/sender.go"),
+					agent("b", "code-reviewer", "Review", status),
+					said("t", "Started the review."),
+				],
+				"complete",
+			),
+		];
+		const { rerender } = render(
+			<Transcript messages={settled("background")} phase="idle" />,
+		);
+		const row = () =>
+			screen.getByRole("group", { name: "Message actions" })
+				.parentElement as HTMLElement;
+		expect(row()).toContainElement(statusLine("1 agent running, details"));
+		expect(row()).not.toHaveTextContent(/tool call/);
+
+		rerender(<Transcript messages={settled("success")} phase="idle" />);
+		expect(
+			screen.queryByRole("button", { name: STATUS }),
+		).not.toBeInTheDocument();
+		expect(within(row()).getByText("2 tool calls")).toBeInTheDocument();
+	});
+
 	it("is drawn in one bubble only", () => {
 		const messages: Message[] = [
 			// A superseded reply left streaming, and the open one.

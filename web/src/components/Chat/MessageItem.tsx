@@ -38,10 +38,12 @@ import {
 	toolSummary,
 	toolSummaryLine,
 } from "../../lib/toolSummary";
-import { turnWork } from "../../lib/turnWork";
+import { turnChanges } from "../../lib/turnChanges";
+import { type TurnWork, turnWork } from "../../lib/turnWork";
 import { useWSStore } from "../../lib/wsStore";
 import type { FileBlock } from "../../types/content";
 import type {
+	AssistantMessage,
 	ContentPart,
 	ExpiryReason,
 	Message,
@@ -1297,7 +1299,7 @@ export interface MessageItemProps {
 	isFirst?: boolean;
 	/**
 	 * First loaded, with older pages still above: a reply here may be the back
-	 * half of one the page boundary cut, so its work line counts nothing it
+	 * half of one the page boundary cut, so its work figures count nothing it
 	 * cannot see the start of.
 	 */
 	olderPagesAbove?: boolean;
@@ -1601,6 +1603,57 @@ function PockodeCommandItem({
 	);
 }
 
+/**
+ * What closes a settled turn, after its ending lines: the changes card, then
+ * the turn-end row. The work figures go on the card when the turn changed files
+ * and on the row when it did not, never both (docs/tool-call-ui.md#the-turns-changes);
+ * on the row they give way to the agents chip while an agent outlives the turn.
+ */
+function SettledTurnEnd({
+	message,
+	work,
+	onOpenFile,
+	copyText,
+	onFork,
+	forkBlocked,
+}: {
+	message: AssistantMessage;
+	work: TurnWork | undefined;
+	onOpenFile?: (path: string) => void;
+	copyText?: string;
+	onFork?: () => void;
+	forkBlocked?: ForkBlocked;
+}) {
+	const workDir = useWSStore((state) => state.workDir);
+	// Once, here: it diffs whole files for a Codex add or delete, and both the
+	// card and the row depend on whether there are any. Keyed on whether there
+	// is work, not on `work`, which is a new object every render.
+	const madeCalls = work !== undefined;
+	const changes = useMemo(
+		() => (madeCalls ? turnChanges(message.parts, workDir) : undefined),
+		[madeCalls, message.parts, workDir],
+	);
+	const changedFiles = !!changes && changes.files.length > 0;
+	return (
+		<>
+			{work && changes && (
+				<TurnChangesCard
+					changes={changes}
+					work={work}
+					onOpenFile={onOpenFile}
+				/>
+			)}
+			<TurnEnd
+				messageId={message.id}
+				copyText={copyText}
+				onFork={onFork}
+				forkBlocked={forkBlocked}
+				work={changedFiles ? undefined : work}
+			/>
+		</>
+	);
+}
+
 const MessageItem = memo(function MessageItem({
 	message,
 	sessionId,
@@ -1795,8 +1848,8 @@ const MessageItem = memo(function MessageItem({
 		.join("\n\n");
 	const pending =
 		message.status === "sending" || message.status === "streaming";
-	// Never on the reply being written: until it is over any text could still
-	// be followed by another call, so which of it is the answer is not known.
+	// Never on the reply being written: the tail line owns the running turn,
+	// and neither its figures nor its files are final until it ends.
 	const work = pending ? undefined : turnWork(message, !!olderPagesAbove);
 
 	// Assistant message: no bubble, the full reading width. Not `overflow-hidden`
@@ -1823,20 +1876,6 @@ const MessageItem = memo(function MessageItem({
 							<PartBlocks
 								items={shownParts}
 								wrapperProps={anchorCandidateProps}
-								// Where the work ends and the answer starts: under the block of
-								// the last call, above everything said after it.
-								after={
-									work && {
-										partId: work.lastCallPartId,
-										node: (
-											<TurnChangesCard
-												parts={message.parts}
-												work={work}
-												onOpenFile={onOpenFile}
-											/>
-										),
-									}
-								}
 								renderPart={({ part, index }) => {
 									const plain = (
 										<ContentPartItem
@@ -1907,8 +1946,10 @@ const MessageItem = memo(function MessageItem({
 							awaitedFetch={message.awaitedFetch}
 						/>
 					) : (
-						<TurnEnd
-							messageId={message.id}
+						<SettledTurnEnd
+							message={message}
+							work={work}
+							onOpenFile={onOpenFile}
 							copyText={copyText || undefined}
 							onFork={onFork}
 							forkBlocked={forkBlocked}

@@ -3,7 +3,8 @@ import userEvent from "@testing-library/user-event";
 import type { ComponentProps } from "react";
 import { describe, expect, it, vi } from "vitest";
 import type { ProposedChangeData } from "../../lib/proposedChange";
-import { turnWork } from "../../lib/turnWork";
+import { turnChanges } from "../../lib/turnChanges";
+import { type TurnWork, turnWork } from "../../lib/turnWork";
 import type { AssistantMessage, ContentPart } from "../../types/message";
 import MessageItem from "./MessageItem";
 import MessageList from "./MessageList";
@@ -61,22 +62,37 @@ const write = (id: string, path: string, content: string, result: string) =>
 
 const card = () => screen.queryByRole("group", { name: /changed$/ });
 
-/** The card as a settled message with these parts draws it, its span unmeasured. */
+/**
+ * The card as a settled message with these parts draws it, its span
+ * unmeasured unless `work` says otherwise.
+ */
 function Card({
 	parts,
+	work,
 	...props
-}: Omit<ComponentProps<typeof TurnChangesCard>, "work">) {
-	const work = turnWork(
-		{
-			id: "m",
-			role: "assistant",
-			parts,
-			status: "complete",
-			createdAt: new Date(),
-		},
-		false,
-	);
-	return work ? <TurnChangesCard parts={parts} work={work} {...props} /> : null;
+}: Omit<ComponentProps<typeof TurnChangesCard>, "work" | "changes"> & {
+	parts: ContentPart[];
+	work?: TurnWork;
+}) {
+	const counted =
+		work ??
+		turnWork(
+			{
+				id: "m",
+				role: "assistant",
+				parts,
+				status: "complete",
+				createdAt: new Date(),
+			},
+			false,
+		);
+	return counted ? (
+		<TurnChangesCard
+			changes={turnChanges(parts, "/repo")}
+			work={counted}
+			{...props}
+		/>
+	) : null;
 }
 
 describe("TurnChangesCard", () => {
@@ -288,8 +304,8 @@ describe("TurnChangesCard", () => {
 		expect(card()).toHaveAccessibleName("9 tool calls, 9 files changed");
 	});
 
-	it("draws the line alone when the calls changed no file", () => {
-		render(
+	it("draws nothing when the calls changed no file", () => {
+		const { container } = render(
 			<Card
 				parts={[
 					{
@@ -309,16 +325,14 @@ describe("TurnChangesCard", () => {
 				]}
 			/>,
 		);
-		expect(card()).not.toBeInTheDocument();
-		expect(screen.queryByRole("button")).not.toBeInTheDocument();
-		expect(screen.getByText("1 tool call")).toBeInTheDocument();
+		expect(container).toBeEmptyDOMElement();
 	});
 
 	it("says how long the reply worked, when both ends were stamped", () => {
 		render(
-			<TurnChangesCard
+			<Card
 				parts={[edit("1", "/repo/a.ts", "a", "b")]}
-				work={{ lastCallPartId: "call-1", calls: 6, durationMs: 133_400 }}
+				work={{ calls: 6, durationMs: 133_400 }}
 			/>,
 		);
 		expect(card()).toHaveAccessibleName(
@@ -332,28 +346,13 @@ describe("TurnChangesCard", () => {
 	});
 
 	it("leaves a reply the oldest page may have cut at its files", () => {
-		const cut = { lastCallPartId: "call-1" };
-		const { container, rerender } = render(
-			<TurnChangesCard
-				parts={[edit("1", "/repo/a.ts", "a", "b")]}
-				work={cut}
-			/>,
-		);
+		render(<Card parts={[edit("1", "/repo/a.ts", "a", "b")]} work={{}} />);
 		expect(card()).toHaveAccessibleName("1 file changed");
-
-		rerender(
-			<TurnChangesCard
-				parts={[
-					{
-						type: "tool_call",
-						id: "call-1",
-						tool: { id: "1", name: "Read", input: {}, status: "success" },
-					},
-				]}
-				work={cut}
-			/>,
-		);
-		expect(container).toBeEmptyDOMElement();
+		// Alone, the entry is never shortened to a fragment: no part of it is
+		// left for the container query to hide.
+		expect(
+			within(card() as HTMLElement).queryByText(/^changed$/),
+		).not.toBeInTheDocument();
 	});
 
 	describe("in a message", () => {
@@ -389,7 +388,7 @@ describe("TurnChangesCard", () => {
 			expect(card()).toBeInTheDocument();
 		});
 
-		it("stands between the work and the answer, above how the turn ended", () => {
+		it("closes the turn: after the answer and how it ended, above the actions", () => {
 			render(
 				<MessageItem
 					sessionId="s"
@@ -402,16 +401,85 @@ describe("TurnChangesCard", () => {
 				/>,
 			);
 			const group = card() as HTMLElement;
-			// Text between two lists is narration, among the work.
-			expect(follows(screen.getByText("Now the other one."), group)).toBe(true);
-			expect(follows(group, screen.getByText("Both done."))).toBe(true);
-			expect(follows(group, screen.getByText("Interrupted"))).toBe(true);
+			const actions = screen.getByRole("group", { name: "Message actions" });
+			expect(follows(screen.getByText("Both done."), group)).toBe(true);
+			expect(follows(screen.getByText("Interrupted"), group)).toBe(true);
+			expect(follows(group, actions)).toBe(true);
+			// The figures are the card's, not said a second time on the row.
+			expect(actions.parentElement).not.toHaveTextContent(/tool call/);
+		});
+
+		const reads = (status: AssistantMessage["status"] = "complete") =>
+			message(status, [
+				{
+					type: "tool_call",
+					id: "call-1",
+					tool: { id: "1", name: "Read", input: {}, status: "success" },
+				},
+				text("1", "It is in sender.go."),
+			]);
+		const actionsRow = () =>
+			screen.getByRole("group", { name: "Message actions" })
+				.parentElement as HTMLElement;
+
+		it("puts the figures of a turn that changed no file on the turn-end row", () => {
+			const { rerender } = render(
+				<MessageItem
+					sessionId="s"
+					message={{ ...reads("streaming"), openedAt: 0, endedAt: 48_000 }}
+				/>,
+			);
+			expect(screen.queryByText(/tool call/)).not.toBeInTheDocument();
+
+			rerender(
+				<MessageItem
+					sessionId="s"
+					message={{ ...reads(), openedAt: 0, endedAt: 48_000 }}
+				/>,
+			);
+			expect(card()).not.toBeInTheDocument();
 			expect(
-				follows(
-					screen.getByText("Both done."),
+				within(actionsRow()).getByText("Worked 48 seconds, 1 tool call"),
+			).toBeInTheDocument();
+			// Not an action: outside the group the buttons are in.
+			expect(
+				within(
 					screen.getByRole("group", { name: "Message actions" }),
-				),
-			).toBe(true);
+				).queryByText(/tool call/),
+			).not.toBeInTheDocument();
+		});
+
+		it("shows no figures on the row for a reply the oldest page may have cut", () => {
+			render(
+				<MessageItem
+					sessionId="s"
+					olderPagesAbove
+					message={{ ...reads(), endedAt: 5_000 }}
+				/>,
+			);
+			expect(actionsRow()).toBeInTheDocument();
+			expect(screen.queryByText(/tool call|Worked/)).not.toBeInTheDocument();
+		});
+
+		// A subagent the turn left running edits a file after it settled.
+		it("moves the figures onto the card when a late edit brings one", () => {
+			const settled = reads();
+			const { rerender } = render(
+				<MessageItem sessionId="s" message={settled} />,
+			);
+			expect(within(actionsRow()).getByText("1 tool call")).toBeInTheDocument();
+
+			rerender(
+				<MessageItem
+					sessionId="s"
+					message={{
+						...settled,
+						parts: [...settled.parts, edit("2", "/repo/a.ts", "a", "b")],
+					}}
+				/>,
+			);
+			expect(card()).toHaveAccessibleName("2 tool calls, 1 file changed");
+			expect(actionsRow()).not.toHaveTextContent(/tool call/);
 		});
 
 		it("draws nothing for a reply that made no call", () => {
@@ -462,7 +530,7 @@ describe("TurnChangesCard", () => {
 		});
 
 		// A subagent's steps left flat by the page boundary are the loaded
-		// half's work: its files are listed, below them, with nothing counted.
+		// half's work: its files are listed, with nothing counted.
 		it("lists the files of a reply whose only calls are flat steps", () => {
 			const step = (part: ContentPart) => ({
 				...part,
@@ -477,9 +545,7 @@ describe("TurnChangesCard", () => {
 					])}
 				/>,
 			);
-			const group = card() as HTMLElement;
-			expect(group).toHaveAccessibleName("1 file changed");
-			expect(follows(group, screen.getByText("Done."))).toBe(true);
+			expect(card()).toHaveAccessibleName("1 file changed");
 		});
 
 		it("gives each reply a read point split off its own span", () => {

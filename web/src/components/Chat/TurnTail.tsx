@@ -546,8 +546,8 @@ function LingeringAgents({
 
 /**
  * The turn-end slot of a settled reply: the turn-end row, holding the status
- * line's height, with the agents chip on its right on the one reply that
- * `overviewMessageId` names after the turn.
+ * line's height, with the agents chip at its right end — in place of the work
+ * figures — on the one reply that `overviewMessageId` names after the turn.
  */
 export function TurnEnd({
 	messageId,

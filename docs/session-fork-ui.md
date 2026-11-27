@@ -227,8 +227,14 @@ split by a mid-reply message is two messages, each a valid anchor.
 - **A session that cannot fork** has only Copy. A message with neither text nor
   fork draws no row once settled.
 - The buttons are `iconButtonClass()` (they grow to 44px under a thumb, 8px
-  apart), at 60% opacity until hover or focus. The row's negative left margin
-  puts the first **icon**, not its box, on the text's left edge.
+  apart), at 60% opacity until hover or focus. The button group's negative left
+  margin puts the first **icon**, not its box, on the text's left edge.
+- **A turn that made calls and changed no file** has its work figures at the
+  row's right end, outside the button group
+  ([tool-call-ui.md](tool-call-ui.md#the-work-figures)); a turn that changed
+  files has them on its changes card, just above. An agents chip that outlives
+  the turn takes that right end in their place, and alone still makes the row
+  ([turn-progress-ui.md §2.1](turn-progress-ui.md#21-where-it-is)).
 
 ### Why the agent's side has a standing row after all
 
@@ -674,7 +680,7 @@ New, all in `web/src/components/Chat/` unless noted:
 | File | Role |
 | --- | --- |
 | `MessageMenuTrigger.tsx` | The slot beside a user row and the `…` in it, plus whether its menu is open. Props: `{ onFork?: () => void; forkBlocked?: "nothing-before" \| "no-anchor-seq" \| "pending-request" }`. No `onFork` means this message is not a turn — the slot renders, the glyph does not. It also owns the `ForkBlocked` type, though only `nothing-before` is spelled there: the other two are `forkAnchor.ts`'s `ForkUnavailable`, declared beside the check that produces them, since a utility module does not import from the components that use it. `MessageMenu` imports `ForkBlocked`, as a type, which is erased at compile time and so is not a runtime cycle |
-| `MessageActions.tsx` | The agent's turn-end row (*The agent's turn-end row*) under a settled message: Copy and Fork, plus the copy state and whether the menu a blocked Fork opens is open. Props: `{ copyText?; onFork?; forkBlocked? }`. While the message is pending, `TurnTail.tsx` holds the slot instead ([turn-progress-ui.md §2](turn-progress-ui.md#2-the-tail-line)) |
+| `MessageActions.tsx` | The agent's turn-end row (*The agent's turn-end row*) under a settled message: Copy and Fork, plus the copy state and whether the menu a blocked Fork opens is open. Props: `{ copyText?; onFork?; forkBlocked?; work?; aside? }` — `work` only for a turn that changed no file, whose figures the row draws at its right end; `aside` the agents chip, which takes that end in their place. While the message is pending, `TurnTail.tsx` holds the slot instead ([turn-progress-ui.md §2](turn-progress-ui.md#2-the-tail-line)) |
 | `MessageMenu.tsx` | The `Sheet` behind the user's `…` and the agent's blocked Fork: everything this message can do, titled by speaker — **Your message** / **Agent message**, since a sheet here names its subject the way `Fork session` and a file's own name do. One list for both sides, with no *Copy text*: the only side with text to copy stands Copy as a button. The rules for adding a row live at its top, where the list is |
 | `ForkSessionSheet.tsx` | The confirm sheet above. Props: `{ anchor, droppedCount, agentType, defaultTitle, isForking, error, onFork, onClose }` |
 | `ForkOriginBanner.tsx` | The lineage row at the top of `MessageList` |
