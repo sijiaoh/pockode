@@ -6,11 +6,12 @@ import {
 	useMemo,
 	useState,
 } from "react";
-import { oldestPart, partBlocks } from "../../lib/partTree";
+import { findToolRunPath, oldestPart, partBlocks } from "../../lib/partTree";
 import { rowEntries } from "../../lib/toolGroups";
 import type { ContentPart } from "../../types/message";
 import { RowExpansionContext, RowFrameContext } from "./rowExpansionContext";
 import { ToolGroupSummary } from "./ToolGroupSummary";
+import { useRevealRequest } from "./toolJumpContext";
 import { OpenedThoughtsContext } from "./turnTailContext";
 import { foldPlaceProps } from "./useFoldLanding";
 
@@ -111,6 +112,18 @@ function RowList<T extends Item>({
 			if (!next.delete(key)) next.add(key);
 			return next;
 		});
+
+	// A jump to a row folded into a group opens the group, as the user's tap
+	// on its summary would; a subagent row in it opens its own Process.
+	useRevealRequest((toolUseId) => {
+		for (const entry of rowEntries(items)) {
+			if (entry.kind !== "item" || entry.group === undefined) continue;
+			if (!findToolRunPath([entry.item.part], toolUseId)) continue;
+			const key = entry.group;
+			setOpenGroups((current) => new Set(current).add(key));
+			return;
+		}
+	});
 
 	// What the user chose for a row belongs to its call: the row rebuilt once a
 	// card is answered is a new part, and opens as the one the card replaced

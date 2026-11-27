@@ -31,6 +31,7 @@ import { anchorCandidateProps } from "./scrollAnchor";
 import { PathLine } from "./ToolInvocation";
 import { Chip, Detail, RowButton } from "./ToolRow";
 import { Section, type SectionFullScreen } from "./ToolSection";
+import { useGoToCall } from "./toolJumpContext";
 
 /**
  * Up to this many files are all listed. Past it the card lists FOLDED_ROWS and
@@ -78,6 +79,30 @@ function dirParts(dir: string): { head: string; tail: string } {
 }
 
 /**
+ * A word, not an arrow: beside a diff an arrow reads as scroll or fold, and
+ * there is no hover to explain it. `touch-target` because the header's line
+ * cannot grow.
+ */
+function GoToCallButton({
+	label,
+	onClick,
+}: {
+	label: string;
+	onClick: () => void;
+}) {
+	return (
+		<button
+			type="button"
+			onClick={onClick}
+			aria-label={label}
+			className="touch-target flex h-6 shrink-0 items-center whitespace-nowrap rounded px-1 text-th-accent hover:bg-th-overlay-hover"
+		>
+			Go to call
+		</button>
+	);
+}
+
+/**
  * One change as the tool body shows it — the same `Section`, header counts,
  * wrap switch and copy, clamped in place with *Full screen* — so a reviewer
  * reads it the same in the card as on its tool row.
@@ -105,6 +130,7 @@ function EditSection({
 		[change],
 	);
 	const noun = change.kind === "write" ? "Content" : "Change";
+	const goToCall = useGoToCall();
 	const fullScreen = useMemo<SectionFullScreen>(
 		() => ({
 			// A Codex change can list one path twice, so the run alone is not
@@ -122,7 +148,22 @@ function EditSection({
 			noun={noun.toLowerCase()}
 			// Named by what it copies, and by which step when several could.
 			copyLabel={`Copy ${noun.toLowerCase()}${step ? ` of ${step} · ${run.name}` : ""}`}
-			{...header}
+			meta={header.meta}
+			actions={
+				<>
+					{goToCall && (
+						<GoToCallButton
+							label={
+								step
+									? `Go to call ${step} · ${run.name}`
+									: "Go to the call that made this change"
+							}
+							onClick={() => goToCall(run.id)}
+						/>
+					)}
+					{header.actions}
+				</>
+			}
 			copyText={proposedChangeText(change)}
 			fullScreen={fullScreen}
 			budget="main"

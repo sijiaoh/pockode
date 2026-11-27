@@ -159,7 +159,10 @@ export interface TranscriptScroll {
 	/** The end of the conversation has changed since the reader left it. */
 	hasUnseen: boolean;
 	scrollToBottom: () => void;
-	/** Puts `target` at the top of the view and reads from there. */
+	/**
+	 * Puts `target` at the top of the view — under whatever its
+	 * `scroll-margin-top` says is pinned there — and reads from there.
+	 */
 	jumpTo: (target: HTMLElement) => void;
 	/** What the rows inside the transcript move the reader with. */
 	view: TranscriptView;
@@ -680,11 +683,16 @@ export function useTranscriptScroll({
 			// `scrollIntoView`: a smooth jump would be cut short by the first output
 			// that lands during it, and `scrollIntoView` also scrolls whatever
 			// contains the container, which is the app shell.
+			//
+			// Short of the top by the target's `scroll-margin-top`: inside an open
+			// row that is the bar pinned over it (`index.css`), which a target
+			// landed at the very top would be under.
 			moveTo(
 				el,
 				el.scrollTop +
 					target.getBoundingClientRect().top -
-					el.getBoundingClientRect().top,
+					el.getBoundingClientRect().top -
+					(Number.parseFloat(getComputedStyle(target).scrollMarginTop) || 0),
 			);
 			// Where it ended up, not where it was aimed: the end of the transcript
 			// cannot be scrolled past, so a card near it stops short of the top edge

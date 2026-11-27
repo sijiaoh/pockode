@@ -6,7 +6,9 @@ import {
 	useEffect,
 	useImperativeHandle,
 	useLayoutEffect,
+	useMemo,
 	useRef,
+	useState,
 } from "react";
 import { openAssistantIndex } from "../../lib/messageReducer";
 import { useChatUIConfig } from "../../lib/registries/chatUIRegistry";
@@ -29,6 +31,7 @@ import MessageItem, {
 	type PromptError,
 } from "./MessageItem";
 import { anchorCandidateProps } from "./scrollAnchor";
+import { ToolJumpContext, type ToolReveal } from "./toolJumpContext";
 import { TranscriptViewContext } from "./transcriptViewContext";
 import { TRANSCRIPT_SPAN_VAR } from "./transcriptWidth";
 import {
@@ -52,22 +55,20 @@ const HIGHLIGHT_CLASS = "jump-highlight";
  */
 const PAGE_AHEAD_VIEWS = 1;
 
-// Attribute lookup rather than a `[data-...="id"]` selector so request ids never
-// need CSS escaping.
-//
-// A permission request is the only kind of card this reaches, because it is the
-// only thing left that holds a turn up and therefore the only thing the strip
-// names by request id. A posted question is reached by the answer panel instead,
-// which is where answering happens — there is deliberately no jump to a question
-// card (docs/answering-ui.md §8).
-function findRequestCard(
+// Attribute lookup rather than a `[data-...="id"]` selector so ids never need
+// CSS escaping. One laid out, not merely mounted: a row folded into a group is
+// only `hidden`, and measures as sitting at the very top.
+function findShown(
 	root: HTMLElement,
-	requestId: string,
+	attribute: "permissionRequestId" | "toolUseId",
+	id: string,
 ): HTMLElement | null {
-	for (const card of root.querySelectorAll<HTMLElement>(
-		"[data-permission-request-id]",
-	)) {
-		if (card.dataset.permissionRequestId === requestId) return card;
+	const selector =
+		attribute === "toolUseId"
+			? "[data-tool-use-id]"
+			: "[data-permission-request-id]";
+	for (const el of root.querySelectorAll<HTMLElement>(selector)) {
+		if (el.dataset[attribute] === id && !el.closest("[hidden]")) return el;
 	}
 	return null;
 }
@@ -77,8 +78,12 @@ function findRequestCard(
  *
  * Jumping to a card is scroll work, and the scroll container lives here — so the
  * attention strip, which sits below the list, asks rather than reimplements. It
- * is the only caller, and a permission card is the only thing it can reach
- * (`findRequestCard`).
+ * is the only caller, and a permission card is the only thing it can reach: the
+ * one thing left that holds a turn up, and so the only thing the strip names by
+ * request id. A posted question is reached by the answer panel instead, which is
+ * where answering happens — there is deliberately no jump to a question card
+ * (docs/answering-ui.md §8). The jump to a tool row is asked from inside the
+ * transcript (`ToolJumpContext`).
  */
 export interface MessageListHandle {
 	jumpToRequest: (requestId: string) => void;
@@ -346,24 +351,19 @@ function MessageList({
 
 	useEffect(() => clearHighlight, [clearHighlight]);
 
-	const scrollToRequest = useCallback(
-		(requestId: string) => {
-			const scrollEl = scrollRef.current;
-			if (!scrollEl) return;
-			const card = findRequestCard(scrollEl, requestId);
-			if (!card) return;
-
-			// The jump is where the view is meant to be now, so the card becomes the
-			// anchor: the output that goes on landing below it must not push it away
-			// again, which is the same promise reading anywhere else gets.
-			jumpTo(card);
+	// Where the view is meant to be now, so the target becomes the anchor: the
+	// output that goes on landing below it must not push it away again, which is
+	// the same promise reading anywhere else gets.
+	const land = useCallback(
+		(target: HTMLElement) => {
+			jumpTo(target);
 
 			clearHighlight();
-			card.classList.add(HIGHLIGHT_CLASS);
+			target.classList.add(HIGHLIGHT_CLASS);
 			highlightRef.current = {
-				card,
+				card: target,
 				timer: setTimeout(() => {
-					card.classList.remove(HIGHLIGHT_CLASS);
+					target.classList.remove(HIGHLIGHT_CLASS);
 					highlightRef.current = null;
 				}, HIGHLIGHT_DURATION_MS),
 			};
@@ -371,16 +371,45 @@ function MessageList({
 			// preventScroll: the browser's own focus scroll would move the view off
 			// the position the jump just took the anchor at.
 			//
-			// The card's first button is the row that opens it, which is as close as
-			// a permission card has to a header. Without moving the focus, the jump
-			// is one a keyboard user cannot perceive — and a focus into an `inert`
-			// subtree is dropped without a word, so a caller jumping out from under
-			// something that covers the transcript has to let the cover go first
-			// (`ChatPanel.handleJumpToRequest`).
-			card.querySelector<HTMLElement>("button")?.focus({ preventScroll: true });
+			// The first button is the row that opens the target — a permission
+			// card's is as close as it has to a header. Without moving the focus,
+			// the jump is one a keyboard user cannot perceive — and a focus into an
+			// `inert` subtree is dropped without a word, so a caller jumping out
+			// from under something that covers the transcript has to let the cover
+			// go first (`ChatPanel.handleJumpToRequest`).
+			target
+				.querySelector<HTMLElement>("button")
+				?.focus({ preventScroll: true });
 		},
 		[clearHighlight, jumpTo],
 	);
+
+	const scrollToRequest = useCallback(
+		(requestId: string) => {
+			const scrollEl = scrollRef.current;
+			if (!scrollEl) return;
+			const card = findShown(scrollEl, "permissionRequestId", requestId);
+			if (card) land(card);
+		},
+		[land],
+	);
+
+	// The jump to a tool row is two-phase: the request opens whatever on its
+	// path hides the row (`useRevealRequest`), and once that commit has landed —
+	// child layout effects run before this one — the row is there to move to.
+	const [reveal, setReveal] = useState<ToolReveal | null>(null);
+	const goToCall = useCallback(
+		(toolUseId: string) => setReveal({ toolUseId }),
+		[],
+	);
+	useLayoutEffect(() => {
+		if (!reveal) return;
+		const scrollEl = scrollRef.current;
+		const row = scrollEl && findShown(scrollEl, "toolUseId", reveal.toolUseId);
+		if (row) land(row);
+		setReveal(null);
+	}, [reveal, land]);
+	const toolJump = useMemo(() => ({ reveal, goToCall }), [reveal, goToCall]);
 
 	useImperativeHandle(ref, () => ({ jumpToRequest: scrollToRequest }), [
 		scrollToRequest,
@@ -480,45 +509,47 @@ function MessageList({
 								<UnfiledChildrenContext value={unfiled}>
 									<DiscardedMessagesContext value={discardedContext}>
 										<TranscriptViewContext value={view}>
-											{messages.map((message, index) => {
-												return (
-													<div
-														key={message.id}
-														data-message-id={message.id}
-														// This wrapper is the row the view can be held still over
-														// (see `scrollAnchor`).
-														{...anchorCandidateProps}
-														className="py-1.5 sm:py-2"
-													>
-														<MessageItem
-															message={message}
-															sessionId={sessionId}
-															// Top of the loaded transcript is the session's own start
-															// only once there are no older pages left above it.
-															isFirst={index === 0 && !hasMoreHistory}
-															olderPagesAbove={index === 0 && hasMoreHistory}
-															isOpenTurn={index === openIndex}
-															isCodex={isCodex}
-															onPermissionRespond={onPermissionRespond}
-															onAnswerQuestion={onAnswerQuestion}
-															promptError={promptError}
-															onOpenWorkDetail={onOpenWorkDetail}
-															onOpenFile={onOpenFile}
-															onForkMessage={onForkMessage}
-															onSignIn={onSignIn}
-															onSwitchAccount={onSwitchAccount}
-															isDiscarded={
-																message.role === "user" &&
-																message.messageId !== undefined &&
-																discardedContext.discarded.has(
-																	message.messageId,
-																)
-															}
-															onRestoreMessages={onRestoreMessages}
-														/>
-													</div>
-												);
-											})}
+											<ToolJumpContext value={toolJump}>
+												{messages.map((message, index) => {
+													return (
+														<div
+															key={message.id}
+															data-message-id={message.id}
+															// This wrapper is the row the view can be held still over
+															// (see `scrollAnchor`).
+															{...anchorCandidateProps}
+															className="py-1.5 sm:py-2"
+														>
+															<MessageItem
+																message={message}
+																sessionId={sessionId}
+																// Top of the loaded transcript is the session's own start
+																// only once there are no older pages left above it.
+																isFirst={index === 0 && !hasMoreHistory}
+																olderPagesAbove={index === 0 && hasMoreHistory}
+																isOpenTurn={index === openIndex}
+																isCodex={isCodex}
+																onPermissionRespond={onPermissionRespond}
+																onAnswerQuestion={onAnswerQuestion}
+																promptError={promptError}
+																onOpenWorkDetail={onOpenWorkDetail}
+																onOpenFile={onOpenFile}
+																onForkMessage={onForkMessage}
+																onSignIn={onSignIn}
+																onSwitchAccount={onSwitchAccount}
+																isDiscarded={
+																	message.role === "user" &&
+																	message.messageId !== undefined &&
+																	discardedContext.discarded.has(
+																		message.messageId,
+																	)
+																}
+																onRestoreMessages={onRestoreMessages}
+															/>
+														</div>
+													);
+												})}
+											</ToolJumpContext>
 										</TranscriptViewContext>
 									</DiscardedMessagesContext>
 								</UnfiledChildrenContext>

@@ -23,7 +23,7 @@ export function BlockHeader({
 			<div className="flex min-w-0 flex-1 items-center text-th-text-muted">
 				{label}
 			</div>
-			{/* Up to four buttons whose hit areas reach past their 24px boxes:
+			{/* Buttons whose hit areas reach past their 24px boxes:
 			    centres 36px apart under a mouse and 44px under a thumb keep the
 			    areas from overlapping. */}
 			{actions && (

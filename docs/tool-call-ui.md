@@ -687,8 +687,8 @@ transcript's own container scrolls so the row's top lands just under every
 bar pinned above it — the open subagent row the reveal just opened pins its own
 bar at the top, and a row landed at the container's top would be under it. The
 offset is the row's computed `scroll-margin-top`, which `index.css` already
-sets under a `.row-bar` for exactly this, and which the jump today does not
-read. The row takes the jump highlight, and
+sets under a `.row-bar` for exactly this, and which the jump reads for every
+target (`useTranscriptScroll`'s `jumpTo`). The row takes the jump highlight, and
 focus moves to the row's button. Tool rows gain a `data-tool-use-id` to be
 found by, as a card is by `data-permission-request-id`. The highlight is the
 same inset ring in `th-accent`, not the card's `th-warning`: a permission card
@@ -706,11 +706,14 @@ inside that — at every depth, a subagent inside a subagent included. Each of
 those is local state today (`RowList`'s open groups, `TaskItem`'s row and
 Process), and a body never opened is not mounted at all (`CollapsibleBody`), so
 there is no row to find until they open. So the jump is two-phase: the press
-raises a *reveal* request for the `tool_use_id` through the transcript's view
-context; every `RowList` and `TaskItem` on the path to it — the path
-`findToolRunPath` gives — opens what it holds, setting the same state the
-user's tap sets; and once that commit has landed the jump finds the row and
-moves. Opened this way they stay open until the user closes them, under the
+raises a *reveal* request for the `tool_use_id` through `ToolJumpContext`, which
+`MessageList` provides beside the view context (not in it: `TranscriptView` is
+the shape `ui`'s clamp takes, and a request would redraw every block that reads
+it); every `RowList` and `TaskItem` on the path to it — each asks
+`findToolRunPath` whether the call is under what it holds — opens what it
+holds during that render (`useRevealRequest`), setting the same state the
+user's tap sets, so a body this mounts takes the same request in the same
+commit; and once that commit has landed the jump finds the row and moves. Opened this way they stay open until the user closes them, under the
 list's rule that nothing folds what the user opened — the press was the
 user's. **The row itself is not
 opened.** Its body is the diff the reader just came from; what they went for is

@@ -302,7 +302,7 @@ const ToolCallItem = memo(function ToolCallItem({
 	);
 
 	return (
-		<div className="text-xs">
+		<div className="text-xs" data-tool-use-id={run.id}>
 			<ToolRow
 				expanded={expanded}
 				onToggle={() => setExpanded(!expanded)}

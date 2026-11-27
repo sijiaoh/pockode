@@ -6,6 +6,7 @@ import type { ProposedChangeData } from "../../lib/proposedChange";
 import { turnWork } from "../../lib/turnWork";
 import type { AssistantMessage, ContentPart } from "../../types/message";
 import MessageItem from "./MessageItem";
+import MessageList from "./MessageList";
 import { TurnChangesCard } from "./TurnChangesCard";
 
 vi.mock("../../lib/wsStore", () => ({
@@ -474,6 +475,121 @@ describe("TurnChangesCard", () => {
 			expect(card()).toHaveAccessibleName(
 				"Worked 2 minutes 0 seconds, 1 tool call, 1 file changed",
 			);
+		});
+	});
+
+	// docs/tool-call-ui.md#from-a-file-to-the-calls-that-changed-it
+	describe("going to the call", () => {
+		const read = (id: string, path: string): ContentPart => ({
+			type: "tool_call",
+			id: `call-${id}`,
+			tool: {
+				id,
+				name: "Read",
+				input: { file_path: path },
+				status: "success",
+				result: "contents",
+			},
+		});
+		const subagent = (id: string, children: ContentPart[]): ContentPart => ({
+			type: "tool_call",
+			id: `call-${id}`,
+			tool: {
+				id,
+				name: "Agent",
+				input: { description: "Fix the retry", prompt: "Fix it." },
+				status: "success",
+				result: "Fixed.",
+				children,
+			},
+		});
+		const transcript = (parts: ContentPart[]) =>
+			render(
+				<MessageList
+					sessionId="s"
+					messages={[
+						{
+							id: "m",
+							role: "assistant",
+							parts,
+							status: "complete",
+							createdAt: new Date(),
+						},
+					]}
+				/>,
+			);
+		const toolRow = (id: string) =>
+			document.querySelector<HTMLElement>(`[data-tool-use-id="${id}"]`);
+		// Inside the card: the tool rows, once revealed, name the file too.
+		const fileRow = (name: RegExp) =>
+			within(card() as HTMLElement).getByRole("button", { name });
+		const openFile = async (name: RegExp) =>
+			userEvent.setup().click(fileRow(name));
+
+		it("opens the group the call is folded into and lands on its row, closed", async () => {
+			const user = userEvent.setup();
+			transcript([
+				read("r1", "/repo/a.ts"),
+				edit("e1", "/repo/a.ts", "a", "b"),
+				read("r2", "/repo/b.ts"),
+				{ id: "text-done", type: "text", content: "Done." },
+			]);
+			const row = toolRow("e1");
+			expect(row?.closest("[hidden]")).not.toBeNull();
+
+			await openFile(/^a\.ts,/);
+			await user.click(
+				screen.getByRole("button", {
+					name: "Go to the call that made this change",
+				}),
+			);
+
+			expect(row?.closest("[hidden]")).toBeNull();
+			expect(row).toHaveClass("jump-highlight");
+			const rowButton = row?.querySelector("button");
+			expect(rowButton).toHaveFocus();
+			// What the reader went for is around the row, not its body: the diff
+			// they came from.
+			expect(rowButton).toHaveAttribute("aria-expanded", "false");
+		});
+
+		it("reaches a subagent's step through its row, Process and group, and leaves them open", async () => {
+			const user = userEvent.setup();
+			transcript([
+				edit("e1", "/repo/a.ts", "a", "b"),
+				subagent("t1", [
+					read("c1", "/repo/a.ts"),
+					edit("c2", "/repo/a.ts", "b", "c"),
+					read("c3", "/repo/a.ts"),
+				]),
+				{ id: "text-done", type: "text", content: "Done." },
+			]);
+			// Never opened, so not even mounted.
+			expect(toolRow("c2")).toBeNull();
+
+			await openFile(/^a\.ts,/);
+			await user.click(
+				screen.getByRole("button", { name: "Go to call 2 · Edit" }),
+			);
+
+			const row = toolRow("c2");
+			expect(row?.closest("[hidden]")).toBeNull();
+			expect(row).toHaveClass("jump-highlight");
+			expect(row?.querySelector("button")).toHaveFocus();
+			expect(screen.getByRole("button", { name: /^Process/ })).toHaveAttribute(
+				"aria-expanded",
+				"true",
+			);
+
+			// The other change goes to the main agent's row; the subagent's stays
+			// open behind it, and so does the file row the reader came from.
+			await user.click(
+				screen.getByRole("button", { name: "Go to call 1 · Edit" }),
+			);
+			expect(toolRow("e1")).toHaveClass("jump-highlight");
+			expect(toolRow("c2")).not.toHaveClass("jump-highlight");
+			expect(toolRow("c2")?.closest("[hidden]")).toBeNull();
+			expect(fileRow(/^a\.ts,/)).toHaveAttribute("aria-expanded", "true");
 		});
 	});
 });
