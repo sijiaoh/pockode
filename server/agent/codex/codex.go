@@ -261,9 +261,10 @@ type appSession struct {
 	// rememberSubagent. Read and written only by the notification handlers, on
 	// the one goroutine reading app-server's output.
 	subagentCalls map[string]subagentSpawn
-	// subagentReports holds each subagent thread's latest words; see
-	// settleSubagent. Same goroutine as subagentCalls.
-	subagentReports map[string]string
+	// subagentOutcomes holds what each subagent thread has reported so far —
+	// its latest words and the size of its context; see settleSubagent. Same
+	// goroutine as subagentCalls.
+	subagentOutcomes map[string]subagentOutcome
 	// reasoningItems are the reasoning items still in flight, by item id; see
 	// reasoningProgress. Same goroutine as subagentCalls, and forgotten when
 	// their thread's turn ends.
