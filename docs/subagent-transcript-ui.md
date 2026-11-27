@@ -80,7 +80,9 @@ A 24px icon there would come out of the description, on every subagent row, to
 save one tap for the reader who opens a transcript — the body is one tap, the
 ⤢ in its Process heading the next. The row is also a single button
 ([the row](tool-call-ui.md#the-row)), and a second control inside it would be
-the nested-button problem the Process heading does not have.
+the nested-button problem the Process heading does not have. A running row's
+[step window](tool-call-ui.md#the-step-window) is not a way in either: it is
+part of that one button, not a control of its own.
 
 ## Where the layer sits
 
@@ -199,7 +201,10 @@ run failed; the muted `Ban` when interrupted.
 
 **Line 3: the row's second line**, as the row draws it (`subagentLine`,
 `SubagentLineContent`): `6 tool uses · <latest child>` while live, the figures
-once settled, the first line of what it returned on a failure. It is the glance
+once settled, the first line of what it returned on a failure. The row's
+[step window](tool-call-ui.md#the-step-window) is not drawn here — the level
+under the header is those steps whole, as an open Process is — so, as on a row
+whose Process is open, the line names its latest child. It is the glance
 that answers *is it moving* for a reader who has scrolled up into the middle of
 the work, and it costs one 16px line. `aria-hidden` while live, exposed once
 settled, as on the row. Drawn only when the row draws one.

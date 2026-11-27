@@ -308,7 +308,16 @@ interface Props {
 	 * A second line with structure of its own rather than one string — a
 	 * subagent's step count beside what it is doing. Wins over `secondLine`.
 	 */
-	richSecondLine?: { content: ReactNode; live: boolean } | null;
+	richSecondLine?: {
+		content: ReactNode;
+		live: boolean;
+		/**
+		 * Drawn under the line, wherever the line goes — in the button while
+		 * the row is closed, under the bar while it is open: a subagent's step
+		 * window. Spans, for the button's sake.
+		 */
+		below?: ReactNode;
+	} | null;
 	/** Failure is the only saturated colour in a stack of rows. */
 	error?: boolean;
 	/**
@@ -502,12 +511,15 @@ export function ToolRow({
 	const beforeFold = useFoldLanding(barRef, titleRef, expanded);
 
 	const second = richSecondLine ? (
-		<span
-			aria-hidden={richSecondLine.live}
-			className="flex min-w-0 items-baseline gap-1.5 text-th-text-muted"
-		>
-			{richSecondLine.content}
-		</span>
+		<>
+			<span
+				aria-hidden={richSecondLine.live}
+				className="flex min-w-0 items-baseline gap-1.5 text-th-text-muted"
+			>
+				{richSecondLine.content}
+			</span>
+			{richSecondLine.below}
+		</>
 	) : (
 		secondLine && (
 			<span

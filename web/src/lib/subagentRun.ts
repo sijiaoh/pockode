@@ -142,6 +142,154 @@ export function latestChild(parts: ContentPart[]): LatestChild | undefined {
 }
 
 /**
+ * The first line of the newest text, when it came after the newest step; a
+ * step, or nothing said, is undefined. A question card is a step, not words.
+ */
+export function textAfterSteps(parts: ContentPart[]): string | undefined {
+	for (let i = parts.length - 1; i >= 0; i--) {
+		const part = parts[i];
+		if (stepId(part)) return undefined;
+		if (part.type !== "text") continue;
+		const text = firstLine(part.content);
+		if (text) return text;
+	}
+	return undefined;
+}
+
+/**
+ * How a step reads in a step window: what its own row or card shows, in one
+ * of the shapes a row's glyph takes, plus `waiting` for a step that stands
+ * behind a card waiting on the user.
+ */
+export type StepMark =
+	| "running"
+	| "waiting"
+	| "success"
+	| "error"
+	| "interrupted";
+
+/** One line of a step window. */
+export interface RecentStep {
+	id: string;
+	mark: StepMark;
+	label:
+		| { kind: "call"; name: string; input: unknown }
+		| { kind: "question"; text: string };
+	/** The step's run, when it is drawn as a row: what its time is read off. */
+	run?: ToolRun;
+}
+
+function recentStep(id: string, part: ContentPart): RecentStep | undefined {
+	switch (part.type) {
+		case "tool_call": {
+			const run = part.tool;
+			const mark: StepMark =
+				run.status === "running" || run.status === "background"
+					? "running"
+					: run.status;
+			return {
+				id,
+				mark,
+				label: { kind: "call", name: run.name, input: run.input },
+				run,
+			};
+		}
+		case "permission_request": {
+			// Allowed and not yet back as a row: it is running. Expired is a
+			// request nobody answered before its asker went away — cut short.
+			const marks = {
+				pending: "waiting",
+				allowed: "running",
+				denied: "error",
+				expired: "interrupted",
+			} as const;
+			return {
+				id,
+				mark: marks[part.status],
+				label: {
+					kind: "call",
+					name: part.request.toolName,
+					input: part.request.toolInput,
+				},
+			};
+		}
+		case "question_record": {
+			// Declined or withdrawn, the question got no answer: it was cut
+			// short, which is not the subagent failing.
+			const marks = {
+				pending: "waiting",
+				answered: "success",
+				declined: "interrupted",
+				cancelled: "interrupted",
+			} as const;
+			const question = part.record.question;
+			return {
+				id,
+				mark: marks[part.status],
+				label: {
+					kind: "question",
+					text: firstLine(question.header || question.question),
+				},
+			};
+		}
+		default:
+			return undefined;
+	}
+}
+
+/**
+ * The newest `limit` steps, oldest first. Ordered by when each step first
+ * arrived, and drawn by its newest form: a card and the row that comes back
+ * for it are one step (`stepId`).
+ */
+export function recentSteps(parts: ContentPart[], limit: number): RecentStep[] {
+	if (limit <= 0) return [];
+	const newest = new Map<string, ContentPart>();
+	for (const part of parts) {
+		const id = stepId(part);
+		if (id) newest.set(id, part);
+	}
+	const steps: RecentStep[] = [];
+	for (const [id, part] of [...newest].slice(-limit)) {
+		const step = recentStep(id, part);
+		if (step) steps.push(step);
+	}
+	return steps;
+}
+
+/**
+ * How many window lines each subagent row of one list gets, by its id: none
+ * for a row that draws no window (docs/tool-call-ui.md#the-step-window).
+ *
+ * The size is set by how many subagent rows the list holds, whatever their
+ * status, so that parallel siblings stay skimmable on a phone. A live row
+ * draws its window; a settled one keeps its frozen window only while a
+ * sibling that was already running when it settled still runs, so the list
+ * folds once, with the last of them — and a sibling resumed or added later
+ * regrows nobody's. Read off the runs alone, so a reload draws what the live
+ * view did; a missing time means no frozen window.
+ *
+ * `runs` are the rows as drawn: a resumed subagent's on its resume.
+ */
+export function stepWindowLines(runs: ToolRun[]): ReadonlyMap<string, number> {
+	const size = runs.length === 1 ? 3 : runs.length === 2 ? 2 : 1;
+	const live = runs.filter(isLiveRun);
+	const lines = new Map<string, number>();
+	for (const run of runs) {
+		const { endedAt } = run;
+		const drawn =
+			isLiveRun(run) ||
+			(endedAt !== undefined &&
+				live.some(
+					(sibling) =>
+						sibling.startedAt !== undefined && sibling.startedAt < endedAt,
+				));
+		lines.set(run.id, drawn ? size : 0);
+	}
+	return lines;
+}
+
+/**
  * A subagent row's second line when it has something of its own to say; null
  * when it has not, and the shared rungs (`toolSecondLine`) then stand,
  * unchanged.
@@ -197,10 +345,27 @@ export function subagentToolUses(
 export function subagentLine(
 	run: ToolRun,
 	unfiled?: UnfiledChildren,
+	/**
+	 * Whether the row draws its step window under this line. The window names
+	 * the calls, so the line then names none: its tail is only words the
+	 * subagent said after its newest step
+	 * (docs/tool-call-ui.md#the-step-window).
+	 */
+	window = false,
 ): SubagentLine | null {
 	const toolUses = subagentToolUses(run, unfiled);
 	const latest = unfiled?.latest ?? latestChild(run.children ?? []);
+	const words = (): LatestChild | undefined => {
+		const text = textAfterSteps([
+			...(run.children ?? []),
+			...(unfiled?.parts ?? []),
+		]);
+		return text ? { kind: "text", text } : undefined;
+	};
 
+	if (window && (isLiveRun(run) || run.status === "interrupted")) {
+		return { toolUses, tail: words(), live: isLiveRun(run) };
+	}
 	if (isLiveRun(run)) {
 		// Before the first child, what the CLI said it last called; its
 		// activity only after that, being `Running <description>` — the row's
@@ -311,6 +476,8 @@ export function withoutEchoedReport(
 
 /** A run's children that sit flat rather than under the call they belong to. */
 export interface UnfiledChildren {
+	/** The parts themselves, in arrival order: newer than any filed child. */
+	parts: ContentPart[];
 	/** How many parts: text and calls alike. */
 	count: number;
 	/** How many of them are calls, by the same rule as `countSteps`. */
@@ -400,6 +567,7 @@ export function unfiledChildren(
 	const result = new Map<string, UnfiledChildren>();
 	for (const [parent, parts] of byParent) {
 		result.set(parent, {
+			parts,
 			count: parts.length,
 			steps: countSteps(parts),
 			latest: latestChild(parts),
