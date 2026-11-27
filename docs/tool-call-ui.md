@@ -48,8 +48,10 @@ is [agent-chat.md](agent-chat.md); the width ladder and the pointer gates are
 is a line in a transcript, not a card. It does not wrap, it does not grow a second title line at `sm:`, and it
 never re-flows when the window is resized. Twenty rows that are each one line
 can be skimmed; twenty rows that are each one-or-three lines cannot. The only
-thing that ever adds a line is the **second line**, and only for a run that has
-something to say on it — see below. Consecutive calls between two pieces of
+things that ever add a line are the **second line**, and only for a run that has
+something to say on it — see below — and a live subagent's
+[step window](#the-step-window), a few lines sized by its list that fold with
+it. Consecutive calls between two pieces of
 text then fold into **one summary row** ([groups](#groups)), with the rows the
 reader must not miss pinned under it.
 
@@ -374,9 +376,9 @@ leading, are what say it is still at work. That line changes only when a call
 settles, so it is read out as it is. A group always has a settled call, so
 some segment is always there — `N interrupted`, if nothing else.
 
-A group no longer speaks a subagent's `N steps · <latest child>`
-([its second line](#the-second-line-steps-and-what-it-is-doing)), and the
-difference is on purpose: a subagent's row is one call whose steps are its
+A group no longer speaks a subagent's live form — its count over its
+newest steps ([its second line](#the-second-line-steps-and-what-it-is-doing),
+[the step window](#the-step-window)) — and the difference is on purpose: a subagent's row is one call whose steps are its
 body, while a group is several calls, each of which the reader needs named.
 
 ### An opened group
@@ -1907,7 +1909,9 @@ A subagent row's figure is its call's, by the rules above: from the `Task` /
 long the subagent worked, not how long the main agent waited for a placeholder.
 A duration the CLI reports for the subagent wins, as everywhere. Its second line
 (the figures, or the latest child) never carries it: the figure stays on line 1
-([why](#line-2-once-settled-the-figures)).
+([why](#line-2-once-settled-the-figures)). A running step in its
+[step window](#the-step-window) carries its own counter, derived as that
+child's row derives it; a settled step there carries none.
 
 The rows in its Process follow the same rules with no exception: their records
 are observed as the subagent's lines arrive. Where a subagent's frames reach the
@@ -3376,10 +3380,10 @@ uses, tokens** — the duration stays on line 1:
 
 | Run | Line 2 |
 |---|---|
-| live (`running` / `background`) | `N tool uses · <latest child>` — count and what it is doing; no tokens |
+| live (`running` / `background`) | `N tool uses`, over its [step window](#the-step-window) from the first step — the count, and the steps under it say what it is doing; no tokens |
 | `success` | the figures |
 | `error` | `N tool uses · <first line of what it returned>`, in the muted second-line colour — the row's red is line 1's; why it failed is the news, and the body does not open to say it ([the body](#the-body-problems-2-and-3)). No tokens: on a failed row why outranks what it spent |
-| `interrupted` | `N tool uses · <latest child>`, frozen where it was cut — no tokens even when a late result brought some: where it was is the news. Codex and Claude alike: a Codex subagent the user's Stop cut short is `interrupted`, not `error` (below) |
+| `interrupted` | `N tool uses` while its frozen [window](#the-step-window) is drawn, then `N tool uses · <latest child>`, frozen where it was cut — no tokens even when a late result brought some: where it was is the news. Codex and Claude alike: a Codex subagent the user's Stop cut short is `interrupted`, not `error` (below) |
 | settled from the background, `completed` | the figures — the outcome is its report ([the subagent body](#the-subagent-body)), so it reads as a foreground success does |
 | settled from the background, `failed` / `stopped` | `N tool uses · <first line of the outcome>` — the verdict is the news, as on a foreground failure |
 
@@ -3433,8 +3437,9 @@ A message to a subagent that is still running changes nothing: it never
 stopped. How the client learns either kind of resume is
 [code/frontend-state.md](code/frontend-state.md#a-subagents-children)'s.
 
-**Running** keeps the live line as it is, with its count now counted as above
-and labelled `tool uses`, and the elapsed counter on line 1. When the run has
+**Running** keeps the live line, with its count now counted as above
+and labelled `tool uses`, and the elapsed counter on line 1; its calls are the
+[step window](#the-step-window)'s. When the run has
 no child yet but the CLI reported progress, the latest-child half reads
 `subagent_progress.last_tool_name` (Claude's `task_progress`) as a bare title (`Grep`) — better than
 `Running <description>`, which is the row's detail said again — and `run.activity`
@@ -3460,12 +3465,17 @@ disclosure for one line is a tap to reveal less than its own label.
 
 ```
  ⟳  ⧉ Explore  Find retry handling                         47s
-    6 tool uses · Grep "Retry-After" in server/
+    6 tool uses · Checking the 503 path next.
+    ✓ Glob   server/relay/**/*.go
+    ✓ Read   sender.go
+    ⟳ Grep   "Retry-After" in server/                       12s
 ```
 
 [Above](#line-2-once-settled-the-figures) replaces the settled rows of the
 table below, and `N steps` is drawn as `N tool uses` throughout; what follows is
-the live line, which is unchanged in what it reads.
+the live line. While a row draws its [step window](#the-step-window) — every
+live row that has a step — the calls are the window's, and the line's tail
+names none (below).
 
 The collapsed row is how a user tells a subagent that is getting somewhere from
 one that is stuck, without opening anything. Two facts do that: *how far* it has
@@ -3477,8 +3487,10 @@ first row that matches wins:
 |---|---|
 | `error`, or settled from the background `failed` / `stopped`, that returned something | `N tool uses · <first line of what it returned>` — of the outcome, for a backgrounded run; with no tool uses, the first line alone |
 | no tool uses and no figures | the shared rungs, unchanged — `run.activity` while live (after `last_tool_name`, [above](#status-by-status)), the background rungs, else no line |
-| live (`running` / `background`) | `N tool uses · <latest child>` |
-| `interrupted` | `N tool uses · <latest child>` — frozen where it was cut |
+| live (`running` / `background`), with a step window | `N tool uses`, then `· <text>` only when the newest child is a text newer than the newest step |
+| `interrupted`, with a frozen step window | the same |
+| live, without a window (no step yet but a text or the CLI's count, or the Process open inline) | `N tool uses · <latest child>` |
+| `interrupted`, without a window (folded, or the Process open inline) | `N tool uses · <latest child>` — frozen where it was cut |
 | `success` / background `completed` | the figures ([above](#line-2-once-settled-the-figures)) |
 
 `1 tool use`, singular. The rules inside that table:
@@ -3495,6 +3507,16 @@ first row that matches wins:
   calls is usually writing, and *"Checking the 503 path next."* is exactly what it
   is doing at that moment — which is why the second half reads children although
   the count only counts steps.
+- **While a window is drawn, the tail never names a call.** The window's
+  bottom line is the newest step; naming it again on line 2, one line above,
+  would be one fact twice. What is left for line 2 is words: the newest text,
+  and only when it arrived after the newest step — a text older than that is
+  about a step that has since moved on. A row whose window is not drawn reads
+  the latest child as before, call or text: one before its first step, one with
+  its Process open inline (the user's own tap took the window away, and the
+  line names its latest child again), and an `interrupted` row once its frozen window
+  folds — the tail takes `· <latest child>` in the same frame as the fold, so
+  *where it was cut* appears at the one moment the row re-flows anyway.
 - **Steps outrank `run.activity`**, which is why only the no-steps row reads it.
   For a subagent Claude's `task_progress` line is `Running <description>`
   (measured, claude 2.1.263 —
@@ -3525,17 +3547,20 @@ first row that matches wins:
   `interrupted` keeps the child because there it *is* the news: where it was
   when it was cut. One that settled from the background and completed reads as
   a foreground success ([why](#status-by-status)). Keeping a line in every case is also
-  what holds the row's height when it settles, and that matters more for a
+  part of what holds the row's height when it settles, and that matters more for a
   subagent than for any other foreground call: the main agent routinely spawns
   several at once, so a subagent row that finishes first is **not** at the
-  tail — its siblings are still running under it.
+  tail — its siblings are still running under it. The rest of the height is
+  its step window's, which stays, frozen, until the list's last sibling that
+  ran beside it settles ([the step window](#settling-and-folding)).
 - **`error` reads its own line, not the shared rung 4.** Rung 4 is the tail of
   machine output in mono; a subagent's result is prose that states its verdict
   first, so the first line is the one that says why
   ([status by status](#status-by-status)).
 - **`aria-hidden` while live, exposed once settled**, as every second line
   ([above](#the-second-line-problem-1)). Both halves move while live: the count
-  and the latest child.
+  and the tail. The step window is `aria-hidden` throughout
+  ([below](#the-step-window)).
 
 A row with **no tool uses and no figures** draws what it drew before this
 section existed. That covers two real cases with one rule: a subagent that
@@ -3548,6 +3573,213 @@ that never called a tool, which is rare.
 A failure that returned something is the exception, and reads its own line
 even here: the shared failure rung is the tail of the raw result in mono, and
 for a framed report that tail is the frame's usage line, not why.
+
+### The step window
+
+```
+ ⟳  ⧉ Explore   Find retry handling                        47s
+    6 tool uses
+    ✓ Read   sender.go
+    ✗ Bash   go test ./relay/…                                    ✗ muted, not red
+    ⟳ Grep   "Retry-After" in server/                       12s
+```
+
+One line says *what* a subagent is doing, not *for how long*, and not what it
+did just before — and those are what tell a subagent that is stuck from one
+that is working. A step that has been running for a minute is the sign of a
+hang; the same command failing three times in a row (`✗ ✗ ✗`) is the sign of a
+loop; how fast the lines turn over is the pace. So while a subagent row is live
+it draws its **newest steps** under its second line, one per line, each with its
+own status: the **step window**. It is the one thing besides the second line
+that adds lines to a row ([the rules](#the-rules)), and everything below is
+about keeping that from costing what the rule protects — a list that can be
+skimmed, and rows that do not move under the reader.
+
+#### How many lines
+
+| Subagent rows in the list (any status) | Window lines per row |
+|---|---|
+| 1 | 3 |
+| 2 | 2 |
+| 3 or more | 1 |
+
+**The list sizes the window, not the row.** The main agent routinely spawns
+several subagents at once, and three lines on each would put four parallel
+siblings at about 370px — the whole transcript area of a 360×640 phone with
+the composer up. Three siblings at one line each are three lines a row, about
+60px instead of the 44px a two-line row takes. The count is of subagent rows in
+the same list ([the list](#the-list)), whatever their status, and it is a
+one-way fact: a row added to a list never leaves it, so a window only ever
+shrinks because a sibling arrived — and parallel spawns arrive together, before
+any of their steps do, while the windows are still empty. A row drawn outside a
+list counts as a list of one. Inside a [Process](#process) or a
+[transcript layer](subagent-transcript-ui.md), a nested subagent row follows
+the same rules, its list being the list it is in at that level.
+
+**It grows only while it fills.** The window is not drawn before the first
+step, so a row with none reads exactly as it did ([the second
+line](#the-second-line-steps-and-what-it-is-doing)). It then fills from one line
+to its k over the first k steps and rolls in place from there: rolling changes
+text, not layout. A live row moves the rows under it at most k times, one line
+each, and the reader can see each one coming.
+
+#### What each line shows
+
+One flex line, `items-baseline gap-1.5`, `text-xs`, starting under the row's
+name — the second line's left edge:
+
+1. **Status glyph**, `size-3`, in the shapes `ToolStatusGlyph` uses, **all in
+   `text-th-text-muted`** — never red, by the rule the second line already
+   follows ([never red](#the-second-line-steps-and-what-it-is-doing)): red on a
+   subagent row is the subagent's own outcome, and the shape alone says a step
+   failed. The glyph is the status the step's own row or card shows in the
+   Process:
+
+   | The step in the Process | Glyph |
+   |---|---|
+   | a running / background row; an allowed card whose row has not come back | spinner — a still dot under reduced motion, as `RunningGlyph` |
+   | a pending permission card; an unanswered question | `CircleHelp` |
+   | a settled row | its own shape: `Check`, `X` or `Ban` |
+   | a denied card | `X` |
+   | an answered question | `Check` |
+   | an expired card; a declined or cancelled question | `Ban` — the step got no answer and was cut short, which is not a failure |
+
+2. **Title**, `shrink-0 text-th-text-secondary`, with its chip if any, then its
+   detail through `Detail` — the call worded as its own row words it, and as
+   the second line words a latest child (`StepCallLabel` is both). A nested
+   subagent step reads as its own row's title, agent mark and name, and its
+   description; its own steps are not shown. A question reads `Question`, then
+   its header, or the question itself when it has none — the card's own
+   `Question · <header>`.
+3. **Elapsed**, right-aligned, `tabular-nums`, muted, as `ToolMeta` derives it
+   for the step's own row — **only next to a spinner on a step drawn as a
+   row**. A settled step carries none: three durations on three lines are
+   noise, and they would cost the detail its width on a phone. A waiting step
+   carries none either: it is waiting on the user, not working.
+
+**Which steps, in what order.** The last k steps by arrival, counted by
+`stepId` across the run's children and then its
+[unfiled](#what-is-not-filed) children (the unfiled ones are the newer). A card
+and the row that comes back for it are one step, drawn by its newest form. A
+text is never a step, so it never takes a window line; the newest text, when it
+is newer than every step, is line 2's tail instead
+([above](#the-second-line-steps-and-what-it-is-doing)). Oldest at the top,
+newest at the bottom: a new step enters where the eye already is, as a
+terminal's tail does, and the oldest drops off the top. No animation.
+
+**There is no `+N more` line.** Claude Code and Copilot end a preview like
+this with one, but line 2's `N tool uses` sits directly above the window and is
+the total; over oldest-first lines it reads plainly as *the last k of N*. A
+`+N−k more` would cost a line on every row for a second number counting one
+fact, and it would be the line that changes meaning on settle — where `N tool
+uses` becomes `N tool uses · 45.6K tokens` in place, the same count in the same
+spot.
+
+**What yields on a narrow line.** The glyph, the title (chip included) and the
+elapsed figure are `shrink-0` and are never cut; the detail truncates, through
+`Detail`, which drops a path's directories before its file name — the rule
+`6 tool uses ·` already follows on line 2. Measured at depth 0 with a running
+step showing `1m 4s`, a 320px transcript column leaves about 174px for the
+detail, a 360px one about 214px; a level of rail comes off that, and the
+browser test (`SubagentStepWindow.browser.test.tsx`) holds the rule at both
+widths in Chromium and WebKit.
+
+#### Settling and folding
+
+Line 2 settles by [status by status](#status-by-status), unchanged. The window:
+
+- **Settled while a sibling that ran beside it is live**: it stays, frozen at
+  its last k steps — drawn with the statuses the reducer left them, nothing
+  inferred, and no elapsed figure even beside a step the reducer still calls
+  running, since a counter ticking on a settled row would be a lie about the
+  row. It is still true as history, and it holds the row's height.
+- **Otherwise it folds.** So a list folds once, in the same frame as the last
+  of the siblings that were running beside each other, losing k lines a row at
+  the moment the main agent picks up again — when attention moves to the tail
+  anyway, and a transcript following its tail absorbs it. A lone subagent folds
+  as it settles.
+
+"Beside" is read off the runs alone: a settled row keeps its window while some
+other subagent row in its list is live **and that sibling's current run started
+before this row ended** — its `startedAt`, or its resume's start for a resumed
+run, earlier than this row's `endedAt` (`stepWindowLines` in
+`lib/subagentRun.ts`). Every input is persisted, so a reload draws exactly the
+windows the live view did. A missing time — an old record with no `startedAt`
+or `endedAt`, or a subagent a Stop settled, which gets no `endedAt` — means no
+frozen window: folding is the safe default, costing at most k lines once.
+
+- **Stop** interrupts every sibling together, so the list folds at once, and
+  each row's line 2 takes its frozen latest child in that frame
+  ([above](#the-second-line-steps-and-what-it-is-doing)).
+- **Failure** keeps its red line 1 and its why-line; its window folds by the
+  list's rule, never earlier.
+- **Resume** — `SendMessage`, `sendInput` or `followupTask`
+  ([status by status](#status-by-status)) — makes the row live again, and it
+  grows its own window back: growth on a row that now says it is running, which
+  the reader should see. Its settled siblings do not regrow: the resumed run
+  started after they ended. A running subagent appended to the list later
+  regrows nobody's either. The resumed row's own window folds when that run
+  settles, unless a sibling that started before then is still live.
+- **A known gap:** after a Claude `SendMessage` resume settles, the row goes
+  back to what it said before ([status by status](#status-by-status)), its
+  `endedAt` included — the original spawn's. So if a sibling resumed alongside
+  it is still running, its frozen window folds early. That is the safe
+  direction; closing the gap would need settled resumes tracked as live ones
+  are.
+
+#### Where it is drawn
+
+**Wherever the second line goes.** On a closed row, inside the row's button
+under line 2: the whole button stays one tap target, and the window is not a
+control — nor a way into the subagent's transcript, which stays the ⤢ in the
+Process heading ([subagent-transcript-ui.md](subagent-transcript-ui.md#the-way-in)).
+On an open row, under the bar directly beneath the second line, outside the
+bar's sticky area and the button, as the second line is
+([the sticky title line](#the-sticky-title-line)). **While the Process is open
+inline it is not drawn**: the Process shows the same steps whole, and that fold
+is the user's own tap.
+
+A pending card is still drawn between the row and its body
+([when a step asks the user](#when-a-step-asks-the-user)); the step behind it is
+in the window with `CircleHelp`, the card right under it.
+
+While a transcript layer covers the chat, the windows behind it change as they
+would, and the chat's anchor holds them on return, as for any growth.
+
+**Scroll anchoring needs nothing new.** The anchor is the last candidate that
+starts at or above the view's top
+([agent-chat.md](agent-chat.md#where-the-view-sits), `scrollAnchor.ts`), so a window growing or
+folding below that point moves nothing above it. Rows the reader watches below
+a growing window shift at most k lines over its life, plus one fold when the
+list settles.
+
+**`aria-hidden`, live and frozen alike.** It is a moving or duplicate view of
+steps the Process lists accessibly; the row's accessible name and its second
+line are unchanged by it, and its glyphs' labels are not read.
+
+#### Rejected alternatives
+
+- **Three lines on every live row, whatever its siblings.** Four parallel
+  siblings are about 370px: a phone's whole transcript, unskimmable, the rows
+  under them pushed off screen.
+- **Fold each row as it settles.** The drop the second line's *keep a line in
+  every case* exists to prevent: the first sibling to finish is usually not at
+  the tail, so 48px vanish above rows still running, and the reader's rows
+  jump.
+- **A window only while the row is in view.** The row would grow the moment it
+  scrolled into sight, re-flowing the list on every scroll near it, for an
+  IntersectionObserver per row.
+- **A window only on the newest, or most recently active, subagent.** The
+  extra height would move between siblings as their steps interleave: a
+  re-flow on every step, worse than any fixed size.
+- **One line, with the current step's glyph and elapsed time**
+  (`6 tool uses · ⟳ Grep … 12s`). Height never changes, and it answers *stuck
+  on a long step*; it cannot show a loop or a pace. The honest runner-up:
+  cheapest, and worse at the question.
+- **A trailing `+N more tool uses` line.** A second count of one fact, a line
+  from the first ([above](#what-each-line-shows)).
+- **A preview on tap.** A tap to answer a question that has to be answerable at
+  a glance — and that tap exists already: the body, the Process, then ⤢.
 
 ### Process
 
@@ -3722,7 +3954,10 @@ row in the transcript the user can always see.
 
 ```
 │ ⟳  ⧉ Explore  Find retry handling                         47s │
-│    6 tool uses · Bash  rm -rf build/                          │
+│    6 tool uses                                                │
+│    ✓ Grep   "Retry-After" in server/                          │
+│    ✓ Read   sender.go                                         │
+│    ? Bash   rm -rf build/                                     │  the step behind the card
 │ ┌ ?  Bash   rm -rf build/                                   ┐ │  the card, as everywhere
 │ │    [Allow]  [Deny]  …                                     │ │
 │ └───────────────────────────────────────────────────────────┘ │
@@ -3736,9 +3971,11 @@ what the card is about and parallel subagents could each be asking. More than
 one can be waiting in the same slot — parallel calls in one subagent, or a
 nested subagent's beside its parent's — and they stack in transcript order, a nested subagent's cards where that
 subagent sits. Each
-card names its own call; the Task row's second line may or may not name the
-same one (a later sibling call, or a nested subagent, can be the latest child),
-and nothing here needs it to. Once answered, a card leaves the slot: whatever it
+card names its own call, and the step behind it is in the row's
+[step window](#the-step-window) with `CircleHelp`, directly above the card —
+unless newer steps — a later sibling call, a nested subagent — have pushed it
+out; the card names its call either way. The second line names no call while
+the window is drawn. Once answered, a card leaves the slot: whatever it
 and its call become afterwards are drawn in the Process, in arrival order, as
 they would be in a message — the one height change here, and it happens under
 the user's own tap.
@@ -3753,7 +3990,10 @@ frame:
 
 ```
 │ ⟳  ⧉ Explore  Find retry handling                         47s │
-│    6 tool uses · code-reviewer  Review the diff               │
+│    6 tool uses                                                │
+│    ✓ Read   sender.go                                         │
+│    ⟳ ⧉ code-reviewer  Review the diff                     12s │
+│    ? Bash   go test ./relay/…                                 │
 │ ┌ ?  Bash   go test ./relay/…                               ┐ │  Explore's own: no asker line
 │ │    [Deny]  [Always Allow]  [Allow]                        │ │
 │ ├───────────────────────────────────────────────────────────┤ │
@@ -3837,11 +4077,11 @@ the limit it always had, now visible as which Process the card lands in.
 
 | Task status | Row | Process |
 |---|---|---|
-| `running` | spinner, `N tool uses · <latest child>` | grows; its live children spin |
+| `running` | spinner, `N tool uses` over its [step window](#the-step-window) | grows; its live children spin |
 | `background` | spinner + chip, same line while children arrive | as running, for as long as children arrive |
 | `success` | muted check, the figures | settled |
 | `error` | red, `N tool uses · <first line of what it returned>`; the body stays closed | closed; a failed call, if any, is red on its own row |
-| `interrupted` | `Ban`, `N tool uses · <latest child>` — on Codex as on Claude ([status by status](#status-by-status)) | settled |
+| `interrupted` | `Ban`, `N tool uses · <latest child>` once its window folds — on Codex as on Claude ([status by status](#status-by-status)) | settled |
 | resumed after any of the three above | as `running`, until the resumed run ends ([status by status](#status-by-status)) | grows again; the new children spin |
 
 **A settled subagent leaves nothing spinning under it**, save a child in
@@ -4894,6 +5134,10 @@ omission.
 A page's card is the one thing wider than the column, and it follows the pane's
 own width rather than a tier ([width](#a-page-the-agent-drew-html_render)).
 
+A subagent's [step window](#the-step-window) adds no tier either: at every
+width its glyph, title and elapsed figure keep their width and its detail
+truncates ([what yields](#what-each-line-shows)).
+
 **No width tier gets a second title line, a tooltip, or a wider truncation
 budget.** A rule like "wrap the command at `sm:`" makes the same call look like
 a different thing on a tablet and a phone, and it would mean the phone — the
@@ -4988,6 +5232,8 @@ the virtualizer measures it.
   repeated in a polite live region, and Escape, Ctrl/Cmd+F and the back gesture
   all close or open what they say ([full screen](#full-screen)). Focus goes back
   to the opener on close, or to whatever opens the same key now.
+- A subagent's [step window](#the-step-window) is `aria-hidden`, live and
+  frozen: the Process lists the same steps accessibly.
 - A subagent's Process is a `role="group"` named for the subagent, and a pending
   permission card it raised sits inside the Task item's own DOM, so both say
   whose they are without the visual cues
@@ -5061,15 +5307,25 @@ the virtualizer measures it.
 15. A subagent at work, collapsed: titled by its agent behind the `Bot` mark
     (`Explore`, a Codex `read_a`, or `Subagent` when none is known), no type
     chip, the description as the detail and still there beside a 40-character
-    agent name. Line 2: `N tool uses · <latest child>`, the count going
-    up with each tool call and the second half changing as it works — its text
-    as prose, its tool calls as their own row would word them. None of its text
+    agent name. Line 2: `N tool uses`, the count going up with each tool
+    call, and `· <text>` only while its newest words are newer than its newest
+    step, as prose. Under it, nothing before the first step; then its newest
+    three steps, oldest on top, each worded as its own row would word it, with
+    a muted glyph — nothing in the window red, even a failed step — and a
+    counter only on the running one. None of its text
     or rows anywhere in the main transcript, as long as the spawning call is
     loaded ([what is not filed](#what-is-not-filed)).
-16. Two subagents spawned together: each row counts only its own tool uses.
+16. Two subagents spawned together: each row counts only its own tool uses,
+    and each window has two lines; three or more siblings have one each.
     Let the upper one finish first: its line becomes `N tool uses · <tokens>`
-    **without the row changing height**, with the same `N` it showed live the
-    moment before, while the lower one keeps moving.
+    **without the row changing height** — its window stays, frozen, with no
+    counter — with the same `N` it showed live the moment before, while the
+    lower one keeps moving. When the lower one settles, both windows fold in
+    one frame. Resume one of them: only its own window comes back, and a
+    subagent appended to the list later regrows nobody's. Reload at each
+    point: the same windows as the live view. Open a running row: the window
+    goes under the bar with the second line; open its Process too: the window
+    is gone, and line 2 names its latest child again.
 17. Open the finished one: report, then `Process · N tool uses` **closed** —
     the same `N`, and that many calls inside when opened — then `Prompt`
     closed, then the facts line (`agentId` and whatever else is known). Open Process: the subagent's text in small secondary type on
@@ -5078,14 +5334,15 @@ the virtualizer measures it.
     Reload: the same row, the same count.
 18. A subagent step that needs permission, with the Task row collapsed: the card
     is visible directly under the Task row, not hidden in the closed Process —
-    and for a subagent's subagent, under the top-level Task row. Approve it: the
+    and for a subagent's subagent, under the top-level Task row — with its step
+    in the window above it, behind a muted `CircleHelp`. Approve it: the
     card leaves that slot and the step runs inside the Process. A card asked by
     the subagent's subagent carries one line above its row naming that inner
     agent as its row does (`⧉ code-reviewer  Review the diff`); the outer
     subagent's own card beside it has none.
 19. Interrupt a subagent mid-run, on Claude and on Codex: `Ban`, muted, never
-    red, the line frozen on its latest child, and no spinner left anywhere
-    inside its Process.
+    red, the window folded and the line frozen on its latest child in the same
+    frame, and no spinner left anywhere inside its Process.
     A subagent that fails, foreground or backgrounded, live or on reload: red
     line 1, `N tool uses · <first line of what it returned>`, and the body
     **closed** until tapped.

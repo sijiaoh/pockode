@@ -2,10 +2,12 @@ import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ComponentProps, ReactNode } from "react";
 import { describe, expect, it, vi } from "vitest";
+import { countSteps, latestChild } from "../../lib/subagentRun";
 import type { ContentPart, ToolRun, ToolRunStatus } from "../../types/message";
 import { SubagentResumesContext } from "./subagentResumesContext";
 import { SubagentTranscriptContext } from "./subagentTranscriptContext";
 import TaskItem from "./TaskItem";
+import { PartBlocks } from "./ToolList";
 import { UnfiledChildrenContext } from "./unfiledChildrenContext";
 
 // A stand-in for the transcript's own part renderer, which TaskItem is handed
@@ -411,6 +413,19 @@ describe("TaskItem", () => {
 			},
 			status: "pending",
 		});
+		// The row's unfiled children, as the transcript derives them.
+		const flat = (...parts: ContentPart[]) =>
+			new Map([
+				[
+					"t1",
+					{
+						parts,
+						count: parts.length,
+						steps: countSteps(parts),
+						latest: latestChild(parts),
+					},
+				],
+			]);
 		const openProcess = async (user: ReturnType<typeof userEvent.setup>) => {
 			await user.click(screen.getByRole("button", { name: /find usages/ }));
 			await user.click(screen.getByRole("button", { name: /^Process/ }));
@@ -896,7 +911,7 @@ describe("TaskItem", () => {
 			const user = userEvent.setup();
 			render(
 				<UnfiledChildrenContext
-					value={new Map([["t1", { count: 3, steps: 2 }]])}
+					value={flat(read("u1"), read("u2"), text("Between."))}
 				>
 					<TaskItemWithChildren
 						run={task("success", { children: [read("c1")] })}
@@ -915,20 +930,7 @@ describe("TaskItem", () => {
 		// The flat ones are the newest, so they say what it is doing now.
 		it("reads what it is doing from children that sit flat", () => {
 			render(
-				<UnfiledChildrenContext
-					value={
-						new Map([
-							[
-								"t1",
-								{
-									count: 1,
-									steps: 0,
-									latest: { kind: "text" as const, text: "Newest words." },
-								},
-							],
-						])
-					}
-				>
+				<UnfiledChildrenContext value={flat(text("Newest words."))}>
 					<TaskItemWithChildren
 						run={task("running", {
 							result: undefined,
@@ -1133,5 +1135,312 @@ describe("TaskItem resumed", () => {
 
 		await user.click(screen.getByRole("button", { name: /find usages/ }));
 		expect(await screen.findByText("First report")).toBeVisible();
+	});
+});
+
+// docs/tool-call-ui.md#the-step-window
+describe("TaskItem step window", () => {
+	const step = (
+		id: string,
+		status: ToolRunStatus = "success",
+		overrides: Partial<ToolRun> = {},
+	): ContentPart => ({
+		type: "tool_call",
+		id: `call-${id}`,
+		tool: {
+			id,
+			name: "Read",
+			input: { file_path: `/repo/${id}.go` },
+			status,
+			...overrides,
+		},
+	});
+	const words = (content: string): ContentPart => ({
+		type: "text",
+		id: `text-${content}`,
+		content,
+	});
+	const stepWindow = (row: HTMLElement) =>
+		row
+			.closest("[data-tool-use-id]")
+			?.querySelector<HTMLElement>("[data-step-window]") ?? null;
+	// One line per step, read by the file each step read.
+	const windowFiles = (row: HTMLElement) =>
+		Array.from(
+			stepWindow(row)?.children ?? [],
+			(line) => line.textContent?.match(/(\w+\.go)/)?.[1],
+		);
+	const rowOf = (description: string) =>
+		screen.getByRole("button", { name: new RegExp(description) });
+
+	it("shows a lone live subagent's three newest steps, oldest first", () => {
+		render(
+			<TaskItemWithChildren
+				run={task("running", {
+					result: undefined,
+					children: [step("a"), step("b"), step("c"), step("d", "running")],
+				})}
+			/>,
+		);
+		expect(windowFiles(rowOf("find usages"))).toEqual(["b.go", "c.go", "d.go"]);
+		// The total stays on line 2, which names no call while the window does.
+		expect(screen.getByText("4 tool uses")).toBeVisible();
+		expect(screen.queryByText("·")).toBeNull();
+	});
+
+	it("keeps the subagent's words on line 2 only when they are newer than its last step", () => {
+		const { rerender } = render(
+			<TaskItemWithChildren
+				run={task("running", {
+					result: undefined,
+					children: [step("a"), words("Checking the 503 path.")],
+				})}
+			/>,
+		);
+		expect(screen.getByText("Checking the 503 path.")).toBeVisible();
+
+		rerender(
+			<TaskItemWithChildren
+				run={task("running", {
+					result: undefined,
+					children: [step("a"), words("Checking the 503 path."), step("b")],
+				})}
+			/>,
+		);
+		expect(screen.queryByText("Checking the 503 path.")).toBeNull();
+	});
+
+	it("draws no window before the first step", () => {
+		render(
+			<TaskItemWithChildren
+				run={task("running", {
+					result: undefined,
+					subagentProgress: { toolUses: 1, lastToolName: "Grep" },
+				})}
+			/>,
+		);
+		expect(screen.getByText("Grep")).toBeVisible();
+		expect(stepWindow(rowOf("find usages"))).toBeNull();
+	});
+
+	// The row's red is the subagent's own outcome.
+	it("draws a failed step muted, never red", () => {
+		render(
+			<TaskItemWithChildren
+				run={task("running", {
+					result: undefined,
+					children: [step("a", "error")],
+				})}
+			/>,
+		);
+		const drawn = stepWindow(rowOf("find usages"));
+		expect(drawn).not.toBeNull();
+		expect(drawn?.querySelector(".text-th-error")).toBeNull();
+	});
+
+	it("times only a running step", () => {
+		const seenAt = new Date(Date.now() - 12_000);
+		render(
+			<TaskItemWithChildren
+				run={task("running", {
+					result: undefined,
+					children: [
+						step("a", "success", { seenAt, durationMs: 5000 }),
+						step("b", "running", { seenAt }),
+					],
+				})}
+			/>,
+		);
+		expect(stepWindow(rowOf("find usages"))).toHaveTextContent(/b\.go12s$/);
+		expect(stepWindow(rowOf("find usages"))).not.toHaveTextContent(/a\.go\d/);
+	});
+
+	// The Process shows the same steps whole.
+	it("goes with the second line on an open row, and away while the Process is open", async () => {
+		const user = userEvent.setup();
+		render(
+			<TaskItemWithChildren
+				run={task("running", { result: undefined, children: [step("a")] })}
+			/>,
+		);
+		// In the row's button while it is closed, under its bar once open.
+		expect(
+			rowOf("find usages").querySelector("[data-step-window]"),
+		).not.toBeNull();
+		await user.click(rowOf("find usages"));
+		expect(windowFiles(rowOf("find usages"))).toEqual(["a.go"]);
+		expect(rowOf("find usages").querySelector("[data-step-window]")).toBeNull();
+		await user.click(screen.getByRole("button", { name: /^Process/ }));
+		expect(stepWindow(rowOf("find usages"))).toBeNull();
+	});
+
+	it("folds a lone row when it settles", () => {
+		render(
+			<TaskItemWithChildren run={task("success", { children: [step("a")] })} />,
+		);
+		expect(stepWindow(rowOf("find usages"))).toBeNull();
+	});
+
+	describe("in a list of siblings", () => {
+		const sibling = (
+			id: string,
+			description: string,
+			status: ToolRunStatus,
+			times: Partial<ToolRun>,
+			children: ContentPart[],
+		): ContentPart => ({
+			type: "tool_call",
+			id: `call-${id}`,
+			tool: {
+				id,
+				name: "Agent",
+				input: { description, subagent_type: "Explore" },
+				status,
+				children,
+				...times,
+			},
+		});
+		const List = ({ parts }: { parts: ContentPart[] }) => (
+			<PartBlocks
+				items={parts.map((part) => ({ part }))}
+				renderPart={({ part }) => renderChild(part, undefined, 0)}
+			/>
+		);
+		const steps = [step("a"), step("b", "error"), step("c")];
+
+		it("gives two siblings two lines each, and keeps the first to settle until the other does", () => {
+			const { rerender } = render(
+				<List
+					parts={[
+						sibling(
+							"t1",
+							"first",
+							"success",
+							{ startedAt: 0, endedAt: 10 },
+							steps,
+						),
+						sibling("t2", "second", "running", { startedAt: 1 }, steps),
+					]}
+				/>,
+			);
+			expect(windowFiles(rowOf("first"))).toEqual(["b.go", "c.go"]);
+			expect(windowFiles(rowOf("second"))).toEqual(["b.go", "c.go"]);
+
+			rerender(
+				<List
+					parts={[
+						sibling(
+							"t1",
+							"first",
+							"success",
+							{ startedAt: 0, endedAt: 10 },
+							steps,
+						),
+						sibling(
+							"t2",
+							"second",
+							"success",
+							{ startedAt: 1, endedAt: 20 },
+							steps,
+						),
+					]}
+				/>,
+			);
+			expect(stepWindow(rowOf("first"))).toBeNull();
+			expect(stepWindow(rowOf("second"))).toBeNull();
+		});
+
+		it("gives three or more siblings one line each", () => {
+			render(
+				<List
+					parts={["t1", "t2", "t3"].map((id) =>
+						sibling(id, `job ${id}`, "running", { startedAt: 0 }, steps),
+					)}
+				/>,
+			);
+			expect(windowFiles(rowOf("job t1"))).toEqual(["c.go"]);
+		});
+
+		// A resumed sibling grows its own window; the one that folded stays
+		// folded.
+		it("regrows only the resumed row's window", () => {
+			const resume: ToolRun = {
+				id: "s1",
+				name: "SendMessage",
+				input: { to: "a1" },
+				status: "running",
+				startedAt: 30,
+			};
+			render(
+				<SubagentResumesContext value={new Map([["t2", resume]])}>
+					<List
+						parts={[
+							sibling(
+								"t1",
+								"first",
+								"success",
+								{ startedAt: 0, endedAt: 10 },
+								steps,
+							),
+							sibling(
+								"t2",
+								"second",
+								"success",
+								{ startedAt: 1, endedAt: 20 },
+								steps,
+							),
+						]}
+					/>
+				</SubagentResumesContext>,
+			);
+			expect(stepWindow(rowOf("first"))).toBeNull();
+			expect(windowFiles(rowOf("second"))).toEqual(["b.go", "c.go"]);
+		});
+
+		// While its window shows where it was cut, line 2 does not say it
+		// again; once the list folds, line 2 keeps it.
+		it("names where an interrupted row was cut only once its window folds", () => {
+			const cut = [step("a"), step("b", "interrupted")];
+			const { rerender } = render(
+				<List
+					parts={[
+						sibling(
+							"t1",
+							"first",
+							"interrupted",
+							{ startedAt: 0, endedAt: 10 },
+							cut,
+						),
+						sibling("t2", "second", "running", { startedAt: 1 }, steps),
+					]}
+				/>,
+			);
+			const line = () =>
+				within(rowOf("first")).getByText("2 tool uses").parentElement;
+			expect(line()).not.toHaveTextContent("b.go");
+
+			rerender(
+				<List
+					parts={[
+						sibling(
+							"t1",
+							"first",
+							"interrupted",
+							{ startedAt: 0, endedAt: 10 },
+							cut,
+						),
+						sibling(
+							"t2",
+							"second",
+							"interrupted",
+							{ startedAt: 1, endedAt: 10 },
+							steps,
+						),
+					]}
+				/>,
+			);
+			expect(stepWindow(rowOf("first"))).toBeNull();
+			expect(line()).toHaveTextContent("b.go");
+		});
 	});
 });

@@ -3,7 +3,9 @@ import { type ReactNode, useState } from "react";
 import { collectPartsWithin, findToolRunPath } from "../../lib/partTree";
 import {
 	countSteps,
+	isLiveRun,
 	type LatestChild,
+	recentSteps,
 	resumedRun,
 	type SubagentLine,
 	subagentLastWords,
@@ -17,7 +19,6 @@ import {
 	taskPrompt,
 	toolSummary,
 } from "../../lib/toolSummary";
-import { useWSStore } from "../../lib/wsStore";
 import type { ContentPart, ToolRun } from "../../types/message";
 import { formatTokens } from "../../utils/tokens";
 import {
@@ -27,6 +28,8 @@ import {
 	MarkdownContent,
 } from "../ui";
 import { FactsLine, SubagentConclusion } from "./SubagentConclusion";
+import { StepCallLabel, SubagentStepWindow } from "./SubagentStepWindow";
+import { useStepWindowLines } from "./stepWindowContext";
 import { useSubagentResume } from "./subagentResumesContext";
 import {
 	SUBAGENT_OPENER_ATTR,
@@ -105,25 +108,10 @@ function AskerLine({ asker }: { asker: ToolRun }) {
 
 /** The latest child, worded as its own row would word it — never red. */
 function LatestChildLabel({ child }: { child: LatestChild }) {
-	const workDir = useWSStore((state) => state.workDir);
 	if (child.kind === "text") {
 		return <span className="min-w-0 truncate">{child.text}</span>;
 	}
-	const summary = toolSummary(child.name, child.input, workDir);
-	return (
-		<>
-			{/* Secondary rather than the accent the row's own title wears: two
-			    accent titles on one row would make the child read as the row. */}
-			<span className="shrink-0 text-th-text-secondary">
-				{summary.chip ? `${summary.title} ${summary.chip}` : summary.title}
-			</span>
-			<Detail
-				detail={summary.detail}
-				detailTail={summary.detailTail}
-				mono={summary.mono}
-			/>
-		</>
-	);
+	return <StepCallLabel name={child.name} input={child.input} />;
 }
 
 /**
@@ -201,7 +189,18 @@ function TaskItem({ run, depth = 0, renderChild }: Props) {
 	// doing under the call that resumed it; the body keeps what it reported.
 	const resume = useSubagentResume(run.id);
 	const rowRun = resume ? resumedRun(run, resume) : run;
-	const line = subagentLine(rowRun, unfiled);
+	// The step window, by the list's rules, and not while the Process is open
+	// inline: that shows the same steps whole
+	// (docs/tool-call-ui.md#the-step-window).
+	const windowLines = useStepWindowLines(rowRun);
+	const windowSteps =
+		expanded && processExpanded
+			? []
+			: recentSteps([...children, ...(unfiled?.parts ?? [])], windowLines);
+	const stepWindow = windowSteps.length > 0 && (
+		<SubagentStepWindow steps={windowSteps} frozen={!isLiveRun(rowRun)} />
+	);
+	const line = subagentLine(rowRun, unfiled, windowSteps.length > 0);
 	// The report — or a backgrounded subagent's outcome, which is its last
 	// words delivered after the call returned (Claude's notification summary,
 	// measured on claude 2.1.286) — is drawn in full above the Process, and
@@ -240,6 +239,7 @@ function TaskItem({ run, depth = 0, renderChild }: Props) {
 					line && {
 						content: <SubagentLineContent line={line} />,
 						live: line.live,
+						below: stepWindow,
 					}
 				}
 				secondLine={line ? null : toolSecondLine(rowRun)}
