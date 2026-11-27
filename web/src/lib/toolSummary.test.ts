@@ -88,20 +88,51 @@ describe("toolSummary", () => {
 		).toBe("ls | wc -l");
 	});
 
-	it("names a subagent call by its description and badges its type", () => {
+	// The agent is the title and the task its detail: the type is no longer a
+	// chip beside a literal `Task`.
+	it("names a subagent call by its agent, and details it by its description", () => {
 		expect(
 			toolSummary(
 				"Agent",
 				{ description: "find usages", subagent_type: "Explore" },
 				WORK_DIR,
 			),
-		).toMatchObject({ title: "Task", chip: "Explore", detail: "find usages" });
+		).toEqual({
+			title: "Explore",
+			detail: "find usages",
+			detailTail: "",
+			mono: false,
+		});
+	});
+
+	it("leaves a plugin's prefix off a subagent's title", () => {
+		expect(
+			toolSummary(
+				"Agent",
+				{
+					description: "review",
+					subagent_type: "pr-review-toolkit:code-reviewer",
+				},
+				WORK_DIR,
+			).title,
+		).toBe("code-reviewer");
+	});
+
+	// Not the CLI's tool name, and not a guess at its default agent.
+	it("titles a subagent call that names no agent Subagent", () => {
+		expect(
+			toolSummary(
+				"Agent",
+				{ description: "find usages", prompt: "Look" },
+				WORK_DIR,
+			),
+		).toMatchObject({ title: "Subagent", detail: "find usages" });
 	});
 
 	it("names a Codex spawn, which has no description, by its agent", () => {
 		expect(
 			toolSummary("Task", { agent_path: "/root/read_a" }, WORK_DIR),
-		).toMatchObject({ title: "Task", chip: undefined, detail: "read_a" });
+		).toMatchObject({ title: "read_a", detail: "" });
 	});
 
 	it("names a Codex spawn that carries only its prompt by the prompt", () => {
@@ -111,7 +142,7 @@ describe("toolSummary", () => {
 				{ prompt: "Read src/file1.go\nThen report." },
 				WORK_DIR,
 			),
-		).toMatchObject({ title: "Task", detail: "Read src/file1.go" });
+		).toMatchObject({ title: "Subagent", detail: "Read src/file1.go" });
 	});
 
 	// Claude passes its own `mcp__server__tool` through verbatim, and the title

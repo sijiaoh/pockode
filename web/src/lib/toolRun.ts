@@ -301,7 +301,15 @@ export function formatDuration(ms: number): string {
 	return `${Math.floor(totalMinutes / 60)}h ${totalMinutes % 60}m`;
 }
 
-/** A count of calls, as a subagent row and a folded group both word it. */
+/** A count of calls, as a folded group words it. */
 export function stepsLabel(steps: number): string {
 	return steps === 1 ? "1 step" : `${steps} steps`;
+}
+
+/**
+ * A count of a subagent's calls, as its row and its Process heading both word
+ * it — the CLI's own word for them.
+ */
+export function toolUsesLabel(toolUses: number): string {
+	return toolUses === 1 ? "1 tool use" : `${toolUses} tool uses`;
 }

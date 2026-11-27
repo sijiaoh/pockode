@@ -17,6 +17,9 @@ import type {
 	RecordedAccount,
 	ServerNotification,
 	SessionTurn,
+	SubagentCounts,
+	SubagentProgress,
+	SubagentReport,
 	SystemMessageMeta,
 	Thought,
 	ToolFetch,
@@ -77,6 +80,50 @@ function serverTime(raw: unknown): number | undefined {
 	if (typeof raw !== "string") return undefined;
 	const ms = Date.parse(raw);
 	return Number.isNaN(ms) ? undefined : ms;
+}
+
+function optionalCount(raw: unknown): number | undefined {
+	return typeof raw === "number" && raw >= 0 ? raw : undefined;
+}
+
+function subagentCounts(record: Record<string, unknown>): SubagentCounts {
+	const toolUses = optionalCount(record.tool_uses);
+	const totalTokens = optionalCount(record.total_tokens);
+	return {
+		...(toolUses !== undefined ? { toolUses } : {}),
+		...(totalTokens !== undefined ? { totalTokens } : {}),
+	};
+}
+
+function isRecord(raw: unknown): raw is Record<string, unknown> {
+	return typeof raw === "object" && raw !== null;
+}
+
+/** A `tool_result`'s `subagent`; undefined when it says nothing. */
+function parseSubagentReport(raw: unknown): SubagentReport | undefined {
+	if (!isRecord(raw)) return undefined;
+	const agentId = optionalString(raw.agent_id);
+	const agentType = optionalString(raw.agent_type);
+	const report: SubagentReport = {
+		...(agentId ? { agentId } : {}),
+		...(agentType ? { agentType } : {}),
+		...subagentCounts(raw),
+	};
+	return Object.keys(report).length > 0 ? report : undefined;
+}
+
+/**
+ * A `tool_activity`'s `subagent_progress`, or one entry of a subscription's
+ * `tool_progress`; undefined when it says nothing.
+ */
+function parseSubagentProgress(raw: unknown): SubagentProgress | undefined {
+	if (!isRecord(raw)) return undefined;
+	const lastToolName = optionalString(raw.last_tool_name);
+	const progress: SubagentProgress = {
+		...subagentCounts(raw),
+		...(lastToolName ? { lastToolName } : {}),
+	};
+	return Object.keys(progress).length > 0 ? progress : undefined;
 }
 
 // Who answered a permission request and why, when it was not a person
@@ -216,6 +263,7 @@ export type NormalizedEvent =
 			 */
 			subtype?: string;
 			durationMs?: number;
+			subagent?: SubagentReport;
 			exitCode?: number;
 			htmlPage?: string;
 			/** See `tool_call`. */
@@ -233,6 +281,8 @@ export type NormalizedEvent =
 			activity?: string;
 			/** An increment: it accumulates into the run's output. */
 			outputDelta?: string;
+			/** A latest value, replacing the last whole. */
+			subagentProgress?: SubagentProgress;
 	  }
 	| {
 			/** A finished stretch of thinking; see the wire record. */
@@ -408,6 +458,7 @@ export function normalizeEvent(
 					typeof record.duration_ms === "number" && record.duration_ms > 0
 						? record.duration_ms
 						: undefined,
+				subagent: parseSubagentReport(record.subagent),
 				exitCode:
 					typeof record.exit_code === "number" ? record.exit_code : undefined,
 				htmlPage:
@@ -424,6 +475,7 @@ export function normalizeEvent(
 				toolUseId: record.tool_use_id as string,
 				activity: record.activity as string | undefined,
 				outputDelta: record.output_delta as string | undefined,
+				subagentProgress: parseSubagentProgress(record.subagent_progress),
 			};
 		case "thinking":
 			return {
@@ -2052,6 +2104,9 @@ function settleToolRun(
 	const settled: ToolRun = {
 		...run,
 		...(event.durationMs !== undefined ? { durationMs: event.durationMs } : {}),
+		// A later result's report replaces an earlier one whole: the outcome of
+		// backgrounded work says everything its placeholder did, and more.
+		...(event.subagent !== undefined ? { subagent: event.subagent } : {}),
 		...(event.exitCode !== undefined ? { exitCode: event.exitCode } : {}),
 		...(event.htmlPage !== undefined ? { htmlPage: event.htmlPage } : {}),
 	};
@@ -2069,6 +2124,10 @@ function settleToolRun(
 
 	const outcome: ToolRun = {
 		...settled,
+		// Live figures stop being true once the run is over; what is true then
+		// is its report, and a run whose engine sent none has no figures rather
+		// than its last live ones posing as final.
+		subagentProgress: undefined,
 		...(event.observedAt !== undefined ? { endedAt: event.observedAt } : {}),
 		result: event.toolResult,
 		contents: event.contents,
@@ -2402,6 +2461,9 @@ function updateToolActivity(
 				// blinks in and out re-flows every row below it.
 				...(event.activity ? { activity: event.activity } : {}),
 				...(event.outputDelta ? appendOutput(run, event.outputDelta) : {}),
+				...(event.subagentProgress
+					? { subagentProgress: event.subagentProgress }
+					: {}),
 			};
 		},
 		false,
@@ -2415,14 +2477,19 @@ function updateToolActivity(
  */
 export function applyToolActivitySnapshot(
 	messages: Message[],
-	activity: Record<string, string>,
+	activity: Record<string, string> = {},
+	progress: Record<string, unknown> = {},
 ): Message[] {
 	let updated = messages;
-	for (const [toolUseId, text] of Object.entries(activity)) {
+	for (const toolUseId of new Set([
+		...Object.keys(activity),
+		...Object.keys(progress),
+	])) {
 		updated = updateToolActivity(updated, {
 			type: "tool_activity",
 			toolUseId,
-			activity: text,
+			activity: activity[toolUseId],
+			subagentProgress: parseSubagentProgress(progress[toolUseId]),
 		});
 	}
 	return updated;

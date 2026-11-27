@@ -85,9 +85,32 @@ export function taskDescription(input: unknown): string {
 		str(obj.subagent_type) ??
 		str(str(obj.agent_path)?.split("/").pop()) ??
 		str(firstLine(str(obj.prompt) ?? "")) ??
-		"Task"
+		SUBAGENT_TITLE
 	);
 }
+
+/**
+ * Which agent a subagent call ran, in full: Claude's `subagent_type` as given
+ * (`pr-review-toolkit:code-reviewer`), or the last segment of a Codex agent's
+ * path. Undefined when the call named none.
+ */
+export function subagentType(input: unknown): string | undefined {
+	const obj = asObject(input);
+	return str(obj.subagent_type) ?? str(str(obj.agent_path)?.split("/").pop());
+}
+
+/**
+ * A subagent row's title: the agent, without a plugin's `plugin:` prefix —
+ * where the agent came from, which the facts line keeps. `Subagent` when the
+ * call named none, rather than a guess at the CLI's default
+ * (docs/tool-call-ui.md#line-1-the-agent-then-what-it-was-asked).
+ */
+export function subagentName(input: unknown): string {
+	return subagentType(input)?.split(":").pop() || SUBAGENT_TITLE;
+}
+
+/** The title of a subagent row whose call named no agent. */
+export const SUBAGENT_TITLE = "Subagent";
 
 /**
  * A path split for one line — the row's, and a tool body's `PathLine`: the
@@ -275,9 +298,8 @@ export function toolSummary(
 
 	if (isTaskTool(toolName)) {
 		return {
-			title: "Task",
-			chip: str(obj.subagent_type),
-			detail: taskDescription(input),
+			title: subagentName(input),
+			detail: str(obj.description) ?? firstLine(str(obj.prompt) ?? ""),
 			detailTail: "",
 			mono: false,
 		};

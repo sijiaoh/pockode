@@ -5,19 +5,22 @@ import { collectPartsDeep } from "../../lib/partTree";
 import {
 	countSteps,
 	type LatestChild,
-	type StepsLine,
+	type SubagentLine,
+	subagentLine,
 	subagentReport,
-	subagentStepsLine,
 	withoutEchoedReport,
 } from "../../lib/subagentRun";
-import { stepsLabel, toolRunText, toolSecondLine } from "../../lib/toolRun";
+import { toolRunText, toolSecondLine, toolUsesLabel } from "../../lib/toolRun";
 import {
+	SUBAGENT_TITLE,
+	subagentType,
 	taskPrompt,
 	toolSummary,
 	toolSummaryLine,
 } from "../../lib/toolSummary";
 import { useWSStore } from "../../lib/wsStore";
 import type { ContentPart, ToolRun } from "../../types/message";
+import { formatTokens } from "../../utils/tokens";
 import { ClampedContent, CollapsibleBody, MarkdownContent } from "../ui";
 import { HeaderlessMainBlock } from "./HeaderlessMainBlock";
 import { PartBlocks } from "./ToolList";
@@ -81,21 +84,60 @@ function LatestChildLabel({ child }: { child: LatestChild }) {
 }
 
 /**
- * `N steps · <latest child>`. The count never yields width: on a narrow phone
- * the latest child is cut to a few characters and the count — the half that
- * answers "is it moving" — is still there.
+ * `N tool uses · <latest child>`, or once settled the figures. The count never
+ * yields width: on a narrow phone the latest child is cut to a few characters
+ * and the count — the half that answers "is it moving" — is still there.
  */
-function StepsLineContent({ line }: { line: StepsLine }) {
+function SubagentLineContent({ line }: { line: SubagentLine }) {
+	const count = line.toolUses > 0 && (
+		<span className="shrink-0">{toolUsesLabel(line.toolUses)}</span>
+	);
+	if (line.tokens !== undefined) {
+		// One line that wraps into its own hidden overflow, so a figure that
+		// does not fit drops out whole rather than reading `45.`.
+		return (
+			<span className="flex h-[1lh] min-w-0 flex-wrap items-baseline gap-x-1.5 overflow-hidden">
+				{count}
+				<span className="flex shrink-0 gap-1.5">
+					{count && <span>·</span>}
+					<span>{formatTokens(line.tokens)} tokens</span>
+				</span>
+			</span>
+		);
+	}
 	return (
 		<>
-			<span className="shrink-0">{stepsLabel(line.steps)}</span>
+			{count}
 			{line.tail && (
 				<>
-					<span className="shrink-0">·</span>
+					{count && <span className="shrink-0">·</span>}
 					<LatestChildLabel child={line.tail} />
 				</>
 			)}
 		</>
+	);
+}
+
+/**
+ * What the row leaves out, for the reader who needs to quote it back: the
+ * subagent's id, which resuming it takes, and its full type where the title
+ * shortened it — or where only the result named it.
+ */
+function FactsLine({ run, title }: { run: ToolRun; title: string }) {
+	const type = subagentType(run.input) ?? run.subagent?.agentType;
+	const agentId = run.subagent?.agentId;
+	const showType = type !== undefined && type !== title;
+	if (!showType && !agentId) return null;
+	return (
+		<p className="border-t border-th-border p-2 text-th-text-muted">
+			{showType && type}
+			{showType && agentId && " · "}
+			{agentId && (
+				<>
+					agent <span className="break-all font-mono">{agentId}</span>
+				</>
+			)}
+		</p>
 	);
 }
 
@@ -192,7 +234,7 @@ function TaskItem({ run, depth = 0, renderChild }: Props) {
 	const children = run.children ?? [];
 	const unfiled = useUnfiledChildren(run.id);
 	const steps = countSteps(children) + (unfiled?.steps ?? 0);
-	const stepsLine = subagentStepsLine(run, unfiled);
+	const line = subagentLine(run, unfiled);
 	// The report — or a backgrounded subagent's outcome, which is its last
 	// words delivered after the call returned (Claude's notification summary,
 	// measured on claude 2.1.286) — is drawn in full above the Process, and
@@ -205,9 +247,10 @@ function TaskItem({ run, depth = 0, renderChild }: Props) {
 	// under a row that is itself inside a closed Process. Only the outermost
 	// row collects them: it is the one the user can always see.
 	const pendingCards = nested ? [] : collectPartsDeep(children, isPendingCard);
-	const processLabel = summary.chip
-		? `${summary.chip} subagent's process`
-		: "Subagent's process";
+	const processLabel =
+		summary.title === SUBAGENT_TITLE
+			? "Subagent's process"
+			: `${summary.title} subagent's process`;
 	const level = depth + 1;
 
 	// A failure has to be read, but only pries the body open once — after that
@@ -235,29 +278,27 @@ function TaskItem({ run, depth = 0, renderChild }: Props) {
 			<ToolRow
 				expanded={expanded}
 				onToggle={() => setExpanded(!expanded)}
-				glyph={<ToolStatusGlyph status={run.status} name="Task" />}
+				glyph={<ToolStatusGlyph status={run.status} name={SUBAGENT_TITLE} />}
 				title={summary.title}
-				chip={summary.chip}
+				agent
 				background={run.fromBackground}
 				detail={summary.detail}
 				meta={<ToolMeta run={run} />}
-				// With steps the row has its own line, which copies nothing in the
-				// body. Without, the shared one stands — except that it ends a failed
-				// run with the last line of its text, and here that text is the
-				// report, which this row has already opened in full below: a worse
-				// second copy, in mono because the shared rule expects machine
-				// output. A backgrounded failure keeps it, being the one failed row
-				// whose body does not open.
+				// With a line of its own the row copies nothing in the body.
+				// Without, the shared one stands — except that it ends a failed run
+				// with the last line of its text, and here that text is the report,
+				// which this row has already opened in full below: a worse second
+				// copy, in mono because the shared rule expects machine output. A
+				// backgrounded failure keeps it, being the one failed row whose
+				// body does not open.
 				richSecondLine={
-					stepsLine && {
-						content: <StepsLineContent line={stepsLine} />,
-						live: stepsLine.live,
+					line && {
+						content: <SubagentLineContent line={line} />,
+						live: line.live,
 					}
 				}
 				secondLine={
-					stepsLine || (failed && !run.fromBackground)
-						? null
-						: toolSecondLine(run)
+					line || (failed && !run.fromBackground) ? null : toolSecondLine(run)
 				}
 				error={failed}
 			/>
@@ -326,7 +367,7 @@ function TaskItem({ run, depth = 0, renderChild }: Props) {
 									className={`size-3 shrink-0 text-th-text-muted transition-transform ${processExpanded ? "rotate-90" : ""}`}
 								/>
 								<span className="text-th-text-muted">
-									{steps > 0 ? `Process · ${stepsLabel(steps)}` : "Process"}
+									{steps > 0 ? `Process · ${toolUsesLabel(steps)}` : "Process"}
 								</span>
 							</button>
 							<CollapsibleBody expanded={processExpanded}>
@@ -384,6 +425,7 @@ function TaskItem({ run, depth = 0, renderChild }: Props) {
 							</CollapsibleBody>
 						</div>
 					)}
+					<FactsLine run={run} title={summary.title} />
 				</div>
 			</CollapsibleBody>
 		</div>

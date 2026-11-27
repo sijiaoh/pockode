@@ -1,4 +1,4 @@
-import { Ban, Check, ChevronRight, CircleDot, X } from "lucide-react";
+import { Ban, Bot, Check, ChevronRight, CircleDot, X } from "lucide-react";
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import {
 	formatDuration,
@@ -6,6 +6,7 @@ import {
 	type ToolSecondLine,
 	toolRunDurationMs,
 } from "../../lib/toolRun";
+import { SUBAGENT_TITLE } from "../../lib/toolSummary";
 import type { ToolRun, ToolRunStatus } from "../../types/message";
 import { Spinner } from "../ui";
 import { useFoldLanding } from "./useFoldLanding";
@@ -202,7 +203,14 @@ interface Props {
 	onToggle: () => void;
 	glyph: ReactNode;
 	title: string;
-	/** A short label after the title: a subagent type, an MCP server. */
+	/**
+	 * Whether the title names an agent rather than a tool — a subagent's.
+	 * It is led by the agent mark so `Explore` does not read as a tool called
+	 * Explore, and capped, being whatever the agent's author typed
+	 * (docs/tool-call-ui.md#line-1-the-agent-then-what-it-was-asked).
+	 */
+	agent?: boolean;
+	/** A short label after the title, such as an MCP server. */
 	chip?: string;
 	/**
 	 * Whether this call left work running past the turn. Drawn as a second chip,
@@ -393,6 +401,7 @@ export function ToolRow({
 	onToggle,
 	glyph,
 	title,
+	agent,
 	chip,
 	background,
 	detail,
@@ -446,7 +455,21 @@ export function ToolRow({
 					toggleable={toggleable}
 				>
 					<span ref={titleRef} className="flex items-baseline gap-1.5">
-						<span className="shrink-0 text-th-accent">{title}</span>
+						{agent ? (
+							<span className="flex min-w-0 max-w-[45%] shrink-0 items-baseline gap-1 text-th-accent">
+								<Bot aria-hidden className="size-3 shrink-0 self-center" />
+								<span className="truncate">
+									{/* What the mark says to the eye; a row already titled
+									    `Subagent` would say it twice. */}
+									{title !== SUBAGENT_TITLE && (
+										<span className="sr-only">Subagent </span>
+									)}
+									{title}
+								</span>
+							</span>
+						) : (
+							<span className="shrink-0 text-th-accent">{title}</span>
+						)}
 						{chip && <Chip>{chip}</Chip>}
 						{background && <Chip>background</Chip>}
 						<Detail

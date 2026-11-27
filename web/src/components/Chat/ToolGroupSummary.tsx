@@ -14,7 +14,7 @@ interface Props {
 
 /**
  * The step a running group is on, worded as that call's own row words it, in
- * the `N steps · <latest>` grammar a subagent row already speaks. One line, so
+ * the `<count> · <latest>` grammar a subagent row already speaks. One line, so
  * the row is the same height running and settled.
  */
 function CurrentStep({ summary }: { summary: GroupSummary }) {

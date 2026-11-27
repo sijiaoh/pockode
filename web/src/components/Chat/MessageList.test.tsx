@@ -2170,6 +2170,6 @@ describe("a subagent's unfiled children", () => {
 		);
 		expect(
 			screen.getByRole("button", { name: /find usages/ }),
-		).toHaveAccessibleName(/3 steps/);
+		).toHaveAccessibleName(/3 tool uses/);
 	});
 });
