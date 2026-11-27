@@ -6129,3 +6129,151 @@ describe("part identity", () => {
 		});
 	});
 });
+
+describe("subagent figures", () => {
+	const go = { type: "message", content: "go" };
+	const call = {
+		type: "tool_call",
+		tool_name: "Agent",
+		tool_input: { subagent_type: "Explore", description: "Probe" },
+		tool_use_id: "t1",
+	};
+	const progress = (toolUses: number) =>
+		normalizeEvent({
+			type: "tool_activity",
+			tool_use_id: "t1",
+			subagent_progress: {
+				tool_uses: toolUses,
+				total_tokens: 1000 * toolUses,
+				last_tool_name: "Bash",
+			},
+		});
+	const runOf = (messages: Message[]): ToolRun => {
+		const parts = (messages[messages.length - 1] as AssistantMessage).parts;
+		const part = parts.find((p) => p.type === "tool_call");
+		if (part?.type !== "tool_call") throw new Error("no run");
+		return part.tool;
+	};
+
+	it("keeps the newest live figures, then the report in their place", () => {
+		let messages = replayHistory([go, call]);
+		messages = applyServerEvent(messages, progress(1));
+		// A progress frame without a line moves the figures and keeps the line.
+		messages = applyServerEvent(
+			messages,
+			normalizeEvent({
+				type: "tool_activity",
+				tool_use_id: "t1",
+				activity: "Running ls",
+			}),
+		);
+		messages = applyServerEvent(messages, progress(3));
+		expect(runOf(messages)).toMatchObject({
+			activity: "Running ls",
+			subagentProgress: {
+				toolUses: 3,
+				totalTokens: 3000,
+				lastToolName: "Bash",
+			},
+		});
+
+		messages = applyServerEvent(
+			messages,
+			normalizeEvent({
+				type: "tool_result",
+				tool_use_id: "t1",
+				tool_result: "report",
+				duration_ms: 4140,
+				subagent: {
+					agent_id: "a1",
+					agent_type: "Explore",
+					tool_uses: 3,
+					total_tokens: 15778,
+				},
+			}),
+		);
+		const run = runOf(messages);
+		expect(run.subagentProgress).toBeUndefined();
+		expect(run.subagent).toEqual({
+			agentId: "a1",
+			agentType: "Explore",
+			toolUses: 3,
+			totalTokens: 15778,
+		});
+		expect(run.durationMs).toBe(4140);
+	});
+
+	it("names a backgrounded subagent from its placeholder and settles on its outcome", () => {
+		const placeholder = {
+			type: "tool_result",
+			tool_use_id: "t1",
+			tool_result: "Async agent launched",
+			subtype: "background_started",
+			subagent: { agent_id: "a1" },
+		};
+		let messages = replayHistory([go, call, placeholder]);
+		expect(runOf(messages)).toMatchObject({
+			status: "background",
+			subagent: { agentId: "a1" },
+		});
+
+		// A client subscribing mid-run gets the figures from the snapshot.
+		messages = applyToolActivitySnapshot(messages, undefined, {
+			t1: { tool_uses: 2, total_tokens: 12737 },
+		});
+		expect(runOf(messages).subagentProgress).toEqual({
+			toolUses: 2,
+			totalTokens: 12737,
+		});
+
+		messages = applyServerEvent(
+			messages,
+			normalizeEvent({
+				type: "tool_result",
+				tool_use_id: "t1",
+				tool_result: "done",
+				subtype: "background_result",
+				subagent: {
+					agent_id: "a1",
+					agent_type: "Explore",
+					tool_uses: 2,
+					total_tokens: 13842,
+				},
+			}),
+		);
+		const run = runOf(messages);
+		expect(run.subagentProgress).toBeUndefined();
+		expect(run.subagent).toEqual({
+			agentId: "a1",
+			agentType: "Explore",
+			toolUses: 2,
+			totalTokens: 13842,
+		});
+	});
+
+	// Zero is a figure: a subagent that answered without a tool call.
+	it("keeps a zero count, and gives an old record none", () => {
+		const zero = runOf(
+			replayHistory([
+				go,
+				call,
+				{
+					type: "tool_result",
+					tool_use_id: "t1",
+					tool_result: "r",
+					subagent: { tool_uses: 0 },
+				},
+			]),
+		);
+		expect(zero.subagent).toEqual({ toolUses: 0 });
+
+		const old = runOf(
+			replayHistory([
+				go,
+				call,
+				{ type: "tool_result", tool_use_id: "t1", tool_result: "r" },
+			]),
+		);
+		expect(old.subagent).toBeUndefined();
+	});
+});

@@ -75,8 +75,10 @@ type codexTokenUsage struct {
 	CachedInputTokens     int64 `json:"cachedInputTokens"`
 	CacheWriteInputTokens int64 `json:"cacheWriteInputTokens"`
 	OutputTokens          int64 `json:"outputTokens"`
-	// TotalTokens is Codex's own sum, kept only to check the arithmetic below
-	// against it. See usageObserver.checkTotal.
+	// TotalTokens is Codex's own sum: input (cached included) plus output.
+	// The session's totals are built from the parts and only checked against
+	// it (see usageObserver.checkTotal); a subagent's context is read from it
+	// directly (see lastRequestTokens).
 	TotalTokens int64 `json:"totalTokens"`
 }
 
@@ -145,6 +147,24 @@ func (o *usageObserver) observe(params json.RawMessage) {
 		notif.TokenUsage.Last.InputTokens,
 		notif.TokenUsage.ModelContextWindow,
 	)
+}
+
+// lastRequestTokens reads the total of a thread/tokenUsage/updated frame's
+// `last` figures: the whole of the latest request, its prompt (cached part
+// included) and its output — measured on codex-cli 0.171.0, where a child's
+// last frame read 18042 input + 27 output = 18069 total. After a compaction it
+// is Codex's estimate of the compacted history, the one figure that frame
+// carries; the next request measures it again.
+func lastRequestTokens(params json.RawMessage) (int64, error) {
+	var notif struct {
+		TokenUsage struct {
+			Last codexTokenUsage `json:"last"`
+		} `json:"tokenUsage"`
+	}
+	if err := json.Unmarshal(params, &notif); err != nil {
+		return 0, err
+	}
+	return notif.TokenUsage.Last.TotalTokens, nil
 }
 
 // checkTotal compares the normalised counts against the total Codex reported for

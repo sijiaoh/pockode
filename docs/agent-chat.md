@@ -391,7 +391,7 @@ the rest costs transport, parsing and memory for records nobody looks at.
 
 | Method | Params | Result |
 |--------|--------|--------|
-| `chat.messages.subscribe` | `id`, `session_id`, `limit?` | `history`, `has_more`, `next_before_seq?`, `turn`, `tool_activity?`, `server_time` |
+| `chat.messages.subscribe` | `id`, `session_id`, `limit?` | `history`, `has_more`, `next_before_seq?`, `turn`, `tool_activity?`, `tool_progress?`, `server_time` |
 | `chat.messages.history` | `session_id`, `before_seq?`, `limit?` | `history`, `has_more`, `next_before_seq?`, `server_time` |
 
 - `history` is the page, **oldest record first**, each record stamped with its
@@ -423,6 +423,10 @@ the rest costs transport, parsing and memory for records nobody looks at.
   The subscription is registered before this snapshot is taken, so an activity
   arriving in between is delivered twice rather than lost, and a latest value
   delivered twice is harmless.
+- `tool_progress` is the same snapshot for a subagent's live counters — the
+  newest `subagent_progress` each subagent call in flight reported, keyed by
+  `tool_use_id` ([agent-integration.md](code/agent-integration.md#eventrecord-unified-event-format)).
+  Absent when none did.
 
 `chat.messages.history` needs no subscription and cannot collide with one. An
 older page is settled history: append-only, so it can never change, and every

@@ -381,6 +381,10 @@ type ToolResultEvent struct {
 	// see reportedDurationMs in the claude package — and never inferred from
 	// arrival times, which ObservedAt records as what they are.
 	DurationMs int64
+	// Subagent is what the agent CLI reported about the subagent a call ran, as
+	// of this result: who it was and what it did. Nil for every call that is not
+	// a subagent's, and for one whose CLI reported nothing about it.
+	Subagent *SubagentReport
 	// ExitCode is the process exit status of a command the agent ran, when the
 	// CLI reports it separately from the result text. Nil for every tool that is
 	// not a command, and for a command that never ran.
@@ -432,6 +436,7 @@ func (e ToolResultEvent) ToRecord() EventRecord {
 		ToolResult:        e.ToolResult,
 		Subtype:           e.Subtype,
 		DurationMs:        e.DurationMs,
+		Subagent:          e.Subagent,
 		ExitCode:          e.ExitCode,
 		Contents:          e.Contents,
 		IsError:           e.IsError,
@@ -460,6 +465,10 @@ type ToolActivityEvent struct {
 	// engines that stream one. Unlike Activity it accumulates, and it is safe to
 	// lose: the whole output arrives again with the result.
 	OutputDelta string
+	// Subagent is how far the subagent this call runs has come, for the engines
+	// that count it while it runs. A latest value, like Activity: each replaces
+	// the last whole. Nil for every call that is not a subagent's.
+	Subagent *SubagentProgress
 }
 
 func (ToolActivityEvent) EventType() EventType { return EventTypeToolActivity }
@@ -467,11 +476,57 @@ func (ToolActivityEvent) isAgentEvent()        {}
 
 func (e ToolActivityEvent) ToRecord() EventRecord {
 	return EventRecord{
-		Type:        e.EventType(),
-		ToolUseID:   e.ToolUseID,
-		Activity:    e.Activity,
-		OutputDelta: e.OutputDelta,
+		Type:             e.EventType(),
+		ToolUseID:        e.ToolUseID,
+		Activity:         e.Activity,
+		OutputDelta:      e.OutputDelta,
+		SubagentProgress: e.Subagent,
 	}
+}
+
+// SubagentCounts are an agent CLI's own counters of a subagent's work, as the
+// CLI reported them: live on SubagentProgress, final on SubagentReport. Both
+// carry the same counters, so a live figure ends on its final one rather than
+// jumping to it. They are the engine's account, kept as it gave it; which
+// number a row draws — its own children, where it has them — is the client's
+// call (docs/tool-call-ui.md).
+//
+// Pointers because zero is a figure — a subagent that answered without a single
+// tool call made 0 tool uses — and absent means the CLI did not say.
+type SubagentCounts struct {
+	// ToolUses is how many tool calls the subagent made in this call. A
+	// resumed subagent's call counts its own calls only.
+	ToolUses *int64 `json:"tool_uses,omitempty"`
+	// TotalTokens is the size of the subagent's context at its latest request:
+	// that request's input, cache and output tokens together — not what the
+	// whole run spent, which is several times more. Measured on claude 2.1.330:
+	// totalTokens equals the sum of the hand-back's own usage, which is the
+	// last request's. An engine filling it reports the same quantity (for
+	// Codex, the child thread's last usage, not its running total).
+	TotalTokens *int64 `json:"total_tokens,omitempty"`
+}
+
+// SubagentReport is what was true of a subagent when its call's result was
+// written: a fact of that moment, stored on the tool_result record. How long it
+// ran is not here but in the record's DurationMs, where every call's duration
+// is.
+type SubagentReport struct {
+	// AgentID is the CLI's own id for the subagent, which is what resuming it
+	// takes (Claude's agentId, Codex's child thread id).
+	AgentID string `json:"agent_id,omitempty"`
+	// AgentType is which agent it was, as the CLI named it: Claude's subagent
+	// type, Codex's agent path (whose last segment is the spawn's task name).
+	AgentType string `json:"agent_type,omitempty"`
+	SubagentCounts
+}
+
+// SubagentProgress is how far a running subagent has come. Live state: it
+// travels on tool_activity, which is never recorded, and the process keeps the
+// newest for a client that subscribes mid-run.
+type SubagentProgress struct {
+	SubagentCounts
+	// LastToolName is the tool the subagent called most recently.
+	LastToolName string `json:"last_tool_name,omitempty"`
 }
 
 // ThinkingEvent is a stretch of the agent's thinking, recorded once it is over:

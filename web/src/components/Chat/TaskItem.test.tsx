@@ -53,7 +53,9 @@ describe("TaskItem", () => {
 		render(<TaskItemWithChildren run={task("running")} />);
 		expect(screen.getByText("find usages")).toBeVisible();
 		expect(screen.getByText("Explore")).toBeVisible();
-		expect(screen.getByRole("status", { name: "Task running" })).toBeVisible();
+		expect(
+			screen.getByRole("status", { name: "Subagent running" }),
+		).toBeVisible();
 	});
 
 	// How long the subagent worked, from its call to its result.
@@ -374,7 +376,7 @@ describe("TaskItem", () => {
 					})}
 				/>,
 			);
-			expect(screen.getByText("2 steps")).toBeVisible();
+			expect(screen.getByText("2 tool uses")).toBeVisible();
 			expect(screen.getByText("Checking the 503 path.")).toBeVisible();
 		});
 
@@ -384,7 +386,7 @@ describe("TaskItem", () => {
 					run={task("running", { result: undefined, children: [read("c1")] })}
 				/>,
 			);
-			expect(screen.getByText("1 step")).toBeVisible();
+			expect(screen.getByText("1 tool use")).toBeVisible();
 			expect(screen.getByText("Read")).toBeVisible();
 			expect(screen.getByText("sender.go")).toBeVisible();
 		});
@@ -399,7 +401,7 @@ describe("TaskItem", () => {
 					})}
 				/>,
 			);
-			expect(screen.getByText("2 steps")).toBeVisible();
+			expect(screen.getByText("2 tool uses")).toBeVisible();
 			expect(screen.queryByText("Checking.")).toBeNull();
 			expect(screen.queryByText("·")).toBeNull();
 		});
@@ -414,7 +416,7 @@ describe("TaskItem", () => {
 					})}
 				/>,
 			);
-			expect(screen.getByText("1 step")).toBeVisible();
+			expect(screen.getByText("1 tool use")).toBeVisible();
 			expect(screen.getByText("Agent crashed")).toBeVisible();
 		});
 
@@ -436,18 +438,39 @@ describe("TaskItem", () => {
 			).toBeVisible();
 		});
 
-		it("ends a settled background row on its outcome", () => {
+		// The CLI backgrounds most subagents of its own accord; a completed one
+		// reads as a foreground success, its outcome being its report.
+		it("ends a completed background row on its figures, not its outcome", () => {
 			render(
 				<TaskItemWithChildren
 					run={task("success", {
 						fromBackground: true,
 						result: "Background agent completed\nmore",
 						children: [read("c1")],
+						subagent: { toolUses: 1, totalTokens: 45_600 },
 					})}
 				/>,
 			);
-			expect(screen.getByText("1 step")).toBeVisible();
-			expect(screen.getByText("Background agent completed")).toBeVisible();
+			expect(screen.getByText("1 tool use")).toBeVisible();
+			expect(screen.getByText("45.6K tokens")).toBeVisible();
+			expect(screen.queryByText("Background agent completed")).toBeNull();
+		});
+
+		// Its body does not open, so the verdict is the row's.
+		it("ends a failed background row on its outcome", () => {
+			render(
+				<TaskItemWithChildren
+					run={task("error", {
+						fromBackground: true,
+						result: "Agent stopped\nmore",
+						children: [read("c1")],
+						subagent: { toolUses: 1, totalTokens: 45_600 },
+					})}
+				/>,
+			);
+			expect(screen.getByText("1 tool use")).toBeVisible();
+			expect(screen.getByText("Agent stopped")).toBeVisible();
+			expect(screen.queryByText(/tokens$/)).toBeNull();
 		});
 
 		it("freezes on where it was when it was cut short", () => {
@@ -459,15 +482,15 @@ describe("TaskItem", () => {
 					})}
 				/>,
 			);
-			expect(screen.getByText("1 step")).toBeVisible();
+			expect(screen.getByText("1 tool use")).toBeVisible();
 			expect(screen.getByText("Looking at backoff.")).toBeVisible();
 		});
 
 		// Every transcript recorded before children were filed: no count at
-		// all, rather than a false "0 steps".
+		// all, rather than a false "0 tool uses".
 		it("draws a row with no steps as it always did", () => {
 			render(<TaskItemWithChildren run={task("success")} />);
-			expect(screen.queryByText(/steps?$/)).toBeNull();
+			expect(screen.queryByText(/tool uses?$/)).toBeNull();
 		});
 
 		it("keeps its process closed under the report, and the report out of it", async () => {
@@ -481,7 +504,9 @@ describe("TaskItem", () => {
 				/>,
 			);
 			await user.click(screen.getByRole("button", { name: /find usages/ }));
-			const process = screen.getByRole("button", { name: "Process · 1 step" });
+			const process = screen.getByRole("button", {
+				name: "Process · 1 tool use",
+			});
 			expect(process).toHaveAttribute("aria-expanded", "false");
 			expect(screen.queryByText("row for c1")).toBeNull();
 
@@ -509,7 +534,7 @@ describe("TaskItem", () => {
 				/>,
 			);
 			await openProcess(user);
-			expect(screen.getAllByText("Here is what I found.")).toHaveLength(2);
+			expect(screen.getAllByText("Here is what I found.")).toHaveLength(1);
 			expect(
 				within(screen.getByRole("group")).queryByText("Here is what I found."),
 			).toBeNull();
@@ -608,6 +633,24 @@ describe("TaskItem", () => {
 			).toBeNull();
 		});
 
+		// claude 2.1.330 puts harness notes above the frame.
+		it("draws the report out of a hand-back with notes above the frame", async () => {
+			const user = userEvent.setup();
+			render(
+				<TaskItemWithChildren
+					run={task("success", {
+						result:
+							"  <tools-used-before-summary>Bash, Read</tools-used-before-summary>\n  \n[Subagent hand-back] The text below is the final report of a subagent. The report follows:\n  The function is `retry2`.\n\n  Second paragraph.",
+					})}
+				/>,
+			);
+			await user.click(screen.getByRole("button", { name: /find usages/ }));
+			expect(screen.getByText("Second paragraph.")).toBeVisible();
+			expect(
+				screen.queryByText(/Subagent hand-back|tools-used-before-summary/),
+			).toBeNull();
+		});
+
 		// A card inside a closed process would leave the session waiting on
 		// someone who cannot see why — also when a subagent's subagent asks.
 		it("draws a pending permission card under the row, never inside the process", async () => {
@@ -639,7 +682,7 @@ describe("TaskItem", () => {
 			});
 			expect(within(group).queryByText("card for c1")).toBeNull();
 			// The steps count both: a card stands in for its call.
-			expect(screen.getAllByText("2 steps")[0]).toBeVisible();
+			expect(screen.getAllByText("2 tool uses")[0]).toBeVisible();
 		});
 
 		// A subagent's subagent is one step of the outer one, worded as its own
@@ -663,7 +706,7 @@ describe("TaskItem", () => {
 					})}
 				/>,
 			);
-			expect(screen.getByText("2 steps")).toBeVisible();
+			expect(screen.getByText("2 tool uses")).toBeVisible();
 			expect(screen.getByText("inner")).toBeVisible();
 			expect(screen.queryByText("Deep in thought.")).toBeNull();
 		});
@@ -679,12 +722,12 @@ describe("TaskItem", () => {
 			);
 			expect(
 				screen.getByRole("button", { name: /find usages/ }),
-			).not.toHaveAccessibleName(/2 steps/);
+			).not.toHaveAccessibleName(/2 tool uses/);
 
 			rerender(<TaskItemWithChildren run={task("success", { children })} />);
 			expect(
 				screen.getByRole("button", { name: /find usages/ }),
-			).toHaveAccessibleName(/2 steps/);
+			).toHaveAccessibleName(/2 tool uses/);
 		});
 
 		// Mid-transcript by definition: the outer subagent dealt with the
@@ -722,7 +765,7 @@ describe("TaskItem", () => {
 					/>
 				</UnfiledChildrenContext>,
 			);
-			expect(screen.getByText("3 steps")).toBeVisible();
+			expect(screen.getByText("3 tool uses")).toBeVisible();
 			await openProcess(user);
 			expect(
 				screen.getByText(
@@ -758,6 +801,170 @@ describe("TaskItem", () => {
 			);
 			expect(screen.getByText("Newest words.")).toBeVisible();
 			expect(screen.queryByText("Old words.")).toBeNull();
+		});
+	});
+
+	describe("which agent, and what it measured", () => {
+		const read = (id: string): ContentPart => ({
+			type: "tool_call",
+			id: `call-${id}`,
+			tool: {
+				id,
+				name: "Read",
+				input: { file_path: "/repo/sender.go" },
+				status: "success",
+			},
+		});
+
+		it("titles the row by its agent, read out as a subagent", () => {
+			render(<TaskItemWithChildren run={task("success")} />);
+			expect(
+				screen.getByRole("button", { name: /find usages/ }),
+			).toHaveAccessibleName(/Subagent\s*Explore\s*find usages/);
+		});
+
+		it("does not say Subagent twice for a call that named no agent", () => {
+			render(
+				<TaskItemWithChildren
+					run={task("success", { input: { description: "find usages" } })}
+				/>,
+			);
+			expect(
+				screen.getByRole("button", { name: /find usages/ }),
+			).not.toHaveAccessibleName(/Subagent\s*Subagent/);
+			expect(screen.getByText("Subagent")).toBeVisible();
+		});
+
+		it("draws the figures once it has settled, and the duration on line 1", () => {
+			const T0 = Date.parse("2026-11-27T09:00:00Z");
+			render(
+				<TaskItemWithChildren
+					run={task("success", {
+						children: [read("c1"), read("c2")],
+						subagent: { toolUses: 2, totalTokens: 45_600 },
+						durationMs: 122_000,
+						startedAt: T0,
+						endedAt: T0 + 1000,
+					})}
+				/>,
+			);
+			expect(screen.getByText("2 tool uses")).toBeVisible();
+			expect(screen.getByText("45.6K tokens")).toBeVisible();
+			expect(screen.getByText("2m 2s")).toBeVisible();
+		});
+
+		// One counter per run: where there are children, they are the count live
+		// and settled alike, whatever the CLI reported — the number the Process
+		// heading shows.
+		it("counts its children over the CLI's count, live and settled alike", () => {
+			const children = [read("c1"), read("c2"), read("c3")];
+			const { rerender } = render(
+				<TaskItemWithChildren
+					run={task("running", {
+						result: undefined,
+						children,
+						subagentProgress: { toolUses: 1 },
+					})}
+				/>,
+			);
+			expect(screen.getByText("3 tool uses")).toBeVisible();
+
+			rerender(
+				<TaskItemWithChildren
+					run={task("success", { children, subagent: { toolUses: 2 } })}
+				/>,
+			);
+			expect(screen.getByText("3 tool uses")).toBeVisible();
+		});
+
+		// A subagent whose work never reached the stream.
+		it("counts the CLI's figure on a run with no children", () => {
+			const { rerender } = render(
+				<TaskItemWithChildren
+					run={task("running", {
+						result: undefined,
+						subagentProgress: { toolUses: 4, lastToolName: "Grep" },
+					})}
+				/>,
+			);
+			expect(screen.getByText("4 tool uses")).toBeVisible();
+			expect(screen.getByText("Grep")).toBeVisible();
+
+			rerender(
+				<TaskItemWithChildren
+					run={task("success", { subagent: { toolUses: 5, totalTokens: 842 } })}
+				/>,
+			);
+			expect(screen.getByText("5 tool uses")).toBeVisible();
+			expect(screen.getByText("842 tokens")).toBeVisible();
+		});
+
+		it("draws tokens alone for a subagent that called nothing", () => {
+			render(
+				<TaskItemWithChildren
+					run={task("success", {
+						subagent: { toolUses: 0, totalTokens: 4200 },
+					})}
+				/>,
+			);
+			expect(screen.getByText("4.2K tokens")).toBeVisible();
+			expect(screen.queryByText(/tool uses?$/)).toBeNull();
+		});
+
+		it("draws no live tokens", () => {
+			render(
+				<TaskItemWithChildren
+					run={task("running", {
+						result: undefined,
+						children: [read("c1")],
+						subagentProgress: { toolUses: 1, totalTokens: 9000 },
+					})}
+				/>,
+			);
+			expect(screen.queryByText(/tokens$/)).toBeNull();
+		});
+
+		// Where it was is the news, even when a late result brought figures.
+		it("draws no tokens on a row that was cut short", () => {
+			render(
+				<TaskItemWithChildren
+					run={task("interrupted", {
+						children: [read("c1")],
+						subagent: { toolUses: 1, totalTokens: 9000 },
+					})}
+				/>,
+			);
+			expect(screen.getByText("1 tool use")).toBeVisible();
+			expect(screen.queryByText(/tokens$/)).toBeNull();
+		});
+
+		it("ends its body on the facts the row leaves out", async () => {
+			const user = userEvent.setup();
+			render(
+				<TaskItemWithChildren
+					run={task("success", {
+						input: {
+							description: "find usages",
+							subagent_type: "pr-review-toolkit:code-reviewer",
+						},
+						subagent: { agentId: "a555947eded58a158" },
+					})}
+				/>,
+			);
+			expect(screen.getByText("code-reviewer")).toBeVisible();
+			await user.click(screen.getByRole("button", { name: /find usages/ }));
+			expect(
+				screen.getByText(/^pr-review-toolkit:code-reviewer · agent/),
+			).toBeVisible();
+			expect(screen.getByText("a555947eded58a158")).toBeVisible();
+		});
+
+		it("leaves out a type the title already says", async () => {
+			const user = userEvent.setup();
+			render(<TaskItemWithChildren run={task("success")} />);
+			await user.click(screen.getByRole("button", { name: /find usages/ }));
+			// The title's own, and no second one in the body.
+			expect(screen.getAllByText(/Explore/)).toHaveLength(1);
 		});
 	});
 });

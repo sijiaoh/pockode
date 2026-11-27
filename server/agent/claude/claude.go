@@ -1407,7 +1407,8 @@ type cliEvent struct {
 	ParentToolUseID string `json:"parent_tool_use_id,omitempty"`
 	// ToolUseResult is the tool's structured result, on a user frame carrying
 	// a tool_result. Untyped in the SDK schema and different per tool; read
-	// only for the durations in reportedDurationMs.
+	// only for the durations in reportedDurationMs and a subagent's report in
+	// reportedSubagent.
 	ToolUseResult json.RawMessage `json:"tool_use_result,omitempty"`
 }
 
@@ -1967,11 +1968,20 @@ func parseUserEvent(log *slog.Logger, event cliEvent, backgroundTasks *backgroun
 			//
 			// A placeholder never carries a duration: the call has not
 			// finished, and the work's own figure comes with its outcome (see
-			// taskOutcome).
+			// taskOutcome). A backgrounded subagent's placeholder does name the
+			// subagent, which is true from launch on; its figures come with the
+			// outcome too.
 			subtype := ""
 			var durationMs int64
+			var subagent *agent.SubagentReport
+			if results == 1 {
+				subagent = reportedSubagent(toolName, event.ToolUseResult)
+			}
 			if backgroundTasks.callIsBackgrounded(block.ToolUseID) {
 				subtype = agent.ToolResultBackgroundStarted
+				if subagent != nil {
+					backgroundTasks.noteAgentID(block.ToolUseID, subagent.AgentID)
+				}
 			} else if results == 1 {
 				durationMs = reportedDurationMs(toolName, event.ToolUseResult)
 			}
@@ -1980,6 +1990,7 @@ func parseUserEvent(log *slog.Logger, event cliEvent, backgroundTasks *backgroun
 				ToolResult:        result.text,
 				Subtype:           subtype,
 				DurationMs:        durationMs,
+				Subagent:          subagent,
 				Contents:          result.blocks,
 				IsError:           block.IsError,
 				ParentToolUseID:   event.ParentToolUseID,

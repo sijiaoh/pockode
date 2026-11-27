@@ -81,12 +81,16 @@ func (s *appSession) handleNotification(msg rpcMessage) {
 		// while the parent is still waiting on the subagent. Its usage is a
 		// running total of its own thread, which read as this thread's would
 		// wreck the deltas the accumulator takes and report the subagent's
-		// prompt as this thread's context; the subagent's tokens therefore go
-		// uncounted, which a per-thread accumulator would fix.
+		// prompt as this thread's context. It is kept apart instead, as the
+		// size of the subagent's own context for its row (see
+		// rememberSubagentUsage); the session's totals do not count it.
 		if thread := notificationThread(msg.Params); !s.isOwnThread(thread) {
-			if msg.Method == "turn/completed" {
+			switch msg.Method {
+			case "turn/completed":
 				s.settleSubagent(thread, msg.Params)
 				s.forgetReasoning(func(t string) bool { return t == thread })
+			case "thread/tokenUsage/updated":
+				s.rememberSubagentUsage(thread, msg.Params)
 			}
 			return
 		}
@@ -265,6 +269,13 @@ func (s *appSession) isOwnThread(threadID string) bool {
 // turn under the same spawn and settles it again; the report is still its
 // latest words, so a turn that said nothing does not wipe out the last one.
 //
+// The result carries what Codex says of the child: its thread id, which is how
+// Codex's own tools address it, the agent path it was spawned under, how long
+// this turn ran, and the size of its context at its last request. Codex counts
+// no tool uses, so none is reported; the row counts the child's own calls. A
+// later turn under the same spawn reports that turn's duration, as a resumed
+// Claude subagent's call reports its own.
+//
 // A child whose spawn was never seen — one a previous process started — has no
 // row to settle, and only a failure is said for it, as a warning: without one
 // the user would see its work stop and nothing say why. An interrupted one is
@@ -275,6 +286,9 @@ func (s *appSession) settleSubagent(threadID string, params json.RawMessage) {
 		Turn struct {
 			Status string     `json:"status"`
 			Error  *turnError `json:"error"`
+			// DurationMs is how long the child's turn ran, by Codex's own
+			// clock (measured on codex-cli 0.171.0; null while it runs).
+			DurationMs int64 `json:"durationMs"`
 		} `json:"turn"`
 	}
 	if err := json.Unmarshal(params, &notif); err != nil {
@@ -300,10 +314,17 @@ func (s *appSession) settleSubagent(threadID string, params json.RawMessage) {
 
 	// The spawn's own parent, so that a nested spawn's result is marked as its
 	// subagent's record like the call it settles.
+	outcome := s.subagentOutcomes[threadID]
 	result := agent.ToolResultEvent{
 		ToolUseID:       spawn.CallID,
-		ToolResult:      s.subagentReports[threadID],
+		ToolResult:      outcome.Report,
 		ParentToolUseID: spawn.ParentToolUseID,
+		DurationMs:      notif.Turn.DurationMs,
+		Subagent: &agent.SubagentReport{
+			AgentID:        threadID,
+			AgentType:      spawn.AgentPath,
+			SubagentCounts: agent.SubagentCounts{TotalTokens: outcome.ContextTokens},
+		},
 	}
 	switch notif.Turn.Status {
 	case "completed":
@@ -330,7 +351,13 @@ func (s *appSession) settleSubagent(threadID string, params json.RawMessage) {
 // The item names the agent and nothing else — no prompt, no task description
 // (measured on codex-cli 0.159.3; the child's prompt is not echoed on its
 // thread either) — so the call's input is the agent's path as Codex gave it,
-// and naming the row after it is the frontend's business.
+// and naming the row after it is the frontend's business. The path is the one
+// name the live stream gives a subagent: its last segment is the task name the
+// model chose when spawning it ("/root/file_reader"), not a role. The child's
+// thread does carry an agentRole and a random agentNickname, but only on
+// thread/read — no thread/started is sent for it on this connection — and the
+// role was null even when the model was asked for one (codex-cli 0.171.0,
+// whose spawn tool takes no agent type).
 //
 // The same codex-cli reports a spawn in a second shape, depending on the model
 // (measured with gpt-5.6-luna): a collabAgentToolCall whose tool is spawnAgent,
@@ -338,7 +365,7 @@ func (s *appSession) settleSubagent(threadID string, params json.RawMessage) {
 // it has completed. The child's items follow that completion, so reading it
 // there is in time; the call's input is then the prompt.
 func (s *appSession) rememberSubagent(item threadItem) {
-	threadID, input, ok := spawnOf(item)
+	threadID, agentPath, input, ok := spawnOf(item)
 	if !ok {
 		return
 	}
@@ -348,7 +375,7 @@ func (s *appSession) rememberSubagent(item threadItem) {
 	if s.subagentCalls == nil {
 		s.subagentCalls = map[string]subagentSpawn{}
 	}
-	s.subagentCalls[threadID] = subagentSpawn{CallID: item.ID, ParentToolUseID: item.ParentToolUseID}
+	s.subagentCalls[threadID] = subagentSpawn{CallID: item.ID, ParentToolUseID: item.ParentToolUseID, AgentPath: agentPath}
 
 	s.emitEvent(agent.ToolCallEvent{
 		ToolUseID:         item.ID,
@@ -359,10 +386,11 @@ func (s *appSession) rememberSubagent(item threadItem) {
 	})
 }
 
-// spawnOf reads the thread a spawn started, and the input its row is drawn
-// from, off either shape of spawn item; ok is false for an item that started
-// no thread (yet).
-func spawnOf(item threadItem) (threadID string, input json.RawMessage, ok bool) {
+// spawnOf reads the thread a spawn started, the agent path it named (only the
+// subAgentActivity shape names one), and the input its row is drawn from, off
+// either shape of spawn item; ok is false for an item that started no thread
+// (yet).
+func spawnOf(item threadItem) (threadID, agentPath string, input json.RawMessage, ok bool) {
 	switch item.Type {
 	case "subAgentActivity":
 		var ev struct {
@@ -371,10 +399,10 @@ func spawnOf(item threadItem) (threadID string, input json.RawMessage, ok bool) 
 			AgentPath     string `json:"agentPath"`
 		}
 		if err := json.Unmarshal(item.Raw, &ev); err != nil || ev.Kind != "started" || ev.AgentThreadID == "" {
-			return "", nil, false
+			return "", "", nil, false
 		}
 		input, _ = json.Marshal(map[string]string{"agent_path": ev.AgentPath})
-		return ev.AgentThreadID, input, true
+		return ev.AgentThreadID, ev.AgentPath, input, true
 	case "collabAgentToolCall":
 		var ev struct {
 			Tool              string   `json:"tool"`
@@ -384,12 +412,12 @@ func spawnOf(item threadItem) (threadID string, input json.RawMessage, ok bool) 
 		// One spawn starts one thread; a call naming none has not started it
 		// yet (item/started) or failed to.
 		if err := json.Unmarshal(item.Raw, &ev); err != nil || ev.Tool != "spawnAgent" || len(ev.ReceiverThreadIDs) != 1 {
-			return "", nil, false
+			return "", "", nil, false
 		}
 		input, _ = json.Marshal(map[string]string{"prompt": ev.Prompt})
-		return ev.ReceiverThreadIDs[0], input, true
+		return ev.ReceiverThreadIDs[0], "", input, true
 	}
-	return "", nil, false
+	return "", "", nil, false
 }
 
 // subagentToolName is one of the names Claude's subagent call goes by, which
@@ -403,16 +431,60 @@ const subagentToolName = "Task"
 type subagentSpawn struct {
 	CallID          string
 	ParentToolUseID string
+	// AgentPath is the path Codex spawned the agent under; empty for a spawn
+	// whose item named none.
+	AgentPath string
 }
 
-// rememberSubagentReport keeps a child's latest words for settleSubagent: the
-// last thing a subagent says is its answer. Kept as the items pass
-// rather than read off turn/completed, whose items are only a summary view.
+// subagentOutcome is what settleSubagent reports of a child, gathered as its
+// thread runs.
+type subagentOutcome struct {
+	// Report is the child's latest words: the last thing a subagent says is
+	// its answer.
+	Report string
+	// ContextTokens is the size of the child's context at its latest request;
+	// nil until Codex has reported one.
+	ContextTokens *int64
+}
+
+// rememberSubagentReport keeps a child's latest words for settleSubagent. Kept
+// as the items pass rather than read off turn/completed, whose items are only
+// a summary view.
 func (s *appSession) rememberSubagentReport(threadID, text string) {
-	if s.subagentReports == nil {
-		s.subagentReports = map[string]string{}
+	outcome := s.subagentOutcomes[threadID]
+	outcome.Report = text
+	s.setSubagentOutcome(threadID, outcome)
+}
+
+// rememberSubagentUsage keeps the size of a child's context for
+// settleSubagent: the total of its thread's `last` usage — the input, cached
+// input and output of its latest request — which is the quantity Claude's
+// subagent token figure is (see agent.SubagentCounts.TotalTokens), and not the
+// thread's running `total`, which sums every request's prompt. Only a child
+// whose spawn was seen has a row for it.
+func (s *appSession) rememberSubagentUsage(threadID string, params json.RawMessage) {
+	if _, seen := s.subagentCalls[threadID]; !seen {
+		return
 	}
-	s.subagentReports[threadID] = text
+	tokens, err := lastRequestTokens(params)
+	if err != nil {
+		s.log.Warn("failed to parse a subagent's thread/tokenUsage/updated", "threadId", threadID, "error", err)
+		return
+	}
+	if tokens == 0 {
+		// A frame reporting nothing; see usageObserver.observe.
+		return
+	}
+	outcome := s.subagentOutcomes[threadID]
+	outcome.ContextTokens = &tokens
+	s.setSubagentOutcome(threadID, outcome)
+}
+
+func (s *appSession) setSubagentOutcome(threadID string, outcome subagentOutcome) {
+	if s.subagentOutcomes == nil {
+		s.subagentOutcomes = map[string]subagentOutcome{}
+	}
+	s.subagentOutcomes[threadID] = outcome
 }
 
 // threadItem is the part of a thread item every branch below reads. The rest is

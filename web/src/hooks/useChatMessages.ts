@@ -58,6 +58,7 @@ import type {
 	ServerNotification,
 	SessionMode,
 	SessionTurn,
+	SubagentProgress,
 	Thought,
 	UserMessage,
 } from "../types/message";
@@ -226,6 +227,8 @@ interface PendingActivity {
 	activity?: string;
 	/** Every chunk since the last frame, in order. */
 	outputDelta?: string;
+	/** The newest one, like `activity`. */
+	subagentProgress?: SubagentProgress;
 }
 
 /**
@@ -244,6 +247,7 @@ function mergeActivity(
 ): void {
 	const current = pending.get(event.toolUseId) ?? {};
 	if (event.activity) current.activity = event.activity;
+	if (event.subagentProgress) current.subagentProgress = event.subagentProgress;
 	if (event.outputDelta) {
 		const combined = (current.outputDelta ?? "") + event.outputDelta;
 		current.outputDelta =
@@ -670,8 +674,12 @@ export function useChatMessages({
 			// client subscribing mid-run knows about a background task that started
 			// half an hour ago.
 			setMessages(
-				initial.tool_activity
-					? applyToolActivitySnapshot(settled, initial.tool_activity)
+				initial.tool_activity || initial.tool_progress
+					? applyToolActivitySnapshot(
+							settled,
+							initial.tool_activity,
+							initial.tool_progress,
+						)
 					: settled,
 			);
 			setIsLoadingHistory(false);

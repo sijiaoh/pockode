@@ -73,6 +73,7 @@ func (h *rpcMethodHandler) handleChatMessagesSubscribe(ctx context.Context, conn
 		// there to be asked.
 		Turn:         rpc.NewTurn(meta.Turn, now),
 		ToolActivity: wt.ProcessManager.GetToolActivity(params.SessionID),
+		ToolProgress: wt.ProcessManager.GetToolProgress(params.SessionID),
 		ServerTime:   now,
 	}
 	if err := conn.Reply(ctx, req.ID, result); err != nil {

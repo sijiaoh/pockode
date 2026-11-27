@@ -77,3 +77,25 @@ func TestEventRecord_WithoutObservedAtRoundTrips(t *testing.T) {
 		t.Fatalf("re-encoded as %s, want %s", again, old)
 	}
 }
+
+// A subagent that made no tool calls made 0 of them, which a record has to keep
+// saying; one written before the field existed says nothing and still loads.
+func TestEventRecord_SubagentReportRoundTrips(t *testing.T) {
+	zero := int64(0)
+	event := ToolResultEvent{ToolUseID: "call-1", Subagent: &SubagentReport{AgentID: "a1", SubagentCounts: SubagentCounts{ToolUses: &zero}}}
+	raw, err := json.Marshal(event.ToRecord())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), `"subagent":{"agent_id":"a1","tool_uses":0}`) {
+		t.Fatalf("record = %s, want the zero count kept and the absent one omitted", raw)
+	}
+
+	var old EventRecord
+	if err := json.Unmarshal([]byte(`{"type":"tool_result","tool_use_id":"call-1","tool_result":"ok","duration_ms":12}`), &old); err != nil {
+		t.Fatal(err)
+	}
+	if old.Subagent != nil {
+		t.Errorf("an old record grew a report: %#v", old.Subagent)
+	}
+}

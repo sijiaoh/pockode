@@ -953,6 +953,70 @@ func TestSubagentTurnSettlesTheSpawnWithItsLastWords(t *testing.T) {
 	}
 }
 
+// The spawn's result says what Codex reported of the child, in the frames of
+// codex-cli 0.171.0: who it was, how long its turn ran, and its context at its
+// last request — the `last` total, not the thread's running `total`. The
+// child's usage never reaches the session's own totals.
+func TestSubagentResultCarriesItsReport(t *testing.T) {
+	sess := newSubagentTestSession()
+	defer sess.cancel()
+	var sessionUsage []session.UsageReport
+	sess.usage = newUsageObserver(testLogger(), agent.StartOptions{
+		OnUsage: func(r session.UsageReport) { sessionUsage = append(sessionUsage, r) },
+	})
+
+	sess.notify("thread/tokenUsage/updated", `{"threadId":"child","turnId":"turn-child","tokenUsage":{
+		"total":{"totalTokens":17936,"inputTokens":17888,"cachedInputTokens":17024,"outputTokens":48},
+		"last":{"totalTokens":17936,"inputTokens":17888,"cachedInputTokens":17024,"outputTokens":48},
+		"modelContextWindow":475000}}`)
+	sess.notify("thread/tokenUsage/updated", `{"threadId":"child","turnId":"turn-child","tokenUsage":{
+		"total":{"totalTokens":36005,"inputTokens":35930,"cachedInputTokens":34816,"outputTokens":75},
+		"last":{"totalTokens":18069,"inputTokens":18042,"cachedInputTokens":17792,"outputTokens":27},
+		"modelContextWindow":475000}}`)
+	sess.notify("turn/completed", `{"threadId":"child","turn":{"id":"turn-child","items":[],"status":"completed","durationMs":7684}}`)
+
+	events := drainEvents(sess.events)
+	if len(events) != 1 {
+		t.Fatalf("expected only the spawn's result, got %v", events)
+	}
+	result := events[0].(agent.ToolResultEvent)
+	if result.DurationMs != 7684 {
+		t.Errorf("DurationMs = %d, want the child turn's 7684", result.DurationMs)
+	}
+	report := result.Subagent
+	if report == nil || report.AgentID != "child" || report.AgentType != "/root/reader" ||
+		report.TotalTokens == nil || *report.TotalTokens != 18069 || report.ToolUses != nil {
+		t.Errorf("Subagent = %+v, want child at /root/reader with 18069 tokens and no tool-use count", report)
+	}
+	if len(sessionUsage) != 0 {
+		t.Errorf("session usage = %+v, want the subagent's tokens kept out of it", sessionUsage)
+	}
+}
+
+// A child that never reported usage, spawned in the shape that names no agent
+// path, still says which thread it was — and nothing it was not told.
+func TestSubagentResultWithoutUsageOrPath(t *testing.T) {
+	sess := newTestSession()
+	defer sess.cancel()
+	sess.stateMu.Lock()
+	sess.threadID = "main"
+	sess.stateMu.Unlock()
+
+	sess.notify("item/completed", `{"threadId":"main","turnId":"turn-main","completedAtMs":2,"item":{
+		"type":"collabAgentToolCall","id":"exec-spawn","tool":"spawnAgent","status":"completed",
+		"senderThreadId":"main","receiverThreadIds":["child"],"prompt":"Read a.go","agentsStates":{}}}`)
+	sess.notify("turn/completed", `{"threadId":"child","turn":{"id":"turn-child","items":[],"status":"interrupted"}}`)
+
+	events := drainEvents(sess.events)
+	result := events[len(events)-1].(agent.ToolResultEvent)
+	if want := (agent.SubagentReport{AgentID: "child"}); result.Subagent == nil || *result.Subagent != want {
+		t.Errorf("Subagent = %+v, want only the thread id", result.Subagent)
+	}
+	if result.DurationMs != 0 {
+		t.Errorf("DurationMs = %d, want none reported", result.DurationMs)
+	}
+}
+
 // A subagent's own subagent names the call that spawned *it*, so the records
 // nest rather than flatten onto the outermost spawn — the inner spawn's row
 // included.

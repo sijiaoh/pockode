@@ -641,8 +641,8 @@ cannot drift from whatever the leading column is sized to.
     {glyph}                                 {/* ToolStatusGlyph, or the card's CircleHelp */}
     <span className="min-w-0 flex-1">
       <span className="flex items-baseline gap-1.5">
-        <span className="shrink-0 text-th-accent">{title}</span>
-        {chip && <Chip>{chip}</Chip>}        {/* subagent type, MCP server */}
+        <span className="shrink-0 text-th-accent">{title}</span>   {/* a subagent's: `agent`, below */}
+        {chip && <Chip>{chip}</Chip>}        {/* MCP server, pockode */}
         {background && <Chip>background</Chip>}
         <Detail detail={detail} detailTail={detailTail} />
         {meta}
@@ -735,7 +735,7 @@ is decoration and `Spinner` does not stop itself, so it is swapped for a still
 reads as live. The `role="status"` and its label sit on the wrapper, not on
 either glyph, so the name survives whichever one is showing.
 
-The chip is the same shape a subagent type or an MCP server wears, and lives in
+The chip is the same shape an MCP server or `background` wears, and lives in
 `ToolRow` so there is one of it:
 
 ```tsx
@@ -894,7 +894,7 @@ afterwards cannot word the same call differently.
 | `Glob` | `Glob` | the pattern | right |
 | `WebFetch` / `WebSearch` | the name | host + path / the query | right |
 | `TodoWrite` | `TodoWrite` | `n done / m` | — |
-| `Task` / `Agent` (the CLI renamed it; history holds both) | the name | `description`, with `subagent_type` as a chip; without a description, `subagent_type`, else a Codex spawn's agent name or prompt ([below](#a-subagents-own-work)) | right |
+| `Task` / `Agent` (the CLI renamed it; history holds both) | the agent: `subagent_type`, a Codex spawn's agent name, else `Subagent` — led by an agent mark, capped at 45% | `description`, else the prompt's first line ([below](#line-1-the-agent-then-what-it-was-asked)) | right |
 | `TaskOutput` | `TaskOutput` | the `task_id`, in mono | right |
 | `server:tool` (Codex MCP) or `mcp__server__tool` (Claude MCP) | the tool half | the server half as a chip, then the first scalar argument, else compact JSON | right |
 | `html_render` (Pockode's own MCP tool), while it is a row | `html_render` | `pockode` as a chip, then the `title` — never the first argument, which is as often the whole page | right |
@@ -1463,7 +1463,8 @@ A subagent row's figure is its call's, by the rules above: from the `Task` /
 `Agent` call to its result, or to its outcome when it ran in the background — how
 long the subagent worked, not how long the main agent waited for a placeholder.
 A duration the CLI reports for the subagent wins, as everywhere. Its second line
-(`12 steps`, or the latest child) is unchanged; the figure stays on line 1.
+(the figures, or the latest child) never carries it: the figure stays on line 1
+([why](#line-2-once-settled-the-figures)).
 
 The rows in its Process follow the same rules with no exception: their records
 are observed as the subagent's lines arrive. Where a subagent's frames reach the
@@ -2349,15 +2350,17 @@ detail.
 
 ```
 ┌────────────────────────────────────────────────────────────┐
-│ ›  ✓  Task  Explore  Find retry handling            1m 12s │
-│       12 steps                                             │
+│ ›  ✓  ⧉ Explore  Find retry handling                1m 12s │
+│       12 tool uses · 45.6K tokens                          │
 ├────────────────────────────────────────────────────────────┤
 │  The sender retries on 429 and 503, honouring …            │  report
 │  …                                                         │
 ├────────────────────────────────────────────────────────────┤
-│ ›  Process · 12 steps                                      │  closed
+│ ›  Process · 12 tool uses                                  │  closed
 ├────────────────────────────────────────────────────────────┤
 │ ›  Prompt                                                  │  closed
+├────────────────────────────────────────────────────────────┤
+│  agent a555947eded58a158                                   │  facts
 └────────────────────────────────────────────────────────────┘
 ```
 
@@ -2584,12 +2587,261 @@ body has no Prompt section; one reported as a `spawnAgent` call carries the
 prompt, which names the row by its first line and fills the Prompt section
 ([code/agent-integration.md](code/agent-integration.md#subagent-threads)).
 
+### The row: which agent, and what it measured
+
+A subagent can be most of a turn's work and most of its cost, and the CLIs say
+which agent it was, how much it did and what it spent. The row used to say none
+of it: its title was the literal `Task` on every subagent, the agent sat in a
+chip, and a settled row ended in a bare count. The row now names the agent and,
+once it settles, carries the measured figures.
+
+```
+ ›  ✓  ⧉ Explore   Find retry handling                     2m 2s
+       12 tool uses · 45.6K tokens
+```
+
+#### Line 1: the agent, then what it was asked
+
+**The title is the agent; the detail is the task.** The title slot — accent,
+`shrink-0`, the slot every row names *the kind of call* in — names the kind of
+subagent, and the detail is the description, as before.
+
+| Call | Title | Detail |
+|---|---|---|
+| Claude, `subagent_type` given | the type, verbatim (`Explore`, `general-purpose`, `code-reviewer`) — for a plugin's `plugin:agent`, the part after the last `:` | `description`; else the first line of `prompt` |
+| Claude, no `subagent_type` | `Subagent` | as above |
+| Codex, `subAgentActivity` (agent path) | the path's last segment (`read_a`) | none — the spawn names no task |
+| Codex, `spawnAgent` | `Subagent` — its input is only `{prompt}`; a name, if a spawn ever carries one in its input, becomes the title by the same rule | the prompt's first line |
+
+- **`Subagent`, not `Task` or `general-purpose`, when no type is known.** `Task`
+  was the CLI's tool name, not anything the reader asked for, and it no longer
+  matches the CLI either (it says `Agent`). `general-purpose` is what Claude runs
+  when the type is omitted, but writing it would be the renderer guessing at the
+  CLI's default — and Codex has no such default at all. `Subagent` is true of
+  every row this renderer draws.
+- **The chip goes.** It used to carry the type, which is now the title; one name
+  twice on a 320px line is width the description needed. A `background` chip
+  stays where it was.
+- **A plugin's prefix leaves the row.** `pr-review-toolkit:code-reviewer` is
+  `code-reviewer` on the row and the full name in the body's facts (below):
+  the prefix says where the agent came from, which the reader rarely needs, and
+  in the title slot it would spend the description's width on it.
+- **The title is capped, because it is no longer a word Pockode chose.** A tool
+  name is short by convention; an agent name is whatever its author typed. The
+  title span is `flex min-w-0 max-w-[45%]` on a subagent row — the mark
+  `shrink-0`, the name `truncate` — so a long name is cut and the description
+  keeps at least half the line. A name cut there is not repeated in the facts
+  line: telling that it was cut would mean measuring the DOM.
+- **Old records need nothing.** The title is derived from the call's input like
+  every row's (`toolSummary`) — `subagent_type` when the agent gave one, the
+  Codex agent path — never from the result record, so a transcript from before
+  this section reads the new way on reload, with no new field, and a call still
+  running has its title from its first frame. A Claude call that omitted the
+  type is `Subagent`, by the rule above.
+
+**An agent mark, so it does not read as a tool.** With the agent's name in the
+title slot, `Explore` sits exactly where `Bash` and `Grep` do and could be taken
+for a tool called Explore. The title is therefore led by lucide's `Bot` (`⧉` in these diagrams) at
+`size-3`, in the title's own accent, `shrink-0`, `gap-1` to the name — drawn
+inside the title span, not in the leading column: the leading column is the
+chevron and the **status** glyph, and a subagent's status must stay in the same
+place as every other row's. It costs 16px, and it is the one icon a title ever
+carries, so it is the subagent category's mark and nothing else's. A nested
+subagent in a Process wears it too, which is what tells it apart from its
+siblings among forty tool rows.
+
+The mark is `aria-hidden`; the name is preceded by a visually hidden
+`Subagent ` (`sr-only`), so a screen reader hears *"Subagent Explore, Find retry
+handling"* — the same distinction the eye gets from the mark. A row titled
+`Subagent` skips the hidden word rather than saying it twice. The running
+glyph is named `Subagent running` on every subagent row, not `<agent> running`:
+the status is the subagent's, whichever agent it is, and `Task` is retired.
+
+Every surface that words the call from the summary follows for free: the sticky
+title line, a full-screen viewer's title (`Explore · Find retry handling`), the
+Process's `aria-label` (`Explore subagent's process`, now from the title rather
+than the chip, so a Codex spawn gets `read_a subagent's process`; a row titled
+`Subagent` keeps `Subagent's process`), and the latest-child wording of an outer
+subagent whose latest child is this one (`Explore  Read the backoff policy`).
+
+#### What is measured, and where each figure comes from
+
+Three figures, each from one place, with one fallback where one exists. Shown
+only when measured — the rule [the meta slot](#where-a-figure-comes-from)
+already follows.
+
+| Figure | First | Else | Never |
+|---|---|---|---|
+| **tool uses** | the run's children: every child `tool_use_id`, filed or [unfiled](#what-is-not-filed) (`countSteps`, unchanged) | the CLI's count — live from the activity's `subagent_progress.tool_uses`, settled from the result record's `subagent.tool_uses` | a mix of the two on one run |
+| **tokens** | the result record's `subagent.total_tokens`: the subagent's context when it finished ([below](#tokens)) | — | a sum of the children's own usages, or a live figure |
+| **duration** | the meta slot's rules, unchanged: Claude's `duration_ms`, else observed `endedAt − startedAt` | — | — |
+
+**Live and final are the same number because they are the same count.** A
+live count that ends on a different final one is what happens when the two
+come from two counters — one ticking on the client while the run goes, another
+the CLI writes when it ends — that count different things even once in a while.
+So there is one counter per run, chosen by the run's data, not by its status:
+
+- **A run with any child call counts its children, live and settled alike.**
+  The live line counts them; the settled line counts the same children; the
+  Process heading counts the same ones again, and the rows under it are the
+  ones counted, so a reader who opens the Process and counts gets the row's
+  number. The CLI's `subagent.tool_uses` is not shown on such a run.
+- **A run with no child call counts the CLI's**: `subagent_progress.tool_uses`
+  while live, the result record's `subagent.tool_uses` once settled — one
+  source again, so they agree with each other. This is the subagent whose work
+  never reached the stream (a subagent's own subagent that ran inside its call,
+  measured on claude 2.1.286) and any CLI that streams no frames. Without that
+  figure the row draws what it draws today with no steps.
+- **What one tool use is**: one call the subagent made, whatever it became — a
+  row, a permission card standing in for one, a denied call, a question card.
+  A subagent's own subagent is one tool use, however much it did. Text is not
+  one.
+
+Why the children and not the CLI wherever both exist, although on an ordinary
+run they agree — over 192 single-run subagents in local Claude Code transcripts
+(claude 2.1.x) the hand-back's `tool_uses` equalled the distinct `tool_use` ids
+in the subagent's own transcript every time:
+
+- **The children are the one count a reader can check**, and the one every
+  engine has. Codex reports no count for a spawn at all, and no record written
+  before the server kept the CLI's has one; a rule that read the CLI's
+  wherever it existed would count Claude and Codex rows, and old and new rows,
+  by two different counters.
+- **They tick per call.** `task_progress` arrives on the CLI's schedule, not on
+  each call; a count read from it would stand still while the Process under it
+  grew.
+- **A resumed subagent is where the two part.** The CLI counts per call: a
+  `SendMessage` that resumes a subagent reports only that call's tool uses, on
+  its own result. Its streamed work is filed under the call that first spawned
+  the subagent ([code/frontend-state.md](code/frontend-state.md#a-subagents-children),
+  [Process](#process)), so that row's Process grows and its count grows with it,
+  while that call's own `tool_uses` was written when it first ended. Every
+  mismatch in the measured runs was this case. The row keeps counting what is
+  under it.
+
+#### Tokens
+
+**What the CLI reports for the subagent, as it reports it — which is its
+context at the end, not its spend.** Claude's figure (the result's
+`tool_use_result.totalTokens`; older CLIs also wrote it into the hand-back text) is the input, cache and output
+tokens of the subagent's **last request** alone: over 135 runs (claude 2.1.x) it
+matched that request's sum in every one that was not resumed, and the run's
+cumulative usage is five to twenty times more. It is what Claude Code's own
+`45.6k tokens` means. Codex's figure is read to mean the same thing: the child
+thread's **last** usage (`tokenUsage.last`), not its running `total`, so the
+same word on two engines' rows is the same quantity.
+
+So the label stays `tokens`, the CLI's own word, and the row does not call it a
+cost: it says how much the subagent had in hand when it answered — a fair
+measure of how big a job it was — and the session's spend is the session
+panel's. A real per-subagent spend would need every one of its requests'
+usage, which neither CLI hands over for a subagent; if one starts to, it is a
+second figure with a name of its own, never a silent change to this one.
+
+They are a fact at the end, so they live **in the result record** (its
+`subagent`, beside `duration_ms` —
+[agent-integration.md](code/agent-integration.md#eventrecord-unified-event-format)),
+and a run gets them when it settles, never while live: a ticking token count on
+a phone row is noise, and the live line has no width for it.
+
+**Number formatting**, all through helpers that already exist:
+
+- tool uses: the integer, `1 tool use` singular, `12 tool uses` —
+  `toolUsesLabel` (`lib/toolRun.ts`), which the row and the Process heading
+  share; `stepsLabel` beside it is the folded group's, which still says steps.
+- tokens: `formatTokens` (`web/src/utils/tokens.ts`) — `842`, `4.2K`, `45.6K`,
+  `128K`, `1.2M` — then ` tokens`. The capital `K` is the session panel's, so
+  the app writes a token figure one way everywhere; Claude Code's own lowercase
+  `k` is not copied.
+- duration: `formatDuration`, in the meta slot, unchanged.
+- Zero tokens are not drawn (an engine that reports `0` has measured nothing
+  useful); zero tool uses are not drawn either — a subagent that answered
+  without calling anything has `45.6K tokens` alone.
+
+#### Line 2 once settled: the figures
+
+The settled second line is the figures, joined by ` · `, in the order **tool
+uses, tokens** — the duration stays on line 1:
+
+```
+ ›  ✓  ⧉ Explore   Find retry handling                     2m 2s
+       12 tool uses · 45.6K tokens
+```
+
+- **The duration stays in the meta slot.** Every row's time is right-aligned
+  on line 1, live as a counter and settled as a duration; a subagent's
+  `2m 2s` moving to the second line on settling would be a figure jumping
+  across the row at the moment it stops, and two time positions in one list. On
+  line 2 it would also be the first thing cut on a phone. Claude Code's
+  `Done (12 tool uses · 45.6k tokens · 2m 2s)` puts the same three facts on one
+  row; this row has them on its two lines.
+- **Each figure is drawn whole or not at all.** The line is one `flex-wrap`
+  row exactly one line high (`h-[1lh] overflow-hidden`), the count and the
+  `· tokens` its two `shrink-0` spans: on a 320px phone with
+  three levels of rail the figures are about 170px of the ~210px left, and if a
+  pathological width cannot fit both, the tokens span drops out whole rather
+  than reading `45.` — it wraps onto the hidden second line. Never truncated
+  mid-number.
+- **What shows with what is known:**
+
+| Known | Line 2 |
+|---|---|
+| tool uses and tokens | `12 tool uses · 45.6K tokens` |
+| tool uses only (every record before the server kept tokens; a Codex child that never reported usage) | `12 tool uses` — exactly today's line, renamed |
+| tokens only (answered without a call) | `45.6K tokens` |
+| neither | the shared rungs, as a row with no steps draws today |
+
+#### Status by status
+
+| Run | Line 2 |
+|---|---|
+| live (`running` / `background`) | `N tool uses · <latest child>` — count and what it is doing; no tokens |
+| `success` | the figures |
+| `error` | the figures, in the muted second-line colour — the row's red is line 1's; a failed subagent still spent what it spent |
+| `interrupted` | `N tool uses · <latest child>`, frozen where it was cut — no tokens even when a late result brought some: where it was is the news |
+| settled from the background, `completed` | the figures — the outcome is its report ([the subagent body](#the-subagent-body)), so it reads as a foreground success does |
+| settled from the background, `failed` / `stopped` | `N tool uses · <first line of the outcome>` — the verdict is the news, and this is the one failed row whose body does not open |
+
+The background split is a change, and the reason for it: on claude 2.1.286 the
+CLI backgrounds a main-agent subagent of its own accord, so if a backgrounded
+success kept its outcome line the most common subagent would never show what it
+cost. Its outcome *is* its report, which is exactly what a foreground success
+already leaves to the body.
+
+**Running** keeps the live line as it is, with its count now counted as above
+and labelled `tool uses`, and the elapsed counter on line 1. When the run has
+no child yet but the CLI reported progress, the latest-child half reads
+`subagent_progress.last_tool_name` (Claude's `task_progress`) as a bare title (`Grep`) — better than
+`Running <description>`, which is the row's detail said again — and `run.activity`
+only when there is neither.
+
+#### What is not on the row
+
+| Fact | Where | Why |
+|---|---|---|
+| `subagent.agent_id` — Claude's `agentId` | the body's **facts** line | a machine key for resuming the subagent, which the reader only needs to quote back to the agent; mono, selectable |
+| full agent type | the facts line, only when it differs from the title: a `plugin:` prefix the row dropped, or a type only the result named (`subagent.agent_type` on a call whose input had none, titled `Subagent`) | otherwise it is the row's title again; a Codex `agent_path` is already the title |
+| model | the facts line, if a record ever carries the subagent's — none does today | rarely differs from the session's; worth a glance, not a line |
+| `spawn_depth` | nowhere | the rail already draws it, and a number would say it twice |
+| per-kind token breakdown, cost | nowhere | the session panel's concern; a subagent's share of it is the turn-level summary's |
+
+The **facts line** is the body's last block, after Prompt: one muted `p-2`
+line, `border-t`, facts joined by ` · `, wrapping (`break-all` on the id) —
+`pr-review-toolkit:code-reviewer · agent a555947eded58a158`.
+It is drawn only with at least one fact. Not a disclosure: it is one line, and a
+disclosure for one line is a tap to reveal less than its own label.
+
 ### The second line: steps and what it is doing
 
 ```
- ⟳  Task  Explore  Find retry handling                     47s
-    6 steps · Grep "Retry-After" in server/
+ ⟳  ⧉ Explore  Find retry handling                         47s
+    6 tool uses · Grep "Retry-After" in server/
 ```
+
+[Above](#line-2-once-settled-the-figures) replaces the settled rows of the
+table below, and `N steps` is drawn as `N tool uses` throughout; what follows is
+the live line, which is unchanged in what it reads.
 
 The collapsed row is how a user tells a subagent that is getting somewhere from
 one that is stuck, without opening anything. Two facts do that: *how far* it has
@@ -2599,13 +2851,13 @@ first row that matches wins:
 
 | Run | Second line |
 |---|---|
-| no steps | the shared rungs, unchanged — `run.activity` while live, the background rungs, else no line |
-| live (`running` / `background`) | `N steps · <latest child>` |
-| `interrupted` | `N steps · <latest child>` — frozen where it was cut |
-| settled, from the background | `N steps · <first line of the outcome>` |
-| `success` / `error` | `N steps` |
+| no tool uses and no figures | the shared rungs, unchanged — `run.activity` while live (after `last_tool_name`, [above](#status-by-status)), the background rungs, else no line |
+| live (`running` / `background`) | `N tool uses · <latest child>` |
+| `interrupted` | `N tool uses · <latest child>` — frozen where it was cut |
+| settled from the background, `failed` / `stopped` | `N tool uses · <first line of the outcome>` |
+| `success` / `error` / background `completed` | the figures ([above](#line-2-once-settled-the-figures)) |
 
-`1 step`, singular. The rules inside that table:
+`1 tool use`, singular. The rules inside that table:
 
 - **The latest child is worded the way it is worded on its own.** A call reads
   as its own row would — `toolSummary` title, then its detail through the same
@@ -2631,7 +2883,7 @@ first row that matches wins:
   then the latest child — a call's title in `text-th-text-secondary` (not the
   accent the row's own title wears: two accent titles on one row would make the
   child read as the row), then `Detail`, which truncates. A text child is one
-  `truncate` span, not mono. `6 steps · ` never yields width; on a 320px phone the
+  `truncate` span, not mono. `6 tool uses · ` never yields width; on a 320px phone the
   latest child is cut to a few characters and the count is still there, because
   the count is the half that answers *is it moving*.
 - **It is never red, even when the latest child failed.** `Detail` is passed no
@@ -2639,33 +2891,34 @@ first row that matches wins:
   exactly as one in the main transcript is
   ([the body](#the-body-problems-2-and-3)); the row's colour is the subagent's own
   outcome, and the failed call is red on its own row in the Process.
-- **A settled run keeps its count and drops the latest child.** On `success` and
+- **A settled run drops the latest child for its figures.** On `success` and
   `error` the report is the account of what happened, and the last thing the
-  subagent touched is noise next to it; `12 steps` is the fact worth keeping on
-  a collapsed row. `interrupted` keeps the child because there it *is* the news:
-  where it was when it was cut. A run that settled from the background, success
-  or failure, keeps its outcome line as every background row does
-  ([above](#the-second-line-problem-1)) — a backgrounded failure does not
-  rely on its body opening, because it must not
-  ([the body](#the-body-problems-2-and-3)). Keeping a line in every case is also
+  subagent touched is noise next to it; `12 tool uses · 45.6K tokens` is the
+  fact worth keeping on a collapsed row. `interrupted` keeps the child because
+  there it *is* the news: where it was when it was cut. A run that settled from
+  the background and failed or was stopped keeps its outcome line as every
+  background row does ([above](#the-second-line-problem-1)) — a backgrounded
+  failure does not rely on its body opening, because it must not
+  ([the body](#the-body-problems-2-and-3)); one that completed reads as a
+  foreground success ([why](#status-by-status)). Keeping a line in every case is also
   what holds the row's height when it settles, and that matters more for a
   subagent than for any other foreground call: the main agent routinely spawns
   several at once, so a subagent row that finishes first is **not** at the
   tail — its siblings are still running under it.
 - **`error` gets a line now.** The shared rung 4 (the tail of the output) is
   still withheld, for the reason [above](#the-body-problems-2-and-3) — the body
-  opens itself and the report is right there — but the count is not a copy of
-  anything in the body's first screen, so it stays.
+  opens itself and the report is right there — but the figures are not a copy
+  of anything in the body's first screen, so they stay.
 - **`aria-hidden` while live, exposed once settled**, as every second line
   ([above](#the-second-line-problem-1)). Both halves move while live: the count
   and the latest child.
 
-A row with **no steps** draws what it drew before this section existed. That
-covers two real cases with one rule: a subagent that answered without calling
-anything, and every transcript recorded before children were attributed —
-their subagent records sit flat beside the call
-([below](#what-is-not-filed)). Writing `0 steps` on those would be false for the
-second kind. The price is that a step-less subagent which showed its activity
+A row with **no tool uses and no figures** draws what it drew before this
+section existed. That covers two real cases with one rule: a subagent that
+answered without calling anything on a record with no tokens, and every
+transcript recorded before children were attributed — their subagent records
+sit flat beside the call ([below](#what-is-not-filed)). Writing `0 tool uses` on
+those would be false for the second kind. The price is that a step-less subagent which showed its activity
 line while live loses it when it settles — the one re-flow left, on a subagent
 that never called a tool, which is rare.
 
@@ -2673,7 +2926,7 @@ that never called a tool, which is rare.
 
 ```
 ├────────────────────────────────────────────────────────────┤
-│ ⌄  Process · 6 steps                                       │
+│ ⌄  Process · 6 tool uses                                   │
 │ ┃ Looking at the sender for edge cases.                    │  subagent text
 │ ┃ ›  ✓  Read   server/relay/sender.go                      │
 │ ┃ ›  ✓  Grep   "Retry-After" in server/                    │
@@ -2686,7 +2939,7 @@ that never called a tool, which is rare.
 
 A disclosure in the shape the Prompt one already has — a `<button>` with
 `aria-expanded`, chevron, muted label, `p-2`, `border-t` — titled
-`Process · N steps` with the same `N` as the row, or `Process` alone when every
+`Process · N tool uses` with the same `N` as the row — the same counter, or `Process` alone when every
 child is text. It is drawn only when it has at least one child to draw (the next
 rule, and a pending card drawn under the row instead
 ([below](#when-a-step-asks-the-user)), can leave it none) or unfiled children to mention
@@ -2793,7 +3046,7 @@ section exists to end. None of the cues is a new colour:
   grouping would have to know.
 - **It is named for a screen reader too.** The column is `role="group"` with an
   `aria-label` naming whose it is (`Explore subagent's process`, from the row's
-  chip; `Subagent's process` on a row with none, as every Codex spawn is). The cues above are all visual, and a screen-reader user
+  title; `Subagent's process` on a row titled `Subagent`). The cues above are all visual, and a screen-reader user
   hearing the subagent's text as plain prose would be making exactly the mistake
   this section ends.
 
@@ -2811,7 +3064,7 @@ design.
 
 - **The outer row counts it as one step**, and when it is the latest child the
   outer line reads it as the inner call's row does
-  (`Task  Explore  Read the backoff policy`), not as the inner subagent's latest
+  (`Explore  Read the backoff policy`), not as the inner subagent's latest
   child. The outer row says what the *outer* subagent is doing, which is waiting
   on its own subagent; the inner row, one tap down, says what that one is doing.
   Reaching through would put a step the outer subagent never took on its line.
@@ -2835,8 +3088,8 @@ row in the transcript the user can always see. Being inside that item's DOM is
 also what tells a screen reader whose request it is.
 
 ```
-│ ⟳  Task  Explore  Find retry handling                     47s │
-│    6 steps · Bash  rm -rf build/                              │
+│ ⟳  ⧉ Explore  Find retry handling                         47s │
+│    6 tool uses · Bash  rm -rf build/                          │
 │ ┌ ?  Bash   rm -rf build/                                   ┐ │  the card, as everywhere
 │ │    [Allow]  [Deny]  …                                     │ │
 │ └───────────────────────────────────────────────────────────┘ │
@@ -2880,11 +3133,11 @@ the limit it always had, now visible as which Process the card lands in.
 
 | Task status | Row | Process |
 |---|---|---|
-| `running` | spinner, `N steps · <latest child>` | grows; its live children spin |
+| `running` | spinner, `N tool uses · <latest child>` | grows; its live children spin |
 | `background` | spinner + chip, same line while children arrive | as running, for as long as children arrive |
-| `success` | muted check, `N steps` | settled |
-| `error` | red, opens its body (not when nested), `N steps` | closed; a failed call, if any, is red on its own row |
-| `interrupted` | `Ban`, `N steps · <latest child>` | settled |
+| `success` | muted check, the figures | settled |
+| `error` | red, opens its body (not when nested), the figures | closed; a failed call, if any, is red on its own row |
+| `interrupted` | `Ban`, `N tool uses · <latest child>` | settled |
 
 **A settled subagent leaves nothing spinning under it**, save a child in
 `background`, which settles by its own notification as any backgrounded call
@@ -3894,16 +4147,21 @@ the virtualizer measures it.
 14. Reload the page on any of the above: every fetched block is still there and
     the row's second line is present from the first frame — a fetch is persisted,
     unlike the activity line.
-15. A subagent at work, collapsed: `N steps · <latest child>`, the count going
+15. A subagent at work, collapsed: titled by its agent behind the `Bot` mark
+    (`Explore`, a Codex `read_a`, or `Subagent` when none is known), no type
+    chip, the description as the detail and still there beside a 40-character
+    agent name. Line 2: `N tool uses · <latest child>`, the count going
     up with each tool call and the second half changing as it works — its text
     as prose, its tool calls as their own row would word them. None of its text
     or rows anywhere in the main transcript, as long as the spawning call is
     loaded ([what is not filed](#what-is-not-filed)).
-16. Two subagents spawned together: each row counts only its own steps. Let the
-    upper one finish first: its line becomes `N steps` **without the row
-    changing height**, while the lower one keeps moving.
-17. Open the finished one: report, then `Process · N steps` **closed**, then
-    `Prompt` closed. Open Process: the subagent's text in small secondary type on
+16. Two subagents spawned together: each row counts only its own tool uses.
+    Let the upper one finish first: its line becomes `N tool uses · <tokens>`
+    **without the row changing height**, with the same `N` it showed live the
+    moment before, while the lower one keeps moving.
+17. Open the finished one: report, then `Process · N tool uses` **closed** —
+    the same `N`, and that many calls inside when opened — then `Prompt`
+    closed, then the facts line (`agentId` and whatever else is known). Open Process: the subagent's text in small secondary type on
     a rail, its tool rows exactly as main-transcript rows, nothing scrolling
     inside the Process itself, and the report **not** repeated at its end.
     Reload: the same row, the same count.
@@ -3914,7 +4172,9 @@ the virtualizer measures it.
 19. Interrupt a subagent mid-run: `Ban`, the line frozen on its latest child,
     and no spinner left anywhere inside its Process.
 20. A transcript recorded before this change: subagent rows and their work read
-    exactly as they did, with no `0 steps` anywhere.
+    exactly as they did, with no `0 tool uses` anywhere — titled by their
+    `subagent_type` now, which their input always carried, and with no tokens
+    where the record kept none.
 21. A turn with text, five calls, text, one call: two framed lists, hairlines
     between rows and no gaps, the text outside both. A one-line row has its
     line in the middle of its 44px on a phone, not along the top; a two-line row

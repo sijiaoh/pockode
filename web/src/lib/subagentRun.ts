@@ -3,9 +3,10 @@ import { toolRunText } from "./toolRun";
 
 /**
  * What a subagent row derives from its children: how far it has come and what
- * it is doing now (docs/tool-call-ui.md#a-subagents-own-work). Nothing here is
- * sent — every figure is read off the children, the way a row's title is read
- * off its input.
+ * it is doing now (docs/tool-call-ui.md#a-subagents-own-work). The count is
+ * read off the children wherever there are any, the way a row's title is read
+ * off its input; the engine's own figures fill in only what the children
+ * cannot say.
  */
 
 /**
@@ -78,7 +79,12 @@ export function firstLine(text: string): string {
 //     The function name is `retry2`.
 //   agentId: a555947eded58a158 (use SendMessage with to: ...)
 //   <usage>subagent_tokens: 14824 ...</usage>
-const HAND_BACK = /^\[Subagent hand-back\][^\n]*The report follows:\n/;
+//
+// claude 2.1.330 drops the two lines after the report — the id and the figures
+// travel on the record's `subagent` instead — and may open with harness notes
+// above the frame (`<tools-used-before-summary>Bash, Read</…>`), so the frame
+// is found at the start of any line, and what is above it is the harness's.
+const HAND_BACK = /(?:^|\n)\[Subagent hand-back\][^\n]*The report follows:\n/;
 
 /**
  * The subagent's own report out of what its call returned. The frame around it
@@ -90,7 +96,7 @@ export function subagentReport(result: string): string {
 	const frame = HAND_BACK.exec(result);
 	if (!frame) return result;
 	const lines: string[] = [];
-	for (const line of result.slice(frame[0].length).split("\n")) {
+	for (const line of result.slice(frame.index + frame[0].length).split("\n")) {
 		// The first line at column zero is the harness's again.
 		if (line !== "" && !line.startsWith("  ")) break;
 		lines.push(line.slice(2));
@@ -134,48 +140,107 @@ export function latestChild(parts: ContentPart[]): LatestChild | undefined {
 }
 
 /**
- * A subagent row's second line when it has steps; null when it has none, and
- * the shared rungs (`toolSecondLine`) then stand, unchanged.
+ * A subagent row's second line when it has something of its own to say; null
+ * when it has not, and the shared rungs (`toolSecondLine`) then stand,
+ * unchanged.
  */
-export interface StepsLine {
-	steps: number;
+export interface SubagentLine {
+	/** How many calls it made, by `subagentToolUses`; 0 is not drawn. */
+	toolUses: number;
+	/**
+	 * The subagent's context when it finished, on a settled figures line only;
+	 * absent there when the engine reported none.
+	 */
+	tokens?: number;
 	/** What follows the count: the latest child, or a background outcome. */
 	tail?: LatestChild;
 	/** Whether it is still moving; see `ToolSecondLine.live`. */
 	live: boolean;
 }
 
+function isLive(run: ToolRun): boolean {
+	return run.status === "running" || run.status === "background";
+}
+
 /**
+ * How many calls the subagent made — one counter per run, chosen by its data
+ * and never by its status, so the live figure is the settled one
+ * (docs/tool-call-ui.md#what-is-measured-and-where-each-figure-comes-from):
+ * its children wherever it has any, which is the count its Process heading
+ * shows; the CLI's own count only on a run with none — live from its progress,
+ * settled from its result.
+ *
  * `unfiled` are the run's children that sit flat, out of its children
  * (docs/tool-call-ui.md#what-is-not-filed). They count, because a count that
- * shrank across a page boundary would understate the work; and they are the
- * newer ones, so the newest of them is what it is doing now.
+ * shrank across a page boundary would understate the work.
  */
-export function subagentStepsLine(
+export function subagentToolUses(
 	run: ToolRun,
 	unfiled?: UnfiledChildren,
-): StepsLine | null {
-	const children = run.children ?? [];
-	const steps = countSteps(children) + (unfiled?.steps ?? 0);
-	if (steps === 0) return null;
-	const latest = unfiled?.latest ?? latestChild(children);
+): number {
+	const children = countSteps(run.children ?? []) + (unfiled?.steps ?? 0);
+	if (children > 0) return children;
+	const reported = isLive(run)
+		? run.subagentProgress?.toolUses
+		: run.subagent?.toolUses;
+	return reported ?? 0;
+}
 
-	if (run.status === "running" || run.status === "background") {
-		return { steps, tail: latest, live: true };
+/**
+ * The run's line, by its status (docs/tool-call-ui.md#status-by-status). The
+ * newest unfiled child is the newest child of all, so it is what the subagent
+ * is doing now.
+ */
+export function subagentLine(
+	run: ToolRun,
+	unfiled?: UnfiledChildren,
+): SubagentLine | null {
+	const toolUses = subagentToolUses(run, unfiled);
+	const latest = unfiled?.latest ?? latestChild(run.children ?? []);
+
+	if (isLive(run)) {
+		// Before the first child, what the CLI said it last called; its
+		// activity only after that, being `Running <description>` — the row's
+		// detail said again.
+		const lastTool = run.subagentProgress?.lastToolName;
+		const tail: LatestChild | undefined =
+			latest ??
+			(lastTool
+				? { kind: "call", name: lastTool, input: undefined }
+				: run.activity
+					? { kind: "text", text: run.activity }
+					: undefined);
+		if (toolUses === 0 && !lastTool) return null;
+		return { toolUses, tail, live: true };
 	}
-	// Frozen where it was cut: where it was is the news.
+	if (toolUses === 0) {
+		// Only a run that settled with figures has a line without a count.
+		const tokens = figuresTokens(run);
+		return tokens ? { toolUses, tokens, live: false } : null;
+	}
+	// Frozen where it was cut: where it was is the news, and a late result's
+	// tokens are not.
 	if (run.status === "interrupted") {
-		return { steps, tail: latest, live: false };
+		return { toolUses, tail: latest, live: false };
 	}
-	if (run.fromBackground) {
+	// A backgrounded failure's body does not open, so its verdict goes here.
+	if (run.fromBackground && run.status === "error") {
 		const outcome = firstLine(toolRunText(run));
 		return {
-			steps,
+			toolUses,
 			tail: outcome ? { kind: "text", text: outcome } : undefined,
 			live: false,
 		};
 	}
-	return { steps, live: false };
+	return { toolUses, tokens: figuresTokens(run), live: false };
+}
+
+/** Tokens for a figures line: settled, not cut short, and not zero. */
+function figuresTokens(run: ToolRun): number | undefined {
+	if (run.status === "interrupted") return undefined;
+	if (run.fromBackground && run.status === "error") return undefined;
+	const tokens = run.subagent?.totalTokens;
+	return tokens ? tokens : undefined;
 }
 
 /**

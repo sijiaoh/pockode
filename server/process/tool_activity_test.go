@@ -189,3 +189,39 @@ func TestManager_ToolActivityOfAnEndedSessionIsEmpty(t *testing.T) {
 		t.Errorf("expected no activity, got %v", activity)
 	}
 }
+
+// A subagent's progress is live state like its activity line, and is kept and
+// settled by the same rules: a reconnect mid-run gets the newest figures, and a
+// settled run leaves none behind.
+func TestToolActivity_SubagentProgressFollowsItsRun(t *testing.T) {
+	uses := func(n int64) *agent.SubagentProgress {
+		return &agent.SubagentProgress{SubagentCounts: agent.SubagentCounts{ToolUses: &n}, LastToolName: "Bash"}
+	}
+	var tracked toolActivity
+
+	tracked.observe(agent.ToolActivityEvent{ToolUseID: "bg", Subagent: uses(1)})
+	// A progress frame with no line of its own still moves the figures.
+	tracked.observe(agent.ToolActivityEvent{ToolUseID: "bg", Subagent: uses(2)})
+	tracked.observe(agent.ToolActivityEvent{ToolUseID: "inline", Activity: "Running ls", Subagent: uses(5)})
+	tracked.observe(agent.ToolResultEvent{ToolUseID: "bg", Subtype: agent.ToolResultBackgroundStarted})
+
+	got := tracked.progressSnapshot()
+	if len(got) != 2 || *got["bg"].ToolUses != 2 || *got["inline"].ToolUses != 5 {
+		t.Fatalf("progress = %#v, want the newest of each run", got)
+	}
+	if line := tracked.snapshot()["bg"]; line != "" {
+		t.Errorf("a progress-only frame wrote the line %q", line)
+	}
+
+	// The turn ending settles the inline run, not the backgrounded one.
+	tracked.observe(agent.DoneEvent{})
+	got = tracked.progressSnapshot()
+	if _, ok := got["inline"]; ok || len(got) != 1 {
+		t.Errorf("after the turn ended progress = %#v, want only the background run", got)
+	}
+
+	tracked.observe(agent.ToolResultEvent{ToolUseID: "bg", Subtype: agent.ToolResultBackgroundResult})
+	if got := tracked.progressSnapshot(); got != nil {
+		t.Errorf("after the outcome progress = %#v, want none", got)
+	}
+}

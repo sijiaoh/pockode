@@ -1171,6 +1171,10 @@ type ChatMessagesSubscribeResult struct {
 	// mid-run would otherwise have missed every one of them, which on a phone is
 	// the normal case. Absent when nothing is in flight.
 	ToolActivity map[string]string `json:"tool_activity,omitempty"`
+	// ToolProgress is how far each subagent still in flight last reported
+	// having come, by its call's tool_use_id, for the same reason ToolActivity
+	// is here (see agent.ToolActivityEvent.Subagent). Absent when none did.
+	ToolProgress map[string]agent.SubagentProgress `json:"tool_progress,omitempty"`
 	// ServerTime is the server's clock as the reply was built, so a client can
 	// count a call still running in History from its observed_at (see
 	// agent.EventRecord.ObservedAt) without trusting its own clock to agree

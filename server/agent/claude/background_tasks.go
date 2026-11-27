@@ -186,15 +186,42 @@ type taskFrame struct {
 	Ambient        bool       `json:"ambient"`
 	SkipTranscript bool       `json:"skip_transcript"`
 	Patch          *taskPatch `json:"patch"`
-	// Usage is task_progress's and task_notification's running totals, of
-	// which only the duration is read: on task_notification it is the CLI's
-	// own measure of how long the task ran (for a subagent, the same
-	// totalDurationMs its call's result would have carried). Optional in the
-	// schema.
-	Usage *struct {
-		DurationMs int64 `json:"duration_ms"`
-	} `json:"usage"`
+	// TaskType and SubagentType are task_started's: what kind of work this is
+	// (local_agent for a subagent, measured on claude 2.1.330) and, for a
+	// subagent, which agent.
+	TaskType     string `json:"task_type"`
+	SubagentType string `json:"subagent_type"`
+	// LastToolName is the tool a subagent called most recently, on
+	// task_progress.
+	LastToolName string `json:"last_tool_name"`
+	// Usage is task_progress's and task_notification's running totals.
+	// Optional in the schema.
+	Usage *taskUsage `json:"usage"`
 }
+
+// taskUsage is a task's running totals. Measured on claude 2.1.330, a
+// subagent's task_progress carries them all as they stand at each of its tool
+// calls, and its task_notification carries the final ones — the same figures
+// its call's result reports as totalToolUseCount, totalTokens and
+// totalDurationMs.
+type taskUsage struct {
+	TotalTokens *int64 `json:"total_tokens"`
+	ToolUses    *int64 `json:"tool_uses"`
+	// DurationMs is read only on task_notification, where it is the CLI's own
+	// measure of how long the task ran. A live one would only restate the
+	// client's own clock, less often.
+	DurationMs int64 `json:"duration_ms"`
+}
+
+func (u *taskUsage) counts() agent.SubagentCounts {
+	if u == nil {
+		return agent.SubagentCounts{}
+	}
+	return agent.SubagentCounts{ToolUses: u.ToolUses, TotalTokens: u.TotalTokens}
+}
+
+// taskTypeLocalAgent is the task_type of a subagent's task.
+const taskTypeLocalAgent = "local_agent"
 
 // taskPatch is task_updated's payload. Only the one field is read: a status and
 // an end time say the task is over, and task_notification says the same thing
@@ -226,6 +253,16 @@ type taskCall struct {
 	// excluded marks ambient or skip_transcript work: read to keep the join
 	// consistent, never forwarded.
 	excluded bool
+	// subagent says the task is a subagent's, so its usage counts a subagent's
+	// work. Only then is it forwarded: the same usage on any other task would
+	// be drawn as an agent's tool uses and tokens.
+	subagent bool
+	// agentType is the subagent's type, from task_started; agentID its id,
+	// from its call's placeholder (see noteAgentID). Both are what the outcome
+	// of backgrounded work is recorded with, since task_notification names
+	// neither.
+	agentType string
+	agentID   string
 }
 
 // startTask records what task_started said, so the frames that follow can be
@@ -239,6 +276,8 @@ func (t *backgroundTaskTracker) startTask(frame taskFrame) {
 		toolUseID:    frame.ToolUseID,
 		backgrounded: frame.IsBackgrounded,
 		excluded:     frame.Ambient || frame.SkipTranscript,
+		subagent:     frame.TaskType == taskTypeLocalAgent || frame.SubagentType != "",
+		agentType:    frame.SubagentType,
 	}
 
 	t.tasksMu.Lock()
@@ -272,6 +311,23 @@ func (t *backgroundTaskTracker) markBackgrounded(taskID string) {
 		t.backgroundedCalls = make(map[string]bool)
 	}
 	t.backgroundedCalls[call.toolUseID] = true
+}
+
+// noteAgentID records the subagent id a backgrounded call's placeholder named,
+// so the outcome that arrives later can be recorded with it.
+func (t *backgroundTaskTracker) noteAgentID(toolUseID, agentID string) {
+	if toolUseID == "" || agentID == "" {
+		return
+	}
+	t.tasksMu.Lock()
+	defer t.tasksMu.Unlock()
+	for id, call := range t.tasks {
+		if call.toolUseID == toolUseID {
+			call.agentID = agentID
+			t.tasks[id] = call
+			return
+		}
+	}
 }
 
 // resolveTask answers which call a task frame belongs to.
@@ -404,11 +460,17 @@ func parseTaskEvent(log *slog.Logger, line []byte, subtype string, tasks *backgr
 			log.Debug("dropping task progress with no tool call behind it", "taskId", frame.TaskID)
 			return nil
 		}
-		activity := frame.activityText()
-		if activity == "" {
+		activity := agent.ToolActivityEvent{ToolUseID: call.toolUseID, Activity: frame.activityText()}
+		if call.subagent {
+			progress := agent.SubagentProgress{SubagentCounts: frame.Usage.counts(), LastToolName: frame.LastToolName}
+			if progress != (agent.SubagentProgress{}) {
+				activity.Subagent = &progress
+			}
+		}
+		if activity.Activity == "" && activity.Subagent == nil {
 			return nil
 		}
-		return []agent.AgentEvent{agent.ToolActivityEvent{ToolUseID: call.toolUseID, Activity: activity}}
+		return []agent.AgentEvent{activity}
 
 	case taskUpdated:
 		if frame.Patch != nil && frame.Patch.IsBackgrounded != nil && *frame.Patch.IsBackgrounded {
@@ -459,6 +521,13 @@ func taskOutcome(log *slog.Logger, frame taskFrame, tasks *backgroundTaskTracker
 	}
 	if frame.Usage != nil && frame.Usage.DurationMs > 0 {
 		result.DurationMs = frame.Usage.DurationMs
+	}
+	if call.subagent {
+		result.Subagent = subagentReport(agent.SubagentReport{
+			AgentID:        call.agentID,
+			AgentType:      call.agentType,
+			SubagentCounts: frame.Usage.counts(),
+		})
 	}
 
 	if frame.OutputFile == "" {

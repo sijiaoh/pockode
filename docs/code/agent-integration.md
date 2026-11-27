@@ -727,9 +727,11 @@ type EventRecord struct {
     Meta                  *MessageMeta        `json:"meta,omitempty"`
     DurationMs            int64               `json:"duration_ms,omitempty"`
     ExitCode              *int                `json:"exit_code,omitempty"`
+    Subagent              *SubagentReport     `json:"subagent,omitempty"`
     HTMLPage              string              `json:"html_page,omitempty"`
     Activity              string              `json:"activity,omitempty"`
     OutputDelta           string              `json:"output_delta,omitempty"`
+    SubagentProgress      *SubagentProgress   `json:"subagent_progress,omitempty"`
     FullReasoning         string              `json:"full_reasoning,omitempty"`
     Redacted              bool                `json:"redacted,omitempty"`
     ContentDelta          string              `json:"content_delta,omitempty"`
@@ -837,7 +839,34 @@ measurement of the call. It is read only from a frame holding one
 `tool_result`, since `tool_use_result` is one per frame, and never onto a
 `background_started` placeholder. A backgrounded task's duration comes with its
 outcome instead: `task_notification`'s `usage.duration_ms`, an optional field,
-is the `background_result`'s `DurationMs`. Arrival times are
+is the `background_result`'s `DurationMs`.
+
+`Subagent` is the same kind of fact about a subagent's call, on its
+`tool_result`: `agent_id`, `agent_type`, `tool_uses`, `total_tokens` — who ran
+and what it did, as of that result (its duration is `DurationMs`, where every
+call's is). Claude's hand-back carries them in `tool_use_result` as `agentId`,
+`agentType`, `totalToolUseCount` and `totalTokens` (2.1.330, which no longer
+writes the `agentId:` and `<usage>` lines into the result text). A backgrounded
+subagent's placeholder names only `agent_id`; its `background_result` carries
+the whole report, from `task_notification`'s `usage` plus the type and id the
+adapter kept from `task_started` and the placeholder. While it runs, the same
+counters travel live as `subagent_progress` on `tool_activity` (`tool_uses`,
+`total_tokens`, `last_tool_name`), which is never recorded; the process keeps
+the newest for a mid-run subscriber as `tool_progress` beside `tool_activity`.
+Live and final are the CLI's one counter both times — a subagent that made
+three calls reported `tool_uses` 1, 2, 3 live and 3 on its notification and its
+hand-back — kept as the engine's own account; which number a row draws is the
+row's decision ([tool-call-ui.md](../tool-call-ui.md#what-is-measured-and-where-each-figure-comes-from)). `tool_uses` counts the
+one call it came with, so a resumed subagent's counts only the resume's calls.
+`total_tokens` is the subagent's context at its last request (that request's
+input, cache and output tokens; measured equal on 2.1.330), not what the run
+spent. The counts are pointers: 0 is a figure, absent means the CLI did not say. Only a
+`local_agent` task (or one with a `subagent_type`) forwards them; the same
+`usage` on any other task would read as an agent's work. Codex fills the same
+fields from a child thread's own frames, with no tool-use count and no live
+progress ([Subagent threads](#subagent-threads)).
+
+Arrival times are
 recorded separately, as what they are: `ObservedAt` is when the server saw a
 `tool_call`, `tool_result`, `permission_response`, `done`, `interrupted` or
 `process_ended` arrive (or wrote one it synthesized), stamped once where the
@@ -2573,9 +2602,9 @@ doing, and how backgrounded work ended. Measured on claude 2.1.263:
 | Subtype | Payload | Read as |
 |---|---|---|
 | `task_started` | `task_id`, `tool_use_id`, `description`, `subagent_type`, `is_backgrounded`, `spawn_depth`, `task_type`, `workflow_name`, `prompt`, `skip_transcript`, `ambient` | registers the task: the `task_id` → `tool_use_id` join, and whether this call's own result will be a placeholder |
-| `task_progress` | `task_id`, `tool_use_id`, `summary`, `description`, `last_tool_name`, `usage` | a `ToolActivityEvent` on that call |
+| `task_progress` | `task_id`, `tool_use_id`, `summary`, `description`, `last_tool_name`, `usage{total_tokens, tool_uses, duration_ms}` | a `ToolActivityEvent` on that call; on a subagent's task, `usage` and `last_tool_name` are its `Subagent` progress |
 | `task_updated` | `task_id`, `patch{status, description, end_time, total_paused_ms, error, is_backgrounded}` | a field changed; only `is_backgrounded` is read — a status and an end time say the task is over, and the notification says that with the outcome attached and an id to hang it on |
-| `task_notification` | `task_id`, `tool_use_id`, `status` ∈ `completed`/`failed`/`stopped`, `output_file`, `summary`, `usage`, `resource_links` | the outcome, recorded only for a backgrounded call |
+| `task_notification` | `task_id`, `tool_use_id`, `status` ∈ `completed`/`failed`/`stopped`, `output_file`, `summary`, `usage`, `resource_links` | the outcome, recorded only for a backgrounded call; a subagent's carries its final `usage` into the record's `subagent` |
 | `background_tasks_changed` | `tasks[]` of `{task_id, task_type, description, ambient}` | the live set, above |
 
 Five things about that table are not guessable from it, and the first two were
@@ -3284,7 +3313,7 @@ the session's):
 | From a subagent's thread | Handling |
 |---|---|
 | `turn/started`, `turn/completed` | not the session's — read as the session's, the child's ending ended the parent's turn while it was still waiting, and the child's start re-aimed `turn/interrupt` at the child. The child's `turn/completed` settles the spawn's row instead (below). For a child whose spawn was never seen there is no row: a `failed` ending is said as a `subagent_failed` `WarningEvent`, so the child's work does not just stop unexplained, and any other ending is dropped |
-| `thread/tokenUsage/updated` | dropped — a running total of another thread wrecks the accumulator's deltas and reports the child's prompt as this session's context. The child's tokens go uncounted; a per-thread accumulator would count them |
+| `thread/tokenUsage/updated` | kept apart from the session's usage — a running total of another thread wrecks the accumulator's deltas and reports the child's prompt as this session's context. Its `last.totalTokens` (the latest request's whole prompt plus output) is kept per thread for the spawn's result instead (below); the session's totals do not count the child |
 | `userMessage` items | dropped — the child's prompt is not a message anyone sent this session, so it is no read point |
 | every other item | mapped as above, with `ParentToolUseID` = the spawn call (from either spawn shape, empty if the spawn was not seen) and no `ProviderMessageID` |
 
@@ -3314,8 +3343,23 @@ cannot carry, measured on 0.159.3:
   ([frontend-state](frontend-state.md#a-subagents-children)). The `subAgentActivity` `kind: "completed"` the
   parent's thread also gets is ignored: it says nothing about how the turn
   ended.
-- **No duration**: the child's turn reports one, but it is not the spawn call's,
-  so the result carries none.
+- **The figures it does have** go on that result, as `DurationMs` and
+  `subagent` ([EventRecord](#eventrecord-unified-event-format)), measured on 0.171.0: the child turn's
+  own `durationMs` — the subagent's run, which is what a Claude subagent's
+  `totalDurationMs` measures too, and a later turn's for a later settle, as a
+  resumed Claude subagent's call reports its own — `agent_id` = the child's
+  thread id, `agent_type` = the spawn's `agentPath` verbatim (none from a
+  `spawnAgent` call, which names none), and `total_tokens` = the child's latest
+  `last.totalTokens`: its context at its last request, the quantity Claude's
+  figure is, not the thread's running `total`, which re-counts every prompt.
+  There is **no tool-use count** and no live progress: Codex counts neither, and
+  the row counts the child's own calls.
+- **No agent name beyond the path.** The path's last segment is the task name
+  the model chose at spawn (`/root/file_reader`), not a role: 0.171.0's spawn
+  tool takes no agent type. The child's thread does carry `agentRole` and a
+  random `agentNickname` (`Hegel`), but only on `thread/read` — no
+  `thread/started` reaches this connection for it — and the role was null even
+  when the model was asked for one, so neither is fetched.
 
 Every other `collabAgentToolCall` stays on the "produce nothing" path. Its
 `wait` names no receiver and no state alongside a `subAgentActivity` spawn; with

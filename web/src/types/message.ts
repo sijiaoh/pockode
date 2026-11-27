@@ -180,6 +180,40 @@ export interface ToolFetch {
 }
 
 /**
+ * An engine's own counters of a subagent's work: live on `subagentProgress`,
+ * final on `subagent`, kept as the engine gave them. A row counts its own
+ * children wherever it has any and reads `toolUses` only where it has none
+ * (`subagentToolUses`). Absent means the engine did not say; 0 is a figure.
+ */
+export interface SubagentCounts {
+	/** How many tool calls the subagent made in this call (not a resume's). */
+	toolUses?: number;
+	/**
+	 * The subagent's context at its latest request — that request's input,
+	 * cache and output tokens — not what the whole run spent.
+	 */
+	totalTokens?: number;
+}
+
+/**
+ * What was true of a subagent when its call's result was written — a fact of
+ * that moment, from the `tool_result` record's `subagent`. Its duration is
+ * the run's `durationMs`, where every call's is.
+ */
+export interface SubagentReport extends SubagentCounts {
+	/** The engine's id for the subagent, which resuming it takes. */
+	agentId?: string;
+	/** Which agent it was: Claude's subagent type, Codex's agent path. */
+	agentType?: string;
+}
+
+/** How far a running subagent has come, from `tool_activity`. Live state. */
+export interface SubagentProgress extends SubagentCounts {
+	/** The tool it called most recently. */
+	lastToolName?: string;
+}
+
+/**
  * One tool call and everything known about it, subagent calls included: a Task
  * *is* a tool call, and keeping a second shape for it meant two status
  * machines and two settle-on-interrupt paths for one thing. `TaskItem` stays,
@@ -200,6 +234,17 @@ export interface ToolRun {
 	 * and is still correct — `status` is what carries "still going".
 	 */
 	activity?: string;
+	/**
+	 * How far a running subagent has come. Live state, like `activity`: gone
+	 * once the run settles, when `subagent` is what is true.
+	 */
+	subagentProgress?: SubagentProgress;
+	/**
+	 * What its result said about the subagent the call ran. A backgrounded
+	 * one's placeholder names it (`agentId`); its outcome carries the whole
+	 * report. Absent for any other call, and on records from before it existed.
+	 */
+	subagent?: SubagentReport;
 	/** A running call's output so far, accumulated from the deltas. Live state. */
 	output?: string;
 	/**
@@ -1341,6 +1386,29 @@ export interface ChatMessagesSubscribeResult extends ChatMessagesHistoryPage {
 	 * and the badge come from the derived status.
 	 */
 	tool_activity?: Record<string, string>;
+	/**
+	 * How far each subagent still in flight last reported having come, by its
+	 * call's `tool_use_id`, for the reason `tool_activity` is here. Absent when
+	 * none did.
+	 */
+	tool_progress?: Record<string, SubagentProgressRecord>;
+}
+
+/** `SubagentCounts` on the wire. */
+export interface SubagentCountsRecord {
+	tool_uses?: number;
+	total_tokens?: number;
+}
+
+/** `SubagentReport` on the wire: a `tool_result` record's `subagent`. */
+export interface SubagentReportRecord extends SubagentCountsRecord {
+	agent_id?: string;
+	agent_type?: string;
+}
+
+/** `SubagentProgress` on the wire: a `tool_activity`'s `subagent_progress`. */
+export interface SubagentProgressRecord extends SubagentCountsRecord {
+	last_tool_name?: string;
 }
 
 export interface ChatMessagesHistoryParams {
@@ -1498,6 +1566,8 @@ export type ServerNotification =
 			subtype?: string;
 			/** Absent, or 0, from an engine that reports no duration (Claude). */
 			duration_ms?: number;
+			/** On a subagent's call alone; see `SubagentReport`. */
+			subagent?: SubagentReportRecord;
 			/** Absent for every tool that is not a command that ran. */
 			exit_code?: number;
 			/**
@@ -1523,6 +1593,8 @@ export type ServerNotification =
 			tool_use_id: string;
 			activity?: string;
 			output_delta?: string;
+			/** A latest value too; see `SubagentProgress`. */
+			subagent_progress?: SubagentProgressRecord;
 	  }
 	| {
 			/**

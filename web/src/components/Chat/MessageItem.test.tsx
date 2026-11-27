@@ -1894,11 +1894,11 @@ describe("MessageItem", () => {
 				],
 			};
 			render(<MessageItem sessionId="session-1" message={message} />);
-			expect(screen.getByText("2 steps")).toBeVisible();
+			expect(screen.getByText("2 tool uses")).toBeVisible();
 
 			await user.click(screen.getByRole("button", { name: /find retries/ }));
 			await user.click(
-				screen.getByRole("button", { name: "Process · 2 steps" }),
+				screen.getByRole("button", { name: "Process · 2 tool uses" }),
 			);
 			const group = screen.getByRole("group", {
 				name: "Explore subagent's process",
