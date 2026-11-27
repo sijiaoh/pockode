@@ -108,24 +108,37 @@ export function LatestChildLabel({ child }: { child: LatestChild }) {
 }
 
 /**
- * `N tool uses · <latest child>`, or once settled the figures. The count never
- * yields width: on a narrow phone the latest child is cut to a few characters
- * and the count — the half that answers "is it moving" — is still there.
+ * `N tool uses · <latest child>`, or once settled `N tool uses · <report>` and
+ * the tokens. The count never yields width: on a narrow phone the latest child
+ * is cut to a few characters and the count — the half that answers "is it
+ * moving" — is still there.
  */
 export function SubagentLineContent({ line }: { line: SubagentLine }) {
 	const count = line.toolUses > 0 && (
 		<span className="shrink-0">{toolUsesLabel(line.toolUses)}</span>
 	);
-	if (line.tokens !== undefined) {
-		// One line that wraps into its own hidden overflow, so a figure that
-		// does not fit drops out whole rather than reading `45.`.
+	if (line.tokens !== undefined || line.report !== undefined) {
+		// One line that wraps into its own hidden overflow. The tokens, at the
+		// right end under line 1's duration, are what wraps away first, and whole
+		// — never `45.`. The report's 16rem basis is what sends them on a phone,
+		// leaving the report the width after the count; without a report the
+		// count takes no basis and the tokens stay.
 		return (
-			<span className="flex h-[1lh] min-w-0 flex-wrap items-baseline gap-x-1.5 overflow-hidden">
-				{count}
-				<span className="flex shrink-0 gap-1.5">
-					{count && <span>·</span>}
-					<span>{formatTokens(line.tokens)} tokens</span>
+			<span className="flex h-[1lh] min-w-0 flex-1 flex-wrap items-baseline gap-x-3 overflow-hidden">
+				<span
+					className={`flex min-w-0 items-baseline gap-1.5 ${line.report ? "flex-[1_1_16rem]" : "flex-1"}`}
+				>
+					{count}
+					{line.report && (
+						<>
+							{count && <span className="shrink-0">·</span>}
+							<span className="min-w-0 truncate">{line.report}</span>
+						</>
+					)}
 				</span>
+				{line.tokens !== undefined && (
+					<span className="shrink-0">{formatTokens(line.tokens)} tokens</span>
+				)}
 			</span>
 		);
 	}

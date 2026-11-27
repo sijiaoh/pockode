@@ -1,12 +1,17 @@
-import { useMemo } from "react";
+import { Fragment, useMemo } from "react";
 import type { FullScreenSource } from "../../lib/fullScreen";
-import { isLiveRun, subagentLastWords } from "../../lib/subagentRun";
+import {
+	isLiveRun,
+	settledTokens,
+	subagentLastWords,
+} from "../../lib/subagentRun";
 import {
 	subagentType,
 	toolSummary,
 	toolSummaryLine,
 } from "../../lib/toolSummary";
 import type { ToolRun } from "../../types/message";
+import { formatTokens } from "../../utils/tokens";
 import { MarkdownContent } from "../ui";
 import { HeaderlessMainBlock } from "./HeaderlessMainBlock";
 import { ToolOutcomeSections } from "./ToolOutcomeSections";
@@ -15,23 +20,33 @@ import { useTranscriptView } from "./transcriptViewContext";
 /**
  * What the row leaves out, for the reader who needs to quote it back: the
  * subagent's id, which resuming it takes, and its full type where the title
- * shortened it — or where only the result named it.
+ * shortened it — or where only the result named it — and its tokens, which a
+ * narrow row drops first.
  */
 export function FactsLine({ run }: { run: ToolRun }) {
 	const title = toolSummary(run.name, run.input, "").title;
 	const type = subagentType(run.input) ?? run.subagent?.agentType;
 	const agentId = run.subagent?.agentId;
-	const showType = type !== undefined && type !== title;
-	if (!showType && !agentId) return null;
+	const tokens = settledTokens(run);
+	const facts = [
+		type !== undefined && type !== title && type,
+		agentId && (
+			<>
+				agent <span className="break-all font-mono">{agentId}</span>
+			</>
+		),
+		tokens !== undefined && `${formatTokens(tokens)} tokens`,
+	].filter((fact) => fact !== false && fact !== undefined && fact !== "");
+	if (facts.length === 0) return null;
 	return (
 		<p className="border-t border-th-border p-2 text-th-text-muted">
-			{showType && type}
-			{showType && agentId && " · "}
-			{agentId && (
-				<>
-					agent <span className="break-all font-mono">{agentId}</span>
-				</>
-			)}
+			{facts.map((fact, i) => (
+				// biome-ignore lint/suspicious/noArrayIndexKey: a fixed order of at most three facts
+				<Fragment key={i}>
+					{i > 0 && " · "}
+					{fact}
+				</Fragment>
+			))}
 		</p>
 	);
 }

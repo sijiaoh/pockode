@@ -1,4 +1,4 @@
-import { act, render, screen } from "@testing-library/react";
+import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import type {
@@ -106,9 +106,11 @@ function renderLevel(
 		belowView: () =>
 			scroller.scrollHeight - scroller.clientHeight - scroller.scrollTop,
 		/** How far below the view's top edge `text` starts. */
+		// Within the scroller: the header over it previews a settled report too.
 		viewTopOf: (content: string) =>
-			screen.getByText(content, { exact: false }).getBoundingClientRect().top -
-			scroller.getBoundingClientRect().top,
+			within(scroller)
+				.getByText(content, { exact: false })
+				.getBoundingClientRect().top - scroller.getBoundingClientRect().top,
 		scrollUp: async (by: number) => {
 			scroller.scrollTop -= by;
 			await settle();
