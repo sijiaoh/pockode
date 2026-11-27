@@ -184,10 +184,14 @@ function recentStep(id: string, part: ContentPart): RecentStep | undefined {
 	switch (part.type) {
 		case "tool_call": {
 			const run = part.tool;
+			// As the step's row draws it: a call that finished after the Stop
+			// succeeded. A denied one keeps the error mark its card had.
 			const mark: StepMark =
 				run.status === "running" || run.status === "background"
 					? "running"
-					: run.status;
+					: run.finishedAfterStop
+						? "success"
+						: run.status;
 			return {
 				id,
 				mark,

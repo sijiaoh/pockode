@@ -1,5 +1,25 @@
-import type { ToolFetch, ToolRun } from "../types/message";
+import type { ToolFetch, ToolRun, ToolRunStatus } from "../types/message";
 import { contentBlocksText } from "./contentBlocks";
+
+/** A run's status as its row draws it; see `toolRunLook`. */
+export type ToolRunLook = ToolRunStatus | "denied";
+
+/**
+ * How a row draws its run, which is its status except where the run knows
+ * more (docs/tool-call-ui.md#status). A call the user denied never ran, and
+ * the refusal the engine reports for it — an error result — is not a failure.
+ * A call the engine let run on past the Stop, and that finished, succeeded:
+ * the status keeps what the turn did to it, and the drawing says what the
+ * call did.
+ */
+export function toolRunLook(run: ToolRun): ToolRunLook {
+	if (run.status === "running" || run.status === "background") {
+		return run.status;
+	}
+	if (run.permission?.answer === "denied") return "denied";
+	if (run.finishedAfterStop) return "success";
+	return run.status;
+}
 
 /**
  * The result as prose, wherever the agent put it.
@@ -240,6 +260,12 @@ const LOST_WITH_PROCESS_LINE: ToolSecondLine = {
 	live: false,
 };
 
+const DENIED_BY_YOU_LINE: ToolSecondLine = {
+	text: "Denied by you",
+	mono: false,
+	live: false,
+};
+
 export function toolSecondLine(run: ToolRun): ToolSecondLine | null {
 	if (run.status === "running" || run.status === "background") {
 		if (run.activity) return { text: run.activity, mono: false, live: true };
@@ -265,6 +291,12 @@ export function toolSecondLine(run: ToolRun): ToolSecondLine | null {
 		const line = run.output ? lastNonEmptyLine(run.output) : "";
 		if (line) return { text: line, mono: true, live: true };
 		return settledFetchLine(run);
+	}
+	// Who denied it, rather than the refusal the engine reported: the row is
+	// the decision, and the refusal is in the body. A reviewer's or Pockode's
+	// deny says so on the verdict line under the row instead.
+	if (run.permission?.answer === "denied") {
+		return run.permission.by ? null : DENIED_BY_YOU_LINE;
 	}
 	// Before the failure rung, not after: a backgrounded failure's outcome is the
 	// notification's own summary sentence, which says more than the tail of a log

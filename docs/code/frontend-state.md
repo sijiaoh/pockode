@@ -795,8 +795,9 @@ place.
   settled call. **A card that takes a row's place takes the row's id**
   (`inPlaceOf`) — a permission card, a posted question's card, a legacy
   `ask_user_question`'s first card — so one place on screen keeps one identity.
-  The row rebuilt once a permission card is answered is a new part with a
-  new id.
+  The row an answered permission card hands its place back to keeps the
+  card's id, which was the row's before the card took it; only a row rebuilt
+  under a card nobody answered is a new part with a new id.
 - **Joining two halves of a turn keeps the newer half's ids.** The newer half
   is the one on screen; the older half was never drawn, so its ids name
   nothing yet. `joinTurnParts` still runs text across the seam through the
@@ -881,21 +882,47 @@ that is the half worth reading before changing any of it. Measured against
 claude 2.1.263: the `tool_call` arrives **before** the approval request, and is
 **not** re-sent after approval. So once the card has replaced it, the card is
 all that is left of the call — and a `tool_result` matching no row would be
-dropped as an orphan, which is the command's entire output gone. So a record
-naming a call with no row rebuilds one from what the card itself carries — the
-same input the call announced, since that is where the server got it — and puts
-it directly under the card, which is where it was. Two rules keep that honest:
+dropped as an orphan, which is the command's entire output gone. So the row is
+rebuilt from what the card itself carries (`rowFromCard`) — the same input the
+call announced, since that is where the server got it — **in place of** the
+card once the card is answered: same slot, same id, and the answer kept on the
+run as `ToolRun.permission` (who answered, whether it was Always Allow and what
+that wrote), which is all of the card the row needs to say
+([tool-call-ui.md](../tool-call-ui.md#the-permission-card-takes-the-rows-place)).
+When that happens depends on the answer:
+
+- **An allow hands the place back on its record** (`handBackAllowedCard`): the
+  call runs from then on, so the row is there, running, before the engine says
+  anything — and an interrupt, a turn's end or the process going settles it like
+  any running row. On the record and not on the press, because a press the
+  server refuses is undone on the card (`resetPromptRequest`), which a row could
+  not be. Every client gets the record, the one that answered included. The
+  record also marks the card `answerRecorded`: before it, an allowed card is a
+  press on its way and draws as the running row it is about to become; after
+  it, an allowed card still standing has its call's row elsewhere — a card
+  asked in a later bubble than its row — and draws as answered.
+- **A deny waits for the engine's report**: nothing runs, and the refusal it
+  reports (Claude's error result, Codex's `declined` item) is what the row is
+  rebuilt from. Its status is that result's `error`; the drawing reads the
+  answer instead (`toolRunLook`).
+- **A call announced after its answered card** — Codex asks before it announces
+  the item — takes the card's place in `applyToolCall`, as a rebuilt row would.
+- **A card nobody answered** — still pending when a result arrives, or expired —
+  keeps saying what it says, and the row goes directly under it, which is where
+  it was.
+
+Two rules keep that honest:
 
 - An existing row **anywhere** in the transcript wins over rebuilding one, so a
   call can never end up drawn twice.
 - A result rebuilds from a card in any state — the engine has acted, and a
-  denial's refusal text lands as an ordinary settled run under the card that
-  already said why — but **progress only rebuilds from a card the user has
-  answered**. Nothing about a call may spin while the card is still pending.
+  denial's refusal text becomes the denied row's result — but **progress only
+  rebuilds from a card the user has answered**. Nothing about a call may spin
+  while the card is still pending.
 
 (Some CLIs do re-send the `tool_call` after approval. That path still draws one
-row: the resend finds no part left to update and appends the row itself, and
-everything after it behaves the same.)
+row: the resend finds the row the allow already handed the place to, and
+refreshes it as any resend does.)
 
 The part holds the run's **current status** — `running` / `background` /
 `success` / `error` / `interrupted` — and the reducer is its only author; the UI
@@ -925,6 +952,12 @@ honest:
   settles from it, as
   `error` like any failed outcome, and takes everything under it along as
   `interrupted`, backgrounded children included, as `process_ended` would.
+- **A result after the interrupt keeps `interrupted`**, and says whether it
+  was an error: `finishedAfterStop` is set when the newest late result is not
+  one (and is not `background_lost`, Pockode's account of a loss). The status
+  is what the turn did to the call; the flag is what the call did, which only
+  the result's `is_error` says and so has to be kept. The row draws it as the
+  success it was ([tool-call-ui.md](../tool-call-ui.md#status)).
 - A turn that ended as `interrupted` / `error` / `process_ended` settles the
   runs still `running` in it: nothing can report back on them, and a spinner
   that never stops is a lie. The rule keys on the turn's resulting **status**,
@@ -1149,7 +1182,8 @@ The rules particular to children:
   earlier page, or a call a fork cut dropped. The part then keeps
   `parentToolUseId`, which stops it running together with the main agent's
   text and lets the parent's row count it once its page loads; a card that
-  takes such a row's place keeps it, and so does the row rebuilt on approval.
+  takes such a row's place keeps it, and so does the row it hands its place
+  back to.
   It is not moved then, by the rule a fetch follows: a row never leaves from
   under the reader. And while any of a run's children sit flat, the ones that
   follow go flat after them, so nothing is filed above words that came first.
@@ -1283,7 +1317,7 @@ A call that waited on a permission card starts at the answer, and the answer's
 record may be applied after the card already shows it — a press sets the status
 optimistically. So the time is stamped onto the card by its own step
 (`stampPermissionAnswer`, `answeredAt` / `answerSeenAt`), independent of the
-status, and a row rebuilt under that card takes its start from there; the first
+status, and the row that takes the card's place takes its start from there; the first
 answer's time stands, as its status does. An answer whose card is on an older
 page comes back as a back-reference when that page is loaded, and is placed
 through *that* page's reading (`HistoryPageCatchUp.clock`): any reading from the

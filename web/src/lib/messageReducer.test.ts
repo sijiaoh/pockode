@@ -911,10 +911,20 @@ describe("messageReducer", () => {
 				choice: "allow",
 			});
 			const assistant = messages[0] as AssistantMessage;
-			expect(assistant.parts[0]).toMatchObject({
-				type: "permission_request",
-				status: "allowed",
-			});
+			// The card hands its place, and its id, to the call now running.
+			expect(assistant.parts).toEqual([
+				{
+					id: "f33",
+					type: "tool_call",
+					tool: {
+						id: "tool-1",
+						name: "Bash",
+						input: { command: "ls" },
+						status: "running",
+						permission: { answer: "allowed" },
+					},
+				},
+			]);
 		});
 
 		it("updates permission_request status on permission_response deny", () => {
@@ -1048,8 +1058,12 @@ describe("messageReducer", () => {
 			});
 			const assistant = messages[0] as AssistantMessage;
 			expect(assistant.parts[0]).toMatchObject({
-				type: "permission_request",
-				status: "allowed",
+				id: "f31",
+				type: "tool_call",
+				tool: {
+					status: "running",
+					permission: { answer: "allowed", always: true },
+				},
 			});
 		});
 
@@ -3092,8 +3106,8 @@ describe("messageReducer", () => {
 			const messages = replayHistory(history);
 			const assistant = messages[1] as AssistantMessage;
 			expect(assistant.parts[0]).toMatchObject({
-				type: "permission_request",
-				status: "allowed",
+				type: "tool_call",
+				tool: { id: "tool-1", permission: { answer: "allowed" } },
 			});
 		});
 
@@ -4134,8 +4148,8 @@ describe("messageReducer", () => {
 					isError: false,
 				});
 
-				expect((messages[0] as AssistantMessage).parts).toMatchObject([
-					{ type: "permission_request", status: "allowed" },
+				const parts = (messages[0] as AssistantMessage).parts;
+				expect(parts).toMatchObject([
 					{
 						type: "tool_call",
 						tool: {
@@ -4144,9 +4158,190 @@ describe("messageReducer", () => {
 							input: { command: "rm -rf build" },
 							status: "success",
 							result: "removed",
+							permission: { answer: "allowed" },
 						},
 					},
 				]);
+			});
+
+			// One call, one row: the line the user answered on is the line that
+			// runs, under the key the call's row had before the card took it.
+			it("hands the card's place, and the row's id, back on the answer", () => {
+				let messages: Message[] = [streamingRun()];
+				messages = applyServerEvent(messages, call("t1"));
+				const rowId = (messages[0] as AssistantMessage).parts[0].id;
+				messages = applyServerEvent(messages, permission);
+				messages = applyServerEvent(messages, {
+					type: "permission_response",
+					requestId: "r1",
+					choice: "allow",
+					observedAt: 5_000,
+				});
+
+				expect((messages[0] as AssistantMessage).parts).toEqual([
+					{
+						id: rowId,
+						type: "tool_call",
+						tool: {
+							id: "t1",
+							name: "Bash",
+							input: { command: "rm -rf build" },
+							status: "running",
+							startedAt: 5_000,
+							permission: { answer: "allowed" },
+						},
+					},
+				]);
+			});
+
+			// A deny runs nothing, so the card stands until the engine reports
+			// the refusal, and the refusal becomes the row in its place.
+			it("turns a denied card into its row when the refusal arrives", () => {
+				let messages: Message[] = [streamingRun()];
+				messages = applyServerEvent(messages, call("t1"));
+				const rowId = (messages[0] as AssistantMessage).parts[0].id;
+				messages = applyServerEvent(messages, permission);
+				messages = applyServerEvent(messages, {
+					type: "permission_response",
+					requestId: "r1",
+					choice: "deny",
+					observedAt: 5_000,
+				});
+				expect((messages[0] as AssistantMessage).parts).toMatchObject([
+					{ id: rowId, type: "permission_request", status: "denied" },
+				]);
+
+				messages = applyServerEvent(messages, {
+					type: "tool_result",
+					toolUseId: "t1",
+					toolResult: "The user doesn't want to proceed with this tool use.",
+					isError: true,
+				});
+				const [row] = (messages[0] as AssistantMessage).parts;
+				expect((messages[0] as AssistantMessage).parts).toHaveLength(1);
+				expect(row).toMatchObject({
+					id: rowId,
+					type: "tool_call",
+					tool: { status: "error", permission: { answer: "denied" } },
+				});
+				// Nothing ran, so nothing started.
+				expect(row.type === "tool_call" && row.tool.startedAt).toBeUndefined();
+			});
+
+			it("keeps who answered and what Always Allow wrote on the row", () => {
+				const rule = {
+					type: "addRules" as const,
+					rules: [{ toolName: "Bash", ruleContent: "rm:*" }],
+					behavior: "allow" as const,
+					destination: "projectSettings" as const,
+				};
+				let messages: Message[] = [streamingRun()];
+				messages = applyServerEvent(messages, call("t1"));
+				messages = applyServerEvent(messages, {
+					...permission,
+					permissionSuggestions: [rule],
+				});
+				messages = applyServerEvent(messages, {
+					type: "permission_response",
+					requestId: "r1",
+					choice: "always_allow",
+				});
+
+				expect((messages[0] as AssistantMessage).parts).toMatchObject([
+					{
+						type: "tool_call",
+						tool: {
+							permission: {
+								answer: "allowed",
+								always: true,
+								suggestions: [rule],
+							},
+						},
+					},
+				]);
+			});
+
+			it("keeps a reviewer's verdict on the row", () => {
+				let messages: Message[] = [streamingRun()];
+				messages = applyServerEvent(messages, call("t1"));
+				messages = applyServerEvent(messages, permission);
+				messages = applyServerEvent(messages, {
+					type: "permission_response",
+					requestId: "r1",
+					choice: "allow",
+					by: "permission_reviewer",
+					review: { sessionId: "rev-1", reason: "harmless" },
+				});
+
+				expect((messages[0] as AssistantMessage).parts).toMatchObject([
+					{
+						type: "tool_call",
+						tool: {
+							permission: {
+								answer: "allowed",
+								by: "permission_reviewer",
+								review: { sessionId: "rev-1", reason: "harmless" },
+							},
+						},
+					},
+				]);
+			});
+
+			// A press is undone on the card when the server refuses it, which a
+			// row could not be: only the answer's record hands the place back.
+			it("keeps the card through a press until its answer is recorded", () => {
+				let messages: Message[] = [streamingRun()];
+				messages = applyServerEvent(messages, call("t1"));
+				messages = applyServerEvent(messages, permission);
+				messages = updatePermissionRequestStatus(messages, "r1", "allowed");
+
+				expect((messages[0] as AssistantMessage).parts).toMatchObject([
+					{ type: "permission_request", status: "allowed" },
+				]);
+				expect((messages[0] as AssistantMessage).parts[0]).not.toHaveProperty(
+					"answerRecorded",
+				);
+			});
+
+			// A message read mid-turn opens a new bubble, and a card asked after
+			// it lands there while its call's row stays above. The row is the
+			// call; the card stays as the record that the user answered, and
+			// says it has been answered rather than waiting for a row to come.
+			it("leaves a card whose row is in an earlier bubble as an answered card", () => {
+				const replayed = replayHistory([
+					{ type: "message", content: "go" },
+					{
+						type: "tool_call",
+						tool_use_id: "t1",
+						tool_name: "Bash",
+						tool_input: { command: "rm -rf build" },
+					},
+					{ type: "message", content: "steer" },
+					{ type: "message_ingested", message_id: "m-2" },
+					{
+						type: "permission_request",
+						request_id: "r1",
+						tool_name: "Bash",
+						tool_input: { command: "rm -rf build" },
+						tool_use_id: "t1",
+					},
+					{ type: "permission_response", request_id: "r1", choice: "allow" },
+					{
+						type: "tool_result",
+						tool_use_id: "t1",
+						tool_result: "removed",
+						is_error: false,
+					},
+				]);
+				const runs = replayed.flatMap((message) =>
+					message.role === "assistant" ? message.parts : [],
+				);
+				expect(runs.filter((part) => part.type === "tool_call")).toMatchObject([
+					{ tool: { id: "t1", status: "success" } },
+				]);
+				expect(
+					runs.filter((part) => part.type === "permission_request"),
+				).toMatchObject([{ status: "allowed", answerRecorded: true }]);
 			});
 
 			// Codex may ask for approval before it announces the item at all, so
@@ -4195,7 +4390,6 @@ describe("messageReducer", () => {
 				});
 
 				expect((messages[0] as AssistantMessage).parts).toMatchObject([
-					{ type: "permission_request", status: "allowed" },
 					{
 						type: "tool_call",
 						tool: { status: "running", output: "working\n" },
@@ -4222,8 +4416,37 @@ describe("messageReducer", () => {
 				});
 
 				expect((messages[0] as AssistantMessage).parts).toMatchObject([
-					{ type: "permission_request", status: "allowed" },
 					{ type: "tool_call", tool: { id: "t1", status: "success" } },
+				]);
+			});
+
+			// Codex asks before it announces the item, and the item starting
+			// is the call running: in the card's place, not under it.
+			it("puts a call announced after its answered card in the card's place", () => {
+				let messages: Message[] = [streamingRun()];
+				messages = applyServerEvent(messages, permission);
+				messages = applyServerEvent(messages, {
+					type: "permission_response",
+					requestId: "r1",
+					choice: "deny",
+				});
+				messages = applyServerEvent(messages, call("t1"));
+				messages = applyServerEvent(messages, {
+					type: "tool_result",
+					toolUseId: "t1",
+					toolResult: "Denied by the user.",
+					isError: true,
+				});
+
+				expect((messages[0] as AssistantMessage).parts).toMatchObject([
+					{
+						type: "tool_call",
+						tool: {
+							id: "t1",
+							status: "error",
+							permission: { answer: "denied" },
+						},
+					},
 				]);
 			});
 		});
@@ -4335,12 +4558,45 @@ describe("messageReducer", () => {
 			expect(tasksOf(messages[0])).toMatchObject([{ status: "interrupted" }]);
 
 			messages = applyServerEvent(messages, taskResult("t1", "late report"));
-			// The content is kept and the status is not: a run that is interrupted
-			// and has a result is exactly the "it came back late" case, so no flag
-			// has to be kept in step with the two fields that already say it.
+			// The content is kept and the status is not: the status is what the
+			// turn did to the call. What the call did is the result's own
+			// `is_error`, which nothing else keeps.
 			expect(tasksOf(messages[0])).toMatchObject([
-				{ status: "interrupted", result: "late report" },
+				{
+					status: "interrupted",
+					result: "late report",
+					finishedAfterStop: true,
+				},
 			]);
+		});
+
+		// Claude's Stop writes an error result for the call it cut, and an
+		// engine that killed the command reports a failure: neither finished.
+		it("does not say a call finished after the Stop on a late error", () => {
+			let messages: Message[] = [streaming()];
+			messages = applyServerEvent(messages, taskCall("t1", "first"));
+			messages = applyServerEvent(messages, { type: "interrupted" });
+			messages = applyServerEvent(
+				messages,
+				taskResult("t1", "Interrupted by user", true),
+			);
+
+			const [run] = tasksOf(messages[0]);
+			expect(run.status).toBe("interrupted");
+			expect(run.finishedAfterStop).toBeUndefined();
+		});
+
+		it("says what the newest late result says", () => {
+			let messages: Message[] = [streaming()];
+			messages = applyServerEvent(messages, taskCall("t1", "first"));
+			messages = applyServerEvent(messages, { type: "interrupted" });
+			messages = applyServerEvent(messages, taskResult("t1", "done"));
+			messages = applyServerEvent(
+				messages,
+				taskResult("t1", "Interrupted by user", true),
+			);
+
+			expect(tasksOf(messages[0])[0].finishedAfterStop).toBeUndefined();
 		});
 
 		it("settles a running Task when the turn ends in an error", () => {
@@ -4661,9 +4917,16 @@ describe("messageReducer", () => {
 				normalizeEvent(result("c1", { parent_tool_use_id: "t1" })),
 			);
 			expect(runAt(lastParts(messages), "t1").children).toMatchObject([
-				{ type: "permission_request", status: "allowed" },
-				{ type: "tool_call", tool: { id: "c1", status: "success" } },
+				{
+					type: "tool_call",
+					tool: {
+						id: "c1",
+						status: "success",
+						permission: { answer: "allowed" },
+					},
+				},
 			]);
+			expect(runAt(lastParts(messages), "t1").children).toHaveLength(1);
 		});
 
 		// The order claude 2.1.286 writes: a subagent's call is asked about before
@@ -4703,15 +4966,15 @@ describe("messageReducer", () => {
 			);
 			expect(lastParts(messages)).toHaveLength(1);
 			expect(runAt(lastParts(messages), "t1").children).toMatchObject([
-				{ type: "permission_request", status: "allowed" },
 				{ type: "tool_call", tool: { id: "c1", status: "success" } },
 				{ type: "tool_call", tool: { id: "c2" } },
 			]);
+			expect(runAt(lastParts(messages), "t1").children).toHaveLength(2);
 		});
 
 		// The engine reported on the call before announcing it, so approval had
 		// already rebuilt its row beside the card: both go, and stay one call.
-		it("takes a row rebuilt beside the card along with it", () => {
+		it("takes the row an answered card handed its place to along with it", () => {
 			const replayed = replayHistory([
 				{ type: "message", content: "go" },
 				task("t1"),
@@ -4728,10 +4991,16 @@ describe("messageReducer", () => {
 			]);
 			expect(lastParts(replayed)).toHaveLength(1);
 			expect(runAt(lastParts(replayed), "t1").children).toMatchObject([
-				{ type: "permission_request", status: "allowed" },
-				{ type: "tool_call", tool: { id: "c1", status: "success" } },
+				{
+					type: "tool_call",
+					tool: {
+						id: "c1",
+						status: "success",
+						permission: { answer: "allowed" },
+					},
+				},
 			]);
-			expect(runAt(lastParts(replayed), "t1").children).toHaveLength(2);
+			expect(runAt(lastParts(replayed), "t1").children).toHaveLength(1);
 		});
 
 		// The call is what says whose the card is: with its parent not loaded the
@@ -5217,7 +5486,7 @@ describe("messageReducer", () => {
 				say("Looking.", "t1"),
 			]);
 			const parts = lastParts(replayed);
-			expect(parts).toHaveLength(2);
+			expect(parts).toHaveLength(1);
 			expect(runAt(parts, "t1").children).toMatchObject([
 				{ type: "text", content: "Looking." },
 			]);
@@ -5257,6 +5526,23 @@ describe("messageReducer", () => {
 					tool_use_id: "t1",
 				},
 				{ type: "permission_response", request_id: "r1", choice: "allow" },
+				{ type: "message", content: "steer" },
+				{ type: "message_ingested", message_id: "m-2" },
+				say("On it."),
+				{ type: "interrupted" },
+				call("c1", "t1"),
+			]);
+			const parts = partsOf(replayed[1]);
+			expect(runAt(parts, "t1").status).toBe("interrupted");
+			expect(runAt(parts, "t1", "c1").status).toBe("interrupted");
+		});
+
+		// No card at all: the user's message since is the turn's own steer,
+		// and the turn it steered is the one now cut short.
+		it("leaves nothing spinning under a subagent cut short past a read point", () => {
+			const replayed = replayHistory([
+				{ type: "message", content: "go" },
+				task("t1"),
 				{ type: "message", content: "steer" },
 				{ type: "message_ingested", message_id: "m-2" },
 				say("On it."),

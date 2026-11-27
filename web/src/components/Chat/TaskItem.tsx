@@ -14,7 +14,7 @@ import {
 	subagentLine,
 	type UnfiledChildren,
 } from "../../lib/subagentRun";
-import { toolSecondLine, toolUsesLabel } from "../../lib/toolRun";
+import { toolRunLook, toolSecondLine, toolUsesLabel } from "../../lib/toolRun";
 import {
 	SUBAGENT_TITLE,
 	subagentPossessive,
@@ -172,15 +172,17 @@ export function subagentHeader(
 	// there is no path in it for one to shorten.
 	const summary = toolSummary(rowRun.name, rowRun.input, "");
 	const line = subagentLine(rowRun, unfiled, stepWindow !== undefined);
-	const failed = rowRun.status === "error";
+	const look = toolRunLook(rowRun);
+	const failed = look === "error";
 	return {
 		summary,
 		failed,
-		glyph: <ToolStatusGlyph status={rowRun.status} name={SUBAGENT_TITLE} />,
+		glyph: <ToolStatusGlyph status={look} name={SUBAGENT_TITLE} />,
 		firstLine: {
 			title: summary.title,
 			agent: true,
 			background: rowRun.fromBackground,
+			afterStop: rowRun.finishedAfterStop,
 			detail: summary.detail,
 			meta: <ToolMeta run={rowRun} />,
 			error: failed,

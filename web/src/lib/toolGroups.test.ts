@@ -882,9 +882,47 @@ describe("rowEntries", () => {
 					result("b"),
 				).slice(6),
 			).toEqual([
+				// The answer hands the card's place to the running row.
+				["[Read 2 files]", "r1↓", "r2↓", "b"],
+				["[Read 2 files]", "r1↓", "r2↓", "b"],
+				["[Ran 1 command · Read 2 files]", "r1↓", "r2↓", "b↓"],
+			]);
+		});
+
+		it("keeps a denied call in sight for good", () => {
+			expect(
+				shapes(
+					toolCall("r1", "Read"),
+					result("r1"),
+					toolCall("r2", "Read"),
+					result("r2"),
+					toolCall("b", "Bash"),
+					permission("b"),
+					{ type: "permission_response", request_id: "req-b", choice: "deny" },
+					result("b", true),
+				).slice(6),
+			).toEqual([
 				["[Read 2 files]", "r1↓", "r2↓", "card:b"],
-				["[Read 2 files]", "r1↓", "r2↓", "card:b", "b"],
-				["[Ran 1 command · Read 2 files]", "r1↓", "r2↓", "card:b↓", "b↓"],
+				["[Read 2 files]", "r1↓", "r2↓", "b"],
+			]);
+		});
+
+		// It read as stopped until its result came; the summary would swallow
+		// the chip that says it ran anyway.
+		it("keeps a call that finished after the Stop out of its group", () => {
+			expect(
+				shapes(
+					toolCall("r1", "Read"),
+					result("r1"),
+					toolCall("r2", "Read"),
+					result("r2"),
+					toolCall("b", "Bash"),
+					{ type: "interrupted" },
+					result("b"),
+				).slice(5),
+			).toEqual([
+				["[Read 2 files · 1 interrupted]", "r1↓", "r2↓", "b↓"],
+				["[Read 2 files]", "r1↓", "r2↓", "b"],
 			]);
 		});
 	});

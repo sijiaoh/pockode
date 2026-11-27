@@ -159,7 +159,7 @@ message does. Every part of a list falls into one of these kinds:
 |---|---|---|
 | **Breaker** | a subagent call, `ExitPlanMode`, and their cards — and, since they already end the list, text, a question card and every other part | ends the group and stands as itself |
 | **Pinned** | a call that is `error`; one that is `background` or `fromBackground`, running or settled, unless it was interrupted; one `lostWithProcess`, interrupted or not; a card that is not `allowed`; an `allowed` card whose row has not come back, or whose call is still running | belongs to the group, never folds |
-| **Settled** | a call that is `success` or `interrupted` (but not `lostWithProcess`), with its `allowed` card if it had one — an `interrupted` one even once a background result reaches it, since the interrupt came first | folds into the summary, and is the only kind that decides whether there is a group |
+| **Settled** | a call that is `success` or `interrupted` (but not `lostWithProcess`), allowed if it asked — an `interrupted` one even once a background result reaches it, since the interrupt came first, unless that result is a success: a call that [finished after the Stop](#status) is pinned, like a failure, or its `after Stop` chip would vanish into the summary | folds into the summary, and is the only kind that decides whether there is a group |
 | **Running** | a `running` call that never had a card | folds into a group its settled neighbours form — named in the summary in the present tense, the newest giving it its elapsed time; otherwise lies flat |
 | **Thinking** | a thinking row — not a call, and counts toward nothing ([turn-progress-ui.md](turn-progress-ui.md#12-where-it-goes-and-groups)) | folds into a group the calls form |
 
@@ -475,8 +475,8 @@ need a name too — it is what keeps a list's rows mounted, and what the open
 groups are remembered by — and they take it from their **oldest** member
 (`oldestPart`), not their first: rows arrive at both ends, a live call after
 the last and an older page in front of the first, and the oldest is the one
-neither displaces. A card that takes a row's place takes its id too, so the
-card does not rename the list either. Only a member *leaving* renames it — a
+neither displaces. A card that takes a row's place takes its id too, and hands
+it back with the place once answered, so neither renames the list. Only a member *leaving* renames it — a
 `question_post` row replaced by its card when it was the oldest, an
 `html_render` or `html_edit` call drawn on its own once it succeeds — and that
 remounts the list.
@@ -597,7 +597,8 @@ changed, not who changed it.
 **What counts** is a call that `succeeded`. A failed or denied call changed
 nothing; one interrupted or still running may or may not have, and listing it
 would send the reader to review a change that may not exist — the summary
-row's rule. A subagent cut short keeps the edits it finished.
+row's rule. One that [finished after the Stop](#status) did, and counts. A
+subagent cut short keeps the edits it finished.
 
 **A row** is, left to right: the chevron, the file name — with the chip, the
 one primary-colour text on the row — the directory (`Detail`, fading out from
@@ -1124,6 +1125,26 @@ It **stays after the run settles**. "This ran in the background" is a permanent
 fact about the call, and it is what tells a reader that the result under the row
 arrived after the agent had already moved on.
 
+**A call that finished after the Stop says so.** An engine may answer a Stop at
+once and let the commands it was running carry on: Codex 0.171 does, for the
+main thread's and a subagent's alike. Their results still arrive, and their
+side effects happened. The model keeps `interrupted` — that is what the turn
+did to the call ([code/frontend-state.md](code/frontend-state.md#tool-runs)) —
+and the drawing is derived (`toolRunLook`): an `interrupted` run whose late
+result is **not an error** (`finishedAfterStop`) is drawn with the muted
+`Check` of any success, and an `after Stop` chip in the `background` chip's slot
+and shape, tinted `bg-th-warning/20` and as permanent. A user who pressed Stop
+on `rm …` has to learn that it ran anyway; that is the one fact the chip is for,
+quieter than red because nothing failed. Its body says *Finished after the turn
+was stopped.* where an interrupted run with a result otherwise says *Returned
+after the turn was interrupted.*, and it [stands alone](#groups) rather than
+folding. A late **error** result does not count: Claude's Stop writes one itself
+for the call it cut (measured: 9ms after the `interrupted` record), and so does
+an engine that actually killed the command. The cost is a command that ran to
+completion after the Stop and then failed: it keeps the `Ban`, with its output
+in the body. Telling it apart from the CLI's own report of the cut would take a
+marker the server does not write.
+
 ### The permission card takes the row's place
 
 `PermissionRequestItem` keeps its own lifetime, its own buttons and its own
@@ -1203,16 +1224,43 @@ painted over the card's children and the row's hover cannot cover it — except
 by a child with a z-index, which an open card's sticky bar is, so the card
 restates its tint and frame for the bar
 ([the sticky title line](#the-sticky-title-line)). Its body
-keeps the tint. Once answered it is an ordinary row: no tint, a body on
-`bg-th-bg-secondary` like a tool row's, and a glyph as muted as a settled
-row's — `Check` for an allow, `X` for a deny, whoever answered. An answer is
-not an event. A session can hold dozens of approved cards, and a green tick on
-each would do what it did on the success rows: draw the eye away from the
-calls that failed. A deny is a decision, not a failure, and what the engine
-reports about the refused call afterwards is a settled run of its own (below).
-A red `X` on the card would say "refused" a second time, in the colour that
-means "failed". Shape tells allow from deny, and the verdict line says who and
-why. A request the permission reviewer is
+keeps the tint.
+
+**An answered card hands the row back.** Once answered, the card stops being a
+row of its own: the call's row takes the same slot under the same key — the
+card's id, which was the row's before the card took it — so one call is one
+row, on every client that watches it. Kept as a muted row of its own, the
+answered card read `✓ Bash python3 …` directly above the `✕ Bash python3 …
+exit 3` of the run it allowed: the same command twice, the first copy saying it
+succeeded.
+
+- **Allow** (yours, or Always Allow, or the reviewer's): tap Allow and the same
+  line becomes a spinner, then `✓` or `✕`. The row line says nothing of the
+  answer — an approval is routine, and an answer is not an event; a session
+  can hold dozens. The body opens with one muted line above the Invocation:
+  *Allowed by you*, or *Always allowed ·* and what it wrote, in the words the
+  card used before it was pressed. A reviewer's answer keeps its verdict line
+  under the row, exactly where
+  [unattended-mode-ui.md §3](unattended-mode-ui.md#3-the-permission-card) puts
+  it on the card, and its reason in the body instead.
+- **Deny**: one row, glyph `X` in `text-th-text-muted` — no red tint and no red
+  detail, though the refusal the engine reports is an error result. The row's
+  look comes from the answer, not the result: a deny is a decision, not a
+  failure, and a red `X` would say "refused" a second time in the colour that
+  means "failed". Line 2 is a muted *Denied by you* (or the reviewer's verdict
+  line), and the engine's refusal text is in the body, under Result.
+- The same on phone and desktop; on a phone the body line truncates.
+
+Until the engine reports, the card stands in its own place and already reads as
+the row it will become: an allowed card with a call to run shows the spinner
+until its answer is recorded, and a person's deny says *Denied by you*. A card
+asked in a later bubble than its call's row — a message read mid-turn opened
+one in between — has that row to hand nothing back to: it stays an answered
+card with the muted `Check`, and the row above says how the call went. A card nobody answered — one that
+expired because its asker went away — keeps saying so, and a result that still
+arrives for it, or for a card still pending, gets a row directly under it as
+before. Posted-question cards are not affected: they have no run row to hand
+back to. A request the permission reviewer is
 answering is the exception while pending: it waits on nobody, so it keeps the
 frame (neutral, `outline-th-border`) without the tint, folds, and no button is
 the accent. A verdict line under the row says who answered in the user's place.
@@ -1256,9 +1304,9 @@ prompt that runs arbitrary commands costs too much.
 A denial settles the card from the user's own response
 (`choice === "deny"` in the reducer), not from anything an engine says — and that
 same tap is what produces codex's `declined` item status and Claude's refusal
-result text afterwards. So whatever the engine then reports lands as an ordinary
-settled run and needs no rung of its own: the card directly above it has already
-said why. "The user refused" is told once, where the refusing happened.
+result text afterwards. So whatever the engine then reports needs no rung of its
+own: it becomes the denied row's body, and "the user refused" is told once, on
+the row, where the refusing happened.
 
 ## Title and detail
 
@@ -1911,8 +1959,8 @@ alike (a backgrounded call has not finished; its counter keeps going until its
 outcome arrives and the duration takes its place).
 
 - **It counts from the same start as the finished figure**, so the counter and
-  the duration that replaces it agree — and a call rebuilt under its answered
-  permission card now gets a clock from the answer, where it had none.
+  the duration that replaces it agree — and a call whose row an answered
+  permission card handed back gets a clock from the answer, where it had none.
 - **It does not depend on the phone's clock agreeing with the server's**, the
   same rule as the turn clock
   ([turn-progress-ui.md §2.3](turn-progress-ui.md#23-what-it-says)). A start the client saw
@@ -2016,8 +2064,9 @@ Codex file change:
   `rewritten` chip. The chip slot is for facts about the call itself, like an
   MCP server or `background`. Whether the file was new is already said by the
   body's *Content* and by the turn's changes card.
-- **Only on `success`.** A failed change changed nothing, which is the turn's
-  tally's rule too. Its body still has the muted counts beside `not applied`.
+- **Only on `success`**, a call that finished after the Stop included. A
+  failed or denied change changed nothing, which is the turn's tally's rule
+  too. Its body still has the muted counts beside `not applied`.
   An `interrupted` one may or may not have changed anything, and a running one
   has not yet. A pending permission card's row has no counts either: the
   change has not run, and the card's *Proposed change* header has them.
@@ -2596,7 +2645,9 @@ In the default order, each section omitted when empty:
      so a refused change looks exactly like one that landed, and the result —
      the only place the reason is — was shown nowhere: on device an `Edit` whose
      `old_string` was not in the file opened on a `+1 −2` diff that read as
-     applied, with the error never on screen.
+     applied, with the error never on screen. A **denied** change reads `not
+     applied` the same way, but its refusal is a decision rather than a
+     failure: the section is *Result*, in plain text.
 4. For a call whose result outlived the turn it was cut off in, one line saying
    so. A non-zero exit code is on the row
    ([what the call measured](#what-the-call-measured)), not here.
@@ -4153,8 +4204,8 @@ frame:
   diff"* — then the card as it always reads. Being inside the outer item's DOM
   says which subagent row a card is under; it never said which subagent asked.
 - **It goes when the card leaves the slot.** Answered, the card is drawn in the
-  asker's own Process, where the rail already says whose it is, and it reads as
-  any answered card does. A card still flat because its call has not been
+  asker's own Process, where the rail already says whose it is, and hands its
+  place to the call's row as any answered card does. A card still flat because its call has not been
   written yet (claude 2.1.286 asks first —
   [code/frontend-state.md](code/frontend-state.md#a-subagents-children)) is
   outside every subagent and has no asker line — for that moment it reads as

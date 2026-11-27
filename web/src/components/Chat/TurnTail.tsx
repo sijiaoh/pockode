@@ -4,7 +4,7 @@ import { useElapsedMs } from "../../hooks/useElapsedMs";
 import { ACTIVITY_VIEW } from "../../lib/activity";
 import { hasProcess, subagentNow } from "../../lib/subagentRun";
 import { hasText, type LiveThinking, latestLine } from "../../lib/thinking";
-import { formatElapsed } from "../../lib/toolRun";
+import { formatElapsed, toolRunLook } from "../../lib/toolRun";
 import { toolSummary } from "../../lib/toolSummary";
 import {
 	type AgentsOverview,
@@ -230,7 +230,7 @@ function AgentEntry({ run }: { run: ToolRun }) {
 	const label = [
 		header.summary.title,
 		header.summary.detail + header.summary.detailTail,
-		toolStatusWord(run.status),
+		toolStatusWord(toolRunLook(run)),
 		toTranscript ? "open its transcript" : "go to its row",
 	]
 		.filter(Boolean)

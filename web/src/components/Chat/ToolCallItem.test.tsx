@@ -151,6 +151,32 @@ describe("ToolCallItem", () => {
 			).toBeVisible();
 		});
 
+		// The engine never stopped it: what the user stopped happened anyway,
+		// and the row says so rather than claiming it was stopped.
+		it("draws a call that finished after the Stop as the success it was", async () => {
+			draw({
+				status: "interrupted",
+				result: "main-done",
+				finishedAfterStop: true,
+			});
+			expect(screen.getByLabelText("succeeded")).toBeInTheDocument();
+			expect(screen.queryByLabelText("interrupted")).not.toBeInTheDocument();
+			expect(screen.getByText("after Stop")).toBeInTheDocument();
+			await open();
+			expect(
+				screen.getByText("Finished after the turn was stopped."),
+			).toBeVisible();
+			expect(
+				screen.queryByText("Returned after the turn was interrupted."),
+			).not.toBeInTheDocument();
+		});
+
+		it("keeps a stopped call stopped when its late result is an error", () => {
+			draw({ status: "interrupted", result: "Interrupted by user" });
+			expect(screen.getByLabelText("interrupted")).toBeInTheDocument();
+			expect(screen.queryByText("after Stop")).not.toBeInTheDocument();
+		});
+
 		// The row already says which file was read; the answer is what the row
 		// was opened for, and the input is folded under it.
 		it("puts a Read's content first and folds the file it was asked for", async () => {
@@ -387,6 +413,24 @@ describe("ToolCallItem", () => {
 				expect(
 					screen.getByText("Content").parentElement?.parentElement,
 				).toHaveTextContent(/not applied$/);
+			});
+
+			// Denied, it never landed either — but nothing failed, so the
+			// refusal reads as the answer it is rather than as an error.
+			it("marks a denied change as not applied, with its refusal plain", async () => {
+				const refusal = "The user doesn't want to proceed with this tool use.";
+				draw({
+					...edit,
+					status: "error",
+					result: refusal,
+					permission: { answer: "denied" },
+				});
+				await open();
+
+				expect(screen.queryByText("Error")).toBeNull();
+				expect(screen.getByText(refusal)).not.toHaveClass("text-th-error");
+				const header = screen.getByText("Change").parentElement?.parentElement;
+				expect(header).toHaveTextContent(/not applied\s*\+2 −1$/);
 			});
 
 			// A phone's width cuts most lines of code; scrolling each one sideways
@@ -1724,5 +1768,81 @@ describe("Pockode's own work calls", () => {
 		expect(screen.getByText("Parameters")).toBeInTheDocument();
 		await user.click(screen.getByRole("button", { name: "Open work w9" }));
 		expect(onOpen).toHaveBeenCalledWith("w9");
+	});
+
+	// One call, one row: the card that asked hands its place back, and the
+	// row says what of the answer is worth saying (docs/tool-call-ui.md).
+	describe("a call that waited on a permission", () => {
+		const refusal = "The user doesn't want to proceed with this tool use.";
+
+		it("draws a deny as a decision, not a failure", async () => {
+			const { container } = draw({
+				status: "error",
+				result: refusal,
+				permission: { answer: "denied" },
+			});
+			expect(screen.getByLabelText("denied")).toHaveClass("text-th-text-muted");
+			expect(screen.queryByLabelText("failed")).not.toBeInTheDocument();
+			expect(container.querySelector(".bg-th-error\\/10")).toBeNull();
+			expect(container.querySelector(".text-th-error")).toBeNull();
+			// Who refused it on line 2; what the engine said in the body.
+			expect(screen.getByText("Denied by you")).toBeInTheDocument();
+			expect(screen.queryByText(refusal)).not.toBeInTheDocument();
+			await userEvent
+				.setup()
+				.click(screen.getByRole("button", { expanded: false }));
+			expect(screen.getByText(refusal)).toBeVisible();
+		});
+
+		it("puts a person's allow in the body and nothing on the row", async () => {
+			draw({
+				status: "success",
+				result: "ok",
+				permission: { answer: "allowed" },
+			});
+			expect(screen.queryByText("Allowed by you")).not.toBeInTheDocument();
+			await userEvent
+				.setup()
+				.click(screen.getByRole("button", { expanded: false }));
+			expect(screen.getByText("Allowed by you")).toBeVisible();
+		});
+
+		it("says what Always Allow wrote", async () => {
+			draw({
+				status: "success",
+				result: "ok",
+				permission: {
+					answer: "allowed",
+					always: true,
+					suggestions: [
+						{
+							type: "addRules",
+							rules: [{ toolName: "Bash", ruleContent: "npm run build" }],
+							behavior: "allow",
+							destination: "projectSettings",
+						},
+					],
+				},
+			});
+			await userEvent
+				.setup()
+				.click(screen.getByRole("button", { expanded: false }));
+			const note = screen.getByText(/Always allowed/);
+			expect(note).toHaveTextContent(
+				"Always allowed · adds to this project: Bash(npm run build)",
+			);
+		});
+
+		it("keeps a reviewer's verdict line under the row", () => {
+			draw({
+				status: "success",
+				result: "ok",
+				permission: { answer: "allowed", by: "permission_reviewer" },
+			});
+			expect(
+				screen.getByText("Allowed by the permission reviewer"),
+			).toBeInTheDocument();
+			expect(screen.queryByText("Allowed by you")).not.toBeInTheDocument();
+		});
 	});
 });

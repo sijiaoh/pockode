@@ -249,6 +249,25 @@ describe("TaskItem", () => {
 		).toBeVisible();
 	});
 
+	// Codex let it run on past the Stop, and it reported.
+	it("draws a subagent that finished after the Stop as having finished", async () => {
+		const user = userEvent.setup();
+		render(
+			<TaskItemWithChildren
+				run={task("interrupted", {
+					result: "sub-done",
+					finishedAfterStop: true,
+				})}
+			/>,
+		);
+		expect(screen.getByLabelText("succeeded")).toBeVisible();
+		expect(screen.getByText("after Stop")).toBeVisible();
+		await user.click(screen.getByRole("button", { expanded: false }));
+		expect(
+			screen.getByText("Finished after the turn was stopped."),
+		).toBeVisible();
+	});
+
 	describe("a subagent that went to the background", () => {
 		// No `result` while it is still running: the outcome only arrives with
 		// the notification, and the helper's default report is not one.

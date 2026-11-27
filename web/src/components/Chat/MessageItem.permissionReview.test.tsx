@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import type {
@@ -259,8 +259,34 @@ describe("a permission card someone answered in the user's place", () => {
 		).not.toBeInTheDocument();
 	});
 
-	it("says nothing more for a person's answer", () => {
+	// No verdict line: it says so as the row the card becomes will.
+	it("says only that the person denied it", () => {
 		const card = draw(cardMessage("denied"));
-		expect(card).not.toHaveTextContent(/Denied by/);
+		expect(card).toHaveTextContent("Denied by you");
+		expect(card).not.toHaveTextContent(/Denied by (the|Pockode)/);
+	});
+
+	// Pressed and not yet recorded, the card is the row about to run; once
+	// recorded, a card still standing has its call's row elsewhere.
+	it("runs an allowed card until its answer is recorded", () => {
+		const pressed = draw(cardMessage("allowed"));
+		expect(within(pressed).getByRole("status")).toHaveAccessibleName(
+			"Bash running",
+		);
+		pressed.remove();
+
+		const message = cardMessage("allowed");
+		if (message.role !== "assistant") throw new Error("not a reply");
+		const recorded = draw({
+			...message,
+			parts: message.parts.map((part) => ({ ...part, answerRecorded: true })),
+		});
+		expect(within(recorded).queryByRole("status")).toBeNull();
+		expect(within(recorded).getByLabelText("allowed")).toBeInTheDocument();
+	});
+
+	it("says nothing more for a person's allow", () => {
+		const card = draw(cardMessage("allowed"));
+		expect(card).not.toHaveTextContent(/Allowed by/);
 	});
 });

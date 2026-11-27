@@ -325,6 +325,22 @@ export interface ToolRun {
 	/** Set once the call is known to have left work running past the turn. */
 	fromBackground?: boolean;
 	/**
+	 * Set on an `interrupted` run whose result arrived after the interrupt and
+	 * was not an error: the engine let the call run on, and it finished. The
+	 * status stays `interrupted` — that is what the turn did to it — and the
+	 * row draws it as the success it was (docs/tool-call-ui.md#status). An
+	 * error result is not enough to set it: Claude's own report of the cut is
+	 * one, and so is a command the engine actually killed.
+	 */
+	finishedAfterStop?: boolean;
+	/**
+	 * The answer this call waited on, carried over from the permission card
+	 * that stood in the row's place: an answered card hands its place back to
+	 * the row, and this is all of the card the row keeps
+	 * (docs/tool-call-ui.md#the-permission-card-takes-the-rows-place).
+	 */
+	permission?: ToolRunPermission;
+	/**
 	 * Its backgrounded work died with the CLI process running it (a
 	 * `process_ended` under it, or Pockode's `background_lost`). Nothing
 	 * returned: a `result` it carries is Pockode's account of the loss, not the
@@ -410,6 +426,18 @@ export interface ToolRun {
 	 * before records named their parent (docs/tool-call-model.md#a-subagents-own-conversation).
 	 */
 	children?: ContentPart[];
+}
+
+/** What a run keeps of the permission card it took back its place from. */
+export interface ToolRunPermission {
+	answer: "allowed" | "denied";
+	/** As on the card: absent for a person's answer. */
+	by?: PermissionAnswerer;
+	review?: PermissionReview;
+	/** The answer was Always Allow. */
+	always?: boolean;
+	/** What Always Allow wrote: the suggestions the request carried. */
+	suggestions?: PermissionUpdate[];
 }
 
 /**
@@ -567,10 +595,18 @@ export type ContentPart = { id: string } & (
 			by?: PermissionAnswerer;
 			/** Set with `by`. */
 			review?: PermissionReview;
+			/** The answer was Always Allow, from its `permission_response` record. */
+			always?: boolean;
+			/**
+			 * The answer's `permission_response` record has been applied. Before
+			 * that an allowed card is a press on its way; after it, an allowed
+			 * card still standing is one whose call's row is drawn elsewhere.
+			 */
+			answerRecorded?: boolean;
 			/**
 			 * When the answer was given, on the server's clock (epoch ms), and on
-			 * this client's; the start of the call a row rebuilt under this card
-			 * is (`ToolRun.startedAt` / `seenAt`). Absent when not known.
+			 * this client's; the start of the call the row that takes this card's
+			 * place runs (`ToolRun.startedAt` / `seenAt`). Absent when not known.
 			 */
 			answeredAt?: number;
 			answerSeenAt?: Date;

@@ -25,7 +25,7 @@ import {
 	unfiledParts,
 	withoutEchoedReport,
 } from "../../lib/subagentRun";
-import { toolSecondLine } from "../../lib/toolRun";
+import { toolRunLook, toolSecondLine } from "../../lib/toolRun";
 import {
 	SUBAGENT_TITLE,
 	subagentPossessive,
@@ -508,7 +508,8 @@ function LevelHeader({
 	const unfiled = useUnfiledChildren(run.id);
 	const line = subagentLine(rowRun, unfiled);
 	const plainLine = line ? null : toolSecondLine(rowRun);
-	const failed = rowRun.status === "error";
+	const look = toolRunLook(rowRun);
+	const failed = look === "error";
 
 	return (
 		<header className="shrink-0 border-b border-th-border bg-th-bg-primary text-xs">
@@ -528,7 +529,7 @@ function LevelHeader({
 				    line 2 and line 3, so line 3 sits under the detail as it does
 				    on the row. */}
 				<div className="flex items-start gap-1.5">
-					<ToolStatusGlyph status={rowRun.status} name={SUBAGENT_TITLE} />
+					<ToolStatusGlyph status={look} name={SUBAGENT_TITLE} />
 					<div className="min-w-0 flex-1">
 						<div className="flex items-baseline gap-1.5">
 							<Detail

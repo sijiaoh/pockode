@@ -134,19 +134,27 @@ type Fold = "settled" | "running" | "pinned";
  *   its settled calls: the call comes into sight under the summary and
  *   nothing else moves.
  * - `pinned` — stays in sight. A failure is the one row the reader has to
- *   notice. Background work is pinned for good, finished or not: it settles
+ *   notice, and so is a call that finished after the Stop: it read as stopped
+ *   until its result came, and then it had done what it was stopped from
+ *   doing. Background work is pinned for good, finished or not: it settles
  *   long after the reader moved on, and moving it into the summary then would
  *   delete a row above them. A card is pinned until it is answered *and* its
  *   call has settled — until the row is back the card is all there is of the
  *   call, and once it is, the reader who approved the command watches it run
- *   to the end.
+ *   to the end. A denied call stays pinned for good.
  */
 function foldOf({ row, card }: Member<unknown>): Fold {
 	if (!row || (card && card.status !== "allowed")) return "pinned";
+	// A row an answered card handed its place to is that card still: a deny
+	// stands as it did, and an allow is watched until it settles.
+	const asked = card !== undefined || row.permission !== undefined;
+	if (row.permission?.answer === "denied") return "pinned";
 	// Background work the process took with it was pinned as background up to
 	// that moment, and the interrupt that settles it lands long after the
 	// reader moved on — the same row above them that folding would delete.
 	if (row.lostWithProcess) return "pinned";
+	// A summary would swallow the chip that says so.
+	if (row.finishedAfterStop) return "pinned";
 	// Ahead of `fromBackground`: the reducer keeps an interrupt over any result
 	// that turns up later, background ones included, so a call cut short is
 	// settled before it can be marked and must not come back out of its group.
@@ -156,7 +164,7 @@ function foldOf({ row, card }: Member<unknown>): Fold {
 		case "success":
 			return "settled";
 		case "running":
-			return card ? "pinned" : "running";
+			return asked ? "pinned" : "running";
 		default:
 			return "pinned";
 	}

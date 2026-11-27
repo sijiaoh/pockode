@@ -26,6 +26,7 @@ import { toolBodyLayout } from "../../lib/toolBodyLayout";
 import {
 	lastOutputLines,
 	shownResult,
+	toolRunLook,
 	toolSecondLine,
 } from "../../lib/toolRun";
 import { toolSummary, toolSummaryLine } from "../../lib/toolSummary";
@@ -37,6 +38,11 @@ import { CollapsibleBody, useEverExpanded } from "../ui";
 import AttachmentStrip from "./AttachmentStrip";
 import { GoToCallButton } from "./GoToCallButton";
 import { useOpenWorkDetail } from "./openWorkDetailContext";
+import {
+	PermissionAnswerNote,
+	readVerdict,
+	VerdictLine,
+} from "./PermissionAnswer";
 import {
 	changeFullScreenContent,
 	LineCountsLabel,
@@ -109,19 +115,20 @@ function NotebookCellSection({
 	run,
 	title,
 	subject,
-	failed,
+	refused,
 }: {
 	run: ToolRun;
 	title: string;
 	subject: FullScreenSubject | undefined;
-	failed: boolean;
+	/** The call failed or was denied, so the cell was not written. */
+	refused: boolean;
 }) {
 	const change = proposedChange(run.name, run.input);
 	const notebook = change?.kind === "notebook" ? change : null;
 	// Green and red only once the call succeeded, and "not applied" only once
-	// it failed: a call still running, or cut off, may or may not have written
-	// the cell, so its counts are drawn plain.
-	const settled = run.status === "success" || failed;
+	// it failed or was denied: a call still running, or cut off, may or may
+	// not have written the cell, so its counts are drawn plain.
+	const settled = toolRunLook(run) === "success" || refused;
 	const header = useMemo(
 		() =>
 			notebook && !settled
@@ -133,8 +140,8 @@ function NotebookCellSection({
 							/>
 						),
 					}
-				: proposedChangeHeader(notebook, { applied: !failed }),
-		[notebook, settled, failed],
+				: proposedChangeHeader(notebook, { applied: !refused }),
+		[notebook, settled, refused],
 	);
 	const source = notebook ? notebookSource(notebook) : undefined;
 	const fullScreen = useMemo<SectionFullScreen | undefined>(
@@ -185,18 +192,23 @@ const ToolCallItem = memo(function ToolCallItem({
 		[run.name, run.input, workDir, run.workRef],
 	);
 	const openWorkDetail = useOpenWorkDetail();
+	const look = toolRunLook(run);
+	const succeeded = look === "success";
 	const workTarget = useMemo(() => {
 		const tool = pockodeWorkTool(run.name);
 		return tool
-			? workToolTarget(tool, run.input, run.workRef, run.status === "success")
+			? workToolTarget(tool, run.input, run.workRef, succeeded)
 			: null;
-	}, [run.name, run.input, run.workRef, run.status]);
+	}, [run.name, run.input, run.workRef, succeeded]);
 	// Nothing opens this body but the user. A failure used to pry it open once,
 	// back when a failed row said only *that* it failed; now it says how, on its
 	// second line. Trial and error is how an agent works, so a turn with four
 	// failed calls in it is ordinary — and four bodies unfolding themselves bury
 	// the answer the user is actually reading.
-	const failed = run.status === "error";
+	const failed = look === "error";
+	// Failed or denied, the call did not do its work: a change it describes
+	// was not applied, and what the engine said instead is the answer.
+	const refused = failed || look === "denied";
 
 	// Partitioned after `contentBlockFiles`, never before: that is where a lone
 	// block borrows the Read's path, and a block with no path is not drawn as a
@@ -215,6 +227,14 @@ const ToolCallItem = memo(function ToolCallItem({
 	);
 
 	const live = run.status === "running" || run.status === "background";
+	// A reviewer's or Pockode's answer keeps the line it had on the card.
+	const verdict = run.permission
+		? readVerdict(
+				run.permission.answer,
+				run.permission.by,
+				run.permission.review,
+			)
+		: undefined;
 	const liveOutput =
 		live && run.output ? lastOutputLines(run.output, LIVE_OUTPUT_LINES) : "";
 	const layout = toolBodyLayout(run.name);
@@ -227,8 +247,8 @@ const ToolCallItem = memo(function ToolCallItem({
 	// A result that only acknowledges the call is no answer to show.
 	const showsResult =
 		Boolean(run.result || run.contents) &&
-		!(layout.resultIsAcknowledgement && !failed) &&
-		!(generation && !failed && !imagePrompt);
+		!(layout.resultIsAcknowledgement && !refused) &&
+		!(generation && !refused && !imagePrompt);
 	// Eager rather than a function handed to the button, because whether there
 	// is anything to copy decides whether there is a button. Gated on the body
 	// having been opened: a collapsed `Read` should not pay to strip its line
@@ -252,8 +272,8 @@ const ToolCallItem = memo(function ToolCallItem({
 		return found?.kind === "notebook" ? null : found;
 	}, [everExpanded, showsResult, run.name, run.input, run.contents]);
 	const changeHeader = useMemo(
-		() => proposedChangeHeader(change, { applied: !failed }),
-		[change, failed],
+		() => proposedChangeHeader(change, { applied: !refused }),
+		[change, refused],
 	);
 	// A stop's way to the work it stopped, when that row is here to land on.
 	// The jump leaves it as it is: that row says it was stopped through its own
@@ -274,8 +294,9 @@ const ToolCallItem = memo(function ToolCallItem({
 			changeHeader.actions
 		);
 	// A change is drawn from the input, so its result is shown nowhere else —
-	// and when the tool refused it, the result is the reason.
-	const changeError = change && failed ? result : "";
+	// and when the tool refused it, or the user denied it, the result is the
+	// reason.
+	const changeError = change && refused ? result : "";
 	// Gated the same way: counting means splitting the whole output.
 	const count = useMemo(
 		() =>
@@ -386,7 +407,7 @@ const ToolCallItem = memo(function ToolCallItem({
 					run={run}
 					title={fullScreenTitle}
 					subject={subject}
-					failed={failed}
+					refused={refused}
 				/>
 			)}
 			{liveOutput && (
@@ -414,9 +435,10 @@ const ToolCallItem = memo(function ToolCallItem({
 				</Section>
 			)}
 			{changeError && (
-				<Section label="Error">
+				// A deny is a decision, not a failure: its refusal reads plain.
+				<Section label={failed ? "Error" : "Result"}>
 					<pre
-						className={`whitespace-pre-wrap break-words font-mono ${FAILURE_TEXT}`}
+						className={`whitespace-pre-wrap break-words font-mono ${failed ? FAILURE_TEXT : "text-th-text-secondary"}`}
 					>
 						{changeError}
 					</pre>
@@ -467,12 +489,13 @@ const ToolCallItem = memo(function ToolCallItem({
 			<ToolRow
 				expanded={expanded}
 				onToggle={() => setExpanded(!expanded)}
-				glyph={<ToolStatusGlyph status={run.status} name={run.name} />}
+				glyph={<ToolStatusGlyph status={look} name={run.name} />}
 				title={summary.title}
 				// About agents, though not one: no Process and no steps.
 				agent={run.name === AGENT_CONTROL_TOOL}
 				chip={summary.chip}
 				background={run.fromBackground}
+				afterStop={run.finishedAfterStop}
 				detail={summary.detail}
 				detailTail={summary.detailTail}
 				detailMono={summary.mono}
@@ -480,6 +503,9 @@ const ToolCallItem = memo(function ToolCallItem({
 				secondLine={toolSecondLine(run)}
 				error={failed}
 			/>
+			{verdict && (
+				<VerdictLine verdict={verdict} reviewing={false} expanded={expanded} />
+			)}
 			{attachments.length > 0 && (
 				<AttachmentStrip
 					files={attachments}
@@ -495,6 +521,9 @@ const ToolCallItem = memo(function ToolCallItem({
 				    opened, so the pretty-printing and the highlighting below are
 				    already paid for only once somebody asks. */}
 				<div className="space-y-3 border-t border-th-border bg-th-bg-secondary p-2">
+					{run.permission && (
+						<PermissionAnswerNote permission={run.permission} />
+					)}
 					{workTarget && (
 						<WorkRefLine
 							label={workKindWord(workTarget.kind)}
@@ -521,7 +550,9 @@ const ToolCallItem = memo(function ToolCallItem({
 						showsResult &&
 						!run.lostWithProcess && (
 							<p className="text-th-text-muted">
-								Returned after the turn was interrupted.
+								{run.finishedAfterStop
+									? "Finished after the turn was stopped."
+									: "Returned after the turn was interrupted."}
 							</p>
 						)}
 				</div>

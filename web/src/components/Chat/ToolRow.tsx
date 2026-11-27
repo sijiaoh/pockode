@@ -4,12 +4,14 @@ import { useElapsedMs } from "../../hooks/useElapsedMs";
 import {
 	formatDuration,
 	formatElapsed,
+	type ToolRunLook,
 	type ToolSecondLine,
 	toolRunDurationMs,
+	toolRunLook,
 } from "../../lib/toolRun";
 import { SUBAGENT_TITLE } from "../../lib/toolSummary";
 import { callLines } from "../../lib/turnChanges";
-import type { ToolRun, ToolRunStatus } from "../../types/message";
+import type { ToolRun } from "../../types/message";
 import { Spinner } from "../ui";
 import { LineCountsLabel } from "./ProposedChange";
 import { useFoldLanding } from "./useFoldLanding";
@@ -28,7 +30,7 @@ import { useStuckBar } from "./useStuckBar";
 
 // Running has no entry: it is the one state shown as a spinner, not an icon.
 const settledGlyphs: Record<
-	Exclude<ToolRunStatus, "running" | "background">,
+	Exclude<ToolRunLook, "running" | "background">,
 	{ Icon: typeof Check; color: string; label: string }
 > = {
 	// Muted, not green. A session has hundreds of successful rows, and a green
@@ -36,13 +38,15 @@ const settledGlyphs: Record<
 	success: { Icon: Check, color: "text-th-text-muted", label: "succeeded" },
 	error: { Icon: X, color: "text-th-error", label: "failed" },
 	interrupted: { Icon: Ban, color: "text-th-text-muted", label: "interrupted" },
+	// A decision, not a failure: the shape of a refusal without its colour.
+	denied: { Icon: X, color: "text-th-text-muted", label: "denied" },
 };
 
 /**
  * A run's status in words, for a control that names the run in a label of its
  * own and so hides the glyph that would otherwise say it.
  */
-export function toolStatusWord(status: ToolRunStatus): string {
+export function toolStatusWord(status: ToolRunLook): string {
 	if (status === "running") return "running";
 	if (status === "background") return "running in the background";
 	return settledGlyphs[status].label;
@@ -93,7 +97,7 @@ export function ToolStatusGlyph({
 	status,
 	name,
 }: {
-	status: ToolRunStatus;
+	status: ToolRunLook;
 	name: string;
 }) {
 	if (status === "running" || status === "background") {
@@ -109,9 +113,18 @@ export function ToolStatusGlyph({
  * A word about the call that is not its title: which subagent is running it,
  * which MCP server it belongs to, or that it went to the background.
  */
-export function Chip({ children }: { children: string }) {
+export function Chip({
+	children,
+	tone = "accent",
+}: {
+	children: string;
+	/** `warning` for the one chip a reader must not miss: `after Stop`. */
+	tone?: "accent" | "warning";
+}) {
 	return (
-		<span className="shrink-0 rounded bg-th-accent/20 px-1.5 py-0.5 text-th-text-primary">
+		<span
+			className={`shrink-0 rounded px-1.5 py-0.5 text-th-text-primary ${tone === "warning" ? "bg-th-warning/20" : "bg-th-accent/20"}`}
+		>
 			{children}
 		</span>
 	);
@@ -231,7 +244,7 @@ function ToolOutcomeFigure({ run }: { run: ToolRun }) {
 	// one, and a settled row re-renders with its list. A run is replaced, not
 	// mutated, when it changes.
 	const lines = useMemo(
-		() => (run.status === "success" ? callLines(run) : null),
+		() => (toolRunLook(run) === "success" ? callLines(run) : null),
 		[run],
 	);
 	if (run.exitCode !== undefined && run.exitCode !== 0) {
@@ -309,6 +322,12 @@ interface Props {
 	 * under the row arrived after the agent had moved on.
 	 */
 	background?: boolean;
+	/**
+	 * Whether the call finished after the turn was stopped: the engine let it
+	 * run on, so what the user stopped happened anyway. A chip in the
+	 * background chip's slot, warning-tinted, and as permanent.
+	 */
+	afterStop?: boolean;
 	detail: string;
 	detailTail?: string;
 	detailMono?: boolean;
@@ -503,6 +522,7 @@ type FirstLineProps = Pick<
 	| "agent"
 	| "chip"
 	| "background"
+	| "afterStop"
 	| "detail"
 	| "detailTail"
 	| "detailMono"
@@ -520,6 +540,7 @@ export function ToolRowFirstLine({
 	agent,
 	chip,
 	background,
+	afterStop,
 	detail,
 	detailTail,
 	detailMono,
@@ -541,6 +562,7 @@ export function ToolRowFirstLine({
 			)}
 			{chip && <Chip>{chip}</Chip>}
 			{background && <Chip>background</Chip>}
+			{afterStop && <Chip tone="warning">after Stop</Chip>}
 			<Detail
 				detail={detail}
 				detailTail={detailTail}
@@ -613,6 +635,7 @@ export function ToolRow({
 	agent,
 	chip,
 	background,
+	afterStop,
 	detail,
 	detailTail,
 	detailMono,
@@ -655,6 +678,7 @@ export function ToolRow({
 							agent={agent}
 							chip={chip}
 							background={background}
+							afterStop={afterStop}
 							detail={detail}
 							detailTail={detailTail}
 							detailMono={detailMono}
