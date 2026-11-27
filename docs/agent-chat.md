@@ -391,8 +391,8 @@ the rest costs transport, parsing and memory for records nobody looks at.
 
 | Method | Params | Result |
 |--------|--------|--------|
-| `chat.messages.subscribe` | `id`, `session_id`, `limit?` | `history`, `has_more`, `next_before_seq?`, `turn`, `tool_activity?` |
-| `chat.messages.history` | `session_id`, `before_seq?`, `limit?` | `history`, `has_more`, `next_before_seq?` |
+| `chat.messages.subscribe` | `id`, `session_id`, `limit?` | `history`, `has_more`, `next_before_seq?`, `turn`, `tool_activity?`, `server_time` |
+| `chat.messages.history` | `session_id`, `before_seq?`, `limit?` | `history`, `has_more`, `next_before_seq?`, `server_time` |
 
 - `history` is the page, **oldest record first**, each record stamped with its
   `seq` — its address in the session's history ([`session.HistorySeq`](../server/session/types.go)).
@@ -403,6 +403,11 @@ the rest costs transport, parsing and memory for records nobody looks at.
   computes the cursor rather than letting the client read `history[0].seq`,
   because a record it could not stamp — one that is not a JSON object — carries
   no `seq` at all and would strand paging at that point.
+- `server_time` is the server's clock as the reply was built. A call still
+  running in `history` is counted from its `observed_at`
+  ([agent-integration.md](code/agent-integration.md)) against this reading plus
+  however long ago the reply arrived, never against the phone's own clock — the
+  same rule as the turn's `open_elapsed_ms`.
 - `limit` of `0` means `session.DefaultHistoryPageSize` (50); anything above
   `session.MaxHistoryPageSize` (500) is clamped. A negative `limit` and a
   `before_seq` naming no record are both refused with an invalid-params error —
@@ -1066,7 +1071,7 @@ and it has no method that can say anything to a session
 | `session_view.worktrees` | — | `worktrees`: `worktree`, `exists`, `session_count` |
 | `session_view.list` | `worktree`, `exclude_work_sessions?`, `exclude_permission_reviewer_sessions?`, `cursor?`, `limit?` | `sessions`, `next_cursor?`, `has_more` |
 | `session_view.get` | `worktree`, `session_id` | `session` |
-| `session_view.history` | `worktree`, `session_id`, `before_seq?`, `limit?` | `history`, `has_more`, `next_before_seq?` |
+| `session_view.history` | `worktree`, `session_id`, `before_seq?`, `limit?` | `history`, `has_more`, `next_before_seq?`, `server_time` |
 | `session_view.attachment` | `worktree`, `session_id`, `id` | `file` |
 | `session_view.html_page` | `worktree`, `session_id`, `id` | `page` |
 | `session_view.delete` | `worktree`, `session_id` | — |

@@ -154,8 +154,9 @@ engine never finished — Codex's, cut off by Stop — leaves no record at all.
 
 **The duration is the server's measurement, never the client's.** A client only
 has the moment a record reached it, which means nothing on replay — the reason
-[tool-call-model.md](tool-call-model.md#toolrun) gives Claude tool rows no
-duration. The server takes the reading while the thinking happens and stores
+a tool row's observed times are server stamps too
+([tool-call-model.md](tool-call-model.md#observed-times-and-reported-durations)).
+The server takes the reading while the thinking happens and stores
 it: Codex's from the engine's own item timestamps, Claude's as the time from the
 thread's last transcript output to the block. `0` is never written for a
 measured thinking, so an absent `duration_ms` always means unmeasured. Neither

@@ -235,13 +235,17 @@ kind would yield `0s` nearly every time. The figure includes the model's time to
 its first token, so it is "how long the agent was quiet before saying this",
 which is what the reader lived through.
 
-**Why this is not the arrival-time guess the tool model rejects.**
-[tool-call-model.md](tool-call-model.md#toolrun) gives Claude tool rows no
-duration because the only clock a *client* has is when it received a record,
-which is meaningless on replay. Here the server takes the reading live, at the
-one moment it means something, and stores the result as data — what
-`durationMs` is for codex. Doing the same for Claude's tool calls would be
-possible and is not part of this design.
+**Why this is not an arrival-time guess.** The only clock a *client* has is
+when it received a record, which is meaningless on replay. Here the server
+takes the reading live, at the one moment it means something, and stores the
+result as data — what `durationMs` is for codex. Tool rows follow the same
+principle by a different route: the server stamps when each call and result
+arrived (`observed_at`), and the duration is the difference of the two stored
+times
+([tool-call-model.md](tool-call-model.md#observed-times-and-reported-durations)).
+Thinking keeps a stored figure instead because nothing in history marks when it
+began: its start is whatever the thread last output, which only the server,
+watching the stream, can tell.
 
 A thinking whose engine path gave nothing to measure has no duration, and the
 row says `Thought` (§1.1).
