@@ -496,6 +496,7 @@ function MessageList({
 															// Top of the loaded transcript is the session's own start
 															// only once there are no older pages left above it.
 															isFirst={index === 0 && !hasMoreHistory}
+															olderPagesAbove={index === 0 && hasMoreHistory}
 															isOpenTurn={index === openIndex}
 															isCodex={isCodex}
 															onPermissionRespond={onPermissionRespond}

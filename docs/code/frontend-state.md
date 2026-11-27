@@ -1187,6 +1187,10 @@ newer half's ending unless the older one had already ended). The sending tab
 gets no record for its own message, so `deliverEcho` writes `openedAt` onto its
 placeholder from the send's answer. A reply that opened without a message
 — resumed output, `openedByCard` — has none, and nothing is guessed.
+`turnWork` (`lib/turnWork.ts`) reads the work line's span and call count off a
+settled reply; `MessageList` tells it when the reply is the first loaded one
+with older pages above, which without an `openedAt` may be the back half of a
+cut reply, so it counts nothing then.
 
 ### Why Pure Function Instead of Store
 

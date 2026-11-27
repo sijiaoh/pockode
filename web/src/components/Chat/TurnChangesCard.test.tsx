@@ -1,7 +1,9 @@
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import type { ComponentProps } from "react";
 import { describe, expect, it, vi } from "vitest";
 import type { ProposedChangeData } from "../../lib/proposedChange";
+import { turnWork } from "../../lib/turnWork";
 import type { AssistantMessage, ContentPart } from "../../types/message";
 import MessageItem from "./MessageItem";
 import { TurnChangesCard } from "./TurnChangesCard";
@@ -56,10 +58,28 @@ const write = (id: string, path: string, content: string, result: string) =>
 
 const card = () => screen.queryByRole("group", { name: /changed$/ });
 
+/** The card as a settled message with these parts draws it, its span unmeasured. */
+function Card({
+	parts,
+	...props
+}: Omit<ComponentProps<typeof TurnChangesCard>, "work">) {
+	const work = turnWork(
+		{
+			id: "m",
+			role: "assistant",
+			parts,
+			status: "complete",
+			createdAt: new Date(),
+		},
+		false,
+	);
+	return work ? <TurnChangesCard parts={parts} work={work} {...props} /> : null;
+}
+
 describe("TurnChangesCard", () => {
 	it("names each file by where it is and what the turn did to it", () => {
 		render(
-			<TurnChangesCard
+			<Card
 				parts={[
 					edit("1", "/repo/src/sender/deliver.ts", "a\nb", "c\nd\ne"),
 					write(
@@ -79,7 +99,7 @@ describe("TurnChangesCard", () => {
 		);
 
 		const group = card();
-		expect(group).toHaveAccessibleName("3 files changed");
+		expect(group).toHaveAccessibleName("3 tool calls, 3 files changed");
 		expect(group).toHaveTextContent("6 lines added, 2 removed");
 		// Only the rows are buttons; the header is not one.
 		const rows = within(group as HTMLElement).getAllByRole("button");
@@ -98,7 +118,7 @@ describe("TurnChangesCard", () => {
 	it("opens a row in place onto every edit of its file, in order", async () => {
 		const user = userEvent.setup();
 		render(
-			<TurnChangesCard
+			<Card
 				parts={[
 					edit("1", "/repo/a.ts", "one", "two"),
 					edit("2", "/repo/b.ts", "x", "y"),
@@ -134,7 +154,7 @@ describe("TurnChangesCard", () => {
 	it("titles nothing when a file was edited once, and says a rewrite's past is unknown", async () => {
 		const user = userEvent.setup();
 		render(
-			<TurnChangesCard
+			<Card
 				parts={[
 					write(
 						"1",
@@ -158,7 +178,7 @@ describe("TurnChangesCard", () => {
 	it("opens onto blocks that clamp themselves, as the tool body's do", async () => {
 		const user = userEvent.setup();
 		render(
-			<TurnChangesCard
+			<Card
 				parts={[
 					edit("1", "/repo/a.ts", "one", "two"),
 					write("2", "/repo/b.ts", "x\n", "File created successfully"),
@@ -186,7 +206,7 @@ describe("TurnChangesCard", () => {
 	it("titles each step by the tool that made it", async () => {
 		const user = userEvent.setup();
 		render(
-			<TurnChangesCard
+			<Card
 				parts={[
 					edit("1", "/repo/a.ts", "x", "y"),
 					write(
@@ -212,7 +232,7 @@ describe("TurnChangesCard", () => {
 	it("offers no way to open a file the turn deleted", async () => {
 		const user = userEvent.setup();
 		render(
-			<TurnChangesCard
+			<Card
 				onOpenFile={vi.fn()}
 				parts={[
 					{
@@ -252,22 +272,22 @@ describe("TurnChangesCard", () => {
 			Array.from({ length: count }, (_, i) =>
 				edit(`${i}`, `/repo/f${i}.ts`, "a", "b"),
 			);
-		const { rerender } = render(<TurnChangesCard parts={parts(7)} />);
+		const { rerender } = render(<Card parts={parts(7)} />);
 		expect(screen.getAllByRole("button")).toHaveLength(7);
 
-		rerender(<TurnChangesCard parts={parts(9)} />);
+		rerender(<Card parts={parts(9)} />);
 		const more = screen.getByRole("button", { name: "Show 4 more files" });
 		expect(more).not.toHaveAttribute("aria-expanded");
 		expect(screen.getAllByRole("button")).toHaveLength(6);
 		await user.click(more);
 		expect(screen.getAllByRole("button")).toHaveLength(9);
 		expect(screen.getByRole("button", { name: /^f5\.ts/ })).toHaveFocus();
-		expect(card()).toHaveAccessibleName("9 files changed");
+		expect(card()).toHaveAccessibleName("9 tool calls, 9 files changed");
 	});
 
-	it("draws nothing when no file was changed", () => {
-		const { container } = render(
-			<TurnChangesCard
+	it("draws the line alone when the calls changed no file", () => {
+		render(
+			<Card
 				parts={[
 					{
 						type: "tool_call",
@@ -286,20 +306,75 @@ describe("TurnChangesCard", () => {
 				]}
 			/>,
 		);
+		expect(card()).not.toBeInTheDocument();
+		expect(screen.queryByRole("button")).not.toBeInTheDocument();
+		expect(screen.getByText("1 tool call")).toBeInTheDocument();
+	});
+
+	it("says how long the reply worked, when both ends were stamped", () => {
+		render(
+			<TurnChangesCard
+				parts={[edit("1", "/repo/a.ts", "a", "b")]}
+				work={{ lastCallPartId: "call-1", calls: 6, durationMs: 133_400 }}
+			/>,
+		);
+		expect(card()).toHaveAccessibleName(
+			"Worked 2 minutes 13 seconds, 6 tool calls, 1 file changed",
+		);
+		// The visible words, both noun forms present: which one shows is the
+		// container query's, which jsdom does not lay out.
+		expect(card()).toHaveTextContent(
+			"Worked 2m 13s · 6 tool calls · 1 file changed",
+		);
+	});
+
+	it("leaves a reply the oldest page may have cut at its files", () => {
+		const cut = { lastCallPartId: "call-1" };
+		const { container, rerender } = render(
+			<TurnChangesCard
+				parts={[edit("1", "/repo/a.ts", "a", "b")]}
+				work={cut}
+			/>,
+		);
+		expect(card()).toHaveAccessibleName("1 file changed");
+
+		rerender(
+			<TurnChangesCard
+				parts={[
+					{
+						type: "tool_call",
+						id: "call-1",
+						tool: { id: "1", name: "Read", input: {}, status: "success" },
+					},
+				]}
+				work={cut}
+			/>,
+		);
 		expect(container).toBeEmptyDOMElement();
 	});
 
 	describe("in a message", () => {
-		const message = (status: AssistantMessage["status"]): AssistantMessage => ({
+		const text = (id: string, content: string): ContentPart => ({
+			id: `text-${id}`,
+			type: "text",
+			content,
+		});
+		const message = (
+			status: AssistantMessage["status"],
+			parts: ContentPart[] = [
+				text("1", "Looking."),
+				edit("1", "/repo/a.ts", "a", "b"),
+				text("2", "Done."),
+			],
+		): AssistantMessage => ({
 			id: "m",
 			role: "assistant",
-			parts: [
-				{ id: "text-1", type: "text", content: "Done." },
-				edit("1", "/repo/a.ts", "a", "b"),
-			],
+			parts,
 			status,
 			createdAt: new Date(),
 		});
+		const follows = (a: Node, b: Node) =>
+			!!(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
 
 		it("waits for the turn to settle", () => {
 			const { rerender } = render(
@@ -311,19 +386,94 @@ describe("TurnChangesCard", () => {
 			expect(card()).toBeInTheDocument();
 		});
 
-		it("sits under how the turn ended, just above its actions", () => {
-			render(<MessageItem sessionId="s" message={message("interrupted")} />);
-			const status = screen.getByText("Interrupted");
+		it("stands between the work and the answer, above how the turn ended", () => {
+			render(
+				<MessageItem
+					sessionId="s"
+					message={message("interrupted", [
+						edit("1", "/repo/a.ts", "a", "b"),
+						text("1", "Now the other one."),
+						edit("2", "/repo/b.ts", "a", "b"),
+						text("2", "Both done."),
+					])}
+				/>,
+			);
 			const group = card() as HTMLElement;
-			const actions = screen.getByRole("group", { name: "Message actions" });
+			// Text between two lists is narration, among the work.
+			expect(follows(screen.getByText("Now the other one."), group)).toBe(true);
+			expect(follows(group, screen.getByText("Both done."))).toBe(true);
+			expect(follows(group, screen.getByText("Interrupted"))).toBe(true);
 			expect(
-				status.compareDocumentPosition(group) &
-					Node.DOCUMENT_POSITION_FOLLOWING,
-			).toBeTruthy();
-			expect(
-				group.compareDocumentPosition(actions) &
-					Node.DOCUMENT_POSITION_FOLLOWING,
-			).toBeTruthy();
+				follows(
+					screen.getByText("Both done."),
+					screen.getByRole("group", { name: "Message actions" }),
+				),
+			).toBe(true);
+		});
+
+		it("draws nothing for a reply that made no call", () => {
+			render(
+				<MessageItem
+					sessionId="s"
+					message={message("complete", [text("1", "Just words.")])}
+				/>,
+			);
+			expect(screen.queryByText(/tool call/)).not.toBeInTheDocument();
+		});
+
+		it("closes nothing the reader opened when it goes in", async () => {
+			const user = userEvent.setup();
+			const { rerender } = render(
+				<MessageItem
+					sessionId="s"
+					message={message("streaming", [edit("1", "/repo/a.ts", "a", "b")])}
+				/>,
+			);
+			const row = screen.getByRole("button", { expanded: false });
+			await user.click(row);
+			expect(row).toHaveAttribute("aria-expanded", "true");
+
+			rerender(
+				<MessageItem
+					sessionId="s"
+					message={message("complete", [
+						edit("1", "/repo/a.ts", "a", "b"),
+						text("1", "Done."),
+					])}
+				/>,
+			);
+			expect(card()).toBeInTheDocument();
+			expect(row).toBeInTheDocument();
+			expect(row).toHaveAttribute("aria-expanded", "true");
+		});
+
+		it("counts only what it can see the start of at the top of loaded history", () => {
+			render(
+				<MessageItem
+					sessionId="s"
+					olderPagesAbove
+					message={{ ...message("complete"), endedAt: 5_000 }}
+				/>,
+			);
+			expect(card()).toHaveAccessibleName("1 file changed");
+		});
+
+		it("gives each reply a read point split off its own span", () => {
+			render(
+				<MessageItem
+					sessionId="s"
+					olderPagesAbove
+					message={{
+						...message("complete"),
+						openedAtReadPoint: true,
+						openedAt: 1_000,
+						endedAt: 121_000,
+					}}
+				/>,
+			);
+			expect(card()).toHaveAccessibleName(
+				"Worked 2 minutes 0 seconds, 1 tool call, 1 file changed",
+			);
 		});
 	});
 });

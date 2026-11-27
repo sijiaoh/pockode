@@ -612,7 +612,8 @@ command alike. The reducer carries the two
 moments onto the assistant message as history, the way it carries a run's
 `startedAt` and `endedAt` — the moment a reply opened is a fact about the past,
 not live state — and the figure is derived beside `turnChanges`, a pure
-function of the message, memoized with it.
+function of the message: `turnWork` (`lib/turnWork.ts`), which also counts the
+calls and names the last one's part, where the line goes.
 
 **Not measured, so not shown** — the line is drawn without its duration:
 

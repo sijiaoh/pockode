@@ -1,6 +1,15 @@
 import { FileDiff } from "lucide-react";
-import { useEffect, useId, useMemo, useRef, useState } from "react";
+import {
+	Fragment,
+	type ReactNode,
+	useEffect,
+	useId,
+	useMemo,
+	useRef,
+	useState,
+} from "react";
 import { changeRowCount, proposedChangeText } from "../../lib/proposedChange";
+import { formatElapsed, spokenElapsed } from "../../lib/toolRun";
 import {
 	type FileEdit,
 	type LineCounts,
@@ -8,6 +17,7 @@ import {
 	type TurnFileMarker,
 	turnChanges,
 } from "../../lib/turnChanges";
+import type { TurnWork } from "../../lib/turnWork";
 import { useWSStore } from "../../lib/wsStore";
 import type { ContentPart } from "../../types/message";
 import { CollapsibleBody } from "../ui";
@@ -222,24 +232,120 @@ function FileRow({
 	);
 }
 
+interface WorkLineProps {
+	work: TurnWork;
+	files: number;
+}
+
+/**
+ * The line as a sentence, at every width: *"Worked 2 minutes 13 seconds, 6
+ * tool calls, 2 files changed"*.
+ */
+function spokenWorkLine({ work, files }: WorkLineProps): string {
+	return [
+		work.durationMs !== undefined && `Worked ${spokenElapsed(work.durationMs)}`,
+		work.calls !== undefined && plural(work.calls, "tool call"),
+		files > 0 && `${plural(files, "file")} changed`,
+	]
+		.filter(Boolean)
+		.join(", ");
+}
+
+/**
+ * The line's visible words. Below the `work-line` container width the nouns
+ * shorten — `14 calls`, `3 files` — rather than the end being cut, which would
+ * cut the file count of a card about files. The container is the caller's box.
+ */
+function WorkLineWords({ work, files }: WorkLineProps) {
+	const wide = (words: string) => (
+		<span className="hidden @work-line:inline">{words}</span>
+	);
+	const entries: { key: string; node: ReactNode }[] = [];
+	if (work.durationMs !== undefined) {
+		entries.push({
+			key: "time",
+			node: (
+				<span className="tabular-nums">
+					Worked {formatElapsed(work.durationMs)}
+				</span>
+			),
+		});
+	}
+	if (work.calls !== undefined) {
+		entries.push({
+			key: "calls",
+			node: (
+				<>
+					{work.calls} {wide("tool ")}
+					{work.calls === 1 ? "call" : "calls"}
+				</>
+			),
+		});
+	}
+	if (files > 0) {
+		entries.push({
+			key: "files",
+			node: (
+				<>
+					{files} {files === 1 ? "file" : "files"}
+					{wide(" changed")}
+				</>
+			),
+		});
+	}
+	return entries.map(({ key, node }, index) => (
+		<Fragment key={key}>
+			{index > 0 && <span className="text-th-text-muted"> · </span>}
+			{node}
+		</Fragment>
+	));
+}
+
+/**
+ * The work line drawn alone, for a reply whose calls changed no file: words on
+ * the text's left edge and a hairline through the rest, which is what makes it
+ * a boundary rather than a row. Not a button and not a `separator` — screen
+ * readers announce or skip those — but a line of text.
+ */
+function BareWorkLine(props: WorkLineProps) {
+	return (
+		<div
+			className="@container flex min-h-9 items-center gap-2 text-xs"
+			{...anchorCandidateProps}
+		>
+			<span className="sr-only">{spokenWorkLine(props)}</span>
+			<span
+				aria-hidden
+				className="min-w-0 shrink truncate text-th-text-secondary"
+			>
+				<WorkLineWords {...props} />
+			</span>
+			<span aria-hidden className="min-w-4 flex-1 border-t border-th-border" />
+		</div>
+	);
+}
+
 interface Props {
 	/** One settled assistant message's parts: the turn. */
 	parts: ContentPart[];
+	work: TurnWork;
 	onOpenFile?: (path: string) => void;
 }
 
 /**
- * The files a turn changed, at its end: one row per file, each opening in
- * place onto that file's diffs. Drawn in the tool list's grammar and told apart
- * from one only by its header, the one row that is not a button.
+ * Where a settled turn's work ends and its answer starts
+ * (docs/tool-call-ui.md#the-turns-changes): the work line, and under it the
+ * files the turn changed — one row per file, each opening in place onto that
+ * file's diffs. Drawn in the tool list's grammar and told apart from one only
+ * by its header, the work line, the one row that is not a button. A turn that
+ * changed nothing has the line alone.
  *
  * Callers render it once the turn has settled; while it runs, the group
- * summaries already count the edits, and a box growing at the tail would push
- * at the content streaming in above it. A subagent the turn left running in
- * the background can still add rows afterwards: its edits are this turn's too,
- * and they land at the tail, under nothing but the actions.
+ * summaries already count the edits, and which text is the answer is not
+ * known until no call can follow it. A subagent the turn left running in the
+ * background can still add rows afterwards: its edits are this turn's too.
  */
-export function TurnChangesCard({ parts, onOpenFile }: Props) {
+export function TurnChangesCard({ parts, work, onOpenFile }: Props) {
 	const workDir = useWSStore((state) => state.workDir);
 	const changes = useMemo(() => turnChanges(parts, workDir), [parts, workDir]);
 	const [showAll, setShowAll] = useState(false);
@@ -256,7 +362,11 @@ export function TurnChangesCard({ parts, onOpenFile }: Props) {
 	}, [showAll]);
 
 	const { files, lines } = changes;
-	if (files.length === 0) return null;
+	const line = { work, files: files.length };
+	if (files.length === 0) {
+		// A reply the oldest page may have cut has no count to stand on alone.
+		return work.calls === undefined ? null : <BareWorkLine {...line} />;
+	}
 	const folded = !showAll && files.length > FILE_LIMIT;
 	const shown = folded ? files.slice(0, FOLDED_ROWS) : files;
 	const spokenTotal = spokenLines(lines);
@@ -264,7 +374,7 @@ export function TurnChangesCard({ parts, onOpenFile }: Props) {
 	return (
 		// A part wrapper's sibling, and an anchor candidate like one: with rows
 		// open it can be screens tall.
-		<div className="mt-2" {...anchorCandidateProps}>
+		<div {...anchorCandidateProps}>
 			{/* A group, not a region: one landmark per turn would drown out the
 			    page's own. */}
 			{/* biome-ignore lint/a11y/useSemanticElements: a list of files, not form controls a fieldset would group */}
@@ -277,17 +387,20 @@ export function TurnChangesCard({ parts, onOpenFile }: Props) {
 				className="overflow-clip rounded-lg border border-th-border text-xs"
 			>
 				<div ref={rowsRef} className="-mt-px">
-					<div className="flex min-h-9 flex-col justify-center border-t border-th-border px-2 py-1.5 sm:px-2.5">
+					<div className="@container flex min-h-9 flex-col justify-center border-t border-th-border px-2 py-1.5 sm:px-2.5">
 						<div className="flex items-start gap-1.5">
 							{/* In the chevron's column, so the title lines up with the
 							    file names under it. */}
 							<FileDiff className="mt-0.5 size-3 shrink-0 text-th-text-muted" />
 							<span className="flex min-w-0 flex-1 items-baseline gap-1.5">
+								<span id={titleId} className="sr-only">
+									{spokenWorkLine(line)}
+								</span>
 								<span
-									id={titleId}
+									aria-hidden
 									className="min-w-0 flex-1 truncate text-th-text-secondary"
 								>
-									{plural(files.length, "file")} changed
+									<WorkLineWords {...line} />
 								</span>
 								<span aria-hidden className="contents">
 									<LineCountsLabel lines={lines} />
