@@ -173,7 +173,7 @@ gap that must not end a background wait.
 
 The agent's plan is a **recorded** `plan` event: the checklist as the agent
 stated it at one moment. It is never updated afterwards, and the newest one is
-the current plan, which is why the turn tail's plan line can read it without a
+the current plan, which is why the turn tail's plan chip can read it without a
 store ([turn-progress-ui.md §4.6](turn-progress-ui.md#46-the-plan-record)
 defines the fields and the three producers: Codex's `turn/plan/updated`,
 Claude's `TodoWrite`, and the server's fold of Claude's `TaskCreate` /

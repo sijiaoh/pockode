@@ -655,10 +655,10 @@ has moved on from claiming to be running.
 What the line *says* does not come through the bubble's props: the turn's phase,
 its clock and what the main agent is thinking right now reach it through
 `TurnTailContext`, so that a thinking delta several times a second re-renders the
-one line rather than every memoized bubble. The plan line and the agents line
-under it come the same way, with the id of the one bubble that draws them
-([turn-progress-ui.md §4.3](../turn-progress-ui.md#43-the-agents-line), *where
-the two lines are derived and drawn*). "Thinking now" is `useChatMessages`
+one line rather than every memoized bubble. The plan and the agents in it come
+the same way, with the id of the one bubble that draws them
+([turn-progress-ui.md §4.3](../turn-progress-ui.md#43-the-agents), *where
+the plan and the agents are derived and drawn*). "Thinking now" is `useChatMessages`
 state beside the transcript, never a part of it — `thinking_delta` is not
 recorded, so it is dropped by the reducer and folded per frame into that state
 instead. What ends it is
@@ -1062,7 +1062,7 @@ says where the agent's plan stood at one moment. One that names a call (Claude's
 no part: the call's row is the plan's history. One with a `plan_id` (Codex) has
 no call, so it becomes a settled `Plan` run of its own, placed and filed by the
 ordinary `tool_call` path. Either way `plan` carries its place in record order
-(`order`), because the plan line picks the newest plan by record order, not by
+(`order`), because the plan chip picks the newest plan by record order, not by
 call order. A persisted record's `order` is its `seq`. One never persisted
 (`orderedPlan`) goes between the newest seq loaded anywhere (a message's
 anchor, or a plan's whole seq) and the next whole number: at that seq + 0.5,

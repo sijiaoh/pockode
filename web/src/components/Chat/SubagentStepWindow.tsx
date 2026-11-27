@@ -61,29 +61,41 @@ export function StepCallLabel({
 	);
 }
 
+const LINE = "flex min-w-0 items-baseline gap-1.5 text-xs";
+
 /**
  * A subagent row's newest steps, one per line, oldest at the top
  * (docs/tool-call-ui.md#the-step-window). Spans, since it is drawn inside the
  * row's button while the row is closed; hidden from assistive tech, being a
  * moving view of steps the Process lists accessibly.
  *
+ * All `lines` boxes are drawn from the first step, the newest on the bottom
+ * one and the unfilled ones blank above it, so the window takes its height
+ * once rather than growing a line per step.
+ *
  * `frozen` is a settled row's: its steps stay as the reducer left them, and
  * carry no time — a counter ticking on a settled row would be a lie about it.
  */
 export function SubagentStepWindow({
 	steps,
+	lines,
 	frozen,
 }: {
 	steps: RecentStep[];
+	lines: number;
 	frozen: boolean;
 }) {
+	const blanks = Math.max(0, lines - steps.length);
 	return (
 		<span aria-hidden className="block" data-step-window>
+			{Array.from({ length: blanks }, (_, i) => (
+				// biome-ignore lint/suspicious/noArrayIndexKey: blank boxes have no identity
+				<span key={`blank-${i}`} className={LINE}>
+					{"\u00a0"}
+				</span>
+			))}
 			{steps.map((step) => (
-				<span
-					key={step.id}
-					className="flex min-w-0 items-baseline gap-1.5 text-xs"
-				>
+				<span key={step.id} className={LINE}>
 					<StepGlyph mark={step.mark} />
 					{step.label.kind === "call" ? (
 						<StepCallLabel name={step.label.name} input={step.label.input} />

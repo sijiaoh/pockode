@@ -1,6 +1,6 @@
-import type { Thought, TurnPhase } from "../types/message";
+import type { Thought, ToolRunPlan, TurnPhase } from "../types/message";
 import { formatElapsed, spokenElapsed } from "./toolRun";
-import type { AgentsOverview, PlanOverview } from "./turnOverview";
+import type { AgentsOverview, TurnPanel } from "./turnOverview";
 
 /**
  * How a thinking row words what it holds (docs/turn-progress-ui.md#1-the-thinking-row).
@@ -78,12 +78,11 @@ export interface LiveThinking {
 	 * starts with text.
 	 */
 	joinedLate: boolean;
-	/** The user opened it; the row it settles into opens too. */
-	expanded: boolean;
 }
 
 /**
- * What the tail line draws from (docs/turn-progress-ui.md#2-the-tail-line).
+ * What the status line and its panel draw from
+ * (docs/turn-progress-ui.md#2-the-tail-line).
  */
 export interface TurnTail {
 	phase: TurnPhase;
@@ -94,14 +93,15 @@ export interface TurnTail {
 	openedAt?: number;
 	/** The main agent is thinking now; null when it is not, or not known to be. */
 	thinking: LiveThinking | null;
-	onToggleThinking: () => void;
 	/**
-	 * The assistant message whose turn-end slot draws the lines under the tail
-	 * line (`overviewMessageId` in lib/turnOverview.ts); absent when none does.
+	 * The assistant message whose turn-end slot draws the plan and the agents
+	 * (`overviewMessageId` in lib/turnOverview.ts); absent when none does.
 	 */
 	overviewMessageId?: string;
-	plan: PlanOverview;
+	/** The open turn's current plan (`currentPlan`); absent when there is none. */
+	plan?: ToolRunPlan;
 	agents: AgentsOverview;
+	panel: TurnPanel;
 }
 
 /**
@@ -117,7 +117,6 @@ export function applyThinkingDelta(
 			content: delta.content,
 			fullReasoning: delta.fullReasoning,
 			joinedLate: Boolean(delta.content || delta.fullReasoning),
-			expanded: false,
 		};
 	}
 	return {

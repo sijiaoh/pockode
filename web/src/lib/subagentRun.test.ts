@@ -167,47 +167,22 @@ describe("subagentPath", () => {
 	});
 });
 
-// docs/tool-call-ui.md#the-step-window
+// docs/tool-call-ui.md#how-many-lines
 describe("stepWindowLines", () => {
-	const live = (id: string, startedAt?: number) =>
-		run({ id, status: "running", startedAt });
-	const settled = (id: string, endedAt?: number) =>
-		run({ id, status: "success", startedAt: 0, endedAt });
-
-	// Parallel siblings stay skimmable on a phone: the more there are, the
-	// fewer lines each gets, whatever their status.
-	it("sizes a live row's window by how many subagent rows share its list", () => {
-		expect(stepWindowLines([live("a")]).get("a")).toBe(3);
-		expect(stepWindowLines([live("a"), settled("b")]).get("a")).toBe(2);
-		expect(
-			stepWindowLines([live("a"), live("b"), live("c"), live("d")]).get("a"),
-		).toBe(1);
-	});
-
-	it("draws none for a settled row with no live sibling", () => {
-		expect(stepWindowLines([settled("a", 10)]).get("a")).toBe(0);
-		expect(stepWindowLines([settled("a", 10), settled("b", 20)]).get("a")).toBe(
-			0,
+	const rows = (n: number) =>
+		Array.from({ length: n }, (_, i) =>
+			run({ id: `t${i}`, status: "running" }),
 		);
-	});
 
-	// The first sibling to finish holds its height above the ones still
-	// running, and the list folds once, with the last of them.
-	it("keeps a settled row's window while a sibling that ran beside it runs", () => {
-		const lines = stepWindowLines([settled("a", 10), live("b", 5)]);
-		expect(lines.get("a")).toBe(2);
-		expect(lines.get("b")).toBe(2);
-	});
-
-	// A sibling resumed or added after the list folded regrows nobody's
-	// window — and a reload, which has no memory, answers the same.
-	it("does not regrow a window for a sibling that started after it settled", () => {
-		expect(stepWindowLines([settled("a", 10), live("b", 20)]).get("a")).toBe(0);
-	});
-
-	it("folds when a time is missing", () => {
-		expect(stepWindowLines([settled("a"), live("b", 5)]).get("a")).toBe(0);
-		expect(stepWindowLines([settled("a", 10), live("b")]).get("a")).toBe(0);
+	// Parallel siblings stay skimmable: the more there are, the fewer lines
+	// each gets, and fewer again on a phone.
+	it("sizes the window by how many subagent rows share the list and the width", () => {
+		expect([1, 2, 3, 4].map((n) => stepWindowLines(rows(n), false))).toEqual([
+			3, 2, 1, 1,
+		]);
+		expect([1, 2, 3, 4].map((n) => stepWindowLines(rows(n), true))).toEqual([
+			2, 1, 0, 0,
+		]);
 	});
 });
 

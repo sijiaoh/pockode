@@ -1,12 +1,6 @@
 import { Ban, Bot, Check, ChevronRight, CircleDot, X } from "lucide-react";
-import {
-	type MouseEvent,
-	type ReactNode,
-	useEffect,
-	useMemo,
-	useRef,
-	useState,
-} from "react";
+import { type MouseEvent, type ReactNode, useMemo, useRef } from "react";
+import { useElapsedMs } from "../../hooks/useElapsedMs";
 import {
 	formatDuration,
 	formatElapsed,
@@ -194,8 +188,7 @@ export function Detail({
 /**
  * How long a run has been going, from its start on this client's clock.
  *
- * Its own component with its own interval, so the tick re-renders the counter
- * and not the row.
+ * Its own component, so the shared tick re-renders the counter and not the row.
  */
 function ElapsedCounter({
 	seenAt,
@@ -208,23 +201,13 @@ function ElapsedCounter({
 	 */
 	separated?: boolean;
 }) {
-	const [now, setNow] = useState(() => Date.now());
-	const elapsed = now - seenAt.getTime();
-	// Every second while the number is seconds, every minute once it is not: a
-	// task that has been running for half an hour has no use for 1,800 wake-ups
-	// that redraw the same string.
-	const period = elapsed < 60_000 ? 1000 : 60_000;
-
-	useEffect(() => {
-		const timer = setInterval(() => setNow(Date.now()), period);
-		return () => clearInterval(timer);
-	}, [period]);
+	const elapsed = useElapsedMs(seenAt.getTime());
 
 	// Not before three seconds, so the calls that finish instantly — nearly all
 	// of them — never flash a number.
 	if (elapsed < 3000) return null;
 	return (
-		<span className="shrink-0 text-th-text-muted">
+		<span className="shrink-0 text-th-text-muted tabular-nums">
 			{separated && "· "}
 			{formatElapsed(elapsed)}
 		</span>

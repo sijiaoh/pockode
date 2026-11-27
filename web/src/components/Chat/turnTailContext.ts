@@ -4,14 +4,8 @@ import type { TurnTail } from "../../lib/thinking";
 export const IDLE_TAIL: TurnTail = {
 	phase: "idle",
 	thinking: null,
-	onToggleThinking: () => {},
-	plan: { expanded: false, onToggle: () => {} },
-	agents: {
-		liveCount: 0,
-		entries: [],
-		expanded: false,
-		onToggle: () => {},
-	},
+	agents: { liveCount: 0, entries: [] },
+	panel: { expanded: false, onToggle: () => {} },
 };
 
 /**
@@ -26,7 +20,7 @@ export function useTurnTail(): TurnTail {
 }
 
 /**
- * Thinking rows that settled from a tail line the user had opened. They open
+ * Thinking rows that settled under a panel the user had opened. They open
  * as they settle — nothing closes what the user opened — so a list reads its
  * rows' first choice from here (docs/turn-progress-ui.md#13-opening-it).
  */

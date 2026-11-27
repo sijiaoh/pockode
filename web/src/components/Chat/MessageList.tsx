@@ -12,6 +12,7 @@ import {
 import { openAssistantIndex } from "../../lib/messageReducer";
 import { useChatUIConfig } from "../../lib/registries/chatUIRegistry";
 import type { TurnTail } from "../../lib/thinking";
+import { isTurnOpen, openTurnReplyIds } from "../../lib/turnOverview";
 import type {
 	Message,
 	PermissionRequest,
@@ -32,6 +33,10 @@ import MessageItem, {
 import { OpenWorkDetailContext } from "./openWorkDetailContext";
 import ScrollToBottomButton from "./ScrollToBottomButton";
 import { anchorCandidateProps } from "./scrollAnchor";
+import {
+	StepWindowFoldContext,
+	useStepWindowFoldValue,
+} from "./stepWindowContext";
 import { StopTargetsContext, useStopTargetsValue } from "./stopTargetsContext";
 import {
 	SubagentResumesContext,
@@ -324,6 +329,9 @@ function MessageList({
 	const resumes = useSubagentResumesValue(messages);
 	const stopTargets = useStopTargetsValue(messages);
 	const discardedContext = useDiscardedMessagesValue(messages, hasMoreHistory);
+	const turnOpen = isTurnOpen(messages, tail?.phase ?? "idle");
+	const openTurnIds = openTurnReplyIds(messages, turnOpen);
+	const stepWindowFold = useStepWindowFoldValue(turnOpen, scrollRef);
 
 	// Where the view is meant to be now, so the target becomes the anchor: the
 	// output that goes on landing below it must not push it away again, which is
@@ -460,49 +468,54 @@ function MessageList({
 											<DiscardedMessagesContext value={discardedContext}>
 												<TranscriptViewContext value={view}>
 													<ToolJumpContext value={toolJump}>
-														<OpenWorkDetailContext value={onOpenWorkDetail}>
-															{messages.map((message, index) => {
-																return (
-																	<div
-																		key={message.id}
-																		data-message-id={message.id}
-																		// This wrapper is the row the view can be held still over
-																		// (see `scrollAnchor`).
-																		{...anchorCandidateProps}
-																		className="py-1.5 sm:py-2"
-																	>
-																		<MessageItem
-																			message={message}
-																			sessionId={sessionId}
-																			// Top of the loaded transcript is the session's own start
-																			// only once there are no older pages left above it.
-																			isFirst={index === 0 && !hasMoreHistory}
-																			olderPagesAbove={
-																				index === 0 && hasMoreHistory
-																			}
-																			isOpenTurn={index === openIndex}
-																			isCodex={isCodex}
-																			onPermissionRespond={onPermissionRespond}
-																			onAnswerQuestion={onAnswerQuestion}
-																			promptError={promptError}
-																			onOpenWorkDetail={onOpenWorkDetail}
-																			onOpenFile={onOpenFile}
-																			onForkMessage={onForkMessage}
-																			onSignIn={onSignIn}
-																			onSwitchAccount={onSwitchAccount}
-																			isDiscarded={
-																				message.role === "user" &&
-																				message.messageId !== undefined &&
-																				discardedContext.discarded.has(
-																					message.messageId,
-																				)
-																			}
-																			onRestoreMessages={onRestoreMessages}
-																		/>
-																	</div>
-																);
-															})}
-														</OpenWorkDetailContext>
+														<StepWindowFoldContext value={stepWindowFold}>
+															<OpenWorkDetailContext value={onOpenWorkDetail}>
+																{messages.map((message, index) => {
+																	return (
+																		<div
+																			key={message.id}
+																			data-message-id={message.id}
+																			// This wrapper is the row the view can be held still over
+																			// (see `scrollAnchor`).
+																			{...anchorCandidateProps}
+																			className="py-1.5 sm:py-2"
+																		>
+																			<MessageItem
+																				message={message}
+																				sessionId={sessionId}
+																				// Top of the loaded transcript is the session's own start
+																				// only once there are no older pages left above it.
+																				isFirst={index === 0 && !hasMoreHistory}
+																				olderPagesAbove={
+																					index === 0 && hasMoreHistory
+																				}
+																				isOpenTurn={index === openIndex}
+																				inOpenTurn={openTurnIds.has(message.id)}
+																				isCodex={isCodex}
+																				onPermissionRespond={
+																					onPermissionRespond
+																				}
+																				onAnswerQuestion={onAnswerQuestion}
+																				promptError={promptError}
+																				onOpenWorkDetail={onOpenWorkDetail}
+																				onOpenFile={onOpenFile}
+																				onForkMessage={onForkMessage}
+																				onSignIn={onSignIn}
+																				onSwitchAccount={onSwitchAccount}
+																				isDiscarded={
+																					message.role === "user" &&
+																					message.messageId !== undefined &&
+																					discardedContext.discarded.has(
+																						message.messageId,
+																					)
+																				}
+																				onRestoreMessages={onRestoreMessages}
+																			/>
+																		</div>
+																	);
+																})}
+															</OpenWorkDetailContext>
+														</StepWindowFoldContext>
 													</ToolJumpContext>
 												</TranscriptViewContext>
 											</DiscardedMessagesContext>

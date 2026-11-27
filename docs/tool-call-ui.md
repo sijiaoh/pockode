@@ -51,8 +51,8 @@ never re-flows when the window is resized. Twenty rows that are each one line
 can be skimmed; twenty rows that are each one-or-three lines cannot. The only
 things that ever add a line are the **second line**, and only for a run that has
 something to say on it — see below — and a live subagent's
-[step window](#the-step-window), a few lines sized by its list that fold with
-it. Consecutive calls between two pieces of
+[step window](#the-step-window), a few lines sized by its list and the
+screen's width, which fold only where nobody sees them. Consecutive calls between two pieces of
 text then fold into **one summary row** ([groups](#groups)), with the rows the
 reader must not miss pinned under it.
 
@@ -542,18 +542,16 @@ colour or fill.
 line, in this order: the parts (the answer, a warning or question record), the
 error or `Interrupted` line, the [discarded
 messages](discarded-messages-ui.md#3-at-the-end-of-the-stopped-turn),
-`Process ended` — then the card, `mt-2` — then the agents line while an agent
-outlives the turn ([turn-progress-ui.md](turn-progress-ui.md); the plan line
-goes when the turn settles) — then the turn-end row. The card is above the
-agents line, not under it: the card is the turn's history, the line is live
-state, and live state stays next to the turn-end row. An interrupted turn so
+`Process ended` — then the card, `mt-2` — then the turn-end row. An agent that
+outlives the turn adds no line between them: its chip stands at the right end
+of the turn-end row
+([turn-progress-ui.md §4.3](turn-progress-ui.md#43-the-agents)). An interrupted turn so
 reads warning → `Interrupted` → card → Copy/Fork: why it stopped, then what it
 left behind, then what to do with it.
 
 The card is what a reader *acts on* once they have read the answer — open a
 diff, open the file, go to the call — so it sits with the other things to act
-on, just above Copy and Fork (with only the agents line between, while an
-agent outlives the turn), rather than between the work and the answer, where
+on, just above Copy and Fork, rather than between the work and the answer, where
 it would be passed on the way down and scrolled back to. And a turn ends in
 fewer rows that way, which on a phone is most of what decides how much of a
 turn a screen holds: no turn gains a row for its size ([the work
@@ -581,8 +579,8 @@ has no work to measure, and a thinking before the answer already says
 whose leftovers most need reading. The one way it grows after settling is a
 subagent the turn left in the background finishing edits: they are this
 turn's, so rows join the card and its figures grow in place. A first such edit
-on a turn that had changed no file draws the card in its place above the plan
-and agents lines, and the figures move from the turn-end row into its header.
+on a turn that had changed no file draws the card in its place above the
+turn-end row, and the figures move from that row into its header.
 
 **The unit is one assistant message** — what the transcript draws as a turn. A
 read point that splits a reply into two messages gives each its own card;
@@ -724,7 +722,9 @@ the chip is a word.
 One run of words that says how big the turn's work was, standing at the
 turn's end: the changes card's header when the turn changed files, and the
 right end of the turn-end row when it did not. Never both, and never a row of
-its own.
+its own. On the row an agents chip that outlives the turn takes their place
+while it lasts ([turn-progress-ui.md
+§2.1](turn-progress-ui.md#21-where-it-is)).
 
 **What they say.** Up to three entries, in this order — from how long, to how
 much, to what was left behind — separated by `·` as a group summary's are:
@@ -763,7 +763,8 @@ format*).
   they are not an action; to assistive technology a line of text, the visible
   words `aria-hidden` beside an `sr-only` sentence — the one a card's header is
   named by, *"Worked 48 seconds, 6 tool calls"*. Not drawn when the turn
-  changed files (the card has them), when the count may have been cut (`calls` undefined: alone it would
+  changed files (the card has them), while an agents chip holds the row's
+  right end (above), when the count may have been cut (`calls` undefined: alone it would
   claim a size it does not know), or when there is no row at all — no text to
   copy and a session that cannot fork, which for a turn that ended on a call is
   rare.
@@ -1922,11 +1923,15 @@ outcome arrives and the duration takes its place).
 - It appears once the run has been going 3s — by its start, not by when this
   screen drew it, so a row replayed four minutes into a run shows `4m 0s` at
   once rather than nothing for three seconds.
-- It ticks at 1s under a minute, then at 1 minute; format `formatElapsed` —
-  whole seconds below a minute (`12s`), then `formatDuration`'s two units.
-- It is its own component with its own interval, so a ticking counter
-  re-renders the counter and not the row. At most a handful of runs are live at
-  once.
+- It ticks every second at every length, and on the same tick as every other
+  elapsed clock on screen — the turn clock and the other live counters
+  (`useElapsedMs`, one interval for all of them). A clock that prints seconds
+  and ticks once a minute sits on `3m 0s` beside a tail line reading `3m 17s`;
+  clocks with intervals of their own change their seconds out of step with each
+  other. Format `formatElapsed` — whole seconds below a minute (`12s`), then
+  `formatDuration`'s two units — and `tabular-nums`, like the turn clock.
+- It is its own component, so the tick re-renders the counter and not the row.
+  At most a handful of runs are live at once.
 - Whether a run is live is still its status, never its clock. A run left
   `running` by a turn that ended is settled to `interrupted` by the reducer
   (and a dangling turn by [lifecycle-ui.md
@@ -2468,8 +2473,8 @@ In the default order, each section omitted when empty:
    - `TodoWrite`, and a Codex `Plan` row: the checklist (`TodoChecklist`,
      labelled `Todos` on both) — a status icon per item, the done ones struck
      through, and a `Plan` row's explanation first, as a muted paragraph. The
-     plan line opens on the same checklist
-     ([turn-progress-ui.md §4.2](turn-progress-ui.md#42-the-plan-line)). An
+     turn's panel opens on the same checklist
+     ([turn-progress-ui.md §4.2](turn-progress-ui.md#42-the-plan)). An
      input that is not a list of todos falls through to the fields below.
    - `ExitPlanMode`: the plan, through `MarkdownContent`, with no label —
      clamped all the same.
@@ -3598,8 +3603,8 @@ first row that matches wins:
   subagent than for any other foreground call: the main agent routinely spawns
   several at once, so a subagent row that finishes first is **not** at the
   tail — its siblings are still running under it. The rest of the height is
-  its step window's, which stays, frozen, until the list's last sibling that
-  ran beside it settles ([the step window](#settling-and-folding)).
+  its step window's, which stays, frozen, until it is unseen or the turn ends
+  ([the step window](#settling-and-folding)).
 - **`error` reads its own line, not the shared rung 4.** Rung 4 is the tail of
   machine output in mono; a subagent's result is prose that states its verdict
   first, so the first line is the one that says why
@@ -3645,31 +3650,48 @@ skimmed, and rows that do not move under the reader.
 
 #### How many lines
 
-| Subagent rows in the list (any status) | Window lines per row |
-|---|---|
-| 1 | 3 |
-| 2 | 2 |
-| 3 or more | 1 |
+| Subagent rows in the list (any status) | compact (< `sm`) | `sm` and wider |
+|---|---|---|
+| 1 | 2 | 3 |
+| 2 | 1 | 2 |
+| 3 or more | 0 | 1 |
 
 **The list sizes the window, not the row.** The main agent routinely spawns
 several subagents at once, and three lines on each would put four parallel
 siblings at about 370px — the whole transcript area of a 360×640 phone with
-the composer up. Three siblings at one line each are three lines a row, about
-60px instead of the 44px a two-line row takes. The count is of subagent rows in
-the same list ([the list](#the-list)), whatever their status, and it is a
-one-way fact: a row added to a list never leaves it, so a window only ever
-shrinks because a sibling arrived — and parallel spawns arrive together, before
-any of their steps do, while the windows are still empty. A row drawn outside a
-list counts as a list of one. Inside a [Process](#process) or a
+the composer up. The count is of subagent rows in the same list
+([the list](#the-list)), whatever their status, and it is a one-way fact: a
+row added to a list never leaves it, so a window only ever shrinks because a
+sibling arrived — and parallel spawns arrive together, before any of their
+steps do, while the windows are still empty. A frozen window
+([below](#settling-and-folding)) keeps the size it settled at: a sibling
+spawned after it shrinks the live windows, not the one the reader may be
+looking at. A row drawn outside a list counts
+as a list of one. Inside a [Process](#process) or a
 [transcript layer](subagent-transcript-ui.md), a nested subagent row follows
 the same rules, its list being the list it is in at that level.
 
-**It grows only while it fills.** The window is not drawn before the first
-step, so a row with none reads exactly as it did ([the second
-line](#the-second-line-steps-and-what-it-is-doing)). It then fills from one line
-to its k over the first k steps and rolls in place from there: rolling changes
-text, not layout. A live row moves the rows under it at most k times, one line
-each, and the reader can see each one coming.
+**A phone gets fewer.** On a phone the progress chrome and the windows compete
+for a transcript area of about 400px, so the compact tier draws one line fewer
+at every count. Zero means the row has no window: three or more parallel
+siblings on a phone are plain two-line rows, line 2 reading
+`N tool uses · <latest child>` ([the second
+line](#the-second-line-steps-and-what-it-is-doing)), that never grow or fold.
+The tier is the viewport's **width**, read through `useMediaQuery` against
+`BREAKPOINTS.sm` (`stepWindowLines(runs, compact)` in `lib/subagentRun.ts`) —
+the one count in this document a width tier decides. Not the height: the app
+sets `interactive-widget=resizes-content`, so the keyboard opening changes the
+height, and sizing by it would resize every window with every focus. Width
+changes only on rotation, which reflows everything anyway.
+
+**Reserved at the first step, bottom-aligned.** The window is not drawn before
+the first step, so a row with none reads exactly as it did ([the second
+line](#the-second-line-steps-and-what-it-is-doing)). At its first step it draws
+**all k line boxes**: the newest step on the bottom line, the unfilled lines
+above it blank, each new step entering at the bottom and rolling upward.
+Rolling changes text, not layout, so a live row moves the rows under it once
+(0 → k), not k times. A resume regrows a folded window the same way: once, at
+the resume, on a row that has just said it is running again.
 
 #### What each line shows
 
@@ -3734,46 +3756,75 @@ widths in Chromium and WebKit.
 
 #### Settling and folding
 
-Line 2 settles by [status by status](#status-by-status), unchanged. The window:
+Line 2 settles by [status by status](#status-by-status), unchanged. The window
+stays, **frozen** at its last steps — drawn with the statuses the reducer left
+them, nothing inferred, and no elapsed figure even beside a step the reducer
+still calls running, since a counter ticking on a settled row would be a lie
+about the row — until the first of:
 
-- **Settled while a sibling that ran beside it is live**: it stays, frozen at
-  its last k steps — drawn with the statuses the reducer left them, nothing
-  inferred, and no elapsed figure even beside a step the reducer still calls
-  running, since a counter ticking on a settled row would be a lie about the
-  row. It is still true as history, and it holds the row's height.
-- **Otherwise it folds.** So a list folds once, in the same frame as the last
-  of the siblings that were running beside each other, losing k lines a row at
-  the moment the main agent picks up again — when attention moves to the tail
-  anyway, and a transcript following its tail absorbs it. A lone subagent folds
-  as it settles.
+1. **Its turn is no longer open.** The turn settles, Stop is pressed, or the
+   row belongs to no open turn: it is not in one of the open turn's replies —
+   the open bubble and, while the reply just taken was opened by a read point,
+   the one before it (`openTurnReplyIds` in `lib/turnOverview.ts`, the walk
+   the plan already uses) — and its run has not been live while this turn was
+   open. The second half is a resume: a subagent resumed this turn runs again
+   on its spawn's row, in an earlier reply, and settling there is settling in
+   this turn. The turn settling is a reflow anyway: the changes card lands
+   then, at the turn's end.
+2. **The row is unseen**: its element lies wholly outside the transcript
+   scroller's rect.
+3. **The reader opens its Process inline**, which shows the same steps whole.
 
-"Beside" is read off the runs alone: a settled row keeps its window while some
-other subagent row in its list is live **and that sibling's current run started
-before this row ended** — its `startedAt`, or its resume's start for a resumed
-run, earlier than this row's `endedAt` (`stepWindowLines` in
-`lib/subagentRun.ts`). Every input is persisted, so a reload draws exactly the
-windows the live view did. A missing time — an old record with no `startedAt`
-or `endedAt`, or a subagent a Stop settled, which gets no `endedAt` — means no
-frozen window: folding is the safe default, costing at most k lines once.
+So the only fold that can happen in view is the one at the turn's end, and
+the scroll needs nothing new for the others. A reader following the tail is
+held at the bottom, and a row folding above the view only lowers the maximum
+scroll. A reader scrolled up is held by the anchor — the last candidate that
+starts at or above the view's top
+([agent-chat.md](agent-chat.md#where-the-view-sits), `scrollAnchor.ts`) — so a
+fold wholly above the view is under its correction, and one wholly below it
+moves nothing visible. A lone subagent that finishes at the tail therefore
+stays frozen in front of the reader until the turn ends.
+`StepWindowFold.browser.test.tsx` holds this, and the reserved growth above,
+on a 360×640 phone.
 
-- **Stop** interrupts every sibling together, so the list folds at once, and
-  each row's line 2 takes its frozen latest child in that frame
-  ([above](#the-second-line-steps-and-what-it-is-doing)).
+**Once folded, it stays folded.** The fold is latched by run id in a set
+`MessageList` owns (`StepWindowFoldContext`, `stepWindowContext.ts`), not in
+the row: a group collapsed and reopened, or a bubble drawn again, remounts the
+row, and a latch inside it would regrow the window in front of the reader.
+Scrolling back to a folded row does not regrow it either. The set is cleared
+once no turn is open, since a settled turn draws every window folded by rule 1;
+a run that goes live again (a resume) drops its entry, so its new window can
+fold later in turn. The same owner keeps the runs seen live while the turn is
+open (`liveThisTurn`, each row reporting itself through `markLive`), for rule
+1's second half, and clears them with the turn.
+
+Whether a bubble is in the open turn reaches the rows through a per-bubble
+context (`InOpenTurnContext`), not the turn-tail context, which changes on
+every thinking delta. "Unseen" is measured before paint as the row settles or
+mounts (a reload into an open turn, a remount), so a row laid out of view is
+never painted frozen, and after that by an `IntersectionObserver` on the
+scroller with no margin — so a row under the pinned bars still counts as seen
+and folds a little later, the safe direction (`useStepWindowFold`).
+
+- **Stop** ends the turn, so every frozen window folds at once, and an
+  interrupted row's line 2 takes its frozen latest child in that frame
+  ([above](#the-second-line-steps-and-what-it-is-doing)) — as it does at
+  whichever of the three moments its window folds.
 - **Failure** keeps its red line 1 and its why-line; its window folds by the
-  list's rule, never earlier.
+  same rule.
 - **Resume** — `SendMessage`, `sendInput` or `followupTask`
   ([status by status](#status-by-status)) — makes the row live again, and it
   grows its own window back: growth on a row that now says it is running, which
-  the reader should see. Its settled siblings do not regrow: the resumed run
-  started after they ended. A running subagent appended to the list later
-  regrows nobody's either. The resumed row's own window folds when that run
-  settles, unless a sibling that started before then is still live.
-- **A known gap:** after a Claude `SendMessage` resume settles, the row goes
-  back to what it said before ([status by status](#status-by-status)), its
-  `endedAt` included — the original spawn's. So if a sibling resumed alongside
-  it is still running, its frozen window folds early. That is the safe
-  direction; closing the gap would need settled resumes tracked as live ones
-  are.
+  the reader should see. Nobody else's regrows. When the resume settles, its
+  window is frozen like any other in the turn, wherever its row is.
+- **Reload** draws no frozen window the live view would already have folded:
+  a settled turn draws them all folded, and in the open turn a row that mounts
+  out of view folds before paint. A row in view may show its frozen window
+  where the live view had folded it while unseen, which is harmless.
+- **A background run that settles after its turn** is in no open turn, so it
+  folds as it settles; its notification is the boundary. One still live when
+  the next turn opens counts as live in that turn, and is kept frozen when it
+  settles there.
 
 #### Where it is drawn
 
@@ -3793,13 +3844,6 @@ in the window with `CircleHelp`, the card right under it.
 
 While a transcript layer covers the chat, the windows behind it change as they
 would, and the chat's anchor holds them on return, as for any growth.
-
-**Scroll anchoring needs nothing new.** The anchor is the last candidate that
-starts at or above the view's top
-([agent-chat.md](agent-chat.md#where-the-view-sits), `scrollAnchor.ts`), so a window growing or
-folding below that point moves nothing above it. Rows the reader watches below
-a growing window shift at most k lines over its life, plus one fold when the
-list settles.
 
 **`aria-hidden`, live and frozen alike.** It is a moving or duplicate view of
 steps the Process lists accessibly; the row's accessible name and its second
@@ -3828,6 +3872,16 @@ line are unchanged by it, and its glyphs' labels are not read.
   from the first ([above](#what-each-line-shows)).
 - **A preview on tap.** A tap to answer a question that has to be answerable at
   a glance — and that tap exists already: the body, the Process, then ⤢.
+- **Sizing by the viewport's height.** The keyboard changes it, and would
+  resize every window each time it opened.
+- **Reserving the window at spawn.** Parallel spawns stream in one by one, so
+  each arrival would resize the others' reserved windows: a flicker before any
+  step.
+- **Folding when the list's last sibling settles** (the rule this replaced: a
+  settled row kept its window while a sibling that had started before it ended
+  was live). A lone subagent, or the last of a list, folded in front of a
+  reader at the tail the moment it settled, and a Claude `SendMessage` resume,
+  which reports the original spawn's `endedAt`, folded early.
 
 ### Process
 
@@ -5176,15 +5230,17 @@ omission.
 | Tier | What changes |
 |---|---|
 | compact (<640) | the baseline described above, and a diff's line numbers in one narrow column |
-| `sm:` (640–1023) | `p-2` → `sm:p-2.5`, the [full screen](#full-screen) viewer's `p-3` / `px-3` → `sm:p-4` / `sm:px-4`, and nothing else |
+| `sm:` (640–1023) | `p-2` → `sm:p-2.5`, the [full screen](#full-screen) viewer's `p-3` / `px-3` → `sm:p-4` / `sm:px-4`, and a subagent's [step window](#how-many-lines) one line taller |
 | `lg:` (≥1024) | nothing — the transcript column does not change shape |
 
 A page's card is the one thing wider than the column, and it follows the pane's
 own width rather than a tier ([width](#a-page-the-agent-drew-html_render)).
 
-A subagent's [step window](#the-step-window) adds no tier either: at every
-width its glyph, title and elapsed figure keep their width and its detail
-truncates ([what yields](#what-each-line-shows)).
+The step window's extra line is the one count a tier decides — a phone's
+transcript is too short for the desktop's ([how many lines](#how-many-lines)).
+What each of its lines shows does not change: at every width its glyph, title
+and elapsed figure keep their width and its detail truncates
+([what yields](#what-each-line-shows)).
 
 **No width tier gets a second title line, a tooltip, or a wider truncation
 budget.** A rule like "wrap the command at `sm:`" makes the same call look like

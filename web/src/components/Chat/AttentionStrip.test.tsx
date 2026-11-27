@@ -237,7 +237,7 @@ describe("AttentionStrip", () => {
 			expect(onJumpToCall).toHaveBeenCalledWith("b");
 		});
 
-		// As the agents line's entries do (docs/turn-progress-ui.md#43-the-agents-line).
+		// As the agents panel's entries do (docs/turn-progress-ui.md#43-the-agents).
 		it("opens a subagent with work to show as its transcript", async () => {
 			const user = userEvent.setup();
 			const onJumpToCall = vi.fn();

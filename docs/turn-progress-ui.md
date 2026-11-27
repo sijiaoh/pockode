@@ -9,14 +9,18 @@ way. Two elements, one grammar:
   the turn runs: `Working 1m 4s`, or `Thinking… 1m 4s · <latest line>` while
   the agent is thinking. It is gone when the turn settles.
 
-Under the tail line, two more lines say what is running and how far the plan
-has come (§4):
+The same line also says what is running and how far the plan has come (§4),
+as two counts and one stretch of words, and a tap on it opens one panel with
+the details:
 
-- **The plan line** — the main agent's latest plan, `3/7 · Now: Writing the
-  retry tests`, opening on the checklist.
-- **The agents line** — the subagents still working, wherever their rows are,
-  `3 agents running · Explore  Read sender.go`, opening on a list that goes
-  to each one.
+```
+⟳ Working 3m 17s · ☑ 3/7 · ⧉ 2 · Now: Writing the retry tests  ›
+```
+
+- **The plan** — the main agent's latest plan: the `3/7` chip, and the panel's
+  checklist.
+- **The agents** — the subagents still working, wherever their rows are: the
+  `⧉ 2` chip, and the panel's list that goes to each one.
 
 When the turn settles, its work figures say what the work came to — `Worked
 2m 13s · 14 tool calls · 3 files changed`, at the turn's end: the header of
@@ -45,8 +49,8 @@ Ns* — that costs a line and gives the reader a pulse.
 **The tail line says one thing: the turn is producing, and for how long.** It
 never names a tool, a command, a file or a blocker. Those are said by the rows
 above it and by the attention strip below, and a second copy of any of them is a
-copy that can disagree (§5 has the boundary in full). The two lines under
-it that do name agents and a plan (§4) are not copies: they read the same
+copy that can disagree (§5 has the boundary in full). The chips and words
+in it that do name agents and a plan (§4) are not copies: they read the same
 state the rows are drawn from, through the same wording.
 
 **Thinking is a part of the reply, stored as a record; "is it thinking right
@@ -216,8 +220,8 @@ non-empty, that one is the body, unlabelled. Nothing is dropped and nothing is
 labelled twice.
 
 Nothing opens the row but the user, and nothing closes what they opened — the
-list's `rowExpansionContext` rule. A tail line the user opened while it said
-`Thinking…` (§2.3) settles into a row that is open.
+list's `rowExpansionContext` rule. A thinking that settles while the status
+line's panel is open on its text (§2.3) settles into a row that is open.
 
 ### 1.4 Redacted and empty thinking
 
@@ -304,36 +308,41 @@ There is at most one reply being written, so there is at most one tail line:
 
 **Its row** is drawn bare, as a thinking alone in its list is (§1.2): the glyph
 on the reply text's left edge, where the turn-end row's first icon will stand,
-so the line settling into that row makes no sideways jump. Its height is the
-turn-end row's (both hold `min-h-9`, `pointer-coarse:min-h-11`), and **the slot
-keeps that height while the line is hidden**: when the turn blocks and
-resumes, nothing above or below moves; when the turn settles, the turn-end
-row, when it draws one, takes the same height.
+so the line settling into that row makes no sideways jump.
 
-**The slot holds more than this line.** The plan line and the agents line
-(§4) are drawn in the same slot, under the tail line or under the space it
-keeps. They come and go on their own conditions, never on the phase. When the
-turn settles, the tail line's height passes to the turn-end row as above, and
-the plan line goes. The agents line stays only while a backgrounded subagent
-outlives the turn (§4.3), and then it stands *above* the turn-end row of the
-last assistant message. Settling therefore moves the turn-end row down by the
-turn's changes card and the agents line, at the tail, where only an unread message can be below it.
+**The slot holds exactly one line for the whole open turn**, the turn-end
+row's height (both hold `min-h-9`, `pointer-coarse:min-h-11`), in every phase —
+running, either block, the placeholder — whatever the line shows or whether it
+shows at all. The plan and the agents (§4) are chips inside that line, not
+lines of their own, so they come and go on their own conditions and move
+nothing; a turn that blocks and resumes moves nothing; and when the turn
+settles the turn-end row takes the same height. An agents chip that outlives
+the turn moves to the right end of that row (§4.3), in the slot the work
+figures otherwise hold, and the figures take it when the chip goes. One slot,
+not two side by side: beside Copy and Fork a phone's row has room for one of
+them ([tool-call-ui.md](tool-call-ui.md#the-work-figures) measures it), so
+both would truncate, and the figures would slide sideways when the chip left;
+and the chip is live where the figures are history. The swap moves nothing,
+since the row's height is fixed. What settling does add is the turn's changes
+card, above that row, when the turn changed files
+([tool-call-ui.md](tool-call-ui.md#the-turns-changes)) — at the tail, where
+only an unread message can be below it.
 
 ### 2.2 When it shows
 
 While the session's activity is `running`
 ([lifecycle-ui.md §1.1](lifecycle-ui.md#11-activity)) — `turn.phase == running`
 — and, before the server has said so, while the optimistic placeholder is up.
-Nothing else shows the tail line and nothing else hides it. The two lines
-under it have their own rules (§4.2, §4.3), and the table below is about the
-tail line alone.
+Nothing else shows the tail line and nothing else hides it. The chips have
+their own rules (§4.2, §4.3) and outlast a block; the table below is about the
+spinner, the label and the clock.
 
 | Turn | Slot | Who says it instead |
 |---|---|---|
 | `idle` | the turn-end row | — |
 | `running` | the tail line | — |
-| `blocked(permission)` | empty, height kept — on a reload too | the attention strip's permission row and the card |
-| `blocked(background)` | empty, height kept — on a reload too | the attention strip's background row |
+| `blocked(permission)` | the chips alone, if any; else empty — height kept, on a reload too | the attention strip's permission row and the card |
+| `blocked(background)` | the chips alone, if any; else empty — height kept, on a reload too | the attention strip's background row |
 | placeholder up, server not yet reporting | `Working`, no clock | — |
 
 **Under `blocked` this changed what was drawn before**: the turn-end row's
@@ -344,7 +353,7 @@ two-hour background wait is exactly what
 the wait instead. When the turn goes back to `running` the line comes back with
 the turn's clock, which kept running underneath.
 
-**A reload keeps the slot empty during either wait**, as live does: the
+**A reload keeps the spinner, label and clock off during either wait**, as live does: the
 subscribe-time settle leaves the reply of an open turn `streaming`, whatever it
 is blocked on
 ([lifecycle-ui.md §2.4](lifecycle-ui.md#24-recovering-a-dangling-turn-after-a-restart)
@@ -359,8 +368,25 @@ taking turns.
 | State | Glyph | Label | Clock | After the clock |
 |---|---|---|---|---|
 | working | `Spinner`, `text-th-accent` | `Working` | turn clock | — |
-| thinking | `Spinner`, `text-th-accent` | `Thinking…` | turn clock | `·` and the latest line, when there is text; then the chevron |
-| waiting for output | `Spinner`, `text-th-accent` | `Waiting for output…` (`Reading output…` for a fetch that does not wait) | turn clock | `·` and `Go to call` |
+| thinking | `Spinner`, `text-th-accent` | `Thinking…` | turn clock | the latest line, as the free text below, when there is text |
+| waiting for output | `Spinner`, `text-th-accent` | `Waiting for output…` (`Reading output…` for a fetch that does not wait) | turn clock | `Go to call`, beside the line |
+
+**The rest of the line.** After the label and the clock come the plan chip
+(`ListChecks` and `3/7`), when there is a plan (§4.2), and the agents chip
+(`Bot` and the live count), while an agent is live (§4.3), or at `0` while
+the open panel still lists agents that settled — so an open panel always has
+its line to be closed by, a blocked one included — both
+`text-th-text-secondary`, `tabular-nums`, and never giving way. Then one
+stretch of muted free text, from exactly one source, the first that has
+something: the plan's words (`Now: … +1`, `Next: …`, `All done`); the latest
+thinking line, while the agent is thinking and the thinking has text; the
+named agent and what it is doing now (§4.3). The plan outranks the thinking:
+codex switches between working and thinking around nearly every call, and a
+thinking line on top would flip the words several times a minute. Each part
+stands behind a muted `·` that goes with it. The free text gives way first;
+the label truncates only once it is gone; the clock and the chips never do.
+While blocked there is no label and no spinner, and the line leads with its
+first chip.
 
 **When it says `Waiting for output…`** — while the
 main agent's newest call is a `TaskOutput` filed under the call it reads and
@@ -374,8 +400,9 @@ It names no call, no command and no
 task — the line's rule holds: it says what the turn is doing, which is waiting.
 `Go to call` is the transcript's jump to the row the fetch is filed under
 ([tool-call-ui.md](tool-call-ui.md#from-a-file-to-the-calls-that-changed-it)),
-a text button in `text-th-accent` with a `touch-target` hit area; the rest of
-the line is not a button. A fetch that kept a row of its own is a running row
+a text button in `text-th-accent` with a `touch-target` hit area. It stands
+beside the line rather than in it, since the line may itself be a button. A
+fetch that kept a row of its own is a running row
 at the tail and leaves the line at `Working`. A subagent's fetch is not the main
 agent's and does not move it (§3).
 
@@ -426,11 +453,13 @@ sees the words become `Thought for 12s` and a fresh `Working` line appear under
 them. Inside a formed group the row folds into the summary at once — its
 `Thought for …` entry grows — unless the user had opened it.
 
-**While it has text, the line is a disclosure** like the row it will become: the
-whole line becomes the button (so the tap target is the line, not the chevron),
-a chevron appears after the latest line, and a tap opens the text so far below
-the line, growing in place, in the body a settled thinking opens on (§1.2) — so
-a body opened while `Thinking…` looks the same once it is `Thought for 12s`.
+**The line is a disclosure whenever its panel has a section** (§4): a plan,
+agents, or thinking with text. The whole line is the button (so the tap target
+is the line, not the chevron), the chevron is last, and a tap opens the panel
+below the line, in place. Otherwise it is the same box, static, so gaining or
+losing the toggle moves nothing. The thinking's section, *Thinking so far*,
+holds the body a settled thinking opens on (§1.2) — so a body opened while
+`Thinking…` looks the same once it is `Thought for 12s`.
 Only the end it is cut from differs: live, each text is read from its newest
 line — cut and faded at its top, its button above it — and, uncut or
 opened, follows that line as it grows, as *Output so far* does
@@ -451,9 +480,10 @@ counts on from when it received it — not `since`, which is the current
 *phase's* start and resets on every block and resume. Because the reading comes
 from the server, a reload or a reconnect mid-turn shows the same clock it would
 have shown anyway. It ticks every second at every length (`1m 4s` must not sit
-for a minute, so this is its own tick, not the tool counter's minute-long one)
-and is not shown under 3s, like a tool row's. Without a reading the clock is
-left out and `Working` stands alone — the strip's rule for `since`.
+for a minute), on the one tick every live call's counter reads too
+([tool-call-ui.md](tool-call-ui.md#live-run)), so the clocks on screen change
+together, and is not shown under 3s, like a tool row's. Without a reading the
+clock is left out and `Working` stands alone — the strip's rule for `since`.
 
 ### 2.4 Reconnecting, reloading, restarting
 
@@ -477,15 +507,18 @@ are its pulse
 A subagent thinking does not move the main tail line to `Thinking…`: the main
 line speaks for the main agent, and the subagent's row is where its work is
 being described. Which subagents are still running, wherever their rows are, is
-the agents line's (§4.3), and it is read from the same runs.
+the agents chip's (§4.3), and it is read from the same runs.
 
 ## 4. What is running, and the plan
 
 ```
 … the last rows of the reply being written …
-⟳ Working 4m 12s                                       ← the tail line (§2)
-☑ 3/7 · Now: Writing the retry tests                 › ← the plan line
-⧉ 3 agents running · Explore  Read sender.go         › ← the agents line
+⟳ Working 4m 12s · ☑ 3/7 · ⧉ 3 · Now: Writing the retry tests  ›
+┌ (a tap) ─────────────────────────────────────────────────────┐
+│ Plan · 3/7          the checklist                            │
+│ Agents · 3 running  an entry per agent                       │
+│ Thinking so far     while the agent is thinking, with text   │
+└──────────────────────────────────────────────────────────────┘
 ```
 
 Parallel and background subagents had no overview. Nothing counted them or
@@ -494,63 +527,78 @@ subagent's row sits wherever it was spawned, often several screens above,
 while the conversation goes on under it. A plan was only a new `TodoWrite` row
 per update, so following one on a phone meant scrolling back to the newest
 row and opening it. Claude Code's agent panel and Codex's subagent panel exist
-for this; these two lines are Pockode's answer, and the plan's rows stay in the
-transcript as its history.
+for this; the two chips and their panel are Pockode's answer, and the plan's
+rows stay in the transcript as its history.
 
 ### 4.1 Where they go, and the rules they change
 
-**In the tail slot, under the tail line.** Not in a bar fixed above the
-composer:
+**In the tail line.** Not in a bar fixed above the composer, and not in
+lines of their own:
 
 - **The fixed area is the tightest space there is.** On a 375×560 phone with
   the keyboard up the transcript has about 87px left
   ([lifecycle-ui.md §2.2](lifecycle-ui.md#22-chat-the-attention-strip)), and
-  the attention strip is one row by rule. A bar of one or two more lines,
-  standing for as long as an agent runs, would take that space for the whole
-  turn.
+  the attention strip is one row by rule. A bar standing for as long as an
+  agent runs would take that space for the whole turn.
 - **The tail is where a reader of a live turn already is.** The transcript
   follows the tail while the reader stays there, and the scroll-to-bottom
   button brings them back to it from anywhere in one press.
+- **Lines of their own cost too much.** A plan line and an agents line under
+  the tail line took ≈100px more on touch — ≈140px with the tail line — of a
+  ≈400px phone transcript for the whole turn, and the agents line repeated,
+  word for word, the subagent row right above it. As chips in the one line
+  they cost no height, and the details are one tap away in the panel.
 - **The case where the reader is *not* at the tail has its own answer.** That
   case is a turn parked on background work, often for an hour. The strip's
   background row, which is fixed, names what the turn is waiting on (§4.5).
 
-**Below the tail line, not above it.** A settled thinking lands directly above
-the tail line, and `Thinking…` has to turn into `Thought for 12s` in place
-(§2.3). A line between the two would split them.
-
 **What this keeps, and what it changes on purpose:**
 
-- **The tail line still says one thing.** It still names no call. The two lines
-  under it do name agents and plan items, and that does not break the rule's reason (a
-  second copy is a copy that can disagree). They are not copies: the agents line
-  reads the same `ToolRun`s the rows are drawn from, worded by the same
-  functions as the rows (`toolSummary`, the subagent row's latest child), and
-  the plan line reads the same plan that the plan rows carry (`ToolRun.plan`,
-  §4.6). §5 has the
-  updated boundary.
-- **Hidden while blocked still holds for the tail line only.** The tail line
-  says "producing", which a blocked turn is not. The plan line and the agents
-  line say nothing about the turn producing: the plan is what the agent said
-  its plan is, and the agents line lists runs that really are live. A
-  background wait is when the agents line is needed most. So a block hides
-  neither: the plan line lasts as long as the open turn (§4.2), and the agents
-  line as long as an agent runs (§4.3). The tail line's
-  space is still kept while it is hidden, so a turn that blocks and resumes
-  moves nothing, which was the reason for keeping that space.
+- **The tail line still names no call.** Its chips and words do name agents
+  and plan items, and that does not break the rule's reason (a second copy is
+  a copy that can disagree). They are not copies: the agents chip reads the
+  same `ToolRun`s the rows are drawn from, worded by the same functions as the
+  rows (`toolSummary`, the subagent row's latest child), and the plan chip
+  reads the same plan that the plan rows carry (`ToolRun.plan`, §4.6). §5 has
+  the updated boundary.
+- **Hidden while blocked holds for the spinner, the label and the clock
+  only.** They say
+  "producing", which a blocked turn is not. The chips say nothing about the
+  turn producing: the plan is what the agent said its plan is, and the agents
+  are runs that really are live — and a background wait is when they are
+  needed most. So a block hides neither: the plan chip lasts as long as the
+  open turn (§4.2), and the agents chip as long as an agent runs (§4.3).
 - **Measured numbers only, as before.** `3/7` counts plan items, and
-  `3 agents` counts live runs. An agent's elapsed time is its row's own counter,
+  `⧉ 3` counts live runs. An agent's elapsed time is its row's own counter,
   left out where its row leaves it out (no `seenAt`). There is no percentage,
   no time remaining and no guessed number of steps.
+
+**The panel.** One `BareBody` under the line, in a `CollapsibleBody`, with
+up to three sections in a fixed order, each under a muted heading and divided
+by `divide-th-border`: *Plan · 3/7* (§4.2), *Agents · 2 running* (§4.3),
+*Thinking so far* (§2.3). Thinking is last because it comes and goes around
+nearly every codex call, and at the bottom that moves nothing but what is
+under the panel.
+
+**Who holds "open".** The line is outside any `ToolList`, so
+`rowExpansionContext` has nothing to hold it in, and the line moves to a new
+bubble at every read point, which remounts it. So one flag sits in
+`useTurnOverview`, which `useChatMessages` calls and hands on as
+`TurnTail.panel` (`{ expanded, onToggle }`). Only the user opens it. It
+closes when the turn settles, when the next turn opens, on another session,
+and when its last section goes — not when one of several does, such as the
+agent clearing its list. A panel left open with nothing in it would open by
+itself on whatever came next: the next thought, around nearly every codex
+call.
 
 **Live state from state, history from history.** Whether an agent is running is
 the reducer's `ToolRun.status`, the one value every subagent row is drawn from
 ([code/frontend-state.md](code/frontend-state.md#tool-runs)). Nothing here reads
 "running" off a record. The plan is the other case: it is something the agent
 said at one moment, so it is a record (§4.6), and the newest one *is* the
-current plan. The line reads the record and stores nothing about it.
+current plan. The chip reads the record and stores nothing about it.
 
-### 4.2 The plan line
+### 4.2 The plan
 
 **Which plan.** The newest main-agent plan, by record order (§4.6), in a reply of the **open
 turn**, read while a turn is open (`turnOpen`, which also counts a send the
@@ -566,19 +614,18 @@ naming its parent, and either way it is not the main plan, with one exception
 for Claude's Task tools, whose records are filed on a top-level run (below).
 If the turn's
 first reply is on a page that is not loaded, its plans are not either, and the
-line shows what is loaded. The line goes when the turn settles, with the tail
-line:
+chip shows what is loaded. It goes when the turn settles, with the tail line:
 
 - **A plan from an earlier turn does not show.** Claude's task list outlives
   the turn and Codex's plan sits in the model's context, but "Now: Writing
   tests" at the top of a new turn the agent has not planned yet would claim
-  something nobody said this turn. The line comes back with the turn's first
+  something nobody said this turn. The chip comes back with the turn's first
   update. Between turns there is nothing "now" about a plan: the rows hold it,
   and the work figures say what the turn did.
 - **A subagent's plan is its own.** A Codex plan update from a child thread is
   a `Plan` row in that subagent's Process. A Claude subagent's `TodoWrite`
   produces no record (§4.6): its rows in its Process are its plan's history.
-  Neither reaches this line.
+  Neither reaches the chip.
 - **Except Claude's task list, which is the session's.** On claude 2.1.330
   every agent in a session writes the same task list, so a subagent's
   `TaskCreate` / `TaskUpdate` / `TaskList` change the main plan. Their record
@@ -588,19 +635,19 @@ line:
   spawned it, in an earlier turn's reply, so a top-level run outside the open
   turn counts too, for a record newer than the user message that opened the
   turn (its `anchorSeq`). Without that seq, only the turn's own replies count.
-- **No plan, no line.** That includes every Claude 5 session on claude 2.1.330,
-  which offers no plan tool to those models (§4.6). The line is not reserved
-  while it is empty.
+- **No plan, no chip.** That includes every Claude 5 session on claude 2.1.330,
+  which offers no plan tool to those models (§4.6).
 
-**What it says:**
+**What it says** — the chip, then the free text when the plan has its words
+(§2.3):
 
-| Plan | Line |
+| Plan | Chip and words |
 |---|---|
 | one item in progress | `3/7 · Now: Writing the retry tests` |
 | several in progress | the first, then a muted `+N`: `3/7 · Now: Writing tests +1` |
 | none in progress, some pending | `3/7 · Next: Update the docs`, the first pending item |
 | every item completed | `7/7 · All done` |
-| no items (the agent cleared the list) | no line |
+| no items (the agent cleared the list) | no chip, no section |
 
 - **The count is completed / total.** Items Claude marked `deleted` are not in
   the plan at all (§4.6).
@@ -608,36 +655,22 @@ line:
   continuous the CLI shows while the item runs) when it is in progress and has
   one. Otherwise they are its `text`. `Next:` always uses `text`, since nothing
   is happening on that item yet.
-- **Its shape.** It is a `BareRow`, as the tail line is: lucide `ListChecks` at
-  `size-3` in `text-th-text-muted` on the text's left edge, then `3/7` in
-  `text-th-text-secondary` `tabular-nums` `shrink-0`, a muted `·`, `Now:` or
-  `Next:` muted and `shrink-0`, the item truncating, and the chevron after it.
-  Everything is `text-xs`, and the height is the tail line's
-  (`min-h-9`, `pointer-coarse:min-h-11`). The count and the label never give
-  way; only the item does.
+- **Its shape.** Lucide `ListChecks` at `size-3` in `text-th-text-muted`,
+  then `3/7` in `text-th-text-secondary` `tabular-nums` `shrink-0`. The count
+  never gives way; the words are the line's free text and give way first.
 - **An update changes the words in place.** There is no animation and no
-  highlight. The line moves only when it appears or goes, at the tail. The
-  only thing that can be under it is a mid-turn message not read yet (§2.1),
-  which moves down by a line, as it does whenever the reply above it grows.
+  highlight, and the chip coming or going moves nothing but the words after
+  it.
 
-**A press opens the checklist in place** (`CollapsibleBody`, then `BareBody`,
-the box a thinking opens in, §1.2). It holds the checklist the `TodoWrite` row's
+**The panel's first section, *Plan · 3/7*,** holds the checklist the `TodoWrite` row's
 body already draws (`kind: "todos"` in `ToolInvocation`: a status icon per item,
 done items struck through), so the plan reads the same on the row and here. A
 Codex `explanation`, when it is not empty, comes first as one muted paragraph.
 The checklist is never cut, as on the row
 ([tool-call-ui.md](tool-call-ui.md#budgets)). While open it follows each new
-record. Only the user opens or closes it, and it stays open across updates.
+record, and stays open across updates.
 
-**Who holds "open".** The line is outside any `ToolList`, so
-`rowExpansionContext` has nothing to hold it in, and the line moves to a new
-bubble at every read point, which remounts it. So it sits in
-`usePlanOverview`, which `useChatMessages` calls and hands on as
-`TurnTail.plan` (`{ plan, expanded, onToggle }`; the agents line's state is the
-same, §4.3). It resets when the line goes: the turn settling, another session,
-or the agent clearing its list, so a later plan does not open by itself.
-
-### 4.3 The agents line
+### 4.3 The agents
 
 **Which agents.** Every **top-level subagent run** in the loaded transcript
 whose `status` is `running` or `background`, each taken as its row draws it —
@@ -648,7 +681,7 @@ named as live:
 
 - **A subagent run** is a call the `TaskItem` renderer draws: Claude's `Task` /
   `Agent`, or a Codex spawn (`spawnAgent`, `subAgentActivity`). Both CLIs reach
-  the reducer as the same `ToolRun`, so this line has no per-engine branch.
+  the reducer as the same `ToolRun`, so the chip has no per-engine branch.
 - **Top-level** means a part in a reply's own content with no
   `parentToolUseId`. That excludes runs filed under another subagent, and also
   runs left flat with a `parentToolUseId`, whether their parent is not loaded or
@@ -657,15 +690,19 @@ named as live:
   one step of its parent's
   ([tool-call-ui.md](tool-call-ui.md#a-subagents-own-work)), and it shows as
   that parent's latest child.
-- **Phase-independent.** The line is drawn whenever that set is not empty: in
+- **Phase-independent.** The chip is drawn whenever that set is not empty: in
   any phase of an open turn, including both waits, and also after the turn
   settles while a backgrounded subagent outlives it (a turn whose background
   budget ran out goes idle with its tasks still going,
   [code/frontend-state.md](code/frontend-state.md#tool-runs)). In that last
-  case there is no reply being written, so the line goes in the turn-end slot of
-  the **last assistant message in the transcript**, above its turn-end row (the
-  run may be in an older reply, and the line is about now, not about that
-  reply). It is the same line in a different slot. It leaves when the run
+  case there is no reply being written, so the chip, with the named agent as
+  its words — `⧉ 1 · code-reviewer  Checking the 503 path… ›` — goes on the
+  **right end of the turn-end row** of the **last assistant message in the
+  transcript** (the run may be in an older reply, and the chip is about now,
+  not about that reply), and opens a panel of the agents alone. That end is
+  the work figures' slot when the turn changed no file, and the chip holds it
+  in their place (§2.1). With no Copy or Fork on that row it stands alone in
+  the same box. It leaves when the run
   settles: by its notification, or at the latest by `process_ended`, which the
   restart repair writes at the next server start if the server died without
   writing one
@@ -674,43 +711,42 @@ named as live:
 **What it says:**
 
 ```
-⧉ 3 agents running · Explore  Read sender.go              ›
-⧉ 1 agent running · code-reviewer  Checking the 503 path…  ›
+⟳ Working 4m 12s · ⧉ 3 · Explore  Read sender.go           ›
+⟳ Working 4m 12s · ⧉ 1 · code-reviewer  Checking the 503 path…  ›
 ```
 
-- `{n} agent running` / `{n} agents running`, in `text-th-text-secondary`,
-  `shrink-0`. Then a muted `·` and the **named agent**: its title in
-  `text-th-text-secondary`, as the row's title (the agent, without the row's
+- The live count behind `Bot`, in `text-th-text-secondary`, `shrink-0`. Then,
+  when neither the plan nor the thinking has words (§2.3), the **named
+  agent**: its title, as the row's title (the agent, without the row's
   45% cap; the line has its own truncation), then **what it is doing now**.
-  That is `subagentNow(run, unfiled)` in `web/src/lib/subagentRun.ts`: the latest child (`unfiled?.latest ??
-  latestChild(run.children)`), else `subagent_progress.last_tool_name` as a
+  That is `subagentNow(run, unfiled)` in `web/src/lib/subagentRun.ts`: the
+  latest child (`unfiled?.latest ?? latestChild(run.children)`), else `subagent_progress.last_tool_name` as a
   bare call, else nothing. `subagentLine` builds its live `tail` from the same
   function, so the row and the line cannot word it differently. The row then
   adds its last fallback, `run.activity`, which for a subagent is
   `Running <description>`, the row's own detail again
   ([tool-call-ui.md](tool-call-ui.md#the-second-line-steps-and-what-it-is-doing)).
-  The line does not take that fallback. The line passes the `unfiled` children
+  The line does not take that fallback. It passes the `unfiled` children
   the row passes (`useUnfiledChildren`). A call is worded by its title and
   `Detail`, a text by its first line. When `subagentNow` returns nothing, the
-  line stops at the named agent's title (`3 agents running · Explore`).
+  words stop at the named agent's title (`⧉ 3 · Explore`).
 - **The named agent is the last live one in transcript order**, which is the
   one spawned most recently. It is not ordered by `startedAt`, which a
   permission answer can move and old records lack. It changes only
   when an agent starts or ends, not on every step. "Whichever moved last" would
   flip between three parallel agents several times a second, on a line nobody
   can read at that rate. Each agent's own progress is on its entry and its row.
-- **The glyph is lucide `Bot` in `text-th-text-muted`, not a spinner.** The
-  tail line is already spinning above it and the agents' rows spin, so a third
-  spinner adds nothing. `Bot` is the subagent mark the rows already carry. The
-  line does not spin during a background wait either; the rows do.
-- Its shape, height, truncation and chevron are the plan line's: the count
-  never gives way, the agent's title gives way after the child, and the child
-  gives way first.
+- **The chip's icon is lucide `Bot` in `text-th-text-muted`, not a spinner.**
+  The line's glyph already spins and the agents' rows spin, so a third spinner
+  adds nothing. `Bot` is the subagent mark the rows already carry.
+- The count never gives way. As the line's free text (§2.3), the agent's title
+  gives way after the child, and the child gives way first; the title truncates
+  with an ellipsis.
 
-**A press opens the list in place**, in a `BareBody`:
+**The panel's agents section** lists them:
 
 ```
-⧉ 3 agents running · Explore  Read sender.go              ⌄
+⟳ Working 4m 12s · ⧉ 3 · Explore  Read sender.go            ⌄
 ┌──────────────────────────────────────────────────────────┐
 │ ⟳ ⧉ Explore   Find retry handling                   47s  │
 │     6 tool uses · Grep "Retry-After" in server/          │
@@ -733,21 +769,20 @@ named as live:
   `ToolRun`, the entry and the row cannot say different things.
 - **Order is transcript order**, the order of the rows. It is stable, so an
   entry never changes place under a finger.
-- **An entry that settles while the list is open stays** where it is, settled:
-  its glyph and second line become what its row became. Entries leave only when
-  the list is closed. The line's count counts live runs only, so the line and
+- **An entry that settles while the panel is open stays** where it is,
+  settled: its glyph and second line become what its row became. Entries leave
+  only when the panel is closed. The chip counts live runs only, so the chip and
   the list can disagree for that moment, and the list shows why. A list that
   dropped an entry the moment it finished would move every entry below it under
-  a press. When the last live agent ends while the list is open, the line reads
-  `No agents running` and stays until the user closes it. Two other things end
-  it: the turn settling, when the line is in the tail slot, or the next turn
-  opening, when it stood above a turn-end row after the turn. In both cases the
-  line moves or goes, and the list closes with it.
-- **Who holds it.** Whether the list is open, and the ids it shows while
-  open, sit in `useAgentsOverview`, which `useChatMessages` calls and hands
-  on as `TurnTail.agents`, beside `TurnTail.plan` and for the same reason
-  (§4.2): the line moves between bubbles and slots, which remounts it. Both
-  reset when the line goes.
+  a press. When the last live agent ends while the panel is open, the section
+  stays, headed *Agents · none running*, and the chip with it at `⧉ 0`, until
+  the user closes the panel; after the turn, the chip on the turn-end row
+  reads `⧉ 0 · No agents running`. The panel closing with the turn, or with
+  the next turn opening (§4.1), takes the list with it.
+- **Who holds it.** The ids the list shows while the panel is open sit in
+  `useAgentsOverview`, which reads the panel's flag (§4.1) and is handed on
+  as `TurnTail.agents`, for the same reason: the line moves between bubbles
+  and slots, which remounts it.
 
 - **A press on an entry opens the subagent's transcript**
   ([subagent-transcript-ui.md](subagent-transcript-ui.md)), the layer its row's
@@ -770,27 +805,30 @@ named as live:
   construction: it is a run in the reducer, and the reducer holds only loaded
   pages.
 
-**Where the two lines are derived and drawn.** `useChatMessages` builds the
-`TurnTail` value. It calls `usePlanOverview` and `useAgentsOverview` over the
-messages and the send-aware `turnOpen`, and the derivations they use live in
+**Where the plan and the agents are derived and drawn.** `useChatMessages`
+builds the `TurnTail` value. It calls `useTurnOverview` over the messages and
+the send-aware `turnOpen`, which holds the panel's flag and calls
+`currentPlan` and `useAgentsOverview`; the derivations live in
 `web/src/lib/turnOverview.ts`. It adds one more field, `overviewMessageId`
 (`overviewMessageId()` there): the id of the assistant message whose slot draws
-the lines. The id is worked out outside the `TurnTail` memo, which then depends
+the chips. The id is worked out outside the `TurnTail` memo, which then depends
 on the id rather than on `messages`, because the tail is a context every
 bubble's slot reads. It is:
 
 - the open bubble (`openAssistantIndex`), while a turn is open;
 - otherwise, the last assistant message in the transcript, while an agent is
-  live **or the agents list is open** (`agents.expanded`), so that
-  `No agents running` can stay until it is closed;
+  live **or the panel is open** (`panel.expanded`), so that
+  `⧉ 0 · No agents running` can stay until it is closed;
 - otherwise, none.
 
-`TurnOverview` reads the context and renders both lines.
-`MessageItem` draws it in exactly one place, the slot of the message whose id
-is `overviewMessageId`. In the pending branch it goes under `TurnTail`. That
-branch draws a `TurnTail` for every pending bubble, including a superseded one
-still `streaming`, so the id check is what keeps the lines in one bubble. In the
-settled branch it goes above `MessageActions`. Because it comes
+`TurnTail` reads the context and draws the chips and the panel only in the
+slot of the message whose id is `overviewMessageId`. `MessageItem` draws a
+`TurnTail` for every pending bubble, including a superseded one still
+`streaming`, so the id check is what keeps them in one bubble. In the settled
+branch `SettledTurnEnd` draws the changes card when the turn changed files,
+then `TurnEnd`, which draws `MessageActions` and, on that one message only,
+hands it the agents chip as `aside` — the row's right end, which
+`MessageActions` fills with `aside ?? figures`. Because it comes
 through the context, the plan or an agent changing re-renders the one slot
 that shows them and no other bubble (the reason `TurnTailContext` exists). An
 entry is drawn from the run itself, the object the reducer holds — taken as its
@@ -798,28 +836,26 @@ row draws it, a resumed one on its resume.
 
 ### 4.4 Phone and desktop
 
-Nothing depends on width, as in the rest of this document (§7). Each line is
-one line at every tier. Its count and label never give way and the rest
-truncates. Both bodies open in place at every tier, under their line:
+Nothing depends on width, as in the rest of this document (§7). There is one
+line at every tier, and its counts never give way: at 320px it reads
+`⟳ Waiting for o… 1h 12m · ☑ 12/14 · ⧉ 3 ›  Go to call` — the halves that
+answer "how long", "how far" and "how many" survive. The panel opens in place
+at every tier, under the line:
 
 - **Not a sheet, not a popover.** On a desktop a sheet is narrower than the
   column being read (the changes card's reason). A popover over the transcript
   would cover the rows it lists. At the tail, opening in place pushes nothing
   down.
-- **The two lines stay separate at every width.** On a desktop they would fit
-  on one line, but one line on a desktop and two on a phone is a second layout
-  to keep true for the sake of 36px. Each line is one fact, and each opens one
-  body.
-- **Touch floor** `pointer-coarse:min-h-11` on both lines and on every entry.
-  Nothing is behind hover. At 320px the lines read `3/7 · Now: Writ…` and
-  `3 agents running · Expl…`: the halves that answer "how far" and "how many"
-  survive.
+- **One line at every width.** Merging the lines only on a phone (§4.1) would
+  be a second layout to keep true.
+- **Touch floor** `pointer-coarse:min-h-11` on the line and on every entry.
+  Nothing is behind hover.
 
 ### 4.5 Naming what a background wait waits on
 
 The strip's background row
 ([lifecycle-ui.md §2.2](lifecycle-ui.md#22-chat-the-attention-strip)) names
-what the turn waits on, from the same reducer state the agents line reads: the runs whose `status` is
+what the turn waits on, from the same reducer state the agents chip reads: the runs whose `status` is
 `background`, not counting those filed under another `background` run (the
 outer one stands for them). Any tool counts here, not only subagents, because a
 backgrounded `Bash` holds the turn just as a subagent does. `AttentionStrip`
@@ -895,7 +931,7 @@ binary, not from docs):
 - With `CLAUDE_CODE_ENABLE_TASKS=false`, `TodoWrite` is on instead.
 - Either set is offered only to models up to the 4.x line, or when the host's
   tool list names one of them, or with `CLAUDE_CODE_ENABLE_TODO_TOOLS`. A
-  Claude 5 model under Pockode's flags gets neither, so it has no plan line.
+  Claude 5 model under Pockode's flags gets neither, so it has no plan chip.
 
 **Per producer:**
 
@@ -1035,7 +1071,7 @@ and each `TaskList` replaces the seed with it.
 
   It is drawn because nothing else in the transcript says that Codex planned.
 
-**What the plan line reads** is the `ToolRun.plan` latest in record order
+**What the plan chip reads** is the `ToolRun.plan` latest in record order
 among the top-level runs §4.2 reads (the open turn's replies, and a resumed
 subagent's earlier spawn), whichever CLI wrote it. This is record order, not call order. With the fold every record is a
 cumulative snapshot, and when two calls' results come back in the other order,
@@ -1044,24 +1080,24 @@ as every persisted record's does, and is the record's place (`order`). A
 record with no `seq` (one the server could not persist) can only have arrived
 live, so it is placed just after what was loaded when it arrived: newer than
 that, and older than every record persisted after it. Ranking it above every
-`seq` instead would keep a stale plan on the line for the rest of the turn. How
+`seq` instead would keep a stale plan on the chip for the rest of the turn. How
 the reducer works out that place, and why it reads the `seq` off the record
 rather than from its caller, is in
 [code/frontend-state.md](code/frontend-state.md#a-plan-filed-on-the-call-that-wrote-it).
 
 ### 4.7 Reconnecting, reloading, and both CLIs
 
-| What happened | Plan line | Agents line |
+| What happened | Plan chip | Agents chip |
 |---|---|---|
 | reload / reconnect mid-turn | the newest plan record in the open turn's loaded replies | from the replayed runs: `status` replays, so the set is right from the first frame; second lines fill in from the subscribe reply's newest activity per call, as the rows do |
 | the turn blocks on a permission or a background task | stays | stays |
 | the turn settles | goes | goes, unless a background subagent is still live (§4.3) |
-| Stop | goes with the turn | foreground runs settle `interrupted` as the turn ends. Background runs settle as Stop's stop notifications for them arrive, or with `process_ended` ([code/agent-integration.md](code/agent-integration.md#stop-ends-the-background-work-too)), and the line goes when the last one does |
-| the server restarted mid-turn | the turn is gone, and the line with it | foreground runs settle against the turn ([lifecycle-ui.md §2.4](lifecycle-ui.md#24-recovering-a-dangling-turn-after-a-restart)). Settling against the turn leaves `background` runs alone; they settle on the `process_ended` the restart repair writes. The line goes when they do |
-| Claude, a Claude 5 model | no plan tools, no line (§4.6) | as everywhere |
+| Stop | goes with the turn | foreground runs settle `interrupted` as the turn ends. Background runs settle as Stop's stop notifications for them arrive, or with `process_ended` ([code/agent-integration.md](code/agent-integration.md#stop-ends-the-background-work-too)), and the chip goes when the last one does |
+| the server restarted mid-turn | the turn is gone, and the chip with it | foreground runs settle against the turn ([lifecycle-ui.md §2.4](lifecycle-ui.md#24-recovering-a-dangling-turn-after-a-restart)). Settling against the turn leaves `background` runs alone; they settle on the `process_ended` the restart repair writes. The chip goes when they do |
+| Claude, a Claude 5 model | no plan tools, no chip (§4.6) | as everywhere |
 | Codex | `turn/plan/updated` | spawns are subagent runs. Codex has no background runs, so nothing waits in a background wait |
 
-**A live run on a page that is not loaded is not counted.** The line counts
+**A live run on a page that is not loaded is not counted.** The chip counts
 what this transcript holds, the way every surface built on the reducer does.
 The case is a backgrounded subagent started more than a page of history ago in
 a long session. Its row is not on screen either, and the strip's background row
@@ -1073,16 +1109,14 @@ is exactly what §4.1 rules out.
 
 ### 4.8 Accessibility
 
-- **The plan line** is a `<button>` with `aria-expanded`. Its name is a
-  sentence that does not depend on the truncation: *"Plan, 3 of 7 done, now
-  Writing the retry tests"* (*"… and 1 more"* when several are in progress;
-  *"next …"*, *"all done"*). It is not a live
-  region. A plan update is not something to read out unasked, and the tail
-  line's status already says the agent is running.
-- **The agents line** is a `<button>` with `aria-expanded`, named by its count
-  alone: *"3 agents running"*. The named agent and its latest child change while
-  live, so that half is `aria-hidden`, by the second line's rule
-  ([tool-call-ui.md](tool-call-ui.md#the-second-line-problem-1)).
+- **The status line** is a `<button>` with `aria-expanded` while it has a
+  panel to open. Its visible words are `aria-hidden`, and its name is built
+  from the facts that do not move while they are live, never from the free
+  text: *"Working, plan 3 of 7, 2 agents running, details"*; an absent part is
+  left out (`statusLineLabel`). The agents chip after the turn is named the
+  same way, *"1 agent running, details"*. Neither is a live region: a plan
+  update is not something to read out unasked, and the line's status already
+  says the agent is running.
 - **An entry** is a `<button>` whose name starts with its visible words,
   *"Explore, Find retry handling, running, open its transcript"* — or *"…, go
   to its row"* where it goes to the row (WCAG 2.5.3, as
@@ -1095,19 +1129,19 @@ what it opened — the transcript, or the row, whose own name is read.
 ## 5. What it does not say
 
 Every state the chat can be in already has an owner. The tail line takes the one
-that had none, *running, with nothing to show yet*, and nothing else. The two
-lines under it (§4) take two more that had no owner: *which agents are still
-going* and *where the plan stands*. Both read the rows' own state, so neither is
-a copy of a row:
+that had none, *running, with nothing to show yet*, and nothing else. Its two
+chips (§4) take two more that had no owner: *which agents are still going* and
+*where the plan stands*. Both read the rows' own state, so neither is a copy of
+a row:
 
 | Fact | Owner | Tail line |
 |---|---|---|
 | the turn is producing | **the tail line** (and the sidebar row's spinner, the same fact in a list) | the one thing it says |
 | which call is running and for how long | the tool row / group summary | never names a call; points at one only while the main agent waits on a fetch that has no row (§2.3) |
-| which subagents are still running, and what each is doing | each subagent's row; **the agents line** gathers them, read from the same `ToolRun`s | never names one |
-| the plan, and how far it has come | the plan's rows (history); **the plan line**, the newest record | never |
-| a permission request blocks the turn | strip permission row, card | hidden |
-| a background task holds the turn, and which | strip background row, which names it (§4.5) | hidden; the agents line stays |
+| which subagents are still running, and what each is doing | each subagent's row; **the agents chip** and its panel gather them, read from the same `ToolRun`s | never names one |
+| the plan, and how far it has come | the plan's rows (history); **the plan chip** and its panel, the newest record | never |
+| a permission request blocks the turn | strip permission row, card | spinner, label and clock hidden; the chips stay |
+| a background task holds the turn, and which | strip background row, which names it (§4.5) | spinner, label and clock hidden; the chips stay |
 | questions are waiting | strip question row | unaffected; both are drawn, they answer different questions |
 | a message sent mid-turn is unread | strip receipt row | unaffected; the receipt is about the message, the line about the turn |
 | the turn can be stopped | Stop in the composer | no Stop of its own |
@@ -1121,8 +1155,8 @@ this design, and the tail line is that spinner given words and a clock.
 
 ## 6. Accessibility
 
-The plan line and the agents line are in §4.8; this section is about the
-thinking row and the tail line.
+The status line's name and the panel's entries are in §4.8; this section is
+about the thinking row and the tail line's announcement.
 
 - **The thinking row** is a `<button>` with `aria-expanded` when it has a body.
   Its name is the sentence: *"Thought for 12 seconds"*. A redacted one, not a
@@ -1136,18 +1170,20 @@ thinking row and the tail line.
   would chatter. The words, the clock and the latest line are `aria-hidden`, and
   so is the `Spinner`, wrapped — it renders a `role="status"` of its own, and a
   second status nested in this one would be announced too. The thinking text so
-  far is readable on request by opening the line, which is then a `<button>`
-  with `aria-expanded` and a name of its own, *"Agent's thinking so far"* — its
-  visible words are hidden, so without one it would be an unnamed button; the
-  status sits beside that button so a press does not re-announce it.
+  far is readable on request by opening the line's panel; the line is then a
+  `<button>` with `aria-expanded` and a name of its own (§4.8) — its visible
+  words are hidden, so without one it would be an unnamed button; the status
+  sits beside that button so a press does not re-announce it.
 
 ## 7. Width and pointer
 
-Nothing is width-dependent. Both elements, and the two lines under the tail
-line (§4.4), are one line at every tier, and a
-body opens in place at every tier. On a narrow screen only the tail line's
-latest line gives way: it truncates with an ellipsis rather than wrapping, and
-the label, the clock and the chevron are always shown. The thinking row and the
+Nothing here is width-dependent; the one exception nearby is a subagent's
+step window, which a phone draws a line shorter
+([tool-call-ui.md](tool-call-ui.md#how-many-lines)). Both elements, with the tail line's chips (§4.4),
+are one line at every tier, and a body opens in place at every tier. On a
+narrow screen the tail line's free text gives way first, then its label: each
+truncates with an ellipsis rather than wrapping, and the clock, the chips and
+the chevron are always shown. The thinking row and the
 tail line hold the row's `pointer-coarse:` height floor. As for tool rows,
 nothing is behind hover
 ([tool-call-ui.md](tool-call-ui.md#width-and-pointer)).
@@ -1165,12 +1201,12 @@ nothing is behind hover
   changes the tail line's words, and losing it on reconnect costs one word
   until the next signal. Making it state would be a field kept in sync for that.
 - **Making Pockode's CLI flags turn plan tools on.** A Claude 5 session has no
-  plan line (§4.6). Which tools the model gets is for the CLI and the user, not
+  plan chip (§4.6). Which tools the model gets is for the CLI and the user, not
   for a transcript line.
-- **Background commands on the agents line.** It lists agents, as the story
+- **Background commands on the agents chip.** It counts agents, as the story
   that asked for it does. A backgrounded `Bash` is named where it holds the
-  turn, in the strip (§4.5), and its row carries its spinner and chip; a line
-  counting agents and commands together would need a noun for both.
+  turn, in the strip (§4.5), and its row carries its spinner and chip; a count
+  of agents and commands together would need a noun for both.
 - **Counting runs on pages not loaded** — §4.7.
-- **A plan line between turns.** The plan belongs to the turn that wrote it
+- **A plan chip between turns.** The plan belongs to the turn that wrote it
   (§4.2).

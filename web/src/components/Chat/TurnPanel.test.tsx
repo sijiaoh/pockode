@@ -1,9 +1,8 @@
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
-import { useAgentsOverview } from "../../hooks/useAgentsOverview";
-import { usePlanOverview } from "../../hooks/usePlanOverview";
-import { overviewMessageId } from "../../lib/turnOverview";
+import { useTurnOverview } from "../../hooks/useTurnOverview";
+import { hasText, type LiveThinking } from "../../lib/thinking";
 import type {
 	ContentPart,
 	Message,
@@ -67,33 +66,35 @@ const reply = (
 });
 
 /**
- * The transcript as `useChatMessages` feeds it: the two lines' state held
- * beside the messages, and the slot that draws it worked out from them.
+ * The transcript as `useChatMessages` feeds it: the plan, the agents and the
+ * panel held beside the messages, and the slot that draws them worked out from
+ * them.
  */
 function Transcript({
 	messages,
 	phase,
 	sessionId = "s",
 	openTranscript = null,
+	thinking = null,
 }: {
 	messages: Message[];
 	phase: TurnPhase;
 	sessionId?: string;
+	/** What the main agent is thinking now, as `useChatMessages` holds it. */
+	thinking?: LiveThinking | null;
 	/** What the chat provides; none, as outside a chat, by default. */
 	openTranscript?: OpenSubagentTranscript | null;
 }) {
 	const open = phase !== "idle" || messages.some((m) => m.status === "sending");
-	const agents = useAgentsOverview(messages, open, sessionId);
-	const plan = usePlanOverview(messages, open, sessionId);
 	const tail = {
 		...IDLE_TAIL,
 		phase,
-		plan,
-		agents,
-		overviewMessageId: overviewMessageId(
+		thinking,
+		...useTurnOverview(
 			messages,
 			open,
-			agents.liveCount > 0 || agents.expanded,
+			sessionId,
+			phase === "running" && thinking !== null && hasText(thinking),
 		),
 	};
 	return (
@@ -116,36 +117,41 @@ const three = (third: ToolRunStatus = "running") => [
 	]),
 ];
 
-// The rows' own buttons are named "Subagent running" by their glyph.
-const LINE_NAME = /^(\d+ agents?|No agents) running$/;
-const agentsLine = (name: RegExp | string) =>
+// The rows' own buttons are named "Subagent running" by their glyph; the
+// status line's name always ends on what a press does.
+const STATUS = /details$/;
+const statusLine = (name: RegExp | string = STATUS) =>
 	screen.getByRole("button", { name });
-// The list's entries are the only buttons named after their row.
+// The panel's entries are the only buttons named after their row.
 const entry = (name: RegExp) =>
 	within(screen.getByRole("list", { name: "Agents" })).getByRole("button", {
 		name,
 	});
 const toolRow = (id: string) =>
 	document.querySelector<HTMLElement>(`[data-tool-use-id="${id}"]`);
+const inMessage = (id: string, element: Element) =>
+	document.querySelector(`[data-message-id="${id}"]`)?.contains(element);
 
-describe("the agents line", () => {
+describe("the status line's agents", () => {
 	it("counts the live subagents and names the last one, with what it is doing", () => {
 		render(<Transcript messages={three("success")} phase="running" />);
-		const line = agentsLine("2 agents running");
+		const line = statusLine("Working, 2 agents running, details");
 		expect(line).toHaveAttribute("aria-expanded", "false");
 		// The latest live one in transcript order, not whichever moved last.
 		expect(line).toHaveTextContent(
-			"2 agents running·code-reviewerChecking the 503 path next.",
+			/^Working·2·code-reviewerChecking the 503 path next\.$/,
 		);
 	});
 
-	// A background wait is when the line is needed most.
-	it("stays while the turn is blocked", () => {
+	// A background wait is when the count is needed most.
+	it("stays while the turn is blocked, leading the line", () => {
 		render(<Transcript messages={three()} phase="blocked" />);
-		expect(agentsLine("3 agents running")).toBeInTheDocument();
+		expect(statusLine("3 agents running, details")).toHaveTextContent(
+			/^3·Plan$/,
+		);
 	});
 
-	it("is not drawn while no subagent is live", () => {
+	it("is not counted while no subagent is live", () => {
 		render(
 			<Transcript
 				messages={[reply("m", [agent("a", "Explore", "x", "success")])]}
@@ -153,15 +159,17 @@ describe("the agents line", () => {
 			/>,
 		);
 		expect(
-			screen.queryByRole("button", { name: LINE_NAME }),
+			screen.queryByRole("button", { name: STATUS }),
 		).not.toBeInTheDocument();
+		expect(screen.getByText("Working")).toBeInTheDocument();
 	});
 
 	it("opens a list of the live agents, in transcript order", async () => {
 		const user = userEvent.setup();
 		render(<Transcript messages={three("success")} phase="running" />);
-		await user.click(agentsLine("2 agents running"));
+		await user.click(statusLine());
 
+		expect(screen.getByText("Agents · 2 running")).toBeInTheDocument();
 		const items = within(
 			screen.getByRole("list", { name: "Agents" }),
 		).getAllByRole("button");
@@ -184,7 +192,7 @@ describe("the agents line", () => {
 				openTranscript={openTranscript}
 			/>,
 		);
-		await user.click(agentsLine("3 agents running"));
+		await user.click(statusLine());
 		const explore = entry(/^Explore,/);
 		expect(explore).toHaveAccessibleName(
 			"Explore, Find retry handling, running, open its transcript",
@@ -205,7 +213,7 @@ describe("the agents line", () => {
 				openTranscript={openTranscript}
 			/>,
 		);
-		await user.click(agentsLine("3 agents running"));
+		await user.click(statusLine());
 		await user.click(
 			entry(/^Plan, Draft the migration, running, go to its row$/),
 		);
@@ -217,22 +225,24 @@ describe("the agents line", () => {
 	});
 
 	// Nothing moves under a press.
-	it("keeps an entry that settles while the list is open, until it is closed", async () => {
+	it("keeps an entry that settles while the panel is open, until it is closed", async () => {
 		const user = userEvent.setup();
 		const { rerender } = render(
 			<Transcript messages={three()} phase="running" />,
 		);
-		await user.click(agentsLine("3 agents running"));
+		await user.click(statusLine());
 
 		rerender(<Transcript messages={three("success")} phase="running" />);
-		expect(agentsLine("2 agents running")).toBeInTheDocument();
+		expect(
+			statusLine("Working, 2 agents running, details"),
+		).toBeInTheDocument();
 		// It says it settled: drawn the same, it must not sound live either.
 		expect(entry(/^Plan,/)).toHaveAccessibleName(
 			"Plan, Draft the migration, succeeded, go to its row",
 		);
 
-		await user.click(agentsLine("2 agents running"));
-		await user.click(agentsLine("2 agents running"));
+		await user.click(statusLine());
+		await user.click(statusLine());
 		expect(
 			within(screen.getByRole("list", { name: "Agents" })).queryByRole(
 				"button",
@@ -241,13 +251,13 @@ describe("the agents line", () => {
 		).not.toBeInTheDocument();
 	});
 
-	it("an agent started while the list is open joins it and stays", async () => {
+	it("an agent started while the panel is open joins it and stays", async () => {
 		const user = userEvent.setup();
 		const one = [agent("a", "Explore", "Find retry handling", "running")];
 		const { rerender } = render(
 			<Transcript messages={[reply("m", one)]} phase="running" />,
 		);
-		await user.click(agentsLine("1 agent running"));
+		await user.click(statusLine());
 
 		const two = [...one, agent("d", "Docs", "Update the docs", "running")];
 		rerender(<Transcript messages={[reply("m", two)]} phase="running" />);
@@ -256,35 +266,55 @@ describe("the agents line", () => {
 		expect(entry(/^Docs,/)).toBeInTheDocument();
 	});
 
-	it("says no agents are running when the last one ends with the list open", async () => {
+	it("keeps the panel when the last one ends with it open, until it is closed", async () => {
 		const user = userEvent.setup();
 		const live = [agent("a", "Explore", "x", "running")];
 		const { rerender } = render(
 			<Transcript messages={[reply("m", live)]} phase="running" />,
 		);
-		await user.click(agentsLine("1 agent running"));
+		await user.click(statusLine());
 
 		const done = [agent("a", "Explore", "x", "success")];
 		rerender(<Transcript messages={[reply("m", done)]} phase="running" />);
-		expect(agentsLine("No agents running")).toHaveAttribute(
+		// The section stays, saying why, and the chip at 0 with it.
+		expect(statusLine("Working, no agents running, details")).toHaveAttribute(
 			"aria-expanded",
 			"true",
 		);
+		expect(statusLine()).toHaveTextContent(/^Working·0$/);
+		expect(screen.getByText("Agents · none running")).toBeInTheDocument();
 
-		await user.click(agentsLine("No agents running"));
+		await user.click(statusLine());
 		expect(
-			screen.queryByRole("button", { name: LINE_NAME }),
+			screen.queryByRole("button", { name: STATUS }),
 		).not.toBeInTheDocument();
 	});
 
+	// Nothing would be left to close it by: the line must still be there.
+	it("keeps the line while the turn blocks with only settled entries open", async () => {
+		const user = userEvent.setup();
+		const live = [agent("a", "Explore", "x", "running")];
+		const { rerender } = render(
+			<Transcript messages={[reply("m", live)]} phase="running" />,
+		);
+		await user.click(statusLine());
+		const done = [agent("a", "Explore", "x", "success")];
+		rerender(<Transcript messages={[reply("m", done)]} phase="blocked" />);
+
+		const line = statusLine("No agents running, details");
+		expect(line).toHaveAttribute("aria-expanded", "true");
+		await user.click(line);
+		expect(screen.queryByText("Agents · none running")).not.toBeInTheDocument();
+	});
+
 	// A turn whose background budget ran out goes idle with its tasks going.
-	it("moves above the last reply's turn-end row while a subagent outlives the turn, closed", async () => {
+	it("moves to the right of the last reply's turn-end row while a subagent outlives the turn, closed", async () => {
 		const user = userEvent.setup();
 		const parts = [agent("b", "code-reviewer", "Review", "background")];
 		const { rerender } = render(
 			<Transcript messages={[reply("m", parts)]} phase="running" />,
 		);
-		await user.click(agentsLine("1 agent running"));
+		await user.click(statusLine());
 
 		const later: Message[] = [
 			reply("m", parts, "complete"),
@@ -292,10 +322,67 @@ describe("the agents line", () => {
 		];
 		rerender(<Transcript messages={later} phase="idle" />);
 
-		const line = agentsLine("1 agent running");
-		expect(line).toHaveAttribute("aria-expanded", "false");
-		const last = document.querySelector('[data-message-id="m2"]');
-		expect(last?.contains(line)).toBe(true);
+		const chip = statusLine("1 agent running, details");
+		expect(chip).toHaveAttribute("aria-expanded", "false");
+		expect(chip).toHaveTextContent(/^1·code-reviewer/);
+		expect(inMessage("m2", chip)).toBe(true);
+		// Beside the actions, not one of them.
+		expect(
+			screen.getAllByRole("group", { name: "Message actions" }).at(-1),
+		).not.toContainElement(chip);
+
+		// Its panel holds the agents alone, and stays at none running while open.
+		await user.click(chip);
+		expect(entry(/^code-reviewer,/)).toBeInTheDocument();
+		rerender(
+			<Transcript
+				messages={[
+					reply(
+						"m",
+						[agent("b", "code-reviewer", "Review", "success")],
+						"complete",
+					),
+					later[1],
+				]}
+				phase="idle"
+			/>,
+		);
+		expect(statusLine("No agents running, details")).toHaveTextContent(
+			/^0·No agents running$/,
+		);
+		await user.click(statusLine());
+		expect(
+			screen.queryByRole("button", { name: STATUS }),
+		).not.toBeInTheDocument();
+	});
+
+	// One right-end slot on the turn-end row: live state over history.
+	it("holds the turn-end row's right end in place of the work figures, which take it when the chip goes", () => {
+		const settled = (status: ToolRunStatus) => [
+			reply(
+				"m",
+				[
+					read("r", "/repo/sender.go"),
+					agent("b", "code-reviewer", "Review", status),
+					said("t", "Started the review."),
+				],
+				"complete",
+			),
+		];
+		const { rerender } = render(
+			<Transcript messages={settled("background")} phase="idle" />,
+		);
+		const row = () =>
+			screen.getByRole("group", { name: "Message actions" })
+				.parentElement as HTMLElement;
+		expect(row()).toContainElement(statusLine("1 agent running, details"));
+		expect(row()).not.toHaveTextContent(/tool call/);
+
+		rerender(<Transcript messages={settled("success")} phase="idle" />);
+		expect(
+			screen.queryByRole("button", { name: STATUS }),
+		).not.toBeInTheDocument();
+		expect(within(row()).getByText("2 tool calls")).toBeInTheDocument();
 	});
 
 	it("is drawn in one bubble only", () => {
@@ -305,21 +392,19 @@ describe("the agents line", () => {
 			reply("m", [agent("b", "Plan", "y", "running")]),
 		];
 		render(<Transcript messages={messages} phase="running" />);
-		expect(screen.getAllByRole("button", { name: LINE_NAME })).toHaveLength(1);
+		expect(screen.getAllByRole("button", { name: STATUS })).toHaveLength(1);
 		expect(
-			document
-				.querySelector('[data-message-id="m"]')
-				?.contains(agentsLine("2 agents running")),
+			inMessage("m", statusLine("Working, 2 agents running, details")),
 		).toBe(true);
 	});
 
-	// The line moves into the new turn's bubble, and the list closes with it.
-	it("closes the list when the next turn opens, from the send on", async () => {
+	// The chip moves into the new turn's line, and the panel closes with it.
+	it("closes the panel when the next turn opens, from the send on", async () => {
 		const user = userEvent.setup();
 		const parts = [agent("b", "code-reviewer", "Review", "background")];
 		const settled: Message[] = [reply("m", parts, "complete")];
 		const { rerender } = render(<Transcript messages={settled} phase="idle" />);
-		await user.click(agentsLine("1 agent running"));
+		await user.click(statusLine());
 
 		const sent: Message[] = [
 			...settled,
@@ -339,26 +424,21 @@ describe("the agents line", () => {
 			},
 		];
 		rerender(<Transcript messages={sent} phase="idle" />);
-		const line = agentsLine("1 agent running");
+		const line = statusLine("Working, 1 agent running, details");
 		expect(line).toHaveAttribute("aria-expanded", "false");
-		expect(
-			document.querySelector('[data-message-id="p"]')?.contains(line),
-		).toBe(true);
+		expect(inMessage("p", line)).toBe(true);
 	});
 
-	it("closes the list on another session", async () => {
+	it("closes the panel on another session", async () => {
 		const user = userEvent.setup();
 		const { rerender } = render(
 			<Transcript messages={three()} phase="running" />,
 		);
-		await user.click(agentsLine("3 agents running"));
+		await user.click(statusLine());
 		rerender(
 			<Transcript messages={three()} phase="running" sessionId="other" />,
 		);
-		expect(agentsLine("3 agents running")).toHaveAttribute(
-			"aria-expanded",
-			"false",
-		);
+		expect(statusLine()).toHaveAttribute("aria-expanded", "false");
 	});
 });
 
@@ -389,9 +469,7 @@ const PLAN = [
 	{ text: "Read the code", status: "completed" },
 ] satisfies PlanStep[];
 
-const planLine = () => screen.getByRole("button", { name: /^Plan, / });
-
-describe("the plan line", () => {
+describe("the status line's plan", () => {
 	it("says where the newest plan stands, and stays while the turn is blocked", () => {
 		const { rerender } = render(
 			<Transcript
@@ -401,10 +479,10 @@ describe("the plan line", () => {
 				phase="running"
 			/>,
 		);
-		expect(planLine()).toHaveAccessibleName(
-			"Plan, 1 of 3 done, now Writing the retry tests",
+		expect(statusLine()).toHaveAccessibleName("Working, plan 1 of 3, details");
+		expect(statusLine()).toHaveTextContent(
+			/^Working·1\/3·Now:Writing the retry tests$/,
 		);
-		expect(planLine()).toHaveTextContent("1/3·Now:Writing the retry tests");
 
 		rerender(
 			<Transcript
@@ -412,10 +490,11 @@ describe("the plan line", () => {
 				phase="blocked"
 			/>,
 		);
-		expect(planLine()).toBeInTheDocument();
+		expect(statusLine("Plan 1 of 3, details")).toBeInTheDocument();
 	});
 
-	it("is drawn above the agents line", () => {
+	// The plan's words outrank the agent's: they move less.
+	it("puts both counts on one line, the plan's words after them", () => {
 		render(
 			<Transcript
 				messages={[
@@ -427,33 +506,47 @@ describe("the plan line", () => {
 				phase="running"
 			/>,
 		);
-		const agents = agentsLine("1 agent running");
-		expect(
-			planLine().compareDocumentPosition(agents) &
-				Node.DOCUMENT_POSITION_FOLLOWING,
-		).toBeTruthy();
+		expect(screen.getAllByRole("button", { name: STATUS })).toHaveLength(1);
+		expect(statusLine()).toHaveAccessibleName(
+			"Working, plan 1 of 3, 1 agent running, details",
+		);
+		expect(statusLine()).toHaveTextContent(
+			/^Working·1\/3·1·Now:Writing the retry tests$/,
+		);
 	});
 
-	it("opens the checklist in place, the explanation first, and follows new records", async () => {
+	it("opens the checklist in the panel, the explanation first, and follows new records", async () => {
 		const user = userEvent.setup();
 		const { rerender } = render(
 			<Transcript
 				messages={[
-					reply("m", [todoWrite("t", 1, PLAN, "Tests before the fix.")]),
+					reply("m", [
+						todoWrite("t", 1, PLAN, "Tests before the fix."),
+						agent("a", "Explore", "Find retry handling", "running"),
+					]),
 				]}
 				phase="running"
 			/>,
 		);
-		await user.click(planLine());
-		expect(planLine()).toHaveAttribute("aria-expanded", "true");
-		const slot = planLine().parentElement as HTMLElement;
-		const explanation = within(slot).getByText("Tests before the fix.");
-		const list = within(slot).getByRole("list");
+		await user.click(statusLine());
+		expect(statusLine()).toHaveAttribute("aria-expanded", "true");
+		const heading = screen.getByText("Plan · 1/3");
+		const explanation = screen.getByText("Tests before the fix.");
+		const checklist = explanation.parentElement?.querySelector("ul");
 		expect(
-			explanation.compareDocumentPosition(list) &
-				Node.DOCUMENT_POSITION_FOLLOWING,
-		).toBeTruthy();
-		expect(within(list).getAllByRole("listitem")).toHaveLength(3);
+			within(checklist as HTMLElement).getAllByRole("listitem"),
+		).toHaveLength(3);
+		// One panel, the plan's section above the agents'.
+		const agents = screen.getByText("Agents · 1 running");
+		for (const [first, second] of [
+			[heading, explanation],
+			[explanation, agents],
+		]) {
+			expect(
+				first.compareDocumentPosition(second) &
+					Node.DOCUMENT_POSITION_FOLLOWING,
+			).toBeTruthy();
+		}
 
 		const done = PLAN.map((s) => ({ ...s, status: "completed" as const }));
 		rerender(
@@ -461,14 +554,16 @@ describe("the plan line", () => {
 				messages={[
 					reply("m", [
 						todoWrite("t", 1, PLAN, "Tests before the fix."),
+						agent("a", "Explore", "Find retry handling", "running"),
 						todoWrite("t2", 2, done),
 					]),
 				]}
 				phase="running"
 			/>,
 		);
-		expect(planLine()).toHaveTextContent("3/3·All done");
-		expect(planLine()).toHaveAttribute("aria-expanded", "true");
+		expect(statusLine()).toHaveTextContent(/·All done$/);
+		expect(screen.getByText("Plan · 3/3")).toBeInTheDocument();
+		expect(statusLine()).toHaveAttribute("aria-expanded", "true");
 	});
 
 	it("draws the other forms: more in progress, and what is next", () => {
@@ -482,10 +577,7 @@ describe("the plan line", () => {
 				phase="running"
 			/>,
 		);
-		expect(planLine()).toHaveTextContent("0/2·Now:Write tests+1");
-		expect(planLine()).toHaveAccessibleName(
-			"Plan, 0 of 2 done, now Write tests and 1 more",
-		);
+		expect(statusLine()).toHaveTextContent(/·0\/2·Now:Write tests\+1$/);
 
 		const next = [
 			{ text: "Write tests", status: "completed" },
@@ -497,7 +589,7 @@ describe("the plan line", () => {
 				phase="running"
 			/>,
 		);
-		expect(planLine()).toHaveTextContent("1/2·Next:Fix sender");
+		expect(statusLine()).toHaveTextContent(/·1\/2·Next:Fix sender$/);
 	});
 
 	// The line remounts in the new bubble a read point opens; open is held
@@ -508,7 +600,7 @@ describe("the plan line", () => {
 		const { rerender } = render(
 			<Transcript messages={[first]} phase="running" />,
 		);
-		await user.click(planLine());
+		await user.click(statusLine());
 
 		const cut: Message[] = [
 			{ ...first, status: "complete" },
@@ -529,11 +621,66 @@ describe("the plan line", () => {
 			},
 		];
 		rerender(<Transcript messages={cut} phase="running" />);
-		const line = planLine();
+		const line = statusLine();
 		expect(line).toHaveAttribute("aria-expanded", "true");
-		expect(
-			document.querySelector('[data-message-id="m2"]')?.contains(line),
-		).toBe(true);
+		expect(inMessage("m2", line)).toBe(true);
+	});
+
+	// Only the plan's section goes; what else the reader opened stays open.
+	it("keeps the panel open when the agent clears its plan", async () => {
+		const user = userEvent.setup();
+		const live = agent("a", "Explore", "Find retry handling", "running");
+		const { rerender } = render(
+			<Transcript
+				messages={[reply("m", [todoWrite("t", 1, PLAN), live])]}
+				phase="running"
+			/>,
+		);
+		await user.click(statusLine());
+		rerender(
+			<Transcript
+				messages={[
+					reply("m", [todoWrite("t", 1, PLAN), live, todoWrite("t2", 2, [])]),
+				]}
+				phase="running"
+			/>,
+		);
+		expect(statusLine("Working, 1 agent running, details")).toHaveAttribute(
+			"aria-expanded",
+			"true",
+		);
+		expect(screen.queryByText(/^Plan · /)).not.toBeInTheDocument();
+		expect(entry(/^Explore,/)).toBeInTheDocument();
+	});
+
+	// Left open with nothing in it, it would open by itself on the next thing
+	// to come — the next thought, around nearly every codex call.
+	it("closes when its last section goes", async () => {
+		const user = userEvent.setup();
+		const messages = [reply("m", [said("t", "Looking.")])];
+		const thought = {
+			content: "Checking the sender",
+			fullReasoning: "",
+			joinedLate: false,
+		};
+		const { rerender } = render(
+			<Transcript messages={messages} phase="running" thinking={thought} />,
+		);
+		await user.click(statusLine("Thinking, details"));
+		expect(screen.getByText("Thinking so far")).toBeInTheDocument();
+
+		rerender(<Transcript messages={messages} phase="running" />);
+		rerender(
+			<Transcript
+				messages={messages}
+				phase="running"
+				thinking={{ ...thought, content: "Next thought" }}
+			/>,
+		);
+		expect(statusLine("Thinking, details")).toHaveAttribute(
+			"aria-expanded",
+			"false",
+		);
 	});
 
 	it("starts closed in the next turn, and on another session", async () => {
@@ -542,13 +689,13 @@ describe("the plan line", () => {
 		const { rerender } = render(
 			<Transcript messages={messages} phase="running" />,
 		);
-		await user.click(planLine());
+		await user.click(statusLine());
 		rerender(
 			<Transcript messages={messages} phase="running" sessionId="other" />,
 		);
-		expect(planLine()).toHaveAttribute("aria-expanded", "false");
+		expect(statusLine()).toHaveAttribute("aria-expanded", "false");
 
-		await user.click(planLine());
+		await user.click(statusLine());
 		rerender(
 			<Transcript
 				messages={[reply("m", [todoWrite("t", 1, PLAN)], "complete")]}
@@ -561,7 +708,7 @@ describe("the plan line", () => {
 			reply("m2", [todoWrite("t2", 2, PLAN)]),
 		];
 		rerender(<Transcript messages={next} phase="running" sessionId="other" />);
-		expect(planLine()).toHaveAttribute("aria-expanded", "false");
+		expect(statusLine()).toHaveAttribute("aria-expanded", "false");
 	});
 
 	it("goes when the turn settles", () => {
@@ -569,7 +716,7 @@ describe("the plan line", () => {
 		const { rerender } = render(
 			<Transcript messages={messages} phase="running" />,
 		);
-		expect(planLine()).toBeInTheDocument();
+		expect(statusLine()).toBeInTheDocument();
 		rerender(
 			<Transcript
 				messages={[reply("m", [todoWrite("t", 1, PLAN)], "complete")]}
@@ -577,7 +724,7 @@ describe("the plan line", () => {
 			/>,
 		);
 		expect(
-			screen.queryByRole("button", { name: /^Plan, / }),
+			screen.queryByRole("button", { name: STATUS }),
 		).not.toBeInTheDocument();
 	});
 });

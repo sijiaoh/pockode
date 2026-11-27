@@ -76,7 +76,7 @@ becomes a flex row: the disclosure button keeps the rest of the width, and the
 
 **Two ways in from outside the row**, which open the same layer through the
 same opener (`SubagentTranscriptContext`): an entry in the turn's agents list
-([turn-progress-ui.md §4.3](turn-progress-ui.md#43-the-agents-line)), and a
+([turn-progress-ui.md §4.3](turn-progress-ui.md#43-the-agents)), and a
 subagent task in the attention strip's background list
 ([turn-progress-ui.md §4.5](turn-progress-ui.md#45-naming-what-a-background-wait-waits-on)).
 Each opens it only where the ⤢ is offered — a subagent with a Process
