@@ -186,6 +186,14 @@ type taskFrame struct {
 	Ambient        bool       `json:"ambient"`
 	SkipTranscript bool       `json:"skip_transcript"`
 	Patch          *taskPatch `json:"patch"`
+	// Usage is task_progress's and task_notification's running totals, of
+	// which only the duration is read: on task_notification it is the CLI's
+	// own measure of how long the task ran (for a subagent, the same
+	// totalDurationMs its call's result would have carried). Optional in the
+	// schema.
+	Usage *struct {
+		DurationMs int64 `json:"duration_ms"`
+	} `json:"usage"`
 }
 
 // taskPatch is task_updated's payload. Only the one field is read: a status and
@@ -448,6 +456,9 @@ func taskOutcome(log *slog.Logger, frame taskFrame, tasks *backgroundTaskTracker
 		// what says so, and what lets the transcript word the difference.
 		Subtype: agent.ToolResultBackgroundResult,
 		IsError: frame.Status != taskStatusCompleted,
+	}
+	if frame.Usage != nil && frame.Usage.DurationMs > 0 {
+		result.DurationMs = frame.Usage.DurationMs
 	}
 
 	if frame.OutputFile == "" {

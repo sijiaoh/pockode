@@ -17,13 +17,14 @@ func parseTestTurns(t *testing.T, lines ...string) []agent.AgentEvent {
 	t.Helper()
 	backgroundTasks := &backgroundTaskTracker{}
 	authFailures := &authFailureTracker{}
+	callNames := &toolCallNames{}
 	var events []agent.AgentEvent
 	for _, line := range lines {
 		var event cliEvent
 		if err := json.Unmarshal([]byte(line), &event); err != nil {
 			t.Fatalf("bad test line %s: %v", line, err)
 		}
-		events = append(events, parseLine(testLogger(), []byte(line), event, &sync.Map{}, backgroundTasks, authFailures, testRefusals(nil, nil), attachments.Store{})...)
+		events = append(events, parseLine(testLogger(), []byte(line), event, &sync.Map{}, backgroundTasks, callNames, authFailures, testRefusals(nil, nil), attachments.Store{})...)
 	}
 	return events
 }

@@ -860,6 +860,7 @@ func (s *cliSession) writeStdin(data []byte) error {
 func streamOutput(ctx context.Context, log *slog.Logger, stdout io.Reader, events chan<- agent.AgentEvent, pendingRequests *sync.Map, resumeState *claudeResumeStateManager, backgroundTasks *backgroundTaskTracker, thinking *thinkingClock, usage *usageObserver, refusals controlRefusals, store attachments.Store) {
 	scanner := agent.NewLineScanner(stdout, agent.MaxLineBytes)
 	authFailures := &authFailureTracker{}
+	callNames := &toolCallNames{}
 
 	// send is the one way an event leaves here, so that none bypasses the
 	// thinking clock: a result it never saw would put the call's whole runtime
@@ -911,7 +912,7 @@ func streamOutput(ctx context.Context, log *slog.Logger, stdout io.Reader, event
 		}
 		usage.observe(line, event)
 
-		for _, ev := range parseLine(log, line, event, pendingRequests, backgroundTasks, authFailures, refusals, store) {
+		for _, ev := range parseLine(log, line, event, pendingRequests, backgroundTasks, callNames, authFailures, refusals, store) {
 			if !send(ev, arrived) {
 				return
 			}
@@ -1404,6 +1405,10 @@ type cliEvent struct {
 	// subagent's frames arrive interleaved with the main conversation's, so
 	// this is the only thing that says whose they are (measured on 2.1.286).
 	ParentToolUseID string `json:"parent_tool_use_id,omitempty"`
+	// ToolUseResult is the tool's structured result, on a user frame carrying
+	// a tool_result. Untyped in the SDK schema and different per tool; read
+	// only for the durations in reportedDurationMs.
+	ToolUseResult json.RawMessage `json:"tool_use_result,omitempty"`
 }
 
 // anchorID is the frame's uuid when it can anchor a fork, and empty when the
@@ -1462,12 +1467,12 @@ type controlRefusals struct {
 // parseLine converts one already-decoded stream-json envelope into agent events.
 // line is retained for the cases (assistant, result, control_*) that decode a
 // superset struct.
-func parseLine(log *slog.Logger, line []byte, event cliEvent, pendingRequests *sync.Map, backgroundTasks *backgroundTaskTracker, authFailures *authFailureTracker, refusals controlRefusals, store attachments.Store) []agent.AgentEvent {
+func parseLine(log *slog.Logger, line []byte, event cliEvent, pendingRequests *sync.Map, backgroundTasks *backgroundTaskTracker, callNames *toolCallNames, authFailures *authFailureTracker, refusals controlRefusals, store attachments.Store) []agent.AgentEvent {
 	switch event.Type {
 	case "assistant":
-		return parseAssistantEvent(log, line, event, backgroundTasks, authFailures)
+		return parseAssistantEvent(log, line, event, backgroundTasks, callNames, authFailures)
 	case "user":
-		return parseUserEvent(log, event, backgroundTasks, store)
+		return parseUserEvent(log, event, backgroundTasks, callNames, store)
 	case "result":
 		if ev := parseResultEvent(log, line, backgroundTasks, authFailures); ev != nil {
 			return []agent.AgentEvent{ev}
@@ -1843,7 +1848,7 @@ func syntheticNotice(log *slog.Logger, line []byte, msg cliMessage, authFailures
 	}}
 }
 
-func parseAssistantEvent(log *slog.Logger, line []byte, event cliEvent, backgroundTasks *backgroundTaskTracker, authFailures *authFailureTracker) []agent.AgentEvent {
+func parseAssistantEvent(log *slog.Logger, line []byte, event cliEvent, backgroundTasks *backgroundTaskTracker, callNames *toolCallNames, authFailures *authFailureTracker) []agent.AgentEvent {
 	if event.Message == nil {
 		log.Warn("assistant event message is nil", "subtype", event.Subtype)
 		return nil
@@ -1894,6 +1899,7 @@ func parseAssistantEvent(log *slog.Logger, line []byte, event cliEvent, backgrou
 			})
 		case "tool_use", "server_tool_use":
 			flushText()
+			callNames.record(block.ID, block.Name)
 			events = append(events, agent.ToolCallEvent{
 				ToolUseID: block.ID,
 				ToolName:  block.Name,
@@ -1922,7 +1928,7 @@ func textEvent(event cliEvent, parts []string) agent.TextEvent {
 	}
 }
 
-func parseUserEvent(log *slog.Logger, event cliEvent, backgroundTasks *backgroundTaskTracker, store attachments.Store) []agent.AgentEvent {
+func parseUserEvent(log *slog.Logger, event cliEvent, backgroundTasks *backgroundTaskTracker, callNames *toolCallNames, store attachments.Store) []agent.AgentEvent {
 	if event.Message == nil {
 		return nil
 	}
@@ -1939,23 +1945,41 @@ func parseUserEvent(log *slog.Logger, event cliEvent, backgroundTasks *backgroun
 		return extractEventsFromText(log, msgStr.Content)
 	}
 
+	// tool_use_result is one per frame and names no tool_use_id, so it can be
+	// read as a result's own only when the frame holds one result.
+	results := 0
+	for _, block := range msg.Content {
+		if block.Type == "tool_result" {
+			results++
+		}
+	}
+
 	var events []agent.AgentEvent
 	for _, block := range msg.Content {
 		switch block.Type {
 		case "tool_result":
 			result := parseToolResult(log, store, block.Content)
+			toolName := callNames.take(block.ToolUseID)
 			// A call that started work outliving it hands back a placeholder,
 			// and that it did stays true forever — so it is recorded, not
 			// tracked live. Without it a replayed transcript shows a background
 			// task that is still running as one that succeeded.
+			//
+			// A placeholder never carries a duration: the call has not
+			// finished, and the work's own figure comes with its outcome (see
+			// taskOutcome).
 			subtype := ""
+			var durationMs int64
 			if backgroundTasks.callIsBackgrounded(block.ToolUseID) {
 				subtype = agent.ToolResultBackgroundStarted
+			} else if results == 1 {
+				durationMs = reportedDurationMs(toolName, event.ToolUseResult)
 			}
 			events = append(events, agent.ToolResultEvent{
 				ToolUseID:         block.ToolUseID,
 				ToolResult:        result.text,
 				Subtype:           subtype,
+				DurationMs:        durationMs,
 				Contents:          result.blocks,
 				IsError:           block.IsError,
 				ParentToolUseID:   event.ParentToolUseID,
