@@ -4817,6 +4817,74 @@ describe("messageReducer", () => {
 			expect(runAt(partsOf(replayed[1]), "t1", "c2").status).toBe("running");
 		});
 
+		// Codex runs a subagent given more work under the spawn that started
+		// it, and says so by announcing the spawn again: the row is running
+		// from then, keeping what it last reported, until its next result.
+		it("runs a resumed call again until its next result", () => {
+			const resumed = replayHistory([
+				{ type: "message", content: "go" },
+				task("t1", { observed_at: "2026-01-01T00:00:00Z" }),
+				result("t1", {
+					tool_result: "first",
+					duration_ms: 40,
+					observed_at: "2026-01-01T00:00:01Z",
+				}),
+				{ type: "done" },
+				{ type: "message", content: "more" },
+				task("t1", {
+					subtype: "resumed",
+					observed_at: "2026-01-01T00:01:00Z",
+				}),
+				call("c1", "t1"),
+			]);
+			expect(resumed).toHaveLength(4);
+			const run = runAt(partsOf(resumed[1]), "t1");
+			expect(run).toMatchObject({
+				status: "running",
+				result: "first",
+				startedAt: Date.parse("2026-01-01T00:01:00Z"),
+			});
+			expect(run.endedAt).toBeUndefined();
+			expect(run.durationMs).toBeUndefined();
+			expect(runAt(partsOf(resumed[1]), "t1", "c1").status).toBe("running");
+
+			const settled = replayHistory([
+				{ type: "message", content: "go" },
+				task("t1"),
+				result("t1", { tool_result: "first" }),
+				task("t1", { subtype: "resumed" }),
+				result("t1", { tool_result: "second" }),
+			]);
+			expect(runAt(lastParts(settled), "t1")).toMatchObject({
+				status: "success",
+				result: "second",
+			});
+		});
+
+		// The user's Stop cut it short, and a later turn gave it more work.
+		it("runs an interrupted call again when it is resumed", () => {
+			const replayed = replayHistory([
+				{ type: "message", content: "go" },
+				task("t1"),
+				{ type: "interrupted" },
+				{ type: "message", content: "continue it" },
+				task("t1", { subtype: "resumed" }),
+				call("c1", "t1"),
+			]);
+			expect(runAt(partsOf(replayed[1]), "t1").status).toBe("running");
+			expect(runAt(partsOf(replayed[1]), "t1", "c1").status).toBe("running");
+		});
+
+		// A resume names a call; with that call's row on a page not loaded, it
+		// is no call of its own and draws nothing.
+		it("draws no row for a resumed call that is not loaded", () => {
+			const replayed = replayHistory([
+				{ type: "message", content: "go" },
+				task("t1", { subtype: "resumed" }),
+			]);
+			expect(replayed.flatMap(partsOf)).toEqual([]);
+		});
+
 		it("settles a call that trails in after its subagent settled", () => {
 			const replayed = replayHistory([
 				{ type: "message", content: "go" },

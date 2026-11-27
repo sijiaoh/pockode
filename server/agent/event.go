@@ -325,9 +325,25 @@ type ToolCallEvent struct {
 	// came out of, when the agent puts ids on them. See
 	// EventRecord.ProviderMessageID.
 	ProviderMessageID string
+	// Subtype marks a tool_call that is not a call starting; see
+	// ToolCallResumed. Empty for every ordinary call.
+	Subtype string
 	// ObservedAt is when Pockode saw the call; see EventRecord.ObservedAt.
 	ObservedAt time.Time
 }
+
+// ToolCallResumed marks a tool_call record that announces an earlier call
+// again because its work has started running again after the call had
+// settled: a subagent given more work under the call that spawned it (Codex's
+// sendInput or followupTask runs another turn on the child's thread). It says
+// what happened at that moment and nothing more. The call's next tool_result
+// settles it again.
+//
+// A subtype rather than a type of its own, so that a client that predates it
+// reads it as what it is on the wire, a resend of the call, and changes
+// nothing. Claude has no counterpart: a resumed Claude subagent runs under a
+// SendMessage call of its own, whose record already says it.
+const ToolCallResumed = "resumed"
 
 func (ToolCallEvent) EventType() EventType { return EventTypeToolCall }
 func (ToolCallEvent) isAgentEvent()        {}
@@ -341,6 +357,7 @@ func (e ToolCallEvent) ToRecord() EventRecord {
 		OriginToolUseID:   e.OriginToolUseID,
 		ParentToolUseID:   e.ParentToolUseID,
 		ProviderMessageID: e.ProviderMessageID,
+		Subtype:           e.Subtype,
 		ObservedAt:        optionalTime(e.ObservedAt),
 	}
 }

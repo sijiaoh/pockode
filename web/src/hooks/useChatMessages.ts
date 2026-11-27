@@ -522,10 +522,12 @@ export function useChatMessages({
 			// record never comes. Read before the skip below, because a record the
 			// page already has still proves it — and the deltas held across a
 			// subscribe are replayed with no seq to skip them by.
+			// A call announced again because a subagent resumed is the subagent's
+			// doing, not the main agent's output.
 			const endsThinking =
 				((event.type === "thinking" ||
 					event.type === "text" ||
-					event.type === "tool_call") &&
+					(event.type === "tool_call" && !event.resumed)) &&
 					!event.parentToolUseId) ||
 				isTurnTerminal(notification);
 			// Already on screen: this record came back in the history page too, and

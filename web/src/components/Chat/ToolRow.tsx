@@ -107,6 +107,34 @@ export function Chip({ children }: { children: string }) {
 }
 
 /**
+ * A subagent's title as its row draws it: the agent mark, then the title,
+ * capped so the detail after it keeps room. Shared with whatever names that
+ * subagent elsewhere — a nested card's asker line — so the two read letter for
+ * letter alike. `spoken` is what a screen reader hears in place of the mark.
+ */
+export function AgentTitle({
+	title,
+	spoken,
+	className,
+}: {
+	title: string;
+	spoken?: string;
+	className: string;
+}) {
+	return (
+		<span
+			className={`flex min-w-0 max-w-[45%] shrink-0 items-baseline gap-1 ${className}`}
+		>
+			<Bot aria-hidden className="size-3 shrink-0 self-center" />
+			<span className="truncate">
+				{spoken && <span className="sr-only">{spoken}</span>}
+				{title}
+			</span>
+		</span>
+	);
+}
+
+/**
  * The part of the row that identifies this particular call, cut to whatever
  * width is left.
  *
@@ -411,20 +439,23 @@ export function StaticRow({
 }
 
 /**
- * A line under a row, outside its button, on the row's columns: the text sits
- * under the title, and `glyph` (blank by default) under the row's glyph. For
- * what a row says beneath itself that holds a control of its own, which the
- * row's button cannot contain.
+ * A line under a row — or over it — outside its button, on the row's columns:
+ * the text sits in the title's column, and `glyph` (blank by default) in the
+ * glyph's. For what a row says beside itself that the row's button cannot
+ * contain: a control of its own, or a fact about the request it stands for.
  */
 export function RowSubline({
 	glyph = NO_CHEVRON,
+	above = false,
 	children,
 }: {
 	glyph?: ReactNode;
+	/** Drawn over the row rather than under it, so padded at its top. */
+	above?: boolean;
 	children: ReactNode;
 }) {
 	return (
-		<div className="px-2 pb-1.5 sm:px-2.5">
+		<div className={`px-2 sm:px-2.5 ${above ? "pt-1.5" : "pb-1.5"}`}>
 			<RowColumns lead={NO_CHEVRON} glyph={glyph}>
 				{children}
 			</RowColumns>
@@ -507,17 +538,13 @@ export function ToolRow({
 				>
 					<span ref={titleRef} className="flex items-baseline gap-1.5">
 						{agent ? (
-							<span className="flex min-w-0 max-w-[45%] shrink-0 items-baseline gap-1 text-th-accent">
-								<Bot aria-hidden className="size-3 shrink-0 self-center" />
-								<span className="truncate">
-									{/* What the mark says to the eye; a row already titled
-									    `Subagent` would say it twice. */}
-									{title !== SUBAGENT_TITLE && (
-										<span className="sr-only">Subagent </span>
-									)}
-									{title}
-								</span>
-							</span>
+							<AgentTitle
+								title={title}
+								// What the mark says to the eye; a row already titled
+								// `Subagent` would say it twice.
+								spoken={title !== SUBAGENT_TITLE ? "Subagent " : undefined}
+								className="text-th-accent"
+							/>
 						) : (
 							<span className="shrink-0 text-th-accent">{title}</span>
 						)}

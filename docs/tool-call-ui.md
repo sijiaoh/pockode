@@ -2545,29 +2545,46 @@ unfolding themselves bury the answer the user is reading. What replaced the
 auto-expand is rung 4 of the second line — a failed row now says how it failed
 without being opened.
 
-`TaskItem` keeps its auto-expand (`autoExpandedRef`, once, so the user's own
-decision to collapse it stands), because the two cases are not the same one: a
-subagent failing is rare rather than routine, and its report is the only account
-of what went wrong anywhere in the UI. For the same reason `TaskItem` passes
-no shared second line on a failed run (`failed && !run.fromBackground`) —
-with the body already open, rung 4 would only be a second and worse copy of what
-is under it, the tail of a markdown report drawn in mono. What a failed subagent row says instead is
-[its step count](#the-second-line-steps-and-what-it-is-doing), which copies
-nothing in the body. A backgrounded failure keeps its outcome line (rung 3),
-steps or not: it is the one failed row whose body is not supposed to open (next
-paragraph), so the line is not a copy of anything on screen.
+That includes a subagent's. `TaskItem` used to be the one exception — it
+opened a failed subagent's body once (`autoExpandedRef`), on the grounds that a
+subagent failing is rare rather than routine and that its report is the only
+account of what went wrong. Neither ground holds up as a reason for the body to
+move itself, and the exception is withdrawn for every failed subagent, foreground
+and backgrounded alike:
 
-**A `background` run must not open itself** — a 30-minute task that unfolds
-itself shoves the transcript around long after the user stopped caring: the
-reader's place is held through it, but what is around it moves each time
-([above](#the-second-line-problem-1)). It is also the one rule on this page
-the code does not keep: `TaskItem`'s `autoExpandedRef` keys on
-`run.status === "error"` alone and never reads `fromBackground`, so a
-backgrounded subagent that fails opens its report anyway, wherever in the
-transcript it sits. The gap predates rung 4 and is recorded rather than closed
-in passing, because closing it is a behavioural decision and not a typo: that
-report is still the only account of what went wrong, so the alternative to
-opening it has to be a way of reaching it, not silence.
+- **Where it fails, the user is either there or not.** A backgrounded run fails
+  wherever in the transcript it was launched, long after the user stopped
+  watching it — a 30-minute task unfolding itself shoves the transcript around
+  under someone reading something else: the reader's place is held through it,
+  but what is around it moves ([above](#the-second-line-problem-1)). A
+  foreground run fails at the tail, where the user may be reading — and there
+  the next thing in the transcript is the main agent's own reaction: it read the
+  report and says what failed, or retries. The report is not the only account
+  in either case; it is the most detailed one, and detail is what a tap is for.
+- **The exception fired where nobody was watching.** It keyed on the status,
+  not on the moment of failing, so it fired on mount: a reloaded session, or a
+  page of history scrolled into, opened every failed subagent in it at once —
+  exactly the "four bodies unfolding themselves" this rule exists to prevent,
+  on a screen the user had not yet read. Keying it on "failed while watched"
+  instead would make the same row draw differently live and on reload, which is
+  the inconsistency [the second line](#the-second-line-problem-1) refuses
+  everywhere else.
+- **The row can carry what opening was for.** What a failed tool row got in
+  place of opening — a line saying how it failed — a failed subagent gets too:
+  `N tool uses · <first line of what it returned>`, the shape a backgrounded
+  failure already had ([status by status](#status-by-status)). Line 1 is red,
+  line 2 says why, the body is a tap away. The red row is how a failure is
+  noticed, and the agents overview (designed separately) lists every subagent's
+  outcome for a reader who was elsewhere.
+
+So `TaskItem` has no auto-expand, and with it goes the only reason it withheld
+the shared second line on a failed run (`failed && !run.fromBackground`): a body
+that does not open is not something the line would copy. A failed subagent
+reads through its own line rather than the shared rung 4, because its result is
+a report or the CLI's verdict — prose, not machine output — and the shared rung
+would cut its tail in mono; the first line is where a verdict states itself. This
+closes the open decision recorded here before: **a `background` run must not
+open itself** is now kept by the code, because no subagent run opens itself.
 
 ### Full screen
 
@@ -2799,6 +2816,15 @@ both because it is how the subagent got there, which a reader wants less often
 than what it found; the prompt comes last because it is the question, and the
 reader opening this row already knows roughly what was asked from the row's own
 detail.
+
+**The prompt is drawn as Markdown, muted.** It is the main agent's prose to the
+subagent — headings, lists, code spans and fences as often as not — and it used
+to be a muted `<pre>`, so a structured brief read as one wall of mono text with
+its markers showing. It is `MarkdownContent` in the **note** variant the
+Process's text uses ([below](#telling-the-subagents-words-from-the-main-agents)):
+`text-xs`, `text-th-text-secondary`, tight margins — rendered, but still read
+as a quotation of what was asked rather than as anyone's answer. Same place,
+same closed disclosure, same clamp; only the rendering changes.
 
 ```
 ┌────────────────────────────────────────────────────────────┐
@@ -3250,16 +3276,60 @@ uses, tokens** — the duration stays on line 1:
 |---|---|
 | live (`running` / `background`) | `N tool uses · <latest child>` — count and what it is doing; no tokens |
 | `success` | the figures |
-| `error` | the figures, in the muted second-line colour — the row's red is line 1's; a failed subagent still spent what it spent |
-| `interrupted` | `N tool uses · <latest child>`, frozen where it was cut — no tokens even when a late result brought some: where it was is the news |
+| `error` | `N tool uses · <first line of what it returned>`, in the muted second-line colour — the row's red is line 1's; why it failed is the news, and the body does not open to say it ([the body](#the-body-problems-2-and-3)). No tokens: on a failed row why outranks what it spent |
+| `interrupted` | `N tool uses · <latest child>`, frozen where it was cut — no tokens even when a late result brought some: where it was is the news. Codex and Claude alike: a Codex subagent the user's Stop cut short is `interrupted`, not `error` (below) |
 | settled from the background, `completed` | the figures — the outcome is its report ([the subagent body](#the-subagent-body)), so it reads as a foreground success does |
-| settled from the background, `failed` / `stopped` | `N tool uses · <first line of the outcome>` — the verdict is the news, and this is the one failed row whose body does not open |
+| settled from the background, `failed` / `stopped` | `N tool uses · <first line of the outcome>` — the verdict is the news, as on a foreground failure |
 
 The background split is a change, and the reason for it: on claude 2.1.286 the
 CLI backgrounds a main-agent subagent of its own accord, so if a backgrounded
 success kept its outcome line the most common subagent would never show what it
 cost. Its outcome *is* its report, which is exactly what a foreground success
 already leaves to the body.
+
+**A failed run's first line is the first non-empty line of its result**, read
+as a text child is ([below](#the-second-line-steps-and-what-it-is-doing)): block
+and inline Markdown markers dropped, one `truncate` span, not mono — a
+subagent's result is its report or the CLI's verdict, prose either way. For a
+foreground failure the result is the call's own (a report that came back framed
+is read out of its frame first, as the body does); for a backgrounded one, the
+outcome. A failure that returned nothing keeps the figures, as before: there is
+no verdict to show, and the red line 1 still says it failed.
+
+**Interrupted reads the same on both CLIs.** Claude settles a subagent the turn
+cut short as `interrupted` — the muted `Ban`, never red, because the user
+stopping it is not the subagent failing. Codex used to report the same case as
+`error` (`settleSubagent` folded an interrupted subagent thread into
+`IsError`), so the same act read as a failure on one CLI and as an interruption
+on the other. A Codex subagent the user's Stop cut short now settles
+`interrupted` too, and reads as the row above. What `interrupted` means is
+*the user stopped it*, on both CLIs: a Codex subagent the model stopped itself,
+inside a turn that went on, reads as failed, as a Claude background task the
+model stops does — and one whose thread failed stays `error`. How the server
+tells the two apart is
+[code/agent-integration.md](code/agent-integration.md#subagent-threads)'s.
+
+**A resumed subagent is running again.** A subagent the agent gives more work
+after it finished — Claude's `SendMessage` to it, Codex's `sendInput` or
+`followupTask` — works on under the row it was spawned with. While it does,
+the row is a running row: the spinner, the live line (its count is every tool
+use under it, the first run's and this one's), and an elapsed counter from the
+moment it resumed — never the red of an earlier failure, nor the `Ban` of an
+earlier Stop. Its body keeps the report it last returned, the only report there
+is until the resumed run ends. When it ends the row settles again, as the run
+that ended:
+
+- **Codex** reports the resumed run on the spawn's own call, so the row takes
+  its outcome — the new report, its duration and its figures — and reads by
+  the table above.
+- **Claude** reports it on the `SendMessage` call, which has a row of its own
+  and gets the outcome there. The subagent's row goes back to what it said
+  before it resumed, figures and report alike; its new work stays in its
+  Process.
+
+A message to a subagent that is still running changes nothing: it never
+stopped. How the client learns either kind of resume is
+[code/frontend-state.md](code/frontend-state.md#a-subagents-children)'s.
 
 **Running** keeps the live line as it is, with its count now counted as above
 and labelled `tool uses`, and the elapsed counter on line 1. When the run has
@@ -3303,11 +3373,11 @@ first row that matches wins:
 
 | Run | Second line |
 |---|---|
+| `error`, or settled from the background `failed` / `stopped`, that returned something | `N tool uses · <first line of what it returned>` — of the outcome, for a backgrounded run; with no tool uses, the first line alone |
 | no tool uses and no figures | the shared rungs, unchanged — `run.activity` while live (after `last_tool_name`, [above](#status-by-status)), the background rungs, else no line |
 | live (`running` / `background`) | `N tool uses · <latest child>` |
 | `interrupted` | `N tool uses · <latest child>` — frozen where it was cut |
-| settled from the background, `failed` / `stopped` | `N tool uses · <first line of the outcome>` |
-| `success` / `error` / background `completed` | the figures ([above](#line-2-once-settled-the-figures)) |
+| `success` / background `completed` | the figures ([above](#line-2-once-settled-the-figures)) |
 
 `1 tool use`, singular. The rules inside that table:
 
@@ -3343,24 +3413,24 @@ first row that matches wins:
   exactly as one in the main transcript is
   ([the body](#the-body-problems-2-and-3)); the row's colour is the subagent's own
   outcome, and the failed call is red on its own row in the Process.
-- **A settled run drops the latest child for its figures.** On `success` and
-  `error` the report is the account of what happened, and the last thing the
-  subagent touched is noise next to it; `12 tool uses · 45.6K tokens` is the
-  fact worth keeping on a collapsed row. `interrupted` keeps the child because
-  there it *is* the news: where it was when it was cut. A run that settled from
-  the background and failed or was stopped keeps its outcome line as every
-  background row does ([above](#the-second-line-problem-1)) — a backgrounded
-  failure does not rely on its body opening, because it must not
-  ([the body](#the-body-problems-2-and-3)); one that completed reads as a
-  foreground success ([why](#status-by-status)). Keeping a line in every case is also
+- **A settled run drops the latest child for its figures, or for its
+  verdict.** On `success` the report is the account of what happened, and the
+  last thing the subagent touched is noise next to it; `12 tool uses · 45.6K
+  tokens` is the fact worth keeping on a collapsed row. A failed run — in its
+  call or in the background — puts the first line of what it returned there
+  instead: no subagent body opens itself
+  ([the body](#the-body-problems-2-and-3)), so the row is where *why* has to be.
+  `interrupted` keeps the child because there it *is* the news: where it was
+  when it was cut. One that settled from the background and completed reads as
+  a foreground success ([why](#status-by-status)). Keeping a line in every case is also
   what holds the row's height when it settles, and that matters more for a
   subagent than for any other foreground call: the main agent routinely spawns
   several at once, so a subagent row that finishes first is **not** at the
   tail — its siblings are still running under it.
-- **`error` gets a line now.** The shared rung 4 (the tail of the output) is
-  still withheld, for the reason [above](#the-body-problems-2-and-3) — the body
-  opens itself and the report is right there — but the figures are not a copy
-  of anything in the body's first screen, so they stay.
+- **`error` reads its own line, not the shared rung 4.** Rung 4 is the tail of
+  machine output in mono; a subagent's result is prose that states its verdict
+  first, so the first line is the one that says why
+  ([status by status](#status-by-status)).
 - **`aria-hidden` while live, exposed once settled**, as every second line
   ([above](#the-second-line-problem-1)). Both halves move while live: the count
   and the latest child.
@@ -3373,6 +3443,9 @@ sit flat beside the call ([below](#what-is-not-filed)). Writing `0 tool uses` on
 those would be false for the second kind. The price is that a step-less subagent which showed its activity
 line while live loses it when it settles — the one re-flow left, on a subagent
 that never called a tool, which is rare.
+A failure that returned something is the exception, and reads its own line
+even here: the shared failure rung is the tail of the raw result in mono, and
+for a framed report that tail is the frame's usage line, not why.
 
 ### Process
 
@@ -3426,10 +3499,11 @@ its frames reached only its sidechain transcript — so its row has a report and
 no Process.
 
 **It is closed until the user opens it, and nothing opens it.** Not a failure,
-not an interruption, not the subagent finishing. `TaskItem` opens its body when
-the subagent fails, because the report is the only account of what went wrong;
-the Process is a tap further down, and opening it too would put a subagent's
-forty rows into the transcript at the moment the user is reading the report. If
+not an interruption, not the subagent finishing — and no more than the
+`TaskItem` body around it, which does not open itself either
+([the body](#the-body-problems-2-and-3)). A reader who opened a failed
+subagent's body came for the report; opening the Process too would put a
+subagent's forty rows into the transcript at the moment they are reading it. If
 the report is empty, its sentence sits above the closed Process — with only the
 outcome blocks, when there are any, between them — which is where the reader
 goes next. Its open state is local and survives the run settling, like the
@@ -3438,11 +3512,9 @@ Prompt's.
 **Children in arrival order, each drawn by the renderer it would have in the
 main transcript.** A call is a `ToolCallItem`, a subagent call a `TaskItem`, a
 permission or question record its own card — the same components and rules as
-at the top level, because a `Grep` is a `Grep` whoever ran it, with one
-exception: **a nested `TaskItem` does not open itself on failure.** Inside an
-open Process it is mid-transcript by definition, so opening it is a height
-change under the reader for a failure the outer subagent has already dealt
-with — its red row says it failed, and the outer report is the account. The
+at the top level, because a `Grep` is a `Grep` whoever ran it — a nested
+`TaskItem` included, which reads its failure on its own line and opens only
+when tapped, like the outer one. The
 Process is a **list of parts**, the same shape a message's content is, so it is
 drawn by the same `PartBlocks` and its consecutive calls fold into a summary
 exactly as a message's do ([groups](#groups)).
@@ -3536,8 +3608,7 @@ Process**: it is drawn **in the outermost Task item, between the row and the
 body**, outside the collapsible, visible whether the row is open or not. The
 outermost, because a card from a subagent's subagent would otherwise be under a
 row that is itself inside a closed Process; the top-level Task row is the one
-row in the transcript the user can always see. Being inside that item's DOM is
-also what tells a screen reader whose request it is.
+row in the transcript the user can always see.
 
 ```
 │ ⟳  ⧉ Explore  Find retry handling                         47s │
@@ -3561,6 +3632,77 @@ and nothing here needs it to. Once answered, a card leaves the slot: whatever it
 and its call become afterwards are drawn in the Process, in arrival order, as
 they would be in a message — the one height change here, and it happens under
 the user's own tap.
+
+**A card from deeper down says who asked.** The slot gathers cards from every
+depth, so the row above it names only the outermost subagent, and each card
+names only its call: `Bash  rm -rf build/` under `Explore` reads as Explore
+asking even when it was the `code-reviewer` Explore spawned. Approving a command
+is a judgement about who wants to run it, so a card asked by anyone other than
+the row it sits under carries an **asker line** above its row line, inside its
+frame:
+
+```
+│ ⟳  ⧉ Explore  Find retry handling                         47s │
+│    6 tool uses · code-reviewer  Review the diff               │
+│ ┌ ?  Bash   go test ./relay/…                               ┐ │  Explore's own: no asker line
+│ │    [Deny]  [Always Allow]  [Allow]                        │ │
+│ ├───────────────────────────────────────────────────────────┤ │
+│ │ ⧉ code-reviewer  Review the diff                          │ │  asker line
+│ │ ?  Bash   rm -rf build/                                   │ │
+│ │    [Deny]  [Always Allow]  [Allow]                        │ │
+│ └───────────────────────────────────────────────────────────┘ │
+```
+
+- **Who asked is the subagent whose children the card is filed in.** No record
+  has to name it, and none does: neither CLI's permission request names a parent
+  (Claude's `can_use_tool`, Codex's approval request with its `itemId`), but the
+  card takes the place of its call, and the call names its parent
+  (`parent_tool_use_id` on Claude's frames, the spawn's call id on a Codex
+  subagent thread's items — [code/frontend-state.md](code/frontend-state.md#a-subagents-children)).
+  So the card already sits in the asker's `children`, and the walk that gathers
+  cards for the slot (`collectPartsWithin`) has only to hand back, with each card,
+  the subagent calls it passed through on the way down. Both CLIs, any depth,
+  one rule; nothing new on the wire or in the record.
+- **The asker is named as its own row names it.** Title and detail come from
+  that call's `toolSummary` and are drawn through the same `Bot` mark, title
+  span and `Detail` the subagent row uses — so the line matches, letter for
+  letter, the row it points at once the user opens the Process. The title is
+  what tells agents of different kinds apart, and the detail is what tells two
+  of the same kind apart: two parallel `Explore`s are two descriptions. A Codex
+  `subAgentActivity` spawn has no detail and needs little — its title is the
+  agent's own path segment, which the model names per agent.
+- **Only the asker, not the path to it.** A subagent's subagent's card names
+  the innermost agent alone, not `code-reviewer › Explore`: the decision is
+  about who runs the command, and the chain between it and the row above is one
+  tap away in the Process, where the asker's row sits under its own parent. A
+  breadcrumb would spend a 320px line on names the user is not deciding about,
+  and at depth it would have to be cut anyway.
+- **None on the outermost subagent's own cards, nor on the main agent's.** A
+  card with no asker line was asked by the row it is under — a subagent's slot
+  or, outside every slot, the main agent — which is how every card has always
+  read. Labelling those too would put the row's own name directly under the
+  row, on the commonest card there is, to cover a case it is not.
+- **Its shape.** One line, `text-xs`, the card's own padding, above the row
+  line and inside the warning frame — part of the card, since it is a fact
+  about the request — with the title in `text-th-text-secondary`, not the
+  accent: an accent title above the card's own `Bash` would make two rows of
+  one card. Title capped as on the row (`max-w-[45%]`, `truncate`), detail
+  truncating after it; the line never wraps, so a card is exactly one line
+  taller for it, and only while it waits.
+- **A screen reader hears it first.** The line is the card's first content in
+  DOM order, so it is read before the call: the mark `aria-hidden`, a visually
+  hidden `Asked by ` before the name — *"Asked by code-reviewer, Review the
+  diff"* — then the card as it always reads. Being inside the outer item's DOM
+  says which subagent row a card is under; it never said which subagent asked.
+- **It goes when the card leaves the slot.** Answered, the card is drawn in the
+  asker's own Process, where the rail already says whose it is, and it reads as
+  any answered card does. A card still flat because its call has not been
+  written yet (claude 2.1.286 asks first —
+  [code/frontend-state.md](code/frontend-state.md#a-subagents-children)) is
+  outside every subagent and has no asker line — for that moment it reads as
+  the main agent's, the one case where the line cannot say who asked, because
+  nothing on screen knows yet. When its call arrives and takes the card into the
+  slot, the card arrives there with its line.
 
 The Task row keeps its spinner while a card waits, and this is the one place a
 spinner sits beside a pending card, which
@@ -3588,8 +3730,9 @@ the limit it always had, now visible as which Process the card lands in.
 | `running` | spinner, `N tool uses · <latest child>` | grows; its live children spin |
 | `background` | spinner + chip, same line while children arrive | as running, for as long as children arrive |
 | `success` | muted check, the figures | settled |
-| `error` | red, opens its body (not when nested), the figures | closed; a failed call, if any, is red on its own row |
-| `interrupted` | `Ban`, `N tool uses · <latest child>` | settled |
+| `error` | red, `N tool uses · <first line of what it returned>`; the body stays closed | closed; a failed call, if any, is red on its own row |
+| `interrupted` | `Ban`, `N tool uses · <latest child>` — on Codex as on Claude ([status by status](#status-by-status)) | settled |
+| resumed after any of the three above | as `running`, until the resumed run ends ([status by status](#status-by-status)) | grows again; the new children spin |
 
 **A settled subagent leaves nothing spinning under it**, save a child in
 `background`, which settles by its own notification as any backgrounded call
@@ -4620,9 +4763,16 @@ the virtualizer measures it.
 18. A subagent step that needs permission, with the Task row collapsed: the card
     is visible directly under the Task row, not hidden in the closed Process —
     and for a subagent's subagent, under the top-level Task row. Approve it: the
-    card leaves that slot and the step runs inside the Process.
-19. Interrupt a subagent mid-run: `Ban`, the line frozen on its latest child,
-    and no spinner left anywhere inside its Process.
+    card leaves that slot and the step runs inside the Process. A card asked by
+    the subagent's subagent carries one line above its row naming that inner
+    agent as its row does (`⧉ code-reviewer  Review the diff`); the outer
+    subagent's own card beside it has none.
+19. Interrupt a subagent mid-run, on Claude and on Codex: `Ban`, muted, never
+    red, the line frozen on its latest child, and no spinner left anywhere
+    inside its Process.
+    A subagent that fails, foreground or backgrounded, live or on reload: red
+    line 1, `N tool uses · <first line of what it returned>`, and the body
+    **closed** until tapped.
 20. A transcript recorded before this change: subagent rows and their work read
     exactly as they did, with no `0 tool uses` anywhere — titled by their
     `subagent_type` now, which their input always carried, and with no tokens

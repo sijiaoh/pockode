@@ -137,7 +137,10 @@ type SessionForker interface {
 func TruncateHistory(records []json.RawMessage, keepThrough int) []json.RawMessage {
 	kept := records[:keepThrough+1]
 
-	settledTools := make(map[string]struct{})
+	// settledTools holds, by call, the index of the last result kept: a call
+	// announced again because it resumed (ToolCallResumed) is only settled by a
+	// result that came after it.
+	settledTools := make(map[string]int)
 	settledRequests := make(map[string]struct{})
 	parsed := make([]*EventRecord, len(kept))
 
@@ -150,7 +153,7 @@ func TruncateHistory(records []json.RawMessage, keepThrough int) []json.RawMessa
 
 		switch rec.Type {
 		case EventTypeToolResult:
-			settledTools[rec.ToolUseID] = struct{}{}
+			settledTools[rec.ToolUseID] = i
 		case EventTypePermissionResponse, EventTypeQuestionResponse, EventTypeRequestCancelled:
 			settledRequests[rec.RequestID] = struct{}{}
 		}
@@ -158,7 +161,7 @@ func TruncateHistory(records []json.RawMessage, keepThrough int) []json.RawMessa
 
 	result := make([]json.RawMessage, 0, len(kept))
 	for i, raw := range kept {
-		if rec := parsed[i]; rec != nil && danglesAfterCut(*rec, settledTools, settledRequests) {
+		if rec := parsed[i]; rec != nil && danglesAfterCut(*rec, i, settledTools, settledRequests) {
 			continue
 		}
 		result = append(result, raw)
@@ -172,13 +175,18 @@ func TruncateHistory(records []json.RawMessage, keepThrough int) []json.RawMessa
 // An event with no ID to pair on is never dangling: it could not have been
 // paired before the fork either, so dropping it would remove history the source
 // session still shows.
-func danglesAfterCut(rec EventRecord, settledTools, settledRequests map[string]struct{}) bool {
+func danglesAfterCut(rec EventRecord, index int, settledTools map[string]int, settledRequests map[string]struct{}) bool {
 	switch rec.Type {
 	case EventTypeToolCall:
 		if rec.ToolUseID == "" {
 			return false
 		}
-		_, settled := settledTools[rec.ToolUseID]
+		last, settled := settledTools[rec.ToolUseID]
+		if rec.Subtype == ToolCallResumed {
+			// The call's first run settled before it; only this run can dangle,
+			// and dropping the record leaves the row as it was before it.
+			return !settled || last < index
+		}
 		return !settled
 	case EventTypePermissionRequest, EventTypeAskUserQuestion:
 		if rec.RequestID == "" {

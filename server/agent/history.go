@@ -129,9 +129,11 @@ type EventRecord struct {
 	// has no id of its own to use. Empty on every record written before this
 	// field existed, and on a message whose id was never established.
 	MessageID string `json:"message_id,omitempty"`
-	// Subtype says what kind of record this is within its type, for the two
-	// types that have kinds: a system-origin message (see MessageEvent), and a
-	// tool result that is not the whole story (see ToolResultBackgroundStarted).
+	// Subtype says what kind of record this is within its type, for the three
+	// types that have kinds: a system-origin message (see MessageEvent), a tool
+	// result that is not the whole story (see ToolResultBackgroundStarted), and
+	// a tool call announced again because it is running again (see
+	// ToolCallResumed).
 	Subtype string       `json:"subtype,omitempty"`
 	Meta    *MessageMeta `json:"meta,omitempty"`
 	// DurationMs and ExitCode are what an agent CLI reported about a finished

@@ -1,5 +1,6 @@
 import type { ContentPart, Message, ToolRun } from "../types/message";
 import { toolRunText } from "./toolRun";
+import { isTaskTool } from "./toolSummary";
 
 /**
  * What a subagent row derives from its children: how far it has come and what
@@ -213,32 +214,32 @@ export function subagentLine(
 		if (toolUses === 0 && !lastTool) return null;
 		return { toolUses, tail, live: true };
 	}
-	if (toolUses === 0) {
-		// Only a run that settled with figures has a line without a count.
-		const tokens = figuresTokens(run);
-		return tokens ? { toolUses, tokens, live: false } : null;
+	// No subagent body opens itself, so a failure's why goes here: the first
+	// line of its report, or of a backgrounded run's outcome — ahead of the
+	// shared rungs too, whose failure rung is the tail of the raw result in mono
+	// (for a framed report, its usage line). One that returned nothing keeps
+	// its figures.
+	if (run.status === "error") {
+		const text = toolRunText(run);
+		const why = firstLine(run.fromBackground ? text : subagentReport(text));
+		if (why) {
+			return { toolUses, tail: { kind: "text", text: why }, live: false };
+		}
 	}
+	const tokens = figuresTokens(run);
+	// Only a run that settled with figures has a line without a count.
+	if (toolUses === 0 && !tokens) return null;
 	// Frozen where it was cut: where it was is the news, and a late result's
 	// tokens are not.
 	if (run.status === "interrupted") {
 		return { toolUses, tail: latest, live: false };
 	}
-	// A backgrounded failure's body does not open, so its verdict goes here.
-	if (run.fromBackground && run.status === "error") {
-		const outcome = firstLine(toolRunText(run));
-		return {
-			toolUses,
-			tail: outcome ? { kind: "text", text: outcome } : undefined,
-			live: false,
-		};
-	}
-	return { toolUses, tokens: figuresTokens(run), live: false };
+	return { toolUses, tokens, live: false };
 }
 
 /** Tokens for a figures line: settled, not cut short, and not zero. */
 function figuresTokens(run: ToolRun): number | undefined {
 	if (run.status === "interrupted") return undefined;
-	if (run.fromBackground && run.status === "error") return undefined;
 	const tokens = run.subagent?.totalTokens;
 	return tokens ? tokens : undefined;
 }
@@ -335,4 +336,96 @@ export function unfiledChildren(
 		});
 	}
 	return result;
+}
+
+// Where: the tool a Claude agent resumes a subagent with, naming it by the id
+// the subagent's call reported (measured on claude 2.1.286 and 2.1.330: its
+// input is `{to, summary, message}`). The call hands back a placeholder at
+// once, and the resumed subagent's outcome arrives as its background result.
+const RESUME_TOOL = "SendMessage";
+
+// Where: the line claude 2.1.286 ends a subagent's hand-back with, and the one
+// a backgrounded subagent's placeholder carries (see HAND_BACK). 2.1.330 puts
+// the id on the record's `subagent` instead.
+const AGENT_ID_LINE = /^agentId: (\S+)/m;
+
+/** The id the CLI named a subagent call's subagent by, if it named one. */
+function subagentAgentId(run: ToolRun): string | undefined {
+	if (run.subagent?.agentId) return run.subagent.agentId;
+	for (const text of [run.result, run.placeholderResult]) {
+		const id = text ? AGENT_ID_LINE.exec(text)?.[1] : undefined;
+		if (id) return id;
+	}
+	return undefined;
+}
+
+const NO_RESUMES: ReadonlyMap<string, ToolRun> = new Map();
+
+/**
+ * Every settled subagent run that is running again, by its `tool_use_id`, with
+ * the call that resumed it.
+ *
+ * A Claude subagent resumes under a call of its own (`SendMessage`), not under
+ * the call that spawned it: its work is still filed under that call, but what
+ * says it is running, and when it stops, is the resuming call's own status. So
+ * it is read from there, each time, rather than copied onto the subagent's run
+ * — a copy would have to follow that call through every way a call can settle
+ * (its outcome, a turn cut short, its process ending), and one it missed would
+ * leave the row spinning for good. Codex, whose resumed subagent settles the
+ * spawn's call again, says so on that call instead (`resumeToolRun`).
+ *
+ * A run still live is not resumed by a message written to it: it never
+ * stopped.
+ */
+export function liveResumes(messages: Message[]): ReadonlyMap<string, ToolRun> {
+	const runsByAgent = new Map<string, ToolRun>();
+	const resumes: ToolRun[] = [];
+	const visit = (parts: ContentPart[]) => {
+		for (const part of parts) {
+			if (part.type !== "tool_call") continue;
+			const run = part.tool;
+			if (run.name === RESUME_TOOL) {
+				if (isLive(run)) resumes.push(run);
+			} else if (isTaskTool(run.name)) {
+				const agentId = subagentAgentId(run);
+				if (agentId) runsByAgent.set(agentId, run);
+			}
+			if (run.children) visit(run.children);
+		}
+	};
+	for (const message of messages) {
+		if (message.role === "assistant") visit(message.parts);
+	}
+	if (resumes.length === 0) return NO_RESUMES;
+
+	const result = new Map<string, ToolRun>();
+	for (const resume of resumes) {
+		const to = (resume.input as { to?: unknown } | null)?.to;
+		const target = typeof to === "string" ? runsByAgent.get(to) : undefined;
+		if (target && !isLive(target)) result.set(target.id, resume);
+	}
+	return result.size > 0 ? result : NO_RESUMES;
+}
+
+/**
+ * A resumed subagent's run as its row draws it: running, on the resuming
+ * call's clock and live progress, since that is the run going on now. What it
+ * reported last is kept for its body, as it is for a Codex subagent resumed.
+ */
+export function resumedRun(run: ToolRun, resume: ToolRun): ToolRun {
+	const {
+		endedAt: _endedAt,
+		durationMs: _durationMs,
+		startedAt: _startedAt,
+		seenAt: _seenAt,
+		...rest
+	} = run;
+	return {
+		...rest,
+		status: "running",
+		activity: resume.activity,
+		subagentProgress: resume.subagentProgress,
+		...(resume.startedAt !== undefined ? { startedAt: resume.startedAt } : {}),
+		...(resume.seenAt ? { seenAt: resume.seenAt } : {}),
+	};
 }
