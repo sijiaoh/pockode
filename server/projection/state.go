@@ -39,23 +39,31 @@ type State struct {
 
 // Turn is one turn of the session, as its turn_started record and its ending
 // say.
+//
+// It is the turn a page's items are grouped under (PageTurn), as it stands
+// now, whichever page its items are on.
 type Turn struct {
-	ID        string
-	Origin    agent.TurnOrigin
-	MessageID string
-	StartedAt *time.Time
+	ID        string           `json:"turn_id"`
+	Origin    agent.TurnOrigin `json:"origin"`
+	MessageID string           `json:"message_id,omitempty"`
+	StartedAt *time.Time       `json:"started_at,omitempty"`
 	// StartSeq is the seq of the turn_started record; NoHistorySeq for a turn
 	// inferred from lines written before turns had ids, whose turn_started is
 	// in no file.
-	StartSeq session.HistorySeq
+	StartSeq session.HistorySeq `json:"start_seq,omitempty"`
 	// Ended says an ending of this turn was recorded. A turn the next
 	// turn_started follows with no ending between — its process died with the
 	// server and nothing said so — stays not ended; it is just not the open
 	// one (State.OpenTurn).
-	Ended   bool
-	Outcome session.TurnOutcome
+	Ended   bool                `json:"ended"`
+	Outcome session.TurnOutcome `json:"outcome,omitempty"`
+	// EndedBy is the signal that ended it, which says more than Outcome: an
+	// aborted turn was interrupted, or lost its process.
+	EndedBy session.TurnSignal `json:"ended_by,omitempty"`
 	// EndSeq is the seq of the record that ended the turn.
-	EndSeq session.HistorySeq
+	EndSeq session.HistorySeq `json:"end_seq,omitempty"`
+	// EndedAt is the moment that record carries.
+	EndedAt *time.Time `json:"ended_at,omitempty"`
 }
 
 // QuestionStatus is where a question stands.
@@ -70,32 +78,38 @@ const (
 
 // Question is one question and what became of it.
 type Question struct {
-	RequestID   string
-	Header      string
-	Question    string
-	Options     []agent.QuestionOption
-	MultiSelect bool
-	AskedAt     *time.Time
+	RequestID   string                 `json:"request_id"`
+	Header      string                 `json:"header,omitempty"`
+	Question    string                 `json:"question"`
+	Options     []agent.QuestionOption `json:"options,omitempty"`
+	MultiSelect bool                   `json:"multi_select,omitempty"`
+	AskedAt     *time.Time             `json:"asked_at,omitempty"`
 	// TurnID is the turn the question was asked in, "" for none.
-	TurnID string
-	Seq    session.HistorySeq
+	TurnID string             `json:"-"`
+	Seq    session.HistorySeq `json:"-"`
 	// Legacy marks the CLI's own blocking question (ask_user_question), from
 	// transcripts written before Pockode stopped letting a CLI ask one. One
 	// record could carry several, so several share a request id. Nothing can
 	// answer one any more, so an open one is not unanswered (State.Unanswered).
-	Legacy    bool
-	ToolUseID string
+	Legacy    bool   `json:"legacy,omitempty"`
+	ToolUseID string `json:"tool_use_id,omitempty"`
 
-	Status QuestionStatus
+	Status QuestionStatus `json:"status"`
 	// Answer is the answer or decline, for those statuses. A legacy answer is
 	// parsed back out of the flat shape it was recorded in, and carries no
 	// answerer or moment.
-	Answer *agent.QuestionAnswer
+	Answer *agent.QuestionAnswer `json:"answer,omitempty"`
 	// AnsweredIn is the message the answer went out in.
-	AnsweredIn string
+	AnsweredIn string `json:"answered_in,omitempty"`
+	// DiscardedAnswer is the answer a Stop threw away unread, which reopened
+	// the question, and DiscardedIn the message it went out in: what the
+	// question's card still shows of it until the question is answered again
+	// or withdrawn.
+	DiscardedAnswer *agent.QuestionAnswer `json:"discarded_answer,omitempty"`
+	DiscardedIn     string                `json:"discarded_in,omitempty"`
 	// Reason and ResolvedAt are a withdrawal's.
-	Reason     agent.CancelReason
-	ResolvedAt *time.Time
+	Reason     agent.CancelReason `json:"reason,omitempty"`
+	ResolvedAt *time.Time         `json:"resolved_at,omitempty"`
 }
 
 // Plan is a plan record and where it sits.
@@ -109,13 +123,13 @@ type Plan struct {
 type DiscardedMessage struct {
 	// MessageID names the message; empty for a discard recorded before the
 	// message_discarded record existed, as a warning that named no message.
-	MessageID string
+	MessageID string `json:"message_id,omitempty"`
 	// Excerpt is what such a warning quoted of the message, as it quoted it;
 	// empty for every discard that names its message.
-	Excerpt string
-	Seq     session.HistorySeq
+	Excerpt string             `json:"excerpt,omitempty"`
+	Seq     session.HistorySeq `json:"seq,omitempty"`
 	// TurnID is the turn the Stop ended.
-	TurnID string
+	TurnID string `json:"-"`
 }
 
 // ReadPoint is the point the agent read a message.

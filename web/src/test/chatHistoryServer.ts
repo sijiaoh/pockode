@@ -1,10 +1,7 @@
 import { IDLE_TURN } from "../lib/activity";
 import type * as WSStoreModule from "../lib/wsStore";
-import type {
-	ChatMessagesHistoryResult,
-	HistorySeq,
-	ServerNotification,
-} from "../types/message";
+import type { ChatNotification, ChatPage } from "../types/chatItems";
+import type { ChatMessagesHistoryResult, HistorySeq } from "../types/message";
 
 type RPCActions = ReturnType<
 	typeof WSStoreModule.useWSStore.getState
@@ -16,17 +13,17 @@ type RPCActions = ReturnType<
  * read whatever this holds at call time.
  */
 const server = {
-	/** History records, split into pages, oldest page first. */
-	pages: [] as unknown[][],
+	/** The transcript's pages, oldest first (`test/chatItemsFixture`). */
+	pages: [] as ChatPage[],
 	/** How many older pages have been asked for. */
 	requests: 0,
 	/** Answers the page request in flight, held until the test lands it. */
 	pending: null as (() => void) | null,
-	/** Where the transcript's subscription delivers live records. */
-	notify: null as ((notification: ServerNotification) => void) | null,
+	/** Where the transcript's subscription delivers notifications. */
+	notify: null as ((notification: ChatNotification) => void) | null,
 };
 
-export function resetChatHistoryServer(pages: unknown[][]) {
+export function resetChatHistoryServer(pages: ChatPage[]) {
 	server.pages = pages;
 	server.requests = 0;
 	server.pending = null;
@@ -46,19 +43,23 @@ export function answerPageRequest(): boolean {
 	return true;
 }
 
-/** Delivers `records` to the transcript as live output, in order. */
-export function streamRecords(records: unknown[]) {
+/** Delivers `notifications` to the transcript's subscription, in order. */
+export function streamUpdates(notifications: ChatNotification[]) {
 	const { notify } = server;
 	if (!notify) throw new Error("the transcript has not subscribed");
-	for (const record of records) notify(record as ServerNotification);
+	for (const notification of notifications) notify(notification);
 }
 
-// A page's cursor is its own index: asking with `i` returns page `i - 1`. Page 0
-// has nothing before it, so it hands out no cursor.
+function firstSeq(p: ChatPage): HistorySeq | undefined {
+	return p.turns[0]?.items[0]?.seq;
+}
+
+// A page's cursor is its first item's seq, as the server's is. Page 0 has
+// nothing before it, so it hands out no cursor.
 function page(index: number): ChatMessagesHistoryResult {
-	const next = index > 0 ? index : undefined;
+	const next = index > 0 ? firstSeq(server.pages[index]) : undefined;
 	return {
-		history: server.pages[index],
+		...server.pages[index],
 		has_more: next !== undefined,
 		next_before_seq: next,
 	};
@@ -67,10 +68,10 @@ function page(index: number): ChatMessagesHistoryResult {
 /**
  * Stands in for the server end of a transcript's history, and nothing else:
  * subscribing hands back the newest page, `chat.messages.history` each older
- * one, on the real store, which is marked connected. Live records reach the
- * subscription only when the test streams them (`streamRecords`). Everything
- * above the RPCs is the app's own — `useChatMessages` replays the records,
- * splices each page in with `prependHistoryPage`, and keeps the paging flags. A
+ * one, on the real store, which is marked connected. Live updates reach the
+ * subscription only when the test streams them (`streamUpdates`). Everything
+ * above the RPCs is the app's own — `useChatMessages` holds the items, adds
+ * each older page in front, and keeps the paging flags. A
  * request for an older page is held until the test answers it
  * (`answerPageRequest`).
  *
@@ -93,7 +94,7 @@ export function stubChatHistoryRpc(
 	const stubs = {
 		chatMessagesSubscribe: async (
 			_sessionId: string,
-			callback: (notification: ServerNotification) => void,
+			callback: (notification: ChatNotification) => void,
 		) => {
 			server.notify = callback;
 			return {
@@ -107,8 +108,9 @@ export function stubChatHistoryRpc(
 		getFile: () => new Promise<never>(() => {}),
 		chatMessagesHistory: (_sessionId: string, beforeSeq: HistorySeq) => {
 			server.requests++;
+			const index = server.pages.findIndex((p) => firstSeq(p) === beforeSeq);
 			return new Promise<ChatMessagesHistoryResult>((resolve) => {
-				server.pending = () => resolve(page(beforeSeq - 1));
+				server.pending = () => resolve(page(index - 1));
 			});
 		},
 	} satisfies Partial<RPCActions>;

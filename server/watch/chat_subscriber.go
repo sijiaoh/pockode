@@ -8,13 +8,11 @@ import (
 )
 
 // ChatResyncMethod is the notification that tells a chat subscriber its stream
-// has a hole in it: a record could not be queued for it. It is the last
+// has a hole in it: an update could not be queued for it, or the projection it
+// is taken from lost track of the history (projection.Live.TakeUpdate). It is the last
 // notification the subscription carries. The client is to drop the
 // subscription and open a fresh one (chat.messages.subscribe), whose snapshot
 // holds everything that was lost. Params: resyncParams.
-//
-// Not "chat.<event type>" by accident: TestChatResync_IsNoWireType holds that no
-// event type takes the name.
 const ChatResyncMethod = "chat.resync"
 
 type resyncParams struct {
@@ -32,15 +30,15 @@ const chatQueueSize = 256
 // that drains it.
 //
 // The queue keeps the order things were offered in. When it is more than half
-// full, live progress is turned away, so a burst of it cannot crowd out
-// anything that happens once: tool_activity and thinking_delta are the
-// high-frequency events, and the only ones whose loss costs nothing lasting —
-// the whole output arrives again with the result, the whole thinking with its
-// record, and a fresh subscription is handed the newest activity line. When a
-// persisted record finds the queue full, the subscriber is stalled instead:
-// everything still queued and everything offered afterwards is discarded, and
-// it is sent ChatResyncMethod and nothing more. What it did receive is
-// therefore always a gap-free prefix of the stream.
+// full, live stream deltas are turned away, so a burst of them cannot crowd
+// out anything that happens once: they are the high-frequency notifications,
+// and the only ones whose loss is repaired in place — the subscriber is sent
+// the whole stream with its next delta (offerDelta), and the item that settles
+// a stream holds all of it. When an update finds the queue full, the
+// subscriber is stalled instead: everything still queued and everything
+// offered afterwards is discarded, and it is sent ChatResyncMethod and nothing
+// more. What it did receive is therefore always a gap-free prefix of the
+// stream.
 type chatSubscriber struct {
 	id        string
 	sessionID string
@@ -54,6 +52,10 @@ type chatSubscriber struct {
 
 	closeOnce sync.Once
 	done      chan struct{}
+
+	// gaps are the live streams a delta of was turned away, by stream key
+	// (offerDelta); guarded by the watcher's sessionMu.
+	gaps map[string]bool
 }
 
 func newChatSubscriber(id, sessionID string, notifier Notifier) *chatSubscriber {
@@ -64,34 +66,48 @@ func newChatSubscriber(id, sessionID string, notifier Notifier) *chatSubscriber 
 		queue:     make(chan Notification, chatQueueSize),
 		resync:    make(chan struct{}, 1),
 		done:      make(chan struct{}),
+		gaps:      make(map[string]bool),
 	}
 }
 
-// offer queues n without blocking. droppable marks live progress, which is
-// turned away rather than queued once the queue is half full.
-func (s *chatSubscriber) offer(n Notification, droppable bool) {
+// offer queues n without blocking, and says whether it did. droppable marks
+// a live stream's delta, which is turned away rather than queued once the
+// queue is half full.
+func (s *chatSubscriber) offer(n Notification, droppable bool) bool {
 	if s.stalled.Load() {
-		return
+		return false
 	}
-	// Half the queue is a reserve, not a tuned figure: it only engages once the
-	// subscriber has fallen far behind, which is exactly when the cheapest thing
-	// to drop should be dropped.
-	if droppable && len(s.queue) > cap(s.queue)/2 {
-		slog.Debug("dropped a live progress update to keep room for records that cannot be lost",
+	if droppable && s.refusesDroppable() {
+		slog.Debug("dropped a live stream delta to keep room for updates that cannot be lost",
 			"id", s.id, "sessionId", s.sessionID, "queued", len(s.queue))
-		return
+		return false
 	}
 	select {
 	case s.queue <- n:
-		return
+		return true
 	default:
 	}
 	if droppable {
-		return
+		return false
 	}
+	slog.Warn("chat subscriber fell too far behind; telling it to resync",
+		"id", s.id, "sessionId", s.sessionID, "method", n.Method)
+	s.requestResync()
+	return false
+}
+
+// refusesDroppable is whether offer would turn a droppable notification away
+// before trying the queue. Half the queue is a reserve, not a tuned figure: it
+// only engages once the subscriber has fallen far behind, which is exactly
+// when the cheapest thing to drop should be dropped.
+func (s *chatSubscriber) refusesDroppable() bool {
+	return s.stalled.Load() || len(s.queue) > cap(s.queue)/2
+}
+
+// requestResync stalls the subscriber: it is sent ChatResyncMethod and
+// nothing more, whatever is still queued included.
+func (s *chatSubscriber) requestResync() {
 	if s.stalled.CompareAndSwap(false, true) {
-		slog.Warn("chat subscriber fell too far behind; telling it to resync",
-			"id", s.id, "sessionId", s.sessionID, "method", n.Method)
 		s.resync <- struct{}{}
 	}
 }

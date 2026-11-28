@@ -300,13 +300,6 @@ func TaggedHistoryRecord(record json.RawMessage, seq HistorySeq, turn HistoryTur
 	return encodeHistoryLine(record, seq, turn)
 }
 
-// encodeWireRecord is the record as a client is sent it: its seq and its own
-// fields. The format version is the file's business, not the event's, and so —
-// until a client reads turns — is the turn.
-func encodeWireRecord(record []byte, seq HistorySeq) ([]byte, error) {
-	return wrapRecord(record, `{"seq":`+strconv.Itoa(int(seq)))
-}
-
 // wrapRecord replaces whatever envelope record has with head, an object's
 // opening brace and its first fields.
 func wrapRecord(record []byte, head string) ([]byte, error) {

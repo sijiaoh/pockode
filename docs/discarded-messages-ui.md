@@ -49,7 +49,7 @@ Interrupted
 ⊘ 2 unread messages were discarded.        [Restore to input]
 ```
 
-The count is every message the turn's records name. One press restores every
+The count is every message the turn's `discarded` names. One press restores every
 plain message the user typed, in the order they were sent, a blank line apart,
 with their files. The wording does not say "Stop": an expired lease ends a turn
 the same way, and `Interrupted` already says how it ended.
@@ -117,7 +117,7 @@ the button is back to `Restore to input`, which is the truth.
 
 ## 6. Across devices and reloads
 
-The endings are derived from history, so every tab and every reload shows them
-alike — including the tab that pressed Stop, which learns its own message's id
-from the reply to its send ([frontend-state.md](code/frontend-state.md#discarded-messages)).
+The endings come from the server's projection of the history, so every tab and
+every reload shows them alike — including the tab that pressed Stop, which
+learns its own message's id from the reply to its send ([frontend-state.md](code/frontend-state.md#discarded-messages)).
 A restore writes the draft of the device it was pressed on only.

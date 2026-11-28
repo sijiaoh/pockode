@@ -661,7 +661,6 @@ describe("the status line's plan", () => {
 		const thought = {
 			content: "Checking the sender",
 			fullReasoning: "",
-			joinedLate: false,
 		};
 		const { rerender } = render(
 			<Transcript messages={messages} phase="running" thinking={thought} />,

@@ -16,6 +16,7 @@ import (
 	"github.com/pockode/server/command"
 	"github.com/pockode/server/htmlpage"
 	"github.com/pockode/server/process"
+	"github.com/pockode/server/projection"
 	"github.com/pockode/server/rpc"
 	"github.com/pockode/server/session"
 	"github.com/pockode/server/worktree"
@@ -44,7 +45,7 @@ func (h *rpcMethodHandler) handleChatMessagesSubscribe(ctx context.Context, conn
 	}
 
 	notifier := h.state.getNotifier()
-	page, err := wt.ChatMessagesWatcher.Subscribe(params.ID, notifier, params.SessionID, params.Limit)
+	page, streams, err := wt.ChatMessagesWatcher.Subscribe(ctx, params.ID, notifier, params.SessionID, params.Limit)
 	if err != nil {
 		// An unusable subscription id or a limit the client cannot ask for are its
 		// mistakes; anything else Subscribe fails on is a history the server could
@@ -52,7 +53,7 @@ func (h *rpcMethodHandler) handleChatMessagesSubscribe(ctx context.Context, conn
 		if h.replySubscriptionIDError(ctx, conn, req.ID, err) {
 			return
 		}
-		if errors.Is(err, session.ErrInvalidHistoryLimit) {
+		if errors.Is(err, projection.ErrInvalidLimit) {
 			h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, err.Error())
 			return
 		}
@@ -65,16 +66,13 @@ func (h *rpcMethodHandler) handleChatMessagesSubscribe(ctx context.Context, conn
 
 	now := time.Now()
 	result := rpc.ChatMessagesSubscribeResult{
-		History:       page.Records,
-		HasMore:       page.HasMore,
-		NextBeforeSeq: page.NextBeforeSeq,
+		Page: page,
 		// From the store, not from the process manager: the turn is what the
 		// session is doing, and it is recorded whether or not a process is still
 		// there to be asked.
-		Turn:         rpc.NewTurn(meta.Turn, now),
-		ToolActivity: wt.ProcessManager.GetToolActivity(params.SessionID),
-		ToolProgress: wt.ProcessManager.GetToolProgress(params.SessionID),
-		ServerTime:   now,
+		Turn:       rpc.NewTurn(meta.Turn, now),
+		Streams:    streams,
+		ServerTime: now,
 	}
 	if err := conn.Reply(ctx, req.ID, result); err != nil {
 		log.Error("failed to send subscribe response", "error", err)
@@ -83,12 +81,14 @@ func (h *rpcMethodHandler) handleChatMessagesSubscribe(ctx context.Context, conn
 
 	log.Info("subscribed to chat messages",
 		"subscriptionId", params.ID, "phase", result.Turn.Phase,
-		"records", len(page.Records), "hasMore", page.HasMore)
+		"turns", len(page.Turns), "hasMore", page.HasMore)
 }
 
-// handleChatMessagesHistory serves the page of history older than a cursor the
-// client already holds — how a chat scrolled back past the page it subscribed
-// with reaches the rest of the conversation.
+// handleChatMessagesHistory serves the page of the transcript older than a
+// cursor the client already holds — how a chat scrolled back past the page it
+// subscribed with reaches the rest of the conversation. A subscribed session's
+// is cut from the projection the subscription holds, so paging back does not
+// read the history file.
 func (h *rpcMethodHandler) handleChatMessagesHistory(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request, wt *worktree.Worktree) {
 	var params rpc.ChatMessagesHistoryParams
 	if err := unmarshalParams(req, &params); err != nil {
@@ -98,43 +98,38 @@ func (h *rpcMethodHandler) handleChatMessagesHistory(ctx context.Context, conn *
 
 	log := h.log.With("sessionId", params.SessionID)
 
-	_, found, err := wt.SessionStore.Get(params.SessionID)
-	if err != nil {
-		h.replyInternalError(ctx, conn, req.ID, "failed to get session", err, "sessionId", params.SessionID)
-		return
-	}
-	if !found {
-		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "session not found")
+	page, ok := h.transcriptPage(ctx, conn, req, wt.Projections, params.SessionID, params.BeforeSeq, params.Limit)
+	if !ok {
 		return
 	}
 
-	records, err := wt.SessionStore.GetHistory(ctx, params.SessionID)
-	if err != nil {
-		h.replyInternalError(ctx, conn, req.ID, "failed to read session history", err, "sessionId", params.SessionID)
-		return
-	}
-
-	page, err := session.PageHistory(records, params.BeforeSeq, params.Limit)
-	if err != nil {
-		// Both failures name what the client asked for and what the history can
-		// answer, so the cause is the reply.
-		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, err.Error())
-		return
-	}
-
-	result := rpc.ChatMessagesHistoryResult{
-		History:       page.Records,
-		HasMore:       page.HasMore,
-		NextBeforeSeq: page.NextBeforeSeq,
-		ServerTime:    time.Now(),
-	}
+	result := rpc.ChatMessagesHistoryResult{Page: page, ServerTime: time.Now()}
 	if err := conn.Reply(ctx, req.ID, result); err != nil {
 		log.Error("failed to send history response", "error", err)
 		return
 	}
 
 	log.Debug("served chat history page",
-		"beforeSeq", params.BeforeSeq, "records", len(page.Records), "hasMore", page.HasMore)
+		"beforeSeq", params.BeforeSeq, "turns", len(page.Turns), "hasMore", page.HasMore)
+}
+
+// transcriptPage cuts a page of a session's transcript, answering the client
+// when it cannot.
+func (h *rpcMethodHandler) transcriptPage(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request, source projection.Source, sessionID string, beforeSeq session.HistorySeq, limit int) (projection.Page, bool) {
+	page, err := source.Page(ctx, sessionID, beforeSeq, limit)
+	switch {
+	case err == nil:
+		return page, true
+	case errors.Is(err, session.ErrSessionNotFound):
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "session not found")
+	case errors.Is(err, projection.ErrInvalidCursor), errors.Is(err, projection.ErrInvalidLimit):
+		// Both name what the client asked for and what the history can answer,
+		// so the cause is the reply.
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, err.Error())
+	default:
+		h.replyInternalError(ctx, conn, req.ID, "failed to read session history", err, "sessionId", sessionID)
+	}
+	return projection.Page{}, false
 }
 
 func (h *rpcMethodHandler) handleMessage(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request, wt *worktree.Worktree) {
@@ -389,7 +384,7 @@ func (h *rpcMethodHandler) handleHTMLAction(ctx context.Context, conn *jsonrpc2.
 // messageResult is the part of a send's answer every kind of send shares:
 // what names the record the message was written to.
 func messageResult(sent chat.Sent) rpc.MessageResult {
-	result := rpc.MessageResult{Seq: sent.Seq, MessageID: sent.MessageID}
+	result := rpc.MessageResult{Seq: sent.Seq, MessageID: sent.MessageID, ItemID: sent.ItemID}
 	if !sent.ObservedAt.IsZero() {
 		result.ObservedAt = &sent.ObservedAt
 	}

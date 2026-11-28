@@ -555,8 +555,9 @@ not acquire a page the news can land behind.
 | *Stopped* cap, *Not running* cap | **50 rows each** | High enough that an ordinary project never sees the control, low enough to stop either group from being the whole screen. One number for both: there is no reason for them to hold different amounts. It is a cap, not a page: pressing it once loads the rest of *both* groups, and there is no second press |
 | Closed archive page | **20** | The pager is fixed (§4.2), so page size is not constrained by reaching it — only by how long a page takes to scan. At 20 a page is about two screens: short enough to be read as one page, long enough that walking a real archive is not all thumb work |
 
-Chat history's 50 (`session.DefaultHistoryPageSize`) is deliberately not matched.
-A history record is a fragment of a message and fifty of them are a conversation;
+Chat history's 50 (`projection.DefaultPageSize`) is deliberately not matched.
+It is a budget of history records, and a record is a fragment of a message:
+fifty of them are a conversation;
 a list row is a whole object with a whole tap target, and fifty of those are a
 scroll with no end in sight.
 

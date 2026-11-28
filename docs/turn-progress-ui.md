@@ -354,8 +354,7 @@ the wait instead. When the turn goes back to `running` the line comes back with
 the turn's clock, which kept running underneath.
 
 **A reload keeps the spinner, label and clock off during either wait**, as live does: the
-subscribe-time settle leaves the reply of an open turn `streaming`, whatever it
-is blocked on
+reply of an open turn is drawn `streaming`, whatever it is blocked on
 ([lifecycle-ui.md §2.4](lifecycle-ui.md#24-recovering-a-dangling-turn-after-a-restart)
 says why).
 
@@ -394,8 +393,8 @@ still `running` ([tool-call-ui.md](tool-call-ui.md#a-fetch-in-flight)). Such a
 fetch draws no row, so nothing at the tail moved for up to 30 seconds and the
 row it reads was often screens up. The state ends with the fetch, and with the
 main agent's next text, thinking or call; thinking still being streamed outranks
-it, since it began after the fetch. The reducer holds it as the bubble's
-`awaitedFetch` ([code/frontend-state.md](code/frontend-state.md#a-fetch-filed-under-the-call-it-reads)).
+it, since it began after the fetch. The transcript reads it off the open turn's
+items as the bubble's `awaitedFetch` ([code/frontend-state.md](code/frontend-state.md#a-fetch-filed-under-the-call-it-reads)).
 It names no call, no command and no
 task — the line's rule holds: it says what the turn is doing, which is waiting.
 `Go to call` is the transcript's jump to the row the fetch is filed under
@@ -465,10 +464,9 @@ line — cut and faded at its top, its button above it — and, uncut or
 opened, follows that line as it grows, as *Output so far* does
 ([tool-call-ui.md](tool-call-ui.md#keeping-the-readers-place)); settled, it is
 read from its start. The chevron moves right as the latest line grows and stops where the line
-starts to truncate, as a cursor would. At the tail this pushes nothing. After
-a reconnect in the middle of a thinking the deltas before it are gone (§2.4),
-so the open body begins with the muted line *Earlier thinking appears in full
-when it finishes.*
+starts to truncate, as a cursor would. At the tail this pushes nothing. A
+reconnect in the middle of a thinking loses none of it: the subscription
+carries the thinking so far, and the deltas continue it (§2.4).
 — which it does, in the settled record.
 
 **The turn clock** counts from the moment the turn opened, which the server
@@ -489,11 +487,11 @@ clock is left out and `Working` stands alone — the strip's rule for `since`.
 
 | What happened | What the reader sees |
 |---|---|
-| reconnect / reload mid-turn | the tail line, with the server's clock, from the subscription's `TurnState`; `Working` until the next thinking signal — earlier deltas were never stored, and the line does not pretend otherwise |
+| reconnect / reload mid-turn | the tail line, with the server's clock, from the subscription's `TurnState`; a thinking under way comes back whole, from the subscription's `streams` ([agent-chat.md](agent-chat.md#live-updates)) |
 | reconnect mid-thinking, then it completes | its row settles with the server-measured duration, as if nothing had happened |
 | the turn ends while you were away | no tail line; the reply has its turn-end row |
-| the server restarted mid-turn | the turn is gone, so `phase` is `idle` and there is no tail line; the dangling reply is finalised by [lifecycle-ui.md §2.4](lifecycle-ui.md#24-recovering-a-dangling-turn-after-a-restart) |
-| Stop during a live thinking | the line goes with the turn. Codex does not complete the item it cut off (measured on codex-cli 0.160.0), so there is no record and no row — the same on replay as live |
+| the server restarted mid-turn | the turn is gone, so `phase` is `idle` and there is no tail line; the reply is finished by the `process_ended` the restart repair writes ([lifecycle-ui.md §2.4](lifecycle-ui.md#24-recovering-a-dangling-turn-after-a-restart)) |
+| Stop during a live thinking | the line goes with the turn. Codex does not complete the item it cut off (measured on codex-cli 0.160.0), so there is no record and no row — the same on a reload as live |
 
 ## 3. Subagents
 
@@ -592,7 +590,7 @@ itself on whatever came next: the next thought, around nearly every codex
 call.
 
 **Live state from state, history from history.** Whether an agent is running is
-the reducer's `ToolRun.status`, the one value every subagent row is drawn from
+the run's `ToolRun.status`, the one value every subagent row is drawn from
 ([code/frontend-state.md](code/frontend-state.md#tool-runs)). Nothing here reads
 "running" off a record. The plan is the other case: it is something the agent
 said at one moment, so it is a record (§4.6), and the newest one *is* the
@@ -681,11 +679,10 @@ named as live:
 
 - **A subagent run** is a call the `TaskItem` renderer draws: Claude's `Task` /
   `Agent`, or a Codex spawn (`spawnAgent`, `subAgentActivity`). Both CLIs reach
-  the reducer as the same `ToolRun`, so the chip has no per-engine branch.
+  the client as the same `ToolRun`, so the chip has no per-engine branch.
 - **Top-level** means a part in a reply's own content with no
   `parentToolUseId`. That excludes runs filed under another subagent, and also
-  runs left flat with a `parentToolUseId`, whether their parent is not loaded or
-  an earlier sibling went flat
+  runs left flat with a `parentToolUseId`, whose parent is not in the history
   ([code/frontend-state.md](code/frontend-state.md#a-subagents-children)). A subagent's own subagent is
   one step of its parent's
   ([tool-call-ui.md](tool-call-ui.md#a-subagents-own-work)), and it shows as
@@ -719,15 +716,14 @@ named as live:
   when neither the plan nor the thinking has words (§2.3), the **named
   agent**: its title, as the row's title (the agent, without the row's
   45% cap; the line has its own truncation), then **what it is doing now**.
-  That is `subagentNow(run, unfiled)` in `web/src/lib/subagentRun.ts`: the
-  latest child (`unfiled?.latest ?? latestChild(run.children)`), else `subagent_progress.last_tool_name` as a
-  bare call, else nothing. `subagentLine` builds its live `tail` from the same
-  function, so the row and the line cannot word it differently. The row then
+  That is `subagentNow(run)` in `web/src/lib/subagentRun.ts`: the latest
+  child (`latestChild(run.children)`), else `subagent_progress.last_tool_name`
+  as a bare call, else nothing. `subagentLine` builds its live `tail` from the
+  same function, so the row and the line cannot word it differently. The row then
   adds its last fallback, `run.activity`, which for a subagent is
   `Running <description>`, the row's own detail again
   ([tool-call-ui.md](tool-call-ui.md#the-second-line-steps-and-what-it-is-doing)).
-  The line does not take that fallback. It passes the `unfiled` children
-  the row passes (`useUnfiledChildren`). A call is worded by its title and
+  The line does not take that fallback. A call is worded by its title and
   `Detail`, a text by its first line. A **nested subagent** is worded by the
   agent mark and its task alone — `⧉ 1 · general-purpose ⧉ Read README first
   line ›` — without its own agent's title: the agent named just before it is
@@ -812,7 +808,7 @@ named as live:
   rings it in `th-accent` and focuses it. Where nothing provides the opener
   (a `MessageList` outside `ChatPanel`), every entry goes to its row. Every
   entry is loaded by
-  construction: it is a run in the reducer, and the reducer holds only loaded
+  construction: it is a run in the transcript, which holds only loaded
   pages.
 
 **Where the plan and the agents are derived and drawn.** `useChatMessages`
@@ -841,7 +837,7 @@ hands it the agents chip as `aside` — the row's right end, which
 `MessageActions` fills with `aside ?? figures`. Because it comes
 through the context, the plan or an agent changing re-renders the one slot
 that shows them and no other bubble (the reason `TurnTailContext` exists). An
-entry is drawn from the run itself, the object the reducer holds — taken as its
+entry is drawn from the run itself, the object the transcript built — taken as its
 row draws it, a resumed one on its resume.
 
 ### 4.4 Phone and desktop
@@ -865,7 +861,7 @@ at every tier, under the line:
 
 The strip's background row
 ([lifecycle-ui.md §2.2](lifecycle-ui.md#22-chat-the-attention-strip)) names
-what the turn waits on, from the same reducer state the agents chip reads: the runs whose `status` is
+what the turn waits on, from the same runs the agents chip reads: the runs whose `status` is
 `background`, not counting those filed under another `background` run (the
 outer one stands for them). Any tool counts here, not only subagents, because a
 backgrounded `Bash` holds the turn just as a subagent does. `AttentionStrip`
@@ -919,9 +915,9 @@ its items have. A step's `id` is the CLI's
 task id. Only a record from the Task-tool fold carries one, because only that
 fold is keyed by id; it is what lets a seed name the tasks the next
 `TaskUpdate` touches (below). `plan_id` exists because a
-Codex plan has no call to be keyed by, and the reducer keys every row (below).
+Codex plan has no call to be keyed by, and the client keys every row (below).
 The adapter numbers the turn's plan updates, so the id is the same on every
-replay.
+reload.
 
 It is persisted like every event record. The adapter emits `agent.PlanEvent`,
 and the record carries what the plan was *at that moment*: an event, never
@@ -1054,15 +1050,14 @@ plan. It is only what the agent last said, kept so that the next update can
 name tasks the fold would otherwise not know. The truth is the CLI's own list,
 and each `TaskList` replaces the seed with it.
 
-**Where the reducer files it, and how it is drawn:**
+**Where it is filed, and how it is drawn:**
 
-- **With a `tool_use_id`** (Claude), it becomes no part. It is set on the
-  call's run as `ToolRun.plan` (steps, explanation, and the record's place in
-  record order, below), found by id at any depth, the way a fetch is filed on the run it reads
-  ([code/frontend-state.md](code/frontend-state.md#a-fetch-filed-under-the-call-it-reads)).
-  A later record for the same call replaces it. A record whose call is not
-  loaded is dropped: its row is not on screen, and the line reads only the
-  open turn's loaded replies anyway. Nothing new is drawn, because the call's
+- **With a `tool_use_id`** (Claude), it becomes no part. The server files it
+  on the call's item, and the run carries it as `ToolRun.plan` (steps,
+  explanation, and its place in record order, below), at any depth. A later
+  record for the same call replaces it. One whose call is not in the history (a
+  fork cut it off) is an item of its own that draws nothing: there is no row to
+  carry it. Nothing new is drawn, because the call's
   row is the history, and a part that rendered nothing would leave a gap in
   `MessageItem`'s `space-y-2` stack. The `TodoWrite` row stays as it is
   ([tool-call-ui.md](tool-call-ui.md#title-and-detail)), and so do the Task
@@ -1091,30 +1086,25 @@ and each `TaskList` replaces the seed with it.
 among the top-level runs §4.2 reads (the open turn's replies, and a resumed
 subagent's earlier spawn), whichever CLI wrote it. This is record order, not call order. With the fold every record is a
 cumulative snapshot, and when two calls' results come back in the other order,
-the later call holds the older snapshot. A live record's `seq` arrives with it,
-as every persisted record's does, and is the record's place (`order`). A
-record with no `seq` (one the server could not persist) can only have arrived
-live, so it is placed just after what was loaded when it arrived: newer than
-that, and older than every record persisted after it. Ranking it above every
-`seq` instead would keep a stale plan on the chip for the rest of the turn. How
-the reducer works out that place, and why it reads the `seq` off the record
-rather than from its caller, is in
-[code/frontend-state.md](code/frontend-state.md#a-plan-filed-on-the-call-that-wrote-it).
+the later call holds the older snapshot. The place (`order`) is read off the
+item that carries the plan — the Codex plan's own seq, or the newest record of
+the call it rides on
+([code/frontend-state.md](code/frontend-state.md#a-plan-filed-on-the-call-that-wrote-it)).
 
 ### 4.7 Reconnecting, reloading, and both CLIs
 
 | What happened | Plan chip | Agents chip |
 |---|---|---|
-| reload / reconnect mid-turn | the newest plan record in the open turn's loaded replies | from the replayed runs: `status` replays, so the set is right from the first frame; second lines fill in from the subscribe reply's newest activity per call, as the rows do |
+| reload / reconnect mid-turn | the newest plan record in the open turn's loaded replies | from the runs on the page: `status` is the item's, so the set is right from the first frame; second lines fill in from the subscribe reply's `streams`, as the rows do |
 | the turn blocks on a permission or a background task | stays | stays |
 | the turn settles | goes | goes, unless a background subagent is still live (§4.3) |
 | Stop | goes with the turn | foreground runs settle `interrupted` as the turn ends. Background runs settle as Stop's stop notifications for them arrive, or with `process_ended` ([code/agent-integration.md](code/agent-integration.md#stop-ends-the-background-work-too)), and the chip goes when the last one does |
-| the server restarted mid-turn | the turn is gone, and the chip with it | foreground runs settle against the turn ([lifecycle-ui.md §2.4](lifecycle-ui.md#24-recovering-a-dangling-turn-after-a-restart)). Settling against the turn leaves `background` runs alone; they settle on the `process_ended` the restart repair writes. The chip goes when they do |
+| the server restarted mid-turn | the turn is gone, and the chip with it | every run settles on the `process_ended` the restart repair writes ([lifecycle-ui.md §2.4](lifecycle-ui.md#24-recovering-a-dangling-turn-after-a-restart)), background ones included. The chip goes when they do |
 | Claude, a Claude 5 model | no plan tools, no chip (§4.6) | as everywhere |
 | Codex | `turn/plan/updated` | spawns are subagent runs. Codex has no background runs, so nothing waits in a background wait |
 
 **A live run on a page that is not loaded is not counted.** The chip counts
-what this transcript holds, the way every surface built on the reducer does.
+what this transcript holds, the way every surface built on the loaded items does.
 The case is a backgrounded subagent started more than a page of history ago in
 a long session. Its row is not on screen either, and the strip's background row
 falls back to its unnamed copy (§4.5). This is accepted for now. The fix, if it

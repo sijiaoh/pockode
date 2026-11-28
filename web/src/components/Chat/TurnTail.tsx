@@ -34,7 +34,6 @@ import {
 } from "./ToolRow";
 import { useGoToCall } from "./toolJumpContext";
 import { useOverviewTail, useTurnTail } from "./turnTailContext";
-import { useUnfiledChildren } from "./unfiledChildrenContext";
 
 interface Props {
 	/** The message this slot belongs to; the plan and the agents are drawn in one slot only. */
@@ -118,13 +117,9 @@ function PlanWords({ words }: { words: PlanLineWords }) {
 	);
 }
 
-/**
- * The named agent and what it is doing now. Its own component because the
- * unfiled children are read by hook, per run.
- */
+/** The named agent and what it is doing now. */
 function NamedAgent({ run }: { run: ToolRun }) {
-	const unfiled = useUnfiledChildren(run.id);
-	const now = subagentNow(run, unfiled);
+	const now = subagentNow(run);
 	const title = toolSummary(run.name, run.input, "").title;
 	// A nested subagent is named by the mark and its task alone: the agent
 	// named just before it is the one running it, and a second agent name on
@@ -238,11 +233,10 @@ function StatusRow({
  * for one with no work to show there (no ⤢ on its row either), goes to its row.
  */
 function AgentEntry({ run }: { run: ToolRun }) {
-	const unfiled = useUnfiledChildren(run.id);
 	const openTranscript = useOpenSubagentTranscript();
 	const goToCall = useGoToCall();
-	const header = subagentHeader(run, unfiled);
-	const toTranscript = openTranscript && hasProcess(run, unfiled);
+	const header = subagentHeader(run);
+	const toTranscript = openTranscript && hasProcess(run);
 	// Starting with the visible words (WCAG 2.5.3): the title, then the detail.
 	const label = [
 		header.summary.title,
@@ -343,11 +337,6 @@ function Panel({
 					<div>
 						<SectionHeading>Thinking so far</SectionHeading>
 						<div className={`px-2.5 pb-2 ${THOUGHT_BODY}`}>
-							{thinking.joinedLate && (
-								<p className="mb-2 text-th-text-muted">
-									Earlier thinking appears in full when it finishes.
-								</p>
-							)}
 							<ThoughtBody thought={{ ...thinking, redacted: false }} live />
 						</div>
 					</div>

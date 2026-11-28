@@ -12,17 +12,30 @@ import type {
 	PockodeCommandInvocation,
 	QuestionAnswerParams,
 } from "../../types/message";
+import { serverTime } from "../chatItems";
 import { parseFileBlocks } from "../contentBlocks";
-import {
-	normalizeCommand,
-	normalizeHtmlAction,
-	readHistorySeq,
-	serverTime,
-} from "../messageReducer";
+import { normalizeCommand, normalizeHtmlAction } from "../transcript";
+
+/**
+ * A reply's `seq`: absent from a server too old to send one, and never 0,
+ * which names no record.
+ */
+function readHistorySeq(result: unknown): HistorySeq | undefined {
+	const seq = (result as Record<string, unknown> | undefined)?.seq;
+	return typeof seq === "number" && seq > 0 ? seq : undefined;
+}
+
+/** A reply's `item_id`, the transcript item later updates name the message by. */
+function readItemId(result: unknown): number | undefined {
+	const id = (result as Record<string, unknown> | undefined)?.item_id;
+	return typeof id === "number" && id > 0 ? id : undefined;
+}
 
 /** What the server said about a message it accepted; see `MessageResult`. */
 export interface SentMessage {
 	seq?: HistorySeq;
+	/** See `MessageResult.item_id`. */
+	itemId?: number;
 	/** See `UserMessage.messageId`. */
 	messageId?: string;
 	/**
@@ -50,6 +63,7 @@ export interface HtmlActionInput {
 /** What the server said about a page's send it accepted. */
 export interface SentHtmlAction {
 	seq?: HistorySeq;
+	itemId?: number;
 	messageId?: string;
 	/** The action as the agent reads it: the record's `content`. */
 	content?: string;
@@ -135,11 +149,13 @@ export function createChatActions(
 			// answers with an empty object, and the missing field must stay absent
 			// rather than become a seq of 0, which names no record.
 			const seq = readHistorySeq(result);
+			const itemId = readItemId(result);
 			const command = normalizeCommand(result?.command);
 			const files = parseFileBlocks(result?.attachments);
 			const observedAt = serverTime(result?.observed_at);
 			return {
 				...(seq !== undefined ? { seq } : {}),
+				...(itemId !== undefined ? { itemId } : {}),
 				...(result?.message_id ? { messageId: result.message_id } : {}),
 				...(files ? { attachments: files } : {}),
 				...(observedAt !== undefined ? { observedAt } : {}),
@@ -170,10 +186,12 @@ export function createChatActions(
 				} satisfies HtmlActionParams,
 			)) as MessageResult | undefined;
 			const seq = readHistorySeq(result);
+			const itemId = readItemId(result);
 			const htmlAction = normalizeHtmlAction(result?.html_action);
 			const observedAt = serverTime(result?.observed_at);
 			return {
 				...(seq !== undefined ? { seq } : {}),
+				...(itemId !== undefined ? { itemId } : {}),
 				...(result?.message_id ? { messageId: result.message_id } : {}),
 				...(typeof result?.content === "string"
 					? { content: result.content }

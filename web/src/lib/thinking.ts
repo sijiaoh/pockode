@@ -71,13 +71,6 @@ export function spokenThoughtLabel(thoughts: Thought[]): string {
 export interface LiveThinking {
 	content: string;
 	fullReasoning: string;
-	/**
-	 * The first delta this client saw already carried text, so the start of the
-	 * thinking was missed — a subscription made mid-thinking. Codex opens every
-	 * reasoning item with an empty delta, so a beginning this client saw never
-	 * starts with text.
-	 */
-	joinedLate: boolean;
 }
 
 /**
@@ -112,15 +105,9 @@ export function applyThinkingDelta(
 	live: LiveThinking | null,
 	delta: { content: string; fullReasoning: string },
 ): LiveThinking {
-	if (!live) {
-		return {
-			content: delta.content,
-			fullReasoning: delta.fullReasoning,
-			joinedLate: Boolean(delta.content || delta.fullReasoning),
-		};
-	}
+	if (!live)
+		return { content: delta.content, fullReasoning: delta.fullReasoning };
 	return {
-		...live,
 		content: live.content + delta.content,
 		fullReasoning: live.fullReasoning + delta.fullReasoning,
 	};

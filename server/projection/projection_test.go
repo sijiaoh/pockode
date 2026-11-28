@@ -215,6 +215,10 @@ func TestQuestions_UnansweredIsWhatAForkInherits(t *testing.T) {
 	if q1.Status != QuestionOpen || q1.Answer != nil || q1.AnsweredIn != "" {
 		t.Errorf("q1 after its answer was discarded = %+v", q1)
 	}
+	// What its card still shows of the answer the Stop threw away.
+	if q1.DiscardedIn != "a1" || q1.DiscardedAnswer == nil || !slices.Equal(q1.DiscardedAnswer.Answers, []string{"Postgres"}) {
+		t.Errorf("q1's discarded answer = %+v in %q", q1.DiscardedAnswer, q1.DiscardedIn)
+	}
 	if len(s.Discarded) != 1 || s.Discarded[0] != (DiscardedMessage{MessageID: "a1", Seq: 6, TurnID: "T1"}) {
 		t.Errorf("discarded = %+v", s.Discarded)
 	}
@@ -284,6 +288,23 @@ func TestQuestions_UnansweredAtTheCut(t *testing.T) {
 // turn holds it (session.TurnState.Delivered), an answer can be taken back by
 // a discard only while the turn it went out in runs, and not once the
 // question was withdrawn.
+// TestQuestions_ADiscardedAnswerGoesWithTheNextResolution: the answer a Stop
+// threw away stays on the question only until something settles it again.
+func TestQuestions_ADiscardedAnswerGoesWithTheNextResolution(t *testing.T) {
+	discarded := []string{prompt1, started1, asked, answer1In, `T1|{"type":"message_discarded","message_id":"a1"}`}
+	for name, next := range map[string]string{
+		"answered afresh": `-|{"type":"message","content":"Answering:","message_id":"a2","answering":[{"request_id":"q1","answers":["SQLite"]}]}`,
+		"withdrawn":       `T1|{"type":"request_cancelled","request_id":"q1"}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			q1, _ := fold(append(slices.Clone(discarded), next)...).Posted("q1")
+			if q1.DiscardedAnswer != nil || q1.DiscardedIn != "" {
+				t.Errorf("q1 = %+v, want its discarded answer gone", q1)
+			}
+		})
+	}
+}
+
 func TestQuestions_AnAnswerIsHeldOnlyWhileItCanBeDiscarded(t *testing.T) {
 	afterTheTurn := fold(
 		prompt1, started1, asked, answer1In,
@@ -478,6 +499,53 @@ func TestPlan(t *testing.T) {
 	}
 }
 
+// mixedHistory is a history of every kind of line, old and new: legacy
+// questions and turns inferred from untagged lines, calls nested before their
+// parent arrives, permission requests asked again, background work, a Stop
+// discarding a message, a straggler.
+var mixedHistory = history(
+	`-|{"type":"message","content":"old","message_id":"m0","origin":"work"}`,
+	`-|{"type":"ask_user_question","tool_use_id":"tu","request_id":"r1","questions":[{"question":"Q?","header":"Q","options":[{"label":"A"}]}]}`,
+	`-|{"type":"question_response","request_id":"r1","answers":{"Q?":"A"}}`,
+	`-|{"type":"warning","code":"message_discarded","message":"x"}`,
+	`-|{"type":"done"}`,
+	`null|{"type":"process_ended"}`,
+	`-|{"type":"tool_call","tool_use_id":"e0","tool_name":"Edit","tool_input":{"changes":{"/a":{"type":"add","content":"x"}}}}`,
+	`-|{"type":"tool_result","tool_use_id":"e0","tool_result":"ok"}`,
+	prompt1, started1,
+	`T1|{"type":"tool_call","tool_use_id":"c1","tool_name":"Task"}`,
+	`T1|{"type":"tool_call","tool_use_id":"c2","tool_name":"Bash","parent_tool_use_id":"c1"}`,
+	`T1|{"type":"permission_request","request_id":"p1","tool_use_id":"c2","tool_name":"Bash"}`,
+	`T1|{"type":"permission_response","request_id":"p1","choice":"allow"}`,
+	`T1|{"type":"permission_request","request_id":"p2","tool_use_id":"c3","tool_name":"Bash"}`,
+	`T1|{"type":"tool_call","tool_use_id":"k1","tool_name":"Bash","parent_tool_use_id":"k0"}`,
+	`T1|{"type":"tool_call","tool_use_id":"k0","tool_name":"Task"}`,
+	`T1|{"type":"tool_result","tool_use_id":"k0","tool_result":"ok"}`,
+	`T1|{"type":"permission_request","request_id":"p3","tool_use_id":"c3","tool_name":"Bash"}`,
+	`T1|{"type":"tool_call","tool_use_id":"c3","tool_name":"Bash","subtype":"resumed"}`,
+	`T1|{"type":"permission_response","request_id":"p1","choice":"deny","by":"pockode"}`,
+	`T1|{"type":"tool_call","tool_use_id":"bg","tool_name":"Bash"}`,
+	`T1|{"type":"tool_result","tool_use_id":"bg","tool_result":"started","subtype":"background_started"}`,
+	asked, askedQ2,
+	`T1|{"type":"plan","tool_use_id":"c1","steps":[{"id":"1","text":"a","status":"pending"}]}`,
+	answer1In,
+	prompt2,
+	`T1|{"type":"message_ingested","message_id":"m2"}`,
+	`T1|{"type":"message_discarded","message_id":"a1"}`,
+	`T1|{"type":"interrupted"}`,
+	`T1|{"type":"tool_call","tool_use_id":"k2","tool_name":"Bash","parent_tool_use_id":"k0"}`,
+	`T1|{"type":"tool_call","tool_use_id":"late","tool_name":"Bash"}`,
+	`-|{"type":"message","content":"Answering:","message_id":"a3","answering":[{"request_id":"q2","text":"Bob"}]}`,
+	`-|{"type":"message","content":"and","message_id":"m3"}`,
+	`T3|{"type":"turn_started","turn_id":"T3","origin":"prompt","message_id":"a3"}`,
+	`T3|{"type":"request_cancelled","request_id":"q1","reason":"work_closed"}`,
+	`T3|{"type":"tool_call","tool_use_id":"c1","tool_name":"Task","subtype":"resumed"}`,
+	`T3|{"type":"tool_call","tool_use_id":"c4","tool_name":"Bash","parent_tool_use_id":"c1"}`,
+	`T3|{"type":"tool_result","tool_use_id":"bg","tool_result":"done","subtype":"background_result"}`,
+	`T3|{"type":"done"}`,
+	`-|{"type":"message","content":"last","message_id":"m4"}`,
+)
+
 // TestFold_AnyPrefix is the contract fork and an open session both rest on:
 // the state after any prefix is the fold of that prefix alone, folding a
 // prefix and appending the rest is folding everything at once, and a state
@@ -485,59 +553,28 @@ func TestPlan(t *testing.T) {
 // old lines and new, and runs of messages — which are read off the record
 // after them — at the cuts.
 func TestFold_AnyPrefix(t *testing.T) {
-	records := history(
-		`-|{"type":"message","content":"old","message_id":"m0","origin":"work"}`,
-		`-|{"type":"ask_user_question","tool_use_id":"tu","request_id":"r1","questions":[{"question":"Q?","header":"Q","options":[{"label":"A"}]}]}`,
-		`-|{"type":"question_response","request_id":"r1","answers":{"Q?":"A"}}`,
-		`-|{"type":"warning","code":"message_discarded","message":"x"}`,
-		`-|{"type":"done"}`,
-		`null|{"type":"process_ended"}`,
-		`-|{"type":"tool_call","tool_use_id":"e0","tool_name":"Edit","tool_input":{"changes":{"/a":{"type":"add","content":"x"}}}}`,
-		`-|{"type":"tool_result","tool_use_id":"e0","tool_result":"ok"}`,
-		prompt1, started1,
-		`T1|{"type":"tool_call","tool_use_id":"c1","tool_name":"Task"}`,
-		`T1|{"type":"tool_call","tool_use_id":"c2","tool_name":"Bash","parent_tool_use_id":"c1"}`,
-		`T1|{"type":"permission_request","request_id":"p1","tool_use_id":"c2","tool_name":"Bash"}`,
-		`T1|{"type":"permission_response","request_id":"p1","choice":"allow"}`,
-		`T1|{"type":"permission_request","request_id":"p2","tool_use_id":"c3","tool_name":"Bash"}`,
-		`T1|{"type":"tool_call","tool_use_id":"k1","tool_name":"Bash","parent_tool_use_id":"k0"}`,
-		`T1|{"type":"tool_call","tool_use_id":"k0","tool_name":"Task"}`,
-		`T1|{"type":"tool_result","tool_use_id":"k0","tool_result":"ok"}`,
-		`T1|{"type":"permission_request","request_id":"p3","tool_use_id":"c3","tool_name":"Bash"}`,
-		`T1|{"type":"tool_call","tool_use_id":"c3","tool_name":"Bash","subtype":"resumed"}`,
-		`T1|{"type":"permission_response","request_id":"p1","choice":"deny","by":"pockode"}`,
-		`T1|{"type":"tool_call","tool_use_id":"bg","tool_name":"Bash"}`,
-		`T1|{"type":"tool_result","tool_use_id":"bg","tool_result":"started","subtype":"background_started"}`,
-		asked, askedQ2,
-		`T1|{"type":"plan","tool_use_id":"c1","steps":[{"id":"1","text":"a","status":"pending"}]}`,
-		answer1In,
-		prompt2,
-		`T1|{"type":"message_ingested","message_id":"m2"}`,
-		`T1|{"type":"message_discarded","message_id":"a1"}`,
-		`T1|{"type":"interrupted"}`,
-		`T1|{"type":"tool_call","tool_use_id":"k2","tool_name":"Bash","parent_tool_use_id":"k0"}`,
-		`T1|{"type":"tool_call","tool_use_id":"late","tool_name":"Bash"}`,
-		`-|{"type":"message","content":"Answering:","message_id":"a3","answering":[{"request_id":"q2","text":"Bob"}]}`,
-		`-|{"type":"message","content":"and","message_id":"m3"}`,
-		`T3|{"type":"turn_started","turn_id":"T3","origin":"prompt","message_id":"a3"}`,
-		`T3|{"type":"request_cancelled","request_id":"q1","reason":"work_closed"}`,
-		`T3|{"type":"tool_call","tool_use_id":"c1","tool_name":"Task","subtype":"resumed"}`,
-		`T3|{"type":"tool_call","tool_use_id":"c4","tool_name":"Bash","parent_tool_use_id":"c1"}`,
-		`T3|{"type":"tool_result","tool_use_id":"bg","tool_result":"done","subtype":"background_result"}`,
-		`T3|{"type":"done"}`,
-		`-|{"type":"message","content":"last","message_id":"m4"}`,
-	)
+	records := mixedHistory
 	for _, agentType := range []session.AgentType{session.AgentTypeClaude, session.AgentTypeCodex} {
-		whole := Fold(records, agentType).State()
+		whole := Fold(records, agentType)
+		wholeState, wholePage := whole.State(), pageJSON(t, whole)
 		for cut := 0; cut <= len(records); cut++ {
 			p := Fold(records[:cut], agentType)
-			before := p.State()
+			// Kept as a value: what a page holds must not change under it as
+			// the fold goes on.
+			before, beforePage := p.State(), newestPage(t, p)
 			p.Append(records[cut:]...)
-			if got := p.State(); !reflect.DeepEqual(got, whole) {
-				t.Errorf("%s: folding %d records and appending the rest:\n  %+v\nfolding all:\n  %+v", agentType, cut, got, whole)
+			if got := p.State(); !reflect.DeepEqual(got, wholeState) {
+				t.Errorf("%s: folding %d records and appending the rest:\n  %+v\nfolding all:\n  %+v", agentType, cut, got, wholeState)
 			}
-			if again := Fold(records[:cut], agentType).State(); !reflect.DeepEqual(before, again) {
-				t.Errorf("%s: the state of %d records changed when the rest was appended:\n  %+v\nwas:\n  %+v", agentType, cut, before, again)
+			if got := pageJSON(t, p); got != wholePage {
+				t.Errorf("%s: the transcript of %d records and the rest appended:\n  %s\nof all:\n  %s", agentType, cut, got, wholePage)
+			}
+			again := Fold(records[:cut], agentType)
+			if !reflect.DeepEqual(before, again.State()) {
+				t.Errorf("%s: the state of %d records changed when the rest was appended:\n  %+v\nwas:\n  %+v", agentType, cut, before, again.State())
+			}
+			if got, was := jsonOf(t, beforePage), pageJSON(t, again); got != was {
+				t.Errorf("%s: the transcript of %d records changed when the rest was appended:\n  %s\nwas:\n  %s", agentType, cut, got, was)
 			}
 		}
 	}
@@ -550,6 +587,9 @@ func TestFold_AnyPrefix(t *testing.T) {
 	}
 	if got := p.State(); !reflect.DeepEqual(got, Fold(records, session.AgentTypeClaude).State()) {
 		t.Errorf("appending one record at a time:\n  %+v", got)
+	}
+	if got, want := pageJSON(t, p), pageJSON(t, Fold(records, session.AgentTypeClaude)); got != want {
+		t.Errorf("appending one record at a time, the transcript:\n  %s\nwant:\n  %s", got, want)
 	}
 }
 

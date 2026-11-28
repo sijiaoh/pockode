@@ -1,11 +1,4 @@
-import {
-	useCallback,
-	useEffect,
-	useLayoutEffect,
-	useMemo,
-	useRef,
-	useState,
-} from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { IDLE_TURN } from "../lib/activity";
 import {
 	type ChatAttachment,
@@ -13,24 +6,22 @@ import {
 	toEchoFileBlocks,
 } from "../lib/chatAttachments";
 import {
-	appendUserMessage,
-	applyAnswering,
-	applyServerEvent,
-	applyToolActivitySnapshot,
-	isBackReference,
-	isTurnTerminal,
-	type NormalizedEvent,
-	normalizeEvent,
-	openAssistantIndex,
-	prependHistoryPage,
-	readHistorySeq,
+	abandonOlderPage,
+	addEcho,
+	addOlderPage,
+	applyToolDelta,
+	applyUpdate,
+	beginOlderPage,
+	type ChatItems,
+	createChatItems,
+	failEcho,
+	installNewestPage,
+	pressAnswer,
 	readServerClock,
-	replayHistory,
-	resetPromptRequest,
-	settleAgainstTurn,
-	stampMessageAnchorSeq,
-	updatePermissionRequestStatus,
-} from "../lib/messageReducer";
+	removeEcho,
+	type SentRecord,
+	settleEcho,
+} from "../lib/chatItems";
 import type { HtmlActionInput } from "../lib/rpc";
 import {
 	selectSessionDetail,
@@ -42,6 +33,11 @@ import {
 	type LiveThinking,
 	type TurnTail,
 } from "../lib/thinking";
+import {
+	buildTranscript,
+	createTranscriptCache,
+	openAssistantIndex,
+} from "../lib/transcript";
 import { isTurnOpen } from "../lib/turnOverview";
 import {
 	type ConnectionStatus,
@@ -50,19 +46,20 @@ import {
 	useWSStore,
 } from "../lib/wsStore";
 import type {
-	AssistantMessage,
+	ChatDelta,
+	ChatPage,
+	ChatStreams,
+	ChatUpdate,
+} from "../types/chatItems";
+import type {
 	ChatMessagesSubscribeResult,
 	ChatNotification,
-	HistorySeq,
 	Message,
 	PermissionResponseParams,
 	QuestionAnswerRecord,
 	ReportedSessionMode,
-	ServerNotification,
 	SessionMode,
 	SessionTurn,
-	SubagentProgress,
-	Thought,
 	UserMessage,
 } from "../types/message";
 import type { AgentType } from "../types/settings";
@@ -88,7 +85,7 @@ interface UseChatMessagesOptions {
 	 * Set when the transcript is read out of another worktree instead of being
 	 * subscribed to in the bound one (`useViewedSession`). Its newest page is
 	 * installed the way a subscription's snapshot is, and earlier pages are
-	 * asked for with `session_view.history` — identical records, identical
+	 * asked for with `session_view.history` — identical items, identical
 	 * paging, identical reply shape, so everything below this line is the same
 	 * code. What changes is that there is no subscription, so nothing arrives
 	 * after that page; and that its `detail` stands in for `sessionDetailStore`,
@@ -104,7 +101,7 @@ interface UseChatMessagesOptions {
 interface UseChatMessagesReturn {
 	messages: Message[];
 	isLoadingHistory: boolean;
-	/** Whether records older than `messages[0]` are still on the server. */
+	/** Whether items older than `messages[0]` are still on the server. */
 	hasMoreHistory: boolean;
 	isLoadingMoreHistory: boolean;
 	/** Why the last attempt at an earlier page failed; cleared by a retry. */
@@ -225,87 +222,68 @@ const {
 	sessionViewHistory,
 } = useWSStore.getState().actions;
 
-/** One call's progress since the last frame, in the records' own semantics. */
-interface PendingActivity {
-	/** The newest one: each report replaces the last. */
-	activity?: string;
-	/** Every chunk since the last frame, in order. */
-	outputDelta?: string;
-	/** The newest one, like `activity`. */
-	subagentProgress?: SubagentProgress;
-}
+type ToolDelta = NonNullable<ChatDelta["tool"]>;
 
 /**
  * The most a call's un-flushed output may carry, in characters.
  *
- * The reducer keeps only the last lines of the accumulation anyway, so an older
+ * The store keeps only the last lines of the accumulation anyway, so an older
  * chunk that has not reached it yet is already destined to be dropped — this is
  * only the ceiling for a tab that has been hidden long enough for "since the
  * last frame" to mean an hour of a build's stdout.
  */
 const MAX_PENDING_OUTPUT = 64 * 1024;
 
-function mergeActivity(
-	pending: Map<string, PendingActivity>,
-	event: Extract<NormalizedEvent, { type: "tool_activity" }>,
+/** Folds a call's delta onto the ones held for the next frame. */
+function mergeToolDelta(
+	pending: Map<string, ToolDelta>,
+	delta: ToolDelta,
 ): void {
-	const current = pending.get(event.toolUseId) ?? {};
-	if (event.activity) current.activity = event.activity;
-	if (event.subagentProgress) current.subagentProgress = event.subagentProgress;
-	if (event.outputDelta) {
-		const combined = (current.outputDelta ?? "") + event.outputDelta;
-		current.outputDelta =
-			combined.length > MAX_PENDING_OUTPUT
-				? combined.slice(-MAX_PENDING_OUTPUT)
-				: combined;
+	const held = pending.get(delta.tool_use_id);
+	if (!held || delta.replace) {
+		pending.set(delta.tool_use_id, { ...delta });
+		return;
 	}
-	pending.set(event.toolUseId, current);
+	const output = (held.output ?? "") + (delta.output ?? "");
+	pending.set(delta.tool_use_id, {
+		...held,
+		...(delta.activity ? { activity: delta.activity } : {}),
+		...(delta.subagent_progress
+			? { subagent_progress: delta.subagent_progress }
+			: {}),
+		...(output
+			? {
+					output:
+						output.length > MAX_PENDING_OUTPUT
+							? output.slice(-MAX_PENDING_OUTPUT)
+							: output,
+				}
+			: {}),
+	});
+}
+
+function thinkingOf(streams: ChatStreams | undefined): LiveThinking | null {
+	const thinking = streams?.thinking;
+	if (!thinking) return null;
+	return {
+		content: thinking.content ?? "",
+		fullReasoning: thinking.full_reasoning ?? "",
+	};
 }
 
 /**
- * The record a page opens on, when all it does is end a turn. The turn it ended
- * is the one the page below trails off on, so this page cannot use it — only the
- * page below can, once it is loaded.
- *
- * Only the first record is looked at. A terminal record behind another one has
- * no turn of its own to end either — replaying the whole history unbroken drops
- * it just the same — except for `process_ended`, which reaches every page as a
- * back-reference anyway.
+ * The thinking part an update settled the thinking stream into: the main
+ * agent's newest thinking item among the ones it brought.
  */
-function leadingTurnTerminal(history: unknown[]): unknown {
-	const first = history[0];
-	return isTurnTerminal(first) ? first : undefined;
-}
-
-/**
- * The newest record's seq in a history page, or undefined if the page addresses
- * none. Records are appended in seq order, so this is the last one that has a
- * seq at all — a page can end on records that were never persisted.
- */
-function newestSeq(history: unknown[]): HistorySeq | undefined {
-	for (let i = history.length - 1; i >= 0; i--) {
-		const seq = readHistorySeq(history[i]);
-		if (seq !== undefined) return seq;
-	}
-	return undefined;
-}
-
-/**
- * The thinking part a record settled into, found by the record itself: the
- * reducer keeps the thought it was handed, so neither its position nor what
- * landed after it in the same commit can point at the wrong part.
- */
-function thoughtPartId(
-	messages: Message[],
-	thought: Thought,
+function settledThoughtId(
+	store: ChatItems,
+	update: ChatUpdate,
 ): string | undefined {
-	for (let i = messages.length - 1; i >= 0; i--) {
-		const message = messages[i];
-		if (message.role !== "assistant") continue;
-		const part = message.parts.find(
-			(p) => p.type === "thinking" && p.thoughts.includes(thought),
-		);
-		if (part?.type === "thinking") return part.id;
+	for (const { item, parent } of [...(update.items ?? [])].reverse()) {
+		if (item.kind !== "thinking" || parent !== undefined) continue;
+		if (item.thinking?.parent_tool_use_id) continue;
+		if (item.id === undefined) continue;
+		return store.partIds.get(item.id);
 	}
 	return undefined;
 }
@@ -319,40 +297,33 @@ export function useChatMessages({
 	// Only read when `isView`; "" is a worktree — the main one — so the fallback
 	// is a placeholder the type needs, not a default that means anything.
 	const sourceWorktree = viewedSession?.worktree ?? "";
+	// The items as the server sent them, and what was built from them. Mutated
+	// only by the handlers below, each of which then commits a rebuild.
+	const storeRef = useRef<ChatItems>(createChatItems());
+	const cacheRef = useRef(createTranscriptCache());
 	const [messages, setMessages] = useState<Message[]>([]);
+	const messagesRef = useRef(messages);
+	messagesRef.current = messages;
 	const [isLoadingHistory, setIsLoadingHistory] = useState(true);
 	const [settingError, setSettingError] = useState<string | null>(null);
 	const [hasMoreHistory, setHasMoreHistory] = useState(false);
 	const [isLoadingMoreHistory, setIsLoadingMoreHistory] = useState(false);
 	const [historyError, setHistoryError] = useState<string | null>(null);
 	const [loadedHistoryPages, setLoadedHistoryPages] = useState(0);
-	// Cursor for the next page back, straight from the server: a record it could
-	// not address carries no seq, so one derived here would eventually name
-	// nothing. Undefined means the start of the session has been reached.
-	const nextBeforeSeqRef = useRef<HistorySeq | undefined>(undefined);
-	// Every back-reference record seen so far, oldest first, so an older page can
-	// be caught up on the answers the loaded pages already hold.
-	const backReferencesRef = useRef<unknown[]>([]);
-	// The oldest loaded record, when it is one that only ends a turn. Replaying
-	// its own page dropped it — the turn it ended is below the page, not in it —
-	// so it is held for the page that turn is on. See `prependHistoryPage`.
-	const boundaryTerminalRef = useRef<unknown>(undefined);
-	// What the session was doing at subscribe time, for the older pages. A
-	// transcript cut short by a restart says nothing about its own end, so that
-	// fact reaches an older page from here rather than through the
-	// back-references; a process that ends while connected broadcasts the record
-	// and travels with them.
-	const subscribedTurnRef = useRef<SessionTurn>(IDLE_TURN);
-	// The newest record the loaded page holds. A live notification for a record
-	// the page already carries is the one thing the subscription can deliver
-	// twice: the server registers the subscription before it reads the history,
-	// so a record committed in between is in both. See `handleNotification`.
-	const newestHistorySeqRef = useRef<HistorySeq | undefined>(undefined);
+	// Cursor for the next page back, straight from the server. Undefined means
+	// the start of the session has been reached.
+	const nextBeforeSeqRef = useRef<number | undefined>(undefined);
 	// Identifies which transcript a page request was made against. A session
 	// switch or a re-subscribe replaces the transcript wholesale, and a page still
-	// in flight would otherwise be spliced into the one that took its place.
+	// in flight would otherwise be added to the one that took its place.
 	const historyGenerationRef = useRef(0);
 	const isLoadingMoreRef = useRef(false);
+
+	const commit = useCallback(() => {
+		setMessages(
+			buildTranscript(storeRef.current, cacheRef.current, { live: !isView }),
+		);
+	}, [isView]);
 
 	const status = useWSStore((state) => state.status);
 	const actions = useWSStore((state) => state.actions);
@@ -366,17 +337,14 @@ export function useChatMessages({
 	const sessionDetail = isView ? viewedSession.detail : liveDetail;
 
 	// One source for what the session is doing, and it is the live one: the
-	// detail subscription reports every turn change as it happens. The chat
-	// subscription's own copy is used once, to settle the page it came with — a
-	// second live copy of one fact would arrive in an order neither side controls.
+	// detail subscription reports every turn change as it happens.
 	//
 	// Idle until that first snapshot: a client that has not been told anything is
 	// running is not entitled to draw a Stop button.
 	//
 	// A viewed transcript is idle for good. Whatever the session was doing when
 	// it was read is already out of date — nothing is pushed here — and a turn
-	// reported as open would arm a Stop this screen cannot deliver and hold
-	// bubbles streaming that will never receive another byte.
+	// reported as open would arm a Stop this screen cannot deliver.
 	const turn = isView ? IDLE_TURN : (sessionDetail?.turn ?? IDLE_TURN);
 	// The turn's clock, carried over to this device's: the server's reading of
 	// how long the turn had been open, taken back from when it arrived. Never
@@ -401,60 +369,71 @@ export function useChatMessages({
 	// is the only way out.
 	const isSessionActivated = sessionDetail?.activated ?? false;
 
-	// What the calls in flight have reported since the last animation frame. A
-	// chatty build's `output_delta` arrives faster than the screen refreshes, and
-	// applying each one would re-render the transcript per line of stdout.
+	// What the calls in flight have streamed since the last animation frame. A
+	// chatty build's output arrives faster than the screen refreshes, and
+	// applying each delta would re-render the transcript per line of stdout.
 	//
-	// Held merged, one entry per call, rather than as a queue of records: it is
-	// the records' own semantics — the activity is a latest value, the deltas
-	// accumulate — and it is what bounds this while nothing is flushing it.
+	// Held merged, one entry per call, rather than as a queue: it is the deltas'
+	// own semantics — the activity is a latest value, the output accumulates —
+	// and it is what bounds this while nothing is flushing it.
 	// `requestAnimationFrame` does not fire in a hidden tab, and a phone spends
 	// most of a long build with the browser in the background; a queue would
 	// grow with the output, a merge grows with the number of live calls.
-	const pendingActivityRef = useRef(new Map<string, PendingActivity>());
-	const activityFrameRef = useRef<number | undefined>(undefined);
+	const pendingToolDeltasRef = useRef(new Map<string, ToolDelta>());
+	const toolFrameRef = useRef<number | undefined>(undefined);
 
-	const flushActivity = useCallback(() => {
-		activityFrameRef.current = undefined;
-		const pending = pendingActivityRef.current;
+	const flushToolDeltas = useCallback(() => {
+		toolFrameRef.current = undefined;
+		const pending = pendingToolDeltasRef.current;
 		if (pending.size === 0) return;
-		pendingActivityRef.current = new Map();
-		setMessages((prev) =>
-			[...pending].reduce(
-				(acc, [toolUseId, merged]) =>
-					applyServerEvent(acc, {
-						type: "tool_activity",
-						toolUseId,
-						...merged,
-					}),
-				prev,
-			),
-		);
+		pendingToolDeltasRef.current = new Map();
+		for (const [toolUseId, delta] of pending) {
+			applyToolDelta(storeRef.current, toolUseId, delta);
+		}
+		commit();
+	}, [commit]);
+
+	// Deltas held for the next frame are applied before anything that comes
+	// after them, so an update ending a stream is never followed by its output.
+	const flushToolDeltasNow = useCallback(() => {
+		if (toolFrameRef.current !== undefined) {
+			cancelAnimationFrame(toolFrameRef.current);
+			toolFrameRef.current = undefined;
+		}
+		const pending = pendingToolDeltasRef.current;
+		pendingToolDeltasRef.current = new Map();
+		for (const [toolUseId, delta] of pending) {
+			applyToolDelta(storeRef.current, toolUseId, delta);
+		}
 	}, []);
 
 	useEffect(() => {
 		return () => {
-			if (activityFrameRef.current !== undefined) {
-				cancelAnimationFrame(activityFrameRef.current);
+			if (toolFrameRef.current !== undefined) {
+				cancelAnimationFrame(toolFrameRef.current);
 			}
 		};
 	}, []);
 
 	// What the main agent is thinking right now. Not a part of the transcript:
-	// it is never recorded, and it ends with the record that is. Coalesced per
-	// frame like tool activity, for the same two reasons — deltas outrun the
+	// it is never recorded, and it ends with the item that is. Coalesced per
+	// frame like tool deltas, for the same two reasons — deltas outrun the
 	// screen, and a hidden tab flushes nothing, so they are held folded rather
 	// than queued.
 	const [liveThinking, setLiveThinking] = useState<LiveThinking | null>(null);
 	const liveThinkingRef = useRef(liveThinking);
 	liveThinkingRef.current = liveThinking;
-	const pendingThinkingRef = useRef<LiveThinking | null>(null);
+	// What the next frame applies: deltas to fold on, or — after a `replace` —
+	// the whole thinking so far.
+	const pendingThinkingRef = useRef<{
+		thinking: LiveThinking;
+		replace: boolean;
+	} | null>(null);
 	const thinkingFrameRef = useRef<number | undefined>(undefined);
 	// Set when a thinking settles under the open panel: its row opens with it.
 	const [openedThoughtIds, setOpenedThoughtIds] = useState<ReadonlySet<string>>(
 		new Set(),
 	);
-	const settlingOpenThoughtRef = useRef<Thought | null>(null);
 
 	const flushThinking = useCallback(() => {
 		thinkingFrameRef.current = undefined;
@@ -462,7 +441,9 @@ export function useChatMessages({
 		if (!pending) return;
 		pendingThinkingRef.current = null;
 		setLiveThinking((prev) =>
-			prev ? applyThinkingDelta(prev, pending) : pending,
+			prev && !pending.replace
+				? applyThinkingDelta(prev, pending.thinking)
+				: pending.thinking,
 		);
 	}, []);
 
@@ -485,9 +466,7 @@ export function useChatMessages({
 		};
 	}, []);
 
-	// A turn that is over thinks no more, however it ended — including the ways
-	// that leave no record to end it here (a restart, a stop that cut a codex
-	// reasoning item off before it completed).
+	// A turn that is over thinks no more, however it ended.
 	useEffect(() => {
 		if (!turn.open) endThinking();
 	}, [turn.open, endThinking]);
@@ -495,10 +474,8 @@ export function useChatMessages({
 	// Whether a turn is open, and the optimistic half is load-bearing: between the
 	// user pressing send and the server reporting `running` there is a round trip,
 	// and a surface watching only the turn would leave them without Stop for the
-	// length of it. What the turn removes is the half that was never reliable —
-	// inferring liveness from the last bubble's status and a `process_ended` that
-	// a restart never wrote (docs/lifecycle-ui.md §2.3). `MessageList` asks the
-	// same question for the step windows, so the rule is `isTurnOpen`'s alone.
+	// length of it (docs/lifecycle-ui.md §2.3). `MessageList` asks the same
+	// question for the step windows, so the rule is `isTurnOpen`'s alone.
 	const openIndex = openAssistantIndex(messages);
 	const open = openIndex >= 0 ? messages[openIndex] : undefined;
 	const turnOpen = isTurnOpen(messages, turn.phase);
@@ -535,111 +512,75 @@ export function useChatMessages({
 		[turn.phase, turnOpenedAt, liveThinking, overviewId, plan, agents, panel],
 	);
 
-	// Before paint, so the row a thinking settles into is never drawn closed.
-	useLayoutEffect(() => {
-		const thought = settlingOpenThoughtRef.current;
-		if (!thought) return;
-		// One look, in the commit the record was applied in: a record the reducer
-		// set aside is never going to be found.
-		settlingOpenThoughtRef.current = null;
-		const id = thoughtPartId(messages, thought);
-		if (id) setOpenedThoughtIds((prev) => new Set(prev).add(id));
-	}, [messages]);
-
 	// Set once the subscription below exists; the notification handler is
 	// declared before it.
 	const resubscribeRef = useRef<() => Promise<void>>(async () => {});
 
-	const handleNotification = useCallback(
-		(chatNotification: ChatNotification) => {
-			// The server dropped a record for this subscription and will send
-			// nothing more on it. What arrived so far is a gap-free prefix, but the
-			// hole may hold anything — the `done` of a turn still drawn as running —
-			// so the transcript is rebuilt exactly as after a reconnect: a fresh
-			// subscription, whose snapshot replaces it wholesale.
-			if (chatNotification.type === "resync") {
-				void resubscribeRef.current();
-				return;
-			}
-			const notification: ServerNotification = chatNotification;
-			const seq = readHistorySeq(notification);
-			const event = normalizeEvent(notification);
-			// The thinking's own record ends it, and so does anything the main
-			// agent says after it: output proves the thinking is over even if its
-			// record never comes. Read before the skip below, because a record the
-			// page already has still proves it — and the deltas held across a
-			// subscribe are replayed with no seq to skip them by.
-			// A call announced again because a subagent resumed is the subagent's
-			// doing, not the main agent's output.
-			const endsThinking =
-				((event.type === "thinking" ||
-					event.type === "text" ||
-					(event.type === "tool_call" && !event.resumed) ||
-					// Codex's only: a Claude plan follows a result the thinking
-					// already ended on, and one from a subagent's Task calls names
-					// no parent, so it would end the main agent's thinking.
-					(event.type === "plan" && event.planId !== undefined)) &&
-					!event.parentToolUseId) ||
-				isTurnTerminal(notification);
-			// Already on screen: this record came back in the history page too, and
-			// applying it again would put a second copy of the message in the
-			// transcript. Only a record the page actually reaches is skipped — seqs
-			// grow with the session, so anything newer is a record the page never had.
-			// A record with no seq is not addressable at all (never persisted, or a
-			// server too old to say), so it cannot be matched against the page and is
-			// applied — the duplicate the whole subscription has always tolerated.
-			if (
-				seq !== undefined &&
-				newestHistorySeqRef.current !== undefined &&
-				seq <= newestHistorySeqRef.current
-			) {
-				if (endsThinking) endThinking();
-				return;
-			}
-
-			if (isBackReference(notification)) {
-				backReferencesRef.current.push(notification);
-			}
-			if (event.type === "thinking_delta") {
-				pendingThinkingRef.current = applyThinkingDelta(
-					pendingThinkingRef.current,
-					{
-						content: event.contentDelta,
-						fullReasoning: event.fullReasoningDelta,
-					},
-				);
-				if (thinkingFrameRef.current === undefined) {
-					thinkingFrameRef.current = requestAnimationFrame(flushThinking);
-				}
-				return;
-			}
-			if (endsThinking) {
-				// Only here: a skipped record is never applied, so there would be no
-				// part for it to settle into.
+	const handleUpdate = useCallback(
+		(update: ChatUpdate) => {
+			flushToolDeltasNow();
+			const store = storeRef.current;
+			if (update.streams_ended?.thinking) {
 				// Its section was showing only if it had text.
 				const thinking = liveThinkingRef.current;
-				if (
-					event.type === "thinking" &&
-					panelOpenRef.current &&
-					thinking &&
-					hasText(thinking)
-				) {
-					settlingOpenThoughtRef.current = event.thought;
+				if (panelOpenRef.current && thinking && hasText(thinking)) {
+					applyUpdate(store, update, new Date());
+					// In the same render as the row, so it is never drawn closed.
+					const id = settledThoughtId(store, update);
+					if (id) setOpenedThoughtIds((prev) => new Set(prev).add(id));
+					endThinking();
+					commit();
+					return;
 				}
 				endThinking();
 			}
-			if (event.type === "tool_activity") {
-				mergeActivity(pendingActivityRef.current, event);
-				if (activityFrameRef.current === undefined) {
-					activityFrameRef.current = requestAnimationFrame(flushActivity);
-				}
+			applyUpdate(store, update, new Date());
+			commit();
+		},
+		[commit, endThinking, flushToolDeltasNow],
+	);
+
+	const handleNotification = useCallback(
+		(notification: ChatNotification) => {
+			// The server could not tell this subscription something and will send
+			// nothing more on it, so the transcript is rebuilt exactly as after a
+			// reconnect: a fresh subscription, whose snapshot replaces it wholesale.
+			if (notification.type === "resync") {
+				void resubscribeRef.current();
 				return;
 			}
-			// Live, so a call this client watched start counts from when it did;
-			// a replayed one counts against its page's server clock reading.
-			setMessages((prev) => applyServerEvent(prev, event, seq, { live: true }));
+			if (notification.type === "update") {
+				handleUpdate(notification);
+				return;
+			}
+			if (notification.thinking) {
+				const { replace, ...stream } = notification.thinking;
+				const thinking = thinkingOf({ thinking: stream });
+				if (thinking) {
+					const held = pendingThinkingRef.current;
+					pendingThinkingRef.current =
+						held && !replace
+							? {
+									thinking: applyThinkingDelta(held.thinking, thinking),
+									replace: held.replace,
+								}
+							: {
+									thinking,
+									replace: replace === true,
+								};
+					if (thinkingFrameRef.current === undefined) {
+						thinkingFrameRef.current = requestAnimationFrame(flushThinking);
+					}
+				}
+			}
+			if (notification.tool) {
+				mergeToolDelta(pendingToolDeltasRef.current, notification.tool);
+				if (toolFrameRef.current === undefined) {
+					toolFrameRef.current = requestAnimationFrame(flushToolDeltas);
+				}
+			}
 		},
-		[flushActivity, flushThinking, endThinking],
+		[flushThinking, flushToolDeltas, handleUpdate],
 	);
 
 	// Reset when the session changes. During render rather than in an effect: an
@@ -650,6 +591,8 @@ export function useChatMessages({
 	const [renderedSessionId, setRenderedSessionId] = useState(sessionId);
 	if (renderedSessionId !== sessionId) {
 		setRenderedSessionId(sessionId);
+		storeRef.current = createChatItems();
+		cacheRef.current = createTranscriptCache();
 		setMessages([]);
 		setIsLoadingHistory(true);
 		setSettingError(null);
@@ -658,26 +601,20 @@ export function useChatMessages({
 		setHistoryError(null);
 		setLoadedHistoryPages(0);
 		nextBeforeSeqRef.current = undefined;
-		backReferencesRef.current = [];
-		boundaryTerminalRef.current = undefined;
-		newestHistorySeqRef.current = undefined;
-		subscribedTurnRef.current = IDLE_TURN;
 		isLoadingMoreRef.current = false;
 		historyGenerationRef.current++;
 		// Progress held for the next frame belongs to the session being left.
-		pendingActivityRef.current.clear();
+		pendingToolDeltasRef.current.clear();
 		pendingThinkingRef.current = null;
 		setLiveThinking(null);
 		setOpenedThoughtIds(new Set());
 	}
 
 	// The transcript's own subscription, opened through the common layer like
-	// every other one: a record written between the subscription being registered
-	// and this page of history being read reaches the callback before the page
-	// does, and would be applied and then overwritten by it. `useSubscription`
-	// holds such a record until the page is in and replays it after — and this is
-	// the one subscription where losing that record loses a message outright, as
-	// it is newer than the history that just came back.
+	// every other one: an update sent between the subscription being registered
+	// and its reply reaching this client is held by `useSubscription` until the
+	// page is in, and replayed after — the store skips what the page already
+	// holds (`through_seq`).
 	//
 	// Loading state is managed by the initial value and the reset above, so
 	// re-subscribing on reconnect won't flash the spinner. It also stays true for
@@ -692,8 +629,8 @@ export function useChatMessages({
 
 	// `receivedAt` is when the page reached this client, which its clock reading
 	// is taken against: a page installed from a cache arrived before now.
-	const installNewestPage = useCallback(
-		(initial: ChatMessagesSubscribeResult, receivedAt: number) => {
+	const installPage = useCallback(
+		(page: ChatPage, streams: ChatStreams | undefined, receivedAt: number) => {
 			// Subscribing hands back the newest page only, and a re-subscribe
 			// hands it back again: pages paged in before a reconnect are gone, so
 			// the paging state starts over with them.
@@ -707,50 +644,31 @@ export function useChatMessages({
 			// Keyed on the cursor rather than on `has_more`: the cursor is what
 			// an earlier page is actually asked for with, so the history reserve
 			// can never be left offering a page there is no way to request.
-			setHasMoreHistory(initial.next_before_seq !== undefined);
+			setHasMoreHistory(page.next_before_seq !== undefined);
 			setLoadedHistoryPages(0);
 			setHistoryError(null);
-			nextBeforeSeqRef.current = initial.next_before_seq;
-			backReferencesRef.current = initial.history.filter(isBackReference);
-			boundaryTerminalRef.current = leadingTurnTerminal(initial.history);
-			newestHistorySeqRef.current = newestSeq(initial.history);
-			subscribedTurnRef.current = initial.turn;
-			// Progress for the transcript being replaced. A thinking under way
-			// carries on, but every delta of it before now is gone: the next one
-			// starts it over as joined late.
-			pendingActivityRef.current.clear();
+			nextBeforeSeqRef.current = page.next_before_seq;
+			// Deltas held for the transcript being replaced: the snapshot's
+			// streams already include them.
+			pendingToolDeltasRef.current.clear();
 			endThinking();
-			const replayed = replayHistory(
-				initial.history,
-				readServerClock(initial, receivedAt),
+			setLiveThinking(thinkingOf(streams));
+			installNewestPage(
+				storeRef.current,
+				page,
+				streams,
+				readServerClock(page, receivedAt),
 			);
-			// The turn is the authority the records are missing: a transcript the
-			// server died in the middle of ends with a bubble still streaming and
-			// nothing in history that says otherwise. Older pages get the part of
-			// this that is true of them as they are paged in.
-			const settled = settleAgainstTurn(replayed, initial.turn);
-			// What the calls still in flight last reported. History carries none —
-			// a `tool_activity` is never recorded — so this is the whole of what a
-			// client subscribing mid-run knows about a background task that started
-			// half an hour ago.
-			setMessages(
-				initial.tool_activity || initial.tool_progress
-					? applyToolActivitySnapshot(
-							settled,
-							initial.tool_activity,
-							initial.tool_progress,
-						)
-					: settled,
-			);
+			commit();
 			setIsLoadingHistory(false);
 		},
-		[endThinking],
+		[commit, endThinking],
 	);
 
 	const handleSubscribed = useCallback(
 		(initial: ChatMessagesSubscribeResult) =>
-			installNewestPage(initial, Date.now()),
-		[installNewestPage],
+			installPage(initial, initial.streams, Date.now()),
+		[installPage],
 	);
 
 	const handleSubscribeError = useCallback((err: unknown) => {
@@ -777,9 +695,7 @@ export function useChatMessages({
 	resubscribeRef.current = resubscribe;
 
 	// The viewed transcript's newest page, installed the way a subscription's
-	// snapshot is. `turn` is idle rather than the session's own: see `turn`
-	// above. It is what settles the bubbles of a transcript cut off mid-stream,
-	// and here nothing is ever going to continue one.
+	// snapshot is. Nothing ever continues it, so it has no streams.
 	useEffect(() => {
 		if (!viewedSession) return;
 		// Both reads, not just the page: the two go out together, so waiting for
@@ -789,17 +705,14 @@ export function useChatMessages({
 		// loading its history.
 		if (!viewedSession.isSettled) return;
 		if (viewedSession.page) {
-			installNewestPage(
-				{ ...viewedSession.page, turn: IDLE_TURN },
-				viewedSession.pageReceivedAt,
-			);
+			installPage(viewedSession.page, undefined, viewedSession.pageReceivedAt);
 			return;
 		}
 		// The read answered without a page. The wait is over either way — leaving
 		// the spinner up would promise a transcript that is not coming; the reason
 		// reaches the screen through `viewedSession` itself.
 		setIsLoadingHistory(false);
-	}, [viewedSession, installNewestPage]);
+	}, [viewedSession, installPage]);
 
 	const loadMoreHistory = useCallback(async () => {
 		const beforeSeq = nextBeforeSeqRef.current;
@@ -809,34 +722,21 @@ export function useChatMessages({
 		isLoadingMoreRef.current = true;
 		setIsLoadingMoreHistory(true);
 		setHistoryError(null);
+		beginOlderPage(storeRef.current);
 		try {
 			const page = isView
 				? await sessionViewHistory(sourceWorktree, sessionId, beforeSeq)
 				: await chatMessagesHistory(sessionId, beforeSeq);
 			if (historyGenerationRef.current !== generation) return;
 
-			const clock = readServerClock(page);
-			const older = replayHistory(page.history, clock);
-			// Read now, not inside the updater: React calls that during a later
-			// render, by which point these refs have moved on to describe this page
-			// instead of the one above it.
-			const catchUp = {
-				boundaryTerminal: boundaryTerminalRef.current,
-				backReferences: backReferencesRef.current,
-				turn: subscribedTurnRef.current,
-				clock,
-			};
-			setMessages((prev) => prependHistoryPage(older, prev, catchUp));
-			boundaryTerminalRef.current = leadingTurnTerminal(page.history);
-			backReferencesRef.current = [
-				...page.history.filter(isBackReference),
-				...backReferencesRef.current,
-			];
+			addOlderPage(storeRef.current, page, readServerClock(page));
+			commit();
 			nextBeforeSeqRef.current = page.next_before_seq;
 			setHasMoreHistory(page.next_before_seq !== undefined);
 			setLoadedHistoryPages((n) => n + 1);
 		} catch (error) {
 			if (historyGenerationRef.current !== generation) return;
+			abandonOlderPage(storeRef.current);
 			// Silence here would read as "this is the start of the conversation",
 			// which is the one thing the user must not conclude from a failure.
 			const reason =
@@ -852,152 +752,76 @@ export function useChatMessages({
 				setIsLoadingMoreHistory(false);
 			}
 		}
-	}, [sessionId, isView, sourceWorktree]);
+	}, [sessionId, isView, sourceWorktree, commit]);
 
 	/**
-	 * The one path a message sent from this screen takes: echoed at once, as
-	 * `echo` with a placeholder for the reply when it opens a turn, then filled
-	 * in from the server's reply — or taken back, or left with the failure
-	 * under it. Typed messages and page actions differ only in what they send
-	 * and what the reply fills in.
+	 * The one path a message sent from this screen takes: echoed at once — with
+	 * a placeholder for the reply when it opens a turn — then filled in from the
+	 * server's reply, or taken back, or left with the failure under it. Typed
+	 * messages and page actions differ only in what they send and what the
+	 * reply fills in.
 	 */
 	const deliverEcho = useCallback(
 		async (
 			echo: UserMessage,
-			send: () => Promise<{
-				seq?: HistorySeq;
-				update: Partial<UserMessage>;
-				/** The record's moment; see `AssistantMessage.openedAt`. */
-				observedAt?: number;
-			}>,
+			send: () => Promise<SentRecord>,
 			{
 				takeBack,
 				rethrow,
-				settle,
 			}: {
 				/** Whether a failure means nothing was recorded, so the echo goes. */
 				takeBack: (error: unknown) => boolean;
 				/** Rethrow a failure that was reported into the transcript too. */
 				rethrow: boolean;
-				/** What the sent message settles beyond itself. */
-				settle?: (messages: Message[], messageId?: string) => Message[];
 			},
 		): Promise<boolean> => {
-			const userMessageId = echo.id;
-			const assistantMessageId = generateUUID();
-
-			// Empty assistant message ready to receive streaming content
-			const assistantMessage: AssistantMessage = {
-				id: assistantMessageId,
-				role: "assistant",
-				parts: [],
-				status: "sending",
-				createdAt: new Date(),
-			};
-
-			// The same shaping a broadcast message gets, from the same function: a
-			// message sent into a running turn neither closes that turn's bubble nor
-			// gets a placeholder of its own, while one sent to an idle agent opens a
-			// turn. The placeholder is passed as a thunk because the mid-turn shape
-			// does not want one.
-			setMessages((prev) =>
-				appendUserMessage(prev, echo, () => assistantMessage),
-			);
+			// A message sent into a running turn is drawn under the reply still
+			// being written, and gets no placeholder of its own: the bubble for
+			// what the agent writes after reading it opens where it reads it. One
+			// sent to an idle agent opens a turn, and its reply is drawn at once.
+			const opensTurn = openAssistantIndex(messagesRef.current) < 0;
+			addEcho(storeRef.current, {
+				message: echo,
+				awaitingReply: true,
+				...(opensTurn ? { replyId: generateUUID() } : {}),
+			});
+			commit();
 
 			try {
-				// The server's reply is where this client learns the seq of its own
-				// message — it is excluded from the broadcast carrying everyone else's.
-				// Without it the bubble just added could not be forked from until the
-				// session was reloaded. An older server sends none, which simply leaves
-				// the message unaddressable, as every locally sent one used to be.
-				const { seq, update, observedAt } = await send();
-				setMessages((prev) => {
-					// The sender is left out of the broadcast, so the reply is its one
-					// copy of what the record holds — what the agent was actually
-					// sent, the files as stored, and the record's id, which is how a
-					// Stop throwing this message away names it: without it the one tab
-					// that pressed Stop is the one that could not show the message's
-					// ending.
-					const filled =
-						Object.keys(update).length > 0
-							? prev.map((m) =>
-									m.id === userMessageId && m.role === "user"
-										? { ...m, ...update }
-										: m,
-								)
-							: prev;
-					// The reply this message opened began when the record says, and
-					// this is the one tab no record reaches. A message sent into a
-					// running turn made no placeholder, and the read point that opens
-					// its reply carries a moment of its own.
-					const opened =
-						observedAt !== undefined
-							? filled.map((m) =>
-									m.id === assistantMessageId && m.role === "assistant"
-										? { ...m, openedAt: observedAt }
-										: m,
-								)
-							: filled;
-					const stamped = stampMessageAnchorSeq(opened, userMessageId, seq);
-					return settle ? settle(stamped, update.messageId) : stamped;
-				});
+				// The sender is left out of the update carrying its own message,
+				// so the reply is its one copy of what the record holds — what the
+				// agent was actually sent, the files as stored, the record's id
+				// and seq, and the item later updates name it by.
+				const sent = await send();
+				settleEcho(storeRef.current, echo.id, sent);
+				commit();
 				return true;
 			} catch (error) {
 				console.error("Failed to send message:", error);
 				if (takeBack(error)) {
-					setMessages((prev) =>
-						prev.filter(
-							(m) => m.id !== userMessageId && m.id !== assistantMessageId,
-						),
-					);
+					removeEcho(storeRef.current, echo.id);
+					commit();
 					throw error;
 				}
-				// The server's reason is what tells a missing CLI apart from a dropped
-				// connection; without it every failure reads the same.
+				// The server's reason is what tells a missing CLI apart from a
+				// dropped connection; without it every failure reads the same.
+				// Said under the message it failed to deliver: it may have been
+				// delivered, and silence would leave it looking sent.
 				const reason =
 					error instanceof Error && error.message
 						? error.message
 						: "Unknown error";
-				const failure = `Failed to send message: ${reason}`;
-				setMessages((prev) => {
-					// The message opened a turn, so the placeholder standing in for the
-					// reply is where the failure belongs.
-					if (prev.some((m) => m.id === assistantMessageId)) {
-						return prev.map((m): Message => {
-							if (m.role === "assistant" && m.id === assistantMessageId) {
-								return { ...m, status: "error", error: failure };
-							}
-							return m;
-						});
-					}
-
-					// No placeholder means one of two things, and only the message itself
-					// tells them apart: it went into a turn that was already running — no
-					// placeholder is made for those — or the transcript on screen is no
-					// longer the one it was sent to, the user having switched sessions
-					// while the call was in flight. Reporting into that one would be
-					// reporting into somebody else's conversation.
-					const sentAt = prev.findIndex((m) => m.id === userMessageId);
-					if (sentAt === -1) return prev;
-
-					// Below the message it failed to deliver rather than at the end,
-					// which by now may be several messages further down. Saying nothing
-					// is the one option ruled out: the server does refuse a mid-turn send
-					// while a permission or question is waiting, and the message would
-					// otherwise sit in the transcript looking delivered.
-					const reported = [...prev];
-					reported.splice(sentAt + 1, 0, {
-						...assistantMessage,
-						status: "error",
-						error: failure,
-					});
-					return reported;
-				});
+				failEcho(
+					storeRef.current,
+					echo.id,
+					`Failed to send message: ${reason}`,
+				);
+				commit();
 				if (rethrow) throw error;
 				return false;
 			}
 		},
-		[],
+		[commit],
 	);
 
 	const sendUserMessageHandler = useCallback(
@@ -1034,6 +858,7 @@ export function useChatMessages({
 				async () => {
 					const {
 						seq,
+						itemId,
 						messageId,
 						expanded,
 						attachments: described,
@@ -1051,11 +876,13 @@ export function useChatMessages({
 					// echo had only the browser's guess.
 					return {
 						seq,
+						itemId,
 						observedAt,
 						update: {
 							...expanded,
 							...(described ? { attachments: described } : {}),
 							...(messageId ? { messageId } : {}),
+							...(seq !== undefined ? { anchorSeq: seq } : {}),
 						},
 					};
 				},
@@ -1084,14 +911,6 @@ export function useChatMessages({
 						((command !== undefined || files !== undefined) &&
 							isInvalidParamsRejection(error)),
 					rethrow: false,
-					// The cards this message settled, and this client has to settle
-					// them itself: the sender is left out of the broadcast that
-					// carries the record, so nothing else is coming to do it. Only
-					// after the send — a refused answer settles nothing.
-					settle: answers
-						? (messages, messageId) =>
-								applyAnswering(messages, answers, messageId)
-						: undefined,
 				},
 			);
 			// Not at click time: the server records a slash command's use only
@@ -1122,15 +941,17 @@ export function useChatMessages({
 			await deliverEcho(
 				echo,
 				async () => {
-					const { seq, messageId, content, htmlAction, observedAt } =
+					const { seq, itemId, messageId, content, htmlAction, observedAt } =
 						await sendHtmlAction(sessionId, input);
 					return {
 						seq,
+						itemId,
 						observedAt,
 						update: {
 							...(content !== undefined ? { content } : {}),
 							...(htmlAction ? { htmlAction } : {}),
 							...(messageId ? { messageId } : {}),
+							...(seq !== undefined ? { anchorSeq: seq } : {}),
 						},
 					};
 				},
@@ -1142,30 +963,31 @@ export function useChatMessages({
 		[sessionId, deliverEcho],
 	);
 
-	const resetPrompt = useCallback(
-		(requestId: string, status: "pending" | "expired") => {
-			setMessages((prev) => resetPromptRequest(prev, requestId, status));
-		},
-		[],
-	);
-
+	// A press on a permission card is drawn at once; the server's answer
+	// replaces it when the update recording it arrives.
 	const updatePermissionStatus = useCallback(
 		(requestId: string, newStatus: "allowed" | "denied") => {
-			setMessages((prev) =>
-				updatePermissionRequestStatus(prev, requestId, newStatus),
-			);
+			pressAnswer(storeRef.current, requestId, newStatus);
+			commit();
 		},
-		[],
+		[commit],
+	);
+
+	const resetPrompt = useCallback(
+		(requestId: string, status: "pending" | "expired") => {
+			pressAnswer(storeRef.current, requestId, status);
+			commit();
+		},
+		[commit],
 	);
 
 	// Whether the message the transcript ends on went into a turn that was already
 	// running and is still unread. Derived, never recorded: the record says what
 	// was typed at that moment and cannot also carry whether the agent has picked
-	// it up — that half changes, and a copy inside the record would start lying
-	// the moment it did (AGENTS.md, "events are events, state is state"). Reading
-	// it back out of the transcript costs nothing and is always current: the turn
-	// ending retires it, and so does the read point, which puts a bubble under
-	// this message as soon as the agent reaches it (`message_ingested`).
+	// it up (AGENTS.md, "events are events, state is state"). Reading it back out
+	// of the transcript costs nothing and is always current: the turn ending
+	// retires it, and so does the read point, which puts a bubble under this
+	// message as soon as the agent reaches it.
 	//
 	// Any tab's message counts, because any tab's message reaches the same CLI and
 	// steers the same turn. Kickoff, restart and auto-continue arrive as

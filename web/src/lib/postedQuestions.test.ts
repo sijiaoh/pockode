@@ -1,64 +1,64 @@
-import { describe, expect, it, vi } from "vitest";
-import type { Message } from "../types/message";
+import { beforeEach, describe, expect, it } from "vitest";
 import {
-	applyBackReference,
-	applyServerEvent,
-	isBackReference,
-	normalizeEvent,
-	prependHistoryPage,
-	replayHistory,
-	settleAfterProcessGone,
-} from "./messageReducer";
+	msg,
+	page,
+	question,
+	resetItems,
+	tool,
+	turn,
+} from "../test/chatItemsFixture";
+import type { PageItem } from "../types/chatItems";
+import type { ContentPart, Message } from "../types/message";
+import { createChatItems, installNewestPage } from "./chatItems";
+import { buildTranscript, createTranscriptCache } from "./transcript";
 
-vi.mock("../utils/uuid", () => {
-	let counter = 0;
-	return { generateUUID: () => `test-uuid-${++counter}` };
-});
+const POST = "mcp__pockode__question_post";
 
-const partsOf = (message: Message) =>
-	message.role === "assistant" ? message.parts : [];
+/** The parts of the reply to a turn holding `items` after its message. */
+function replyTo(...items: (() => PageItem)[]): ContentPart[] {
+	const store = createChatItems();
+	const go = msg("go");
+	installNewestPage(
+		store,
+		page([turn({}, go, ...items.map((build) => build()))]),
+		undefined,
+		undefined,
+	);
+	const messages: Message[] = buildTranscript(store, createTranscriptCache(), {
+		live: true,
+	});
+	const last = messages.at(-1);
+	return last?.role === "assistant" ? last.parts : [];
+}
 
-const lastParts = (messages: Message[]) =>
-	partsOf(messages[messages.length - 1]);
+function labels(parts: ContentPart[]): string[] {
+	return parts.map((part) =>
+		part.type === "question_record"
+			? part.record.requestId
+			: part.type === "tool_call"
+				? part.tool.name
+				: part.type,
+	);
+}
 
-const posted = (requestId: string, header = "Database") => ({
-	type: "question_posted",
-	request_id: requestId,
-	questions: [
-		{
-			question: "Which database should I use?",
-			header,
-			options: [{ label: "SQLite", description: "One file" }],
-			multiSelect: false,
-		},
-	],
-	asked_at: "2026-01-02T14:02:00Z",
-});
-
-const toolCall = (id: string, name: string) => ({
-	type: "tool_call",
-	tool_use_id: id,
-	tool_name: name,
-	tool_input: {},
-});
+beforeEach(resetItems);
 
 /**
- * The transcript half of posted questions: how a `question_posted` record gets
- * on screen, what settles it, and — the two rules the old blocking prompt had
- * that this one must not inherit — that a process ending does not retire it and
- * that nothing but a record naming it can.
+ * How a posted question is drawn: where its card goes, and the card saying
+ * what became of the question as the server states it.
  */
 describe("posted questions in the transcript", () => {
 	it("draws a question the agent posted", () => {
-		const messages = replayHistory([
-			{ type: "message", content: "go" },
-			posted("r1"),
-		]);
-		expect(lastParts(messages)).toMatchObject([
+		expect(
+			replyTo(() => question("Which database?", { request_id: "r1" })),
+		).toMatchObject([
 			{
 				type: "question_record",
 				status: "pending",
-				record: { requestId: "r1", askedAt: "2026-01-02T14:02:00Z" },
+				record: {
+					requestId: "r1",
+					question: { question: "Which database?" },
+				},
 			},
 		]);
 	});
@@ -66,416 +66,164 @@ describe("posted questions in the transcript", () => {
 	describe("taking the question_post tool row's place", () => {
 		// Joined by position, because there is no `tool_use_id` to join on: the
 		// call reaches the server over HTTP from the MCP endpoint. What the
-		// server does guarantee is that the record is written *during* the call.
-		it("hides the call the record was written during", () => {
-			const messages = replayHistory([
-				{ type: "message", content: "go" },
-				toolCall("t1", "mcp__pockode__question_post"),
-				posted("r1"),
-				{ type: "tool_result", tool_use_id: "t1", tool_result: "posted" },
-			]);
-			expect(lastParts(messages)).toMatchObject([
+		// server does guarantee is that the question is written *during* the
+		// call.
+		it("takes the place of the call it was posted during", () => {
+			const parts = replyTo(
+				() => tool(POST, {}, { result: { text: "posted", seq: 100 } }),
+				() => question("Which?", { request_id: "r1" }),
+			);
+			expect(parts).toMatchObject([
 				{ type: "question_record", record: { requestId: "r1" } },
 			]);
 		});
 
 		it("takes only its own call, not an unrelated one beside it", () => {
-			const messages = replayHistory([
-				{ type: "message", content: "go" },
-				toolCall("t1", "Read"),
-				posted("r1"),
-			]);
-			expect(lastParts(messages)).toMatchObject([
-				{ type: "tool_call", tool: { id: "t1" } },
-				{ type: "question_record", record: { requestId: "r1" } },
-			]);
+			expect(
+				labels(
+					replyTo(
+						() => tool("Read"),
+						() => question("Which?", { request_id: "r1" }),
+					),
+				),
+			).toEqual(["Read", "r1"]);
 		});
 
 		// A join that misses leaves two rows rather than getting one wrong.
-		it("degrades to two rows when the call is not on screen", () => {
-			const messages = replayHistory([
-				{ type: "message", content: "go" },
-				toolCall("t1", "mcp__pockode__question_post"),
-				{ type: "tool_result", tool_use_id: "t1", tool_result: "posted" },
-				posted("r1"),
-			]);
-			expect(lastParts(messages)).toMatchObject([
-				{ type: "tool_call", tool: { id: "t1" } },
-				{ type: "question_record", record: { requestId: "r1" } },
-			]);
+		it("leaves a call that had returned before the question alone", () => {
+			expect(
+				labels(
+					replyTo(
+						() => tool(POST, {}, { result: { text: "posted", seq: 2 } }),
+						() => question("Which?", { request_id: "r1" }),
+					),
+				),
+			).toEqual([POST, "r1"]);
 		});
 	});
 
-	// One `question_post` call posts its questions as one record each, all
-	// with the call's `asked_at`, back to back. Only the first finds the row.
+	// One `question_post` call posts its questions one item each, all with
+	// the call's `asked_at`, back to back. Only the first finds the row.
 	describe("questions asked in one call", () => {
-		const batched = (requestId: string, askedAt: string) => ({
-			...posted(requestId, requestId),
-			asked_at: askedAt,
-		});
-		const first = "2026-01-02T14:02:00.000000001Z";
-		const second = "2026-01-02T14:02:00.000000002Z";
-		const cards = (messages: Message[]) =>
-			lastParts(messages).map((part) =>
-				part.type === "question_record"
-					? part.record.requestId
-					: part.type === "tool_call"
-						? part.tool.id
-						: part.type,
-			);
+		const batched = (requestId: string, askedAt: string) => () =>
+			question(requestId, { request_id: requestId, asked_at: askedAt });
 
 		it("keeps them together and in order behind a call drawn after the row", () => {
-			const messages = replayHistory([
-				{ type: "message", content: "go" },
-				toolCall("t1", "mcp__pockode__question_post"),
-				toolCall("t2", "Read"),
-				batched("a1", first),
-				batched("a2", first),
-				batched("a3", first),
-			]);
-			expect(cards(messages)).toEqual(["a1", "a2", "a3", "t2"]);
+			expect(
+				labels(
+					replyTo(
+						() => tool(POST, {}, { status: "running" }),
+						() => tool("Read"),
+						batched("a1", "t1"),
+						batched("a2", "t1"),
+						batched("a3", "t1"),
+					),
+				),
+			).toEqual(["a1", "a2", "a3", "Read"]);
 		});
 
 		it("keeps each batch in order when two calls are open at once", () => {
-			const messages = replayHistory([
-				{ type: "message", content: "go" },
-				toolCall("t1", "mcp__pockode__question_post"),
-				toolCall("t2", "mcp__pockode__question_post"),
-				batched("a1", first),
-				batched("a2", first),
-				batched("b1", second),
-				batched("b2", second),
-			]);
+			const order = labels(
+				replyTo(
+					() => tool(POST, {}, { status: "running" }),
+					() => tool(POST, {}, { status: "running" }),
+					batched("a1", "t1"),
+					batched("a2", "t1"),
+					batched("b1", "t2"),
+					batched("b2", "t2"),
+				),
+			);
 			// Which call a batch came from is not on the record, so either may
 			// take either row; what holds is that neither batch is split or
 			// reordered.
-			const order = cards(messages);
 			expect(order).toHaveLength(4);
 			expect(order.indexOf("a2")).toBe(order.indexOf("a1") + 1);
 			expect(order.indexOf("b2")).toBe(order.indexOf("b1") + 1);
 		});
 	});
 
-	describe("what settles a card", () => {
-		it("answers it from the message that carries the answer", () => {
-			const messages = replayHistory([
-				{ type: "message", content: "go" },
-				posted("r1"),
-				{ type: "done" },
-				{
-					type: "message",
-					content: "Answering:\n\nQ: Which database should I use?\nA: SQLite",
-					answering: [
-						{
-							request_id: "r1",
-							header: "Database",
-							question: "Which database should I use?",
+	describe("what became of it", () => {
+		it("draws an answer, and the message it went out in", () => {
+			expect(
+				replyTo(() =>
+					question("Which?", {
+						status: "answered",
+						answer: {
+							request_id: "q-2",
 							answers: ["SQLite"],
 							answered_at: "2026-01-02T14:05:00Z",
 						},
-					],
-				},
-			]);
-			expect(partsOf(messages[1])).toMatchObject([
+						answered_in: "m9",
+					}),
+				),
+			).toMatchObject([
 				{
-					type: "question_record",
 					status: "answered",
 					answer: { answers: ["SQLite"] },
+					answerMessageId: "m9",
 				},
 			]);
 		});
 
-		it("declines it when the user said they would not answer", () => {
-			const messages = replayHistory([
-				{ type: "message", content: "go" },
-				posted("r1"),
-				{ type: "done" },
-				{
-					type: "message",
-					content: "Answering:\n\nQ: Which?\nA: (not answering)",
-					answering: [
-						{
-							request_id: "r1",
+		it("draws a decline", () => {
+			expect(
+				replyTo(() =>
+					question("Which?", {
+						status: "declined",
+						answer: {
+							request_id: "q-2",
 							declined: true,
 							answered_at: "2026-01-02T14:05:00Z",
 						},
-					],
-				},
-			]);
-			expect(partsOf(messages[1])).toMatchObject([
-				{ type: "question_record", status: "declined" },
-			]);
+					}),
+				),
+			).toMatchObject([{ status: "declined" }]);
 		});
 
-		it("cancels it when the agent withdrew it", () => {
-			const messages = replayHistory([
-				{ type: "message", content: "go" },
-				posted("r1"),
-				{
-					type: "request_cancelled",
-					request_id: "r1",
-					resolved_at: "2026-01-02T14:05:00Z",
-				},
-			]);
-			expect(partsOf(messages[1])).toMatchObject([
-				{ type: "question_record", status: "cancelled" },
-			]);
-		});
-
-		// Whichever record got there first is what happened; nothing arriving
-		// after it can know better.
-		it("leaves a card something else already settled alone", () => {
-			const messages = replayHistory([
-				{ type: "message", content: "go" },
-				posted("r1"),
-				{ type: "request_cancelled", request_id: "r1" },
-				{
-					type: "message",
-					content: "late",
-					answering: [
-						{
-							request_id: "r1",
-							answers: ["SQLite"],
-							answered_at: "2026-01-02T14:06:00Z",
-						},
-					],
-				},
-			]);
-			expect(partsOf(messages[1])).toMatchObject([
-				{ type: "question_record", status: "cancelled" },
-			]);
-		});
-	});
-
-	// The rule the old blocking prompt had that this one must not inherit: a
-	// posted question belongs to the session, so the process that asked it dying
-	// is not an ending for the question.
-	it("survives the process that asked it", () => {
-		const messages = settleAfterProcessGone(
-			replayHistory([{ type: "message", content: "go" }, posted("r1")]),
-		);
-		expect(partsOf(messages[1])).toMatchObject([
-			{ type: "question_record", status: "pending" },
-		]);
-	});
-
-	it("survives a turn that ends with it still open", () => {
-		const messages = replayHistory([
-			{ type: "message", content: "go" },
-			posted("r1"),
-			{ type: "done" },
-		]);
-		expect(partsOf(messages[1])).toMatchObject([
-			{ type: "question_record", status: "pending" },
-		]);
-	});
-
-	describe("paging backwards", () => {
-		// The message belongs where it was written, a page above; only the half
-		// that settles the card is true of the older page.
-		it("keeps an answering message as a back-reference", () => {
-			expect(isBackReference({ type: "message", content: "hi" })).toBe(false);
+		it("draws a withdrawal, with why", () => {
 			expect(
-				isBackReference({
-					type: "message",
-					content: "hi",
-					answering: [{ request_id: "r1" }],
-				}),
-			).toBe(true);
-		});
-
-		it("settles a card a page below without drawing the message twice", () => {
-			const older = replayHistory([
-				{ type: "message", content: "go" },
-				posted("r1"),
-			]);
-			const answer = {
-				type: "message",
-				content: "Answering:",
-				answering: [
-					{
-						request_id: "r1",
-						answers: ["SQLite"],
-						answered_at: "2026-01-02T14:05:00Z",
-					},
-				],
-			};
-
-			const caught = prependHistoryPage(older, [], {
-				backReferences: [answer],
-			});
-
-			expect(caught.filter((m) => m.role === "user")).toHaveLength(1);
-			const card = caught.flatMap(partsOf)[0];
-			expect(card).toMatchObject({
-				type: "question_record",
-				status: "answered",
-			});
-		});
-
-		it("replays an ordinary back-reference unchanged", () => {
-			const older = replayHistory([
-				{ type: "message", content: "go" },
-				toolCall("t1", "Read"),
-			]);
-			const caught = applyBackReference(older, {
-				type: "tool_result",
-				tool_use_id: "t1",
-				tool_result: "body",
-			});
-			expect(lastParts(caught)).toMatchObject([
-				{ type: "tool_call", tool: { result: "body" } },
-			]);
-		});
-	});
-
-	describe("at the wire boundary", () => {
-		it("reads one question out of the one-element list", () => {
-			expect(normalizeEvent(posted("r1", "Region"))).toEqual({
-				type: "question_posted",
-				requestId: "r1",
-				question: {
-					question: "Which database should I use?",
-					header: "Region",
-					options: [{ label: "SQLite", description: "One file" }],
-					multiSelect: false,
-				},
-				askedAt: "2026-01-02T14:02:00Z",
-			});
-		});
-
-		// `asked_at` and `resolved_at` are optional on the wire; absent means the
-		// record has no such moment, never the zero time.
-		it("leaves an absent asked_at absent", () => {
-			const event = normalizeEvent({
-				type: "question_posted",
-				request_id: "r1",
-				questions: [
-					{ question: "q", header: "h", multiSelect: false } as never,
-				],
-			});
-			expect(event).toMatchObject({
-				askedAt: undefined,
-				question: { options: [] },
-			});
-		});
-
-		it("carries a message's answering through", () => {
-			expect(
-				normalizeEvent({ type: "message", content: "hi", answering: [] }),
-			).toMatchObject({ answering: undefined });
-		});
-	});
-
-	it("draws an answering message as the answers, not as its body", () => {
-		const messages = applyServerEvent([], {
-			type: "message",
-			content: "Answering:\n\nQ: Which?\nA: SQLite",
-			answering: [
-				{
-					request_id: "r1",
-					header: "Database",
-					question: "Which?",
-					answers: ["SQLite"],
-					answered_at: "2026-01-02T14:05:00Z",
-				},
-			],
-		});
-		expect(messages[0]).toMatchObject({
-			role: "user",
-			answering: [{ request_id: "r1", answers: ["SQLite"] }],
+				replyTo(() =>
+					question("Which?", { status: "withdrawn", reason: "step_done" }),
+				),
+			).toMatchObject([{ status: "cancelled", reason: "step_done" }]);
 		});
 	});
 });
-// Old transcripts hold `ask_user_question` records that carried several questions
-// under one `request_id`, answered by one `question_response`. They render as one
-// card each, and each card has to find *its own* answer in that map.
+
+// Old transcripts hold the CLI's own blocking questions, several under one
+// request id. They are drawn one card each, in the place of the ask call.
 describe("a legacy multi-question record", () => {
-	const twoQuestions = {
-		type: "ask_user_question",
-		request_id: "q-1",
-		tool_use_id: "t1",
-		questions: [
-			{
-				question: "Which database?",
-				header: "Database",
-				options: [{ label: "Postgres", description: "" }],
-				multiSelect: false,
-			},
-			{
-				question: "Which region?",
-				header: "Region",
-				options: [{ label: "eu-west-1", description: "" }],
-				multiSelect: false,
-			},
-		],
-	};
-
-	it("draws one card per question, all sharing the request id", () => {
-		const parts = partsOf(replayHistory([twoQuestions])[0]);
-		expect(parts).toMatchObject([
-			{ type: "question_record", legacy: true, record: { requestId: "q-1" } },
-			{ type: "question_record", legacy: true, record: { requestId: "q-1" } },
-		]);
-	});
-
-	it("gives each card the answer keyed by its own question", () => {
-		const parts = partsOf(
-			replayHistory([
-				twoQuestions,
-				{
-					type: "question_response",
+	it("draws one card per question in the place of the call that asked", () => {
+		const parts = replyTo(
+			() => tool("AskUserQuestion", {}, { tool_use_id: "ask-1" }),
+			() =>
+				question("Which database?", {
 					request_id: "q-1",
-					answers: {
-						"Which database?": "Postgres",
-						"Which region?": "eu-west-1",
+					legacy: true,
+					tool_use_id: "ask-1",
+				}),
+			() =>
+				question("Which region?", {
+					request_id: "q-1",
+					legacy: true,
+					tool_use_id: "ask-1",
+					status: "answered",
+					answer: {
+						request_id: "q-1",
+						answers: ["eu-west-1"],
+						answered_at: "",
 					},
-				},
-			])[0],
+				}),
 		);
 		expect(parts).toMatchObject([
-			{ status: "answered", answer: { answers: ["Postgres"] } },
-			{ status: "answered", answer: { answers: ["eu-west-1"] } },
+			{ type: "question_record", legacy: true, status: "pending" },
+			{
+				type: "question_record",
+				legacy: true,
+				status: "answered",
+				answer: { answers: ["eu-west-1"] },
+			},
 		]);
-	});
-
-	// The degradation `lookupAnswer` allows — "one question, one entry, they must
-	// be each other" — must not fire here. Handing the single entry to both cards
-	// would put one user's answer on a question they never answered.
-	it("leaves a card whose answer the map does not name empty", () => {
-		const parts = partsOf(
-			replayHistory([
-				twoQuestions,
-				{
-					type: "question_response",
-					request_id: "q-1",
-					answers: { "a key matching neither question": "Postgres" },
-				},
-			])[0],
-		);
-		// Both are settled — the response says the request was answered — and
-		// neither claims a selection it cannot account for.
-		expect(parts).toMatchObject([
-			{ status: "answered", answer: { answers: [] } },
-			{ status: "answered", answer: { answers: [] } },
-		]);
-	});
-
-	// The single-question case is where that degradation is useful, and it still
-	// works: one card, one entry, no key match needed.
-	it("still falls back to the only entry for a single-question record", () => {
-		const parts = partsOf(
-			replayHistory([
-				{ ...twoQuestions, questions: [twoQuestions.questions[0]] },
-				{
-					type: "question_response",
-					request_id: "q-1",
-					answers: { "a key matching nothing": "Postgres" },
-				},
-			])[0],
-		);
-		expect(parts).toMatchObject([
-			{ status: "answered", answer: { answers: ["Postgres"] } },
-		]);
+		expect(parts[0]).not.toHaveProperty("toolUseId");
 	});
 });

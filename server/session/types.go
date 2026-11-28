@@ -1,7 +1,6 @@
 package session
 
 import (
-	"encoding/json"
 	"errors"
 	"time"
 )
@@ -128,34 +127,6 @@ const NoHistorySeq HistorySeq = 0
 
 // Valid reports whether the sequence number names a record at all.
 func (s HistorySeq) Valid() bool { return s > 0 }
-
-// stampHistorySeq returns the records as a client gets them: each with its
-// seq in front and nothing else of the envelope it was stored in, so a
-// replayed record reads like the notification it was first sent as (see
-// watch.notifyParams). seqs are the records' own, from HistorySeqs over the
-// whole history — a page cannot be numbered on its own.
-//
-// A record of an older format gets the seq it was always given, which is what
-// keeps the seqs clients hold valid; the file is not rewritten. One the store
-// synthesized keeps the NoHistorySeq it carries (see historyWarning).
-func stampHistorySeq(records []json.RawMessage, seqs []HistorySeq) []json.RawMessage {
-	stamped := make([]json.RawMessage, len(records))
-	for i, raw := range records {
-		if !seqs[i].Valid() {
-			stamped[i] = raw
-			continue
-		}
-		line, err := encodeWireRecord(raw, seqs[i])
-		if err != nil {
-			// Read off disk, so it is valid JSON; failing to take it apart only
-			// costs the client the ability to name it.
-			stamped[i] = raw
-			continue
-		}
-		stamped[i] = line
-	}
-	return stamped
-}
 
 // ForkOrigin records the session a session was forked from.
 //

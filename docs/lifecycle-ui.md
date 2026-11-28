@@ -826,24 +826,25 @@ outlives the process that asked it, which is what §5.1 below gives up.
 
 ### 2.4 Recovering a dangling turn after a restart
 
-The subscription result carries `turn`, so the client no longer infers liveness
-from the absence of `process_ended` in history. Rule: **on subscribe, if
-`turn.phase != "running"`, every message still `streaming` is finalised** — as
-`interrupted` when `turn` reports the last turn aborted, `complete` otherwise —
-**unless the turn is still open**, whatever it is blocked on. An open turn
-resumes in the same reply — after the permission is answered, or, for a
-background wait, when the CLI picks the turn back up itself once the task
-finishes ([agent-integration.md](code/agent-integration.md#background-waits))
-— so the reply stays `streaming`: its turn-end slot stays empty on a
-reload exactly as it does live
-([turn-progress-ui.md §2.2](turn-progress-ui.md#22-when-it-shows)), and the text
-written after the wait lands in that same bubble rather than opening a second
-one under a reply already marked finished. Finalising it as `complete`, which
-this rule first did, put Copy and Fork on a half-written reply after every
-reload during a wait. A permission prompt that outlived its turn (`open`
-false) has nothing to resume, and its reply is finalised as before.
-This replaces the `isProcessRunning` bookkeeping in `useChatMessages` and is the
-only thing that closes out a transcript whose server died mid-stream.
+A transcript whose server died mid-stream is closed out by the history itself:
+the [restart repair](code/agent-integration.md#restart-repair) writes the
+`process_ended` the killed run never got to, so the projection ends the turn —
+its calls interrupted, its background work lost with the process — and every
+client reads it ended, on every page and every reload. The client keeps no
+settling of its own against the session's turn.
+
+What it does decide is how a turn the history leaves *open* is drawn: as
+`streaming` while it is the newest turn, whatever it is blocked on, and finished
+otherwise. An open turn resumes in the same reply — after a permission is
+answered, or, for a background wait, when the CLI picks the turn back up itself
+once the task finishes ([agent-integration.md](code/agent-integration.md#background-waits))
+— so the reply stays `streaming`: its turn-end slot stays empty on a reload
+exactly as it does live ([turn-progress-ui.md §2.2](turn-progress-ui.md#22-when-it-shows)),
+and the text written after the wait lands in that same bubble rather than
+opening a second one under a reply already marked finished. An open turn that
+is not the newest lost its process without a record, and is drawn finished. A
+transcript read out of another worktree is never continued, so its open turn is
+drawn finished too.
 
 ## 3. Button rules
 
@@ -1007,9 +1008,8 @@ has exactly one producer, and **no value reaches both kinds of card**:
 | `step_done` | a question card | a step completing while one of its questions was still waiting |
 
 All four arrive the same way, as a `request_cancelled` record naming the request
-and carrying the reason, which is also what makes the outcome survive a reload — a
-client paging back through history would otherwise replay a card as still
-waiting.
+and carrying the reason, which is also what makes the outcome survive a reload —
+the projection would otherwise leave a card waiting on every page it is on.
 
 The client's own copy of this set is `ExpiryReason`, and it deliberately does not
 give a permission card a sentence for `step_done`: the missing entry *is* the

@@ -134,7 +134,6 @@ describe("a thought in a real layout", () => {
 		const live = (paragraphs: number, newest: number): LiveThinking => ({
 			content: reasoning(paragraphs, newest),
 			fullReasoning: "",
-			joinedLate: false,
 		});
 		const panel = { expanded: true, onToggle: () => {} };
 		const tail = (thinking: LiveThinking) => (

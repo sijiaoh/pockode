@@ -7,7 +7,9 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/pockode/server/session"
 )
@@ -76,6 +78,18 @@ func fileState(t *testing.T, store *session.FileStore, id string) State {
 	return Fold(records, session.AgentTypeClaude).State()
 }
 
+// writtenFileState is writtenState of what the store's file holds now: the
+// fold of the file, but for a history of nothing but messages, which Live
+// knows it has just written (Projection.AppendWritten).
+func writtenFileState(t *testing.T, store *session.FileStore, id string) State {
+	t.Helper()
+	records, err := store.GetHistory(context.Background(), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return writtenState(records)
+}
+
 // resident says Live keeps a folded projection of the session.
 func resident(l *Live, id string) bool {
 	e := l.lookup(id)
@@ -113,7 +127,7 @@ func TestLive_IsTheFoldOfTheFile(t *testing.T) {
 			}
 			appendLine(t, store, "s", line)
 			if i >= firstRead {
-				if got, want := liveState(t, l, "s"), fileState(t, store, "s"); !reflect.DeepEqual(got, want) {
+				if got, want := liveState(t, l, "s"), writtenFileState(t, store, "s"); !reflect.DeepEqual(got, want) {
 					t.Fatalf("first read before record %d, after record %d:\n  live %+v\n  file %+v", firstRead, i, got, want)
 				}
 			}
@@ -133,9 +147,9 @@ func TestLive_ReadsSeeEveryReturnedAppend(t *testing.T) {
 		createSession(t, store, "s")
 		l.Hold("s")
 		records := history(liveLines...)
-		prefixes := make([]State, len(records)+1)
+		prefixes := make([][]State, len(records)+1)
 		for i := range prefixes {
-			prefixes[i] = Fold(records[:i], session.AgentTypeClaude).State()
+			prefixes[i] = readings(records[:i])
 		}
 
 		var appended sync.Mutex
@@ -179,19 +193,40 @@ func TestLive_ReadsSeeEveryReturnedAppend(t *testing.T) {
 		}
 		readers.Wait()
 		<-done
-		if got, want := liveState(t, l, "s"), prefixes[len(records)]; !reflect.DeepEqual(got, want) {
+		if got, want := liveState(t, l, "s"), prefixes[len(records)][0]; !reflect.DeepEqual(got, want) {
 			t.Errorf("round %d: at the end:\n  live %+v\n  file %+v", round, got, want)
 		}
 	}
 }
 
-func matchesPrefix(s State, prefixes []State) bool {
-	for _, p := range prefixes {
-		if reflect.DeepEqual(s, p) {
-			return true
+func matchesPrefix(s State, prefixes [][]State) bool {
+	for _, readings := range prefixes {
+		for _, p := range readings {
+			if reflect.DeepEqual(s, p) {
+				return true
+			}
 		}
 	}
 	return false
+}
+
+// writtenState is the projection of records as Live folds them when it hears
+// of each as it is written (Projection.AppendWritten).
+func writtenState(records []json.RawMessage) State {
+	p := New(session.AgentTypeClaude)
+	for _, raw := range records {
+		p.AppendWritten(raw)
+	}
+	return p.State()
+}
+
+// readings are what a read of a history holding records can say: what Live
+// holds when it heard of them as written — the first —, or what it reads off
+// the file when it loads right then. The two differ while the history is
+// nothing but messages, which the file cannot tell the version of
+// (agent.TurnInference).
+func readings(records []json.RawMessage) []State {
+	return []State{writtenState(records), Fold(records, session.AgentTypeClaude).State()}
 }
 
 // TestLive_Lifecycle: a projection is let go with the history it describes —
@@ -274,9 +309,12 @@ type interposed struct {
 	staleGet   *session.SessionMeta
 	// afterRead runs once a history read has its records.
 	afterRead func()
+	// reads counts the history reads.
+	reads atomic.Int32
 }
 
 func (s *interposed) GetHistory(ctx context.Context, sessionID string) ([]json.RawMessage, error) {
+	s.reads.Add(1)
 	records, err := s.FileStore.GetHistory(ctx, sessionID)
 	if f := s.afterRead; f != nil {
 		s.afterRead = nil
@@ -425,6 +463,7 @@ func assertRecreated(t *testing.T, store *session.FileStore, l *Live) {
 // file, also after appends it was not there to hear.
 func TestLive_HeldOnlyWhileActive(t *testing.T) {
 	store, l := newTracked(t)
+	l.linger = 0 // TestLive_LingersOnceLetGo
 	createSession(t, store, "s")
 	half := len(liveLines) / 2
 	for _, line := range liveLines[:half] {
@@ -522,11 +561,12 @@ func TestLive_LastReleaseDuringAFirstRead(t *testing.T) {
 func TestLive_HoldsComingAndGoing(t *testing.T) {
 	for round := 0; round < 20; round++ {
 		store, l := newTracked(t)
+		l.linger = 0 // TestLive_LingersOnceLetGo
 		createSession(t, store, "s")
 		records := history(liveLines...)
-		prefixes := make([]State, len(records)+1)
+		prefixes := make([][]State, len(records)+1)
 		for i := range prefixes {
-			prefixes[i] = Fold(records[:i], session.AgentTypeClaude).State()
+			prefixes[i] = readings(records[:i])
 		}
 
 		var appended sync.Mutex
@@ -591,8 +631,205 @@ func TestLive_HoldsComingAndGoing(t *testing.T) {
 			t.Fatalf("round %d: kept after every holder let go: holds %v, %d entries", round, l.holds, len(l.sessions))
 		}
 		l.Hold("s")
-		if got, want := liveState(t, l, "s"), prefixes[len(records)]; !reflect.DeepEqual(got, want) {
+		if got, want := liveState(t, l, "s"), prefixes[len(records)][0]; !reflect.DeepEqual(got, want) {
 			t.Errorf("round %d: at the end:\n  live %+v\n  file %+v", round, got, want)
 		}
+	}
+}
+
+// A held session's pages are cut from what Live keeps: the file is read once,
+// however many pages are asked for and whatever is appended meanwhile, and
+// each page is the one the file's fold gives. Let go, it lingers: the pages
+// after are still cut from it.
+func TestLive_PagesOfAHeldSessionReadTheFileOnce(t *testing.T) {
+	store, s, l := trackedWithHistory(t)
+	ctx := context.Background()
+	release := l.Hold("s")
+
+	page := func() string {
+		t.Helper()
+		page, err := l.Page(ctx, "s", session.NoHistorySeq, MaxPageSize)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return jsonOf(t, page)
+	}
+	filePage := func() string {
+		t.Helper()
+		records, err := store.GetHistory(ctx, "s")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return pageJSON(t, Fold(records, session.AgentTypeClaude))
+	}
+
+	first := page()
+	appendLine(t, store, "s", `T2|{"type":"text","content":"more"}`)
+	if got, want := page(), filePage(); got != want || got == first {
+		t.Errorf("after an append:\n  live %s\n  file %s", got, want)
+	}
+	if _, err := l.Page(ctx, "s", 3, 1); err != nil {
+		t.Fatal(err)
+	}
+	if got := s.reads.Load(); got != 1 {
+		t.Errorf("history read %d times while held, want once", got)
+	}
+
+	release()
+	appendLine(t, store, "s", `T2|{"type":"text","content":"after"}`)
+	if got, want := page(), filePage(); got != want {
+		t.Errorf("let go, then appended to:\n  live %s\n  file %s", got, want)
+	}
+	page()
+	if got := s.reads.Load(); got != 1 {
+		t.Errorf("history read %d times, want once: a session let go lingers", got)
+	}
+	if _, err := l.Page(ctx, "missing", session.NoHistorySeq, 0); !errors.Is(err, session.ErrSessionNotFound) {
+		t.Errorf("unknown session: err = %v, want ErrSessionNotFound", err)
+	}
+}
+
+// TestLive_LingersOnceLetGo: a session's projection outlives its last holder,
+// and a read of one nobody holds, by the linger — kept current meanwhile, each
+// read pushing the end back — and is let go when it runs out.
+func TestLive_LingersOnceLetGo(t *testing.T) {
+	store, s, l := trackedWithHistory(t)
+	// Ended by hand (expireLinger), so no step depends on the clock.
+	l.linger = time.Hour
+	ctx := context.Background()
+	gone := func() bool {
+		l.sessionsMu.Lock()
+		defer l.sessionsMu.Unlock()
+		return len(l.holds) == 0 && len(l.sessions) == 0 && len(l.lingering) == 0
+	}
+	letGo := func(when string) {
+		t.Helper()
+		expireLinger(l, "s")
+		if !gone() {
+			t.Fatalf("%s: still kept once the linger ran out: holds %v", when, l.holds)
+		}
+	}
+
+	// Read with nobody holding it: folded once, then lingering.
+	for range 3 {
+		if _, err := l.Page(ctx, "s", session.NoHistorySeq, 0); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := s.reads.Load(); got != 1 {
+		t.Errorf("history read %d times by reads nobody held, want once", got)
+	}
+	appendLine(t, store, "s", `T2|{"type":"text","content":"while lingering"}`)
+	if got, want := liveState(t, l, "s"), fileState(t, store, "s"); !reflect.DeepEqual(got, want) {
+		t.Errorf("appended to while lingering:\n  live %+v\n  file %+v", got, want)
+	}
+	letGo("read with nobody holding it")
+
+	// Held and let go: lingers again, and a hold taken meanwhile is not
+	// counted twice.
+	release := l.Hold("s")
+	liveState(t, l, "s")
+	reads := s.reads.Load()
+	release()
+	again := l.Hold("s")
+	again()
+	liveState(t, l, "s")
+	if got := s.reads.Load(); got != reads {
+		t.Errorf("history read again after a release, while lingering")
+	}
+	letGo("held and let go")
+
+	if _, _, err := l.TakeUpdate(ctx, "s"); err != nil {
+		t.Fatal(err)
+	}
+	if !gone() {
+		t.Error("an update taken for a session nobody holds made it linger")
+	}
+	liveState(t, l, "s")
+	if got := s.reads.Load(); got != reads+1 {
+		t.Errorf("history read %d times after the linger ran out, want %d", got, reads+1)
+	}
+
+	// Lingering only, its history replaced: the update after the next write
+	// has nobody to tell, and does not fold the file for nobody; nor is it a
+	// break.
+	reads = s.reads.Load()
+	if err := store.WriteHistory(ctx, "s", history(prompt1, started1)); err != nil {
+		t.Fatal(err)
+	}
+	appendLine(t, store, "s", `T1|{"type":"text","content":"after the reset"}`)
+	if _, continuous, err := l.TakeUpdate(ctx, "s"); err != nil || !continuous {
+		t.Errorf("update after a lingering session's reset: continuous %v, err %v", continuous, err)
+	}
+	if got := s.reads.Load(); got != reads {
+		t.Errorf("history read %d times by an update nobody waits on, want %d", got, reads)
+	}
+	if got, want := liveState(t, l, "s"), fileState(t, store, "s"); !reflect.DeepEqual(got, want) {
+		t.Errorf("read after the reset:\n  live %+v\n  file %+v", got, want)
+	}
+}
+
+// TestLive_AnUpdateThatLoads: a held session whose projection was let go
+// loads it again on the next record written, and the update is what that
+// record changed — the call it settled among it — not nothing.
+func TestLive_AnUpdateThatLoads(t *testing.T) {
+	store, _, l := trackedWithHistory(t)
+	l.linger = 0
+	ctx := context.Background()
+	release := l.Hold("s")
+	defer release()
+	liveState(t, l, "s")
+	if err := store.WriteHistory(ctx, "s", history(prompt1, started1,
+		`T1|{"type":"tool_call","tool_use_id":"tu","tool_name":"Bash"}`)); err != nil {
+		t.Fatal(err)
+	}
+	appendLine(t, store, "s", `T1|{"type":"tool_result","tool_use_id":"tu","tool_result":"ok"}`)
+	u, continuous, err := l.TakeUpdate(ctx, "s")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if continuous {
+		t.Error("an update after the held session's history was replaced is continuous")
+	}
+	if len(u.Items) != 1 || u.Items[0].Item.Tool == nil || u.Items[0].Item.Tool.Status != ItemSucceeded {
+		t.Errorf("update = %+v, want the call the record settled", u)
+	}
+	if got, want := liveState(t, l, "s"), fileState(t, store, "s"); !reflect.DeepEqual(got, want) {
+		t.Errorf("loaded by an update:\n  live %+v\n  file %+v", got, want)
+	}
+
+	// A read that loads it between a record and that record's update leaves
+	// the update to say what the record changed.
+	if err := store.WriteHistory(ctx, "s", history(prompt1, started1,
+		`T1|{"type":"tool_call","tool_use_id":"tu2","tool_name":"Bash"}`)); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := l.TakeUpdate(ctx, "s"); err != nil {
+		t.Fatal(err)
+	}
+	l.HistoryReset("s")
+	appendLine(t, store, "s", `T1|{"type":"tool_result","tool_use_id":"tu2","tool_result":"ok"}`)
+	if got, want := liveState(t, l, "s"), fileState(t, store, "s"); !reflect.DeepEqual(got, want) {
+		t.Errorf("loaded by a read:\n  live %+v\n  file %+v", got, want)
+	}
+	u, _, err = l.TakeUpdate(ctx, "s")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(u.Items) != 1 || u.Items[0].Item.Tool == nil || u.Items[0].Item.Tool.ToolUseID != "tu2" || u.Items[0].Item.Tool.Status != ItemSucceeded {
+		t.Errorf("update after a read loaded it = %+v, want the call the record settled", u)
+	}
+}
+
+// expireLinger runs the session's linger out now.
+func expireLinger(l *Live, sessionID string) {
+	l.sessionsMu.Lock()
+	h := l.lingering[sessionID]
+	if h != nil {
+		h.until = time.Time{}
+	}
+	l.sessionsMu.Unlock()
+	if h != nil {
+		l.endLinger(sessionID, h)
 	}
 }

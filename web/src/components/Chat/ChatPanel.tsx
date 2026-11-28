@@ -1511,7 +1511,7 @@ function ChatPanel({
 							// itself without a control when it is given none — a pending
 							// card that offers nothing is the truth here, not the dead end
 							// it would be in a live session. The question card is the one
-							// that needs this: its status comes from the records, not from
+							// that needs this: its status comes from its item, not from
 							// the turn, so "Answer this" otherwise survives into a screen
 							// whose answer panel is not rendered at all. The other two are
 							// the same statement made where it cannot drift.

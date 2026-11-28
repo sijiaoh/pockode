@@ -42,7 +42,7 @@ React SPA ──WebSocket──▶ Go Server ──spawn──▶ AI CLI (subpro
 2. ChatClient persists message to session history, forwards to `Process.SendMessage()` — unless the turn is holding a permission request open, the one state a message cannot be delivered in, which is refused as `InvalidParams` with nothing written ([lifecycle.md](lifecycle.md#session-one-reducer)). A turn merely *running* is not refused; the message steers it, and the answer to it begins where the agent reads it rather than where the turn ends — for an agent that cannot report that moment itself, this is also where the read point record is written ([agent-event.md](agent-event.md#the-read-point-message_ingested)).
 3. Agent subprocess receives via stdin, processes, emits stream-json events
 4. Events are parsed into typed `AgentEvent`s (Text, ToolCall, ToolResult, Error, PermissionRequest, Done, etc.)
-5. Each event is persisted to session history and then queued for every WebSocket subscriber, in one step per session (`chatstream.Sequencer`), so subscribers get records in seq order; a live event (`tool_activity`, `thinking_delta`) is queued without being persisted
+5. Each event is persisted to session history, folded into the session's projection as it is written, and then handed to `ChatMessagesWatcher`, in one step per session (`chatstream.Sequencer`), which queues what the record changed — a `chat.update` of turns and items — for every WebSocket subscriber, in seq order; a live event (`tool_activity`, `thinking_delta`) is not persisted and goes out as a `chat.delta` ([Live updates](#live-updates))
 6. On `Done` event, process transitions to `idle`
 
 Besides user-typed messages, the Work system pushes automatic prompts to the same session via `Client.SendSystemMessage`; these are tagged `origin: "system"` with a `meta` summary naming the work, so the frontend can render each as a one-line work event where it happened instead of as a user bubble. See [agent-event.md](agent-event.md#message-origin-user-vs-system) and [code/work-system.md](code/work-system.md#work-messages-in-chat).
@@ -389,25 +389,151 @@ that brings no folder, by a send, and by switching sessions.
 ## History Paging
 
 Opening a session does not ship its whole transcript. `chat.messages.subscribe`
-replies with the newest page of history and a cursor; scrolling up fetches the
-pages before it with `chat.messages.history`. A long conversation is mostly tool
-calls and their results, and a client only ever renders the tail of it — sending
-the rest costs transport, parsing and memory for records nobody looks at.
+replies with the newest page of it and a cursor; scrolling up fetches the
+pages before it with `chat.messages.history` (`session_view.history` for a
+session of another worktree, which pages the same way). A long conversation is
+mostly tool calls and their results, and a client only ever renders the tail of
+it — sending the rest costs transport, parsing and memory for items nobody
+looks at.
 
 | Method | Params | Result |
 |--------|--------|--------|
-| `chat.messages.subscribe` | `id`, `session_id`, `limit?` | `history`, `has_more`, `next_before_seq?`, `turn`, `tool_activity?`, `tool_progress?`, `server_time` |
-| `chat.messages.history` | `session_id`, `before_seq?`, `limit?` | `history`, `has_more`, `next_before_seq?`, `server_time` |
+| `chat.messages.subscribe` | `id`, `session_id`, `limit?` | `turns`, `has_more`, `next_before_seq?`, `through_seq?`, `plan?`, `turn`, `streams`, `server_time` |
+| `chat.messages.history` | `session_id`, `before_seq?`, `limit?` | `turns`, `has_more`, `next_before_seq?`, `through_seq?`, `plan?`, `server_time` |
 
-- `history` is the page, **oldest record first**, each record stamped with its
-  `seq` — its address in the session's history ([`session.HistorySeq`](../server/session/types.go)).
-- `before_seq` is **exclusive**: the reply holds the records immediately older
-  than the record it names. Omitted (or `0`) asks for the newest page.
-- `has_more` says whether anything older than `history[0]` exists; `next_before_seq`
-  is the cursor for that page and is absent once `has_more` is false. The server
-  computes the cursor rather than letting the client read `history[0].seq`,
-  because a record it could not stamp — one that is not a JSON object — carries
-  no `seq` at all and would strand paging at that point.
+**A page is a slice of the conversation, not of the record stream.** It is cut
+from the session's history projection
+([agent-integration.md](code/agent-integration.md#the-history-projection)) and
+holds *items*, oldest first, grouped into the turns they belong to. Every item
+is complete as it stands when the page is cut: a tool run carries its status,
+its permission request and what became of it, its result (a background
+outcome beside the placeholder it replaced) and the plan filed on it; a
+subagent's call carries its own words, thinking and calls inside it, at any
+depth, however the records interleaved; a question carries its answer or its
+withdrawal — and, reopened because a Stop discarded the message its answer went
+out in, the answer it lost (`discarded_answer`, with `discarded_in` naming that
+message) until it is answered again or withdrawn; a message says whether a Stop
+discarded it. So no page needs
+another to be read — what an older page holds is earlier items, never a missing
+piece of one on this page — and nothing about a page boundary has to be
+repaired.
+
+```json
+{
+  "turns": [
+    {
+      "turn": {"turn_id": "T7", "origin": "prompt", "message_id": "m7",
+               "started_at": "…", "start_seq": 41, "ended": true,
+               "outcome": "completed", "ended_by": "done", "end_seq": 52,
+               "ended_at": "…"},
+      "continued": true,
+      "items": [
+        {"kind": "text", "seq": 44, "last_seq": 44, "text": {"content": "Looking."}},
+        {"kind": "tool", "seq": 45, "last_seq": 51, "tool": {
+          "tool_use_id": "tu1", "tool_name": "Task", "tool_input": {…},
+          "status": "succeeded", "started_at": "…", "ended_at": "…",
+          "result": {"text": "…", "duration_ms": 9000, "seq": 51},
+          "children": [
+            {"kind": "thinking", "seq": 46, "last_seq": 46, "thinking": {"content": "…", "parent_tool_use_id": "tu1"}},
+            {"kind": "tool", "seq": 47, "last_seq": 50, "tool": {
+              "tool_use_id": "tu2", "tool_name": "Bash", "parent_tool_use_id": "tu1",
+              "status": "succeeded",
+              "permission": {"request_id": "p1", "status": "allowed", "choice": "allow", "seq": 48},
+              "result": {"text": "ok", "seq": 50}}}
+          ]}}
+      ]
+    }
+  ],
+  "has_more": true,
+  "next_before_seq": 44,
+  "through_seq": 52
+}
+```
+
+- **A stretch is `{turn?, continued?, items, discarded?}`.** `turn` is the
+  whole turn as it stands — its origin, opening message, start, and whether,
+  how and when it ended — whichever page its items are on; absent for items
+  outside every turn (a message whose turn never started, a warning written
+  between turns). `discarded` lists the messages the Stop that ended it threw
+  away unread, a legacy one by the excerpt its warning quoted. A turn is
+  usually one stretch, but a page boundary can cut it: the newer half is then
+  `continued` — the item before its first, on the older page, is the same
+  turn's. Output tagged with a turn after the next one had started (a Codex
+  straggler) is a stretch of its own after that turn's, naming its turn, and
+  is not `continued`. Either way a stretch reads on its own; a client that
+  wants one block per turn joins stretches by `turn_id`.
+- **A turn's `outcome` is `completed`, `failed`, `auth_failed` or
+  `aborted`; `ended_by` is the signal that ended it** — `done`, `failed`,
+  `auth_failed`, `interrupted`, `process_ended`, `process_started` — which says
+  what `aborted` cannot: whether the turn was stopped or lost its process, a
+  difference the transcript draws. Both are absent while `ended` is false.
+- **An item is `{id, kind, seq?, last_seq?, <kind>: payload}`**, the payload under
+  the field named after its kind: `message`, `text`, `thinking`, `tool`,
+  `question`, `plan`, `read`, `system`, `warning`, `error`, `raw`,
+  `command_output`. The shapes are the `projection.PageItem` family
+  ([`server/projection/page.go`](../server/projection/page.go)). Not items: a
+  turn's ending (`done`, `interrupted`, `process_ended` are its `turn`; an
+  `error` is both an item and the turn's outcome), a `turn_started`, a
+  `background_wait`, and the records that settle an item, which are folded
+  into it. A `read` item is a read point, where the agent picked up the
+  message it names — the place a reply splits. A `plan` item is a plan record
+  filed on no call the history holds (a Codex plan); one filed on a call rides
+  on that call's `tool` item. A fetch (`origin_tool_use_id`) stays a `tool`
+  item of its own naming the call it reads, in its own turn: it always comes
+  after that call, so a client paging newest-first holds every fetch of a call
+  by the time the call's page arrives.
+- **`id` names the item**: the same item has the same id on every page and in
+  every update, and no other item has it. It is the item's place among all the
+  transcript's items, nested ones included, counted from one, so items at one
+  level — the top level, or one run's children — are in id order. A client
+  keys its copy by it and derives nothing else from it. It holds for as long
+  as the history is the one it was read from: a history replaced under a
+  subscription ends it with `chat.resync`.
+- **`seq` is the item's first record's, and is the item's place;** absent for
+  an item in no file (the warning a damaged history gets).
+  **`last_seq` is the newest record that went into it** — a tool run's nested
+  items' included — so it moves when a call returns, an answer arrives, or a
+  backgrounded run reports its outcome turns later. Both are record-level
+  seqs, the addresses a fork anchor names
+  ([session-fork-ui.md](session-fork-ui.md#data-contract)); as before, a
+  client quotes them back and never computes with them.
+- **`before_seq` is exclusive**: the reply holds the items immediately older
+  than the item it names. Omitted (or `0`) asks for the newest page. It must be
+  a cursor the server handed out (`next_before_seq`), which is the seq of the
+  page's first item: an item in no file has none, so a page never starts on
+  one.
+- `has_more` says whether items older than the page's first exist;
+  `next_before_seq` is the cursor for that page and is absent once `has_more`
+  is false.
+- **`limit` is a budget in records**, not a count of items: the newest items
+  come back until the records that went into them — a tool run's nested work
+  included — reach it, and the page ends on the item that spends it. An item
+  is never split, so a page holds at least one however large it is (the
+  longest real turn is about 670 records; a subagent run inside one is one
+  item). `0` means `projection.DefaultPageSize` (50); anything above
+  `projection.MaxPageSize` (500) is clamped. A negative `limit` and a
+  `before_seq` past the newest record are both refused with an invalid-params
+  error — answering an unusable cursor with the newest page would silently
+  restart the client's scrollback from the bottom. A `before_seq` inside a gap
+  (seqs are not dense, see
+  [agent-integration.md](code/agent-integration.md#history-storage)) is not
+  unusable: it still means "older than this".
+- `through_seq` is the newest record the page had folded when it was cut. A
+  `chat.update` whose `through_seq` is not past it says nothing the page does
+  not ([Live updates](#live-updates)).
+- `plan` is the session's current plan as of `through_seq` — the newest
+  main-thread plan record, as a `plan` item with its seq. It is state, not an
+  item of the page: the plan in force can be on any page.
+- **The file is not read per request.** A session somebody subscribes to is
+  held in memory from the first subscriber to the last
+  (`ChatMessagesWatcher`), and its pages — the snapshot and every
+  `chat.messages.history` after it — are cut from that projection. Once
+  nobody holds it, it lingers two minutes, and a page of a session nobody
+  holds (paging without a subscription) starts the same linger, so a
+  reconnect or the next page does not fold the file again.
+  `session_view.history` of a worktree that is not loaded keeps its fold the
+  same way, for as long as the history file is unchanged — nothing here hears
+  of that directory's writes, so each page checks the file's version instead.
 - A `seq` is an address only for as long as the server process that handed it
   out: appends are not fsynced, so a power loss can drop a tail the client
   already holds, and the restarted server gives those seqs to different
@@ -419,119 +545,185 @@ the rest costs transport, parsing and memory for records nobody looks at.
   continued from with a cursor. Nothing in the client acts on it yet; it is the
   contract a resuming stream will build on.
 - `server_time` is the server's clock as the reply was built. A call still
-  running in `history` is counted from its `observed_at`
+  running in a page is counted from its `started_at`
   ([agent-integration.md](code/agent-integration.md)) against this reading plus
   however long ago the reply arrived, never against the phone's own clock — the
-  same rule as the turn's `open_elapsed_ms`.
-- `limit` of `0` means `session.DefaultHistoryPageSize` (50); anything above
-  `session.MaxHistoryPageSize` (500) is clamped. A negative `limit` and a
-  `before_seq` past the newest record are both refused with an invalid-params
-  error — answering an unusable cursor with the newest page would silently
-  restart the client's scrollback from the bottom. A `before_seq` inside a gap
-  (seqs are not dense, see
-  [agent-integration.md](code/agent-integration.md#history-storage)) is not
-  unusable: it still means "older than this".
-- A page can hold more than `limit` records: it starts early enough to hold the
-  call of every subagent whose work it holds (nested ones included), as far back
-  as `session.MaxHistoryPageSize` records from its end. A boundary between a
-  subagent call and its work would leave that work drawn flat for good — the
-  client never refiles a row it has drawn
-  ([tool-call-ui.md](tool-call-ui.md#what-is-not-filed)).
+  same rule as the turn's `open_elapsed_ms`. Moments are sent as the server
+  recorded them; correcting for the phone's clock stays the client's.
 
-- `tool_activity` is what each tool call still in flight last reported doing,
-  keyed by `tool_use_id`. It is not part of the page, because that kind of event
-  is never recorded — it is the latest value of something still changing
-  ([tool-call-model.md](tool-call-model.md#tool_activity-is-not-persisted)) — so a
-  client subscribing mid-run would otherwise see a call that has been running for
-  half an hour with nothing to say for itself. Absent when no call is in flight.
-  The subscription is registered before this snapshot is taken, so an activity
-  arriving in between is delivered twice rather than lost, and a latest value
-  delivered twice is harmless.
-- `tool_progress` is the same snapshot for a subagent's live counters — the
-  newest `subagent_progress` each subagent call in flight reported, keyed by
-  `tool_use_id` ([agent-integration.md](code/agent-integration.md#history-records-and-live-events)).
-  Absent when none did.
+- `streams` is what is still being generated as the subscription opens:
+  `thinking` — the main agent's thinking so far, `{content?, full_reasoning?}`,
+  absent when it is not thinking — and `tools`, by `tool_use_id`, what each call
+  in flight has said about itself: `{activity?, output?, output_truncated?,
+  subagent_progress?}`. None of it is ever recorded
+  ([tool-call-model.md](tool-call-model.md#tool_activity-is-not-persisted)), so
+  a client subscribing mid-run would otherwise see a call that has been running
+  for half an hour with nothing to say for itself. The `chat.delta`
+  notifications continue it exactly ([Live updates](#live-updates)).
 
-`chat.messages.history` needs no subscription and cannot collide with one. An
-older page is settled history: append-only, so it can never change, and every
-record a live notification carries is newer than the page subscribing returned.
-A client scrolled up therefore keeps paging with the cursor it already holds
-while new records stream in below.
+`chat.messages.history` needs no subscription. Its cursors name places, and a
+place never moves — items are only ever added after the newest — so a client
+scrolled up keeps paging with the cursor it already holds while the newest
+page grows below. What an older page says of an item is how it stands when the
+page is cut, which for an item still changing (a backgrounded run, an open
+question) can be newer than what the client was told when it subscribed.
+
+
+### Live updates
+
+A subscription is kept current with three notifications, all carrying the
+subscription `id` for routing, and nothing else: the records themselves never
+go out. What a record changed is said in the terms a page uses, and a stream
+still being generated is extended in place, close to Codex's `item/started` /
+`item/completed` and its deltas.
+
+**`chat.update`** is what one history record changed
+(`projection.Update`, [`server/projection/update.go`](../server/projection/update.go)):
+
+```json
+{"id": "client-1", "through_seq": 61,
+ "turns": [{"turn": {"turn_id": "T8", "origin": "prompt", "ended": true, "outcome": "aborted", "ended_by": "interrupted", "end_seq": 61, …}}],
+ "items": [
+   {"turn_id": "T8", "item": {"id": 40, "kind": "tool", "seq": 55, "last_seq": 59,
+     "tool": {"tool_use_id": "tu1", "tool_name": "Task", "status": "interrupted", …}}},
+   {"parent": 40, "item": {"id": 42, "kind": "tool", "seq": 58, "last_seq": 59,
+     "tool": {"tool_use_id": "tu2", "parent_tool_use_id": "tu1", "status": "interrupted", …}}}
+ ],
+ "streams_ended": {"thinking": true, "tools": ["tu2"]}}
+```
+
+- `turns` are the turns the record started or ended, or had a message
+  discarded in, each whole (`{turn, discarded?}`, as a stretch carries them).
+  They come before the items, so an item names a turn the client has.
+- `items` are the items it changed, each **upserted**: complete as it stands
+  now, replacing the client's copy — with one exception, a `tool` item's
+  `children`, which are never sent in an update. Every nested item is an item
+  of its own: a subagent's call returning sends that call, and the runs it is
+  nested in again (their `last_seq` moved), never the whole run. That keeps a
+  long subagent run at the cost of what changed rather than its whole tree on
+  every record. An item that changed without any record naming it is sent all
+  the same: calls a turn's cut-off interrupted, requests a process's end
+  expired, a call that ran inside a subagent call recorded after it, a
+  message taken into the turn it opened.
+- Where an item sits is beside it: `parent` is the id of the run it is nested
+  in, absent at the top level, where `turn_id` is its turn (absent for none).
+  An item's place within its level is its id. A new item is newer than every
+  item the client has, so it goes at the end of its level; one the client has
+  stays where it is unless `parent` or `turn_id` says it moved — a call
+  recorded before its subagent call moves under it when that call arrives, and
+  the message that opened a turn moves into it. Items come in an order that can
+  be applied one at a time: a run before what is nested in it.
+- `plan` is the session's plan, when the record changed it (`Page.plan`).
+- `streams_ended` names the live streams the record settled; see below.
+- An item with no `id` is in no history: the warning that stands in for a
+  record that could not be written (`history_write_failed`). It is shown once
+  and never updated, and a reload no longer has it.
+- **Turn state, questions and permission requests come only this way.** A
+  question asked, answered, withdrawn or reopened by a discard is an upsert of
+  its `question` item; a permission request and its answer or expiry are an
+  upsert of the `tool` item it holds back (status `awaiting_permission`, then
+  `running`, `denied` or `expired`); a turn's start and end are its `turns`
+  entry. Nothing is left for the client to work out from records.
+- The sender of a message is left out of the update that carries it — it drew
+  the message itself — and learns its id from its own reply:
+  `chat.message`'s result has `item_id` beside `seq` and `message_id`. The rest
+  of that update (the questions an answer settled) still reaches it, and every
+  later update names the message by that id. The reply and the notifications
+  travel separately, so a later update — the turn the message opened — can
+  arrive before the reply does: an item of kind `message` whose id the client
+  does not know yet, carrying the `message_id` its pending send will be told.
+
+**`chat.delta`** extends a live stream — what is being generated and is in no
+record yet:
+
+```json
+{"id": "client-1", "thinking": {"content": "Let me look at "}}
+{"id": "client-1", "tool": {"tool_use_id": "tu3", "activity": "Running tests", "output": "ok 12\n"}}
+```
+
+- `thinking` is the main agent's thinking under way: `content` and
+  `full_reasoning` are appended to what the client has. Never a subagent's.
+- `tool` is a call in flight, named by `tool_use_id` — the `tool` item it
+  belongs to: `output` is appended; `activity` and `subagent_progress` are
+  latest values, each replacing the last when present.
+- `replace: true` says the fields are the whole stream so far rather than the
+  next piece. A subscriber that fell behind has deltas turned away first
+  ([subscription-system.md](code/subscription-system.md#chat-delivery)); the
+  next one it is sent of that stream is the whole of it, so a stream it holds
+  never has a hole. A call's kept output is bounded (1 MiB, its tail —
+  `output_truncated`); the whole output arrives with its result.
+- A stream ends with the update that settles it, which says so in
+  `streams_ended`: the thinking stream with the main agent's next item of its
+  own (the `thinking` item that records it, or text written without one) or a
+  change of turn; a call's when its item is no longer in flight (anything but
+  `running`, `background` and `awaiting_permission`), or when a turn ends and
+  the call is not in the background — which also ends a stream naming a call
+  no item is for. The client drops its copy; the item has all of it.
+
+**`chat.resync`** ends the subscription: something could not be told — an
+update did not fit a subscriber that fell too far behind, or the history was
+replaced under it so no update can describe the change. The client subscribes
+afresh ([subscription-system.md](code/subscription-system.md#chat-delivery)).
+
+**Ordering and consistency.**
+
+- Updates are in seq order, one per record that changed anything, and each is
+  the state as of its `through_seq`: a session's records are written,
+  folded and handed to the watcher one at a time (`chatstream.Sequencer`), so
+  the next record is not written before this one's update is taken. Deltas sit
+  among them in the order the agent produced them.
+- Subscribing registers the subscriber and snapshots `streams` in one step
+  between two notifications, then cuts the page. So the deltas a subscriber is
+  sent continue `streams` with nothing missed and nothing repeated, and every
+  update after the snapshot reaches it. An update can also be in the page — its
+  record was written between the registration and the cut: if its
+  `through_seq` is not past the page's, skip its `turns` and `items`, which
+  the page already holds as of a moment no older, but apply its
+  `streams_ended`, which the snapshot taken before it does not know of.
+- A client that reconnects starts over with `chat.messages.subscribe`: the page
+  and `streams` hold everything it missed, and nothing in between is replayed.
+
 
 ### Reading a page on the client
 
-A page is a slice of the record stream, not a slice of the conversation. The
-reducer's rules assume it can see the whole stream, and two of those assumptions
-stop holding when it can only see a page. Both are repaired in `prependHistoryPage`
-([`messageReducer`](../web/src/lib/messageReducer.ts)), where the rest of the
-record-to-message rules already live — not in the list component, which would
-otherwise have to know what a record means.
+A page is a slice of the conversation, so the client reads it as it comes and
+repairs nothing. It holds the items as the server stated them (`ChatItems`,
+[`web/src/lib/chatItems.ts`](../web/src/lib/chatItems.ts)) and draws bubbles and
+rows from them (`buildTranscript`,
+[`web/src/lib/transcript.ts`](../web/src/lib/transcript.ts)); how, and why, is
+[code/frontend-state.md](code/frontend-state.md#the-transcript). The list
+component knows neither: it is handed messages.
 
-**A page does not know what happened after it.** A tool call whose result is one
-page newer replays as still running; a question answered later replays as still
-waiting. The client keeps every record that settles something recorded earlier —
-tool results, permission responses, cancellations, process ends, and a message
-carrying `answering` — and replays them over each older page it pulls in. They
-are all "update it wherever it is" operations, so replaying them costs nothing
-when the target is not in that page either.
+- **Subscribing installs the newest page** and the streams it came with;
+  re-subscribing — a reconnect, or `chat.resync` — installs a fresh one in its
+  place, dropping the older pages scrolled in so far.
+- **An older page goes in front.** Its items are complete, so nothing on it
+  waits for a newer page to settle it, and nothing on the loaded pages is
+  touched — except that a page's turns can be newer than what the client was
+  told of them, and a turn it holds with an ending replaces one held without.
+- **A turn cut by a page boundary is one bubble.** The page above holds the
+  front of the turn (the stretch below it is `continued`), and its items go into
+  the bubble already on screen, which is keyed by its turn and so stays the same
+  node: the reader is held across a page by that row ([below](#reading-a-page-on-the-client)).
+  Until that page joins it, the bubble's start is not loaded, and the client
+  reads so from `continued` rather than from the bubble's position: when the
+  oldest loaded page's first stretch is `continued`, `ChatItems.continuedFrom`
+  holds that stretch's first item, and the transcript marks the bubble the
+  stretch opens with `startNotLoaded` unless something loaded opened it, so
+  its work figures are not counted on half the turn
+  ([tool-call-ui.md](tool-call-ui.md#where-the-duration-comes-from)).
+- **Updates keep it current** ([Live updates](#live-updates)): an update a page
+  already reached is skipped, and an upsert for an item on a page not loaded —
+  older than the oldest loaded item — is dropped, since that page will bring the
+  item as it then stands. The one exception is a page already on its way: the
+  server cuts it and sends the subscription's updates independently, so an
+  update can arrive before a page cut ahead of its record. While an older page
+  is being fetched the client keeps what it drops (`ChatItems.missedOlder`), and
+  once the page lands applies those newer than its `through_seq`.
 
-The last of those is the only one kept for *half* of itself. An ordinary message
-must never be replayed — that would draw a second copy of it — so what is
-replayed is the settling it does and not the message, which is what keeps one
-record from being two bubbles.
-
-Order matters inside that repair: the page's trailing turn is closed *first*.
-The records that ended it are in the page above, so left as it replayed it would
-keep a tail line running in the middle of the transcript — and with nothing left
-streaming, a later `process_ended` retires only the dialogs and Tasks this page
-left open instead of also stamping its status onto a turn that was still running
-at this point. What the session is doing is passed in separately rather than
-looked for in the page, so every page is retired the same way the newest one
-already is — a `process_ended` is written for a session a restart cut short
-([agent-integration.md](code/agent-integration.md#restart-repair)), but it lands
-at the end of the transcript and says nothing to a page pulled in from further
-back. An older page is given `retireAgainstTurn`, not the whole of
-`settleAgainstTurn`: how the *last* turn ended is no business of a turn five
-pages up, which this page already closed without needing to know
-([lifecycle-ui.md](lifecycle-ui.md#24-recovering-a-dangling-turn-after-a-restart)).
-
-The mirror of this is one record the page above has to hand *down*. A record
-that only ends a turn — `done`, `error`, `interrupted`, `process_ended` — has
-nothing to end when it opens a page, so replaying that page alone learns nothing
-from it; the turn it ended is the one the page below trails off on. It is
-therefore held as that page's *boundary terminal* and replayed against it, with
-its `seq`, before the turn is closed. Without this an interrupted or failed turn
-reappears as an ordinary finished one on the way back up — with its error text
-gone and any Task it was running still spinning. Output that trails such a turn
-cannot reopen it, at a page seam for the same reason it cannot in one stream.
-
-**A page boundary can fall inside one turn.** The older page trails off
-mid-answer and the page above opens on content that no `message` event preceded,
-and the two halves are joined. Text at the seam goes through the same rule
-streaming uses, so the messages either side of it come back as one part, a
-paragraph apart, as they would have streamed. What was on screen keeps its
-identity through the join, so nothing the user opened closes
-([code/frontend-state.md](code/frontend-state.md#part-identity)).
-
-The reducer produces a leading assistant message in one other case, and it is the
-one case that must *not* be joined: a page beginning at a read point, where the
-agent picked up a message recorded in that page and what follows answers it
-rather than continuing the reply below
-([code/agent-integration.md](code/agent-integration.md#the-read-point)). That
-bubble says so on itself, so the seam can tell the two apart; joining it would
-put the later message's answer back in the earlier message's bubble, once per
-boundary that lands there.
-
-A turn is the *only* thing a boundary splits and folds back. A work event is
-one message where it happened
-([code/work-system.md](code/work-system.md#rendering-in-the-transcript)), so it
-cannot arrive as two halves. That is not an accident of how it happens to be
-rendered, it is a reason for rendering it that way: anything aggregated across
-records has to be found and re-anchored at every seam, and an event left where
-it landed never does. A subagent's work is the one thing aggregated across
-records — it is filed under the call that spawned it — and it is deliberately
-*not* re-anchored at a seam: work already drawn stays flat where it loaded when
-the call's page arrives, and the call's row only counts it
+A subagent's work is nested in its call on the page, whatever page the records
+it was folded from sat on, so nothing is re-anchored at a seam; a child whose
+call is not in the history at all — a fork cut it off — sits flat where it is
 ([code/frontend-state.md](code/frontend-state.md#a-subagents-children)).
 
 Reconnecting re-subscribes and so lands back on the newest page: pages already
@@ -541,9 +733,9 @@ chain would have to be replayed from the bottom anyway.
 **A page is held by its seam, not by the anchor.** The seam is the bottom edge
 of the first loaded row (`Seam` in `web/src/components/Chat/scrollAnchor.ts`). A
 page only ever adds content above that edge — rows before the first one, or the
-older half of its turn spliced into it from the top, the merge keeping the row's
-identity so that it is the same node afterwards
-([code/frontend-state.md](code/frontend-state.md#turn-boundaries-and-late-events)).
+older half of its turn added into it from the top, the row keyed by its turn so
+that it is the same node afterwards
+([code/frontend-state.md](code/frontend-state.md#bubbles)).
 The rows sit on the bottom edge of the track ([where the view
 sits](#where-the-view-sits)), so what a page adds above that edge moves nothing
 below it — the reader included — and writes nothing while the view is moving,
@@ -557,10 +749,10 @@ view as it now is; the one held before the page is not carried across it.
 Neither of the two obvious measures says the same thing. The content's total
 height counts the page and that output together and cannot say which part was
 which. The anchor ([where the view sits](#where-the-view-sits)) says it only of an element
-the page left alone, and inside a spliced row that may be none of them: the text
-at the seam grows from the top of its own part, and the merge rebuilds the row's
-parts, so the element the reader was anchored on can have grown above its own top
-edge or left the DOM. That is how the anchor used to lose the reader on a splice:
+the page left alone, and inside a row a page added to that may be none of them:
+the text at the seam grows from the top of its own part, and the row's parts are
+rebuilt, so the element the reader was anchored on can have grown above its own
+top edge or left the DOM. That is how the anchor used to lose the reader there:
 the anchored part was remounted, a fresh anchor was taken at the top of the view,
 the view stayed at 0 and the next page was asked for at once.
 
@@ -572,7 +764,7 @@ resize observation reaches the list; from then on that layout is where they are,
 and a page landing must not count the growth a second time.
 
 Because nothing on the anchor has to survive a page, the first row and its first
-part are ordinary candidates, and a reader inside the merged row is held as
+part are ordinary candidates, and a reader inside the row a page added to is held as
 finely as anywhere else. If the seam's row is itself gone after the page, the
 track is left as it is for that commit and the next is held by whatever the view
 now shows — the same answer as an anchor with nothing left
@@ -618,7 +810,7 @@ Being asked twice is therefore ordinary, and harmless. A request made while one
 is in flight is refused outright, and every request that does go out moves the
 cursor further back, so the rule settles at the rows' top out of range or
 `has_more` being false however many times it is put. Nothing judges how much a
-page added — an empty one, or one whose records all rendered to nothing, simply
+page added — an empty one, or one whose items all drew nothing, simply
 leads to the next — which is what removed the last reason to ask whether "the
 view moved", and with it the stall that question used to leave behind. The one
 state not answered from is a container of zero height: it has not been laid out
@@ -630,8 +822,8 @@ in range immediately, so rebuilding it is a loop rather than a rule: one page
 that leaves the reserve where it was becomes an unbounded run of them. It lives
 exactly as long as the reserve node does, except while a failure stands — the
 fresh one Retry brings reports at once, which is what a retry wants — and is
-attached again when the scroll container mounts. A newest page that replays to
-no rows mounts none: the list shows its empty state, with no reserve and nothing
+attached again when the scroll container mounts. A newest page that draws no
+rows mounts none: the list shows its empty state, with no reserve and nothing
 to ask from, until the first live message arrives. What it reports is acted on as
 given: a delivered entry was computed at the most recent layout, which is one
 this commit's own writes have already gone into.
@@ -811,7 +1003,8 @@ below it. A count cannot say it, because a page landing above grows the list
 without adding anything at its end, and it routinely lands under a transcript
 whose newest row is one the reader typed. "Replaced" is the page count dropping,
 or — when the page count has not changed — none of the previous rows
-surviving, since replaying history mints every row a new id. The
+surviving, which is a different transcript: a re-subscribe of the same one keeps
+its rows' ids. The
 scroll-to-bottom button — shown only while reading somewhere — reads the tail, and
 a jump — to a pending permission request, or from the turn's changes to a tool
 row ([tool-call-ui.md](tool-call-ui.md#from-a-file-to-the-calls-that-changed-it))
@@ -1111,7 +1304,7 @@ and it has no method that can say anything to a session
 | `session_view.worktrees` | — | `worktrees`: `worktree`, `exists`, `session_count` |
 | `session_view.list` | `worktree`, `exclude_work_sessions?`, `exclude_permission_reviewer_sessions?`, `cursor?`, `limit?` | `sessions`, `next_cursor?`, `has_more` |
 | `session_view.get` | `worktree`, `session_id` | `session` |
-| `session_view.history` | `worktree`, `session_id`, `before_seq?`, `limit?` | `history`, `has_more`, `next_before_seq?`, `server_time` |
+| `session_view.history` | `worktree`, `session_id`, `before_seq?`, `limit?` | `turns`, `has_more`, `next_before_seq?`, `through_seq?`, `plan?`, `server_time` |
 | `session_view.attachment` | `worktree`, `session_id`, `id` | `file` |
 | `session_view.html_page` | `worktree`, `session_id`, `id` | `page` |
 | `session_view.delete` | `worktree`, `session_id` | — |

@@ -189,32 +189,23 @@ func (h *rpcMethodHandler) handleSessionViewHistory(ctx context.Context, conn *j
 		return
 	}
 
-	reader, _, ok := h.viewedSession(ctx, conn, req, params.Worktree, params.SessionID)
+	if _, _, ok := h.viewedSession(ctx, conn, req, params.Worktree, params.SessionID); !ok {
+		return
+	}
+	// The name was already checked on the way to the reader, so this cannot
+	// fail on it: a failure here is the server's.
+	source, err := h.worktreeManager.SessionProjections(params.Worktree)
+	if err != nil {
+		h.replyInternalError(ctx, conn, req.ID, "failed to read the worktree's sessions", err,
+			"worktree", params.Worktree, "sessionId", params.SessionID)
+		return
+	}
+	page, ok := h.transcriptPage(ctx, conn, req, source, params.SessionID, params.BeforeSeq, params.Limit)
 	if !ok {
 		return
 	}
 
-	records, err := reader.GetHistory(ctx, params.SessionID)
-	if err != nil {
-		h.replyInternalError(ctx, conn, req.ID, "failed to read session history", err,
-			"worktree", params.Worktree, "sessionId", params.SessionID)
-		return
-	}
-
-	page, err := session.PageHistory(records, params.BeforeSeq, params.Limit)
-	if err != nil {
-		// Both failures name what the client asked for and what the history can
-		// answer, so the cause is the reply.
-		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, err.Error())
-		return
-	}
-
-	result := rpc.SessionViewHistoryResult{
-		History:       page.Records,
-		HasMore:       page.HasMore,
-		NextBeforeSeq: page.NextBeforeSeq,
-		ServerTime:    time.Now(),
-	}
+	result := rpc.SessionViewHistoryResult{Page: page, ServerTime: time.Now()}
 	if err := conn.Reply(ctx, req.ID, result); err != nil {
 		h.log.Error("failed to send session view history response", "error", err)
 	}

@@ -50,17 +50,15 @@ it sends. `useChatMessages` had its own subscribe effect and was exposed exactly
 that way; it has been folded back into the hook rather than given a second copy
 of the hold-and-replay.
 
-**What the replay costs.** A record landing in the window has always been both
-broadcast *and* present in the history page the reply carries. What is new is
-that the broadcast now arrives, so replaying it puts a second copy of the
-message in the transcript. `useChatMessages` drops a notification whose `seq` is
-at or below the newest `seq` in the page it just applied — that is, only records
-the page demonstrably already contains, since seqs grow monotonically within a
-session. A notification with no `seq` is never dropped: it addresses nothing, so
-it cannot be shown to be a duplicate, and losing a real message is much worse
-than showing a rare one twice. The server's own "rare duplicates are
-acceptable" comment in `chat_messages.go` still describes its side of the deal;
-the client is simply now able to collect on it.
+**What the replay costs.** A record landing in the window is both in the page
+the reply carries and in an update that the hold then replays over it. Each
+update says how far into the history it reaches (`through_seq`), and so does the
+page; the chat store skips the turns and items of an update whose `through_seq`
+is not past the newest it holds — only what the page demonstrably already
+contains — and still applies its `streams_ended`
+([agent-chat.md](../agent-chat.md#live-updates)). An update with no
+`through_seq` (the warning for a record that could not be written) is never
+skipped: it addresses nothing, so it cannot be shown to be a duplicate.
 
 ### Why a Throwing Snapshot Handler Is Reported Separately
 
@@ -222,56 +220,79 @@ func (w *WorkListWatcher) eventLoop() {
 
 ### Chat Delivery
 
-The chat stream cannot use the dirty flag: a chat notification is a record of
-the transcript, not a change to a value the next snapshot repeats, so a
-"full sync" for it is a fresh `chat.messages.subscribe`, which only the client
-can ask for. And it must not drop records either: a dropped `done` leaves a
-finished turn drawn as running.
+The chat stream cannot use the dirty flag: a chat update says what one record
+changed in a transcript the client holds a page of, and a "full sync" for it is
+a fresh `chat.messages.subscribe`, which only the client can ask for. And it
+must not drop updates either: a dropped turn ending leaves a finished turn
+drawn as running.
 
 So `ChatMessagesWatcher` has no shared queue and no loop of its own.
-`Enqueue` — called only by the session's `chatstream.Sequencer`, in seq order — hands the
-record to every subscriber of the session and returns; each subscriber
+`Enqueue` — called only by the session's `chatstream.Sequencer`, in seq order,
+never twice at once for one session — takes from the session's projection what
+the record changed (`projection.Live.TakeUpdate`; the projection folded the
+record inside the append, as `session.HistoryObserver`) and hands that
+`chat.update` to every subscriber of the session, or for a live event extends
+the session's stream and hands the `chat.delta` on; then it returns. The
+update is taken before the session map is locked, so a projection being loaded
+for one session holds up nobody else's fan-out. Each subscriber
 (`watch/chat_subscriber.go`) has its own bounded queue (`chatQueueSize`, 256)
 drained by its own goroutine, started on subscribe and stopped on unsubscribe.
 A subscriber that falls behind therefore holds up neither the agent producing
-the records nor the other subscribers. A subscriber receives records in the
-order `Enqueue` was called; the fan-out of one record holds the session map
-exclusively, so all subscribers of a session see the same order.
+the records nor the other subscribers. A subscriber receives notifications in
+the order `Enqueue` was called; the fan-out of one holds the session map
+exclusively, so all subscribers of a session see the same order. The shapes
+and what a client does with them are in
+[agent-chat.md](../agent-chat.md#live-updates).
 
 **The ordering promise.** Together with the sequencer, a subscriber is sent a
-session's records in seq order, with live events in the place they were
-produced (a record landing while it subscribes may also be in its snapshot;
-the client drops that copy by `seq` —
+session's updates in seq order, with deltas in the place they were produced (an
+update for a record landing while it subscribes may also be in its page; the
+client skips its items by `through_seq` —
 [above](#why-nothing-is-lost-while-a-subscription-is-being-opened)) — or, past a hole, nothing more but `chat.resync`.
-A record the history refused never appears; a `history_write_failed` warning
-with no seq stands in its place
+A record the history refused never appears; a `history_write_failed` warning,
+an item with no id or seq, stands in its place
 ([agent-integration.md](agent-integration.md#history-storage) has the sequencer
 and that failure policy).
+
+**Live streams are the watcher's.** What is being generated and is in no
+record — the main agent's thinking under way, what each call in flight has
+said and printed — is kept per session (`watch/chat_streams.go`), subscribed or
+not, from its first delta until the update that settles it: the thinking item
+that records it or a change of turn, the call's item no longer in flight, or a
+turn's end for every call not in the background. The projection says when, not
+the records: nothing here reads a `tool_result` to decide a call is over — at a
+turn's end the watcher asks the projection which streamed calls are in the
+background, rather than remembering it from updates, since a call can go there
+before anything of the session streamed. Text is kept in buffers that grow by
+amortized appends and a call's output is bounded to its newest megabyte, so a
+long stream of small deltas costs what it carries. A subscription's registration and its copy of the
+streams are taken under one hold of the session map, between two fan-outs, so
+the deltas it is sent continue that copy exactly.
 
 When a subscriber's queue fills up:
 
 | What is offered | Queue state | What happens |
 |-----------------|-------------|--------------|
-| Live progress (`agent.LiveEvent`: `tool_activity`, `thinking_delta`) | more than half full | Dropped. It is the only thing whose loss costs nothing lasting, and the half kept free is room for what is not |
-| A record | full | The subscriber is **stalled**: everything still queued for it and everything offered later is discarded, and it is sent `chat.resync` and nothing more |
-
-Whether something may be dropped is read from its type, not its `seq`.
+| A stream delta (`chat.delta`) | more than half full | Dropped, and noted against that stream for that subscriber: the next delta of the stream it is sent is the whole stream so far (`replace`), so what it holds never has a hole. The half kept free is room for what cannot be dropped |
+| An update (`chat.update`) | full | The subscriber is **stalled**: everything still queued for it and everything offered later is discarded, and it is sent `chat.resync` and nothing more |
 
 **The `chat.resync` contract.** Params: `{"id": "<subscription id>"}`. It
-means "this subscription's stream has a hole at this point". Everything the
+means "this subscription's stream has a hole at this point": an update did not
+fit, or the projection the updates are taken from was let go while it was held
+— the history replaced under it — so no update can say what changed
+(`TakeUpdate` reports it not `continuous`). Everything the
 subscription delivered before it is a gap-free prefix of the stream, in order,
 and it is the last notification the subscription will carry; the server keeps
 the subscription registered (so the session still counts as viewed) but
 delivers nothing more on it. The client recovers exactly as from a reconnect:
 unsubscribe the id and open a fresh `chat.messages.subscribe`, whose snapshot
-(history page, turn, tool activity) holds everything the hole lost. No
-`chat.<event type>` takes the name (`TestChatResync_IsNoWireType`). In `web`,
+(history page, turn, live streams) holds everything the hole lost. In `web`,
 `useChatMessages` does this with `useSubscription`'s `refresh`: the snapshot
 replaces the transcript wholesale, the same path a reconnect takes, so nothing
 the first stream delivered is drawn twice.
 
 Ending the subscription instead of carrying on after the hole is what keeps the
-client from ever drawing a transcript with a record silently missing from its
+client from ever drawing a transcript with an update silently missing from its
 middle; a client that falls this far behind has a fresh snapshot to catch up on
 either way.
 

@@ -17,6 +17,8 @@ import browserConfig from "./vitest.browser.config";
  * paint events — what the CPU profile shows only as `(program)`;
  * `BENCH_CSS` injects a stylesheet, to try a rule before writing it;
  * `BENCH_LONG_ONLY=1` skips the no-history pass;
+ * `BENCH_PAGES` caps how many older pages the paging pass asks for (`-t
+ * "pages back"` runs that pass alone);
  * `BENCH_REACT=production` runs it on React's production profiling build
  * instead of the development build every test uses.
  *
@@ -59,6 +61,7 @@ export default defineConfig({
 			trace: process.env.BENCH_TRACE === "1",
 			css: process.env.BENCH_CSS ?? "",
 			longOnly: process.env.BENCH_LONG_ONLY === "1",
+			pages: Number(process.env.BENCH_PAGES ?? 300),
 		}),
 	},
 	test: {

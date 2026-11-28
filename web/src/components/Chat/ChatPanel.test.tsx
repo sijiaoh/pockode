@@ -29,6 +29,7 @@ import { useSessionStore } from "../../lib/sessionStore";
 import { useSettingsStore } from "../../lib/settingsStore";
 import { useWorkStore } from "../../lib/workStore";
 import { worktreeActions } from "../../lib/worktreeStore";
+import * as fx from "../../test/chatItemsFixture";
 import {
 	createFakeCliAuth,
 	makeLogin,
@@ -39,9 +40,18 @@ import {
 	makeSessionDetail,
 	makeSessionListItem,
 } from "../../test/sessionFixtures";
+import type {
+	ChatDelta,
+	ChatPage,
+	ChatTurn,
+	ChatUpdate,
+	MessageItem,
+	PageItem,
+	PageTurn,
+	QuestionItem,
+} from "../../types/chatItems";
 import type { GitStatus } from "../../types/git";
 import type {
-	ServerNotification,
 	SessionDetail,
 	SessionMode,
 	SessionTurn,
@@ -141,7 +151,13 @@ vi.mock("../Project", () => ({
 const mockState = vi.hoisted(() => ({
 	// Mirrors ChatActions.sendMessage: it resolves with what the server said
 	// about the message — its seq, when it has an address to give.
-	sendMessage: vi.fn((): Promise<SentMessage> => Promise.resolve({})),
+	sendMessage: vi.fn(
+		(
+			_sessionId: string,
+			_content: string,
+			..._rest: unknown[]
+		): Promise<SentMessage> => Promise.resolve({}),
+	),
 	interrupt: vi.fn(() => Promise.resolve()),
 	permissionResponse: vi.fn(() => Promise.resolve()),
 	questionResponse: vi.fn(() => Promise.resolve()),
@@ -193,9 +209,18 @@ const mockState = vi.hoisted(() => ({
 	// The `cli_auth.*` actions, swapped per test for a fake server
 	// (test/cliAuthFixtures) that the sign-in sheet talks to.
 	cliAuth: {} as Record<string, (...args: never[]) => unknown>,
-	onNotification: null as ((notification: ServerNotification) => void) | null,
+	/** The newest `through_seq` the subscription has been given. */
+	throughSeq: undefined as number | undefined,
+	/** What the subscription delivers to; `push` writes to it. */
+	listener: null as ((notification: ChatUpdate | ChatDelta) => void) | null,
 	sessionDetail: null as SessionDetail | null,
-	mockHistory: [] as unknown[],
+	/**
+	 * The message item each send became, in the order sent: what the default
+	 * `sendMessage` answers with, as the server's reply names it.
+	 */
+	sent: [] as PageItem[],
+	/** The page the default subscription answers with. */
+	page: null as ChatPage | null,
 	uuidCounter: 0,
 }));
 
@@ -207,12 +232,14 @@ vi.mock("../../lib/wsStore", () => {
 		interrupt: mockState.interrupt,
 		permissionResponse: mockState.permissionResponse,
 		questionResponse: mockState.questionResponse,
-		chatMessagesSubscribe: (
-			_sessionId: string,
-			listener: (notification: ServerNotification) => void,
+		chatMessagesSubscribe: async (
+			sessionId: string,
+			listener: (notification: ChatUpdate | ChatDelta) => void,
 		) => {
-			mockState.onNotification = listener;
-			return mockState.chatMessagesSubscribe(_sessionId, listener);
+			mockState.listener = listener;
+			const reply = await mockState.chatMessagesSubscribe(sessionId, listener);
+			mockState.throughSeq = reply?.initial?.through_seq;
+			return reply;
 		},
 		chatMessagesUnsubscribe: mockState.chatMessagesUnsubscribe,
 		markSessionRead: vi.fn(() => Promise.resolve()),
@@ -374,12 +401,87 @@ describe("ChatPanel", () => {
 	const sessionPanel = () =>
 		screen.queryByRole("dialog", { name: defaultProps.sessionTitle });
 
+	/**
+	 * Delivers what the server sends the subscription, in order. An update no
+	 * newer than what the subscription already holds is one the client rightly
+	 * drops as already applied, so a test sending one would assert on nothing:
+	 * it fails here instead.
+	 */
+	const push = (...notifications: (ChatUpdate | ChatDelta)[]) =>
+		act(() => {
+			for (const n of notifications) {
+				if (n.type === "update" && n.through_seq !== undefined) {
+					const held = mockState.throughSeq;
+					if (held !== undefined && n.through_seq <= held) {
+						throw new Error(
+							`update through_seq ${n.through_seq} is not newer than ${held}`,
+						);
+					}
+					mockState.throughSeq = n.through_seq;
+				}
+				mockState.listener?.(n);
+			}
+		});
+
+	/**
+	 * The server starting a turn — opened by `opener` when a message opened
+	 * it, which the update carries into the turn.
+	 */
+	const startTurn = (opener?: PageItem): PageTurn => {
+		const started = opener
+			? fx.turn({ ended: false }, opener)
+			: fx.turn({ ended: false, origin: "output", start_seq: fx.record() });
+		const turn = started.turn as ChatTurn;
+		push(
+			fx.update({
+				turns: [{ turn }],
+				turnId: turn.turn_id,
+				...(opener ? { items: [opener] } : {}),
+			}),
+		);
+		return started;
+	};
+
+	/**
+	 * `i` with what the CLI marked it with — an auth failure, a usage limit —
+	 * added to its payload. Here rather than in the builders: a builder's body
+	 * is scanned as a possible class helper (tests/classScan.ts), and one that
+	 * names more drags unrelated classes into the contrast checks.
+	 */
+	const withPayload = <K extends "error" | "warning">(
+		i: PageItem,
+		kind: K,
+		fields: NonNullable<PageItem[K]>,
+	): PageItem => ({ ...i, [kind]: { ...i[kind], ...fields } });
+
+	/** The server's first turn, opened by this tab's first send. */
+	const startReply = () => startTurn(mockState.sent[0]);
+
+	/** Items the server upserts into `t`, as they happen. */
+	const say = (t: PageTurn, ...upserts: PageItem[]) =>
+		push(fx.update({ turnId: t.turn?.turn_id, items: upserts }));
+
+	/** The server ending `t`, completed unless `fields` say otherwise. */
+	const endTurn = (t: PageTurn, fields: Partial<ChatTurn> = {}) =>
+		push(fx.update({ turns: [fx.ended(t, fields)] }));
+
 	beforeEach(() => {
 		vi.clearAllMocks();
-		mockState.sendMessage.mockResolvedValue({});
-		mockState.onNotification = null;
+		mockState.sent = [];
+		mockState.sendMessage.mockImplementation(async (_sessionId, content) => {
+			const sent = fx.msg(content);
+			mockState.sent.push(sent);
+			return {
+				itemId: sent.id,
+				seq: sent.seq,
+				messageId: sent.message?.message_id,
+			};
+		});
+		mockState.listener = null;
+		mockState.throughSeq = undefined;
+		fx.resetItems();
 		mockState.uuidCounter = 0;
-		mockState.mockHistory = [];
+		mockState.page = fx.page([]);
 		useSessionDetailStore.getState().clear();
 		seedSessionDetail();
 		mockState.setSessionMode.mockImplementation(async (_id, mode) =>
@@ -402,7 +504,7 @@ describe("ChatPanel", () => {
 			Promise.resolve({
 				id: "sub-1",
 				initial: {
-					history: mockState.mockHistory,
+					...mockState.page,
 					turn: { phase: "idle", open: false, since: "" },
 				},
 			}),
@@ -413,10 +515,7 @@ describe("ChatPanel", () => {
 		mockState.sessionViewGet.mockResolvedValue(
 			makeSessionDetail({ id: "test-session", title: "Old Chat" }),
 		);
-		mockState.sessionViewHistory.mockResolvedValue({
-			history: [],
-			has_more: false,
-		});
+		mockState.sessionViewHistory.mockResolvedValue(fx.page([]));
 		useSessionStore.setState({ sessions: [] });
 		useInputStore.setState({ inputs: {}, attachments: {} });
 		useQuestionDraftStore.setState({ drafts: {}, restorable: {} });
@@ -776,24 +875,21 @@ describe("ChatPanel", () => {
 		 */
 		const answerPanel = () => screen.getByRole("dialog", { name: /question/ });
 
+		/** The waiting question's item and the turn it was asked in. */
+		let posted: PageItem;
+		let asked: PageTurn;
+
 		const seedUnansweredQuestion = () => {
-			mockState.mockHistory = [
-				{ type: "message", content: "go", seq: 1 },
-				{
-					type: "question_posted",
-					request_id: "q1",
-					questions: [
-						{
-							question: question.question,
-							header: question.header,
-							options: question.options,
-							multiSelect: false,
-						},
-					],
-					asked_at: question.asked_at,
-					seq: 2,
-				},
-			];
+			const go = fx.msg("go");
+			posted = fx.question(question.question, {
+				request_id: "q1",
+				header: question.header,
+				options: question.options,
+				multi_select: false,
+				asked_at: question.asked_at,
+			});
+			asked = fx.turn({ ended: false }, go, posted);
+			mockState.page = fx.page([asked]);
 			acceptSetting({
 				turn: {
 					phase: "idle",
@@ -803,6 +899,31 @@ describe("ChatPanel", () => {
 				},
 			});
 		};
+
+		/**
+		 * What the server sends this tab once it takes an answer: the question
+		 * settled. The message itself is left out — the sender builds it from
+		 * the reply.
+		 */
+		const answerTaken = (answers: string[]) =>
+			fx.update({
+				turnId: asked.turn?.turn_id,
+				items: [
+					fx.changed(posted, {
+						question: {
+							...(posted.question as QuestionItem),
+							status: "answered",
+							answer: {
+								request_id: "q1",
+								header: question.header,
+								question: question.question,
+								answers,
+								answered_at: "",
+							},
+						},
+					}),
+				],
+			});
 
 		/** What a reload leaves behind: a stored draft, not vouched for yet. */
 		const seedStoredDraft = (requestId: string) =>
@@ -856,6 +977,11 @@ describe("ChatPanel", () => {
 		it("shows itself for a waiting question and settles the card in the transcript", async () => {
 			const user = userEvent.setup();
 			seedUnansweredQuestion();
+			mockState.sendMessage.mockImplementationOnce(async () => {
+				const sent = fx.msg("");
+				push(answerTaken(["SQLite"]));
+				return { itemId: sent.id, seq: sent.seq };
+			});
 			render(<ChatPanel {...defaultProps} />);
 			await waitForHistoryLoad();
 
@@ -900,14 +1026,46 @@ describe("ChatPanel", () => {
 			const panel = within(answerPanel());
 			await user.click(panel.getByRole("radio", { name: /SQLite/ }));
 			await user.click(panel.getByRole("button", { name: "Send" }));
-			act(() => {
-				mockState.onNotification?.({
-					type: "message_discarded",
-					message_id: "m-9",
-				});
-				mockState.onNotification?.({ type: "interrupted" });
+			// The Stop's update reaches the sender too: it carries the message
+			// it discarded, which this tab has not been told the id of yet.
+			const answer = {
+				request_id: "q1",
+				header: question.header,
+				question: question.question,
+				answers: ["SQLite"],
+				answered_at: "",
+			};
+			const sent = fx.msg("", {
+				message_id: "m-9",
+				answering: [answer],
+				discarded: true,
 			});
-			act(() => reply({ seq: 3, messageId: "m-9" }));
+			push(
+				fx.update({
+					turnId: asked.turn?.turn_id,
+					turns: [
+						{
+							...fx.ended(asked, {
+								outcome: "aborted",
+								ended_by: "interrupted",
+							}),
+							discarded: [{ message_id: "m-9", seq: sent.seq }],
+						},
+					],
+					items: [
+						sent,
+						fx.changed(posted, {
+							question: {
+								...(posted.question as QuestionItem),
+								status: "open",
+								discarded_answer: answer,
+								discarded_in: "m-9",
+							},
+						}),
+					],
+				}),
+			);
+			act(() => reply({ seq: sent.seq, messageId: "m-9", itemId: sent.id }));
 
 			expect(await screen.findByText("Not read")).toBeInTheDocument();
 			expect(screen.queryByText("Answered")).not.toBeInTheDocument();
@@ -1272,15 +1430,16 @@ describe("ChatPanel", () => {
 			render(<ChatPanel {...defaultProps} />);
 			await waitForHistoryLoad();
 
-			act(() => {
-				mockState.onNotification?.({
-					type: "permission_request",
-					request_id: "req-9",
-					tool_name: "Edit",
-					tool_input: { file_path: "/etc/hosts" },
-					tool_use_id: "tool-9",
-				});
-			});
+			push(
+				fx.update({
+					turnId: asked.turn?.turn_id,
+					items: [
+						fx.awaiting("Edit", { file_path: "/etc/hosts" }, "req-9", {
+							tool_use_id: "tool-9",
+						}),
+					],
+				}),
+			);
 			act(() =>
 				acceptSetting({
 					turn: {
@@ -1330,20 +1489,27 @@ describe("ChatPanel", () => {
 			render(<ChatPanel {...defaultProps} />);
 			await waitForHistoryLoad();
 
-			act(() => {
-				mockState.onNotification?.({
-					type: "tool_call",
-					tool_name: "Bash",
-					tool_input: { command: "npm run build", run_in_background: true },
-					tool_use_id: "tool-bg",
-				});
-				mockState.onNotification?.({
-					type: "tool_result",
-					tool_use_id: "tool-bg",
-					tool_result: "Command running in background with ID: bash_1",
-					subtype: "background_started",
-				});
-			});
+			push(
+				fx.update({
+					turnId: asked.turn?.turn_id,
+					items: [
+						fx.tool(
+							"Bash",
+							{ command: "npm run build", run_in_background: true },
+							{
+								tool_use_id: "tool-bg",
+								status: "background",
+								backgrounded: true,
+								placeholder: "Command running in background with ID: bash_1",
+								result: {
+									text: "Command running in background with ID: bash_1",
+									subtype: "background_started",
+								},
+							},
+						),
+					],
+				}),
+			);
 			act(() =>
 				acceptSetting({
 					turn: {
@@ -1384,15 +1550,16 @@ describe("ChatPanel", () => {
 			seedUnansweredQuestion();
 			render(<ChatPanel {...defaultProps} />);
 			await waitForHistoryLoad();
-			act(() => {
-				mockState.onNotification?.({
-					type: "permission_request",
-					request_id: "req-9",
-					tool_name: "Bash",
-					tool_input: { command: "npm test" },
-					tool_use_id: "tool-9",
-				});
-			});
+			push(
+				fx.update({
+					turnId: asked.turn?.turn_id,
+					items: [
+						fx.awaiting("Bash", { command: "npm test" }, "req-9", {
+							tool_use_id: "tool-9",
+						}),
+					],
+				}),
+			);
 			act(() =>
 				acceptSetting({
 					turn: {
@@ -2999,9 +3166,8 @@ describe("ChatPanel", () => {
 			await user.type(screen.getByRole("textbox"), "Hi");
 			await user.click(screen.getByRole("button", { name: /Send/ }));
 			setTurn("running");
-			act(() => {
-				mockState.onNotification?.({ type: "text", content: "Working on it" });
-			});
+			const answering = startReply();
+			say(answering, fx.text("Working on it"));
 
 			// Held open so the transcript can move on underneath the call, which is
 			// what decides whether the reason lands beside its message or wherever
@@ -3015,12 +3181,7 @@ describe("ChatPanel", () => {
 			await user.type(screen.getByRole("textbox"), "Also look at X");
 			await user.click(screen.getByRole("button", { name: /Send/ }));
 
-			act(() => {
-				mockState.onNotification?.({
-					type: "message",
-					content: "sent from another tab",
-				});
-			});
+			say(answering, fx.msg("sent from another tab"));
 			act(() => {
 				refuse(
 					new Error(
@@ -3045,9 +3206,7 @@ describe("ChatPanel", () => {
 			);
 
 			// The turn it failed to reach is untouched and still running.
-			act(() => {
-				mockState.onNotification?.({ type: "text", content: "Carrying on." });
-			});
+			say(answering, fx.text("Carrying on."));
 			expect(screen.getByText("Carrying on.")).toBeInTheDocument();
 			const after = document.body.textContent ?? "";
 			expect(after.indexOf("Carrying on.")).toBeLessThan(
@@ -3069,9 +3228,8 @@ describe("ChatPanel", () => {
 			await user.type(screen.getByRole("textbox"), "Hi");
 			await user.click(screen.getByRole("button", { name: /Send/ }));
 			setTurn("running");
-			act(() => {
-				mockState.onNotification?.({ type: "text", content: "Working on it" });
-			});
+			const answering = startReply();
+			say(answering, fx.text("Working on it"));
 
 			let refuse: (reason: Error) => void = () => {};
 			mockState.sendMessage.mockReturnValueOnce(
@@ -3109,9 +3267,8 @@ describe("ChatPanel", () => {
 			await user.type(screen.getByRole("textbox"), "Hi");
 			await user.click(screen.getByRole("button", { name: /Send/ }));
 			setTurn("running");
-			act(() => {
-				mockState.onNotification?.({ type: "text", content: "Working on it" });
-			});
+			const answering = startReply();
+			say(answering, fx.text("Working on it"));
 			expect(await screen.findByText("Agent is running")).toBeInTheDocument();
 
 			await user.type(screen.getByRole("textbox"), "Also look at X");
@@ -3121,9 +3278,7 @@ describe("ChatPanel", () => {
 			expect(await screen.findByText("Agent is running")).toBeInTheDocument();
 
 			// And it goes when the turn does, rather than spinning on.
-			act(() => {
-				mockState.onNotification?.({ type: "done" });
-			});
+			endTurn(answering);
 			expect(screen.queryByText("Agent is running")).not.toBeInTheDocument();
 		});
 
@@ -3137,9 +3292,8 @@ describe("ChatPanel", () => {
 			await user.type(screen.getByRole("textbox"), "Hi");
 			await user.click(screen.getByRole("button", { name: /Send/ }));
 			setTurn("running");
-			act(() => {
-				mockState.onNotification?.({ type: "text", content: "Working on it" });
-			});
+			const answering = startReply();
+			say(answering, fx.text("Working on it"));
 
 			await user.type(screen.getByRole("textbox"), "Also look at X");
 			await user.click(screen.getByRole("button", { name: /Send/ }));
@@ -3152,13 +3306,11 @@ describe("ChatPanel", () => {
 
 			// The reply carries on in the bubble it was already in, above the new
 			// message, and the receipt goes when the turn ends.
-			act(() => {
-				mockState.onNotification?.({ type: "text", content: "And X." });
-			});
+			say(answering, fx.text("And X."));
 			expect(screen.getByText("And X.")).toBeInTheDocument();
 
+			endTurn(answering);
 			act(() => {
-				mockState.onNotification?.({ type: "done" });
 				acceptSetting({
 					turn: { phase: "idle", open: false, since: "2024-01-01T00:00:00Z" },
 				});
@@ -3179,21 +3331,18 @@ describe("ChatPanel", () => {
 			await user.type(screen.getByRole("textbox"), "Hi");
 			await user.click(screen.getByRole("button", { name: /Send/ }));
 			setTurn("running");
-			act(() => {
-				mockState.onNotification?.({ type: "text", content: "Working on it" });
-			});
+			const answering = startReply();
+			say(answering, fx.text("Working on it"));
 
 			await user.type(screen.getByRole("textbox"), "Also look at X");
 			await user.click(screen.getByRole("button", { name: /Send/ }));
 			await screen.findByText("Also look at X");
 
-			act(() => {
-				mockState.onNotification?.({
-					type: "message_ingested",
-					message_id: "m-2",
-				});
-				mockState.onNotification?.({ type: "text", content: "X is fine" });
-			});
+			say(
+				answering,
+				fx.read(mockState.sent[1].message?.message_id),
+				fx.text("X is fine"),
+			);
 
 			// Two bubbles, not one: the first half stands as it was written.
 			expect(screen.getByText("Working on it")).toBeInTheDocument();
@@ -3221,16 +3370,9 @@ describe("ChatPanel", () => {
 			await user.type(textarea, "Hi");
 			await user.click(screen.getByRole("button", { name: /Send/ }));
 
-			act(() => {
-				mockState.onNotification?.({
-					type: "text",
-					content: "Hello.",
-				});
-				mockState.onNotification?.({
-					type: "text",
-					content: "There!",
-				});
-			});
+			const answering = startReply();
+			say(answering, fx.text("Hello."));
+			say(answering, fx.text("There!"));
 
 			expect(screen.getByText("Hello.")).toBeInTheDocument();
 			expect(screen.getByText("There!")).toBeInTheDocument();
@@ -3245,19 +3387,20 @@ describe("ChatPanel", () => {
 			await user.type(textarea, "List files");
 			await user.click(screen.getByRole("button", { name: /Send/ }));
 
-			act(() => {
-				mockState.onNotification?.({
-					type: "tool_call",
-					tool_name: "Bash",
-					tool_input: { command: "ls" },
-					tool_use_id: "tool-1",
-				});
-				mockState.onNotification?.({
-					type: "tool_result",
-					tool_use_id: "tool-1",
-					tool_result: "file1.txt",
-				});
-			});
+			const answering = startReply();
+			const call = fx.tool(
+				"Bash",
+				{ command: "ls" },
+				{ tool_use_id: "tool-1", status: "running" },
+			);
+			say(answering, call);
+			say(
+				answering,
+				fx.changedTool(call, {
+					status: "succeeded",
+					result: { text: "file1.txt" },
+				}),
+			);
 
 			expect(screen.getByText("Bash")).toBeInTheDocument();
 			// Result visible after expanding
@@ -3274,12 +3417,16 @@ describe("ChatPanel", () => {
 			await user.type(textarea, "Hi");
 			await user.click(screen.getByRole("button", { name: /Send/ }));
 
-			act(() => {
-				mockState.onNotification?.({
-					type: "error",
-					error: "Something went wrong",
-				});
-			});
+			const answering = startReply();
+			push(
+				fx.update({
+					turnId: answering.turn?.turn_id,
+					turns: [
+						fx.ended(answering, { outcome: "failed", ended_by: "failed" }),
+					],
+					items: [fx.error("Something went wrong")],
+				}),
+			);
 
 			expect(screen.getByText("Something went wrong")).toBeInTheDocument();
 		});
@@ -3291,15 +3438,12 @@ describe("ChatPanel", () => {
 			render(<ChatPanel {...defaultProps} />);
 			await waitForHistoryLoad();
 
-			act(() => {
-				mockState.onNotification?.({
-					type: "permission_request",
-					request_id: "req-1",
-					tool_name: "Bash",
-					tool_input: { command: "rm -rf /" },
+			say(
+				startTurn(),
+				fx.awaiting("Bash", { command: "rm -rf /" }, "req-1", {
 					tool_use_id: "tool-1",
-				});
-			});
+				}),
+			);
 
 			// Permission request now shows inline in message flow
 			expect(screen.getByText("Bash")).toBeInTheDocument();
@@ -3323,15 +3467,12 @@ describe("ChatPanel", () => {
 			render(<ChatPanel {...defaultProps} />);
 			await waitForHistoryLoad();
 
-			act(() => {
-				mockState.onNotification?.({
-					type: "permission_request",
-					request_id: "req-codex",
-					tool_name: "Bash",
-					tool_input: { command: "npm test" },
+			say(
+				startTurn(),
+				fx.awaiting("Bash", { command: "npm test" }, "req-codex", {
 					tool_use_id: "tool-codex",
-				});
-			});
+				}),
+			);
 
 			expect(
 				screen.getByRole("button", { name: "Always Allow" }),
@@ -3353,15 +3494,12 @@ describe("ChatPanel", () => {
 			render(<ChatPanel {...defaultProps} />);
 			await waitForHistoryLoad();
 
-			act(() => {
-				mockState.onNotification?.({
-					type: "permission_request",
-					request_id: "req-claude",
-					tool_name: "Bash",
-					tool_input: { command: "ls" },
+			say(
+				startTurn(),
+				fx.awaiting("Bash", { command: "ls" }, "req-claude", {
 					tool_use_id: "tool-claude",
-				});
-			});
+				}),
+			);
 
 			expect(
 				screen.queryByRole("button", { name: "Always Allow" }),
@@ -3374,15 +3512,12 @@ describe("ChatPanel", () => {
 			const user = userEvent.setup();
 			render(<ChatPanel {...defaultProps} />);
 			await waitForHistoryLoad();
-			act(() => {
-				mockState.onNotification?.({
-					type: "permission_request",
-					request_id: "req-3",
-					tool_name: "Bash",
-					tool_input: { command: "npm test" },
+			say(
+				startTurn(),
+				fx.awaiting("Bash", { command: "npm test" }, "req-3", {
 					tool_use_id: "tool-3",
-				});
-			});
+				}),
+			);
 			act(() =>
 				acceptSetting({
 					turn: {
@@ -3438,28 +3573,26 @@ describe("ChatPanel", () => {
 		it("answers a subagent's request from the strip", async () => {
 			render(<ChatPanel {...defaultProps} />);
 			await waitForHistoryLoad();
-			act(() => {
-				mockState.onNotification?.({
-					type: "tool_call",
-					tool_use_id: "task-1",
-					tool_name: "Agent",
-					tool_input: { description: "explore", subagent_type: "Explore" },
-				});
-				mockState.onNotification?.({
-					type: "tool_call",
-					tool_use_id: "tool-4",
-					tool_name: "Bash",
-					tool_input: { command: "ls" },
-					parent_tool_use_id: "task-1",
-				});
-				mockState.onNotification?.({
-					type: "permission_request",
-					request_id: "req-4",
-					tool_name: "Bash",
-					tool_input: { command: "ls" },
-					tool_use_id: "tool-4",
-				});
-			});
+			const running = startTurn();
+			const task = fx.tool(
+				"Agent",
+				{ description: "explore", subagent_type: "Explore" },
+				{ tool_use_id: "task-1", status: "running" },
+			);
+			say(running, task);
+			push(
+				fx.update({
+					items: [
+						{
+							parent: task.id,
+							item: fx.awaiting("Bash", { command: "ls" }, "req-4", {
+								tool_use_id: "tool-4",
+								parent_tool_use_id: "task-1",
+							}),
+						},
+					],
+				}),
+			);
 			act(() =>
 				acceptSetting({
 					turn: {
@@ -3486,29 +3619,34 @@ describe("ChatPanel", () => {
 
 		// docs/subagent-transcript-ui.md
 		describe("a subagent's transcript", () => {
-			const streamSubagent = () =>
-				act(() => {
-					mockState.onNotification?.({
-						type: "tool_call",
-						tool_use_id: "task-1",
-						tool_name: "Agent",
-						tool_input: { description: "explore", subagent_type: "Explore" },
-					});
-					mockState.onNotification?.({
-						type: "tool_call",
-						tool_use_id: "tool-3",
-						tool_name: "Read",
-						tool_input: { file_path: "/repo/a.go" },
+			/** An Explore subagent running two calls, as it streams in. */
+			const streamSubagent = () => {
+				const turn = startTurn();
+				const task = fx.tool(
+					"Agent",
+					{ description: "explore", subagent_type: "Explore" },
+					{ tool_use_id: "task-1", status: "running" },
+				);
+				const child = (name: string, input: unknown, toolUseId: string) =>
+					fx.tool(name, input, {
+						tool_use_id: toolUseId,
 						parent_tool_use_id: "task-1",
+						status: "running",
 					});
-					mockState.onNotification?.({
-						type: "tool_call",
-						tool_use_id: "tool-4",
-						tool_name: "Bash",
-						tool_input: { command: "ls" },
-						parent_tool_use_id: "task-1",
-					});
-				});
+				const read = child("Read", { file_path: "/repo/a.go" }, "tool-3");
+				const bash = child("Bash", { command: "ls" }, "tool-4");
+				push(
+					fx.update({
+						turnId: turn.turn?.turn_id,
+						items: [
+							task,
+							{ parent: task.id, item: read },
+							{ parent: task.id, item: bash },
+						],
+					}),
+				);
+				return { turn, task, bash };
+			};
 			const openTranscript = async (
 				user: ReturnType<typeof userEvent.setup>,
 			) => {
@@ -3544,16 +3682,20 @@ describe("ChatPanel", () => {
 				const user = userEvent.setup();
 				render(<ChatPanel {...defaultProps} />);
 				await waitForHistoryLoad();
-				streamSubagent();
-				act(() => {
-					mockState.onNotification?.({
-						type: "permission_request",
-						request_id: "req-4",
-						tool_name: "Bash",
-						tool_input: { command: "ls" },
-						tool_use_id: "tool-4",
-					});
-				});
+				const { task, bash } = streamSubagent();
+				push(
+					fx.update({
+						items: [
+							{
+								parent: task.id,
+								item: fx.changedTool(bash, {
+									status: "awaiting_permission",
+									permission: { request_id: "req-4", status: "pending" },
+								}),
+							},
+						],
+					}),
+				);
 				act(() =>
 					acceptSetting({
 						turn: {
@@ -3587,17 +3729,14 @@ describe("ChatPanel", () => {
 				const user = userEvent.setup();
 				render(<ChatPanel {...defaultProps} />);
 				await waitForHistoryLoad();
-				streamSubagent();
+				const { turn } = streamSubagent();
 				await openTranscript(user);
-				act(() => {
-					mockState.onNotification?.({
-						type: "permission_request",
-						request_id: "req-5",
-						tool_name: "Edit",
-						tool_input: { file_path: "/etc/hosts" },
+				say(
+					turn,
+					fx.awaiting("Edit", { file_path: "/etc/hosts" }, "req-5", {
 						tool_use_id: "tool-5",
-					});
-				});
+					}),
+				);
 				act(() =>
 					acceptSetting({
 						turn: {
@@ -3630,23 +3769,33 @@ describe("ChatPanel", () => {
 				const user = userEvent.setup();
 				render(<ChatPanel {...defaultProps} />);
 				await waitForHistoryLoad();
-				streamSubagent();
-				act(() => {
-					mockState.onNotification?.({
-						type: "tool_call",
+				const { task } = streamSubagent();
+				const plan = fx.tool(
+					"Agent",
+					{ description: "plan", subagent_type: "Plan" },
+					{
 						tool_use_id: "task-2",
-						tool_name: "Agent",
-						tool_input: { description: "plan", subagent_type: "Plan" },
 						parent_tool_use_id: "task-1",
-					});
-					mockState.onNotification?.({
-						type: "tool_call",
+						status: "running",
+					},
+				);
+				const read = fx.tool(
+					"Read",
+					{ file_path: "/repo/b.go" },
+					{
 						tool_use_id: "tool-6",
-						tool_name: "Read",
-						tool_input: { file_path: "/repo/b.go" },
 						parent_tool_use_id: "task-2",
-					});
-				});
+						status: "running",
+					},
+				);
+				push(
+					fx.update({
+						items: [
+							{ parent: task.id, item: plan },
+							{ parent: plan.id, item: read },
+						],
+					}),
+				);
 				await user.click(screen.getByRole("button", { name: /explore/ }));
 				await user.click(screen.getByRole("button", { name: /^Process/ }));
 				await user.click(screen.getByRole("button", { name: /plan/ }));
@@ -3674,15 +3823,12 @@ describe("ChatPanel", () => {
 			render(<ChatPanel {...defaultProps} />);
 			await waitForHistoryLoad();
 
-			act(() => {
-				mockState.onNotification?.({
-					type: "permission_request",
-					request_id: "req-2",
-					tool_name: "Edit",
-					tool_input: { file_path: "/etc/passwd" },
+			say(
+				startTurn(),
+				fx.awaiting("Edit", { file_path: "/etc/passwd" }, "req-2", {
 					tool_use_id: "tool-2",
-				});
-			});
+				}),
+			);
 
 			expect(screen.getByText("Edit")).toBeInTheDocument();
 			await user.click(screen.getByRole("button", { name: "Deny" }));
@@ -3714,15 +3860,12 @@ describe("ChatPanel", () => {
 				).getByRole("button", { name });
 
 			const raisePermission = () =>
-				act(() => {
-					mockState.onNotification?.({
-						type: "permission_request",
-						request_id: "req-9",
-						tool_name: "Edit",
-						tool_input: { file_path: "/etc/hosts" },
+				say(
+					startTurn(),
+					fx.awaiting("Edit", { file_path: "/etc/hosts" }, "req-9", {
 						tool_use_id: "tool-9",
-					});
-				});
+					}),
+				);
 
 			const blockedOn = (requestId: string) =>
 				acceptSetting({
@@ -3794,15 +3937,11 @@ describe("ChatPanel", () => {
 			render(<ChatPanel {...defaultProps} onSelectSession={onSelectSession} />);
 			await waitForHistoryLoad();
 
-			act(() => {
-				mockState.onNotification?.({
-					type: "permission_request",
-					request_id: "req-r",
-					tool_name: "Bash",
-					tool_input: { command: "rm -rf out" },
-					tool_use_id: "tool-r",
-				});
+			const reviewed = startTurn();
+			const call = fx.awaiting("Bash", { command: "rm -rf out" }, "req-r", {
+				tool_use_id: "tool-r",
 			});
+			say(reviewed, call);
 			act(() =>
 				acceptSetting({
 					turn: {
@@ -3829,19 +3968,23 @@ describe("ChatPanel", () => {
 			};
 			expect(card()).toHaveTextContent("Permission reviewer is checking this");
 
-			act(() => {
-				mockState.onNotification?.({
-					type: "permission_response",
-					request_id: "req-r",
-					choice: "deny",
-					by: "permission_reviewer",
-					review: {
-						session_id: "reviewer-1",
-						category: "system_damage",
-						reason: "It deletes the build output.",
+			say(
+				reviewed,
+				fx.changedTool(call, {
+					status: "denied",
+					permission: {
+						request_id: "req-r",
+						status: "denied",
+						choice: "deny",
+						by: "permission_reviewer",
+						review: {
+							session_id: "reviewer-1",
+							category: "system_damage",
+							reason: "It deletes the build output.",
+						},
 					},
-				} as never);
-			});
+				}),
+			);
 			act(() =>
 				acceptSetting({
 					turn: { phase: "running", open: true, since: "2024-01-01T00:00:00Z" },
@@ -3914,12 +4057,7 @@ describe("ChatPanel", () => {
 			await user.type(textarea, "Hi");
 			await user.click(screen.getByRole("button", { name: /Send/ }));
 
-			act(() => {
-				mockState.onNotification?.({
-					type: "text",
-					content: "Hello",
-				});
-			});
+			say(startReply(), fx.text("Hello"));
 			mockState.interrupt.mockClear();
 
 			// Re-render with work-list overlay (hides InputBar)
@@ -4050,34 +4188,38 @@ describe("ChatPanel", () => {
 	// always did — but a pending one says it can no longer be answered, because the
 	// process that was holding that tool call open is long gone.
 	describe("a legacy CLI question in history", () => {
-		const legacyQuestion = {
-			type: "ask_user_question",
-			request_id: "q-2",
-			tool_use_id: "toolu_q_2",
-			questions: [
-				{
-					question: "Which library?",
-					header: "Library",
-					options: [
-						{ label: "React", description: "UI library" },
-						{ label: "Vue", description: "Progressive framework" },
-					],
-					multiSelect: false,
-				},
-			],
-		};
+		/** The card the server makes of the CLI's question, as it stands. */
+		const legacyQuestion = (fields: Partial<QuestionItem> = {}) =>
+			fx.page([
+				fx.turn(
+					{ origin: "output" },
+					fx.question("Which library?", {
+						request_id: "q-2",
+						tool_use_id: "toolu_q_2",
+						header: "Library",
+						options: [
+							{ label: "React", description: "UI library" },
+							{ label: "Vue", description: "Progressive framework" },
+						],
+						multi_select: false,
+						legacy: true,
+						...fields,
+					}),
+				),
+			]);
 
 		it("restores the answered form when replaying history", async () => {
 			const user = userEvent.setup();
-			mockState.mockHistory = [
-				legacyQuestion,
-				{
-					type: "question_response",
+			mockState.page = legacyQuestion({
+				status: "answered",
+				answer: {
 					request_id: "q-2",
-					answers: { "Which library?": "Vue" },
+					header: "Library",
+					question: "Which library?",
+					answers: ["Vue"],
+					answered_at: "",
 				},
-				{ type: "done" },
-			];
+			});
 
 			render(<ChatPanel {...defaultProps} />);
 			await waitForHistoryLoad();
@@ -4095,7 +4237,7 @@ describe("ChatPanel", () => {
 		// to a panel the question is not in.
 		it("says an unanswered one can no longer be answered", async () => {
 			const user = userEvent.setup();
-			mockState.mockHistory = [legacyQuestion, { type: "done" }];
+			mockState.page = legacyQuestion();
 
 			render(<ChatPanel {...defaultProps} />);
 			await waitForHistoryLoad();
@@ -4108,26 +4250,7 @@ describe("ChatPanel", () => {
 		});
 
 		it("shows a cancelled question as cancelled when replaying history", async () => {
-			mockState.mockHistory = [
-				{
-					type: "ask_user_question",
-					request_id: "q-3",
-					tool_use_id: "toolu_q_3",
-					questions: [
-						{
-							question: "Which library?",
-							header: "Library",
-							options: [
-								{ label: "React", description: "UI library" },
-								{ label: "Vue", description: "Progressive framework" },
-							],
-							multiSelect: false,
-						},
-					],
-				},
-				{ type: "question_response", request_id: "q-3" },
-				{ type: "done" },
-			];
+			mockState.page = legacyQuestion({ status: "withdrawn" });
 
 			render(<ChatPanel {...defaultProps} />);
 			await waitForHistoryLoad();
@@ -4193,10 +4316,13 @@ describe("ChatPanel", () => {
 		it("stays switchable when a failed first turn left messages behind", async () => {
 			const user = userEvent.setup();
 			seedSession(false);
-			mockState.mockHistory = [
-				{ type: "message", content: "Hello" },
-				{ type: "error", error: "Invalid API key" },
-			];
+			mockState.page = fx.page([
+				fx.turn(
+					{ outcome: "failed", ended_by: "failed" },
+					fx.msg("Hello"),
+					fx.error("Invalid API key"),
+				),
+			]);
 
 			render(<ChatPanel {...defaultProps} />);
 			await waitForHistoryLoad();
@@ -4737,7 +4863,7 @@ describe("ChatPanel", () => {
 		});
 
 		it("is not offered over a conversation", async () => {
-			mockState.mockHistory = [{ type: "message", content: "go", seq: 1 }];
+			mockState.page = fx.page([fx.turn({ ended: false }, fx.msg("go"))]);
 			render(<ChatPanel {...defaultProps} />);
 			expect(await screen.findByText("go")).toBeInTheDocument();
 
@@ -4821,24 +4947,20 @@ describe("ChatPanel", () => {
 	// emitting any message, so anything in the transcript claiming to know the
 	// work's state would be lying exactly when the user most needs the truth.
 	describe("when a work and its chat process end at different times", () => {
-		const emit = (...notifications: ServerNotification[]) => {
-			act(() => {
-				for (const n of notifications) mockState.onNotification?.(n);
-			});
-		};
-
-		const autoContinue: ServerNotification = {
-			type: "message",
-			content: "Your last turn ended without moving this task along.",
-			origin: "system",
-			subtype: "auto_continue",
-			meta: {
-				work_id: "work-1",
-				work_type: "task",
-				title: "Ship the status bar",
-				step: { current: 2, total: 3 },
-			},
-		};
+		/** Pockode nudging the agent on: a turn opened by its message. */
+		const autoContinue = () =>
+			startTurn(
+				fx.msg("Your last turn ended without moving this task along.", {
+					origin: "system",
+					subtype: "auto_continue",
+					meta: {
+						work_id: "work-1",
+						work_type: "task",
+						title: "Ship the status bar",
+						step: { current: 2, total: 3 },
+					},
+				}),
+			);
 
 		// The only way into the work from the chat now that the top bar is gone,
 		// so the whole path from the event line to the host has to hold.
@@ -4851,7 +4973,7 @@ describe("ChatPanel", () => {
 			);
 			await waitForHistoryLoad();
 
-			emit(autoContinue);
+			autoContinue();
 
 			await user.click(screen.getByText("Pockode · Continued"));
 			await user.click(screen.getByRole("button", { name: "Details" }));
@@ -4864,9 +4986,9 @@ describe("ChatPanel", () => {
 			render(<ChatPanel {...defaultProps} />);
 			await waitForHistoryLoad();
 
-			emit(autoContinue);
+			const continued = autoContinue();
 			// The user interrupts before the agent writes a word.
-			emit({ type: "interrupted" });
+			endTurn(continued, { outcome: "aborted", ended_by: "interrupted" });
 
 			// The turn speaks only for the agent's output.
 			expect(screen.getByText("Interrupted")).toBeInTheDocument();
@@ -4898,7 +5020,7 @@ describe("ChatPanel", () => {
 					turn: { phase: "running", open: true, since: "2024-01-01T00:00:00Z" },
 				});
 			});
-			emit(autoContinue, { type: "text", content: "wrapping up" });
+			say(autoContinue(), fx.text("wrapping up"));
 
 			setWorkStatus("closed");
 
@@ -4912,18 +5034,14 @@ describe("ChatPanel", () => {
 	describe("history replay", () => {
 		it("loads and displays history on mount", async () => {
 			const user = userEvent.setup();
-			mockState.mockHistory = [
-				{ type: "message", content: "Hello" },
-				{ type: "text", content: "Hi there!" },
-				{
-					type: "tool_call",
-					tool_name: "Bash",
-					tool_input: { command: "ls" },
-					tool_use_id: "tool-1",
-				},
-				{ type: "tool_result", tool_use_id: "tool-1", tool_result: "file.txt" },
-				{ type: "done" },
-			];
+			mockState.page = fx.page([
+				fx.turn(
+					{},
+					fx.msg("Hello"),
+					fx.text("Hi there!"),
+					fx.tool("Bash", { command: "ls" }, { result: { text: "file.txt" } }),
+				),
+			]);
 
 			render(<ChatPanel {...defaultProps} />);
 			await waitForHistoryLoad();
@@ -4940,21 +5058,18 @@ describe("ChatPanel", () => {
 	// the conversation: what it covers has to be there, and the same, on the way
 	// back — and out of reach for as long as it is covered.
 	describe("under an overlay", () => {
-		const openableHistory = [
-			{ type: "message", content: "Hello" },
-			{
-				type: "tool_call",
-				tool_name: "Bash",
-				tool_input: { command: "ls" },
-				tool_use_id: "tool-1",
-			},
-			{ type: "tool_result", tool_use_id: "tool-1", tool_result: "file.txt" },
-			{ type: "done" },
-		];
+		const openableHistory = () =>
+			fx.page([
+				fx.turn(
+					{},
+					fx.msg("Hello"),
+					fx.tool("Bash", { command: "ls" }, { result: { text: "file.txt" } }),
+				),
+			]);
 
 		it("hands the transcript back with the cards the reader opened", async () => {
 			const user = userEvent.setup();
-			mockState.mockHistory = openableHistory;
+			mockState.page = openableHistory();
 			const { rerender } = render(<ChatPanel {...defaultProps} />);
 			await waitForHistoryLoad();
 			await user.click(screen.getByText("Bash"));
@@ -4976,7 +5091,7 @@ describe("ChatPanel", () => {
 		});
 
 		it("puts the transcript out of reach while the overlay is up", async () => {
-			mockState.mockHistory = openableHistory;
+			mockState.page = openableHistory();
 			const { rerender } = render(<ChatPanel {...defaultProps} />);
 			await waitForHistoryLoad();
 
@@ -5293,7 +5408,7 @@ describe("ChatPanel", () => {
 		});
 
 		it("hides the covered transcript without taking its box away", async () => {
-			mockState.mockHistory = openableHistory;
+			mockState.page = openableHistory();
 			const { rerender } = render(<ChatPanel {...defaultProps} />);
 			await waitForHistoryLoad();
 
@@ -5307,15 +5422,17 @@ describe("ChatPanel", () => {
 	});
 	// The chat's way in to signing a CLI in (docs/cli-login-ui.md#from-the-chat).
 	describe("signing in from an auth failure", () => {
-		const failedHistory = [
-			{ type: "message", content: "fix the build", seq: 1 },
-			{
-				type: "error",
-				error: "Not logged in · Please run /login",
-				auth_failure: { agent: "codex" },
-				seq: 2,
-			},
-		];
+		/** A turn that failed for want of a signed-in CLI. */
+		const failedHistory = (message: Partial<MessageItem> = {}) =>
+			fx.page([
+				fx.turn(
+					{ outcome: "failed", ended_by: "failed" },
+					fx.msg("fix the build", message),
+					withPayload(fx.error("Not logged in · Please run /login"), "error", {
+						auth_failure: { agent: "codex", profile_id: "" },
+					}),
+				),
+			]);
 
 		let server: ReturnType<typeof createFakeCliAuth>;
 
@@ -5342,7 +5459,7 @@ describe("ChatPanel", () => {
 
 		beforeEach(() => {
 			resetCliLoginStore();
-			mockState.mockHistory = failedHistory;
+			mockState.page = failedHistory();
 			// From the first render: the notice follows the account list.
 			server = createFakeCliAuth();
 			mockState.cliAuth = server.actions as typeof mockState.cliAuth;
@@ -5367,20 +5484,16 @@ describe("ChatPanel", () => {
 
 		// Text alone would send the message again without what it was about.
 		it("puts the failed message's files back with it", async () => {
-			mockState.mockHistory = [
-				{
-					...failedHistory[0],
-					attachments: [
-						{
-							name: "shot.png",
-							mime: "image/png",
-							size: 4,
-							attachment_id: "a1.png",
-						},
-					],
-				},
-				failedHistory[1],
-			];
+			mockState.page = failedHistory({
+				attachments: [
+					{
+						name: "shot.png",
+						mime: "image/png",
+						size: 4,
+						attachment_id: "a1.png",
+					},
+				],
+			});
 			const user = userEvent.setup();
 			render(<ChatPanel {...defaultProps} />);
 			await waitForHistoryLoad();
@@ -5455,17 +5568,18 @@ describe("ChatPanel", () => {
 		beforeEach(() => {
 			resetCliLoginStore();
 			// Claude's: the limit on a warning, then an unmarked failed ending.
-			mockState.mockHistory = [
-				{ type: "message", content: "fix the build", seq: 1 },
-				{
-					type: "warning",
-					message: "You've hit your limit · resets 5pm",
-					code: "rate_limit",
-					usage_limit: { agent: "claude", profile_id: WORK },
-					seq: 2,
-				},
-				{ type: "error", error: "Claude exited", seq: 3 },
-			];
+			mockState.page = fx.page([
+				fx.turn(
+					{ outcome: "failed", ended_by: "failed" },
+					fx.msg("fix the build"),
+					withPayload(
+						fx.warning("You've hit your limit · resets 5pm", "rate_limit"),
+						"warning",
+						{ usage_limit: { agent: "claude", profile_id: WORK } },
+					),
+					fx.error("Claude exited"),
+				),
+			]);
 			server = createFakeCliAuth();
 			mockState.cliAuth = server.actions as typeof mockState.cliAuth;
 			server.setOverview(overview(WORK));
@@ -5540,10 +5654,7 @@ describe("ChatPanel", () => {
 
 		it("offers the switch, but neither sign-in nor Send again, in a viewed session", async () => {
 			const user = userEvent.setup();
-			mockState.sessionViewHistory.mockResolvedValue({
-				history: mockState.mockHistory,
-				has_more: false,
-			});
+			mockState.sessionViewHistory.mockResolvedValue(mockState.page);
 			server.setInspections([
 				{ status: { agent: "claude", state: "signed_in" } },
 				{
@@ -5583,14 +5694,15 @@ describe("ChatPanel", () => {
 	});
 
 	describe("forking a session", () => {
-		const forkHistory = [
-			{ type: "message", content: "Hello", seq: 1 },
-			{ type: "text", content: "Hi there!", seq: 2 },
-			{ type: "done", seq: 3 },
-			{ type: "message", content: "Try again", seq: 4 },
-			{ type: "text", content: "Second answer", seq: 5 },
-			{ type: "done", seq: 6 },
-		];
+		/**
+		 * Two settled turns, built first in the test so their seqs are 1–3 (the
+		 * first turn ends at 3) and 4–6.
+		 */
+		const forkHistory = () =>
+			fx.page([
+				fx.turn({}, fx.msg("Hello"), fx.text("Hi there!")),
+				fx.turn({}, fx.msg("Try again"), fx.text("Second answer")),
+			]);
 
 		const forkedSession = makeSessionListItem({
 			id: "forked-session",
@@ -5633,7 +5745,7 @@ describe("ChatPanel", () => {
 		// can do nothing to its messages should not pay for the room. Driven by
 		// the server's declaration, not by which agent the session runs.
 		it("reserves nothing at all when the agent cannot be forked", async () => {
-			mockState.mockHistory = forkHistory;
+			mockState.page = forkHistory();
 			mockState.listAgents.mockResolvedValueOnce([
 				{ type: "claude", fork_support: "none" },
 			]);
@@ -5671,7 +5783,7 @@ describe("ChatPanel", () => {
 
 		it("forks from the chosen message and opens the new session", async () => {
 			const user = userEvent.setup();
-			mockState.mockHistory = forkHistory;
+			mockState.page = forkHistory();
 			mockState.forkSession.mockResolvedValue(forkedSession);
 			const onSelectSession = vi.fn();
 
@@ -5712,7 +5824,7 @@ describe("ChatPanel", () => {
 		// Landing the user in a session that may not exist is worse than the error.
 		it("keeps the sheet open and never navigates when the fork fails", async () => {
 			const user = userEvent.setup();
-			mockState.mockHistory = forkHistory;
+			mockState.page = forkHistory();
 			mockState.forkSession.mockRejectedValue(new Error("session not found"));
 			const onSelectSession = vi.fn();
 
@@ -5743,22 +5855,10 @@ describe("ChatPanel", () => {
 			render(<ChatPanel {...defaultProps} onSelectSession={onSelectSession} />);
 			await waitForHistoryLoad();
 
-			act(() => {
-				mockState.onNotification?.({
-					type: "message",
-					content: "Hello",
-					seq: 7,
-				} as ServerNotification);
-				mockState.onNotification?.({
-					type: "text",
-					content: "Hi there!",
-					seq: 8,
-				} as ServerNotification);
-				mockState.onNotification?.({
-					type: "done",
-					seq: 9,
-				} as ServerNotification);
-			});
+			// Another tab's message, so the updates are all this tab hears of it.
+			const opened = startTurn(fx.msg("Hello"));
+			say(opened, fx.text("Hi there!"));
+			endTurn(opened);
 
 			await openForkSheet(user);
 			await user.click(screen.getByRole("button", { name: "Fork" }));
@@ -5766,7 +5866,8 @@ describe("ChatPanel", () => {
 			await waitFor(() =>
 				expect(mockState.forkSession).toHaveBeenCalledWith(
 					"test-session",
-					9,
+					// The turn's end, the newest record of that answer.
+					3,
 					"Test Chat (fork)",
 				),
 			);
@@ -5777,15 +5878,15 @@ describe("ChatPanel", () => {
 		// the reason is worth nothing if focus cannot reach it.
 		it("disables fork on a message that has no settled cut point", async () => {
 			const user = userEvent.setup();
-			mockState.mockHistory = [
-				{ type: "message", content: "Opening", seq: 1 },
-				{ type: "text", content: "Sure", seq: 2 },
-				{ type: "done", seq: 3 },
-				// No seq: a record the server could not persist, or one this tab sent
-				// to a server too old to answer with its address. Nothing the client
-				// can name.
-				{ type: "message", content: "Hello" },
-			];
+			// No seq: a record the server could not persist, or one this tab sent
+			// to a server too old to answer with its address. Nothing the client
+			// can name.
+			const opening = fx.turn({}, fx.msg("Opening"), fx.text("Sure"));
+			const { seq: _, last_seq: __, ...unaddressed } = fx.msg("Hello");
+			mockState.page = fx.page([
+				opening,
+				fx.turn({ ended: false }, unaddressed),
+			]);
 
 			render(<ChatPanel {...defaultProps} onSelectSession={vi.fn()} />);
 			await waitForHistoryLoad();
@@ -5817,7 +5918,7 @@ describe("ChatPanel", () => {
 		// permanently, which is why this label does not say "yet".
 		it("disables fork on the message that opens the session", async () => {
 			const user = userEvent.setup();
-			mockState.mockHistory = forkHistory;
+			mockState.page = forkHistory();
 
 			render(<ChatPanel {...defaultProps} onSelectSession={vi.fn()} />);
 			await waitForHistoryLoad();
@@ -5838,17 +5939,11 @@ describe("ChatPanel", () => {
 		// only once there is nothing older left to read.
 		it("keeps fork on the top message while older pages remain", async () => {
 			const user = userEvent.setup();
-			mockState.mockHistory = forkHistory;
-			mockState.chatMessagesSubscribe.mockImplementation(() =>
-				Promise.resolve({
-					id: "sub-1",
-					initial: {
-						history: mockState.mockHistory,
-						turn: { phase: "idle", open: false, since: "" },
-						next_before_seq: 1,
-					},
-				}),
-			);
+			mockState.page = {
+				...forkHistory(),
+				has_more: true,
+				next_before_seq: 1,
+			};
 			mockState.forkSession.mockResolvedValue(forkedSession);
 
 			render(<ChatPanel {...defaultProps} onSelectSession={vi.fn()} />);
@@ -5872,7 +5967,7 @@ describe("ChatPanel", () => {
 		// other record's seq. Now the send's own reply brings it.
 		it("forks from a message this tab just sent, with no reload", async () => {
 			const user = userEvent.setup();
-			mockState.mockHistory = forkHistory;
+			mockState.page = forkHistory();
 			mockState.sendMessage.mockResolvedValue({ seq: 7 });
 			mockState.forkSession.mockResolvedValue(forkedSession);
 
@@ -5909,7 +6004,7 @@ describe("ChatPanel", () => {
 		// neither shifts the address nor claims to keep the prompt.
 		it("forks from a user message back to just before it", async () => {
 			const user = userEvent.setup();
-			mockState.mockHistory = forkHistory;
+			mockState.page = forkHistory();
 			mockState.forkSession.mockResolvedValue(forkedSession);
 
 			render(<ChatPanel {...defaultProps} onSelectSession={vi.fn()} />);
@@ -5956,7 +6051,7 @@ describe("ChatPanel", () => {
 		// back button, or an iOS swipe back, onto a URL that carries an overlay.
 		it("takes the message menu away with the transcript an overlay covers", async () => {
 			const user = userEvent.setup();
-			mockState.mockHistory = forkHistory;
+			mockState.page = forkHistory();
 			const props = { ...defaultProps, onSelectSession: vi.fn() };
 			const { rerender } = render(<ChatPanel {...props} />);
 			await waitForHistoryLoad();
@@ -5976,7 +6071,7 @@ describe("ChatPanel", () => {
 
 		it("takes the fork confirmation away with it too", async () => {
 			const user = userEvent.setup();
-			mockState.mockHistory = forkHistory;
+			mockState.page = forkHistory();
 			const props = { ...defaultProps, onSelectSession: vi.fn() };
 			const { rerender } = render(<ChatPanel {...props} />);
 			await waitForHistoryLoad();
@@ -6004,7 +6099,7 @@ describe("ChatPanel", () => {
 		// the row instead, would blank every `…` in the transcript with it.
 		it("leaves the menu alone when the answer panel only dims the transcript", async () => {
 			const user = userEvent.setup();
-			mockState.mockHistory = forkHistory;
+			mockState.page = forkHistory();
 			render(<ChatPanel {...defaultProps} onSelectSession={vi.fn()} />);
 			await waitForHistoryLoad();
 
@@ -6055,7 +6150,7 @@ describe("ChatPanel", () => {
 					{ ...forkedSession, id: "parent-session", title: "Parent chat" },
 				],
 			});
-			mockState.mockHistory = forkHistory;
+			mockState.page = forkHistory();
 
 			render(<ChatPanel {...defaultProps} onSelectSession={onSelectSession} />);
 			await waitForHistoryLoad();
@@ -6079,10 +6174,9 @@ describe("ChatPanel", () => {
 		};
 
 		it("reads the transcript through session_view, not the chat subscription", async () => {
-			mockState.sessionViewHistory.mockResolvedValue({
-				history: [{ type: "message", content: "What did we decide?", seq: 1 }],
-				has_more: false,
-			});
+			mockState.sessionViewHistory.mockResolvedValue(
+				fx.page([fx.turn({ ended: false }, fx.msg("What did we decide?"))]),
+			);
 
 			render(
 				<ChatPanel
@@ -6212,17 +6306,14 @@ describe("ChatPanel", () => {
 		// status comes from the records themselves — so "Answer this" survived
 		// into a screen whose answer panel is not even rendered.
 		it("offers nothing to answer a question the transcript left pending", async () => {
-			mockState.sessionViewHistory.mockResolvedValue({
-				history: [
-					{
-						type: "question_posted",
-						request_id: "req-1",
-						questions: [{ header: "Which branch?", question: "Which branch?" }],
-						seq: 1,
-					},
-				],
-				has_more: false,
-			});
+			mockState.sessionViewHistory.mockResolvedValue(
+				fx.page([
+					fx.turn(
+						{ ended: false, origin: "output" },
+						fx.question("Which branch?", { request_id: "req-1" }),
+					),
+				]),
+			);
 			const user = userEvent.setup();
 
 			render(
@@ -6244,19 +6335,16 @@ describe("ChatPanel", () => {
 		});
 
 		it("offers no Allow or Deny on a permission the transcript left pending", async () => {
-			mockState.sessionViewHistory.mockResolvedValue({
-				history: [
-					{
-						type: "permission_request",
-						request_id: "req-1",
-						tool_name: "Bash",
-						tool_input: { command: "rm -rf /" },
-						tool_use_id: "tool-1",
-						seq: 1,
-					},
-				],
-				has_more: false,
-			});
+			mockState.sessionViewHistory.mockResolvedValue(
+				fx.page([
+					fx.turn(
+						{ ended: false, origin: "output" },
+						fx.awaiting("Bash", { command: "rm -rf /" }, "req-1", {
+							tool_use_id: "tool-1",
+						}),
+					),
+				]),
+			);
 
 			render(
 				<ChatPanel
@@ -6573,20 +6661,38 @@ describe("ChatPanel", () => {
 	});
 
 	describe("discarded messages", () => {
-		const stoppedTurn = [
-			{ type: "message", content: "Start", message_id: "m-1", seq: 1 },
-			{ type: "text", content: "Working", seq: 2 },
-			{ type: "message", content: "Do X instead", message_id: "m-2", seq: 3 },
-			{ type: "message_ingested", message_id: "m-2", seq: 4 },
-			{ type: "message_discarded", message_id: "m-2", seq: 5 },
-			{ type: "interrupted", seq: 6 },
-		];
+		/** A turn the user stopped, which threw message `m-2` away unread. */
+		const stoppedWith = (...turnItems: PageItem[]) => {
+			const discarded = turnItems.find((i) => i.message?.message_id === "m-2");
+			return fx.page([
+				fx.turn(
+					{
+						outcome: "aborted",
+						ended_by: "interrupted",
+						discarded: [{ message_id: "m-2", seq: discarded?.seq }],
+					},
+					...turnItems.map((i) =>
+						i === discarded
+							? { ...i, message: { ...i.message, discarded: true } }
+							: i,
+					),
+				),
+			]);
+		};
+
+		const stoppedTurn = () =>
+			stoppedWith(
+				fx.msg("Start", { message_id: "m-1" }),
+				fx.text("Working"),
+				fx.msg("Do X instead", { message_id: "m-2" }),
+				fx.read("m-2"),
+			);
 		const restoreButton = () =>
 			screen.getByRole("button", { name: "Restore to input" });
 
 		it("draws the ending on the message and restores it into the input", async () => {
 			const user = userEvent.setup();
-			mockState.mockHistory = stoppedTurn;
+			mockState.page = stoppedTurn();
 			render(<ChatPanel {...defaultProps} />);
 			await waitForHistoryLoad();
 
@@ -6614,7 +6720,7 @@ describe("ChatPanel", () => {
 
 		it("adds to a draft the user is writing rather than replacing it", async () => {
 			const user = userEvent.setup();
-			mockState.mockHistory = stoppedTurn;
+			mockState.page = stoppedTurn();
 			render(<ChatPanel {...defaultProps} />);
 			await waitForHistoryLoad();
 
@@ -6644,24 +6750,40 @@ describe("ChatPanel", () => {
 
 			await user.type(screen.getByRole("textbox"), "Do X instead");
 			await user.click(screen.getByRole("button", { name: /Send/ }));
-			act(() => {
-				mockState.onNotification?.({
-					type: "message_discarded",
-					message_id: "m-9",
-				});
-				mockState.onNotification?.({ type: "interrupted" });
+			// The Stop's update reaches the sender too: the turn the message
+			// opened, and the message itself, which it discarded.
+			const sent = fx.msg("Do X instead", {
+				message_id: "m-9",
+				discarded: true,
 			});
+			const stopped = fx.turn(
+				{
+					outcome: "aborted",
+					ended_by: "interrupted",
+					discarded: [{ message_id: "m-9", seq: sent.seq }],
+				},
+				sent,
+			);
+			push(
+				fx.update({
+					turnId: stopped.turn?.turn_id,
+					turns: [
+						{ turn: stopped.turn as ChatTurn, discarded: stopped.discarded },
+					],
+					items: [sent],
+				}),
+			);
 			expect(
 				await screen.findByText("1 unread message was discarded."),
 			).toBeInTheDocument();
+			// The update that discarded it carries the message itself, so the
+			// bubble knows its ending before the reply says which message it is.
 			expect(
-				screen.queryByText("Not read — won't be answered"),
-			).not.toBeInTheDocument();
-			// Not "scroll up for it": there is no earlier history, only a reply
-			// still on its way.
+				await screen.findByText("Not read — won't be answered"),
+			).toBeInTheDocument();
 			expect(screen.queryByText(/earlier history/)).not.toBeInTheDocument();
 
-			act(() => reply({ seq: 1, messageId: "m-9" }));
+			act(() => reply({ seq: sent.seq, messageId: "m-9", itemId: sent.id }));
 
 			expect(
 				await screen.findByText("Not read — won't be answered"),
@@ -6672,18 +6794,13 @@ describe("ChatPanel", () => {
 		// words already in the input.
 		it("refuses to put a command after a draft, and says why", async () => {
 			const user = userEvent.setup();
-			mockState.mockHistory = [
-				{ type: "message", content: "Start", message_id: "m-1", seq: 1 },
-				{
-					type: "message",
-					content: "expanded prompt",
-					command: { name: "pockode-lead", args: "now" },
+			mockState.page = stoppedWith(
+				fx.msg("Start", { message_id: "m-1" }),
+				fx.msg("expanded prompt", {
 					message_id: "m-2",
-					seq: 2,
-				},
-				{ type: "message_discarded", message_id: "m-2", seq: 3 },
-				{ type: "interrupted", seq: 4 },
-			];
+					command: { name: "pockode-lead", args: "now" },
+				}),
+			);
 			render(<ChatPanel {...defaultProps} />);
 			await waitForHistoryLoad();
 
@@ -6708,7 +6825,7 @@ describe("ChatPanel", () => {
 		// where fork is not on offer at all.
 		it("offers restoring from the message's menu", async () => {
 			const user = userEvent.setup();
-			mockState.mockHistory = stoppedTurn;
+			mockState.page = stoppedTurn();
 			render(<ChatPanel {...defaultProps} />);
 			await waitForHistoryLoad();
 

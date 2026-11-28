@@ -365,7 +365,9 @@ Follows standard JSON-RPC 2.0; Pockode has no custom extensions.
 ### Growing a reply
 
 `chat.message` answers `rpc.MessageResult` — `omitempty` fields only: `seq`,
-telling the sender where its own message landed in the history, and, for a
+telling the sender where its own message landed in the history, `message_id`,
+and `item_id`, the transcript item the message became, by which every later
+`chat.update` names it ([agent-chat.md](../agent-chat.md#live-updates)), and, for a
 message that invoked a [Pockode command](../pockode-commands.md#what-is-recorded),
 `content` and `command` — the prompt the command expanded to and the command as
 parsed — or, for a message carrying `answering`, `content` alone: the body the
@@ -379,7 +381,7 @@ wrote for the agent and the action as its record holds it. Both carry
 the reply this message opens began, which the sender needs to measure that
 reply ([tool-call-ui.md](../tool-call-ui.md#where-the-duration-comes-from)).
 It needs one because the sender is deliberately left out of the
-broadcast that carries every other record's `seq` (it has already echoed the
+`chat.update` that carries the message's item (it has already echoed the
 message into its own transcript), so the reply is the only place that address —
 or a body the server wrote — can reach it. What the address is for is in [session-fork-ui.md](../session-fork-ui.md#which-messages-get-a-menu-and-when-fork-is-on-it):
 a record a client cannot name is a record it cannot fork from.

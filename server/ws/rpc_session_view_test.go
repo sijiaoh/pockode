@@ -144,8 +144,8 @@ func TestSessionView_SessionDataSurvivesItsWorktree(t *testing.T) {
 	if err := json.Unmarshal(historyResp.Result, &history); err != nil {
 		t.Fatalf("unmarshal session_view.history: %v", err)
 	}
-	if len(history.History) != 2 {
-		t.Errorf("history = %d records, want the 2 that were written", len(history.History))
+	if got := contentsOf(history.Page); len(got) != 2 {
+		t.Errorf("history = %q, want the 2 texts that were written", got)
 	}
 
 	attachResp := env.call("session_view.attachment", rpc.SessionViewAttachmentParams{

@@ -26,11 +26,10 @@ import {
 type History = ReturnType<typeof createMemoryHistory>;
 
 let partId = 0;
-const text = (content: string, parentToolUseId?: string): ContentPart => ({
+const text = (content: string): ContentPart => ({
 	type: "text",
 	id: `text-${++partId}`,
 	content,
-	...(parentToolUseId ? { parentToolUseId } : {}),
 });
 const read = (id: string, filePath = "/repo/sender.go"): ContentPart => ({
 	type: "tool_call",
@@ -170,19 +169,6 @@ describe("SubagentTranscript", () => {
 		const words = within(level()).getByText("I'll start with the sender.");
 		expect(words.closest(".markdown-note")).toBeNull();
 		expect(within(level()).getByText("Read")).toBeVisible();
-	});
-
-	it("draws children that sit flat after the filed ones, in arrival order", () => {
-		renderLayer([
-			reply(agent({ id: "t1", children: [text("first, filed")] })),
-			reply(text("then, flat", "t1"), text("someone else's", "t9")),
-		]);
-		const all = within(level()).getAllByText(/^(first, filed|then, flat)$/);
-		expect(all.map((el) => el.textContent)).toEqual([
-			"first, filed",
-			"then, flat",
-		]);
-		expect(within(level()).queryByText("someone else's")).toBeNull();
 	});
 
 	it("ends on the report once, under its label", () => {

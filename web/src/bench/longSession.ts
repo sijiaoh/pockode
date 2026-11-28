@@ -1,13 +1,23 @@
+import type {
+	ChatPage,
+	ChatTurn,
+	ChatUpdate,
+	ItemUpdate,
+	PageItem,
+	PageTurn,
+	ToolItem,
+} from "../types/chatItems";
+
 /**
- * A long Claude session as the server would replay it: history records, oldest
- * first, plus factories for the live records a benchmark streams into it.
+ * A long Claude session as the server would send it: its newest page of
+ * items, plus factories for the live updates a benchmark streams into it.
  *
  * The shape is what a busy agent produces over a working day — every turn
  * plans (TodoWrite + `plan`), thinks, talks between runs of top-level calls,
  * spawns subagents that do their own calls and talk, and now and then resumes
  * an earlier subagent (`SendMessage`), whose new work is filed under the call
  * that spawned it. The last turn is still open: a subagent of it is running,
- * in the foreground or in the background, and is what child records stream
+ * in the foreground or in the background, and is what child items stream
  * into.
  */
 
@@ -39,12 +49,16 @@ export const DEFAULT_LONG_SESSION: LongSessionOptions = {
 };
 
 export interface LongSession {
-	history: unknown[];
+	/** The whole session as one page. */
+	page: ChatPage;
 	/** How many tool calls the history holds, at every depth. */
 	toolCalls: number;
-	/** The open turn's running subagent, which child records go under. */
+	/** The open turn's running subagent's `tool_use_id`. */
 	liveAgentId: string;
-	/** Seq for the next live record, past everything the history holds. */
+	/** Its item, which child items are nested in. */
+	liveAgent: PageItem;
+	liveTurnId: string;
+	/** Seq and item id for the next live item, past everything the page holds. */
 	nextSeq: number;
 }
 
@@ -86,97 +100,177 @@ function toolResult(name: string, n: number): string {
 const PARAGRAPH =
 	"Looked at how the handler retries; the backoff is applied twice when the server sends Retry-After, so the second attempt waits far longer than intended.";
 
-/** Builds records with increasing seqs and unique ids. */
+/**
+ * Builds items as the server's projection states them: each with the next id
+ * and seq, a subagent's work nested in its call, every call settled with its
+ * result unless left running.
+ */
 class Writer {
-	readonly records: unknown[] = [];
+	readonly turns: PageTurn[] = [];
+	private items: PageItem[] = [];
+	private turn?: ChatTurn;
+	private readonly runs = new Map<string, PageItem>();
 	seq = 1;
 	ids = 0;
 	toolCalls = 0;
-	private push(record: Record<string, unknown>) {
-		this.records.push({ ...record, seq: this.seq++ });
+	private next(): number {
+		return this.seq++;
+	}
+	private place(item: PageItem, parent?: string) {
+		const run = parent ? this.runs.get(parent) : undefined;
+		if (run?.tool) {
+			run.tool.children = [...(run.tool.children ?? []), item];
+			run.last_seq = item.last_seq;
+		} else {
+			this.items.push(item);
+		}
 	}
 	id(prefix: string): string {
 		return `${prefix}-${this.ids++}`;
 	}
 	say(content: string, parent?: string) {
-		this.push({
-			type: "text",
-			content,
-			...(parent ? { parent_tool_use_id: parent } : {}),
-		});
+		const n = this.next();
+		this.place(
+			{
+				id: n,
+				kind: "text",
+				seq: n,
+				last_seq: n,
+				text: { content, ...(parent ? { parent_tool_use_id: parent } : {}) },
+			},
+			parent,
+		);
 	}
 	think(content: string) {
-		this.push({ type: "thinking", content, duration_ms: 1200 });
+		const n = this.next();
+		this.place({
+			id: n,
+			kind: "thinking",
+			seq: n,
+			last_seq: n,
+			thinking: { content, duration_ms: 1200 },
+		});
 	}
 	message(content: string) {
-		this.push({ type: "message", content, message_id: this.id("msg") });
+		const n = this.next();
+		const messageId = this.id("msg");
+		this.turn = {
+			turn_id: this.id("turn"),
+			origin: "prompt",
+			message_id: messageId,
+			start_seq: n,
+			ended: false,
+		};
+		this.items = [];
+		this.place({
+			id: n,
+			kind: "message",
+			seq: n,
+			last_seq: n,
+			message: { content, message_id: messageId },
+		});
 	}
-	call(name: string, input: unknown, parent?: string, id = this.id("call")) {
+	call(
+		name: string,
+		input: unknown,
+		parent?: string,
+		fields: Partial<ToolItem> = {},
+	): PageItem {
 		this.toolCalls++;
-		this.push({
-			type: "tool_call",
-			tool_use_id: id,
-			tool_name: name,
-			tool_input: input,
-			...(parent ? { parent_tool_use_id: parent } : {}),
-		});
-		return id;
+		const n = this.next();
+		const id = this.id("call");
+		const item: PageItem = {
+			id: n,
+			kind: "tool",
+			seq: n,
+			last_seq: n,
+			tool: {
+				tool_use_id: id,
+				tool_name: name,
+				tool_input: input,
+				status: "running",
+				...(parent ? { parent_tool_use_id: parent } : {}),
+				...fields,
+			},
+		};
+		this.runs.set(id, item);
+		this.place(item, parent);
+		return item;
 	}
-	result(id: string, content: string, extra: Record<string, unknown> = {}) {
-		this.push({
-			type: "tool_result",
-			tool_use_id: id,
-			tool_result: content,
-			duration_ms: 800,
-			...extra,
-		});
+	result(item: PageItem, text: string, fields: Partial<ToolItem> = {}) {
+		const n = this.next();
+		item.last_seq = Math.max(item.last_seq ?? 0, n);
+		if (item.tool) {
+			Object.assign(item.tool, {
+				status: "succeeded",
+				result: { text, duration_ms: 800, seq: n },
+				...fields,
+			});
+		}
 	}
 	tool(n: number, parent?: string) {
 		const name = TOOLS[n % TOOLS.length];
-		const id = this.call(name, toolInput(name, n), parent);
-		this.result(id, toolResult(name, n));
+		this.result(
+			this.call(name, toolInput(name, n), parent),
+			toolResult(name, n),
+		);
 	}
 	plan(done: number, total: number) {
-		const id = this.call("TodoWrite", { todos: [] });
-		this.result(id, "Todos have been modified successfully.");
-		this.push({
-			type: "plan",
-			tool_use_id: id,
-			steps: Array.from({ length: total }, (_, i) => ({
-				id: String(i + 1),
-				text: `Step ${i + 1} of the plan`,
-				status: i < done ? "completed" : i === done ? "in_progress" : "pending",
-			})),
+		const item = this.call("TodoWrite", { todos: [] });
+		this.result(item, "Todos have been modified successfully.", {
+			plan: {
+				steps: Array.from({ length: total }, (_, i) => ({
+					id: String(i + 1),
+					text: `Step ${i + 1} of the plan`,
+					status:
+						i < done ? "completed" : i === done ? "in_progress" : "pending",
+				})),
+			},
 		});
 	}
 	/** A subagent's call and its work; its result only when `settle`. */
-	agent(n: number, children: number, settle: boolean) {
-		const id = this.call("Agent", {
+	agent(n: number, children: number, settle: boolean): PageItem {
+		const item = this.call("Agent", {
 			description: `Investigate area ${n}`,
 			subagent_type: "Explore",
 			prompt: "Find where the retry is applied.",
 		});
+		const id = item.tool?.tool_use_id ?? "";
 		this.say("Starting with the transport package.", id);
 		for (let c = 0; c < children; c++) this.tool(n * 100 + c, id);
 		this.say(PARAGRAPH, id);
 		if (settle) {
-			this.result(id, `${PARAGRAPH}\n\nagentId: agent-${id}`, {
-				subagent: { agent_id: `agent-${id}`, agent_type: "Explore" },
+			this.result(item, `${PARAGRAPH}\n\nagentId: agent-${id}`, {
+				result: {
+					text: `${PARAGRAPH}\n\nagentId: agent-${id}`,
+					subagent: { agent_id: `agent-${id}`, agent_type: "Explore" },
+				},
 			});
 		}
-		return id;
+		return item;
 	}
 	resume(agentId: string, children: number, n: number) {
-		const id = this.call("SendMessage", {
+		const item = this.call("SendMessage", {
 			to: `agent-${agentId}`,
 			summary: "Follow up",
 			message: "Now check the client side too.",
 		});
 		for (let c = 0; c < children; c++) this.tool(n * 1000 + c, agentId);
-		this.result(id, "Message sent.");
+		this.result(item, "Message sent.");
 	}
-	done() {
-		this.push({ type: "done" });
+	/** Ends the turn the last message opened; `open` leaves it running. */
+	close(open = false) {
+		if (!this.turn) return;
+		const turn: ChatTurn = open
+			? this.turn
+			: {
+					...this.turn,
+					ended: true,
+					outcome: "completed",
+					ended_by: "done",
+					end_seq: this.next(),
+				};
+		this.turns.push({ turn, items: this.items });
 	}
 }
 
@@ -195,13 +289,14 @@ export function longSession(
 			if (c % 8 === 7) w.say(PARAGRAPH);
 		}
 		for (let a = 0; a < options.agentsPerTurn; a++) {
-			agents.push(w.agent(t * 10 + a, options.childrenPerAgent, true));
+			const agent = w.agent(t * 10 + a, options.childrenPerAgent, true);
+			agents.push(agent.tool?.tool_use_id ?? "");
 		}
 		if (t > 0 && t % options.resumeEvery === 0) {
 			w.resume(agents[agents.length - 3], 3, t);
 		}
 		w.say(`${PARAGRAPH}\n\n${PARAGRAPH}`);
-		w.done();
+		w.close();
 	}
 
 	// The open turn: a plan under way, calls made, a subagent still working.
@@ -211,77 +306,156 @@ export function longSession(
 	for (let c = 0; c < 30; c++) w.tool(9_000_000 + c);
 	const live = w.agent(9_999, 5, false);
 	if (options.background) {
-		w.result(live, "Async agent launched successfully.", {
-			subtype: "background_started",
-		});
+		live.tool = {
+			...(live.tool as ToolItem),
+			status: "background",
+			backgrounded: true,
+			placeholder: "Async agent launched successfully.",
+		};
 	}
+	w.close(true);
+	const liveTurn = w.turns.at(-1)?.turn;
 
 	return {
-		history: w.records,
+		page: { turns: w.turns, has_more: false, through_seq: w.seq - 1 },
 		toolCalls: w.toolCalls,
-		liveAgentId: live,
+		liveAgentId: live.tool?.tool_use_id ?? "",
+		liveAgent: live,
+		liveTurnId: liveTurn?.turn_id ?? "",
 		nextSeq: w.seq,
 	};
 }
 
 /**
- * The live records a benchmark streams, one kind at a time. Each call makes a
- * new record with a seq past the history's, so none is skipped as already
- * loaded.
+ * The live updates a benchmark streams, one kind at a time. Each makes a new
+ * item, or changes one, with a seq past the page's, so none is skipped as
+ * already loaded.
  */
 export function liveRecords(session: LongSession) {
 	let seq = session.nextSeq;
 	let n = 0;
-	const stamp = (record: Record<string, unknown>) => ({
-		...record,
-		seq: seq++,
+	const turnId = session.liveTurnId;
+	const { children: _, ...agentTool } = session.liveAgent.tool as ToolItem;
+	const agent = { ...session.liveAgent, tool: agentTool };
+	const at = (fields: Omit<PageItem, "id" | "seq" | "last_seq">): PageItem => {
+		const s = seq++;
+		return { id: s, seq: s, last_seq: s, ...fields } as PageItem;
+	};
+	const updateOf = (...items: ItemUpdate[]): ChatUpdate => ({
+		type: "update",
+		through_seq: seq - 1,
+		items,
+	});
+	/** A child changing: its run's `last_seq` moves with it. */
+	const inAgent = (child: PageItem): ChatUpdate =>
+		updateOf(
+			{ turn_id: turnId, item: { ...agent, last_seq: child.last_seq } },
+			{ parent: agent.id, item: child },
+		);
+	const settled = (call: PageItem, text: string): PageItem => ({
+		...call,
+		last_seq: seq++,
+		tool: {
+			...(call.tool as ToolItem),
+			status: "succeeded",
+			result: { text },
+		},
 	});
 	return {
 		/**
-		 * The main agent's words. Back to back they join into one text part, as
-		 * the reducer joins whole messages, so the open paragraph grows with
-		 * every one and is parsed again each time: kept to a sentence, so that
-		 * growth stays the size of a long reply rather than of a book.
+		 * The main agent's words. Back to back they join into one text part, so
+		 * the open paragraph grows with every one and is parsed again each time:
+		 * kept to a sentence, so that growth stays the size of a long reply
+		 * rather than of a book.
 		 */
-		text: () =>
-			stamp({ type: "text", content: `Checked the retry path (${n++}).` }),
+		text: (): ChatUpdate =>
+			updateOf({
+				turn_id: turnId,
+				item: at({
+					kind: "text",
+					text: { content: `Checked the retry path (${n++}).` },
+				}),
+			}),
 		/** A top-level call, then its result. */
-		topLevelCall: () => {
-			const id = `live-top-${n++}`;
-			return [
-				stamp({
-					type: "tool_call",
-					tool_use_id: id,
+		topLevelCall: (): ChatUpdate[] => {
+			const call = at({
+				kind: "tool",
+				tool: {
+					tool_use_id: `live-top-${n++}`,
 					tool_name: "Read",
 					tool_input: { file_path: `/work/project/web/src/file${n}.ts` },
-				}),
-				stamp({ type: "tool_result", tool_use_id: id, tool_result: "ok" }),
+					status: "running",
+				},
+			});
+			return [
+				updateOf({ turn_id: turnId, item: call }),
+				updateOf({ turn_id: turnId, item: settled(call, "ok") }),
 			];
 		},
 		/** A call of the running subagent's, then its result. */
-		childCall: () => {
-			const id = `live-child-${n++}`;
-			return [
-				stamp({
-					type: "tool_call",
-					tool_use_id: id,
+		childCall: (): ChatUpdate[] => {
+			const call = at({
+				kind: "tool",
+				tool: {
+					tool_use_id: `live-child-${n++}`,
 					tool_name: "Grep",
 					tool_input: { pattern: `retry${n}`, path: "/work/project/web" },
 					parent_tool_use_id: session.liveAgentId,
-				}),
-				stamp({
-					type: "tool_result",
-					tool_use_id: id,
-					tool_result: "web/src/lib/retry.ts:12",
-				}),
-			];
+					status: "running",
+				},
+			});
+			return [inAgent(call), inAgent(settled(call, "web/src/lib/retry.ts:12"))];
 		},
 		/** The running subagent's words. */
-		childText: () =>
-			stamp({
-				type: "text",
-				content: `Checked candidate ${n++}.`,
-				parent_tool_use_id: session.liveAgentId,
-			}),
+		childText: (): ChatUpdate =>
+			inAgent(
+				at({
+					kind: "text",
+					text: {
+						content: `Checked candidate ${n++}.`,
+						parent_tool_use_id: session.liveAgentId,
+					},
+				}),
+			),
 	};
+}
+
+/** Records an item stands for, as the server's page budget counts them. */
+function recordsOf(item: PageItem): number {
+	const tool = item.tool;
+	if (!tool) return 1;
+	let n = tool.result ? 2 : 1;
+	for (const child of tool.children ?? []) n += recordsOf(child);
+	return n;
+}
+
+/**
+ * The session cut into pages the way the server cuts them: newest first,
+ * `limit` records each, ending on the item that uses the budget up, a turn
+ * split across pages marked `continued` on its newer part. Oldest page first,
+ * as `resetChatHistoryServer` takes them.
+ */
+export function pagedSession(session: LongSession, limit = 50): ChatPage[] {
+	const flat = session.page.turns.flatMap((t) =>
+		t.items.map((item, i) => ({ turn: t.turn, item, first: i === 0 })),
+	);
+	const pages: ChatPage[] = [];
+	let end = flat.length;
+	while (end > 0) {
+		let start = end;
+		let budget = 0;
+		while (start > 0 && budget < limit) budget += recordsOf(flat[--start].item);
+		const turns: PageTurn[] = [];
+		for (let i = start; i < end; i++) {
+			const { turn, item, first } = flat[i];
+			const last = turns.at(-1);
+			if (last && last.turn === turn) last.items.push(item);
+			else turns.push({ turn, continued: !first, items: [item] });
+		}
+		pages.unshift({ turns, has_more: start > 0 });
+		end = start;
+	}
+	const newest = pages.at(-1);
+	if (newest) newest.through_seq = session.page.through_seq;
+	return pages;
 }

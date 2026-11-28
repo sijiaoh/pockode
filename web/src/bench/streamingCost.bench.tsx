@@ -3,7 +3,7 @@
  * Run with `vitest.bench.config.ts` (the command and its knobs are there); the
  * numbers go to the console and to `bench-results/<label>.json`.
  *
- * Two measurements, both in real Chromium:
+ * Three measurements, all in real Chromium:
  *
  * - Per record, through the real `useChatMessages` and `MessageList` (and the
  *   attention strip, and optionally a subagent's transcript, as `ChatPanel`
@@ -13,6 +13,10 @@
  *   history before it — the difference is what loaded history costs.
  * - Per transcript-wide derivation, over the loaded messages: what each pass
  *   that runs on every record costs on its own.
+ * - Per older page (`pages back`, results in `<label>-paging.json`): the
+ *   session cut into the server's 50-record pages, the newest mounted, and
+ *   each older page timed from its answer to the commit that drew it being
+ *   laid out — what paging back costs as the loaded transcript grows.
  *
  * React is its development build unless the bench is run with
  * `BENCH_REACT=production` (see the config); a development build's render
@@ -20,7 +24,7 @@
  * derivations' are not. The results say which build they were taken on.
  */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { Profiler } from "react";
+import { Profiler, useLayoutEffect } from "react";
 import { flushSync } from "react-dom";
 import { createRoot } from "react-dom/client";
 import { describe, expect, it, vi } from "vitest";
@@ -29,10 +33,10 @@ import AttentionStrip from "../components/Chat/AttentionStrip";
 import MessageList from "../components/Chat/MessageList";
 import { SubagentTranscript } from "../components/Chat/SubagentTranscript";
 import { useChatMessages } from "../hooks/useChatMessages";
-import { openAssistantIndex } from "../lib/messageReducer";
 import { useSessionDetailStore } from "../lib/sessionDetailStore";
-import { liveResumes, unfiledChildren, unfiledParts } from "../lib/subagentRun";
+import { liveResumes } from "../lib/subagentRun";
 import { loadedStopTargets } from "../lib/taskStop";
+import { openAssistantIndex } from "../lib/transcript";
 import { findLoadedRun } from "../lib/transcriptMemo";
 import {
 	backgroundTaskRuns,
@@ -43,10 +47,12 @@ import {
 	topLevelAgentRuns,
 } from "../lib/turnOverview";
 import {
+	answerPageRequest,
 	resetChatHistoryServer,
-	streamRecords,
+	streamUpdates,
 } from "../test/chatHistoryServer";
 import { makeSessionDetail } from "../test/sessionFixtures";
+import type { ChatNotification, ChatPage } from "../types/chatItems";
 import type { Message, SessionTurn } from "../types/message";
 import { refusalAccounts } from "../utils/cliRefusal";
 import { discardedMessages } from "../utils/discardedMessage";
@@ -62,6 +68,7 @@ import {
 	type LongSession,
 	liveRecords,
 	longSession,
+	pagedSession,
 } from "./longSession";
 import { startTrace, stopTrace, type TraceCost } from "./trace";
 
@@ -79,6 +86,7 @@ declare const __BENCH__: {
 	trace: boolean;
 	css: string;
 	longOnly: boolean;
+	pages: number;
 };
 const BENCH = __BENCH__;
 
@@ -96,11 +104,18 @@ const noop = () => {};
 let rendered: Message[] = [];
 /** React's own render time, every commit, summed. */
 let reactMs = 0;
+/** The harness's chat, for the paging pass to ask for older pages. */
+let chatOf: ReturnType<typeof useChatMessages> | undefined;
+/** Called once a commit has laid out a page more than the last. */
+let onPageLanded: ((pages: number) => void) | undefined;
 
 function Harness({ transcriptOf }: { transcriptOf?: string }) {
 	const chat = useChatMessages({ sessionId: SESSION_ID });
 	const turn = useSessionDetailStore((s) => s.detail?.turn);
 	rendered = chat.messages;
+	chatOf = chat;
+	const pages = chat.loadedHistoryPages;
+	useLayoutEffect(() => onPageLanded?.(pages), [pages]);
 	return (
 		<Profiler
 			id="chat"
@@ -167,8 +182,9 @@ async function mount(
 	session: LongSession,
 	background: boolean,
 	transcript: boolean,
+	pages: ChatPage[] = [session.page],
 ) {
-	resetChatHistoryServer([session.history]);
+	resetChatHistoryServer(pages);
 	useSessionDetailStore
 		.getState()
 		.setDetail(
@@ -218,9 +234,12 @@ const quantile = (values: number[], q: number) => {
  * commit, effects, and the layout they force — and React's render time also
  * takes in whatever the observers set off in the frames after it.
  */
-async function stream(next: () => unknown, count: number): Promise<Sample> {
+async function stream(
+	next: () => ChatNotification,
+	count: number,
+): Promise<Sample> {
 	for (let i = 0; i < WARMUP; i++) {
-		flushSync(() => streamRecords([next()]));
+		flushSync(() => streamUpdates([next()]));
 		await settle();
 	}
 	const wallMs: number[] = [];
@@ -229,7 +248,7 @@ async function stream(next: () => unknown, count: number): Promise<Sample> {
 	for (let i = 0; i < count; i++) {
 		const record = next();
 		const started = performance.now();
-		flushSync(() => streamRecords([record]));
+		flushSync(() => streamUpdates([record]));
 		document.body.getBoundingClientRect();
 		wallMs.push(performance.now() - started);
 		await settle();
@@ -240,7 +259,7 @@ async function stream(next: () => unknown, count: number): Promise<Sample> {
 	// Apart from the timed pass: the profiler slows what it samples.
 	await startProfile();
 	for (let i = 0; i < count; i++) {
-		flushSync(() => streamRecords([next()]));
+		flushSync(() => streamUpdates([next()]));
 		document.body.getBoundingClientRect();
 		await settle();
 	}
@@ -254,7 +273,7 @@ async function stream(next: () => unknown, count: number): Promise<Sample> {
 	if (BENCH.trace) {
 		await startTrace();
 		for (let i = 0; i < count; i++) {
-			flushSync(() => streamRecords([next()]));
+			flushSync(() => streamUpdates([next()]));
 			document.body.getBoundingClientRect();
 			await settle();
 		}
@@ -276,12 +295,12 @@ async function stream(next: () => unknown, count: number): Promise<Sample> {
 	};
 }
 
-/** Alternates a pair's two records, so calls and results are both sampled. */
-function alternating(pair: () => unknown[]) {
-	let held: unknown[] = [];
+/** Alternates a pair's two updates, so calls and results are both sampled. */
+function alternating(pair: () => ChatNotification[]) {
+	let held: ChatNotification[] = [];
 	return () => {
 		if (held.length === 0) held = pair();
-		return held.shift();
+		return held.shift() as ChatNotification;
 	};
 }
 
@@ -289,7 +308,7 @@ interface Case {
 	name: string;
 	background?: boolean;
 	transcript?: boolean;
-	records: (live: ReturnType<typeof liveRecords>) => () => unknown;
+	records: (live: ReturnType<typeof liveRecords>) => () => ChatNotification;
 }
 
 const CASES: Case[] = [
@@ -332,9 +351,6 @@ function derivations(source: Message[], liveAgentId: string) {
 	};
 	let messages = source;
 	const passes: Record<string, () => unknown> = {
-		"unfiledChildren (MessageList, SubagentTranscript)": () =>
-			unfiledChildren(messages),
-		"unfiledParts (SubagentTranscript)": () => unfiledParts(messages),
 		"liveResumes (once per record: MessageList, useAgentsOverview, SubagentTranscript share it)":
 			() => liveResumes(messages),
 		"loadedStopTargets (MessageList)": () => loadedStopTargets(messages),
@@ -380,15 +396,14 @@ const fmt = (ms: number) => ms.toFixed(2);
 
 /** Functions the profile table always lists, whether or not they are on top. */
 const WATCHED = [
-	"applyServerEvent",
+	"applyUpdate",
+	"buildTranscript",
 	"handleNotification",
-	"useUnfiledChildrenValue",
 	"useSubagentResumesValue",
 	"useStopTargetsValue",
 	"useDiscardedMessagesValue",
 	"useAgentsOverview",
 	"useTurnOverview",
-	"unfiledChildren",
 	"liveResumes",
 	"loadedStopTargets",
 	"discardedMessages",
@@ -534,5 +549,66 @@ describe("streaming cost", () => {
 			`bench-results/${BENCH.label}.md`,
 			lines.join("\n"),
 		);
+	});
+
+	it("pages back", async () => {
+		if (BENCH.cpuThrottle > 1) await setCpuThrottle(BENCH.cpuThrottle);
+		const session = longSession({
+			...DEFAULT_LONG_SESSION,
+			turns: BENCH.turns,
+		});
+		const pages = pagedSession(session);
+		const { unmount, mountMs } = await mount(session, false, false, pages);
+		const times: number[] = [];
+		let reactTotal = 0;
+		for (let i = 0; i < BENCH.pages && chatOf?.hasMoreHistory; i++) {
+			const chat = chatOf;
+			flushSync(() => {
+				void chat.loadMoreHistory();
+			});
+			await settle();
+			const landed = new Promise<void>((resolve) => {
+				onPageLanded = (n) => {
+					if (n > i) resolve();
+				};
+			});
+			reactMs = 0;
+			const started = performance.now();
+			if (!answerPageRequest()) throw new Error("no page request in flight");
+			await landed;
+			document.body.getBoundingClientRect();
+			times.push(performance.now() - started);
+			await settle();
+			reactTotal += reactMs;
+		}
+		onPageLanded = undefined;
+		const lines: string[] = [
+			`### paging back — ${session.toolCalls} calls, ${pages.length} pages of 50 records, React ${reactBuild()}`,
+			`mount of the newest page ${fmt(mountMs)}ms · ${times.length} pages paged · ${rendered.length} messages at the end · React render ${fmt(reactTotal / times.length)}ms/page`,
+			"| pages | p50 ms/page | p95 ms/page |",
+			"|---|---:|---:|",
+		];
+		const BUCKET = 50;
+		for (let b = 0; b < times.length; b += BUCKET) {
+			const slice = times.slice(b, b + BUCKET);
+			lines.push(
+				`| ${b + 1}–${b + slice.length} | ${fmt(quantile(slice, 0.5))} | ${fmt(quantile(slice, 0.95))} |`,
+			);
+		}
+		console.info(lines.join("\n"));
+		await commands.writeFile(
+			`bench-results/${BENCH.label}-paging.json`,
+			JSON.stringify(
+				{ bench: BENCH, react: reactBuild(), mountMs, times },
+				null,
+				2,
+			),
+		);
+		await commands.writeFile(
+			`bench-results/${BENCH.label}-paging.md`,
+			lines.join("\n"),
+		);
+		unmount();
+		useSessionDetailStore.getState().clear();
 	});
 });

@@ -237,9 +237,10 @@ The line adds who and why:
     link.)
 - An unknown `by` draws no line; the status glyph still says the outcome.
   Labels for both tables live in `lib/permissionReview.ts`.
-- **The reducer keeps who answered.** `permission_response`'s `by` and
-  `review` are kept on the card beside its status — history, from the record —
-  and carried onto the run the card hands back to (`ToolRun.permission`); both
+- **The card keeps who answered.** `permission_response`'s `by` and
+  `review` are on the call's item, folded in by the projection — history, from
+  the record — and drawn on the card beside its status and on the run once it
+  is a row again (`ToolRun.permission`); both
   draw the line from them, through the one `VerdictLine` in
   `Chat/PermissionAnswer.tsx`; a `by: "pockode"` deny is still
   status `denied`, and its glyph is every deny's.

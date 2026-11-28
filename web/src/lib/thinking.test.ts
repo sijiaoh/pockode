@@ -56,16 +56,7 @@ describe("applyThinkingDelta", () => {
 		expect(live).toMatchObject({
 			content: "**Plan**\n\nRead it",
 			fullReasoning: "ab",
-			joinedLate: false,
 		});
-	});
-
-	// Codex opens every reasoning item with an empty delta, so text in the first
-	// one this client sees means the beginning went by before it subscribed.
-	it("marks a thinking first seen mid-text as joined late", () => {
-		expect(applyThinkingDelta(null, delta("half a thought")).joinedLate).toBe(
-			true,
-		);
 	});
 });
 

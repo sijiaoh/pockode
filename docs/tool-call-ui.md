@@ -72,7 +72,8 @@ mostly successful `Read`s. If success is green, red stops being loud, and the
 one row the user has to notice is the one that failed.
 
 **The renderer infers nothing.** It switches on `run.status` and draws the
-table below. Every "is this still running" question is answered by the reducer
+table below. Every "is this still running" question is answered by the server's
+projection and read onto the run by the client's transcript
 ([tool-call-model.md](tool-call-model.md#toolrun)), for every tool-shaped row
 alike — that single author is what the merge of subagent rows into tool rows
 bought.
@@ -215,7 +216,7 @@ folds into one that already does. What is left is accepted, not patched over:
 2. **A running call already in sight folds.** With parallel calls, one may be
    showing flat while it runs and then fold when others settle into a group
    around it.
-3. **The reducer's known corner.** A call marked backgrounded only after a
+3. **The projection's known corner.** A call marked backgrounded only after a
    `success` placeholder
    ([tool-call-model.md](tool-call-model.md#background-lives-on-tool_result-twice))
    counts as settled until it is marked, then turns pinned; a group that had
@@ -571,7 +572,7 @@ the tail line goes in. It is never drawn on the reply the turn is writing: the
 tail line and the group summaries own the running turn, and neither its
 figures nor its files are final until it ends. A reply [a read
 point](code/agent-integration.md#the-read-point) closes is over at that moment
-(the reducer settles it to `complete`), so its card is drawn then, at the end
+(the transcript draws it `complete`), so its card is drawn then, at the end
 of *that* reply, above the message the read point delivered, while the turn
 goes on in the reply under it; a call of its that is still running is counted
 among its calls and, until it succeeds, not among its files. Settling appends
@@ -818,7 +819,7 @@ it.
 
 | Moment | Record | Its `observed_at` |
 |---|---|---|
-| a reply that opened its turn begins | the `message` record that opened the turn — a send, a scheduled prompt, a page's action, a command | the moment the send reached Pockode, minted once and used twice: stamped on the record, and handed to the process as the prompt's moment, so `TurnState.OpenedAt` is that same instant whenever the message opens the turn — the tail line's `Working 2m 12s` and this `Worked 2m 13s` count from one start, retries after a replaced process included. Every `message` record carries it; the client reads it as a start only for a message that opened a reply — the reducer's *nothing running, so the message opens a turn* branch |
+| a reply that opened its turn begins | the `message` record that opened the turn — a send, a scheduled prompt, a page's action, a command | the moment the send reached Pockode, minted once and used twice: stamped on the record, and handed to the process as the prompt's moment, so `TurnState.OpenedAt` is that same instant whenever the message opens the turn — the tail line's `Working 2m 12s` and this `Worked 2m 13s` count from one start, retries after a replaced process included. Every `message` record carries it; the client reads it as a start only for the message that opened the turn |
 | a reply opened by [a read point](code/agent-integration.md#the-read-point) begins | its `message_ingested` | when Pockode wrote it: codex's echo, or Claude's delivery — as exact as the read point itself |
 | a reply split off by a read point ends | the next `message_ingested` | the same moment, so the two replies' spans meet and add up to the turn's |
 | the reply that ended the turn ends | the turn's `done`, `interrupted`, `process_ended` or `error` | when Pockode saw it |
@@ -826,7 +827,7 @@ it.
 Which records are stamped where is in
 [agent-integration.md](code/agent-integration.md#history-records-and-live-events) (the server
 side) and [frontend-state.md](code/frontend-state.md#times-on-a-reply) (how the
-reducer carries the two moments onto the assistant message — history, the way
+transcript carries the two moments onto the assistant message — history, the way
 a run's `startedAt` and `endedAt` are, not live state). One piece of it is
 the design's own: the tab that sent the message never receives its record —
 the server leaves the sender out of the broadcast — so the same moment comes
@@ -843,12 +844,13 @@ made any.
   `14 tool calls · …`. A reload does not lose the figure on a newer turn: both
   moments are stored.
 - **A reply that opened without a message** — output the CLI resumed by
-  itself, or an answer to a permission card that outlived its turn
-  (`openedByCard`) — has no start. The reducer knows it: no `message` record
-  and no read point came between the previous ending and the reply.
-- **The top of the loaded history.** A page boundary can cut a reply, so the
-  oldest loaded bubble may be the back half of one, with no opening record
-  ([`prependHistoryPage`](agent-chat.md#history-paging)). Its count would be of
+  itself — has no start: its turn holds no opening message and no read point.
+- **The top of the loaded history.** A page boundary can cut a turn, so the
+  oldest loaded bubble may be the back half of one, with its opening message on
+  a page not loaded. The server says so — the page's first stretch is
+  `continued` ([agent-chat.md](agent-chat.md#reading-a-page-on-the-client)) —
+  and the transcript marks that bubble `startNotLoaded`; the client does not
+  guess it from position. Its count would be of
   half the calls, so the card's header shows only what the card already does —
   `N files changed`, of the loaded half — and the turn-end row, which would have
   nothing else to say, shows nothing; both gain the other entries when the
@@ -1170,7 +1172,7 @@ Before this, the card was appended beside the row, so the same call was in the
 list twice.
 Adding a spinner to that first row is what turned the duplication from untidy
 into false — it would say the machine is busy while the machine is waiting for
-the user. The precedent was already in the reducer, one case away:
+the user. The precedent was already in the client, one case away:
 `ask_user_question` — the CLI's own question, now read from old transcripts
 only — finds the `tool_call` part with its `toolUseId` and takes its place,
 because "all three describe one tool use". `permission_request` carries
@@ -1204,13 +1206,13 @@ The difference from the permission card is what the card is allowed to do:
 a permission card holds buttons because the call is waiting on them, a question
 card holds none because the call is over and the answer goes somewhere else.
 
-**Taking the row means the reducer has to give it back**, and that rule is not in
-this design because it is not a drawing decision: claude 2.1.263 does **not**
-re-send the `tool_call` after approval (measured; an earlier CLI did, and an
-earlier draft of this document assumed it still would). Without giving the row
-back, an approved command's entire output would land as an orphan and be dropped.
-How the row is rebuilt, and why progress may only rebuild it once the card is
-answered, is [code/frontend-state.md](code/frontend-state.md#tool-runs).
+**Taking the row means giving it back**: once the card is answered and the call
+runs, or the engine reports on it, the call is a row again, in the card's place
+and under its id. Nothing has to be rebuilt for that — the call's item holds its
+input, its permission and its result whichever order they were recorded in
+(claude 2.1.263 does **not** re-send the `tool_call` after approval, measured),
+and the card or the row is only how that item is drawn at the moment
+([code/frontend-state.md](code/frontend-state.md#tool-runs)).
 
 That is what makes the waiting rung honest. A row that shows a spinner while the
 call is actually blocked on a dialog two rows down is telling the user the
@@ -1311,7 +1313,7 @@ already interrupts the turn
 prompt that runs arbitrary commands costs too much.
 
 A denial settles the card from the user's own response
-(`choice === "deny"` in the reducer), not from anything an engine says — and that
+(the permission's `status: "denied"`), not from anything an engine says — and that
 same tap is what produces codex's `declined` item status and Claude's refusal
 result text afterwards. So whatever the engine then reports needs no rung of its
 own: it becomes the denied row's body, and "the user refused" is told once, on
@@ -1611,15 +1613,16 @@ run does not lose its second line when it settles:
 
 Which is also the better row: a settled background call that reads *"Build
 succeeded in 4m12s"* without being opened is the thing the user went looking for.
-It replays correctly too, because the outcome is persisted while the activity is
+It reloads correctly too, because the outcome is persisted while the activity is
 not. Only a run that finished in the foreground drops its line — or hands it to
 rung 4, if it failed — and that row is at the tail by construction, so both
 changes of height happen where nothing is below them.
 
 **After a reconnect** the line survives exactly as far as the backend carries
-it. `tool_activity` is not persisted, so history replay has none of it; what
-closes the gap is the newest activity per in-flight call, handed to a client in
-the subscribe reply ([agent-chat.md](agent-chat.md#history-paging)) — and on a
+it. `tool_activity` is not persisted, so history has none of it; what
+closes the gap is each in-flight call's live stream — its newest activity and
+the output so far — handed to a client in the subscribe reply
+([agent-chat.md](agent-chat.md#live-updates)) — and on a
 phone reconnecting mid-run is the normal case, not an edge. **The row is the same
 either way**: the field arrives filled instead of empty, and a row with an empty
 one is still correct, because the spinner and the chip come from `status`. That
@@ -1631,12 +1634,12 @@ a future engine stops reporting progress at all.
 not the individual deltas, so a delta dropped under load costs a moment of
 liveness and nothing more.
 
-**A replayed background run that is still going may show no second line at all**
+**A reloaded background run that is still going may show no second line at all**
 — rungs 1 and 2's `output` half are both live-only — **and still reads
 correctly**, because `status` alone carries it: spinner + `background` chip =
 still going. That is the whole reason status is derived from persisted records
-and activity is not. The two things that do replay onto that row are the outcome,
-once it has finished, and any fetch of it: a fetch is a persisted `tool_result`,
+and activity is not. The two things a reload does bring onto that row are the
+outcome, once it has finished, and any fetch of it: a fetch is a persisted call,
 so a reloaded page shows the fetched line from its first frame and never changes
 height there. The cost is the row that has neither: it grows from no line to one
 when its outcome arrives — or when the process ends live under it and rung 3's
@@ -1733,9 +1736,8 @@ join by eye. So it takes no row: when the server could say which call it reads,
 the fetched text is drawn on **that** row, as rung 2 of its second line and as
 the middle block of its body.
 
-Whether it is absorbed at all is not a drawing decision — it is decided once,
-when the `tool_call` arrives, by the reducer, and the reasons (including why a
-row that did keep its own is never taken away afterwards) are in
+Whether it is filed at all depends only on the call it reads being loaded, and
+the reasons are in
 [code/frontend-state.md](code/frontend-state.md#a-fetch-filed-under-the-call-it-reads).
 What is decided here is everything after that.
 
@@ -1814,7 +1816,7 @@ Three things a fetch must not do to the row it lands on:
   so the red lives in the block, where it refers to the thing that actually
   failed, and the row keeps the glyph and colour it already had. This is the
   general rule with a new chance to break it: the renderer infers nothing, and
-  whether the task is still running is the reducer's to say.
+  whether the task is still running is the run's status to say.
 - **Not add a badge, and not count itself on the row.** The `background` chip
   already says this work outlived the turn, and a fetch is part of that work
   rather than a second fact beside it. The count is in the body's heading, which
@@ -1961,7 +1963,7 @@ either side of it — reading the call, writing the result line — which is not
 difference a reader would act on. A mark beside one source would ask them to
 weigh it anyway, and on a phone a tooltip explaining it could not be opened. The distinction is kept in
 the model — the engine's figure and the observed times are separate fields,
-and the precedence above is the reducer's, not the row's — so a later feature
+and the precedence above is `toolRunDurationMs`'s, not the row's — so a later feature
 that needs to know can, and nobody reading the record mistakes Pockode's
 reading for the CLI's report.
 
@@ -1998,14 +2000,14 @@ outcome arrives and the duration takes its place).
   on the client's own clock. A start known only from history is a server time;
   it is counted from the server's clock reading sent with that history, and the
   client counts on from when it received the reading. Without a reading, a
-  replayed running row has no counter, as today — subtracting a server time from
+  reloaded running row has no counter, as today — subtracting a server time from
   the phone's clock would show minutes of drift as minutes of work.
 - So a reload, a reconnect and a second device all show the clock the first
-  screen would have shown. A running subagent row replayed after a reload is
+  screen would have shown. A running subagent row drawn after a reload is
   the case this was missing most: it is the row most likely to be running long
   enough to reload over.
 - It appears once the run has been going 3s — by its start, not by when this
-  screen drew it, so a row replayed four minutes into a run shows `4m 0s` at
+  screen drew it, so a row reloaded four minutes into a run shows `4m 0s` at
   once rather than nothing for three seconds.
 - It ticks every second at every length, and on the same tick as every other
   elapsed clock on screen — the turn clock and the other live counters
@@ -2017,7 +2019,8 @@ outcome arrives and the duration takes its place).
 - It is its own component, so the tick re-renders the counter and not the row.
   At most a handful of runs are live at once.
 - Whether a run is live is still its status, never its clock. A run left
-  `running` by a turn that ended is settled to `interrupted` by the reducer
+  `running` by a turn that ended is settled to `interrupted` by the server's
+  projection
   (and a dangling turn by [lifecycle-ui.md
   §2.4](lifecycle-ui.md#24-recovering-a-dangling-turn-after-a-restart)), so a
   year-old transcript still draws no stopwatches. A background task that
@@ -2944,7 +2947,7 @@ props for it: `subtitle`, drawn under the title, and `initialFocusRef`.
   diff library draws a diff whole — which is affordable because diffs come from
   edit inputs and are rarely thousands of rows.
 - **A failed command** keeps its last five lines red (`FAILURE_TEXT`).
-- **Live output** shows the reducer's whole 200-line buffer, not the
+- **Live output** shows the client's whole 200-line buffer, not the
   transcript's 50. Once lines have been dropped from its head
   (`ToolRun.outputDroppedLines`) a muted line heads it: *Earlier output arrives
   with the result*. It follows its tail while the reader is at the end and stops
@@ -3385,7 +3388,7 @@ already follows.
 
 | Figure | First | Else | Never |
 |---|---|---|---|
-| **tool uses** | the run's children: every child `tool_use_id`, filed or [unfiled](#what-is-not-filed) (`countSteps`, unchanged) | the CLI's count — live from the activity's `subagent_progress.tool_uses`, settled from the result record's `subagent.tool_uses` | a mix of the two on one run |
+| **tool uses** | the run's children: every child `tool_use_id` (`countSteps`, unchanged) | the CLI's count — live from the activity's `subagent_progress.tool_uses`, settled from the result record's `subagent.tool_uses` | a mix of the two on one run |
 | **tokens** | the result record's `subagent.total_tokens`: the subagent's context when it finished ([below](#tokens)) | — | a sum of the children's own usages, or a live figure |
 | **duration** | the meta slot's rules, unchanged: Claude's `duration_ms`, else observed `endedAt − startedAt` | — | — |
 
@@ -3663,8 +3666,8 @@ first row that matches wins:
   (measured, claude 2.1.263 —
   [the task lifecycle](code/agent-integration.md#the-task-lifecycle)), which is
   the row's own detail said again. It is better than nothing only before the
-  first step has arrived. Children also replay — they are persisted, and the
-  activity is not — so a reloaded row reads the same as the live one did.
+  first step has arrived. Children also survive a reload — they are persisted,
+  and the activity is not — so a reloaded row reads the same as the live one did.
 - **Its shape.** One flex line, `items-baseline gap-1.5`, inside the row's
   existing `text-th-text-muted` second-line slot: the count `shrink-0`, a `·`,
   then the latest child — a call's title in `text-th-text-secondary` (not the
@@ -3821,8 +3824,7 @@ name — the second line's left edge:
    carries none either: it is waiting on the user, not working.
 
 **Which steps, in what order.** The last k steps by arrival, counted by
-`stepId` across the run's children and then its
-[unfiled](#what-is-not-filed) children (the unfiled ones are the newer). A card
+`stepId` across the run's children. A card
 and the row that comes back for it are one step, drawn by its newest form. A
 text is never a step, so it never takes a window line; the newest text, when it
 is newer than every step, is line 2's tail instead
@@ -3850,9 +3852,9 @@ widths in Chromium and WebKit.
 #### Settling and folding
 
 Line 2 settles by [status by status](#status-by-status), unchanged. The window
-stays, **frozen** at its last steps — drawn with the statuses the reducer left
-them, nothing inferred, and no elapsed figure even beside a step the reducer
-still calls running, since a counter ticking on a settled row would be a lie
+stays, **frozen** at its last steps — drawn with the statuses the items say,
+nothing inferred, and no elapsed figure even beside a step still marked
+running, since a counter ticking on a settled row would be a lie
 about the row — until the first of:
 
 1. **Its turn is no longer open.** The turn settles, Stop is pressed, or the
@@ -3996,8 +3998,7 @@ A disclosure in the shape the Prompt one already has — a `<button>` with
 `Process · N tool uses` with the same `N` as the row — the same counter, or `Process` alone when every
 child is text. It is drawn only when it has at least one child to draw (the next
 rule, and a pending card drawn under the row instead
-([below](#when-a-step-asks-the-user)), can leave it none) or unfiled children to mention
-([below](#what-is-not-filed)).
+([below](#when-a-step-asks-the-user)), can leave it none).
 
 **The report is not drawn twice.** A subagent's last message *is* its report,
 handed to the main agent as the call's result when the subagent ran inside its
@@ -4283,7 +4284,7 @@ the limit it always had, now visible as which Process the card lands in.
 `background`, which settles by its own notification as any backgrounded call
 does. Those are the model's rules
 ([tool-call-model.md](tool-call-model.md#a-subagents-own-conversation)), applied
-by the reducer
+by the server's projection and drawn by the client's transcript
 ([code/frontend-state.md](code/frontend-state.md#a-subagents-children)); the
 renderer infers nothing.
 
@@ -4291,21 +4292,12 @@ renderer infers nothing.
 
 - **Records of transcripts recorded before children were attributed** carry
   nothing to file them by, and stay where they are. They read exactly as before.
-- **A child whose call is not in the loaded transcript** — the page boundary fell
-  between a subagent call and its work, which the server only lets happen when
-  the call is more than a maximum page (500 records) back
-  ([agent-chat.md](agent-chat.md#history-paging)) — has no row to go under, and is drawn
-  flat where it arrived, as old transcripts are, rather than under a stand-in
-  row naming a call the client cannot show. When the page holding the call
-  loads, the flat children stay where they are, by the rule a fetch already
-  follows ([code/frontend-state.md](code/frontend-state.md#a-fetch-filed-under-the-call-it-reads)):
-  a row is never taken away from under the reader. The call's row still counts
-  them — `N` counts every loaded child with its id, filed or not, because a
-  count that silently shrank across a page boundary would understate the work —
-  and its Process ends with one muted line saying how many are further down,
-  where they loaded first. While any are flat, the subagent's later work goes
-  flat after them rather than being filed above words that came first — so the
-  flat ones are the newest, and the row's latest child is read from them.
+- **A child whose call is not in the history** — a fork cut the call off — has
+  no row to go under, and is drawn flat where it is, as old transcripts are,
+  rather than under a stand-in row naming a call the client cannot show. A page
+  boundary no longer does this: a subagent's work is nested in its call's item,
+  so it arrives on the call's page whatever page its records sat on
+  ([agent-chat.md](agent-chat.md#history-paging)).
 
 ## The remaining tool kinds
 
@@ -5518,7 +5510,7 @@ the virtualizer measures it.
     a muted glyph — nothing in the window red, even a failed step — and a
     counter only on the running one. None of its text
     or rows anywhere in the main transcript, as long as the spawning call is
-    loaded ([what is not filed](#what-is-not-filed)).
+    in the history ([what is not filed](#what-is-not-filed)).
 16. Two subagents spawned together: each row counts only its own tool uses,
     and each window has two lines; three or more siblings have one each.
     Let the upper one finish first: its line becomes `N tool uses · <report>`

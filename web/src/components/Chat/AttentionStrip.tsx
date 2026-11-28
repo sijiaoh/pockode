@@ -20,12 +20,7 @@ import {
 } from "react";
 import { describeChangeCount } from "../../hooks/useGitChangeCount";
 import { ACTIVITY_VIEW, watchingLabel } from "../../lib/activity";
-import {
-	hasProcess,
-	isLiveRun,
-	type UnfiledChildren,
-	unfiledChildren,
-} from "../../lib/subagentRun";
+import { hasProcess, isLiveRun } from "../../lib/subagentRun";
 import { toolRunLook } from "../../lib/toolRun";
 import { isTaskTool, SUBAGENT_TITLE, toolSummary } from "../../lib/toolSummary";
 import { backgroundTaskRuns } from "../../lib/turnOverview";
@@ -792,19 +787,17 @@ function TaskName({ run }: { run: ToolRun }) {
  */
 function BackgroundTaskItem({
 	run,
-	unfiled,
 	onJump,
 	onOpenTranscript,
 	jumpDisabled,
 }: {
 	run: ToolRun;
-	unfiled?: UnfiledChildren;
 	onJump?: (toolUseId: string) => void;
 	onOpenTranscript?: OpenSubagentTranscript;
 	jumpDisabled?: boolean;
 }) {
 	const toTranscript =
-		onOpenTranscript && isTaskTool(run.name) && hasProcess(run, unfiled);
+		onOpenTranscript && isTaskTool(run.name) && hasProcess(run);
 	const workDir = useWSStore((state) => state.workDir);
 	const summary = toolSummary(run.name, run.input, workDir);
 	// Starting with the visible words (WCAG 2.5.3), as an agents-list entry is
@@ -870,7 +863,6 @@ function BackgroundRow({
 	onOpenTranscript?: OpenSubagentTranscript;
 	jumpDisabled?: boolean;
 }) {
-	const unfiled = useMemo(() => unfiledChildren(messages ?? []), [messages]);
 	const [held, setHeld] = useState<ReadonlySet<string> | null>(null);
 	const expanded = held !== null;
 	const tasks = useMemo(
@@ -940,7 +932,6 @@ function BackgroundRow({
 								<BackgroundTaskItem
 									key={run.id}
 									run={run}
-									unfiled={unfiled.get(run.id)}
 									onJump={onJumpToCall}
 									onOpenTranscript={onOpenTranscript}
 									jumpDisabled={jumpDisabled}

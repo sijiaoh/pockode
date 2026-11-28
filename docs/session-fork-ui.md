@@ -744,17 +744,18 @@ Three things the UI needs. All have since landed on the backend; where what
 shipped differs from what this section asked for, the note below the code block
 says so, and the backend is the truth.
 
-**1. A stable anchor.** Message ids are client-generated UUIDs
-(`messageReducer`, `generateUUID`) that change on every reload, and one message
+**1. A stable anchor.** Message ids are the client's row keys, and one message
 is folded from *several* history records, so neither a message id nor a message
 index can name a cut point. Each history record needs a server-assigned,
-monotonic **`seq`**, reaching the client by all three routes a record can
-arrive on: the record in stored history, the live event notification, and —
-for the one message a sender is excluded from being told about, its own — the
-reply to `chat.message` (`rpc.MessageResult`). A message then carries
-`anchorSeq` — the `seq` of the last record folded into it — computed identically
-whichever route delivered it, so what a client can fork from does not depend on
-how it came to be looking at the message. The client quotes that number back
+monotonic **`seq`**, and the client is given the ones it needs by every route a
+message can reach it: the items of a page and of an update carry their first
+and last record's (`seq`, `last_seq`), and — for the one message a sender is
+excluded from being told about, its own — the reply to `chat.message`
+(`rpc.MessageResult`). A message then carries `anchorSeq` — the `seq` of the
+last record folded into it, read off its items
+([code/frontend-state.md](code/frontend-state.md#bubbles)) — the same whichever
+route delivered it, so what a client can fork from does not depend on how it
+came to be looking at the message. The client quotes that number back
 untouched; the server turns it into the record index `agent.TruncateHistory`
 takes as `keepThrough`, and it is the server that decides whether the anchor's
 own record is included (assistant) or stepped back past (user, per *The rule*).

@@ -144,33 +144,20 @@ func TestFileStore_DamagedHistory_KeepsSeqsUnique(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetHistory failed: %v", err)
 	}
-	page, err := PageHistory(records, NoHistorySeq, DefaultHistoryPageSize)
-	if err != nil {
-		t.Fatalf("PageHistory failed: %v", err)
-	}
-	stamped := page.Records
-
 	// Two readable records plus the warning.
-	if len(stamped) != 3 {
-		t.Fatalf("got %d records, want 3: %s", len(stamped), stamped)
+	if len(records) != 3 {
+		t.Fatalf("got %d records, want 3: %s", len(records), records)
 	}
 
 	var seqs []HistorySeq
-	for i, raw := range stamped {
-		var rec struct {
-			Type string     `json:"type"`
-			Seq  HistorySeq `json:"seq"`
-		}
-		if err := json.Unmarshal(raw, &rec); err != nil {
-			t.Fatalf("record %d does not parse: %v", i, err)
-		}
-		if rec.Seq.Valid() {
-			seqs = append(seqs, rec.Seq)
+	for _, seq := range HistorySeqs(records) {
+		if seq.Valid() {
+			seqs = append(seqs, seq)
 		}
 	}
 
 	if len(seqs) != 2 {
-		t.Fatalf("%d records are addressable, want the 2 real ones: %s", len(seqs), stamped)
+		t.Fatalf("%d records are addressable, want the 2 real ones: %s", len(seqs), records)
 	}
 	if seqs[0] == seqs[1] {
 		t.Errorf("two records share seq %d", seqs[0])

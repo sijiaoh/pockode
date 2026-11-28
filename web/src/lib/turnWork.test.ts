@@ -45,7 +45,7 @@ const message = (
 
 describe("turnWork", () => {
 	it("is nothing for a reply that made no call", () => {
-		expect(turnWork(message([text("1")]), false)).toBeUndefined();
+		expect(turnWork(message([text("1")]))).toBeUndefined();
 	});
 
 	it("counts every call made, once, whatever became of it", () => {
@@ -58,16 +58,12 @@ describe("turnWork", () => {
 				card("1"),
 				text("1"),
 			]),
-			false,
 		);
 		expect(work?.calls).toBe(3);
 	});
 
 	it("counts a subagent's flat steps as its call's", () => {
-		const work = turnWork(
-			message([call("1"), call("2", "success", "task-9")]),
-			false,
-		);
+		const work = turnWork(message([call("1"), call("2", "success", "task-9")]));
 		expect(work).toEqual({ calls: 1 });
 	});
 
@@ -77,29 +73,26 @@ describe("turnWork", () => {
 				openedAt: 0,
 				endedAt: 5000,
 			}),
-			false,
 		);
 		expect(work).toEqual({});
 	});
 
 	it("takes the span from the two stamped ends, from a second up", () => {
 		const at = (openedAt?: number, endedAt?: number) =>
-			turnWork(message([call("1")], { openedAt, endedAt }), false)?.durationMs;
+			turnWork(message([call("1")], { openedAt, endedAt }))?.durationMs;
 		expect(at(1_000, 134_000)).toBe(133_000);
 		expect(at(1_000, 1_999)).toBeUndefined();
 		expect(at(undefined, 134_000)).toBeUndefined();
 		expect(at(1_000, undefined)).toBeUndefined();
 	});
 
-	it("counts nothing a page above may hold the start of", () => {
+	it("counts nothing on a reply whose start is not loaded", () => {
 		const parts = [call("1"), call("2")];
-		expect(turnWork(message(parts, { endedAt: 9_000 }), true)).toEqual({});
-		// Opened here, by its message or by a read point: whole.
 		expect(
-			turnWork(message(parts, { openedAt: 1_000, endedAt: 9_000 }), true),
+			turnWork(message(parts, { startNotLoaded: true, endedAt: 9_000 })),
+		).toEqual({});
+		expect(
+			turnWork(message(parts, { openedAt: 1_000, endedAt: 9_000 })),
 		).toEqual({ calls: 2, durationMs: 8_000 });
-		expect(
-			turnWork(message(parts, { openedAtReadPoint: true }), true)?.calls,
-		).toBe(2);
 	});
 });
