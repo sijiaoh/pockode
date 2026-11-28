@@ -526,8 +526,8 @@ export type NormalizedEvent =
  * server too old to put one there. Absent means "not addressable", never
  * "position zero".
  *
- * Not absent for history written before seqs existed: replay stamps every
- * unaddressed record by position (session.stampHistorySeq).
+ * Not absent for history written before seqs were stored: replay numbers such
+ * a record by its position (session.HistorySeqs).
  */
 export function readHistorySeq(e: unknown): HistorySeq | undefined {
 	const seq = (e as Record<string, unknown> | undefined)?.seq;

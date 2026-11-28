@@ -308,11 +308,11 @@ func TestFileStore_History(t *testing.T) {
 		t.Fatalf("expected 2 records, got %d", len(history))
 	}
 
-	// Verify content (raw JSON)
-	if string(history[0]) != `{"content":"hello","type":"message"}` {
+	// Verify content (raw JSON): each record as it marshaled, behind its envelope
+	if string(history[0]) != `{"seq":1,"v":2,"content":"hello","type":"message"}` {
 		t.Errorf("unexpected record 0: %s", history[0])
 	}
-	if string(history[1]) != `{"content":"world","type":"text"}` {
+	if string(history[1]) != `{"seq":2,"v":2,"content":"world","type":"text"}` {
 		t.Errorf("unexpected record 1: %s", history[1])
 	}
 }
@@ -558,7 +558,7 @@ func TestFileStore_WriteHistoryKeepsOneRecordPerLine(t *testing.T) {
 	if len(got) != 2 {
 		t.Fatalf("read back %d records, want 2: %s", len(got), got)
 	}
-	if string(got[0]) != `{"type":"text","content":"line one"}` {
+	if string(got[0]) != `{"seq":1,"v":2,"type":"text","content":"line one"}` {
 		t.Errorf("first record = %s, want it compacted onto one line", got[0])
 	}
 }
@@ -584,7 +584,7 @@ func TestFileStore_WriteHistoryRejectsInvalidJSON(t *testing.T) {
 }
 
 // TestFileStore_AppendToHistoryNumbersRecords pins what a sequence number means:
-// the position of that record in the history GetHistory returns. A client is
+// the address of that record in the history GetHistory returns. A client is
 // given these numbers and quotes them back to name a record — a fork point, for
 // instance — so an off-by-one here is an off-by-one in every such reference.
 func TestFileStore_AppendToHistoryNumbersRecords(t *testing.T) {
@@ -629,13 +629,14 @@ func TestFileStore_AppendToHistoryNumbersRecords(t *testing.T) {
 		if !seq.Valid() {
 			t.Fatalf("record %d got no sequence number", i)
 		}
-		if seq.Index() >= len(records) {
-			t.Fatalf("seq %d points past the %d records read back", seq, len(records))
+		index, found := FindHistorySeq(records, seq)
+		if !found {
+			t.Fatalf("seq %d names none of the %d records read back", seq, len(records))
 		}
 		var rec struct {
 			Content string `json:"content"`
 		}
-		if err := json.Unmarshal(records[seq.Index()], &rec); err != nil {
+		if err := json.Unmarshal(records[index], &rec); err != nil {
 			t.Fatalf("record at seq %d does not parse: %v", seq, err)
 		}
 		if rec.Content != contents[i] {
@@ -650,13 +651,14 @@ func TestFileStore_AppendToHistoryNumbersRecords(t *testing.T) {
 // That is what lets a record type drop a field a record on disk still carries —
 // the legacy question_response record's `answers` map is the case this was
 // written for. The client still gets such a field verbatim because this
-// round-trips through a raw field map rather than through agent.DecodeRecord.
+// splices the seq onto the stored bytes rather than going through
+// agent.DecodeRecord.
 func TestStampHistorySeq_KeepsFieldsThisBuildHasNoNameFor(t *testing.T) {
 	legacy := json.RawMessage(
 		`{"type":"question_response","request_id":"q-1","answers":{"Which?":"React"}}`,
 	)
 
-	stamped := stampHistorySeq([]json.RawMessage{legacy}, 7)
+	stamped := stampHistorySeq([]json.RawMessage{legacy}, []HistorySeq{7})
 
 	var rec struct {
 		Seq     HistorySeq        `json:"seq"`
@@ -684,7 +686,7 @@ func TestStampHistorySeq(t *testing.T) {
 	stamped := stampHistorySeq([]json.RawMessage{
 		json.RawMessage(`{"type":"text","content":"one"}`),
 		json.RawMessage(`{}`),
-	}, 1)
+	}, []HistorySeq{1, 2})
 
 	if len(stamped) != 2 {
 		t.Fatalf("stamped %d records, want 2", len(stamped))

@@ -119,6 +119,18 @@ type AuthResult struct {
 	// So a client can store it unconditionally without tracking how it logged
 	// in.
 	SessionToken string `json:"session_token"`
+	// ServerInstance names the server process that answered, and is new every
+	// time the server starts. History seqs (session.HistorySeq) are not promised
+	// durable: a power loss can drop a tail of history a client already saw,
+	// and the server that starts again then hands the same seqs to different
+	// records. A power loss always comes with a restart, so a client that holds
+	// seqs from a connection whose ServerInstance differs from the current one
+	// must take a fresh snapshot rather than continue from them; an equal one
+	// means no restart came between. It is here rather than on each history
+	// reply because a connection never outlives the process that accepted it,
+	// so every seq a connection carries belongs to the instance its auth named.
+	// An opaque string; compare it, never parse it.
+	ServerInstance string `json:"server_instance"`
 }
 
 // The reasons an auth request is refused. Clients branch on these rather than

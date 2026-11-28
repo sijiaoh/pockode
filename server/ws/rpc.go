@@ -111,6 +111,9 @@ type RPCHandler struct {
 	cloudLink        *CloudLink
 	conns            *Connections
 	server           ServerControl
+	// instance is rpc.AuthResult.ServerInstance. Drawn per handler, and main
+	// builds exactly one per process, so it is new on every process start.
+	instance string
 }
 
 func NewRPCHandler(password string, passwordGuard *authguard.Guard, sessions SessionStore, version string, remoteURL func() string, previewTickets PreviewTickets, loginTickets LoginTickets, rawCapabilities RawCapabilities, devMode bool, commandStore *command.Store, worktreeManager *worktree.Manager, settingsStore *settings.Store, workStore work.Store, workOps *work.Operations, workEngine *work.Engine, agentRoleStore agentrole.Store, scheduleStore schedule.Store, scheduler *schedule.Scheduler, cliAuth *cliauth.Service, cliProfiles *cliprofile.Store, cliUpdate *cliupdate.Service, cloudLink *cloudlogin.Service, restarter *restart.Restarter, updater *Updater) *RPCHandler {
@@ -168,6 +171,7 @@ func NewRPCHandler(password string, passwordGuard *authguard.Guard, sessions Ses
 		passwordGuard:         passwordGuard,
 		sessions:              sessions,
 		version:               version,
+		instance:              uuid.NewString(),
 		remoteURL:             remoteURL,
 		remoteURLWatcher:      remoteURLWatcher,
 		previewTickets:        previewTickets,
@@ -990,6 +994,7 @@ func (h *rpcMethodHandler) handleAuth(ctx context.Context, conn *jsonrpc2.Conn, 
 	title := filepath.Base(h.worktreeManager.Registry().MainDir())
 	result := rpc.AuthResult{
 		Version:             h.version,
+		ServerInstance:      h.instance,
 		Title:               title,
 		WorkDir:             wt.WorkDir,
 		WorktreeName:        wt.Name,

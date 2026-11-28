@@ -895,6 +895,42 @@ func TestHandler_Auth_ReportsCurrentRemoteURL(t *testing.T) {
 	}
 }
 
+// A client tells that history seqs may have been reused by server_instance
+// changing (see rpc.AuthResult.ServerInstance): every connection to one server
+// process has to see the same value, and a server started afresh — a new
+// handler, since main builds one per process — a different one.
+func TestHandler_Auth_ReportsServerInstance(t *testing.T) {
+	authInstance := func(serverURL string) string {
+		t.Helper()
+		resp := callOnce(t, serverURL, "auth", rpc.AuthParams{Password: testPassword})
+		if resp.Error != nil {
+			t.Fatalf("auth failed: %v", resp.Error)
+		}
+		// Decoded by its wire name, as in TestHandler_Auth_ReportsSizeLimits.
+		var result struct {
+			ServerInstance string `json:"server_instance"`
+		}
+		if err := json.Unmarshal(resp.Result, &result); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		return result.ServerInstance
+	}
+
+	server := newAuthTestServer(t, testPassword, "", authsessiontest.New())
+	first := authInstance(server.URL)
+	if first == "" {
+		t.Fatal("server_instance is empty")
+	}
+	if again := authInstance(server.URL); again != first {
+		t.Errorf("server_instance on a second connection = %q, want the same %q", again, first)
+	}
+
+	restarted := newAuthTestServer(t, testPassword, "", authsessiontest.New())
+	if got := authInstance(restarted.URL); got == first {
+		t.Errorf("server_instance of a restarted server = %q, want it to differ from %q", got, first)
+	}
+}
+
 // A PWA cached on a phone before the rename still sends `token`, and must keep
 // working for the deprecation period.
 func TestHandler_Auth_AcceptsDeprecatedTokenParam(t *testing.T) {

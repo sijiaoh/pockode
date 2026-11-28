@@ -17,12 +17,13 @@ import (
 // therefore on the payload of one record we ever append — a reader smaller than
 // the writer would append history it then refuses to load back, and the loss
 // would surface much later, as "entries too large to load" on a session the
-// user reopens. Not equal to it but a megabyte past it: the record is the event
-// wrapped in its record's own JSON, so it is the larger of the two by an
-// envelope, and two equal ceilings would leave exactly that envelope of
-// payloads writable and unreadable. Not imported from there either — this
-// package sits under the agent layer, not beside it — so
-// agent.TestLineLimitsCoverHistory holds the two together instead.
+// user reopens. Not equal to it but a megabyte past it: the line is the event
+// wrapped in its record's own JSON and the history seq envelope, so it is the
+// larger of the two by that wrapping, and two equal ceilings would leave
+// exactly that wrapping's worth of payloads writable and unreadable. Not
+// imported from there either — this package sits under the agent layer, not
+// beside it — so agent.TestLineLimitsCoverHistory holds the two together
+// instead.
 //
 // The margin is free because this is a limit and not an allocation: ReadJSONL
 // assembles a line above a small read buffer (jsonlReadBuffer) rather than

@@ -275,4 +275,14 @@ func TestPageHistoryKeepsSynthesizedWarningUnaddressed(t *testing.T) {
 	if page.NextBeforeSeq != 3 {
 		t.Errorf("NextBeforeSeq = %d, want 3 (the oldest record of this page)", page.NextBeforeSeq)
 	}
+
+	// A page of one cannot hold the warning alone: it has no seq to hand out
+	// as the cursor for the page before it.
+	page, err = PageHistory(records, NoHistorySeq, 1)
+	if err != nil {
+		t.Fatalf("PageHistory failed: %v", err)
+	}
+	if got := seqsOf(t, page.Records); len(got) != 2 || got[0] != 3 || page.NextBeforeSeq != 3 {
+		t.Errorf("limit 1: seqs %v, next %d; want [3 0], next 3", got, page.NextBeforeSeq)
+	}
 }

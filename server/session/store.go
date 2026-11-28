@@ -61,14 +61,15 @@ type Store interface {
 
 	// History persistence
 	// AppendToHistory appends a record to history (does not update timestamp)
-	// and returns the record's sequence number: its 1-based position in the
-	// history GetHistory returns. Sending that number to clients is the only
-	// way they can name a record — see HistorySeq.
+	// and returns the sequence number it was stored under, one past the newest
+	// record's. Sending that number to clients is the only way they can name a
+	// record — see HistorySeq.
 	//
 	// After Delete, it and WriteHistory fail with ErrSessionNotFound and write
 	// nothing, the session's directory included.
 	AppendToHistory(ctx context.Context, sessionID string, record HistoryRecord) (HistorySeq, error)
-	// WriteHistory replaces a session's whole history with records.
+	// WriteHistory replaces a session's whole history with records, numbered
+	// from 1 whatever seqs they carried.
 	//
 	// For a session nothing is streaming to yet — a fork's copied history, written
 	// once rather than appended record by record. It does not coordinate with
@@ -125,30 +126,17 @@ type FileStore struct {
 	// ones — so a reader shares it without a lock and without a copy.
 	published atomic.Pointer[[]SessionMeta]
 
-	// historyMu guards historyLen and is held across the append itself, so two
-	// concurrent appends cannot take sequence numbers in one order and reach the
-	// file in the other — which would make a sequence number name the wrong
-	// record.
+	// histories holds each session's history state and lock (see
+	// sessionHistory); historiesMu guards only the map. Readers of history take
+	// neither — see GetHistory.
 	//
-	// It also guards deleted. Delete tombstones a session under it before
-	// removing the directory, so an append is either finished before the
-	// removal starts or sees the tombstone — never one that recreates the
-	// directory through AppendJSONL's MkdirAll. The removal itself runs after
-	// it is released: this lock is every session's, and a large directory
-	// would otherwise stall every session's appends.
-	//
-	// Lock order is writeMu then historyMu (Delete and insertLocked take both).
-	// Never take writeMu while holding this one.
-	historyMu  sync.Mutex
-	historyLen map[string]int // sessionID -> records written so far
-	// deleted holds the sessions this process deleted, so a late write to one —
-	// an expiry recorded while its process is torn down — fails with
-	// ErrSessionNotFound instead of leaving an orphan directory nothing lists.
-	// A tombstone rather than a lookup in sessions: that would mean taking writeMu on
-	// every streamed record, behind each index write. It lasts until the same
-	// id is created again (a work restarts its deleted session under its own
-	// id); sessions deleted by an earlier run have no process left to write.
-	deleted map[string]struct{}
+	// Lock order is writeMu then a session's sessionHistory.fileMu (Delete and
+	// insertLocked take both). Never take writeMu while holding the latter.
+	historiesMu sync.Mutex
+	histories   map[string]*sessionHistory
+	// countHistory finds the newest seq already in a session's history the
+	// first time it is appended to; a test holds a count in flight through it.
+	countHistory func(sessionID string) (HistorySeq, error)
 
 	// dirty says the index in memory has changes the file does not; flushTimer
 	// is what will write them. Both guarded by writeMu — see persistLocked.
@@ -172,11 +160,11 @@ func NewFileStore(dataDir string) (*FileStore, error) {
 
 	store := &FileStore{
 		dataDir:    dataDir,
-		historyLen: make(map[string]int),
-		deleted:    make(map[string]struct{}),
+		histories:  make(map[string]*sessionHistory),
 		flushDelay: recoverableFlushDelay,
 		writeIndex: filestore.WriteFileAtomic,
 	}
+	store.countHistory = store.countHistoryOnDisk
 
 	idx, err := store.readIndexFromDisk()
 	if err != nil {
@@ -515,9 +503,10 @@ func (s *FileStore) insertLocked(session SessionMeta) error {
 	// write from the deleted one refused; and before it is published, since
 	// nothing but such a write can reach the id until then — a reader that
 	// gets the session must be able to write to it.
-	s.historyMu.Lock()
-	delete(s.deleted, session.ID)
-	s.historyMu.Unlock()
+	h := s.historyState(session.ID)
+	h.fileMu.Lock()
+	h.deleted = false
+	h.fileMu.Unlock()
 
 	s.publishLocked(s.sessions)
 	s.notifyChange(SessionChangeEvent{Op: OperationCreate, Session: session})
@@ -685,16 +674,19 @@ func (s *FileStore) Delete(ctx context.Context, sessionID string) error {
 }
 
 // removeSessionDirs tombstones the sessions, then removes their directories
-// (see historyMu for why in that order, and why the removal is outside it). A
-// session whose removal fails stays tombstoned, so it takes no further writes
-// into a directory that may already be half gone.
+// (see sessionHistory for why in that order). The removal runs after each
+// session's lock is released, so a large directory does not hold up a late
+// writer that only needs to be refused. A session whose removal fails stays
+// tombstoned, so it takes no further writes into a directory that may already
+// be half gone.
 func (s *FileStore) removeSessionDirs(ids []string) error {
-	s.historyMu.Lock()
 	for _, id := range ids {
-		s.deleted[id] = struct{}{}
-		delete(s.historyLen, id)
+		h := s.historyState(id)
+		h.fileMu.Lock()
+		h.deleted = true
+		h.counted = false
+		h.fileMu.Unlock()
 	}
-	s.historyMu.Unlock()
 
 	for _, id := range ids {
 		if err := os.RemoveAll(filepath.Join(s.dataDir, "sessions", id)); err != nil {
@@ -927,9 +919,10 @@ func (s *FileStore) GetHistory(ctx context.Context, sessionID string) ([]json.Ra
 	}
 
 	// No lock: history lives in an independent per-session file reached via an
-	// immutable path, and AppendToHistory writes it lock-free. Taking s.writeMu here
-	// would only block metadata writers for the whole (potentially large) scan
-	// without protecting anything.
+	// immutable path, and appends reach it in one write each (filestore.AppendJSONL)
+	// while whole-file writes rename into place, so a reader never sees half of
+	// either. Taking a lock here would only hold up writers for the whole
+	// (potentially large) scan without protecting anything.
 	return readHistory(s.dataDir, sessionID)
 }
 
@@ -957,10 +950,9 @@ func readHistory(dataDir, sessionID string) ([]json.RawMessage, error) {
 // not silently see a shorter history than what actually happened.
 //
 // It carries seq 0 because it is not in the file: nothing can be resolved back to
-// it, and leaving it to be numbered by position would hand out an address that the
-// next real append also gets — the client would then name a record it never saw.
-// Stamping leaves an existing seq alone, and this record is only ever appended
-// last, so the records before it keep their positions.
+// it, and leaving it to be numbered after the record before it would hand out
+// the seq the next real append also gets — the client would then name a record
+// it never saw. HistorySeqs gives a record carrying 0 no number.
 func historyWarning(stats filestore.JSONLStats) json.RawMessage {
 	var parts []string
 	if stats.Corrupted > 0 {
@@ -997,75 +989,94 @@ func (s *FileStore) AppendToHistory(ctx context.Context, sessionID string, recor
 		return NoHistorySeq, err
 	}
 
-	s.historyMu.Lock()
-	defer s.historyMu.Unlock()
-
-	if err := s.checkNotDeletedLocked(sessionID); err != nil {
-		return NoHistorySeq, err
-	}
-
-	written, err := s.historyLenLocked(sessionID)
+	body, err := record.MarshalJSON()
 	if err != nil {
+		return NoHistorySeq, fmt.Errorf("marshal history record: %w", err)
+	}
+
+	h := s.historyState(sessionID)
+	h.fileMu.Lock()
+	defer h.fileMu.Unlock()
+
+	if err := h.checkNotDeletedLocked(sessionID); err != nil {
 		return NoHistorySeq, err
 	}
 
-	if err := filestore.AppendJSONL(s.historyPath(sessionID), record); err != nil {
+	if !h.counted {
+		last, err := s.countHistory(sessionID)
+		if err != nil {
+			return NoHistorySeq, err
+		}
+		h.lastSeq, h.counted = last, true
+	}
+
+	// Taken under the lock and written before it is released, so seqs reach the
+	// file in the order they were handed out.
+	seq := h.lastSeq + 1
+	line, err := encodeHistoryLine(body, seq)
+	if err != nil {
+		return NoHistorySeq, fmt.Errorf("encode history record: %w", err)
+	}
+	if err := filestore.AppendJSONL(s.historyPath(sessionID), json.RawMessage(line)); err != nil {
+		// The line may have reached the file anyway (a failed close), and
+		// handing its seq out again would store a duplicate, which renumbers
+		// every later record (HistorySeqs). The next append asks the file.
+		h.counted = false
 		return NoHistorySeq, err
 	}
 
-	s.historyLen[sessionID] = written + 1
-	return HistorySeq(written + 1), nil
+	h.lastSeq = seq
+	return seq, nil
 }
 
-// checkNotDeletedLocked refuses a write to a session this store deleted.
-// Caller must hold historyMu.
-func (s *FileStore) checkNotDeletedLocked(sessionID string) error {
-	if _, gone := s.deleted[sessionID]; gone {
-		return fmt.Errorf("%w: %s was deleted", ErrSessionNotFound, sessionID)
-	}
-	return nil
-}
-
-// historyLenLocked returns how many records the session's history holds,
-// counting them off disk the first time it is asked. Caller must hold historyMu.
+// countHistoryOnDisk returns the seq of the newest record in the session's
+// history, which the next append's seq follows.
 //
-// It counts what GetHistory returns rather than lines in the file, so a record a
-// crash damaged — which GetHistory skips — does not shift every later sequence
-// number by one against the history the client was given. The count is seeded
-// once because only this process appends to it afterwards.
-func (s *FileStore) historyLenLocked(sessionID string) (int, error) {
-	if written, ok := s.historyLen[sessionID]; ok {
-		return written, nil
-	}
-
+// It numbers what GetHistory returns rather than lines in the file, so a record
+// a crash damaged — which GetHistory skips — does not shift every later sequence
+// number by one against the history the client was given. It is asked once per
+// session because only this process appends to the file afterwards.
+func (s *FileStore) countHistoryOnDisk(sessionID string) (HistorySeq, error) {
 	records, _, err := filestore.ReadJSONL(s.historyPath(sessionID), filestore.DefaultMaxLineBytes)
 	if err != nil {
-		return 0, err
+		return NoHistorySeq, err
 	}
-	s.historyLen[sessionID] = len(records)
-	return len(records), nil
+	return lastHistorySeq(HistorySeqs(records)), nil
 }
 
+// WriteHistory writes records as the session's whole history, numbered from 1
+// in the order given — whatever seqs they carried before. Its one caller is a
+// fork, whose copy is not a prefix of the source (agent.TruncateHistory drops
+// what the cut left dangling), so the source's seqs would leave gaps the new
+// session never had.
 func (s *FileStore) WriteHistory(ctx context.Context, sessionID string, records []json.RawMessage) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
 
 	var buf bytes.Buffer
+	var compact bytes.Buffer
 	for i, record := range records {
 		// Compacted rather than copied through: one record per line is the file
 		// format, and a record carrying a newline would silently become two lines
 		// neither of which parses.
-		if err := json.Compact(&buf, record); err != nil {
+		compact.Reset()
+		if err := json.Compact(&compact, record); err != nil {
 			return fmt.Errorf("history record %d is not valid JSON: %w", i, err)
 		}
+		line, err := encodeHistoryLine(compact.Bytes(), HistorySeq(i+1))
+		if err != nil {
+			return fmt.Errorf("history record %d: %w", i, err)
+		}
+		buf.Write(line)
 		buf.WriteByte('\n')
 	}
 
-	s.historyMu.Lock()
-	defer s.historyMu.Unlock()
+	h := s.historyState(sessionID)
+	h.fileMu.Lock()
+	defer h.fileMu.Unlock()
 
-	if err := s.checkNotDeletedLocked(sessionID); err != nil {
+	if err := h.checkNotDeletedLocked(sessionID); err != nil {
 		return err
 	}
 
@@ -1073,7 +1084,7 @@ func (s *FileStore) WriteHistory(ctx context.Context, sessionID string, records 
 		return err
 	}
 
-	s.historyLen[sessionID] = len(records)
+	h.lastSeq, h.counted = HistorySeq(len(records)), true
 	return nil
 }
 

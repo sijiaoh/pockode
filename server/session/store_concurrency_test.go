@@ -36,7 +36,7 @@ func holdNextIndexWrite(t *testing.T, store *FileStore) (entered <-chan struct{}
 }
 
 // readWithin runs read on another goroutine and fails the test if it has not
-// returned within a generous bound — a reader stuck behind a write.
+// returned within a generous bound — a call stuck behind a write it does not need.
 func readWithin(t *testing.T, read func()) {
 	t.Helper()
 	done := make(chan struct{})
@@ -47,7 +47,7 @@ func readWithin(t *testing.T, read func()) {
 	select {
 	case <-done:
 	case <-time.After(5 * time.Second):
-		t.Fatal("a reader waited for the index write to finish")
+		t.Fatal("waited for a write held on something else to finish")
 	}
 }
 
@@ -242,5 +242,59 @@ func mustSucceed(t *testing.T, err error) {
 	t.Helper()
 	if err != nil {
 		t.Error(err)
+	}
+}
+
+// Counting a session's history is the slow part of its first append, and it
+// holds only that session: appends to another one go on while it runs.
+func TestFileStore_FirstCountHoldsOnlyItsOwnSession(t *testing.T) {
+	store := reopen(t, t.TempDir())
+	for _, id := range []string{"big", "busy"} {
+		if _, err := store.Create(ctx, id, CreateSpec{}); err != nil {
+			t.Fatalf("Create failed: %v", err)
+		}
+	}
+
+	entered := make(chan struct{})
+	gate := make(chan struct{})
+	release := sync.OnceFunc(func() { close(gate) })
+	count := store.countHistory
+	store.countHistory = func(sessionID string) (HistorySeq, error) {
+		if sessionID == "big" {
+			close(entered)
+			<-gate
+		}
+		return count(sessionID)
+	}
+
+	appended := make(chan HistorySeq, 1)
+	finished := make(chan struct{})
+	// Released and waited for even when the test fails early, so the held
+	// append does not write into a temp dir that is being removed.
+	t.Cleanup(func() {
+		release()
+		<-finished
+	})
+	go func() {
+		defer close(finished)
+		seq, err := store.AppendToHistory(ctx, "big", testRecord{"type": "first"})
+		mustSucceed(t, err)
+		appended <- seq
+	}()
+	<-entered
+
+	readWithin(t, func() {
+		for want := HistorySeq(1); want <= 3; want++ {
+			seq, err := store.AppendToHistory(ctx, "busy", testRecord{"type": "streamed"})
+			mustSucceed(t, err)
+			if seq != want {
+				t.Errorf("busy seq = %d, want %d", seq, want)
+			}
+		}
+	})
+
+	release()
+	if seq := <-appended; seq != 1 {
+		t.Errorf("big seq = %d, want 1", seq)
 	}
 }
