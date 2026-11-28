@@ -52,6 +52,7 @@ import {
 import type {
 	AssistantMessage,
 	ChatMessagesSubscribeResult,
+	ChatNotification,
 	HistorySeq,
 	Message,
 	PermissionResponseParams,
@@ -545,8 +546,22 @@ export function useChatMessages({
 		if (id) setOpenedThoughtIds((prev) => new Set(prev).add(id));
 	}, [messages]);
 
+	// Set once the subscription below exists; the notification handler is
+	// declared before it.
+	const resubscribeRef = useRef<() => Promise<void>>(async () => {});
+
 	const handleNotification = useCallback(
-		(notification: ServerNotification) => {
+		(chatNotification: ChatNotification) => {
+			// The server dropped a record for this subscription and will send
+			// nothing more on it. What arrived so far is a gap-free prefix, but the
+			// hole may hold anything — the `done` of a turn still drawn as running —
+			// so the transcript is rebuilt exactly as after a reconnect: a fresh
+			// subscription, whose snapshot replaces it wholesale.
+			if (chatNotification.type === "resync") {
+				void resubscribeRef.current();
+				return;
+			}
+			const notification: ServerNotification = chatNotification;
 			const seq = readHistorySeq(notification);
 			const event = normalizeEvent(notification);
 			// The thinking's own record ends it, and so does anything the main
@@ -670,7 +685,7 @@ export function useChatMessages({
 	// to resolve" and "waiting for its history" a single continuous wait for
 	// callers timing a loading indicator against it.
 	const subscribe = useCallback(
-		(onNotification: (notification: ServerNotification) => void) =>
+		(onNotification: (notification: ChatNotification) => void) =>
 			chatMessagesSubscribe(sessionId, onNotification),
 		[sessionId],
 	);
@@ -745,22 +760,21 @@ export function useChatMessages({
 		setIsLoadingHistory(false);
 	}, []);
 
-	useSubscription<ServerNotification, ChatMessagesSubscribeResult>(
-		subscribe,
-		chatMessagesUnsubscribe,
-		handleNotification,
-		{
-			enabled: enabled && !isView,
-			// A session belongs to its worktree, so switching does end this
-			// subscription server-side — but it ends the session with it, and
-			// `enabled` has already gone false by then. Resubscribing on switch
-			// would only ask the new worktree about a session id it has never heard
-			// of. See useSessionDetailSubscription, which is gated the same way.
-			resubscribeOnWorktreeChange: false,
-			onSubscribed: handleSubscribed,
-			onError: handleSubscribeError,
-		},
-	);
+	const { refresh: resubscribe } = useSubscription<
+		ChatNotification,
+		ChatMessagesSubscribeResult
+	>(subscribe, chatMessagesUnsubscribe, handleNotification, {
+		enabled: enabled && !isView,
+		// A session belongs to its worktree, so switching does end this
+		// subscription server-side — but it ends the session with it, and
+		// `enabled` has already gone false by then. Resubscribing on switch
+		// would only ask the new worktree about a session id it has never heard
+		// of. See useSessionDetailSubscription, which is gated the same way.
+		resubscribeOnWorktreeChange: false,
+		onSubscribed: handleSubscribed,
+		onError: handleSubscribeError,
+	});
+	resubscribeRef.current = resubscribe;
 
 	// The viewed transcript's newest page, installed the way a subscription's
 	// snapshot is. `turn` is idle rather than the session's own: see `turn`
