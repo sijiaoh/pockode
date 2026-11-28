@@ -47,7 +47,7 @@ func TestManager_SeedsThePlanFromHistory(t *testing.T) {
 		agent.PlanEvent{ToolUseID: "toolu_1", Steps: steps}.ToRecord(),
 		agent.TextEvent{Content: "done"}.ToRecord(),
 	} {
-		if _, err := store.AppendToHistory(context.Background(), "sess-1", record); err != nil {
+		if _, err := store.AppendToHistory(context.Background(), "sess-1", record, session.HistoryTurn{}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -101,7 +101,7 @@ func TestManager_PlanSeedWaitsForThePreviousProcess(t *testing.T) {
 
 	// The previous process's last plan, written as it drains.
 	steps := []agent.PlanStep{{ID: "1", Text: "A", Status: agent.PlanStepCompleted}}
-	if _, err := store.AppendToHistory(context.Background(), "sess-1", agent.PlanEvent{ToolUseID: "toolu_1", Steps: steps}.ToRecord()); err != nil {
+	if _, err := store.AppendToHistory(context.Background(), "sess-1", agent.PlanEvent{ToolUseID: "toolu_1", Steps: steps}.ToRecord(), session.HistoryTurn{}); err != nil {
 		t.Fatal(err)
 	}
 	close(gate)
@@ -179,7 +179,7 @@ func TestManager_PlanSeedGivesUpOnASlowPreviousProcess(t *testing.T) {
 		return !running
 	})
 	steps := []agent.PlanStep{{ID: "1", Text: "A", Status: agent.PlanStepPending}}
-	if _, err := store.AppendToHistory(context.Background(), "sess-1", agent.PlanEvent{ToolUseID: "toolu_1", Steps: steps}.ToRecord()); err != nil {
+	if _, err := store.AppendToHistory(context.Background(), "sess-1", agent.PlanEvent{ToolUseID: "toolu_1", Steps: steps}.ToRecord(), session.HistoryTurn{}); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err := m.GetOrCreateProcess(context.Background(), meta); err != nil {

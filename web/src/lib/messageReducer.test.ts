@@ -2907,6 +2907,32 @@ describe("messageReducer", () => {
 		});
 	});
 
+	// The server records each turn's opening for its own reading of history. The
+	// transcript does not read it yet, and it must not fall back to `raw`.
+	describe("turn_started", () => {
+		it("does not open a bubble of its own or move the anchor", () => {
+			const messages = replayHistory([
+				{ type: "message", content: "Go", message_id: "m1", seq: 1 },
+				{
+					type: "turn_started",
+					turn_id: "t1",
+					origin: "prompt",
+					message_id: "m1",
+					seq: 2,
+				},
+				{ type: "text", content: "Done.", seq: 3 },
+				{ type: "done", seq: 4 },
+			]);
+
+			expect(messages).toHaveLength(2);
+			const assistant = messages[1] as AssistantMessage;
+			expect(assistant.parts).toEqual([
+				{ id: expect.any(String), type: "text", content: "Done." },
+			]);
+			expect(assistant.anchorSeq).toBe(4);
+		});
+	});
+
 	// The address a fork cuts at. It has to come from the server, and it has to
 	// land on the message the user is looking at — a seq on the wrong message
 	// cuts the transcript in the wrong place, silently.

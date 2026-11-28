@@ -27,20 +27,21 @@ func TestProcess_StoredAndBroadcastRecordsCarryTheSameObservedAt(t *testing.T) {
 
 	before := time.Now()
 	sess.emit(t, agent.ToolCallEvent{ToolUseID: "call-1", ToolName: "Bash", ToolInput: json.RawMessage(`{}`)})
-	waitForHistory(t, store, "sess-1", 1)
+	// The call opens a turn nothing prompted, whose turn_started goes first.
+	waitForHistory(t, store, "sess-1", 2)
 	after := time.Now()
 
 	records, err := store.GetHistory(context.Background(), "sess-1")
 	if err != nil {
 		t.Fatal(err)
 	}
-	decoded, err := agent.DecodeRecord(records[0])
+	decoded, err := agent.DecodeRecord(records[1])
 	if err != nil {
 		t.Fatal(err)
 	}
 	stored, ok := decoded.(agent.ToolCallRecord)
 	if !ok {
-		t.Fatalf("records[0] = %T, want a tool call", decoded)
+		t.Fatalf("records[1] = %T, want a tool call", decoded)
 	}
 	if stored.ObservedAt == nil || stored.ObservedAt.Before(before) || stored.ObservedAt.After(after) {
 		t.Fatalf("stored observed_at = %v, want between %v and %v", stored.ObservedAt, before, after)

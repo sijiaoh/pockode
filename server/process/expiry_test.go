@@ -1,10 +1,12 @@
 package process
 
 import (
+	"context"
 	"errors"
 	"slices"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/pockode/server/agent"
 	"github.com/pockode/server/session"
@@ -204,5 +206,54 @@ func TestExpiry_IsAnnouncedAfterTheEventThatCausedIt(t *testing.T) {
 	}
 	if seqs[0] >= seqs[1] {
 		t.Errorf("sequence numbers went backwards: %v", seqs)
+	}
+}
+
+// expiryTurns returns the turn each request_cancelled record in history is
+// tagged with, by request id.
+func expiryTurns(t *testing.T, store session.Store, sessionID string) map[string]session.HistoryTurn {
+	t.Helper()
+	raws, err := store.GetHistory(context.Background(), sessionID)
+	if err != nil {
+		t.Fatalf("GetHistory: %v", err)
+	}
+	turns := make(map[string]session.HistoryTurn)
+	for _, raw := range raws {
+		rec, err := agent.DecodeRecord(raw)
+		if err != nil {
+			t.Fatalf("DecodeRecord: %v", err)
+		}
+		if cancelled, ok := rec.(agent.RequestCancelledRecord); ok {
+			turns[cancelled.RequestID] = session.HistoryTurnOf(raw)
+		}
+	}
+	return turns
+}
+
+// An expiry is written after whatever caused it, and belongs to a turn only if
+// the turn its prompt waited in is still open: not after the turn's ending,
+// and not when a new turn's prompt overtook a prompt raised after the last one
+// ended.
+func TestExpiry_BelongsToNoTurnOnceItsTurnIsOver(t *testing.T) {
+	_, mock, store, proc := startedTurn(t, leaseTestBudgets)
+	sess := mock.session(t, "sess-1")
+
+	// Raised in the turn, expired by its ending.
+	sess.emit(t, agent.PermissionRequestEvent{RequestID: "in-turn", ToolName: "Bash"})
+	sess.emit(t, agent.DoneEvent{})
+	waitUntil(t, "the turn to end", func() bool { return !proc.turnState().Open })
+
+	// Raised after the turn, expired by the prompt that opens the next.
+	sess.emit(t, agent.PermissionRequestEvent{RequestID: "after-turn", ToolName: "Bash"})
+	waitUntil(t, "the late prompt", func() bool { return proc.turnState().AwaitingAnswerTo("after-turn") })
+	if _, err := proc.SendMessage(agent.Prompt{Text: "next"}, time.Now()); err != nil {
+		t.Fatalf("SendMessage: %v", err)
+	}
+
+	waitUntil(t, "both expiries", func() bool { return len(expiryTurns(t, store, "sess-1")) == 2 })
+	for id, turn := range expiryTurns(t, store, "sess-1") {
+		if turn != session.NoTurn {
+			t.Errorf("expiry of %s is in %+v, want no turn", id, turn)
+		}
 	}
 }

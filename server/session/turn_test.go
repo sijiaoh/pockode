@@ -694,3 +694,174 @@ func TestReduceTurnOpenedAtSpansTheTurn(t *testing.T) {
 		t.Fatalf("OpenedAt = %v, want %v", got.OpenedAt, at(5))
 	}
 }
+
+// A turn's id is the one the input that opened it was given, and it holds for
+// the whole turn: a prompt joining it, an answer resuming it and the ending all
+// happen in the same turn, whatever ids they arrived with. The ending reports
+// the turn it ended — the state, cleared by then, cannot.
+func TestReduceTurnKeepsTheOpeningInputsTurnID(t *testing.T) {
+	opened := ReduceTurn(TurnState{}, TurnInput{Signal: SignalPrompt, TurnID: "t1", At: at(0)})
+	if !opened.Started || opened.Turn != "t1" || opened.State.TurnID != "t1" {
+		t.Fatalf("opening = started %v, turn %q, state %q; want t1 opened", opened.Started, opened.Turn, opened.State.TurnID)
+	}
+
+	state := opened.State
+	for _, next := range []TurnInput{
+		{Signal: SignalPrompt, TurnID: "t2", At: at(1)},
+		{Signal: SignalPermissionRaised, RequestID: "r1", TurnID: "t3", At: at(2)},
+		{Signal: SignalAnswered, RequestID: "r1", TurnID: "t4", At: at(3)},
+		{Signal: SignalOutput, TurnID: "t5", At: at(4)},
+	} {
+		transition := ReduceTurn(state, next)
+		if transition.Turn != "t1" || transition.State.TurnID != "t1" {
+			t.Errorf("%s: turn %q, state %q; want it to stay in t1", next.Signal, transition.Turn, transition.State.TurnID)
+		}
+		state = transition.State
+	}
+
+	ended := ReduceTurn(state, TurnInput{Signal: SignalDone, TurnID: "t6", At: at(5)})
+	if !ended.Ended || ended.Turn != "t1" {
+		t.Errorf("ending = ended %v, turn %q; want t1 ended", ended.Ended, ended.Turn)
+	}
+	if ended.State.TurnID != "" {
+		t.Errorf("state after the ending holds turn %q, want none open", ended.State.TurnID)
+	}
+
+	// Claude writes a second interrupted for one Stop: it ends nothing, so it
+	// happened in no turn.
+	again := ReduceTurn(ended.State, TurnInput{Signal: SignalDone, TurnID: "t7", At: at(6)})
+	if again.Ended || again.Turn != "" {
+		t.Errorf("repeated ending = ended %v, turn %q; want no turn", again.Ended, again.Turn)
+	}
+}
+
+// Every way a turn can begin takes the input's id, and a new turn gets a new
+// one: an id is never carried over from the turn before.
+func TestReduceTurnEachWayInGivesTheTurnItsInputsID(t *testing.T) {
+	afterTurn := drive(TurnState{},
+		TurnInput{Signal: SignalPrompt, TurnID: "first", At: at(0)},
+		inReq(SignalPermissionRaised, "r1", 1),
+		in(SignalDone, 2),
+	)
+	for _, opening := range []TurnInput{
+		{Signal: SignalPrompt, TurnID: "next", At: at(3)},
+		{Signal: SignalOutput, TurnID: "next", At: at(3)},
+		{Signal: SignalAnswered, RequestID: "r1", TurnID: "next", At: at(3)},
+	} {
+		transition := ReduceTurn(afterTurn, opening)
+		if !transition.Started || transition.Turn != "next" || transition.State.TurnID != "next" {
+			t.Errorf("%s: started %v, turn %q; want turn next opened", opening.Signal, transition.Started, transition.Turn)
+		}
+	}
+	if noise := ReduceTurn(afterTurn, TurnInput{Signal: SignalNoise, TurnID: "next", At: at(3)}); noise.Turn != "" {
+		t.Errorf("noise after a turn is in turn %q, want none", noise.Turn)
+	}
+}
+
+// A straggler — content Codex reports after the turn it belongs to ended —
+// happened in that turn: the one that ended last, even once a newer one is
+// open, and in none once the process that could still report it is gone.
+// Unflagged output after an ending is Claude's way in and opens a turn.
+func TestReduceTurnAStragglerHappenedInTheTurnThatEndedLast(t *testing.T) {
+	straggler := TurnInput{Signal: SignalNoise, AfterTurn: true, At: at(9)}
+
+	ended := drive(TurnState{},
+		TurnInput{Signal: SignalPrompt, TurnID: "t1", At: at(0)},
+		in(SignalInterrupted, 1),
+	)
+	if got := ReduceTurn(ended, straggler); got.Turn != "t1" || got.Started || got.Changed {
+		t.Errorf("straggler after t1 = turn %q, started %v, changed %v; want t1, moving nothing", got.Turn, got.Started, got.Changed)
+	}
+	if got := ReduceTurn(ended, in(SignalNoise, 2)); got.Turn != "" {
+		t.Errorf("unflagged noise after t1 is in turn %q, want none", got.Turn)
+	}
+	if got := ReduceTurn(ended, TurnInput{Signal: SignalOutput, TurnID: "claude", At: at(2)}); !got.Started || got.Turn != "claude" {
+		t.Errorf("unflagged output after t1 = started %v, turn %q; want turn claude opened", got.Started, got.Turn)
+	}
+
+	// The stop's leftovers land after the next prompt has opened t2.
+	next := drive(ended, TurnInput{Signal: SignalPrompt, TurnID: "t2", At: at(2)})
+	if got := ReduceTurn(next, straggler); got.Turn != "t1" || got.State.TurnID != "t2" {
+		t.Errorf("straggler while t2 is open = turn %q, open %q; want t1, with t2 still open", got.Turn, got.State.TurnID)
+	}
+	if got := ReduceTurn(next, in(SignalNoise, 3)); got.Turn != "t2" {
+		t.Errorf("unflagged noise while t2 is open is in turn %q, want t2", got.Turn)
+	}
+
+	after2 := drive(next, in(SignalDone, 3))
+	if got := ReduceTurn(after2, straggler); got.Turn != "t2" {
+		t.Errorf("straggler after t2 is in turn %q, want t2", got.Turn)
+	}
+
+	for _, gone := range []TurnSignal{SignalProcessEnded, SignalProcessStarted} {
+		// Forgetting the ended turn is not a turn change: nothing the session
+		// is doing moved.
+		cleared := ReduceTurn(after2, in(gone, 4))
+		if cleared.Changed {
+			t.Errorf("%s on an idle session reports a change", gone)
+		}
+		if got := ReduceTurn(cleared.State, straggler); got.Turn != "" {
+			t.Errorf("straggler after %s is in turn %q, want none", gone, got.Turn)
+		}
+	}
+	if got := ReduceTurn(TurnState{}, straggler); got.Turn != "" {
+		t.Errorf("straggler before any turn ended is in turn %q, want none", got.Turn)
+	}
+}
+
+// A tool result answers a call the model made, so it continues a turn and never
+// opens one. Claude's Stop is the shape that needs this: the interrupt's
+// acknowledgement ends the turn, the CLI then refuses each call still in flight,
+// and its aborted result is a second ending. The refusals belong to the
+// interrupted turn, and the second ending to none — no turn in between.
+func TestReduceTurnAToolResultNeverOpensATurn(t *testing.T) {
+	ended := drive(TurnState{},
+		TurnInput{Signal: SignalPrompt, TurnID: "t1", At: at(0)},
+		in(SignalInterrupted, 1),
+	)
+	refusal := TurnInput{Signal: SignalToolResult, TurnID: "phantom", At: at(2)}
+	got := ReduceTurn(ended, refusal)
+	if got.Started || got.State.Open || got.Turn != "t1" || got.Changed {
+		t.Errorf("refusal after t1 = started %v, open %v, turn %q, changed %v; want t1, moving nothing",
+			got.Started, got.State.Open, got.Turn, got.Changed)
+	}
+	again := ReduceTurn(got.State, refusal)
+	if again.Turn != "t1" {
+		t.Errorf("second refusal is in turn %q, want t1", again.Turn)
+	}
+	if dup := ReduceTurn(again.State, in(SignalInterrupted, 3)); dup.Ended || dup.Turn != "" {
+		t.Errorf("second interrupted = ended %v, turn %q; want the no-turn duplicate", dup.Ended, dup.Turn)
+	}
+
+	if got := ReduceTurn(TurnState{}, refusal); got.Started || got.Turn != "" {
+		t.Errorf("result before any turn = started %v, turn %q; want nothing", got.Started, got.Turn)
+	}
+
+	// Inside a turn it is output: it ends a background wait, and is the open
+	// turn's even when an earlier one ended in this process.
+	parked := drive(ended,
+		TurnInput{Signal: SignalPrompt, TurnID: "t2", At: at(4)},
+		in(SignalBackgroundParked, 5),
+	)
+	resumed := ReduceTurn(parked, refusal)
+	if resumed.Turn != "t2" || resumed.State.Phase != PhaseRunning {
+		t.Errorf("result while t2 is parked = turn %q, phase %q; want t2, running", resumed.Turn, resumed.State.Phase)
+	}
+}
+
+func TestEndsTurnIsWhatReduceTurnEndsOn(t *testing.T) {
+	all := []TurnSignal{
+		SignalProcessStarted, SignalPrompt, SignalOutput, SignalToolResult,
+		SignalNoise, SignalPermissionRaised, SignalBackgroundParked,
+		SignalRequestCancelled, SignalAnswered, SignalDone, SignalFailed,
+		SignalAuthFailed, SignalInterrupted, SignalQuestionPosted,
+		SignalQuestionResolved, SignalMessageDiscarded, SignalProcessEnded,
+	}
+	open := drive(NewTurnState(at(0)), in(SignalPrompt, 1))
+	for _, sig := range all {
+		ended := ReduceTurn(open, inReq(sig, "r1", 2)).Ended
+		if ended != sig.EndsTurn() {
+			t.Errorf("%s: ReduceTurn ends an open turn = %v, EndsTurn = %v", sig, ended, sig.EndsTurn())
+		}
+	}
+}

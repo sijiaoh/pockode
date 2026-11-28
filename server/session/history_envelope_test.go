@@ -104,7 +104,7 @@ func TestHistory_MixedFileNumbersOnFromTheOldRecords(t *testing.T) {
 		`{"type":"text","content":"two"}`,
 	)
 
-	seq, err := store.AppendToHistory(ctx, "mixed", testRecord{"type": "text", "content": "three"})
+	seq, err := store.AppendToHistory(ctx, "mixed", testRecord{"type": "text", "content": "three"}, HistoryTurn{})
 	if err != nil {
 		t.Fatalf("AppendToHistory failed: %v", err)
 	}
@@ -128,7 +128,7 @@ func TestHistory_MixedFileNumbersOnFromTheOldRecords(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewFileStore failed: %v", err)
 	}
-	seq, err = reopened.AppendToHistory(ctx, "mixed", testRecord{"type": "text", "content": "five"})
+	seq, err = reopened.AppendToHistory(ctx, "mixed", testRecord{"type": "text", "content": "five"}, HistoryTurn{})
 	if err != nil {
 		t.Fatalf("AppendToHistory failed: %v", err)
 	}
@@ -145,7 +145,7 @@ func TestHistory_MixedFileNumbersOnFromTheOldRecords(t *testing.T) {
 	if lines[0] != `{"type":"message","content":"one"}` {
 		t.Errorf("old line rewritten: %s", lines[0])
 	}
-	if !strings.HasPrefix(lines[2], `{"seq":3,"v":2,`) {
+	if !strings.HasPrefix(lines[2], `{"seq":3,"v":3,`) {
 		t.Errorf("new line = %s, want it to store its seq and format version", lines[2])
 	}
 }
@@ -196,7 +196,7 @@ func TestHistory_GapsInStoredSeqs(t *testing.T) {
 		t.Error("FindHistorySeq(3) found a record in the gap")
 	}
 
-	seq, err := store.AppendToHistory(ctx, "gaps", testRecord{"type": "text", "content": "six"})
+	seq, err := store.AppendToHistory(ctx, "gaps", testRecord{"type": "text", "content": "six"}, HistoryTurn{})
 	if err != nil {
 		t.Fatalf("AppendToHistory failed: %v", err)
 	}
@@ -272,16 +272,16 @@ func TestFileStore_WriteHistoryRenumbers(t *testing.T) {
 	}
 	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
 	want := []string{
-		`{"seq":1,"v":2,"type":"message","content":"three"}`,
-		`{"seq":2,"v":2,"type":"text","content":"seven"}`,
-		`{"seq":3,"v":2,"type":"text","content":"old format"}`,
-		`{"seq":4,"v":2,"content":"stamped by an old server","type":"text"}`,
+		`{"seq":1,"v":3,"type":"message","content":"three"}`,
+		`{"seq":2,"v":3,"type":"text","content":"seven"}`,
+		`{"seq":3,"v":3,"type":"text","content":"old format"}`,
+		`{"seq":4,"v":3,"content":"stamped by an old server","type":"text"}`,
 	}
 	if !reflect.DeepEqual(lines, want) {
 		t.Errorf("written lines:\n%s\nwant:\n%s", strings.Join(lines, "\n"), strings.Join(want, "\n"))
 	}
 
-	seq, err := store.AppendToHistory(ctx, "fork", testRecord{"type": "text"})
+	seq, err := store.AppendToHistory(ctx, "fork", testRecord{"type": "text"}, HistoryTurn{})
 	if err != nil {
 		t.Fatalf("AppendToHistory failed: %v", err)
 	}
@@ -298,7 +298,7 @@ func TestAppendToHistory_LineIsTheRecordPlusTheEnvelope(t *testing.T) {
 	store, dir := newStoreWithSession(t, "sess")
 	record := testRecord{"type": "tool_call", "tool_use_id": "t1", "input": map[string]any{"seq": 1}}
 
-	if _, err := store.AppendToHistory(ctx, "sess", record); err != nil {
+	if _, err := store.AppendToHistory(ctx, "sess", record, HistoryTurn{}); err != nil {
 		t.Fatalf("AppendToHistory failed: %v", err)
 	}
 	data, err := os.ReadFile(historyPath(dir, "sess"))
@@ -346,5 +346,83 @@ func TestPageHistory_SendsTheSeqWithoutTheFormatVersion(t *testing.T) {
 		if string(raw) != want[i] {
 			t.Errorf("record %d = %s, want %s", i, raw, want[i])
 		}
+	}
+}
+
+// The turn a record belongs to is the third envelope field, and has three
+// values: a turn, none (null), or nothing said at all — a message, and every
+// line from before turns had ids. A reader tells them apart without parsing the
+// record, and a client is sent none of it.
+func TestAppendToHistory_StoresTheTurnInTheEnvelope(t *testing.T) {
+	store, dir := newStoreWithSession(t, "sess")
+	for _, turn := range []HistoryTurn{InTurn("t-1"), NoTurn, {}} {
+		if _, err := store.AppendToHistory(ctx, "sess", testRecord{"type": "text"}, turn); err != nil {
+			t.Fatalf("AppendToHistory failed: %v", err)
+		}
+	}
+
+	data, err := os.ReadFile(historyPath(dir, "sess"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+	want := []string{
+		`{"seq":1,"v":3,"turn":"t-1","type":"text"}`,
+		`{"seq":2,"v":3,"turn":null,"type":"text"}`,
+		`{"seq":3,"v":3,"type":"text"}`,
+	}
+	if !reflect.DeepEqual(lines, want) {
+		t.Fatalf("written lines:\n%s\nwant:\n%s", strings.Join(lines, "\n"), strings.Join(want, "\n"))
+	}
+
+	records, err := store.GetHistory(ctx, "sess")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantTurns := []HistoryTurn{InTurn("t-1"), NoTurn, {}}
+	for i, raw := range records {
+		if got := HistoryTurnOf(raw); got != wantTurns[i] {
+			t.Errorf("record %d turn = %+v, want %+v", i, got, wantTurns[i])
+		}
+	}
+	if seqs := HistorySeqs(records); !reflect.DeepEqual(seqs, []HistorySeq{1, 2, 3}) {
+		t.Errorf("seqs = %v, want the stored ones", seqs)
+	}
+
+	page, err := PageHistory(records, NoHistorySeq, 10)
+	if err != nil {
+		t.Fatalf("PageHistory failed: %v", err)
+	}
+	for _, raw := range page.Records {
+		if bytes.Contains(raw, []byte(`"turn"`)) {
+			t.Errorf("client is sent %s, want the turn left in the file", raw)
+		}
+	}
+}
+
+// A fork's copy holds the same turns as the records it copied, so each keeps
+// its tag through the renumbering — including saying it has none.
+func TestFileStore_WriteHistoryKeepsEachRecordsTurn(t *testing.T) {
+	store, dir := newStoreWithSession(t, "fork")
+	copied := []json.RawMessage{
+		json.RawMessage(`{"seq":4,"v":3,"type":"message","content":"go"}`),
+		json.RawMessage(`{"seq":5,"v":3,"turn":"t-1","type":"turn_started","turn_id":"t-1","origin":"prompt"}`),
+		json.RawMessage(`{"seq":6,"v":3,"turn":null,"type":"interrupted"}`),
+	}
+	if err := store.WriteHistory(ctx, "fork", copied); err != nil {
+		t.Fatalf("WriteHistory failed: %v", err)
+	}
+	data, err := os.ReadFile(historyPath(dir, "fork"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+	want := []string{
+		`{"seq":1,"v":3,"type":"message","content":"go"}`,
+		`{"seq":2,"v":3,"turn":"t-1","type":"turn_started","turn_id":"t-1","origin":"prompt"}`,
+		`{"seq":3,"v":3,"turn":null,"type":"interrupted"}`,
+	}
+	if !reflect.DeepEqual(lines, want) {
+		t.Errorf("written lines:\n%s\nwant:\n%s", strings.Join(lines, "\n"), strings.Join(want, "\n"))
 	}
 }

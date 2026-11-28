@@ -103,19 +103,20 @@ func TestProcess_WorkToolResultIsRecordedWithItsWork(t *testing.T) {
 	sess := mock.session(t, "sess-1")
 	sess.emit(t, call("start", "mcp__pockode__task_start", `{"id":"t1"}`))
 	sess.emit(t, agent.ToolResultEvent{ToolUseID: "start", ToolResult: "Started"})
-	waitForHistory(t, store, "sess-1", 2)
+	// After the turn_started the call opened.
+	waitForHistory(t, store, "sess-1", 3)
 
 	records, err := store.GetHistory(context.Background(), "sess-1")
 	if err != nil {
 		t.Fatal(err)
 	}
-	decoded, err := agent.DecodeRecord(records[1])
+	decoded, err := agent.DecodeRecord(records[2])
 	if err != nil {
 		t.Fatal(err)
 	}
 	rec, ok := decoded.(agent.ToolResultRecord)
 	if !ok {
-		t.Fatalf("records[1] = %T, want a tool result", decoded)
+		t.Fatalf("records[2] = %T, want a tool result", decoded)
 	}
 	if rec.WorkRef == nil || *rec.WorkRef != (agent.WorkRef{ID: "t1", Type: "task", Title: "Design the row"}) {
 		t.Errorf("work_ref = %+v", rec.WorkRef)

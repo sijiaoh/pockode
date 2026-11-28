@@ -382,7 +382,7 @@ That gap is not the whole of what must not end a wait. A `tool_result` that
 settles background work (`ToolResultEvent.SettlesBackgroundWork`) is inside
 `ActivatesSession` and still is not the CLI resuming. It stays in, because it
 only ever follows a call the agent made and so cannot cost anyone the escape
-hatch; `process.turnInputFor` keeps it from moving the turn by its subtype,
+hatch; `agent.TurnInputOf` keeps it from moving the turn by its subtype,
 which no predicate on the type can see.
 
 The exclusion this section claims is not something the predicate can enforce on
@@ -604,14 +604,16 @@ that would answer "forked" to a request that carried nothing across. The reasoni
 is shown is in [session-fork-ui.md](../session-fork-ui.md#the-rule).
 
 The cut is not snapped to a turn boundary. Cutting mid-turn leaves a last turn
-with no terminal event, and none is invented to tidy it up: the next agent reads
-this transcript too, and one claiming a turn ended where it was cut would lie to
-it as well as to the user.
-The price lands in the fork's UI: with nothing to
-settle it, that last message sits in the frontend's `streaming` status until the
-user's next message closes the turn, and while it does it cannot itself be a fork
-anchor. It does not look busy in the meantime — the tail line is drawn only on
-the open turn, and a fresh fork has none.
+the agent never ended, and no agent ending is invented to tidy it up: the next
+agent reads this transcript too, and one claiming the turn finished where it was
+cut would lie to it as well as to the user. What the copy does get is the truth
+about the fork itself — no process of its own is carrying that turn — so
+`chat.Client.Fork` appends `process_ended`, in no turn, when the copy leaves a
+turn open (`agent.OpenTurnOf`, which reads old sources through the inference in
+[Turn Identity](#turn-identity)). The cut reply reads "Process ended", and the
+history agrees with the fork's idle turn state; it is the same record restart
+repair would write at the next start anyway ([Restart Repair](#restart-repair)).
+A cut between turns gets nothing.
 
 Events the cut left half of go the other way — `agent.TruncateHistory` drops a
 tool call whose result fell after the anchor, and a permission request or a
@@ -720,7 +722,7 @@ round. `agent/history_compat_test.go` freezes that flat struct
 
 **Replay does not go through these types.** A history page hands the client the
 line as it is on disk — replay puts the record's `seq` in front, drops the
-line's format version and changes nothing else, because
+line's format version and turn and changes nothing else, because
 `session.stampHistorySeq` splices bytes rather than decoding the record
 (`TestStampHistorySeq_KeepsFieldsThisBuildHasNoNameFor`) — so a field a newer
 server wrote reaches the client even through a build that has no name for it.
@@ -2451,14 +2453,15 @@ turn nobody was running, with the reaper needing a hole cut in it to avoid killi
 tasks. The event is recorded like any other, so the wait is visible
 in the transcript where it happened.
 
-**Only content ends the wait.** `SignalOutput` — text, a tool call, a result —
-clears the blocker, because it is the only proof the CLI resumed. A `system`
+**Only content ends the wait.** `SignalOutput` — text, a tool call — and
+`SignalToolResult` — a result — clear the blocker, because content is the only
+proof the CLI resumed. A `system`
 frame does not, and that exclusion is load-bearing rather than cautious: the
 background task list changing *is* a `system` frame, so counting it would make a
 task **finishing** look like the turn coming back. The task's outcome itself is
 excluded for the same reason. A `tool_result` with subtype `background_result` or
 `background_lost` records how background work ended — as the CLI reported it, or
-as Pockode observed it — not the model saying anything, so `turnInputFor` maps it
+as Pockode observed it — not the model saying anything, so `agent.TurnInputOf` maps it
 to `SignalNoise`: it is stored and shown like any result, but it neither ends a
 wait nor opens a turn. The proof the CLI resumed is what the model writes after
 it. The same holds once the turn
@@ -4318,13 +4321,19 @@ it ([A Prompt Belongs to the Process That Raised It](#a-prompt-belongs-to-the-pr
 `aborted`; the same reduction runs over the whole index at startup, which is what
 a restart-killed run leaves behind (see [Restart Repair](#restart-repair)).
 
-**Inputs are signals, not event types.** `process.turnInputFor` is the whole of
-the translation, and it exists because the mapping is not one-to-one in either
+**Inputs are signals, not event types.** `agent.TurnInputOf` is the whole of
+the translation. It reads what an event encodes to, so two callers share it:
+`process.turnInputFor`, which adds only what an arriving event knows and its
+record does not, and the inference of turns in old histories
+([Turn Identity](#turn-identity)), which has only the records. The translation
+exists because the mapping is not one-to-one in either
 direction: five event types all mean "the agent produced content", while a
 `system` frame means "the turn is alive" and must specifically *not* mean "the
 CLI resumed". Nor is it keyed on the type alone: a `tool_result` settling
 background work is noise, and so is content an adapter flagged as arriving
-after its turn ended (`agent.MarkAfterTurn`); every other one is output.
+after its turn ended (`agent.MarkAfterTurn`); every other result is
+`SignalToolResult`, which never opens a turn, and every other piece of content
+is output.
 Nothing else in the server reads event types to decide what a session is doing.
 
 The send path supplies the two signals no event carries: `SignalPrompt` when a
@@ -4492,8 +4501,9 @@ So `session.FileStore` repairs it at load, in two parts:
   process dying while the server runs, which is the point of there being one
   rule.
 - **The transcript**, which gets the `process_ended` record the killed run never
-  wrote. That record is what a replaying client reads to mark a pending
-  permission card `expired`; without it a restarted server shows requests that
+  wrote — in no turn, like every `process_ended` ([Turn Identity](#turn-identity)),
+  so it ends whatever turn the run left open. That record is what a replaying
+  client reads to mark a pending permission card `expired`; without it a restarted server shows requests that
   look decidable and are not, and it is what settles a backgrounded call
   ([frontend-state.md](frontend-state.md#tool-runs)). It deliberately does *not*
   touch a question card — that card is not a prompt a process holds open.
@@ -4541,15 +4551,17 @@ func (p *Process) streamEvents(ctx context.Context) {
             p.markActivated(ctx, log) // first transition only
         }
 
-        // 1. Turn state, decided
         in, reduce := turnInputFor(event)
-        if reduce { transition = p.applyTurn(ctx, in) }
+        wire := event.Encode()
+        record, _ := wire.(agent.Record)
 
-        // 2. Persistence and broadcast, in one step under the session's lock
-        switch wire := event.Encode().(type) {
-        case agent.Record:    stream.Append(ctx, sessionID, wire, nil)
-        case agent.LiveEvent: stream.Publish(sessionID, wire)
+        // 1+2. Turn state decided, any turn_started and the record written,
+        // in one step under the session's lock
+        switch {
+        case reduce:         transition = stream.Advance(ctx, sessionID, in, record, applied)
+        case record != nil:  stream.Append(ctx, sessionID, record, nil)
         }
+        if live, ok := wire.(agent.LiveEvent); ok { stream.Publish(sessionID, live) }
 
         // 3. Turn state, announced
         if reduce { p.manager.emitTurn(p.sessionID, transition) }
@@ -5231,12 +5243,13 @@ for the same reason, which is harmless: it can only anchor on a record it has
 seen.
 
 **The seq is stored in the record.** Each line `AppendToHistory` writes is the
-record's own JSON behind an envelope, `{"seq":N,"v":2,` and then the record's
-fields (`session/history_envelope.go`). `seq` is assigned under the session's
+record's own JSON behind an envelope, `{"seq":N,"v":3,"turn":…,` and then the
+record's fields (`session/history_envelope.go`); `turn` is described under
+[Turn Identity](#turn-identity). `seq` is assigned under the session's
 lock, one past the newest record's, and written before the lock is released,
 so seqs reach the file in the order they were handed out. `v` is the line's
 format version, so a later change has something to key a migration on; a line
-without one is version 1. The envelope adds nothing else — no timestamp:
+without one is version 1. Version 2 had no `turn`. The envelope adds nothing else — no timestamp:
 `observed_at` stays the record's own field, present only where the moment was
 honestly observed.
 
@@ -5265,18 +5278,128 @@ with gaps in them: it pages and forks by position, so in a history with a gap
 its cursors and fork anchors past the gap name the wrong record. Reading is
 what the compatibility promises.
 
-Replay sends the seq without the version: the version belongs to the file, not
-to the event.
+Replay sends the seq without the version or the turn: the version belongs to
+the file, not to the event, and no client reads turns yet.
 
 **A fork's copy is renumbered.** `TruncateHistory` drops calls the cut left
 unsettled, so the copy is not a prefix of the source, and the source's seqs are
 addresses in the source. `WriteHistory` numbers what it writes from 1.
+
+A fork keeps each copied record's `turn`: a turn id is not an address, and the
+copy holds the same turns.
 
 The one record carrying a seq that is not its own is the synthetic warning
 `GetHistory` appends when the file was damaged: `NoHistorySeq` (0), "not
 addressable", because it is in no file and the next real append takes the seq
 it would otherwise appear to hold. A page never starts on it, since a page's
 first seq is the cursor for the page before.
+
+### Turn Identity
+
+Every turn has an id, and history says where each one starts and which records
+belong to it, so nothing reading a transcript has to infer turns from the
+endings.
+
+- **A turn starts with a record.** The moment a session goes from no turn to an
+  open one — `session.TurnTransition.Started` — a `turn_started` record is
+  written carrying the new id, its origin and the opening message's id
+  ([agent-event.md](../agent-event.md#a-turns-start-turn_started)). The id is
+  a UUIDv7 minted by the sequencer and handed to the reducer
+  (`TurnInput.TurnID`), which keeps it in `TurnState.TurnID` while the turn is
+  open; like `OpenedAt` it is not stored, since no open turn survives a
+  restart.
+- **Every later record is tagged.** The envelope's `turn` is the turn's id for
+  every record written while it is open, its ending included, and `null` for a
+  record written while none is: a duplicate ending (Claude writes two
+  `interrupted` for one Stop), `process_ended` — always, even when it aborts a
+  turn, because it is about the process — and an expiry written after its turn
+  ended or overtaken by a new turn's prompt.
+- **A straggler is tagged with the turn that ended last.** Content Codex
+  reports after its turn's ending — what a Stop did not kill
+  ([Ending a Turn Exactly Once](#ending-a-turn-exactly-once)) — carries
+  `TurnInput.AfterTurn`, and the reducer reports it as happening in
+  `TurnState.EndedTurnID`, the turn this process ended last, even when a newer
+  turn has opened since (a prompt sent right after a Stop). In-memory like
+  `TurnID`, and cleared when a process starts or ends, since nothing a gone
+  process ran can still report. Only Codex sets the flag, because only Codex
+  names every turn before its content; Claude's content after an ending is the
+  CLI resuming — a background subagent waking the session, or the answer to a
+  message queued into the turn before — and opens a turn of its own.
+- **A tool result never opens a turn.** It answers a call the model made, so
+  it belongs to the turn that call was made in, and it is never the CLI
+  resuming — that is the model writing something new. The translation gives it
+  its own signal, `SignalToolResult`: inside a turn it is output, and with
+  none open the reducer reports it in `TurnState.EndedTurnID`, as a straggler,
+  for every agent. Claude's Stop is the shape this is for, and it is most of
+  them in real histories: the interrupt's acknowledgement ends the turn, the
+  CLI then answers each call still in flight with a refusal ("The user doesn't
+  want to proceed with this tool use"), and the aborted turn's result is a
+  second `interrupted`. Read as output the refusals opened a phantom turn that
+  only the second `interrupted` closed; now they are the stopped turn's, and
+  the second `interrupted` is the no-turn duplicate. Claude's content after an
+  ending still opens a turn — text, a tool call, thinking, whether a subagent
+  woke the session or the model is answering a queued message.
+- **Every turn's ending is in the history.** A turn the agent ended has the
+  agent's ending; a turn whose process stopped carrying it has
+  `process_ended`, in no turn, which ends whichever turn was open. That record
+  is written wherever such a turn ends: by the process going away, by restart
+  repair for a run nobody saw end ([Restart Repair](#restart-repair)), by the
+  sequencer when a successor's `SignalProcessStarted` aborts a turn or expires
+  a prompt its predecessor never said it had stopped carrying — or when a
+  process's stream closes without delivering its own (an agent failing on the
+  way up, a panic in the read loop) and the manager's backstop
+  `SignalProcessEnded` ends the turn instead — and by a fork
+  cut inside a turn — the fork has no process, so it starts idle, and its copy
+  says the same of the turn the cut went through. Readers therefore never treat
+  a new `turn_started` as closing an open turn: a `turn_started` with a turn
+  still open is a write-path bug, not a shape to read around.
+  `agent.OpenTurnOf` reads the turn a history leaves open off these records,
+  and `session.TurnSignal.EndsTurn` is which signals end one, held to
+  `ReduceTurn` by a test.
+- **Server readers of turns read the ids.** The fork's mid-turn cut is the one
+  that used to find turns from the endings, and now asks `agent.OpenTurnOf`
+  ([Session Forking](#session-forking)). The rest stay on the turn state,
+  because their question is not about records: `ReduceTurn` is what produces
+  the ids, restart repair asks whether the *process* was closed out (a turn
+  idle on its background budget may still need its `process_ended`), and the
+  work engine, permission review, the settler and leases read the live
+  `TurnState`.
+- **A `message` is the one record with no `turn` at all**, and so is every line
+  from before version 3. The message is written before anyone knows whether it
+  opens a turn; the `turn_started` naming it says it did.
+- **Membership is not "which message this answers".** That stays the read
+  point ([agent-event.md](../agent-event.md#the-read-point-message_ingested)),
+  and the two disagree in real histories.
+- **Older lines have their turns inferred when read, in one place.**
+  `agent.InferHistoryTurns(records, agentType)` returns a history the way one
+  written with turn ids holds it: each untagged line tagged, and a synthesized
+  `turn_started` in front of each turn. Nothing is written back. Every reader
+  that needs turns reads them through it rather than inferring them itself.
+  It replays the old lines through the rule that tags new ones, so an
+  inferred turn starts and ends where a live one would. That rule is the
+  translation of records into signals (`agent.TurnInputOf`, which the live
+  process uses too), `ReduceTurn`, and the sequencer's and expiries' tagging.
+  The agent type is needed because the lines do not say whether content came
+  after its turn. For Claude, content other than a tool result with no turn
+  open opens one. For Codex,
+  it is a straggler of the turn that ended. The one case the lines cannot
+  settle is a straggler that lands after the next prompt, which is read as the
+  new turn's. An inferred turn's id is `legacy-<seq>`, the seq of the record
+  that opened it, so it is the same on every read. A synthesized `turn_started`
+  is in no file and carries seq 0, which gives it no number. A line is old when
+  it is untagged and not a message; a message goes with the records around it.
+  So a fork's copy of an old session, which `WriteHistory` re-envelopes
+  without tags, still reads as old.
+
+The tag is a fact about the record's position, and what makes it one is the
+per-session lock of `chatstream.Sequencer`: every input that can open or end a
+turn is reduced there (`Advance`), in the same step as writing the record that
+caused it and any `turn_started`, and a plain `Append` reads the open turn under
+the same lock. So a record tagged T always lies between T's `turn_started` and
+its ending — or, for a straggler, after that ending. The question signals
+reduce through the store directly; they never open or end a turn. A reduction the store applied but failed to write to the
+index is carried out all the same — the store holds that state and retries the
+write — so a turn it opened still gets its `turn_started`.
 
 ### The Session Index
 
@@ -5504,7 +5627,8 @@ second Stop found no turn to name. Since every turn of this thread names itself
 with `turn/started` before its content, on the same reader goroutine that clears
 it, `emitEvent` flags any content emitted with no turn recorded
 (`agent.MarkAfterTurn`), and `process.turnInputFor` reads a flagged event as
-noise. It is still recorded and drawn under the call it settles. The results a
+noise. It is still recorded — tagged with the turn that ended
+([Turn Identity](#turn-identity)) — and drawn under the call it settles. The results a
 turn's own ending releases (held subagent results) go out before the turn is
 cleared, so they are not flagged.
 

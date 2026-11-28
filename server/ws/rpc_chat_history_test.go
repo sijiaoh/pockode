@@ -24,7 +24,7 @@ func seedHistory(t *testing.T, env *testEnv, sessionID string, n int) *worktree.
 	}
 	for i := 1; i <= n; i++ {
 		record := agent.TextRecord{Content: fmt.Sprintf("m%d", i)}
-		if _, err := wt.SessionStore.AppendToHistory(bgCtx, sessionID, record); err != nil {
+		if _, err := wt.SessionStore.AppendToHistory(bgCtx, sessionID, record, session.HistoryTurn{}); err != nil {
 			t.Fatalf("append record %d: %v", i, err)
 		}
 	}
@@ -166,7 +166,7 @@ func TestChatMessagesHistory_LiveEventsDoNotShiftOlderPages(t *testing.T) {
 	sub := env.subscribeChatMessagesWithLimit("sess", 2) // m5, m6
 
 	if _, err := wt.SessionStore.AppendToHistory(bgCtx, "sess",
-		agent.TextRecord{Content: "m7"}); err != nil {
+		agent.TextRecord{Content: "m7"}, session.HistoryTurn{}); err != nil {
 		t.Fatalf("append live record: %v", err)
 	}
 

@@ -614,6 +614,14 @@ cut short takes its pending permission requests down with it, so no answer can
 resume it either. That makes the rule for content arriving after an ending
 unambiguous: it belongs to the turn that just ended.
 
+These are the client's own boundaries, read off the records around them. The
+server now records each turn's id and its `turn_started`
+([agent-integration.md](agent-integration.md#turn-identity)), but replay does
+not send the tag and the reducer draws nothing for `turn_started`, so the client
+does not read turns off them yet. The two readings can differ: Claude text
+after an `interrupted` opens a turn on the server (a tool result does not),
+while the client appends it to the stopped bubble.
+
 A posted question is deliberately **not** taken down with it. It belongs to the
 session rather than to the turn, so it is still waiting when the next process
 starts — and it never held this turn open in the first place

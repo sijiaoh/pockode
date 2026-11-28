@@ -57,7 +57,7 @@ func seedSession(t *testing.T, env *testEnv, worktreeName, sessionID, title stri
 	}
 	for _, text := range []string{"what happened here", "this"} {
 		if _, err := wt.SessionStore.AppendToHistory(bgCtx, sessionID,
-			agent.TextRecord{Content: text}); err != nil {
+			agent.TextRecord{Content: text}, session.HistoryTurn{}); err != nil {
 			t.Fatalf("append to history: %v", err)
 		}
 	}

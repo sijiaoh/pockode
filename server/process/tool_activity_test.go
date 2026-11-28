@@ -54,15 +54,16 @@ func TestProcess_ToolActivityIsBroadcastButNeverRecorded(t *testing.T) {
 	sess.emit(t, agent.TextEvent{Content: "done"})
 
 	// The text event lands in history; waiting for it proves the activity ahead
-	// of it was processed and deliberately not written.
-	waitForHistory(t, store, "sess-1", 1)
+	// of it was processed and deliberately not written. The text opens a turn,
+	// so its turn_started is the one other record.
+	waitForHistory(t, store, "sess-1", 2)
 
 	records, err := store.GetHistory(context.Background(), "sess-1")
 	if err != nil {
 		t.Fatalf("failed to read history: %v", err)
 	}
-	if len(records) != 1 {
-		t.Fatalf("expected only the text event in history, got %d records", len(records))
+	if len(records) != 2 {
+		t.Fatalf("expected only the text event and its turn's start in history, got %d records", len(records))
 	}
 
 	var activity *streamed

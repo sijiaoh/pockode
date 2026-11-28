@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -545,7 +546,9 @@ func TestProcess_TurnStateTransitions(t *testing.T) {
 			// lets the count below be asserted exactly rather than waited for
 			// and hoped about.
 			mock.session(t, "sess-1").emit(t, agent.WarningEvent{Message: "barrier", Code: "test_barrier"})
-			waitForHistory(t, store, "sess-1", len(tt.events)+1)
+			// Waited on by what it is, not by a count: how many records a
+			// scenario writes depends on how many turns it opens.
+			waitUntil(t, "the barrier record", func() bool { return lastWarning(t, store, "sess-1").Code == "test_barrier" })
 
 			got := rec.snapshot()
 			if len(got) != len(tt.want) {
@@ -595,7 +598,7 @@ func TestProcess_OnlyContentEndsABackgroundWait(t *testing.T) {
 	// And the task's outcome itself: Pockode's record of the work ending, which
 	// the CLI hands over before the model has said anything about it.
 	sess.emit(t, agent.ToolResultEvent{ToolUseID: "call-1", Subtype: agent.ToolResultBackgroundResult})
-	waitForHistory(t, store, "sess-1", 3) // the park, the system frame and the result
+	waitForHistory(t, store, "sess-1", 4) // the turn_started, the park, the system frame and the result
 	if hold := holdOf(proc); hold != session.LeaseBackground {
 		t.Fatalf("hold = %q, want the wait to still be on — none of these is the CLI resuming", hold)
 	}
@@ -605,16 +608,16 @@ func TestProcess_OnlyContentEndsABackgroundWait(t *testing.T) {
 }
 
 // The translation is keyed on the subtype, not on the event type: a tool result
-// is the agent's output unless it settles background work. Codex never sets one
-// of those subtypes; what keeps a Codex straggler from opening a turn is
-// agent.MarkAfterTurn.
+// is the agent's output — as a result, which cannot open a turn — unless it
+// settles background work. Codex never sets one of those subtypes; what keeps
+// a Codex straggler from opening a turn is agent.MarkAfterTurn.
 func TestTurnInputFor_BackgroundSettlementIsNotOutput(t *testing.T) {
 	tests := []struct {
 		subtype agent.ToolResultSubtype
 		want    session.TurnSignal
 	}{
-		{"", session.SignalOutput},
-		{agent.ToolResultBackgroundStarted, session.SignalOutput},
+		{"", session.SignalToolResult},
+		{agent.ToolResultBackgroundStarted, session.SignalToolResult},
 		{agent.ToolResultBackgroundResult, session.SignalNoise},
 		{agent.ToolResultBackgroundLost, session.SignalNoise},
 	}
@@ -649,8 +652,9 @@ func TestProcess_ConsecutiveTurns(t *testing.T) {
 	mock.session(t, "sess-1").emit(t, agent.InterruptedEvent{})
 	mock.session(t, "sess-1").emit(t, agent.DoneEvent{})
 	// Both ends must be consumed before the next turn starts, or the duplicate
-	// would land in turn 2 and stop measuring what this test is about.
-	waitForHistory(t, store, "sess-1", 2)
+	// would land in turn 2 and stop measuring what this test is about. Three:
+	// the turn's turn_started, then both ends.
+	waitForHistory(t, store, "sess-1", 3)
 	rec.waitForCount(t, 2)
 
 	// Turn 2: a full cycle of its own.
@@ -1285,7 +1289,8 @@ func TestProcess_EmitsOnlyRealTurnChanges(t *testing.T) {
 	// Codex announces the same ending twice; the second says nothing new.
 	// Observed through history, which is written after the turn is reduced.
 	sess.emit(t, agent.DoneEvent{})
-	waitForHistory(t, store, "sess-1", 4)
+	// The turn_started, both texts and both endings.
+	waitForHistory(t, store, "sess-1", 5)
 	if events := rec.snapshot(); len(events) != 0 {
 		t.Errorf("expected no state change for a repeated ending, got %v", events)
 	}
@@ -1734,4 +1739,105 @@ func TestManager_AgentProcessCount(t *testing.T) {
 
 	m.Close("sess-1")
 	waitUntil(t, "the process to be gone", func() bool { return m.AgentProcessCount(session.AgentTypeClaude) == 0 })
+}
+
+// What a Codex Stop did not kill is recorded under the turn it stopped, while
+// Claude's content after an ending — never flagged — is a turn of its own.
+// Claude's Stop, as the CLI reports it: the interrupt's acknowledgement, a
+// refusal for each call still in flight, and the aborted turn's result. One
+// turn, the one stopped: the refusals are recorded under it, the second
+// interrupted under none, and the session never goes back to running.
+func TestProcess_ClaudeStopOpensNoTurnForTheRefusedCalls(t *testing.T) {
+	_, mock, store, proc := startedTurn(t, leaseTestBudgets)
+	sess := mock.session(t, "sess-1")
+
+	refused := "The user doesn't want to proceed with this tool use."
+	sess.emit(t, agent.InterruptedEvent{})
+	sess.emit(t, agent.ToolResultEvent{ToolUseID: "t1", ToolResult: refused, IsError: true})
+	sess.emit(t, agent.ToolResultEvent{ToolUseID: "t2", ToolResult: refused, IsError: true})
+	sess.emit(t, agent.InterruptedEvent{})
+	waitForHistory(t, store, "sess-1", 5)
+
+	if proc.turnState().Open {
+		t.Error("the session is running after the Stop, want idle")
+	}
+	raws, err := store.GetHistory(context.Background(), "sess-1")
+	if err != nil {
+		t.Fatalf("GetHistory: %v", err)
+	}
+	type tagged struct {
+		typ  agent.EventType
+		turn session.HistoryTurn
+	}
+	var got []tagged
+	var turn string
+	for _, raw := range raws {
+		record, err := agent.DecodeRecord(raw)
+		if err != nil {
+			t.Fatalf("DecodeRecord: %v", err)
+		}
+		if s, ok := record.(agent.TurnStartedRecord); ok {
+			turn = s.TurnID
+		}
+		got = append(got, tagged{record.Type(), session.HistoryTurnOf(raw)})
+	}
+	want := []tagged{
+		{agent.EventTypeTurnStarted, session.InTurn(turn)},
+		{agent.EventTypeInterrupted, session.InTurn(turn)},
+		{agent.EventTypeToolResult, session.InTurn(turn)},
+		{agent.EventTypeToolResult, session.InTurn(turn)},
+		{agent.EventTypeInterrupted, session.NoTurn},
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("history = %+v\nwant      %+v", got, want)
+	}
+}
+
+func TestProcess_StragglersAreRecordedUnderTheTurnThatEnded(t *testing.T) {
+	_, mock, store, proc := startedTurn(t, leaseTestBudgets)
+	sess := mock.session(t, "sess-1")
+
+	sess.emit(t, agent.InterruptedEvent{})
+	sess.emit(t, agent.ToolResultEvent{ToolUseID: "exec-1", ToolResult: "main-done", AfterTurn: true})
+	sess.emit(t, agent.DoneEvent{})
+	sess.emit(t, agent.TextEvent{Content: "woken by a subagent"})
+	sess.emit(t, agent.DoneEvent{})
+	waitForHistory(t, store, "sess-1", 7)
+	waitUntil(t, "the second turn to end", func() bool { return !proc.turnState().Open })
+
+	raws, err := store.GetHistory(context.Background(), "sess-1")
+	if err != nil {
+		t.Fatalf("GetHistory: %v", err)
+	}
+	var started []string
+	type tagged struct {
+		typ  agent.EventType
+		turn session.HistoryTurn
+	}
+	var got []tagged
+	for _, raw := range raws {
+		record, err := agent.DecodeRecord(raw)
+		if err != nil {
+			t.Fatalf("DecodeRecord: %v", err)
+		}
+		if s, ok := record.(agent.TurnStartedRecord); ok {
+			started = append(started, s.TurnID)
+		}
+		got = append(got, tagged{record.Type(), session.HistoryTurnOf(raw)})
+	}
+	if len(started) != 2 {
+		t.Fatalf("history = %+v, want the prompt's turn and the one the text opened", got)
+	}
+	want := []tagged{
+		{agent.EventTypeTurnStarted, session.InTurn(started[0])},
+		{agent.EventTypeInterrupted, session.InTurn(started[0])},
+		{agent.EventTypeToolResult, session.InTurn(started[0])},
+		{agent.EventTypeDone, session.NoTurn},
+		{agent.EventTypeTurnStarted, session.InTurn(started[1])},
+		{agent.EventTypeText, session.InTurn(started[1])},
+		{agent.EventTypeDone, session.InTurn(started[1])},
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("history = %+v\nwant      %+v", got, want)
+	}
 }

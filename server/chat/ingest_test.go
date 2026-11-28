@@ -70,16 +70,16 @@ func TestClient_MidTurnMessageRecordsTheReadPoint(t *testing.T) {
 	}
 
 	records := f.records(t)
-	if len(records) != 3 {
-		t.Fatalf("history = %+v, want both messages and one read point", records)
+	if len(records) != 4 {
+		t.Fatalf("history = %+v, want both messages, the first's turn_started and one read point", records)
 	}
-	readPoint, ok := records[2].(agent.MessageIngestedRecord)
+	readPoint, ok := records[3].(agent.MessageIngestedRecord)
 	if !ok {
-		t.Fatalf("last record is %q, want the read point", records[2].Type())
+		t.Fatalf("last record is %q, want the read point", records[3].Type())
 	}
 	// The read point names the message it is about rather than leaving it to be
 	// inferred from position, which is what keeps two queued messages apart.
-	second := recordAs[agent.MessageRecord](t, records[1])
+	second := recordAs[agent.MessageRecord](t, records[2])
 	if second.MessageID == "" {
 		t.Fatal("the message record carries no id for the read point to name")
 	}
@@ -115,8 +115,13 @@ func TestClient_MessageThatStartsATurnRecordsNoReadPoint(t *testing.T) {
 	f.startTurn(t)
 
 	records := f.records(t)
-	if len(records) != 1 || records[0].Type() != agent.EventTypeMessage {
-		t.Fatalf("history = %+v, want only the message that started the turn", records)
+	if len(records) != 2 {
+		t.Fatalf("history = %+v, want only the message that started the turn and the turn's start", records)
+	}
+	message := recordAs[agent.MessageRecord](t, records[0])
+	started := recordAs[agent.TurnStartedRecord](t, records[1])
+	if started.MessageID != message.MessageID || started.Origin != agent.TurnOriginPrompt {
+		t.Errorf("turn_started = %+v, want it to name the message %q as its prompt", started, message.MessageID)
 	}
 }
 
@@ -154,10 +159,10 @@ func TestClient_EachQueuedMessageGetsItsOwnReadPoint(t *testing.T) {
 	}
 
 	records := f.records(t)
-	if len(records) != 5 {
-		t.Fatalf("history = %+v, want three messages and two read points", records)
+	if len(records) != 6 {
+		t.Fatalf("history = %+v, want three messages, the first's turn_started and two read points", records)
 	}
-	for _, pair := range [][2]int{{1, 2}, {3, 4}} {
+	for _, pair := range [][2]int{{2, 3}, {4, 5}} {
 		message, isMessage := records[pair[0]].(agent.MessageRecord)
 		readPoint, isReadPoint := records[pair[1]].(agent.MessageIngestedRecord)
 		if !isMessage || !isReadPoint {
@@ -178,7 +183,7 @@ type countingFailStore struct {
 	attempts int
 }
 
-func (s *countingFailStore) AppendToHistory(context.Context, string, session.HistoryRecord) (session.HistorySeq, error) {
+func (s *countingFailStore) AppendToHistory(context.Context, string, session.HistoryRecord, session.HistoryTurn) (session.HistorySeq, error) {
 	s.attempts++
 	return session.NoHistorySeq, errors.New("history is not writable")
 }
@@ -207,8 +212,8 @@ func TestClient_NoReadPointForAMessageThatWasNotRecorded(t *testing.T) {
 		}
 	}
 
-	if store.attempts != 2 {
-		t.Errorf("history appends attempted = %d, want one per message and no read point", store.attempts)
+	if store.attempts != 3 {
+		t.Errorf("history appends attempted = %d, want one per message, the first's turn_started and no read point", store.attempts)
 	}
 }
 
@@ -225,8 +230,8 @@ func TestClient_ReadPointLeftToAnAgentThatReportsItsOwn(t *testing.T) {
 	}
 
 	records := f.records(t)
-	if len(records) != 2 {
-		t.Fatalf("history = %+v, want the two messages and no read point of Pockode's", records)
+	if len(records) != 3 {
+		t.Fatalf("history = %+v, want the two messages, the first's turn_started and no read point of Pockode's", records)
 	}
 }
 
@@ -244,8 +249,8 @@ func TestClient_MessageThatOpensATurnCarriesTheTurnsOpeningMoment(t *testing.T) 
 	}
 
 	records := f.records(t)
-	if len(records) != 1 {
-		t.Fatalf("history = %+v, want one message carrying observed_at", records)
+	if len(records) != 2 {
+		t.Fatalf("history = %+v, want one message carrying observed_at and its turn_started", records)
 	}
 	message, ok := records[0].(agent.MessageRecord)
 	if !ok || message.ObservedAt == nil {
@@ -257,6 +262,9 @@ func TestClient_MessageThatOpensATurnCarriesTheTurnsOpeningMoment(t *testing.T) 
 	}
 	if !sent.ObservedAt.Equal(at) {
 		t.Errorf("sender told %v, record says %v", sent.ObservedAt, at)
+	}
+	if started := recordAs[agent.TurnStartedRecord](t, records[1]); started.ObservedAt == nil || !started.ObservedAt.Equal(at) {
+		t.Errorf("turn_started observed at %v, message record says %v", started.ObservedAt, at)
 	}
 }
 

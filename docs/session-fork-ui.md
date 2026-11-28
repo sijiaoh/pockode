@@ -809,6 +809,11 @@ want: the inherited transcript was produced by that agent. Model and effort stay
 changeable, as on any activated session. `unread` starts false, and so does the
 turn: it begins idle even when the source is mid-turn, because nothing is
 producing output for the fork and nothing can answer a prompt copied into it.
+A cut inside a turn therefore ends the fork's copy with `process_ended`, so its
+history agrees with that idle turn
+([agent-integration.md](code/agent-integration.md#turn-identity)); the cut
+reply reads "Process ended", as it would anyway after the server's next start
+([Restart Repair](code/agent-integration.md#restart-repair)).
 The token usage starts at zero — the tokens behind the copied transcript were
 spent by the parent, and counting them on both sides would make every sum over
 sessions wrong ([usage-display-ui.md](usage-display-ui.md#a-fork-starts-at-zero)). So a
