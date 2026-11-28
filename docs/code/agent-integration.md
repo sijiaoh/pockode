@@ -4435,7 +4435,9 @@ killed with `SIGKILL`, crashed or cut off from power had no chance to write
 anything on the way out, and a session still streaming when `Shutdown`'s 10s
 drain gives up on it may not get to; for those the stored state may still say
 a turn is running, and the history may end on a call still running in the
-background.
+background. Such a crash also takes the last second of turn moves the index had
+not yet written — which is safe only because this repair rebuilds them, or
+reads them back as an aborted turn ([The Session Index](#the-session-index)).
 
 **The authoritative record is Pockode's own, not the CLI's.** A CLI killed
 mid-prompt may leave a dangling `tool_use` with no result, a last line written
@@ -5095,10 +5097,9 @@ goes there, what only gets described, and what a fork does with it are in
   `GetHistory` runs when a session is opened and again for every page scrolled
   back.
 
-The session index (`sessions/index.json`) is a whole-file rewrite instead, and
-uses `filestore.WriteFileAtomic`. If it is nonetheless found corrupt at startup,
-it is moved to `index.json.corrupt` and the store starts empty rather than
-failing to boot.
+The session index (`sessions/index.json`) is a whole-file rewrite instead, with
+durability rules and a concurrency model of its own — see
+[The Session Index](#the-session-index).
 
 **A deleted session takes no more writes.** Deleting a session closes its
 process first and waits for it (`process.Manager.Close`), but that process is not
@@ -5139,6 +5140,117 @@ restarts. The one record carrying a seq of its own is the synthetic warning
 addressable", because it is in no file and the next real append takes the
 position it would otherwise appear to hold.
 
+### The Session Index
+
+`sessions/index.json` holds every session's `SessionMeta` in one file, written
+whole through `filestore.WriteFileAtomic`. If it is nonetheless found corrupt at
+startup, it is moved to `index.json.corrupt` and the store starts empty rather
+than failing to boot.
+
+**Not every change is fsynced before the call returns.** A rewrite costs a disk
+round-trip, and a turn moves many times — a permission raised, answered, a
+background task parked, the ending — across every session at once. Each
+mutation therefore says how soon it has to reach the disk (`metaChange` in
+`server/session/persist.go`):
+
+| Class | Fields | Why |
+|-------|--------|-----|
+| durable — written and fsynced before the call returns | ID, title, creation and deletion, agent type, mode, model, effort, HTML-first, `Started`, fork and reviewer links, the **first** `Activate`, every usage report, a turn **opening**, any change to `Unanswered` | Nothing can rebuild them. Settings and titles are the user's intent; usage reports are not in the history, and `session.ReadUsages` reads the file, promising it is never behind a usage notification; `Activated` is what forbids switching the agent of a session that has run; a posted question survives every restart and is read off disk by startup recovery ([work-system.md](work-system.md#input-8-startup)); an opening turn has to be on disk so that a crash mid-turn reads back as that turn aborted rather than as the previous turn's outcome |
+| recoverable — written at most `recoverableFlushDelay` (1s) later, in one rewrite with everything else pending | every other turn move (phase, `Open`, `Since`, `Blockers`, `LastOutcome`), `UpdatedAt` from `Touch` and repeat `Activate`s, `Unread` | A crash loses nothing anyone is owed: see below |
+
+Why each recoverable loss is harmless:
+
+- **Turn moves are rebuilt by [Restart Repair](#restart-repair).** Startup reduces
+  every stored turn with `SignalProcessEnded`, which expires every blocker and
+  aborts an open turn whatever the file said, and gives a history not ending on
+  `process_ended` that record. A lost raise or answer leaves its record as the
+  history's last one, so the session reads back exactly as if the change had
+  been written.
+- **A lost ending reads back as `aborted`** instead of completed or failed. The
+  flush delay is deliberately shorter than the [settle delay](#settling) (2s), so
+  an ending has ordinarily reached the disk before the work engine acts on it,
+  and one a crash takes is one nothing had acted on yet
+  (`TestRecoverableFlushDelayIsShorterThanTheSettleDelay` holds the ordering).
+  Ordinarily, not always: a disk that refuses the write, or a write queued
+  behind a long `Delete`, can lose an ending the engine has seen — and the cost
+  is then an outcome shown as aborted, nothing more.
+- **`UpdatedAt` and `Unread`** fall back to their value of a second earlier: list
+  order and a visual hint.
+
+A durable write carries whatever recoverable changes are pending — the index is
+one file. The timer is armed by the first pending change and never pushed back,
+so a session that changes constantly still reaches the disk every second. A
+write the disk refuses keeps the store dirty and re-arms the timer, so it is
+retried even if the session goes quiet — until `Close`, after which it waits for
+the next change. A deferred write — the background flush, `Close`, or a
+recoverable change after `Close` — that finds the `sessions/` directory gone
+drops its changes rather than recreate the directory: under a live store it
+disappears only when its data was removed on purpose. A durable write still
+goes through.
+
+**`Close` ends the deferral.** `Worktree.Stop` calls `FileStore.Close` after
+`ProcessManager.Shutdown`, so the endings of the processes it drained are on disk
+once the stop returns. After `Close` every change is written as it happens: a
+late event from a process still being torn down has no timer left to take it
+there.
+
+**Who may read the file while a store is live.** The file can trail a live store
+by its pending recoverable changes, never by a durable one. So every reader of
+turn state or metadata goes through the store when the worktree is loaded
+(`worktree.Manager.SessionTurns`, `worktree.Manager.SessionReader`), and reads the
+file only for a worktree that is not loaded, or at startup, before there is a
+store. A worktree is taken out of the loaded set *before* it is stopped, so
+for the length of its drain (up to `Shutdown`'s 10s) the file is read while the
+old store is still live and not yet closed. That is the price of not building
+or waiting on a worktree to answer a read, and it is small: turn state read off
+disk is normalised on the way out (`NormalizeTurn`), so a stale open turn reads
+as the aborted one it is about to become. What is left behind is at most a
+second of changes: `UpdatedAt`, `Unread`, and a turn's ending, which reads as
+aborted until it is written — the same trade a crash makes. `ReadUsages` and the startup reads of
+`Unanswered` read the file at any time, because they read only durable fields.
+
+**Readers never wait for a write.** A write may hold the store across an fsync,
+and nearly every RPC lists or gets a session, so `List` and `Get` take no lock:
+
+- Writers are serialized on `FileStore.writeMu`. Under it, a write is one step:
+  change the working copy (`sessions`), write it to disk (or defer it, above),
+  publish a snapshot, notify listeners. The background flush and `Close` take the
+  same lock and publish nothing, having changed no session.
+- Readers load the published snapshot, an `atomic.Pointer` to a slice that is
+  never modified once stored. Sharing it without a copy is safe because nothing
+  reachable from a stored `SessionMeta` is edited in place: the turn reducer
+  clones `Blockers` and `Unanswered`, and usage folding replaces the `CostUSD`
+  pointer rather than writing through it. A change that edits one in place
+  breaks every reader silently. `List` still copies the slice, to sort it.
+- **Publishing follows the disk write and precedes the notification.** A reader
+  never sees a durable change before its write finished, nor half of one, and a
+  listener that queues an event and later calls `Get` sees at least that event's
+  state. A write the disk refuses is still published — the change stays in the
+  store, dirty and retried — but listeners never hear of it, since the caller was
+  told it failed. A failed insert is rolled back and publishes nothing.
+- **Deletion is the one change shown early.** `Delete` publishes the list without
+  the doomed sessions *before* removing their directories: a reader handed a
+  session whose files are going could write an attachment or a page into it and
+  leave an orphan directory. Nothing is owed back — a deletion that does not
+  reach the index still stands in the store — and if removing the directories
+  fails, the sessions are published again, since they are still in the index
+  (and still tombstoned against late history writes).
+
+The cost is a shallow clone of the session list per write that changes
+something. Listeners are still called with `writeMu` held, so they see changes in
+order; a new subscriber may receive a create or update for a row its first `List`
+already showed. The watcher forwards it as it is; the client absorbs it, since
+inserting a row it already holds re-places that row instead
+(`web/src/lib/sessionStore.ts`).
+
+**Known limitation:** while a worktree is unloaded but its processes are still
+draining, its old store can still write — through its flush timer, `Close`, or
+late events. A new store opened on the same directory in that window can be
+overwritten by it, and a `DeleteInDir` in that window can have the deleted
+session written back. The draining process's own turn-ending write did the same
+before writes were deferred. Closing it belongs in `worktree.Manager`: creating a
+worktree should wait while one of the same name is still stopping.
+
 ## Concurrency Safety
 
 ### Lock Strategy
@@ -5148,7 +5260,7 @@ position it would otherwise appear to hold.
 | `stdinMu` | Subprocess stdin writes |
 | `requestsMu` | Pending requests map |
 | `processesMu` | Process map |
-| `sessionsMu` | Session list |
+| `writeMu` | Session index writers; readers take no lock ([why](#the-session-index)) |
 
 `processesMu` is held from the lookup that finds no process through to the one it
 registers, `Agent.Start` included — that is what keeps two messages arriving at
