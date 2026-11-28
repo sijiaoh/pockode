@@ -67,6 +67,13 @@ type Store interface {
 	//
 	// After Delete, it and WriteHistory fail with ErrSessionNotFound and write
 	// nothing, the session's directory included.
+	//
+	// Every record written while the server runs goes through chatstream's
+	// Sequencer, which calls this and puts the record on the session's live
+	// stream in one step; an append made around it would take a seq no client
+	// is ever sent. The one caller that does not is this store's own repair on
+	// load (abortTurnsTheLastRunLeftOpen), which runs before anything can
+	// subscribe to a session, so there is no stream to order it in.
 	AppendToHistory(ctx context.Context, sessionID string, record HistoryRecord) (HistorySeq, error)
 	// WriteHistory replaces a session's whole history with records, numbered
 	// from 1 whatever seqs they carried.

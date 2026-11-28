@@ -100,7 +100,7 @@ func TestClient_MidTurnMessageRecordsTheReadPoint(t *testing.T) {
 
 	// Everyone is told, the sender included: unlike the message itself, no
 	// client has a local echo of this to fall back on.
-	last := f.broadcasts[len(f.broadcasts)-1]
+	last := f.stream.records()[len(f.stream.records())-1]
 	if ingested, ok := last.(agent.MessageIngestedRecord); !ok || ingested.MessageID != second.MessageID {
 		t.Errorf("last broadcast = %+v, want the read point", last)
 	}

@@ -12,7 +12,7 @@ React SPA ──WebSocket──▶ Go Server ──spawn──▶ AI CLI (subpro
                          ProcessManager ◀───── AgentSession
 ```
 
-- **ChatClient** (`server/chat/`) — Coordinates session/process management, persists messages to history, broadcasts events to all WebSocket subscribers.
+- **ChatClient** (`server/chat/`) — Coordinates session/process management, records messages, answers and warnings through the session's `chatstream.Sequencer`, which persists each and puts it on the live stream in seq order ([why](code/agent-integration.md#history-storage)).
 - **ProcessManager** (`server/process/`) — Manages agent process lifecycle. Streams agent events into history and turn state, and runs the lease reaper that decides how long a process may be held ([the lease table](code/agent-integration.md#the-lease-table)).
 - **Agent Session** (`server/agent/`) — Common `Session` interface implemented by each backend (`agent/claude/`, `agent/codex/`). Handles subprocess spawning, stream-json parsing, stdin messaging.
 
@@ -26,7 +26,7 @@ React SPA ──WebSocket──▶ Go Server ──spawn──▶ AI CLI (subpro
 | Attachments | `server/ws/rpc_attachment.go` | `attachment.get` — the content a chat event references by id, answered in `file.get`'s own shape so one client path renders both ([why](code/agent-integration.md#content-blocks-and-attachments)) |
 | Agent pages | `server/ws/rpc_html_page.go` | `html_page.get` `{session_id, id}` → `{page: {id, title, html, base?, created_at}}` — a page an agent drew, by the id its `tool_result` record carries as `html_page`; immutable, so never subscribed to ([how](code/work-system.md#rendering-tool)) |
 | Sending files | `server/filetransfer/attachment.go`, `server/chat/attachments.go` | `POST /api/chat/attachments` stores a file in the session's store; `chat.message`'s `attachments` names it by id and each agent delivers it its own way ([how](code/agent-integration.md#files-the-user-sends)). Client side: `web/src/lib/chatAttachments.ts`; the composer's `+` menu (Photos / Files), a drop on the chat or a paste into the composer ([how](#attaching-by-drop-or-paste)) uploads each file as it arrives (`inputStore`), holds Send until every one is stored, and takes the files back if the message is refused |
-| Chat client | `server/chat/client.go` | Session coordination, message persistence, event broadcast; `SendMessageExcluding` (user) and `SendSystemMessage` (system automation) share one persist+broadcast path |
+| Chat client | `server/chat/client.go` | Session coordination and the records Pockode writes itself; `SendMessageExcluding` (user) and `SendSystemMessage` (system automation) share one path into the sequencer |
 | Agent interface | `server/agent/agent.go` | `Session` and `AgentEvent` interfaces |
 | Claude impl | `server/agent/claude/claude.go` | Claude CLI subprocess, stream-json parsing, MCP server config |
 | Process manager | `server/process/manager.go` | Process lifecycle, event stream, lease reaper |
@@ -42,7 +42,7 @@ React SPA ──WebSocket──▶ Go Server ──spawn──▶ AI CLI (subpro
 2. ChatClient persists message to session history, forwards to `Process.SendMessage()` — unless the turn is holding a permission request open, the one state a message cannot be delivered in, which is refused as `InvalidParams` with nothing written ([lifecycle.md](lifecycle.md#session-one-reducer)). A turn merely *running* is not refused; the message steers it, and the answer to it begins where the agent reads it rather than where the turn ends — for an agent that cannot report that moment itself, this is also where the read point record is written ([agent-event.md](agent-event.md#the-read-point-message_ingested)).
 3. Agent subprocess receives via stdin, processes, emits stream-json events
 4. Events are parsed into typed `AgentEvent`s (Text, ToolCall, ToolResult, Error, PermissionRequest, Done, etc.)
-5. Events are broadcast to all WebSocket subscribers and persisted to session history
+5. Each event is persisted to session history and then queued for every WebSocket subscriber, in one step per session (`chatstream.Sequencer`), so subscribers get records in seq order; a live event (`tool_activity`, `thinking_delta`) is queued without being persisted
 6. On `Done` event, process transitions to `idle`
 
 Besides user-typed messages, the Work system pushes automatic prompts to the same session via `Client.SendSystemMessage`; these are tagged `origin: "system"` with a `meta` summary naming the work, so the frontend can render each as a one-line work event where it happened instead of as a user bubble. See [agent-event.md](agent-event.md#message-origin-user-vs-system) and [code/work-system.md](code/work-system.md#work-messages-in-chat).

@@ -168,33 +168,14 @@ func TestExpiry_ATimeoutDoesNotLeakOntoTheNextPrompt(t *testing.T) {
 	}
 }
 
-// recordingListener keeps the broadcast order, which is the thing under test
-// below: it has to match the order history holds.
-type recordingListener struct {
-	mu   sync.Mutex
-	msgs []ChatMessage
-}
-
-func (r *recordingListener) OnChatMessage(msg ChatMessage) {
-	r.mu.Lock()
-	r.msgs = append(r.msgs, msg)
-	r.mu.Unlock()
-}
-
-func (r *recordingListener) snapshot() []ChatMessage {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return append([]ChatMessage(nil), r.msgs...)
-}
-
 // A subscriber is handed the records in the order they were written. An expiry
 // announced before the event that caused it would deliver a higher sequence
 // number before the one below it, to a client that uses those numbers to page
 // and to anchor forks.
 func TestExpiry_IsAnnouncedAfterTheEventThatCausedIt(t *testing.T) {
 	m, mock, _, proc := startedTurn(t, leaseTestBudgets)
-	listener := &recordingListener{}
-	m.SetMessageListener(listener)
+	listener := &messageRecorder{}
+	m.SetStreamSink(listener)
 	sess := mock.session(t, "sess-1")
 
 	sess.emit(t, agent.PermissionRequestEvent{RequestID: "req-1", ToolName: "Bash"})
@@ -209,9 +190,9 @@ func TestExpiry_IsAnnouncedAfterTheEventThatCausedIt(t *testing.T) {
 	waitUntil(t, "the expiry to be announced", func() bool {
 		order, seqs = nil, nil
 		for _, msg := range listener.snapshot() {
-			switch msg.Event.(type) {
-			case agent.InterruptedEvent, agent.RequestCancelledEvent:
-				order = append(order, msg.Event.EventType())
+			switch msg.Record.Type() {
+			case agent.EventTypeInterrupted, agent.EventTypeRequestCancelled:
+				order = append(order, msg.Record.Type())
 				seqs = append(seqs, msg.Seq)
 			}
 		}

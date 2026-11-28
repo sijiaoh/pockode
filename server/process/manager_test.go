@@ -1169,7 +1169,7 @@ func TestManager_StreamingEvents_PreventsReaping(t *testing.T) {
 	// listener is the point at which the event is known to have been counted as
 	// activity. Sleeping instead would only guess at when that happened.
 	seen := make(chan struct{}, 8)
-	m.SetMessageListener(listenerFunc(func(ChatMessage) { seen <- struct{}{} }))
+	m.SetStreamSink(sinkFunc(func(agent.Wire) { seen <- struct{}{} }))
 
 	proc, _, _ := m.GetOrCreateProcess(context.Background(), createSession(t, store, "sess-1"))
 
@@ -1358,9 +1358,9 @@ func backdate(p *Process, d time.Duration) {
 	p.mu.Unlock()
 }
 
-type listenerFunc func(ChatMessage)
+type sinkFunc func(agent.Wire)
 
-func (f listenerFunc) OnChatMessage(msg ChatMessage) { f(msg) }
+func (f sinkFunc) Enqueue(_ string, record agent.Wire, _ session.HistorySeq, _ any) { f(record) }
 
 // TestProcess_ActivationFollowsAgentOutput covers what "activated" is supposed
 // to mean. A first turn that dies before the agent says anything — expired

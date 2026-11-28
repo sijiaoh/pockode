@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/pockode/server/agent"
+	"github.com/pockode/server/chatstream"
 	"github.com/pockode/server/cliprofile"
 	"github.com/pockode/server/logger"
 	"github.com/pockode/server/session"
@@ -84,8 +85,9 @@ type Manager struct {
 	agentCountsMu sync.Mutex
 	agentCounts   map[session.AgentType]int
 
-	// Message listener (ChatMessagesWatcher)
-	messageListener ChatMessageListener
+	// stream is the one way any record of these sessions reaches history and
+	// the clients watching them; see chatstream.
+	stream *chatstream.Sequencer
 
 	// workLookup is what workCalls reads a work tool call's work from.
 	workLookup WorkLookup
@@ -260,6 +262,7 @@ func NewManager(agents *agent.Registry, worktree, workDir, dataDir, mcpServerDir
 		dataDir:      dataDir,
 		mcpServerDir: mcpServerDir,
 		sessionStore: store,
+		stream:       chatstream.New(store),
 		budgets:      budgets,
 		processes:    make(map[string]*Process),
 		exiting:      make(map[*Process]struct{}),
@@ -281,9 +284,17 @@ func NewManager(agents *agent.Registry, worktree, workDir, dataDir, mcpServerDir
 	return m
 }
 
-// SetMessageListener sets the listener for chat messages.
-func (m *Manager) SetMessageListener(l ChatMessageListener) {
-	m.messageListener = l
+// SetStreamSink names where these sessions' records go once they are written
+// (the ChatMessagesWatcher). Set before any process starts.
+func (m *Manager) SetStreamSink(sink chatstream.Sink) {
+	m.stream.SetSink(sink)
+}
+
+// Stream is the sequencer every record of these sessions is written through —
+// the chat client's as well as the processes' — so that each session's live
+// stream carries them in the order its history holds them.
+func (m *Manager) Stream() *chatstream.Sequencer {
+	return m.stream
 }
 
 // SetWorkLookup names the work store a Pockode work tool's result is stamped
@@ -350,18 +361,6 @@ func (m *Manager) emitStateChange(sessionID string, state ProcessState) {
 func (m *Manager) emitStateChangeEvent(e StateChangeEvent) {
 	if m.onStateChange != nil {
 		m.onStateChange(e)
-	}
-}
-
-// EmitMessage sends a message to the listener. seq is where the event was
-// persisted in the session's history, or session.NoHistorySeq if it was not.
-func (m *Manager) EmitMessage(sessionID string, event agent.AgentEvent, seq session.HistorySeq) {
-	if m.messageListener != nil {
-		m.messageListener.OnChatMessage(ChatMessage{
-			SessionID: sessionID,
-			Event:     event,
-			Seq:       seq,
-		})
 	}
 }
 
@@ -1622,21 +1621,13 @@ func (p *Process) recordExpiries(ctx context.Context, log *slog.Logger, sig sess
 			"kind", blocker.Kind, "requestId", blocker.RequestID,
 			"raisedAt", blocker.RaisedAt, "cause", sig, "reason", reason)
 
+		// A failed write has been reported by the sequencer, and there is
+		// nothing else to undo: the blocker is already gone from the turn. A
+		// deleted session is the ordinary failure here — its process is torn
+		// down asynchronously, so an expiry can outlive the session it
+		// describes — and the sequencer drops that one quietly.
 		event := agent.RequestCancelledEvent{RequestID: blocker.RequestID, Reason: reason}
-		seq, err := p.sessionStore.AppendToHistory(ctx, p.sessionID, event.ToRecord())
-		if err != nil {
-			// A deleted session is the ordinary case here: its process is torn
-			// down asynchronously, so an expiry can outlive the session it
-			// describes, and the store refuses the write rather than recreate
-			// the directory Delete removed.
-			if errors.Is(err, session.ErrSessionNotFound) {
-				log.Debug("expired request not recorded, session is gone", "requestId", blocker.RequestID)
-			} else {
-				log.Error("failed to record an expired request", "requestId", blocker.RequestID, "error", err)
-			}
-			continue
-		}
-		p.manager.EmitMessage(p.sessionID, event, seq)
+		_, _ = p.manager.stream.Append(ctx, p.sessionID, event.ToRecord(), nil)
 	}
 }
 
@@ -2024,21 +2015,18 @@ func (p *Process) handleEvent(ctx context.Context, log *slog.Logger, event agent
 		transition = p.applyTurn(ctx, in)
 	}
 
-	// Persist to history. An event that reports a latest value rather than a
-	// settled fact encodes as an agent.LiveEvent, which is broadcast and never
-	// stored, so it reaches subscribers with no sequence number.
-	seq := session.NoHistorySeq
-	if record, ok := event.Encode().(agent.Record); ok {
-		var err error
-		seq, err = p.sessionStore.AppendToHistory(ctx, p.sessionID, record)
-		switch {
-		case errors.Is(err, session.ErrSessionNotFound):
-			// As in applyTurn: output still arriving for a session deleted
-			// while its process is torn down.
-			log.Debug("history record dropped, session is gone", "eventType", eventType)
-		case err != nil:
-			log.Error("failed to append to history", "error", err)
-		}
+	// Recorded and put on the session's stream in one step. An event that
+	// reports a latest value rather than a settled fact encodes as an
+	// agent.LiveEvent, which is broadcast and never stored, so it reaches
+	// subscribers with no sequence number. A failed write is the sequencer's to
+	// report (output still arriving for a session deleted while its process is
+	// torn down is the usual one, and is dropped quietly); the event goes on
+	// moving the turn either way, as the agent did act on it.
+	switch wire := event.Encode().(type) {
+	case agent.Record:
+		_, _ = p.manager.stream.Append(ctx, p.sessionID, wire, nil)
+	case agent.LiveEvent:
+		p.manager.stream.Publish(p.sessionID, wire)
 	}
 
 	if reduce {
@@ -2066,11 +2054,8 @@ func (p *Process) handleEvent(ctx context.Context, log *slog.Logger, event agent
 		}
 	}
 
-	// Emit to listener (ChatMessagesWatcher)
-	p.manager.EmitMessage(p.sessionID, event, seq)
-
-	// After the broadcast, so the request is on screen before anything else
-	// starts answering it.
+	// After the record is on its way to clients, so the request is on screen
+	// before anything else starts answering it.
 	if routing.Route != nil {
 		routing.Route()
 	}

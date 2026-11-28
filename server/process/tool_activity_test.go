@@ -10,23 +10,29 @@ import (
 	"github.com/pockode/server/session"
 )
 
-// messageRecorder collects what the manager broadcasts, which is where a
-// non-persisted event is the only place it can be observed.
+// messageRecorder collects what the manager puts on a session's stream, which
+// is where a non-persisted event is the only place it can be observed.
 type messageRecorder struct {
 	mu       sync.Mutex
-	messages []ChatMessage
+	messages []streamed
 }
 
-func (r *messageRecorder) OnChatMessage(msg ChatMessage) {
+type streamed struct {
+	SessionID string
+	Record    agent.Wire
+	Seq       session.HistorySeq
+}
+
+func (r *messageRecorder) Enqueue(sessionID string, record agent.Wire, seq session.HistorySeq, _ any) {
 	r.mu.Lock()
-	r.messages = append(r.messages, msg)
+	r.messages = append(r.messages, streamed{SessionID: sessionID, Record: record, Seq: seq})
 	r.mu.Unlock()
 }
 
-func (r *messageRecorder) snapshot() []ChatMessage {
+func (r *messageRecorder) snapshot() []streamed {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return append([]ChatMessage(nil), r.messages...)
+	return append([]streamed(nil), r.messages...)
 }
 
 // A progress line is the latest value of something still changing; recorded, it
@@ -39,7 +45,7 @@ func TestProcess_ToolActivityIsBroadcastButNeverRecorded(t *testing.T) {
 	defer m.Shutdown()
 
 	rec := &messageRecorder{}
-	m.SetMessageListener(rec)
+	m.SetStreamSink(rec)
 
 	m.GetOrCreateProcess(context.Background(), createActivatedSession(t, store, "sess-1"))
 
@@ -59,9 +65,9 @@ func TestProcess_ToolActivityIsBroadcastButNeverRecorded(t *testing.T) {
 		t.Fatalf("expected only the text event in history, got %d records", len(records))
 	}
 
-	var activity *ChatMessage
+	var activity *streamed
 	for _, msg := range rec.snapshot() {
-		if msg.Event.EventType() == agent.EventTypeToolActivity {
+		if msg.Record.Type() == agent.EventTypeToolActivity {
 			activity = &msg
 		}
 	}

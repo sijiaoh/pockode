@@ -8,6 +8,7 @@ import { useSessionDetailStore } from "../lib/sessionDetailStore";
 import { makeSessionDetail } from "../test/sessionFixtures";
 import type {
 	AssistantMessage,
+	ChatNotification,
 	Message,
 	QuestionAnswerRecord,
 	ServerNotification,
@@ -731,6 +732,76 @@ describe("useChatMessages", () => {
 		expect(messages[1]).toMatchObject({
 			role: "assistant",
 			parts: [{ type: "text", content: "written meanwhile" }],
+		});
+	});
+
+	// `chat.resync`: the server could not queue a record for this subscriber and
+	// will send nothing more on it. The record it lost here is the turn's end, so
+	// without a fresh snapshot the bubble would stream forever.
+	it("replaces the transcript with a fresh subscription's snapshot on resync", async () => {
+		let notify: (notification: ChatNotification) => void = () => {};
+		let subscriptions = 0;
+		mockState.chatMessagesUnsubscribe.mockClear();
+		mockState.chatMessagesSubscribe.mockImplementation(
+			async (
+				_sessionId: string,
+				onNotification: (notification: ChatNotification) => void,
+			) => {
+				notify = onNotification;
+				subscriptions++;
+				const asked = { type: "message", content: "Do the thing", seq: 1 };
+				const working = { type: "text", content: "Working", seq: 2 };
+				return subscriptions === 1
+					? {
+							id: "sub-1",
+							initial: {
+								history: [asked, working],
+								turn: { phase: "running", open: true, since: "" },
+							},
+						}
+					: {
+							id: "sub-2",
+							initial: {
+								history: [
+									asked,
+									working,
+									{ type: "text", content: " and done", seq: 3 },
+									{ type: "done", seq: 4 },
+								],
+								turn: { phase: "idle", open: false, since: "" },
+							},
+						};
+			},
+		);
+
+		let messages: Message[] = [];
+		function Probe() {
+			messages = useChatMessages({ sessionId: "s1" }).messages;
+			return null;
+		}
+		render(<Probe />);
+		await waitFor(() =>
+			expect(messages.at(-1)).toMatchObject({ status: "streaming" }),
+		);
+
+		await act(async () => notify({ type: "resync" }));
+
+		await waitFor(() =>
+			expect(messages.at(-1)).toMatchObject({ status: "complete" }),
+		);
+		expect(mockState.chatMessagesUnsubscribe).toHaveBeenCalledWith("sub-1");
+		expect(subscriptions).toBe(2);
+		// Replaced, not appended to: the records the first stream delivered are
+		// in the new snapshot too, and appear once.
+		expect(messages).toHaveLength(2);
+		expect(messages[1]).toMatchObject({
+			role: "assistant",
+			parts: [
+				{
+					type: "text",
+					content: expect.stringMatching(/^Working\s*and done$/),
+				},
+			],
 		});
 	});
 

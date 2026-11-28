@@ -146,8 +146,11 @@ func (c *Client) postQuestion(ctx context.Context, sessionID string, spec Questi
 		},
 		AskedAt: now,
 	}.ToRecord()
-	seq, err := c.store.AppendToHistory(ctx, sessionID, record)
-	if err != nil {
+	// On the wire from here, a moment before the turn lists it as pending
+	// below. Nobody answers a question in that moment — a person has to read
+	// it first — and should the turn not take it, the next reload shows the
+	// same record anyway.
+	if _, err := c.stream.Append(ctx, sessionID, record, nil); err != nil {
 		// Refused rather than degraded, unlike a message: a message is worth
 		// answering whether or not the transcript kept it, but a question the
 		// transcript never heard cannot be inherited by a fork and cannot be
@@ -161,7 +164,6 @@ func (c *Client) postQuestion(ctx context.Context, sessionID string, spec Questi
 		return session.PendingQuestion{}, fmt.Errorf("record that the session is waiting for an answer: %w", err)
 	}
 
-	c.broadcastRecord(sessionID, record, seq)
 	slog.Info("question posted", "sessionId", sessionID, "requestId", q.RequestID)
 	return q, nil
 }
@@ -236,8 +238,7 @@ func (c *Client) withdraw(ctx context.Context, sessionID, requestID string, reas
 	record := agent.RequestCancelledEvent{
 		RequestID: requestID, Reason: reason, At: now,
 	}.ToRecord()
-	seq, err := c.store.AppendToHistory(ctx, sessionID, record)
-	if err != nil {
+	if _, err := c.stream.Append(ctx, sessionID, record, nil); err != nil {
 		return session.PendingQuestion{}, fmt.Errorf("record withdrawal: %w", err)
 	}
 	if _, err := c.store.ApplyTurn(ctx, sessionID, session.TurnInput{
@@ -246,7 +247,6 @@ func (c *Client) withdraw(ctx context.Context, sessionID, requestID string, reas
 		return session.PendingQuestion{}, fmt.Errorf("stop waiting for the answer: %w", err)
 	}
 
-	c.broadcastRecord(sessionID, record, seq)
 	slog.Info("question withdrawn", "sessionId", sessionID, "requestId", requestID, "reason", reason)
 	return q, nil
 }
@@ -649,10 +649,4 @@ func (c *Client) readResolutions(ctx context.Context, sessionID string, requestI
 		}
 	}
 	return out
-}
-
-func (c *Client) broadcastRecord(sessionID string, record agent.Record, seq session.HistorySeq) {
-	if c.broadcast != nil {
-		c.broadcast(sessionID, record, seq, nil)
-	}
 }

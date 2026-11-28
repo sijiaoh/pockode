@@ -14,11 +14,11 @@ import (
 // midTurnFixture is one session with a live process, held at whatever the test
 // drives its turn to.
 type midTurnFixture struct {
-	store      session.Store
-	client     *Client
-	agent      *mockAgent
-	pm         *process.Manager
-	broadcasts []agent.Record
+	store  session.Store
+	client *Client
+	agent  *mockAgent
+	pm     *process.Manager
+	stream *streamRecorder
 }
 
 func newMidTurnFixture(t *testing.T) *midTurnFixture {
@@ -36,10 +36,7 @@ func newMidTurnFixture(t *testing.T) *midTurnFixture {
 		t.Fatalf("Create session: %v", err)
 	}
 
-	f := &midTurnFixture{store: store, client: NewClient(store, pm), agent: ag, pm: pm}
-	f.client.SetBroadcaster(func(_ string, record agent.Record, _ session.HistorySeq, _ any) {
-		f.broadcasts = append(f.broadcasts, record)
-	})
+	f := &midTurnFixture{store: store, client: NewClient(store, pm), agent: ag, stream: recordStream(pm), pm: pm}
 	return f
 }
 
@@ -90,11 +87,14 @@ func (f *midTurnFixture) waitForPhase(t *testing.T, want session.TurnPhase) {
 // the earlier of the two — a test that counted records after waiting on a phase
 // would sometimes count one too few, and then see it arrive during the
 // assertion it was making about something else.
+//
+// It waits for the stream to have been handed them too, for the same reason
+// one step on: the sequencer enqueues a record just after history takes it.
 func (f *midTurnFixture) waitForRecords(t *testing.T, n int) int {
 	t.Helper()
 	deadline := time.Now().Add(15 * time.Second)
 	for time.Now().Before(deadline) {
-		if got := f.historyLen(t); got >= n {
+		if got := f.historyLen(t); got >= n && len(f.stream.records()) >= got {
 			return got
 		}
 		time.Sleep(time.Millisecond)
@@ -137,8 +137,8 @@ func TestClient_MessageDuringARunningTurnGoesThrough(t *testing.T) {
 	if got := f.historyLen(t); got != 3 {
 		t.Errorf("history records = %d, want both messages and the read point", got)
 	}
-	if len(f.broadcasts) != 3 {
-		t.Errorf("broadcasts = %d, want the records that were written", len(f.broadcasts))
+	if len(f.stream.records()) != 3 {
+		t.Errorf("broadcasts = %d, want the records that were written", len(f.stream.records()))
 	}
 	if phase := f.phase(t); phase != session.PhaseRunning {
 		t.Errorf("phase = %q, want the turn still running", phase)
@@ -213,7 +213,7 @@ func TestClient_MessageRefusedWhileARequestIsOnScreen(t *testing.T) {
 
 				// The message that started the turn, and the request itself.
 				before := f.waitForRecords(t, 2)
-				broadcasts := len(f.broadcasts)
+				broadcasts := len(f.stream.records())
 
 				if err := sender.send(f.client); !errors.Is(err, ErrTurnAwaitingAnswer) {
 					t.Fatalf("error = %v, want ErrTurnAwaitingAnswer", err)
@@ -225,8 +225,8 @@ func TestClient_MessageRefusedWhileARequestIsOnScreen(t *testing.T) {
 				if got := f.historyLen(t); got != before {
 					t.Errorf("history records = %d, want the refused message not recorded (%d)", got, before)
 				}
-				if len(f.broadcasts) != broadcasts {
-					t.Errorf("broadcasts = %d, want the refused message not broadcast (%d)", len(f.broadcasts), broadcasts)
+				if len(f.stream.records()) != broadcasts {
+					t.Errorf("broadcasts = %d, want the refused message not broadcast (%d)", len(f.stream.records()), broadcasts)
 				}
 				if got := sess.sentPrompts(); len(got) != 1 {
 					t.Errorf("prompts handed to the agent = %q, want only the one that started the turn", got)

@@ -1532,3 +1532,17 @@ export interface SessionEffortsResult {
  * (`wire.generated.ts`); a history page's entries are the same records.
  */
 export type ServerNotification = Wire.WireEvent & { seq?: HistorySeq };
+
+/**
+ * `chat.resync`: the server could not queue a record for this subscription, so
+ * its stream has a hole here. Everything before it arrived in order and without
+ * gaps, and nothing more will arrive on this subscription id. The only recovery
+ * is a fresh subscribe, whose snapshot covers whatever the hole lost. Never a
+ * wire event type — the server holds that apart.
+ */
+export interface ChatResyncNotification {
+	type: "resync";
+}
+
+/** Everything a chat subscription's callback can receive. */
+export type ChatNotification = ServerNotification | ChatResyncNotification;
