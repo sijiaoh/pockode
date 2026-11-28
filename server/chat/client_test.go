@@ -296,7 +296,7 @@ func TestClient_UnknownSessionStaysNotFound(t *testing.T) {
 // the point of the test below is that nothing passes it on.
 type failingAppendStore struct{ session.Store }
 
-func (failingAppendStore) AppendToHistory(context.Context, string, session.HistoryRecord) (session.HistorySeq, error) {
+func (failingAppendStore) AppendToHistory(context.Context, string, session.HistoryRecord, session.HistoryTurn) (session.HistorySeq, error) {
 	return 42, errors.New("history is not writable")
 }
 
@@ -329,9 +329,11 @@ func TestClient_MessageWithNoRecordHasNoAddress(t *testing.T) {
 	}
 	// Not passed off as a live record either: it would be on screen now and gone
 	// on the next reload. Every subscriber, the sender included, is told instead.
+	// Two: the message's, and that of the turn_started it opened, which this
+	// store refuses as well.
 	entries := stream.snapshot()
-	if len(entries) != 1 {
-		t.Fatalf("stream = %+v, want only the warning standing in for the message", entries)
+	if len(entries) != 2 {
+		t.Fatalf("stream = %+v, want only the warnings standing in for the message and its turn_started", entries)
 	}
 	warning, ok := entries[0].record.(agent.WarningRecord)
 	if !ok || warning.Code != chatstream.HistoryWriteFailedCode {

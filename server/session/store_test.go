@@ -293,10 +293,10 @@ func TestFileStore_History(t *testing.T) {
 	record1 := testRecord{"type": "message", "content": "hello"}
 	record2 := testRecord{"type": "text", "content": "world"}
 
-	if _, err := store.AppendToHistory(ctx, sess.ID, record1); err != nil {
+	if _, err := store.AppendToHistory(ctx, sess.ID, record1, HistoryTurn{}); err != nil {
 		t.Fatalf("AppendToHistory failed: %v", err)
 	}
-	if _, err := store.AppendToHistory(ctx, sess.ID, record2); err != nil {
+	if _, err := store.AppendToHistory(ctx, sess.ID, record2, HistoryTurn{}); err != nil {
 		t.Fatalf("AppendToHistory failed: %v", err)
 	}
 
@@ -309,10 +309,10 @@ func TestFileStore_History(t *testing.T) {
 	}
 
 	// Verify content (raw JSON): each record as it marshaled, behind its envelope
-	if string(history[0]) != `{"seq":1,"v":2,"content":"hello","type":"message"}` {
+	if string(history[0]) != `{"seq":1,"v":3,"content":"hello","type":"message"}` {
 		t.Errorf("unexpected record 0: %s", history[0])
 	}
-	if string(history[1]) != `{"seq":2,"v":2,"content":"world","type":"text"}` {
+	if string(history[1]) != `{"seq":2,"v":3,"content":"world","type":"text"}` {
 		t.Errorf("unexpected record 1: %s", history[1])
 	}
 }
@@ -337,7 +337,7 @@ func TestFileStore_AppendToHistory_DoesNotUpdateTimestamp(t *testing.T) {
 	sess, _ := store.Create(ctx, "test-session", CreateSpec{})
 	initialUpdatedAt := sess.UpdatedAt
 
-	store.AppendToHistory(ctx, sess.ID, testRecord{"type": "message"})
+	store.AppendToHistory(ctx, sess.ID, testRecord{"type": "message"}, HistoryTurn{})
 
 	sessions, _ := store.List()
 	if sessions[0].UpdatedAt != initialUpdatedAt {
@@ -350,7 +350,7 @@ func TestFileStore_Delete_RemovesHistory(t *testing.T) {
 
 	sessionID := "session-with-history"
 	store.Create(ctx, sessionID, CreateSpec{})
-	store.AppendToHistory(ctx, sessionID, testRecord{"type": "message", "content": "test"})
+	store.AppendToHistory(ctx, sessionID, testRecord{"type": "message", "content": "test"}, HistoryTurn{})
 
 	history, _ := store.GetHistory(ctx, sessionID)
 	if len(history) != 1 {
@@ -374,7 +374,7 @@ func TestFileStore_WritesAfterDeleteFailWithoutRecreatingTheSession(t *testing.T
 		write func(store *FileStore, id string) error
 	}{
 		{"AppendToHistory", func(store *FileStore, id string) error {
-			_, err := store.AppendToHistory(ctx, id, testRecord{"type": "late"})
+			_, err := store.AppendToHistory(ctx, id, testRecord{"type": "late"}, HistoryTurn{})
 			return err
 		}},
 		{"WriteHistory", func(store *FileStore, id string) error {
@@ -394,7 +394,7 @@ func TestFileStore_WritesAfterDeleteFailWithoutRecreatingTheSession(t *testing.T
 				t.Fatal(err)
 			}
 			for _, id := range []string{"main", "reviewer"} {
-				if _, err := store.AppendToHistory(ctx, id, testRecord{"type": "before"}); err != nil {
+				if _, err := store.AppendToHistory(ctx, id, testRecord{"type": "before"}, HistoryTurn{}); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -420,7 +420,7 @@ func TestFileStore_WritesAfterDeleteFailWithoutRecreatingTheSession(t *testing.T
 func TestFileStore_RecreatedSessionTakesWritesAgain(t *testing.T) {
 	store, _ := NewFileStore(t.TempDir())
 	store.Create(ctx, "s", CreateSpec{})
-	store.AppendToHistory(ctx, "s", testRecord{"type": "old"})
+	store.AppendToHistory(ctx, "s", testRecord{"type": "old"}, HistoryTurn{})
 	if err := store.Delete(ctx, "s"); err != nil {
 		t.Fatal(err)
 	}
@@ -428,7 +428,7 @@ func TestFileStore_RecreatedSessionTakesWritesAgain(t *testing.T) {
 	if _, err := store.Create(ctx, "s", CreateSpec{}); err != nil {
 		t.Fatal(err)
 	}
-	seq, err := store.AppendToHistory(ctx, "s", testRecord{"type": "new"})
+	seq, err := store.AppendToHistory(ctx, "s", testRecord{"type": "new"}, HistoryTurn{})
 	if err != nil {
 		t.Fatalf("append to the recreated session: %v", err)
 	}
@@ -468,7 +468,7 @@ func TestFileStore_DeleteRacingAppendsLeavesNoDirectory(t *testing.T) {
 						after = true
 					default:
 					}
-					_, err := store.AppendToHistory(ctx, id, testRecord{"type": "racing"})
+					_, err := store.AppendToHistory(ctx, id, testRecord{"type": "racing"}, HistoryTurn{})
 					switch {
 					case errors.Is(err, ErrSessionNotFound):
 						return
@@ -558,7 +558,7 @@ func TestFileStore_WriteHistoryKeepsOneRecordPerLine(t *testing.T) {
 	if len(got) != 2 {
 		t.Fatalf("read back %d records, want 2: %s", len(got), got)
 	}
-	if string(got[0]) != `{"seq":1,"v":2,"type":"text","content":"line one"}` {
+	if string(got[0]) != `{"seq":1,"v":3,"type":"text","content":"line one"}` {
 		t.Errorf("first record = %s, want it compacted onto one line", got[0])
 	}
 }
@@ -600,7 +600,7 @@ func TestFileStore_AppendToHistoryNumbersRecords(t *testing.T) {
 	contents := []string{"one", "two", "three"}
 	var seqs []HistorySeq
 	for _, content := range contents {
-		seq, err := store.AppendToHistory(ctx, "sess", testRecord{"type": "text", "content": content})
+		seq, err := store.AppendToHistory(ctx, "sess", testRecord{"type": "text", "content": content}, HistoryTurn{})
 		if err != nil {
 			t.Fatalf("AppendToHistory failed: %v", err)
 		}
@@ -613,7 +613,7 @@ func TestFileStore_AppendToHistoryNumbersRecords(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewFileStore failed: %v", err)
 	}
-	seq, err := reopened.AppendToHistory(ctx, "sess", testRecord{"type": "text", "content": "four"})
+	seq, err := reopened.AppendToHistory(ctx, "sess", testRecord{"type": "text", "content": "four"}, HistoryTurn{})
 	if err != nil {
 		t.Fatalf("AppendToHistory failed: %v", err)
 	}

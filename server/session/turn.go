@@ -140,6 +140,22 @@ type TurnState struct {
 	// reading taken from it instead (rpc.NewTurn), so no client ever compares it
 	// with its own clock.
 	OpenedAt time.Time `json:"-"`
+	// TurnID is the open turn's id, the one its turn_started record carries and
+	// every record written while it is open is tagged with; empty while Open is
+	// false. Not stored, for OpenedAt's reason: no open turn survives a restart.
+	TurnID string `json:"-"`
+	// EndedTurnID is the id of the turn that ended last in this process
+	// incarnation, kept after a new one opens: the turn a straggler that turn
+	// left behind belongs to (TurnInput.AfterTurn). Empty before this process
+	// has ended a turn — a turn the previous process ended left nothing that
+	// can still arrive. Not stored, for TurnID's reason.
+	//
+	// Left out of equal: it is bookkeeping for tagging records, not something
+	// the session is doing, so a process starting or ending on an idle session
+	// clears it without that counting as a turn change — which would wake the
+	// settler and every turn listener for nothing. The store keeps the cleared
+	// value all the same, since it applies every reduction in place.
+	EndedTurnID string `json:"-"`
 	// LastOutcome is how the previous turn ended, and is cleared the moment a
 	// new turn starts. Reading it while Open is true would therefore be reading
 	// about nothing.
@@ -180,8 +196,9 @@ type TurnState struct {
 // below agent and cannot import it, and — the one that would matter anyway —
 // several distinct event types mean the same thing here while one event type
 // (a `system` frame) means something different depending on what raised it. The
-// translation from events to signals lives with the process that streams them
-// (process.turnInputFor).
+// translation from records to signals is agent.TurnInputOf, shared by the
+// process that streams them (process.turnInputFor) and the reading of old
+// histories (agent.InferHistoryTurns).
 type TurnSignal string
 
 const (
@@ -192,11 +209,27 @@ const (
 	// by Pockode itself. Either way a turn begins.
 	SignalPrompt TurnSignal = "prompt"
 	// SignalOutput is the agent putting something into the conversation: text, a
-	// tool call, a result. This is the only signal that ends a background wait,
-	// because it is the only one that proves the CLI has resumed. The record of
-	// background work ending is not output, though it is shown as a
-	// result: it arrives as SignalNoise (see process.turnInputFor).
+	// tool call, its thinking — anything but a result (SignalToolResult). This
+	// is the only signal that ends a background wait — with SignalToolResult,
+	// inside a turn — because it is the only one that proves the CLI has
+	// resumed. The record of background work ending is not output, though it is
+	// shown as a result: it arrives as SignalNoise (see agent.TurnInputOf).
 	SignalOutput TurnSignal = "output"
+	// SignalToolResult is what a tool call came back with. Inside a turn it is
+	// output like any other. With no turn open it opens none: a result answers a
+	// call the model made, so it can only belong to the turn that call was made
+	// in — one that has ended — and never be the CLI resuming, which is the
+	// model writing something new. It is reported as happening in the turn that
+	// ended last (TurnState.EndedTurnID), as a straggler is.
+	//
+	// The case this exists for is Claude's Stop: the CLI acknowledges the
+	// interrupt (the turn's ending), then answers each call still in flight with
+	// a refusal ("The user doesn't want to proceed with this tool use"), then
+	// reports the aborted turn's result — a second ending. Read as output, the
+	// refusals would open a turn only that second ending closes: a phantom turn
+	// per Stop, with the refusals filed under it rather than under the turn
+	// they were refused in.
+	SignalToolResult TurnSignal = "tool_result"
 	// SignalNoise is the agent's process saying something that is not content —
 	// a `system` frame, a live progress line. It moves nothing at all, and the
 	// two things it must not do are why it is named rather than dropped at the
@@ -249,6 +282,28 @@ const (
 	SignalProcessEnded TurnSignal = "process_ended"
 )
 
+// IsContent reports the signals that are the agent putting something into the
+// conversation — the ones a straggler (TurnInput.AfterTurn) can be.
+func (s TurnSignal) IsContent() bool {
+	return s == SignalOutput || s == SignalToolResult
+}
+
+// EndsTurn reports the signals that end a turn open when they arrive: the four
+// endings the agent reports, and the two ways the process carrying the turn
+// stops carrying it. ReduceTurn is the rule; this is it stated for a reader of
+// a history, which sees an ending as a record and cannot ask the reducer
+// (agent.OpenTurnOf). TestEndsTurnIsWhatReduceTurnEndsOn holds the two
+// together.
+func (s TurnSignal) EndsTurn() bool {
+	switch s {
+	case SignalDone, SignalFailed, SignalAuthFailed, SignalInterrupted,
+		SignalProcessEnded, SignalProcessStarted:
+		return true
+	default:
+		return false
+	}
+}
+
 // TurnInput is one signal plus what the reducer needs to act on it.
 type TurnInput struct {
 	Signal TurnSignal
@@ -260,12 +315,26 @@ type TurnInput struct {
 	// nothing.
 	Question *PendingQuestion
 	// MessageID names the message SignalQuestionResolved delivered an answer in,
-	// or the one SignalMessageDiscarded says was thrown away. Ignored by every
-	// other signal.
+	// or the one SignalMessageDiscarded says was thrown away. The reducer
+	// ignores it for every other signal; on SignalPrompt it is the prompt's own
+	// message, which the turn_started of a turn it opens names
+	// (chatstream.Sequencer.Advance).
 	MessageID string
 	// Reviewing is SignalPermissionRaised's request going to the session's
 	// permission reviewer (Blocker.Reviewing). Ignored by every other signal.
 	Reviewing bool
+	// TurnID is the id the turn this input opens is given, if it opens one.
+	// Minted by the caller (chatstream.Sequencer), which is what keeps the
+	// reducer a function of its arguments; ignored when no turn starts.
+	TurnID string
+	// AfterTurn says the input is content a turn that has already ended left
+	// behind (agent.MarkAfterTurn): it happened in the turn that ended last
+	// (TurnState.EndedTurnID), whatever is open now, and is reported as
+	// happening there. Only an agent that announces every turn it opens can
+	// know this, so for Claude it is never set: content after Claude's ending
+	// opens a turn of its own — except a tool result, which the reducer files
+	// under the ended turn by itself (SignalToolResult).
+	AfterTurn bool
 	// At is when this happened. Supplied by the caller rather than read from the
 	// clock inside so that the reducer stays a function of its arguments.
 	At time.Time
@@ -297,6 +366,13 @@ type TurnTransition struct {
 	// a race: two sends reaching one idle session would both believe they
 	// started it.
 	Started bool
+	// Turn is the id of the turn this input happened in: the one open after it,
+	// or the one it ended; for a straggler (TurnInput.AfterTurn, or a
+	// SignalToolResult with no turn open), the turn that ended last. Empty when
+	// no turn was open on either side — an ending repeated after the turn was
+	// over, output nobody's turn holds. The state cannot say it for an ending,
+	// which clears State.TurnID.
+	Turn string
 	// Changed is false when the input left the state exactly as it was, which is
 	// the common case — most of a turn's events are output, and the second one
 	// says nothing the first did not. It is what keeps a persisted TurnState
@@ -363,6 +439,13 @@ func ReduceTurn(state TurnState, in TurnInput) TurnTransition {
 		// them: content is the CLI resuming, and it resumes once.
 		next.Blockers = dropKind(next.Blockers, BlockerBackground)
 		next.Open = true
+
+	case SignalToolResult:
+		// Output inside a turn; outside one, a straggler of the turn that ended
+		// (see the attribution below), which moves nothing.
+		if state.Open {
+			next.Blockers = dropKind(next.Blockers, BlockerBackground)
+		}
 
 	case SignalNoise:
 		// Empty on purpose, and the emptiness is the rule: noise moves nothing.
@@ -471,9 +554,25 @@ func ReduceTurn(state TurnState, in TurnInput) TurnTransition {
 	if started {
 		next.LastOutcome = ""
 		next.OpenedAt = in.At
+		next.TurnID = in.TurnID
+	}
+	turn := next.TurnID
+	if ended {
+		next.EndedTurnID = turn
+	}
+	switch in.Signal {
+	case SignalProcessStarted, SignalProcessEnded:
+		// Whatever ended in another incarnation, nothing of it can arrive
+		// through this one.
+		next.EndedTurnID = ""
+	}
+	afterTurn := in.AfterTurn || (in.Signal == SignalToolResult && !state.Open)
+	if afterTurn && next.EndedTurnID != "" {
+		turn = next.EndedTurnID
 	}
 	if !next.Open {
 		next.OpenedAt = time.Time{}
+		next.TurnID = ""
 		// Read, all of them: a turn ends only once the CLI has taken in every
 		// message written before it, and the one thing that discards a message
 		// — a Stop — reports it ahead of the ending (SignalMessageDiscarded).
@@ -490,6 +589,7 @@ func ReduceTurn(state TurnState, in TurnInput) TurnTransition {
 		Expired: expired,
 		Ended:   ended,
 		Started: started,
+		Turn:    turn,
 		Changed: !next.equal(state),
 	}
 }
@@ -634,7 +734,7 @@ func cloneBlockers(blockers []Blocker) []Blocker {
 func (t TurnState) equal(other TurnState) bool {
 	if t.Phase != other.Phase || t.Open != other.Open ||
 		!t.Since.Equal(other.Since) || !t.OpenedAt.Equal(other.OpenedAt) ||
-		t.LastOutcome != other.LastOutcome {
+		t.TurnID != other.TurnID || t.LastOutcome != other.LastOutcome {
 		return false
 	}
 	if len(t.Blockers) != len(other.Blockers) {

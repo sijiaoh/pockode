@@ -52,6 +52,11 @@ type Store interface {
 	// ApplyTurn folds one thing that happened into the session's TurnState and
 	// returns what changed. It is the only way turn state is ever written; see
 	// ReduceTurn.
+	//
+	// An error writing the index comes with the transition: the store holds
+	// the new state anyway and retries the write (see persistIndex), so the
+	// caller acts on what happened. Only an error that applied nothing — the
+	// session is gone — comes with the zero transition.
 	ApplyTurn(ctx context.Context, sessionID string, in TurnInput) (TurnTransition, error)
 	SetUnread(ctx context.Context, sessionID string, unread bool) error
 	// AddUsage folds one agent report into the session's running consumption.
@@ -74,9 +79,15 @@ type Store interface {
 	// is ever sent. The one caller that does not is this store's own repair on
 	// load (abortTurnsTheLastRunLeftOpen), which runs before anything can
 	// subscribe to a session, so there is no stream to order it in.
-	AppendToHistory(ctx context.Context, sessionID string, record HistoryRecord) (HistorySeq, error)
+	//
+	// turn is stored in the record's envelope, and is the caller's to decide:
+	// which turn a record belongs to is a fact about when it was written
+	// relative to the turn's opening and ending, which only the writer ordering
+	// the two knows (chatstream.Sequencer).
+	AppendToHistory(ctx context.Context, sessionID string, record HistoryRecord, turn HistoryTurn) (HistorySeq, error)
 	// WriteHistory replaces a session's whole history with records, numbered
-	// from 1 whatever seqs they carried.
+	// from 1 whatever seqs they carried. The turns they were tagged with are
+	// kept: a copy holds the same turns.
 	//
 	// For a session nothing is streaming to yet — a fork's copied history, written
 	// once rather than appended record by record. It does not coordinate with
@@ -282,7 +293,7 @@ func (s *FileStore) abortTurnsTheLastRunLeftOpen() {
 		if !aborted && !s.historyLeftRunOpen(s.sessions[i].ID) {
 			continue
 		}
-		if _, err := s.AppendToHistory(context.Background(), s.sessions[i].ID, processEndedRecord{}); err != nil {
+		if _, err := s.AppendToHistory(context.Background(), s.sessions[i].ID, processEndedRecord{}, NoTurn); err != nil {
 			slog.Warn("failed to record the end of a session interrupted by a restart",
 				"sessionId", s.sessions[i].ID, "error", err)
 			continue
@@ -868,10 +879,7 @@ func (s *FileStore) ApplyTurn(ctx context.Context, sessionID string, in TurnInpu
 		meta.Turn = transition.State
 		return change, nil
 	})
-	if err != nil {
-		return TurnTransition{}, err
-	}
-	return transition, nil
+	return transition, err
 }
 
 // AddUsage records consumption without touching UpdatedAt: spending tokens is
@@ -991,7 +999,7 @@ func countEntries(n int) string {
 	return fmt.Sprintf("%d history entries", n)
 }
 
-func (s *FileStore) AppendToHistory(ctx context.Context, sessionID string, record HistoryRecord) (HistorySeq, error) {
+func (s *FileStore) AppendToHistory(ctx context.Context, sessionID string, record HistoryRecord, turn HistoryTurn) (HistorySeq, error) {
 	if err := ctx.Err(); err != nil {
 		return NoHistorySeq, err
 	}
@@ -1020,7 +1028,7 @@ func (s *FileStore) AppendToHistory(ctx context.Context, sessionID string, recor
 	// Taken under the lock and written before it is released, so seqs reach the
 	// file in the order they were handed out.
 	seq := h.lastSeq + 1
-	line, err := encodeHistoryLine(body, seq)
+	line, err := encodeHistoryLine(body, seq, turn)
 	if err != nil {
 		return NoHistorySeq, fmt.Errorf("encode history record: %w", err)
 	}
@@ -1055,7 +1063,8 @@ func (s *FileStore) countHistoryOnDisk(sessionID string) (HistorySeq, error) {
 // in the order given — whatever seqs they carried before. Its one caller is a
 // fork, whose copy is not a prefix of the source (agent.TruncateHistory drops
 // what the cut left dangling), so the source's seqs would leave gaps the new
-// session never had.
+// session never had. A turn id is not an address, so each record keeps the
+// turn it was tagged with.
 func (s *FileStore) WriteHistory(ctx context.Context, sessionID string, records []json.RawMessage) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -1071,7 +1080,7 @@ func (s *FileStore) WriteHistory(ctx context.Context, sessionID string, records 
 		if err := json.Compact(&compact, record); err != nil {
 			return fmt.Errorf("history record %d is not valid JSON: %w", i, err)
 		}
-		line, err := encodeHistoryLine(compact.Bytes(), HistorySeq(i+1))
+		line, err := encodeHistoryLine(compact.Bytes(), HistorySeq(i+1), HistoryTurnOf(compact.Bytes()))
 		if err != nil {
 			return fmt.Errorf("history record %d: %w", i, err)
 		}

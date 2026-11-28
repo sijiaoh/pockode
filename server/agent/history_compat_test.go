@@ -342,11 +342,21 @@ func TestDecodeRecord_ReadsWhatTheFlatRecordWrote(t *testing.T) {
 	}
 }
 
+// bornAfterTheSplit are the types no server before the split could write, so
+// the flat record has nothing to compare them with. Each is pinned by an
+// ordinary round trip instead (TestDecodeRecord_RoundTripsTypesBornAfterTheSplit).
+var bornAfterTheSplit = map[EventType]bool{
+	EventTypeTurnStarted: true,
+}
+
 // TestWireCompatCases_CoverEveryType keeps the two tests above honest: a type
 // added to wireTypes needs a case here before it can be trusted to be on the
 // format, and has to be stored or live, never both.
 func TestWireCompatCases_CoverEveryType(t *testing.T) {
 	covered := make(map[EventType]bool)
+	for typ := range bornAfterTheSplit {
+		covered[typ] = true
+	}
 	for _, tc := range wireCompatCases() {
 		if tc.wire.Type() != tc.legacy.Type {
 			t.Errorf("case %q: wire type %q, legacy type %q", tc.name, tc.wire.Type(), tc.legacy.Type)
@@ -475,6 +485,49 @@ func TestAgentEvent_EncodesAsItsOwnType(t *testing.T) {
 		}
 		if _, decodable := recordTypes[event.EventType()]; decodable != isRecord {
 			t.Errorf("%T is persisted = %v but decodable = %v", event, isRecord, decodable)
+		}
+	}
+}
+
+// TestDecodeRecord_RoundTripsTypesBornAfterTheSplit is the format of each type
+// in bornAfterTheSplit, written down: the line it marshals to, and that the
+// line decodes back to the same record.
+func TestDecodeRecord_RoundTripsTypesBornAfterTheSplit(t *testing.T) {
+	at := time.Date(2026, 11, 28, 12, 0, 0, 0, time.UTC)
+	cases := []struct {
+		record Record
+		line   string
+	}{
+		{
+			TurnStartedRecord{TurnID: "t1", Origin: TurnOriginPrompt, MessageID: "m1", ObservedAt: &at},
+			`{"type":"turn_started","turn_id":"t1","origin":"prompt","message_id":"m1","observed_at":"2026-11-28T12:00:00Z"}`,
+		},
+		{
+			TurnStartedRecord{TurnID: "t2", Origin: TurnOriginOutput},
+			`{"type":"turn_started","turn_id":"t2","origin":"output"}`,
+		},
+	}
+	seen := make(map[EventType]bool)
+	for _, tc := range cases {
+		seen[tc.record.Type()] = true
+		got, err := json.Marshal(tc.record)
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		if string(got) != tc.line {
+			t.Errorf("line = %s, want %s", got, tc.line)
+		}
+		decoded, err := DecodeRecord([]byte(tc.line))
+		if err != nil {
+			t.Fatalf("decode %s: %v", tc.line, err)
+		}
+		if !reflect.DeepEqual(decoded, tc.record) {
+			t.Errorf("decoded %#v, want %#v", decoded, tc.record)
+		}
+	}
+	for typ := range bornAfterTheSplit {
+		if !seen[typ] {
+			t.Errorf("%q has no round-trip case", typ)
 		}
 	}
 }

@@ -57,7 +57,7 @@ func (m *mockSessionStore) GetHistory(ctx context.Context, sessionID string) ([]
 	return nil, nil
 }
 
-func (m *mockSessionStore) AppendToHistory(ctx context.Context, sessionID string, record session.HistoryRecord) (session.HistorySeq, error) {
+func (m *mockSessionStore) AppendToHistory(ctx context.Context, sessionID string, record session.HistoryRecord, turn session.HistoryTurn) (session.HistorySeq, error) {
 	return session.NoHistorySeq, nil
 }
 

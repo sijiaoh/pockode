@@ -277,7 +277,7 @@ func TestFileStore_FirstCountHoldsOnlyItsOwnSession(t *testing.T) {
 	})
 	go func() {
 		defer close(finished)
-		seq, err := store.AppendToHistory(ctx, "big", testRecord{"type": "first"})
+		seq, err := store.AppendToHistory(ctx, "big", testRecord{"type": "first"}, HistoryTurn{})
 		mustSucceed(t, err)
 		appended <- seq
 	}()
@@ -285,7 +285,7 @@ func TestFileStore_FirstCountHoldsOnlyItsOwnSession(t *testing.T) {
 
 	readWithin(t, func() {
 		for want := HistorySeq(1); want <= 3; want++ {
-			seq, err := store.AppendToHistory(ctx, "busy", testRecord{"type": "streamed"})
+			seq, err := store.AppendToHistory(ctx, "busy", testRecord{"type": "streamed"}, HistoryTurn{})
 			mustSucceed(t, err)
 			if seq != want {
 				t.Errorf("busy seq = %d, want %d", seq, want)

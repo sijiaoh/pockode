@@ -403,8 +403,8 @@ func (s *appSession) holdSubagentResult(threadID string, result agent.ToolResult
 //
 // A turn the user interrupted took them with it: their rows are left running
 // for the InterruptedEvent to settle as interrupted, and nothing is sent for
-// them. Not even after the ending: a result is output, and output after an
-// ending opens a turn (session.SignalOutput) that nothing would ever end. Their
+// them. Not even after the ending: that would file them as stragglers of the
+// stopped turn (session.SignalToolResult) under rows already settled. Their
 // last words are already filed under their rows. A turn ending any other way
 // was not stopped by the user, so its children were stopped from inside it, by
 // the model, which reads as their failure — as a Claude background task the

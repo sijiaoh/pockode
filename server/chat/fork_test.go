@@ -89,7 +89,7 @@ func newForkFixture(t *testing.T, ag *forkingAgent, history []agent.Record) fork
 	}
 	var seqs []session.HistorySeq
 	for _, rec := range history {
-		seq, err := store.AppendToHistory(ctx, "source", rec)
+		seq, err := store.AppendToHistory(ctx, "source", rec, session.HistoryTurn{})
 		if err != nil {
 			t.Fatalf("AppendToHistory: %v", err)
 		}
@@ -265,13 +265,16 @@ func TestFork_SystemMessageAnchorIsKept(t *testing.T) {
 		t.Fatalf("Fork: %v", err)
 	}
 
+	// All four, and the end of the turn the system message opened, which the
+	// fork's process is not carrying (TestFork_ACutTurnEndsWithTheFork).
 	got := forkedHistory(t, f.store, meta.ID)
-	if len(got) != 4 {
-		t.Fatalf("copied %d records, want all 4: %+v", len(got), got)
+	if len(got) != 5 {
+		t.Fatalf("copied %d records, want all 4 and the cut turn's end: %+v", len(got), got)
 	}
 	if m := recordAs[agent.MessageRecord](t, got[3]); m.Content != "step 2 started" {
-		t.Errorf("last record = %q, want the system message the anchor named", m.Content)
+		t.Errorf("last copied record = %q, want the system message the anchor named", m.Content)
 	}
+	recordAs[agent.ProcessEndedRecord](t, got[4])
 }
 
 // TestFork_WarnsWhenTheAgentWillNotRemember: the user is about to talk to an
@@ -479,8 +482,9 @@ func TestFork_WhileSourceIsRunning(t *testing.T) {
 
 	// The turn keeps running in the session it was started in, with its own
 	// transcript untouched.
-	if source := forkedHistory(t, f.store, "source"); len(source) != 4 {
-		t.Errorf("source history has %d records, want 4 untouched", len(source))
+	// The four it was seeded with, and the start of the turn the prompt opened.
+	if source := forkedHistory(t, f.store, "source"); len(source) != 5 {
+		t.Errorf("source history has %d records, want 5 untouched", len(source))
 	}
 	if !f.client.pm.HasProcess("source") {
 		t.Error("the source's process was closed by forking it")
@@ -510,13 +514,14 @@ func TestFork_AnchorNamesTheRecordTheClientSaw(t *testing.T) {
 		t.Fatalf("Fork: %v", err)
 	}
 
+	// Cut mid-turn, so the copy is followed by the cut turn's end
+	// (TestFork_ACutTurnEndsWithTheFork).
 	history := forkedHistory(t, f.store, meta.ID)
-	last := history[len(history)-1]
-	if text, ok := last.(agent.TextRecord); !ok || text.Content != "the record the user anchors on" {
-		t.Errorf("fork ends at %+v, want the anchored record", last)
+	if len(history) != 5 {
+		t.Fatalf("kept %d records, want 4 and the cut turn's end: %+v", len(history), history)
 	}
-	if len(history) != 4 {
-		t.Errorf("kept %d records, want 4", len(history))
+	if text, ok := history[3].(agent.TextRecord); !ok || text.Content != "the record the user anchors on" {
+		t.Errorf("fork's copy ends at %+v, want the anchored record", history[3])
 	}
 }
 
@@ -547,17 +552,18 @@ func TestFork_AnchorIsTheStoredSeqAcrossAGap(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Fork: %v", err)
 	}
+	// The three copied, then the cut turn's end (TestFork_ACutTurnEndsWithTheFork).
 	history := forkedHistory(t, f.store, meta.ID)
-	if text, ok := history[len(history)-1].(agent.TextRecord); !ok || text.Content != "the record the user anchors on" {
-		t.Errorf("fork ends at %+v, want the anchored record", history[len(history)-1])
+	if text, ok := history[2].(agent.TextRecord); !ok || text.Content != "the record the user anchors on" {
+		t.Errorf("fork's copy ends at %+v, want the anchored record", history[2])
 	}
 
 	records, err := f.store.GetHistory(context.Background(), meta.ID)
 	if err != nil {
 		t.Fatalf("GetHistory: %v", err)
 	}
-	if got := session.HistorySeqs(records); !slices.Equal(got, []session.HistorySeq{1, 2, 3}) {
-		t.Errorf("fork's seqs = %v, want [1 2 3]", got)
+	if got := session.HistorySeqs(records); !slices.Equal(got, []session.HistorySeq{1, 2, 3, 4}) {
+		t.Errorf("fork's seqs = %v, want [1 2 3 4]", got)
 	}
 }
 
@@ -682,5 +688,76 @@ func TestFork_CopiesThePagesDrawnBeforeTheCut(t *testing.T) {
 	next, err := pages.Append(f.dataDir, meta.ID, htmlpage.Draft{Title: "fresh", HTML: "x"})
 	if err != nil || next.ID != "p4" {
 		t.Errorf("fork's next page = %+v, %v; want p4", next, err)
+	}
+}
+
+// TestFork_ACutTurnEndsWithTheFork: a fork has no process, so its turn state is
+// idle, and its history has to say the same of the turn the cut went through —
+// with the record of a turn whose process stopped carrying it, process_ended,
+// in no turn. A cut between turns leaves nothing open and gets nothing.
+func TestFork_ACutTurnEndsWithTheFork(t *testing.T) {
+	f := newForkFixture(t, &forkingAgent{carried: true}, nil)
+	ctx := context.Background()
+	var seqs []session.HistorySeq
+	for _, line := range []struct {
+		rec  agent.Record
+		turn session.HistoryTurn
+	}{
+		{agent.MessageRecord{Content: "first", MessageID: "m1"}, session.HistoryTurn{}},
+		{agent.TurnStartedRecord{TurnID: "t1", Origin: agent.TurnOriginPrompt, MessageID: "m1"}, session.InTurn("t1")},
+		{agent.TextRecord{Content: "answering first"}, session.InTurn("t1")},
+		{agent.DoneRecord{}, session.InTurn("t1")},
+		{agent.MessageRecord{Content: "second", MessageID: "m2"}, session.HistoryTurn{}},
+		{agent.TurnStartedRecord{TurnID: "t2", Origin: agent.TurnOriginPrompt, MessageID: "m2"}, session.InTurn("t2")},
+		{agent.TextRecord{Content: "answering second"}, session.InTurn("t2")},
+	} {
+		seq, err := f.store.AppendToHistory(ctx, "source", line.rec, line.turn)
+		if err != nil {
+			t.Fatalf("AppendToHistory: %v", err)
+		}
+		seqs = append(seqs, seq)
+	}
+
+	for _, tc := range []struct {
+		name   string
+		anchor session.HistorySeq
+		copied int
+		ended  bool
+	}{
+		{"between turns", seqs[3], 4, false},
+		{"inside a turn", seqs[6], 7, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			meta, err := f.client.Fork(ctx, "source", tc.anchor, "")
+			if err != nil {
+				t.Fatalf("Fork: %v", err)
+			}
+			if meta.Turn.InProgress() {
+				t.Errorf("fork turn state = %+v, want idle", meta.Turn)
+			}
+			records, err := f.store.GetHistory(ctx, meta.ID)
+			if err != nil {
+				t.Fatalf("GetHistory: %v", err)
+			}
+			want := tc.copied
+			if tc.ended {
+				want++
+			}
+			if len(records) != want {
+				t.Fatalf("fork holds %d records, want %d", len(records), want)
+			}
+			if tc.ended {
+				last := records[len(records)-1]
+				if rec, _ := agent.DecodeRecord(last); rec == nil || rec.Type() != agent.EventTypeProcessEnded {
+					t.Errorf("fork ends on %s, want process_ended", last)
+				}
+				if turn := session.HistoryTurnOf(last); turn != session.NoTurn {
+					t.Errorf("process_ended tagged %+v, want no turn", turn)
+				}
+			}
+			if open := agent.OpenTurnOf(agent.InferHistoryTurns(records, session.AgentTypeClaude)); open != "" {
+				t.Errorf("fork's history leaves turn %q open; its turn state is idle", open)
+			}
+		})
 	}
 }

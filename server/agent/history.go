@@ -117,6 +117,7 @@ var wireTypes = []Wire{
 	PlanRecord{},
 	AskUserQuestionRecord{},
 	QuestionResponseRecord{},
+	TurnStartedRecord{},
 	ToolActivityLiveEvent{},
 	ThinkingDeltaLiveEvent{},
 }
@@ -421,6 +422,44 @@ type MessageIngestedRecord struct {
 	MessageID string `json:"message_id,omitempty"`
 }
 
+// TurnOrigin is what opened a turn.
+type TurnOrigin string
+
+const (
+	// TurnOriginPrompt is a message handed to an idle agent — typed, or sent
+	// by Pockode itself.
+	TurnOriginPrompt TurnOrigin = "prompt"
+	// TurnOriginOutput is the agent producing content with no turn open and
+	// nothing asking it to: output after a done with no message in between.
+	TurnOriginOutput TurnOrigin = "output"
+	// TurnOriginAnswer is an answer to a permission request that outlived the
+	// turn it was raised in.
+	TurnOriginAnswer TurnOrigin = "answer"
+)
+
+// TurnStartedRecord is a turn opening: the moment a session went from idle to
+// open (session.TurnTransition.Started). Every record written while the turn
+// is open carries its id in the history envelope (session.HistoryTurn), its
+// ending included.
+//
+// The message that opened it is named here rather than tagged, because the
+// message record is written before anyone knows whether it opens a turn or
+// joins one. This says which turn a message started; which message the
+// agent's output answers is a different relation, kept by
+// message_ingested — Claude answers a message queued into one turn in the
+// next.
+type TurnStartedRecord struct {
+	TurnID string     `json:"turn_id"`
+	Origin TurnOrigin `json:"origin"`
+	// MessageID is the opening message's (MessageRecord.MessageID), for
+	// TurnOriginPrompt; empty for the other origins, and for a prompt whose
+	// message record could not be written.
+	MessageID string `json:"message_id,omitempty"`
+	// ObservedAt: see ObserveAt. The instant the turn opened at
+	// (session.TurnState.OpenedAt) — for a prompt, its message's own.
+	ObservedAt *time.Time `json:"observed_at,omitempty"`
+}
+
 // MessageDiscardedRecord is a message a Stop threw away unread; see
 // MessageDiscardedEvent.
 type MessageDiscardedRecord struct {
@@ -528,6 +567,7 @@ func (CommandOutputRecord) Type() EventType      { return EventTypeCommandOutput
 func (PlanRecord) Type() EventType               { return EventTypePlan }
 func (AskUserQuestionRecord) Type() EventType    { return EventTypeAskUserQuestion }
 func (QuestionResponseRecord) Type() EventType   { return EventTypeQuestionResponse }
+func (TurnStartedRecord) Type() EventType        { return EventTypeTurnStarted }
 func (ToolActivityLiveEvent) Type() EventType    { return EventTypeToolActivity }
 func (ThinkingDeltaLiveEvent) Type() EventType   { return EventTypeThinkingDelta }
 
@@ -650,6 +690,11 @@ func (r QuestionResponseRecord) MarshalJSON() ([]byte, error) {
 	return marshalWire(r.Type(), fields(r))
 }
 
+func (r TurnStartedRecord) MarshalJSON() ([]byte, error) {
+	type fields TurnStartedRecord
+	return marshalWire(r.Type(), fields(r))
+}
+
 func (r ToolActivityLiveEvent) MarshalJSON() ([]byte, error) {
 	type fields ToolActivityLiveEvent
 	return marshalWire(r.Type(), fields(r))
@@ -683,6 +728,7 @@ func (CommandOutputRecord) isWire()      {}
 func (PlanRecord) isWire()               {}
 func (AskUserQuestionRecord) isWire()    {}
 func (QuestionResponseRecord) isWire()   {}
+func (TurnStartedRecord) isWire()        {}
 func (ToolActivityLiveEvent) isWire()    {}
 func (ThinkingDeltaLiveEvent) isWire()   {}
 
@@ -709,6 +755,7 @@ func (CommandOutputRecord) HistoryRecord()      {}
 func (PlanRecord) HistoryRecord()               {}
 func (AskUserQuestionRecord) HistoryRecord()    {}
 func (QuestionResponseRecord) HistoryRecord()   {}
+func (TurnStartedRecord) HistoryRecord()        {}
 
 func (ToolActivityLiveEvent) isLiveEvent()  {}
 func (ThinkingDeltaLiveEvent) isLiveEvent() {}

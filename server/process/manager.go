@@ -561,8 +561,11 @@ func (m *Manager) GetOrCreateProcess(ctx context.Context, meta session.SessionMe
 			// fails on the way up, or a panic in the loop above, closes the
 			// channel without one. Reducing it twice changes nothing; not
 			// reducing it at all leaves the session claiming a turn is running
-			// with no process behind it. The announcement below is the process's
-			// own, and is the one state the turn cannot express.
+			// with no process behind it — and when this is the reduction that
+			// ends the turn, the sequencer writes the process_ended the stream
+			// never carried (chatstream.Sequencer.Advance). The announcement
+			// below is the process's own, and is the one state the turn cannot
+			// express.
 			endCtx := context.Background()
 			endTransition := proc.applyTurn(endCtx,
 				session.TurnInput{Signal: session.SignalProcessEnded})
@@ -571,7 +574,7 @@ func (m *Manager) GetOrCreateProcess(ctx context.Context, meta session.SessionMe
 			// agent never got to send a process_ended of its own — which is every
 			// kill, the path that leaves a card on screen with nothing behind it.
 			proc.recordExpiries(endCtx, slog.With("sessionId", sessionID),
-				session.SignalProcessEnded, endTransition.Expired)
+				session.SignalProcessEnded, endTransition)
 			m.emitStateChange(sessionID, ProcessStateEnded)
 			slog.Info("process ended", "sessionId", sessionID)
 		}()
@@ -1451,7 +1454,9 @@ func (p *Process) SendMessage(prompt agent.Prompt, at time.Time) (openedTurn boo
 	// Before the turn opens: a retirement that sees the open turn while the
 	// flag is still up would end the turn this prompt is starting.
 	p.retiring.Store(false)
-	in := session.TurnInput{Signal: session.SignalPrompt, At: at}
+	// The message id goes with the prompt so the turn it may open names its
+	// opening message (agent.TurnStartedRecord).
+	in := session.TurnInput{Signal: session.SignalPrompt, MessageID: prompt.ID, At: at}
 	transition := p.applyTurn(context.Background(), in)
 	p.sendMu.Unlock()
 	p.announceTurn(in, transition)
@@ -1593,7 +1598,7 @@ func (p *Process) signal(sig session.TurnSignal, requestID string) bool {
 // processesMu held: the listeners take processesMu.
 func (p *Process) announceTurn(in session.TurnInput, transition session.TurnTransition) {
 	p.manager.emitTurn(p.sessionID, transition)
-	p.recordExpiries(context.Background(), slog.With("sessionId", p.sessionID), in.Signal, transition.Expired)
+	p.recordExpiries(context.Background(), slog.With("sessionId", p.sessionID), in.Signal, transition)
 }
 
 // recordExpiries writes what became of each prompt this input ended without an
@@ -1609,8 +1614,17 @@ func (p *Process) announceTurn(in session.TurnInput, transition session.TurnTran
 // is a record of something that happened, not a signal that it should. And a
 // process on its way out is exactly when this has to be written, while inject
 // deliberately refuses to speak for one.
-func (p *Process) recordExpiries(ctx context.Context, log *slog.Logger, sig session.TurnSignal, expired []session.Blocker) {
-	for _, blocker := range expired {
+//
+// An expiry belongs to the turn its prompt was waiting in, if that turn is
+// still open: one written after the turn's ending, or the process's, belongs
+// to none, and so does one a new turn's prompt overtook — the prompt was
+// raised before that turn opened.
+func (p *Process) recordExpiries(ctx context.Context, log *slog.Logger, sig session.TurnSignal, transition session.TurnTransition) {
+	turn := session.InTurn(transition.Turn)
+	if transition.Started || !transition.State.Open {
+		turn = session.NoTurn
+	}
+	for _, blocker := range transition.Expired {
 		if blocker.RequestID == "" {
 			// A background wait: nobody raised it with the user and nobody was
 			// going to answer it, so there is no card to settle.
@@ -1627,7 +1641,7 @@ func (p *Process) recordExpiries(ctx context.Context, log *slog.Logger, sig sess
 		// down asynchronously, so an expiry can outlive the session it
 		// describes — and the sequencer drops that one quietly.
 		event := agent.RequestCancelledEvent{RequestID: blocker.RequestID, Reason: reason}
-		_, _ = p.manager.stream.Append(ctx, p.sessionID, event.ToRecord(), nil)
+		_, _ = p.manager.stream.AppendTo(ctx, p.sessionID, event.ToRecord(), turn)
 	}
 }
 
@@ -1641,8 +1655,10 @@ func (p *Process) recordExpiries(ctx context.Context, log *slog.Logger, sig sess
 //
 // SignalProcessStarted is not here even though it expires blockers too: that is
 // a successor clearing up after a process that died without saying so, and the
-// session store has already written a process_ended record for exactly that
-// case when it loaded the index (see abortTurnsTheLastRunLeftOpen).
+// process_ended written for exactly that case already says what became of
+// them — by the sequencer as the successor starts (chatstream.Sequencer.Advance),
+// or by the session store when it loaded the index after a restart (see
+// abortTurnsTheLastRunLeftOpen). The successor records no expiries of its own.
 func (p *Process) expiryReason(sig session.TurnSignal, requestID string) agent.CancelReason {
 	if p.takeAnswerTimeout(requestID) {
 		return agent.ReasonTimeout
@@ -1694,26 +1710,28 @@ func (p *Process) takeAnswerTimeout(requestID string) bool {
 // the listeners take that lock. streamEvents writes before the event's own
 // history record and announces after it (see there).
 func (p *Process) applyTurn(ctx context.Context, in session.TurnInput) session.TurnTransition {
+	return p.advance(ctx, in, nil)
+}
+
+// advance is applyTurn writing record — nil for none — in the same step as the
+// reduction, through the session's sequencer (chatstream.Sequencer.Advance):
+// that is what puts a turn's turn_started ahead of its first record and tags
+// each record with the turn the input happened in. The sequencer logs a failed
+// reduction; what it returns is what the store holds — the zero transition
+// when nothing was applied, which leaves the cached state alone.
+func (p *Process) advance(ctx context.Context, in session.TurnInput, record agent.Record) session.TurnTransition {
 	if in.At.IsZero() {
 		in.At = time.Now()
 	}
 
-	transition, err := p.sessionStore.ApplyTurn(ctx, p.sessionID, in)
-	if err != nil {
-		// A deleted session is the ordinary case and not worth shouting about:
-		// its process is torn down asynchronously, so events can still arrive
-		// with nowhere left to record them.
-		if errors.Is(err, session.ErrSessionNotFound) {
-			slog.Debug("turn state dropped, session is gone", "sessionId", p.sessionID, "signal", in.Signal)
-		} else {
-			slog.Error("failed to apply turn state", "sessionId", p.sessionID, "signal", in.Signal, "error", err)
-		}
-		return session.TurnTransition{}
-	}
-
-	p.mu.Lock()
-	p.turn = transition.State
-	p.mu.Unlock()
+	// The copy is updated inside the sequencer's step, before the record is
+	// on its way: a test or listener that sees the record must find the state
+	// it caused here as well.
+	transition, _ := p.manager.stream.Advance(ctx, p.sessionID, in, record, func(transition session.TurnTransition) {
+		p.mu.Lock()
+		p.turn = transition.State
+		p.mu.Unlock()
+	})
 
 	// What became of an expired blocker is recorded by recordExpiries, which the
 	// callers that can announce things reach after this returns. Not here:
@@ -1850,82 +1868,24 @@ func (p *Process) acceptsTurnInput(in session.TurnInput) bool {
 
 // turnInputFor translates one agent event into the reducer's vocabulary, and is
 // the whole of the translation: every other part of the server reads turn state
-// rather than events.
-//
-// The events that map to nothing are the ones that say nothing about a turn. A
-// warning is a session-level problem and can arrive before the first message
-// ever goes out — the startup warning Codex emits for a thread it cannot resume
-// once marked a session as running with nothing running. A message event is the
-// broadcast of a prompt whose turn the send path already started. The rest are
-// only ever replayed from history.
-//
-// The fall-through is deliberately the inert one: a type nobody named here and
-// nobody put in IndicatesAgentActivity moves no turn at all. That is the right
-// default for an event that only describes something, and the wrong one for an
-// event that ends or blocks a turn — such a type has to be named in the switch
-// below, because no predicate will pick it up.
+// rather than events. What each kind of output means is agent.TurnInputOf's,
+// shared with the reading of old histories; what is added here is what only the
+// event as it arrives knows.
 func turnInputFor(event agent.AgentEvent) (session.TurnInput, bool) {
-	in := session.TurnInput{At: time.Now()}
-
-	switch e := event.(type) {
-	case agent.PermissionRequestEvent:
-		in.Signal, in.RequestID = session.SignalPermissionRaised, e.RequestID
-	case agent.RequestCancelledEvent:
-		in.Signal, in.RequestID = session.SignalRequestCancelled, e.RequestID
-	case agent.BackgroundWaitEvent:
-		in.Signal = session.SignalBackgroundParked
-	case agent.DoneEvent:
-		in.Signal = session.SignalDone
-	case agent.ErrorEvent:
-		in.Signal = session.SignalFailed
-		if e.AuthFailure != nil {
-			in.Signal = session.SignalAuthFailed
-		}
-	case agent.InterruptedEvent:
-		in.Signal = session.SignalInterrupted
-	case agent.ProcessEndedEvent:
-		in.Signal = session.SignalProcessEnded
-	case agent.MessageDiscardedEvent:
-		in.Signal, in.MessageID = session.SignalMessageDiscarded, e.MessageID
-	default:
-		switch {
-		// The tool results that are not content: the record of how background
-		// work ended. A task finishing, or being stopped, is not the
-		// CLI resuming — what the model writes next is — so this must neither
-		// end a wait nor open a turn. Otherwise the stopped notification of a
-		// task Stop ended would reopen the turn whenever it lands after the
-		// interrupt's acknowledgement, an order the CLI never promised.
-		case isBackgroundSettlement(event):
-			in.Signal = session.SignalNoise
-		// A straggler of a turn that is over (agent.MarkAfterTurn) is not the CLI
-		// resuming either. Read as output it would open a turn its CLI will
-		// never end, leaving the session running — Stop showing, and a Stop
-		// with no turn to name — until the next prompt.
-		case agent.ArrivedAfterTurn(event):
-			in.Signal = session.SignalNoise
-		// Content is the one thing that ends a background wait: it is the proof
-		// that the CLI resumed by itself. ActivatesSession, less the case above, is
-		// exactly that set — what the agent put into the conversation, as opposed
-		// to what it said about it.
-		case event.EventType().ActivatesSession():
-			in.Signal = session.SignalOutput
-		// Everything else that only arrives mid-turn shows the turn is alive
-		// without proving the CLI came back: a `system` frame, a live progress
-		// line. The background task list changing is a `system` frame, so
-		// counting these as a resumption would make a task *finishing* look like
-		// the turn returning.
-		case event.EventType().IndicatesAgentActivity():
-			in.Signal = session.SignalNoise
-		default:
-			return session.TurnInput{}, false
-		}
+	in, ok := agent.TurnInputOf(event.Encode())
+	if !ok {
+		return session.TurnInput{}, false
 	}
+	// A straggler of a turn that is over (agent.MarkAfterTurn) is not the CLI
+	// resuming. Read as output it would open a turn its CLI will never end,
+	// leaving the session running — Stop showing, and a Stop with no turn to
+	// name — until the next prompt. It is recorded under the turn that ended,
+	// which is the one it belongs to.
+	if in.Signal.IsContent() && agent.ArrivedAfterTurn(event) {
+		in.Signal, in.AfterTurn = session.SignalNoise, true
+	}
+	in.At = time.Now()
 	return in, true
-}
-
-func isBackgroundSettlement(event agent.AgentEvent) bool {
-	result, ok := event.(agent.ToolResultEvent)
-	return ok && result.SettlesBackgroundWork()
 }
 
 // streamEvents routes events to history and emits to the event listener.
@@ -2010,23 +1970,25 @@ func (p *Process) handleEvent(ctx context.Context, log *slog.Logger, event agent
 		routing = p.manager.permissionRouter(p, request)
 		in.Reviewing = routing.Reviewing
 	}
+	// Recorded and put on the session's stream in one step, and in the same
+	// step as the turn it moves (advance). An event that reports a latest
+	// value rather than a settled fact encodes as an agent.LiveEvent, which is
+	// broadcast and never stored, so it reaches subscribers with no sequence
+	// number. A failed write is the sequencer's to report (output still
+	// arriving for a session deleted while its process is torn down is the
+	// usual one, and is dropped quietly); the event goes on moving the turn
+	// either way, as the agent did act on it.
+	wire := event.Encode()
+	record, _ := wire.(agent.Record)
 	var transition session.TurnTransition
-	if reduce {
-		transition = p.applyTurn(ctx, in)
+	switch {
+	case reduce:
+		transition = p.advance(ctx, in, record)
+	case record != nil:
+		_, _ = p.manager.stream.Append(ctx, p.sessionID, record, nil)
 	}
-
-	// Recorded and put on the session's stream in one step. An event that
-	// reports a latest value rather than a settled fact encodes as an
-	// agent.LiveEvent, which is broadcast and never stored, so it reaches
-	// subscribers with no sequence number. A failed write is the sequencer's to
-	// report (output still arriving for a session deleted while its process is
-	// torn down is the usual one, and is dropped quietly); the event goes on
-	// moving the turn either way, as the agent did act on it.
-	switch wire := event.Encode().(type) {
-	case agent.Record:
-		_, _ = p.manager.stream.Append(ctx, p.sessionID, wire, nil)
-	case agent.LiveEvent:
-		p.manager.stream.Publish(p.sessionID, wire)
+	if live, ok := wire.(agent.LiveEvent); ok {
+		p.manager.stream.Publish(p.sessionID, live)
 	}
 
 	if reduce {
@@ -2065,6 +2027,6 @@ func (p *Process) handleEvent(ctx context.Context, log *slog.Logger, event agent
 	// ending did to the prompts on screen. Announcing them first would hand a
 	// client a higher sequence number before the one below it.
 	if reduce {
-		p.recordExpiries(ctx, log, in.Signal, transition.Expired)
+		p.recordExpiries(ctx, log, in.Signal, transition)
 	}
 }

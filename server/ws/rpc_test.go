@@ -1668,9 +1668,9 @@ func TestHandler_SessionFork(t *testing.T) {
 	store := env.getMainWorktree().SessionStore
 	store.Create(bgCtx, "source", session.CreateSpec{AgentType: session.AgentTypeClaude, Mode: session.ModeYolo})
 	store.Update(bgCtx, "source", "Fix the parser")
-	store.AppendToHistory(bgCtx, "source", agent.MessageRecord{Content: "keep me"})
-	anchor, _ := store.AppendToHistory(bgCtx, "source", agent.TextRecord{Content: "keep me too"})
-	store.AppendToHistory(bgCtx, "source", agent.TextRecord{Content: "drop me"})
+	store.AppendToHistory(bgCtx, "source", agent.MessageRecord{Content: "keep me"}, session.HistoryTurn{})
+	anchor, _ := store.AppendToHistory(bgCtx, "source", agent.TextRecord{Content: "keep me too"}, session.HistoryTurn{})
+	store.AppendToHistory(bgCtx, "source", agent.TextRecord{Content: "drop me"}, session.HistoryTurn{})
 
 	resp := env.call("session.fork", rpc.SessionForkParams{SessionID: "source", AnchorSeq: anchor})
 	if resp.Error != nil {
@@ -1705,10 +1705,11 @@ func TestHandler_SessionFork(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetHistory: %v", err)
 	}
-	// The conversation through the anchored record, plus the warning that this
-	// agent brought no context with it — the mock answers carried == false.
-	if len(history) != 3 {
-		t.Fatalf("forked history has %d records, want 3: %s", len(history), history)
+	// The conversation through the anchored record, cut inside the turn the
+	// message opened, so followed by that turn's end; then the warning that
+	// this agent brought no context with it — the mock answers carried == false.
+	if len(history) != 4 {
+		t.Fatalf("forked history has %d records, want 4: %s", len(history), history)
 	}
 	if !strings.Contains(string(history[0]), "keep me") ||
 		!strings.Contains(string(history[1]), "keep me too") {
@@ -1724,7 +1725,7 @@ func TestHandler_SessionFork_NoHistoryBeforeAnchor(t *testing.T) {
 	env := newForkableTestEnv(t)
 	store := env.getMainWorktree().SessionStore
 	store.Create(bgCtx, "source", session.CreateSpec{AgentType: session.AgentTypeClaude, Mode: session.ModeYolo})
-	anchor, _ := store.AppendToHistory(bgCtx, "source", agent.MessageRecord{Content: "the first thing"})
+	anchor, _ := store.AppendToHistory(bgCtx, "source", agent.MessageRecord{Content: "the first thing"}, session.HistoryTurn{})
 
 	resp := env.call("session.fork", rpc.SessionForkParams{SessionID: "source", AnchorSeq: anchor})
 	if resp.Error == nil {
@@ -1759,7 +1760,7 @@ func TestHandler_SessionFork_AgentCannotFork(t *testing.T) {
 	env := newTestEnv(t, &mockAgent{})
 	store := env.getMainWorktree().SessionStore
 	store.Create(bgCtx, "source", session.CreateSpec{AgentType: session.AgentTypeClaude, Mode: session.ModeYolo})
-	anchor, _ := store.AppendToHistory(bgCtx, "source", agent.MessageRecord{Content: "keep me"})
+	anchor, _ := store.AppendToHistory(bgCtx, "source", agent.MessageRecord{Content: "keep me"}, session.HistoryTurn{})
 
 	resp := env.call("session.fork", rpc.SessionForkParams{SessionID: "source", AnchorSeq: anchor})
 
@@ -1936,7 +1937,7 @@ func TestHandler_ChatMessagesSubscribe_History(t *testing.T) {
 	env := newTestEnv(t, &mockAgent{})
 	store := env.getMainWorktree().SessionStore
 	sess, _ := store.Create(bgCtx, "with-history", session.CreateSpec{})
-	store.AppendToHistory(bgCtx, sess.ID, agent.MessageRecord{Content: "hello"})
+	store.AppendToHistory(bgCtx, sess.ID, agent.MessageRecord{Content: "hello"}, session.HistoryTurn{})
 
 	result := env.subscribeChatMessages(sess.ID)
 

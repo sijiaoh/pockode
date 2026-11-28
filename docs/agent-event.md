@@ -74,6 +74,7 @@ type AgentEvent interface {
 | Message | `message` (user-typed or system-driven; persisted + broadcast) | No |
 | Read point | `message_ingested` (the agent has taken in a message sent mid-turn) | No |
 | Message ending | `message_discarded` (a Stop threw away a message the agent had not read) | No |
+| Turn | `turn_started` (a turn opened; written by Pockode, never by an agent) | No |
 
 Terminal events end the current message response. Non-terminal events are appended to the active assistant message.
 
@@ -193,7 +194,7 @@ The four predicates, answered explicitly:
 - **`ActivatesSession`: no.** A Claude `plan` follows a tool result that
   already proves the turn reached the model, and a Codex one arrives inside a
   turn that has started. It must not end a background wait either, the same gap
-  `tool_activity` sits in. So `turnInputFor` maps it to `SignalNoise`.
+  `tool_activity` sits in. So `agent.TurnInputOf` maps it to `SignalNoise`.
 
 #### Message Origin (user vs. system)
 
@@ -251,6 +252,28 @@ because nothing on the wire attributes a sentence to a message. Only the model
 knows, and it does not say, so a finer split could only be guessed at; a
 transcript that is confidently wrong about who a sentence answers is worse than
 one that is coarsely right about where the answering began.
+
+#### A Turn's Start (`turn_started`)
+
+Pockode writes `{"type": "turn_started", "turn_id": "...", "origin": "...", "message_id": "...", "observed_at": "..."}`
+each time a session goes from no turn to an open one. `origin` is what opened
+it: `prompt` (a message reached an idle agent, named by `message_id`), `output`
+(the agent produced content with no turn open — real histories have output after
+`done` with no message in between), or `answer` (an answer to a permission
+request that outlived its turn). `message_id` is set for `prompt` only, and not
+even then when the message's own record could not be written.
+
+Which turn every other record belongs to is not in the record but in its history
+envelope ([code/agent-integration.md](code/agent-integration.md#turn-identity)).
+This record is how a `message` is placed: a message is written before anyone
+knows whether it opens a turn or joins one, so it carries no turn, and the
+`turn_started` naming it says which turn it opened. A message it does not name
+joined a turn already running. Which message the output *answers* is a separate
+relation, kept by [the read point](#the-read-point-message_ingested): Claude
+answers a message queued into one turn in the next.
+
+It moves nothing — the turn was opened by the input it records — and the client
+does not draw it.
 
 #### A Discarded Message (`message_discarded`)
 
@@ -661,7 +684,7 @@ file too large to send and a binary read the same in both places.
     → done           → "complete"
     → error          → "error"
     → interrupted    → "interrupted"
-    → process_ended  → "interrupted"
+    → process_ended  → "process_ended"
 ```
 
 ### Subscription

@@ -122,8 +122,8 @@ func TestHandler_SessionFork_CopiesHTMLFirst(t *testing.T) {
 	if resp := setHTMLFirst(env, "source", true); resp.Error != nil {
 		t.Fatalf("set_html_first: %s", resp.Error.Message)
 	}
-	store.AppendToHistory(bgCtx, "source", agent.MessageRecord{Content: "hello"})
-	anchor, _ := store.AppendToHistory(bgCtx, "source", agent.TextRecord{Content: "a page"})
+	store.AppendToHistory(bgCtx, "source", agent.MessageRecord{Content: "hello"}, session.HistoryTurn{})
+	anchor, _ := store.AppendToHistory(bgCtx, "source", agent.TextRecord{Content: "a page"}, session.HistoryTurn{})
 
 	resp := env.call("session.fork", rpc.SessionForkParams{SessionID: "source", AnchorSeq: anchor})
 	if resp.Error != nil {

@@ -284,8 +284,8 @@ func TestLease_NothingHappensInsideTheBudget(t *testing.T) {
 	sess.emit(t, agent.BackgroundWaitEvent{})
 	// The record, not the hold: the hold flips while the event is being reduced,
 	// which is before the record is written, so counting records against the hold
-	// would race the append.
-	waitForHistory(t, store, "sess-1", 1)
+	// would race the append. Two: the prompt's turn_started, then the wait.
+	waitForHistory(t, store, "sess-1", 2)
 
 	// Past the turn budget, which is shorter — and not the one holding this
 	// process. A table that picked the wrong row would act here.
@@ -297,7 +297,7 @@ func TestLease_NothingHappensInsideTheBudget(t *testing.T) {
 	if holdOf(proc) != session.LeaseBackground {
 		t.Errorf("hold = %q, want the background wait it is still inside", holdOf(proc))
 	}
-	if n := len(historyRecords(t, store, "sess-1")); n != 1 {
+	if n := len(historyRecords(t, store, "sess-1")); n != 2 {
 		t.Errorf("history grew to %d records; nothing should have been written", n)
 	}
 }
@@ -331,9 +331,10 @@ func TestLease_ProgressAfterTheTurnEndedDoesNotReviveIt(t *testing.T) {
 	// The task Pockode stopped waiting for is still running, and still talking.
 	sess.emit(t, agent.ToolActivityEvent{ToolUseID: "call-1", Activity: "still going"})
 	sess.emit(t, agent.SystemEvent{Content: "background_tasks_changed"})
-	// background_wait, the expiry's warning, its done, and the system frame. The
-	// tool_activity is not in the count: it is broadcast and never recorded.
-	waitForHistory(t, store, "sess-1", 4)
+	// The turn_started, background_wait, the expiry's warning, its done, and
+	// the system frame. The tool_activity is not in the count: it is broadcast
+	// and never recorded.
+	waitForHistory(t, store, "sess-1", 5)
 
 	if turn := proc.turnState(); turn.Phase != session.PhaseIdle {
 		t.Errorf("phase = %q, want idle: a task reporting progress is not a turn", turn.Phase)
@@ -356,8 +357,9 @@ func TestLease_ATaskFinishingAfterTheWaitExpiredIsNotATurn(t *testing.T) {
 	m.reapLeasesAsOf(pastBudget(leaseTestBudgets.Background))
 
 	sess.emit(t, agent.ToolResultEvent{ToolUseID: "call-1", Subtype: agent.ToolResultBackgroundResult})
-	// background_wait, the expiry's warning, its done, and the result.
-	waitForHistory(t, store, "sess-1", 4)
+	// The turn_started, background_wait, the expiry's warning, its done, and
+	// the result.
+	waitForHistory(t, store, "sess-1", 5)
 	if turn := proc.turnState(); turn.Phase != session.PhaseIdle {
 		t.Fatalf("phase = %q, want idle: a task finishing is not the agent resuming", turn.Phase)
 	}

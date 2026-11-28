@@ -119,7 +119,7 @@ func TestDelete_TakesThePermissionReviewerWithIt(t *testing.T) {
 		if _, _, err := store.EnsurePermissionReviewer(ctx, main, reviewer); err != nil {
 			t.Fatalf("create reviewer of %s: %v", main, err)
 		}
-		if _, err := store.AppendToHistory(ctx, reviewer, testRecord{"type": "text"}); err != nil {
+		if _, err := store.AppendToHistory(ctx, reviewer, testRecord{"type": "text"}, HistoryTurn{}); err != nil {
 			t.Fatalf("append to %s: %v", reviewer, err)
 		}
 	}

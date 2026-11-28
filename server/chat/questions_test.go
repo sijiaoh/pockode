@@ -365,10 +365,11 @@ func TestSendAnswers_DeliversAndClears(t *testing.T) {
 		t.Errorf("returned content = %q, want what the agent was sent", content)
 	}
 
+	// The message, followed by the turn it opened.
 	records := f.records(t)
-	last, ok := records[len(records)-1].(agent.MessageRecord)
+	last, ok := records[len(records)-2].(agent.MessageRecord)
 	if !ok || len(last.Answering) != 2 {
-		t.Fatalf("last record = %+v, want the message carrying both answers", records[len(records)-1])
+		t.Fatalf("record = %+v, want the message carrying both answers", records[len(records)-2])
 	}
 	// The question travels with the answer: the card may be thousands of
 	// records back, outside every page the bubble will ever have.
@@ -995,7 +996,7 @@ func TestDescribeResolution_ARecordWithNoResolverIsTheUsers(t *testing.T) {
 			Answers: []string{"Postgres"}, AnsweredAt: time.Now(),
 		}},
 	}.ToRecord()
-	if _, err := f.store.AppendToHistory(context.Background(), "sess", legacy); err != nil {
+	if _, err := f.store.AppendToHistory(context.Background(), "sess", legacy, session.HistoryTurn{}); err != nil {
 		t.Fatalf("AppendToHistory: %v", err)
 	}
 	if _, err := f.store.ApplyTurn(context.Background(), "sess", session.TurnInput{

@@ -488,6 +488,36 @@ export interface QuestionResponseRecord {
 }
 
 /**
+ * TurnStartedRecord is a turn opening: the moment a session went from idle to
+ * open (session.TurnTransition.Started). Every record written while the turn
+ * is open carries its id in the history envelope (session.HistoryTurn), its
+ * ending included.
+ *
+ * The message that opened it is named here rather than tagged, because the
+ * message record is written before anyone knows whether it opens a turn or
+ * joins one. This says which turn a message started; which message the
+ * agent's output answers is a different relation, kept by
+ * message_ingested — Claude answers a message queued into one turn in the
+ * next.
+ */
+export interface TurnStartedRecord {
+	type: "turn_started";
+	turn_id: string;
+	origin: TurnOrigin;
+	/**
+	 * MessageID is the opening message's (MessageRecord.MessageID), for
+	 * TurnOriginPrompt; empty for the other origins, and for a prompt whose
+	 * message record could not be written.
+	 */
+	message_id?: string;
+	/**
+	 * ObservedAt: see ObserveAt. The instant the turn opened at
+	 * (session.TurnState.OpenedAt) — for a prompt, its message's own.
+	 */
+	observed_at?: string;
+}
+
+/**
  * ToolActivityLiveEvent is what a tool call that has not returned is doing
  * right now; see ToolActivityEvent.
  */
@@ -539,7 +569,8 @@ export type HistoryRecord =
 	| CommandOutputRecord
 	| PlanRecord
 	| AskUserQuestionRecord
-	| QuestionResponseRecord;
+	| QuestionResponseRecord
+	| TurnStartedRecord;
 
 /**
  * Every event that is broadcast and never stored: never in a history page,
@@ -1016,6 +1047,11 @@ export interface PlanStep {
 	active_text?: string;
 	status: PlanStepStatus;
 }
+
+/**
+ * TurnOrigin is what opened a turn.
+ */
+export type TurnOrigin = "prompt" | "output" | "answer";
 
 /**
  * SubagentProgress is how far a running subagent has come. Live state: it

@@ -180,6 +180,9 @@ func TestFileStore_RestartAbortsAnOpenTurn(t *testing.T) {
 	if len(records) != 1 || recordType(t, records[0]) != HistoryTypeProcessEnded {
 		t.Fatalf("history = %s, want one process_ended record", records)
 	}
+	if turn := HistoryTurnOf(records[0]); turn != NoTurn {
+		t.Errorf("process_ended is in %+v, want no turn", turn)
+	}
 }
 
 // The repair is written back, so a session nobody touches again is not repaired
@@ -278,7 +281,7 @@ func TestFileStore_RestartClosesOutARunWhoseTurnWasIdle(t *testing.T) {
 		t.Fatalf("ApplyTurn failed: %v", err)
 	}
 	for _, record := range []string{"message", "done"} {
-		if _, err := store.AppendToHistory(ctx, "sess-1", testRecord{"type": record}); err != nil {
+		if _, err := store.AppendToHistory(ctx, "sess-1", testRecord{"type": record}, HistoryTurn{}); err != nil {
 			t.Fatalf("AppendToHistory failed: %v", err)
 		}
 	}
@@ -326,7 +329,7 @@ func TestFileStore_RestartLeavesAClosedOutRunAlone(t *testing.T) {
 		t.Fatalf("Create failed: %v", err)
 	}
 	for _, record := range []string{"message", "done", HistoryTypeProcessEnded} {
-		if _, err := store.AppendToHistory(ctx, "sess-1", testRecord{"type": record}); err != nil {
+		if _, err := store.AppendToHistory(ctx, "sess-1", testRecord{"type": record}, HistoryTurn{}); err != nil {
 			t.Fatalf("AppendToHistory failed: %v", err)
 		}
 	}

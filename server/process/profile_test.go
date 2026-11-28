@@ -486,7 +486,8 @@ func TestProcess_RecordsTheAccountOnAuthAndLimitRecords(t *testing.T) {
 			sess.emit(t, agent.WarningEvent{Message: "hit your limit", UsageLimit: &agent.UsageLimit{Agent: session.AgentTypeClaude}})
 			sess.emit(t, agent.ErrorEvent{Error: "failed", UsageLimit: &agent.UsageLimit{Agent: session.AgentTypeCodex}})
 			sess.emit(t, agent.WarningEvent{Message: "unrelated"})
-			waitForHistory(t, store, "sess-1", 4)
+			// The four, behind the turn_started of the turn they arrive in.
+			waitForHistory(t, store, "sess-1", 5)
 
 			records, err := store.GetHistory(context.Background(), "sess-1")
 			if err != nil {

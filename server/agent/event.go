@@ -61,6 +61,9 @@ const (
 	// next piece of the text when the engine streams one. Broadcast, never
 	// recorded; see ThinkingDeltaEvent.
 	EventTypeThinkingDelta EventType = "thinking_delta"
+	// EventTypeTurnStarted is Pockode's record of a turn opening. Written by
+	// Pockode, never by an agent; see TurnStartedRecord.
+	EventTypeTurnStarted EventType = "turn_started"
 )
 
 // AwaitsUserInput returns true for the events after which the agent produces
@@ -111,7 +114,7 @@ func (e EventType) AwaitsUserInput() bool {
 // Excluded, and why they are not oversights: AwaitsUserInput events end or block
 // the turn, so they drive those transitions instead (the two predicates never
 // overlap); request_cancelled and process_ended likewise have signals of their
-// own, named in process.turnInputFor before this predicate is ever asked; and a
+// own, named in TurnInputOf before this predicate is ever asked; and a
 // warning is how a session-level problem is reported, which can happen before
 // the first message ever goes out. The remaining types are only ever replayed
 // from history, never streamed.
@@ -120,7 +123,7 @@ func (e EventType) AwaitsUserInput() bool {
 // ActivatesSession, and the gap between the two predicates is the set that
 // must *not* end a background wait: the background task list changing is a
 // `system` frame, so counting it would make a task finishing look like the turn
-// coming back (see process.turnInputFor). That gap is this predicate's whole
+// coming back (see TurnInputOf). That gap is this predicate's whole
 // remaining job. It is not the whole of what must not end a wait: a tool result
 // that settles background work is inside ActivatesSession and still is not the
 // CLI resuming (ToolResultEvent.SettlesBackgroundWork), which the translation
@@ -173,7 +176,7 @@ func (e EventType) IndicatesAgentActivity() bool {
 // has resumed. A tool result that settles background work is in here — it
 // only ever follows a call the agent made, so it cannot cost anyone the escape
 // hatch — but it records work ending, not the agent saying anything, so
-// process.turnInputFor keeps it from opening a turn or ending a wait
+// TurnInputOf keeps it from opening a turn or ending a wait
 // (ToolResultEvent.SettlesBackgroundWork).
 func (e EventType) ActivatesSession() bool {
 	switch e {
@@ -284,7 +287,8 @@ type TextEvent struct {
 	// TextRecord.ProviderMessageID.
 	ProviderMessageID string
 	// AfterTurn says this arrived after the turn it belongs to had ended; see
-	// MarkAfterTurn. Not recorded: the record is drawn the same either way.
+	// MarkAfterTurn. Not a field of the record: its turn tag says the same,
+	// naming the turn that ended (session.TurnInput.AfterTurn).
 	AfterTurn bool
 }
 
@@ -322,7 +326,8 @@ type ToolCallEvent struct {
 	// ObservedAt is when Pockode saw the call; see ObserveAt.
 	ObservedAt time.Time
 	// AfterTurn says this arrived after the turn it belongs to had ended; see
-	// MarkAfterTurn. Not recorded: the record is drawn the same either way.
+	// MarkAfterTurn. Not a field of the record: its turn tag says the same,
+	// naming the turn that ended (session.TurnInput.AfterTurn).
 	AfterTurn bool
 }
 
@@ -439,7 +444,8 @@ type ToolResultEvent struct {
 	// Never set on a ToolResultBackgroundLost result (see ObserveAt).
 	ObservedAt time.Time
 	// AfterTurn says this arrived after the turn it belongs to had ended; see
-	// MarkAfterTurn. Not recorded: the record is drawn the same either way.
+	// MarkAfterTurn. Not a field of the record: its turn tag says the same,
+	// naming the turn that ended (session.TurnInput.AfterTurn).
 	AfterTurn bool
 }
 
@@ -454,7 +460,13 @@ func (ToolResultEvent) isAgentEvent()        {}
 // with its process, can happen after a turn is over and does not mean the model
 // has resumed.
 func (e ToolResultEvent) SettlesBackgroundWork() bool {
-	return e.Subtype == ToolResultBackgroundResult || e.Subtype == ToolResultBackgroundLost
+	return e.Subtype.SettlesBackgroundWork()
+}
+
+// SettlesBackgroundWork is ToolResultEvent.SettlesBackgroundWork, for a result
+// read back out of history.
+func (s ToolResultSubtype) SettlesBackgroundWork() bool {
+	return s == ToolResultBackgroundResult || s == ToolResultBackgroundLost
 }
 
 func (e ToolResultEvent) ToRecord() ToolResultRecord {
@@ -595,7 +607,8 @@ type ThinkingEvent struct {
 	// thinking came out of; see TextRecord.ProviderMessageID.
 	ProviderMessageID string
 	// AfterTurn says this arrived after the turn it belongs to had ended; see
-	// MarkAfterTurn. Not recorded: the record is drawn the same either way.
+	// MarkAfterTurn. Not a field of the record: its turn tag says the same,
+	// naming the turn that ended (session.TurnInput.AfterTurn).
 	AfterTurn bool
 }
 
@@ -1074,8 +1087,9 @@ func ObserveAt[E AgentEvent](event E, at time.Time) E {
 // (Codex's turn/started), content with no turn running cannot be the CLI
 // resuming: it is a straggler of a turn that is over — a command the interrupt
 // did not kill finishing, a subagent still running when its parent's turn
-// ended. It is stored and shown like any other content, but it must not open a
-// turn, because no ending is coming for one (process.turnInputFor).
+// ended. It is stored and shown like any other content, tagged in history with
+// the turn that ended last, but it must not open a turn, because no ending is
+// coming for one (process.turnInputFor).
 //
 // Claude does not use it: Claude announces no turn start, and content after an
 // ending — a background subagent waking the session — is how its turns open.

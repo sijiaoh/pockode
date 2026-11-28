@@ -136,7 +136,8 @@ func TestClient_SendWithAttachments(t *testing.T) {
 			t.Errorf("agent was handed %+v", sent)
 		}
 		history, err := store.GetHistory(context.Background(), "sess")
-		if err != nil || len(history) != 1 {
+		// The message, and the turn it opened.
+		if err != nil || len(history) != 2 {
 			t.Fatalf("history = %d records, err %v", len(history), err)
 		}
 		if !bytes.Contains(history[0], []byte(`"attachments":[{"name":"shot.png","mime":"image/png","size":10,"attachment_id":"abc"}]`)) {

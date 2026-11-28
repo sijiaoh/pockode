@@ -426,6 +426,11 @@ export type NormalizedEvent =
 	| { type: "process_ended"; observedAt?: number }
 	/** The turn parked on background work; neither an ending nor output. */
 	| { type: "background_wait" }
+	/**
+	 * A turn opening, as the server records it. The transcript still finds its
+	 * turns from the records around it; this one draws nothing.
+	 */
+	| { type: "turn_started" }
 	| { type: "system"; content: string }
 	| {
 			// User message or system-driven message (history replay or broadcast)
@@ -659,6 +664,8 @@ export function normalizeEvent(e: unknown): NormalizedEvent {
 			};
 		case "background_wait":
 			return { type: "background_wait" };
+		case "turn_started":
+			return { type: "turn_started" };
 		case "system":
 			return { type: "system", content: record.content ?? "" };
 		case "message":
@@ -1495,6 +1502,14 @@ function applyEvent(
 	// is not wired up yet. Ignored outright rather than falling through, which
 	// would open an empty assistant bubble for it.
 	if (event.type === "background_wait") {
+		return messages;
+	}
+
+	// The server's record of a turn opening, for its own reading of the
+	// history (docs/code/agent-integration.md#turn-identity). The transcript
+	// does not read turns off it yet, and like background_wait it must not fall
+	// through and open an empty bubble.
+	if (event.type === "turn_started") {
 		return messages;
 	}
 

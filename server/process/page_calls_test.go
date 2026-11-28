@@ -39,7 +39,8 @@ func TestProcess_PageToolResultIsRecordedWithItsPage(t *testing.T) {
 		sess.emit(t, agent.ToolCallEvent{ToolUseID: c.id, ToolName: c.tool, ToolInput: json.RawMessage(`{}`)})
 		sess.emit(t, agent.ToolResultEvent{ToolUseID: c.id, ToolResult: c.result, IsError: c.isError})
 	}
-	waitForHistory(t, store, "sess-1", 2*len(calls))
+	// Each call and result, behind the turn_started the first call opened.
+	waitForHistory(t, store, "sess-1", 2*len(calls)+1)
 
 	records, err := store.GetHistory(context.Background(), "sess-1")
 	if err != nil {

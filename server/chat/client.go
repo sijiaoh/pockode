@@ -474,10 +474,13 @@ func (c *Client) Interrupt(_ context.Context, sessionID string) error {
 // (see session.HistorySeq).
 //
 // The cut is not snapped to a turn boundary: cutting in the middle of a turn is
-// allowed, and leaves a last turn with no ending event, which is what the source
-// really did contain up to that point. No terminal event is invented to tidy it
-// up — a transcript claiming a turn finished where it was cut would be a lie,
-// and the next agent reads that transcript too.
+// allowed, and keeps that turn only up to the cut, which is what the source
+// really did contain up to that point. No ending of the agent's is invented to
+// tidy it up — a transcript claiming a turn finished where it was cut would be
+// a lie, and the next agent reads that transcript too. What is appended is
+// Pockode's own process_ended, the record of a turn whose process stopped
+// carrying it: true of the fork, where no process is, and what keeps its
+// history agreeing with its idle turn state.
 //
 // The source may be mid-turn. Forking neither waits for it nor disturbs it.
 //
@@ -562,6 +565,18 @@ func (c *Client) Fork(ctx context.Context, sourceID string, anchor session.Histo
 
 	if err := c.store.WriteHistory(ctx, newID, history); err != nil {
 		return fail(fmt.Errorf("copy history: %w", err))
+	}
+
+	// A cut inside a turn leaves that turn open in the copy, and the fork's
+	// own turn state idle (session.ForkSpec): no process of the fork's is
+	// carrying it. The history says so the way it says it of any turn whose
+	// process stopped carrying it — process_ended, in no turn — so the two
+	// agree, and every reader of the copy sees the turn end where it was cut,
+	// aborted rather than finished.
+	if agent.OpenTurnOf(agent.InferHistoryTurns(history, source.AgentType)) != "" {
+		if _, err := c.stream.AppendTo(ctx, newID, agent.ProcessEndedRecord{}, session.NoTurn); err != nil {
+			return fail(fmt.Errorf("record that the fork carries no turn: %w", err))
+		}
 	}
 
 	// Nothing about the source's present state goes with this, not even whether a
