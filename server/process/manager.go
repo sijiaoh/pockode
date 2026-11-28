@@ -113,6 +113,10 @@ type Manager struct {
 	// Tracks the reaper and every event stream, so Shutdown can return only once
 	// nothing is still writing to the session store.
 	wg sync.WaitGroup
+	// stopped is closed once Shutdown has run and everything wg tracks has
+	// returned; see Stopped.
+	stopped     chan struct{}
+	stoppedOnce sync.Once
 }
 
 // ErrManagerClosed is returned when a process is requested after shutdown.
@@ -264,6 +268,7 @@ func NewManager(agents *agent.Registry, worktree, workDir, dataDir, mcpServerDir
 		settler:      session.NewTurnSettler(session.DefaultSettleDelay),
 		ctx:          ctx,
 		cancel:       cancel,
+		stopped:      make(chan struct{}),
 	}
 	// A deleted session's pending ending is dropped through this, whichever of
 	// the several deletion paths took it away.
@@ -1099,6 +1104,14 @@ func (p *Process) enforceRetirement() {
 func (m *Manager) Shutdown() {
 	m.processesMu.Lock()
 	m.cancel()
+	// Started under processesMu, after the cancel: no process can register — and
+	// so no wg.Add can race the Wait — once m.ctx is done (see GetOrCreateProcess).
+	m.stoppedOnce.Do(func() {
+		go func() {
+			m.wg.Wait()
+			close(m.stopped)
+		}()
+	})
 	procs := make([]*Process, 0, len(m.processes))
 	for sessionID, p := range m.processes {
 		procs = append(procs, p)
@@ -1126,13 +1139,26 @@ func (m *Manager) Shutdown() {
 		}
 	}
 	// The streams are done; this is the lease reaper, which stops on m.cancel.
-	m.wg.Wait()
+	// Waited for through stopped rather than wg itself, so that Stopped is
+	// already closed when Shutdown returns.
+	<-m.stopped
 
 	// Nothing is left to act on a turn ending, and the endings the shutdown
 	// itself produced describe processes the server killed on its way out.
 	m.settler.Stop()
 
 	slog.Info("manager shutdown complete", "processesClosed", len(procs))
+}
+
+// Stopped is closed once Shutdown has run and every goroutine that writes to the
+// session store on this manager's behalf — every event stream, the lease
+// reaper — has returned. Ordinarily that is by the time Shutdown returns; it is
+// later only when Shutdown gave up waiting for a stream (shutdownDrainTimeout),
+// whose late events still reach the store until the stream ends. It is what
+// tells the owner of the data directory that this manager has stopped writing
+// there.
+func (m *Manager) Stopped() <-chan struct{} {
+	return m.stopped
 }
 
 // runLeaseReaper is the whole of the process lifecycle policy: a process lives

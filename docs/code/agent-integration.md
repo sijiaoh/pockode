@@ -5243,13 +5243,52 @@ already showed. The watcher forwards it as it is; the client absorbs it, since
 inserting a row it already holds re-places that row instead
 (`web/src/lib/sessionStore.ts`).
 
-**Known limitation:** while a worktree is unloaded but its processes are still
-draining, its old store can still write — through its flush timer, `Close`, or
-late events. A new store opened on the same directory in that window can be
-overwritten by it, and a `DeleteInDir` in that window can have the deleted
-session written back. The draining process's own turn-ending write did the same
-before writes were deferred. Closing it belongs in `worktree.Manager`: creating a
-worktree should wait while one of the same name is still stopping.
+#### One Writer per Data Directory
+
+**At most one writer per worktree data directory, at any moment.** A writer is a
+session store together with everything that can still write through it — its
+flush timer, `Close`, and the event streams of its process manager — or a write
+made with no store at all. Two writers on one directory lose changes: each
+rewrites the whole index from its own copy, so whichever writes last undoes the
+other, and a store's deferred write can put back a session deleted beneath it.
+
+`worktree.Manager` holds the rule with one claim per directory
+(`Manager.writers`), taken under its lock before anything writes and released
+only once nothing it covered can write any more. Every writing path takes one:
+
+- **Loading a worktree** (`Get`) claims the directory before its store opens. A
+  second `Get` that finds a load in progress waits for it and is handed the same
+  worktree — no duplicate store is built and discarded beside it. A load that
+  fails gives the claim up; if the worktree got as far as `Start`, only after
+  closing the store it opened and shutting down its process manager.
+- **Unloading** releases the claim after `Worktree.Stop`, once its process manager
+  reports `Stopped()`: every event stream has ended, including one `Shutdown`
+  gave up waiting for at its drain timeout and that still writes what the CLI
+  leaves in its pipe. A `Get` of the same name in the meantime waits for that,
+  and its new store then reads the index the old one left.
+- **Deleting a session of a worktree gone from git** (`Manager.DeleteSessions`,
+  `session_view.delete`) goes through the store while one is still loaded — git
+  can lose a worktree before Pockode unloads it — and waits while one is still
+  stopping. Only with no store left does `session.DeleteInDir` rewrite the index
+  on disk, under a claim of its own, so no store opens meanwhile.
+- **Pruning a deleted worktree's empty directory** (`pruneEmptySessionData`)
+  needs the claim too. The deletion above prunes before releasing its claim;
+  `ForceShutdown` prunes only if it can take the claim at once, and otherwise
+  leaves the directory for the next deletion.
+
+A wait for a previous writer to release is bounded by `writerReleaseTimeout`
+(30s), after which the load or the deletion fails rather than open a second
+writer. Ordinarily it is over once the drain is: only a stream that outlives the
+kill of its CLI runs it out.
+
+Not covered by the claim: a write through a reference taken before
+`ForceShutdown` — a connection still bound to the deleted worktree. Its requests
+are refused from then on instead
+([websocket-rpc.md](websocket-rpc.md#a-binding-whose-worktree-was-deleted)), so
+only one already past that check can write after the claim is released.
+Nested worktree names (`fix`, `fix/foo`) have separate claims, though one's
+directory lies inside the other's; `Manager.dataDirMu` keeps pruning one from
+removing a directory the other's store is opening under.
 
 ## Concurrency Safety
 
