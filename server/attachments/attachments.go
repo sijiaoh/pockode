@@ -1,7 +1,7 @@
 // Package attachments keeps the binary content an agent delivers inside its
 // output — the image a tool returned — out of the session history.
 //
-// Why it exists: an EventRecord is written whole into
+// Why it exists: a history record is written whole into
 // sessions/<id>/history.jsonl and replayed on every history page. One image
 // claude hands over is around half a megabyte of base64, so a session with a
 // dozen screenshots would carry megabytes of them in every page of scrollback,

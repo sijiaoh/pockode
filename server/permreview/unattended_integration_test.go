@@ -146,7 +146,7 @@ func TestIntegration_UnattendedClaude(t *testing.T) {
 	if err != nil {
 		t.Fatalf("find reviewer: %v", err)
 	}
-	var reviewerRecords []agent.EventRecord
+	var reviewerRecords []agent.Record
 	if found {
 		reviewerRecords = readHistory(t, ctx, wt.SessionStore, reviewer.ID)
 	}
@@ -157,7 +157,7 @@ func TestIntegration_UnattendedClaude(t *testing.T) {
 		}
 	})
 
-	requests := ofType(mainRecords, agent.EventTypePermissionRequest)
+	requests := ofType[agent.PermissionRequestRecord](mainRecords)
 	if len(requests) == 0 {
 		t.Fatalf("the main session raised no permission request; Claude Code may no longer honour the project ask rule %q under bypassPermissions", askRule)
 	}
@@ -167,21 +167,22 @@ func TestIntegration_UnattendedClaude(t *testing.T) {
 	if reviewer.PermissionReviewerOf != mainID {
 		t.Errorf("reviewer's permission_reviewer_of = %q, want %q", reviewer.PermissionReviewerOf, mainID)
 	}
-	if len(withSubtype(reviewerRecords, permreview.MessageSubtype)) == 0 {
+	if len(messagesWithSubtype(reviewerRecords, permreview.MessageSubtype)) == 0 {
 		t.Error("the reviewer session was never sent a review message")
 	}
 
 	verdictCalls := 0
-	for _, r := range ofType(reviewerRecords, agent.EventTypeToolCall) {
+	for _, r := range ofType[agent.ToolCallRecord](reviewerRecords) {
 		if strings.HasSuffix(r.ToolName, agent.PermissionVerdictTool) {
 			verdictCalls++
 		}
 	}
 
-	responses := ofType(mainRecords, agent.EventTypePermissionResponse)
+	responses := ofType[agent.PermissionResponseRecord](mainRecords)
 	firstVerdict := -1
-	for i, r := range mainRecords {
-		if r.Type != agent.EventTypePermissionResponse {
+	for i, rec := range mainRecords {
+		r, ok := rec.(agent.PermissionResponseRecord)
+		if !ok {
 			continue
 		}
 		switch r.By {
@@ -207,12 +208,12 @@ func TestIntegration_UnattendedClaude(t *testing.T) {
 	}
 
 	end := mainRecords[len(mainRecords)-1]
-	if end.Type != agent.EventTypeDone {
-		t.Errorf("the main turn ended with %q, want done: a verdict must not end the turn", end.Type)
+	if end.Type() != agent.EventTypeDone {
+		t.Errorf("the main turn ended with %q, want done: a verdict must not end the turn", end.Type())
 	}
 	saidAfter := false
 	for _, r := range mainRecords[firstVerdict+1:] {
-		if r.Type == agent.EventTypeText && strings.Contains(r.Content, doneMarker) {
+		if text, ok := r.(agent.TextRecord); ok && strings.Contains(text.Content, doneMarker) {
 			saidAfter = true
 		}
 	}
@@ -220,7 +221,7 @@ func TestIntegration_UnattendedClaude(t *testing.T) {
 		t.Errorf("the main agent never said %s after the verdict, so the turn did not visibly carry on", doneMarker)
 	}
 
-	verdict := mainRecords[firstVerdict]
+	verdict := mainRecords[firstVerdict].(agent.PermissionResponseRecord)
 	category, reason := "", ""
 	if verdict.Review != nil {
 		category, reason = string(verdict.Review.Category), verdict.Review.Reason
@@ -259,12 +260,12 @@ func startLocalAPI(t *testing.T, dataDir string, registry *worktree.Registry, ma
 // waitForTurnEnd reads the session's history until the turn the test started
 // has ended, and returns it. A permission request does not end a turn; only
 // what the CLI reports as the end of one, or the process going, does.
-func waitForTurnEnd(t *testing.T, ctx context.Context, store session.Store, sessionID string) []agent.EventRecord {
+func waitForTurnEnd(t *testing.T, ctx context.Context, store session.Store, sessionID string) []agent.Record {
 	t.Helper()
 	for {
 		records := readHistory(t, ctx, store, sessionID)
 		if n := len(records); n > 0 {
-			switch records[n-1].Type {
+			switch records[n-1].Type() {
 			case agent.EventTypeDone, agent.EventTypeInterrupted, agent.EventTypeError, agent.EventTypeProcessEnded:
 				return records
 			}
@@ -277,16 +278,16 @@ func waitForTurnEnd(t *testing.T, ctx context.Context, store session.Store, sess
 	}
 }
 
-func readHistory(t *testing.T, ctx context.Context, store session.Store, sessionID string) []agent.EventRecord {
+func readHistory(t *testing.T, ctx context.Context, store session.Store, sessionID string) []agent.Record {
 	t.Helper()
 	raw, err := store.GetHistory(ctx, sessionID)
 	if err != nil {
 		t.Fatalf("read history of %s: %v", sessionID, err)
 	}
-	records := make([]agent.EventRecord, 0, len(raw))
+	records := make([]agent.Record, 0, len(raw))
 	for _, r := range raw {
-		var rec agent.EventRecord
-		if err := json.Unmarshal(r, &rec); err != nil {
+		rec, err := agent.DecodeRecord(r)
+		if err != nil {
 			t.Fatalf("decode a history record of %s: %v\n%s", sessionID, err, r)
 		}
 		records = append(records, rec)
@@ -294,19 +295,19 @@ func readHistory(t *testing.T, ctx context.Context, store session.Store, session
 	return records
 }
 
-func ofType(records []agent.EventRecord, typ agent.EventType) []agent.EventRecord {
-	var out []agent.EventRecord
-	for _, r := range records {
-		if r.Type == typ {
+func ofType[R agent.Record](records []agent.Record) []R {
+	var out []R
+	for _, rec := range records {
+		if r, ok := rec.(R); ok {
 			out = append(out, r)
 		}
 	}
 	return out
 }
 
-func withSubtype(records []agent.EventRecord, subtype string) []agent.EventRecord {
-	var out []agent.EventRecord
-	for _, r := range records {
+func messagesWithSubtype(records []agent.Record, subtype agent.MessageSubtype) []agent.MessageRecord {
+	var out []agent.MessageRecord
+	for _, r := range ofType[agent.MessageRecord](records) {
 		if r.Subtype == subtype {
 			out = append(out, r)
 		}
@@ -314,20 +315,17 @@ func withSubtype(records []agent.EventRecord, subtype string) []agent.EventRecor
 	return out
 }
 
-// describe is one line per record, enough to read a failed run by.
-func describe(records []agent.EventRecord) string {
+// describe is one line per record, enough to read a failed run by: its type,
+// then its own fields as stored.
+func describe(records []agent.Record) string {
 	var b strings.Builder
 	for _, r := range records {
-		fmt.Fprintf(&b, "  %s", r.Type)
-		for _, part := range []string{r.Subtype, r.ToolName, string(r.ToolInput), r.Choice, string(r.By), r.Content, r.Message, r.Error} {
-			if part != "" {
-				fmt.Fprintf(&b, " | %.300s", part)
-			}
+		line, err := json.Marshal(r)
+		if err != nil {
+			fmt.Fprintf(&b, "  %s | unencodable: %v\n", r.Type(), err)
+			continue
 		}
-		if r.Review != nil {
-			fmt.Fprintf(&b, " | review %+v", *r.Review)
-		}
-		b.WriteByte('\n')
+		fmt.Fprintf(&b, "  %s | %.1000s\n", r.Type(), line)
 	}
 	return b.String()
 }

@@ -1,35 +1,10 @@
-import type { OmitReason } from "./contents";
+import type * as Wire from "./wire.generated";
 
 /**
  * One file-like piece of an agent's output — the image a tool returned, the PDF
- * a read delivered. Mirrors `agent.FileBlock` on the server.
- *
- * `attachment_id` is the one route to the bytes: an agent that delivers content
- * inline has it stored there, and so does one that only names a file, which the
- * server reads when the event arrives. `path` says which file was looked at and
- * is never fetched by — it is what offers the way over to the Files tab — so a
- * block may carry both, as Codex's do. `omitted` says why a block has neither.
+ * a read delivered — exactly as the server sends it (`agent.FileBlock`).
  */
-export interface FileBlock {
-	/** Absent when the agent named no file, which is usual for an inline image. */
-	name?: string;
-	/** What the agent called the content. Empty when it said nothing. */
-	mime: string;
-	size?: number;
-	/**
-	 * The delivered bytes' dimensions, absent when they could not be read. They
-	 * are what lets the strip hold an image's space before it arrives, which is
-	 * what keeps loading a history page from moving the text under the reader.
-	 */
-	width?: number;
-	height?: number;
-	attachment_id?: string;
-	/** Absolute, on the machine the agent runs on; may be outside the work dir. */
-	path?: string;
-	omitted?: OmitReason;
-	/** The ceiling that kept the content out; only with `too_large`. */
-	limit?: number;
-}
+export type FileBlock = Wire.FileBlock;
 
 /**
  * One piece of a tool result, in the order the agent produced it. Mirrors

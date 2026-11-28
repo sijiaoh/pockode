@@ -10,7 +10,7 @@ import (
 // itself.
 //
 // Why a process keeps this at all: a tool_activity event is broadcast and never
-// recorded (agent.EventType.Persisted), so a client that was not connected when
+// recorded (agent.LiveEvent), so a client that was not connected when
 // one arrived has missed it — and on a phone not being connected is the normal
 // case rather than an edge. Without this, reconnecting to a background task that
 // has been running for half an hour shows its placeholder result and nothing

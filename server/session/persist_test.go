@@ -49,7 +49,7 @@ func TestFileStore_CrashBeforeFlush_TurnReadsBackAsIfWritten(t *testing.T) {
 		if _, err := store.Create(ctx, "s1", CreateSpec{}); err != nil {
 			t.Fatalf("Create failed: %v", err)
 		}
-		if _, err := store.AppendToHistory(ctx, "s1", map[string]any{"type": "message"}); err != nil {
+		if _, err := store.AppendToHistory(ctx, "s1", testRecord{"type": "message"}); err != nil {
 			t.Fatalf("AppendToHistory failed: %v", err)
 		}
 		if _, err := store.ApplyTurn(ctx, "s1", TurnInput{Signal: SignalPrompt, At: at(0)}); err != nil {
@@ -58,7 +58,7 @@ func TestFileStore_CrashBeforeFlush_TurnReadsBackAsIfWritten(t *testing.T) {
 		if _, err := store.ApplyTurn(ctx, "s1", TurnInput{Signal: SignalPermissionRaised, RequestID: "r1", At: at(1)}); err != nil {
 			t.Fatalf("ApplyTurn failed: %v", err)
 		}
-		if _, err := store.AppendToHistory(ctx, "s1", map[string]any{"type": "permission_request"}); err != nil {
+		if _, err := store.AppendToHistory(ctx, "s1", testRecord{"type": "permission_request"}); err != nil {
 			t.Fatalf("AppendToHistory failed: %v", err)
 		}
 		if flushed {

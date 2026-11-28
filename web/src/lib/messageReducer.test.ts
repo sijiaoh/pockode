@@ -394,6 +394,19 @@ describe("messageReducer", () => {
 			});
 		});
 
+		// As the server reads one: only an allow lets the call run.
+		it("reads a permission_response choice it does not know as a deny", () => {
+			for (const choice of ["allow_forever", undefined]) {
+				expect(
+					normalizeEvent({
+						type: "permission_response",
+						request_id: "req-1",
+						choice,
+					}),
+				).toMatchObject({ choice: "deny" });
+			}
+		});
+
 		it("keeps who answered a permission request, and the review", () => {
 			const event = normalizeEvent({
 				type: "permission_response",
@@ -3449,6 +3462,26 @@ describe("messageReducer", () => {
 					duration_ms: 0,
 				}),
 			).toMatchObject({ durationMs: undefined });
+		});
+
+		// A newer server may add a kind of result this client has no name for;
+		// it reads as an ordinary result rather than carrying a value the
+		// event's type says cannot be there.
+		it("reads a subtype it does not know as an ordinary result", () => {
+			const event = normalizeEvent({
+				type: "tool_result",
+				tool_use_id: "t1",
+				tool_result: "ok",
+				subtype: "future_kind",
+			});
+			expect(event).toMatchObject({ type: "tool_result", subtype: undefined });
+			expect(
+				normalizeEvent({
+					type: "tool_result",
+					tool_use_id: "t1",
+					subtype: "background_lost",
+				}),
+			).toMatchObject({ subtype: "background_lost" });
 		});
 
 		// A backgrounded call returns a placeholder at once. Without the subtype

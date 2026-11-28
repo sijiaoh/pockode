@@ -13,21 +13,43 @@ import (
 
 // records reads the session's whole transcript back as typed records, which is
 // what a client replaying the conversation sees.
-func (f *midTurnFixture) records(t *testing.T) []agent.EventRecord {
+func (f *midTurnFixture) records(t *testing.T) []agent.Record {
 	t.Helper()
-	raws, err := f.store.GetHistory(context.Background(), "sess")
+	return sessionRecords(t, f.store, "sess")
+}
+
+// sessionRecords reads a session's whole transcript back as typed records.
+func sessionRecords(t *testing.T, store session.Store, sessionID string) []agent.Record {
+	t.Helper()
+	raws, err := store.GetHistory(context.Background(), sessionID)
 	if err != nil {
 		t.Fatalf("GetHistory: %v", err)
 	}
-	records := make([]agent.EventRecord, 0, len(raws))
+	return decodeRecords(t, raws)
+}
+
+func decodeRecords(t *testing.T, raws []json.RawMessage) []agent.Record {
+	t.Helper()
+	records := make([]agent.Record, 0, len(raws))
 	for _, raw := range raws {
-		var rec agent.EventRecord
-		if err := json.Unmarshal(raw, &rec); err != nil {
-			t.Fatalf("parse history record: %v", err)
+		rec, err := agent.DecodeRecord(raw)
+		if err != nil {
+			t.Fatalf("parse history record %s: %v", raw, err)
 		}
 		records = append(records, rec)
 	}
 	return records
+}
+
+// recordAs asserts rec is a T, failing the test with what it is instead.
+func recordAs[T agent.Record](t *testing.T, rec agent.Record) T {
+	t.Helper()
+	got, ok := rec.(T)
+	if !ok {
+		var want T
+		t.Fatalf("record = %q %+v, want %q", rec.Type(), rec, want.Type())
+	}
+	return got
 }
 
 // A message that arrives mid-turn is steered into the turn already running, so
@@ -51,17 +73,18 @@ func TestClient_MidTurnMessageRecordsTheReadPoint(t *testing.T) {
 	if len(records) != 3 {
 		t.Fatalf("history = %+v, want both messages and one read point", records)
 	}
-	if records[2].Type != agent.EventTypeMessageIngested {
-		t.Fatalf("last record is %q, want the read point", records[2].Type)
+	readPoint, ok := records[2].(agent.MessageIngestedRecord)
+	if !ok {
+		t.Fatalf("last record is %q, want the read point", records[2].Type())
 	}
 	// The read point names the message it is about rather than leaving it to be
 	// inferred from position, which is what keeps two queued messages apart.
-	second := records[1]
+	second := recordAs[agent.MessageRecord](t, records[1])
 	if second.MessageID == "" {
 		t.Fatal("the message record carries no id for the read point to name")
 	}
-	if records[2].MessageID != second.MessageID {
-		t.Errorf("read point names %q, want the second message %q", records[2].MessageID, second.MessageID)
+	if readPoint.MessageID != second.MessageID {
+		t.Errorf("read point names %q, want the second message %q", readPoint.MessageID, second.MessageID)
 	}
 	// And the agent was handed the same id, which is the only way an agent that
 	// echoes messages back can report the read point itself.
@@ -78,7 +101,7 @@ func TestClient_MidTurnMessageRecordsTheReadPoint(t *testing.T) {
 	// Everyone is told, the sender included: unlike the message itself, no
 	// client has a local echo of this to fall back on.
 	last := f.broadcasts[len(f.broadcasts)-1]
-	if last.Type != agent.EventTypeMessageIngested || last.MessageID != second.MessageID {
+	if ingested, ok := last.(agent.MessageIngestedRecord); !ok || ingested.MessageID != second.MessageID {
 		t.Errorf("last broadcast = %+v, want the read point", last)
 	}
 }
@@ -92,7 +115,7 @@ func TestClient_MessageThatStartsATurnRecordsNoReadPoint(t *testing.T) {
 	f.startTurn(t)
 
 	records := f.records(t)
-	if len(records) != 1 || records[0].Type != agent.EventTypeMessage {
+	if len(records) != 1 || records[0].Type() != agent.EventTypeMessage {
 		t.Fatalf("history = %+v, want only the message that started the turn", records)
 	}
 }
@@ -110,7 +133,7 @@ func TestClient_MessageBetweenTurnsRecordsNoReadPoint(t *testing.T) {
 	}
 
 	for _, rec := range f.records(t) {
-		if rec.Type == agent.EventTypeMessageIngested {
+		if rec.Type() == agent.EventTypeMessageIngested {
 			t.Fatalf("history = %+v, want no read point for a message that started its own turn", f.records(t))
 		}
 	}
@@ -135,10 +158,11 @@ func TestClient_EachQueuedMessageGetsItsOwnReadPoint(t *testing.T) {
 		t.Fatalf("history = %+v, want three messages and two read points", records)
 	}
 	for _, pair := range [][2]int{{1, 2}, {3, 4}} {
-		message, readPoint := records[pair[0]], records[pair[1]]
-		if message.Type != agent.EventTypeMessage || readPoint.Type != agent.EventTypeMessageIngested {
+		message, isMessage := records[pair[0]].(agent.MessageRecord)
+		readPoint, isReadPoint := records[pair[1]].(agent.MessageIngestedRecord)
+		if !isMessage || !isReadPoint {
 			t.Fatalf("records %d and %d are %q and %q, want a message and its read point",
-				pair[0], pair[1], message.Type, readPoint.Type)
+				pair[0], pair[1], records[pair[0]].Type(), records[pair[1]].Type())
 		}
 		if readPoint.MessageID != message.MessageID {
 			t.Errorf("read point at %d names %q, want the message above it %q (%q)",
@@ -154,7 +178,7 @@ type countingFailStore struct {
 	attempts int
 }
 
-func (s *countingFailStore) AppendToHistory(context.Context, string, any) (session.HistorySeq, error) {
+func (s *countingFailStore) AppendToHistory(context.Context, string, session.HistoryRecord) (session.HistorySeq, error) {
 	s.attempts++
 	return session.NoHistorySeq, errors.New("history is not writable")
 }
@@ -220,10 +244,14 @@ func TestClient_MessageThatOpensATurnCarriesTheTurnsOpeningMoment(t *testing.T) 
 	}
 
 	records := f.records(t)
-	if len(records) != 1 || records[0].ObservedAt == nil {
+	if len(records) != 1 {
 		t.Fatalf("history = %+v, want one message carrying observed_at", records)
 	}
-	at := *records[0].ObservedAt
+	message, ok := records[0].(agent.MessageRecord)
+	if !ok || message.ObservedAt == nil {
+		t.Fatalf("history = %+v, want one message carrying observed_at", records)
+	}
+	at := *message.ObservedAt
 	if opened := f.pm.GetProcess("sess").TurnState().OpenedAt; !opened.Equal(at) {
 		t.Errorf("turn opened at %v, record says %v", opened, at)
 	}
@@ -245,9 +273,10 @@ func TestClient_ReadPointCarriesItsMoment(t *testing.T) {
 	after := time.Now()
 
 	records := f.records(t)
-	readPoint := records[len(records)-1]
-	if readPoint.Type != agent.EventTypeMessageIngested || readPoint.ObservedAt == nil {
-		t.Fatalf("last record = %+v, want a read point carrying observed_at", readPoint)
+	last := records[len(records)-1]
+	readPoint, ok := last.(agent.MessageIngestedRecord)
+	if !ok || readPoint.ObservedAt == nil {
+		t.Fatalf("last record = %q %+v, want a read point carrying observed_at", last.Type(), last)
 	}
 	if at := *readPoint.ObservedAt; at.Before(before) || at.After(after) {
 		t.Errorf("read point observed_at = %v, want between %v and %v", at, before, after)

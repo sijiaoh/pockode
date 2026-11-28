@@ -42,7 +42,7 @@ func TestManager_SeedsThePlanFromHistory(t *testing.T) {
 
 	meta := createActivatedSession(t, store, "sess-1")
 	steps := []agent.PlanStep{{ID: "1", Text: "A", Status: agent.PlanStepInProgress}}
-	for _, record := range []agent.EventRecord{
+	for _, record := range []agent.Record{
 		agent.PlanEvent{ToolUseID: "toolu_0", Steps: []agent.PlanStep{{ID: "1", Text: "A", Status: agent.PlanStepPending}}}.ToRecord(),
 		agent.PlanEvent{ToolUseID: "toolu_1", Steps: steps}.ToRecord(),
 		agent.TextEvent{Content: "done"}.ToRecord(),

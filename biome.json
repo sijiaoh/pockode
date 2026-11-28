@@ -6,7 +6,7 @@
 		"useIgnoreFile": true
 	},
 	"files": {
-		"includes": ["**", "!**/dist"]
+		"includes": ["**", "!**/dist", "!**/src/types/wire.generated.ts"]
 	},
 	"css": {
 		"parser": {

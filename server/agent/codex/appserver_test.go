@@ -57,6 +57,33 @@ func drainEvents(ch <-chan agent.AgentEvent) []agent.AgentEvent {
 	}
 }
 
+// storedFields reads the fields several record types share off the line an
+// event is stored as — the form a fork's anchor search and a replay read. A
+// field the event's record type does not have reads as empty.
+func storedFields(t *testing.T, event agent.AgentEvent) recordFields {
+	t.Helper()
+	rec, ok := event.Encode().(agent.Record)
+	if !ok {
+		t.Fatalf("%T is not recorded", event)
+	}
+	raw, err := json.Marshal(rec)
+	if err != nil {
+		t.Fatalf("marshal %T: %v", event, err)
+	}
+	var fields recordFields
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		t.Fatalf("read back %s: %v", raw, err)
+	}
+	return fields
+}
+
+type recordFields struct {
+	ToolUseID         string `json:"tool_use_id"`
+	ParentToolUseID   string `json:"parent_tool_use_id"`
+	ProviderMessageID string `json:"provider_message_id"`
+	MessageID         string `json:"message_id"`
+}
+
 // waitForEvent reads the next event, failing if it never arrives.
 func waitForEvent(t *testing.T, sess *appSession) agent.AgentEvent {
 	t.Helper()
@@ -728,7 +755,7 @@ func TestEventsCarryTheirTurnID(t *testing.T) {
 		t.Fatalf("expected the call and the four results, got %v", events)
 	}
 	for _, event := range events {
-		if got := event.ToRecord().ProviderMessageID; got != "turn-7" {
+		if got := storedFields(t, event).ProviderMessageID; got != "turn-7" {
 			t.Errorf("%T carries provider message id %q, want the turn id", event, got)
 		}
 	}
@@ -742,7 +769,7 @@ func TestEventsOutsideATurnCarryNoTurnID(t *testing.T) {
 
 	sess.notify("warning", `{"message":"heads up"}`)
 
-	if got := drainEvents(sess.events)[0].ToRecord().ProviderMessageID; got != "" {
+	if got := storedFields(t, drainEvents(sess.events)[0]).ProviderMessageID; got != "" {
 		t.Errorf("provider message id = %q, want none", got)
 	}
 }
@@ -826,7 +853,7 @@ func TestSpawnAgentCallIsATaskCall(t *testing.T) {
 		string(call.ToolInput) != `{"prompt":"Read a.go"}` {
 		t.Errorf("first event = %+v, want a Task carrying the prompt", events[0])
 	}
-	if parent := events[1].ToRecord().ParentToolUseID; parent != "exec-spawn" {
+	if parent := storedFields(t, events[1]).ParentToolUseID; parent != "exec-spawn" {
 		t.Errorf("child text names parent %q, want the spawn", parent)
 	}
 }
@@ -849,7 +876,7 @@ func TestSubagentItemsNameTheSpawningCall(t *testing.T) {
 		t.Fatalf("expected the call, its result and the text, got %v", events)
 	}
 	for _, event := range events {
-		record := event.ToRecord()
+		record := storedFields(t, event)
 		if record.ParentToolUseID != "call_spawn" {
 			t.Errorf("%T names parent %q, want the spawning call", event, record.ParentToolUseID)
 		}
@@ -872,7 +899,7 @@ func TestOwnThreadItemsNameNoParent(t *testing.T) {
 	if len(events) != 1 {
 		t.Fatalf("expected the session's own text alone, got %v", events)
 	}
-	record := events[0].ToRecord()
+	record := storedFields(t, events[0])
 	if record.ParentToolUseID != "" || record.ProviderMessageID != "turn-main" {
 		t.Errorf("record = %+v, want no parent and the session's own turn", record)
 	}
@@ -887,7 +914,7 @@ func TestUnknownSubagentItemsAreStillSetApart(t *testing.T) {
 	sess.notify("item/completed", `{"threadId":"stranger","turnId":"turn-x","completedAtMs":2,"item":{
 		"type":"agentMessage","id":"msg-1","text":"hello","phase":"final_answer"}}`)
 
-	record := drainEvents(sess.events)[0].ToRecord()
+	record := storedFields(t, drainEvents(sess.events)[0])
 	if record.ParentToolUseID != "" || record.ProviderMessageID != "" {
 		t.Errorf("record = %+v, want neither a parent nor a turn", record)
 	}
@@ -1036,14 +1063,26 @@ func TestNestedSubagentNamesItsOwnSpawn(t *testing.T) {
 	if len(events) != 3 {
 		t.Fatalf("expected the inner spawn, its text and its result, got %v", events)
 	}
-	if call := events[0].ToRecord(); call.ToolUseID != "call_inner" || call.ParentToolUseID != "call_spawn" || call.ProviderMessageID != "" {
-		t.Errorf("inner spawn = %+v, want call_inner under call_spawn with no turn", call)
+	call, ok := events[0].(agent.ToolCallEvent)
+	if !ok {
+		t.Fatalf("first event = %T, want the inner spawn's call", events[0])
 	}
-	if text := events[1].ToRecord(); text.ParentToolUseID != "call_inner" {
-		t.Errorf("grandchild's text = %+v, want it under the inner spawn", text)
+	if rec := call.ToRecord(); rec.ToolUseID != "call_inner" || rec.ParentToolUseID != "call_spawn" || rec.ProviderMessageID != "" {
+		t.Errorf("inner spawn = %+v, want call_inner under call_spawn with no turn", rec)
 	}
-	if result := events[2].ToRecord(); result.ToolUseID != "call_inner" || result.ToolResult != "deep" || result.ParentToolUseID != "call_spawn" {
-		t.Errorf("result = %+v, want call_inner settled with the grandchild's words, under call_spawn", result)
+	text, ok := events[1].(agent.TextEvent)
+	if !ok {
+		t.Fatalf("second event = %T, want the grandchild's text", events[1])
+	}
+	if rec := text.ToRecord(); rec.ParentToolUseID != "call_inner" {
+		t.Errorf("grandchild's text = %+v, want it under the inner spawn", rec)
+	}
+	result, ok := events[2].(agent.ToolResultEvent)
+	if !ok {
+		t.Fatalf("third event = %T, want the inner spawn's result", events[2])
+	}
+	if rec := result.ToRecord(); rec.ToolUseID != "call_inner" || rec.ToolResult != "deep" || rec.ParentToolUseID != "call_spawn" {
+		t.Errorf("result = %+v, want call_inner settled with the grandchild's words, under call_spawn", rec)
 	}
 }
 
@@ -1065,7 +1104,7 @@ func TestSubagentSpawnIsLearnedFromEitherHalf(t *testing.T) {
 		"type":"agentMessage","id":"msg-1","text":"hi","phase":"final_answer"}}`)
 
 	events := drainEvents(sess.events)
-	if len(events) != 2 || events[0].ToRecord().ToolUseID != "call_spawn" || events[1].ToRecord().ParentToolUseID != "call_spawn" {
+	if len(events) != 2 || storedFields(t, events[0]).ToolUseID != "call_spawn" || storedFields(t, events[1]).ParentToolUseID != "call_spawn" {
 		t.Errorf("expected the spawn's call and the child's text under it, got %v", events)
 	}
 }
@@ -1988,7 +2027,7 @@ func TestUserMessageEcho_WithoutAClientIDIsStillReported(t *testing.T) {
 	if len(events) != 1 {
 		t.Fatalf("expected the second echo to be reported, got %v", events)
 	}
-	if got := events[0].ToRecord().MessageID; got != "" {
+	if got := storedFields(t, events[0]).MessageID; got != "" {
 		t.Errorf("MessageID = %q, want none", got)
 	}
 }

@@ -463,7 +463,7 @@ func (h *rpcMethodHandler) handlePermissionResponse(ctx context.Context, conn *j
 		ToolUseID:             params.ToolUseID,
 		PermissionSuggestions: params.PermissionSuggestions,
 	}
-	choice := parsePermissionChoice(params.Choice)
+	choice := agent.ParsePermissionChoice(params.Choice)
 
 	if err := wt.ChatClient.SendPermissionResponse(ctx, params.SessionID, data, choice); err != nil {
 		h.replyErrorForChat(ctx, conn, req, params.SessionID, err)
@@ -515,17 +515,6 @@ func (h *rpcMethodHandler) replyErrorForChat(ctx context.Context, conn *jsonrpc2
 		// because the dispatcher only logs that at Debug.
 		h.log.With("sessionId", sessionID).Error("chat request failed", "method", req.Method, "error", err)
 		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInternalError, err.Error())
-	}
-}
-
-func parsePermissionChoice(choice string) agent.PermissionChoice {
-	switch choice {
-	case "allow":
-		return agent.PermissionAllow
-	case "always_allow":
-		return agent.PermissionAlwaysAllow
-	default:
-		return agent.PermissionDeny
 	}
 }
 

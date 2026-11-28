@@ -9,10 +9,10 @@ func TestThinking_AnswersTheStatePredicates(t *testing.T) {
 	record, delta := EventTypeThinking, EventTypeThinkingDelta
 
 	// A thinking row has to come back on replay; "is thinking now" must not.
-	if !record.Persisted() {
+	if _, ok := (ThinkingEvent{}).Encode().(Record); !ok {
 		t.Error("a thinking is not recorded, so a replayed transcript loses it")
 	}
-	if delta.Persisted() {
+	if _, ok := (ThinkingDeltaEvent{}).Encode().(LiveEvent); !ok {
 		t.Error("the thinking signal is recorded, so a transcript would claim a thinking that is long over")
 	}
 

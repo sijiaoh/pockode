@@ -56,16 +56,15 @@ type PlanEvent struct {
 	// their Task calls change the main plan.
 	ParentToolUseID string
 	// ProviderMessageID is what the event's neighbours carry; see
-	// EventRecord.ProviderMessageID.
+	// TextRecord.ProviderMessageID.
 	ProviderMessageID string
 }
 
 func (PlanEvent) EventType() EventType { return EventTypePlan }
 func (PlanEvent) isAgentEvent()        {}
 
-func (e PlanEvent) ToRecord() EventRecord {
-	return EventRecord{
-		Type:              e.EventType(),
+func (e PlanEvent) ToRecord() PlanRecord {
+	return PlanRecord{
 		Steps:             e.Steps,
 		Explanation:       e.Explanation,
 		ToolUseID:         e.ToolUseID,
@@ -74,6 +73,8 @@ func (e PlanEvent) ToRecord() EventRecord {
 		ProviderMessageID: e.ProviderMessageID,
 	}
 }
+
+func (e PlanEvent) Encode() Wire { return e.ToRecord() }
 
 // LatestPlanSeed is the StartOptions.PlanSeed a session's history holds: the
 // steps of its newest main-thread plan record, when that record is a snapshot
@@ -87,9 +88,12 @@ func LatestPlanSeed(records []json.RawMessage) []PlanStep {
 		if !bytes.Contains(records[i], []byte(`"plan"`)) {
 			continue
 		}
-		var record EventRecord
-		if err := json.Unmarshal(records[i], &record); err != nil ||
-			record.Type != EventTypePlan || record.ToolUseID == "" || record.ParentToolUseID != "" {
+		rec, err := DecodeRecord(records[i])
+		if err != nil {
+			continue
+		}
+		record, ok := rec.(PlanRecord)
+		if !ok || record.ToolUseID == "" || record.ParentToolUseID != "" {
 			continue
 		}
 		for _, step := range record.Steps {

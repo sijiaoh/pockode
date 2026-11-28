@@ -11,7 +11,7 @@ import (
 // a background wait.
 func TestPlan_AnswersTheStatePredicates(t *testing.T) {
 	plan := EventTypePlan
-	if !plan.Persisted() {
+	if _, ok := (PlanEvent{}).Encode().(Record); !ok {
 		t.Error("a plan is not recorded, so a replayed transcript has no plan to read")
 	}
 	if plan.AwaitsUserInput() {

@@ -249,7 +249,7 @@ type QuestionAnswerParams struct {
 // so neither is an error.
 //
 // Content is set for a message whose text the server wrote rather than took as
-// typed, and is the content its record carries (agent.EventRecord): the prompt a
+// typed, and is the content its record carries (agent.MessageRecord): the prompt a
 // Pockode command expanded to, with Command beside it as parsed, or the body
 // written from the answers of a message carrying Answering. The sender has only
 // what it sent, and this reply is its one way to learn what the agent was sent.
@@ -271,7 +271,7 @@ type MessageResult struct {
 	// reason as Content: the sender is left out of the broadcast.
 	Attachments []agent.FileBlock `json:"attachments,omitempty"`
 	// ObservedAt is the moment the message's record carries
-	// (agent.EventRecord.ObservedAt), omitted exactly when Seq is. The sender
+	// (agent.ObserveAt), omitted exactly when Seq is. The sender
 	// draws the reply this message opens without ever receiving that record, so
 	// this is where it learns when the reply began.
 	ObservedAt *time.Time `json:"observed_at,omitempty"`
@@ -1172,7 +1172,7 @@ type ChatMessagesSubscribeResult struct {
 	// ToolActivity is what each tool call still in flight last reported doing,
 	// by tool_use_id. It is here rather than in History because a tool_activity
 	// event is the latest value of something still changing and is never
-	// recorded (see agent.EventType.Persisted) — so a client that subscribes
+	// recorded (see agent.LiveEvent) — so a client that subscribes
 	// mid-run would otherwise have missed every one of them, which on a phone is
 	// the normal case. Absent when nothing is in flight.
 	ToolActivity map[string]string `json:"tool_activity,omitempty"`
@@ -1182,7 +1182,7 @@ type ChatMessagesSubscribeResult struct {
 	ToolProgress map[string]agent.SubagentProgress `json:"tool_progress,omitempty"`
 	// ServerTime is the server's clock as the reply was built, so a client can
 	// count a call still running in History from its observed_at (see
-	// agent.EventRecord.ObservedAt) without trusting its own clock to agree
+	// agent.ObserveAt) without trusting its own clock to agree
 	// with the server's: elapsed is ServerTime minus observed_at, plus however
 	// long ago the client received this reply. The same rule as Turn's reading.
 	ServerTime time.Time `json:"server_time"`

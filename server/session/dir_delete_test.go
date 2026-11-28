@@ -21,7 +21,7 @@ func TestDeleteInDir(t *testing.T) {
 		if _, err := store.Create(context.Background(), id, CreateSpec{}); err != nil {
 			t.Fatalf("create %s: %v", id, err)
 		}
-		if _, err := store.AppendToHistory(context.Background(), id, map[string]any{"type": "text"}); err != nil {
+		if _, err := store.AppendToHistory(context.Background(), id, testRecord{"type": "text"}); err != nil {
 			t.Fatalf("append to history of %s: %v", id, err)
 		}
 	}

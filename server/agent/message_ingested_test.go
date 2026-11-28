@@ -20,7 +20,7 @@ func TestMessageIngested_AnswersTheStatePredicates(t *testing.T) {
 	e := EventTypeMessageIngested
 
 	// The whole point of the signal: the split it marks has to survive a reload.
-	if !e.Persisted() {
+	if _, ok := (MessageIngestedEvent{}).Encode().(Record); !ok {
 		t.Error("the read point is not recorded, so it cannot be replayed")
 	}
 	if e.AwaitsUserInput() {
@@ -40,7 +40,7 @@ func TestMessageIngested_AnswersTheStatePredicates(t *testing.T) {
 func TestMessageDiscarded_AnswersTheStatePredicates(t *testing.T) {
 	e := EventTypeMessageDiscarded
 
-	if !e.Persisted() {
+	if _, ok := (MessageDiscardedEvent{}).Encode().(Record); !ok {
 		t.Error("the discard is not recorded, so a reload shows the message as merely sent")
 	}
 	if e.AwaitsUserInput() {

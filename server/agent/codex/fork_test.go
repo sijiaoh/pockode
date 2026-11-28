@@ -26,8 +26,7 @@ func forkHistory(t *testing.T, turnIDs ...string) []json.RawMessage {
 	t.Helper()
 	records := make([]json.RawMessage, 0, len(turnIDs))
 	for _, id := range turnIDs {
-		raw, err := json.Marshal(agent.EventRecord{
-			Type:              agent.EventTypeText,
+		raw, err := json.Marshal(agent.TextRecord{
 			Content:           "hi",
 			ProviderMessageID: id,
 		})

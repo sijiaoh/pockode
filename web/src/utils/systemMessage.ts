@@ -1,9 +1,11 @@
-import type { SystemMessageMeta } from "../types/message";
+import type { MessageSubtype, SystemMessageMeta } from "../types/message";
+import type * as Wire from "../types/wire.generated";
 import { formatStepProgress, recordedStepProgress } from "./workSteps";
 
 // subtype → action word. Where values come from: the backend system message
-// subtypes in server/work/prompt.go (kickoff, restart, ...).
-const SYSTEM_MESSAGE_LABELS: Record<string, string> = {
+// subtypes in server/work/prompt.go (kickoff, restart, ...). The reviewer's
+// two are drawn by ReviewerEventItem instead.
+const SYSTEM_MESSAGE_LABELS: Readonly<Record<string, string | undefined>> = {
 	kickoff: "Started",
 	restart: "Restarted",
 	auto_continue: "Continued",
@@ -19,7 +21,7 @@ const SYSTEM_MESSAGE_LABELS: Record<string, string> = {
 	watched_story_stopped: "Story stopped",
 	watched_story_question: "Story asked",
 	watched_story_question_settled: "Question settled",
-};
+} satisfies Partial<Record<Wire.MessageSubtype, string>>;
 
 /** How one work event reads in the stream. */
 export interface WorkEventWording {
@@ -34,7 +36,7 @@ export interface WorkEventWording {
  * belongs on the line depends on the same subtype the action word does.
  */
 export function workEventWording(
-	subtype: string | undefined,
+	subtype: MessageSubtype | undefined,
 	meta: SystemMessageMeta | undefined,
 ): WorkEventWording {
 	const label = (subtype && SYSTEM_MESSAGE_LABELS[subtype]) || "System Message";
@@ -83,7 +85,7 @@ export interface WorkEventSubject {
  * which is often a plain chat with no work at all — so it leads to that story.
  */
 export function workEventSubject(
-	subtype: string | undefined,
+	subtype: MessageSubtype | undefined,
 	meta: SystemMessageMeta | undefined,
 ): WorkEventSubject {
 	if (subtype?.startsWith("watched_story_") && meta?.story) {

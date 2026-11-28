@@ -824,7 +824,7 @@ it.
 | the reply that ended the turn ends | the turn's `done`, `interrupted`, `process_ended` or `error` | when Pockode saw it |
 
 Which records are stamped where is in
-[agent-integration.md](code/agent-integration.md#eventrecord-unified-event-format) (the server
+[agent-integration.md](code/agent-integration.md#history-records-and-live-events) (the server
 side) and [frontend-state.md](code/frontend-state.md#times-on-a-reply) (how the
 reducer carries the two moments onto the assistant message — history, the way
 a run's `startedAt` and `endedAt` are, not live state). One piece of it is
@@ -1691,7 +1691,7 @@ by thousands of pixels.
 `partitionFileBlocks` sends it to the body rather than to the strip. There it is
 a **reference line**: the full path in mono at the weight of a line of body
 text, the reason under it, and the same Open the Files tab gets from
-`FileBlock.Path` elsewhere ([agent-event.md](agent-event.md#eventrecord-serialization))
+`FileBlock.Path` elsewhere ([agent-event.md](agent-event.md#records-serialization))
 when the path is under the work directory. No card, no border, no icon — it is a
 pointer, not an answer.
 
@@ -1925,7 +1925,7 @@ measurements, tried in this order:
 1. **What the engine reported.** Codex's `durationMs` on a command or an MCP
    call, and Claude's for a subagent, `WebFetch` and `WebSearch`, and for
    backgrounded work's outcome
-   ([agent-integration.md](code/agent-integration.md#eventrecord-unified-event-format)). It wins
+   ([agent-integration.md](code/agent-integration.md#history-records-and-live-events)). It wins
    whenever it exists: it is the engine timing its own work, and it leaves out
    whatever happened around the call.
 2. **What Pockode observed.** The server stamps the moment it saw each record
@@ -2114,7 +2114,7 @@ whatever the status. Negative codes and signal codes are drawn as they came
 (`exit -1`, `exit 137`). `0` and "unknown" draw nothing. Codex reports the code
 as a figure. Claude writes it as the failed `Bash` result's first line, and the
 adapter parses that
-([agent-integration.md](code/agent-integration.md#eventrecord-unified-event-format)).
+([agent-integration.md](code/agent-integration.md#history-records-and-live-events)).
 An engine that reports a code also fails the call for it, so in practice the
 code appears only on red rows. Rows that succeeded never show one, even though
 no rule here checks the status.
@@ -3454,7 +3454,7 @@ second figure with a name of its own, never a silent change to this one.
 
 They are a fact at the end, so they live **in the result record** (its
 `subagent`, beside `duration_ms` —
-[agent-integration.md](code/agent-integration.md#eventrecord-unified-event-format)),
+[agent-integration.md](code/agent-integration.md#history-records-and-live-events)),
 and a run gets them when it settles, never while live: a ticking token count on
 a phone row is noise, and the live line has no width for it.
 

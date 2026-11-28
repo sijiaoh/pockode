@@ -47,12 +47,12 @@ func TestProcess_PageToolResultIsRecordedWithItsPage(t *testing.T) {
 	}
 	got := map[string]string{}
 	for _, raw := range records {
-		var rec agent.EventRecord
-		if err := json.Unmarshal(raw, &rec); err != nil {
+		rec, err := agent.DecodeRecord(raw)
+		if err != nil {
 			t.Fatal(err)
 		}
-		if rec.Type == agent.EventTypeToolResult {
-			got[rec.ToolUseID] = rec.HTMLPage
+		if result, ok := rec.(agent.ToolResultRecord); ok {
+			got[result.ToolUseID] = result.HTMLPage
 		}
 	}
 	for _, c := range calls {

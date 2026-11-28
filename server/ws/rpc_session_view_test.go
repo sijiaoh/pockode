@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/pockode/server/agent"
 	"github.com/pockode/server/attachments"
 	"github.com/pockode/server/contents"
 	"github.com/pockode/server/htmlpage"
@@ -56,7 +57,7 @@ func seedSession(t *testing.T, env *testEnv, worktreeName, sessionID, title stri
 	}
 	for _, text := range []string{"what happened here", "this"} {
 		if _, err := wt.SessionStore.AppendToHistory(bgCtx, sessionID,
-			map[string]any{"type": "text", "content": text}); err != nil {
+			agent.TextRecord{Content: text}); err != nil {
 			t.Fatalf("append to history: %v", err)
 		}
 	}

@@ -2,7 +2,6 @@ package chat
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"testing"
 	"time"
@@ -20,20 +19,12 @@ func (f *midTurnFixture) raisePermission(t *testing.T, sess *mockSession, reques
 }
 
 // permissionResponses is every permission_response record in the transcript.
-func (f *midTurnFixture) permissionResponses(t *testing.T) []agent.EventRecord {
+func (f *midTurnFixture) permissionResponses(t *testing.T) []agent.PermissionResponseRecord {
 	t.Helper()
-	raw, err := f.store.GetHistory(context.Background(), "sess")
-	if err != nil {
-		t.Fatalf("GetHistory: %v", err)
-	}
-	var out []agent.EventRecord
-	for _, r := range raw {
-		var rec agent.EventRecord
-		if err := json.Unmarshal(r, &rec); err != nil {
-			t.Fatalf("unmarshal record: %v", err)
-		}
-		if rec.Type == agent.EventTypePermissionResponse {
-			out = append(out, rec)
+	var out []agent.PermissionResponseRecord
+	for _, rec := range f.records(t) {
+		if response, ok := rec.(agent.PermissionResponseRecord); ok {
+			out = append(out, response)
 		}
 	}
 	return out
@@ -54,7 +45,7 @@ func TestClient_SendPermissionVerdict(t *testing.T) {
 		name       string
 		allow      bool
 		review     agent.PermissionReview
-		wantChoice string
+		wantChoice agent.PermissionChoiceName
 		wantSent   sentAnswer
 	}{
 		{
@@ -106,7 +97,7 @@ func TestClient_SendPermissionVerdict(t *testing.T) {
 
 			var broadcast bool
 			for _, b := range f.broadcasts {
-				if b.Type == agent.EventTypePermissionResponse && b.By == agent.RespondedByPermissionReviewer {
+				if b, ok := b.(agent.PermissionResponseRecord); ok && b.By == agent.RespondedByPermissionReviewer {
 					broadcast = true
 				}
 			}
@@ -141,7 +132,7 @@ func TestClient_PersonsPermissionResponseUnattributed(t *testing.T) {
 	}
 	var broadcast bool
 	for _, b := range f.broadcasts {
-		if b.Type == agent.EventTypePermissionResponse && b.RequestID == "req-1" {
+		if b, ok := b.(agent.PermissionResponseRecord); ok && b.RequestID == "req-1" {
 			broadcast = true
 		}
 	}
@@ -263,7 +254,7 @@ func TestClient_ReviewAnswerRefusedForAReplacedProcess(t *testing.T) {
 }
 
 // A call that waited on a card could only start once it was answered, so the
-// answer is where its measured duration begins (agent.EventRecord.ObservedAt):
+// answer is where its measured duration begins (agent.ObserveAt):
 // whoever answered, the record says when.
 func TestClient_PermissionResponseRecordsWhenItWasAnswered(t *testing.T) {
 	data := agent.PermissionRequestData{RequestID: "req-1"}

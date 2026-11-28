@@ -749,7 +749,7 @@ says so, and the backend is the truth.
 is folded from *several* history records, so neither a message id nor a message
 index can name a cut point. Each history record needs a server-assigned,
 monotonic **`seq`**, reaching the client by all three routes a record can
-arrive on: `EventRecord` in stored history, the live event notification, and —
+arrive on: the record in stored history, the live event notification, and —
 for the one message a sender is excluded from being told about, its own — the
 reply to `chat.message` (`rpc.MessageResult`). A message then carries
 `anchorSeq` — the `seq` of the last record folded into it — computed identically

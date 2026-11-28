@@ -142,26 +142,30 @@ func TruncateHistory(records []json.RawMessage, keepThrough int) []json.RawMessa
 	// result that came after it.
 	settledTools := make(map[string]int)
 	settledRequests := make(map[string]struct{})
-	parsed := make([]*EventRecord, len(kept))
+	parsed := make([]Record, len(kept))
 
 	for i, raw := range kept {
-		var rec EventRecord
-		if err := json.Unmarshal(raw, &rec); err != nil {
+		rec, err := DecodeRecord(raw)
+		if err != nil {
 			continue
 		}
-		parsed[i] = &rec
+		parsed[i] = rec
 
-		switch rec.Type {
-		case EventTypeToolResult:
+		switch rec := rec.(type) {
+		case ToolResultRecord:
 			settledTools[rec.ToolUseID] = i
-		case EventTypePermissionResponse, EventTypeQuestionResponse, EventTypeRequestCancelled:
+		case PermissionResponseRecord:
+			settledRequests[rec.RequestID] = struct{}{}
+		case QuestionResponseRecord:
+			settledRequests[rec.RequestID] = struct{}{}
+		case RequestCancelledRecord:
 			settledRequests[rec.RequestID] = struct{}{}
 		}
 	}
 
 	result := make([]json.RawMessage, 0, len(kept))
 	for i, raw := range kept {
-		if rec := parsed[i]; rec != nil && danglesAfterCut(*rec, i, settledTools, settledRequests) {
+		if rec := parsed[i]; rec != nil && danglesAfterCut(rec, i, settledTools, settledRequests) {
 			continue
 		}
 		result = append(result, raw)
@@ -175,9 +179,9 @@ func TruncateHistory(records []json.RawMessage, keepThrough int) []json.RawMessa
 // An event with no ID to pair on is never dangling: it could not have been
 // paired before the fork either, so dropping it would remove history the source
 // session still shows.
-func danglesAfterCut(rec EventRecord, index int, settledTools map[string]int, settledRequests map[string]struct{}) bool {
-	switch rec.Type {
-	case EventTypeToolCall:
+func danglesAfterCut(rec Record, index int, settledTools map[string]int, settledRequests map[string]struct{}) bool {
+	switch rec := rec.(type) {
+	case ToolCallRecord:
 		if rec.ToolUseID == "" {
 			return false
 		}
@@ -188,12 +192,10 @@ func danglesAfterCut(rec EventRecord, index int, settledTools map[string]int, se
 			return !settled || last < index
 		}
 		return !settled
-	case EventTypePermissionRequest, EventTypeAskUserQuestion:
-		if rec.RequestID == "" {
-			return false
-		}
-		_, settled := settledRequests[rec.RequestID]
-		return !settled
+	case PermissionRequestRecord:
+		return requestDangles(rec.RequestID, settledRequests)
+	case AskUserQuestionRecord:
+		return requestDangles(rec.RequestID, settledRequests)
 	default:
 		// question_posted is deliberately not here, and it is the one case where
 		// an unclosed pair must be kept. A prompt the CLI raised belongs to the
@@ -205,17 +207,25 @@ func danglesAfterCut(rec EventRecord, index int, settledTools map[string]int, se
 	}
 }
 
+func requestDangles(requestID string, settledRequests map[string]struct{}) bool {
+	if requestID == "" {
+		return false
+	}
+	_, settled := settledRequests[requestID]
+	return !settled
+}
+
 // HistoryActivatesSession reports whether these records put anything on the
 // agent's side of the conversation, which is what makes a session "started" —
 // see EventType.ActivatesSession. A session created from copied history is
 // therefore activated at birth, without an agent having run for it yet.
 func HistoryActivatesSession(records []json.RawMessage) bool {
 	for _, raw := range records {
-		var rec EventRecord
-		if err := json.Unmarshal(raw, &rec); err != nil {
+		rec, err := DecodeRecord(raw)
+		if err != nil {
 			continue
 		}
-		if rec.Type.ActivatesSession() {
+		if rec.Type().ActivatesSession() {
 			return true
 		}
 	}
@@ -237,13 +247,31 @@ func HistoryActivatesSession(records []json.RawMessage) bool {
 // short of the end is the agent's own trade-off to state; see the callers.
 func LastProviderMessageID(history []json.RawMessage) string {
 	for i := len(history) - 1; i >= 0; i-- {
-		var rec EventRecord
-		if err := json.Unmarshal(history[i], &rec); err != nil {
+		rec, err := DecodeRecord(history[i])
+		if err != nil {
 			continue
 		}
-		if rec.ProviderMessageID != "" {
-			return rec.ProviderMessageID
+		if id := providerMessageID(rec); id != "" {
+			return id
 		}
+	}
+	return ""
+}
+
+// providerMessageID is the agent's own id a record names, for the record types
+// that carry one (TextRecord.ProviderMessageID).
+func providerMessageID(rec Record) string {
+	switch rec := rec.(type) {
+	case TextRecord:
+		return rec.ProviderMessageID
+	case ToolCallRecord:
+		return rec.ProviderMessageID
+	case ToolResultRecord:
+		return rec.ProviderMessageID
+	case ThinkingRecord:
+		return rec.ProviderMessageID
+	case PlanRecord:
+		return rec.ProviderMessageID
 	}
 	return ""
 }

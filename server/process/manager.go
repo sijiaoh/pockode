@@ -1597,7 +1597,7 @@ func (p *Process) recordExpiries(ctx context.Context, log *slog.Logger, sig sess
 			"raisedAt", blocker.RaisedAt, "cause", sig, "reason", reason)
 
 		event := agent.RequestCancelledEvent{RequestID: blocker.RequestID, Reason: reason}
-		seq, err := p.sessionStore.AppendToHistory(ctx, p.sessionID, agent.NewEventRecord(event))
+		seq, err := p.sessionStore.AppendToHistory(ctx, p.sessionID, event.ToRecord())
 		if err != nil {
 			// A deleted session is the ordinary case here: its process is torn
 			// down asynchronously, so an expiry can outlive the session it
@@ -1999,12 +1999,12 @@ func (p *Process) handleEvent(ctx context.Context, log *slog.Logger, event agent
 	}
 
 	// Persist to history. An event that reports a latest value rather than a
-	// settled fact is broadcast and never stored, so it reaches subscribers
-	// with no sequence number — see agent.EventType.Persisted.
+	// settled fact encodes as an agent.LiveEvent, which is broadcast and never
+	// stored, so it reaches subscribers with no sequence number.
 	seq := session.NoHistorySeq
-	if eventType.Persisted() {
+	if record, ok := event.Encode().(agent.Record); ok {
 		var err error
-		seq, err = p.sessionStore.AppendToHistory(ctx, p.sessionID, agent.NewEventRecord(event))
+		seq, err = p.sessionStore.AppendToHistory(ctx, p.sessionID, record)
 		switch {
 		case errors.Is(err, session.ErrSessionNotFound):
 			// As in applyTurn: output still arriving for a session deleted

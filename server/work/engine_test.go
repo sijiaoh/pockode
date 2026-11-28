@@ -15,7 +15,7 @@ import (
 
 type sentMessage struct {
 	sessionID string
-	subtype   string
+	subtype   agent.MessageSubtype
 	content   string
 }
 
@@ -24,17 +24,17 @@ type recordingSender struct {
 	sent []sentMessage
 }
 
-func (r *recordingSender) SendSystemMessage(_ context.Context, sessionID, content, subtype string, _ *agent.MessageMeta) error {
+func (r *recordingSender) SendSystemMessage(_ context.Context, sessionID, content string, subtype agent.MessageSubtype, _ *agent.MessageMeta) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.sent = append(r.sent, sentMessage{sessionID: sessionID, subtype: subtype, content: content})
 	return nil
 }
 
-func (r *recordingSender) subtypes() []string {
+func (r *recordingSender) subtypes() []agent.MessageSubtype {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	out := make([]string, len(r.sent))
+	out := make([]agent.MessageSubtype, len(r.sent))
 	for i, m := range r.sent {
 		out[i] = m.subtype
 	}
@@ -861,7 +861,7 @@ func TestEngine_LeavesAnUnreachableParentThatStillHasASubtask(t *testing.T) {
 // nothing with nobody told.
 type failingSender struct{}
 
-func (failingSender) SendSystemMessage(context.Context, string, string, string, *agent.MessageMeta) error {
+func (failingSender) SendSystemMessage(context.Context, string, string, agent.MessageSubtype, *agent.MessageMeta) error {
 	return errors.New("session unreachable")
 }
 
@@ -2012,7 +2012,7 @@ func TestEngine_ASettledQuestionTravelsTheWholeChain(t *testing.T) {
 // sessionGoneSender is a chat whose sessions have all been deleted.
 type sessionGoneSender struct{}
 
-func (sessionGoneSender) SendSystemMessage(context.Context, string, string, string, *agent.MessageMeta) error {
+func (sessionGoneSender) SendSystemMessage(context.Context, string, string, agent.MessageSubtype, *agent.MessageMeta) error {
 	return session.ErrSessionNotFound
 }
 

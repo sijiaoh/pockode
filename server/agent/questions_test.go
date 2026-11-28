@@ -9,7 +9,7 @@ import (
 
 func recordJSON(t *testing.T, event AgentEvent) json.RawMessage {
 	t.Helper()
-	raw, err := json.Marshal(NewEventRecord(event))
+	raw, err := json.Marshal(event.Encode())
 	if err != nil {
 		t.Fatalf("marshal record: %v", err)
 	}
@@ -84,24 +84,25 @@ func TestUnansweredQuestions_ReadsARecordFromBeforeRecommended(t *testing.T) {
 	}
 }
 
-// TestEventRecord_CarriesNoEmptyTimestamps: `omitempty` does nothing for a
-// struct, so a plain time.Time on EventRecord would put a zero timestamp on
-// every record of every transcript and on every notification. Two fields that
-// mean something on two event types must not be paid for by all of them.
-func TestEventRecord_CarriesNoEmptyTimestamps(t *testing.T) {
-	raw := string(recordJSON(t, TextEvent{Content: "hi"}))
-	for _, field := range []string{"asked_at", "resolved_at"} {
-		if strings.Contains(raw, field) {
-			t.Errorf("a text record carries %s: %s", field, raw)
+// TestRecords_CarryNoEmptyTimestamps: `omitempty` does nothing for a struct, so
+// a plain time.Time on a record would put a zero timestamp on every record of
+// its type that has no moment. Every event with a moment of its own, left
+// without one, must write none.
+func TestRecords_CarryNoEmptyTimestamps(t *testing.T) {
+	momentless := []AgentEvent{
+		QuestionPostedEvent{RequestID: "req-1"}, RequestCancelledEvent{RequestID: "req-1"},
+		ToolCallEvent{}, ToolResultEvent{}, DoneEvent{}, InterruptedEvent{}, ProcessEndedEvent{},
+		ErrorEvent{}, MessageEvent{}, MessageIngestedEvent{}, PermissionResponseEvent{},
+	}
+	for _, event := range momentless {
+		raw := string(recordJSON(t, event))
+		if strings.Contains(raw, "_at") {
+			t.Errorf("%T with no moment carries one: %s", event, raw)
 		}
 	}
 
-	posted := string(postedRecord(t, "req-1"))
-	if !strings.Contains(posted, "asked_at") {
+	if posted := string(postedRecord(t, "req-1")); !strings.Contains(posted, `"asked_at"`) {
 		t.Errorf("a question_posted record has no asked_at: %s", posted)
-	}
-	if strings.Contains(posted, "resolved_at") {
-		t.Errorf("a question_posted record carries resolved_at: %s", posted)
 	}
 }
 

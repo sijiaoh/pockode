@@ -31,19 +31,16 @@ const (
 	EventTypeMessage            EventType = "message"             // User message
 	EventTypePermissionResponse EventType = "permission_response" // User permission response
 	// EventTypeQuestionResponse is read, never written: the answer to an
-	// EventTypeAskUserQuestion, from the same transcripts. Only the *type* is read
-	// here — fork truncation needs to know such a record settles a request — and
-	// the answers it carries are the client's to draw, off the raw record. There
-	// is deliberately no field for them on EventRecord: nothing in Go reads them,
-	// and replay preserves every field a record has on disk whether this struct
-	// knows about it or not (session.stampHistorySeq round-trips through a raw
-	// field map). The shape is written down in docs/agent-event.md.
+	// EventTypeAskUserQuestion, from the same transcripts. Go only reads its
+	// request id — fork truncation needs to know such a record settles a
+	// request — and the answers it carries are the client's to draw
+	// (QuestionResponseRecord). The shape is written down in docs/agent-event.md.
 	EventTypeQuestionResponse EventType = "question_response"
 	EventTypeRaw              EventType = "raw"            // Unprocessed CLI output
 	EventTypeCommandOutput    EventType = "command_output" // Local command output (e.g., /context)
 	// EventTypeToolActivity reports what a tool call that has not returned is
-	// doing right now. The only event Pockode broadcasts without recording;
-	// see Persisted.
+	// doing right now. Broadcast and never recorded, like thinking_delta; see
+	// LiveEvent.
 	EventTypeToolActivity EventType = "tool_activity"
 	// EventTypeBackgroundWait says the turn has been parked on work that
 	// outlives the tool call that started it. See BackgroundWaitEvent.
@@ -65,22 +62,6 @@ const (
 	// recorded; see ThinkingDeltaEvent.
 	EventTypeThinkingDelta EventType = "thinking_delta"
 )
-
-// Persisted returns true for the events that belong in session history.
-//
-// A denylist, unlike the other three predicates, because the default is the
-// safe one here: an event says what was true at one moment, and that stays
-// true, so a new type left unnamed is recorded rather than lost.
-//
-// The exception is an event that reports the *latest value* of something still
-// changing. A snapshot of that in a transcript becomes a lie the moment the
-// next one arrives — the same argument that keeps token usage out of the event
-// stream (docs/agent-event.md). An unpersisted event reaches subscribers with
-// no sequence number (session.NoHistorySeq), because there is no record for one
-// to name.
-func (e EventType) Persisted() bool {
-	return e != EventTypeToolActivity && e != EventTypeThinkingDelta
-}
 
 // AwaitsUserInput returns true for the events after which the agent produces
 // nothing until someone acts: the three that end a turn and the one that blocks
@@ -284,9 +265,11 @@ type AskUserQuestion struct {
 type AgentEvent interface {
 	EventType() EventType
 
-	// ToRecord converts the event to an EventRecord for persistence and notification.
-	// EventRecord is the single source of truth for event serialization.
-	ToRecord() EventRecord
+	// Encode is the event as it is serialized: a Record for an event that
+	// belongs in history, a LiveEvent for one that is only broadcast. An event
+	// that belongs in history also has a ToRecord returning its concrete
+	// record type, for callers that write one directly.
+	Encode() Wire
 
 	isAgentEvent() // unexported marker method to restrict implementations to this package
 }
@@ -294,11 +277,11 @@ type AgentEvent interface {
 type TextEvent struct {
 	Content string
 	// ParentToolUseID names the subagent call this text was written inside; see
-	// EventRecord.ParentToolUseID.
+	// TextRecord.ParentToolUseID.
 	ParentToolUseID string
 	// ProviderMessageID names the part of the agent's own conversation this text
 	// came out of, when the agent puts ids on them. See
-	// EventRecord.ProviderMessageID.
+	// TextRecord.ProviderMessageID.
 	ProviderMessageID string
 	// AfterTurn says this arrived after the turn it belongs to had ended; see
 	// MarkAfterTurn. Not recorded: the record is drawn the same either way.
@@ -308,14 +291,15 @@ type TextEvent struct {
 func (TextEvent) EventType() EventType { return EventTypeText }
 func (TextEvent) isAgentEvent()        {}
 
-func (e TextEvent) ToRecord() EventRecord {
-	return EventRecord{
-		Type:              e.EventType(),
+func (e TextEvent) ToRecord() TextRecord {
+	return TextRecord{
 		Content:           e.Content,
 		ParentToolUseID:   e.ParentToolUseID,
 		ProviderMessageID: e.ProviderMessageID,
 	}
 }
+
+func (e TextEvent) Encode() Wire { return e.ToRecord() }
 
 type ToolCallEvent struct {
 	ToolName  string
@@ -323,24 +307,31 @@ type ToolCallEvent struct {
 	ToolUseID string
 	// OriginToolUseID names an earlier call this one is about, when the input
 	// only identifies it by something Pockode's join key cannot be recovered
-	// from. See EventRecord.OriginToolUseID.
+	// from. See ToolCallRecord.OriginToolUseID.
 	OriginToolUseID string
 	// ParentToolUseID names the subagent call this call was made inside; see
-	// EventRecord.ParentToolUseID.
+	// TextRecord.ParentToolUseID.
 	ParentToolUseID string
 	// ProviderMessageID names the part of the agent's own conversation this call
 	// came out of, when the agent puts ids on them. See
-	// EventRecord.ProviderMessageID.
+	// TextRecord.ProviderMessageID.
 	ProviderMessageID string
 	// Subtype marks a tool_call that is not a call starting; see
 	// ToolCallResumed. Empty for every ordinary call.
-	Subtype string
-	// ObservedAt is when Pockode saw the call; see EventRecord.ObservedAt.
+	Subtype ToolCallSubtype
+	// ObservedAt is when Pockode saw the call; see ObserveAt.
 	ObservedAt time.Time
 	// AfterTurn says this arrived after the turn it belongs to had ended; see
 	// MarkAfterTurn. Not recorded: the record is drawn the same either way.
 	AfterTurn bool
 }
+
+// ToolCallSubtype is a kind of tool_call record that is not a call starting.
+// Its own type rather than a plain string because tool_result and message
+// records carry a subtype too, from sets of their own: each set is named where
+// its record is, so neither the server nor the generated client can put one
+// record's kind on another.
+type ToolCallSubtype string
 
 // ToolCallResumed marks a tool_call record that announces an earlier call
 // again because its work has started running again after the call had
@@ -353,14 +344,13 @@ type ToolCallEvent struct {
 // reads it as what it is on the wire, a resend of the call, and changes
 // nothing. Claude has no counterpart: a resumed Claude subagent runs under a
 // SendMessage call of its own, whose record already says it.
-const ToolCallResumed = "resumed"
+const ToolCallResumed ToolCallSubtype = "resumed"
 
 func (ToolCallEvent) EventType() EventType { return EventTypeToolCall }
 func (ToolCallEvent) isAgentEvent()        {}
 
-func (e ToolCallEvent) ToRecord() EventRecord {
-	return EventRecord{
-		Type:              e.EventType(),
+func (e ToolCallEvent) ToRecord() ToolCallRecord {
+	return ToolCallRecord{
 		ToolName:          e.ToolName,
 		ToolInput:         e.ToolInput,
 		ToolUseID:         e.ToolUseID,
@@ -372,9 +362,13 @@ func (e ToolCallEvent) ToRecord() EventRecord {
 	}
 }
 
-// Subtypes a tool_result event can carry. An absent subtype is the ordinary
-// case: the result is the whole of what the call produced, and it is what the
-// agent read.
+func (e ToolCallEvent) Encode() Wire { return e.ToRecord() }
+
+// ToolResultSubtype is a kind of tool_result record that is not simply what the
+// call produced. An absent subtype is the ordinary case: the result is the
+// whole of what the call produced, and it is what the agent read.
+type ToolResultSubtype string
+
 const (
 	// ToolResultBackgroundStarted marks a result that is only a placeholder —
 	// the call handed work to something that outlives it, and the real outcome
@@ -382,11 +376,11 @@ const (
 	// live because "this call handed back a placeholder" stays true forever, and
 	// without it a replayed transcript shows unfinished background work as
 	// successfully completed.
-	ToolResultBackgroundStarted = "background_started"
+	ToolResultBackgroundStarted ToolResultSubtype = "background_started"
 	// ToolResultBackgroundResult marks the real outcome of that work. The
 	// subtype is what keeps the record honest: the agent never read this, it
 	// read the placeholder.
-	ToolResultBackgroundResult = "background_result"
+	ToolResultBackgroundResult ToolResultSubtype = "background_result"
 	// ToolResultBackgroundLost marks an outcome Pockode wrote itself: the CLI
 	// process ended while the work was still running, so no outcome was ever
 	// reported and none is coming. Kept apart from ToolResultBackgroundResult
@@ -394,7 +388,7 @@ const (
 	// this one is what Pockode observed of a process it killed or watched die.
 	// Wearing the same subtype would claim the agent's own tooling reported an
 	// ending it never did.
-	ToolResultBackgroundLost = "background_lost"
+	ToolResultBackgroundLost ToolResultSubtype = "background_lost"
 )
 
 type ToolResultEvent struct {
@@ -402,7 +396,7 @@ type ToolResultEvent struct {
 	ToolResult string
 	// Subtype marks a result that is not simply "what the call produced"; see
 	// the ToolResultBackground* constants. Empty for every ordinary result.
-	Subtype string
+	Subtype ToolResultSubtype
 	// DurationMs is how long the call took, when the agent CLI reports it as a
 	// figure. Zero when it does not — Claude reports one only for a few tools;
 	// see reportedDurationMs in the claude package — and never inferred from
@@ -431,17 +425,17 @@ type ToolResultEvent struct {
 	// agent CLI says so, never inferred from the result text.
 	IsError bool
 	// ParentToolUseID names the subagent call this result came back inside; see
-	// EventRecord.ParentToolUseID.
+	// TextRecord.ParentToolUseID.
 	ParentToolUseID string
 	// ProviderMessageID names the part of the agent's own conversation this
 	// result came out of, when the agent puts ids on them. See
-	// EventRecord.ProviderMessageID.
+	// TextRecord.ProviderMessageID.
 	ProviderMessageID string
-	// HTMLPage is the page the call stored; see EventRecord.HTMLPage.
+	// HTMLPage is the page the call stored; see ToolResultRecord.HTMLPage.
 	HTMLPage string
-	// WorkRef is the work item the call acted on; see EventRecord.WorkRef.
+	// WorkRef is the work item the call acted on; see ToolResultRecord.WorkRef.
 	WorkRef *WorkRef
-	// ObservedAt is when Pockode saw the result; see EventRecord.ObservedAt.
+	// ObservedAt is when Pockode saw the result; see ObserveAt.
 	// Never set on a ToolResultBackgroundLost result (see ObserveAt).
 	ObservedAt time.Time
 	// AfterTurn says this arrived after the turn it belongs to had ended; see
@@ -463,9 +457,8 @@ func (e ToolResultEvent) SettlesBackgroundWork() bool {
 	return e.Subtype == ToolResultBackgroundResult || e.Subtype == ToolResultBackgroundLost
 }
 
-func (e ToolResultEvent) ToRecord() EventRecord {
-	return EventRecord{
-		Type:              e.EventType(),
+func (e ToolResultEvent) ToRecord() ToolResultRecord {
+	return ToolResultRecord{
 		ToolUseID:         e.ToolUseID,
 		ToolResult:        e.ToolResult,
 		Subtype:           e.Subtype,
@@ -482,8 +475,10 @@ func (e ToolResultEvent) ToRecord() EventRecord {
 	}
 }
 
+func (e ToolResultEvent) Encode() Wire { return e.ToRecord() }
+
 // ToolActivityEvent reports what a tool call that has not returned yet is
-// doing. It is broadcast and never recorded (EventType.Persisted), so a client
+// doing. It is broadcast and never recorded (see LiveEvent), so a client
 // that was not listening at the time has missed it — which is why a process
 // also keeps the newest Activity of every call still in flight, to hand to a
 // client that subscribes mid-run.
@@ -509,15 +504,16 @@ type ToolActivityEvent struct {
 func (ToolActivityEvent) EventType() EventType { return EventTypeToolActivity }
 func (ToolActivityEvent) isAgentEvent()        {}
 
-func (e ToolActivityEvent) ToRecord() EventRecord {
-	return EventRecord{
-		Type:             e.EventType(),
+func (e ToolActivityEvent) ToLive() ToolActivityLiveEvent {
+	return ToolActivityLiveEvent{
 		ToolUseID:        e.ToolUseID,
 		Activity:         e.Activity,
 		OutputDelta:      e.OutputDelta,
 		SubagentProgress: e.Subagent,
 	}
 }
+
+func (e ToolActivityEvent) Encode() Wire { return e.ToLive() }
 
 // SubagentCounts are an agent CLI's own counters of a subagent's work, as the
 // CLI reported them: live on SubagentProgress, final on SubagentReport. Both
@@ -593,10 +589,10 @@ type ThinkingEvent struct {
 	// is in docs/agent-event.md.
 	DurationMs int64
 	// ParentToolUseID names the subagent call this thinking happened inside;
-	// see EventRecord.ParentToolUseID.
+	// see TextRecord.ParentToolUseID.
 	ParentToolUseID string
 	// ProviderMessageID names the part of the agent's own conversation this
-	// thinking came out of; see EventRecord.ProviderMessageID.
+	// thinking came out of; see TextRecord.ProviderMessageID.
 	ProviderMessageID string
 	// AfterTurn says this arrived after the turn it belongs to had ended; see
 	// MarkAfterTurn. Not recorded: the record is drawn the same either way.
@@ -606,9 +602,8 @@ type ThinkingEvent struct {
 func (ThinkingEvent) EventType() EventType { return EventTypeThinking }
 func (ThinkingEvent) isAgentEvent()        {}
 
-func (e ThinkingEvent) ToRecord() EventRecord {
-	return EventRecord{
-		Type:              e.EventType(),
+func (e ThinkingEvent) ToRecord() ThinkingRecord {
+	return ThinkingRecord{
 		Content:           e.Content,
 		FullReasoning:     e.FullReasoning,
 		Redacted:          e.Redacted,
@@ -618,11 +613,13 @@ func (e ThinkingEvent) ToRecord() EventRecord {
 	}
 }
 
+func (e ThinkingEvent) Encode() Wire { return e.ToRecord() }
+
 // ThinkingDeltaEvent says the main agent is thinking right now — never a
 // subagent, whose own row is where its work is described. It ends with the
 // ThinkingEvent that settles it, or with the turn.
 //
-// Broadcast and never recorded (EventType.Persisted), like ToolActivityEvent and
+// Broadcast and never recorded (see LiveEvent), like ToolActivityEvent and
 // for the same reason: "is thinking" is a latest value. Unlike tool activity,
 // nothing keeps a snapshot for a client that subscribes mid-thinking — it loses
 // one word until the next signal, and the full text arrives with the record.
@@ -642,13 +639,14 @@ type ThinkingDeltaEvent struct {
 func (ThinkingDeltaEvent) EventType() EventType { return EventTypeThinkingDelta }
 func (ThinkingDeltaEvent) isAgentEvent()        {}
 
-func (e ThinkingDeltaEvent) ToRecord() EventRecord {
-	return EventRecord{
-		Type:               e.EventType(),
+func (e ThinkingDeltaEvent) ToLive() ThinkingDeltaLiveEvent {
+	return ThinkingDeltaLiveEvent{
 		ContentDelta:       e.ContentDelta,
 		FullReasoningDelta: e.FullReasoningDelta,
 	}
 }
+
+func (e ThinkingDeltaEvent) Encode() Wire { return e.ToLive() }
 
 // WarningEvent represents a non-fatal warning (e.g., unsupported content type).
 // Unlike ErrorEvent which represents a fatal error, this is displayed inline and the conversation continues.
@@ -667,15 +665,16 @@ type WarningEvent struct {
 func (WarningEvent) EventType() EventType { return EventTypeWarning }
 func (WarningEvent) isAgentEvent()        {}
 
-func (e WarningEvent) ToRecord() EventRecord {
-	return EventRecord{
-		Type:        e.EventType(),
+func (e WarningEvent) ToRecord() WarningRecord {
+	return WarningRecord{
 		Message:     e.Message,
 		Code:        e.Code,
 		AuthFailure: e.AuthFailure,
 		UsageLimit:  e.UsageLimit,
 	}
 }
+
+func (e WarningEvent) Encode() Wire { return e.ToRecord() }
 
 // AuthFailure marks a record as the CLI being refused for its credentials — not
 // signed in, a login that expired, a key the provider rejected — and names the
@@ -729,40 +728,46 @@ type ErrorEvent struct {
 	// UsageLimit is set when the turn failed because the account hit its usage
 	// limit. The turn ends as any other failure.
 	UsageLimit *UsageLimit
-	// ObservedAt is when Pockode saw the turn fail; see EventRecord.ObservedAt.
+	// ObservedAt is when Pockode saw the turn fail; see ObserveAt.
 	ObservedAt time.Time
 }
 
 func (ErrorEvent) EventType() EventType { return EventTypeError }
 func (ErrorEvent) isAgentEvent()        {}
 
-func (e ErrorEvent) ToRecord() EventRecord {
-	return EventRecord{Type: e.EventType(), Error: e.Error, AuthFailure: e.AuthFailure, UsageLimit: e.UsageLimit, ObservedAt: optionalTime(e.ObservedAt)}
+func (e ErrorEvent) ToRecord() ErrorRecord {
+	return ErrorRecord{Error: e.Error, AuthFailure: e.AuthFailure, UsageLimit: e.UsageLimit, ObservedAt: optionalTime(e.ObservedAt)}
 }
 
+func (e ErrorEvent) Encode() Wire { return e.ToRecord() }
+
 type DoneEvent struct {
-	// ObservedAt is when Pockode saw the turn end; see EventRecord.ObservedAt.
+	// ObservedAt is when Pockode saw the turn end; see ObserveAt.
 	ObservedAt time.Time
 }
 
 func (DoneEvent) EventType() EventType { return EventTypeDone }
 func (DoneEvent) isAgentEvent()        {}
 
-func (e DoneEvent) ToRecord() EventRecord {
-	return EventRecord{Type: e.EventType(), ObservedAt: optionalTime(e.ObservedAt)}
+func (e DoneEvent) ToRecord() DoneRecord {
+	return DoneRecord{ObservedAt: optionalTime(e.ObservedAt)}
 }
 
+func (e DoneEvent) Encode() Wire { return e.ToRecord() }
+
 type InterruptedEvent struct {
-	// ObservedAt is when Pockode saw the turn stop; see EventRecord.ObservedAt.
+	// ObservedAt is when Pockode saw the turn stop; see ObserveAt.
 	ObservedAt time.Time
 }
 
 func (InterruptedEvent) EventType() EventType { return EventTypeInterrupted }
 func (InterruptedEvent) isAgentEvent()        {}
 
-func (e InterruptedEvent) ToRecord() EventRecord {
-	return EventRecord{Type: e.EventType(), ObservedAt: optionalTime(e.ObservedAt)}
+func (e InterruptedEvent) ToRecord() InterruptedRecord {
+	return InterruptedRecord{ObservedAt: optionalTime(e.ObservedAt)}
 }
+
+func (e InterruptedEvent) Encode() Wire { return e.ToRecord() }
 
 type PermissionRequestEvent struct {
 	RequestID             string
@@ -784,9 +789,8 @@ type PermissionRequestEvent struct {
 func (PermissionRequestEvent) EventType() EventType { return EventTypePermissionRequest }
 func (PermissionRequestEvent) isAgentEvent()        {}
 
-func (e PermissionRequestEvent) ToRecord() EventRecord {
-	return EventRecord{
-		Type:                  e.EventType(),
+func (e PermissionRequestEvent) ToRecord() PermissionRequestRecord {
+	return PermissionRequestRecord{
 		RequestID:             e.RequestID,
 		ToolName:              e.ToolName,
 		ToolInput:             e.ToolInput,
@@ -796,6 +800,8 @@ func (e PermissionRequestEvent) ToRecord() EventRecord {
 		BlockedPath:           e.BlockedPath,
 	}
 }
+
+func (e PermissionRequestEvent) Encode() Wire { return e.ToRecord() }
 
 // CancelReason says why a prompt stopped waiting for its answer, for the two
 // records that can report it — a request cancelled, and a request that expired
@@ -847,9 +853,11 @@ type RequestCancelledEvent struct {
 func (RequestCancelledEvent) EventType() EventType { return EventTypeRequestCancelled }
 func (RequestCancelledEvent) isAgentEvent()        {}
 
-func (e RequestCancelledEvent) ToRecord() EventRecord {
-	return EventRecord{Type: e.EventType(), RequestID: e.RequestID, Reason: e.Reason, ResolvedAt: optionalTime(e.At)}
+func (e RequestCancelledEvent) ToRecord() RequestCancelledRecord {
+	return RequestCancelledRecord{RequestID: e.RequestID, Reason: e.Reason, ResolvedAt: optionalTime(e.At)}
 }
+
+func (e RequestCancelledEvent) Encode() Wire { return e.ToRecord() }
 
 // QuestionPostedEvent is one question an agent asked through the question_post
 // tool, recorded at the moment it was asked.
@@ -877,9 +885,8 @@ type QuestionPostedEvent struct {
 func (QuestionPostedEvent) EventType() EventType { return EventTypeQuestionPosted }
 func (QuestionPostedEvent) isAgentEvent()        {}
 
-func (e QuestionPostedEvent) ToRecord() EventRecord {
-	return EventRecord{
-		Type:      e.EventType(),
+func (e QuestionPostedEvent) ToRecord() QuestionPostedRecord {
+	return QuestionPostedRecord{
 		RequestID: e.RequestID,
 		// A one-element list rather than a field of its own, so that a client
 		// draws a posted question with the same code it draws the CLI's own.
@@ -887,6 +894,8 @@ func (e QuestionPostedEvent) ToRecord() EventRecord {
 		AskedAt:   optionalTime(e.AskedAt),
 	}
 }
+
+func (e QuestionPostedEvent) Encode() Wire { return e.ToRecord() }
 
 // QuestionAnswer is one question answered — or deliberately not answered — by
 // the message that carries it (MessageEvent.Answering).
@@ -940,14 +949,13 @@ type QuestionAnswer struct {
 	// legacy reading is a rule about old transcripts, not a default worth
 	// leaning on twice.
 	ResolvedBy *QuestionResolver `json:"resolved_by,omitempty"`
-	// AnsweredAt is when this was sent. Recorded per entry rather than per
-	// message because it is the only timestamp a question's fate has: an
-	// EventRecord carries no clock, and "answered by the user at 14:02" is what
-	// a later attempt to answer the same question is refused with.
+	// AnsweredAt is when this was sent. Recorded per entry rather than read off
+	// the message because an entry is what a question's fate is looked up by:
+	// "answered by the user at 14:02" is what a later attempt to answer the
+	// same question is refused with.
 	//
-	// Always set, so no `omitempty` to be misread: it would do nothing for a
-	// struct anyway, and claiming otherwise is how the two fields on
-	// EventRecord went wrong.
+	// Always set, so a plain time.Time: the zero value never reaches a record.
+	// Every moment that can be absent is a pointer instead (see ObserveAt).
 	AnsweredAt time.Time `json:"answered_at"`
 }
 
@@ -984,7 +992,7 @@ type QuestionResolver struct {
 // UserResolver is who a question answered in the chat was answered by.
 func UserResolver() QuestionResolver { return QuestionResolver{Kind: ResolverUser} }
 
-// ObserveAt stamps the events that carry EventRecord.ObservedAt with the moment
+// ObserveAt stamps the events whose records carry `observed_at` with the moment
 // Pockode saw them, and returns every other event unchanged. It is called once
 // per event, where it enters a session — process.Process for everything an
 // agent sends, chat.Client for a permission answer and the read point it writes
@@ -995,37 +1003,68 @@ func UserResolver() QuestionResolver { return QuestionResolver{Kind: ResolverUse
 // A ToolResultBackgroundLost result is left unstamped: it is written when the
 // next process starts, which can be any time after the work actually died, so
 // the moment Pockode wrote it says nothing about when the call ended.
-func ObserveAt(event AgentEvent, at time.Time) AgentEvent {
-	switch e := event.(type) {
+//
+// What the moment means: when the Pockode server saw the event arrive — from
+// the agent CLI, or for a permission_response from whoever answered — or, for
+// one Pockode synthesized (an interrupt, a turn its lease ended), when it wrote
+// it. It is Pockode's clock, not the CLI's: the CLI reports no start or end
+// times, and a duration it does report stays in DurationMs. It exists so a
+// client can measure a tool call from when it could start (its tool_call, or
+// the permission_response that let it run) to the tool_result that settled it,
+// and give a call replayed while still running a clock (see
+// rpc.ChatMessagesSubscribeResult.ServerTime). On done, interrupted and
+// process_ended it says when the turn or process ended, which is not when any
+// call still open in it finished.
+//
+// On message it is when the message reached Pockode, the instant a turn it
+// opened began (stamped by chat.Client.sendEvent, not here); on
+// message_ingested, when the read point was written; on error, when the turn
+// failed. Those three, with done, interrupted and process_ended, are what a
+// client measures a reply's span between.
+//
+// Absent on every record written before the field existed, and where no
+// honest moment exists: a background_lost result, and the process_ended a
+// restarted server writes for a run nobody saw end. A record copied into a
+// fork keeps its moment — it is when that event happened, which copying does
+// not change.
+//
+// Every moment on a record is a pointer, and that is not a style choice:
+// `omitempty` does nothing for a struct, so a plain time.Time would put
+// `"observed_at":"0001-01-01T00:00:00Z"` on every record that has none.
+//
+// Generic so that a caller holding a concrete event gets that event back, and
+// can still call its ToRecord.
+func ObserveAt[E AgentEvent](event E, at time.Time) E {
+	var stamped any = event
+	switch e := any(event).(type) {
 	case ToolCallEvent:
 		e.ObservedAt = at
-		return e
+		stamped = e
 	case ToolResultEvent:
-		if e.Subtype == ToolResultBackgroundLost {
-			return e
+		if e.Subtype != ToolResultBackgroundLost {
+			e.ObservedAt = at
+			stamped = e
 		}
-		e.ObservedAt = at
-		return e
 	case DoneEvent:
 		e.ObservedAt = at
-		return e
+		stamped = e
 	case InterruptedEvent:
 		e.ObservedAt = at
-		return e
+		stamped = e
 	case ProcessEndedEvent:
 		e.ObservedAt = at
-		return e
+		stamped = e
 	case PermissionResponseEvent:
 		e.ObservedAt = at
-		return e
+		stamped = e
 	case ErrorEvent:
 		e.ObservedAt = at
-		return e
+		stamped = e
 	case MessageIngestedEvent:
 		e.ObservedAt = at
-		return e
+		stamped = e
 	}
-	return event
+	return stamped.(E)
 }
 
 // MarkAfterTurn flags content that arrived after the turn it belongs to had
@@ -1073,7 +1112,7 @@ func ArrivedAfterTurn(event AgentEvent) bool {
 	return false
 }
 
-// optionalTime is how a moment reaches an EventRecord: the zero time means the
+// optionalTime is how a moment reaches a record: the zero time means the
 // event carried none, and an absent field is the honest way to record that.
 func optionalTime(at time.Time) *time.Time {
 	if at.IsZero() {
@@ -1089,9 +1128,11 @@ type SystemEvent struct {
 func (SystemEvent) EventType() EventType { return EventTypeSystem }
 func (SystemEvent) isAgentEvent()        {}
 
-func (e SystemEvent) ToRecord() EventRecord {
-	return EventRecord{Type: e.EventType(), Content: e.Content}
+func (e SystemEvent) ToRecord() SystemRecord {
+	return SystemRecord{Content: e.Content}
 }
+
+func (e SystemEvent) Encode() Wire { return e.ToRecord() }
 
 // BackgroundWaitEvent says the turn is parked: the CLI ended it with an
 // ordinary result frame, but work it started outlives that frame and it will
@@ -1113,12 +1154,14 @@ type BackgroundWaitEvent struct{}
 func (BackgroundWaitEvent) EventType() EventType { return EventTypeBackgroundWait }
 func (BackgroundWaitEvent) isAgentEvent()        {}
 
-func (e BackgroundWaitEvent) ToRecord() EventRecord {
-	return EventRecord{Type: e.EventType()}
+func (e BackgroundWaitEvent) ToRecord() BackgroundWaitRecord {
+	return BackgroundWaitRecord{}
 }
 
+func (e BackgroundWaitEvent) Encode() Wire { return e.ToRecord() }
+
 type ProcessEndedEvent struct {
-	// ObservedAt is when Pockode saw the process end; see EventRecord.ObservedAt.
+	// ObservedAt is when Pockode saw the process end; see ObserveAt.
 	// The process_ended a restarted server writes for a run that died with the
 	// last one (session.FileStore) carries none: nobody saw that run end.
 	ObservedAt time.Time
@@ -1127,9 +1170,11 @@ type ProcessEndedEvent struct {
 func (ProcessEndedEvent) EventType() EventType { return EventTypeProcessEnded }
 func (ProcessEndedEvent) isAgentEvent()        {}
 
-func (e ProcessEndedEvent) ToRecord() EventRecord {
-	return EventRecord{Type: e.EventType(), ObservedAt: optionalTime(e.ObservedAt)}
+func (e ProcessEndedEvent) ToRecord() ProcessEndedRecord {
+	return ProcessEndedRecord{ObservedAt: optionalTime(e.ObservedAt)}
 }
+
+func (e ProcessEndedEvent) Encode() Wire { return e.ToRecord() }
 
 // MessageOrigin distinguishes who produced a message event.
 // An empty value (default) means a user-typed message, kept empty for
@@ -1153,6 +1198,14 @@ const (
 	// which is where a reader of the *record* needs it.
 	MessageOriginAgent MessageOrigin = "agent"
 )
+
+// MessageSubtype is which prompt a system-origin message is: why Pockode sent
+// it. Declared here, beside the record, and given its values by the packages
+// that send such messages (the MessageSubtype* constants in package work, and
+// package permreview's), because those are the ones that know what each
+// prompt is for. Its own type so that it cannot be confused with a
+// tool_call's or a tool_result's subtype, which are other sets entirely.
+type MessageSubtype string
 
 // StepInfo is a 1-indexed step position carried by a system message's summary.
 type StepInfo struct {
@@ -1205,11 +1258,11 @@ type StoryInfo struct {
 type MessageEvent struct {
 	Content string
 	Origin  MessageOrigin
-	Subtype string
+	Subtype MessageSubtype
 	Meta    *MessageMeta
 	// MessageID is Pockode's own id for this message, minted where the message
 	// is sent (chat.Client.sendEvent) so that a later message_ingested record can
-	// name the message the agent read. See EventRecord.MessageID.
+	// name the message the agent read. See MessageRecord.MessageID.
 	MessageID string
 	// Answering are the posted questions this message answers, if any. The
 	// content still carries the answers in prose — that is what the agent reads
@@ -1231,7 +1284,7 @@ type MessageEvent struct {
 	// ObservedAt is when the message reached Pockode, minted once where it is
 	// sent (chat.Client.sendEvent) and handed to the process as the prompt's
 	// moment too, so a turn this message opens began at exactly this instant
-	// (session.TurnState.OpenedAt). See EventRecord.ObservedAt.
+	// (session.TurnState.OpenedAt). See ObserveAt.
 	ObservedAt time.Time
 }
 
@@ -1247,9 +1300,8 @@ type CommandInvocation struct {
 func (MessageEvent) EventType() EventType { return EventTypeMessage }
 func (MessageEvent) isAgentEvent()        {}
 
-func (e MessageEvent) ToRecord() EventRecord {
-	return EventRecord{
-		Type:        e.EventType(),
+func (e MessageEvent) ToRecord() MessageRecord {
+	return MessageRecord{
 		Content:     e.Content,
 		Origin:      e.Origin,
 		Subtype:     e.Subtype,
@@ -1262,6 +1314,8 @@ func (e MessageEvent) ToRecord() EventRecord {
 		ObservedAt:  optionalTime(e.ObservedAt),
 	}
 }
+
+func (e MessageEvent) Encode() Wire { return e.ToRecord() }
 
 // MessageIngestedEvent says the agent has taken in a message that arrived while
 // it was already working, and that everything it produces from here answers
@@ -1299,16 +1353,18 @@ type MessageIngestedEvent struct {
 	MessageID string
 	// ObservedAt is when Pockode wrote the read point — the moment the reply
 	// before it ended and the one answering this message began; see
-	// EventRecord.ObservedAt.
+	// ObserveAt.
 	ObservedAt time.Time
 }
 
 func (MessageIngestedEvent) EventType() EventType { return EventTypeMessageIngested }
 func (MessageIngestedEvent) isAgentEvent()        {}
 
-func (e MessageIngestedEvent) ToRecord() EventRecord {
-	return EventRecord{Type: e.EventType(), MessageID: e.MessageID, ObservedAt: optionalTime(e.ObservedAt)}
+func (e MessageIngestedEvent) ToRecord() MessageIngestedRecord {
+	return MessageIngestedRecord{MessageID: e.MessageID, ObservedAt: optionalTime(e.ObservedAt)}
 }
+
+func (e MessageIngestedEvent) Encode() Wire { return e.ToRecord() }
 
 // MessageDiscardedEvent says a Stop threw away a message the agent had not read
 // yet: it will never be answered. Only Claude produces it — its Stop carries
@@ -1333,32 +1389,33 @@ type MessageDiscardedEvent struct {
 func (MessageDiscardedEvent) EventType() EventType { return EventTypeMessageDiscarded }
 func (MessageDiscardedEvent) isAgentEvent()        {}
 
-func (e MessageDiscardedEvent) ToRecord() EventRecord {
-	return EventRecord{Type: e.EventType(), MessageID: e.MessageID}
+func (e MessageDiscardedEvent) ToRecord() MessageDiscardedRecord {
+	return MessageDiscardedRecord{MessageID: e.MessageID}
 }
 
-// PermissionResponseEvent is the answer a permission request got. A person's
-// answer is for history replay only — the client that sent it already shows it —
-// while a permission reviewer's, or Pockode's own, is also broadcast, since no
-// client sent it.
+func (e MessageDiscardedEvent) Encode() Wire { return e.ToRecord() }
+
+// PermissionResponseEvent is the answer a permission request got, whoever gave
+// it. Every answer is broadcast as well as stored — a person's too: the client
+// that sent it already shows it, but every other client watching the session
+// does not.
 type PermissionResponseEvent struct {
 	RequestID string
-	Choice    string // "deny", "allow", "always_allow"
+	Choice    PermissionChoiceName
 	// By is who answered; empty is a person. See PermissionResponder.
 	By PermissionResponder
 	// Review is set whenever By is.
 	Review *PermissionReview
 	// ObservedAt is when the answer reached Pockode — the moment the call it
-	// lets run could start; see EventRecord.ObservedAt.
+	// lets run could start; see ObserveAt.
 	ObservedAt time.Time
 }
 
 func (PermissionResponseEvent) EventType() EventType { return EventTypePermissionResponse }
 func (PermissionResponseEvent) isAgentEvent()        {}
 
-func (e PermissionResponseEvent) ToRecord() EventRecord {
-	return EventRecord{
-		Type:       e.EventType(),
+func (e PermissionResponseEvent) ToRecord() PermissionResponseRecord {
+	return PermissionResponseRecord{
 		RequestID:  e.RequestID,
 		Choice:     e.Choice,
 		By:         e.By,
@@ -1367,6 +1424,8 @@ func (e PermissionResponseEvent) ToRecord() EventRecord {
 	}
 }
 
+func (e PermissionResponseEvent) Encode() Wire { return e.ToRecord() }
+
 type RawEvent struct {
 	Content string
 }
@@ -1374,9 +1433,11 @@ type RawEvent struct {
 func (RawEvent) EventType() EventType { return EventTypeRaw }
 func (RawEvent) isAgentEvent()        {}
 
-func (e RawEvent) ToRecord() EventRecord {
-	return EventRecord{Type: e.EventType(), Content: e.Content}
+func (e RawEvent) ToRecord() RawRecord {
+	return RawRecord{Content: e.Content}
 }
+
+func (e RawEvent) Encode() Wire { return e.ToRecord() }
 
 type CommandOutputEvent struct {
 	Content string
@@ -1385,6 +1446,8 @@ type CommandOutputEvent struct {
 func (CommandOutputEvent) EventType() EventType { return EventTypeCommandOutput }
 func (CommandOutputEvent) isAgentEvent()        {}
 
-func (e CommandOutputEvent) ToRecord() EventRecord {
-	return EventRecord{Type: e.EventType(), Content: e.Content}
+func (e CommandOutputEvent) ToRecord() CommandOutputRecord {
+	return CommandOutputRecord{Content: e.Content}
 }
+
+func (e CommandOutputEvent) Encode() Wire { return e.ToRecord() }

@@ -265,24 +265,16 @@ half stands in for the other.
 
 ### Event Types
 
-Events are divided into these categories:
-
-| Category | Event Types | Description |
-|----------|-------------|-------------|
-| **Content** | `text`, `tool_call`, `tool_result`, `thinking`, `plan`, `system`, `warning`, `raw`, `command_output` | AI-generated content |
-| **Live** | `tool_activity`, `thinking_delta` | what a call or the agent is doing right now; broadcast, never recorded |
-| **Terminal** | `done`, `error`, `interrupted`, `process_ended` | Marks end of AI turn |
-| **Permission** | `permission_request`, `permission_response`, `request_cancelled` | Tool execution authorization |
-| **Questions** | `question_posted` | a question the agent asked through `question_post`. Nothing waits on it; the answer arrives as a `message` carrying `answering` |
-| **Read point** | `message_ingested` | the agent has taken in a message that reached it mid-turn ([agent-event.md](../agent-event.md#the-read-point-message_ingested)) |
-| **Message ending** | `message_discarded` | a Stop threw away a message the agent had not read; Claude only ([agent-event.md](../agent-event.md#a-discarded-message-message_discarded)) |
-| **Legacy** | `ask_user_question`, `question_response` | the CLI's own blocking question, read from old transcripts and never written ([agent-event.md](../agent-event.md#legacy-ask_user_question-and-question_response)) |
+The categories, and what each type is for, are in
+[agent-event.md](../agent-event.md#event-types); the complete set of types an
+event can be serialized as is `agent.WireTypes`
+([History Records and Live Events](#history-records-and-live-events)).
 
 ```go
 // agent/event.go
 type AgentEvent interface {
     EventType() EventType
-    ToRecord() EventRecord          // Unified serialization format
+    Encode() Wire                   // a Record (stored) or a LiveEvent (broadcast only)
     isAgentEvent()                  // sealed interface marker
 }
 ```
@@ -291,19 +283,21 @@ type AgentEvent interface {
 
 ### What an Event Says About Process State
 
-Four predicates on `EventType` are the entire contract between an agent and the
-state layer. Every agent event answers all four, and nothing else in that layer
-inspects event types.
+Four questions are the entire contract between an agent and the state layer.
+Every agent event answers all four, and nothing else in that layer inspects
+event types. The first is answered by what the event encodes as, the other three
+by predicates on `EventType`.
 
 ```go
-// agent/event.go
-func (e EventType) Persisted() bool            // everything except tool_activity and thinking_delta
+// agent/event.go, agent/history.go
+event.Encode().(agent.Record)                  // persisted: everything except tool_activity and thinking_delta
 func (e EventType) AwaitsUserInput() bool      // done, error, interrupted, permission_request
 func (e EventType) IndicatesAgentActivity() bool
 func (e EventType) ActivatesSession() bool
 ```
 
-- `Persisted` — this belongs in session history. Decides whether
+- Persisted — this belongs in session history: the event encodes as an
+  `agent.Record` rather than an `agent.LiveEvent`. Decides whether
   `streamEvents` writes a record before broadcasting.
 - `AwaitsUserInput` — the turn stopped: it finished, failed, was aborted, or is
   blocked on a permission request. Now only decides whether the session's
@@ -318,13 +312,18 @@ func (e EventType) ActivatesSession() bool
   [Background Waits](#background-waits) for the results it includes that are no
   turn signal.
 
-**`Persisted` is the one denylist among the four**, and the asymmetry is the
-point rather than an inconsistency to tidy away. The other three are allowlists
-because being wrong is expensive and nothing downstream corrects it (below). Here
-the default is the safe one: an event says what was true at one moment and that
-stays true, so a type nobody thought about is recorded. Forgetting to exclude one
-costs a stored record nobody reads; forgetting to include one would leave a hole
-in history. The exclusions are `tool_activity`, which reports the *latest*
+**Persisted is the one question with no default**, and that is deliberate. The
+other three are allowlists because being wrong is expensive and nothing
+downstream corrects it (below). Here a new event type cannot be left unnamed at
+all: its `Encode` returns one record type or one live-event type, and the two
+interfaces are disjoint — no wire type is both, which
+`TestWireCompatCases_CoverEveryType` holds — so the decision is made when the
+type is written.
+The list a record type also has to join, `agent.WireTypes`, is what
+`DecodeRecord` reads by; `TestAgentEvent_EncodesAsItsOwnType` checks that the
+events it names agree with it. The default worth choosing is still
+"record": an event says what was true at one moment and that stays true. The
+exceptions are `tool_activity`, which reports the *latest*
 value of something still changing and would be a lie in a transcript the moment
 the next one arrived ([tool-call-model.md](../tool-call-model.md#tool_activity-is-not-persisted)),
 and `thinking_delta`, which says the agent is thinking *now* — the finished
@@ -454,7 +453,7 @@ which is the shape this is.
 A turn the CLI was refused for its credentials — not signed in, a login that
 expired, a key the provider rejected — ends in an `ErrorEvent` carrying
 `AuthFailure{Agent}`, so the chat can offer the right sign-in from the record and
-the turn ends as `auth_failed` (see [agent-event.md](../agent-event.md#eventrecord-serialization)).
+the turn ends as `auth_failed` (see [agent-event.md](../agent-event.md#records-serialization)).
 Neither CLI says so on the frame that ends the turn, so each adapter remembers it
 for the turn under way from the CLI's structured signal, never from its text:
 
@@ -690,75 +689,45 @@ The reader fails closed: the fields the check needs (a frame's type, its content
 
 An implementation returns `*BinaryNotFoundError` (not installed), `*OneShotAuthError` (not signed in — claude's `authentication_failed` frame, codex's `401 Unauthorized` in its turn failure, since `exec` carries none of the structured auth info `app-server` does), `*OneShotFailedError` (the CLI ended without an answer, carrying its own words — or the tail of its stderr, kept to 16 KiB), `ErrOneShotToolUse`, or `ctx.Err()`. What an empty answer means is the caller's to decide.
 
-## EventRecord: Unified Event Format
+## History Records and Live Events
 
-`EventRecord` is the standard serialization format for events, used for both:
-- **Persistence**: Appended to history file in JSON Lines format
-- **Transport**: WebSocket broadcast to frontend
+An event is serialized as an `agent.Wire`, and every `Wire` is exactly one of
+two kinds:
+- **`agent.Record`** — one line of `history.jsonl`, and the params of the
+  `chat.<type>` notification that announces it. One struct per record type
+  (`TextRecord`, `ToolCallRecord`, … and the read-only legacy
+  `AskUserQuestionRecord` / `QuestionResponseRecord`), each holding only that
+  type's fields.
+- **`agent.LiveEvent`** — broadcast and never stored: `ToolActivityLiveEvent`
+  and `ThinkingDeltaLiveEvent`. `session.Store.AppendToHistory` takes a
+  `session.HistoryRecord`, which `Record` embeds and a live event does not
+  implement, so storing either of them does not compile.
 
-```go
-// agent/history.go
-type EventRecord struct {
-    Type                  EventType           `json:"type"`
-    Content               string              `json:"content,omitempty"`
-    ToolName              string              `json:"tool_name,omitempty"`
-    ToolInput             json.RawMessage     `json:"tool_input,omitempty"`
-    ToolUseID             string              `json:"tool_use_id,omitempty"`
-    OriginToolUseID       string              `json:"origin_tool_use_id,omitempty"`
-    ParentToolUseID       string              `json:"parent_tool_use_id,omitempty"`
-    ToolResult            string              `json:"tool_result,omitempty"`
-    Contents              []ContentBlock      `json:"contents,omitempty"`
-    IsError               bool                `json:"is_error,omitempty"`
-    Error                 string              `json:"error,omitempty"`
-    Message               string              `json:"message,omitempty"`
-    Code                  string              `json:"code,omitempty"`
-    RequestID             string              `json:"request_id,omitempty"`
-    PermissionSuggestions []PermissionUpdate  `json:"permission_suggestions,omitempty"`
-    DecisionReason        string              `json:"decision_reason,omitempty"`
-    BlockedPath           string              `json:"blocked_path,omitempty"`
-    By                    PermissionResponder `json:"by,omitempty"`
-    Review                *PermissionReview   `json:"review,omitempty"`
-    Questions             []AskUserQuestion   `json:"questions,omitempty"`
-    Choice                string              `json:"choice,omitempty"`
-    Reason                CancelReason        `json:"reason,omitempty"`
-    AskedAt               *time.Time          `json:"asked_at,omitempty"`
-    ResolvedAt            *time.Time          `json:"resolved_at,omitempty"`
-    ObservedAt            *time.Time          `json:"observed_at,omitempty"`
-    Answering             []QuestionAnswer    `json:"answering,omitempty"`
-    Origin                MessageOrigin       `json:"origin,omitempty"`
-    Subtype               string              `json:"subtype,omitempty"`
-    Meta                  *MessageMeta        `json:"meta,omitempty"`
-    DurationMs            int64               `json:"duration_ms,omitempty"`
-    ExitCode              *int                `json:"exit_code,omitempty"`
-    Subagent              *SubagentReport     `json:"subagent,omitempty"`
-    HTMLPage              string              `json:"html_page,omitempty"`
-    WorkRef               *WorkRef            `json:"work_ref,omitempty"`
-    Activity              string              `json:"activity,omitempty"`
-    OutputDelta           string              `json:"output_delta,omitempty"`
-    SubagentProgress      *SubagentProgress   `json:"subagent_progress,omitempty"`
-    FullReasoning         string              `json:"full_reasoning,omitempty"`
-    Redacted              bool                `json:"redacted,omitempty"`
-    ContentDelta          string              `json:"content_delta,omitempty"`
-    FullReasoningDelta    string              `json:"full_reasoning_delta,omitempty"`
-    ProviderMessageID     string              `json:"provider_message_id,omitempty"`
-}
-```
+`agent.WireTypes` is the one list of every type an event can be serialized as;
+the decoder table is built from it, and so are the web client's types.
 
-**Design Decision**: A single format avoids type conversion errors during serialization/deserialization.
+The discriminator `type` is not a field: each type's `MarshalJSON` writes it
+first, from the type itself, so a value cannot be serialized under a type that
+is not its own. `agent.DecodeRecord` reads a history line back as the record its
+`type` names, and readers switch on the concrete type — a field a record type
+does not have cannot be read off it. Fields keep the order and tags the single
+flat struct these replaced had, so the JSON is byte-for-byte what it was: a
+server from before the split reads what this one writes, and the other way
+round. `agent/history_compat_test.go` freezes that flat struct
+(`legacyEventRecord`) and holds every type in `WireTypes` to it.
 
-**A field a record on disk carries need not be here.** The legacy
-`question_response` record's `answers` map is the case: nothing in Go reads it, so
-it has no field, and the client still gets it verbatim — replay adds a `seq` and
-changes nothing else, because `session.stampHistorySeq` round-trips through a raw
-field map rather than through this struct
-(`TestStampHistorySeq_KeepsFieldsThisBuildHasNoNameFor`). What this struct is the
-single source of truth for is the records Pockode *writes*.
+**Replay does not go through these types.** A history page hands the client the
+line as it is on disk — replay adds a `seq` and changes nothing else, because
+`session.stampHistorySeq` round-trips through a raw field map
+(`TestStampHistorySeq_KeepsFieldsThisBuildHasNoNameFor`) — so a field a newer
+server wrote reaches the client even through a build that has no name for it.
+The types are the source of truth for what Pockode *writes*, and for what Go
+reads back.
 
-`AskedAt` and `ResolvedAt` are pointers, and that is not a style choice:
-`omitempty` does nothing for a struct, so a plain `time.Time` would put
-`"asked_at":"0001-01-01T00:00:00Z"` on every record in every transcript and on
-every notification — two junk fields per event, for two fields that mean something
-on two event types.
+Every moment on a record (`AskedAt`, `ResolvedAt`, `ObservedAt`) is a pointer,
+and that is not a style choice: `omitempty` does nothing for a struct, so a
+plain `time.Time` would put `"asked_at":"0001-01-01T00:00:00Z"` on every record
+that has none.
 
 `ProviderMessageID` is the agent's own id for the piece of its conversation this
 event was parsed out of. It is a fact the event arrived with rather than Pockode
@@ -766,8 +735,9 @@ state, which is why it lives on the record. It exists so a fork can name its cut
 point in the agent's own terms ([Session Forking](#session-forking)): `HistorySeq`
 means nothing to a CLI, and one piece of an agent's conversation can produce
 several records here, so position cannot be recovered from the records either.
-Empty for events with nothing of the agent's behind them (a warning Pockode
-raised itself), for agents that expose no ids, and for every record written
+Only the record types parsed out of the agent's own conversation carry it
+(`text`, `thinking`, `tool_call`, `tool_result`, `plan`); it is empty on those
+for agents that expose no ids, and for every record written
 before the field existed — which is why every reader treats it as optional rather
 than assuming it.
 
@@ -784,8 +754,8 @@ whatever the main agent went on to do meanwhile — which is a point the main
 conversation can be reopened at.
 
 `ParentToolUseID` is what marks those records: the subagent call (Claude's
-`Task` / `Agent`, Codex's spawn) a `text`, `tool_call` or `tool_result` record
-was produced inside. It has to be a field because position cannot say it: a
+`Task` / `Agent`, Codex's spawn) a `text`, `thinking`, `tool_call`,
+`tool_result` or `plan` record was produced inside. It has to be a field because position cannot say it: a
 backgrounded Claude subagent writes between the main agent's own lines, and a
 Codex subagent's items arrive interleaved with the parent thread's. A subagent's
 subagent names the call that spawned *it*, so the field nests — when the CLI
@@ -826,13 +796,28 @@ successful.
 and `ToolResult` are the same field in two shapes and never both set. See
 [Content Blocks and Attachments](#content-blocks-and-attachments).
 
-`Subtype` serves the two event types that have kinds. On a system-origin
-`message` it says which prompt produced it; on a `tool_result` it says the result
-is not the whole story — `background_started` for the placeholder a backgrounded
-call handed back, `background_result` for the outcome the CLI reported afterwards,
-`background_lost` for the one Pockode wrote when the process died with the work
-still running. An ordinary result carries none
-([tool-call-model.md](../tool-call-model.md#background-lives-on-tool_result-twice)).
+`subtype` is on the three record types that have kinds, and on each it means
+the same thing — which kind of that record this one is — from a set of values
+that is that type's alone. Each set is a Go type of its own, so neither the
+server nor the generated client can put one record's kind on another:
+
+| Record | Go type | Values |
+|--------|---------|--------|
+| `tool_call` | `ToolCallSubtype` | `resumed`: an earlier call announced again because its work started again |
+| `tool_result` | `ToolResultSubtype` | `background_started` for the placeholder a backgrounded call handed back, `background_result` for the outcome the CLI reported afterwards, `background_lost` for the one Pockode wrote when the process died with the work still running ([tool-call-model.md](../tool-call-model.md#background-lives-on-tool_result-twice)) |
+| `message` | `MessageSubtype` | which prompt a system-origin message is; the values are declared by the packages that send them (`work.MessageSubtype*`, `permreview`) |
+
+An ordinary call, result or user message carries none. The key stays one key
+rather than three: the sets never meet on one record, so a reader always knows
+which set it is reading from the record's `type`. Renaming it per type would
+also mean writing `subtype` beside the new key on every record, forever, because
+a downgraded server reads only `subtype` — which would add a key and remove no
+overloading.
+
+`duration_ms` is one key for the same reason. On a `tool_result` it is what the
+CLI reported; on a `thinking` record the server measured it live. Both say how
+long the thing the record describes took, and which one measured it is fixed by
+the record's type, so a reader never has to tell the two apart on one record.
 
 `DurationMs` and `ExitCode` are what a CLI reported about a finished call as
 figures, and are never inferred from arrival times, which would be wrong on
@@ -918,15 +903,68 @@ tool call id, so the id is matched up from the result's text
 successful Pockode work tool call acted on — `{id, type, title}` as of the call,
 and no status — stamped the same way, by `process.workCalls`
 ([tool-call-model.md](../tool-call-model.md#a-call-on-pockodes-own-work)). `Activity` and
-`OutputDelta` belong to `tool_activity` records, which are broadcast and never
-stored; they are fields here anyway because `EventRecord` is the whole of how an
-event is serialized, for the wire as much as for history.
+`OutputDelta` belong to `tool_activity`, a live event that is broadcast and never
+stored (`ToolActivityLiveEvent`).
 
 A `thinking` record keeps its text in `Content`, beside `FullReasoning` and
 `Redacted`, and its `DurationMs` is the one Pockode measured rather than one a CLI
 reported, for Claude ([Thinking](#thinking)). `ContentDelta` and
 `FullReasoningDelta` belong to `thinking_delta`, which, like `tool_activity`, is
 never stored.
+
+### The client's copy is generated
+
+`server/agent/wirets` walks `WireTypes` and writes
+`web/src/types/wire.generated.ts`: one interface per record and live event,
+the `HistoryRecord` / `LiveEvent` unions that keep the two kinds apart, and
+every type they reach. It derives the JSON the way `encoding/json` does —
+exported fields, tags, `omitempty` as an optional field, an embedded struct
+flattened — and adds the two things reflection cannot see: the `type`
+discriminator, from `Type()`, and from the package's Go source the doc
+comments and, for a named string type, the union of its constants. Those
+constants may be declared in any package of the module, as
+`agent.MessageSubtype`'s are: the type sits beside the record, and the packages
+that send each kind of system message (`work`, `permreview`) declare the values,
+because they are the ones that know what each is for. The generator scans the
+module once and adds them after the type's own, from every file whatever its
+build constraint — a value only one platform sends is still one the client
+receives.
+
+It refuses what it cannot describe faithfully rather than guess: a nested type
+with a `MarshalJSON` of its own, an interface field, a map with non-string
+keys, two fields written under one name (or a field under the discriminator's),
+a name that is not a plain identifier, a generic type, a type declared twice
+(per platform), a value two constants of one type share, and a constant it
+could not file under its type's union — one whose value is not a string
+literal, one declared through an alias (the type's own package's or a
+function's), one in a package that dot-imports the type's, or one through an
+import of a directory whose files name two packages — which would otherwise
+drop out of the union unnoticed. A constant declared inside a function counts,
+unless the function declares a type of that name of its own. Anything outside
+this module (other than `time.Time` and `json.RawMessage`) is refused too —
+there is no source to read.
+`TestGeneratedMatchesMarshaledKeys` holds the output to `encoding/json` itself:
+every wire type, filled in to its last field and marshalled, writes exactly the
+keys its interface declares.
+
+The file is checked in so the web build needs no Go, and
+`TestGeneratedFileIsCurrent` fails when it is not what the Go types produce
+now. The Server workflow runs on a change to the file as well as to `server/`,
+and runs this test with `-count=1`: the test cache it restores does not watch a
+file outside the module, so a hand edit alone would otherwise replay an old
+pass. Regenerate with
+`cd server && UPDATE_WIRE_TYPES=1 go test ./agent/wirets`, then type-check the
+web client: what stops compiling is what the change asks of it.
+`normalizeEvent` switches over `WireEvent` with a `never` check in its default,
+so a new record type fails `tsc` until the reducer handles it.
+
+The generated types say what this server writes, not what every line on disk
+holds: a record from an older build may lack a field the type requires
+(`profile_id` on an account mark) or carry a value no constant names
+(`origin: "work"`), and a value the server hands through from a CLI unchecked —
+a plan step's status, a permission suggestion — may be one no constant names
+either. `normalizeEvent` is where both are
+settled, which is why it still checks closed sets rather than trusting them.
 
 ## Content Blocks and Attachments
 
@@ -974,7 +1012,7 @@ sees as one image.
 
 ### Why the Bytes Are Not in the Event
 
-An `EventRecord` is written whole into `history.jsonl` and replayed with every
+A record is written whole into `history.jsonl` and replayed with every
 page of scrollback. One image Claude hands over is around half a megabyte, so a
 session with a dozen screenshots in it would carry megabytes of base64 in every
 page, forever, for images the reader has already seen. The content is therefore
@@ -1637,7 +1675,7 @@ facts about the past are in the transcript.
 ### Answering
 
 Answers ride on the message that carries them: `chat.message` takes an
-`answering` array, and the message record keeps it (`EventRecord.Answering`).
+`answering` array, and the message record keeps it (`MessageRecord.Answering`).
 There is no second record per question — a second account of one act could
 disagree with the first.
 
@@ -2215,7 +2253,7 @@ the resume otherwise, which is a guard for undoing a single turn; a Pockode fork
 routinely discards many, so passing it would turn the normal case into a refusal.
 
 **Naming the anchor needs the CLI's own uuid for that message**, which Pockode
-keeps in `EventRecord.ProviderMessageID` — `HistorySeq` means nothing to the CLI,
+keeps in `TextRecord.ProviderMessageID` (and the other record types that carry it) — `HistorySeq` means nothing to the CLI,
 and one CLI message can become several records, so position cannot stand in for
 it. `forkAnchorMessage` takes the last record in the copied history that carries
 one. The message it names is kept whole, so a cut *inside* an assistant message
@@ -3089,8 +3127,8 @@ carry `turnId` as a required field (checked against the generated schema), and
 which turn a record belongs to is a fact that arrived with it — reading it back off
 the session would stamp an empty id on any item processed after `turn/completed`
 had moved on, silently making that record unusable as an anchor. It is stored in
-`EventRecord.ProviderMessageID`, the same field Claude puts a message uuid in
-([EventRecord](#eventrecord-unified-event-format)).
+`provider_message_id`, the same field Claude puts a message uuid in
+([History Records](#history-records-and-live-events)).
 
 **An anchor turn that is still running is refused**, says the schema the CLI
 generates (*The referenced turn cannot be in progress*) — which is what a fork
@@ -3439,7 +3477,7 @@ cannot carry, measured on 0.159.3:
   parent's thread also gets is ignored: it says nothing about how the turn
   ended.
 - **The figures it does have** go on that result, as `DurationMs` and
-  `subagent` ([EventRecord](#eventrecord-unified-event-format)), measured on 0.171.0: the child turn's
+  `subagent` ([History Records](#history-records-and-live-events)), measured on 0.171.0: the child turn's
   own `durationMs` — the subagent's run, which is what a Claude subagent's
   `totalDurationMs` measures too, and a later turn's for a later settle, as a
   resumed Claude subagent's call reports its own — `agent_id` = the child's
@@ -4505,7 +4543,9 @@ func (p *Process) streamEvents(ctx context.Context) {
         if reduce { transition = p.applyTurn(ctx, in) }
 
         // 2. Persistence
-        store.AppendToHistory(ctx, sessionID, event.ToRecord())
+        if record, ok := event.Encode().(agent.Record); ok {
+            store.AppendToHistory(ctx, sessionID, record)
+        }
 
         // 3. Turn state, announced
         if reduce { p.manager.emitTurn(p.sessionID, transition) }
@@ -5059,7 +5099,7 @@ the situation it is meant to rescue.
 
 ### History Storage
 
-History is stored in JSON Lines format, one `EventRecord` per line:
+History is stored in JSON Lines format, one `agent.Record` per line:
 
 ```
 <dataDir>/sessions/<sessionID>/history.jsonl
@@ -5085,7 +5125,7 @@ goes there, what only gets described, and what a fork does with it are in
 - Reads skip lines that are not valid JSON, or longer than the 9 MiB line limit.
   That limit covers `agent.MaxLineBytes` (8 MiB) **plus an envelope**, so a
   record we were able to append is never one we then refuse to load back: the
-  record is the CLI event wrapped in `EventRecord`'s own JSON, so two equal
+  record is the CLI event wrapped in the record's own JSON, so two equal
   ceilings would leave an envelope's worth of payloads writable and unreadable
   (`agent.TestLineLimitsCoverHistory`). The rest of the conversation stays
   loadable, and the count is reported so the session store can log it and
@@ -5122,13 +5162,14 @@ position in what `GetHistory` returns. The server hands the number out, on
 replayed history (`stampHistorySeq`) and on every `chat.*` notification of a
 persisted event alike, and the client only ever reads it back.
 
-**Counting records client-side is the trap the number exists to close.**
-`chat.Client.SendPermissionResponse` appends to history without broadcasting, so a
-client's own counter drifts by one for every permission decided in the session —
-silently, and a fork would then cut somewhere the user never chose. For the same reason the seqs a client knows
-are sparse, which is harmless: it can only anchor on a record it has seen.
-Broadcasting those responses to fill the gaps would trade a harmless hole for a
-real one.
+**Counting records client-side is the trap the number exists to close.** Not
+every record reaches every client as a notification: the tab that sent a message
+is left out of that message's broadcast, and a record written before a client
+subscribed (or while it was reconnecting) reaches it only on a history page. A
+client's own counter would drift by one for each — silently, and a fork would
+then cut somewhere the user never chose. The seqs a client knows can be sparse
+for the same reason, which is harmless: it can only anchor on a record it has
+seen.
 
 Sequence numbers are stamped on the way out and never written to the file. A seq
 is a record's address in one session's history, not part of what happened, and a

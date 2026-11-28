@@ -252,7 +252,7 @@ func TestClient_UnknownSessionStaysNotFound(t *testing.T) {
 // the point of the test below is that nothing passes it on.
 type failingAppendStore struct{ session.Store }
 
-func (failingAppendStore) AppendToHistory(context.Context, string, any) (session.HistorySeq, error) {
+func (failingAppendStore) AppendToHistory(context.Context, string, session.HistoryRecord) (session.HistorySeq, error) {
 	return 42, errors.New("history is not writable")
 }
 
@@ -275,7 +275,7 @@ func TestClient_MessageWithNoRecordHasNoAddress(t *testing.T) {
 
 	client := NewClient(store, pm)
 	broadcastSeq := session.HistorySeq(-1)
-	client.SetBroadcaster(func(_ string, _ agent.EventRecord, seq session.HistorySeq, _ any) {
+	client.SetBroadcaster(func(_ string, _ agent.Record, seq session.HistorySeq, _ any) {
 		broadcastSeq = seq
 	})
 

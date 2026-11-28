@@ -12,6 +12,7 @@ go run . --password=xxx --dev            # 运行（开发模式，不 serve 静
 go test ./...                            # 测试
 gofmt -w .                               # 格式化
 go vet ./...                             # 静态检查
+UPDATE_WIRE_TYPES=1 go test ./agent/wirets  # 改了 agent.WireTypes 里的类型（或它们引用的类型、文档注释、常量）后重新生成 web/src/types/wire.generated.ts，再到 web 跑 tsc
 
 # 构建（含前端）
 cd ../web && pnpm run build && cp -r dist ../server/static
@@ -42,6 +43,7 @@ main.go                 # 入口 + 路由 + graceful shutdown
 agent/                  # Agent 抽象（接口, 事件, 进程管理, 注册表）
   claude/               # Claude CLI 实现
   codex/                # Codex CLI 实现
+  wirets/               # 从 agent.WireTypes 生成前端的记录类型 web/src/types/wire.generated.ts；生成文件过期时 go test 失败（见 docs/code/agent-integration.md#the-clients-copy-is-generated）
   questioneval/         # question_post 引导评测：真实 CLI 跑场景并判定提问质量（付费，`integration` 标签 + `QUESTION_EVAL_RUNS`）
 agentrole/              # AgentRole 存储 + 类型定义
 apiroute/               # 本进程 API 路径判定（SPA handler 与 relay 代理共用）；/api/raw 的路由判定与日志中 capability 的遮蔽

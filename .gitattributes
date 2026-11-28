@@ -12,3 +12,5 @@
 # Written by a Go test (TestRawPageContract) and compared to what it would
 # write byte for byte, so a CRLF checkout fails it.
 web/src/test/page-hosts/raw-contract.json text eol=lf
+# Likewise, by TestGeneratedFileIsCurrent.
+web/src/types/wire.generated.ts text eol=lf

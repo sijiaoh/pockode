@@ -1001,7 +1001,7 @@ and the nudge limit is what bounds the cost of being wrong about that.
 
 A turn that failed on the CLI's credentials (`session.OutcomeAuthFailed`, from an
 error record carrying an auth mark — see
-[agent-event.md](../agent-event.md#eventrecord-serialization)) is the exception:
+[agent-event.md](../agent-event.md#records-serialization)) is the exception:
 it stops the work at once, ahead of the question checks, with a comment saying
 the CLI couldn't authenticate and where to sign in. Nothing the agent does can
 fix it, so every nudge would only buy another identical failure up to the limit.

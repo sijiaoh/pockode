@@ -1052,7 +1052,7 @@ func (m *Manager) create(name, workDir string) (*Worktree, error) {
 	}
 
 	chatClient := chat.NewClient(sessionStore, processManager)
-	chatClient.SetBroadcaster(func(sessionID string, record agent.EventRecord, seq session.HistorySeq, exclude any) {
+	chatClient.SetBroadcaster(func(sessionID string, record agent.Record, seq session.HistorySeq, exclude any) {
 		var n watch.Notifier
 		if exclude != nil {
 			n = exclude.(watch.Notifier)

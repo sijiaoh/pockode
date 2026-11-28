@@ -13,38 +13,41 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// Message subtypes identify which system-driven prompt produced a message.
-// The frontend maps these to display labels (Kickoff, Restart, ...).
+// Message subtypes identify which system-driven prompt produced a message:
+// values of agent.MessageSubtype, declared here because this package is what
+// sends them. The client's type for the field is their union, generated with
+// package permreview's (agent/wirets); the frontend maps them to display
+// labels (Kickoff, Restart, ...).
 const (
-	MessageSubtypeKickoff      = "kickoff"
-	MessageSubtypeRestart      = "restart"
-	MessageSubtypeAutoContinue = "auto_continue"
-	MessageSubtypeStepAdvance  = "step_advance"
-	MessageSubtypeReopen       = "reopen"
-	MessageSubtypeChildDone    = "child_done"
+	MessageSubtypeKickoff      agent.MessageSubtype = "kickoff"
+	MessageSubtypeRestart      agent.MessageSubtype = "restart"
+	MessageSubtypeAutoContinue agent.MessageSubtype = "auto_continue"
+	MessageSubtypeStepAdvance  agent.MessageSubtype = "step_advance"
+	MessageSubtypeReopen       agent.MessageSubtype = "reopen"
+	MessageSubtypeChildDone    agent.MessageSubtype = "child_done"
 	// MessageSubtypeChildQuestion is a question one of this story's subtasks
 	// posted, passed up in case the story can answer it without the user.
 	// Unlike the two below it, it clears no wait: the subtask carries on, and
 	// nothing the story was waiting for has happened.
-	MessageSubtypeChildQuestion = "child_question"
+	MessageSubtypeChildQuestion agent.MessageSubtype = "child_question"
 	// MessageSubtypeChildQuestionSettled is a subtask's question that stopped
 	// waiting — answered, declined or withdrawn — so that a story that
 	// forwarded it can withdraw its copy. It clears no wait either.
-	MessageSubtypeChildQuestionSettled = "child_question_settled"
+	MessageSubtypeChildQuestionSettled agent.MessageSubtype = "child_question_settled"
 	// MessageSubtypeWaitStranded is the counterpart of child_done for the case
 	// where nothing is going to close: the parent's wait on its subtasks has
 	// nothing left that could end it.
-	MessageSubtypeWaitStranded = "wait_stranded"
+	MessageSubtypeWaitStranded agent.MessageSubtype = "wait_stranded"
 	// The watched_story_* subtypes go to the session that started a story with
 	// a watch (Work.Watcher), which need not be running any work at all: the
 	// story closed, was stopped, or posted a question of its own.
-	MessageSubtypeWatchedStoryClosed   = "watched_story_closed"
-	MessageSubtypeWatchedStoryStopped  = "watched_story_stopped"
-	MessageSubtypeWatchedStoryQuestion = "watched_story_question"
+	MessageSubtypeWatchedStoryClosed   agent.MessageSubtype = "watched_story_closed"
+	MessageSubtypeWatchedStoryStopped  agent.MessageSubtype = "watched_story_stopped"
+	MessageSubtypeWatchedStoryQuestion agent.MessageSubtype = "watched_story_question"
 	// MessageSubtypeWatchedStoryQuestionSettled is the watcher's counterpart of
 	// child_question_settled: a question watched_story_question told it about
 	// stopped waiting, so a copy it forwarded can be withdrawn.
-	MessageSubtypeWatchedStoryQuestionSettled = "watched_story_question_settled"
+	MessageSubtypeWatchedStoryQuestionSettled agent.MessageSubtype = "watched_story_question_settled"
 )
 
 // NewMessageMeta builds the summary metadata for a system message.

@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pockode/server/agent"
 	"github.com/pockode/server/rpc"
 	"github.com/pockode/server/session"
 	"github.com/pockode/server/worktree"
@@ -22,7 +23,7 @@ func seedHistory(t *testing.T, env *testEnv, sessionID string, n int) *worktree.
 		t.Fatalf("create session: %v", err)
 	}
 	for i := 1; i <= n; i++ {
-		record := map[string]any{"type": "text", "content": fmt.Sprintf("m%d", i)}
+		record := agent.TextRecord{Content: fmt.Sprintf("m%d", i)}
 		if _, err := wt.SessionStore.AppendToHistory(bgCtx, sessionID, record); err != nil {
 			t.Fatalf("append record %d: %v", i, err)
 		}
@@ -165,7 +166,7 @@ func TestChatMessagesHistory_LiveEventsDoNotShiftOlderPages(t *testing.T) {
 	sub := env.subscribeChatMessagesWithLimit("sess", 2) // m5, m6
 
 	if _, err := wt.SessionStore.AppendToHistory(bgCtx, "sess",
-		map[string]any{"type": "text", "content": "m7"}); err != nil {
+		agent.TextRecord{Content: "m7"}); err != nil {
 		t.Fatalf("append live record: %v", err)
 	}
 

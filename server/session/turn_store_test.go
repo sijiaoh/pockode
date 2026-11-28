@@ -278,7 +278,7 @@ func TestFileStore_RestartClosesOutARunWhoseTurnWasIdle(t *testing.T) {
 		t.Fatalf("ApplyTurn failed: %v", err)
 	}
 	for _, record := range []string{"message", "done"} {
-		if _, err := store.AppendToHistory(ctx, "sess-1", map[string]any{"type": record}); err != nil {
+		if _, err := store.AppendToHistory(ctx, "sess-1", testRecord{"type": record}); err != nil {
 			t.Fatalf("AppendToHistory failed: %v", err)
 		}
 	}
@@ -326,7 +326,7 @@ func TestFileStore_RestartLeavesAClosedOutRunAlone(t *testing.T) {
 		t.Fatalf("Create failed: %v", err)
 	}
 	for _, record := range []string{"message", "done", HistoryTypeProcessEnded} {
-		if _, err := store.AppendToHistory(ctx, "sess-1", map[string]any{"type": record}); err != nil {
+		if _, err := store.AppendToHistory(ctx, "sess-1", testRecord{"type": record}); err != nil {
 			t.Fatalf("AppendToHistory failed: %v", err)
 		}
 	}

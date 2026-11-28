@@ -109,9 +109,13 @@ func TestProcess_WorkToolResultIsRecordedWithItsWork(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var rec agent.EventRecord
-	if err := json.Unmarshal(records[1], &rec); err != nil {
+	decoded, err := agent.DecodeRecord(records[1])
+	if err != nil {
 		t.Fatal(err)
+	}
+	rec, ok := decoded.(agent.ToolResultRecord)
+	if !ok {
+		t.Fatalf("records[1] = %T, want a tool result", decoded)
 	}
 	if rec.WorkRef == nil || *rec.WorkRef != (agent.WorkRef{ID: "t1", Type: "task", Title: "Design the row"}) {
 		t.Errorf("work_ref = %+v", rec.WorkRef)

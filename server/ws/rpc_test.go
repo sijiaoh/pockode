@@ -1632,9 +1632,9 @@ func TestHandler_SessionFork(t *testing.T) {
 	store := env.getMainWorktree().SessionStore
 	store.Create(bgCtx, "source", session.CreateSpec{AgentType: session.AgentTypeClaude, Mode: session.ModeYolo})
 	store.Update(bgCtx, "source", "Fix the parser")
-	store.AppendToHistory(bgCtx, "source", map[string]string{"type": "message", "content": "keep me"})
-	anchor, _ := store.AppendToHistory(bgCtx, "source", map[string]string{"type": "text", "content": "keep me too"})
-	store.AppendToHistory(bgCtx, "source", map[string]string{"type": "text", "content": "drop me"})
+	store.AppendToHistory(bgCtx, "source", agent.MessageRecord{Content: "keep me"})
+	anchor, _ := store.AppendToHistory(bgCtx, "source", agent.TextRecord{Content: "keep me too"})
+	store.AppendToHistory(bgCtx, "source", agent.TextRecord{Content: "drop me"})
 
 	resp := env.call("session.fork", rpc.SessionForkParams{SessionID: "source", AnchorSeq: anchor})
 	if resp.Error != nil {
@@ -1688,7 +1688,7 @@ func TestHandler_SessionFork_NoHistoryBeforeAnchor(t *testing.T) {
 	env := newForkableTestEnv(t)
 	store := env.getMainWorktree().SessionStore
 	store.Create(bgCtx, "source", session.CreateSpec{AgentType: session.AgentTypeClaude, Mode: session.ModeYolo})
-	anchor, _ := store.AppendToHistory(bgCtx, "source", map[string]string{"type": "message", "content": "the first thing"})
+	anchor, _ := store.AppendToHistory(bgCtx, "source", agent.MessageRecord{Content: "the first thing"})
 
 	resp := env.call("session.fork", rpc.SessionForkParams{SessionID: "source", AnchorSeq: anchor})
 	if resp.Error == nil {
@@ -1723,7 +1723,7 @@ func TestHandler_SessionFork_AgentCannotFork(t *testing.T) {
 	env := newTestEnv(t, &mockAgent{})
 	store := env.getMainWorktree().SessionStore
 	store.Create(bgCtx, "source", session.CreateSpec{AgentType: session.AgentTypeClaude, Mode: session.ModeYolo})
-	anchor, _ := store.AppendToHistory(bgCtx, "source", map[string]string{"type": "message", "content": "keep me"})
+	anchor, _ := store.AppendToHistory(bgCtx, "source", agent.MessageRecord{Content: "keep me"})
 
 	resp := env.call("session.fork", rpc.SessionForkParams{SessionID: "source", AnchorSeq: anchor})
 
@@ -1900,7 +1900,7 @@ func TestHandler_ChatMessagesSubscribe_History(t *testing.T) {
 	env := newTestEnv(t, &mockAgent{})
 	store := env.getMainWorktree().SessionStore
 	sess, _ := store.Create(bgCtx, "with-history", session.CreateSpec{})
-	store.AppendToHistory(bgCtx, sess.ID, map[string]string{"type": "message", "content": "hello"})
+	store.AppendToHistory(bgCtx, sess.ID, agent.MessageRecord{Content: "hello"})
 
 	result := env.subscribeChatMessages(sess.ID)
 
