@@ -35,7 +35,7 @@ describe("a Mermaid diagram in a real browser", () => {
 
 		await waitFor(
 			() => expect(frame().getBoundingClientRect().height).toBeGreaterThan(40),
-			{ timeout: 20_000 },
+			{ timeout: 15_000 },
 		);
 	});
 
@@ -50,7 +50,7 @@ describe("a Mermaid diagram in a real browser", () => {
 		const load = await screen.findByRole(
 			"button",
 			{ name: "Load diagram images from img.example" },
-			{ timeout: 20_000 },
+			{ timeout: 15_000 },
 		);
 		expect(policyOf(frame())).toContain("img-src data:;");
 		expect(frame().getBoundingClientRect().height).toBeGreaterThan(0);
@@ -64,7 +64,7 @@ describe("a Mermaid diagram in a real browser", () => {
 		expect(screen.getByText("Loading diagram...")).toBeInTheDocument();
 		await waitFor(
 			() => expect(screen.queryByText("Loading diagram...")).toBeNull(),
-			{ timeout: 20_000 },
+			{ timeout: 15_000 },
 		);
 		expect(frame().getBoundingClientRect().height).toBeGreaterThan(0);
 	});

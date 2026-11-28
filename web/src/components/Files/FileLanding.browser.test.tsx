@@ -347,7 +347,7 @@ describe("a file opened at a line", () => {
 		await view();
 		expect(band()).toBeTruthy();
 
-		await expect.poll(() => band(), { timeout: 4_000 }).toBeNull();
+		await expect.poll(() => band()).toBeNull();
 		expect(number()).toBeNull();
 	});
 });

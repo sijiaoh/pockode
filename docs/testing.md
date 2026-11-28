@@ -46,10 +46,16 @@ unrelated. Match the message before touching a number.
 |---|---|---|
 | `Test timed out in <n>ms` | `testTimeout` / `hookTimeout` | `packages/shared/vitest-runtime.js` |
 | `[vitest-pool-runner]: Timeout waiting for worker to respond` | `maxWorkers` — the worker pool is starved, no individual test is slow. `poolOptions` and `fileParallelism` are the other levers, both left at their defaults | `packages/shared/vitest-runtime.js` |
-| testing-library's `Unable to find an element …` with a DOM dump, from a `findBy*` | `asyncUtilTimeout` — testing-library's own default is 1000ms however high `testTimeout` is, and it is enforced by testing-library, not vitest. `web` raises it to 5000ms, deliberately below `testTimeout` | `web/src/test/setup.ts` |
+| The wait's own failure — testing-library's `Unable to find an element …` with a DOM dump from a `findBy*` / `waitFor`, or the last assertion error from `vi.waitFor`, `vi.waitUntil` or `expect.poll` | `WAIT_TIMEOUT_MS`, 5000ms, deliberately below `testTimeout`. Each of those waits defaults to 1000ms on its own however high `testTimeout` is, and enforces it itself, not through vitest's test clock. `expect.poll` reads it from config; the rest are set by `web/src/test/waitPolicy.ts` (and `web-cluster/src/test/setup.ts`), which get it through `provide`. `expect.element` is the exception: under the Playwright provider vitest gives it what is left of `testTimeout`, less 100ms | `packages/shared/vitest-runtime.js` |
 
 The third one catches people out: raising `testTimeout` does nothing for a
-`findBy*` that already gave up, and the reverse holds too.
+wait that already gave up, and the reverse holds too.
+
+A test gets the wait timeout without asking: both of `web`'s setup files import
+`waitPolicy.ts`, which configures testing-library and wraps `vi.waitFor` /
+`vi.waitUntil` (vitest has no setting for those two). A config that does not
+spread `vitestRuntimeOptions` provides no value, and `waitPolicy.ts` throws at
+setup rather than let every wait fall back to 1s.
 
 The same split applies to the overrides written on a test, and mixing them up
 is how a file ends up carrying both numbers without saying which is which:
@@ -58,17 +64,25 @@ is how a file ends up carrying both numbers without saying which is which:
   `testTimeout`. Written as `20_000` it is a no-op — that *is* the shared
   default — and the comment usually beside it ("outruns the default 5s") states
   a default that no longer holds. Delete it rather than copy it.
-- `findBy*(…, …, { timeout: n })` and `waitFor(fn, { timeout: n })` are
-  `asyncUtilTimeout`, a different knob with a different default. A value there
-  is a real change, and must stay below `testTimeout` or the DOM dump is lost to
-  a bare `Test timed out`.
+- A timeout written on a wait — `findBy*(…, …, { timeout: n })`,
+  testing-library's `waitFor(fn, { timeout: n })`, `vi.waitFor(fn, n)` or
+  `vi.waitFor(fn, { timeout: n })`, the same for `vi.waitUntil`, and
+  `expect.poll(fn, { timeout: n })` — overrides `WAIT_TIMEOUT_MS` and is used
+  as written. That is how a test that should fail fast opts out. Passing only
+  `{ interval }` keeps the shared timeout. A value written to give a wait
+  *more* time than the old 1s is now a no-op at 5000ms and a cut below it;
+  delete it. One above 5000ms must stay below `testTimeout`, or the wait's own
+  message is lost to a bare `Test timed out`.
+  `web/src/test/waitPolicy.test.ts` holds every API past the 1s default, and
+  checks that an explicit 50ms still gives up well short of the shared value.
 
 Neither is the fix when the thing being waited for is a debounce: see the next
 section.
 
 The chosen values, and the measurements each was derived from, are in the
-comments at those two files. What is worth saying here is the conclusion none of
-them states on its own: **the failures were oversubscription, not slow tests.**
+comments in `packages/shared/vitest-runtime.js`. What is worth saying here is
+the conclusion none of them states on its own: **the failures were
+oversubscription, not slow tests.**
 Vitest defaults `maxWorkers` to `cores - 1`, which assumes the suite owns the
 machine. Each jsdom worker is a fork carrying a full DOM, so on a developer box
 shared with other agents the limit reached first is memory, and the suite spends
@@ -308,10 +322,10 @@ jsdom. The glob is written once, in `web/vitest.files.ts`: the browser config
 includes it and the jsdom config excludes it. So `pnpm run test` never needs a
 browser and never runs one of these files. `web/vitest.browser.config.ts` loads
 the Tailwind plugin, and `web/src/test/browserSetup.ts` imports the app's real
-stylesheet, so classes get their real sizes. It also gives testing-library the
-same `asyncUtilTimeout` as `setup.ts`. Runs are headless. Add
-`--browser.headless=false` to watch one. `web/src/test/layout.browser.test.tsx`
-is the smoke test for all of that: it fails if the styles or the scroll clamping
+stylesheet, so classes get their real sizes. It also imports the same
+`waitPolicy.ts` as `setup.ts`, so waits there get the same timeout. Runs are
+headless. Add `--browser.headless=false` to watch one.
+`web/src/test/layout.browser.test.tsx` is the smoke test for all of that: it fails if the styles or the scroll clamping
 are not real.
 
 The config also loads a stand-in for `/api/raw` (`web/vitest.rawPages.ts`), so

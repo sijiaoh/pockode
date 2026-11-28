@@ -236,9 +236,7 @@ describe("CommitActions", () => {
 		await screen.findByRole("button", { name: "Copied" });
 		expect(onClose).not.toHaveBeenCalled();
 
-		await vi.waitFor(() => expect(onClose).toHaveBeenCalled(), {
-			timeout: 2000,
-		});
+		await vi.waitFor(() => expect(onClose).toHaveBeenCalled());
 	});
 
 	// Creating a session for the text can take a while, and the menu's other

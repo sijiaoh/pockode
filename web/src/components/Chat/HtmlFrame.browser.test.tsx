@@ -83,11 +83,7 @@ function policyOf(frame: HTMLIFrameElement): string {
 }
 
 function strip() {
-	return screen.findByRole(
-		"group",
-		{ name: "Hosts not loaded" },
-		{ timeout: 5000 },
-	);
+	return screen.findByRole("group", { name: "Hosts not loaded" });
 }
 
 /** Time for anything a page was going to do to have happened. */
@@ -123,9 +119,7 @@ describe("an agent's page in a real browser", () => {
 			}),
 		);
 
-		await waitFor(() => expect(signals).toContain("script"), {
-			timeout: 5000,
-		});
+		await waitFor(() => expect(signals).toContain("script"));
 		expect(policyOf(wrapperOf())).toContain(`https://${OTHER_HOST}`);
 		expect(screen.queryByRole("group")).toBeNull();
 		// Where the Load was, not the top of the screen.
@@ -143,16 +137,12 @@ describe("an agent's page in a real browser", () => {
 				<HtmlFrame html={html} title="Full screen" pageKey={KEY} />
 			</>,
 		);
-		await waitFor(() => expect(screen.getAllByRole("group")).toHaveLength(2), {
-			timeout: 5000,
-		});
+		await waitFor(() => expect(screen.getAllByRole("group")).toHaveLength(2));
 		const [card, fullScreen] = screen.getAllByRole("group");
 
 		await settle(PRESS_HOLD_MS + 100);
 		await user.click(within(fullScreen).getByRole("button", { name: /^Load/ }));
-		await waitFor(() => expect(signals).toEqual(["script"]), {
-			timeout: 5000,
-		});
+		await waitFor(() => expect(signals).toEqual(["script"]));
 
 		expect(card).toHaveTextContent(`Allowed · ${OTHER_HOST}`);
 		await settle(1000);
@@ -163,9 +153,7 @@ describe("an agent's page in a real browser", () => {
 				name: `Reload the page to load ${OTHER_HOST}`,
 			}),
 		);
-		await waitFor(() => expect(signals).toEqual(["script", "script"]), {
-			timeout: 5000,
-		});
+		await waitFor(() => expect(signals).toEqual(["script", "script"]));
 		expect(screen.queryByRole("group")).toBeNull();
 	});
 
@@ -188,33 +176,27 @@ var f=document.createElement("iframe");f.src="https://frame.example/";document.b
 		const refused = await strip();
 		// The strip is up at the first refusal; Review only past three hosts.
 		await user.click(
-			await within(refused).findByRole(
-				"button",
-				{ name: "Review" },
-				{ timeout: 5000 },
-			),
+			await within(refused).findByRole("button", { name: "Review" }),
 		);
 		const listed = () =>
 			within(refused)
 				.getAllByRole("listitem")
 				.map((item) => item.textContent);
-		await waitFor(
-			() =>
-				expect(listed()).toEqual(
-					expect.arrayContaining([
-						"style.example",
-						"font.example",
-						"img.example",
-						"fetch.example",
-						"socket.example",
-						"beacon.example",
-						"events.example",
-						"xhr.example",
-						// A frame never reaches a host here, allowed or not.
-						"frame.example (can't be allowed)",
-					]),
-				),
-			{ timeout: 5000 },
+		await waitFor(() =>
+			expect(listed()).toEqual(
+				expect.arrayContaining([
+					"style.example",
+					"font.example",
+					"img.example",
+					"fetch.example",
+					"socket.example",
+					"beacon.example",
+					"events.example",
+					"xhr.example",
+					// A frame never reaches a host here, allowed or not.
+					"frame.example (can't be allowed)",
+				]),
+			),
 		);
 	});
 
@@ -256,9 +238,7 @@ for (var target of [parent, parent.parent, top]) {
 			frame.srcdoc = `<meta http-equiv="Content-Security-Policy" content="${pagePolicy([])}"><script>location.href = "${LANDED_URL}"</script>`;
 			document.body.append(frame);
 			try {
-				await waitFor(() => expect(signals).toContain("landed"), {
-					timeout: 5000,
-				});
+				await waitFor(() => expect(signals).toContain("landed"));
 			} finally {
 				frame.remove();
 			}
@@ -313,9 +293,7 @@ for (var target of [parent, parent.parent, top]) {
 
 			if (says) {
 				const refused = await strip();
-				await waitFor(() => expect(refused).toHaveTextContent(says), {
-					timeout: 5000,
-				});
+				await waitFor(() => expect(refused).toHaveTextContent(says));
 			}
 			await settle(2000);
 			expect(signals).not.toContain("landed");
@@ -332,9 +310,7 @@ for (var target of [parent, parent.parent, top]) {
 			const refused = await strip();
 			await settle(PRESS_HOLD_MS + 100);
 			await user.click(within(refused).getByRole("button", { name: /^Load/ }));
-			await waitFor(() => expect(signals).toContain("script"), {
-				timeout: 5000,
-			});
+			await waitFor(() => expect(signals).toContain("script"));
 
 			await settle(2000);
 			expect(signals).not.toContain("landed");
@@ -348,17 +324,13 @@ addEventListener("message", function(e){ if (e.data === "go") location.href = "$
 			const refused = await strip();
 			await settle(PRESS_HOLD_MS + 100);
 			await user.click(within(refused).getByRole("button", { name: /^Load/ }));
-			await waitFor(() => expect(signals).toContain("script"), {
-				timeout: 5000,
-			});
+			await waitFor(() => expect(signals).toContain("script"));
 
 			// Asked by the test, which reaches the page as any window may.
 			wrapperOf().contentWindow?.[0]?.postMessage("go", "*");
 
 			const left = await strip();
-			await waitFor(() => expect(left).toHaveTextContent("Page left"), {
-				timeout: 5000,
-			});
+			await waitFor(() => expect(left).toHaveTextContent("Page left"));
 			await settle(1000);
 			expect(signals).not.toContain("landed");
 		});
@@ -400,9 +372,7 @@ addEventListener("message", function(e){ if (e.data === "go") location.href = "$
 			await realUserEvent.click(
 				within(refused).getByRole("button", { name: /^Load/ }),
 			);
-			await waitFor(() => expect(signals).toContain("script"), {
-				timeout: 5000,
-			});
+			await waitFor(() => expect(signals).toContain("script"));
 
 			const asked = await strip();
 			await waitFor(() =>
@@ -497,12 +467,7 @@ describe("an agent's page reaching the project", () => {
 	});
 
 	async function signalled(...names: string[]) {
-		await waitFor(
-			() => expect(signals).toEqual(expect.arrayContaining(names)),
-			{
-				timeout: 5000,
-			},
-		);
+		await waitFor(() => expect(signals).toEqual(expect.arrayContaining(names)));
 	}
 
 	it("loads images, video, audio, scripts and data by paths from the root", async () => {
