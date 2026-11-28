@@ -15,12 +15,14 @@ import {
 	type ChatItems,
 	createChatItems,
 	failEcho,
+	forgetResume,
 	installNewestPage,
 	pressAnswer,
 	readServerClock,
-	removeEcho,
-	type SentRecord,
-	settleEcho,
+	resumeFrom,
+	resumeTranscript,
+	sentEcho,
+	takeBackEcho,
 } from "../lib/chatItems";
 import type { HtmlActionInput } from "../lib/rpc";
 import {
@@ -43,6 +45,7 @@ import {
 	type ConnectionStatus,
 	isInvalidParamsRejection,
 	isPermissionReviewerRejection,
+	isServerRejection,
 	useWSStore,
 } from "../lib/wsStore";
 import type {
@@ -111,7 +114,8 @@ interface UseChatMessagesReturn {
 	 * commit that prepended history from the commits that merely appended to it.
 	 * Read for two things: where the conversation begins is only said to a reader
 	 * who has actually paged back, and a count that goes *down* is the one sign
-	 * that a reconnect replaced the transcript (`useTranscriptScroll`).
+	 * that a reconnect replaced the transcript with a snapshot
+	 * (`useTranscriptScroll`); one that resumed it leaves the count alone.
 	 */
 	loadedHistoryPages: number;
 	loadMoreHistory: () => Promise<void>;
@@ -185,8 +189,8 @@ interface UseChatMessagesReturn {
 	) => Promise<boolean>;
 	/**
 	 * Sends what a page sent (docs/tool-call-ui.md § The action message),
-	 * echoed into the transcript as a typed message is — the sender is left
-	 * out of the broadcast. Rejects on every failure, since the page that sent
+	 * echoed into the transcript as a typed message is. Rejects on every
+	 * failure, since the page that sent
 	 * it is told the outcome: a refusal takes the echo back, as nothing was
 	 * recorded; anything else leaves it with the failure under it, as a typed
 	 * message's, because it may have been delivered.
@@ -314,8 +318,10 @@ export function useChatMessages({
 	// the start of the session has been reached.
 	const nextBeforeSeqRef = useRef<number | undefined>(undefined);
 	// Identifies which transcript a page request was made against. A session
-	// switch or a re-subscribe replaces the transcript wholesale, and a page still
-	// in flight would otherwise be added to the one that took its place.
+	// switch or a snapshot replaces the transcript wholesale, and a page still in
+	// flight would otherwise be added to the one that took its place; a resume
+	// gives up a page in flight too, since it was asked over the connection
+	// that is gone.
 	const historyGenerationRef = useRef(0);
 	const isLoadingMoreRef = useRef(false);
 
@@ -543,9 +549,11 @@ export function useChatMessages({
 	const handleNotification = useCallback(
 		(notification: ChatNotification) => {
 			// The server could not tell this subscription something and will send
-			// nothing more on it, so the transcript is rebuilt exactly as after a
-			// reconnect: a fresh subscription, whose snapshot replaces it wholesale.
+			// nothing more on it, so the transcript is rebuilt: a fresh
+			// subscription, whose snapshot replaces it wholesale. Not a resume —
+			// a hole in the stream is something the copy cannot vouch past.
 			if (notification.type === "resync") {
+				forgetResume(storeRef.current);
 				void resubscribeRef.current();
 				return;
 			}
@@ -616,6 +624,10 @@ export function useChatMessages({
 	// page is in, and replayed after — the store skips what the page already
 	// holds (`through_seq`).
 	//
+	// A re-subscribe — a reconnect, on a phone constantly — asks to resume the
+	// copy held (`resumeFrom`), so what the user had scrolled back through
+	// survives it; the reply says whether it did (`handleSubscribed`).
+	//
 	// Loading state is managed by the initial value and the reset above, so
 	// re-subscribing on reconnect won't flash the spinner. It also stays true for
 	// as long as `enabled` is false, which is what makes "waiting for the session
@@ -623,17 +635,37 @@ export function useChatMessages({
 	// callers timing a loading indicator against it.
 	const subscribe = useCallback(
 		(onNotification: (notification: ChatNotification) => void) =>
-			chatMessagesSubscribe(sessionId, onNotification),
+			chatMessagesSubscribe(
+				sessionId,
+				onNotification,
+				resumeFrom(storeRef.current),
+			),
 		[sessionId],
+	);
+
+	// Deltas held for the streams a snapshot or a resume replaces: the streams
+	// it carries already include them.
+	const replaceStreams = useCallback(
+		(streams: ChatStreams | undefined) => {
+			pendingToolDeltasRef.current.clear();
+			endThinking();
+			setLiveThinking(thinkingOf(streams));
+		},
+		[endThinking],
 	);
 
 	// `receivedAt` is when the page reached this client, which its clock reading
 	// is taken against: a page installed from a cache arrived before now.
 	const installPage = useCallback(
-		(page: ChatPage, streams: ChatStreams | undefined, receivedAt: number) => {
-			// Subscribing hands back the newest page only, and a re-subscribe
-			// hands it back again: pages paged in before a reconnect are gone, so
-			// the paging state starts over with them.
+		(
+			page: ChatPage,
+			streams: ChatStreams | undefined,
+			receivedAt: number,
+			instance?: string,
+		) => {
+			// A snapshot is the newest page only, and a re-subscribe given one
+			// hands it back again: pages paged in before the reconnect are gone,
+			// so the paging state starts over with them.
 			historyGenerationRef.current++;
 			// Both halves of "a page is on its way", or the flag left standing
 			// would be read as one: the request this generation bump discards
@@ -648,27 +680,65 @@ export function useChatMessages({
 			setLoadedHistoryPages(0);
 			setHistoryError(null);
 			nextBeforeSeqRef.current = page.next_before_seq;
-			// Deltas held for the transcript being replaced: the snapshot's
-			// streams already include them.
-			pendingToolDeltasRef.current.clear();
-			endThinking();
-			setLiveThinking(thinkingOf(streams));
+			replaceStreams(streams);
 			installNewestPage(
 				storeRef.current,
 				page,
 				streams,
 				readServerClock(page, receivedAt),
+				instance,
 			);
 			commit();
 			setIsLoadingHistory(false);
 		},
-		[commit, endThinking],
+		[commit, replaceStreams],
+	);
+
+	// What a resumed subscription starts from: the copy held, brought up to
+	// date. The pages paged in stay, and with them the cursor for the next.
+	// An older page asked for over the connection that is gone has failed
+	// with it — or, on a resubscribe over the same connection, is given up
+	// here — so its error is not left stopping the reserve from asking again.
+	const resumePage = useCallback(
+		(
+			initial: Extract<ChatMessagesSubscribeResult, { delivery: "resume" }>,
+			receivedAt: number,
+			instance: string | undefined,
+		) => {
+			if (isLoadingMoreRef.current) {
+				historyGenerationRef.current++;
+				isLoadingMoreRef.current = false;
+				setIsLoadingMoreHistory(false);
+			}
+			setHistoryError(null);
+			replaceStreams(initial.streams);
+			resumeTranscript(
+				storeRef.current,
+				initial.update,
+				initial.streams,
+				readServerClock(initial, receivedAt),
+				new Date(receivedAt),
+				instance,
+			);
+			commit();
+			setIsLoadingHistory(false);
+		},
+		[commit, replaceStreams],
 	);
 
 	const handleSubscribed = useCallback(
-		(initial: ChatMessagesSubscribeResult) =>
-			installPage(initial, initial.streams, Date.now()),
-		[installPage],
+		(initial: ChatMessagesSubscribeResult) => {
+			// The instance the reply came over is the one that is up: the
+			// connection it was asked on cannot have been replaced meanwhile
+			// without the reply being lost with it.
+			const instance = useWSStore.getState().serverInstance || undefined;
+			if (initial.delivery === "resume") {
+				resumePage(initial, Date.now(), instance);
+				return;
+			}
+			installPage(initial, initial.streams, Date.now(), instance);
+		},
+		[installPage, resumePage],
 	);
 
 	const handleSubscribeError = useCallback((err: unknown) => {
@@ -756,20 +826,24 @@ export function useChatMessages({
 
 	/**
 	 * The one path a message sent from this screen takes: echoed at once — with
-	 * a placeholder for the reply when it opens a turn — then filled in from the
-	 * server's reply, or taken back, or left with the failure under it. Typed
-	 * messages and page actions differ only in what they send and what the
-	 * reply fills in.
+	 * a placeholder for the reply when it opens a turn — under the id it is
+	 * sent with, then taken back, or left with the failure under it. What the
+	 * record holds arrives with the record, on the subscription, and the echo
+	 * becomes that item by the id (`claimEcho`); the reply only says the send
+	 * is over. Typed messages and page actions differ only in what they send.
 	 */
 	const deliverEcho = useCallback(
 		async (
 			echo: UserMessage,
-			send: () => Promise<SentRecord>,
+			send: () => Promise<void>,
 			{
 				takeBack,
 				rethrow,
 			}: {
-				/** Whether a failure means nothing was recorded, so the echo goes. */
+				/**
+				 * Whether a failure means nothing was recorded, so the echo goes —
+				 * unless its record arrived after all (`takeBackEcho`).
+				 */
 				takeBack: (error: unknown) => boolean;
 				/** Rethrow a failure that was reported into the transcript too. */
 				rethrow: boolean;
@@ -788,34 +862,34 @@ export function useChatMessages({
 			commit();
 
 			try {
-				// The sender is left out of the update carrying its own message,
-				// so the reply is its one copy of what the record holds — what the
-				// agent was actually sent, the files as stored, the record's id
-				// and seq, and the item later updates name it by.
-				const sent = await send();
-				settleEcho(storeRef.current, echo.id, sent);
+				await send();
+				sentEcho(storeRef.current, echo.id);
 				commit();
 				return true;
 			} catch (error) {
 				console.error("Failed to send message:", error);
-				if (takeBack(error)) {
-					removeEcho(storeRef.current, echo.id);
-					commit();
-					throw error;
-				}
 				// The server's reason is what tells a missing CLI apart from a
 				// dropped connection; without it every failure reads the same.
-				// Said under the message it failed to deliver: it may have been
-				// delivered, and silence would leave it looking sent.
 				const reason =
 					error instanceof Error && error.message
 						? error.message
 						: "Unknown error";
-				failEcho(
-					storeRef.current,
-					echo.id,
-					`Failed to send message: ${reason}`,
-				);
+				const text = `Failed to send message: ${reason}`;
+				if (takeBack(error)) {
+					takeBackEcho(
+						storeRef.current,
+						echo.id,
+						text,
+						isServerRejection(error),
+					);
+					commit();
+					throw error;
+				}
+				// Said under the message it failed to deliver: it may have been
+				// delivered — a reply lost with the connection — and silence would
+				// leave it looking sent. Its record arriving takes such a failure
+				// back; not one the server answered with.
+				failEcho(storeRef.current, echo.id, text, isServerRejection(error));
 				commit();
 				if (rethrow) throw error;
 				return false;
@@ -840,8 +914,11 @@ export function useChatMessages({
 			// expand, and arrives with the reply.
 			const command = parsePockodeCommand(content) ?? undefined;
 
+			// The id it is sent under, and so the id its record will carry.
+			const id = generateUUID();
 			const echo: UserMessage = {
-				id: generateUUID(),
+				id,
+				messageId: id,
 				role: "user",
 				content: command ? "" : content,
 				status: "complete",
@@ -855,43 +932,24 @@ export function useChatMessages({
 
 			const sent = await deliverEcho(
 				echo,
-				async () => {
-					const {
-						seq,
-						itemId,
-						messageId,
-						expanded,
-						attachments: described,
-						observedAt,
-					} = await sendMessage(
+				() =>
+					sendMessage(
 						sessionId,
+						id,
 						content,
 						answers && toAnswerParams(answers),
 						// Only when there are any, so a message without files is sent with
 						// exactly the arguments it always was.
 						...(files ? [toAttachmentParams(files)] : []),
-					);
-					// A command's parse and prompt, or the body written from the
-					// answers; the files with the type the stored bytes are, where the
-					// echo had only the browser's guess.
-					return {
-						seq,
-						itemId,
-						observedAt,
-						update: {
-							...expanded,
-							...(described ? { attachments: described } : {}),
-							...(messageId ? { messageId } : {}),
-							...(seq !== undefined ? { anchorSeq: seq } : {}),
-						},
-					};
-				},
+					),
 				{
-					// An answering send is refused whole — nothing was written, nothing
-					// was delivered, and the questions are all still open — so the echo
-					// is taken back out rather than left looking sent with a failure
-					// pinned under it. The sheet is where the reason belongs: it holds
-					// the drafts, and it is what the user is looking at.
+					// An answering send that fails leaves the questions all still open,
+					// and is refused whole when it is refused — nothing written, nothing
+					// delivered — so the echo is taken back out rather than left looking
+					// sent with a failure pinned under it. The sheet is where the reason
+					// belongs: it holds the drafts, and it is what the user is looking
+					// at. One whose record was written before its handover failed stays
+					// (`takeBackEcho`).
 					//
 					// A command the server refused (an unknown name, a worktree with no
 					// branch, or a send refused as any message's would be) is gone the
@@ -926,8 +984,10 @@ export function useChatMessages({
 		async (input: HtmlActionInput): Promise<void> => {
 			// Drawn from `htmlAction` from the first frame; `content` is the
 			// agent's text, which only the server writes.
+			const id = generateUUID();
 			const echo: UserMessage = {
-				id: generateUUID(),
+				id,
+				messageId: id,
 				role: "user",
 				content: "",
 				status: "complete",
@@ -938,27 +998,12 @@ export function useChatMessages({
 					data: input.data === undefined ? {} : input.data,
 				},
 			};
-			await deliverEcho(
-				echo,
-				async () => {
-					const { seq, itemId, messageId, content, htmlAction, observedAt } =
-						await sendHtmlAction(sessionId, input);
-					return {
-						seq,
-						itemId,
-						observedAt,
-						update: {
-							...(content !== undefined ? { content } : {}),
-							...(htmlAction ? { htmlAction } : {}),
-							...(messageId ? { messageId } : {}),
-							...(seq !== undefined ? { anchorSeq: seq } : {}),
-						},
-					};
-				},
-				// A refusal recorded nothing, so its echo goes; the page that sent
-				// it is told either way, and says it under the card.
-				{ takeBack: isInvalidParamsRejection, rethrow: true },
-			);
+			// A refusal recorded nothing, so its echo goes; the page that sent it
+			// is told either way, and says it under the card.
+			await deliverEcho(echo, () => sendHtmlAction(sessionId, id, input), {
+				takeBack: isInvalidParamsRejection,
+				rethrow: true,
+			});
 		},
 		[sessionId, deliverEcho],
 	);

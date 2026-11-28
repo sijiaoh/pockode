@@ -318,10 +318,10 @@ files that say which is which: `utils/messageActions.ts` answers the first,
 `isForkableMessage`, `resolveForkAnchor`)
 
 - A message no record names cannot be pointed at, and the client must not
-  number it itself (`no-anchor-seq`, *Data contract*). Two ways to get there,
-  both rare: the server could not persist the record, or it is too old to answer
-  `chat.message` with a seq at all — for such a server, every message this tab
-  sends stays unaddressable until a reload.
+  number it itself (`no-anchor-seq`, *Data contract*). Two ways to get there:
+  this tab's own send whose record has not arrived yet, which it can be forked
+  from once the record does, and — rarely — a record the server could not
+  persist, which never gets one.
 - A message holding a pending permission request is not a settled transcript to
   cut at (`pending-request`). A posted question is deliberately **not** one of
   these: it belongs to the session rather than to the message, the fork
@@ -349,12 +349,11 @@ and a half-truth to the one who could not. Were the two questions still one, as
 they were while `isForkableMessage` gated the entry point itself, a missing
 `seq` would silently cost the message every other action it will ever be given.
 
-**A message the user just sent is not in that set, and closing that hole is why
-`chat.message` has a reply at all.** The server leaves a sender out of the
-broadcast carrying every other record's `seq` — it has already echoed the message
-into its own transcript — so the reply is the one place it can learn where its
-own message landed (`rpc.MessageResult`). Without it every prompt typed since the
-page loaded offered a fork row it could not run until a reload, which is
+**A message the user just sent is in that set as soon as its record arrives.**
+The sender is told of its own record like every other tab, and knows it by the
+`message_id` it sent the message under. Before that — when a sender was left out
+of its own record and learned the address from the send's reply — every prompt
+typed since the page loaded offered a fork row it could not run until a reload, which is
 precisely the message this feature exists to fork from, at precisely the moment
 the user wants to: just after reading an answer they did not like. Rewording the
 sentence would have described that state more honestly without making it any
@@ -749,9 +748,8 @@ is folded from *several* history records, so neither a message id nor a message
 index can name a cut point. Each history record needs a server-assigned,
 monotonic **`seq`**, and the client is given the ones it needs by every route a
 message can reach it: the items of a page and of an update carry their first
-and last record's (`seq`, `last_seq`), and — for the one message a sender is
-excluded from being told about, its own — the reply to `chat.message`
-(`rpc.MessageResult`). A message then carries `anchorSeq` — the `seq` of the
+and last record's (`seq`, `last_seq`) — the sender's own message included,
+whose record reaches it like any other. A message then carries `anchorSeq` — the `seq` of the
 last record folded into it, read off its items
 ([code/frontend-state.md](code/frontend-state.md#bubbles)) — the same whichever
 route delivered it, so what a client can fork from does not depend on how it

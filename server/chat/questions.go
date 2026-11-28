@@ -151,7 +151,7 @@ func (c *Client) postQuestion(ctx context.Context, sessionID string, spec Questi
 	// below. Nobody answers a question in that moment — a person has to read
 	// it first — and should the turn not take it, the next reload shows the
 	// same record anyway.
-	if _, err := c.stream.Append(ctx, sessionID, record, nil); err != nil {
+	if _, err := c.stream.Append(ctx, sessionID, record); err != nil {
 		// Refused rather than degraded, unlike a message: a message is worth
 		// answering whether or not the transcript kept it, but a question the
 		// transcript never heard cannot be inherited by a fork and cannot be
@@ -239,7 +239,7 @@ func (c *Client) withdraw(ctx context.Context, sessionID, requestID string, reas
 	record := agent.RequestCancelledEvent{
 		RequestID: requestID, Reason: reason, At: now,
 	}.ToRecord()
-	if _, err := c.stream.Append(ctx, sessionID, record, nil); err != nil {
+	if _, err := c.stream.Append(ctx, sessionID, record); err != nil {
 		return session.PendingQuestion{}, fmt.Errorf("record withdrawal: %w", err)
 	}
 	if _, err := c.store.ApplyTurn(ctx, sessionID, session.TurnInput{
@@ -253,13 +253,14 @@ func (c *Client) withdraw(ctx context.Context, sessionID, requestID string, reas
 }
 
 // SendAnswers sends a message that answers posted questions, and is the only
-// way a person answers one. It returns the message body alongside the seq.
+// way a person answers one. messageID is the sender's, as for SendMessage: a
+// retry of an answer already recorded is answered with that record, before
+// the answers are checked against questions it has since settled.
 //
 // The message body is written here, from the answers, rather than taken from
 // the client: it is the only half of an answer the agent reads, and an agent's
 // answer arrives in the same shape (see answerMessage), so the wording has one
-// home. The sender is left out of the broadcast carrying the record, so the
-// body is handed back for it to learn what the agent read.
+// home.
 //
 // Every answer is checked before anything is delivered, and one bad answer
 // refuses the whole message. The content is a single string written for all of
@@ -280,8 +281,10 @@ func (c *Client) withdraw(ctx context.Context, sessionID, requestID string, reas
 // answered twice, which is a thing it can make sense of; the alternative is
 // holding the session's state across a write to a subprocess's stdin, for a
 // race that needs two people answering one question in the same breath.
-func (c *Client) SendAnswers(ctx context.Context, sessionID string, answers []Answer, exclude any) (Sent, string, error) {
-	return c.deliverAnswers(ctx, sessionID, answers, agent.UserResolver(), exclude)
+func (c *Client) SendAnswers(ctx context.Context, sessionID string, answers []Answer, messageID string) (Sent, error) {
+	return c.sendOnce(ctx, sessionID, messageID, func() (Sent, error) {
+		return c.deliverAnswers(ctx, sessionID, answers, agent.UserResolver(), messageID)
+	})
 }
 
 // AnswerQuestion delivers one answer an agent gave to a question another
@@ -304,38 +307,37 @@ func (c *Client) SendAnswers(ctx context.Context, sessionID string, answers []An
 // answer simply leaves the question where it is, for the user or for another
 // agent. So question_answer offers no decline.
 func (c *Client) AnswerQuestion(ctx context.Context, sessionID string, answer Answer, by agent.QuestionResolver) error {
-	_, _, err := c.deliverAnswers(ctx, sessionID, []Answer{answer}, by, nil)
+	_, err := c.deliverAnswers(ctx, sessionID, []Answer{answer}, by, "")
 	return err
 }
 
-// deliverAnswers is the one path an answer takes, whoever gave it, and returns
-// the body the agent was sent.
-func (c *Client) deliverAnswers(ctx context.Context, sessionID string, answers []Answer, by agent.QuestionResolver, exclude any) (Sent, string, error) {
+// deliverAnswers is the one path an answer takes, whoever gave it.
+func (c *Client) deliverAnswers(ctx context.Context, sessionID string, answers []Answer, by agent.QuestionResolver, messageID string) (Sent, error) {
 	if len(answers) == 0 {
 		// A body with no answers in it would be a bare "Answering:" that starts
 		// a turn about nothing.
-		return Sent{}, "", fmt.Errorf("%w: a message answering questions has to answer at least one", ErrAnswerShape)
+		return Sent{}, fmt.Errorf("%w: a message answering questions has to answer at least one", ErrAnswerShape)
 	}
 	meta, found, err := c.store.Get(sessionID)
 	if err != nil {
-		return Sent{}, "", fmt.Errorf("get session: %w", err)
+		return Sent{}, fmt.Errorf("get session: %w", err)
 	}
 	if !found {
-		return Sent{}, "", ErrSessionNotFound
+		return Sent{}, ErrSessionNotFound
 	}
 
 	now := time.Now()
 	answering, err := c.resolveAnswers(ctx, sessionID, meta.Turn, answers, by, now)
 	if err != nil {
-		return Sent{}, "", err
+		return Sent{}, err
 	}
 
 	content := answerMessage(answering, by)
 	sent, err := c.sendEvent(ctx, sessionID, agent.MessageEvent{
-		Content: content, Answering: answering, Origin: originOf(by),
-	}, nil, exclude)
+		Content: content, Answering: answering, Origin: originOf(by), MessageID: messageID,
+	}, nil)
 	if err != nil {
-		return sent, "", err
+		return sent, err
 	}
 
 	settled := make([]agent.SettledQuestion, 0, len(answering))
@@ -357,7 +359,7 @@ func (c *Client) deliverAnswers(ctx context.Context, sessionID string, answers [
 	// Told even where the list fell behind: the agent has the answer, and that
 	// is what settled the question.
 	c.notifySettled(sessionID, settled)
-	return sent, content, nil
+	return sent, nil
 }
 
 // originOf says how a message carrying these answers is marked.

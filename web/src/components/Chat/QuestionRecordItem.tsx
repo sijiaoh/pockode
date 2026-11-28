@@ -1,5 +1,5 @@
 import { Check, ChevronRight, CircleHelp, EyeOff, X } from "lucide-react";
-import { useContext, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import type { FullScreenSource } from "../../lib/fullScreen";
 import type {
 	ExpiryReason,
@@ -12,7 +12,6 @@ import {
 	type QuestionSelection,
 } from "../../utils/questionAnswer";
 import { CollapsibleBody } from "../ui";
-import { DiscardedMessagesContext } from "./discardedMessagesContext";
 import { HeaderlessMainBlock } from "./HeaderlessMainBlock";
 import QuestionForm from "./QuestionForm";
 import { useTranscriptView } from "./transcriptViewContext";
@@ -22,8 +21,8 @@ interface Props {
 	status: QuestionRecordStatus;
 	/** What was said back; set on `answered` and `declined`. */
 	answer?: QuestionAnswerRecord;
-	/** The message that carried `answer`; see `isUnread`. */
-	answerMessageId?: string;
+	/** A Stop threw `answer` away unread; see the part's `unread`. */
+	unread?: boolean;
 	/** Why it was withdrawn, when the server could say. */
 	reason?: ExpiryReason;
 	/**
@@ -164,20 +163,13 @@ function QuestionRecordItem({
 	record,
 	status,
 	answer,
-	answerMessageId,
+	unread: isUnread = false,
 	reason,
 	legacy = false,
 	onAnswer,
 }: Props) {
 	const [expanded, setExpanded] = useState(false);
 	const view = useTranscriptView();
-	// Read from the transcript's discarded messages rather than carried on the
-	// card: the Stop's record may land before the sender learns its own answer's
-	// id, and a card on an older page may be settled long after the record was
-	// read (docs/code/frontend-state.md#discarded-messages).
-	const { discarded } = useContext(DiscardedMessagesContext);
-	const isUnread =
-		answerMessageId !== undefined && discarded.has(answerMessageId);
 	const { label: statusLabel, chip } = isUnread ? UNREAD : statusConfig[status];
 	const outcome = outcomeLine(status, answer, legacy);
 	const isAnswered = status === "answered";

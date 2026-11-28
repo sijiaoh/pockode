@@ -497,13 +497,6 @@ function MessageList({
 																			onForkMessage={onForkMessage}
 																			onSignIn={onSignIn}
 																			onSwitchAccount={onSwitchAccount}
-																			isDiscarded={
-																				message.role === "user" &&
-																				message.messageId !== undefined &&
-																				discardedContext.discarded.has(
-																					message.messageId,
-																				)
-																			}
 																			onRestoreMessages={onRestoreMessages}
 																		/>
 																	</div>

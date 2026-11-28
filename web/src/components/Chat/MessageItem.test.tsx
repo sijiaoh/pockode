@@ -184,8 +184,11 @@ describe("MessageItem", () => {
 			render(
 				<MessageItem
 					sessionId="session-1"
-					message={{ ...actionMessage({ id: "42" }), messageId: "m1" }}
-					isDiscarded
+					message={{
+						...actionMessage({ id: "42" }),
+						messageId: "m1",
+						discarded: true,
+					}}
 					onRestoreMessages={vi.fn()}
 				/>,
 			);

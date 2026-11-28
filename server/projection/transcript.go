@@ -66,6 +66,9 @@ type entry struct {
 	record agent.Record
 	// discarded is a message's: a Stop threw it away unread.
 	discarded bool
+	// changed is the record whose fold last changed the item (transcript.pushed
+	// as it was marked): what Projection.Since reads.
+	changed session.HistorySeq
 }
 
 // transcript is the fold's ordered account of everything a chat draws.
@@ -87,6 +90,20 @@ type transcript struct {
 	unopened int
 	// lastSeq is the seq of the newest numbered record folded.
 	lastSeq session.HistorySeq
+	// pushed is the seq of the newest numbered record handed to the
+	// projection, folded or not: what a change is stamped with (mark). Not
+	// lastSeq, because a message read off a file is folded only with the
+	// record after it, and what that changes is that record's doing.
+	pushed session.HistorySeq
+	// unnumbered is whether an entry came from a line in no file — the
+	// warning the store reads in for records it skipped. The store adds it
+	// at the end of whatever it read, so a fold from the file again files
+	// it, and every entry after where it stood, under other item ids.
+	unnumbered bool
+	// turnChanged and planChanged are entry.changed for each turn, by its
+	// index in State.Turns, and for the session's plan.
+	turnChanged []session.HistorySeq
+	planChanged session.HistorySeq
 
 	// line is the line being folded, and touched the entries it has named so
 	// far.
@@ -112,19 +129,29 @@ func newChanges() *changes {
 	return &changes{entries: map[int]struct{}{}, turns: map[int]struct{}{}}
 }
 
+// mark, markTurn and markPlan are the one place a change is recorded, for
+// both readers of it: the next update (changes), and Projection.Since (the
+// stamps). Since is right for exactly the reason an update is — it reads
+// what was marked.
 func (t *transcript) mark(i int) {
+	t.entries[i].changed = t.pushed
 	if t.changed != nil {
 		t.changed.entries[i] = struct{}{}
 	}
 }
 
 func (t *transcript) markTurn(i int) {
+	for len(t.turnChanged) <= i {
+		t.turnChanged = append(t.turnChanged, session.NoHistorySeq)
+	}
+	t.turnChanged[i] = t.pushed
 	if t.changed != nil {
 		t.changed.turns[i] = struct{}{}
 	}
 }
 
 func (t *transcript) markPlan() {
+	t.planChanged = t.pushed
 	if t.changed != nil {
 		t.changed.plan = true
 	}
@@ -150,6 +177,7 @@ func (t transcript) clone() transcript {
 	c.questionEntry = slices.Clone(t.questionEntry)
 	c.messages = cloneMap(t.messages)
 	c.turns = cloneMap(t.turns)
+	c.turnChanged = slices.Clone(t.turnChanged)
 	c.touched = nil
 	// A copy is read, never taken updates from.
 	c.changed = nil
@@ -174,6 +202,7 @@ func (t *transcript) add(e entry) int {
 	e.pos, e.numbered = t.line.Seq, t.line.Seq.Valid()
 	if !e.numbered {
 		e.pos = t.lastSeq
+		t.unnumbered = true
 	}
 	i := len(t.entries)
 	t.entries = append(t.entries, e)

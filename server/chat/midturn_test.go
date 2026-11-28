@@ -45,8 +45,8 @@ func newMidTurnFixture(t *testing.T) *midTurnFixture {
 // returns the agent session behind it.
 func (f *midTurnFixture) startTurn(t *testing.T) *mockSession {
 	t.Helper()
-	if _, err := f.client.SendMessageExcluding(context.Background(), "sess", "first", nil, nil); err != nil {
-		t.Fatalf("SendMessageExcluding: %v", err)
+	if _, err := f.client.SendMessage(context.Background(), "sess", "first", nil, ""); err != nil {
+		t.Fatalf("SendMessage: %v", err)
 	}
 	if phase := f.phase(t); phase != session.PhaseRunning {
 		t.Fatalf("setup: phase = %q, want running", phase)
@@ -122,9 +122,9 @@ func TestClient_MessageDuringARunningTurnGoesThrough(t *testing.T) {
 	f := newMidTurnFixture(t)
 	sess := f.startTurn(t)
 
-	sent, err := f.client.SendMessageExcluding(context.Background(), "sess", "second", nil, nil)
+	sent, err := f.client.SendMessage(context.Background(), "sess", "second", nil, "")
 	if err != nil {
-		t.Fatalf("SendMessageExcluding during a running turn = %v, want it delivered", err)
+		t.Fatalf("SendMessage during a running turn = %v, want it delivered", err)
 	}
 	if !sent.Seq.Valid() {
 		t.Errorf("seq = %d, want the record's address", sent.Seq)
@@ -160,8 +160,8 @@ func TestClient_MessageDuringABackgroundWaitGoesThrough(t *testing.T) {
 	sess.events <- agent.BackgroundWaitEvent{}
 	f.waitForPhase(t, session.PhaseBlocked)
 
-	if _, err := f.client.SendMessageExcluding(context.Background(), "sess", "second", nil, nil); err != nil {
-		t.Fatalf("SendMessageExcluding during a background wait = %v, want it delivered", err)
+	if _, err := f.client.SendMessage(context.Background(), "sess", "second", nil, ""); err != nil {
+		t.Fatalf("SendMessage during a background wait = %v, want it delivered", err)
 	}
 	if got := sess.sentPrompts(); len(got) != 2 || got[1] != "second" {
 		t.Errorf("prompts handed to the agent = %q, want both messages", got)
@@ -196,7 +196,7 @@ func TestClient_MessageRefusedWhileARequestIsOnScreen(t *testing.T) {
 		send func(*Client) error
 	}{
 		{"user message", func(c *Client) error {
-			_, err := c.SendMessageExcluding(context.Background(), "sess", "never mind", nil, nil)
+			_, err := c.SendMessage(context.Background(), "sess", "never mind", nil, "")
 			return err
 		}},
 		{"system message", func(c *Client) error {
@@ -257,8 +257,8 @@ func TestClient_MessageAfterTheAnswerGoesThrough(t *testing.T) {
 	}
 	f.waitForPhase(t, session.PhaseRunning)
 
-	if _, err := f.client.SendMessageExcluding(context.Background(), "sess", "second", nil, nil); err != nil {
-		t.Fatalf("SendMessageExcluding after the answer = %v, want it delivered", err)
+	if _, err := f.client.SendMessage(context.Background(), "sess", "second", nil, ""); err != nil {
+		t.Fatalf("SendMessage after the answer = %v, want it delivered", err)
 	}
 	if got := sess.sentPrompts(); len(got) != 2 {
 		t.Errorf("prompts handed to the agent = %q, want both messages", got)

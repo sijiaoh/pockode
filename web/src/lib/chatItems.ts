@@ -9,6 +9,7 @@ import type {
 	ToolStream,
 } from "../types/chatItems";
 import type {
+	ChatResume,
 	HistorySeq,
 	SubagentProgress,
 	UserMessage,
@@ -50,6 +51,19 @@ export interface ChatItems {
 	 */
 	continuedFrom?: number;
 	throughSeq?: HistorySeq;
+	/**
+	 * The server instance `throughSeq` was read from
+	 * (`AuthResult.server_instance`): the one whose item ids this copy holds,
+	 * and the one instance that can resume it (`resumeFrom`). Absent for a
+	 * viewed session's copy.
+	 */
+	instance?: string;
+	/**
+	 * Whether `instance` may continue this copy; not once a resync has said
+	 * it has a hole in it (`forgetResume`). Apart from `instance`, which still
+	 * says whose numbering the copy is in until a page replaces it.
+	 */
+	resumable?: boolean;
 	/**
 	 * Set while an older page is being fetched (`beginOlderPage`): the upserts
 	 * dropped meanwhile for naming an item that page may hold. The server cuts
@@ -130,19 +144,31 @@ export type PressedAnswer = "allowed" | "denied" | "pending" | "expired";
  * A message this client sent. Drawn on its own until the transcript holds its
  * item, and after that only lends the item its row keys, so the bubble the
  * user watched appear is the one that stays.
+ *
+ * `message.id` is the id it was sent under, which its record carries as
+ * `message_id`: the item is this echo's when it carries that id
+ * (`claimEcho`), however it arrives — an update, a page, a resume — and
+ * whether or not the send's reply ever did.
  */
 export interface Echo {
 	message: UserMessage;
 	/** The reply bubble a message sent to an idle agent opened. */
 	replyId?: string;
-	/** The item the transcript holds this message as, once it is known. */
+	/** The item the transcript holds this message as, once it has arrived. */
 	itemId?: number;
 	/** Still waiting for the server's reply to the send. */
 	awaitingReply: boolean;
 	/** Why the send failed, drawn as a failed reply under the message. */
 	error?: string;
-	/** When the reply it opened began, from the send's reply (epoch ms). */
-	openedAt?: number;
+	/**
+	 * The server itself answered the send with `error`. Its record arriving
+	 * does not take that back: the record is written before the message is
+	 * handed to the agent, and the handover is what failed. A failure the
+	 * transport reported says nothing either way, so the record is taken as
+	 * the answer — wrongly only when the handover failed too and the server's
+	 * saying so was lost with the connection.
+	 */
+	failedOnServer?: boolean;
 	/**
 	 * Where it was sent: after this top-level item, into this turn — a turn
 	 * running when it was sent, which it went into; none for one sent to an
@@ -370,6 +396,7 @@ function addPageItem(
 		if (parent) insertSorted(parent.children, node.id);
 	}
 	index(store, node);
+	claimEcho(store, node);
 	for (const child of children) {
 		addPageItem(store, child, { parent: node.id }, clock);
 	}
@@ -403,15 +430,18 @@ function setToolStreams(store: ChatItems, tools: ChatStreams["tools"]): void {
 
 /**
  * Starts the transcript over from the newest page — a subscription's snapshot,
- * or a viewed session's — with the live streams it came with. Messages this
- * client sent and is still waiting on stay, and so do the part ids, so a
- * re-subscribe redraws nothing that did not change.
+ * or a viewed session's — with the live streams it came with. `instance` is
+ * the server instance a subscription's came from, which can resume it; a
+ * viewed session's has none. Messages this client sent and is still waiting
+ * on stay, and so do the part ids, so a re-subscribe redraws nothing that did
+ * not change.
  */
 export function installNewestPage(
 	store: ChatItems,
 	page: ChatPage,
 	streams: ChatStreams | undefined,
 	clock: ServerClockReading | undefined,
+	instance?: string,
 ): void {
 	store.nodes = new Map();
 	store.top = [];
@@ -422,54 +452,90 @@ export function installNewestPage(
 	store.fetchesOf = new Map();
 	store.pressed = new Map();
 	store.missedOlder = undefined;
-	const heldThrough = store.throughSeq;
 	store.throughSeq = page.through_seq;
+	// Another server instance may number items differently, so nothing keyed
+	// by an item id the last one gave carries over: part ids are minted
+	// afresh, and echoes are claimed afresh from the page.
+	const renumbered =
+		store.instance !== undefined &&
+		instance !== undefined &&
+		store.instance !== instance;
+	store.instance = instance;
+	store.resumable = instance !== undefined;
 	store.clock = clock;
+	if (renumbered) store.partIds = new Map();
+	store.echoes = store.echoes.map(({ itemId: _, ...echo }) => echo);
 	addPage(store, page, clock);
 	setToolStreams(store, streams?.tools);
-	claimEchoes(store, heldThrough);
 	// A send still in flight, or one that failed, is still this client's to
-	// draw; one the server took is the page's now, or on a page further back.
-	store.echoes = store.echoes.filter(
-		(echo) =>
-			echo.awaitingReply ||
-			echo.error !== undefined ||
-			(echo.itemId !== undefined && store.nodes.has(echo.itemId)),
-	);
+	// draw; one the server took is the page's now, or on a page further back —
+	// or it was never recorded, and a reload would not show it either.
+	const end = store.top.at(-1) ?? 0;
+	store.echoes = store.echoes
+		.filter(
+			(echo) =>
+				echo.awaitingReply ||
+				echo.error !== undefined ||
+				echo.itemId !== undefined,
+		)
+		.map((echo) => {
+			if (!renumbered || echo.itemId !== undefined) return echo;
+			// Where it was sent is named in the old numbering; the end of the
+			// newest page is where a send not on it was made, as far as this
+			// copy can tell.
+			const { turnId: _, ...rest } = echo;
+			return { ...rest, after: end };
+		});
 	store.echoVersion++;
 }
 
 /**
- * Gives a send still unaccounted for — waiting on its reply, or failed on a
- * dropped connection that may have delivered it — the message a fresh page
- * holds for it: one recorded since the transcript last stood, with what was
- * typed. Without this the page's copy and the echo would both be drawn.
+ * What a re-subscribe asks to continue from, when this copy can be continued
+ * at all: it has read something, from a server instance it knows.
  */
-function claimEchoes(store: ChatItems, since: HistorySeq | undefined): void {
-	const claimed = new Set(
-		store.echoes.flatMap((e) => (e.itemId !== undefined ? [e.itemId] : [])),
-	);
-	let changed = false;
-	const echoes = store.echoes.map((echo) => {
-		if (echo.itemId !== undefined && store.nodes.has(echo.itemId)) return echo;
-		if (!echo.awaitingReply && echo.error === undefined) return echo;
-		const match = store.top.find((id) => {
-			const item = store.nodes.get(id)?.item;
-			return (
-				item?.kind === "message" &&
-				!claimed.has(id) &&
-				(since === undefined || (item.seq ?? 0) > since) &&
-				item.message?.content === echo.message.content &&
-				!!echo.message.content
-			);
-		});
-		if (match === undefined) return echo;
-		claimed.add(match);
-		changed = true;
-		const { error: _, ...rest } = echo;
-		return { ...rest, itemId: match, awaitingReply: echo.awaitingReply };
-	});
-	if (changed) store.echoes = echoes;
+export function resumeFrom(store: ChatItems): ChatResume | undefined {
+	if (!store.resumable || !store.instance || store.throughSeq === undefined) {
+		return undefined;
+	}
+	return { server_instance: store.instance, after_seq: store.throughSeq };
+}
+
+/**
+ * Says this copy is not to be continued: the next subscription starts over
+ * from a page. For a resync, whose hole the copy cannot know the extent of.
+ */
+export function forgetResume(store: ChatItems): void {
+	store.resumable = false;
+}
+
+/**
+ * Brings the copy up to date from a resumed subscription: `update` is what
+ * the records after its `throughSeq` changed, applied as a `chat.update` is,
+ * and `streams` are the live streams as they stand now, which replace the
+ * ones held — those stopped being continued with the connection. Everything
+ * else stays: the older pages paged in, the part ids, the sends this client
+ * is still accounting for (a message of theirs recorded meanwhile arrives in
+ * `update` and takes its echo, `claimEcho`).
+ */
+export function resumeTranscript(
+	store: ChatItems,
+	update: Omit<ChatUpdate, "type" | "streams_ended">,
+	streams: ChatStreams | undefined,
+	clock: ServerClockReading | undefined,
+	now: Date,
+	instance: string | undefined,
+): void {
+	store.instance = instance;
+	// Upserts held for an older page that was asked for over the connection
+	// that is gone: the page is not coming, and asking again brings them.
+	store.missedOlder = undefined;
+	store.clock = clock;
+	applyUpdate(store, { type: "update", ...update }, now);
+	const held = [...store.streams.keys()];
+	setToolStreams(store, streams?.tools);
+	for (const toolUseId of new Set([...held, ...store.streams.keys()])) {
+		touch(store, store.byToolUse.get(toolUseId));
+	}
 }
 
 /**
@@ -635,57 +701,26 @@ function upsertItem(
 	}
 	putNode(store, node);
 	index(store, node, held?.item);
-	if (!held && item.kind === "message") adoptEcho(store, node, update);
+	if (!held) claimEcho(store, node);
 }
 
 /**
- * Takes a message item this client sent as its echo's, when it arrives before
- * the reply that would say so: the sender is left out of the update for its
- * own message, so a message item it first hears of from a later record — the
- * turn the message opened taking it in — is its own.
+ * Gives the echo sent under a message item's `message_id` the item. A send
+ * whose reply was lost to a timeout or a dropped connection was not a failure
+ * after all once its record arrives; one the server said failed still was.
  */
-function adoptEcho(store: ChatItems, node: ItemNode, update: ChatUpdate): void {
-	if (node.item.seq === undefined || update.through_seq === undefined) return;
-	const content = node.item.message?.content;
-	// A send that failed here may still have been recorded — a reply lost to
-	// a timeout or a dropped connection. Its own record can reach this client
-	// too, over a connection that is not the one it was sent on, so only what
-	// was typed tells it.
-	const failed = store.echoes.find(
-		(e) =>
-			e.error !== undefined &&
-			e.itemId === undefined &&
-			!!content &&
-			e.message.content === content,
-	);
-	if (update.through_seq <= node.item.seq) {
-		if (failed) claimEcho(store, failed, node.id);
-		return;
-	}
-	const waiting = store.echoes.filter(
-		(e) => e.awaitingReply && e.itemId === undefined,
-	);
-	// Two records send a message back to its sender: the turn it opened taking
-	// it in, and a Stop discarding it. Which of several sends in flight it is
-	// is told by what was typed where that says, and otherwise by which kind
-	// of send it can be — only one sent to an idle agent opens a turn.
+function claimEcho(store: ChatItems, node: ItemNode): void {
 	const messageId = node.item.message?.message_id;
-	const opens = (update.turns ?? []).some(
-		({ turn }) => messageId !== undefined && turn.message_id === messageId,
+	if (node.item.kind !== "message" || !messageId) return;
+	const echo = store.echoes.find(
+		(e) => e.itemId === undefined && e.message.id === messageId,
 	);
-	const echo =
-		waiting.find((e) => content && e.message.content === content) ??
-		waiting.find((e) => (e.replyId !== undefined) === opens) ??
-		failed;
-	if (echo) claimEcho(store, echo, node.id);
-}
-
-/** Gives `echo` the item it became; a failed one was not a failure after all. */
-function claimEcho(store: ChatItems, echo: Echo, itemId: number): void {
+	if (!echo) return;
 	store.echoes = store.echoes.map((e) => {
 		if (e !== echo) return e;
+		if (e.failedOnServer) return { ...e, itemId: node.id };
 		const { error: _, ...rest } = e;
-		return { ...rest, itemId };
+		return { ...rest, itemId: node.id };
 	});
 	store.echoVersion++;
 }
@@ -776,121 +811,65 @@ export function addEcho(store: ChatItems, echo: Echo): void {
 	const turnId = echo.replyId === undefined ? openTurnId(store) : undefined;
 	store.echoes = [
 		...store.echoes,
-		{ ...echo, after: store.top.at(-1) ?? 0, ...(turnId ? { turnId } : {}) },
+		{
+			...echo,
+			after: store.top.at(-1) ?? 0,
+			...(turnId ? { turnId } : {}),
+		},
 	];
 	store.echoVersion++;
 }
 
-export function removeEcho(store: ChatItems, messageId: string): void {
+/**
+ * Takes back a send that failed leaving nothing written. One whose record has
+ * arrived meanwhile was written after all, so it stays: with `error` under it
+ * when the server said the send failed (the record goes before the handover,
+ * which is what failed), as sent when only the transport did.
+ */
+export function takeBackEcho(
+	store: ChatItems,
+	messageId: string,
+	error: string,
+	onServer: boolean,
+): void {
+	const echo = store.echoes.find((e) => e.message.id === messageId);
+	if (echo?.itemId !== undefined) {
+		failEcho(store, messageId, error, onServer);
+		return;
+	}
 	store.echoes = store.echoes.filter((e) => e.message.id !== messageId);
 	store.echoVersion++;
 }
 
+/**
+ * Says the send failed. `onServer` is whether the server said so (see
+ * `Echo.failedOnServer`); a failure only the transport reported is dropped
+ * when the record has arrived already, which says the server took it.
+ */
 export function failEcho(
 	store: ChatItems,
 	messageId: string,
 	error: string,
+	onServer: boolean,
 ): void {
 	store.echoes = store.echoes.map((e) =>
-		e.message.id === messageId ? { ...e, awaitingReply: false, error } : e,
+		e.message.id !== messageId
+			? e
+			: onServer
+				? { ...e, awaitingReply: false, error, failedOnServer: true }
+				: e.itemId !== undefined
+					? { ...e, awaitingReply: false }
+					: { ...e, awaitingReply: false, error },
 	);
 	store.echoVersion++;
 }
 
-/** What the server's reply to a send says about the message it recorded. */
-export interface SentRecord {
-	itemId?: number;
-	seq?: HistorySeq;
-	/** What the record holds that the echo did not know. */
-	update: Partial<UserMessage>;
-	/** The record's `observed_at`, epoch ms on the server's clock. */
-	observedAt?: number;
-}
-
-/**
- * Files the server's reply to a send. The sender is left out of the update
- * carrying its message, so the item is written here from what was sent and
- * what the reply adds — unless an update already brought it (`adoptEcho`).
- * A reply naming no item leaves the echo drawn on its own: the message was
- * not recorded, or the server is too old to say where.
- */
-export function settleEcho(
-	store: ChatItems,
-	messageId: string,
-	sent: SentRecord,
-): void {
-	const at = store.echoes.findIndex((e) => e.message.id === messageId);
-	if (at === -1) return;
-	const echo = store.echoes[at];
-	const message = { ...echo.message, ...sent.update };
-	// The reply names the message's item for certain; an adoption was a guess,
-	// and one that took another send's item gives it back.
-	const itemId = sent.itemId ?? echo.itemId;
-	store.echoes = store.echoes.map((e, i) =>
-		i === at
-			? {
-					...e,
-					message,
-					awaitingReply: false,
-					...(itemId !== undefined ? { itemId } : {}),
-					...(sent.observedAt !== undefined
-						? { openedAt: sent.observedAt }
-						: {}),
-				}
-			: itemId !== undefined && e.itemId === itemId && e.awaitingReply
-				? { ...e, itemId: undefined }
-				: e,
+/** The server has the message; its record arrives, or has, on its own. */
+export function sentEcho(store: ChatItems, messageId: string): void {
+	store.echoes = store.echoes.map((e) =>
+		e.message.id === messageId ? { ...e, awaitingReply: false } : e,
 	);
 	store.echoVersion++;
-	if (itemId === undefined || store.nodes.has(itemId)) return;
-	if (
-		store.cursor !== undefined &&
-		sent.seq !== undefined &&
-		sent.seq < store.cursor
-	)
-		return;
-	// The turn it went into, unless that turn ended before the server took the
-	// message: it is then in none, until a turn takes it in.
-	const sentInto =
-		echo.turnId && !store.turns.get(echo.turnId)?.turn.ended
-			? echo.turnId
-			: undefined;
-	const turnId = openerTurn(store, message.messageId) ?? sentInto;
-	const node: ItemNode = {
-		id: itemId,
-		partId: partIdOf(store, itemId),
-		children: [],
-		...(turnId ? { turnId } : {}),
-		item: {
-			id: itemId,
-			kind: "message",
-			...(sent.seq !== undefined ? { seq: sent.seq, last_seq: sent.seq } : {}),
-			message: {
-				content: message.content,
-				...(message.messageId ? { message_id: message.messageId } : {}),
-				...(sent.observedAt !== undefined
-					? { observed_at: new Date(sent.observedAt).toISOString() }
-					: {}),
-				...(message.answering ? { answering: message.answering } : {}),
-				...(message.command ? { command: message.command } : {}),
-				...(message.attachments ? { attachments: message.attachments } : {}),
-				...(message.htmlAction ? { html_action: message.htmlAction } : {}),
-			},
-		},
-	};
-	setNode(store, node);
-	insertTop(store, itemId);
-}
-
-function openerTurn(
-	store: ChatItems,
-	messageId: string | undefined,
-): string | undefined {
-	if (!messageId) return undefined;
-	for (const { turn } of store.turns.values()) {
-		if (turn.message_id === messageId) return turn.turn_id;
-	}
-	return undefined;
 }
 
 /** The newest turn, while it has not ended. */

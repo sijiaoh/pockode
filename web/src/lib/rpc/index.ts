@@ -11,7 +11,6 @@ export {
 	type ChatActions,
 	createChatActions,
 	type HtmlActionInput,
-	type SentMessage,
 } from "./chat";
 export { type CliAuthActions, createCliAuthActions } from "./cliAuth";
 export {

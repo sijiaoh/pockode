@@ -99,7 +99,11 @@ export function stubChatHistoryRpc(
 			server.notify = callback;
 			return {
 				id: "transcript-fixture",
-				initial: { ...page(server.pages.length - 1), turn: IDLE_TURN },
+				initial: {
+					...page(server.pages.length - 1),
+					turn: IDLE_TURN,
+					delivery: "snapshot" as const,
+				},
 			};
 		},
 		chatMessagesUnsubscribe: async () => {},

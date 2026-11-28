@@ -478,7 +478,7 @@ func TestStreamedNotificationsShareACompressionWindow(t *testing.T) {
 	event := agent.ThinkingDeltaLiveEvent{ContentDelta: strings.Repeat("a streamed chat event. ", 6)}
 	var first, last int
 	for i := 0; i < events; i++ {
-		wt.ChatMessagesWatcher.Enqueue(sessionID, event, session.NoHistorySeq, nil)
+		wt.ChatMessagesWatcher.Enqueue(sessionID, event, session.NoHistorySeq)
 		msg := c.receiveNotification(watch.ChatDeltaMethod)
 		if len(msg.data) >= 444 {
 			t.Fatalf("notification is %d bytes, which is at or above the median real event; "+

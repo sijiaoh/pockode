@@ -346,10 +346,10 @@ func TestSendAnswers_DeliversAndClears(t *testing.T) {
 	first := f.post(t, "Database")
 	second := f.post(t, "Runtime")
 
-	_, content, err := f.client.SendAnswers(context.Background(), "sess", []Answer{
+	_, err := f.client.SendAnswers(context.Background(), "sess", []Answer{
 		{RequestID: first, Answers: []string{"Postgres"}},
 		{RequestID: second, Declined: true, Note: "not my call"},
-	}, nil)
+	}, "")
 	if err != nil {
 		t.Fatalf("SendAnswers: %v", err)
 	}
@@ -360,10 +360,6 @@ func TestSendAnswers_DeliversAndClears(t *testing.T) {
 	want := "Answering:\n\nQ: Which database?\nA: Postgres\n\nQ: Which database?\nA: (not answering) — note: not my call"
 	if prompts := f.agent.session(t, 1).sentPrompts(); len(prompts) != 1 || prompts[0] != want {
 		t.Errorf("prompts = %q, want %q delivered once", prompts, want)
-	}
-	// Handed back because the sender is left out of the broadcast.
-	if content != want {
-		t.Errorf("returned content = %q, want what the agent was sent", content)
 	}
 
 	// The message, followed by the turn it opened.
@@ -392,9 +388,9 @@ func TestSendAnswers_PartialAnswersAreFine(t *testing.T) {
 	first := f.post(t, "Database")
 	second := f.post(t, "Runtime")
 
-	if _, _, err := f.client.SendAnswers(context.Background(), "sess", []Answer{
+	if _, err := f.client.SendAnswers(context.Background(), "sess", []Answer{
 		{RequestID: first, Answers: []string{"SQLite"}},
-	}, nil); err != nil {
+	}, ""); err != nil {
 		t.Fatalf("SendAnswers: %v", err)
 	}
 
@@ -418,10 +414,10 @@ func TestSendAnswers_OneResolvedQuestionRefusesTheWholeMessage(t *testing.T) {
 	}
 
 	before := len(f.records(t))
-	_, _, err := f.client.SendAnswers(context.Background(), "sess", []Answer{
+	_, err := f.client.SendAnswers(context.Background(), "sess", []Answer{
 		{RequestID: first, Answers: []string{"Postgres"}},
 		{RequestID: second, Answers: []string{"Node"}},
-	}, nil)
+	}, "")
 	if !errors.Is(err, ErrQuestionNotPending) {
 		t.Fatalf("error = %v, want ErrQuestionNotPending", err)
 	}
@@ -489,9 +485,9 @@ func TestSendAnswers_ShapeRefusals(t *testing.T) {
 		if err != nil {
 			t.Fatalf("PostQuestions: %v", err)
 		}
-		_, _, err = f.client.SendAnswers(context.Background(), "sess", []Answer{
+		_, err = f.client.SendAnswers(context.Background(), "sess", []Answer{
 			{RequestID: q.RequestID, Text: "ledger", Note: "short is better"},
-		}, nil)
+		}, "")
 		if !errors.Is(err, ErrAnswerShape) || !strings.Contains(err.Error(), "takes no note") {
 			t.Fatalf("error = %v, want ErrAnswerShape saying it takes no note", err)
 		}
@@ -508,9 +504,9 @@ func TestSendAnswers_ShapeRefusals(t *testing.T) {
 		id := q.RequestID
 		// Recorded as answered, it would read to the agent as "the user said
 		// nothing" — which is what declining says properly.
-		_, _, err = f.client.SendAnswers(context.Background(), "sess", []Answer{
+		_, err = f.client.SendAnswers(context.Background(), "sess", []Answer{
 			{RequestID: id, Text: "   "},
-		}, nil)
+		}, "")
 		if !errors.Is(err, ErrAnswerShape) {
 			t.Fatalf("error = %v, want ErrAnswerShape", err)
 		}
@@ -524,7 +520,7 @@ func TestSendAnswers_ShapeRefusals(t *testing.T) {
 			f := newQuestionFixture(t)
 			id := f.post(t, "Database")
 
-			_, _, err := f.client.SendAnswers(context.Background(), "sess", []Answer{tt.answer(id)}, nil)
+			_, err := f.client.SendAnswers(context.Background(), "sess", []Answer{tt.answer(id)}, "")
 			if !errors.Is(err, ErrAnswerShape) {
 				t.Fatalf("error = %v, want ErrAnswerShape", err)
 			}
@@ -550,10 +546,10 @@ func TestSendAnswers_AResolvedQuestionIsReportedBeforeABadShape(t *testing.T) {
 		t.Fatalf("CancelQuestion: %v", err)
 	}
 
-	_, _, err := f.client.SendAnswers(context.Background(), "sess", []Answer{
+	_, err := f.client.SendAnswers(context.Background(), "sess", []Answer{
 		{RequestID: first, Answers: []string{"MySQL"}}, // never offered
 		{RequestID: second, Answers: []string{"Node"}}, // already withdrawn
-	}, nil)
+	}, "")
 	if !errors.Is(err, ErrQuestionNotPending) {
 		t.Fatalf("error = %v, want the resolved question reported first", err)
 	}
@@ -575,9 +571,9 @@ func TestSendAnswers_MultiSelectAndFreeText(t *testing.T) {
 			t.Fatalf("PostQuestions: %v", err)
 		}
 		id := q.RequestID
-		if _, _, err := f.client.SendAnswers(context.Background(), "sess", []Answer{
+		if _, err := f.client.SendAnswers(context.Background(), "sess", []Answer{
 			{RequestID: id, Answers: []string{"linux", "windows"}},
-		}, nil); err != nil {
+		}, ""); err != nil {
 			t.Fatalf("SendAnswers: %v", err)
 		}
 	})
@@ -592,9 +588,9 @@ func TestSendAnswers_MultiSelectAndFreeText(t *testing.T) {
 		}
 		id := q.RequestID
 		// Anything goes: there were no options for it to fail to be one of.
-		if _, _, err := f.client.SendAnswers(context.Background(), "sess", []Answer{
+		if _, err := f.client.SendAnswers(context.Background(), "sess", []Answer{
 			{RequestID: id, Text: "whatever I like"},
-		}, nil); err != nil {
+		}, ""); err != nil {
 			t.Fatalf("SendAnswers: %v", err)
 		}
 	})
@@ -611,9 +607,9 @@ func TestSendAnswers_MultiSelectAndFreeText(t *testing.T) {
 			t.Fatalf("PostQuestions: %v", err)
 		}
 		id := q.RequestID
-		_, _, err = f.client.SendAnswers(context.Background(), "sess", []Answer{
+		_, err = f.client.SendAnswers(context.Background(), "sess", []Answer{
 			{RequestID: id, Answers: []string{"pockode"}},
-		}, nil)
+		}, "")
 		if !errors.Is(err, ErrAnswerShape) {
 			t.Fatalf("error = %v, want ErrAnswerShape", err)
 		}
@@ -666,7 +662,7 @@ func TestSendAnswers_FreeTextBesideTheOptions(t *testing.T) {
 			}
 			id := q.RequestID
 
-			if _, _, err := f.client.SendAnswers(context.Background(), "sess", []Answer{tt.answer(id)}, nil); err != nil {
+			if _, err := f.client.SendAnswers(context.Background(), "sess", []Answer{tt.answer(id)}, ""); err != nil {
 				t.Fatalf("SendAnswers: %v", err)
 			}
 
@@ -721,8 +717,8 @@ func TestSendAnswers_NoteBesideTheAnswer(t *testing.T) {
 				t.Fatalf("PostQuestions: %v", err)
 			}
 
-			if _, _, err := f.client.SendAnswers(context.Background(), "sess",
-				[]Answer{tt.answer(q.RequestID)}, nil); err != nil {
+			if _, err := f.client.SendAnswers(context.Background(), "sess",
+				[]Answer{tt.answer(q.RequestID)}, ""); err != nil {
 				t.Fatalf("SendAnswers: %v", err)
 			}
 
@@ -767,10 +763,10 @@ func TestSendAnswers_SameQuestionTwiceInOneMessage(t *testing.T) {
 	f := newQuestionFixture(t)
 	id := f.post(t, "Database")
 
-	_, _, err := f.client.SendAnswers(context.Background(), "sess", []Answer{
+	_, err := f.client.SendAnswers(context.Background(), "sess", []Answer{
 		{RequestID: id, Answers: []string{"Postgres"}},
 		{RequestID: id, Answers: []string{"SQLite"}},
-	}, nil)
+	}, "")
 	if !errors.Is(err, ErrAnswerShape) {
 		t.Errorf("error = %v, want ErrAnswerShape", err)
 	}
@@ -784,8 +780,8 @@ func TestSendAnswers_RefusedWhileAPermissionIsOnScreen(t *testing.T) {
 	f := newQuestionFixture(t)
 	id := f.post(t, "Database")
 
-	if _, err := f.client.SendMessageExcluding(context.Background(), "sess", "go", nil, nil); err != nil {
-		t.Fatalf("SendMessageExcluding: %v", err)
+	if _, err := f.client.SendMessage(context.Background(), "sess", "go", nil, ""); err != nil {
+		t.Fatalf("SendMessage: %v", err)
 	}
 	// The prompt has to be *reduced* before the permission is pushed, not merely
 	// sent. A prompt signal expires every blocker on the turn, so a permission
@@ -812,9 +808,9 @@ func TestSendAnswers_RefusedWhileAPermissionIsOnScreen(t *testing.T) {
 		return err == nil && proc.TurnState().AwaitingUserAnswer()
 	})
 
-	_, _, err := f.client.SendAnswers(context.Background(), "sess", []Answer{
+	_, err := f.client.SendAnswers(context.Background(), "sess", []Answer{
 		{RequestID: id, Answers: []string{"Postgres"}},
-	}, nil)
+	}, "")
 	if !errors.Is(err, ErrTurnAwaitingAnswer) {
 		t.Fatalf("error = %v, want ErrTurnAwaitingAnswer", err)
 	}
@@ -829,7 +825,7 @@ func TestSendAnswers_RefusesNoAnswers(t *testing.T) {
 	f := newQuestionFixture(t)
 	f.post(t, "Database")
 
-	if _, _, err := f.client.SendAnswers(context.Background(), "sess", nil, nil); !errors.Is(err, ErrAnswerShape) {
+	if _, err := f.client.SendAnswers(context.Background(), "sess", nil, ""); !errors.Is(err, ErrAnswerShape) {
 		t.Fatalf("error = %v, want ErrAnswerShape", err)
 	}
 	if got := len(f.agent.sessions); got != 0 {
@@ -907,9 +903,9 @@ func TestSendAnswers_RecordsTheUserAsTheAnswerer(t *testing.T) {
 	f := newQuestionFixture(t)
 	id := f.post(t, "Database")
 
-	if _, _, err := f.client.SendAnswers(context.Background(), "sess", []Answer{
+	if _, err := f.client.SendAnswers(context.Background(), "sess", []Answer{
 		{RequestID: id, Answers: []string{"Postgres"}},
-	}, nil); err != nil {
+	}, ""); err != nil {
 		t.Fatalf("SendAnswers: %v", err)
 	}
 
@@ -937,7 +933,7 @@ func TestDescribeResolution_SaysWhoResolvedIt(t *testing.T) {
 		{
 			name: "the user answered in the chat",
 			resolve: func(t *testing.T, f *questionFixture, id string) {
-				if _, _, err := f.client.SendAnswers(context.Background(), "sess", []Answer{{RequestID: id, Answers: []string{"Postgres"}}}, nil); err != nil {
+				if _, err := f.client.SendAnswers(context.Background(), "sess", []Answer{{RequestID: id, Answers: []string{"Postgres"}}}, ""); err != nil {
 					t.Fatalf("SendAnswers: %v", err)
 				}
 			},
@@ -1080,12 +1076,12 @@ func TestSendAnswers_DiscardedAnswerReopensTheQuestion(t *testing.T) {
 	answered := f.post(t, "Database")
 	other := f.post(t, "Runtime")
 
-	if _, err := f.client.SendMessageExcluding(context.Background(), "sess", "go", nil, nil); err != nil {
-		t.Fatalf("SendMessageExcluding: %v", err)
+	if _, err := f.client.SendMessage(context.Background(), "sess", "go", nil, ""); err != nil {
+		t.Fatalf("SendMessage: %v", err)
 	}
-	sent, _, err := f.client.SendAnswers(context.Background(), "sess", []Answer{
+	sent, err := f.client.SendAnswers(context.Background(), "sess", []Answer{
 		{RequestID: answered, Answers: []string{"Postgres"}},
-	}, nil)
+	}, "")
 	if err != nil {
 		t.Fatalf("SendAnswers: %v", err)
 	}
@@ -1112,9 +1108,9 @@ func TestSendAnswers_DiscardedAnswerReopensTheQuestion(t *testing.T) {
 		}
 	}
 
-	if _, _, err := f.client.SendAnswers(context.Background(), "sess", []Answer{
+	if _, err := f.client.SendAnswers(context.Background(), "sess", []Answer{
 		{RequestID: answered, Answers: []string{"SQLite"}},
-	}, nil); err != nil {
+	}, ""); err != nil {
 		t.Fatalf("answering again: %v", err)
 	}
 	if got := requestIDsOf(f.unanswered(t)); !slices.Equal(got, []string{other}) {
@@ -1130,12 +1126,12 @@ func TestWithdrawQuestions_LetsGoOfAnswersInFlight(t *testing.T) {
 	f := newQuestionFixture(t)
 	id := f.post(t, "Database")
 
-	if _, err := f.client.SendMessageExcluding(context.Background(), "sess", "go", nil, nil); err != nil {
-		t.Fatalf("SendMessageExcluding: %v", err)
+	if _, err := f.client.SendMessage(context.Background(), "sess", "go", nil, ""); err != nil {
+		t.Fatalf("SendMessage: %v", err)
 	}
-	sent, _, err := f.client.SendAnswers(context.Background(), "sess", []Answer{
+	sent, err := f.client.SendAnswers(context.Background(), "sess", []Answer{
 		{RequestID: id, Answers: []string{"Postgres"}},
-	}, nil)
+	}, "")
 	if err != nil {
 		t.Fatalf("SendAnswers: %v", err)
 	}
@@ -1176,10 +1172,10 @@ func TestQuestionsSettled_EveryWayAQuestionStopsWaitingIsTold(t *testing.T) {
 		{
 			name: "answered and declined by the user in one message",
 			settle: func(t *testing.T, f *questionFixture, ids []string) {
-				if _, _, err := f.client.SendAnswers(ctx, "sess", []Answer{
+				if _, err := f.client.SendAnswers(ctx, "sess", []Answer{
 					{RequestID: ids[0], Answers: []string{"Postgres"}},
 					{RequestID: ids[1], Declined: true},
-				}, nil); err != nil {
+				}, ""); err != nil {
 					t.Fatalf("SendAnswers: %v", err)
 				}
 			},
@@ -1272,9 +1268,9 @@ func TestQuestionsSettled_ARefusalTellsNobody(t *testing.T) {
 	f := newQuestionFixture(t)
 	id := f.post(t, "Database")
 
-	if _, _, err := f.client.SendAnswers(context.Background(), "sess", []Answer{
+	if _, err := f.client.SendAnswers(context.Background(), "sess", []Answer{
 		{RequestID: id, Answers: []string{"MySQL"}},
-	}, nil); !errors.Is(err, ErrAnswerShape) {
+	}, ""); !errors.Is(err, ErrAnswerShape) {
 		t.Fatalf("SendAnswers error = %v, want a shape refusal", err)
 	}
 	if err := f.client.CancelQuestion(context.Background(), "sess", "req-nobody"); !errors.Is(err, ErrQuestionNotPending) {

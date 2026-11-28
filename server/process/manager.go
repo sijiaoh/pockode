@@ -1973,7 +1973,7 @@ func (p *Process) handleEvent(ctx context.Context, log *slog.Logger, event agent
 	case reduce:
 		transition = p.advance(ctx, in, record)
 	case record != nil:
-		_, _ = p.manager.stream.Append(ctx, p.sessionID, record, nil)
+		_, _ = p.manager.stream.Append(ctx, p.sessionID, record)
 	}
 	if live, ok := wire.(agent.LiveEvent); ok {
 		p.manager.stream.Publish(p.sessionID, live)

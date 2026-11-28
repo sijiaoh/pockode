@@ -473,16 +473,14 @@ record that says the agent read it and the `message_discarded` record that says
 a Stop threw it away unread. It is what names *which* of several messages
 queued into one turn was read or discarded, which position cannot say.
 
-**It is not what a client cuts the transcript on**: a read point is applied
-where it sits, so the cut lands under the newest message anyway, and the client
-that sent a message learns the id minted for it only from the `chat.message`
-reply ([Broadcasting](#broadcasting)), which can arrive after the read point
-does. Laying a transcript out by this id would therefore give the sending tab a
-different transcript from every other tab, and a different one again after a
-reload ([code/frontend-state.md](code/frontend-state.md)). A discard is the one
-consumer that does join on it, because it has nothing else to go by — and it
-derives the result on every render rather than at arrival for exactly that
-lateness. It is empty on every record written before the field existed, and a
+**It is what a client cuts a turn on.** A read point closes the reply above
+it under the message it names and the ones queued before it; the ones queued
+behind it go on waiting under the reply it opens. Every client knows each
+message by this id — the tab that sent one minted it, and its record carries
+it — so every tab, and a reload, lays the turn out alike
+([code/frontend-state.md](code/frontend-state.md#bubbles)). A discard joins on
+it too.
+It is empty on every record written before the field existed, and a
 `message_ingested` without one still marks the boundary it sits at.
 
 Two decisions worth knowing before adding a field — why every moment on a
@@ -582,7 +580,7 @@ owns them.
 
 `server/watch/chat_messages.go` — `ChatMessagesWatcher` implements `chatstream.Sink`. The session's `chatstream.Sequencer` hands it every record — the process's and the ones Pockode writes itself — in seq order, each right after it is persisted and folded into the session's projection (a live event, never persisted, in its place among them; a record whose append failed is replaced by a `history_write_failed` warning with no seq). Records do not go out as themselves: for each one it queues a `chat.update` saying what the record changed in the transcript — the turns and items it changed, each as it stands now, in the shape a history page uses — and for a live event a `chat.delta` extending the stream it belongs to; both carry the subscription ID for client-side routing, for each subscriber of the session, each on a bounded queue of its own (overflow drops deltas, repaired by the next, or ends the subscription with `chat.resync` — [code/subscription-system.md](code/subscription-system.md#chat-delivery)). The shapes and the ordering rules are in [agent-chat.md](agent-chat.md#live-updates). An item carries its `seq` and `last_seq`, the addresses a history page's items carry ([paging](agent-chat.md#history-paging)), so a point in the conversation is named the same way whichever route told the client of it ([code/agent-integration.md](code/agent-integration.md#history-storage)).
 
-A user message's item is sent to every subscriber except the tab that sent it, which has already echoed the message into its own transcript; the rest of that update still reaches it. That tab therefore learns its own item's address from a third source — the reply to the `chat.message` call it made (`rpc.MessageResult`), the only channel that reaches it, which carries the item's `item_id` beside its `seq` and `message_id`: every later update names the message by that id. Pages, updates and that reply all carry the same `seq` and `message_id`, so what a client can name does not depend on which of the three delivered the message. For a message that invoked a [Pockode command](pockode-commands.md) the reply also carries the record's `content` and `command`, for the same reason: the sender typed `/pockode-lead`, and the prompt the agent was sent instead reaches it nowhere else. A message carrying `answering` gets `content` back the same way: the sender sent none, and the body the server wrote from the answers reaches it nowhere else. A message carrying files gets `attachments` back too: the sender knew only what the browser guessed about each file. A page's action gets `content` and `html_action` back: the sender echoed only the action, and the text the agent was sent reaches it nowhere else. A message no record names stays unaddressable, and a client must not number it itself.
+A user message's item is sent to every subscriber, the tab that sent it included. That tab has echoed the message into its own transcript under the `message_id` it minted and sent it with, and the record carries that id, so the item arriving is how the echo learns everything the server wrote into the record — its `seq`, the prompt a [Pockode command](pockode-commands.md) expanded to, the body written from `answering`, the files as stored, a page action's text — the same way every other tab learns it. Pages and updates carry the same `seq` and `message_id`, so what a client can name does not depend on which of them delivered the message. A message no record names stays unaddressable, and a client must not number it itself.
 
 ## Frontend
 
@@ -672,7 +670,7 @@ ended_by process_ended      → "process_ended"
 
 ### Subscription
 
-`web/src/hooks/useChatMessages.ts` — Subscribes via `chat.messages.subscribe` RPC, installs the newest page and the live streams it came with, then applies `chat.update` and `chat.delta` notifications to the same store. Earlier pages are fetched on demand as the user scrolls back and added in front of what is already there ([agent-chat.md](agent-chat.md#reading-a-page-on-the-client)).
+`web/src/hooks/useChatMessages.ts` — Subscribes via `chat.messages.subscribe` RPC, installs the newest page and the live streams it came with (or, re-subscribing after a reconnect, resumes the copy it holds — [agent-chat.md](agent-chat.md#live-updates)), then applies `chat.update` and `chat.delta` notifications to the same store. Earlier pages are fetched on demand as the user scrolls back and added in front of what is already there ([agent-chat.md](agent-chat.md#reading-a-page-on-the-client)).
 
 ## Key Files
 

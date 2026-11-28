@@ -595,9 +595,10 @@ does not cover; the record payloads they nest come from `wire.generated.ts`.
 ### Data Flow
 
 ```
-chat.messages.subscribe / chat.messages.history / session_view.history → ChatPage
+chat.messages.subscribe → ChatPage (delivery "snapshot") or ChatUpdate (delivery "resume")
+chat.messages.history / session_view.history → ChatPage
 chat.update → ChatUpdate        chat.delta → ChatDelta        chat.resync
-  → useChatMessages → ChatItems (installNewestPage / addOlderPage / applyUpdate / applyToolDelta)
+  → useChatMessages → ChatItems (installNewestPage / resumeTranscript / addOlderPage / applyUpdate / applyToolDelta)
     → buildTranscript(store, cache) → Message[] → MessageList
 ```
 
@@ -628,10 +629,25 @@ later build walk everything.
 
 Reading a page or an update is a matter of filing:
 
-- **The subscription's page replaces everything.** A re-subscribe — a
-  reconnect, or `chat.resync` — starts the store over from the new snapshot;
-  only this client's sends still waiting on a reply, and the part ids, carry
-  over, so nothing that did not change remounts.
+- **A re-subscribe resumes when it can.** The store remembers which server
+  instance its copy came from (`ChatItems.instance`, from `auth`), and every
+  re-subscribe asks to continue from its `through_seq` (`resumeFrom`). A
+  resumed answer is one update, applied like any other (`resumeTranscript`):
+  the older pages scrolled back through, the cursor and the part ids stay, and
+  the live streams are replaced by the ones it brings, since the old ones
+  stopped with the connection. An older page that was in flight is given up —
+  it was asked for over the dead connection — and asking again brings it. Why
+  the server can answer this way, and when it will not, is in
+  [websocket-rpc.md](websocket-rpc.md#resuming-a-chat).
+- **A snapshot replaces everything.** The server's answer to a copy it cannot
+  continue, and the only answer to a `chat.resync`, which marks the copy not
+  to be resumed first (`forgetResume`): the hole a resync reports is one the copy cannot
+  vouch past. The store starts over from the page; only this client's sends
+  still unaccounted for, and the part ids, carry over, so nothing that did not
+  change remounts — unless the page is another server instance's, whose item
+  ids may name other items: the part ids are then minted afresh, and a send
+  the page does not hold is drawn at its end rather than after an item named
+  in the old numbering.
 - **An older page goes in front.** An item already held keeps the newer
   account; a turn already held is replaced only by one that knows its ending.
 - **An update upserts.** Its turns first, then its items in order, each
@@ -682,7 +698,13 @@ is drawn finished too.
 **A message sent into a running turn is drawn under the reply that was being
 written**, not where its item sits among the turn's items: the reply above it
 keeps growing until the agent *reads* the message, and splits there, at the
-`read` item ([agent-integration.md](agent-integration.md#the-read-point)). One
+`read` item ([agent-integration.md](agent-integration.md#the-read-point)). The
+read point names the message it read by `message_id`: that message and the
+ones queued before it close the reply above, and the ones queued behind it
+stay unread under the reply the read point opens. The sender knows its own
+message by that id as well as any other tab does — it minted it — so every
+tab cuts the turn in the same place. A read point naming no unread message,
+or none at all, was read past everything waiting. One
 turn has one ending, but not one bubble. A bubble opened at a read point carries
 `openedAtReadPoint`, which is how `openTurnReplies` reads the turn's work
 across both halves. Messages nobody read — a Stop discarded them —
@@ -771,32 +793,42 @@ never computes with them — where the cut falls is the server's answer
 
 ### This Client's Own Messages
 
-The sender is left out of the update carrying its own message
-([agent-chat.md](../agent-chat.md#live-updates)), so a send is drawn from an
-**echo** (`Echo`) until the transcript holds its item. The echo goes where the
-message was sent: after the top-level item that was last at that moment, in
-the turn then open — so a message sent mid-turn is drawn under the reply being
-written, like anybody's — or, sent to an idle agent, with a reply bubble of its
-own (`sending`) at once. A refused send takes the echo back; one that failed
-otherwise leaves it with the failure drawn directly under it.
+A send is drawn from an **echo** (`Echo`) until the transcript holds its
+item. The echo goes where the message was sent: after the top-level item that
+was last at that moment, in the turn then open — so a message sent mid-turn is
+drawn under the reply being written, like anybody's — or, sent to an idle
+agent, with a reply bubble of its own (`sending`) at once.
 
-The reply to `chat.message` carries the message's `item_id`, and the item is
-written into the store from what was sent and what the reply adds. An update
-can beat the reply — the turn the message opened takes its item in, or a Stop
-discards it — and a message item first heard of from a record after its own is
-this client's: the waiting echo with the same text takes it, or else one of the
-kind that record implies (only a send to an idle agent opens a turn). That is a
-guess the reply can overrule: the item the reply names wins, and an echo that
-guessed it gives it back. A fresh page — a re-subscribe while a send is in
-flight, or after one failed on a dropped connection — is matched the same way,
-against the messages recorded since the transcript last stood, so the page's
-copy and the echo are never both drawn. A send that failed here may still have
-been recorded (a reply lost to a timeout or a dropped connection), and its own
-record can then reach this client over a newer connection; a failed echo
-therefore takes a newly heard-of message item with the same text, and its
-failure is dropped. Several sends keep the order they were
-made in. Either way the item it becomes takes the echo's row keys, its own and
-its reply's, so the bubble the user watched appear is the one that stays.
+**The echo is matched by id, never guessed.** The client mints the message's
+id (a UUID) before it sends, the record carries it as `message_id`, and the
+sender is sent that record like every other subscriber
+([websocket-rpc.md](websocket-rpc.md#sending-a-message)). So a message item
+whose `message_id` is an unclaimed echo's is that echo's (`claimEcho`), however
+it arrives: an update before the send's reply or after it, a page, or a resume
+after a reply lost with the connection. The reply is `{}` and says only that
+the send is over (`sentEcho`). When the server minted the id, the sender was
+left out of the broadcast and had to match items to echoes by text and by
+which turn they opened, which two sends of the same text could fool. A
+snapshot unclaims every echo and claims them again from the page, since
+another server instance numbers items differently. Either way the item takes
+the echo's row keys, its own and its reply's, so the bubble the user watched
+appear is the one that stays.
+
+**A failure is the server's or the transport's**, and only the first survives
+the record. The record is written before the message is handed to the agent,
+so a send can be recorded and still fail — the process closed, stdin refused
+it. `isServerRejection` (`wsStore`) tells a reply with a JSON-RPC code from a
+transport failure ("Connection lost", a timeout, code 0), and `failEcho` marks
+the first `failedOnServer`. Such an echo keeps its error when its record
+arrives, and `buildTranscript` draws the failure under the recorded message —
+beside the bubble of a turn it opened, since a failed handover can still open
+one. A transport failure says nothing about what happened, so the record
+arriving is taken as the answer and the error is dropped. That is wrong only
+when the handover failed *and* the server's saying so was lost with the
+connection. A refused send takes the echo back (`takeBackEcho`) — unless its
+record has already arrived, in which case it was written after all and stays:
+failed when the server said so, drawn as sent when only the transport failed,
+by the same rule. Several sends keep the order they were made in.
 
 ### Part Identity
 
@@ -832,21 +864,23 @@ What the transcript draws from it is in
 [discarded-messages-ui.md](../discarded-messages-ui.md); this is how the state is
 kept.
 
-The server says it twice over, and the client keeps both as said: the message's
-item is marked `discarded`, and the turn the Stop ended lists it (`discarded`
-on its stretch and its update), which the turn's last bubble carries as
-`discardedMessageIds`. "This message was discarded" is derived on every render
-by `discardedMessages`, which joins those ids with the messages' `messageId`s
-across the loaded transcript, rather than written onto the message: the turn
-can be loaded a page before the message it names.
+The server says it twice over, and the client keeps both as said. **The
+message's item is marked `discarded`**, and its bubble reads that flag off its
+own item (`UserMessage.discarded`): the fact belongs to the message, so it
+arrives with the message on whatever page or update brings it, and nothing has
+to be joined. **The turn the Stop ended lists the messages** (`discarded` on its
+stretch and its update), which the turn's last bubble carries as
+`discardedMessageIds`. That list is read only by the restore summary at the end
+of the stopped turn, which needs the messages themselves: `discardedMessages`
+maps each id to the message where it is loaded, and the turn can be loaded a
+page before a message it names.
 
 A posted question's card is read the same way. A discarded answer reopens its
 question — the server's item goes back to `open` — but the card is the record
 of what was said, so the item keeps the answer it lost (`discarded_answer`,
-`discarded_in`) and the card is drawn with it, its message id as
-`answerMessageId`; the card reads `Not read` when that id is in the derived set
-([answering-ui.md](../answering-ui.md#6-the-record-card-in-the-stream)). A new
-answer or a withdrawal replaces it.
+`discarded_in`) and the card is drawn with it, marked `unread`; the card reads
+`Not read` from that ([answering-ui.md](../answering-ui.md#6-the-record-card-in-the-stream)).
+A new answer or a withdrawal replaces it.
 
 ### Tool Runs
 
@@ -1073,8 +1107,9 @@ are: they are history, so a reload draws what the live view did
 ([tool-call-ui.md](../tool-call-ui.md#where-the-duration-comes-from) says which
 records). A reply opens at its turn's opening message's `observed_at`, or at
 the read point that opened it; it ends at the next read point, or at the turn's
-`ended_at` on its last bubble. The sending tab's echo takes `openedAt` from the
-send's reply. A reply that opened without a message — output the CLI resumed by
+`ended_at` on its last bubble. The sending tab's own reply bubble is no
+exception: until the message's record arrives it has no start, and the record
+brings it. A reply that opened without a message — output the CLI resumed by
 itself — has none, and nothing is guessed. `turnWork` (`lib/turnWork.ts`) reads
 the work figures' span and call count off a settled reply. It counts nothing
 on a reply whose start is not loaded: the server marks the newer half of a turn

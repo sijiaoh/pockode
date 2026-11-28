@@ -828,11 +828,9 @@ Which records are stamped where is in
 [agent-integration.md](code/agent-integration.md#history-records-and-live-events) (the server
 side) and [frontend-state.md](code/frontend-state.md#times-on-a-reply) (how the
 transcript carries the two moments onto the assistant message — history, the way
-a run's `startedAt` and `endedAt` are, not live state). One piece of it is
-the design's own: the tab that sent the message never receives its record —
-the server leaves the sender out of the broadcast — so the same moment comes
-back on the send's answer (`rpc.MessageResult`'s `observed_at`), or the device
-the user typed on would draw no `Worked` until a reload. The figure is derived
+a run's `startedAt` and `endedAt` are, not live state). The tab that sent the
+message reads the moment off its own record, which reaches it like every other
+tab's. The figure is derived
 beside `turnChanges`, a pure function of the message: `turnWork`
 (`lib/turnWork.ts`), which also counts the calls and says whether the reply
 made any.
@@ -5114,10 +5112,11 @@ the `message` record, origin user, with one field added, as `command` is:
 ```
 chat.html_action {
   session_id: string,
+  message_id?: string,     // minted by the client, as chat.message's
   page: string,            // the card's id, "p3"
   action: string,          // 1–128 characters, no control characters
   data?: unknown,          // any JSON; omitted = {}; at most 64KB compacted
-} -> MessageResult         // chat.message's, plus html_action echoed back
+} -> {}                    // the record arrives on the subscription
 ```
 
 Refusals are `InvalidParams`, checked in this order, and leave nothing
@@ -5129,9 +5128,11 @@ behind:
    reach `p3` while the record says otherwise;
 3. `action must be 1–128 characters with no control characters`;
 4. `data is <n> bytes, over the 64KB limit`;
-5. `page p9 does not exist in this session` — any page the session has, not
+5. `message_id must be a UUID in canonical form (lowercase and hyphenated),
+   not "<id>"` — absent is allowed, and the server mints one;
+6. `page p9 does not exist in this session` — any page the session has, not
    only the latest;
-6. `chat.ErrTurnAwaitingAnswer`'s message, unchanged, with `data.reason:
+7. `chat.ErrTurnAwaitingAnswer`'s message, unchanged, with `data.reason:
    "awaiting_permission"` (`rpc.ChatErrorData`) so the client can tell it
    apart without reading the words ([above](#while-the-session-is-busy)).
    `replyErrorForChat` adds the reason for every chat send refused this way,
@@ -5142,8 +5143,10 @@ message's path — refused before anything is recorded when the turn awaits an
 answer, then persisted, delivered, broadcast, with a read point mid-turn, and
 in a work item's session handed to the work engine after a successful send
 (`HandleUserMessage`), as a typed message is — a press is the reader speaking
-to that work as much as typing is. Its reply carries `content` as well as
-`html_action`, so the sender's own copy is the record that was broadcast. No
+to that work as much as typing is. Like a typed message it goes under a
+`message_id` the page's client minted, and the sender reads its own copy —
+`content` and `html_action` — off the record it is broadcast like everyone
+else; the reply is `{}`. No
 token, no rate limit: an agent's page is not an adversary to be throttled, and
 the activation rule already keeps an unattended page from sending (what a
 loaded host may send is [above](#the-bridge)).
@@ -5152,7 +5155,8 @@ loaded host may send is [above](#the-bridge)).
 
 `HtmlActionBubble`, from the canvas branch's `CanvasActionBubble`, drawn from
 `html_action` alone — never `content`, which is for the agent and which the
-sender's echo does not have until the reply, so the echo reads right at once:
+sender's echo does not have until its record arrives, so the echo reads right
+at once:
 
 ```
                           ┌───────────────────────────┐

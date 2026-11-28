@@ -6,14 +6,16 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/pockode/server/agent"
 	"github.com/pockode/server/htmlpage"
 	"github.com/pockode/server/rpc"
 	"github.com/sourcegraph/jsonrpc2"
 )
 
-// A page action reaches the agent as a user message naming the page, and its
-// record and reply carry the structured action beside that text
+// A page action reaches the agent as a user message naming the page, under
+// the id the client minted, and its record carries the structured action
+// beside that text
 // (docs/tool-call-ui.md § The action message).
 func TestChatHTMLAction_SendsTheActionAsAUserMessage(t *testing.T) {
 	mock := &mockAgent{}
@@ -23,8 +25,9 @@ func TestChatHTMLAction_SendsTheActionAsAUserMessage(t *testing.T) {
 	storePage(t, env, created.ID, htmlpage.Draft{Title: "Two", HTML: "<p>2</p>"})
 
 	// p1 while p2 is the latest: any page with an id may send.
+	id := uuid.NewString()
 	resp := env.call("chat.html_action", rpc.HTMLActionParams{
-		SessionID: created.ID, Page: "p1", Action: "approve",
+		SessionID: created.ID, MessageID: id, Page: "p1", Action: "approve",
 		Data: json.RawMessage(`{ "id": "42",  "tags": ["a", "b"] }`),
 	})
 	if resp.Error != nil {
@@ -32,20 +35,6 @@ func TestChatHTMLAction_SendsTheActionAsAUserMessage(t *testing.T) {
 	}
 
 	const wantContent = "Page action \"approve\" from p1:\n{\"id\":\"42\",\"tags\":[\"a\",\"b\"]}"
-	var result rpc.MessageResult
-	if err := json.Unmarshal(resp.Result, &result); err != nil {
-		t.Fatalf("failed to unmarshal result: %v", err)
-	}
-	if result.Content != wantContent {
-		t.Errorf("reply content = %q, want %q", result.Content, wantContent)
-	}
-	if a := result.HTMLAction; a == nil || a.Page != "p1" || a.Action != "approve" || string(a.Data) != `{"id":"42","tags":["a","b"]}` {
-		t.Errorf("reply html_action = %+v", a)
-	}
-	if !result.Seq.Valid() || result.MessageID == "" {
-		t.Errorf("reply does not name its record: seq=%v id=%q", result.Seq, result.MessageID)
-	}
-
 	if got := mock.sentMessagesFor(created.ID); len(got) != 1 || got[0] != wantContent {
 		t.Errorf("agent was sent %q, want [%q]", got, wantContent)
 	}
@@ -62,10 +51,10 @@ func TestChatHTMLAction_SendsTheActionAsAUserMessage(t *testing.T) {
 	if !ok {
 		t.Fatalf("records[0] = %T, want a message", decoded)
 	}
-	if rec.Origin != "" || rec.Content != wantContent || rec.MessageID != result.MessageID {
+	if rec.Origin != "" || rec.Content != wantContent || rec.MessageID != id {
 		t.Errorf("record = %+v", rec)
 	}
-	if a := rec.HTMLAction; a == nil || a.Page != "p1" || a.Action != "approve" {
+	if a := rec.HTMLAction; a == nil || a.Page != "p1" || a.Action != "approve" || string(a.Data) != `{"id":"42","tags":["a","b"]}` {
 		t.Errorf("record html_action = %+v", a)
 	}
 }
@@ -211,5 +200,29 @@ func TestChatHTMLAction_RefusedWhileAPermissionIsOpen(t *testing.T) {
 		if message, ok := rec.(agent.MessageRecord); ok && message.HTMLAction != nil {
 			t.Errorf("a refused action was recorded: %+v", rec)
 		}
+	}
+}
+
+// A page's send retried under the id of one already recorded sends nothing
+// more, as a typed message's does.
+func TestChatHTMLAction_ARetryUnderTheSameIDSendsNothing(t *testing.T) {
+	mock := &mockAgent{}
+	env := newTestEnv(t, mock)
+	_, created := env.createSession()
+	storePage(t, env, created.ID, htmlpage.Draft{Title: "One", HTML: `<button data-pk-send="approve">OK</button>`})
+
+	id := uuid.NewString()
+	for attempt := range 2 {
+		resp := env.call("chat.html_action", rpc.HTMLActionParams{SessionID: created.ID, MessageID: id, Page: "p1", Action: "approve"})
+		if resp.Error != nil {
+			t.Fatalf("attempt %d: %s", attempt, resp.Error.Message)
+		}
+	}
+
+	if records := messageRecords(t, env, created.ID); len(records) != 1 || records[0].MessageID != id {
+		t.Errorf("message records = %+v, want one, under %s", records, id)
+	}
+	if got := mock.sentMessagesFor(created.ID); len(got) != 1 {
+		t.Errorf("agent was sent %q, want the action once", got)
 	}
 }

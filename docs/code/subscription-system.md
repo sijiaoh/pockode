@@ -50,7 +50,7 @@ it sends. `useChatMessages` had its own subscribe effect and was exposed exactly
 that way; it has been folded back into the hook rather than given a second copy
 of the hold-and-replay.
 
-**What the replay costs.** A record landing in the window is both in the page
+**What the replay costs.** A record landing in the window is both in the page (or the resumed update)
 the reply carries and in an update that the hold then replays over it. Each
 update says how far into the history it reaches (`through_seq`), and so does the
 page; the chat store skips the turns and items of an update whose `through_seq`
@@ -284,17 +284,55 @@ fit, or the projection the updates are taken from was let go while it was held
 subscription delivered before it is a gap-free prefix of the stream, in order,
 and it is the last notification the subscription will carry; the server keeps
 the subscription registered (so the session still counts as viewed) but
-delivers nothing more on it. The client recovers exactly as from a reconnect:
-unsubscribe the id and open a fresh `chat.messages.subscribe`, whose snapshot
-(history page, turn, live streams) holds everything the hole lost. In `web`,
-`useChatMessages` does this with `useSubscription`'s `refresh`: the snapshot
-replaces the transcript wholesale, the same path a reconnect takes, so nothing
-the first stream delivered is drawn twice.
+delivers nothing more on it. The client unsubscribes the id and opens a fresh
+`chat.messages.subscribe` **without** `resume`, whose snapshot (history page,
+turn, live streams) holds everything the hole lost. In `web`,
+`useChatMessages` does this with `useSubscription`'s `refresh`, having first
+forgotten which server instance its copy came from, so the snapshot replaces
+the transcript wholesale and nothing the first stream delivered is drawn twice.
+A reconnect is different: nothing it lost was refused by the server, so it
+resumes ([below](#resuming-from-a-seq)).
 
 Ending the subscription instead of carrying on after the hole is what keeps the
 client from ever drawing a transcript with an update silently missing from its
 middle; a client that falls this far behind has a fresh snapshot to catch up on
 either way.
+
+#### Resuming from a seq
+
+A reconnecting client asks to be sent only what the records after its
+`through_seq` changed (the wire contract and when the server answers with a
+page instead are in
+[websocket-rpc.md](websocket-rpc.md#resuming-a-chat)). The watcher serves that
+from the projection, not from a log of the updates it sent:
+`ChatMessagesWatcher.Subscribe(…, resumeAfter)` calls `projection.Live.Since`
+and answers `ChatStart{Resumed}` instead of `ChatStart{Page}`, or falls back to
+a page — logged — when `Since` says `ErrResumeUnavailable`.
+
+**Every change carries the seq that made it.** The fold stamps each entry, turn
+and the plan with a seq in the same marks `TakeUpdate` reads, and `Since`
+gathers everything stamped after the seq asked for. The stamp is the newest
+record *pushed* to the projection, not the newest folded: a message read off a
+file is folded only together with the record after it, so stamping with the
+folded seq would put the message before a seq the client already holds, and no
+resume would send it.
+
+A history holding a line in no file — the warning the store adds for history
+lines it had to skip — is never resumed. The store appends that line to the end
+of whatever it read, so a fold from the file again puts it, and every item
+after where it stood, under other item ids than the client's copy has.
+
+Because the stamps live in the projection, a resume works after the projection
+was let go (its linger expired) and folded again from the file, which a replay
+buffer would not survive. Its cost is a gap cap, `projection.MaxResumeGap`: a
+resume more than a page's worth behind is answered with a page, which is the
+cheaper answer by then.
+
+**The race is the page's.** Registration and the copy of the streams are taken
+before `Since` runs, exactly as before a page is cut, so an update for a record
+landing in that window may also be in the resumed update. The client applies
+the same rule as for a page: skip the turns and items of an update whose
+`through_seq` is not past the one it holds, apply its `streams_ended`.
 
 ### Why Reference Counting in FSWatcher?
 

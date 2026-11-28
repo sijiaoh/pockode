@@ -23,7 +23,6 @@ import {
 	resetChatUIConfig,
 	setChatUIConfig,
 } from "../../lib/registries/chatUIRegistry";
-import type { SentMessage } from "../../lib/rpc";
 import { useSessionDetailStore } from "../../lib/sessionDetailStore";
 import { useSessionStore } from "../../lib/sessionStore";
 import { useSettingsStore } from "../../lib/settingsStore";
@@ -149,14 +148,15 @@ vi.mock("../Project", () => ({
 
 // Use vi.hoisted to ensure mockState is available when vi.mock factory runs
 const mockState = vi.hoisted(() => ({
-	// Mirrors ChatActions.sendMessage: it resolves with what the server said
-	// about the message — its seq, when it has an address to give.
+	// Mirrors ChatActions.sendMessage: it resolves once the server has the
+	// message, and says nothing more — the record arrives on the subscription.
 	sendMessage: vi.fn(
 		(
 			_sessionId: string,
+			_messageId: string,
 			_content: string,
 			..._rest: unknown[]
-		): Promise<SentMessage> => Promise.resolve({}),
+		): Promise<void> => Promise.resolve(),
 	),
 	interrupt: vi.fn(() => Promise.resolve()),
 	permissionResponse: vi.fn(() => Promise.resolve()),
@@ -301,6 +301,9 @@ vi.mock("../../lib/wsStore", () => {
 		wsActions: actions,
 		isInvalidParamsRejection: mockState.isInvalidParamsRejection,
 		isPermissionReviewerRejection: mockState.isPermissionReviewerRejection,
+		// The real check reads the JSON-RPC code: 0 is the transport's own.
+		isServerRejection: (error: unknown) =>
+			error instanceof JSONRPCErrorException && error.code !== 0,
 	};
 });
 
@@ -408,28 +411,32 @@ describe("ChatPanel", () => {
 	 * it fails here instead.
 	 */
 	const push = (...notifications: (ChatUpdate | ChatDelta)[]) =>
-		act(() => {
-			for (const n of notifications) {
-				if (n.type === "update" && n.through_seq !== undefined) {
-					const held = mockState.throughSeq;
-					if (held !== undefined && n.through_seq <= held) {
-						throw new Error(
-							`update through_seq ${n.through_seq} is not newer than ${held}`,
-						);
-					}
-					mockState.throughSeq = n.through_seq;
+		act(() => deliver(...notifications));
+
+	/** `push` for a caller already inside `act`: a send the test drives. */
+	const deliver = (...notifications: (ChatUpdate | ChatDelta)[]) => {
+		for (const n of notifications) {
+			if (n.type === "update" && n.through_seq !== undefined) {
+				const held = mockState.throughSeq;
+				if (held !== undefined && n.through_seq <= held) {
+					throw new Error(
+						`update through_seq ${n.through_seq} is not newer than ${held}`,
+					);
 				}
-				mockState.listener?.(n);
+				mockState.throughSeq = n.through_seq;
 			}
-		});
+			mockState.listener?.(n);
+		}
+	};
 
 	/**
 	 * The server starting a turn — opened by `opener` when a message opened
 	 * it, which the update carries into the turn.
 	 */
 	const startTurn = (opener?: PageItem): PageTurn => {
+		// Its turn_started is a record of its own, after the message's.
 		const started = opener
-			? fx.turn({ ended: false }, opener)
+			? fx.turn({ ended: false, start_seq: fx.record() }, opener)
 			: fx.turn({ ended: false, origin: "output", start_seq: fx.record() });
 		const turn = started.turn as ChatTurn;
 		push(
@@ -468,15 +475,15 @@ describe("ChatPanel", () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
 		mockState.sent = [];
-		mockState.sendMessage.mockImplementation(async (_sessionId, content) => {
-			const sent = fx.msg(content);
-			mockState.sent.push(sent);
-			return {
-				itemId: sent.id,
-				seq: sent.seq,
-				messageId: sent.message?.message_id,
-			};
-		});
+		// What the server does with a send: records it under the id the client
+		// sent it with, and tells every subscriber — the sender too.
+		mockState.sendMessage.mockImplementation(
+			async (_sessionId, messageId, content) => {
+				const sent = fx.msg(content, { message_id: messageId });
+				mockState.sent.push(sent);
+				deliver(fx.update({ items: [sent] }));
+			},
+		);
 		mockState.listener = null;
 		mockState.throughSeq = undefined;
 		fx.resetItems();
@@ -850,9 +857,8 @@ describe("ChatPanel", () => {
 	});
 
 	// The whole answering path, end to end: the strip offers it, the panel sends
-	// it, and the card in the transcript settles. The last of those is the one
-	// this client has to do itself — the sender is left out of the broadcast
-	// that carries its own message, so nothing is coming to settle the card
+	// it, and the card in the transcript settles when the update recording the
+	// answer arrives — the sender is told like every other tab
 	// (docs/answering-ui.md §3).
 	describe("answering a posted question", () => {
 		const question = {
@@ -977,10 +983,11 @@ describe("ChatPanel", () => {
 		it("shows itself for a waiting question and settles the card in the transcript", async () => {
 			const user = userEvent.setup();
 			seedUnansweredQuestion();
-			mockState.sendMessage.mockImplementationOnce(async () => {
-				const sent = fx.msg("");
-				push(answerTaken(["SQLite"]));
-				return { itemId: sent.id, seq: sent.seq };
+			mockState.sendMessage.mockImplementationOnce(async (_s, messageId) => {
+				deliver(
+					fx.update({ items: [fx.msg("", { message_id: messageId })] }),
+					answerTaken(["SQLite"]),
+				);
 			});
 			render(<ChatPanel {...defaultProps} />);
 			await waitForHistoryLoad();
@@ -1001,6 +1008,7 @@ describe("ChatPanel", () => {
 
 			expect(mockState.sendMessage).toHaveBeenCalledWith(
 				"test-session",
+				expect.any(String),
 				// The server writes what the agent reads from the answers.
 				"",
 				[{ request_id: "q1", answers: ["SQLite"] }],
@@ -1010,12 +1018,12 @@ describe("ChatPanel", () => {
 		});
 
 		// This tab's own answer, thrown away by a Stop whose record lands before
-		// the reply naming the answer's id: the card must still find out.
+		// the send's reply does: the card must still find out.
 		it("stops calling the card Answered when a Stop threw the answer away", async () => {
 			const user = userEvent.setup();
-			let reply: (sent: SentMessage) => void = () => {};
+			let reply: () => void = () => {};
 			mockState.sendMessage.mockReturnValueOnce(
-				new Promise((resolve) => {
+				new Promise<void>((resolve) => {
 					reply = resolve;
 				}),
 			);
@@ -1027,7 +1035,8 @@ describe("ChatPanel", () => {
 			await user.click(panel.getByRole("radio", { name: /SQLite/ }));
 			await user.click(panel.getByRole("button", { name: "Send" }));
 			// The Stop's update reaches the sender too: it carries the message
-			// it discarded, which this tab has not been told the id of yet.
+			// it discarded, under the id this tab sent it with.
+			const id = mockState.sendMessage.mock.calls[0][1];
 			const answer = {
 				request_id: "q1",
 				header: question.header,
@@ -1036,7 +1045,7 @@ describe("ChatPanel", () => {
 				answered_at: "",
 			};
 			const sent = fx.msg("", {
-				message_id: "m-9",
+				message_id: id,
 				answering: [answer],
 				discarded: true,
 			});
@@ -1049,7 +1058,7 @@ describe("ChatPanel", () => {
 								outcome: "aborted",
 								ended_by: "interrupted",
 							}),
-							discarded: [{ message_id: "m-9", seq: sent.seq }],
+							discarded: [{ message_id: id, seq: sent.seq }],
 						},
 					],
 					items: [
@@ -1059,13 +1068,13 @@ describe("ChatPanel", () => {
 								...(posted.question as QuestionItem),
 								status: "open",
 								discarded_answer: answer,
-								discarded_in: "m-9",
+								discarded_in: id,
 							},
 						}),
 					],
 				}),
 			);
-			act(() => reply({ seq: sent.seq, messageId: "m-9", itemId: sent.id }));
+			await act(async () => reply());
 
 			expect(await screen.findByText("Not read")).toBeInTheDocument();
 			expect(screen.queryByText("Answered")).not.toBeInTheDocument();
@@ -1125,6 +1134,7 @@ describe("ChatPanel", () => {
 			await user.click(composerSend[0]);
 			expect(mockState.sendMessage).toHaveBeenCalledWith(
 				"test-session",
+				expect.any(String),
 				"meanwhile",
 				undefined,
 			);
@@ -1722,6 +1732,7 @@ describe("ChatPanel", () => {
 			// It answers nothing: no `answering`, and the card stays Pending.
 			expect(mockState.sendMessage).toHaveBeenCalledWith(
 				"test-session",
+				expect.any(String),
 				"an ordinary message",
 				undefined,
 			);
@@ -2530,6 +2541,7 @@ describe("ChatPanel", () => {
 			// An ordinary message answers nothing, so the third argument is absent.
 			expect(mockState.sendMessage).toHaveBeenCalledWith(
 				"test-session",
+				expect.any(String),
 				"Hello AI",
 				undefined,
 			);
@@ -2740,9 +2752,9 @@ describe("ChatPanel", () => {
 		// Files the agent cannot receive are refused, and a refused message must
 		// not leave its name behind — so the rename waits, as a command's does.
 		it("names a new chat after its files once the message is accepted", async () => {
-			let accept: (value: SentMessage) => void = () => {};
+			let accept: () => void = () => {};
 			mockState.sendMessage.mockReturnValueOnce(
-				new Promise((resolve) => {
+				new Promise<void>((resolve) => {
 					accept = resolve;
 				}),
 			);
@@ -2761,12 +2773,13 @@ describe("ChatPanel", () => {
 
 			expect(mockState.sendMessage).toHaveBeenCalledWith(
 				"test-session",
+				expect.any(String),
 				"",
 				undefined,
 				[{ id: "a1.png", name: "shot.png" }],
 			);
 			expect(onUpdateTitle).not.toHaveBeenCalled();
-			await act(async () => accept({ seq: 1 } as SentMessage));
+			await act(async () => accept());
 			expect(onUpdateTitle).toHaveBeenCalledWith("shot.png");
 		});
 
@@ -3080,6 +3093,7 @@ describe("ChatPanel", () => {
 
 			expect(mockState.sendMessage).toHaveBeenCalledWith(
 				"test-session",
+				expect.any(String),
 				"Also look at X",
 				undefined,
 			);
@@ -4777,6 +4791,7 @@ describe("ChatPanel", () => {
 			await user.click(send);
 			expect(mockState.sendMessage).toHaveBeenCalledWith(
 				"test-session",
+				expect.any(String),
 				"Hello",
 				undefined,
 			);
@@ -4831,6 +4846,7 @@ describe("ChatPanel", () => {
 				await waitFor(() =>
 					expect(mockState.sendMessage).toHaveBeenCalledWith(
 						"test-session",
+						expect.any(String),
 						"Hi",
 						undefined,
 					),
@@ -5170,6 +5186,7 @@ describe("ChatPanel", () => {
 
 			expect(mockState.sendMessage).toHaveBeenCalledWith(
 				"test-session",
+				expect.any(String),
 				"rename it",
 				undefined,
 			);
@@ -5507,6 +5524,7 @@ describe("ChatPanel", () => {
 			await user.click(screen.getByRole("button", { name: "Send" }));
 			expect(mockState.sendMessage).toHaveBeenCalledWith(
 				"test-session",
+				expect.any(String),
 				"fix the build",
 				undefined,
 				[{ id: "a1.png", name: "shot.png" }],
@@ -5866,8 +5884,9 @@ describe("ChatPanel", () => {
 			await waitFor(() =>
 				expect(mockState.forkSession).toHaveBeenCalledWith(
 					"test-session",
-					// The turn's end, the newest record of that answer.
-					3,
+					// The turn's end, the newest record of that answer: after the
+					// message, its turn_started and the text.
+					4,
 					"Test Chat (fork)",
 				),
 			);
@@ -5878,8 +5897,7 @@ describe("ChatPanel", () => {
 		// the reason is worth nothing if focus cannot reach it.
 		it("disables fork on a message that has no settled cut point", async () => {
 			const user = userEvent.setup();
-			// No seq: a record the server could not persist, or one this tab sent
-			// to a server too old to answer with its address. Nothing the client
+			// No seq: a record the server could not persist. Nothing the client
 			// can name.
 			const opening = fx.turn({}, fx.msg("Opening"), fx.text("Sure"));
 			const { seq: _, last_seq: __, ...unaddressed } = fx.msg("Hello");
@@ -5961,14 +5979,11 @@ describe("ChatPanel", () => {
 		});
 
 		// The message you just sent is the one you most want to fork from — you
-		// asked, the answer disappointed, and you want to rephrase. It used to be
-		// the one message that could not be forked from at all until the session
-		// was reloaded: the sender is left out of the broadcast carrying every
-		// other record's seq. Now the send's own reply brings it.
+		// asked, the answer disappointed, and you want to rephrase. Its record
+		// reaches this tab as every other tab's does, seq and all.
 		it("forks from a message this tab just sent, with no reload", async () => {
 			const user = userEvent.setup();
 			mockState.page = forkHistory();
-			mockState.sendMessage.mockResolvedValue({ seq: 7 });
 			mockState.forkSession.mockResolvedValue(forkedSession);
 
 			render(<ChatPanel {...defaultProps} onSelectSession={vi.fn()} />);
@@ -5977,8 +5992,8 @@ describe("ChatPanel", () => {
 			await user.type(screen.getByRole("textbox"), "One more thing");
 			await user.click(screen.getByRole("button", { name: /Send/ }));
 
-			// Nothing was resubscribed and no history was replayed: the only place
-			// this seq can have come from is the reply to the send itself.
+			// Nothing was resubscribed and no history was replayed: the seq came
+			// with the message's own record.
 			expect(mockState.chatMessagesSubscribe).toHaveBeenCalledTimes(1);
 			await openMenu(user, -1);
 			const fork = menuForkRow();
@@ -5993,7 +6008,7 @@ describe("ChatPanel", () => {
 			await waitFor(() =>
 				expect(mockState.forkSession).toHaveBeenCalledWith(
 					"test-session",
-					7,
+					mockState.sent[0].seq,
 					"Test Chat (fork)",
 				),
 			);
@@ -6734,14 +6749,13 @@ describe("ChatPanel", () => {
 			);
 		});
 
-		// The tab that sent the message learns its id from the reply, which may
-		// land after the Stop's record: the ending is read off both whenever they
-		// are both there, not looked up once when the record arrives.
+		// The tab that sent the message knows it by the id it sent it with, so a
+		// Stop's record landing before the send's reply marks it all the same.
 		it("marks this tab's own message, whichever of reply and record comes first", async () => {
 			const user = userEvent.setup();
-			let reply: (sent: SentMessage) => void = () => {};
+			let reply: () => void = () => {};
 			mockState.sendMessage.mockReturnValueOnce(
-				new Promise((resolve) => {
+				new Promise<void>((resolve) => {
 					reply = resolve;
 				}),
 			);
@@ -6752,15 +6766,16 @@ describe("ChatPanel", () => {
 			await user.click(screen.getByRole("button", { name: /Send/ }));
 			// The Stop's update reaches the sender too: the turn the message
 			// opened, and the message itself, which it discarded.
+			const id = mockState.sendMessage.mock.calls[0][1];
 			const sent = fx.msg("Do X instead", {
-				message_id: "m-9",
+				message_id: id,
 				discarded: true,
 			});
 			const stopped = fx.turn(
 				{
 					outcome: "aborted",
 					ended_by: "interrupted",
-					discarded: [{ message_id: "m-9", seq: sent.seq }],
+					discarded: [{ message_id: id, seq: sent.seq }],
 				},
 				sent,
 			);
@@ -6777,13 +6792,13 @@ describe("ChatPanel", () => {
 				await screen.findByText("1 unread message was discarded."),
 			).toBeInTheDocument();
 			// The update that discarded it carries the message itself, so the
-			// bubble knows its ending before the reply says which message it is.
+			// bubble knows its ending before the reply arrives.
 			expect(
 				await screen.findByText("Not read — won't be answered"),
 			).toBeInTheDocument();
 			expect(screen.queryByText(/earlier history/)).not.toBeInTheDocument();
 
-			act(() => reply({ seq: sent.seq, messageId: "m-9", itemId: sent.id }));
+			await act(async () => reply());
 
 			expect(
 				await screen.findByText("Not read — won't be answered"),

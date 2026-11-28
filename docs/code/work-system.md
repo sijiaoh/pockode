@@ -781,13 +781,14 @@ page, action, data?}` (`server/ws/rpc_chat.go`, `handleHTMLAction`): the
 session must be this worktree's, `page` a page it has (`htmlpage.Get` — any
 page, not only the latest), `action` 1–128 characters with no control
 characters, `data` any JSON, compacted, at most 64KB, `{}` when omitted. It is
-sent as the user's message through `chat.Client.SendHTMLActionExcluding`, the
+sent as the user's message through `chat.Client.SendHTMLAction`, the
 typed message's path — refused while a permission request is open (with
 `data.reason: "awaiting_permission"`, `rpc.ChatErrorData`), folded into a
 running turn, handed to the work engine after a successful send. Its content
 is `htmlpage.ActionText` (`Page action "approve" from p3:` and the data on the
 next line), and its record carries the structured copy as `html_action
-{page, action, data}`, as a command's carries `command`; the reply echoes both.
+{page, action, data}`, as a command's carries `command`; the sender reads both off that record, like
+every other subscriber.
 The contract and the UI around it are in
 [tool-call-ui.md](../tool-call-ui.md#sending-to-the-agent); how a page sends,
 and the `--pk-*` theme variables, are told to the agent in both page tools'

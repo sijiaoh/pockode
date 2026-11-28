@@ -3,6 +3,7 @@ package watch
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"sync"
 
@@ -19,6 +20,8 @@ import (
 type ChatProjections interface {
 	projection.Source
 	TakeUpdate(ctx context.Context, sessionID string) (u projection.Update, continuous bool, err error)
+	// Since is what a resumed subscription starts from (projection.Live.Since).
+	Since(ctx context.Context, sessionID string, seq session.HistorySeq) (projection.Update, error)
 }
 
 // ChatUpdateMethod is the notification that carries what one history record
@@ -102,17 +105,11 @@ func (w *ChatMessagesWatcher) Stop() {
 // chatstream.Sequencer, calls it in seq order and never twice at once for one
 // session, so updates reach the wire in seq order.
 //
-// exclude, if not nil, is the sending connection's Notifier, which has drawn
-// the record itself: its subscribers are sent the update without the item the
-// record started, and learn that item's id from their own reply
-// (rpc.MessageResult.ItemID). It is typed any because the chat client that
-// passes it through does not know the watch package.
-//
 // seq is where the record landed in the session's history, or
 // session.NoHistorySeq for a live event — and for the warning standing in for
 // a record that could not be written, which is in no history and is sent as an
 // item of its own that nothing will update.
-func (w *ChatMessagesWatcher) Enqueue(sessionID string, record agent.Wire, seq session.HistorySeq, exclude any) {
+func (w *ChatMessagesWatcher) Enqueue(sessionID string, record agent.Wire, seq session.HistorySeq) {
 	if w.Context().Err() != nil {
 		return
 	}
@@ -129,12 +126,12 @@ func (w *ChatMessagesWatcher) Enqueue(sessionID string, record agent.Wire, seq s
 		if !seq.Valid() {
 			w.sessionMu.Lock()
 			defer w.sessionMu.Unlock()
-			w.fanOut(sessionID, projection.Update{Items: []projection.ItemUpdate{{Item: projection.UnrecordedWarning(ev)}}}, nil, 0, nil)
+			w.fanOut(sessionID, projection.Update{Items: []projection.ItemUpdate{{Item: projection.UnrecordedWarning(ev)}}}, nil)
 			return
 		}
-		w.recordWritten(sessionID, seq, exclude)
+		w.recordWritten(sessionID, seq)
 	case agent.Record:
-		w.recordWritten(sessionID, seq, exclude)
+		w.recordWritten(sessionID, seq)
 	}
 }
 
@@ -144,9 +141,10 @@ func (w *ChatMessagesWatcher) Enqueue(sessionID string, record agent.Wire, seq s
 // The update is taken before sessionMu: the sequencer never hands one
 // session two records at once, so taking it outside keeps a projection being
 // loaded from holding up every other session's fan-out. An update taken here
-// and fanned out after a subscription registered in between is in that
-// subscription's page as well; applying it again is harmless (see Subscribe).
-func (w *ChatMessagesWatcher) recordWritten(sessionID string, seq session.HistorySeq, exclude any) {
+// and fanned out after a subscription registered in between is in what that
+// subscription started from as well — its page, or its resumed update; the
+// subscriber skips it by through_seq (see Subscribe).
+func (w *ChatMessagesWatcher) recordWritten(sessionID string, seq session.HistorySeq) {
 	update, continuous, err := w.projections.TakeUpdate(w.Context(), sessionID)
 	if errors.Is(err, session.ErrSessionNotFound) {
 		// Nothing will settle what a deleted session was streaming.
@@ -185,7 +183,7 @@ func (w *ChatMessagesWatcher) recordWritten(sessionID string, seq session.Histor
 	if update.Empty() && ended == nil {
 		return
 	}
-	w.fanOut(sessionID, update, ended, seq, exclude)
+	w.fanOut(sessionID, update, ended)
 }
 
 // backgroundCalls are which of the session's streamed calls are in the
@@ -224,43 +222,17 @@ func (w *ChatMessagesWatcher) backgroundCalls(sessionID string, update projectio
 	return background
 }
 
-// fanOut queues an update for every subscriber of the session. Caller holds
-// sessionMu.
-func (w *ChatMessagesWatcher) fanOut(sessionID string, update projection.Update, ended *streamsEnded, seq session.HistorySeq, exclude any) {
-	var own *projection.Update
+// fanOut queues an update for every subscriber of the session, the one whose
+// connection sent the record among them: the record is the sender's one copy
+// of its own message too, which its echo is matched to by the id it minted.
+// Caller holds sessionMu.
+func (w *ChatMessagesWatcher) fanOut(sessionID string, update projection.Update, ended *streamsEnded) {
 	for _, sub := range w.sessionToSub[sessionID] {
-		u := update
-		if exclude != nil && any(sub.notifier) == exclude {
-			if own == nil {
-				own = withoutItemAt(update, seq)
-			}
-			u = *own
-			if u.Empty() && ended == nil {
-				continue
-			}
-		}
 		sub.offer(Notification{
 			Method: ChatUpdateMethod,
-			Params: updateParams{ID: sub.id, Update: u, StreamsEnded: ended},
+			Params: updateParams{ID: sub.id, Update: update, StreamsEnded: ended},
 		}, false)
 	}
-}
-
-// withoutItemAt is update without the item the record at seq started: what
-// its sender, which drew that item itself, is sent.
-func withoutItemAt(update projection.Update, seq session.HistorySeq) *projection.Update {
-	items := make([]projection.ItemUpdate, 0, len(update.Items))
-	for _, it := range update.Items {
-		if it.Parent == 0 && it.Item.Kind == projection.KindMessage && it.Item.Seq == seq {
-			continue
-		}
-		items = append(items, it)
-	}
-	update.Items = items
-	if len(items) == 0 {
-		update.Items = nil
-	}
-	return &update
 }
 
 // updateParams is a chat.update: the subscription id for routing, the
@@ -274,17 +246,41 @@ type updateParams struct {
 	StreamsEnded *streamsEnded `json:"streams_ended,omitempty"`
 }
 
+// ChatStart is what a subscription starts from: the newest page of the
+// transcript, or — for a subscriber that asked to resume and could — the
+// update that brings the copy it holds up to date. Exactly one of Page and
+// Resumed is set.
+type ChatStart struct {
+	Page    *projection.Page
+	Resumed *projection.Update
+	// Streams are the session's live streams as of the moment the
+	// subscription registered, either way: they are never recorded, so a
+	// resumed copy's are as stale as its items, and are replaced by these.
+	Streams rpc.ChatStreams
+}
+
 // Subscribe registers a subscriber for a specific session under the
-// client-chosen id and returns the newest page of that session's transcript,
-// with its live streams as of the moment it registered.
+// client-chosen id and returns what it starts from (ChatStart), with its live
+// streams as of the moment it registered.
+//
+// resumeAfter, when it is a seq, is the newest record the subscriber already
+// holds — the through_seq of the last page or update it applied, from this
+// same server process. It is then sent what the records after it changed
+// (projection.Live.Since) rather than a page, and keeps whatever it had paged
+// in. When that cannot be answered — the seq is past the history or too far
+// behind it, or the history holds a line in no file
+// (projection.ErrResumeUnavailable) — it is sent the newest page,
+// as a subscriber that did not ask is: a fresh start is never wrong, only
+// costlier for the client. NoHistorySeq asks for the page.
 //
 // The registration and the stream snapshot are taken together, between two
 // fan-outs, so the chat.delta notifications the subscriber is sent continue
-// the snapshot with nothing missed and nothing repeated. The page is cut after
-// both, so a record written in between is notified rather than lost. Its
-// update is in the page as well: an update whose through_seq is not past the
-// page's ThroughSeq says nothing the page does not, as of a moment no later,
-// and its items are to be skipped — but not its streams_ended, which the
+// the snapshot with nothing missed and nothing repeated. The page — or the
+// resumed update — is cut after both, so a record written in between is
+// notified rather than lost. Its update is in what the subscriber started
+// from as well: an update whose through_seq is not past the start's
+// through_seq says nothing the start does not, as of a moment no later, and
+// its items are to be skipped — but not its streams_ended, which the
 // snapshot taken before it does not know of.
 //
 // The hold taken for the subscriber precedes the page too, so the page is cut
@@ -302,9 +298,15 @@ func (w *ChatMessagesWatcher) Subscribe(
 	notifier Notifier,
 	sessionID string,
 	limit int,
-) (projection.Page, rpc.ChatStreams, error) {
+	resumeAfter session.HistorySeq,
+) (ChatStart, error) {
+	// Checked before anything is registered, as the page's own is: a limit
+	// the client cannot ask for is refused whether or not it resumes.
+	if limit < 0 {
+		return ChatStart{}, fmt.Errorf("%w: limit %d is negative", projection.ErrInvalidLimit, limit)
+	}
 	if err := w.AddSubscription(&Subscription{ID: id, Notifier: notifier}); err != nil {
-		return projection.Page{}, rpc.ChatStreams{}, err
+		return ChatStart{}, err
 	}
 
 	sub := newChatSubscriber(id, sessionID, notifier)
@@ -318,12 +320,28 @@ func (w *ChatMessagesWatcher) Subscribe(
 	w.sessionMu.Unlock()
 	w.Go(func() { sub.run(w.Context()) })
 
+	start := ChatStart{Streams: streams}
+	if resumeAfter.Valid() {
+		resumed, err := w.projections.Since(ctx, sessionID, resumeAfter)
+		switch {
+		case err == nil:
+			start.Resumed = &resumed
+			return start, nil
+		case errors.Is(err, projection.ErrResumeUnavailable):
+			slog.Info("cannot resume the chat subscription; sending a fresh page",
+				"id", id, "sessionId", sessionID, "reason", err)
+		default:
+			w.Unsubscribe(id)
+			return ChatStart{}, err
+		}
+	}
 	page, err := w.projections.Page(ctx, sessionID, session.NoHistorySeq, limit)
 	if err != nil {
 		w.Unsubscribe(id)
-		return projection.Page{}, rpc.ChatStreams{}, err
+		return ChatStart{}, err
 	}
-	return page, streams, nil
+	start.Page = &page
+	return start, nil
 }
 
 // Unsubscribe removes a subscription.

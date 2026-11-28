@@ -1366,7 +1366,7 @@ func backdate(p *Process, d time.Duration) {
 
 type sinkFunc func(agent.Wire)
 
-func (f sinkFunc) Enqueue(_ string, record agent.Wire, _ session.HistorySeq, _ any) { f(record) }
+func (f sinkFunc) Enqueue(_ string, record agent.Wire, _ session.HistorySeq) { f(record) }
 
 // TestProcess_ActivationFollowsAgentOutput covers what "activated" is supposed
 // to mean. A first turn that dies before the agent says anything — expired

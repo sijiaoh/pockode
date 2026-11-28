@@ -37,8 +37,10 @@ import type {
 	AuthResult,
 	ChatMessagesHistoryParams,
 	ChatMessagesHistoryResult,
+	ChatMessagesSubscribeParams,
 	ChatMessagesSubscribeResult,
 	ChatNotification,
+	ChatResume,
 	HistorySeq,
 	RemoteUrlChangedNotification,
 	RemoteUrlSubscribeResult,
@@ -262,9 +264,11 @@ export interface WatchActions {
 		callback: (params: SessionDetailChangedNotification) => void,
 	) => Promise<WatchSubscribeResult<SessionDetailSubscribeResult>>;
 	sessionDetailUnsubscribe: (id: string) => Promise<void>;
+	/** `resume` asks to continue a copy already held; see `ChatResume`. */
 	chatMessagesSubscribe: (
 		sessionId: string,
 		callback: (notification: ChatNotification) => void,
+		resume?: ChatResume,
 	) => Promise<WatchSubscribeResult<ChatMessagesSubscribeResult>>;
 	/** Fetches the page of history older than `beforeSeq` (exclusive). */
 	chatMessagesHistory: (
@@ -391,6 +395,12 @@ interface WSState {
 	maxAttachmentSize: number;
 	/** See `AuthResult.max_image_preview_size`; 0 until an auth reply has arrived. */
 	maxImagePreviewSize: number;
+	/**
+	 * See `AuthResult.server_instance`: the instance of the connection that is
+	 * up, or of the last one while none is. "" until an auth reply has arrived,
+	 * and from a server that predates it — nothing held can be resumed then.
+	 */
+	serverInstance: string;
 	/**
 	 * When the server will take a password again (epoch milliseconds), set by
 	 * the "auth_failed" of a `rate_limited` refusal and null for any other. It
@@ -643,6 +653,16 @@ export function isInvalidParamsRejection(error: unknown): boolean {
 		error instanceof JSONRPCErrorException &&
 		error.code === JSONRPCErrorCode.InvalidParams
 	);
+}
+
+/**
+ * Whether the server itself answered the request with this failure, as
+ * opposed to the transport giving up on it — a dead socket or our own
+ * timeout, both DefaultErrorCode (0), after which what became of the request
+ * is unknown. See isInvalidParamsRejection.
+ */
+export function isServerRejection(error: unknown): boolean {
+	return error instanceof JSONRPCErrorException && error.code !== 0;
 }
 
 /** The `data.reason` of an invalid-params refusal, if it carries one. */
@@ -1119,6 +1139,7 @@ export const useWSStore = create<WSState>((set, get) => ({
 	maxUploadSize: 0,
 	maxAttachmentSize: 0,
 	maxImagePreviewSize: 0,
+	serverInstance: "",
 	authRetryAt: null,
 	restartRequestedAt: null,
 	serverUpdate: null,
@@ -1209,6 +1230,7 @@ export const useWSStore = create<WSState>((set, get) => ({
 						maxUploadSize: result.max_upload_size,
 						maxAttachmentSize: result.max_attachment_size ?? 0,
 						maxImagePreviewSize: result.max_image_preview_size ?? 0,
+						serverInstance: result.server_instance ?? "",
 						restartRequestedAt: null,
 					});
 				} catch (error) {
@@ -1584,10 +1606,14 @@ export const useWSStore = create<WSState>((set, get) => ({
 		chatMessagesSubscribe: async (
 			sessionId: string,
 			callback: (notification: ChatNotification) => void,
+			resume?: ChatResume,
 		) => {
 			const { id, result } = await openSubscription(
 				"chat.messages.subscribe",
-				{ session_id: sessionId },
+				{
+					session_id: sessionId,
+					...(resume ? { resume } : {}),
+				} satisfies ChatMessagesSubscribeParams,
 				chatMessagesCallbacks,
 				callback,
 			);

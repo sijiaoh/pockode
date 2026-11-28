@@ -43,11 +43,9 @@ const HistoryWriteFailedCode = "history_write_failed"
 // from the file, and it holds up only this session.
 //
 // seq is session.NoHistorySeq for a live event, and for the warning that
-// stands in for a record that could not be written. exclude, if not nil, is a
-// subscriber's notifier to leave out: the client that sent the record and has
-// drawn it already.
+// stands in for a record that could not be written.
 type Sink interface {
-	Enqueue(sessionID string, record agent.Wire, seq session.HistorySeq, exclude any)
+	Enqueue(sessionID string, record agent.Wire, seq session.HistorySeq)
 }
 
 // Store is the part of session.Store the Sequencer writes through.
@@ -101,10 +99,10 @@ func (s *Sequencer) SetSink(sink Sink) {
 // given — and a client that hung up mid-request does not undo that. Losing the
 // record to it would put a "could not save" warning in front of everyone else
 // for nothing but a dropped connection.
-func (s *Sequencer) Append(ctx context.Context, sessionID string, record agent.Record, exclude any) (session.HistorySeq, error) {
+func (s *Sequencer) Append(ctx context.Context, sessionID string, record agent.Record) (session.HistorySeq, error) {
 	unlock := s.lock(sessionID)
 	defer unlock()
-	return s.appendLocked(ctx, sessionID, record, s.openTurnLocked(sessionID), exclude)
+	return s.appendLocked(ctx, sessionID, record, s.openTurnLocked(sessionID))
 }
 
 // AppendTo is Append with the turn named by the caller, for a record whose
@@ -113,7 +111,7 @@ func (s *Sequencer) Append(ctx context.Context, sessionID string, record agent.R
 func (s *Sequencer) AppendTo(ctx context.Context, sessionID string, record agent.Record, turn session.HistoryTurn) (session.HistorySeq, error) {
 	unlock := s.lock(sessionID)
 	defer unlock()
-	return s.appendLocked(ctx, sessionID, record, turn, nil)
+	return s.appendLocked(ctx, sessionID, record, turn)
 }
 
 // Advance reduces in into the session's turn state and writes what it caused,
@@ -159,7 +157,7 @@ func (s *Sequencer) Advance(ctx context.Context, sessionID string, in session.Tu
 		}
 		if !transition.Changed {
 			if record != nil {
-				_, _ = s.appendLocked(ctx, sessionID, record, recordTurn(in.Signal, s.openTurnLocked(sessionID)), nil)
+				_, _ = s.appendLocked(ctx, sessionID, record, recordTurn(in.Signal, s.openTurnLocked(sessionID)))
 			}
 			return transition, err
 		}
@@ -169,7 +167,7 @@ func (s *Sequencer) Advance(ctx context.Context, sessionID string, in session.Tu
 	}
 
 	if record == nil && abortsWithoutRecord(in.Signal, transition) {
-		_, _ = s.appendLocked(ctx, sessionID, agent.ProcessEndedRecord{}, session.NoTurn, nil)
+		_, _ = s.appendLocked(ctx, sessionID, agent.ProcessEndedRecord{}, session.NoTurn)
 	}
 
 	if transition.Started {
@@ -183,16 +181,16 @@ func (s *Sequencer) Advance(ctx context.Context, sessionID string, in session.Tu
 		if in.Signal == session.SignalPrompt {
 			started.MessageID = in.MessageID
 		}
-		_, _ = s.appendLocked(ctx, sessionID, started, session.InTurn(transition.Turn), nil)
+		_, _ = s.appendLocked(ctx, sessionID, started, session.InTurn(transition.Turn))
 	}
 
 	if record != nil {
-		_, _ = s.appendLocked(ctx, sessionID, record, recordTurn(in.Signal, session.InTurn(transition.Turn)), nil)
+		_, _ = s.appendLocked(ctx, sessionID, record, recordTurn(in.Signal, session.InTurn(transition.Turn)))
 	}
 	return transition, err
 }
 
-func (s *Sequencer) appendLocked(ctx context.Context, sessionID string, record agent.Record, turn session.HistoryTurn, exclude any) (session.HistorySeq, error) {
+func (s *Sequencer) appendLocked(ctx context.Context, sessionID string, record agent.Record, turn session.HistoryTurn) (session.HistorySeq, error) {
 	// A message is written before anyone can know whether it opens a turn or
 	// joins one; the turn_started that names it says which.
 	if record.Type() == agent.EventTypeMessage {
@@ -205,10 +203,10 @@ func (s *Sequencer) appendLocked(ctx context.Context, sessionID string, record a
 			return session.NoHistorySeq, err
 		}
 		slog.Error("failed to append to history", "sessionId", sessionID, "type", record.Type(), "error", err)
-		s.enqueue(sessionID, writeFailedWarning(record.Type(), err), session.NoHistorySeq, nil)
+		s.enqueue(sessionID, writeFailedWarning(record.Type(), err), session.NoHistorySeq)
 		return session.NoHistorySeq, err
 	}
-	s.enqueue(sessionID, record, seq, exclude)
+	s.enqueue(sessionID, record, seq)
 	return seq, nil
 }
 
@@ -275,12 +273,12 @@ func newTurnID() string {
 func (s *Sequencer) Publish(sessionID string, event agent.LiveEvent) {
 	unlock := s.lock(sessionID)
 	defer unlock()
-	s.enqueue(sessionID, event, session.NoHistorySeq, nil)
+	s.enqueue(sessionID, event, session.NoHistorySeq)
 }
 
-func (s *Sequencer) enqueue(sessionID string, record agent.Wire, seq session.HistorySeq, exclude any) {
+func (s *Sequencer) enqueue(sessionID string, record agent.Wire, seq session.HistorySeq) {
 	if s.sink != nil {
-		s.sink.Enqueue(sessionID, record, seq, exclude)
+		s.sink.Enqueue(sessionID, record, seq)
 	}
 }
 

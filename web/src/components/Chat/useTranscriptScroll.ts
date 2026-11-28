@@ -192,12 +192,13 @@ export function useMessagesTail(
 			loadedHistoryPages < prev.pages ||
 			(added === "replaced" && loadedHistoryPages === prev.pages)
 		) {
-			// The transcript was replaced, which only a reconnect does:
-			// re-subscribing lands back on the newest page. Paging starting over
-			// says so when pages had been loaded; with none, the count cannot drop,
-			// but replaying history mints every row a new id. The rows an anchor
-			// names are gone or at offsets it was never measured against, and the
-			// newest page is what was asked for.
+			// The transcript was replaced, which only a reconnect answered with
+			// a snapshot does: it lands back on the newest page. A resumed one
+			// keeps its rows, and what it missed arrives as an update does.
+			// Paging starting over says so when pages had been loaded; with none,
+			// the count cannot drop, but replaying history mints every row a new
+			// id. The rows an anchor names are gone or at offsets it was never
+			// measured against, and the newest page is what was asked for.
 			return true;
 		}
 		// Sending is the reader saying where they are reading next; they have just

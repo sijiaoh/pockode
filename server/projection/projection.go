@@ -92,6 +92,7 @@ func (p *Projection) Append(records ...json.RawMessage) {
 	p.settled = nil
 	var lines []agent.InferredLine
 	for _, raw := range records {
+		p.push(raw)
 		lines = p.inference.Push(lines[:0], raw)
 		for _, line := range lines {
 			p.fold(line)
@@ -104,8 +105,17 @@ func (p *Projection) Append(records ...json.RawMessage) {
 // of with the record after it, which is what lets a live update carry it.
 func (p *Projection) AppendWritten(raw json.RawMessage) {
 	p.settled = nil
+	p.push(raw)
 	for _, line := range p.inference.PushWritten(nil, raw) {
 		p.fold(line)
+	}
+}
+
+// push notes raw as the newest record handed to the projection, numbered as
+// session.HistorySeqs numbers a history.
+func (p *Projection) push(raw json.RawMessage) {
+	if seq := session.NextHistorySeq(p.t.pushed, raw); seq.Valid() {
+		p.t.pushed = seq
 	}
 }
 

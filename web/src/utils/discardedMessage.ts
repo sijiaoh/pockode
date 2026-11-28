@@ -15,12 +15,12 @@ export interface Draft {
 }
 
 /**
- * Every message a Stop threw away unread, by the server id each turn names it
- * by, mapped to the message itself where it is loaded. Derived from the
- * records on every pass rather than written onto the message when the record
- * arrives: the sender's own echo learns its id only from the `chat.message`
- * reply, which may land after the Stop's record does, and an older page brings
- * a message in long after its turn was read (docs/discarded-messages-ui.md).
+ * Every message a Stop threw away unread, by the id each turn names it by,
+ * mapped to the message itself where it is loaded: what the end of a stopped
+ * turn offers back. Joined across the whole transcript on every pass, because
+ * an older page brings a message in long after its turn was read
+ * (docs/discarded-messages-ui.md). Whether one message was discarded is its
+ * own item's to say (`UserMessage.discarded`).
  */
 export function discardedMessages(
 	messages: readonly Message[],

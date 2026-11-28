@@ -998,7 +998,7 @@ function ContentPartBody(props: ContentPartItemProps) {
 				record={part.record}
 				status={part.status}
 				answer={part.answer}
-				answerMessageId={part.answerMessageId}
+				unread={part.unread}
 				reason={part.reason}
 				legacy={part.legacy}
 				onAnswer={onAnswerQuestion}
@@ -1115,12 +1115,6 @@ export interface MessageItemProps {
 	 * stable: this component is memoized.
 	 */
 	onSwitchAccount?: (refusal: CliRefusal, messageId: string) => void;
-	/**
-	 * A Stop threw this message away before the agent read it. Derived from the
-	 * whole transcript by `MessageList`, since the record saying so sits in a
-	 * turn below.
-	 */
-	isDiscarded?: boolean;
 	/**
 	 * Puts discarded messages back into the composer. Absent where there is no
 	 * composer to put them into. Must be stable: this component is memoized.
@@ -1436,7 +1430,6 @@ const MessageItem = memo(function MessageItem({
 	onForkMessage,
 	onSignIn,
 	onSwitchAccount,
-	isDiscarded,
 	onRestoreMessages,
 }: MessageItemProps) {
 	const chatUIConfig = useChatUIConfig();
@@ -1456,6 +1449,7 @@ const MessageItem = memo(function MessageItem({
 	const forkBlocked = forkBlockedReason(message, isFirst);
 
 	if (message.role === "user") {
+		const isDiscarded = message.discarded === true;
 		// Restoring needs no navigation, so it brings the slot along even where
 		// fork is not on offer (docs/session-fork-ui.md, "Which rows reserve a
 		// slot").

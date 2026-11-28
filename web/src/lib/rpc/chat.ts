@@ -1,55 +1,12 @@
 import type { JSONRPCRequester } from "json-rpc-2.0";
-import type { FileBlock } from "../../types/content";
 import type {
-	HistorySeq,
-	HtmlAction,
 	HtmlActionParams,
 	InterruptParams,
 	MessageAttachmentParams,
 	MessageParams,
-	MessageResult,
 	PermissionResponseParams,
-	PockodeCommandInvocation,
 	QuestionAnswerParams,
 } from "../../types/message";
-import { serverTime } from "../chatItems";
-import { parseFileBlocks } from "../contentBlocks";
-import { normalizeCommand, normalizeHtmlAction } from "../transcript";
-
-/**
- * A reply's `seq`: absent from a server too old to send one, and never 0,
- * which names no record.
- */
-function readHistorySeq(result: unknown): HistorySeq | undefined {
-	const seq = (result as Record<string, unknown> | undefined)?.seq;
-	return typeof seq === "number" && seq > 0 ? seq : undefined;
-}
-
-/** A reply's `item_id`, the transcript item later updates name the message by. */
-function readItemId(result: unknown): number | undefined {
-	const id = (result as Record<string, unknown> | undefined)?.item_id;
-	return typeof id === "number" && id > 0 ? id : undefined;
-}
-
-/** What the server said about a message it accepted; see `MessageResult`. */
-export interface SentMessage {
-	seq?: HistorySeq;
-	/** See `MessageResult.item_id`. */
-	itemId?: number;
-	/** See `UserMessage.messageId`. */
-	messageId?: string;
-	/**
-	 * Present when the server wrote the text the agent was sent rather than
-	 * taking it as typed: the prompt a Pockode command expanded to, with the
-	 * command as the server parsed it, or the body written from a message's
-	 * answers.
-	 */
-	expanded?: { content: string; command?: PockodeCommandInvocation };
-	/** The files the message carried, as the server described them. */
-	attachments?: FileBlock[];
-	/** See `MessageResult.observed_at`; epoch ms on the server's clock. */
-	observedAt?: number;
-}
 
 /** What a page sent, as the app sends it on (`chat.html_action`). */
 export interface HtmlActionInput {
@@ -60,27 +17,16 @@ export interface HtmlActionInput {
 	data?: unknown;
 }
 
-/** What the server said about a page's send it accepted. */
-export interface SentHtmlAction {
-	seq?: HistorySeq;
-	itemId?: number;
-	messageId?: string;
-	/** The action as the agent reads it: the record's `content`. */
-	content?: string;
-	/** The action as its record carries it, `data` normalized. */
-	htmlAction?: HtmlAction;
-	/** See `SentMessage.observedAt`. */
-	observedAt?: number;
-}
-
 export interface ChatActions {
 	/**
-	 * Resolves with the seq the server gave the message, so the caller can name
-	 * that record — absent when it has no address to give (see `MessageResult`),
-	 * which is not a failure.
+	 * Resolves once the server has the message. The reply says nothing more:
+	 * the message's record arrives on the chat subscription like any other,
+	 * under `messageId` — the id this client minted for it, which is also what
+	 * makes sending it again safe (`MessageParams.message_id`).
 	 */
 	sendMessage: (
 		sessionId: string,
+		messageId: string,
 		content: string,
 		/**
 		 * The posted questions this message answers. The server validates the
@@ -94,7 +40,7 @@ export interface ChatActions {
 		 * Refused beside `answering`.
 		 */
 		attachments?: MessageAttachmentParams[],
-	) => Promise<SentMessage>;
+	) => Promise<void>;
 	/**
 	 * Sends what a page sent (`chat.html_action`, docs/tool-call-ui.md § The
 	 * action message). Refusals are `InvalidParams` in the server's words; one
@@ -103,8 +49,9 @@ export interface ChatActions {
 	 */
 	sendHtmlAction: (
 		sessionId: string,
+		messageId: string,
 		action: HtmlActionInput,
-	) => Promise<SentHtmlAction>;
+	) => Promise<void>;
 	interrupt: (sessionId: string) => Promise<void>;
 	permissionResponse: (params: PermissionResponseParams) => Promise<void>;
 }
@@ -131,74 +78,34 @@ export function createChatActions(
 	return {
 		sendMessage: async (
 			sessionId: string,
+			messageId: string,
 			content: string,
 			answering?: QuestionAnswerParams[],
 			attachments?: MessageAttachmentParams[],
-		): Promise<SentMessage> => {
-			const result = (await requireClient(getAgentStartClient).request(
-				"chat.message",
-				{
-					session_id: sessionId,
-					content,
-					...(answering && answering.length > 0 ? { answering } : {}),
-					...(attachments && attachments.length > 0 ? { attachments } : {}),
-				} as MessageParams,
-			)) as MessageResult | undefined;
-			// Decoded by the same reader as a seq arriving on a notification, because
-			// it is the same field with the same rule: a server too old to send one
-			// answers with an empty object, and the missing field must stay absent
-			// rather than become a seq of 0, which names no record.
-			const seq = readHistorySeq(result);
-			const itemId = readItemId(result);
-			const command = normalizeCommand(result?.command);
-			const files = parseFileBlocks(result?.attachments);
-			const observedAt = serverTime(result?.observed_at);
-			return {
-				...(seq !== undefined ? { seq } : {}),
-				...(itemId !== undefined ? { itemId } : {}),
-				...(result?.message_id ? { messageId: result.message_id } : {}),
-				...(files ? { attachments: files } : {}),
-				...(observedAt !== undefined ? { observedAt } : {}),
-				...(typeof result?.content === "string"
-					? {
-							expanded: {
-								content: result.content,
-								...(command ? { command } : {}),
-							},
-						}
-					: {}),
-			};
+		): Promise<void> => {
+			await requireClient(getAgentStartClient).request("chat.message", {
+				session_id: sessionId,
+				message_id: messageId,
+				content,
+				...(answering && answering.length > 0 ? { answering } : {}),
+				...(attachments && attachments.length > 0 ? { attachments } : {}),
+			} satisfies MessageParams);
 		},
 
 		sendHtmlAction: async (
 			sessionId: string,
+			messageId: string,
 			{ page, action, data }: HtmlActionInput,
-		): Promise<SentHtmlAction> => {
+		): Promise<void> => {
 			// Through the agent-start requester for the reason `chat.message` is:
 			// a page's send is a message, and may be what starts the agent.
-			const result = (await requireClient(getAgentStartClient).request(
-				"chat.html_action",
-				{
-					session_id: sessionId,
-					page,
-					action,
-					...(data !== undefined ? { data } : {}),
-				} satisfies HtmlActionParams,
-			)) as MessageResult | undefined;
-			const seq = readHistorySeq(result);
-			const itemId = readItemId(result);
-			const htmlAction = normalizeHtmlAction(result?.html_action);
-			const observedAt = serverTime(result?.observed_at);
-			return {
-				...(seq !== undefined ? { seq } : {}),
-				...(itemId !== undefined ? { itemId } : {}),
-				...(result?.message_id ? { messageId: result.message_id } : {}),
-				...(typeof result?.content === "string"
-					? { content: result.content }
-					: {}),
-				...(htmlAction ? { htmlAction } : {}),
-				...(observedAt !== undefined ? { observedAt } : {}),
-			};
+			await requireClient(getAgentStartClient).request("chat.html_action", {
+				session_id: sessionId,
+				message_id: messageId,
+				page,
+				action,
+				...(data !== undefined ? { data } : {}),
+			} satisfies HtmlActionParams);
 		},
 
 		interrupt: async (sessionId: string): Promise<void> => {

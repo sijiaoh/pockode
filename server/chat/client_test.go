@@ -30,6 +30,10 @@ type mockAgent struct {
 	// sessions are. Set before the first session is started.
 	receivesAttachments bool
 
+	// handoverErr, when set, is what every session's SendMessage fails with:
+	// a CLI whose stdin is gone. Set before the first session is started.
+	handoverErr error
+
 	mu       sync.Mutex
 	sessions []*mockSession
 	// htmlFirst is StartOptions.HTMLFirst of every start, in order.
@@ -54,7 +58,7 @@ func (a *mockAgent) Start(_ context.Context, opts agent.StartOptions) (agent.Ses
 		a.mu.Unlock()
 		return sess, nil
 	}
-	sess := &mockSession{events: make(chan agent.AgentEvent)}
+	sess := &mockSession{events: make(chan agent.AgentEvent), handoverErr: a.handoverErr}
 	a.mu.Lock()
 	a.sessions = append(a.sessions, sess)
 	a.mu.Unlock()
@@ -86,7 +90,8 @@ func (a *mockAgent) session(t *testing.T, n int) *mockSession {
 }
 
 type mockSession struct {
-	events chan agent.AgentEvent
+	events      chan agent.AgentEvent
+	handoverErr error
 
 	promptsMu sync.Mutex
 	prompts   []agent.Prompt
@@ -113,6 +118,9 @@ func (s *mockSession) sentAnswers() []sentAnswer {
 func (s *mockSession) Events() <-chan agent.AgentEvent { return s.events }
 
 func (s *mockSession) SendMessage(prompt agent.Prompt) error {
+	if s.handoverErr != nil {
+		return s.handoverErr
+	}
 	s.promptsMu.Lock()
 	s.prompts = append(s.prompts, prompt)
 	s.promptsMu.Unlock()
@@ -171,9 +179,8 @@ type streamRecorder struct {
 }
 
 type streamEntry struct {
-	record  agent.Wire
-	seq     session.HistorySeq
-	exclude any
+	record agent.Wire
+	seq    session.HistorySeq
 }
 
 func recordStream(pm *process.Manager) *streamRecorder {
@@ -182,9 +189,9 @@ func recordStream(pm *process.Manager) *streamRecorder {
 	return r
 }
 
-func (r *streamRecorder) Enqueue(_ string, record agent.Wire, seq session.HistorySeq, exclude any) {
+func (r *streamRecorder) Enqueue(_ string, record agent.Wire, seq session.HistorySeq) {
 	r.mu.Lock()
-	r.entries = append(r.entries, streamEntry{record: record, seq: seq, exclude: exclude})
+	r.entries = append(r.entries, streamEntry{record: record, seq: seq})
 	r.mu.Unlock()
 }
 
@@ -321,9 +328,9 @@ func TestClient_MessageWithNoRecordHasNoAddress(t *testing.T) {
 	client := NewClient(store, projection.FromReader(store), pm)
 	stream := recordStream(pm)
 
-	sent, err := client.SendMessageExcluding(context.Background(), "sess", "hello", nil, nil)
+	sent, err := client.SendMessage(context.Background(), "sess", "hello", nil, "")
 	if err != nil {
-		t.Fatalf("SendMessageExcluding = %v, want the prompt to go through anyway", err)
+		t.Fatalf("SendMessage = %v, want the prompt to go through anyway", err)
 	}
 	if sent != (Sent{}) {
 		t.Errorf("sent = %+v, want neither an address nor an id for a record that was not written", sent)
@@ -340,7 +347,7 @@ func TestClient_MessageWithNoRecordHasNoAddress(t *testing.T) {
 	if !ok || warning.Code != chatstream.HistoryWriteFailedCode {
 		t.Errorf("stream[0] = %+v, want a %s warning", entries[0].record, chatstream.HistoryWriteFailedCode)
 	}
-	if entries[0].seq.Valid() || entries[0].exclude != nil {
-		t.Errorf("warning seq = %d, exclude = %v; want no address and nobody left out", entries[0].seq, entries[0].exclude)
+	if entries[0].seq.Valid() {
+		t.Errorf("warning seq = %d, want no address", entries[0].seq)
 	}
 }

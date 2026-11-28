@@ -135,7 +135,7 @@ func TestIntegration_UnattendedClaude(t *testing.T) {
 		"Whether it is allowed or denied, do not retry it or run anything else. "+
 		"Afterwards reply with the single word %s and nothing else.", checkCommand, doneMarker)
 	started := time.Now()
-	if _, err := wt.ChatClient.SendMessageExcluding(ctx, mainID, prompt, nil, nil); err != nil {
+	if _, err := wt.ChatClient.SendMessage(ctx, mainID, prompt, nil, ""); err != nil {
 		t.Fatalf("send to main session: %v", err)
 	}
 

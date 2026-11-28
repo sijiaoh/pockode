@@ -3,7 +3,6 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { layOutClamp } from "../../test/clampLayout";
 import type { QuestionRecord } from "../../types/message";
-import { DiscardedMessagesContext } from "./discardedMessagesContext";
 import { FullScreenHost } from "./FullScreenHost";
 import QuestionRecordItem from "./QuestionRecordItem";
 
@@ -108,30 +107,23 @@ describe("QuestionRecordItem", () => {
 	// A Stop threw the answering message away before the agent read it. The card
 	// still holds what was said — it was said — but must not claim it landed.
 	describe("an answer the agent never read", () => {
-		const renderUnread = (discardedId: string) =>
+		const renderAnswered = (unread: boolean) =>
 			render(
-				<DiscardedMessagesContext
-					value={{
-						discarded: new Map([[discardedId, undefined]]),
-						hasMoreHistory: false,
+				<QuestionRecordItem
+					record={record}
+					status="answered"
+					unread={unread}
+					answer={{
+						request_id: "r1",
+						answers: ["Postgres"],
+						answered_at: "2026-01-02T14:05:00Z",
 					}}
-				>
-					<QuestionRecordItem
-						record={record}
-						status="answered"
-						answerMessageId="m-2"
-						answer={{
-							request_id: "r1",
-							answers: ["Postgres"],
-							answered_at: "2026-01-02T14:05:00Z",
-						}}
-					/>
-				</DiscardedMessagesContext>,
+				/>,
 			);
 
 		it("reads Not read, and still shows what was answered", async () => {
 			const user = userEvent.setup();
-			renderUnread("m-2");
+			renderAnswered(true);
 			expect(screen.getByText("Not read")).toBeInTheDocument();
 			expect(screen.queryByText("Answered")).not.toBeInTheDocument();
 			await user.click(screen.getByRole("button", { name: /Database/ }));
@@ -141,8 +133,8 @@ describe("QuestionRecordItem", () => {
 			expect(screen.getByRole("radio", { name: /Postgres/ })).toBeChecked();
 		});
 
-		it("reads Answered when another message was the one discarded", () => {
-			renderUnread("m-9");
+		it("reads Answered when its answer was read", () => {
+			renderAnswered(false);
 			expect(screen.getByText("Answered")).toBeInTheDocument();
 			expect(screen.queryByText("Not read")).not.toBeInTheDocument();
 		});

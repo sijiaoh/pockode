@@ -23,8 +23,8 @@ type Source interface {
 	// Page is a page of the session's transcript (Projection.Page) as of the
 	// same moment State is. Its errors are Projection.Page's, beside State's.
 	Page(ctx context.Context, sessionID string, beforeSeq session.HistorySeq, limit int) (Page, error)
-	// ItemAt is Projection.ItemAt as of the same moment State is.
-	ItemAt(ctx context.Context, sessionID string, seq session.HistorySeq) (int, error)
+	// Message is Projection.Message as of the same moment State is.
+	Message(ctx context.Context, sessionID, messageID string) (RecordedMessage, bool, error)
 	Holder
 }
 
@@ -171,14 +171,27 @@ func (l *Live) Page(ctx context.Context, sessionID string, beforeSeq session.His
 	return page, err
 }
 
-// ItemAt implements Source.
-func (l *Live) ItemAt(ctx context.Context, sessionID string, seq session.HistorySeq) (int, error) {
-	var id int
+// Since is Projection.Since as of the same moment State is, and costs what
+// Page does: a held session's is read off the projection kept for it.
+func (l *Live) Since(ctx context.Context, sessionID string, seq session.HistorySeq) (Update, error) {
+	var u Update
 	err := l.read(ctx, sessionID, func(p *Projection) error {
-		id = p.ItemAt(seq)
+		var err error
+		u, err = p.Since(seq)
+		return err
+	})
+	return u, err
+}
+
+// Message implements Source.
+func (l *Live) Message(ctx context.Context, sessionID, messageID string) (RecordedMessage, bool, error) {
+	var msg RecordedMessage
+	var ok bool
+	err := l.read(ctx, sessionID, func(p *Projection) error {
+		msg, ok = p.Message(messageID)
 		return nil
 	})
-	return id, err
+	return msg, ok, err
 }
 
 // read calls view with the session's projection: the one kept for it, under
@@ -213,8 +226,9 @@ func (l *Live) read(ctx context.Context, sessionID string, view func(*Projection
 // load folds e from the file, unless it has been already. Caller holds
 // e.foldMu.
 //
-// The file's newest record is folded after changes start being tracked, so
-// that what it changed is in the next update. It may be a record whose update
+// The file's newest numbered record — and the warning the store reads in
+// after it on a damaged history — is folded after changes start being
+// tracked, so that what it changed is in the next update. It may be a record whose update
 // is still to be taken: written while nothing was loaded, with the read that
 // loads it landing before TakeUpdate does — or TakeUpdate itself loading, on
 // the record just written. Either way the update would otherwise report
@@ -232,14 +246,14 @@ func (l *Live) load(ctx context.Context, sessionID string, e *liveSession, writt
 		l.forget(sessionID, e)
 		return err
 	}
-	before := max(len(records)-1, 0)
+	before := newestNumbered(records)
 	e.fold = Fold(records[:before], e.agentType)
 	e.fold.TrackChanges()
-	if before < len(records) {
-		if written {
-			e.fold.AppendWritten(records[before])
+	for i := before; i < len(records); i++ {
+		if written && i == before {
+			e.fold.AppendWritten(records[i])
 		} else {
-			e.fold.Append(records[before])
+			e.fold.Append(records[i])
 		}
 	}
 	e.lastSeq = lastSeq(session.NoHistorySeq, records)
@@ -479,6 +493,20 @@ func (l *Live) HistoryReset(sessionID string) {
 	l.drop(sessionID)
 }
 
+// newestNumbered is the index of records' newest numbered record: the one
+// just written, when a load is TakeUpdate's. Not simply the last, which on a
+// damaged history is the warning the store reads in after every record
+// (session.FileStore.GetHistory). Zero for a history with none.
+func newestNumbered(records []json.RawMessage) int {
+	seqs := session.HistorySeqs(records)
+	for i := len(seqs) - 1; i >= 0; i-- {
+		if seqs[i].Valid() {
+			return i
+		}
+	}
+	return 0
+}
+
 // lastSeq is the seq of the newest numbered record of records, which follow
 // one numbered prev.
 func lastSeq(prev session.HistorySeq, records []json.RawMessage) session.HistorySeq {
@@ -516,12 +544,13 @@ func (s readerSource) Page(ctx context.Context, sessionID string, beforeSeq sess
 	return p.Page(beforeSeq, limit)
 }
 
-func (s readerSource) ItemAt(ctx context.Context, sessionID string, seq session.HistorySeq) (int, error) {
+func (s readerSource) Message(ctx context.Context, sessionID, messageID string) (RecordedMessage, bool, error) {
 	p, err := s.fold(ctx, sessionID)
 	if err != nil {
-		return 0, err
+		return RecordedMessage{}, false, err
 	}
-	return p.ItemAt(seq), nil
+	msg, ok := p.Message(messageID)
+	return msg, ok, nil
 }
 
 func (s readerSource) fold(ctx context.Context, sessionID string) (*Projection, error) {

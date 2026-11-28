@@ -947,8 +947,8 @@ One `chat.message` carrying
 `content` — labels in `answers`, the user's own words in `text`, and `note`
 beside a decline or beside an answer it applies to. The client writes no body:
 the server writes it from the same entries, for a person's answer and an
-agent's alike, and hands it back in the reply for the sender's echo
-([agent-integration.md](code/agent-integration.md#answering)). It reads:
+agent's alike, into the record, which reaches the sender like every other
+subscriber and becomes its echo ([agent-integration.md](code/agent-integration.md#answering)). It reads:
 
 ```
 Answering:
@@ -1529,10 +1529,11 @@ is what it is — the record of a question, in one of four states.
   question being open again, because that is live state and not always true —
   a step that finished or a work that closed in between leaves the question
   answered (§7); when it is open, the strip and the panel already say so, and
-  a `Pending` chip here could promise an answer nobody can give. Derived as the
-  card is drawn from the answering message's id and the transcript's discarded
-  messages ([discarded-messages-ui.md](discarded-messages-ui.md)), so the tab
-  that sent the answer, other devices and reloads agree. Answering the reopened
+  a `Pending` chip here could promise an answer nobody can give. Read off the
+  question's own item, which keeps the answer it lost (`discarded_answer`)
+  until the question is answered again or withdrawn
+  ([discarded-messages-ui.md](discarded-messages-ui.md)), so the tab that sent
+  the answer, other devices and reloads agree. Answering the reopened
   question again, or the agent withdrawing it, takes the card over as usual:
   the server takes neither for a question whose answer stands.
 - **`Declined` and `Cancelled` are told apart in the body, not by the chip's

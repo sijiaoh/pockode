@@ -1274,9 +1274,10 @@ type MessageEvent struct {
 	Origin  MessageOrigin
 	Subtype MessageSubtype
 	Meta    *MessageMeta
-	// MessageID is Pockode's own id for this message, minted where the message
-	// is sent (chat.Client.sendEvent) so that a later message_ingested record can
-	// name the message the agent read. See MessageRecord.MessageID.
+	// MessageID is Pockode's own id for this message, minted by the client that
+	// sent it — or by chat.Client.sendEvent for a sender that named none — so
+	// that a later message_ingested record can name the message the agent read.
+	// See MessageRecord.MessageID.
 	MessageID string
 	// Answering are the posted questions this message answers, if any. The
 	// content still carries the answers in prose — that is what the agent reads
@@ -1356,14 +1357,12 @@ type MessageIngestedEvent struct {
 	// could not be established — an agent whose echo carries none, or a message
 	// whose own record failed to be written.
 	//
-	// Not what a client cuts on, and it must not become that: the record's
-	// position already says which message was read, while the client that *sent*
-	// a message is never told the id minted for it — it is the one subscriber
-	// excluded from that broadcast (chat.Client.sendEvent) — so a transcript laid
-	// out by this id would differ between the sending tab and every other tab,
-	// and differ again after a reload. It is recorded because it is what the echo
-	// carried and the only thing that says *which* of several queued messages a
-	// read point belongs to.
+	// It is what says *which* of several messages queued into one turn a read
+	// point belongs to, which position cannot: a client draws the reply after
+	// it under that message, and leaves the ones queued behind it waiting. Every
+	// client knows each message by this id — the sender too, which minted it —
+	// so every tab, and a reload, lays the turn out alike. A read point without
+	// one is applied where it sits.
 	MessageID string
 	// ObservedAt is when Pockode wrote the read point — the moment the reply
 	// before it ended and the one answering this message began; see

@@ -1,6 +1,9 @@
 package projection
 
 import (
+	"encoding/json"
+	"errors"
+	"fmt"
 	"reflect"
 	"testing"
 
@@ -96,23 +99,132 @@ func TestUpdate_KeepsAPageCurrent(t *testing.T) {
 				assertSubtreeLast(t, p)
 				client.apply(t, p.TakeUpdate())
 			}
-			want := newClientCopy(t, newestPage(t, p))
-			if !reflect.DeepEqual(client.items, want.items) {
-				for id, it := range want.items {
-					if got := client.items[id]; !reflect.DeepEqual(got, it) {
-						t.Errorf("%s, cut at %d: item %d is\n  %+v\nwant\n  %+v", agentType, cut, id, got, it)
-					}
-				}
-				for id := range client.items {
-					if _, ok := want.items[id]; !ok {
-						t.Errorf("%s, cut at %d: the client has item %d, which the page does not", agentType, cut, id)
-					}
-				}
-			}
-			if got, want := client.named(), want.named(); !reflect.DeepEqual(got, want) {
-				t.Errorf("%s, cut at %d: turns\n  %+v\nwant\n  %+v", agentType, cut, got, want)
+			client.assertCurrent(t, fmt.Sprintf("%s, cut at %d", agentType, cut), p)
+		}
+	}
+}
+
+// assertCurrent holds the copy to what a page cut from p now says.
+func (c clientCopy) assertCurrent(t *testing.T, label string, p *Projection) {
+	t.Helper()
+	want := newClientCopy(t, newestPage(t, p))
+	if !reflect.DeepEqual(c.items, want.items) {
+		for id, it := range want.items {
+			if got := c.items[id]; !reflect.DeepEqual(got, it) {
+				t.Errorf("%s: item %d is\n  %+v\nwant\n  %+v", label, id, got, it)
 			}
 		}
+		for id := range c.items {
+			if _, ok := want.items[id]; !ok {
+				t.Errorf("%s: the client has item %d, which the page does not", label, id)
+			}
+		}
+	}
+	if got, want := c.named(), want.named(); !reflect.DeepEqual(got, want) {
+		t.Errorf("%s: turns\n  %+v\nwant\n  %+v", label, got, want)
+	}
+}
+
+// TestSince_KeepsAPageCurrent is the contract a resumed subscription rests
+// on: a client holding the page cut after any prefix, applying the one
+// update Since gives for that page's through_seq, holds what a page cut at
+// the end says — whether the projection it is read from went on folding
+// the records as they were written, or was let go and folded again from the
+// file, as one is when nobody has looked at the session for a while.
+func TestSince_KeepsAPageCurrent(t *testing.T) {
+	for _, agentType := range []session.AgentType{session.AgentTypeClaude, session.AgentTypeCodex} {
+		for cut := 0; cut <= len(mixedHistory); cut++ {
+			page := newestPage(t, Fold(mixedHistory[:cut], agentType))
+			if !page.ThroughSeq.Valid() {
+				continue
+			}
+			written := Fold(mixedHistory[:cut], agentType)
+			for _, raw := range mixedHistory[cut:] {
+				written.AppendWritten(raw)
+			}
+			for name, p := range map[string]*Projection{
+				"written": written,
+				"read":    Fold(mixedHistory, agentType),
+			} {
+				client := newClientCopy(t, page)
+				u, err := p.Since(page.ThroughSeq)
+				if err != nil {
+					t.Fatalf("%s, cut at %d, %s: %v", agentType, cut, name, err)
+				}
+				if want := newestPage(t, p).ThroughSeq; u.ThroughSeq != want {
+					t.Errorf("%s, cut at %d, %s: through_seq %d, want a page's, %d", agentType, cut, name, u.ThroughSeq, want)
+				}
+				client.apply(t, u)
+				client.assertCurrent(t, fmt.Sprintf("%s, cut at %d, %s", agentType, cut, name), p)
+			}
+		}
+	}
+}
+
+// Since sends what the records after the seq changed, not the transcript:
+// an item nothing has touched since is not sent again.
+func TestSince_SendsOnlyWhatChanged(t *testing.T) {
+	p := Fold(history(prompt1, started1,
+		`T1|{"type":"tool_call","tool_use_id":"a","tool_name":"Read"}`,
+		`T1|{"type":"tool_call","tool_use_id":"b","tool_name":"Read"}`,
+	), session.AgentTypeClaude)
+	after := p.t.lastSeq
+	p.AppendWritten(history(prompt1, started1, "", "",
+		`T1|{"type":"tool_result","tool_use_id":"b","tool_result":"ok"}`)[4])
+
+	u, err := p.Since(after)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, it := range u.Items {
+		got = append(got, it.Item.Tool.ToolUseID+":"+string(it.Item.Tool.Status))
+	}
+	assertStrings(t, "items", got, []string{"b:succeeded"})
+	if len(u.Turns) != 0 || u.Plan != nil {
+		t.Errorf("turns %+v, plan %+v: nothing about them changed", u.Turns, u.Plan)
+	}
+
+	nothing, err := p.Since(p.t.lastSeq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !nothing.Empty() || nothing.ThroughSeq != p.t.lastSeq {
+		t.Errorf("since the newest record = %+v, want nothing through %d", nothing, p.t.lastSeq)
+	}
+}
+
+// A damaged history is answered with a page: the warning the store adds for
+// what it skipped goes at the end of each read, so a fold from the file again
+// numbers the items after where it stood differently from the copy's.
+func TestSince_RefusesAHistoryWithALineInNoFile(t *testing.T) {
+	records := history(prompt1, started1, `T1|{"type":"text","content":"x"}`)
+	records = append(records, json.RawMessage(`{"type":"warning","message":"Skipped 1 entry","code":"history_corrupted","seq":0}`))
+	p := Fold(records, session.AgentTypeClaude)
+
+	if _, err := p.Since(p.t.lastSeq); !errors.Is(err, ErrResumeUnavailable) {
+		t.Errorf("since the newest record: err = %v, want ErrResumeUnavailable", err)
+	}
+}
+
+// What Since cannot answer it refuses rather than answering wrongly: a seq
+// the history has not reached is from some other history, and a gap past
+// MaxResumeGap is better served by a page.
+func TestSince_RefusesWhatItCannotServe(t *testing.T) {
+	lines := []string{prompt1, started1}
+	for range MaxResumeGap + 1 {
+		lines = append(lines, `T1|{"type":"text","content":"x"}`)
+	}
+	p := Fold(history(lines...), session.AgentTypeClaude)
+	newest := p.t.lastSeq
+
+	for _, seq := range []session.HistorySeq{newest + 1, newest - MaxResumeGap - 1, session.NoHistorySeq} {
+		if _, err := p.Since(seq); !errors.Is(err, ErrResumeUnavailable) {
+			t.Errorf("since %d (newest %d): err = %v, want ErrResumeUnavailable", seq, newest, err)
+		}
+	}
+	if _, err := p.Since(newest - MaxResumeGap); err != nil {
+		t.Errorf("since %d, exactly MaxResumeGap behind: %v", newest-MaxResumeGap, err)
 	}
 }
 
@@ -163,36 +275,29 @@ func TestUpdate_SendsOnlyWhatChanged(t *testing.T) {
 	}
 }
 
-// The id of the item a record started is what a sender left out of its
-// update learns it by; a record that only changed items started none.
-func TestItemAt(t *testing.T) {
-	p := Fold(history(prompt1, started1,
-		`T1|{"type":"tool_call","tool_use_id":"c","tool_name":"Read"}`,
-		`T1|{"type":"tool_result","tool_use_id":"c","tool_result":"ok"}`,
-	), session.AgentTypeClaude)
-	page := newestPage(t, p)
-	items := page.Turns[0].Items
-	if got := p.ItemAt(items[0].Seq); got != items[0].ID {
-		t.Errorf("ItemAt(message) = %d, want %d", got, items[0].ID)
-	}
-	if got := p.ItemAt(items[1].LastSeq); got != 0 {
-		t.Errorf("ItemAt(result) = %d, want 0: the result started no item", got)
-	}
-}
-
-// A message a file ends on is read as the fold will read it once the record
-// after it arrives, so its id is the one later updates use.
-func TestItemAt_AMessageTheFileEndsOn(t *testing.T) {
+// A message is found by the id its sender minted, wherever it stands — the
+// last record of a file included, which the fold reads only with the record
+// after it — and an id nothing carries finds nothing.
+func TestMessage(t *testing.T) {
 	records := history(prompt1, started1, `T1|{"type":"done"}`, prompt2)
-	held := Fold(records, session.AgentTypeClaude)
-	seq := session.HistorySeq(len(records))
-	id := held.ItemAt(seq)
-	if id == 0 {
-		t.Fatal("ItemAt = 0 for the message the file ends on")
+	p := Fold(records, session.AgentTypeClaude)
+	for _, tt := range []struct {
+		id      string
+		seq     session.HistorySeq
+		content string
+	}{
+		{"m1", 1, "go"},
+		{"m2", session.HistorySeq(len(records)), "more"},
+	} {
+		got, ok := p.Message(tt.id)
+		if !ok || got.Seq != tt.seq || got.Record.Content != tt.content || got.Record.MessageID != tt.id {
+			t.Errorf("Message(%q) = %+v, %v; want %q at seq %d", tt.id, got, ok, tt.content, tt.seq)
+		}
 	}
-	held.Append(history(`T2|{"type":"turn_started","turn_id":"T2","origin":"prompt"}`)...)
-	if got := held.ItemAt(seq); got != id {
-		t.Errorf("once the record after it arrived, ItemAt = %d, want %d", got, id)
+	for _, id := range []string{"", "m3"} {
+		if got, ok := p.Message(id); ok {
+			t.Errorf("Message(%q) = %+v, want none", id, got)
+		}
 	}
 }
 

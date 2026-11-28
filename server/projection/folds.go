@@ -85,13 +85,14 @@ func (s foldsSource) Page(ctx context.Context, sessionID string, beforeSeq sessi
 	return page, err
 }
 
-func (s foldsSource) ItemAt(ctx context.Context, sessionID string, seq session.HistorySeq) (int, error) {
-	var id int
+func (s foldsSource) Message(ctx context.Context, sessionID, messageID string) (RecordedMessage, bool, error) {
+	var msg RecordedMessage
+	var ok bool
 	err := s.read(ctx, sessionID, func(p *Projection) error {
-		id = p.ItemAt(seq)
+		msg, ok = p.Message(messageID)
 		return nil
 	})
-	return id, err
+	return msg, ok, err
 }
 
 // Hold implements Source. Nothing that holds a session — its process, its

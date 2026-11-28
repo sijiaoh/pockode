@@ -24,7 +24,7 @@ type streamed struct {
 	Seq       session.HistorySeq
 }
 
-func (r *messageRecorder) Enqueue(sessionID string, record agent.Wire, seq session.HistorySeq, _ any) {
+func (r *messageRecorder) Enqueue(sessionID string, record agent.Wire, seq session.HistorySeq) {
 	r.mu.Lock()
 	r.messages = append(r.messages, streamed{SessionID: sessionID, Record: record, Seq: seq})
 	r.mu.Unlock()
