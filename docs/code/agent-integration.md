@@ -22,15 +22,14 @@ Pockode integrates AI Agents (Claude and Codex) through subprocess management. T
 ┌─────────────────────────────────────────────────────────────────────┐
 │  ChatClient (chat/)                                                  │
 │  ├─ Session/Process coordination                                     │
-│  ├─ History persistence                                              │
-│  └─ Event broadcasting                                               │
+│  └─ Records it writes itself → chatstream.Sequencer                  │
 └───────────────────────────────┬─────────────────────────────────────┘
                                 │
                                 ▼
 ┌─────────────────────────────────────────────────────────────────────┐
 │  ProcessManager (process/)                                           │
 │  ├─ Create Agent Session                                             │
-│  ├─ Event stream handling: persistence + broadcast                   │
+│  ├─ Event stream handling: records → chatstream.Sequencer            │
 │  ├─ State machine: idle ↔ running → ended                            │
 │  └─ Idle timeout cleanup                                             │
 └───────────────────────────────┬─────────────────────────────────────┘
@@ -209,7 +208,7 @@ type Session interface {
 
 - **Long-lived Session**: A Session is a persistent subprocess, not request-response. It survives across multiple messages, supporting continuous context conversations
 - **Channel event stream**: Uses unbuffered channels for low-latency event delivery. A consumer drains `Events()` until the agent closes it — that close is the end of the session, and it is what `process.Manager.Close` waits for before letting a caller delete what the session writes to
-- **`process_ended` waits for its consumer**: every other send on the channel steps aside when the session's context is cancelled, which is right for output overtaken by a shutdown. The last event cannot: it is needed *most* when that context has just been cancelled on purpose — a reaped or deleted session — and a `select` over the two has both cases ready, so Go picks at random and half the closes never reach the client, which goes on showing the session as running until it refetches history. `agent.EmitProcessEnded` therefore waits for the consumer instead, with only a 10s backstop against a read loop that has stopped draining without closing the session (a panic recovered above it). The guarantee ends at that consumer: the next hop, `watch.ChatMessagesWatcher.OnChatMessage`, is a bounded queue that drops on overflow like every other chat event, and a client that loses one recovers by refetching history. What was fixed is the hop that dropped the event *by design*, on exactly the closes a user asked for
+- **`process_ended` waits for its consumer**: every other send on the channel steps aside when the session's context is cancelled, which is right for output overtaken by a shutdown. The last event cannot: it is needed *most* when that context has just been cancelled on purpose — a reaped or deleted session — and a `select` over the two has both cases ready, so Go picks at random and half the closes never reach the client, which goes on showing the session as running until it refetches history. `agent.EmitProcessEnded` therefore waits for the consumer instead, with only a 10s backstop against a read loop that has stopped draining without closing the session (a panic recovered above it). The guarantee ends at that consumer: the next hop, `chatstream.Sequencer`, appends it and hands it to `watch.ChatMessagesWatcher.Enqueue`, which queues it per subscriber, and a subscriber whose queue is full is told to resync (`chat.resync`) rather than silently missing it ([subscription-system.md](subscription-system.md#chat-delivery)). What was fixed is the hop that dropped the event *by design*, on exactly the closes a user asked for
 - **Close() returns nothing**: Session closure is a best-effort operation; errors don't affect the outcome
 - **A prompt is a struct, not a string**: `Prompt` carries the text and Pockode's own id for the message record it came from. The id is there for one thing — recognising *this* message being read later (see The Read Point below) — and an agent that cannot carry an id through ignores it
 
@@ -581,6 +580,9 @@ sentence, which `chat.Client` writes into the forked transcript as a
 `fork_agent_context_unavailable` warning rather than leave to be discovered. Only
 a returned *error* is a failure, and it costs the whole fork: the caller deletes
 the half-made session instead of leaving an empty one wearing the source's title.
+So does failing to write that warning: it is the only way the user learns the
+agent remembers nothing, and the new session has no subscriber yet who could be
+told it was lost.
 
 **Why `ForkUnsupported` is a refusal and not a warning.** The Pockode side of such
 a fork would work perfectly — the transcript copies like any other. What the user
@@ -4543,16 +4545,14 @@ func (p *Process) streamEvents(ctx context.Context) {
         in, reduce := turnInputFor(event)
         if reduce { transition = p.applyTurn(ctx, in) }
 
-        // 2. Persistence
-        if record, ok := event.Encode().(agent.Record); ok {
-            store.AppendToHistory(ctx, sessionID, record)
+        // 2. Persistence and broadcast, in one step under the session's lock
+        switch wire := event.Encode().(type) {
+        case agent.Record:    stream.Append(ctx, sessionID, wire, nil)
+        case agent.LiveEvent: stream.Publish(sessionID, wire)
         }
 
         // 3. Turn state, announced
         if reduce { p.manager.emitTurn(p.sessionID, transition) }
-
-        // 4. Broadcast
-        manager.EmitMessage(sessionID, event)
     }
 }
 ```
@@ -5151,7 +5151,7 @@ between the close and the delete. Their writes can arrive after the directory is
 gone. Appending creates the directory it writes into, so a late write used to
 bring `sessions/<sessionID>/` back as an orphan that nothing lists. The store therefore remembers, in memory,
 the sessions it deleted, and `AppendToHistory` / `WriteHistory` refuse them with
-`ErrSessionNotFound`, which the process manager logs at debug level: nothing was
+`ErrSessionNotFound`, which `chatstream.Sequencer` logs for an append at debug level: nothing was
 lost, there is no longer a session to lose it from. The memory is cleared when the
 same id is created again (a work restarts its deleted session under its own id),
 and needs no persisting, since a session deleted by an earlier run has no process
@@ -5160,6 +5160,61 @@ between the check and the removal is in the comment on `session.sessionHistory`:
 the tombstone and the newest seq are kept per session, under a lock of that
 session's own, so counting one large history on its first append never holds up
 another session's stream.
+
+**One order for every writer** (`server/chatstream`). A session's records have
+more than one writer: the process reading the agent, the chat client recording
+what a person or Pockode itself said (messages, answers, warnings, questions),
+the reaper expiring a prompt nobody answered. When each persisted and then
+broadcast on its own, two of them could interleave between the two steps, and a
+client was sent seq 8 before seq 7 — a transcript drawn in an order its history
+does not hold, and a reload that reorders it. `chatstream.Sequencer` is the one
+place both steps happen, under a lock per session: `Append` writes the record
+and hands it to the chat subscribers' queues (`chatstream.Sink`, which is
+`watch.ChatMessagesWatcher`) before any other record of the session can be
+written, and `Publish` puts a live event in its place among them the same way.
+So the order a subscriber is sent records in is the order they were numbered
+in; how each subscriber's queue keeps that order is in
+[subscription-system.md](subscription-system.md#chat-delivery). There is one
+sequencer per worktree, made by `process.Manager` (`Manager.Stream()`) and
+handed to `chat.Client`, so the process's records and the server's share it. The
+sequencer only appends and enqueues; `Enqueue` never blocks, so the lock is
+never held across a write to a connection.
+
+Nothing appends around it while the server runs — an append that did would take
+a seq no client is ever sent. The one exception is the store's own repair on
+load (closing the turns the last run left open): it runs inside `NewFileStore`,
+before any session can be subscribed to, so there is no stream to order it in.
+A fork's `WriteHistory` into the new session is likewise not an append to a
+stream anyone holds.
+
+**A record that cannot be written is never shown.** Every writer gets the same
+policy, in `Sequencer.Append`:
+
+- The record is not enqueued — in particular never sent live with no seq. A
+  record a client is shown and then loses on reload is worse than a gap it is
+  told about.
+- Every subscriber of the session, the sender included (its own copy was not
+  saved either), is sent a `warning` with code `history_write_failed`
+  (`chatstream.HistoryWriteFailedCode`) in the record's place, naming the type
+  lost and why. A `warning` and not an `error`, because an `error` ends the
+  turn on the client. It is not persisted, like the warning `GetHistory` puts in
+  place of lines it could not read, and so carries no seq. The failure is also
+  logged as an error. A session that no longer exists (`ErrSessionNotFound`)
+  gets no warning: nobody is watching it.
+- The error is returned, and the caller decides only whether *its own*
+  operation failed. A message still goes to the agent, and its reply carries no
+  seq, id or timestamp; a permission response or a reviewer's verdict still
+  succeeds, since the answer reached the agent; posting or withdrawing a
+  question and `RecordWarning` fail; process events go on moving the turn. A
+  fork whose "will not remember" warning cannot be written fails as a whole
+  ([Session Forking](#session-forking)).
+- The caller's cancellation is not honoured (`context.WithoutCancel`): a record
+  is written because something already happened, and a client hanging up
+  mid-request does not undo it.
+
+Because a sent message is appended and enqueued before it is handed to the
+agent, the other clients see it live even when the handover then fails — which
+is what a reload shows too, since it is in history either way.
 
 **Naming a record.** A client that needs to point at one record — paging back
 and forking so far — quotes back a `session.HistorySeq`. The server hands the

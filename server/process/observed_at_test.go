@@ -20,7 +20,7 @@ func TestProcess_StoredAndBroadcastRecordsCarryTheSameObservedAt(t *testing.T) {
 	defer m.Shutdown()
 
 	rec := &messageRecorder{}
-	m.SetMessageListener(rec)
+	m.SetStreamSink(rec)
 
 	m.GetOrCreateProcess(context.Background(), createActivatedSession(t, store, "sess-1"))
 	sess := mock.session(t, "sess-1")
@@ -52,7 +52,7 @@ func TestProcess_StoredAndBroadcastRecordsCarryTheSameObservedAt(t *testing.T) {
 	deadline := time.Now().Add(5 * time.Second)
 	for broadcast == nil {
 		for _, msg := range rec.snapshot() {
-			if r, ok := msg.Event.Encode().(agent.ToolCallRecord); ok {
+			if r, ok := msg.Record.(agent.ToolCallRecord); ok {
 				broadcast = &r
 			}
 		}

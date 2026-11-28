@@ -188,7 +188,7 @@ func (w *WorkListWatcher) OnWorkChange(event work.ChangeEvent) {
 
 2. **Non-blocking stores**: Store operations should be fast. Offloading notification to a separate goroutine keeps write latency predictable.
 
-3. **Backpressure isolation**: A slow client holds up neither the store nor the other subscribers: a notification only queues on its connection's writer, which closes a connection that falls too far behind ([websocket-rpc.md](websocket-rpc.md#outbound-delivery)).
+3. **Backpressure isolation**: A slow client holds up neither the store nor the other subscribers: a notification only queues on its connection's writer, which closes a connection that falls too far behind ([websocket-rpc.md](websocket-rpc.md#outbound-delivery)). The chat stream goes further and gives every subscriber a queue of its own ([Chat Delivery](#chat-delivery)).
 
 ### Why Backpressure via Dirty Flag Instead of Blocking?
 
@@ -219,6 +219,61 @@ func (w *WorkListWatcher) eventLoop() {
 2. **Bounded memory**: Fixed channel buffers (16–256) prevent unbounded growth during bursts.
 
 3. **Self-healing**: No manual intervention needed. The system automatically recovers by sending a full state snapshot.
+
+### Chat Delivery
+
+The chat stream cannot use the dirty flag: a chat notification is a record of
+the transcript, not a change to a value the next snapshot repeats, so a
+"full sync" for it is a fresh `chat.messages.subscribe`, which only the client
+can ask for. And it must not drop records either: a dropped `done` leaves a
+finished turn drawn as running.
+
+So `ChatMessagesWatcher` has no shared queue and no loop of its own.
+`Enqueue` — called only by the session's `chatstream.Sequencer`, in seq order — hands the
+record to every subscriber of the session and returns; each subscriber
+(`watch/chat_subscriber.go`) has its own bounded queue (`chatQueueSize`, 256)
+drained by its own goroutine, started on subscribe and stopped on unsubscribe.
+A subscriber that falls behind therefore holds up neither the agent producing
+the records nor the other subscribers. A subscriber receives records in the
+order `Enqueue` was called; the fan-out of one record holds the session map
+exclusively, so all subscribers of a session see the same order.
+
+**The ordering promise.** Together with the sequencer, a subscriber is sent a
+session's records in seq order, with live events in the place they were
+produced (a record landing while it subscribes may also be in its snapshot;
+the client drops that copy by `seq` —
+[above](#why-nothing-is-lost-while-a-subscription-is-being-opened)) — or, past a hole, nothing more but `chat.resync`.
+A record the history refused never appears; a `history_write_failed` warning
+with no seq stands in its place
+([agent-integration.md](agent-integration.md#history-storage) has the sequencer
+and that failure policy).
+
+When a subscriber's queue fills up:
+
+| What is offered | Queue state | What happens |
+|-----------------|-------------|--------------|
+| Live progress (`agent.LiveEvent`: `tool_activity`, `thinking_delta`) | more than half full | Dropped. It is the only thing whose loss costs nothing lasting, and the half kept free is room for what is not |
+| A record | full | The subscriber is **stalled**: everything still queued for it and everything offered later is discarded, and it is sent `chat.resync` and nothing more |
+
+Whether something may be dropped is read from its type, not its `seq`.
+
+**The `chat.resync` contract.** Params: `{"id": "<subscription id>"}`. It
+means "this subscription's stream has a hole at this point". Everything the
+subscription delivered before it is a gap-free prefix of the stream, in order,
+and it is the last notification the subscription will carry; the server keeps
+the subscription registered (so the session still counts as viewed) but
+delivers nothing more on it. The client recovers exactly as from a reconnect:
+unsubscribe the id and open a fresh `chat.messages.subscribe`, whose snapshot
+(history page, turn, tool activity) holds everything the hole lost. No
+`chat.<event type>` takes the name (`TestChatResync_IsNoWireType`). In `web`,
+`useChatMessages` does this with `useSubscription`'s `refresh`: the snapshot
+replaces the transcript wholesale, the same path a reconnect takes, so nothing
+the first stream delivered is drawn twice.
+
+Ending the subscription instead of carrying on after the hole is what keeps the
+client from ever drawing a transcript with a record silently missing from its
+middle; a client that falls this far behind has a fresh snapshot to catch up on
+either way.
 
 ### Why Reference Counting in FSWatcher?
 
@@ -1318,7 +1373,7 @@ places, and that the names never say "loading" where nothing is loading.
 
 | Watcher | Buffer | Reasoning |
 |---------|--------|-----------|
-| ChatMessages | 256 | High frequency during active coding sessions |
+| ChatMessages | 256 per subscriber | High frequency during active coding sessions; overflow asks that subscriber to resync rather than syncing it ([Chat Delivery](#chat-delivery)) |
 | WorkList | 64 | Medium frequency; UI can tolerate small delays |
 | SessionList | 64 | Medium frequency; similar to WorkList |
 | SessionDetail | 64 | Same store events as SessionList; see [above](#why-a-session-is-two-subscriptions) |

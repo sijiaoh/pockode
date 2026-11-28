@@ -20,7 +20,6 @@ import (
 	"time"
 
 	"github.com/pockode/server/agent"
-	"github.com/pockode/server/process"
 	"github.com/pockode/server/rpc"
 	"github.com/pockode/server/session"
 )
@@ -478,7 +477,7 @@ func TestStreamedNotificationsShareACompressionWindow(t *testing.T) {
 	event := agent.TextEvent{Content: strings.Repeat("a streamed chat event. ", 6)}
 	var first, last int
 	for i := 0; i < events; i++ {
-		wt.ChatMessagesWatcher.OnChatMessage(process.ChatMessage{SessionID: sessionID, Event: event})
+		wt.ChatMessagesWatcher.Enqueue(sessionID, event.Encode(), session.NoHistorySeq, nil)
 		msg := c.receiveNotification("chat.text")
 		if len(msg.data) >= 444 {
 			t.Fatalf("notification is %d bytes, which is at or above the median real event; "+

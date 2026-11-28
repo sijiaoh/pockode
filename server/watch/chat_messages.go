@@ -7,23 +7,30 @@ import (
 	"sync"
 
 	"github.com/pockode/server/agent"
-	"github.com/pockode/server/process"
+	"github.com/pockode/server/chatstream"
 	"github.com/pockode/server/session"
 )
 
-// ChatMessagesWatcher manages subscriptions for chat messages.
-// Implements process.ChatMessageListener to receive messages from ProcessManager.
+// ChatMessagesWatcher manages subscriptions for chat messages. It is the
+// chatstream.Sink every record of a session is handed to, in seq order, by the
+// session's sequencer.
+//
+// The sequencer only enqueues: every subscriber has a bounded queue of its own,
+// drained by a goroutine of its own (chatSubscriber), so a subscriber that
+// falls behind holds up neither the agent producing the records nor the other
+// subscribers. See docs/code/subscription-system.md#chat-delivery.
 type ChatMessagesWatcher struct {
 	*BaseWatcher
 	store session.Store
-	msgCh chan process.ChatMessage
 
+	// sessionMu is held exclusively for the whole fan-out of one record, so
+	// every subscriber of a session queues records in the same order.
 	sessionMu    sync.RWMutex
-	sessionToIDs map[string][]string // sessionID -> subscription IDs
-	idToSession  map[string]string   // subscription ID -> sessionID
+	sessionToSub map[string][]*chatSubscriber // sessionID -> subscribers
+	idToSub      map[string]*chatSubscriber   // subscription ID -> subscriber
 }
 
-var _ process.ChatMessageListener = (*ChatMessagesWatcher)(nil)
+var _ chatstream.Sink = (*ChatMessagesWatcher)(nil)
 var _ Watcher = (*ChatMessagesWatcher)(nil)
 var _ ViewingChecker = (*ChatMessagesWatcher)(nil)
 
@@ -31,14 +38,14 @@ func NewChatMessagesWatcher(store session.Store) *ChatMessagesWatcher {
 	return &ChatMessagesWatcher{
 		BaseWatcher:  NewBaseWatcher(),
 		store:        store,
-		msgCh:        make(chan process.ChatMessage, 256),
-		sessionToIDs: make(map[string][]string),
-		idToSession:  make(map[string]string),
+		sessionToSub: make(map[string][]*chatSubscriber),
+		idToSub:      make(map[string]*chatSubscriber),
 	}
 }
 
+// Start has nothing to start: each subscriber's delivery goroutine is started
+// when it subscribes.
 func (w *ChatMessagesWatcher) Start() error {
-	w.Go(w.messageLoop)
 	slog.Info("ChatMessagesWatcher started")
 	return nil
 }
@@ -48,90 +55,36 @@ func (w *ChatMessagesWatcher) Stop() {
 	slog.Info("ChatMessagesWatcher stopped")
 }
 
-// OnChatMessage implements process.ChatMessageListener.
-// Called from Process.streamEvents(), must not block.
-func (w *ChatMessagesWatcher) OnChatMessage(msg process.ChatMessage) {
+// Enqueue queues a record for every subscriber of the session except the one
+// whose Notifier is exclude, and returns without waiting for any of them. Each
+// subscriber receives what it is given in the order Enqueue was called, and its
+// one caller, the session's chatstream.Sequencer, calls it in seq order, so
+// records reach the wire in seq order.
+//
+// exclude is typed any because the chat client that passes it through does not
+// know the watch package; it is the sending connection's Notifier.
+//
+// seq is where the record landed in the session's history, or
+// session.NoHistorySeq for a live event, which was never persisted. Whether a
+// record may be dropped when a subscriber falls behind is read from its type,
+// not from seq: only an agent.LiveEvent may be.
+func (w *ChatMessagesWatcher) Enqueue(sessionID string, record agent.Wire, seq session.HistorySeq, exclude any) {
 	if w.Context().Err() != nil {
 		return
 	}
-
-	// A losable event gives way rather than crowding out one that is not.
-	//
-	// tool_activity and thinking_delta are the high-frequency events Pockode
-	// forwards — a chatty command produces one per chunk of stdout, a reasoning
-	// summary one per few words — and the only ones whose loss costs nothing
-	// lasting: the whole output arrives again with the result, the whole
-	// thinking with its record, and a client that subscribes is handed the
-	// newest activity line (agent.LiveEvent). Everything else in this
-	// buffer happens once, and a dropped `done` leaves a finished turn drawn as
-	// running until the client resubscribes. Without a reserve, a burst of
-	// progress could evict one.
-	//
-	// Half the buffer is a reserve, not a tuned figure: it only engages once the
-	// consumer has fallen far behind, which is exactly when the cheapest thing
-	// to drop should be dropped.
-	if _, live := msg.Event.Encode().(agent.LiveEvent); live && len(w.msgCh) > cap(w.msgCh)/2 {
-		slog.Debug("dropped a live progress update to keep room for events that cannot be lost",
-			"sessionId", msg.SessionID, "queued", len(w.msgCh))
-		return
-	}
-
-	select {
-	case w.msgCh <- msg:
-	default:
-		slog.Warn("chat message dropped (buffer full)",
-			"sessionId", msg.SessionID,
-			"type", msg.Event.EventType())
-	}
-}
-
-func (w *ChatMessagesWatcher) messageLoop() {
-	for {
-		select {
-		case <-w.Context().Done():
-			return
-		case msg := <-w.msgCh:
-			w.notifyMessage(msg)
-		}
-	}
-}
-
-func (w *ChatMessagesWatcher) notifyMessage(msg process.ChatMessage) {
-	w.notifyEvent(msg.SessionID, msg.Event.Encode(), msg.Seq, nil)
-}
-
-// notifyEvent broadcasts an event to session subscribers, optionally excluding one notifier.
-func (w *ChatMessagesWatcher) notifyEvent(sessionID string, record agent.Wire, seq session.HistorySeq, exclude Notifier) {
-	w.sessionMu.RLock()
-	ids := make([]string, len(w.sessionToIDs[sessionID]))
-	copy(ids, w.sessionToIDs[sessionID])
-	w.sessionMu.RUnlock()
-
-	if len(ids) == 0 {
-		return
-	}
-
+	_, live := record.(agent.LiveEvent)
 	method := "chat." + string(record.Type())
 
-	for _, id := range ids {
-		sub := w.GetSubscription(id)
-		if sub == nil || sub.Notifier == exclude {
+	w.sessionMu.Lock()
+	defer w.sessionMu.Unlock()
+	for _, sub := range w.sessionToSub[sessionID] {
+		if exclude != nil && any(sub.notifier) == exclude {
 			continue
 		}
-
-		params := notifyParams{
-			ID:    sub.ID,
-			Seq:   seq,
-			Event: record,
-		}
-
-		n := Notification{Method: method, Params: params}
-		if err := sub.Notifier.Notify(context.Background(), n); err != nil {
-			slog.Debug("failed to notify subscriber",
-				"id", sub.ID,
-				"sessionId", sessionID,
-				"error", err)
-		}
+		sub.offer(Notification{
+			Method: method,
+			Params: notifyParams{ID: sub.id, Seq: seq, Event: record},
+		}, live)
 	}
 }
 
@@ -186,18 +139,16 @@ func (w *ChatMessagesWatcher) Subscribe(
 	sessionID string,
 	limit int,
 ) (session.HistoryPage, error) {
-	sub := &Subscription{
-		ID:       id,
-		Notifier: notifier,
-	}
-	if err := w.AddSubscription(sub); err != nil {
+	if err := w.AddSubscription(&Subscription{ID: id, Notifier: notifier}); err != nil {
 		return session.HistoryPage{}, err
 	}
 
+	sub := newChatSubscriber(id, sessionID, notifier)
 	w.sessionMu.Lock()
-	w.sessionToIDs[sessionID] = append(w.sessionToIDs[sessionID], id)
-	w.idToSession[id] = sessionID
+	w.sessionToSub[sessionID] = append(w.sessionToSub[sessionID], sub)
+	w.idToSub[id] = sub
 	w.sessionMu.Unlock()
+	w.Go(func() { sub.run(w.Context()) })
 
 	history, err := w.store.GetHistory(context.Background(), sessionID)
 	if err != nil {
@@ -223,23 +174,25 @@ func (w *ChatMessagesWatcher) Unsubscribe(id string) {
 	w.RemoveSubscription(id)
 }
 
-// removeSessionMapping removes session mapping for a subscription. Caller must hold sessionMu.
+// removeSessionMapping removes session mapping for a subscription and stops
+// its delivery. Caller must hold sessionMu.
 func (w *ChatMessagesWatcher) removeSessionMapping(id string) {
-	sessionID, ok := w.idToSession[id]
+	sub, ok := w.idToSub[id]
 	if !ok {
 		return
 	}
+	sub.close()
 
-	delete(w.idToSession, id)
-	ids := w.sessionToIDs[sessionID]
-	for i, v := range ids {
-		if v == id {
-			w.sessionToIDs[sessionID] = append(ids[:i], ids[i+1:]...)
+	delete(w.idToSub, id)
+	subs := w.sessionToSub[sub.sessionID]
+	for i, v := range subs {
+		if v == sub {
+			w.sessionToSub[sub.sessionID] = append(subs[:i], subs[i+1:]...)
 			break
 		}
 	}
-	if len(w.sessionToIDs[sessionID]) == 0 {
-		delete(w.sessionToIDs, sessionID)
+	if len(w.sessionToSub[sub.sessionID]) == 0 {
+		delete(w.sessionToSub, sub.sessionID)
 	}
 }
 
@@ -247,14 +200,5 @@ func (w *ChatMessagesWatcher) removeSessionMapping(id string) {
 func (w *ChatMessagesWatcher) IsViewing(sessionID string) bool {
 	w.sessionMu.RLock()
 	defer w.sessionMu.RUnlock()
-	return len(w.sessionToIDs[sessionID]) > 0
-}
-
-// NotifyRecord broadcasts a record the server wrote itself to all session
-// subscribers except the given one. It is how a record that never passes
-// through a process's event stream — a message a client sent, a question
-// Pockode posted on an agent's behalf, its withdrawal — reaches the other
-// clients watching the same session without waiting for a reload.
-func (w *ChatMessagesWatcher) NotifyRecord(sessionID string, record agent.Record, seq session.HistorySeq, exclude Notifier) {
-	w.notifyEvent(sessionID, record, seq, exclude)
+	return len(w.sessionToSub[sessionID]) > 0
 }

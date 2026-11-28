@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/pockode/server/agent"
+	"github.com/pockode/server/chatstream"
 	"github.com/pockode/server/process"
 	"github.com/pockode/server/session"
 )
@@ -160,6 +161,49 @@ type attachmentReceivingSession struct{ mockSession }
 
 func (s *attachmentReceivingSession) ReceivesAttachments() {}
 
+// streamRecorder is what the process manager's sequencer hands a session's
+// records to in these tests: every record of the session, the process's and
+// the client's alike, in the order a subscriber would receive them.
+type streamRecorder struct {
+	mu      sync.Mutex
+	entries []streamEntry
+}
+
+type streamEntry struct {
+	record  agent.Wire
+	seq     session.HistorySeq
+	exclude any
+}
+
+func recordStream(pm *process.Manager) *streamRecorder {
+	r := &streamRecorder{}
+	pm.SetStreamSink(r)
+	return r
+}
+
+func (r *streamRecorder) Enqueue(_ string, record agent.Wire, seq session.HistorySeq, exclude any) {
+	r.mu.Lock()
+	r.entries = append(r.entries, streamEntry{record: record, seq: seq, exclude: exclude})
+	r.mu.Unlock()
+}
+
+func (r *streamRecorder) snapshot() []streamEntry {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]streamEntry(nil), r.entries...)
+}
+
+// records is every persisted-kind record enqueued so far, live events left out.
+func (r *streamRecorder) records() []agent.Record {
+	var out []agent.Record
+	for _, e := range r.snapshot() {
+		if rec, ok := e.record.(agent.Record); ok {
+			out = append(out, rec)
+		}
+	}
+	return out
+}
+
 func newTestManager(t *testing.T, store session.Store) *process.Manager {
 	t.Helper()
 	pm, _ := newTestManagerWithAgent(t, store)
@@ -274,10 +318,7 @@ func TestClient_MessageWithNoRecordHasNoAddress(t *testing.T) {
 	}
 
 	client := NewClient(store, pm)
-	broadcastSeq := session.HistorySeq(-1)
-	client.SetBroadcaster(func(_ string, _ agent.Record, seq session.HistorySeq, _ any) {
-		broadcastSeq = seq
-	})
+	stream := recordStream(pm)
 
 	sent, err := client.SendMessageExcluding(context.Background(), "sess", "hello", nil, nil)
 	if err != nil {
@@ -286,7 +327,17 @@ func TestClient_MessageWithNoRecordHasNoAddress(t *testing.T) {
 	if sent != (Sent{}) {
 		t.Errorf("sent = %+v, want neither an address nor an id for a record that was not written", sent)
 	}
-	if broadcastSeq.Valid() {
-		t.Errorf("broadcast seq = %d, want no address for a record that was not written", broadcastSeq)
+	// Not passed off as a live record either: it would be on screen now and gone
+	// on the next reload. Every subscriber, the sender included, is told instead.
+	entries := stream.snapshot()
+	if len(entries) != 1 {
+		t.Fatalf("stream = %+v, want only the warning standing in for the message", entries)
+	}
+	warning, ok := entries[0].record.(agent.WarningRecord)
+	if !ok || warning.Code != chatstream.HistoryWriteFailedCode {
+		t.Errorf("stream[0] = %+v, want a %s warning", entries[0].record, chatstream.HistoryWriteFailedCode)
+	}
+	if entries[0].seq.Valid() || entries[0].exclude != nil {
+		t.Errorf("warning seq = %d, exclude = %v; want no address and nobody left out", entries[0].seq, entries[0].exclude)
 	}
 }

@@ -9,10 +9,11 @@ AI CLI (stdout)
   → streamOutput (line-by-line JSON parsing)
     → AgentEvent channel (unbuffered)
       → Process.streamEvents
-          ├─ Persist: store.AppendToHistory (agent.Record) — skipped for an
-          │           agent.LiveEvent, which is broadcast only
-          └─ ProcessManager.EmitMessage
-               → ChatMessagesWatcher (implements ChatMessageListener)
+          └─ chatstream.Sequencer (one per worktree, locked per session;
+             │  the chat client writes through it too)
+             ├─ Append: store.AppendToHistory (agent.Record), then enqueue;
+             │          Publish for an agent.LiveEvent, which is never stored
+             → ChatMessagesWatcher.Enqueue (implements chatstream.Sink)
                  → Broadcast: JSON-RPC notification ("chat.<type>")
                    → WebSocket → Frontend
                      → wsStore (route by subscription ID)
@@ -552,7 +553,7 @@ owns them.
 
 ### Broadcasting
 
-`server/watch/chat_messages.go` — `ChatMessagesWatcher` implements `process.ChatMessageListener`. Receives every event, after it is persisted if it encodes as a record (persistence happens in `ProcessManager.streamEvents()` via `store.AppendToHistory`), encodes it with `Encode()` (a record, or a live event for a broadcast-only type), then broadcasts JSON-RPC notifications with method `"chat.<event-type>"` and the subscription ID for client-side routing. Each notification also carries the record's `seq`, the same address a history page carries on its records ([paging](agent-chat.md#history-paging)), so a client cannot tell a replayed record from a live one when it names a point in the conversation ([code/agent-integration.md](code/agent-integration.md#history-storage)). Events that were not persisted carry none.
+`server/watch/chat_messages.go` — `ChatMessagesWatcher` implements `chatstream.Sink`. The session's `chatstream.Sequencer` hands it every record — the process's and the ones Pockode writes itself — in seq order, each right after it is persisted (a live event, never persisted, in its place among them; a record whose append failed is replaced by a `history_write_failed` warning with no seq). It queues a JSON-RPC notification with method `"chat.<event-type>"`, carrying the subscription ID for client-side routing, for each subscriber of the session, each on a bounded queue of its own (overflow drops live progress, or ends the subscription with `chat.resync` — [code/subscription-system.md](code/subscription-system.md#chat-delivery)). Each notification also carries the record's `seq`, the same address a history page carries on its records ([paging](agent-chat.md#history-paging)), so a client cannot tell a replayed record from a live one when it names a point in the conversation ([code/agent-integration.md](code/agent-integration.md#history-storage)). Events that were not persisted carry none.
 
 A user message is broadcast to every subscriber except the tab that sent it, which has already echoed the message into its own transcript. That tab therefore learns its own record's address from a third source — the reply to the `chat.message` call it made (`rpc.MessageResult`), the only channel that reaches it. Replayed history, live notification and that reply all carry the same `seq` and `message_id`, so what a client can name does not depend on which of the three delivered the record. For a message that invoked a [Pockode command](pockode-commands.md) the reply also carries the record's `content` and `command`, for the same reason: the sender typed `/pockode-lead`, and the prompt the agent was sent instead reaches it nowhere else. A message carrying `answering` gets `content` back the same way: the sender sent none, and the body the server wrote from the answers reaches it nowhere else. A message carrying files gets `attachments` back too: the sender knew only what the browser guessed about each file. A page's action gets `content` and `html_action` back: the sender echoed only the action, and the text the agent was sent reaches it nowhere else. A message no record names stays unaddressable, and a client must not number it itself.
 

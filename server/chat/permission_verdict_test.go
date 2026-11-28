@@ -96,7 +96,7 @@ func TestClient_SendPermissionVerdict(t *testing.T) {
 			}
 
 			var broadcast bool
-			for _, b := range f.broadcasts {
+			for _, b := range f.stream.records() {
 				if b, ok := b.(agent.PermissionResponseRecord); ok && b.By == agent.RespondedByPermissionReviewer {
 					broadcast = true
 				}
@@ -131,7 +131,7 @@ func TestClient_PersonsPermissionResponseUnattributed(t *testing.T) {
 		t.Errorf("records = %+v, want one with no attribution", responses)
 	}
 	var broadcast bool
-	for _, b := range f.broadcasts {
+	for _, b := range f.stream.records() {
 		if b, ok := b.(agent.PermissionResponseRecord); ok && b.RequestID == "req-1" {
 			broadcast = true
 		}

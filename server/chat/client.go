@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/pockode/server/agent"
+	"github.com/pockode/server/chatstream"
 	"github.com/pockode/server/htmlpage"
 	"github.com/pockode/server/process"
 	"github.com/pockode/server/session"
@@ -80,39 +81,21 @@ var ErrForkAnchorNoHistory = errors.New("there is no conversation before this me
 // just because the Pockode side of it would have worked.
 var ErrForkUnsupported = errors.New("this session's agent does not support forking")
 
-// EventBroadcastFunc broadcasts a record Pockode wrote itself to all session
-// subscribers, optionally excluding one notifier. seq is where the record landed
-// in the session's history, so subscribers can name it later, or
-// session.NoHistorySeq when it was not recorded and there is nothing to name.
-// The exclude parameter is typed as any to avoid importing the watch package;
-// the wiring code casts it.
-//
-// It takes a record rather than one event type because the records that need it
-// are no longer only messages: a question Pockode posts on an agent's behalf,
-// and its withdrawal, are written here too and never pass through the process's
-// event stream, so this is the only way they reach an open chat before the next
-// reload.
-type EventBroadcastFunc func(sessionID string, record agent.Record, seq session.HistorySeq, exclude any)
-
 // Client coordinates chat operations across session and process management.
 // It is the single entry point for programmatic chat interactions.
 type Client struct {
-	store     session.Store
-	pm        *process.Manager
-	broadcast EventBroadcastFunc
-	settled   QuestionsSettledFunc
+	store session.Store
+	pm    *process.Manager
+	// stream is the process manager's, so what this client writes and what
+	// the session's process writes take their places in one order.
+	stream  *chatstream.Sequencer
+	settled QuestionsSettledFunc
 	// postMu keeps each PostQuestions call's questions contiguous; see there.
 	postMu sync.Mutex
 }
 
 func NewClient(store session.Store, pm *process.Manager) *Client {
-	return &Client{store: store, pm: pm}
-}
-
-// SetBroadcaster sets the function used to broadcast server-written records to
-// subscribers.
-func (c *Client) SetBroadcaster(fn EventBroadcastFunc) {
-	c.broadcast = fn
+	return &Client{store: store, pm: pm, stream: pm.Stream()}
 }
 
 // QuestionsSettledFunc is told when posted questions stop waiting in a session,
@@ -230,22 +213,26 @@ func (c *Client) sendEvent(ctx context.Context, sessionID string, event agent.Me
 	receivedAt := time.Now()
 	event.ObservedAt = receivedAt
 
-	// Persist message to history
-	seq, err := c.store.AppendToHistory(ctx, sessionID, event.ToRecord())
+	// Recorded and shown to the other subscribers before it is handed over, so
+	// that it precedes everything the agent says in reply, on the wire as in
+	// history. A handover that fails below leaves the record standing, as the
+	// next reload would show it anyway.
+	seq, err := c.stream.Append(ctx, sessionID, event.ToRecord(), exclude)
 	if err != nil {
-		slog.Error("failed to persist message", "sessionId", sessionID, "error", err)
 		// The prompt still goes to the agent — it is worth answering whether or not
 		// the transcript kept it, and refusing it here would turn a disk hiccup into
-		// a session that cannot be talked to. But the failed append handed back no
-		// address, so nothing below may pass one on: a seq nobody can resolve would
-		// send a later fork to whatever record eventually takes that number.
+		// a session that cannot be talked to. The sequencer has told every
+		// subscriber, the sender among them, that it was not saved. But the failed
+		// append handed back no address, so nothing below may pass one on: a seq
+		// nobody can resolve would send a later fork to whatever record eventually
+		// takes that number.
 		seq = session.NoHistorySeq
 		// The id goes with it. There is no record carrying this id, so a read
 		// point naming it would name nothing.
 		event.MessageID = ""
-		// And the moment, on the broadcast as in the sender's answer: a figure
-		// drawn from it would be gone on the next reload. The turn still opens
-		// at it — that is when the message arrived either way.
+		// And the moment, in the sender's answer: a figure drawn from it would be
+		// gone on the next reload. The turn still opens at it — that is when the
+		// message arrived either way.
 		event.ObservedAt = time.Time{}
 	}
 
@@ -265,10 +252,6 @@ func (c *Client) sendEvent(ctx context.Context, sessionID string, event agent.Me
 	}
 	if err != nil {
 		return Sent{}, err
-	}
-
-	if c.broadcast != nil {
-		c.broadcast(sessionID, event.ToRecord(), seq, exclude)
 	}
 
 	// A message that joined a turn already under way is the one that needs a
@@ -346,17 +329,13 @@ func (c *Client) processToDeliverTo(ctx context.Context, sessionID string, hasAt
 // subscriber would be told the agent had read a message it had not yet been
 // told about.
 //
-// A failed append is logged and nothing more. The message was delivered and the
-// turn is under way; losing the boundary costs the reader a bubble break on the
-// next reload, which is not worth failing a send that succeeded.
+// A failed append is reported by the sequencer and fails nothing here. The
+// message was delivered and the turn is under way; losing the boundary costs
+// the reader a bubble break on the next reload, which is not worth failing a
+// send that succeeded.
 func (c *Client) noteIngested(ctx context.Context, sessionID, messageID string) {
 	record := agent.ObserveAt(agent.MessageIngestedEvent{MessageID: messageID}, time.Now()).ToRecord()
-	seq, err := c.store.AppendToHistory(ctx, sessionID, record)
-	if err != nil {
-		slog.Error("failed to persist the message read point", "sessionId", sessionID, "error", err)
-		return
-	}
-	c.broadcastRecord(sessionID, record, seq)
+	_, _ = c.stream.Append(ctx, sessionID, record, nil)
 }
 
 func (c *Client) SendPermissionResponse(ctx context.Context, sessionID string, data agent.PermissionRequestData, choice agent.PermissionChoice) error {
@@ -371,17 +350,14 @@ func (c *Client) SendPermissionResponse(ctx context.Context, sessionID string, d
 
 	// Broadcast as well as stored: the client that answered has drawn its own
 	// press, but every other client watching the session has not, and kept a
-	// live card for an answered request until it reloaded.
+	// live card for an answered request until it reloaded. A failed write is
+	// the sequencer's to report; the answer itself reached the agent, so the
+	// request did not fail.
 	record := agent.ObserveAt(agent.PermissionResponseEvent{
 		RequestID: data.RequestID,
 		Choice:    choice.Name(),
 	}, time.Now()).ToRecord()
-	seq, err := c.store.AppendToHistory(ctx, sessionID, record)
-	if err != nil {
-		slog.Error("failed to persist permission response", "sessionId", sessionID, "error", err)
-		return nil
-	}
-	c.broadcastRecord(sessionID, record, seq)
+	_, _ = c.stream.Append(ctx, sessionID, record, nil)
 	return nil
 }
 
@@ -451,12 +427,9 @@ func (c *Client) answerForReview(ctx context.Context, proc *process.Process, dat
 		By:        by,
 		Review:    &review,
 	}, time.Now()).ToRecord()
-	seq, err := c.store.AppendToHistory(ctx, sessionID, record)
-	if err != nil {
-		slog.Error("failed to persist permission response", "sessionId", sessionID, "by", by, "error", err)
-		return nil
-	}
-	c.broadcastRecord(sessionID, record, seq)
+	// As for a person's answer: a failed write is reported, and the answer
+	// stands.
+	_, _ = c.stream.Append(ctx, sessionID, record, nil)
 	return nil
 }
 
@@ -465,12 +438,9 @@ func (c *Client) answerForReview(ctx context.Context, proc *process.Process, dat
 // for what went wrong outside the agent's own stream that the person reading
 // the session has to know.
 func (c *Client) RecordWarning(ctx context.Context, sessionID string, warning agent.WarningEvent) error {
-	record := warning.ToRecord()
-	seq, err := c.store.AppendToHistory(ctx, sessionID, record)
-	if err != nil {
+	if _, err := c.stream.Append(ctx, sessionID, warning.ToRecord(), nil); err != nil {
 		return fmt.Errorf("record warning: %w", err)
 	}
-	c.broadcastRecord(sessionID, record, seq)
 	return nil
 }
 
@@ -618,9 +588,11 @@ func (c *Client) Fork(ctx context.Context, sourceID string, anchor session.Histo
 				source.AgentType.DisplayName()),
 			Code: "fork_agent_context_unavailable",
 		}
-		if _, err := c.store.AppendToHistory(ctx, newID, warning.ToRecord()); err != nil {
-			slog.Error("failed to record that the fork has no agent context",
-				"sessionId", newID, "error", err)
+		// Failing the fork rather than logging it: the warning is the only way
+		// the user learns the agent remembers nothing, and the new session has
+		// no subscriber yet to be told that it could not be written.
+		if _, err := c.stream.Append(ctx, newID, warning.ToRecord(), nil); err != nil {
+			return fail(fmt.Errorf("record that the fork has no agent context: %w", err))
 		}
 	}
 

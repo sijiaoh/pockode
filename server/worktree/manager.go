@@ -1210,7 +1210,7 @@ func (m *Manager) create(name, workDir string, claim *dataDirWriter) (*Worktree,
 	// session state lands next to the session store. MCP discovery still points at
 	// the main data dir (m.dataDir), the only place server.json is written.
 	processManager := process.NewManager(m.agents, name, workDir, wtDataDir, m.dataDir, sessionStore, m.leaseBudgets)
-	processManager.SetMessageListener(chatMessagesWatcher)
+	processManager.SetStreamSink(chatMessagesWatcher)
 	processManager.SetWorkLookup(m.workStore)
 	sessionListWatcher.SetViewingChecker(chatMessagesWatcher)
 	processManager.SetOnStateChange(sessionListWatcher.HandleProcessStateChange)
@@ -1219,13 +1219,6 @@ func (m *Manager) create(name, workDir string, claim *dataDirWriter) (*Worktree,
 	}
 
 	chatClient := chat.NewClient(sessionStore, processManager)
-	chatClient.SetBroadcaster(func(sessionID string, record agent.Record, seq session.HistorySeq, exclude any) {
-		var n watch.Notifier
-		if exclude != nil {
-			n = exclude.(watch.Notifier)
-		}
-		chatMessagesWatcher.NotifyRecord(sessionID, record, seq, n)
-	})
 	if m.workEngine != nil {
 		// Every way a posted question stops waiting goes through the chat
 		// client, whichever caller asked for it, so this is where the engine

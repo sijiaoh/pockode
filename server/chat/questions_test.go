@@ -15,10 +15,10 @@ import (
 )
 
 type questionFixture struct {
-	store      session.Store
-	client     *Client
-	agent      *mockAgent
-	broadcasts []agent.Record
+	store  session.Store
+	client *Client
+	agent  *mockAgent
+	stream *streamRecorder
 	// settled is every call QuestionsSettledFunc received, in order.
 	settled [][]agent.SettledQuestion
 }
@@ -38,10 +38,7 @@ func newQuestionFixture(t *testing.T) *questionFixture {
 		t.Fatalf("Create session: %v", err)
 	}
 
-	f := &questionFixture{store: store, client: NewClient(store, pm), agent: ag}
-	f.client.SetBroadcaster(func(_ string, record agent.Record, _ session.HistorySeq, _ any) {
-		f.broadcasts = append(f.broadcasts, record)
-	})
+	f := &questionFixture{store: store, client: NewClient(store, pm), agent: ag, stream: recordStream(pm)}
 	f.client.SetOnQuestionsSettled(func(sessionID string, settled []agent.SettledQuestion) {
 		if sessionID != "sess" {
 			t.Errorf("settled reported for session %q, want sess", sessionID)
@@ -156,8 +153,8 @@ func TestPostQuestion_RecordsAndWaits(t *testing.T) {
 	if got := len(f.agent.sessions); got != 0 {
 		t.Errorf("agent sessions started = %d, want none", got)
 	}
-	if len(f.broadcasts) != 1 || f.broadcasts[0].Type() != agent.EventTypeQuestionPosted {
-		t.Errorf("broadcasts = %+v, want the card pushed to open chats", f.broadcasts)
+	if len(f.stream.records()) != 1 || f.stream.records()[0].Type() != agent.EventTypeQuestionPosted {
+		t.Errorf("broadcasts = %+v, want the card pushed to open chats", f.stream.records())
 	}
 }
 
@@ -200,13 +197,13 @@ func TestPostQuestions_ABatchIsQuestionsOfTheirOwn(t *testing.T) {
 
 	pending := f.unanswered(t)
 	records := f.records(t)
-	if len(pending) != 3 || len(records) != 3 || len(f.broadcasts) != 3 {
+	if len(pending) != 3 || len(records) != 3 || len(f.stream.records()) != 3 {
 		t.Fatalf("unanswered = %d, records = %d, broadcasts = %d; want one of each per question",
-			len(pending), len(records), len(f.broadcasts))
+			len(pending), len(records), len(f.stream.records()))
 	}
 	for i, q := range posted {
 		record := recordAs[agent.QuestionPostedRecord](t, records[i])
-		broadcast := recordAs[agent.QuestionPostedRecord](t, f.broadcasts[i])
+		broadcast := recordAs[agent.QuestionPostedRecord](t, f.stream.records()[i])
 		if pending[i].RequestID != q.RequestID || record.RequestID != q.RequestID || broadcast.RequestID != q.RequestID {
 			t.Errorf("position %d: unanswered %s, record %s, broadcast %s; want %s (%s) — asking order",
 				i, pending[i].RequestID, record.RequestID, broadcast.RequestID, q.RequestID, q.Header)
