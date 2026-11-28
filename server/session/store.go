@@ -8,9 +8,11 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/pockode/server/attachments"
@@ -78,6 +80,10 @@ type Store interface {
 
 	// Change notification
 	AddOnChangeListener(listener OnChangeListener)
+
+	// Close writes what is still held in memory. The store goes on working
+	// afterwards, writing every change as it happens.
+	Close() error
 }
 
 type indexData struct {
@@ -101,10 +107,23 @@ const indexVersion = 1
 // directory, worktrees' data under it included, at startup (datadir.Lock), and
 // a second server on the same one refuses to start.
 type FileStore struct {
-	dataDir   string
-	mu        sync.RWMutex
-	sessions  []SessionMeta // in-memory cache
+	dataDir string
+
+	// writeMu serializes everything that changes the index — the mutation,
+	// its write to disk and its notification are one step under it — and
+	// guards sessions, listeners and the persistence fields below. Readers
+	// never take it: a write can hold it across an fsync, and nearly every
+	// RPC lists or gets a session.
+	writeMu sync.Mutex
+	// sessions is the writers' working copy.
+	sessions  []SessionMeta
 	listeners []OnChangeListener
+	// published is what List and Get read: a copy of sessions taken once a
+	// write has finished with it (see publishLocked). It is never modified
+	// after it is stored, and neither is anything it points to — the turn
+	// reducer and usage folding build new values rather than editing stored
+	// ones — so a reader shares it without a lock and without a copy.
+	published atomic.Pointer[[]SessionMeta]
 
 	// historyMu guards historyLen and is held across the append itself, so two
 	// concurrent appends cannot take sequence numbers in one order and reach the
@@ -118,18 +137,31 @@ type FileStore struct {
 	// it is released: this lock is every session's, and a large directory
 	// would otherwise stall every session's appends.
 	//
-	// Lock order is mu then historyMu (Delete and insertLocked take both).
-	// Never take mu while holding this one.
+	// Lock order is writeMu then historyMu (Delete and insertLocked take both).
+	// Never take writeMu while holding this one.
 	historyMu  sync.Mutex
 	historyLen map[string]int // sessionID -> records written so far
 	// deleted holds the sessions this process deleted, so a late write to one —
 	// an expiry recorded while its process is torn down — fails with
 	// ErrSessionNotFound instead of leaving an orphan directory nothing lists.
-	// A tombstone rather than a lookup in sessions: that would mean taking mu on
+	// A tombstone rather than a lookup in sessions: that would mean taking writeMu on
 	// every streamed record, behind each index write. It lasts until the same
 	// id is created again (a work restarts its deleted session under its own
 	// id); sessions deleted by an earlier run have no process left to write.
 	deleted map[string]struct{}
+
+	// dirty says the index in memory has changes the file does not; flushTimer
+	// is what will write them. Both guarded by writeMu — see persistLocked.
+	dirty      bool
+	flushTimer *time.Timer
+	// flushGen names the timer currently armed — see disarmFlushLocked.
+	flushGen   uint64
+	flushDelay time.Duration
+	// closed is set by Close, after which nothing is held back.
+	closed bool
+	// writeIndex is filestore.WriteFileAtomic; a test holds a write in
+	// flight through it.
+	writeIndex func(path string, data []byte, perm os.FileMode) error
 }
 
 func NewFileStore(dataDir string) (*FileStore, error) {
@@ -142,6 +174,8 @@ func NewFileStore(dataDir string) (*FileStore, error) {
 		dataDir:    dataDir,
 		historyLen: make(map[string]int),
 		deleted:    make(map[string]struct{}),
+		flushDelay: recoverableFlushDelay,
+		writeIndex: filestore.WriteFileAtomic,
 	}
 
 	idx, err := store.readIndexFromDisk()
@@ -150,6 +184,7 @@ func NewFileStore(dataDir string) (*FileStore, error) {
 	}
 	store.sessions = idx.Sessions
 	store.abortTurnsTheLastRunLeftOpen()
+	store.publishLocked(store.sessions)
 
 	return store, nil
 }
@@ -354,24 +389,13 @@ func dropStaleClaudeContext(sessions []SessionMeta) {
 	}
 }
 
-func (s *FileStore) persistIndex() error {
-	// The version is stamped by whatever write comes first rather than forced at
-	// startup: a run that stores nothing has nothing to lose by repairing the
-	// same file again, and the first report from any agent writes both at once.
-	data, err := filestore.MarshalIndex(indexData{Version: indexVersion, Sessions: s.sessions})
-	if err != nil {
-		return err
-	}
-	return filestore.WriteFileAtomic(s.indexPath(), data, 0644)
-}
-
 func (s *FileStore) AddOnChangeListener(listener OnChangeListener) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
 	s.listeners = append(s.listeners, listener)
 }
 
-// notifyChange must be called with mu held — that is the contract listeners are
+// notifyChange must be called with writeMu held — that is the contract listeners are
 // written against (see OnChangeListener).
 func (s *FileStore) notifyChange(event SessionChangeEvent) {
 	for _, l := range s.listeners {
@@ -379,12 +403,24 @@ func (s *FileStore) notifyChange(event SessionChangeEvent) {
 	}
 }
 
-func (s *FileStore) List() ([]SessionMeta, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+// publishLocked makes a copy of sessions what readers see — a copy, because
+// writers go on assigning the fields of the slice they pass. It is called once
+// a write is done with the disk, so a reader never sees a durable change
+// before its write has finished, nor one half applied. Done with it either
+// way: a write the disk refuses leaves the change in the store, dirty and
+// retried (see persistIndex), and readers see what the store holds — though
+// listeners never hear of it, since the caller was told it failed. Deletion is
+// the one change shown early; see Delete. Caller must hold writeMu, except
+// during construction.
+func (s *FileStore) publishLocked(sessions []SessionMeta) {
+	snapshot := slices.Clone(sessions)
+	s.published.Store(&snapshot)
+}
 
-	result := make([]SessionMeta, len(s.sessions))
-	copy(result, s.sessions)
+func (s *FileStore) List() ([]SessionMeta, error) {
+	sessions := *s.published.Load()
+	result := make([]SessionMeta, len(sessions))
+	copy(result, sessions)
 
 	sort.Slice(result, ListOrder(result, SessionMeta.Cursor))
 
@@ -392,10 +428,7 @@ func (s *FileStore) List() ([]SessionMeta, error) {
 }
 
 func (s *FileStore) Get(sessionID string) (SessionMeta, bool, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	for _, sess := range s.sessions {
+	for _, sess := range *s.published.Load() {
 		if sess.ID == sessionID {
 			return sess, true, nil
 		}
@@ -424,8 +457,8 @@ func (s *FileStore) Create(ctx context.Context, sessionID string, spec CreateSpe
 		return SessionMeta{}, fmt.Errorf("%w: effort %q, agent %q", ErrEffortNotAvailable, spec.Effort, agentType)
 	}
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
 
 	now := time.Now()
 	session := SessionMeta{
@@ -447,7 +480,7 @@ func (s *FileStore) Create(ctx context.Context, sessionID string, spec CreateSpe
 }
 
 // insertLocked puts a new session at the front of the list, persists the index and
-// announces it, restoring the in-memory list if the write fails. Caller must hold mu.
+// announces it, restoring the in-memory list if the write fails. Caller must hold writeMu.
 func (s *FileStore) insertLocked(session SessionMeta) error {
 	s.sessions = append([]SessionMeta{session}, s.sessions...)
 
@@ -457,12 +490,14 @@ func (s *FileStore) insertLocked(session SessionMeta) error {
 	}
 
 	// Lifted only once the session exists, so a failed create leaves a late
-	// write from the deleted one refused; and before it is announced, since
-	// nothing but such a write can reach the id until then.
+	// write from the deleted one refused; and before it is published, since
+	// nothing but such a write can reach the id until then — a reader that
+	// gets the session must be able to write to it.
 	s.historyMu.Lock()
 	delete(s.deleted, session.ID)
 	s.historyMu.Unlock()
 
+	s.publishLocked(s.sessions)
 	s.notifyChange(SessionChangeEvent{Op: OperationCreate, Session: session})
 	return nil
 }
@@ -477,8 +512,8 @@ func (s *FileStore) CreateFork(ctx context.Context, sessionID string, fork ForkS
 		title = fork.Source.Title
 	}
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
 
 	now := time.Now()
 	session := SessionMeta{
@@ -559,8 +594,8 @@ func (s *FileStore) EnsurePermissionReviewer(ctx context.Context, mainSessionID,
 		return SessionMeta{}, false, err
 	}
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
 
 	var main *SessionMeta
 	for i := range s.sessions {
@@ -600,16 +635,23 @@ func (s *FileStore) Delete(ctx context.Context, sessionID string) error {
 		return err
 	}
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
 
 	doomed := withPermissionReviewers(s.sessions, sessionID)
+	// Unlisted before its directory goes rather than after the index is
+	// written: a reader handed a session whose files are being removed could
+	// write into it again — an attachment, a page — and leave an orphan
+	// directory nothing lists. Shown early because nothing is owed back: a
+	// deletion that fails to reach the index still stands in the store.
+	s.publishLocked(withoutSessions(s.sessions, doomed))
 	if err := s.removeSessionDirs(doomed); err != nil {
+		// Still in the index, so listed again; tombstoned all the same.
+		s.publishLocked(s.sessions)
 		return err
 	}
 
 	s.sessions = withoutSessions(s.sessions, doomed)
-
 	if err := s.persistIndex(); err != nil {
 		return err
 	}
@@ -641,29 +683,32 @@ func (s *FileStore) removeSessionDirs(ids []string) error {
 }
 
 // updateMeta applies a mutation to one session's metadata under the store lock.
-// It persists and notifies only when apply reports an actual change, so callers
-// that write the value a session already has cost nothing. An apply that
-// rejects the write returns the error to the caller unchanged.
-func (s *FileStore) updateMeta(ctx context.Context, sessionID string, apply func(*SessionMeta) (bool, error)) error {
+// It persists — as soon as the change apply reports needs (see metaChange) —
+// and notifies only when there is a change, so callers that write the value a
+// session already has cost nothing. An apply that rejects the write returns the
+// error to the caller unchanged.
+func (s *FileStore) updateMeta(ctx context.Context, sessionID string, apply func(*SessionMeta) (metaChange, error)) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
 
 	for i := range s.sessions {
 		if s.sessions[i].ID != sessionID {
 			continue
 		}
-		changed, err := apply(&s.sessions[i])
+		change, err := apply(&s.sessions[i])
 		if err != nil {
 			return err
 		}
-		if !changed {
+		if change == unchanged {
 			return nil
 		}
-		if err := s.persistIndex(); err != nil {
+		err = s.persistLocked(change)
+		s.publishLocked(s.sessions)
+		if err != nil {
 			return err
 		}
 		s.notifyChange(SessionChangeEvent{Op: OperationUpdate, Session: s.sessions[i]})
@@ -674,23 +719,30 @@ func (s *FileStore) updateMeta(ctx context.Context, sessionID string, apply func
 }
 
 func (s *FileStore) Update(ctx context.Context, sessionID string, title string) error {
-	return s.updateMeta(ctx, sessionID, func(meta *SessionMeta) (bool, error) {
+	return s.updateMeta(ctx, sessionID, func(meta *SessionMeta) (metaChange, error) {
 		meta.Title = title
 		meta.UpdatedAt = time.Now()
-		return true, nil
+		return durable, nil
 	})
 }
 
+// Activate is durable only the first time: Activated is what keeps a session
+// that has run from being switched to another agent. Every later call is a
+// Touch, since a process is activated once per incarnation.
 func (s *FileStore) Activate(ctx context.Context, sessionID string) error {
-	return s.updateMeta(ctx, sessionID, func(meta *SessionMeta) (bool, error) {
+	return s.updateMeta(ctx, sessionID, func(meta *SessionMeta) (metaChange, error) {
+		change := recoverable
+		if !meta.Activated {
+			change = durable
+		}
 		meta.Activated = true
 		meta.UpdatedAt = time.Now()
-		return true, nil
+		return change, nil
 	})
 }
 
 func (s *FileStore) SetAgentType(ctx context.Context, sessionID string, agentType AgentType) error {
-	return s.updateMeta(ctx, sessionID, func(meta *SessionMeta) (bool, error) {
+	return s.updateMeta(ctx, sessionID, func(meta *SessionMeta) (metaChange, error) {
 		meta.AgentType = agentType
 		// Models are agent-specific and no two agents share one, so a model
 		// selected for the previous agent would only make the CLI fail to start.
@@ -704,15 +756,15 @@ func (s *FileStore) SetAgentType(ctx context.Context, sessionID string, agentTyp
 			meta.Effort = ""
 		}
 		meta.UpdatedAt = time.Now()
-		return true, nil
+		return durable, nil
 	})
 }
 
 func (s *FileStore) SetMode(ctx context.Context, sessionID string, mode Mode) error {
-	return s.updateMeta(ctx, sessionID, func(meta *SessionMeta) (bool, error) {
+	return s.updateMeta(ctx, sessionID, func(meta *SessionMeta) (metaChange, error) {
 		meta.Mode = mode
 		meta.UpdatedAt = time.Now()
-		return true, nil
+		return durable, nil
 	})
 }
 
@@ -722,13 +774,13 @@ func (s *FileStore) SetMode(ctx context.Context, sessionID string, mode Mode) er
 // so a caller that validated beforehand could still write a model the agent
 // type it saw no longer has.
 func (s *FileStore) SetModel(ctx context.Context, sessionID string, model string) error {
-	return s.updateMeta(ctx, sessionID, func(meta *SessionMeta) (bool, error) {
+	return s.updateMeta(ctx, sessionID, func(meta *SessionMeta) (metaChange, error) {
 		if !IsValidModel(meta.AgentType, model) {
-			return false, fmt.Errorf("%w: model %q, agent %q", ErrModelNotAvailable, model, meta.AgentType)
+			return unchanged, fmt.Errorf("%w: model %q, agent %q", ErrModelNotAvailable, model, meta.AgentType)
 		}
 		meta.Model = model
 		meta.UpdatedAt = time.Now()
-		return true, nil
+		return durable, nil
 	})
 }
 
@@ -738,13 +790,13 @@ func (s *FileStore) SetModel(ctx context.Context, sessionID string, model string
 // lock. The stored model is left alone — effort is validated per agent, not per
 // model (see effort.go).
 func (s *FileStore) SetEffort(ctx context.Context, sessionID string, effort string) error {
-	return s.updateMeta(ctx, sessionID, func(meta *SessionMeta) (bool, error) {
+	return s.updateMeta(ctx, sessionID, func(meta *SessionMeta) (metaChange, error) {
 		if !IsValidEffort(meta.AgentType, effort) {
-			return false, fmt.Errorf("%w: effort %q, agent %q", ErrEffortNotAvailable, effort, meta.AgentType)
+			return unchanged, fmt.Errorf("%w: effort %q, agent %q", ErrEffortNotAvailable, effort, meta.AgentType)
 		}
 		meta.Effort = effort
 		meta.UpdatedAt = time.Now()
-		return true, nil
+		return durable, nil
 	})
 }
 
@@ -752,26 +804,29 @@ func (s *FileStore) SetEffort(ctx context.Context, sessionID string, effort stri
 // writes under the same lock: a switch either lands before the first message is
 // delivered, and the sender sees it, or is refused.
 func (s *FileStore) SetHTMLFirst(ctx context.Context, sessionID string, htmlFirst bool) error {
-	return s.updateMeta(ctx, sessionID, func(meta *SessionMeta) (bool, error) {
+	return s.updateMeta(ctx, sessionID, func(meta *SessionMeta) (metaChange, error) {
 		if meta.Started {
-			return false, ErrSessionStarted
+			return unchanged, ErrSessionStarted
 		}
 		if meta.HTMLFirst == htmlFirst {
-			return false, nil
+			return unchanged, nil
 		}
 		meta.HTMLFirst = htmlFirst
 		meta.UpdatedAt = time.Now()
-		return true, nil
+		return durable, nil
 	})
 }
 
 func (s *FileStore) MarkStarted(ctx context.Context, sessionID string) (SessionMeta, error) {
 	var started SessionMeta
-	err := s.updateMeta(ctx, sessionID, func(meta *SessionMeta) (bool, error) {
-		changed := !meta.Started
+	err := s.updateMeta(ctx, sessionID, func(meta *SessionMeta) (metaChange, error) {
+		change := unchanged
+		if !meta.Started {
+			change = durable
+		}
 		meta.Started = true
 		started = *meta
-		return changed, nil
+		return change, nil
 	})
 	if err != nil {
 		return SessionMeta{}, err
@@ -782,13 +837,15 @@ func (s *FileStore) MarkStarted(ctx context.Context, sessionID string) (SessionM
 // ApplyTurn runs the reducer against the stored state and writes the result.
 // The index is only rewritten when the state actually moved, which is what keeps
 // a turn's worth of output — dozens of events that all say "still running" —
-// from costing a file write each.
+// from costing a file write each; and most moves are recoverable, so a turn's
+// raises, answers and ending share a write (see metaChange for which are not).
 func (s *FileStore) ApplyTurn(ctx context.Context, sessionID string, in TurnInput) (TurnTransition, error) {
 	var transition TurnTransition
-	err := s.updateMeta(ctx, sessionID, func(meta *SessionMeta) (bool, error) {
+	err := s.updateMeta(ctx, sessionID, func(meta *SessionMeta) (metaChange, error) {
 		transition = ReduceTurn(meta.Turn, in)
+		change := turnChange(meta.Turn, transition)
 		meta.Turn = transition.State
-		return transition.Changed, nil
+		return change, nil
 	})
 	if err != nil {
 		return TurnTransition{}, err
@@ -813,18 +870,21 @@ func (s *FileStore) AddUsage(ctx context.Context, sessionID string, report Usage
 	if report.IsEmpty() {
 		return nil
 	}
-	return s.updateMeta(ctx, sessionID, func(meta *SessionMeta) (bool, error) {
-		return meta.Usage.apply(report), nil
+	return s.updateMeta(ctx, sessionID, func(meta *SessionMeta) (metaChange, error) {
+		if !meta.Usage.apply(report) {
+			return unchanged, nil
+		}
+		return durable, nil
 	})
 }
 
 func (s *FileStore) SetUnread(ctx context.Context, sessionID string, unread bool) error {
-	return s.updateMeta(ctx, sessionID, func(meta *SessionMeta) (bool, error) {
+	return s.updateMeta(ctx, sessionID, func(meta *SessionMeta) (metaChange, error) {
 		if meta.Unread == unread {
-			return false, nil
+			return unchanged, nil
 		}
 		meta.Unread = unread
-		return true, nil
+		return recoverable, nil
 	})
 }
 
@@ -845,7 +905,7 @@ func (s *FileStore) GetHistory(ctx context.Context, sessionID string) ([]json.Ra
 	}
 
 	// No lock: history lives in an independent per-session file reached via an
-	// immutable path, and AppendToHistory writes it lock-free. Taking s.mu here
+	// immutable path, and AppendToHistory writes it lock-free. Taking s.writeMu here
 	// would only block metadata writers for the whole (potentially large) scan
 	// without protecting anything.
 	return readHistory(s.dataDir, sessionID)
@@ -996,8 +1056,21 @@ func (s *FileStore) WriteHistory(ctx context.Context, sessionID string, records 
 }
 
 func (s *FileStore) Touch(ctx context.Context, sessionID string) error {
-	return s.updateMeta(ctx, sessionID, func(meta *SessionMeta) (bool, error) {
+	return s.updateMeta(ctx, sessionID, func(meta *SessionMeta) (metaChange, error) {
 		meta.UpdatedAt = time.Now()
-		return true, nil
+		return recoverable, nil
 	})
+}
+
+// turnChange classifies a turn transition; see metaChange for why these two are
+// the ones a crash must not take.
+func turnChange(before TurnState, transition TurnTransition) metaChange {
+	switch {
+	case !transition.Changed:
+		return unchanged
+	case transition.Started, !sameQuestions(before.Unanswered, transition.State.Unanswered):
+		return durable
+	default:
+		return recoverable
+	}
 }

@@ -1084,6 +1084,10 @@ func TestManager_Shutdown_PersistsWhatTheStreamDrains(t *testing.T) {
 	if meta.Turn.Phase != session.PhaseIdle {
 		t.Errorf("turn phase after shutdown = %q, want idle", meta.Turn.Phase)
 	}
+	// As the worktree does once its process manager has shut down.
+	if err := store.Close(); err != nil {
+		t.Fatalf("failed to close the store: %v", err)
+	}
 
 	restarted, err := session.NewFileStore(dataDir)
 	if err != nil {

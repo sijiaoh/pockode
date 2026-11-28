@@ -22,11 +22,12 @@ var ctx = context.Background()
 // session fail even though the operation did its job.
 func backdateUpdatedAt(t *testing.T, store *FileStore, sessionID string) time.Time {
 	t.Helper()
-	store.mu.Lock()
-	defer store.mu.Unlock()
+	store.writeMu.Lock()
+	defer store.writeMu.Unlock()
 	for i := range store.sessions {
 		if store.sessions[i].ID == sessionID {
 			store.sessions[i].UpdatedAt = store.sessions[i].UpdatedAt.Add(-time.Hour)
+			store.publishLocked(store.sessions)
 			return store.sessions[i].UpdatedAt
 		}
 	}
@@ -115,9 +116,9 @@ func TestFileStore_List_OrdersTiesByID(t *testing.T) {
 		if err != nil {
 			t.Fatalf("create: %v", err)
 		}
-		if err := store.updateMeta(ctx, sess.ID, func(m *SessionMeta) (bool, error) {
+		if err := store.updateMeta(ctx, sess.ID, func(m *SessionMeta) (metaChange, error) {
 			m.UpdatedAt = at
-			return true, nil
+			return durable, nil
 		}); err != nil {
 			t.Fatalf("stamp: %v", err)
 		}

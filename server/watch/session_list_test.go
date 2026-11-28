@@ -18,6 +18,8 @@ type mockSessionStore struct {
 	listeners []session.OnChangeListener
 }
 
+func (m *mockSessionStore) Close() error { return nil }
+
 func (m *mockSessionStore) List() ([]session.SessionMeta, error) {
 	return m.sessions, nil
 }

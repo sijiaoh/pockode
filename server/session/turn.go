@@ -648,16 +648,8 @@ func (t TurnState) equal(other TurnState) bool {
 			return false
 		}
 	}
-	// Only the identities and the order: a question's text never changes once
-	// posted, so two lists naming the same requests in the same order are the
-	// same list.
-	if len(t.Unanswered) != len(other.Unanswered) {
+	if !sameQuestions(t.Unanswered, other.Unanswered) {
 		return false
-	}
-	for i := range t.Unanswered {
-		if t.Unanswered[i].RequestID != other.Unanswered[i].RequestID {
-			return false
-		}
 	}
 	if len(t.Delivered) != len(other.Delivered) {
 		return false
@@ -665,6 +657,21 @@ func (t TurnState) equal(other TurnState) bool {
 	for i := range t.Delivered {
 		if t.Delivered[i].Question.RequestID != other.Delivered[i].Question.RequestID ||
 			t.Delivered[i].MessageID != other.Delivered[i].MessageID {
+			return false
+		}
+	}
+	return true
+}
+
+// sameQuestions compares the identities and the order only: a question's text
+// never changes once posted, so two lists naming the same requests in the same
+// order are the same list.
+func sameQuestions(a, b []PendingQuestion) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i].RequestID != b[i].RequestID {
 			return false
 		}
 	}

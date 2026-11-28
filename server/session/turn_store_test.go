@@ -234,6 +234,9 @@ func TestFileStore_RestartLeavesAnIdleSessionAlone(t *testing.T) {
 	if _, err := store.ApplyTurn(ctx, "sess-1", TurnInput{Signal: SignalDone, At: at(1)}); err != nil {
 		t.Fatalf("ApplyTurn failed: %v", err)
 	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("Close failed: %v", err)
+	}
 
 	restarted, err := NewFileStore(dir)
 	if err != nil {
@@ -278,6 +281,11 @@ func TestFileStore_RestartClosesOutARunWhoseTurnWasIdle(t *testing.T) {
 		if _, err := store.AppendToHistory(ctx, "sess-1", map[string]any{"type": record}); err != nil {
 			t.Fatalf("AppendToHistory failed: %v", err)
 		}
+	}
+	// The ending reached the disk long before the kill: the turn went idle on
+	// its budget hours earlier.
+	if err := store.Close(); err != nil {
+		t.Fatalf("Close failed: %v", err)
 	}
 
 	for range 2 {
