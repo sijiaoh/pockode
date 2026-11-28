@@ -513,7 +513,9 @@ The Work system uses atomic file I/O instead of a database:
 The main server is the **sole writer** of work data: the frontend goes through
 the WebSocket layer and the AI goes through the MCP API (see *MCP Server
 Architecture*), and both mutate the in-memory store directly. Mutations are
-serialized by a mutex and persisted atomically.
+serialized by a mutex and persisted atomically. A second server on the same data
+directory is refused at startup, so this holds across processes too
+([data-model.md](../projects/data-model.md#atomic-persistence)).
 
 > Because the server is the sole writer of work data, the work store does not
 > run a file watcher: its change events are emitted directly from in-process
@@ -1832,6 +1834,17 @@ worktree's: a live one's directory holds more than sessions and may have a store
 open on it, and the main worktree's *is* the project's `.pockode`. Deleting the
 worktree checks the same thing, so a worktree whose sessions were all deleted
 before it was leaves nothing behind either.
+
+A worktree's name may contain slashes (`fix/foo`, after its branch), and its data
+directory is then nested to match. The levels in between are not worktrees: a
+data directory is recognised by the `sessions` directory every one has, so the
+source list finds `fix/foo` under its full name and never offers `fix` for it.
+Pruning climbs those levels too, removing each one left empty. It never removes
+another worktree's data: `fix` and `fix/foo` can both be names, so when `fix` is
+emptied and something is nested beneath it, only its own `sessions` goes. Nor
+does it pull a directory out from under a worktree whose store is opening beneath
+it (`fix/bar` while `fix` is pruned): the manager serialises the two, and once a
+store has opened, its `sessions` directory keeps every level above it non-empty.
 
 No subscriber is notified along the on-disk path, and there is nobody to notify:
 the worktree's watchers stopped with it. A client that deletes this way re-reads

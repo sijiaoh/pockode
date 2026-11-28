@@ -124,7 +124,10 @@ up on 1024. A restarted node keeps its port
 - **Start**: Spawns a new Pockode process for the node (requires the node's password).
   A stale `server.json` is removed before the process is spawned: the wait for
   the node to come up is a wait for that file to appear, and a leftover one
-  would answer it on the first read — reporting a node started that never was
+  would answer it on the first read — reporting a node started that never was.
+  A node whose data directory another server already holds exits without writing
+  it ([why](projects/data-model.md#atomic-persistence)), so the wait ends in a
+  timeout and the reason is only in the node's `server.log`
 - **Stop**: Asks the node to exit, then force-kills it after a 5 second grace
   period. Either way the node is gone and its `server.json` removed before the
   operation reports success, so stopping a node never leaves stale state behind.

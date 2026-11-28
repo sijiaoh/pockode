@@ -62,6 +62,9 @@ type Store interface {
 	// update timestamp) and returns the record's sequence number: its 1-based
 	// position in the history GetHistory returns. Sending that number to clients
 	// is the only way they can name a record — see HistorySeq.
+	//
+	// After Delete, it and WriteHistory fail with ErrSessionNotFound and write
+	// nothing, the session's directory included.
 	AppendToHistory(ctx context.Context, sessionID string, record any) (HistorySeq, error)
 	// WriteHistory replaces a session's whole history with records.
 	//
@@ -94,6 +97,9 @@ const indexVersion = 1
 
 // FileStore is NOT safe for multiple instances sharing the same dataDir.
 // Use a single instance per data directory (e.g., via dependency injection).
+// Across processes that is enforced, not assumed: a server claims its data
+// directory, worktrees' data under it included, at startup (datadir.Lock), and
+// a second server on the same one refuses to start.
 type FileStore struct {
 	dataDir   string
 	mu        sync.RWMutex
@@ -105,10 +111,25 @@ type FileStore struct {
 	// file in the other — which would make a sequence number name the wrong
 	// record.
 	//
-	// Lock order is mu then historyMu (Delete takes both). Never take mu while
-	// holding this one.
+	// It also guards deleted. Delete tombstones a session under it before
+	// removing the directory, so an append is either finished before the
+	// removal starts or sees the tombstone — never one that recreates the
+	// directory through AppendJSONL's MkdirAll. The removal itself runs after
+	// it is released: this lock is every session's, and a large directory
+	// would otherwise stall every session's appends.
+	//
+	// Lock order is mu then historyMu (Delete and insertLocked take both).
+	// Never take mu while holding this one.
 	historyMu  sync.Mutex
 	historyLen map[string]int // sessionID -> records written so far
+	// deleted holds the sessions this process deleted, so a late write to one —
+	// an expiry recorded while its process is torn down — fails with
+	// ErrSessionNotFound instead of leaving an orphan directory nothing lists.
+	// A tombstone rather than a lookup in sessions: that would mean taking mu on
+	// every streamed record, behind each index write. It lasts until the same
+	// id is created again (a work restarts its deleted session under its own
+	// id); sessions deleted by an earlier run have no process left to write.
+	deleted map[string]struct{}
 }
 
 func NewFileStore(dataDir string) (*FileStore, error) {
@@ -117,7 +138,11 @@ func NewFileStore(dataDir string) (*FileStore, error) {
 		return nil, err
 	}
 
-	store := &FileStore{dataDir: dataDir, historyLen: make(map[string]int)}
+	store := &FileStore{
+		dataDir:    dataDir,
+		historyLen: make(map[string]int),
+		deleted:    make(map[string]struct{}),
+	}
 
 	idx, err := store.readIndexFromDisk()
 	if err != nil {
@@ -431,6 +456,13 @@ func (s *FileStore) insertLocked(session SessionMeta) error {
 		return err
 	}
 
+	// Lifted only once the session exists, so a failed create leaves a late
+	// write from the deleted one refused; and before it is announced, since
+	// nothing but such a write can reach the id until then.
+	s.historyMu.Lock()
+	delete(s.deleted, session.ID)
+	s.historyMu.Unlock()
+
 	s.notifyChange(SessionChangeEvent{Op: OperationCreate, Session: session})
 	return nil
 }
@@ -572,17 +604,9 @@ func (s *FileStore) Delete(ctx context.Context, sessionID string) error {
 	defer s.mu.Unlock()
 
 	doomed := withPermissionReviewers(s.sessions, sessionID)
-	for _, id := range doomed {
-		if err := os.RemoveAll(filepath.Join(s.dataDir, "sessions", id)); err != nil {
-			return err
-		}
+	if err := s.removeSessionDirs(doomed); err != nil {
+		return err
 	}
-
-	s.historyMu.Lock()
-	for _, id := range doomed {
-		delete(s.historyLen, id)
-	}
-	s.historyMu.Unlock()
 
 	s.sessions = withoutSessions(s.sessions, doomed)
 
@@ -592,6 +616,26 @@ func (s *FileStore) Delete(ctx context.Context, sessionID string) error {
 
 	for _, id := range doomed {
 		s.notifyChange(SessionChangeEvent{Op: OperationDelete, Session: SessionMeta{ID: id}})
+	}
+	return nil
+}
+
+// removeSessionDirs tombstones the sessions, then removes their directories
+// (see historyMu for why in that order, and why the removal is outside it). A
+// session whose removal fails stays tombstoned, so it takes no further writes
+// into a directory that may already be half gone.
+func (s *FileStore) removeSessionDirs(ids []string) error {
+	s.historyMu.Lock()
+	for _, id := range ids {
+		s.deleted[id] = struct{}{}
+		delete(s.historyLen, id)
+	}
+	s.historyMu.Unlock()
+
+	for _, id := range ids {
+		if err := os.RemoveAll(filepath.Join(s.dataDir, "sessions", id)); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -874,6 +918,10 @@ func (s *FileStore) AppendToHistory(ctx context.Context, sessionID string, recor
 	s.historyMu.Lock()
 	defer s.historyMu.Unlock()
 
+	if err := s.checkNotDeletedLocked(sessionID); err != nil {
+		return NoHistorySeq, err
+	}
+
 	written, err := s.historyLenLocked(sessionID)
 	if err != nil {
 		return NoHistorySeq, err
@@ -885,6 +933,15 @@ func (s *FileStore) AppendToHistory(ctx context.Context, sessionID string, recor
 
 	s.historyLen[sessionID] = written + 1
 	return HistorySeq(written + 1), nil
+}
+
+// checkNotDeletedLocked refuses a write to a session this store deleted.
+// Caller must hold historyMu.
+func (s *FileStore) checkNotDeletedLocked(sessionID string) error {
+	if _, gone := s.deleted[sessionID]; gone {
+		return fmt.Errorf("%w: %s was deleted", ErrSessionNotFound, sessionID)
+	}
+	return nil
 }
 
 // historyLenLocked returns how many records the session's history holds,
@@ -925,6 +982,10 @@ func (s *FileStore) WriteHistory(ctx context.Context, sessionID string, records 
 
 	s.historyMu.Lock()
 	defer s.historyMu.Unlock()
+
+	if err := s.checkNotDeletedLocked(sessionID); err != nil {
+		return err
+	}
 
 	if err := filestore.WriteFileAtomic(s.historyPath(sessionID), buf.Bytes(), 0644); err != nil {
 		return err

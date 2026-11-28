@@ -35,7 +35,8 @@ type Reader interface {
 // directory a FileStore may also be open on — it keeps no cache that could
 // disagree with that store, and the index is written atomically, so a read
 // lands on one whole version or another. The reverse — a second FileStore over
-// the same directory — is exactly what must not happen (see FileStore).
+// the same directory — is exactly what must not happen (see FileStore), and
+// is why DirReader takes no lock: the server that owns the directory holds it.
 //
 // It never writes, not even the repairs FileStore performs on load: a turn the
 // last run left open is normalised on the way out (NormalizeTurn) and the file

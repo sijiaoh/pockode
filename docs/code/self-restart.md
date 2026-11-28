@@ -327,6 +327,21 @@ input, so it covers only the "anywhere else" branch; the terminal branch —
 waiting on the successor, holding Ctrl+C, passing its exit code on — has been
 neither tested nor run by hand.
 
+### The data directory lock
+
+A server holds an OS lock on its data directory for as long as it runs
+(`datadir.Lock`; see [data-model.md](../projects/data-model.md#atomic-persistence)).
+`main` releases it once the shutdown is over and before `Restart`, by hand
+rather than with the exit: on Windows the old process is still alive when its
+successor starts — and stays alive, waiting, in a terminal — so a lock left to
+the exit would make the successor refuse the directory. On unix the exec would
+drop it anyway, since the handle is close-on-exec; releasing it first keeps the
+two platforms one rule. Between the release and the new run taking it there is
+a moment in which another server could claim the directory; the new run then
+waits for it like any second server (three seconds — the patience exists for
+Windows, which drops a dead process's lock only eventually) and, refused, exits
+1.
+
 ## When the last step fails
 
 `exec` failing, or the successor not starting, is past the point of carrying

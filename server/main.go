@@ -314,6 +314,16 @@ Flags:
 		LogFile:   pathutil.ExpandTilde(*logFileFlag),
 	})
 
+	// Before anything opens a store, and before the listener: a refused server
+	// must not publish a server.json over the running one's. After the logger,
+	// so a node refused here says why in its server.log.
+	unlockDataDir, err := datadir.Lock(dataDir)
+	if err != nil {
+		slog.Error("failed to claim data directory", "error", err)
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+
 	// Bound here and served on as is, never released in between: see
 	// netutil.ListenAvailable. Holding it also means server.json, published
 	// further down, can only ever name a port this process is listening on.
@@ -747,6 +757,10 @@ Flags:
 		os.Exit(1)
 	}
 	<-shutdownDone
+	// Released by hand rather than left to the exit: on Windows a restart's
+	// successor starts while this process is still alive, and waits on it from
+	// a terminal.
+	unlockDataDir()
 	slog.Info("server stopped")
 	if restarter.Pending() {
 		if instanceKind == relay.InstanceNode {

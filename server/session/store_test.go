@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -359,6 +361,139 @@ func TestFileStore_Delete_RemovesHistory(t *testing.T) {
 	history, _ = store.GetHistory(ctx, sessionID)
 	if len(history) != 0 {
 		t.Errorf("expected history to be deleted, got %d records", len(history))
+	}
+}
+
+// A write that lands after Delete — an expiry recorded while the session's
+// process is torn down — must fail as not found and write nothing: the
+// directory it would create is one no index entry points to.
+func TestFileStore_WritesAfterDeleteFailWithoutRecreatingTheSession(t *testing.T) {
+	writes := []struct {
+		name  string
+		write func(store *FileStore, id string) error
+	}{
+		{"AppendToHistory", func(store *FileStore, id string) error {
+			_, err := store.AppendToHistory(ctx, id, map[string]string{"type": "late"})
+			return err
+		}},
+		{"WriteHistory", func(store *FileStore, id string) error {
+			return store.WriteHistory(ctx, id, []json.RawMessage{json.RawMessage(`{"type":"late"}`)})
+		}},
+	}
+	for _, w := range writes {
+		t.Run(w.name, func(t *testing.T) {
+			dataDir := t.TempDir()
+			store, err := NewFileStore(dataDir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			store.Create(ctx, "main", CreateSpec{})
+			// The reviewer goes with its main session, so it is tombstoned too.
+			if _, _, err := store.EnsurePermissionReviewer(ctx, "main", "reviewer"); err != nil {
+				t.Fatal(err)
+			}
+			for _, id := range []string{"main", "reviewer"} {
+				if _, err := store.AppendToHistory(ctx, id, map[string]string{"type": "before"}); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			if err := store.Delete(ctx, "main"); err != nil {
+				t.Fatal(err)
+			}
+
+			for _, id := range []string{"main", "reviewer"} {
+				if err := w.write(store, id); !errors.Is(err, ErrSessionNotFound) {
+					t.Errorf("%s on deleted %q: got %v, want ErrSessionNotFound", w.name, id, err)
+				}
+				if _, err := os.Stat(filepath.Join(dataDir, "sessions", id)); !os.IsNotExist(err) {
+					t.Errorf("directory of deleted %q exists after a late write (stat: %v)", id, err)
+				}
+			}
+		})
+	}
+}
+
+// A work restarts its session under the session's own id, so a deleted id that
+// is created again takes writes like any new session.
+func TestFileStore_RecreatedSessionTakesWritesAgain(t *testing.T) {
+	store, _ := NewFileStore(t.TempDir())
+	store.Create(ctx, "s", CreateSpec{})
+	store.AppendToHistory(ctx, "s", map[string]string{"type": "old"})
+	if err := store.Delete(ctx, "s"); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := store.Create(ctx, "s", CreateSpec{}); err != nil {
+		t.Fatal(err)
+	}
+	seq, err := store.AppendToHistory(ctx, "s", map[string]string{"type": "new"})
+	if err != nil {
+		t.Fatalf("append to the recreated session: %v", err)
+	}
+	if seq != 1 {
+		t.Errorf("seq = %d, want 1: the old history went with the old session", seq)
+	}
+}
+
+// Run with -race. Appends racing a Delete either land before it or are refused
+// after it; none may leave the directory behind.
+func TestFileStore_DeleteRacingAppendsLeavesNoDirectory(t *testing.T) {
+	dataDir := t.TempDir()
+	store, err := NewFileStore(dataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const rounds, appenders = 50, 4
+	for round := range rounds {
+		id := fmt.Sprintf("s%d", round)
+		store.Create(ctx, id, CreateSpec{})
+
+		var wg sync.WaitGroup
+		deleted := make(chan struct{})
+		errs := make(chan error, appenders)
+		for range appenders {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				for {
+					// Read before appending, so an append that began after
+					// Delete returned is one that must be refused — and a
+					// store that accepts it fails here instead of looping.
+					var after bool
+					select {
+					case <-deleted:
+						after = true
+					default:
+					}
+					_, err := store.AppendToHistory(ctx, id, map[string]string{"type": "racing"})
+					switch {
+					case errors.Is(err, ErrSessionNotFound):
+						return
+					case err != nil:
+						errs <- err
+						return
+					case after:
+						errs <- errors.New("an append that began after Delete returned was accepted")
+						return
+					}
+				}
+			}()
+		}
+		if err := store.Delete(ctx, id); err != nil {
+			t.Fatal(err)
+		}
+		close(deleted)
+		wg.Wait()
+		close(errs)
+		for err := range errs {
+			t.Errorf("round %d: %v", round, err)
+		}
+
+		if _, err := os.Stat(filepath.Join(dataDir, "sessions", id)); !os.IsNotExist(err) {
+			t.Fatalf("round %d: directory of the deleted session survived a racing append (stat: %v)", round, err)
+		}
 	}
 }
 
