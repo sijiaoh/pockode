@@ -105,7 +105,7 @@ describe("a page that sends", () => {
 		const sender = renderPage(BUTTON);
 		await press();
 
-		await waitFor(() => expect(signals).toContain("ok"), { timeout: 5000 });
+		await waitFor(() => expect(signals).toContain("ok"));
 		expect(sender.send).toHaveBeenCalledWith({
 			page: "p3",
 			action: "approve",
@@ -121,9 +121,7 @@ describe("a page that sends", () => {
 			`<p>Hi</p><script>${REPORT}report(pockode.send('refresh'))</script>`,
 		);
 
-		await waitFor(() => expect(signals).toContain("err:inactive"), {
-			timeout: 5000,
-		});
+		await waitFor(() => expect(signals).toContain("err:inactive"));
 		expect(sender.send).not.toHaveBeenCalled();
 		const line = await screen.findByText(
 			'Not sent · "refresh" — the page tried to send before you used it',
@@ -135,9 +133,7 @@ describe("a page that sends", () => {
 		const sender = renderPage(BUTTON, { awaitingPermission: true });
 		await press();
 
-		await waitFor(() => expect(signals).toContain("err:awaiting"), {
-			timeout: 5000,
-		});
+		await waitFor(() => expect(signals).toContain("err:awaiting"));
 		expect(sender.send).not.toHaveBeenCalled();
 		await waitFor(() =>
 			expect(screen.getByRole("alert")).toHaveTextContent(
@@ -156,9 +152,7 @@ describe("a page that sends", () => {
 		});
 		await press();
 
-		await waitFor(() => expect(signals).toContain("err:awaiting"), {
-			timeout: 5000,
-		});
+		await waitFor(() => expect(signals).toContain("err:awaiting"));
 		await waitFor(() =>
 			expect(screen.getByRole("alert")).toHaveTextContent(
 				"Answer the permission request first.",
@@ -174,9 +168,7 @@ describe("a page that sends", () => {
 		});
 		await press();
 
-		await waitFor(() => expect(signals).toContain("err:invalid"), {
-			timeout: 5000,
-		});
+		await waitFor(() => expect(signals).toContain("err:invalid"));
 		await waitFor(() =>
 			expect(screen.getByRole("alert")).toHaveTextContent(
 				'Not sent · "approve" — page p3 does not exist',
@@ -189,9 +181,7 @@ describe("a page that sends", () => {
 		const sender = renderPage(BUTTON);
 		await press();
 
-		await waitFor(() => expect(signals).toContain("err:offline"), {
-			timeout: 5000,
-		});
+		await waitFor(() => expect(signals).toContain("err:offline"));
 		expect(sender.send).not.toHaveBeenCalled();
 	});
 
@@ -201,9 +191,7 @@ describe("a page that sends", () => {
 		renderPage(
 			`<form><input name="q"><button>Go</button></form><button data-pk-send="x">X</button><script>parent.parent.postMessage({signal:"loaded"},"*")</script>`,
 		);
-		await waitFor(() => expect(signals).toContain("loaded"), {
-			timeout: 5000,
-		});
+		await waitFor(() => expect(signals).toContain("loaded"));
 		await inner().getByRole("button", { name: "Go" }).click();
 		await new Promise((resolve) => setTimeout(resolve, 1000));
 		expect(signals.filter((s) => s === "loaded")).toHaveLength(1);
@@ -219,9 +207,7 @@ describe("a page that sends", () => {
 		);
 		await press();
 
-		await waitFor(() => expect(signals).toContain("err:readonly"), {
-			timeout: 5000,
-		});
+		await waitFor(() => expect(signals).toContain("err:readonly"));
 		expect(sender.send).not.toHaveBeenCalled();
 		await waitFor(() =>
 			expect(screen.getByRole("alert")).toHaveTextContent(

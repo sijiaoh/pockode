@@ -1,6 +1,26 @@
 import { availableParallelism } from "node:os";
 
 /**
+ * How long a wait inside a test polls before giving up: Vitest's `vi.waitFor` /
+ * `vi.waitUntil` and `expect.poll`, and testing-library's `findBy*` /
+ * `waitFor`. Each defaults to 1s on its own, whatever `testTimeout` says, so
+ * this is raised for the same reason that one is — a worker under parallel load
+ * can simply be waiting its turn. Kept well below `testTimeout`, so a wait that
+ * never comes true fails with its own message (testing-library's DOM dump, the
+ * last assertion error) rather than a bare "Test timed out".
+ *
+ * `expect.element` is the one wait left out: under the Playwright provider,
+ * Vitest gives it whatever is left of `testTimeout`, less 100ms, unless the
+ * call names a timeout.
+ *
+ * Only `expect.poll` reads Vitest config. The rest are set at runtime by each
+ * project's test setup, which gets this number through `provide` (see
+ * `web/src/test/waitPolicy.ts`): in the real-browser entry the setup cannot
+ * import this module, which needs `node:os`.
+ */
+const WAIT_TIMEOUT_MS = 5_000;
+
+/**
  * Runner tuning shared by every frontend Vitest config, the jsdom entries and
  * `web`'s real-browser one alike — there `maxWorkers` caps how many test files
  * run at once per browser.
@@ -52,4 +72,7 @@ export const vitestRuntimeOptions = {
 	 */
 	testTimeout: 20_000,
 	hookTimeout: 20_000,
+
+	expect: { poll: { timeout: WAIT_TIMEOUT_MS } },
+	provide: { waitTimeout: WAIT_TIMEOUT_MS },
 };

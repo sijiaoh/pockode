@@ -1,13 +1,26 @@
 import { cleanup, configure } from "@testing-library/react";
 import "@testing-library/jest-dom/vitest";
-import { afterEach } from "vitest";
+import { afterEach, inject } from "vitest";
 
-// Raised from testing-library's 1s default for the same reason vitest's
-// `testTimeout` is raised in the shared runner config: under parallel load a
-// worker can simply be waiting its turn. Kept below `testTimeout` so a missing
-// element still fails with testing-library's DOM dump rather than a bare
-// "test timed out".
-configure({ asyncUtilTimeout: 5_000 });
+declare module "vitest" {
+	export interface ProvidedContext {
+		/** `WAIT_TIMEOUT_MS` in `packages/shared/vitest-runtime.js`. */
+		waitTimeout: number;
+	}
+}
+
+// The shared wait timeout, why it is raised and why it stays below
+// `testTimeout`, are at `WAIT_TIMEOUT_MS`. Only testing-library is set here:
+// nothing in this project calls `vi.waitFor`, which `web` has to wrap.
+const waitTimeout = inject("waitTimeout");
+// A config that does not spread `vitestRuntimeOptions` provides nothing, and an
+// undefined timeout makes every testing-library wait give up at once.
+if (typeof waitTimeout !== "number") {
+	throw new Error(
+		"waitTimeout is not provided: spread vitestRuntimeOptions from @pockode/shared/vitest into this Vitest config",
+	);
+}
+configure({ asyncUtilTimeout: waitTimeout });
 
 // `Sheet` reads the width ladder through `useIsExpanded`, which jsdom has no
 // implementation of at all. Reporting no match puts every sheet in its drawer

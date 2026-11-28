@@ -525,9 +525,7 @@ describe("MediaViewer video stage", () => {
 		const video = (await screen.findByLabelText("clip.webm", {
 			selector: "video",
 		})) as HTMLVideoElement;
-		// A real fetch and decode, which a loaded machine stretches past the
-		// default second.
-		await expect.poll(() => video.videoWidth, { timeout: 5_000 }).toBe(64);
+		await expect.poll(() => video.videoWidth).toBe(64);
 		// The caption takes the size the stage reported.
 		await screen.findByText(/64×36/);
 
@@ -615,9 +613,7 @@ describe("MediaViewer html stage", () => {
 		// ↻ spins until the page's first load. A navigation before the page
 		// has finished loading is made a replace, so give it a moment more.
 		const reload = screen.getByRole("button", { name: "Reload page" });
-		await expect
-			.poll(() => reload.querySelector(".animate-spin"), { timeout: 5_000 })
-			.toBeNull();
+		await expect.poll(() => reload.querySelector(".animate-spin")).toBeNull();
 		await settle();
 		return frame;
 	}

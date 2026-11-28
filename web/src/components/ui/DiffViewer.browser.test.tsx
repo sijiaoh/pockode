@@ -59,7 +59,7 @@ describe("hunk bars in a real browser", () => {
 					expect(bar.getBoundingClientRect().width).toBeGreaterThan(0);
 				}
 			},
-			{ timeout: 20_000 },
+			{ timeout: 15_000 },
 		);
 	});
 });
@@ -95,7 +95,7 @@ describe("the diff library's styles in the cascade", () => {
 					expect(found).not.toBeNull();
 					return found as Element;
 				},
-				{ timeout: 20_000 },
+				{ timeout: 15_000 },
 			);
 			const style = (selector: string) => {
 				const el = container.querySelector(selector);
@@ -151,7 +151,7 @@ describe("syntax colours on the screen", () => {
 					);
 					expect(colours.size).toBeGreaterThan(1);
 				},
-				{ timeout: 20_000 },
+				{ timeout: 15_000 },
 			);
 		} finally {
 			document.documentElement.classList.remove("dark");

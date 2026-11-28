@@ -61,9 +61,7 @@ describe("MediaPreview video box", () => {
 		const video = (await screen.findByLabelText("clip.webm", {
 			selector: "video",
 		})) as HTMLVideoElement;
-		// The clip is fetched and decoded, which a loaded machine stretches past
-		// the poll's 1s default; the margin `browserSetup.ts` gives findBy*.
-		await expect.poll(() => video.videoWidth, { timeout: 5_000 }).toBe(72);
+		await expect.poll(() => video.videoWidth).toBe(72);
 
 		// Room to spare on both sides, so the clip keeps its own pixels.
 		await expect

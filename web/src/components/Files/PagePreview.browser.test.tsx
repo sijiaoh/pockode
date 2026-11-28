@@ -79,21 +79,15 @@ function ask(wrapper: HTMLIFrameElement, what: Record<string, unknown>) {
 }
 
 function strip() {
-	return screen.findByRole(
-		"group",
-		{ name: "Hosts not loaded" },
-		{ timeout: 5000 },
-	);
+	return screen.findByRole("group", { name: "Hosts not loaded" });
 }
 
 /** Until the strip says `text`: it says what the page was refused first. */
 async function stripSays(text: string) {
-	await waitFor(
-		() =>
-			expect(
-				screen.getByRole("group", { name: "Hosts not loaded" }),
-			).toHaveTextContent(text),
-		{ timeout: 5000 },
+	await waitFor(() =>
+		expect(
+			screen.getByRole("group", { name: "Hosts not loaded" }),
+		).toHaveTextContent(text),
 	);
 }
 
@@ -104,7 +98,7 @@ function settle(ms = 1500) {
 
 /** Until the page has started, reporting what it was refused. */
 async function started() {
-	await waitFor(() => expect(signals).toContain("own"), { timeout: 5000 });
+	await waitFor(() => expect(signals).toContain("own"));
 	return frame();
 }
 
@@ -139,9 +133,7 @@ describe("a workspace page in a real browser", () => {
 			}),
 		);
 
-		await waitFor(() => expect(signals).toContain("script"), {
-			timeout: 5000,
-		});
+		await waitFor(() => expect(signals).toContain("script"));
 		expect(rawCapability).toHaveBeenLastCalledWith(
 			expect.objectContaining({ page: { hosts: [OTHER_HOST] } }),
 		);
@@ -156,9 +148,7 @@ describe("a workspace page in a real browser", () => {
 
 		ask(wrapper, { click: "inside" });
 
-		await waitFor(() => expect(signals).toContain("second"), {
-			timeout: 5000,
-		});
+		await waitFor(() => expect(signals).toContain("second"));
 		expect(screen.queryByText(/Page left/)).toBeNull();
 	});
 
@@ -169,7 +159,7 @@ describe("a workspace page in a real browser", () => {
 
 		ask(wrapper, { click: "up" });
 
-		await waitFor(() => expect(signals).toContain("up"), { timeout: 5000 });
+		await waitFor(() => expect(signals).toContain("up"));
 		expect(screen.queryByText(/Page left/)).toBeNull();
 	});
 
@@ -196,23 +186,16 @@ describe("a workspace page in a real browser", () => {
 
 		await user.click(screen.getByRole("button", { name: "View full screen" }));
 		const dialog = await screen.findByRole("dialog");
-		await waitFor(
-			() => expect(signals.filter((s) => s === "own")).toHaveLength(2),
-			{
-				timeout: 5000,
-			},
+		await waitFor(() =>
+			expect(signals.filter((s) => s === "own")).toHaveLength(2),
 		);
 		await settle(PRESS_HOLD_MS + 100);
 		await user.click(
-			await within(dialog).findByRole(
-				"button",
-				{ name: `Load ${OTHER_HOST} and reload the page` },
-				{ timeout: 5000 },
-			),
+			await within(dialog).findByRole("button", {
+				name: `Load ${OTHER_HOST} and reload the page`,
+			}),
 		);
-		await waitFor(() => expect(signals).toContain("script"), {
-			timeout: 5000,
-		});
+		await waitFor(() => expect(signals).toContain("script"));
 
 		await user.click(within(dialog).getByRole("button", { name: "Close" }));
 		await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
@@ -225,9 +208,8 @@ describe("a workspace page in a real browser", () => {
 				name: `Reload the page to load ${OTHER_HOST}`,
 			}),
 		);
-		await waitFor(
-			() => expect(signals.filter((s) => s === "script")).toHaveLength(2),
-			{ timeout: 5000 },
+		await waitFor(() =>
+			expect(signals.filter((s) => s === "script")).toHaveLength(2),
 		);
 		expect(screen.queryByRole("group")).toBeNull();
 	});
@@ -244,9 +226,7 @@ describe("a workspace page in a real browser", () => {
 				name: `Load ${OTHER_HOST} and reload the page`,
 			}),
 		);
-		await waitFor(() => expect(signals).toContain("script"), {
-			timeout: 5000,
-		});
+		await waitFor(() => expect(signals).toContain("script"));
 
 		ask(frame(), { embed: LANDED_URL });
 
@@ -308,9 +288,7 @@ describe("a workspace page in a real browser", () => {
 				go: `./page.htm?hosts=${OTHER_HOST}&host=${OTHER_HOST}`,
 			});
 
-			await waitFor(() => expect(signals).toContain("own"), {
-				timeout: 5000,
-			});
+			await waitFor(() => expect(signals).toContain("own"));
 			await expectNothingAllowed();
 		});
 
